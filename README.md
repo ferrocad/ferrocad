@@ -111,5 +111,6 @@ python/FreeCAD/           drop-in module: __init__.py (facade + backend selector
     _ffi.py               ctypes bindings for the fallback
 rust/freecad-py/          PyO3 bindings (primary)
 rust/freecad-core/        Rust object model + flat C ABI (fallback)
+rust/fc-host/             spike: Rust host + bite-gpui (headless #[gpui::test])
 tests/test_parity.py      behavioural checks
 ```

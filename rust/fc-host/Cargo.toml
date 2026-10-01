@@ -1,0 +1,9 @@
+[package]
+name = "fc-host"
+version = "0.1.0"
+edition = "2021"
+description = "Spike: Rust host embedding CPython + bite-gpui (Python-declarative UI)"
+
+[dependencies]
+# `test-support` enables TestAppContext / VisualTestContext / #[gpui::test].
+bite-gpui = { version = "1.21.0", features = ["test-support"] }

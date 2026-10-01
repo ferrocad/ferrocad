@@ -1,9 +1,10 @@
 """Python-declarative UI spike.
 
 A standalone, hermetic version of the eventual ``FreeCAD/ui/declarative.py``.
-A workbench builds an ``Element`` tree in Python; ``render_ui()`` serializes it to
-JSON and ``dispatch_event(handler_id)`` runs a callback and re-renders. The Rust
-host parses the JSON and drives `bite-gpui` elements from it.
+A workbench builds an ``Element`` tree in Python; ``render_ui()`` serializes the
+full tree (initial state), and ``dispatch_event(handler_id)`` runs a callback
+then emits a *diffed patch stream* against the previous tree, so only changes
+cross the PyO3 boundary.
 """
 
 import json
@@ -56,14 +57,17 @@ class AppState:
 
 app_state = AppState()
 ACTIVE_REGISTRY: Dict[str, Callable] = {}
+_prev_tree: Optional[dict] = None
 
 
 def reset_state() -> None:
     """Reset module-global state (test isolation between Rust tests)."""
+    global _prev_tree
     app_state.counter = 0
+    _prev_tree = None
 
 
-def render_ui() -> str:
+def _snapshot() -> dict:
     ACTIVE_REGISTRY.clear()
 
     root = Element("container", id="root", layout="vertical")
@@ -84,11 +88,55 @@ def render_ui() -> str:
 
     root.add(label).add(btn_increment).add(btn_fault)
 
-    return json.dumps(root.serialize(ACTIVE_REGISTRY))
+    return root.serialize(ACTIVE_REGISTRY)
+
+
+def render_ui() -> str:
+    """Return the full tree (used only for the initial render)."""
+    global _prev_tree
+    _prev_tree = _snapshot()
+    return json.dumps(_prev_tree)
+
+
+def _diff_nodes(old, new, patches):
+    if old is None:
+        patches.append({"op": "insert", "node": new})
+        return
+    if new is None:
+        patches.append({"op": "remove", "id": old.get("id")})
+        return
+
+    changed = {}
+    for key in ("text", "title"):
+        ov = old.get("props", {}).get(key)
+        nv = new.get("props", {}).get(key)
+        if ov != nv:
+            changed[key] = nv
+    if changed:
+        patches.append({"op": "update", "id": new["id"], "props": changed})
+
+    old_children = {c["id"]: c for c in old.get("children", [])}
+    new_children = {c["id"]: c for c in new.get("children", [])}
+    for cid in old_children:
+        if cid not in new_children:
+            patches.append({"op": "remove", "id": cid})
+    for cid, nc in new_children.items():
+        _diff_nodes(old_children.get(cid), nc, patches)
+
+
+def _diff(old, new):
+    patches = []
+    _diff_nodes(old, new, patches)
+    return patches
 
 
 def dispatch_event(handler_id: str) -> str:
+    """Run a handler, then return the diffed patch stream (JSON array)."""
+    global _prev_tree
     if handler_id in ACTIVE_REGISTRY:
         # Executes the callback; may raise to test boundary isolation.
         ACTIVE_REGISTRY[handler_id]()
-    return render_ui()
+    new_tree = _snapshot()
+    patches = _diff(_prev_tree, new_tree)
+    _prev_tree = new_tree
+    return json.dumps(patches)

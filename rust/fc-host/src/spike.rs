@@ -28,6 +28,61 @@ pub struct WireNode {
     pub children: Vec<WireNode>,
 }
 
+/// One diffed patch from the Python side (a minimal change stream).
+#[derive(Debug, Clone, Deserialize)]
+#[serde(tag = "op", rename_all = "lowercase")]
+enum Patch {
+    Insert { node: WireNode },
+    Remove { id: String },
+    Update { id: String, props: HashMap<String, String> },
+}
+
+fn find_mut<'a>(node: &'a mut WireNode, id: &str) -> Option<&'a mut WireNode> {
+    if node.id == id {
+        return Some(node);
+    }
+    for child in &mut node.children {
+        if let Some(found) = find_mut(child, id) {
+            return Some(found);
+        }
+    }
+    None
+}
+
+fn remove_by_id(node: &mut WireNode, id: &str) -> bool {
+    let before = node.children.len();
+    node.children.retain(|c| c.id != id);
+    if node.children.len() != before {
+        return true;
+    }
+    for child in &mut node.children {
+        if remove_by_id(child, id) {
+            return true;
+        }
+    }
+    false
+}
+
+fn apply_patches(root: &mut WireNode, patches: &[Patch]) {
+    for patch in patches {
+        match patch {
+            Patch::Update { id, props } => {
+                if let Some(node) = find_mut(root, id) {
+                    for (k, v) in props {
+                        node.props.insert(k.clone(), v.clone());
+                    }
+                }
+            }
+            Patch::Remove { id } => {
+                remove_by_id(root, id);
+            }
+            Patch::Insert { node } => {
+                root.children.push(node.clone());
+            }
+        }
+    }
+}
+
 fn python_path() -> String {
     std::env::var("FC_SPIKE_PYTHON_PATH").unwrap_or_else(|_| "../../python".to_string())
 }
@@ -90,19 +145,26 @@ impl WireView {
         Self { tree }
     }
 
-    /// Criteria 3 & 4: run a Python handler; isolate a raising one.
-    fn dispatch(&mut self, handler_id: &str) {
+    /// Criteria 3 & 4: run a Python handler, apply its diffed patches; isolate
+    /// a raising one. Returns the number of patches applied.
+    fn dispatch(&mut self, handler_id: &str) -> Result<usize, String> {
         match call_dispatch_event(handler_id) {
             Ok(json) => {
-                if let Ok(node) = serde_json::from_str::<WireNode>(&json) {
-                    *self.tree.lock().unwrap() = Some(node);
+                let patches: Vec<Patch> =
+                    serde_json::from_str(&json).map_err(|e| e.to_string())?;
+                let count = patches.len();
+                let mut guard = self.tree.lock().unwrap();
+                if let Some(root) = guard.as_mut() {
+                    apply_patches(root, &patches);
                 }
+                Ok(count)
             }
             Err(msg) if msg.starts_with("exception:") => {
                 eprintln!("[FAULT ISOLATED] {msg}");
                 // Keep the previous tree; the host stays stable.
+                Ok(0)
             }
-            Err(msg) => eprintln!("[DISPATCH ERROR] {msg}"),
+            Err(msg) => Err(msg),
         }
     }
 
@@ -126,7 +188,7 @@ impl WireView {
                     .map(|(_, id)| id.clone())
                 {
                     el = el.on_click(cx.listener(move |this, _ev, _window, cx| {
-                        this.dispatch(&handler_id);
+                        let _ = this.dispatch(&handler_id);
                         cx.notify();
                     }));
                 }
@@ -172,6 +234,49 @@ mod tests {
             .children[0]
             .props["text"]
             .clone()
+    }
+
+    /// Pure-Rust: the patch stream deserializes and applies (no Python, no UI).
+    #[test]
+    fn patch_application_updates_and_removes() {
+        let mut root = WireNode {
+            id: "root".into(),
+            tag: "container".into(),
+            props: std::collections::HashMap::new(),
+            events: vec![],
+            children: vec![
+                WireNode {
+                    id: "counter_label".into(),
+                    tag: "label".into(),
+                    props: std::collections::HashMap::from([(
+                        "text".into(),
+                        "Total Operations: 0".into(),
+                    )]),
+                    events: vec![],
+                    children: vec![],
+                },
+                WireNode {
+                    id: "btn_inc".into(),
+                    tag: "button".into(),
+                    props: std::collections::HashMap::from([(
+                        "title".into(),
+                        "Increment Count".into(),
+                    )]),
+                    events: vec![],
+                    children: vec![],
+                },
+            ],
+        };
+
+        let patches: Vec<Patch> = serde_json::from_str(
+            r#"[{"op":"update","id":"counter_label","props":{"text":"Total Operations: 1"}},{"op":"remove","id":"btn_inc"}]"#,
+        )
+        .unwrap();
+
+        apply_patches(&mut root, &patches);
+
+        assert_eq!(root.children[0].props["text"], "Total Operations: 1");
+        assert_eq!(root.children.len(), 1); // btn_inc removed
     }
 
     /// Criteria 1–4 in one headless test.

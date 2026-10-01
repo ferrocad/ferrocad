@@ -25,7 +25,7 @@ impl Unit {
         }
     }
 
-    fn parse(s: &str) -> Option<Unit> {
+    pub fn parse(s: &str) -> Option<Unit> {
         Some(match s.to_ascii_lowercase().as_str() {
             "mm" => Unit::Millimeter,
             "cm" => Unit::Centimeter,

@@ -112,8 +112,10 @@ python/FreeCAD/           drop-in module: __init__.py (facade + backend selector
 rust/freecad-py/          PyO3 bindings (primary)
 rust/freecad-core/        Rust object model + flat C ABI (fallback)
 rust/fc-core/             pure Rust core: quantities, properties, DAG, tx/observers/expr
+rust/fc-python/           PyO3 bindings over fc-core (module `fc`)
 rust/fc-host/             spike: Rust host embedding CPython + bite-gpui
     src/spike.rs          Python-declared UI -> bite-gpui element (headless)
 python/fcspike/           Python declarative UI spike module
-tests/test_parity.py      behavioural checks
+tests/test_parity.py      behavioural checks (M0/M1)
+tests/test_fc_core.py     fc-core via Python (M3b)
 ```

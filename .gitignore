@@ -5,6 +5,9 @@
 /python/FreeCAD/*.so
 /python/FreeCAD/*.dylib
 /python/FreeCAD/*.dll
+/python/fc.abi3.so
+/python/fc.dylib
+/python/fc.dll
 
 # Python
 __pycache__/

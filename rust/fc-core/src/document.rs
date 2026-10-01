@@ -63,6 +63,14 @@ impl Document {
         self.objects.get(&id)
     }
 
+    pub fn object_ids(&self) -> Vec<ObjectId> {
+        self.objects.keys().copied().collect()
+    }
+
+    pub fn get_by_name(&self, name: &str) -> Option<ObjectId> {
+        self.objects.values().find(|o| o.name == name).map(|o| o.id)
+    }
+
     /// Declare that `object` depends on `depends_on` (the latter recomputes first).
     pub fn add_dependency(&mut self, object: ObjectId, depends_on: ObjectId) {
         if let (Some(&a), Some(&b)) = (self.index.get(&depends_on), self.index.get(&object)) {

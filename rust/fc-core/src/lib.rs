@@ -21,8 +21,7 @@ pub use quantity::{Quantity, Unit};
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::cell::RefCell;
-    use std::rc::Rc;
+    use std::sync::{Arc, Mutex};
 
     #[test]
     fn quantity_parses_and_converts() {
@@ -117,12 +116,12 @@ mod tests {
     }
 
     struct RecordingObserver {
-        log: Rc<RefCell<Vec<String>>>,
+        log: Arc<Mutex<Vec<String>>>,
     }
 
     impl Observer for RecordingObserver {
         fn on_object_added(&mut self, object: ObjectId) {
-            self.log.borrow_mut().push(format!("added:{object}"));
+            self.log.lock().unwrap().push(format!("added:{object}"));
         }
 
         fn on_property_changed(
@@ -133,21 +132,22 @@ mod tests {
             new: &Property,
         ) {
             self.log
-                .borrow_mut()
+                .lock()
+                .unwrap()
                 .push(format!("changed:{object}:{name}:{new:?}"));
         }
     }
 
     #[test]
     fn observers_fire_on_changes() {
-        let log = Rc::new(RefCell::new(Vec::new()));
+        let log = Arc::new(Mutex::new(Vec::new()));
         let mut doc = Document::new();
         doc.add_observer(Box::new(RecordingObserver { log: log.clone() }));
 
         let a = doc.add_object("A", "App::Feature");
         doc.set_property(a, "Width", Property::Float(10.0)).unwrap();
 
-        let log = log.borrow();
+        let log = log.lock().unwrap();
         assert!(log.iter().any(|e| e == "added:0"));
         assert!(log.iter().any(|e| e.starts_with("changed:0:Width:")));
     }

@@ -1,0 +1,13 @@
+[package]
+name = "fc-python"
+version = "0.1.0"
+edition = "2021"
+description = "PyO3 bindings exposing fc-core to Python (M3b)"
+
+[lib]
+name = "fc_python"
+crate-type = ["cdylib"]
+
+[dependencies]
+fc-core = { path = "../fc-core" }
+pyo3 = { version = "0.25", features = ["extension-module", "abi3-py38"] }

@@ -2,19 +2,27 @@
 //!
 //! The pure-Rust core of the FreeCAD-on-Rust rewrite (M2): typed quantities,
 //! a property container, and a document object model with a dependency-graph
-//! recompute order. No Python and no UI — this is what `fc-python` will bind.
+//! recompute order, transactions (open/commit/abort + undo/redo), observers,
+//! and expression-driven recompute. No Python and no UI — this is what
+//! `fc-python` will bind.
 
 mod document;
+mod expr;
+mod observer;
 mod property;
 mod quantity;
+mod transaction;
 
 pub use document::{Document, DocumentObject, ObjectId};
+pub use observer::Observer;
 pub use property::{Property, PropertyContainer};
 pub use quantity::{Quantity, Unit};
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::cell::RefCell;
+    use std::rc::Rc;
 
     #[test]
     fn quantity_parses_and_converts() {
@@ -67,5 +75,98 @@ mod tests {
         doc.add_dependency(b, a); // cycle
 
         assert!(doc.recompute_order().is_err());
+    }
+
+    #[test]
+    fn transactions_abort_undo_redo() {
+        let mut doc = Document::new();
+        let a = doc.add_object("A", "App::Feature");
+        doc.set_property(a, "Width", Property::Float(1.0)).unwrap();
+
+        // abort reverts
+        doc.open_transaction();
+        doc.set_property(a, "Width", Property::Float(2.0)).unwrap();
+        doc.set_property(a, "Height", Property::Float(3.0)).unwrap();
+        doc.abort_transaction();
+        assert_eq!(
+            doc.object(a).unwrap().properties.get("Width"),
+            Some(&Property::Float(1.0))
+        );
+        assert_eq!(doc.object(a).unwrap().properties.get("Height"), None);
+
+        // commit keeps, undo/redo round-trips
+        doc.open_transaction();
+        doc.set_property(a, "Width", Property::Float(5.0)).unwrap();
+        doc.commit_transaction();
+        assert_eq!(
+            doc.object(a).unwrap().properties.get("Width"),
+            Some(&Property::Float(5.0))
+        );
+
+        assert!(doc.undo());
+        assert_eq!(
+            doc.object(a).unwrap().properties.get("Width"),
+            Some(&Property::Float(1.0))
+        );
+
+        assert!(doc.redo());
+        assert_eq!(
+            doc.object(a).unwrap().properties.get("Width"),
+            Some(&Property::Float(5.0))
+        );
+    }
+
+    struct RecordingObserver {
+        log: Rc<RefCell<Vec<String>>>,
+    }
+
+    impl Observer for RecordingObserver {
+        fn on_object_added(&mut self, object: ObjectId) {
+            self.log.borrow_mut().push(format!("added:{object}"));
+        }
+
+        fn on_property_changed(
+            &mut self,
+            object: ObjectId,
+            name: &str,
+            _old: Option<&Property>,
+            new: &Property,
+        ) {
+            self.log
+                .borrow_mut()
+                .push(format!("changed:{object}:{name}:{new:?}"));
+        }
+    }
+
+    #[test]
+    fn observers_fire_on_changes() {
+        let log = Rc::new(RefCell::new(Vec::new()));
+        let mut doc = Document::new();
+        doc.add_observer(Box::new(RecordingObserver { log: log.clone() }));
+
+        let a = doc.add_object("A", "App::Feature");
+        doc.set_property(a, "Width", Property::Float(10.0)).unwrap();
+
+        let log = log.borrow();
+        assert!(log.iter().any(|e| e == "added:0"));
+        assert!(log.iter().any(|e| e.starts_with("changed:0:Width:")));
+    }
+
+    #[test]
+    fn expressions_recompute() {
+        let mut doc = Document::new();
+        let a = doc.add_object("A", "App::Feature");
+        let b = doc.add_object("B", "App::Feature");
+        let c = doc.add_object("C", "App::Feature");
+
+        doc.set_property(a, "Width", Property::Float(10.0)).unwrap();
+        doc.set_property(b, "Height", Property::Float(5.0)).unwrap();
+        doc.set_expression(c, "Area", "A.Width * B.Height").unwrap();
+
+        assert_eq!(doc.recompute().unwrap(), 1);
+        assert_eq!(
+            doc.object(c).unwrap().properties.get("Area"),
+            Some(&Property::Float(50.0))
+        );
     }
 }

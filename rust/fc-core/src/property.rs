@@ -30,6 +30,10 @@ impl PropertyContainer {
         self.props.get(name)
     }
 
+    pub fn remove(&mut self, name: &str) -> Option<Property> {
+        self.props.remove(name)
+    }
+
     pub fn len(&self) -> usize {
         self.props.len()
     }

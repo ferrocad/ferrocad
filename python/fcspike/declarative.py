@@ -58,6 +58,11 @@ app_state = AppState()
 ACTIVE_REGISTRY: Dict[str, Callable] = {}
 
 
+def reset_state() -> None:
+    """Reset module-global state (test isolation between Rust tests)."""
+    app_state.counter = 0
+
+
 def render_ui() -> str:
     ACTIVE_REGISTRY.clear()
 

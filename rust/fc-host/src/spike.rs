@@ -1,16 +1,17 @@
 //! Feasibility spike: a Python workbench *declares* a UI tree; Rust parses it
-//! and renders it with `bite-gpui`.
+//! and renders it with `bite-gpui`, wiring real `on_click` handlers back to
+//! Python.
 //!
 //! Covers the four criteria from `docs/python-ui-research.md` Part D:
 //!   1. the Rust host embeds CPython,
 //!   2. the Python-declared tree compiles into `bite-gpui` elements headlessly,
-//!   3. a synthetic event round-trips through a Python callback that mutates state,
+//!   3. a real click round-trips through a Python callback that mutates state,
 //!   4. a raising Python handler is isolated at the boundary without crashing the host.
 
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
-use gpui::{div, prelude::*, AnyElement, Context, IntoElement, Render, SharedString, Window};
+use gpui::{div, prelude::*, px, AnyElement, Context, IntoElement, Render, SharedString, Window};
 use pyo3::types::PyAnyMethods;
 use serde::Deserialize;
 
@@ -22,123 +23,129 @@ pub struct WireNode {
     #[serde(default)]
     pub props: HashMap<String, String>,
     #[serde(default)]
-    #[allow(dead_code)] // parsed now, wired to on_click handlers in the next step
     pub events: Vec<(String, String)>,
     #[serde(default)]
     pub children: Vec<WireNode>,
 }
 
-/// Convert a `WireNode` into a `bite-gpui` element tree. Only the handful of
-/// tags the spike uses are mapped; this is where the real "UI abstraction"
-/// would live.
-fn wire_to_element(node: &WireNode) -> AnyElement {
-    let mut el = div().id(SharedString::from(node.id.clone()));
-    match node.tag.as_str() {
-        "label" => {
-            if let Some(text) = node.props.get("text") {
-                el = el.child(text.clone());
-            }
-        }
-        "button" => {
-            if let Some(title) = node.props.get("title") {
-                el = el.child(title.clone());
-            }
-        }
-        _ => {}
-    }
-    for child in &node.children {
-        el = el.child(wire_to_element(child));
-    }
-    el.into_any_element()
+fn python_path() -> String {
+    std::env::var("FC_SPIKE_PYTHON_PATH").unwrap_or_else(|_| "../../python".to_string())
 }
 
-/// Owns the embedded interpreter state: the current tree, shared with the view.
-pub struct Host {
-    pub tree: Arc<Mutex<Option<WireNode>>>,
+/// Criterion 1: embed CPython, put `python/` on the path, render the tree.
+fn initialize_python_runtime() -> Result<WireNode, String> {
+    let json: String = pyo3::Python::with_gil(|py| -> Result<String, String> {
+        let sys = py.import("sys").map_err(|e| e.to_string())?;
+        let path = sys.getattr("path").map_err(|e| e.to_string())?;
+        path.call_method1("insert", (0, python_path()))
+            .map_err(|e| e.to_string())?;
+
+        let module = py
+            .import("fcspike.declarative")
+            .map_err(|e| e.to_string())?;
+        module
+            .getattr("reset_state")
+            .map_err(|e| e.to_string())?
+            .call0()
+            .map_err(|e| e.to_string())?;
+        let raw: String = module
+            .getattr("render_ui")
+            .map_err(|e| e.to_string())?
+            .call0()
+            .map_err(|e| e.to_string())?
+            .extract()
+            .map_err(|e| e.to_string())?;
+        Ok(raw)
+    })?;
+
+    serde_json::from_str(&json).map_err(|e| e.to_string())
 }
 
-impl Host {
-    pub fn new() -> Self {
-        Self {
-            tree: Arc::new(Mutex::new(None)),
+/// Call `fcspike.declarative.dispatch_event(handler_id)`; return fresh JSON,
+/// or an `exception: …` error marker when the Python handler raises.
+fn call_dispatch_event(handler_id: &str) -> Result<String, String> {
+    pyo3::Python::with_gil(|py| {
+        let module = py
+            .import("fcspike.declarative")
+            .map_err(|e| e.to_string())?;
+        let func = module
+            .getattr("dispatch_event")
+            .map_err(|e| e.to_string())?;
+        match func.call1((handler_id,)) {
+            Ok(value) => value.extract::<String>().map_err(|e| e.to_string()),
+            Err(e) => Err(format!("exception: {e}")),
         }
-    }
-
-    fn python_path() -> String {
-        std::env::var("FC_SPIKE_PYTHON_PATH").unwrap_or_else(|_| "../../python".to_string())
-    }
-
-    /// Criterion 1: embed CPython, put `python/` on the path, render the tree.
-    pub fn initialize_python_runtime(&self) -> Result<(), String> {
-        let json: String = pyo3::Python::with_gil(|py| -> Result<String, String> {
-            let sys = py.import("sys").map_err(|e| e.to_string())?;
-            let path = sys.getattr("path").map_err(|e| e.to_string())?;
-            path.call_method1("insert", (0, Self::python_path()))
-                .map_err(|e| e.to_string())?;
-
-            let module = py
-                .import("fcspike.declarative")
-                .map_err(|e| e.to_string())?;
-            let raw: String = module
-                .getattr("render_ui")
-                .map_err(|e| e.to_string())?
-                .call0()
-                .map_err(|e| e.to_string())?
-                .extract()
-                .map_err(|e| e.to_string())?;
-            Ok(raw)
-        })?;
-
-        let node: WireNode = serde_json::from_str(&json).map_err(|e| e.to_string())?;
-        *self.tree.lock().unwrap() = Some(node);
-        Ok(())
-    }
-
-    /// Criteria 3 & 4: dispatch an event into Python; isolate a raising handler.
-    pub fn trigger_event(&self, handler_id: &str) -> Result<(), String> {
-        let result: Result<String, String> = pyo3::Python::with_gil(|py| {
-            let module = py
-                .import("fcspike.declarative")
-                .map_err(|e| e.to_string())?;
-            let func = module
-                .getattr("dispatch_event")
-                .map_err(|e| e.to_string())?;
-            match func.call1((handler_id,)) {
-                Ok(value) => value.extract::<String>().map_err(|e| e.to_string()),
-                Err(e) => Err(format!("exception: {e}")),
-            }
-        });
-
-        match result {
-            Ok(json) => {
-                let node: WireNode = serde_json::from_str(&json).map_err(|e| e.to_string())?;
-                *self.tree.lock().unwrap() = Some(node);
-                Ok(())
-            }
-            Err(msg) if msg.starts_with("exception:") => {
-                eprintln!("[FAULT ISOLATED] {msg}");
-                // Keep the previous tree; the host stays stable.
-                Ok(())
-            }
-            Err(msg) => Err(msg),
-        }
-    }
-
-    pub fn current(&self) -> Option<WireNode> {
-        self.tree.lock().unwrap().clone()
-    }
+    })
 }
 
-/// A view that renders the current Python-declared tree.
+/// A view that renders the Python-declared tree and dispatches clicks back to
+/// Python. The tree is shared via an `Arc<Mutex<_>>` so a click handler can
+/// replace it and notify for a re-render.
 pub struct WireView {
     tree: Arc<Mutex<Option<WireNode>>>,
 }
 
+impl WireView {
+    pub fn new(tree: Arc<Mutex<Option<WireNode>>>) -> Self {
+        Self { tree }
+    }
+
+    /// Criteria 3 & 4: run a Python handler; isolate a raising one.
+    fn dispatch(&mut self, handler_id: &str) {
+        match call_dispatch_event(handler_id) {
+            Ok(json) => {
+                if let Ok(node) = serde_json::from_str::<WireNode>(&json) {
+                    *self.tree.lock().unwrap() = Some(node);
+                }
+            }
+            Err(msg) if msg.starts_with("exception:") => {
+                eprintln!("[FAULT ISOLATED] {msg}");
+                // Keep the previous tree; the host stays stable.
+            }
+            Err(msg) => eprintln!("[DISPATCH ERROR] {msg}"),
+        }
+    }
+
+    fn element(&mut self, node: &WireNode, cx: &mut Context<Self>) -> AnyElement {
+        let mut el = div().id(SharedString::from(node.id.clone()));
+        match node.tag.as_str() {
+            "label" => {
+                if let Some(text) = node.props.get("text") {
+                    el = el.h(px(20.)).child(text.clone());
+                }
+            }
+            "button" => {
+                el = el.h(px(30.)).w(px(160.));
+                if let Some(title) = node.props.get("title") {
+                    el = el.child(title.clone());
+                }
+                if let Some(handler_id) = node
+                    .events
+                    .iter()
+                    .find(|(evt, _)| evt == "click")
+                    .map(|(_, id)| id.clone())
+                {
+                    el = el.on_click(cx.listener(move |this, _ev, _window, cx| {
+                        this.dispatch(&handler_id);
+                        cx.notify();
+                    }));
+                }
+            }
+            _ => {}
+        }
+        for child in &node.children {
+            let child_el = self.element(child, cx);
+            el = el.child(child_el);
+        }
+        el.into_any_element()
+    }
+}
+
 impl Render for WireView {
-    fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let node = self.tree.lock().unwrap().clone();
         match node {
-            Some(n) => wire_to_element(&n),
+            Some(n) => self.element(&n, cx),
             None => div().into_any_element(),
         }
     }
@@ -147,49 +154,58 @@ impl Render for WireView {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use gpui::{Entity, TestAppContext, VisualTestContext};
+    use gpui::{
+        Bounds, Entity, Modifiers, Point, TestAppContext, VisualTestContext, WindowBounds,
+        WindowOptions, px, size,
+    };
 
-    /// Criteria 1, 3, 4 — plain Python round-trip + exception isolation.
-    #[test]
-    fn python_roundtrip_and_exception_isolation() {
-        let host = Host::new();
-        host.initialize_python_runtime().expect("embed python");
-
-        let tree = host.current().expect("initial tree");
-        assert_eq!(tree.tag, "container");
-        assert_eq!(
-            tree.children[0].props.get("text").unwrap(),
-            "Total Operations: 0"
-        );
-
-        host.trigger_event("btn_inc_click").expect("increment");
-        assert_eq!(
-            host.current().unwrap().children[0].props["text"],
-            "Total Operations: 1"
-        );
-
-        // A raising handler is isolated; state is unchanged, host is stable.
-        host.trigger_event("btn_err_click").expect("fault isolated");
-        assert_eq!(
-            host.current().unwrap().children[0].props["text"],
-            "Total Operations: 1"
-        );
+    fn tree_with_python() -> Arc<Mutex<Option<WireNode>>> {
+        let node = initialize_python_runtime().expect("embed python");
+        Arc::new(Mutex::new(Some(node)))
     }
 
-    /// Criterion 2 — the Python-declared tree renders in a headless window.
-    #[gpui::test]
-    fn python_declares_ui_renders_headless(cx: &mut TestAppContext) {
-        let host = Host::new();
-        host.initialize_python_runtime().expect("embed python");
+    fn text(tree: &Arc<Mutex<Option<WireNode>>>) -> String {
+        tree.lock()
+            .unwrap()
+            .as_ref()
+            .unwrap()
+            .children[0]
+            .props["text"]
+            .clone()
+    }
 
-        let tree = host.tree.clone();
+    /// Criteria 1–4 in one headless test.
+    ///
+    /// A single test drives the embedded interpreter because tests that share
+    /// one CPython instance (module-global state) must be serialized — see
+    /// `docs/python-ui-research.md` §F.
+    #[gpui::test]
+    fn python_declares_ui_and_click_round_trips(cx: &mut TestAppContext) {
+        let tree = tree_with_python();
+        assert_eq!(text(&tree), "Total Operations: 0");
+
         let window = cx.update(|cx| {
-            cx.open_window(Default::default(), |_, cx| cx.new(|_| WireView { tree }))
-                .unwrap()
+            cx.open_window(
+                WindowOptions {
+                    window_bounds: Some(WindowBounds::Windowed(Bounds {
+                        origin: Point::new(px(0.), px(0.)),
+                        size: size(px(400.), px(300.)),
+                    })),
+                    ..Default::default()
+                },
+                |_, cx| cx.new(|_| WireView::new(tree.clone())),
+            )
+            .unwrap()
         });
         let mut cx = VisualTestContext::from_window(window.into(), cx);
-
-        // No display server, no GPU: the view mounts and renders.
         let _root: Entity<WireView> = window.root(&mut cx).unwrap();
+
+        // Stacked block layout: label y=0..20, btn_inc y=20..50, btn_err y=50..80.
+        cx.simulate_click(Point::new(px(80.), px(35.)), Modifiers::none());
+        assert_eq!(text(&tree), "Total Operations: 1");
+
+        // btn_err raises in Python; isolated, state unchanged.
+        cx.simulate_click(Point::new(px(80.), px(65.)), Modifiers::none());
+        assert_eq!(text(&tree), "Total Operations: 1");
     }
 }

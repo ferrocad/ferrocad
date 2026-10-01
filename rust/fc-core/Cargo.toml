@@ -1,0 +1,8 @@
+[package]
+name = "fc-core"
+version = "0.1.0"
+edition = "2021"
+description = "FreeCAD-on-Rust core: quantities, properties, documents, recompute DAG"
+
+[dependencies]
+petgraph = "0.6"

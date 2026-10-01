@@ -1,5 +1,5 @@
 # Rust build output
-/rust/freecad-core/target/
+/rust/*/target/
 
 # Packaged native library (build artifact)
 /python/FreeCAD/*.so

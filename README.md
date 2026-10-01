@@ -53,18 +53,23 @@ Tests:
 PYTHONPATH=python python3 -m unittest discover -s tests -v
 ```
 
-## Why a C ABI + `ctypes` (and not PyO3)?
+## Why a C ABI + `ctypes` (bootstrap) and not PyO3?
 
-PyO3 is the production path, but it compiles against the CPython headers. The
-build environment here has **no `python3-dev` and no system Rust**, and is
-non-root, so PyO3 cannot build. A dependency-free `cdylib` loaded with `ctypes`
-needs neither headers nor a package manager, so the POC builds anywhere with a
-Rust toolchain.
+When this POC was first built the environment had **no CPython headers**, so PyO3
+could not compile. A dependency-free `cdylib` loaded with `ctypes` needs neither
+headers nor a package manager, which let the milestone land immediately.
+
+**That constraint no longer holds.** The system now ships `python3.14-dev`
+(`/usr/include/python3.14/Python.h`), so **PyO3 is the chosen path for M1** — see
+[`../docs/rewrite-strategy.md`](../docs/rewrite-strategy.md). The `ctypes` bridge
+here is a bootstrap, not the destination.
 
 The seam is deliberately thin: `rust/freecad-core/src/lib.rs` is plain Rust with
 a flat `extern "C"` surface. Swapping it for PyO3 `#[pyclass]` bindings means
 rewriting `python/FreeCAD/_ffi.py` and adding `#[pymethods]` — the model itself
-does not move. See `../docs/` for the full feasibility assessment.
+does not move. See [`../docs/rewrite-strategy.md`](../docs/rewrite-strategy.md) for the direction and
+[`../docs/coin-bridge-reuse-assessment.md`](../docs/coin-bridge-reuse-assessment.md)
+for the underlying analysis.
 
 ### Production path (PyO3)
 

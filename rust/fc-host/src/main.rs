@@ -3,6 +3,9 @@ use gpui::prelude::*;
 use gpui::{div, px, rgb, App, Context, Render, Window, WindowOptions};
 
 #[cfg(test)]
+mod spike;
+
+#[cfg(test)]
 use gpui::{Entity, TestAppContext, VisualTestContext};
 
 struct MyView;

@@ -1,0 +1,11 @@
+# Rust build output
+/rust/freecad-core/target/
+
+# Packaged native library (build artifact)
+/python/FreeCAD/*.so
+/python/FreeCAD/*.dylib
+/python/FreeCAD/*.dll
+
+# Python
+__pycache__/
+*.py[cod]

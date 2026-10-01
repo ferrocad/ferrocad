@@ -32,7 +32,11 @@ pub struct WireNode {
 #[derive(Debug, Clone, Deserialize)]
 #[serde(tag = "op", rename_all = "lowercase")]
 enum Patch {
-    Insert { node: WireNode },
+    Insert {
+        parent: String,
+        index: usize,
+        node: WireNode,
+    },
     Remove { id: String },
     Update { id: String, props: HashMap<String, String> },
 }
@@ -63,6 +67,20 @@ fn remove_by_id(node: &mut WireNode, id: &str) -> bool {
     false
 }
 
+fn insert_at(root: &mut WireNode, parent: &str, index: usize, node: &WireNode) -> bool {
+    if root.id == parent {
+        let idx = index.min(root.children.len());
+        root.children.insert(idx, node.clone());
+        return true;
+    }
+    for child in &mut root.children {
+        if insert_at(child, parent, index, node) {
+            return true;
+        }
+    }
+    false
+}
+
 fn apply_patches(root: &mut WireNode, patches: &[Patch]) {
     for patch in patches {
         match patch {
@@ -76,8 +94,8 @@ fn apply_patches(root: &mut WireNode, patches: &[Patch]) {
             Patch::Remove { id } => {
                 remove_by_id(root, id);
             }
-            Patch::Insert { node } => {
-                root.children.push(node.clone());
+            Patch::Insert { parent, index, node } => {
+                insert_at(root, parent, *index, node);
             }
         }
     }
@@ -236,9 +254,13 @@ mod tests {
             .clone()
     }
 
+    fn child_count(tree: &Arc<Mutex<Option<WireNode>>>) -> usize {
+        tree.lock().unwrap().as_ref().unwrap().children.len()
+    }
+
     /// Pure-Rust: the patch stream deserializes and applies (no Python, no UI).
     #[test]
-    fn patch_application_updates_and_removes() {
+    fn patch_application_updates_inserts_and_removes() {
         let mut root = WireNode {
             id: "root".into(),
             tag: "container".into(),
@@ -265,18 +287,34 @@ mod tests {
                     events: vec![],
                     children: vec![],
                 },
+                WireNode {
+                    id: "btn_rem".into(),
+                    tag: "button".into(),
+                    props: std::collections::HashMap::from([(
+                        "title".into(),
+                        "Remove Item".into(),
+                    )]),
+                    events: vec![],
+                    children: vec![],
+                },
             ],
         };
 
         let patches: Vec<Patch> = serde_json::from_str(
-            r#"[{"op":"update","id":"counter_label","props":{"text":"Total Operations: 1"}},{"op":"remove","id":"btn_inc"}]"#,
+            r#"[
+                {"op":"update","id":"counter_label","props":{"text":"Total Operations: 1"}},
+                {"op":"remove","id":"btn_inc"},
+                {"op":"insert","parent":"root","index":1,"node":{"id":"item_0","tag":"label","props":{"text":"Item 1"}}}
+            ]"#,
         )
         .unwrap();
 
         apply_patches(&mut root, &patches);
 
         assert_eq!(root.children[0].props["text"], "Total Operations: 1");
-        assert_eq!(root.children.len(), 1); // btn_inc removed
+        assert_eq!(root.children[1].id, "item_0"); // inserted at index 1
+        assert_eq!(root.children[2].id, "btn_rem"); // btn_inc removed
+        assert_eq!(root.children.len(), 3);
     }
 
     /// Criteria 1–4 in one headless test.
@@ -288,6 +326,7 @@ mod tests {
     fn python_declares_ui_and_click_round_trips(cx: &mut TestAppContext) {
         let tree = tree_with_python();
         assert_eq!(text(&tree), "Total Operations: 0");
+        assert_eq!(child_count(&tree), 5); // label + 4 buttons
 
         let window = cx.update(|cx| {
             cx.open_window(
@@ -305,12 +344,20 @@ mod tests {
         let mut cx = VisualTestContext::from_window(window.into(), cx);
         let _root: Entity<WireView> = window.root(&mut cx).unwrap();
 
-        // Stacked block layout: label y=0..20, btn_inc y=20..50, btn_err y=50..80.
+        // Stacked block layout: label y=0..20, btn_inc 20..50, btn_add 50..80,
+        // btn_rem 80..110, btn_err 110..140 (x=0..160).
         cx.simulate_click(Point::new(px(80.), px(35.)), Modifiers::none());
         assert_eq!(text(&tree), "Total Operations: 1");
 
-        // btn_err raises in Python; isolated, state unchanged.
         cx.simulate_click(Point::new(px(80.), px(65.)), Modifiers::none());
+        assert_eq!(child_count(&tree), 6); // item_0 inserted
+
+        cx.simulate_click(Point::new(px(80.), px(95.)), Modifiers::none());
+        assert_eq!(child_count(&tree), 5); // item_0 removed
+
+        // btn_err raises in Python; isolated, state unchanged.
+        cx.simulate_click(Point::new(px(80.), px(125.)), Modifiers::none());
         assert_eq!(text(&tree), "Total Operations: 1");
+        assert_eq!(child_count(&tree), 5);
     }
 }

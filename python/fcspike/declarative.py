@@ -47,9 +47,17 @@ class AppState:
     def __init__(self):
         self.counter: int = 0
         self.label_prefix: str = "Total Operations: "
+        self.items: List[str] = []
 
     def increment(self):
         self.counter += 1
+
+    def add_item(self):
+        self.items.append(f"Item {len(self.items) + 1}")
+
+    def remove_item(self):
+        if self.items:
+            self.items.pop()
 
     def fail_gracefully(self):
         raise RuntimeError("Controlled workbench fault")
@@ -64,6 +72,7 @@ def reset_state() -> None:
     """Reset module-global state (test isolation between Rust tests)."""
     global _prev_tree
     app_state.counter = 0
+    app_state.items = []
     _prev_tree = None
 
 
@@ -82,11 +91,22 @@ def _snapshot() -> dict:
         "button", id="btn_inc", title="Increment Count"
     ).on("click", lambda: app_state.increment())
 
+    btn_add = Element(
+        "button", id="btn_add", title="Add Item"
+    ).on("click", lambda: app_state.add_item())
+
+    btn_remove = Element(
+        "button", id="btn_rem", title="Remove Item"
+    ).on("click", lambda: app_state.remove_item())
+
     btn_fault = Element(
         "button", id="btn_err", title="Trigger Error"
     ).on("click", lambda: app_state.fail_gracefully())
 
-    root.add(label).add(btn_increment).add(btn_fault)
+    root.add(label).add(btn_increment).add(btn_add).add(btn_remove).add(btn_fault)
+
+    for index, item in enumerate(app_state.items):
+        root.add(Element("label", id=f"item_{index}", text=item))
 
     return root.serialize(ACTIVE_REGISTRY)
 
@@ -98,14 +118,25 @@ def render_ui() -> str:
     return json.dumps(_prev_tree)
 
 
-def _diff_nodes(old, new, patches):
-    if old is None:
-        patches.append({"op": "insert", "node": new})
-        return
-    if new is None:
-        patches.append({"op": "remove", "id": old.get("id")})
-        return
+def _diff_children(old_list, new_list, parent_id, patches):
+    old_by_id = {c["id"]: c for c in old_list}
+    new_by_id = {c["id"]: c for c in new_list}
 
+    for cid in old_by_id:
+        if cid not in new_by_id:
+            patches.append({"op": "remove", "id": cid})
+
+    for index, new_child in enumerate(new_list):
+        old_child = old_by_id.get(new_child["id"])
+        if old_child is None:
+            patches.append(
+                {"op": "insert", "parent": parent_id, "index": index, "node": new_child}
+            )
+        else:
+            _diff_node(old_child, new_child, patches)
+
+
+def _diff_node(old, new, patches):
     changed = {}
     for key in ("text", "title"):
         ov = old.get("props", {}).get(key)
@@ -115,18 +146,12 @@ def _diff_nodes(old, new, patches):
     if changed:
         patches.append({"op": "update", "id": new["id"], "props": changed})
 
-    old_children = {c["id"]: c for c in old.get("children", [])}
-    new_children = {c["id"]: c for c in new.get("children", [])}
-    for cid in old_children:
-        if cid not in new_children:
-            patches.append({"op": "remove", "id": cid})
-    for cid, nc in new_children.items():
-        _diff_nodes(old_children.get(cid), nc, patches)
+    _diff_children(old.get("children", []), new.get("children", []), new["id"], patches)
 
 
 def _diff(old, new):
     patches = []
-    _diff_nodes(old, new, patches)
+    _diff_node(old, new, patches)
     return patches
 
 

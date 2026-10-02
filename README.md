@@ -133,6 +133,8 @@ rust/freecad-core/        Rust object model + flat C ABI (fallback)
 rust/fc-host/             spike: Rust host embedding CPython + bite-gpui
     src/spike.rs          Python-declared UI -> bite-gpui element (headless)
 python/fcspike/           Python declarative UI spike module
+tools/inventory.py        M3a: parse upstream .pyi stubs into an API model (Python ast)
+tools/test_inventory.py   M3a tests (hermetic fixtures + upstream integration guard)
 tests/test_parity.py      behavioural checks (M0/M1)
 tests/test_fc_core.py     fc-core via Python (M3b)
 ```

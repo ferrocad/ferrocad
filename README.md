@@ -1,6 +1,6 @@
 # freecad-rs-poc
 
-**Milestones 0–4 (slice 15):** run a FreeCAD headless "hello world" Python script on a pure-Rust
+**Milestones 0–4 (slice 16):** run a FreeCAD headless "hello world" Python script on a pure-Rust
 core, with the C++ Python bindings replaced by Rust bindings.
 
 * **M0** — hello world on a Rust object model, bridged to Python over a C ABI + `ctypes`.
@@ -51,7 +51,11 @@ core, with the C++ Python bindings replaced by Rust bindings.
 * **M4 (slice 15)** — widen the conformance harness to eight upstream files (`BaseTests`,
   `TestIntPairList`, `FreeCADInitTests` added); full `ParameterGrp` rewrite; a **matrix inverse
   transpose fix**; and a broad `Base` geometry surface (`Matrix`/`Rotation`/`Placement` helpers,
-  `Vector2d`/`Material`/`BoundBox`, `IntPairList`); conformance now **135 passing**.
+  `Vector2d`/`Material`/`BoundBox`, `IntPairList`).
+* **M4 (slice 16)** — **matrix decomposition** (`Matrix.decompose()` / `hasScale()` / `ScaleType`)
+  plus the rotation-numerics cluster: FreeCAD's verbatim **Gauss-Jordan inverse**, quaternion
+  normalizing `to_matrix`, `decompose`-based `from_matrix`, angle wrapping, quaternion
+  `yaw_pitch_roll`, and `Rotation.Axes`; conformance now **146 passing** (`BaseTests` 48/49).
 
 This is a proof of concept, not a product. It exists to validate the single
 riskiest assumption of the rewrite plan: *that a Python script written against

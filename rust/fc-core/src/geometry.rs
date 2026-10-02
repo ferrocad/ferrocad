@@ -1,12 +1,13 @@
 //! Core geometry types used by FreeCAD's `Base` module: `Vector3`, `Matrix4`,
 //! `Rotation`, `Placement`, and `TypeId`.
 
+use serde::{Deserialize, Serialize};
 
 // ---------------------------------------------------------------------------
 // Vector3
 // ---------------------------------------------------------------------------
 
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub struct Vector3 {
     pub x: f64,
     pub y: f64,
@@ -85,7 +86,7 @@ impl Vector3 {
 // Matrix4 (row-major [16]; identity is diag(1,1,1,1))
 // ---------------------------------------------------------------------------
 
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub struct Matrix4 {
     pub m: [f64; 16],
 }
@@ -139,7 +140,7 @@ impl Matrix4 {
 // Rotation (quaternion: w, x, y, z)
 // ---------------------------------------------------------------------------
 
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub struct Rotation {
     pub q: [f64; 4],
 }
@@ -189,7 +190,7 @@ impl Rotation {
 // Placement (base point + rotation)
 // ---------------------------------------------------------------------------
 
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub struct Placement {
     pub base: Vector3,
     pub rotation: Rotation,
@@ -226,7 +227,7 @@ impl Placement {
 // TypeId (an interned type-name identifier)
 // ---------------------------------------------------------------------------
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct TypeId(pub String);
 
 impl TypeId {

@@ -5,6 +5,7 @@ use std::collections::BTreeMap;
 
 use petgraph::graph::NodeIndex;
 use petgraph::stable_graph::StableGraph;
+use serde::{Deserialize, Serialize};
 
 use crate::expr;
 use crate::observer::Observer;
@@ -279,6 +280,73 @@ impl Document {
     pub fn add_observer(&mut self, observer: Box<dyn Observer>) {
         self.observers.push(observer);
     }
+
+    // -- persistence --------------------------------------------------------
+
+    /// Serialize this document's objects (with `name`) to JSON.
+    pub fn to_saved(&self, name: &str) -> SavedDocument {
+        let objects = self
+            .object_ids()
+            .into_iter()
+            .filter_map(|id| {
+                self.object(id).map(|o| SavedObject {
+                    name: o.name.clone(),
+                    label: o.label.clone(),
+                    type_id: o.type_id.clone(),
+                    properties: o
+                        .properties
+                        .iter()
+                        .map(|(k, v)| (k.clone(), v.clone()))
+                        .collect(),
+                    expressions: o.expressions.clone(),
+                })
+            })
+            .collect();
+        SavedDocument { name: name.to_string(), objects }
+    }
+
+    /// Build a fresh document from a `SavedDocument`.
+    pub fn from_saved(saved: &SavedDocument) -> Document {
+        let mut doc = Document::new();
+        for obj in &saved.objects {
+            let id = doc.add_object(&obj.name, &obj.type_id);
+            doc.set_label(id, &obj.label);
+            if let Some(o) = doc.objects.get_mut(&id) {
+                o.properties.clear();
+                for (k, v) in &obj.properties {
+                    o.properties.set(k.clone(), v.clone());
+                }
+                o.expressions = obj.expressions.clone();
+            }
+        }
+        doc
+    }
+
+    pub fn save_to_file(&self, name: &str, path: &str) -> Result<(), String> {
+        let json = serde_json::to_string(&self.to_saved(name)).map_err(|e| e.to_string())?;
+        std::fs::write(path, json).map_err(|e| e.to_string())
+    }
+
+    pub fn load_from_file(path: &str) -> Result<SavedDocument, String> {
+        let text = std::fs::read_to_string(path).map_err(|e| e.to_string())?;
+        serde_json::from_str(&text).map_err(|e| e.to_string())
+    }
+}
+
+/// A document as persisted to disk (JSON).
+#[derive(Serialize, Deserialize)]
+pub struct SavedDocument {
+    pub name: String,
+    pub objects: Vec<SavedObject>,
+}
+
+#[derive(Serialize, Deserialize)]
+pub struct SavedObject {
+    pub name: String,
+    pub label: String,
+    pub type_id: String,
+    pub properties: BTreeMap<String, Property>,
+    pub expressions: BTreeMap<String, String>,
 }
 
 fn numeric(obj: &DocumentObject, name: &str) -> Option<f64> {

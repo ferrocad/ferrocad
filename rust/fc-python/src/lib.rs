@@ -313,10 +313,41 @@ fn default_property(type_id: &str) -> Property {
 // Document / DocumentObject
 // ---------------------------------------------------------------------------
 
+fn copy_source_data(
+    obj: &PyRef<'_, PyDocumentObject>,
+) -> PyResult<(String, String, String, Vec<(String, Property)>, Vec<(String, String)>)> {
+    let doc = obj.inner.lock().unwrap();
+    let o = doc
+        .object(obj.id)
+        .ok_or_else(|| PyValueError::new_err("source object no longer exists"))?;
+    Ok((
+        o.name.clone(),
+        o.label.clone(),
+        o.type_id.clone(),
+        o.properties.iter().map(|(k, v)| (k.clone(), v.clone())).collect(),
+        o.expressions.iter().map(|(k, v)| (k.clone(), v.clone())).collect(),
+    ))
+}
+
+fn unique_name(doc: &CoreDocument, name: &str) -> String {
+    if doc.get_by_name(name).is_none() {
+        return name.to_string();
+    }
+    let mut i = 1;
+    loop {
+        let candidate = format!("{}{:03}", name, i);
+        if doc.get_by_name(&candidate).is_none() {
+            return candidate;
+        }
+        i += 1;
+    }
+}
+
 #[pyclass(name = "Document", module = "fc")]
 struct PyDocument {
     name: String,
     label: String,
+    file_name: Option<String>,
     inner: Arc<Mutex<CoreDocument>>,
 }
 
@@ -335,6 +366,7 @@ impl PyDocument {
         Self {
             name: name.to_string(),
             label: name.to_string(),
+            file_name: None,
             inner: Arc::new(Mutex::new(CoreDocument::new())),
         }
     }
@@ -442,6 +474,92 @@ impl PyDocument {
 
     fn redo(&self) -> bool {
         self.inner.lock().unwrap().redo()
+    }
+
+    // -- persistence ---------------------------------------------------------
+    fn saveAs(&mut self, path: &str) -> PyResult<()> {
+        self.inner
+            .lock()
+            .unwrap()
+            .save_to_file(&self.name, path)
+            .map_err(PyValueError::new_err)?;
+        self.file_name = Some(path.to_string());
+        Ok(())
+    }
+
+    fn save(&self) -> PyResult<()> {
+        match &self.file_name {
+            Some(path) => self
+                .inner
+                .lock()
+                .unwrap()
+                .save_to_file(&self.name, path)
+                .map_err(PyValueError::new_err),
+            None => Err(PyValueError::new_err(
+                "document has no file name; use saveAs first",
+            )),
+        }
+    }
+
+    fn load(&mut self, path: &str) -> PyResult<()> {
+        let saved = CoreDocument::load_from_file(path).map_err(PyValueError::new_err)?;
+        self.name = saved.name.clone();
+        self.label = saved.name.clone();
+        self.file_name = Some(path.to_string());
+        self.inner = Arc::new(Mutex::new(CoreDocument::from_saved(&saved)));
+        Ok(())
+    }
+
+    /// Copy one object (or a sequence of objects) from another document.
+    #[pyo3(signature = (object, recursive=false, return_all=false))]
+    fn copyObject(
+        slf: &Bound<'_, Self>,
+        object: &Bound<'_, PyAny>,
+        recursive: bool,
+        return_all: bool,
+    ) -> PyResult<PyObject> {
+        let _ = (recursive, return_all);
+        let py = slf.py();
+
+        // Collect source objects' data (name, label, type, properties, expressions).
+        let sources: Vec<(String, String, String, Vec<(String, Property)>, Vec<(String, String)>)> =
+            if let Ok(obj) = object.extract::<PyRef<'_, PyDocumentObject>>() {
+                vec![copy_source_data(&obj)?]
+            } else if let Ok(objs) = object.extract::<Vec<PyRef<'_, PyDocumentObject>>>() {
+                objs.iter().map(copy_source_data).collect::<PyResult<_>>()?
+            } else {
+                return Err(PyTypeError::new_err(
+                    "copyObject expects a DocumentObject or a sequence of them",
+                ));
+            };
+
+        let inner = Arc::clone(&slf.borrow().inner);
+        let mut copied: Vec<PyDocumentObject> = Vec::new();
+        {
+            let mut doc = inner.lock().unwrap();
+            for (name, label, type_id, props, exprs) in &sources {
+                let unique = unique_name(&doc, name);
+                let id = doc.add_object(&unique, type_id);
+                doc.set_label(id, label);
+                for (k, v) in props {
+                    let _ = doc.set_property(id, k, v.clone());
+                }
+                for (k, v) in exprs {
+                    let _ = doc.set_expression(id, k, v);
+                }
+                copied.push(PyDocumentObject {
+                    doc: slf.clone().unbind(),
+                    inner: Arc::clone(&inner),
+                    id,
+                });
+            }
+        }
+
+        if copied.len() == 1 {
+            Ok(copied.pop().unwrap().into_py_any(py).unwrap())
+        } else {
+            Ok(copied.into_py_any(py).unwrap())
+        }
     }
 
     // -- undo/redo metadata (POC: not tracked yet) ---------------------------
@@ -1015,8 +1133,20 @@ fn newDocument(name: Option<String>) -> PyDocument {
     PyDocument {
         label: name.clone(),
         name,
+        file_name: None,
         inner: Arc::new(Mutex::new(CoreDocument::new())),
     }
+}
+
+#[pyfunction]
+fn openDocument(path: &str) -> PyResult<PyDocument> {
+    let saved = CoreDocument::load_from_file(path).map_err(PyValueError::new_err)?;
+    Ok(PyDocument {
+        name: saved.name.clone(),
+        label: saved.name.clone(),
+        file_name: Some(path.to_string()),
+        inner: Arc::new(Mutex::new(CoreDocument::from_saved(&saved))),
+    })
 }
 
 #[pymodule]
@@ -1034,5 +1164,6 @@ fn fc(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyStringHasher>()?;
     m.add_class::<PyStringID>()?;
     m.add_function(wrap_pyfunction!(newDocument, m)?)?;
+    m.add_function(wrap_pyfunction!(openDocument, m)?)?;
     Ok(())
 }

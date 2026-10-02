@@ -2,10 +2,12 @@
 
 use std::collections::BTreeMap;
 
+use serde::{Deserialize, Serialize};
+
 use crate::geometry::{Matrix4, Placement, Vector3};
 use crate::quantity::Quantity;
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum Property {
     String(String),
     Float(f64),
@@ -66,6 +68,14 @@ impl PropertyContainer {
 
     pub fn remove(&mut self, name: &str) -> Option<Property> {
         self.props.remove(name)
+    }
+
+    pub fn clear(&mut self) {
+        self.props.clear();
+    }
+
+    pub fn iter(&self) -> impl Iterator<Item = (&String, &Property)> {
+        self.props.iter()
     }
 
     pub fn len(&self) -> usize {

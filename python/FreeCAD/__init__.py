@@ -70,6 +70,13 @@ if backend == "fc":
         _active = doc
         return doc
 
+    def open(name, hidden=False, temporary=False):
+        global _active
+        doc = _fc.openDocument(name)
+        _documents[doc.Name] = doc
+        _active = doc
+        return doc
+
     def closeDocument(name):
         global _active
         if name not in _documents:

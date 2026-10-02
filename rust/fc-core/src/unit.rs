@@ -10,11 +10,13 @@ use std::collections::HashMap;
 use std::f64::consts::PI;
 use std::sync::OnceLock;
 
+use serde::{Deserialize, Serialize};
+
 pub type Signature = [i8; 8];
 
 const RAD_TO_DEG: f64 = 180.0 / PI;
 
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub struct Unit {
     pub sig: Signature,
     pub scale: f64,

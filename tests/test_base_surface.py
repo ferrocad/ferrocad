@@ -116,5 +116,43 @@ class TestGeometry(unittest.TestCase):
         FreeCAD.closeDocument("Ft")
 
 
+class TestPersistence(unittest.TestCase):
+    def test_save_and_open_roundtrip(self):
+        import os
+        import tempfile
+
+        doc = FreeCAD.newDocument("SaveTest")
+        obj = doc.addObject("App::FeaturePython", "Box")
+        obj.Label = "Persisted label"
+        obj.addProperty("App::PropertyString", "Description", "Base", "")
+        obj.Description = "hello"
+        path = os.path.join(tempfile.gettempdir(), "SaveTest.FCStd")
+        doc.saveAs(path)
+        FreeCAD.closeDocument("SaveTest")
+
+        doc2 = FreeCAD.open(path)
+        self.assertEqual(doc2.Name, "SaveTest")
+        o = doc2.getObject("Box")
+        self.assertEqual(o.Label, "Persisted label")
+        self.assertEqual(o.Description, "hello")
+        FreeCAD.closeDocument("SaveTest")
+
+    def test_copy_object(self):
+        src = FreeCAD.newDocument("Src")
+        o = src.addObject("App::FeaturePython", "Box")
+        o.Label = "copy me"
+        o.addProperty("App::PropertyInteger", "N", "Base", "")
+        o.N = 5
+
+        dst = FreeCAD.newDocument("Dst")
+        c = dst.copyObject(o)
+        self.assertEqual(c.Name, "Box")
+        self.assertEqual(c.Label, "copy me")
+        self.assertEqual(c.getPropertyByName("N"), 5)
+
+        FreeCAD.closeDocument("Src")
+        FreeCAD.closeDocument("Dst")
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -8,7 +8,7 @@
 
 use std::sync::{Arc, Mutex};
 
-use fc_core::{Document as CoreDocument, ObjectId, Property, Quantity, Unit};
+use fc_core::{Document as CoreDocument, ObjectId, Property, Quantity, StringHasher, StringId, Unit};
 use pyo3::exceptions::{PyAttributeError, PyTypeError, PyValueError};
 use pyo3::prelude::*;
 use pyo3::types::{PyAny, PyAnyMethods};
@@ -61,11 +61,15 @@ fn property_to_py(py: Python<'_>, value: &Property) -> PyObject {
 }
 
 fn py_to_property(value: &Bound<'_, PyAny>) -> PyResult<Property> {
-    if let Ok(q) = value.extract::<PyRef<'_, PyQuantity>>() {
-        return Ok(Property::Quantity(q.inner));
+    if let Ok(q) = value.downcast::<PyQuantity>() {
+        return Ok(Property::Quantity(q.borrow().inner));
     }
     if let Ok(b) = value.extract::<bool>() {
         return Ok(Property::Bool(b));
+    }
+    // `int` is distinct from `float` in PyO3; map it to Float.
+    if let Ok(i) = value.extract::<i64>() {
+        return Ok(Property::Float(i as f64));
     }
     if let Ok(f) = value.extract::<f64>() {
         return Ok(Property::Float(f));
@@ -74,7 +78,7 @@ fn py_to_property(value: &Bound<'_, PyAny>) -> PyResult<Property> {
         return Ok(Property::String(s));
     }
     Err(PyTypeError::new_err(
-        "unsupported property value (expected str, float, bool, or Quantity)",
+        "unsupported property value (expected str, int, float, bool, or Quantity)",
     ))
 }
 
@@ -204,7 +208,10 @@ impl PyDocument {
     }
 
     // -- transactions -------------------------------------------------------
-    fn openTransaction(&self) {
+    #[pyo3(signature = (name = ""))]
+    fn openTransaction(&self, name: &str) {
+        // The name is a label for undo/redo; the POC does not track it yet.
+        let _ = name;
         self.inner.lock().unwrap().open_transaction();
     }
 
@@ -374,6 +381,79 @@ impl PyDocumentObject {
 }
 
 // ---------------------------------------------------------------------------
+// StringHasher / StringID
+// ---------------------------------------------------------------------------
+
+#[pyclass(name = "StringHasher", module = "fc")]
+#[derive(Clone)]
+struct PyStringHasher {
+    inner: StringHasher,
+}
+
+#[pymethods]
+impl PyStringHasher {
+    #[new]
+    fn new() -> Self {
+        Self {
+            inner: StringHasher::new(),
+        }
+    }
+
+    fn getID(&self, arg: &Bound<'_, PyAny>) -> PyResult<PyStringID> {
+        if let Ok(s) = arg.extract::<String>() {
+            return Ok(PyStringID {
+                inner: self.inner.get_id(&s),
+            });
+        }
+        if let Ok(i) = arg.extract::<usize>() {
+            return self
+                .inner
+                .find_id(i)
+                .map(|id| PyStringID { inner: id })
+                .ok_or_else(|| PyValueError::new_err(format!("no StringID with value {i}")));
+        }
+        Err(PyValueError::new_err("getID expects a string or an integer"))
+    }
+
+    fn isSame(&self, other: &Bound<'_, PyAny>) -> PyResult<bool> {
+        match other.extract::<PyRef<'_, PyStringHasher>>() {
+            Ok(o) => Ok(self.inner.is_same(&o.inner)),
+            Err(_) => Err(PyTypeError::new_err("isSame expects a StringHasher")),
+        }
+    }
+}
+
+#[pyclass(name = "StringID", module = "fc")]
+#[derive(Clone)]
+struct PyStringID {
+    inner: StringId,
+}
+
+#[pymethods]
+impl PyStringID {
+    #[getter]
+    fn Value(&self) -> usize {
+        self.inner.value()
+    }
+
+    #[getter]
+    fn Data(&self) -> String {
+        self.inner.data()
+    }
+
+    fn isSame(&self, other: &Bound<'_, PyAny>) -> PyResult<bool> {
+        match other.extract::<PyRef<'_, PyStringID>>() {
+            Ok(o) => Ok(self.inner.is_same(&o.inner)),
+            Err(_) => Err(PyTypeError::new_err("isSame expects a StringID")),
+        }
+    }
+
+    fn __repr__(&self) -> String {
+        format!("<StringID {}>", self.inner.value())
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Module
 // ---------------------------------------------------------------------------
 
@@ -394,6 +474,8 @@ fn fc(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyQuantity>()?;
     m.add_class::<PyDocument>()?;
     m.add_class::<PyDocumentObject>()?;
+    m.add_class::<PyStringHasher>()?;
+    m.add_class::<PyStringID>()?;
     m.add_function(wrap_pyfunction!(newDocument, m)?)?;
     Ok(())
 }

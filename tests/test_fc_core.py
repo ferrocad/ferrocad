@@ -116,6 +116,36 @@ def test_remove_object():
     assert raised, "expected ValueError for missing object"
 
 
+def test_string_hasher():
+    h = fc.StringHasher()
+    sid = h.getID("A")
+    assert sid.Value >= 1
+    assert sid.Data == "A"
+    assert sid.isSame(h.getID("A")) is True
+
+    # Wrong types raise (matching upstream StringHasher.py semantics).
+    for fn, exc in [
+        (lambda: fc.StringHasher(0), TypeError),
+        (lambda: h.getID(0), ValueError),
+        (lambda: h.isSame(0), TypeError),
+        (lambda: sid.isSame(0), TypeError),
+    ]:
+        try:
+            fn()
+        except exc:
+            pass
+        else:
+            raise AssertionError("expected %s" % exc.__name__)
+
+
+def test_int_property_value():
+    doc = fc.newDocument("Ints")
+    obj = doc.addObject("App::FeaturePython", "Box")
+    obj.addProperty("App::PropertyInteger", "Integer", "Base", "")
+    obj.Integer = 5
+    assert obj.getPropertyByName("Integer") == 5.0
+
+
 if __name__ == "__main__":
     test_quantity()
     test_document_and_expressions()
@@ -125,4 +155,6 @@ if __name__ == "__main__":
     test_document_back_reference()
     test_dynamic_properties()
     test_remove_object()
+    test_string_hasher()
+    test_int_property_value()
     print("all fc-python tests passed")

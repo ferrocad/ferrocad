@@ -1,7 +1,7 @@
 # freecad-rs-poc
 
-**Milestones 0–3d:** run a FreeCAD headless "hello world" Python script on a pure-Rust core,
-with the C++ Python bindings replaced by Rust bindings.
+**Milestones 0–4 (slice 1):** run a FreeCAD headless "hello world" Python script on a pure-Rust
+core, with the C++ Python bindings replaced by Rust bindings.
 
 * **M0** — hello world on a Rust object model, bridged to Python over a C ABI + `ctypes`.
 * **M1** — the bridge migrated to **PyO3** (`FreeCAD._core`); the `ctypes` path kept as a fallback.
@@ -13,7 +13,9 @@ with the C++ Python bindings replaced by Rust bindings.
 * **M3c** — generate PyO3 **skeleton** bindings (`fc-gen`) from the `.pyi` model; behaviour stays
   in `fc-core` (hand-written glue).
 * **M3d** — a **conformance harness** that runs upstream `Mod/Test` files against our `FreeCAD`
-  and reports the parity gap (1 upstream test already passes unchanged).
+  and reports the parity gap.
+* **M4 (slice 1)** — the `FreeCAD.Base`/`FreeCAD.Units`/`FreeCAD.Console`/`ParamGet`/`StringHasher`
+  surface; conformance now **13 passing, 0 files fail to load** (`StringHasher.py` is 4/4).
 
 This is a proof of concept, not a product. It exists to validate the single
 riskiest assumption of the rewrite plan: *that a Python script written against
@@ -144,6 +146,9 @@ Not implemented (deliberately out of scope for this milestone):
 hello_freecad.py          the milestone script (public FreeCAD API only)
 run.sh / build.sh         convenience wrappers
 python/FreeCAD/           drop-in module: __init__.py (facade + backend selector)
+    Base.py              core data types (Quantity; Vector/Matrix later)
+    Units.py             units facade (Quantity)
+    Console.py           minimal Print* logging facade
     fc.abi3.so            built PyO3 bindings over fc-core (gitignored)
     fc_gen.abi3.so        generated skeleton bindings, M3c (gitignored)
     _core.abi3.so         M1 PyO3 extension (legacy; gitignored)

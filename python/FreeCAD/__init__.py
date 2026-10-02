@@ -35,7 +35,12 @@ if backend == "fc":
     Document = _fc.Document
     DocumentObject = _fc.DocumentObject
     Quantity = _fc.Quantity
+    StringHasher = _fc.StringHasher
+    StringID = _fc.StringID
     __version__ = _fc.__version__
+
+    # Core/utility submodules (the M4 Base/Units/Console surface).
+    from . import Base, Units, Console
 
     # `fc` has no App/registry, so the facade owns it: a name -> Document map,
     # an "active" pointer, and FreeCAD-style unique name allocation.
@@ -101,6 +106,8 @@ __all__ = [
     "DocumentObject",
     "ActiveDocument",
     "backend",
+    "ParamGet",
+    "ParameterGrp",
 ]
 
 
@@ -109,3 +116,51 @@ def __getattr__(name):
     if name == "ActiveDocument":
         return activeDocument()
     raise AttributeError("module 'FreeCAD' has no attribute '%s'" % name)
+
+
+# ---------------------------------------------------------------------------
+# Parameters (App-level config store) — minimal in-memory shim
+# ---------------------------------------------------------------------------
+
+
+class ParameterGrp:
+    """A minimal, in-memory stand-in for ``Base.ParameterGrp``."""
+
+    def __init__(self, path=""):
+        self._path = path
+        self._values = {}
+
+    def GetInt(self, name, default=0):
+        return int(self._values.get(name, default))
+
+    def GetBool(self, name, default=False):
+        return bool(self._values.get(name, default))
+
+    def GetFloat(self, name, default=0.0):
+        return float(self._values.get(name, default))
+
+    def GetString(self, name, default=""):
+        return str(self._values.get(name, default))
+
+    def SetInt(self, name, value):
+        self._values[name] = int(value)
+
+    def SetBool(self, name, value):
+        self._values[name] = bool(value)
+
+    def SetFloat(self, name, value):
+        self._values[name] = float(value)
+
+    def SetString(self, name, value):
+        self._values[name] = str(value)
+
+    def GetGroup(self, name):
+        return ParameterGrp(self._path + "/" + name)
+
+    def __repr__(self):
+        return "<ParameterGrp '%s'>" % self._path
+
+
+def ParamGet(path="", create=True):
+    """Return the parameter group rooted at ``path`` (in-memory)."""
+    return ParameterGrp(path)

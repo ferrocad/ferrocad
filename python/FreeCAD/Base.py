@@ -9,6 +9,8 @@ by ``fc-python``.
 
 from __future__ import annotations
 
+from enum import IntEnum
+
 from fc import (
     BoundBox,
     Material,
@@ -22,6 +24,17 @@ from fc import (
     Vector2d,
 )
 
+
+class ScaleType(IntEnum):
+    """Scaling mode returned by ``Matrix.hasScale()`` (``Base::ScaleType``)."""
+
+    Other = -1
+    NoScaling = 0
+    NonUniformRight = 1
+    NonUniformLeft = 2
+    Uniform = 3
+
+
 __all__ = [
     "Quantity",
     "Unit",
@@ -33,4 +46,5 @@ __all__ = [
     "TypeId",
     "BoundBox",
     "Material",
+    "ScaleType",
 ]

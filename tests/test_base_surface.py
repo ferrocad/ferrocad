@@ -6,6 +6,7 @@ Exercises the new facade modules exposed from ``FreeCAD`` (over the Rust
 Run: PYTHONPATH=python python3 -m unittest tests.test_base_surface -v
 """
 
+import enum
 import math
 import os
 import sys
@@ -900,6 +901,74 @@ class TestBaseTypes(unittest.TestCase):
         self.assertEqual(type(r.toMatrix()), FreeCAD.Matrix)
         self.assertTrue(r.isSame(FreeCAD.Rotation(45, 30, 0)))
 
+    def test_matrix_has_scale(self):
+        self.assertIs(FreeCAD.ScaleType.__mro__[1], enum.IntEnum)
+        self.assertEqual(FreeCAD.Matrix().hasScale(), FreeCAD.ScaleType.NoScaling)
+
+        left = FreeCAD.Matrix()
+        left.scale(1.0, 2.0, 3.0)
+        self.assertEqual(left.hasScale(), FreeCAD.ScaleType.NonUniformLeft)
+        left.rotateX(1.0)  # scale applied from the left
+        self.assertEqual(left.hasScale(), FreeCAD.ScaleType.NonUniformRight)
+
+        uniform = FreeCAD.Matrix()
+        uniform.scale(2.0)
+        self.assertEqual(uniform.hasScale(), FreeCAD.ScaleType.Uniform)
+
+        shear = FreeCAD.Matrix()
+        shear.setRow(1, FreeCAD.Vector(0, 1, 1))
+        self.assertEqual(shear.hasScale(), FreeCAD.ScaleType.Other)
+
+    def test_matrix_decompose(self):
+        m = FreeCAD.Matrix()
+        m.A21 = 1.0
+        m.A14 = 1.0
+        m.A24 = 2.0
+        m.A34 = 3.0
+        shear, scale, rotation, move = m.decompose()
+
+        self.assertEqual(move * rotation * scale * shear, m)
+        self.assertAlmostEqual(shear.determinant(), 1.0)
+        self.assertEqual(scale.hasScale(), FreeCAD.ScaleType.NonUniformLeft)
+        self.assertTrue(
+            FreeCAD.Rotation(rotation).isSame(
+                FreeCAD.Rotation(FreeCAD.Vector(0, 0, 1), 45), 1e-12
+            )
+        )
+        self.assertEqual(FreeCAD.Placement(move).Base, FreeCAD.Vector(1, 2, 3))
+
+    def test_rotation_axes_and_wrapping(self):
+        r = FreeCAD.Rotation(1, 0, 0, 0)  # 180 deg about X
+        self.assertEqual(r.Axis, FreeCAD.Vector(1, 0, 0))
+        self.assertAlmostEqual(abs(r.Angle), math.pi)
+        self.assertAlmostEqual(r.multiply(r).Angle, 0.0)
+
+        # The axis is retained even at angle 0, so a following Angle set works.
+        s = FreeCAD.Rotation()
+        s.Axis = FreeCAD.Vector(1, 0, 0)
+        s.Angle = math.pi / 2
+        self.assertEqual(s.Axis, FreeCAD.Vector(1, 0, 0))
+        self.assertAlmostEqual(s.Angle, math.pi / 2)
+
+        # `Axes` sets the rotation mapping the first vector onto the second.
+        t = FreeCAD.Rotation(1, 0, 0, 0)
+        t.Axes = (FreeCAD.Vector(0, 0, 1), FreeCAD.Vector(0, 0, 1))
+        self.assertTrue(t.isSame(FreeCAD.Rotation(), 1e-12))
+
+        # Angles wrap into [0, 2*pi): 270 and 270 + 360 are the same rotation.
+        a = FreeCAD.Rotation(FreeCAD.Vector(1, 0, 0), 270)
+        b = FreeCAD.Rotation(FreeCAD.Vector(1, 0, 0), 270 + 360)
+        self.assertEqual(a.Axis, b.Axis)
+        self.assertTrue(a.isSame(b))
+
+        # yaw/pitch/roll round-trips through gimbal lock.
+        g = FreeCAD.Rotation()
+        g.setYawPitchRoll(20, 90, 10)
+        yaw, pitch, roll = g.getYawPitchRoll()
+        self.assertAlmostEqual(yaw, 0.0)
+        self.assertAlmostEqual(pitch, 90.0)
+        self.assertAlmostEqual(roll, -10.0)
+
     def test_placement_inverse_and_matrix(self):
         # NOTE: `Placement` sub-objects are returned by value in FreeCAD (the C++
         # getters copy), so `p.Rotation.Angle = ...` mutates a temporary and does
@@ -912,7 +981,6 @@ class TestBaseTypes(unittest.TestCase):
         self.assertTrue(p.toMatrix().isUnity() is False)
         q = FreeCAD.Placement(p.toMatrix())
         self.assertTrue(q.isSame(p, 1e-9))
-
 
 if __name__ == "__main__":
     unittest.main()

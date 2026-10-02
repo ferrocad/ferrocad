@@ -18,7 +18,7 @@ mod typeregistry;
 mod unit;
 
 pub use document::{Document, DocumentObject, ObjectId, SavedDocument};
-pub use geometry::{Matrix4, Placement, Rotation, TypeId, Vector3};
+pub use geometry::{Matrix4, Placement, Rotation, ScaleType, TypeId, Vector3};
 pub use observer::Observer;
 pub use property::{Property, PropertyContainer};
 pub use quantity::{canonical_name, parse_unit, Quantity};

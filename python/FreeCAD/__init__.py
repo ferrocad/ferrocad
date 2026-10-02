@@ -51,6 +51,8 @@ if backend == "fc":
     # Core/utility submodules (the M4 Base/Units/Console surface).
     from . import Base, Units, Console
 
+    ScaleType = Base.ScaleType
+
     addDocumentObserver = _fc.addDocumentObserver
     removeDocumentObserver = _fc.removeDocumentObserver
 
@@ -142,6 +144,7 @@ __all__ = [
     "backend",
     "ParamGet",
     "ParameterGrp",
+    "ScaleType",
     "writeRecoverySnapshotToTransientDir",
 ]
 

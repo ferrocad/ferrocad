@@ -503,10 +503,10 @@ fn property_to_py(py: Python<'_>, value: &Property) -> PyObject {
             .collect::<Vec<_>>()
             .into_py_any(py)
             .unwrap(),
-        Property::Rotation(r) => PyRotation { inner: *r }.into_py_any(py).unwrap(),
+        Property::Rotation(r) => PyRotation { inner: *r, axis_cache: None }.into_py_any(py).unwrap(),
         Property::RotationList(v) => v
             .iter()
-            .map(|x| PyRotation { inner: *x }.into_py_any(py).unwrap())
+            .map(|x| PyRotation { inner: *x, axis_cache: None }.into_py_any(py).unwrap())
             .collect::<Vec<_>>()
             .into_py_any(py)
             .unwrap(),
@@ -2705,6 +2705,29 @@ impl PyMatrix {
         PyMatrix { inner: self.inner.transpose() }
     }
 
+    /// Classify scaling; returns a `FreeCAD.ScaleType` member like upstream.
+    #[pyo3(signature = (tol=0.0))]
+    fn hasScale(&self, py: Python<'_>, tol: f64) -> PyResult<PyObject> {
+        let value = self.inner.has_scale(tol) as i32;
+        // Upstream builds the enum via `FreeCAD.ScaleType(int)`; fall back to a
+        // plain int when the facade isn't importable (e.g. bare `fc` usage).
+        match py.import("FreeCAD") {
+            Ok(module) => Ok(module.getattr("ScaleType")?.call1((value,))?.into_py_any(py)?),
+            Err(_) => Ok(value.into_py_any(py)?),
+        }
+    }
+
+    /// `(shear, scale, rotation, move)` such that `self == move * rotation * scale * shear`.
+    fn decompose(&self) -> (PyMatrix, PyMatrix, PyMatrix, PyMatrix) {
+        let [shear, scale, rotation, mv] = self.inner.decompose();
+        (
+            PyMatrix { inner: shear },
+            PyMatrix { inner: scale },
+            PyMatrix { inner: rotation },
+            PyMatrix { inner: mv },
+        )
+    }
+
     fn multiply(&self, o: PyRef<'_, PyMatrix>) -> PyMatrix {
         PyMatrix { inner: self.inner.mul(&o.inner) }
     }
@@ -2749,8 +2772,15 @@ impl PyMatrix {
 
     // -- operators ----------------------------------------------------------
     fn __eq__(&self, other: &Bound<'_, PyAny>) -> bool {
+        // Upstream `Matrix4D::operator==` compares element-wise within
+        // `std::numeric_limits<double>::epsilon()` (not exact).
         match other.extract::<PyRef<'_, PyMatrix>>() {
-            Ok(o) => self.inner == o.inner,
+            Ok(o) => self
+                .inner
+                .m
+                .iter()
+                .zip(o.inner.m.iter())
+                .all(|(a, b)| (a - b).abs() <= f64::EPSILON),
             Err(_) => false,
         }
     }
@@ -2891,6 +2921,10 @@ impl PyMatrix {
 #[derive(Clone, Copy)]
 struct PyRotation {
     inner: Rotation,
+    /// FreeCAD keeps the axis passed to `Axis`/`Angle` even at angle 0 (its
+    /// `Rotation` stores `_axis`/`_angle` alongside the quaternion). The quaternion
+    /// alone can't represent "axis X, angle 0", so cache it here.
+    axis_cache: Option<Vector3>,
 }
 
 #[pymethods]
@@ -2945,7 +2979,7 @@ impl PyRotation {
                 ))
             }
         };
-        Ok(Self { inner })
+        Ok(Self { inner, axis_cache: None })
     }
 
     #[getter]
@@ -2955,18 +2989,20 @@ impl PyRotation {
 
     #[setter]
     fn set_Angle(&mut self, angle: f64) {
-        self.inner.set_angle(angle);
+        let axis = self.axis_cache.unwrap_or_else(|| self.inner.axis());
+        self.inner = Rotation::from_axis_angle(&axis, angle);
     }
 
     #[getter]
     fn Axis(&self) -> PyVector {
-        PyVector { inner: self.inner.axis() }
+        PyVector { inner: self.axis_cache.unwrap_or_else(|| self.inner.axis()) }
     }
 
     #[setter]
     fn set_Axis(&mut self, v: &Bound<'_, PyAny>) -> PyResult<()> {
         let axis = extract_vector(v)?;
         let angle = self.inner.angle();
+        self.axis_cache = Some(axis);
         self.inner = Rotation::from_axis_angle(&axis, angle);
         Ok(())
     }
@@ -2984,6 +3020,7 @@ impl PyRotation {
     #[setter]
     fn set_Q(&mut self, v: (f64, f64, f64, f64)) {
         self.inner.q = [v.3, v.0, v.1, v.2];
+        self.axis_cache = None;
     }
 
     #[getter]
@@ -2994,6 +3031,36 @@ impl PyRotation {
     #[setter]
     fn set_Matrix(&mut self, m: PyRef<'_, PyMatrix>) {
         self.inner = Rotation::from_matrix(&m.inner);
+        self.axis_cache = None;
+    }
+
+    /// FreeCAD custom attribute: `Rotation.Axes = (fromVec, toVec)`.
+    #[setter]
+    fn set_Axes(&mut self, value: &Bound<'_, PyAny>) -> PyResult<()> {
+        let a = value.get_item(0)?;
+        let b = value.get_item(1)?;
+        self.inner = Rotation::from_vectors(extract_vector(&a)?, extract_vector(&b)?);
+        self.axis_cache = None;
+        Ok(())
+    }
+
+    // FreeCAD custom attributes: `Rotation.Yaw`/`Pitch`/`Roll` (degrees).
+    #[setter]
+    fn set_Yaw(&mut self, v: f64) {
+        let (_, p, r) = self.getYawPitchRoll();
+        self.inner = Rotation::from_euler_deg(v, p, r);
+    }
+
+    #[setter]
+    fn set_Pitch(&mut self, v: f64) {
+        let (y, _, r) = self.getYawPitchRoll();
+        self.inner = Rotation::from_euler_deg(y, v, r);
+    }
+
+    #[setter]
+    fn set_Roll(&mut self, v: f64) {
+        let (y, p, _) = self.getYawPitchRoll();
+        self.inner = Rotation::from_euler_deg(y, p, v);
     }
 
     fn toMatrix(&self) -> PyMatrix {
@@ -3001,15 +3068,16 @@ impl PyRotation {
     }
 
     fn multiply(&self, o: PyRef<'_, PyRotation>) -> PyRotation {
-        PyRotation { inner: self.inner.multiply(&o.inner) }
+        PyRotation { inner: self.inner.multiply(&o.inner), axis_cache: None }
     }
 
     fn invert(&mut self) {
         self.inner = self.inner.inverse();
+        self.axis_cache = None;
     }
 
     fn inverse(&self) -> PyRotation {
-        PyRotation { inner: self.inner.inverse() }
+        PyRotation { inner: self.inner.inverse(), axis_cache: None }
     }
 
     #[pyo3(signature = (o, tol=0.0))]
@@ -3019,6 +3087,7 @@ impl PyRotation {
 
     fn setYawPitchRoll(&mut self, yaw: f64, pitch: f64, roll: f64) {
         self.inner = Rotation::from_euler_deg(yaw, pitch, roll);
+        self.axis_cache = None;
     }
 
     fn getYawPitchRoll(&self) -> (f64, f64, f64) {
@@ -3095,7 +3164,7 @@ impl PyPlacement {
     }
 
     #[getter]
-    fn Rotation(&self) -> PyRotation { PyRotation { inner: self.inner.rotation } }
+    fn Rotation(&self) -> PyRotation { PyRotation { inner: self.inner.rotation, axis_cache: None } }
     #[setter]
     fn set_Rotation(&mut self, q: &Bound<'_, PyAny>) -> PyResult<()> {
         self.inner.rotation = extract_rotation(q)?;

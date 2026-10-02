@@ -55,6 +55,16 @@ impl Vector3 {
         self.dot(self).sqrt()
     }
 
+    /// Squared length (FreeCAD `Vector3::Sqr`).
+    pub fn sqr(&self) -> f64 {
+        self.dot(self)
+    }
+
+    /// Exact null test (FreeCAD `Vector3::IsNull` compares components to 0).
+    pub fn is_null(&self) -> bool {
+        self.x == 0.0 && self.y == 0.0 && self.z == 0.0
+    }
+
     pub fn normalize(&self) -> Vector3 {
         let l = self.length();
         if l == 0.0 {
@@ -80,6 +90,20 @@ impl Vector3 {
     pub fn is_equal(&self, o: &Vector3, tol: f64) -> bool {
         self.distance(o) <= tol
     }
+}
+
+// ---------------------------------------------------------------------------
+// ScaleType (FreeCAD `Base::ScaleType`, mirrored by `FreeCAD.ScaleType`)
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[repr(i32)]
+pub enum ScaleType {
+    Other = -1,
+    NoScaling = 0,
+    NonUniformRight = 1,
+    NonUniformLeft = 2,
+    Uniform = 3,
 }
 
 // ---------------------------------------------------------------------------
@@ -163,6 +187,18 @@ impl Matrix4 {
             - m[3] * det3(m[4], m[5], m[6], m[8], m[9], m[10], m[12], m[13], m[14])
     }
 
+    /// Determinant of the top-left 3x3 block (FreeCAD `Matrix4D::determinant3`).
+    pub fn determinant3(&self) -> f64 {
+        let m = &self.m;
+        let va = m[0] * m[5] * m[10];
+        let vb = m[1] * m[6] * m[8];
+        let vc = m[4] * m[9] * m[2];
+        let vd = m[2] * m[5] * m[8];
+        let ve = m[4] * m[1] * m[10];
+        let vf = m[0] * m[9] * m[6];
+        (va + vb + vc) - (vd + ve + vf)
+    }
+
     pub fn transpose(&self) -> Matrix4 {
         let m = &self.m;
         let mut r = [0.0; 16];
@@ -214,6 +250,28 @@ impl Matrix4 {
         Some(Matrix4 { m: r })
     }
 
+    /// In-place inverse via Gauss-Jordan with partial pivoting, mirroring
+    /// FreeCAD's `Matrix4D::inverseGauss` (bit-for-bit, including the GL
+    /// transpose in/out). For an orthonormal frame this yields the transpose.
+    pub fn inverse_gauss(&mut self) {
+        let mut matrix = [0.0f64; 16];
+        for i in 0..4 {
+            for j in 0..4 {
+                matrix[i + 4 * j] = self.m[4 * i + j];
+            }
+        }
+        let mut inv = Matrix4::identity().m;
+        if gauss_invert(&mut matrix, &mut inv) {
+            for i in 0..4 {
+                for j in 0..4 {
+                    self.m[4 * i + j] = inv[i + 4 * j];
+                }
+            }
+        } else {
+            *self = self.transpose();
+        }
+    }
+
     pub fn row(&self, r: usize) -> Vector3 {
         Vector3::new(self.m[r * 4], self.m[r * 4 + 1], self.m[r * 4 + 2])
     }
@@ -236,6 +294,12 @@ impl Matrix4 {
 
     pub fn diagonal(&self) -> Vector3 {
         Vector3::new(self.m[0], self.m[5], self.m[10])
+    }
+
+    pub fn set_diagonal(&mut self, v: Vector3) {
+        self.m[0] = v.x;
+        self.m[5] = v.y;
+        self.m[10] = v.z;
     }
 
     /// Pre-multiply by a translation.
@@ -266,11 +330,220 @@ impl Matrix4 {
         let r = Rotation::from_axis_angle(&unit, angle).to_matrix();
         *self = r.mul(self);
     }
+
+    /// Classify the linear part as scaled/rotated/sheared (FreeCAD
+    /// `Matrix4D::hasScale`). Distinguishes scaling applied from the left
+    /// (pre-multiplied, "Right") from the right (post-multiplied, "Left").
+    pub fn has_scale(&self, tol: f64) -> ScaleType {
+        let tol = if tol == 0.0 { 1e-9 } else { tol };
+        let close_abs = |a: f64, b: f64| {
+            let (aa, ab) = (a.abs(), b.abs());
+            if ab > aa {
+                (ab - aa) / ab <= tol
+            } else if aa > ab {
+                (aa - ab) / aa <= tol
+            } else {
+                true
+            }
+        };
+
+        let dx = self.col(0).sqr();
+        let dy = self.col(1).sqr();
+        let dz = self.col(2).sqr();
+        let dxyz = (dx * dy * dz).sqrt();
+
+        let du = self.row(0).sqr();
+        let dv = self.row(1).sqr();
+        let dw = self.row(2).sqr();
+        let duvw = (du * dv * dw).sqrt();
+
+        let d3 = self.determinant3();
+
+        // projection / shearing / ...
+        if !close_abs(dxyz, d3) && !close_abs(duvw, d3) {
+            return ScaleType::Other;
+        }
+        if close_abs(duvw, d3) && (!close_abs(du, dv) || !close_abs(dv, dw)) {
+            return ScaleType::NonUniformLeft;
+        }
+        if close_abs(dxyz, d3) && (!close_abs(dx, dy) || !close_abs(dy, dz)) {
+            return ScaleType::NonUniformRight;
+        }
+        if (d3 - 1.0).abs() > tol {
+            return ScaleType::Uniform;
+        }
+        ScaleType::NoScaling
+    }
+
+    /// Decompose into `[shear, scale, rotation, move]` such that
+    /// `self == move * rotation * scale * shear` (FreeCAD `Matrix4D::decompose`).
+    pub fn decompose(&self) -> [Matrix4; 4] {
+        let mut move_matrix = Matrix4::identity();
+        move_matrix.set_col(3, self.col(3));
+        let mut residual = *self;
+        residual.set_col(3, Vector3::zero());
+
+        // Find an orthonormal frame from the (possibly scaled) column vectors.
+        let mut prim_dir: i32 = -1;
+        let mut dirs = [
+            Vector3::new(1.0, 0.0, 0.0),
+            Vector3::new(0.0, 1.0, 0.0),
+            Vector3::new(0.0, 0.0, 1.0),
+        ];
+        for i in 0..3 {
+            if residual.col(i).is_null() {
+                continue;
+            }
+            if prim_dir < 0 {
+                dirs[i] = residual.col(i).normalize();
+                prim_dir = i as i32;
+                continue;
+            }
+
+            let cross = dirs[prim_dir as usize].cross(&residual.col(i));
+            if cross.is_null() {
+                continue;
+            }
+            let cross = cross.normalize();
+            let last_dir = 3 - i - prim_dir as usize;
+            if i as i32 - prim_dir == 1 {
+                dirs[last_dir] = cross;
+                dirs[i] = cross.cross(&dirs[prim_dir as usize]);
+            } else {
+                dirs[last_dir] = cross.neg();
+                dirs[i] = dirs[prim_dir as usize].cross(&cross.neg());
+            }
+            prim_dir = -2; // done
+            break;
+        }
+        if prim_dir >= 0 {
+            // only one valid direction
+            let pd = prim_dir as usize;
+            let mut cross = dirs[pd].cross(&Vector3::new(0.0, 0.0, 1.0));
+            if cross.is_null() {
+                cross = dirs[pd].cross(&Vector3::new(0.0, 1.0, 0.0));
+            }
+            dirs[(pd + 1) % 3] = cross;
+            dirs[(pd + 2) % 3] = dirs[pd].cross(&cross);
+        }
+
+        let mut rotation = Matrix4::identity();
+        rotation.set_col(0, dirs[0]);
+        rotation.set_col(1, dirs[1]);
+        rotation.set_col(2, dirs[2]);
+        // `inverseGauss` on an orthonormal frame is effectively the transpose.
+        rotation.inverse_gauss();
+        residual = rotation.mul(&residual);
+        // Keep the signs of the scale factors equal.
+        if residual.determinant() < 0.0 {
+            rotation.pre_rotate(2, std::f64::consts::PI);
+            residual.pre_rotate(2, std::f64::consts::PI);
+        }
+        rotation.inverse_gauss();
+
+        // Extract scale.
+        let x_scale = residual.m[0];
+        let y_scale = residual.m[5];
+        let z_scale = residual.m[10];
+        let mut scale_matrix = Matrix4::identity();
+        scale_matrix.m[0] = x_scale;
+        scale_matrix.m[5] = y_scale;
+        scale_matrix.m[10] = z_scale;
+
+        // The remaining shear.
+        residual.pre_scale(Vector3::new(
+            if x_scale != 0.0 { 1.0 / x_scale } else { 1.0 },
+            if y_scale != 0.0 { 1.0 / y_scale } else { 1.0 },
+            if z_scale != 0.0 { 1.0 / z_scale } else { 1.0 },
+        ));
+        residual.set_diagonal(Vector3::new(1.0, 1.0, 1.0));
+
+        // Remove values close to zero.
+        for i in 0..3 {
+            if scale_matrix.m[i * 4 + i].abs() < 1e-15 {
+                scale_matrix.m[i * 4 + i] = 0.0;
+            }
+            for j in 0..3 {
+                if residual.m[i * 4 + j].abs() < 1e-15 {
+                    residual.m[i * 4 + j] = 0.0;
+                }
+                if rotation.m[i * 4 + j].abs() < 1e-15 {
+                    rotation.m[i * 4 + j] = 0.0;
+                }
+            }
+        }
+
+        [residual, scale_matrix, rotation, move_matrix]
+    }
 }
 
 /// A 3x3 determinant (row-major).
 fn det3(a: f64, b: f64, c: f64, d: f64, e: f64, f: f64, g: f64, h: f64, i: f64) -> f64 {
     a * (e * i - f * h) - b * (d * i - f * g) + c * (d * h - e * g)
+}
+
+/// Gauss-Jordan inversion of `a` (row-major [16]); writes the inverse into `b`.
+/// A direct port of FreeCAD's `Matrix_gauss`. Returns `false` if singular.
+fn gauss_invert(a: &mut [f64; 16], b: &mut [f64; 16]) -> bool {
+    let mut ipiv = [0i32; 4];
+    let mut indxr = [0usize; 4];
+    let mut indxc = [0usize; 4];
+    for i in 0..4 {
+        let mut big = 0.0f64;
+        let mut irow = 0usize;
+        let mut icol = 0usize;
+        for j in 0..4 {
+            if ipiv[j] != 1 {
+                for k in 0..4 {
+                    if ipiv[k] == 0 {
+                        if a[4 * j + k].abs() >= big {
+                            big = a[4 * j + k].abs();
+                            irow = j;
+                            icol = k;
+                        }
+                    } else if ipiv[k] > 1 {
+                        return false;
+                    }
+                }
+            }
+        }
+        ipiv[icol] += 1;
+        if irow != icol {
+            for l in 0..4 {
+                a.swap(4 * irow + l, 4 * icol + l);
+                b.swap(4 * irow + l, 4 * icol + l);
+            }
+        }
+        indxr[i] = irow;
+        indxc[i] = icol;
+        if a[4 * icol + icol] == 0.0 {
+            return false;
+        }
+        let pivinv = 1.0 / a[4 * icol + icol];
+        a[4 * icol + icol] = 1.0;
+        for l in 0..4 {
+            a[4 * icol + l] *= pivinv;
+            b[4 * icol + l] *= pivinv;
+        }
+        for ll in 0..4 {
+            if ll != icol {
+                let dum = a[4 * ll + icol];
+                a[4 * ll + icol] = 0.0;
+                for l in 0..4 {
+                    a[4 * ll + l] -= a[4 * icol + l] * dum;
+                    b[4 * ll + l] -= b[4 * icol + l] * dum;
+                }
+            }
+        }
+    }
+    for l in (0..4).rev() {
+        if indxr[l] != indxc[l] {
+            for k in 0..4 {
+                a.swap(4 * k + indxr[l], 4 * k + indxc[l]);
+            }
+        }
+    }
+    true
 }
 
 // ---------------------------------------------------------------------------
@@ -289,6 +562,9 @@ impl Rotation {
 
     /// Rotation around `axis` (normalized) by `angle` (radians).
     pub fn from_axis_angle(axis: &Vector3, angle: f64) -> Self {
+        // FreeCAD normalizes the angle into [0, 2*pi) inside `setValue(axis, angle)`.
+        let two_pi = 2.0 * std::f64::consts::PI;
+        let angle = angle - (angle / two_pi).floor() * two_pi;
         let a = axis.normalize();
         let half = angle * 0.5;
         let s = half.sin();
@@ -296,7 +572,17 @@ impl Rotation {
     }
 
     pub fn to_matrix(&self) -> Matrix4 {
-        let (w, x, y, z) = (self.q[0], self.q[1], self.q[2], self.q[3]);
+        // Normalize the quaternion first, matching FreeCAD `Rotation::getValue(Matrix4D&)`.
+        let l = (self.q[0] * self.q[0]
+            + self.q[1] * self.q[1]
+            + self.q[2] * self.q[2]
+            + self.q[3] * self.q[3])
+            .sqrt();
+        let (w, x, y, z) = if l > 0.0 {
+            (self.q[0] / l, self.q[1] / l, self.q[2] / l, self.q[3] / l)
+        } else {
+            (1.0, 0.0, 0.0, 0.0)
+        };
         Matrix4::from_values([
             1.0 - 2.0 * (y * y + z * z),
             2.0 * (x * y - z * w),
@@ -318,13 +604,24 @@ impl Rotation {
     }
 
     /// Rotation angle in radians (about the rotation axis).
+    /// Mirrors FreeCAD `Rotation::evaluateVector`: a quaternion whose scalar
+    /// part is not strictly inside (-1, 1) is treated as angle 0.
     pub fn angle(&self) -> f64 {
-        2.0 * self.q[0].clamp(-1.0, 1.0).acos()
+        let w = self.q[0];
+        if w > -1.0 && w < 1.0 {
+            2.0 * w.acos()
+        } else {
+            0.0
+        }
     }
 
     /// The normalized rotation axis (Z if the rotation is (near-)identity).
     pub fn axis(&self) -> Vector3 {
-        let s = (1.0 - self.q[0] * self.q[0]).sqrt();
+        let w = self.q[0];
+        if !(-1.0..=1.0).contains(&w) {
+            return Vector3::new(0.0, 0.0, 1.0);
+        }
+        let s = (1.0 - w * w).sqrt();
         if s < 1e-12 {
             Vector3::new(0.0, 0.0, 1.0)
         } else {
@@ -372,44 +669,114 @@ impl Rotation {
     }
 
     pub fn from_yaw_pitch_roll(yaw: f64, pitch: f64, roll: f64) -> Rotation {
-        let rz = Rotation::from_axis_angle(&Vector3::new(0.0, 0.0, 1.0), yaw);
-        let ry = Rotation::from_axis_angle(&Vector3::new(0.0, 1.0, 0.0), pitch);
-        let rx = Rotation::from_axis_angle(&Vector3::new(1.0, 0.0, 0.0), roll);
-        rz.multiply(&ry).multiply(&rx)
-    }
-
-    /// Extract `(yaw, pitch, roll)` (radians) from R = Rz*Ry*Rx.
-    pub fn yaw_pitch_roll(&self) -> (f64, f64, f64) {
-        let m = self.to_matrix().m;
-        let (r00, r10, r20, r21, r22) = (m[0], m[4], m[8], m[9], m[10]);
-        let pitch = (-r20).clamp(-1.0, 1.0).asin();
-        if pitch.cos().abs() > 1e-6 {
-            (r10.atan2(r00), pitch, r21.atan2(r22))
-        } else {
-            (0.0, pitch, r10.atan2(r00))
+        // Direct half-angle formula, mirroring FreeCAD `Rotation::setYawPitchRoll`
+        // (XY'Z''). Building it from `from_axis_angle` would normalize the angles
+        // and flip quaternion signs, which the gimbal-lock read-back is sensitive to.
+        let c1 = (yaw / 2.0).cos();
+        let s1 = (yaw / 2.0).sin();
+        let c2 = (pitch / 2.0).cos();
+        let s2 = (pitch / 2.0).sin();
+        let c3 = (roll / 2.0).cos();
+        let s3 = (roll / 2.0).sin();
+        Rotation {
+            q: [
+                c1 * c2 * c3 + s1 * s2 * s3,
+                c1 * c2 * s3 - s1 * s2 * c3,
+                c1 * s2 * c3 + s1 * c2 * s3,
+                s1 * c2 * c3 - c1 * s2 * s3,
+            ],
         }
     }
 
-    /// Extract a rotation from the upper-left 3x3 block of a matrix.
-    pub fn from_matrix(m: &Matrix4) -> Rotation {
-        let (m00, m01, m02) = (m.m[0], m.m[1], m.m[2]);
-        let (m10, m11, m12) = (m.m[4], m.m[5], m.m[6]);
-        let (m20, m21, m22) = (m.m[8], m.m[9], m.m[10]);
-        let trace = m00 + m11 + m22;
-        let q = if trace > 0.0 {
-            let s = (trace + 1.0).sqrt() * 2.0;
-            [0.25 * s, (m21 - m12) / s, (m02 - m20) / s, (m10 - m01) / s]
-        } else if m00 > m11 && m00 > m22 {
-            let s = (1.0 + m00 - m11 - m22).sqrt() * 2.0;
-            [(m21 - m12) / s, 0.25 * s, (m01 + m10) / s, (m02 + m20) / s]
-        } else if m11 > m22 {
-            let s = (1.0 + m11 - m00 - m22).sqrt() * 2.0;
-            [(m02 - m20) / s, (m01 + m10) / s, 0.25 * s, (m12 + m21) / s]
+    /// Rotation that maps `from` onto `to` (FreeCAD `Rotation::setValue(from, to)`).
+    pub fn from_vectors(from: Vector3, to: Vector3) -> Rotation {
+        let u = from.normalize();
+        let v = to.normalize();
+        let dot = u.dot(&v);
+        let w = u.cross(&v);
+        if w.length() == 0.0 {
+            if dot > 0.0 {
+                // Parallel, same direction.
+                Rotation::identity()
+            } else {
+                // Anti-parallel: any axis perpendicular to `u`.
+                let mut t = u.cross(&Vector3::new(1.0, 0.0, 0.0));
+                if t.length() < 1e-15 {
+                    t = u.cross(&Vector3::new(0.0, 1.0, 0.0));
+                }
+                let t = t.normalize();
+                Rotation { q: [0.0, t.x, t.y, t.z] }
+            }
         } else {
-            let s = (1.0 + m22 - m00 - m11).sqrt() * 2.0;
-            [(m10 - m01) / s, (m02 + m20) / s, (m12 + m21) / s, 0.25 * s]
-        };
-        Rotation { q }
+            Rotation::from_axis_angle(&w, dot.clamp(-1.0, 1.0).acos())
+        }
+    }
+
+    /// Extract `(yaw, pitch, roll)` (radians) from R = Rz*Ry*Rx, mirroring
+    /// FreeCAD `Rotation::getYawPitchRoll` (quaternion-based, OCC gimbal tolerance).
+    pub fn yaw_pitch_roll(&self) -> (f64, f64, f64) {
+        // Upstream `quat` is (x, y, z, w); ours is [w, x, y, z].
+        let (x, y, z, w) = (self.q[1], self.q[2], self.q[3], self.q[0]);
+        let (q00, q11, q22, q33) = (x * x, y * y, z * z, w * w);
+        let (q01, q02, q03) = (x * y, x * z, x * w);
+        let (q12, q13, q23) = (y * z, y * w, z * w);
+        let qd2 = 2.0 * (q13 - q02);
+        let tol = 16.0 * f64::EPSILON;
+        let half_pi = std::f64::consts::FRAC_PI_2;
+        if (qd2 - 1.0).abs() <= tol {
+            // north pole
+            (0.0, half_pi, 2.0 * x.atan2(w))
+        } else if (qd2 + 1.0).abs() <= tol {
+            // south pole
+            (0.0, -half_pi, 2.0 * x.atan2(w))
+        } else {
+            let yaw = (2.0 * (q01 + q23)).atan2((q00 + q33) - (q11 + q22));
+            let pitch = if qd2 > 1.0 {
+                half_pi
+            } else if qd2 < -1.0 {
+                -half_pi
+            } else {
+                qd2.asin()
+            };
+            let roll = (2.0 * (q12 + q03)).atan2((q22 + q33) - (q00 + q11));
+            (yaw, pitch, roll)
+        }
+    }
+
+    /// Extract a rotation from a matrix, mirroring FreeCAD `Rotation::setValue(Matrix4D)`:
+    /// take the rotation part of the decomposition, then read the quaternion.
+    pub fn from_matrix(m: &Matrix4) -> Rotation {
+        let mc = m.decompose()[2];
+        let g = |r: usize, c: usize| mc.m[4 * r + c];
+        let (m00, m11, m22) = (g(0, 0), g(1, 1), g(2, 2));
+        let trace = m00 + m11 + m22;
+        if trace > 0.0 {
+            let s = (1.0 + trace).sqrt();
+            let w = 0.5 * s;
+            let s = 0.5 / s;
+            Rotation {
+                q: [w, (g(2, 1) - g(1, 2)) * s, (g(0, 2) - g(2, 0)) * s, (g(1, 0) - g(0, 1)) * s],
+            }
+        } else {
+            let mut i = 0usize;
+            if m11 > m00 {
+                i = 1;
+            }
+            let mm = [m00, m11, m22];
+            if mm[2] > mm[i] {
+                i = 2;
+            }
+            let j = (i + 1) % 3;
+            let k = (i + 2) % 3;
+            let s = ((mm[i] - (mm[j] + mm[k])) + 1.0).sqrt();
+            let mut q = [0.0f64; 4];
+            q[1 + i] = s * 0.5;
+            let s = 0.5 / s;
+            q[0] = (g(k, j) - g(j, k)) * s;
+            q[1 + j] = (g(j, i) + g(i, j)) * s;
+            q[1 + k] = (g(k, i) + g(i, k)) * s;
+            Rotation { q }
+        }
     }
 }
 
@@ -524,5 +891,67 @@ mod tests {
         let r = Rotation::from_axis_angle(&Vector3::new(0.0, 1.0, 0.0), -half);
         let v = r.to_matrix().transform(&Vector3::new(1.0, 0.0, 0.0));
         assert!(v.is_equal(&Vector3::new(0.0, 0.0, 1.0), 1e-9));
+    }
+
+    #[test]
+    fn matrix_has_scale_classifies() {
+        assert_eq!(Matrix4::identity().has_scale(0.0), ScaleType::NoScaling);
+
+        let mut non_uniform = Matrix4::identity();
+        non_uniform.pre_scale(Vector3::new(1.0, 2.0, 3.0));
+        assert_eq!(non_uniform.has_scale(0.0), ScaleType::NonUniformLeft);
+
+        let mut uniform = Matrix4::identity();
+        uniform.pre_scale(Vector3::new(2.0, 2.0, 2.0));
+        assert_eq!(uniform.has_scale(0.0), ScaleType::Uniform);
+
+        // A pure rotation is not a scale.
+        let rot = Rotation::from_axis_angle(&Vector3::new(1.0, 0.0, 0.0), 1.0).to_matrix();
+        assert_eq!(rot.has_scale(0.0), ScaleType::NoScaling);
+
+        // Shearing is neither.
+        let mut shear = Matrix4::identity();
+        shear.set_row(1, Vector3::new(0.0, 1.0, 1.0));
+        assert_eq!(shear.has_scale(0.0), ScaleType::Other);
+    }
+
+    #[test]
+    fn matrix_decompose_round_trips() {
+        // move * rotation * scale (shear-free) must recompose.
+        let rot = Rotation::from_yaw_pitch_roll(0.3, -0.4, 0.5).to_matrix();
+        let mut scale_m = Matrix4::identity();
+        scale_m.pre_scale(Vector3::new(2.0, 3.0, 4.0));
+        let mut m = rot.mul(&scale_m);
+        m.set_col(3, Vector3::new(1.0, 2.0, 3.0));
+
+        let [shear, scale, rotation, mv] = m.decompose();
+        let rebuilt = mv.mul(&rotation.mul(&scale.mul(&shear)));
+        for (a, b) in m.m.iter().zip(rebuilt.m.iter()) {
+            assert!((a - b).abs() <= 1e-9, "recompose mismatch: {a} vs {b}");
+        }
+        assert!(shear.is_unity(1e-9));
+        assert!((scale.m[0] - 2.0).abs() < 1e-9);
+        assert!((scale.m[5] - 3.0).abs() < 1e-9);
+        assert!((scale.m[10] - 4.0).abs() < 1e-9);
+        assert!(mv.col(3).is_equal(&Vector3::new(1.0, 2.0, 3.0), 1e-12));
+    }
+
+    #[test]
+    fn rotation_from_vectors_maps_source_to_target() {
+        let identity = Rotation::from_vectors(Vector3::new(0.0, 0.0, 1.0), Vector3::new(0.0, 0.0, 1.0));
+        assert!(identity.is_same(&Rotation::identity(), 1e-12));
+
+        let r = Rotation::from_vectors(Vector3::new(1.0, 0.0, 0.0), Vector3::new(0.0, 1.0, 0.0));
+        let v = r.to_matrix().transform(&Vector3::new(1.0, 0.0, 0.0));
+        assert!(v.is_equal(&Vector3::new(0.0, 1.0, 0.0), 1e-9));
+    }
+
+    #[test]
+    fn rotation_angle_wraps_to_two_pi() {
+        let a = Rotation::from_axis_angle(&Vector3::new(1.0, 0.0, 0.0), 270f64.to_radians());
+        let b = Rotation::from_axis_angle(&Vector3::new(1.0, 0.0, 0.0), 630f64.to_radians());
+        assert!(a.is_same(&b, 1e-12));
+        assert!(a.axis().is_equal(&Vector3::new(1.0, 0.0, 0.0), 1e-12));
+        assert!(b.axis().is_equal(&Vector3::new(1.0, 0.0, 0.0), 1e-12));
     }
 }

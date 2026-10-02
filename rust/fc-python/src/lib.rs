@@ -8,11 +8,51 @@
 
 use std::sync::{Arc, Mutex};
 
-use fc_core::{Document as CoreDocument, ObjectId, Property, Quantity, StringHasher, StringId, Unit};
+use fc_core::{canonical_name, parse_unit, Document as CoreDocument, ObjectId, Property, Quantity, StringHasher, StringId, Unit};
 use pyo3::exceptions::{PyAttributeError, PyTypeError, PyValueError};
 use pyo3::prelude::*;
-use pyo3::types::{PyAny, PyAnyMethods};
+use pyo3::types::{PyAny, PyAnyMethods, PyTuple};
 use pyo3::IntoPyObjectExt;
+
+// ---------------------------------------------------------------------------
+// Unit
+// ---------------------------------------------------------------------------
+
+#[pyclass(name = "Unit", module = "fc")]
+#[derive(Clone, Copy)]
+struct PyUnit {
+    inner: Unit,
+}
+
+#[pymethods]
+impl PyUnit {
+    #[new]
+    fn new(symbol: &str) -> PyResult<Self> {
+        match Unit::parse(symbol) {
+            Some(u) => Ok(Self { inner: u }),
+            None => Err(PyValueError::new_err(format!("unknown unit '{symbol}'"))),
+        }
+    }
+
+    fn __eq__(&self, other: &Bound<'_, PyAny>) -> bool {
+        match other.extract::<PyRef<'_, PyUnit>>() {
+            Ok(o) => {
+                self.inner.sig == o.inner.sig
+                    && (self.inner.scale - o.inner.scale).abs() < 1e-12
+            }
+            Err(_) => false,
+        }
+    }
+
+    fn __repr__(&self) -> String {
+        let name = canonical_name(self.inner.sig);
+        if name.is_empty() {
+            "1".to_string()
+        } else {
+            name
+        }
+    }
+}
 
 // ---------------------------------------------------------------------------
 // Quantity
@@ -27,19 +67,133 @@ struct PyQuantity {
 #[pymethods]
 impl PyQuantity {
     #[new]
-    fn new(s: &str) -> PyResult<Self> {
-        let q: Quantity = s.parse().map_err(PyValueError::new_err)?;
+    #[pyo3(signature = (*args))]
+    fn new(args: &Bound<'_, PyTuple>) -> PyResult<Self> {
+        let q = match args.len() {
+            0 => Quantity::dimensionless(0.0),
+            1 => {
+                let a = args.get_item(0)?;
+                if let Ok(q) = a.extract::<PyRef<'_, PyQuantity>>() {
+                    q.inner
+                } else if let Ok(s) = a.extract::<String>() {
+                    s.parse().map_err(PyValueError::new_err)?
+                } else if let Ok(v) = a.extract::<f64>() {
+                    Quantity::dimensionless(v)
+                } else {
+                    return Err(PyTypeError::new_err(
+                        "Quantity() expects a string, number, or Quantity",
+                    ));
+                }
+            }
+            2 => {
+                let value: f64 = args.get_item(0)?.extract()?;
+                let unit: String = args.get_item(1)?.extract()?;
+                let u = Unit::parse(&unit)
+                    .ok_or_else(|| PyValueError::new_err(format!("unknown unit '{unit}'")))?;
+                Quantity::new(value, u)
+            }
+            _ => {
+                return Err(PyTypeError::new_err(
+                    "Quantity() takes 0, 1, or 2 arguments",
+                ))
+            }
+        };
         Ok(Self { inner: q })
     }
 
+    #[getter]
+    fn Value(&self) -> f64 {
+        self.inner.value()
+    }
+
+    #[getter]
+    fn UserString(&self) -> String {
+        self.inner.user_string()
+    }
+
+    #[getter]
+    fn Unit(&self) -> PyUnit {
+        PyUnit { inner: self.inner.unit() }
+    }
+
+    #[getter]
+    fn Format(&self, py: Python<'_>) -> PyObject {
+        pyo3::types::PyDict::new(py).into_py_any(py).unwrap()
+    }
+
+    #[setter]
+    fn set_Format(&self, _value: &Bound<'_, PyAny>) {}
+
+    fn getValueAs(&self, unit: &str) -> PyResult<PyQuantity> {
+        let u = parse_unit(unit)
+            .ok_or_else(|| PyValueError::new_err(format!("unknown unit '{unit}'")))?;
+        if u.sig != self.inner.sig() {
+            return Err(PyValueError::new_err("incompatible unit for getValueAs"));
+        }
+        Ok(PyQuantity { inner: self.inner.in_unit(u) })
+    }
+
+    fn toStr(&self) -> String {
+        self.inner.user_string()
+    }
+
+    // backward-compat (M2/M3b surface)
     fn value_mm(&self) -> f64 {
-        self.inner.value_mm()
+        self.inner.canonical_value()
     }
 
     fn value_in(&self, unit: &str) -> PyResult<f64> {
         let u = Unit::parse(unit)
             .ok_or_else(|| PyValueError::new_err(format!("unknown unit '{unit}'")))?;
         Ok(self.inner.value_in(u))
+    }
+
+    // arithmetic
+    fn __add__(&self, other: &Bound<'_, PyAny>) -> PyResult<PyQuantity> {
+        let o = other
+            .extract::<PyRef<'_, PyQuantity>>()
+            .map_err(|_| PyTypeError::new_err("can only add Quantity to Quantity"))?;
+        Ok(PyQuantity { inner: self.inner.add(&o.inner).map_err(PyValueError::new_err)? })
+    }
+
+    fn __sub__(&self, other: &Bound<'_, PyAny>) -> PyResult<PyQuantity> {
+        let o = other
+            .extract::<PyRef<'_, PyQuantity>>()
+            .map_err(|_| PyTypeError::new_err("can only subtract Quantity from Quantity"))?;
+        Ok(PyQuantity { inner: self.inner.sub(&o.inner).map_err(PyValueError::new_err)? })
+    }
+
+    fn __mul__(&self, other: &Bound<'_, PyAny>) -> PyResult<PyQuantity> {
+        let o = other
+            .extract::<PyRef<'_, PyQuantity>>()
+            .map_err(|_| PyTypeError::new_err("can only multiply Quantity by Quantity"))?;
+        Ok(PyQuantity { inner: self.inner.mul(&o.inner) })
+    }
+
+    fn __truediv__(&self, other: &Bound<'_, PyAny>) -> PyResult<PyQuantity> {
+        let o = other
+            .extract::<PyRef<'_, PyQuantity>>()
+            .map_err(|_| PyTypeError::new_err("can only divide Quantity by Quantity"))?;
+        Ok(PyQuantity { inner: self.inner.div(&o.inner) })
+    }
+
+    fn __pow__(&self, e: i32, _modulo: Option<&Bound<'_, PyAny>>) -> PyQuantity {
+        PyQuantity { inner: self.inner.powi(e) }
+    }
+
+    fn __neg__(&self) -> PyQuantity {
+        PyQuantity { inner: self.inner.neg() }
+    }
+
+    fn __float__(&self) -> f64 {
+        self.inner.value()
+    }
+
+    fn __eq__(&self, other: &Bound<'_, PyAny>) -> bool {
+        match other.extract::<PyRef<'_, PyQuantity>>() {
+            Ok(o) => self.inner == o.inner,
+            Err(_) => false,
+        }
     }
 
     fn __repr__(&self) -> String {
@@ -472,6 +626,7 @@ fn newDocument(name: Option<String>) -> PyDocument {
 fn fc(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add("__version__", env!("CARGO_PKG_VERSION"))?;
     m.add_class::<PyQuantity>()?;
+    m.add_class::<PyUnit>()?;
     m.add_class::<PyDocument>()?;
     m.add_class::<PyDocumentObject>()?;
     m.add_class::<PyStringHasher>()?;

@@ -41,6 +41,33 @@ class TestUnitsAndBase(unittest.TestCase):
         q = FreeCAD.Base.Quantity("10 mm")
         self.assertEqual(q.value_mm(), 10.0)
 
+    def test_quantity_value_and_unit(self):
+        q = FreeCAD.Units.Quantity(1, "m")
+        self.assertEqual(q.Value, 1000.0)
+        self.assertEqual(q.Unit, FreeCAD.Units.Length)
+
+    def test_quantity_compound(self):
+        self.assertEqual(FreeCAD.Units.Quantity("10 m").Value, 10000.0)
+        self.assertAlmostEqual(FreeCAD.Units.Quantity("3/8 in").Value, 9.525)
+        self.assertEqual(FreeCAD.Units.Quantity("2*pi rad").Value, 360.0)
+
+    def test_get_value_as(self):
+        psi = FreeCAD.Units.parseQuantity("1psi")
+        self.assertAlmostEqual(psi.getValueAs("MPa").Value, 0.0068947572932, places=8)
+
+    def test_to_number(self):
+        self.assertEqual(float(FreeCAD.Units.toNumber(1023, "g", 2)), 1000)
+        self.assertEqual(float(FreeCAD.Units.toNumber(1023, "f", 2)), 1023)
+        self.assertEqual(float(FreeCAD.Units.toNumber(1023, "e", 2)), 1020)
+
+    def test_schemas(self):
+        self.assertEqual(FreeCAD.Units.listSchemas(), ("Standard",))
+        psi = FreeCAD.Units.parseQuantity("1psi")
+        t = FreeCAD.Units.schemaTranslate(psi, 0)
+        self.assertAlmostEqual(
+            FreeCAD.Units.parseQuantity(t[0]).getValueAs("psi").Value, 1.0, places=8
+        )
+
 
 class TestConsole(unittest.TestCase):
     def test_print_methods_exist(self):

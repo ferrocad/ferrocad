@@ -8,6 +8,6 @@ types for convenience. This POC implements ``Quantity``/``Unit`` (Rust
 
 from __future__ import annotations
 
-from fc import Quantity
+from fc import Quantity, Unit
 
-__all__ = ["Quantity"]
+__all__ = ["Quantity", "Unit"]

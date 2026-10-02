@@ -1,6 +1,6 @@
 # freecad-rs-poc
 
-**Milestones 0–4 (slice 1):** run a FreeCAD headless "hello world" Python script on a pure-Rust
+**Milestones 0–4 (slice 2):** run a FreeCAD headless "hello world" Python script on a pure-Rust
 core, with the C++ Python bindings replaced by Rust bindings.
 
 * **M0** — hello world on a Rust object model, bridged to Python over a C ABI + `ctypes`.
@@ -14,8 +14,9 @@ core, with the C++ Python bindings replaced by Rust bindings.
   in `fc-core` (hand-written glue).
 * **M3d** — a **conformance harness** that runs upstream `Mod/Test` files against our `FreeCAD`
   and reports the parity gap.
-* **M4 (slice 1)** — the `FreeCAD.Base`/`FreeCAD.Units`/`FreeCAD.Console`/`ParamGet`/`StringHasher`
-  surface; conformance now **13 passing, 0 files fail to load** (`StringHasher.py` is 4/4).
+* **M4 (slice 1)** — the `FreeCAD.Base`/`Units`/`Console`/`ParamGet`/`StringHasher` surface.
+* **M4 (slice 2)** — the full **`FreeCAD.Units` system** (`Unit`/`Quantity` + expression parser);
+  conformance now **25 passing** (`StringHasher.py` 4/4, `UnitTests.py` 12/12).
 
 This is a proof of concept, not a product. It exists to validate the single
 riskiest assumption of the rewrite plan: *that a Python script written against
@@ -117,7 +118,11 @@ for the underlying analysis.
 
 Implemented in **`fc-core` / `fc-python`** (the real model, not just a stub):
 
-* `Quantity`/`Unit` parsing and conversion (mm-internal), `Property`/`PropertyContainer`.
+* a **full `Quantity`/`Unit` system**: 8-dimension signatures, an internal unit table
+  (SI base + derived + imperial + prefixes), an expression parser (fractions, scientific
+  notation, compound units, `pi`/`sin`/`cos`/`tan`, feet-inches `N'(expr)"`), arithmetic,
+  `Value`/`UserString`/`getValueAs`/`toNumber`.
+* `Property`/`PropertyContainer`, `StringHasher`/`StringID`.
 * `Document`/`DocumentObject` with default naming, a `petgraph` dependency graph,
   topological recompute order, and `removeObject`.
 * transactions (`open`/`commit`/`abort` + `undo`/`redo`), an `Observer` trait, and an

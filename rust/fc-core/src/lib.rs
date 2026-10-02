@@ -13,12 +13,14 @@ mod property;
 mod quantity;
 mod stringhasher;
 mod transaction;
+mod unit;
 
 pub use document::{Document, DocumentObject, ObjectId};
 pub use observer::Observer;
 pub use property::{Property, PropertyContainer};
-pub use quantity::{Quantity, Unit};
+pub use quantity::{canonical_name, parse_unit, Quantity};
 pub use stringhasher::{StringHasher, StringId};
+pub use unit::Unit;
 
 #[cfg(test)]
 mod tests {

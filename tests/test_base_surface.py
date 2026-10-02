@@ -749,5 +749,67 @@ class TestPythonObjectPersistence(unittest.TestCase):
         FreeCAD.closeDocument("ProxyPersist")
 
 
+class TestExpressionSurface(unittest.TestCase):
+    def test_int_assigned_to_float_property_is_float(self):
+        doc = FreeCAD.newDocument("Expr1")
+        a = doc.addObject("App::FeaturePython", "A")
+        b = doc.addObject("App::FeaturePython", "B")
+        a.addProperty("App::PropertyFloat", "x")
+        b.addProperty("App::PropertyFloat", "y")
+        a.x = 42  # int assigned to a Float property
+        b.setExpression("y", "A.x")
+        doc.recompute()
+        self.assertEqual(b.y, 42)
+        FreeCAD.closeDocument("Expr1")
+
+    def test_expression_engine_and_eval(self):
+        doc = FreeCAD.newDocument("Expr2")
+        o = doc.addObject("App::FeatureTest", "O")
+        o.setExpression("Float", "2*(5%3)")
+        doc.recompute()
+        self.assertEqual(o.Float, 4)
+        self.assertEqual(o.evalExpression(o.ExpressionEngine[0][1]), 4)
+        o.setExpression("Float", None)  # clear
+        self.assertEqual(o.ExpressionEngine, [])
+        FreeCAD.closeDocument("Expr2")
+
+    def test_cyclic_dependency_raises(self):
+        doc = FreeCAD.newDocument("Expr3")
+        o = doc.addObject("App::FeaturePython", "P")
+        o.addProperty("App::PropertyPlacement", "Placement")
+        o.setExpression(".Placement.Base.x", ".Placement.Base.y + 10mm")
+        with self.assertRaises(RuntimeError):
+            o.setExpression(".Placement.Base.y", ".Placement.Base.x + 10mm")
+        FreeCAD.closeDocument("Expr3")
+
+    def test_touch_marks_for_recompute(self):
+        doc = FreeCAD.newDocument("Expr4")
+        o = doc.addObject("App::FeatureTest", "O")
+        self.assertFalse(o.MustExecute)
+        o.touch()
+        self.assertTrue(o.MustExecute)
+        doc.recompute()
+        self.assertFalse(o.MustExecute)
+        FreeCAD.closeDocument("Expr4")
+
+
+class TestFileIncluded(unittest.TestCase):
+    def test_file_included_roundtrip(self):
+        import os
+        import tempfile
+
+        doc = FreeCAD.newDocument("FileInc")
+        obj = doc.addObject("App::DocumentObjectFileIncluded", "F")
+        self.assertEqual(obj.File, "")
+        src = os.path.join(tempfile.gettempdir(), "fc_src_payload.bin")
+        with open(src, "wb") as handle:
+            handle.write(b"payload")
+        obj.File = (src, "stored.bin")
+        self.assertEqual(obj.File.split("/")[-1], "stored.bin")
+        with open(obj.File, "rb") as handle:
+            self.assertEqual(handle.read(), b"payload")
+        FreeCAD.closeDocument("FileInc")
+
+
 if __name__ == "__main__":
     unittest.main()

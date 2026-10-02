@@ -36,6 +36,9 @@ pub enum Property {
     /// An arbitrary Python object, stored as a base64-encoded pickle
     /// (`App::PropertyPythonObject`, POC simplification).
     PythonObject(String),
+    /// An included file, stored as its path in the document's transient dir
+    /// (`App::PropertyFileIncluded`).
+    FileIncluded(String),
 }
 
 impl Property {
@@ -63,6 +66,7 @@ impl Property {
             Property::LinkSub(_, _) => "App::PropertyLinkSub",
             Property::ColorList(_) => "App::PropertyColorList",
             Property::PythonObject(_) => "App::PropertyPythonObject",
+            Property::FileIncluded(_) => "App::PropertyFileIncluded",
         }
     }
 }

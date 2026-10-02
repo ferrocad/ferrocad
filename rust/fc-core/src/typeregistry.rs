@@ -86,6 +86,9 @@ pub fn default_properties(type_id: &str) -> Vec<(&'static str, Property)> {
             ("Group", Property::LinkList(vec![])),
             ("Placement", Property::Placement(Placement::identity())),
         ],
+        "App::DocumentObjectFileIncluded" => {
+            vec![("File", Property::FileIncluded(String::new()))]
+        }
         _ => vec![],
     }
 }

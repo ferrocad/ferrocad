@@ -16,6 +16,7 @@ pub enum Op {
     Sub,
     Mul,
     Div,
+    Mod,
 }
 
 pub fn parse(input: &str) -> Result<Expr, String> {
@@ -47,6 +48,13 @@ impl Expr {
                             Err("division by zero".to_string())
                         } else {
                             Ok(lv / rv)
+                        }
+                    }
+                    Op::Mod => {
+                        if rv == 0.0 {
+                            Err("division by zero".to_string())
+                        } else {
+                            Ok(lv % rv)
                         }
                     }
                 }
@@ -110,6 +118,11 @@ impl<'a> Parser<'a> {
                     let rhs = self.parse_primary()?;
                     left = Expr::Binary(Box::new(left), Op::Div, Box::new(rhs));
                 }
+                Some('%') => {
+                    self.next();
+                    let rhs = self.parse_primary()?;
+                    left = Expr::Binary(Box::new(left), Op::Mod, Box::new(rhs));
+                }
                 _ => break,
             }
         }
@@ -130,7 +143,18 @@ impl<'a> Parser<'a> {
                 self.next();
                 Ok(Expr::UnaryNeg(Box::new(self.parse_primary()?)))
             }
-            Some(c) if c.is_ascii_digit() || c == '.' => self.parse_number(),
+            Some('.') => {
+                // A leading '.' starts a self-relative path (e.g. `.Placement.Base.x`).
+                let mut ahead = self.chars.clone();
+                ahead.next();
+                match ahead.peek() {
+                    Some(c) if c.is_ascii_alphabetic() || *c == '_' => {
+                        Ok(Expr::Var(self.parse_ident()))
+                    }
+                    _ => self.parse_number(),
+                }
+            }
+            Some(c) if c.is_ascii_digit() => self.parse_number(),
             Some(c) if c.is_ascii_alphabetic() || c == '_' => Ok(Expr::Var(self.parse_ident())),
             Some(c) => Err(format!("unexpected character '{c}'")),
             None => Err("unexpected end of expression".to_string()),
@@ -147,9 +171,18 @@ impl<'a> Parser<'a> {
                 break;
             }
         }
-        s.parse::<f64>()
-            .map(Expr::Number)
-            .map_err(|e| format!("invalid number '{s}': {e}"))
+        let value = s
+            .parse::<f64>()
+            .map_err(|e| format!("invalid number '{s}': {e}"))?;
+        // Optional adjacent unit suffix (`10mm`, `2rad`); the POC treats it as the base unit.
+        while let Some(&c) = self.chars.peek() {
+            if c.is_ascii_alphabetic() {
+                self.chars.next();
+            } else {
+                break;
+            }
+        }
+        Ok(Expr::Number(value))
     }
 
     fn parse_ident(&mut self) -> String {

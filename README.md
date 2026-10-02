@@ -1,6 +1,6 @@
 # freecad-rs-poc
 
-**Milestones 0–4 (slice 13):** run a FreeCAD headless "hello world" Python script on a pure-Rust
+**Milestones 0–4 (slice 14):** run a FreeCAD headless "hello world" Python script on a pure-Rust
 core, with the C++ Python bindings replaced by Rust bindings.
 
 * **M0** — hello world on a Rust object model, bridged to Python over a C ABI + `ctypes`.
@@ -44,8 +44,11 @@ core, with the C++ Python bindings replaced by Rust bindings.
   `DocumentObject.dumpContent`/`restoreContent`/`dumpPropertyContent`/`restorePropertyContent`,
   `canWriteRecoverySnapshot`/`TransientDir` and `writeRecoverySnapshotToTransientDir`.
 * **M4 (slice 13)** — Python-object & `Proxy` persistence: `App::PropertyPythonObject` values and an
-  object's `Proxy` (`dumps`/`loads` protocol) survive save/restore; conformance now **87 passing**
-  (`StringHasher.py` 4/4, `UnitTests.py` 12/12).
+  object's `Proxy` (`dumps`/`loads` protocol) survive save/restore.
+* **M4 (slice 14)** — expression engine: `int`→`Float` coercion, self-relative paths (`10mm`, `%`),
+  cycle detection (`RuntimeError`), `ExpressionEngine`/`evalExpression`/`touch`, and
+  `App::DocumentObjectFileIncluded`; conformance now **90 passing** (`StringHasher.py` 4/4,
+  `UnitTests.py` 12/12).
 
 This is a proof of concept, not a product. It exists to validate the single
 riskiest assumption of the rewrite plan: *that a Python script written against

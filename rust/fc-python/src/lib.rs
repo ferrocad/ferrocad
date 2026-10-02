@@ -7,10 +7,11 @@
 #![allow(non_snake_case)]
 
 use std::collections::{BTreeMap, HashMap};
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, OnceLock};
 
 use fc_core::{canonical_name, parse_unit, Document as CoreDocument, Matrix4, ObjectId, Placement, Property, Quantity, Rotation, StringHasher, StringId, TypeId, Unit, Vector3};
-use pyo3::exceptions::{PyAttributeError, PyTypeError, PyValueError};
+use pyo3::exceptions::{PyAttributeError, PyRuntimeError, PyTypeError, PyValueError};
 use pyo3::prelude::*;
 use pyo3::types::{PyAny, PyAnyMethods, PyBool, PyBytes, PyDict, PyDictMethods, PyTuple, PyType};
 use pyo3::IntoPyObjectExt;
@@ -529,6 +530,7 @@ fn property_to_py(py: Python<'_>, value: &Property) -> PyObject {
                     .unbind()
             }
         }
+        Property::FileIncluded(s) => s.clone().into_py_any(py).unwrap(),
     }
 }
 
@@ -631,6 +633,8 @@ fn default_property(type_id: &str) -> Property {
         Property::ColorList(vec![])
     } else if t.ends_with("pythonobject") {
         Property::PythonObject(String::new())
+    } else if t.ends_with("fileincluded") {
+        Property::FileIncluded(String::new())
     } else if t.ends_with("linklist") {
         Property::LinkList(vec![])
     } else if t.ends_with("link") || t.ends_with("linksub") || t.ends_with("linksublist") {
@@ -808,6 +812,26 @@ fn py_to_link_sub(value: &Bound<'_, PyAny>) -> PyResult<(String, Vec<String>)> {
         ));
     };
     Ok((name, names))
+}
+
+/// Coerce a value into an included-file path: a `(source, name)` tuple copies
+/// `source` into the document's transient dir under `name`; a string is used as-is.
+fn py_to_file_included(transient: &Path, value: &Bound<'_, PyAny>) -> PyResult<String> {
+    if value.is_none() {
+        return Ok(String::new());
+    }
+    if let Ok((source, name)) = value.extract::<(String, String)>() {
+        std::fs::create_dir_all(transient).map_err(|e| PyValueError::new_err(e.to_string()))?;
+        let dest = transient.join(&name);
+        std::fs::copy(&source, &dest).map_err(|e| PyValueError::new_err(e.to_string()))?;
+        return Ok(dest.to_string_lossy().to_string());
+    }
+    if let Ok(s) = value.extract::<String>() {
+        return Ok(s);
+    }
+    Err(PyTypeError::new_err(
+        "File expects a path or a (source, name) tuple",
+    ))
 }
 
 /// Store an arbitrary Python attribute on a document object (its `__dict__`),
@@ -998,6 +1022,14 @@ struct PyDocumentObject {
     doc: Py<PyDocument>,
     inner: Arc<Mutex<CoreDocument>>,
     id: ObjectId,
+}
+
+impl PyDocument {
+    fn transient_dir(&self) -> PathBuf {
+        let mut dir = std::env::temp_dir();
+        dir.push(format!("FreeCAD_transient_{}", self.name));
+        dir
+    }
 }
 
 #[pymethods]
@@ -1388,9 +1420,14 @@ impl PyDocument {
     /// A per-document transient directory (used for recovery snapshots).
     #[getter]
     fn TransientDir(&self) -> String {
-        let mut dir = std::env::temp_dir();
-        dir.push(format!("FreeCAD_transient_{}", self.name));
-        dir.to_string_lossy().to_string()
+        self.transient_dir().to_string_lossy().to_string()
+    }
+
+    /// A file name inside the transient directory (`getTempFileName`).
+    fn getTempFileName(&self, basename: &str) -> String {
+        let dir = self.transient_dir();
+        let _ = std::fs::create_dir_all(&dir);
+        dir.join(basename).to_string_lossy().to_string()
     }
 
     /// Recovery snapshots are only writable outside a transaction.
@@ -1606,10 +1643,15 @@ impl PyDocumentObject {
         None
     }
 
-    /// Whether the object must be recomputed. POC: never (recompute is a no-op).
+    /// Whether the object must be recomputed (set by `enforceRecompute`/`touch`).
     #[getter]
     fn MustExecute(&self) -> bool {
-        false
+        self.inner
+            .lock()
+            .unwrap()
+            .object(self.id)
+            .map(|o| o.must_execute)
+            .unwrap_or(false)
     }
 
     #[getter]
@@ -1689,12 +1731,50 @@ impl PyDocumentObject {
         Ok(())
     }
 
-    fn setExpression(&self, prop: &str, source: &str) -> PyResult<()> {
+    #[pyo3(signature = (prop, source=None))]
+    fn setExpression(&self, prop: &str, source: Option<String>) -> PyResult<()> {
+        let mut doc = self.inner.lock().unwrap();
+        match source {
+            Some(src) => doc.set_expression(self.id, prop, &src).map_err(|e| {
+                if e.starts_with("cyclic") {
+                    PyRuntimeError::new_err(e)
+                } else {
+                    PyValueError::new_err(e)
+                }
+            }),
+            None => {
+                doc.remove_expression(self.id, prop);
+                Ok(())
+            }
+        }
+    }
+
+    /// `ExpressionEngine`: the object's expressions as `(property, source)` pairs.
+    #[getter]
+    fn ExpressionEngine(&self) -> Vec<(String, Option<String>)> {
         self.inner
             .lock()
             .unwrap()
-            .set_expression(self.id, prop, source)
+            .expressions(self.id)
+            .into_iter()
+            .map(|(k, v)| (k, Some(v)))
+            .collect()
+    }
+
+    /// Evaluate an expression source in this object's context.
+    fn evalExpression(&self, source: &str) -> PyResult<f64> {
+        self.inner
+            .lock()
+            .unwrap()
+            .eval_expression(self.id, source)
             .map_err(PyValueError::new_err)
+    }
+
+    /// Mark the object for recompute (the POC tracks this as a flag).
+    #[pyo3(signature = (prop=""))]
+    fn touch(&self, prop: &str) {
+        let _ = prop;
+        self.inner.lock().unwrap().enforce_recompute(self.id);
     }
 
     fn recompute(slf: &Bound<'_, Self>) -> bool {
@@ -2140,6 +2220,23 @@ impl PyDocumentObject {
             }
             Some(Property::ColorList(_)) => Property::ColorList(py_to_color_list(value)?),
             Some(Property::PythonObject(_)) => Property::PythonObject(pickle_b64(slf.py(), value)?),
+            Some(Property::FileIncluded(_)) => {
+                let doc = slf.borrow().doc.clone_ref(slf.py());
+                let transient = doc.bind(slf.py()).borrow().transient_dir();
+                Property::FileIncluded(py_to_file_included(&transient, value)?)
+            }
+            Some(Property::Float(_)) => match value.extract::<f64>() {
+                Ok(f) => Property::Float(f),
+                Err(_) => py_to_property(value)?,
+            },
+            Some(Property::Integer(_)) => match value.extract::<i64>() {
+                Ok(i) => Property::Integer(i),
+                Err(_) => py_to_property(value)?,
+            },
+            Some(Property::Bool(_)) => match value.extract::<bool>() {
+                Ok(b) => Property::Bool(b),
+                Err(_) => py_to_property(value)?,
+            },
             Some(_) => py_to_property(value)?,
             // Not a known property: store it as a Python attribute (`Proxy`, …).
             None => return set_instance_attr(slf, &name, value),

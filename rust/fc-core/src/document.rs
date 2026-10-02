@@ -367,13 +367,54 @@ impl Document {
     // -- expressions --------------------------------------------------------
 
     pub fn set_expression(&mut self, object: ObjectId, prop: &str, source: &str) -> Result<(), String> {
-        expr::parse(source)?; // validate early
-        let obj = self
-            .objects
-            .get_mut(&object)
-            .ok_or_else(|| format!("no object {object}"))?;
+        let parsed = expr::parse(source)?; // validate early
+        let target = normalize_path(prop);
+        let mut new_deps = BTreeSet::new();
+        collect_self_deps(&parsed, &mut new_deps);
+
+        // Build this object's self-dependency graph (existing + new) and reject cycles.
+        let mut graph: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
+        {
+            let obj = self
+                .objects
+                .get(&object)
+                .ok_or_else(|| format!("no object {object}"))?;
+            for (p, src) in &obj.expressions {
+                let mut deps = BTreeSet::new();
+                if let Ok(e) = expr::parse(src) {
+                    collect_self_deps(&e, &mut deps);
+                }
+                graph.insert(normalize_path(p), deps);
+            }
+        }
+        graph.insert(target.clone(), new_deps);
+        if graph_reaches(&graph, &target, &target) {
+            return Err(format!("cyclic dependency detected for '{prop}'"));
+        }
+
+        let obj = self.objects.get_mut(&object).unwrap();
         obj.expressions.insert(prop.to_string(), source.to_string());
         Ok(())
+    }
+
+    pub fn remove_expression(&mut self, object: ObjectId, prop: &str) -> bool {
+        match self.objects.get_mut(&object) {
+            Some(obj) => obj.expressions.remove(prop).is_some(),
+            None => false,
+        }
+    }
+
+    /// The object's expressions as `(property, source)` pairs.
+    pub fn expressions(&self, object: ObjectId) -> Vec<(String, String)> {
+        self.object(object)
+            .map(|o| o.expressions.iter().map(|(k, v)| (k.clone(), v.clone())).collect())
+            .unwrap_or_default()
+    }
+
+    /// Evaluate an expression source in the context of `object`.
+    pub fn eval_expression(&self, object: ObjectId, source: &str) -> Result<f64, String> {
+        let parsed = expr::parse(source)?;
+        parsed.eval(&|name| self.resolve(&object, name))
     }
 
     /// Evaluate every expression (in dependency order) and write the results.
@@ -568,6 +609,51 @@ fn extension_is_or_derives(ext: &str, base: &str) -> bool {
         ("App::GroupExtensionPython", "App::GroupExtension")
             | ("Gui::ViewProviderGroupExtensionPython", "Gui::ViewProviderGroupExtension")
     )
+}
+
+/// Strip a leading '.' from a self-relative expression path.
+fn normalize_path(path: &str) -> String {
+    path.trim_start_matches('.').to_string()
+}
+
+/// Collect the self-relative paths an expression depends on (leading '.', or a
+/// bare name without a `.`).
+fn collect_self_deps(e: &expr::Expr, out: &mut BTreeSet<String>) {
+    match e {
+        expr::Expr::Number(_) => {}
+        expr::Expr::Var(name) => {
+            if name.starts_with('.') || !name.contains('.') {
+                out.insert(normalize_path(name));
+            }
+        }
+        expr::Expr::UnaryNeg(x) => collect_self_deps(x, out),
+        expr::Expr::Binary(l, _, r) => {
+            collect_self_deps(l, out);
+            collect_self_deps(r, out);
+        }
+    }
+}
+
+/// Whether `goal` is reachable from `start` in the property dependency graph.
+fn graph_reaches(
+    graph: &BTreeMap<String, BTreeSet<String>>,
+    start: &str,
+    goal: &str,
+) -> bool {
+    let mut stack: Vec<String> = graph.get(start).cloned().unwrap_or_default().into_iter().collect();
+    let mut seen = BTreeSet::new();
+    while let Some(node) = stack.pop() {
+        if node == goal {
+            return true;
+        }
+        if !seen.insert(node.clone()) {
+            continue;
+        }
+        if let Some(deps) = graph.get(&node) {
+            stack.extend(deps.iter().cloned());
+        }
+    }
+    false
 }
 
 fn numeric(obj: &DocumentObject, name: &str) -> Option<f64> {

@@ -195,5 +195,67 @@ class TestDocumentMetadata(unittest.TestCase):
         self.assertEqual(FreeCAD.PropertyType.Prop_NoPersist, 32)
 
 
+class TestExtensionsAndGroups(unittest.TestCase):
+    def test_add_and_has_extension(self):
+        doc = FreeCAD.newDocument("Ext")
+        obj = doc.addObject("App::DocumentObject", "Obj")
+        self.assertFalse(obj.hasExtension("App::GroupExtension"))
+        obj.addExtension("App::GroupExtensionPython")
+        self.assertTrue(obj.hasExtension("App::GroupExtension"))
+        self.assertTrue(obj.hasExtension("App::GroupExtensionPython"))
+        FreeCAD.closeDocument("Ext")
+
+    def test_group_add_object(self):
+        doc = FreeCAD.newDocument("Grp")
+        obj = doc.addObject("App::FeaturePython", "Child")
+        grp = doc.addObject("App::DocumentObjectGroup", "Group")
+        grp.addObject(obj)
+        self.assertTrue(grp.hasObject(obj))
+        self.assertTrue(obj in grp.Group)
+        self.assertEqual(grp.getObject("Child").Name, "Child")
+        # a group cannot contain itself
+        with self.assertRaises(Exception):
+            grp.addObject(grp)
+        FreeCAD.closeDocument("Grp")
+
+    def test_duplicate_links(self):
+        doc = FreeCAD.newDocument("Dup")
+        obj = doc.addObject("App::FeaturePython", "obj")
+        grp = doc.addObject("App::DocumentObjectGroup", "group")
+        grp.Group = [obj, obj]
+        doc.removeObject("obj")
+        self.assertEqual(grp.Group, [])
+        FreeCAD.closeDocument("Dup")
+
+    def test_parent_group(self):
+        doc = FreeCAD.newDocument("Parent")
+        obj = doc.addObject("App::FeaturePython", "Child")
+        grp = doc.addObject("App::DocumentObjectGroup", "Group")
+        grp.addObject(obj)
+        self.assertEqual(obj.getParentGroup().Name, "Group")
+        FreeCAD.closeDocument("Parent")
+
+    def test_extension_group(self):
+        doc = FreeCAD.newDocument("ExtGrp")
+        obj = doc.addObject("App::DocumentObject", "Obj")
+        grp = doc.addObject("App::FeaturePython", "Extension_2")
+        grp.addExtension("App::GroupExtensionPython")
+        grp.Group = [obj]
+        self.assertTrue(obj in grp.Group)
+        FreeCAD.closeDocument("ExtGrp")
+
+
+class TestGuiStub(unittest.TestCase):
+    def test_import_freecadgui_console_mode(self):
+        import FreeCADGui
+
+        self.assertIsNotNone(FreeCADGui)
+        self.assertFalse(hasattr(FreeCADGui, "getDocument"))
+        doc = FreeCAD.newDocument("Gui")
+        obj = doc.addObject("App::FeatureTest", "HeadlessViewObject")
+        self.assertIsNone(obj.ViewObject)
+        FreeCAD.closeDocument("Gui")
+
+
 if __name__ == "__main__":
     unittest.main()

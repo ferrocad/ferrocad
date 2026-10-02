@@ -239,6 +239,7 @@ fn property_to_py(py: Python<'_>, value: &Property) -> PyObject {
             .unwrap(),
         Property::Matrix(m) => PyMatrix { inner: *m }.into_py_any(py).unwrap(),
         Property::Link(s) => s.clone().into_py_any(py).unwrap(),
+        Property::LinkList(v) => v.clone().into_py_any(py).unwrap(),
     }
 }
 
@@ -328,7 +329,9 @@ fn default_property(type_id: &str) -> Property {
         Property::Float(0.0)
     } else if t.ends_with("bool") {
         Property::Bool(false)
-    } else if t.ends_with("link") || t.ends_with("linksub") || t.ends_with("linksublist") || t.ends_with("linklist") {
+    } else if t.ends_with("linklist") {
+        Property::LinkList(vec![])
+    } else if t.ends_with("link") || t.ends_with("linksub") || t.ends_with("linksublist") {
         Property::Link(String::new())
     } else if t.ends_with("length") || t.ends_with("distance") || t.ends_with("quantity") || t.ends_with("angle") {
         Property::Quantity(Quantity::new(0.0, Unit::Millimeter))
@@ -395,6 +398,35 @@ fn extract_rotation(v: &Bound<'_, PyAny>) -> PyResult<Rotation> {
         }
     }
     Err(PyTypeError::new_err("expected a Rotation or a 4-sequence"))
+}
+
+/// Find the plain group (`geo == false`) or geo-feature group (`geo == true`)
+/// that lists `slf` in its `Group` link list.
+fn parent_of(slf: &Bound<'_, PyDocumentObject>, geo: bool) -> Option<PyDocumentObject> {
+    let py = slf.py();
+    let inner = Arc::clone(&slf.borrow().inner);
+    let name = slf.borrow().Name();
+    let doc = inner.lock().unwrap();
+    for id in doc.object_ids() {
+        let other = doc.object(id)?;
+        let is_geo = other.type_id == "App::Part";
+        if is_geo != geo {
+            continue;
+        }
+        if !doc.is_group_like(id) {
+            continue;
+        }
+        if let Some(Property::LinkList(links)) = other.properties.get("Group") {
+            if links.contains(&name) {
+                return Some(PyDocumentObject {
+                    doc: slf.borrow().doc.clone_ref(py),
+                    inner: Arc::clone(&inner),
+                    id,
+                });
+            }
+        }
+    }
+    None
 }
 
 #[pyclass(name = "Document", module = "fc")]
@@ -721,6 +753,14 @@ impl PyDocument {
 
 #[pymethods]
 impl PyDocumentObject {
+    /// Two objects are equal when they are the same object in the same document.
+    fn __eq__(&self, other: &Bound<'_, PyAny>) -> bool {
+        match other.extract::<PyRef<'_, PyDocumentObject>>() {
+            Ok(o) => self.doc.is(&o.doc) && self.id == o.id,
+            Err(_) => false,
+        }
+    }
+
     #[getter]
     fn Name(&self) -> String {
         self.inner
@@ -749,6 +789,12 @@ impl PyDocumentObject {
             .object(self.id)
             .map(|o| o.type_id.clone())
             .unwrap_or_default()
+    }
+
+    /// `ViewObject` is only present when a GUI is up; headless → `None`.
+    #[getter]
+    fn ViewObject(&self) -> Option<PyObject> {
+        None
     }
 
     #[getter]
@@ -859,10 +905,174 @@ impl PyDocumentObject {
         ]
     }
 
+    // -- extensions ---------------------------------------------------------
+
+    fn addExtension(&self, name: &str) -> PyResult<()> {
+        let mut doc = self.inner.lock().unwrap();
+        if !doc.add_extension(self.id, name) {
+            return Err(PyValueError::new_err(format!(
+                "no object {}",
+                self.id
+            )));
+        }
+        // Group extensions carry a `Group` link list property.
+        if doc.is_group_like(self.id)
+            && doc.object(self.id).map(|o| o.properties.get("Group").is_none()).unwrap_or(false)
+        {
+            let _ = doc.set_property(self.id, "Group", Property::LinkList(vec![]));
+        }
+        Ok(())
+    }
+
+    fn hasExtension(&self, name: &str) -> bool {
+        self.inner.lock().unwrap().has_extension(self.id, name)
+    }
+
+    fn removeExtension(&self, name: &str) -> PyResult<()> {
+        if self.inner.lock().unwrap().remove_extension(self.id, name) {
+            Ok(())
+        } else {
+            Err(PyValueError::new_err(format!(
+                "object has no extension '{name}'"
+            )))
+        }
+    }
+
+    // -- groups -------------------------------------------------------------
+
+    /// Resolve this object's `Group` link list into `DocumentObject`s.
+    fn group_members(&self, py: Python<'_>) -> Vec<PyDocumentObject> {
+        let inner = Arc::clone(&self.inner);
+        let names: Vec<String> = {
+            let doc = inner.lock().unwrap();
+            match doc.object(self.id).and_then(|o| o.properties.get("Group")) {
+                Some(Property::LinkList(links)) => links.clone(),
+                _ => return vec![],
+            }
+        };
+        names
+            .into_iter()
+            .filter_map(|name| {
+                let id = inner.lock().unwrap().get_by_name(&name)?;
+                Some(PyDocumentObject {
+                    doc: self.doc.clone_ref(py),
+                    inner: Arc::clone(&inner),
+                    id,
+                })
+            })
+            .collect()
+    }
+
+    fn addObject(&self, other: &Bound<'_, PyAny>) -> PyResult<()> {
+        let other_ref: PyRef<'_, PyDocumentObject> = other
+            .extract()
+            .map_err(|_| PyTypeError::new_err("addObject expects a DocumentObject"))?;
+        let other_id = other_ref.id;
+        let other_name = other_ref.Name();
+        drop(other_ref);
+
+        let mut doc = self.inner.lock().unwrap();
+        if !doc.is_group_like(self.id) {
+            let type_id = doc.object(self.id).map(|o| o.type_id.clone()).unwrap_or_default();
+            return Err(PyAttributeError::new_err(format!(
+                "'{type_id}' is not a group; add a group extension first"
+            )));
+        }
+        if other_id == self.id {
+            return Err(PyValueError::new_err("a group cannot contain itself"));
+        }
+        doc.unlink_from_groups(other_id);
+        let mut links = match doc.object(self.id).and_then(|o| o.properties.get("Group")) {
+            Some(Property::LinkList(l)) => l.clone(),
+            _ => vec![],
+        };
+        if !links.contains(&other_name) {
+            links.push(other_name);
+        }
+        doc.set_property(self.id, "Group", Property::LinkList(links))
+            .map_err(PyValueError::new_err)
+    }
+
+    fn hasObject(&self, other: &Bound<'_, PyAny>) -> PyResult<bool> {
+        let other_ref: PyRef<'_, PyDocumentObject> = other
+            .extract()
+            .map_err(|_| PyTypeError::new_err("hasObject expects a DocumentObject"))?;
+        let name = other_ref.Name();
+        drop(other_ref);
+        let doc = self.inner.lock().unwrap();
+        Ok(match doc.object(self.id).and_then(|o| o.properties.get("Group")) {
+            Some(Property::LinkList(links)) => links.contains(&name),
+            _ => false,
+        })
+    }
+
+    fn getObject(slf: &Bound<'_, Self>, name: &str) -> Option<PyDocumentObject> {
+        let py = slf.py();
+        let inner = Arc::clone(&slf.borrow().inner);
+        let in_group = {
+            let doc = inner.lock().unwrap();
+            match doc.object(slf.borrow().id).and_then(|o| o.properties.get("Group")) {
+                Some(Property::LinkList(links)) => links.iter().any(|n| n == name),
+                _ => false,
+            }
+        };
+        if !in_group {
+            return None;
+        }
+        let id = inner.lock().unwrap().get_by_name(name)?;
+        Some(PyDocumentObject {
+            doc: slf.borrow().doc.clone_ref(py),
+            inner,
+            id,
+        })
+    }
+
+    /// The plain group (or group-extension object) that lists this object.
+    fn getParentGroup(slf: &Bound<'_, Self>) -> Option<PyDocumentObject> {
+        parent_of(slf, false)
+    }
+
+    /// The geo-feature group (`App::Part`) that lists this object.
+    fn getParentGeoFeatureGroup(slf: &Bound<'_, Self>) -> Option<PyDocumentObject> {
+        parent_of(slf, true)
+    }
+
+    /// `OutList`: the objects this object links to (group members).
+    fn OutList(&self, py: Python<'_>) -> Vec<PyDocumentObject> {
+        self.group_members(py)
+    }
+
+    /// `InList`: the objects that link to this object.
+    fn InList(slf: &Bound<'_, Self>) -> Vec<PyDocumentObject> {
+        let py = slf.py();
+        let inner = Arc::clone(&slf.borrow().inner);
+        let name = slf.borrow().Name();
+        let mut result = vec![];
+        let doc = inner.lock().unwrap();
+        for id in doc.object_ids() {
+            if doc.object(id).map(|o| o.name == name).unwrap_or(false) {
+                continue;
+            }
+            if let Some(Property::LinkList(links)) = doc.object(id).and_then(|o| o.properties.get("Group")) {
+                if links.contains(&name) {
+                    result.push(PyDocumentObject {
+                        doc: slf.borrow().doc.clone_ref(py),
+                        inner: Arc::clone(&inner),
+                        id,
+                    });
+                }
+            }
+        }
+        result
+    }
+
     fn __getattr__(&self, name: &Bound<'_, PyAny>) -> PyResult<PyObject> {
         let name: String = name.extract()?;
         if name.starts_with('_') {
             return Err(PyAttributeError::new_err(name));
+        }
+        if name == "Group" {
+            return Ok(pyo3::Python::with_gil(|py| self.group_members(py).into_py_any(py).unwrap()));
         }
         let value = {
             let doc = self.inner.lock().unwrap();
@@ -888,6 +1098,9 @@ impl PyDocumentObject {
             self.inner.lock().unwrap().set_label(self.id, &label);
             return Ok(());
         }
+        if name == "Group" {
+            return self.set_group(value);
+        }
         if name.starts_with('_') {
             return Err(PyAttributeError::new_err(name));
         }
@@ -908,6 +1121,28 @@ impl PyDocumentObject {
             .lock()
             .unwrap()
             .set_property(self.id, &name, property)
+            .map_err(PyValueError::new_err)
+    }
+
+    /// Assign the `Group` link list from a sequence of objects (or names).
+    fn set_group(&self, value: &Bound<'_, PyAny>) -> PyResult<()> {
+        let names: Vec<String> = if let Ok(objs) = value.extract::<Vec<PyRef<'_, PyDocumentObject>>>() {
+            objs.iter().map(|o| o.Name()).collect()
+        } else if let Ok(names) = value.extract::<Vec<String>>() {
+            names
+        } else {
+            return Err(PyTypeError::new_err(
+                "Group expects a list of DocumentObject (or names)",
+            ));
+        };
+        let mut doc = self.inner.lock().unwrap();
+        // Enforce single-group membership.
+        for n in &names {
+            if let Some(member) = doc.get_by_name(n) {
+                doc.unlink_from_groups(member);
+            }
+        }
+        doc.set_property(self.id, "Group", Property::LinkList(names))
             .map_err(PyValueError::new_err)
     }
 }

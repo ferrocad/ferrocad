@@ -80,6 +80,11 @@ pub fn default_properties(type_id: &str) -> Vec<(&'static str, Property)> {
             ("Object", Property::String(String::new())),
             ("Attribute", Property::String(String::new())),
         ],
+        "App::DocumentObjectGroup" => vec![("Group", Property::LinkList(vec![]))],
+        "App::Part" => vec![
+            ("Group", Property::LinkList(vec![])),
+            ("Placement", Property::Placement(Placement::identity())),
+        ],
         _ => vec![],
     }
 }

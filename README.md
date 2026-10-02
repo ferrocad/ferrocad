@@ -1,6 +1,6 @@
 # freecad-rs-poc
 
-**Milestones 0–4 (slice 3):** run a FreeCAD headless "hello world" Python script on a pure-Rust
+**Milestones 0–4 (slice 6):** run a FreeCAD headless "hello world" Python script on a pure-Rust
 core, with the C++ Python bindings replaced by Rust bindings.
 
 * **M0** — hello world on a Rust object model, bridged to Python over a C ABI + `ctypes`.
@@ -17,8 +17,16 @@ core, with the C++ Python bindings replaced by Rust bindings.
 * **M4 (slice 1)** — the `FreeCAD.Base`/`Units`/`Console`/`ParamGet`/`StringHasher` surface.
 * **M4 (slice 2)** — the full **`FreeCAD.Units` system** (`Unit`/`Quantity` + expression parser).
 * **M4 (slice 3)** — `Base.Vector`/`Matrix`/`Placement`/`Rotation`/`TypeId` + `App::FeatureTest`.
-* **M4 (slice 4)** — document `saveAs`/`save`/`open`/`copyObject` (JSON persistence);
-  conformance now **41 passing** (`StringHasher.py` 4/4, `UnitTests.py` 12/12).
+* **M4 (slice 4)** — document `saveAs`/`save`/`open`/`copyObject` (JSON persistence).
+* **M4 (slice 5)** — geometry tuple setters, `PlacementList`/`RotationList` properties, document
+  metadata (`ActiveObject`/`findObjects`/`setAutoCreated`), `TypeId` classmethods, `addProperty`
+  flags, `addDocumentObserver` (no-op) + `FreeCAD.PropertyType`.
+* **M4 (slice 6)** — dynamic **extensions** (`addExtension`/`hasExtension` with
+  `GroupExtensionPython`→`GroupExtension` inheritance), **groups** (`App::DocumentObjectGroup` +
+  `App::Part` with `Group` link list, `addObject`/`hasObject`/`getObject`/`getParentGroup`/
+  `getParentGeoFeatureGroup`/`OutList`/`InList`, single-group enforcement), and a console-mode
+  **`FreeCADGui`** stub + `ViewObject` → `None`; conformance now **51 passing** (`StringHasher.py`
+  4/4, `UnitTests.py` 12/12).
 
 This is a proof of concept, not a product. It exists to validate the single
 riskiest assumption of the rewrite plan: *that a Python script written against

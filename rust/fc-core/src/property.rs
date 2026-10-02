@@ -27,6 +27,8 @@ pub enum Property {
     Matrix(Matrix4),
     /// A link to another object, stored by name (POC simplification).
     Link(String),
+    /// A list of links to other objects, stored by name (POC simplification).
+    LinkList(Vec<String>),
 }
 
 impl Property {
@@ -50,6 +52,7 @@ impl Property {
             Property::RotationList(_) => "App::PropertyRotationList",
             Property::Matrix(_) => "App::PropertyMatrix",
             Property::Link(_) => "App::PropertyLink",
+            Property::LinkList(_) => "App::PropertyLinkList",
         }
     }
 }
@@ -70,6 +73,10 @@ impl PropertyContainer {
 
     pub fn get(&self, name: &str) -> Option<&Property> {
         self.props.get(name)
+    }
+
+    pub fn get_mut(&mut self, name: &str) -> Option<&mut Property> {
+        self.props.get_mut(name)
     }
 
     pub fn remove(&mut self, name: &str) -> Option<Property> {

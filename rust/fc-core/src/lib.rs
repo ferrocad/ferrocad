@@ -160,6 +160,35 @@ mod tests {
     }
 
     #[test]
+    fn extensions_and_groups() {
+        let mut doc = Document::new();
+        let grp = doc.add_object("Group", "App::DocumentObjectGroup");
+        let obj = doc.add_object("Obj", "App::DocumentObject");
+        assert!(doc.is_group_like(grp));
+        assert!(!doc.has_extension(obj, "App::GroupExtension"));
+
+        doc.add_extension(obj, "App::GroupExtensionPython");
+        assert!(doc.has_extension(obj, "App::GroupExtension"));
+        assert!(doc.has_extension(obj, "App::GroupExtensionPython"));
+        assert!(doc.is_group_like(obj));
+    }
+
+    #[test]
+    fn removing_object_drops_it_from_groups() {
+        let mut doc = Document::new();
+        let grp = doc.add_object("Group", "App::DocumentObjectGroup");
+        let obj = doc.add_object("Obj", "App::DocumentObject");
+        doc.set_property(grp, "Group", Property::LinkList(vec!["Obj".into(), "Obj".into()]))
+            .unwrap();
+
+        doc.remove_object(obj);
+        match doc.object(grp).unwrap().properties.get("Group") {
+            Some(Property::LinkList(links)) => assert!(links.is_empty()),
+            other => panic!("expected empty LinkList, got {other:?}"),
+        }
+    }
+
+    #[test]
     fn expressions_recompute() {
         let mut doc = Document::new();
         let a = doc.add_object("A", "App::Feature");

@@ -1,7 +1,7 @@
 //! A document object model with a dependency graph, transactions, observers,
 //! and expression-driven recompute.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use petgraph::graph::NodeIndex;
 use petgraph::stable_graph::StableGraph;
@@ -24,6 +24,8 @@ pub struct DocumentObject {
     pub properties: PropertyContainer,
     /// Property name → expression source (evaluated on recompute).
     pub expressions: BTreeMap<String, String>,
+    /// Dynamic extension type ids added via `addExtension`.
+    pub extensions: BTreeSet<String>,
 }
 
 #[derive(Default)]
@@ -79,6 +81,7 @@ impl Document {
                 type_id: type_id.to_string(),
                 properties,
                 expressions: BTreeMap::new(),
+                extensions: BTreeSet::new(),
             },
         );
         for observer in &mut self.observers {
@@ -101,11 +104,21 @@ impl Document {
 
     /// Remove an object (and its graph node/edges). Returns false if absent.
     pub fn remove_object(&mut self, id: ObjectId) -> bool {
+        let name = match self.objects.get(&id) {
+            Some(o) => o.name.clone(),
+            None => return false,
+        };
         if self.objects.remove(&id).is_none() {
             return false;
         }
         if let Some(node) = self.index.remove(&id) {
             self.graph.remove_node(node);
+        }
+        // Drop the removed object from any group's `Group` link list.
+        for other in self.objects.values_mut() {
+            if let Some(Property::LinkList(links)) = other.properties.get_mut("Group") {
+                links.retain(|n| n != &name);
+            }
         }
         true
     }
@@ -124,6 +137,58 @@ impl Document {
         match self.objects.get_mut(&object) {
             Some(obj) => obj.properties.remove(name).is_some(),
             None => false,
+        }
+    }
+
+    // -- extensions ---------------------------------------------------------
+
+    /// Record a dynamic extension on an object.
+    pub fn add_extension(&mut self, id: ObjectId, ext: &str) -> bool {
+        match self.objects.get_mut(&id) {
+            Some(obj) => obj.extensions.insert(ext.to_string()),
+            None => false,
+        }
+    }
+
+    /// Whether an object has `ext`, considering extension inheritance (e.g.
+    /// `App::GroupExtensionPython` derives from `App::GroupExtension`).
+    pub fn has_extension(&self, id: ObjectId, ext: &str) -> bool {
+        self.object(id)
+            .map(|o| o.extensions.iter().any(|e| extension_is_or_derives(e, ext)))
+            .unwrap_or(false)
+    }
+
+    pub fn remove_extension(&mut self, id: ObjectId, ext: &str) -> bool {
+        match self.objects.get_mut(&id) {
+            Some(obj) => obj.extensions.remove(ext),
+            None => false,
+        }
+    }
+
+    /// Whether the object acts as a group (document group, part, or has a
+    /// group extension) and therefore carries a `Group` link list.
+    pub fn is_group_like(&self, id: ObjectId) -> bool {
+        self.object(id)
+            .map(|o| {
+                o.type_id == "App::DocumentObjectGroup"
+                    || o.type_id == "App::Part"
+                    || o.extensions
+                        .iter()
+                        .any(|e| extension_is_or_derives(e, "App::GroupExtension"))
+            })
+            .unwrap_or(false)
+    }
+
+    /// Remove `member` from any group that lists it (single-group enforcement).
+    pub fn unlink_from_groups(&mut self, member: ObjectId) {
+        let name = match self.object(member) {
+            Some(o) => o.name.clone(),
+            None => return,
+        };
+        for other in self.objects.values_mut() {
+            if let Some(Property::LinkList(links)) = other.properties.get_mut("Group") {
+                links.retain(|n| n != &name);
+            }
         }
     }
 
@@ -299,6 +364,7 @@ impl Document {
                         .map(|(k, v)| (k.clone(), v.clone()))
                         .collect(),
                     expressions: o.expressions.clone(),
+                    extensions: o.extensions.iter().cloned().collect(),
                 })
             })
             .collect();
@@ -317,6 +383,7 @@ impl Document {
                     o.properties.set(k.clone(), v.clone());
                 }
                 o.expressions = obj.expressions.clone();
+                o.extensions = obj.extensions.iter().cloned().collect();
             }
         }
         doc
@@ -347,6 +414,22 @@ pub struct SavedObject {
     pub type_id: String,
     pub properties: BTreeMap<String, Property>,
     pub expressions: BTreeMap<String, String>,
+    pub extensions: BTreeSet<String>,
+}
+
+/// Extension inheritance: true if `ext` is `base` or derives from it.
+///
+/// Covers the Python-extension → C++-extension pairs relevant to the POC
+/// (the `*Python` extension derives from its C++ counterpart).
+fn extension_is_or_derives(ext: &str, base: &str) -> bool {
+    if ext == base {
+        return true;
+    }
+    matches!(
+        (ext, base),
+        ("App::GroupExtensionPython", "App::GroupExtension")
+            | ("Gui::ViewProviderGroupExtensionPython", "Gui::ViewProviderGroupExtension")
+    )
 }
 
 fn numeric(obj: &DocumentObject, name: &str) -> Option<f64> {

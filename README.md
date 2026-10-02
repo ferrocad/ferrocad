@@ -1,6 +1,6 @@
 # freecad-rs-poc
 
-**Milestones 0–3c:** run a FreeCAD headless "hello world" Python script on a pure-Rust core,
+**Milestones 0–3d:** run a FreeCAD headless "hello world" Python script on a pure-Rust core,
 with the C++ Python bindings replaced by Rust bindings.
 
 * **M0** — hello world on a Rust object model, bridged to Python over a C ABI + `ctypes`.
@@ -12,6 +12,8 @@ with the C++ Python bindings replaced by Rust bindings.
   the `FreeCAD` facade; `ctypes` remains the fallback.
 * **M3c** — generate PyO3 **skeleton** bindings (`fc-gen`) from the `.pyi` model; behaviour stays
   in `fc-core` (hand-written glue).
+* **M3d** — a **conformance harness** that runs upstream `Mod/Test` files against our `FreeCAD`
+  and reports the parity gap (1 upstream test already passes unchanged).
 
 This is a proof of concept, not a product. It exists to validate the single
 riskiest assumption of the rewrite plan: *that a Python script written against
@@ -76,12 +78,20 @@ PYTHONPATH=python python3 tests/test_fc_core.py               # fc bindings over
 PYTHONPATH=python python3 tests/test_codegen.py               # generated skeleton surface (M3c)
 python3 tools/test_inventory.py                                # .pyi parser (M3a)
 python3 tools/test_codegen.py                                  # codegen logic (M3c)
+python3 tools/test_conformance.py                              # harness helpers (M3d)
 ```
 
 Regenerate the M3c skeleton (`rust/fc-gen/src/lib.rs`, committed):
 
 ```sh
 python3 tools/codegen.py --root ../freecad-upstream --out rust/fc-gen/src/lib.rs
+```
+
+Run upstream tests against our `FreeCAD` (conformance harness, M3d):
+
+```sh
+python3 tools/conformance.py --root ../freecad-upstream            # default curated files
+python3 tools/conformance.py --root ../freecad-upstream --list     # list candidates
 ```
 
 ## The two backends
@@ -152,6 +162,8 @@ tools/inventory.py        M3a: parse upstream .pyi stubs into an API model (Pyth
 tools/test_inventory.py   M3a tests (hermetic fixtures + upstream integration guard)
 tools/codegen.py          M3c: emit PyO3 skeleton bindings from the API model
 tools/test_codegen.py     M3c tests (hermetic generator logic)
+tools/conformance.py      M3d: run upstream Mod/Test files against our FreeCAD
+tools/test_conformance.py M3d tests (hermetic harness helpers)
 tests/test_parity.py      behavioural checks (M0/M1)
 tests/test_fc_core.py     fc-core via Python (M3b)
 tests/test_codegen.py     generated skeleton surface (M3c)

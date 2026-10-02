@@ -3,15 +3,15 @@
 Upstream keeps the low-level value types (``Quantity``, ``Unit``, ``Vector``,
 ``Vector2d``, ``Matrix``, ``Rotation``, ``Placement``, ``TypeId``, ``BoundBox``,
 ``Material``, …) under ``FreeCAD.Base``; ``FreeCAD.Units`` re-exports the unit
-types for convenience. These are all implemented in Rust (``fc-core``) and bound
-by ``fc-python``.
+types for convenience. These are all implemented in Rust (``ferrocad_core``) and bound
+by ``ferrocad_py``.
 """
 
 from __future__ import annotations
 
 from enum import IntEnum
 
-from fc import (
+from ferrocad import (
     BoundBox,
     Material,
     Matrix,

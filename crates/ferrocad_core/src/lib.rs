@@ -1,10 +1,10 @@
-//! # fc-core
+//! # ferrocad_core
 //!
 //! The pure-Rust core of the FreeCAD-on-Rust rewrite (M2): typed quantities,
 //! a property container, and a document object model with a dependency-graph
 //! recompute order, transactions (open/commit/abort + undo/redo), observers,
 //! and expression-driven recompute. No Python and no UI — this is what
-//! `fc-python` will bind.
+//! `ferrocad_py` will bind.
 
 mod document;
 mod expr;

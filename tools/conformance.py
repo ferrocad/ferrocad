@@ -24,7 +24,7 @@ import sys
 import unittest
 from pathlib import Path
 
-REPO = Path(__file__).resolve().parents[1]   # freecad-rs-poc
+REPO = Path(__file__).resolve().parents[1]   # ferrocad project root
 PYTHON_DIR = REPO / "python"
 
 DEFAULT_FILES = [

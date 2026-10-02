@@ -1,7 +1,7 @@
 """Tests for the M4 `Base`/`Units`/`Console`/`ParamGet`/`StringHasher` surface.
 
 Exercises the new facade modules exposed from ``FreeCAD`` (over the Rust
-``fc-core``/``fc-python`` backend).
+``ferrocad_core``/``ferrocad_py`` backend).
 
 Run: PYTHONPATH=python python3 -m unittest tests.test_base_surface -v
 """

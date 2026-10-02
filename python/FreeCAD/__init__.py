@@ -10,8 +10,8 @@ touch::
 
 Two Rust backends provide the implementation; this module just selects one:
 
-* ``fc``               — the PyO3 bindings over ``fc-core`` (primary, M3b).
-* ``_ctypes_backend``  — the M0 C-ABI bridge, used if ``fc`` is unavailable.
+* ``ferrocad``         — the PyO3 bindings over ``ferrocad_core`` (primary, M3b).
+* ``_ctypes_backend``  — the M0 C-ABI bridge, used if ``ferrocad`` is unavailable.
 
 The C++ PyCXX bindings are not involved at all.
 
@@ -23,15 +23,15 @@ that small layer in Python so the ``FreeCAD`` module surface stays complete.
 from __future__ import annotations
 
 try:  # pragma: no cover - trivial branch
-    import fc as _fc
+    import ferrocad as _fc
 
-    backend = "fc"
+    backend = "ferrocad"
 except ImportError:  # pragma: no cover - depends on build artifacts
     _fc = None
     backend = "ctypes"
     from . import _ctypes_backend as _ctypes
 
-if backend == "fc":
+if backend == "ferrocad":
     Document = _fc.Document
     DocumentObject = _fc.DocumentObject
     Quantity = _fc.Quantity

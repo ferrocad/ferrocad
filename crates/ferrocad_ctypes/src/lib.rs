@@ -1,4 +1,4 @@
-//! # freecad-core (POC)
+//! # ferrocad_ctypes (legacy M0 C-ABI fallback)
 //!
 //! A deliberately small re-implementation of the *headless* FreeCAD document
 //! object model in Rust, exposed to Python through a flat C ABI.
@@ -96,13 +96,13 @@ fn obj_ptr(o: &mut FcObject) -> *mut FcObject {
 // Library lifecycle
 // ---------------------------------------------------------------------------
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn fc_version() -> *const c_char {
     concat!(env!("CARGO_PKG_VERSION"), "\0").as_ptr() as *const c_char
 }
 
 /// Frees a string previously returned by this library.
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn fc_string_free(s: *mut c_char) {
     if !s.is_null() {
         unsafe { drop(CString::from_raw(s)) };
@@ -113,7 +113,7 @@ pub extern "C" fn fc_string_free(s: *mut c_char) {
 // Documents
 // ---------------------------------------------------------------------------
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn fc_new_document(name: *const c_char) -> *mut FcDocument {
     let mut doc_name = unsafe { cstr(name) };
     if doc_name.is_empty() {
@@ -147,7 +147,7 @@ pub extern "C" fn fc_new_document(name: *const c_char) -> *mut FcDocument {
     doc_ptr(&mut reg.docs[index])
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn fc_close_document(doc: *mut FcDocument) -> i32 {
     if doc.is_null() {
         return -1;
@@ -172,7 +172,7 @@ pub extern "C" fn fc_close_document(doc: *mut FcDocument) -> i32 {
     }
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn fc_active_document() -> *mut FcDocument {
     let mut reg = REG.lock().unwrap();
     match reg.active {
@@ -181,7 +181,7 @@ pub extern "C" fn fc_active_document() -> *mut FcDocument {
     }
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn fc_get_document(name: *const c_char) -> *mut FcDocument {
     let target = unsafe { cstr(name) };
     let mut reg = REG.lock().unwrap();
@@ -191,12 +191,12 @@ pub extern "C" fn fc_get_document(name: *const c_char) -> *mut FcDocument {
     }
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn fc_document_count() -> i32 {
     REG.lock().unwrap().docs.len() as i32
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn fc_document_at(index: i32) -> *mut FcDocument {
     if index < 0 {
         return ptr::null_mut();
@@ -208,7 +208,7 @@ pub extern "C" fn fc_document_at(index: i32) -> *mut FcDocument {
     }
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn fc_document_name(doc: *mut FcDocument) -> *mut c_char {
     if doc.is_null() {
         return ptr::null_mut();
@@ -216,7 +216,7 @@ pub extern "C" fn fc_document_name(doc: *mut FcDocument) -> *mut c_char {
     to_c(unsafe { &*doc }.name.clone())
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn fc_document_label(doc: *mut FcDocument) -> *mut c_char {
     if doc.is_null() {
         return ptr::null_mut();
@@ -224,7 +224,7 @@ pub extern "C" fn fc_document_label(doc: *mut FcDocument) -> *mut c_char {
     to_c(unsafe { &*doc }.label.clone())
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn fc_document_set_label(doc: *mut FcDocument, label: *const c_char) -> i32 {
     if doc.is_null() {
         return -1;
@@ -233,7 +233,7 @@ pub extern "C" fn fc_document_set_label(doc: *mut FcDocument, label: *const c_ch
     0
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn fc_document_object_count(doc: *mut FcDocument) -> i32 {
     if doc.is_null() {
         return 0;
@@ -241,7 +241,7 @@ pub extern "C" fn fc_document_object_count(doc: *mut FcDocument) -> i32 {
     unsafe { &*doc }.objects.len() as i32
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn fc_document_object_at(doc: *mut FcDocument, index: i32) -> *mut FcObject {
     if doc.is_null() || index < 0 {
         return ptr::null_mut();
@@ -253,7 +253,7 @@ pub extern "C" fn fc_document_object_at(doc: *mut FcDocument, index: i32) -> *mu
     }
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn fc_document_get_object(
     doc: *mut FcDocument,
     name: *const c_char,
@@ -269,7 +269,7 @@ pub extern "C" fn fc_document_get_object(
     }
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn fc_document_add_object(
     doc: *mut FcDocument,
     type_id: *const c_char,
@@ -306,7 +306,7 @@ pub extern "C" fn fc_document_add_object(
     obj_ptr(doc.objects.last_mut().unwrap())
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn fc_document_remove_object(doc: *mut FcDocument, name: *const c_char) -> i32 {
     if doc.is_null() {
         return -1;
@@ -322,7 +322,7 @@ pub extern "C" fn fc_document_remove_object(doc: *mut FcDocument, name: *const c
     }
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn fc_document_recompute(doc: *mut FcDocument) -> i32 {
     if doc.is_null() {
         return 0;
@@ -335,7 +335,7 @@ pub extern "C" fn fc_document_recompute(doc: *mut FcDocument) -> i32 {
 // Document objects
 // ---------------------------------------------------------------------------
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn fc_object_name(obj: *mut FcObject) -> *mut c_char {
     if obj.is_null() {
         return ptr::null_mut();
@@ -343,7 +343,7 @@ pub extern "C" fn fc_object_name(obj: *mut FcObject) -> *mut c_char {
     to_c(unsafe { &*obj }.name.clone())
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn fc_object_label(obj: *mut FcObject) -> *mut c_char {
     if obj.is_null() {
         return ptr::null_mut();
@@ -351,7 +351,7 @@ pub extern "C" fn fc_object_label(obj: *mut FcObject) -> *mut c_char {
     to_c(unsafe { &*obj }.label.clone())
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn fc_object_set_label(obj: *mut FcObject, label: *const c_char) -> i32 {
     if obj.is_null() {
         return -1;
@@ -360,7 +360,7 @@ pub extern "C" fn fc_object_set_label(obj: *mut FcObject, label: *const c_char) 
     0
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn fc_object_type_id(obj: *mut FcObject) -> *mut c_char {
     if obj.is_null() {
         return ptr::null_mut();
@@ -368,7 +368,7 @@ pub extern "C" fn fc_object_type_id(obj: *mut FcObject) -> *mut c_char {
     to_c(unsafe { &*obj }.type_id.clone())
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn fc_object_add_property(
     obj: *mut FcObject,
     type_id: *const c_char,
@@ -391,7 +391,7 @@ pub extern "C" fn fc_object_add_property(
 }
 
 /// Returns the value of `name`, or NULL if the property does not exist.
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn fc_object_get_property(obj: *mut FcObject, name: *const c_char) -> *mut c_char {
     if obj.is_null() {
         return ptr::null_mut();
@@ -404,7 +404,7 @@ pub extern "C" fn fc_object_get_property(obj: *mut FcObject, name: *const c_char
 }
 
 /// Sets an existing property. Returns 0 on success, -1 if unknown.
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn fc_object_set_property(
     obj: *mut FcObject,
     name: *const c_char,
@@ -424,7 +424,7 @@ pub extern "C" fn fc_object_set_property(
     }
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn fc_object_property_count(obj: *mut FcObject) -> i32 {
     if obj.is_null() {
         return 0;
@@ -432,7 +432,7 @@ pub extern "C" fn fc_object_property_count(obj: *mut FcObject) -> i32 {
     unsafe { &*obj }.props.len() as i32
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn fc_object_property_name_at(obj: *mut FcObject, index: i32) -> *mut c_char {
     if obj.is_null() || index < 0 {
         return ptr::null_mut();
@@ -444,7 +444,7 @@ pub extern "C" fn fc_object_property_name_at(obj: *mut FcObject, index: i32) -> 
 }
 
 /// Returns the declared type (e.g. "App::PropertyString") of a property.
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn fc_object_property_type(obj: *mut FcObject, name: *const c_char) -> *mut c_char {
     if obj.is_null() {
         return ptr::null_mut();

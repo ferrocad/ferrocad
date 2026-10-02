@@ -1,6 +1,6 @@
-//! # fc-python (M3b)
+//! # ferrocad_py (M3b)
 //!
-//! PyO3 bindings exposing the `fc-core` document/object model (properties,
+//! PyO3 bindings exposing the `ferrocad_core` document/object model (properties,
 //! quantities, expressions, transactions, recompute) to Python. This is the
 //! bridge that replaces the hand-written `FreeCAD` facade from M0/M1.
 
@@ -10,7 +10,7 @@ use std::collections::{BTreeMap, HashMap};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, OnceLock};
 
-use fc_core::{canonical_name, parse_unit, Document as CoreDocument, Matrix4, ObjectId, Placement, Property, Quantity, Rotation, StringHasher, StringId, TypeId, Unit, Vector3};
+use ferrocad_core::{canonical_name, parse_unit, Document as CoreDocument, Matrix4, ObjectId, Placement, Property, Quantity, Rotation, StringHasher, StringId, TypeId, Unit, Vector3};
 use pyo3::exceptions::{
     PyAttributeError, PyIndexError, PyNotImplementedError, PyRuntimeError, PyTypeError, PyValueError,
 };
@@ -291,7 +291,7 @@ fn apply_all_python_states(py: Python<'_>, doc_py: &Py<PyDocument>, inner: &Arc<
 // Unit
 // ---------------------------------------------------------------------------
 
-#[pyclass(name = "Unit", module = "fc")]
+#[pyclass(name = "Unit", module = "ferrocad")]
 #[derive(Clone, Copy)]
 struct PyUnit {
     inner: Unit,
@@ -331,7 +331,7 @@ impl PyUnit {
 // Quantity
 // ---------------------------------------------------------------------------
 
-#[pyclass(name = "Quantity", module = "fc")]
+#[pyclass(name = "Quantity", module = "ferrocad")]
 #[derive(Clone)]
 struct PyQuantity {
     inner: Quantity,
@@ -945,7 +945,7 @@ fn parse_bool(raw: &str) -> Option<bool> {
     }
 }
 
-#[pyclass(name = "DocumentSettings", module = "fc")]
+#[pyclass(name = "DocumentSettings", module = "ferrocad")]
 struct PyDocumentSettings {
     meta: Arc<Mutex<BTreeMap<String, String>>>,
     namespace: String,
@@ -1044,7 +1044,7 @@ impl PyDocumentSettings {
     }
 }
 
-#[pyclass(name = "Document", module = "fc")]
+#[pyclass(name = "Document", module = "ferrocad")]
 struct PyDocument {
     name: String,
     label: String,
@@ -1056,7 +1056,7 @@ struct PyDocument {
     comment: Mutex<String>,
 }
 
-#[pyclass(name = "DocumentObject", module = "fc", dict)]
+#[pyclass(name = "DocumentObject", module = "ferrocad", dict)]
 struct PyDocumentObject {
     doc: Py<PyDocument>,
     inner: Arc<Mutex<CoreDocument>>,
@@ -2347,7 +2347,7 @@ impl PyDocumentObject {
 // StringHasher / StringID
 // ---------------------------------------------------------------------------
 
-#[pyclass(name = "StringHasher", module = "fc")]
+#[pyclass(name = "StringHasher", module = "ferrocad")]
 #[derive(Clone)]
 struct PyStringHasher {
     inner: StringHasher,
@@ -2386,7 +2386,7 @@ impl PyStringHasher {
     }
 }
 
-#[pyclass(name = "StringID", module = "fc")]
+#[pyclass(name = "StringID", module = "ferrocad")]
 #[derive(Clone)]
 struct PyStringID {
     inner: StringId,
@@ -2420,7 +2420,7 @@ impl PyStringID {
 // Geometry types
 // ---------------------------------------------------------------------------
 
-#[pyclass(name = "Vector", module = "fc")]
+#[pyclass(name = "Vector", module = "ferrocad")]
 #[derive(Clone, Copy)]
 struct PyVector {
     inner: Vector3,
@@ -2543,7 +2543,7 @@ impl PyVector {
     }
 }
 
-#[pyclass(name = "Matrix", module = "fc")]
+#[pyclass(name = "Matrix", module = "ferrocad")]
 #[derive(Clone, Copy)]
 struct PyMatrix {
     inner: Matrix4,
@@ -2917,7 +2917,7 @@ impl PyMatrix {
     }
 }
 
-#[pyclass(name = "Rotation", module = "fc")]
+#[pyclass(name = "Rotation", module = "ferrocad")]
 #[derive(Clone, Copy)]
 struct PyRotation {
     inner: Rotation,
@@ -3107,7 +3107,7 @@ impl PyRotation {
     }
 }
 
-#[pyclass(name = "Placement", module = "fc")]
+#[pyclass(name = "Placement", module = "ferrocad")]
 #[derive(Clone, Copy)]
 struct PyPlacement {
     inner: Placement,
@@ -3190,7 +3190,7 @@ impl PyPlacement {
     }
 }
 
-#[pyclass(name = "TypeId", module = "fc")]
+#[pyclass(name = "TypeId", module = "ferrocad")]
 #[derive(Clone)]
 struct PyTypeId {
     inner: TypeId,
@@ -3238,7 +3238,7 @@ impl PyTypeId {
 // Vector2d / Material / BoundBox
 // ---------------------------------------------------------------------------
 
-#[pyclass(name = "Vector2d", module = "fc")]
+#[pyclass(name = "Vector2d", module = "ferrocad")]
 #[derive(Clone, Copy)]
 struct PyVector2d {
     x: f64,
@@ -3282,7 +3282,7 @@ impl PyVector2d {
     }
 }
 
-#[pyclass(name = "Material", module = "fc")]
+#[pyclass(name = "Material", module = "ferrocad")]
 #[derive(Clone, PartialEq)]
 struct PyMaterial {
     diffuse: [f64; 4],
@@ -3324,7 +3324,7 @@ impl PyMaterial {
     }
 }
 
-#[pyclass(name = "BoundBox", module = "fc")]
+#[pyclass(name = "BoundBox", module = "ferrocad")]
 #[derive(Clone)]
 struct PyBoundBox {
     min: [f64; 3],
@@ -3554,7 +3554,7 @@ fn _forgetDocument(doc: &Bound<'_, PyDocument>) {
 }
 
 #[pymodule]
-fn fc(m: &Bound<'_, PyModule>) -> PyResult<()> {
+fn ferrocad(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add("__version__", env!("CARGO_PKG_VERSION"))?;
     m.add_class::<PyQuantity>()?;
     m.add_class::<PyUnit>()?;

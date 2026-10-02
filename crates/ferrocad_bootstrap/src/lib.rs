@@ -1,4 +1,4 @@
-//! # freecad-py (M1)
+//! # ferrocad_bootstrap (legacy M1 PyO3 extension)
 //!
 //! PyO3 bindings that expose the Rust FreeCAD object model as a native Python
 //! extension module, importable as `FreeCAD._core`.

@@ -16,7 +16,7 @@ from __future__ import annotations
 import ctypes as _c
 import os as _os
 
-_LIB_NAMES = ("libfreecad_core.so", "libfreecad_core.dylib", "freecad_core.dll")
+_LIB_NAMES = ("libferrocad_ctypes.so", "libferrocad_ctypes.dylib", "ferrocad_ctypes.dll")
 
 
 def _candidates():

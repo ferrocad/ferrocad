@@ -1,0 +1,30 @@
+[build-system]
+requires = ["maturin>=1.7,<2.0"]
+build-backend = "maturin"
+
+# FerroCAD is distributed as the `ferrocad` Python project, but its public
+# import namespace is `FreeCAD` (see python/FreeCAD). `ferrocad` itself is the
+# private PyO3 backend module built from crates/ferrocad_py.
+[project]
+name = "ferrocad"
+version = "0.1.0"
+description = "FerroCAD — a Rust reimplementation of FreeCAD's App core, exposed as a drop-in `FreeCAD` Python package."
+readme = "README.md"
+requires-python = ">=3.10"
+license = "LGPL-2.1-or-later"
+keywords = ["freecad", "cad", "rust", "pyo3"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Programming Language :: Python :: Implementation :: CPython",
+    "Programming Language :: Rust",
+    "Topic :: Scientific/Engineering",
+]
+
+[tool.maturin]
+# The primary PyO3 extension lives in crates/ferrocad_py and is importable as
+# the top-level module `ferrocad`. `python/` holds the pure-Python `FreeCAD`
+# (and `FreeCADGui`) facade packages.
+manifest-path = "crates/ferrocad_py/Cargo.toml"
+python-source = "python"
+module-name = "ferrocad"
+features = ["pyo3/extension-module"]

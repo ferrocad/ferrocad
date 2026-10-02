@@ -1,11 +1,12 @@
 [package]
-name = "freecad-py"
-version = "0.1.0"
-edition = "2021"
-description = "PyO3 bindings: the Rust FreeCAD core as a native Python extension"
+name = "ferrocad_bootstrap"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Legacy M1 PyO3 extension, importable as `FreeCAD._core` (superseded by ferrocad_py)"
 
 [lib]
-name = "freecad_py"
+name = "ferrocad_bootstrap"
 # A CPython extension module, importable as `FreeCAD._core`.
 # `abi3` builds against the stable ABI so one binary works across CPython
 # versions; it is also what lets us build for a CPython newer than the one

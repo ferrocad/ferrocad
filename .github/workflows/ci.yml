@@ -5,8 +5,8 @@ on:
   pull_request:
 
 jobs:
-  # Headless tests: the primary validation path. bite-gpui's #[gpui::test]
-  # harness and the PyO3 tests run without a display server or GPU.
+  # Headless tests: the primary validation path. ferrocad_core's unit tests and
+  # the PyO3 tests run without a display server or GPU.
   headless:
     runs-on: ubuntu-latest
     steps:
@@ -15,20 +15,24 @@ jobs:
       - name: Install CPython headers (PyO3 embedding / extension build)
         run: sudo apt-get update && sudo apt-get install -y python3-dev
 
-      - name: fc-core (pure Rust) tests
-        working-directory: rust/fc-core
+      - name: ferrocad_core (pure Rust) tests
+        working-directory: crates/ferrocad_core
         run: cargo test
 
-      - name: fc-host headless tests (bite-gpui + embedded CPython)
-        working-directory: rust/fc-host
+      - name: ferrocad_host headless tests (bite-gpui + embedded CPython)
+        working-directory: crates/ferrocad_host
         run: cargo test
 
-      - name: freecad-core (C ABI) build
-        working-directory: rust/freecad-core
+      - name: ferrocad_ctypes (C ABI fallback) build
+        working-directory: crates/ferrocad_ctypes
         run: cargo build
 
-      - name: freecad-py (PyO3 extension) build
-        working-directory: rust/freecad-py
+      - name: ferrocad_bootstrap (legacy M1 extension) build
+        working-directory: crates/ferrocad_bootstrap
+        run: cargo build
+
+      - name: ferrocad_py + ferrocad_gen (primary + generated bindings) build
+        working-directory: crates/ferrocad_py
         run: cargo build
 
   # Real-window smoke test: opens a bite-gpui window under Xvfb using the
@@ -44,7 +48,7 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y xvfb mesa-vulkan-drivers python3-dev
       - name: Open a real window (must not crash within 30s)
-        working-directory: rust/fc-host
+        working-directory: crates/ferrocad_host
         run: |
           export VK_ICD_FILENAMES=/usr/share/vulkan/icd.d/lvp_icd.json
           timeout 30 xvfb-run -a cargo run

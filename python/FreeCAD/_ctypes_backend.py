@@ -1,6 +1,6 @@
-"""ctypes backend: the M0 bridge over the ``freecad-core`` C ABI.
+"""ctypes backend: the M0 bridge over the ``ferrocad_ctypes`` C ABI.
 
-Retained as a fallback for environments where the PyO3 ``fc`` extension cannot
+Retained as a fallback for environments where the PyO3 ``ferrocad`` extension cannot
 be built or loaded. ``FreeCAD/__init__.py`` selects it automatically.
 
 It exposes the same document-object surface as ``fc`` so the package facade is

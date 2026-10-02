@@ -105,7 +105,7 @@ class TestRenderClass(unittest.TestCase):
             methods=[_method("save", [], "None")],
         )
         text = "\n".join(codegen.render_class(cls))
-        self.assertIn('#[pyclass(name = "Document", module = "fc_gen")]', text)
+        self.assertIn('#[pyclass(name = "Document", module = "ferrocad_gen")]', text)
         self.assertIn("fn Name(&self) -> String", text)          # Final -> getter only
         self.assertIn("fn UndoMode(&self) -> i64", text)
         self.assertIn("fn set_UndoMode(&mut self, value: i64)", text)  # mutable -> setter

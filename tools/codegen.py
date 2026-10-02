@@ -5,7 +5,7 @@ Reads the FreeCAD ``.pyi`` stubs (via ``inventory``) and generates a Rust
 extension crate whose ``#[pyclass]``/``#[pymethods]`` surface mirrors a chosen
 slice. Bodies are ``todo!()`` stubs — this is the **skeleton** half of decision
 "generate skeleton bindings + hand-written behaviour glue"; behaviour lives in
-``fc-core`` and is filled in separately.
+``ferrocad_core`` and is filled in separately.
 
 The generator deliberately keeps the Rust *simple and always-compiling*:
 
@@ -18,7 +18,7 @@ The generator deliberately keeps the Rust *simple and always-compiling*:
 
 Usage::
 
-    python3 tools/codegen.py --root ../freecad-upstream --out rust/fc-gen/src/lib.rs
+    python3 tools/codegen.py --root ../freecad-upstream --out crates/ferrocad_gen/src/lib.rs
 """
 
 from __future__ import annotations
@@ -250,7 +250,7 @@ def render_attribute(attr: inventory.Attribute, class_name: str) -> list[str]:
 
 def render_class(cls: inventory.Class) -> list[str]:
     out: list[str] = []
-    out.append(f"#[pyclass(name = \"{cls.name}\", module = \"fc_gen\")]")
+    out.append(f"#[pyclass(name = \"{cls.name}\", module = \"ferrocad_gen\")]")
     out.append(f"struct {cls.name};")
     out.append("")
     out.append("#[pymethods]")
@@ -278,7 +278,7 @@ def render_module(classes: list[inventory.Class]) -> str:
         lines.extend(render_class(cls))
         lines.append("")
     lines.append("#[pymodule]")
-    lines.append("fn fc_gen(m: &Bound<'_, PyModule>) -> PyResult<()> {")
+    lines.append("fn ferrocad_gen(m: &Bound<'_, PyModule>) -> PyResult<()> {")
     for cls in classes:
         lines.append(f"    m.add_class::<{cls.name}>()?;")
     lines.append("    Ok(())")
@@ -303,7 +303,7 @@ def select(modules: list[inventory.Module], area: str, names: list[str]) -> list
 def main(argv: list[str]) -> int:
     parser = argparse.ArgumentParser(description="Generate PyO3 skeleton bindings.")
     parser.add_argument("--root", required=True, help="path to the freecad-upstream checkout")
-    parser.add_argument("--out", default="rust/fc-gen/src/lib.rs", help="output Rust file")
+    parser.add_argument("--out", default="crates/ferrocad_gen/src/lib.rs", help="output Rust file")
     parser.add_argument("--area", default=DEFAULT_AREA, help="stub area to slice (default: App)")
     parser.add_argument(
         "--class",

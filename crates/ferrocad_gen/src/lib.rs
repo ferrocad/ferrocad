@@ -7,7 +7,7 @@
 use pyo3::prelude::*;
 use pyo3::types::{PyAnyMethods, PyDict, PyTuple, PyType};
 
-#[pyclass(name = "Document", module = "fc_gen")]
+#[pyclass(name = "Document", module = "ferrocad_gen")]
 struct Document;
 
 #[pymethods]
@@ -147,7 +147,7 @@ impl Document {
     fn getBookedTransactionID(&self) -> i64 { todo!("Document.getBookedTransactionID") }
 }
 
-#[pyclass(name = "DocumentObject", module = "fc_gen")]
+#[pyclass(name = "DocumentObject", module = "ferrocad_gen")]
 struct DocumentObject;
 
 #[pymethods]
@@ -247,7 +247,7 @@ impl DocumentObject {
     fn moveProperty(&self, name: &str, targetObj: PyObject) -> () { todo!("DocumentObject.moveProperty") }
 }
 
-#[pyclass(name = "PropertyContainer", module = "fc_gen")]
+#[pyclass(name = "PropertyContainer", module = "ferrocad_gen")]
 struct PropertyContainer;
 
 #[pymethods]
@@ -289,7 +289,7 @@ impl PropertyContainer {
 }
 
 #[pymodule]
-fn fc_gen(m: &Bound<'_, PyModule>) -> PyResult<()> {
+fn ferrocad_gen(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<Document>()?;
     m.add_class::<DocumentObject>()?;
     m.add_class::<PropertyContainer>()?;

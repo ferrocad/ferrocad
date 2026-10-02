@@ -1,10 +1,11 @@
 #!/bin/sh
-# Build the Rust core(s) and package the native libraries next to the Python
-# facade.
+# Build the FerroCAD Rust crates and package the native libraries next to the
+# Python facade (python/FreeCAD).
 #
-#   * freecad-py   -> python/FreeCAD/_core.abi3.so   (PyO3, primary)
-#   * freecad-core -> python/FreeCAD/libfreecad_core.so (C ABI, ctypes fallback)
-#   * fc-python    -> python/fc.abi3.so              (PyO3 over fc-core)
+#   * ferrocad_bootstrap -> python/FreeCAD/_core.abi3.so           (legacy M1, fallback)
+#   * ferrocad_ctypes    -> python/FreeCAD/libferrocad_ctypes.so   (C ABI, ctypes fallback)
+#   * ferrocad_py        -> python/ferrocad.abi3.so                (PyO3 over ferrocad_core, primary)
+#   * ferrocad_gen       -> python/ferrocad_gen.abi3.so            (generated skeleton, M3c)
 #
 # The toolchain can be project-local (see ../.toolchain/env.sh) so this needs no
 # root and no system-wide Rust install.
@@ -28,50 +29,46 @@ fi
 PYO3_USE_ABI3_FORWARD_COMPATIBILITY=1
 export PYO3_USE_ABI3_FORWARD_COMPATIBILITY
 
-echo "== building freecad-py (PyO3) =="
-cargo build --release --offline --manifest-path "$HERE/rust/freecad-py/Cargo.toml"
+TARGET="$HERE/target/release"
 
-echo "== building freecad-core (C ABI fallback) =="
-cargo build --release --offline --manifest-path "$HERE/rust/freecad-core/Cargo.toml"
+echo "== building ferrocad_core / ferrocad_py / ferrocad_gen / ferrocad_ctypes =="
+# The workspace `default-members` selects exactly these four crates.
+cargo build --release --offline --manifest-path "$HERE/Cargo.toml"
 
-echo "== building fc-python (PyO3 over fc-core) =="
-cargo build --release --offline --manifest-path "$HERE/rust/fc-python/Cargo.toml"
+echo "== building ferrocad_bootstrap (legacy M1 fallback) =="
+cargo build --release --offline --manifest-path "$HERE/crates/ferrocad_bootstrap/Cargo.toml"
 
-echo "== building fc-gen (generated skeleton bindings, M3c) =="
-cargo build --release --offline --manifest-path "$HERE/rust/fc-gen/Cargo.toml"
-
-# Package the PyO3 extension (importable as FreeCAD._core; `.abi3.so` is a
-# recognised extension suffix).
-py_src="$HERE/rust/freecad-py/target/release/libfreecad_py.so"
-if [ -f "$py_src" ]; then
-    cp "$py_src" "$HERE/python/FreeCAD/_core.abi3.so"
-    echo "packaged python/FreeCAD/_core.abi3.so"
+# Package the primary PyO3 extension (importable as `ferrocad`).
+fc_src="$TARGET/libferrocad_py.so"
+if [ -f "$fc_src" ]; then
+    cp "$fc_src" "$HERE/python/ferrocad.abi3.so"
+    echo "packaged python/ferrocad.abi3.so"
 else
-    echo "error: PyO3 extension not produced" >&2
+    echo "error: ferrocad_py extension not produced" >&2
     exit 1
 fi
 
+# Package the legacy M1 extension (importable as FreeCAD._core).
+boot_src="$TARGET/libferrocad_bootstrap.so"
+if [ -f "$boot_src" ]; then
+    cp "$boot_src" "$HERE/python/FreeCAD/_core.abi3.so"
+    echo "packaged python/FreeCAD/_core.abi3.so"
+fi
+
 # Package the ctypes fallback shared library.
-for name in libfreecad_core.so libfreecad_core.dylib freecad_core.dll; do
-    src="$HERE/rust/freecad-core/target/release/$name"
+for name in libferrocad_ctypes.so libferrocad_ctypes.dylib ferrocad_ctypes.dll; do
+    src="$TARGET/$name"
     if [ -f "$src" ]; then
         cp "$src" "$HERE/python/FreeCAD/$name"
         echo "packaged python/FreeCAD/$name"
     fi
 done
 
-# Package the fc-python bindings over fc-core.
-fc_src="$HERE/rust/fc-python/target/release/libfc_python.so"
-if [ -f "$fc_src" ]; then
-    cp "$fc_src" "$HERE/python/fc.abi3.so"
-    echo "packaged python/fc.abi3.so"
-fi
-
 # Package the generated skeleton bindings (M3c).
-gen_src="$HERE/rust/fc-gen/target/release/libfc_gen.so"
+gen_src="$TARGET/libferrocad_gen.so"
 if [ -f "$gen_src" ]; then
-    cp "$gen_src" "$HERE/python/fc_gen.abi3.so"
-    echo "packaged python/fc_gen.abi3.so"
+    cp "$gen_src" "$HERE/python/ferrocad_gen.abi3.so"
+    echo "packaged python/ferrocad_gen.abi3.so"
 fi
 
 echo "build OK"

@@ -1,0 +1,12 @@
+[package]
+name = "ferrocad_ctypes"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "C ABI shared library for the ctypes fallback backend (legacy M0 bootstrap)"
+
+[lib]
+name = "ferrocad_ctypes"
+# A plain C ABI shared library loaded from Python via ctypes.
+# Deliberately zero dependencies so it builds with no network and no Python headers.
+crate-type = ["cdylib"]

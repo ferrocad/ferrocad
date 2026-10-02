@@ -1,4 +1,4 @@
-"""Smoke tests for the M3c generated bindings (``fc_gen``).
+"""Smoke tests for the M3c generated bindings (``ferrocad_gen``).
 
 Verifies the generated PyO3 module exposes the same class/method/attribute
 surface as the upstream ``.pyi`` stubs it was generated from. Skips cleanly when
@@ -19,7 +19,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "python"))
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "tools"))
 
 try:
-    import fc_gen  # noqa: E402
+    import ferrocad_gen as fc_gen  # noqa: E402
 except ImportError:  # not built
     fc_gen = None
 

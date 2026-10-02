@@ -114,7 +114,7 @@ fn initialize_python_runtime() -> Result<WireNode, String> {
             .map_err(|e| e.to_string())?;
 
         let module = py
-            .import("fcspike.declarative")
+            .import("ferrocad_spike.declarative")
             .map_err(|e| e.to_string())?;
         module
             .getattr("reset_state")
@@ -134,12 +134,12 @@ fn initialize_python_runtime() -> Result<WireNode, String> {
     serde_json::from_str(&json).map_err(|e| e.to_string())
 }
 
-/// Call `fcspike.declarative.dispatch_event(handler_id)`; return fresh JSON,
+/// Call `ferrocad_spike.declarative.dispatch_event(handler_id)`; return fresh JSON,
 /// or an `exception: …` error marker when the Python handler raises.
 fn call_dispatch_event(handler_id: &str) -> Result<String, String> {
     pyo3::Python::with_gil(|py| {
         let module = py
-            .import("fcspike.declarative")
+            .import("ferrocad_spike.declarative")
             .map_err(|e| e.to_string())?;
         let func = module
             .getattr("dispatch_event")

@@ -1,0 +1,13 @@
+[package]
+name = "ferrocad_gen"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Generated PyO3 skeleton bindings from FreeCAD .pyi stubs (M3c)"
+
+[lib]
+name = "ferrocad_gen"
+crate-type = ["cdylib"]
+
+[dependencies]
+pyo3 = { version = "0.25", features = ["extension-module", "abi3-py310"] }

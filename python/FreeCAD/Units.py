@@ -1,18 +1,18 @@
 """``FreeCAD.Units`` — the units facade.
 
-Re-exports ``Quantity``/``Unit`` from ``fc-core`` (identical objects to
+Re-exports ``Quantity``/``Unit`` from ``ferrocad_core`` (identical objects to
 ``FreeCAD.Base``) and adds the module-level units API: ``parseQuantity``,
 ``toNumber``, ``listSchemas``, ``schemaTranslate``, ``translateUnit``, the
 ``NumberFormat`` enum, and the predefined unit/quantity constants.
 
-The unit *parsing/arithmetic* lives in Rust (``fc-core``); this module is a thin
+The unit *parsing/arithmetic* lives in Rust (``ferrocad_core``); this module is a thin
 Python layer. ``listSchemas``/``schemaTranslate`` are a minimal single-schema
 ("Standard") implementation for now.
 """
 
 from __future__ import annotations
 
-from fc import Quantity, Unit
+from ferrocad import Quantity, Unit
 
 # --- predefined units (canonical internal units) ----------------------------
 Length = Unit("mm")

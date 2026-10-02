@@ -1,0 +1,42 @@
+# FerroCAD — rust workspace.
+#
+# The project was formerly "freecad-rs-poc"; this workspace is the beginning of
+# the deliverable layout. It is meant to grow into a standalone, drop-in
+# replacement for FreeCAD's C++ App core: `ferrocad_core` is the pure model,
+# `ferrocad_py` the PyO3 extension behind the `FreeCAD` Python namespace.
+[workspace]
+resolver = "3"
+members = [
+    "crates/ferrocad_core",
+    "crates/ferrocad_py",
+    "crates/ferrocad_gen",
+    "crates/ferrocad_ctypes",
+    "crates/ferrocad_bootstrap",
+    "crates/ferrocad_host",
+]
+# The legacy `bootstrap`/`host` crates enable conflicting PyO3 features
+# (abi3-py38 / auto-initialize vs. the extension-module feature of the primary
+# crates), so they are excluded from a bare `cargo build`/`cargo test`.
+default-members = [
+    "crates/ferrocad_core",
+    "crates/ferrocad_py",
+    "crates/ferrocad_gen",
+    "crates/ferrocad_ctypes",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+license = "LGPL-2.1-or-later"
+repository = "https://github.com/ferrocad/ferrocad"
+rust-version = "1.85"
+
+[workspace.dependencies]
+petgraph = "0.6"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+# `lto` pays off for the extension/shared libraries; keep it workspace-wide.
+[profile.release]
+opt-level = 3
+lto = true

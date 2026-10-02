@@ -1,4 +1,4 @@
-"""Exercises the `fc` PyO3 bindings over `fc-core` (M3b).
+"""Exercises the `ferrocad` PyO3 bindings over `ferrocad_core` (M3b).
 
 Run: PYTHONPATH=python python3 tests/test_fc_core.py
 """
@@ -8,7 +8,7 @@ import sys
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "python"))
 
-import fc  # noqa: E402
+import ferrocad as fc  # noqa: E402
 
 
 def test_quantity():
@@ -157,4 +157,4 @@ if __name__ == "__main__":
     test_remove_object()
     test_string_hasher()
     test_int_property_value()
-    print("all fc-python tests passed")
+    print("all ferrocad_py tests passed")

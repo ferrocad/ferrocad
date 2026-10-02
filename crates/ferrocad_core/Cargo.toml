@@ -1,0 +1,14 @@
+[package]
+name = "ferrocad_core"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "FerroCAD core: quantities, properties, documents, recompute DAG"
+
+[lib]
+name = "ferrocad_core"
+
+[dependencies]
+petgraph.workspace = true
+serde.workspace = true
+serde_json.workspace = true

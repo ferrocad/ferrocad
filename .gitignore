@@ -1,17 +1,14 @@
 # Rust build output
-/rust/*/target/
+/target/
 
-# Packaged native library (build artifact)
+# Packaged native libraries (build artifacts)
+/python/*.so
+/python/*.dylib
+/python/*.dll
 /python/FreeCAD/*.so
 /python/FreeCAD/*.dylib
 /python/FreeCAD/*.dll
-/python/fc.abi3.so
-/python/fc.dylib
-/python/fc.dll
 
 # Python
 __pycache__/
 *.py[cod]
-
-# Generated skeleton bindings (M3c)
-/python/fc_gen.abi3.so

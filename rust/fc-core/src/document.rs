@@ -26,6 +26,8 @@ pub struct DocumentObject {
     pub expressions: BTreeMap<String, String>,
     /// Dynamic extension type ids added via `addExtension`.
     pub extensions: BTreeSet<String>,
+    /// Set by `enforceRecompute`; cleared when the object recomputes.
+    pub must_execute: bool,
 }
 
 #[derive(Default)]
@@ -82,6 +84,7 @@ impl Document {
                 properties,
                 expressions: BTreeMap::new(),
                 extensions: BTreeSet::new(),
+                must_execute: false,
             },
         );
         for observer in &mut self.observers {
@@ -221,7 +224,7 @@ impl Document {
             obj.properties.set(name.to_string(), value.clone());
         }
 
-        if self.tx.is_active() {
+        if self.tx.is_active() || self.tx.has_pending() {
             self.tx.record(PropertyChange {
                 object,
                 name: name.to_string(),
@@ -237,19 +240,74 @@ impl Document {
 
     // -- transactions -------------------------------------------------------
 
+    /// Request a named transaction (created on the first change).
+    pub fn open_transaction_named(&mut self, name: &str) {
+        self.tx.open_named(name);
+    }
+
     pub fn open_transaction(&mut self) {
-        self.tx.open();
+        self.tx.open_named("");
     }
 
-    pub fn commit_transaction(&mut self) {
-        self.tx.commit();
+    /// If a pending transaction exists, make it active and return its name.
+    pub fn begin_transaction_if_pending(&mut self) -> Option<String> {
+        self.tx.begin()
     }
 
-    pub fn abort_transaction(&mut self) {
-        if let Some(changes) = self.tx.abort() {
-            for change in changes.into_iter().rev() {
-                self.revert(&change);
+    /// Commit the active transaction; returns whether one was committed.
+    pub fn commit_transaction(&mut self) -> bool {
+        self.tx.commit()
+    }
+
+    pub fn has_undo(&self) -> bool {
+        self.tx.has_undo()
+    }
+
+    pub fn has_redo(&self) -> bool {
+        self.tx.has_redo()
+    }
+
+    // -- recompute flags -----------------------------------------------------
+
+    pub fn enforce_recompute(&mut self, id: ObjectId) {
+        if let Some(obj) = self.objects.get_mut(&id) {
+            obj.must_execute = true;
+        }
+    }
+
+    /// Take (and clear) the `must_execute` flag for one object.
+    pub fn take_must_execute_one(&mut self, id: ObjectId) -> bool {
+        match self.objects.get_mut(&id) {
+            Some(obj) => std::mem::replace(&mut obj.must_execute, false),
+            None => false,
+        }
+    }
+
+    /// Take (and clear) all `must_execute` flags, in object order.
+    pub fn take_must_execute(&mut self) -> Vec<ObjectId> {
+        let flagged: Vec<ObjectId> = self
+            .objects
+            .values()
+            .filter(|o| o.must_execute)
+            .map(|o| o.id)
+            .collect();
+        for id in &flagged {
+            if let Some(obj) = self.objects.get_mut(id) {
+                obj.must_execute = false;
             }
+        }
+        flagged
+    }
+
+    pub fn abort_transaction(&mut self) -> bool {
+        match self.tx.abort() {
+            Some(changes) => {
+                for change in changes.into_iter().rev() {
+                    self.revert(&change);
+                }
+                true
+            }
+            None => false,
         }
     }
 

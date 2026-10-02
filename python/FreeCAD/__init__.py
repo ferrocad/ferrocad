@@ -88,9 +88,11 @@ if backend == "fc":
         global _active
         if name not in _documents:
             raise ValueError("no document named '%s'" % name)
-        del _documents[name]
+        doc = _documents.pop(name)
         if _active is not None and _active.Name == name:
             _active = None
+        _fc._emitDocument("slotDeletedDocument", doc)
+        _fc._forgetDocument(doc)
 
     def getDocument(name):
         return _documents.get(name)
@@ -98,7 +100,10 @@ if backend == "fc":
     def setActiveDocument(name):
         global _active
         if name in _documents:
-            _active = _documents[name]
+            doc = _documents[name]
+            if doc is not _active:
+                _active = doc
+                _fc._emitDocument("slotActivateDocument", doc)
 
     def listDocuments():
         return dict(_documents)

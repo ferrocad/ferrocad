@@ -414,5 +414,217 @@ class TestModuleSurface(unittest.TestCase):
         FreeCAD.closeDocument("ListDocs")
 
 
+class _RecordingObserver:
+    """Minimal document observer recording `(slot, extra)` signals."""
+
+    def __init__(self):
+        self.clear()
+
+    def clear(self):
+        self.signals = []
+        self.args = []
+
+    def _doc(self, tag, doc):
+        self.signals.append(tag)
+        self.args.append(doc)
+
+    def _obj(self, tag, obj):
+        self.signals.append(tag)
+        self.args.append(obj)
+
+    def slotCreatedDocument(self, doc):
+        self._doc("DocCreated", doc)
+
+    def slotDeletedDocument(self, doc):
+        self._doc("DocDeleted", doc)
+
+    def slotRelabelDocument(self, doc):
+        self._doc("DocRelabled", doc)
+
+    def slotActivateDocument(self, doc):
+        self._doc("DocActivated", doc)
+
+    def slotRecomputedDocument(self, doc):
+        self._doc("DocRecomputed", doc)
+
+    def slotUndoDocument(self, doc):
+        self._doc("DocUndo", doc)
+
+    def slotRedoDocument(self, doc):
+        self._doc("DocRedo", doc)
+
+    def slotBeforeChangeDocument(self, doc, prop):
+        self.signals.append(("DocBeforeChange", prop))
+        self.args.append(doc)
+
+    def slotChangedDocument(self, doc, prop):
+        self.signals.append(("DocChanged", prop))
+        self.args.append(doc)
+
+    def slotOpenTransaction(self, doc, name):
+        self.signals.append(("DocOpenTransaction", name))
+        self.args.append(doc)
+
+    def slotCommitTransaction(self, doc):
+        self._doc("DocCommitTransaction", doc)
+
+    def slotAbortTransaction(self, doc):
+        self._doc("DocAbortTransaction", doc)
+
+    def slotStartSaveDocument(self, doc, name):
+        self.signals.append(("DocStartSave", name))
+        self.args.append(doc)
+
+    def slotFinishSaveDocument(self, doc, name):
+        self.signals.append(("DocFinishSave", name))
+        self.args.append(doc)
+
+    def slotCreatedObject(self, obj):
+        self._obj("ObjCreated", obj)
+
+    def slotDeletedObject(self, obj):
+        self._obj("ObjDeleted", obj)
+
+    def slotRecomputedObject(self, obj):
+        self._obj("ObjRecomputed", obj)
+
+    def slotBeforeChangeObject(self, obj, prop):
+        self.signals.append(("ObjBeforeChange", prop))
+        self.args.append(obj)
+
+    def slotChangedObject(self, obj, prop):
+        self.signals.append(("ObjChanged", prop))
+        self.args.append(obj)
+
+    def slotAppendDynamicProperty(self, obj, prop):
+        self.signals.append(("ObjAddDynProp", prop))
+        self.args.append(obj)
+
+    def slotRemoveDynamicProperty(self, obj, prop):
+        self.signals.append(("ObjRemoveDynProp", prop))
+        self.args.append(obj)
+
+    def slotChangePropertyEditor(self, obj, prop):
+        self.signals.append(("ObjChangePropEdit", prop))
+        self.args.append(obj)
+
+    def slotBeforeAddingDynamicExtension(self, obj, ext):
+        self.signals.append(("ObjBeforeDynExt", ext))
+        self.args.append(obj)
+
+    def slotAddedDynamicExtension(self, obj, ext):
+        self.signals.append(("ObjDynExt", ext))
+        self.args.append(obj)
+
+
+class TestDocumentObservers(unittest.TestCase):
+    def setUp(self):
+        self.obs = _RecordingObserver()
+        FreeCAD.addDocumentObserver(self.obs)
+
+    def tearDown(self):
+        FreeCAD.removeDocumentObserver(self.obs)
+
+    def test_document_lifecycle(self):
+        self.obs.clear()
+        doc = FreeCAD.newDocument("Obs")
+        self.assertEqual(
+            self.obs.signals,
+            ["DocCreated", ("DocBeforeChange", "Label"), ("DocChanged", "Label"), "DocRelabled"],
+        )
+        self.assertIs(self.obs.args[0], doc)
+
+        FreeCAD.setActiveDocument("Obs")  # already active -> no signal
+        self.obs.clear()
+        FreeCAD.closeDocument("Obs")
+        self.assertEqual(self.obs.signals, ["DocDeleted"])
+        self.assertIs(self.obs.args[0], doc)
+
+    def test_object_events_and_identity(self):
+        doc = FreeCAD.newDocument("ObsObj")
+        self.obs.clear()
+        obj = doc.addObject("App::DocumentObject", "O")
+        self.assertEqual(self.obs.signals, ["ObjCreated"])
+        self.assertIs(self.obs.args[0], obj)  # identity, not just equality
+
+        self.obs.clear()
+        obj.Label = "renamed"
+        self.assertEqual(
+            self.obs.signals,
+            [("ObjBeforeChange", "Label"), ("ObjChanged", "Label")],
+        )
+        self.assertIs(self.obs.args[0], obj)
+
+        self.obs.clear()
+        doc.removeObject("O")
+        self.assertEqual(self.obs.signals, ["ObjDeleted"])
+        self.assertIs(self.obs.args[0], obj)
+        FreeCAD.closeDocument("ObsObj")
+
+    def test_transactions_and_save(self):
+        import os
+        import tempfile
+
+        doc = FreeCAD.newDocument("ObsTx")
+        self.obs.clear()
+        doc.openTransaction("t")
+        self.assertEqual(self.obs.signals, [])  # pending until a change
+        doc.addObject("App::FeatureTest", "X")
+        self.assertEqual(self.obs.signals[0], ("DocOpenTransaction", "t"))
+
+        self.obs.clear()
+        doc.commitTransaction()
+        self.assertEqual(self.obs.signals, ["DocCommitTransaction"])
+
+        self.obs.clear()
+        doc.openTransaction("empty")
+        doc.commitTransaction()  # nothing changed -> no signal
+        self.assertEqual(self.obs.signals, [])
+
+        self.obs.clear()
+        path = os.path.join(tempfile.gettempdir(), "ObsTx.FCStd")
+        doc.saveAs(path)
+        self.assertEqual([s[0] for s in self.obs.signals], ["DocStartSave", "DocFinishSave"])
+        self.assertEqual(self.obs.signals[0][1], doc.FileName)
+        FreeCAD.closeDocument("ObsTx")
+
+    def test_recompute_events(self):
+        doc = FreeCAD.newDocument("ObsRec")
+        obj = doc.addObject("App::FeatureTest", "R")
+        self.obs.clear()
+        obj.enforceRecompute()
+        doc.recompute()
+        self.assertEqual(self.obs.signals, ["ObjRecomputed", "DocRecomputed"])
+        self.assertIs(self.obs.args[0], obj)
+        FreeCAD.closeDocument("ObsRec")
+
+    def test_dynamic_property_and_extension_events(self):
+        doc = FreeCAD.newDocument("ObsExt")
+        obj = doc.addObject("App::FeaturePython", "P")
+        self.obs.clear()
+        obj.addProperty("App::PropertyLength", "Prop")
+        self.assertEqual(self.obs.signals, [("ObjAddDynProp", "Prop")])
+        self.obs.clear()
+        obj.setEditorMode("Prop", ["ReadOnly"])
+        self.assertEqual(self.obs.signals, [("ObjChangePropEdit", "Prop")])
+        self.obs.clear()
+        obj.removeProperty("Prop")
+        self.assertEqual(self.obs.signals, [("ObjRemoveDynProp", "Prop")])
+        self.obs.clear()
+        obj.addExtension("App::GroupExtensionPython")
+        self.assertEqual(
+            self.obs.signals,
+            [("ObjBeforeDynExt", "App::GroupExtensionPython"), ("ObjDynExt", "App::GroupExtensionPython")],
+        )
+        FreeCAD.closeDocument("ObsExt")
+
+    def test_removed_observer_receives_nothing(self):
+        FreeCAD.removeDocumentObserver(self.obs)
+        self.obs.clear()
+        doc = FreeCAD.newDocument("NoObs")
+        FreeCAD.closeDocument("NoObs")
+        self.assertEqual(self.obs.signals, [])
+
+
 if __name__ == "__main__":
     unittest.main()

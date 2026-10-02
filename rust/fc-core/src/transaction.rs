@@ -13,36 +13,71 @@ pub struct PropertyChange {
 
 #[derive(Debug, Default)]
 pub struct TransactionManager {
+    /// A transaction requested by `open`, not yet made active by a change.
+    pending: Option<String>,
     active: Option<Vec<PropertyChange>>,
     undo: Vec<Vec<PropertyChange>>,
     redo: Vec<Vec<PropertyChange>>,
 }
 
 impl TransactionManager {
-    pub fn open(&mut self) {
+    /// Request a (named) transaction. It only becomes `active` on the first
+    /// recorded change, mirroring FreeCAD's "pending transaction" behaviour.
+    pub fn open_named(&mut self, name: &str) {
         if self.active.is_none() {
-            self.active = Some(Vec::new());
+            self.pending = Some(name.to_string());
         }
+    }
+
+    /// Make the pending transaction active and return its name (once).
+    pub fn begin(&mut self) -> Option<String> {
+        if self.active.is_none() {
+            if let Some(name) = self.pending.take() {
+                self.active = Some(Vec::new());
+                return Some(name);
+            }
+        }
+        None
+    }
+
+    pub fn has_pending(&self) -> bool {
+        self.pending.is_some()
     }
 
     pub fn is_active(&self) -> bool {
         self.active.is_some()
     }
 
+    pub fn has_undo(&self) -> bool {
+        !self.undo.is_empty()
+    }
+
+    pub fn has_redo(&self) -> bool {
+        !self.redo.is_empty()
+    }
+
     pub fn record(&mut self, change: PropertyChange) {
+        self.begin();
         if let Some(active) = &mut self.active {
             active.push(change);
         }
     }
 
-    pub fn commit(&mut self) {
-        if let Some(active) = self.active.take() {
-            self.undo.push(active);
-            self.redo.clear();
+    /// Commit the active transaction; returns whether one was committed.
+    pub fn commit(&mut self) -> bool {
+        self.pending = None;
+        match self.active.take() {
+            Some(active) => {
+                self.undo.push(active);
+                self.redo.clear();
+                true
+            }
+            None => false,
         }
     }
 
     pub fn abort(&mut self) -> Option<Vec<PropertyChange>> {
+        self.pending = None;
         self.active.take()
     }
 

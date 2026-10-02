@@ -6,14 +6,118 @@
 
 #![allow(non_snake_case)]
 
-use std::collections::BTreeMap;
-use std::sync::{Arc, Mutex};
+use std::collections::{BTreeMap, HashMap};
+use std::sync::{Arc, Mutex, OnceLock};
 
 use fc_core::{canonical_name, parse_unit, Document as CoreDocument, Matrix4, ObjectId, Placement, Property, Quantity, Rotation, StringHasher, StringId, TypeId, Unit, Vector3};
 use pyo3::exceptions::{PyAttributeError, PyTypeError, PyValueError};
 use pyo3::prelude::*;
 use pyo3::types::{PyAny, PyAnyMethods, PyBool, PyDict, PyDictMethods, PyTuple, PyType};
 use pyo3::IntoPyObjectExt;
+
+// ---------------------------------------------------------------------------
+// Observer registry + object identity cache
+// ---------------------------------------------------------------------------
+
+/// Python objects registered via `FreeCAD.addDocumentObserver`.
+static OBSERVERS: OnceLock<Mutex<Vec<Py<PyAny>>>> = OnceLock::new();
+
+/// Canonical `Py<PyDocumentObject>` per `(document pointer, object id)`, so the
+/// same Rust object always maps to the *same* Python object (needed for `is`).
+static OBJECT_CACHE: OnceLock<Mutex<HashMap<(usize, ObjectId), Py<PyDocumentObject>>>> = OnceLock::new();
+
+fn observers() -> &'static Mutex<Vec<Py<PyAny>>> {
+    OBSERVERS.get_or_init(|| Mutex::new(Vec::new()))
+}
+
+fn object_cache() -> &'static Mutex<HashMap<(usize, ObjectId), Py<PyDocumentObject>>> {
+    OBJECT_CACHE.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+fn doc_key(doc: &Py<PyDocument>) -> usize {
+    doc.as_ptr() as usize
+}
+
+/// Return the canonical Python object for `(doc, id)`, creating it once.
+fn get_or_create_object(
+    py: Python<'_>,
+    doc: &Py<PyDocument>,
+    inner: &Arc<Mutex<CoreDocument>>,
+    id: ObjectId,
+) -> Py<PyDocumentObject> {
+    let key = (doc_key(doc), id);
+    if let Some(existing) = object_cache().lock().unwrap().get(&key) {
+        return existing.clone_ref(py);
+    }
+    let obj = Py::new(
+        py,
+        PyDocumentObject {
+            doc: doc.clone_ref(py),
+            inner: Arc::clone(inner),
+            id,
+        },
+    )
+    .unwrap();
+    object_cache().lock().unwrap().insert(key, obj.clone_ref(py));
+    obj
+}
+
+fn forget_object(doc: &Py<PyDocument>, id: ObjectId) {
+    object_cache().lock().unwrap().remove(&(doc_key(doc), id));
+}
+
+fn forget_document(doc: &Py<PyDocument>) {
+    let key = doc_key(doc);
+    object_cache().lock().unwrap().retain(|(d, _), _| *d != key);
+}
+
+fn observer_snapshot(py: Python<'_>) -> Vec<Py<PyAny>> {
+    observers()
+        .lock()
+        .unwrap()
+        .iter()
+        .map(|o| o.clone_ref(py))
+        .collect()
+}
+
+/// Call `slot` on every registered observer, swallowing per-observer errors.
+fn fire_doc(slot: &str, doc: &Bound<'_, PyDocument>, extra: Option<&Bound<'_, PyAny>>) {
+    let py = doc.py();
+    for ob in observer_snapshot(py) {
+        let ob = ob.bind(py);
+        if let Ok(m) = ob.getattr(slot) {
+            let _ = match extra {
+                Some(e) => m.call1((doc, e)),
+                None => m.call1((doc,)),
+            };
+        }
+    }
+}
+
+fn fire_obj(slot: &str, obj: &Bound<'_, PyDocumentObject>, extra: Option<&Bound<'_, PyAny>>) {
+    let py = obj.py();
+    for ob in observer_snapshot(py) {
+        let ob = ob.bind(py);
+        if let Ok(m) = ob.getattr(slot) {
+            let _ = match extra {
+                Some(e) => m.call1((obj, e)),
+                None => m.call1((obj,)),
+            };
+        }
+    }
+}
+
+fn fire_doc_str(slot: &str, doc: &Bound<'_, PyDocument>, extra: &str) {
+    let py = doc.py();
+    let e = extra.into_py_any(py).unwrap().into_bound(py);
+    fire_doc(slot, doc, Some(&e));
+}
+
+fn fire_obj_str(slot: &str, obj: &Bound<'_, PyDocumentObject>, extra: &str) {
+    let py = obj.py();
+    let e = extra.into_py_any(py).unwrap().into_bound(py);
+    fire_obj(slot, obj, Some(&e));
+}
 
 // ---------------------------------------------------------------------------
 // Unit
@@ -543,31 +647,26 @@ fn set_instance_attr(
 
 /// Find the plain group (`geo == false`) or geo-feature group (`geo == true`)
 /// that lists `slf` in its `Group` link list.
-fn parent_of(slf: &Bound<'_, PyDocumentObject>, geo: bool) -> Option<PyDocumentObject> {
+fn parent_of(slf: &Bound<'_, PyDocumentObject>, geo: bool) -> Option<Py<PyDocumentObject>> {
     let py = slf.py();
     let inner = Arc::clone(&slf.borrow().inner);
+    let doc_py = slf.borrow().doc.clone_ref(py);
     let name = slf.borrow().Name();
-    let doc = inner.lock().unwrap();
-    for id in doc.object_ids() {
-        let other = doc.object(id)?;
-        let is_geo = other.type_id == "App::Part";
-        if is_geo != geo {
-            continue;
-        }
-        if !doc.is_group_like(id) {
-            continue;
-        }
-        if let Some(Property::LinkList(links)) = other.properties.get("Group") {
-            if links.contains(&name) {
-                return Some(PyDocumentObject {
-                    doc: slf.borrow().doc.clone_ref(py),
-                    inner: Arc::clone(&inner),
-                    id,
-                });
+    let found = {
+        let doc = inner.lock().unwrap();
+        doc.object_ids().into_iter().find(|id| {
+            match doc.object(*id) {
+                Some(other) => {
+                    (other.type_id == "App::Part") == geo
+                        && doc.is_group_like(*id)
+                        && matches!(other.properties.get("Group"),
+                            Some(Property::LinkList(links)) if links.contains(&name))
+                }
+                None => false,
             }
-        }
-    }
-    None
+        })
+    };
+    found.map(|id| get_or_create_object(py, &doc_py, &inner, id))
 }
 
 // ---------------------------------------------------------------------------
@@ -715,6 +814,7 @@ struct PyDocument {
     inner: Arc<Mutex<CoreDocument>>,
     /// Namespaced document meta-settings (`Doc.Meta` / `Doc.settings`).
     meta: Arc<Mutex<BTreeMap<String, String>>>,
+    comment: Mutex<String>,
 }
 
 #[pyclass(name = "DocumentObject", module = "fc", dict)]
@@ -736,6 +836,7 @@ impl PyDocument {
             auto_created: false,
             inner: Arc::new(Mutex::new(CoreDocument::new())),
             meta: Arc::new(Mutex::new(BTreeMap::new())),
+            comment: Mutex::new(String::new()),
         }
     }
 
@@ -754,26 +855,54 @@ impl PyDocument {
         self.label = label;
     }
 
+    #[getter]
+    fn FileName(&self) -> String {
+        self.file_name.clone().unwrap_or_default()
+    }
+
+    #[getter]
+    fn Comment(&self) -> String {
+        self.comment.lock().unwrap().clone()
+    }
+
+    #[setter]
+    fn set_Comment(slf: &Bound<'_, Self>, value: String) {
+        fire_doc_str("slotBeforeChangeDocument", slf, "Comment");
+        *slf.borrow().comment.lock().unwrap() = value;
+        fire_doc_str("slotChangedDocument", slf, "Comment");
+    }
+
     #[pyo3(signature = (type_id, name=None))]
-    fn addObject(slf: Bound<'_, Self>, type_id: &str, name: Option<String>) -> PyDocumentObject {
+    fn addObject(
+        slf: Bound<'_, Self>,
+        type_id: &str,
+        name: Option<String>,
+    ) -> PyResult<Py<PyDocumentObject>> {
+        let py = slf.py();
         let inner = Arc::clone(&slf.borrow().inner);
+        let doc_py: Py<PyDocument> = slf.clone().unbind();
         let name = name.unwrap_or_default();
-        let id = {
+        let (id, tx) = {
             let mut doc = inner.lock().unwrap();
+            let tx = doc.begin_transaction_if_pending();
             let id = doc.add_object(&name, type_id);
             if type_id == "App::Origin" {
                 create_origin_children(&mut doc, id);
             }
-            id
+            (id, tx)
         };
-        PyDocumentObject {
-            doc: slf.unbind(),
-            inner,
-            id,
+        if let Some(tx) = tx {
+            fire_doc_str("slotOpenTransaction", &slf, &tx);
         }
+        let obj = get_or_create_object(py, &doc_py, &inner, id);
+        fire_obj("slotCreatedObject", obj.bind(py), None);
+        Ok(obj)
     }
 
-    fn getObject(slf: &Bound<'_, Self>, key: &Bound<'_, PyAny>) -> PyResult<Option<PyDocumentObject>> {
+    fn getObject(
+        slf: &Bound<'_, Self>,
+        key: &Bound<'_, PyAny>,
+    ) -> PyResult<Option<Py<PyDocumentObject>>> {
         let py = slf.py();
         let inner = Arc::clone(&slf.borrow().inner);
         let doc_py: Py<PyDocument> = slf.clone().unbind();
@@ -790,25 +919,17 @@ impl PyDocument {
                 "getObject expects a name (str) or an object id (int)",
             ));
         };
-        Ok(id.map(|id| PyDocumentObject {
-            doc: doc_py.clone_ref(py),
-            inner,
-            id,
-        }))
+        Ok(id.map(|id| get_or_create_object(py, &doc_py, &inner, id)))
     }
 
     #[getter]
-    fn Objects(slf: Bound<'_, Self>) -> Vec<PyDocumentObject> {
+    fn Objects(slf: Bound<'_, Self>) -> Vec<Py<PyDocumentObject>> {
         let py = slf.py();
         let inner = Arc::clone(&slf.borrow().inner);
         let doc: Py<PyDocument> = slf.unbind();
         let ids = inner.lock().unwrap().object_ids();
         ids.into_iter()
-            .map(|id| PyDocumentObject {
-                doc: doc.clone_ref(py),
-                inner: Arc::clone(&inner),
-                id,
-            })
+            .map(|id| get_or_create_object(py, &doc, &inner, id))
             .collect()
     }
 
@@ -817,83 +938,131 @@ impl PyDocument {
         self.inner.lock().unwrap().object_ids().len()
     }
 
-    fn removeObject(&self, name: &str) -> PyResult<()> {
-        let mut doc = self.inner.lock().unwrap();
-        match doc.get_by_name(name) {
-            Some(id) => {
-                doc.remove_object(id);
-                Ok(())
+    fn removeObject(slf: &Bound<'_, Self>, name: &str) -> PyResult<()> {
+        let py = slf.py();
+        let inner = Arc::clone(&slf.borrow().inner);
+        let doc_py: Py<PyDocument> = slf.clone().unbind();
+        let (found, tx) = {
+            let mut doc = inner.lock().unwrap();
+            let tx = doc.begin_transaction_if_pending();
+            match doc.get_by_name(name) {
+                Some(id) => {
+                    doc.remove_object(id);
+                    (Some(id), tx)
+                }
+                None => (None, tx),
             }
-            None => Err(PyValueError::new_err(format!(
+        };
+        let id = found.ok_or_else(|| {
+            PyValueError::new_err(format!(
                 "no object named '{name}' in document '{}'",
-                self.name
-            ))),
+                slf.borrow().name
+            ))
+        })?;
+        if let Some(tx) = tx {
+            fire_doc_str("slotOpenTransaction", slf, &tx);
         }
+        let obj = get_or_create_object(py, &doc_py, &inner, id);
+        forget_object(&doc_py, id);
+        fire_obj("slotDeletedObject", obj.bind(py), None);
+        Ok(())
     }
 
-    fn recompute(&self) -> PyResult<usize> {
-        self.inner
-            .lock()
-            .unwrap()
-            .recompute()
-            .map_err(PyValueError::new_err)
+    fn recompute(slf: &Bound<'_, Self>) -> PyResult<usize> {
+        let py = slf.py();
+        let inner = Arc::clone(&slf.borrow().inner);
+        let doc_py: Py<PyDocument> = slf.clone().unbind();
+        let (flagged, count) = {
+            let mut doc = inner.lock().unwrap();
+            let flagged = doc.take_must_execute();
+            let count = doc.recompute().map_err(PyValueError::new_err)?;
+            (flagged, count)
+        };
+        for id in flagged {
+            let obj = get_or_create_object(py, &doc_py, &inner, id);
+            fire_obj("slotRecomputedObject", obj.bind(py), None);
+        }
+        fire_doc("slotRecomputedDocument", slf, None);
+        Ok(count)
     }
 
     // -- transactions -------------------------------------------------------
     #[pyo3(signature = (name = ""))]
     fn openTransaction(&self, name: &str) {
-        // The name is a label for undo/redo; the POC does not track it yet.
-        let _ = name;
-        self.inner.lock().unwrap().open_transaction();
+        self.inner.lock().unwrap().open_transaction_named(name);
     }
 
-    fn commitTransaction(&self) {
-        self.inner.lock().unwrap().commit_transaction();
-    }
-
-    fn abortTransaction(&self) {
-        self.inner.lock().unwrap().abort_transaction();
-    }
-
-    fn undo(&self) -> bool {
-        self.inner.lock().unwrap().undo()
-    }
-
-    fn redo(&self) -> bool {
-        self.inner.lock().unwrap().redo()
-    }
-
-    // -- persistence ---------------------------------------------------------
-    fn saveAs(&mut self, path: &str) -> PyResult<()> {
-        self.inner
-            .lock()
-            .unwrap()
-            .save_to_file(&self.name, path)
-            .map_err(PyValueError::new_err)?;
-        self.file_name = Some(path.to_string());
-        Ok(())
-    }
-
-    fn save(&self) -> PyResult<()> {
-        match &self.file_name {
-            Some(path) => self
-                .inner
-                .lock()
-                .unwrap()
-                .save_to_file(&self.name, path)
-                .map_err(PyValueError::new_err),
-            None => Err(PyValueError::new_err(
-                "document has no file name; use saveAs first",
-            )),
+    fn commitTransaction(slf: &Bound<'_, Self>) {
+        if slf.borrow().inner.lock().unwrap().commit_transaction() {
+            fire_doc("slotCommitTransaction", slf, None);
         }
     }
 
-    fn load(&mut self, path: &str) -> PyResult<()> {
+    fn abortTransaction(slf: &Bound<'_, Self>) {
+        if slf.borrow().inner.lock().unwrap().abort_transaction() {
+            fire_doc("slotAbortTransaction", slf, None);
+        }
+    }
+
+    fn undo(slf: &Bound<'_, Self>) -> bool {
+        let did = slf.borrow().inner.lock().unwrap().undo();
+        if did {
+            fire_doc("slotUndoDocument", slf, None);
+        }
+        did
+    }
+
+    fn redo(slf: &Bound<'_, Self>) -> bool {
+        let did = slf.borrow().inner.lock().unwrap().redo();
+        if did {
+            fire_doc("slotRedoDocument", slf, None);
+        }
+        did
+    }
+
+    // -- persistence ---------------------------------------------------------
+    fn saveAs(slf: &Bound<'_, Self>, path: &str) -> PyResult<()> {
+        let name = slf.borrow().name.clone();
+        fire_doc_str("slotStartSaveDocument", slf, path);
+        slf.borrow()
+            .inner
+            .lock()
+            .unwrap()
+            .save_to_file(&name, path)
+            .map_err(PyValueError::new_err)?;
+        slf.borrow_mut().file_name = Some(path.to_string());
+        fire_doc_str("slotFinishSaveDocument", slf, path);
+        Ok(())
+    }
+
+    fn save(slf: &Bound<'_, Self>) -> PyResult<()> {
+        let (name, path) = {
+            let this = slf.borrow();
+            (this.name.clone(), this.file_name.clone())
+        };
+        let path = path
+            .ok_or_else(|| PyValueError::new_err("document has no file name; use saveAs first"))?;
+        fire_doc_str("slotStartSaveDocument", slf, &path);
+        slf.borrow()
+            .inner
+            .lock()
+            .unwrap()
+            .save_to_file(&name, &path)
+            .map_err(PyValueError::new_err)?;
+        fire_doc_str("slotFinishSaveDocument", slf, &path);
+        Ok(())
+    }
+
+    fn load(slf: &Bound<'_, Self>, path: &str) -> PyResult<()> {
         let saved = CoreDocument::load_from_file(path).map_err(PyValueError::new_err)?;
-        self.name = saved.name.clone();
-        self.label = saved.name.clone();
-        self.file_name = Some(path.to_string());
-        self.inner = Arc::new(Mutex::new(CoreDocument::from_saved(&saved)));
+        let doc_py: Py<PyDocument> = slf.clone().unbind();
+        forget_document(&doc_py);
+        let mut this = slf.borrow_mut();
+        this.name = saved.name.clone();
+        this.label = saved.name.clone();
+        this.file_name = Some(path.to_string());
+        this.inner = Arc::new(Mutex::new(CoreDocument::from_saved(&saved)));
+        this.meta = Arc::new(Mutex::new(BTreeMap::new()));
         Ok(())
     }
 
@@ -921,7 +1090,8 @@ impl PyDocument {
             };
 
         let inner = Arc::clone(&slf.borrow().inner);
-        let mut copied: Vec<PyDocumentObject> = Vec::new();
+        let doc_py: Py<PyDocument> = slf.clone().unbind();
+        let mut copied: Vec<Py<PyDocumentObject>> = Vec::new();
         {
             let mut doc = inner.lock().unwrap();
             for (name, label, type_id, props, exprs) in &sources {
@@ -934,11 +1104,7 @@ impl PyDocument {
                 for (k, v) in exprs {
                     let _ = doc.set_expression(id, k, v);
                 }
-                copied.push(PyDocumentObject {
-                    doc: slf.clone().unbind(),
-                    inner: Arc::clone(&inner),
-                    id,
-                });
+                copied.push(get_or_create_object(py, &doc_py, &inner, id));
             }
         }
 
@@ -981,39 +1147,42 @@ impl PyDocument {
     }
 
     #[pyo3(signature = (Type="", Name="", Label=""))]
-    fn findObjects(slf: &Bound<'_, Self>, Type: &str, Name: &str, Label: &str) -> Vec<PyDocumentObject> {
+    fn findObjects(
+        slf: &Bound<'_, Self>,
+        Type: &str,
+        Name: &str,
+        Label: &str,
+    ) -> Vec<Py<PyDocumentObject>> {
         let py = slf.py();
         let inner = Arc::clone(&slf.borrow().inner);
-        let doc = inner.lock().unwrap();
         let doc_py: Py<PyDocument> = slf.clone().unbind();
-        doc.object_ids()
-            .into_iter()
-            .filter(|id| {
-                doc.object(*id).map(|o| {
-                    (Type.is_empty() || o.type_id == Type)
-                        && (Name.is_empty() || o.name == Name)
-                        && (Label.is_empty() || o.label == Label)
-                }).unwrap_or(false)
-            })
-            .map(|id| PyDocumentObject {
-                doc: doc_py.clone_ref(py),
-                inner: Arc::clone(&inner),
-                id,
-            })
+        let ids: Vec<ObjectId> = {
+            let doc = inner.lock().unwrap();
+            doc.object_ids()
+                .into_iter()
+                .filter(|id| {
+                    doc.object(*id)
+                        .map(|o| {
+                            (Type.is_empty() || o.type_id == Type)
+                                && (Name.is_empty() || o.name == Name)
+                                && (Label.is_empty() || o.label == Label)
+                        })
+                        .unwrap_or(false)
+                })
+                .collect()
+        };
+        ids.into_iter()
+            .map(|id| get_or_create_object(py, &doc_py, &inner, id))
             .collect()
     }
 
     #[getter]
-    fn ActiveObject(slf: &Bound<'_, Self>) -> Option<PyDocumentObject> {
+    fn ActiveObject(slf: &Bound<'_, Self>) -> Option<Py<PyDocumentObject>> {
         let py = slf.py();
         let inner = Arc::clone(&slf.borrow().inner);
         let id = inner.lock().unwrap().object_ids().into_iter().last()?;
         let doc: Py<PyDocument> = slf.clone().unbind();
-        Some(PyDocumentObject {
-            doc: doc.clone_ref(py),
-            inner,
-            id,
-        })
+        Some(get_or_create_object(py, &doc, &inner, id))
     }
 
     fn setAutoCreated(&mut self, v: bool) {
@@ -1063,56 +1232,53 @@ impl PyDocument {
 
     // -- topology ------------------------------------------------------------
 
-    /// Objects not referenced by any link (link roots).
     #[getter]
-    fn RootObjects(slf: &Bound<'_, Self>) -> Vec<PyDocumentObject> {
+    fn RootObjects(slf: &Bound<'_, Self>) -> Vec<Py<PyDocumentObject>> {
         let py = slf.py();
         let inner = Arc::clone(&slf.borrow().inner);
         let doc_py: Py<PyDocument> = slf.clone().unbind();
-        let doc = inner.lock().unwrap();
-        let mut referenced = std::collections::BTreeSet::new();
-        for id in doc.object_ids() {
-            if let Some(o) = doc.object(id) {
-                for (_, p) in o.properties.iter() {
-                    match p {
-                        Property::Link(n) if !n.is_empty() => {
-                            referenced.insert(n.clone());
+        let ids: Vec<ObjectId> = {
+            let doc = inner.lock().unwrap();
+            let mut referenced = std::collections::BTreeSet::new();
+            for id in doc.object_ids() {
+                if let Some(o) = doc.object(id) {
+                    for (_, p) in o.properties.iter() {
+                        match p {
+                            Property::Link(n) if !n.is_empty() => {
+                                referenced.insert(n.clone());
+                            }
+                            Property::LinkList(ns) => referenced.extend(ns.iter().cloned()),
+                            _ => {}
                         }
-                        Property::LinkList(ns) => referenced.extend(ns.iter().cloned()),
-                        _ => {}
                     }
                 }
             }
-        }
-        doc.object_ids()
-            .into_iter()
-            .filter(|id| {
-                doc.object(*id)
-                    .map(|o| !referenced.contains(&o.name))
-                    .unwrap_or(false)
-            })
-            .map(|id| PyDocumentObject {
-                doc: doc_py.clone_ref(py),
-                inner: Arc::clone(&inner),
-                id,
-            })
+            doc.object_ids()
+                .into_iter()
+                .filter(|id| {
+                    doc.object(*id)
+                        .map(|o| !referenced.contains(&o.name))
+                        .unwrap_or(false)
+                })
+                .collect()
+        };
+        ids.into_iter()
+            .map(|id| get_or_create_object(py, &doc_py, &inner, id))
             .collect()
     }
 
     /// All objects in dependency-first order.
     #[getter]
-    fn TopologicalSortedObjects(slf: &Bound<'_, Self>) -> Vec<PyDocumentObject> {
+    fn TopologicalSortedObjects(slf: &Bound<'_, Self>) -> Vec<Py<PyDocumentObject>> {
         let py = slf.py();
         let inner = Arc::clone(&slf.borrow().inner);
         let doc_py: Py<PyDocument> = slf.clone().unbind();
-        let doc = inner.lock().unwrap();
-        let ids = doc.recompute_order().unwrap_or_else(|_| doc.object_ids());
+        let ids = {
+            let doc = inner.lock().unwrap();
+            doc.recompute_order().unwrap_or_else(|_| doc.object_ids())
+        };
         ids.into_iter()
-            .map(|id| PyDocumentObject {
-                doc: doc_py.clone_ref(py),
-                inner: Arc::clone(&inner),
-                id,
-            })
+            .map(|id| get_or_create_object(py, &doc_py, &inner, id))
             .collect()
     }
 
@@ -1128,13 +1294,9 @@ impl PyDocument {
             PyAttributeError::new_err(format!("'Document' object has no attribute '{name}'"))
         })?;
         let doc: Py<PyDocument> = slf.clone().unbind();
-        Ok(PyDocumentObject {
-            doc: doc.clone_ref(py),
-            inner,
-            id,
-        }
-        .into_py_any(py)
-        .unwrap())
+        Ok(get_or_create_object(py, &doc, &inner, id)
+            .into_py_any(py)
+            .unwrap())
     }
 }
 
@@ -1249,7 +1411,7 @@ impl PyDocumentObject {
 
     #[pyo3(signature = (type_id, name, group="", doc="", attr=0, read_only=false, hidden=false, locked=false))]
     fn addProperty(
-        &self,
+        slf: &Bound<'_, Self>,
         type_id: &str,
         name: &str,
         group: &str,
@@ -1263,12 +1425,18 @@ impl PyDocumentObject {
         if name.is_empty() {
             return Err(PyValueError::new_err("property name must not be empty"));
         }
+        let (inner, id) = {
+            let this = slf.borrow();
+            (Arc::clone(&this.inner), this.id)
+        };
         let default = default_property(type_id);
-        self.inner
+        inner
             .lock()
             .unwrap()
-            .set_property(self.id, name, default)
-            .map_err(PyValueError::new_err)
+            .set_property(id, name, default)
+            .map_err(PyValueError::new_err)?;
+        fire_obj_str("slotAppendDynamicProperty", slf, name);
+        Ok(())
     }
 
     fn setExpression(&self, prop: &str, source: &str) -> PyResult<()> {
@@ -1279,13 +1447,33 @@ impl PyDocumentObject {
             .map_err(PyValueError::new_err)
     }
 
-    fn recompute(&self) -> bool {
-        // Per-object recompute is a no-op in the POC; the document drives it.
+    fn recompute(slf: &Bound<'_, Self>) -> bool {
+        let (inner, id) = {
+            let this = slf.borrow();
+            (Arc::clone(&this.inner), this.id)
+        };
+        if inner.lock().unwrap().take_must_execute_one(id) {
+            fire_obj("slotRecomputedObject", slf, None);
+        }
         true
     }
 
-    fn removeProperty(&self, name: &str) -> PyResult<()> {
-        if self.inner.lock().unwrap().remove_property(self.id, name) {
+    fn enforceRecompute(&self) {
+        self.inner.lock().unwrap().enforce_recompute(self.id);
+    }
+
+    /// Record a property editor mode (`ReadOnly`, …); POC: fires the event only.
+    fn setEditorMode(slf: &Bound<'_, Self>, prop: &str, _modes: &Bound<'_, PyAny>) {
+        fire_obj_str("slotChangePropertyEditor", slf, prop);
+    }
+
+    fn removeProperty(slf: &Bound<'_, Self>, name: &str) -> PyResult<()> {
+        let (inner, id) = {
+            let this = slf.borrow();
+            (Arc::clone(&this.inner), this.id)
+        };
+        if inner.lock().unwrap().remove_property(id, name) {
+            fire_obj_str("slotRemoveDynamicProperty", slf, name);
             Ok(())
         } else {
             Err(PyValueError::new_err(format!(
@@ -1310,20 +1498,28 @@ impl PyDocumentObject {
 
     // -- extensions ---------------------------------------------------------
 
-    fn addExtension(&self, name: &str) -> PyResult<()> {
-        let mut doc = self.inner.lock().unwrap();
-        if !doc.add_extension(self.id, name) {
-            return Err(PyValueError::new_err(format!(
-                "no object {}",
-                self.id
-            )));
-        }
-        // Group extensions carry a `Group` link list property.
-        if doc.is_group_like(self.id)
-            && doc.object(self.id).map(|o| o.properties.get("Group").is_none()).unwrap_or(false)
+    fn addExtension(slf: &Bound<'_, Self>, name: &str) -> PyResult<()> {
+        let (inner, id) = {
+            let this = slf.borrow();
+            (Arc::clone(&this.inner), this.id)
+        };
+        fire_obj_str("slotBeforeAddingDynamicExtension", slf, name);
         {
-            let _ = doc.set_property(self.id, "Group", Property::LinkList(vec![]));
+            let mut doc = inner.lock().unwrap();
+            if !doc.add_extension(id, name) {
+                return Err(PyValueError::new_err(format!("no object {id}")));
+            }
+            // Group extensions carry a `Group` link list property.
+            if doc.is_group_like(id)
+                && doc
+                    .object(id)
+                    .map(|o| o.properties.get("Group").is_none())
+                    .unwrap_or(false)
+            {
+                let _ = doc.set_property(id, "Group", Property::LinkList(vec![]));
+            }
         }
+        fire_obj_str("slotAddedDynamicExtension", slf, name);
         Ok(())
     }
 
@@ -1344,7 +1540,7 @@ impl PyDocumentObject {
     // -- groups -------------------------------------------------------------
 
     /// Resolve this object's `Group` link list into `DocumentObject`s.
-    fn group_members(&self, py: Python<'_>) -> Vec<PyDocumentObject> {
+    fn group_members(&self, py: Python<'_>) -> Vec<Py<PyDocumentObject>> {
         let inner = Arc::clone(&self.inner);
         let names: Vec<String> = {
             let doc = inner.lock().unwrap();
@@ -1357,11 +1553,7 @@ impl PyDocumentObject {
             .into_iter()
             .filter_map(|name| {
                 let id = inner.lock().unwrap().get_by_name(&name)?;
-                Some(PyDocumentObject {
-                    doc: self.doc.clone_ref(py),
-                    inner: Arc::clone(&inner),
-                    id,
-                })
+                Some(get_or_create_object(py, &self.doc, &inner, id))
             })
             .collect()
     }
@@ -1409,9 +1601,10 @@ impl PyDocumentObject {
         })
     }
 
-    fn getObject(slf: &Bound<'_, Self>, name: &str) -> Option<PyDocumentObject> {
+    fn getObject(slf: &Bound<'_, Self>, name: &str) -> Option<Py<PyDocumentObject>> {
         let py = slf.py();
         let inner = Arc::clone(&slf.borrow().inner);
+        let doc_py = slf.borrow().doc.clone_ref(py);
         let in_group = {
             let doc = inner.lock().unwrap();
             match doc.object(slf.borrow().id).and_then(|o| o.properties.get("Group")) {
@@ -1423,53 +1616,49 @@ impl PyDocumentObject {
             return None;
         }
         let id = inner.lock().unwrap().get_by_name(name)?;
-        Some(PyDocumentObject {
-            doc: slf.borrow().doc.clone_ref(py),
-            inner,
-            id,
-        })
+        Some(get_or_create_object(py, &doc_py, &inner, id))
     }
 
     /// The plain group (or group-extension object) that lists this object.
-    fn getParentGroup(slf: &Bound<'_, Self>) -> Option<PyDocumentObject> {
+    fn getParentGroup(slf: &Bound<'_, Self>) -> Option<Py<PyDocumentObject>> {
         parent_of(slf, false)
     }
 
     /// The geo-feature group (`App::Part`) that lists this object.
-    fn getParentGeoFeatureGroup(slf: &Bound<'_, Self>) -> Option<PyDocumentObject> {
+    fn getParentGeoFeatureGroup(slf: &Bound<'_, Self>) -> Option<Py<PyDocumentObject>> {
         parent_of(slf, true)
     }
 
     /// `OutList`: the objects this object links to (group members).
     #[getter]
-    fn OutList(slf: &Bound<'_, Self>) -> Vec<PyDocumentObject> {
+    fn OutList(slf: &Bound<'_, Self>) -> Vec<Py<PyDocumentObject>> {
         let py = slf.py();
         slf.borrow().group_members(py)
     }
 
     /// `InList`: the objects that link to this object.
     #[getter]
-    fn InList(slf: &Bound<'_, Self>) -> Vec<PyDocumentObject> {
+    fn InList(slf: &Bound<'_, Self>) -> Vec<Py<PyDocumentObject>> {
         let py = slf.py();
         let inner = Arc::clone(&slf.borrow().inner);
+        let doc_py = slf.borrow().doc.clone_ref(py);
         let name = slf.borrow().Name();
-        let mut result = vec![];
-        let doc = inner.lock().unwrap();
-        for id in doc.object_ids() {
-            if doc.object(id).map(|o| o.name == name).unwrap_or(false) {
-                continue;
-            }
-            if let Some(Property::LinkList(links)) = doc.object(id).and_then(|o| o.properties.get("Group")) {
-                if links.contains(&name) {
-                    result.push(PyDocumentObject {
-                        doc: slf.borrow().doc.clone_ref(py),
-                        inner: Arc::clone(&inner),
-                        id,
-                    });
-                }
-            }
-        }
-        result
+        let ids: Vec<ObjectId> = {
+            let doc = inner.lock().unwrap();
+            doc.object_ids()
+                .into_iter()
+                .filter(|id| {
+                    if doc.object(*id).map(|o| o.name == name).unwrap_or(false) {
+                        return false;
+                    }
+                    matches!(doc.object(*id).and_then(|o| o.properties.get("Group")),
+                        Some(Property::LinkList(links)) if links.contains(&name))
+                })
+                .collect()
+        };
+        ids.into_iter()
+            .map(|id| get_or_create_object(py, &doc_py, &inner, id))
+            .collect()
     }
 
     /// Resolve sub-object(s) and return them per FreeCAD's `retType` convention:
@@ -1499,7 +1688,7 @@ impl PyDocumentObject {
         let inner = Arc::clone(&slf.borrow().inner);
         let doc_py = slf.borrow().doc.clone_ref(py);
 
-        let resolved: Vec<(Option<PyDocumentObject>, Placement)> = {
+        let resolved: Vec<(Option<Py<PyDocumentObject>>, Placement)> = {
             let doc = inner.lock().unwrap();
             subs.iter()
                 .map(|sub| {
@@ -1513,28 +1702,16 @@ impl PyDocumentObject {
                             _ => None,
                         })
                         .unwrap_or_else(Placement::identity);
-                    let obj = child_id.map(|id| PyDocumentObject {
-                        doc: doc_py.clone_ref(py),
-                        inner: Arc::clone(&inner),
-                        id,
-                    });
+                    let obj = child_id.map(|id| get_or_create_object(py, &doc_py, &inner, id));
                     (obj, placement)
                 })
                 .collect()
         };
 
-        let build = |obj: &Option<PyDocumentObject>, pl: &Placement| -> PyObject {
+        let build = |obj: &Option<Py<PyDocumentObject>>, pl: &Placement| -> PyObject {
             let obj_py = obj
                 .as_ref()
-                .map(|o| {
-                    PyDocumentObject {
-                        doc: o.doc.clone_ref(py),
-                        inner: Arc::clone(&o.inner),
-                        id: o.id,
-                    }
-                    .into_py_any(py)
-                    .unwrap()
-                })
+                .map(|o| o.clone_ref(py).into_py_any(py).unwrap())
                 .unwrap_or_else(|| py.None());
             match retType {
                 1 => obj_py,
@@ -1566,11 +1743,11 @@ impl PyDocumentObject {
         if name == "Group" {
             return Ok(slf.borrow().group_members(py).into_py_any(py).unwrap());
         }
-        let (value, inner) = {
+        let (value, inner, doc_py) = {
             let this = slf.borrow();
             let doc = this.inner.lock().unwrap();
             let value = doc.object(this.id).and_then(|o| o.properties.get(&name)).cloned();
-            (value, Arc::clone(&this.inner))
+            (value, Arc::clone(&this.inner), this.doc.clone_ref(py))
         };
         match value {
             // Link properties resolve to the referenced object (or None).
@@ -1578,28 +1755,19 @@ impl PyDocumentObject {
                 if link.is_empty() {
                     return Ok(py.None());
                 }
-                let found = inner.lock().unwrap().get_by_name(&link);
-                match found {
-                    Some(id) => Ok(PyDocumentObject {
-                        doc: slf.borrow().doc.clone_ref(py),
-                        inner,
-                        id,
-                    }
-                    .into_py_any(py)
-                    .unwrap()),
+                match inner.lock().unwrap().get_by_name(&link) {
+                    Some(id) => Ok(get_or_create_object(py, &doc_py, &inner, id)
+                        .into_py_any(py)
+                        .unwrap()),
                     None => Ok(py.None()),
                 }
             }
             Some(Property::LinkList(links)) => {
-                let objs: Vec<PyDocumentObject> = links
+                let objs: Vec<Py<PyDocumentObject>> = links
                     .iter()
                     .filter_map(|n| {
                         let id = inner.lock().unwrap().get_by_name(n)?;
-                        Some(PyDocumentObject {
-                            doc: slf.borrow().doc.clone_ref(py),
-                            inner: Arc::clone(&inner),
-                            id,
-                        })
+                        Some(get_or_create_object(py, &doc_py, &inner, id))
                     })
                     .collect();
                 Ok(objs.into_py_any(py).unwrap())
@@ -1613,13 +1781,9 @@ impl PyDocumentObject {
                     py.None()
                 } else {
                     match inner.lock().unwrap().get_by_name(&obj) {
-                        Some(id) => PyDocumentObject {
-                            doc: slf.borrow().doc.clone_ref(py),
-                            inner: Arc::clone(&inner),
-                            id,
-                        }
-                        .into_py_any(py)
-                        .unwrap(),
+                        Some(id) => get_or_create_object(py, &doc_py, &inner, id)
+                            .into_py_any(py)
+                            .unwrap(),
                         None => py.None(),
                     }
                 };
@@ -1645,7 +1809,13 @@ impl PyDocumentObject {
             let label: String = value
                 .extract()
                 .map_err(|_| PyTypeError::new_err("Label must be a string"))?;
-            slf.borrow().inner.lock().unwrap().set_label(slf.borrow().id, &label);
+            let (inner, id) = {
+                let this = slf.borrow();
+                (Arc::clone(&this.inner), this.id)
+            };
+            fire_obj_str("slotBeforeChangeObject", slf, "Label");
+            inner.lock().unwrap().set_label(id, &label);
+            fire_obj_str("slotChangedObject", slf, "Label");
             return Ok(());
         }
         if name == "Group" {
@@ -1676,8 +1846,11 @@ impl PyDocumentObject {
             let this = slf.borrow();
             (Arc::clone(&this.inner), this.id)
         };
+        fire_obj_str("slotBeforeChangeObject", slf, &name);
         let result = inner.lock().unwrap().set_property(id, &name, property);
-        result.map_err(PyValueError::new_err)
+        result.map_err(PyValueError::new_err)?;
+        fire_obj_str("slotChangedObject", slf, &name);
+        Ok(())
     }
 
     /// Assign the `Group` link list from a sequence of objects (or names).
@@ -2109,36 +2282,74 @@ impl PyTypeId {
 
 #[pyfunction]
 #[pyo3(signature = (name=None))]
-fn newDocument(name: Option<String>) -> PyDocument {
+fn newDocument(py: Python<'_>, name: Option<String>) -> PyResult<Py<PyDocument>> {
     let name = name.unwrap_or_else(|| "Unnamed".to_string());
-    PyDocument {
-        label: name.clone(),
-        name,
-        file_name: None,
-        auto_created: false,
-        inner: Arc::new(Mutex::new(CoreDocument::new())),
-        meta: Arc::new(Mutex::new(BTreeMap::new())),
+    let doc = Py::new(
+        py,
+        PyDocument {
+            label: name.clone(),
+            name,
+            file_name: None,
+            auto_created: false,
+            inner: Arc::new(Mutex::new(CoreDocument::new())),
+            meta: Arc::new(Mutex::new(BTreeMap::new())),
+            comment: Mutex::new(String::new()),
+        },
+    )?;
+    let bound = doc.bind(py);
+    fire_doc("slotCreatedDocument", bound, None);
+    fire_doc_str("slotBeforeChangeDocument", bound, "Label");
+    fire_doc_str("slotChangedDocument", bound, "Label");
+    fire_doc("slotRelabelDocument", bound, None);
+    Ok(doc)
+}
+
+#[pyfunction]
+fn openDocument(py: Python<'_>, path: &str) -> PyResult<Py<PyDocument>> {
+    let saved = CoreDocument::load_from_file(path).map_err(PyValueError::new_err)?;
+    Ok(Py::new(
+        py,
+        PyDocument {
+            name: saved.name.clone(),
+            label: saved.name.clone(),
+            file_name: Some(path.to_string()),
+            auto_created: false,
+            inner: Arc::new(Mutex::new(CoreDocument::from_saved(&saved))),
+            meta: Arc::new(Mutex::new(BTreeMap::new())),
+            comment: Mutex::new(String::new()),
+        },
+    )?)
+}
+
+#[pyfunction]
+fn addDocumentObserver(observer: Py<PyAny>) {
+    let mut obs = observers().lock().unwrap();
+    if !obs.iter().any(|o| o.as_ptr() == observer.as_ptr()) {
+        obs.push(observer);
     }
 }
 
 #[pyfunction]
-fn openDocument(path: &str) -> PyResult<PyDocument> {
-    let saved = CoreDocument::load_from_file(path).map_err(PyValueError::new_err)?;
-    Ok(PyDocument {
-        name: saved.name.clone(),
-        label: saved.name.clone(),
-        file_name: Some(path.to_string()),
-        auto_created: false,
-        inner: Arc::new(Mutex::new(CoreDocument::from_saved(&saved))),
-        meta: Arc::new(Mutex::new(BTreeMap::new())),
-    })
+fn removeDocumentObserver(observer: &Bound<'_, PyAny>) {
+    observers()
+        .lock()
+        .unwrap()
+        .retain(|o| o.as_ptr() != observer.as_ptr());
 }
 
+/// Emit a document-level signal (used by the `FreeCAD` facade for the
+/// operations it owns: `closeDocument`, `setActiveDocument`).
 #[pyfunction]
-fn addDocumentObserver(_observer: &Bound<'_, PyAny>) {}
+#[pyo3(signature = (slot, doc, extra=None))]
+fn _emitDocument(slot: &str, doc: &Bound<'_, PyDocument>, extra: Option<&Bound<'_, PyAny>>) {
+    fire_doc(slot, doc, extra);
+}
 
+/// Drop all cached Python object handles for a closed document.
 #[pyfunction]
-fn removeDocumentObserver(_observer: &Bound<'_, PyAny>) {}
+fn _forgetDocument(doc: &Bound<'_, PyDocument>) {
+    forget_document(&doc.clone().unbind());
+}
 
 #[pymodule]
 fn fc(m: &Bound<'_, PyModule>) -> PyResult<()> {
@@ -2159,5 +2370,7 @@ fn fc(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(openDocument, m)?)?;
     m.add_function(wrap_pyfunction!(addDocumentObserver, m)?)?;
     m.add_function(wrap_pyfunction!(removeDocumentObserver, m)?)?;
+    m.add_function(wrap_pyfunction!(_emitDocument, m)?)?;
+    m.add_function(wrap_pyfunction!(_forgetDocument, m)?)?;
     Ok(())
 }

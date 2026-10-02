@@ -1,6 +1,6 @@
 # freecad-rs-poc
 
-**Milestones 0–4 (slice 14):** run a FreeCAD headless "hello world" Python script on a pure-Rust
+**Milestones 0–4 (slice 15):** run a FreeCAD headless "hello world" Python script on a pure-Rust
 core, with the C++ Python bindings replaced by Rust bindings.
 
 * **M0** — hello world on a Rust object model, bridged to Python over a C ABI + `ctypes`.
@@ -47,8 +47,11 @@ core, with the C++ Python bindings replaced by Rust bindings.
   object's `Proxy` (`dumps`/`loads` protocol) survive save/restore.
 * **M4 (slice 14)** — expression engine: `int`→`Float` coercion, self-relative paths (`10mm`, `%`),
   cycle detection (`RuntimeError`), `ExpressionEngine`/`evalExpression`/`touch`, and
-  `App::DocumentObjectFileIncluded`; conformance now **90 passing** (`StringHasher.py` 4/4,
-  `UnitTests.py` 12/12).
+  `App::DocumentObjectFileIncluded`.
+* **M4 (slice 15)** — widen the conformance harness to eight upstream files (`BaseTests`,
+  `TestIntPairList`, `FreeCADInitTests` added); full `ParameterGrp` rewrite; a **matrix inverse
+  transpose fix**; and a broad `Base` geometry surface (`Matrix`/`Rotation`/`Placement` helpers,
+  `Vector2d`/`Material`/`BoundBox`, `IntPairList`); conformance now **135 passing**.
 
 This is a proof of concept, not a product. It exists to validate the single
 riskiest assumption of the rewrite plan: *that a Python script written against
@@ -183,7 +186,7 @@ Not implemented (deliberately out of scope for this milestone):
 hello_freecad.py          the milestone script (public FreeCAD API only)
 run.sh / build.sh         convenience wrappers
 python/FreeCAD/           drop-in module: __init__.py (facade + backend selector)
-    Base.py              core data types (Quantity; Vector/Matrix later)
+    Base.py              core data types re-exported from fc (Vector/Matrix/Rotation/…)
     Units.py             units facade (Quantity)
     Console.py           minimal Print* logging facade
     fc.abi3.so            built PyO3 bindings over fc-core (gitignored)
@@ -207,6 +210,7 @@ tools/test_codegen.py     M3c tests (hermetic generator logic)
 tools/conformance.py      M3d: run upstream Mod/Test files against our FreeCAD
 tools/test_conformance.py M3d tests (hermetic harness helpers)
 tests/test_parity.py      behavioural checks (M0/M1)
+tests/test_base_surface.py  end-to-end FreeCAD surface smoke tests (M4)
 tests/test_fc_core.py     fc-core via Python (M3b)
 tests/test_codegen.py     generated skeleton surface (M3c)
 ```

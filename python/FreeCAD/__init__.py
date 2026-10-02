@@ -10,33 +10,85 @@ touch::
 
 Two Rust backends provide the implementation; this module just selects one:
 
-* ``_core``           — the PyO3 extension (primary, M1).
-* ``_ctypes_backend`` — the M0 C-ABI bridge, used if ``_core`` is unavailable.
+* ``fc``               — the PyO3 bindings over ``fc-core`` (primary, M3b).
+* ``_ctypes_backend``  — the M0 C-ABI bridge, used if ``fc`` is unavailable.
 
 The C++ PyCXX bindings are not involved at all.
+
+``fc`` is a thin binding over the document object model; it has no notion of an
+"application" (document registry, active document, version). This facade adds
+that small layer in Python so the ``FreeCAD`` module surface stays complete.
 """
 
 from __future__ import annotations
 
 try:  # pragma: no cover - trivial branch
-    from . import _core as _backend
+    import fc as _fc
 
-    backend = "pyo3"
+    backend = "fc"
 except ImportError:  # pragma: no cover - depends on build artifacts
-    from . import _ctypes_backend as _backend
-
+    _fc = None
     backend = "ctypes"
+    from . import _ctypes_backend as _ctypes
 
-Document = _backend.Document
-DocumentObject = _backend.DocumentObject
-newDocument = _backend.newDocument
-closeDocument = _backend.closeDocument
-getDocument = _backend.getDocument
-listDocuments = _backend.listDocuments
-activeDocument = _backend.activeDocument
-Version = _backend.Version
+if backend == "fc":
+    Document = _fc.Document
+    DocumentObject = _fc.DocumentObject
+    Quantity = _fc.Quantity
+    __version__ = _fc.__version__
 
-__version__ = _backend.__version__
+    # `fc` has no App/registry, so the facade owns it: a name -> Document map,
+    # an "active" pointer, and FreeCAD-style unique name allocation.
+    _documents = {}
+    _active = None
+
+    def _unique_name(name):
+        base = name or "Unnamed"
+        candidate = base
+        i = 1
+        while candidate in _documents:
+            candidate = "%s%03d" % (base, i)
+            i += 1
+        return candidate
+
+    def newDocument(name=None, hidden=False, temp=False):
+        global _active
+        doc_name = _unique_name(name)
+        doc = _fc.newDocument(doc_name)
+        _documents[doc_name] = doc
+        _active = doc
+        return doc
+
+    def closeDocument(name):
+        global _active
+        if name not in _documents:
+            raise ValueError("no document named '%s'" % name)
+        del _documents[name]
+        if _active is not None and _active.Name == name:
+            _active = None
+
+    def getDocument(name):
+        return _documents.get(name)
+
+    def listDocuments():
+        return list(_documents)
+
+    def activeDocument():
+        return _active
+
+    def Version():
+        return __version__.split(".") + ["rust-fc", ""]
+
+else:
+    Document = _ctypes.Document
+    DocumentObject = _ctypes.DocumentObject
+    newDocument = _ctypes.newDocument
+    closeDocument = _ctypes.closeDocument
+    getDocument = _ctypes.getDocument
+    listDocuments = _ctypes.listDocuments
+    activeDocument = _ctypes.activeDocument
+    Version = _ctypes.Version
+    __version__ = _ctypes.__version__
 
 __all__ = [
     "Version",

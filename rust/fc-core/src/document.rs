@@ -3,7 +3,8 @@
 
 use std::collections::BTreeMap;
 
-use petgraph::graph::{DiGraph, NodeIndex};
+use petgraph::graph::NodeIndex;
+use petgraph::stable_graph::StableGraph;
 
 use crate::expr;
 use crate::observer::Observer;
@@ -16,6 +17,8 @@ pub type ObjectId = usize;
 pub struct DocumentObject {
     pub id: ObjectId,
     pub name: String,
+    /// Display name; defaults to `name` and is mutable.
+    pub label: String,
     pub type_id: String,
     pub properties: PropertyContainer,
     /// Property name → expression source (evaluated on recompute).
@@ -27,7 +30,7 @@ pub struct Document {
     objects: BTreeMap<ObjectId, DocumentObject>,
     next_id: ObjectId,
     /// Edges point dependency → dependant (dependency recomputes first).
-    graph: DiGraph<ObjectId, ()>,
+    graph: StableGraph<ObjectId, ()>,
     index: BTreeMap<ObjectId, NodeIndex>,
     tx: TransactionManager,
     observers: Vec<Box<dyn Observer>>,
@@ -41,13 +44,30 @@ impl Document {
     pub fn add_object(&mut self, name: &str, type_id: &str) -> ObjectId {
         let id = self.next_id;
         self.next_id += 1;
+
+        // FreeCAD-style default naming: last segment of the type id + counter.
+        let name = if name.is_empty() {
+            let base = type_id.rsplit("::").next().unwrap_or("Object");
+            let base = if base.is_empty() { "Object" } else { base };
+            let mut candidate = base.to_string();
+            let mut i = 1;
+            while self.objects.values().any(|o| o.name == candidate) {
+                candidate = format!("{base}{i:03}");
+                i += 1;
+            }
+            candidate
+        } else {
+            name.to_string()
+        };
+
         let node = self.graph.add_node(id);
         self.index.insert(id, node);
         self.objects.insert(
             id,
             DocumentObject {
                 id,
-                name: name.to_string(),
+                label: name.clone(),
+                name,
                 type_id: type_id.to_string(),
                 properties: PropertyContainer::new(),
                 expressions: BTreeMap::new(),
@@ -69,6 +89,27 @@ impl Document {
 
     pub fn get_by_name(&self, name: &str) -> Option<ObjectId> {
         self.objects.values().find(|o| o.name == name).map(|o| o.id)
+    }
+
+    /// Remove an object (and its graph node/edges). Returns false if absent.
+    pub fn remove_object(&mut self, id: ObjectId) -> bool {
+        if self.objects.remove(&id).is_none() {
+            return false;
+        }
+        if let Some(node) = self.index.remove(&id) {
+            self.graph.remove_node(node);
+        }
+        true
+    }
+
+    pub fn set_label(&mut self, id: ObjectId, label: &str) -> bool {
+        match self.objects.get_mut(&id) {
+            Some(obj) => {
+                obj.label = label.to_string();
+                true
+            }
+            None => false,
+        }
     }
 
     /// Declare that `object` depends on `depends_on` (the latter recomputes first).

@@ -12,6 +12,18 @@ pub enum Property {
     Quantity(Quantity),
 }
 
+impl Property {
+    /// FreeCAD-style type id for this property.
+    pub fn type_name(&self) -> &'static str {
+        match self {
+            Property::String(_) => "App::PropertyString",
+            Property::Float(_) => "App::PropertyFloat",
+            Property::Bool(_) => "App::PropertyBool",
+            Property::Quantity(_) => "App::PropertyLength",
+        }
+    }
+}
+
 #[derive(Debug, Default)]
 pub struct PropertyContainer {
     props: BTreeMap<String, Property>,

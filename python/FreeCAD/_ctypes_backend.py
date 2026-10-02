@@ -1,10 +1,10 @@
 """ctypes backend: the M0 bridge over the ``freecad-core`` C ABI.
 
-Retained as a fallback for environments where the PyO3 extension (``_core``)
-cannot be built or loaded. ``FreeCAD/__init__.py`` selects it automatically.
+Retained as a fallback for environments where the PyO3 ``fc`` extension cannot
+be built or loaded. ``FreeCAD/__init__.py`` selects it automatically.
 
-It exposes the same surface as the PyO3 ``_core`` module so the package facade
-is backend-agnostic.
+It exposes the same document-object surface as ``fc`` so the package facade is
+backend-agnostic.
 """
 
 from __future__ import annotations

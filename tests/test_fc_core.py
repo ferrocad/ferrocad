@@ -66,9 +66,63 @@ def test_objects_and_lookup():
     assert doc.getObject("Nope") is None
 
 
+def test_label_and_default_naming():
+    doc = fc.newDocument("Naming")
+    first = doc.addObject("App::FeaturePython")
+    assert first.Name == "FeaturePython"
+    second = doc.addObject("Part::Box")
+    assert second.Name == "Box"
+    third = doc.addObject("App::FeaturePython")
+    assert third.Name == "FeaturePython001"
+
+    # Label is independent of Name.
+    first.Label = "First thing"
+    assert first.Name == "FeaturePython"
+    assert first.Label == "First thing"
+
+
+def test_document_back_reference():
+    doc = fc.newDocument("Backref")
+    obj = doc.addObject("App::FeaturePython", "Box")
+    assert obj.Document is doc
+    assert doc.getObject("Box").Document is doc
+    assert obj.Document.Name == "Backref"
+
+
+def test_dynamic_properties():
+    doc = fc.newDocument("Props")
+    obj = doc.addObject("App::FeaturePython", "Box")
+    obj.addProperty("App::PropertyString", "Description", "Base", "")
+    assert obj.PropertiesList == ["Description"]
+    assert obj.getTypeIdOfProperty("Description") == "App::PropertyString"
+    assert obj.Description == ""
+    obj.Description = "hello"
+    assert obj.getPropertyByName("Description") == "hello"
+
+
+def test_remove_object():
+    doc = fc.newDocument("Remove")
+    doc.addObject("App::FeaturePython", "Box")
+    assert doc.CountObjects == 1
+    doc.removeObject("Box")
+    assert doc.CountObjects == 0
+
+    # Removing a missing object raises ValueError.
+    raised = False
+    try:
+        doc.removeObject("Box")
+    except ValueError:
+        raised = True
+    assert raised, "expected ValueError for missing object"
+
+
 if __name__ == "__main__":
     test_quantity()
     test_document_and_expressions()
     test_transactions()
     test_objects_and_lookup()
+    test_label_and_default_naming()
+    test_document_back_reference()
+    test_dynamic_properties()
+    test_remove_object()
     print("all fc-python tests passed")

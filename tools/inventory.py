@@ -3,7 +3,10 @@
 
 FreeCAD keeps its Python-visible API contract in source-adjacent ``.pyi`` stubs
 (320 files across ``src/App``, ``src/Base``, ``src/Gui``, ``src/Mod/*`` and a
-handful of PySide overlays under ``src/Tools/typing``). This tool walks that
+handful of PySide overlays under ``src/Tools/typing``). Upstream is migrating
+from the legacy ``<Class>Py.xml`` binding definitions to these stubs; on current
+``main`` no ``*Py.xml`` remains, so the ``.pyi`` set is the authoritative target
+surface (a pre-migration checkout is detected and reported). This tool walks that
 tree, parses each stub with the standard-library ``ast`` module, and emits
 
 * a machine-readable JSON model (the input for M3c PyO3 codegen), and
@@ -265,10 +268,27 @@ def classify_area(rel_path: Path) -> str:
 
 
 def discover(root: Path) -> list[Module]:
-    """Find and parse every ``.pyi`` stub under ``root/src``."""
+    """Find and parse every ``.pyi`` stub under ``root/src``.
+
+    Upstream is mid-migration from the legacy ``<Class>Py.xml`` binding
+    definitions to ``.pyi`` stubs: on current ``main`` the XML files are gone and
+    every ``*PyImp.cpp`` has a matching ``.pyi``. When pointed at an older tree
+    that still carries ``*Py.xml``, classes defined only there would be invisible
+    to a ``.pyi``-only walk, so warn about it.
+    """
     src = root / "src"
     if not src.is_dir():
         raise SystemExit(f"no src/ directory under {root}")
+
+    legacy = sorted(src.rglob("*Py.xml"))
+    if legacy:
+        unstubbed = [p for p in legacy if not p.with_suffix(".pyi").exists()]
+        print(
+            f"warning: found {len(legacy)} legacy *Py.xml binding file(s)"
+            f" ({len(unstubbed)} without a .pyi) - this checkout predates the"
+            " XML->pyi migration and the inventory may be incomplete",
+            file=sys.stderr,
+        )
 
     modules: list[Module] = []
     errors: list[str] = []

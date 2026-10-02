@@ -134,6 +134,35 @@ class TestDiscoveryAndSummary(unittest.TestCase):
         self.assertEqual(areas["Mod.Part"]["classes"], 1)
 
 
+class TestLegacyXmlGuard(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.root = Path(self.tmp.name)
+        (self.root / "src" / "App").mkdir(parents=True)
+        (self.root / "src" / "App" / "Doc.pyi").write_text(FIXTURE_CLASS, encoding="utf-8")
+
+    def _discover_stderr(self):
+        import contextlib
+        import io
+
+        buf = io.StringIO()
+        with contextlib.redirect_stderr(buf):
+            modules = discover(self.root)
+        return modules, buf.getvalue()
+
+    def test_no_warning_on_migrated_tree(self):
+        _, err = self._discover_stderr()
+        self.assertNotIn("legacy", err)
+
+    def test_warns_on_pre_migration_xml(self):
+        # A legacy binding with no .pyi sibling would be invisible to a .pyi walk.
+        (self.root / "src" / "App" / "LegacyPy.xml").write_text("<xml/>", encoding="utf-8")
+        _, err = self._discover_stderr()
+        self.assertIn("legacy", err)
+        self.assertIn("XML->pyi migration", err)
+
+
 class TestClassifyArea(unittest.TestCase):
     def test_areas(self):
         self.assertEqual(classify_area(Path("App/Document.pyi")), "App")

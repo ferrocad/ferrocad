@@ -85,5 +85,36 @@ class TestParamGet(unittest.TestCase):
         self.assertEqual(grp.GetString("Name", "x"), "x")
 
 
+class TestGeometry(unittest.TestCase):
+    def test_vector(self):
+        v = FreeCAD.Vector(1, 2, 3)
+        self.assertEqual((v.x, v.y, v.z), (1.0, 2.0, 3.0))
+        self.assertEqual(len(v), 3)
+        self.assertEqual(v[0], 1.0)
+        self.assertEqual(v[-1], 3.0)
+        self.assertAlmostEqual(v.Length, (1 + 4 + 9) ** 0.5)
+        self.assertEqual(v + FreeCAD.Vector(1, 1, 1), FreeCAD.Vector(2, 3, 4))
+        self.assertEqual(v * FreeCAD.Vector(1, 0, 0), 1.0)  # dot product
+        self.assertEqual((v * 2.0).x, 2.0)
+
+    def test_placement_identity(self):
+        p = FreeCAD.Placement()
+        self.assertEqual(p.Base, FreeCAD.Vector(0, 0, 0))
+
+    def test_base_aliases(self):
+        self.assertIs(FreeCAD.Vector, FreeCAD.Base.Vector)
+        self.assertIs(FreeCAD.Matrix, FreeCAD.Base.Matrix)
+        self.assertIs(FreeCAD.Placement, FreeCAD.Base.Placement)
+
+    def test_feature_test_default_properties(self):
+        doc = FreeCAD.newDocument("Ft")
+        obj = doc.addObject("App::FeatureTest", "F")
+        self.assertEqual(obj.Integer, 0)
+        self.assertEqual(obj.Float, 0.0)
+        self.assertEqual(obj.String, "")
+        self.assertIsInstance(obj.Placement, FreeCAD.Placement)
+        FreeCAD.closeDocument("Ft")
+
+
 if __name__ == "__main__":
     unittest.main()

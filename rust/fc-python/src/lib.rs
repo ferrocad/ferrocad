@@ -8,7 +8,7 @@
 
 use std::sync::{Arc, Mutex};
 
-use fc_core::{canonical_name, parse_unit, Document as CoreDocument, ObjectId, Property, Quantity, StringHasher, StringId, Unit};
+use fc_core::{canonical_name, parse_unit, Document as CoreDocument, Matrix4, ObjectId, Placement, Property, Quantity, Rotation, StringHasher, StringId, TypeId, Unit, Vector3};
 use pyo3::exceptions::{PyAttributeError, PyTypeError, PyValueError};
 use pyo3::prelude::*;
 use pyo3::types::{PyAny, PyAnyMethods, PyTuple};
@@ -210,7 +210,22 @@ fn property_to_py(py: Python<'_>, value: &Property) -> PyObject {
         Property::String(s) => s.clone().into_py_any(py).unwrap(),
         Property::Float(f) => (*f).into_py_any(py).unwrap(),
         Property::Bool(b) => (*b).into_py_any(py).unwrap(),
+        Property::Integer(i) => (*i).into_py_any(py).unwrap(),
         Property::Quantity(q) => PyQuantity { inner: *q }.into_py_any(py).unwrap(),
+        Property::FloatList(v) => v.clone().into_py_any(py).unwrap(),
+        Property::IntegerList(v) => v.clone().into_py_any(py).unwrap(),
+        Property::StringList(v) => v.clone().into_py_any(py).unwrap(),
+        Property::BoolList(v) => v.clone().into_py_any(py).unwrap(),
+        Property::Vector(v) => PyVector { inner: *v }.into_py_any(py).unwrap(),
+        Property::VectorList(v) => v
+            .iter()
+            .map(|x| PyVector { inner: *x }.into_py_any(py).unwrap())
+            .collect::<Vec<_>>()
+            .into_py_any(py)
+            .unwrap(),
+        Property::Placement(p) => PyPlacement { inner: *p }.into_py_any(py).unwrap(),
+        Property::Matrix(m) => PyMatrix { inner: *m }.into_py_any(py).unwrap(),
+        Property::Link(s) => s.clone().into_py_any(py).unwrap(),
     }
 }
 
@@ -218,12 +233,20 @@ fn py_to_property(value: &Bound<'_, PyAny>) -> PyResult<Property> {
     if let Ok(q) = value.downcast::<PyQuantity>() {
         return Ok(Property::Quantity(q.borrow().inner));
     }
+    if let Ok(v) = value.downcast::<PyVector>() {
+        return Ok(Property::Vector(v.borrow().inner));
+    }
+    if let Ok(p) = value.downcast::<PyPlacement>() {
+        return Ok(Property::Placement(p.borrow().inner));
+    }
+    if let Ok(m) = value.downcast::<PyMatrix>() {
+        return Ok(Property::Matrix(m.borrow().inner));
+    }
     if let Ok(b) = value.extract::<bool>() {
         return Ok(Property::Bool(b));
     }
-    // `int` is distinct from `float` in PyO3; map it to Float.
     if let Ok(i) = value.extract::<i64>() {
-        return Ok(Property::Float(i as f64));
+        return Ok(Property::Integer(i));
     }
     if let Ok(f) = value.extract::<f64>() {
         return Ok(Property::Float(f));
@@ -231,19 +254,55 @@ fn py_to_property(value: &Bound<'_, PyAny>) -> PyResult<Property> {
     if let Ok(s) = value.extract::<String>() {
         return Ok(Property::String(s));
     }
+    // sequences (list/tuple) of homogeneous values
+    if let Ok(v) = value.extract::<Vec<bool>>() {
+        return Ok(Property::BoolList(v));
+    }
+    if let Ok(v) = value.extract::<Vec<i64>>() {
+        return Ok(Property::IntegerList(v));
+    }
+    if let Ok(v) = value.extract::<Vec<f64>>() {
+        return Ok(Property::FloatList(v));
+    }
+    if let Ok(v) = value.extract::<Vec<String>>() {
+        return Ok(Property::StringList(v));
+    }
+    if let Ok(v) = value.extract::<Vec<PyRef<'_, PyVector>>>() {
+        return Ok(Property::VectorList(v.iter().map(|x| x.inner).collect()));
+    }
     Err(PyTypeError::new_err(
-        "unsupported property value (expected str, int, float, bool, or Quantity)",
+        "unsupported property value (expected str, int, float, bool, list, Quantity, Vector, Placement, or Matrix)",
     ))
 }
 
 /// Map a FreeCAD property type id to its default value.
 fn default_property(type_id: &str) -> Property {
     let t = type_id.to_ascii_lowercase();
-    if t.ends_with("float") {
+    if t.ends_with("integerlist") {
+        Property::IntegerList(vec![])
+    } else if t.ends_with("floatlist") {
+        Property::FloatList(vec![])
+    } else if t.ends_with("stringlist") {
+        Property::StringList(vec![])
+    } else if t.ends_with("boollist") {
+        Property::BoolList(vec![])
+    } else if t.ends_with("integer") {
+        Property::Integer(0)
+    } else if t.ends_with("float") {
         Property::Float(0.0)
     } else if t.ends_with("bool") {
         Property::Bool(false)
-    } else if t.ends_with("length") || t.ends_with("distance") || t.ends_with("quantity") {
+    } else if t.ends_with("vectorlist") {
+        Property::VectorList(vec![])
+    } else if t.ends_with("vector") {
+        Property::Vector(Vector3::zero())
+    } else if t.ends_with("placement") {
+        Property::Placement(Placement::identity())
+    } else if t.ends_with("matrix") {
+        Property::Matrix(Matrix4::identity())
+    } else if t.ends_with("link") || t.ends_with("linksublist") || t.ends_with("linklist") || t.ends_with("linksub") {
+        Property::Link(String::new())
+    } else if t.ends_with("length") || t.ends_with("distance") || t.ends_with("quantity") || t.ends_with("angle") {
         Property::Quantity(Quantity::new(0.0, Unit::Millimeter))
     } else {
         Property::String(String::new())
@@ -384,6 +443,53 @@ impl PyDocument {
     fn redo(&self) -> bool {
         self.inner.lock().unwrap().redo()
     }
+
+    // -- undo/redo metadata (POC: not tracked yet) ---------------------------
+    #[getter]
+    fn UndoNames(&self) -> Vec<String> {
+        vec![]
+    }
+
+    #[getter]
+    fn RedoNames(&self) -> Vec<String> {
+        vec![]
+    }
+
+    #[getter]
+    fn UndoCount(&self) -> usize {
+        0
+    }
+
+    #[getter]
+    fn RedoCount(&self) -> usize {
+        0
+    }
+
+    #[getter]
+    fn MemSize(&self) -> usize {
+        0
+    }
+
+    /// Objects are also exposed by name as attributes (`doc.Label_1`).
+    fn __getattr__(slf: &Bound<'_, Self>, name: &Bound<'_, PyAny>) -> PyResult<PyObject> {
+        let py = slf.py();
+        let name: String = name.extract()?;
+        if name.starts_with('_') {
+            return Err(PyAttributeError::new_err(name));
+        }
+        let inner = Arc::clone(&slf.borrow().inner);
+        let id = inner.lock().unwrap().get_by_name(&name).ok_or_else(|| {
+            PyAttributeError::new_err(format!("'Document' object has no attribute '{name}'"))
+        })?;
+        let doc: Py<PyDocument> = slf.clone().unbind();
+        Ok(PyDocumentObject {
+            doc: doc.clone_ref(py),
+            inner,
+            id,
+        }
+        .into_py_any(py)
+        .unwrap())
+    }
 }
 
 #[pymethods]
@@ -479,6 +585,35 @@ impl PyDocumentObject {
             .unwrap()
             .set_expression(self.id, prop, source)
             .map_err(PyValueError::new_err)
+    }
+
+    fn recompute(&self) -> bool {
+        // Per-object recompute is a no-op in the POC; the document drives it.
+        true
+    }
+
+    fn removeProperty(&self, name: &str) -> PyResult<()> {
+        if self.inner.lock().unwrap().remove_property(self.id, name) {
+            Ok(())
+        } else {
+            Err(PyValueError::new_err(format!(
+                "no property '{name}' on object"
+            )))
+        }
+    }
+
+    fn supportedProperties(&self) -> Vec<String> {
+        vec![
+            "App::PropertyString".to_string(),
+            "App::PropertyFloat".to_string(),
+            "App::PropertyBool".to_string(),
+            "App::PropertyInteger".to_string(),
+            "App::PropertyLength".to_string(),
+            "App::PropertyVector".to_string(),
+            "App::PropertyPlacement".to_string(),
+            "App::PropertyMatrix".to_string(),
+            "App::PropertyLink".to_string(),
+        ]
     }
 
     fn __getattr__(&self, name: &Bound<'_, PyAny>) -> PyResult<PyObject> {
@@ -608,6 +743,268 @@ impl PyStringID {
 }
 
 // ---------------------------------------------------------------------------
+// Geometry types
+// ---------------------------------------------------------------------------
+
+#[pyclass(name = "Vector", module = "fc")]
+#[derive(Clone, Copy)]
+struct PyVector {
+    inner: Vector3,
+}
+
+#[pymethods]
+impl PyVector {
+    #[new]
+    #[pyo3(signature = (*args))]
+    fn new(args: &Bound<'_, PyTuple>) -> PyResult<Self> {
+        let v = match args.len() {
+            0 => Vector3::zero(),
+            1 => {
+                let a = args.get_item(0)?;
+                if let Ok(v) = a.extract::<PyRef<'_, PyVector>>() {
+                    v.inner
+                } else if let Ok(seq) = a.extract::<Vec<f64>>() {
+                    if seq.len() != 3 {
+                        return Err(PyValueError::new_err("Vector sequence must have 3 items"));
+                    }
+                    Vector3::new(seq[0], seq[1], seq[2])
+                } else {
+                    return Err(PyTypeError::new_err(
+                        "Vector() expects x,y,z, a Vector, or a 3-sequence",
+                    ));
+                }
+            }
+            _ => {
+                let x: f64 = args.get_item(0)?.extract()?;
+                let y: f64 = args.get_item(1)?.extract()?;
+                let z: f64 = if args.len() > 2 { args.get_item(2)?.extract()? } else { 0.0 };
+                Vector3::new(x, y, z)
+            }
+        };
+        Ok(Self { inner: v })
+    }
+
+    #[getter]
+    fn x(&self) -> f64 { self.inner.x }
+    #[setter]
+    fn set_x(&mut self, v: f64) { self.inner.x = v; }
+
+    #[getter]
+    fn y(&self) -> f64 { self.inner.y }
+    #[setter]
+    fn set_y(&mut self, v: f64) { self.inner.y = v; }
+
+    #[getter]
+    fn z(&self) -> f64 { self.inner.z }
+    #[setter]
+    fn set_z(&mut self, v: f64) { self.inner.z = v; }
+
+    #[getter]
+    fn Length(&self) -> f64 { self.inner.length() }
+    #[setter]
+    fn set_Length(&mut self, v: f64) {
+        self.inner = self.inner.normalize().scale(v);
+    }
+
+    fn add(&self, o: PyRef<'_, PyVector>) -> PyVector { PyVector { inner: self.inner.add(&o.inner) } }
+    fn sub(&self, o: PyRef<'_, PyVector>) -> PyVector { PyVector { inner: self.inner.sub(&o.inner) } }
+    fn negative(&self) -> PyVector { PyVector { inner: self.inner.neg() } }
+    fn dot(&self, o: PyRef<'_, PyVector>) -> f64 { self.inner.dot(&o.inner) }
+    fn cross(&self, o: PyRef<'_, PyVector>) -> PyVector { PyVector { inner: self.inner.cross(&o.inner) } }
+    fn normalize(&self) -> PyVector { PyVector { inner: self.inner.normalize() } }
+    fn distanceToPoint(&self, o: PyRef<'_, PyVector>) -> f64 { self.inner.distance(&o.inner) }
+    fn getAngle(&self, o: PyRef<'_, PyVector>) -> f64 { self.inner.angle(&o.inner) }
+    fn isEqual(&self, o: PyRef<'_, PyVector>, tol: f64) -> bool { self.inner.is_equal(&o.inner, tol) }
+
+    fn __add__(&self, o: PyRef<'_, PyVector>) -> PyVector { PyVector { inner: self.inner.add(&o.inner) } }
+    fn __sub__(&self, o: PyRef<'_, PyVector>) -> PyVector { PyVector { inner: self.inner.sub(&o.inner) } }
+    fn __neg__(&self) -> PyVector { PyVector { inner: self.inner.neg() } }
+
+    fn __mul__(&self, other: &Bound<'_, PyAny>) -> PyResult<PyObject> {
+        let py = other.py();
+        if let Ok(f) = other.extract::<f64>() {
+            return Ok(PyVector { inner: self.inner.scale(f) }.into_py_any(py).unwrap());
+        }
+        if let Ok(o) = other.extract::<PyRef<'_, PyVector>>() {
+            return Ok(self.inner.dot(&o.inner).into_py_any(py).unwrap());
+        }
+        Err(PyTypeError::new_err("Vector can only multiply by a number or Vector"))
+    }
+
+    fn __rmul__(&self, f: f64) -> PyVector { PyVector { inner: self.inner.scale(f) } }
+    fn __truediv__(&self, f: f64) -> PyVector { PyVector { inner: self.inner.scale(1.0 / f) } }
+
+    fn __eq__(&self, other: &Bound<'_, PyAny>) -> bool {
+        match other.extract::<PyRef<'_, PyVector>>() {
+            Ok(o) => self.inner.is_equal(&o.inner, 1e-12),
+            Err(_) => false,
+        }
+    }
+
+    fn __len__(&self) -> usize { 3 }
+
+    fn __getitem__(&self, i: isize) -> PyResult<f64> {
+        let idx = if i < 0 { 3 + i } else { i };
+        match idx {
+            0 => Ok(self.inner.x),
+            1 => Ok(self.inner.y),
+            2 => Ok(self.inner.z),
+            _ => Err(pyo3::exceptions::PyIndexError::new_err("vector index out of range")),
+        }
+    }
+
+    fn __setitem__(&mut self, i: isize, v: f64) -> PyResult<()> {
+        let idx = if i < 0 { 3 + i } else { i };
+        match idx {
+            0 => self.inner.x = v,
+            1 => self.inner.y = v,
+            2 => self.inner.z = v,
+            _ => return Err(pyo3::exceptions::PyIndexError::new_err("vector index out of range")),
+        }
+        Ok(())
+    }
+
+    fn __repr__(&self) -> String {
+        format!("Vector ({}, {}, {})", self.inner.x, self.inner.y, self.inner.z)
+    }
+}
+
+#[pyclass(name = "Matrix", module = "fc")]
+#[derive(Clone, Copy)]
+struct PyMatrix {
+    inner: Matrix4,
+}
+
+#[pymethods]
+impl PyMatrix {
+    #[new]
+    fn new() -> Self {
+        Self { inner: Matrix4::identity() }
+    }
+
+    fn __eq__(&self, other: &Bound<'_, PyAny>) -> bool {
+        match other.extract::<PyRef<'_, PyMatrix>>() {
+            Ok(o) => self.inner == o.inner,
+            Err(_) => false,
+        }
+    }
+
+    fn multiply(&self, o: PyRef<'_, PyMatrix>) -> PyMatrix { PyMatrix { inner: self.inner.mul(&o.inner) } }
+
+    fn __mul__(&self, o: PyRef<'_, PyMatrix>) -> PyMatrix { PyMatrix { inner: self.inner.mul(&o.inner) } }
+
+    fn __repr__(&self) -> String {
+        let m = &self.inner.m;
+        format!("Matrix ({:?})", m)
+    }
+}
+
+#[pyclass(name = "Rotation", module = "fc")]
+#[derive(Clone, Copy)]
+struct PyRotation {
+    inner: Rotation,
+}
+
+#[pymethods]
+impl PyRotation {
+    #[new]
+    fn new() -> Self {
+        Self { inner: Rotation::identity() }
+    }
+
+    #[getter]
+    fn Angle(&self) -> f64 { self.inner.angle() }
+
+    #[getter]
+    fn Axis(&self) -> PyVector {
+        let q = self.inner.q;
+        let s = (1.0 - q[0] * q[0]).sqrt();
+        let axis = if s < 1e-12 {
+            Vector3::new(0.0, 0.0, 1.0)
+        } else {
+            Vector3::new(q[1] / s, q[2] / s, q[3] / s)
+        };
+        PyVector { inner: axis }
+    }
+
+    fn __eq__(&self, other: &Bound<'_, PyAny>) -> bool {
+        match other.extract::<PyRef<'_, PyRotation>>() {
+            Ok(o) => self.inner == o.inner,
+            Err(_) => false,
+        }
+    }
+
+    fn __repr__(&self) -> String {
+        format!("Rotation ({:?})", self.inner.q)
+    }
+}
+
+#[pyclass(name = "Placement", module = "fc")]
+#[derive(Clone, Copy)]
+struct PyPlacement {
+    inner: Placement,
+}
+
+#[pymethods]
+impl PyPlacement {
+    #[new]
+    #[pyo3(signature = (base=None, rotation=None))]
+    fn new(base: Option<PyRef<'_, PyVector>>, rotation: Option<PyRef<'_, PyRotation>>) -> Self {
+        let b = base.map(|v| v.inner).unwrap_or_else(Vector3::zero);
+        let r = rotation.map(|q| q.inner).unwrap_or_else(Rotation::identity);
+        Self { inner: Placement::new(b, r) }
+    }
+
+    #[getter]
+    fn Base(&self) -> PyVector { PyVector { inner: self.inner.base } }
+    #[setter]
+    fn set_Base(&mut self, v: PyRef<'_, PyVector>) { self.inner.base = v.inner; }
+
+    #[getter]
+    fn Rotation(&self) -> PyRotation { PyRotation { inner: self.inner.rotation } }
+    #[setter]
+    fn set_Rotation(&mut self, q: PyRef<'_, PyRotation>) { self.inner.rotation = q.inner; }
+
+    fn __mul__(&self, o: PyRef<'_, PyPlacement>) -> PyPlacement { PyPlacement { inner: self.inner.mul(&o.inner) } }
+
+    fn __eq__(&self, other: &Bound<'_, PyAny>) -> bool {
+        match other.extract::<PyRef<'_, PyPlacement>>() {
+            Ok(o) => self.inner == o.inner,
+            Err(_) => false,
+        }
+    }
+
+    fn __repr__(&self) -> String {
+        format!("Placement ({:?}, {:?})", self.inner.base, self.inner.rotation.q)
+    }
+}
+
+#[pyclass(name = "TypeId", module = "fc")]
+#[derive(Clone)]
+struct PyTypeId {
+    inner: TypeId,
+}
+
+#[pymethods]
+impl PyTypeId {
+    #[new]
+    fn new(name: &str) -> Self {
+        Self { inner: TypeId::from_name(name) }
+    }
+
+    fn __eq__(&self, other: &Bound<'_, PyAny>) -> bool {
+        match other.extract::<PyRef<'_, PyTypeId>>() {
+            Ok(o) => self.inner == o.inner,
+            Err(_) => false,
+        }
+    }
+
+    fn __repr__(&self) -> String {
+        format!("TypeId({})", self.inner.name())
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Module
 // ---------------------------------------------------------------------------
 
@@ -627,6 +1024,11 @@ fn fc(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add("__version__", env!("CARGO_PKG_VERSION"))?;
     m.add_class::<PyQuantity>()?;
     m.add_class::<PyUnit>()?;
+    m.add_class::<PyVector>()?;
+    m.add_class::<PyMatrix>()?;
+    m.add_class::<PyRotation>()?;
+    m.add_class::<PyPlacement>()?;
+    m.add_class::<PyTypeId>()?;
     m.add_class::<PyDocument>()?;
     m.add_class::<PyDocumentObject>()?;
     m.add_class::<PyStringHasher>()?;

@@ -8,14 +8,17 @@
 
 mod document;
 mod expr;
+mod geometry;
 mod observer;
 mod property;
 mod quantity;
 mod stringhasher;
 mod transaction;
+mod typeregistry;
 mod unit;
 
 pub use document::{Document, DocumentObject, ObjectId};
+pub use geometry::{Matrix4, Placement, Rotation, TypeId, Vector3};
 pub use observer::Observer;
 pub use property::{Property, PropertyContainer};
 pub use quantity::{canonical_name, parse_unit, Quantity};

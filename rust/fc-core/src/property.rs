@@ -2,6 +2,7 @@
 
 use std::collections::BTreeMap;
 
+use crate::geometry::{Matrix4, Placement, Vector3};
 use crate::quantity::Quantity;
 
 #[derive(Debug, Clone, PartialEq)]
@@ -9,7 +10,18 @@ pub enum Property {
     String(String),
     Float(f64),
     Bool(bool),
+    Integer(i64),
     Quantity(Quantity),
+    FloatList(Vec<f64>),
+    IntegerList(Vec<i64>),
+    StringList(Vec<String>),
+    BoolList(Vec<bool>),
+    Vector(Vector3),
+    VectorList(Vec<Vector3>),
+    Placement(Placement),
+    Matrix(Matrix4),
+    /// A link to another object, stored by name (POC simplification).
+    Link(String),
 }
 
 impl Property {
@@ -19,7 +31,17 @@ impl Property {
             Property::String(_) => "App::PropertyString",
             Property::Float(_) => "App::PropertyFloat",
             Property::Bool(_) => "App::PropertyBool",
+            Property::Integer(_) => "App::PropertyInteger",
             Property::Quantity(_) => "App::PropertyLength",
+            Property::FloatList(_) => "App::PropertyFloatList",
+            Property::IntegerList(_) => "App::PropertyIntegerList",
+            Property::StringList(_) => "App::PropertyStringList",
+            Property::BoolList(_) => "App::PropertyBoolList",
+            Property::Vector(_) => "App::PropertyVector",
+            Property::VectorList(_) => "App::PropertyVectorList",
+            Property::Placement(_) => "App::PropertyPlacement",
+            Property::Matrix(_) => "App::PropertyMatrix",
+            Property::Link(_) => "App::PropertyLink",
         }
     }
 }

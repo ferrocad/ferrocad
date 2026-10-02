@@ -37,6 +37,12 @@ if backend == "fc":
     Quantity = _fc.Quantity
     StringHasher = _fc.StringHasher
     StringID = _fc.StringID
+    Vector = _fc.Vector
+    Matrix = _fc.Matrix
+    Placement = _fc.Placement
+    Rotation = _fc.Rotation
+    TypeId = _fc.TypeId
+    GuiUp = 0
     __version__ = _fc.__version__
 
     # Core/utility submodules (the M4 Base/Units/Console surface).

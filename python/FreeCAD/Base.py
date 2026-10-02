@@ -1,13 +1,21 @@
 """``FreeCAD.Base`` — the core data types.
 
 Upstream keeps the low-level value types (``Quantity``, ``Unit``, ``Vector``,
-``Matrix``, …) under ``FreeCAD.Base``; ``FreeCAD.Units`` re-exports the unit
-types for convenience. This POC implements ``Quantity``/``Unit`` (Rust
-``fc-core``) now; the remaining geometry types land here as they are added.
+``Matrix``, ``Rotation``, ``Placement``, ``TypeId``, …) under ``FreeCAD.Base``;
+``FreeCAD.Units`` re-exports the unit types for convenience. These are all
+implemented in Rust (``fc-core``) and bound by ``fc-python``.
 """
 
 from __future__ import annotations
 
-from fc import Quantity, Unit
+from fc import Matrix, Placement, Quantity, Rotation, TypeId, Unit, Vector
 
-__all__ = ["Quantity", "Unit"]
+__all__ = [
+    "Quantity",
+    "Unit",
+    "Vector",
+    "Matrix",
+    "Rotation",
+    "Placement",
+    "TypeId",
+]

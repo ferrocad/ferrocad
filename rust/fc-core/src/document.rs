@@ -62,6 +62,13 @@ impl Document {
 
         let node = self.graph.add_node(id);
         self.index.insert(id, node);
+
+        // Initialize default properties for known types (FeatureTest, …).
+        let mut properties = PropertyContainer::new();
+        for (prop_name, prop) in crate::typeregistry::default_properties(type_id) {
+            properties.set(prop_name.to_string(), prop);
+        }
+
         self.objects.insert(
             id,
             DocumentObject {
@@ -69,7 +76,7 @@ impl Document {
                 label: name.clone(),
                 name,
                 type_id: type_id.to_string(),
-                properties: PropertyContainer::new(),
+                properties,
                 expressions: BTreeMap::new(),
             },
         );
@@ -108,6 +115,13 @@ impl Document {
                 obj.label = label.to_string();
                 true
             }
+            None => false,
+        }
+    }
+
+    pub fn remove_property(&mut self, object: ObjectId, name: &str) -> bool {
+        match self.objects.get_mut(&object) {
+            Some(obj) => obj.properties.remove(name).is_some(),
             None => false,
         }
     }

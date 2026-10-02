@@ -4,7 +4,7 @@ use std::collections::BTreeMap;
 
 use serde::{Deserialize, Serialize};
 
-use crate::geometry::{Matrix4, Placement, Vector3};
+use crate::geometry::{Matrix4, Placement, Rotation, Vector3};
 use crate::quantity::Quantity;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -21,6 +21,9 @@ pub enum Property {
     Vector(Vector3),
     VectorList(Vec<Vector3>),
     Placement(Placement),
+    PlacementList(Vec<Placement>),
+    Rotation(Rotation),
+    RotationList(Vec<Rotation>),
     Matrix(Matrix4),
     /// A link to another object, stored by name (POC simplification).
     Link(String),
@@ -42,6 +45,9 @@ impl Property {
             Property::Vector(_) => "App::PropertyVector",
             Property::VectorList(_) => "App::PropertyVectorList",
             Property::Placement(_) => "App::PropertyPlacement",
+            Property::PlacementList(_) => "App::PropertyPlacementList",
+            Property::Rotation(_) => "App::PropertyRotation",
+            Property::RotationList(_) => "App::PropertyRotationList",
             Property::Matrix(_) => "App::PropertyMatrix",
             Property::Link(_) => "App::PropertyLink",
         }

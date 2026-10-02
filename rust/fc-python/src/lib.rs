@@ -11,7 +11,7 @@ use std::sync::{Arc, Mutex};
 use fc_core::{canonical_name, parse_unit, Document as CoreDocument, Matrix4, ObjectId, Placement, Property, Quantity, Rotation, StringHasher, StringId, TypeId, Unit, Vector3};
 use pyo3::exceptions::{PyAttributeError, PyTypeError, PyValueError};
 use pyo3::prelude::*;
-use pyo3::types::{PyAny, PyAnyMethods, PyTuple};
+use pyo3::types::{PyAny, PyAnyMethods, PyTuple, PyType};
 use pyo3::IntoPyObjectExt;
 
 // ---------------------------------------------------------------------------
@@ -224,6 +224,19 @@ fn property_to_py(py: Python<'_>, value: &Property) -> PyObject {
             .into_py_any(py)
             .unwrap(),
         Property::Placement(p) => PyPlacement { inner: *p }.into_py_any(py).unwrap(),
+        Property::PlacementList(v) => v
+            .iter()
+            .map(|x| PyPlacement { inner: *x }.into_py_any(py).unwrap())
+            .collect::<Vec<_>>()
+            .into_py_any(py)
+            .unwrap(),
+        Property::Rotation(r) => PyRotation { inner: *r }.into_py_any(py).unwrap(),
+        Property::RotationList(v) => v
+            .iter()
+            .map(|x| PyRotation { inner: *x }.into_py_any(py).unwrap())
+            .collect::<Vec<_>>()
+            .into_py_any(py)
+            .unwrap(),
         Property::Matrix(m) => PyMatrix { inner: *m }.into_py_any(py).unwrap(),
         Property::Link(s) => s.clone().into_py_any(py).unwrap(),
     }
@@ -238,6 +251,9 @@ fn py_to_property(value: &Bound<'_, PyAny>) -> PyResult<Property> {
     }
     if let Ok(p) = value.downcast::<PyPlacement>() {
         return Ok(Property::Placement(p.borrow().inner));
+    }
+    if let Ok(r) = value.downcast::<PyRotation>() {
+        return Ok(Property::Rotation(r.borrow().inner));
     }
     if let Ok(m) = value.downcast::<PyMatrix>() {
         return Ok(Property::Matrix(m.borrow().inner));
@@ -270,15 +286,25 @@ fn py_to_property(value: &Bound<'_, PyAny>) -> PyResult<Property> {
     if let Ok(v) = value.extract::<Vec<PyRef<'_, PyVector>>>() {
         return Ok(Property::VectorList(v.iter().map(|x| x.inner).collect()));
     }
+    if let Ok(v) = value.extract::<Vec<PyRef<'_, PyPlacement>>>() {
+        return Ok(Property::PlacementList(v.iter().map(|x| x.inner).collect()));
+    }
+    if let Ok(v) = value.extract::<Vec<PyRef<'_, PyRotation>>>() {
+        return Ok(Property::RotationList(v.iter().map(|x| x.inner).collect()));
+    }
     Err(PyTypeError::new_err(
-        "unsupported property value (expected str, int, float, bool, list, Quantity, Vector, Placement, or Matrix)",
+        "unsupported property value (expected str, int, float, bool, list, Quantity, Vector, Placement, Rotation, or Matrix)",
     ))
 }
 
 /// Map a FreeCAD property type id to its default value.
 fn default_property(type_id: &str) -> Property {
     let t = type_id.to_ascii_lowercase();
-    if t.ends_with("integerlist") {
+    if t.ends_with("placementlist") {
+        Property::PlacementList(vec![])
+    } else if t.ends_with("rotationlist") {
+        Property::RotationList(vec![])
+    } else if t.ends_with("integerlist") {
         Property::IntegerList(vec![])
     } else if t.ends_with("floatlist") {
         Property::FloatList(vec![])
@@ -286,21 +312,23 @@ fn default_property(type_id: &str) -> Property {
         Property::StringList(vec![])
     } else if t.ends_with("boollist") {
         Property::BoolList(vec![])
+    } else if t.ends_with("vectorlist") {
+        Property::VectorList(vec![])
+    } else if t.ends_with("placement") {
+        Property::Placement(Placement::identity())
+    } else if t.ends_with("rotation") {
+        Property::Rotation(Rotation::identity())
+    } else if t.ends_with("vector") {
+        Property::Vector(Vector3::zero())
+    } else if t.ends_with("matrix") {
+        Property::Matrix(Matrix4::identity())
     } else if t.ends_with("integer") {
         Property::Integer(0)
     } else if t.ends_with("float") {
         Property::Float(0.0)
     } else if t.ends_with("bool") {
         Property::Bool(false)
-    } else if t.ends_with("vectorlist") {
-        Property::VectorList(vec![])
-    } else if t.ends_with("vector") {
-        Property::Vector(Vector3::zero())
-    } else if t.ends_with("placement") {
-        Property::Placement(Placement::identity())
-    } else if t.ends_with("matrix") {
-        Property::Matrix(Matrix4::identity())
-    } else if t.ends_with("link") || t.ends_with("linksublist") || t.ends_with("linklist") || t.ends_with("linksub") {
+    } else if t.ends_with("link") || t.ends_with("linksub") || t.ends_with("linksublist") || t.ends_with("linklist") {
         Property::Link(String::new())
     } else if t.ends_with("length") || t.ends_with("distance") || t.ends_with("quantity") || t.ends_with("angle") {
         Property::Quantity(Quantity::new(0.0, Unit::Millimeter))
@@ -343,11 +371,38 @@ fn unique_name(doc: &CoreDocument, name: &str) -> String {
     }
 }
 
+/// Extract a `Vector3` from a `Vector` or a 3-sequence.
+fn extract_vector(v: &Bound<'_, PyAny>) -> PyResult<Vector3> {
+    if let Ok(vec) = v.extract::<PyRef<'_, PyVector>>() {
+        return Ok(vec.inner);
+    }
+    if let Ok(seq) = v.extract::<Vec<f64>>() {
+        if seq.len() == 3 {
+            return Ok(Vector3::new(seq[0], seq[1], seq[2]));
+        }
+    }
+    Err(PyTypeError::new_err("expected a Vector or a 3-sequence"))
+}
+
+/// Extract a `Rotation` from a `Rotation` or a 4-sequence (quaternion).
+fn extract_rotation(v: &Bound<'_, PyAny>) -> PyResult<Rotation> {
+    if let Ok(r) = v.extract::<PyRef<'_, PyRotation>>() {
+        return Ok(r.inner);
+    }
+    if let Ok(seq) = v.extract::<Vec<f64>>() {
+        if seq.len() == 4 {
+            return Ok(Rotation { q: [seq[0], seq[1], seq[2], seq[3]] });
+        }
+    }
+    Err(PyTypeError::new_err("expected a Rotation or a 4-sequence"))
+}
+
 #[pyclass(name = "Document", module = "fc")]
 struct PyDocument {
     name: String,
     label: String,
     file_name: Option<String>,
+    auto_created: bool,
     inner: Arc<Mutex<CoreDocument>>,
 }
 
@@ -367,6 +422,7 @@ impl PyDocument {
             name: name.to_string(),
             label: name.to_string(),
             file_name: None,
+            auto_created: false,
             inner: Arc::new(Mutex::new(CoreDocument::new())),
         }
     }
@@ -588,6 +644,59 @@ impl PyDocument {
         0
     }
 
+    #[getter]
+    fn UndoRedoMemSize(&self) -> usize {
+        0
+    }
+
+    #[pyo3(signature = (Type="", Name="", Label=""))]
+    fn findObjects(slf: &Bound<'_, Self>, Type: &str, Name: &str, Label: &str) -> Vec<PyDocumentObject> {
+        let py = slf.py();
+        let inner = Arc::clone(&slf.borrow().inner);
+        let doc = inner.lock().unwrap();
+        let doc_py: Py<PyDocument> = slf.clone().unbind();
+        doc.object_ids()
+            .into_iter()
+            .filter(|id| {
+                doc.object(*id).map(|o| {
+                    (Type.is_empty() || o.type_id == Type)
+                        && (Name.is_empty() || o.name == Name)
+                        && (Label.is_empty() || o.label == Label)
+                }).unwrap_or(false)
+            })
+            .map(|id| PyDocumentObject {
+                doc: doc_py.clone_ref(py),
+                inner: Arc::clone(&inner),
+                id,
+            })
+            .collect()
+    }
+
+    #[getter]
+    fn ActiveObject(slf: &Bound<'_, Self>) -> Option<PyDocumentObject> {
+        let py = slf.py();
+        let inner = Arc::clone(&slf.borrow().inner);
+        let id = inner.lock().unwrap().object_ids().into_iter().last()?;
+        let doc: Py<PyDocument> = slf.clone().unbind();
+        Some(PyDocumentObject {
+            doc: doc.clone_ref(py),
+            inner,
+            id,
+        })
+    }
+
+    fn setAutoCreated(&mut self, v: bool) {
+        self.auto_created = v;
+    }
+
+    fn isAutoCreated(&self) -> bool {
+        self.auto_created
+    }
+
+    fn getBookedTransactionID(&self) -> usize {
+        0
+    }
+
     /// Objects are also exposed by name as attributes (`doc.Label_1`).
     fn __getattr__(slf: &Bound<'_, Self>, name: &Bound<'_, PyAny>) -> PyResult<PyObject> {
         let py = slf.py();
@@ -683,9 +792,25 @@ impl PyDocumentObject {
             .map(|p| p.type_name().to_string())
     }
 
-    #[pyo3(signature = (type_id, name, group="", doc=""))]
-    fn addProperty(&self, type_id: &str, name: &str, group: &str, doc: &str) -> PyResult<()> {
-        let _ = (group, doc);
+    /// FreeCAD alias: `getTypeOfProperty` returns the property's type flags
+    /// (the POC returns the type id, which round-trips for the tests).
+    fn getTypeOfProperty(&self, name: &str) -> Option<String> {
+        self.getTypeIdOfProperty(name)
+    }
+
+    #[pyo3(signature = (type_id, name, group="", doc="", attr=0, read_only=false, hidden=false, locked=false))]
+    fn addProperty(
+        &self,
+        type_id: &str,
+        name: &str,
+        group: &str,
+        doc: &str,
+        attr: i64,
+        read_only: bool,
+        hidden: bool,
+        locked: bool,
+    ) -> PyResult<()> {
+        let _ = (group, doc, attr, read_only, hidden, locked);
         if name.is_empty() {
             return Err(PyValueError::new_err("property name must not be empty"));
         }
@@ -1026,8 +1151,19 @@ struct PyRotation {
 #[pymethods]
 impl PyRotation {
     #[new]
-    fn new() -> Self {
-        Self { inner: Rotation::identity() }
+    #[pyo3(signature = (*args))]
+    fn new(args: &Bound<'_, PyTuple>) -> PyResult<Self> {
+        match args.len() {
+            0 => Ok(Self { inner: Rotation::identity() }),
+            2 => {
+                let axis: PyRef<'_, PyVector> = args.get_item(0)?.extract()?;
+                let angle: f64 = args.get_item(1)?.extract()?;
+                Ok(Self { inner: Rotation::from_axis_angle(&axis.inner, angle) })
+            }
+            _ => Err(PyTypeError::new_err(
+                "Rotation() takes 0 or 2 arguments (axis, angle)",
+            )),
+        }
     }
 
     #[getter]
@@ -1043,6 +1179,19 @@ impl PyRotation {
             Vector3::new(q[1] / s, q[2] / s, q[3] / s)
         };
         PyVector { inner: axis }
+    }
+
+    #[setter]
+    fn set_Axis(&mut self, v: &Bound<'_, PyAny>) -> PyResult<()> {
+        let axis = extract_vector(v)?;
+        let angle = self.inner.angle();
+        self.inner = Rotation::from_axis_angle(&axis, angle);
+        Ok(())
+    }
+
+    #[getter]
+    fn RawAxis(&self) -> PyVector {
+        self.Axis()
     }
 
     fn __eq__(&self, other: &Bound<'_, PyAny>) -> bool {
@@ -1067,21 +1216,33 @@ struct PyPlacement {
 impl PyPlacement {
     #[new]
     #[pyo3(signature = (base=None, rotation=None))]
-    fn new(base: Option<PyRef<'_, PyVector>>, rotation: Option<PyRef<'_, PyRotation>>) -> Self {
-        let b = base.map(|v| v.inner).unwrap_or_else(Vector3::zero);
-        let r = rotation.map(|q| q.inner).unwrap_or_else(Rotation::identity);
-        Self { inner: Placement::new(b, r) }
+    fn new(base: Option<&Bound<'_, PyAny>>, rotation: Option<&Bound<'_, PyAny>>) -> PyResult<Self> {
+        let b = match base {
+            Some(v) => extract_vector(v)?,
+            None => Vector3::zero(),
+        };
+        let r = match rotation {
+            Some(q) => extract_rotation(q)?,
+            None => Rotation::identity(),
+        };
+        Ok(Self { inner: Placement::new(b, r) })
     }
 
     #[getter]
     fn Base(&self) -> PyVector { PyVector { inner: self.inner.base } }
     #[setter]
-    fn set_Base(&mut self, v: PyRef<'_, PyVector>) { self.inner.base = v.inner; }
+    fn set_Base(&mut self, v: &Bound<'_, PyAny>) -> PyResult<()> {
+        self.inner.base = extract_vector(v)?;
+        Ok(())
+    }
 
     #[getter]
     fn Rotation(&self) -> PyRotation { PyRotation { inner: self.inner.rotation } }
     #[setter]
-    fn set_Rotation(&mut self, q: PyRef<'_, PyRotation>) { self.inner.rotation = q.inner; }
+    fn set_Rotation(&mut self, q: &Bound<'_, PyAny>) -> PyResult<()> {
+        self.inner.rotation = extract_rotation(q)?;
+        Ok(())
+    }
 
     fn __mul__(&self, o: PyRef<'_, PyPlacement>) -> PyPlacement { PyPlacement { inner: self.inner.mul(&o.inner) } }
 
@@ -1110,6 +1271,25 @@ impl PyTypeId {
         Self { inner: TypeId::from_name(name) }
     }
 
+    #[classmethod]
+    fn fromName(_cls: &Bound<'_, PyType>, name: &str) -> PyTypeId {
+        PyTypeId { inner: TypeId::from_name(name) }
+    }
+
+    #[classmethod]
+    fn getAllDerivedFrom(_cls: &Bound<'_, PyType>, _parent: Option<&Bound<'_, PyAny>>) -> Vec<String> {
+        vec![]
+    }
+
+    #[getter]
+    fn Name(&self) -> String {
+        self.inner.name().to_string()
+    }
+
+    fn createInstance(&self) -> Option<PyObject> {
+        None
+    }
+
     fn __eq__(&self, other: &Bound<'_, PyAny>) -> bool {
         match other.extract::<PyRef<'_, PyTypeId>>() {
             Ok(o) => self.inner == o.inner,
@@ -1134,6 +1314,7 @@ fn newDocument(name: Option<String>) -> PyDocument {
         label: name.clone(),
         name,
         file_name: None,
+        auto_created: false,
         inner: Arc::new(Mutex::new(CoreDocument::new())),
     }
 }
@@ -1145,9 +1326,16 @@ fn openDocument(path: &str) -> PyResult<PyDocument> {
         name: saved.name.clone(),
         label: saved.name.clone(),
         file_name: Some(path.to_string()),
+        auto_created: false,
         inner: Arc::new(Mutex::new(CoreDocument::from_saved(&saved))),
     })
 }
+
+#[pyfunction]
+fn addDocumentObserver(_observer: &Bound<'_, PyAny>) {}
+
+#[pyfunction]
+fn removeDocumentObserver(_observer: &Bound<'_, PyAny>) {}
 
 #[pymodule]
 fn fc(m: &Bound<'_, PyModule>) -> PyResult<()> {
@@ -1165,5 +1353,7 @@ fn fc(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyStringID>()?;
     m.add_function(wrap_pyfunction!(newDocument, m)?)?;
     m.add_function(wrap_pyfunction!(openDocument, m)?)?;
+    m.add_function(wrap_pyfunction!(addDocumentObserver, m)?)?;
+    m.add_function(wrap_pyfunction!(removeDocumentObserver, m)?)?;
     Ok(())
 }

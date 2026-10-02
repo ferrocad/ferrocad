@@ -101,6 +101,22 @@ class TestGeometry(unittest.TestCase):
         p = FreeCAD.Placement()
         self.assertEqual(p.Base, FreeCAD.Vector(0, 0, 0))
 
+    def test_placement_from_tuple(self):
+        p = FreeCAD.Placement()
+        p.Base = (1, 2, 3)
+        self.assertEqual(p.Base, FreeCAD.Vector(1, 2, 3))
+        p.Rotation = (0, 0, 1, 0)
+
+    def test_rotation_from_axis_angle(self):
+        r = FreeCAD.Rotation(FreeCAD.Vector(0, 0, 1), 1.0)
+        self.assertAlmostEqual(r.Angle, 1.0)
+        r.Axis = (1, 0, 0)
+
+    def test_typeid(self):
+        t = FreeCAD.Base.TypeId.fromName("App::FeatureTest")
+        self.assertEqual(t.Name, "App::FeatureTest")
+        self.assertIsNone(t.createInstance())
+
     def test_base_aliases(self):
         self.assertIs(FreeCAD.Vector, FreeCAD.Base.Vector)
         self.assertIs(FreeCAD.Matrix, FreeCAD.Base.Matrix)
@@ -152,6 +168,31 @@ class TestPersistence(unittest.TestCase):
 
         FreeCAD.closeDocument("Src")
         FreeCAD.closeDocument("Dst")
+
+
+class TestDocumentMetadata(unittest.TestCase):
+    def test_auto_created(self):
+        doc = FreeCAD.newDocument("Auto")
+        doc.setAutoCreated(True)
+        self.assertTrue(doc.isAutoCreated())
+        FreeCAD.closeDocument("Auto")
+
+    def test_active_object(self):
+        doc = FreeCAD.newDocument("Act")
+        doc.addObject("App::FeaturePython", "A")
+        doc.addObject("App::FeaturePython", "B")
+        self.assertEqual(doc.ActiveObject.Name, "B")
+        FreeCAD.closeDocument("Act")
+
+    def test_find_objects(self):
+        doc = FreeCAD.newDocument("Find")
+        doc.addObject("App::FeaturePython", "A")
+        doc.addObject("App::FeatureTest", "B")
+        self.assertEqual(len(doc.findObjects(Type="App::FeatureTest")), 1)
+        FreeCAD.closeDocument("Find")
+
+    def test_property_type_constants(self):
+        self.assertEqual(FreeCAD.PropertyType.Prop_NoPersist, 32)
 
 
 if __name__ == "__main__":

@@ -48,6 +48,9 @@ if backend == "fc":
     # Core/utility submodules (the M4 Base/Units/Console surface).
     from . import Base, Units, Console
 
+    addDocumentObserver = _fc.addDocumentObserver
+    removeDocumentObserver = _fc.removeDocumentObserver
+
     # `fc` has no App/registry, so the facade owns it: a name -> Document map,
     # an "active" pointer, and FreeCAD-style unique name allocation.
     _documents = {}
@@ -87,6 +90,11 @@ if backend == "fc":
 
     def getDocument(name):
         return _documents.get(name)
+
+    def setActiveDocument(name):
+        global _active
+        if name in _documents:
+            _active = _documents[name]
 
     def listDocuments():
         return list(_documents)
@@ -177,3 +185,15 @@ class ParameterGrp:
 def ParamGet(path="", create=True):
     """Return the parameter group rooted at ``path`` (in-memory)."""
     return ParameterGrp(path)
+
+
+class PropertyType:
+    """Property type bit flags (``FreeCAD.PropertyType.*``)."""
+
+    Prop_None = 0
+    Prop_ReadOnly = 1
+    Prop_Transient = 2
+    Prop_Hidden = 4
+    Prop_Output = 8
+    Prop_NoRecompute = 16
+    Prop_NoPersist = 32

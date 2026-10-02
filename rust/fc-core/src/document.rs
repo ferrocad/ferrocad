@@ -28,6 +28,8 @@ pub struct DocumentObject {
     pub extensions: BTreeSet<String>,
     /// Set by `enforceRecompute`; cleared when the object recomputes.
     pub must_execute: bool,
+    /// Opaque base64-pickled Python state (instance `__dict__` + `Proxy`).
+    pub python_state: Option<String>,
 }
 
 #[derive(Default)]
@@ -85,6 +87,7 @@ impl Document {
                 expressions: BTreeMap::new(),
                 extensions: BTreeSet::new(),
                 must_execute: false,
+                python_state: None,
             },
         );
         for observer in &mut self.observers {
@@ -95,6 +98,10 @@ impl Document {
 
     pub fn object(&self, id: ObjectId) -> Option<&DocumentObject> {
         self.objects.get(&id)
+    }
+
+    pub fn object_mut(&mut self, id: ObjectId) -> Option<&mut DocumentObject> {
+        self.objects.get_mut(&id)
     }
 
     pub fn object_ids(&self) -> Vec<ObjectId> {
@@ -428,6 +435,7 @@ impl Document {
                         .collect(),
                     expressions: o.expressions.clone(),
                     extensions: o.extensions.iter().cloned().collect(),
+                    python_state: o.python_state.clone(),
                 })
             })
             .collect();
@@ -447,6 +455,7 @@ impl Document {
                 }
                 o.expressions = obj.expressions.clone();
                 o.extensions = obj.extensions.iter().cloned().collect();
+                o.python_state = obj.python_state.clone();
             }
         }
         doc
@@ -487,6 +496,7 @@ impl Document {
                 .collect(),
             expressions: o.expressions.clone(),
             extensions: o.extensions.iter().cloned().collect(),
+            python_state: o.python_state.clone(),
         })
     }
 
@@ -506,6 +516,7 @@ impl Document {
         }
         o.expressions = saved.expressions;
         o.extensions = saved.extensions.into_iter().collect();
+        o.python_state = saved.python_state;
         Ok(())
     }
 
@@ -540,6 +551,8 @@ pub struct SavedObject {
     pub properties: BTreeMap<String, Property>,
     pub expressions: BTreeMap<String, String>,
     pub extensions: BTreeSet<String>,
+    #[serde(default)]
+    pub python_state: Option<String>,
 }
 
 /// Extension inheritance: true if `ext` is `base` or derives from it.

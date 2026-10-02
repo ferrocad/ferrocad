@@ -120,6 +120,171 @@ fn fire_obj_str(slot: &str, obj: &Bound<'_, PyDocumentObject>, extra: &str) {
 }
 
 // ---------------------------------------------------------------------------
+// Pickling helpers (for `PropertyPythonObject` and Python instance state)
+// ---------------------------------------------------------------------------
+
+/// Pickle a Python value to a base64 string.
+fn pickle_b64(py: Python<'_>, value: &Bound<'_, PyAny>) -> PyResult<String> {
+    let pickle = py.import("pickle")?;
+    let base64 = py.import("base64")?;
+    let data = pickle.call_method1("dumps", (value,))?;
+    let encoded = base64.call_method1("b64encode", (data,))?;
+    encoded.call_method0("decode")?.extract()
+}
+
+/// Unpickle a base64 string back into a Python value.
+fn unpickle_b64<'py>(py: Python<'py>, data: &str) -> PyResult<Bound<'py, PyAny>> {
+    let pickle = py.import("pickle")?;
+    let base64 = py.import("base64")?;
+    let raw = base64.call_method1("b64decode", (data,))?;
+    pickle.call_method1("loads", (raw,))
+}
+
+/// Capture an object's Python instance state (`__dict__` + `Proxy`) as a base64
+/// pickle, or `None` when there is nothing to persist.
+fn capture_object_state(py: Python<'_>, obj: &Bound<'_, PyDocumentObject>) -> Option<String> {
+    let dict = obj.getattr("__dict__").ok()?.downcast_into::<PyDict>().ok()?;
+    if dict.is_empty() {
+        return None;
+    }
+
+    let payload = PyDict::new(py);
+    let attrs = PyDict::new(py);
+    for (k, v) in dict.iter() {
+        if k.extract::<String>().map(|s| s == "Proxy").unwrap_or(false) {
+            continue;
+        }
+        let _ = attrs.set_item(k, v);
+    }
+    let _ = payload.set_item("attrs", &attrs);
+
+    if let Ok(Some(proxy)) = dict.get_item("Proxy") {
+        if !proxy.is_none() {
+            let info = PyDict::new(py);
+            let module: String = proxy
+                .getattr("__module__")
+                .and_then(|m| m.extract())
+                .unwrap_or_default();
+            let class: String = proxy
+                .get_type()
+                .name()
+                .and_then(|n| n.extract())
+                .unwrap_or_default();
+            // FreeCAD protocol: `Proxy.dumps()` if present, else the proxy dict.
+            let data = if proxy.hasattr("dumps").unwrap_or(false) {
+                proxy.call_method0("dumps")
+            } else {
+                proxy.getattr("__dict__")
+            }
+            .unwrap_or_else(|_| py.None().into_bound(py));
+            let _ = info.set_item("module", module);
+            let _ = info.set_item("class", class);
+            let _ = info.set_item("data", data);
+            let _ = payload.set_item("proxy", info);
+        }
+    }
+
+    pickle_b64(py, payload.as_any()).ok()
+}
+
+/// Restore an object's Python instance state from a `capture_object_state` blob.
+fn apply_object_state(
+    py: Python<'_>,
+    obj: &Bound<'_, PyDocumentObject>,
+    state: &str,
+) -> PyResult<()> {
+    let payload = unpickle_b64(py, state)?;
+    let payload = payload.downcast::<PyDict>()?;
+
+    if let Ok(Some(attrs)) = payload.get_item("attrs") {
+        if let Ok(attrs) = attrs.downcast_into::<PyDict>() {
+            let dict = obj.getattr("__dict__")?.downcast_into::<PyDict>()?;
+            for (k, v) in attrs.iter() {
+                dict.set_item(k, v)?;
+            }
+        }
+    }
+
+    if let Ok(Some(proxy_info)) = payload.get_item("proxy") {
+        let info = proxy_info.downcast_into::<PyDict>()?;
+        let module: String = info
+            .get_item("module")?
+            .and_then(|m| m.extract().ok())
+            .unwrap_or_default();
+        let class: String = info
+            .get_item("class")?
+            .and_then(|m| m.extract().ok())
+            .unwrap_or_default();
+        let data = info
+            .get_item("data")?
+            .unwrap_or_else(|| py.None().into_bound(py));
+        if !module.is_empty() && !class.is_empty() {
+            let sys = py.import("sys")?;
+            let modules = sys.getattr("modules")?.downcast_into::<PyDict>()?;
+            let module_obj = match modules.get_item(&module)? {
+                Some(m) => m,
+                None => py
+                    .import("importlib")?
+                    .call_method1("import_module", (&module,))?,
+            };
+            if let Ok(cls) = module_obj.getattr(class.as_str()) {
+                // Bypass `__init__` (which may require the object argument).
+                let proxy = cls.getattr("__new__")?.call1((&cls,))?;
+                if proxy.hasattr("loads")? {
+                    proxy.call_method1("loads", (data,))?;
+                } else if let Ok(d) = data.downcast::<PyDict>() {
+                    let pd = proxy.getattr("__dict__")?.downcast_into::<PyDict>()?;
+                    for (k, v) in d.iter() {
+                        pd.set_item(k, v)?;
+                    }
+                }
+                obj.setattr("Proxy", proxy)?;
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Capture Python state for every object into its core `python_state` field.
+fn capture_all_python_states(
+    py: Python<'_>,
+    doc_py: &Py<PyDocument>,
+    inner: &Arc<Mutex<CoreDocument>>,
+) {
+    let ids = inner.lock().unwrap().object_ids();
+    let mut states: Vec<(ObjectId, Option<String>)> = Vec::new();
+    for id in ids {
+        let obj = get_or_create_object(py, doc_py, inner, id);
+        states.push((id, capture_object_state(py, obj.bind(py))));
+    }
+    let mut doc = inner.lock().unwrap();
+    for (id, state) in states {
+        if let Some(o) = doc.object_mut(id) {
+            o.python_state = state;
+        }
+    }
+}
+
+/// Apply every object's core `python_state` back onto its Python object.
+fn apply_all_python_states(py: Python<'_>, doc_py: &Py<PyDocument>, inner: &Arc<Mutex<CoreDocument>>) {
+    let states: Vec<(ObjectId, String)> = {
+        let doc = inner.lock().unwrap();
+        doc.object_ids()
+            .into_iter()
+            .filter_map(|id| {
+                doc.object(id)
+                    .and_then(|o| o.python_state.clone())
+                    .map(|s| (id, s))
+            })
+            .collect()
+    };
+    for (id, state) in states {
+        let obj = get_or_create_object(py, doc_py, inner, id);
+        let _ = apply_object_state(py, obj.bind(py), &state);
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Unit
 // ---------------------------------------------------------------------------
 
@@ -355,6 +520,15 @@ fn property_to_py(py: Python<'_>, value: &Property) -> PyObject {
             .collect::<Vec<_>>()
             .into_py_any(py)
             .unwrap(),
+        Property::PythonObject(s) => {
+            if s.is_empty() {
+                py.None()
+            } else {
+                unpickle_b64(py, s)
+                    .unwrap_or_else(|_| py.None().into_bound(py))
+                    .unbind()
+            }
+        }
     }
 }
 
@@ -455,6 +629,8 @@ fn default_property(type_id: &str) -> Property {
         Property::LinkSub(String::new(), vec![])
     } else if t.ends_with("colorlist") || t.ends_with("colourlist") {
         Property::ColorList(vec![])
+    } else if t.ends_with("pythonobject") {
+        Property::PythonObject(String::new())
     } else if t.ends_with("linklist") {
         Property::LinkList(vec![])
     } else if t.ends_with("link") || t.ends_with("linksub") || t.ends_with("linksublist") {
@@ -1022,10 +1198,13 @@ impl PyDocument {
 
     // -- persistence ---------------------------------------------------------
     fn saveAs(slf: &Bound<'_, Self>, path: &str) -> PyResult<()> {
+        let py = slf.py();
         let name = slf.borrow().name.clone();
+        let inner = Arc::clone(&slf.borrow().inner);
+        let doc_py: Py<PyDocument> = slf.clone().unbind();
         fire_doc_str("slotStartSaveDocument", slf, path);
-        slf.borrow()
-            .inner
+        capture_all_python_states(py, &doc_py, &inner);
+        inner
             .lock()
             .unwrap()
             .save_to_file(&name, path)
@@ -1036,15 +1215,18 @@ impl PyDocument {
     }
 
     fn save(slf: &Bound<'_, Self>) -> PyResult<()> {
+        let py = slf.py();
         let (name, path) = {
             let this = slf.borrow();
             (this.name.clone(), this.file_name.clone())
         };
         let path = path
             .ok_or_else(|| PyValueError::new_err("document has no file name; use saveAs first"))?;
+        let inner = Arc::clone(&slf.borrow().inner);
+        let doc_py: Py<PyDocument> = slf.clone().unbind();
         fire_doc_str("slotStartSaveDocument", slf, &path);
-        slf.borrow()
-            .inner
+        capture_all_python_states(py, &doc_py, &inner);
+        inner
             .lock()
             .unwrap()
             .save_to_file(&name, &path)
@@ -1054,6 +1236,7 @@ impl PyDocument {
     }
 
     fn load(slf: &Bound<'_, Self>, path: &str) -> PyResult<()> {
+        let py = slf.py();
         let saved = CoreDocument::load_from_file(path).map_err(PyValueError::new_err)?;
         let doc_py: Py<PyDocument> = slf.clone().unbind();
         forget_document(&doc_py);
@@ -1063,6 +1246,9 @@ impl PyDocument {
         this.file_name = Some(path.to_string());
         this.inner = Arc::new(Mutex::new(CoreDocument::from_saved(&saved)));
         this.meta = Arc::new(Mutex::new(BTreeMap::new()));
+        drop(this);
+        let inner = Arc::clone(&slf.borrow().inner);
+        apply_all_python_states(py, &doc_py, &inner);
         Ok(())
     }
 
@@ -1217,9 +1403,10 @@ impl PyDocument {
         let _ = Compression;
         let py = slf.py();
         let name = slf.borrow().name.clone();
-        let data = slf
-            .borrow()
-            .inner
+        let inner = Arc::clone(&slf.borrow().inner);
+        let doc_py: Py<PyDocument> = slf.clone().unbind();
+        capture_all_python_states(py, &doc_py, &inner);
+        let data = inner
             .lock()
             .unwrap()
             .dump(&name)
@@ -1229,17 +1416,23 @@ impl PyDocument {
 
     /// Replace this document's content from a `dumpContent` payload.
     fn restoreContent(slf: &Bound<'_, Self>, data: &Bound<'_, PyAny>) -> PyResult<()> {
+        let py = slf.py();
         let bytes: Vec<u8> = data.extract()?;
-        slf.borrow()
-            .inner
+        let doc_py: Py<PyDocument> = slf.clone().unbind();
+        forget_document(&doc_py);
+        let inner = Arc::clone(&slf.borrow().inner);
+        inner
             .lock()
             .unwrap()
             .restore_from_bytes(&bytes)
-            .map_err(PyValueError::new_err)
+            .map_err(PyValueError::new_err)?;
+        apply_all_python_states(py, &doc_py, &inner);
+        Ok(())
     }
 
     /// Re-load the document from its saved file (clearing current content).
     fn restore(slf: &Bound<'_, Self>) -> PyResult<()> {
+        let py = slf.py();
         let path = slf
             .borrow()
             .file_name
@@ -1249,6 +1442,8 @@ impl PyDocument {
         let doc_py: Py<PyDocument> = slf.clone().unbind();
         forget_document(&doc_py);
         slf.borrow_mut().inner = Arc::new(Mutex::new(CoreDocument::from_saved(&saved)));
+        let inner = Arc::clone(&slf.borrow().inner);
+        apply_all_python_states(py, &doc_py, &inner);
         Ok(())
     }
 
@@ -1944,6 +2139,7 @@ impl PyDocumentObject {
                 Property::LinkSub(obj, subs)
             }
             Some(Property::ColorList(_)) => Property::ColorList(py_to_color_list(value)?),
+            Some(Property::PythonObject(_)) => Property::PythonObject(pickle_b64(slf.py(), value)?),
             Some(_) => py_to_property(value)?,
             // Not a known property: store it as a Python attribute (`Proxy`, …).
             None => return set_instance_attr(slf, &name, value),
@@ -2413,7 +2609,7 @@ fn newDocument(py: Python<'_>, name: Option<String>) -> PyResult<Py<PyDocument>>
 #[pyfunction]
 fn openDocument(py: Python<'_>, path: &str) -> PyResult<Py<PyDocument>> {
     let saved = CoreDocument::load_from_file(path).map_err(PyValueError::new_err)?;
-    Ok(Py::new(
+    let doc = Py::new(
         py,
         PyDocument {
             name: saved.name.clone(),
@@ -2424,7 +2620,10 @@ fn openDocument(py: Python<'_>, path: &str) -> PyResult<Py<PyDocument>> {
             meta: Arc::new(Mutex::new(BTreeMap::new())),
             comment: Mutex::new(String::new()),
         },
-    )?)
+    )?;
+    let inner = Arc::clone(&doc.bind(py).borrow().inner);
+    apply_all_python_states(py, &doc, &inner);
+    Ok(doc)
 }
 
 #[pyfunction]

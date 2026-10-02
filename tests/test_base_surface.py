@@ -700,5 +700,54 @@ class TestPersistenceDumpAndRecovery(unittest.TestCase):
         FreeCAD.closeDocument("Recover")
 
 
+class _FeatureProxy:
+    """Module-level proxy (importable for restore), FreeCAD dumps/loads protocol."""
+
+    def __init__(self, obj):
+        self.Dictionary = {}
+        obj.Proxy = self
+
+    def dumps(self):
+        return self.Dictionary
+
+    def loads(self, data):
+        self.Dictionary = data
+
+
+class TestPythonObjectPersistence(unittest.TestCase):
+    def test_python_object_property_roundtrip(self):
+        import os
+        import tempfile
+
+        doc = FreeCAD.newDocument("PyObj")
+        obj = doc.addObject("App::DocumentObject", "Object")
+        obj.addProperty("App::PropertyPythonObject", "Dictionary")
+        obj.Dictionary = {"Stored data": [3, 5, 7]}
+        self.assertEqual(obj.Dictionary, {"Stored data": [3, 5, 7]})
+
+        path = os.path.join(tempfile.gettempdir(), "PyObj.FCStd")
+        doc.saveAs(path)
+        FreeCAD.closeDocument("PyObj")
+        doc = FreeCAD.open(path)
+        self.assertEqual(doc.Object.Dictionary, {"Stored data": [3, 5, 7]})
+        FreeCAD.closeDocument("PyObj")
+
+    def test_proxy_persists_via_dumps_loads(self):
+        import os
+        import tempfile
+
+        doc = FreeCAD.newDocument("ProxyPersist")
+        obj = doc.addObject("App::FeaturePython", "Python")
+        proxy = _FeatureProxy(obj)
+        proxy.Dictionary["Stored data"] = [3, 5, 7]
+
+        path = os.path.join(tempfile.gettempdir(), "ProxyPersist.FCStd")
+        doc.saveAs(path)
+        FreeCAD.closeDocument("ProxyPersist")
+        doc = FreeCAD.open(path)
+        self.assertEqual(doc.Python.Proxy.Dictionary, {"Stored data": [3, 5, 7]})
+        FreeCAD.closeDocument("ProxyPersist")
+
+
 if __name__ == "__main__":
     unittest.main()

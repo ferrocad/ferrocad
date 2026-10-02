@@ -33,6 +33,9 @@ pub enum Property {
     LinkSub(String, Vec<String>),
     /// RGBA colors in the 0..1 range (`App::PropertyColorList`).
     ColorList(Vec<[f64; 4]>),
+    /// An arbitrary Python object, stored as a base64-encoded pickle
+    /// (`App::PropertyPythonObject`, POC simplification).
+    PythonObject(String),
 }
 
 impl Property {
@@ -59,6 +62,7 @@ impl Property {
             Property::LinkList(_) => "App::PropertyLinkList",
             Property::LinkSub(_, _) => "App::PropertyLinkSub",
             Property::ColorList(_) => "App::PropertyColorList",
+            Property::PythonObject(_) => "App::PropertyPythonObject",
         }
     }
 }

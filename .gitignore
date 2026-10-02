@@ -12,3 +12,6 @@
 # Python
 __pycache__/
 *.py[cod]
+
+# Generated skeleton bindings (M3c)
+/python/fc_gen.abi3.so

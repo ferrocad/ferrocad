@@ -40,6 +40,7 @@ class Param:
     kind: str          # posonly | pos | vararg | kwonly | kwarg
     annotation: str    # "" when unannotated
     default: bool
+    default_value: str = ""   # unparse of the default expr, "" when absent
 
 
 @dataclass
@@ -128,22 +129,24 @@ def _signature(node: ast.FunctionDef | ast.AsyncFunctionDef) -> Signature:
     a = node.args
     params: list[Param] = []
 
-    for p in a.posonlyargs:
-        params.append(Param(p.arg, "posonly", _ann(p.annotation), False))
-
+    # Positional params = posonlyargs + args; `defaults` aligns to the trailing
+    # entries of that combined list (CPython stores pos-only defaults here too).
+    positional = list(a.posonlyargs) + list(a.args)
+    n_posonly = len(a.posonlyargs)
     n_defaults = len(a.defaults)
-    n_pos = len(a.args)
-    n_no_default = n_pos - n_defaults
-    for i, p in enumerate(a.args):
-        params.append(Param(p.arg, "pos", _ann(p.annotation), i >= n_no_default))
+    n_no_default = len(positional) - n_defaults
+    for i, p in enumerate(positional):
+        kind = "posonly" if i < n_posonly else "pos"
+        default = i >= n_no_default
+        default_value = _value(a.defaults[i - n_no_default]) if default else ""
+        params.append(Param(p.arg, kind, _ann(p.annotation), default, default_value))
 
     if a.vararg is not None:
         params.append(Param(a.vararg.arg, "vararg", _ann(a.vararg.annotation), False))
 
     for i, p in enumerate(a.kwonlyargs):
-        params.append(
-            Param(p.arg, "kwonly", _ann(p.annotation), a.kw_defaults[i] is not None)
-        )
+        d = a.kw_defaults[i]
+        params.append(Param(p.arg, "kwonly", _ann(p.annotation), d is not None, _value(d)))
 
     if a.kwarg is not None:
         params.append(Param(a.kwarg.arg, "kwarg", _ann(a.kwarg.annotation), False))

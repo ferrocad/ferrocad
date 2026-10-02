@@ -1,0 +1,12 @@
+[package]
+name = "fc-gen"
+version = "0.1.0"
+edition = "2021"
+description = "Generated PyO3 skeleton bindings from FreeCAD .pyi stubs (M3c)"
+
+[lib]
+name = "fc_gen"
+crate-type = ["cdylib"]
+
+[dependencies]
+pyo3 = { version = "0.25", features = ["extension-module", "abi3-py38"] }

@@ -37,6 +37,9 @@ cargo build --release --offline --manifest-path "$HERE/rust/freecad-core/Cargo.t
 echo "== building fc-python (PyO3 over fc-core) =="
 cargo build --release --offline --manifest-path "$HERE/rust/fc-python/Cargo.toml"
 
+echo "== building fc-gen (generated skeleton bindings, M3c) =="
+cargo build --release --offline --manifest-path "$HERE/rust/fc-gen/Cargo.toml"
+
 # Package the PyO3 extension (importable as FreeCAD._core; `.abi3.so` is a
 # recognised extension suffix).
 py_src="$HERE/rust/freecad-py/target/release/libfreecad_py.so"
@@ -62,6 +65,13 @@ fc_src="$HERE/rust/fc-python/target/release/libfc_python.so"
 if [ -f "$fc_src" ]; then
     cp "$fc_src" "$HERE/python/fc.abi3.so"
     echo "packaged python/fc.abi3.so"
+fi
+
+# Package the generated skeleton bindings (M3c).
+gen_src="$HERE/rust/fc-gen/target/release/libfc_gen.so"
+if [ -f "$gen_src" ]; then
+    cp "$gen_src" "$HERE/python/fc_gen.abi3.so"
+    echo "packaged python/fc_gen.abi3.so"
 fi
 
 echo "build OK"

@@ -39,7 +39,7 @@ def main() -> int:
         print("  - %s (%s) label=%r" % (o.Name, o.TypeId, o.Label))
     print("obj.Description :", obj.Description)
     print("Properties      :", obj.PropertiesList)
-    print("Documents       :", FreeCAD.listDocuments())
+    print("Documents       :", sorted(FreeCAD.listDocuments()))
 
     FreeCAD.closeDocument(doc.Name)
     print("Active after close:", FreeCAD.ActiveDocument)

@@ -384,6 +384,35 @@ class TestObjectExtras(unittest.TestCase):
         self.assertAlmostEqual(o1.ColourList[0][3], 1.0)  # alpha defaults to 1
         FreeCAD.closeDocument("Extras")
 
+    def test_link_sub_none_roundtrip(self):
+        doc = FreeCAD.newDocument("LinkSub")
+        obj = doc.addObject("App::FeaturePython", "Reference")
+        obj.addProperty("App::PropertyLinkSub", "Axis")
+        self.assertIsNone(obj.Axis)
+        obj.Axis = (None, "X_Axis")
+        self.assertEqual(obj.Axis, (None, ["X_Axis"]))
+        obj.Axis = (None, ["Y_Axis"])
+        self.assertEqual(obj.Axis, (None, ["Y_Axis"]))
+        obj.Axis = None
+        self.assertIsNone(obj.Axis)
+        obj.Axis = (None, [])
+        self.assertIsNone(obj.Axis)
+        with self.assertRaises(TypeError):
+            obj.Axis = (None, [1])
+        with self.assertRaises(TypeError):
+            obj.Axis = (1, ["X_Axis"])
+        FreeCAD.closeDocument("LinkSub")
+
+
+class TestModuleSurface(unittest.TestCase):
+    def test_list_documents_is_a_dict(self):
+        doc = FreeCAD.newDocument("ListDocs")
+        docs = FreeCAD.listDocuments()
+        self.assertIsInstance(docs, dict)
+        self.assertIn("ListDocs", docs)
+        self.assertIs(docs["ListDocs"], doc)
+        FreeCAD.closeDocument("ListDocs")
+
 
 if __name__ == "__main__":
     unittest.main()

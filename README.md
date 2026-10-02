@@ -1,6 +1,6 @@
 # freecad-rs-poc
 
-**Milestones 0–4 (slice 9):** run a FreeCAD headless "hello world" Python script on a pure-Rust
+**Milestones 0–4 (slice 10):** run a FreeCAD headless "hello world" Python script on a pure-Rust
 core, with the C++ Python bindings replaced by Rust bindings.
 
 * **M0** — hello world on a Rust object model, bridged to Python over a C ABI + `ctypes`.
@@ -33,7 +33,10 @@ core, with the C++ Python bindings replaced by Rust bindings.
   (`obj.Proxy`) via an instance `__dict__`; object `__hash__`; `abi3` minimum 3.10.
 * **M4 (slice 9)** — `Document.Meta` + `Document.settings(namespace)` (typed get/set, validation),
   `Document.RootObjects`/`TopologicalSortedObjects`, `DocumentObject.ID`, id-aware `getObject`,
-  `ColorList`; conformance now **70 passing** (`StringHasher.py` 4/4, `UnitTests.py` 12/12).
+  `ColorList`.
+* **M4 (slice 10)** — `PropertyLinkSub` (`(object, subnames)` round-trip); `listDocuments()` returns
+  a dict (upstream shape) and `openDocument` is exposed; conformance now **75 passing**
+  (`StringHasher.py` 4/4, `UnitTests.py` 12/12).
 
 This is a proof of concept, not a product. It exists to validate the single
 riskiest assumption of the rewrite plan: *that a Python script written against

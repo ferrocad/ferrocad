@@ -241,6 +241,10 @@ fn property_to_py(py: Python<'_>, value: &Property) -> PyObject {
         Property::Matrix(m) => PyMatrix { inner: *m }.into_py_any(py).unwrap(),
         Property::Link(s) => s.clone().into_py_any(py).unwrap(),
         Property::LinkList(v) => v.clone().into_py_any(py).unwrap(),
+        Property::LinkSub(s, subs) => {
+            let obj = if s.is_empty() { py.None() } else { s.clone().into_py_any(py).unwrap() };
+            (obj, subs.clone()).into_py_any(py).unwrap()
+        }
         Property::ColorList(v) => v
             .iter()
             .map(|c| (c[0], c[1], c[2], c[3]))
@@ -341,6 +345,10 @@ fn default_property(type_id: &str) -> Property {
         Property::Float(0.0)
     } else if t.ends_with("bool") {
         Property::Bool(false)
+    } else if t.ends_with("linksublist") {
+        Property::LinkList(vec![])
+    } else if t.ends_with("linksub") {
+        Property::LinkSub(String::new(), vec![])
     } else if t.ends_with("colorlist") || t.ends_with("colourlist") {
         Property::ColorList(vec![])
     } else if t.ends_with("linklist") {
@@ -482,6 +490,44 @@ fn py_to_color_list(value: &Bound<'_, PyAny>) -> PyResult<Vec<[f64; 4]>> {
     Err(PyTypeError::new_err(
         "ColorList expects a list of (r, g, b[, a]) tuples",
     ))
+}
+
+/// Coerce a value into a link-sub `(object_name, subnames)` pair.
+fn py_to_link_sub(value: &Bound<'_, PyAny>) -> PyResult<(String, Vec<String>)> {
+    if value.is_none() {
+        return Ok((String::new(), vec![]));
+    }
+    let t = value
+        .downcast::<PyTuple>()
+        .map_err(|_| PyTypeError::new_err("LinkSub expects an (object, subnames) tuple"))?;
+    if t.len() != 2 {
+        return Err(PyTypeError::new_err("LinkSub expects a 2-tuple"));
+    }
+    let obj = t.get_item(0)?;
+    let subs = t.get_item(1)?;
+    let name = if obj.is_none() {
+        String::new()
+    } else if let Ok(o) = obj.downcast::<PyDocumentObject>() {
+        o.borrow().Name()
+    } else {
+        return Err(PyTypeError::new_err(
+            "LinkSub object must be a DocumentObject or None",
+        ));
+    };
+    let names: Vec<String> = if let Ok(s) = subs.extract::<String>() {
+        if s.is_empty() {
+            vec![]
+        } else {
+            vec![s]
+        }
+    } else if let Ok(v) = subs.extract::<Vec<String>>() {
+        v
+    } else {
+        return Err(PyTypeError::new_err(
+            "LinkSub subnames must be a string or a list of strings",
+        ));
+    };
+    Ok((name, names))
 }
 
 /// Store an arbitrary Python attribute on a document object (its `__dict__`),
@@ -1558,6 +1604,27 @@ impl PyDocumentObject {
                     .collect();
                 Ok(objs.into_py_any(py).unwrap())
             }
+            // LinkSub exposes `(object_or_None, [subnames])`, or None when empty.
+            Some(Property::LinkSub(obj, subs)) => {
+                if obj.is_empty() && subs.is_empty() {
+                    return Ok(py.None());
+                }
+                let obj_py = if obj.is_empty() {
+                    py.None()
+                } else {
+                    match inner.lock().unwrap().get_by_name(&obj) {
+                        Some(id) => PyDocumentObject {
+                            doc: slf.borrow().doc.clone_ref(py),
+                            inner: Arc::clone(&inner),
+                            id,
+                        }
+                        .into_py_any(py)
+                        .unwrap(),
+                        None => py.None(),
+                    }
+                };
+                Ok((obj_py, subs.clone()).into_py_any(py).unwrap())
+            }
             Some(p) => Ok(property_to_py(py, &p)),
             None => {
                 let type_id = {
@@ -1596,6 +1663,10 @@ impl PyDocumentObject {
         let property = match existing {
             Some(Property::Link(_)) => Property::Link(py_to_link(value)?),
             Some(Property::LinkList(_)) => Property::LinkList(py_to_link_list(value)?),
+            Some(Property::LinkSub(_, _)) => {
+                let (obj, subs) = py_to_link_sub(value)?;
+                Property::LinkSub(obj, subs)
+            }
             Some(Property::ColorList(_)) => Property::ColorList(py_to_color_list(value)?),
             Some(_) => py_to_property(value)?,
             // Not a known property: store it as a Python attribute (`Proxy`, …).

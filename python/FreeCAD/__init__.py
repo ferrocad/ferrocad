@@ -80,6 +80,10 @@ if backend == "fc":
         _active = doc
         return doc
 
+    # Upstream alias (`FreeCAD.openDocument(path)`).
+    def openDocument(path, hidden=False, temporary=False):
+        return open(path, hidden=hidden, temporary=temporary)
+
     def closeDocument(name):
         global _active
         if name not in _documents:
@@ -97,7 +101,7 @@ if backend == "fc":
             _active = _documents[name]
 
     def listDocuments():
-        return list(_documents)
+        return dict(_documents)
 
     def activeDocument():
         return _active
@@ -122,6 +126,7 @@ __all__ = [
     "closeDocument",
     "getDocument",
     "listDocuments",
+    "openDocument",
     "activeDocument",
     "Document",
     "DocumentObject",

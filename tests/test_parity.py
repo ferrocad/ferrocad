@@ -36,7 +36,7 @@ class TestDocument(unittest.TestCase):
         self.assertEqual(doc.Name, "DocA")
         self.assertEqual(doc.Label, "DocA")
         self.assertIs(FreeCAD.ActiveDocument, doc)
-        self.assertEqual(FreeCAD.listDocuments(), ["DocA"])
+        self.assertEqual(sorted(FreeCAD.listDocuments()), ["DocA"])
 
     def test_duplicate_names_are_made_unique(self):
         FreeCAD.newDocument("Dup")

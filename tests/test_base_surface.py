@@ -6,6 +6,7 @@ Exercises the new facade modules exposed from ``FreeCAD`` (over the Rust
 Run: PYTHONPATH=python python3 -m unittest tests.test_base_surface -v
 """
 
+import math
 import os
 import sys
 import unittest
@@ -108,9 +109,12 @@ class TestGeometry(unittest.TestCase):
         p.Rotation = (0, 0, 1, 0)
 
     def test_rotation_from_axis_angle(self):
-        r = FreeCAD.Rotation(FreeCAD.Vector(0, 0, 1), 1.0)
-        self.assertAlmostEqual(r.Angle, 1.0)
+        # FreeCAD's two-argument form takes the angle in degrees.
+        r = FreeCAD.Rotation(FreeCAD.Vector(0, 0, 1), 90)
+        self.assertAlmostEqual(r.Angle, math.pi / 2)
         r.Axis = (1, 0, 0)
+        r = FreeCAD.Rotation(1, 0, 0, 0)  # (x, y, z, w) quaternion: 180° about X
+        self.assertAlmostEqual(abs(r.Angle), math.pi)
 
     def test_typeid(self):
         t = FreeCAD.Base.TypeId.fromName("App::FeatureTest")
@@ -809,6 +813,105 @@ class TestFileIncluded(unittest.TestCase):
         with open(obj.File, "rb") as handle:
             self.assertEqual(handle.read(), b"payload")
         FreeCAD.closeDocument("FileInc")
+
+
+class TestBaseTypes(unittest.TestCase):
+    def test_parameter_group_nesting_and_typed_values(self):
+        grp = FreeCAD.ParamGet("System parameter:TestPy")
+        grp.SetInt("i", 4711)
+        grp.SetFloat("f", 4711.4711)
+        grp.SetBool("b", 1)
+        grp.SetString("s", "abc")
+        self.assertEqual(grp.GetInt("i"), 4711)
+        self.assertAlmostEqual(grp.GetFloat("f"), 4711.4711)
+        self.assertTrue(grp.GetBool("b"))
+        self.assertEqual(grp.GetString("s"), "abc")
+        grp.RemInt("i")
+        self.assertEqual(grp.GetInt("i", 1), 1)
+
+        sub = grp.GetGroup("////Sub1/////Sub2/////")
+        self.assertTrue(grp.HasGroup("Sub1/Sub2"))
+        self.assertEqual(sub.GetGroupName(), "Sub2")
+        sub.SetInt("n", 5)
+        self.assertEqual(sub.GetInt("n"), 5)
+        with self.assertRaises(ValueError):
+            grp.GetGroup("")
+        grp.Clear()
+
+    def test_vector2d_rotate(self):
+        v = FreeCAD.Base.Vector2d(1.0, 1.0)
+        v.rotate(math.pi / 2)
+        self.assertAlmostEqual(v.x, -1.0)
+        self.assertAlmostEqual(v.y, 1.0)
+
+    def test_material_equality(self):
+        a = FreeCAD.Material()
+        b = FreeCAD.Material()
+        self.assertEqual(a, b)
+        a.DiffuseColor = (1.0, 0.0, 0.0, 1.0)
+        self.assertNotEqual(a, b)
+
+    def test_bound_box(self):
+        b = FreeCAD.BoundBox()
+        b.setVoid()
+        self.assertFalse(b.isValid())
+        b.add(0, 0, 0)
+        b.add(2, 2, 2)
+        self.assertTrue(b.isValid())
+        self.assertEqual(b.XLength, 2)
+        self.assertEqual(b.Center, FreeCAD.Vector(1, 1, 1))
+        self.assertTrue(b.isInside(b.Center))
+        self.assertFalse(b.intersected(FreeCAD.BoundBox(4, 4, 4, 6, 6, 6)).isValid())
+
+    def test_int_pair_list(self):
+        doc = FreeCAD.newDocument("Pairs")
+        obj = doc.addObject("App::FeaturePython", "P")
+        obj.addProperty("App::PropertyIntPairList", "Values")
+        self.assertEqual(obj.Values, [])
+        obj.Values = [(0, 2), [-3, 4]]
+        self.assertEqual(obj.Values, [(0, 2), (-3, 4)])
+        obj.Values = {1: (5, 6)}  # indexed assignment
+        self.assertEqual(obj.Values, [(0, 2), (5, 6)])
+        with self.assertRaises(TypeError):
+            obj.Values = [(1, 2), (1.0, 2)]
+        self.assertEqual(obj.Values, [(0, 2), (5, 6)])
+        FreeCAD.closeDocument("Pairs")
+
+    def test_matrix_and_rotation(self):
+        m = FreeCAD.Matrix(4, 2, 1, 0, 1, 1, 1, 0, 0, 0, 1, 0, 0, 0, 0, 1)
+        self.assertAlmostEqual(m.A11, 4.0)
+        self.assertTrue((m * m.inverse()).isUnity())
+        self.assertTrue((m * 0.0).isNull())
+        m.nullify()
+        self.assertTrue(m.isNull())
+        m.unity()
+        self.assertTrue(m.isUnity())
+
+        m2 = FreeCAD.Matrix()
+        m2.move(10, 5, -3)
+        m2.rotateY(0.2)
+        m3 = FreeCAD.Matrix()
+        m3.move(10, 5, -3)
+        m4 = FreeCAD.Matrix()
+        m4.rotateY(0.2)
+        self.assertEqual(m2, m4 * m3)
+
+        r = FreeCAD.Rotation(45, 30, 0)  # yaw, pitch, roll (degrees)
+        self.assertEqual(type(r.toMatrix()), FreeCAD.Matrix)
+        self.assertTrue(r.isSame(FreeCAD.Rotation(45, 30, 0)))
+
+    def test_placement_inverse_and_matrix(self):
+        # NOTE: `Placement` sub-objects are returned by value in FreeCAD (the C++
+        # getters copy), so `p.Rotation.Angle = ...` mutates a temporary and does
+        # not propagate. Set the whole rotation explicitly instead.
+        p = FreeCAD.Placement(
+            FreeCAD.Vector(1, 2, 3),
+            FreeCAD.Rotation(FreeCAD.Vector(0, 0, 1), 90.0),
+        )
+        self.assertAlmostEqual(abs(p.inverse().Rotation.Angle), p.Rotation.Angle)
+        self.assertTrue(p.toMatrix().isUnity() is False)
+        q = FreeCAD.Placement(p.toMatrix())
+        self.assertTrue(q.isSame(p, 1e-9))
 
 
 if __name__ == "__main__":

@@ -42,6 +42,9 @@ if backend == "fc":
     Placement = _fc.Placement
     Rotation = _fc.Rotation
     TypeId = _fc.TypeId
+    BoundBox = _fc.BoundBox
+    Material = _fc.Material
+    Vector2d = _fc.Vector2d
     GuiUp = 0
     __version__ = _fc.__version__
 
@@ -151,46 +154,140 @@ def __getattr__(name):
 
 
 # ---------------------------------------------------------------------------
-# Parameters (App-level config store) — minimal in-memory shim
+# Parameters (App-level config store) — in-memory shim with typed values and
+# nested groups.
 # ---------------------------------------------------------------------------
+
+# root path -> {"values": {(group, name, kind): value}, "groups": {group, ...}}
+_parameter_stores = {}
+
+
+def _param_store(root):
+    return _parameter_stores.setdefault(root, {"values": {}, "groups": set()})
+
+
+def _collapse(path):
+    return "/".join(part for part in path.split("/") if part)
 
 
 class ParameterGrp:
-    """A minimal, in-memory stand-in for ``Base.ParameterGrp``."""
+    """An in-memory stand-in for ``Base.ParameterGrp`` (typed, nested groups)."""
 
     def __init__(self, path=""):
-        self._path = path
-        self._values = {}
+        path = path.strip("/")
+        if ":" in path:
+            root, _, rest = path.partition(":")
+        else:
+            root, rest = path, ""
+        self._init(root, rest.strip("/"), _param_store(root))
 
+    def _init(self, root, group, store):
+        self._root = root
+        self._group = group
+        self._store = store
+        store["groups"].add(group)
+
+    def _full(self, sub):
+        return (self._group + "/" + sub) if self._group else sub
+
+    def _get(self, name, kind, default):
+        return self._store["values"].get((self._group, name, kind), default)
+
+    def _set(self, name, kind, value):
+        self._store["values"][(self._group, name, kind)] = value
+
+    def _rem(self, name, kind):
+        self._store["values"].pop((self._group, name, kind), None)
+
+    # -- groups -------------------------------------------------------------
+    def GetGroup(self, name, _store=None, _group=None):
+        sub = _collapse(name)
+        if not sub:
+            raise ValueError("empty group name")
+        child = ParameterGrp.__new__(ParameterGrp)
+        child._init(self._root, self._full(sub), self._store)
+        return child
+
+    def GetGroupName(self):
+        return self._group.split("/")[-1] if self._group else ""
+
+    def HasGroup(self, name):
+        return self._full(_collapse(name)) in self._store["groups"]
+
+    def RemGroup(self, name):
+        # POC: a live reference keeps the group alive, so this is a no-op.
+        pass
+
+    def Clear(self):
+        group = self._group
+        for key in list(self._store["values"]):
+            if group == "" or key[0] == group or key[0].startswith(group + "/"):
+                del self._store["values"][key]
+
+    # -- typed accessors ----------------------------------------------------
     def GetInt(self, name, default=0):
-        return int(self._values.get(name, default))
-
-    def GetBool(self, name, default=False):
-        return bool(self._values.get(name, default))
-
-    def GetFloat(self, name, default=0.0):
-        return float(self._values.get(name, default))
-
-    def GetString(self, name, default=""):
-        return str(self._values.get(name, default))
+        return int(self._get(name, "int", default))
 
     def SetInt(self, name, value):
-        self._values[name] = int(value)
+        self._set(name, "int", int(value))
+
+    def RemInt(self, name):
+        self._rem(name, "int")
+
+    def GetBool(self, name, default=False):
+        return bool(self._get(name, "bool", default))
 
     def SetBool(self, name, value):
-        self._values[name] = bool(value)
+        self._set(name, "bool", bool(value))
+
+    def RemBool(self, name):
+        self._rem(name, "bool")
+
+    def GetFloat(self, name, default=0.0):
+        return float(self._get(name, "float", default))
 
     def SetFloat(self, name, value):
-        self._values[name] = float(value)
+        self._set(name, "float", float(value))
+
+    def RemFloat(self, name):
+        self._rem(name, "float")
+
+    def GetString(self, name, default=""):
+        return str(self._get(name, "string", default))
 
     def SetString(self, name, value):
-        self._values[name] = str(value)
+        self._set(name, "string", str(value))
 
-    def GetGroup(self, name):
-        return ParameterGrp(self._path + "/" + name)
+    def RemString(self, name):
+        self._rem(name, "string")
+
+    # -- import / export ----------------------------------------------------
+    def Export(self, path):
+        import json
+
+        data = {}
+        group = self._group
+        for (g, name, kind), value in self._store["values"].items():
+            if g == group or g.startswith(group + "/"):
+                rel = g[len(group):].lstrip("/")
+                data["%s\t%s\t%s" % (rel, name, kind)] = value
+        with _builtins.open(path, "w", encoding="utf-8") as handle:
+            json.dump(data, handle)
+
+    def Import(self, path):
+        import json
+
+        with _builtins.open(path, "r", encoding="utf-8") as handle:
+            data = json.load(handle)
+        group = self._group
+        for key, value in data.items():
+            rel, name, kind = key.split("\t")
+            target = (group + "/" + rel) if rel else group
+            self._store["values"][(target, name, kind)] = value
+            self._store["groups"].add(target)
 
     def __repr__(self):
-        return "<ParameterGrp '%s'>" % self._path
+        return "<ParameterGrp '%s:%s'>" % (self._root, self._group)
 
 
 def ParamGet(path="", create=True):

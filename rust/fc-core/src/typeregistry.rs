@@ -78,7 +78,7 @@ pub fn default_properties(type_id: &str) -> Vec<(&'static str, Property)> {
             ("MultRight", Property::Placement(Placement::identity())),
         ],
         "App::FeatureTestAttribute" => vec![
-            ("Object", Property::String(String::new())),
+            ("Object", Property::Link(String::new())),
             ("Attribute", Property::String(String::new())),
         ],
         "App::DocumentObjectGroup" => vec![("Group", Property::LinkList(vec![]))],

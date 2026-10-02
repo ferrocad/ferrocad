@@ -11,7 +11,9 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, OnceLock};
 
 use fc_core::{canonical_name, parse_unit, Document as CoreDocument, Matrix4, ObjectId, Placement, Property, Quantity, Rotation, StringHasher, StringId, TypeId, Unit, Vector3};
-use pyo3::exceptions::{PyAttributeError, PyRuntimeError, PyTypeError, PyValueError};
+use pyo3::exceptions::{
+    PyAttributeError, PyIndexError, PyNotImplementedError, PyRuntimeError, PyTypeError, PyValueError,
+};
 use pyo3::prelude::*;
 use pyo3::types::{PyAny, PyAnyMethods, PyBool, PyBytes, PyDict, PyDictMethods, PyTuple, PyType};
 use pyo3::IntoPyObjectExt;
@@ -531,6 +533,12 @@ fn property_to_py(py: Python<'_>, value: &Property) -> PyObject {
             }
         }
         Property::FileIncluded(s) => s.clone().into_py_any(py).unwrap(),
+        Property::IntPairList(v) => v
+            .iter()
+            .map(|p| *p)
+            .collect::<Vec<_>>()
+            .into_py_any(py)
+            .unwrap(),
     }
 }
 
@@ -635,6 +643,8 @@ fn default_property(type_id: &str) -> Property {
         Property::PythonObject(String::new())
     } else if t.ends_with("fileincluded") {
         Property::FileIncluded(String::new())
+    } else if t.ends_with("intpairlist") {
+        Property::IntPairList(vec![])
     } else if t.ends_with("linklist") {
         Property::LinkList(vec![])
     } else if t.ends_with("link") || t.ends_with("linksub") || t.ends_with("linksublist") {
@@ -812,6 +822,35 @@ fn py_to_link_sub(value: &Bound<'_, PyAny>) -> PyResult<(String, Vec<String>)> {
         ));
     };
     Ok((name, names))
+}
+
+/// Parse one `(int, int)` pair, rejecting wrong arity/types (OverflowError for
+/// out-of-range ints is propagated from the `i64` extraction).
+fn parse_int_pair(item: &Bound<'_, PyAny>) -> PyResult<(i64, i64)> {
+    if item.downcast::<pyo3::types::PyString>().is_ok() {
+        return Err(PyTypeError::new_err("expected an (int, int) pair"));
+    }
+    let items: Vec<Bound<'_, PyAny>> = item
+        .try_iter()
+        .map_err(|_| PyTypeError::new_err("expected an (int, int) pair"))?
+        .collect::<PyResult<Vec<_>>>()
+        .map_err(|_| PyTypeError::new_err("expected an (int, int) pair"))?;
+    if items.len() != 2 {
+        return Err(PyTypeError::new_err("expected an (int, int) pair"));
+    }
+    Ok((items[0].extract::<i64>()?, items[1].extract::<i64>()?))
+}
+
+/// Parse a sequence of `(int, int)` pairs (`App::PropertyIntPairList`).
+fn py_to_int_pair_list(value: &Bound<'_, PyAny>) -> PyResult<Vec<(i64, i64)>> {
+    let mut out = Vec::new();
+    for item in value
+        .try_iter()
+        .map_err(|_| PyTypeError::new_err("expected a list of (int, int) pairs"))?
+    {
+        out.push(parse_int_pair(&item?)?);
+    }
+    Ok(out)
 }
 
 /// Coerce a value into an included-file path: a `(source, name)` tuple copies
@@ -1654,6 +1693,16 @@ impl PyDocumentObject {
             .unwrap_or(false)
     }
 
+    /// The object's state flags (`Touched` vs `Up-to-date`).
+    #[getter]
+    fn State(&self) -> Vec<String> {
+        if self.MustExecute() {
+            vec!["Touched".to_string()]
+        } else {
+            vec!["Up-to-date".to_string()]
+        }
+    }
+
     #[getter]
     fn Document(&self, py: Python<'_>) -> Py<PyDocument> {
         self.doc.clone_ref(py)
@@ -2225,6 +2274,25 @@ impl PyDocumentObject {
                 let transient = doc.bind(slf.py()).borrow().transient_dir();
                 Property::FileIncluded(py_to_file_included(&transient, value)?)
             }
+            Some(Property::IntPairList(existing)) => {
+                if let Ok(dict) = value.downcast::<PyDict>() {
+                    let mut list = existing.clone();
+                    for (k, v) in dict.iter() {
+                        let idx: usize = k
+                            .extract()
+                            .map_err(|_| PyTypeError::new_err("index must be an int"))?;
+                        if idx >= list.len() {
+                            return Err(pyo3::exceptions::PyIndexError::new_err(
+                                "index out of range",
+                            ));
+                        }
+                        list[idx] = parse_int_pair(&v)?;
+                    }
+                    Property::IntPairList(list)
+                } else {
+                    Property::IntPairList(py_to_int_pair_list(value)?)
+                }
+            }
             Some(Property::Float(_)) => match value.extract::<f64>() {
                 Ok(f) => Property::Float(f),
                 Err(_) => py_to_property(value)?,
@@ -2481,13 +2549,205 @@ struct PyMatrix {
     inner: Matrix4,
 }
 
+/// Parse a FreeCAD `A<row><col>` element name (1-based) into a 0-based index.
+fn parse_a_name(name: &str) -> Option<usize> {
+    let b = name.as_bytes();
+    if b.len() == 3 && b[0] == b'A' && (b'1'..=b'4').contains(&b[1]) && (b'1'..=b'4').contains(&b[2])
+    {
+        Some((b[1] - b'1') as usize * 4 + (b[2] - b'1') as usize)
+    } else {
+        None
+    }
+}
+
+/// Extract a 3-vector from `(x, y, z)` or a `Vector` argument tuple.
+fn extract_vec_args(args: &Bound<'_, PyTuple>) -> PyResult<Vector3> {
+    if args.len() == 1 {
+        if let Ok(v) = args.get_item(0)?.extract::<PyRef<'_, PyVector>>() {
+            return Ok(v.inner);
+        }
+    }
+    if args.len() == 3 {
+        return Ok(Vector3::new(
+            args.get_item(0)?.extract()?,
+            args.get_item(1)?.extract()?,
+            args.get_item(2)?.extract()?,
+        ));
+    }
+    Err(PyTypeError::new_err("expected (x, y, z) or a Vector"))
+}
+
 #[pymethods]
 impl PyMatrix {
     #[new]
-    fn new() -> Self {
-        Self { inner: Matrix4::identity() }
+    #[pyo3(signature = (*args))]
+    fn new(args: &Bound<'_, PyTuple>) -> PyResult<Self> {
+        let mut m = Matrix4::identity();
+        match args.len() {
+            0 => {}
+            4 => {
+                for i in 0..4 {
+                    m.m[i] = args.get_item(i)?.extract()?;
+                }
+            }
+            12 => {
+                for i in 0..12 {
+                    m.m[i] = args.get_item(i)?.extract()?;
+                }
+                m.m[12] = 0.0;
+                m.m[13] = 0.0;
+                m.m[14] = 0.0;
+                m.m[15] = 1.0;
+            }
+            16 => {
+                for i in 0..16 {
+                    m.m[i] = args.get_item(i)?.extract()?;
+                }
+            }
+            _ => {
+                return Err(PyTypeError::new_err(
+                    "Matrix() takes 0, 4, 12 or 16 arguments",
+                ))
+            }
+        }
+        Ok(Self { inner: m })
     }
 
+    // -- elements -----------------------------------------------------------
+    #[getter]
+    fn A(&self) -> Vec<f64> {
+        self.inner.m.to_vec()
+    }
+
+    fn __getattr__(&self, name: &Bound<'_, PyAny>) -> PyResult<f64> {
+        let n: String = name.extract()?;
+        parse_a_name(&n)
+            .map(|i| self.inner.m[i])
+            .ok_or_else(|| PyAttributeError::new_err(n))
+    }
+
+    fn __setattr__(&mut self, name: &Bound<'_, PyAny>, value: f64) -> PyResult<()> {
+        let n: String = name.extract()?;
+        match parse_a_name(&n) {
+            Some(i) => {
+                self.inner.m[i] = value;
+                Ok(())
+            }
+            None => Err(PyAttributeError::new_err(n)),
+        }
+    }
+
+    // `__setattr__` above cannot mutate `&self`, so expose explicit setters.
+    fn setRow(&mut self, row: usize, v: PyRef<'_, PyVector>) -> PyResult<()> {
+        if row > 3 {
+            return Err(PyIndexError::new_err("row out of range"));
+        }
+        self.inner.set_row(row, v.inner);
+        Ok(())
+    }
+
+    fn setCol(&mut self, col: usize, v: PyRef<'_, PyVector>) -> PyResult<()> {
+        if col > 3 {
+            return Err(PyIndexError::new_err("col out of range"));
+        }
+        self.inner.set_col(col, v.inner);
+        Ok(())
+    }
+
+    fn row(&self, row: usize) -> PyResult<PyVector> {
+        if row > 3 {
+            return Err(PyIndexError::new_err("row out of range"));
+        }
+        Ok(PyVector { inner: self.inner.row(row) })
+    }
+
+    fn col(&self, col: usize) -> PyResult<PyVector> {
+        if col > 3 {
+            return Err(PyIndexError::new_err("col out of range"));
+        }
+        Ok(PyVector { inner: self.inner.col(col) })
+    }
+
+    fn diagonal(&self) -> PyVector {
+        PyVector { inner: self.inner.diagonal() }
+    }
+
+    // -- predicates ---------------------------------------------------------
+    #[pyo3(signature = (tol=0.0))]
+    fn isUnity(&self, tol: f64) -> bool {
+        self.inner.is_unity(tol)
+    }
+
+    fn isNull(&self) -> bool {
+        self.inner.is_null()
+    }
+
+    fn unity(&mut self) {
+        self.inner.unity();
+    }
+
+    fn nullify(&mut self) {
+        self.inner.nullify();
+    }
+
+    fn determinant(&self) -> f64 {
+        self.inner.determinant()
+    }
+
+    fn inverse(&self) -> PyResult<PyMatrix> {
+        self.inner
+            .inverse()
+            .map(|inner| PyMatrix { inner })
+            .ok_or_else(|| PyRuntimeError::new_err("matrix is singular"))
+    }
+
+    fn transpose(&self) -> PyMatrix {
+        PyMatrix { inner: self.inner.transpose() }
+    }
+
+    fn multiply(&self, o: PyRef<'_, PyMatrix>) -> PyMatrix {
+        PyMatrix { inner: self.inner.mul(&o.inner) }
+    }
+
+    /// Transform a vector by this matrix (FreeCAD `Matrix.multVec`).
+    fn multVec(&self, v: PyRef<'_, PyVector>) -> PyVector {
+        PyVector { inner: self.inner.transform(&v.inner) }
+    }
+
+    // -- in-place transforms (pre-multiply, matching FreeCAD) ---------------
+    #[pyo3(name = "move", signature = (*args))]
+    fn move_(&mut self, args: &Bound<'_, PyTuple>) -> PyResult<()> {
+        self.inner.pre_move(extract_vec_args(args)?);
+        Ok(())
+    }
+
+    #[pyo3(signature = (*args))]
+    fn scale(&mut self, args: &Bound<'_, PyTuple>) -> PyResult<()> {
+        let s = if args.len() == 1 {
+            if let Ok(v) = args.get_item(0)?.extract::<PyRef<'_, PyVector>>() {
+                v.inner
+            } else {
+                let f: f64 = args.get_item(0)?.extract()?;
+                Vector3::new(f, f, f)
+            }
+        } else {
+            extract_vec_args(args)?
+        };
+        self.inner.pre_scale(s);
+        Ok(())
+    }
+
+    fn rotateX(&mut self, angle: f64) {
+        self.inner.pre_rotate(0, angle);
+    }
+    fn rotateY(&mut self, angle: f64) {
+        self.inner.pre_rotate(1, angle);
+    }
+    fn rotateZ(&mut self, angle: f64) {
+        self.inner.pre_rotate(2, angle);
+    }
+
+    // -- operators ----------------------------------------------------------
     fn __eq__(&self, other: &Bound<'_, PyAny>) -> bool {
         match other.extract::<PyRef<'_, PyMatrix>>() {
             Ok(o) => self.inner == o.inner,
@@ -2495,18 +2755,135 @@ impl PyMatrix {
         }
     }
 
-    fn multiply(&self, o: PyRef<'_, PyMatrix>) -> PyMatrix { PyMatrix { inner: self.inner.mul(&o.inner) } }
-
-    /// Transform a vector by this matrix (FreeCAD `Matrix.multVec`).
-    fn multVec(&self, v: PyRef<'_, PyVector>) -> PyVector {
-        PyVector { inner: self.inner.transform(&v.inner) }
+    fn __mul__(&self, other: &Bound<'_, PyAny>) -> PyResult<PyObject> {
+        let py = other.py();
+        if let Ok(f) = other.extract::<f64>() {
+            let mut m = self.inner.m;
+            for v in m.iter_mut() {
+                *v *= f;
+            }
+            return Ok(PyMatrix { inner: Matrix4 { m } }.into_py_any(py).unwrap());
+        }
+        if let Ok(o) = other.extract::<PyRef<'_, PyMatrix>>() {
+            return Ok(PyMatrix { inner: self.inner.mul(&o.inner) }.into_py_any(py).unwrap());
+        }
+        if let Ok(v) = other.extract::<PyRef<'_, PyVector>>() {
+            return Ok(PyVector { inner: self.inner.transform(&v.inner) }.into_py_any(py).unwrap());
+        }
+        if let Ok(r) = other.extract::<PyRef<'_, PyRotation>>() {
+            return Ok(PyMatrix { inner: self.inner.mul(&r.inner.to_matrix()) }
+                .into_py_any(py)
+                .unwrap());
+        }
+        if let Ok(p) = other.extract::<PyRef<'_, PyPlacement>>() {
+            return Ok(PyMatrix { inner: self.inner.mul(&p.inner.to_matrix()) }
+                .into_py_any(py)
+                .unwrap());
+        }
+        Err(PyNotImplementedError::new_err(
+            "unsupported operand type(s) for *",
+        ))
     }
 
-    fn __mul__(&self, o: PyRef<'_, PyMatrix>) -> PyMatrix { PyMatrix { inner: self.inner.mul(&o.inner) } }
+    fn __add__(&self, other: &Bound<'_, PyAny>) -> PyResult<PyMatrix> {
+        let o = other
+            .extract::<PyRef<'_, PyMatrix>>()
+            .map_err(|_| PyNotImplementedError::new_err("unsupported operand type(s) for +"))?;
+        let mut m = [0.0; 16];
+        for i in 0..16 {
+            m[i] = self.inner.m[i] + o.inner.m[i];
+        }
+        Ok(PyMatrix { inner: Matrix4 { m } })
+    }
+
+    fn __sub__(&self, other: &Bound<'_, PyAny>) -> PyResult<PyMatrix> {
+        let o = other
+            .extract::<PyRef<'_, PyMatrix>>()
+            .map_err(|_| PyNotImplementedError::new_err("unsupported operand type(s) for -"))?;
+        let mut m = [0.0; 16];
+        for i in 0..16 {
+            m[i] = self.inner.m[i] - o.inner.m[i];
+        }
+        Ok(PyMatrix { inner: Matrix4 { m } })
+    }
+
+    fn __neg__(&self) -> PyMatrix {
+        let mut m = self.inner.m;
+        for v in m.iter_mut() {
+            *v = -*v;
+        }
+        PyMatrix { inner: Matrix4 { m } }
+    }
+
+    fn __pos__(&self) -> PyMatrix {
+        *self
+    }
+
+    fn __bool__(&self) -> bool {
+        true
+    }
+
+    fn __pow__(&self, e: &Bound<'_, PyAny>, _modulo: Option<&Bound<'_, PyAny>>) -> PyResult<PyMatrix> {
+        let e: i32 = e
+            .extract()
+            .map_err(|_| PyNotImplementedError::new_err("unsupported operand type(s) for **"))?;
+        if e == 0 {
+            return Ok(PyMatrix { inner: Matrix4::identity() });
+        }
+        let base = if e < 0 {
+            self.inner
+                .inverse()
+                .ok_or_else(|| PyRuntimeError::new_err("matrix is singular"))?
+        } else {
+            self.inner
+        };
+        let mut m = Matrix4::identity();
+        for _ in 0..e.abs() {
+            m = m.mul(&base);
+        }
+        Ok(PyMatrix { inner: m })
+    }
+
+    // Unsupported numeric protocol (mirrors FreeCAD's NotImplementedError).
+    fn __truediv__(&self, _o: &Bound<'_, PyAny>) -> PyResult<PyObject> {
+        Err(PyNotImplementedError::new_err("unsupported operand"))
+    }
+    fn __mod__(&self, _o: &Bound<'_, PyAny>) -> PyResult<PyObject> {
+        Err(PyNotImplementedError::new_err("unsupported operand"))
+    }
+    fn __divmod__(&self, _o: &Bound<'_, PyAny>) -> PyResult<PyObject> {
+        Err(PyNotImplementedError::new_err("unsupported operand"))
+    }
+    fn __float__(&self) -> PyResult<f64> {
+        Err(PyNotImplementedError::new_err("unsupported operand"))
+    }
+    fn __int__(&self) -> PyResult<i64> {
+        Err(PyNotImplementedError::new_err("unsupported operand"))
+    }
+    fn __or__(&self, _o: &Bound<'_, PyAny>) -> PyResult<PyObject> {
+        Err(PyNotImplementedError::new_err("unsupported operand"))
+    }
+    fn __and__(&self, _o: &Bound<'_, PyAny>) -> PyResult<PyObject> {
+        Err(PyNotImplementedError::new_err("unsupported operand"))
+    }
+    fn __xor__(&self, _o: &Bound<'_, PyAny>) -> PyResult<PyObject> {
+        Err(PyNotImplementedError::new_err("unsupported operand"))
+    }
+    fn __lshift__(&self, _o: &Bound<'_, PyAny>) -> PyResult<PyObject> {
+        Err(PyNotImplementedError::new_err("unsupported operand"))
+    }
+    fn __rshift__(&self, _o: &Bound<'_, PyAny>) -> PyResult<PyObject> {
+        Err(PyNotImplementedError::new_err("unsupported operand"))
+    }
+    fn __invert__(&self) -> PyResult<PyObject> {
+        Err(PyNotImplementedError::new_err("unsupported operand"))
+    }
+    fn __abs__(&self) -> PyResult<PyObject> {
+        Err(PyNotImplementedError::new_err("unsupported operand"))
+    }
 
     fn __repr__(&self) -> String {
-        let m = &self.inner.m;
-        format!("Matrix ({:?})", m)
+        format!("Matrix ({:?})", &self.inner.m)
     }
 }
 
@@ -2521,32 +2898,69 @@ impl PyRotation {
     #[new]
     #[pyo3(signature = (*args))]
     fn new(args: &Bound<'_, PyTuple>) -> PyResult<Self> {
-        match args.len() {
-            0 => Ok(Self { inner: Rotation::identity() }),
-            2 => {
-                let axis: PyRef<'_, PyVector> = args.get_item(0)?.extract()?;
-                let angle: f64 = args.get_item(1)?.extract()?;
-                Ok(Self { inner: Rotation::from_axis_angle(&axis.inner, angle) })
+        let inner = match args.len() {
+            0 => Rotation::identity(),
+            1 => {
+                let a = args.get_item(0)?;
+                if let Ok(r) = a.extract::<PyRef<'_, PyRotation>>() {
+                    r.inner
+                } else if let Ok(m) = a.extract::<PyRef<'_, PyMatrix>>() {
+                    Rotation::from_matrix(&m.inner)
+                } else {
+                    return Err(PyTypeError::new_err(
+                        "Rotation() expects a Rotation or a Matrix",
+                    ));
+                }
             }
-            _ => Err(PyTypeError::new_err(
-                "Rotation() takes 0 or 2 arguments (axis, angle)",
-            )),
-        }
+            2 => {
+                // `Rotation(axis, degree)` — the angle is in degrees (FreeCAD).
+                let axis: PyRef<'_, PyVector> = args.get_item(0)?.extract()?;
+                let degree: f64 = args.get_item(1)?.extract()?;
+                Rotation::from_axis_angle(&axis.inner, degree.to_radians())
+            }
+            3 => {
+                let yaw: f64 = args.get_item(0)?.extract()?;
+                let pitch: f64 = args.get_item(1)?.extract()?;
+                let roll: f64 = args.get_item(2)?.extract()?;
+                Rotation::from_euler_deg(yaw, pitch, roll)
+            }
+            4 => {
+                // `Rotation(x, y, z, w)`.
+                let x: f64 = args.get_item(0)?.extract()?;
+                let y: f64 = args.get_item(1)?.extract()?;
+                let z: f64 = args.get_item(2)?.extract()?;
+                let w: f64 = args.get_item(3)?.extract()?;
+                Rotation { q: [w, x, y, z] }
+            }
+            16 => {
+                let mut m = Matrix4::identity();
+                for i in 0..16 {
+                    m.m[i] = args.get_item(i)?.extract()?;
+                }
+                Rotation::from_matrix(&m)
+            }
+            _ => {
+                return Err(PyTypeError::new_err(
+                    "Rotation() takes 0, 1, 2, 3, 4 or 16 arguments",
+                ))
+            }
+        };
+        Ok(Self { inner })
     }
 
     #[getter]
-    fn Angle(&self) -> f64 { self.inner.angle() }
+    fn Angle(&self) -> f64 {
+        self.inner.angle()
+    }
+
+    #[setter]
+    fn set_Angle(&mut self, angle: f64) {
+        self.inner.set_angle(angle);
+    }
 
     #[getter]
     fn Axis(&self) -> PyVector {
-        let q = self.inner.q;
-        let s = (1.0 - q[0] * q[0]).sqrt();
-        let axis = if s < 1e-12 {
-            Vector3::new(0.0, 0.0, 1.0)
-        } else {
-            Vector3::new(q[1] / s, q[2] / s, q[3] / s)
-        };
-        PyVector { inner: axis }
+        PyVector { inner: self.inner.axis() }
     }
 
     #[setter]
@@ -2559,7 +2973,57 @@ impl PyRotation {
 
     #[getter]
     fn RawAxis(&self) -> PyVector {
-        self.Axis()
+        PyVector { inner: self.inner.axis() }
+    }
+
+    #[getter]
+    fn Q(&self) -> (f64, f64, f64, f64) {
+        (self.inner.q[1], self.inner.q[2], self.inner.q[3], self.inner.q[0])
+    }
+
+    #[setter]
+    fn set_Q(&mut self, v: (f64, f64, f64, f64)) {
+        self.inner.q = [v.3, v.0, v.1, v.2];
+    }
+
+    #[getter]
+    fn Matrix(&self) -> PyMatrix {
+        PyMatrix { inner: self.inner.to_matrix() }
+    }
+
+    #[setter]
+    fn set_Matrix(&mut self, m: PyRef<'_, PyMatrix>) {
+        self.inner = Rotation::from_matrix(&m.inner);
+    }
+
+    fn toMatrix(&self) -> PyMatrix {
+        PyMatrix { inner: self.inner.to_matrix() }
+    }
+
+    fn multiply(&self, o: PyRef<'_, PyRotation>) -> PyRotation {
+        PyRotation { inner: self.inner.multiply(&o.inner) }
+    }
+
+    fn invert(&mut self) {
+        self.inner = self.inner.inverse();
+    }
+
+    fn inverse(&self) -> PyRotation {
+        PyRotation { inner: self.inner.inverse() }
+    }
+
+    #[pyo3(signature = (o, tol=0.0))]
+    fn isSame(&self, o: PyRef<'_, PyRotation>, tol: f64) -> bool {
+        self.inner.is_same(&o.inner, tol)
+    }
+
+    fn setYawPitchRoll(&mut self, yaw: f64, pitch: f64, roll: f64) {
+        self.inner = Rotation::from_euler_deg(yaw, pitch, roll);
+    }
+
+    fn getYawPitchRoll(&self) -> (f64, f64, f64) {
+        let (y, p, r) = self.inner.yaw_pitch_roll();
+        (y.to_degrees(), p.to_degrees(), r.to_degrees())
     }
 
     fn __eq__(&self, other: &Bound<'_, PyAny>) -> bool {
@@ -2585,6 +3049,19 @@ impl PyPlacement {
     #[new]
     #[pyo3(signature = (base=None, rotation=None))]
     fn new(base: Option<&Bound<'_, PyAny>>, rotation: Option<&Bound<'_, PyAny>>) -> PyResult<Self> {
+        // `Placement(matrix)` builds from a 4x4 transformation matrix.
+        if rotation.is_none() {
+            if let Some(b) = base {
+                if let Ok(m) = b.extract::<PyRef<'_, PyMatrix>>() {
+                    return Ok(Self {
+                        inner: Placement::new(
+                            Vector3::new(m.inner.m[3], m.inner.m[7], m.inner.m[11]),
+                            Rotation::from_matrix(&m.inner),
+                        ),
+                    });
+                }
+            }
+        }
         let b = match base {
             Some(v) => extract_vector(v)?,
             None => Vector3::zero(),
@@ -2594,6 +3071,19 @@ impl PyPlacement {
             None => Rotation::identity(),
         };
         Ok(Self { inner: Placement::new(b, r) })
+    }
+
+    fn inverse(&self) -> PyPlacement {
+        PyPlacement { inner: self.inner.inverse() }
+    }
+
+    fn toMatrix(&self) -> PyMatrix {
+        PyMatrix { inner: self.inner.to_matrix() }
+    }
+
+    #[pyo3(signature = (o, tol=0.0))]
+    fn isSame(&self, o: PyRef<'_, PyPlacement>, tol: f64) -> bool {
+        self.inner.is_same(&o.inner, tol)
     }
 
     #[getter]
@@ -2672,6 +3162,247 @@ impl PyTypeId {
 
     fn __repr__(&self) -> String {
         format!("TypeId({})", self.inner.name())
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Vector2d / Material / BoundBox
+// ---------------------------------------------------------------------------
+
+#[pyclass(name = "Vector2d", module = "fc")]
+#[derive(Clone, Copy)]
+struct PyVector2d {
+    x: f64,
+    y: f64,
+}
+
+#[pymethods]
+impl PyVector2d {
+    #[new]
+    #[pyo3(signature = (x=0.0, y=0.0))]
+    fn new(x: f64, y: f64) -> Self {
+        Self { x, y }
+    }
+
+    #[getter]
+    fn x(&self) -> f64 {
+        self.x
+    }
+    #[setter]
+    fn set_x(&mut self, v: f64) {
+        self.x = v;
+    }
+    #[getter]
+    fn y(&self) -> f64 {
+        self.y
+    }
+    #[setter]
+    fn set_y(&mut self, v: f64) {
+        self.y = v;
+    }
+
+    fn rotate(&mut self, angle: f64) {
+        let (s, c) = angle.sin_cos();
+        let (x, y) = (self.x, self.y);
+        self.x = x * c - y * s;
+        self.y = x * s + y * c;
+    }
+
+    fn __repr__(&self) -> String {
+        format!("Vector2d ({}, {})", self.x, self.y)
+    }
+}
+
+#[pyclass(name = "Material", module = "fc")]
+#[derive(Clone, PartialEq)]
+struct PyMaterial {
+    diffuse: [f64; 4],
+}
+
+#[pymethods]
+impl PyMaterial {
+    #[new]
+    fn new() -> Self {
+        Self { diffuse: [0.8, 0.8, 0.8, 1.0] }
+    }
+
+    #[getter]
+    fn DiffuseColor(&self) -> (f64, f64, f64, f64) {
+        (self.diffuse[0], self.diffuse[1], self.diffuse[2], self.diffuse[3])
+    }
+
+    #[setter]
+    fn set_DiffuseColor(&mut self, value: &Bound<'_, PyAny>) -> PyResult<()> {
+        if let Ok((r, g, b, a)) = value.extract::<(f64, f64, f64, f64)>() {
+            self.diffuse = [r, g, b, a];
+        } else if let Ok((r, g, b)) = value.extract::<(f64, f64, f64)>() {
+            self.diffuse = [r, g, b, 1.0];
+        } else {
+            return Err(PyTypeError::new_err("DiffuseColor expects (r, g, b[, a])"));
+        }
+        Ok(())
+    }
+
+    fn __eq__(&self, other: &Bound<'_, PyAny>) -> bool {
+        match other.extract::<PyRef<'_, PyMaterial>>() {
+            Ok(o) => self.diffuse == o.diffuse,
+            Err(_) => false,
+        }
+    }
+
+    fn __ne__(&self, other: &Bound<'_, PyAny>) -> bool {
+        !self.__eq__(other)
+    }
+}
+
+#[pyclass(name = "BoundBox", module = "fc")]
+#[derive(Clone)]
+struct PyBoundBox {
+    min: [f64; 3],
+    max: [f64; 3],
+    valid: bool,
+}
+
+impl PyBoundBox {
+    fn add_point(&mut self, p: [f64; 3]) {
+        if self.valid {
+            for i in 0..3 {
+                self.min[i] = self.min[i].min(p[i]);
+                self.max[i] = self.max[i].max(p[i]);
+            }
+        } else {
+            self.min = p;
+            self.max = p;
+            self.valid = true;
+        }
+    }
+
+    fn contains(&self, p: [f64; 3]) -> bool {
+        self.valid && (0..3).all(|i| p[i] >= self.min[i] && p[i] <= self.max[i])
+    }
+}
+
+#[pymethods]
+impl PyBoundBox {
+    #[new]
+    #[pyo3(signature = (xmin=None, ymin=None, zmin=None, xmax=None, ymax=None, zmax=None))]
+    fn new(
+        xmin: Option<f64>,
+        ymin: Option<f64>,
+        zmin: Option<f64>,
+        xmax: Option<f64>,
+        ymax: Option<f64>,
+        zmax: Option<f64>,
+    ) -> Self {
+        match (xmin, ymin, zmin, xmax, ymax, zmax) {
+            (Some(a), Some(b), Some(c), Some(d), Some(e), Some(f)) => Self {
+                min: [a, b, c],
+                max: [d, e, f],
+                valid: true,
+            },
+            _ => Self {
+                min: [0.0; 3],
+                max: [0.0; 3],
+                valid: false,
+            },
+        }
+    }
+
+    fn setVoid(&mut self) {
+        self.valid = false;
+    }
+
+    fn isValid(&self) -> bool {
+        self.valid
+    }
+
+    #[pyo3(signature = (x, y, z))]
+    fn add(&mut self, x: &Bound<'_, PyAny>, y: Option<f64>, z: Option<f64>) -> PyResult<()> {
+        if let Ok(v) = x.extract::<PyRef<'_, PyVector>>() {
+            self.add_point([v.inner.x, v.inner.y, v.inner.z]);
+            return Ok(());
+        }
+        let x = x.extract::<f64>()?;
+        self.add_point([x, y.unwrap_or(0.0), z.unwrap_or(0.0)]);
+        Ok(())
+    }
+
+    #[getter]
+    fn XLength(&self) -> f64 {
+        self.max[0] - self.min[0]
+    }
+    #[getter]
+    fn YLength(&self) -> f64 {
+        self.max[1] - self.min[1]
+    }
+    #[getter]
+    fn ZLength(&self) -> f64 {
+        self.max[2] - self.min[2]
+    }
+
+    #[getter]
+    fn Center(&self) -> PyVector {
+        PyVector {
+            inner: Vector3::new(
+                (self.min[0] + self.max[0]) / 2.0,
+                (self.min[1] + self.max[1]) / 2.0,
+                (self.min[2] + self.max[2]) / 2.0,
+            ),
+        }
+    }
+
+    fn isInside(&self, point: PyRef<'_, PyVector>) -> bool {
+        self.contains([point.inner.x, point.inner.y, point.inner.z])
+    }
+
+    /// The first box-surface point hit by a ray from `point` along `direction`.
+    fn getIntersectionPoint(&self, point: PyRef<'_, PyVector>, direction: PyRef<'_, PyVector>) -> PyVector {
+        let p = point.inner;
+        let d = direction.inner;
+        let mut t = f64::INFINITY;
+        for i in 0..3 {
+            let (pi, di) = ([p.x, p.y, p.z][i], [d.x, d.y, d.z][i]);
+            if di.abs() > 1e-15 {
+                for bound in [self.min[i], self.max[i]] {
+                    let ti = (bound - pi) / di;
+                    if ti >= 0.0 {
+                        t = t.min(ti);
+                    }
+                }
+            }
+        }
+        if t.is_finite() {
+            PyVector {
+                inner: Vector3::new(p.x + t * d.x, p.y + t * d.y, p.z + t * d.z),
+            }
+        } else {
+            PyVector { inner: p }
+        }
+    }
+
+    fn intersect(&self, other: PyRef<'_, PyBoundBox>) -> bool {
+        self.valid
+            && other.valid
+            && (0..3).all(|i| self.min[i] <= other.max[i] && self.max[i] >= other.min[i])
+    }
+
+    fn intersected(&self, other: PyRef<'_, PyBoundBox>) -> PyBoundBox {
+        let overlaps = self.valid
+            && other.valid
+            && (0..3).all(|i| self.min[i] <= other.max[i] && self.max[i] >= other.min[i]);
+        if !overlaps {
+            return PyBoundBox { min: [0.0; 3], max: [0.0; 3], valid: false };
+        }
+        let mut out = PyBoundBox { min: [0.0; 3], max: [0.0; 3], valid: true };
+        for i in 0..3 {
+            out.min[i] = self.min[i].max(other.min[i]);
+            out.max[i] = self.max[i].min(other.max[i]);
+        }
+        out
+    }
+
+    fn __repr__(&self) -> String {
+        format!("BoundBox ({:?}, {:?})", self.min, self.max)
     }
 }
 
@@ -2763,6 +3494,9 @@ fn fc(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyRotation>()?;
     m.add_class::<PyPlacement>()?;
     m.add_class::<PyTypeId>()?;
+    m.add_class::<PyVector2d>()?;
+    m.add_class::<PyMaterial>()?;
+    m.add_class::<PyBoundBox>()?;
     m.add_class::<PyDocument>()?;
     m.add_class::<PyDocumentObject>()?;
     m.add_class::<PyDocumentSettings>()?;

@@ -39,6 +39,8 @@ pub enum Property {
     /// An included file, stored as its path in the document's transient dir
     /// (`App::PropertyFileIncluded`).
     FileIncluded(String),
+    /// A list of integer pairs (`App::PropertyIntPairList`).
+    IntPairList(Vec<(i64, i64)>),
 }
 
 impl Property {
@@ -67,6 +69,7 @@ impl Property {
             Property::ColorList(_) => "App::PropertyColorList",
             Property::PythonObject(_) => "App::PropertyPythonObject",
             Property::FileIncluded(_) => "App::PropertyFileIncluded",
+            Property::IntPairList(_) => "App::PropertyIntPairList",
         }
     }
 }

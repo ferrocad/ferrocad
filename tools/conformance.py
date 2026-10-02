@@ -27,7 +27,16 @@ from pathlib import Path
 REPO = Path(__file__).resolve().parents[1]   # freecad-rs-poc
 PYTHON_DIR = REPO / "python"
 
-DEFAULT_FILES = ["Document", "StringHasher", "UnitTests", "UnicodeTests", "TestApp"]
+DEFAULT_FILES = [
+    "Document",
+    "StringHasher",
+    "UnitTests",
+    "UnicodeTests",
+    "TestApp",
+    "BaseTests",
+    "TestIntPairList",
+    "FreeCADInitTests",
+]
 
 
 def _short(err) -> str:

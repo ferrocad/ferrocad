@@ -267,6 +267,11 @@ impl Document {
         self.tx.has_redo()
     }
 
+    /// Whether a transaction is pending or active.
+    pub fn is_in_transaction(&self) -> bool {
+        self.tx.has_pending() || self.tx.is_active()
+    }
+
     // -- recompute flags -----------------------------------------------------
 
     pub fn enforce_recompute(&mut self, id: ObjectId) {
@@ -455,6 +460,68 @@ impl Document {
     pub fn load_from_file(path: &str) -> Result<SavedDocument, String> {
         let text = std::fs::read_to_string(path).map_err(|e| e.to_string())?;
         serde_json::from_str(&text).map_err(|e| e.to_string())
+    }
+
+    /// Serialize the whole document to bytes (`dumpContent`).
+    pub fn dump(&self, name: &str) -> Result<Vec<u8>, String> {
+        serde_json::to_vec(&self.to_saved(name)).map_err(|e| e.to_string())
+    }
+
+    /// Replace this document's content from a `dump` payload (`restoreContent`).
+    pub fn restore_from_bytes(&mut self, data: &[u8]) -> Result<(), String> {
+        let saved: SavedDocument = serde_json::from_slice(data).map_err(|e| e.to_string())?;
+        *self = Document::from_saved(&saved);
+        Ok(())
+    }
+
+    fn saved_object(&self, id: ObjectId) -> Result<SavedObject, String> {
+        let o = self.object(id).ok_or_else(|| format!("no object {id}"))?;
+        Ok(SavedObject {
+            name: o.name.clone(),
+            label: o.label.clone(),
+            type_id: o.type_id.clone(),
+            properties: o
+                .properties
+                .iter()
+                .map(|(k, v)| (k.clone(), v.clone()))
+                .collect(),
+            expressions: o.expressions.clone(),
+            extensions: o.extensions.iter().cloned().collect(),
+        })
+    }
+
+    /// Serialize one object to bytes (`dumpContent`).
+    pub fn dump_object(&self, id: ObjectId) -> Result<Vec<u8>, String> {
+        serde_json::to_vec(&self.saved_object(id)?).map_err(|e| e.to_string())
+    }
+
+    /// Restore one object's content from bytes (`restoreContent`).
+    pub fn restore_object(&mut self, id: ObjectId, data: &[u8]) -> Result<(), String> {
+        let saved: SavedObject = serde_json::from_slice(data).map_err(|e| e.to_string())?;
+        let o = self.objects.get_mut(&id).ok_or_else(|| format!("no object {id}"))?;
+        o.label = saved.label;
+        o.properties.clear();
+        for (k, v) in saved.properties {
+            o.properties.set(k, v);
+        }
+        o.expressions = saved.expressions;
+        o.extensions = saved.extensions.into_iter().collect();
+        Ok(())
+    }
+
+    /// Serialize a single property to bytes (`dumpPropertyContent`).
+    pub fn dump_property(&self, id: ObjectId, name: &str) -> Result<Vec<u8>, String> {
+        let p = self
+            .object(id)
+            .and_then(|o| o.properties.get(name))
+            .ok_or_else(|| format!("no property '{name}'"))?;
+        serde_json::to_vec(p).map_err(|e| e.to_string())
+    }
+
+    /// Restore a single property from bytes (`restorePropertyContent`).
+    pub fn restore_property(&mut self, id: ObjectId, name: &str, data: &[u8]) -> Result<(), String> {
+        let p: Property = serde_json::from_slice(data).map_err(|e| e.to_string())?;
+        self.set_property(id, name, p)
     }
 }
 

@@ -12,7 +12,7 @@ use std::sync::{Arc, Mutex, OnceLock};
 use fc_core::{canonical_name, parse_unit, Document as CoreDocument, Matrix4, ObjectId, Placement, Property, Quantity, Rotation, StringHasher, StringId, TypeId, Unit, Vector3};
 use pyo3::exceptions::{PyAttributeError, PyTypeError, PyValueError};
 use pyo3::prelude::*;
-use pyo3::types::{PyAny, PyAnyMethods, PyBool, PyDict, PyDictMethods, PyTuple, PyType};
+use pyo3::types::{PyAny, PyAnyMethods, PyBool, PyBytes, PyDict, PyDictMethods, PyTuple, PyType};
 use pyo3::IntoPyObjectExt;
 
 // ---------------------------------------------------------------------------
@@ -1197,6 +1197,61 @@ impl PyDocument {
         0
     }
 
+    // -- persistence / recovery ---------------------------------------------
+
+    /// A per-document transient directory (used for recovery snapshots).
+    #[getter]
+    fn TransientDir(&self) -> String {
+        let mut dir = std::env::temp_dir();
+        dir.push(format!("FreeCAD_transient_{}", self.name));
+        dir.to_string_lossy().to_string()
+    }
+
+    /// Recovery snapshots are only writable outside a transaction.
+    fn canWriteRecoverySnapshot(&self) -> bool {
+        !self.inner.lock().unwrap().is_in_transaction()
+    }
+
+    #[pyo3(signature = (Compression=0))]
+    fn dumpContent(slf: &Bound<'_, Self>, Compression: i64) -> PyResult<Py<PyBytes>> {
+        let _ = Compression;
+        let py = slf.py();
+        let name = slf.borrow().name.clone();
+        let data = slf
+            .borrow()
+            .inner
+            .lock()
+            .unwrap()
+            .dump(&name)
+            .map_err(PyValueError::new_err)?;
+        Ok(PyBytes::new(py, &data).unbind())
+    }
+
+    /// Replace this document's content from a `dumpContent` payload.
+    fn restoreContent(slf: &Bound<'_, Self>, data: &Bound<'_, PyAny>) -> PyResult<()> {
+        let bytes: Vec<u8> = data.extract()?;
+        slf.borrow()
+            .inner
+            .lock()
+            .unwrap()
+            .restore_from_bytes(&bytes)
+            .map_err(PyValueError::new_err)
+    }
+
+    /// Re-load the document from its saved file (clearing current content).
+    fn restore(slf: &Bound<'_, Self>) -> PyResult<()> {
+        let path = slf
+            .borrow()
+            .file_name
+            .clone()
+            .ok_or_else(|| PyValueError::new_err("document has no file name"))?;
+        let saved = CoreDocument::load_from_file(&path).map_err(PyValueError::new_err)?;
+        let doc_py: Py<PyDocument> = slf.clone().unbind();
+        forget_document(&doc_py);
+        slf.borrow_mut().inner = Arc::new(Mutex::new(CoreDocument::from_saved(&saved)));
+        Ok(())
+    }
+
     // -- meta settings -------------------------------------------------------
 
     #[getter]
@@ -1480,6 +1535,57 @@ impl PyDocumentObject {
                 "no property '{name}' on object"
             )))
         }
+    }
+
+    // -- persistence ---------------------------------------------------------
+
+    /// Serialize this object's content to bytes (`dumpContent`).
+    fn dumpContent(&self, py: Python<'_>) -> PyResult<Py<PyBytes>> {
+        let data = self
+            .inner
+            .lock()
+            .unwrap()
+            .dump_object(self.id)
+            .map_err(PyValueError::new_err)?;
+        Ok(PyBytes::new(py, &data).unbind())
+    }
+
+    /// Restore this object's content from bytes (`restoreContent`).
+    fn restoreContent(&self, data: &Bound<'_, PyAny>) -> PyResult<()> {
+        let bytes: Vec<u8> = data.extract()?;
+        self.inner
+            .lock()
+            .unwrap()
+            .restore_object(self.id, &bytes)
+            .map_err(PyValueError::new_err)
+    }
+
+    /// Serialize one property to bytes (`dumpPropertyContent`).
+    #[pyo3(signature = (name, Compression=0))]
+    fn dumpPropertyContent(
+        &self,
+        py: Python<'_>,
+        name: &str,
+        Compression: i64,
+    ) -> PyResult<Py<PyBytes>> {
+        let _ = Compression;
+        let data = self
+            .inner
+            .lock()
+            .unwrap()
+            .dump_property(self.id, name)
+            .map_err(PyValueError::new_err)?;
+        Ok(PyBytes::new(py, &data).unbind())
+    }
+
+    /// Restore one property from bytes (`restorePropertyContent`).
+    fn restorePropertyContent(&self, name: &str, data: &Bound<'_, PyAny>) -> PyResult<()> {
+        let bytes: Vec<u8> = data.extract()?;
+        self.inner
+            .lock()
+            .unwrap()
+            .restore_property(self.id, name, &bytes)
+            .map_err(PyValueError::new_err)
     }
 
     fn supportedProperties(&self) -> Vec<String> {

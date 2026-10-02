@@ -139,6 +139,7 @@ __all__ = [
     "backend",
     "ParamGet",
     "ParameterGrp",
+    "writeRecoverySnapshotToTransientDir",
 ]
 
 
@@ -195,6 +196,73 @@ class ParameterGrp:
 def ParamGet(path="", create=True):
     """Return the parameter group rooted at ``path`` (in-memory)."""
     return ParameterGrp(path)
+
+
+# ---------------------------------------------------------------------------
+# Recovery snapshots (App-level; writes metadata + document to the transient
+# directory of a document).
+# ---------------------------------------------------------------------------
+
+import builtins as _builtins  # the facade defines `open` (document); keep the builtin.
+
+
+def _xml_escape(text):
+    return (
+        str(text)
+        .replace("&", "&amp;")
+        .replace("<", "&lt;")
+        .replace(">", "&gt;")
+        .replace('"', "&quot;")
+        .replace("'", "&apos;")
+    )
+
+
+def _document_xml(doc):
+    """A minimal ``Document.xml`` body for a recovery snapshot."""
+    parts = ['<?xml version="1.0" encoding="utf-8"?>', "<Document>"]
+    for obj in doc.Objects:
+        parts.append(
+            '  <Object name="%s" type="%s" />' % (_xml_escape(obj.Name), _xml_escape(obj.TypeId))
+        )
+    parts.append("</Document>")
+    return "\n".join(parts) + "\n"
+
+
+def writeRecoverySnapshotToTransientDir(doc, compressed=True):
+    """Write a recovery snapshot (metadata + document) to ``doc.TransientDir``.
+
+    Raises ``RuntimeError`` while a transaction is open (see
+    ``Document.canWriteRecoverySnapshot``).
+    """
+    if not doc.canWriteRecoverySnapshot():
+        raise RuntimeError("cannot write a recovery snapshot while a transaction is open")
+
+    import os
+    import zipfile
+
+    transient = doc.TransientDir
+    os.makedirs(transient, exist_ok=True)
+
+    metadata = os.path.join(transient, "fc_recovery_file.xml")
+    with _builtins.open(metadata, "w", encoding="utf-8") as handle:
+        handle.write('<?xml version="1.0" encoding="utf-8"?>\n')
+        handle.write("<AutoRecovery>\n")
+        handle.write("  <Label>%s</Label>\n" % _xml_escape(doc.Label))
+        handle.write("  <FileName>%s</FileName>\n" % _xml_escape(doc.FileName))
+        handle.write("</AutoRecovery>\n")
+
+    document_xml = _document_xml(doc)
+    if compressed:
+        archive = os.path.join(transient, "fc_recovery_file.fcstd")
+        with zipfile.ZipFile(archive, "w", zipfile.ZIP_DEFLATED) as recovery:
+            recovery.writestr("Document.xml", document_xml)
+    else:
+        uncompressed = os.path.join(transient, "fc_recovery_files")
+        os.makedirs(uncompressed, exist_ok=True)
+        with _builtins.open(os.path.join(uncompressed, "Document.xml"), "w", encoding="utf-8") as handle:
+            handle.write(document_xml)
+
+    return True
 
 
 class PropertyType:

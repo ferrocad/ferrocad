@@ -626,5 +626,79 @@ class TestDocumentObservers(unittest.TestCase):
         self.assertEqual(self.obs.signals, [])
 
 
+class TestPersistenceDumpAndRecovery(unittest.TestCase):
+    def test_property_object_document_dump_roundtrip(self):
+        doc = FreeCAD.newDocument("Dump")
+        a = doc.addObject("App::FeatureTest", "A")
+        b = doc.addObject("App::FeatureTest", "B")
+        c = doc.addObject("App::FeatureTest", "C")
+        a.Vector = (1, 2, 3)
+        b.restorePropertyContent("Vector", a.dumpPropertyContent("Vector", Compression=9))
+        self.assertEqual(a.Vector, b.Vector)
+
+        a.Distance = 12
+        a.String = "test"
+        c.restoreContent(a.dumpContent())
+        self.assertEqual(c.Distance, a.Distance)
+        self.assertEqual(c.String, a.String)
+
+        other = FreeCAD.newDocument("DumpRestore")
+        other.restoreContent(doc.dumpContent(9))
+        self.assertEqual(len(other.Objects), len(doc.Objects))
+        self.assertEqual(other.A.Distance, a.Distance)
+        self.assertEqual(other.A.Vector, a.Vector)
+        FreeCAD.closeDocument("Dump")
+        FreeCAD.closeDocument("DumpRestore")
+
+    def test_restore_from_file(self):
+        import os
+        import tempfile
+
+        doc = FreeCAD.newDocument("RestoreMe")
+        doc.addObject("App::FeatureTest", "X")
+        doc.saveAs(os.path.join(tempfile.gettempdir(), "RestoreMe.FCStd"))
+        doc.addObject("App::FeatureTest", "Y")
+        self.assertEqual(len(doc.Objects), 2)
+        doc.restore()  # clears current content
+        self.assertEqual(len(doc.Objects), 1)
+        FreeCAD.closeDocument("RestoreMe")
+
+    def test_recovery_snapshot(self):
+        import os
+        import xml.etree.ElementTree as ET
+        import zipfile
+
+        doc = FreeCAD.newDocument("Recover")
+        doc.addObject("App::FeatureTest", "O")
+        doc.Label = 'Recovery <Label> & "Name"'
+        self.assertTrue(doc.canWriteRecoverySnapshot())
+        self.assertTrue(FreeCAD.writeRecoverySnapshotToTransientDir(doc))
+
+        transitive = doc.TransientDir
+        meta = os.path.join(transitive, "fc_recovery_file.xml")
+        archive = os.path.join(transitive, "fc_recovery_file.fcstd")
+        self.assertTrue(os.path.isfile(meta))
+        self.assertTrue(os.path.isfile(archive))
+        root = ET.parse(meta).getroot()
+        self.assertEqual(root.tag, "AutoRecovery")
+        self.assertEqual(root.findtext("Label"), doc.Label)
+        with zipfile.ZipFile(archive) as recovery:
+            self.assertIn("Document.xml", recovery.namelist())
+
+        # Uncompressed variant writes a plain Document.xml.
+        self.assertTrue(FreeCAD.writeRecoverySnapshotToTransientDir(doc, compressed=False))
+        self.assertTrue(
+            os.path.isfile(os.path.join(transitive, "fc_recovery_files", "Document.xml"))
+        )
+
+        # Rejected while a transaction is open.
+        doc.openTransaction("t")
+        self.assertFalse(doc.canWriteRecoverySnapshot())
+        with self.assertRaises(RuntimeError):
+            FreeCAD.writeRecoverySnapshotToTransientDir(doc)
+        doc.abortTransaction()
+        FreeCAD.closeDocument("Recover")
+
+
 if __name__ == "__main__":
     unittest.main()

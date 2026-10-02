@@ -1,6 +1,6 @@
 # freecad-rs-poc
 
-**Milestones 0–4 (slice 11):** run a FreeCAD headless "hello world" Python script on a pure-Rust
+**Milestones 0–4 (slice 12):** run a FreeCAD headless "hello world" Python script on a pure-Rust
 core, with the C++ Python bindings replaced by Rust bindings.
 
 * **M0** — hello world on a Rust object model, bridged to Python over a C ABI + `ctypes`.
@@ -39,8 +39,11 @@ core, with the C++ Python bindings replaced by Rust bindings.
 * **M4 (slice 11)** — **document observers that fire**: a global observer registry + an object
   identity cache (so observer arguments satisfy `is`), pending/named transactions, and event
   emission at the exact FreeCAD points (document lifecycle, object create/change/delete/recompute,
-  dynamic properties/extensions, transactions, save). All `DocumentObserverCases` pass; conformance
-  now **78 passing** (`StringHasher.py` 4/4, `UnitTests.py` 12/12).
+  dynamic properties/extensions, transactions, save). All `DocumentObserverCases` pass.
+* **M4 (slice 12)** — persistence/recovery: `Document.dumpContent`/`restoreContent`/`restore`,
+  `DocumentObject.dumpContent`/`restoreContent`/`dumpPropertyContent`/`restorePropertyContent`,
+  `canWriteRecoverySnapshot`/`TransientDir` and `writeRecoverySnapshotToTransientDir`; conformance
+  now **84 passing** (`StringHasher.py` 4/4, `UnitTests.py` 12/12).
 
 This is a proof of concept, not a product. It exists to validate the single
 riskiest assumption of the rewrite plan: *that a Python script written against

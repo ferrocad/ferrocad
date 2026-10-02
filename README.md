@@ -1,6 +1,6 @@
 # freecad-rs-poc
 
-**Milestones 0–4 (slice 6):** run a FreeCAD headless "hello world" Python script on a pure-Rust
+**Milestones 0–4 (slice 9):** run a FreeCAD headless "hello world" Python script on a pure-Rust
 core, with the C++ Python bindings replaced by Rust bindings.
 
 * **M0** — hello world on a Rust object model, bridged to Python over a C ABI + `ctypes`.
@@ -25,8 +25,15 @@ core, with the C++ Python bindings replaced by Rust bindings.
   `GroupExtensionPython`→`GroupExtension` inheritance), **groups** (`App::DocumentObjectGroup` +
   `App::Part` with `Group` link list, `addObject`/`hasObject`/`getObject`/`getParentGroup`/
   `getParentGeoFeatureGroup`/`OutList`/`InList`, single-group enforcement), and a console-mode
-  **`FreeCADGui`** stub + `ViewObject` → `None`; conformance now **51 passing** (`StringHasher.py`
-  4/4, `UnitTests.py` 12/12).
+  **`FreeCADGui`** stub + `ViewObject` → `None`.
+* **M4 (slice 7)** — `App::Origin.getSubObject` (axes/planes with the standard frames; FreeCAD's
+  `retType` convention) + a **row-major `Matrix4` fix** (`transform`/`Placement.to_matrix` were
+  inconsistent, inverting rotations).
+* **M4 (slice 8)** — link properties read/write as `DocumentObject`s; arbitrary object attributes
+  (`obj.Proxy`) via an instance `__dict__`; object `__hash__`; `abi3` minimum 3.10.
+* **M4 (slice 9)** — `Document.Meta` + `Document.settings(namespace)` (typed get/set, validation),
+  `Document.RootObjects`/`TopologicalSortedObjects`, `DocumentObject.ID`, id-aware `getObject`,
+  `ColorList`; conformance now **70 passing** (`StringHasher.py` 4/4, `UnitTests.py` 12/12).
 
 This is a proof of concept, not a product. It exists to validate the single
 riskiest assumption of the rewrite plan: *that a Python script written against

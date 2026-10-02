@@ -94,8 +94,12 @@ class TestDocumentObject(unittest.TestCase):
         obj = self.doc.addObject("App::FeaturePython", "Box")
         with self.assertRaises(AttributeError):
             _ = obj.NotAThing
+        # Upstream FreeCAD allows arbitrary Python attributes on objects (e.g.
+        # `obj.Proxy`); they round-trip through the instance `__dict__`.
+        obj.Proxy = {"kind": "feature"}
+        self.assertEqual(obj.Proxy, {"kind": "feature"})
         with self.assertRaises(AttributeError):
-            obj.NotAThing = 1
+            _ = obj.StillMissing
 
     def test_get_and_remove_object(self):
         self.doc.addObject("App::FeaturePython", "Box")

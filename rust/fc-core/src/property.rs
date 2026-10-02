@@ -29,6 +29,8 @@ pub enum Property {
     Link(String),
     /// A list of links to other objects, stored by name (POC simplification).
     LinkList(Vec<String>),
+    /// RGBA colors in the 0..1 range (`App::PropertyColorList`).
+    ColorList(Vec<[f64; 4]>),
 }
 
 impl Property {
@@ -53,6 +55,7 @@ impl Property {
             Property::Matrix(_) => "App::PropertyMatrix",
             Property::Link(_) => "App::PropertyLink",
             Property::LinkList(_) => "App::PropertyLinkList",
+            Property::ColorList(_) => "App::PropertyColorList",
         }
     }
 }

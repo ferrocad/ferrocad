@@ -10,4 +10,4 @@ crate-type = ["cdylib"]
 
 [dependencies]
 fc-core = { path = "../fc-core" }
-pyo3 = { version = "0.25", features = ["extension-module", "abi3-py38"] }
+pyo3 = { version = "0.25", features = ["extension-module", "abi3-py310"] }

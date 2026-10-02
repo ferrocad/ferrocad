@@ -6,12 +6,13 @@
 
 #![allow(non_snake_case)]
 
+use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex};
 
 use fc_core::{canonical_name, parse_unit, Document as CoreDocument, Matrix4, ObjectId, Placement, Property, Quantity, Rotation, StringHasher, StringId, TypeId, Unit, Vector3};
 use pyo3::exceptions::{PyAttributeError, PyTypeError, PyValueError};
 use pyo3::prelude::*;
-use pyo3::types::{PyAny, PyAnyMethods, PyTuple, PyType};
+use pyo3::types::{PyAny, PyAnyMethods, PyBool, PyDict, PyDictMethods, PyTuple, PyType};
 use pyo3::IntoPyObjectExt;
 
 // ---------------------------------------------------------------------------
@@ -240,6 +241,12 @@ fn property_to_py(py: Python<'_>, value: &Property) -> PyObject {
         Property::Matrix(m) => PyMatrix { inner: *m }.into_py_any(py).unwrap(),
         Property::Link(s) => s.clone().into_py_any(py).unwrap(),
         Property::LinkList(v) => v.clone().into_py_any(py).unwrap(),
+        Property::ColorList(v) => v
+            .iter()
+            .map(|c| (c[0], c[1], c[2], c[3]))
+            .collect::<Vec<_>>()
+            .into_py_any(py)
+            .unwrap(),
     }
 }
 
@@ -287,6 +294,11 @@ fn py_to_property(value: &Bound<'_, PyAny>) -> PyResult<Property> {
     if let Ok(v) = value.extract::<Vec<PyRef<'_, PyVector>>>() {
         return Ok(Property::VectorList(v.iter().map(|x| x.inner).collect()));
     }
+    if let Ok(v) = value.extract::<Vec<(f64, f64, f64)>>() {
+        return Ok(Property::VectorList(
+            v.iter().map(|(x, y, z)| Vector3::new(*x, *y, *z)).collect(),
+        ));
+    }
     if let Ok(v) = value.extract::<Vec<PyRef<'_, PyPlacement>>>() {
         return Ok(Property::PlacementList(v.iter().map(|x| x.inner).collect()));
     }
@@ -329,6 +341,8 @@ fn default_property(type_id: &str) -> Property {
         Property::Float(0.0)
     } else if t.ends_with("bool") {
         Property::Bool(false)
+    } else if t.ends_with("colorlist") || t.ends_with("colourlist") {
+        Property::ColorList(vec![])
     } else if t.ends_with("linklist") {
         Property::LinkList(vec![])
     } else if t.ends_with("link") || t.ends_with("linksub") || t.ends_with("linksublist") {
@@ -374,6 +388,32 @@ fn unique_name(doc: &CoreDocument, name: &str) -> String {
     }
 }
 
+/// Create the 6 datum sub-elements of an `App::Origin` and link them into its
+/// `Group`. Each carries a `Placement` encoding the standard axis/plane frame.
+fn create_origin_children(doc: &mut CoreDocument, origin_id: ObjectId) {
+    use std::f64::consts::FRAC_PI_2;
+    let children: [(&str, &str, Rotation); 6] = [
+        ("X_Axis", "App::Line", Rotation::identity()),
+        ("Y_Axis", "App::Line", Rotation::from_axis_angle(&Vector3::new(0.0, 0.0, 1.0), FRAC_PI_2)),
+        ("Z_Axis", "App::Line", Rotation::from_axis_angle(&Vector3::new(0.0, 1.0, 0.0), -FRAC_PI_2)),
+        ("XY_Plane", "App::Plane", Rotation::identity()),
+        ("XZ_Plane", "App::Plane", Rotation::from_axis_angle(&Vector3::new(1.0, 0.0, 0.0), FRAC_PI_2)),
+        ("YZ_Plane", "App::Plane", Rotation::from_axis_angle(&Vector3::new(0.0, 1.0, 0.0), FRAC_PI_2)),
+    ];
+    let mut names = Vec::with_capacity(6);
+    for (base, ty, rot) in children {
+        let name = unique_name(doc, base);
+        let child_id = doc.add_object(&name, ty);
+        let _ = doc.set_property(
+            child_id,
+            "Placement",
+            Property::Placement(Placement::new(Vector3::zero(), rot)),
+        );
+        names.push(name);
+    }
+    let _ = doc.set_property(origin_id, "Group", Property::LinkList(names));
+}
+
 /// Extract a `Vector3` from a `Vector` or a 3-sequence.
 fn extract_vector(v: &Bound<'_, PyAny>) -> PyResult<Vector3> {
     if let Ok(vec) = v.extract::<PyRef<'_, PyVector>>() {
@@ -398,6 +438,61 @@ fn extract_rotation(v: &Bound<'_, PyAny>) -> PyResult<Rotation> {
         }
     }
     Err(PyTypeError::new_err("expected a Rotation or a 4-sequence"))
+}
+
+/// Coerce a value into a link target (an object name, or `""` for null).
+fn py_to_link(value: &Bound<'_, PyAny>) -> PyResult<String> {
+    if value.is_none() {
+        return Ok(String::new());
+    }
+    if let Ok(o) = value.downcast::<PyDocumentObject>() {
+        return Ok(o.borrow().Name());
+    }
+    if let Ok(s) = value.extract::<String>() {
+        return Ok(s);
+    }
+    Err(PyTypeError::new_err("Link expects a DocumentObject or a name"))
+}
+
+/// Coerce a value into a link list (names).
+fn py_to_link_list(value: &Bound<'_, PyAny>) -> PyResult<Vec<String>> {
+    if value.is_none() {
+        return Ok(vec![]);
+    }
+    if let Ok(v) = value.extract::<Vec<PyRef<'_, PyDocumentObject>>>() {
+        return Ok(v.iter().map(|o| o.Name()).collect());
+    }
+    if let Ok(v) = value.extract::<Vec<String>>() {
+        return Ok(v);
+    }
+    Err(PyTypeError::new_err("LinkList expects a list of DocumentObjects"))
+}
+
+/// Coerce a value into a color list (`(r, g, b[, a])` tuples, alpha defaults to 1).
+fn py_to_color_list(value: &Bound<'_, PyAny>) -> PyResult<Vec<[f64; 4]>> {
+    if value.is_none() {
+        return Ok(vec![]);
+    }
+    if let Ok(v) = value.extract::<Vec<(f64, f64, f64, f64)>>() {
+        return Ok(v.iter().map(|(r, g, b, a)| [*r, *g, *b, *a]).collect());
+    }
+    if let Ok(v) = value.extract::<Vec<(f64, f64, f64)>>() {
+        return Ok(v.iter().map(|(r, g, b)| [*r, *g, *b, 1.0]).collect());
+    }
+    Err(PyTypeError::new_err(
+        "ColorList expects a list of (r, g, b[, a]) tuples",
+    ))
+}
+
+/// Store an arbitrary Python attribute on a document object (its `__dict__`),
+/// mirroring FreeCAD's support for `obj.Proxy` and similar.
+fn set_instance_attr(
+    slf: &Bound<'_, PyDocumentObject>,
+    name: &str,
+    value: &Bound<'_, PyAny>,
+) -> PyResult<()> {
+    let dict = slf.getattr("__dict__")?;
+    dict.downcast_into::<PyDict>()?.set_item(name, value)
 }
 
 /// Find the plain group (`geo == false`) or geo-feature group (`geo == true`)
@@ -429,6 +524,142 @@ fn parent_of(slf: &Bound<'_, PyDocumentObject>, geo: bool) -> Option<PyDocumentO
     None
 }
 
+// ---------------------------------------------------------------------------
+// Document settings (a namespaced view over `Document.Meta`)
+// ---------------------------------------------------------------------------
+
+fn valid_ident(s: &str) -> bool {
+    let mut chars = s.chars();
+    match chars.next() {
+        Some(c) if c.is_ascii_alphabetic() || c == '_' => {}
+        _ => return false,
+    }
+    chars.all(|c| c.is_ascii_alphanumeric() || c == '_')
+}
+
+fn validate_namespace(ns: &str) -> PyResult<()> {
+    if ns.is_empty() || !ns.split('.').all(valid_ident) {
+        return Err(PyValueError::new_err(format!(
+            "invalid settings namespace '{ns}'"
+        )));
+    }
+    Ok(())
+}
+
+fn validate_key(key: &str) -> PyResult<()> {
+    if !valid_ident(key) {
+        return Err(PyValueError::new_err(format!("invalid setting key '{key}'")));
+    }
+    Ok(())
+}
+
+fn parse_bool(raw: &str) -> Option<bool> {
+    match raw.trim().to_ascii_lowercase().as_str() {
+        "true" | "1" => Some(true),
+        "false" | "0" => Some(false),
+        _ => None,
+    }
+}
+
+#[pyclass(name = "DocumentSettings", module = "fc")]
+struct PyDocumentSettings {
+    meta: Arc<Mutex<BTreeMap<String, String>>>,
+    namespace: String,
+}
+
+impl PyDocumentSettings {
+    fn full_key(&self, key: &str) -> String {
+        format!("{}.{}", self.namespace, key)
+    }
+
+    fn get_raw(&self, key: &str) -> Option<String> {
+        self.meta.lock().unwrap().get(&self.full_key(key)).cloned()
+    }
+
+    fn set_raw(&self, key: &str, value: String) {
+        self.meta.lock().unwrap().insert(self.full_key(key), value);
+    }
+}
+
+#[pymethods]
+impl PyDocumentSettings {
+    #[pyo3(signature = (key, default=""))]
+    fn getString(&self, key: &str, default: &str) -> String {
+        self.get_raw(key).unwrap_or_else(|| default.to_string())
+    }
+
+    #[pyo3(signature = (key, default=0))]
+    fn getInt(&self, key: &str, default: i64) -> i64 {
+        self.get_raw(key)
+            .and_then(|v| v.trim().parse::<i64>().ok())
+            .unwrap_or(default)
+    }
+
+    #[pyo3(signature = (key, default=0.0))]
+    fn getFloat(&self, key: &str, default: f64) -> f64 {
+        self.get_raw(key)
+            .and_then(|v| v.trim().parse::<f64>().ok())
+            .unwrap_or(default)
+    }
+
+    fn getBool(&self, key: &str, default: &Bound<'_, PyAny>) -> PyResult<bool> {
+        if !default.is_instance_of::<PyBool>() {
+            return Err(PyTypeError::new_err("default must be a bool"));
+        }
+        let default: bool = default.extract()?;
+        Ok(self.get_raw(key).and_then(|v| parse_bool(&v)).unwrap_or(default))
+    }
+
+    fn setString(&self, key: &str, value: &str) -> PyResult<()> {
+        validate_key(key)?;
+        self.set_raw(key, value.to_string());
+        Ok(())
+    }
+
+    fn setInt(&self, key: &str, value: i64) -> PyResult<()> {
+        validate_key(key)?;
+        self.set_raw(key, value.to_string());
+        Ok(())
+    }
+
+    fn setFloat(&self, key: &str, value: f64) -> PyResult<()> {
+        validate_key(key)?;
+        self.set_raw(key, format!("{value}"));
+        Ok(())
+    }
+
+    fn setBool(&self, key: &str, value: &Bound<'_, PyAny>) -> PyResult<()> {
+        validate_key(key)?;
+        if !value.is_instance_of::<PyBool>() {
+            return Err(PyTypeError::new_err("value must be a bool"));
+        }
+        let value: bool = value.extract()?;
+        self.set_raw(key, if value { "true".into() } else { "false".into() });
+        Ok(())
+    }
+
+    fn remove(&self, key: &str) -> PyResult<()> {
+        validate_key(key)?;
+        self.meta.lock().unwrap().remove(&self.full_key(key));
+        Ok(())
+    }
+
+    fn keys(&self) -> Vec<String> {
+        let prefix = format!("{}.", self.namespace);
+        let mut out: Vec<String> = self
+            .meta
+            .lock()
+            .unwrap()
+            .keys()
+            .filter_map(|k| k.strip_prefix(&prefix))
+            .filter(|rest| !rest.contains('.'))
+            .map(|s| s.to_string())
+            .collect();
+        out.sort();
+        out
+    }
+}
+
 #[pyclass(name = "Document", module = "fc")]
 struct PyDocument {
     name: String,
@@ -436,9 +667,11 @@ struct PyDocument {
     file_name: Option<String>,
     auto_created: bool,
     inner: Arc<Mutex<CoreDocument>>,
+    /// Namespaced document meta-settings (`Doc.Meta` / `Doc.settings`).
+    meta: Arc<Mutex<BTreeMap<String, String>>>,
 }
 
-#[pyclass(name = "DocumentObject", module = "fc")]
+#[pyclass(name = "DocumentObject", module = "fc", dict)]
 struct PyDocumentObject {
     doc: Py<PyDocument>,
     inner: Arc<Mutex<CoreDocument>>,
@@ -456,6 +689,7 @@ impl PyDocument {
             file_name: None,
             auto_created: false,
             inner: Arc::new(Mutex::new(CoreDocument::new())),
+            meta: Arc::new(Mutex::new(BTreeMap::new())),
         }
     }
 
@@ -478,7 +712,14 @@ impl PyDocument {
     fn addObject(slf: Bound<'_, Self>, type_id: &str, name: Option<String>) -> PyDocumentObject {
         let inner = Arc::clone(&slf.borrow().inner);
         let name = name.unwrap_or_default();
-        let id = inner.lock().unwrap().add_object(&name, type_id);
+        let id = {
+            let mut doc = inner.lock().unwrap();
+            let id = doc.add_object(&name, type_id);
+            if type_id == "App::Origin" {
+                create_origin_children(&mut doc, id);
+            }
+            id
+        };
         PyDocumentObject {
             doc: slf.unbind(),
             inner,
@@ -486,16 +727,28 @@ impl PyDocument {
         }
     }
 
-    fn getObject(slf: Bound<'_, Self>, name: &str) -> Option<PyDocumentObject> {
+    fn getObject(slf: &Bound<'_, Self>, key: &Bound<'_, PyAny>) -> PyResult<Option<PyDocumentObject>> {
         let py = slf.py();
         let inner = Arc::clone(&slf.borrow().inner);
-        let doc: Py<PyDocument> = slf.unbind();
-        let id = inner.lock().unwrap().get_by_name(name)?;
-        Some(PyDocumentObject {
-            doc: doc.clone_ref(py),
+        let doc_py: Py<PyDocument> = slf.clone().unbind();
+        let id = if let Ok(name) = key.extract::<String>() {
+            inner.lock().unwrap().get_by_name(&name)
+        } else if let Ok(id) = key.extract::<usize>() {
+            if inner.lock().unwrap().object(id).is_some() {
+                Some(id)
+            } else {
+                None
+            }
+        } else {
+            return Err(PyTypeError::new_err(
+                "getObject expects a name (str) or an object id (int)",
+            ));
+        };
+        Ok(id.map(|id| PyDocumentObject {
+            doc: doc_py.clone_ref(py),
             inner,
             id,
-        })
+        }))
     }
 
     #[getter]
@@ -729,6 +982,94 @@ impl PyDocument {
         0
     }
 
+    // -- meta settings -------------------------------------------------------
+
+    #[getter]
+    fn Meta(&self, py: Python<'_>) -> Py<PyDict> {
+        let dict = PyDict::new(py);
+        for (k, v) in self.meta.lock().unwrap().iter() {
+            let _ = dict.set_item(k, v);
+        }
+        dict.unbind()
+    }
+
+    #[setter]
+    fn set_Meta(&self, value: &Bound<'_, PyAny>) -> PyResult<()> {
+        let dict = value
+            .downcast::<PyDict>()
+            .map_err(|_| PyTypeError::new_err("Meta must be a dict"))?;
+        let mut meta = self.meta.lock().unwrap();
+        meta.clear();
+        for (k, v) in dict.iter() {
+            meta.insert(k.extract()?, v.extract()?);
+        }
+        Ok(())
+    }
+
+    /// Return a namespaced view over `Meta` (keys `"<namespace>.<key>"`).
+    fn settings(&self, namespace: &str) -> PyResult<PyDocumentSettings> {
+        validate_namespace(namespace)?;
+        Ok(PyDocumentSettings {
+            meta: Arc::clone(&self.meta),
+            namespace: namespace.to_string(),
+        })
+    }
+
+    // -- topology ------------------------------------------------------------
+
+    /// Objects not referenced by any link (link roots).
+    #[getter]
+    fn RootObjects(slf: &Bound<'_, Self>) -> Vec<PyDocumentObject> {
+        let py = slf.py();
+        let inner = Arc::clone(&slf.borrow().inner);
+        let doc_py: Py<PyDocument> = slf.clone().unbind();
+        let doc = inner.lock().unwrap();
+        let mut referenced = std::collections::BTreeSet::new();
+        for id in doc.object_ids() {
+            if let Some(o) = doc.object(id) {
+                for (_, p) in o.properties.iter() {
+                    match p {
+                        Property::Link(n) if !n.is_empty() => {
+                            referenced.insert(n.clone());
+                        }
+                        Property::LinkList(ns) => referenced.extend(ns.iter().cloned()),
+                        _ => {}
+                    }
+                }
+            }
+        }
+        doc.object_ids()
+            .into_iter()
+            .filter(|id| {
+                doc.object(*id)
+                    .map(|o| !referenced.contains(&o.name))
+                    .unwrap_or(false)
+            })
+            .map(|id| PyDocumentObject {
+                doc: doc_py.clone_ref(py),
+                inner: Arc::clone(&inner),
+                id,
+            })
+            .collect()
+    }
+
+    /// All objects in dependency-first order.
+    #[getter]
+    fn TopologicalSortedObjects(slf: &Bound<'_, Self>) -> Vec<PyDocumentObject> {
+        let py = slf.py();
+        let inner = Arc::clone(&slf.borrow().inner);
+        let doc_py: Py<PyDocument> = slf.clone().unbind();
+        let doc = inner.lock().unwrap();
+        let ids = doc.recompute_order().unwrap_or_else(|_| doc.object_ids());
+        ids.into_iter()
+            .map(|id| PyDocumentObject {
+                doc: doc_py.clone_ref(py),
+                inner: Arc::clone(&inner),
+                id,
+            })
+            .collect()
+    }
+
     /// Objects are also exposed by name as attributes (`doc.Label_1`).
     fn __getattr__(slf: &Bound<'_, Self>, name: &Bound<'_, PyAny>) -> PyResult<PyObject> {
         let py = slf.py();
@@ -759,6 +1100,16 @@ impl PyDocumentObject {
             Ok(o) => self.doc.is(&o.doc) && self.id == o.id,
             Err(_) => false,
         }
+    }
+
+    fn __hash__(&self) -> u64 {
+        self.id as u64
+    }
+
+    /// The object's document-unique id (also accepted by `getObject`).
+    #[getter]
+    fn ID(&self) -> u64 {
+        self.id as u64
     }
 
     #[getter]
@@ -795,6 +1146,12 @@ impl PyDocumentObject {
     #[getter]
     fn ViewObject(&self) -> Option<PyObject> {
         None
+    }
+
+    /// Whether the object must be recomputed. POC: never (recompute is a no-op).
+    #[getter]
+    fn MustExecute(&self) -> bool {
+        false
     }
 
     #[getter]
@@ -1038,11 +1395,14 @@ impl PyDocumentObject {
     }
 
     /// `OutList`: the objects this object links to (group members).
-    fn OutList(&self, py: Python<'_>) -> Vec<PyDocumentObject> {
-        self.group_members(py)
+    #[getter]
+    fn OutList(slf: &Bound<'_, Self>) -> Vec<PyDocumentObject> {
+        let py = slf.py();
+        slf.borrow().group_members(py)
     }
 
     /// `InList`: the objects that link to this object.
+    #[getter]
     fn InList(slf: &Bound<'_, Self>) -> Vec<PyDocumentObject> {
         let py = slf.py();
         let inner = Arc::clone(&slf.borrow().inner);
@@ -1066,62 +1426,187 @@ impl PyDocumentObject {
         result
     }
 
-    fn __getattr__(&self, name: &Bound<'_, PyAny>) -> PyResult<PyObject> {
+    /// Resolve sub-object(s) and return them per FreeCAD's `retType` convention:
+    /// 1 → DocumentObject, 2 → (obj, Matrix, proxy), 3 → Placement, 4 → Matrix.
+    #[pyo3(signature = (subname, retType=0, matrix=None, transform=true, depth=0))]
+    fn getSubObject(
+        slf: &Bound<'_, Self>,
+        subname: &Bound<'_, PyAny>,
+        retType: i64,
+        matrix: Option<&Bound<'_, PyAny>>,
+        transform: bool,
+        depth: i64,
+    ) -> PyResult<PyObject> {
+        let _ = (matrix, transform, depth);
+        let py = slf.py();
+
+        let subs: Vec<String> = if let Ok(s) = subname.extract::<String>() {
+            vec![s]
+        } else if let Ok(seq) = subname.extract::<Vec<String>>() {
+            seq
+        } else {
+            return Err(PyTypeError::new_err(
+                "subname must be a string or a sequence of strings",
+            ));
+        };
+
+        let inner = Arc::clone(&slf.borrow().inner);
+        let doc_py = slf.borrow().doc.clone_ref(py);
+
+        let resolved: Vec<(Option<PyDocumentObject>, Placement)> = {
+            let doc = inner.lock().unwrap();
+            subs.iter()
+                .map(|sub| {
+                    let stripped = sub.trim_end_matches('.');
+                    let child_id = doc.get_by_name(stripped);
+                    let placement = child_id
+                        .and_then(|id| doc.object(id))
+                        .and_then(|o| o.properties.get("Placement"))
+                        .and_then(|p| match p {
+                            Property::Placement(pl) => Some(*pl),
+                            _ => None,
+                        })
+                        .unwrap_or_else(Placement::identity);
+                    let obj = child_id.map(|id| PyDocumentObject {
+                        doc: doc_py.clone_ref(py),
+                        inner: Arc::clone(&inner),
+                        id,
+                    });
+                    (obj, placement)
+                })
+                .collect()
+        };
+
+        let build = |obj: &Option<PyDocumentObject>, pl: &Placement| -> PyObject {
+            let obj_py = obj
+                .as_ref()
+                .map(|o| {
+                    PyDocumentObject {
+                        doc: o.doc.clone_ref(py),
+                        inner: Arc::clone(&o.inner),
+                        id: o.id,
+                    }
+                    .into_py_any(py)
+                    .unwrap()
+                })
+                .unwrap_or_else(|| py.None());
+            match retType {
+                1 => obj_py,
+                2 => {
+                    let mat_py = PyMatrix { inner: pl.to_matrix() }.into_py_any(py).unwrap();
+                    (obj_py, mat_py, py.None()).into_py_any(py).unwrap()
+                }
+                3 => PyPlacement { inner: *pl }.into_py_any(py).unwrap(),
+                4 => PyMatrix { inner: pl.to_matrix() }.into_py_any(py).unwrap(),
+                _ => py.None(),
+            }
+        };
+
+        if resolved.len() == 1 {
+            let (obj, pl) = &resolved[0];
+            Ok(build(obj, pl))
+        } else {
+            let items: Vec<PyObject> = resolved.iter().map(|(o, pl)| build(o, pl)).collect();
+            Ok(items.into_py_any(py).unwrap())
+        }
+    }
+
+    fn __getattr__(slf: &Bound<'_, Self>, name: &Bound<'_, PyAny>) -> PyResult<PyObject> {
+        let py = slf.py();
         let name: String = name.extract()?;
         if name.starts_with('_') {
             return Err(PyAttributeError::new_err(name));
         }
         if name == "Group" {
-            return Ok(pyo3::Python::with_gil(|py| self.group_members(py).into_py_any(py).unwrap()));
+            return Ok(slf.borrow().group_members(py).into_py_any(py).unwrap());
         }
-        let value = {
-            let doc = self.inner.lock().unwrap();
-            doc.object(self.id)
-                .and_then(|o| o.properties.get(&name))
-                .cloned()
+        let (value, inner) = {
+            let this = slf.borrow();
+            let doc = this.inner.lock().unwrap();
+            let value = doc.object(this.id).and_then(|o| o.properties.get(&name)).cloned();
+            (value, Arc::clone(&this.inner))
         };
         match value {
-            Some(p) => Ok(pyo3::Python::with_gil(|py| property_to_py(py, &p))),
-            None => Err(PyAttributeError::new_err(format!(
-                "'{}' object has no attribute '{name}'",
-                self.TypeId()
-            ))),
+            // Link properties resolve to the referenced object (or None).
+            Some(Property::Link(link)) => {
+                if link.is_empty() {
+                    return Ok(py.None());
+                }
+                let found = inner.lock().unwrap().get_by_name(&link);
+                match found {
+                    Some(id) => Ok(PyDocumentObject {
+                        doc: slf.borrow().doc.clone_ref(py),
+                        inner,
+                        id,
+                    }
+                    .into_py_any(py)
+                    .unwrap()),
+                    None => Ok(py.None()),
+                }
+            }
+            Some(Property::LinkList(links)) => {
+                let objs: Vec<PyDocumentObject> = links
+                    .iter()
+                    .filter_map(|n| {
+                        let id = inner.lock().unwrap().get_by_name(n)?;
+                        Some(PyDocumentObject {
+                            doc: slf.borrow().doc.clone_ref(py),
+                            inner: Arc::clone(&inner),
+                            id,
+                        })
+                    })
+                    .collect();
+                Ok(objs.into_py_any(py).unwrap())
+            }
+            Some(p) => Ok(property_to_py(py, &p)),
+            None => {
+                let type_id = {
+                    let this = slf.borrow();
+                    let doc = this.inner.lock().unwrap();
+                    doc.object(this.id).map(|o| o.type_id.clone()).unwrap_or_default()
+                };
+                Err(PyAttributeError::new_err(format!(
+                    "'{type_id}' object has no attribute '{name}'"
+                )))
+            }
         }
     }
 
-    fn __setattr__(&self, name: &Bound<'_, PyAny>, value: &Bound<'_, PyAny>) -> PyResult<()> {
+    fn __setattr__(slf: &Bound<'_, Self>, name: &Bound<'_, PyAny>, value: &Bound<'_, PyAny>) -> PyResult<()> {
         let name: String = name.extract()?;
         if name == "Label" {
             let label: String = value
                 .extract()
                 .map_err(|_| PyTypeError::new_err("Label must be a string"))?;
-            self.inner.lock().unwrap().set_label(self.id, &label);
+            slf.borrow().inner.lock().unwrap().set_label(slf.borrow().id, &label);
             return Ok(());
         }
         if name == "Group" {
-            return self.set_group(value);
+            return slf.borrow().set_group(value);
         }
         if name.starts_with('_') {
-            return Err(PyAttributeError::new_err(name));
+            return set_instance_attr(slf, &name, value);
         }
-        let property = py_to_property(value)?;
-        let exists = {
-            let doc = self.inner.lock().unwrap();
-            doc.object(self.id)
-                .map(|o| o.properties.get(&name).is_some())
-                .unwrap_or(false)
+        // Coerce by the existing property's type where it matters (links).
+        let existing = {
+            let this = slf.borrow();
+            let doc = this.inner.lock().unwrap();
+            doc.object(this.id).and_then(|o| o.properties.get(&name)).cloned()
         };
-        if !exists {
-            return Err(PyAttributeError::new_err(format!(
-                "'{}' object has no attribute '{name}'",
-                self.TypeId()
-            )));
-        }
-        self.inner
-            .lock()
-            .unwrap()
-            .set_property(self.id, &name, property)
-            .map_err(PyValueError::new_err)
+        let property = match existing {
+            Some(Property::Link(_)) => Property::Link(py_to_link(value)?),
+            Some(Property::LinkList(_)) => Property::LinkList(py_to_link_list(value)?),
+            Some(Property::ColorList(_)) => Property::ColorList(py_to_color_list(value)?),
+            Some(_) => py_to_property(value)?,
+            // Not a known property: store it as a Python attribute (`Proxy`, …).
+            None => return set_instance_attr(slf, &name, value),
+        };
+        let (inner, id) = {
+            let this = slf.borrow();
+            (Arc::clone(&this.inner), this.id)
+        };
+        let result = inner.lock().unwrap().set_property(id, &name, property);
+        result.map_err(PyValueError::new_err)
     }
 
     /// Assign the `Group` link list from a sequence of objects (or names).
@@ -1369,6 +1854,11 @@ impl PyMatrix {
 
     fn multiply(&self, o: PyRef<'_, PyMatrix>) -> PyMatrix { PyMatrix { inner: self.inner.mul(&o.inner) } }
 
+    /// Transform a vector by this matrix (FreeCAD `Matrix.multVec`).
+    fn multVec(&self, v: PyRef<'_, PyVector>) -> PyVector {
+        PyVector { inner: self.inner.transform(&v.inner) }
+    }
+
     fn __mul__(&self, o: PyRef<'_, PyMatrix>) -> PyMatrix { PyMatrix { inner: self.inner.mul(&o.inner) } }
 
     fn __repr__(&self) -> String {
@@ -1481,6 +1971,11 @@ impl PyPlacement {
 
     fn __mul__(&self, o: PyRef<'_, PyPlacement>) -> PyPlacement { PyPlacement { inner: self.inner.mul(&o.inner) } }
 
+    /// Transform a vector by this placement (FreeCAD `Placement.multVec`).
+    fn multVec(&self, v: PyRef<'_, PyVector>) -> PyVector {
+        PyVector { inner: self.inner.to_matrix().transform(&v.inner) }
+    }
+
     fn __eq__(&self, other: &Bound<'_, PyAny>) -> bool {
         match other.extract::<PyRef<'_, PyPlacement>>() {
             Ok(o) => self.inner == o.inner,
@@ -1551,6 +2046,7 @@ fn newDocument(name: Option<String>) -> PyDocument {
         file_name: None,
         auto_created: false,
         inner: Arc::new(Mutex::new(CoreDocument::new())),
+        meta: Arc::new(Mutex::new(BTreeMap::new())),
     }
 }
 
@@ -1563,6 +2059,7 @@ fn openDocument(path: &str) -> PyResult<PyDocument> {
         file_name: Some(path.to_string()),
         auto_created: false,
         inner: Arc::new(Mutex::new(CoreDocument::from_saved(&saved))),
+        meta: Arc::new(Mutex::new(BTreeMap::new())),
     })
 }
 
@@ -1584,6 +2081,7 @@ fn fc(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyTypeId>()?;
     m.add_class::<PyDocument>()?;
     m.add_class::<PyDocumentObject>()?;
+    m.add_class::<PyDocumentSettings>()?;
     m.add_class::<PyStringHasher>()?;
     m.add_class::<PyStringID>()?;
     m.add_function(wrap_pyfunction!(newDocument, m)?)?;

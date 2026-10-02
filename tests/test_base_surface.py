@@ -257,5 +257,133 @@ class TestGuiStub(unittest.TestCase):
         FreeCAD.closeDocument("Gui")
 
 
+class TestOriginSubObject(unittest.TestCase):
+    def test_get_sub_object_axes_and_planes(self):
+        doc = FreeCAD.newDocument("Orig")
+        obj = doc.addObject("App::Origin", "Origin")
+        doc.recompute()
+
+        def angle(res, v1, v2):
+            return res[1].multVec(v1).getAngle(v2)
+
+        self.assertEqual(angle(obj.getSubObject("X_Axis", retType=2), FreeCAD.Vector(1, 0, 0), FreeCAD.Vector(1, 0, 0)), 0.0)
+        self.assertEqual(angle(obj.getSubObject("Y_Axis", retType=2), FreeCAD.Vector(1, 0, 0), FreeCAD.Vector(0, 1, 0)), 0.0)
+        self.assertEqual(angle(obj.getSubObject("Z_Axis", retType=2), FreeCAD.Vector(1, 0, 0), FreeCAD.Vector(0, 0, 1)), 0.0)
+        self.assertEqual(angle(obj.getSubObject("XY_Plane", retType=2), FreeCAD.Vector(0, 0, 1), FreeCAD.Vector(0, 0, 1)), 0.0)
+        self.assertEqual(angle(obj.getSubObject("XZ_Plane", retType=2), FreeCAD.Vector(0, 0, 1), FreeCAD.Vector(0, -1, 0)), 0.0)
+        self.assertEqual(angle(obj.getSubObject("YZ_Plane", retType=2), FreeCAD.Vector(0, 0, 1), FreeCAD.Vector(1, 0, 0)), 0.0)
+
+        # retType=3 (Placement) and retType=4 (Matrix) both have multVec
+        res = obj.getSubObject("YZ_Plane", retType=3)
+        self.assertEqual(res.multVec(FreeCAD.Vector(0, 0, 1)).getAngle(FreeCAD.Vector(1, 0, 0)), 0.0)
+        res = obj.getSubObject("YZ_Plane", retType=4)
+        self.assertEqual(res.multVec(FreeCAD.Vector(0, 0, 1)).getAngle(FreeCAD.Vector(1, 0, 0)), 0.0)
+
+        # sequence of subnames
+        r = obj.getSubObject(("XY_Plane", "YZ_Plane"), retType=4)
+        self.assertEqual(r[0], obj.getSubObject("XY_Plane", retType=4))
+        self.assertEqual(r[1], obj.getSubObject("YZ_Plane", retType=4))
+
+        # a second origin: OutList children resolve back to themselves
+        obj2 = doc.addObject("App::Origin", "Origin2")
+        doc.recompute()
+        self.assertEqual(len(obj2.OutList), 6)
+        for i in obj2.OutList:
+            self.assertEqual(obj2.getSubObject(i.Name, retType=1).Name, i.Name)
+            self.assertEqual(obj2.getSubObject(i.Name + ".", retType=1).Name, i.Name)
+
+        FreeCAD.closeDocument("Orig")
+
+
+class TestDocumentSettings(unittest.TestCase):
+    def test_meta_and_namespaced_settings(self):
+        doc = FreeCAD.newDocument("Settings")
+        doc.Meta = {"Draft.GridSpacing": "1 m", "Unrelated": "keep"}
+
+        settings = doc.settings("Draft")
+        self.assertEqual(settings.keys(), ["GridSpacing"])
+        settings.setString("GridSpacing", "0.1 m")
+        self.assertEqual(settings.getString("GridSpacing", ""), "0.1 m")
+        self.assertEqual(doc.Meta["Draft.GridSpacing"], "0.1 m")
+        self.assertEqual(doc.Meta["Unrelated"], "keep")
+
+        settings.setInt("GridMainlines", 10)
+        settings.setFloat("GridSize", 12.5)
+        settings.setBool("ShowGrid", True)
+        self.assertEqual(doc.Meta["Draft.GridMainlines"], "10")
+        self.assertEqual(doc.Meta["Draft.GridSize"], "12.5")
+        self.assertEqual(doc.Meta["Draft.ShowGrid"], "true")
+        FreeCAD.closeDocument("Settings")
+
+    def test_typed_getters_and_validation(self):
+        doc = FreeCAD.newDocument("Settings2")
+        doc.Meta = {
+            "Draft.GridMainlines": "10",
+            "Draft.BadInt": "10 lines",
+            "Draft.BadBool": "sometimes",
+        }
+        settings = doc.settings("Draft")
+        self.assertEqual(settings.getInt("GridMainlines", 1), 10)
+        self.assertEqual(settings.getInt("BadInt", 7), 7)
+        self.assertTrue(settings.getBool("BadBool", True))
+
+        for ns in ("", ".Draft", "Draft.", "Draft..Grid", "Draft-Grid"):
+            with self.assertRaises(ValueError):
+                doc.settings(ns)
+        for key in ("", "Grid.Spacing", "Grid-Spacing"):
+            with self.assertRaises(ValueError):
+                settings.setString(key, "x")
+        with self.assertRaises(TypeError):
+            settings.getBool("GridMainlines", "false")
+        FreeCAD.closeDocument("Settings2")
+
+
+class TestDocumentTopology(unittest.TestCase):
+    def test_get_object_by_id_and_type(self):
+        doc = FreeCAD.newDocument("Topo")
+        obj = doc.addObject("App::DocumentObject", "MyName")
+        self.assertEqual(doc.getObject(obj.Name), obj)
+        self.assertEqual(doc.getObject(obj.ID), obj)
+        self.assertIsNone(doc.getObject("Unknown"))
+        self.assertIsNone(doc.getObject(obj.ID + 1))
+        with self.assertRaises(TypeError):
+            doc.getObject([1])
+        FreeCAD.closeDocument("Topo")
+
+    def test_root_objects_and_topological_order(self):
+        doc = FreeCAD.newDocument("Roots")
+        a = doc.addObject("App::FeatureTest", "A")
+        b = doc.addObject("App::FeatureTest", "B")
+        a.Link = b
+        self.assertTrue(b not in doc.RootObjects)
+        self.assertTrue(a in doc.RootObjects)
+        self.assertEqual(len(doc.Objects), len(doc.TopologicalSortedObjects))
+        FreeCAD.closeDocument("Roots")
+
+
+class TestObjectExtras(unittest.TestCase):
+    def test_proxy_attribute_roundtrip(self):
+        doc = FreeCAD.newDocument("Proxy")
+        obj = doc.addObject("App::FeaturePython", "P")
+        marker = {"kind": "feature"}
+        obj.Proxy = marker
+        self.assertIs(obj.Proxy, marker)
+        FreeCAD.closeDocument("Proxy")
+
+    def test_link_and_color_list(self):
+        doc = FreeCAD.newDocument("Extras")
+        o1 = doc.addObject("App::FeatureTest", "o1")
+        o2 = doc.addObject("App::FeatureTest", "o2")
+        o1.Link = o2
+        self.assertEqual(o1.Link, o2)
+        o1.LinkList = [o2]
+        self.assertEqual(o1.LinkList, [o2])
+
+        o1.ColourList = [(1.0, 0.5, 0.0), (0.0, 0.5, 1.0)]
+        self.assertAlmostEqual(o1.ColourList[0][0], 1.0)
+        self.assertAlmostEqual(o1.ColourList[0][3], 1.0)  # alpha defaults to 1
+        FreeCAD.closeDocument("Extras")
+
+
 if __name__ == "__main__":
     unittest.main()

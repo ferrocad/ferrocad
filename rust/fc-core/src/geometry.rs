@@ -120,13 +120,13 @@ impl Matrix4 {
         Matrix4 { m: r }
     }
 
-    /// Transform a point (w=1).
+    /// Transform a point (w=1), row-major `M * v`.
     pub fn transform(&self, v: &Vector3) -> Vector3 {
         let m = &self.m;
-        let w = m[3] * v.x + m[7] * v.y + m[11] * v.z + m[15];
-        let x = (m[0] * v.x + m[4] * v.y + m[8] * v.z + m[12]) / w;
-        let y = (m[1] * v.x + m[5] * v.y + m[9] * v.z + m[13]) / w;
-        let z = (m[2] * v.x + m[6] * v.y + m[10] * v.z + m[14]) / w;
+        let w = m[12] * v.x + m[13] * v.y + m[14] * v.z + m[15];
+        let x = (m[0] * v.x + m[1] * v.y + m[2] * v.z + m[3]) / w;
+        let y = (m[4] * v.x + m[5] * v.y + m[6] * v.z + m[7]) / w;
+        let z = (m[8] * v.x + m[9] * v.y + m[10] * v.z + m[11]) / w;
         Vector3::new(x, y, z)
     }
 
@@ -216,9 +216,10 @@ impl Placement {
 
     pub fn to_matrix(&self) -> Matrix4 {
         let mut m = self.rotation.to_matrix();
-        m.m[12] = self.base.x;
-        m.m[13] = self.base.y;
-        m.m[14] = self.base.z;
+        // Row-major: translation occupies the 4th column (m[3], m[7], m[11]).
+        m.m[3] = self.base.x;
+        m.m[7] = self.base.y;
+        m.m[11] = self.base.z;
         m
     }
 }
@@ -267,5 +268,19 @@ mod tests {
         assert!(Rotation::identity().angle().abs() < 1e-12);
         let r = Rotation::from_axis_angle(&Vector3::new(0.0, 0.0, 1.0), pi);
         assert!((r.angle() - pi).abs() < 1e-12);
+    }
+
+    #[test]
+    fn rotation_direction_matches_right_hand_rule() {
+        let half = std::f64::consts::FRAC_PI_2;
+        // Rotation about +Z by +90° maps +X to +Y.
+        let r = Rotation::from_axis_angle(&Vector3::new(0.0, 0.0, 1.0), half);
+        let v = r.to_matrix().transform(&Vector3::new(1.0, 0.0, 0.0));
+        assert!(v.is_equal(&Vector3::new(0.0, 1.0, 0.0), 1e-9));
+
+        // Rotation about +Y by -90° maps +X to +Z.
+        let r = Rotation::from_axis_angle(&Vector3::new(0.0, 1.0, 0.0), -half);
+        let v = r.to_matrix().transform(&Vector3::new(1.0, 0.0, 0.0));
+        assert!(v.is_equal(&Vector3::new(0.0, 0.0, 1.0), 1e-9));
     }
 }

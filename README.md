@@ -67,7 +67,11 @@ core, with the C++ Python bindings replaced by Rust bindings.
 * **MVP slice B1** — **object name/label semantics**: names are sanitized
   (`My Label` → `My_Label`) and made unique; labels are unique unless the `DuplicateLabels`
   document preference is set (then the requested label is kept verbatim), for both `addObject` and
-  `copyObject`. Conformance now **153 passing**. This continues the [MVP track](../docs/mvp-path.md).
+  `copyObject`.
+* **MVP slice A2** — **`PropertyEnumeration` + type validation**: an enumeration property
+  (set-from-list, select by index/value, `enum_vals`), `addObject`/`addProperty`/`findObjects`
+  reject extension / non-property types with `TypeError`. Conformance now **155 passing**. This
+  continues the [MVP track](../docs/mvp-path.md).
 
 This is a proof of concept, not a product. It exists to validate the single
 riskiest assumption of the rewrite plan: *that a Python script written against

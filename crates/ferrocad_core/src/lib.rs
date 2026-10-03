@@ -17,7 +17,7 @@ mod transaction;
 mod typeregistry;
 mod unit;
 
-pub use document::{Document, DocumentObject, ObjectId, SavedDocument};
+pub use document::{sanitize_name, Document, DocumentObject, ObjectId, SavedDocument};
 pub use geometry::{Matrix4, Placement, Rotation, ScaleType, TypeId, Vector3};
 pub use observer::Observer;
 pub use property::{prop_status, status_from_name, status_names, Property, PropertyContainer};
@@ -108,6 +108,30 @@ mod tests {
         let obj = restored.object(id).unwrap();
         assert!(obj.properties.get("NoPersist").is_none());
         assert_eq!(obj.properties.status("Kept"), Some(prop_status::NONE));
+    }
+
+    #[test]
+    fn name_sanitization_and_uniqueness() {
+        assert_eq!(sanitize_name("My Label"), "My_Label");
+        assert_eq!(sanitize_name("abc\u{1}ef"), "abc_ef");
+        assert_eq!(sanitize_name("5x"), "_5x");
+        assert_eq!(sanitize_name(""), "_");
+
+        let mut doc = Document::new();
+        let a = doc.add_object("Label", "App::FeatureTest");
+        let b = doc.add_object("Label", "App::FeatureTest");
+        assert_eq!(doc.object(a).unwrap().name, "Label");
+        assert_eq!(doc.object(a).unwrap().label, "Label");
+        assert_eq!(doc.object(b).unwrap().name, "Label001");
+        assert_eq!(doc.object(b).unwrap().label, "Label001");
+
+        // Duplicate labels allowed: the requested label is kept verbatim.
+        let c = doc.add_object_with("Label", "App::FeatureTest", true);
+        assert_eq!(doc.object(c).unwrap().name, "Label002");
+        assert_eq!(doc.object(c).unwrap().label, "Label");
+
+        // Unique-label helper skips taken labels.
+        assert_eq!(doc.unique_label("Label"), "Label002");
     }
 
     #[test]

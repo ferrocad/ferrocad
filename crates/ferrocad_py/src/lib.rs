@@ -722,18 +722,14 @@ fn copy_source_data(
     ))
 }
 
-fn unique_name(doc: &CoreDocument, name: &str) -> String {
-    if doc.get_by_name(name).is_none() {
-        return name.to_string();
-    }
-    let mut i = 1;
-    loop {
-        let candidate = format!("{}{:03}", name, i);
-        if doc.get_by_name(&candidate).is_none() {
-            return candidate;
-        }
-        i += 1;
-    }
+/// Whether duplicate labels are allowed: the `DuplicateLabels` document preference
+/// (`User parameter:BaseApp/Preferences/Document`). Defaults to `false`.
+fn duplicate_labels(py: Python<'_>) -> bool {
+    py.import("FreeCAD")
+        .and_then(|m| m.call_method1("ParamGet", ("User parameter:BaseApp/Preferences/Document",)))
+        .and_then(|g| g.call_method1("GetBool", ("DuplicateLabels", false)))
+        .and_then(|v| v.extract::<bool>())
+        .unwrap_or(false)
 }
 
 /// Create the 6 datum sub-elements of an `App::Origin` and link them into its
@@ -750,8 +746,11 @@ fn create_origin_children(doc: &mut CoreDocument, origin_id: ObjectId) {
     ];
     let mut names = Vec::with_capacity(6);
     for (base, ty, rot) in children {
-        let name = unique_name(doc, base);
-        let child_id = doc.add_object(&name, ty);
+        let child_id = doc.add_object(base, ty);
+        let name = doc
+            .object(child_id)
+            .map(|o| o.name.clone())
+            .unwrap_or_else(|| base.to_string());
         let _ = doc.set_property(
             child_id,
             "Placement",
@@ -1175,10 +1174,11 @@ impl PyDocument {
         let inner = Arc::clone(&slf.borrow().inner);
         let doc_py: Py<PyDocument> = slf.clone().unbind();
         let name = name.unwrap_or_default();
+        let dup = duplicate_labels(py);
         let (id, tx) = {
             let mut doc = inner.lock().unwrap();
             let tx = doc.begin_transaction_if_pending();
-            let id = doc.add_object(&name, type_id);
+            let id = doc.add_object_with(&name, type_id, dup);
             if type_id == "App::Origin" {
                 create_origin_children(&mut doc, id);
             }
@@ -1394,13 +1394,16 @@ impl PyDocument {
 
         let inner = Arc::clone(&slf.borrow().inner);
         let doc_py: Py<PyDocument> = slf.clone().unbind();
+        let dup = duplicate_labels(py);
         let mut copied: Vec<Py<PyDocumentObject>> = Vec::new();
         {
             let mut doc = inner.lock().unwrap();
             for (name, label, type_id, props, exprs) in &sources {
-                let unique = unique_name(&doc, name);
-                let id = doc.add_object(&unique, type_id);
-                doc.set_label(id, label);
+                // The copy keeps the source label only when duplicates are allowed;
+                // otherwise the label is made unique (computed before inserting).
+                let new_label = if dup { label.clone() } else { doc.unique_label(label) };
+                let id = doc.add_object_with(name, type_id, dup);
+                doc.set_label(id, &new_label);
                 for (k, v) in props {
                     let _ = doc.set_property(id, k, v.clone());
                 }

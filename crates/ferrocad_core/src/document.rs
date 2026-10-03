@@ -51,22 +51,37 @@ impl Document {
     }
 
     pub fn add_object(&mut self, name: &str, type_id: &str) -> ObjectId {
+        self.add_object_with(name, type_id, false)
+    }
+
+    /// Add an object, applying FreeCAD's name/label rules.
+    ///
+    /// The internal `name` is always sanitized and made unique. The `label` is the
+    /// requested name when `duplicate_labels` is set, otherwise a unique label.
+    pub fn add_object_with(
+        &mut self,
+        name: &str,
+        type_id: &str,
+        duplicate_labels: bool,
+    ) -> ObjectId {
         let id = self.next_id;
         self.next_id += 1;
 
-        // FreeCAD-style default naming: last segment of the type id + counter.
-        let name = if name.is_empty() {
+        let (name, label) = if name.is_empty() {
+            // FreeCAD-style default naming: last segment of the type id + counter.
             let base = type_id.rsplit("::").next().unwrap_or("Object");
             let base = if base.is_empty() { "Object" } else { base };
-            let mut candidate = base.to_string();
-            let mut i = 1;
-            while self.objects.values().any(|o| o.name == candidate) {
-                candidate = format!("{base}{i:03}");
-                i += 1;
-            }
-            candidate
+            let unique = self.unique_name(base);
+            (unique.clone(), unique)
         } else {
-            name.to_string()
+            let base = sanitize_name(name);
+            let unique = self.unique_name(&base);
+            let label = if duplicate_labels {
+                base
+            } else {
+                self.unique_label(&base)
+            };
+            (unique, label)
         };
 
         let node = self.graph.add_node(id);
@@ -82,7 +97,7 @@ impl Document {
             id,
             DocumentObject {
                 id,
-                label: name.clone(),
+                label,
                 name,
                 type_id: type_id.to_string(),
                 properties,
@@ -97,6 +112,38 @@ impl Document {
             observer.on_object_added(id);
         }
         id
+    }
+
+    /// Make `base` a unique object *name* (base, base001, base002, …).
+    pub fn unique_name(&self, base: &str) -> String {
+        if self.get_by_name(base).is_none() {
+            return base.to_string();
+        }
+        let stem = strip_trailing_digits(base);
+        let mut i = 1;
+        loop {
+            let candidate = format!("{stem}{i:03}");
+            if self.get_by_name(&candidate).is_none() {
+                return candidate;
+            }
+            i += 1;
+        }
+    }
+
+    /// Make `base` a unique object *label* (base, base001, base002, …).
+    pub fn unique_label(&self, base: &str) -> String {
+        if !self.objects.values().any(|o| o.label == base) {
+            return base.to_string();
+        }
+        let stem = strip_trailing_digits(base);
+        let mut i = 1;
+        loop {
+            let candidate = format!("{stem}{i:03}");
+            if !self.objects.values().any(|o| o.label == candidate) {
+                return candidate;
+            }
+            i += 1;
+        }
     }
 
     pub fn object(&self, id: ObjectId) -> Option<&DocumentObject> {
@@ -689,6 +736,47 @@ fn extension_is_or_derives(ext: &str, base: &str) -> bool {
 }
 
 /// Strip a leading '.' from a self-relative expression path.
+/// FreeCAD `Base::Tools::getIdentifier`: keep identifier characters, replace every
+/// other code point with `_`, and prepend `_` if the first character is not a
+/// valid identifier start (e.g. a digit).
+pub fn sanitize_name(name: &str) -> String {
+    if name.is_empty() {
+        return "_".to_string();
+    }
+    let is_subsequent = |c: char| c == '_' || c.is_alphanumeric();
+    let is_first = |c: char| c == '_' || c.is_alphabetic();
+    let mut out = String::with_capacity(name.len() + 1);
+    let mut chars = name.chars();
+    if let Some(first) = chars.next() {
+        let first_ok = is_first(first);
+        if !first_ok {
+            out.push('_');
+        }
+        if first_ok || is_subsequent(first) {
+            out.push(first);
+        }
+    }
+    for c in chars {
+        if is_subsequent(c) {
+            out.push(c);
+        } else {
+            out.push('_');
+        }
+    }
+    out
+}
+
+/// Strip a trailing run of ASCII digits so `Label001` and `Label` share a stem;
+/// an all-digit name is returned unchanged.
+fn strip_trailing_digits(name: &str) -> &str {
+    let trimmed = name.trim_end_matches(|c: char| c.is_ascii_digit());
+    if trimmed.is_empty() {
+        name
+    } else {
+        trimmed
+    }
+}
+
 fn normalize_path(path: &str) -> String {
     path.trim_start_matches('.').to_string()
 }

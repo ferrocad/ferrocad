@@ -81,6 +81,32 @@ class TestDocumentObject(unittest.TestCase):
         self.assertEqual(obj.Name, "Box")
         self.assertEqual(obj.Label, "My Label")
 
+    def test_duplicate_object_names_get_unique_names_and_labels(self):
+        first = self.doc.addObject("App::FeaturePython", "Box")
+        second = self.doc.addObject("App::FeaturePython", "Box")
+        self.assertEqual(first.Name, "Box")
+        self.assertEqual(second.Name, "Box001")
+        # Default: the label is made unique too.
+        self.assertEqual(second.Label, "Box001")
+
+    def test_requested_name_is_sanitized(self):
+        obj = self.doc.addObject("App::FeaturePython", "My Box")
+        self.assertEqual(obj.Name, "My_Box")
+        self.assertEqual(obj.Label, "My_Box")
+
+    def test_duplicate_labels_preference(self):
+        params = FreeCAD.ParamGet("User parameter:BaseApp/Preferences/Document")
+        old = params.GetBool("DuplicateLabels", False)
+        try:
+            params.SetBool("DuplicateLabels", True)
+            first = self.doc.addObject("App::FeaturePython", "Lbl")
+            second = self.doc.addObject("App::FeaturePython", "Lbl")
+            self.assertEqual(first.Label, "Lbl")
+            self.assertEqual(second.Label, "Lbl")  # duplicates allowed
+            self.assertEqual(second.Name, "Lbl001")
+        finally:
+            params.SetBool("DuplicateLabels", old)
+
     def test_dynamic_properties(self):
         obj = self.doc.addObject("App::FeaturePython", "Box")
         obj.addProperty("App::PropertyString", "Description", "Base", "")

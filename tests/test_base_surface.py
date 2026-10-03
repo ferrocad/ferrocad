@@ -10,6 +10,7 @@ import enum
 import math
 import os
 import sys
+import tempfile
 import unittest
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "python"))
@@ -981,6 +982,69 @@ class TestBaseTypes(unittest.TestCase):
         self.assertTrue(p.toMatrix().isUnity() is False)
         q = FreeCAD.Placement(p.toMatrix())
         self.assertTrue(q.isSame(p, 1e-9))
+
+class TestPropertyStatus(unittest.TestCase):
+    def tearDown(self):
+        for name in ("Status", "NoPersist"):
+            if FreeCAD.getDocument(name) is not None:
+                FreeCAD.closeDocument(name)
+
+    def test_flags_touch_and_state(self):
+        doc = FreeCAD.newDocument("Status")
+        obj = doc.addObject("App::FeaturePython", "Obj")
+        obj.addProperty("App::PropertyString", "Plain")
+        obj.addProperty(
+            "App::PropertyString", "Out", "", "", FreeCAD.PropertyType.Prop_Output
+        )
+        doc.recompute()
+        self.assertNotIn("Touched", obj.State)
+
+        # Assigning a normal property touches the object; recompute clears it.
+        obj.Plain = "x"
+        self.assertIn("Touched", obj.State)
+        doc.recompute()
+        self.assertNotIn("Touched", obj.State)
+
+        # An output property does not touch the object.
+        obj.Out = "y"
+        self.assertNotIn("Touched", obj.State)
+
+        # Property status queries.
+        self.assertEqual(obj.getPropertyStatus("Out"), ["Output"])
+        self.assertEqual(obj.getTypeOfProperty("Plain"), [])
+        self.assertIn("Output", obj.getPropertyStatus())
+        obj.setPropertyStatus("Plain", "Hidden")
+        self.assertIn("Hidden", obj.getPropertyStatus("Plain"))
+        obj.setPropertyStatus("Plain", "-Hidden")
+        self.assertNotIn("Hidden", obj.getPropertyStatus("Plain"))
+        with self.assertRaises(AttributeError):
+            obj.getTypeOfProperty("Nope")
+
+        obj.enforceRecompute()
+        self.assertEqual(obj.getStatusString(), "Touched")
+        obj.purgeTouched()
+        self.assertEqual(obj.getStatusString(), "Valid")
+
+    def test_no_persist_is_not_saved(self):
+        doc = FreeCAD.newDocument("NoPersist")
+        obj = doc.addObject("App::FeaturePython", "Obj")
+        obj.addProperty("App::PropertyString", "Kept")
+        obj.addProperty(
+            "App::PropertyString", "Gone", "", "", FreeCAD.PropertyType.Prop_NoPersist
+        )
+        obj.Kept = "a"
+        obj.Gone = "b"
+        path = os.path.join(tempfile.gettempdir(), "ferrocad_nopersist.FCStd")
+        doc.saveAs(path)
+        FreeCAD.closeDocument("NoPersist")
+
+        doc2 = FreeCAD.open(path)
+        obj2 = doc2.getObject("Obj")
+        self.assertEqual(obj2.Kept, "a")
+        with self.assertRaises(AttributeError):
+            obj2.getTypeOfProperty("Gone")
+        FreeCAD.closeDocument(doc2.Name)
+
 
 if __name__ == "__main__":
     unittest.main()

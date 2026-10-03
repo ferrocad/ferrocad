@@ -28,6 +28,8 @@ pub struct DocumentObject {
     pub extensions: BTreeSet<String>,
     /// Set by `enforceRecompute`; cleared when the object recomputes.
     pub must_execute: bool,
+    /// Set when the object's last recompute failed (reported as `Invalid`).
+    pub invalid: bool,
     /// Opaque base64-pickled Python state (instance `__dict__` + `Proxy`).
     pub python_state: Option<String>,
 }
@@ -87,6 +89,7 @@ impl Document {
                 expressions: BTreeMap::new(),
                 extensions: BTreeSet::new(),
                 must_execute: false,
+                invalid: false,
                 python_state: None,
             },
         );
@@ -226,9 +229,19 @@ impl Document {
                 .ok_or_else(|| format!("no object {object}"))?;
             obj.properties.get(name).cloned()
         };
+        let status = self
+            .objects
+            .get(&object)
+            .and_then(|o| o.properties.status(name))
+            .unwrap_or(crate::prop_status::NONE);
         {
             let obj = self.objects.get_mut(&object).unwrap();
             obj.properties.set(name.to_string(), value.clone());
+            // Assigning a property touches the object, unless it is an output /
+            // no-recompute property (FreeCAD `Property::touch`).
+            if status & crate::prop_status::NO_TOUCH == 0 {
+                obj.must_execute = true;
+            }
         }
 
         if self.tx.is_active() || self.tx.has_pending() {
@@ -243,6 +256,43 @@ impl Document {
             observer.on_property_changed(object, name, old.as_ref(), &value);
         }
         Ok(())
+    }
+
+    /// Add a property with an explicit status mask. Unlike `set_property`, this
+    /// does not touch the object (FreeCAD `addProperty`).
+    pub fn add_property(
+        &mut self,
+        object: ObjectId,
+        name: &str,
+        value: Property,
+        status: u32,
+    ) -> Result<(), String> {
+        let obj = self
+            .objects
+            .get_mut(&object)
+            .ok_or_else(|| format!("no object {object}"))?;
+        obj.properties.set_with_status(name.to_string(), value, status);
+        Ok(())
+    }
+
+    /// The status mask of a property (`getPropertyStatus`), if it exists.
+    pub fn property_status(&self, object: ObjectId, name: &str) -> Option<u32> {
+        self.objects.get(&object).and_then(|o| o.properties.status(name))
+    }
+
+    /// Replace a property's status mask (`setPropertyStatus`).
+    pub fn set_property_status(&mut self, object: ObjectId, name: &str, status: u32) -> bool {
+        match self.objects.get_mut(&object) {
+            Some(obj) => obj.properties.set_status(name, status).is_some(),
+            None => false,
+        }
+    }
+
+    /// Mark an object as unchanged (FreeCAD `purgeTouched`).
+    pub fn purge_touched(&mut self, object: ObjectId) {
+        if let Some(obj) = self.objects.get_mut(&object) {
+            obj.must_execute = false;
+        }
     }
 
     // -- transactions -------------------------------------------------------
@@ -431,15 +481,34 @@ impl Document {
                     .collect()
             };
             for (prop, source) in expressions {
-                let parsed = expr::parse(&source)?;
-                let value = parsed.eval(&|name| self.resolve(&id, name))?;
+                let parsed = match expr::parse(&source) {
+                    Ok(p) => p,
+                    Err(e) => {
+                        self.mark_invalid(id);
+                        return Err(e);
+                    }
+                };
+                let value = match parsed.eval(&|name| self.resolve(&id, name)) {
+                    Ok(v) => v,
+                    Err(e) => {
+                        self.mark_invalid(id);
+                        return Err(e);
+                    }
+                };
                 if let Some(obj) = self.objects.get_mut(&id) {
                     obj.properties.set(prop.clone(), Property::Float(value));
+                    obj.invalid = false;
                 }
                 count += 1;
             }
         }
         Ok(count)
+    }
+
+    fn mark_invalid(&mut self, id: ObjectId) {
+        if let Some(obj) = self.objects.get_mut(&id) {
+            obj.invalid = true;
+        }
     }
 
     fn resolve(&self, current: &ObjectId, name: &str) -> Option<f64> {
@@ -464,21 +533,7 @@ impl Document {
         let objects = self
             .object_ids()
             .into_iter()
-            .filter_map(|id| {
-                self.object(id).map(|o| SavedObject {
-                    name: o.name.clone(),
-                    label: o.label.clone(),
-                    type_id: o.type_id.clone(),
-                    properties: o
-                        .properties
-                        .iter()
-                        .map(|(k, v)| (k.clone(), v.clone()))
-                        .collect(),
-                    expressions: o.expressions.clone(),
-                    extensions: o.extensions.iter().cloned().collect(),
-                    python_state: o.python_state.clone(),
-                })
-            })
+            .filter_map(|id| self.object(id).map(SavedObject::from_object))
             .collect();
         SavedDocument { name: name.to_string(), objects }
     }
@@ -492,11 +547,14 @@ impl Document {
             if let Some(o) = doc.objects.get_mut(&id) {
                 o.properties.clear();
                 for (k, v) in &obj.properties {
-                    o.properties.set(k.clone(), v.clone());
+                    let status = obj.property_status.get(k).copied().unwrap_or(crate::prop_status::NONE);
+                    o.properties.set_with_status(k.clone(), v.clone(), status);
                 }
                 o.expressions = obj.expressions.clone();
                 o.extensions = obj.extensions.iter().cloned().collect();
                 o.python_state = obj.python_state.clone();
+                o.must_execute = false;
+                o.invalid = false;
             }
         }
         doc
@@ -526,19 +584,7 @@ impl Document {
 
     fn saved_object(&self, id: ObjectId) -> Result<SavedObject, String> {
         let o = self.object(id).ok_or_else(|| format!("no object {id}"))?;
-        Ok(SavedObject {
-            name: o.name.clone(),
-            label: o.label.clone(),
-            type_id: o.type_id.clone(),
-            properties: o
-                .properties
-                .iter()
-                .map(|(k, v)| (k.clone(), v.clone()))
-                .collect(),
-            expressions: o.expressions.clone(),
-            extensions: o.extensions.iter().cloned().collect(),
-            python_state: o.python_state.clone(),
-        })
+        Ok(SavedObject::from_object(o))
     }
 
     /// Serialize one object to bytes (`dumpContent`).
@@ -553,7 +599,8 @@ impl Document {
         o.label = saved.label;
         o.properties.clear();
         for (k, v) in saved.properties {
-            o.properties.set(k, v);
+            let status = saved.property_status.get(&k).copied().unwrap_or(crate::prop_status::NONE);
+            o.properties.set_with_status(k, v, status);
         }
         o.expressions = saved.expressions;
         o.extensions = saved.extensions.into_iter().collect();
@@ -590,10 +637,40 @@ pub struct SavedObject {
     pub label: String,
     pub type_id: String,
     pub properties: BTreeMap<String, Property>,
+    /// Property name → `PropertyType` status mask.
+    #[serde(default)]
+    pub property_status: BTreeMap<String, u32>,
     pub expressions: BTreeMap<String, String>,
     pub extensions: BTreeSet<String>,
     #[serde(default)]
     pub python_state: Option<String>,
+}
+
+impl SavedObject {
+    /// Build the persisted form of an object, dropping transient / no-persist
+    /// properties (`Prop_Transient`, `Prop_NoPersist`).
+    fn from_object(o: &DocumentObject) -> SavedObject {
+        let mut properties = BTreeMap::new();
+        let mut property_status = BTreeMap::new();
+        for (k, v) in o.properties.iter() {
+            let status = o.properties.status(k).unwrap_or(crate::prop_status::NONE);
+            if status & crate::prop_status::NOT_PERSISTED != 0 {
+                continue;
+            }
+            properties.insert(k.clone(), v.clone());
+            property_status.insert(k.clone(), status);
+        }
+        SavedObject {
+            name: o.name.clone(),
+            label: o.label.clone(),
+            type_id: o.type_id.clone(),
+            properties,
+            property_status,
+            expressions: o.expressions.clone(),
+            extensions: o.extensions.iter().cloned().collect(),
+            python_state: o.python_state.clone(),
+        }
+    }
 }
 
 /// Extension inheritance: true if `ext` is `base` or derives from it.

@@ -74,9 +74,73 @@ impl Property {
     }
 }
 
+/// Public `PropertyType` flag bits (mirror `FreeCAD.PropertyType`).
+pub mod prop_status {
+    pub const NONE: u32 = 0;
+    pub const READONLY: u32 = 1;
+    pub const TRANSIENT: u32 = 2;
+    pub const HIDDEN: u32 = 4;
+    pub const OUTPUT: u32 = 8;
+    pub const NORECOMPUTE: u32 = 16;
+    pub const NOPERSIST: u32 = 32;
+    /// Internal-only `Prop_Input` (reported by `getTypeOfProperty`).
+    pub const INPUT: u32 = 64;
+
+    /// Properties with this bit are never written to the file. Note that
+    /// `Prop_Transient` only suppresses persistence for *static* properties;
+    /// dynamically added ones are still saved (FreeCAD `PropertyContainer::Save`).
+    pub const NOT_PERSISTED: u32 = NOPERSIST;
+    /// Setting a property with either of these bits does not touch the object.
+    pub const NO_TOUCH: u32 = OUTPUT | NORECOMPUTE;
+}
+
+/// The `getTypeOfProperty` / `getPropertyStatus` text names for a status mask.
+/// Order follows the upstream `getTypeOfProperty` docstring.
+pub fn status_names(status: u32) -> Vec<&'static str> {
+    let mut names = Vec::new();
+    if status & prop_status::HIDDEN != 0 {
+        names.push("Hidden");
+    }
+    if status & prop_status::NORECOMPUTE != 0 {
+        names.push("NoRecompute");
+    }
+    if status & prop_status::NOPERSIST != 0 {
+        names.push("NoPersist");
+    }
+    if status & prop_status::OUTPUT != 0 {
+        names.push("Output");
+    }
+    if status & prop_status::READONLY != 0 {
+        names.push("ReadOnly");
+    }
+    if status & prop_status::TRANSIENT != 0 {
+        names.push("Transient");
+    }
+    if status & prop_status::INPUT != 0 {
+        names.push("Input");
+    }
+    names
+}
+
+/// Map a status text name to its bit (case-insensitive).
+pub fn status_from_name(name: &str) -> Option<u32> {
+    match name.to_ascii_lowercase().as_str() {
+        "readonly" => Some(prop_status::READONLY),
+        "transient" => Some(prop_status::TRANSIENT),
+        "hidden" => Some(prop_status::HIDDEN),
+        "output" => Some(prop_status::OUTPUT),
+        "norecompute" => Some(prop_status::NORECOMPUTE),
+        "nopersist" => Some(prop_status::NOPERSIST),
+        "input" => Some(prop_status::INPUT),
+        _ => None,
+    }
+}
+
 #[derive(Debug, Default)]
 pub struct PropertyContainer {
     props: BTreeMap<String, Property>,
+    /// Property name → `PropertyType` status bitmask.
+    status: BTreeMap<String, u32>,
 }
 
 impl PropertyContainer {
@@ -85,7 +149,30 @@ impl PropertyContainer {
     }
 
     pub fn set(&mut self, name: impl Into<String>, value: Property) {
-        self.props.insert(name.into(), value);
+        let name = name.into();
+        self.status.entry(name.clone()).or_insert(prop_status::NONE);
+        self.props.insert(name, value);
+    }
+
+    /// Insert a value together with its status mask (used by `addProperty`).
+    pub fn set_with_status(&mut self, name: impl Into<String>, value: Property, status: u32) {
+        let name = name.into();
+        self.status.insert(name.clone(), status);
+        self.props.insert(name, value);
+    }
+
+    /// The status mask for a property, or `None` if the property does not exist.
+    pub fn status(&self, name: &str) -> Option<u32> {
+        self.status.get(name).copied()
+    }
+
+    /// Replace a property's status mask; `None` if the property does not exist.
+    pub fn set_status(&mut self, name: &str, status: u32) -> Option<u32> {
+        if !self.props.contains_key(name) {
+            return None;
+        }
+        let old = self.status.insert(name.to_string(), status);
+        Some(old.unwrap_or(prop_status::NONE))
     }
 
     pub fn get(&self, name: &str) -> Option<&Property> {
@@ -97,11 +184,13 @@ impl PropertyContainer {
     }
 
     pub fn remove(&mut self, name: &str) -> Option<Property> {
+        self.status.remove(name);
         self.props.remove(name)
     }
 
     pub fn clear(&mut self) {
         self.props.clear();
+        self.status.clear();
     }
 
     pub fn iter(&self) -> impl Iterator<Item = (&String, &Property)> {

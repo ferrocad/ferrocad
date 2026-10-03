@@ -10,7 +10,7 @@ use std::collections::{BTreeMap, HashMap};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, OnceLock};
 
-use ferrocad_core::{canonical_name, parse_unit, Document as CoreDocument, Matrix4, ObjectId, Placement, Property, Quantity, Rotation, StringHasher, StringId, TypeId, Unit, Vector3};
+use ferrocad_core::{canonical_name, parse_unit, prop_status, status_from_name, status_names, Document as CoreDocument, Matrix4, ObjectId, Placement, Property, Quantity, Rotation, StringHasher, StringId, TypeId, Unit, Vector3};
 use pyo3::exceptions::{
     PyAttributeError, PyIndexError, PyNotImplementedError, PyRuntimeError, PyTypeError, PyValueError,
 };
@@ -600,6 +600,52 @@ fn py_to_property(value: &Bound<'_, PyAny>) -> PyResult<Property> {
     Err(PyTypeError::new_err(
         "unsupported property value (expected str, int, float, bool, list, Quantity, Vector, Placement, Rotation, or Matrix)",
     ))
+}
+
+/// Apply a `setPropertyStatus` value to a status mask. Accepts an int (negative
+/// clears the bits), a status name, or a sequence of either; a leading `-` on a
+/// name clears that flag.
+fn apply_status(status: &mut u32, val: &Bound<'_, PyAny>) -> PyResult<()> {
+    if let Ok(i) = val.extract::<i64>() {
+        if i >= 0 {
+            *status |= i as u32;
+        } else {
+            *status &= !((-i) as u32);
+        }
+        return Ok(());
+    }
+    if let Ok(s) = val.extract::<String>() {
+        return apply_status_name(status, &s);
+    }
+    if let Ok(iter) = val.try_iter() {
+        for item in iter {
+            apply_status(status, &item?)?;
+        }
+        return Ok(());
+    }
+    Err(PyTypeError::new_err(
+        "property status must be an int, a str, or a sequence of either",
+    ))
+}
+
+fn apply_status_name(status: &mut u32, name: &str) -> PyResult<()> {
+    let (clear, bare) = match name.strip_prefix('-') {
+        Some(rest) => (true, rest),
+        None => (false, name),
+    };
+    match status_from_name(bare) {
+        Some(bit) if clear => {
+            *status &= !bit;
+            Ok(())
+        }
+        Some(bit) => {
+            *status |= bit;
+            Ok(())
+        }
+        None => Err(PyValueError::new_err(format!(
+            "unknown property status '{name}'"
+        ))),
+    }
 }
 
 /// Map a FreeCAD property type id to its default value.
@@ -1693,13 +1739,14 @@ impl PyDocumentObject {
             .unwrap_or(false)
     }
 
-    /// The object's state flags (`Touched` vs `Up-to-date`).
+    /// The object's state flags (`Invalid`/`Touched` vs `Up-to-date`).
     #[getter]
     fn State(&self) -> Vec<String> {
-        if self.MustExecute() {
-            vec!["Touched".to_string()]
-        } else {
-            vec!["Up-to-date".to_string()]
+        let doc = self.inner.lock().unwrap();
+        match doc.object(self.id) {
+            Some(o) if o.invalid => vec!["Invalid".to_string(), "Touched".to_string()],
+            Some(o) if o.must_execute => vec!["Touched".to_string()],
+            _ => vec!["Up-to-date".to_string()],
         }
     }
 
@@ -1744,13 +1791,54 @@ impl PyDocumentObject {
             .map(|p| p.type_name().to_string())
     }
 
-    /// FreeCAD alias: `getTypeOfProperty` returns the property's type flags
-    /// (the POC returns the type id, which round-trips for the tests).
-    fn getTypeOfProperty(&self, name: &str) -> Option<String> {
-        self.getTypeIdOfProperty(name)
+    /// `getTypeOfProperty`: the property's status flags as text names.
+    fn getTypeOfProperty(&self, name: &str) -> PyResult<Vec<String>> {
+        let doc = self.inner.lock().unwrap();
+        match doc.object(self.id).and_then(|o| o.properties.status(name)) {
+            Some(status) => Ok(status_names(status).into_iter().map(String::from).collect()),
+            None => Err(PyAttributeError::new_err(format!("no property '{name}'"))),
+        }
     }
 
-    #[pyo3(signature = (type_id, name, group="", doc="", attr=0, read_only=false, hidden=false, locked=false))]
+    /// `getPropertyStatus(name="")`: with no name, the supported status names.
+    #[pyo3(signature = (name=""))]
+    fn getPropertyStatus(&self, name: &str) -> PyResult<Vec<String>> {
+        if name.is_empty() {
+            return Ok([
+                "ReadOnly",
+                "Hidden",
+                "Transient",
+                "Output",
+                "NoRecompute",
+                "NoPersist",
+                "Input",
+            ]
+            .into_iter()
+            .map(String::from)
+            .collect());
+        }
+        let doc = self.inner.lock().unwrap();
+        match doc.object(self.id).and_then(|o| o.properties.status(name)) {
+            Some(status) => Ok(status_names(status).into_iter().map(String::from).collect()),
+            None => Err(PyAttributeError::new_err(format!("no property '{name}'"))),
+        }
+    }
+
+    /// `setPropertyStatus(name, val)`: add (or, with a leading `-`, clear) flags.
+    fn setPropertyStatus(&self, name: &str, val: &Bound<'_, PyAny>) -> PyResult<()> {
+        let current = {
+            let doc = self.inner.lock().unwrap();
+            doc.property_status(self.id, name)
+                .ok_or_else(|| PyAttributeError::new_err(format!("no property '{name}'")))?
+        };
+        let mut status = current;
+        apply_status(&mut status, val)?;
+        let mut doc = self.inner.lock().unwrap();
+        doc.set_property_status(self.id, name, status);
+        Ok(())
+    }
+
+    #[pyo3(signature = (type_id, name, group="", doc="", attr=0, read_only=false, hidden=false, locked=false, enum_vals=None))]
     fn addProperty(
         slf: &Bound<'_, Self>,
         type_id: &str,
@@ -1761,10 +1849,18 @@ impl PyDocumentObject {
         read_only: bool,
         hidden: bool,
         locked: bool,
+        enum_vals: Option<Vec<String>>,
     ) -> PyResult<()> {
-        let _ = (group, doc, attr, read_only, hidden, locked);
+        let _ = (group, doc, locked, enum_vals);
         if name.is_empty() {
             return Err(PyValueError::new_err("property name must not be empty"));
+        }
+        let mut status = attr.max(0) as u32;
+        if read_only {
+            status |= prop_status::READONLY;
+        }
+        if hidden {
+            status |= prop_status::HIDDEN;
         }
         let (inner, id) = {
             let this = slf.borrow();
@@ -1774,7 +1870,7 @@ impl PyDocumentObject {
         inner
             .lock()
             .unwrap()
-            .set_property(id, name, default)
+            .add_property(id, name, default, status)
             .map_err(PyValueError::new_err)?;
         fire_obj_str("slotAppendDynamicProperty", slf, name);
         Ok(())
@@ -1839,6 +1935,21 @@ impl PyDocumentObject {
 
     fn enforceRecompute(&self) {
         self.inner.lock().unwrap().enforce_recompute(self.id);
+    }
+
+    /// Mark the object as unchanged (FreeCAD `purgeTouched`).
+    fn purgeTouched(&self) {
+        self.inner.lock().unwrap().purge_touched(self.id);
+    }
+
+    /// A short status string: `Invalid`, `Touched` or `Valid`.
+    fn getStatusString(&self) -> String {
+        let doc = self.inner.lock().unwrap();
+        match doc.object(self.id) {
+            Some(o) if o.invalid => "Invalid".to_string(),
+            Some(o) if o.must_execute => "Touched".to_string(),
+            _ => "Valid".to_string(),
+        }
     }
 
     /// Record a property editor mode (`ReadOnly`, …); POC: fires the event only.

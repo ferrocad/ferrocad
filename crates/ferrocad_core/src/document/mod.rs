@@ -1,5 +1,9 @@
-//! A document object model with a dependency graph, transactions, observers,
-//! and expression-driven recompute.
+//! The document object model: objects, a dependency graph, observers, and
+//! expression-driven recompute.
+//!
+//! Transactional editing (undo/redo, the reversible change set, FreeCAD's
+//! transaction metadata) lives in the [`transaction`] submodule, which adds a
+//! second `impl Document`; this module owns the object store the engine mutates.
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -10,7 +14,10 @@ use serde::{Deserialize, Serialize};
 use crate::expr;
 use crate::observer::Observer;
 use crate::property::{Property, PropertyContainer};
-use crate::transaction::{Change, PropertyChange, TransactionManager};
+
+mod transaction;
+
+use transaction::{Change, PropertyChange, TransactionManager};
 
 pub type ObjectId = usize;
 
@@ -236,39 +243,6 @@ impl Document {
         true
     }
 
-    /// Re-insert an object (with its original id) from a saved snapshot.
-    fn insert_saved_object(&mut self, id: ObjectId, saved: &SavedObject) {
-        let node = self.graph.add_node(id);
-        self.index.insert(id, node);
-        let mut properties = PropertyContainer::new();
-        for (k, v) in &saved.properties {
-            let status = saved
-                .property_status
-                .get(k)
-                .copied()
-                .unwrap_or(crate::prop_status::NONE);
-            properties.set_with_status(k.clone(), v.clone(), status);
-        }
-        self.objects.insert(
-            id,
-            DocumentObject {
-                id,
-                name: saved.name.clone(),
-                label: saved.label.clone(),
-                type_id: saved.type_id.clone(),
-                properties,
-                expressions: saved.expressions.clone(),
-                extensions: saved.extensions.iter().cloned().collect(),
-                must_execute: false,
-                invalid: false,
-                python_state: saved.python_state.clone(),
-            },
-        );
-        if id >= self.next_id {
-            self.next_id = id + 1;
-        }
-    }
-
     pub fn set_label(&mut self, id: ObjectId, label: &str) -> bool {
         match self.objects.get_mut(&id) {
             Some(obj) => {
@@ -389,34 +363,9 @@ impl Document {
         Ok(())
     }
 
-    /// Record a reversible change, but only while a transaction is pending or
-    /// active (edits outside a transaction are not undoable).
-    fn record_change(&mut self, change: Change) {
-        if self.tx.is_active() || self.tx.has_pending() {
-            self.tx.record(change);
-        }
-    }
-
     /// The object made active by the most recent `addObject` (or `None`).
     pub fn active_object(&self) -> Option<ObjectId> {
         self.active_object
-    }
-
-    /// The currently booked transaction id, or 0 (FreeCAD `getBookedTransactionID`).
-    pub fn booked_transaction_id(&self) -> usize {
-        self.tx.booked_transaction_id()
-    }
-
-    /// The number of undo steps, or the depth of transaction `id`
-    /// (FreeCAD `getAvailableUndos`).
-    pub fn available_undos(&self, id: usize) -> usize {
-        self.tx.available_undos(id)
-    }
-
-    /// The number of redo steps, or the depth of transaction `id`
-    /// (FreeCAD `getAvailableRedos`).
-    pub fn available_redos(&self, id: usize) -> usize {
-        self.tx.available_redos(id)
     }
 
     /// Add a property with an explicit status mask. Unlike `set_property`, this
@@ -456,55 +405,6 @@ impl Document {
         }
     }
 
-    // -- transactions -------------------------------------------------------
-
-    /// Request a named transaction (created on the first change).
-    pub fn open_transaction_named(&mut self, name: &str) {
-        self.tx.open_named(name);
-    }
-
-    pub fn open_transaction(&mut self) {
-        self.tx.open_named("");
-    }
-
-    /// If a pending transaction exists, make it active and return its name.
-    pub fn begin_transaction_if_pending(&mut self) -> Option<String> {
-        self.tx.begin()
-    }
-
-    /// Commit the active transaction; returns whether one was committed.
-    pub fn commit_transaction(&mut self) -> bool {
-        self.tx.commit()
-    }
-
-    pub fn has_undo(&self) -> bool {
-        self.tx.has_undo()
-    }
-
-    pub fn has_redo(&self) -> bool {
-        self.tx.has_redo()
-    }
-
-    /// Whether a transaction is pending or active.
-    pub fn is_in_transaction(&self) -> bool {
-        self.tx.has_pending() || self.tx.is_active()
-    }
-
-    /// The undo transaction names, newest first (FreeCAD `UndoNames`).
-    pub fn undo_names(&self) -> Vec<String> {
-        self.tx.undo_names()
-    }
-
-    /// The redo transaction names, newest first (FreeCAD `RedoNames`).
-    pub fn redo_names(&self) -> Vec<String> {
-        self.tx.redo_names()
-    }
-
-    /// Drop all undo/redo history (FreeCAD `clearUndos`).
-    pub fn clear_undos(&mut self) {
-        self.tx.clear();
-    }
-
     // -- recompute flags -----------------------------------------------------
 
     pub fn enforce_recompute(&mut self, id: ObjectId) {
@@ -535,109 +435,6 @@ impl Document {
             }
         }
         flagged
-    }
-
-    pub fn abort_transaction(&mut self) -> bool {
-        match self.tx.abort() {
-            Some(tx) => {
-                for change in tx.changes.iter().rev() {
-                    self.revert(change);
-                }
-                true
-            }
-            None => false,
-        }
-    }
-
-    pub fn undo(&mut self) -> bool {
-        match self.tx.undo() {
-            Some(tx) => {
-                for change in tx.changes.iter().rev() {
-                    self.revert(change);
-                }
-                true
-            }
-            None => false,
-        }
-    }
-
-    pub fn redo(&mut self) -> bool {
-        match self.tx.redo() {
-            Some(tx) => {
-                for change in tx.changes.iter() {
-                    self.apply(change);
-                }
-                true
-            }
-            None => false,
-        }
-    }
-
-    fn apply(&mut self, change: &Change) {
-        match change {
-            Change::Property(c) => {
-                if let Some(obj) = self.objects.get_mut(&c.object) {
-                    obj.properties.set(c.name.clone(), c.new.clone());
-                }
-            }
-            Change::AddObject { id, saved } => self.insert_saved_object(*id, saved),
-            Change::RemoveObject { id, .. } => {
-                self.remove_object_raw(*id, true);
-            }
-            Change::AddExpression {
-                object,
-                prop,
-                new,
-                ..
-            } => self.set_expression_raw(*object, prop, new),
-            Change::RemoveExpression { object, prop, .. } => {
-                if let Some(obj) = self.objects.get_mut(object) {
-                    obj.expressions.remove(prop);
-                }
-            }
-        }
-    }
-
-    fn revert(&mut self, change: &Change) {
-        match change {
-            Change::Property(c) => {
-                if let Some(obj) = self.objects.get_mut(&c.object) {
-                    match &c.old {
-                        Some(old) => obj.properties.set(c.name.clone(), old.clone()),
-                        None => {
-                            obj.properties.remove(&c.name);
-                        }
-                    }
-                }
-            }
-            Change::AddObject { id, .. } => {
-                self.remove_object_raw(*id, false);
-            }
-            Change::RemoveObject { id, saved } => self.insert_saved_object(*id, saved),
-            Change::AddExpression {
-                object,
-                prop,
-                old,
-                ..
-            } => match old {
-                Some(source) => self.set_expression_raw(*object, prop, source),
-                None => {
-                    if let Some(obj) = self.objects.get_mut(object) {
-                        obj.expressions.remove(prop);
-                    }
-                }
-            },
-            Change::RemoveExpression { object, prop, old } => {
-                self.set_expression_raw(*object, prop, old);
-            }
-        }
-    }
-
-    /// Insert an expression without validation or recording (undo/redo path).
-    fn set_expression_raw(&mut self, object: ObjectId, prop: &str, source: &str) {
-        if let Some(obj) = self.objects.get_mut(&object) {
-            obj.expressions.insert(prop.to_string(), source.to_string());
-        }
     }
 
     // -- expressions --------------------------------------------------------

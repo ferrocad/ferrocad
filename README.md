@@ -63,8 +63,11 @@ core, with the C++ Python bindings replaced by Rust bindings.
 * **MVP slice A1** — **object state, property status & touch**: per-property `PropertyType` status
   flags (`getPropertyStatus`/`setPropertyStatus`/`getTypeOfProperty`), touch-on-assign
   (`Prop_Output`/`Prop_NoRecompute` suppress it), `Prop_NoPersist` dropped on save, `purgeTouched`,
-  `getStatusString`, and a full `State` (`Invalid`/`Touched`/`Up-to-date`); conformance now
-  **149 passing**. This begins the [MVP track](../docs/mvp-path.md).
+  `getStatusString`, and a full `State` (`Invalid`/`Touched`/`Up-to-date`).
+* **MVP slice B1** — **object name/label semantics**: names are sanitized
+  (`My Label` → `My_Label`) and made unique; labels are unique unless the `DuplicateLabels`
+  document preference is set (then the requested label is kept verbatim), for both `addObject` and
+  `copyObject`. Conformance now **153 passing**. This continues the [MVP track](../docs/mvp-path.md).
 
 This is a proof of concept, not a product. It exists to validate the single
 riskiest assumption of the rewrite plan: *that a Python script written against

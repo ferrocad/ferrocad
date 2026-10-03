@@ -60,6 +60,11 @@ core, with the C++ Python bindings replaced by Rust bindings.
   plus the rotation-numerics cluster: FreeCAD's verbatim **Gauss-Jordan inverse**, quaternion
   normalizing `to_matrix`, `decompose`-based `from_matrix`, angle wrapping, quaternion
   `yaw_pitch_roll`, and `Rotation.Axes`; conformance now **146 passing** (`BaseTests` 48/49).
+* **MVP slice A1** — **object state, property status & touch**: per-property `PropertyType` status
+  flags (`getPropertyStatus`/`setPropertyStatus`/`getTypeOfProperty`), touch-on-assign
+  (`Prop_Output`/`Prop_NoRecompute` suppress it), `Prop_NoPersist` dropped on save, `purgeTouched`,
+  `getStatusString`, and a full `State` (`Invalid`/`Touched`/`Up-to-date`); conformance now
+  **149 passing**. This begins the [MVP track](../docs/mvp-path.md).
 
 This is a proof of concept, not a product. It exists to validate the single
 riskiest assumption of the rewrite plan: *that a Python script written against

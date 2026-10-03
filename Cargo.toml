@@ -13,9 +13,12 @@ members = [
     "crates/ferrocad_ctypes",
     "crates/ferrocad_host",
 ]
-# The `host` crate is a UI spike whose PyO3 `auto-initialize` feature conflicts
-# with the `extension-module` feature of the primary crates, so it is excluded
-# from a bare `cargo build`/`cargo test`.
+# `ferrocad_host` is the bite-gpui app-shell spike: it is a workspace member so
+# `-p ferrocad_host` works, but it is excluded from `default-members` because
+# building it pulls in the whole GUI stack (a slow compile) and it embeds CPython
+# via PyO3 `auto-initialize`. It links fine in a full `cargo build --workspace`
+# because the extension crates keep `pyo3/extension-module` opt-in (see their
+# manifests), avoiding the libpython link conflict.
 default-members = [
     "crates/ferrocad_core",
     "crates/ferrocad_py",

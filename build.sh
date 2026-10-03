@@ -31,8 +31,11 @@ export PYO3_USE_ABI3_FORWARD_COMPATIBILITY
 TARGET="$HERE/target/release"
 
 echo "== building ferrocad_core / ferrocad_py / ferrocad_gen / ferrocad_ctypes =="
-# The workspace `default-members` selects exactly these four crates.
-cargo build --release --offline --manifest-path "$HERE/Cargo.toml"
+# The workspace `default-members` selects exactly these four crates. The
+# `extension-module` feature (opt-in, see the crates' manifests) makes PyO3 skip
+# linking libpython, which is what a packaged extension module needs.
+cargo build --release --offline --manifest-path "$HERE/Cargo.toml" \
+    --features ferrocad_py/extension-module,ferrocad_gen/extension-module
 
 # Package the primary PyO3 extension (importable as `ferrocad`).
 fc_src="$TARGET/libferrocad_py.so"

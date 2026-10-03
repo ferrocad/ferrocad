@@ -10,4 +10,10 @@ name = "ferrocad_gen"
 crate-type = ["cdylib"]
 
 [dependencies]
-pyo3 = { version = "0.25", features = ["extension-module", "abi3-py310"] }
+# `extension-module` is opt-in (see ferrocad_py) so a plain workspace build keeps
+# linking libpython and the `ferrocad_host` binary links cleanly.
+pyo3 = { version = "0.25", features = ["abi3-py310"] }
+
+[features]
+# Enabled by build.sh when producing the generated extension module.
+extension-module = ["pyo3/extension-module"]

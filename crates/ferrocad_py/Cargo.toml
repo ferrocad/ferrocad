@@ -11,4 +11,12 @@ crate-type = ["cdylib"]
 
 [dependencies]
 ferrocad_core = { path = "../ferrocad_core" }
-pyo3 = { version = "0.25", features = ["extension-module", "abi3-py310"] }
+# NOTE: `extension-module` is deliberately *not* a hard dependency feature. It
+# tells PyO3 not to link libpython, which is correct for a packaged extension
+# module but breaks `cargo build --workspace` (the `ferrocad_host` bin needs the
+# libpython symbols). It is enabled only when packaging the extension.
+pyo3 = { version = "0.25", features = ["abi3-py310"] }
+
+[features]
+# Enabled by maturin / build.sh when producing the Python extension module.
+extension-module = ["pyo3/extension-module"]

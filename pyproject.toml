@@ -27,4 +27,4 @@ classifiers = [
 manifest-path = "crates/ferrocad_py/Cargo.toml"
 python-source = "python"
 module-name = "ferrocad"
-features = ["pyo3/extension-module"]
+features = ["extension-module"]

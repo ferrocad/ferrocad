@@ -1539,6 +1539,30 @@ impl PyDocument {
         self.inner.lock().unwrap().clear_undos();
     }
 
+    /// The undo mode. FreeCAD reports `1`; assignment is accepted and ignored
+    /// (upstream's setter is a no-op), so `doc.UndoMode = 1` never fails.
+    #[getter]
+    fn UndoMode(&self) -> i64 {
+        1
+    }
+
+    #[setter]
+    fn set_UndoMode(&self, _value: i64) {}
+
+    /// The number of undo steps, or the depth of transaction `id`
+    /// (FreeCAD `getAvailableUndos`).
+    #[pyo3(signature = (id=0))]
+    fn getAvailableUndos(&self, id: usize) -> usize {
+        self.inner.lock().unwrap().available_undos(id)
+    }
+
+    /// The number of redo steps, or the depth of transaction `id`
+    /// (FreeCAD `getAvailableRedos`).
+    #[pyo3(signature = (id=0))]
+    fn getAvailableRedos(&self, id: usize) -> usize {
+        self.inner.lock().unwrap().available_redos(id)
+    }
+
     #[getter]
     fn MemSize(&self) -> usize {
         0

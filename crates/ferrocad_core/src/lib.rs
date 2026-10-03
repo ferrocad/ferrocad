@@ -84,8 +84,10 @@
 //! - **MVP slice B1** — name/label semantics ([`sanitize_name`], [`Document::unique_name`]).
 //! - **MVP slice A2** — [`Property::Enumeration`] and type-registry validation.
 //! - **MVP slice B2** — a general reversible undo/redo change set (property edits,
-//!   object add/remove, expressions) with named transactions and an active-object
-//!   pointer ([`Document::undo_names`], [`Document::active_object`]).
+//!   object add/remove, expressions) with named, id-carrying transactions, an active-object
+//!   pointer, and FreeCAD's undo metadata ([`Document::undo_names`],
+//!   [`Document::getAvailableUndos`](Document::available_undos),
+//!   [`Document::active_object`]).
 //!
 //! # Reference
 //!
@@ -467,6 +469,54 @@ mod tests {
             Some(Property::LinkList(links)) => assert_eq!(links, &vec!["Obj".to_string()]),
             other => panic!("expected restored LinkList, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn transaction_booking_and_available_steps() {
+        let mut doc = Document::new();
+        let a = doc.add_object("A", "App::Feature");
+        doc.set_property(a, "Width", Property::Float(0.0)).unwrap();
+
+        // No transaction booked initially.
+        assert_eq!(doc.booked_transaction_id(), 0);
+        assert_eq!(doc.available_undos(0), 0);
+
+        // Opening books an id immediately, before any change.
+        doc.open_transaction_named("T1");
+        let t1 = doc.booked_transaction_id();
+        assert_ne!(t1, 0);
+        assert_eq!(doc.available_undos(0), 0); // pending only, not yet undoable
+
+        doc.set_property(a, "Width", Property::Float(1.0)).unwrap();
+        assert_eq!(doc.booked_transaction_id(), t1);
+        assert_eq!(doc.available_undos(0), 1);
+        assert_eq!(doc.available_undos(t1), 1);
+
+        // Commit clears the booking but keeps the undo entry.
+        doc.commit_transaction();
+        assert_eq!(doc.booked_transaction_id(), 0);
+        assert_eq!(doc.available_undos(0), 1);
+        assert_eq!(doc.available_undos(t1), 1);
+
+        // A second transaction is a distinct id, at depth 1 from the top.
+        doc.open_transaction_named("T2");
+        let t2 = doc.booked_transaction_id();
+        assert_ne!(t2, t1);
+        doc.set_property(a, "Width", Property::Float(2.0)).unwrap();
+        assert_eq!(doc.available_undos(0), 2);
+        assert_eq!(doc.available_undos(t2), 1);
+        assert_eq!(doc.available_undos(t1), 2);
+
+        // Undo moves the top transaction to redo.
+        assert!(doc.undo());
+        assert_eq!(doc.available_undos(0), 1);
+        assert_eq!(doc.available_undos(t1), 1);
+        assert_eq!(doc.available_redos(0), 1);
+        assert_eq!(doc.available_redos(t2), 1);
+
+        // Unknown ids report 0.
+        assert_eq!(doc.available_undos(9999), 0);
+        assert_eq!(doc.available_redos(9999), 0);
     }
 
     #[test]

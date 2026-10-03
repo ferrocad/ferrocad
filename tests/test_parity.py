@@ -267,6 +267,31 @@ class TestUndoRedo(unittest.TestCase):
             self.doc.getBookedTransactionID(), other.getBookedTransactionID()
         )
 
+    def test_undo_mode_and_available_steps(self):
+        # Upstream reports UndoMode 1 and accepts (ignores) assignment.
+        self.assertEqual(self.doc.UndoMode, 1)
+        self.doc.UndoMode = 1
+
+        obj = self.doc.addObject("App::FeatureTest", "A")
+        obj.Integer = 0
+        self.doc.openTransaction("T1")
+        booked = self.doc.getBookedTransactionID()
+        self.assertNotEqual(booked, 0)
+        obj.Integer = 1
+        self.assertEqual(self.doc.getAvailableUndos(), 1)
+        self.assertEqual(self.doc.getAvailableUndos(booked), 1)
+
+        self.doc.commitTransaction()
+        self.assertEqual(self.doc.getBookedTransactionID(), 0)
+        self.assertEqual(self.doc.getAvailableUndos(), 1)
+
+        self.doc.undo()
+        self.assertEqual(self.doc.getAvailableUndos(), 0)
+        self.assertEqual(self.doc.getAvailableRedos(), 1)
+        self.assertEqual(self.doc.getAvailableRedos(booked), 1)
+        self.assertEqual(self.doc.getAvailableUndos(999999), 0)
+        self.assertEqual(self.doc.getAvailableRedos(999999), 0)
+
     def test_get_object_by_list_raises(self):
         with self.assertRaises(TypeError):
             self.doc.getObject([1])

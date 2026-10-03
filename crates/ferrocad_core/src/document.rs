@@ -14,9 +14,6 @@ use crate::transaction::{Change, PropertyChange, TransactionManager};
 
 pub type ObjectId = usize;
 
-/// Hands out a process-unique booking id per document (`getBookedTransactionID`).
-static NEXT_BOOKING: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(1);
-
 #[derive(Debug)]
 pub struct DocumentObject {
     pub id: ObjectId,
@@ -48,16 +45,11 @@ pub struct Document {
     observers: Vec<Box<dyn Observer>>,
     /// The object made active by the last `addObject` (FreeCAD `ActiveObject`).
     active_object: Option<ObjectId>,
-    /// A per-document booking id, unique across documents in this process.
-    booked_transaction_id: usize,
 }
 
 impl Document {
     pub fn new() -> Self {
-        let mut doc = Self::default();
-        doc.booked_transaction_id =
-            NEXT_BOOKING.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-        doc
+        Self::default()
     }
 
     pub fn add_object(&mut self, name: &str, type_id: &str) -> ObjectId {
@@ -410,9 +402,21 @@ impl Document {
         self.active_object
     }
 
-    /// A per-document booking id (distinct across documents in this process).
+    /// The currently booked transaction id, or 0 (FreeCAD `getBookedTransactionID`).
     pub fn booked_transaction_id(&self) -> usize {
-        self.booked_transaction_id
+        self.tx.booked_transaction_id()
+    }
+
+    /// The number of undo steps, or the depth of transaction `id`
+    /// (FreeCAD `getAvailableUndos`).
+    pub fn available_undos(&self, id: usize) -> usize {
+        self.tx.available_undos(id)
+    }
+
+    /// The number of redo steps, or the depth of transaction `id`
+    /// (FreeCAD `getAvailableRedos`).
+    pub fn available_redos(&self, id: usize) -> usize {
+        self.tx.available_redos(id)
     }
 
     /// Add a property with an explicit status mask. Unlike `set_property`, this

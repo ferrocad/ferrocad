@@ -8,6 +8,14 @@
 use crate::document::{ObjectId, SavedObject};
 use crate::property::Property;
 
+/// Hands out a process-unique id per transaction (FreeCAD `Transaction::getNewID`).
+static NEXT_TRANSACTION_ID: std::sync::atomic::AtomicUsize =
+    std::sync::atomic::AtomicUsize::new(1);
+
+fn new_transaction_id() -> usize {
+    NEXT_TRANSACTION_ID.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+}
+
 /// A single property assignment: `old` is `None` when the property was created.
 #[derive(Debug, Clone)]
 pub struct PropertyChange {
@@ -41,17 +49,25 @@ pub enum Change {
     },
 }
 
-/// A committed (or active) transaction: a name plus its ordered changes.
+/// A committed (or active) transaction: an id, a name and its ordered changes.
 #[derive(Debug, Clone)]
 pub struct Transaction {
+    pub id: usize,
     pub name: String,
     pub changes: Vec<Change>,
+}
+
+/// A transaction requested by `open`, not yet made active by a change.
+#[derive(Debug)]
+struct Pending {
+    name: String,
+    id: usize,
 }
 
 #[derive(Debug, Default)]
 pub struct TransactionManager {
     /// A transaction requested by `open`, not yet made active by a change.
-    pending: Option<String>,
+    pending: Option<Pending>,
     active: Option<Transaction>,
     /// Stack of committed transactions (oldest first; newest on top).
     undo: Vec<Transaction>,
@@ -60,11 +76,15 @@ pub struct TransactionManager {
 }
 
 impl TransactionManager {
-    /// Request a (named) transaction. It only becomes `active` on the first
-    /// recorded change; if a transaction is already active it is committed when
-    /// the *next* change arrives, mirroring FreeCAD's pending-transaction model.
+    /// Request a (named) transaction, booking a fresh transaction id. It only
+    /// becomes `active` on the first recorded change; if a transaction is already
+    /// active it is committed when the *next* change arrives, mirroring FreeCAD's
+    /// pending-transaction model.
     pub fn open_named(&mut self, name: &str) {
-        self.pending = Some(name.to_string());
+        self.pending = Some(Pending {
+            name: name.to_string(),
+            id: new_transaction_id(),
+        });
     }
 
     /// Make the pending transaction active and return its name (once).
@@ -73,12 +93,14 @@ impl TransactionManager {
     /// `openTransaction` calls without an explicit commit still produce separate
     /// undo entries), and a new active transaction invalidates the redo stack.
     pub fn begin(&mut self) -> Option<String> {
-        if let Some(name) = self.pending.take() {
+        if let Some(pending) = self.pending.take() {
             if let Some(previous) = self.active.take() {
                 self.undo.push(previous);
             }
             self.redo.clear();
+            let name = pending.name.clone();
             self.active = Some(Transaction {
+                id: pending.id,
                 name: name.clone(),
                 changes: Vec::new(),
             });
@@ -119,6 +141,55 @@ impl TransactionManager {
         self.redo.iter().rev().map(|t| t.name.clone()).collect()
     }
 
+    /// The currently booked transaction id, or 0 if none is open
+    /// (FreeCAD `getBookedTransactionID`).
+    pub fn booked_transaction_id(&self) -> usize {
+        if let Some(pending) = &self.pending {
+            return pending.id;
+        }
+        self.active.as_ref().map(|t| t.id).unwrap_or(0)
+    }
+
+    /// The number of undo steps (FreeCAD `getAvailableUndos`). With `id == 0`
+    /// this is the total count (including an active transaction); otherwise it
+    /// is the 1-based depth of the transaction with that id, or 0 if unknown.
+    pub fn available_undos(&self, id: usize) -> usize {
+        if id == 0 {
+            return self.undo.len() + usize::from(self.active.is_some());
+        }
+        let mut depth = 0;
+        if let Some(active) = &self.active {
+            depth += 1;
+            if active.id == id {
+                return depth;
+            }
+        }
+        for t in self.undo.iter().rev() {
+            depth += 1;
+            if t.id == id {
+                return depth;
+            }
+        }
+        0
+    }
+
+    /// The number of redo steps (FreeCAD `getAvailableRedos`). With `id == 0`
+    /// this is the total count; otherwise the 1-based depth of the transaction
+    /// with that id from the top of the redo stack, or 0 if unknown.
+    pub fn available_redos(&self, id: usize) -> usize {
+        if id == 0 {
+            return self.redo.len();
+        }
+        let mut depth = 0;
+        for t in self.redo.iter().rev() {
+            depth += 1;
+            if t.id == id {
+                return depth;
+            }
+        }
+        0
+    }
+
     pub fn record(&mut self, change: Change) {
         self.begin();
         if let Some(active) = &mut self.active {
@@ -154,7 +225,9 @@ impl TransactionManager {
     }
 
     /// Pop the newest redo transaction (returning it and pushing it to undo).
+    /// An active transaction is committed first.
     pub fn redo(&mut self) -> Option<Transaction> {
+        self.commit();
         let t = self.redo.pop()?;
         self.undo.push(t.clone());
         Some(t)

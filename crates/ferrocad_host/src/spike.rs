@@ -324,6 +324,8 @@ mod tests {
     /// `docs/python-ui-research.md` §F.
     #[gpui::test]
     fn python_declares_ui_and_click_round_trips(cx: &mut TestAppContext) {
+        // Tests share one CPython instance (module-global state); serialize them.
+        let _guard = crate::PYTHON_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let tree = tree_with_python();
         assert_eq!(text(&tree), "Total Operations: 0");
         assert_eq!(child_count(&tree), 5); // label + 4 buttons

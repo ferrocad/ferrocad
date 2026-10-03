@@ -2,10 +2,9 @@
 # Build the FerroCAD Rust crates and package the native libraries next to the
 # Python facade (python/FreeCAD).
 #
-#   * ferrocad_bootstrap -> python/FreeCAD/_core.abi3.so           (legacy M1, fallback)
-#   * ferrocad_ctypes    -> python/FreeCAD/libferrocad_ctypes.so   (C ABI, ctypes fallback)
-#   * ferrocad_py        -> python/ferrocad.abi3.so                (PyO3 over ferrocad_core, primary)
-#   * ferrocad_gen       -> python/ferrocad_gen.abi3.so            (generated skeleton, M3c)
+#   * ferrocad_py     -> python/ferrocad.abi3.so               (PyO3 over ferrocad_core, primary)
+#   * ferrocad_ctypes -> python/FreeCAD/libferrocad_ctypes.so   (C ABI, ctypes fallback)
+#   * ferrocad_gen    -> python/ferrocad_gen.abi3.so            (generated skeleton, M3c)
 #
 # The toolchain can be project-local (see ../.toolchain/env.sh) so this needs no
 # root and no system-wide Rust install.
@@ -35,9 +34,6 @@ echo "== building ferrocad_core / ferrocad_py / ferrocad_gen / ferrocad_ctypes =
 # The workspace `default-members` selects exactly these four crates.
 cargo build --release --offline --manifest-path "$HERE/Cargo.toml"
 
-echo "== building ferrocad_bootstrap (legacy M1 fallback) =="
-cargo build --release --offline --manifest-path "$HERE/crates/ferrocad_bootstrap/Cargo.toml"
-
 # Package the primary PyO3 extension (importable as `ferrocad`).
 fc_src="$TARGET/libferrocad_py.so"
 if [ -f "$fc_src" ]; then
@@ -46,13 +42,6 @@ if [ -f "$fc_src" ]; then
 else
     echo "error: ferrocad_py extension not produced" >&2
     exit 1
-fi
-
-# Package the legacy M1 extension (importable as FreeCAD._core).
-boot_src="$TARGET/libferrocad_bootstrap.so"
-if [ -f "$boot_src" ]; then
-    cp "$boot_src" "$HERE/python/FreeCAD/_core.abi3.so"
-    echo "packaged python/FreeCAD/_core.abi3.so"
 fi
 
 # Package the ctypes fallback shared library.

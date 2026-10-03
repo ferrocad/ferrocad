@@ -27,10 +27,6 @@ jobs:
         working-directory: crates/ferrocad_ctypes
         run: cargo build
 
-      - name: ferrocad_bootstrap (legacy M1 extension) build
-        working-directory: crates/ferrocad_bootstrap
-        run: cargo build
-
       - name: ferrocad_py + ferrocad_gen (primary + generated bindings) build
         working-directory: crates/ferrocad_py
         run: cargo build

@@ -11,12 +11,11 @@ members = [
     "crates/ferrocad_py",
     "crates/ferrocad_gen",
     "crates/ferrocad_ctypes",
-    "crates/ferrocad_bootstrap",
     "crates/ferrocad_host",
 ]
-# The legacy `bootstrap`/`host` crates enable conflicting PyO3 features
-# (abi3-py38 / auto-initialize vs. the extension-module feature of the primary
-# crates), so they are excluded from a bare `cargo build`/`cargo test`.
+# The `host` crate is a UI spike whose PyO3 `auto-initialize` feature conflicts
+# with the `extension-module` feature of the primary crates, so it is excluded
+# from a bare `cargo build`/`cargo test`.
 default-members = [
     "crates/ferrocad_core",
     "crates/ferrocad_py",

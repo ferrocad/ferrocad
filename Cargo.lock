@@ -2192,13 +2192,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "ferrocad_bootstrap"
-version = "0.1.0"
-dependencies = [
- "pyo3",
-]
-
-[[package]]
 name = "ferrocad_core"
 version = "0.1.0"
 dependencies = [

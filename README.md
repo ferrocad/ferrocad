@@ -96,19 +96,18 @@ flowchart TD
 
 ## Workspace layout
 
-FerroCAD is a Cargo workspace (edition 2024). The primary crates are:
+FerroCAD is a Cargo workspace (edition 2024). Crate status:
 
-| Crate | Role |
-| --- | --- |
-| `crates/ferrocad_core` | pure-Rust model: quantities, properties, documents, recompute DAG |
-| `crates/ferrocad_py` | PyO3 extension over `ferrocad_core` (module `ferrocad`, primary backend) |
-| `crates/ferrocad_gen` | generated PyO3 skeleton bindings from the `.pyi` model (M3c) |
-| `crates/ferrocad_ctypes` | C ABI shared library for the `ctypes` fallback (legacy M0) |
-| `crates/ferrocad_bootstrap` | legacy M1 PyO3 extension (`FreeCAD._core`) |
-| `crates/ferrocad_host` | spike: Rust host embedding CPython + `bite-gpui` (M5 UI track) |
+| Crate | Role | Status |
+| --- | --- | --- |
+| `crates/ferrocad_core` | pure-Rust model: quantities, properties, documents, recompute DAG | primary |
+| `crates/ferrocad_py` | PyO3 extension over `ferrocad_core` (module `ferrocad`, primary backend) | primary |
+| `crates/ferrocad_gen` | generated PyO3 skeleton bindings from the `.pyi` model (M3c) | useful — drives the codegen tests |
+| `crates/ferrocad_ctypes` | C ABI shared library for the `ctypes` fallback (legacy M0) | useful — a real, working fallback |
+| `crates/ferrocad_host` | spike: Rust host embedding CPython + `bite-gpui` (M5 UI track) | **spike — kept**, not yet production |
 
-The legacy `bootstrap`/`host` crates are excluded from the workspace `default-members` because they
-enable PyO3 features that conflict with the primary extension crates.
+The `host` crate is excluded from the workspace `default-members` because its PyO3 `auto-initialize`
+feature conflicts with the `extension-module` feature of the primary extension crates.
 
 ## Build & run
 
@@ -142,6 +141,8 @@ PYTHONPATH=python python3 tests/test_codegen.py                    # generated s
 python3 tools/test_inventory.py                                    # .pyi parser (M3a)
 python3 tools/test_codegen.py                                      # codegen logic (M3c)
 python3 tools/test_conformance.py                                  # harness helpers (M3d)
+PYTHONPATH=python python3 examples/file_roundtrip.py               # save/open a document (file load)
+. ../.toolchain/env.sh && cargo test -p ferrocad_host              # embedded-CPython host spike (3)
 ```
 
 Regenerate the M3c skeleton (`crates/ferrocad_gen/src/lib.rs`, committed):
@@ -163,6 +164,30 @@ python3 tools/conformance.py --root ../freecad-upstream --list     # list candid
 [`maturin`](https://www.maturin.rs/): it compiles `crates/ferrocad_py` into the top-level module
 `ferrocad` and ships the pure-Python `FreeCAD`/`FreeCADGui` packages from `python/`. A user still
 writes `import FreeCAD`.
+
+## Embedded Python (running scripts from Rust)
+
+The **host** crate embeds CPython and drives it from Rust. `crates/ferrocad_host` passes three
+headless `#[gpui::test]`s, one of which embeds the interpreter, imports a Python module, and
+round-trips a click through a Python callback back into a `bite-gpui` element
+(`cargo test -p ferrocad_host`). This is the Blender-style model the M5 UI track builds on: Python
+declares the UI/workbench, Rust owns the process and renders.
+
+Note the layering: `ferrocad_core` is **pure Rust and does not embed Python**; the embedding lives
+in the host. Workbench Python is driven by the host, while the `FreeCAD` facade talks to the
+`ferrocad` extension the ordinary ways (import).
+
+## Python-only scripts & file loading
+
+A plain workbench-style script that uses only the public `FreeCAD` API runs today —
+`hello_freecad.py` is one, and `examples/file_roundtrip.py` demonstrates the **file** path:
+create a document, `doc.saveAs(path)`, `FreeCAD.open(path)`, and read the objects/`PropertyLength`
+back. The on-disk format is FerroCAD's own JSON under a `.FCStd` name; it is not yet upstream's
+`.FCStd`/`zip` and importing real `Part` geometry is still out of scope.
+
+```sh
+PYTHONPATH=python python3 examples/file_roundtrip.py
+```
 
 ## The two backends
 
@@ -208,7 +233,8 @@ Exposed through the **`FreeCAD` facade** (enough for the hello world and a workb
 Not implemented (deliberately out of scope for this milestone):
 
 * the geometry kernel (`Part::Box` etc. produce no shape),
-* persistence (`.FCStd`), `App`/`Gui` split, Coin3D, Qt,
+* upstream's `.FCStd` (zip) format — persistence is FerroCAD's own JSON,
+* `App`/`Gui` split, Coin3D, Qt,
 * `FeaturePython` scripting callbacks,
 * thread-safety guarantees beyond a coarse global mutex.
 
@@ -218,6 +244,7 @@ Not implemented (deliberately out of scope for this milestone):
 Cargo.toml                Cargo workspace (edition 2024)
 pyproject.toml            maturin packaging (distribution `ferrocad`)
 hello_freecad.py          the milestone script (public FreeCAD API only)
+examples/file_roundtrip.py  saveAs / open a document (file loading)
 run.sh / build.sh         convenience wrappers
 python/FreeCAD/           drop-in module: __init__.py (facade + backend selector)
     Base.py               core data types re-exported from ferrocad (Vector/Matrix/Rotation/…)
@@ -225,7 +252,6 @@ python/FreeCAD/           drop-in module: __init__.py (facade + backend selector
     Console.py            minimal Print* logging facade
     _ctypes_backend.py    ctypes fallback backend
     _ffi.py               ctypes bindings for the fallback
-    _core.abi3.so         legacy M1 extension (gitignored)
     libferrocad_ctypes.so C ABI fallback lib (gitignored)
 python/ferrocad.abi3.so   built PyO3 bindings (module `ferrocad`, gitignored)
 python/ferrocad_gen.abi3.so generated skeleton bindings, M3c (gitignored)
@@ -235,7 +261,6 @@ crates/ferrocad_core/     pure Rust core: quantities, properties, DAG, tx/observ
 crates/ferrocad_py/       PyO3 bindings over ferrocad_core (module `ferrocad`)
 crates/ferrocad_gen/      generated PyO3 skeleton bindings (module `ferrocad_gen`)
     src/lib.rs            GENERATED by tools/codegen.py (committed)
-crates/ferrocad_bootstrap/ legacy M1 PyO3 bindings (`FreeCAD._core`)
 crates/ferrocad_ctypes/   Rust object model + flat C ABI (fallback)
 crates/ferrocad_host/     spike: Rust host embedding CPython + bite-gpui
     src/spike.rs          Python-declared UI -> bite-gpui element (headless)

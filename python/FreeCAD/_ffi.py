@@ -1,4 +1,4 @@
-"""ctypes bridge to the Rust ``freecad-core`` native library.
+"""ctypes bridge to the FerroCAD ``ferrocad_ctypes`` native library.
 
 This is the only place that knows about the C ABI. Everything in
 ``FreeCAD/__init__.py`` speaks plain Python; everything below this line is the
@@ -29,7 +29,7 @@ def _candidates():
     repo = _os.path.abspath(_os.path.join(here, "..", ".."))
     for profile in ("release", "debug"):
         for name in _LIB_NAMES:
-            yield _os.path.join(repo, "rust", "freecad-core", "target", profile, name)
+            yield _os.path.join(repo, "target", profile, name)
 
 
 def _load():
@@ -39,7 +39,7 @@ def _load():
             return _c.CDLL(path)
         tried.append(path)
     raise ImportError(
-        "freecad-core native library not found.\n"
+        "ferrocad_ctypes native library not found.\n"
         "Build it with ./build.sh, or point FREECAD_CORE_LIB at the library.\n"
         "Looked in:\n  " + "\n  ".join(tried)
     )

@@ -83,6 +83,9 @@
 //! - **MVP slice A1** — object state and per-property status flags; touch-on-assign.
 //! - **MVP slice B1** — name/label semantics ([`sanitize_name`], [`Document::unique_name`]).
 //! - **MVP slice A2** — [`Property::Enumeration`] and type-registry validation.
+//! - **MVP slice B2** — a general reversible undo/redo change set (property edits,
+//!   object add/remove, expressions) with named transactions and an active-object
+//!   pointer ([`Document::undo_names`], [`Document::active_object`]).
 //!
 //! # Reference
 //!

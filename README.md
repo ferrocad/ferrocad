@@ -197,9 +197,9 @@ per-module pages are the reference.
 
 The **product surface is Python** (`import FreeCAD`) and deliberately mirrors upstream FreeCAD, so
 its API reference *is* FreeCAD's own. FerroCAD-specific Python guidance therefore lives in the
-`python/FreeCAD` facade docstrings and the repository `docs/` (milestones, MVP path, rewrite
-strategy). A Sphinx/mkdocstrings site is the natural next step once a Python doc build can run in
-CI; until then rustdoc is the verifiable source of truth.
+`python/FreeCAD` facade docstrings and the repository `docs/` (milestones, MVP path, app-shell
+vision, rewrite strategy). A Sphinx/mkdocstrings site is the natural next step once a Python doc
+build can run in CI; until then rustdoc is the verifiable source of truth.
 
 ## Packaging
 
@@ -280,6 +280,21 @@ Not implemented (deliberately out of scope for this milestone):
 * `App`/`Gui` split, Coin3D, Qt,
 * `FeaturePython` scripting callbacks,
 * thread-safety guarantees beyond a coarse global mutex.
+
+## Next: the MVP app shell
+
+The headless engine is the foundation; the next chunk is a **single interactive window**
+that drives it — a developer tool with five pillars: **open/close/load/save**, **undo/redo**,
+a **DOM-like inspector**, a **property editor**, and a **Python console**. It is one
+`bite-gpui` window embedding CPython, calling the engine only through the public `FreeCAD`
+API, so commands, console input and property edits all take the same path (and every edit is
+one more undoable transaction). The `ferrocad_host` spike already proves the
+Python-declared-UI ↔ `bite-gpui` round-trip headlessly.
+
+The plan, architecture and slices (S1 shell skeleton → S2 lifecycle + commands → S3 inspector
+→ S4 property editor → S5 console → S6 polish) are in
+[`../docs/app-shell-vision.md`](../docs/app-shell-vision.md). The 3D viewport is a later
+track that docks into the shell's placeholder pane.
 
 ## Repository layout
 

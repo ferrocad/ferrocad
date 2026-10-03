@@ -135,6 +135,15 @@ mod tests {
     }
 
     #[test]
+    fn enumeration_property_roundtrips() {
+        let p = Property::Enumeration(vec!["a".to_string(), "b".to_string()], 1);
+        assert_eq!(p.type_name(), "App::PropertyEnumeration");
+        let json = serde_json::to_string(&p).unwrap();
+        let back: Property = serde_json::from_str(&json).unwrap();
+        assert_eq!(back, p);
+    }
+
+    #[test]
     fn status_name_mapping() {
         assert_eq!(status_names(prop_status::NONE), Vec::<&str>::new());
         assert_eq!(status_names(prop_status::OUTPUT), vec!["Output"]);

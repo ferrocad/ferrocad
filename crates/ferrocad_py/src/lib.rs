@@ -539,6 +539,13 @@ fn property_to_py(py: Python<'_>, value: &Property) -> PyObject {
             .collect::<Vec<_>>()
             .into_py_any(py)
             .unwrap(),
+        // The current selection (empty string when no choices are set).
+        Property::Enumeration(choices, idx) => choices
+            .get(*idx)
+            .cloned()
+            .unwrap_or_default()
+            .into_py_any(py)
+            .unwrap(),
     }
 }
 
@@ -651,7 +658,9 @@ fn apply_status_name(status: &mut u32, name: &str) -> PyResult<()> {
 /// Map a FreeCAD property type id to its default value.
 fn default_property(type_id: &str) -> Property {
     let t = type_id.to_ascii_lowercase();
-    if t.ends_with("placementlist") {
+    if t.ends_with("enumeration") {
+        Property::Enumeration(vec![], 0)
+    } else if t.ends_with("placementlist") {
         Property::PlacementList(vec![])
     } else if t.ends_with("rotationlist") {
         Property::RotationList(vec![])
@@ -730,6 +739,17 @@ fn duplicate_labels(py: Python<'_>) -> bool {
         .and_then(|g| g.call_method1("GetBool", ("DuplicateLabels", false)))
         .and_then(|v| v.extract::<bool>())
         .unwrap_or(false)
+}
+
+/// Extension type ids (`App::DocumentObjectExtension`, `App::LinkExtensionPython`, …)
+/// cannot be instantiated as document objects nor used as property types.
+fn is_extension_type(type_id: &str) -> bool {
+    type_id.ends_with("Extension") || type_id.ends_with("ExtensionPython")
+}
+
+/// Property type ids are namespaced `…::Property…` (e.g. `App::PropertyLength`).
+fn is_property_type(type_id: &str) -> bool {
+    type_id.contains("Property") && !is_extension_type(type_id)
 }
 
 /// Create the 6 datum sub-elements of an `App::Origin` and link them into its
@@ -1164,12 +1184,23 @@ impl PyDocument {
         fire_doc_str("slotChangedDocument", slf, "Comment");
     }
 
-    #[pyo3(signature = (type_id, name=None))]
+    #[pyo3(signature = (r#type, name=None, objProxy=None, viewProxy=None, attach=false, viewType=None))]
     fn addObject(
         slf: Bound<'_, Self>,
-        type_id: &str,
+        r#type: &str,
         name: Option<String>,
+        objProxy: Option<&Bound<'_, PyAny>>,
+        viewProxy: Option<&Bound<'_, PyAny>>,
+        attach: bool,
+        viewType: Option<String>,
     ) -> PyResult<Py<PyDocumentObject>> {
+        let _ = (objProxy, viewProxy, attach, viewType);
+        if is_extension_type(r#type) {
+            return Err(PyTypeError::new_err(format!(
+                "'{0}' is not a document object type",
+                r#type
+            )));
+        }
         let py = slf.py();
         let inner = Arc::clone(&slf.borrow().inner);
         let doc_py: Py<PyDocument> = slf.clone().unbind();
@@ -1178,8 +1209,8 @@ impl PyDocument {
         let (id, tx) = {
             let mut doc = inner.lock().unwrap();
             let tx = doc.begin_transaction_if_pending();
-            let id = doc.add_object_with(&name, type_id, dup);
-            if type_id == "App::Origin" {
+            let id = doc.add_object_with(&name, r#type, dup);
+            if r#type == "App::Origin" {
                 create_origin_children(&mut doc, id);
             }
             (id, tx)
@@ -1458,7 +1489,12 @@ impl PyDocument {
         Type: &str,
         Name: &str,
         Label: &str,
-    ) -> Vec<Py<PyDocumentObject>> {
+    ) -> PyResult<Vec<Py<PyDocumentObject>>> {
+        if !Type.is_empty() && is_extension_type(Type) {
+            return Err(PyTypeError::new_err(format!(
+                "'{Type}' is not a document object type"
+            )));
+        }
         let py = slf.py();
         let inner = Arc::clone(&slf.borrow().inner);
         let doc_py: Py<PyDocument> = slf.clone().unbind();
@@ -1477,9 +1513,10 @@ impl PyDocument {
                 })
                 .collect()
         };
-        ids.into_iter()
+        Ok(ids
+            .into_iter()
             .map(|id| get_or_create_object(py, &doc_py, &inner, id))
-            .collect()
+            .collect())
     }
 
     #[getter]
@@ -1854,9 +1891,14 @@ impl PyDocumentObject {
         locked: bool,
         enum_vals: Option<Vec<String>>,
     ) -> PyResult<()> {
-        let _ = (group, doc, locked, enum_vals);
+        let _ = (group, doc, locked);
         if name.is_empty() {
             return Err(PyValueError::new_err("property name must not be empty"));
+        }
+        if !is_property_type(type_id) {
+            return Err(PyTypeError::new_err(format!(
+                "'{type_id}' is not a property type"
+            )));
         }
         let mut status = attr.max(0) as u32;
         if read_only {
@@ -1869,7 +1911,11 @@ impl PyDocumentObject {
             let this = slf.borrow();
             (Arc::clone(&this.inner), this.id)
         };
-        let default = default_property(type_id);
+        // `enum_vals` seeds an enumeration's allowed values.
+        let default = match (default_property(type_id), enum_vals) {
+            (_, Some(vals)) => Property::Enumeration(vals, 0),
+            (d, None) => d,
+        };
         inner
             .lock()
             .unwrap()
@@ -2405,6 +2451,31 @@ impl PyDocumentObject {
                     Property::IntPairList(list)
                 } else {
                     Property::IntPairList(py_to_int_pair_list(value)?)
+                }
+            }
+            Some(Property::Enumeration(choices, _)) => {
+                // A string selects a value (error if not offered); an int selects by
+                // index; a sequence of strings sets the allowed values.
+                if let Ok(s) = value.extract::<String>() {
+                    match choices.iter().position(|c| c == &s) {
+                        Some(i) => Property::Enumeration(choices, i),
+                        None => {
+                            return Err(PyValueError::new_err(format!(
+                                "{s:?} is not part of the enumeration"
+                            )))
+                        }
+                    }
+                } else if let Ok(i) = value.extract::<i64>() {
+                    if i < 0 || i as usize >= choices.len() {
+                        return Err(PyValueError::new_err("enumeration index out of range"));
+                    }
+                    Property::Enumeration(choices, i as usize)
+                } else if let Ok(list) = value.extract::<Vec<String>>() {
+                    Property::Enumeration(list, 0)
+                } else {
+                    return Err(PyTypeError::new_err(
+                        "expected a list of strings, an index, or a value",
+                    ));
                 }
             }
             Some(Property::Float(_)) => match value.extract::<f64>() {

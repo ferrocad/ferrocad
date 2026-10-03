@@ -41,6 +41,8 @@ pub enum Property {
     FileIncluded(String),
     /// A list of integer pairs (`App::PropertyIntPairList`).
     IntPairList(Vec<(i64, i64)>),
+    /// An enumeration: allowed values + selected index (`App::PropertyEnumeration`).
+    Enumeration(Vec<String>, usize),
 }
 
 impl Property {
@@ -70,6 +72,7 @@ impl Property {
             Property::PythonObject(_) => "App::PropertyPythonObject",
             Property::FileIncluded(_) => "App::PropertyFileIncluded",
             Property::IntPairList(_) => "App::PropertyIntPairList",
+            Property::Enumeration(_, _) => "App::PropertyEnumeration",
         }
     }
 }

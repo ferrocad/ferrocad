@@ -107,6 +107,34 @@ class TestDocumentObject(unittest.TestCase):
         finally:
             params.SetBool("DuplicateLabels", old)
 
+    def test_enumeration_property(self):
+        obj = self.doc.addObject("App::FeaturePython", "Enum")
+        obj.addProperty("App::PropertyEnumeration", "Mode")
+        with self.assertRaises(ValueError):
+            obj.Mode = "Fast"  # no choices registered yet
+        obj.Mode = ["Fast", "Slow"]
+        self.assertEqual(obj.Mode, "Fast")
+        obj.Mode = "Slow"
+        self.assertEqual(obj.Mode, "Slow")
+        obj.Mode = 0
+        self.assertEqual(obj.Mode, "Fast")
+        with self.assertRaises(ValueError):
+            obj.Mode = "Bogus"
+        with self.assertRaises(ValueError):
+            obj.Mode = 5
+        self.assertEqual(obj.getTypeIdOfProperty("Mode"), "App::PropertyEnumeration")
+
+    def test_invalid_types_raise(self):
+        with self.assertRaises(TypeError):
+            self.doc.addObject("App::DocumentObjectExtension")
+        with self.assertRaises(TypeError):
+            self.doc.addObject(type="App::DocumentObjectExtension", attach=True)
+        obj = self.doc.addObject("App::FeaturePython", "Obj")
+        with self.assertRaises(TypeError):
+            obj.addProperty("App::DocumentObjectExtension", "P")
+        with self.assertRaises(TypeError):
+            self.doc.findObjects(Type="App::DocumentObjectExtension")
+
     def test_dynamic_properties(self):
         obj = self.doc.addObject("App::FeaturePython", "Box")
         obj.addProperty("App::PropertyString", "Description", "Base", "")

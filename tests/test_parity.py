@@ -165,5 +165,112 @@ class TestDocumentObject(unittest.TestCase):
             self.doc.removeObject("Box")
 
 
+class TestUndoRedo(unittest.TestCase):
+    def setUp(self):
+        self.doc = FreeCAD.newDocument("UndoTest")
+
+    def tearDown(self):
+        for name in FreeCAD.listDocuments():
+            FreeCAD.closeDocument(name)
+
+    def test_initially_empty(self):
+        self.assertEqual(self.doc.UndoNames, [])
+        self.assertEqual(self.doc.UndoCount, 0)
+        self.assertEqual(self.doc.RedoNames, [])
+        self.assertEqual(self.doc.RedoCount, 0)
+
+    def test_active_transaction_is_visible(self):
+        self.doc.openTransaction("T1")
+        a = self.doc.addObject("App::FeatureTest", "A")
+        a.Integer = 1
+        self.assertEqual(self.doc.UndoNames, ["T1"])
+        self.assertEqual(self.doc.UndoCount, 1)
+
+        # A second open adds no entry until it records a change…
+        self.doc.openTransaction("T2")
+        self.assertEqual(self.doc.UndoNames, ["T1"])
+        # …which commits T1 and makes T2 the active transaction.
+        a.Integer = 2
+        self.assertEqual(self.doc.UndoNames, ["T2", "T1"])
+
+    def test_undo_redo_round_trip(self):
+        obj = self.doc.addObject("App::FeatureTest", "A")
+        obj.Integer = 1
+        self.doc.openTransaction("T1")
+        obj.Integer = 2
+        self.doc.commitTransaction()
+
+        self.assertTrue(self.doc.undo())
+        self.assertEqual(obj.Integer, 1)
+        self.assertEqual(self.doc.RedoNames, ["T1"])
+        self.assertTrue(self.doc.redo())
+        self.assertEqual(obj.Integer, 2)
+        self.assertEqual(self.doc.UndoNames, ["T1"])
+
+    def test_new_change_clears_redo_and_abort_leaves_no_entry(self):
+        obj = self.doc.addObject("App::FeatureTest", "A")
+        obj.Integer = 1
+        self.doc.openTransaction("T1")
+        obj.Integer = 2
+        self.doc.commitTransaction()
+        self.doc.undo()
+        self.assertEqual(self.doc.RedoCount, 1)
+
+        self.doc.openTransaction("T2")
+        obj.Integer = 5
+        self.assertEqual(self.doc.RedoNames, [])  # new change drops redo
+        self.doc.abortTransaction()
+        self.assertEqual(obj.Integer, 1)
+        self.assertEqual(self.doc.UndoNames, [])
+
+    def test_undo_add_object_clears_active_object(self):
+        self.doc.openTransaction("Add")
+        self.doc.addObject("App::FeatureTest", "New")
+        self.doc.commitTransaction()
+        self.doc.undo()
+        self.assertIsNone(self.doc.ActiveObject)
+        self.assertIsNone(self.doc.getObject("New"))
+        self.doc.clearUndos()
+        self.assertEqual(self.doc.UndoNames, [])
+        self.assertEqual(self.doc.RedoNames, [])
+
+    def test_undo_remove_object_restores_links(self):
+        box = self.doc.addObject("App::FeatureTest", "Box")
+        cyl = self.doc.addObject("App::FeatureTest", "Cyl")
+        fuse = self.doc.addObject("App::FeatureTest", "Fuse")
+        fuse.LinkList = [box, cyl]
+        self.assertEqual(box.InList, [fuse])
+        self.assertEqual(cyl.InList, [fuse])
+
+        self.doc.openTransaction("Remove")
+        self.doc.removeObject("Fuse")
+        self.doc.commitTransaction()
+        self.assertEqual(box.InList, [])
+
+        self.doc.undo()
+        restored = self.doc.getObject("Fuse")
+        self.assertIsNotNone(restored)
+        self.assertEqual(box.InList, [restored])
+
+    def test_expression_creates_backlink(self):
+        a = self.doc.addObject("App::FeatureTest", "A")
+        b = self.doc.addObject("App::FeatureTest", "B")
+        b.setExpression("Float", "A.Float + 1")
+        self.assertEqual(b.InList, [])  # b links to a, not the reverse
+        self.assertEqual(a.InList, [b])
+
+    def test_booked_transaction_ids_are_distinct(self):
+        other = FreeCAD.newDocument("Other")
+        self.doc.openTransaction("t1")
+        other.openTransaction("t2")
+        self.assertNotEqual(
+            self.doc.getBookedTransactionID(), other.getBookedTransactionID()
+        )
+
+    def test_get_object_by_list_raises(self):
+        with self.assertRaises(TypeError):
+            self.doc.getObject([1])
+
+
 if __name__ == "__main__":
     unittest.main()

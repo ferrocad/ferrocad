@@ -1018,6 +1018,26 @@ fn parent_of(slf: &Bound<'_, PyDocumentObject>, geo: bool) -> Option<Py<PyDocume
 // Document settings (a namespaced view over `Document.Meta`)
 // ---------------------------------------------------------------------------
 
+/// Whether an expression source references the object `name` (e.g. `Name.Prop`),
+/// guarding against matching inside a longer identifier.
+fn expression_references(source: &str, name: &str) -> bool {
+    let needle = format!("{name}.");
+    source.match_indices(&needle).any(|(i, _)| {
+        let boundary_before = source[..i]
+            .chars()
+            .next_back()
+            .map(|c| !(c.is_alphanumeric() || c == '_'))
+            .unwrap_or(true);
+        let after = &source[i + needle.len()..];
+        let has_prop = after
+            .chars()
+            .next()
+            .map(|c| c.is_alphanumeric() || c == '_')
+            .unwrap_or(false);
+        boundary_before && has_prop
+    })
+}
+
 fn valid_ident(s: &str) -> bool {
     let mut chars = s.chars();
     match chars.next() {
@@ -1493,25 +1513,30 @@ impl PyDocument {
         }
     }
 
-    // -- undo/redo metadata (POC: not tracked yet) ---------------------------
+    // -- undo/redo metadata --------------------------------------------------
     #[getter]
     fn UndoNames(&self) -> Vec<String> {
-        vec![]
+        self.inner.lock().unwrap().undo_names()
     }
 
     #[getter]
     fn RedoNames(&self) -> Vec<String> {
-        vec![]
+        self.inner.lock().unwrap().redo_names()
     }
 
     #[getter]
     fn UndoCount(&self) -> usize {
-        0
+        self.inner.lock().unwrap().undo_names().len()
     }
 
     #[getter]
     fn RedoCount(&self) -> usize {
-        0
+        self.inner.lock().unwrap().redo_names().len()
+    }
+
+    /// Drop the whole undo/redo history (FreeCAD `clearUndos`).
+    fn clearUndos(&self) {
+        self.inner.lock().unwrap().clear_undos();
     }
 
     #[getter]
@@ -1564,7 +1589,7 @@ impl PyDocument {
     fn ActiveObject(slf: &Bound<'_, Self>) -> Option<Py<PyDocumentObject>> {
         let py = slf.py();
         let inner = Arc::clone(&slf.borrow().inner);
-        let id = inner.lock().unwrap().object_ids().into_iter().last()?;
+        let id = inner.lock().unwrap().active_object()?;
         let doc: Py<PyDocument> = slf.clone().unbind();
         Some(get_or_create_object(py, &doc, &inner, id))
     }
@@ -1578,7 +1603,7 @@ impl PyDocument {
     }
 
     fn getBookedTransactionID(&self) -> usize {
-        0
+        self.inner.lock().unwrap().booked_transaction_id()
     }
 
     // -- persistence / recovery ---------------------------------------------
@@ -2267,23 +2292,37 @@ impl PyDocumentObject {
         slf.borrow().group_members(py)
     }
 
-    /// `InList`: the objects that link to this object.
+    /// `InList`: the objects that link to this object (any `Link`/`LinkList`/
+    /// `LinkSub` property, or an expression referencing it).
     #[getter]
     fn InList(slf: &Bound<'_, Self>) -> Vec<Py<PyDocumentObject>> {
         let py = slf.py();
         let inner = Arc::clone(&slf.borrow().inner);
         let doc_py = slf.borrow().doc.clone_ref(py);
+        let self_id = slf.borrow().id;
         let name = slf.borrow().Name();
         let ids: Vec<ObjectId> = {
             let doc = inner.lock().unwrap();
             doc.object_ids()
                 .into_iter()
                 .filter(|id| {
-                    if doc.object(*id).map(|o| o.name == name).unwrap_or(false) {
+                    if *id == self_id {
                         return false;
                     }
-                    matches!(doc.object(*id).and_then(|o| o.properties.get("Group")),
-                        Some(Property::LinkList(links)) if links.contains(&name))
+                    doc.object(*id)
+                        .map(|o| {
+                            let linked = o.properties.iter().any(|(_, p)| match p {
+                                Property::Link(n) => n == &name,
+                                Property::LinkList(ns) => ns.contains(&name),
+                                Property::LinkSub(obj, _) => obj == &name,
+                                _ => false,
+                            });
+                            linked
+                                || o.expressions
+                                    .values()
+                                    .any(|src| expression_references(src, &name))
+                        })
+                        .unwrap_or(false)
                 })
                 .collect()
         };

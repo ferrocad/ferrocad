@@ -10,9 +10,12 @@ use serde::{Deserialize, Serialize};
 use crate::expr;
 use crate::observer::Observer;
 use crate::property::{Property, PropertyContainer};
-use crate::transaction::{PropertyChange, TransactionManager};
+use crate::transaction::{Change, PropertyChange, TransactionManager};
 
 pub type ObjectId = usize;
+
+/// Hands out a process-unique booking id per document (`getBookedTransactionID`).
+static NEXT_BOOKING: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(1);
 
 #[derive(Debug)]
 pub struct DocumentObject {
@@ -43,11 +46,18 @@ pub struct Document {
     index: BTreeMap<ObjectId, NodeIndex>,
     tx: TransactionManager,
     observers: Vec<Box<dyn Observer>>,
+    /// The object made active by the last `addObject` (FreeCAD `ActiveObject`).
+    active_object: Option<ObjectId>,
+    /// A per-document booking id, unique across documents in this process.
+    booked_transaction_id: usize,
 }
 
 impl Document {
     pub fn new() -> Self {
-        Self::default()
+        let mut doc = Self::default();
+        doc.booked_transaction_id =
+            NEXT_BOOKING.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        doc
     }
 
     pub fn add_object(&mut self, name: &str, type_id: &str) -> ObjectId {
@@ -108,6 +118,11 @@ impl Document {
                 python_state: None,
             },
         );
+        self.active_object = Some(id);
+        {
+            let saved = SavedObject::from_object(&self.objects[&id]);
+            self.record_change(Change::AddObject { id, saved });
+        }
         for observer in &mut self.observers {
             observer.on_object_added(id);
         }
@@ -162,8 +177,50 @@ impl Document {
         self.objects.values().find(|o| o.name == name).map(|o| o.id)
     }
 
-    /// Remove an object (and its graph node/edges). Returns false if absent.
+    /// Remove an object (and its graph node/edges), recording the change so it
+    /// can be undone. Returns false if the object is absent.
     pub fn remove_object(&mut self, id: ObjectId) -> bool {
+        let saved = match self.objects.get(&id) {
+            Some(o) => SavedObject::from_object(o),
+            None => return false,
+        };
+        let name = saved.name.clone();
+        // Group link lists that reference the object, before it is stripped.
+        let group_before: Vec<(ObjectId, Vec<String>)> = self
+            .objects
+            .values()
+            .filter(|o| o.id != id)
+            .filter_map(|o| match o.properties.get("Group") {
+                Some(Property::LinkList(links)) if links.contains(&name) => {
+                    Some((o.id, links.clone()))
+                }
+                _ => None,
+            })
+            .collect();
+
+        self.record_change(Change::RemoveObject { id, saved });
+        if !self.remove_object_raw(id, true) {
+            return false;
+        }
+        // Record the link-list edits so undo restores group membership.
+        for (group, old) in group_before {
+            let new = match self.objects.get(&group).and_then(|o| o.properties.get("Group")) {
+                Some(Property::LinkList(links)) => links.clone(),
+                _ => continue,
+            };
+            self.record_change(Change::Property(PropertyChange {
+                object: group,
+                name: "Group".to_string(),
+                old: Some(Property::LinkList(old)),
+                new: Property::LinkList(new),
+            }));
+        }
+        true
+    }
+
+    /// Remove an object without recording anything. `strip_groups` also drops it
+    /// from every group's `Group` link list (used by the public, recording path).
+    fn remove_object_raw(&mut self, id: ObjectId, strip_groups: bool) -> bool {
         let name = match self.objects.get(&id) {
             Some(o) => o.name.clone(),
             None => return false,
@@ -174,13 +231,50 @@ impl Document {
         if let Some(node) = self.index.remove(&id) {
             self.graph.remove_node(node);
         }
-        // Drop the removed object from any group's `Group` link list.
-        for other in self.objects.values_mut() {
-            if let Some(Property::LinkList(links)) = other.properties.get_mut("Group") {
-                links.retain(|n| n != &name);
+        if strip_groups {
+            for other in self.objects.values_mut() {
+                if let Some(Property::LinkList(links)) = other.properties.get_mut("Group") {
+                    links.retain(|n| n != &name);
+                }
             }
         }
+        if self.active_object == Some(id) {
+            self.active_object = None;
+        }
         true
+    }
+
+    /// Re-insert an object (with its original id) from a saved snapshot.
+    fn insert_saved_object(&mut self, id: ObjectId, saved: &SavedObject) {
+        let node = self.graph.add_node(id);
+        self.index.insert(id, node);
+        let mut properties = PropertyContainer::new();
+        for (k, v) in &saved.properties {
+            let status = saved
+                .property_status
+                .get(k)
+                .copied()
+                .unwrap_or(crate::prop_status::NONE);
+            properties.set_with_status(k.clone(), v.clone(), status);
+        }
+        self.objects.insert(
+            id,
+            DocumentObject {
+                id,
+                name: saved.name.clone(),
+                label: saved.label.clone(),
+                type_id: saved.type_id.clone(),
+                properties,
+                expressions: saved.expressions.clone(),
+                extensions: saved.extensions.iter().cloned().collect(),
+                must_execute: false,
+                invalid: false,
+                python_state: saved.python_state.clone(),
+            },
+        );
+        if id >= self.next_id {
+            self.next_id = id + 1;
+        }
     }
 
     pub fn set_label(&mut self, id: ObjectId, label: &str) -> bool {
@@ -291,18 +385,34 @@ impl Document {
             }
         }
 
-        if self.tx.is_active() || self.tx.has_pending() {
-            self.tx.record(PropertyChange {
-                object,
-                name: name.to_string(),
-                old: old.clone(),
-                new: value.clone(),
-            });
-        }
+        self.record_change(Change::Property(PropertyChange {
+            object,
+            name: name.to_string(),
+            old: old.clone(),
+            new: value.clone(),
+        }));
         for observer in &mut self.observers {
             observer.on_property_changed(object, name, old.as_ref(), &value);
         }
         Ok(())
+    }
+
+    /// Record a reversible change, but only while a transaction is pending or
+    /// active (edits outside a transaction are not undoable).
+    fn record_change(&mut self, change: Change) {
+        if self.tx.is_active() || self.tx.has_pending() {
+            self.tx.record(change);
+        }
+    }
+
+    /// The object made active by the most recent `addObject` (or `None`).
+    pub fn active_object(&self) -> Option<ObjectId> {
+        self.active_object
+    }
+
+    /// A per-document booking id (distinct across documents in this process).
+    pub fn booked_transaction_id(&self) -> usize {
+        self.booked_transaction_id
     }
 
     /// Add a property with an explicit status mask. Unlike `set_property`, this
@@ -376,6 +486,21 @@ impl Document {
         self.tx.has_pending() || self.tx.is_active()
     }
 
+    /// The undo transaction names, newest first (FreeCAD `UndoNames`).
+    pub fn undo_names(&self) -> Vec<String> {
+        self.tx.undo_names()
+    }
+
+    /// The redo transaction names, newest first (FreeCAD `RedoNames`).
+    pub fn redo_names(&self) -> Vec<String> {
+        self.tx.redo_names()
+    }
+
+    /// Drop all undo/redo history (FreeCAD `clearUndos`).
+    pub fn clear_undos(&mut self) {
+        self.tx.clear();
+    }
+
     // -- recompute flags -----------------------------------------------------
 
     pub fn enforce_recompute(&mut self, id: ObjectId) {
@@ -410,9 +535,9 @@ impl Document {
 
     pub fn abort_transaction(&mut self) -> bool {
         match self.tx.abort() {
-            Some(changes) => {
-                for change in changes.into_iter().rev() {
-                    self.revert(&change);
+            Some(tx) => {
+                for change in tx.changes.iter().rev() {
+                    self.revert(change);
                 }
                 true
             }
@@ -422,8 +547,8 @@ impl Document {
 
     pub fn undo(&mut self) -> bool {
         match self.tx.undo() {
-            Some(changes) => {
-                for change in changes.iter().rev() {
+            Some(tx) => {
+                for change in tx.changes.iter().rev() {
                     self.revert(change);
                 }
                 true
@@ -434,8 +559,8 @@ impl Document {
 
     pub fn redo(&mut self) -> bool {
         match self.tx.redo() {
-            Some(changes) => {
-                for change in changes.iter() {
+            Some(tx) => {
+                for change in tx.changes.iter() {
                     self.apply(change);
                 }
                 true
@@ -444,20 +569,70 @@ impl Document {
         }
     }
 
-    fn apply(&mut self, change: &PropertyChange) {
-        if let Some(obj) = self.objects.get_mut(&change.object) {
-            obj.properties.set(change.name.clone(), change.new.clone());
+    fn apply(&mut self, change: &Change) {
+        match change {
+            Change::Property(c) => {
+                if let Some(obj) = self.objects.get_mut(&c.object) {
+                    obj.properties.set(c.name.clone(), c.new.clone());
+                }
+            }
+            Change::AddObject { id, saved } => self.insert_saved_object(*id, saved),
+            Change::RemoveObject { id, .. } => {
+                self.remove_object_raw(*id, true);
+            }
+            Change::AddExpression {
+                object,
+                prop,
+                new,
+                ..
+            } => self.set_expression_raw(*object, prop, new),
+            Change::RemoveExpression { object, prop, .. } => {
+                if let Some(obj) = self.objects.get_mut(object) {
+                    obj.expressions.remove(prop);
+                }
+            }
         }
     }
 
-    fn revert(&mut self, change: &PropertyChange) {
-        if let Some(obj) = self.objects.get_mut(&change.object) {
-            match &change.old {
-                Some(old) => obj.properties.set(change.name.clone(), old.clone()),
-                None => {
-                    obj.properties.remove(&change.name);
+    fn revert(&mut self, change: &Change) {
+        match change {
+            Change::Property(c) => {
+                if let Some(obj) = self.objects.get_mut(&c.object) {
+                    match &c.old {
+                        Some(old) => obj.properties.set(c.name.clone(), old.clone()),
+                        None => {
+                            obj.properties.remove(&c.name);
+                        }
+                    }
                 }
             }
+            Change::AddObject { id, .. } => {
+                self.remove_object_raw(*id, false);
+            }
+            Change::RemoveObject { id, saved } => self.insert_saved_object(*id, saved),
+            Change::AddExpression {
+                object,
+                prop,
+                old,
+                ..
+            } => match old {
+                Some(source) => self.set_expression_raw(*object, prop, source),
+                None => {
+                    if let Some(obj) = self.objects.get_mut(object) {
+                        obj.expressions.remove(prop);
+                    }
+                }
+            },
+            Change::RemoveExpression { object, prop, old } => {
+                self.set_expression_raw(*object, prop, old);
+            }
+        }
+    }
+
+    /// Insert an expression without validation or recording (undo/redo path).
+    fn set_expression_raw(&mut self, object: ObjectId, prop: &str, source: &str) {
+        if let Some(obj) = self.objects.get_mut(&object) {
+            obj.expressions.insert(prop.to_string(), source.to_string());
         }
     }
 
@@ -489,16 +664,34 @@ impl Document {
             return Err(format!("cyclic dependency detected for '{prop}'"));
         }
 
+        let old_source = self
+            .objects
+            .get(&object)
+            .and_then(|o| o.expressions.get(prop).cloned());
         let obj = self.objects.get_mut(&object).unwrap();
         obj.expressions.insert(prop.to_string(), source.to_string());
+        self.record_change(Change::AddExpression {
+            object,
+            prop: prop.to_string(),
+            old: old_source,
+            new: source.to_string(),
+        });
         Ok(())
     }
 
     pub fn remove_expression(&mut self, object: ObjectId, prop: &str) -> bool {
-        match self.objects.get_mut(&object) {
-            Some(obj) => obj.expressions.remove(prop).is_some(),
-            None => false,
+        let old = match self.objects.get_mut(&object) {
+            Some(obj) => obj.expressions.remove(prop),
+            None => return false,
+        };
+        if let Some(old) = &old {
+            self.record_change(Change::RemoveExpression {
+                object,
+                prop: prop.to_string(),
+                old: old.clone(),
+            });
         }
+        old.is_some()
     }
 
     /// The object's expressions as `(property, source)` pairs.
@@ -672,13 +865,13 @@ impl Document {
 }
 
 /// A document as persisted to disk (JSON).
-#[derive(Serialize, Deserialize)]
+#[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct SavedDocument {
     pub name: String,
     pub objects: Vec<SavedObject>,
 }
 
-#[derive(Serialize, Deserialize)]
+#[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct SavedObject {
     pub name: String,
     pub label: String,
@@ -696,7 +889,7 @@ pub struct SavedObject {
 impl SavedObject {
     /// Build the persisted form of an object, dropping transient / no-persist
     /// properties (`Prop_Transient`, `Prop_NoPersist`).
-    fn from_object(o: &DocumentObject) -> SavedObject {
+    pub(crate) fn from_object(o: &DocumentObject) -> SavedObject {
         let mut properties = BTreeMap::new();
         let mut property_status = BTreeMap::new();
         for (k, v) in o.properties.iter() {

@@ -70,8 +70,17 @@ core, with the C++ Python bindings replaced by Rust bindings.
   `copyObject`.
 * **MVP slice A2** — **`PropertyEnumeration` + type validation**: an enumeration property
   (set-from-list, select by index/value, `enum_vals`), `addObject`/`addProperty`/`findObjects`
-  reject extension / non-property types with `TypeError`. Conformance now **155 passing**. This
-  continues the [MVP track](../docs/mvp-path.md).
+  reject extension / non-property types with `TypeError`. This continues the
+  [MVP track](../docs/mvp-path.md).
+* **MVP slice B2** — **the undo/redo engine**: transactions now record a general, reversible
+  change set (property edits, object add/remove, expression set/remove) and expose
+  `UndoNames`/`RedoNames`/`UndoCount`/`RedoCount`/`clearUndos`. Opening a second transaction
+  commits the first on its next change, a new change drops the redo stack, and aborting leaves no
+  entry. `ActiveObject` follows `addObject` and is cleared when that object is undone; removing an
+  object records the group link-list edits so group membership is restored; `InList` is
+  link-type-aware (any `Link`/`LinkList`/`LinkSub`, plus extension-created backlinks); and
+  `getBookedTransactionID` is unique per document. Conformance is now **159 passing**
+  (`UndoRedoCases` and `MultiDocumentUndo` pass).
 
 This is a proof of concept, not a product. It exists to validate the single
 riskiest assumption of the rewrite plan: *that a Python script written against

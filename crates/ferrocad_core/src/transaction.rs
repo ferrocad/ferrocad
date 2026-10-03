@@ -1,8 +1,14 @@
-//! Open/commit/abort transactions plus a simple undo/redo stack.
+//! Open/commit/abort transactions plus a named undo/redo stack.
+//!
+//! A transaction collects a list of reversible [`Change`]s. Opening a
+//! transaction only *books* a name; the transaction becomes active — and the
+//! redo stack is dropped — on the first recorded change, mirroring FreeCAD's
+//! "new transaction clears redo" behaviour.
 
-use crate::document::ObjectId;
+use crate::document::{ObjectId, SavedObject};
 use crate::property::Property;
 
+/// A single property assignment: `old` is `None` when the property was created.
 #[derive(Debug, Clone)]
 pub struct PropertyChange {
     pub object: ObjectId,
@@ -11,31 +17,72 @@ pub struct PropertyChange {
     pub new: Property,
 }
 
+/// One reversible edit inside a transaction.
+#[derive(Debug, Clone)]
+pub enum Change {
+    /// A property assignment.
+    Property(PropertyChange),
+    /// An object was added; `saved` is its full state (for redo / undo-removal).
+    AddObject { id: ObjectId, saved: SavedObject },
+    /// An object was removed; `saved` is its full state (for undo restore).
+    RemoveObject { id: ObjectId, saved: SavedObject },
+    /// An expression was set on `(object, prop)`; `old` was the previous source.
+    AddExpression {
+        object: ObjectId,
+        prop: String,
+        old: Option<String>,
+        new: String,
+    },
+    /// An expression was removed from `(object, prop)`.
+    RemoveExpression {
+        object: ObjectId,
+        prop: String,
+        old: String,
+    },
+}
+
+/// A committed (or active) transaction: a name plus its ordered changes.
+#[derive(Debug, Clone)]
+pub struct Transaction {
+    pub name: String,
+    pub changes: Vec<Change>,
+}
+
 #[derive(Debug, Default)]
 pub struct TransactionManager {
     /// A transaction requested by `open`, not yet made active by a change.
     pending: Option<String>,
-    active: Option<Vec<PropertyChange>>,
-    undo: Vec<Vec<PropertyChange>>,
-    redo: Vec<Vec<PropertyChange>>,
+    active: Option<Transaction>,
+    /// Stack of committed transactions (oldest first; newest on top).
+    undo: Vec<Transaction>,
+    /// Stack of undone transactions (top is the next to redo).
+    redo: Vec<Transaction>,
 }
 
 impl TransactionManager {
     /// Request a (named) transaction. It only becomes `active` on the first
-    /// recorded change, mirroring FreeCAD's "pending transaction" behaviour.
+    /// recorded change; if a transaction is already active it is committed when
+    /// the *next* change arrives, mirroring FreeCAD's pending-transaction model.
     pub fn open_named(&mut self, name: &str) {
-        if self.active.is_none() {
-            self.pending = Some(name.to_string());
-        }
+        self.pending = Some(name.to_string());
     }
 
     /// Make the pending transaction active and return its name (once).
+    ///
+    /// Any already-active transaction is committed first (so consecutive
+    /// `openTransaction` calls without an explicit commit still produce separate
+    /// undo entries), and a new active transaction invalidates the redo stack.
     pub fn begin(&mut self) -> Option<String> {
-        if self.active.is_none() {
-            if let Some(name) = self.pending.take() {
-                self.active = Some(Vec::new());
-                return Some(name);
+        if let Some(name) = self.pending.take() {
+            if let Some(previous) = self.active.take() {
+                self.undo.push(previous);
             }
+            self.redo.clear();
+            self.active = Some(Transaction {
+                name: name.clone(),
+                changes: Vec::new(),
+            });
+            return Some(name);
         }
         None
     }
@@ -56,10 +103,26 @@ impl TransactionManager {
         !self.redo.is_empty()
     }
 
-    pub fn record(&mut self, change: PropertyChange) {
+    /// The undo transaction names, newest first (FreeCAD `UndoNames`). An
+    /// in-progress (active) transaction is included as the newest entry.
+    pub fn undo_names(&self) -> Vec<String> {
+        let mut names = Vec::new();
+        if let Some(active) = &self.active {
+            names.push(active.name.clone());
+        }
+        names.extend(self.undo.iter().rev().map(|t| t.name.clone()));
+        names
+    }
+
+    /// The redo transaction names, newest first (FreeCAD `RedoNames`).
+    pub fn redo_names(&self) -> Vec<String> {
+        self.redo.iter().rev().map(|t| t.name.clone()).collect()
+    }
+
+    pub fn record(&mut self, change: Change) {
         self.begin();
         if let Some(active) = &mut self.active {
-            active.push(change);
+            active.changes.push(change);
         }
     }
 
@@ -69,27 +132,37 @@ impl TransactionManager {
         match self.active.take() {
             Some(active) => {
                 self.undo.push(active);
-                self.redo.clear();
                 true
             }
             None => false,
         }
     }
 
-    pub fn abort(&mut self) -> Option<Vec<PropertyChange>> {
+    /// Discard the active transaction (the caller reverts its changes).
+    pub fn abort(&mut self) -> Option<Transaction> {
         self.pending = None;
         self.active.take()
     }
 
-    pub fn undo(&mut self) -> Option<Vec<PropertyChange>> {
-        let changes = self.undo.pop()?;
-        self.redo.push(changes.clone());
-        Some(changes)
+    /// Pop the newest undo transaction (returning it and pushing it to redo).
+    /// An active transaction is committed first so it can be undone too.
+    pub fn undo(&mut self) -> Option<Transaction> {
+        self.commit();
+        let t = self.undo.pop()?;
+        self.redo.push(t.clone());
+        Some(t)
     }
 
-    pub fn redo(&mut self) -> Option<Vec<PropertyChange>> {
-        let changes = self.redo.pop()?;
-        self.undo.push(changes.clone());
-        Some(changes)
+    /// Pop the newest redo transaction (returning it and pushing it to undo).
+    pub fn redo(&mut self) -> Option<Transaction> {
+        let t = self.redo.pop()?;
+        self.undo.push(t.clone());
+        Some(t)
+    }
+
+    /// Drop all undo/redo history (`clearUndos`).
+    pub fn clear(&mut self) {
+        self.undo.clear();
+        self.redo.clear();
     }
 }

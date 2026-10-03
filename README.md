@@ -78,9 +78,9 @@ core, with the C++ Python bindings replaced by Rust bindings.
   commits the first on its next change, a new change drops the redo stack, and aborting leaves no
   entry. `ActiveObject` follows `addObject` and is cleared when that object is undone; removing an
   object records the group link-list edits so group membership is restored; `InList` is
-  link-type-aware (any `Link`/`LinkList`/`LinkSub`, plus extension-created backlinks); and
+  link-type-aware (any `Link`/`LinkList`/`LinkSub`, plus expression backlinks); and
   `getBookedTransactionID` is unique per document. Conformance is now **159 passing**
-  (`UndoRedoCases` and `MultiDocumentUndo` pass).
+  (`UndoRedoCases` and `MultiDocumentUndo` are fully green).
 
 This is a proof of concept, not a product. It exists to validate the single
 riskiest assumption of the rewrite plan: *that a Python script written against

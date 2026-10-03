@@ -170,6 +170,27 @@ python3 tools/conformance.py --root ../freecad-upstream            # default cur
 python3 tools/conformance.py --root ../freecad-upstream --list     # list candidates
 ```
 
+## Documentation
+
+The Rust crates carry **Diátaxis-structured rustdoc** — a tutorial, how-to guides, an explanation of
+the design, and the generated item reference:
+
+```sh
+cargo doc --no-deps --open                    # ferrocad_core + ferrocad_py
+cargo doc --no-deps -p ferrocad_core          # one crate
+cargo test --doc -p ferrocad_core             # the tutorial is a doc test
+```
+
+The crate page of `ferrocad_core` (`crates/ferrocad_core/src/lib.rs`) reads as a tutorial and an
+explanation with `How-to`/`Reference` sections; it is rendered on docs.rs when published. The
+per-module pages are the reference.
+
+The **product surface is Python** (`import FreeCAD`) and deliberately mirrors upstream FreeCAD, so
+its API reference *is* FreeCAD's own. FerroCAD-specific Python guidance therefore lives in the
+`python/FreeCAD` facade docstrings and the repository `docs/` (milestones, MVP path, rewrite
+strategy). A Sphinx/mkdocstrings site is the natural next step once a Python doc build can run in
+CI; until then rustdoc is the verifiable source of truth.
+
 ## Packaging
 
 `pyproject.toml` builds the distribution **`ferrocad`** with

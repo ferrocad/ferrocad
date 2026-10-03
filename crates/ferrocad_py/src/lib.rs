@@ -1,8 +1,49 @@
-//! # ferrocad_py (M3b)
+//! # ferrocad_py
 //!
-//! PyO3 bindings exposing the `ferrocad_core` document/object model (properties,
-//! quantities, expressions, transactions, recompute) to Python. This is the
-//! bridge that replaces the hand-written `FreeCAD` facade from M0/M1.
+//! The PyO3 extension that exposes [`ferrocad_core`](https://crates.io/crates/ferrocad_core)
+//! to Python as the **`ferrocad`** module. It contains no model logic of its own —
+//! it wraps the core types as `#[pyclass]`es and adapts FreeCAD's Python surface
+//! (document/object/property APIs, `Base` value types, observers, transactions).
+//!
+//! This is an implementation detail of the `ferrocad` distribution. **Users do not
+//! import it directly**: the pure-Python `python/FreeCAD` facade imports `ferrocad`
+//! and re-exports the App-level API under the `FreeCAD` namespace, so workbench
+//! scripts keep writing `import FreeCAD`.
+//!
+//! The documentation is organised following [Diátaxis](https://diataxis.fr).
+//!
+//! # How-to guide: use it from Python
+//!
+//! ```python
+//! import FreeCAD                       # the facade
+//! doc = FreeCAD.newDocument("Demo")
+//! obj = doc.addObject("App::FeaturePython", "Box")
+//! obj.addProperty("App::PropertyLength", "Height")
+//! obj.Height = "25 mm"
+//! doc.recompute()
+//! ```
+//!
+//! The same code runs against upstream FreeCAD and against FerroCAD; only the
+//! backend behind `import FreeCAD` differs.
+//!
+//! # Explanation
+//!
+//! Each core document or object is shared with Python behind an
+//! `Arc<Mutex<..>>`. Observer arguments are backed by a global identity cache so
+//! the same object compares equal with `is` across calls. Because the types are
+//! built with the `abi3` stable ABI, one binary works across CPython versions.
+//!
+//! The crate is compiled as a `cdylib` extension module (not published docs); the
+//! Rust-level API reference here is thin by design — the interesting surface is the
+//! Python API, documented on the `FreeCAD` facade and by the upstream
+//! [FreeCAD documentation](https://wiki.freecad.org).
+//!
+//! # Implemented capabilities
+//!
+//! Follows `ferrocad_core`: the `Base`/`App` surface through M4 slices 1–16, plus the
+//! MVP slices A1 (object state / property status), B1 (name/label semantics), and A2
+//! ([`PropertyEnumeration`](https://docs.rs/ferrocad_core) and type validation). See
+//! the repository `docs/milestones.md` for the per-slice record.
 
 #![allow(non_snake_case)]
 

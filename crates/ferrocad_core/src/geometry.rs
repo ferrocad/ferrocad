@@ -223,12 +223,12 @@ impl Matrix4 {
             for j in 0..4 {
                 // cofactor C_ji (transposed)
                 let mut minor = [[0.0; 3]; 3];
-                let (mut mi, mut mj) = (0, 0);
+                let mut mi = 0;
                 for ri in 0..4 {
                     if ri == j {
                         continue;
                     }
-                    mj = 0;
+                    let mut mj = 0;
                     for ci in 0..4 {
                         if ci == i {
                             continue;

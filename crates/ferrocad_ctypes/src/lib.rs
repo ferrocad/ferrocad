@@ -73,7 +73,8 @@ unsafe fn cstr(p: *const c_char) -> String {
     if p.is_null() {
         return String::new();
     }
-    CStr::from_ptr(p).to_string_lossy().into_owned()
+    // SAFETY: the C ABI guarantees a non-null, NUL-terminated string.
+    unsafe { CStr::from_ptr(p) }.to_string_lossy().into_owned()
 }
 
 /// Move a Rust `String` out to an owned C string (freed by `fc_string_free`).

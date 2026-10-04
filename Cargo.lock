@@ -2194,6 +2194,9 @@ dependencies = [
 [[package]]
 name = "ferrocad"
 version = "0.0.0"
+dependencies = [
+ "ferrocad_host",
+]
 
 [[package]]
 name = "ferrocad_core"

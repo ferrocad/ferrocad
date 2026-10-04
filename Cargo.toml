@@ -45,6 +45,7 @@ unicode-segmentation = "1"
 # `ferrocad_widgets`. See ../docs/releasing.md.
 ferrocad_core = { path = "crates/ferrocad_core", version = "0.1.0" }
 ferrocad_widgets = { path = "crates/ferrocad_widgets", version = "0.1.0" }
+ferrocad_host = { path = "crates/ferrocad_host", version = "0.1.0" }
 
 # `lto` pays off for the extension/shared libraries; keep it workspace-wide.
 [profile.release]

@@ -118,12 +118,12 @@ FerroCAD is a Cargo workspace (edition 2024). Crate status:
 
 | Crate | Role | Status |
 | --- | --- | --- |
-| `crates/ferrocad` | name reservation on crates.io (`0.0.0`, empty); see the repository | placeholder |
+| `crates/ferrocad` | the base app: runs the general edition (`cargo run -p ferrocad`); reserved on crates.io at `0.0.0` | base app |
 | `crates/ferrocad_core` | pure-Rust model: quantities, properties, documents, recompute DAG | primary |
 | `crates/ferrocad_py` | PyO3 extension over `ferrocad_core` (module `ferrocad`) | primary |
 | `crates/ferrocad_gen` | generated PyO3 skeleton bindings from the `.pyi` model (M3c) | useful — drives the codegen tests |
-| `crates/ferrocad_widgets` | reusable `bite-gpui` widgets (window chrome, field, console) | shared with the shell |
-| `crates/ferrocad_host` | spike: Rust host embedding CPython + `bite-gpui` (M5 UI track) | **spike — kept**, not yet production |
+| `crates/ferrocad_widgets` | reusable `bite-gpui` widgets (window chrome, field, console) | published |
+| `crates/ferrocad_host` | library: reusable app shell (`run`/`run_with` + `HostConfig`), boots CPython | primary |
 
 The `host` crate is excluded from the workspace `default-members` because its PyO3 `auto-initialize`
 feature conflicts with the `extension-module` feature of the primary extension crates.
@@ -133,6 +133,7 @@ feature conflicts with the `extension-module` feature of the primary extension c
 ```sh
 ./build.sh     # cargo build --release, then package the native libs into python/
 ./run.sh       # PYTHONPATH=python python3 hello_freecad.py
+cargo run -p ferrocad   # the base app window (needs a display)
 ```
 
 Expected output:
@@ -305,7 +306,7 @@ track that docks into the shell's placeholder pane.
 embedded CPython interpreter, creates a sample document, and shows a model inspector, a
 read-only property editor, a viewport placeholder, a Python console and a status bar — all
 driven live through the `FreeCAD` API (`python/ferrocad_shell`). Run it with
-`cargo run -p ferrocad_host` (needs a display); the headless `#[gpui::test]` is the CI-proof path.
+`cargo run -p ferrocad` (needs a display); the headless `#[gpui::test]` is the CI-proof path.
 
 ## Repository layout
 

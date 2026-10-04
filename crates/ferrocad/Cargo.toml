@@ -15,3 +15,12 @@ documentation = "https://docs.rs/ferrocad"
 
 [lib]
 name = "ferrocad"
+
+# The base application: the general FerroCAD edition. Editions (FerroCAD:
+# Architecture, ...) are thin binaries that depend on `ferrocad_host` directly.
+[[bin]]
+name = "ferrocad"
+path = "src/main.rs"
+
+[dependencies]
+ferrocad_host.workspace = true

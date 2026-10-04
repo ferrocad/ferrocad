@@ -12,3 +12,6 @@
 # Python
 __pycache__/
 *.py[cod]
+
+# Downloaded packaging tools (e.g. appimagetool-<arch>.AppImage)
+/tools/*.AppImage

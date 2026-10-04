@@ -1,9 +1,18 @@
 #!/bin/sh
 # FerroCAD launcher inside the .app bundle: point the embedded interpreter at the
-# bundled Python, then run the real binary.
+# bundled Python runtime and scripts, then run the real binary.
 #
 # `$0` is .../FerroCAD.app/Contents/MacOS/ferrocad, so its `..` is Contents.
 HERE=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
+
+RUNTIME="$HERE/Resources/runtime"
+if [ -d "$RUNTIME" ]; then
+    export PYTHONHOME="$RUNTIME"
+    export PATH="$RUNTIME/bin:$PATH"
+    DYLD_LIBRARY_PATH="$RUNTIME/lib${DYLD_LIBRARY_PATH:+:$DYLD_LIBRARY_PATH}"
+    export DYLD_LIBRARY_PATH
+fi
+
 export FERROCAD_PYTHON_PATH="$HERE/Resources/python"
 export PYTHONPATH="$HERE/Frameworks:$HERE/Resources/python:$HERE/Resources/mods${PYTHONPATH:+:$PYTHONPATH}"
 exec "$HERE/MacOS/ferrocad-bin" "$@"

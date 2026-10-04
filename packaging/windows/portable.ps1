@@ -25,10 +25,15 @@ try {
     New-Item -ItemType Directory -Path $Out -Force | Out-Null
     Copy-Item -Recurse -Force (Join-Path $Payload '*') $Out
 
-    # A convenience launcher that points the embedded interpreter at the payload.
+    # A convenience launcher that points the embedded interpreter at the payload
+    # and, when bundled, at the Python runtime.
     $bat = @'
 @echo off
 set "HERE=%~dp0"
+if exist "%HERE%runtime" (
+  set "PYTHONHOME=%HERE%runtime"
+  set "PATH=%HERE%runtime;%HERE%runtime\Scripts;%PATH%"
+)
 set "FERROCAD_PYTHON_PATH=%HERE%python"
 set "PYTHONPATH=%HERE%lib;%HERE%python;%HERE%mods;%PYTHONPATH%"
 "%HERE%bin\ferrocad.exe" %*

@@ -1,7 +1,17 @@
 #!/bin/sh
 # FerroCAD launcher (AppImage): point the embedded interpreter at the bundled
-# Python, then run the app.
+# Python runtime and scripts, then run the app.
 HERE=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+
+# Use the bundled CPython when present (self-contained), else the system one.
+# libpython is resolved via LD_LIBRARY_PATH because the host has no rpath.
+if [ -d "$HERE/runtime" ]; then
+    export PYTHONHOME="$HERE/runtime"
+    export PATH="$HERE/runtime/bin:$PATH"
+    LD_LIBRARY_PATH="$HERE/runtime/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+    export LD_LIBRARY_PATH
+fi
+
 export FERROCAD_PYTHON_PATH="$HERE/python"
 export PYTHONPATH="$HERE/lib:$HERE/python:$HERE/mods${PYTHONPATH:+:$PYTHONPATH}"
 exec "$HERE/bin/ferrocad" "$@"

@@ -23,6 +23,7 @@ target/dist/ferrocad/
 ├── lib/ferrocad.abi3.so      the PyO3 extension (`ferrocad.pyd` on Windows)
 ├── python/                   FreeCAD, FreeCADGui, ferrocad_shell, ferrocad_spike
 ├── mods/                     workbenches
+├── runtime/                  bundled CPython (when fetched; self-contained)
 └── LICENSES/                 LGPL-2.1-or-later
 ```
 
@@ -32,8 +33,12 @@ finds `python/`, `lib/` and `mods/`.
 
 ## Notes
 
-- **CPython is not bundled yet.** The payload uses the system interpreter.
-  Bundling python-build-standalone is the next step (see `docs/distribution.md`).
+- **CPython is bundled when available.** Run `cargo xtask python` once to fetch a
+  pinned `python-build-standalone` runtime (cached under `target/python-runtime/`);
+  `bundle` then includes it as `runtime/` and builds the app against it. The
+  launchers set `PYTHONHOME` and the library path, so `libpython` and the stdlib
+  come from the bundle. Pin a different version with `FERROCAD_PYTHON_VERSION` and
+  `FERROCAD_PBS_DATE`. Without a runtime, the payload uses the system interpreter.
 - **Icons are optional.** Each script uses one if you provide it
   (`linux/ferrocad.png`, `macos/FerroCAD.icns`, `windows/ferrocad.ico`) and warns
   otherwise. The source is `icon/ferrocad.svg`; convert it with `rsvg-convert` or

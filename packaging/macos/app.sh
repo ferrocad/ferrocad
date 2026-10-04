@@ -31,6 +31,9 @@ chmod +x "$APP/Contents/MacOS/ferrocad-bin" "$APP/Contents/MacOS/ferrocad"
 cp -R "$PAYLOAD/python" "$APP/Contents/Resources/python"
 cp -R "$PAYLOAD/mods" "$APP/Contents/Resources/mods"
 cp -R "$PAYLOAD/LICENSES" "$APP/Contents/Resources/LICENSES"
+if [ -d "$PAYLOAD/runtime" ]; then
+    cp -R "$PAYLOAD/runtime" "$APP/Contents/Resources/runtime"
+fi
 cp "$PAYLOAD/lib/ferrocad.abi3.so" "$APP/Contents/Frameworks/"
 
 if [ -f "$HERE/FerroCAD.icns" ]; then

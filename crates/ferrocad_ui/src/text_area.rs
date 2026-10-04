@@ -2,15 +2,14 @@
 //!
 //! This is the console's element. The buffer ([`TextBuffer`]) holds the whole
 //! transcript; everything before `read_only_len` is drawn muted and cannot be
-//! edited, and the tail after it is the live input. `Enter` emits a
-//! [`SubmitEvent`] with that tail; the owner runs it, appends the result and a
-//! fresh prompt with [`TextAreaState::set_transcript`], and the caret returns to
-//! the new editable region.
+//! edited, and the tail after it is the live input. The tail may contain
+//! newlines: `Shift+Enter` inserts one and a pasted snippet keeps its own. `Enter`
+//! emits a [`SubmitEvent`] with the whole tail; the owner runs it and rebuilds the
+//! transcript with [`TextAreaState::set_transcript`].
 //!
-//! The editable tail carries no newlines (paste is sanitised), so it always
-//! lives on the last line. That keeps the rendering and hit-testing simple: every
-//! line but the last is read-only, and the last line is a muted prefix run plus a
-//! normal editable run.
+//! Rendering walks the content line by line. A line is split into a muted
+//! read-only run and a normal editable run at `read_only_len`, and the caret and
+//! the selection are drawn only inside the editable region.
 
 use std::ops::Range;
 
@@ -23,7 +22,8 @@ use gpui::{
     rgb, rgba, size,
 };
 
-use crate::text::{SubmitEvent, TextBuffer};
+use crate::events::SubmitEvent;
+use crate::text_buffer::TextBuffer;
 
 const AREA_BG: u32 = 0x0d0f12;
 const READ_ONLY: u32 = 0xb6bcc6;
@@ -36,6 +36,11 @@ const LINE_HEIGHT: Pixels = px(18.);
 const PAD_Y: Pixels = px(4.);
 const PAD_X: Pixels = px(8.);
 
+struct LineLayout {
+    start: usize,
+    line: ShapedLine,
+}
+
 /// The backing state of the console text area.
 pub struct TextAreaState {
     buffer: TextBuffer,
@@ -43,8 +48,7 @@ pub struct TextAreaState {
     scroll: ScrollHandle,
     // Geometry captured during the last paint, used for hit-testing.
     last_bounds: Option<Bounds<Pixels>>,
-    last_layout: Option<ShapedLine>,
-    last_line_start: usize,
+    last_lines: Vec<LineLayout>,
     is_selecting: bool,
 }
 
@@ -63,8 +67,7 @@ impl TextAreaState {
             focus_handle: cx.focus_handle(),
             scroll: ScrollHandle::new(),
             last_bounds: None,
-            last_layout: None,
-            last_line_start: 0,
+            last_lines: Vec::new(),
             is_selecting: false,
         }
     }
@@ -101,8 +104,8 @@ impl TextAreaState {
 
     fn paste(&mut self, cx: &mut Context<Self>) {
         if let Some(text) = cx.read_from_clipboard().and_then(|item| item.text()) {
-            // Keep the editable tail on one line.
-            self.buffer.insert(&text.replace('\n', " "));
+            // A pasted snippet keeps its newlines; it is code to edit and run.
+            self.buffer.insert(&text);
             cx.notify();
         }
     }
@@ -112,9 +115,15 @@ impl TextAreaState {
         let secondary = keystroke.modifiers.platform || keystroke.modifiers.control;
         let handled = match keystroke.key.as_str() {
             "enter" | "return" => {
-                cx.emit(SubmitEvent {
-                    text: self.buffer.editable().to_string(),
-                });
+                if keystroke.modifiers.shift {
+                    // Shift+Enter continues the snippet on a new line.
+                    self.buffer.insert("\n");
+                    cx.notify();
+                } else {
+                    cx.emit(SubmitEvent {
+                        text: self.buffer.editable().to_string(),
+                    });
+                }
                 true
             }
             "backspace" => {
@@ -155,9 +164,17 @@ impl TextAreaState {
                 cx.notify();
                 true
             }
+            "up" => {
+                self.move_line(-1);
+                cx.notify();
+                true
+            }
+            "down" => {
+                self.move_line(1);
+                cx.notify();
+                true
+            }
             "home" => {
-                // The start of the editable region, not the start of the line:
-                // the prefix is read-only.
                 let start = self.buffer.read_only_len();
                 self.buffer.move_to(start);
                 cx.notify();
@@ -194,12 +211,32 @@ impl TextAreaState {
         }
     }
 
-    fn on_mouse_down(
-        &mut self,
-        event: &MouseDownEvent,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
+    /// Move the caret one visual line up or down, keeping the column if the target
+    /// line is long enough.
+    fn move_line(&mut self, delta: i32) {
+        let cursor = self.buffer.cursor_offset();
+        let line_range = self.buffer.line_range(cursor);
+        if delta < 0 {
+            if line_range.start == self.buffer.read_only_len() {
+                return;
+            }
+            let prev_line = self.buffer.line_range(line_range.start.saturating_sub(1));
+            let column = cursor - line_range.start;
+            let target = (prev_line.start + column).min(prev_line.end);
+            self.buffer.move_to(target);
+        } else {
+            let end = self.buffer.content().len();
+            if line_range.end >= end {
+                return;
+            }
+            let next_line = self.buffer.line_range(line_range.end + 1);
+            let column = cursor - line_range.start;
+            let target = (next_line.start + column).min(next_line.end);
+            self.buffer.move_to(target);
+        }
+    }
+
+    fn on_mouse_down(&mut self, event: &MouseDownEvent, window: &mut Window, cx: &mut Context<Self>) {
         window.focus(&self.focus_handle, cx);
         self.is_selecting = true;
         let offset = self.index_for_mouse_position(event.position);
@@ -230,20 +267,26 @@ impl TextAreaState {
         let Some(bounds) = self.last_bounds else {
             return read_only_len;
         };
-        if position.y < bounds.top() {
+        if self.last_lines.is_empty() {
             return read_only_len;
         }
         let y = position.y - bounds.top() - PAD_Y;
-        let line = (y / LINE_HEIGHT).floor().max(0.0) as usize;
-        let line_count = self.buffer.content().split('\n').count().max(1);
-        if line + 1 < line_count {
-            return read_only_len;
-        }
-        let Some(layout) = self.last_layout.as_ref() else {
-            return read_only_len;
-        };
+        let line_index = (y / LINE_HEIGHT).floor().max(0.0) as usize;
+        let line_index = line_index.min(self.last_lines.len() - 1);
+        let line = &self.last_lines[line_index];
         let x = position.x - bounds.left() - PAD_X;
-        self.last_line_start + layout.closest_index_for_x(x)
+        line.start + line.line.closest_index_for_x(x)
+    }
+
+    /// The last rendered line whose start is at or before `offset`.
+    fn line_for_offset(&self, offset: usize) -> Option<(usize, &LineLayout)> {
+        let mut found = None;
+        for (index, line) in self.last_lines.iter().enumerate() {
+            if offset >= line.start {
+                found = Some((index, line));
+            }
+        }
+        found
     }
 }
 
@@ -329,19 +372,17 @@ impl EntityInputHandler for TextAreaState {
         _window: &mut Window,
         _cx: &mut Context<Self>,
     ) -> Option<Bounds<Pixels>> {
-        let layout = self.last_layout.as_ref()?;
         let range = self.buffer.range_from_utf16(&range_utf16);
-        let start = range.start.saturating_sub(self.last_line_start);
-        let end = range.end.saturating_sub(self.last_line_start);
+        let (index, line) = self.line_for_offset(range.start)?;
+        let top = bounds.top() + PAD_Y + index as f32 * LINE_HEIGHT;
+        let start = range.start.saturating_sub(line.start);
+        let end = range.end.saturating_sub(line.start);
         Some(Bounds::from_corners(
             point(
-                bounds.left() + PAD_X + layout.x_for_index(start),
-                bounds.top(),
+                bounds.left() + PAD_X + line.line.x_for_index(start),
+                top,
             ),
-            point(
-                bounds.left() + PAD_X + layout.x_for_index(end),
-                bounds.bottom(),
-            ),
+            point(bounds.left() + PAD_X + line.line.x_for_index(end), top + LINE_HEIGHT),
         ))
     }
 
@@ -352,17 +393,22 @@ impl EntityInputHandler for TextAreaState {
         _cx: &mut Context<Self>,
     ) -> Option<usize> {
         let bounds = self.last_bounds?;
-        let layout = self.last_layout.as_ref()?;
+        if self.last_lines.is_empty() {
+            return None;
+        }
+        let y = point.y - bounds.top() - PAD_Y;
+        let index = ((y / LINE_HEIGHT).floor().max(0.0) as usize).min(self.last_lines.len() - 1);
+        let line = &self.last_lines[index];
         let x = point.x - bounds.left() - PAD_X;
-        let idx = layout.index_for_x(x)?;
-        Some(self.buffer.offset_to_utf16(self.last_line_start + idx))
+        let byte = line.start + line.line.index_for_x(x)?;
+        Some(self.buffer.offset_to_utf16(byte))
     }
 }
 
 impl Render for TextAreaState {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         div()
-            .id("console-textarea")
+            .id("text-area")
             .flex_1()
             .min_h_0()
             .overflow_y_scroll()
@@ -381,17 +427,10 @@ impl Render for TextAreaState {
     }
 }
 
-struct LineLayout {
-    line: ShapedLine,
-    start: usize,
-}
-
 struct PrepaintState {
     lines: Vec<LineLayout>,
     cursor: Option<PaintQuad>,
-    selection: Option<PaintQuad>,
-    last_layout: Option<ShapedLine>,
-    last_line_start: usize,
+    selection: Vec<PaintQuad>,
 }
 
 struct TextAreaElement {
@@ -449,58 +488,72 @@ impl Element for TextAreaElement {
         let font = style.font();
         let font_size = style.font_size.to_pixels(window.rem_size());
 
-        let part_count = content.split('\n').count();
-        let mut lines = Vec::with_capacity(part_count);
+        let mut lines = Vec::new();
         let mut offset = 0usize;
-        for (i, part) in content.split('\n').enumerate() {
-            let is_last = i + 1 == part_count;
+        for part in content.split('\n') {
             let start = offset;
-            let runs = line_runs(part, read_only_len - start, marked.as_ref(), start, is_last, &font);
+            let runs = line_runs(part, start, read_only_len, marked.as_ref(), &font);
             let line = window
                 .text_system()
                 .shape_line(part.to_string().into(), font_size, &runs, None);
-            lines.push(LineLayout { line, start });
+            lines.push(LineLayout { start, line });
             offset = start + part.len() + 1;
         }
 
-        let last = lines.last().expect("at least one line");
-        let last_layout = last.line.clone();
-        let last_line_start = last.start;
-        let last_top = bounds.top() + PAD_Y + (part_count as f32 - 1.) * LINE_HEIGHT;
-        let last_bottom = last_top + LINE_HEIGHT;
+        let line_of = |needle: usize| -> usize {
+            let mut found = 0;
+            for (index, line) in lines.iter().enumerate() {
+                if needle >= line.start {
+                    found = index;
+                }
+            }
+            found
+        };
 
-        let caret_in_line = cursor.saturating_sub(last_line_start);
+        let cursor_line = line_of(cursor);
+        let cursor_index = cursor.saturating_sub(lines[cursor_line].start);
+        let cursor_top = bounds.top() + PAD_Y + cursor_line as f32 * LINE_HEIGHT;
         let cursor_quad = fill(
             Bounds::new(
                 point(
-                    bounds.left() + PAD_X + last.line.x_for_index(caret_in_line),
-                    last_top,
+                    bounds.left() + PAD_X + lines[cursor_line].line.x_for_index(cursor_index),
+                    cursor_top,
                 ),
                 size(px(2.), LINE_HEIGHT),
             ),
             rgb(CARET),
         );
 
-        let selection_quad = if selected.is_empty() {
-            None
-        } else {
-            let s = selected.start.saturating_sub(last_line_start);
-            let e = selected.end.saturating_sub(last_line_start);
-            Some(fill(
-                Bounds::from_corners(
-                    point(bounds.left() + PAD_X + last.line.x_for_index(s), last_top),
-                    point(bounds.left() + PAD_X + last.line.x_for_index(e), last_bottom),
-                ),
-                rgba(SELECTION),
-            ))
-        };
+        let mut selection = Vec::new();
+        if !selected.is_empty() {
+            for line in &lines {
+                let end = line.start + line.line.text.len();
+                let start = selected.start.max(line.start);
+                let stop = selected.end.min(end);
+                if start >= stop {
+                    continue;
+                }
+                let top = bounds.top() + PAD_Y + line_index(&lines, line.start) as f32 * LINE_HEIGHT;
+                selection.push(fill(
+                    Bounds::from_corners(
+                        point(
+                            bounds.left() + PAD_X + line.line.x_for_index(start - line.start),
+                            top,
+                        ),
+                        point(
+                            bounds.left() + PAD_X + line.line.x_for_index(stop - line.start),
+                            top + LINE_HEIGHT,
+                        ),
+                    ),
+                    rgba(SELECTION),
+                ));
+            }
+        }
 
         PrepaintState {
             lines,
             cursor: Some(cursor_quad),
-            selection: selection_quad,
-            last_layout: Some(last_layout),
-            last_line_start,
+            selection,
         }
     }
 
@@ -520,17 +573,16 @@ impl Element for TextAreaElement {
             cx,
         );
 
-        if let Some(selection) = prepaint.selection.take() {
-            window.paint_quad(selection);
+        for quad in prepaint.selection.drain(..) {
+            window.paint_quad(quad);
         }
 
-        for (i, layout) in prepaint.lines.iter().enumerate() {
+        for (i, line) in prepaint.lines.iter().enumerate() {
             let origin = point(
                 bounds.left() + PAD_X,
                 bounds.top() + PAD_Y + i as f32 * LINE_HEIGHT,
             );
-            layout
-                .line
+            line.line
                 .paint(origin, LINE_HEIGHT, TextAlign::Left, None, window, cx)
                 .unwrap();
         }
@@ -541,65 +593,65 @@ impl Element for TextAreaElement {
             window.paint_quad(cursor);
         }
 
+        let lines = std::mem::take(&mut prepaint.lines);
         self.state.update(cx, |state, _cx| {
-            state.last_layout = prepaint.last_layout.take();
-            state.last_line_start = prepaint.last_line_start;
             state.last_bounds = Some(bounds);
+            state.last_lines = lines;
         });
     }
 }
 
-/// Build the text runs for one line. The last line splits into a muted read-only
-/// prefix and a normal editable tail; the IME marked range is underlined.
+fn line_index(lines: &[LineLayout], start: usize) -> usize {
+    lines.iter().position(|line| line.start == start).unwrap_or(0)
+}
+
+/// Build the text runs for one line: a muted read-only part up to `read_only_len`
+/// and a normal editable part after it, with the IME marked range underlined.
 fn line_runs(
     part: &str,
-    prefix_len: usize,
-    marked: Option<&Range<usize>>,
     start: usize,
-    is_last: bool,
+    read_only_len: usize,
+    marked: Option<&Range<usize>>,
     font: &Font,
 ) -> Vec<TextRun> {
-    let run = |len: usize, color: u32, underline: bool| TextRun {
-        len,
-        font: font.clone(),
-        color: rgb(color).into(),
-        background_color: None,
-        underline: underline.then_some(UnderlineStyle {
-            color: Some(rgb(color).into()),
-            thickness: px(1.0),
-            wavy: false,
-        }),
-        strikethrough: None,
-    };
-
-    if !is_last {
-        return vec![run(part.len(), READ_ONLY, false)];
-    }
-
-    let prefix_len = prefix_len.min(part.len());
-    let mut bounds = vec![0usize, prefix_len, part.len()];
+    let end = start + part.len();
+    let rel = |absolute: usize| absolute.clamp(start, end) - start;
+    let mut cuts = vec![0usize, part.len(), rel(read_only_len)];
     if let Some(marked) = marked {
-        let ms = marked.start.saturating_sub(start).min(part.len());
-        let me = marked.end.saturating_sub(start).min(part.len());
-        bounds.push(ms);
-        bounds.push(me);
+        cuts.push(rel(marked.start));
+        cuts.push(rel(marked.end));
     }
-    bounds.sort_unstable();
-    bounds.dedup();
+    cuts.sort_unstable();
+    cuts.dedup();
 
     let mut runs = Vec::new();
-    for window in bounds.windows(2) {
+    for window in cuts.windows(2) {
         let (a, b) = (window[0], window[1]);
         if a >= b {
             continue;
         }
-        let color = if b <= prefix_len { READ_ONLY } else { EDITABLE };
+        let color = if start + a < read_only_len {
+            READ_ONLY
+        } else {
+            EDITABLE
+        };
         let underlined = marked.is_some_and(|marked| {
-            let ms = marked.start.saturating_sub(start);
-            let me = marked.end.saturating_sub(start);
-            a >= ms && b <= me
+            let ms = marked.start.clamp(start, end);
+            let me = marked.end.clamp(start, end);
+            start + a >= ms && start + b <= me
         });
-        runs.push(run(b - a, color, underlined));
+        runs.push(TextRun {
+            len: b - a,
+            font: font.clone(),
+            color: rgb(color).into(),
+            background_color: None,
+            underline: underlined.then_some(UnderlineStyle {
+                color: Some(rgb(color).into()),
+                thickness: px(1.0),
+                wavy: false,
+            }),
+            strikethrough: None,
+        });
     }
     runs
 }
@@ -657,7 +709,17 @@ mod tests {
     }
 
     #[gpui::test]
-    fn enter_emits_the_editable_tail(cx: &mut TestAppContext) {
+    fn shift_enter_inserts_a_newline_in_the_snippet(cx: &mut TestAppContext) {
+        let (mut cx, area) = open(cx);
+
+        cx.simulate_input("a = 1");
+        cx.simulate_keystrokes("shift-enter");
+        cx.simulate_input("b = 2");
+        assert_eq!(content(&area, &cx), "welcome\n>>> a = 1\nb = 2");
+    }
+
+    #[gpui::test]
+    fn enter_emits_the_whole_multiline_tail(cx: &mut TestAppContext) {
         use std::cell::RefCell;
         use std::rc::Rc;
 
@@ -671,12 +733,12 @@ mod tests {
             })
         });
 
-        cx.simulate_input("len(doc.Objects)");
+        cx.simulate_input("if True:");
+        cx.simulate_keystrokes("shift-enter");
+        cx.simulate_input("    print(1)");
         cx.simulate_keystrokes("enter");
 
-        assert_eq!(seen.borrow().as_slice(), ["len(doc.Objects)"]);
-        // The Enter did not insert a newline.
-        assert_eq!(content(&area, &cx), "welcome\n>>> len(doc.Objects)");
+        assert_eq!(seen.borrow().as_slice(), ["if True:\n    print(1)"]);
     }
 
     #[gpui::test]
@@ -685,9 +747,6 @@ mod tests {
         cx.update(|_window, cx| {
             area.update(cx, |area, cx| area.set_transcript("welcome\n>>> 3\n>>> ", cx));
         });
-        assert_eq!(
-            content(&area, &cx),
-            "welcome\n>>> 3\n>>> "
-        );
+        assert_eq!(content(&area, &cx), "welcome\n>>> 3\n>>> ");
     }
 }

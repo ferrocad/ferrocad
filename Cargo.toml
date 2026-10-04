@@ -11,6 +11,7 @@ members = [
     "crates/ferrocad_py",
     "crates/ferrocad_gen",
     "crates/ferrocad_ctypes",
+    "crates/ferrocad_ui",
     "crates/ferrocad_host",
 ]
 # `ferrocad_host` is the bite-gpui app-shell spike: it is a workspace member so
@@ -38,6 +39,7 @@ petgraph = "0.6"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 unicode-segmentation = "1"
+ferrocad_ui = { path = "crates/ferrocad_ui" }
 
 # `lto` pays off for the extension/shared libraries; keep it workspace-wide.
 [profile.release]

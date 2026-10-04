@@ -6,12 +6,8 @@
 //! window, the inspector / viewport-placeholder / property-editor / console
 //! layout, and the live interpreter wiring.
 
-mod chrome;
-mod input;
 mod python;
 mod shell;
-mod text;
-mod textarea;
 
 #[cfg(test)]
 mod spike;

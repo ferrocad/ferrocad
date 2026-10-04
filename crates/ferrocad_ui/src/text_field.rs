@@ -1,25 +1,22 @@
 //! A single-line editable field.
 //!
-//! Two pieces, per the `View` pattern (see `docs/input-components.md`):
-//!
-//! * [`TextInputState`] is the backing entity. It owns the [`TextBuffer`], the
-//!   focus handle and the editing methods, and implements [`EntityInputHandler`].
-//! * [`Edit`] is the ephemeral view. It carries the per-call-site props (the
-//!   placeholder, and later a width) and implements [`View`], returning the
-//!   state's id from `entity_id()` so the two share reactive identity.
-//!
-//! The shell's property editor draws one [`Edit`] per editable property; the
-//! console is a text area (`crate::textarea`) instead.
+//! One entity: it owns the [`TextBuffer`], the focus handle and the editing
+//! methods, implements `EntityInputHandler`, and draws itself. It emits
+//! [`ChangeEvent`] after every edit (a controlled parent mirrors it) and
+//! [`SubmitEvent`] on `Enter` (an uncontrolled parent reads it there).
+
+use std::ops::Range;
 
 use gpui::{
     App, Bounds, ClipboardItem, Context, CursorStyle, Element, ElementId, ElementInputHandler,
-    Entity, EntityId, EntityInputHandler, EventEmitter, FocusHandle, Focusable, GlobalElementId,
-    IntoElement, KeyDownEvent, LayoutId, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent,
-    PaintQuad, Pixels, Point, ShapedLine, SharedString, Style, TextAlign, TextRun, UTF16Selection,
-    UnderlineStyle, View, Window, div, fill, point, prelude::*, px, relative, rgb, rgba, size,
+    Entity, EntityInputHandler, EventEmitter, FocusHandle, Focusable, GlobalElementId, IntoElement,
+    KeyDownEvent, LayoutId, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, PaintQuad,
+    Pixels, Point, ShapedLine, SharedString, Style, TextAlign, TextRun, UTF16Selection,
+    UnderlineStyle, Window, div, fill, point, prelude::*, px, relative, rgb, rgba, size,
 };
 
-use crate::text::{SubmitEvent, TextBuffer};
+use crate::events::{ChangeEvent, SubmitEvent};
+use crate::text_buffer::TextBuffer;
 
 const INPUT_BG: u32 = 0x171a1f;
 const INPUT_FG: u32 = 0xd8dbe0;
@@ -27,27 +24,30 @@ const INPUT_PLACEHOLDER: u32 = 0x6b7280;
 const CARET: u32 = 0x7aa2f7;
 const SELECTION: u32 = 0x3311ff30;
 
-/// The backing state of a single-line field.
-pub struct TextInputState {
+/// A single-line editable text field.
+pub struct TextInput {
     buffer: TextBuffer,
+    placeholder: SharedString,
     focus_handle: FocusHandle,
     last_layout: Option<ShapedLine>,
     last_bounds: Option<Bounds<Pixels>>,
     is_selecting: bool,
 }
 
-impl EventEmitter<SubmitEvent> for TextInputState {}
+impl EventEmitter<ChangeEvent> for TextInput {}
+impl EventEmitter<SubmitEvent> for TextInput {}
 
-impl Focusable for TextInputState {
+impl Focusable for TextInput {
     fn focus_handle(&self, _: &App) -> FocusHandle {
         self.focus_handle.clone()
     }
 }
 
-impl TextInputState {
-    pub fn new(cx: &mut Context<Self>) -> Self {
+impl TextInput {
+    pub fn new(cx: &mut Context<Self>, placeholder: impl Into<SharedString>) -> Self {
         Self {
             buffer: TextBuffer::new(),
+            placeholder: placeholder.into(),
             focus_handle: cx.focus_handle(),
             last_layout: None,
             last_bounds: None,
@@ -55,51 +55,25 @@ impl TextInputState {
         }
     }
 
-    /// Replace the text and move the caret to the end.
+    pub fn text(&self) -> &str {
+        self.buffer.content()
+    }
+
+    /// Replace the text and move the caret to the end. Programmatic, so it does
+    /// not emit `ChangeEvent` (that would loop with a controlled parent).
     pub fn set_text(&mut self, text: impl Into<SharedString>, cx: &mut Context<Self>) {
         self.buffer.set_content(text);
         cx.notify();
     }
 
-    fn backspace(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if !self.buffer.backspace() {
-            window.play_system_bell();
-        }
-        cx.notify();
+    pub fn clear(&mut self, cx: &mut Context<Self>) {
+        self.set_text("", cx);
     }
 
-    fn delete(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if !self.buffer.delete() {
-            window.play_system_bell();
-        }
-        cx.notify();
-    }
-
-    fn paste(&mut self, _window: &mut Window, cx: &mut Context<Self>) {
-        if let Some(text) = cx.read_from_clipboard().and_then(|item| item.text()) {
-            // A single-line field keeps a pasted newline from splitting it.
-            self.buffer.insert(&text.replace('\n', " "));
-        }
-        cx.notify();
-    }
-
-    fn copy(&mut self, cx: &mut Context<Self>) {
-        let range = self.buffer.selected_range().clone();
-        if !range.is_empty() {
-            cx.write_to_clipboard(ClipboardItem::new_string(
-                self.buffer.content()[range].to_string(),
-            ));
-        }
-    }
-
-    fn cut(&mut self, _window: &mut Window, cx: &mut Context<Self>) {
-        let range = self.buffer.selected_range().clone();
-        if !range.is_empty() {
-            cx.write_to_clipboard(ClipboardItem::new_string(
-                self.buffer.content()[range.clone()].to_string(),
-            ));
-            self.buffer.replace_range(range, "");
-        }
+    fn changed(&self, cx: &mut Context<Self>) {
+        cx.emit(ChangeEvent {
+            text: self.buffer.content().to_string(),
+        });
         cx.notify();
     }
 
@@ -114,16 +88,22 @@ impl TextInputState {
                 true
             }
             "backspace" => {
-                self.backspace(window, cx);
+                if !self.buffer.backspace() {
+                    window.play_system_bell();
+                }
+                self.changed(cx);
                 true
             }
             "delete" => {
-                self.delete(window, cx);
+                if !self.buffer.delete() {
+                    window.play_system_bell();
+                }
+                self.changed(cx);
                 true
             }
             "left" => {
-                let cursor = self.buffer.cursor_offset();
                 if self.buffer.selected_range().is_empty() {
+                    let cursor = self.buffer.cursor_offset();
                     let prev = self.buffer.previous_boundary(cursor);
                     self.buffer.move_to(prev);
                 } else {
@@ -134,8 +114,8 @@ impl TextInputState {
                 true
             }
             "right" => {
-                let cursor = self.buffer.cursor_offset();
                 if self.buffer.selected_range().is_empty() {
+                    let cursor = self.buffer.cursor_offset();
                     let next = self.buffer.next_boundary(cursor);
                     self.buffer.move_to(next);
                 } else {
@@ -162,15 +142,30 @@ impl TextInputState {
                 true
             }
             "c" if secondary => {
-                self.copy(cx);
+                let range = self.buffer.selected_range().clone();
+                if !range.is_empty() {
+                    cx.write_to_clipboard(ClipboardItem::new_string(
+                        self.buffer.content()[range].to_string(),
+                    ));
+                }
                 true
             }
             "x" if secondary => {
-                self.cut(window, cx);
+                let range = self.buffer.selected_range().clone();
+                if !range.is_empty() {
+                    cx.write_to_clipboard(ClipboardItem::new_string(
+                        self.buffer.content()[range.clone()].to_string(),
+                    ));
+                    self.buffer.replace_range(range, "");
+                    self.changed(cx);
+                }
                 true
             }
             "v" if secondary => {
-                self.paste(window, cx);
+                if let Some(text) = cx.read_from_clipboard().and_then(|item| item.text()) {
+                    self.buffer.insert(&text.replace('\n', " "));
+                    self.changed(cx);
+                }
                 true
             }
             _ => false,
@@ -181,12 +176,7 @@ impl TextInputState {
         }
     }
 
-    fn on_mouse_down(
-        &mut self,
-        event: &MouseDownEvent,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
+    fn on_mouse_down(&mut self, event: &MouseDownEvent, window: &mut Window, cx: &mut Context<Self>) {
         window.focus(&self.focus_handle, cx);
         self.is_selecting = true;
         let offset = self.index_for_mouse_position(event.position);
@@ -225,11 +215,11 @@ impl TextInputState {
     }
 }
 
-impl EntityInputHandler for TextInputState {
+impl EntityInputHandler for TextInput {
     fn text_for_range(
         &mut self,
-        range_utf16: std::ops::Range<usize>,
-        actual_range: &mut Option<std::ops::Range<usize>>,
+        range_utf16: Range<usize>,
+        actual_range: &mut Option<Range<usize>>,
         _window: &mut Window,
         _cx: &mut Context<Self>,
     ) -> Option<String> {
@@ -254,7 +244,7 @@ impl EntityInputHandler for TextInputState {
         &self,
         _window: &mut Window,
         _cx: &mut Context<Self>,
-    ) -> Option<std::ops::Range<usize>> {
+    ) -> Option<Range<usize>> {
         self.buffer
             .marked_range()
             .map(|range| self.buffer.range_to_utf16(range))
@@ -266,7 +256,7 @@ impl EntityInputHandler for TextInputState {
 
     fn replace_text_in_range(
         &mut self,
-        range_utf16: Option<std::ops::Range<usize>>,
+        range_utf16: Option<Range<usize>>,
         new_text: &str,
         _window: &mut Window,
         cx: &mut Context<Self>,
@@ -277,14 +267,14 @@ impl EntityInputHandler for TextInputState {
             .or_else(|| self.buffer.marked_range().cloned())
             .unwrap_or_else(|| self.buffer.selected_range().clone());
         self.buffer.replace_range(range, new_text);
-        cx.notify();
+        self.changed(cx);
     }
 
     fn replace_and_mark_text_in_range(
         &mut self,
-        range_utf16: Option<std::ops::Range<usize>>,
+        range_utf16: Option<Range<usize>>,
         new_text: &str,
-        new_selected_range_utf16: Option<std::ops::Range<usize>>,
+        new_selected_range_utf16: Option<Range<usize>>,
         _window: &mut Window,
         cx: &mut Context<Self>,
     ) {
@@ -297,12 +287,12 @@ impl EntityInputHandler for TextInputState {
             .as_ref()
             .map(|range_utf16| self.buffer.range_from_utf16(range_utf16));
         self.buffer.replace_and_mark(range, new_text, selection);
-        cx.notify();
+        self.changed(cx);
     }
 
     fn bounds_for_range(
         &mut self,
-        range_utf16: std::ops::Range<usize>,
+        range_utf16: Range<usize>,
         bounds: Bounds<Pixels>,
         _window: &mut Window,
         _cx: &mut Context<Self>,
@@ -334,56 +324,8 @@ impl EntityInputHandler for TextInputState {
     }
 }
 
-/// The ephemeral view: props plus a handle to the state.
-pub struct Edit {
-    state: Entity<TextInputState>,
-    placeholder: SharedString,
-}
-
-impl Edit {
-    pub fn new(state: Entity<TextInputState>, placeholder: impl Into<SharedString>) -> Self {
-        Self {
-            state,
-            placeholder: placeholder.into(),
-        }
-    }
-}
-
-impl View for Edit {
-    fn entity_id(&self) -> Option<EntityId> {
-        Some(self.state.entity_id())
-    }
-
-    fn render(self, _window: &mut Window, cx: &mut App) -> impl IntoElement {
-        let entity = self.state.clone();
-        let placeholder = self.placeholder.clone();
-        self.state.update(cx, move |this, cx| {
-            div()
-                .w_full()
-                .h(px(26.))
-                .px_2()
-                .bg(rgb(INPUT_BG))
-                .text_size(px(13.))
-                .line_height(px(26.))
-                .cursor(CursorStyle::IBeam)
-                .track_focus(&this.focus_handle)
-                .on_key_down(cx.listener(TextInputState::on_key_down))
-                .on_mouse_down(MouseButton::Left, cx.listener(TextInputState::on_mouse_down))
-                .on_mouse_up(MouseButton::Left, cx.listener(TextInputState::on_mouse_up))
-                .on_mouse_up_out(MouseButton::Left, cx.listener(TextInputState::on_mouse_up))
-                .on_mouse_move(cx.listener(TextInputState::on_mouse_move))
-                .child(TextElement {
-                    input: entity.clone(),
-                    placeholder,
-                })
-        })
-    }
-}
-
-/// The custom element that paints the field and registers the input handler.
 struct TextElement {
-    input: Entity<TextInputState>,
-    placeholder: SharedString,
+    input: Entity<TextInput>,
 }
 
 struct PrepaintState {
@@ -432,15 +374,15 @@ impl Element for TextElement {
         window: &mut Window,
         cx: &mut App,
     ) -> Self::PrepaintState {
-        let state = self.input.read(cx);
-        let content = state.buffer.content().to_string();
-        let selected_range = state.buffer.selected_range().clone();
-        let cursor = state.buffer.cursor_offset();
-        let marked_range = state.buffer.marked_range().cloned();
+        let input = self.input.read(cx);
+        let content = input.buffer.content().to_string();
+        let selected_range = input.buffer.selected_range().clone();
+        let cursor = input.buffer.cursor_offset();
+        let marked_range = input.buffer.marked_range().cloned();
         let style = window.text_style();
 
         let (display_text, text_color) = if content.is_empty() {
-            (self.placeholder.to_string(), rgb(INPUT_PLACEHOLDER).into())
+            (input.placeholder.to_string(), rgb(INPUT_PLACEHOLDER).into())
         } else {
             (content, rgb(INPUT_FG).into())
         };
@@ -560,93 +502,73 @@ impl Element for TextElement {
             window.paint_quad(cursor);
         }
 
-        self.input.update(cx, |state, _cx| {
-            state.last_layout = Some(line);
-            state.last_bounds = Some(bounds);
+        self.input.update(cx, |input, _cx| {
+            input.last_layout = Some(line);
+            input.last_bounds = Some(bounds);
         });
+    }
+}
+
+impl Render for TextInput {
+    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        div()
+            .w_full()
+            .h(px(26.))
+            .px_2()
+            .bg(rgb(INPUT_BG))
+            .text_size(px(13.))
+            .line_height(px(26.))
+            .cursor(CursorStyle::IBeam)
+            .track_focus(&self.focus_handle)
+            .on_key_down(cx.listener(Self::on_key_down))
+            .on_mouse_down(MouseButton::Left, cx.listener(Self::on_mouse_down))
+            .on_mouse_up(MouseButton::Left, cx.listener(Self::on_mouse_up))
+            .on_mouse_up_out(MouseButton::Left, cx.listener(Self::on_mouse_up))
+            .on_mouse_move(cx.listener(Self::on_mouse_move))
+            .child(TextElement { input: cx.entity() })
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use gpui::{Render, TestAppContext, ViewElement, VisualTestContext};
+    use gpui::{TestAppContext, VisualTestContext};
 
-    /// The root that shows the field; `Edit` is a view, not a root.
-    struct FieldHost {
-        state: Entity<TextInputState>,
-    }
+    #[gpui::test]
+    fn typing_reports_changes_and_submit(cx: &mut TestAppContext) {
+        use std::cell::RefCell;
+        use std::rc::Rc;
 
-    impl Render for FieldHost {
-        fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
-            ViewElement::new(Edit::new(self.state.clone(), "type here"))
-        }
-    }
-
-    /// Open a window holding a single field, focused and ready to type.
-    fn open(cx: &mut TestAppContext) -> (VisualTestContext, Entity<TextInputState>) {
         let window = cx.update(|cx| {
             cx.open_window(Default::default(), |window, cx| {
-                let state = cx.new(|cx| TextInputState::new(cx));
-                window.focus(&state.read(cx).focus_handle(cx), cx);
-                cx.new(|_| FieldHost { state })
+                let input = cx.new(|cx| TextInput::new(cx, "type here"));
+                window.focus(&input.read(cx).focus_handle(cx), cx);
+                input
             })
             .unwrap()
         });
         let mut cx = VisualTestContext::from_window(window.into(), cx);
-        let host: Entity<FieldHost> = window.root(&mut cx).unwrap();
-        let state = host.read_with(&cx, |host, _| host.state.clone());
-        (cx, state)
-    }
+        let input: Entity<TextInput> = window.root(&mut cx).unwrap();
 
-    fn content(state: &Entity<TextInputState>, cx: &VisualTestContext) -> String {
-        state.read_with(cx, |state, _| state.buffer.content().to_string())
-    }
-
-    #[gpui::test]
-    fn typing_backspace_and_caret_movement_edit_the_content(cx: &mut TestAppContext) {
-        let (mut cx, state) = open(cx);
-
-        cx.simulate_input("hello");
-        assert_eq!(content(&state, &cx), "hello");
-
-        cx.simulate_keystrokes("backspace");
-        assert_eq!(content(&state, &cx), "hell");
-
-        cx.simulate_keystrokes("left left");
-        cx.simulate_input("X");
-        assert_eq!(content(&state, &cx), "heXll");
-    }
-
-    #[gpui::test]
-    fn select_all_then_type_replaces_the_line(cx: &mut TestAppContext) {
-        let (mut cx, state) = open(cx);
-
-        cx.simulate_input("remove me");
-        cx.simulate_keystrokes("cmd-a");
-        cx.simulate_input("kept");
-        assert_eq!(content(&state, &cx), "kept");
-    }
-
-    #[gpui::test]
-    fn enter_emits_a_submit_event_without_inserting_a_newline(cx: &mut TestAppContext) {
-        use std::cell::RefCell;
-        use std::rc::Rc;
-
-        let (mut cx, state) = open(cx);
-
-        let seen: Rc<RefCell<Vec<String>>> = Rc::default();
-        let sink = seen.clone();
-        let _subscription = cx.update(|_window, cx| {
-            cx.subscribe(&state, move |_emitter, event: &SubmitEvent, _cx| {
-                sink.borrow_mut().push(event.text.clone());
-            })
+        let changes: Rc<RefCell<Vec<String>>> = Rc::default();
+        let submits: Rc<RefCell<Vec<String>>> = Rc::default();
+        let change_sink = changes.clone();
+        let submit_sink = submits.clone();
+        let _subscriptions = cx.update(|_window, cx| {
+            (
+                cx.subscribe(&input, move |_e, event: &ChangeEvent, _cx| {
+                    change_sink.borrow_mut().push(event.text.clone());
+                }),
+                cx.subscribe(&input, move |_e, event: &SubmitEvent, _cx| {
+                    submit_sink.borrow_mut().push(event.text.clone());
+                }),
+            )
         });
 
-        cx.simulate_input("1 + 2");
-        cx.simulate_keystrokes("enter");
+        cx.simulate_input("hi");
+        assert_eq!(changes.borrow().last().cloned(), Some("hi".to_string()));
 
-        assert_eq!(seen.borrow().as_slice(), ["1 + 2"]);
-        assert_eq!(content(&state, &cx), "1 + 2");
+        cx.simulate_keystrokes("enter");
+        assert_eq!(submits.borrow().as_slice(), ["hi"]);
     }
 }

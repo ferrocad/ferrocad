@@ -1,0 +1,17 @@
+[package]
+name = "ferrocad_ui"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Reusable bite-gpui widgets for FerroCAD: window chrome, editable field, console text area"
+
+[lib]
+name = "ferrocad_ui"
+
+[dependencies]
+bite-gpui = { version = "1.21.0" }
+unicode-segmentation.workspace = true
+
+[dev-dependencies]
+# Enables TestAppContext / #[gpui::test] for the headless component tests.
+bite-gpui = { version = "1.21.0", features = ["test-support"] }

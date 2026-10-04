@@ -9,22 +9,11 @@
 //! All offsets are UTF-8 byte offsets. The platform speaks UTF-16; conversion
 //! happens at the component boundary through [`TextBuffer::range_to_utf16`] and
 //! [`TextBuffer::range_from_utf16`].
-//!
-//! WIP: the components still carry their own editing code; the next slice moves
-//! `input` and the new `textarea` onto this buffer. Until then it is unused
-//! outside its tests.
-#![allow(dead_code)]
 
 use std::ops::Range;
 
 use gpui::SharedString;
 use unicode_segmentation::UnicodeSegmentation;
-
-/// Emitted when the user presses `Enter` in an editable component.
-#[derive(Clone, Debug)]
-pub struct SubmitEvent {
-    pub text: String,
-}
 
 /// Text, selection and read-only boundary for one editable region.
 #[derive(Clone, Debug)]

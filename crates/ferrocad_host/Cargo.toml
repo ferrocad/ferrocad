@@ -10,11 +10,10 @@ name = "ferrocad_host"
 path = "src/main.rs"
 
 [dependencies]
+ferrocad_ui.workspace = true
 # `test-support` enables TestAppContext / VisualTestContext / #[gpui::test].
 bite-gpui = { version = "1.21.0", features = ["test-support"] }
 # Embedding CPython in the host (not the extension-module mode).
 pyo3 = { version = "0.25", features = ["auto-initialize"] }
 serde.workspace = true
 serde_json.workspace = true
-# Grapheme-aware caret movement in the editable text control.
-unicode-segmentation.workspace = true

@@ -11,13 +11,12 @@ use std::sync::{Arc, Mutex};
 
 use gpui::{
     AnyElement, App, Context, Entity, FocusHandle, Focusable, IntoElement, Render, SharedString,
-    Subscription, ViewElement, Window, div, prelude::*, px, rgb,
+    Subscription, Window, div, prelude::*, px, rgb,
 };
 
-use crate::input::{Edit, TextInputState};
+use ferrocad_ui::{SubmitEvent, TextAreaState, TextInput, window_frame};
+
 use crate::python::{self, Bootstrap, DocumentNode, PropRow};
-use crate::text::SubmitEvent;
-use crate::textarea::TextAreaState;
 
 const BG: u32 = 0x101216;
 const PANEL: u32 = 0x16181d;
@@ -57,7 +56,7 @@ pub struct Shell {
 
 /// An uncontrolled property field plus the value it was last seeded with.
 struct PropInput {
-    state: Entity<TextInputState>,
+    state: Entity<TextInput>,
     seeded: String,
     _submit: Subscription,
 }
@@ -154,7 +153,7 @@ impl Shell {
         value: &str,
         window: &Window,
         cx: &mut Context<Self>,
-    ) -> Entity<TextInputState> {
+    ) -> Entity<TextInput> {
         if let Some(input) = self.prop_inputs.get_mut(key) {
             let focused = input.state.read(cx).focus_handle(cx).is_focused(window);
             if input.seeded != value && !focused {
@@ -167,7 +166,7 @@ impl Shell {
         }
 
         let state = cx.new(|cx| {
-            let mut state = TextInputState::new(cx);
+            let mut state = TextInput::new(cx, "");
             state.set_text(value.to_string(), cx);
             state
         });
@@ -360,7 +359,7 @@ fn properties_panel(
                     div()
                         .w(px(150.))
                         .flex_shrink_0()
-                        .child(ViewElement::new(Edit::new(state, "")))
+                        .child(state)
                         .into_any_element()
                 } else {
                     let value = if row.status.is_empty() {
@@ -525,7 +524,7 @@ impl Render for Shell {
             .child(console_panel(&self.console, cx))
             .child(status);
 
-        crate::chrome::window_frame(window, model.title.clone(), content)
+        window_frame(window, model.title.clone(), content)
     }
 }
 

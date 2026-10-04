@@ -3,15 +3,23 @@ name = "ferrocad_gpui"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
-# An application library; it ships inside the installer, not on crates.io.
-publish = false
+readme.workspace = true
+repository.workspace = true
+homepage.workspace = true
+rust-version.workspace = true
 description = "FerroCAD's bite-gpui application shell: boots CPython and provides the window, panels and HostConfig"
+keywords = ["cad", "gui", "gpui", "freecad"]
+categories = ["gui"]
+documentation = "https://docs.rs/ferrocad_gpui"
 
 [dependencies]
 ferrocad_widgets.workspace = true
-# `test-support` enables TestAppContext / VisualTestContext / #[gpui::test].
-bite-gpui = { version = "1.21.0", features = ["test-support"] }
+bite-gpui = { version = "1.21.0" }
 # Embedding CPython in the host (not the extension-module mode).
 pyo3 = { version = "0.25", features = ["auto-initialize"] }
 serde.workspace = true
 serde_json.workspace = true
+
+[dev-dependencies]
+# `test-support` enables TestAppContext / VisualTestContext / #[gpui::test].
+bite-gpui = { version = "1.21.0", features = ["test-support"] }

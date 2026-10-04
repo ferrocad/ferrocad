@@ -21,7 +21,7 @@ The project lives at **https://github.com/ferrocad/ferrocad**:
 The public surface is the **`FreeCAD`** Python package.
 
 > **Runtime payload.** The app loads the `FreeCAD` facade, the `ferrocad`
-> extension and the shell scripts from a Python payload. The binary looks for it
-> next to the executable or via `FERROCAD_PYTHON_PATH`; the installer/AppImage
-> ships it. Embedding the payload into the binary so a bare `cargo install` is
-> self-sufficient is planned.
+> extension and the workbench scripts from a Python payload. The binary looks for
+> it next to the executable or via `FERROCAD_PYTHON_PATH`; the installer/AppImage
+> ships it as loose files. It is not embedded in the binary, so `cargo install`
+> alone needs the payload supplied separately.

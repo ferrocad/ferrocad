@@ -35,6 +35,7 @@ if exist "%HERE%runtime" (
   set "PATH=%HERE%runtime;%HERE%runtime\Scripts;%PATH%"
 )
 set "FERROCAD_PYTHON_PATH=%HERE%python"
+set "FERROCAD_MODS_PATH=%HERE%mods"
 set "PYTHONPATH=%HERE%lib;%HERE%python;%HERE%mods;%PYTHONPATH%"
 "%HERE%bin\ferrocad.exe" %*
 '@

@@ -41,6 +41,51 @@ def hello() -> str:
     return f"hello from Python {version} — FreeCAD backend: {FreeCAD.backend}"
 
 
+def load_workbenches(dirs_json: str = "[]") -> str:
+    """Best-effort workbench loading.
+
+    For every ``<dir>/<Workbench>/Init.py`` and ``InitGui.py`` the script is
+    executed. A failure is **recorded, not raised**: one broken workbench must not
+    take down the app (FreeCAD isolates them the same way). Returns JSON with the
+    scripts that loaded and the tracebacks that did not.
+    """
+    import os
+
+    try:
+        dirs = json.loads(dirs_json)
+    except Exception:
+        dirs = []
+
+    loaded = []
+    errors = []
+    for root in dirs:
+        if not os.path.isdir(root):
+            continue
+        for name in sorted(os.listdir(root)):
+            workbench_dir = os.path.join(root, name)
+            if not os.path.isdir(workbench_dir):
+                continue
+            for script in ("Init.py", "InitGui.py"):
+                path = os.path.join(workbench_dir, script)
+                if not os.path.isfile(path):
+                    continue
+                namespace = {"__file__": path, "__name__": f"{name}.{script[:-3]}"}
+                try:
+                    with open(path, encoding="utf-8") as handle:
+                        source = handle.read()
+                    exec(compile(source, path, "exec"), namespace)
+                    loaded.append(f"{name}/{script}")
+                except Exception:
+                    errors.append(
+                        {
+                            "workbench": name,
+                            "script": script,
+                            "traceback": traceback.format_exc(),
+                        }
+                    )
+    return _json({"loaded": loaded, "errors": errors})
+
+
 def bootstrap(doc_name: str = "Shell") -> str:
     """Create (or recreate) the sample document and report host status."""
     if FreeCAD.getDocument(doc_name) is not None:

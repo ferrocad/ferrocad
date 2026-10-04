@@ -76,6 +76,28 @@ impl Shell {
             Ok(line) => console.push(line),
             Err(e) => console.push(format!("python: {e}")),
         }
+        // Load workbenches best-effort: a broken one is reported, never fatal.
+        match python::load_workbenches() {
+            Ok(report) => {
+                if !report.loaded.is_empty() {
+                    console.push(format!(
+                        "workbenches: loaded {} script(s)",
+                        report.loaded.len()
+                    ));
+                }
+                for error in &report.errors {
+                    console.push(format!(
+                        "workbench {} / {} failed (see stderr)",
+                        error.workbench, error.script
+                    ));
+                    eprintln!(
+                        "ferrocad: workbench {} {} failed:\n{}",
+                        error.workbench, error.script, error.traceback
+                    );
+                }
+            }
+            Err(e) => console.push(format!("workbench loader: {e}")),
+        }
         let objects: usize = tree.iter().map(|d| d.objects.len()).sum();
         let status = format!("{objects} object(s) · {}", boot.document);
         Ok(Arc::new(Mutex::new(ShellModel {

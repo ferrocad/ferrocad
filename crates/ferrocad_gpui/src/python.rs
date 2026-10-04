@@ -24,14 +24,19 @@ static ENTRY_MODULE: OnceLock<String> = OnceLock::new();
 /// Extra `sys.path` entries supplied by the app (its startup scripts and mods).
 static APP_PATHS: OnceLock<Vec<PathBuf>> = OnceLock::new();
 
+/// Workbench (`mods/`) directories scanned at boot.
+static MODS_PATHS: OnceLock<Vec<PathBuf>> = OnceLock::new();
+
 /// Configure the app side of the boundary, before boot.
 ///
 /// `entry_module` must expose the shell's data functions (`bootstrap`,
 /// `model_tree`, `properties`, `set_property`, `evaluate`). `python_paths` are
-/// the app's script and mod directories, added to `sys.path`.
-pub fn configure(entry_module: &str, python_paths: &[PathBuf]) {
+/// the app's script and mod directories, added to `sys.path`. `mods_paths` are
+/// the workbench directories scanned for `Init.py`/`InitGui.py`.
+pub fn configure(entry_module: &str, python_paths: &[PathBuf], mods_paths: &[PathBuf]) {
     let _ = ENTRY_MODULE.set(entry_module.to_string());
     let _ = APP_PATHS.set(python_paths.to_vec());
+    let _ = MODS_PATHS.set(mods_paths.to_vec());
 }
 
 /// The app's entry module.
@@ -48,6 +53,25 @@ pub struct Bootstrap {
     pub version: String,
     pub backend: String,
     pub document: String,
+}
+
+/// The outcome of loading workbench scripts: what loaded, and what raised.
+#[derive(Debug, Clone, Default, Deserialize)]
+pub struct WorkbenchReport {
+    #[serde(default)]
+    pub loaded: Vec<String>,
+    #[serde(default)]
+    pub errors: Vec<WorkbenchError>,
+}
+
+/// A workbench script that raised. Loading is best-effort: the shell reports
+/// these instead of failing.
+#[derive(Debug, Clone, Deserialize)]
+pub struct WorkbenchError {
+    pub workbench: String,
+    pub script: String,
+    #[serde(default)]
+    pub traceback: String,
 }
 
 /// A document in the model tree.
@@ -171,6 +195,43 @@ pub fn bootstrap() -> Result<Bootstrap, String> {
             .map_err(|e| e.to_string())
     })?;
     serde_json::from_str(&raw).map_err(|e| e.to_string())
+}
+
+/// The workbench directories to scan: explicit config, then `FERROCAD_MODS_PATH`,
+/// then a `mods/` directory beside the discovered `python/` tree.
+fn mods_dirs() -> Vec<PathBuf> {
+    if let Some(paths) = MODS_PATHS.get() {
+        if !paths.is_empty() {
+            return paths.clone();
+        }
+    }
+    if let Ok(value) = std::env::var("FERROCAD_MODS_PATH") {
+        let paths: Vec<PathBuf> = std::env::split_paths(&value).collect();
+        if !paths.is_empty() {
+            return paths;
+        }
+    }
+    if let Ok(python_dir) = find_python_dir() {
+        if let Some(parent) = python_dir.parent() {
+            let mods = parent.join("mods");
+            if mods.is_dir() {
+                return vec![mods];
+            }
+        }
+    }
+    Vec::new()
+}
+
+/// Load workbench scripts (`Init.py`/`InitGui.py`) from the configured
+/// directories. A broken workbench comes back as an entry in `errors`, never as a
+/// hard failure.
+pub fn load_workbenches() -> Result<WorkbenchReport, String> {
+    let dirs: Vec<String> = mods_dirs()
+        .iter()
+        .map(|p| p.to_string_lossy().into_owned())
+        .collect();
+    let arg = serde_json::to_string(&dirs).map_err(|e| e.to_string())?;
+    call_json("load_workbenches", Some(&arg))
 }
 
 /// The console "hello world" line.

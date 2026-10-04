@@ -13,5 +13,6 @@ if [ -d "$HERE/runtime" ]; then
 fi
 
 export FERROCAD_PYTHON_PATH="$HERE/python"
+export FERROCAD_MODS_PATH="$HERE/mods"
 export PYTHONPATH="$HERE/lib:$HERE/python:$HERE/mods${PYTHONPATH:+:$PYTHONPATH}"
 exec "$HERE/bin/ferrocad" "$@"

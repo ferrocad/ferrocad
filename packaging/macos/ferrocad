@@ -14,5 +14,6 @@ if [ -d "$RUNTIME" ]; then
 fi
 
 export FERROCAD_PYTHON_PATH="$HERE/Resources/python"
+export FERROCAD_MODS_PATH="$HERE/Resources/mods"
 export PYTHONPATH="$HERE/Frameworks:$HERE/Resources/python:$HERE/Resources/mods${PYTHONPATH:+:$PYTHONPATH}"
 exec "$HERE/MacOS/ferrocad-bin" "$@"

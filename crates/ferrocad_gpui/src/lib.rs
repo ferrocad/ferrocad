@@ -39,6 +39,10 @@ pub struct HostConfig {
     /// The app's Python script and mod directories, prepended to `sys.path`.
     /// Empty means "discover the development `python/` directory".
     pub python_paths: Vec<std::path::PathBuf>,
+    /// Workbench (`mods/`) directories scanned at boot for `Init.py`/`InitGui.py`.
+    /// Empty means "discover a `mods/` directory beside `python_paths`, or
+    /// `FERROCAD_MODS_PATH`".
+    pub mods_paths: Vec<std::path::PathBuf>,
     /// The app's Python entry module, imported at boot. It must expose the shell
     /// data functions (`bootstrap`, `model_tree`, `properties`, `set_property`,
     /// `evaluate`). The library ships no copy of this script: it lives with the
@@ -51,6 +55,7 @@ impl Default for HostConfig {
         Self {
             app_name: "FerroCAD".to_string(),
             python_paths: Vec::new(),
+            mods_paths: Vec::new(),
             entry_module: "ferrocad_shell".to_string(),
         }
     }
@@ -65,7 +70,7 @@ pub fn run() {
 pub fn run_with(config: HostConfig) {
     // Hand the app's scripts to the interpreter bridge before it boots. The
     // interpreter belongs to the shell; the scripts belong to the app.
-    python::configure(&config.entry_module, &config.python_paths);
+    python::configure(&config.entry_module, &config.python_paths, &config.mods_paths);
 
     let model = match Shell::boot() {
         Ok(model) => model,

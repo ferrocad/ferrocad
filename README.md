@@ -118,9 +118,11 @@ FerroCAD is a Cargo workspace (edition 2024). Crate status:
 
 | Crate | Role | Status |
 | --- | --- | --- |
+| `crates/ferrocad` | name reservation on crates.io (`0.0.0`, empty); see the repository | placeholder |
 | `crates/ferrocad_core` | pure-Rust model: quantities, properties, documents, recompute DAG | primary |
-| `crates/ferrocad_py` | PyO3 extension over `ferrocad_core` (module `ferrocad`, primary backend) | primary |
+| `crates/ferrocad_py` | PyO3 extension over `ferrocad_core` (module `ferrocad`) | primary |
 | `crates/ferrocad_gen` | generated PyO3 skeleton bindings from the `.pyi` model (M3c) | useful — drives the codegen tests |
+| `crates/ferrocad_widgets` | reusable `bite-gpui` widgets (window chrome, field, console) | shared with the shell |
 | `crates/ferrocad_host` | spike: Rust host embedding CPython + `bite-gpui` (M5 UI track) | **spike — kept**, not yet production |
 
 The `host` crate is excluded from the workspace `default-members` because its PyO3 `auto-initialize`

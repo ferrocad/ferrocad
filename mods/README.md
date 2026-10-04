@@ -9,5 +9,7 @@ distribution beside `python/`, and `AppRun` puts it on `PYTHONPATH`. A user can
 drop a new workbench into `mods/` after install, which is why the scripts ship as
 loose files rather than embedded in the binary (see `docs/distribution.md` §8).
 
-The directory is intentionally empty for now: the first workbench arrives with the
-workbench/runtime slice.
+Populate it with `cargo xtask mods`, which fetches selected upstream FreeCAD
+workbenches (default `Draft`, at the pinned revision `FERROCAD_FREECAD_TAG`) and
+copies them in as loose files. The fetched trees are gitignored; only this README
+is tracked. The release workflow runs `cargo xtask mods` before packaging.

@@ -1,0 +1,9 @@
+#!/bin/sh
+# FerroCAD launcher inside the .app bundle: point the embedded interpreter at the
+# bundled Python, then run the real binary.
+#
+# `$0` is .../FerroCAD.app/Contents/MacOS/ferrocad, so its `..` is Contents.
+HERE=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
+export FERROCAD_PYTHON_PATH="$HERE/Resources/python"
+export PYTHONPATH="$HERE/Frameworks:$HERE/Resources/python:$HERE/Resources/mods${PYTHONPATH:+:$PYTHONPATH}"
+exec "$HERE/MacOS/ferrocad-bin" "$@"

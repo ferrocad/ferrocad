@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- FerroCAD icon source. Convert to png/ico/icns as each packager needs; see
+     packaging/README.md. -->
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
+  <rect x="32" y="32" width="448" height="448" rx="96" fill="#2f4a6d"/>
+  <circle cx="256" cy="256" r="120" fill="none" stroke="#d8dbe0" stroke-width="24"/>
+  <circle cx="256" cy="256" r="44" fill="#d8dbe0"/>
+  <g stroke="#d8dbe0" stroke-width="24" stroke-linecap="round">
+    <line x1="256" y1="96" x2="256" y2="136"/>
+    <line x1="256" y1="376" x2="256" y2="416"/>
+    <line x1="96" y1="256" x2="136" y2="256"/>
+    <line x1="376" y1="256" x2="416" y2="256"/>
+    <line x1="143" y1="143" x2="171" y2="171"/>
+    <line x1="341" y1="341" x2="369" y2="369"/>
+    <line x1="143" y1="369" x2="171" y2="341"/>
+    <line x1="341" y1="171" x2="369" y2="143"/>
+  </g>
+</svg>

@@ -1,0 +1,8 @@
+[Desktop Entry]
+Type=Application
+Name=FerroCAD
+Comment=Rust reimplementation of FreeCAD's App core
+Exec=ferrocad
+Icon=ferrocad
+Terminal=false
+Categories=Graphics;Engineering;Science;

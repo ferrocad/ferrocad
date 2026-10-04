@@ -136,8 +136,8 @@ so `cargo build`/`cargo test` stay fast; `ferrocad_gpui` additionally carries th
 ./build.sh     # cargo build --release, then package the native libs into python/
 ./run.sh       # PYTHONPATH=python python3 hello_freecad.py
 cargo run -p ferrocad   # the base app window (needs a display)
-cargo xtask bundle      # stage a distribution into target/dist/ferrocad (--debug for speed)
-cargo xtask appimage    # wrap the staged AppDir into an AppImage (needs appimagetool)
+cargo xtask bundle             # stage the payload into target/dist/ferrocad (--debug for speed)
+packaging/linux/appimage.sh    # wrap it into an AppImage (needs appimagetool)
 ```
 
 Expected output:
@@ -346,6 +346,11 @@ crates/xtask/             cargo xtask tasks (bundle: stage a distribution)
     src/main.rs           `cargo xtask bundle [--debug]`
 .cargo/config.toml        the `cargo xtask` alias
 mods/                     workbenches (FreeCAD Mod/ equivalent); packaged into the dist
+packaging/                per-platform packagers wrapping the staged payload
+    linux/appimage.sh      AppImage (needs appimagetool)
+    macos/app.sh           .app + .dmg
+    windows/portable.ps1   portable folder + .zip
+    icon/ferrocad.svg      icon source
 python/ferrocad_shell/    Python side of the shell (sample document, console, model queries)
 tools/inventory.py        M3a: parse upstream .pyi stubs into an API model (Python ast)
 tools/test_inventory.py   M3a tests (hermetic fixtures + upstream integration guard)

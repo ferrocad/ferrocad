@@ -1,0 +1,7 @@
+#!/bin/sh
+# FerroCAD launcher (AppImage): point the embedded interpreter at the bundled
+# Python, then run the app.
+HERE=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+export FERROCAD_PYTHON_PATH="$HERE/python"
+export PYTHONPATH="$HERE/lib:$HERE/python:$HERE/mods${PYTHONPATH:+:$PYTHONPATH}"
+exec "$HERE/bin/ferrocad" "$@"

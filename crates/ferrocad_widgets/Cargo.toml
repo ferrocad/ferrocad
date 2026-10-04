@@ -1,5 +1,5 @@
 [package]
-name = "ferrocad_ui"
+name = "ferrocad_widgets"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -10,10 +10,10 @@ rust-version.workspace = true
 description = "Reusable bite-gpui widgets for FerroCAD: window chrome, editable field, console text area"
 keywords = ["cad", "gui", "widgets", "gpui"]
 categories = ["gui"]
-documentation = "https://docs.rs/ferrocad_ui"
+documentation = "https://docs.rs/ferrocad_widgets"
 
 [lib]
-name = "ferrocad_ui"
+name = "ferrocad_widgets"
 
 [dependencies]
 bite-gpui = { version = "1.21.0" }

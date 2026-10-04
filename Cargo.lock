@@ -2212,7 +2212,7 @@ name = "ferrocad_host"
 version = "0.1.0"
 dependencies = [
  "bite-gpui",
- "ferrocad_ui",
+ "ferrocad_widgets",
  "pyo3",
  "serde",
  "serde_json",
@@ -2227,7 +2227,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "ferrocad_ui"
+name = "ferrocad_widgets"
 version = "0.1.0"
 dependencies = [
  "bite-gpui",

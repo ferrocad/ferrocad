@@ -14,7 +14,7 @@ use gpui::{
     Subscription, Window, div, prelude::*, px, rgb,
 };
 
-use ferrocad_ui::{SubmitEvent, TextAreaState, TextInput, window_frame};
+use ferrocad_widgets::{SubmitEvent, TextAreaState, TextInput, window_frame};
 
 use crate::python::{self, Bootstrap, DocumentNode, PropRow};
 

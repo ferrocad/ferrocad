@@ -10,7 +10,7 @@ name = "ferrocad_host"
 path = "src/main.rs"
 
 [dependencies]
-ferrocad_ui.workspace = true
+ferrocad_widgets.workspace = true
 # `test-support` enables TestAppContext / VisualTestContext / #[gpui::test].
 bite-gpui = { version = "1.21.0", features = ["test-support"] }
 # Embedding CPython in the host (not the extension-module mode).

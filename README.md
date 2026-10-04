@@ -203,7 +203,7 @@ build can run in CI; until then rustdoc is the verifiable source of truth.
 `ferrocad` and ships the pure-Python `FreeCAD`/`FreeCADGui` packages from `python/`. A user still
 writes `import FreeCAD`.
 
-The Rust library crates (`ferrocad_core`, `ferrocad_ui`) additionally publish to **crates.io**, and
+The Rust library crates (`ferrocad_core`, `ferrocad_widgets`) additionally publish to **crates.io**, and
 the wheel publishes to **PyPI**; the extension crates (`ferrocad_py`,
 `ferrocad_gen`) and the `ferrocad_host` binary do not go to crates.io. Publish order, the
 `abi3`/`extension-module` notes, and the dry-run commands are in

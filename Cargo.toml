@@ -10,7 +10,7 @@ members = [
     "crates/ferrocad_core",
     "crates/ferrocad_py",
     "crates/ferrocad_gen",
-    "crates/ferrocad_ui",
+    "crates/ferrocad_widgets",
     "crates/ferrocad_host",
 ]
 # `ferrocad_host` is the bite-gpui app-shell spike: it is a workspace member so
@@ -41,9 +41,9 @@ serde_json = "1"
 unicode-segmentation = "1"
 # Internal crates carry both a `path` (for development) and a `version` (which
 # crates.io requires). Publish them in dependency order: `ferrocad_core`, then
-# `ferrocad_ui`. See ../docs/releasing.md.
+# `ferrocad_widgets`. See ../docs/releasing.md.
 ferrocad_core = { path = "crates/ferrocad_core", version = "0.1.0" }
-ferrocad_ui = { path = "crates/ferrocad_ui", version = "0.1.0" }
+ferrocad_widgets = { path = "crates/ferrocad_widgets", version = "0.1.0" }
 
 # `lto` pays off for the extension/shared libraries; keep it workspace-wide.
 [profile.release]

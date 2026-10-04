@@ -192,8 +192,8 @@ per-module pages are the reference.
 
 The **product surface is Python** (`import FreeCAD`) and deliberately mirrors upstream FreeCAD, so
 its API reference *is* FreeCAD's own. FerroCAD-specific Python guidance therefore lives in the
-`python/FreeCAD` facade docstrings and the repository `docs/` (milestones, MVP path, app-shell
-vision, rewrite strategy). A Sphinx/mkdocstrings site is the natural next step once a Python doc
+`python/FreeCAD` facade docstrings and the repository `docs/` (milestones, MVP path, architecture,
+app-shell vision, repackaging, rewrite strategy). A Sphinx/mkdocstrings site is the natural next step once a Python doc
 build can run in CI; until then rustdoc is the verifiable source of truth.
 
 ## Packaging

@@ -2,6 +2,7 @@
 //!
 //!     cargo xtask bundle [--debug] [--out DIR] [--python | --system-python]
 //!     cargo xtask python
+//!     cargo xtask mods [--freecad TAG] [--only WB,WB]
 //!
 //! `bundle` stages the platform-neutral distribution payload: the app binary, the
 //! PyO3 extension, the Python facade and scripts, the `mods/` workbenches, the
@@ -10,9 +11,8 @@
 //! payload; see `docs/distribution.md`.
 //!
 //! `python` fetches a `python-build-standalone` runtime and caches it under
-//! `target/python-runtime/`. When a runtime is present, `bundle` copies it into
-//! the payload as `runtime/` and builds the app against it, so the artifact does
-//! not depend on the system CPython.
+//! `target/python-runtime/`. `mods` fetches workbench scripts from a pinned
+//! upstream FreeCAD revision into `mods/` (loose files, as FreeCAD ships them).
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -22,6 +22,12 @@ use std::process::Command;
 /// `FERROCAD_PBS_DATE` / `FERROCAD_PYTHON_VERSION`.
 const PBS_DATE: &str = "20261003";
 const PYTHON_VERSION: &str = "3.14.8";
+
+/// Pinned upstream FreeCAD revision for workbench scripts. Override with
+/// `FERROCAD_FREECAD_TAG` or `--freecad`.
+const FREECAD_TAG: &str = "1.1.4";
+/// Workbenches fetched by default (pure-Python, no geometry kernel needed yet).
+const DEFAULT_MODS: &[&str] = &["Draft"];
 
 #[derive(Clone, Copy, PartialEq)]
 enum PythonMode {
@@ -53,6 +59,13 @@ fn main() {
                 }
             }
         }
+        Some("mods") => {
+            let opts = Options::parse(args);
+            if let Err(e) = fetch_mods(&opts) {
+                eprintln!("xtask: {e}");
+                std::process::exit(1);
+            }
+        }
         Some("help") | Some("--help") | Some("-h") | None => usage(),
         Some(other) => {
             eprintln!("xtask: unknown task `{other}`\n");
@@ -65,12 +78,15 @@ fn main() {
 fn usage() {
     println!("cargo xtask bundle [--debug] [--out DIR] [--python|--system-python]");
     println!("cargo xtask python   # fetch a python-build-standalone runtime");
+    println!("cargo xtask mods [--freecad TAG] [--only WB,WB]   # fetch workbench scripts");
 }
 
 struct Options {
     release: bool,
     out: Option<PathBuf>,
     python: PythonMode,
+    freecad: Option<String>,
+    only: Vec<String>,
 }
 
 impl Options {
@@ -79,6 +95,8 @@ impl Options {
             release: true,
             out: None,
             python: PythonMode::Auto,
+            freecad: None,
+            only: Vec::new(),
         };
         let mut args = args;
         while let Some(arg) = args.next() {
@@ -88,6 +106,16 @@ impl Options {
                 "--out" => opts.out = args.next().map(PathBuf::from),
                 "--python" => opts.python = PythonMode::Bundled,
                 "--system-python" => opts.python = PythonMode::System,
+                "--freecad" => opts.freecad = args.next(),
+                "--only" => {
+                    if let Some(list) = args.next() {
+                        opts.only = list
+                            .split(',')
+                            .map(|s| s.trim().to_string())
+                            .filter(|s| !s.is_empty())
+                            .collect();
+                    }
+                }
                 other => eprintln!("xtask: ignoring unknown flag `{other}`"),
             }
         }
@@ -311,6 +339,90 @@ fn ensure_runtime(root: &Path) -> Result<PathBuf, String> {
     let reported = String::from_utf8_lossy(&out.stdout);
     eprint!("bundled interpreter: {reported}");
     Ok(dest)
+}
+
+// ---------------------------------------------------------------------------
+// workbench scripts (mods)
+// ---------------------------------------------------------------------------
+
+/// Fetch workbench scripts from a pinned upstream FreeCAD revision into `mods/`.
+///
+/// Uses a blobless sparse checkout, so only the selected `src/Mod/<WB>` trees are
+/// downloaded. The result is loose files, as FreeCAD ships them; `bundle` copies
+/// them into the payload. See `docs/distribution.md`.
+fn fetch_mods(opts: &Options) -> Result<(), String> {
+    let root = workspace_root();
+    let tag = opts
+        .freecad
+        .clone()
+        .or_else(|| std::env::var("FERROCAD_FREECAD_TAG").ok())
+        .unwrap_or_else(|| FREECAD_TAG.to_string());
+    let workbenches: Vec<String> = if opts.only.is_empty() {
+        DEFAULT_MODS.iter().map(|s| s.to_string()).collect()
+    } else {
+        opts.only.clone()
+    };
+
+    let repo = root.join("target/freecad-src").join(&tag).join("repo");
+    if !repo.join(".git").is_dir() {
+        if let Some(parent) = repo.parent() {
+            fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+        }
+        eprintln!("== cloning FreeCAD {tag} (blobless sparse) ==");
+        run_command(
+            Command::new("git")
+                .args([
+                    "clone",
+                    "--depth",
+                    "1",
+                    "--filter=blob:none",
+                    "--sparse",
+                    "--branch",
+                    &tag,
+                    "https://github.com/FreeCAD/FreeCAD",
+                ])
+                .arg(&repo),
+            "git clone",
+        )?;
+    }
+
+    let mut sparse = Command::new("git");
+    sparse.arg("-C").arg(&repo).args(["sparse-checkout", "set"]);
+    for wb in &workbenches {
+        sparse.arg(format!("src/Mod/{wb}"));
+    }
+    run_command(&mut sparse, "git sparse-checkout")?;
+
+    let mods = root.join("mods");
+    fs::create_dir_all(&mods).map_err(|e| e.to_string())?;
+    for wb in &workbenches {
+        let src = repo.join("src").join("Mod").join(wb);
+        if !src.is_dir() {
+            return Err(format!(
+                "workbench `{wb}` not found at FreeCAD {tag} ({})",
+                src.display()
+            ));
+        }
+        let dst = mods.join(wb);
+        if dst.exists() {
+            fs::remove_dir_all(&dst).map_err(|e| e.to_string())?;
+        }
+        copy_dir_all(&src, &dst)?;
+        eprintln!("copied {wb} -> {}", dst.display());
+    }
+    eprintln!("mods ready under {}", mods.display());
+    Ok(())
+}
+
+fn run_command(cmd: &mut Command, what: &str) -> Result<(), String> {
+    let status = cmd
+        .status()
+        .map_err(|e| format!("failed to run {what}: {e}"))?;
+    if status.success() {
+        Ok(())
+    } else {
+        Err(format!("{what} failed"))
+    }
 }
 
 // ---------------------------------------------------------------------------

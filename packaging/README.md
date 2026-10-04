@@ -9,6 +9,10 @@ Platform scripts that wrap the payload staged by `cargo xtask bundle`
 | macOS | `macos/app.sh` | `target/dist/FerroCAD.app` (+ `FerroCAD.dmg`) | macOS; `hdiutil` for the dmg |
 | Windows | `windows/portable.ps1` | `target/dist/ferrocad-windows-x86_64/` + `.zip` | PowerShell |
 
+Workbench scripts are fetched first with `cargo xtask mods` (a pinned upstream
+FreeCAD revision, default `Draft`) into `mods/`; the packagers ship them loose.
+The release workflow runs it before packaging.
+
 Each script runs `cargo xtask bundle` first, so one command produces the artifact.
 Pass `--debug` (or `-Debug` on Windows) for a fast, unstripped build.
 

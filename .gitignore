@@ -15,3 +15,7 @@ __pycache__/
 
 # Downloaded packaging tools (e.g. appimagetool-<arch>.AppImage)
 /tools/*.AppImage
+
+# Upstream workbenches fetched by `cargo xtask mods` (only the README is tracked)
+/mods/*
+!/mods/README.md

@@ -13,8 +13,8 @@ mod shell;
 mod spike;
 
 use gpui::{
-    App, TitlebarOptions, WindowBounds, WindowOptions, application, bounds, point, prelude::*, px,
-    size,
+    App, TitlebarOptions, WindowBackgroundAppearance, WindowBounds, WindowDecorations,
+    WindowOptions, application, bounds, point, prelude::*, px, size,
 };
 
 use crate::shell::Shell;
@@ -44,10 +44,18 @@ fn main() {
 
 fn window_options() -> WindowOptions {
     WindowOptions {
+        // Client-side decorations: we draw the title bar and the resize grips
+        // ourselves, which is what GNOME/Wayland requires.
         titlebar: Some(TitlebarOptions {
             title: Some("FerroCAD".into()),
+            appears_transparent: true,
             ..Default::default()
         }),
+        window_background: WindowBackgroundAppearance::Opaque,
+        window_decorations: Some(WindowDecorations::Client),
+        is_movable: true,
+        is_resizable: true,
+        app_owns_titlebar_drag: true,
         window_bounds: Some(WindowBounds::Windowed(bounds(
             point(px(80.), px(80.)),
             size(px(1180.), px(760.)),

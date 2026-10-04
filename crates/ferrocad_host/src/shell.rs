@@ -9,9 +9,8 @@
 use std::sync::{Arc, Mutex};
 
 use gpui::{
-    App, Bounds, Context, CursorStyle, Decorations, Entity, FocusHandle, Focusable, HitboxBehavior,
-    IntoElement, MouseButton, Pixels, Point, Render, ResizeEdge, SharedString, Size, Subscription,
-    Window, canvas, div, point, prelude::*, px, rgb,
+    App, Context, Entity, FocusHandle, Focusable, IntoElement, Render, SharedString, Subscription,
+    Window, div, prelude::*, px, rgb,
 };
 
 use crate::input::{SubmitEvent, TextInput};
@@ -345,10 +344,6 @@ fn console_panel(
 impl Render for Shell {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let model = self.snapshot();
-        // On compositors that want client-side decorations (GNOME/Wayland), we
-        // draw the title bar and the resize grips ourselves.
-        let client_decorations = matches!(window.window_decorations(), Decorations::Client { .. });
-        let inset = px(6.);
 
         let viewport = div()
             .flex()
@@ -382,18 +377,12 @@ impl Render for Shell {
             .child(model.status.clone())
             .child(format!("FreeCAD {} · {}", model.version, model.backend));
 
-        let mut inner = div()
+        let content = div()
             .flex()
             .flex_col()
             .size_full()
             .bg(rgb(BG))
-            .text_color(rgb(FG));
-        if client_decorations {
-            window.set_client_inset(inset);
-            inner = inner.child(title_bar(&model, cx));
-        }
-
-        let content = inner
+            .text_color(rgb(FG))
             .child(
                 div()
                     .flex()
@@ -407,151 +396,14 @@ impl Render for Shell {
             .child(console_panel(&model, &self.console_input, cx))
             .child(status);
 
-        if !client_decorations {
-            return content.into_any_element();
-        }
-
-        // The backdrop turns the window border into resize grips and moves the
-        // window; the content is drawn on top of it.
-        div()
-            .id("window-backdrop")
-            .size_full()
-            .child(resize_canvas(inset))
-            .on_mouse_move(|_event, window, _cx| window.refresh())
-            .on_mouse_down(MouseButton::Left, move |event, window, _cx| {
-                let size = window.window_bounds().get_bounds().size;
-                if let Some(edge) = resize_edge(event.position, inset, size) {
-                    window.start_window_resize(edge);
-                }
-            })
-            .child(content)
-            .into_any_element()
+        crate::chrome::window_frame(window, model.title.clone(), content)
     }
-}
-
-/// Which edge or corner of the window a point is on, within `inset` pixels of
-/// the border. `None` means the point is in the content area.
-fn resize_edge(pos: Point<Pixels>, inset: Pixels, size: Size<Pixels>) -> Option<ResizeEdge> {
-    let near_left = pos.x < inset;
-    let near_right = pos.x > size.width - inset;
-    let near_top = pos.y < inset;
-    let near_bottom = pos.y > size.height - inset;
-    match (near_left, near_right, near_top, near_bottom) {
-        (true, _, true, _) => Some(ResizeEdge::TopLeft),
-        (_, true, true, _) => Some(ResizeEdge::TopRight),
-        (true, _, _, true) => Some(ResizeEdge::BottomLeft),
-        (_, true, _, true) => Some(ResizeEdge::BottomRight),
-        (_, _, true, _) => Some(ResizeEdge::Top),
-        (_, _, _, true) => Some(ResizeEdge::Bottom),
-        (true, _, _, _) => Some(ResizeEdge::Left),
-        (_, true, _, _) => Some(ResizeEdge::Right),
-        _ => None,
-    }
-}
-
-fn cursor_for(edge: ResizeEdge) -> CursorStyle {
-    match edge {
-        ResizeEdge::Top | ResizeEdge::Bottom => CursorStyle::ResizeUpDown,
-        ResizeEdge::Left | ResizeEdge::Right => CursorStyle::ResizeLeftRight,
-        ResizeEdge::TopLeft | ResizeEdge::BottomRight => CursorStyle::ResizeUpLeftDownRight,
-        ResizeEdge::TopRight | ResizeEdge::BottomLeft => CursorStyle::ResizeUpRightDownLeft,
-    }
-}
-
-/// An invisible full-window canvas that registers a window-wide hitbox and sets
-/// the resize cursor when the pointer is near an edge.
-fn resize_canvas(inset: Pixels) -> impl IntoElement {
-    canvas(
-        move |_bounds, window, _cx| {
-            window.insert_hitbox(
-                Bounds::new(
-                    point(px(0.), px(0.)),
-                    window.window_bounds().get_bounds().size,
-                ),
-                HitboxBehavior::Normal,
-            )
-        },
-        move |_bounds, hitbox, window, _cx| {
-            let size = window.window_bounds().get_bounds().size;
-            if let Some(edge) = resize_edge(window.mouse_position(), inset, size) {
-                window.set_cursor_style(cursor_for(edge), &hitbox);
-            }
-        },
-    )
-    .absolute()
-    .size_full()
-}
-
-/// The custom title bar: drag to move, right-click for the window menu, and
-/// platform controls on the right.
-fn title_bar(model: &ShellModel, cx: &mut Context<Shell>) -> impl IntoElement {
-    let controls = div()
-        .flex()
-        .flex_row()
-        .items_center()
-        .child(control_button("win-min", "\u{2013}", cx, |window| {
-            window.minimize_window()
-        }))
-        .child(control_button("win-max", "\u{25A1}", cx, |window| {
-            window.zoom_window()
-        }))
-        .child(control_button("win-close", "\u{2715}", cx, |window| {
-            window.remove_window()
-        }));
-
-    div()
-        .id("titlebar")
-        .flex()
-        .flex_row()
-        .items_center()
-        .justify_between()
-        .h(px(32.))
-        .px_3()
-        .bg(rgb(PANEL_ALT))
-        .on_mouse_down(MouseButton::Left, |_event, window, _cx| {
-            window.start_window_move()
-        })
-        .on_click(|event, window, _cx| {
-            if event.is_right_click() {
-                window.show_window_menu(event.position());
-            }
-        })
-        .child(
-            div()
-                .text_sm()
-                .text_color(rgb(FG))
-                .child(model.title.clone()),
-        )
-        .child(controls)
-}
-
-fn control_button(
-    id: &str,
-    glyph: &str,
-    cx: &mut Context<Shell>,
-    action: impl Fn(&mut Window) + 'static,
-) -> impl IntoElement {
-    div()
-        .id(SharedString::from(id.to_string()))
-        .w(px(30.))
-        .h_full()
-        .flex()
-        .items_center()
-        .justify_center()
-        .cursor_pointer()
-        .hover(|style| style.bg(rgb(0x3a3f47)))
-        // Keep the title-bar drag from swallowing the click.
-        .on_mouse_down(MouseButton::Left, |_event, _window, cx| {
-            cx.stop_propagation()
-        })
-        .on_click(cx.listener(move |_this, _event, window, _cx| action(window)))
-        .child(glyph.to_string())
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use gpui::{Entity, TestAppContext, VisualTestContext, size};
+    use gpui::{Entity, TestAppContext, VisualTestContext};
 
     /// S1 end-to-end, headless: boot the interpreter, read the sample document
     /// through it, round-trip the console, and render the shell.
@@ -612,66 +464,5 @@ mod tests {
             );
             assert!(m.console.iter().any(|l| l == "3"), "console: {:?}", m.console);
         }
-    }
-
-    /// Pure geometry: the resize-grip hit regions hug the border and leave the
-    /// content area alone.
-    #[test]
-    fn resize_edge_detects_corners_edges_and_content() {
-        let inset = px(6.);
-        let size = size(px(1000.), px(800.));
-
-        // Corners take precedence over the plain edges they touch.
-        assert_eq!(resize_edge(point(px(2.), px(2.)), inset, size), Some(ResizeEdge::TopLeft));
-        assert_eq!(
-            resize_edge(point(px(998.), px(2.)), inset, size),
-            Some(ResizeEdge::TopRight)
-        );
-        assert_eq!(
-            resize_edge(point(px(2.), px(798.)), inset, size),
-            Some(ResizeEdge::BottomLeft)
-        );
-        assert_eq!(
-            resize_edge(point(px(998.), px(798.)), inset, size),
-            Some(ResizeEdge::BottomRight)
-        );
-
-        // Edges, away from the corners.
-        assert_eq!(resize_edge(point(px(500.), px(2.)), inset, size), Some(ResizeEdge::Top));
-        assert_eq!(
-            resize_edge(point(px(500.), px(798.)), inset, size),
-            Some(ResizeEdge::Bottom)
-        );
-        assert_eq!(resize_edge(point(px(2.), px(400.)), inset, size), Some(ResizeEdge::Left));
-        assert_eq!(
-            resize_edge(point(px(998.), px(400.)), inset, size),
-            Some(ResizeEdge::Right)
-        );
-
-        // The grip band is the outer `inset` pixels: x < inset is a grip, and
-        // the first pixel at or past `inset` is content.
-        assert_eq!(resize_edge(point(px(5.), px(400.)), inset, size), Some(ResizeEdge::Left));
-        assert_eq!(resize_edge(point(px(6.), px(400.)), inset, size), None);
-        assert_eq!(resize_edge(point(px(500.), px(500.)), inset, size), None);
-    }
-
-    /// Every grip has a sensible cursor shape, and the four corners differ from
-    /// the four edges (so drags are discoverable).
-    #[test]
-    fn cursors_match_each_resize_direction() {
-        assert_eq!(cursor_for(ResizeEdge::Top), CursorStyle::ResizeUpDown);
-        assert_eq!(cursor_for(ResizeEdge::Bottom), CursorStyle::ResizeUpDown);
-        assert_eq!(cursor_for(ResizeEdge::Left), CursorStyle::ResizeLeftRight);
-        assert_eq!(cursor_for(ResizeEdge::Right), CursorStyle::ResizeLeftRight);
-        assert_eq!(cursor_for(ResizeEdge::TopLeft), CursorStyle::ResizeUpLeftDownRight);
-        assert_eq!(
-            cursor_for(ResizeEdge::BottomRight),
-            CursorStyle::ResizeUpLeftDownRight
-        );
-        assert_eq!(cursor_for(ResizeEdge::TopRight), CursorStyle::ResizeUpRightDownLeft);
-        assert_eq!(
-            cursor_for(ResizeEdge::BottomLeft),
-            CursorStyle::ResizeUpRightDownLeft
-        );
     }
 }

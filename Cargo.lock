@@ -2201,10 +2201,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "ferrocad_ctypes"
-version = "0.1.0"
-
-[[package]]
 name = "ferrocad_gen"
 version = "0.1.0"
 dependencies = [

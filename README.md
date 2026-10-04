@@ -7,13 +7,13 @@ Python import namespace stays `FreeCAD`; the project/distribution is `ferrocad`.
 **Milestones 0–4 (slice 16):** run a FreeCAD headless "hello world" Python script on a pure-Rust
 core, with the C++ Python bindings replaced by Rust bindings.
 
-* **M0** — hello world on a Rust object model, bridged to Python over a C ABI + `ctypes`.
-* **M1** — the bridge migrated to **PyO3** (`FreeCAD._core`); the `ctypes` path kept as a fallback.
+* **M0** — hello world on a Rust object model, bridged to Python over a temporary C ABI + `ctypes`.
+* **M1** — the bridge migrated to **PyO3** (`FreeCAD._core`); the temporary `ctypes` path stood in as a fallback until it was removed in favour of a hard dependency on the CPython headers.
 * **M2** — the pure-Rust core (`ferrocad_core`): quantities, properties, a dependency-graph
   recompute order, transactions (open/commit/abort/undo/redo), observers, and an expression engine.
 * **M3a** — inventory the upstream `.pyi` stubs (320 files → 329 classes / 2210 methods).
-* **M3b** — PyO3 bindings over `ferrocad_core` (`ferrocad_py`, module `ferrocad`) made the
-  **primary** backend of the `FreeCAD` facade; `ctypes` remains the fallback.
+* **M3b** — PyO3 bindings over `ferrocad_core` (`ferrocad_py`, module `ferrocad`) became the
+  **sole** backend of the `FreeCAD` facade; the legacy `ctypes` fallback was removed.
 * **M3c** — generate PyO3 **skeleton** bindings (`ferrocad_gen`) from the `.pyi` model; behaviour
   stays in `ferrocad_core` (hand-written glue).
 * **M3d** — a **conformance harness** that runs upstream `Mod/Test` files against our `FreeCAD`
@@ -93,28 +93,24 @@ C++ one, without changing the script.*
 ```mermaid
 flowchart TD
     S["hello_freecad.py<br/>(unchanged FreeCAD API)"]
-    M["python/FreeCAD<br/>facade (backend-agnostic)"]
-    P["crates/ferrocad_py<br/>ferrocad (PyO3, primary)"]
+    M["python/FreeCAD<br/>facade"]
+    P["crates/ferrocad_py<br/>ferrocad (PyO3)"]
     K["crates/ferrocad_core<br/>pure-Rust core"]
-    C["crates/ferrocad_ctypes<br/>C ABI (ctypes fallback)"]
     S -->|"import FreeCAD"| M
-    M -->|"primary"| P
-    M -.->|"fallback"| C
+    M --> P
     P --> K
 ```
 
 * **`hello_freecad.py`** uses only the public FreeCAD API. The same file is
   intended to run against upstream FreeCAD.
-* **`python/FreeCAD/`** is a drop-in module that speaks that API and selects a
-  backend; it knows nothing about C++ or Coin. Since `ferrocad` is just a document-object
-  model (no "application"), the facade adds the small App-level layer it lacks:
-  a document registry, `ActiveDocument`, unique-name allocation, and `Version`.
+* **`python/FreeCAD/`** is a drop-in module that speaks that API; it knows nothing
+  about C++ or Coin. Since `ferrocad` is just a document-object model (no "application"),
+  the facade adds the small App-level layer it lacks: a document registry,
+  `ActiveDocument`, unique-name allocation, and `Version`.
 * **`crates/ferrocad_py/`** exposes the model as real `#[pyclass]` types via PyO3
-  (primary; importable as `ferrocad`).
+  (importable as `ferrocad`).
 * **`crates/ferrocad_core/`** is the pure-Rust implementation behind `ferrocad_py`: no Python,
   no UI, just the object model.
-* **`crates/ferrocad_ctypes/`** implements the same model behind a flat C ABI, used as
-  the `ctypes` fallback.
 
 ## Workspace layout
 
@@ -125,7 +121,6 @@ FerroCAD is a Cargo workspace (edition 2024). Crate status:
 | `crates/ferrocad_core` | pure-Rust model: quantities, properties, documents, recompute DAG | primary |
 | `crates/ferrocad_py` | PyO3 extension over `ferrocad_core` (module `ferrocad`, primary backend) | primary |
 | `crates/ferrocad_gen` | generated PyO3 skeleton bindings from the `.pyi` model (M3c) | useful — drives the codegen tests |
-| `crates/ferrocad_ctypes` | C ABI shared library for the `ctypes` fallback (legacy M0) | useful — a real, working fallback |
 | `crates/ferrocad_host` | spike: Rust host embedding CPython + `bite-gpui` (M5 UI track) | **spike — kept**, not yet production |
 
 The `host` crate is excluded from the workspace `default-members` because its PyO3 `auto-initialize`
@@ -209,7 +204,7 @@ build can run in CI; until then rustdoc is the verifiable source of truth.
 writes `import FreeCAD`.
 
 The Rust library crates (`ferrocad_core`, `ferrocad_ui`) additionally publish to **crates.io**, and
-the wheel publishes to **PyPI**; the extension crates (`ferrocad_py`, `ferrocad_ctypes`,
+the wheel publishes to **PyPI**; the extension crates (`ferrocad_py`,
 `ferrocad_gen`) and the `ferrocad_host` binary do not go to crates.io. Publish order, the
 `abi3`/`extension-module` notes, and the dry-run commands are in
 [`../docs/releasing.md`](../docs/releasing.md).
@@ -238,18 +233,20 @@ back. The on-disk format is FerroCAD's own JSON under a `.FCStd` name; it is not
 PYTHONPATH=python python3 examples/file_roundtrip.py
 ```
 
-## The two backends
+## The Python bridge
 
-* **PyO3 (`crates/ferrocad_py` → `ferrocad`)** — the destination (M3b). `ferrocad.Document` /
-  `ferrocad.DocumentObject` are native `#[pyclass]` types over `Arc<Mutex<ferrocad_core::Document>>`.
-  Built with `abi3` and `PYO3_USE_ABI3_FORWARD_COMPATIBILITY=1`, because this sandbox
-  runs CPython 3.14, which is newer than PyO3 0.25 officially targets.
-* **C ABI + `ctypes` (`crates/ferrocad_ctypes`)** — the M0 bootstrap, kept as a fallback.
-  It needs no CPython headers, so it builds in the most restricted environments.
+`crates/ferrocad_py` builds the PyO3 extension `ferrocad` (M3b). `ferrocad.Document` /
+`ferrocad.DocumentObject` are native `#[pyclass]` types over
+`Arc<Mutex<ferrocad_core::Document>>`, built with `abi3` and
+`PYO3_USE_ABI3_FORWARD_COMPATIBILITY=1`, because this sandbox runs CPython 3.14, which is
+newer than PyO3 0.25 officially targets. `FreeCAD/__init__.py` imports it unconditionally
+and reports `FreeCAD.backend == "ferrocad"`.
 
-`FreeCAD/__init__.py` imports `ferrocad` if present, otherwise `_ctypes_backend`, and
-reports which via `FreeCAD.backend` (`"ferrocad"` or `"ctypes"`). Both paths expose the
-same document-object surface, so `hello_freecad.py` and the tests are backend-agnostic.
+PyO3 is a **hard build dependency on the CPython headers** (CI installs `python3-dev`).
+An earlier M0 `ctypes`/C-ABI fallback was removed: it was not a second transport for the
+same core but a second, narrower model, and every capability it had is available through
+PyO3. See [`../docs/architecture.md`](../docs/architecture.md) for the call-path diagrams
+and the decision.
 
 See [`../docs/rewrite-strategy.md`](../docs/rewrite-strategy.md) for the direction and
 [`../docs/coin-bridge-reuse-assessment.md`](../docs/coin-bridge-reuse-assessment.md)
@@ -277,7 +274,7 @@ Exposed through the **`FreeCAD` facade** (enough for the hello world and a workb
   `CountObjects`, `Name`/`Label`/`TypeId`/`Document`, `recompute`.
 * properties: `addProperty`, `get`/`setPropertyByName`, dynamic attribute
   mapping (`obj.Foo`), `PropertiesList`, `getTypeIdOfProperty`.
-* two interchangeable backends, selected automatically and reported as `FreeCAD.backend`.
+* a single Python bridge, reported as `FreeCAD.backend` (`"ferrocad"`).
 
 Not implemented (deliberately out of scope for this milestone):
 
@@ -317,13 +314,10 @@ pyproject.toml            maturin packaging (distribution `ferrocad`)
 hello_freecad.py          the milestone script (public FreeCAD API only)
 examples/file_roundtrip.py  saveAs / open a document (file loading)
 run.sh / build.sh         convenience wrappers
-python/FreeCAD/           drop-in module: __init__.py (facade + backend selector)
+python/FreeCAD/           drop-in module: __init__.py (facade)
     Base.py               core data types re-exported from ferrocad (Vector/Matrix/Rotation/…)
     Units.py              units facade (Quantity)
     Console.py            minimal Print* logging facade
-    _ctypes_backend.py    ctypes fallback backend
-    _ffi.py               ctypes bindings for the fallback
-    libferrocad_ctypes.so C ABI fallback lib (gitignored)
 python/ferrocad.abi3.so   built PyO3 bindings (module `ferrocad`, gitignored)
 python/ferrocad_gen.abi3.so generated skeleton bindings, M3c (gitignored)
 python/FreeCADGui/        console-mode Gui stub
@@ -332,7 +326,6 @@ crates/ferrocad_core/     pure Rust core: quantities, properties, DAG, tx/observ
 crates/ferrocad_py/       PyO3 bindings over ferrocad_core (module `ferrocad`)
 crates/ferrocad_gen/      generated PyO3 skeleton bindings (module `ferrocad_gen`)
     src/lib.rs            GENERATED by tools/codegen.py (committed)
-crates/ferrocad_ctypes/   Rust object model + flat C ABI (fallback)
 crates/ferrocad_host/     app shell (S1): Rust host embedding CPython + bite-gpui
     src/main.rs           app entry: boot the interpreter, open the window
     src/python.rs         embedded-CPython bridge (boot, model_tree, properties, evaluate)

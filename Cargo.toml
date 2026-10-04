@@ -10,7 +10,6 @@ members = [
     "crates/ferrocad_core",
     "crates/ferrocad_py",
     "crates/ferrocad_gen",
-    "crates/ferrocad_ctypes",
     "crates/ferrocad_ui",
     "crates/ferrocad_host",
 ]
@@ -24,7 +23,6 @@ default-members = [
     "crates/ferrocad_core",
     "crates/ferrocad_py",
     "crates/ferrocad_gen",
-    "crates/ferrocad_ctypes",
 ]
 
 [workspace.package]
@@ -43,7 +41,7 @@ serde_json = "1"
 unicode-segmentation = "1"
 # Internal crates carry both a `path` (for development) and a `version` (which
 # crates.io requires). Publish them in dependency order: `ferrocad_core`, then
-# `ferrocad_ctypes` / `ferrocad_py` / `ferrocad_ui`. See ../docs/releasing.md.
+# `ferrocad_ui`. See ../docs/releasing.md.
 ferrocad_core = { path = "crates/ferrocad_core", version = "0.1.0" }
 ferrocad_ui = { path = "crates/ferrocad_ui", version = "0.1.0" }
 

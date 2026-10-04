@@ -8,12 +8,8 @@ touch::
     obj = doc.addObject("App::FeaturePython", "Box")
     doc.recompute()
 
-Two Rust backends provide the implementation; this module just selects one:
-
-* ``ferrocad``         — the PyO3 bindings over ``ferrocad_core`` (primary, M3b).
-* ``_ctypes_backend``  — the M0 C-ABI bridge, used if ``ferrocad`` is unavailable.
-
-The C++ PyCXX bindings are not involved at all.
+The implementation is the PyO3 extension ``ferrocad``, which binds the Rust
+``ferrocad_core`` engine. The C++ PyCXX bindings are not involved at all.
 
 ``fc`` is a thin binding over the document object model; it has no notion of an
 "application" (document registry, active document, version). This facade adds
@@ -22,113 +18,96 @@ that small layer in Python so the ``FreeCAD`` module surface stays complete.
 
 from __future__ import annotations
 
-try:  # pragma: no cover - trivial branch
-    import ferrocad as _fc
+import ferrocad as _fc
 
-    backend = "ferrocad"
-except ImportError:  # pragma: no cover - depends on build artifacts
-    _fc = None
-    backend = "ctypes"
-    from . import _ctypes_backend as _ctypes
+backend = "ferrocad"
 
-if backend == "ferrocad":
-    Document = _fc.Document
-    DocumentObject = _fc.DocumentObject
-    Quantity = _fc.Quantity
-    StringHasher = _fc.StringHasher
-    StringID = _fc.StringID
-    Vector = _fc.Vector
-    Matrix = _fc.Matrix
-    Placement = _fc.Placement
-    Rotation = _fc.Rotation
-    TypeId = _fc.TypeId
-    BoundBox = _fc.BoundBox
-    Material = _fc.Material
-    Vector2d = _fc.Vector2d
-    GuiUp = 0
-    __version__ = _fc.__version__
+Document = _fc.Document
+DocumentObject = _fc.DocumentObject
+Quantity = _fc.Quantity
+StringHasher = _fc.StringHasher
+StringID = _fc.StringID
+Vector = _fc.Vector
+Matrix = _fc.Matrix
+Placement = _fc.Placement
+Rotation = _fc.Rotation
+TypeId = _fc.TypeId
+BoundBox = _fc.BoundBox
+Material = _fc.Material
+Vector2d = _fc.Vector2d
+GuiUp = 0
+__version__ = _fc.__version__
 
-    # Core/utility submodules (the M4 Base/Units/Console surface).
-    from . import Base, Units, Console
+# Core/utility submodules (the M4 Base/Units/Console surface).
+from . import Base, Units, Console
 
-    ScaleType = Base.ScaleType
+ScaleType = Base.ScaleType
 
-    addDocumentObserver = _fc.addDocumentObserver
-    removeDocumentObserver = _fc.removeDocumentObserver
+addDocumentObserver = _fc.addDocumentObserver
+removeDocumentObserver = _fc.removeDocumentObserver
 
-    # `fc` has no App/registry, so the facade owns it: a name -> Document map,
-    # an "active" pointer, and FreeCAD-style unique name allocation.
-    _documents = {}
-    _active = None
+# `fc` has no App/registry, so the facade owns it: a name -> Document map,
+# an "active" pointer, and FreeCAD-style unique name allocation.
+_documents = {}
+_active = None
 
-    def _unique_name(name):
-        base = name or "Unnamed"
-        candidate = base
-        i = 1
-        while candidate in _documents:
-            candidate = "%s%03d" % (base, i)
-            i += 1
-        return candidate
+def _unique_name(name):
+    base = name or "Unnamed"
+    candidate = base
+    i = 1
+    while candidate in _documents:
+        candidate = "%s%03d" % (base, i)
+        i += 1
+    return candidate
 
-    def newDocument(name=None, hidden=False, temp=False):
-        global _active
-        doc_name = _unique_name(name)
-        doc = _fc.newDocument(doc_name)
-        _documents[doc_name] = doc
-        _active = doc
-        return doc
+def newDocument(name=None, hidden=False, temp=False):
+    global _active
+    doc_name = _unique_name(name)
+    doc = _fc.newDocument(doc_name)
+    _documents[doc_name] = doc
+    _active = doc
+    return doc
 
-    def open(name, hidden=False, temporary=False):
-        global _active
-        doc = _fc.openDocument(name)
-        _documents[doc.Name] = doc
-        _active = doc
-        return doc
+def open(name, hidden=False, temporary=False):
+    global _active
+    doc = _fc.openDocument(name)
+    _documents[doc.Name] = doc
+    _active = doc
+    return doc
 
-    # Upstream alias (`FreeCAD.openDocument(path)`).
-    def openDocument(path, hidden=False, temporary=False):
-        return open(path, hidden=hidden, temporary=temporary)
+# Upstream alias (`FreeCAD.openDocument(path)`).
+def openDocument(path, hidden=False, temporary=False):
+    return open(path, hidden=hidden, temporary=temporary)
 
-    def closeDocument(name):
-        global _active
-        if name not in _documents:
-            raise ValueError("no document named '%s'" % name)
-        doc = _documents.pop(name)
-        if _active is not None and _active.Name == name:
-            _active = None
-        _fc._emitDocument("slotDeletedDocument", doc)
-        _fc._forgetDocument(doc)
+def closeDocument(name):
+    global _active
+    if name not in _documents:
+        raise ValueError("no document named '%s'" % name)
+    doc = _documents.pop(name)
+    if _active is not None and _active.Name == name:
+        _active = None
+    _fc._emitDocument("slotDeletedDocument", doc)
+    _fc._forgetDocument(doc)
 
-    def getDocument(name):
-        return _documents.get(name)
+def getDocument(name):
+    return _documents.get(name)
 
-    def setActiveDocument(name):
-        global _active
-        if name in _documents:
-            doc = _documents[name]
-            if doc is not _active:
-                _active = doc
-                _fc._emitDocument("slotActivateDocument", doc)
+def setActiveDocument(name):
+    global _active
+    if name in _documents:
+        doc = _documents[name]
+        if doc is not _active:
+            _active = doc
+            _fc._emitDocument("slotActivateDocument", doc)
 
-    def listDocuments():
-        return dict(_documents)
+def listDocuments():
+    return dict(_documents)
 
-    def activeDocument():
-        return _active
+def activeDocument():
+    return _active
 
-    def Version():
-        return __version__.split(".") + ["rust-fc", ""]
-
-else:
-    Document = _ctypes.Document
-    DocumentObject = _ctypes.DocumentObject
-    newDocument = _ctypes.newDocument
-    closeDocument = _ctypes.closeDocument
-    getDocument = _ctypes.getDocument
-    listDocuments = _ctypes.listDocuments
-    activeDocument = _ctypes.activeDocument
-    Version = _ctypes.Version
-    __version__ = _ctypes.__version__
+def Version():
+    return __version__.split(".") + ["rust-fc", ""]
 
 __all__ = [
     "Version",

@@ -3,7 +3,6 @@
 # Python facade (python/FreeCAD).
 #
 #   * ferrocad_py     -> python/ferrocad.abi3.so               (PyO3 over ferrocad_core, primary)
-#   * ferrocad_ctypes -> python/FreeCAD/libferrocad_ctypes.so   (C ABI, ctypes fallback)
 #   * ferrocad_gen    -> python/ferrocad_gen.abi3.so            (generated skeleton, M3c)
 #
 # The toolchain can be project-local (see ../.toolchain/env.sh) so this needs no
@@ -30,7 +29,7 @@ export PYO3_USE_ABI3_FORWARD_COMPATIBILITY
 
 TARGET="$HERE/target/release"
 
-echo "== building ferrocad_core / ferrocad_py / ferrocad_gen / ferrocad_ctypes =="
+echo "== building ferrocad_core / ferrocad_py / ferrocad_gen =="
 # The workspace `default-members` selects exactly these four crates. The
 # `extension-module` feature (opt-in, see the crates' manifests) makes PyO3 skip
 # linking libpython, which is what a packaged extension module needs.
@@ -46,15 +45,6 @@ else
     echo "error: ferrocad_py extension not produced" >&2
     exit 1
 fi
-
-# Package the ctypes fallback shared library.
-for name in libferrocad_ctypes.so libferrocad_ctypes.dylib ferrocad_ctypes.dll; do
-    src="$TARGET/$name"
-    if [ -f "$src" ]; then
-        cp "$src" "$HERE/python/FreeCAD/$name"
-        echo "packaged python/FreeCAD/$name"
-    fi
-done
 
 # Package the generated skeleton bindings (M3c).
 gen_src="$TARGET/libferrocad_gen.so"

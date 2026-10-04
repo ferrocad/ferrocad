@@ -12,14 +12,15 @@ members = [
     "crates/ferrocad_py",
     "crates/ferrocad_gen",
     "crates/ferrocad_widgets",
-    "crates/ferrocad_host",
+    "crates/ferrocad_gpui",
 ]
-# `ferrocad_host` is the bite-gpui app-shell spike: it is a workspace member so
-# `-p ferrocad_host` works, but it is excluded from `default-members` because
-# building it pulls in the whole GUI stack (a slow compile) and it embeds CPython
-# via PyO3 `auto-initialize`. It links fine in a full `cargo build --workspace`
-# because the extension crates keep `pyo3/extension-module` opt-in (see their
-# manifests), avoiding the libpython link conflict.
+# The GUI crates (`ferrocad_widgets`, `ferrocad_gpui`, `ferrocad`) are workspace
+# members so `-p <crate>` works, but they are excluded from `default-members`
+# because building them pulls in the whole GUI stack (a slow compile).
+# `ferrocad_gpui` embeds CPython via PyO3 `auto-initialize`; it links fine in a
+# full `cargo build --workspace` because the extension crates keep
+# `pyo3/extension-module` opt-in (see their manifests), avoiding the libpython
+# link conflict.
 default-members = [
     "crates/ferrocad_core",
     "crates/ferrocad_py",
@@ -42,10 +43,12 @@ serde_json = "1"
 unicode-segmentation = "1"
 # Internal crates carry both a `path` (for development) and a `version` (which
 # crates.io requires). Publish them in dependency order: `ferrocad_core`, then
-# `ferrocad_widgets`. See ../docs/releasing.md.
+# `ferrocad_widgets`. `ferrocad_gpui` is not published (it is an application
+# library; publishing `ferrocad` as a crate would require it first). See
+# ../docs/releasing.md.
 ferrocad_core = { path = "crates/ferrocad_core", version = "0.1.0" }
 ferrocad_widgets = { path = "crates/ferrocad_widgets", version = "0.1.0" }
-ferrocad_host = { path = "crates/ferrocad_host", version = "0.1.0" }
+ferrocad_gpui = { path = "crates/ferrocad_gpui", version = "0.1.0" }
 
 # `lto` pays off for the extension/shared libraries; keep it workspace-wide.
 [profile.release]

@@ -11,7 +11,7 @@ use pyo3::prelude::*;
 use pyo3::types::PyAnyMethods;
 use serde::Deserialize;
 
-/// Host status returned by [`bootstrap`].
+/// Shell status returned by [`bootstrap`].
 #[derive(Debug, Clone, Deserialize)]
 pub struct Bootstrap {
     pub version: String,

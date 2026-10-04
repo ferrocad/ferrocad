@@ -19,8 +19,8 @@ jobs:
         working-directory: crates/ferrocad_core
         run: cargo test
 
-      - name: ferrocad_host headless tests (bite-gpui + embedded CPython)
-        working-directory: crates/ferrocad_host
+      - name: ferrocad_gpui headless tests (bite-gpui + embedded CPython)
+        working-directory: crates/ferrocad_gpui
         run: cargo test
 
       - name: ferrocad_py + ferrocad_gen (primary + generated bindings) build
@@ -40,7 +40,7 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y xvfb mesa-vulkan-drivers python3-dev
       - name: Open a real window (must not crash within 30s)
-        working-directory: crates/ferrocad_host
+        working-directory: crates/ferrocad_gpui
         run: |
           export VK_ICD_FILENAMES=/usr/share/vulkan/icd.d/lvp_icd.json
           timeout 30 xvfb-run -a cargo run

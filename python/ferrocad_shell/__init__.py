@@ -1,6 +1,6 @@
-"""App-shell helpers used by the FerroCAD Rust host.
+"""App-shell helpers used by the FerroCAD shell library.
 
-The host drives the document model **only** through these functions, so the
+The shell drives the document model **only** through these functions, so the
 shell is a client of the same public ``FreeCAD`` API a workbench would use.
 Each entry point returns a JSON string the Rust side deserialises.
 """

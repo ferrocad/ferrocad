@@ -1,4 +1,4 @@
-//! FerroCAD host: the reusable application shell.
+//! FerroCAD shell: the reusable `bite-gpui` application shell.
 //!
 //! Boots an embedded CPython interpreter, wires the `FreeCAD` facade, and opens
 //! the `bite-gpui` window (model inspector, property editor, Python console).

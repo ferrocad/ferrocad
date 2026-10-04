@@ -6,7 +6,7 @@ tests import it defensively (e.g. ``if FreeCAD.GuiUp:``) and probe for attribute
 like ``getDocument`` — which must *not* exist here, mirroring upstream's dummy
 GUI module in console mode.
 
-The real GUI module (M5: ``bite-gpui`` host) will replace this stub.
+The real GUI module (M5: the ``bite-gpui`` shell) will replace this stub.
 """
 
 from __future__ import annotations

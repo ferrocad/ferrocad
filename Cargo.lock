@@ -2195,7 +2195,7 @@ dependencies = [
 name = "ferrocad"
 version = "0.0.0"
 dependencies = [
- "ferrocad_host",
+ "ferrocad_gpui",
 ]
 
 [[package]]
@@ -2215,7 +2215,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "ferrocad_host"
+name = "ferrocad_gpui"
 version = "0.1.0"
 dependencies = [
  "bite-gpui",

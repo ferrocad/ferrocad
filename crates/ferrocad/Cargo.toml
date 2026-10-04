@@ -17,10 +17,10 @@ documentation = "https://docs.rs/ferrocad"
 name = "ferrocad"
 
 # The base application: the general FerroCAD edition. Editions (FerroCAD:
-# Architecture, ...) are thin binaries that depend on `ferrocad_host` directly.
+# Architecture, ...) are thin binaries that depend on `ferrocad_gpui` directly.
 [[bin]]
 name = "ferrocad"
 path = "src/main.rs"
 
 [dependencies]
-ferrocad_host.workspace = true
+ferrocad_gpui.workspace = true

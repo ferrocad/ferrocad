@@ -1,13 +1,9 @@
 [package]
-name = "ferrocad_host"
+name = "ferrocad_gpui"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
-description = "Spike: Rust host embedding CPython + bite-gpui (Python-declarative UI)"
-
-[[bin]]
-name = "ferrocad_host"
-path = "src/main.rs"
+description = "FerroCAD's bite-gpui application shell: boots CPython and provides the window, panels and HostConfig"
 
 [dependencies]
 ferrocad_widgets.workspace = true

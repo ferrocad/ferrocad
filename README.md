@@ -123,10 +123,11 @@ FerroCAD is a Cargo workspace (edition 2024). Crate status:
 | `crates/ferrocad_py` | PyO3 extension over `ferrocad_core` (module `ferrocad`) | primary |
 | `crates/ferrocad_gen` | generated PyO3 skeleton bindings from the `.pyi` model (M3c) | useful — drives the codegen tests |
 | `crates/ferrocad_widgets` | reusable `bite-gpui` widgets (window chrome, field, console) | published |
-| `crates/ferrocad_host` | library: reusable app shell (`run`/`run_with` + `HostConfig`), boots CPython | primary |
+| `crates/ferrocad_gpui` | library: reusable app shell (`run`/`run_with` + `HostConfig`), boots CPython | primary |
 
-The `host` crate is excluded from the workspace `default-members` because its PyO3 `auto-initialize`
-feature conflicts with the `extension-module` feature of the primary extension crates.
+The GUI crates (`ferrocad_widgets`, `ferrocad_gpui`, `ferrocad`) are excluded from `default-members`
+so `cargo build`/`cargo test` stay fast; `ferrocad_gpui` additionally carries the PyO3
+`auto-initialize` feature, which conflicts with the `extension-module` feature of the extension crates.
 
 ## Build & run
 
@@ -162,7 +163,7 @@ python3 tools/test_inventory.py                                    # .pyi parser
 python3 tools/test_codegen.py                                      # codegen logic (M3c)
 python3 tools/test_conformance.py                                  # harness helpers (M3d)
 PYTHONPATH=python python3 examples/file_roundtrip.py               # save/open a document (file load)
-. ../.toolchain/env.sh && cargo test -p ferrocad_host              # embedded-CPython host spike (3)
+. ../.toolchain/env.sh && cargo test -p ferrocad_gpui              # shell library tests (4)
 ```
 
 Regenerate the M3c skeleton (`crates/ferrocad_gen/src/lib.rs`, committed):
@@ -208,21 +209,22 @@ writes `import FreeCAD`.
 
 The Rust library crates (`ferrocad_core`, `ferrocad_widgets`) additionally publish to **crates.io**, and
 the wheel publishes to **PyPI**; the extension crates (`ferrocad_py`,
-`ferrocad_gen`) and the `ferrocad_host` binary do not go to crates.io. Publish order, the
+`ferrocad_gen`) and the application crates (`ferrocad`, `ferrocad_gpui`) do not go to crates.io. Publish order, the
 `abi3`/`extension-module` notes, and the dry-run commands are in
 [`../docs/releasing.md`](../docs/releasing.md).
 
 ## Embedded Python (running scripts from Rust)
 
-The **host** crate embeds CPython and drives it from Rust. `crates/ferrocad_host` passes three
-headless `#[gpui::test]`s, one of which embeds the interpreter, imports a Python module, and
+The **shell library** (`crates/ferrocad_gpui`) embeds CPython and drives it from Rust. It passes
+four headless `#[gpui::test]`s, one of which embeds the interpreter, imports a Python module, and
 round-trips a click through a Python callback back into a `bite-gpui` element
-(`cargo test -p ferrocad_host`). This is the Blender-style model the M5 UI track builds on: Python
+(`cargo test -p ferrocad_gpui`). The base app (`crates/ferrocad`) is a thin binary over it
+(`cargo run -p ferrocad`). This is the Blender-style model the M5 UI track builds on: Python
 declares the UI/workbench, Rust owns the process and renders.
 
 Note the layering: `ferrocad_core` is **pure Rust and does not embed Python**; the embedding lives
-in the host. Workbench Python is driven by the host, while the `FreeCAD` facade talks to the
-`ferrocad` extension the ordinary ways (import).
+in the shell library. Workbench Python is driven by the shell, while the `FreeCAD` facade talks to
+the `ferrocad` extension the ordinary ways (import).
 
 ## Python-only scripts & file loading
 
@@ -294,7 +296,7 @@ that drives it — a developer tool with five pillars: **open/close/load/save**,
 a **DOM-like inspector**, a **property editor**, and a **Python console**. It is one
 `bite-gpui` window embedding CPython, calling the engine only through the public `FreeCAD`
 API, so commands, console input and property edits all take the same path (and every edit is
-one more undoable transaction). The `ferrocad_host` spike already proves the
+one more undoable transaction). The `ferrocad_gpui` spike already proves the
 Python-declared-UI ↔ `bite-gpui` round-trip headlessly.
 
 The plan, architecture and slices (S1 shell skeleton → S2 lifecycle + commands → S3 inspector
@@ -302,7 +304,7 @@ The plan, architecture and slices (S1 shell skeleton → S2 lifecycle + commands
 [`../docs/app-shell-vision.md`](../docs/app-shell-vision.md). The 3D viewport is a later
 track that docks into the shell's placeholder pane.
 
-**S1 is implemented** (`crates/ferrocad_host`): a titled `bite-gpui` window that boots an
+**S1 is implemented** (`crates/ferrocad_gpui`): a titled `bite-gpui` window that boots an
 embedded CPython interpreter, creates a sample document, and shows a model inspector, a
 read-only property editor, a viewport placeholder, a Python console and a status bar — all
 driven live through the `FreeCAD` API (`python/ferrocad_shell`). Run it with
@@ -329,11 +331,14 @@ crates/ferrocad_core/     pure Rust core: quantities, properties, DAG, tx/observ
 crates/ferrocad_py/       PyO3 bindings over ferrocad_core (module `ferrocad`)
 crates/ferrocad_gen/      generated PyO3 skeleton bindings (module `ferrocad_gen`)
     src/lib.rs            GENERATED by tools/codegen.py (committed)
-crates/ferrocad_host/     app shell (S1): Rust host embedding CPython + bite-gpui
-    src/main.rs           app entry: boot the interpreter, open the window
+crates/ferrocad/          the base app binary (cargo run -p ferrocad)
+    src/main.rs           entry: calls ferrocad_gpui::run()
+crates/ferrocad_gpui/     library: FerroCAD's bite-gpui app shell (boots CPython)
+    src/lib.rs            run/run_with + HostConfig + window options
     src/python.rs         embedded-CPython bridge (boot, model_tree, properties, evaluate)
     src/shell.rs          the Shell view: inspector / property editor / console / status bar
     src/spike.rs          kept feasibility spike (Python-declared UI, headless)
+crates/ferrocad_widgets/  reusable bite-gpui widgets (window chrome, field, console)
 python/ferrocad_shell/    Python side of the shell (sample document, console, model queries)
 tools/inventory.py        M3a: parse upstream .pyi stubs into an API model (Python ast)
 tools/test_inventory.py   M3a tests (hermetic fixtures + upstream integration guard)

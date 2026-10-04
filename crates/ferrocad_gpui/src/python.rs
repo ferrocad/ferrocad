@@ -2,14 +2,45 @@
 //!
 //! The shell never touches the document model directly: like a workbench, it
 //! goes through the public `FreeCAD` Python API. This module boots the
-//! interpreter, puts the `python/` facade on `sys.path`, and marshals small
-//! JSON payloads across the boundary (defined by `python/ferrocad_shell`).
+//! interpreter, puts the app's script directories on `sys.path`, and marshals
+//! small JSON payloads across the boundary.
+//!
+//! The Python *scripts* are not part of this library. The importing app declares
+//! them through [`configure`] (from its `HostConfig`): the module to boot and the
+//! directories to search. This mirrors FreeCAD, where the interpreter belongs to
+//! the application but the workbench (`Mod/`) scripts ship with the distribution.
 
 use std::path::PathBuf;
+use std::sync::OnceLock;
 
 use pyo3::prelude::*;
 use pyo3::types::PyAnyMethods;
 use serde::Deserialize;
+
+/// The Python module the shell boots and then calls. It is the app's script, so
+/// the library ships no copy; [`configure`] sets it before boot.
+static ENTRY_MODULE: OnceLock<String> = OnceLock::new();
+
+/// Extra `sys.path` entries supplied by the app (its startup scripts and mods).
+static APP_PATHS: OnceLock<Vec<PathBuf>> = OnceLock::new();
+
+/// Configure the app side of the boundary, before boot.
+///
+/// `entry_module` must expose the shell's data functions (`bootstrap`,
+/// `model_tree`, `properties`, `set_property`, `evaluate`). `python_paths` are
+/// the app's script and mod directories, added to `sys.path`.
+pub fn configure(entry_module: &str, python_paths: &[PathBuf]) {
+    let _ = ENTRY_MODULE.set(entry_module.to_string());
+    let _ = APP_PATHS.set(python_paths.to_vec());
+}
+
+/// The app's entry module.
+///
+/// Falls back to the base app's development module so the library's own tests can
+/// boot without a host; a real app always calls [`configure`].
+fn entry_module() -> &'static str {
+    ENTRY_MODULE.get().map(String::as_str).unwrap_or("ferrocad_shell")
+}
 
 /// Shell status returned by [`bootstrap`].
 #[derive(Debug, Clone, Deserialize)]
@@ -90,10 +121,10 @@ pub fn find_python_dir() -> Result<PathBuf, String> {
     Err("could not locate the python/ facade directory (set FERROCAD_PYTHON_PATH)".to_string())
 }
 
-/// Call a `ferrocad_shell` function that returns a JSON string and decode it.
+/// Call a function on the app's entry module that returns JSON, and decode it.
 fn call_json<T: for<'de> Deserialize<'de>>(func: &str, arg: Option<&str>) -> Result<T, String> {
     let raw = Python::with_gil(|py| -> Result<String, String> {
-        let module = py.import("ferrocad_shell").map_err(|e| e.to_string())?;
+        let module = py.import(entry_module()).map_err(|e| e.to_string())?;
         let f = module.getattr(func).map_err(|e| e.to_string())?;
         let value = match arg {
             Some(a) => f.call1((a,)),
@@ -110,13 +141,27 @@ fn call_json<T: for<'de> Deserialize<'de>>(func: &str, arg: Option<&str>) -> Res
 pub fn bootstrap() -> Result<Bootstrap, String> {
     let dir = find_python_dir()?;
     let dir = dir.to_string_lossy().into_owned();
+    let app: Vec<String> = APP_PATHS
+        .get()
+        .map(|paths| {
+            paths
+                .iter()
+                .map(|p| p.to_string_lossy().into_owned())
+                .collect()
+        })
+        .unwrap_or_default();
     let raw = Python::with_gil(|py| -> Result<String, String> {
         let sys = py.import("sys").map_err(|e| e.to_string())?;
         let path = sys.getattr("path").map_err(|e| e.to_string())?;
         // A duplicate entry is harmless; inserting unconditionally is simplest.
-        path.call_method1("insert", (0, dir)).map_err(|e| e.to_string())?;
+        // The app's directories go first, then the facade directory.
+        for p in app.iter().rev() {
+            path.call_method1("insert", (0, p.as_str()))
+                .map_err(|e| e.to_string())?;
+        }
+        path.call_method1("insert", (0, dir.as_str())).map_err(|e| e.to_string())?;
 
-        let module = py.import("ferrocad_shell").map_err(|e| e.to_string())?;
+        let module = py.import(entry_module()).map_err(|e| e.to_string())?;
         module
             .getattr("bootstrap")
             .map_err(|e| e.to_string())?
@@ -131,7 +176,7 @@ pub fn bootstrap() -> Result<Bootstrap, String> {
 /// The console "hello world" line.
 pub fn hello() -> Result<String, String> {
     Python::with_gil(|py| {
-        let module = py.import("ferrocad_shell").map_err(|e| e.to_string())?;
+        let module = py.import(entry_module()).map_err(|e| e.to_string())?;
         module
             .getattr("hello")
             .map_err(|e| e.to_string())?
@@ -158,7 +203,7 @@ pub fn evaluate(code: &str) -> Result<EvalResult, String> {
 /// a named transaction and recomputes.
 pub fn set_property(object: &str, property: &str, value: &str) -> Result<SetResult, String> {
     let raw = Python::with_gil(|py| -> Result<String, String> {
-        let module = py.import("ferrocad_shell").map_err(|e| e.to_string())?;
+        let module = py.import(entry_module()).map_err(|e| e.to_string())?;
         module
             .getattr("set_property")
             .map_err(|e| e.to_string())?

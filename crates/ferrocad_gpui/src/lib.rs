@@ -29,18 +29,29 @@ pub(crate) static PYTHON_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 /// Per-edition configuration.
 ///
 /// The base app uses [`HostConfig::default`]; a redistribution (FerroCAD:
-/// Architecture, Furniture, ...) supplies its own application name and, later,
-/// its workbench set and startup template.
+/// Architecture, Furniture, ...) supplies its own application name, its Python
+/// entry module and, later, its workbench (`Mod/`) directories and startup
+/// template.
 #[derive(Debug, Clone)]
 pub struct HostConfig {
     /// The application name shown in the OS window title.
     pub app_name: String,
+    /// The app's Python script and mod directories, prepended to `sys.path`.
+    /// Empty means "discover the development `python/` directory".
+    pub python_paths: Vec<std::path::PathBuf>,
+    /// The app's Python entry module, imported at boot. It must expose the shell
+    /// data functions (`bootstrap`, `model_tree`, `properties`, `set_property`,
+    /// `evaluate`). The library ships no copy of this script: it lives with the
+    /// app (see `docs/repackaging.md`).
+    pub entry_module: String,
 }
 
 impl Default for HostConfig {
     fn default() -> Self {
         Self {
             app_name: "FerroCAD".to_string(),
+            python_paths: Vec::new(),
+            entry_module: "ferrocad_shell".to_string(),
         }
     }
 }
@@ -52,6 +63,10 @@ pub fn run() {
 
 /// Run the application with an edition's configuration.
 pub fn run_with(config: HostConfig) {
+    // Hand the app's scripts to the interpreter bridge before it boots. The
+    // interpreter belongs to the shell; the scripts belong to the app.
+    python::configure(&config.entry_module, &config.python_paths);
+
     let model = match Shell::boot() {
         Ok(model) => model,
         Err(e) => {

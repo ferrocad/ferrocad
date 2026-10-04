@@ -1,7 +1,13 @@
 # ferrocad
 
-This crate reserves the `ferrocad` name on crates.io. It is intentionally
-empty at `0.0.0` and exposes nothing yet.
+The **base FerroCAD application**: a Rust reimplementation of FreeCAD's `App`
+core, exposed as the drop-in `FreeCAD` Python package.
+
+- `cargo install ferrocad` builds the app binary. It boots an embedded CPython
+  interpreter and opens the `bite-gpui` shell (model inspector, property editor,
+  Python console).
+- The library target is a placeholder for a facade that will re-export the core
+  crates.
 
 The project lives at **https://github.com/ferrocad/ferrocad**:
 
@@ -9,11 +15,13 @@ The project lives at **https://github.com/ferrocad/ferrocad**:
   model with a recompute dependency graph, transactions with undo/redo, observers,
   expressions, and FreeCAD's geometry and unit types.
 - **`ferrocad_widgets`** — reusable `bite-gpui` widgets (window chrome, editable
-  field, console text area) shared by the application shell.
+  field, console text area).
+- **`ferrocad_gpui`** — the application shell library (`HostConfig`, `run`).
 
-The public surface is the **`FreeCAD`** Python package: a drop-in, Rust-backed
-reimplementation of FreeCAD's `App` core.
+The public surface is the **`FreeCAD`** Python package.
 
-This crate will later become either a facade that re-exports the core crates, or
-the base application binary. Until then, depend on `ferrocad_core` and
-`ferrocad_widgets` directly.
+> **Runtime payload.** The app loads the `FreeCAD` facade, the `ferrocad`
+> extension and the shell scripts from a Python payload. The binary looks for it
+> next to the executable or via `FERROCAD_PYTHON_PATH`; the installer/AppImage
+> ships it. Embedding the payload into the binary so a bare `cargo install` is
+> self-sufficient is planned.

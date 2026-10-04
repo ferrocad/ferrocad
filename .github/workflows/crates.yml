@@ -40,9 +40,9 @@ jobs:
         run: |
           set -eu
 
-          # Dependency order: core, then widgets, then gpui (which depends on
-          # widgets). Others set `publish = false`.
-          crates="ferrocad_core ferrocad_widgets ferrocad_gpui"
+          # Dependency order: core, widgets, gpui (depends on widgets), then the
+          # base app (depends on gpui). Others set `publish = false`.
+          crates="ferrocad_core ferrocad_widgets ferrocad_gpui ferrocad"
 
           on_crates_io() {
             code=$(curl -s -o /dev/null -w '%{http_code}' \

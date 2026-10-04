@@ -1,12 +1,9 @@
 //! # ferrocad
 //!
-//! A placeholder crate reserving the `ferrocad` name on crates.io. It currently
-//! exposes nothing.
+//! The base FerroCAD application. The binary (`cargo install ferrocad`) boots an
+//! embedded CPython interpreter and opens the `bite-gpui` shell; the engine is
+//! [`ferrocad_core`](https://crates.io/crates/ferrocad_core) and the shell library
+//! is [`ferrocad_gpui`](https://crates.io/crates/ferrocad_gpui).
 //!
-//! The project lives at <https://github.com/ferrocad/ferrocad>: the engine is
-//! [`ferrocad_core`](https://crates.io/crates/ferrocad_core) and the widget kit
-//! is [`ferrocad_widgets`](https://crates.io/crates/ferrocad_widgets). The public
-//! surface is the `FreeCAD` Python package.
-//!
-//! This crate may later become a facade that re-exports the core crates, or the
-//! base application binary. Until then it is intentionally empty.
+//! The library target is a placeholder for a facade that will re-export the core
+//! crates. The public surface is the `FreeCAD` Python package.

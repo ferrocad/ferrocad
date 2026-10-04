@@ -3,7 +3,14 @@ name = "ferrocad_core"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+readme.workspace = true
+repository.workspace = true
+homepage.workspace = true
+rust-version.workspace = true
 description = "FerroCAD core: quantities, properties, documents, recompute DAG"
+keywords = ["cad", "freecad", "parametric", "geometry"]
+categories = ["science", "data-structures", "mathematics"]
+documentation = "https://docs.rs/ferrocad_core"
 
 [lib]
 name = "ferrocad_core"

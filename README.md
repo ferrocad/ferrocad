@@ -208,6 +208,12 @@ build can run in CI; until then rustdoc is the verifiable source of truth.
 `ferrocad` and ships the pure-Python `FreeCAD`/`FreeCADGui` packages from `python/`. A user still
 writes `import FreeCAD`.
 
+The Rust library crates (`ferrocad_core`, `ferrocad_ui`) additionally publish to **crates.io**, and
+the wheel publishes to **PyPI**; the extension crates (`ferrocad_py`, `ferrocad_ctypes`,
+`ferrocad_gen`) and the `ferrocad_host` binary do not go to crates.io. Publish order, the
+`abi3`/`extension-module` notes, and the dry-run commands are in
+[`../docs/releasing.md`](../docs/releasing.md).
+
 ## Embedded Python (running scripts from Rust)
 
 The **host** crate embeds CPython and drives it from Rust. `crates/ferrocad_host` passes three
@@ -306,6 +312,7 @@ driven live through the `FreeCAD` API (`python/ferrocad_shell`). Run it with
 
 ```
 Cargo.toml                Cargo workspace (edition 2024)
+LICENSE                   LGPL-2.1-or-later (the `license` field is the SPDX id)
 pyproject.toml            maturin packaging (distribution `ferrocad`)
 hello_freecad.py          the milestone script (public FreeCAD API only)
 examples/file_roundtrip.py  saveAs / open a document (file loading)

@@ -10,7 +10,7 @@ name = "ferrocad_py"
 crate-type = ["cdylib"]
 
 [dependencies]
-ferrocad_core = { path = "../ferrocad_core" }
+ferrocad_core.workspace = true
 # NOTE: `extension-module` is deliberately *not* a hard dependency feature. It
 # tells PyO3 not to link libpython, which is correct for a packaged extension
 # module but breaks `cargo build --workspace` (the `ferrocad_host` bin needs the

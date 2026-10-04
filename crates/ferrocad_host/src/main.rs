@@ -10,6 +10,7 @@ mod chrome;
 mod input;
 mod python;
 mod shell;
+mod text;
 
 #[cfg(test)]
 mod spike;

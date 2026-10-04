@@ -9,8 +9,8 @@
 use std::sync::{Arc, Mutex};
 
 use gpui::{
-    App, Context, Entity, FocusHandle, Focusable, IntoElement, Render, SharedString, Subscription,
-    Window, div, prelude::*, px, rgb,
+    App, Context, Entity, FocusHandle, Focusable, IntoElement, Render, ScrollHandle, SharedString,
+    Subscription, Window, div, prelude::*, px, rgb,
 };
 
 use crate::input::{SubmitEvent, TextInput};
@@ -41,6 +41,8 @@ pub struct Shell {
     model: Arc<Mutex<ShellModel>>,
     /// The editable Python console line (S5's input, previewed here).
     console_input: Entity<TextInput>,
+    /// Keeps the console log pinned to the latest line.
+    console_scroll: ScrollHandle,
     _submit: Subscription,
 }
 
@@ -88,6 +90,7 @@ impl Shell {
         Self {
             model,
             console_input,
+            console_scroll: ScrollHandle::new(),
             _submit: submit,
         }
     }
@@ -126,6 +129,9 @@ impl Shell {
             Err(e) => m.console.push(format!("error: {e}")),
         }
         m.tree = tree;
+        drop(m);
+        // New output arrives at the bottom; keep it in view.
+        self.console_scroll.scroll_to_bottom();
     }
 
     fn snapshot(&self) -> ShellModel {
@@ -149,16 +155,16 @@ fn panel_header(text: &str) -> impl IntoElement {
 
 /// The model inspector: documents and their objects.
 fn tree_panel(model: &ShellModel, cx: &mut Context<Shell>) -> impl IntoElement {
-    let mut panel = div()
+    let mut rows = div()
+        .id("tree-scroll")
         .flex()
         .flex_col()
-        .w(px(260.))
-        .h_full()
-        .bg(rgb(PANEL))
-        .child(panel_header("Model"));
+        .flex_1()
+        .min_h_0()
+        .overflow_y_scroll();
 
     for doc in &model.tree {
-        panel = panel.child(
+        rows = rows.child(
             div()
                 .px_2()
                 .py_1()
@@ -188,28 +194,36 @@ fn tree_panel(model: &ShellModel, cx: &mut Context<Shell>) -> impl IntoElement {
             if model.selected.as_deref() == Some(name.as_str()) {
                 row = row.bg(rgb(ACCENT));
             }
-            panel = panel.child(row.on_click(cx.listener(move |this, _ev, _win, cx| {
+            rows = rows.child(row.on_click(cx.listener(move |this, _ev, _win, cx| {
                 this.select(&name);
                 cx.notify();
             })));
         }
     }
-    panel
+
+    div()
+        .flex()
+        .flex_col()
+        .w(px(260.))
+        .h_full()
+        .bg(rgb(PANEL))
+        .child(panel_header("Model"))
+        .child(rows)
 }
 
 /// The property editor (S1: read-only rows for the selected object).
 fn properties_panel(model: &ShellModel) -> impl IntoElement {
-    let mut panel = div()
+    let mut rows = div()
+        .id("properties-scroll")
         .flex()
         .flex_col()
-        .w(px(320.))
-        .h_full()
-        .bg(rgb(PANEL))
-        .child(panel_header("Properties"));
+        .flex_1()
+        .min_h_0()
+        .overflow_y_scroll();
 
     match &model.selected {
         None => {
-            panel = panel.child(
+            rows = rows.child(
                 div()
                     .px_2()
                     .py_1()
@@ -219,7 +233,7 @@ fn properties_panel(model: &ShellModel) -> impl IntoElement {
             );
         }
         Some(name) => {
-            panel = panel.child(
+            rows = rows.child(
                 div()
                     .px_2()
                     .py_1()
@@ -233,7 +247,7 @@ fn properties_panel(model: &ShellModel) -> impl IntoElement {
                 } else {
                     format!("{}  [{}]", row.value, row.status)
                 };
-                panel = panel.child(
+                rows = rows.child(
                     div()
                         .flex()
                         .flex_row()
@@ -276,7 +290,15 @@ fn properties_panel(model: &ShellModel) -> impl IntoElement {
             }
         }
     }
-    panel
+
+    div()
+        .flex()
+        .flex_col()
+        .w(px(320.))
+        .h_full()
+        .bg(rgb(PANEL))
+        .child(panel_header("Properties"))
+        .child(rows)
 }
 
 /// A console action button.
@@ -306,16 +328,19 @@ fn console_button(
 fn console_panel(
     model: &ShellModel,
     input: &Entity<TextInput>,
+    scroll: &ScrollHandle,
     cx: &mut Context<Shell>,
 ) -> impl IntoElement {
     let mut log = div()
+        .id("console-scroll")
         .flex()
         .flex_col()
         .flex_1()
         .min_h_0()
         .px_2()
         .py_1()
-        .overflow_hidden();
+        .overflow_y_scroll()
+        .track_scroll(scroll);
     for line in &model.console {
         log = log.child(div().text_xs().text_color(rgb(FG)).child(line.clone()));
     }
@@ -393,7 +418,12 @@ impl Render for Shell {
                     .child(viewport)
                     .child(properties_panel(&model)),
             )
-            .child(console_panel(&model, &self.console_input, cx))
+            .child(console_panel(
+                &model,
+                &self.console_input,
+                &self.console_scroll,
+                cx,
+            ))
             .child(status);
 
         crate::chrome::window_frame(window, model.title.clone(), content)

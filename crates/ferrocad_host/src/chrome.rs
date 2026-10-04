@@ -23,7 +23,10 @@ const TITLE_BAR_HEIGHT: Pixels = px(32.);
 
 const TITLE_BG: u32 = 0x20242a;
 const TITLE_FG: u32 = 0xd8dbe0;
-const CONTROL_HOVER: u32 = 0x3a3f47;
+const CONTROL_FG: u32 = 0xc9ced6;
+const CONTROL_HOVER: u32 = 0x363c46;
+/// The close button gets a red hover, matching native window controls.
+const CONTROL_CLOSE_HOVER: u32 = 0xb03a3a;
 
 /// Wrap `content` in client-side decorations when the platform asks for them.
 ///
@@ -80,15 +83,18 @@ fn title_bar(title: SharedString) -> impl IntoElement {
         .flex()
         .flex_row()
         .items_center()
-        .child(control_button("win-min", "\u{2013}", |window| {
+        .child(control_button("win-min", "\u{2013}", CONTROL_HOVER, |window| {
             window.minimize_window()
         }))
-        .child(control_button("win-max", "\u{25A1}", |window| {
+        .child(control_button("win-max", "\u{25A1}", CONTROL_HOVER, |window| {
             window.zoom_window()
         }))
-        .child(control_button("win-close", "\u{2715}", |window| {
-            window.remove_window()
-        }));
+        .child(control_button(
+            "win-close",
+            "\u{2715}",
+            CONTROL_CLOSE_HOVER,
+            |window| window.remove_window(),
+        ));
 
     div()
         .id("titlebar")
@@ -99,6 +105,7 @@ fn title_bar(title: SharedString) -> impl IntoElement {
         .h(TITLE_BAR_HEIGHT)
         .px_3()
         .bg(rgb(TITLE_BG))
+        .text_color(rgb(TITLE_FG))
         .on_mouse_down(MouseButton::Left, |_event, window, _cx| {
             window.start_window_move()
         })
@@ -114,6 +121,7 @@ fn title_bar(title: SharedString) -> impl IntoElement {
 fn control_button(
     id: &str,
     glyph: &str,
+    hover_bg: u32,
     action: impl Fn(&mut Window) + 'static,
 ) -> impl IntoElement {
     div()
@@ -124,7 +132,8 @@ fn control_button(
         .items_center()
         .justify_center()
         .cursor_pointer()
-        .hover(|style| style.bg(rgb(CONTROL_HOVER)))
+        .text_color(rgb(CONTROL_FG))
+        .hover(move |style| style.bg(rgb(hover_bg)))
         // Keep the title-bar drag from swallowing the click.
         .on_mouse_down(MouseButton::Left, |_event, _window, cx| {
             cx.stop_propagation()

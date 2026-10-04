@@ -1,0 +1,111 @@
+name: Release
+
+# Tag a verified version to publish the artifacts:
+#
+#   git tag v0.1.0 && git push origin v0.1.0
+#
+# The `verify` job checks the tag against the workspace version and runs the
+# tests; `build` produces the AppImage, .dmg and Windows zip; `release` attaches
+# them to a GitHub Release.
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+# Pin the bundled CPython so every artifact ships the same runtime.
+env:
+  FERROCAD_PYTHON_VERSION: "3.14.8"
+  FERROCAD_PBS_DATE: "20261003"
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Tag matches the workspace version
+        run: |
+          tag="${GITHUB_REF_NAME#v}"
+          version=$(grep -m1 '^version = ' Cargo.toml | sed -E 's/^version = "([^"]+)".*/\1/')
+          echo "tag=$tag version=$version"
+          test "$tag" = "$version"
+
+      - name: Engine tests
+        run: cargo test
+
+      - name: Headless shell tests (embedded CPython)
+        run: cargo test -p ferrocad_gpui
+
+  build:
+    needs: verify
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            artifact_name: ferrocad-linux
+            artifact_path: target/dist/ferrocad-x86_64.AppImage
+          - os: macos-latest
+            artifact_name: ferrocad-macos
+            artifact_path: target/dist/FerroCAD.dmg
+          - os: windows-latest
+            artifact_name: ferrocad-windows
+            artifact_path: target/dist/ferrocad-windows-x86_64.zip
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      # appimagetool (run via --appimage-extract-and-run, so no FUSE) and a PNG
+      # icon converted from the SVG source.
+      - name: AppImage tooling (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y librsvg2-bin
+          rsvg-convert -w 256 -h 256 packaging/icon/ferrocad.svg -o packaging/linux/ferrocad.png
+          mkdir -p tools
+          curl -fL -o tools/appimagetool-x86_64.AppImage \
+            https://github.com/AppImage/appimagetool/releases/download/continuous/appimagetool-x86_64.AppImage
+          chmod +x tools/appimagetool-x86_64.AppImage
+
+      - name: Package (Linux)
+        if: runner.os == 'Linux'
+        run: bash packaging/linux/appimage.sh
+
+      - name: Package (macOS)
+        if: runner.os == 'macOS'
+        run: bash packaging/macos/app.sh
+
+      - name: Package (Windows)
+        if: runner.os == 'Windows'
+        run: pwsh -File packaging/windows/portable.ps1
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact_name }}
+          path: ${{ matrix.artifact_path }}
+          if-no-files-found: error
+
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: dist/**/*
+          fail_on_unmatched_files: true
+          generate_release_notes: true

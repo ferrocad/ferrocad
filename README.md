@@ -216,6 +216,12 @@ the wheel publishes to **PyPI**; the extension crates (`ferrocad_py`,
 `abi3`/`extension-module` notes, and the dry-run commands are in
 [`../docs/releasing.md`](../docs/releasing.md).
 
+Application artifacts (AppImage, `.dmg`, Windows zip) are built by
+[`../packaging`](../packaging) from the payload staged by `cargo xtask bundle`.
+Tagging `v*` runs [`.github/workflows/release.yml`](.github/workflows/release.yml),
+which verifies the tag against the workspace version, runs the tests, builds the
+three artifacts with the pinned Python runtime, and publishes a GitHub Release.
+
 ## Embedded Python (running scripts from Rust)
 
 The **shell library** (`crates/ferrocad_gpui`) embeds CPython and drives it from Rust. It passes

@@ -40,7 +40,6 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y xvfb mesa-vulkan-drivers python3-dev
       - name: Open a real window (must not crash within 30s)
-        working-directory: crates/ferrocad_gpui
         run: |
           export VK_ICD_FILENAMES=/usr/share/vulkan/icd.d/lvp_icd.json
-          timeout 30 xvfb-run -a cargo run
+          timeout 30 xvfb-run -a cargo run -p ferrocad

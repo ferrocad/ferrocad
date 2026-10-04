@@ -137,6 +137,7 @@ so `cargo build`/`cargo test` stay fast; `ferrocad_gpui` additionally carries th
 ./run.sh       # PYTHONPATH=python python3 hello_freecad.py
 cargo run -p ferrocad   # the base app window (needs a display)
 cargo xtask bundle      # stage a distribution into target/dist/ferrocad (--debug for speed)
+cargo xtask appimage    # wrap the staged AppDir into an AppImage (needs appimagetool)
 ```
 
 Expected output:

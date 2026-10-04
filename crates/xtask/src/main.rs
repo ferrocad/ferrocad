@@ -21,6 +21,13 @@ fn main() {
                 std::process::exit(1);
             }
         }
+        Some("appimage") => {
+            let opts = Options::parse(args);
+            if let Err(e) = appimage(&opts) {
+                eprintln!("xtask: {e}");
+                std::process::exit(1);
+            }
+        }
         Some("help") | Some("--help") | Some("-h") | None => usage(),
         Some(other) => {
             eprintln!("xtask: unknown task `{other}`\n");
@@ -32,6 +39,7 @@ fn main() {
 
 fn usage() {
     println!("cargo xtask bundle [--debug] [--out DIR]");
+    println!("cargo xtask appimage [--debug] [--out DIR]");
 }
 
 struct Options {
@@ -130,6 +138,102 @@ fn bundle(opts: &Options) -> Result<(), String> {
 
     eprintln!("staged {}", out.display());
     Ok(())
+}
+
+/// Stage the distribution, then wrap it in an AppImage with `appimagetool`.
+///
+/// The canonical tool is written in C. It is located on `PATH`, via
+/// `APPIMAGETOOL`, or as `tools/appimagetool-<arch>.AppImage`. A `.AppImage` is
+/// run with `--appimage-extract-and-run`, so no FUSE and no system install is
+/// required. See `docs/distribution.md`.
+fn appimage(opts: &Options) -> Result<(), String> {
+    let root = workspace_root();
+
+    // Always refresh the staged AppDir first.
+    bundle(opts)?;
+
+    let appdir = opts
+        .out
+        .clone()
+        .unwrap_or_else(|| root.join("target/dist/ferrocad"));
+
+    let (tool, is_appimage) = find_appimagetool(&root).ok_or_else(|| {
+        "appimagetool not found.\n\
+         Put it on PATH, set APPIMAGETOOL, or drop \
+         appimagetool-<arch>.AppImage into tools/.\n\
+         It runs without FUSE via --appimage-extract-and-run.\n\
+         Download: https://github.com/AppImage/appimagetool/releases"
+            .to_string()
+    })?;
+
+    let out_image = root
+        .join("target/dist")
+        .join(format!("ferrocad-{}.AppImage", arch()));
+
+    let mut cmd = Command::new(&tool);
+    if is_appimage {
+        // Avoid needing FUSE to run appimagetool itself.
+        cmd.arg("--appimage-extract-and-run");
+        cmd.env("APPIMAGE_EXTRACT_AND_RUN", "1");
+    }
+    cmd.env("ARCH", arch());
+    cmd.arg(&appdir).arg(&out_image);
+    cmd.current_dir(&root);
+
+    eprintln!(
+        "== appimagetool {} -> {} ==",
+        appdir.display(),
+        out_image.display()
+    );
+    let status = cmd
+        .status()
+        .map_err(|e| format!("failed to run appimagetool: {e}"))?;
+    if !status.success() {
+        return Err("appimagetool failed".to_string());
+    }
+    eprintln!("created {}", out_image.display());
+    Ok(())
+}
+
+fn arch() -> &'static str {
+    std::env::consts::ARCH
+}
+
+/// Find `appimagetool`. Returns the path and whether it is an `.AppImage`
+/// (which must be invoked with `--appimage-extract-and-run`).
+fn find_appimagetool(root: &Path) -> Option<(PathBuf, bool)> {
+    if let Ok(path) = std::env::var("APPIMAGETOOL") {
+        if !path.is_empty() {
+            let path = PathBuf::from(path);
+            let is_image = is_appimage_path(&path);
+            return Some((path, is_image));
+        }
+    }
+    if let Some(paths) = std::env::var_os("PATH") {
+        for dir in std::env::split_paths(&paths) {
+            let candidate = dir.join("appimagetool");
+            if candidate.is_file() {
+                return Some((candidate, false));
+            }
+        }
+    }
+    for candidate in [
+        root.join("tools")
+            .join(format!("appimagetool-{}.AppImage", arch())),
+        root.join("tools").join("appimagetool.AppImage"),
+    ] {
+        if candidate.is_file() {
+            return Some((candidate, true));
+        }
+    }
+    None
+}
+
+fn is_appimage_path(path: &Path) -> bool {
+    path.extension()
+        .and_then(|e| e.to_str())
+        .map(|e| e.eq_ignore_ascii_case("AppImage"))
+        .unwrap_or(false)
 }
 
 const APP_RUN: &str = "\

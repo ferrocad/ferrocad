@@ -11,6 +11,7 @@ mod input;
 mod python;
 mod shell;
 mod text;
+mod textarea;
 
 #[cfg(test)]
 mod spike;

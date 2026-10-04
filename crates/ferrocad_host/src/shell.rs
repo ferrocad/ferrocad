@@ -9,12 +9,13 @@
 use std::sync::{Arc, Mutex};
 
 use gpui::{
-    App, Context, Entity, FocusHandle, Focusable, IntoElement, Render, ScrollHandle, SharedString,
-    Subscription, Window, div, prelude::*, px, rgb,
+    App, Context, Entity, FocusHandle, Focusable, IntoElement, Render, SharedString, Subscription,
+    Window, div, prelude::*, px, rgb,
 };
 
-use crate::input::{SubmitEvent, TextInput};
 use crate::python::{self, Bootstrap, DocumentNode, PropRow};
+use crate::text::SubmitEvent;
+use crate::textarea::TextAreaState;
 
 const BG: u32 = 0x101216;
 const PANEL: u32 = 0x16181d;
@@ -22,6 +23,12 @@ const PANEL_ALT: u32 = 0x1d2026;
 const FG: u32 = 0xd8dbe0;
 const MUTED: u32 = 0x8b919a;
 const ACCENT: u32 = 0x2f4a6d;
+
+/// The console transcript: the log lines plus a fresh prompt.
+fn transcript_of(model: &Arc<Mutex<ShellModel>>) -> String {
+    let m = model.lock().unwrap();
+    format!("{}\n>>> ", m.console.join("\n"))
+}
 
 /// Everything the window renders, kept in an `Arc<Mutex<_>>` so click handlers
 /// can mutate it and tests can inspect it.
@@ -39,10 +46,8 @@ pub struct ShellModel {
 
 pub struct Shell {
     model: Arc<Mutex<ShellModel>>,
-    /// The editable Python console line (S5's input, previewed here).
-    console_input: Entity<TextInput>,
-    /// Keeps the console log pinned to the latest line.
-    console_scroll: ScrollHandle,
+    /// The console transcript plus the live input line (S5's text area).
+    console: Entity<TextAreaState>,
     _submit: Subscription,
 }
 
@@ -77,27 +82,28 @@ impl Shell {
 
     /// Build a shell around an existing model (the window and tests use this).
     pub fn from_model(model: Arc<Mutex<ShellModel>>, cx: &mut Context<Self>) -> Self {
-        let console_input =
-            cx.new(|cx| TextInput::new(cx, ">>> type Python and press Enter"));
+        let transcript = transcript_of(&model);
+        let console = cx.new(|cx| {
+            let mut area = TextAreaState::new(cx);
+            area.set_transcript(transcript, cx);
+            area
+        });
         let submit = cx.subscribe(
-            &console_input,
-            |this: &mut Shell, emitter, event: &SubmitEvent, cx| {
-                this.run(&event.text);
-                emitter.update(cx, |input, cx| input.clear(cx));
-                cx.notify();
+            &console,
+            |this: &mut Shell, _emitter, event: &SubmitEvent, cx| {
+                this.run(&event.text, cx);
             },
         );
         Self {
             model,
-            console_input,
-            console_scroll: ScrollHandle::new(),
+            console,
             _submit: submit,
         }
     }
 
     /// The console's focus handle, so the window can put the caret there at boot.
     pub fn console_focus_handle(&self, cx: &App) -> FocusHandle {
-        self.console_input.read(cx).focus_handle(cx)
+        self.console.read(cx).focus_handle(cx)
     }
 
     /// Select an object; the property editor is filled from the live model.
@@ -109,29 +115,34 @@ impl Shell {
         m.status = format!("selected {name}");
     }
 
-    /// Run a console snippet and refresh the tree (the model may have changed).
-    fn run(&mut self, code: &str) {
+    /// Run a console snippet, refresh the tree (the model may have changed), and
+    /// rebuild the transcript so the console text area shows the result and a
+    /// fresh prompt.
+    fn run(&mut self, code: &str, cx: &mut Context<Self>) {
         let result = python::evaluate(code);
         let tree = python::model_tree().unwrap_or_default();
-        let mut m = self.model.lock().unwrap();
-        m.console.push(format!(">>> {code}"));
-        match result {
-            Ok(r) => {
-                if !r.output.is_empty() {
-                    m.console.push(r.output);
+        {
+            let mut m = self.model.lock().unwrap();
+            m.console.push(format!(">>> {code}"));
+            match result {
+                Ok(r) => {
+                    if !r.output.is_empty() {
+                        m.console.push(r.output);
+                    }
+                    m.status = if r.ok {
+                        "ok".to_string()
+                    } else {
+                        "console error".to_string()
+                    };
                 }
-                m.status = if r.ok {
-                    "ok".to_string()
-                } else {
-                    "console error".to_string()
-                };
+                Err(e) => m.console.push(format!("error: {e}")),
             }
-            Err(e) => m.console.push(format!("error: {e}")),
+            m.tree = tree;
         }
-        m.tree = tree;
-        drop(m);
-        // New output arrives at the bottom; keep it in view.
-        self.console_scroll.scroll_to_bottom();
+        let transcript = transcript_of(&self.model);
+        self.console
+            .update(cx, |area, cx| area.set_transcript(transcript, cx));
+        cx.notify();
     }
 
     fn snapshot(&self) -> ShellModel {
@@ -319,32 +330,13 @@ fn console_button(
         .text_color(rgb(FG))
         .child(label.to_string())
         .on_click(cx.listener(move |this, _ev, _win, cx| {
-            this.run(&code);
-            cx.notify();
+            this.run(&code, cx);
         }))
 }
 
-/// The Python console: a log, an editable input line, and a few runnable snippets.
-fn console_panel(
-    model: &ShellModel,
-    input: &Entity<TextInput>,
-    scroll: &ScrollHandle,
-    cx: &mut Context<Shell>,
-) -> impl IntoElement {
-    let mut log = div()
-        .id("console-scroll")
-        .flex()
-        .flex_col()
-        .flex_1()
-        .min_h_0()
-        .px_2()
-        .py_1()
-        .overflow_y_scroll()
-        .track_scroll(scroll);
-    for line in &model.console {
-        log = log.child(div().text_xs().text_color(rgb(FG)).child(line.clone()));
-    }
-
+/// The Python console: one text area (scrollback plus prompt) and runnable
+/// snippets.
+fn console_panel(console: &Entity<TextAreaState>, cx: &mut Context<Shell>) -> impl IntoElement {
     let actions = div()
         .flex()
         .flex_row()
@@ -361,8 +353,7 @@ fn console_panel(
         .h(px(160.))
         .bg(rgb(PANEL))
         .child(panel_header("Python console"))
-        .child(log)
-        .child(input.clone())
+        .child(console.clone())
         .child(actions)
 }
 
@@ -418,12 +409,7 @@ impl Render for Shell {
                     .child(viewport)
                     .child(properties_panel(&model)),
             )
-            .child(console_panel(
-                &model,
-                &self.console_input,
-                &self.console_scroll,
-                cx,
-            ))
+            .child(console_panel(&self.console, cx))
             .child(status);
 
         crate::chrome::window_frame(window, model.title.clone(), content)

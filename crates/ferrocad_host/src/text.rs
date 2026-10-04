@@ -20,6 +20,12 @@ use std::ops::Range;
 use gpui::SharedString;
 use unicode_segmentation::UnicodeSegmentation;
 
+/// Emitted when the user presses `Enter` in an editable component.
+#[derive(Clone, Debug)]
+pub struct SubmitEvent {
+    pub text: String,
+}
+
 /// Text, selection and read-only boundary for one editable region.
 #[derive(Clone, Debug)]
 pub struct TextBuffer {
@@ -164,6 +170,33 @@ impl TextBuffer {
     pub fn insert(&mut self, text: &str) {
         let range = self.selected_range.clone();
         self.replace_range(range, text);
+    }
+
+    /// Replace `range` with `text` for the IME path, marking the inserted text
+    /// as composing and placing the selection relative to the insertion point.
+    pub fn replace_and_mark(
+        &mut self,
+        range: Range<usize>,
+        text: &str,
+        selection: Option<Range<usize>>,
+    ) {
+        let start = self.clamp(range.start);
+        let end = self.clamp(range.end).max(start);
+        self.content =
+            (self.content[0..start].to_owned() + text + &self.content[end..]).into();
+        self.marked_range = if text.is_empty() {
+            None
+        } else {
+            Some(start..start + text.len())
+        };
+        self.selected_range = match selection {
+            Some(relative) => (start + relative.start)..(start + relative.end),
+            None => {
+                let caret = start + text.len();
+                caret..caret
+            }
+        };
+        self.selection_reversed = false;
     }
 
     /// Delete the selection, or the grapheme before the caret. Returns whether

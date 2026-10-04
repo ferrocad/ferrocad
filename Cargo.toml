@@ -13,6 +13,7 @@ members = [
     "crates/ferrocad_gen",
     "crates/ferrocad_widgets",
     "crates/ferrocad_gpui",
+    "crates/xtask",
 ]
 # The GUI crates (`ferrocad_widgets`, `ferrocad_gpui`, `ferrocad`) are workspace
 # members so `-p <crate>` works, but they are excluded from `default-members`

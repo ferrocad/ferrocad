@@ -16,3 +16,5 @@ bite-gpui = { version = "1.21.0", features = ["test-support"] }
 pyo3 = { version = "0.25", features = ["auto-initialize"] }
 serde.workspace = true
 serde_json.workspace = true
+# Grapheme-aware caret movement in the editable text control.
+unicode-segmentation.workspace = true

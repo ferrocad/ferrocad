@@ -6,6 +6,7 @@
 //! window, the inspector / viewport-placeholder / property-editor / console
 //! layout, and the live interpreter wiring.
 
+mod input;
 mod python;
 mod shell;
 
@@ -24,19 +25,21 @@ use crate::shell::Shell;
 pub(crate) static PYTHON_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
 fn main() {
-    let shell = match Shell::boot() {
-        Ok(shell) => shell,
+    let model = match Shell::boot() {
+        Ok(model) => model,
         Err(e) => {
             eprintln!("ferrocad: failed to start: {e}");
             std::process::exit(1);
         }
     };
-    let model = shell.model();
 
     application().run(move |cx: &mut App| {
         let model = model.clone();
-        cx.open_window(window_options(), move |_window, cx| {
-            cx.new(|_| Shell::from_model(model.clone()))
+        cx.open_window(window_options(), move |window, cx| {
+            let shell = cx.new(|cx| Shell::from_model(model.clone(), cx));
+            let console = shell.read(cx).console_focus_handle(cx);
+            window.focus(&console, cx);
+            shell
         })
         .unwrap();
     });

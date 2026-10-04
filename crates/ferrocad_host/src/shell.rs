@@ -9,10 +9,12 @@
 use std::sync::{Arc, Mutex};
 
 use gpui::{
-    Bounds, Context, CursorStyle, Decorations, HitboxBehavior, IntoElement, MouseButton, Pixels,
-    Point, Render, ResizeEdge, SharedString, Size, Window, canvas, div, point, prelude::*, px, rgb,
+    App, Bounds, Context, CursorStyle, Decorations, Entity, FocusHandle, Focusable, HitboxBehavior,
+    IntoElement, MouseButton, Pixels, Point, Render, ResizeEdge, SharedString, Size, Subscription,
+    Window, canvas, div, point, prelude::*, px, rgb,
 };
 
+use crate::input::{SubmitEvent, TextInput};
 use crate::python::{self, Bootstrap, DocumentNode, PropRow};
 
 const BG: u32 = 0x101216;
@@ -38,11 +40,16 @@ pub struct ShellModel {
 
 pub struct Shell {
     model: Arc<Mutex<ShellModel>>,
+    /// The editable Python console line (S5's input, previewed here).
+    console_input: Entity<TextInput>,
+    _submit: Subscription,
 }
 
 impl Shell {
-    /// Boot the interpreter, create the sample document, and assemble the shell.
-    pub fn boot() -> Result<Self, String> {
+    /// Boot the interpreter, create the sample document, and return the model the
+    /// view is built from. The view itself is created with `from_model` because
+    /// entities (the console input) need an `App` context.
+    pub fn boot() -> Result<Arc<Mutex<ShellModel>>, String> {
         let boot: Bootstrap = python::bootstrap()?;
         let tree = python::model_tree().unwrap_or_default();
         let mut console = vec![format!(
@@ -55,27 +62,40 @@ impl Shell {
         }
         let objects: usize = tree.iter().map(|d| d.objects.len()).sum();
         let status = format!("{objects} object(s) · {}", boot.document);
-        Ok(Self {
-            model: Arc::new(Mutex::new(ShellModel {
-                title: format!("FerroCAD — {}", boot.document),
-                version: boot.version,
-                backend: boot.backend,
-                tree,
-                selected: None,
-                properties: Vec::new(),
-                console,
-                status,
-            })),
-        })
+        Ok(Arc::new(Mutex::new(ShellModel {
+            title: format!("FerroCAD — {}", boot.document),
+            version: boot.version,
+            backend: boot.backend,
+            tree,
+            selected: None,
+            properties: Vec::new(),
+            console,
+            status,
+        })))
     }
 
     /// Build a shell around an existing model (the window and tests use this).
-    pub fn from_model(model: Arc<Mutex<ShellModel>>) -> Self {
-        Self { model }
+    pub fn from_model(model: Arc<Mutex<ShellModel>>, cx: &mut Context<Self>) -> Self {
+        let console_input =
+            cx.new(|cx| TextInput::new(cx, ">>> type Python and press Enter"));
+        let submit = cx.subscribe(
+            &console_input,
+            |this: &mut Shell, emitter, event: &SubmitEvent, cx| {
+                this.run(&event.text);
+                emitter.update(cx, |input, cx| input.clear(cx));
+                cx.notify();
+            },
+        );
+        Self {
+            model,
+            console_input,
+            _submit: submit,
+        }
     }
 
-    pub fn model(&self) -> Arc<Mutex<ShellModel>> {
-        Arc::clone(&self.model)
+    /// The console's focus handle, so the window can put the caret there at boot.
+    pub fn console_focus_handle(&self, cx: &App) -> FocusHandle {
+        self.console_input.read(cx).focus_handle(cx)
     }
 
     /// Select an object; the property editor is filled from the live model.
@@ -283,8 +303,12 @@ fn console_button(
         }))
 }
 
-/// The Python console (S1: a log plus a few runnable snippets).
-fn console_panel(model: &ShellModel, cx: &mut Context<Shell>) -> impl IntoElement {
+/// The Python console: a log, an editable input line, and a few runnable snippets.
+fn console_panel(
+    model: &ShellModel,
+    input: &Entity<TextInput>,
+    cx: &mut Context<Shell>,
+) -> impl IntoElement {
     let mut log = div()
         .flex()
         .flex_col()
@@ -314,6 +338,7 @@ fn console_panel(model: &ShellModel, cx: &mut Context<Shell>) -> impl IntoElemen
         .bg(rgb(PANEL))
         .child(panel_header("Python console"))
         .child(log)
+        .child(input.clone())
         .child(actions)
 }
 
@@ -379,7 +404,7 @@ impl Render for Shell {
                     .child(viewport)
                     .child(properties_panel(&model)),
             )
-            .child(console_panel(&model, cx))
+            .child(console_panel(&model, &self.console_input, cx))
             .child(status);
 
         if !client_decorations {
@@ -537,8 +562,7 @@ mod tests {
             .lock()
             .unwrap_or_else(|e| e.into_inner());
 
-        let shell = Shell::boot().expect("boot shell");
-        let model = shell.model();
+        let model = Shell::boot().expect("boot shell");
         {
             let m = model.lock().unwrap();
             let doc = m
@@ -565,12 +589,29 @@ mod tests {
         let window = cx.update(|cx| {
             let model = model.clone();
             cx.open_window(Default::default(), move |_window, cx| {
-                cx.new(|_| Shell::from_model(model.clone()))
+                cx.new(|cx| Shell::from_model(model.clone(), cx))
             })
             .unwrap()
         });
         let mut cx = VisualTestContext::from_window(window.into(), cx);
-        let _root: Entity<Shell> = window.root(&mut cx).unwrap();
+        let shell: Entity<Shell> = window.root(&mut cx).unwrap();
+
+        // Typing in the console input and pressing Enter runs the line through the
+        // interpreter (S5 previewed): the log gains the echoed line and the result,
+        // and the field is cleared.
+        let console = shell.read_with(&cx, |shell, cx| shell.console_focus_handle(cx));
+        cx.update(|window, cx| window.focus(&console, cx));
+        cx.simulate_input("len(doc.Objects)");
+        cx.simulate_keystrokes("enter");
+        {
+            let m = model.lock().unwrap();
+            assert!(
+                m.console.iter().any(|l| l == ">>> len(doc.Objects)"),
+                "console: {:?}",
+                m.console
+            );
+            assert!(m.console.iter().any(|l| l == "3"), "console: {:?}", m.console);
+        }
     }
 
     /// Pure geometry: the resize-grip hit regions hug the border and leave the

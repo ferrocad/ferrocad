@@ -2219,6 +2219,7 @@ dependencies = [
  "pyo3",
  "serde",
  "serde_json",
+ "unicode-segmentation",
 ]
 
 [[package]]

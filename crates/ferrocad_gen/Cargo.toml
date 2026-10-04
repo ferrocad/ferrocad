@@ -3,6 +3,8 @@ name = "ferrocad_gen"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+# Generated skeleton bindings; shipped in the wheel, never to crates.io.
+publish = false
 description = "Generated PyO3 skeleton bindings from FreeCAD .pyi stubs (M3c)"
 
 [lib]

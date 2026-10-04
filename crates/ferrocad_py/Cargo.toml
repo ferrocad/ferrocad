@@ -3,6 +3,8 @@ name = "ferrocad_py"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+# Shipped in the maturin wheel, never to crates.io.
+publish = false
 description = "PyO3 bindings exposing ferrocad_core to Python (importable as `ferrocad`)"
 
 [lib]

@@ -221,6 +221,9 @@ Application artifacts (AppImage, `.dmg`, Windows zip) are built by
 Tagging `v*` runs [`.github/workflows/release.yml`](.github/workflows/release.yml),
 which verifies the tag against the workspace version, runs the tests, builds the
 three artifacts with the pinned Python runtime, and publishes a GitHub Release.
+The same tag runs [`.github/workflows/crates.yml`](.github/workflows/crates.yml),
+which publishes the library crates to crates.io (needs a `CARGO_REGISTRY_TOKEN`
+secret).
 
 ## Embedded Python (running scripts from Rust)
 

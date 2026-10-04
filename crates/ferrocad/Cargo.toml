@@ -2,6 +2,8 @@
 name = "ferrocad"
 # 0.0.0 is deliberate: this is a name reservation, not a release. See README.md.
 version = "0.0.0"
+# Not publishable yet: the app depends on ferrocad_gpui, which is unpublished.
+publish = false
 edition.workspace = true
 license.workspace = true
 readme = "README.md"

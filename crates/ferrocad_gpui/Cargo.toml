@@ -3,6 +3,8 @@ name = "ferrocad_gpui"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+# An application library; it ships inside the installer, not on crates.io.
+publish = false
 description = "FerroCAD's bite-gpui application shell: boots CPython and provides the window, panels and HostConfig"
 
 [dependencies]

@@ -8,10 +8,8 @@
 //!   placeholder, and later a width) and implements [`View`], returning the
 //!   state's id from `entity_id()` so the two share reactive identity.
 //!
-//! The shell does not use this yet; the console is a text area
-//! (`crate::textarea`). The property editor (S4) will draw an [`Edit`] per value.
-
-#![allow(dead_code)]
+//! The shell's property editor draws one [`Edit`] per editable property; the
+//! console is a text area (`crate::textarea`) instead.
 
 use gpui::{
     App, Bounds, ClipboardItem, Context, CursorStyle, Element, ElementId, ElementInputHandler,
@@ -57,22 +55,10 @@ impl TextInputState {
         }
     }
 
-    pub fn text(&self) -> &str {
-        self.buffer.content()
-    }
-
-    pub fn buffer(&self) -> &TextBuffer {
-        &self.buffer
-    }
-
     /// Replace the text and move the caret to the end.
     pub fn set_text(&mut self, text: impl Into<SharedString>, cx: &mut Context<Self>) {
         self.buffer.set_content(text);
         cx.notify();
-    }
-
-    pub fn clear(&mut self, cx: &mut Context<Self>) {
-        self.set_text("", cx);
     }
 
     fn backspace(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -614,7 +600,7 @@ mod tests {
     }
 
     fn content(state: &Entity<TextInputState>, cx: &VisualTestContext) -> String {
-        state.read_with(cx, |state, _| state.text().to_string())
+        state.read_with(cx, |state, _| state.buffer.content().to_string())
     }
 
     #[gpui::test]

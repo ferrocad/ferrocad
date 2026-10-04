@@ -6,13 +6,15 @@
 //! the live document through `python/ferrocad_shell`; richer widgets, commands
 //! and menus come in later slices (see `docs/app-shell-vision.md`).
 
+use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
 use gpui::{
-    App, Context, Entity, FocusHandle, Focusable, IntoElement, Render, SharedString, Subscription,
-    Window, div, prelude::*, px, rgb,
+    AnyElement, App, Context, Entity, FocusHandle, Focusable, IntoElement, Render, SharedString,
+    Subscription, ViewElement, Window, div, prelude::*, px, rgb,
 };
 
+use crate::input::{Edit, TextInputState};
 use crate::python::{self, Bootstrap, DocumentNode, PropRow};
 use crate::text::SubmitEvent;
 use crate::textarea::TextAreaState;
@@ -48,6 +50,15 @@ pub struct Shell {
     model: Arc<Mutex<ShellModel>>,
     /// The console transcript plus the live input line (S5's text area).
     console: Entity<TextAreaState>,
+    /// One uncontrolled field per editable property, keyed by `object.property`.
+    prop_inputs: HashMap<String, PropInput>,
+    _submit: Subscription,
+}
+
+/// An uncontrolled property field plus the value it was last seeded with.
+struct PropInput {
+    state: Entity<TextInputState>,
+    seeded: String,
     _submit: Subscription,
 }
 
@@ -97,6 +108,7 @@ impl Shell {
         Self {
             model,
             console,
+            prop_inputs: HashMap::new(),
             _submit: submit,
         }
     }
@@ -106,13 +118,96 @@ impl Shell {
         self.console.read(cx).focus_handle(cx)
     }
 
-    /// Select an object; the property editor is filled from the live model.
+    /// Select an object; the property editor is filled from the live model. The
+    /// property fields are dropped so they re-seed from the new object's values.
     fn select(&mut self, name: &str) {
         let properties = python::properties(name).unwrap_or_default();
+        self.prop_inputs.clear();
         let mut m = self.model.lock().unwrap();
         m.selected = Some(name.to_string());
         m.properties = properties;
         m.status = format!("selected {name}");
+    }
+
+    /// Re-read the tree and the selected object's properties after a change.
+    fn refresh(&mut self, cx: &mut Context<Self>) {
+        let selected = self.model.lock().unwrap().selected.clone();
+        let tree = python::model_tree().unwrap_or_default();
+        let properties = selected
+            .as_deref()
+            .map(|name| python::properties(name).unwrap_or_default())
+            .unwrap_or_default();
+        {
+            let mut m = self.model.lock().unwrap();
+            m.tree = tree;
+            m.properties = properties;
+        }
+        cx.notify();
+    }
+
+    /// Get the field for a property, creating it (and its submit subscription) on
+    /// first use. The field is re-seeded from the model when the value changed
+    /// underneath and the user is not editing it.
+    fn ensure_prop_input(
+        &mut self,
+        key: &str,
+        value: &str,
+        window: &Window,
+        cx: &mut Context<Self>,
+    ) -> Entity<TextInputState> {
+        if let Some(input) = self.prop_inputs.get_mut(key) {
+            let focused = input.state.read(cx).focus_handle(cx).is_focused(window);
+            if input.seeded != value && !focused {
+                input
+                    .state
+                    .update(cx, |state, cx| state.set_text(value.to_string(), cx));
+                input.seeded = value.to_string();
+            }
+            return input.state.clone();
+        }
+
+        let state = cx.new(|cx| {
+            let mut state = TextInputState::new(cx);
+            state.set_text(value.to_string(), cx);
+            state
+        });
+        let key = key.to_string();
+        let key_for_submit = key.clone();
+        let submit = cx.subscribe(
+            &state,
+            move |this: &mut Shell, _emitter, event: &SubmitEvent, cx| {
+                this.commit_property(&key_for_submit, &event.text, cx);
+            },
+        );
+        self.prop_inputs.insert(
+            key,
+            PropInput {
+                state: state.clone(),
+                seeded: value.to_string(),
+                _submit: submit,
+            },
+        );
+        state
+    }
+
+    /// Commit a property field: one filtered edit inside one transaction.
+    fn commit_property(&mut self, key: &str, text: &str, cx: &mut Context<Self>) {
+        let Some((object, property)) = key.split_once('.') else {
+            return;
+        };
+        let status = match python::set_property(object, property, text) {
+            Ok(result) if result.ok => {
+                if let Some(input) = self.prop_inputs.get_mut(key) {
+                    input.seeded = text.to_string();
+                }
+                self.refresh(cx);
+                format!("set {key}")
+            }
+            Ok(result) => format!("property error: {}", result.error),
+            Err(e) => format!("property error: {e}"),
+        };
+        self.model.lock().unwrap().status = status;
+        cx.notify();
     }
 
     /// Run a console snippet, refresh the tree (the model may have changed), and
@@ -120,7 +215,6 @@ impl Shell {
     /// fresh prompt.
     fn run(&mut self, code: &str, cx: &mut Context<Self>) {
         let result = python::evaluate(code);
-        let tree = python::model_tree().unwrap_or_default();
         {
             let mut m = self.model.lock().unwrap();
             m.console.push(format!(">>> {code}"));
@@ -137,8 +231,9 @@ impl Shell {
                 }
                 Err(e) => m.console.push(format!("error: {e}")),
             }
-            m.tree = tree;
         }
+        // A console line can add objects or change values; re-read the model.
+        self.refresh(cx);
         let transcript = transcript_of(&self.model);
         self.console
             .update(cx, |area, cx| area.set_transcript(transcript, cx));
@@ -222,8 +317,14 @@ fn tree_panel(model: &ShellModel, cx: &mut Context<Shell>) -> impl IntoElement {
         .child(rows)
 }
 
-/// The property editor (S1: read-only rows for the selected object).
-fn properties_panel(model: &ShellModel) -> impl IntoElement {
+/// The property editor: read-only rows plus an uncontrolled field for each
+/// editable property.
+fn properties_panel(
+    shell: &mut Shell,
+    model: &ShellModel,
+    window: &Window,
+    cx: &mut Context<Shell>,
+) -> impl IntoElement {
     let mut rows = div()
         .id("properties-scroll")
         .flex()
@@ -253,16 +354,34 @@ fn properties_panel(model: &ShellModel) -> impl IntoElement {
                     .child(name.clone()),
             );
             for row in &model.properties {
-                let value = if row.status.is_empty() {
-                    row.value.clone()
+                let value: AnyElement = if row.editable {
+                    let key = format!("{name}.{}", row.name);
+                    let state = shell.ensure_prop_input(&key, &row.value, window, cx);
+                    div()
+                        .w(px(150.))
+                        .flex_shrink_0()
+                        .child(ViewElement::new(Edit::new(state, "")))
+                        .into_any_element()
                 } else {
-                    format!("{}  [{}]", row.value, row.status)
+                    let value = if row.status.is_empty() {
+                        row.value.clone()
+                    } else {
+                        format!("{}  [{}]", row.value, row.status)
+                    };
+                    div()
+                        .min_w_0()
+                        .truncate()
+                        .text_xs()
+                        .text_color(rgb(MUTED))
+                        .child(value)
+                        .into_any_element()
                 };
+
                 rows = rows.child(
                     div()
                         .flex()
                         .flex_row()
-                        .justify_between()
+                        .items_center()
                         .gap_2()
                         .px_2()
                         .py_1()
@@ -272,6 +391,7 @@ fn properties_panel(model: &ShellModel) -> impl IntoElement {
                                 .flex()
                                 .flex_row()
                                 .gap_1()
+                                .flex_1()
                                 .min_w_0()
                                 .child(
                                     div()
@@ -289,14 +409,7 @@ fn properties_panel(model: &ShellModel) -> impl IntoElement {
                                         .child(row.type_id.clone()),
                                 ),
                         )
-                        .child(
-                            div()
-                                .min_w_0()
-                                .truncate()
-                                .text_xs()
-                                .text_color(rgb(MUTED))
-                                .child(value),
-                        ),
+                        .child(value),
                 );
             }
         }
@@ -407,7 +520,7 @@ impl Render for Shell {
                     .min_h_0()
                     .child(tree_panel(&model, cx))
                     .child(viewport)
-                    .child(properties_panel(&model)),
+                    .child(properties_panel(self, &model, window, cx)),
             )
             .child(console_panel(&self.console, cx))
             .child(status);
@@ -480,5 +593,69 @@ mod tests {
             );
             assert!(m.console.iter().any(|l| l == "3"), "console: {:?}", m.console);
         }
+    }
+
+    /// Slice E: an uncontrolled property field commits on Enter, inside a named
+    /// transaction, and the change propagates through recompute.
+    #[gpui::test]
+    fn editing_a_property_commits_in_a_transaction(cx: &mut TestAppContext) {
+        let _guard = crate::PYTHON_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+
+        let model = Shell::boot().expect("boot shell");
+        let window = cx.update(|cx| {
+            let model = model.clone();
+            cx.open_window(Default::default(), move |_window, cx| {
+                cx.new(|cx| Shell::from_model(model.clone(), cx))
+            })
+            .unwrap()
+        });
+        let mut cx = VisualTestContext::from_window(window.into(), cx);
+        let shell: Entity<Shell> = window.root(&mut cx).unwrap();
+
+        // Select Params so the editor builds one field per editable property.
+        cx.update(|_window, cx| {
+            shell.update(cx, |shell, cx| {
+                shell.select("Params");
+                cx.notify();
+            });
+        });
+
+        let field = shell.read_with(&cx, |shell, _| {
+            shell
+                .prop_inputs
+                .get("Params.Length")
+                .expect("Length field")
+                .state
+                .clone()
+        });
+        cx.update(|window, cx| window.focus(&field.read(cx).focus_handle(cx), cx));
+        cx.simulate_keystrokes("cmd-a");
+        cx.simulate_input("25 mm");
+        cx.simulate_keystrokes("enter");
+
+        // The selected object's row reflects the committed value...
+        let length = shell.read_with(&cx, |shell, _| {
+            shell
+                .model
+                .lock()
+                .unwrap()
+                .properties
+                .iter()
+                .find(|row| row.name == "Length")
+                .map(|row| row.value.clone())
+        });
+        assert!(
+            length.as_deref().unwrap_or_default().contains("25"),
+            "Length = {length:?}"
+        );
+
+        // ...and recompute propagated it to the expression-driven other object.
+        let derived = crate::python::properties("Derived").expect("properties");
+        let result = derived
+            .iter()
+            .find(|row| row.name == "Result")
+            .map(|row| row.value.clone())
+            .unwrap_or_default();
+        assert!(result.contains("50"), "Derived.Result = {result:?}");
     }
 }

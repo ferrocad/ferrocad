@@ -17,6 +17,19 @@ import FreeCAD
 # The namespace the console evaluates in; populated by :func:`bootstrap`.
 _NAMESPACE: dict = {}
 
+# Property type id -> editor kind. A type absent here is read-only in the pane.
+_EDITABLE_KINDS = {
+    "App::PropertyString": "text",
+    "App::PropertyBool": "bool",
+    "App::PropertyInteger": "int",
+    "App::PropertyFloat": "float",
+    "App::PropertyLength": "quantity",
+    "App::PropertyDistance": "quantity",
+    "App::PropertyAngle": "quantity",
+    "App::PropertyQuantity": "quantity",
+    "App::PropertyEnumeration": "enum",
+}
+
 
 def _json(payload) -> str:
     return json.dumps(payload)
@@ -85,12 +98,26 @@ def model_tree() -> str:
     return _json(docs)
 
 
+def _expression_properties(obj) -> set:
+    """Names of properties that are driven by an expression (not freely settable)."""
+    try:
+        return {name for name, _ in obj.ExpressionEngine}
+    except Exception:
+        return set()
+
+
 def properties(object_name: str) -> str:
-    """Read-only property rows for one object, for the property editor pane."""
+    """Property rows for one object, for the property editor pane.
+
+    ``editable`` marks a property the editor can change, and ``kind`` selects the
+    control (and the coercion in :func:`set_property`). A property set by an
+    expression is read-only, because a recompute would overwrite the edit.
+    """
     doc = _active_doc()
     obj = doc.getObject(object_name)
     if obj is None:
         return _json([])
+    driven = _expression_properties(obj)
     rows = []
     for prop in obj.PropertiesList:
         try:
@@ -101,15 +128,68 @@ def properties(object_name: str) -> str:
             status = ", ".join(obj.getTypeOfProperty(prop))
         except Exception:
             status = ""
+        type_id = obj.getTypeIdOfProperty(prop)
+        kind = _EDITABLE_KINDS.get(type_id, "")
         rows.append(
             {
                 "name": prop,
-                "type": obj.getTypeIdOfProperty(prop),
+                "type": type_id,
                 "value": str(value),
                 "status": status,
+                "editable": bool(kind) and prop not in driven,
+                "kind": kind,
             }
         )
     return _json(rows)
+
+
+def _coerce(kind: str, text: str):
+    """Turn an editor string into the Python value a property setter expects."""
+    if kind in ("text", "enum"):
+        return text
+    if kind == "bool":
+        return text.strip().lower() in ("1", "true", "yes", "on")
+    if kind == "int":
+        return int(float(text))
+    if kind == "float":
+        return float(text)
+    if kind == "quantity":
+        return FreeCAD.Units.Quantity(text)
+    raise ValueError(f"unsupported editor kind {kind!r}")
+
+
+def set_property(object_name: str, prop: str, text: str) -> str:
+    """Set one property from its editor string, in a named transaction.
+
+    Returns ``{"ok": bool, "error": str}``. The transaction makes the edit a
+    single undo step; recompute then propagates it (for example to an
+    expression-driven property elsewhere in the document).
+    """
+    doc = _active_doc()
+    obj = doc.getObject(object_name)
+    if obj is None:
+        return _json({"ok": False, "error": f"no object {object_name!r}"})
+    if prop not in obj.PropertiesList:
+        return _json({"ok": False, "error": f"no property {prop!r}"})
+    kind = _EDITABLE_KINDS.get(obj.getTypeIdOfProperty(prop), "")
+    if not kind:
+        return _json({"ok": False, "error": f"{prop} is not editable"})
+    if prop in _expression_properties(obj):
+        return _json({"ok": False, "error": f"{prop} is set by an expression"})
+    try:
+        value = _coerce(kind, text)
+    except Exception as exc:
+        return _json({"ok": False, "error": str(exc)})
+
+    doc.openTransaction(f"Edit {prop}")
+    try:
+        setattr(obj, prop, value)
+    except Exception as exc:
+        doc.abortTransaction()
+        return _json({"ok": False, "error": str(exc)})
+    doc.commitTransaction()
+    doc.recompute()
+    return _json({"ok": True, "error": ""})
 
 
 def evaluate(code: str) -> str:

@@ -44,6 +44,22 @@ pub struct PropRow {
     pub type_id: String,
     pub value: String,
     pub status: String,
+    /// Whether the editor can change this property.
+    #[serde(default)]
+    pub editable: bool,
+    /// The editor kind (`text`, `bool`, `int`, `float`, `quantity`, `enum`).
+    /// Used to pick the control once the editor has more than a text field.
+    #[serde(default)]
+    #[allow(dead_code)]
+    pub kind: String,
+}
+
+/// The outcome of a property edit.
+#[derive(Debug, Clone, Deserialize)]
+pub struct SetResult {
+    pub ok: bool,
+    #[serde(default)]
+    pub error: String,
 }
 
 /// The outcome of evaluating a console line.
@@ -136,4 +152,20 @@ pub fn properties(object: &str) -> Result<Vec<PropRow>, String> {
 
 pub fn evaluate(code: &str) -> Result<EvalResult, String> {
     call_json("evaluate", Some(code))
+}
+
+/// Set one property from its editor string. The Python side wraps the change in
+/// a named transaction and recomputes.
+pub fn set_property(object: &str, property: &str, value: &str) -> Result<SetResult, String> {
+    let raw = Python::with_gil(|py| -> Result<String, String> {
+        let module = py.import("ferrocad_shell").map_err(|e| e.to_string())?;
+        module
+            .getattr("set_property")
+            .map_err(|e| e.to_string())?
+            .call1((object, property, value))
+            .map_err(|e| e.to_string())?
+            .extract::<String>()
+            .map_err(|e| e.to_string())
+    })?;
+    serde_json::from_str(&raw).map_err(|e| e.to_string())
 }

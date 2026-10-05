@@ -302,7 +302,73 @@ that make those links meaningful after a rebuild.
 
 ---
 
-## 9. What to freeze now, and what to defer
+## 9. The Lineage Engine and the selection translation layer (future)
+
+There is a second consumer of lineage that only appears once there is a GUI:
+**selection**. A user clicks a face in the viewport, and a command must turn that
+geometric pick into a named, storable reference, then into the OCCT sub-shape the
+operation runs on. Scripts do not need this step, which is exactly why the engine
+can ship before it.
+
+### Why scripts bypass it
+
+The Python path never picks; it *names*. A script writes `obj.Axis = (ref, ["Face6"])`
+or calls `Part.makeFillet(shape, ["Edge3"])`; the name is supplied by the developer,
+and our current API stores and resolves it directly (`LinkSub`, `getSubObject`).
+That direct wiring is correct for the headless engine and should stay: the `FreeCAD`
+API is the contract, and routing scripts through a GUI-oriented layer would be
+inversion for no benefit.
+
+### Why GUI clicks need a translation layer
+
+A pick carries geometry, not a name. In FreeCAD the view provider closes the gap:
+
+| Direction | Function | Meaning |
+| --- | --- | --- |
+| pick → name | `ViewProviderPartExt::getElement(const SoDetail*)` | Coin `SoFaceDetail`/`SoLineDetail`/`SoPointDetail` → `"FaceN"`/`"EdgeN"`/`"VertexN"` |
+| name → pick | `ViewProviderPartExt::getDetail(const char*)` | inverse, used to highlight a named element |
+| name → shape | `TopoShape::getSubShape(name)` | resolve a name to the OCCT sub-shape |
+| name → operation input | `Part::Feature::getShape(obj, ShapeOption::NeedSubElement \| ResolveLink, name)` | feed a sub-shape to a command |
+
+The mapping is not a trivial index. Edges with no polyline are omitted from the
+line set, so the render index and the topological edge index differ
+(`SoBrepEdgeSet::edgeIndexFromLine`). That is the kind of detail that must live in
+one place rather than be rediscovered per workbench.
+
+### The proposed component
+
+A **Lineage Engine**: a document-level service that owns the element maps and
+answers both directions consistently across rebuilds.
+
+- **name → shape**: resolve a stored reference to a current sub-shape.
+- **pick → name**: turn a hit (an object plus a sub-shape or a render index) into a
+  stable reference, the string a script *would* have written.
+- **keep them consistent**: update the maps when a feature rebuilds, so a reference
+  recorded before an edit still resolves after it.
+
+It must be Coin-agnostic and OCCT-agnostic. The viewport hands it an opaque "hit"
+and gets back a reference; the kernel is reached through the `GeometryEngine` seam
+(§6), not called directly. The scene graph (M6) needs the same map to draw a
+selection, so the translation layer is shared between *selecting* and *highlighting*,
+not owned by either.
+
+```mermaid
+flowchart LR
+    Pick["Coin pick"] --> TL["Translation layer"]
+    TL --> LE["Lineage Engine"]
+    Ref["Stored reference"] --> LE
+    LE --> Map["Element maps"]
+    LE --> Eng["GeometryEngine (OCCT)"]
+    LE --> Hi["Highlight"]
+```
+
+This component is deliberately deferred: it is wanted eventually, to translate GUI
+clicks into kernel references through a translation layer, while scripts keep wiring
+those references directly today.
+
+---
+
+## 10. What to freeze now, and what to defer
 
 Do now (unaffected by geometry, and mostly already done):
 
@@ -321,6 +387,8 @@ Do next, deliberately, when geometry is scheduled:
 3. OCCT engine behind a feature flag + a first real feature (box, maybe fuse) and its
    element map; conformance against upstream `Part` tests.
 4. Lineage-aware `getSubObject` and `LinkSub` resolution.
+5. The **Lineage Engine** and its selection translation layer (§9), once a viewport
+   exists and clicks have to become references.
 
 Do **not** do yet:
 
@@ -332,7 +400,7 @@ Do **not** do yet:
 
 ---
 
-## 10. Premises, checked
+## 11. Premises, checked
 
 | Premise from the discussion | Verdict |
 | --- | --- |
@@ -345,7 +413,7 @@ Do **not** do yet:
 
 ---
 
-## 11. Open questions
+## 12. Open questions
 
 - Which OCCT Rust binding, and which OCCT version. Verify before committing.
 - Static or dynamic OCCT, and how it lands in each packaging artifact.
@@ -359,3 +427,9 @@ Do **not** do yet:
   object.
 - Whether the first geometry feature ships before or after the scene graph (M6). The
   naming work has no dependency on rendering, so geometry can precede the viewport.
+- Where the Lineage Engine lives: a document-level service in `ferrocad_core` (which
+  would then know about shape handles) or a crate beside `ferrocad_geom`. This is the
+  same leaf-boundary question as the `GeometryEngine` trait placement (§6).
+- Whether the selection translation layer is part of M6 (scene graph) or of the
+  geometry track. It is shared by both, which is an argument for putting it with the
+  Lineage Engine rather than with either consumer.

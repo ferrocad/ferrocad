@@ -1,188 +1,84 @@
-//! Rust OCCT binding spike: build, fuse, fillet, and read shape history.
+//! Rust OCCT spike using the real binding crate (`opencascade-sys` 0.3,
+//! bschwind/opencascade-rs).
 //!
-//! This is the Rust rewrite of `../occt-history/probe.cpp`. It drives OCCT through
-//! the small C ABI in `shim/`, which is the part a future `ferrocad_geom_occt`
-//! would own. The point is not the geometry; it is to see whether shape history
-//! (`Modified`/`Generated`/`Deleted`) survives the Rust <-> OCCT boundary and is
-//! usable to build an element map. See `../../docs/occt-history-spike.md`.
+//! It mirrors the C++ probe: build two boxes, fuse and cut them, count
+//! sub-shapes, fillet an edge, and report what **history** the binding exposes.
+//! The finding is the point, not the geometry.
 //!
-//! Build/run (OCCT 7.8+ required):
-//!   cargo run --release
+//! What the binding covers (verified against the 0.3.0 sources):
+//!   * primitives, booleans, fillet/chamfer, `TopExp::MapShapes`, `TopoDS`
+//!     downcasts, `TopTools_IndexedMapOfShape::{Extent,FindKey}`.
+//! What it does NOT cover:
+//!   * `BRepBuilderAPI_MakeShape::{Modified,IsDeleted}` and `BRepTools_History`.
+//!     Only `BRepAlgoAPI_Cut::Generated` is bridged. So the binding can build
+//!     geometry but cannot hand us the lineage an element map needs.
+//!
+//! See ../../docs/occt-history-spike.md §7 for the implication and the minimal
+//! bridge addition this suggests.
 
-use std::ffi::c_int;
+use opencascade_sys as ffi;
 
-/// Opaque OCCT shape, owned by the shim.
-#[repr(C)]
-struct OcctShape {
-    _private: [u8; 0],
+use ffi::top_abs::TopAbs_ShapeEnum;
+use ffi::topo_ds::TopoDS_Shape;
+
+/// Count the sub-shapes of `kind` using the binding's `TopExp::MapShapes`.
+fn count(shape: &TopoDS_Shape, kind: TopAbs_ShapeEnum) -> i32 {
+    let mut map = ffi::top_tools::new_indexed_map_of_shape();
+    ffi::top_exp::TopExp::MapShapes(shape, kind, map.pin_mut());
+    map.Extent()
 }
 
-/// Opaque operation history, owned by the shim.
-#[repr(C)]
-struct OcctHistory {
-    _private: [u8; 0],
-}
-
-extern "C" {
-    fn occt_make_box(
-        x: f64,
-        y: f64,
-        z: f64,
-        dx: f64,
-        dy: f64,
-        dz: f64,
-    ) -> *mut OcctShape;
-    fn occt_fuse(
-        a: *const OcctShape,
-        b: *const OcctShape,
-        history_out: *mut *mut OcctHistory,
-    ) -> *mut OcctShape;
-    fn occt_fillet(
-        shape: *const OcctShape,
-        edge_ordinal: c_int,
-        radius: f64,
-        history_out: *mut *mut OcctHistory,
-    ) -> *mut OcctShape;
-    fn occt_shape_free(shape: *mut OcctShape);
-    fn occt_history_free(history: *mut OcctHistory);
-    fn occt_shape_count(shape: *const OcctShape, kind: c_int) -> c_int;
-    fn occt_history_modified(
-        history: *const OcctHistory,
-        input: *const OcctShape,
-        kind: c_int,
-        ordinal: c_int,
-    ) -> c_int;
-    fn occt_history_generated(
-        history: *const OcctHistory,
-        input: *const OcctShape,
-        kind: c_int,
-        ordinal: c_int,
-    ) -> c_int;
-    fn occt_history_deleted(
-        history: *const OcctHistory,
-        input: *const OcctShape,
-        kind: c_int,
-        ordinal: c_int,
-    ) -> c_int;
-}
-
-const SOLID: c_int = 0;
-const FACE: c_int = 1;
-const EDGE: c_int = 2;
-const VERTEX: c_int = 3;
-
-/// RAII wrapper: frees the OCCT shape on drop.
-struct Shape(*mut OcctShape);
-impl Shape {
-    fn ptr(&self) -> *const OcctShape {
-        self.0
-    }
-}
-impl Drop for Shape {
-    fn drop(&mut self) {
-        unsafe { occt_shape_free(self.0) }
-    }
-}
-
-/// RAII wrapper: frees the OCCT history on drop.
-struct History(*mut OcctHistory);
-impl History {
-    fn ptr(&self) -> *const OcctHistory {
-        self.0
-    }
-}
-impl Drop for History {
-    fn drop(&mut self) {
-        unsafe { occt_history_free(self.0) }
-    }
-}
-
-fn kind_name(kind: c_int) -> &'static str {
-    match kind {
-        SOLID => "Solid",
-        FACE => "Face",
-        EDGE => "Edge",
-        _ => "Vertex",
-    }
-}
-
-fn print_counts(label: &str, shape: &Shape) {
-    print!("{label}:");
-    for kind in [SOLID, FACE, EDGE, VERTEX] {
-        let n = unsafe { occt_shape_count(shape.ptr(), kind) };
-        print!(" {n} {}s", kind_name(kind));
-    }
-    println!();
-}
-
-/// One line per input sub-shape: what did the operation do to it?
-fn report_history(phase: &str, history: &History, input: &Shape, kind: c_int) {
-    let n = unsafe { occt_shape_count(input.ptr(), kind) };
+fn print_counts(label: &str, shape: &TopoDS_Shape) {
     println!(
-        "-- {phase} history over {n} {}s of the input:",
-        kind_name(kind)
+        "{label}: {} solids, {} faces, {} edges, {} vertices",
+        count(shape, TopAbs_ShapeEnum::TopAbs_SOLID),
+        count(shape, TopAbs_ShapeEnum::TopAbs_FACE),
+        count(shape, TopAbs_ShapeEnum::TopAbs_EDGE),
+        count(shape, TopAbs_ShapeEnum::TopAbs_VERTEX),
     );
-    for ordinal in 1..=n {
-        let modified = unsafe { occt_history_modified(history.ptr(), input.ptr(), kind, ordinal) };
-        let generated = unsafe { occt_history_generated(history.ptr(), input.ptr(), kind, ordinal) };
-        let deleted = unsafe { occt_history_deleted(history.ptr(), input.ptr(), kind, ordinal) };
-
-        let mut tags = String::new();
-        if deleted > 0 {
-            tags.push_str(" DELETED");
-        }
-        if modified > 0 {
-            tags.push_str(&format!(" Modified->{modified}"));
-        }
-        if generated > 0 {
-            tags.push_str(&format!(" Generated->{generated}"));
-        }
-        if tags.is_empty() {
-            tags.push_str(" unchanged/unreported");
-        }
-        println!("   {}{ordinal}:{tags}", kind_name(kind));
-    }
 }
 
 fn main() {
-    println!("OCCT history probe (Rust)\n=========================");
+    println!("OCCT history probe (Rust, opencascade-sys)\n==========================================");
 
-    let a = Shape(unsafe { occt_make_box(0.0, 0.0, 0.0, 10.0, 10.0, 10.0) });
-    let b = Shape(unsafe { occt_make_box(5.0, 0.0, 0.0, 10.0, 10.0, 10.0) });
+    // --- primitives -----------------------------------------------------------
+    let mut a = ffi::b_rep_prim_api::BRepPrimAPI_MakeBox_new(&ffi::gp::new_point(0.0, 0.0, 0.0), 10.0, 10.0, 10.0);
+    let mut b = ffi::b_rep_prim_api::BRepPrimAPI_MakeBox_new(&ffi::gp::new_point(5.0, 0.0, 0.0), 10.0, 10.0, 10.0);
+    let a_shape = a.pin_mut().Shape();
+    let b_shape = b.pin_mut().Shape();
 
     println!("\n== inputs ==");
-    print_counts("box a", &a);
-    print_counts("box b", &b);
+    print_counts("box a", a_shape);
+    print_counts("box b", b_shape);
 
-    let mut fuse_history: *mut OcctHistory = std::ptr::null_mut();
-    let fused = Shape(unsafe { occt_fuse(a.ptr(), b.ptr(), &mut fuse_history) });
-    if fused.0.is_null() || fuse_history.is_null() {
-        eprintln!("fuse failed");
-        std::process::exit(2);
-    }
-    let fuse_history = History(fuse_history);
-
+    // --- fuse -----------------------------------------------------------------
+    let mut fuse = ffi::b_rep_algo_api::BRepAlgoAPI_Fuse_new(a_shape, b_shape);
+    let fused = fuse.pin_mut().Shape();
     println!("\n== fuse output ==");
-    print_counts("fused", &fused);
+    print_counts("fused", fused);
 
-    report_history("FUSE", &fuse_history, &a, FACE);
-    report_history("FUSE", &fuse_history, &a, EDGE);
-    report_history("FUSE", &fuse_history, &b, FACE);
-    report_history("FUSE", &fuse_history, &b, EDGE);
-
-    let mut fillet_history: *mut OcctHistory = std::ptr::null_mut();
-    let filleted = Shape(unsafe { occt_fillet(fused.ptr(), 1, 1.0, &mut fillet_history) });
-    if filleted.0.is_null() || fillet_history.is_null() {
-        eprintln!("fillet failed");
-        std::process::exit(3);
+    // --- fillet one edge ------------------------------------------------------
+    let mut edges = ffi::top_exp::TopExp_Explorer_new(fused, TopAbs_ShapeEnum::TopAbs_EDGE);
+    let mut fillet = ffi::b_rep_fillet_api::BRepFilletAPI_MakeFillet_new(fused);
+    if edges.More() {
+        let edge = ffi::topo_ds::TopoDS::Edge(edges.Current());
+        fillet.pin_mut().add_edge(1.0, edge);
     }
-    let fillet_history = History(fillet_history);
-
+    let rounded = fillet.pin_mut().Shape();
     println!("\n== fillet output ==");
-    print_counts("filleted", &filleted);
-    report_history("FILLET", &fillet_history, &fused, FACE);
-    report_history("FILLET", &fillet_history, &fused, EDGE);
+    print_counts("filleted", rounded);
 
-    println!("\n(note: OCCT never names elements; only history is reported)");
-    println!("(a stable element map is our code, built from this history)");
+    // --- history: the one call the binding exposes ----------------------------
+    // `Generated` is bridged only on `BRepAlgoAPI_Cut`, not on `Fuse`, and
+    // `Modified`/`IsDeleted`/`BRepTools_History` are not bridged at all.
+    let mut cut = ffi::b_rep_algo_api::BRepAlgoAPI_Cut_new(a_shape, b_shape);
+    let generated = cut.pin_mut().Generated(a_shape);
+    println!("\n== history exposed by opencascade-sys 0.3.0 ==");
+    println!("BRepAlgoAPI_Cut::Generated(a) -> {} shape(s)", generated.Size());
+    println!("BRepAlgoAPI_Fuse::Modified/Generated/IsDeleted -> not bridged");
+    println!("BRepTools_History, BRepAlgoAPI_BuilderAlgo::History   -> not bridged");
+
+    println!("\nConclusion: the binding builds geometry, but a stable element map");
+    println!("needs ~a dozen extra bridge functions over BRepBuilderAPI_MakeShape");
+    println!("(Modified/Generated/IsDeleted) and TopExp traversal. See the report.");
 }

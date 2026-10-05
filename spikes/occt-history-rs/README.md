@@ -1,59 +1,82 @@
-# Spike: OCCT from Rust (shape history)
+# Spike: OCCT from Rust with a real binding crate
 
-The Rust rewrite of [`../occt-history/probe.cpp`](../occt-history/probe.cpp). Same
-experiment, same question: **does shape history survive the Rust <-> OCCT boundary,
-in a form we can build an element map from?**
+The Rust rewrite of [`../occt-history/probe.cpp`](../occt-history/probe.cpp),
+using the existing [`opencascade-sys`](https://crates.io/crates/opencascade-sys)
+crate (bschwind/opencascade-rs). No hand-rolled binding.
 
-## Why a hand-rolled C ABI, not a bindings crate
+Same question: **does shape history survive into Rust?** The answer turns out to be
+about the *crate's coverage*, and it is the important finding.
 
-OCCT is C++ with no C ABI. Two ways to reach it from Rust:
+## Install
 
-| Approach | Pro | Con (for this spike) |
-| --- | --- | --- |
-| Existing crate (`opencascade-rs`, `occt-sys`, …) | Less glue to write | Coverage of **history** is unknown and unverifiable offline; history is the whole point, and stock wrappers may expose only the geometry, not `Modified`/`Generated`/`IsDeleted` |
-| Hand-rolled C ABI (this spike) | We control exactly which OCCT calls cross the boundary; it doubles as the first sketch of `ferrocad_geom_occt` | More glue (a small `shim.cpp` + `extern "C"` declarations) |
-
-Since history is the crux and we cannot check a crate's coverage without network,
-the spike binds the handful of calls by hand. The shim is ~120 lines; the Rust side
-is the probe. If a crate later turns out to expose history well, it can replace the
-shim behind the same seam.
-
-## The shim surface
-
-`shim/occt_shim.{h,cpp}` exposes opaque `OcctShape`/`OcctHistory` handles and:
-
-- `occt_make_box`, `occt_fuse`, `occt_fillet` (each returns a shape + history);
-- `occt_shape_count(shape, kind)`;
-- `occt_history_{modified,generated,deleted}(history, input, kind, ordinal)`.
-
-The OCCT classes behind it (`BRepAlgoAPI_Fuse`, `BRepFilletAPI_MakeFillet`,
-`BRepBuilderAPI_MakeShape::Modified/Generated/IsDeleted`, `TopExp::MapShapes`) are
-the same ones FreeCAD's element mapper consumes.
-
-## Build and run
-
-Requires OCCT **7.8+** dev headers and libraries.
+OCCT **>= 7.8** dev libraries plus a C++ toolchain and CMake. On Debian/Ubuntu:
 
 ```sh
-# Debian/Ubuntu:  sudo apt-get install -y libocct-*-dev
-# conda:          conda install -c conda-forge occt
-cargo run --release
-# If OCCT is not in the default prefix:
-#   OCCT_INCLUDE_DIR=/opt/occt/include OCCT_LIB_DIR=/opt/occt/lib cargo run --release
+sudo apt-get install -y \
+  cmake clang pkg-config \
+  libocct-foundation-dev \
+  libocct-modeling-data-dev \
+  libocct-modeling-algorithms-dev \
+  libocct-data-exchange-dev \
+  libocct-ocaf-dev \
+  libocct-visualization-dev \
+  occt-misc
 ```
 
-**Untested in the authoring sandbox**: that environment has no OCCT, no network, and
-`sudo` requires a password, so this crate was never compiled there. The OCCT calls
-mirror the verified C++ probe; the Rust/`cc` wiring is written against `cc` 1.x.
+That covers every toolkit `opencascade-sys` links (`TKernel`, `TKMath`, `TKBRep`,
+`TKTopAlgo`, `TKPrim`, `TKBO`, `TKBool`, `TKFillet`, `TKOffset`, `TKShHealing`,
+`TKGeomBase`, `TKGeomAlgo`, `TKG2d`, `TKG3d`, `TKDE`, `TKDESTEP`, `TKDEIGES`,
+`TKDESTL`, `TKXSBase`, `TKCAF`, `TKLCAF`, `TKXCAF`, `TKMesh`). The crate finds OCCT
+by running `find_package(OpenCASCADE)`; a system install is enough, no env vars.
+If you cannot install system-wide, the crate's `builtin` feature builds OCCT from
+source instead (slow, needs network).
 
-## What to look for
+Then:
 
-Same as the C++ probe (see the report). The Rust-specific question is whether the
-`-1`/count protocol carries enough information, or whether the shim needs to return
-richer history (the full `BRepTools_History` graph) for a real element map. If the
-`Modified`/`Generated` counts come back meaningful, the seam is viable; if the shim
-has to grow a bespoke history serialization, that is the design pressure the
-`GeometryEngine` trait must absorb.
+```sh
+cargo run --release
+```
+
+## What the crate actually exposes (the finding)
+
+Verified against the `opencascade-sys` 0.3.0 sources:
+
+| Need | Covered? |
+| --- | --- |
+| Primitives, booleans, fillet/chamfer | ✅ |
+| `TopExp::MapShapes`, `TopoDS` downcasts, `TopTools_IndexedMapOfShape::{Extent,FindKey}` | ✅ |
+| `BRepAlgoAPI_Cut::Generated` | ✅ (only this one) |
+| `BRepAlgoAPI_Fuse::{Modified,Generated}` | ❌ not bridged |
+| `BRepBuilderAPI_MakeShape::{Modified,Generated,IsDeleted}` | ❌ |
+| `BRepTools_History`, `BRepAlgoAPI_BuilderAlgo::History` | ❌ |
+
+So the binding builds geometry but cannot hand us the lineage a stable element map
+needs. It is not a full hand-rolled binding that is missing; it is a handful of
+history functions. The pragmatic move is a small **bridge addition** (either
+upstream, or a thin patch/fork) declaring the missing calls, not writing our own
+binding from scratch. Sketch:
+
+```rust
+// our own #[cxx::bridge], reusing the crate's types, added on top:
+pub fn BRepAlgoAPI_Fuse_Modified<'a>(
+    self: Pin<&'a mut BRepAlgoAPI_Fuse>, shape: &'a TopoDS_Shape,
+) -> &'a TopTools_ListOfShape;
+pub fn BRepBuilderAPI_MakeShape_IsDeleted(
+    self: &BRepBuilderAPI_MakeShape, shape: &TopoDS_Shape,
+) -> bool;
+// ...and bridge BRepTools_History / BRepAlgoAPI_BuilderAlgo::History.
+```
+
+There is also a milder signal in the crate's own model: the high-level
+`BooleanShape` carries `new_edges` (the edges the boolean generated), which is a
+coarse, operation-specific form of exactly the lineage we need. It shows the crate
+authors already think in these terms.
+
+## Note on the high-level crate
+
+`opencascade` (the high-level crate) wraps `Shape { inner: UniquePtr<TopoDS_Shape> }`
+but keeps `inner` `pub(crate)`, so you cannot get the raw `TopoDS_Shape` to call the
+sys-level traversal functions. This spike therefore uses `opencascade-sys` directly.
 
 ## Not a workspace member
 

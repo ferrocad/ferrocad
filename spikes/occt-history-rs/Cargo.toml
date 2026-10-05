@@ -1,8 +1,12 @@
-# Throwaway spike: drive OCCT from Rust and read shape history.
+# Throwaway spike: drive OCCT from Rust with the real binding crate and find out
+# how much shape *history* the binding exposes.
 #
 # This is deliberately NOT a member of the FerroCAD workspace. The empty
-# `[workspace]` table below marks it as its own workspace root so `cargo` in the
-# parent tree never tries to build it.
+# `[workspace]` table marks it as its own workspace root.
+#
+# Uses `opencascade-sys` (bschwind/opencascade-rs) directly, because the
+# high-level `opencascade` `Shape` hides its `TopoDS_Shape` (pub(crate)) and so
+# cannot reach the sub-shape traversal functions we need.
 [package]
 name = "occt-history-rs"
 version = "0.0.0"
@@ -12,6 +16,5 @@ publish = false
 [workspace]
 
 [dependencies]
-
-[build-dependencies]
-cc = "1"
+opencascade-sys = "0.3"
+cxx = "1"

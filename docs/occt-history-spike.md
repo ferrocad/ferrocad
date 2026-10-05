@@ -18,12 +18,16 @@ across a Rust binding (§7).
 
 The authoring sandbox has:
 
-- **no OCCT** (no headers, no libraries, anywhere on disk);
-- **no network** (APT and crates.io unreachable);
-- **no passwordless `sudo`** (interactive authentication required).
+- **no OCCT** (no headers, no libraries, anywhere on disk), and
+- **no passwordless `sudo`** (interactive authentication required), so it cannot be
+  apt-installed here.
 
-So neither probe could be compiled here. Both are committed ready to run where OCCT
-7.8+ exists (see each spike's README). This is a finding about our
+Network itself was reachable (with an explicit grant), which let us download and read
+the `opencascade-sys` sources to write the Rust spike against its real API (see §7).
+
+The bind blocker is OCCT plus root, not network. Neither probe could be compiled
+here; both are committed ready to run where OCCT 7.8+ exists (see each spike's
+README). This is a finding about our
 **CI and build story**, not just the sandbox: any geometry milestone needs an OCCT
 toolchain in CI, and that is a real cost to budget (see
 [`distribution.md`](distribution.md)).
@@ -146,31 +150,48 @@ list) even while the shape output stays behind the geometry seam. Do not model a
 
 ## 7. The Rust binding spike
 
-The C++ probe answers whether OCCT *has* history. A second, smaller spike
-([`../spikes/occt-history-rs/`](../spikes/occt-history-rs/)) asks whether that
-history survives *into Rust*, and what the binding has to look like.
+The C++ probe answers whether OCCT *has* history. The Rust spike
+([`../spikes/occt-history-rs/`](../spikes/occt-history-rs/)) asks whether that history
+reaches Rust through an **existing binding** (we are not writing our own). It uses
+`opencascade-sys` 0.3 (bschwind/opencascade-rs) and mirrors `probe.cpp`.
 
-There are two ways to reach a C++ library from Rust, and the spike deliberately
-takes the less glamorous one:
+**The answer: the standard binding builds geometry but does not expose history.**
 
-| Approach | Verdict for this spike |
+| Need | `opencascade-sys` 0.3.0 |
 | --- | --- |
-| Existing crate (`opencascade-rs`, `occt-sys`, …) | Less glue, but coverage of **history** is unverifiable offline, and history is the whole point. Stock wrappers may expose geometry only. |
-| Hand-rolled C ABI over a small `shim.cpp` | More glue (~120 lines), but we control exactly which OCCT calls cross the boundary. Doubles as the first sketch of `ferrocad_geom_occt`. |
+| Primitives, booleans, fillet/chamfer | ✅ |
+| `TopExp::MapShapes`, `TopoDS` downcasts, `IndexedMapOfShape::{Extent,FindKey}` | ✅ |
+| `BRepAlgoAPI_Cut::Generated` | ✅ (only this one) |
+| `BRepAlgoAPI_Fuse::{Modified,Generated}`, `BRepBuilderAPI_MakeShape::{Modified,IsDeleted}`, `BRepTools_History` | ❌ not bridged |
 
-The shim exposes opaque `OcctShape`/`OcctHistory` handles and
-`occt_make_box`/`occt_fuse`/`occt_fillet` plus
-`occt_shape_count` and `occt_history_{modified,generated,deleted}`; the Rust probe
-mirrors `probe.cpp`. It is committed ready to run and, like the C++ probe, could not
-be compiled in the authoring sandbox (no OCCT, no network, no passwordless `sudo`).
+So a stable element map cannot be built on the stock crate alone. The gap is not a
+whole binding, though: it is roughly a dozen bridge functions. The pragmatic path is
+a small bridge addition (upstream, or a thin patch/fork), not a from-scratch binding.
+The high-level `opencascade` crate is worse for us here: its `Shape` keeps its
+`TopoDS_Shape` `pub(crate)`, so the sys-level traversal cannot be reached from it.
 
-What it is meant to reveal once built:
+Install (Debian/Ubuntu; OCCT >= 7.8):
 
-- whether a flat count protocol is enough for an element map, or the shim must
-  serialise the richer `BRepTools_History` graph;
-- the ergonomics of RAII over opaque OCCT handles across a C ABI;
-- whether the `GeometryEngine` trait can stay shape-first and history-carrying
-  without leaking OCCT types into `ferrocad_core`.
+```sh
+sudo apt-get install -y cmake clang pkg-config \
+  libocct-foundation-dev libocct-modeling-data-dev \
+  libocct-modeling-algorithms-dev libocct-data-exchange-dev \
+  libocct-ocaf-dev libocct-visualization-dev occt-misc
+```
+
+`opencascade-sys` finds OCCT via `find_package(OpenCASCADE)`, so a system install
+suffices; its `builtin` feature builds OCCT from source if you cannot install one.
+
+Like the C++ probe, the Rust crate could not be built in the authoring sandbox
+(installing OCCT needs `sudo`, which asks for a password). It is committed ready to
+run; the crate sources were read to write the API accurately.
+
+What a successful run still needs to settle:
+
+- whether the ~a dozen bridge additions land upstream, or become a maintained patch;
+- the ergonomics of cxx `Pin`/`UniquePtr` lifetimes for the history calls;
+- whether a flat count protocol is enough for an element map, or the bridge must
+  carry the richer `BRepTools_History` graph.
 
 ---
 
@@ -185,14 +206,22 @@ What it is meant to reveal once built:
 4. **Let B3/B5 carry Link's geometry-facing fields** (§6) without pulling in shapes.
 5. **Run both committed probes** (C++ and Rust) on a machine with OCCT 7.8+ and
    record the raw output here before finalizing the trait.
+6. **Decide the binding path (do not hand-roll).** `opencascade-sys` 0.3 covers
+   geometry but not history (§7); budget ~a dozen bridge functions, added upstream
+   or as a thin maintained patch, rather than a from-scratch binding.
 
 ---
 
 ## 9. Open questions
 
-- Which Rust binding, and whether it exposes `BRepTools_History` /
-   `BRepAlgoAPI_BuilderAlgo::History`, not just the binary accessors. Unverifiable
-   offline.
+- **Binding, resolved enough to act:** `opencascade`/`opencascade-sys` 0.3 is the
+   candidate, covering geometry but not history (§7). Open: contribute the bridge
+   upstream vs. keep a thin patch; and whether the lower-level `occt-sys` (the
+   `builtin` OCCT builder) already bridges more history than `opencascade-sys`.
+- **`cadrum` as an alternative.** A newer crate (statically-linked headless OCCT,
+   native + wasm) that could sidestep the system-OCCT packaging problem, but likely
+   hides the kernel behind a modelling API, so probably no history. Worth a look if
+   static linking becomes attractive.
 - Whether to port `FCBRepAlgoAPI_*` exactly, or only the parts that affect naming.
 - BREP vs STEP as the on-disk shape encoding for our own format (FreeCAD uses BREP
   inside the zip container).

@@ -36,6 +36,8 @@ The probe is **untested in the authoring sandbox**: that environment has no OCCT
 no network, and `sudo` requires a password, so nothing could be compiled there.
 Method names are written against OCCT 7.8/7.9; adjust if a signature differs.
 
+A Rust rewrite of this probe lives in [`../occt-history-rs/`](../occt-history-rs/).
+
 ## What to look for
 
 - **Fuse**: coincident faces should be `Modified` (two inputs map to one output),

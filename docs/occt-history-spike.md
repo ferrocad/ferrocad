@@ -8,7 +8,9 @@ deliberately small, experiment toward the geometry kernel.
 **Goal.** Answer one question before any trait or crate is designed: does OCCT
 expose enough *shape history* for a stable element map? The experiment is
 [`../spikes/occt-history/`](../spikes/occt-history/): build two boxes, fuse, fillet,
-and dump `Modified`/`Generated`/`Deleted` per input sub-shape.
+and dump `Modified`/`Generated`/`Deleted` per input sub-shape. A Rust rewrite,
+[`../spikes/occt-history-rs/`](../spikes/occt-history-rs/), tests the same thing
+across a Rust binding (§7).
 
 ---
 
@@ -20,8 +22,8 @@ The authoring sandbox has:
 - **no network** (APT and crates.io unreachable);
 - **no passwordless `sudo`** (interactive authentication required).
 
-So the probe could not be compiled here. It is committed ready to run where OCCT
-7.8+ exists (see the spike README for the two commands). This is a finding about our
+So neither probe could be compiled here. Both are committed ready to run where OCCT
+7.8+ exists (see each spike's README). This is a finding about our
 **CI and build story**, not just the sandbox: any geometry milestone needs an OCCT
 toolchain in CI, and that is a real cost to budget (see
 [`distribution.md`](distribution.md)).
@@ -142,7 +144,37 @@ list) even while the shape output stays behind the geometry seam. Do not model a
 
 ---
 
-## 7. Recommended revisions to the plan
+## 7. The Rust binding spike
+
+The C++ probe answers whether OCCT *has* history. A second, smaller spike
+([`../spikes/occt-history-rs/`](../spikes/occt-history-rs/)) asks whether that
+history survives *into Rust*, and what the binding has to look like.
+
+There are two ways to reach a C++ library from Rust, and the spike deliberately
+takes the less glamorous one:
+
+| Approach | Verdict for this spike |
+| --- | --- |
+| Existing crate (`opencascade-rs`, `occt-sys`, …) | Less glue, but coverage of **history** is unverifiable offline, and history is the whole point. Stock wrappers may expose geometry only. |
+| Hand-rolled C ABI over a small `shim.cpp` | More glue (~120 lines), but we control exactly which OCCT calls cross the boundary. Doubles as the first sketch of `ferrocad_geom_occt`. |
+
+The shim exposes opaque `OcctShape`/`OcctHistory` handles and
+`occt_make_box`/`occt_fuse`/`occt_fillet` plus
+`occt_shape_count` and `occt_history_{modified,generated,deleted}`; the Rust probe
+mirrors `probe.cpp`. It is committed ready to run and, like the C++ probe, could not
+be compiled in the authoring sandbox (no OCCT, no network, no passwordless `sudo`).
+
+What it is meant to reveal once built:
+
+- whether a flat count protocol is enough for an element map, or the shim must
+  serialise the richer `BRepTools_History` graph;
+- the ergonomics of RAII over opaque OCCT handles across a C ABI;
+- whether the `GeometryEngine` trait can stay shape-first and history-carrying
+  without leaking OCCT types into `ferrocad_core`.
+
+---
+
+## 8. Recommended revisions to the plan
 
 1. **Do not design the trait from stock OCCT.** Fold Finding 1 into §6 of
    [`geometry-and-topology.md`](geometry-and-topology.md): the engine must expose
@@ -151,12 +183,12 @@ list) even while the shape output stays behind the geometry seam. Do not model a
    mismatch (§5). This is format work we can do without a kernel.
 3. **Add OCCT to the CI/packaging budget** (§1, [`distribution.md`](distribution.md)).
 4. **Let B3/B5 carry Link's geometry-facing fields** (§6) without pulling in shapes.
-5. **Run the committed probe** on a machine with OCCT 7.8+ and record the raw output
-   here before finalizing the trait.
+5. **Run both committed probes** (C++ and Rust) on a machine with OCCT 7.8+ and
+   record the raw output here before finalizing the trait.
 
 ---
 
-## 8. Open questions
+## 9. Open questions
 
 - Which Rust binding, and whether it exposes `BRepTools_History` /
    `BRepAlgoAPI_BuilderAlgo::History`, not just the binary accessors. Unverifiable

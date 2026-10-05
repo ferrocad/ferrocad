@@ -1,0 +1,17 @@
+# Throwaway spike: drive OCCT from Rust and read shape history.
+#
+# This is deliberately NOT a member of the FerroCAD workspace. The empty
+# `[workspace]` table below marks it as its own workspace root so `cargo` in the
+# parent tree never tries to build it.
+[package]
+name = "occt-history-rs"
+version = "0.0.0"
+edition = "2021"
+publish = false
+
+[workspace]
+
+[dependencies]
+
+[build-dependencies]
+cc = "1"

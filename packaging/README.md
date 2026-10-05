@@ -14,7 +14,7 @@ FreeCAD revision, default `Draft`) into `mods/`; the packagers ship them loose.
 The release workflow runs it before packaging.
 
 Each script runs `cargo xtask bundle` first, so one command produces the artifact.
-Pass `--debug` (or `-Debug` on Windows) for a fast, unstripped build.
+Pass `--debug` (or `-DebugBuild` on Windows) for a fast, unstripped build.
 
 ## The payload
 

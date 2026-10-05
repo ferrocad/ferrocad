@@ -1,12 +1,14 @@
 # Build a portable FerroCAD distribution (and a .zip) for Windows.
 #
-#   powershell -ExecutionPolicy Bypass -File packaging\windows\portable.ps1 [-Debug]
+#   powershell -ExecutionPolicy Bypass -File packaging\windows\portable.ps1 [-DebugBuild]
 #
 # Requires a Rust toolchain and CPython headers (PyO3). An MSIX/WiX installer is a
 # later step (see docs/distribution.md).
 [CmdletBinding()]
 param(
-    [switch]$Debug
+    # Named `DebugBuild`, not `Debug`: `[CmdletBinding()]` already contributes a
+    # common `-Debug` parameter, and a second one is a hard error.
+    [switch]$DebugBuild
 )
 $ErrorActionPreference = 'Stop'
 
@@ -15,7 +17,7 @@ $Root = (Resolve-Path (Join-Path $Here '..\..')).Path
 Push-Location $Root
 try {
     $bundleArgs = @()
-    if ($Debug) { $bundleArgs += '--debug' }
+    if ($DebugBuild) { $bundleArgs += '--debug' }
     & cargo xtask bundle @bundleArgs
     if ($LASTEXITCODE -ne 0) { throw "cargo xtask bundle failed" }
 

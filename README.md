@@ -6,89 +6,25 @@
 C++ `App` core, designed to be a **drop-in replacement for the `FreeCAD` Python package**. The
 Python import namespace stays `FreeCAD`; the project/distribution is `ferrocad`.
 
-**Milestones 0–4 (slice 16):** run a FreeCAD headless "hello world" Python script on a pure-Rust
-core, with the C++ Python bindings replaced by Rust bindings.
+## Status
 
-* **M0** — hello world on a Rust object model, bridged to Python over a temporary C ABI + `ctypes`.
-* **M1** — the bridge migrated to **PyO3** (`FreeCAD._core`); the temporary `ctypes` path stood in as a fallback until it was removed in favour of a hard dependency on the CPython headers.
-* **M2** — the pure-Rust core (`ferrocad_core`): quantities, properties, a dependency-graph
-  recompute order, transactions (open/commit/abort/undo/redo), observers, and an expression engine.
-* **M3a** — inventory the upstream `.pyi` stubs (320 files → 329 classes / 2210 methods).
-* **M3b** — PyO3 bindings over `ferrocad_core` (`ferrocad_py`, module `ferrocad`) became the
-  **sole** backend of the `FreeCAD` facade; the legacy `ctypes` fallback was removed.
-* **M3c** — generate PyO3 **skeleton** bindings (`ferrocad_gen`) from the `.pyi` model; behaviour
-  stays in `ferrocad_core` (hand-written glue).
-* **M3d** — a **conformance harness** that runs upstream `Mod/Test` files against our `FreeCAD`
-  and reports the parity gap.
-* **M4 (slice 1)** — the `FreeCAD.Base`/`Units`/`Console`/`ParamGet`/`StringHasher` surface.
-* **M4 (slice 2)** — the full **`FreeCAD.Units` system** (`Unit`/`Quantity` + expression parser).
-* **M4 (slice 3)** — `Base.Vector`/`Matrix`/`Placement`/`Rotation`/`TypeId` + `App::FeatureTest`.
-* **M4 (slice 4)** — document `saveAs`/`save`/`open`/`copyObject` (JSON persistence).
-* **M4 (slice 5)** — geometry tuple setters, `PlacementList`/`RotationList` properties, document
-  metadata (`ActiveObject`/`findObjects`/`setAutoCreated`), `TypeId` classmethods, `addProperty`
-  flags, `addDocumentObserver` (no-op) + `FreeCAD.PropertyType`.
-* **M4 (slice 6)** — dynamic **extensions** (`addExtension`/`hasExtension` with
-  `GroupExtensionPython`→`GroupExtension` inheritance), **groups** (`App::DocumentObjectGroup` +
-  `App::Part` with `Group` link list, `addObject`/`hasObject`/`getObject`/`getParentGroup`/
-  `getParentGeoFeatureGroup`/`OutList`/`InList`, single-group enforcement), and a console-mode
-  **`FreeCADGui`** stub + `ViewObject` → `None`.
-* **M4 (slice 7)** — `App::Origin.getSubObject` (axes/planes with the standard frames; FreeCAD's
-  `retType` convention) + a **row-major `Matrix4` fix** (`transform`/`Placement.to_matrix` were
-  inconsistent, inverting rotations).
-* **M4 (slice 8)** — link properties read/write as `DocumentObject`s; arbitrary object attributes
-  (`obj.Proxy`) via an instance `__dict__`; object `__hash__`; `abi3` minimum 3.10.
-* **M4 (slice 9)** — `Document.Meta` + `Document.settings(namespace)` (typed get/set, validation),
-  `Document.RootObjects`/`TopologicalSortedObjects`, `DocumentObject.ID`, id-aware `getObject`,
-  `ColorList`.
-* **M4 (slice 10)** — `PropertyLinkSub` (`(object, subnames)` round-trip); `listDocuments()` returns
-  a dict (upstream shape) and `openDocument` is exposed.
-* **M4 (slice 11)** — **document observers that fire**: a global observer registry + an object
-  identity cache (so observer arguments satisfy `is`), pending/named transactions, and event
-  emission at the exact FreeCAD points (document lifecycle, object create/change/delete/recompute,
-  dynamic properties/extensions, transactions, save). All `DocumentObserverCases` pass.
-* **M4 (slice 12)** — persistence/recovery: `Document.dumpContent`/`restoreContent`/`restore`,
-  `DocumentObject.dumpContent`/`restoreContent`/`dumpPropertyContent`/`restorePropertyContent`,
-  `canWriteRecoverySnapshot`/`TransientDir` and `writeRecoverySnapshotToTransientDir`.
-* **M4 (slice 13)** — Python-object & `Proxy` persistence: `App::PropertyPythonObject` values and an
-  object's `Proxy` (`dumps`/`loads` protocol) survive save/restore.
-* **M4 (slice 14)** — expression engine: `int`→`Float` coercion, self-relative paths (`10mm`, `%`),
-  cycle detection (`RuntimeError`), `ExpressionEngine`/`evalExpression`/`touch`, and
-  `App::DocumentObjectFileIncluded`.
-* **M4 (slice 15)** — widen the conformance harness to eight upstream files (`BaseTests`,
-  `TestIntPairList`, `FreeCADInitTests` added); full `ParameterGrp` rewrite; a **matrix inverse
-  transpose fix**; and a broad `Base` geometry surface (`Matrix`/`Rotation`/`Placement` helpers,
-  `Vector2d`/`Material`/`BoundBox`, `IntPairList`).
-* **M4 (slice 16)** — **matrix decomposition** (`Matrix.decompose()` / `hasScale()` / `ScaleType`)
-  plus the rotation-numerics cluster: FreeCAD's verbatim **Gauss-Jordan inverse**, quaternion
-  normalizing `to_matrix`, `decompose`-based `from_matrix`, angle wrapping, quaternion
-  `yaw_pitch_roll`, and `Rotation.Axes`; conformance now **146 passing** (`BaseTests` 48/49).
-* **MVP slice A1** — **object state, property status & touch**: per-property `PropertyType` status
-  flags (`getPropertyStatus`/`setPropertyStatus`/`getTypeOfProperty`), touch-on-assign
-  (`Prop_Output`/`Prop_NoRecompute` suppress it), `Prop_NoPersist` dropped on save, `purgeTouched`,
-  `getStatusString`, and a full `State` (`Invalid`/`Touched`/`Up-to-date`).
-* **MVP slice B1** — **object name/label semantics**: names are sanitized
-  (`My Label` → `My_Label`) and made unique; labels are unique unless the `DuplicateLabels`
-  document preference is set (then the requested label is kept verbatim), for both `addObject` and
-  `copyObject`.
-* **MVP slice A2** — **`PropertyEnumeration` + type validation**: an enumeration property
-  (set-from-list, select by index/value, `enum_vals`), `addObject`/`addProperty`/`findObjects`
-  reject extension / non-property types with `TypeError`. This continues the
-  [MVP track](../docs/mvp-path.md).
-* **MVP slice B2** — **the undo/redo engine**: transactions now record a general, reversible
-  change set (property edits, object add/remove, expression set/remove) and expose
-  `UndoNames`/`RedoNames`/`UndoCount`/`RedoCount`/`clearUndos`. Opening a second transaction
-  commits the first on its next change, a new change drops the redo stack, and aborting leaves no
-  entry. `ActiveObject` follows `addObject` and is cleared when that object is undone; removing an
-  object records the group link-list edits so group membership is restored; `InList` is
-  link-type-aware (any `Link`/`LinkList`/`LinkSub`, plus expression backlinks); and transactions
-  carry process-unique ids (`getBookedTransactionID`, `getAvailableUndos`/`getAvailableRedos`),
-  with `UndoMode` reported as `1` (assignment accepted and ignored). Conformance is now
-  **160 passing** (`UndoRedoCases`, `MultiDocumentUndo` and `TestIntPairList` are fully green).
+| Track | What it is | State |
+| --- | --- | --- |
+| **Engine** | the pure-Rust document model behind the `FreeCAD` API | `A1`/`B1`/`A2`/`B2` done; conformance **160 passing** (`Document.py` 87/137, ~18 real gaps). Persistence (`C`) and the MVP surface (`D`) outstanding. |
+| **App shell** | the `bite-gpui` window driving the engine through embedded CPython | `S1` done: decorated window, inspector, property editor, Python console, status bar. `S2`–`S6` planned. |
+| **Distribution** | how it ships | done: `v0.1.1`, five crates on crates.io, three self-contained artifacts (AppImage / `.dmg` / zip) plus `cargo install`. |
+| **Workbenches** | reusing upstream workbenches | `cargo xtask mods` fetches `Draft`; loading is best-effort and stops on the `FreeCADGui` stub (`Workbench`, `addWorkbench`, …) and the missing `FreeCAD.addImportType`. |
 
 This is a proof of concept, not a product. It exists to validate the single
 riskiest assumption of the rewrite plan: *that a Python script written against
 FreeCAD's public `App` API can be served by a Rust implementation instead of the
 C++ one, without changing the script.*
+
+**Roadmap.** The headless engine MVP is defined in `docs/mvp-path.md`, the
+interactive window in `docs/app-shell-vision.md`, and the full milestone record in
+`docs/milestones.md`. Next: lock the MVP demo, then build the `FreeCADGui`
+workbench host (`Workbench`, commands, workbench lifecycle) so an unmodified
+upstream workbench can load.
 
 ## Install
 

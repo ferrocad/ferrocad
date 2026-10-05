@@ -1,6 +1,7 @@
 //! The document object model: names/labels, the dependency graph, extensions,
 //! groups, expressions and observers.
 
+use crate::geometry::{Placement, Rotation, Vector3};
 use crate::{sanitize_name, Document, ObjectId, Observer, Property};
 use std::sync::{Arc, Mutex};
 
@@ -102,6 +103,63 @@ fn expressions_recompute() {
         doc.object(c).unwrap().properties.get("Area"),
         Some(&Property::Float(50.0))
     );
+}
+
+#[test]
+fn nested_path_expressions_read_and_write() {
+    let mut doc = Document::new();
+    let src = doc.add_object("Src", "App::FeatureTest");
+    let dst = doc.add_object("Dst", "App::FeatureTest");
+
+    let angle = 10.0f64.to_radians();
+    doc.set_property(
+        src,
+        "Placement",
+        Property::Placement(Placement::new(
+            Vector3::zero(),
+            Rotation::from_axis_angle(&Vector3::new(0.0, 0.0, 1.0), angle),
+        )),
+    )
+    .unwrap();
+
+    // Read a nested path from another object and write it to a nested path.
+    doc.set_expression(dst, "Placement.Rotation.Angle", "Src.Placement.Rotation.Angle")
+        .unwrap();
+    doc.recompute().unwrap();
+
+    let placement_angle = |id| match doc.object(id).unwrap().properties.get("Placement") {
+        Some(Property::Placement(p)) => p.rotation.angle(),
+        other => panic!("expected a placement, got {other:?}"),
+    };
+    assert!((placement_angle(src) - placement_angle(dst)).abs() < 1e-12);
+
+    // A deeper write into `Placement.Base.x`.
+    doc.set_expression(dst, "Placement.Base.x", "12.5").unwrap();
+    doc.recompute().unwrap();
+    match doc.object(dst).unwrap().properties.get("Placement") {
+        Some(Property::Placement(p)) => assert_eq!(p.base.x, 12.5),
+        other => panic!("expected a placement, got {other:?}"),
+    }
+}
+
+#[test]
+fn root_and_topological_objects() {
+    let mut doc = Document::new();
+    let a = doc.add_object("A", "App::FeatureTest");
+    let b = doc.add_object("B", "App::FeatureTest");
+    let c = doc.add_object("C", "App::FeatureTest");
+    // `a` depends on `b`, `b` depends on `c`.
+    doc.set_property(a, "Link", Property::Link("B".into())).unwrap();
+    doc.set_property(b, "Link", Property::Link("C".into())).unwrap();
+
+    // Only `a` has no dependents.
+    assert_eq!(doc.root_objects(), vec![a]);
+
+    // `TopologicalSortedObjects` is dependents-first: a before b before c.
+    let order = doc.topological_sorted_objects();
+    let pos = |id| order.iter().position(|&x| x == id).unwrap();
+    assert!(pos(a) < pos(b));
+    assert!(pos(b) < pos(c));
 }
 
 #[test]

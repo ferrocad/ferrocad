@@ -5,12 +5,12 @@ Status: living record (2026-10-02). Complements [`rewrite-strategy.md`](rewrite-
 [repository](..).
 
 **Current state:** M0–M3 complete; **M4 in progress** (sixteen slices done) and the MVP slices
-(A1, A2, B1, B2, C1, D1, D2) landing. The pure-Rust `ferrocad_core` + PyO3 `ferrocad` extension
+(A1, A2, B1, B2, C1, D1, D2, B4) landing. The pure-Rust `ferrocad_core` + PyO3 `ferrocad` extension
 serve the FreeCAD Python surface behind the `python/FreeCAD` facade, with a conformance harness
-tracking **167 upstream tests passing** across eight `Mod/Test` files (`StringHasher.py` 4/4,
+tracking **169 upstream tests passing** across eight `Mod/Test` files (`StringHasher.py` 4/4,
 `UnitTests.py` 12/12, `BaseTests.py` 48/49).
-Next MVP slices: B3 (containers/links) and B4 (expressions v2); then the `FreeCAD` package-init
-shim.
+Next MVP slices: B3 (containers/links) and B5 (extension lifecycle); then the `FreeCAD`
+package-init shim.
 
 > **Naming note (FerroCAD restructure).** The repo `freecad-rs-poc` was renamed to `ferrocad` and
 the flat `rust/` tree became a Cargo workspace under `crates/`. Crate names below use the
@@ -938,6 +938,27 @@ Python (+6: metadata, constraints, lifecycle, placement write-through, raw axis)
 
 ---
 
+### MVP slice B4 — expressions v2 ✅
+
+**Goal:** nested-path expressions and real recompute counting (mvp-path §6 B4).
+
+**Built:**
+- **`ferrocad_core` (`document/mod.rs`):** expressions resolve and assign through nested property
+  paths. `resolve` handles self-relative (`.Placement.Base.x`), object-qualified
+  (`Test.Placement.Rotation.Angle`) and bare self paths; new `resolve_path`/`sub_value` walk
+  `Placement`→`Base`/`Rotation`→`Angle`/`Axis` and `Vector.x/y/z`. `eval_expressions` writes the
+  result back through `assign_path`/`assign_nested`, descending into `Placement`/`Rotation`/`Vector`
+  while keeping whole-property kinds (a `PropertyLength` stays a length).
+- **Topology:** `Document::root_objects` (no dependents) and `topological_sorted_objects`
+  (dependents-first), exposed as `Doc.RootObjects` / `Doc.TopologicalSortedObjects`.
+
+**Conformance:** **169 passed** (was 167) · 40 failed · 6 errored; `Document.py` **96/137**. Newly
+green: `DocumentExpressionCases.testExpression`, `DocumentRecomputeCases.testRecompute` (the
+`ExecCount`/object-count progression follows from D2's recompute engine). Tests: 47 Rust (+2 nested
+paths, RootObjects/topological sort) and 107 Python (+3).
+
+---
+
 ## 2. Decisions now unlocked by the spike work
 
 These are no longer open questions — the spike produced evidence:
@@ -1068,7 +1089,7 @@ flowchart TD
 The MVP is now defined: see **[`mvp-path.md`](mvp-path.md)** — *a headless, geometry-free parametric
 document engine exposed as the drop-in `FreeCAD` package*, measured by taking upstream
 `Mod/Test/Document.py` to parity **excluding** the C++ `App::FeatureTest` fixture (~32 tests).
-Conformance is **167 passed** (was 146) · 41 failed · 7 errored; `Document.py` 94/137, of whose 40
+Conformance is **169 passed** (was 146) · 40 failed · 6 errored; `Document.py` 96/137, of whose 39
 failures most are the C++ `App::FeatureTest*` fixture (§7).
 
 MVP slices, in order (details and test yields in [`mvp-path.md`](mvp-path.md) §6):
@@ -1083,14 +1104,17 @@ MVP slices, in order (details and test yields in [`mvp-path.md`](mvp-path.md) §
    transactions with process-unique ids, `UndoNames`/`RedoNames`/`Count`/`clearUndos`, `UndoMode`,
    `getBookedTransactionID`/`getAvailableUndos`/`getAvailableRedos`, `ActiveObject`, transactional
    expressions, link-aware `InList`.
-5. **B3 · containers/links** (4) and **B4 · expressions v2** — the remaining engine items.
-6. **C1 · full property round-trip** — ✅ **done** (slice C1): fixture defaults/statuses,
+5. **C1 · full property round-trip** — ✅ **done** (slice C1): fixture defaults/statuses,
    `PropertyLinkSub`, static-vs-dynamic transient persistence, proxy round-trip.
-7. **D1 · `examples/mvp_workflow.py` + CI** — ✅ **done** (slice D1): the acceptance demo, wired
+6. **D1 · `examples/mvp_workflow.py` + CI** — ✅ **done** (slice D1): the acceptance demo, wired
    into CI.
-8. **D2 · remaining `DocumentBasicCases`** — ✅ **done** (slice D2): recompute Touch/Enforce +
+7. **D2 · remaining `DocumentBasicCases`** — ✅ **done** (slice D2): recompute Touch/Enforce +
    dependency propagation, property metadata, constraints, object invalidation, and write-through
    geometry handles.
+8. **B4 · expressions v2** — ✅ **done** (slice B4): nested-path expression read/write and real
+   recompute counting + `RootObjects`/`TopologicalSortedObjects`.
+9. **B3 · containers/links** and **B5 · extension lifecycle** — the remaining Track-B items; then
+   **C2/C3** and **D3**.
 
 **After the headless MVP — the app shell.** The next major chunk turns the engine into an
 interactive window: see **[`app-shell-vision.md`](app-shell-vision.md)**. A single `bite-gpui`

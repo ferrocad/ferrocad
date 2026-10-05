@@ -13,6 +13,7 @@ use petgraph::visit::{EdgeRef, IntoEdgeReferences};
 use serde::{Deserialize, Serialize};
 
 use crate::expr;
+use crate::geometry::{Rotation, Vector3};
 use crate::observer::Observer;
 use crate::property::{prop_status, Property, PropertyContainer};
 
@@ -394,6 +395,31 @@ impl Document {
         out
     }
 
+    /// Objects that no other object depends on (FreeCAD `RootObjects`).
+    pub fn root_objects(&self) -> Vec<ObjectId> {
+        let referenced: BTreeSet<ObjectId> = self
+            .dependency_edges()
+            .into_iter()
+            .map(|(from, _)| from)
+            .collect();
+        self.object_ids()
+            .into_iter()
+            .filter(|id| !referenced.contains(id))
+            .collect()
+    }
+
+    /// Objects in dependents-first topological order
+    /// (FreeCAD `TopologicalSortedObjects`).
+    pub fn topological_sorted_objects(&self) -> Vec<ObjectId> {
+        match self.recompute_order() {
+            Ok(mut order) => {
+                order.reverse();
+                order
+            }
+            Err(_) => self.object_ids(),
+        }
+    }
+
     /// Object ids in dependency-first order. `Err` if the graph has a cycle.
     pub fn recompute_order(&self) -> Result<Vec<ObjectId>, String> {
         let mut graph: petgraph::graph::DiGraph<ObjectId, ()> = petgraph::graph::DiGraph::new();
@@ -701,14 +727,16 @@ impl Document {
                     return Err(e);
                 }
             };
+            // Write the result back through the (possibly nested) target path.
+            let assigned = match self.objects.get_mut(&id) {
+                Some(obj) => assign_path(obj, &prop, value),
+                None => Ok(()),
+            };
+            if let Err(e) = assigned {
+                self.mark_invalid(id);
+                return Err(e);
+            }
             if let Some(obj) = self.objects.get_mut(&id) {
-                let result = match obj.properties.get(&prop) {
-                    Some(Property::Quantity(existing)) => Property::Quantity(
-                        crate::quantity::Quantity::new(value, existing.unit()),
-                    ),
-                    _ => Property::Float(value),
-                };
-                obj.properties.set(prop.clone(), result);
                 obj.invalid = false;
             }
         }
@@ -756,12 +784,20 @@ impl Document {
     }
 
     fn resolve(&self, current: &ObjectId, name: &str) -> Option<f64> {
-        if let Some((object_name, prop_name)) = name.split_once('.') {
-            let obj = self.objects.values().find(|o| o.name == object_name)?;
-            return numeric(obj, prop_name);
+        // A leading '.' is a self-relative path (`.Placement.Base.x`).
+        if let Some(rest) = name.strip_prefix('.') {
+            return self.objects.get(current).and_then(|o| resolve_path(o, rest));
         }
-        let obj = &self.objects[current];
-        numeric(obj, name).or_else(|| self.objects.values().find_map(|o| numeric(o, name)))
+        // Otherwise a leading `Name.` may qualify another object; fall back to a
+        // self-relative path when no object matches (e.g. `Placement.Base.x`).
+        if let Some((head, tail)) = name.split_once('.') {
+            if let Some(obj) = self.objects.values().find(|o| o.name == head) {
+                return resolve_path(obj, tail);
+            }
+        }
+        self.objects
+            .get(current)
+            .and_then(|o| resolve_path(o, name))
     }
 
     // -- observers ----------------------------------------------------------
@@ -1068,13 +1104,130 @@ fn graph_reaches(
     false
 }
 
-fn numeric(obj: &DocumentObject, name: &str) -> Option<f64> {
-    match obj.properties.get(name)? {
+/// A scalar property (or a constraint) as a number.
+fn property_as_number(p: &Property) -> Option<f64> {
+    match p {
         Property::Float(f) => Some(*f),
         Property::Integer(n) => Some(*n as f64),
         Property::Quantity(q) => Some(q.value_mm()),
         Property::IntegerConstraint { value, .. } => Some(*value as f64),
         Property::FloatConstraint { value, .. } => Some(*value),
         _ => None,
+    }
+}
+
+/// Descend one segment of a nested property path (`Placement` → `Base` → `x`).
+fn sub_value(value: &Property, seg: &str) -> Option<Property> {
+    match value {
+        Property::Placement(p) => match seg {
+            "Base" | "Position" => Some(Property::Vector(p.base)),
+            "Rotation" => Some(Property::Rotation(p.rotation)),
+            _ => None,
+        },
+        Property::Rotation(r) => match seg {
+            "Angle" => Some(Property::Float(r.angle())),
+            "Axis" | "RawAxis" => Some(Property::Vector(r.axis())),
+            _ => None,
+        },
+        Property::Vector(v) => match seg {
+            "x" => Some(Property::Float(v.x)),
+            "y" => Some(Property::Float(v.y)),
+            "z" => Some(Property::Float(v.z)),
+            _ => None,
+        },
+        _ => None,
+    }
+}
+
+/// Resolve a (possibly nested) property path on one object to a number.
+fn resolve_path(obj: &DocumentObject, path: &str) -> Option<f64> {
+    let mut segs = path.split('.');
+    let first = segs.next()?;
+    let mut value = obj.properties.get(first)?.clone();
+    for seg in segs {
+        value = sub_value(&value, seg)?;
+    }
+    property_as_number(&value)
+}
+
+/// Assign `value` to a (possibly nested) property path on one object.
+///
+/// A single segment writes the whole property, keeping its kind (a
+/// `PropertyLength` stays a length with its unit). Deeper paths descend into
+/// `Placement`/`Rotation`/`Vector` sub-objects.
+fn assign_path(obj: &mut DocumentObject, path: &str, value: f64) -> Result<(), String> {
+    let segs: Vec<&str> = path.split('.').collect();
+    let (root, rest) = segs.split_first().ok_or_else(|| "empty path".to_string())?;
+    if rest.is_empty() {
+        let result = match obj.properties.get(*root) {
+            Some(Property::Quantity(existing)) => {
+                Property::Quantity(crate::quantity::Quantity::new(value, existing.unit()))
+            }
+            Some(Property::Integer(_)) => Property::Integer(value as i64),
+            Some(Property::IntegerConstraint { min, max, step, .. }) => {
+                Property::IntegerConstraint { value: (value as i64).clamp(*min, *max), min: *min, max: *max, step: *step }
+            }
+            Some(Property::FloatConstraint { min, max, step, .. }) => {
+                Property::FloatConstraint { value: value.clamp(*min, *max), min: *min, max: *max, step: *step }
+            }
+            _ => Property::Float(value),
+        };
+        obj.properties.set(root.to_string(), result);
+        return Ok(());
+    }
+    let mut prop = obj
+        .properties
+        .get(*root)
+        .cloned()
+        .ok_or_else(|| format!("no property '{root}'"))?;
+    assign_nested(&mut prop, rest, value)?;
+    obj.properties.set(root.to_string(), prop);
+    Ok(())
+}
+
+fn assign_nested(prop: &mut Property, segs: &[&str], value: f64) -> Result<(), String> {
+    let (seg, rest) = segs.split_first().ok_or_else(|| "empty path".to_string())?;
+    match prop {
+        Property::Placement(p) => match *seg {
+            "Base" | "Position" => assign_vector(&mut p.base, rest, value),
+            "Rotation" => assign_rotation(&mut p.rotation, rest, value),
+            other => Err(format!("no field '{other}' on Placement")),
+        },
+        Property::Rotation(r) => assign_rotation(r, segs, value),
+        Property::Vector(v) => assign_vector(v, segs, value),
+        Property::Quantity(q) if rest.is_empty() => {
+            *q = crate::quantity::Quantity::new(value, q.unit());
+            Ok(())
+        }
+        _ => Err(format!("cannot assign '{seg}'")),
+    }
+}
+
+fn assign_vector(v: &mut Vector3, segs: &[&str], value: f64) -> Result<(), String> {
+    let (seg, rest) = segs.split_first().ok_or_else(|| "empty path".to_string())?;
+    if !rest.is_empty() {
+        return Err("path too deep for Vector".to_string());
+    }
+    match *seg {
+        "x" => v.x = value,
+        "y" => v.y = value,
+        "z" => v.z = value,
+        other => return Err(format!("no component '{other}' on Vector")),
+    }
+    Ok(())
+}
+
+fn assign_rotation(r: &mut Rotation, segs: &[&str], value: f64) -> Result<(), String> {
+    let (seg, rest) = segs.split_first().ok_or_else(|| "empty path".to_string())?;
+    if !rest.is_empty() {
+        return Err("path too deep for Rotation".to_string());
+    }
+    match *seg {
+        // Angles are radians, matching the `Rotation.Angle` read-back.
+        "Angle" => {
+            r.set_angle(value);
+            Ok(())
+        }
+        other => return Err(format!("no field '{other}' on Rotation")),
     }
 }

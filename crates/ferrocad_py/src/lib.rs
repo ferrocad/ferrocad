@@ -1803,51 +1803,25 @@ impl PyDocument {
 
     // -- topology ------------------------------------------------------------
 
+    /// `RootObjects`: objects that no other object depends on.
     #[getter]
     fn RootObjects(slf: &Bound<'_, Self>) -> Vec<Py<PyDocumentObject>> {
         let py = slf.py();
         let inner = Arc::clone(&slf.borrow().inner);
         let doc_py: Py<PyDocument> = slf.clone().unbind();
-        let ids: Vec<ObjectId> = {
-            let doc = inner.lock().unwrap();
-            let mut referenced = std::collections::BTreeSet::new();
-            for id in doc.object_ids() {
-                if let Some(o) = doc.object(id) {
-                    for (_, p) in o.properties.iter() {
-                        match p {
-                            Property::Link(n) if !n.is_empty() => {
-                                referenced.insert(n.clone());
-                            }
-                            Property::LinkList(ns) => referenced.extend(ns.iter().cloned()),
-                            _ => {}
-                        }
-                    }
-                }
-            }
-            doc.object_ids()
-                .into_iter()
-                .filter(|id| {
-                    doc.object(*id)
-                        .map(|o| !referenced.contains(&o.name))
-                        .unwrap_or(false)
-                })
-                .collect()
-        };
+        let ids = inner.lock().unwrap().root_objects();
         ids.into_iter()
             .map(|id| get_or_create_object(py, &doc_py, &inner, id))
             .collect()
     }
 
-    /// All objects in dependency-first order.
+    /// `TopologicalSortedObjects`: dependents-first topological order.
     #[getter]
     fn TopologicalSortedObjects(slf: &Bound<'_, Self>) -> Vec<Py<PyDocumentObject>> {
         let py = slf.py();
         let inner = Arc::clone(&slf.borrow().inner);
         let doc_py: Py<PyDocument> = slf.clone().unbind();
-        let ids = {
-            let doc = inner.lock().unwrap();
-            doc.recompute_order().unwrap_or_else(|_| doc.object_ids())
-        };
+        let ids = inner.lock().unwrap().topological_sorted_objects();
         ids.into_iter()
             .map(|id| get_or_create_object(py, &doc_py, &inner, id))
             .collect()

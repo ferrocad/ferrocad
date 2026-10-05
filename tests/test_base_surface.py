@@ -1192,5 +1192,47 @@ class TestGeometryWriteThrough(unittest.TestCase):
         FreeCAD.closeDocument(doc.Name)
 
 
+class TestExpressionsV2(unittest.TestCase):
+    def test_nested_path_expression(self):
+        doc = FreeCAD.newDocument("ExprNested")
+        src = doc.addObject("App::FeatureTest", "Src")
+        dst = doc.addObject("App::FeatureTest", "Dst")
+        src.Placement = FreeCAD.Placement(
+            FreeCAD.Vector(0, 0, 0), FreeCAD.Rotation(FreeCAD.Vector(0, 0, 1), 10)
+        )
+        dst.setExpression(
+            "Placement.Rotation.Angle", "%s.Placement.Rotation.Angle" % src.Name
+        )
+        doc.recompute()
+        self.assertAlmostEqual(
+            src.Placement.Rotation.Angle, dst.Placement.Rotation.Angle
+        )
+        FreeCAD.closeDocument("ExprNested")
+
+    def test_root_and_topological_objects(self):
+        doc = FreeCAD.newDocument("Topo")
+        a = doc.addObject("App::FeatureTest", "A")
+        b = doc.addObject("App::FeatureTest", "B")
+        c = doc.addObject("App::FeatureTest", "C")
+        a.Link = b
+        b.Link = c
+        self.assertEqual([o.Name for o in doc.RootObjects], ["A"])
+        order = [o.Name for o in doc.TopologicalSortedObjects]
+        self.assertLess(order.index("A"), order.index("B"))
+        self.assertLess(order.index("B"), order.index("C"))
+        FreeCAD.closeDocument("Topo")
+
+    def test_recompute_counts_dependents(self):
+        doc = FreeCAD.newDocument("Counts")
+        child = doc.addObject("App::FeatureTest", "Child")
+        parent = doc.addObject("App::FeatureTest", "Parent")
+        parent.Source1 = child
+        self.assertEqual(doc.recompute(), 1)
+        # Touching a `NoRecompute` property re-runs the dependent only.
+        child.TypeNoRecompute = 2
+        self.assertEqual(doc.recompute(), 1)
+        FreeCAD.closeDocument("Counts")
+
+
 if __name__ == "__main__":
     unittest.main()

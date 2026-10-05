@@ -203,9 +203,14 @@ Ordered by dependency and value. Sizes are rough (test yield in parentheses).
 - **B3 · Containers & links.** `GeoFeatureGroupExtension` / `App::Part` chains,
   `getParentGeoFeatureGroup` across nesting, link rewriting on add/remove.
   *(DocumentGroupCases ×4; ~4.)*
-- **B4 · Expressions v2.** Nested-path evaluation (`Object.Placement.Rotation.Angle`),
-  `recompute()` object counting, transactional expressions + proxy `onChanged`.
-  *(testExpression, testRecompute; ~2.)*
+- **B4 · Expressions v2. ✅ DONE.** Nested-path expressions now read and write
+  through `Placement`/`Rotation`/`Vector` sub-objects (`Object.Placement.Rotation.Angle`,
+  `.Placement.Base.x`), and `recompute()` returns the executed-object count. Document
+  gained `RootObjects` and `TopologicalSortedObjects` (dependents-first), and
+  `recompute_order` derives link/expression dependencies from D2. *(Landed:
+  `DocumentExpressionCases.testExpression`, `DocumentRecomputeCases.testRecompute`.)*
+  Deferred to a later slice: `testIssue4649` (proxy `onChanged` + a
+  `PropertyExpressionEngine` that lists removed expressions as `(name, None)`).
 - **B5 · Extensions in the document lifecycle.** Dynamic extension kinds round-trip and
   fire the right events. *(testExtensions; ~1.)*
 

@@ -110,6 +110,19 @@ fn forget_object(doc: &Py<PyDocument>, id: ObjectId) {
     object_cache().lock().unwrap().remove(&(doc_key(doc), id));
 }
 
+/// Error for any access on a document object that is no longer in its document
+/// (FreeCAD raises `ReferenceError` for deleted objects).
+fn deleted_object_error(attr: &str) -> PyErr {
+    pyo3::exceptions::PyReferenceError::new_err(format!(
+        "Cannot access attribute '{attr}' of deleted object"
+    ))
+}
+
+/// True if `id` still names an object in the document.
+fn object_is_attached(inner: &Arc<Mutex<CoreDocument>>, id: ObjectId) -> bool {
+    inner.lock().unwrap().object(id).is_some()
+}
+
 fn forget_document(doc: &Py<PyDocument>) {
     let key = doc_key(doc);
     object_cache().lock().unwrap().retain(|(d, _), _| *d != key);
@@ -530,24 +543,24 @@ fn property_to_py(py: Python<'_>, value: &Property) -> PyObject {
         Property::IntegerList(v) => v.clone().into_py_any(py).unwrap(),
         Property::StringList(v) => v.clone().into_py_any(py).unwrap(),
         Property::BoolList(v) => v.clone().into_py_any(py).unwrap(),
-        Property::Vector(v) => PyVector { inner: *v }.into_py_any(py).unwrap(),
+        Property::Vector(v) => PyVector::fresh(*v).into_py_any(py).unwrap(),
         Property::VectorList(v) => v
             .iter()
-            .map(|x| PyVector { inner: *x }.into_py_any(py).unwrap())
+            .map(|x| PyVector::fresh(*x).into_py_any(py).unwrap())
             .collect::<Vec<_>>()
             .into_py_any(py)
             .unwrap(),
-        Property::Placement(p) => PyPlacement { inner: *p }.into_py_any(py).unwrap(),
+        Property::Placement(p) => PyPlacement::fresh(*p).into_py_any(py).unwrap(),
         Property::PlacementList(v) => v
             .iter()
-            .map(|x| PyPlacement { inner: *x }.into_py_any(py).unwrap())
+            .map(|x| PyPlacement::fresh(*x).into_py_any(py).unwrap())
             .collect::<Vec<_>>()
             .into_py_any(py)
             .unwrap(),
-        Property::Rotation(r) => PyRotation { inner: *r, axis_cache: None }.into_py_any(py).unwrap(),
+        Property::Rotation(r) => PyRotation::fresh(*r, None).into_py_any(py).unwrap(),
         Property::RotationList(v) => v
             .iter()
-            .map(|x| PyRotation { inner: *x, axis_cache: None }.into_py_any(py).unwrap())
+            .map(|x| PyRotation::fresh(*x, None).into_py_any(py).unwrap())
             .collect::<Vec<_>>()
             .into_py_any(py)
             .unwrap(),
@@ -587,6 +600,46 @@ fn property_to_py(py: Python<'_>, value: &Property) -> PyObject {
             .unwrap_or_default()
             .into_py_any(py)
             .unwrap(),
+        // Constraints expose their value like the underlying scalar type.
+        Property::IntegerConstraint { value, .. } => (*value).into_py_any(py).unwrap(),
+        Property::FloatConstraint { value, .. } => (*value).into_py_any(py).unwrap(),
+    }
+}
+
+/// Like [`property_to_py`], but for a geometry value read from a document
+/// object: the result carries a write-through view back to `prop`, so
+/// `obj.Placement.Base.x = 5` (and similar) propagate to the property.
+fn property_to_py_at(
+    py: Python<'_>,
+    p: &Property,
+    inner: &Arc<Mutex<CoreDocument>>,
+    id: ObjectId,
+    prop: &str,
+) -> PyObject {
+    let version = inner.lock().unwrap().property_version(id, prop);
+    let view = |kind: ViewKind| GeometryView {
+        inner: Arc::clone(inner),
+        id,
+        prop: prop.to_string(),
+        expect: p.clone(),
+        version,
+        kind,
+    };
+    match p {
+        Property::Placement(pl) => PyPlacement {
+            inner: *pl,
+            view: Some(view(ViewKind::Placement)),
+        }
+        .into_py_any(py)
+        .unwrap(),
+        Property::Rotation(r) => PyRotation {
+            inner: *r,
+            axis_cache: None,
+            view: Some(view(ViewKind::Rotation)),
+        }
+        .into_py_any(py)
+        .unwrap(),
+        _ => property_to_py(py, p),
     }
 }
 
@@ -699,7 +752,11 @@ fn apply_status_name(status: &mut u32, name: &str) -> PyResult<()> {
 /// Map a FreeCAD property type id to its default value.
 fn default_property(type_id: &str) -> Property {
     let t = type_id.to_ascii_lowercase();
-    if t.ends_with("enumeration") {
+    if t.ends_with("integerconstraint") {
+        Property::IntegerConstraint { value: 0, min: 0, max: 0, step: 1 }
+    } else if t.ends_with("floatconstraint") {
+        Property::FloatConstraint { value: 0.0, min: 0.0, max: 0.0, step: 1.0 }
+    } else if t.ends_with("enumeration") {
         Property::Enumeration(vec![], 0)
     } else if t.ends_with("placementlist") {
         Property::PlacementList(vec![])
@@ -842,7 +899,7 @@ fn extract_rotation(v: &Bound<'_, PyAny>) -> PyResult<Rotation> {
     }
     if let Ok(seq) = v.extract::<Vec<f64>>() {
         if seq.len() == 4 {
-            return Ok(Rotation { q: [seq[0], seq[1], seq[2], seq[3]] });
+            return Ok(Rotation { q: [seq[0], seq[1], seq[2], seq[3]], raw_axis: None });
         }
     }
     Err(PyTypeError::new_err("expected a Rotation or a 4-sequence"))
@@ -854,7 +911,7 @@ fn py_to_link(value: &Bound<'_, PyAny>) -> PyResult<String> {
         return Ok(String::new());
     }
     if let Ok(o) = value.downcast::<PyDocumentObject>() {
-        return Ok(o.borrow().Name());
+        return Ok(o.borrow().name_string());
     }
     if let Ok(s) = value.extract::<String>() {
         return Ok(s);
@@ -868,7 +925,7 @@ fn py_to_link_list(value: &Bound<'_, PyAny>) -> PyResult<Vec<String>> {
         return Ok(vec![]);
     }
     if let Ok(v) = value.extract::<Vec<PyRef<'_, PyDocumentObject>>>() {
-        return Ok(v.iter().map(|o| o.Name()).collect());
+        return Ok(v.iter().map(|o| o.name_string()).collect());
     }
     if let Ok(v) = value.extract::<Vec<String>>() {
         return Ok(v);
@@ -908,7 +965,7 @@ fn py_to_link_sub(value: &Bound<'_, PyAny>) -> PyResult<(String, Vec<String>)> {
     let name = if obj.is_none() {
         String::new()
     } else if let Ok(o) = obj.downcast::<PyDocumentObject>() {
-        o.borrow().Name()
+        o.borrow().name_string()
     } else {
         return Err(PyTypeError::new_err(
             "LinkSub object must be a DocumentObject or None",
@@ -996,7 +1053,7 @@ fn parent_of(slf: &Bound<'_, PyDocumentObject>, geo: bool) -> Option<Py<PyDocume
     let py = slf.py();
     let inner = Arc::clone(&slf.borrow().inner);
     let doc_py = slf.borrow().doc.clone_ref(py);
-    let name = slf.borrow().Name();
+    let name = slf.borrow().name_string();
     let found = {
         let doc = inner.lock().unwrap();
         doc.object_ids().into_iter().find(|id| {
@@ -1189,6 +1246,19 @@ struct PyDocumentObject {
     id: ObjectId,
 }
 
+impl PyDocumentObject {
+    /// Internal, non-fallible name accessor (the fallible Python `Name` getter
+    /// raises for deleted objects; internal coercions only see attached ones).
+    fn name_string(&self) -> String {
+        self.inner
+            .lock()
+            .unwrap()
+            .object(self.id)
+            .map(|o| o.name.clone())
+            .unwrap_or_default()
+    }
+}
+
 impl PyDocument {
     fn transient_dir(&self) -> PathBuf {
         let mut dir = std::env::temp_dir();
@@ -1357,18 +1427,17 @@ impl PyDocument {
         let py = slf.py();
         let inner = Arc::clone(&slf.borrow().inner);
         let doc_py: Py<PyDocument> = slf.clone().unbind();
-        let (flagged, count) = {
-            let mut doc = inner.lock().unwrap();
-            let flagged = doc.take_must_execute();
-            let count = doc.recompute().map_err(PyValueError::new_err)?;
-            (flagged, count)
-        };
-        for id in flagged {
-            let obj = get_or_create_object(py, &doc_py, &inner, id);
+        let executed = inner
+            .lock()
+            .unwrap()
+            .recompute()
+            .map_err(PyValueError::new_err)?;
+        for id in &executed {
+            let obj = get_or_create_object(py, &doc_py, &inner, *id);
             fire_obj("slotRecomputedObject", obj.bind(py), None);
         }
         fire_doc("slotRecomputedDocument", slf, None);
-        Ok(count)
+        Ok(executed.len())
     }
 
     // -- transactions -------------------------------------------------------
@@ -1823,33 +1892,27 @@ impl PyDocumentObject {
     }
 
     #[getter]
-    fn Name(&self) -> String {
-        self.inner
-            .lock()
-            .unwrap()
-            .object(self.id)
-            .map(|o| o.name.clone())
-            .unwrap_or_default()
+    fn Name(&self) -> PyResult<String> {
+        match self.inner.lock().unwrap().object(self.id) {
+            Some(o) => Ok(o.name.clone()),
+            None => Err(deleted_object_error("Name")),
+        }
     }
 
     #[getter]
-    fn Label(&self) -> String {
-        self.inner
-            .lock()
-            .unwrap()
-            .object(self.id)
-            .map(|o| o.label.clone())
-            .unwrap_or_default()
+    fn Label(&self) -> PyResult<String> {
+        match self.inner.lock().unwrap().object(self.id) {
+            Some(o) => Ok(o.label.clone()),
+            None => Err(deleted_object_error("Label")),
+        }
     }
 
     #[getter]
-    fn TypeId(&self) -> String {
-        self.inner
-            .lock()
-            .unwrap()
-            .object(self.id)
-            .map(|o| o.type_id.clone())
-            .unwrap_or_default()
+    fn TypeId(&self) -> PyResult<String> {
+        match self.inner.lock().unwrap().object(self.id) {
+            Some(o) => Ok(o.type_id.clone()),
+            None => Err(deleted_object_error("TypeId")),
+        }
     }
 
     /// `ViewObject` is only present when a GUI is up; headless → `None`.
@@ -1926,6 +1989,34 @@ impl PyDocumentObject {
         let doc = self.inner.lock().unwrap();
         match doc.object(self.id).and_then(|o| o.properties.status(name)) {
             Some(status) => Ok(status_names(status).into_iter().map(String::from).collect()),
+            None => Err(PyAttributeError::new_err(format!("no property '{name}'"))),
+        }
+    }
+
+    /// `getGroupOfProperty`: the UI group the property belongs to.
+    fn getGroupOfProperty(&self, name: &str) -> PyResult<String> {
+        let doc = self.inner.lock().unwrap();
+        match doc.object(self.id).and_then(|o| o.properties.group(name)) {
+            Some(group) => Ok(group.to_string()),
+            None => Err(PyAttributeError::new_err(format!("no property '{name}'"))),
+        }
+    }
+
+    /// `getDocumentationOfProperty`: the property's documentation string.
+    fn getDocumentationOfProperty(&self, name: &str) -> PyResult<String> {
+        let doc = self.inner.lock().unwrap();
+        match doc.object(self.id).and_then(|o| o.properties.doc(name)) {
+            Some(doc) => Ok(doc.to_string()),
+            None => Err(PyAttributeError::new_err(format!("no property '{name}'"))),
+        }
+    }
+
+    /// `getEnumerationsOfProperty`: an enumeration's allowed values, else `None`.
+    fn getEnumerationsOfProperty(&self, name: &str) -> PyResult<Option<Vec<String>>> {
+        let doc = self.inner.lock().unwrap();
+        match doc.object(self.id).and_then(|o| o.properties.get(name)) {
+            Some(Property::Enumeration(choices, _)) => Ok(Some(choices.clone())),
+            Some(_) => Ok(None),
             None => Err(PyAttributeError::new_err(format!("no property '{name}'"))),
         }
     }
@@ -2009,7 +2100,7 @@ impl PyDocumentObject {
         inner
             .lock()
             .unwrap()
-            .add_property(id, name, default, status)
+            .add_property(id, name, default, status, group, doc)
             .map_err(PyValueError::new_err)?;
         fire_obj_str("slotAppendDynamicProperty", slf, name);
         Ok(())
@@ -2054,11 +2145,17 @@ impl PyDocumentObject {
             .map_err(PyValueError::new_err)
     }
 
-    /// Mark the object for recompute (the POC tracks this as a flag).
-    #[pyo3(signature = (prop=""))]
-    fn touch(&self, prop: &str) {
-        let _ = prop;
-        self.inner.lock().unwrap().enforce_recompute(self.id);
+    /// Mark the object for recompute (FreeCAD `DocumentObject.touch`).
+    ///
+    /// `touch()` forces execution; `touch("")` marks the object touched without
+    /// forcing its own execution (dependents still recompute).
+    #[pyo3(signature = (prop=None))]
+    fn touch(&self, prop: Option<&str>) {
+        let mut doc = self.inner.lock().unwrap();
+        match prop {
+            Some("") => doc.touch(self.id, true),
+            _ => doc.touch(self.id, false),
+        }
     }
 
     fn recompute(slf: &Bound<'_, Self>) -> bool {
@@ -2243,7 +2340,7 @@ impl PyDocumentObject {
             .extract()
             .map_err(|_| PyTypeError::new_err("addObject expects a DocumentObject"))?;
         let other_id = other_ref.id;
-        let other_name = other_ref.Name();
+        let other_name = other_ref.name_string();
         drop(other_ref);
 
         let mut doc = self.inner.lock().unwrap();
@@ -2272,7 +2369,7 @@ impl PyDocumentObject {
         let other_ref: PyRef<'_, PyDocumentObject> = other
             .extract()
             .map_err(|_| PyTypeError::new_err("hasObject expects a DocumentObject"))?;
-        let name = other_ref.Name();
+        let name = other_ref.name_string();
         drop(other_ref);
         let doc = self.inner.lock().unwrap();
         Ok(match doc.object(self.id).and_then(|o| o.properties.get("Group")) {
@@ -2324,7 +2421,7 @@ impl PyDocumentObject {
         let inner = Arc::clone(&slf.borrow().inner);
         let doc_py = slf.borrow().doc.clone_ref(py);
         let self_id = slf.borrow().id;
-        let name = slf.borrow().Name();
+        let name = slf.borrow().name_string();
         let ids: Vec<ObjectId> = {
             let doc = inner.lock().unwrap();
             doc.object_ids()
@@ -2413,7 +2510,7 @@ impl PyDocumentObject {
                     let mat_py = PyMatrix { inner: pl.to_matrix() }.into_py_any(py).unwrap();
                     (obj_py, mat_py, py.None()).into_py_any(py).unwrap()
                 }
-                3 => PyPlacement { inner: *pl }.into_py_any(py).unwrap(),
+                3 => PyPlacement::fresh(*pl).into_py_any(py).unwrap(),
                 4 => PyMatrix { inner: pl.to_matrix() }.into_py_any(py).unwrap(),
                 _ => py.None(),
             }
@@ -2434,14 +2531,17 @@ impl PyDocumentObject {
         if name.starts_with('_') {
             return Err(PyAttributeError::new_err(name));
         }
+        if !object_is_attached(&slf.borrow().inner, slf.borrow().id) {
+            return Err(deleted_object_error(&name));
+        }
         if name == "Group" {
             return Ok(slf.borrow().group_members(py).into_py_any(py).unwrap());
         }
-        let (value, inner, doc_py) = {
+        let (value, inner, doc_py, this_id) = {
             let this = slf.borrow();
             let doc = this.inner.lock().unwrap();
             let value = doc.object(this.id).and_then(|o| o.properties.get(&name)).cloned();
-            (value, Arc::clone(&this.inner), this.doc.clone_ref(py))
+            (value, Arc::clone(&this.inner), this.doc.clone_ref(py), this.id)
         };
         match value {
             // Link properties resolve to the referenced object (or None).
@@ -2483,7 +2583,7 @@ impl PyDocumentObject {
                 };
                 Ok((obj_py, subs.clone()).into_py_any(py).unwrap())
             }
-            Some(p) => Ok(property_to_py(py, &p)),
+            Some(p) => Ok(property_to_py_at(py, &p, &inner, this_id, &name)),
             None => {
                 let type_id = {
                     let this = slf.borrow();
@@ -2590,6 +2690,40 @@ impl PyDocumentObject {
                 Ok(i) => Property::Integer(i),
                 Err(_) => py_to_property(value)?,
             },
+            // Assigning `(value, min, max, step)` sets the range too; a bare
+            // number is clamped into the existing range.
+            Some(Property::IntegerConstraint { min, max, step, .. }) => {
+                if let Ok((v, lo, hi, st)) = value.extract::<(i64, i64, i64, i64)>() {
+                    Property::IntegerConstraint {
+                        value: v.clamp(lo, hi),
+                        min: lo,
+                        max: hi,
+                        step: st,
+                    }
+                } else {
+                    let v: i64 = value.extract().map_err(|_| {
+                        PyTypeError::new_err("expected an int or an (int, min, max, step) tuple")
+                    })?;
+                    Property::IntegerConstraint { value: v.clamp(min, max), min, max, step }
+                }
+            }
+            Some(Property::FloatConstraint { min, max, step, .. }) => {
+                if let Ok((v, lo, hi, st)) =
+                    value.extract::<(f64, f64, f64, f64)>()
+                {
+                    Property::FloatConstraint {
+                        value: v.clamp(lo, hi),
+                        min: lo,
+                        max: hi,
+                        step: st,
+                    }
+                } else {
+                    let v: f64 = value.extract().map_err(|_| {
+                        PyTypeError::new_err("expected a float or a (float, min, max, step) tuple")
+                    })?;
+                    Property::FloatConstraint { value: v.clamp(min, max), min, max, step }
+                }
+            }
             Some(Property::Bool(_)) => match value.extract::<bool>() {
                 Ok(b) => Property::Bool(b),
                 Err(_) => py_to_property(value)?,
@@ -2625,7 +2759,7 @@ impl PyDocumentObject {
     /// Assign the `Group` link list from a sequence of objects (or names).
     fn set_group(&self, value: &Bound<'_, PyAny>) -> PyResult<()> {
         let names: Vec<String> = if let Ok(objs) = value.extract::<Vec<PyRef<'_, PyDocumentObject>>>() {
-            objs.iter().map(|o| o.Name()).collect()
+            objs.iter().map(|o| o.name_string()).collect()
         } else if let Ok(names) = value.extract::<Vec<String>>() {
             names
         } else {
@@ -2722,10 +2856,93 @@ impl PyStringID {
 // Geometry types
 // ---------------------------------------------------------------------------
 
+/// A write-through view into a document geometry property.
+///
+/// FreeCAD exposes `obj.Placement` as a value copy, so mutating a sub-object
+/// (`obj.Placement.Base.x = 5`) would be lost. To support that ergonomic
+/// pattern we return *live* handles instead, recording the property version
+/// the handle was derived from: a write only applies while the property's
+/// version is unchanged. Reassigning the property therefore detaches handles
+/// captured earlier, even when the new value compares equal (see
+/// `Document.testNotification_Issue2902Part2`).
+#[derive(Clone)]
+struct GeometryView {
+    inner: Arc<Mutex<CoreDocument>>,
+    id: ObjectId,
+    prop: String,
+    /// The property value when the view was created (used to merge a
+    /// sub-field like `Base`/`Rotation` back into the whole value).
+    expect: Property,
+    /// The property version when the view was created. A write is dropped once
+    /// the property has been reassigned (its version changed), even if the new
+    /// value compares equal.
+    version: u64,
+    kind: ViewKind,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum ViewKind {
+    /// The whole `PropertyPlacement`.
+    Placement,
+    /// The whole `PropertyRotation`.
+    Rotation,
+    /// The base vector inside a `PropertyPlacement`.
+    PlacementBase,
+    /// The rotation inside a `PropertyPlacement`.
+    PlacementRotation,
+}
+
+impl GeometryView {
+    /// A sub-view of the same property with a different field `kind`.
+    fn child(&self, kind: ViewKind) -> GeometryView {
+        GeometryView { kind, ..self.clone() }
+    }
+
+    /// Write this view's new `value` back to the property, unless the property
+    /// has since been reassigned (in which case the view is detached).
+    fn write(&self, value: Property) {
+        let mut doc = self.inner.lock().unwrap();
+        if doc.property_version(self.id, &self.prop) != self.version {
+            return;
+        }
+        let new = match self.kind {
+            ViewKind::Placement | ViewKind::Rotation => value,
+            ViewKind::PlacementBase | ViewKind::PlacementRotation => {
+                let Property::Placement(mut placement) = self.expect.clone() else {
+                    return;
+                };
+                match (self.kind, value) {
+                    (ViewKind::PlacementBase, Property::Vector(v)) => placement.base = v,
+                    (ViewKind::PlacementRotation, Property::Rotation(r)) => placement.rotation = r,
+                    _ => return,
+                }
+                Property::Placement(placement)
+            }
+        };
+        let _ = doc.set_property(self.id, &self.prop, new);
+    }
+}
+
 #[pyclass(name = "Vector", module = "ferrocad")]
-#[derive(Clone, Copy)]
+#[derive(Clone)]
 struct PyVector {
     inner: Vector3,
+    /// Set when this vector is a live view of a geometry property.
+    view: Option<GeometryView>,
+}
+
+impl PyVector {
+    /// A detached vector value.
+    fn fresh(inner: Vector3) -> Self {
+        Self { inner, view: None }
+    }
+
+    /// Propagate a mutation to the backing geometry property, if any.
+    fn write_back(&self) {
+        if let Some(view) = &self.view {
+            view.write(Property::Vector(self.inner));
+        }
+    }
 }
 
 #[pymethods]
@@ -2757,49 +2974,50 @@ impl PyVector {
                 Vector3::new(x, y, z)
             }
         };
-        Ok(Self { inner: v })
+        Ok(Self::fresh(v))
     }
 
     #[getter]
     fn x(&self) -> f64 { self.inner.x }
     #[setter]
-    fn set_x(&mut self, v: f64) { self.inner.x = v; }
+    fn set_x(&mut self, v: f64) { self.inner.x = v; self.write_back(); }
 
     #[getter]
     fn y(&self) -> f64 { self.inner.y }
     #[setter]
-    fn set_y(&mut self, v: f64) { self.inner.y = v; }
+    fn set_y(&mut self, v: f64) { self.inner.y = v; self.write_back(); }
 
     #[getter]
     fn z(&self) -> f64 { self.inner.z }
     #[setter]
-    fn set_z(&mut self, v: f64) { self.inner.z = v; }
+    fn set_z(&mut self, v: f64) { self.inner.z = v; self.write_back(); }
 
     #[getter]
     fn Length(&self) -> f64 { self.inner.length() }
     #[setter]
     fn set_Length(&mut self, v: f64) {
         self.inner = self.inner.normalize().scale(v);
+        self.write_back();
     }
 
-    fn add(&self, o: PyRef<'_, PyVector>) -> PyVector { PyVector { inner: self.inner.add(&o.inner) } }
-    fn sub(&self, o: PyRef<'_, PyVector>) -> PyVector { PyVector { inner: self.inner.sub(&o.inner) } }
-    fn negative(&self) -> PyVector { PyVector { inner: self.inner.neg() } }
+    fn add(&self, o: PyRef<'_, PyVector>) -> PyVector { PyVector::fresh(self.inner.add(&o.inner)) }
+    fn sub(&self, o: PyRef<'_, PyVector>) -> PyVector { PyVector::fresh(self.inner.sub(&o.inner)) }
+    fn negative(&self) -> PyVector { PyVector::fresh(self.inner.neg()) }
     fn dot(&self, o: PyRef<'_, PyVector>) -> f64 { self.inner.dot(&o.inner) }
-    fn cross(&self, o: PyRef<'_, PyVector>) -> PyVector { PyVector { inner: self.inner.cross(&o.inner) } }
-    fn normalize(&self) -> PyVector { PyVector { inner: self.inner.normalize() } }
+    fn cross(&self, o: PyRef<'_, PyVector>) -> PyVector { PyVector::fresh(self.inner.cross(&o.inner)) }
+    fn normalize(&self) -> PyVector { PyVector::fresh(self.inner.normalize()) }
     fn distanceToPoint(&self, o: PyRef<'_, PyVector>) -> f64 { self.inner.distance(&o.inner) }
     fn getAngle(&self, o: PyRef<'_, PyVector>) -> f64 { self.inner.angle(&o.inner) }
     fn isEqual(&self, o: PyRef<'_, PyVector>, tol: f64) -> bool { self.inner.is_equal(&o.inner, tol) }
 
-    fn __add__(&self, o: PyRef<'_, PyVector>) -> PyVector { PyVector { inner: self.inner.add(&o.inner) } }
-    fn __sub__(&self, o: PyRef<'_, PyVector>) -> PyVector { PyVector { inner: self.inner.sub(&o.inner) } }
-    fn __neg__(&self) -> PyVector { PyVector { inner: self.inner.neg() } }
+    fn __add__(&self, o: PyRef<'_, PyVector>) -> PyVector { PyVector::fresh(self.inner.add(&o.inner)) }
+    fn __sub__(&self, o: PyRef<'_, PyVector>) -> PyVector { PyVector::fresh(self.inner.sub(&o.inner)) }
+    fn __neg__(&self) -> PyVector { PyVector::fresh(self.inner.neg()) }
 
     fn __mul__(&self, other: &Bound<'_, PyAny>) -> PyResult<PyObject> {
         let py = other.py();
         if let Ok(f) = other.extract::<f64>() {
-            return Ok(PyVector { inner: self.inner.scale(f) }.into_py_any(py).unwrap());
+            return Ok(PyVector::fresh(self.inner.scale(f)).into_py_any(py).unwrap());
         }
         if let Ok(o) = other.extract::<PyRef<'_, PyVector>>() {
             return Ok(self.inner.dot(&o.inner).into_py_any(py).unwrap());
@@ -2807,8 +3025,8 @@ impl PyVector {
         Err(PyTypeError::new_err("Vector can only multiply by a number or Vector"))
     }
 
-    fn __rmul__(&self, f: f64) -> PyVector { PyVector { inner: self.inner.scale(f) } }
-    fn __truediv__(&self, f: f64) -> PyVector { PyVector { inner: self.inner.scale(1.0 / f) } }
+    fn __rmul__(&self, f: f64) -> PyVector { PyVector::fresh(self.inner.scale(f)) }
+    fn __truediv__(&self, f: f64) -> PyVector { PyVector::fresh(self.inner.scale(1.0 / f)) }
 
     fn __eq__(&self, other: &Bound<'_, PyAny>) -> bool {
         match other.extract::<PyRef<'_, PyVector>>() {
@@ -2960,18 +3178,18 @@ impl PyMatrix {
         if row > 3 {
             return Err(PyIndexError::new_err("row out of range"));
         }
-        Ok(PyVector { inner: self.inner.row(row) })
+        Ok(PyVector::fresh(self.inner.row(row)))
     }
 
     fn col(&self, col: usize) -> PyResult<PyVector> {
         if col > 3 {
             return Err(PyIndexError::new_err("col out of range"));
         }
-        Ok(PyVector { inner: self.inner.col(col) })
+        Ok(PyVector::fresh(self.inner.col(col)))
     }
 
     fn diagonal(&self) -> PyVector {
-        PyVector { inner: self.inner.diagonal() }
+        PyVector::fresh(self.inner.diagonal())
     }
 
     // -- predicates ---------------------------------------------------------
@@ -3036,7 +3254,7 @@ impl PyMatrix {
 
     /// Transform a vector by this matrix (FreeCAD `Matrix.multVec`).
     fn multVec(&self, v: PyRef<'_, PyVector>) -> PyVector {
-        PyVector { inner: self.inner.transform(&v.inner) }
+        PyVector::fresh(self.inner.transform(&v.inner))
     }
 
     // -- in-place transforms (pre-multiply, matching FreeCAD) ---------------
@@ -3100,7 +3318,7 @@ impl PyMatrix {
             return Ok(PyMatrix { inner: self.inner.mul(&o.inner) }.into_py_any(py).unwrap());
         }
         if let Ok(v) = other.extract::<PyRef<'_, PyVector>>() {
-            return Ok(PyVector { inner: self.inner.transform(&v.inner) }.into_py_any(py).unwrap());
+            return Ok(PyVector::fresh(self.inner.transform(&v.inner)).into_py_any(py).unwrap());
         }
         if let Ok(r) = other.extract::<PyRef<'_, PyRotation>>() {
             return Ok(PyMatrix { inner: self.inner.mul(&r.inner.to_matrix()) }
@@ -3220,13 +3438,29 @@ impl PyMatrix {
 }
 
 #[pyclass(name = "Rotation", module = "ferrocad")]
-#[derive(Clone, Copy)]
+#[derive(Clone)]
 struct PyRotation {
     inner: Rotation,
     /// FreeCAD keeps the axis passed to `Axis`/`Angle` even at angle 0 (its
     /// `Rotation` stores `_axis`/`_angle` alongside the quaternion). The quaternion
     /// alone can't represent "axis X, angle 0", so cache it here.
     axis_cache: Option<Vector3>,
+    /// Set when this rotation is a live view of a geometry property.
+    view: Option<GeometryView>,
+}
+
+impl PyRotation {
+    /// A detached rotation value.
+    fn fresh(inner: Rotation, axis_cache: Option<Vector3>) -> Self {
+        Self { inner, axis_cache, view: None }
+    }
+
+    /// Propagate a mutation to the backing geometry property, if any.
+    fn write_back(&self) {
+        if let Some(view) = &self.view {
+            view.write(Property::Rotation(self.inner));
+        }
+    }
 }
 
 #[pymethods]
@@ -3266,7 +3500,7 @@ impl PyRotation {
                 let y: f64 = args.get_item(1)?.extract()?;
                 let z: f64 = args.get_item(2)?.extract()?;
                 let w: f64 = args.get_item(3)?.extract()?;
-                Rotation { q: [w, x, y, z] }
+                Rotation { q: [w, x, y, z], raw_axis: None }
             }
             16 => {
                 let mut m = Matrix4::identity();
@@ -3281,7 +3515,7 @@ impl PyRotation {
                 ))
             }
         };
-        Ok(Self { inner, axis_cache: None })
+        Ok(Self::fresh(inner, None))
     }
 
     #[getter]
@@ -3289,15 +3523,18 @@ impl PyRotation {
         self.inner.angle()
     }
 
+    #[getter]
+    fn Axis(&self) -> PyVector {
+        // `Axis` is normalized; `RawAxis` (below) is not.
+        PyVector::fresh(self.axis_cache.unwrap_or_else(|| self.inner.axis()).normalize())
+    }
+
     #[setter]
     fn set_Angle(&mut self, angle: f64) {
         let axis = self.axis_cache.unwrap_or_else(|| self.inner.axis());
         self.inner = Rotation::from_axis_angle(&axis, angle);
-    }
-
-    #[getter]
-    fn Axis(&self) -> PyVector {
-        PyVector { inner: self.axis_cache.unwrap_or_else(|| self.inner.axis()) }
+        self.inner.raw_axis = Some(axis);
+        self.write_back();
     }
 
     #[setter]
@@ -3306,12 +3543,15 @@ impl PyRotation {
         let angle = self.inner.angle();
         self.axis_cache = Some(axis);
         self.inner = Rotation::from_axis_angle(&axis, angle);
+        // FreeCAD keeps the raw (unnormalized) axis for `RawAxis`.
+        self.inner.raw_axis = Some(axis);
+        self.write_back();
         Ok(())
     }
 
     #[getter]
     fn RawAxis(&self) -> PyVector {
-        PyVector { inner: self.inner.axis() }
+        PyVector::fresh(self.axis_cache.unwrap_or_else(|| self.inner.axis()))
     }
 
     #[getter]
@@ -3322,7 +3562,9 @@ impl PyRotation {
     #[setter]
     fn set_Q(&mut self, v: (f64, f64, f64, f64)) {
         self.inner.q = [v.3, v.0, v.1, v.2];
+        self.inner.raw_axis = None;
         self.axis_cache = None;
+        self.write_back();
     }
 
     #[getter]
@@ -3370,7 +3612,7 @@ impl PyRotation {
     }
 
     fn multiply(&self, o: PyRef<'_, PyRotation>) -> PyRotation {
-        PyRotation { inner: self.inner.multiply(&o.inner), axis_cache: None }
+        PyRotation::fresh(self.inner.multiply(&o.inner), None)
     }
 
     fn invert(&mut self) {
@@ -3379,7 +3621,7 @@ impl PyRotation {
     }
 
     fn inverse(&self) -> PyRotation {
-        PyRotation { inner: self.inner.inverse(), axis_cache: None }
+        PyRotation::fresh(self.inner.inverse(), None)
     }
 
     #[pyo3(signature = (o, tol=0.0))]
@@ -3410,9 +3652,25 @@ impl PyRotation {
 }
 
 #[pyclass(name = "Placement", module = "ferrocad")]
-#[derive(Clone, Copy)]
+#[derive(Clone)]
 struct PyPlacement {
     inner: Placement,
+    /// Set when this placement is a live view of a geometry property.
+    view: Option<GeometryView>,
+}
+
+impl PyPlacement {
+    /// A detached placement value.
+    fn fresh(inner: Placement) -> Self {
+        Self { inner, view: None }
+    }
+
+    /// Propagate a mutation to the backing geometry property, if any.
+    fn write_back(&self) {
+        if let Some(view) = &self.view {
+            view.write(Property::Placement(self.inner));
+        }
+    }
 }
 
 #[pymethods]
@@ -3424,12 +3682,10 @@ impl PyPlacement {
         if rotation.is_none() {
             if let Some(b) = base {
                 if let Ok(m) = b.extract::<PyRef<'_, PyMatrix>>() {
-                    return Ok(Self {
-                        inner: Placement::new(
-                            Vector3::new(m.inner.m[3], m.inner.m[7], m.inner.m[11]),
-                            Rotation::from_matrix(&m.inner),
-                        ),
-                    });
+                    return Ok(Self::fresh(Placement::new(
+                        Vector3::new(m.inner.m[3], m.inner.m[7], m.inner.m[11]),
+                        Rotation::from_matrix(&m.inner),
+                    )));
                 }
             }
         }
@@ -3441,11 +3697,11 @@ impl PyPlacement {
             Some(q) => extract_rotation(q)?,
             None => Rotation::identity(),
         };
-        Ok(Self { inner: Placement::new(b, r) })
+        Ok(Self::fresh(Placement::new(b, r)))
     }
 
     fn inverse(&self) -> PyPlacement {
-        PyPlacement { inner: self.inner.inverse() }
+        PyPlacement::fresh(self.inner.inverse())
     }
 
     fn toMatrix(&self) -> PyMatrix {
@@ -3458,26 +3714,36 @@ impl PyPlacement {
     }
 
     #[getter]
-    fn Base(&self) -> PyVector { PyVector { inner: self.inner.base } }
+    fn Base(&self) -> PyVector {
+        let mut v = PyVector::fresh(self.inner.base);
+        v.view = self.view.as_ref().map(|view| view.child(ViewKind::PlacementBase));
+        v
+    }
     #[setter]
     fn set_Base(&mut self, v: &Bound<'_, PyAny>) -> PyResult<()> {
         self.inner.base = extract_vector(v)?;
+        self.write_back();
         Ok(())
     }
 
     #[getter]
-    fn Rotation(&self) -> PyRotation { PyRotation { inner: self.inner.rotation, axis_cache: None } }
+    fn Rotation(&self) -> PyRotation {
+        let mut r = PyRotation::fresh(self.inner.rotation, None);
+        r.view = self.view.as_ref().map(|view| view.child(ViewKind::PlacementRotation));
+        r
+    }
     #[setter]
     fn set_Rotation(&mut self, q: &Bound<'_, PyAny>) -> PyResult<()> {
         self.inner.rotation = extract_rotation(q)?;
+        self.write_back();
         Ok(())
     }
 
-    fn __mul__(&self, o: PyRef<'_, PyPlacement>) -> PyPlacement { PyPlacement { inner: self.inner.mul(&o.inner) } }
+    fn __mul__(&self, o: PyRef<'_, PyPlacement>) -> PyPlacement { PyPlacement::fresh(self.inner.mul(&o.inner)) }
 
     /// Transform a vector by this placement (FreeCAD `Placement.multVec`).
     fn multVec(&self, v: PyRef<'_, PyVector>) -> PyVector {
-        PyVector { inner: self.inner.to_matrix().transform(&v.inner) }
+        PyVector::fresh(self.inner.to_matrix().transform(&v.inner))
     }
 
     fn __eq__(&self, other: &Bound<'_, PyAny>) -> bool {
@@ -3713,13 +3979,11 @@ impl PyBoundBox {
 
     #[getter]
     fn Center(&self) -> PyVector {
-        PyVector {
-            inner: Vector3::new(
-                (self.min[0] + self.max[0]) / 2.0,
-                (self.min[1] + self.max[1]) / 2.0,
-                (self.min[2] + self.max[2]) / 2.0,
-            ),
-        }
+        PyVector::fresh(Vector3::new(
+            (self.min[0] + self.max[0]) / 2.0,
+            (self.min[1] + self.max[1]) / 2.0,
+            (self.min[2] + self.max[2]) / 2.0,
+        ))
     }
 
     fn isInside(&self, point: PyRef<'_, PyVector>) -> bool {
@@ -3743,11 +4007,9 @@ impl PyBoundBox {
             }
         }
         if t.is_finite() {
-            PyVector {
-                inner: Vector3::new(p.x + t * d.x, p.y + t * d.y, p.z + t * d.z),
-            }
+            PyVector::fresh(Vector3::new(p.x + t * d.x, p.y + t * d.y, p.z + t * d.z))
         } else {
-            PyVector { inner: p }
+            PyVector::fresh(p)
         }
     }
 

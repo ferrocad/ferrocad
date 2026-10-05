@@ -176,7 +176,7 @@ fn undo_expression_set_and_remove() {
     doc.open_transaction_named("Expr");
     doc.set_expression(a, "Result", "Width * 3").unwrap();
     doc.commit_transaction();
-    assert_eq!(doc.recompute().unwrap(), 1);
+    assert_eq!(doc.recompute().unwrap().len(), 1);
     assert_eq!(
         doc.object(a).unwrap().properties.get("Result"),
         Some(&Property::Float(6.0))
@@ -190,7 +190,7 @@ fn undo_expression_set_and_remove() {
         doc.object(a).unwrap().expressions.get("Result").map(String::as_str),
         Some("Width * 3")
     );
-    assert_eq!(doc.recompute().unwrap(), 1);
+    assert_eq!(doc.recompute().unwrap().len(), 1);
     assert_eq!(
         doc.object(a).unwrap().properties.get("Result"),
         Some(&Property::Float(6.0))

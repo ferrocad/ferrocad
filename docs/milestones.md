@@ -5,9 +5,9 @@ Status: living record (2026-10-02). Complements [`rewrite-strategy.md`](rewrite-
 [repository](..).
 
 **Current state:** M0–M3 complete; **M4 in progress** (sixteen slices done) and the MVP slices
-(A1, A2, B1, B2, C1, D1) landing. The pure-Rust `ferrocad_core` + PyO3 `ferrocad` extension serve
-the FreeCAD Python surface behind the `python/FreeCAD` facade, with a conformance harness tracking
-**161 upstream tests passing** across eight `Mod/Test` files (`StringHasher.py` 4/4,
+(A1, A2, B1, B2, C1, D1, D2) landing. The pure-Rust `ferrocad_core` + PyO3 `ferrocad` extension
+serve the FreeCAD Python surface behind the `python/FreeCAD` facade, with a conformance harness
+tracking **167 upstream tests passing** across eight `Mod/Test` files (`StringHasher.py` 4/4,
 `UnitTests.py` 12/12, `BaseTests.py` 48/49).
 Next MVP slices: B3 (containers/links) and B4 (expressions v2); then the `FreeCAD` package-init
 shim.
@@ -904,6 +904,40 @@ bit), 98 Python (+2 round-trip cases).
 
 ---
 
+### MVP slice D2 — the remaining `DocumentBasicCases` ✅
+
+**Goal:** clear the six remaining `DocumentBasicCases` (mvp-path §6 D2), including the two that
+hinge on property sub-object reference semantics (§8.1).
+
+**Built:**
+- **`ferrocad_core` recompute engine** (`document/mod.rs`): split FreeCAD's `Touch`/`Enforce`
+  flags (`DocumentObject::touched` alongside `must_execute`); derive dependencies from link
+  properties and cross-object expression references (`dependency_edges`, `dependents`) instead of
+  only the manual graph; `recompute()` now executes dirty objects in dependency order, propagates
+  to dependents, runs a type-specific `execute` (`App::FeatureTest*` bumps `ExecCount`/`ExecResult`),
+  and returns the executed ids (`objectCount`). `touch(no_recompute)`, `purge_touched` and
+  expression set/remove updated to match.
+- **Property metadata** (`property.rs`, `typeregistry.rs`): `PropertyContainer` carries a group and
+  documentation per property; `property_meta` mirrors `FeatureTest.cpp`. New
+  `App::PropertyIntegerConstraint`/`App::PropertyFloatConstraint` value kinds with `[min,max]`
+  clamping (4-tuple assignment sets the range); the `Enum` default is `["Zero"…"Four"]` at index 4.
+- **Object lifecycle** (`ferrocad_py`): a removed object's handle raises `ReferenceError` on
+  attribute access.
+- **Geometry write-through** (`ferrocad_py`): `Placement`/`Rotation`/`Vector` handles returned from
+  a document object carry a `GeometryView` (property location + version); sub-object writes
+  (`obj.Placement.Base.x = 5`, `obj.Rotation.Axis = …`) propagate, while reassigning the property
+  invalidates previously captured handles via a new per-property version counter
+  (`DocumentObject::property_versions`). Core `Rotation` retains the raw axis
+  (`#[serde(default)] raw_axis`) so `RawAxis` survives a save/restore; `PartialEq` still compares
+  the quaternion only.
+
+**Conformance:** **167 passed** (was 161) · 41 failed · 7 errored; `Document.py` **94/137**. Newly
+green: `testAddRemove`, `testObjects`, `testNoRecomputeParent`, `testIssue24571`,
+`testNotification_Issue2902Part2`, `testRawAxis`. Tests: 45 Rust (+3 recompute/touch) and 104
+Python (+6: metadata, constraints, lifecycle, placement write-through, raw axis).
+
+---
+
 ## 2. Decisions now unlocked by the spike work
 
 These are no longer open questions — the spike produced evidence:
@@ -1034,8 +1068,8 @@ flowchart TD
 The MVP is now defined: see **[`mvp-path.md`](mvp-path.md)** — *a headless, geometry-free parametric
 document engine exposed as the drop-in `FreeCAD` package*, measured by taking upstream
 `Mod/Test/Document.py` to parity **excluding** the C++ `App::FeatureTest` fixture (~32 tests).
-Conformance is **161 passed** (was 146) · 46 failed · 8 errored; `Document.py` 88/137, of whose 49
-failures ~17 are real product gaps (`testObjects` now reaches `getDocumentationOfProperty`).
+Conformance is **167 passed** (was 146) · 41 failed · 7 errored; `Document.py` 94/137, of whose 40
+failures most are the C++ `App::FeatureTest*` fixture (§7).
 
 MVP slices, in order (details and test yields in [`mvp-path.md`](mvp-path.md) §6):
 
@@ -1049,10 +1083,14 @@ MVP slices, in order (details and test yields in [`mvp-path.md`](mvp-path.md) §
    transactions with process-unique ids, `UndoNames`/`RedoNames`/`Count`/`clearUndos`, `UndoMode`,
    `getBookedTransactionID`/`getAvailableUndos`/`getAvailableRedos`, `ActiveObject`, transactional
    expressions, link-aware `InList`.
-5. **B3 · containers/links** (4) → **C1 · full property round-trip** — ✅ **done** (slice C1):
-   fixture defaults/statuses, `PropertyLinkSub`, static-vs-dynamic transient persistence,
-   proxy round-trip → **B4 · expressions v2**.
-6. **D1 · `examples/mvp_workflow.py` + CI** — the acceptance demo, run on both backends.
+5. **B3 · containers/links** (4) and **B4 · expressions v2** — the remaining engine items.
+6. **C1 · full property round-trip** — ✅ **done** (slice C1): fixture defaults/statuses,
+   `PropertyLinkSub`, static-vs-dynamic transient persistence, proxy round-trip.
+7. **D1 · `examples/mvp_workflow.py` + CI** — ✅ **done** (slice D1): the acceptance demo, wired
+   into CI.
+8. **D2 · remaining `DocumentBasicCases`** — ✅ **done** (slice D2): recompute Touch/Enforce +
+   dependency propagation, property metadata, constraints, object invalidation, and write-through
+   geometry handles.
 
 **After the headless MVP — the app shell.** The next major chunk turns the engine into an
 interactive window: see **[`app-shell-vision.md`](app-shell-vision.md)**. A single `bite-gpui`

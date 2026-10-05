@@ -550,14 +550,27 @@ fn gauss_invert(a: &mut [f64; 16], b: &mut [f64; 16]) -> bool {
 // Rotation (quaternion: w, x, y, z)
 // ---------------------------------------------------------------------------
 
-#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
 pub struct Rotation {
     pub q: [f64; 4],
+    /// The axis the rotation was last set with (FreeCAD `_axis`). The quaternion
+    /// alone cannot represent "axis X, angle 0", and `RawAxis` must survive a
+    /// save, so it is retained here when set explicitly.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub raw_axis: Option<Vector3>,
+}
+
+/// Two rotations are equal when their quaternions match; the cached raw axis is
+/// presentation metadata and is ignored (mirroring FreeCAD).
+impl PartialEq for Rotation {
+    fn eq(&self, other: &Self) -> bool {
+        self.q == other.q
+    }
 }
 
 impl Rotation {
     pub fn identity() -> Self {
-        Rotation { q: [1.0, 0.0, 0.0, 0.0] }
+        Rotation { q: [1.0, 0.0, 0.0, 0.0], raw_axis: None }
     }
 
     /// Rotation around `axis` (normalized) by `angle` (radians).
@@ -568,7 +581,7 @@ impl Rotation {
         let a = axis.normalize();
         let half = angle * 0.5;
         let s = half.sin();
-        Rotation { q: [half.cos(), a.x * s, a.y * s, a.z * s] }
+        Rotation { q: [half.cos(), a.x * s, a.y * s, a.z * s], raw_axis: None }
     }
 
     pub fn to_matrix(&self) -> Matrix4 {
@@ -615,8 +628,13 @@ impl Rotation {
         }
     }
 
-    /// The normalized rotation axis (Z if the rotation is (near-)identity).
+    /// The rotation axis. Prefers the axis retained by an explicit
+    /// `setAxis`/`setAngle` (FreeCAD `getRawAxis`/`getAxis`), falling back to
+    /// the axis derived from the quaternion (Z if near-identity).
     pub fn axis(&self) -> Vector3 {
+        if let Some(a) = self.raw_axis {
+            return a;
+        }
         let w = self.q[0];
         if !(-1.0..=1.0).contains(&w) {
             return Vector3::new(0.0, 0.0, 1.0);
@@ -630,8 +648,11 @@ impl Rotation {
     }
 
     /// Rebuild the rotation about the current axis with a new `angle` (radians).
+    /// A retained raw axis is preserved.
     pub fn set_angle(&mut self, angle: f64) {
+        let raw = self.raw_axis;
         *self = Rotation::from_axis_angle(&self.axis(), angle);
+        self.raw_axis = raw;
     }
 
     /// Quaternion product (`self * o`): apply `o` first, then `self`.
@@ -645,12 +666,13 @@ impl Rotation {
                 w1 * y2 - x1 * z2 + y1 * w2 + z1 * x2,
                 w1 * z2 + x1 * y2 - y1 * x2 + z1 * w2,
             ],
+            raw_axis: None,
         }
     }
 
     /// The inverse rotation (quaternion conjugate).
     pub fn inverse(&self) -> Rotation {
-        Rotation { q: [self.q[0], -self.q[1], -self.q[2], -self.q[3]] }
+        Rotation { q: [self.q[0], -self.q[1], -self.q[2], -self.q[3]], raw_axis: None }
     }
 
     /// Whether two rotations are equal within `tol`.
@@ -685,6 +707,7 @@ impl Rotation {
                 c1 * s2 * c3 + s1 * c2 * s3,
                 s1 * c2 * c3 - c1 * s2 * s3,
             ],
+            raw_axis: None,
         }
     }
 
@@ -705,7 +728,7 @@ impl Rotation {
                     t = u.cross(&Vector3::new(0.0, 1.0, 0.0));
                 }
                 let t = t.normalize();
-                Rotation { q: [0.0, t.x, t.y, t.z] }
+                Rotation { q: [0.0, t.x, t.y, t.z], raw_axis: None }
             }
         } else {
             Rotation::from_axis_angle(&w, dot.clamp(-1.0, 1.0).acos())
@@ -756,6 +779,7 @@ impl Rotation {
             let s = 0.5 / s;
             Rotation {
                 q: [w, (g(2, 1) - g(1, 2)) * s, (g(0, 2) - g(2, 0)) * s, (g(1, 0) - g(0, 1)) * s],
+                raw_axis: None,
             }
         } else {
             let mut i = 0usize;
@@ -775,7 +799,7 @@ impl Rotation {
             q[0] = (g(k, j) - g(j, k)) * s;
             q[1 + j] = (g(j, i) + g(i, j)) * s;
             q[1 + k] = (g(k, i) + g(i, k)) * s;
-            Rotation { q }
+            Rotation { q, raw_axis: None }
         }
     }
 }

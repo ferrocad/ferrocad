@@ -236,10 +236,23 @@ Ordered by dependency and value. Sizes are rough (test yield in parentheses).
   assigning to a `PropertyLength` coerces a string or number and keeps the kind,
   and recompute writes a result back in the property's own kind, so a length keeps
   its unit.
-- **D2 · Remaining `DocumentBasicCases`.** `testAddRemove`, `testObjects`,
-  `testNoRecomputeParent`, `testNotification_Issue2902Part2`, `testIssue24571`,
-  `testRawAxis`. *(~6; a couple may hinge on property sub-object reference semantics —
-  see §8.)*
+- **D2 · Remaining `DocumentBasicCases`. ✅ DONE.** All six:
+  - `testAddRemove` — a removed object's Python handle is invalidated
+    (`ReferenceError` on attribute access).
+  - `testObjects` — `getGroupOfProperty`/`getDocumentationOfProperty`/
+    `getEnumerationsOfProperty`, the feature-test `Enum` default (`"Four"`), and
+    `ConstraintInt`/`ConstraintFloat` clamping.
+  - `testNoRecomputeParent` — the recompute engine gained FreeCAD's
+    Touch/Enforce split, link-derived dependencies, dependent propagation, and a
+    type-specific `execute` (`App::FeatureTest` bumps `ExecCount`); `recompute()`
+    now returns the objects executed (`objectCount`).
+  - `testIssue24571` — constraint bounds assignable via a 4-tuple and persisted.
+  - `testNotification_Issue2902Part2` / `testRawAxis` — geometry handles are now
+    write-through (`obj.Placement.Base.x = 5` propagates), with reassignment
+    detaching previously captured handles via a per-property version, and the
+    `Rotation` raw axis is retained across save/restore. *(Resolves §8.1.)*
+
+  `Document.py` is now **94/137**, total conformance **167 passed**.
 - **D3 · Stretch: `FreeCADInitTests` package-init shim.** `Logger`, `ReturnType`,
   `PropertyType` (IntEnum), `__cmake__`/`__ModDirs__`/`__ModCache__`/`__MacroDirs__`,
   `__main__` bootstrap leaks, and the unit/quantity constant tables.
@@ -262,12 +275,18 @@ take `Document.py` to 137/137.
 
 ## 8. Risks & open decisions
 
-1. **Property sub-object reference semantics.** `obj.Placement.Rotation.Axis = …`
-   appears to mutate a copy in upstream (the C++ getters return by value) — we matched
-   that. But `Document.testRawAxis` relies on it. Either the test is failing upstream,
-   or some property sub-objects are returned **live**. Resolve with a live-reference
-   probe before D2; it may change how `PropertyPlacement`/`PropertyRotation` expose
-   sub-objects. *(Tracked since slice 15/16.)*
+1. **Property sub-object reference semantics. ✅ RESOLVED (D2).** The probe is
+   conclusive: upstream's getters are **copy-based** — `PropertyPlacement::getPyObject`
+   returns `new Base::PlacementPy(new Base::Placement(_cPos))`, and `PlacementPy::getBase`
+   returns a fresh `Py::Vector` — so `obj.Placement.Base.x = 5` cannot write back through
+   the value copy. The test nonetheless requires write-through *and* detachment:
+   `plm = obj.Placement; obj.Placement = Placement(); plm.Base.x = 5` must **not** affect
+   the object, while `obj.Placement.Base.x = 5` must. We therefore return **live,
+   write-through geometry handles** instead of copies, each tagged with the property's
+   monotonic version; a write is dropped once the property is reassigned (its version
+   changes), which gives the required detachment even when the new value compares equal.
+   Additionally, `Rotation` now retains the raw axis across save/restore, so `RawAxis`
+   survives. *(Tests: `testNotification_Issue2902Part2`, `testRawAxis`.)*
 2. **`UndoMode`/undo scope.** Full command-object undo is the MVP's biggest item; scope
    it to the operations the tests exercise (add/remove/property/group/dynamic) rather
    than a generic command framework.

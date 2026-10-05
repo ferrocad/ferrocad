@@ -18,9 +18,9 @@ fn property_container_get_set() {
 fn property_status_and_touch() {
     let mut doc = Document::new();
     let o = doc.add_object("Obj", "App::FeaturePython");
-    doc.add_property(o, "Plain", Property::String(String::new()), prop_status::NONE)
+    doc.add_property(o, "Plain", Property::String(String::new()), prop_status::NONE, "", "")
         .unwrap();
-    doc.add_property(o, "Out", Property::String(String::new()), prop_status::OUTPUT)
+    doc.add_property(o, "Out", Property::String(String::new()), prop_status::OUTPUT, "", "")
         .unwrap();
 
     // `add_property` itself does not touch the object.
@@ -46,12 +46,26 @@ fn property_status_and_touch() {
 fn no_persist_properties_are_dropped_but_dynamic_transients_saved() {
     let mut doc = Document::new();
     let o = doc.add_object("Obj", "App::FeaturePython");
-    doc.add_property(o, "Kept", Property::String("v".into()), prop_status::NONE)
+    doc.add_property(o, "Kept", Property::String("v".into()), prop_status::NONE, "", "")
         .unwrap();
-    doc.add_property(o, "Transient", Property::String("t".into()), prop_status::TRANSIENT)
-        .unwrap();
-    doc.add_property(o, "NoPersist", Property::String("n".into()), prop_status::NOPERSIST)
-        .unwrap();
+    doc.add_property(
+        o,
+        "Transient",
+        Property::String("t".into()),
+        prop_status::TRANSIENT,
+        "",
+        "",
+    )
+    .unwrap();
+    doc.add_property(
+        o,
+        "NoPersist",
+        Property::String("n".into()),
+        prop_status::NOPERSIST,
+        "",
+        "",
+    )
+    .unwrap();
 
     let saved = doc.to_saved("Doc");
     let obj = &saved.objects[0];

@@ -15,6 +15,44 @@ fn quantity(value: f64) -> Property {
     Property::Quantity(Quantity::new(value, Unit::Millimeter))
 }
 
+/// `(group, documentation)` for a type's property, mirroring the group/doc
+/// arguments upstream passes to `ADD_PROPERTY_TYPE` (defaults empty).
+pub fn property_meta(type_id: &str, name: &str) -> (&'static str, &'static str) {
+    if !type_id.starts_with("App::FeatureTest") {
+        return ("", "");
+    }
+    const GROUP: &str = "Feature Test";
+    let doc = match name {
+        "Source1" | "Source2" | "SourceN" => "Source for testing links",
+        "ExecResult" => "Result of the execution",
+        "ExceptionType" => "The type of exception the execution method throws",
+        "ExecCount" => "Number of executions",
+        "TypeHidden" => "An example property which has the type 'Hidden'",
+        "TypeReadOnly" => "An example property which has the type 'ReadOnly'",
+        "TypeOutput" => "An example property which has the type 'Output'",
+        "TypeTransient" => "An example property which has the type 'Transient'",
+        "TypeNoRecompute" => "An example property which has the type 'NoRecompute'",
+        "TypeAll" => "An example property which has the types 'Output', 'ReadOnly' and 'Hidden'",
+        _ => "",
+    };
+    let in_group = matches!(
+        name,
+        "Source1"
+            | "Source2"
+            | "SourceN"
+            | "ExecResult"
+            | "ExceptionType"
+            | "ExecCount"
+            | "TypeHidden"
+            | "TypeReadOnly"
+            | "TypeOutput"
+            | "TypeTransient"
+            | "TypeNoRecompute"
+            | "TypeAll"
+    );
+    (if in_group { GROUP } else { "" }, doc)
+}
+
 /// `(name, default, status)` for each of the type's properties.
 pub fn default_properties(type_id: &str) -> Vec<(&'static str, Property, u32)> {
     use prop_status::{HIDDEN, NONE, NORECOMPUTE, OUTPUT, READONLY, TRANSIENT};
@@ -30,9 +68,37 @@ pub fn default_properties(type_id: &str) -> Vec<(&'static str, Property, u32)> {
             ("StringList", Property::StringList(vec![]), NONE),
             ("Distance", quantity(47.11), NONE),
             ("Angle", quantity(3.0), NONE),
-            ("Enum", Property::String(String::new()), NONE),
-            ("ConstraintInt", Property::IntegerList(vec![5]), NONE),
-            ("ConstraintFloat", Property::FloatList(vec![5.0]), NONE),
+            (
+                "Enum",
+                Property::Enumeration(
+                    ["Zero", "One", "Two", "Three", "Four"]
+                        .iter()
+                        .map(|s| s.to_string())
+                        .collect(),
+                    4,
+                ),
+                NONE,
+            ),
+            (
+                "ConstraintInt",
+                Property::IntegerConstraint {
+                    value: 5,
+                    min: 0,
+                    max: 100,
+                    step: 1,
+                },
+                NONE,
+            ),
+            (
+                "ConstraintFloat",
+                Property::FloatConstraint {
+                    value: 5.0,
+                    min: 0.0,
+                    max: 100.0,
+                    step: 1.0,
+                },
+                NONE,
+            ),
             ("IntegerList", Property::IntegerList(vec![4711]), NONE),
             ("FloatList", Property::FloatList(vec![47.11]), NONE),
             ("Link", Property::Link(String::new()), NONE),

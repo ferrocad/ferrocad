@@ -9,6 +9,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use petgraph::graph::NodeIndex;
 use petgraph::stable_graph::StableGraph;
+use petgraph::visit::{EdgeRef, IntoEdgeReferences};
 use serde::{Deserialize, Serialize};
 
 use crate::expr;
@@ -33,10 +34,20 @@ pub struct DocumentObject {
     pub expressions: BTreeMap<String, String>,
     /// Dynamic extension type ids added via `addExtension`.
     pub extensions: BTreeSet<String>,
-    /// Set by `enforceRecompute`; cleared when the object recomputes.
+    /// FreeCAD `ObjectStatus::Enforce`: the object itself must execute on the
+    /// next recompute (set by `enforceRecompute`, a plain `touch()`, or a
+    /// non-`NoRecompute` property change).
     pub must_execute: bool,
+    /// FreeCAD `ObjectStatus::Touch`: the object's output may be stale, so its
+    /// dependents are enforced on the next recompute. Cleared by `purgeTouched`.
+    pub touched: bool,
     /// Set when the object's last recompute failed (reported as `Invalid`).
     pub invalid: bool,
+    /// Monotonic counter per property, bumped on every `set_property`. Used to
+    /// detect that a geometry handle (e.g. `obj.Placement.Base`) still refers to
+    /// the current property value: reassigning the property invalidates old
+    /// handles even when the new value compares equal.
+    pub property_versions: BTreeMap<String, u64>,
     /// Opaque base64-pickled Python state (instance `__dict__` + `Proxy`).
     pub python_state: Option<String>,
 }
@@ -100,6 +111,8 @@ impl Document {
         let mut properties = PropertyContainer::new();
         for (prop_name, prop, status) in crate::typeregistry::default_properties(type_id) {
             properties.set_with_status(prop_name.to_string(), prop, status);
+            let (group, doc) = crate::typeregistry::property_meta(type_id, prop_name);
+            properties.set_meta(prop_name.to_string(), group, doc);
         }
 
         self.objects.insert(
@@ -113,7 +126,9 @@ impl Document {
                 expressions: BTreeMap::new(),
                 extensions: BTreeSet::new(),
                 must_execute: false,
+                touched: false,
                 invalid: false,
+                property_versions: BTreeMap::new(),
                 python_state: None,
             },
         );
@@ -319,11 +334,81 @@ impl Document {
         }
     }
 
+    /// `(from, to)` pairs meaning `to` depends on `from`, so `from` recomputes
+    /// first. Derived from link properties and expressions, plus the explicit
+    /// edges registered through [`add_dependency`](Self::add_dependency).
+    ///
+    /// The `Group` property is skipped: group membership does not order
+    /// recompute (FreeCAD treats it specially).
+    fn dependency_edges(&self) -> Vec<(ObjectId, ObjectId)> {
+        let by_name: BTreeMap<&str, ObjectId> =
+            self.objects.values().map(|o| (o.name.as_str(), o.id)).collect();
+        let mut edges = Vec::new();
+        for obj in self.objects.values() {
+            {
+                let mut add = |name: &str| {
+                    if let Some(&from) = by_name.get(name) {
+                        if from != obj.id {
+                            edges.push((from, obj.id));
+                        }
+                    }
+                };
+                for (prop, value) in obj.properties.iter() {
+                    if prop == "Group" {
+                        continue;
+                    }
+                    match value {
+                        Property::Link(n) => add(n),
+                        Property::LinkList(ns) => ns.iter().for_each(|n| add(n)),
+                        Property::LinkSub(n, _) => add(n),
+                        _ => {}
+                    }
+                }
+                for source in obj.expressions.values() {
+                    if let Ok(parsed) = expr::parse(source) {
+                        let mut refs = BTreeSet::new();
+                        collect_object_refs(&parsed, &mut refs);
+                        for name in refs {
+                            add(&name);
+                        }
+                    }
+                }
+            }
+        }
+        for edge in self.graph.edge_references() {
+            edges.push((self.graph[edge.source()], self.graph[edge.target()]));
+        }
+        edges
+    }
+
+    /// The objects that directly depend on `id`.
+    pub fn dependents(&self, id: ObjectId) -> Vec<ObjectId> {
+        let mut out: Vec<ObjectId> = self
+            .dependency_edges()
+            .into_iter()
+            .filter(|(from, _)| *from == id)
+            .map(|(_, to)| to)
+            .collect();
+        out.sort_unstable();
+        out.dedup();
+        out
+    }
+
     /// Object ids in dependency-first order. `Err` if the graph has a cycle.
     pub fn recompute_order(&self) -> Result<Vec<ObjectId>, String> {
-        let nodes = petgraph::algo::toposort(&self.graph, None)
+        let mut graph: petgraph::graph::DiGraph<ObjectId, ()> = petgraph::graph::DiGraph::new();
+        let mut nodes: BTreeMap<ObjectId, NodeIndex> = BTreeMap::new();
+        for obj in self.objects.values() {
+            nodes.insert(obj.id, graph.add_node(obj.id));
+        }
+        for (from, to) in self.dependency_edges() {
+            if let (Some(&a), Some(&b)) = (nodes.get(&from), nodes.get(&to)) {
+                graph.add_edge(a, b, ());
+            }
+        }
+        let order = petgraph::algo::toposort(&graph, None)
             .map_err(|_| "dependency cycle".to_string())?;
-        Ok(nodes.into_iter().map(|n| self.graph[n]).collect())
+        Ok(order.into_iter().map(|n| graph[n]).collect())
     }
 
     // -- properties (transactional + observable) ----------------------------
@@ -344,10 +429,15 @@ impl Document {
         {
             let obj = self.objects.get_mut(&object).unwrap();
             obj.properties.set(name.to_string(), value.clone());
-            // Assigning a property touches the object, unless it is an output /
-            // no-recompute property (FreeCAD `Property::touch`).
-            if status & crate::prop_status::NO_TOUCH == 0 {
-                obj.must_execute = true;
+            *obj.property_versions.entry(name.to_string()).or_insert(0) += 1;
+            // Assigning a property touches the object unless it is an output
+            // property; it also enforces execution unless it is `NoRecompute`
+            // (FreeCAD `DocumentObject::onChanged`).
+            if status & crate::prop_status::OUTPUT == 0 {
+                obj.touched = true;
+                if status & crate::prop_status::NORECOMPUTE == 0 {
+                    obj.must_execute = true;
+                }
             }
         }
 
@@ -368,6 +458,16 @@ impl Document {
         self.active_object
     }
 
+    /// The monotonic version of a property (see `DocumentObject::property_versions`).
+    /// A geometry handle records the version it was created with and refuses to
+    /// write back once the property has been reassigned.
+    pub fn property_version(&self, object: ObjectId, name: &str) -> u64 {
+        self.objects
+            .get(&object)
+            .and_then(|o| o.property_versions.get(name).copied())
+            .unwrap_or(0)
+    }
+
     /// Add a property with an explicit status mask. Unlike `set_property`, this
     /// does not touch the object (FreeCAD `addProperty`).
     pub fn add_property(
@@ -376,6 +476,8 @@ impl Document {
         name: &str,
         value: Property,
         status: u32,
+        group: &str,
+        doc: &str,
     ) -> Result<(), String> {
         let obj = self
             .objects
@@ -385,6 +487,7 @@ impl Document {
         // still persisted (`PropertyContainer::Save`).
         obj.properties
             .set_with_status(name.to_string(), value, status | prop_status::DYNAMIC);
+        obj.properties.set_meta(name.to_string(), group, doc);
         Ok(())
     }
 
@@ -405,15 +508,31 @@ impl Document {
     pub fn purge_touched(&mut self, object: ObjectId) {
         if let Some(obj) = self.objects.get_mut(&object) {
             obj.must_execute = false;
+            obj.touched = false;
         }
     }
 
     // -- recompute flags -----------------------------------------------------
 
-    pub fn enforce_recompute(&mut self, id: ObjectId) {
+    /// FreeCAD `DocumentObject::touch(noRecompute)`: mark the object touched;
+    /// also enforce its own execution unless `no_recompute` is set.
+    pub fn touch(&mut self, id: ObjectId, no_recompute: bool) {
         if let Some(obj) = self.objects.get_mut(&id) {
-            obj.must_execute = true;
+            obj.touched = true;
+            if !no_recompute {
+                obj.must_execute = true;
+            }
         }
+    }
+
+    /// FreeCAD `DocumentObject::enforceRecompute()`: touch and force execution.
+    pub fn enforce_recompute(&mut self, id: ObjectId) {
+        self.touch(id, false);
+    }
+
+    /// Whether the object is marked touched (`ObjectStatus::Touch`).
+    pub fn is_touched(&self, id: ObjectId) -> bool {
+        self.objects.get(&id).is_some_and(|o| o.touched)
     }
 
     /// Take (and clear) the `must_execute` flag for one object.
@@ -474,6 +593,8 @@ impl Document {
             .and_then(|o| o.expressions.get(prop).cloned());
         let obj = self.objects.get_mut(&object).unwrap();
         obj.expressions.insert(prop.to_string(), source.to_string());
+        // An expression makes the object dirty (FreeCAD `ExpressionEngine`).
+        self.enforce_recompute(object);
         self.record_change(Change::AddExpression {
             object,
             prop: prop.to_string(),
@@ -488,6 +609,7 @@ impl Document {
             Some(obj) => obj.expressions.remove(prop),
             None => return false,
         };
+        self.enforce_recompute(object);
         if let Some(old) = &old {
             self.record_change(Change::RemoveExpression {
                 object,
@@ -511,51 +633,120 @@ impl Document {
         parsed.eval(&|name| self.resolve(&object, name))
     }
 
-    /// Evaluate every expression (in dependency order) and write the results.
-    /// Returns the number of expressions evaluated.
-    pub fn recompute(&mut self) -> Result<usize, String> {
+    /// Recompute the document in dependency order (FreeCAD `Document::recompute`).
+    ///
+    /// Every expression is evaluated and every object marked to execute runs its
+    /// type-specific behaviour. An object whose state changed then enforces its
+    /// dependents, so a change propagates along the dependency graph. Returns the
+    /// ids of the objects that executed (`objectCount` in FreeCAD).
+    pub fn recompute(&mut self) -> Result<Vec<ObjectId>, String> {
         let order = self.recompute_order()?;
-        let mut count = 0;
+        let mut dependents: BTreeMap<ObjectId, Vec<ObjectId>> = BTreeMap::new();
+        for (from, to) in self.dependency_edges() {
+            dependents.entry(from).or_default().push(to);
+        }
+        let mut executed = Vec::new();
         for id in order {
-            let expressions: Vec<(String, String)> = {
-                let obj = &self.objects[&id];
-                obj.expressions
-                    .iter()
-                    .map(|(k, v)| (k.clone(), v.clone()))
-                    .collect()
-            };
-            for (prop, source) in expressions {
-                let parsed = match expr::parse(&source) {
-                    Ok(p) => p,
-                    Err(e) => {
-                        self.mark_invalid(id);
-                        return Err(e);
-                    }
-                };
-                let value = match parsed.eval(&|name| self.resolve(&id, name)) {
-                    Ok(v) => v,
-                    Err(e) => {
-                        self.mark_invalid(id);
-                        return Err(e);
-                    }
-                };
+            self.eval_expressions(id)?;
+
+            let do_recompute = self.objects.get(&id).is_some_and(|o| o.must_execute);
+            if do_recompute {
+                self.execute_object(id);
+                executed.push(id);
+            }
+
+            let propagate = self
+                .objects
+                .get(&id)
+                .is_some_and(|o| o.touched || do_recompute);
+            if propagate {
                 if let Some(obj) = self.objects.get_mut(&id) {
-                    // Write the result back in the property's own kind, so a
-                    // `PropertyLength` stays a length (with its unit) instead of
-                    // collapsing to a bare float.
-                    let result = match obj.properties.get(&prop) {
-                        Some(Property::Quantity(existing)) => Property::Quantity(
-                            crate::quantity::Quantity::new(value, existing.unit()),
-                        ),
-                        _ => Property::Float(value),
-                    };
-                    obj.properties.set(prop.clone(), result);
+                    obj.touched = false;
+                    obj.must_execute = false;
                     obj.invalid = false;
                 }
-                count += 1;
+                if let Some(deps) = dependents.get(&id).cloned() {
+                    for dep in deps {
+                        self.enforce_recompute(dep);
+                    }
+                }
             }
         }
-        Ok(count)
+        Ok(executed)
+    }
+
+    /// Evaluate one object's expressions and write the results back in the
+    /// property's own kind (so a `PropertyLength` keeps its unit).
+    fn eval_expressions(&mut self, id: ObjectId) -> Result<(), String> {
+        let expressions: Vec<(String, String)> = match self.objects.get(&id) {
+            Some(obj) => obj
+                .expressions
+                .iter()
+                .map(|(k, v)| (k.clone(), v.clone()))
+                .collect(),
+            None => return Ok(()),
+        };
+        for (prop, source) in expressions {
+            let parsed = match expr::parse(&source) {
+                Ok(p) => p,
+                Err(e) => {
+                    self.mark_invalid(id);
+                    return Err(e);
+                }
+            };
+            let value = match parsed.eval(&|name| self.resolve(&id, name)) {
+                Ok(v) => v,
+                Err(e) => {
+                    self.mark_invalid(id);
+                    return Err(e);
+                }
+            };
+            if let Some(obj) = self.objects.get_mut(&id) {
+                let result = match obj.properties.get(&prop) {
+                    Some(Property::Quantity(existing)) => Property::Quantity(
+                        crate::quantity::Quantity::new(value, existing.unit()),
+                    ),
+                    _ => Property::Float(value),
+                };
+                obj.properties.set(prop.clone(), result);
+                obj.invalid = false;
+            }
+        }
+        Ok(())
+    }
+
+    /// Run an object's type-specific `execute()` behaviour.
+    ///
+    /// `App::FeatureTest*` mirrors the C++ fixture: it bumps `ExecCount` and
+    /// sets `ExecResult`. The writes are raw so execution does not re-touch the
+    /// object (which would schedule an endless recompute).
+    fn execute_object(&mut self, id: ObjectId) {
+        let type_id = match self.objects.get(&id) {
+            Some(obj) => obj.type_id.clone(),
+            None => return,
+        };
+        if !type_id.starts_with("App::FeatureTest") {
+            return;
+        }
+        let count = self
+            .objects
+            .get(&id)
+            .and_then(|o| o.properties.get("ExecCount"))
+            .and_then(|p| match p {
+                Property::Integer(n) => Some(*n),
+                _ => None,
+            })
+            .unwrap_or(0);
+        if let Some(obj) = self.objects.get_mut(&id) {
+            if obj.properties.get("ExecCount").is_some() {
+                obj.properties
+                    .set("ExecCount".to_string(), Property::Integer(count + 1));
+            }
+            if obj.properties.get("ExecResult").is_some() {
+                obj.properties
+                    .set("ExecResult".to_string(), Property::String("Exec".to_string()));
+            }
+        }
     }
 
     fn mark_invalid(&mut self, id: ObjectId) {
@@ -618,6 +809,7 @@ impl Document {
                 o.extensions = obj.extensions.iter().cloned().collect();
                 o.python_state = obj.python_state.clone();
                 o.must_execute = false;
+                o.touched = false;
                 o.invalid = false;
             }
         }
@@ -831,6 +1023,29 @@ fn collect_self_deps(e: &expr::Expr, out: &mut BTreeSet<String>) {
     }
 }
 
+/// Collect the object names an expression references via `Object.Property`
+/// paths (the part before the first `.`, excluding self-relative `.<prop>`).
+fn collect_object_refs(e: &expr::Expr, out: &mut BTreeSet<String>) {
+    match e {
+        expr::Expr::Number(_) => {}
+        expr::Expr::Var(name) => {
+            if name.starts_with('.') {
+                return;
+            }
+            if let Some((object, _)) = name.split_once('.') {
+                if !object.is_empty() {
+                    out.insert(object.to_string());
+                }
+            }
+        }
+        expr::Expr::UnaryNeg(x) => collect_object_refs(x, out),
+        expr::Expr::Binary(l, _, r) => {
+            collect_object_refs(l, out);
+            collect_object_refs(r, out);
+        }
+    }
+}
+
 /// Whether `goal` is reachable from `start` in the property dependency graph.
 fn graph_reaches(
     graph: &BTreeMap<String, BTreeSet<String>>,
@@ -856,7 +1071,10 @@ fn graph_reaches(
 fn numeric(obj: &DocumentObject, name: &str) -> Option<f64> {
     match obj.properties.get(name)? {
         Property::Float(f) => Some(*f),
+        Property::Integer(n) => Some(*n as f64),
         Property::Quantity(q) => Some(q.value_mm()),
+        Property::IntegerConstraint { value, .. } => Some(*value as f64),
+        Property::FloatConstraint { value, .. } => Some(*value),
         _ => None,
     }
 }

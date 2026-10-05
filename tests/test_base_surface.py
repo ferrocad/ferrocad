@@ -1099,5 +1099,98 @@ class TestPropertyStatus(unittest.TestCase):
         FreeCAD.closeDocument(doc2.Name)
 
 
+class TestPropertyMetadataAndConstraints(unittest.TestCase):
+    def test_property_metadata(self):
+        doc = FreeCAD.newDocument("Meta")
+        obj = doc.addObject("App::FeatureTest", "F")
+        self.assertEqual(obj.getGroupOfProperty("Source1"), "Feature Test")
+        self.assertNotEqual(obj.getDocumentationOfProperty("Source1"), "")
+        self.assertEqual(obj.getTypeOfProperty("Source1"), [])
+        self.assertIsNone(obj.getEnumerationsOfProperty("Source1"))
+        self.assertEqual(
+            sorted(obj.getEnumerationsOfProperty("Enum")),
+            sorted(["Zero", "One", "Two", "Three", "Four"]),
+        )
+        self.assertEqual(obj.Enum, "Four")
+        with self.assertRaises(AttributeError):
+            obj.getGroupOfProperty("Nope")
+        FreeCAD.closeDocument("Meta")
+
+    def test_constraint_clamping(self):
+        doc = FreeCAD.newDocument("Constraints")
+        obj = doc.addObject("App::FeatureTest", "F")
+        self.assertEqual(obj.ConstraintInt, 5)
+        self.assertAlmostEqual(obj.ConstraintFloat, 5.0)
+        obj.ConstraintInt = 500
+        self.assertEqual(obj.ConstraintInt, 100)
+        obj.ConstraintInt = -500
+        self.assertEqual(obj.ConstraintInt, 0)
+        obj.ConstraintFloat = 500.0
+        self.assertAlmostEqual(obj.ConstraintFloat, 100.0)
+        FreeCAD.closeDocument("Constraints")
+
+    def test_constraint_bounds_roundtrip(self):
+        doc = FreeCAD.newDocument("Constraints2")
+        obj = doc.addObject("App::FeatureTest", "F")
+        obj.ConstraintInt = (50, 0, 100, 1)
+        self.assertEqual(obj.ConstraintInt, 50)
+        path = os.path.join(tempfile.gettempdir(), "ferrocad_constraints.FCStd")
+        doc.saveAs(path)
+        FreeCAD.closeDocument("Constraints2")
+
+        doc = FreeCAD.open(path)
+        obj = doc.getObject("F")
+        obj.ConstraintInt = -1
+        self.assertEqual(obj.ConstraintInt, 0)
+        obj.ConstraintInt = 101
+        self.assertEqual(obj.ConstraintInt, 100)
+        FreeCAD.closeDocument(doc.Name)
+
+
+class TestObjectLifecycle(unittest.TestCase):
+    def test_removed_object_is_invalidated(self):
+        doc = FreeCAD.newDocument("Lifecycle")
+        obj = doc.addObject("App::FeatureTest", "L")
+        doc.removeObject(obj.Name)
+        with self.assertRaises(Exception):
+            _ = obj.Name
+        FreeCAD.closeDocument("Lifecycle")
+
+
+class TestGeometryWriteThrough(unittest.TestCase):
+    def test_placement_subobject_writes_back(self):
+        doc = FreeCAD.newDocument("WriteThrough")
+        obj = doc.addObject("App::FeatureTest", "F")
+        plm = obj.Placement
+        obj.Placement = FreeCAD.Placement()
+        # `plm` was captured before the reassignment, so it is now detached.
+        plm.Base.x = 5
+        self.assertEqual(obj.Placement.Base.x, 0)
+        obj.Placement.Base.x = 5
+        self.assertEqual(obj.Placement.Base.x, 5)
+        FreeCAD.closeDocument("WriteThrough")
+
+    def test_rotation_raw_axis_roundtrip(self):
+        doc = FreeCAD.newDocument("RawAxis")
+        obj = doc.addObject("App::FeaturePython", "F")
+        obj.addProperty("App::PropertyPlacement", "Plm")
+        obj.addProperty("App::PropertyRotation", "Rot")
+        obj.Plm.Rotation.Axis = (1, 2, 3)
+        obj.Rot.Axis = (3, 2, 1)
+        path = os.path.join(tempfile.gettempdir(), "ferrocad_rawaxis.FCStd")
+        doc.saveAs(path)
+        FreeCAD.closeDocument("RawAxis")
+
+        doc = FreeCAD.open(path)
+        obj = doc.getObject("F")
+        self.assertAlmostEqual(obj.Plm.Rotation.RawAxis.x, 1)
+        self.assertAlmostEqual(obj.Plm.Rotation.RawAxis.y, 2)
+        self.assertAlmostEqual(obj.Plm.Rotation.RawAxis.z, 3)
+        self.assertAlmostEqual(obj.Rot.RawAxis.x, 3)
+        self.assertAlmostEqual(obj.Rot.RawAxis.y, 2)
+        self.assertAlmostEqual(obj.Rot.RawAxis.z, 1)
+        FreeCAD.closeDocument(doc.Name)
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -29,8 +29,8 @@
 //! // …an expression on another (dependencies are tracked automatically)…
 //! doc.set_expression(area, "Result", "Width.Value * 2").unwrap();
 //!
-//! // …and a recompute in dependency order.
-//! assert_eq!(doc.recompute().unwrap(), 1);
+//! // …and a recompute in dependency order (returns the objects executed).
+//! assert_eq!(doc.recompute().unwrap().len(), 2);
 //! assert_eq!(
 //!     doc.object(area).unwrap().properties.get("Result"),
 //!     Some(&Property::Float(20.0)),

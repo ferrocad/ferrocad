@@ -43,6 +43,20 @@ pub enum Property {
     IntPairList(Vec<(i64, i64)>),
     /// An enumeration: allowed values + selected index (`App::PropertyEnumeration`).
     Enumeration(Vec<String>, usize),
+    /// An integer with a `[min, max]` range and step (`App::PropertyIntegerConstraint`).
+    IntegerConstraint {
+        value: i64,
+        min: i64,
+        max: i64,
+        step: i64,
+    },
+    /// A float with a `[min, max]` range and step (`App::PropertyFloatConstraint`).
+    FloatConstraint {
+        value: f64,
+        min: f64,
+        max: f64,
+        step: f64,
+    },
 }
 
 impl Property {
@@ -73,6 +87,8 @@ impl Property {
             Property::FileIncluded(_) => "App::PropertyFileIncluded",
             Property::IntPairList(_) => "App::PropertyIntPairList",
             Property::Enumeration(_, _) => "App::PropertyEnumeration",
+            Property::IntegerConstraint { .. } => "App::PropertyIntegerConstraint",
+            Property::FloatConstraint { .. } => "App::PropertyFloatConstraint",
         }
     }
 }
@@ -98,8 +114,6 @@ pub mod prop_status {
     /// `Prop_Transient` only suppresses persistence for *static* properties;
     /// dynamically added ones are still saved (FreeCAD `PropertyContainer::Save`).
     pub const NOT_PERSISTED: u32 = NOPERSIST;
-    /// Setting a property with either of these bits does not touch the object.
-    pub const NO_TOUCH: u32 = OUTPUT | NORECOMPUTE;
 }
 
 /// The `getTypeOfProperty` / `getPropertyStatus` text names for a status mask.
@@ -150,6 +164,10 @@ pub struct PropertyContainer {
     /// Property name → status bitmask. May carry the internal `DYNAMIC` bit,
     /// which the public accessors mask out.
     status: BTreeMap<String, u32>,
+    /// Property name → group shown in the UI (`getGroupOfProperty`).
+    group: BTreeMap<String, String>,
+    /// Property name → documentation (`getDocumentationOfProperty`).
+    doc: BTreeMap<String, String>,
 }
 
 impl PropertyContainer {
@@ -184,6 +202,27 @@ impl PropertyContainer {
         self.status.get(name).copied()
     }
 
+    /// Record a property's group and documentation (`addProperty` metadata).
+    pub fn set_meta(&mut self, name: impl Into<String>, group: &str, doc: &str) {
+        let name = name.into();
+        self.group.insert(name.clone(), group.to_string());
+        self.doc.insert(name, doc.to_string());
+    }
+
+    /// The group a property belongs to (`getGroupOfProperty`), if it exists.
+    pub fn group(&self, name: &str) -> Option<&str> {
+        self.props.contains_key(name).then(|| {
+            self.group.get(name).map(String::as_str).unwrap_or("")
+        })
+    }
+
+    /// A property's documentation (`getDocumentationOfProperty`), if it exists.
+    pub fn doc(&self, name: &str) -> Option<&str> {
+        self.props.contains_key(name).then(|| {
+            self.doc.get(name).map(String::as_str).unwrap_or("")
+        })
+    }
+
     /// Replace a property's *public* status mask; `None` if the property does
     /// not exist. The internal `DYNAMIC` bit is preserved.
     pub fn set_status(&mut self, name: &str, status: u32) -> Option<u32> {
@@ -207,12 +246,16 @@ impl PropertyContainer {
 
     pub fn remove(&mut self, name: &str) -> Option<Property> {
         self.status.remove(name);
+        self.group.remove(name);
+        self.doc.remove(name);
         self.props.remove(name)
     }
 
     pub fn clear(&mut self) {
         self.props.clear();
         self.status.clear();
+        self.group.clear();
+        self.doc.clear();
     }
 
     pub fn iter(&self) -> impl Iterator<Item = (&String, &Property)> {

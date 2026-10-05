@@ -20,6 +20,8 @@
 //!         └── undo() / redo()      ──► move a whole transaction between stacks
 //! ```
 
+use std::collections::BTreeMap;
+
 use super::{Document, DocumentObject, ObjectId, SavedObject};
 use crate::property::{Property, PropertyContainer};
 
@@ -399,6 +401,7 @@ impl Document {
                 if let Some(obj) = self.objects.get_mut(object) {
                     obj.expressions.remove(prop);
                 }
+                self.enforce_recompute(*object);
             }
         }
     }
@@ -431,6 +434,7 @@ impl Document {
                     if let Some(obj) = self.objects.get_mut(object) {
                         obj.expressions.remove(prop);
                     }
+                    self.enforce_recompute(*object);
                 }
             },
             Change::RemoveExpression { object, prop, old } => {
@@ -444,6 +448,9 @@ impl Document {
         if let Some(obj) = self.objects.get_mut(&object) {
             obj.expressions.insert(prop.to_string(), source.to_string());
         }
+        // Setting or restoring an expression dirties the object (FreeCAD
+        // `ExpressionEngine::setExpression`), so undo/redo propagates.
+        self.enforce_recompute(object);
     }
 
     /// Re-insert an object (with its original id) from a saved snapshot
@@ -471,7 +478,9 @@ impl Document {
                 expressions: saved.expressions.clone(),
                 extensions: saved.extensions.iter().cloned().collect(),
                 must_execute: false,
+                touched: false,
                 invalid: false,
+                property_versions: BTreeMap::new(),
                 python_state: saved.python_state.clone(),
             },
         );

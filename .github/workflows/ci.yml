@@ -12,8 +12,11 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
-      - name: Install CPython headers + GPUI system libraries (PyO3, fontconfig)
-        run: sudo apt-get update && sudo apt-get install -y python3-dev libfontconfig1-dev pkg-config
+      - name: Install CPython headers + GPUI system libraries (PyO3, X11/xkb/fontconfig)
+        run: >
+          sudo apt-get update && sudo apt-get install -y
+          python3-dev libfontconfig1-dev pkg-config
+          libxcb1-dev libxkbcommon-dev libxkbcommon-x11-dev
 
       - name: ferrocad_core (pure Rust) tests
         working-directory: crates/ferrocad_core
@@ -38,7 +41,8 @@ jobs:
       - name: Install Xvfb + software Vulkan (lavapipe) + CPython headers + GPUI libs
         run: |
           sudo apt-get update
-          sudo apt-get install -y xvfb mesa-vulkan-drivers python3-dev libfontconfig1-dev pkg-config
+          sudo apt-get install -y xvfb mesa-vulkan-drivers python3-dev \
+            libfontconfig1-dev pkg-config libxcb1-dev libxkbcommon-dev libxkbcommon-x11-dev
       - name: Open a real window (must not crash within 30s)
         run: |
           export VK_ICD_FILENAMES=/usr/share/vulkan/icd.d/lvp_icd.json

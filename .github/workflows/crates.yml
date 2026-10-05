@@ -26,8 +26,11 @@ jobs:
 
       - name: GPUI system libraries
         # `cargo publish` verify-builds each crate in isolation; the GPUI stack
-        # needs fontconfig's dev headers (and pkg-config to find them).
-        run: sudo apt-get update && sudo apt-get install -y libfontconfig1-dev pkg-config
+        # needs fontconfig, xcb and xkbcommon dev packages to build and link.
+        run: >
+          sudo apt-get update && sudo apt-get install -y
+          libfontconfig1-dev pkg-config
+          libxcb1-dev libxkbcommon-dev libxkbcommon-x11-dev
 
       - name: Verify the tag matches the workspace version
         run: |

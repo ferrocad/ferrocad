@@ -30,7 +30,10 @@ jobs:
           python-version: "3.12"
 
       - name: GPUI system libraries
-        run: sudo apt-get update && sudo apt-get install -y libfontconfig1-dev pkg-config
+        run: >
+          sudo apt-get update && sudo apt-get install -y
+          libfontconfig1-dev pkg-config
+          libxcb1-dev libxkbcommon-dev libxkbcommon-x11-dev
 
       - name: Tag matches the workspace version
         run: |
@@ -74,7 +77,8 @@ jobs:
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update
-          sudo apt-get install -y librsvg2-bin libfontconfig1-dev pkg-config
+          sudo apt-get install -y librsvg2-bin libfontconfig1-dev pkg-config \
+            libxcb1-dev libxkbcommon-dev libxkbcommon-x11-dev
           rsvg-convert -w 256 -h 256 packaging/icon/ferrocad.svg -o packaging/linux/ferrocad.png
           mkdir -p tools
           curl -fL -o tools/appimagetool-x86_64.AppImage \

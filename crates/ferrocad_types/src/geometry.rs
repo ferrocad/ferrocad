@@ -1,4 +1,4 @@
-//! Core geometry types used by FreeCAD's `Base` module: `Vector3`, `Matrix4`,
+//! Base geometry value types (FreeCAD's `Base` module): `Vector3`, `Matrix4`,
 //! `Rotation`, `Placement`, and `TypeId`.
 
 use serde::{Deserialize, Serialize};

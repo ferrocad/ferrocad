@@ -15,7 +15,9 @@ obvious:
 
 | Component | Kind | Role |
 | --- | --- | --- |
-| `ferrocad_core` | `rlib` | The pure-Rust engine: documents, properties, DAG, transactions, observers, expressions. No Python, no UI. A **leaf**. |
+| `ferrocad_types` | `rlib` | Base value types (FreeCAD's `Base`): `Quantity`/`Unit`, `Vector3`/`Matrix4`/`Rotation`/`Placement`. A **leaf**. |
+| `ferrocad_geom` | `rlib` | The geometry seam: opaque `Shape`, `History`/`ElementRef`/`ElementMap`, and the `GeometryBackend` trait (+ `NullBackend`). No kernel. A **leaf** above `ferrocad_types`. |
+| `ferrocad_core` | `rlib` | The pure-Rust engine: documents, properties, DAG, transactions, observers, expressions. No Python, no UI, no OCCT. Depends on `ferrocad_types` (and re-exports it). A **leaf** wrt the kernel. |
 | `ferrocad_py` | `cdylib` | The PyO3 extension, importable as the module `ferrocad`. The only bridge into `ferrocad_core`. |
 | `ferrocad_widgets` | `rlib` | Reusable `bite-gpui` widgets. Depends on **neither** `ferrocad_core` nor `ferrocad_py`. |
 | `ferrocad_gpui` | `rlib` | The `bite-gpui` application-shell library: boots CPython and provides `Shell`, `run`/`run_with` and `HostConfig`. Ships no application scripts. |
@@ -141,7 +143,9 @@ These edges are the ones to keep. `ferrocad_core` is a leaf; nothing ferrocad
 depends on a `cdylib`.
 
 ```
-ferrocad_core      -> (crates.io only)               [leaf]
+ferrocad_types     -> (crates.io only)               [leaf: Quantity, Placement, ...]
+ferrocad_geom      -> ferrocad_types                 [seam: Shape, History, GeometryBackend]
+ferrocad_core      -> ferrocad_types                 [re-exports; no OCCT]
 ferrocad_py        -> ferrocad_core                  [rlib + cdylib]
 ferrocad_widgets   -> (bite-gpui only)               [must not depend on core or py]
 ferrocad_gpui      -> ferrocad_widgets, pyo3 (embed) [may later -> ferrocad_core directly]
@@ -149,6 +153,10 @@ ferrocad_gpui      -> ferrocad_widgets, pyo3 (embed) [may later -> ferrocad_core
 ferrocad           -> ferrocad_gpui, ferrocad_py     [base app: links the module in, embeds payload]
 python/FreeCAD     -> ferrocad (built-in module when linked, else a .so on sys.path)
 ```
+
+`ferrocad_geom` is not yet depended on: `ferrocad_core` gains the edge when a
+`Property` can hold a `Shape`. The kernel backend (`ferrocad_occt`) will sit above
+`ferrocad_geom` and never below `ferrocad_core`; see [`occt-integration.md`](occt-integration.md).
 
 The rule that keeps the design honest: **the shell talks to the model through the
 `FreeCAD` API, exactly like a workbench does.** A direct `shell -> ferrocad_core`

@@ -97,13 +97,15 @@
 
 mod document;
 mod expr;
-mod geometry;
 mod observer;
 mod property;
-mod quantity;
 mod stringhasher;
 mod typeregistry;
-mod unit;
+
+// The base value types (`Quantity`/`Unit`/geometry) live in `ferrocad_types`, a
+// lower leaf crate, and are re-exported here so `ferrocad_core::Quantity` and the
+// `crate::geometry::…` paths inside this crate keep working.
+pub use ferrocad_types::{geometry, quantity, unit};
 
 pub use document::{sanitize_name, Document, DocumentObject, ObjectId, SavedDocument};
 pub use geometry::{Matrix4, Placement, Rotation, ScaleType, TypeId, Vector3};

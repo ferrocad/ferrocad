@@ -17,6 +17,7 @@ documentation = "https://docs.rs/ferrocad_core"
 name = "ferrocad_core"
 
 [dependencies]
+ferrocad_types.workspace = true
 petgraph.workspace = true
 serde.workspace = true
 serde_json.workspace = true

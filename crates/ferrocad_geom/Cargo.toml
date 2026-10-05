@@ -1,0 +1,19 @@
+[package]
+name = "ferrocad_geom"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+readme.workspace = true
+repository.workspace = true
+homepage.workspace = true
+rust-version.workspace = true
+description = "FerroCAD geometry seam: an opaque Shape handle, history/element-map types, and the GeometryBackend trait"
+keywords = ["cad", "freecad", "geometry", "parametric"]
+categories = ["science"]
+documentation = "https://docs.rs/ferrocad_geom"
+
+[lib]
+name = "ferrocad_geom"
+
+[dependencies]
+ferrocad_types.workspace = true

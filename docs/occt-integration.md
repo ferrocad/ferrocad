@@ -116,11 +116,13 @@ for a background import/export worker).
 
 The extraction is a refactor with its own tests, so it lands in stages:
 
-1. **`ferrocad_geom`** with `Shape`, `History`, `ElementMap`, `GeometryBackend`,
-   `NullBackend`. (If `Placement` is needed before step 2, `ferrocad_geom` may
-   temporarily depend on `ferrocad_core`; that edge is removed in step 2.)
-2. **`ferrocad_types`**: move the value types out of `ferrocad_core`, re-export them, so
-   `ferrocad_core`'s public surface is unchanged and `ferrocad_geom` no longer needs core.
+1. **[x] `ferrocad_types`** (done 2026-10-06): the value types (`quantity`, `unit`,
+   `geometry`) moved out of `ferrocad_core`, which now depends on and re-exports them, so
+   the public surface is unchanged.
+2. **[x] `ferrocad_geom`** (done 2026-10-06): `Shape`, `History`, `ElementRef`,
+   `ElementMap`, `OpResult`, `GeometryBackend` and `NullBackend`. It depends only on
+   `ferrocad_types`; `ferrocad_core` does not depend on it yet. (The doc's temporary
+   `geom -> core` edge was avoided: `ferrocad_types` landed first.)
 3. **`ferrocad_occt`**: port the spike's sibling bridge + first operations (box, fuse,
    cut) into the backend, and install it in the app.
 4. **`ferrocad_part` / `ferrocad_part_py`**: Part features as `DocumentObject`s, exposed

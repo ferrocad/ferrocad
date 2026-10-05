@@ -8,7 +8,9 @@
 resolver = "3"
 members = [
     "crates/ferrocad",
+    "crates/ferrocad_types",
     "crates/ferrocad_core",
+    "crates/ferrocad_geom",
     "crates/ferrocad_py",
     "crates/ferrocad_gen",
     "crates/ferrocad_widgets",
@@ -23,7 +25,9 @@ members = [
 # `pyo3/extension-module` opt-in (see their manifests), avoiding the libpython
 # link conflict.
 default-members = [
+    "crates/ferrocad_types",
     "crates/ferrocad_core",
+    "crates/ferrocad_geom",
     "crates/ferrocad_py",
     "crates/ferrocad_gen",
 ]
@@ -52,7 +56,9 @@ unicode-segmentation = "1"
 # whose sources changed, so the publish workflow skips the rest (their version is
 # already on crates.io). `[workspace.package] version` is the release/product
 # version, which the release workflow checks the git tag against.
+ferrocad_types = { path = "crates/ferrocad_types", version = "0.1.0" }
 ferrocad_core = { path = "crates/ferrocad_core", version = "0.1.0" }
+ferrocad_geom = { path = "crates/ferrocad_geom", version = "0.1.0" }
 ferrocad_py = { path = "crates/ferrocad_py", version = "0.1.0" }
 ferrocad_widgets = { path = "crates/ferrocad_widgets", version = "0.1.0" }
 ferrocad_gpui = { path = "crates/ferrocad_gpui", version = "0.1.1" }

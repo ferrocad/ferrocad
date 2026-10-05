@@ -2205,6 +2205,7 @@ dependencies = [
 name = "ferrocad_core"
 version = "0.1.0"
 dependencies = [
+ "ferrocad_types",
  "petgraph",
  "serde",
  "serde_json",
@@ -2215,6 +2216,13 @@ name = "ferrocad_gen"
 version = "0.1.1"
 dependencies = [
  "pyo3",
+]
+
+[[package]]
+name = "ferrocad_geom"
+version = "0.1.0"
+dependencies = [
+ "ferrocad_types",
 ]
 
 [[package]]
@@ -2234,6 +2242,13 @@ version = "0.1.0"
 dependencies = [
  "ferrocad_core",
  "pyo3",
+]
+
+[[package]]
+name = "ferrocad_types"
+version = "0.1.0"
+dependencies = [
+ "serde",
 ]
 
 [[package]]

@@ -1126,3 +1126,10 @@ B2 undo engine) → S3 (inspector) → S4 (property editor) → S5 (console) →
 
 Candidate parallel work while the above proceeds: `BaseTests.testAngleWithNullVector` (small),
 and the `FreeCADInitTests` package-init shim (stretch).
+
+**Geometry track (prep, outside the MVP slices).** The value types were extracted into
+`ferrocad_types` and the kernel-independent seam now exists in `ferrocad_geom` (`Shape`,
+`History`/`ElementRef`/`ElementMap`, `GeometryBackend`, `NullBackend`), so the document
+layer can start using geometry without a kernel. See
+[`occt-integration.md`](occt-integration.md) §7: steps 1–2 done; `ferrocad_occt` (the real
+backend) and the Part crates are next.

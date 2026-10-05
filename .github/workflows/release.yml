@@ -45,6 +45,11 @@ jobs:
       - name: Engine tests
         run: cargo test
 
+      - name: Build the FreeCAD extension module (for the shell tests)
+        run: |
+          cargo build -p ferrocad_py --features extension-module
+          cp target/debug/libferrocad_py.so python/ferrocad.abi3.so
+
       - name: Headless shell tests (embedded CPython)
         run: cargo test -p ferrocad_gpui
 

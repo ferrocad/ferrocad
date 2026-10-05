@@ -22,6 +22,14 @@ jobs:
         working-directory: crates/ferrocad_core
         run: cargo test
 
+      - name: Build the FreeCAD extension module (for the shell tests)
+        # The shell tests import the FreeCAD facade, which imports the `ferrocad`
+        # extension. Locally `build.sh` leaves the `.so` in `python/`; CI must
+        # build it too (the shell library does not link the bindings itself).
+        run: |
+          cargo build -p ferrocad_py --features extension-module
+          cp target/debug/libferrocad_py.so python/ferrocad.abi3.so
+
       - name: ferrocad_gpui headless tests (bite-gpui + embedded CPython)
         working-directory: crates/ferrocad_gpui
         run: cargo test
@@ -48,4 +56,9 @@ jobs:
           export VK_ICD_FILENAMES=/usr/share/vulkan/icd.d/lvp_icd.json
           # Build first: the 30s budget is for the run, not a cold compile.
           cargo build -p ferrocad
-          timeout 30 xvfb-run -a ./target/debug/ferrocad
+          # `timeout` exits 124 after killing a process that was still alive at
+          # 30s, which is the pass condition (no crash). Any other exit is a
+          # crash (or a boot failure) and fails the job.
+          code=0
+          timeout 30 xvfb-run -a ./target/debug/ferrocad || code=$?
+          if [ "$code" != "124" ]; then exit "$code"; fi

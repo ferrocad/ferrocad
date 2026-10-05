@@ -82,8 +82,16 @@ jobs:
               cargo xtask stage-payload
             fi
 
+            # `ferrocad` carries the payload staged above; those files are
+            # untracked on purpose, so the tree is dirty. Allow that for this
+            # crate only (everything else must be committed).
+            publish_args=""
+            if [ "$name" = "ferrocad" ]; then
+              publish_args="--allow-dirty"
+            fi
+
             echo "== publishing $name $version =="
-            cargo publish -p "$name"
+            cargo publish -p "$name" $publish_args
 
             # Wait until the version is visible so the next (dependent) crate can
             # resolve it from the index.

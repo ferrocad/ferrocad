@@ -90,6 +90,31 @@ riskiest assumption of the rewrite plan: *that a Python script written against
 FreeCAD's public `App` API can be served by a Rust implementation instead of the
 C++ one, without changing the script.*
 
+## Install
+
+Two ways to get the base app:
+
+- **Prebuilt artifacts** on the [Releases](https://github.com/ferrocad/ferrocad/releases)
+  page: `ferrocad-x86_64.AppImage` (Linux), `FerroCAD.dmg` (macOS, arm64), and
+  `ferrocad-windows-x86_64.zip` (Windows). Each is self-contained: it bundles
+  CPython, the `FreeCAD` facade and the `Draft` workbench, so no system Python is
+  needed.
+- **`cargo install ferrocad`** from crates.io. It builds a self-contained binary
+  that carries the same payload and unpacks it on first run.
+
+```sh
+cargo install ferrocad
+ferrocad
+```
+
+The Python package (`pip install ferrocad`, the `FreeCAD` API without a GUI) is
+not on PyPI yet.
+
+> **macOS**: the `.app` is ad-hoc signed, so a downloaded DMG needs
+> `xattr -dr com.apple.quarantine /Applications/FerroCAD.app` (or right-click →
+> Open) on first launch. **Windows**: the zip is unsigned, so SmartScreen may warn
+> on first run.
+
 ## The idea
 
 ```mermaid

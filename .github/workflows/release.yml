@@ -68,6 +68,10 @@ jobs:
           - os: windows-latest
             artifact_name: ferrocad-windows
             artifact_path: target/dist/ferrocad-windows-x86_64.zip
+            # Upstream `bite-gp-windows` 1.21.0 does not compile (unresolved
+            # `gpui` import), so the Windows leg is best-effort and must not
+            # block the Linux/macOS release. Remove once that crate is fixed.
+            continue-on-error: true
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4

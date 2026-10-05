@@ -74,15 +74,22 @@ A bundled Linux AppImage would look like this:
 
 ```
 ferrocad.AppImage
-├── AppRun                        -> sets PYTHONHOME/FERROCAD_PYTHON_PATH, exec bin/ferrocad
+├── AppRun                        -> sets PYTHONHOME/FERROCAD_PYTHON_PATH and
+│                                 LD_LIBRARY_PATH, exec bin/ferrocad
 ├── ferrocad.desktop, ferro.png
 ├── bin/ferrocad                  Rust bin (crate `ferrocad` -> ferrocad_gpui::run_with)
 │                                 links the PyO3 bindings; `ferrocad` is a built-in module
+├── lib/                          OCCT toolkit .so (the closure of the binary's DT_NEEDED)
 ├── mods/                         the workbenches (FreeCAD's Mod/ equivalent)
 ├── python/FreeCAD/               the pure-Python facade
 ├── runtime/                      python-build-standalone (libpython + stdlib)
-└── LICENSES/                     LGPL-2.1 (FerroCAD) + PSF (CPython)
+└── LICENSES/                     LGPL-3.0 (FerroCAD) + PSF (CPython) + OCCT exception
 ```
+
+OCCT is bundled exactly as CPython is: a per-platform runtime staged into the payload
+with the launcher setting the library path. It is not required yet (the MVP is
+geometry-free), so `lib/` appears only once the geometry slices land; see
+[`occt-bundling.md`](occt-bundling.md).
 
 The shell already resolves the facade via `FERROCAD_PYTHON_PATH` (see
 `crates/ferrocad_gpui/src/python.rs`); the bundle sets it (and `PYTHONHOME`) at
@@ -99,6 +106,7 @@ built-in `ferrocad`, so the interpreter finds it without a file on disk (see §8
 ```
 target/dist/ferrocad/
 ├── bin/ferrocad[.exe]        the app binary (PyO3 module built in)
+├── lib/                      OCCT toolkit .so (shared; staged when geometry is included)
 ├── python/                   FreeCAD, FreeCADGui, ferrocad_shell, ferrocad_spike
 ├── mods/                     workbenches
 ├── runtime/                  bundled CPython (when fetched)

@@ -29,6 +29,11 @@ is the `FreeCAD` Python API, documented by convention and by upstream.
   topological naming, and the seam for a future OCCT geometry engine.
 - [occt-history-spike.md](occt-history-spike.md) — the first geometry spike: what
   OCCT history FreeCAD depends on, and what it implies for the trait and the B slices.
+- [occt-integration.md](occt-integration.md) — the crate layout for OCCT: the
+  `ferrocad_geom` seam, the `ferrocad_occt` backend, and where Part/its Python
+  bindings sit.
+- [occt-bundling.md](occt-bundling.md) — shipping OCCT the way we ship CPython
+  (closure, payload layout, launcher, licensing).
 - [python-bindings.md](python-bindings.md) — the PyO3 binding design.
 - [distribution.md](distribution.md) — how the app runs and is packaged (payload,
   bundled runtime, artifacts).

@@ -250,6 +250,14 @@ never be a transitive dependency of the pure engine. A geometry feature type liv
 above the seam; `ferrocad_core` only needs to let a `Property` hold an opaque shape
 handle and to persist it.
 
+**Decided (2026-10-06): the middle option, with a narrow type extraction.** The trait
+and its vocabulary live in a new `ferrocad_geom` leaf; the real engine is a new
+`ferrocad_occt` crate; `ferrocad_core` depends only on `ferrocad_geom`. The value types
+the seam needs (`Quantity`, `Placement`, `Vector3`) move to a `ferrocad_types` leaf so
+the backend does not pull the document model. The Part workbench is `ferrocad_part`
+(depends on core, not on OCCT) with `ferrocad_part_py` wiring the backend; the backend
+is installed on the `App` at startup. Details in [`occt-integration.md`](occt-integration.md).
+
 ---
 
 ## 7. OCCT FFI: cost, licensing, and what to verify first
@@ -264,9 +272,9 @@ Rust-to-OCCT means FFI over a large, old C++ library. The practical concerns, in
 order they bite:
 
 1. **Binding source.** There are community Rust bindings (`opencascade-rs`,
-   `occt-sys`, and others). Their coverage and upkeep vary, and this note cannot
-   verify the current state offline; treat the choice as an open question and run a
-   smoke test before designing the trait around it.
+   `occt-sys`, and others). **Resolved:** use `opencascade-sys` 0.3 for geometry and a
+   *sibling* `#[cxx::bridge]` for history — no fork, no patch. Verified against OCCT
+   7.8.1 in [`occt-history-spike.md`](occt-history-spike.md) §7.
 2. **The smoking gun is history, not geometry.** Building a box and a fuse is easy;
    the make-or-break question is whether the bindings expose `Generated`/`Modified`/
    `IsDeleted` and the `BRepAlgoAPI_*` history cleanly enough to build an element map.
@@ -274,7 +282,7 @@ order they bite:
 3. **Build and distribution cost.** OCCT is large and slow to build. Static vs
    dynamic linking changes the AppImage/dmg/zip payload, and bundling it is a
    [`distribution.md`](distribution.md) concern, not a footnote. It also affects CI
-   build times.
+   build times. Measured and planned in [`occt-bundling.md`](occt-bundling.md).
 4. **License.** OCCT is LGPL-2.1-or-later **with an exception**, which is compatible
    with FerroCAD's LGPL-3.0-or-later (see [`rewrite-strategy.md`](rewrite-strategy.md)).
    Confirm the exact exception text at adoption time.

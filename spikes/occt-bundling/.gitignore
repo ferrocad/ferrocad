@@ -1,0 +1,4 @@
+# Staged OCCT runtime and any fetched prefix are build artifacts, not source.
+/out*/
+/.prefix/
+/__pycache__/

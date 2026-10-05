@@ -256,7 +256,8 @@ and its vocabulary live in a new `ferrocad_geom` leaf; the real engine is a new
 the seam needs (`Quantity`, `Placement`, `Vector3`) move to a `ferrocad_types` leaf so
 the backend does not pull the document model. The Part workbench is `ferrocad_part`
 (depends on core, not on OCCT) with `ferrocad_part_py` wiring the backend; the backend
-is installed on the `App` at startup. Details in [`occt-integration.md`](occt-integration.md).
+backend is installed on the core `Application` singleton at startup. Details in
+[`occt-integration.md`](occt-integration.md).
 
 ---
 

@@ -69,15 +69,18 @@ It is a **leaf above `ferrocad_geom`** — it does not depend on `ferrocad_core`
 
 ## 4. Injection: one backend, installed at startup
 
-`ferrocad_core` (or the `App`) holds `Arc<dyn GeometryBackend>` and defaults to
-`NullBackend`. The application installs the real one once:
+`ferrocad_core`'s application singleton — `Application`, the analog of FreeCAD's
+`App::Application` (`App::GetApplication()`) — holds `Arc<dyn GeometryBackend>` and
+defaults to `NullBackend`. The application installs the real one once:
 
 ```
-App::init()  ->  set_geometry_backend(Arc::new(OcctBackend::new()))
+Application::instance().set_geometry_backend(Arc::new(OcctBackend::new()))
 ```
 
-Features ask the document for the backend (`doc.geometry()`), the same way FreeCAD
-features reach `App::GetApplication()`. Nothing below the app names `ferrocad_occt`, so:
+This is the **core** singleton, not `bite-gpui`'s UI `App`; core never depends on the UI.
+Features ask the application for the backend (`Application::instance().geometry()`), the
+same way FreeCAD features reach `App::GetApplication()`. Nothing below the app names
+`ferrocad_occt`, so:
 
 - the headless engine and its tests run with `NullBackend`;
 - swapping or mocking a kernel is one call, not a recompile of core.
@@ -108,7 +111,7 @@ Two optional extras are deliberately out:
 Because the trait is in `ferrocad_geom` and the backend in `ferrocad_occt`, another
 workbench (PartDesign, Draft, an edition) that needs the kernel directly depends on
 **those two**, not on Part. In practice it should keep using the single installed
-backend from the `App` rather than constructing its own — one kernel instance, one set of
+backend from the `Application` rather than constructing its own — one kernel instance, one set of
 shape handles — but the layout does not forbid a second, isolated `OcctBackend` (useful
 for a background import/export worker).
 
@@ -128,7 +131,8 @@ The extraction is a refactor with its own tests, so it lands in stages:
    `make_box`, `fuse`, `cut`, `fillet`, `place`, and a positional `resolve`; fuse/cut
    build a face-level `History`. Verified against OCCT 7.8.1 (5 tests + doctest) and
    tested in CI by a `geometry` job that fetches OCCT from conda-forge. **Not yet
-   installed in the app**: that needs the `App` backend slot below.
+   installed**: that needs the `Application` backend slot (and the document registry it
+   owns) below.
 4. **`ferrocad_part` / `ferrocad_part_py`**: Part features as `DocumentObject`s, exposed
    as the Python module `Part`.
 

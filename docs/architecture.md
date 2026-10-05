@@ -158,7 +158,7 @@ python/FreeCAD     -> ferrocad (built-in module when linked, else a .so on sys.p
 ```
 
 `ferrocad_geom` is not yet depended on and `ferrocad_occt` is not yet installed:
-`ferrocad_core` gains the `ferrocad_geom` edge (and an `App` backend slot) when a
+`ferrocad_core` gains the `ferrocad_geom` edge (and an `Application` backend slot) when a
 `Property` can hold a `Shape`, at which point the application installs `OcctBackend`.
 The backend sits above the seam and never below `ferrocad_core`; see
 [`occt-integration.md`](occt-integration.md).

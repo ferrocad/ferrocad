@@ -1,8 +1,9 @@
 # Throwaway spike: drive OCCT from Rust with the real binding crate and find out
 # how much shape *history* the binding exposes.
 #
-# This is deliberately NOT a member of the FerroCAD workspace. The empty
-# `[workspace]` table marks it as its own workspace root.
+# This is deliberately NOT a member of the FerroCAD workspace. This `[workspace]`
+# table makes the spike its own workspace root (with the sibling bridge crate as a
+# member).
 #
 # Uses `opencascade-sys` (bschwind/opencascade-rs) directly, because the
 # high-level `opencascade` `Shape` hides its `TopoDS_Shape` (pub(crate)) and so
@@ -14,6 +15,7 @@ edition = "2021"
 publish = false
 
 [workspace]
+members = ["bridge"]
 
 [features]
 # Enable after applying patch/0001-history-bridge.patch to opencascade-sys.
@@ -25,3 +27,4 @@ builtin = ["opencascade-sys/builtin"]
 [dependencies]
 opencascade-sys = "0.3"
 cxx = "1"
+occt-history-bridge = { path = "bridge" }

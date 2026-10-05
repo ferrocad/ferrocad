@@ -4,11 +4,14 @@
 //! It mirrors the C++ probe: build two boxes, fuse and cut them, count
 //! sub-shapes, fillet an edge, and report what **history** the binding exposes.
 //!
-//! Stock `opencascade-sys` bridges no useful history, so this runs two modes:
+//! Three modes:
 //!
-//!   * default: prints what the stock crate exposes (geometry + `Cut::Generated`);
-//!   * `--features patched`: after applying `patch/0001-history-bridge.patch`, it
-//!     also reads `Modified`/`Generated`/`Deleted` and `BRepTools_History`.
+//!   * default: stock geometry plus the **element map** from the sibling bridge
+//!     crate `occt-history-bridge`, which adds the missing history calls without
+//!     patching `opencascade-sys`;
+//!   * `--features patched`: additionally reads `Modified`/`Generated`/`Deleted` and
+//!     `BRepTools_History` through `patch/0001-history-bridge.patch` applied inside the
+//!     crate (the version to send upstream).
 //!
 //! See `../../docs/occt-history-spike.md` §7 and `README.md`.
 
@@ -16,6 +19,8 @@ use opencascade_sys as ffi;
 
 use ffi::top_abs::TopAbs_ShapeEnum;
 use ffi::topo_ds::TopoDS_Shape;
+// Sibling bridge: the history/element-map calls missing from `opencascade-sys`.
+use occt_history_bridge as bridge;
 
 /// Count the sub-shapes of `kind` using the binding's `TopExp::MapShapes`.
 fn count(shape: &TopoDS_Shape, kind: TopAbs_ShapeEnum) -> i32 {
@@ -107,6 +112,66 @@ fn report_fuse_history(
     );
 }
 
+/// Element-level lineage, via the sibling bridge crate.
+///
+/// For each face of `input`, the 1-based indices (in `result_faces`) of the result
+/// faces it maps to. This is the granularity an element map needs; the whole-solid
+/// query above gives nothing. Works against the **stock** crate.
+fn report_element_map(
+    fuse: &mut cxx::UniquePtr<ffi::b_rep_algo_api::BRepAlgoAPI_Fuse>,
+    input: &TopoDS_Shape,
+    result_faces: &ffi::top_tools::TopTools_IndexedMapOfShape,
+    who: &str,
+) {
+    let mut input_faces = ffi::top_tools::new_indexed_map_of_shape();
+    ffi::top_exp::TopExp::MapShapes(input, TopAbs_ShapeEnum::TopAbs_FACE, input_faces.pin_mut());
+    let n = input_faces.Extent();
+    println!("\n== fuse element map [{who}: {n} input faces] ==");
+
+    for i in 1..=n {
+        let face = input_faces.FindKey(i);
+
+        let mut modified = ffi::top_tools::new_indexed_map_of_shape();
+        bridge::fc_brep_fuse_modified(fuse.pin_mut(), face, modified.pin_mut());
+        let mut generated = ffi::top_tools::new_indexed_map_of_shape();
+        bridge::fc_brep_fuse_generated(fuse.pin_mut(), face, generated.pin_mut());
+
+        let mut idx = Vec::new();
+        for k in 1..=modified.Extent() {
+            idx.push(bridge::fc_indexed_map_find_index(
+                result_faces,
+                modified.FindKey(k),
+            ));
+        }
+        for k in 1..=generated.Extent() {
+            idx.push(bridge::fc_indexed_map_find_index(
+                result_faces,
+                generated.FindKey(k),
+            ));
+        }
+        idx.sort_unstable();
+        idx.dedup();
+
+        if idx.is_empty() {
+            let deleted = bridge::fc_brep_fuse_is_deleted(fuse.pin_mut(), face);
+            if deleted {
+                println!("  face #{i} -> deleted");
+            } else {
+                // OCCT convention: an unchanged sub-shape is absent from
+                // Modified()/Generated() and is expected to survive as-is.
+                let same = bridge::fc_indexed_map_find_index(result_faces, face);
+                if same > 0 {
+                    println!("  face #{i} -> result face [{same}] (unchanged)");
+                } else {
+                    println!("  face #{i} -> no mapping and not deleted (absorbed)");
+                }
+            }
+        } else {
+            println!("  face #{i} -> result faces {idx:?}");
+        }
+    }
+}
+
 fn main() {
     println!("OCCT history probe (Rust, opencascade-sys)\n==========================================");
 
@@ -139,6 +204,17 @@ fn main() {
     report_fuse_history(&mut fuse, a_shape, "box a");
     report_fuse_history(&mut fuse, b_shape, "box b");
 
+    // Element-level lineage. Build the result face index map first; the borrow of
+    // `fuse` ends with this block, so the loop can borrow it mutably again.
+    let result_faces = {
+        let fused = fuse.pin_mut().Shape();
+        let mut m = ffi::top_tools::new_indexed_map_of_shape();
+        ffi::top_exp::TopExp::MapShapes(fused, TopAbs_ShapeEnum::TopAbs_FACE, m.pin_mut());
+        m
+    };
+    report_element_map(&mut fuse, a_shape, &result_faces, "box a");
+    report_element_map(&mut fuse, b_shape, &result_faces, "box b");
+
     let fused = fuse.pin_mut().Shape();
     println!("\n== fuse output ==");
     print_counts("fused", fused);
@@ -161,6 +237,7 @@ fn main() {
     println!("BRepAlgoAPI_Cut::Generated(a) -> {} shape(s)", generated.Size());
 
     println!("\nConclusion: stock opencascade-sys builds geometry but exposes almost no");
-    println!("history; patch/0001-history-bridge.patch adds the ~3 calls needed so the");
-    println!("spike can read Modified/Generated/Deleted and BRepTools_History.");
+    println!("history; the sibling bridge crate adds the calls needed to read per-sub-shape");
+    println!("Modified/Generated lineage against the unmodified crate, and");
+    println!("patch/0001-history-bridge.patch is a minimal in-crate variant of the same idea.");
 }

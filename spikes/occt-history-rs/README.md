@@ -7,8 +7,9 @@ crate (bschwind/opencascade-rs). No hand-rolled binding.
 Same question: **does shape history survive into Rust?** The answer turns out to be
 about the *crate's coverage*, and it is the important finding.
 
-**Status: verified.** The example compiles and runs against real OCCT 7.8.1, and the
-patched build reads real history (see "Verified results" below).
+**Status: verified.** The example compiles and runs against real OCCT 7.8.1. The
+sibling bridge (`bridge/`) yields element-level lineage against the **stock** crate
+(no patch), and the in-crate patch additionally reports counts (see "Verified results").
 
 ## What the crate actually exposes (the finding)
 
@@ -31,7 +32,8 @@ binding from scratch.
 ## Reading real history: `patch/0001-history-bridge.patch`
 
 `patch/0001-history-bridge.patch` is a concrete, apply-able patch against
-`opencascade-sys` 0.3.0. It adds one header and three bridge functions:
+`opencascade-sys` 0.3.0. It adds one header and three bridge functions (counts only;
+the sibling bridge below adds the element-map functions):
 
 - new `include/fc_history.hxx`: `fc_brep_{fuse,cut,common}_history(op, sub_shape, ...)`,
   which fill `Modified`/`Generated`/`Deleted` (from `BRepBuilderAPI_MakeShape`) and
@@ -42,6 +44,25 @@ binding from scratch.
 
 That is the whole diff: one header plus three functions, reusing the crate's existing
 `TopoDS_Shape`/`TopTools_ListOfShape` types.
+
+## The integration path: a sibling bridge (`bridge/`)
+
+The patch modifies the crate. `bridge/` instead adds a **second `#[cxx::bridge]`** that
+reuses `opencascade-sys`'s opaque types and links the same OCCT libraries, so there is
+**no fork, no patch, and no registry edit**:
+
+```rust
+type BRepAlgoAPI_Fuse = opencascade_sys::b_rep_algo_api::BRepAlgoAPI_Fuse;
+type TopoDS_Shape = opencascade_sys::topo_ds::TopoDS_Shape;
+fn fc_brep_fuse_modified(op: Pin<&mut BRepAlgoAPI_Fuse>, shape: &TopoDS_Shape,
+                         out: Pin<&mut TopTools_IndexedMapOfShape>);
+```
+
+It adds `Modified`/`Generated`/`IsDeleted` for fuse/cut/common, plus the
+`TopTools_IndexedMapOfShape::FindIndex` the crate also omits, so the spike can turn
+per-face history into **result face indices**. It needs only `OCCT_INCLUDE_DIR` at build
+time. This is the recommended production shape; see `../../docs/occt-history-spike.md`
+§10 for the full integration discussion.
 
 ## Getting OCCT (two ways)
 
@@ -96,26 +117,28 @@ CMake honors this from the environment, so no source edit is needed.
 . ../.toolchain/env.sh                                 # project-local Rust
 export CMAKE_POLICY_VERSION_MINIMUM=3.5
 export OpenCASCADE_DIR=$PWD/.occt78/lib/cmake/opencascade
+export OCCT_INCLUDE_DIR=$PWD/.occt78/include/opencascade   # sibling bridge
 
-# stock crate: geometry works, history is unavailable
+export LD_LIBRARY_PATH=$PWD/.occt78/lib:$LD_LIBRARY_PATH   # conda OCCT is shared
 cargo build --release
-LD_LIBRARY_PATH=$PWD/.occt78/lib ./target/release/occt-history-rs
+./target/release/occt-history-rs
 ```
 
-To read real history, apply the patch and force a rebuild of the crate (Cargo treats
-registry sources as immutable and will otherwise reuse the cached build):
+The sibling bridge builds automatically (it is a workspace member), so the element map
+appears even against the stock crate. To *also* see the count functions, apply the patch
+and force a rebuild (Cargo treats registry sources as immutable and will otherwise reuse
+the cached build):
 
 ```sh
 SYS=$(find "$CARGO_HOME/registry/src" -maxdepth 2 -name 'opencascade-sys-0.3.0' | head -1)
 patch -p1 -d "$SYS" < patch/0001-history-bridge.patch
 cargo clean -p opencascade-sys --release
 cargo build --release --features patched
-LD_LIBRARY_PATH=$PWD/.occt78/lib ./target/release/occt-history-rs
+./target/release/occt-history-rs
 ```
 
-Other application methods: `cargo vendor`, or fork `opencascade-rs` and point
-`[patch.crates-io]` at the fork (the clean path, and the one that could go upstream as
-a PR).
+Alternative ways to consume the history bridge: vendor a patched crate, or fork
+`opencascade-rs` and point `[patch.crates-io]` at the fork (the path to send upstream).
 
 ## Verified results (OCCT 7.8.1, Linux, clang 21, CMake 4.2)
 
@@ -130,7 +153,7 @@ filleted: 1 solids, 15 faces, 31 edges, 18 vertices
 BRepAlgoAPI_Cut::Generated(a) -> 0 shape(s)
 ```
 
-Patched (`--features patched`):
+Patched (`--features patched`), the count functions:
 
 ```
 fuse history[box a solid]: Modified=0 Generated=0 Deleted=1 | BRepTools_History: Modified=0 Generated=0 Removed=1
@@ -139,18 +162,35 @@ fuse history[box b solid]: Modified=0 Generated=0 Deleted=1 | BRepTools_History:
 fuse history[box b faces (6)]: Modified=8 Generated=0 Deleted=1 | BRepTools_History: Modified=8 Generated=0 Removed=1
 ```
 
-### What those numbers mean (a second finding)
+Element map (stock crate, via `bridge/`) — one line per input face, with the result-face
+indices it maps to:
+
+```
+== fuse element map [box a: 6 input faces] ==
+  face #1 -> result face [1] (unchanged)
+  face #2 -> deleted
+  face #3 -> result faces [2, 6]
+  face #4 -> result faces [4, 8]
+  face #5 -> result faces [5, 9]
+  face #6 -> result faces [3, 7]
+```
+
+### What those numbers mean (the findings)
 
 Querying the **whole input solid** gives `Modified=0 Generated=0 Deleted=1`: the fuse
-consumes both solids, so at the solid level every input is simply "deleted". That
-number is useless for naming.
+consumes both solids, so at the solid level every input is simply "deleted". That number
+is useless for naming. Lineage only appears at sub-shape (face) level.
 
-Querying each **face** of the input gives `Modified=8` (6 input faces of box A map to 8
-faces of the fused result; one input face is deleted). *This* is the granularity an
-element map needs. So the lineage functions are necessary but not sufficient: the next
-addition is **element-level iteration** that records, per input sub-shape, which output
-sub-shapes it maps to (indices, not just counts). `BRepTools_History` agreeing with the
-`BRepBuilderAPI_MakeShape` base on every number is a good sign the bridge is faithful.
+A complete element map needs **three** cases per input sub-shape, not two:
+
+- **modified** — maps to one or more result faces (faces #3-#6 map to two each);
+- **deleted** — gone from the result (face #2);
+- **unchanged** — absent from `Modified()`/`Generated()` *and* not deleted, but present
+  in the result as the same `TopoDS_Shape` (face #1). A naive "modified or deleted"
+  model would silently drop unchanged faces.
+
+This is exactly the lineage an element map needs, and `BRepTools_History` agreeing with
+the `BRepBuilderAPI_MakeShape` base on every count is a good sign the bridge is faithful.
 
 ## Note on the high-level crate
 
@@ -158,7 +198,7 @@ sub-shapes it maps to (indices, not just counts). `BRepTools_History` agreeing w
 but keeps `inner` `pub(crate)`, so you cannot get the raw `TopoDS_Shape` to call the
 sys-level traversal functions. This spike therefore uses `opencascade-sys` directly.
 
-## Not a workspace member
+## Not part of the FerroCAD workspace
 
-`Cargo.toml` has an empty `[workspace]` table so the FerroCAD workspace never builds
-this crate. It is throwaway.
+This `Cargo.toml` is its own workspace root (with `bridge/` as a member), so the
+FerroCAD workspace never builds these crates. It is throwaway.

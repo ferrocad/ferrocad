@@ -176,34 +176,57 @@ sudo apt-get install -y cmake clang pkg-config \
 `opencascade-sys` finds OCCT via `find_package(OpenCASCADE)`, so a system install
 suffices; its `builtin` feature builds OCCT from source if you cannot install one.
 
-**Verified run (OCCT 7.8.1, Linux, clang 21, CMake 4.2).** The Rust spike now
-compiles and runs. OCCT came from conda-forge (`occt=7.8.1`) into a local prefix, so
-no root and no multi-hour source build were needed. The bridge patch
-(`spikes/occt-history-rs/patch/0001-history-bridge.patch`) was applied to the crate and
-the probe re-run; it reads real history:
+**Verified run (OCCT 7.8.1, Linux, clang 21, CMake 4.2).** The Rust spike compiles
+and runs. OCCT came from conda-forge (`occt=7.8.1`) into a local prefix, so no root
+and no multi-hour source build were needed. Two routes were built:
+
+1. `patch/0001-history-bridge.patch` — the calls added *inside* `opencascade-sys`
+   (the minimal change to send upstream). Gives counts.
+2. `spikes/occt-history-rs/bridge/` — a **sibling cxx bridge** that reuses
+   `opencascade-sys`'s types and adds the calls *without* patching or forking the
+   crate. This is the integration path (§10).
+
+Counts (route 1, `--features patched`):
 
 ```
 fuse history[box a solid]: Modified=0 Generated=0 Deleted=1 | BRepTools_History: Modified=0 Generated=0 Removed=1
 fuse history[box a faces (6)]: Modified=8 Generated=0 Deleted=1 | BRepTools_History: Modified=8 Generated=0 Removed=1
 ```
 
-Two things this settles and one it raises:
+Element map (route 2, **stock** crate, `opencascade-sys` unmodified), one line per
+input face and the result-face indices it maps to:
+
+```
+== fuse element map [box a: 6 input faces] ==
+  face #1 -> result face [1] (unchanged)
+  face #2 -> deleted
+  face #3 -> result faces [2, 6]
+  face #4 -> result faces [4, 8]
+  face #5 -> result faces [5, 9]
+  face #6 -> result faces [3, 7]
+```
+
+Findings:
 
 - The bridge works, and `BRepTools_History` agrees with the `BRepBuilderAPI_MakeShape`
   base on every number. The cxx `Pin`/`UniquePtr` ergonomics are fine for out-parameter
   calls (bridging the `Handle` itself is not needed).
-- **Whole-solid queries are useless.** A fuse consumes both input solids, so at the
-  solid level each input reports `Deleted=1` and no modifications. The useful lineage
-  only appears at sub-shape (face) level (`Modified=8`). The bridge is necessary but not
-  sufficient: it must be driven with **element-level iteration** that records which
-  output sub-shapes each input sub-shape maps to (indices, not counts).
-- Still open: whether the ~a dozen bridge additions land upstream or become a maintained
-  patch/fork.
+- **Whole-solid queries are useless.** At the solid level each input reports
+  `Deleted=1` and no modifications. Lineage only appears at sub-shape (face) level.
+- **Three cases, not two.** Per input face an element map must handle: *modified*
+  (maps to one or more result faces; here the four split faces map to two each),
+  *deleted* (face #2), and **unchanged** (face #1: absent from
+  `Modified()`/`Generated()` and not deleted, yet present in the result as the same
+  `TopoDS_Shape`). A naive "modified or deleted" model would silently drop unchanged
+  faces.
+- The sibling bridge (route 2) is preferred over the in-crate patch: no fork, no
+  registry mutation, no `cargo clean` dance, and the types are shared at the ABI level
+  (`type X = opencascade_sys::…`), which cxx supports across crates.
 
 Reproducing notes: CMake 4.x removed support for the `cmake_minimum_required` versions
-OCCT 7.8.1 uses, so `CMAKE_POLICY_VERSION_MINIMUM=3.5` must be exported; and Cargo
-treats registry sources as immutable, so after patching the crate you must
-`cargo clean -p opencascade-sys` to force a rebuild.
+OCCT 7.8.1 uses, so `CMAKE_POLICY_VERSION_MINIMUM=3.5` must be exported; the
+sibling-bridge crate needs `OCCT_INCLUDE_DIR`; and if you use the in-crate patch, Cargo
+treats registry sources as immutable, so you must `cargo clean -p opencascade-sys`.
 
 ---
 
@@ -219,18 +242,19 @@ treats registry sources as immutable, so after patching the crate you must
 5. **Run both committed probes** on a machine with OCCT 7.8+. The **Rust** probe is
    now done and recorded here (§7); the **C++** probe is still pending.
 6. **Decide the binding path (do not hand-roll).** `opencascade-sys` 0.3 covers
-   geometry but not history (§7); budget ~a dozen bridge functions, added upstream
-   or as a thin maintained patch, rather than a from-scratch binding.
+   geometry but not history (§7). Use a **sibling bridge crate** over the crate's own
+   types (verified, no fork/patch); keep the patch only as the upstream contribution.
+   See §10 for the OCCT-provisioning decision.
 
 ---
 
 ## 9. Open questions
 
 - **Binding, resolved enough to act:** `opencascade`/`opencascade-sys` 0.3 is the
-   candidate, covering geometry but not history (§7). The history bridge patch is now
-   **verified working** against OCCT 7.8.1. Open: contribute the bridge upstream vs.
-   keep a thin patch/fork; and driving it with element-level iteration (whole-shape
-   queries return no useful lineage).
+   candidate, covering geometry but not history (§7). A **sibling cxx bridge**
+   (`spikes/occt-history-rs/bridge/`) is verified working against OCCT 7.8.1 and needs
+   no fork or patch, and it yields element-level lineage. Open: send the equivalent
+   change upstream; and the OCCT-provisioning choice in §10.
 - **`cadrum` as an alternative.** A newer crate (statically-linked headless OCCT,
    native + wasm) that could sidestep the system-OCCT packaging problem, but likely
    hides the kernel behind a modelling API, so probably no history. Worth a look if
@@ -240,3 +264,67 @@ treats registry sources as immutable, so after patching the crate you must
   inside the zip container).
 - Whether the element-map version we choose should mirror FreeCAD's string so a
    future `.FCStd` import can reuse maps, or diverge for a cleaner scheme.
+
+---
+
+## 10. What this means for OCCT integration
+
+Running the spike surfaced the integration problem as much as the history question.
+
+### The binding: a sibling bridge, not a fork
+
+`opencascade-sys` covers geometry but not history. Our history calls live in
+[`../spikes/occt-history-rs/bridge/`](../spikes/occt-history-rs/bridge/) as a **second
+`#[cxx::bridge]`** that:
+
+- reuses the crate's opaque types (`type TopoDS_Shape = opencascade_sys::topo_ds::TopoDS_Shape;`),
+- links the same OCCT libraries (through the `opencascade-sys` dependency), and
+- adds the missing functions (`Modified`/`Generated`/`IsDeleted`, and the
+  `IndexedMapOfShape::FindIndex` the crate omits).
+
+This needs **no fork and no patch**. It is the recommended shape for our own
+`ferrocad_occt` crate: `opencascade-sys` for geometry, a sibling bridge for lineage. The
+committed patch is kept only as the minimal change to *propose upstream*.
+
+Limits: we can only add calls over types the crate already exports, and we must point
+build.rs at the OCCT headers (`OCCT_INCLUDE_DIR`). Both are fine for us. Only if we need
+a type the crate does not export would vendoring its source become necessary.
+
+### Getting OCCT: not a `cargo build` concern
+
+`cargo build` cannot fetch conda packages; `cmake-rs` only runs
+`find_package(OpenCASCADE)` / CMake. So the question is not "can cargo call mamba" but
+"who provides the OCCT binary, and when":
+
+| Approach | Who provides OCCT | Cost | Self-contained |
+| --- | --- | --- | --- |
+| crate `builtin` feature | cargo compiles OCCT from source | hours, high RAM, needs cmake + C++ on every platform | yes |
+| prebuilt (conda-forge / vcpkg / conan) | a **fetch step** (micromamba / xtask) before `cargo build` | minutes | no (pinned version) |
+| system packages (apt / brew / choco) | OS packaging | varies | no |
+
+There is **no "build once, run everywhere"** for a native kernel: any OCCT is
+platform-specific. You can avoid *compiling* it per platform by fetching prebuilt
+binaries, but that is a step *outside* `cargo build` (a script, an xtask, or CI), not
+something Cargo does. A build script that downloads binaries is possible but fragile
+(offline builds, checksums, proxies), so we should not depend on it.
+
+### Recommended integration
+
+Treat OCCT like CPython: a bundled native dependency, fetched once and cached, never
+compiled by the ordinary `cargo build`.
+
+- **Dev / CI:** a `fetch-occt` step using `micromamba`, pinned to `occt=7.8.1`, into a
+  local prefix; export `OpenCASCADE_DIR` + `OCCT_INCLUDE_DIR` (and `LD_LIBRARY_PATH` for
+  the shared libs). Cache the prefix in CI. Note conda-forge now defaults to **OCCT
+  8.0**, which `opencascade-sys` 0.3 rejects, so pin 7.8.x (or move the bridge to 8
+  deliberately, as a separate decision).
+- **Distribution** (AppImage / `.dmg` / Windows zip): bundle the OCCT shared libraries
+  next to the CPython ones we already ship. Same story as `libpython`: the payload grows
+  by tens of MB, and OCCT's LGPL-2.1-with-exception is compatible with our
+  LGPL-3.0-or-later combination.
+- **Do not** make end users install OCCT or a C++ toolchain; fetching/building it is a
+  packaging concern, not a user one.
+
+Open: whether to *also* offer the `builtin` static build as the release path (fewer
+files, no shared-lib bundling, one artifact per platform) or keep shared libs and bundle
+them.

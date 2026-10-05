@@ -135,7 +135,8 @@ This exercises every axis below and is the acceptance demo for the MVP
    **160 → ~176**.
 2. **No regressions.** `BaseTests`, `UnitTests`, `StringHasher`, `UnicodeTests`,
    `TestIntPairList`, and all currently-passing `Document*` cases stay green.
-3. **The MVP workflow script passes** (`examples/mvp_workflow.py`), wired into CI.
+3. ✅ **The MVP workflow script passes** (`examples/mvp_workflow.py`), wired into CI
+   (`tests/test_mvp_workflow.py`).
 4. ~~**The `ctypes` fallback runs the same MVP script** (backend-agnostic parity).~~
    Dropped: the fallback is a second, narrower model, not a transport for the
    same core, and is slated for removal (see [`architecture.md`](architecture.md) §4-5).
@@ -222,8 +223,11 @@ Ordered by dependency and value. Sizes are rough (test yield in parentheses).
 
 ### Track D — MVP surface
 
-- **D1 · MVP demo + CI.** `examples/mvp_workflow.py` (the §2 script) and a committed
-  test; run it on both backends in CI so it cannot regress.
+- **D1 · MVP demo + CI. ✅ DONE.** `examples/mvp_workflow.py` (the §2 script) and
+  `tests/test_mvp_workflow.py`; CI runs both. It surfaced two real gaps, now fixed:
+  assigning to a `PropertyLength` coerces a string or number and keeps the kind,
+  and recompute writes a result back in the property's own kind, so a length keeps
+  its unit.
 - **D2 · Remaining `DocumentBasicCases`.** `testAddRemove`, `testObjects`,
   `testNoRecomputeParent`, `testNotification_Issue2902Part2`, `testIssue24571`,
   `testRawAxis`. *(~6; a couple may hinge on property sub-object reference semantics —

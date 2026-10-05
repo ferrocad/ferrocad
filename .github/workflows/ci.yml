@@ -30,6 +30,12 @@ jobs:
           cargo build -p ferrocad_py --features extension-module
           cp target/debug/libferrocad_py.so python/ferrocad.abi3.so
 
+      - name: Python facade, bindings and MVP workflow tests
+        run: |
+          PYTHONPATH=python python3 tests/test_fc_core.py
+          PYTHONPATH=python python3 -m unittest discover -s tests
+          PYTHONPATH=python python3 examples/mvp_workflow.py
+
       - name: ferrocad_gpui headless tests (bite-gpui + embedded CPython)
         working-directory: crates/ferrocad_gpui
         run: cargo test

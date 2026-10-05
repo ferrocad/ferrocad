@@ -537,7 +537,16 @@ impl Document {
                     }
                 };
                 if let Some(obj) = self.objects.get_mut(&id) {
-                    obj.properties.set(prop.clone(), Property::Float(value));
+                    // Write the result back in the property's own kind, so a
+                    // `PropertyLength` stays a length (with its unit) instead of
+                    // collapsing to a bare float.
+                    let result = match obj.properties.get(&prop) {
+                        Some(Property::Quantity(existing)) => Property::Quantity(
+                            crate::quantity::Quantity::new(value, existing.unit()),
+                        ),
+                        _ => Property::Float(value),
+                    };
+                    obj.properties.set(prop.clone(), result);
                     obj.invalid = false;
                 }
                 count += 1;

@@ -147,6 +147,7 @@ python3 tools/test_inventory.py                                    # .pyi parser
 python3 tools/test_codegen.py                                      # codegen logic (M3c)
 python3 tools/test_conformance.py                                  # harness helpers (M3d)
 PYTHONPATH=python python3 examples/file_roundtrip.py               # save/open a document (file load)
+PYTHONPATH=python python3 examples/mvp_workflow.py                # the MVP acceptance demo (docs/mvp-path.md)
 . ../.toolchain/env.sh && cargo test -p ferrocad_gpui              # shell library tests (4)
 ```
 
@@ -180,8 +181,8 @@ per-module pages are the reference.
 
 The **product surface is Python** (`import FreeCAD`) and deliberately mirrors upstream FreeCAD, so
 its API reference *is* FreeCAD's own. FerroCAD-specific Python guidance therefore lives in the
-`python/FreeCAD` facade docstrings and the repository `docs/` (milestones, MVP path, architecture,
-app-shell vision, repackaging, rewrite strategy). A Sphinx/mkdocstrings site is the natural next step once a Python doc
+`python/FreeCAD` facade docstrings and the repository `docs/` ([index](docs/README.md); milestones,
+MVP path, architecture, app-shell vision, repackaging, rewrite strategy). A Sphinx/mkdocstrings site is the natural next step once a Python doc
 build can run in CI; until then rustdoc is the verifiable source of truth.
 
 ## Packaging

@@ -2594,6 +2594,19 @@ impl PyDocumentObject {
                 Ok(b) => Property::Bool(b),
                 Err(_) => py_to_property(value)?,
             },
+            // A length/quantity property keeps its kind: "10 mm" parses, and a
+            // bare number is read in the property's own unit.
+            Some(Property::Quantity(existing)) => {
+                if let Ok(q) = value.extract::<PyRef<'_, PyQuantity>>() {
+                    Property::Quantity(q.inner)
+                } else if let Ok(s) = value.extract::<String>() {
+                    Property::Quantity(s.parse::<Quantity>().map_err(PyValueError::new_err)?)
+                } else if let Ok(f) = value.extract::<f64>() {
+                    Property::Quantity(Quantity::new(f, existing.unit()))
+                } else {
+                    py_to_property(value)?
+                }
+            }
             Some(_) => py_to_property(value)?,
             // Not a known property: store it as a Python attribute (`Proxy`, …).
             None => return set_instance_attr(slf, &name, value),

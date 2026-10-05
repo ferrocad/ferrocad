@@ -98,6 +98,12 @@ jobs:
       - name: Fetch workbench scripts
         run: cargo xtask mods
 
+      - name: Fetch the bundled CPython runtime
+        # Makes every artifact self-contained: `bundle` then stages `runtime/`
+        # and builds the app against that interpreter (pinned by the workflow
+        # env), instead of whichever Python the runner happens to have.
+        run: cargo xtask python
+
       - name: Package (Linux)
         if: runner.os == 'Linux'
         run: bash packaging/linux/appimage.sh

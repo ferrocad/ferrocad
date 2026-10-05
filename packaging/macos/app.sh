@@ -33,6 +33,27 @@ cp -R "$PAYLOAD/mods" "$APP/Contents/Resources/mods"
 cp -R "$PAYLOAD/LICENSES" "$APP/Contents/Resources/LICENSES"
 if [ -d "$PAYLOAD/runtime" ]; then
     cp -R "$PAYLOAD/runtime" "$APP/Contents/Resources/runtime"
+
+    # PyO3 links libpython but adds no rpath for a non-framework Python (only the
+    # Python.framework case gets one), so the binary would resolve libpython via
+    # the build machine's path. Repoint it at the bundled runtime and add an
+    # rpath. `install_name_tool` invalidates the code signature, so sign ad-hoc
+    # afterwards or the loader kills the process on arm64.
+    BIN="$APP/Contents/MacOS/ferrocad-bin"
+    RUNTIME_LIB="$APP/Contents/Resources/runtime/lib"
+    dylib=$(ls "$RUNTIME_LIB"/libpython*.dylib 2>/dev/null | head -1)
+    if [ -n "$dylib" ]; then
+        base=$(basename "$dylib")
+        old=$(otool -L "$BIN" | awk '/libpython/{print $1; exit}')
+        echo "bundled libpython: $base (binary referenced: ${old:-none})"
+        if [ -n "$old" ] && [ "$old" != "@rpath/$base" ]; then
+            install_name_tool -change "$old" "@rpath/$base" "$BIN"
+        fi
+        install_name_tool -add_rpath "@executable_path/../Resources/runtime/lib" "$BIN" 2>/dev/null || true
+        codesign --force --sign - "$BIN"
+    fi
+    echo "== ferrocad-bin libpython references =="
+    otool -L "$BIN" | grep -i python || echo "  (none)"
 fi
 
 if [ -f "$HERE/FerroCAD.icns" ]; then

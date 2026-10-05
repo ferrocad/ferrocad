@@ -180,9 +180,16 @@ fn bundle(opts: &Options) -> Result<(), String> {
     // `libpython` soname matches the runtime we ship.
     let mut app_env = Vec::new();
     if let Some(rt) = &runtime {
+        // python-build-standalone reports its libdir as the build-time
+        // `/install/lib`, which PyO3 would use verbatim (it never consults the
+        // relocated layout). Hand PyO3 an explicit config so it links the
+        // runtime we ship rather than a path that only existed on the builder.
+        let version = std::env::var("FERROCAD_PYTHON_VERSION")
+            .unwrap_or_else(|_| PYTHON_VERSION.to_string());
+        let cfg = write_pyo3_config(&root, rt, &version)?;
         app_env.push((
-            "PYO3_PYTHON".to_string(),
-            python_exe_in(rt).to_string_lossy().into_owned(),
+            "PYO3_CONFIG_FILE".to_string(),
+            cfg.to_string_lossy().into_owned(),
         ));
         app_env.push((
             "PYO3_USE_ABI3_FORWARD_COMPATIBILITY".to_string(),
@@ -273,6 +280,40 @@ fn existing_runtime(root: &Path) -> Option<PathBuf> {
     } else {
         None
     }
+}
+
+/// Write a PyO3 config file describing the bundled runtime, and return its path.
+///
+/// PyO3's interpreter probe reads `sysconfig`, and python-build-standalone reports
+/// `LIBDIR=/install/lib` (its build prefix) rather than the relocated path. A
+/// config file overrides the probe; only `lib_dir`/`lib_name` matter for linking
+/// (PyO3 uses no Python headers). `abi3` is left out on purpose, so the crate's
+/// `abi3-py3*` feature still applies (PyO3 ORs it in).
+fn write_pyo3_config(root: &Path, runtime: &Path, version: &str) -> Result<PathBuf, String> {
+    let mut parts = version.split('.');
+    let major = parts.next().unwrap_or("3");
+    let minor = parts.next().unwrap_or("0");
+    let path = root
+        .join("target/pyo3-config")
+        .join(format!("{}.txt", pbs_triple()?));
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+    }
+    let contents = format!(
+        "implementation=CPython\n\
+         version={major}.{minor}\n\
+         shared=true\n\
+         lib_name=python{major}.{minor}\n\
+         lib_dir={}\n\
+         executable={}\n\
+         pointer_width={}\n",
+        runtime.join("lib").display(),
+        python_exe_in(runtime).display(),
+        std::mem::size_of::<usize>() * 8,
+    );
+    fs::write(&path, contents).map_err(|e| e.to_string())?;
+    eprintln!("wrote PyO3 config {}", path.display());
+    Ok(path)
 }
 
 /// Fetch and extract the pinned runtime into `target/python-runtime/<triple>/`.

@@ -17,9 +17,9 @@ documentation = "https://docs.rs/ferrocad_widgets"
 name = "ferrocad_widgets"
 
 [dependencies]
-bite-gpui = { version = "1.21.0" }
+bite-gpui = { version = "1.21.1" }
 unicode-segmentation.workspace = true
 
 [dev-dependencies]
 # Enables TestAppContext / #[gpui::test] for the headless component tests.
-bite-gpui = { version = "1.21.0", features = ["test-support"] }
+bite-gpui = { version = "1.21.1", features = ["test-support"] }

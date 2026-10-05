@@ -65,14 +65,9 @@ jobs:
           - os: macos-latest
             artifact_name: ferrocad-macos
             artifact_path: target/dist/FerroCAD.dmg
-          # Windows is intentionally omitted for now: upstream `bite-gp-windows`
-          # 1.21.0 does not compile (unresolved `gpui` import), which fails the
-          # build and skips the release. `packaging/windows/portable.ps1` is
-          # ready; re-add this entry once that crate is fixed:
-          #
-          #   - os: windows-latest
-          #     artifact_name: ferrocad-windows
-          #     artifact_path: target/dist/ferrocad-windows-x86_64.zip
+          - os: windows-latest
+            artifact_name: ferrocad-windows
+            artifact_path: target/dist/ferrocad-windows-x86_64.zip
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4

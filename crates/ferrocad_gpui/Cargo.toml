@@ -14,7 +14,7 @@ documentation = "https://docs.rs/ferrocad_gpui"
 
 [dependencies]
 ferrocad_widgets.workspace = true
-bite-gpui = { version = "1.21.0" }
+bite-gpui = { version = "1.21.1" }
 # Embedding CPython in the host (not the extension-module mode).
 pyo3 = { version = "0.25", features = ["auto-initialize"] }
 serde.workspace = true
@@ -22,4 +22,4 @@ serde_json.workspace = true
 
 [dev-dependencies]
 # `test-support` enables TestAppContext / VisualTestContext / #[gpui::test].
-bite-gpui = { version = "1.21.0", features = ["test-support"] }
+bite-gpui = { version = "1.21.1", features = ["test-support"] }

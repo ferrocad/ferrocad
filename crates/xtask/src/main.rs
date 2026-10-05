@@ -299,15 +299,23 @@ fn write_pyo3_config(root: &Path, runtime: &Path, version: &str) -> Result<PathB
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent).map_err(|e| e.to_string())?;
     }
+    // Windows ships the stable-ABI import library as `libs/python3.lib` (and
+    // `libs/python3XX.lib`); Unix ships `lib/libpython3.XX.*`. FerroCAD always
+    // builds with abi3, so the Windows lib name is `python3`.
+    let (lib_name, lib_dir) = if cfg!(windows) {
+        ("python3".to_string(), runtime.join("libs"))
+    } else {
+        (format!("python{major}.{minor}"), runtime.join("lib"))
+    };
     let contents = format!(
         "implementation=CPython\n\
          version={major}.{minor}\n\
          shared=true\n\
-         lib_name=python{major}.{minor}\n\
+         lib_name={lib_name}\n\
          lib_dir={}\n\
          executable={}\n\
          pointer_width={}\n",
-        runtime.join("lib").display(),
+        lib_dir.display(),
         python_exe_in(runtime).display(),
         std::mem::size_of::<usize>() * 8,
     );

@@ -36,7 +36,7 @@ if exist "%HERE%runtime" (
 )
 set "FERROCAD_PYTHON_PATH=%HERE%python"
 set "FERROCAD_MODS_PATH=%HERE%mods"
-set "PYTHONPATH=%HERE%lib;%HERE%python;%HERE%mods;%PYTHONPATH%"
+set "PYTHONPATH=%HERE%python;%HERE%mods;%PYTHONPATH%"
 "%HERE%bin\ferrocad.exe" %*
 '@
     Set-Content -Encoding ASCII -Path (Join-Path $Out 'ferrocad.bat') -Value $bat

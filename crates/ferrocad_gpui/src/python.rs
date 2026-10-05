@@ -126,16 +126,39 @@ pub struct EvalResult {
 
 /// Locate the `python/` facade directory (the one containing `FreeCAD/`).
 ///
-/// Checks `FERROCAD_PYTHON_PATH`, then walks up from the current directory —
-/// which covers launching from either the workspace root or the crate dir.
+/// Order: `FERROCAD_PYTHON_PATH`; a directory the host configured explicitly
+/// (an extracted embedded payload, say); a loose payload beside the executable
+/// (`<dir>/python` or the bundled `<dir>/../python`); then walking up from the
+/// current directory, which covers launching from either the workspace root or
+/// the crate dir.
 pub fn find_python_dir() -> Result<PathBuf, String> {
     if let Ok(path) = std::env::var("FERROCAD_PYTHON_PATH") {
         return Ok(PathBuf::from(path));
     }
+    // The host may hand us an extracted payload through `configure`. Only a path
+    // that actually holds the facade counts (the same list may hold plain script
+    // directories).
+    if let Some(paths) = APP_PATHS.get() {
+        if let Some(found) = paths.iter().find(|p| is_facade(p)) {
+            return Ok(found.clone());
+        }
+    }
+    // A loose payload beside the executable: the bundled layout is
+    // `<root>/bin/ferrocad` with `<root>/python`, so check both `<dir>/python`
+    // and `<dir>/../python`.
+    if let Ok(exe) = std::env::current_exe() {
+        if let Some(dir) = exe.parent() {
+            for candidate in [dir.join("python"), dir.join("..").join("python")] {
+                if is_facade(&candidate) {
+                    return Ok(candidate);
+                }
+            }
+        }
+    }
     let mut dir = std::env::current_dir().map_err(|e| e.to_string())?;
     loop {
         let candidate = dir.join("python");
-        if candidate.join("FreeCAD").join("__init__.py").is_file() {
+        if is_facade(&candidate) {
             return Ok(candidate);
         }
         if !dir.pop() {
@@ -143,6 +166,11 @@ pub fn find_python_dir() -> Result<PathBuf, String> {
         }
     }
     Err("could not locate the python/ facade directory (set FERROCAD_PYTHON_PATH)".to_string())
+}
+
+/// Is `dir` a facade directory, i.e. does it contain `FreeCAD/__init__.py`?
+fn is_facade(dir: &std::path::Path) -> bool {
+    dir.join("FreeCAD").join("__init__.py").is_file()
 }
 
 /// Call a function on the app's entry module that returns JSON, and decode it.

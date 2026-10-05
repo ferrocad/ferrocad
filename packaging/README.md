@@ -23,17 +23,21 @@ the current host:
 
 ```
 target/dist/ferrocad/
-├── bin/ferrocad[.exe]        the app binary
-├── lib/ferrocad.abi3.so      the PyO3 extension (`ferrocad.pyd` on Windows)
+├── bin/ferrocad[.exe]        the app binary (links the PyO3 bindings built in)
 ├── python/                   FreeCAD, FreeCADGui, ferrocad_shell, ferrocad_spike
 ├── mods/                     workbenches
 ├── runtime/                  bundled CPython (when fetched; self-contained)
 └── LICENSES/                 LGPL-2.1-or-later
 ```
 
+There is no separate `lib/ferrocad.abi3.so`: the binary registers the PyO3 module
+as a built-in `ferrocad` module, so the interpreter finds it without a file on
+disk. (The standalone extension still exists for the `pip`/maturin wheel, built
+by `build.sh`; the app does not need it.)
+
 Each packager adds its own launcher (AppRun, the `.app` launcher, `ferrocad.bat`)
-that sets `FERROCAD_PYTHON_PATH` and `PYTHONPATH`, so the embedded interpreter
-finds `python/`, `lib/` and `mods/`.
+that sets `FERROCAD_PYTHON_PATH`, `FERROCAD_MODS_PATH` and `PYTHONPATH`, so the
+embedded interpreter finds `python/` and `mods/`.
 
 ## Notes
 

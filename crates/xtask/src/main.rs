@@ -3,16 +3,26 @@
 //!     cargo xtask bundle [--debug] [--out DIR] [--python | --system-python]
 //!     cargo xtask python
 //!     cargo xtask mods [--freecad TAG] [--only WB,WB]
+//!     cargo xtask stage-payload [--python-only]
+//!     cargo xtask unstage-payload
 //!
 //! `bundle` stages the platform-neutral distribution payload: the app binary, the
-//! PyO3 extension, the Python facade and scripts, the `mods/` workbenches, the
-//! license and, when available, a bundled Python runtime. Per-platform packaging
-//! (AppImage, `.app`, portable Windows) lives in `packaging/` and wraps this
-//! payload; see `docs/distribution.md`.
+//! Python facade and scripts, the `mods/` workbenches, the license and, when
+//! available, a bundled Python runtime. Per-platform packaging (AppImage, `.app`,
+//! portable Windows) lives in `packaging/` and wraps this payload; see
+//! `docs/distribution.md`. The app binary links the PyO3 bindings and registers
+//! them as a built-in `ferrocad` module, so no separate extension file ships.
 //!
 //! `python` fetches a `python-build-standalone` runtime and caches it under
 //! `target/python-runtime/`. `mods` fetches workbench scripts from a pinned
 //! upstream FreeCAD revision into `mods/` (loose files, as FreeCAD ships them).
+//!
+//! `stage-payload` / `unstage-payload` copy that payload in beside the app
+//! crate's manifest and remove it again. They exist for *publishing*: crates.io
+//! gets a self-contained tarball, so `python/` and `mods/` (which live at the
+//! workspace root, shared across editions) are transiently staged, then cleaned
+//! up. The app crate's `build.rs` embeds them, so `cargo install ferrocad`
+//! produces a working app.
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -66,6 +76,19 @@ fn main() {
                 std::process::exit(1);
             }
         }
+        Some("stage-payload") => {
+            let python_only = args.any(|a| a == "--python-only");
+            if let Err(e) = stage_payload(python_only) {
+                eprintln!("xtask: {e}");
+                std::process::exit(1);
+            }
+        }
+        Some("unstage-payload") => {
+            if let Err(e) = unstage_payload() {
+                eprintln!("xtask: {e}");
+                std::process::exit(1);
+            }
+        }
         Some("help") | Some("--help") | Some("-h") | None => usage(),
         Some(other) => {
             eprintln!("xtask: unknown task `{other}`\n");
@@ -79,6 +102,8 @@ fn usage() {
     println!("cargo xtask bundle [--debug] [--out DIR] [--python|--system-python]");
     println!("cargo xtask python   # fetch a python-build-standalone runtime");
     println!("cargo xtask mods [--freecad TAG] [--only WB,WB]   # fetch workbench scripts");
+    println!("cargo xtask stage-payload [--python-only]   # stage the payload for publishing");
+    println!("cargo xtask unstage-payload   # remove the staged payload");
 }
 
 struct Options {
@@ -144,7 +169,10 @@ fn bundle(opts: &Options) -> Result<(), String> {
     };
 
     eprintln!("== building ferrocad ({profile}) ==");
-    let mut app = vec!["build", "-p", "ferrocad"];
+    // `--no-default-features` turns off the embedded payload: installers ship
+    // `python/` and `mods/` loose beside the binary, so baking a duplicate copy
+    // into it would only bloat the binary.
+    let mut app = vec!["build", "-p", "ferrocad", "--no-default-features"];
     if opts.release {
         app.push("--release");
     }
@@ -163,19 +191,6 @@ fn bundle(opts: &Options) -> Result<(), String> {
     }
     run_cargo(&root, &app, &app_env)?;
 
-    eprintln!("== building the ferrocad extension ({profile}) ==");
-    let mut ext = vec![
-        "build",
-        "-p",
-        "ferrocad_py",
-        "--features",
-        "extension-module",
-    ];
-    if opts.release {
-        ext.push("--release");
-    }
-    run_cargo(&root, &ext, &[])?;
-
     let out = opts
         .out
         .clone()
@@ -183,19 +198,16 @@ fn bundle(opts: &Options) -> Result<(), String> {
     if out.exists() {
         fs::remove_dir_all(&out).map_err(|e| e.to_string())?;
     }
-    for dir in ["bin", "lib", "python", "mods", "LICENSES"] {
+    for dir in ["bin", "python", "mods", "LICENSES"] {
         fs::create_dir_all(out.join(dir)).map_err(|e| e.to_string())?;
     }
 
-    // The app binary.
+    // The app binary (it links the PyO3 bindings as a built-in `ferrocad`
+    // module, so there is no separate extension file to stage).
     copy_file(
         &target.join(exe_name("ferrocad")),
         &out.join("bin").join(exe_name("ferrocad")),
     )?;
-
-    // The PyO3 extension, named for import as `ferrocad`.
-    let ext_src = find_extension(&target)?;
-    copy_file(&ext_src, &out.join("lib").join(module_file_name()))?;
 
     // The Python sources (facade + app scripts), without build artifacts.
     copy_dir_filtered(&root.join("python"), &out.join("python"))?;
@@ -426,6 +438,75 @@ fn run_command(cmd: &mut Command, what: &str) -> Result<(), String> {
 }
 
 // ---------------------------------------------------------------------------
+// publish staging
+// ---------------------------------------------------------------------------
+
+/// Copy the workspace payload (`python/`, and `mods/` unless `--python-only`)
+/// in beside the app crate's manifest so `cargo publish` carries it.
+///
+/// These directories live at the workspace root because they are shared across
+/// FerroCAD editions and are not crate sources. crates.io, however, uploads a
+/// self-contained tarball, and `cargo install` has no data-file step, so the app
+/// crate's `build.rs` embeds whatever sits beside its manifest. Staging is the
+/// bridge; [`unstage_payload`] removes it again so it is never committed.
+fn stage_payload(python_only: bool) -> Result<(), String> {
+    let root = workspace_root();
+    let crate_dir = root.join("crates/ferrocad");
+
+    let facade = root.join("python").join("FreeCAD").join("__init__.py");
+    if !facade.is_file() {
+        return Err(format!(
+            "no Python facade at {} (run from a full checkout)",
+            facade.display()
+        ));
+    }
+
+    let python_dst = crate_dir.join("python");
+    replace_dir(&root.join("python"), &python_dst)?;
+
+    let mods_dst = crate_dir.join("mods");
+    // Always clear a stale `mods/`, so a `--python-only` publish does not
+    // silently carry a leftover copy from an earlier staging.
+    if mods_dst.exists() {
+        fs::remove_dir_all(&mods_dst).map_err(|e| e.to_string())?;
+    }
+    if python_only {
+        eprintln!("note: --python-only; workbenches stay loose and will not be embedded");
+    } else {
+        let mods = root.join("mods");
+        if mods.is_dir() {
+            replace_dir(&mods, &mods_dst)?;
+        } else {
+            eprintln!("note: no mods/ directory; publishing without workbenches");
+        }
+    }
+    Ok(())
+}
+
+/// Remove the staged payload.
+fn unstage_payload() -> Result<(), String> {
+    let crate_dir = workspace_root().join("crates/ferrocad");
+    for dir in ["python", "mods"] {
+        let path = crate_dir.join(dir);
+        if path.exists() {
+            fs::remove_dir_all(&path).map_err(|e| e.to_string())?;
+            eprintln!("removed {}", path.display());
+        }
+    }
+    Ok(())
+}
+
+/// Copy `src` to a fresh `dst`, dropping bytecode and native build artifacts.
+fn replace_dir(src: &Path, dst: &Path) -> Result<(), String> {
+    if dst.exists() {
+        fs::remove_dir_all(dst).map_err(|e| e.to_string())?;
+    }
+    copy_dir_filtered(src, dst)?;
+    eprintln!("staged {} -> {}", src.display(), dst.display());
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
 // helpers
 // ---------------------------------------------------------------------------
 
@@ -451,27 +532,6 @@ fn exe_name(stem: &str) -> String {
     } else {
         stem.to_string()
     }
-}
-
-fn module_file_name() -> &'static str {
-    if cfg!(windows) {
-        "ferrocad.pyd"
-    } else {
-        "ferrocad.abi3.so"
-    }
-}
-
-fn find_extension(dir: &Path) -> Result<PathBuf, String> {
-    for name in ["libferrocad_py.so", "libferrocad_py.dylib", "ferrocad_py.dll"] {
-        let candidate = dir.join(name);
-        if candidate.is_file() {
-            return Ok(candidate);
-        }
-    }
-    Err(format!(
-        "extension library not found in {} (was ferrocad_py built?)",
-        dir.display()
-    ))
 }
 
 fn copy_file(src: &Path, dst: &Path) -> Result<(), String> {

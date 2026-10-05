@@ -18,7 +18,7 @@ PAYLOAD="$ROOT/target/dist/ferrocad"
 APP="$ROOT/target/dist/FerroCAD.app"
 
 rm -rf "$APP"
-mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources" "$APP/Contents/Frameworks"
+mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 
 # Bundle metadata and launcher. `ferrocad` sets the environment and execs
 # `ferrocad-bin`, because a Finder-launched app has no wrapper script otherwise.
@@ -34,7 +34,6 @@ cp -R "$PAYLOAD/LICENSES" "$APP/Contents/Resources/LICENSES"
 if [ -d "$PAYLOAD/runtime" ]; then
     cp -R "$PAYLOAD/runtime" "$APP/Contents/Resources/runtime"
 fi
-cp "$PAYLOAD/lib/ferrocad.abi3.so" "$APP/Contents/Frameworks/"
 
 if [ -f "$HERE/FerroCAD.icns" ]; then
     cp "$HERE/FerroCAD.icns" "$APP/Contents/Resources/"

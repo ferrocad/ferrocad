@@ -5,5 +5,11 @@
 //! [`ferrocad_core`](https://crates.io/crates/ferrocad_core) and the shell library
 //! is [`ferrocad_gpui`](https://crates.io/crates/ferrocad_gpui).
 //!
-//! The library target is a placeholder for a facade that will re-export the core
-//! crates. The public surface is the `FreeCAD` Python package.
+//! ## The payload
+//!
+//! The app is useless without its Python facade and workbenches. A development
+//! checkout has them in the workspace; `cargo install` does not, so the payload
+//! is embedded into the binary and unpacked on first run. See [`payload`] for the
+//! resolution order and the packaging story in `docs/distribution.md`.
+
+pub mod payload;

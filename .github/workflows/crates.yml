@@ -34,15 +34,21 @@ jobs:
       - name: Tests
         run: cargo test
 
+      - name: Fetch workbench scripts
+        # The published `ferrocad` crate embeds the workbenches, so `cargo
+        # install ferrocad` yields an app that can load one. Swap `stage-payload
+        # --python-only` in below to ship a smaller, workbench-less crate.
+        run: cargo xtask mods
+
       - name: Publish to crates.io
         env:
           CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
         run: |
           set -eu
 
-          # Dependency order: core, widgets, gpui (depends on widgets), then the
-          # base app (depends on gpui). Others set `publish = false`.
-          crates="ferrocad_core ferrocad_widgets ferrocad_gpui ferrocad"
+          # Dependency order: core, py (bindings), widgets, gpui, then the base
+          # app (links py + gpui). Others set `publish = false`.
+          crates="ferrocad_core ferrocad_py ferrocad_widgets ferrocad_gpui ferrocad"
 
           on_crates_io() {
             code=$(curl -s -o /dev/null -w '%{http_code}' \
@@ -51,6 +57,13 @@ jobs:
             [ "$code" = "200" ]
           }
 
+          # The app crate carries the Python payload (`python/` and `mods/`) in
+          # its tarball. Those live at the workspace root, so they are staged
+          # beside the crate for the publish and removed again afterwards, even
+          # if the job fails.
+          cleanup_payload() { cargo xtask unstage-payload; }
+          trap cleanup_payload EXIT INT TERM
+
           for name in $crates; do
             version=$(cargo metadata --no-deps --format-version 1 \
               | python3 -c 'import sys,json;d=json.load(sys.stdin);print(next(p["version"] for p in d["packages"] if p["name"]==sys.argv[1]))' "$name")
@@ -58,6 +71,10 @@ jobs:
             if on_crates_io "$name" "$version"; then
               echo "$name $version is already on crates.io; skipping"
               continue
+            fi
+
+            if [ "$name" = "ferrocad" ]; then
+              cargo xtask stage-payload
             fi
 
             echo "== publishing $name $version =="

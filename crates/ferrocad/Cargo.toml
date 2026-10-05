@@ -11,6 +11,19 @@ description = "FerroCAD: a Rust reimplementation of FreeCAD's App core, exposed 
 keywords = ["cad", "freecad", "parametric"]
 categories = ["science", "graphics"]
 documentation = "https://docs.rs/ferrocad"
+# The payload allowlist. Cargo's default `include` (everything not gitignored)
+# would drop `python/`/`mods/`, which are gitignored at the workspace root. The
+# publish staging step copies them in beside this manifest; listing them here
+# forces them into the `.crate` tarball even though git ignores them. See
+# ../docs/distribution.md.
+include = [
+    "/src/**",
+    "/build.rs",
+    "/python/**",
+    "/mods/**",
+    "/Cargo.toml",
+    "/README.md",
+]
 
 [lib]
 name = "ferrocad"
@@ -23,3 +36,18 @@ path = "src/main.rs"
 
 [dependencies]
 ferrocad_gpui.workspace = true
+# The PyO3 bindings, linked in so `import ferrocad` resolves to a built-in module
+# (no separate platform-specific extension file to ship).
+ferrocad_py.workspace = true
+pyo3 = { version = "0.25", features = ["auto-initialize"] }
+# Embeds the Python facade and workbenches into the binary so `cargo install`
+# yields a working app (there is no data-file install step to copy them beside
+# the executable). Optional: installers ship the same files loose instead.
+include_dir = { workspace = true, optional = true }
+
+[features]
+default = ["embedded-payload"]
+# Embed `python/` and `mods/` at compile time (see `build.rs`). A development
+# checkout has neither beside this manifest, so the flag is inert there; the
+# publish tarball and `cargo install` do have them.
+embedded-payload = ["dep:include_dir"]

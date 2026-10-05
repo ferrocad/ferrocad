@@ -19,3 +19,9 @@ __pycache__/
 # Upstream workbenches fetched by `cargo xtask mods` (only the README is tracked)
 /mods/*
 !/mods/README.md
+
+# Publish staging: transient copies of the workspace payload beside the app crate
+# so `cargo publish` (with the crate's `include` allowlist) carries them. Removed
+# after publishing; never committed. See docs/distribution.md.
+/crates/ferrocad/python/
+/crates/ferrocad/mods/

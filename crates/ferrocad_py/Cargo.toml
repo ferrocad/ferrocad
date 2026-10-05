@@ -3,13 +3,20 @@ name = "ferrocad_py"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
-# Shipped in the maturin wheel, never to crates.io.
-publish = false
+readme.workspace = true
+repository.workspace = true
+homepage.workspace = true
+rust-version.workspace = true
 description = "PyO3 bindings exposing ferrocad_core to Python (importable as `ferrocad`)"
+keywords = ["cad", "freecad", "pyo3", "python"]
+categories = ["api-bindings"]
+documentation = "https://docs.rs/ferrocad_py"
 
 [lib]
 name = "ferrocad_py"
-crate-type = ["cdylib"]
+# `cdylib` for the maturin wheel; `rlib` so the `ferrocad` app can link the module
+# in directly (then no platform-specific extension file ships in the app).
+crate-type = ["cdylib", "rlib"]
 
 [dependencies]
 ferrocad_core.workspace = true

@@ -68,3 +68,27 @@ jobs:
           code=0
           timeout 30 xvfb-run -a ./target/debug/ferrocad || code=$?
           if [ "$code" != "124" ]; then exit "$code"; fi
+
+  # Geometry: the OCCT backend (`ferrocad_occt`). It needs a kernel, so OCCT 7.8.1 is
+  # fetched from conda-forge into a local prefix (rootless) and the backend is built
+  # and tested against it. This is the only job that needs OCCT; the fast jobs above
+  # do not, because `ferrocad_occt` is not in `default-members`.
+  geometry:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Fetch OCCT 7.8.1 (conda-forge, rootless)
+        run: |
+          mkdir -p .occt
+          curl -sSL https://micro.mamba.pm/api/micromamba/linux-64/latest | tar -xj -C .occt
+          export MAMBA_ROOT_PREFIX="$PWD/.occt/root"
+          .occt/bin/micromamba create -y -p "$PWD/.occt/prefix" -c conda-forge occt=7.8.1
+      - name: Build and test ferrocad_occt
+        run: |
+          # CMake 4.x dropped the `cmake_minimum_required` versions OCCT 7.8.1 uses.
+          export CMAKE_POLICY_VERSION_MINIMUM=3.5
+          export OpenCASCADE_DIR="$PWD/.occt/prefix/lib/cmake/opencascade"
+          export OCCT_INCLUDE_DIR="$PWD/.occt/prefix/include/opencascade"
+          export LD_LIBRARY_PATH="$PWD/.occt/prefix/lib:$LD_LIBRARY_PATH"
+          cargo test -p ferrocad_occt

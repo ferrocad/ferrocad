@@ -101,6 +101,7 @@ FerroCAD is a Cargo workspace (edition 2024). Crate status:
 | `crates/ferrocad_types` | base value types: quantities, units, geometry (`Vector3`, `Placement`, …) | primary |
 | `crates/ferrocad_core` | pure-Rust model: properties, documents, recompute DAG (re-exports `ferrocad_types`) | primary |
 | `crates/ferrocad_geom` | the geometry seam: opaque `Shape`, `History`/`ElementMap`, the `GeometryBackend` trait | new |
+| `crates/ferrocad_occt` | the OCCT backend: implements `GeometryBackend` (box/fuse/cut/fillet/place) | new — needs OCCT 7.8+ |
 | `crates/ferrocad_py` | PyO3 extension over `ferrocad_core` (module `ferrocad`) | primary |
 | `crates/ferrocad_gen` | generated PyO3 skeleton bindings from the `.pyi` model (M3c) | useful — drives the codegen tests |
 | `crates/ferrocad_widgets` | reusable `bite-gpui` widgets (window chrome, field, console) | published |

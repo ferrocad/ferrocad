@@ -1131,5 +1131,7 @@ and the `FreeCADInitTests` package-init shim (stretch).
 `ferrocad_types` and the kernel-independent seam now exists in `ferrocad_geom` (`Shape`,
 `History`/`ElementRef`/`ElementMap`, `GeometryBackend`, `NullBackend`), so the document
 layer can start using geometry without a kernel. See
-[`occt-integration.md`](occt-integration.md) §7: steps 1–2 done; `ferrocad_occt` (the real
-backend) and the Part crates are next.
+[`occt-integration.md`](occt-integration.md) §7: steps 1–3 done — `ferrocad_occt` now
+implements `GeometryBackend` (box/fuse/cut/fillet/place) via `opencascade-sys` + the
+sibling history bridge, verified against OCCT 7.8.1 and tested by a `geometry` CI job.
+Next: the `App` backend slot (installing `OcctBackend`) and the Part crates.

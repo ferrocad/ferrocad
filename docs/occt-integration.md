@@ -123,10 +123,19 @@ The extraction is a refactor with its own tests, so it lands in stages:
    `ElementMap`, `OpResult`, `GeometryBackend` and `NullBackend`. It depends only on
    `ferrocad_types`; `ferrocad_core` does not depend on it yet. (The doc's temporary
    `geom -> core` edge was avoided: `ferrocad_types` landed first.)
-3. **`ferrocad_occt`**: port the spike's sibling bridge + first operations (box, fuse,
-   cut) into the backend, and install it in the app.
+3. **[x] `ferrocad_occt`** (done 2026-10-06): implements `GeometryBackend` via
+   `opencascade-sys` + the sibling bridge (`include/fc_history.hxx`). First operations:
+   `make_box`, `fuse`, `cut`, `fillet`, `place`, and a positional `resolve`; fuse/cut
+   build a face-level `History`. Verified against OCCT 7.8.1 (5 tests + doctest) and
+   tested in CI by a `geometry` job that fetches OCCT from conda-forge. **Not yet
+   installed in the app**: that needs the `App` backend slot below.
 4. **`ferrocad_part` / `ferrocad_part_py`**: Part features as `DocumentObject`s, exposed
    as the Python module `Part`.
+
+`ferrocad_occt` is deliberately **not** in `default-members`, so an ordinary
+`cargo build`/`cargo test` needs no kernel; only the `geometry` CI job (and geometry
+work) sets `OCCT_INCLUDE_DIR` / `OpenCASCADE_DIR` / `LD_LIBRARY_PATH` from a fetched
+OCCT prefix.
 
 Naming follows the existing snake_case crates (`ferrocad_core`, `ferrocad_py`); the
 Python-visible names stay `ferrocad` and `Part`.

@@ -1,0 +1,30 @@
+# The OCCT implementation of the ferrocad_geom seam.
+#
+# Building this crate needs OCCT 7.8+; it is therefore a workspace member but NOT
+# in `default-members`, so `cargo build`/`cargo test` do not require a kernel.
+# See docs/occt-integration.md and docs/occt-bundling.md.
+[package]
+name = "ferrocad_occt"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+readme.workspace = true
+repository.workspace = true
+homepage.workspace = true
+rust-version.workspace = true
+description = "OCCT geometry backend for FerroCAD: implements the ferrocad_geom GeometryBackend"
+keywords = ["cad", "freecad", "opencascade", "occt", "geometry"]
+categories = ["science"]
+documentation = "https://docs.rs/ferrocad_occt"
+
+[lib]
+name = "ferrocad_occt"
+
+[dependencies]
+ferrocad_geom.workspace = true
+ferrocad_types.workspace = true
+opencascade-sys = "0.3"
+cxx = "1"
+
+[build-dependencies]
+cxx-build = "1"

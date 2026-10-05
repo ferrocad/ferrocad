@@ -47,6 +47,10 @@ embedded interpreter finds `python/` and `mods/`.
   launchers set `PYTHONHOME` and the library path, so `libpython` and the stdlib
   come from the bundle. Pin a different version with `FERROCAD_PYTHON_VERSION` and
   `FERROCAD_PBS_DATE`. Without a runtime, the payload uses the system interpreter.
+  The release workflow runs `cargo xtask python` before packaging. Since
+  python-build-standalone reports `LIBDIR=/install/lib`, `bundle` writes a PyO3
+  config (`PYO3_CONFIG_FILE`) pointing at the relocated `lib/`; `macos/app.sh`
+  then repoints the binary at the bundled `libpython` with `install_name_tool`.
 - **Icons are optional.** Each script uses one if you provide it
   (`linux/ferrocad.png`, `macos/FerroCAD.icns`, `windows/ferrocad.ico`) and warns
   otherwise. The source is `icon/ferrocad.svg`; convert it with `rsvg-convert` or

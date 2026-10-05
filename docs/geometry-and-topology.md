@@ -254,6 +254,12 @@ handle and to persist it.
 
 ## 7. OCCT FFI: cost, licensing, and what to verify first
 
+A first spike ([`occt-history-spike.md`](occt-history-spike.md)) already settled one
+point: FreeCAD does **not** use stock OCCT booleans. It wraps every boolean in
+`FCBRepAlgoAPI_*` to add auto-fuzzy (scaled to the model bounds), non-destructive
+mode, and recursive compound handling, because stock behaviour yields a worse
+element map. Any engine we build must port that behaviour, or accept degraded naming.
+
 Rust-to-OCCT means FFI over a large, old C++ library. The practical concerns, in the
 order they bite:
 

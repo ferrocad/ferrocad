@@ -250,14 +250,15 @@ never be a transitive dependency of the pure engine. A geometry feature type liv
 above the seam; `ferrocad_core` only needs to let a `Property` hold an opaque shape
 handle and to persist it.
 
-**Decided (2026-10-06): the middle option, with a narrow type extraction.** The trait
-and its vocabulary live in a new `ferrocad_geom` leaf; the real engine is a new
-`ferrocad_occt` crate; `ferrocad_core` depends only on `ferrocad_geom`. The value types
-the seam needs (`Quantity`, `Placement`, `Vector3`) move to a `ferrocad_types` leaf so
-the backend does not pull the document model. The Part workbench is `ferrocad_part`
-(depends on core, not on OCCT) with `ferrocad_part_py` wiring the backend; the backend
-backend is installed on the core `Application` singleton at startup. Details in
-[`occt-integration.md`](occt-integration.md).
+**Decided (2026-10-06, revised).** The trait and its vocabulary live in a `ferrocad_geom`
+leaf; the real engine is `ferrocad_occt`; the value types the seam needs
+(`Quantity`, `Placement`, `Vector3`) move to a `ferrocad_types` leaf. Crucially,
+`ferrocad_core` stays **geometry-agnostic** and does **not** depend on `ferrocad_geom`:
+the kernel lives in the workbench (`ferrocad_part` owns the `GeometryBackend` and the
+shape property), and composition is compile-time, so a minimal app without Part links no
+OCCT. The prerequisite is a **document-object SPI** in core (an object/property extension
+seam), because `Property` is a closed enum and `DocumentObject::execute_object` is
+built-in. Details in [`occt-integration.md`](occt-integration.md).
 
 ---
 

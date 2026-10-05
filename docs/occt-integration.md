@@ -67,55 +67,94 @@ It owns everything OCCT-specific, so no other crate has to:
 
 It is a **leaf above `ferrocad_geom`** — it does not depend on `ferrocad_core`.
 
-## 4. Injection: one backend, installed at startup
+## 4. Where the kernel lives: Part, not core
 
-`ferrocad_core`'s application singleton — `Application`, the analog of FreeCAD's
-`App::Application` (`App::GetApplication()`) — holds `Arc<dyn GeometryBackend>` and
-defaults to `NullBackend`. The application installs the real one once:
+Geometry does **not** belong in `ferrocad_core`, and there is no `Application` backend
+slot. Upstream agrees: `App` core contains no `TopoDS` at all (`grep -l TopoDS src/App/*.h`
+is empty); the OCCT shape lives in `Mod/Part/App/PropertyTopoShape.h`, and `Part::Feature`
+is a Part class. `App` is the kernel-agnostic document model; **Part is the kernel.**
+
+So:
+
+- `ferrocad_core` stays geometry-free. A Part feature is a core `DocumentObject`, but the
+  *shape it holds* is a Part property type, not a core one.
+- **`ferrocad_part` owns the kernel.** It holds the `Arc<dyn GeometryBackend>` as a
+  Part-level service (set when the Part module initialises), defines `Part::Feature`, and
+  holds the shape property. Core never sees it.
+- **Composition is compile-time.** "Injection" in a Rust app is which crates the edition
+  links (and which Cargo features are on), not a runtime slot on a core singleton:
+
+  | Edition app | links | kernel |
+  | --- | --- | --- |
+  | FerroCAD: Architecture | `ferrocad_part_py` → `ferrocad_occt` | OCCT |
+  | a 2D-only Draft app | no Part | none |
+
+  That is exactly the repackaging vision ([`repackaging.md`](repackaging.md)): minimal
+  apps that do not include Part link no OCCT, and the shell library (`ferrocad_gpui`,
+  formerly `ferrocad_host`) never does. A runtime `Arc<dyn GeometryBackend>` is still
+  useful *inside* Part — to test against `NullBackend`, or to swap kernels — but it lives
+  in Part, not core.
+
+## 5. The prerequisite: a document-object SPI
+
+There is a catch, and it is bigger than the backend slot. Today `ferrocad_core` cannot
+host a Part feature or a shape property, because it has **no extension point**:
+
+- `Property` is a **closed enum** (`property.rs`); a module cannot add a variant.
+- `DocumentObject` is a **concrete struct**; recompute calls a built-in `execute_object`,
+  not a trait method a module supplies. Its `extensions` is a `BTreeSet<String>` of
+  *names* — no behaviour.
+- `typeregistry::default_properties` is a closed `match type_id`, not a registry.
+
+Upstream does not have this problem: `App::Property` is a base class that modules
+subclass (`Part::PropertyPartShape`), `Part::Feature` subclasses `App::Feature`, and both
+register with `Base::Type`. Porting Part therefore needs core to grow the same kind of
+seam **before any shape property exists**:
+
+- **Object types** — a `DocumentObject` *behaviour* seam plus a registry, so
+  `ferrocad_part` can register `Part::Feature` (construction, `execute`, property schema).
+- **Property types** — a property seam with the hooks core's persistence needs (at minimum
+  `save`/`restore`, ideally `copy`/`execute`), so a Part shape property can serialise BREP
+  itself. This is what the closed enum most clearly cannot express: `save_to_file` has to
+  delegate persistence to the property, and cannot serialise a kernel handle on its own.
+
+The exact shape of that seam (trait objects vs. a registry keyed by `Base::Type`-style
+names; how Python `Proxy` objects fit) is its own design note. The point here: it is the
+real next prerequisite for Part — not an OCCT backend slot in core.
+
+## 6. Dependency rules (the edges to keep)
 
 ```
-Application::instance().set_geometry_backend(Arc::new(OcctBackend::new()))
+ferrocad_types   -> (crates.io only)                       [leaf: Quantity, Placement, ...]
+ferrocad_geom    -> ferrocad_types                         [leaf: Shape, History, traits]
+ferrocad_occt    -> ferrocad_geom, ferrocad_types, opencascade-sys   [kernel impl]
+ferrocad_core    -> ferrocad_types                          [geometry-agnostic; never geom/occt]
+ferrocad_part    -> ferrocad_core, ferrocad_geom, ferrocad_occt      [workbench = kernel owner]
+ferrocad_part_py -> ferrocad_part, pyo3                     [module `Part`]
+ferrocad_py      -> ferrocad_core, pyo3                     [module `ferrocad`; no Part]
+ferrocad (app)   -> ferrocad_gpui, ferrocad_py,
+                    ferrocad_part_py                       [edition composition]
 ```
 
-This is the **core** singleton, not `bite-gpui`'s UI `App`; core never depends on the UI.
-Features ask the application for the backend (`Application::instance().geometry()`), the
-same way FreeCAD features reach `App::GetApplication()`. Nothing below the app names
-`ferrocad_occt`, so:
+`ferrocad_core` does **not** depend on `ferrocad_geom`: the shape handle lives in a Part
+property, so core never names a kernel type. This is the change from the earlier plan,
+which put the backend on `Application` (§4). Two further edges:
 
-- the headless engine and its tests run with `NullBackend`;
-- swapping or mocking a kernel is one call, not a recompile of core.
-
-## 5. Dependency rules (the edges to keep)
-
-```
-ferrocad_types  -> (crates.io only)                        [leaf: Quantity, Placement, ...]
-ferrocad_geom   -> ferrocad_types                          [leaf: Shape, History, traits]
-ferrocad_occt   -> ferrocad_geom, ferrocad_types, opencascade-sys   [kernel backend; no core]
-ferrocad_core   -> ferrocad_types, ferrocad_geom           [still a leaf wrt OCCT]
-ferrocad_part   -> ferrocad_core, ferrocad_geom            [workbench logic; no occt]
-ferrocad_part_py-> ferrocad_part, ferrocad_occt, pyo3      [wires the backend, module `Part`]
-ferrocad_py     -> ferrocad_core, pyo3                     [module `ferrocad`; no Part]
-ferrocad (app)  -> ferrocad_gpui, ferrocad_py,
-                   ferrocad_part_py, ferrocad_occt         [installs the backend]
-```
-
-Two optional extras are deliberately out:
-
-- `ferrocad_part` does **not** depend on `ferrocad_occt`, so it can be unit-tested
-  against `NullBackend` and never forces the kernel to build.
+- `ferrocad_part` may depend on `ferrocad_occt` directly (it is the kernel owner); testing
+  against `NullBackend` is done by passing a different `Arc<dyn GeometryBackend>`, not by
+  a feature that removes OCCT.
 - `ferrocad_py` does **not** depend on `ferrocad_part_py`, so the core bindings stay
-  Part-free; the app links both and registers both as built-in modules.
+  Part-free; the edition app links both and registers both as built-in modules.
 
-## 6. Reuse by other workbenches
+## 7. Reuse by other workbenches
 
 Because the trait is in `ferrocad_geom` and the backend in `ferrocad_occt`, another
-workbench (PartDesign, Draft, an edition) that needs the kernel directly depends on
-**those two**, not on Part. In practice it should keep using the single installed
-backend from the `Application` rather than constructing its own — one kernel instance, one set of
-shape handles — but the layout does not forbid a second, isolated `OcctBackend` (useful
-for a background import/export worker).
+workbench that needs the kernel (PartDesign, Draft, an edition) depends on **those two**
+directly, not on Part. There is no core singleton to consult; each kernel-using module owns
+or shares the backend instance it was composed with. Keeping one instance per process is a
+convention (and matters for shape-handle identity), not something core enforces.
 
-## 7. Staged rollout
+## 8. Staged rollout
 
 The extraction is a refactor with its own tests, so it lands in stages:
 
@@ -130,11 +169,14 @@ The extraction is a refactor with its own tests, so it lands in stages:
    `opencascade-sys` + the sibling bridge (`include/fc_history.hxx`). First operations:
    `make_box`, `fuse`, `cut`, `fillet`, `place`, and a positional `resolve`; fuse/cut
    build a face-level `History`. Verified against OCCT 7.8.1 (5 tests + doctest) and
-   tested in CI by a `geometry` job that fetches OCCT from conda-forge. **Not yet
-   installed**: that needs the `Application` backend slot (and the document registry it
-   owns) below.
-4. **`ferrocad_part` / `ferrocad_part_py`**: Part features as `DocumentObject`s, exposed
-   as the Python module `Part`.
+   tested in CI by a `geometry` job that fetches OCCT from conda-forge.
+4. **`Application` (core document registry)** — documents + active document moved out of
+   the Python facade so the registry has one owner. Facade completeness; independent of
+   geometry.
+5. **Document-object SPI** — the object/property extension seam from §5. The real
+   prerequisite for Part.
+6. **`ferrocad_part` / `ferrocad_part_py`** — Part features as registered
+   `DocumentObject`s holding a Part shape property; owns the OCCT backend; module `Part`.
 
 `ferrocad_occt` is deliberately **not** in `default-members`, so an ordinary
 `cargo build`/`cargo test` needs no kernel; only the `geometry` CI job (and geometry

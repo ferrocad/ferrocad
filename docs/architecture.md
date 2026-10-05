@@ -157,11 +157,12 @@ ferrocad           -> ferrocad_gpui, ferrocad_py     [base app: links the module
 python/FreeCAD     -> ferrocad (built-in module when linked, else a .so on sys.path)
 ```
 
-`ferrocad_geom` is not yet depended on and `ferrocad_occt` is not yet installed:
-`ferrocad_core` gains the `ferrocad_geom` edge (and an `Application` backend slot) when a
-`Property` can hold a `Shape`, at which point the application installs `OcctBackend`.
-The backend sits above the seam and never below `ferrocad_core`; see
-[`occt-integration.md`](occt-integration.md).
+`ferrocad_core` stays geometry-agnostic and does **not** depend on `ferrocad_geom`: the
+kernel lives in `ferrocad_part`, which owns the `GeometryBackend` and the shape property.
+Before Part can hold a shape, core needs a **document-object SPI** (a `DocumentObject`
+behaviour seam and an extensible property type) — `Property` is a closed enum and
+`execute_object` is built-in today. `ferrocad_occt` is not linked by any default build.
+See [`occt-integration.md`](occt-integration.md).
 
 The rule that keeps the design honest: **the shell talks to the model through the
 `FreeCAD` API, exactly like a workbench does.** A direct `shell -> ferrocad_core`

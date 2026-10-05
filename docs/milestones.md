@@ -1129,9 +1129,11 @@ and the `FreeCADInitTests` package-init shim (stretch).
 
 **Geometry track (prep, outside the MVP slices).** The value types were extracted into
 `ferrocad_types` and the kernel-independent seam now exists in `ferrocad_geom` (`Shape`,
-`History`/`ElementRef`/`ElementMap`, `GeometryBackend`, `NullBackend`), so the document
-layer can start using geometry without a kernel. See
-[`occt-integration.md`](occt-integration.md) §7: steps 1–3 done — `ferrocad_occt` now
+`History`/`ElementRef`/`ElementMap`, `GeometryBackend`, `NullBackend`). See
+[`occt-integration.md`](occt-integration.md) §8: steps 1–3 done — `ferrocad_occt` now
 implements `GeometryBackend` (box/fuse/cut/fillet/place) via `opencascade-sys` + the
 sibling history bridge, verified against OCCT 7.8.1 and tested by a `geometry` CI job.
-Next: the `App` backend slot (installing `OcctBackend`) and the Part crates.
+The kernel lives in the workbench, **not core**: `ferrocad_core` stays geometry-agnostic.
+Next: the core `Application` document registry, then the **document-object SPI**
+(object/property extension — the real prerequisite before Part can hold a shape), then the
+Part crates.

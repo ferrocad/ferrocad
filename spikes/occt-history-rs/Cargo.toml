@@ -18,6 +18,9 @@ publish = false
 [features]
 # Enable after applying patch/0001-history-bridge.patch to opencascade-sys.
 patched = []
+# Build OCCT 7.8.1 from source (bundled in `occt-sys`): needs cmake + a C++
+# compiler, but no system-wide OCCT and no root.
+builtin = ["opencascade-sys/builtin"]
 
 [dependencies]
 opencascade-sys = "0.3"

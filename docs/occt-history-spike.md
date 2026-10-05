@@ -14,27 +14,21 @@ across a Rust binding (§7).
 
 ---
 
-## 1. Environment result (the sandbox cannot run the probe)
+## 1. Environment result (OCCT without root)
 
-The authoring sandbox has:
+The authoring sandbox has **no OCCT** on disk and **no passwordless `sudo`**, so a
+system install was not possible. Network was reachable, which let us download and read
+the `opencascade-sys` sources to write the Rust spike against its real API.
 
-- **no OCCT** (no headers, no libraries, anywhere on disk), and
-- **no passwordless `sudo`** (interactive authentication required), so it cannot be
-  apt-installed here.
+The blocker is OCCT plus root, not network, and it is solvable without root: OCCT can
+be obtained from conda-forge into a local prefix (or built from source via the crate's
+`builtin` feature). The **Rust** probe was subsequently compiled and run that way and
+now records real output (§7). The **C++** probe still needs a machine with OCCT 7.8+
+headers and a C++ toolchain.
 
-Network itself was reachable (with an explicit grant), which let us download and read
-the `opencascade-sys` sources to write the Rust spike against its real API (see §7).
-
-The bind blocker is OCCT plus root, not network. Neither probe could be compiled
-here; both are committed ready to run where OCCT 7.8+ exists (see each spike's
-README). This is a finding about our
-**CI and build story**, not just the sandbox: any geometry milestone needs an OCCT
-toolchain in CI, and that is a real cost to budget (see
+This is still a finding about our **CI and build story**: any geometry milestone needs
+an OCCT toolchain in CI, and that is a real cost to budget (see
 [`distribution.md`](distribution.md)).
-
-Because the empirical part is blocked, the rest of this report is the **offline
-part of the spike**: reading what FreeCAD actually depends on. That turned out to be
-more useful than a single box/fuse run, and it changes the plan.
 
 ---
 
@@ -182,16 +176,34 @@ sudo apt-get install -y cmake clang pkg-config \
 `opencascade-sys` finds OCCT via `find_package(OpenCASCADE)`, so a system install
 suffices; its `builtin` feature builds OCCT from source if you cannot install one.
 
-Like the C++ probe, the Rust crate could not be built in the authoring sandbox
-(installing OCCT needs `sudo`, which asks for a password). It is committed ready to
-run; the crate sources were read to write the API accurately.
+**Verified run (OCCT 7.8.1, Linux, clang 21, CMake 4.2).** The Rust spike now
+compiles and runs. OCCT came from conda-forge (`occt=7.8.1`) into a local prefix, so
+no root and no multi-hour source build were needed. The bridge patch
+(`spikes/occt-history-rs/patch/0001-history-bridge.patch`) was applied to the crate and
+the probe re-run; it reads real history:
 
-What a successful run still needs to settle:
+```
+fuse history[box a solid]: Modified=0 Generated=0 Deleted=1 | BRepTools_History: Modified=0 Generated=0 Removed=1
+fuse history[box a faces (6)]: Modified=8 Generated=0 Deleted=1 | BRepTools_History: Modified=8 Generated=0 Removed=1
+```
 
-- whether the ~a dozen bridge additions land upstream, or become a maintained patch;
-- the ergonomics of cxx `Pin`/`UniquePtr` lifetimes for the history calls;
-- whether a flat count protocol is enough for an element map, or the bridge must
-  carry the richer `BRepTools_History` graph.
+Two things this settles and one it raises:
+
+- The bridge works, and `BRepTools_History` agrees with the `BRepBuilderAPI_MakeShape`
+  base on every number. The cxx `Pin`/`UniquePtr` ergonomics are fine for out-parameter
+  calls (bridging the `Handle` itself is not needed).
+- **Whole-solid queries are useless.** A fuse consumes both input solids, so at the
+  solid level each input reports `Deleted=1` and no modifications. The useful lineage
+  only appears at sub-shape (face) level (`Modified=8`). The bridge is necessary but not
+  sufficient: it must be driven with **element-level iteration** that records which
+  output sub-shapes each input sub-shape maps to (indices, not counts).
+- Still open: whether the ~a dozen bridge additions land upstream or become a maintained
+  patch/fork.
+
+Reproducing notes: CMake 4.x removed support for the `cmake_minimum_required` versions
+OCCT 7.8.1 uses, so `CMAKE_POLICY_VERSION_MINIMUM=3.5` must be exported; and Cargo
+treats registry sources as immutable, so after patching the crate you must
+`cargo clean -p opencascade-sys` to force a rebuild.
 
 ---
 
@@ -204,8 +216,8 @@ What a successful run still needs to settle:
    mismatch (§5). This is format work we can do without a kernel.
 3. **Add OCCT to the CI/packaging budget** (§1, [`distribution.md`](distribution.md)).
 4. **Let B3/B5 carry Link's geometry-facing fields** (§6) without pulling in shapes.
-5. **Run both committed probes** (C++ and Rust) on a machine with OCCT 7.8+ and
-   record the raw output here before finalizing the trait.
+5. **Run both committed probes** on a machine with OCCT 7.8+. The **Rust** probe is
+   now done and recorded here (§7); the **C++** probe is still pending.
 6. **Decide the binding path (do not hand-roll).** `opencascade-sys` 0.3 covers
    geometry but not history (§7); budget ~a dozen bridge functions, added upstream
    or as a thin maintained patch, rather than a from-scratch binding.
@@ -215,9 +227,10 @@ What a successful run still needs to settle:
 ## 9. Open questions
 
 - **Binding, resolved enough to act:** `opencascade`/`opencascade-sys` 0.3 is the
-   candidate, covering geometry but not history (§7). Open: contribute the bridge
-   upstream vs. keep a thin patch; and whether the lower-level `occt-sys` (the
-   `builtin` OCCT builder) already bridges more history than `opencascade-sys`.
+   candidate, covering geometry but not history (§7). The history bridge patch is now
+   **verified working** against OCCT 7.8.1. Open: contribute the bridge upstream vs.
+   keep a thin patch/fork; and driving it with element-level iteration (whole-shape
+   queries return no useful lineage).
 - **`cadrum` as an alternative.** A newer crate (statically-linked headless OCCT,
    native + wasm) that could sidestep the system-OCCT packaging problem, but likely
    hides the kernel behind a modelling API, so probably no history. Worth a look if

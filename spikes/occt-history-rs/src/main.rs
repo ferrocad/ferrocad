@@ -34,31 +34,64 @@ fn print_counts(label: &str, shape: &TopoDS_Shape) {
     );
 }
 
-/// Report the fuse history for one input sub-shape.
+/// One `fc_brep_fuse_history` call, returned as six numbers:
+/// `(Modified, Generated, Deleted, BRepTools_History::Modified, ..Generated, ..Removed)`.
+#[cfg(feature = "patched")]
+fn fuse_history_for(
+    fuse: &mut cxx::UniquePtr<ffi::b_rep_algo_api::BRepAlgoAPI_Fuse>,
+    sub_shape: &TopoDS_Shape,
+) -> (i32, i32, i32, i32, i32, i32) {
+    let (mut m, mut g, mut d) = (0, 0, 0);
+    let (mut hm, mut hg, mut hr) = (0, 0, 0);
+    ffi::b_rep_algo_api::fc_brep_fuse_history(
+        fuse.pin_mut(),
+        sub_shape,
+        &mut m,
+        &mut g,
+        &mut d,
+        &mut hm,
+        &mut hg,
+        &mut hr,
+    );
+    (m, g, d, hm, hg, hr)
+}
+
+/// Report the fuse history for one input shape.
 ///
-/// With the bridge patch, all six numbers are real. Without it, there is nothing
-/// to call, so it prints why.
+/// Two queries, because they answer different questions: the whole solid is
+/// consumed by the fuse (all its faces are replaced), so it reports
+/// `Modified=0 Generated=0 Deleted=1`. The per-face query is the one that
+/// carries the lineage an element map needs.
 #[cfg(feature = "patched")]
 fn report_fuse_history(
     fuse: &mut cxx::UniquePtr<ffi::b_rep_algo_api::BRepAlgoAPI_Fuse>,
     input: &TopoDS_Shape,
     who: &str,
 ) {
-    let (mut modified, mut generated, mut deleted) = (0, 0, 0);
-    let (mut h_modified, mut h_generated, mut h_removed) = (0, 0, 0);
-    ffi::b_rep_algo_api::fc_brep_fuse_history(
-        fuse.pin_mut(),
-        input,
-        &mut modified,
-        &mut generated,
-        &mut deleted,
-        &mut h_modified,
-        &mut h_generated,
-        &mut h_removed,
-    );
+    let (m, g, d, hm, hg, hr) = fuse_history_for(fuse, input);
     println!(
-        "fuse history[{who}]: Modified={modified} Generated={generated} Deleted={deleted} \
-         | BRepTools_History: Modified={h_modified} Generated={h_generated} Removed={h_removed}"
+        "fuse history[{who} solid]: Modified={m} Generated={g} Deleted={d} \
+         | BRepTools_History: Modified={hm} Generated={hg} Removed={hr}"
+    );
+
+    let mut faces = ffi::top_tools::new_indexed_map_of_shape();
+    ffi::top_exp::TopExp::MapShapes(input, TopAbs_ShapeEnum::TopAbs_FACE, faces.pin_mut());
+    let n = faces.Extent();
+    let (mut sm, mut sg, mut sd) = (0, 0, 0);
+    let (mut shm, mut shg, mut shr) = (0, 0, 0);
+    for i in 1..=n {
+        let face = faces.FindKey(i);
+        let (fm, fg, fd, fhm, fhg, fhr) = fuse_history_for(fuse, face);
+        sm += fm;
+        sg += fg;
+        sd += fd;
+        shm += fhm;
+        shg += fhg;
+        shr += fhr;
+    }
+    println!(
+        "fuse history[{who} faces ({n})]: Modified={sm} Generated={sg} Deleted={sd} \
+         | BRepTools_History: Modified={shm} Generated={shg} Removed={shr}"
     );
 }
 
@@ -111,7 +144,7 @@ fn main() {
     print_counts("fused", fused);
 
     // --- fillet one edge ------------------------------------------------------
-    let mut edges = ffi::top_exp::TopExp_Explorer_new(fused, TopAbs_ShapeEnum::TopAbs_EDGE);
+    let edges = ffi::top_exp::TopExp_Explorer_new(fused, TopAbs_ShapeEnum::TopAbs_EDGE);
     let mut fillet = ffi::b_rep_fillet_api::BRepFilletAPI_MakeFillet_new(fused);
     if edges.More() {
         let edge = ffi::topo_ds::TopoDS::Edge(edges.Current());

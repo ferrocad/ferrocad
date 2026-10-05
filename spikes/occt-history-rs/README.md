@@ -7,37 +7,8 @@ crate (bschwind/opencascade-rs). No hand-rolled binding.
 Same question: **does shape history survive into Rust?** The answer turns out to be
 about the *crate's coverage*, and it is the important finding.
 
-## Install
-
-OCCT **>= 7.8** dev libraries plus a C++ toolchain and CMake. On Debian/Ubuntu:
-
-```sh
-sudo apt-get install -y \
-  cmake clang pkg-config \
-  libocct-foundation-dev \
-  libocct-modeling-data-dev \
-  libocct-modeling-algorithms-dev \
-  libocct-data-exchange-dev \
-  libocct-ocaf-dev \
-  libocct-visualization-dev \
-  occt-misc
-```
-
-That covers every toolkit `opencascade-sys` links (`TKernel`, `TKMath`, `TKBRep`,
-`TKTopAlgo`, `TKPrim`, `TKBO`, `TKBool`, `TKFillet`, `TKOffset`, `TKShHealing`,
-`TKGeomBase`, `TKGeomAlgo`, `TKG2d`, `TKG3d`, `TKDE`, `TKDESTEP`, `TKDEIGES`,
-`TKDESTL`, `TKXSBase`, `TKCAF`, `TKLCAF`, `TKXCAF`, `TKMesh`). The crate finds OCCT
-by running `find_package(OpenCASCADE)`; a system install is enough, no env vars.
-If you cannot install system-wide, the crate's `builtin` feature builds OCCT from
-source instead (slow, needs network).
-
-Then, from the FerroCAD repo root and using the project-local toolchain (this
-repo keeps Rust under `../.toolchain`, so no system-wide install is needed):
-
-```sh
-. ../.toolchain/env.sh
-cargo run --release --manifest-path spikes/occt-history-rs/Cargo.toml
-```
+**Status: verified.** The example compiles and runs against real OCCT 7.8.1, and the
+patched build reads real history (see "Verified results" below).
 
 ## What the crate actually exposes (the finding)
 
@@ -72,38 +43,114 @@ binding from scratch.
 That is the whole diff: one header plus three functions, reusing the crate's existing
 `TopoDS_Shape`/`TopTools_ListOfShape` types.
 
-Apply it one of three ways:
+## Getting OCCT (two ways)
+
+`opencascade-sys` finds OCCT with `find_package(OpenCASCADE)`, so it needs an OCCT
+**7.8+** install with a CMake config. Two ways to get one, neither needing root:
+
+### A. Prebuilt, rootless, minutes (what this spike was verified with)
+
+Use `micromamba` and conda-forge, pinned to 7.8.1:
 
 ```sh
-# from the FerroCAD repo root; the project toolchain sets CARGO_HOME to
-# ../.toolchain/cargo, so the registry is under $CARGO_HOME, not ~/.cargo.
-. ../.toolchain/env.sh
-
-# A. quick local (dirty, for a spike): patch the extracted crate, then re-run
-SYS=$(find "${CARGO_HOME:-$HOME/.cargo}/registry/src" -maxdepth 2 -name 'opencascade-sys-0.3.0' | head -1)
-patch -p1 -d "$SYS" < spikes/occt-history-rs/patch/0001-history-bridge.patch
-cargo run --release --features patched --manifest-path spikes/occt-history-rs/Cargo.toml
-
-# B. vendor: cargo vendor, apply the same patch, wire .cargo/config.toml
-# C. fork opencascade-rs, apply the same patch, point [patch.crates-io] at the fork
-#    (the clean path, and the one that could be sent upstream as a PR)
+# from this directory (spikes/occt-history-rs)
+mkdir -p .mm && curl -sSL https://micro.mamba.pm/api/micromamba/linux-64/latest \
+  | tar -xj -C .mm
+export MAMBA_ROOT_PREFIX=$PWD/.mm/root
+.mm/bin/micromamba create -y -p $PWD/.occt78 -c conda-forge occt=7.8.1
+export OpenCASCADE_DIR=$PWD/.occt78/lib/cmake/opencascade
+export LD_LIBRARY_PATH=$PWD/.occt78/lib:$LD_LIBRARY_PATH   # conda OCCT is shared
 ```
 
-With `--features patched` the run prints real numbers, e.g.:
+Conda-forge's unpinned `occt` is now **8.0.1**, which the crate rejects (it requires
+major 7). Pin `occt=7.8.1`.
+
+### B. From source via the crate's `builtin` feature (slow)
+
+`occt-sys` bundles the OCCT 7.8.1 sources, so the `builtin` feature builds OCCT
+statically with no install at all:
+
+```sh
+CMAKE_BUILD_PARALLEL_LEVEL=4 cargo build --release --features builtin
+```
+
+This is **not** the fast path: OCCT is ~5700 source files, and on a 4-core / 7 GB box
+it swaps and runs for hours. Use method A unless you specifically want the static
+build.
+
+### CMake 4.x note
+
+OCCT 7.8.1 (and even the crate's tiny finder project) use a
+`cmake_minimum_required` below 3.5, which CMake **4.x** removed. With a new CMake you
+must export:
+
+```sh
+export CMAKE_POLICY_VERSION_MINIMUM=3.5
+```
+
+CMake honors this from the environment, so no source edit is needed.
+
+## Build and run
+
+```sh
+. ../.toolchain/env.sh                                 # project-local Rust
+export CMAKE_POLICY_VERSION_MINIMUM=3.5
+export OpenCASCADE_DIR=$PWD/.occt78/lib/cmake/opencascade
+
+# stock crate: geometry works, history is unavailable
+cargo build --release
+LD_LIBRARY_PATH=$PWD/.occt78/lib ./target/release/occt-history-rs
+```
+
+To read real history, apply the patch and force a rebuild of the crate (Cargo treats
+registry sources as immutable and will otherwise reuse the cached build):
+
+```sh
+SYS=$(find "$CARGO_HOME/registry/src" -maxdepth 2 -name 'opencascade-sys-0.3.0' | head -1)
+patch -p1 -d "$SYS" < patch/0001-history-bridge.patch
+cargo clean -p opencascade-sys --release
+cargo build --release --features patched
+LD_LIBRARY_PATH=$PWD/.occt78/lib ./target/release/occt-history-rs
+```
+
+Other application methods: `cargo vendor`, or fork `opencascade-rs` and point
+`[patch.crates-io]` at the fork (the clean path, and the one that could go upstream as
+a PR).
+
+## Verified results (OCCT 7.8.1, Linux, clang 21, CMake 4.2)
+
+Stock (`cargo build --release`):
 
 ```
-== fuse history ==
-fuse history[box a]: Modified=2 Generated=1 Deleted=0 | BRepTools_History: Modified=2 Generated=1 Removed=0
+box a: 1 solids, 6 faces, 12 edges, 8 vertices
+box b: 1 solids, 6 faces, 12 edges, 8 vertices
+fuse history[box a]: not exposed by stock opencascade-sys (...)
+fused: 1 solids, 14 faces, 28 edges, 16 vertices
+filleted: 1 solids, 15 faces, 31 edges, 18 vertices
+BRepAlgoAPI_Cut::Generated(a) -> 0 shape(s)
 ```
 
-Without the feature it prints that history is unavailable, which is the stock-crate
-baseline. Element-level iteration (which output index each input maps to) is the next
-addition; the counts here are enough to prove the history crosses the boundary.
+Patched (`--features patched`):
 
-There is also a milder signal in the crate's own model: the high-level
-`BooleanShape` carries `new_edges` (the edges the boolean generated), which is a
-coarse, operation-specific form of exactly the lineage we need. It shows the crate
-authors already think in these terms.
+```
+fuse history[box a solid]: Modified=0 Generated=0 Deleted=1 | BRepTools_History: Modified=0 Generated=0 Removed=1
+fuse history[box a faces (6)]: Modified=8 Generated=0 Deleted=1 | BRepTools_History: Modified=8 Generated=0 Removed=1
+fuse history[box b solid]: Modified=0 Generated=0 Deleted=1 | BRepTools_History: Modified=0 Generated=0 Removed=1
+fuse history[box b faces (6)]: Modified=8 Generated=0 Deleted=1 | BRepTools_History: Modified=8 Generated=0 Removed=1
+```
+
+### What those numbers mean (a second finding)
+
+Querying the **whole input solid** gives `Modified=0 Generated=0 Deleted=1`: the fuse
+consumes both solids, so at the solid level every input is simply "deleted". That
+number is useless for naming.
+
+Querying each **face** of the input gives `Modified=8` (6 input faces of box A map to 8
+faces of the fused result; one input face is deleted). *This* is the granularity an
+element map needs. So the lineage functions are necessary but not sufficient: the next
+addition is **element-level iteration** that records, per input sub-shape, which output
+sub-shapes it maps to (indices, not just counts). `BRepTools_History` agreeing with the
+`BRepBuilderAPI_MakeShape` base on every number is a good sign the bridge is faithful.
 
 ## Note on the high-level crate
 

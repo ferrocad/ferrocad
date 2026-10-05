@@ -1,2 +1,7 @@
 /target/
 Cargo.lock
+# Local verification toolchain: micromamba binary, a conda-forge OCCT prefix,
+# and build logs. Reproduce from README; never commit.
+/.mm/
+/.occt/
+/.occt78/

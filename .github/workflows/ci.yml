@@ -12,8 +12,8 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
-      - name: Install CPython headers (PyO3 embedding / extension build)
-        run: sudo apt-get update && sudo apt-get install -y python3-dev
+      - name: Install CPython headers + GPUI system libraries (PyO3, fontconfig)
+        run: sudo apt-get update && sudo apt-get install -y python3-dev libfontconfig1-dev pkg-config
 
       - name: ferrocad_core (pure Rust) tests
         working-directory: crates/ferrocad_core
@@ -35,11 +35,13 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
-      - name: Install Xvfb + software Vulkan (lavapipe) + CPython headers
+      - name: Install Xvfb + software Vulkan (lavapipe) + CPython headers + GPUI libs
         run: |
           sudo apt-get update
-          sudo apt-get install -y xvfb mesa-vulkan-drivers python3-dev
+          sudo apt-get install -y xvfb mesa-vulkan-drivers python3-dev libfontconfig1-dev pkg-config
       - name: Open a real window (must not crash within 30s)
         run: |
           export VK_ICD_FILENAMES=/usr/share/vulkan/icd.d/lvp_icd.json
-          timeout 30 xvfb-run -a cargo run -p ferrocad
+          # Build first: the 30s budget is for the run, not a cold compile.
+          cargo build -p ferrocad
+          timeout 30 xvfb-run -a ./target/debug/ferrocad

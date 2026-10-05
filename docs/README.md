@@ -25,6 +25,8 @@ is the `FreeCAD` Python API, documented by convention and by upstream.
 
 - [architecture.md](architecture.md) — crates, the call paths, and the dependency
   rules.
+- [geometry-and-topology.md](geometry-and-topology.md) — topological sorting vs
+  topological naming, and the seam for a future OCCT geometry engine.
 - [python-bindings.md](python-bindings.md) — the PyO3 binding design.
 - [distribution.md](distribution.md) — how the app runs and is packaged (payload,
   bundled runtime, artifacts).

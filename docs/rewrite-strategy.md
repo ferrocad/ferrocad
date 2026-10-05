@@ -208,6 +208,9 @@ document-object core (M2–M4) is the active track, and the **MVP app shell**
 - [`mvp-path.md`](mvp-path.md) — **the MVP definition**: a headless, geometry-free parametric
   document engine as the drop-in `FreeCAD` package; the minimum model/workflow/persistence and the
   slices that get there (acceptance = upstream `Document.py` parity minus the C++ fixture).
+- [`geometry-and-topology.md`](geometry-and-topology.md) — the geometry-kernel seam: topological
+  sorting vs topological naming, the `GeometryEngine` trait, OCCT FFI, and how persistence and
+  sub-shape lineage interact.
 - [`documentation.md`](documentation.md) — the documentation approach (Diátaxis rustdoc for the Rust
   crates; the Python surface documented by convention + upstream; Sphinx later).
 - The [repository](..) — the artifact: `crates/ferrocad_core` (Rust core), `crates/ferrocad_py`

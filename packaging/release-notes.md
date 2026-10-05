@@ -3,11 +3,7 @@
 Every artifact is self-contained: it bundles CPython, the `FreeCAD` Python facade
 and the `Draft` workbench, so no system Python is required.
 
-| Artifact | `python/` | `mods/Draft/` | `runtime/` | Launcher |
-| --- | --- | --- | --- | --- |
-| `ferrocad-x86_64.AppImage` | ✅ 7 files | ✅ 502 | ✅ `lib/libpython3.14.so.1.0` | `AppRun` |
-| `FerroCAD.dmg` → `FerroCAD.app` | ✅ `Contents/Resources/python` | ✅ 502 | ✅ `lib/libpython3.14.dylib` | `Contents/MacOS/ferrocad` |
-| `ferrocad-windows-x86_64.zip` | ✅ 7 files | ✅ 502 | ✅ `python314.dll` | `ferrocad.bat` |
+<!--ARTIFACTS-->
 
 - **Linux**: `chmod +x ferrocad-x86_64.AppImage && ./ferrocad-x86_64.AppImage`.
 - **macOS**: arm64 only; the app is ad-hoc signed, so a downloaded DMG needs

@@ -58,5 +58,9 @@ embedded interpreter finds `python/` and `mods/`.
 - **Linux `appimagetool`** is found on `PATH`, via `APPIMAGETOOL`, or as
   `tools/appimagetool-<arch>.AppImage`. An `.AppImage` tool is run with
   `--appimage-extract-and-run`, so FUSE is not required.
+- **Release notes** are generated: `release-notes.sh` inspects the built
+  artifacts (the AppImage, the `.app` inside the `.dmg`, the Windows zip) and
+  fills the `<!--ARTIFACTS-->` marker in `release-notes.md`. The release workflow
+  runs it before creating the GitHub Release, so the table reflects what shipped.
 - **macOS and Windows scripts are untested here** (this project builds on Linux);
   they are written to be read and adjusted on their platforms.

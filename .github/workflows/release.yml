@@ -126,10 +126,18 @@ jobs:
         with:
           path: dist
 
+      - name: Install archive tools
+        # 7z reads the .dmg (APFS) and unzip reads the Windows zip; the AppImage
+        # is inspected by running it with --appimage-extract (no FUSE needed).
+        run: sudo apt-get update && sudo apt-get install -y p7zip-full unzip
+
+      - name: Generate the release body from the artifacts
+        run: packaging/release-notes.sh dist > release-body.md
+
       - uses: softprops/action-gh-release@v2
         with:
           files: dist/**/*
           fail_on_unmatched_files: true
           generate_release_notes: true
-          # Prepended to the generated notes (v2 concatenates body + generated).
-          body_path: packaging/release-notes.md
+          # Measured from the actual artifacts; prepended to the generated notes.
+          body_path: release-body.md

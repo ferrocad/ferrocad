@@ -95,6 +95,7 @@
 //! types, and the supporting modules) are the reference. The `mod` items below are
 //! the module-level documentation.
 
+mod application;
 mod document;
 mod expr;
 mod observer;
@@ -107,6 +108,7 @@ mod typeregistry;
 // `crate::geometry::…` paths inside this crate keep working.
 pub use ferrocad_types::{geometry, quantity, unit};
 
+pub use application::{application, Application, DocumentHandle, DocumentObserver};
 pub use document::{sanitize_name, Document, DocumentObject, ObjectId, SavedDocument};
 pub use geometry::{Matrix4, Placement, Rotation, ScaleType, TypeId, Vector3};
 pub use observer::Observer;

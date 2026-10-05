@@ -11,9 +11,10 @@ touch::
 The implementation is the PyO3 extension ``ferrocad``, which binds the Rust
 ``ferrocad_core`` engine. The C++ PyCXX bindings are not involved at all.
 
-``fc`` is a thin binding over the document object model; it has no notion of an
-"application" (document registry, active document, version). This facade adds
-that small layer in Python so the ``FreeCAD`` module surface stays complete.
+``fc`` exposes the application too: the document registry, the active document and
+FreeCAD-style unique naming all live in the Rust core
+(``ferrocad_core::Application``). This facade mirrors the ``FreeCAD`` module surface
+and keeps no state of its own.
 """
 
 from __future__ import annotations
@@ -46,65 +47,36 @@ ScaleType = Base.ScaleType
 addDocumentObserver = _fc.addDocumentObserver
 removeDocumentObserver = _fc.removeDocumentObserver
 
-# `fc` has no App/registry, so the facade owns it: a name -> Document map,
-# an "active" pointer, and FreeCAD-style unique name allocation.
-_documents = {}
-_active = None
-
-def _unique_name(name):
-    base = name or "Unnamed"
-    candidate = base
-    i = 1
-    while candidate in _documents:
-        candidate = "%s%03d" % (base, i)
-        i += 1
-    return candidate
+# The document registry (which documents are open, which is active, FreeCAD-style
+# unique naming) lives in the Rust core; `fc` exposes it, so the facade keeps no
+# state of its own.
 
 def newDocument(name=None, hidden=False, temp=False):
-    global _active
-    doc_name = _unique_name(name)
-    doc = _fc.newDocument(doc_name)
-    _documents[doc_name] = doc
-    _active = doc
-    return doc
+    return _fc.newDocument(name)
 
 def open(name, hidden=False, temporary=False):
-    global _active
-    doc = _fc.openDocument(name)
-    _documents[doc.Name] = doc
-    _active = doc
-    return doc
+    return _fc.openDocument(name)
 
 # Upstream alias (`FreeCAD.openDocument(path)`).
 def openDocument(path, hidden=False, temporary=False):
-    return open(path, hidden=hidden, temporary=temporary)
+    return _fc.openDocument(path)
 
 def closeDocument(name):
-    global _active
-    if name not in _documents:
+    if _fc.getDocument(name) is None:
         raise ValueError("no document named '%s'" % name)
-    doc = _documents.pop(name)
-    if _active is not None and _active.Name == name:
-        _active = None
-    _fc._emitDocument("slotDeletedDocument", doc)
-    _fc._forgetDocument(doc)
+    _fc.closeDocument(name)
 
 def getDocument(name):
-    return _documents.get(name)
+    return _fc.getDocument(name)
 
 def setActiveDocument(name):
-    global _active
-    if name in _documents:
-        doc = _documents[name]
-        if doc is not _active:
-            _active = doc
-            _fc._emitDocument("slotActivateDocument", doc)
+    _fc.setActiveDocument(name)
 
 def listDocuments():
-    return dict(_documents)
+    return _fc.listDocuments()
 
 def activeDocument():
-    return _active
+    return _fc.activeDocument()
 
 def Version():
     return __version__.split(".") + ["rust-fc", ""]

@@ -170,9 +170,12 @@ The extraction is a refactor with its own tests, so it lands in stages:
    `make_box`, `fuse`, `cut`, `fillet`, `place`, and a positional `resolve`; fuse/cut
    build a face-level `History`. Verified against OCCT 7.8.1 (5 tests + doctest) and
    tested in CI by a `geometry` job that fetches OCCT from conda-forge.
-4. **`Application` (core document registry)** — documents + active document moved out of
-   the Python facade so the registry has one owner. Facade completeness; independent of
-   geometry.
+4. **[x] `Application` (core document registry)** (done 2026-10-06) —
+   `ferrocad_core::Application` owns the open documents
+   (`BTreeMap<String, Arc<Mutex<Document>>>`), the active document, document-lifecycle
+   observers and FreeCAD-style unique naming; the PyO3 module delegates to it and the
+   Python facade keeps no state (only a wrapper-identity cache in the binding).
+   Independent of geometry.
 5. **Document-object SPI** — the object/property extension seam from §5. The real
    prerequisite for Part.
 6. **`ferrocad_part` / `ferrocad_part_py`** — Part features as registered

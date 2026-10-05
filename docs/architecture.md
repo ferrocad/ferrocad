@@ -27,6 +27,12 @@ obvious:
 | `ferrocad_gen` | `cdylib` | Generated PyO3 skeletons (M3c). A build-time experiment, not wired into the facade. |
 | `ferrocad_ctypes` | `cdylib` | The legacy M0 C-ABI backend, **removed** (kept in §4 as the rationale). |
 
+The open-document registry lives in `ferrocad_core::Application` (the analog of FreeCAD's
+`App::Application` / `App::GetApplication()`): the open documents (`Arc<Mutex<Document>>`),
+the active document, document-lifecycle observers, and FreeCAD-style unique naming. The
+PyO3 module delegates to it; the Python facade keeps no state (the binding retains only a
+wrapper-identity cache).
+
 ## 2. Who owns the process: there are two entry points
 
 The stack starts in exactly one of two ways.

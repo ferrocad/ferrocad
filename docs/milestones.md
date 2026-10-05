@@ -1134,6 +1134,13 @@ and the `FreeCADInitTests` package-init shim (stretch).
 implements `GeometryBackend` (box/fuse/cut/fillet/place) via `opencascade-sys` + the
 sibling history bridge, verified against OCCT 7.8.1 and tested by a `geometry` CI job.
 The kernel lives in the workbench, **not core**: `ferrocad_core` stays geometry-agnostic.
-Next: the core `Application` document registry, then the **document-object SPI**
-(object/property extension — the real prerequisite before Part can hold a shape), then the
-Part crates.
+
+**Core `Application` (open-document registry) — done.** `ferrocad_core::Application` now
+owns the open documents (`BTreeMap<String, Arc<Mutex<Document>>>`), the active document,
+document-lifecycle observers and FreeCAD-style unique naming; `ferrocad_py` delegates to it
+and `python/FreeCAD/__init__.py` keeps no state (the binding retains only a
+wrapper-identity cache). The Python facade tests (107) and upstream conformance (169) are
+unchanged.
+
+Next: the **document-object SPI** (object/property extension — the real prerequisite before
+Part can hold a shape), then the Part crates.

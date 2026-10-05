@@ -51,7 +51,7 @@ use std::collections::{BTreeMap, HashMap};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, OnceLock};
 
-use ferrocad_core::{canonical_name, parse_unit, prop_status, status_from_name, status_names, Document as CoreDocument, Matrix4, ObjectId, Placement, Property, Quantity, Rotation, StringHasher, StringId, TypeId, Unit, Vector3};
+use ferrocad_core::{application, canonical_name, parse_unit, prop_status, status_from_name, status_names, Document as CoreDocument, Matrix4, ObjectId, Placement, Property, Quantity, Rotation, StringHasher, StringId, TypeId, Unit, Vector3};
 use pyo3::exceptions::{
     PyAttributeError, PyIndexError, PyNotImplementedError, PyRuntimeError, PyTypeError, PyValueError,
 };
@@ -69,6 +69,16 @@ static OBSERVERS: OnceLock<Mutex<Vec<Py<PyAny>>>> = OnceLock::new();
 /// Canonical `Py<PyDocumentObject>` per `(document pointer, object id)`, so the
 /// same Rust object always maps to the *same* Python object (needed for `is`).
 static OBJECT_CACHE: OnceLock<Mutex<HashMap<(usize, ObjectId), Py<PyDocumentObject>>>> = OnceLock::new();
+
+/// Canonical `Py<PyDocument>` per open-document name, so `getDocument`/`listDocuments`
+/// return the *same* Python object (needed for `is`). Document *existence*, the
+/// active document and name allocation live in `ferrocad_core::application`; this
+/// cache only preserves Python object identity for the wrappers.
+static DOCUMENTS: OnceLock<Mutex<BTreeMap<String, Py<PyDocument>>>> = OnceLock::new();
+
+fn documents() -> &'static Mutex<BTreeMap<String, Py<PyDocument>>> {
+    DOCUMENTS.get_or_init(|| Mutex::new(BTreeMap::new()))
+}
 
 fn observers() -> &'static Mutex<Vec<Py<PyAny>>> {
     OBSERVERS.get_or_init(|| Mutex::new(Vec::new()))
@@ -4020,19 +4030,25 @@ impl PyBoundBox {
 #[pyfunction]
 #[pyo3(signature = (name=None))]
 fn newDocument(py: Python<'_>, name: Option<String>) -> PyResult<Py<PyDocument>> {
-    let name = name.unwrap_or_else(|| "Unnamed".to_string());
+    // Existence, unique naming and the active pointer live in `ferrocad_core`;
+    // this layer keeps the Python wrapper (identity + label/meta/comment).
+    let (doc_name, handle) = application()
+        .lock()
+        .unwrap()
+        .new_document(name.as_deref());
     let doc = Py::new(
         py,
         PyDocument {
-            label: name.clone(),
-            name,
+            label: doc_name.clone(),
+            name: doc_name.clone(),
             file_name: None,
             auto_created: false,
-            inner: Arc::new(Mutex::new(CoreDocument::new())),
+            inner: handle,
             meta: Arc::new(Mutex::new(BTreeMap::new())),
             comment: Mutex::new(String::new()),
         },
     )?;
+    documents().lock().unwrap().insert(doc_name, doc.clone_ref(py));
     let bound = doc.bind(py);
     fire_doc("slotCreatedDocument", bound, None);
     fire_doc_str("slotBeforeChangeDocument", bound, "Label");
@@ -4044,21 +4060,86 @@ fn newDocument(py: Python<'_>, name: Option<String>) -> PyResult<Py<PyDocument>>
 #[pyfunction]
 fn openDocument(py: Python<'_>, path: &str) -> PyResult<Py<PyDocument>> {
     let saved = CoreDocument::load_from_file(path).map_err(PyValueError::new_err)?;
+    let core_doc = CoreDocument::from_saved(&saved);
+    let (doc_name, handle) = application()
+        .lock()
+        .unwrap()
+        .insert_document(&saved.name, core_doc);
     let doc = Py::new(
         py,
         PyDocument {
-            name: saved.name.clone(),
-            label: saved.name.clone(),
+            name: doc_name.clone(),
+            label: doc_name.clone(),
             file_name: Some(path.to_string()),
             auto_created: false,
-            inner: Arc::new(Mutex::new(CoreDocument::from_saved(&saved))),
+            inner: Arc::clone(&handle),
             meta: Arc::new(Mutex::new(BTreeMap::new())),
             comment: Mutex::new(String::new()),
         },
     )?;
-    let inner = Arc::clone(&doc.bind(py).borrow().inner);
-    apply_all_python_states(py, &doc, &inner);
+    documents().lock().unwrap().insert(doc_name, doc.clone_ref(py));
+    apply_all_python_states(py, &doc, &handle);
     Ok(doc)
+}
+
+/// The registered Python wrapper for an open document, if any.
+#[pyfunction]
+fn getDocument(py: Python<'_>, name: &str) -> Option<Py<PyDocument>> {
+    documents().lock().unwrap().get(name).map(|doc| doc.clone_ref(py))
+}
+
+/// `name -> wrapper` for every open document.
+#[pyfunction]
+fn listDocuments(py: Python<'_>) -> BTreeMap<String, Py<PyDocument>> {
+    documents()
+        .lock()
+        .unwrap()
+        .iter()
+        .map(|(name, doc)| (name.clone(), doc.clone_ref(py)))
+        .collect()
+}
+
+/// Close a document; emits the deletion signal. Returns whether it was open.
+#[pyfunction]
+fn closeDocument(py: Python<'_>, name: &str) -> bool {
+    let doc = documents().lock().unwrap().remove(name);
+    application().lock().unwrap().close_document(name);
+    match doc {
+        Some(doc) => {
+            fire_doc("slotDeletedDocument", doc.bind(py), None);
+            forget_document(&doc);
+            true
+        }
+        None => false,
+    }
+}
+
+/// Make a document active; emits the activation signal when it changes.
+#[pyfunction]
+fn setActiveDocument(py: Python<'_>, name: &str) -> bool {
+    let changed = {
+        let mut app = application().lock().unwrap();
+        if !app.contains(name) {
+            return false;
+        }
+        let changed = app.active() != Some(name);
+        app.set_active(name);
+        changed
+    };
+    if changed {
+        let doc = documents().lock().unwrap().get(name).map(|d| d.clone_ref(py));
+        if let Some(doc) = doc {
+            fire_doc("slotActivateDocument", doc.bind(py), None);
+        }
+    }
+    true
+}
+
+/// The active document's wrapper, if any.
+#[pyfunction]
+fn activeDocument(py: Python<'_>) -> Option<Py<PyDocument>> {
+    let name = application().lock().unwrap().active().map(str::to_string)?;
+    documents().lock().unwrap().get(&name).map(|doc| doc.clone_ref(py))
 }
 
 #[pyfunction]
@@ -4075,20 +4156,6 @@ fn removeDocumentObserver(observer: &Bound<'_, PyAny>) {
         .lock()
         .unwrap()
         .retain(|o| o.as_ptr() != observer.as_ptr());
-}
-
-/// Emit a document-level signal (used by the `FreeCAD` facade for the
-/// operations it owns: `closeDocument`, `setActiveDocument`).
-#[pyfunction]
-#[pyo3(signature = (slot, doc, extra=None))]
-fn _emitDocument(slot: &str, doc: &Bound<'_, PyDocument>, extra: Option<&Bound<'_, PyAny>>) {
-    fire_doc(slot, doc, extra);
-}
-
-/// Drop all cached Python object handles for a closed document.
-#[pyfunction]
-fn _forgetDocument(doc: &Bound<'_, PyDocument>) {
-    forget_document(&doc.clone().unbind());
 }
 
 #[pymodule]
@@ -4111,9 +4178,12 @@ pub fn ferrocad(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyStringID>()?;
     m.add_function(wrap_pyfunction!(newDocument, m)?)?;
     m.add_function(wrap_pyfunction!(openDocument, m)?)?;
+    m.add_function(wrap_pyfunction!(getDocument, m)?)?;
+    m.add_function(wrap_pyfunction!(listDocuments, m)?)?;
+    m.add_function(wrap_pyfunction!(closeDocument, m)?)?;
+    m.add_function(wrap_pyfunction!(setActiveDocument, m)?)?;
+    m.add_function(wrap_pyfunction!(activeDocument, m)?)?;
     m.add_function(wrap_pyfunction!(addDocumentObserver, m)?)?;
     m.add_function(wrap_pyfunction!(removeDocumentObserver, m)?)?;
-    m.add_function(wrap_pyfunction!(_emitDocument, m)?)?;
-    m.add_function(wrap_pyfunction!(_forgetDocument, m)?)?;
     Ok(())
 }

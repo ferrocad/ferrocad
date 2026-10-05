@@ -129,11 +129,12 @@ class TestGeometry(unittest.TestCase):
         self.assertIs(FreeCAD.Placement, FreeCAD.Base.Placement)
 
     def test_feature_test_default_properties(self):
+        # Defaults mirror the upstream C++ fixture `src/App/FeatureTest.cpp`.
         doc = FreeCAD.newDocument("Ft")
         obj = doc.addObject("App::FeatureTest", "F")
-        self.assertEqual(obj.Integer, 0)
-        self.assertEqual(obj.Float, 0.0)
-        self.assertEqual(obj.String, "")
+        self.assertEqual(obj.Integer, 4711)
+        self.assertAlmostEqual(obj.Float, 47.11, places=2)
+        self.assertEqual(obj.String, "4711")
         self.assertIsInstance(obj.Placement, FreeCAD.Placement)
         FreeCAD.closeDocument("Ft")
 
@@ -158,6 +159,58 @@ class TestPersistence(unittest.TestCase):
         self.assertEqual(o.Label, "Persisted label")
         self.assertEqual(o.Description, "hello")
         FreeCAD.closeDocument("SaveTest")
+
+    def test_full_property_roundtrip(self):
+        # Mirrors upstream `DocumentSaveRestoreCases.testSaveAndRestore`.
+        import os
+        import tempfile
+
+        doc = FreeCAD.newDocument("RoundTrip")
+        l1 = doc.addObject("App::FeatureTest", "Label_1")
+        l2 = doc.addObject("App::FeatureTest", "Label_2")
+        l3 = doc.addObject("App::FeatureTest", "Label_3")
+
+        self.assertEqual(l1.TypeTransient, 4711)
+        l1.TypeTransient = 4712
+        l1.Link = l2
+        l2.Link = l3
+        l1.LinkSub = (l2, ["Sub1", "Sub2"])
+        l2.LinkSub = (l3, ["Sub3", "Sub4"])
+
+        path = os.path.join(tempfile.gettempdir(), "RoundTrip.FCStd")
+        doc.saveAs(path)
+        FreeCAD.closeDocument("RoundTrip")
+        doc = FreeCAD.open(path)
+
+        self.assertEqual(doc.Label_1.Integer, 4711)
+        self.assertEqual(doc.Label_1.Link, doc.Label_2)
+        self.assertEqual(doc.Label_2.Link, doc.Label_3)
+        self.assertEqual(doc.Label_1.LinkSub, (doc.Label_2, ["Sub1", "Sub2"]))
+        self.assertEqual(doc.Label_2.LinkSub, (doc.Label_3, ["Sub3", "Sub4"]))
+        # Static transient properties keep their status but not their value, so
+        # they revert to the constructor default after a restore.
+        self.assertEqual(doc.Label_1.TypeTransient, 4711)
+        FreeCAD.closeDocument("RoundTrip")
+
+    def test_dynamic_transient_property_is_persisted(self):
+        # A transient property added at runtime is still saved (upstream only
+        # drops transient *static* properties).
+        import os
+        import tempfile
+
+        doc = FreeCAD.newDocument("DynTransient")
+        obj = doc.addObject("App::FeaturePython", "Obj")
+        obj.addProperty(
+            "App::PropertyString", "Scratch", "Base", "", FreeCAD.PropertyType.Prop_Transient
+        )
+        obj.Scratch = "kept"
+        path = os.path.join(tempfile.gettempdir(), "DynTransient.FCStd")
+        doc.saveAs(path)
+        FreeCAD.closeDocument("DynTransient")
+
+        doc = FreeCAD.open(path)
+        self.assertEqual(doc.Obj.Scratch, "kept")
+        FreeCAD.closeDocument("DynTransient")
 
     def test_copy_object(self):
         src = FreeCAD.newDocument("Src")

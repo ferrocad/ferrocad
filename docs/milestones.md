@@ -4,11 +4,13 @@ Status: living record (2026-10-02). Complements [`rewrite-strategy.md`](rewrite-
 (direction) and [`python-ui-research.md`](python-ui-research.md) (evidence). The code lives in the
 [repository](..).
 
-**Current state:** M0–M3 complete; **M4 in progress** (sixteen slices done). The pure-Rust
-`ferrocad_core` + PyO3 `ferrocad` extension serve the FreeCAD Python surface behind the
-`python/FreeCAD` facade, with a conformance harness tracking **146 upstream tests passing** across
-eight `Mod/Test` files (`StringHasher.py` 4/4, `UnitTests.py` 12/12, `BaseTests.py` 48/49).
-Next: `Document.UndoMode`/`Touched`, then the `FreeCAD` package-init shim.
+**Current state:** M0–M3 complete; **M4 in progress** (sixteen slices done) and the MVP slices
+(A1, A2, B1, B2, C1, D1) landing. The pure-Rust `ferrocad_core` + PyO3 `ferrocad` extension serve
+the FreeCAD Python surface behind the `python/FreeCAD` facade, with a conformance harness tracking
+**161 upstream tests passing** across eight `Mod/Test` files (`StringHasher.py` 4/4,
+`UnitTests.py` 12/12, `BaseTests.py` 48/49).
+Next MVP slices: B3 (containers/links) and B4 (expressions v2); then the `FreeCAD` package-init
+shim.
 
 > **Naming note (FerroCAD restructure).** The repo `freecad-rs-poc` was renamed to `ferrocad` and
 the flat `rust/` tree became a Cargo workspace under `crates/`. Crate names below use the
@@ -867,6 +869,41 @@ and book Chapter 14 ("What FerroCAD uses") and Chapter 16.
 
 ---
 
+### MVP slice C1 — full property round-trip ✅
+
+**Goal:** save and restore every property type, including the `SaveRestoreSpecialGroup` fixture,
+so `DocumentSaveRestoreCases.testSaveAndRestore` passes (mvp-path §6 C1).
+
+**Built:**
+- **`ferrocad_core` (`typeregistry.rs`):** `default_properties` now yields
+  `(name, default, status)` and mirrors the upstream `src/App/FeatureTest.cpp` constructor
+  (`Integer`=4711, `Float`/`Distance`=47.11, `Angle`=3.0, `String`="4711", `Enum` seeded,
+  `ConstraintInt/Float`=5, `Vector`=(1,2,3), `ExecResult`="empty", the `Type*` status flags, …);
+  `PropertyLinkSub`/`LinkSubList` are now real properties.
+- **`ferrocad_core` (`property.rs`):** new internal `prop_status::DYNAMIC` bit (upstream
+  `PropDynamic`). It is stored in the raw status, but `PropertyContainer::status` masks it out
+  (public `PropertyType` mask stays clean), with `raw_status`/`is_dynamic` for persistence.
+  `add_property` sets it.
+- **`ferrocad_core` (`document/mod.rs`):** `SavedObject::from_object` skips `NoPersist` values and,
+  for *static* transient properties, persists only the status (value omitted), matching
+  `PropertyContainer::Save`; dynamic transient properties keep their value. `from_saved` and
+  `restore_object` overlay the persisted values on the constructor defaults instead of clearing,
+  so static transient properties revert to their default after a restore.
+- **`tools/conformance.py`:** the loader now registers each test module in `sys.modules` before its
+  body runs (as a normal import would), so proxy classes referenced by module name resolve. This
+  is behavior-neutral for the harness (its `main` already puts the test dir on `sys.path`) but
+  makes `run_file` self-contained.
+
+**Conformance:** **161 passed** (was 160) · 46 failed · 8 errored; `Document.py` 88/137. Newly green:
+`DocumentSaveRestoreCases.testSaveAndRestore` (and, with the loader fix,
+`testExtensionSaveRestore`, `testWithProxy`). `testObjects` moved from an early assertion failure
+(wrong stub defaults) to a later missing-method error (`getDocumentationOfProperty`, a D2 gap),
+so it is not a regression. Tests: 42 Rust (unchanged; the existing
+`no_persist_properties_are_dropped_but_dynamic_transients_saved` now passes with the `DYNAMIC`
+bit), 98 Python (+2 round-trip cases).
+
+---
+
 ## 2. Decisions now unlocked by the spike work
 
 These are no longer open questions — the spike produced evidence:
@@ -997,8 +1034,8 @@ flowchart TD
 The MVP is now defined: see **[`mvp-path.md`](mvp-path.md)** — *a headless, geometry-free parametric
 document engine exposed as the drop-in `FreeCAD` package*, measured by taking upstream
 `Mod/Test/Document.py` to parity **excluding** the C++ `App::FeatureTest` fixture (~32 tests).
-Conformance is **160 passed** (was 146) · 48 failed · 7 errored; `Document.py` 87/137, of whose 50
-failures ~18 are real product gaps.
+Conformance is **161 passed** (was 146) · 46 failed · 8 errored; `Document.py` 88/137, of whose 49
+failures ~17 are real product gaps (`testObjects` now reaches `getDocumentationOfProperty`).
 
 MVP slices, in order (details and test yields in [`mvp-path.md`](mvp-path.md) §6):
 
@@ -1012,7 +1049,9 @@ MVP slices, in order (details and test yields in [`mvp-path.md`](mvp-path.md) §
    transactions with process-unique ids, `UndoNames`/`RedoNames`/`Count`/`clearUndos`, `UndoMode`,
    `getBookedTransactionID`/`getAvailableUndos`/`getAvailableRedos`, `ActiveObject`, transactional
    expressions, link-aware `InList`.
-5. **B3 · containers/links** (4) → **C1 · full property round-trip** → **B4 · expressions v2**.
+5. **B3 · containers/links** (4) → **C1 · full property round-trip** — ✅ **done** (slice C1):
+   fixture defaults/statuses, `PropertyLinkSub`, static-vs-dynamic transient persistence,
+   proxy round-trip → **B4 · expressions v2**.
 6. **D1 · `examples/mvp_workflow.py` + CI** — the acceptance demo, run on both backends.
 
 **After the headless MVP — the app shell.** The next major chunk turns the engine into an

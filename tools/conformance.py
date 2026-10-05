@@ -73,12 +73,20 @@ class Collector(unittest.TestResult):
 
 
 def load_module(path: Path):
-    """Import a test file as a module; return (module, None) or (None, error)."""
+    """Import a test file as a module; return (module, None) or (None, error).
+
+    The module is registered in ``sys.modules`` before its body runs, exactly as
+    a normal import would. FreeCAD persists Python proxy objects by referencing
+    their defining module by name, so an unregistered module makes proxy
+    save/restore tests fail spuriously.
+    """
     spec = importlib.util.spec_from_file_location(path.stem, path)
     module = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = module
     try:
         spec.loader.exec_module(module)
     except Exception as exc:  # noqa: BLE001 - we want any import failure
+        sys.modules.pop(spec.name, None)
         return None, exc
     return module, None
 

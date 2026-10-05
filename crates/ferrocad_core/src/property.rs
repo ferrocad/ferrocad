@@ -88,6 +88,11 @@ pub mod prop_status {
     pub const NOPERSIST: u32 = 32;
     /// Internal-only `Prop_Input` (reported by `getTypeOfProperty`).
     pub const INPUT: u32 = 64;
+    /// Internal-only marker for a property added at runtime via `addProperty`
+    /// (upstream `Property::PropDynamic`). It is deliberately absent from
+    /// `status_names` / `status_from_name`, which describe the public
+    /// `PropertyType` mask only.
+    pub const DYNAMIC: u32 = 128;
 
     /// Properties with this bit are never written to the file. Note that
     /// `Prop_Transient` only suppresses persistence for *static* properties;
@@ -142,7 +147,8 @@ pub fn status_from_name(name: &str) -> Option<u32> {
 #[derive(Debug, Default)]
 pub struct PropertyContainer {
     props: BTreeMap<String, Property>,
-    /// Property name → `PropertyType` status bitmask.
+    /// Property name → status bitmask. May carry the internal `DYNAMIC` bit,
+    /// which the public accessors mask out.
     status: BTreeMap<String, u32>,
 }
 
@@ -157,25 +163,38 @@ impl PropertyContainer {
         self.props.insert(name, value);
     }
 
-    /// Insert a value together with its status mask (used by `addProperty`).
+    /// Insert a value together with its status mask (used by `addProperty` and
+    /// by document restore). The mask is stored verbatim: callers that want the
+    /// `DYNAMIC` bit set must include it.
     pub fn set_with_status(&mut self, name: impl Into<String>, value: Property, status: u32) {
         let name = name.into();
         self.status.insert(name.clone(), status);
         self.props.insert(name, value);
     }
 
-    /// The status mask for a property, or `None` if the property does not exist.
+    /// The public `PropertyType` status mask for a property, or `None` if the
+    /// property does not exist. The internal `DYNAMIC` bit is masked out.
     pub fn status(&self, name: &str) -> Option<u32> {
+        self.status.get(name).map(|s| s & !prop_status::DYNAMIC)
+    }
+
+    /// The raw status mask, including the internal `DYNAMIC` bit (used when
+    /// persisting, so dynamic-ness survives a save/restore round trip).
+    pub fn raw_status(&self, name: &str) -> Option<u32> {
         self.status.get(name).copied()
     }
 
-    /// Replace a property's status mask; `None` if the property does not exist.
+    /// Replace a property's *public* status mask; `None` if the property does
+    /// not exist. The internal `DYNAMIC` bit is preserved.
     pub fn set_status(&mut self, name: &str, status: u32) -> Option<u32> {
         if !self.props.contains_key(name) {
             return None;
         }
-        let old = self.status.insert(name.to_string(), status);
-        Some(old.unwrap_or(prop_status::NONE))
+        let prev = self.status.get(name).copied().unwrap_or(prop_status::NONE);
+        let dynamic = prev & prop_status::DYNAMIC;
+        let new = (status & !prop_status::DYNAMIC) | dynamic;
+        self.status.insert(name.to_string(), new);
+        Some(prev & !prop_status::DYNAMIC)
     }
 
     pub fn get(&self, name: &str) -> Option<&Property> {

@@ -3,91 +3,97 @@
 //! Upstream registers each object type's properties via `ADD_PROPERTY` in the
 //! C++ constructor. For the POC we hard-code the properties of the test types
 //! (and a few common document types) so `addObject("App::FeatureTest")`
-//! produces an object that already has its expected properties.
+//! produces an object that already has its expected properties, defaults and
+//! status flags.
 
 use crate::geometry::{Matrix4, Placement, Vector3};
-use crate::property::Property;
+use crate::property::{prop_status, Property};
 use crate::quantity::Quantity;
 use crate::unit::Unit;
 
-fn length() -> Property {
-    Property::Quantity(Quantity::new(0.0, Unit::Millimeter))
+fn quantity(value: f64) -> Property {
+    Property::Quantity(Quantity::new(value, Unit::Millimeter))
 }
 
-fn angle() -> Property {
-    Property::Quantity(Quantity::new(0.0, Unit::Millimeter))
-}
-
-/// Return the default property list for a type id (empty for unknown types).
-pub fn default_properties(type_id: &str) -> Vec<(&'static str, Property)> {
+/// `(name, default, status)` for each of the type's properties.
+pub fn default_properties(type_id: &str) -> Vec<(&'static str, Property, u32)> {
+    use prop_status::{HIDDEN, NONE, NORECOMPUTE, OUTPUT, READONLY, TRANSIENT};
     match type_id {
+        // Defaults and status flags mirror `src/App/FeatureTest.cpp` (the C++
+        // fixture that `Mod/Test/Document.py` exercises).
         "App::FeatureTest" => vec![
-            ("Integer", Property::Integer(0)),
-            ("Float", Property::Float(0.0)),
-            ("Bool", Property::Bool(false)),
-            ("BoolList", Property::BoolList(vec![])),
-            ("String", Property::String(String::new())),
-            ("StringList", Property::StringList(vec![])),
-            ("Distance", length()),
-            ("Angle", angle()),
-            ("Enum", Property::String(String::new())),
-            ("ConstraintInt", Property::IntegerList(vec![])),
-            ("ConstraintFloat", Property::FloatList(vec![])),
-            ("IntegerList", Property::IntegerList(vec![])),
-            ("FloatList", Property::FloatList(vec![])),
-            ("Link", Property::Link(String::new())),
-            ("LinkList", Property::LinkList(vec![])),
-            ("ColourList", Property::ColorList(vec![])),
-            ("Matrix", Property::Matrix(Matrix4::identity())),
-            ("Vector", Property::Vector(Vector3::zero())),
-            ("VectorList", Property::VectorList(vec![])),
-            ("Placement", Property::Placement(Placement::identity())),
-            ("Source1", Property::Link(String::new())),
-            ("Source2", Property::Link(String::new())),
-            ("SourceN", Property::Link(String::new())),
-            ("ExecResult", Property::String(String::new())),
-            ("ExceptionType", Property::Integer(0)),
-            ("ExecCount", Property::Integer(0)),
-            ("TypeHidden", Property::Integer(0)),
-            ("TypeReadOnly", Property::Integer(0)),
-            ("TypeOutput", Property::Integer(0)),
-            ("TypeAll", Property::Integer(0)),
-            ("TypeTransient", Property::Integer(0)),
-            ("TypeNoRecompute", Property::Integer(0)),
-            ("QuantityLength", length()),
-            ("QuantityOther", length()),
+            ("Integer", Property::Integer(4711), NONE),
+            ("Float", Property::Float(47.11), NONE),
+            ("Bool", Property::Bool(true), NONE),
+            ("BoolList", Property::BoolList(vec![]), NONE),
+            ("String", Property::String("4711".to_string()), NONE),
+            ("StringList", Property::StringList(vec![]), NONE),
+            ("Distance", quantity(47.11), NONE),
+            ("Angle", quantity(3.0), NONE),
+            ("Enum", Property::String(String::new()), NONE),
+            ("ConstraintInt", Property::IntegerList(vec![5]), NONE),
+            ("ConstraintFloat", Property::FloatList(vec![5.0]), NONE),
+            ("IntegerList", Property::IntegerList(vec![4711]), NONE),
+            ("FloatList", Property::FloatList(vec![47.11]), NONE),
+            ("Link", Property::Link(String::new()), NONE),
+            ("LinkSub", Property::LinkSub(String::new(), Vec::new()), NONE),
+            ("LinkList", Property::LinkList(vec![]), NONE),
+            ("LinkSubList", Property::LinkList(vec![]), NONE),
+            ("ColourList", Property::ColorList(vec![]), NONE),
+            ("Matrix", Property::Matrix(Matrix4::identity()), NONE),
+            ("Vector", Property::Vector(Vector3::new(1.0, 2.0, 3.0)), NONE),
+            (
+                "VectorList",
+                Property::VectorList(vec![Vector3::new(3.0, 2.0, 1.0)]),
+                NONE,
+            ),
+            ("Placement", Property::Placement(Placement::identity()), NONE),
+            ("Source1", Property::Link(String::new()), NONE),
+            ("Source2", Property::Link(String::new()), NONE),
+            ("SourceN", Property::Link(String::new()), NONE),
+            ("ExecResult", Property::String("empty".to_string()), NONE),
+            ("ExceptionType", Property::Integer(0), NONE),
+            ("ExecCount", Property::Integer(0), NONE),
+            ("TypeHidden", Property::Integer(4711), HIDDEN),
+            ("TypeReadOnly", Property::Integer(4711), READONLY),
+            ("TypeOutput", Property::Integer(4711), OUTPUT),
+            ("TypeTransient", Property::Integer(4711), TRANSIENT),
+            ("TypeNoRecompute", Property::Integer(4711), NORECOMPUTE),
+            ("TypeAll", Property::Integer(4711), OUTPUT | READONLY | HIDDEN),
+            ("QuantityLength", quantity(1.0), NONE),
+            ("QuantityOther", quantity(5.0), NONE),
         ],
         "App::FeatureTestColumn" => vec![
-            ("Column", Property::String(String::new())),
-            ("Silent", Property::Bool(false)),
-            ("Value", Property::Integer(0)),
+            ("Column", Property::String("A".to_string()), NONE),
+            ("Silent", Property::Bool(false), NONE),
+            ("Value", Property::Integer(0), OUTPUT),
         ],
         "App::FeatureTestRow" => vec![
-            ("Row", Property::String(String::new())),
-            ("Silent", Property::Bool(false)),
-            ("Value", Property::Integer(0)),
+            ("Row", Property::String("1".to_string()), NONE),
+            ("Silent", Property::Bool(false), NONE),
+            ("Value", Property::Integer(0), OUTPUT),
         ],
         "App::FeatureTestAbsAddress" => vec![
-            ("Address", Property::String(String::new())),
-            ("Valid", Property::Bool(false)),
+            ("Address", Property::String(String::new()), NONE),
+            ("Valid", Property::Bool(false), OUTPUT | READONLY),
         ],
         "App::FeatureTestPlacement" => vec![
-            ("Input1", Property::Placement(Placement::identity())),
-            ("Input2", Property::Placement(Placement::identity())),
-            ("MultLeft", Property::Placement(Placement::identity())),
-            ("MultRight", Property::Placement(Placement::identity())),
+            ("Input1", Property::Placement(Placement::identity()), NONE),
+            ("Input2", Property::Placement(Placement::identity()), NONE),
+            ("MultLeft", Property::Placement(Placement::identity()), NONE),
+            ("MultRight", Property::Placement(Placement::identity()), NONE),
         ],
         "App::FeatureTestAttribute" => vec![
-            ("Object", Property::Link(String::new())),
-            ("Attribute", Property::String(String::new())),
+            ("Object", Property::Link(String::new()), NONE),
+            ("Attribute", Property::String(String::new()), NONE),
         ],
-        "App::DocumentObjectGroup" => vec![("Group", Property::LinkList(vec![]))],
+        "App::DocumentObjectGroup" => vec![("Group", Property::LinkList(vec![]), NONE)],
         "App::Part" => vec![
-            ("Group", Property::LinkList(vec![])),
-            ("Placement", Property::Placement(Placement::identity())),
+            ("Group", Property::LinkList(vec![]), NONE),
+            ("Placement", Property::Placement(Placement::identity()), NONE),
         ],
         "App::DocumentObjectFileIncluded" => {
-            vec![("File", Property::FileIncluded(String::new()))]
+            vec![("File", Property::FileIncluded(String::new()), NONE)]
         }
         _ => vec![],
     }

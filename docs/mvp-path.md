@@ -211,9 +211,17 @@ Ordered by dependency and value. Sizes are rough (test yield in parentheses).
 
 ### Track C — persistence
 
-- **C1 · Full property round-trip.** Save/restore every property type (Enum, Link,
-  LinkSub, Map, Quantity, Placement, PythonObject), incl. `SaveRestoreSpecialGroup`
-  (group + view-provider proxy). *(DocumentSaveRestoreCases; ~1–2.)*
+- **C1 · Full property round-trip. ✅ DONE.** Defaults and status flags for the
+  `App::FeatureTest*` fixtures now mirror `src/App/FeatureTest.cpp`
+  (`Integer`=4711, `Distance`=47.11, `Angle`=3.0, `Enum`=…, `Type*` statuses);
+  `PropertyLinkSub`/`LinkSubList` are real properties; save/restore skips
+  `NoPersist` values and, for *static* transient properties, persists only the
+  status so the value reverts to its constructor default (runtime-added dynamic
+  transients keep their value, tracked by an internal `DYNAMIC` status bit).
+  `SaveRestoreSpecialGroup`/proxy round-trip works via the `python_state`
+  capture, provided the proxy's module is importable. *(Landed:
+  `DocumentSaveRestoreCases` ×5 incl. `testSaveAndRestore` +
+  `testExtensionSaveRestore`, `testWithProxy`.)*
 - **C2 · `Content` + XML validate.** `DocumentObject.Content` XML dump,
   `restoreContent`, `validateXml`, and a small pure-Python `Show` shim
   (`Show.Containers.ContainerChain`) that `Document.py` imports. *(testContent,

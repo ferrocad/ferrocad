@@ -13,7 +13,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::expr;
 use crate::observer::Observer;
-use crate::property::{Property, PropertyContainer};
+use crate::property::{prop_status, Property, PropertyContainer};
 
 mod transaction;
 
@@ -98,8 +98,8 @@ impl Document {
 
         // Initialize default properties for known types (FeatureTest, …).
         let mut properties = PropertyContainer::new();
-        for (prop_name, prop) in crate::typeregistry::default_properties(type_id) {
-            properties.set(prop_name.to_string(), prop);
+        for (prop_name, prop, status) in crate::typeregistry::default_properties(type_id) {
+            properties.set_with_status(prop_name.to_string(), prop, status);
         }
 
         self.objects.insert(
@@ -381,7 +381,10 @@ impl Document {
             .objects
             .get_mut(&object)
             .ok_or_else(|| format!("no object {object}"))?;
-        obj.properties.set_with_status(name.to_string(), value, status);
+        // Mark runtime-added properties as dynamic so that transient ones are
+        // still persisted (`PropertyContainer::Save`).
+        obj.properties
+            .set_with_status(name.to_string(), value, status | prop_status::DYNAMIC);
         Ok(())
     }
 
@@ -595,10 +598,21 @@ impl Document {
             let id = doc.add_object(&obj.name, &obj.type_id);
             doc.set_label(id, &obj.label);
             if let Some(o) = doc.objects.get_mut(&id) {
-                o.properties.clear();
+                // Apply the persisted values *over* the constructor defaults
+                // created by `add_object`. We must not clear first: static
+                // transient properties are not written to the file, and after a
+                // restore they should fall back to their constructor default
+                // (upstream `PropertyContainer::Restore`).
                 for (k, v) in &obj.properties {
                     let status = obj.property_status.get(k).copied().unwrap_or(crate::prop_status::NONE);
                     o.properties.set_with_status(k.clone(), v.clone(), status);
+                }
+                // Re-apply statuses recorded without a value (transient
+                // placeholders for dynamically added properties).
+                for (k, status) in &obj.property_status {
+                    if !obj.properties.contains_key(k) {
+                        o.properties.set_status(k, *status);
+                    }
                 }
                 o.expressions = obj.expressions.clone();
                 o.extensions = obj.extensions.iter().cloned().collect();
@@ -647,10 +661,16 @@ impl Document {
         let saved: SavedObject = serde_json::from_slice(data).map_err(|e| e.to_string())?;
         let o = self.objects.get_mut(&id).ok_or_else(|| format!("no object {id}"))?;
         o.label = saved.label;
-        o.properties.clear();
-        for (k, v) in saved.properties {
-            let status = saved.property_status.get(&k).copied().unwrap_or(crate::prop_status::NONE);
-            o.properties.set_with_status(k, v, status);
+        // As in `from_saved`, keep the existing property set (constructor
+        // defaults included) and overlay the restored values.
+        for (k, v) in &saved.properties {
+            let status = saved.property_status.get(k).copied().unwrap_or(crate::prop_status::NONE);
+            o.properties.set_with_status(k.clone(), v.clone(), status);
+        }
+        for (k, status) in &saved.property_status {
+            if !saved.properties.contains_key(k) {
+                o.properties.set_status(k, *status);
+            }
         }
         o.expressions = saved.expressions;
         o.extensions = saved.extensions.into_iter().collect();
@@ -703,12 +723,21 @@ impl SavedObject {
         let mut properties = BTreeMap::new();
         let mut property_status = BTreeMap::new();
         for (k, v) in o.properties.iter() {
-            let status = o.properties.status(k).unwrap_or(crate::prop_status::NONE);
+            let status = o.properties.raw_status(k).unwrap_or(crate::prop_status::NONE);
             if status & crate::prop_status::NOT_PERSISTED != 0 {
                 continue;
             }
-            properties.insert(k.clone(), v.clone());
+            // Record the status even for static transient properties, but skip
+            // the value: upstream stores a valueless `_Property` placeholder so
+            // the property reverts to its constructor default on restore.
+            // Dynamic (runtime-added) transient properties keep their value.
             property_status.insert(k.clone(), status);
+            if status & crate::prop_status::TRANSIENT != 0
+                && status & crate::prop_status::DYNAMIC == 0
+            {
+                continue;
+            }
+            properties.insert(k.clone(), v.clone());
         }
         SavedObject {
             name: o.name.clone(),

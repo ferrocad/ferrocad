@@ -1,5 +1,7 @@
 # FerroCAD
 
+![The FerroCAD shell: model tree, 3D viewport, property editor and Python console](screenshot.png)
+
 **FerroCAD** is the project formerly known as `freecad-rs-poc`: a Rust reimplementation of FreeCAD's
 C++ `App` core, designed to be a **drop-in replacement for the `FreeCAD` Python package**. The
 Python import namespace stays `FreeCAD`; the project/distribution is `ferrocad`.
@@ -335,6 +337,7 @@ driven live through the `FreeCAD` API (`python/ferrocad_shell`). Run it with
 ```
 Cargo.toml                Cargo workspace (edition 2024)
 LICENSE                   LGPL-2.1-or-later (the `license` field is the SPDX id)
+screenshot.png            the shell screenshot above
 pyproject.toml            maturin packaging (distribution `ferrocad`)
 hello_freecad.py          the milestone script (public FreeCAD API only)
 examples/file_roundtrip.py  saveAs / open a document (file loading)

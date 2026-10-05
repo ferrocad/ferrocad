@@ -1,0 +1,137 @@
+diff -ruN sys-orig/include/fc_history.hxx sys-mod/include/fc_history.hxx
+--- sys-orig/include/fc_history.hxx	1970-01-01 01:00:00.000000000 +0100
++++ sys-mod/include/fc_history.hxx	2026-10-05 23:00:43.495902073 +0100
+@@ -0,0 +1,85 @@
++#pragma once
++
++#include <BRepAlgoAPI_Common.hxx>
++#include <BRepAlgoAPI_Cut.hxx>
++#include <BRepAlgoAPI_Fuse.hxx>
++#include <BRepBuilderAPI_MakeShape.hxx>
++#include <BRepTools_History.hxx>
++#include <TopTools_ListOfShape.hxx>
++#include <TopoDS_Shape.hxx>
++
++// FerroCAD spike: history accessors for the boolean operations, without bridging
++// Handle(BRepTools_History). For one input sub-shape `s`:
++//   modified/generated/deleted  from BRepBuilderAPI_MakeShape (the operation base)
++//   history_*                   from BRepTools_History (the richer graph), or -1
++//                               when the operation carries no history object.
++// Reads only; `op` must already be built.
++
++inline void fc_brep_fuse_history(BRepAlgoAPI_Fuse& op,
++                                 const TopoDS_Shape& s,
++                                 int& modified,
++                                 int& generated,
++                                 int& deleted,
++                                 int& history_modified,
++                                 int& history_generated,
++                                 int& history_removed)
++{
++    modified = op.Modified(s).Size();
++    generated = op.Generated(s).Size();
++    deleted = op.IsDeleted(s) ? 1 : 0;
++    Handle(BRepTools_History) h = op.History();
++    if (!h.IsNull()) {
++        history_modified = h->Modified(s).Size();
++        history_generated = h->Generated(s).Size();
++        history_removed = h->IsRemoved(s) ? 1 : 0;
++    }
++    else {
++        history_modified = history_generated = history_removed = -1;
++    }
++}
++
++inline void fc_brep_cut_history(BRepAlgoAPI_Cut& op,
++                                const TopoDS_Shape& s,
++                                int& modified,
++                                int& generated,
++                                int& deleted,
++                                int& history_modified,
++                                int& history_generated,
++                                int& history_removed)
++{
++    modified = op.Modified(s).Size();
++    generated = op.Generated(s).Size();
++    deleted = op.IsDeleted(s) ? 1 : 0;
++    Handle(BRepTools_History) h = op.History();
++    if (!h.IsNull()) {
++        history_modified = h->Modified(s).Size();
++        history_generated = h->Generated(s).Size();
++        history_removed = h->IsRemoved(s) ? 1 : 0;
++    }
++    else {
++        history_modified = history_generated = history_removed = -1;
++    }
++}
++
++inline void fc_brep_common_history(BRepAlgoAPI_Common& op,
++                                   const TopoDS_Shape& s,
++                                   int& modified,
++                                   int& generated,
++                                   int& deleted,
++                                   int& history_modified,
++                                   int& history_generated,
++                                   int& history_removed)
++{
++    modified = op.Modified(s).Size();
++    generated = op.Generated(s).Size();
++    deleted = op.IsDeleted(s) ? 1 : 0;
++    Handle(BRepTools_History) h = op.History();
++    if (!h.IsNull()) {
++        history_modified = h->Modified(s).Size();
++        history_generated = h->Generated(s).Size();
++        history_removed = h->IsRemoved(s) ? 1 : 0;
++    }
++    else {
++        history_modified = history_generated = history_removed = -1;
++    }
++}
+diff -ruN sys-orig/src/b_rep_algo_api.rs sys-mod/src/b_rep_algo_api.rs
+--- sys-orig/src/b_rep_algo_api.rs	2026-10-05 23:00:43.331535927 +0100
++++ sys-mod/src/b_rep_algo_api.rs	2026-10-05 23:00:43.496682367 +0100
+@@ -4,6 +4,7 @@
+ mod inner {
+     unsafe extern "C++" {
+         include!("opencascade-sys/include/b_rep_algo_api.hxx");
++        include!("opencascade-sys/include/fc_history.hxx");
+ 
+         type TopoDS_Shape = crate::topo_ds::TopoDS_Shape;
+         type TopTools_ListOfShape = crate::top_tools::TopTools_ListOfShape;
+@@ -61,5 +62,36 @@
+         pub fn Build(self: Pin<&mut BRepAlgoAPI_Section>, progress: &Message_ProgressRange);
+         pub fn IsDone(self: &BRepAlgoAPI_Section) -> bool;
+         pub fn SectionEdges(self: Pin<&mut BRepAlgoAPI_Section>) -> &TopTools_ListOfShape;
++
++        pub fn fc_brep_fuse_history(
++            op: Pin<&mut BRepAlgoAPI_Fuse>,
++            shape: &TopoDS_Shape,
++            modified: &mut i32,
++            generated: &mut i32,
++            deleted: &mut i32,
++            history_modified: &mut i32,
++            history_generated: &mut i32,
++            history_removed: &mut i32,
++        );
++        pub fn fc_brep_cut_history(
++            op: Pin<&mut BRepAlgoAPI_Cut>,
++            shape: &TopoDS_Shape,
++            modified: &mut i32,
++            generated: &mut i32,
++            deleted: &mut i32,
++            history_modified: &mut i32,
++            history_generated: &mut i32,
++            history_removed: &mut i32,
++        );
++        pub fn fc_brep_common_history(
++            op: Pin<&mut BRepAlgoAPI_Common>,
++            shape: &TopoDS_Shape,
++            modified: &mut i32,
++            generated: &mut i32,
++            deleted: &mut i32,
++            history_modified: &mut i32,
++            history_generated: &mut i32,
++            history_removed: &mut i32,
++        );
+     }
+ }

@@ -51,21 +51,48 @@ Verified against the `opencascade-sys` 0.3.0 sources:
 | `BRepTools_History`, `BRepAlgoAPI_BuilderAlgo::History` | ❌ |
 
 So the binding builds geometry but cannot hand us the lineage a stable element map
-needs. It is not a full hand-rolled binding that is missing; it is a handful of
-history functions. The pragmatic move is a small **bridge addition** (either
-upstream, or a thin patch/fork) declaring the missing calls, not writing our own
-binding from scratch. Sketch:
+needs. It is not a full binding that is missing; it is a handful of history
+functions. The pragmatic move is a small **bridge addition**, not writing our own
+binding from scratch.
 
-```rust
-// our own #[cxx::bridge], reusing the crate's types, added on top:
-pub fn BRepAlgoAPI_Fuse_Modified<'a>(
-    self: Pin<&'a mut BRepAlgoAPI_Fuse>, shape: &'a TopoDS_Shape,
-) -> &'a TopTools_ListOfShape;
-pub fn BRepBuilderAPI_MakeShape_IsDeleted(
-    self: &BRepBuilderAPI_MakeShape, shape: &TopoDS_Shape,
-) -> bool;
-// ...and bridge BRepTools_History / BRepAlgoAPI_BuilderAlgo::History.
+## Reading real history: `patch/0001-history-bridge.patch`
+
+`patch/0001-history-bridge.patch` is a concrete, apply-able patch against
+`opencascade-sys` 0.3.0. It adds one header and three bridge functions:
+
+- new `include/fc_history.hxx`: `fc_brep_{fuse,cut,common}_history(op, sub_shape, ...)`,
+  which fill `Modified`/`Generated`/`Deleted` (from `BRepBuilderAPI_MakeShape`) and
+  `BRepTools_History`'s `Modified`/`Generated`/`Removed` (`-1` when the op keeps no
+  history object). It uses out-parameters, so `Handle(BRepTools_History)` never has to
+  cross the cxx boundary.
+- `src/b_rep_algo_api.rs`: the three matching declarations in the existing bridge.
+
+That is the whole diff: one header plus three functions, reusing the crate's existing
+`TopoDS_Shape`/`TopTools_ListOfShape` types.
+
+Apply it one of three ways:
+
+```sh
+# A. quick local (dirty, for a spike): patch the extracted crate, then re-run
+SYS=$(find ~/.cargo/registry/src -maxdepth 1 -name 'opencascade-sys-0.3.0' | head -1)
+patch -p1 -d "$SYS" < patch/0001-history-bridge.patch
+cargo run --release --features patched
+
+# B. vendor: cargo vendor, apply the same patch, wire .cargo/config.toml
+# C. fork opencascade-rs, apply the same patch, point [patch.crates-io] at the fork
+#    (the clean path, and the one that could be sent upstream as a PR)
 ```
+
+With `--features patched` the run prints real numbers, e.g.:
+
+```
+== fuse history ==
+fuse history[box a]: Modified=2 Generated=1 Deleted=0 | BRepTools_History: Modified=2 Generated=1 Removed=0
+```
+
+Without the feature it prints that history is unavailable, which is the stock-crate
+baseline. Element-level iteration (which output index each input maps to) is the next
+addition; the counts here are enough to prove the history crosses the boundary.
 
 There is also a milder signal in the crate's own model: the high-level
 `BooleanShape` carries `new_edges` (the edges the boolean generated), which is a

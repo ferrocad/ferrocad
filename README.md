@@ -2,7 +2,7 @@
 
 ![The FerroCAD shell: model tree, 3D viewport, property editor and Python console](screenshot.png)
 
-**FerroCAD** is the project formerly known as `freecad-rs-poc`: a Rust reimplementation of FreeCAD's
+**FerroCAD** is a Rust reimplementation of FreeCAD's
 C++ `App` core, designed to be a **drop-in replacement for the `FreeCAD` Python package**. The
 Python import namespace stays `FreeCAD`; the project/distribution is `ferrocad`.
 
@@ -92,23 +92,39 @@ C++ one, without changing the script.*
 
 ## Install
 
-Two ways to get the base app:
+### Download a prebuilt app
 
-- **Prebuilt artifacts** on the [Releases](https://github.com/ferrocad/ferrocad/releases)
-  page: `ferrocad-x86_64.AppImage` (Linux), `FerroCAD.dmg` (macOS, arm64), and
-  `ferrocad-windows-x86_64.zip` (Windows). Each is self-contained: it bundles
-  CPython, the `FreeCAD` facade and the `Draft` workbench, so no system Python is
-  needed.
-- **`cargo install ferrocad`** from crates.io. It builds a self-contained binary
-  that carries the same payload and unpacks it on first run.
+Self-contained builds from the
+[latest release](https://github.com/ferrocad/ferrocad/releases/latest). Each one
+bundles CPython, the `FreeCAD` facade and the `Draft` workbench, so no system
+Python is needed:
+
+| Platform | Download |
+| --- | --- |
+| Linux (x86_64) | [`ferrocad-x86_64.AppImage`](https://github.com/ferrocad/ferrocad/releases/latest/download/ferrocad-x86_64.AppImage) |
+| macOS (arm64) | [`FerroCAD.dmg`](https://github.com/ferrocad/ferrocad/releases/latest/download/FerroCAD.dmg) |
+| Windows (x86_64) | [`ferrocad-windows-x86_64.zip`](https://github.com/ferrocad/ferrocad/releases/latest/download/ferrocad-windows-x86_64.zip) |
+
+The Linux AppImage is a single executable:
 
 ```sh
+chmod +x ferrocad-x86_64.AppImage && ./ferrocad-x86_64.AppImage
+```
+
+### Install from crates.io
+
+`cargo install ferrocad` builds the same self-contained app from source. It needs a
+Rust toolchain; install one with [rustup](https://rustup.rs) if you do not have it:
+
+```sh
+curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
 cargo install ferrocad
 ferrocad
 ```
 
-The Python package (`pip install ferrocad`, the `FreeCAD` API without a GUI) is
-not on PyPI yet.
+The binary embeds the Python payload and unpacks it on first run (see
+[Embedded Python](#embedded-python-running-scripts-from-rust)). The Python package
+(`pip install ferrocad`, the `FreeCAD` API without a GUI) is not on PyPI yet.
 
 > **macOS**: the `.app` is ad-hoc signed, so a downloaded DMG needs
 > `xattr -dr com.apple.quarantine /Applications/FerroCAD.app` (or right-click →

@@ -31,10 +31,12 @@ by running `find_package(OpenCASCADE)`; a system install is enough, no env vars.
 If you cannot install system-wide, the crate's `builtin` feature builds OCCT from
 source instead (slow, needs network).
 
-Then:
+Then, from the FerroCAD repo root and using the project-local toolchain (this
+repo keeps Rust under `../.toolchain`, so no system-wide install is needed):
 
 ```sh
-cargo run --release
+. ../.toolchain/env.sh
+cargo run --release --manifest-path spikes/occt-history-rs/Cargo.toml
 ```
 
 ## What the crate actually exposes (the finding)
@@ -73,10 +75,14 @@ That is the whole diff: one header plus three functions, reusing the crate's exi
 Apply it one of three ways:
 
 ```sh
+# from the FerroCAD repo root; the project toolchain sets CARGO_HOME to
+# ../.toolchain/cargo, so the registry is under $CARGO_HOME, not ~/.cargo.
+. ../.toolchain/env.sh
+
 # A. quick local (dirty, for a spike): patch the extracted crate, then re-run
-SYS=$(find ~/.cargo/registry/src -maxdepth 1 -name 'opencascade-sys-0.3.0' | head -1)
-patch -p1 -d "$SYS" < patch/0001-history-bridge.patch
-cargo run --release --features patched
+SYS=$(find "${CARGO_HOME:-$HOME/.cargo}/registry/src" -maxdepth 2 -name 'opencascade-sys-0.3.0' | head -1)
+patch -p1 -d "$SYS" < spikes/occt-history-rs/patch/0001-history-bridge.patch
+cargo run --release --features patched --manifest-path spikes/occt-history-rs/Cargo.toml
 
 # B. vendor: cargo vendor, apply the same patch, wire .cargo/config.toml
 # C. fork opencascade-rs, apply the same patch, point [patch.crates-io] at the fork

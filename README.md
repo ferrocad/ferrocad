@@ -20,11 +20,11 @@ riskiest assumption of the rewrite plan: *that a Python script written against
 FreeCAD's public `App` API can be served by a Rust implementation instead of the
 C++ one, without changing the script.*
 
-**Roadmap.** The headless engine MVP is defined in `docs/mvp-path.md`, the
-interactive window in `docs/app-shell-vision.md`, and the full milestone record in
-`docs/milestones.md`. Next: lock the MVP demo, then build the `FreeCADGui`
-workbench host (`Workbench`, commands, workbench lifecycle) so an unmodified
-upstream workbench can load.
+**Roadmap.** The headless engine MVP is defined in [docs/mvp-path.md](docs/mvp-path.md), the
+interactive window in [docs/app-shell-vision.md](docs/app-shell-vision.md), and the full milestone
+record in [docs/milestones.md](docs/milestones.md). Next: lock the MVP demo, then build the
+`FreeCADGui` workbench host (`Workbench`, commands, workbench lifecycle) so an unmodified upstream
+workbench can load.
 
 ## Install
 
@@ -193,10 +193,10 @@ writes `import FreeCAD`.
 
 The Rust library crates (`ferrocad_core`, `ferrocad_py`, `ferrocad_widgets`, `ferrocad_gpui`) and the
 app (`ferrocad`) publish to **crates.io**, and the wheel publishes to **PyPI**. A `v*` tag drives both
-[`../.github/workflows/crates.yml`](.github/workflows/crates.yml) (publish order, payload staging) and
-[`../.github/workflows/release.yml`](.github/workflows/release.yml) (the platform artifacts). The
+[`.github/workflows/crates.yml`](.github/workflows/crates.yml) (publish order, payload staging) and
+[`.github/workflows/release.yml`](.github/workflows/release.yml) (the platform artifacts). The
 `abi3`/`extension-module` notes, the publish order, and the staging commands are in
-[`../docs/releasing.md`](../docs/releasing.md) and [`../docs/distribution.md`](../docs/distribution.md).
+[`docs/releasing.md`](docs/releasing.md) and [`docs/distribution.md`](docs/distribution.md).
 
 `cargo install ferrocad` produces a **self-contained** binary: `crates/ferrocad` embeds the workspace
 `python/` (and, when published with workbenches, `mods/`) and unpacks it on first run, because Cargo has
@@ -204,7 +204,7 @@ no data-file install step. The publish staging (`cargo xtask stage-payload`) kee
 of the crate source; they are copied in only for `cargo publish` and removed after.
 
 Application artifacts (AppImage, `.dmg`, Windows zip) are built by
-[`../packaging`](../packaging) from the payload staged by `cargo xtask bundle`.
+[`packaging`](packaging) from the payload staged by `cargo xtask bundle`.
 Tagging `v*` runs [`.github/workflows/release.yml`](.github/workflows/release.yml),
 which verifies the tag against the workspace version, runs the tests, builds the
 three artifacts with the pinned Python runtime, and publishes a GitHub Release.
@@ -249,11 +249,11 @@ and reports `FreeCAD.backend == "ferrocad"`.
 PyO3 is a **hard build dependency on the CPython headers** (CI installs `python3-dev`).
 An earlier M0 `ctypes`/C-ABI fallback was removed: it was not a second transport for the
 same core but a second, narrower model, and every capability it had is available through
-PyO3. See [`../docs/architecture.md`](../docs/architecture.md) for the call-path diagrams
+PyO3. See [`docs/architecture.md`](docs/architecture.md) for the call-path diagrams
 and the decision.
 
-See [`../docs/rewrite-strategy.md`](../docs/rewrite-strategy.md) for the direction and
-[`../docs/coin-bridge-reuse-assessment.md`](../docs/coin-bridge-reuse-assessment.md)
+See [`docs/rewrite-strategy.md`](docs/rewrite-strategy.md) for the direction and
+[`docs/coin-bridge-reuse-assessment.md`](docs/coin-bridge-reuse-assessment.md)
 for the underlying analysis.
 
 ## What is implemented vs. not
@@ -300,7 +300,7 @@ Python-declared-UI ↔ `bite-gpui` round-trip headlessly.
 
 The plan, architecture and slices (S1 shell skeleton → S2 lifecycle + commands → S3 inspector
 → S4 property editor → S5 console → S6 polish) are in
-[`../docs/app-shell-vision.md`](../docs/app-shell-vision.md). The 3D viewport is a later
+[`docs/app-shell-vision.md`](docs/app-shell-vision.md). The 3D viewport is a later
 track that docks into the shell's placeholder pane.
 
 **S1 is implemented** (`crates/ferrocad_gpui`): a titled `bite-gpui` window that boots an

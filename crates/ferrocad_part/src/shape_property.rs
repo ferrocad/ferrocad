@@ -1,9 +1,10 @@
 //! `Part::PropertyPartShape`: a kernel shape held as a [`Property::Extension`].
 //!
-//! The value wraps a [`ferrocad_geom::Shape`] in a `Mutex` so it is `Sync` (OCCT's
-//! `TopoDS_Shape` is `Send` but not `Sync`) and gives kernel calls exclusive access.
-//! Its `save`/`restore` use the OCCT backend's in-memory BREP read/write, so a shape
-//! persists through the ordinary document JSON without core knowing anything about it.
+//! The value wraps a [`ferrocad_geom::Shape`] in a `Mutex` so it is `Sync` (a kernel
+//! shape handle need only be `Send`; OCCT's `TopoDS_Shape` is `Send` but not `Sync`)
+//! and gives kernel calls exclusive access. Its `save`/`restore` go through the
+//! **injected** backend's in-memory encoding, so a shape persists through the ordinary
+//! document JSON without Part naming a kernel or core knowing anything about it.
 
 use std::any::Any;
 use std::fmt;
@@ -84,7 +85,7 @@ impl ExtensionData for ShapeProperty {
 
     fn save(&self) -> Vec<u8> {
         match self.shape.lock().unwrap().as_ref() {
-            Some(shape) => ferrocad_occt::write_brep(shape).unwrap_or_default(),
+            Some(shape) => crate::backend().save_shape(shape),
             None => Vec::new(),
         }
     }
@@ -123,6 +124,6 @@ fn restore(bytes: &[u8]) -> Option<Box<dyn ExtensionData>> {
     if bytes.is_empty() {
         return Some(Box::new(ShapeProperty::empty()));
     }
-    let shape = ferrocad_occt::read_brep(bytes)?;
+    let shape = crate::backend().load_shape(bytes)?;
     Some(Box::new(ShapeProperty::new(shape)))
 }

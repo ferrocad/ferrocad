@@ -8,40 +8,51 @@
 //! - **`Part::PropertyPartShape`** — a property *value* type holding a
 //!   [`ferrocad_geom::Shape`], via [`ferrocad_core::extension`].
 //!
-//! It is the proof that a module can add geometry without core knowing any: core sees
-//! a registered object type and an opaque property value; Part owns the OCCT backend.
-//! See `docs/occt-integration.md` and `docs/property-value-extension.md`.
+//! Part depends **only on the seam** ([`ferrocad_geom`]), never on a concrete kernel:
+//! the application composes it with one — `ferrocad_part::register(Arc::new(OcctBackend::new()))`.
+//! That is what lets the kernel be replaced (or swapped per edition) without touching
+//! Part, and keeps `ferrocad_core` geometry-agnostic. See `docs/occt-integration.md`.
 //!
 //! # Building
 //!
-//! Needs OCCT 7.8+ (like [`ferrocad_occt`](https://crates.io/crates/ferrocad_occt)),
-//! and is **not** a default member.
+//! The library needs no kernel. Its tests use OCCT through a dev-dependency, so they
+//! still need OCCT 7.8+; the crate is **not** a default member.
 
 mod shape_property;
 
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 
 use ferrocad_core::object_registry::{self, ObjectType};
 use ferrocad_core::{prop_status, Property};
 use ferrocad_geom::{GeometryBackend, Shape};
-use ferrocad_occt::OcctBackend;
 use ferrocad_types::Placement;
 
 pub use shape_property::{make_shape_property, shape_of, ShapeProperty};
 
-/// The OCCT backend the Part workbench uses.
-pub fn backend() -> OcctBackend {
-    OcctBackend::new()
+/// The kernel the Part workbench was composed with.
+static BACKEND: OnceLock<Arc<dyn GeometryBackend>> = OnceLock::new();
+
+/// The injected geometry backend.
+///
+/// # Panics
+/// If [`register`] has not been called.
+pub fn backend() -> Arc<dyn GeometryBackend> {
+    Arc::clone(
+        BACKEND
+            .get()
+            .expect("ferrocad_part::register was not called"),
+    )
 }
 
-/// Register Part's property and object types with the core registries. Idempotent;
-/// an application calls this once at startup.
-pub fn register() {
+/// Compose Part with a geometry backend and register its types. Idempotent; an
+/// application calls this once at startup with the kernel it wants.
+pub fn register(backend: Arc<dyn GeometryBackend>) {
+    let _ = BACKEND.set(backend);
     shape_property::register();
     object_registry::register("Part::Feature", Arc::new(Feature));
 }
 
-/// A convenience box from the backend (what a script's `Part.makeBox` will call).
+/// A convenience box from the injected backend (what a script's `Part.makeBox` calls).
 pub fn make_box(length: f64, width: f64, height: f64) -> Option<Shape> {
     backend().make_box(length, width, height).ok()
 }
@@ -74,17 +85,23 @@ impl ObjectType for Feature {
 mod tests {
     use super::*;
     use ferrocad_core::{property_types, Document};
+    use ferrocad_occt::OcctBackend;
+
+    /// Compose Part with OCCT (as an application would).
+    fn setup() {
+        register(Arc::new(OcctBackend::new()));
+    }
 
     #[test]
     fn registers_the_property_and_object_types() {
-        register();
+        setup();
         assert!(property_types::contains("Part::PropertyPartShape"));
         assert!(object_registry::is_registered("Part::Feature"));
     }
 
     #[test]
     fn a_part_feature_gets_shape_and_placement() {
-        register();
+        setup();
         let mut doc = Document::new();
         let id = doc.add_object("box", "Part::Feature");
         let object = doc.object(id).unwrap();
@@ -97,7 +114,7 @@ mod tests {
 
     #[test]
     fn a_shape_round_trips_through_the_property() {
-        register();
+        setup();
         let mut doc = Document::new();
         let id = doc.add_object("box", "Part::Feature");
 
@@ -106,14 +123,13 @@ mod tests {
             .unwrap();
 
         let stored = doc.object(id).unwrap().properties.get("Shape").unwrap();
-        let property = shape_of(stored).unwrap();
-        let recovered = property.shape().unwrap();
+        let recovered = shape_of(stored).unwrap().shape().unwrap();
         assert!(backend().resolve(&recovered, "Face1").is_some());
     }
 
     #[test]
     fn a_shape_persists_through_json() {
-        register();
+        setup();
         let shape = make_box(10.0, 10.0, 10.0).unwrap();
         let value = make_shape_property(ShapeProperty::new(shape));
 
@@ -125,7 +141,7 @@ mod tests {
 
     #[test]
     fn an_empty_shape_property_round_trips() {
-        register();
+        setup();
         let value = make_shape_property(ShapeProperty::empty());
         let json = serde_json::to_string(&value).unwrap();
         let back: Property = serde_json::from_str(&json).unwrap();

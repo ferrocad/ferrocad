@@ -189,34 +189,50 @@ impl OpResult {
     }
 }
 
+/// A boxed kernel error.
+///
+/// A backend is a shared service injected at runtime (`Arc<dyn GeometryBackend>`),
+/// and a trait object cannot carry an associated `Error` type. Each backend therefore
+/// keeps its own concrete error enum (for its own tests and diagnostics) and boxes it
+/// here — via `?` or `.into()` at the seam. Callers still read a real `Display` message.
+pub type GeomError = Box<dyn std::error::Error + Send + Sync + 'static>;
+
 /// A geometry kernel.
 ///
 /// One method per operation the workbenches actually call; the set grows with them.
 /// Implementations are stateless with respect to the call (`&self`); each operation
 /// builds whatever it needs and returns an owned [`OpResult`].
-pub trait GeometryBackend {
-    /// Kernel-specific failure. Must be a real error so callers (and later, Python)
-    /// can surface it; the null backend uses [`NullError`], which is never produced.
-    type Error: std::error::Error + Send + Sync + 'static;
-
+///
+/// The trait is `Send + Sync` and object-safe, because a backend is a shared service:
+/// an application installs one and hands it out as an `Arc<dyn GeometryBackend>`, so a
+/// workbench (Part) can be composed with a kernel without depending on it.
+pub trait GeometryBackend: Send + Sync {
     /// A rectangular box with its corner at the origin.
-    fn make_box(&self, length: f64, width: f64, height: f64) -> Result<Shape, Self::Error>;
+    fn make_box(&self, length: f64, width: f64, height: f64) -> Result<Shape, GeomError>;
 
     /// Boolean union.
-    fn fuse(&self, a: &Shape, b: &Shape) -> Result<OpResult, Self::Error>;
+    fn fuse(&self, a: &Shape, b: &Shape) -> Result<OpResult, GeomError>;
 
     /// Boolean difference, `a` minus `b`.
-    fn cut(&self, a: &Shape, b: &Shape) -> Result<OpResult, Self::Error>;
+    fn cut(&self, a: &Shape, b: &Shape) -> Result<OpResult, GeomError>;
 
     /// Round the given edges of `shape`.
     fn fillet(&self, shape: &Shape, edges: &[ElementRef], radius: f64)
-    -> Result<OpResult, Self::Error>;
+    -> Result<OpResult, GeomError>;
 
     /// Apply a placement (transform) to `shape`.
-    fn place(&self, shape: &Shape, placement: &Placement) -> Result<Shape, Self::Error>;
+    fn place(&self, shape: &Shape, placement: &Placement) -> Result<Shape, GeomError>;
 
     /// Resolve a stable sub-element name against `shape`, if it still exists.
     fn resolve(&self, shape: &Shape, name: &str) -> Option<Shape>;
+
+    /// Serialise a shape for persistence. Core stores the bytes verbatim and never
+    /// interprets them; the kernel owns the encoding (OCCT writes BREP).
+    fn save_shape(&self, shape: &Shape) -> Vec<u8>;
+
+    /// Reconstruct a shape from [`save_shape`](GeometryBackend::save_shape) bytes,
+    /// or `None` if they are not valid.
+    fn load_shape(&self, bytes: &[u8]) -> Option<Shape>;
 }
 
 // ---------------------------------------------------------------------------
@@ -230,19 +246,6 @@ pub struct NullShape {
     pub kind: String,
 }
 
-/// The error type of [`NullBackend`]. It is never returned; it exists so the
-/// backend satisfies [`GeometryBackend`] without an associated `Infallible`.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct NullError;
-
-impl fmt::Display for NullError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str("the null geometry backend cannot fail")
-    }
-}
-
-impl std::error::Error for NullError {}
-
 /// A geometry kernel that produces placeholder shapes and **empty** [`History`].
 ///
 /// It lets the document model, persistence and their tests run without OCCT: objects
@@ -251,15 +254,13 @@ impl std::error::Error for NullError {}
 pub struct NullBackend;
 
 impl GeometryBackend for NullBackend {
-    type Error = NullError;
-
-    fn make_box(&self, _length: f64, _width: f64, _height: f64) -> Result<Shape, Self::Error> {
+    fn make_box(&self, _length: f64, _width: f64, _height: f64) -> Result<Shape, GeomError> {
         Ok(Shape::new(NullShape {
             kind: "box".to_string(),
         }))
     }
 
-    fn fuse(&self, _a: &Shape, _b: &Shape) -> Result<OpResult, Self::Error> {
+    fn fuse(&self, _a: &Shape, _b: &Shape) -> Result<OpResult, GeomError> {
         Ok(OpResult::new(
             Shape::new(NullShape {
                 kind: "fuse".to_string(),
@@ -268,7 +269,7 @@ impl GeometryBackend for NullBackend {
         ))
     }
 
-    fn cut(&self, _a: &Shape, _b: &Shape) -> Result<OpResult, Self::Error> {
+    fn cut(&self, _a: &Shape, _b: &Shape) -> Result<OpResult, GeomError> {
         Ok(OpResult::new(
             Shape::new(NullShape {
                 kind: "cut".to_string(),
@@ -282,7 +283,7 @@ impl GeometryBackend for NullBackend {
         _shape: &Shape,
         _edges: &[ElementRef],
         _radius: f64,
-    ) -> Result<OpResult, Self::Error> {
+    ) -> Result<OpResult, GeomError> {
         Ok(OpResult::new(
             Shape::new(NullShape {
                 kind: "fillet".to_string(),
@@ -291,12 +292,20 @@ impl GeometryBackend for NullBackend {
         ))
     }
 
-    fn place(&self, shape: &Shape, _placement: &Placement) -> Result<Shape, Self::Error> {
+    fn place(&self, shape: &Shape, _placement: &Placement) -> Result<Shape, GeomError> {
         // The null backend has no geometry to move, so the handle is unchanged.
         Ok(shape.clone())
     }
 
     fn resolve(&self, _shape: &Shape, _name: &str) -> Option<Shape> {
+        None
+    }
+
+    fn save_shape(&self, _shape: &Shape) -> Vec<u8> {
+        Vec::new()
+    }
+
+    fn load_shape(&self, _bytes: &[u8]) -> Option<Shape> {
         None
     }
 }

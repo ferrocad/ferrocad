@@ -230,6 +230,12 @@ pub trait GeometryEngine {
 }
 ```
 
+> **Note.** This is the original sketch. The implemented seam is
+> [`ferrocad_geom::GeometryBackend`](occt-integration.md) and differs in two ways: it uses
+> one concrete [`Shape`](occt-integration.md) handle rather than an associated `Shape` type,
+> and it is **object-safe** (a boxed `GeomError`, not an associated `Error`), because Part
+> holds it as an `Arc<dyn GeometryBackend>`.
+
 Two implementations matter:
 
 - a **null/headless engine** that returns placeholder shapes and empty maps, so the

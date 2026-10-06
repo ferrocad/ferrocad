@@ -1,8 +1,10 @@
 # The Part workbench: the first module built on the document-object SPI.
 #
 # It registers `Part::Feature` (an object type) and `Part::PropertyPartShape` (a
-# property value type), both over the OCCT backend (`ferrocad_occt`). It therefore
-# needs OCCT to build — a workspace member, but NOT in `default-members`.
+# property value type) over the injected `ferrocad_geom::GeometryBackend`. The
+# library itself depends only on the seam; its tests use the OCCT backend as a
+# dev-dependency, so building the library needs no kernel — a workspace member,
+# but NOT in `default-members`.
 [package]
 name = "ferrocad_part"
 version = "0.1.0"
@@ -23,8 +25,8 @@ name = "ferrocad_part"
 [dependencies]
 ferrocad_core.workspace = true
 ferrocad_geom.workspace = true
-ferrocad_occt.workspace = true
 ferrocad_types.workspace = true
 
 [dev-dependencies]
+ferrocad_occt.workspace = true
 serde_json.workspace = true

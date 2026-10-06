@@ -11,7 +11,7 @@
 //! `spikes/occt-history-rs`.)
 
 use cxx::UniquePtr;
-use ferrocad_geom::{ElementRef, GeometryBackend, History, OpResult, Shape};
+use ferrocad_geom::{ElementRef, GeomError, GeometryBackend, History, OpResult, Shape};
 use ferrocad_types::Placement;
 use opencascade_sys as ffi;
 
@@ -36,20 +36,18 @@ impl OcctBackend {
 }
 
 impl GeometryBackend for OcctBackend {
-    type Error = OcctError;
-
-    fn make_box(&self, length: f64, width: f64, height: f64) -> Result<Shape, Self::Error> {
+    fn make_box(&self, length: f64, width: f64, height: f64) -> Result<Shape, GeomError> {
         let origin = ffi::gp::new_point(0.0, 0.0, 0.0);
         let mut make =
             ffi::b_rep_prim_api::BRepPrimAPI_MakeBox_new(&origin, length, width, height);
         let shape = erase(make.pin_mut().Shape());
         if !make.IsDone() {
-            return Err(OcctError::NotDone { operation: "make_box" });
+            return Err(OcctError::NotDone { operation: "make_box" }.into());
         }
         Ok(shape)
     }
 
-    fn fuse(&self, a: &Shape, b: &Shape) -> Result<OpResult, Self::Error> {
+    fn fuse(&self, a: &Shape, b: &Shape) -> Result<OpResult, GeomError> {
         let a_occt = downcast(a)?;
         let b_occt = downcast(b)?;
         let a_guard = a_occt.borrow();
@@ -62,7 +60,7 @@ impl GeometryBackend for OcctBackend {
             .ok_or(OcctError::InvalidInput { what: "null shape" })?;
         let mut op = ffi::b_rep_algo_api::BRepAlgoAPI_Fuse_new(sa, sb);
         if !op.IsDone() {
-            return Err(OcctError::NotDone { operation: "fuse" });
+            return Err(OcctError::NotDone { operation: "fuse" }.into());
         }
         let out_faces = sub_shape_map(op.pin_mut().Shape(), TopAbs_ShapeEnum::TopAbs_FACE);
         let history = build_history(sa, &out_faces, |face, mods, gens| {
@@ -73,7 +71,7 @@ impl GeometryBackend for OcctBackend {
         Ok(OpResult::new(erase(op.pin_mut().Shape()), history))
     }
 
-    fn cut(&self, a: &Shape, b: &Shape) -> Result<OpResult, Self::Error> {
+    fn cut(&self, a: &Shape, b: &Shape) -> Result<OpResult, GeomError> {
         let a_occt = downcast(a)?;
         let b_occt = downcast(b)?;
         let a_guard = a_occt.borrow();
@@ -86,7 +84,7 @@ impl GeometryBackend for OcctBackend {
             .ok_or(OcctError::InvalidInput { what: "null shape" })?;
         let mut op = ffi::b_rep_algo_api::BRepAlgoAPI_Cut_new(sa, sb);
         if !op.IsDone() {
-            return Err(OcctError::NotDone { operation: "cut" });
+            return Err(OcctError::NotDone { operation: "cut" }.into());
         }
         let out_faces = sub_shape_map(op.pin_mut().Shape(), TopAbs_ShapeEnum::TopAbs_FACE);
         let history = build_history(sa, &out_faces, |face, mods, gens| {
@@ -102,11 +100,12 @@ impl GeometryBackend for OcctBackend {
         shape: &Shape,
         edges: &[ElementRef],
         radius: f64,
-    ) -> Result<OpResult, Self::Error> {
+    ) -> Result<OpResult, GeomError> {
         if edges.is_empty() {
             return Err(OcctError::InvalidInput {
                 what: "fillet needs at least one edge",
-            });
+            }
+            .into());
         }
         let shape_occt = downcast(shape)?;
         let shape_guard = shape_occt.borrow();
@@ -125,13 +124,13 @@ impl GeometryBackend for OcctBackend {
         // `Shape()` triggers the build; `IsDone()` is meaningful afterwards.
         let out = erase(op.pin_mut().Shape());
         if !op.IsDone() {
-            return Err(OcctError::NotDone { operation: "fillet" });
+            return Err(OcctError::NotDone { operation: "fillet" }.into());
         }
         // Fillet history is not built yet (the bridge would need the fillet class).
         Ok(OpResult::new(out, History::default()))
     }
 
-    fn place(&self, shape: &Shape, placement: &Placement) -> Result<Shape, Self::Error> {
+    fn place(&self, shape: &Shape, placement: &Placement) -> Result<Shape, GeomError> {
         let shape_occt = downcast(shape)?;
         let shape_guard = shape_occt.borrow();
         let s = shape_guard
@@ -141,7 +140,7 @@ impl GeometryBackend for OcctBackend {
         let mut op = ffi::b_rep_builder_api::BRepBuilderAPI_Transform_new(s, &trsf, true);
         let out = erase(op.pin_mut().Shape());
         if !op.IsDone() {
-            return Err(OcctError::NotDone { operation: "place" });
+            return Err(OcctError::NotDone { operation: "place" }.into());
         }
         Ok(out)
     }
@@ -160,6 +159,14 @@ impl GeometryBackend for OcctBackend {
         } else {
             None
         }
+    }
+
+    fn save_shape(&self, shape: &Shape) -> Vec<u8> {
+        crate::shape::write_brep(shape).unwrap_or_default()
+    }
+
+    fn load_shape(&self, bytes: &[u8]) -> Option<Shape> {
+        crate::shape::read_brep(bytes)
     }
 }
 

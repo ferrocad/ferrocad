@@ -36,15 +36,21 @@ pub struct ElementRef { pub shape: Shape, pub name: String }
 pub struct History { pub generated: Vec<(ElementRef, ElementRef)>, /* modified, deleted */ }
 pub struct ElementMap { /* stable name -> current sub-shape */ }
 
-pub trait GeometryBackend {
-    type Error;
-    fn make_box(&self, l: f64, w: f64, h: f64) -> Result<Shape, Self::Error>;
-    fn fuse(&self, a: &Shape, b: &Shape) -> Result<(Shape, History), Self::Error>;
-    fn fillet(&self, s: &Shape, edges: &[ElementRef], r: f64) -> Result<(Shape, History), Self::Error>;
+pub trait GeometryBackend: Send + Sync {
+    // object-safe: errors are boxed (GeomError), not an associated type
+    fn make_box(&self, l: f64, w: f64, h: f64) -> Result<Shape, GeomError>;
+    fn fuse(&self, a: &Shape, b: &Shape) -> Result<OpResult, GeomError>;
+    fn fillet(&self, s: &Shape, edges: &[ElementRef], r: f64) -> Result<OpResult, GeomError>;
     fn resolve(&self, s: &Shape, name: &str) -> Option<Shape>;
+    fn save_shape(&self, s: &Shape) -> Vec<u8>;   // kernel owns the encoding (OCCT: BREP)
+    fn load_shape(&self, bytes: &[u8]) -> Option<Shape>;
     // ... one method per operation a workbench actually calls
 }
 ```
+
+The trait is used as a **trait object** (`Arc<dyn GeometryBackend>`), so it cannot carry
+an associated `Error` type. Each backend keeps its own concrete error enum and boxes it
+at the seam (a `GeomError = Box<dyn Error + Send + Sync>` alias in `ferrocad_geom`).
 
 Two implementations are in scope, exactly as §6 proposed:
 
@@ -78,9 +84,10 @@ So:
 
 - `ferrocad_core` stays geometry-free. A Part feature is a core `DocumentObject`, but the
   *shape it holds* is a Part property type, not a core one.
-- **`ferrocad_part` owns the kernel.** It holds the `Arc<dyn GeometryBackend>` as a
-  Part-level service (set when the Part module initialises), defines `Part::Feature`, and
-  holds the shape property. Core never sees it.
+- **`ferrocad_part` owns the kernel.** The library depends only on the seam; a
+  `OnceLock<Arc<dyn GeometryBackend>>` is filled by `ferrocad_part::register(backend)`, which
+  the application calls once with the kernel it wants. Part defines `Part::Feature` and holds
+  the shape property, but never names a kernel type. Core never sees it.
 - **Composition is compile-time.** "Injection" in a Rust app is which crates the edition
   links (and which Cargo features are on), not a runtime slot on a core singleton:
 
@@ -91,9 +98,9 @@ So:
 
   That is exactly the repackaging vision ([`repackaging.md`](repackaging.md)): minimal
   apps that do not include Part link no OCCT, and the shell library (`ferrocad_gpui`,
-  formerly `ferrocad_host`) never does. A runtime `Arc<dyn GeometryBackend>` is still
-  useful *inside* Part — to test against `NullBackend`, or to swap kernels — but it lives
-  in Part, not core.
+  formerly `ferrocad_host`) never does. The runtime `Arc<dyn GeometryBackend>` is how Part
+  obtains the kernel — the edition app calls `ferrocad_part::register(Arc::new(OcctBackend::new()))`
+  at startup, and tests call it with `NullBackend` — but it lives in Part, not core.
 
 ## 5. The prerequisite: a document-object SPI
 
@@ -129,8 +136,8 @@ ferrocad_types   -> (crates.io only)                       [leaf: Quantity, Plac
 ferrocad_geom    -> ferrocad_types                         [leaf: Shape, History, traits]
 ferrocad_occt    -> ferrocad_geom, ferrocad_types, opencascade-sys   [kernel impl]
 ferrocad_core    -> ferrocad_types                          [geometry-agnostic; never geom/occt]
-ferrocad_part    -> ferrocad_core, ferrocad_geom, ferrocad_occt      [workbench = kernel owner]
-ferrocad_part_py -> ferrocad_part, pyo3                     [module `Part`]
+ferrocad_part    -> ferrocad_core, ferrocad_geom, ferrocad_types     [workbench; kernel injected]
+ferrocad_part_py -> ferrocad_part, ferrocad_occt, pyo3       [module `Part`; composes the kernel]
 ferrocad_py      -> ferrocad_core, pyo3                     [module `ferrocad`; no Part]
 ferrocad (app)   -> ferrocad_gpui, ferrocad_py,
                     ferrocad_part_py                       [edition composition]
@@ -140,9 +147,11 @@ ferrocad (app)   -> ferrocad_gpui, ferrocad_py,
 property, so core never names a kernel type. This is the change from the earlier plan,
 which put the backend on `Application` (§4). Two further edges:
 
-- `ferrocad_part` may depend on `ferrocad_occt` directly (it is the kernel owner); testing
-  against `NullBackend` is done by passing a different `Arc<dyn GeometryBackend>`, not by
-  a feature that removes OCCT.
+- `ferrocad_part` links **no kernel crate**; it holds an injected `Arc<dyn GeometryBackend>`.
+  Testing against `NullBackend` or OCCT is done by passing a different backend to
+  `ferrocad_part::register`, not by a feature that removes OCCT. `ferrocad_occt` is a
+  **dev-dependency** of Part (its own unit tests) and a real dependency of the
+  composition root that wires the kernel in (`ferrocad_part_py` / the edition app).
 - `ferrocad_py` does **not** depend on `ferrocad_part_py`, so the core bindings stay
   Part-free; the edition app links both and registers both as built-in modules.
 
@@ -184,9 +193,11 @@ The extraction is a refactor with its own tests, so it lands in stages:
    Part needs.
 6. **[x] `ferrocad_part`** (started 2026-10-06) — registers `Part::Feature` (with `Shape`
    and `Placement`) via `object_registry`, and `Part::PropertyPartShape` (a
-   `ShapeProperty` holding a `ferrocad_geom::Shape`, persisted as in-memory BREP) via
-   `property_types`. Remaining: `ferrocad_part_py` (the `Part` Python module, `obj.Shape`,
-   `Part.makeBox`).
+   `ShapeProperty` holding a `ferrocad_geom::Shape`, persisted as in-memory BREP **through the
+   injected backend**) via `property_types`. Decoupled from `ferrocad_occt` (dev-dependency
+   only): the kernel is injected with `ferrocad_part::register(backend)`. Remaining:
+   `ferrocad_part_py` (the `Part` Python module, `obj.Shape`, `Part.makeBox`) — the
+   composition root that links `ferrocad_occt` and calls `register`.
 
 `ferrocad_occt` is deliberately **not** in `default-members`, so an ordinary
 `cargo build`/`cargo test` needs no kernel; only the `geometry` CI job (and geometry

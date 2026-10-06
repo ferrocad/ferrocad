@@ -1155,10 +1155,15 @@ Part needs. Verified: core 45 tests; Python facade 107; upstream conformance unc
 
 **`ferrocad_part` (started).** The first module: `register()` registers `Part::Feature` (an
 `ObjectType` with `Shape` and `Placement`) and `Part::PropertyPartShape` (a `ShapeProperty`
-holding a `ferrocad_geom::Shape`, persisted as in-memory BREP through the OCCT backend).
-`ferrocad_geom::Shape` is now `Send + Sync` — documents reach Python, whose classes must be
-`Sync` — so OCCT's `OcctShape` wraps its `TopoDS_Shape` in a `Mutex`. Verified: geom 4, occt
-5, part 5 tests; core 45; facade 107; conformance 169; the `geometry` CI job now runs
+holding a `ferrocad_geom::Shape`, persisted as in-memory BREP **through the injected
+backend**). Part depends only on the seam: the kernel is injected with
+`ferrocad_part::register(Arc::new(backend))`, `ferrocad_occt` is a dev-dependency (its own
+tests). `ferrocad_geom::Shape` is now `Send + Sync` — documents reach Python, whose classes
+must be `Sync` — so OCCT's `OcctShape` wraps its `TopoDS_Shape` in a `Mutex`. The trait is
+object-safe (a boxed `GeomError` instead of an associated `Error` type), which is what lets
+Part hold `Arc<dyn GeometryBackend>` without naming a kernel. Verified: geom 4, occt 5, part
+5 tests; core 45; facade 107; conformance 169; the `geometry` CI job now runs
 `ferrocad_part` too.
 
-Next: `ferrocad_part_py` — the `Part` Python module (`obj.Shape`, `Part.makeBox`).
+Next: `ferrocad_part_py` — the `Part` Python module (`obj.Shape`, `Part.makeBox`); the
+composition root that links `ferrocad_occt` and calls `ferrocad_part::register`.

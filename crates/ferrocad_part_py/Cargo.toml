@@ -1,0 +1,49 @@
+# The Part workbench's Python module (importable as `Part`).
+#
+# This is the composition root for Part: it links the OCCT kernel, calls
+# `ferrocad_part::register`, and exposes `Part.makeBox` / `Part.Shape` on top of
+# the `ferrocad` (core) bindings. It builds an `rlib` so an application can link
+# it in and register `Part` as a built-in module (see `docs/occt-integration.md`
+# §4), and a `cdylib` so it can also be shipped as a standalone extension.
+#
+# It needs OCCT 7.8+, so it is a workspace member but NOT in `default-members`,
+# and it is not published yet (the app/wheel wiring and OCCT bundling are the
+# next packaging step).
+[package]
+name = "ferrocad_part_py"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+readme.workspace = true
+repository.workspace = true
+homepage.workspace = true
+rust-version.workspace = true
+publish = false
+description = "The Part workbench Python module (importable as `Part`) over ferrocad_part"
+keywords = ["cad", "freecad", "opencascade", "pyo3"]
+categories = ["science"]
+documentation = "https://docs.rs/ferrocad_part_py"
+
+[lib]
+name = "ferrocad_part_py"
+# `rlib` for the in-process app/wheel composition; `cdylib` for a standalone
+# `Part.abi3.so` (built with the `extension-module` feature, as for ferrocad_py).
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+ferrocad_core.workspace = true
+ferrocad_geom.workspace = true
+ferrocad_occt.workspace = true
+ferrocad_part.workspace = true
+ferrocad_py.workspace = true
+# `extension-module` is deliberately *not* a hard feature (see ferrocad_py): it is
+# enabled only when packaging the standalone extension module.
+pyo3 = { version = "0.25", features = ["abi3-py310"] }
+
+[dev-dependencies]
+# `auto-initialize` lets the boot test embed CPython (as the app does).
+pyo3 = { version = "0.25", features = ["abi3-py310", "auto-initialize"] }
+
+[features]
+# Enabled when producing the standalone `Part` extension module.
+extension-module = ["pyo3/extension-module"]

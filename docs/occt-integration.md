@@ -145,7 +145,7 @@ ferrocad_geom    -> ferrocad_types                         [leaf: Shape, History
 ferrocad_occt    -> ferrocad_geom, ferrocad_types, opencascade-sys   [kernel impl]
 ferrocad_core    -> ferrocad_types                          [geometry-agnostic; never geom/occt]
 ferrocad_part    -> ferrocad_core, ferrocad_geom, ferrocad_types     [workbench; kernel injected]
-ferrocad_part_py -> ferrocad_part, ferrocad_occt, pyo3       [module `Part`; composes the kernel]
+ferrocad_part_py -> ferrocad_part, ferrocad_occt, ferrocad_py, pyo3  [module `Part`; composition root]
 ferrocad_py      -> ferrocad_core, pyo3                     [module `ferrocad`; no Part]
 ferrocad (app)   -> ferrocad_gpui, ferrocad_py,
                     ferrocad_part_py                       [edition composition]
@@ -162,6 +162,27 @@ which put the backend on `Application` (§4). Two further edges:
   composition root that wires the kernel in (`ferrocad_part_py` / the edition app).
 - `ferrocad_py` does **not** depend on `ferrocad_part_py`, so the core bindings stay
   Part-free; the edition app links both and registers both as built-in modules.
+- `ferrocad_part_py` **does** depend on `ferrocad_py`, but only for the extension-conversion
+  hook (below), never the reverse. That is what breaks the would-be cycle and keeps Part's
+  Python module out of the core bindings.
+
+### The extension-conversion hook
+
+A `Property::Extension` value is opaque to core. `ferrocad_py` therefore keeps a small
+registry of converters, keyed by registered type name, populated by the owning module at
+import: `ferrocad_py::register_extension_converter("Part::PropertyPartShape", to_python,
+from_python)`. Without it, `obj.Shape` reads as `None`; with it, it round-trips to and from
+`Part.Shape`. This is the same split as upstream, where the value's Python representation
+lives in the module that owns the property type.
+
+**Why one image.** The registry is a process-global `OnceLock`, like
+`ferrocad_core::application`. Two separate extension modules (`.so` files) each statically
+link their own copy of that state, so a standalone `Part.abi3.so` would not see the
+documents `import FreeCAD` created. Part must therefore be linked into the same image as
+the core bindings — the app does this with `pyo3::append_to_inittab!`; so must the wheel.
+`ferrocad_part_py` ships as `rlib` (for that composition) and `cdylib` (for the future
+standalone). Wiring it into `crates/ferrocad` and the wheel — which also means bundling
+OCCT (see [`occt-bundling.md`](occt-bundling.md)) — is the next packaging step.
 
 ## 7. Reuse by other workbenches
 
@@ -203,9 +224,13 @@ The extraction is a refactor with its own tests, so it lands in stages:
    and `Placement`) via `object_registry`, and `Part::PropertyPartShape` (a
    `ShapeProperty` holding a `ferrocad_geom::Shape`, persisted as in-memory BREP **through the
    injected backend**) via `property_types`. Decoupled from `ferrocad_occt` (dev-dependency
-   only): the kernel is injected with `ferrocad_part::register(backend)`. Remaining:
-   `ferrocad_part_py` (the `Part` Python module, `obj.Shape`, `Part.makeBox`) — the
-   composition root that links `ferrocad_occt` and calls `register`.
+   only): the kernel is injected with `ferrocad_part::register(backend)`.
+7. **[x] `ferrocad_part_py`** (started 2026-10-06) — the `Part` Python module. It is the
+   composition root: it links `ferrocad_occt`, calls `ferrocad_part::register`, and exposes
+   `Part.makeBox` and `Part.Shape`. It registers the `Part::PropertyPartShape` ↔ `Part.Shape`
+   converter with `ferrocad_py`, so `obj.Shape` round-trips (verified by
+   `tests/part_boot.rs`, which embeds CPython with both modules built in). Wiring it into the
+   app binary and the wheel is the remaining packaging step (see §6).
 
 `ferrocad_occt` is deliberately **not** in `default-members`, so an ordinary
 `cargo build`/`cargo test` needs no kernel; only the `geometry` CI job (and geometry

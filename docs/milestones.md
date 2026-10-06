@@ -1169,3 +1169,16 @@ lets Part hold `Arc<dyn GeometryBackend>` without naming a kernel. Verified: geo
 
 Next: `ferrocad_part_py` — the `Part` Python module (`obj.Shape`, `Part.makeBox`); the
 composition root that links `ferrocad_occt` and calls `ferrocad_part::register`.
+
+**`ferrocad_part_py` (started).** The `Part` Python module — the composition root that
+links `ferrocad_occt`, calls `ferrocad_part::register`, and exposes `Part.makeBox` and
+`Part.Shape`. `ferrocad_py` gained the **extension-conversion hook**: a registry
+(`register_extension_converter`) keyed by the registered type name, so the owning module
+turns a `Property::Extension` into Python and back; Part registers `Part::PropertyPartShape`
+↔ `Part.Shape`, which is what makes `obj.Shape` round-trip. Because the registry (like
+`ferrocad_core::application`) is a process-global, Part must be in the **same image** as the
+core bindings; `tests/part_boot.rs` embeds CPython with both modules registered as built-ins
+and asserts `makeBox` → `obj.Shape = box` → read-back `isSame`, plus a non-empty BREP
+export. Verified: `ferrocad_part_py` boot test + 1 ignored doctest; facade 107 (Part tests
+skip until the extension bundles Part); conformance 169. Next: wire it into the app and the
+wheel (also bundling OCCT).

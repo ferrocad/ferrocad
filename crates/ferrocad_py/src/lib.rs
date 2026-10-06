@@ -51,7 +51,7 @@ use std::collections::{BTreeMap, HashMap};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, OnceLock};
 
-use ferrocad_core::{application, canonical_name, parse_unit, prop_status, status_from_name, status_names, Document as CoreDocument, Matrix4, ObjectId, Placement, Property, Quantity, Rotation, StringHasher, StringId, TypeId, Unit, Vector3};
+use ferrocad_core::{application, canonical_name, parse_unit, prop_status, status_from_name, status_names, Document as CoreDocument, ExtensionData, ExtensionValue, Matrix4, ObjectId, Placement, Property, Quantity, Rotation, StringHasher, StringId, TypeId, Unit, Vector3};
 use pyo3::exceptions::{
     PyAttributeError, PyIndexError, PyNotImplementedError, PyRuntimeError, PyTypeError, PyValueError,
 };
@@ -184,6 +184,64 @@ fn fire_obj_str(slot: &str, obj: &Bound<'_, PyDocumentObject>, extra: &str) {
     let py = obj.py();
     let e = extra.into_py_any(py).unwrap().into_bound(py);
     fire_obj(slot, obj, Some(&e));
+}
+
+// ---------------------------------------------------------------------------
+// Module-owned property conversions (`Property::Extension`)
+// ---------------------------------------------------------------------------
+
+/// Convert a module-owned value to Python; `None` if the value is not this
+/// module's (the caller then falls back to an opaque `None`).
+pub type ExtensionToPython = fn(Python<'_>, &dyn ExtensionData) -> Option<PyObject>;
+
+/// Recognise a Python value as a module-owned value; `None` if it is not.
+pub type PythonToExtension = fn(&Bound<'_, PyAny>) -> Option<ExtensionValue>;
+
+type ExtensionConverters = Vec<(String, ExtensionToPython, PythonToExtension)>;
+
+fn extension_converters() -> &'static Mutex<ExtensionConverters> {
+    static CONVERTERS: OnceLock<Mutex<ExtensionConverters>> = OnceLock::new();
+    CONVERTERS.get_or_init(|| Mutex::new(Vec::new()))
+}
+
+/// Register the Python conversions for a module-owned property type, keyed by its
+/// registered type name (e.g. `Part::PropertyPartShape`). A workbench module
+/// calls this at import, so `obj.Shape` round-trips between core and its own
+/// `Part.Shape` class. Core stays free of any knowledge of the module's value.
+pub fn register_extension_converter(
+    type_name: &str,
+    to_python: ExtensionToPython,
+    to_extension: PythonToExtension,
+) {
+    let mut converters = extension_converters().lock().unwrap();
+    converters.retain(|(name, _, _)| name != type_name);
+    converters.push((type_name.to_string(), to_python, to_extension));
+}
+
+/// `Property::Extension` -> Python, using the converter the owning module
+/// registered (or `None` when the module is not loaded).
+fn extension_to_py(py: Python<'_>, value: &ExtensionValue) -> PyObject {
+    let converter = extension_converters()
+        .lock()
+        .unwrap()
+        .iter()
+        .find(|(name, _, _)| name == value.type_name())
+        .map(|(_, to_python, _)| *to_python);
+    converter
+        .and_then(|to_python| to_python(py, value.data()))
+        .unwrap_or_else(|| py.None())
+}
+
+/// Python -> `ExtensionValue`, trying each module's recogniser (there is no type
+/// name to key on: the object's own class decides).
+fn extension_from_py(value: &Bound<'_, PyAny>) -> Option<ExtensionValue> {
+    let converters: Vec<PythonToExtension> = extension_converters()
+        .lock()
+        .unwrap()
+        .iter()
+        .map(|(_, _, to_extension)| *to_extension)
+        .collect();
+    converters.iter().find_map(|to_extension| to_extension(value))
 }
 
 // ---------------------------------------------------------------------------
@@ -613,9 +671,9 @@ fn property_to_py(py: Python<'_>, value: &Property) -> PyObject {
         // Constraints expose their value like the underlying scalar type.
         Property::IntegerConstraint { value, .. } => (*value).into_py_any(py).unwrap(),
         Property::FloatConstraint { value, .. } => (*value).into_py_any(py).unwrap(),
-        // Core cannot interpret a module-owned value; the owning module provides the
-        // Python conversion (Part, for `obj.Shape`). Until then the value is opaque.
-        Property::Extension(_) => py.None(),
+        // Core cannot interpret a module-owned value; the owning module registers
+        // the Python conversion (Part, for `obj.Shape`). Without one, it is opaque.
+        Property::Extension(value) => extension_to_py(py, value),
     }
 }
 
@@ -717,6 +775,10 @@ fn py_to_property(value: &Bound<'_, PyAny>) -> PyResult<Property> {
     }
     if let Ok(v) = value.extract::<Vec<PyRef<'_, PyRotation>>>() {
         return Ok(Property::RotationList(v.iter().map(|x| x.inner).collect()));
+    }
+    // A module-owned value the owning module recognises (e.g. a Part.Shape).
+    if let Some(extension) = extension_from_py(value) {
+        return Ok(Property::Extension(extension));
     }
     Err(PyTypeError::new_err(
         "unsupported property value (expected str, int, float, bool, list, Quantity, Vector, Placement, Rotation, or Matrix)",

@@ -2362,6 +2362,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "ferrocad_part_py"
+version = "0.1.0"
+dependencies = [
+ "ferrocad_core",
+ "ferrocad_geom",
+ "ferrocad_occt",
+ "ferrocad_part",
+ "ferrocad_py",
+ "pyo3",
+]
+
+[[package]]
 name = "ferrocad_py"
 version = "0.1.0"
 dependencies = [

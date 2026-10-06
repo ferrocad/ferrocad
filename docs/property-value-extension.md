@@ -67,8 +67,11 @@ pub fn register_extension(
 
 - `Property::type_name` must become `&str` (dynamic for extensions), not `&'static str`.
 - Python conversion (`py_to_property`/`property_to_py`) has no generic answer for an
-  extension value; it raises until the owning module registers a conversion (Part will,
-  for `obj.Shape`). This is the same split as upstream: the value is opaque to core.
+  extension value; core cannot interpret it. The owning module registers a converter with
+  `ferrocad_py::register_extension_converter(type_name, to_python, from_python)`, which is
+  how `obj.Shape` round-trips to and from `Part.Shape`. Without a registered converter the
+  value reads as `None` and cannot be assigned. This is the same split as upstream: the
+  value is opaque to core and its Python face lives in the owning module.
 - `dump_property`/`restore_property` (the bytes API) delegate to `save`/`restore`, so they
   work unchanged.
 

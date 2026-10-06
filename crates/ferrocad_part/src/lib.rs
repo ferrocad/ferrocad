@@ -27,7 +27,7 @@ use ferrocad_core::{prop_status, Property};
 use ferrocad_geom::{GeometryBackend, Shape};
 use ferrocad_types::Placement;
 
-pub use shape_property::{make_shape_property, shape_of, ShapeProperty};
+pub use shape_property::{make_shape_property, shape_of, ShapeProperty, TYPE_NAME};
 
 /// The kernel the Part workbench was composed with.
 static BACKEND: OnceLock<Arc<dyn GeometryBackend>> = OnceLock::new();

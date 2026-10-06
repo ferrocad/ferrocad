@@ -1193,3 +1193,16 @@ gives `import Part` sharing one core with `import FreeCAD`. Verified: the editio
 (with OCCT); base app + `cargo package -p ferrocad` unchanged; default tests green. CI's
 `real-window` job now builds it and smoke-runs it under Xvfb for 30s. Shipping it still
 requires staging OCCT beside the binary (`occt-bundling.md`).
+
+**Part conformance (the measurement harness).** `tools/conformance.py` gained a `--part`
+group (the upstream `src/Mod/Part/parttests/*.py` files plus `TestPartApp.py`). Those tests
+import `Part` **and** `FreeCAD`, so they only run in one image; `ferrocad_part_py`'s
+`tests/part_conformance.rs` boots `ferrocad` + `Part` as built-ins and runs the harness
+in-process (skipped unless `FERROCAD_UPSTREAM` is set). Baseline against OCCT 7.8.1:
+**2 passed, 1 failed, 89 errored, 4 files failed to load** — the errors name the missing
+surface (`Part.makeCylinder`/`makeCone`/`Sphere`/`Wire`/`BSplineCurve`/`Geom2d`, a
+`Part::Box` scripted object with `Shape`, `Part::PropertyTopoShapeList`), and the load
+errors name other workbenches (`Draft`) and GUI deps (`pivy`). Fixing the two facade gaps
+it exposed (`FreeCAD.__cmake__`, `getResourceDir`, `Base.Precision`) also moved one core
+conformance error to the failure column: the core summary is now **169 passed, 41 failed,
+5 errored** (was 169/40/6).

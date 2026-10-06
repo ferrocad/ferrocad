@@ -81,6 +81,18 @@ def activeDocument():
 def Version():
     return __version__.split(".") + ["rust-fc", ""]
 
+# App-level build configuration. Upstream fills this from CMake; tests read it as
+# ``"BUILD_X" in FreeCAD.__cmake__``. We build no optional module in-tree, so it is
+# empty (every optional-module test is skipped).
+__cmake__: dict = {}
+
+
+def getResourceDir():
+    """The FerroCAD resource root (upstream's install prefix)."""
+    import os
+
+    return os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
 __all__ = [
     "Version",
     "newDocument",
@@ -186,6 +198,16 @@ class ParameterGrp:
         self._set(name, "int", int(value))
 
     def RemInt(self, name):
+        self._rem(name, "int")
+
+    def GetUnsigned(self, name, default=0):
+        value = self._get(name, "int", None)
+        return default if value is None else int(value) & 0xFFFFFFFF
+
+    def SetUnsigned(self, name, value):
+        self._set(name, "int", int(value) & 0xFFFFFFFF)
+
+    def RemUnsigned(self, name):
         self._rem(name, "int")
 
     def GetBool(self, name, default=False):

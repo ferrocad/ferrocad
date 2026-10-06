@@ -35,6 +35,42 @@ class ScaleType(IntEnum):
     Uniform = 3
 
 
+class Precision:
+    """``Base::Precision`` — the global tolerance defaults OCCT uses.
+
+    Values match OCCT's ``Precision`` (``confusion`` is the linear tolerance,
+    ``angular`` the angular one); a kernel backend may refine them later.
+    """
+
+    @staticmethod
+    def confusion() -> float:
+        return 1e-7
+
+    @staticmethod
+    def squareConfusion() -> float:
+        return 1e-14
+
+    @staticmethod
+    def angular() -> float:
+        return 1e-12
+
+    @staticmethod
+    def approximation() -> float:
+        return 1e-12
+
+    @staticmethod
+    def intersection() -> float:
+        return 1e-9
+
+    @staticmethod
+    def firstParameter() -> float:
+        return 1e-7
+
+    @staticmethod
+    def lastParameter() -> float:
+        return 1.0 - 1e-7
+
+
 __all__ = [
     "Quantity",
     "Unit",
@@ -47,4 +83,5 @@ __all__ = [
     "BoundBox",
     "Material",
     "ScaleType",
+    "Precision",
 ]

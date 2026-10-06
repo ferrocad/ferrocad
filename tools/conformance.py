@@ -12,7 +12,14 @@ Usage::
 
     python3 tools/conformance.py --root ../freecad-upstream            # default files
     python3 tools/conformance.py --root ../freecad-upstream --files Document StringHasher
-    python3 tools/conformance.py --root ../freecad-upstream --list     # list candidates
+    python3 tools/conformance.py --root ../freecad-upstream --part      # Part workbench tests
+    python3 tools/conformance.py --root ../freecad-upstream --list      # list candidates
+
+The `--part` group needs an image that links the `Part` module (it imports `Part`
+and `FreeCAD` and they must share one core), which the standalone `ferrocad.abi3.so`
+does not. Run it through
+`cargo test -p ferrocad_part_py --test part_conformance -- --nocapture` (set
+`FERROCAD_UPSTREAM`), which supplies the one image and calls this harness.
 """
 
 from __future__ import annotations
@@ -36,6 +43,25 @@ DEFAULT_FILES = [
     "BaseTests",
     "TestIntPairList",
     "FreeCADInitTests",
+]
+
+# The Part workbench's App-level tests. They live beside the module rather than in
+# `src/Mod/Test`, and they import `Part` as well as `FreeCAD`, so they only run in
+# an image that links both (the `Part` module must share one core with the
+# bindings; see `crates/ferrocad_part_py/tests/part_conformance.rs`).
+PART_DIRS = ["src/Mod/Part/parttests", "src/Mod/Part"]
+PART_FILES = [
+    "BRep_tests",
+    "Geom2d_tests",
+    "regression_tests",
+    "TopoShapeTest",
+    "TopoShapeListTest",
+    "TestPartMirror",
+    "TestFaceMakerUnifiedPlanar",
+    "TestFaceMakerUnifiedNonPlanar",
+    "ColorPerFaceTest",
+    "ColorTransparencyTest",
+    "TestPartApp",
 ]
 
 
@@ -176,8 +202,13 @@ def render(outcomes: list[dict]) -> str:
 def main(argv: list[str]) -> int:
     parser = argparse.ArgumentParser(description="Run upstream tests against our FreeCAD.")
     parser.add_argument("--root", required=True, help="path to the freecad-upstream checkout")
-    parser.add_argument("--files", nargs="*", default=DEFAULT_FILES, help="test file stems to run")
+    parser.add_argument("--files", nargs="*", default=None, help="test file stems to run")
     parser.add_argument("--list", action="store_true", help="list candidate test files and exit")
+    parser.add_argument(
+        "--part",
+        action="store_true",
+        help="run the Part workbench tests (needs an image that links `Part`)",
+    )
     args = parser.parse_args(argv)
 
     root = Path(args.root).resolve()
@@ -187,16 +218,26 @@ def main(argv: list[str]) -> int:
         print("\n".join(list_candidates(root)))
         return 0
 
+    if args.part:
+        dirs = [root / d for d in PART_DIRS]
+        stems = args.files if args.files else PART_FILES
+    else:
+        dirs = [test_dir]
+        stems = args.files if args.files else DEFAULT_FILES
+
+    # `src/Mod/Part` must be importable as a package root: the Part tests do
+    # `from parttests.X import Y`.
+    for d in dirs:
+        if str(d) not in sys.path:
+            sys.path.insert(0, str(d))
     if str(PYTHON_DIR) not in sys.path:
         sys.path.insert(0, str(PYTHON_DIR))
-    if str(test_dir) not in sys.path:
-        sys.path.insert(0, str(test_dir))
 
     outcomes = []
-    for stem in args.files:
-        path = test_dir / f"{stem}.py"
-        if not path.is_file():
-            print(f"warning: not found: {path}", file=sys.stderr)
+    for stem in stems:
+        path = next((d / f"{stem}.py" for d in dirs if (d / f"{stem}.py").is_file()), None)
+        if path is None:
+            print(f"warning: not found: {stem}", file=sys.stderr)
             continue
         outcomes.append(run_file(path))
 

@@ -1,0 +1,29 @@
+# FerroCAD: Parametric — the first edition.
+#
+# A thin binary: it registers the Part workbench module as a built-in, then
+# delegates to the base app (`ferrocad::run_as`). Everything expensive (the
+# engine, the shell, the widget kit) is shared; the edition only adds a module and
+# a window title. See `docs/repackaging.md`.
+#
+# It needs OCCT (via `ferrocad_part_py`), so it is a workspace member but NOT in
+# `default-members`, and it is an application binary, so it is NOT published.
+[package]
+name = "ferrocad_parametric"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+readme.workspace = true
+repository.workspace = true
+homepage.workspace = true
+rust-version.workspace = true
+publish = false
+description = "FerroCAD: Parametric — the base app plus the Part workbench"
+
+[[bin]]
+name = "ferrocad_parametric"
+path = "src/main.rs"
+
+[dependencies]
+ferrocad.workspace = true
+ferrocad_part_py.workspace = true
+pyo3 = { version = "0.25", features = ["auto-initialize"] }

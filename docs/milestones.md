@@ -1182,3 +1182,14 @@ and asserts `makeBox` → `obj.Shape = box` → read-back `isSame`, plus a non-e
 export. Verified: `ferrocad_part_py` boot test + 1 ignored doctest; facade 107 (Part tests
 skip until the extension bundles Part); conformance 169. Next: wire it into the app and the
 wheel (also bundling OCCT).
+
+**`ferrocad_parametric` (the first edition).** Wired `Part` into an application. The base
+`ferrocad` crate is published, and Cargo rewrites path deps to registry versions on publish,
+so it cannot reference the unpublished OCCT-backed crates; per [`repackaging.md`](repackaging.md)
+a Part-enabled app is therefore an **edition**. `ferrocad_parametric` is a thin binary
+(`append_to_inittab!(Part)` then `ferrocad::run_as`), and the base app's entry point moved
+into `ferrocad::run_as(app_name)` so editions stay thin. `cargo run -p ferrocad_parametric`
+gives `import Part` sharing one core with `import FreeCAD`. Verified: the edition builds
+(with OCCT); base app + `cargo package -p ferrocad` unchanged; default tests green. CI's
+`real-window` job now builds it and smoke-runs it under Xvfb for 30s. Shipping it still
+requires staging OCCT beside the binary (`occt-bundling.md`).

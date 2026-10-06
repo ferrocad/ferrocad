@@ -69,7 +69,38 @@ The shape, and where it stands:
    host library and calls `run()`. An edition is the same shape with a different
    `HostConfig`.
 3. **Done.** `cargo run -p ferrocad` runs the general edition. `ferrocad_gpui` is
-   library-only; `ferrocad` is the only application binary.
+   library-only; `ferrocad` is the base application binary.
+4. **Started.** `ferrocad_parametric` is the first edition binary: it registers the
+   OCCT-backed Part module (`import Part`) and delegates to `ferrocad::run_as`. See
+   §4a for why a Part-enabled app must be an edition, not the base crate.
+
+### 4a. Editions exist for the OCCT-backed workbenches
+
+The base `ferrocad` crate is **published to crates.io**, so it may only depend on
+crates that are published. `ferrocad_occt`, `ferrocad_part` and `ferrocad_part_py`
+are not published (they need a kernel to build), and Cargo rewrites a path
+dependency to a registry version on `cargo publish` — so an optional, unpublished
+dependency would still break the publish. A Part-enabled application therefore
+cannot be the published base crate; it is an edition.
+
+The edition is thin: all it does is register the extra built-in module(s) and set
+its window title.
+
+```rust
+// crates/ferrocad_parametric/src/main.rs
+fn main() {
+    use ferrocad_part_py::Part as part_module;
+    pyo3::append_to_inittab!(part_module); // same image => one core
+    ferrocad::run_as("FerroCAD: Parametric");
+}
+```
+
+Linking the module into the **same image** is required: both `import Part` and
+`import FreeCAD` must see one `ferrocad_core` (see [`occt-integration.md`](occt-integration.md)
+§4). Because the edition links OCCT, shipping it (AppImage/`.dmg`/zip) also means
+staging the OCCT libraries beside the binary — [`occt-bundling.md`](occt-bundling.md).
+That is why the packaged artifacts still build the base `ferrocad` binary for now;
+the edition is run from a source checkout (`cargo run -p ferrocad_parametric`).
 
 The boundary between the two crates: `ferrocad_gpui` owns the **interpreter**
 (boot, `sys.path`, JSON) and ships no application script; the **app** owns the

@@ -47,6 +47,10 @@ jobs:
   # Real-window smoke test: opens a bite-gpui window under Xvfb using the
   # lavapipe software Vulkan driver. This exercises the non-headless path that
   # the sandbox cannot (no display server). A crash fails the job.
+  #
+  # It runs the `ferrocad_parametric` edition (base app + the OCCT-backed Part
+  # workbench), so it also proves the Part module loads: `import Part` needs OCCT
+  # present at runtime, and the app boots the interpreter that imports it.
   real-window:
     runs-on: ubuntu-latest
     steps:
@@ -57,16 +61,27 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y xvfb mesa-vulkan-drivers python3-dev \
             libfontconfig1-dev pkg-config libxcb1-dev libxkbcommon-dev libxkbcommon-x11-dev
-      - name: Open a real window (must not crash within 30s)
+      - name: Fetch OCCT 7.8.1 (conda-forge, rootless) for the Part workbench
+        run: |
+          mkdir -p .occt
+          curl -sSL https://micro.mamba.pm/api/micromamba/linux-64/latest | tar -xj -C .occt
+          export MAMBA_ROOT_PREFIX="$PWD/.occt/root"
+          .occt/bin/micromamba create -y -p "$PWD/.occt/prefix" -c conda-forge occt=7.8.1
+      - name: Open a real window with the Part workbench (must not crash within 30s)
         run: |
           export VK_ICD_FILENAMES=/usr/share/vulkan/icd.d/lvp_icd.json
+          # CMake 4.x dropped the `cmake_minimum_required` versions OCCT 7.8.1 uses.
+          export CMAKE_POLICY_VERSION_MINIMUM=3.5
+          export OpenCASCADE_DIR="$PWD/.occt/prefix/lib/cmake/opencascade"
+          export OCCT_INCLUDE_DIR="$PWD/.occt/prefix/include/opencascade"
+          export LD_LIBRARY_PATH="$PWD/.occt/prefix/lib:$LD_LIBRARY_PATH"
           # Build first: the 30s budget is for the run, not a cold compile.
-          cargo build -p ferrocad
+          cargo build -p ferrocad -p ferrocad_parametric
           # `timeout` exits 124 after killing a process that was still alive at
           # 30s, which is the pass condition (no crash). Any other exit is a
           # crash (or a boot failure) and fails the job.
           code=0
-          timeout 30 xvfb-run -a ./target/debug/ferrocad || code=$?
+          timeout 30 xvfb-run -a ./target/debug/ferrocad_parametric || code=$?
           if [ "$code" != "124" ]; then exit "$code"; fi
 
   # Geometry: the OCCT backend (`ferrocad_occt`) and the Part bindings that sit on

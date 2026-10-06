@@ -18,11 +18,13 @@ members = [
     "crates/ferrocad_gen",
     "crates/ferrocad_widgets",
     "crates/ferrocad_gpui",
+    "crates/ferrocad_parametric",
     "crates/xtask",
 ]
-# The GUI crates (`ferrocad_widgets`, `ferrocad_gpui`, `ferrocad`) are workspace
-# members so `-p <crate>` works, but they are excluded from `default-members`
-# because building them pulls in the whole GUI stack (a slow compile).
+# The GUI crates (`ferrocad_widgets`, `ferrocad_gpui`, `ferrocad`) and the OCCT-backed
+# editions (`ferrocad_parametric`, via `ferrocad_part_py`) are workspace members so
+# `-p <crate>` works, but they are excluded from `default-members` because building
+# them pulls in the whole GUI stack (and OCCT) — a slow compile.
 # `ferrocad_gpui` embeds CPython via PyO3 `auto-initialize`; it links fine in a
 # full `cargo build --workspace` because the extension crates keep
 # `pyo3/extension-module` opt-in (see their manifests), avoiding the libpython
@@ -68,6 +70,7 @@ ferrocad_part_py = { path = "crates/ferrocad_part_py", version = "0.1.0" }
 ferrocad_py = { path = "crates/ferrocad_py", version = "0.1.0" }
 ferrocad_widgets = { path = "crates/ferrocad_widgets", version = "0.1.0" }
 ferrocad_gpui = { path = "crates/ferrocad_gpui", version = "0.1.1" }
+ferrocad = { path = "crates/ferrocad", version = "0.1.1" }
 
 # `lto` pays off for the extension/shared libraries; keep it workspace-wide.
 [profile.release]

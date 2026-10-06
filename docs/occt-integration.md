@@ -101,14 +101,18 @@ So:
 
   | Edition app | links | kernel |
   | --- | --- | --- |
-  | FerroCAD: Architecture | `ferrocad_part_py` → `ferrocad_occt` | OCCT |
-  | a 2D-only Draft app | no Part | none |
+  | FerroCAD: Parametric | `ferrocad_part_py` → `ferrocad_occt` | OCCT |
+  | the base `ferrocad` app | no Part | none |
 
   That is exactly the repackaging vision ([`repackaging.md`](repackaging.md)): minimal
   apps that do not include Part link no OCCT, and the shell library (`ferrocad_gpui`,
   formerly `ferrocad_host`) never does. The runtime `Arc<dyn GeometryBackend>` is how Part
-  obtains the kernel — the edition app calls `ferrocad_part::register(Arc::new(OcctBackend::new()))`
-  at startup, and tests call it with `NullBackend` — but it lives in Part, not core.
+  obtains the kernel — the edition registers it with
+  `ferrocad_part::register(Arc::new(OcctBackend::new()))` at startup (via
+  `ferrocad_part_py`'s module init), and tests use `NullBackend` — but it lives in Part, not
+  core. The base `ferrocad` crate is published and cannot reference the unpublished
+  OCCT-backed crates, so a Part-enabled app is the `ferrocad_parametric` edition
+  ([`repackaging.md`](repackaging.md) §4a).
 
 ## 5. The prerequisite: a document-object SPI
 
@@ -229,8 +233,12 @@ The extraction is a refactor with its own tests, so it lands in stages:
    composition root: it links `ferrocad_occt`, calls `ferrocad_part::register`, and exposes
    `Part.makeBox` and `Part.Shape`. It registers the `Part::PropertyPartShape` ↔ `Part.Shape`
    converter with `ferrocad_py`, so `obj.Shape` round-trips (verified by
-   `tests/part_boot.rs`, which embeds CPython with both modules built in). Wiring it into the
-   app binary and the wheel is the remaining packaging step (see §6).
+   `tests/part_boot.rs`, which embeds CPython with both modules built in).
+8. **[x] `ferrocad_parametric` (the edition)** (started 2026-10-06) — the first edition
+   binary: it registers `Part` as a built-in and delegates to `ferrocad::run_as`. Wiring it
+   into the shipped artifacts still needs OCCT staged beside the binary
+   ([`occt-bundling.md`](occt-bundling.md)); the `real-window` CI job smoke-tests it under
+   Xvfb in the meantime.
 
 `ferrocad_occt` is deliberately **not** in `default-members`, so an ordinary
 `cargo build`/`cargo test` needs no kernel; only the `geometry` CI job (and geometry

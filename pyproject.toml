@@ -7,7 +7,7 @@ build-backend = "maturin"
 # private PyO3 backend module built from crates/ferrocad_py.
 [project]
 name = "ferrocad"
-version = "0.1.0"
+version = "0.1.2"
 description = "FerroCAD — a Rust reimplementation of FreeCAD's App core, exposed as a drop-in `FreeCAD` Python package."
 readme = "README.md"
 requires-python = ">=3.10"

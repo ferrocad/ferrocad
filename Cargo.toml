@@ -38,7 +38,7 @@ default-members = [
 ]
 
 [workspace.package]
-version = "0.1.1"
+version = "0.1.2"
 edition = "2024"
 license = "LGPL-2.1-or-later"
 readme = "README.md"
@@ -53,24 +53,26 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 unicode-segmentation = "1"
 # Internal crates carry both a `path` (for development) and a `version` (which
-# crates.io requires). Publish them in dependency order: `ferrocad_core`, then
-# `ferrocad_py`, then `ferrocad_widgets`, `ferrocad_gpui` and finally `ferrocad`.
-# See ../docs/releasing.md.
+# crates.io requires). Publish them in dependency order: `ferrocad_types`,
+# `ferrocad_core`, `ferrocad_geom`, `ferrocad_occt`, `ferrocad_part`,
+# `ferrocad_py`, `ferrocad_part_py`, `ferrocad_widgets`, `ferrocad_gpui` and
+# finally the `ferrocad` app. See ../docs/releasing.md.
 #
-# Versions are per crate, not workspace-wide: a release bumps only the crates
+# Versions are per crate, not workspace-wide: a release may bump only the crates
 # whose sources changed, so the publish workflow skips the rest (their version is
-# already on crates.io). `[workspace.package] version` is the release/product
-# version, which the release workflow checks the git tag against.
-ferrocad_types = { path = "crates/ferrocad_types", version = "0.1.0" }
-ferrocad_core = { path = "crates/ferrocad_core", version = "0.1.0" }
-ferrocad_geom = { path = "crates/ferrocad_geom", version = "0.1.0" }
-ferrocad_occt = { path = "crates/ferrocad_occt", version = "0.1.0" }
-ferrocad_part = { path = "crates/ferrocad_part", version = "0.1.0" }
-ferrocad_part_py = { path = "crates/ferrocad_part_py", version = "0.1.0" }
-ferrocad_py = { path = "crates/ferrocad_py", version = "0.1.0" }
-ferrocad_widgets = { path = "crates/ferrocad_widgets", version = "0.1.0" }
-ferrocad_gpui = { path = "crates/ferrocad_gpui", version = "0.1.1" }
-ferrocad = { path = "crates/ferrocad", version = "0.1.1" }
+# already on crates.io). This release bumps all of them to 0.1.2 in lockstep.
+# `[workspace.package] version` is the release/product version, which the release
+# workflow checks the git tag against.
+ferrocad_types = { path = "crates/ferrocad_types", version = "0.1.2" }
+ferrocad_core = { path = "crates/ferrocad_core", version = "0.1.2" }
+ferrocad_geom = { path = "crates/ferrocad_geom", version = "0.1.2" }
+ferrocad_occt = { path = "crates/ferrocad_occt", version = "0.1.2" }
+ferrocad_part = { path = "crates/ferrocad_part", version = "0.1.2" }
+ferrocad_part_py = { path = "crates/ferrocad_part_py", version = "0.1.2" }
+ferrocad_py = { path = "crates/ferrocad_py", version = "0.1.2" }
+ferrocad_widgets = { path = "crates/ferrocad_widgets", version = "0.1.2" }
+ferrocad_gpui = { path = "crates/ferrocad_gpui", version = "0.1.2" }
+ferrocad = { path = "crates/ferrocad", version = "0.1.2" }
 
 # `lto` pays off for the extension/shared libraries; keep it workspace-wide.
 [profile.release]

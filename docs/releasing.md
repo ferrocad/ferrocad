@@ -6,17 +6,20 @@ Status: reference (2026-10-05). Companion to
 how the workspace reaches its consumers: the Rust crates on crates.io and the
 `FreeCAD`-namespace Python distribution on PyPI.
 
-**Status (2026-10-06).** `ferrocad_core` `0.1.0`, `ferrocad_py` `0.1.0`,
-`ferrocad_widgets` `0.1.0`, `ferrocad_gpui` `0.1.1` and `ferrocad` `0.1.1` are
-on crates.io. Versions are **per crate**: a release bumps only the crates whose
-sources changed, and the publish workflow skips the rest (their version is
-already on crates.io). `[workspace.package] version` is the release/product
-version the git tag is checked against. The same tag produces three
-self-contained desktop artifacts on the GitHub Releases page (§5). The widget kit
-was renamed from `ferrocad_ui` before release, because that name read as "the UI
-application" next to `ferrocad_gpui`. `ferrocad_gui` is reserved for the future
-Gui bindings; the per-edition binaries are not published as crates (see
-[`repackaging.md`](repackaging.md)).
+**Status (2026-10-06, `0.1.2`).** Ten crates are published: `ferrocad_types`,
+`ferrocad_core`, `ferrocad_geom`, `ferrocad_occt`, `ferrocad_part`, `ferrocad_py`,
+`ferrocad_part_py`, `ferrocad_widgets`, `ferrocad_gpui` and `ferrocad`. This release
+publishes the geometry/Part crates for the first time — `ferrocad_types`,
+`ferrocad_geom`, `ferrocad_occt`, `ferrocad_part` and `ferrocad_part_py` — because
+the Part workbench is the milestone. `ferrocad_occt` and `ferrocad_part_py` compile
+against OCCT, so the publish job fetches it (§2.1). Versions are **per crate**: a
+release may bump only the crates whose sources changed, and the publish workflow
+skips the rest (their version is already on crates.io); this release bumps all of
+them to `0.1.2` in lockstep. `[workspace.package] version` is the release/product
+version the git tag is checked against. The same tag produces three self-contained
+desktop artifacts on the GitHub Releases page (§5). `ferrocad_gen` (a wheel-only
+cdylib), `xtask` and the edition binary set `publish = false`; the per-edition
+binaries are not published as crates (see [`repackaging.md`](repackaging.md)).
 
 ## 1. What ships, and where
 
@@ -26,10 +29,16 @@ FerroCAD is one workspace that produces two kinds of deliverable.
 | --- | --- | --- | --- |
 | `ferrocad` | lib + bin | crates.io | yes (app binary; embeds the payload) |
 | `ferrocad_core` | `rlib` | crates.io | yes |
+| `ferrocad_types` | `rlib` | crates.io | yes |
+| `ferrocad_geom` | `rlib` | crates.io | yes (the geometry seam) |
+| `ferrocad_occt` | `rlib` | crates.io | yes (needs OCCT to build) |
+| `ferrocad_part` | `rlib` | crates.io | yes (kernel injected; OCCT is a dev-dep) |
 | `ferrocad_py` | `rlib` + `cdylib` (module `ferrocad`) | crates.io and PyPI (maturin) | yes (both) |
+| `ferrocad_part_py` | `rlib` + `cdylib` (module `Part`) | crates.io | yes (needs OCCT to build) |
 | `ferrocad_widgets` | `rlib` | crates.io | yes |
 | `ferrocad_gpui` | `rlib` | crates.io | yes |
 | `ferrocad_gen` | `cdylib` (generated skeleton) | PyPI, via the wheel | no |
+| `ferrocad_parametric` | `bin` (an edition) | GitHub Releases / installers | no |
 | `xtask` | binary | build tool | no |
 
 The Python distribution is named **`ferrocad`**, but its import namespace is
@@ -54,28 +63,42 @@ path-only dependencies.
 
 Dependencies are published before their dependents:
 
-1. `ferrocad_core` (depends only on crates.io crates).
-2. `ferrocad_py` (depends on `ferrocad_core`; `rlib` + `cdylib`).
-3. `ferrocad_widgets` (depends on `bite-gpui`; independent of the core crates).
-4. `ferrocad_gpui` (depends on `ferrocad_widgets`).
-5. `ferrocad` (the app binary; depends on `ferrocad_gpui` and `ferrocad_py`).
+1. `ferrocad_types` (depends only on crates.io crates).
+2. `ferrocad_core` (depends on `ferrocad_types`).
+3. `ferrocad_geom` (depends on `ferrocad_types`).
+4. `ferrocad_occt` (depends on `ferrocad_geom` and `ferrocad_types`; **needs OCCT**).
+5. `ferrocad_part` (depends on `ferrocad_core`, `ferrocad_geom`, `ferrocad_types`;
+   OCCT is a *dev-dependency* only, so its publish is kernel-free).
+6. `ferrocad_py` (depends on `ferrocad_core`; `rlib` + `cdylib`).
+7. `ferrocad_part_py` (depends on `ferrocad_core`, `ferrocad_geom`, `ferrocad_occt`,
+   `ferrocad_part` and `ferrocad_py`; **needs OCCT**).
+8. `ferrocad_widgets` (depends on `bite-gpui`; independent of the core crates).
+9. `ferrocad_gpui` (depends on `ferrocad_widgets`).
+10. `ferrocad` (the app binary; depends on `ferrocad_gpui` and `ferrocad_py`).
+
+`ferrocad_occt` and `ferrocad_part_py` are the two crates whose `cargo publish`
+verify-build compiles against a kernel, so the publish job fetches OCCT 7.8.1 from
+conda-forge and exports `CMAKE_POLICY_VERSION_MINIMUM`, `OpenCASCADE_DIR`,
+`OCCT_INCLUDE_DIR` and `LD_LIBRARY_PATH` before publishing. `ferrocad_part` is
+*not* one of them: it holds only the seam, and `ferrocad_occt` sits in its
+`[dev-dependencies]`, which the verify-build does not compile.
 
 The workspace pins internal dependencies with **both** a `path` (for local
 development) and a `version` (which the registry requires):
 
 ```toml
 # [workspace.dependencies]
-ferrocad_core    = { path = "crates/ferrocad_core",    version = "0.1.0" }
-ferrocad_py      = { path = "crates/ferrocad_py",      version = "0.1.0" }
-ferrocad_widgets = { path = "crates/ferrocad_widgets", version = "0.1.0" }
-ferrocad_gpui    = { path = "crates/ferrocad_gpui",    version = "0.1.1" }
+ferrocad_types = { path = "crates/ferrocad_types", version = "0.1.2" }
+ferrocad_core  = { path = "crates/ferrocad_core",  version = "0.1.2" }
+# ... one line per crate, all at the release version
 ```
 
 Each dependency's `version` requirement must be satisfied by the version that
-crate will publish at, and each crate's own `[package] version` is explicit (or
-inherited from `[workspace.package]`) accordingly. A release that changes only
-`ferrocad_gpui` and `ferrocad` (as this one does) leaves the other three pinned
-at their published `0.1.0`, so the workflow republishes only the two.
+crate publishes at, and each crate's own `[package] version` is explicit (or
+inherited from `[workspace.package]`) accordingly. A coordinated release bumps every
+crate to the same version (this one, `0.1.2`); a targeted one bumps only the crates
+whose sources changed and leaves the rest at their published version, so the
+workflow republishes only those.
 
 Crates that consume them write `ferrocad_core.workspace = true`. A `path`
 dependency **without** a `version` makes `cargo publish` refuse the crate, which
@@ -156,17 +179,18 @@ path when the crate was published without workbenches.
 
 ### CI publishing
 
-`.github/workflows/crates.yml` publishes on a `v*` tag. It verifies the tag
-against `[workspace.package] version`, runs the tests, fetches the workbench
-scripts (`cargo xtask mods`), and publishes `ferrocad_core`, `ferrocad_py`,
-`ferrocad_widgets`, `ferrocad_gpui` and `ferrocad` in dependency order, skipping
-any version already on crates.io (re-running a tag is safe). It stages the payload
-(`cargo xtask stage-payload`) just before publishing `ferrocad` and unstages it in
-an `EXIT` trap, so a failed job never leaves the copies behind.
+`.github/workflows/crates.yml` publishes on a `v*` tag. It fetches OCCT 7.8.1,
+verifies the tag against `[workspace.package] version`, runs the tests, fetches the
+workbench scripts (`cargo xtask mods`), and publishes the ten crates in dependency
+order (§2.1), skipping any version already on crates.io (re-running a tag is safe).
+It stages the payload (`cargo xtask stage-payload`) just before publishing
+`ferrocad` and unstages it in an `EXIT` trap, so a failed job never leaves the
+copies behind.
 
 It needs a repository secret named **`CARGO_REGISTRY_TOKEN`** (a crates.io API
-token with publish rights). The other workspace crates set `publish = false`: they
-ship in the wheel (`ferrocad_gen`) or the installer (`xtask` is a build tool).
+token with publish rights). The crates that set `publish = false` ship another way:
+the wheel (`ferrocad_gen`), an installer (`ferrocad_parametric`) or not at all
+(`xtask` is a build tool).
 
 ## 3. PyPI: the `FreeCAD` distribution
 
@@ -246,3 +270,10 @@ Outcome for `v0.1.1`: `ferrocad_core`/`ferrocad_py`/`ferrocad_widgets` `0.1.0` a
 (`ferrocad-x86_64.AppImage`, `FerroCAD.dmg`, `ferrocad-windows-x86_64.zip`) on the
 GitHub Release. The macOS artifact is arm64-only and ad-hoc signed; Windows is an
 unsigned zip.
+
+`v0.1.2` (the Part-workbench milestone) bumps every crate to `0.1.2` and publishes
+the five new ones for the first time: `ferrocad_types`, `ferrocad_geom`,
+`ferrocad_occt`, `ferrocad_part` and `ferrocad_part_py`. This is the first tag whose
+publish job needs OCCT (§2.1). The desktop artifacts still ship the base `ferrocad`
+binary; bundling OCCT so the `ferrocad_parametric` edition rides along is
+[`occt-bundling.md`](occt-bundling.md).

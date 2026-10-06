@@ -1206,3 +1206,12 @@ errors name other workbenches (`Draft`) and GUI deps (`pivy`). Fixing the two fa
 it exposed (`FreeCAD.__cmake__`, `getResourceDir`, `Base.Precision`) also moved one core
 conformance error to the failure column: the core summary is now **169 passed, 41 failed,
 5 errored** (was 169/40/6).
+
+**Release `0.1.2` (publishing the new crates).** A coordinated bump to `0.1.2` publishes
+ten crates. Five are new on crates.io: `ferrocad_types`, `ferrocad_geom`, `ferrocad_occt`,
+`ferrocad_part` and `ferrocad_part_py`. The publish list/order in `.github/workflows/crates.yml`
+now covers all ten (types, core, geom, occt, part, py, part_py, widgets, gpui, app), and the
+job fetches OCCT 7.8.1 because `ferrocad_occt` and `ferrocad_part_py` verify-build against a
+kernel (`ferrocad_part` does not — OCCT is only a dev-dependency there). `ferrocad_part_py`
+loses its `publish = false`. `pyproject.toml` moves to `0.1.2` too. Shipping the OCCT-backed
+edition in the desktop artifacts is the remaining bundling step (`occt-bundling.md`).

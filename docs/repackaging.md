@@ -74,14 +74,15 @@ The shape, and where it stands:
    OCCT-backed Part module (`import Part`) and delegates to `ferrocad::run_as`. See
    §4a for why a Part-enabled app must be an edition, not the base crate.
 
-### 4a. Editions exist for the OCCT-backed workbenches
+### 4a. Editions carry the OCCT-backed workbenches
 
-The base `ferrocad` crate is **published to crates.io**, so it may only depend on
-crates that are published. `ferrocad_occt`, `ferrocad_part` and `ferrocad_part_py`
-are not published (they need a kernel to build), and Cargo rewrites a path
-dependency to a registry version on `cargo publish` — so an optional, unpublished
-dependency would still break the publish. A Part-enabled application therefore
-cannot be the published base crate; it is an edition.
+The base `ferrocad` app is **published to crates.io**, and `cargo install ferrocad`
+should stay a clean build with no kernel: linking the Part workbench pulls in OCCT,
+which a `cargo install` user may not have. The OCCT-backed crates *are* published
+(`ferrocad_occt`, `ferrocad_part`, `ferrocad_part_py`), so a kernel is one optional
+dependency away — but an edition is the right home for it: editions own the
+workbench set and the window branding, and the base app stays minimal. So a
+Part-enabled application is `ferrocad_parametric`, an edition.
 
 The edition is thin: all it does is register the extra built-in module(s) and set
 its window title.

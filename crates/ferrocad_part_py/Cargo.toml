@@ -6,19 +6,18 @@
 # it in and register `Part` as a built-in module (see `docs/occt-integration.md`
 # §4), and a `cdylib` so it can also be shipped as a standalone extension.
 #
-# It needs OCCT 7.8+, so it is a workspace member but NOT in `default-members`,
-# and it is not published yet (the app/wheel wiring and OCCT bundling are the
-# next packaging step).
+# It needs OCCT 7.8+, so it is a workspace member but NOT in `default-members`. It is
+# published (a consumer builds it against their own OCCT prefix), so the publish
+# CI must provide OCCT for its verify-build (see `.github/workflows/crates.yml`).
 [package]
 name = "ferrocad_part_py"
-version = "0.1.0"
+version = "0.1.2"
 edition.workspace = true
 license.workspace = true
 readme.workspace = true
 repository.workspace = true
 homepage.workspace = true
 rust-version.workspace = true
-publish = false
 description = "The Part workbench Python module (importable as `Part`) over ferrocad_part"
 keywords = ["cad", "freecad", "opencascade", "pyo3"]
 categories = ["science"]

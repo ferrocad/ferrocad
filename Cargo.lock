@@ -2296,7 +2296,7 @@ dependencies = [
 
 [[package]]
 name = "ferrocad"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "ferrocad_gpui",
  "ferrocad_py",
@@ -2306,7 +2306,7 @@ dependencies = [
 
 [[package]]
 name = "ferrocad_core"
-version = "0.1.0"
+version = "0.1.2"
 dependencies = [
  "ferrocad_types",
  "petgraph",
@@ -2316,21 +2316,21 @@ dependencies = [
 
 [[package]]
 name = "ferrocad_gen"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "pyo3",
 ]
 
 [[package]]
 name = "ferrocad_geom"
-version = "0.1.0"
+version = "0.1.2"
 dependencies = [
  "ferrocad_types",
 ]
 
 [[package]]
 name = "ferrocad_gpui"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "bite-gpui",
  "ferrocad_widgets",
@@ -2341,7 +2341,7 @@ dependencies = [
 
 [[package]]
 name = "ferrocad_occt"
-version = "0.1.0"
+version = "0.1.2"
 dependencies = [
  "cxx",
  "cxx-build",
@@ -2352,7 +2352,7 @@ dependencies = [
 
 [[package]]
 name = "ferrocad_parametric"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "ferrocad",
  "ferrocad_part_py",
@@ -2361,7 +2361,7 @@ dependencies = [
 
 [[package]]
 name = "ferrocad_part"
-version = "0.1.0"
+version = "0.1.2"
 dependencies = [
  "ferrocad_core",
  "ferrocad_geom",
@@ -2372,7 +2372,7 @@ dependencies = [
 
 [[package]]
 name = "ferrocad_part_py"
-version = "0.1.0"
+version = "0.1.2"
 dependencies = [
  "ferrocad_core",
  "ferrocad_geom",
@@ -2384,7 +2384,7 @@ dependencies = [
 
 [[package]]
 name = "ferrocad_py"
-version = "0.1.0"
+version = "0.1.2"
 dependencies = [
  "ferrocad_core",
  "pyo3",
@@ -2392,14 +2392,14 @@ dependencies = [
 
 [[package]]
 name = "ferrocad_types"
-version = "0.1.0"
+version = "0.1.2"
 dependencies = [
  "serde",
 ]
 
 [[package]]
 name = "ferrocad_widgets"
-version = "0.1.0"
+version = "0.1.2"
 dependencies = [
  "bite-gpui",
  "unicode-segmentation",
@@ -7458,7 +7458,7 @@ checksum = "ec7a2a501ed189703dba8b08142f057e887dfc4b2cc4db2d343ac6376ba3e0b9"
 
 [[package]]
 name = "xtask"
-version = "0.1.1"
+version = "0.1.2"
 
 [[package]]
 name = "y4m"

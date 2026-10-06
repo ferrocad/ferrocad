@@ -32,6 +32,16 @@ jobs:
           libfontconfig1-dev pkg-config
           libxcb1-dev libxkbcommon-dev libxkbcommon-x11-dev
 
+      - name: Fetch OCCT 7.8.1 (conda-forge, rootless)
+        # `cargo publish` verify-builds `ferrocad_occt` and `ferrocad_part_py`,
+        # which compile against OCCT. The artifact builds in release.yml use the
+        # same kind of prefix; see docs/occt-bundling.md.
+        run: |
+          mkdir -p .occt
+          curl -sSL https://micro.mamba.pm/api/micromamba/linux-64/latest | tar -xj -C .occt
+          export MAMBA_ROOT_PREFIX="$PWD/.occt/root"
+          .occt/bin/micromamba create -y -p "$PWD/.occt/prefix" -c conda-forge occt=7.8.1
+
       - name: Verify the tag matches the workspace version
         run: |
           tag="${GITHUB_REF_NAME#v}"
@@ -40,6 +50,8 @@ jobs:
           test "$tag" = "$version"
 
       - name: Tests
+        # `cargo test` runs `default-members`, which exclude the OCCT crates, so
+        # this needs no kernel.
         run: cargo test
 
       - name: Fetch workbench scripts
@@ -54,9 +66,17 @@ jobs:
         run: |
           set -eu
 
-          # Dependency order: core, py (bindings), widgets, gpui, then the base
-          # app (links py + gpui). Others set `publish = false`.
-          crates="ferrocad_core ferrocad_py ferrocad_widgets ferrocad_gpui ferrocad"
+          # Dependency order: types, core, geom, occt, part, py, part_py, widgets,
+          # gpui, then the base app (links py + gpui). `ferrocad_gen` (a wheel-only
+          # cdylib), `xtask` and the edition binary set `publish = false`.
+          #
+          # `ferrocad_occt` and `ferrocad_part_py` compile against OCCT.
+          export CMAKE_POLICY_VERSION_MINIMUM=3.5
+          export OpenCASCADE_DIR="$PWD/.occt/prefix/lib/cmake/opencascade"
+          export OCCT_INCLUDE_DIR="$PWD/.occt/prefix/include/opencascade"
+          export LD_LIBRARY_PATH="$PWD/.occt/prefix/lib:$LD_LIBRARY_PATH"
+
+          crates="ferrocad_types ferrocad_core ferrocad_geom ferrocad_occt ferrocad_part ferrocad_py ferrocad_part_py ferrocad_widgets ferrocad_gpui ferrocad"
 
           on_crates_io() {
             code=$(curl -s -o /dev/null -w '%{http_code}' \

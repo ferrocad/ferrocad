@@ -3,6 +3,7 @@
 use cxx::UniquePtr;
 use ferrocad_geom::Shape;
 use opencascade_sys as ffi;
+use std::sync::Mutex;
 
 use ffi::top_abs::TopAbs_ShapeEnum;
 use ffi::top_tools::TopTools_IndexedMapOfShape;
@@ -14,20 +15,20 @@ use crate::error::OcctError;
 /// [`ferrocad_geom::Shape`]. Owning the `TopoDS_Shape` as a `UniquePtr` copies the
 /// handle (OCCT shapes are reference-counted), so the shape outlives the operation
 /// object that produced it.
-pub struct OcctShape(pub(crate) UniquePtr<TopoDS_Shape>);
+pub struct OcctShape(pub(crate) Mutex<UniquePtr<TopoDS_Shape>>);
 
 impl OcctShape {
     /// Take ownership of a copy of `shape`.
     pub fn from_ref(shape: &TopoDS_Shape) -> Self {
-        OcctShape(ffi::topo_ds::TopoDS_Shape_to_owned(shape))
+        OcctShape(Mutex::new(ffi::topo_ds::TopoDS_Shape_to_owned(shape)))
     }
 
-    /// Borrow the underlying OCCT shape.
-    pub fn as_shape(&self) -> &TopoDS_Shape {
-        match self.0.as_ref() {
-            Some(shape) => shape,
-            None => panic!("OCCT shape is null"),
-        }
+    /// Lock the shape for the duration of a call.
+    ///
+    /// The `Mutex` is what makes the handle `Sync` (OCCT's `TopoDS_Shape` is `Send`
+    /// but not `Sync`) and serialises kernel calls on it.
+    pub fn borrow(&self) -> std::sync::MutexGuard<'_, UniquePtr<TopoDS_Shape>> {
+        self.0.lock().unwrap()
     }
 }
 
@@ -60,4 +61,23 @@ pub(crate) fn sub_shape_map(shape: &TopoDS_Shape, kind: TopAbs_ShapeEnum) -> Uni
     let mut map = new_map();
     ffi::top_exp::TopExp::MapShapes(shape, kind, map.pin_mut());
     map
+}
+
+/// Serialise a shape to BREP bytes (in memory; the crate only bridges file I/O).
+pub fn write_brep(shape: &Shape) -> Option<Vec<u8>> {
+    let occt = downcast(shape).ok()?;
+    let guard = occt.borrow();
+    let inner = guard.as_ref()?;
+    let mut bytes = Vec::new();
+    crate::bridge::fc_brep_write(inner, &mut bytes);
+    Some(bytes)
+}
+
+/// Read a shape from BREP bytes, or `None` if they are not valid BREP.
+pub fn read_brep(bytes: &[u8]) -> Option<Shape> {
+    let shape = crate::bridge::fc_brep_read(bytes);
+    if shape.is_null() {
+        return None;
+    }
+    Some(Shape::new(OcctShape(Mutex::new(shape))))
 }

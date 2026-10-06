@@ -4,10 +4,18 @@
 #include <BRepAlgoAPI_Cut.hxx>
 #include <BRepAlgoAPI_Fuse.hxx>
 #include <BRepBuilderAPI_MakeShape.hxx>
+#include <BRepTools.hxx>
+#include <BRep_Builder.hxx>
 #include <TopTools_IndexedMapOfShape.hxx>
 #include <TopTools_ListIteratorOfListOfShape.hxx>
 #include <TopTools_ListOfShape.hxx>
 #include <TopoDS_Shape.hxx>
+
+#include <memory>
+#include <sstream>
+#include <string>
+
+#include "rust/cxx.h"
 
 // FerroCAD: the history / element-map calls that `opencascade-sys` 0.3 does not
 // bridge, provided as a *sibling* cxx bridge over the crate's own types.
@@ -102,4 +110,29 @@ inline void fc_brep_common_generated(BRepAlgoAPI_Common& op, const TopoDS_Shape&
 inline bool fc_brep_common_is_deleted(BRepAlgoAPI_Common& op, const TopoDS_Shape& s)
 {
     return op.IsDeleted(s);
+}
+
+// --- BREP persistence -------------------------------------------------------
+// In-memory shape <-> bytes. `opencascade-sys` only bridges the file-based
+// `BRepTools::write/read`; a property value needs bytes, not a temp file.
+
+inline void fc_brep_write(const TopoDS_Shape& shape, rust::Vec<uint8_t>& out)
+{
+    std::ostringstream stream;
+    BRepTools::Write(shape, stream);
+    const std::string bytes = stream.str();
+    for (char c : bytes)
+        out.push_back(static_cast<uint8_t>(c));
+}
+
+inline std::unique_ptr<TopoDS_Shape> fc_brep_read(rust::Slice<const uint8_t> data)
+{
+    const std::string bytes(reinterpret_cast<const char*>(data.data()), data.size());
+    std::istringstream stream(bytes);
+    auto shape = std::make_unique<TopoDS_Shape>();
+    BRep_Builder builder;
+    BRepTools::Read(*shape, stream, builder);
+    if (shape->IsNull())
+        return nullptr;
+    return shape;
 }

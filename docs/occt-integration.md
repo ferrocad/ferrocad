@@ -182,8 +182,11 @@ The extraction is a refactor with its own tests, so it lands in stages:
    (`Property::Extension`: module-owned values with `clone`/`eq`/`save`/`restore`). A module
    can now register a name, an object type, and a value that holds its own data — everything
    Part needs.
-6. **`ferrocad_part` / `ferrocad_part_py`** — Part features as registered
-   `DocumentObject`s holding a Part shape property; owns the OCCT backend; module `Part`.
+6. **[x] `ferrocad_part`** (started 2026-10-06) — registers `Part::Feature` (with `Shape`
+   and `Placement`) via `object_registry`, and `Part::PropertyPartShape` (a
+   `ShapeProperty` holding a `ferrocad_geom::Shape`, persisted as in-memory BREP) via
+   `property_types`. Remaining: `ferrocad_part_py` (the `Part` Python module, `obj.Shape`,
+   `Part.makeBox`).
 
 `ferrocad_occt` is deliberately **not** in `default-members`, so an ordinary
 `cargo build`/`cargo test` needs no kernel; only the `geometry` CI job (and geometry

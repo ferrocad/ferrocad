@@ -91,4 +91,4 @@ jobs:
           export OpenCASCADE_DIR="$PWD/.occt/prefix/lib/cmake/opencascade"
           export OCCT_INCLUDE_DIR="$PWD/.occt/prefix/include/opencascade"
           export LD_LIBRARY_PATH="$PWD/.occt/prefix/lib:$LD_LIBRARY_PATH"
-          cargo test -p ferrocad_occt
+          cargo test -p ferrocad_occt -p ferrocad_part

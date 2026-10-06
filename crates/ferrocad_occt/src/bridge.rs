@@ -28,6 +28,11 @@ mod ffi {
             shape: &TopoDS_Shape,
         ) -> i32;
 
+        /// Serialise a shape to BREP bytes (in memory; the crate only does files).
+        fn fc_brep_write(shape: &TopoDS_Shape, out: &mut Vec<u8>);
+        /// Read a shape from BREP bytes; null on failure.
+        fn fc_brep_read(data: &[u8]) -> UniquePtr<TopoDS_Shape>;
+
         fn fc_brep_fuse_modified(
             op: Pin<&mut BRepAlgoAPI_Fuse>,
             shape: &TopoDS_Shape,

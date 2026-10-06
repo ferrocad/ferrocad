@@ -50,8 +50,16 @@ impl GeometryBackend for OcctBackend {
     }
 
     fn fuse(&self, a: &Shape, b: &Shape) -> Result<OpResult, Self::Error> {
-        let sa = downcast(a)?.as_shape();
-        let sb = downcast(b)?.as_shape();
+        let a_occt = downcast(a)?;
+        let b_occt = downcast(b)?;
+        let a_guard = a_occt.borrow();
+        let b_guard = b_occt.borrow();
+        let sa = a_guard
+            .as_ref()
+            .ok_or(OcctError::InvalidInput { what: "null shape" })?;
+        let sb = b_guard
+            .as_ref()
+            .ok_or(OcctError::InvalidInput { what: "null shape" })?;
         let mut op = ffi::b_rep_algo_api::BRepAlgoAPI_Fuse_new(sa, sb);
         if !op.IsDone() {
             return Err(OcctError::NotDone { operation: "fuse" });
@@ -66,8 +74,16 @@ impl GeometryBackend for OcctBackend {
     }
 
     fn cut(&self, a: &Shape, b: &Shape) -> Result<OpResult, Self::Error> {
-        let sa = downcast(a)?.as_shape();
-        let sb = downcast(b)?.as_shape();
+        let a_occt = downcast(a)?;
+        let b_occt = downcast(b)?;
+        let a_guard = a_occt.borrow();
+        let b_guard = b_occt.borrow();
+        let sa = a_guard
+            .as_ref()
+            .ok_or(OcctError::InvalidInput { what: "null shape" })?;
+        let sb = b_guard
+            .as_ref()
+            .ok_or(OcctError::InvalidInput { what: "null shape" })?;
         let mut op = ffi::b_rep_algo_api::BRepAlgoAPI_Cut_new(sa, sb);
         if !op.IsDone() {
             return Err(OcctError::NotDone { operation: "cut" });
@@ -92,10 +108,18 @@ impl GeometryBackend for OcctBackend {
                 what: "fillet needs at least one edge",
             });
         }
-        let s = downcast(shape)?.as_shape();
+        let shape_occt = downcast(shape)?;
+        let shape_guard = shape_occt.borrow();
+        let s = shape_guard
+            .as_ref()
+            .ok_or(OcctError::InvalidInput { what: "null shape" })?;
         let mut op = ffi::b_rep_fillet_api::BRepFilletAPI_MakeFillet_new(s);
         for edge_ref in edges {
-            let es = downcast(&edge_ref.shape)?.as_shape();
+            let edge_occt = downcast(&edge_ref.shape)?;
+            let edge_guard = edge_occt.borrow();
+            let es = edge_guard
+                .as_ref()
+                .ok_or(OcctError::InvalidInput { what: "null edge" })?;
             op.pin_mut().add_edge(radius, TopoDS::Edge(es));
         }
         // `Shape()` triggers the build; `IsDone()` is meaningful afterwards.
@@ -108,7 +132,11 @@ impl GeometryBackend for OcctBackend {
     }
 
     fn place(&self, shape: &Shape, placement: &Placement) -> Result<Shape, Self::Error> {
-        let s = downcast(shape)?.as_shape();
+        let shape_occt = downcast(shape)?;
+        let shape_guard = shape_occt.borrow();
+        let s = shape_guard
+            .as_ref()
+            .ok_or(OcctError::InvalidInput { what: "null shape" })?;
         let trsf = transform_from(placement);
         let mut op = ffi::b_rep_builder_api::BRepBuilderAPI_Transform_new(s, &trsf, true);
         let out = erase(op.pin_mut().Shape());
@@ -122,7 +150,9 @@ impl GeometryBackend for OcctBackend {
         // Positional fallback only: `FaceN`/`EdgeN` -> the N-th sub-shape. Stable
         // *named* resolution needs the lineage mapper (a later slice); this mirrors
         // FreeCAD's behaviour when no element map is available.
-        let s = downcast(shape).ok()?.as_shape();
+        let shape_occt = downcast(shape).ok()?;
+        let shape_guard = shape_occt.borrow();
+        let s = shape_guard.as_ref()?;
         let (kind, index) = parse_sub_name(name)?;
         let map = sub_shape_map(s, kind);
         if index >= 1 && index <= map.Extent() {

@@ -1142,10 +1142,7 @@ and `python/FreeCAD/__init__.py` keeps no state (the binding retains only a
 wrapper-identity cache). The Python facade tests (107) and upstream conformance (169) are
 unchanged.
 
-Next: the **document-object SPI** (object/property extension — the real prerequisite before
-Part can hold a shape), then the Part crates.
-
-**Document-object SPI (started).** `ferrocad_core::property_types` is a name-keyed registry
+**Document-object SPI (done).** `ferrocad_core::property_types` is a name-keyed registry
 of property types (core seeds `App::*`; `register(name, factory)` is the module SPI);
 `addProperty` resolves through it and now **raises** on an unknown name instead of silently
 creating a `String`, and `supportedProperties()` enumerates it.
@@ -1155,3 +1152,13 @@ construction defaults and `execute`, consulted by `Document::add_object_with` an
 holds a module-owned value with `clone`/`eq`/`save`/`restore`, hand-written so `Property`'s
 derives survive. A module can now register a name, an object type and a value — everything
 Part needs. Verified: core 45 tests; Python facade 107; upstream conformance unchanged (169).
+
+**`ferrocad_part` (started).** The first module: `register()` registers `Part::Feature` (an
+`ObjectType` with `Shape` and `Placement`) and `Part::PropertyPartShape` (a `ShapeProperty`
+holding a `ferrocad_geom::Shape`, persisted as in-memory BREP through the OCCT backend).
+`ferrocad_geom::Shape` is now `Send + Sync` — documents reach Python, whose classes must be
+`Sync` — so OCCT's `OcctShape` wraps its `TopoDS_Shape` in a `Mutex`. Verified: geom 4, occt
+5, part 5 tests; core 45; facade 107; conformance 169; the `geometry` CI job now runs
+`ferrocad_part` too.
+
+Next: `ferrocad_part_py` — the `Part` Python module (`obj.Shape`, `Part.makeBox`).

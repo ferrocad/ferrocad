@@ -43,7 +43,7 @@ mod shape;
 
 pub use backend::OcctBackend;
 pub use error::OcctError;
-pub use shape::OcctShape;
+pub use shape::{read_brep, write_brep, OcctShape};
 
 #[cfg(test)]
 mod tests {

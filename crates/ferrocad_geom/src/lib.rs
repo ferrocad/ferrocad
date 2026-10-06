@@ -46,15 +46,19 @@ use ferrocad_types::Placement;
 /// it. Equality is *handle identity* (two handles are equal only if they refer to the
 /// very same kernel object), never geometric equality; compare geometry by resolving
 /// to `ElementRef`s instead.
+///
+/// `Shape` is `Send + Sync` — documents reach Python, whose classes must be `Sync`.
+/// A backend value that is only `Send` (OCCT's `TopoDS_Shape`) therefore wraps any
+/// non-thread-safe inner state in a `Mutex`.
 #[derive(Clone)]
 pub struct Shape {
-    inner: Arc<dyn Any>,
+    inner: Arc<dyn Any + Send + Sync>,
     kind: &'static str,
 }
 
 impl Shape {
-    /// Wrap a backend-specific value as a shape handle.
-    pub fn new<T: Any>(data: T) -> Self {
+    /// Wrap a backend-specific, thread-safe value as a shape handle.
+    pub fn new<T: Any + Send + Sync>(data: T) -> Self {
         Shape {
             inner: Arc::new(data),
             kind: std::any::type_name::<T>(),

@@ -176,8 +176,11 @@ The extraction is a refactor with its own tests, so it lands in stages:
    observers and FreeCAD-style unique naming; the PyO3 module delegates to it and the
    Python facade keeps no state (only a wrapper-identity cache in the binding).
    Independent of geometry.
-5. **Document-object SPI** — the object/property extension seam from §5. The real
-   prerequisite for Part.
+5. **[~] Document-object SPI** (started 2026-10-06) — `ferrocad_core::object_registry`
+   (`ObjectType` trait + registry: construction defaults and `execute`) and
+   `ferrocad_core::property_types` (name-keyed property registry; `addProperty` now raises
+   on an unknown name). Remaining: a property *value* extension so a module type can hold
+   its own data (a shape) with `save`/`restore`.
 6. **`ferrocad_part` / `ferrocad_part_py`** — Part features as registered
    `DocumentObject`s holding a Part shape property; owns the OCCT backend; module `Part`.
 

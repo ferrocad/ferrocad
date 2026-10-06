@@ -759,65 +759,7 @@ fn apply_status_name(status: &mut u32, name: &str) -> PyResult<()> {
     }
 }
 
-/// Map a FreeCAD property type id to its default value.
-fn default_property(type_id: &str) -> Property {
-    let t = type_id.to_ascii_lowercase();
-    if t.ends_with("integerconstraint") {
-        Property::IntegerConstraint { value: 0, min: 0, max: 0, step: 1 }
-    } else if t.ends_with("floatconstraint") {
-        Property::FloatConstraint { value: 0.0, min: 0.0, max: 0.0, step: 1.0 }
-    } else if t.ends_with("enumeration") {
-        Property::Enumeration(vec![], 0)
-    } else if t.ends_with("placementlist") {
-        Property::PlacementList(vec![])
-    } else if t.ends_with("rotationlist") {
-        Property::RotationList(vec![])
-    } else if t.ends_with("integerlist") {
-        Property::IntegerList(vec![])
-    } else if t.ends_with("floatlist") {
-        Property::FloatList(vec![])
-    } else if t.ends_with("stringlist") {
-        Property::StringList(vec![])
-    } else if t.ends_with("boollist") {
-        Property::BoolList(vec![])
-    } else if t.ends_with("vectorlist") {
-        Property::VectorList(vec![])
-    } else if t.ends_with("placement") {
-        Property::Placement(Placement::identity())
-    } else if t.ends_with("rotation") {
-        Property::Rotation(Rotation::identity())
-    } else if t.ends_with("vector") {
-        Property::Vector(Vector3::zero())
-    } else if t.ends_with("matrix") {
-        Property::Matrix(Matrix4::identity())
-    } else if t.ends_with("integer") {
-        Property::Integer(0)
-    } else if t.ends_with("float") {
-        Property::Float(0.0)
-    } else if t.ends_with("bool") {
-        Property::Bool(false)
-    } else if t.ends_with("linksublist") {
-        Property::LinkList(vec![])
-    } else if t.ends_with("linksub") {
-        Property::LinkSub(String::new(), vec![])
-    } else if t.ends_with("colorlist") || t.ends_with("colourlist") {
-        Property::ColorList(vec![])
-    } else if t.ends_with("pythonobject") {
-        Property::PythonObject(String::new())
-    } else if t.ends_with("fileincluded") {
-        Property::FileIncluded(String::new())
-    } else if t.ends_with("intpairlist") {
-        Property::IntPairList(vec![])
-    } else if t.ends_with("linklist") {
-        Property::LinkList(vec![])
-    } else if t.ends_with("link") || t.ends_with("linksub") || t.ends_with("linksublist") {
-        Property::Link(String::new())
-    } else if t.ends_with("length") || t.ends_with("distance") || t.ends_with("quantity") || t.ends_with("angle") {
-        Property::Quantity(Quantity::new(0.0, Unit::Millimeter))
-    } else {
-        Property::String(String::new())
-    }
-}
+
 
 // ---------------------------------------------------------------------------
 // Document / DocumentObject
@@ -855,10 +797,6 @@ fn is_extension_type(type_id: &str) -> bool {
     type_id.ends_with("Extension") || type_id.ends_with("ExtensionPython")
 }
 
-/// Property type ids are namespaced `…::Property…` (e.g. `App::PropertyLength`).
-fn is_property_type(type_id: &str) -> bool {
-    type_id.contains("Property") && !is_extension_type(type_id)
-}
 
 /// Create the 6 datum sub-elements of an `App::Origin` and link them into its
 /// `Group`. Each carries a `Placement` encoding the standard axis/plane frame.
@@ -2060,11 +1998,11 @@ impl PyDocumentObject {
         if name.is_empty() {
             return Err(PyValueError::new_err("property name must not be empty"));
         }
-        if !is_property_type(type_id) {
-            return Err(PyTypeError::new_err(format!(
-                "'{type_id}' is not a property type"
-            )));
-        }
+        // Resolve the type through the registry (FreeCAD's `Base::Type` by name):
+        // an unknown type is an error, never a silent default.
+        let base = ferrocad_core::property_types::default_for(type_id).ok_or_else(|| {
+            PyTypeError::new_err(format!("'{type_id}' is not a property type"))
+        })?;
         let mut status = attr.max(0) as u32;
         if read_only {
             status |= prop_status::READONLY;
@@ -2077,9 +2015,9 @@ impl PyDocumentObject {
             (Arc::clone(&this.inner), this.id)
         };
         // `enum_vals` seeds an enumeration's allowed values.
-        let default = match (default_property(type_id), enum_vals) {
-            (_, Some(vals)) => Property::Enumeration(vals, 0),
-            (d, None) => d,
+        let default = match enum_vals {
+            Some(vals) => Property::Enumeration(vals, 0),
+            None => base,
         };
         inner
             .lock()
@@ -2244,17 +2182,7 @@ impl PyDocumentObject {
     }
 
     fn supportedProperties(&self) -> Vec<String> {
-        vec![
-            "App::PropertyString".to_string(),
-            "App::PropertyFloat".to_string(),
-            "App::PropertyBool".to_string(),
-            "App::PropertyInteger".to_string(),
-            "App::PropertyLength".to_string(),
-            "App::PropertyVector".to_string(),
-            "App::PropertyPlacement".to_string(),
-            "App::PropertyMatrix".to_string(),
-            "App::PropertyLink".to_string(),
-        ]
+        ferrocad_core::property_types::names()
     }
 
     // -- extensions ---------------------------------------------------------

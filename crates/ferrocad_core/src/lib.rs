@@ -99,7 +99,9 @@ mod application;
 mod document;
 mod expr;
 mod observer;
+pub mod object_registry;
 mod property;
+pub mod property_types;
 mod stringhasher;
 mod typeregistry;
 

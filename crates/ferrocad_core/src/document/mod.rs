@@ -108,12 +108,21 @@ impl Document {
         let node = self.graph.add_node(id);
         self.index.insert(id, node);
 
-        // Initialize default properties for known types (FeatureTest, …).
+        // Initialize default properties: a module-registered type first, otherwise
+        // the built-in core types (FeatureTest, …).
         let mut properties = PropertyContainer::new();
-        for (prop_name, prop, status) in crate::typeregistry::default_properties(type_id) {
-            properties.set_with_status(prop_name.to_string(), prop, status);
-            let (group, doc) = crate::typeregistry::property_meta(type_id, prop_name);
-            properties.set_meta(prop_name.to_string(), group, doc);
+        if let Some(behavior) = crate::object_registry::get(type_id) {
+            for (prop_name, prop, status) in behavior.default_properties() {
+                let (group, doc) = behavior.property_meta(&prop_name).unwrap_or_default();
+                properties.set_meta(prop_name.clone(), &group, &doc);
+                properties.set_with_status(prop_name, prop, status);
+            }
+        } else {
+            for (prop_name, prop, status) in crate::typeregistry::default_properties(type_id) {
+                properties.set_with_status(prop_name.to_string(), prop, status);
+                let (group, doc) = crate::typeregistry::property_meta(type_id, prop_name);
+                properties.set_meta(prop_name.to_string(), group, doc);
+            }
         }
 
         self.objects.insert(
@@ -753,6 +762,12 @@ impl Document {
             Some(obj) => obj.type_id.clone(),
             None => return,
         };
+        // A module-registered behaviour runs first; the built-in FeatureTest fixture
+        // behaviour is the fallback for core types.
+        if let Some(behavior) = crate::object_registry::get(&type_id) {
+            behavior.execute(self, id);
+            return;
+        }
         if !type_id.starts_with("App::FeatureTest") {
             return;
         }
@@ -774,6 +789,22 @@ impl Document {
                 obj.properties
                     .set("ExecResult".to_string(), Property::String("Exec".to_string()));
             }
+        }
+    }
+
+    /// Set a property without marking the object dirty.
+    ///
+    /// Intended for `execute` implementations (registered
+    /// [`crate::object_registry::ObjectType`]s): recompute writes its outputs here so
+    /// it does not re-touch the object and schedule another recompute. A normal edit
+    /// should go through [`Document::set_property`].
+    pub fn set_property_raw(&mut self, id: ObjectId, name: &str, value: Property) -> bool {
+        match self.objects.get_mut(&id) {
+            Some(obj) => {
+                obj.properties.set(name.to_string(), value);
+                true
+            }
+            None => false,
         }
     }
 

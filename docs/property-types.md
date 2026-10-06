@@ -65,3 +65,16 @@ Part; Python compatibility is what makes it mandatory rather than nice-to-have.
 Scripts that `addProperty` a module type, or that read `supportedProperties()` /
 `getTypeIdOfProperty`, would silently mis-type or miss types. The name-driven dispatch must
 be in place before any module (Part) ships.
+
+## 6. Status (2026-10-06): implemented
+
+`ferrocad_core::property_types` is now the registry. Core seeds the `App::*` set;
+`register(name, factory)` is the module SPI. `addProperty` resolves through it and
+**raises** on an unknown name (the silent-`String` fallback is gone), and
+`supportedProperties()` enumerates it.
+
+The companion object-type seam, `ferrocad_core::object_registry`, is also in: an
+`ObjectType` supplies construction defaults and `execute`, so a module can register a
+whole object type, not just a property. Remaining: a property *value* extension so a
+module type can hold its own data (a shape) with `save`/`restore` — the last piece Part
+needs before `Part::PropertyPartShape` can exist.

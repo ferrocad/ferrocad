@@ -1144,3 +1144,13 @@ unchanged.
 
 Next: the **document-object SPI** (object/property extension — the real prerequisite before
 Part can hold a shape), then the Part crates.
+
+**Document-object SPI (started).** `ferrocad_core::property_types` is a name-keyed registry
+of property types (core seeds `App::*`; `register(name, factory)` is the module SPI);
+`addProperty` resolves through it and now **raises** on an unknown name instead of silently
+creating a `String`, and `supportedProperties()` enumerates it.
+`ferrocad_core::object_registry` adds the object-type half: an `ObjectType` supplies
+construction defaults and `execute`, consulted by `Document::add_object_with` and
+`execute_object`. Remaining: a property *value* extension so a module type can hold its own
+data (a shape) with `save`/`restore`. Verified: core 42 tests; Python facade 107; upstream
+conformance unchanged (169).

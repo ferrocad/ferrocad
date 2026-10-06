@@ -14,6 +14,7 @@
 use std::collections::BTreeMap;
 use std::sync::{Mutex, OnceLock};
 
+use crate::extension::ExtensionData;
 use crate::geometry::{Matrix4, Placement, Rotation, Vector3};
 use crate::property::Property;
 use crate::quantity::Quantity;
@@ -37,6 +38,37 @@ pub fn register(name: &str, factory: impl Fn() -> Property + Send + Sync + 'stat
         .lock()
         .unwrap()
         .insert(name.to_string(), Box::new(factory));
+}
+
+type RestoreFn = fn(&[u8]) -> Option<Box<dyn ExtensionData>>;
+
+fn extensions() -> &'static Mutex<BTreeMap<String, RestoreFn>> {
+    static EXTENSIONS: OnceLock<Mutex<BTreeMap<String, RestoreFn>>> = OnceLock::new();
+    EXTENSIONS.get_or_init(|| Mutex::new(BTreeMap::new()))
+}
+
+/// Register a module-owned property type: a factory for its default value and the
+/// function that reconstructs it from [`ExtensionData::save`] bytes (used on load).
+///
+/// `make_default` must return a `Property::Extension`; `restore` is called with the
+/// bytes when a saved document is read. See `docs/property-value-extension.md`.
+pub fn register_extension(
+    name: &str,
+    make_default: impl Fn() -> Property + Send + Sync + 'static,
+    restore: RestoreFn,
+) {
+    register(name, make_default);
+    extensions().lock().unwrap().insert(name.to_string(), restore);
+}
+
+/// Reconstruct a registered extension value from its `save()` bytes, or `None` if
+/// the type is not registered (its module is not loaded).
+pub fn restore_extension(name: &str, bytes: &[u8]) -> Option<Box<dyn ExtensionData>> {
+    extensions()
+        .lock()
+        .unwrap()
+        .get(name)
+        .and_then(|restore| restore(bytes))
 }
 
 /// Whether `name` is a registered property type.

@@ -73,8 +73,8 @@ be in place before any module (Part) ships.
 **raises** on an unknown name (the silent-`String` fallback is gone), and
 `supportedProperties()` enumerates it.
 
-The companion object-type seam, `ferrocad_core::object_registry`, is also in: an
-`ObjectType` supplies construction defaults and `execute`, so a module can register a
-whole object type, not just a property. Remaining: a property *value* extension so a
-module type can hold its own data (a shape) with `save`/`restore` — the last piece Part
-needs before `Part::PropertyPartShape` can exist.
+The companion object-type seam, `ferrocad_core::object_registry`, and the property *value*
+extension (`ferrocad_core::extension`; `Property::Extension`) are also in. A module can now
+register a name, an object type and a value that holds its own data with `save`/`restore`
+— which is everything `Part::PropertyPartShape` needs; see
+[`property-value-extension.md`](property-value-extension.md).

@@ -1151,6 +1151,7 @@ of property types (core seeds `App::*`; `register(name, factory)` is the module 
 creating a `String`, and `supportedProperties()` enumerates it.
 `ferrocad_core::object_registry` adds the object-type half: an `ObjectType` supplies
 construction defaults and `execute`, consulted by `Document::add_object_with` and
-`execute_object`. Remaining: a property *value* extension so a module type can hold its own
-data (a shape) with `save`/`restore`. Verified: core 42 tests; Python facade 107; upstream
-conformance unchanged (169).
+`execute_object`. `ferrocad_core::extension` adds the value half: `Property::Extension`
+holds a module-owned value with `clone`/`eq`/`save`/`restore`, hand-written so `Property`'s
+derives survive. A module can now register a name, an object type and a value — everything
+Part needs. Verified: core 45 tests; Python facade 107; upstream conformance unchanged (169).

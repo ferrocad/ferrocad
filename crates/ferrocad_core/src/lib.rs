@@ -98,6 +98,7 @@
 mod application;
 mod document;
 mod expr;
+mod extension;
 mod observer;
 pub mod object_registry;
 mod property;
@@ -112,6 +113,7 @@ pub use ferrocad_types::{geometry, quantity, unit};
 
 pub use application::{application, Application, DocumentHandle, DocumentObserver};
 pub use document::{sanitize_name, Document, DocumentObject, ObjectId, SavedDocument};
+pub use extension::{ExtensionData, ExtensionValue};
 pub use geometry::{Matrix4, Placement, Rotation, ScaleType, TypeId, Vector3};
 pub use observer::Observer;
 pub use property::{prop_status, status_from_name, status_names, Property, PropertyContainer};

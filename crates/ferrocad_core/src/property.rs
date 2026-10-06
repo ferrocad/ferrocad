@@ -4,6 +4,7 @@ use std::collections::BTreeMap;
 
 use serde::{Deserialize, Serialize};
 
+use crate::extension::ExtensionValue;
 use crate::geometry::{Matrix4, Placement, Rotation, Vector3};
 use crate::quantity::Quantity;
 
@@ -57,11 +58,14 @@ pub enum Property {
         max: f64,
         step: f64,
     },
+    /// A module-owned value (e.g. `Part::PropertyPartShape`). Core stores it opaquely;
+    /// the owning module clones, compares and serialises it. See [`crate::extension`].
+    Extension(ExtensionValue),
 }
 
 impl Property {
     /// FreeCAD-style type id for this property.
-    pub fn type_name(&self) -> &'static str {
+    pub fn type_name(&self) -> &str {
         match self {
             Property::String(_) => "App::PropertyString",
             Property::Float(_) => "App::PropertyFloat",
@@ -89,6 +93,7 @@ impl Property {
             Property::Enumeration(_, _) => "App::PropertyEnumeration",
             Property::IntegerConstraint { .. } => "App::PropertyIntegerConstraint",
             Property::FloatConstraint { .. } => "App::PropertyFloatConstraint",
+            Property::Extension(value) => value.type_name(),
         }
     }
 }

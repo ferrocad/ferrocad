@@ -613,6 +613,9 @@ fn property_to_py(py: Python<'_>, value: &Property) -> PyObject {
         // Constraints expose their value like the underlying scalar type.
         Property::IntegerConstraint { value, .. } => (*value).into_py_any(py).unwrap(),
         Property::FloatConstraint { value, .. } => (*value).into_py_any(py).unwrap(),
+        // Core cannot interpret a module-owned value; the owning module provides the
+        // Python conversion (Part, for `obj.Shape`). Until then the value is opaque.
+        Property::Extension(_) => py.None(),
     }
 }
 

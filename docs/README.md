@@ -37,6 +37,8 @@ is the `FreeCAD` Python API, documented by convention and by upstream.
 - [python-bindings.md](python-bindings.md) — the PyO3 binding design.
 - [property-types.md](property-types.md) — how FreeCAD exposes property types (C++
   `Base::Type`, addressed by name) and what that demands of the document-object SPI.
+- [property-value-extension.md](property-value-extension.md) — how a module holds its own
+  property value (`Property::Extension`) with `clone`/`eq`/`save`/`restore`.
 - [distribution.md](distribution.md) — how the app runs and is packaged (payload,
   bundled runtime, artifacts).
 - [releasing.md](releasing.md) — how a release is cut (crates.io, the tag, the

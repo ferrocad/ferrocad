@@ -52,6 +52,14 @@ The trait is used as a **trait object** (`Arc<dyn GeometryBackend>`), so it cann
 an associated `Error` type. Each backend keeps its own concrete error enum and boxes it
 at the seam (a `GeomError = Box<dyn Error + Send + Sync>` alias in `ferrocad_geom`).
 
+[`Shape`](https://docs.rs/ferrocad_geom) is `Send` but **not** `Sync`. It shares its payload
+by letting the kernel clone its own handle (a separate `Arc<()>` token carries `is_same`
+identity) rather than putting the payload behind an `Arc`, which would force `T: Sync`.
+So a `Send`-only kernel handle such as OCCT's `TopoDS_Shape` sits in `OcctShape` directly,
+with no `Mutex`; exclusivity comes from the document's own lock. The reason the bound
+matters: `#[pyclass]` types must be `Send + Sync`, so a bare extension value must never be
+a field of one.
+
 Two implementations are in scope, exactly as §6 proposed:
 
 - a **`NullBackend`** in `ferrocad_geom` (placeholder shapes, empty maps) so documents,

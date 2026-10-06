@@ -18,14 +18,15 @@ use crate::property_types;
 
 /// A module-owned property value.
 ///
-/// Must be `Send + Sync` because documents are shared behind `Arc<Mutex<…>>` and reach
-/// Python (whose classes must be `Sync`). A kernel handle that is only `Send` (OCCT's
-/// `TopoDS_Shape`) is wrapped in a `Mutex` inside the module's value.
+/// Must be `Send` because documents are shared behind `Arc<Mutex<…>>` (and `Arc<Mutex<T>>`
+/// is `Sync` only when `T: Send`). It need not be `Sync`: a kernel handle that is only
+/// `Send` (OCCT's `TopoDS_Shape`) is stored as-is; exclusive access is provided by the
+/// document's own `Mutex`, not by a second lock inside the value.
 ///
 /// Only [`type_name`](ExtensionData::type_name), [`save`](ExtensionData::save) and
 /// [`clone_box`](ExtensionData::clone_box) cross the core boundary; core never
 /// interprets the bytes.
-pub trait ExtensionData: Send + Sync {
+pub trait ExtensionData: Send {
     /// The registered type name, e.g. `"Part::PropertyPartShape"`.
     fn type_name(&self) -> &str;
     /// A deep clone (the enum's `Clone` cannot be derived through a trait object).

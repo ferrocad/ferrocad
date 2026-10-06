@@ -3,7 +3,6 @@
 use cxx::UniquePtr;
 use ferrocad_geom::Shape;
 use opencascade_sys as ffi;
-use std::sync::Mutex;
 
 use ffi::top_abs::TopAbs_ShapeEnum;
 use ffi::top_tools::TopTools_IndexedMapOfShape;
@@ -15,20 +14,27 @@ use crate::error::OcctError;
 /// [`ferrocad_geom::Shape`]. Owning the `TopoDS_Shape` as a `UniquePtr` copies the
 /// handle (OCCT shapes are reference-counted), so the shape outlives the operation
 /// object that produced it.
-pub struct OcctShape(pub(crate) Mutex<UniquePtr<TopoDS_Shape>>);
+pub struct OcctShape(pub(crate) UniquePtr<TopoDS_Shape>);
 
 impl OcctShape {
     /// Take ownership of a copy of `shape`.
     pub fn from_ref(shape: &TopoDS_Shape) -> Self {
-        OcctShape(Mutex::new(ffi::topo_ds::TopoDS_Shape_to_owned(shape)))
+        OcctShape(ffi::topo_ds::TopoDS_Shape_to_owned(shape))
     }
 
-    /// Lock the shape for the duration of a call.
+    /// The wrapped shape.
     ///
-    /// The `Mutex` is what makes the handle `Sync` (OCCT's `TopoDS_Shape` is `Send`
-    /// but not `Sync`) and serialises kernel calls on it.
-    pub fn borrow(&self) -> std::sync::MutexGuard<'_, UniquePtr<TopoDS_Shape>> {
-        self.0.lock().unwrap()
+    /// No lock: the handle only needs to be `Send`, and every call already runs under
+    /// the owning document's `Mutex`.
+    pub fn borrow(&self) -> &UniquePtr<TopoDS_Shape> {
+        &self.0
+    }
+}
+
+impl Clone for OcctShape {
+    /// Copy the OCCT handle (reference-counted), so the copy outlives this value.
+    fn clone(&self) -> Self {
+        OcctShape(ffi::topo_ds::TopoDS_Shape_to_owned(&self.0))
     }
 }
 
@@ -79,5 +85,5 @@ pub fn read_brep(bytes: &[u8]) -> Option<Shape> {
     if shape.is_null() {
         return None;
     }
-    Some(Shape::new(OcctShape(Mutex::new(shape))))
+    Some(Shape::new(OcctShape(shape)))
 }

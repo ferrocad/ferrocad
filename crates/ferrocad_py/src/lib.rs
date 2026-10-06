@@ -630,11 +630,18 @@ fn property_to_py_at(
     prop: &str,
 ) -> PyObject {
     let version = inner.lock().unwrap().property_version(id, prop);
+    // Only `Placement`/`Rotation` values build views (`property_to_py_at` is called for
+    // those two), so a sub-field write only ever needs the placement it came from. This
+    // keeps the view free of a whole `Property`, which could hold a !`Sync` extension.
+    let expect_placement = match p {
+        Property::Placement(pl) => Some(*pl),
+        _ => None,
+    };
     let view = |kind: ViewKind| GeometryView {
         inner: Arc::clone(inner),
         id,
         prop: prop.to_string(),
-        expect: p.clone(),
+        expect_placement,
         version,
         kind,
     };
@@ -2785,9 +2792,9 @@ struct GeometryView {
     inner: Arc<Mutex<CoreDocument>>,
     id: ObjectId,
     prop: String,
-    /// The property value when the view was created (used to merge a
-    /// sub-field like `Base`/`Rotation` back into the whole value).
-    expect: Property,
+    /// The `Placement` the view was derived from, so a `Base`/`Rotation` sub-field
+    /// write can be merged back into the whole value. `None` for a whole-value view.
+    expect_placement: Option<Placement>,
     /// The property version when the view was created. A write is dropped once
     /// the property has been reassigned (its version changed), even if the new
     /// value compares equal.
@@ -2823,7 +2830,7 @@ impl GeometryView {
         let new = match self.kind {
             ViewKind::Placement | ViewKind::Rotation => value,
             ViewKind::PlacementBase | ViewKind::PlacementRotation => {
-                let Property::Placement(mut placement) = self.expect.clone() else {
+                let Some(mut placement) = self.expect_placement else {
                     return;
                 };
                 match (self.kind, value) {

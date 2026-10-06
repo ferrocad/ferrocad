@@ -40,27 +40,53 @@ use ferrocad_types::Placement;
 // Shape
 // ---------------------------------------------------------------------------
 
+/// A kernel-owned shape payload that can be cloned without a lock.
+///
+/// Kept private: [`Shape`] is the public handle. It exists because `Shape` must be
+/// `Send` but **not** `Sync` (a kernel handle such as OCCT's `TopoDS_Shape` is `Send`
+/// but not `Sync`), and `Arc<T>` is only `Send` when `T: Sync`. So `Shape` shares its
+/// payload by asking the kernel to copy its own handle, never by reference counting it.
+trait ShapeData: Any + Send {
+    /// A new boxed copy of the payload (a kernel-handle copy is cheap).
+    fn clone_box(&self) -> Box<dyn ShapeData>;
+    /// Borrow for downcasting.
+    fn as_any(&self) -> &dyn Any;
+}
+
+impl<T: Any + Send + Clone> ShapeData for T {
+    fn clone_box(&self) -> Box<dyn ShapeData> {
+        Box::new(self.clone())
+    }
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+}
+
 /// An opaque handle to a kernel shape.
 ///
-/// Cheap to clone: the kernel keeps the geometry, and this only shares a reference to
-/// it. Equality is *handle identity* (two handles are equal only if they refer to the
-/// very same kernel object), never geometric equality; compare geometry by resolving
-/// to `ElementRef`s instead.
+/// Cheap to clone: cloning copies the kernel's own (reference-counted) handle through
+/// [`ShapeData::clone_box`]. Equality is *handle identity* (two handles are equal only
+/// if one was cloned from the other, or both from the same source), never geometric
+/// equality; compare geometry by resolving to `ElementRef`s instead.
 ///
-/// `Shape` is `Send + Sync` — documents reach Python, whose classes must be `Sync`.
-/// A backend value that is only `Send` (OCCT's `TopoDS_Shape`) therefore wraps any
-/// non-thread-safe inner state in a `Mutex`.
-#[derive(Clone)]
+/// `Shape` is `Send` but not `Sync`. Documents are shared behind `Arc<Mutex<…>>`, which
+/// only needs their contents to be `Send`; exclusive access comes from the document's
+/// lock, so the seam neither needs a per-handle lock nor forces the kernel's handle to
+/// be `Sync`.
 pub struct Shape {
-    inner: Arc<dyn Any + Send + Sync>,
+    inner: Box<dyn ShapeData>,
+    /// Shared only to give clones a common identity for [`is_same`](Shape::is_same).
+    /// `()` is `Sync`, so this token does not make `Shape` `Sync`.
+    identity: Arc<()>,
     kind: &'static str,
 }
 
 impl Shape {
-    /// Wrap a backend-specific, thread-safe value as a shape handle.
-    pub fn new<T: Any + Send + Sync>(data: T) -> Self {
+    /// Wrap a backend-specific, cloneable value as a shape handle.
+    pub fn new<T: Any + Send + Clone>(data: T) -> Self {
         Shape {
-            inner: Arc::new(data),
+            inner: Box::new(data),
+            identity: Arc::new(()),
             kind: std::any::type_name::<T>(),
         }
     }
@@ -70,7 +96,7 @@ impl Shape {
     /// A kernel backend uses this to recover its own shape type (for OCCT, the
     /// `TopoDS_Shape` wrapper) from the erased handle.
     pub fn downcast_ref<T: Any>(&self) -> Option<&T> {
-        self.inner.downcast_ref::<T>()
+        self.inner.as_any().downcast_ref::<T>()
     }
 
     /// The Rust type name of the wrapped value, for diagnostics.
@@ -78,9 +104,20 @@ impl Shape {
         self.kind
     }
 
-    /// Whether two handles refer to the same kernel object.
+    /// Whether two handles share one identity (one derives from the other, or both
+    /// derive from a common source).
     pub fn is_same(&self, other: &Shape) -> bool {
-        Arc::ptr_eq(&self.inner, &other.inner)
+        Arc::ptr_eq(&self.identity, &other.identity)
+    }
+}
+
+impl Clone for Shape {
+    fn clone(&self) -> Self {
+        Shape {
+            inner: self.inner.clone_box(),
+            identity: Arc::clone(&self.identity),
+            kind: self.kind,
+        }
     }
 }
 

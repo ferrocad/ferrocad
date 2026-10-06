@@ -22,7 +22,7 @@ is a newtype over `Box<dyn ExtensionData>` with **manual** `Clone`/`Debug`/`Part
 the field type to implement the traits, which `ExtensionValue` does.
 
 ```rust
-pub trait ExtensionData: Send + Sync {
+pub trait ExtensionData: Send {
     fn type_name(&self) -> &str;              // "Part::PropertyPartShape"
     fn clone_box(&self) -> Box<dyn ExtensionData>;
     fn as_any(&self) -> &dyn std::any::Any;   // for equality
@@ -32,9 +32,15 @@ pub trait ExtensionData: Send + Sync {
 }
 ```
 
-The `Sync` bound is not decoration: documents are shared behind `Arc<Mutex<…>>` and
-reach Python, whose classes must be `Sync`. A kernel handle that is only `Send` (OCCT's
-`TopoDS_Shape`) is wrapped in a `Mutex` inside the module's value.
+The bound is `Send` and stops there. Documents are shared behind `Arc<Mutex<…>>`, which
+is `Sync` as long as its contents are `Send`, so a document holding a module value stays
+shareable without the value itself being `Sync` — a kernel handle that is only `Send`
+(OCCT's `TopoDS_Shape`) is stored as-is. (`Shape` shares its payload the same way: it
+lets the kernel clone its own handle rather than putting the payload behind an `Arc`,
+which would demand `Sync`.) The one remaining place that could force `Sync` is PyO3,
+whose `#[pyclass]` types must be `Send + Sync`; the binding therefore never holds a whole
+`Property` in a pyclass (the geometry write-through view stores the `Placement` it came
+from, not the enclosing `Property`), so a `!Sync` extension never reaches PyO3.
 
 - **Clone** → `clone_box`. **PartialEq** → compare `type_name`, then trait `eq`.
 - **Serialize** → `{ "type": <name>, "bytes": <save()> }`.

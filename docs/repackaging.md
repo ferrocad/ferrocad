@@ -102,6 +102,7 @@ Linking the module into the **same image** is required: both `import Part` and
 staging the OCCT libraries beside the binary — [`occt-bundling.md`](occt-bundling.md).
 That is why the packaged artifacts still build the base `ferrocad` binary for now;
 the edition is run from a source checkout (`cargo run -p ferrocad_parametric`).
+[`edition-publishing.md`](edition-publishing.md) plans the step that ships it.
 
 The boundary between the two crates: `ferrocad_gpui` owns the **interpreter**
 (boot, `sys.path`, JSON) and ships no application script; the **app** owns the

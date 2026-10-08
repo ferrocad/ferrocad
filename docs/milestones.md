@@ -1215,3 +1215,24 @@ job fetches OCCT 7.8.1 because `ferrocad_occt` and `ferrocad_part_py` verify-bui
 kernel (`ferrocad_part` does not — OCCT is only a dev-dependency there). `ferrocad_part_py`
 loses its `publish = false`. `pyproject.toml` moves to `0.1.2` too. Shipping the OCCT-backed
 edition in the desktop artifacts is the remaining bundling step (`occt-bundling.md`).
+
+**Headless CI green again.** `tests/test_fc_core.py` asserted `recompute() == 1` for the
+A/B/C expression case, but the property writes touch A and B and C is enforced as a touched
+dependent, so it is 3 — exactly what `ferrocad_core` documents and asserts in
+`expressions_recompute`. The Python smoke test was stale, and had been failing the
+`headless` job since the workspace split (the later steps were skipped, masking it). Fixed
+the assertion; `cargo test -p ferrocad_gpui` and the bindings build pass locally, and CI is
+green.
+
+**Windows packaging and `--check-init`.** The `ferrocad` app gained a `--check-init` flag:
+it boots the embedded interpreter, native dependencies, built-in modules, facade and
+workbenches, then exits without a window (no display, no GPU), so a release can smoke-test
+an unpacked artifact. `release.yml` links the Windows CRT statically and runs the check on
+the unpacked zip; `ci.yml` adds a `windows` job that runs the `ferrocad_widgets`/`ferrocad_gpui`
+tests, the only path that exercises the `comctl32` v6 manifest. See `distribution.md` §6.
+
+**Publishing the first edition (planned).** [`edition-publishing.md`](edition-publishing.md)
+settles how `ferrocad_parametric` ships: editions are artifacts, not crates; the edition is a
+different Rust composition (a linked `Part`/OCCT binary), so it needs its own payload with an
+OCCT `lib/` closure. The plan covers `xtask occt`, `bundle --edition`, the launcher library
+path, the release matrix, and the slices E1–E4.

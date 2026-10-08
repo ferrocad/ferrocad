@@ -44,5 +44,8 @@ is the `FreeCAD` Python API, documented by convention and by upstream.
 - [releasing.md](releasing.md) — how a release is cut (crates.io, the tag, the
   artifacts).
 - [repackaging.md](repackaging.md) — editions and the repackaging vision.
+- [edition-publishing.md](edition-publishing.md) — how the first edition
+  (`FerroCAD: Parametric`) is published: a linked `Part`/OCCT binary and its
+  bundled `lib/`, the slices, and the open decisions.
 - [input-components.md](input-components.md) — the input widget design.
 - [python-ui-research.md](python-ui-research.md) — Python-declarative UI research.

@@ -76,6 +76,16 @@ jobs:
         with:
           python-version: "3.12"
 
+      - name: Link the CRT statically (self-contained Windows build)
+        # Rust defaults to the dynamic CRT on `*-pc-windows-msvc`, so the `.exe`
+        # would need `vcruntime140.dll` from the VC++ redistributable on the
+        # user's machine. `crt-static` (permitted alongside the bundled `libpython`
+        # DLL) removes that dependency, keeping the zip self-contained like the
+        # AppImage and the `.dmg`. See docs/distribution.md section 6.
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: echo "RUSTFLAGS=-C target-feature=+crt-static" >> $env:GITHUB_ENV
+
       # appimagetool (run via --appimage-extract-and-run, so no FUSE) and a PNG
       # icon converted from the SVG source.
       - name: AppImage tooling (Linux)
@@ -110,6 +120,20 @@ jobs:
       - name: Package (Windows)
         if: runner.os == 'Windows'
         run: pwsh -File packaging/windows/portable.ps1
+
+      - name: Smoke-test the packaged layout (Windows)
+        # Unpack the zip into a clean directory and boot it with `--check-init`: the
+        # app loads the bundled CPython and its native dependencies and exits
+        # without opening a window. A missing DLL or entry point fails the release
+        # here, not on a user's machine.
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $scratch = Join-Path $env:RUNNER_TEMP 'ferrocad-smoke'
+          if (Test-Path $scratch) { Remove-Item -Recurse -Force $scratch }
+          Expand-Archive -Path target\dist\ferrocad-windows-x86_64.zip -DestinationPath $scratch
+          & "$scratch\ferrocad.bat" --check-init
+          if ($LASTEXITCODE -ne 0) { throw "ferrocad --check-init failed with exit code $LASTEXITCODE" }
 
       - uses: actions/upload-artifact@v4
         with:

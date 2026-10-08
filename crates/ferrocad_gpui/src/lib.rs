@@ -92,6 +92,19 @@ pub fn run_with(config: HostConfig) {
     });
 }
 
+/// Run [`Shell::boot`] and return without opening a window.
+///
+/// This is the `--check-init` path: it runs the same boot as [`run_with`] —
+/// loading the bundled interpreter and every native dependency, importing the
+/// entry module and scanning the workbenches — then stops. Because it never
+/// creates a GPUI application, it needs no display server and no GPU, so a
+/// packaged layout that is missing a DLL or an entry point fails here instead of
+/// on a user's machine.
+pub fn check_init(config: HostConfig) -> Result<(), String> {
+    python::configure(&config.entry_module, &config.python_paths, &config.mods_paths);
+    Shell::boot().map(|_| ())
+}
+
 fn window_options(config: &HostConfig) -> WindowOptions {
     WindowOptions {
         // Client-side decorations: we draw the title bar and the resize grips

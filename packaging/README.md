@@ -64,3 +64,15 @@ embedded interpreter finds `python/` and `mods/`.
   runs it before creating the GitHub Release, so the table reflects what shipped.
 - **macOS and Windows scripts are untested here** (this project builds on Linux);
   they are written to be read and adjusted on their platforms.
+- **Windows needs the v6 `comctl32` manifest in every binary, tests included.**
+  `bite-gpui` embeds it via `embed-resource` (feature `windows-manifest`, from
+  `resources/windows/gpui.rc`); without it a process requests the legacy
+  `comctl32.dll` v5 and aborts at startup with `0xc0000139`
+  (`STATUS_ENTRYPOINT_NOT_FOUND`). The app `.exe` gets the manifest, but a `cargo
+  test` harness is a separate binary, so the embedding crate should use
+  `embed_resource::compile_for_everything` to reach tests as well. See
+  `docs/distribution.md` §6.
+- **`--check-init` verifies a packaged layout without a display.** The app boots
+  its embedded interpreter, native dependencies, built-in modules, facade and
+  workbenches, then exits (no window, no GPU). The release workflow runs it on the
+  unpacked Windows zip; it is useful on any platform to smoke-test an artifact.

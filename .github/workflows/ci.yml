@@ -44,6 +44,31 @@ jobs:
         working-directory: crates/ferrocad_py
         run: cargo build
 
+  # Windows: the headless tests on the platform where the app manifest matters.
+  # A GPUI/winit binary needs Version 6 of comctl32.dll, which only arrives if the
+  # manifest is embedded in the linked executable -- including the per-target
+  # harness binaries `cargo test` links. A harness without it aborts at startup
+  # with 0xc0000139 before any test runs, so this is the only job that exercises
+  # that path. See docs/distribution.md section 6.
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Build the FreeCAD extension module (for the shell tests)
+        # The shell tests import the FreeCAD facade, which imports the `ferrocad`
+        # extension. On Windows the extension is a `.pyd`, not an `.abi3.so`.
+        run: |
+          cargo build -p ferrocad_py --features extension-module
+          Copy-Item target\debug\ferrocad_py.dll python\ferrocad.pyd
+
+      - name: ferrocad_widgets + ferrocad_gpui headless tests (bite-gpui + CPython)
+        run: cargo test -p ferrocad_widgets -p ferrocad_gpui
+
   # Real-window smoke test: opens a bite-gpui window under Xvfb using the
   # lavapipe software Vulkan driver. This exercises the non-headless path that
   # the sandbox cannot (no display server). A crash fails the job.

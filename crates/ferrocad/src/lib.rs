@@ -44,13 +44,28 @@ pub fn run() {
 /// the process-wide core the shell boots (see `docs/occt-integration.md` §4).
 pub fn run_as(app_name: &str) {
     register_core_module();
+    ferrocad_gpui::run_with(base_config(app_name));
+}
 
+/// Boot the interpreter and the payload, then exit without opening a window.
+///
+/// This backs the app's `--check-init` flag: it loads the native dependencies,
+/// the built-in `ferrocad` module, the `FreeCAD` facade and the workbenches
+/// exactly as a normal start does, and reports success. It needs no display or
+/// GPU, so the release workflow runs it on an unpacked artifact to catch a broken
+/// layout before shipping (see `docs/distribution.md`).
+pub fn check_init() -> Result<(), String> {
+    register_core_module();
+    ferrocad_gpui::check_init(base_config("FerroCAD"))
+}
+
+/// The [`HostConfig`] an edition boots with, after resolving its payload.
+fn base_config(app_name: &str) -> HostConfig {
     let payload = payload::resolve();
-    let config = HostConfig {
+    HostConfig {
         app_name: app_name.to_string(),
         entry_module: "ferrocad_shell".to_string(),
         python_paths: payload.python_paths,
         mods_paths: payload.mods_paths,
-    };
-    ferrocad_gpui::run_with(config);
+    }
 }

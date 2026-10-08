@@ -160,14 +160,63 @@ application. See [`releasing.md`](releasing.md).
 | macOS | `.app` in a `.dmg` | `hdiutil`/`create-dmg`; codesign + notarize |
 | Windows | portable `.exe` or MSIX | WiX/MSIX, or a zip |
 
-**Status (v0.1.2).** The release workflow builds and publishes the Linux AppImage
-and the macOS `.dmg`, each bundling the pinned `python-build-standalone` runtime
-(the build job runs `cargo xtask python` before `bundle`, so the host is compiled
-against that interpreter and the runtime ships as `runtime/`). The Windows leg is
-omitted from the matrix: its packaging script (`packaging/windows/portable.ps1`)
-is written, but the upstream `bite-gp-windows` 1.21.0 crate does not compile
-(`unresolved import gpui`), and a failing matrix job skips the whole release.
-Re-add the matrix entry once that crate builds. See `.github/workflows/release.yml`.
+**Status (v0.1.2).** The release workflow builds and publishes all three desktop
+artifacts — the Linux AppImage, the macOS `.dmg` and the Windows `.zip` — each
+bundling the pinned `python-build-standalone` runtime (the build job runs
+`cargo xtask python` before `bundle`, so the host is compiled against that
+interpreter and the runtime ships as `runtime/`). The Windows leg was re-enabled at
+`v0.1.1`: the upstream `bite-gp-windows` build failure (`unresolved import gpui`)
+was fixed by bumping `bite-gpui` to `1.21.1`, so the matrix now runs
+`packaging/windows/portable.ps1` to produce the `.zip`. See
+`.github/workflows/release.yml`.
+
+### Known issue: the comctl32 v6 manifest and `cargo test`
+
+A GPUI/winit binary on Windows needs **Version 6** of `comctl32.dll` (Common
+Controls). Windows loads the legacy v5 unless the executable embeds an application
+manifest, and a process that calls a v6-only entry point against v5 dies at startup
+with `0xc0000139` (`STATUS_ENTRYPOINT_NOT_FOUND`). `bite-gpui` embeds that manifest
+with `embed-resource` — compiled from `resources/windows/gpui.rc` (which points at
+`gpui.manifest.xml`, whose `<dependency>` names `Microsoft.Windows.Common-Controls`
+v6) by `build.rs`, behind its `windows-manifest` feature (on by default via
+`platform`). That is why `cargo build` / `cargo run` produce a working `.exe`.
+
+`cargo test` is not the app binary: it links a separate harness per test target.
+`embed_resource::compile()` chooses its link instruction from the *embedding* crate:
+a crate with binaries of its own gets `cargo:rustc-link-arg-bins` (its bins only),
+and a library with no bins records a `rustc-link-lib` on its own library —
+`bite-gpui` is the latter, so the manifest rides its `rlib`. Neither form is a
+promise about a *downstream* test harness, which is a different binary.
+`embed_resource::compile_for_everything()` instead emits `cargo:rustc-link-arg`,
+which reaches every linked artifact (bins, tests, benches, examples), and is what
+the crate's own docs recommend when tests must carry the manifest.
+
+The symptom, when it bites, is a startup crash with no test output (`0xc0000139`),
+not a compile failure — so add the test job before trusting a Windows build. This
+is why `ci.yml` now has a `windows` job that runs `ferrocad_widgets` and
+`ferrocad_gpui` under `cargo test`: the manifest path is otherwise never exercised
+on the platform where it matters. If it fails, the fix belongs in the embedding
+crate's `build.rs` (upstream `bite-gpui`, or a patched fork), not a workflow
+workaround.
+
+### Windows: the VC runtime and the `--check-init` boot check
+
+Rust defaults to the **dynamic** CRT on `*-pc-windows-msvc` (the target spec
+leaves `crt-static-default` off), so a default `.exe` imports `vcruntime140.dll`
+from the VC++ redistributable — not something stock Windows carries. The Windows
+release build therefore sets `RUSTFLAGS=-C target-feature=+crt-static`
+(`crt-static` is permitted alongside the bundled `libpython` DLL), which drops that
+dependency and keeps the zip self-contained like the AppImage and the `.dmg`.
+
+Because it is a compile-time switch, the release job proves the result: after
+packaging, it unpacks the zip into a clean directory and boots it with
+`ferrocad --check-init`. That flag runs the normal boot — the bundled interpreter
+and every native dependency, the built-in `ferrocad` module, the `FreeCAD` facade
+and the workbenches — then exits without opening a window. It never creates a GPUI
+application, so it needs no display and no GPU and runs on a headless runner. A
+missing DLL or entry point fails the release there instead of on a user's machine;
+the same check also covers the comctl32 manifest above, since a binary without it
+cannot start at all.
 
 Two things make the runtime bundle work despite PyO3:
 

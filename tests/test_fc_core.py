@@ -30,7 +30,9 @@ def test_document_and_expressions():
     b.setPropertyByName("Height", 5.0)
     c.setExpression("Area", "A.Width * B.Height")
 
-    assert doc.recompute() == 1
+    # The property writes touch A and B; C is enforced as a touched dependent.
+    # `ferrocad_core`'s `expressions_recompute` asserts the same three.
+    assert doc.recompute() == 3
     assert c.getPropertyByName("Area") == 50.0
     assert c.PropertiesList == ["Area"]
     assert c.TypeId == "App::Feature"

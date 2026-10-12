@@ -145,6 +145,7 @@ Deliverable: the reserved config becomes real, and the specified thresholds are 
 - Formalise the viewport **theme** (colour/width/opacity/label attributes) with the
   current palette as the default, and thread it through both producers (inventor
   `Material`/`DrawStyle`, stage `ShapeItem` colours/`edge_width`); add `NaviCube::with_theme`.
+  (An assigned edge *width* is a no-op until `ferrocad_wgpu` honours it — §5.)
 - Enforce the **min-drag threshold** (`3 logical px × dpr`) in the click-vs-drag decision
   ([`navicube-spec.md`](navicube-spec.md) §8, §14) — the build currently accumulates
   movement but never gates on it.
@@ -170,6 +171,11 @@ Deliverable: the reserved config becomes real, and the specified thresholds are 
 - **The move touches `ferrocad_inventor`.** `ferrocad_inventor/src/navicube.rs` is deleted
   and its tests move to `ferrocad_viewport`; update the doc counts in
   [`inventor-renderer.md`](inventor-renderer.md) §6 and [`navicube.md`](navicube.md) §7.
+- **Edge width is not honoured yet.** A theme can assign a line/edge *width*, but the
+  renderer draws fixed 1-px lines: `ShapeItem::edge_width` is stored-but-unconsumed and
+  `SoDrawStyle` line width is dropped by `ferrocad_wgpu`'s line pipeline. Theming colour
+  works today; theming `edge_width` needs a separate `ferrocad_wgpu` slice (a wide-line
+  pipeline or quad-expansion) before it has any visible effect.
 
 ## 6. Verification
 

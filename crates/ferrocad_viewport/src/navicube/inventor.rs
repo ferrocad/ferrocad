@@ -141,7 +141,7 @@ impl NavicubeView for InventorProducer {
     fn rebuild(&mut self, viewport: &Viewport, visual: &NavicubeVisual, theme: &NavicubeTheme) {
         let mut scene = scene_with(visual.hilite, &visual.away, theme);
         set_orientation(&mut scene, visual.orientation);
-        self.queue = compile_with(&scene, viewport);
+        self.queue = compile_with(&scene, viewport).0;
     }
 
     fn queue(&self) -> &RenderQueue {
@@ -167,7 +167,7 @@ mod tests {
 
     #[test]
     fn scene_compiles_to_all_pieces_and_the_home_button() {
-        let queue = compile(&scene(None));
+        let (queue, _) = compile(&scene(None));
         assert_eq!(queue.len(), 27, "26 pieces plus the Home button");
         let ids: Vec<u32> = queue.packets.iter().map(|p| p.state.id.0).collect();
         assert_eq!(ids, (1..=27).collect::<Vec<u32>>());
@@ -180,7 +180,7 @@ mod tests {
             .count();
         assert_eq!(lines, 12);
         // The highlight recolours exactly one piece.
-        let queue = compile(&scene(Some(NaviTarget::Piece(Piece::TOP))));
+        let (queue, _) = compile(&scene(Some(NaviTarget::Piece(Piece::TOP))));
         let top = queue
             .packets
             .iter()
@@ -191,7 +191,7 @@ mod tests {
 
     #[test]
     fn faces_carry_a_label_texture() {
-        let queue = compile(&scene(None));
+        let (queue, _) = compile(&scene(None));
         for piece in Piece::ALL.iter().filter(|p| p.kind() == PieceKind::Face) {
             let packet = queue
                 .packets
@@ -211,7 +211,7 @@ mod tests {
 
     #[test]
     fn the_home_button_is_a_fixed_labeled_quad() {
-        let queue = compile(&scene(None));
+        let (queue, _) = compile(&scene(None));
         let home = queue
             .packets
             .iter()
@@ -225,6 +225,7 @@ mod tests {
         let mut oriented = scene(None);
         set_orientation(&mut oriented, Piece::TOP.orientation());
         let home = compile(&oriented)
+            .0
             .packets
             .into_iter()
             .find(|p| p.state.id == HOME_PICK_ID)

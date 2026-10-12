@@ -51,6 +51,10 @@ the concrete packet the compiler emits. A packet carries:
 Keeping the boundary a trait (not a struct) is what lets a future D3D/Metal
 backend sit behind it without touching the node model or compiler.
 
+Compilation returns `(RenderQueue, Directives)`: the [`Directives`] are a neutral,
+semantic channel the renderer ignores and the viewport consumes (see
+[`directives.md`](directives.md)).
+
 ## 3. Picking and events
 
 - **Picking** — two paths with the same `Hit` vocabulary:

@@ -59,7 +59,7 @@ fn python_built_scene_extracts_and_compiles() {
         // The root is a separator whose children carry the fields the compiler binds.
         assert_eq!(scene.root.children.len(), 4);
 
-        let queue = compile(&scene);
+        let (queue, _) = compile(&scene);
         assert_eq!(queue.len(), 1, "one mesh in the cube");
         let packet = &queue.packets[0];
         assert_eq!(packet.topology, Topology::Triangles);

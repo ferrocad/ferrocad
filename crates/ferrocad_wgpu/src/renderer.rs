@@ -1037,7 +1037,7 @@ mod tests {
     #[test]
     fn renders_and_reads_back() {
         let _gpu = gpu_guard();
-        let queue = compile(&clip_space_triangle());
+        let (queue, _) = compile(&clip_space_triangle());
         let Ok(mut renderer) = WgpuRenderer::new_default([64, 64]) else {
             eprintln!("no GPU adapter available; skipping offscreen render test");
             return;
@@ -1113,8 +1113,8 @@ mod tests {
     #[test]
     fn overlay_draws_into_its_rect() {
         let _gpu = gpu_guard();
-        let main = compile(&clip_space_triangle());
-        let cube = compile(&overlay_quad());
+        let (main, _) = compile(&clip_space_triangle());
+        let (cube, _) = compile(&overlay_quad());
         let Ok(mut renderer) = WgpuRenderer::new_default([128, 128]) else {
             eprintln!("no GPU adapter available; skipping overlay test");
             return;
@@ -1226,7 +1226,7 @@ mod tests {
 
         // One unified queue: the legacy compile, then the stage's batches appended.
         let merge = || {
-            let mut queue = compile_with(&scene, &viewport);
+            let (mut queue, _) = compile_with(&scene, &viewport);
             stage.emit_batches(&mut queue);
             queue
         };

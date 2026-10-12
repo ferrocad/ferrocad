@@ -172,21 +172,28 @@ tests (was 32): a custom theme recolours both producers, and a config reposition
 
 ### V4 — the directives channel: `SoNaviCube` → neutral model → producers
 
-Deliverable: a `SoNaviCube` scene node drives the neutral navicube on **either**
-producer, through the neutral directives channel ([`directives.md`](directives.md)).
+Deliverable: a `SoNaviCube` scene node drives the neutral navicube on **either** producer,
+through the neutral directives channel ([`directives.md`](directives.md)). Split into three
+sub-slices because it spans four crates.
 
-- `ferrocad_graphics`: `Directives` + `Directive { NaviCube(NaviCubeDirective),
-  EventCallback(u64) }` and `NaviCubeDirective { rect, orientation: Option<Rotation>,
-  hilite: Option<PickId>, orthographic }`; `compile_with` returns `(RenderQueue,
-  Directives)`.
-- `ferrocad_inventor`: `NodeKind::NaviCube(NaviCubeDirective)` (no packet emitted); the
-  compiler lifts it into the directives and migrates `event_callbacks(scene)` into
-  `Directive::EventCallback`.
-- `ferrocad_inventor_py`: `extract_scene` recognises a Python `SoNaviCube` and captures
-  its `SoSF*` fields (the `pivy.coin` surface); the node's colours are ignored (§5 of
-  [`directives.md`](directives.md)).
-- `ferrocad_viewport`: consume `Directive::NaviCube` → `NavicubeVisual` + theme + `Rect`
-  → the producer → overlay `ViewSpec`.
+**V4.1 — the channel ✅ built 2026-10-12**
+
+- `ferrocad_graphics`: `Directives` + `Directive { NaviCube(NaviCubeDirective) }` and
+  `NaviCubeDirective { rect, orientation: Option<Rotation>, hilite: Option<PickId>,
+  orthographic }`; `compile`/`compile_with` return `(RenderQueue, Directives)`.
+- `ferrocad_inventor`: `NodeKind::NaviCube(NaviCubeDirective)`; the compiler lifts it into
+  the directives and emits **no** packet. (`Directive::EventCallback` joins with V4.2.)
+  A test asserts a navicube node compiles to zero packets and one directive.
+
+**V4.2 — the viewport consumes it.** The viewport hosts an overlay from each
+`Directive::NaviCube` (`NaviCubeDirective` + theme → `NavicubeVisual` + `Rect` → the
+producer → overlay `ViewSpec`), and the `SoEventCallback` path migrates from
+`event_callbacks(scene)` into `Directive::EventCallback` (threading the directives through
+the `EventListener` API).
+
+**V4.3 — the `pivy.coin` surface.** `ferrocad_inventor_py::extract_scene` recognises a
+Python `SoNaviCube` and captures its `SoSF*` fields; the node's colours are ignored
+([`directives.md`](directives.md) §5).
 
 **Gate:** a `SoNaviCube` in the scene drives the stage producer (structural); the
 `TestCoinNodeSnapshots` NaviCube fixtures *render*, with pixel-conformance gated on the
@@ -239,4 +246,4 @@ Runs: `cargo test -p ferrocad_viewport -p ferrocad_inventor -p ferrocad_stage`
 | **V1** | Move the model + inventor producer into `ferrocad_viewport::navicube`; add the `NavicubeView` seam and `NavicubeVisual`; the controller drives `Box<dyn NavicubeView>`. No behaviour change. | `ferrocad_viewport`, `ferrocad_inventor` | ✅ |
 | **V2** | `navicube::stage::StageProducer` + the producer-conformance test. | `ferrocad_viewport` | ✅ |
 | **V3** | `NaviCubeConfig`, the viewport `NavicubeTheme`, the min-drag threshold, `draggable`/`rotate_to_nearest`, docs. | `ferrocad_viewport`, docs | ✅ |
-| **V4** | The neutral `Directives` channel in `ferrocad_graphics`; `SoNaviCube → NaviCubeDirective → producers` (see [`directives.md`](directives.md)). | `ferrocad_graphics`, `ferrocad_inventor`, `ferrocad_viewport` | ▢ |
+| **V4** | The neutral `Directives` channel in `ferrocad_graphics`; `SoNaviCube → NaviCubeDirective → producers` (see [`directives.md`](directives.md)). | `ferrocad_graphics`, `ferrocad_inventor`, `ferrocad_viewport` | ◐ (V4.1) |

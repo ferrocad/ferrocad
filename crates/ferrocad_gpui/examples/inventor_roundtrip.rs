@@ -86,7 +86,7 @@ fn main() {
 
 /// Headless: simulate a hover over the cube's centre, render, and write a PNG.
 fn render_headless(mut scene: Scene, camera: ferrocad_inventor::Camera, path: &str) {
-    let queue = compile_with(&scene, &camera.viewport);
+    let (queue, _) = compile_with(&scene, &camera.viewport);
     let [width, height] = camera.viewport.device_size();
     let centre = camera
         .viewport
@@ -111,7 +111,7 @@ fn render_headless(mut scene: Scene, camera: ferrocad_inventor::Camera, path: &s
         },
         hit.as_ref(),
     );
-    let queue = compile_with(&scene, &camera.viewport);
+    let (queue, _) = compile_with(&scene, &camera.viewport);
 
     let mut renderer = WgpuRenderer::new_default(SIZE).unwrap_or_else(|e| {
         eprintln!("ferrocad: could not create a GPU renderer: {e}");

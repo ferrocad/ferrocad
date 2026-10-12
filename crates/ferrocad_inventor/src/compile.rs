@@ -10,25 +10,29 @@
 //! siblings), and a `Separator` isolates its subtree from the state around it.
 
 use crate::batch::{DrawPacket, Generation, MeshId, PickId, RenderQueue};
+use crate::directive::{Directive, Directives};
 use crate::geometry::{Geometry, Topology, Vertex};
 use crate::node::{Node, NodeKind, Scene, SO_SWITCH_ALL};
 use crate::pixels::Viewport;
 use crate::state::State;
 
-/// Compile `scene` into a [`RenderQueue`] at a device-pixel ratio of 1.
+/// Compile `scene` into a `(RenderQueue, Directives)` pair at a device-pixel ratio of 1.
 ///
 /// A convenience for callers that have no viewport (tests, headless tools); the
 /// host uses [`compile_with`].
-pub fn compile(scene: &Scene) -> RenderQueue {
+pub fn compile(scene: &Scene) -> (RenderQueue, Directives) {
     compile_with(scene, &Viewport::default())
 }
 
-/// Compile `scene` into a [`RenderQueue`] for `viewport`.
+/// Compile `scene` into a `(RenderQueue, Directives)` pair for `viewport`.
 ///
 /// Each [`NodeKind::Mesh`] becomes one packet. Geometry is attached **on every
 /// compile** (a fresh upload from the compiler's point of view); a renderer keys its
 /// upload cache on `(mesh_id, generation)` and, because a stable scene compiles to
 /// the same ids and generations each time, only uploads once.
+///
+/// Semantic nodes (a [`NodeKind::NaviCube`]) emit **no** packet: they are lifted into
+/// the [`Directives`] the viewport consumes (see `docs/directives.md`).
 ///
 /// `viewport`'s device-pixel ratio seeds [`State::device_pixel_ratio`], which
 /// screen-space nodes read while building geometry. Because that scaling is baked in
@@ -36,13 +40,14 @@ pub fn compile(scene: &Scene) -> RenderQueue {
 /// display with a different scale factor) requires recompiling the scene.
 ///
 /// [`Scene::root`] is treated as a group: its children are traversed at the top level.
-pub fn compile_with(scene: &Scene, viewport: &Viewport) -> RenderQueue {
+pub fn compile_with(scene: &Scene, viewport: &Viewport) -> (RenderQueue, Directives) {
     let mut state = State::default();
     state.device_pixel_ratio = viewport.device_pixel_ratio();
 
     let mut ctx = Compiler {
         next_mesh: 0,
         packets: Vec::new(),
+        directives: Directives::new(),
     };
     let mut coordinates = Vec::new();
     let mut tex_coords = Vec::new();
@@ -53,14 +58,18 @@ pub fn compile_with(scene: &Scene, viewport: &Viewport) -> RenderQueue {
         &mut tex_coords,
         &mut ctx,
     );
-    RenderQueue {
-        packets: ctx.packets,
-    }
+    (
+        RenderQueue {
+            packets: ctx.packets,
+        },
+        ctx.directives,
+    )
 }
 
 struct Compiler {
     next_mesh: u64,
     packets: Vec<DrawPacket>,
+    directives: Directives,
 }
 
 /// Walk a list of siblings in order, threading `state` and the coordinate/texture
@@ -142,6 +151,10 @@ fn walk_children(
                         state: state.snapshot(),
                     });
                 }
+            }
+            // A navigation-cube node draws nothing: it becomes a host-facing directive.
+            NodeKind::NaviCube(directive) => {
+                ctx.directives.push(Directive::NaviCube(*directive));
             }
             // Custom node classes carry no geometry the core understands yet.
             NodeKind::Custom(_) => {}
@@ -256,7 +269,7 @@ mod tests {
                 mesh(),
             ]),
         };
-        let queue = compile(&scene);
+        let (queue, _) = compile(&scene);
         assert_eq!(queue.len(), 1);
         let packet = &queue.packets[0];
         assert_eq!(packet.topology, Topology::Triangles);
@@ -293,7 +306,7 @@ mod tests {
                 ]),
             ]),
         };
-        let queue = compile(&scene);
+        let (queue, _) = compile(&scene);
         assert_eq!(queue.len(), 2);
         assert_eq!(queue.packets[0].state.color, [1.0, 0.0, 0.0, 1.0]);
         assert_eq!(queue.packets[1].state.color, [1.0, 1.0, 1.0, 1.0]);
@@ -314,7 +327,7 @@ mod tests {
                 mesh(),
             ]),
         };
-        let queue = compile(&scene);
+        let (queue, _) = compile(&scene);
         assert_eq!(queue.len(), 1);
         assert_eq!(queue.packets[0].state.color, [0.1, 0.2, 0.3, 1.0]);
     }
@@ -339,9 +352,32 @@ mod tests {
 
     #[test]
     fn switch_honours_which_child_sentinels() {
-        assert_eq!(compile(&switch_scene(0)).len(), 1);
-        assert_eq!(compile(&switch_scene(1)).len(), 1);
-        assert_eq!(compile(&switch_scene(crate::node::SO_SWITCH_NONE)).len(), 0);
-        assert_eq!(compile(&switch_scene(crate::node::SO_SWITCH_ALL)).len(), 2);
+        assert_eq!(compile(&switch_scene(0)).0.len(), 1);
+        assert_eq!(compile(&switch_scene(1)).0.len(), 1);
+        assert_eq!(compile(&switch_scene(crate::node::SO_SWITCH_NONE)).0.len(), 0);
+        assert_eq!(compile(&switch_scene(crate::node::SO_SWITCH_ALL)).0.len(), 2);
+    }
+
+    #[test]
+    fn a_navicube_node_becomes_a_directive_not_a_packet() {
+        use crate::{NaviCubeDirective, Rect};
+        let directive = NaviCubeDirective {
+            rect: Rect::new(10, 10, 50, 50),
+            orientation: None,
+            hilite: None,
+            orthographic: true,
+        };
+        let scene = Scene {
+            root: separator(vec![Node {
+                kind: NodeKind::NaviCube(directive),
+                children: vec![],
+            }]),
+        };
+        let (queue, directives) = compile(&scene);
+        assert!(queue.is_empty(), "a navicube node draws nothing");
+        assert_eq!(
+            directives.navicubes().copied().collect::<Vec<_>>(),
+            vec![directive]
+        );
     }
 }

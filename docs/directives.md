@@ -42,18 +42,15 @@ either depending on the other.
 ## 3. Shapes
 
 ```rust
-#[derive(Clone, Debug, Default)]
-pub struct Directives(Vec<Directive>);
-
-#[derive(Clone, Debug)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Directive {
-    /// A host-rendered navicube overlay (from `SoNaviCube`; a stage may emit it too).
+    /// A host-rendered navicube overlay (from a `SoNaviCube` node).
     NaviCube(NaviCubeDirective),
-    /// A scripted event-callback id the host dispatches to (`SoEventCallback`).
-    EventCallback(u64),
+    // `EventCallback(u64)` joins when the `SoEventCallback` path migrates (V4.2).
 }
 
 /// A navicube overlay request — structural only; **styling is the Rust core's** (§5).
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub struct NaviCubeDirective {
     pub rect: Rect,
     /// `None` mirrors the main camera (the modern default); `Some` is explicit (legacy).
@@ -103,9 +100,10 @@ ferrocad_graphics   RenderQueue · Camera · ViewSpec · Directives · Directive
 
 ## 7. Producers and consumers
 
-- **`ferrocad_inventor`** — a `NodeKind::NaviCube(NaviCubeDirective)` node emits **no
-  packet**; the compiler lifts it into `Directives`. `SoEventCallback` migrates from
-  `event_callbacks(scene)` into `Directive::EventCallback`.
+- **`ferrocad_inventor`** — a `NodeKind::NaviCube(NaviCubeDirective)` node emits **no**
+  packet; the compiler lifts it into `Directives`. (`SoEventCallback` migrates from
+  `event_callbacks(scene)` into `Directive::EventCallback` in V4.2, threading the
+  directives through the `EventListener` API — so there is then one channel, not two.)
 - **`ferrocad_stage`** — the channel is neutral, so a stage can emit directives (e.g. a
   stage-side navicube); that is why this lives in `ferrocad_graphics`.
 - **`ferrocad_viewport`** — consumes `Directive::NaviCube` (`NaviCubeDirective` + the

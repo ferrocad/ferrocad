@@ -35,7 +35,7 @@
 //! use ferrocad_inventor::{Scene, compile};
 //!
 //! // An empty scene compiles to an empty queue (nothing to draw yet).
-//! let queue = compile(&Scene::default());
+//! let (queue, _directives) = compile(&Scene::default());
 //! assert!(queue.is_empty());
 //! ```
 
@@ -49,13 +49,14 @@ pub mod view;
 // The neutral draw contract, camera/viewport and picking live in `ferrocad_graphics`;
 // they are re-exported (modules and types) so existing `ferrocad_inventor::…` paths
 // keep working. New code should depend on `ferrocad_graphics` directly.
-pub use ferrocad_graphics::{batch, camera, geometry, pick, pixels};
+pub use ferrocad_graphics::{batch, camera, directive, geometry, pick, pixels};
 pub use ferrocad_graphics::pick::{
     pick_at, pick_at_hit, pick_at_rect, pick_at_rect_hit, pick_hit,
 };
 pub use ferrocad_graphics::{
-    Camera, DrawBatch, DrawPacket, Generation, Geometry, Hit, MeshId, PickId, Projection, Ray,
-    Rect, RenderQueue, StateSnapshot, Texture2, Topology, Vertex, Viewport,
+    Camera, Directive, Directives, DrawBatch, DrawPacket, Generation, Geometry, Hit, MeshId,
+    NaviCubeDirective, PickId, Projection, Ray, Rect, RenderQueue, StateSnapshot, Texture2, Topology,
+    Vertex, Viewport,
 };
 
 pub use compile::{compile, compile_with};

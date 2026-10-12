@@ -710,7 +710,7 @@ impl<V: InventorView + 'static> Render for InventorViewport<V> {
 /// Compile the inventor scene and append the stage's batches, so the two producers
 /// share one queue (and thus one render pass and one depth buffer).
 fn merge_queue(scene: &Scene, stage: &Stage, viewport: &Viewport) -> RenderQueue {
-    let mut queue = compile_with(scene, viewport);
+    let (mut queue, _directives) = compile_with(scene, viewport);
     stage.emit_batches(&mut queue);
     queue
 }
@@ -1019,7 +1019,7 @@ mod tests {
             ..Camera::identity()
         };
         let scene = triangle_scene();
-        let expected = compile_with(&scene, &camera.viewport).len();
+        let expected = compile_with(&scene, &camera.viewport).0.len();
         let viewport = InventorViewport::new(fake(ImageData::default()), camera, scene);
         assert_eq!(viewport.queue.len(), expected);
         assert_eq!(viewport.scene().root.children.len(), 3);

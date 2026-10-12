@@ -9,6 +9,7 @@ use std::sync::Arc;
 
 use ferrocad_types::Placement;
 
+use crate::directive::NaviCubeDirective;
 use crate::geometry::{Texture2, Topology};
 
 /// A scene: a root node. The compiler walks this to produce a render queue.
@@ -76,6 +77,12 @@ pub enum NodeKind {
     /// `SoEventCallback` live on the facade side, keyed by this id (the core stays
     /// Python-free). The compiler treats it as a leaf.
     EventCallback(u64),
+    /// A navigation-cube overlay node (`SoNaviCube`).
+    ///
+    /// It draws nothing into the scene: the compiler lifts it into a
+    /// [`Directive::NaviCube`](crate::Directive) that the viewport hosts as an overlay
+    /// (see `docs/directives.md`).
+    NaviCube(NaviCubeDirective),
     /// A node class whose behaviour is registered from outside the core.
     Custom(String),
 }

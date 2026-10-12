@@ -437,7 +437,7 @@ mod tests {
     fn inventor_scene_script_builds_a_compilable_cube() {
         let _guard = crate::PYTHON_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let scene = inventor_scene().expect("build the scene from Python");
-        let queue = compile(&scene);
+        let (queue, _) = compile(&scene);
         assert_eq!(queue.len(), 1, "one mesh in the cube");
         assert_eq!(queue.packets[0].state.color, [0.9, 0.6, 0.2, 1.0]);
     }

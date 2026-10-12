@@ -6,6 +6,9 @@ menu and arrow buttons remain deferred.**
 Companion to [`inventor-renderer.md`](inventor-renderer.md) (the render stack this
 builds on), [`inventor-plan.md`](inventor-plan.md) (the emulation phase roadmap), and
 the [`coin-bridge-reuse-assessment.md`](coin-bridge-reuse-assessment.md) evidence.
+The producer-neutral **specification** is [`navicube-spec.md`](navicube-spec.md), and the
+plan to make the cube implementable by both the legacy and modern stacks is
+[`navicube-plan.md`](navicube-plan.md); this note remains the as-built record.
 
 This note records how FreeCAD's navigation cube works and what it took to
 reimplement it on the FerroCAD render stack (§7 is the as-built map).

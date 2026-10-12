@@ -210,7 +210,9 @@ traversal/compile, picking/events — adapted to the code as it stands) is in
 2. **Navigation-cube polish** (N4b, remaining): a context menu and the arrow buttons
    (see [`navicube.md`](navicube.md)). The pieces, the overlay pass, drag-orbit, the
    animated snap, translucent away-facing faces, baked face labels and the `Home`
-   button are built.
+   button are built. Separating the cube's model from its producer — so the modern
+   `ferrocad_stage` stack can build it too — is specified in
+   [`navicube-spec.md`](navicube-spec.md) and planned in [`navicube-plan.md`](navicube-plan.md).
 3. **Line/point pipeline polish** and **feature snapping** from the G-buffer
    `part_idx` (the pick pass now supplies the sub-element index).
 4. **Grow the `pivy.coin` facade** and the `TypeRegistry` toward the ~63

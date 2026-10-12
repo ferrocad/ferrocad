@@ -1001,6 +1001,34 @@ extracted `Scene` is a copy).
 
 ---
 
+### Navigation cube (NaviCube) — slices N1–N3 ✅
+
+**Goal:** the viewer-corner orientation gizmo (FreeCAD's `Gui::NaviCube`), as the
+first real overlay on the render stack. Plan and status: [`navicube.md`](navicube.md).
+
+**Built:**
+- **Renderer (N1):** a device-pixel `Rect` and a **rect-relative pick**
+  (`Camera::ray_through_rect`, `pick_at_rect`); a **multi-view pass**
+  (`ViewSpec` + `InventorView::draw_frame`; `WgpuRenderer::render_views` with per-view
+  `set_viewport`/`set_scissor_rect` and an overlay pipeline — depth off, `Always`,
+  alpha blend); a per-shape selection id (`NodeKind::PickId`).
+- **Cube + controller (N2):** `ferrocad_inventor::navicube` (`Face`, `scene(hilite)`,
+  `camera(rect)`, `snap_view`) and `ferrocad_gpui::navicube::NaviCube` (corner rect ×
+  DPR, camera mirroring, base/hilite colours); `InventorViewport::with_navicube`.
+- **Interaction (N3):** rect hit-test → hover highlight (recompile on change); a click
+  snaps the main camera onto the picked face, keeping the camera distance.
+
+**Verification:** `ferrocad_inventor` 16 · `ferrocad_inventor_py` 17 · `ferrocad_wgpu`
+**2** (incl. `overlay_draws_into_its_rect`) · `ferrocad_gpui` 15 (incl. 6 NaviCube
+unit tests). The `inventor_roundtrip` example renders the cube in the corner and
+mirrors a tilted camera.
+
+**Deferred (N4):** face labels (need a texture path), edge/corner picks (need
+line/point pipelines + pick), translucent inactive faces, drag-rotate, animated snap,
+`Home`/arrows.
+
+---
+
 ## 2. Decisions now unlocked by the spike work
 
 These are no longer open questions — the spike produced evidence:

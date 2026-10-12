@@ -24,13 +24,27 @@
 use ferrocad_gpui::InventorViewport;
 use ferrocad_gpui::scene::{HoverHighlight, sample_camera, sample_scene};
 use ferrocad_inventor::{
-    Event, EventListener, InventorView, Scene, Viewport, compile_with, pick_at_hit,
+    Camera, Event, EventListener, InventorView, Scene, ViewSpec, Viewport, compile_with, pick_at_hit,
 };
+use ferrocad_types::{Placement, Rotation, Vector3};
 use ferrocad_wgpu::WgpuRenderer;
 use gpui::{App, AppContext, WindowBounds, WindowOptions, application, bounds, point, px, size};
 
 /// The offscreen render target size (device pixels; 1x here for the PoC).
 const SIZE: [u32; 2] = [640, 480];
+
+/// The sample camera, tilted toward an axonometric view so both the scene and the
+/// navigation cube show three faces.
+fn camera(viewport: Viewport) -> Camera {
+    let direction = Vector3::new(1.0, 0.9, 1.0).normalize();
+    let mut camera = sample_camera(viewport);
+    camera.view = Placement::new(
+        Vector3::new(0.0, 0.0, -4.0),
+        Rotation::from_vectors(direction, Vector3::new(0.0, 0.0, 1.0)),
+    )
+    .to_matrix();
+    camera
+}
 
 /// Build the scene the workbench way — a `from pivy import coin` script extracted
 /// into a [`Scene`] — and fall back to the Rust twin if the interpreter is absent.
@@ -42,7 +56,7 @@ fn build_scene() -> Scene {
 }
 
 fn main() {
-    let camera = sample_camera(Viewport::new(SIZE, 1.0));
+    let camera = camera(Viewport::new(SIZE, 1.0));
     let scene = build_scene();
 
     let mut args = std::env::args().skip(1);
@@ -59,9 +73,11 @@ fn main() {
 
     application().run(move |cx: &mut App| {
         cx.open_window(window_options(), move |_window, cx| {
+            let navicube = ferrocad_gpui::NaviCube::new(camera.viewport);
             cx.new(|_cx| {
                 InventorViewport::new(renderer, camera, scene)
                     .with_listener(Box::new(HoverHighlight::default()))
+                    .with_navicube(navicube)
             })
         })
         .unwrap();
@@ -85,7 +101,7 @@ fn render_headless(mut scene: Scene, camera: ferrocad_inventor::Camera, path: &s
         &mut scene,
     );
 
-    // Deliver the pick to any Python `SoEventCallback` (S4): a click at the centre.
+    // Deliver the pick to any Python `SoEventCallback`: a click at the centre.
     ferrocad_gpui::python::dispatch(
         &scene,
         &Event::MouseButton {
@@ -101,7 +117,19 @@ fn render_headless(mut scene: Scene, camera: ferrocad_inventor::Camera, path: &s
         eprintln!("ferrocad: could not create a GPU renderer: {e}");
         std::process::exit(1);
     });
-    renderer.draw(&queue, &camera).unwrap_or_else(|e| {
+    // Composite the navigation cube over the scene in the corner.
+    let mut navicube = ferrocad_gpui::NaviCube::new(camera.viewport);
+    navicube.sync(&camera);
+    let views = [
+        ViewSpec {
+            queue: &queue,
+            camera: &camera,
+            rect: None,
+            overlay: false,
+        },
+        navicube.view(),
+    ];
+    renderer.draw_frame(&views).unwrap_or_else(|e| {
         eprintln!("ferrocad: draw failed: {e}");
         std::process::exit(1);
     });

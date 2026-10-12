@@ -10,6 +10,7 @@
 //! `docs/architecture.md` and `docs/repackaging.md`).
 
 pub mod inventor_view;
+pub mod navicube;
 pub mod python;
 pub mod scene;
 pub mod shell;
@@ -23,6 +24,7 @@ use gpui::{
 };
 
 pub use inventor_view::InventorViewport;
+pub use navicube::NaviCube;
 pub use shell::{Shell, ShellModel};
 
 /// Serializes tests that drive the shared embedded CPython instance.

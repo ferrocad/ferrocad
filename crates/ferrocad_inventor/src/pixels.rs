@@ -90,6 +90,57 @@ impl Viewport {
             (device_height - device[1] as f32 - 1.0) / scale,
         ]
     }
+
+    /// The whole viewport as a [`Rect`], for code that treats a sub-rectangle and the
+    /// full frame uniformly.
+    pub fn rect(&self) -> Rect {
+        Rect::new(0, 0, self.device_size[0], self.device_size[1])
+    }
+}
+
+/// A **device-pixel** rectangle within a render target, in the same convention as
+/// [`Viewport`] device positions: **bottom-left origin**.
+///
+/// Used for overlays (the navigation cube's corner) — both to confine a render pass
+/// with `set_viewport`/`set_scissor_rect` and to compute a rect-relative pick
+/// ([`Camera::ray_through_rect`](crate::Camera::ray_through_rect)).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Rect {
+    /// Left edge, in device pixels.
+    pub x: i32,
+    /// Bottom edge, in device pixels.
+    pub y: i32,
+    /// Width, in device pixels.
+    pub width: u32,
+    /// Height, in device pixels.
+    pub height: u32,
+}
+
+impl Rect {
+    /// A rectangle at `(x, y)` (bottom-left origin) of the given size.
+    pub fn new(x: i32, y: i32, width: u32, height: u32) -> Self {
+        Self {
+            x,
+            y,
+            width,
+            height,
+        }
+    }
+
+    /// Whether the device position lies inside the rectangle.
+    pub fn contains(&self, device: [i32; 2]) -> bool {
+        device[0] >= self.x
+            && device[0] < self.x + self.width as i32
+            && device[1] >= self.y
+            && device[1] < self.y + self.height as i32
+    }
+
+    /// The position relative to the rectangle's bottom-left corner; `None` when the
+    /// point is outside.
+    pub fn relative(&self, device: [i32; 2]) -> Option<[i32; 2]> {
+        self.contains(device)
+            .then_some([device[0] - self.x, device[1] - self.y])
+    }
 }
 
 #[cfg(test)]
@@ -125,5 +176,18 @@ mod tests {
     #[test]
     fn rejects_a_zero_ratio() {
         assert_eq!(Viewport::new([800, 600], 0.0).device_pixel_ratio(), 1.0);
+    }
+
+    #[test]
+    fn rect_contains_and_relatives_a_device_point() {
+        // A 100x100 overlay in the top-right of an 800x600 target (bottom-left origin).
+        let rect = Rect::new(700, 500, 100, 100);
+        assert!(rect.contains([750, 550]));
+        assert!(!rect.contains([699, 550]));
+        assert!(!rect.contains([750, 499]));
+        assert_eq!(rect.relative([750, 550]), Some([50, 50]));
+        assert_eq!(rect.relative([100, 100]), None);
+        // The whole viewport is one rect at 0,0.
+        assert_eq!(Viewport::new([800, 600], 1.0).rect(), Rect::new(0, 0, 800, 600));
     }
 }

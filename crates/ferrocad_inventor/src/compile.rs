@@ -9,7 +9,7 @@
 //! affects the traversal that *follows* it within its `Separator` (i.e. later
 //! siblings), and a `Separator` isolates its subtree from the state around it.
 
-use crate::batch::{DrawPacket, Generation, MeshId, RenderQueue};
+use crate::batch::{DrawPacket, Generation, MeshId, PickId, RenderQueue};
 use crate::geometry::{Geometry, Topology, Vertex};
 use crate::node::{Node, NodeKind, Scene, SO_SWITCH_ALL};
 use crate::pixels::Viewport;
@@ -85,6 +85,10 @@ fn walk_children(
             }
             NodeKind::Coordinate3(points) => {
                 *coordinates = points.clone();
+            }
+            // A selection id applies to the shapes that follow it.
+            NodeKind::PickId(id) => {
+                state.id = PickId(*id);
             }
             // Normals round-trip through the model but are not consumed yet
             // (flat shading); Phase 3 will thread them into the mesh compiler.

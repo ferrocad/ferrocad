@@ -22,6 +22,7 @@
 
 use crate::batch::RenderQueue;
 use crate::camera::Camera;
+use crate::pixels::Rect;
 
 /// A CPU-side RGBA8 image, row-major, top-left origin.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -59,4 +60,33 @@ pub trait InventorView {
 
     /// The last drawn frame read back as an RGBA image (the MVP path).
     fn image(&mut self) -> Result<ImageData, Self::Error>;
+
+    /// Draw a frame of one or more views. The first is the main view; later ones are
+    /// **overlays** ([`ViewSpec::overlay`]), each confined to its [`ViewSpec::rect`].
+    ///
+    /// The default draws only the main view (a backend without overlay support still
+    /// renders the scene). `ferrocad_wgpu` overrides it to render every view in one
+    /// pass.
+    fn draw_frame(&mut self, views: &[ViewSpec<'_>]) -> Result<(), Self::Error> {
+        match views.first() {
+            Some(view) => self.draw(view.queue, view.camera),
+            None => Ok(()),
+        }
+    }
+}
+
+/// One view in a multi-view frame: a compiled queue, its camera, and — for overlays —
+/// the device-pixel rectangle it is confined to.
+#[derive(Clone, Copy)]
+pub struct ViewSpec<'a> {
+    /// The compiled queue to draw.
+    pub queue: &'a RenderQueue,
+    /// The camera to draw it with.
+    pub camera: &'a Camera,
+    /// The device-pixel rectangle to confine the draw to (`None` = the whole target).
+    /// Bottom-left origin, like [`Rect`].
+    pub rect: Option<Rect>,
+    /// Whether this is an overlay: drawn on top of the main view with depth off and
+    /// alpha blending, and not clearing the target.
+    pub overlay: bool,
 }

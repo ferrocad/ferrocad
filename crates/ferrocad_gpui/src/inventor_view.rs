@@ -16,13 +16,15 @@ use std::sync::Arc;
 
 use ferrocad_inventor::{
     Camera, Event, EventListener, Hit, ImageData, InventorView, PickId, RenderQueue, Scene,
-    compile_with, pick_at_hit,
+    ViewSpec, compile_with, pick_at_hit,
 };
 use gpui::{
     AnyElement, Context, IntoElement, MouseButton, MouseDownEvent, MouseExitEvent, MouseMoveEvent,
     MouseUpEvent, ObjectFit, Render, RenderImage, Window, div, img, prelude::*,
 };
 use image::{Frame, ImageBuffer, Rgba};
+
+use crate::navicube::NaviCube;
 
 /// A gpui view that presents an [`InventorView`] (image path) and routes pointer
 /// events into the scene.
@@ -32,6 +34,8 @@ pub struct InventorViewport<V: InventorView> {
     scene: Scene,
     queue: RenderQueue,
     listeners: Vec<Box<dyn EventListener>>,
+    /// The navigation-cube overlay, when enabled.
+    navicube: Option<NaviCube>,
     /// The object currently under the pointer.
     hover: Option<PickId>,
     frame: Option<Arc<RenderImage>>,
@@ -47,6 +51,7 @@ impl<V: InventorView> InventorViewport<V> {
             scene,
             queue,
             listeners: Vec::new(),
+            navicube: None,
             hover: None,
             frame: None,
         }
@@ -56,6 +61,12 @@ impl<V: InventorView> InventorViewport<V> {
     /// listener sees every event, in the order added.
     pub fn with_listener(mut self, listener: Box<dyn EventListener>) -> Self {
         self.listeners.push(listener);
+        self
+    }
+
+    /// Show a navigation cube in the viewport corner.
+    pub fn with_navicube(mut self, navicube: NaviCube) -> Self {
+        self.navicube = Some(navicube);
         self
     }
 
@@ -82,18 +93,47 @@ impl<V: InventorView> InventorViewport<V> {
 
     /// Deliver a pointer move, in **logical** window coordinates (top-left origin).
     ///
-    /// Returns whether the scene changed (and so needs repainting).
+    /// Over the navigation cube this hovers its faces; otherwise it picks the main
+    /// scene. Returns whether the scene changed (and so needs repainting).
     pub fn handle_pointer(&mut self, logical: [f32; 2]) -> bool {
         let device = self.camera.viewport.to_device(logical);
-        let hit = pick_at_hit(&self.queue, &self.camera, device);
-        self.hover = hit.as_ref().map(|hit| hit.id);
-        let event = Event::MouseMove { position: device };
-        self.dispatch(&event, hit.as_ref())
+        let mut changed = false;
+        if let Some(cube) = self.navicube.as_mut() {
+            if cube.rect().contains(device) {
+                let face = cube.hit(device);
+                self.hover = None;
+                return cube.set_hilite(face);
+            }
+            changed = cube.set_hilite(None);
+        }
+        changed | self.pick_main(device)
     }
 
     /// Deliver a mouse-button change, in **logical** window coordinates.
+    ///
+    /// A press on a navigation-cube face snaps the main camera onto it; otherwise the
+    /// event goes to the main scene's listeners.
     pub fn handle_button(&mut self, logical: [f32; 2], button: u8, down: bool) -> bool {
         let device = self.camera.viewport.to_device(logical);
+        let navicube_face = self
+            .navicube
+            .as_ref()
+            .filter(|cube| cube.rect().contains(device))
+            .and_then(|cube| cube.hit(device));
+        if self
+            .navicube
+            .as_ref()
+            .is_some_and(|cube| cube.rect().contains(device))
+        {
+            if down {
+                if let Some(face) = navicube_face {
+                    self.camera.view = crate::navicube::snap_view(face, &self.camera);
+                    self.recompile();
+                    return true;
+                }
+            }
+            return false;
+        }
         let hit = pick_at_hit(&self.queue, &self.camera, device);
         let event = Event::MouseButton {
             position: device,
@@ -107,6 +147,14 @@ impl<V: InventorView> InventorViewport<V> {
     pub fn handle_pointer_leave(&mut self) -> bool {
         self.hover = None;
         self.dispatch(&Event::MouseLeave, None)
+    }
+
+    /// Pick the main scene at a device position and run the listeners.
+    fn pick_main(&mut self, device: [i32; 2]) -> bool {
+        let hit = pick_at_hit(&self.queue, &self.camera, device);
+        self.hover = hit.as_ref().map(|hit| hit.id);
+        let event = Event::MouseMove { position: device };
+        self.dispatch(&event, hit.as_ref())
     }
 
     /// Run the listeners on an event and recompile if any changed the scene.
@@ -130,9 +178,36 @@ impl<V: InventorView> InventorViewport<V> {
         self.queue = compile_with(&self.scene, &self.camera.viewport);
     }
 
-    /// Draw the scene and read it back, refreshing the cached frame.
+    /// Draw the scene (and the navigation cube, when enabled) and read it back,
+    /// refreshing the cached frame.
     fn refresh(&mut self) {
-        if self.view.draw(&self.queue, &self.camera).is_ok() {
+        if let Some(cube) = self.navicube.as_mut() {
+            cube.sync(&self.camera);
+        }
+        let drawn = match self.navicube.as_ref() {
+            Some(cube) => {
+                let views = [
+                    ViewSpec {
+                        queue: &self.queue,
+                        camera: &self.camera,
+                        rect: None,
+                        overlay: false,
+                    },
+                    cube.view(),
+                ];
+                self.view.draw_frame(&views).is_ok()
+            }
+            None => {
+                let views = [ViewSpec {
+                    queue: &self.queue,
+                    camera: &self.camera,
+                    rect: None,
+                    overlay: false,
+                }];
+                self.view.draw_frame(&views).is_ok()
+            }
+        };
+        if drawn {
             if let Ok(image) = self.view.image() {
                 self.frame = Some(Arc::new(render_image(image)));
             }

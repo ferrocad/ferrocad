@@ -11,6 +11,7 @@ use ferrocad_types::Matrix4;
 use crate::batch::{PickId, RenderQueue};
 use crate::camera::Camera;
 use crate::geometry::Topology;
+use crate::pixels::Rect;
 
 /// A world-space ray. `direction` is normalised.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -55,9 +56,17 @@ impl Camera {
     ///
     /// `None` if the view-projection is singular.
     pub fn ray_through(&self, device: [i32; 2]) -> Option<Ray> {
-        let [width, height] = self.viewport.device_size();
-        let ndc_x = 2.0 * f64::from(device[0]) / f64::from(width) - 1.0;
-        let ndc_y = 2.0 * f64::from(device[1]) / f64::from(height) - 1.0;
+        self.ray_through_rect(self.viewport.rect(), device)
+    }
+
+    /// The world-space ray through a device position **within `rect`** (bottom-left
+    /// origin): the NDC is computed relative to the rectangle, so an overlay with its
+    /// own rect picks through its own view.
+    pub fn ray_through_rect(&self, rect: Rect, device: [i32; 2]) -> Option<Ray> {
+        let width = f64::from(rect.width.max(1));
+        let height = f64::from(rect.height.max(1));
+        let ndc_x = 2.0 * f64::from(device[0] - rect.x) / width - 1.0;
+        let ndc_y = 2.0 * f64::from(device[1] - rect.y) / height - 1.0;
 
         let inverse = invert(&self.view_projection())?;
         let near = unproject(&inverse, ndc_x, ndc_y, 0.0);
@@ -137,6 +146,22 @@ pub fn pick_at(queue: &RenderQueue, camera: &Camera, device: [i32; 2]) -> Option
 /// The [`Hit`] under a device position, if any.
 pub fn pick_at_hit(queue: &RenderQueue, camera: &Camera, device: [i32; 2]) -> Option<Hit> {
     let ray = camera.ray_through(device)?;
+    pick_hit(queue, &ray)
+}
+
+/// The [`PickId`] under a device position **within `rect`** (an overlay), if any.
+pub fn pick_at_rect(queue: &RenderQueue, camera: &Camera, rect: Rect, device: [i32; 2]) -> Option<PickId> {
+    pick_at_rect_hit(queue, camera, rect, device).map(|hit| hit.id)
+}
+
+/// The [`Hit`] under a device position **within `rect`** (an overlay), if any.
+pub fn pick_at_rect_hit(
+    queue: &RenderQueue,
+    camera: &Camera,
+    rect: Rect,
+    device: [i32; 2],
+) -> Option<Hit> {
+    let ray = camera.ray_through_rect(rect, device)?;
     pick_hit(queue, &ray)
 }
 

@@ -15,6 +15,9 @@ pub const DEPTH_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Depth32Float;
 pub struct ScenePipelines {
     /// Opaque triangles (the common case).
     pub opaque: wgpu::RenderPipeline,
+    /// Overlays (the navigation cube): drawn on top of the main view — depth writes
+    /// off, depth compare `Always`, alpha blending.
+    pub overlay: wgpu::RenderPipeline,
 }
 
 impl ScenePipelines {
@@ -39,46 +42,66 @@ impl ScenePipelines {
         });
 
         let attributes = wgpu::vertex_attr_array![0 => Float32x3, 1 => Float32x3];
-        let opaque = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-            label: Some("ferrocad opaque"),
-            layout: Some(&layout),
-            vertex: wgpu::VertexState {
-                module: &shader,
-                entry_point: Some("vs_main"),
-                compilation_options: Default::default(),
-                buffers: &[wgpu::VertexBufferLayout {
-                    array_stride: size_of::<GpuVertex>() as u64,
-                    step_mode: wgpu::VertexStepMode::Vertex,
-                    attributes: &attributes,
-                }],
-            },
-            primitive: wgpu::PrimitiveState::default(),
-            depth_stencil: Some(wgpu::DepthStencilState {
-                format: DEPTH_FORMAT,
-                depth_write_enabled: Some(true),
-                depth_compare: Some(wgpu::CompareFunction::Less),
-                stencil: wgpu::StencilState::default(),
-                bias: wgpu::DepthBiasState::default(),
-            }),
-            multisample: wgpu::MultisampleState {
-                count: sample_count,
-                mask: !0,
-                alpha_to_coverage_enabled: false,
-            },
-            fragment: Some(wgpu::FragmentState {
-                module: &shader,
-                entry_point: Some("fs_main"),
-                compilation_options: Default::default(),
-                targets: &[Some(wgpu::ColorTargetState {
-                    format: color_format,
-                    blend: Some(wgpu::BlendState::REPLACE),
-                    write_mask: wgpu::ColorWrites::ALL,
-                })],
-            }),
-            multiview_mask: None,
-            cache: None,
-        });
+        let vertex_buffers = [wgpu::VertexBufferLayout {
+            array_stride: size_of::<GpuVertex>() as u64,
+            step_mode: wgpu::VertexStepMode::Vertex,
+            attributes: &attributes,
+        }];
 
-        Self { opaque }
+        let make = |label: &str,
+                    depth_write_enabled: bool,
+                    depth_compare: wgpu::CompareFunction,
+                    blend: wgpu::BlendState| {
+            device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+                label: Some(label),
+                layout: Some(&layout),
+                vertex: wgpu::VertexState {
+                    module: &shader,
+                    entry_point: Some("vs_main"),
+                    compilation_options: Default::default(),
+                    buffers: &vertex_buffers,
+                },
+                primitive: wgpu::PrimitiveState::default(),
+                depth_stencil: Some(wgpu::DepthStencilState {
+                    format: DEPTH_FORMAT,
+                    depth_write_enabled: Some(depth_write_enabled),
+                    depth_compare: Some(depth_compare),
+                    stencil: wgpu::StencilState::default(),
+                    bias: wgpu::DepthBiasState::default(),
+                }),
+                multisample: wgpu::MultisampleState {
+                    count: sample_count,
+                    mask: !0,
+                    alpha_to_coverage_enabled: false,
+                },
+                fragment: Some(wgpu::FragmentState {
+                    module: &shader,
+                    entry_point: Some("fs_main"),
+                    compilation_options: Default::default(),
+                    targets: &[Some(wgpu::ColorTargetState {
+                        format: color_format,
+                        blend: Some(blend),
+                        write_mask: wgpu::ColorWrites::ALL,
+                    })],
+                }),
+                multiview_mask: None,
+                cache: None,
+            })
+        };
+
+        let opaque = make(
+            "ferrocad opaque",
+            true,
+            wgpu::CompareFunction::Less,
+            wgpu::BlendState::REPLACE,
+        );
+        let overlay = make(
+            "ferrocad overlay",
+            false,
+            wgpu::CompareFunction::Always,
+            wgpu::BlendState::ALPHA_BLENDING,
+        );
+
+        Self { opaque, overlay }
     }
 }

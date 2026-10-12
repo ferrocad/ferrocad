@@ -16,7 +16,8 @@ use std::collections::HashMap;
 use std::fmt;
 
 use ferrocad_inventor::{
-    Camera, DrawBatch, Generation, ImageData, InventorView, MeshId, RenderQueue,
+    Camera, DrawBatch, DrawPacket, Generation, ImageData, InventorView, MeshId, Rect, RenderQueue,
+    ViewSpec,
 };
 use ferrocad_types::Matrix4;
 
@@ -217,14 +218,7 @@ impl WgpuRenderer {
         batches: &[B],
     ) -> Result<(), RenderError> {
         let count = batches.len() as u32;
-        if count > self.uniforms.capacity {
-            self.uniforms = DynamicUniforms::new(
-                &self.context.device,
-                &self.uniform_layout,
-                self.context.device.limits().min_uniform_buffer_offset_alignment,
-                count,
-            );
-        }
+        self.ensure_uniform_capacity(count);
 
         // Upload anything not already cached. A stable scene keeps the same
         // `(mesh_id, generation)`, so this uploads once and reuses thereafter.
@@ -311,6 +305,149 @@ impl WgpuRenderer {
         Ok(())
     }
 
+    /// Draw a frame of one or more [`ViewSpec`]s in one pass: the main view first
+    /// (clearing), then each overlay confined to its rectangle (`set_viewport` +
+    /// `set_scissor_rect`), with the overlay pipeline (depth off, blending).
+    ///
+    /// This is what a host uses to composite the navigation cube over the scene; the
+    /// single-view [`render`](Self::render) is the special case of one full-target
+    /// view.
+    pub fn render_views(
+        &mut self,
+        target: &wgpu::TextureView,
+        views: &[ViewSpec<'_>],
+    ) -> Result<(), RenderError> {
+        let total: u32 = views
+            .iter()
+            .map(|view| view.queue.packets.len() as u32)
+            .sum();
+        self.ensure_uniform_capacity(total);
+
+        // Upload every view's fresh geometry, then write one uniform slot per packet
+        // (in view order) with that view's view-projection.
+        for view in views {
+            self.upload_packets(&view.queue.packets);
+        }
+        let mut slot = 0u32;
+        for view in views {
+            let view_proj = mat4_to_wgsl(&view.camera.view_projection());
+            for batch in &view.queue.packets {
+                let snapshot = batch.state();
+                self.uniforms.write(
+                    &self.context.queue,
+                    slot,
+                    &UniformData {
+                        view_proj,
+                        model: mat4_to_wgsl(&snapshot.world_transform),
+                        color: snapshot.color,
+                    },
+                );
+                slot += 1;
+            }
+        }
+
+        let (attachment_view, resolve_target) = match &self.targets.msaa_view {
+            Some(msaa) => (msaa, Some(target)),
+            None => (target, None),
+        };
+        let [width, height] = self.size;
+
+        let mut encoder = self.context.device.create_command_encoder(
+            &wgpu::CommandEncoderDescriptor {
+                label: Some("ferrocad frame"),
+            },
+        );
+        {
+            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("ferrocad frame pass"),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: attachment_view,
+                    depth_slice: None,
+                    resolve_target,
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(wgpu::Color {
+                            r: 0.1,
+                            g: 0.1,
+                            b: 0.12,
+                            a: 1.0,
+                        }),
+                        store: wgpu::StoreOp::Store,
+                    },
+                })],
+                depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
+                    view: &self.targets.depth_view,
+                    depth_ops: Some(wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(1.0),
+                        store: wgpu::StoreOp::Store,
+                    }),
+                    stencil_ops: None,
+                }),
+                timestamp_writes: None,
+                occlusion_query_set: None,
+                multiview_mask: None,
+            });
+
+            let mut slot = 0u32;
+            for view in views {
+                // Overlays are confined to their rectangle; the main view fills the
+                // target. The rect is bottom-left origin, wgpu's viewport/scissor are
+                // top-left origin.
+                let (x, y, w, h) = match view.rect {
+                    Some(rect) => wgpu_rect(rect, height),
+                    None => (0.0, 0.0, width as f32, height as f32),
+                };
+                pass.set_viewport(x, y, w, h, 0.0, 1.0);
+                pass.set_scissor_rect(x as u32, y as u32, w as u32, h as u32);
+                pass.set_pipeline(if view.overlay {
+                    &self.pipelines.overlay
+                } else {
+                    &self.pipelines.opaque
+                });
+                for batch in &view.queue.packets {
+                    let key = (batch.mesh_id, batch.generation);
+                    if let Some(mesh) = self.mesh_cache.get(&key) {
+                        pass.set_bind_group(
+                            0,
+                            &self.uniforms.bind_group,
+                            &[self.uniforms.offset(slot)],
+                        );
+                        pass.set_vertex_buffer(0, mesh.vertex_buffer.slice(..));
+                        pass.set_index_buffer(mesh.index_buffer.slice(..), wgpu::IndexFormat::Uint32);
+                        pass.draw_indexed(0..mesh.index_count, 0, 0..1);
+                    }
+                    slot += 1;
+                }
+            }
+        }
+        self.context.queue.submit(Some(encoder.finish()));
+        Ok(())
+    }
+
+    /// Grow the dynamic-uniform buffer so it holds at least `count` slots.
+    fn ensure_uniform_capacity(&mut self, count: u32) {
+        if count > self.uniforms.capacity {
+            self.uniforms = DynamicUniforms::new(
+                &self.context.device,
+                &self.uniform_layout,
+                self.context.device.limits().min_uniform_buffer_offset_alignment,
+                count,
+            );
+        }
+    }
+
+    /// Upload the fresh geometry of each packet, keyed on `(mesh_id, generation)`.
+    fn upload_packets(&mut self, packets: &[DrawPacket]) {
+        for packet in packets {
+            if let Some(geometry) = packet.geometry.as_ref() {
+                let key = (packet.mesh_id, packet.generation);
+                if !self.mesh_cache.contains_key(&key) {
+                    self.mesh_cache
+                        .insert(key, GpuMesh::upload(&self.context.device, geometry));
+                }
+            }
+        }
+    }
+
     /// Read `texture` back into RGBA8, stripping the row padding wgpu requires.
     fn read_back(&self, texture: &wgpu::Texture) -> Result<ImageData, RenderError> {
         let [width, height] = self.size;
@@ -392,6 +529,11 @@ impl InventorView for WgpuRenderer {
         self.render(&target, camera, &queue.packets)
     }
 
+    fn draw_frame(&mut self, views: &[ViewSpec<'_>]) -> Result<(), Self::Error> {
+        let target = self.targets.color_view.clone();
+        self.render_views(&target, views)
+    }
+
     fn borrow_surface(&self) -> Option<&Self::Surface> {
         Some(&self.targets.color)
     }
@@ -422,6 +564,16 @@ fn mat4_to_wgsl(m: &Matrix4) -> [[f32; 4]; 4] {
         }
     }
     out
+}
+
+/// Convert a bottom-left-origin device [`Rect`] into a wgpu top-left-origin
+/// `(x, y, width, height)`, clamped to the target.
+fn wgpu_rect(rect: Rect, target_height: u32) -> (f32, f32, f32, f32) {
+    let w = rect.width.max(1) as f32;
+    let h = rect.height.max(1) as f32;
+    let x = rect.x.max(0) as f32;
+    let y = (target_height as f32 - (rect.y as f32 + h)).clamp(0.0, target_height as f32);
+    (x, y, w, h)
 }
 
 /// A target size with each dimension at least one pixel (textures cannot be empty).
@@ -538,6 +690,7 @@ mod tests {
                     Node {
                         kind: NodeKind::Mesh {
                             indices: vec![0, 1, 2],
+                            normal_indices: vec![],
                             topology: Topology::Triangles,
                         },
                         children: vec![],
@@ -569,6 +722,49 @@ mod tests {
             texel(32, 32),
             texel(0, 0),
             "the triangle should cover the centre but not the corner"
+        );
+    }
+
+    /// An overlay (the navigation cube) draws into its rectangle only, over the main
+    /// view; the readback shows its colour in the corner. Skips without a GPU.
+    #[test]
+    fn overlay_draws_into_its_rect() {
+        let main = compile(&clip_space_triangle());
+        let cube = compile(&ferrocad_inventor::navicube::scene(None));
+        let Ok(mut renderer) = WgpuRenderer::new_default([128, 128]) else {
+            eprintln!("no GPU adapter available; skipping overlay test");
+            return;
+        };
+        // A 50x50 overlay in the top-right corner (device rect, bottom-left origin).
+        let rect = Rect::new(78, 78, 50, 50);
+        let cube_camera = ferrocad_inventor::navicube::camera(rect);
+        let main_camera = Camera::identity();
+        let views = [
+            ViewSpec {
+                queue: &main,
+                camera: &main_camera,
+                rect: None,
+                overlay: false,
+            },
+            ViewSpec {
+                queue: &cube,
+                camera: &cube_camera,
+                rect: Some(rect),
+                overlay: true,
+            },
+        ];
+        renderer.draw_frame(&views).expect("draw_frame");
+        let image = renderer.image().expect("readback");
+        let texel = |x: u32, y: u32| {
+            let i = ((y * 128 + x) * 4) as usize;
+            [image.rgba[i], image.rgba[i + 1], image.rgba[i + 2]]
+        };
+        // Image is top-left origin, the rect bottom-left origin: the overlay is in the
+        // image's top-right. Its centre differs from the clear-coloured far corner.
+        assert_ne!(
+            texel(103, 24),
+            texel(5, 5),
+            "the navigation cube should paint its corner over the main view"
         );
     }
 }

@@ -113,12 +113,17 @@ The contract, matching FreeCAD (see the assessment and `InputDevice`/
   shows a scene built from a `pivy.coin` script (`python::inventor_scene`, with the
   Rust `scene::sample_scene` as fallback); the `inventor_roundtrip` example renders
   both windowed and headless (`--headless out.png`).
+- **Overlays / multi-view** (the navigation cube, `docs/navicube.md`):
+  `ferrocad_inventor::ViewSpec` + `InventorView::draw_frame`,
+  `WgpuRenderer::render_views` (per-view `set_viewport`/`set_scissor_rect`, an overlay
+  pipeline with depth off and alpha blending), `ferrocad_inventor::navicube` (the
+  cube scene + ortho camera), and `ferrocad_gpui::navicube::NaviCube` +
+  `InventorViewport::with_navicube` (placement, camera mirroring, hover, click-snap).
 
 **Not implemented**
 
 - The g-buffer pick pass (`ferrocad_wgpu::pick` is a stub); line/point and
-  transparent pipelines; overlays and multi-viewport rendering (needed for the
-  NaviCube and other screen-space decoration).
+  transparent pipelines (so an overlay's edges/corners and labels are deferred).
 - The `pivy.coin` facade is deliberately narrow: no arena/object identity, no
   `SoPath`/`SoSearchAction`, no NumPy zero-copy or generational dirty counters, and
   no `-1` polygon delimiters (see [`inventor-plan.md`](inventor-plan.md) §8).
@@ -151,9 +156,9 @@ traversal/compile, picking/events — adapted to the code as it stands) is in
 1. **Layout-driven sizing**: an `Element` that reads its bounds ×
    `window.scale_factor()` to size the target and place the camera, making hover
    coordinates exact in a docked pane (and removing the fixed-size stretch).
-2. **Overlays / multi-viewport** in `ferrocad_wgpu` (corner viewport + scissor +
-   its own camera) — the prerequisite for the NaviCube (see
-   [`navicube.md`](navicube.md)).
+2. **Navigation-cube polish** (N4): labels, edge/corner picks (needs line/point
+   pipelines + pick), translucent inactive faces, and drag-rotate/animated snap
+   (see [`navicube.md`](navicube.md)). The overlay *pass* itself is built.
 3. **The g-buffer pick** and line/point pipelines.
 4. **Grow the `pivy.coin` facade** and the `TypeRegistry` toward the ~63
    registered node/kit classes and the `SoType.fromName` surface the workbenches

@@ -58,6 +58,10 @@ pub enum NodeKind {
     /// A list (Coin's `SoMFColor.diffuseColor`); the compiler binds the first
     /// entry as the draw colour.
     Material(Vec<[f32; 4]>),
+    /// Sets the selection identity ([`PickId`](crate::PickId)) of the following
+    /// shapes — the `SoFCSelection`/`SoPickStyle` role. Used to give overlay parts
+    /// (e.g. the navigation cube's faces) distinguishable pick ids.
+    PickId(u32),
     /// A transform applied to the following siblings (`SoTransform`).
     Transform(Placement),
     /// An event-handling node (`SoEventCallback`).

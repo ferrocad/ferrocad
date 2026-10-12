@@ -1,4 +1,4 @@
-//! S2 tests: geometry field objects over the `pivy.coin` facade, via embedded CPython.
+//! Geometry field objects over the `pivy.coin` facade, via embedded CPython.
 //!
 //! These exercise the sequence protocol that workbench code relies on when it
 //! mutates node fields in place (`coords.point[i] = …`, `faces.coordIndex.setValues(…)`),

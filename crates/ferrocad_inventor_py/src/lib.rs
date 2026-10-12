@@ -5,12 +5,16 @@
 //! FreeCAD's custom node classes. This extension reproduces that surface on top of
 //! [`ferrocad_inventor`], so a workbench's scene-building code keeps working.
 //!
-//! This is slices **S1–S2** (see `docs/inventor-plan.md`): the class spine, the type
-//! registry, and the geometry field objects. Python classes mirror the Coin
-//! hierarchy (`SoBase` → `SoFieldContainer` → `SoNode` → `SoGroup` →
-//! `SoSeparator`/`SoSwitch`, with `SoCoordinate3`/`SoNormal`/`SoMaterial`/… as
-//! `SoNode` leaves) so `isinstance()` passes, and each wraps the existing, owned
-//! [`ferrocad_inventor`] `Node` — no arena yet (that is deferred).
+//! The surface has three parts. The **class spine and `SoType` registry** mirror the
+//! Coin hierarchy (`SoBase` → `SoFieldContainer` → `SoNode` → `SoGroup` →
+//! `SoSeparator`/`SoSwitch`, with the geometry, transform and event nodes as `SoNode`
+//! leaves) so `isinstance()` passes. The **geometry field objects** (`SoCoordinate3`,
+//! `SoMaterial`, …) are live views over the node data. The **scene bridge**
+//! ([`install`]/[`extract_scene`]) copies a Python-built tree into a
+//! [`ferrocad_inventor::Scene`], and [`dispatch_event`] delivers picked input to the
+//! `SoEventCallback` nodes. Each class wraps the existing, owned
+//! [`ferrocad_inventor`] `Node`; the generational arena is deferred (see
+//! `docs/inventor-plan.md`).
 
 use ferrocad_inventor::{Node, NodeKind, Scene};
 use pyo3::exceptions::PyTypeError;
@@ -307,7 +311,7 @@ pub fn install(py: Python<'_>) -> PyResult<Bound<'_, PyModule>> {
     Ok(coin)
 }
 
-/// Extract the scene graph from a Python-built `coin` node (slice **S3**).
+/// Extract the scene graph from a Python-built `coin` node.
 ///
 /// `root` is typically a `SoSeparator`; its subtree is copied into a
 /// [`ferrocad_inventor::Scene`] the mesh compiler walks, so a workbench that

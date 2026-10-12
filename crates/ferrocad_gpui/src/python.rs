@@ -359,7 +359,7 @@ _events.addEventCallback(coin.SoMouseButtonEvent.getClassTypeId(), _report)
 root.addChild(_events)
 "#;
 
-/// Build the viewport scene the workbench way (slice **S3**): run a
+/// Build the viewport scene the workbench way: run a
 /// `from pivy import coin` script and extract the tree it builds.
 ///
 /// The scene layer is registered into the embedded interpreter on demand (so the
@@ -427,7 +427,7 @@ mod tests {
     use super::*;
     use ferrocad_inventor::compile;
 
-    /// The host builds its viewport scene from a `pivy.coin` script (S3); check
+    /// The host builds its viewport scene from a `pivy.coin` script; check
     /// that it extracts and compiles to the expected cube without a GPU.
     #[test]
     fn inventor_scene_script_builds_a_compilable_cube() {
@@ -439,7 +439,7 @@ mod tests {
     }
 
     /// The script registers an `SoEventCallback`; dispatching a mouse-button event
-    /// (S4) must reach it.
+    /// must reach it.
     #[test]
     fn dispatch_reaches_the_scripted_event_callback() {
         let _guard = crate::PYTHON_LOCK.lock().unwrap_or_else(|e| e.into_inner());

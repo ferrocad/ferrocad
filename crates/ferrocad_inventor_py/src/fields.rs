@@ -1,4 +1,4 @@
-//! Slice **S2**: geometry field objects over the owned node model.
+//! Geometry field objects over the owned node model.
 //!
 //! A workbench does not assign whole lists to a node — it mutates fields in place
 //! (`coords.point[0] = (x, y, z)`, `faces.coordIndex.setValues(0, idx)`), so the

@@ -1,4 +1,4 @@
-//! S4 tests: the event classes, `SoEventCallback`, and the dispatch bridge.
+//! The event classes, `SoEventCallback`, and the dispatch bridge.
 //!
 //! A workbench registers a callback on a `SoEventCallback` node; the host dispatches
 //! each input event (with its pick) through it, and the callback reads the event and

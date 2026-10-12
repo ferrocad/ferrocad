@@ -1,4 +1,4 @@
-//! S1 boot tests for the `pivy.coin` facade, via embedded CPython.
+//! Boot tests for the `pivy.coin` facade, via embedded CPython.
 //!
 //! FreeCAD brings Coin up through the GUI (`SoDB::init`/`SoFCDB::init` in
 //! `Gui::Application`), and workbenches then do `from pivy import coin`. This tests

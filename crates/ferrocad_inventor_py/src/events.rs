@@ -1,4 +1,4 @@
-//! Slice **S4**: the `SoEvent`/`SoEventCallback` surface and the dispatch bridge.
+//! The `SoEvent`/`SoEventCallback` surface and the dispatch bridge.
 //!
 //! Workbenches register input callbacks on a `SoEventCallback` node——
 //! `coin.SoMouseButtonEvent.getClassTypeId()` plus a Python callable — and the host

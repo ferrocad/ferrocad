@@ -1,4 +1,4 @@
-//! S3 tests: the scene-extraction bridge — a Python-built `pivy.coin` tree copied
+//! The scene-extraction bridge — a Python-built `pivy.coin` tree copied
 //! into a `ferrocad_inventor::Scene` and compiled, exactly as the host does.
 
 use ferrocad_inventor::{compile, Topology};

@@ -5,7 +5,7 @@
 //! Python workbench (`from pivy import coin`)
 //!     → ferrocad_inventor_py (extract) → ferrocad_inventor (compile → batches)
 //!         → ferrocad_wgpu (render + readback)
-//!             → ferrocad_gpui (InventorViewport shows the image)
+//!             → ferrocad_viewport (InventorViewport shows the image)
 //! ```
 //!
 //! The cube is built by a Python script (the twin of the Rust `sample_scene`), so
@@ -21,8 +21,8 @@
 //! cargo run -p ferrocad_gpui --example inventor_roundtrip -- --headless frame.png
 //! ```
 
-use ferrocad_gpui::InventorViewport;
-use ferrocad_gpui::scene::{HoverHighlight, sample_camera, sample_scene};
+use ferrocad_viewport::InventorViewport;
+use ferrocad_viewport::scene::{HoverHighlight, sample_camera, sample_scene};
 use ferrocad_inventor::{
     Camera, Event, EventListener, InventorView, Scene, ViewSpec, Viewport, compile_with, pick_at_hit,
 };
@@ -73,7 +73,7 @@ fn main() {
 
     application().run(move |cx: &mut App| {
         cx.open_window(window_options(), move |_window, cx| {
-            let navicube = ferrocad_gpui::NaviCube::new(camera.viewport);
+            let navicube = ferrocad_viewport::NaviCube::new(camera.viewport);
             cx.new(|_cx| {
                 InventorViewport::new(renderer, camera, scene)
                     .with_listener(Box::new(HoverHighlight::default()))
@@ -118,7 +118,7 @@ fn render_headless(mut scene: Scene, camera: ferrocad_inventor::Camera, path: &s
         std::process::exit(1);
     });
     // Composite the navigation cube over the scene in the corner.
-    let mut navicube = ferrocad_gpui::NaviCube::new(camera.viewport);
+    let mut navicube = ferrocad_viewport::NaviCube::new(camera.viewport);
     navicube.sync(&camera);
     let views = [
         ViewSpec {

@@ -21,7 +21,7 @@ adaptations are:
 | `DrawBatchDescriptor` with raw `vertex_data: Arc<Vec<u8>>` | `DrawPacket` with `geometry: Option<Geometry>` (`Vec<Vertex>`/`Vec<u32>`) | The renderer owns the GPU layout; the packet stays typed. |
 | (not mentioned) | **CPU ray pick** ✅ (`pick`/`pick_at`), **G-buffer pick** ▢ (stub) | The draft specified G-buffer picking; a CPU pick landed first. |
 | (not mentioned) | `Viewport` (device size + DPR) ✅, `InventorView` (surface/image) ✅ | HiDPI + presentation seams added since the draft. |
-| `ferrocad_gpui::input_bridge` | `ferrocad_gpui::inventor_view` + `scene` | Host-side glue. |
+| `ferrocad_gpui::input_bridge` | `ferrocad_viewport::inventor_view` + `scene` | Host-side glue. |
 
 ## 1. Boundaries & guarantees
 
@@ -119,7 +119,7 @@ shared coords → surface + wireframe batches, concave triangulation, cache reus
 * ✅ **Events**: `ferrocad_inventor::Event` (`MouseMove`/`MouseButton`/`MouseLeave`)
   + `EventListener` (`on_event(event, hit, scene)`, with the full `Hit`) →
   recompile/highlight; the host delivers device-pixel events and the viewport routes
-  them (`ferrocad_gpui::InventorViewport`). **S4** adds the `SoEventCallback` node
+  them (`ferrocad_viewport::InventorViewport`). **S4** adds the `SoEventCallback` node
   (found via `event_callbacks`), the `SoEvent`/`SoButtonEvent`/`SoMouseButtonEvent`/
   `SoLocation2Event` classes, and the dispatch bridge
   (`ferrocad_inventor_py::dispatch_event`; `ferrocad_gpui::python::PythonEventCallbacks`).
@@ -153,7 +153,7 @@ and the host test `ferrocad_gpui::python::tests::dispatch_reaches_the_scripted_e
 | `entity_id` | `PickId` |
 | `part_index` | (▢ — sub-shape id; needs topological naming) |
 | `glam::Mat4` | `ferrocad_types::Matrix4` |
-| `ferrocad_gpui::input_bridge` | `ferrocad_gpui::inventor_view` |
+| `ferrocad_gpui::input_bridge` | `ferrocad_viewport::inventor_view` |
 | (not in draft) | `Viewport`, `InventorView`, `ImageData` |
 
 ## 7. Roadmap

@@ -970,7 +970,8 @@ that builds scene graphs (`from pivy import coin`) keeps working. Plan and statu
 - **Renderer (prerequisite, commit `63bc59b`):** `ferrocad_inventor` (node AST, state
   accumulator, mesh compiler, CPU pick, events, `Viewport`/DPI), `ferrocad_wgpu`
   (pipelines, dynamic uniforms, 4× MSAA, offscreen target, readback) and the
-  `ferrocad_gpui` `InventorViewport` (image path) + the `inventor_roundtrip` example.
+  `ferrocad_viewport` `InventorViewport` (image path) + the `inventor_roundtrip`
+  example.
 - **S1 — facade spine:** the PyO3 class hierarchy `SoBase` → `SoFieldContainer` →
   `SoNode` → `SoGroup` → `SoSeparator`/`SoSwitch` over the owned `Node` tree; `SoType`
   (`fromName`/`createInstance`/`isDerivedFrom`); `SoGroup.addChild`/`getNumChildren`.
@@ -1013,8 +1014,8 @@ first real overlay on the render stack. Plan and status: [`navicube.md`](navicub
   `set_viewport`/`set_scissor_rect` and an overlay pipeline — depth off, `Always`,
   alpha blend); a per-shape selection id (`NodeKind::PickId`).
 - **Cube + controller (N2):** `ferrocad_inventor::navicube` (`Face`, `scene(hilite)`,
-  `camera(rect)`, `snap_view`) and `ferrocad_gpui::navicube::NaviCube` (corner rect ×
-  DPR, camera mirroring, base/hilite colours); `InventorViewport::with_navicube`.
+  `camera(rect)`, `snap_view`) and `ferrocad_viewport::navicube::NaviCube` (corner
+  rect × DPR, camera mirroring, base/hilite colours); `InventorViewport::with_navicube`.
 - **Interaction (N3):** rect hit-test → hover highlight (recompile on change); a click
   snaps the main camera onto the picked piece, keeping the camera distance.
 - **Edges, corners & drag (N4 core):** line/point render **pipelines** routed by
@@ -1029,12 +1030,16 @@ first real overlay on the render stack. Plan and status: [`navicube.md`](navicub
   baked into a texture, and a fixed **Home** button (id 27, outside the rotating
   subtree) that snaps the view to the default orientation; `NaviTarget` unifies a
   piece and Home for hit-testing.
+- **Viewport crate (N4c):** the viewport modules — `inventor_view`
+  (`InventorViewport`), `navicube` (`NaviCube`) and `scene` (the sample) — were
+  extracted from `ferrocad_gpui` into **`ferrocad_viewport`**, which depends only on
+  `ferrocad_inventor` (no `ferrocad_wgpu`, no Python); `ferrocad_gpui` mounts it.
 
-**Verification:** `ferrocad_inventor` 22 · `ferrocad_inventor_py` 17 · `ferrocad_wgpu`
-**2** (incl. `overlay_draws_into_its_rect`) · `ferrocad_gpui` 20 (incl. NaviCube unit
-tests for the corner rect, centre→Front, corner hit, Home hit, mirroring, hilite,
-snap, orbit, slerp, away faces). The `inventor_roundtrip` example renders the labeled
-cube (faces, edges, corners, Home) and mirrors a tilted camera.
+**Verification:** `ferrocad_inventor` 23 · `ferrocad_inventor_py` 17 · `ferrocad_wgpu`
+**2** (incl. `overlay_draws_into_its_rect`) · `ferrocad_viewport` 13 (incl. NaviCube
+unit tests for the corner rect, centre→Front, corner hit, Home hit, mirroring, hilite,
+snap, orbit, slerp, away faces) · `ferrocad_gpui` 7. The `inventor_roundtrip` example
+renders the labeled cube (faces, edges, corners, Home) and mirrors a tilted camera.
 
 **Deferred (N4b, remaining):** the context menu and the arrow buttons.
 

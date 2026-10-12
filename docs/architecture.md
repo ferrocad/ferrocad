@@ -24,7 +24,8 @@ obvious:
 | `ferrocad_inventor` | `rlib` | The Coin/Inventor scene core: node AST, state accumulator, mesh compiler, picking, events, viewport/DPI. Renderer-agnostic; a **leaf** above `ferrocad_types`. |
 | `ferrocad_wgpu` | `rlib` | The wgpu backend: consumes compiled draw batches, pipelines, uniforms, MSAA, offscreen target, readback. |
 | `ferrocad_inventor_py` | `cdylib` | The `pivy.coin` facade (scaffolding) over `ferrocad_inventor`. |
-| `ferrocad_gpui` | `rlib` | The `bite-gpui` application-shell library: boots CPython and provides `Shell`, `run`/`run_with`, `HostConfig`, and the `InventorViewport`. Ships no application scripts. |
+| `ferrocad_viewport` | `rlib` | The `bite-gpui` viewport over an invented scene: `InventorViewport` (image path, pointer→pick→listener), the navigation cube (`NaviCube`), and the sample scene. Depends only on `ferrocad_inventor`. |
+| `ferrocad_gpui` | `rlib` | The `bite-gpui` application-shell library: boots CPython and provides `Shell`, `run`/`run_with`, `HostConfig`, and mounts the `ferrocad_viewport`. Ships no application scripts. |
 | `ferrocad` | `bin` | The base app (the general edition). Owns the app's Python entry module and, when packaged, its mods and interpreter; calls `ferrocad_gpui::run_with`. |
 | `python/FreeCAD` | package | The public, pure-Python `import FreeCAD` facade. |
 | `ferrocad_gen` | `cdylib` | Generated PyO3 skeletons (M3c). A build-time experiment, not wired into the facade. |
@@ -163,9 +164,11 @@ ferrocad_widgets   -> (bite-gpui only)               [must not depend on core or
 ferrocad_inventor  -> ferrocad_types                 [renderer-agnostic scene core; leaf]
 ferrocad_wgpu      -> ferrocad_inventor, ferrocad_types, wgpu, bytemuck
 ferrocad_inventor_py -> ferrocad_inventor            [pivy.coin facade; + pyo3]
-ferrocad_gpui      -> ferrocad_widgets, ferrocad_inventor,
-                      ferrocad_wgpu, ferrocad_types,
-                      pyo3 (embed)                   [the host/glue owns the viewport]
+ferrocad_viewport  -> ferrocad_inventor, ferrocad_types,
+                      bite-gpui                      [the gpui viewport; no wgpu, no pyo3]
+ferrocad_gpui      -> ferrocad_widgets, ferrocad_viewport,
+                      ferrocad_inventor, ferrocad_wgpu,
+                      ferrocad_types, pyo3 (embed)   [the host/glue owns the window]
                       must NOT -> ferrocad_py        [the *app* links it, not the shell]
 ferrocad           -> ferrocad_gpui, ferrocad_py     [base app: links the module in, embeds payload]
 python/FreeCAD     -> ferrocad (built-in module when linked, else a .so on sys.path)

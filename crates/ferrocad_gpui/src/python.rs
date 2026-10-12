@@ -312,8 +312,9 @@ pub fn set_property(object: &str, property: &str, value: &str) -> Result<SetResu
 
 /// The `pivy.coin` script that builds the demo cube, the way a workbench would.
 ///
-/// It is the Python twin of [`crate::scene::sample_scene`], so the viewport shows
-/// the same object however the scene is built. The host runs it and extracts the
+/// It is the Python twin of [`ferrocad_viewport::scene::sample_scene`], so the
+/// viewport shows the same object however the scene is built. The host runs it and
+/// extracts the
 /// tree it leaves in `root`.
 const INVENTOR_SCENE_SCRIPT: &str = r#"
 from pivy import coin

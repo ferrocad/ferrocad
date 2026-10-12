@@ -110,12 +110,13 @@ FerroCAD is a Cargo workspace (edition 2024). Crate status:
 | `crates/ferrocad_inventor_py` | the pivy-compatible `coin` facade (scaffolding, surfaced as `pivy.coin`) | new |
 | `crates/ferrocad_gen` | generated PyO3 skeleton bindings from the `.pyi` model (M3c) | useful — drives the codegen tests |
 | `crates/ferrocad_widgets` | reusable `bite-gpui` widgets (window chrome, field, console) | published |
+| `crates/ferrocad_viewport` | the `bite-gpui` viewport: `InventorViewport` (image path), the navigation cube (`NaviCube`), the sample scene | primary |
 | `crates/ferrocad_gpui` | library: reusable app shell (`run`/`run_with` + `HostConfig`), boots CPython | primary |
 | `crates/ferrocad_parametric` | edition binary: the base app + the Part workbench (`cargo run -p ferrocad_parametric`) | new — needs OCCT 7.8+ |
 | `crates/xtask` | build tasks: `cargo xtask bundle` stages a distribution | tool |
 
-The GUI crates (`ferrocad_widgets`, `ferrocad_gpui`, `ferrocad`) are excluded from `default-members`
-so `cargo build`/`cargo test` stay fast; `ferrocad_gpui` additionally carries the PyO3
+The GUI crates (`ferrocad_viewport`, `ferrocad_widgets`, `ferrocad_gpui`, `ferrocad`) are excluded from
+`default-members` so `cargo build`/`cargo test` stay fast; `ferrocad_gpui` additionally carries the PyO3
 `auto-initialize` feature, which conflicts with the `extension-module` feature of the extension crates.
 
 ## Build & run
@@ -355,6 +356,11 @@ crates/ferrocad/          the base app binary (cargo run -p ferrocad)
     build.rs              embeds python/ + mods/ when staged (embedded-payload feature)
 crates/ferrocad_parametric/ edition binary: base app + Part (cargo run -p ferrocad_parametric)
     src/main.rs           registers the Part module, then ferrocad::run_as
+crates/ferrocad_viewport/ the bite-gpui viewport: InventorViewport (image path), NaviCube, sample scene
+    src/lib.rs            the crate surface (InventorViewport, NaviCube)
+    src/inventor_view.rs  the gpui element + pointer→pick→listener interaction
+    src/navicube.rs       the navigation-cube controller (placement, sync, hit-test, snap)
+    src/scene.rs          the sample Inventor scene + hover listener
 crates/ferrocad_gpui/     library: FerroCAD's bite-gpui app shell (boots CPython)
     src/lib.rs            run/run_with + HostConfig + window options
     src/python.rs         embedded-CPython bridge (boot, model_tree, properties, evaluate)

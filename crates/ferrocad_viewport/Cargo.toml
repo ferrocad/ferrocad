@@ -1,0 +1,23 @@
+[package]
+name = "ferrocad_viewport"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+readme.workspace = true
+repository.workspace = true
+homepage.workspace = true
+rust-version.workspace = true
+description = "FerroCAD's bite-gpui viewport: presents an Inventor scene (image path), the navigation cube, and the sample scene"
+keywords = ["cad", "gui", "gpui", "viewport"]
+categories = ["gui"]
+documentation = "https://docs.rs/ferrocad_viewport"
+
+[dependencies]
+# The scene vocabulary the viewport presents (Scene/Camera/RenderQueue/Event/PickId
+# and the `InventorView` capability trait). No concrete renderer or Python here.
+ferrocad_inventor.workspace = true
+ferrocad_types.workspace = true
+bite-gpui = { version = "1.21.1" }
+# The image path wraps readback pixels as a gpui `RenderImage`, which holds
+# `image::Frame`s; gpui does not re-export the `image` crate.
+image = "0.25"

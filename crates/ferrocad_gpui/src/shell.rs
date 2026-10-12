@@ -16,12 +16,12 @@ use gpui::{
 };
 
 use ferrocad_inventor::Viewport;
+use ferrocad_viewport::InventorViewport;
+use ferrocad_viewport::scene;
 use ferrocad_wgpu::WgpuRenderer;
 use ferrocad_widgets::{SubmitEvent, TextAreaState, TextInput, window_frame};
 
-use crate::inventor_view::InventorViewport;
 use crate::python::{self, Bootstrap, DocumentNode, PropRow};
-use crate::scene;
 
 const BG: u32 = 0x101216;
 const PANEL: u32 = 0x16181d;
@@ -164,7 +164,7 @@ impl Shell {
         };
         let camera = scene::sample_camera(Viewport::new(SIZE, 1.0));
         let scene = python::inventor_scene().unwrap_or_else(|_| scene::sample_scene());
-        let navicube = crate::navicube::NaviCube::new(camera.viewport);
+        let navicube = ferrocad_viewport::NaviCube::new(camera.viewport);
         self.viewport = Some(cx.new(move |_cx| {
             InventorViewport::new(renderer, camera, scene)
                 .with_listener(Box::new(scene::HoverHighlight::default()))

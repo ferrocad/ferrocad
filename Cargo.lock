@@ -2336,6 +2336,7 @@ dependencies = [
  "ferrocad_inventor",
  "ferrocad_inventor_py",
  "ferrocad_types",
+ "ferrocad_viewport",
  "ferrocad_wgpu",
  "ferrocad_widgets",
  "image",
@@ -2416,6 +2417,16 @@ name = "ferrocad_types"
 version = "0.1.2"
 dependencies = [
  "serde",
+]
+
+[[package]]
+name = "ferrocad_viewport"
+version = "0.1.2"
+dependencies = [
+ "bite-gpui",
+ "ferrocad_inventor",
+ "ferrocad_types",
+ "image",
 ]
 
 [[package]]

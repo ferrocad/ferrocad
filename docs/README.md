@@ -27,8 +27,8 @@ is the `FreeCAD` Python API, documented by convention and by upstream.
   rules.
 - [inventor-renderer.md](inventor-renderer.md) — the Inventor scene core, the wgpu
   backend, and the gpui viewport (the render milestone).
-- [navicube.md](navicube.md) — the navigation cube: what it is upstream and the plan
-  to implement it (plan, not implemented).
+- [navicube.md](navicube.md) — the navigation cube: what it is upstream, the slice
+  plan, and the as-built map (implemented, N1–N4b).
 - [inventor-plan.md](inventor-plan.md) — the Inventor/Coin emulation roadmap (four
   phases), adapted to the code as it stands (plan, with per-item status).
 - [geometry-and-topology.md](geometry-and-topology.md) — topological sorting vs

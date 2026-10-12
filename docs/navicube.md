@@ -62,8 +62,8 @@ mode.
 | **Overlay / multi-view render** (corner rect + scissor + on-top, depth off, its own camera) | `ferrocad_wgpu` | The bulk. Today: one pass, full target, one camera. |
 | Ortho camera + viewport **rect**; rect-aware pick | `ferrocad_inventor` | `Camera` already carries matrices (ortho is another projection); `Viewport` needs a sub-rect; `pick_at` needs NDC within the rect. |
 | The cube model (6 faces, 12 edges, 8 corners, ids) | `ferrocad_inventor` scene | Just `Coordinate3`+`Mesh`+`Material`; ids via `PickId`. No new node kinds. |
-| Controller: camera-mirroring transform, corner placement × DPR, hover highlight, click→orientation, drag | host/glue (`ferrocad_gpui`) | New module; reuses listener/events/pick. |
-| Overlay routing in the viewport (corner events → NaviCube, else main scene) | `ferrocad_gpui` | `InventorViewport` grows an optional overlay view. |
+| Controller: camera-mirroring transform, corner placement × DPR, hover highlight, click→orientation, drag | `ferrocad_viewport` | New module; reuses listener/events/pick. |
+| Overlay routing in the viewport (corner events → NaviCube, else main scene) | `ferrocad_viewport` | `InventorViewport` grows an optional overlay view. |
 | Face labels | `ferrocad_wgpu` + `ferrocad_inventor` | Built (N4b): a texture path (`SoTexture2` analogue) + glyph baking into a `Texture2`. |
 | Context menu / `Home` / arrows / opacity | — | Later polish. |
 
@@ -80,10 +80,10 @@ lands (and is tested) before the renderer change.
 | --- | --- | --- | --- |
 | **N1a — sub-rect viewport** ✅ | A sub-rectangle (origin + size, device px) on the view, and a **rect-relative** pick (NDC computed within the rect). | `ferrocad_inventor` | unit: a pick inside a rect resolves the same object as the equivalent full-frame pick. |
 | **N1b — overlay render** ✅ | Multi-view `render_views(target, &[ViewSpec])`: main view (full, depth clear) then each overlay (`set_viewport` + `set_scissor_rect`, load), an overlay pipeline (depth write off, compare `Always`, alpha blend). | `ferrocad_wgpu` | headless: the corner region differs from the clear colour (`overlay_draws_into_its_rect`). |
-| **N2 — cube + controller** ✅ | The cube model (6 faces, ids 1–6) and the `NaviCube` controller: mirror the main camera orientation into the cube's `Transform`, place the corner rect × DPR, base/hilite colours. | cube scene in `ferrocad_inventor::navicube`; controller in `ferrocad_gpui::navicube` | headless: the corner cube renders and (test) rotates with the camera. |
-| **N3 — interaction** ✅ | Rect hit-test → hover highlight (recompile on change); click → snap the main camera onto the picked face. | `ferrocad_gpui::navicube` + `InventorViewport` | headless: a synthesized pointer maps to a face id; a click sets the camera orientation. |
-| **N4a — edges, corners & drag** ✅ | Line/point render pipelines (routed by topology) + **line (segment) picking**; the 12 edges (lines) and 8 corners (small cubes) as pieces, each a `PickId`, with hover and click; **drag-rotate** (gpui `on_drag`/`on_drag_move`). | `ferrocad_wgpu` (pipelines), `ferrocad_inventor` (pick + `Piece`), `ferrocad_gpui` | unit: 26 pieces, segment pick, corner hit, orbit; example shows the faceted cube. |
-| **N4b — polish** ◐ | **Built:** an **animated snap** (quaternion slerp, eased; `request_animation_frame`) on click; **translucent away-facing faces** (drawn first in `INACTIVE_COLOR`); **baked face labels** (a `Texture2` path + 5×7 glyphs, `SoTexture2`-style) and a fixed **Home** button that snaps to the default orientation. **Remaining:** a context menu and the arrow buttons. | `ferrocad_inventor` + `ferrocad_wgpu` + `ferrocad_gpui` | unit: `slerp`/`SnapAnimation`, away-face colour, labels and Home; headless: the labeled cube. |
+| **N2 — cube + controller** ✅ | The cube model (6 faces, ids 1–6) and the `NaviCube` controller: mirror the main camera orientation into the cube's `Transform`, place the corner rect × DPR, base/hilite colours. | cube scene in `ferrocad_inventor::navicube`; controller in `ferrocad_viewport::navicube` | headless: the corner cube renders and (test) rotates with the camera. |
+| **N3 — interaction** ✅ | Rect hit-test → hover highlight (recompile on change); click → snap the main camera onto the picked face. | `ferrocad_viewport::navicube` + `InventorViewport` | headless: a synthesized pointer maps to a face id; a click sets the camera orientation. |
+| **N4a — edges, corners & drag** ✅ | Line/point render pipelines (routed by topology) + **line (segment) picking**; the 12 edges (lines) and 8 corners (small cubes) as pieces, each a `PickId`, with hover and click; **drag-rotate** (gpui `on_drag`/`on_drag_move`). | `ferrocad_wgpu` (pipelines), `ferrocad_inventor` (pick + `Piece`), `ferrocad_viewport` | unit: 26 pieces, segment pick, corner hit, orbit; example shows the faceted cube. |
+| **N4b — polish** ◐ | **Built:** an **animated snap** (quaternion slerp, eased; `request_animation_frame`) on click; **translucent away-facing faces** (drawn first in `INACTIVE_COLOR`); **baked face labels** (a `Texture2` path + 5×7 glyphs, `SoTexture2`-style) and a fixed **Home** button that snaps to the default orientation. **Remaining:** a context menu and the arrow buttons. | `ferrocad_inventor` + `ferrocad_wgpu` + `ferrocad_viewport` | unit: `slerp`/`SnapAnimation`, away-face colour, labels and Home; headless: the labeled cube. |
 
 A bare corner cube after N1a–N3 is already a genuine NaviCube; N4 adds fidelity
 (edges, corners, drag, labels, the Home button). **N1b is the real work**
@@ -100,7 +100,7 @@ built vertical slice (state accumulator, packets, CPU pick, events, DPR, viewpor
 2. **Overlay pass:** the **same MSAA pass**; `set_viewport` + `set_scissor_rect` per
    view; the overlay pipeline matches the pass depth format but writes no depth and
    compares `Always`; the depth buffer is cleared once for the whole pass.
-3. **Controller home:** `ferrocad_gpui` (viewer glue); the cube *scene builder* lives
+3. **Controller home:** `ferrocad_viewport` (viewer glue); the cube *scene builder* lives
    in `ferrocad_inventor` (pure). Not `ferrocad_widgets`.
 4. **Camera sync:** the overlay camera is a **fixed orthographic** camera; the cube's
    `Transform` mirrors the main camera's orientation (no camera juggling).
@@ -129,11 +129,11 @@ built vertical slice (state accumulator, packets, CPU pick, events, DPR, viewpor
 | Cube scene (`Piece`, `scene(hilite)`, `camera(rect)`, `snap_view`) | `ferrocad_inventor::navicube` |
 | Multi-view hook | `ferrocad_inventor::view::ViewSpec` + `InventorView::draw_frame` |
 | Multi-view pass (overlay pipeline, `set_viewport`/`set_scissor_rect`) | `ferrocad_wgpu::WgpuRenderer::render_views` |
-| Controller (placement × DPR, camera sync, hit-test, hover, snap, orbit) | `ferrocad_gpui::navicube::NaviCube` |
-| Viewport integration (`with_navicube`, event routing) | `ferrocad_gpui::InventorViewport` |
+| Controller (placement × DPR, camera sync, hit-test, hover, snap, orbit) | `ferrocad_viewport::navicube::NaviCube` |
+| Viewport integration (`with_navicube`, event routing) | `ferrocad_viewport::InventorViewport` |
 | Texture path (`State.texture`, `Texture2`, wgpu bind group 1) | `ferrocad_inventor::{state,geometry,node}`, `ferrocad_wgpu::textures` |
 | Baked face labels + fixed Home button + `NaviTarget` | `ferrocad_inventor::navicube` |
-| Animated snap (`SnapAnimation`, `navicube::slerp`) + away-face translucency | `ferrocad_gpui::navicube` |
+| Animated snap (`SnapAnimation`, `navicube::slerp`) + away-face translucency | `ferrocad_viewport::navicube` |
 
 **Behaviour:** the cube mirrors the main camera's **view rotation** (its `Transform`
 node); a hover recompiles the cube with the hovered **piece** (face, edge or corner)
@@ -158,9 +158,14 @@ documented path for non-D&D drags "like resizing"); `on_drag_move` gives the poi
 position, the controller accumulates the delta into `drag_view`. A press/release
 without movement snaps to the piece under the pointer.
 
+**Crate:** these viewport pieces (the element, the controller, and the sample scene)
+live in **`ferrocad_viewport`**, extracted from `ferrocad_gpui`; it depends only on
+`ferrocad_inventor` (no `ferrocad_wgpu`, no Python). The `InventorView` capability
+trait — implemented by `ferrocad_wgpu`, supplied by the shell — is the seam.
+
 **Verification:** `ferrocad_inventor::navicube` unit tests (ids, kinds, orientation,
 compilation, labels, Home) + `pick` segment tests; `ferrocad_wgpu`
-`overlay_draws_into_its_rect`; `ferrocad_gpui::navicube` tests (corner rect,
+`overlay_draws_into_its_rect`; `ferrocad_viewport::navicube` tests (corner rect,
 centre→Front, corner hit, Home hit, mirroring, hilite, snap, orbit); the
 `inventor_roundtrip` example shows the labeled cube with the Home button
 (`--headless out.png`).

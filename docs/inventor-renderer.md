@@ -16,7 +16,8 @@ and a gpui viewport wired into the app shell — exercised end to end by an exam
 | `ferrocad_inventor` | The **scene core**: node AST, traversal/state accumulator, mesh compiler, picking, events, viewport/DPI. Renderer-agnostic. A **leaf** above `ferrocad_types`. | `ferrocad_types` |
 | `ferrocad_wgpu` | The **backend**: consumes compiled batches, WGSL pipelines, dynamic uniforms, MSAA, offscreen target, readback. | `ferrocad_inventor`, `ferrocad_types`, `wgpu`, `bytemuck` |
 | `ferrocad_inventor_py` | The **`pivy.coin` facade** (PyO3): the class spine, type registry, geometry field objects, and the `install`/`extract_scene` bridge (slices S1–S3). | `ferrocad_inventor`, `ferrocad_types`, `pyo3` |
-| `ferrocad_gpui` | The **host/glue**: `InventorViewport` (element + interaction loop), `scene` (the Rust sample), `python::inventor_scene` (the `pivy.coin` scene builder), the shell wiring. | `ferrocad_inventor`, `ferrocad_inventor_py`, `ferrocad_wgpu`, `ferrocad_types`, `bite-gpui`, `pyo3` |
+| `ferrocad_viewport` | The **gpui viewport**: `InventorViewport` (element + interaction loop), the navigation cube (`navicube`), and `scene` (the Rust sample). No wgpu, no Python. | `ferrocad_inventor`, `ferrocad_types`, `bite-gpui` |
+| `ferrocad_gpui` | The **host/glue**: the window and shell wiring, `python::inventor_scene` (the `pivy.coin` scene builder), mounting the viewport. | `ferrocad_viewport`, `ferrocad_inventor`, `ferrocad_inventor_py`, `ferrocad_wgpu`, `ferrocad_types`, `bite-gpui`, `pyo3` |
 
 The split follows the assessment's seam: the glossary of scene semantics stays in
 `ferrocad_inventor`; the graphics API stays behind a trait; the host owns the
@@ -28,7 +29,7 @@ flowchart LR
     C --> RQ["RenderQueue"]
     RQ -. "trait DrawBatch" .-> RW["WgpuRenderer"]
     RW --> IMG["ImageData / wgpu::Texture"]
-    IMG --> VP["InventorViewport (gpui)"]
+    IMG --> VP["InventorViewport (ferrocad_viewport)"]
     VP --> W["window (window_frame)"]
 ```
 
@@ -107,8 +108,8 @@ The contract, matching FreeCAD (see the assessment and `InputDevice`/
 - wgpu renderer: triangle pipeline with depth, dynamic-offset uniforms, 4× MSAA,
   offscreen target, RGBA readback, mesh upload cache.
 - CPU ray picking; event/listener dispatch; `Viewport`/DPI primitives.
-- gpui `InventorViewport`: image path (readback → `RenderImage` → `img`), pointer
-  events → pick → listener → recompile, `with_listener`.
+- `ferrocad_viewport::InventorViewport` (gpui): image path (readback → `RenderImage`
+  → `img`), pointer events → pick → listener → recompile, `with_listener`.
 - Wired into the app shell: `Shell::enable_viewport` (best-effort, needs a GPU)
   shows a scene built from a `pivy.coin` script (`python::inventor_scene`, with the
   Rust `scene::sample_scene` as fallback); the `inventor_roundtrip` example renders
@@ -117,7 +118,7 @@ The contract, matching FreeCAD (see the assessment and `InputDevice`/
   `ferrocad_inventor::ViewSpec` + `InventorView::draw_frame`,
   `WgpuRenderer::render_views` (per-view `set_viewport`/`set_scissor_rect`, an overlay
   pipeline with depth off and alpha blending), `ferrocad_inventor::navicube` (the
-  cube scene + ortho camera), and `ferrocad_gpui::navicube::NaviCube` +
+  cube scene + ortho camera), and `ferrocad_viewport::navicube::NaviCube` +
   `InventorViewport::with_navicube` (placement, camera mirroring, hover, click-snap,
   drag-orbit, the animated snap). The cube carries baked face labels and a fixed
   `Home` button (N4b; see [`navicube.md`](navicube.md)).

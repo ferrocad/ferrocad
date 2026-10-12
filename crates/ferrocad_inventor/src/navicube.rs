@@ -8,7 +8,7 @@
 //!
 //! This module is the **pure** part — the cube scene and its orthographic overlay
 //! camera. The controller (placement, camera sync, hit-testing, snapping) lives in
-//! `ferrocad_gpui::navicube`, and the overlay render pass in `ferrocad_wgpu`.
+//! `ferrocad_viewport::navicube`, and the overlay render pass in `ferrocad_wgpu`.
 //!
 //! Our axes follow the engine's default view: **+Z toward the viewer**, **+Y up**,
 //! **+X right**. (FreeCAD is Z-up; the piece *names* differ, the behaviour does not.)

@@ -20,3 +20,9 @@ ferrocad_inventor.workspace = true
 ferrocad_types.workspace = true
 wgpu = "29"
 bytemuck = { version = "1", features = ["derive"] }
+
+[dev-dependencies]
+# The coexistence test proves the renderer draws a modern `ferrocad_stage` producer and
+# a legacy inventor producer in one pass with a shared upload cache. Dev-only: the
+# renderer itself has no knowledge of either producer's crate.
+ferrocad_stage.workspace = true

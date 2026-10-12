@@ -2443,6 +2443,7 @@ version = "0.1.2"
 dependencies = [
  "bytemuck",
  "ferrocad_inventor",
+ "ferrocad_stage",
  "ferrocad_types",
  "wgpu",
 ]

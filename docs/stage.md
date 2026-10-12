@@ -1,6 +1,7 @@
 # The modern stack: `ferrocad_stage` — plan and status
 
-Status: **T0 (crate + declarative spine) built (2026-10-12); T1–T5 planned.**
+Status: **T0 (crate + declarative spine) and T1 (render + coexistence) built
+(2026-10-12); T2–T5 planned.**
 Companion to [`inventor-renderer.md`](inventor-renderer.md) (the legacy `pivy.coin`
 stack this runs beside), [`inventor-plan.md`](inventor-plan.md) (the emulation roadmap),
 and [`architecture.md`](architecture.md) (crate layering).
@@ -41,13 +42,15 @@ moves to a neutral `ferrocad_batch` crate (see §5).
 | Slice | Deliverable | Status |
 | --- | --- | --- |
 | **T0 — crate + declarative spine** | `ferrocad_stage`: a `Stage` of items and a `ShapeItem` (positions/normals/triangles/edges + `DrawMode`/colours/`entity_id`), with `Stage::emit_batches(&mut RenderQueue)`. No pyo3, no wgpu, no scene graph. | ✅ |
-| **T1 — render + coexistence** | Draw a stage into the existing pass, beside a compiled inventor queue in one `render_views` call; headless readback + the example. | ▢ |
+| **T1 — render + coexistence** | Draw a stage beside a compiled inventor queue in one pass; headless readback asserts both rasterize and that frame 2 reuses the upload cache. | ✅ |
 | **T2 — tools** | `Tool`/`PointerEvent`, transient items (rubber-band, snap marker), `snap_to_geometry`, host dispatch. | ▢ |
 | **T3 — `TransformGizmo`** | Draggers with drag/commit delta events; transient transform override. | ▢ |
 | **T4 — G-buffer pick pass** | The offscreen `Rg32Uint`/normal/depth pass + 1×1 readback + `part_index` unprojection — the shared enabler for O(1) picking in both stacks. **This is where the batch contract is extended and (likely) extracted.** | ▢ |
 | **T5 — `ferrocad.stage` bindings** | PyO3 module exposing `ShapeItem`/`Tool`/`TransformGizmo`. | ▢ |
 
-## 4. As built (T0)
+## 4. As built (T0–T1)
+
+### T0 — declarative spine
 
 `crates/ferrocad_stage` (pure Rust; depends on `ferrocad_inventor` + `ferrocad_types`):
 
@@ -74,6 +77,26 @@ moves to a neutral `ferrocad_batch` crate (see §5).
 flat-shaded surfaces, stable/unique/high mesh ids, generation bumps, non-selectable pick
 ids, empty geometry, placement → world transform, and `emit_batches` appending.
 
+### T1 — render + coexistence
+
+Both producers emit the same vocabulary, so they draw together with no new machinery:
+`let mut queue = compile_with(&scene, &viewport); stage.emit_batches(&mut queue);`, then
+one `draw_frame` (the renderer's `InventorView` impl — what `ferrocad_viewport` calls).
+
+`ferrocad_wgpu`'s `a_stage_and_an_inventor_scene_coexist_in_one_pass` (dev-dependency on
+`ferrocad_stage`, the renderer's own test module) proves it end to end on a real GPU
+(skipping without an adapter):
+
+- a legacy inventor red surface, a modern blue `Shaded` surface, and a modern green
+  `Wireframe` triangle are merged into one queue and drawn in one pass;
+- the readback shows each producer's object rasterized in its own region (red-dominant
+  left, blue-dominant right) — no layering artifacts;
+- **frame 2 rebuilds the same queue and adds nothing to the upload cache** (the mesh ids
+  are stable across compiles), i.e. every unchanged item is a cache hit.
+
+The two producers are spatially separated; the coplanar-edge case is deliberately left
+to T4 (see §5.4).
+
 ## 5. Deferred decisions
 
 1. **Batch vocabulary home.** Kept in `ferrocad_inventor` for T0/T1 (`DrawPacket` is
@@ -88,9 +111,9 @@ ids, empty geometry, placement → world transform, and `emit_batches` appending
    `Rotation`); do **not** introduce `glam` alongside it. The renderer converts f64→f32
    at the WGSL boundary.
 4. **Coplanar CAD edges.** The current scene pipelines use `DepthBiasState::default()`
-   (zero bias), so an edge coplanar with its shaded surface will z-fight. The doc's
-   slope/constant depth bias is T4 work; until then, verify T1 with `Shaded` and
-   `Wireframe` separately.
+   (zero bias), so an edge coplanar with its shaded surface will z-fight. T1 therefore
+   verified **spatially separated** `Shaded`/`Wireframe` items (see §4); the slope/constant
+   depth bias is T4 work.
 
 ## 6. Naming reconciliation
 

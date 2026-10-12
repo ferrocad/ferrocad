@@ -712,7 +712,9 @@ fn block_on<F: std::future::Future>(future: F) -> F::Output {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use ferrocad_inventor::{Node, NodeKind, Scene, Topology, compile};
+    use ferrocad_inventor::{
+        Node, NodeKind, PickId, Scene, Topology, Viewport, compile, compile_with,
+    };
 
     /// A triangle already in clip space, for use with [`Camera::identity`].
     fn clip_space_triangle() -> Scene {
@@ -807,5 +809,140 @@ mod tests {
             texel(5, 5),
             "the navigation cube should paint its corner over the main view"
         );
+    }
+
+    /// A legacy inventor scene and a modern [`ferrocad_stage`] item render together in
+    /// **one** pass over one depth buffer, and share the `(mesh_id, generation)` upload
+    /// cache across frames. The two producers are spatially separated (the coplanar-edge
+    /// depth bias is deferred to T4). Skips (rather than fails) without a GPU adapter.
+    #[test]
+    fn a_stage_and_an_inventor_scene_coexist_in_one_pass() {
+        use ferrocad_stage::{DrawMode, ShapeItem, Stage};
+
+        let Ok(mut renderer) = WgpuRenderer::new_default([64, 64]) else {
+            eprintln!("no GPU adapter available; skipping coexistence test");
+            return;
+        };
+
+        // Legacy: a red surface triangle on the left half (clip space, identity camera).
+        let scene = Scene {
+            root: Node {
+                kind: NodeKind::Separator,
+                children: vec![
+                    Node {
+                        kind: NodeKind::Material(vec![[1.0, 0.0, 0.0, 1.0]]),
+                        children: vec![],
+                    },
+                    Node {
+                        kind: NodeKind::Coordinate3(vec![
+                            [-0.9, -0.5, 0.5],
+                            [-0.1, -0.5, 0.5],
+                            [-0.5, 0.5, 0.5],
+                        ]),
+                        children: vec![],
+                    },
+                    Node {
+                        kind: NodeKind::Mesh {
+                            indices: vec![0, 1, 2],
+                            normal_indices: vec![],
+                            topology: Topology::Triangles,
+                        },
+                        children: vec![],
+                    },
+                ],
+            },
+        };
+
+        // Modern: a blue `Shaded` surface on the right half, and a separate `Wireframe`
+        // triangle along the bottom — the two `DrawMode`s as distinct items.
+        let stage = Stage::new()
+            .with_item(
+                ShapeItem::new(1)
+                    .with_draw_mode(DrawMode::Shaded)
+                    .with_surface_color([0.0, 0.0, 1.0, 1.0])
+                    .with_shape(
+                        vec![[0.1, -0.5, 0.5], [0.9, -0.5, 0.5], [0.5, 0.5, 0.5]],
+                        vec![],
+                        vec![0, 1, 2],
+                        vec![],
+                    ),
+            )
+            .with_item(
+                ShapeItem::new(2)
+                    .with_draw_mode(DrawMode::Wireframe)
+                    .with_edge_color([0.0, 1.0, 0.0, 1.0])
+                    .with_shape(
+                        vec![[-0.5, -0.9, 0.5], [0.5, -0.9, 0.5], [0.0, -0.6, 0.5]],
+                        vec![],
+                        vec![],
+                        vec![0, 1, 1, 2, 2, 0],
+                    ),
+            );
+
+        let viewport = Viewport::new([64, 64], 1.0);
+        let camera = Camera::identity();
+
+        // One unified queue: the legacy compile, then the stage's batches appended.
+        let merge = || {
+            let mut queue = compile_with(&scene, &viewport);
+            stage.emit_batches(&mut queue);
+            queue
+        };
+
+        let queue = merge();
+        assert_eq!(queue.len(), 3, "one legacy surface + one stage surface + one stage wire");
+        // Both producers contributed, and the stage's line packets are present.
+        assert!(queue.packets.iter().any(|p| p.state.id == PickId(0)), "legacy packet");
+        assert!(queue.packets.iter().any(|p| p.state.id == PickId(1)), "stage surface");
+        assert!(
+            queue
+                .packets
+                .iter()
+                .any(|p| p.state.id == PickId(2) && p.topology == Topology::Lines),
+            "stage wireframe"
+        );
+
+        renderer
+            .draw_frame(&[ViewSpec {
+                queue: &queue,
+                camera: &camera,
+                rect: None,
+                overlay: false,
+            }])
+            .expect("frame 1");
+        let uploaded = renderer.mesh_cache.len();
+        assert_eq!(uploaded, 3, "the first frame uploads one mesh per packet");
+
+        // Frame 2 rebuilds the same queue: the mesh ids are stable across compiles, so
+        // every upload is a cache hit and nothing new is allocated on the GPU.
+        let queue = merge();
+        renderer
+            .draw_frame(&[ViewSpec {
+                queue: &queue,
+                camera: &camera,
+                rect: None,
+                overlay: false,
+            }])
+            .expect("frame 2");
+        assert_eq!(
+            renderer.mesh_cache.len(),
+            uploaded,
+            "unchanged items must reuse the upload cache"
+        );
+
+        let image = renderer.image().expect("readback");
+        let texel = |x: u32, y: u32| {
+            let i = ((y * 64 + x) * 4) as usize;
+            [image.rgba[i], image.rgba[i + 1], image.rgba[i + 2]]
+        };
+        let background = texel(2, 2);
+        // NDC x = -0.5 -> pixel x = 16; NDC x = +0.5 -> pixel x = 48 (both at y = 32).
+        let legacy = texel(16, 32);
+        let modern = texel(48, 32);
+        assert_ne!(legacy, background, "the inventor triangle should rasterize");
+        assert_ne!(modern, background, "the stage triangle should rasterize");
+        assert_ne!(legacy, modern, "the two producers are distinct objects");
+        assert!(legacy[0] > legacy[2], "the inventor triangle is red-dominant: {legacy:?}");
+        assert!(modern[2] > modern[0], "the stage triangle is blue-dominant: {modern:?}");
     }
 }

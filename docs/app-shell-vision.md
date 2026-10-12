@@ -74,7 +74,7 @@ same path — and every edit is one more undoable transaction.
 │  bite-gpui window                                                                   │
 │    ├── menu bar / toolbar   ── command ids ──┐                                      │
 │    ├── inspector pane       ── selection ────┤                                      │
-│    ├── viewport (placeholder now, M5 later)  │                                      │
+│    ├── viewport (sample Inventor scene; M5 later)  │                                      │
 │    ├── property editor pane                   │                                     │
 │    └── Python console pane                    │                                     │
 │                                               ▼                                     │

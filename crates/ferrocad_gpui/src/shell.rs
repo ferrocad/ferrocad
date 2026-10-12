@@ -1,10 +1,11 @@
 //! The app-shell view (S1).
 //!
-//! One window with a title bar, a model inspector, a viewport placeholder, a
-//! property editor and a Python console. The layout and the interpreter wiring
-//! are the S1 deliverable: the tree, editor and console are already driven by
-//! the live document through `python/ferrocad_shell`; richer widgets, commands
-//! and menus come in later slices (see `docs/app-shell-vision.md`).
+//! One window with a title bar, a model inspector, a 3D viewport, a property editor
+//! and a Python console. The layout and the interpreter wiring are the S1 deliverable:
+//! the tree, editor and console are already driven by the live document through
+//! `python/ferrocad_shell`; the viewport renders the sample scene until the geometry
+//! kernel/`ViewProvider`s produce real geometry; richer widgets, commands and menus
+//! come in later slices (see `docs/app-shell-vision.md`).
 
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
@@ -14,9 +15,13 @@ use gpui::{
     Subscription, Window, div, prelude::*, px, rgb,
 };
 
+use ferrocad_inventor::Viewport;
+use ferrocad_wgpu::WgpuRenderer;
 use ferrocad_widgets::{SubmitEvent, TextAreaState, TextInput, window_frame};
 
+use crate::inventor_view::InventorViewport;
 use crate::python::{self, Bootstrap, DocumentNode, PropRow};
+use crate::scene;
 
 const BG: u32 = 0x101216;
 const PANEL: u32 = 0x16181d;
@@ -49,6 +54,9 @@ pub struct Shell {
     model: Arc<Mutex<ShellModel>>,
     /// The console transcript plus the live input line (S5's text area).
     console: Entity<TextAreaState>,
+    /// The 3D viewport, once [`Shell::enable_viewport`] has created a GPU renderer.
+    /// `None` headlessly (no GPU), where the pane shows a placeholder.
+    viewport: Option<Entity<InventorViewport<WgpuRenderer>>>,
     /// One uncontrolled field per editable property, keyed by `object.property`.
     prop_inputs: HashMap<String, PropInput>,
     _submit: Subscription,
@@ -129,6 +137,7 @@ impl Shell {
         Self {
             model,
             console,
+            viewport: None,
             prop_inputs: HashMap::new(),
             _submit: submit,
         }
@@ -137,6 +146,23 @@ impl Shell {
     /// The console's focus handle, so the window can put the caret there at boot.
     pub fn console_focus_handle(&self, cx: &App) -> FocusHandle {
         self.console.read(cx).focus_handle(cx)
+    }
+
+    /// Create the 3D viewport, best-effort: it needs a GPU.
+    ///
+    /// Called by the app after `from_model` (not by `from_model` itself), so headless
+    /// tests stay GPU-free and render the placeholder. If no adapter is available the
+    /// pane keeps the placeholder too.
+    pub fn enable_viewport(&mut self, cx: &mut Context<Self>) {
+        const SIZE: [u32; 2] = [640, 480];
+        let Ok(renderer) = WgpuRenderer::new_default(SIZE) else {
+            return;
+        };
+        let camera = scene::sample_camera(Viewport::new(SIZE, 1.0));
+        self.viewport = Some(cx.new(move |_cx| {
+            InventorViewport::new(renderer, camera, scene::sample_scene())
+                .with_listener(Box::new(scene::HoverHighlight::default()))
+        }));
     }
 
     /// Select an object; the property editor is filled from the live model. The
@@ -502,17 +528,19 @@ impl Render for Shell {
             .min_w_0()
             .h_full()
             .bg(rgb(BG))
-            .child(panel_header("3D viewport — M5 (scenix / wgpu)"))
-            .child(
-                div()
+            .child(panel_header("3D viewport"))
+            .child(match &self.viewport {
+                Some(viewport) => viewport.clone().into_any_element(),
+                None => div()
                     .flex()
                     .flex_1()
                     .items_center()
                     .justify_center()
                     .text_sm()
                     .text_color(rgb(MUTED))
-                    .child("viewport placeholder"),
-            );
+                    .child("viewport (no GPU)")
+                    .into_any_element(),
+            });
 
         let status = div()
             .flex()
@@ -678,5 +706,36 @@ mod tests {
             .map(|row| row.value.clone())
             .unwrap_or_default();
         assert!(result.contains("50"), "Derived.Result = {result:?}");
+    }
+
+    /// The shell attaches and paints the 3D viewport headlessly. No CPython needed:
+    /// it builds a default model, attaches a GPU renderer when one is available
+    /// (else the placeholder), and forces a paint so the viewport render path runs.
+    #[gpui::test]
+    fn shell_paints_the_viewport(cx: &mut TestAppContext) {
+        let model = Arc::new(Mutex::new(ShellModel::default()));
+        let window = cx.update(|cx| {
+            let model = model.clone();
+            cx.open_window(Default::default(), move |_window, cx| {
+                cx.new(|cx| Shell::from_model(model.clone(), cx))
+            })
+            .unwrap()
+        });
+        let mut cx = VisualTestContext::from_window(window.into(), cx);
+        let shell: Entity<Shell> = window.root(&mut cx).unwrap();
+
+        let attached = cx.update(|_window, cx| {
+            shell.update(cx, |shell, cx| {
+                shell.enable_viewport(cx);
+                shell.viewport.is_some()
+            })
+        });
+        println!("shell viewport attached: {attached}");
+
+        // Force a full paint (this is where `InventorViewport::render` draws and
+        // reads the frame back). Works with the placeholder too when no GPU exists.
+        cx.update(|window, cx| {
+            let _ = window.draw(cx);
+        });
     }
 }

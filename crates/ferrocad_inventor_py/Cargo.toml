@@ -1,0 +1,37 @@
+# The pivy-compatible `coin` facade (surfaced to Python as `pivy.coin`).
+#
+# 75 upstream Python files build Coin scene graphs directly (`from pivy import
+# coin`), and `coin.SoType.fromName(...).createInstance()` is how they instantiate
+# FreeCAD's custom node classes. This extension reproduces that surface on top of
+# `ferrocad_inventor`, so workbench scene-building code keeps working.
+#
+# `rlib` so the host can register it into an embedded interpreter; `cdylib` so it
+# can ship as a standalone extension (as for ferrocad_py). Needs CPython headers, so
+# it is a workspace member but NOT in `default-members`.
+[package]
+name = "ferrocad_inventor_py"
+version = "0.1.2"
+edition.workspace = true
+license.workspace = true
+readme.workspace = true
+repository.workspace = true
+homepage.workspace = true
+rust-version.workspace = true
+description = "The pivy-compatible `coin` facade over ferrocad_inventor (surfaced as `pivy.coin`)"
+keywords = ["cad", "freecad", "pivy", "python"]
+categories = ["api-bindings"]
+documentation = "https://docs.rs/ferrocad_inventor_py"
+
+[lib]
+name = "ferrocad_inventor_py"
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+ferrocad_inventor.workspace = true
+# `extension-module` is deliberately *not* a hard feature (see ferrocad_py): it is
+# enabled only when packaging the standalone extension module.
+pyo3 = { version = "0.25", features = ["abi3-py310"] }
+
+[features]
+# Enabled by maturin / build.sh when producing the Python extension module.
+extension-module = ["pyo3/extension-module"]

@@ -25,6 +25,8 @@ is the `FreeCAD` Python API, documented by convention and by upstream.
 
 - [architecture.md](architecture.md) — crates, the call paths, and the dependency
   rules.
+- [inventor-renderer.md](inventor-renderer.md) — the Inventor scene core, the wgpu
+  backend, and the gpui viewport (the render milestone).
 - [geometry-and-topology.md](geometry-and-topology.md) — topological sorting vs
   topological naming, and the seam for a future OCCT geometry engine.
 - [occt-history-spike.md](occt-history-spike.md) — the first geometry spike: what

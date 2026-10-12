@@ -16,15 +16,20 @@ members = [
     "crates/ferrocad_part_py",
     "crates/ferrocad_py",
     "crates/ferrocad_gen",
+    "crates/ferrocad_inventor",
+    "crates/ferrocad_wgpu",
+    "crates/ferrocad_inventor_py",
     "crates/ferrocad_widgets",
     "crates/ferrocad_gpui",
     "crates/ferrocad_parametric",
     "crates/xtask",
 ]
-# The GUI crates (`ferrocad_widgets`, `ferrocad_gpui`, `ferrocad`) and the OCCT-backed
-# editions (`ferrocad_parametric`, via `ferrocad_part_py`) are workspace members so
+# The GUI crates (`ferrocad_widgets`, `ferrocad_gpui`, `ferrocad`), the renderer
+# (`ferrocad_wgpu`, which pulls in the whole GPU stack) and the pivy facade
+# (`ferrocad_inventor_py`, which needs CPython headers), plus the OCCT-backed
+# editions (`ferrocad_parametric`, via `ferrocad_part_py`), are workspace members so
 # `-p <crate>` works, but they are excluded from `default-members` because building
-# them pulls in the whole GUI stack (and OCCT) — a slow compile.
+# them is slow. The pure scene core `ferrocad_inventor` stays in `default-members`.
 # `ferrocad_gpui` embeds CPython via PyO3 `auto-initialize`; it links fine in a
 # full `cargo build --workspace` because the extension crates keep
 # `pyo3/extension-module` opt-in (see their manifests), avoiding the libpython
@@ -33,6 +38,7 @@ default-members = [
     "crates/ferrocad_types",
     "crates/ferrocad_core",
     "crates/ferrocad_geom",
+    "crates/ferrocad_inventor",
     "crates/ferrocad_py",
     "crates/ferrocad_gen",
 ]
@@ -70,6 +76,9 @@ ferrocad_occt = { path = "crates/ferrocad_occt", version = "0.1.2" }
 ferrocad_part = { path = "crates/ferrocad_part", version = "0.1.2" }
 ferrocad_part_py = { path = "crates/ferrocad_part_py", version = "0.1.2" }
 ferrocad_py = { path = "crates/ferrocad_py", version = "0.1.2" }
+ferrocad_inventor = { path = "crates/ferrocad_inventor", version = "0.1.2" }
+ferrocad_wgpu = { path = "crates/ferrocad_wgpu", version = "0.1.2" }
+ferrocad_inventor_py = { path = "crates/ferrocad_inventor_py", version = "0.1.2" }
 ferrocad_widgets = { path = "crates/ferrocad_widgets", version = "0.1.2" }
 ferrocad_gpui = { path = "crates/ferrocad_gpui", version = "0.1.2" }
 ferrocad = { path = "crates/ferrocad", version = "0.1.2" }

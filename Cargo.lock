@@ -2333,10 +2333,29 @@ name = "ferrocad_gpui"
 version = "0.1.2"
 dependencies = [
  "bite-gpui",
+ "ferrocad_inventor",
+ "ferrocad_types",
+ "ferrocad_wgpu",
  "ferrocad_widgets",
+ "image",
  "pyo3",
  "serde",
  "serde_json",
+]
+
+[[package]]
+name = "ferrocad_inventor"
+version = "0.1.2"
+dependencies = [
+ "ferrocad_types",
+]
+
+[[package]]
+name = "ferrocad_inventor_py"
+version = "0.1.2"
+dependencies = [
+ "ferrocad_inventor",
+ "pyo3",
 ]
 
 [[package]]
@@ -2395,6 +2414,16 @@ name = "ferrocad_types"
 version = "0.1.2"
 dependencies = [
  "serde",
+]
+
+[[package]]
+name = "ferrocad_wgpu"
+version = "0.1.2"
+dependencies = [
+ "bytemuck",
+ "ferrocad_inventor",
+ "ferrocad_types",
+ "wgpu",
 ]
 
 [[package]]
@@ -3131,6 +3160,7 @@ dependencies = [
  "qoi",
  "ravif",
  "rayon",
+ "rgb",
  "tiff",
  "zune-core",
  "zune-jpeg",

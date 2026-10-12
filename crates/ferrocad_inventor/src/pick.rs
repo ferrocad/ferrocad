@@ -1,0 +1,305 @@
+//! Ray picking: which draw packet is under a device-space pointer position.
+//!
+//! The counterpart of Coin's `SoRayPickAction`: it unprojects a device position
+//! through the camera into a world-space ray and intersects it with the compiled
+//! triangles. Because it works on a [`RenderQueue`] (world-space packets), it needs
+//! neither a GPU nor a live scene graph — the same reason the g-buffer pass in
+//! `ferrocad_wgpu` is optional.
+
+use ferrocad_types::Matrix4;
+
+use crate::batch::{PickId, RenderQueue};
+use crate::camera::Camera;
+use crate::geometry::Topology;
+
+/// A world-space ray. `direction` is normalised.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Ray {
+    /// Where the ray starts (the near clip point).
+    pub origin: [f64; 3],
+    /// The (normalised) direction.
+    pub direction: [f64; 3],
+}
+
+impl Ray {
+    /// The distance from [`origin`](Self::origin) to triangle `abc`, if the ray
+    /// crosses it (either face).
+    ///
+    /// Möller–Trumbore; only intersections in front of the origin (`t > 0`) count.
+    pub fn triangle_distance(&self, a: [f64; 3], b: [f64; 3], c: [f64; 3]) -> Option<f64> {
+        let edge1 = sub(b, a);
+        let edge2 = sub(c, a);
+        let pvec = cross(self.direction, edge2);
+        let det = dot(edge1, pvec);
+        if det.abs() < 1e-12 {
+            return None; // ray parallel to the triangle
+        }
+        let inv_det = 1.0 / det;
+        let tvec = sub(self.origin, a);
+        let u = dot(tvec, pvec) * inv_det;
+        if !(0.0..=1.0).contains(&u) {
+            return None;
+        }
+        let qvec = cross(tvec, edge1);
+        let v = dot(self.direction, qvec) * inv_det;
+        if v < 0.0 || u + v > 1.0 {
+            return None;
+        }
+        let t = dot(edge2, qvec) * inv_det;
+        (t > 0.0).then_some(t)
+    }
+}
+
+impl Camera {
+    /// The world-space ray through a device position (bottom-left origin).
+    ///
+    /// `None` if the view-projection is singular.
+    pub fn ray_through(&self, device: [i32; 2]) -> Option<Ray> {
+        let [width, height] = self.viewport.device_size();
+        let ndc_x = 2.0 * f64::from(device[0]) / f64::from(width) - 1.0;
+        let ndc_y = 2.0 * f64::from(device[1]) / f64::from(height) - 1.0;
+
+        let inverse = invert(&self.view_projection())?;
+        let near = unproject(&inverse, ndc_x, ndc_y, 0.0);
+        let far = unproject(&inverse, ndc_x, ndc_y, 1.0);
+        let direction = normalize(sub(far, near));
+        Some(Ray {
+            origin: near,
+            direction,
+        })
+    }
+}
+
+/// The nearest packet under `ray`, with its hit distance.
+pub fn pick(queue: &RenderQueue, ray: &Ray) -> Option<(PickId, f64)> {
+    let mut best: Option<(PickId, f64)> = None;
+    for packet in &queue.packets {
+        if packet.topology != Topology::Triangles {
+            continue;
+        }
+        let Some(geometry) = &packet.geometry else {
+            continue; // a cache-hit packet has no geometry to test against
+        };
+        let world: Vec<[f64; 3]> = geometry
+            .vertices
+            .iter()
+            .map(|vertex| transform_point(&packet.state.world_transform, vertex.position))
+            .collect();
+        for triangle in geometry.indices.chunks_exact(3) {
+            let hit = ray.triangle_distance(
+                world[triangle[0] as usize],
+                world[triangle[1] as usize],
+                world[triangle[2] as usize],
+            );
+            if let Some(distance) = hit {
+                if best.is_none_or(|(_, nearest)| distance < nearest) {
+                    best = Some((packet.state.id, distance));
+                }
+            }
+        }
+    }
+    best
+}
+
+/// The [`PickId`] under a device position, if any.
+pub fn pick_at(queue: &RenderQueue, camera: &Camera, device: [i32; 2]) -> Option<PickId> {
+    let ray = camera.ray_through(device)?;
+    pick(queue, &ray).map(|(id, _)| id)
+}
+
+// --- small vector/matrix helpers (f64, row-major) --------------------------------
+
+fn sub(a: [f64; 3], b: [f64; 3]) -> [f64; 3] {
+    [a[0] - b[0], a[1] - b[1], a[2] - b[2]]
+}
+
+fn dot(a: [f64; 3], b: [f64; 3]) -> f64 {
+    a[0] * b[0] + a[1] * b[1] + a[2] * b[2]
+}
+
+fn cross(a: [f64; 3], b: [f64; 3]) -> [f64; 3] {
+    [
+        a[1] * b[2] - a[2] * b[1],
+        a[2] * b[0] - a[0] * b[2],
+        a[0] * b[1] - a[1] * b[0],
+    ]
+}
+
+fn normalize(v: [f64; 3]) -> [f64; 3] {
+    let length = dot(v, v).sqrt();
+    if length > 0.0 {
+        [v[0] / length, v[1] / length, v[2] / length]
+    } else {
+        v
+    }
+}
+
+/// Transform a point by a row-major matrix, dividing by `w`.
+fn transform_point(m: &Matrix4, p: [f32; 3]) -> [f64; 3] {
+    let v = [f64::from(p[0]), f64::from(p[1]), f64::from(p[2]), 1.0];
+    let out = mul_vec(m, v);
+    let w = if out[3] != 0.0 { out[3] } else { 1.0 };
+    [out[0] / w, out[1] / w, out[2] / w]
+}
+
+/// Unproject an NDC point with the inverse view-projection.
+fn unproject(inverse: &Matrix4, x: f64, y: f64, z: f64) -> [f64; 3] {
+    let out = mul_vec(inverse, [x, y, z, 1.0]);
+    let w = if out[3] != 0.0 { out[3] } else { 1.0 };
+    [out[0] / w, out[1] / w, out[2] / w]
+}
+
+/// Row-major matrix-vector product.
+fn mul_vec(m: &Matrix4, v: [f64; 4]) -> [f64; 4] {
+    let mut out = [0.0; 4];
+    for row in 0..4 {
+        out[row] = (0..4).map(|col| m.m[row * 4 + col] * v[col]).sum();
+    }
+    out
+}
+
+/// Inverse of a row-major 4×4 matrix (the standard cofactor expansion).
+fn invert(m: &Matrix4) -> Option<Matrix4> {
+    let a = &m.m;
+    let mut inv = [0.0f64; 16];
+
+    inv[0] = a[5] * a[10] * a[15] - a[5] * a[11] * a[14] - a[9] * a[6] * a[15]
+        + a[9] * a[7] * a[14]
+        + a[13] * a[6] * a[11]
+        - a[13] * a[7] * a[10];
+    inv[4] = -a[4] * a[10] * a[15] + a[4] * a[11] * a[14] + a[8] * a[6] * a[15]
+        - a[8] * a[7] * a[14]
+        - a[12] * a[6] * a[11]
+        + a[12] * a[7] * a[10];
+    inv[8] = a[4] * a[9] * a[15] - a[4] * a[11] * a[13] - a[8] * a[5] * a[15]
+        + a[8] * a[7] * a[13]
+        + a[12] * a[5] * a[11]
+        - a[12] * a[7] * a[9];
+    inv[12] = -a[4] * a[9] * a[14] + a[4] * a[10] * a[13] + a[8] * a[5] * a[14]
+        - a[8] * a[6] * a[13]
+        - a[12] * a[5] * a[10]
+        + a[12] * a[6] * a[9];
+    inv[1] = -a[1] * a[10] * a[15] + a[1] * a[11] * a[14] + a[9] * a[2] * a[15]
+        - a[9] * a[3] * a[14]
+        - a[13] * a[2] * a[11]
+        + a[13] * a[3] * a[10];
+    inv[5] = a[0] * a[10] * a[15] - a[0] * a[11] * a[14] - a[8] * a[2] * a[15]
+        + a[8] * a[3] * a[14]
+        + a[12] * a[2] * a[11]
+        - a[12] * a[3] * a[10];
+    inv[9] = -a[0] * a[9] * a[15] + a[0] * a[11] * a[13] + a[8] * a[1] * a[15]
+        - a[8] * a[3] * a[13]
+        - a[12] * a[1] * a[11]
+        + a[12] * a[3] * a[9];
+    inv[13] = a[0] * a[9] * a[14] - a[0] * a[10] * a[13] - a[8] * a[1] * a[14]
+        + a[8] * a[2] * a[13]
+        + a[12] * a[1] * a[10]
+        - a[12] * a[2] * a[9];
+    inv[2] = a[1] * a[6] * a[15] - a[1] * a[7] * a[14] - a[5] * a[2] * a[15]
+        + a[5] * a[3] * a[14]
+        + a[13] * a[2] * a[7]
+        - a[13] * a[3] * a[6];
+    inv[6] = -a[0] * a[6] * a[15] + a[0] * a[7] * a[14] + a[4] * a[2] * a[15]
+        - a[4] * a[3] * a[14]
+        - a[12] * a[2] * a[7]
+        + a[12] * a[3] * a[6];
+    inv[10] = a[0] * a[5] * a[15] - a[0] * a[7] * a[13] - a[4] * a[1] * a[15]
+        + a[4] * a[3] * a[13]
+        + a[12] * a[1] * a[7]
+        - a[12] * a[3] * a[5];
+    inv[14] = -a[0] * a[5] * a[14] + a[0] * a[6] * a[13] + a[4] * a[1] * a[14]
+        - a[4] * a[2] * a[13]
+        - a[12] * a[1] * a[6]
+        + a[12] * a[2] * a[5];
+    inv[3] = -a[1] * a[6] * a[11] + a[1] * a[7] * a[10] + a[5] * a[2] * a[11]
+        - a[5] * a[3] * a[10]
+        - a[9] * a[2] * a[7]
+        + a[9] * a[3] * a[6];
+    inv[7] = a[0] * a[6] * a[11] - a[0] * a[7] * a[10] - a[4] * a[2] * a[11]
+        + a[4] * a[3] * a[10]
+        + a[8] * a[2] * a[7]
+        - a[8] * a[3] * a[6];
+    inv[11] = -a[0] * a[5] * a[11] + a[0] * a[7] * a[9] + a[4] * a[1] * a[11]
+        - a[4] * a[3] * a[9]
+        - a[8] * a[1] * a[7]
+        + a[8] * a[3] * a[5];
+    inv[15] = a[0] * a[5] * a[10] - a[0] * a[6] * a[9] - a[4] * a[1] * a[10]
+        + a[4] * a[2] * a[9]
+        + a[8] * a[1] * a[6]
+        - a[8] * a[2] * a[5];
+
+    let det = a[0] * inv[0] + a[1] * inv[4] + a[2] * inv[8] + a[3] * inv[12];
+    if det.abs() < 1e-12 {
+        return None;
+    }
+    let inv_det = 1.0 / det;
+    for value in &mut inv {
+        *value *= inv_det;
+    }
+    Some(Matrix4::from_values(inv))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::node::{Node, NodeKind, Scene};
+    use crate::{compile, PickId};
+
+    /// A triangle at z = 0.5 spanning [-0.5, 0.5] in x and y.
+    fn triangle_scene() -> Scene {
+        Scene {
+            root: Node {
+                kind: NodeKind::Separator,
+                children: vec![
+                    Node {
+                        kind: NodeKind::Coordinate3(vec![
+                            [-0.5, -0.5, 0.5],
+                            [0.5, -0.5, 0.5],
+                            [0.0, 0.5, 0.5],
+                        ]),
+                        children: vec![],
+                    },
+                    Node {
+                        kind: NodeKind::Mesh {
+                            indices: vec![0, 1, 2],
+                            topology: Topology::Triangles,
+                        },
+                        children: vec![],
+                    },
+                ],
+            },
+        }
+    }
+
+    #[test]
+    fn identity_camera_ray_through_center_hits_the_triangle() {
+        let queue = compile(&triangle_scene());
+        // Identity view/projection: view_projection is identity, so device (50,50)
+        // of a 100x100 viewport is NDC (0, 0) and the ray runs along +z.
+        let camera = Camera::identity();
+        let camera = Camera {
+            viewport: crate::Viewport::new([100, 100], 1.0),
+            ..camera
+        };
+        assert_eq!(pick_at(&queue, &camera, [50, 50]), Some(PickId(0)));
+        assert_eq!(pick_at(&queue, &camera, [5, 5]), None);
+    }
+
+    #[test]
+    fn triangle_distance_respects_winding_and_range() {
+        let ray = Ray {
+            origin: [0.0, 0.0, 0.0],
+            direction: [0.0, 0.0, 1.0],
+        };
+        let a = [-0.5, -0.5, 0.5];
+        let b = [0.5, -0.5, 0.5];
+        let c = [0.0, 0.5, 0.5];
+        assert!((ray.triangle_distance(a, b, c).unwrap() - 0.5).abs() < 1e-9);
+        // Behind the origin.
+        let behind = Ray {
+            origin: [0.0, 0.0, 1.0],
+            direction: [0.0, 0.0, 1.0],
+        };
+        assert_eq!(behind.triangle_distance(a, b, c), None);
+    }
+}

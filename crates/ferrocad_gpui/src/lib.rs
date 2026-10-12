@@ -9,7 +9,9 @@
 //! public `FreeCAD` Python API, exactly like a workbench (see
 //! `docs/architecture.md` and `docs/repackaging.md`).
 
+pub mod inventor_view;
 pub mod python;
+pub mod scene;
 pub mod shell;
 
 #[cfg(test)]
@@ -20,6 +22,7 @@ use gpui::{
     application, bounds, point, prelude::*, px, size,
 };
 
+pub use inventor_view::InventorViewport;
 pub use shell::{Shell, ShellModel};
 
 /// Serializes tests that drive the shared embedded CPython instance.
@@ -84,6 +87,9 @@ pub fn run_with(config: HostConfig) {
         let model = model.clone();
         cx.open_window(window_options(&config), move |window, cx| {
             let shell = cx.new(|cx| Shell::from_model(model.clone(), cx));
+            // Best-effort: needs a GPU. Headless tests skip this and keep the
+            // placeholder (see `Shell::enable_viewport`).
+            shell.update(cx, |shell, cx| shell.enable_viewport(cx));
             let console = shell.read(cx).console_focus_handle(cx);
             window.focus(&console, cx);
             shell

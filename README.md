@@ -105,6 +105,9 @@ FerroCAD is a Cargo workspace (edition 2024). Crate status:
 | `crates/ferrocad_part` | the Part workbench: registers `Part::Feature` and `Part::PropertyPartShape` | new — needs OCCT 7.8+ |
 | `crates/ferrocad_part_py` | the `Part` Python module (`makeBox`, `Shape`); the composition root that links OCCT | new — needs OCCT 7.8+ |
 | `crates/ferrocad_py` | PyO3 extension over `ferrocad_core` (module `ferrocad`) | primary |
+| `crates/ferrocad_inventor` | the Coin/Inventor scene core: node AST, state accumulator, mesh compiler, picking, events, viewport/DPI | primary |
+| `crates/ferrocad_wgpu` | the wgpu backend: pipelines, dynamic uniforms, MSAA, offscreen target, readback | primary |
+| `crates/ferrocad_inventor_py` | the pivy-compatible `coin` facade (scaffolding, surfaced as `pivy.coin`) | new |
 | `crates/ferrocad_gen` | generated PyO3 skeleton bindings from the `.pyi` model (M3c) | useful — drives the codegen tests |
 | `crates/ferrocad_widgets` | reusable `bite-gpui` widgets (window chrome, field, console) | published |
 | `crates/ferrocad_gpui` | library: reusable app shell (`run`/`run_with` + `HostConfig`), boots CPython | primary |
@@ -307,12 +310,15 @@ Python-declared-UI ↔ `bite-gpui` round-trip headlessly.
 
 The plan, architecture and slices (S1 shell skeleton → S2 lifecycle + commands → S3 inspector
 → S4 property editor → S5 console → S6 polish) are in
-[`docs/app-shell-vision.md`](docs/app-shell-vision.md). The 3D viewport is a later
-track that docks into the shell's placeholder pane.
+[`docs/app-shell-vision.md`](docs/app-shell-vision.md). The 3D viewport now docks into
+the shell's pane as an image-path presenter (readback → `RenderImage`) drawing a sample
+Inventor scene; the full `scenix`/`wgpu` viewport and the overlay/NaviCube work are in
+[`docs/inventor-renderer.md`](docs/inventor-renderer.md).
 
 **S1 is implemented** (`crates/ferrocad_gpui`): a titled `bite-gpui` window that boots an
 embedded CPython interpreter, creates a sample document, and shows a model inspector, a
-read-only property editor, a viewport placeholder, a Python console and a status bar — all
+read-only property editor, a 3D viewport (the sample Inventor scene, image path), a Python
+console and a status bar — all
 driven live through the `FreeCAD` API (`python/ferrocad_shell`). Run it with
 `cargo run -p ferrocad` (needs a display); the headless `#[gpui::test]` is the CI-proof path.
 

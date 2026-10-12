@@ -14,11 +14,17 @@ documentation = "https://docs.rs/ferrocad_gpui"
 
 [dependencies]
 ferrocad_widgets.workspace = true
+ferrocad_inventor.workspace = true
+ferrocad_wgpu.workspace = true
+ferrocad_types.workspace = true
 bite-gpui = { version = "1.21.1" }
 # Embedding CPython in the host (not the extension-module mode).
 pyo3 = { version = "0.25", features = ["auto-initialize"] }
 serde.workspace = true
 serde_json.workspace = true
+# The image path wraps readback pixels as a gpui `RenderImage`, which holds
+# `image::Frame`s; gpui does not re-export the `image` crate.
+image = "0.25"
 
 [dev-dependencies]
 # `test-support` enables TestAppContext / VisualTestContext / #[gpui::test].

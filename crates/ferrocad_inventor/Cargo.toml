@@ -1,0 +1,25 @@
+# The pure-Rust Coin/Inventor scene core: the node AST, the state accumulator and
+# the mesh compiler that flattens a scene into GPU-ready draw batches.
+#
+# Deliberately headless — no GPU, no Python, no Qt — so it can be unit-tested on
+# its own. It is the seam `ferrocad_wgpu` renders and the `ferrocad_inventor_py`
+# (pivy-compatible `coin`) facade scripts against.
+[package]
+name = "ferrocad_inventor"
+version = "0.1.2"
+edition.workspace = true
+license.workspace = true
+readme.workspace = true
+repository.workspace = true
+homepage.workspace = true
+rust-version.workspace = true
+description = "FerroCAD's Coin/Inventor scene core: node AST, state accumulator and mesh compiler"
+keywords = ["cad", "freecad", "inventor", "scenegraph"]
+categories = ["graphics", "data-structures"]
+documentation = "https://docs.rs/ferrocad_inventor"
+
+[lib]
+name = "ferrocad_inventor"
+
+[dependencies]
+ferrocad_types.workspace = true

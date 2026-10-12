@@ -1236,3 +1236,22 @@ settles how `ferrocad_parametric` ships: editions are artifacts, not crates; the
 different Rust composition (a linked `Part`/OCCT binary), so it needs its own payload with an
 OCCT `lib/` closure. The plan covers `xtask occt`, `bundle --edition`, the launcher library
 path, the release matrix, and the slices E1–E4.
+
+**The Inventor renderer (first slice).** Added the crates that begin the Coin
+replacement: `ferrocad_inventor` (scene core: node AST, state accumulator, mesh
+compiler, CPU ray picking, events/listeners, `Viewport`/DPI), `ferrocad_wgpu` (the
+backend: triangle pipeline + depth, dynamic-offset uniforms, 4× MSAA, offscreen
+target, RGBA readback and a mesh-upload cache), and `ferrocad_inventor_py`
+(`pivy.coin` facade scaffolding). The `ferrocad_gpui` shell gained
+`InventorViewport` — the image-path presenter (readback → `RenderImage` → `img`)
+with pointer events routed through picking to an `EventListener`, so hovering the
+sample cube highlights it — and `Shell::enable_viewport` shows it in the 3D pane
+(best-effort; no GPU falls back to a placeholder). The whole roundtrip is proven by
+`cargo run -p ferrocad_gpui --example inventor_roundtrip` (windowed and
+`--headless out.png`). Design decisions recorded in
+[`inventor-renderer.md`](inventor-renderer.md): the `DrawBatch` boundary, the
+physical-pixel/DPI contract (conversion only at the host, matching FreeCAD), and
+the CPU pick. Verified: inventor/wgpu/gpui tests green (incl. a headless shell
+paint that attaches the viewport when a GPU is present). Next: layout-driven
+sizing, overlays/multi-viewport (NaviCube), the g-buffer pick, and growing the
+facade.

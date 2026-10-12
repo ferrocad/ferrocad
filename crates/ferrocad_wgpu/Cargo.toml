@@ -1,0 +1,22 @@
+[package]
+name = "ferrocad_wgpu"
+version = "0.1.2"
+edition.workspace = true
+license.workspace = true
+readme.workspace = true
+repository.workspace = true
+homepage.workspace = true
+rust-version.workspace = true
+description = "FerroCAD's wgpu backend: hardware commands, WGSL pipelines, dynamic uniforms and g-buffer picking"
+keywords = ["cad", "freecad", "wgpu", "renderer"]
+categories = ["graphics", "rendering"]
+documentation = "https://docs.rs/ferrocad_wgpu"
+
+[lib]
+name = "ferrocad_wgpu"
+
+[dependencies]
+ferrocad_inventor.workspace = true
+ferrocad_types.workspace = true
+wgpu = "29"
+bytemuck = { version = "1", features = ["derive"] }

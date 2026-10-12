@@ -26,7 +26,10 @@ for the modern stack — so a NaviCube can be built from either `pivy.coin` node
 **Non-goals.** No new node kinds, no draw-contract fields, no new crate, no behaviour
 change to the existing cube (V1 is a pure refactor). The arrow buttons, context menu,
 `Backside`/`ViewMenu`, `stepByTurn`, rotate-to-nearest rounding and draggable-cube
-movement stay deferred ([`navicube-spec.md`](navicube-spec.md) §12).
+movement stay deferred ([`navicube-spec.md`](navicube-spec.md) §12). Upstream-fidelity
+gaps the current build has (chamfer geometry, light palette, label rendering, animation
+timing, orbit, placement) are catalogued in [`navicube-spec.md`](navicube-spec.md) §14 and
+are **not** part of V1–V3.
 
 ## 2. Where it sits
 

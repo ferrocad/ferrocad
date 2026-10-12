@@ -16,13 +16,15 @@ use std::collections::HashMap;
 use std::fmt;
 
 use ferrocad_graphics::{
-    Camera, DrawBatch, DrawPacket, Generation, Geometry, MeshId, Rect, RenderQueue,
+    Camera, DrawBatch, DrawPacket, Generation, Geometry, Hit, MeshId, PickId, Rect, RenderQueue,
+    Topology,
 };
 use ferrocad_inventor::{ImageData, InventorView, ViewSpec};
-use ferrocad_types::Matrix4;
+use ferrocad_types::{Matrix4, Vector3};
 
 use crate::batch::GpuMesh;
 use crate::context::GpuContext;
+use crate::pick::{self, PickPipelines, PickTargets};
 use crate::pipeline::{self, ScenePipelines};
 use crate::textures;
 use crate::uniforms::{self, DynamicUniforms, UniformData};
@@ -127,6 +129,11 @@ pub struct WgpuRenderer {
     /// the older GPU buffers, so transient rewrites (tool cursor moves, gizmo drags) do
     /// not leak entries across frames.
     mesh_cache: HashMap<MeshId, GpuMesh>,
+    /// The single-sampled pick pipelines (the offscreen G-buffer pass).
+    pick_pipelines: PickPipelines,
+    /// The pick targets, allocated lazily on the first [`pick_at`](Self::pick_at) and
+    /// dropped on resize (they track the target size).
+    pick_targets: Option<PickTargets>,
 }
 
 impl WgpuRenderer {
@@ -158,6 +165,7 @@ impl WgpuRenderer {
             &textures_layout,
             targets.sample_count,
         );
+        let pick_pipelines = PickPipelines::new(&context.device, &uniform_layout);
         Self {
             context,
             targets,
@@ -169,6 +177,8 @@ impl WgpuRenderer {
             texture_cache: HashMap::new(),
             pipelines,
             mesh_cache: HashMap::new(),
+            pick_pipelines,
+            pick_targets: None,
         }
     }
 
@@ -208,6 +218,7 @@ impl WgpuRenderer {
             return;
         }
         self.targets = Targets::new(&self.context.device, size, self.targets.sample_count);
+        self.pick_targets = None; // re-allocated at the new size on the next pick
         self.size = size;
     }
 
@@ -251,6 +262,9 @@ impl WgpuRenderer {
                 view_proj,
                 model: mat4_to_wgsl(&snapshot.world_transform),
                 color: snapshot.color,
+                pick: snapshot.id.0,
+                topology: topology_ordinal(batch.topology()),
+                _padding: [0; 2],
             };
             self.uniforms.write(&self.context.queue, index as u32, &data);
         }
@@ -355,6 +369,9 @@ impl WgpuRenderer {
                         view_proj,
                         model: mat4_to_wgsl(&snapshot.world_transform),
                         color: snapshot.color,
+                        pick: snapshot.id.0,
+                        topology: topology_ordinal(batch.topology),
+                        _padding: [0; 2],
                     },
                 );
                 slot += 1;
@@ -436,6 +453,206 @@ impl WgpuRenderer {
         }
         self.context.queue.submit(Some(encoder.finish()));
         Ok(())
+    }
+
+    /// Pick the object under a **device** pixel (bottom-left origin) with an offscreen
+    /// G-buffer pass.
+    ///
+    /// The queue (the main scene view) is drawn once more into the pick targets, encoding
+    /// each packet's id, its vertices' topological sub-element index and the surface
+    /// normal; one texel of each target is then read back and the world point unprojected
+    /// through `camera`. `None` outside the target, when nothing is under the pixel, or
+    /// when the view-projection is singular.
+    ///
+    /// Unlike the CPU ray cast, this resolves the exact rasterised pixel — so it agrees
+    /// with what the user sees for overlapping or concave geometry. Because the pick pass
+    /// is single-sampled and offscreen, it is independent of the scene's MSAA target.
+    pub fn pick_at(
+        &mut self,
+        queue: &RenderQueue,
+        camera: &Camera,
+        device: [i32; 2],
+    ) -> Option<Hit> {
+        let [width, height] = self.size;
+        let [x, y] = device;
+        if x < 0 || y < 0 || x as u32 >= width || y as u32 >= height || queue.is_empty() {
+            return None;
+        }
+
+        // Re-draw the queue into the pick targets: fresh geometry (a no-op cache hit for
+        // the frame that just drew it) and one uniform slot per packet.
+        self.ensure_uniform_capacity(queue.packets.len() as u32);
+        self.upload_packets(&queue.packets);
+        let view_proj = mat4_to_wgsl(&camera.view_projection());
+        for (index, packet) in queue.packets.iter().enumerate() {
+            self.uniforms.write(
+                &self.context.queue,
+                index as u32,
+                &UniformData {
+                    view_proj,
+                    model: mat4_to_wgsl(&packet.state.world_transform),
+                    color: packet.state.color,
+                    pick: packet.state.id.0,
+                    topology: topology_ordinal(packet.topology),
+                    _padding: [0; 2],
+                },
+            );
+        }
+
+        if self.pick_targets.is_none() {
+            self.pick_targets = Some(PickTargets::new(&self.context.device, self.size));
+        }
+        let targets = self.pick_targets.as_ref()?;
+
+        let mut encoder = self.context.device.create_command_encoder(
+            &wgpu::CommandEncoderDescriptor {
+                label: Some("ferrocad pick"),
+            },
+        );
+        {
+            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("ferrocad pick pass"),
+                color_attachments: &[
+                    Some(wgpu::RenderPassColorAttachment {
+                        view: &targets.id_view,
+                        depth_slice: None,
+                        resolve_target: None,
+                        ops: wgpu::Operations {
+                            // Id 0 = "empty": a hit overwrites it with the packet's id.
+                            load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
+                            store: wgpu::StoreOp::Store,
+                        },
+                    }),
+                    Some(wgpu::RenderPassColorAttachment {
+                        view: &targets.normal_view,
+                        depth_slice: None,
+                        resolve_target: None,
+                        ops: wgpu::Operations {
+                            load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
+                            store: wgpu::StoreOp::Store,
+                        },
+                    }),
+                    Some(wgpu::RenderPassColorAttachment {
+                        view: &targets.depth_view,
+                        depth_slice: None,
+                        resolve_target: None,
+                        ops: wgpu::Operations {
+                            load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
+                            store: wgpu::StoreOp::Store,
+                        },
+                    }),
+                ],
+                depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
+                    view: &targets.depth_buffer_view,
+                    depth_ops: Some(wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(1.0),
+                        store: wgpu::StoreOp::Store,
+                    }),
+                    stencil_ops: None,
+                }),
+                timestamp_writes: None,
+                occlusion_query_set: None,
+                multiview_mask: None,
+            });
+            for (index, packet) in queue.packets.iter().enumerate() {
+                let Some(mesh) = self.mesh_cache.get(&packet.mesh_id) else {
+                    continue;
+                };
+                if mesh.generation != packet.generation {
+                    continue;
+                }
+                pass.set_pipeline(self.pick_pipelines.for_topology(packet.topology));
+                pass.set_bind_group(
+                    0,
+                    &self.uniforms.bind_group,
+                    &[self.uniforms.offset(index as u32)],
+                );
+                pass.set_vertex_buffer(0, mesh.vertex_buffer.slice(..));
+                pass.set_index_buffer(mesh.index_buffer.slice(..), wgpu::IndexFormat::Uint32);
+                pass.draw_indexed(0..mesh.index_count, 0, 0..1);
+            }
+        }
+        self.context.queue.submit(Some(encoder.finish()));
+
+        // `device` is bottom-left origin; the pick targets are top-left origin, so the
+        // copy row flips. The unprojection below uses the (unflipped) device pixel centre.
+        let origin = wgpu::Origin3d {
+            x: x as u32,
+            y: height - 1 - y as u32,
+            z: 0,
+        };
+        let (gpu_device, gpu_queue) = (&self.context.device, &self.context.queue);
+        let ids = pick::read_texel(
+            gpu_device,
+            gpu_queue,
+            &targets.id,
+            wgpu::TextureAspect::All,
+            8,
+            origin,
+        )
+        .ok()?;
+        let normals = pick::read_texel(
+            gpu_device,
+            gpu_queue,
+            &targets.normal,
+            wgpu::TextureAspect::All,
+            16,
+            origin,
+        )
+        .ok()?;
+        let depths = pick::read_texel(
+            gpu_device,
+            gpu_queue,
+            &targets.depth,
+            wgpu::TextureAspect::All,
+            4,
+            origin,
+        )
+        .ok()?;
+
+        let entity_raw = read_u32(&ids)?;
+        if entity_raw == 0 {
+            // Empty space: the target was cleared to 0, and a hit always writes id + 1,
+            // so `PickId(0)` (the compiler's default) remains a valid hit.
+            return None;
+        }
+        let entity = entity_raw - 1;
+        let element = read_u32(&ids[4..])?;
+        let normal = [
+            read_f32(&normals)?,
+            read_f32(&normals[4..])?,
+            read_f32(&normals[8..])?,
+        ];
+        let topology = topology_from_ordinal(read_f32(&normals[12..])? as u32);
+        let depth = read_f32(&depths)?;
+
+        let [width_f, height_f] = [f64::from(width), f64::from(height)];
+        let ndc = [
+            2.0 * (f64::from(x) + 0.5) / width_f - 1.0,
+            2.0 * (f64::from(y) + 0.5) / height_f - 1.0,
+            f64::from(depth),
+        ];
+        let inverse = camera.view_projection().inverse()?;
+        let point = unproject(&inverse, ndc);
+
+        // The G-buffer carries no ray parameter; the eye is the view-space origin.
+        let eye = camera.view.inverse()?.transform(&Vector3::zero());
+        let distance = Vector3::new(
+            f64::from(point[0]),
+            f64::from(point[1]),
+            f64::from(point[2]),
+        )
+        .sub(&eye)
+        .length();
+
+        Some(Hit {
+            id: PickId(entity),
+            point,
+            normal,
+            element,
+            topology,
+            distance,
+        })
     }
 
     /// Grow the dynamic-uniform buffer so it holds at least `count` slots.
@@ -593,6 +810,15 @@ impl InventorView for WgpuRenderer {
     fn image(&mut self) -> Result<ImageData, Self::Error> {
         self.read_back(&self.targets.color)
     }
+
+    fn supports_pick(&self) -> bool {
+        true
+    }
+
+    fn pick_at(&mut self, queue: &RenderQueue, camera: &Camera, device: [i32; 2]) -> Option<Hit> {
+        // The inherent method (the G-buffer pass), not this trait method.
+        WgpuRenderer::pick_at(self, queue, camera, device)
+    }
 }
 
 /// Whether the adapter supports `count` samples for both the colour and depth formats.
@@ -616,6 +842,45 @@ fn mat4_to_wgsl(m: &Matrix4) -> [[f32; 4]; 4] {
         }
     }
     out
+}
+
+/// The topology ordinal the pick shader writes to the normal target's `w` channel.
+fn topology_ordinal(topology: Topology) -> u32 {
+    match topology {
+        Topology::Triangles => 0,
+        Topology::Lines => 1,
+        Topology::Points => 2,
+    }
+}
+
+/// Decode [`topology_ordinal`]; anything unexpected is treated as triangles.
+fn topology_from_ordinal(ordinal: u32) -> Topology {
+    match ordinal {
+        1 => Topology::Lines,
+        2 => Topology::Points,
+        _ => Topology::Triangles,
+    }
+}
+
+/// Read a little-endian `u32` from the first four bytes.
+fn read_u32(bytes: &[u8]) -> Option<u32> {
+    Some(u32::from_le_bytes(bytes.get(..4)?.try_into().ok()?))
+}
+
+/// Read a little-endian `f32` from the first four bytes.
+fn read_f32(bytes: &[u8]) -> Option<f32> {
+    Some(f32::from_le_bytes(bytes.get(..4)?.try_into().ok()?))
+}
+
+/// Unproject a clip-space NDC point with the inverse (row-major) view-projection.
+fn unproject(inverse: &Matrix4, ndc: [f64; 3]) -> [f32; 3] {
+    let v = [ndc[0], ndc[1], ndc[2], 1.0];
+    let mut out = [0.0f64; 4];
+    for row in 0..4 {
+        out[row] = (0..4).map(|col| inverse.m[row * 4 + col] * v[col]).sum();
+    }
+    let w = if out[3] != 0.0 { out[3] } else { 1.0 };
+    [(out[0] / w) as f32, (out[1] / w) as f32, (out[2] / w) as f32]
 }
 
 /// Convert a bottom-left-origin device [`Rect`] into a wgpu top-left-origin
@@ -726,6 +991,16 @@ mod tests {
     use ferrocad_graphics::{PickId, Topology, Viewport};
     use ferrocad_inventor::{Node, NodeKind, Scene, compile, compile_with};
 
+    /// Serializes the GPU tests. The suite runs in one process with one thread per test,
+    /// and the (software) adapter can fault when several `wgpu` devices are driven at
+    /// once, so every GPU test holds this for its duration.
+    static GPU_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    /// Acquire [`GPU_LOCK`], ignoring poisoning (a failed test already released it).
+    fn gpu_guard() -> std::sync::MutexGuard<'static, ()> {
+        GPU_LOCK.lock().unwrap_or_else(|poison| poison.into_inner())
+    }
+
     /// A triangle already in clip space, for use with [`Camera::identity`].
     fn clip_space_triangle() -> Scene {
         Scene {
@@ -757,6 +1032,7 @@ mod tests {
     /// than fails) when the machine has no GPU adapter, so CI without a GPU passes.
     #[test]
     fn renders_and_reads_back() {
+        let _gpu = gpu_guard();
         let queue = compile(&clip_space_triangle());
         let Ok(mut renderer) = WgpuRenderer::new_default([64, 64]) else {
             eprintln!("no GPU adapter available; skipping offscreen render test");
@@ -782,6 +1058,7 @@ mod tests {
     /// view; the readback shows its colour in the corner. Skips without a GPU.
     #[test]
     fn overlay_draws_into_its_rect() {
+        let _gpu = gpu_guard();
         let main = compile(&clip_space_triangle());
         let cube = compile(&ferrocad_inventor::navicube::scene(None));
         let Ok(mut renderer) = WgpuRenderer::new_default([128, 128]) else {
@@ -829,6 +1106,7 @@ mod tests {
     fn a_stage_and_an_inventor_scene_coexist_in_one_pass() {
         use ferrocad_stage::{DrawMode, ShapeItem, Stage};
 
+        let _gpu = gpu_guard();
         let Ok(mut renderer) = WgpuRenderer::new_default([64, 64]) else {
             eprintln!("no GPU adapter available; skipping coexistence test");
             return;
@@ -963,6 +1241,7 @@ mod tests {
     fn coplanar_edges_render_over_the_shaded_surface() {
         use ferrocad_stage::{DrawMode, ShapeItem, Stage};
 
+        let _gpu = gpu_guard();
         let Ok(mut renderer) = WgpuRenderer::new_default([64, 64]) else {
             eprintln!("no GPU adapter available; skipping depth-bias test");
             return;
@@ -1022,6 +1301,7 @@ mod tests {
     fn repeated_shape_rewrites_do_not_grow_the_mesh_cache() {
         use ferrocad_stage::{DrawMode, ShapeItem};
 
+        let _gpu = gpu_guard();
         let Ok(mut renderer) = WgpuRenderer::new_default([32, 32]) else {
             eprintln!("no GPU adapter available; skipping cache-eviction test");
             return;
@@ -1061,5 +1341,163 @@ mod tests {
                 "the cache holds one mesh after {step} rewrites (no leak)"
             );
         }
+    }
+
+    /// A draw packet with an explicit pick id, per-vertex sub-element index and topology,
+    /// for driving the G-buffer pass directly (no producer). Identity camera, so the
+    /// positions are clip-space *and* world coordinates at the sampled depth.
+    fn pick_packet(
+        mesh: u64,
+        id: u32,
+        part: u32,
+        topology: Topology,
+        positions: Vec<[f32; 3]>,
+        indices: Vec<u32>,
+    ) -> DrawPacket {
+        use ferrocad_graphics::{Generation, StateSnapshot, Vertex};
+        DrawPacket {
+            mesh_id: MeshId(mesh),
+            generation: Generation(1),
+            topology,
+            geometry: Some(Geometry {
+                vertices: positions
+                    .iter()
+                    .map(|position| Vertex {
+                        position: *position,
+                        normal: [0.0, 0.0, 1.0],
+                        uv: [0.0, 0.0],
+                        part_idx: part,
+                    })
+                    .collect(),
+                indices,
+            }),
+            state: StateSnapshot {
+                world_transform: Matrix4::identity(),
+                color: [1.0, 1.0, 1.0, 1.0],
+                depth_bias: 0.0,
+                texture: None,
+                id: PickId(id),
+            },
+        }
+    }
+
+    /// The offscreen G-buffer pass resolves the object under a pixel, its world point and
+    /// its surface normal — the hardware replacement for the CPU ray cast. Skips (rather
+    /// than fails) without a GPU adapter.
+    #[test]
+    fn pick_at_resolves_the_object_and_its_world_point() {
+        let _gpu = gpu_guard();
+        let Ok(mut renderer) = WgpuRenderer::new_default([64, 64]) else {
+            eprintln!("no GPU adapter available; skipping pick test");
+            return;
+        };
+        let camera = Camera::identity();
+
+        // Two clip-space triangles at z = 0.5: id 1 on the left, id 2 on the right.
+        let mut queue = RenderQueue::default();
+        queue.packets.push(pick_packet(
+            1,
+            1,
+            0,
+            Topology::Triangles,
+            vec![[-0.9, -0.9, 0.5], [-0.1, -0.9, 0.5], [-0.5, 0.9, 0.5]],
+            vec![0, 1, 2],
+        ));
+        queue.packets.push(pick_packet(
+            2,
+            2,
+            0,
+            Topology::Triangles,
+            vec![[0.1, -0.9, 0.5], [0.9, -0.9, 0.5], [0.5, 0.9, 0.5]],
+            vec![0, 1, 2],
+        ));
+        renderer
+            .draw_frame(&[ViewSpec {
+                queue: &queue,
+                camera: &camera,
+                rect: None,
+                overlay: false,
+            }])
+            .expect("draw");
+
+        let left = renderer.pick_at(&queue, &camera, [16, 32]).expect("left hit");
+        assert_eq!(left.id, PickId(1));
+        assert_eq!(left.topology, Topology::Triangles);
+        // Identity camera: clip == world, so the world point is the pixel-centre NDC at
+        // the sampled depth (0.5).
+        let expected: [f32; 3] = [2.0 * 16.5 / 64.0 - 1.0, 2.0 * 32.5 / 64.0 - 1.0, 0.5];
+        for (got, want) in left.point.iter().zip(expected) {
+            assert!((got - want).abs() < 0.02, "world point {got} !~ {want}");
+        }
+        // The triangle lies in the XY plane, so its normal is +Z.
+        assert!(
+            (left.normal[2] - 1.0).abs() < 0.01,
+            "normal {:?} should be +Z",
+            left.normal
+        );
+        assert!(left.distance > 0.0);
+
+        let right = renderer.pick_at(&queue, &camera, [48, 32]).expect("right hit");
+        assert_eq!(right.id, PickId(2));
+
+        assert_eq!(renderer.pick_at(&queue, &camera, [2, 2]), None, "empty space");
+        assert_eq!(
+            renderer.pick_at(&queue, &camera, [-1, 0]),
+            None,
+            "outside the target"
+        );
+    }
+
+    /// The G-buffer carries each vertex's topological sub-element index and the primitive
+    /// topology, so a hit resolves to a `Face1`/`Edge2` (and the CPU and GPU paths agree on
+    /// the index). `PickId(0)` — the compiler's default — is a *real* id, not "empty".
+    /// Skips (rather than fails) without a GPU adapter.
+    #[test]
+    fn pick_at_reports_the_sub_element_index_and_topology() {
+        let _gpu = gpu_guard();
+        let Ok(mut renderer) = WgpuRenderer::new_default([64, 64]) else {
+            eprintln!("no GPU adapter available; skipping pick detail test");
+            return;
+        };
+        let camera = Camera::identity();
+
+        // A triangle (id 0, part 5) on the left, and a wireframe line (id 4, part 7) across
+        // the right at the row-32 pixel centre.
+        let y = 2.0 * 32.5 / 64.0 - 1.0;
+        let mut queue = RenderQueue::default();
+        queue.packets.push(pick_packet(
+            1,
+            0,
+            5,
+            Topology::Triangles,
+            vec![[-0.9, -0.9, 0.5], [-0.1, -0.9, 0.5], [-0.5, 0.9, 0.5]],
+            vec![0, 1, 2],
+        ));
+        queue.packets.push(pick_packet(
+            2,
+            4,
+            7,
+            Topology::Lines,
+            vec![[0.2, y, 0.5], [0.9, y, 0.5]],
+            vec![0, 1],
+        ));
+        renderer
+            .draw_frame(&[ViewSpec {
+                queue: &queue,
+                camera: &camera,
+                rect: None,
+                overlay: false,
+            }])
+            .expect("draw");
+
+        let face = renderer.pick_at(&queue, &camera, [16, 32]).expect("triangle hit");
+        assert_eq!(face.id, PickId(0), "PickId(0) is a valid hit, not empty space");
+        assert_eq!(face.element, 5, "the face's sub-element index");
+        assert_eq!(face.topology, Topology::Triangles);
+
+        let edge = renderer.pick_at(&queue, &camera, [48, 32]).expect("line hit");
+        assert_eq!(edge.id, PickId(4));
+        assert_eq!(edge.element, 7, "the edge's sub-element index");
+        assert_eq!(edge.topology, Topology::Lines);
     }
 }

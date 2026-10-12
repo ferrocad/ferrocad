@@ -52,13 +52,20 @@ backend sit behind it without touching the node model or compiler.
 
 ## 3. Picking and events
 
-- **Picking** is a CPU ray cast (`ferrocad_inventor::pick`): unproject a device
-  position through the camera (`Camera::ray_through`, using a local 4×4 inverse)
-  and intersect Möller–Trumbore against the world-space triangles. This is the
-  `SoRayPickAction` analogue and needs no GPU. `pick_hit`/`pick_at_hit` return a
-  [`Hit`](../crates/ferrocad_inventor/src/pick.rs) (object id, world point, surface
-  normal, triangle index) — what `SoPickedPoint`/`SoFaceDetail` expose to Python. A
-  g-buffer pick in `ferrocad_wgpu` remains the stub for later.
+- **Picking** — two paths with the same `Hit` vocabulary:
+  - the **CPU ray cast** (`ferrocad_graphics::pick`): unproject a device position
+    through the camera (`Camera::ray_through`, using a local 4×4 inverse) and intersect
+    Möller–Trumbore against the world-space triangles. This is the `SoRayPickAction`
+    analogue and needs no GPU. `pick_hit`/`pick_at_hit` return a
+    [`Hit`](../crates/ferrocad_graphics/src/pick.rs) (object id, world point, surface
+    normal, primitive index) — what `SoPickedPoint`/`SoFaceDetail` expose to Python.
+  - the **hardware G-buffer pass** (`ferrocad_wgpu::pick`, T4 sub-slice 4): the scene
+    view is re-drawn into offscreen single-sampled targets (`Rg32Uint`
+    `[entity_id, part_idx]`, `Rgba32Float` `[normal, topology]`, `R32Float` depth), and a
+    1×1 texel is read back and unprojected — the exact rasterised pixel, O(1).
+  The `InventorView` seam carries both: `supports_pick()` (default `false`) selects
+  whether `InventorViewport::pick_main` uses the backend's `pick_at` or falls back to the
+  CPU ray cast. The two agree on the object id and the sub-element index.
 - **Events** are `ferrocad_inventor::Event` (`MouseMove`/`MouseButton`/`MouseLeave`)
   delivered to an `EventListener` (`on_event(event, hit, scene)`) — the
   `SoEventCallback` analogue. The listener may edit the scene and reports whether it
@@ -113,6 +120,11 @@ The contract, matching FreeCAD (see the assessment and `InputDevice`/
   test), and the mesh cache is keyed by `mesh_id`, **evicting the previous generation**
   (T4.2–T4.3) instead of accumulating.
 - CPU ray picking; event/listener dispatch; `Viewport`/DPI primitives.
+- **Hardware G-buffer picking** (`ferrocad_wgpu::pick`): `WgpuRenderer::pick_at` renders
+  the `[entity_id, part_idx]` / `[normal, topology]` / depth targets and reads one texel
+  back, unprojecting the world point via the inverse view-projection. Exposed through
+  `InventorView::supports_pick`/`pick_at`, preferred by `InventorViewport` with the CPU
+  ray cast as fallback.
 - `ferrocad_viewport::InventorViewport` (gpui): image path (readback → `RenderImage`
   → `img`), pointer events → pick → listener → recompile, `with_listener`.
 - Wired into the app shell: `Shell::enable_viewport` (best-effort, needs a GPU)
@@ -139,9 +151,9 @@ The contract, matching FreeCAD (see the assessment and `InputDevice`/
 
 **Not implemented**
 
-- The g-buffer pick pass (`ferrocad_wgpu::pick` is a stub); a **transparent** (order-
-  independent) pipeline; a **text/glyph-run** node (labels exist, but as baked
-  textures, not text nodes).
+- The g-buffer pick pass is no longer a stub (T4 sub-slice 4 landed; see §3); what
+  remains is a **transparent** (order-independent) pipeline and a **text/glyph-run**
+  node (labels exist, but as baked textures, not text nodes).
 - The `pivy.coin` facade is deliberately narrow: no arena/object identity, no
   `SoPath`/`SoSearchAction`, no NumPy zero-copy or generational dirty counters, and
   no `-1` polygon delimiters (see [`inventor-plan.md`](inventor-plan.md) §8).
@@ -178,7 +190,8 @@ traversal/compile, picking/events — adapted to the code as it stands) is in
    (see [`navicube.md`](navicube.md)). The pieces, the overlay pass, drag-orbit, the
    animated snap, translucent away-facing faces, baked face labels and the `Home`
    button are built.
-3. **The g-buffer pick** and line/point pipelines.
+3. **Line/point pipeline polish** and **feature snapping** from the G-buffer
+   `part_idx` (the pick pass now supplies the sub-element index).
 4. **Grow the `pivy.coin` facade** and the `TypeRegistry` toward the ~63
    registered node/kit classes and the `SoType.fromName` surface the workbenches
    use. S1–S4 cover the class spine, the geometry fields, the scene-extraction

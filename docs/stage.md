@@ -1,8 +1,9 @@
 # The modern stack: `ferrocad_stage` — plan and status
 
-Status: **T0–T3 built, and T4 in progress (2026-10-12): sub-slices 1–3 done
-(`ferrocad_graphics` extracted, surface depth bias, mesh-cache generational eviction);
-sub-slice 4 (the G-buffer pick pass + `part_idx`) is pending.**
+Status: **T0–T4 built (2026-10-12).** T4's four sub-slices are done:
+`ferrocad_graphics` extracted, surface depth bias, mesh-cache generational eviction, and
+the offscreen G-buffer pick pass (vertex `part_idx`). T5 (`ferrocad.stage` PyO3 bindings)
+remains.
 Companion to [`inventor-renderer.md`](inventor-renderer.md) (the legacy `pivy.coin`
 stack this runs beside), [`inventor-plan.md`](inventor-plan.md) (the emulation roadmap),
 and [`architecture.md`](architecture.md) (crate layering).
@@ -46,10 +47,10 @@ vocabulary, camera and picking) shared with the legacy stack (T4, sub-slice 1).
 | **T1.5 — viewport bridge** | `InventorViewport` holds a `Stage` (`stage_mut`/`set_stage`); its queue is the inventor compile plus `stage.emit_batches`, so the shell renders both producers. | ✅ |
 | **T2 — tools** | `Tool`/`PointerEvent`/`MouseButton`, snapping (`snap_to_geometry`), transient items (`PolylineTool`), and host dispatch from the viewport (drawn as a transient overlay, never picked). | ✅ |
 | **T3 — `TransformGizmo`** | Draggers with drag/commit delta events; transient transform override. | ✅ |
-| **T4 — G-buffer pick pass** ◐ | *(1/4)* `ferrocad_graphics` extracted, `ferrocad_stage` decoupled from inventor. *(2/4)* surface slope/constant depth bias (coplanar shaded-with-edges). *(3/4)* mesh-cache generational eviction. *(todo, 4/4)* vertex `part_idx` + the offscreen `Rg32Uint` pass + 1×1 readback + `part_index` unprojection. | ◐ |
+| **T4 — G-buffer pick pass** | *(1/4)* `ferrocad_graphics` extracted, `ferrocad_stage` decoupled from inventor. *(2/4)* surface slope/constant depth bias (coplanar shaded-with-edges). *(3/4)* mesh-cache generational eviction. *(4/4)* vertex `part_idx` + the offscreen `Rg32Uint` pass + 1×1 readback + world-point unprojection, wired into the viewport. | ✅ |
 | **T5 — `ferrocad.stage` bindings** | PyO3 module exposing `ShapeItem`/`Tool`/`TransformGizmo`. | ▢ |
 
-## 4. As built (T0–T1)
+## 4. As built (T0–T4)
 
 ### T0 — declarative spine
 
@@ -172,16 +173,66 @@ invariant scale, the per-mode handle set, axis/plane/ring drags, the commit, and
 axis handle, drags, asserts the target item's preview, then releases and asserts the
 commit and the cleared preview.
 
+### T4 — the G-buffer pick pass
+
+T4 is four independent sub-slices:
+
+1. **`ferrocad_graphics` extracted** — the neutral draw contract (batch vocabulary,
+camera/viewport, CPU picking) moved out of `ferrocad_inventor` into its own leaf crate
+(§5.1).
+2. **Surface depth bias** — the triangle (surface) pipeline carries a slope/constant depth
+bias (`constant: 1, slope_scale: 1.0`), so a coplanar edge wireframe wins the depth test
+(§5.4).
+3. **Mesh-cache generational eviction** — the renderer's mesh cache is keyed by `MeshId`
+alone; a newer `Generation` **replaces** (and drops) the old GPU buffers, so transient
+rewrites (tool cursors, gizmo drags) never leak.
+4. **The offscreen pick pass** — the selection path, replacing the CPU ray cast on a GPU.
+
+The pick pass (`ferrocad_wgpu::pick`, `crates/ferrocad_wgpu/src/pick.wgsl`) draws the
+main scene view once more into its own **single-sampled** targets (the scene pass is
+multisampled, so it cannot share the MSAA attachments):
+
+- target 0 `Rg32Uint` — `[entity_id, part_idx]` (the packet's `PickId`, and the hit
+  vertex's topological sub-element index);
+- target 1 `Rgba32Float` — `[normal.xyz, topology]`;
+- target 2 `R32Float` — the depth, written from the fragment's `@builtin(position).z`.
+  A depth *attachment* cannot be partially copied on every backend, so the pass binds a
+  depth buffer for the test and mirrors its value into a colour target the host can copy
+  a texel at a time.
+
+`WgpuRenderer::pick_at(queue, camera, device)` re-uploads any fresh geometry, re-encodes
+the pass, copies the 1×1 texel at `device` (bottom-left origin) from each target with
+256-byte-aligned staging buffers, and reconstructs the world point by unprojecting the
+pixel-centre NDC (`ndc = 2·(p + 0.5)/size − 1`) through the inverse view-projection. A
+zero entity id means empty space (`PickId(0)` is the "not pickable" id).
+
+It is exposed through the **`InventorView` seam** (in `ferrocad_inventor`): the trait
+gains `supports_pick()` (default `false`) and `pick_at(...)` (default `None`).
+`InventorViewport::pick_main` calls the backend's pick when `supports_pick()` is true and
+the CPU ray cast (`ferrocad_graphics::pick_at_hit`) otherwise, so the CPU path stays the
+fallback for headless/CPU hosts and every listener/tool/gizmo keeps working unchanged.
+The vertex `part_idx` (`Vertex { pos, norm, uv, part_idx }`, a `u32`) is the green
+channel; `Hit::element` carries it, which is what `SoFaceDetail`/`SoLineDetail` and
+`stage`'s snapping will consume.
+
+**Verification:** `ferrocad_wgpu`'s `pick_at_resolves_the_object_and_its_world_point`
+(two clip-space triangles, distinct ids — a pixel picks the right id and the world
+point/normal of the hit) and `pick_at_reports_the_sub_element_index_and_topology` (the
+sub-element index and `Topology` come back for a triangle and a line);
+`ferrocad_viewport`'s `the_viewport_prefers_a_hardware_pick_when_the_backend_has_one`
+proves the viewport prefers a backend's `pick_at` over the CPU ray cast.
+
 ## 5. Deferred decisions
 
 1. **Batch vocabulary home.** *Done (T4, sub-slice 1):* the vocabulary now lives in the
    neutral `ferrocad_graphics` crate. `ferrocad_inventor` re-exports it, `ferrocad_stage`
    is fully decoupled from Inventor, and `ferrocad_wgpu`/`ferrocad_viewport` depend on it
    directly.
-2. **Contract extension.** `pipeline_kind`, `entity_id`, and interleaved `part_idx` are
-   deliberately **not** added yet: `ShadedWithEdges` already decomposes into existing
-   `Topology` packets, and surface/wireframe/overlay is already expressible. Add them at
-   T4, where the G-buffer pass gives them a consumer.
+2. **Contract extension.** *Done (T4, sub-slice 4):* `Vertex` gained `part_idx` (the
+   G-buffer's sub-element index) and the per-draw uniform gained `pick` + `topology`, so
+   the pick pass has a consumer. `pipeline_kind` remains folded into
+   `Topology` + the view's `overlay` flag — a separate enum would carry no new information
+   yet.
 3. **Math crates.** Stay on `ferrocad_types` (CAD-grade f64 `Matrix4`/`Placement`/
    `Rotation`); do **not** introduce `glam` alongside it. The renderer converts f64→f32
    at the WGSL boundary.
@@ -189,6 +240,10 @@ commit and the cleared preview.
    carries a slope/constant depth bias (`constant: 1, slope_scale: 1.0`), so a coplanar
    edge wireframe wins the depth test; `ferrocad_wgpu` verifies it headlessly
    (`coplanar_edges_render_over_the_shaded_surface`).
+5. **Picking path.** *Resolved (T4, sub-slice 4):* the G-buffer pick is the primary path
+   where a GPU exists; the CPU ray cast is retained as the fallback (it needs geometry in
+   the queue, which a fresh compile always carries). The two agree on the object id and
+   the sub-element index, so a switch is invisible to a listener.
 
 ## 6. Naming reconciliation
 
@@ -201,5 +256,5 @@ vocabulary:
 | `MeshCacheKey` | `(MeshId, Generation)` |
 | `BatchPipelineKind` | the pipeline is chosen from `Topology` + the view's `overlay` flag (extended at T4) |
 | `entity_id` | `PickId` (a `u32`) |
-| interleaved `[pos, norm, part_idx]` | `Geometry { Vec<Vertex>, Vec<u32> }`, `Vertex { pos, norm, uv }` |
+| interleaved `[pos, norm, part_idx]` | `Geometry { Vec<Vertex>, Vec<u32> }`, `Vertex { pos, norm, uv, part_idx }` |
 | `glam::Mat4`/`Vec4` | `ferrocad_types::Matrix4` / `[f32; 4]` |

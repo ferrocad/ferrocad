@@ -19,7 +19,7 @@ adaptations are:
 | Generational arena (`NodeSlot`) + intrusive refcount | **Owned tree**: `Scene { root: Node }`, `Node { kind, children }`, `NodeKind` enum | ▢ The arena is the migration target for PyO3 identity + detached fields. |
 | `glam::Mat4` / `Vec4` | `ferrocad_types::Matrix4` (f64, row-major) | Kept FreeCAD-native; converted to f32 column-major for WGSL in the renderer. |
 | `DrawBatchDescriptor` with raw `vertex_data: Arc<Vec<u8>>` | `DrawPacket` with `geometry: Option<Geometry>` (`Vec<Vertex>`/`Vec<u32>`) | The renderer owns the GPU layout; the packet stays typed. |
-| (not mentioned) | **CPU ray pick** ✅ (`pick`/`pick_at`), **G-buffer pick** ▢ (stub) | The draft specified G-buffer picking; a CPU pick landed first. |
+| (not mentioned) | **CPU ray pick** ✅ (`pick`/`pick_at`), **G-buffer pick** ✅ (`ferrocad_wgpu::pick`) | Both exist; the GPU pass is preferred where a GPU is present, the CPU ray cast is the fallback. |
 | (not mentioned) | `Viewport` (device size + DPR) ✅, `InventorView` (surface/image) ✅ | HiDPI + presentation seams added since the draft. |
 | `ferrocad_gpui::input_bridge` | `ferrocad_viewport::inventor_view` + `scene` | Host-side glue. |
 
@@ -112,10 +112,10 @@ shared coords → surface + wireframe batches, concave triangulation, cache reus
 
 ## 5. Phase 4 — CAD interactivity, picking & the event bridge
 
-* ✅ **CPU ray pick**: `ferrocad_inventor::pick` (`Ray`, `Camera::ray_through`,
-  `pick`/`pick_hit`, `pick_at`/`pick_at_hit`) — the `SoRayPickAction` analogue;
-  `Hit` carries the object `PickId`, the world point, the surface normal and the
-  triangle index.
+* ✅ **CPU ray pick**: `ferrocad_graphics::pick` (`Ray`, `Camera::ray_through`,
+  `pick`/`pick_hit`, `pick_at`/`pick_at_hit`; extracted from `ferrocad_inventor` in T4.1)
+  — the `SoRayPickAction` analogue; `Hit` carries the object `PickId`, the world point,
+  the surface normal and the primitive index.
 * ✅ **Events**: `ferrocad_inventor::Event` (`MouseMove`/`MouseButton`/`MouseLeave`)
   + `EventListener` (`on_event(event, hit, scene)`, with the full `Hit`) →
   recompile/highlight; the host delivers device-pixel events and the viewport routes
@@ -126,10 +126,13 @@ shared coords → surface + wireframe batches, concave triangulation, cache reus
   **Deferred:** the global thread-local context Coin uses (ours lives on the node for
   the duration of the call) and callbacks that change what is *rendered* (the
   extracted scene is a copy).
-* ▢ **G-buffer pick pass** (`ferrocad_wgpu::pick` is a stub): `Rg32Uint`
-  `(entity_id, part_index)` + normal + depth, 256-byte staging readback, NDC
-  unprojection. Note the **`part_index`** (FreeCAD 1-based sub-shape id) depends on
-  the OCCT topological-naming work, not just the renderer.
+* ✅ **G-buffer pick pass** (`ferrocad_wgpu::pick`): `Rg32Uint` `(entity_id, part_index)`
+  + `Rgba32Float` `(normal, topology)` + an `R32Float` depth target, 256-byte staging
+  1×1 readback, and NDC unprojection through the inverse view-projection, exposed via
+  `InventorView::supports_pick`/`pick_at` and preferred by `InventorViewport` (the CPU
+  ray cast is the fallback). The **`part_index`** it reports is the per-vertex
+  `Vertex::part_idx`; filling it with the real (1-based) sub-shape id still depends on
+  the OCCT topological-naming work, not the renderer.
 * ◐ **`SoPickedPoint`** (world point, normal, `SoDetail`) and the **`SoDetail`
   classes** (`SoFaceDetail.getFaceIndex()`/`getPartIndex()`,
   `SoLineDetail.getLineIndex()`, `getPoint()`). Built in **S4** with 0-based indices;

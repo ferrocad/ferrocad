@@ -58,7 +58,9 @@ impl ScenePipelines {
             immediate_size: 0,
         });
 
-        let attributes = wgpu::vertex_attr_array![0 => Float32x3, 1 => Float32x3, 2 => Float32x2];
+        let attributes = wgpu::vertex_attr_array![
+            0 => Float32x3, 1 => Float32x3, 2 => Float32x2, 3 => Uint32
+        ];
         let vertex_buffers = [wgpu::VertexBufferLayout {
             array_stride: size_of::<GpuVertex>() as u64,
             step_mode: wgpu::VertexStepMode::Vertex,

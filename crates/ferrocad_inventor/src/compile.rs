@@ -189,7 +189,12 @@ fn build_geometry(
                 .copied()
                 .unwrap_or([0.0, 0.0]);
             indices_out.push(vertices.len() as u32);
-            vertices.push(Vertex { position, normal, uv });
+            vertices.push(Vertex {
+                position,
+                normal,
+                uv,
+                part_idx: 0,
+            });
         }
     }
 

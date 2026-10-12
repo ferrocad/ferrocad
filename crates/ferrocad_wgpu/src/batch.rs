@@ -22,6 +22,8 @@ pub struct GpuVertex {
     pub normal: [f32; 3],
     /// Texture coordinates.
     pub uv: [f32; 2],
+    /// Topological sub-element index (the pick G-buffer's green channel).
+    pub part_idx: u32,
 }
 
 impl From<&ferrocad_graphics::Vertex> for GpuVertex {
@@ -30,6 +32,7 @@ impl From<&ferrocad_graphics::Vertex> for GpuVertex {
             position: v.position,
             normal: v.normal,
             uv: v.uv,
+            part_idx: v.part_idx,
         }
     }
 }

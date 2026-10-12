@@ -17,6 +17,9 @@ pub struct Vertex {
     pub normal: [f32; 3],
     /// Texture coordinates (`[0, 0]` when the shape has no texture).
     pub uv: [f32; 2],
+    /// The topological sub-element index — a face/edge ordinal the G-buffer picking
+    /// pass writes to its green channel. `0` until topological naming lands.
+    pub part_idx: u32,
 }
 
 /// A CPU-side RGBA8 texture: the `SoTexture2` payload a shape samples.

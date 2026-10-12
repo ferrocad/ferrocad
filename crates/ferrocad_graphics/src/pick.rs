@@ -379,6 +379,7 @@ mod tests {
                 position: *position,
                 normal: [0.0, 0.0, 1.0],
                 uv: [0.0, 0.0],
+                part_idx: 0,
             })
             .collect();
         DrawPacket {

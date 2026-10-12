@@ -451,8 +451,15 @@ impl<V: InventorView> InventorViewport<V> {
     }
 
     /// Pick the main scene at a device position and run the listeners.
+    ///
+    /// The backend's hardware G-buffer pick is preferred (it resolves the exact
+    /// rasterised pixel); a backend without one falls back to the CPU ray cast.
     fn pick_main(&mut self, device: [i32; 2]) -> bool {
-        let hit = pick_at_hit(&self.queue, &self.camera, device);
+        let hit = if self.view.supports_pick() {
+            self.view.pick_at(&self.queue, &self.camera, device)
+        } else {
+            pick_at_hit(&self.queue, &self.camera, device)
+        };
         self.hover = hit.as_ref().map(|hit| hit.id);
         let event = Event::MouseMove { position: device };
         self.dispatch(&event, hit.as_ref())
@@ -770,6 +777,62 @@ mod tests {
         assert_eq!(viewport.hovered(), None);
         // Leaving is a no-op once nothing is hovered.
         assert!(!viewport.handle_pointer_leave());
+    }
+
+    /// A view with a hardware pick path: it reports id `42` wherever there is a queue to
+    /// pick, ignoring the scene, so a test can tell it apart from the CPU ray cast (which
+    /// would report `PickId(0)` at the centre).
+    struct HardwarePickView;
+
+    impl InventorView for HardwarePickView {
+        type Surface = ();
+        type Error = std::io::Error;
+
+        fn size(&self) -> [u32; 2] {
+            [100, 100]
+        }
+        fn draw(&mut self, _queue: &RenderQueue, _camera: &Camera) -> Result<(), Self::Error> {
+            Ok(())
+        }
+        fn borrow_surface(&self) -> Option<&()> {
+            None
+        }
+        fn image(&mut self) -> Result<ImageData, Self::Error> {
+            Ok(ImageData::default())
+        }
+        fn supports_pick(&self) -> bool {
+            true
+        }
+        fn pick_at(
+            &mut self,
+            queue: &RenderQueue,
+            _camera: &Camera,
+            device: [i32; 2],
+        ) -> Option<Hit> {
+            (!queue.is_empty()).then_some(Hit {
+                id: PickId(42),
+                point: [device[0] as f32, device[1] as f32, 0.0],
+                normal: [0.0, 0.0, 1.0],
+                element: 0,
+                topology: Topology::Triangles,
+                distance: 1.0,
+            })
+        }
+    }
+
+    #[test]
+    fn the_viewport_prefers_a_hardware_pick_when_the_backend_has_one() {
+        let camera = Camera {
+            viewport: ferrocad_graphics::Viewport::new([100, 100], 1.0),
+            ..Camera::identity()
+        };
+        let mut viewport = InventorViewport::new(HardwarePickView, camera, triangle_scene())
+            .with_listener(Box::new(HoverProbe::default()));
+
+        // The CPU path would report `PickId(0)` over the triangle; the backend's hardware
+        // pick reports 42, so seeing 42 proves it was preferred.
+        assert!(viewport.handle_pointer([50.0, 50.0]));
+        assert_eq!(viewport.hovered(), Some(PickId(42)));
     }
 
     #[test]

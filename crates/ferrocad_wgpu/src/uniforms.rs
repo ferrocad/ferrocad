@@ -10,6 +10,9 @@ use std::mem::size_of;
 use bytemuck::{Pod, Zeroable};
 
 /// The per-draw uniform block. Matrices are **column-major** (as WGSL expects).
+///
+/// The last four words are what the G-buffer pick shader reads; the scene shader
+/// declares the same struct but ignores them, so one layout serves both passes.
 #[repr(C)]
 #[derive(Clone, Copy, Debug, Default, Pod, Zeroable)]
 pub struct UniformData {
@@ -19,6 +22,12 @@ pub struct UniformData {
     pub model: [[f32; 4]; 4],
     /// The draw's linear RGBA colour.
     pub color: [f32; 4],
+    /// The pick id written to the G-buffer's red channel (`0` = not pickable).
+    pub pick: u32,
+    /// The topology ordinal written to the G-buffer's normal target's `w` channel.
+    pub topology: u32,
+    /// Keeps the block a multiple of 16 bytes (`u32` pairs need the tail padding).
+    pub _padding: [u32; 2],
 }
 
 /// The size of one [`UniformData`] in bytes.

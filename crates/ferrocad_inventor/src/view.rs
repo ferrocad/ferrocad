@@ -23,6 +23,7 @@
 use crate::batch::RenderQueue;
 use crate::camera::Camera;
 use crate::pixels::Rect;
+use ferrocad_graphics::Hit;
 
 /// A CPU-side RGBA8 image, row-major, top-left origin.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -72,6 +73,25 @@ pub trait InventorView {
             Some(view) => self.draw(view.queue, view.camera),
             None => Ok(()),
         }
+    }
+
+    /// Whether the backend can pick with a hardware G-buffer pass (see
+    /// [`pick_at`](Self::pick_at)). When `false` (the default), the host falls back to
+    /// the CPU ray cast in [`ferrocad_graphics::pick`].
+    fn supports_pick(&self) -> bool {
+        false
+    }
+
+    /// The [`Hit`] under a **device** pixel (bottom-left origin), via an offscreen
+    /// G-buffer pass, or `None` when nothing is there.
+    ///
+    /// `queue`/`camera` are the main scene view — the same pair
+    /// [`draw`](Self::draw) receives — so a backend can re-draw it into its pick targets
+    /// and read a single texel. The default returns `None`; a host must consult
+    /// [`supports_pick`](Self::supports_pick) to tell "unsupported" from "empty".
+    fn pick_at(&mut self, queue: &RenderQueue, camera: &Camera, device: [i32; 2]) -> Option<Hit> {
+        let _ = (queue, camera, device);
+        None
     }
 }
 

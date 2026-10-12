@@ -307,6 +307,7 @@ impl ShapeItem {
                     position: *position,
                     normal: *normal,
                     uv: [0.0, 0.0],
+                    part_idx: 0,
                 })
                 .collect();
             Some(Geometry {
@@ -330,6 +331,7 @@ impl ShapeItem {
                 position: *position,
                 normal: [0.0, 0.0, 1.0],
                 uv: [0.0, 0.0],
+                part_idx: 0,
             })
             .collect();
         Some(Geometry {
@@ -362,6 +364,7 @@ fn flat_surface(positions: &[[f32; 3]], triangles: &[u32]) -> Geometry {
                 position: *position,
                 normal,
                 uv: [0.0, 0.0],
+                part_idx: 0,
             });
         }
     }

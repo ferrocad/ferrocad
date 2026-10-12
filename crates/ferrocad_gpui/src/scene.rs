@@ -6,7 +6,7 @@
 //! also what the `inventor_roundtrip` example renders.
 
 use ferrocad_inventor::{
-    Camera, Event, EventListener, Node, NodeKind, PickId, Scene, Topology, Viewport,
+    Camera, Event, EventListener, Hit, Node, NodeKind, Scene, Topology, Viewport,
 };
 use ferrocad_types::{Matrix4, Placement, Rotation, Vector3};
 
@@ -44,7 +44,7 @@ pub fn sample_scene() -> Scene {
             kind: NodeKind::Separator,
             children: vec![
                 Node {
-                    kind: NodeKind::Material(BASE_COLOR),
+                    kind: NodeKind::Material(vec![BASE_COLOR]),
                     children: vec![],
                 },
                 Node {
@@ -61,6 +61,7 @@ pub fn sample_scene() -> Scene {
                 Node {
                     kind: NodeKind::Mesh {
                         indices,
+                        normal_indices: vec![],
                         topology: Topology::Triangles,
                     },
                     children: vec![],
@@ -90,7 +91,7 @@ pub struct HoverHighlight {
 }
 
 impl EventListener for HoverHighlight {
-    fn on_event(&mut self, event: &Event, hit: Option<PickId>, scene: &mut Scene) -> bool {
+    fn on_event(&mut self, event: &Event, hit: Option<&Hit>, scene: &mut Scene) -> bool {
         let now_hovered = matches!(event, Event::MouseMove { .. }) && hit.is_some();
         if now_hovered == self.hovered {
             return false;
@@ -103,8 +104,8 @@ impl EventListener for HoverHighlight {
 
 fn set_object_color(scene: &mut Scene, color: [f32; 4]) {
     for child in &mut scene.root.children {
-        if let NodeKind::Material(current) = &mut child.kind {
-            *current = color;
+        if let NodeKind::Material(colors) = &mut child.kind {
+            *colors = vec![color];
         }
     }
 }

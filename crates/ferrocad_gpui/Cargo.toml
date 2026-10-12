@@ -15,6 +15,9 @@ documentation = "https://docs.rs/ferrocad_gpui"
 [dependencies]
 ferrocad_widgets.workspace = true
 ferrocad_inventor.workspace = true
+# The `pivy.coin` facade: the host registers it into the embedded interpreter and
+# extracts the scene a workbench script builds.
+ferrocad_inventor_py.workspace = true
 ferrocad_wgpu.workspace = true
 ferrocad_types.workspace = true
 bite-gpui = { version = "1.21.1" }

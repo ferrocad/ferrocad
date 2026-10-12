@@ -15,12 +15,12 @@
 use std::sync::Arc;
 
 use ferrocad_inventor::{
-    Camera, Event, EventListener, ImageData, InventorView, PickId, RenderQueue, Scene, compile_with,
-    pick_at,
+    Camera, Event, EventListener, Hit, ImageData, InventorView, PickId, RenderQueue, Scene,
+    compile_with, pick_at_hit,
 };
 use gpui::{
-    AnyElement, Context, IntoElement, MouseExitEvent, MouseMoveEvent, ObjectFit, Render, RenderImage,
-    Window, div, img, prelude::*,
+    AnyElement, Context, IntoElement, MouseButton, MouseDownEvent, MouseExitEvent, MouseMoveEvent,
+    MouseUpEvent, ObjectFit, Render, RenderImage, Window, div, img, prelude::*,
 };
 use image::{Frame, ImageBuffer, Rgba};
 
@@ -31,7 +31,7 @@ pub struct InventorViewport<V: InventorView> {
     camera: Camera,
     scene: Scene,
     queue: RenderQueue,
-    listener: Option<Box<dyn EventListener>>,
+    listeners: Vec<Box<dyn EventListener>>,
     /// The object currently under the pointer.
     hover: Option<PickId>,
     frame: Option<Arc<RenderImage>>,
@@ -46,15 +46,16 @@ impl<V: InventorView> InventorViewport<V> {
             camera,
             scene,
             queue,
-            listener: None,
+            listeners: Vec::new(),
             hover: None,
             frame: None,
         }
     }
 
-    /// Attach the listener that reacts to pointer events (the `SoEventCallback`).
+    /// Add a listener that reacts to pointer events (a `SoEventCallback`). Every
+    /// listener sees every event, in the order added.
     pub fn with_listener(mut self, listener: Box<dyn EventListener>) -> Self {
-        self.listener = Some(listener);
+        self.listeners.push(listener);
         self
     }
 
@@ -84,10 +85,22 @@ impl<V: InventorView> InventorViewport<V> {
     /// Returns whether the scene changed (and so needs repainting).
     pub fn handle_pointer(&mut self, logical: [f32; 2]) -> bool {
         let device = self.camera.viewport.to_device(logical);
-        let hit = pick_at(&self.queue, &self.camera, device);
-        self.hover = hit;
+        let hit = pick_at_hit(&self.queue, &self.camera, device);
+        self.hover = hit.as_ref().map(|hit| hit.id);
         let event = Event::MouseMove { position: device };
-        self.dispatch(&event, hit)
+        self.dispatch(&event, hit.as_ref())
+    }
+
+    /// Deliver a mouse-button change, in **logical** window coordinates.
+    pub fn handle_button(&mut self, logical: [f32; 2], button: u8, down: bool) -> bool {
+        let device = self.camera.viewport.to_device(logical);
+        let hit = pick_at_hit(&self.queue, &self.camera, device);
+        let event = Event::MouseButton {
+            position: device,
+            button,
+            down,
+        };
+        self.dispatch(&event, hit.as_ref())
     }
 
     /// Deliver a pointer leave.
@@ -96,12 +109,17 @@ impl<V: InventorView> InventorViewport<V> {
         self.dispatch(&Event::MouseLeave, None)
     }
 
-    /// Run the listener on an event and recompile if it changed the scene.
-    fn dispatch(&mut self, event: &Event, hit: Option<PickId>) -> bool {
-        let changed = self
-            .listener
-            .as_mut()
-            .is_some_and(|listener| listener.on_event(event, hit, &mut self.scene));
+    /// Run the listeners on an event and recompile if any changed the scene.
+    ///
+    /// Every listener sees every event (an observation-only listener, like the
+    /// Python `SoEventCallback` bridge, must not stop a later one from running).
+    fn dispatch(&mut self, event: &Event, hit: Option<&Hit>) -> bool {
+        let mut changed = false;
+        for listener in &mut self.listeners {
+            if listener.on_event(event, hit, &mut self.scene) {
+                changed = true;
+            }
+        }
         if changed {
             self.recompile();
         }
@@ -145,12 +163,40 @@ impl<V: InventorView + 'static> Render for InventorViewport<V> {
                     cx.notify();
                 }
             }))
+            .on_any_mouse_down(cx.listener(|this, event: &MouseDownEvent, _window, cx| {
+                if this.handle_button(
+                    [event.position.x.0, event.position.y.0],
+                    mouse_button(event.button),
+                    true,
+                ) {
+                    cx.notify();
+                }
+            }))
+            .capture_any_mouse_up(cx.listener(|this, event: &MouseUpEvent, _window, cx| {
+                if this.handle_button(
+                    [event.position.x.0, event.position.y.0],
+                    mouse_button(event.button),
+                    false,
+                ) {
+                    cx.notify();
+                }
+            }))
             .on_mouse_exit(cx.listener(|this, _event: &MouseExitEvent, _window, cx| {
                 if this.handle_pointer_leave() {
                     cx.notify();
                 }
             }))
             .child(content)
+    }
+}
+
+/// Map a gpui mouse button to Coin's 1-based button number.
+fn mouse_button(button: MouseButton) -> u8 {
+    match button {
+        MouseButton::Left => 1,
+        MouseButton::Middle => 2,
+        MouseButton::Right => 3,
+        _ => 0,
     }
 }
 
@@ -220,7 +266,7 @@ mod tests {
                 kind: NodeKind::Separator,
                 children: vec![
                     Node {
-                        kind: NodeKind::Material([1.0, 1.0, 1.0, 1.0]),
+                        kind: NodeKind::Material(vec![[1.0, 1.0, 1.0, 1.0]]),
                         children: vec![],
                     },
                     Node {
@@ -234,6 +280,7 @@ mod tests {
                     Node {
                         kind: NodeKind::Mesh {
                             indices: vec![0, 1, 2],
+                            normal_indices: vec![],
                             topology: Topology::Triangles,
                         },
                         children: vec![],
@@ -250,7 +297,7 @@ mod tests {
     }
 
     impl EventListener for HoverProbe {
-        fn on_event(&mut self, _event: &Event, hit: Option<PickId>, _scene: &mut Scene) -> bool {
+        fn on_event(&mut self, _event: &Event, hit: Option<&Hit>, _scene: &mut Scene) -> bool {
             let next = hit.is_some();
             let changed = next != self.hovered;
             self.hovered = next;

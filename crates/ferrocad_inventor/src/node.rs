@@ -16,6 +16,11 @@ pub struct Scene {
     pub root: Node,
 }
 
+/// `SoSwitch.whichChild` sentinel: traverse no child (Coin `SO_SWITCH_NONE`).
+pub const SO_SWITCH_NONE: i32 = -1;
+/// `SoSwitch.whichChild` sentinel: traverse every child (Coin `SO_SWITCH_ALL`).
+pub const SO_SWITCH_ALL: i32 = -2;
+
 /// The kinds of node the core recognises.
 ///
 /// This grows as nodes are ported; [`NodeKind::Custom`] carries the name of a
@@ -28,22 +33,39 @@ pub enum NodeKind {
     Separator,
     /// Draws only the selected child (`SoSwitch`).
     Switch {
-        /// The index of the active child.
-        which: usize,
+        /// The active child index, or a `SO_SWITCH_*` sentinel (negative).
+        which: i32,
     },
-    /// Vertex positions for the following shape.
+    /// Vertex positions for the following shape (`SoCoordinate3`).
     Coordinate3(Vec<[f32; 3]>),
+    /// Vertex normals for the following shape (`SoNormal`).
+    ///
+    /// Stored for round-tripping: the compiler flat-shades today and does not
+    /// consume these yet; Phase 3 (split-vertex unrolling) will.
+    Normal(Vec<[f32; 3]>),
     /// A triangle/line/point set drawn from the current `Coordinate3`.
     Mesh {
-        /// Indices into the enclosing `Coordinate3`.
+        /// Indices into the enclosing `Coordinate3` (`SoIndexedShape.coordIndex`).
         indices: Vec<u32>,
+        /// Per-index normals (`SoIndexedFaceSet.normalIndex`); empty when absent.
+        /// Unused by the compiler today (see [`NodeKind::Normal`]).
+        normal_indices: Vec<u32>,
         /// How the indices are assembled.
         topology: Topology,
     },
-    /// The colour for the following shapes (`SoMaterial`/`SoBaseColor`).
-    Material([f32; 4]),
+    /// The colours for the following shapes (`SoMaterial`/`SoBaseColor`).
+    ///
+    /// A list (Coin's `SoMFColor.diffuseColor`); the compiler binds the first
+    /// entry as the draw colour.
+    Material(Vec<[f32; 4]>),
     /// A transform applied to the following siblings (`SoTransform`).
     Transform(Placement),
+    /// An event-handling node (`SoEventCallback`).
+    ///
+    /// Carries an opaque id; the Python callables registered on the corresponding
+    /// `SoEventCallback` live on the facade side, keyed by this id (the core stays
+    /// Python-free). The compiler treats it as a leaf.
+    EventCallback(u64),
     /// A node class whose behaviour is registered from outside the core.
     Custom(String),
 }

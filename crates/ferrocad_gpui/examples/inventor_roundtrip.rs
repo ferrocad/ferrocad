@@ -1,14 +1,17 @@
-//! Proof of concept for the whole render roundtrip, minus the `pivy.coin` bindings:
+//! Proof of concept for the whole render roundtrip, now including the `pivy.coin`
+//! bindings:
 //!
 //! ```text
-//! ferrocad_inventor (scene → compile → batches)
-//!     → ferrocad_wgpu (render + readback)
-//!         → ferrocad_gpui (InventorViewport shows the image)
+//! Python workbench (`from pivy import coin`)
+//!     → ferrocad_inventor_py (extract) → ferrocad_inventor (compile → batches)
+//!         → ferrocad_wgpu (render + readback)
+//!             → ferrocad_gpui (InventorViewport shows the image)
 //! ```
 //!
-//! It draws the same sample scene the app shell shows, and moving the pointer over
-//! the cube picks it and a listener highlights it — the hover path FreeCAD drives
-//! through `View3DInventorViewer` + `SoEventCallback`.
+//! The cube is built by a Python script (the twin of the Rust `sample_scene`), so
+//! the whole stack is exercised end to end. Moving the pointer over the cube picks
+//! it and a listener highlights it — the hover path FreeCAD drives through
+//! `View3DInventorViewer` + `SoEventCallback`.
 //!
 //! ```text
 //! # window (needs a display server and a GPU):
@@ -21,7 +24,7 @@
 use ferrocad_gpui::InventorViewport;
 use ferrocad_gpui::scene::{HoverHighlight, sample_camera, sample_scene};
 use ferrocad_inventor::{
-    Event, EventListener, InventorView, Scene, Viewport, compile_with, pick_at,
+    Event, EventListener, InventorView, Scene, Viewport, compile_with, pick_at_hit,
 };
 use ferrocad_wgpu::WgpuRenderer;
 use gpui::{App, AppContext, WindowBounds, WindowOptions, application, bounds, point, px, size};
@@ -29,9 +32,18 @@ use gpui::{App, AppContext, WindowBounds, WindowOptions, application, bounds, po
 /// The offscreen render target size (device pixels; 1x here for the PoC).
 const SIZE: [u32; 2] = [640, 480];
 
+/// Build the scene the workbench way — a `from pivy import coin` script extracted
+/// into a [`Scene`] — and fall back to the Rust twin if the interpreter is absent.
+fn build_scene() -> Scene {
+    ferrocad_gpui::python::inventor_scene().unwrap_or_else(|e| {
+        eprintln!("ferrocad: python scene unavailable ({e}); using the Rust sample");
+        sample_scene()
+    })
+}
+
 fn main() {
     let camera = sample_camera(Viewport::new(SIZE, 1.0));
-    let scene = sample_scene();
+    let scene = build_scene();
 
     let mut args = std::env::args().skip(1);
     if args.next().as_deref() == Some("--headless") {
@@ -63,14 +75,25 @@ fn render_headless(mut scene: Scene, camera: ferrocad_inventor::Camera, path: &s
     let centre = camera
         .viewport
         .to_device([width as f32 / 2.0, height as f32 / 2.0]);
-    let hit = pick_at(&queue, &camera, centre);
-    println!("ferrocad: pick at centre -> {hit:?}");
+    let hit = pick_at_hit(&queue, &camera, centre);
+    println!("ferrocad: pick at centre -> {:?}", hit.as_ref().map(|h| h.id));
 
     // Run the same listener the window would, then recompile as it would.
     HoverHighlight::default().on_event(
         &Event::MouseMove { position: centre },
-        hit,
+        hit.as_ref(),
         &mut scene,
+    );
+
+    // Deliver the pick to any Python `SoEventCallback` (S4): a click at the centre.
+    ferrocad_gpui::python::dispatch(
+        &scene,
+        &Event::MouseButton {
+            position: centre,
+            button: 1,
+            down: true,
+        },
+        hit.as_ref(),
     );
     let queue = compile_with(&scene, &camera.viewport);
 

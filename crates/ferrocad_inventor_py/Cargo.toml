@@ -28,9 +28,15 @@ crate-type = ["cdylib", "rlib"]
 
 [dependencies]
 ferrocad_inventor.workspace = true
+# For `Placement`/`Rotation`/`Vector3` (the `SoTransform` node).
+ferrocad_types.workspace = true
 # `extension-module` is deliberately *not* a hard feature (see ferrocad_py): it is
 # enabled only when packaging the standalone extension module.
 pyo3 = { version = "0.25", features = ["abi3-py310"] }
+
+[dev-dependencies]
+# `auto-initialize` lets the boot tests embed CPython.
+pyo3 = { version = "0.25", features = ["abi3-py310", "auto-initialize"] }
 
 [features]
 # Enabled by maturin / build.sh when producing the Python extension module.

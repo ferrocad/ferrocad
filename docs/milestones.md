@@ -959,6 +959,48 @@ paths, RootObjects/topological sort) and 107 Python (+3).
 
 ---
 
+### Coin/Inventor replacement — the renderer and the `pivy.coin` slices S1–S4 ✅
+
+**Goal:** a workbench-facing Coin3D/Inventor replacement — a Rust scene core, a `wgpu`
+backend, a `gpui` viewport, and a `pivy.coin`-compatible Python facade, so workbench code
+that builds scene graphs (`from pivy import coin`) keeps working. Plan and status:
+[`inventor-plan.md`](inventor-plan.md).
+
+**Built:**
+- **Renderer (prerequisite, commit `63bc59b`):** `ferrocad_inventor` (node AST, state
+  accumulator, mesh compiler, CPU pick, events, `Viewport`/DPI), `ferrocad_wgpu`
+  (pipelines, dynamic uniforms, 4× MSAA, offscreen target, readback) and the
+  `ferrocad_gpui` `InventorViewport` (image path) + the `inventor_roundtrip` example.
+- **S1 — facade spine:** the PyO3 class hierarchy `SoBase` → `SoFieldContainer` →
+  `SoNode` → `SoGroup` → `SoSeparator`/`SoSwitch` over the owned `Node` tree; `SoType`
+  (`fromName`/`createInstance`/`isDerivedFrom`); `SoGroup.addChild`/`getNumChildren`.
+- **S2 — geometry fields:** live `SoMField` objects (`SoMFVec3f`/`SoMFColor`/`SoMFInt32`)
+  with the sequence protocol, and `SoCoordinate3`/`SoNormal`/`SoMaterial`/
+  `SoIndexedFaceSet`/`SoIndexedLineSet`/`SoTransform`/`SoSwitch.whichChild`. Core model:
+  `Material` became a colour list, `Normal` added, `SoSwitch` is group-like and honours
+  `whichChild` (`SO_SWITCH_NONE`/`ALL`).
+- **S3 — scene extraction:** `ferrocad_inventor_py::install`/`extract_scene` and
+  `ferrocad_gpui::python::inventor_scene` — a `from pivy import coin` script is copied
+  into a `Scene` and rendered through the same `compile` path.
+- **S4 — events + pick:** `Hit` (object, point, normal, triangle), `Event::MouseButton`,
+  `event_callbacks(&Scene)`, the `SoEvent`/`SoButtonEvent`/`SoMouseButtonEvent`/
+  `SoLocation2Event` and `SoPickedPoint`/`SoDetail`/`SoFaceDetail`/`SoLineDetail` classes,
+  the `SoEventCallback` node, and the dispatch bridge
+  (`ferrocad_inventor_py::dispatch_event`; `ferrocad_gpui::python::PythonEventCallbacks`).
+
+**Verification:** `cargo test -p ferrocad_inventor` **12** · `-p ferrocad_inventor_py`
+**17** (`coin_boot` 5, `coin_fields` 7, `coin_scene` 2, `coin_events` 3) · `-p
+ferrocad_gpui` **10**. The headless example builds the cube from Python, picks it, and a
+scripted `SoEventCallback` reports `SoEventCallback picked … face 1`.
+
+**Deferred (in `inventor-plan.md` §8):** the generational arena (object identity,
+detached fields, dirty counters), NumPy zero-copy, Newell/earcut triangulation and `-1`
+polygon delimiters, field-driven generations, the g-buffer pick and 1-based sub-shape
+`part_index` (topological naming), and callbacks that change the *rendered* scene (the
+extracted `Scene` is a copy).
+
+---
+
 ## 2. Decisions now unlocked by the spike work
 
 These are no longer open questions — the spike produced evidence:

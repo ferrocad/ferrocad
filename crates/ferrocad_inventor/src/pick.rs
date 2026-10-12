@@ -70,9 +70,32 @@ impl Camera {
     }
 }
 
+/// A ray hit: which object, where on it, and on which triangle.
+///
+/// The richer form of [`pick`], carrying what `SoPickedPoint` and `SoFaceDetail`
+/// expose to Python (world point, surface normal, and the triangle index).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Hit {
+    /// The object that was hit (the packet's [`PickId`]).
+    pub id: PickId,
+    /// The world-space intersection point.
+    pub point: [f32; 3],
+    /// The world-space triangle normal (normalised).
+    pub normal: [f32; 3],
+    /// The triangle index within the hit mesh (0-based; the `SoFaceDetail` index).
+    pub triangle: u32,
+    /// The distance along the ray from its origin.
+    pub distance: f64,
+}
+
 /// The nearest packet under `ray`, with its hit distance.
 pub fn pick(queue: &RenderQueue, ray: &Ray) -> Option<(PickId, f64)> {
-    let mut best: Option<(PickId, f64)> = None;
+    pick_hit(queue, ray).map(|hit| (hit.id, hit.distance))
+}
+
+/// The nearest triangle under `ray`, with its point, normal and index.
+pub fn pick_hit(queue: &RenderQueue, ray: &Ray) -> Option<Hit> {
+    let mut best: Option<Hit> = None;
     for packet in &queue.packets {
         if packet.topology != Topology::Triangles {
             continue;
@@ -85,15 +108,20 @@ pub fn pick(queue: &RenderQueue, ray: &Ray) -> Option<(PickId, f64)> {
             .iter()
             .map(|vertex| transform_point(&packet.state.world_transform, vertex.position))
             .collect();
-        for triangle in geometry.indices.chunks_exact(3) {
-            let hit = ray.triangle_distance(
-                world[triangle[0] as usize],
-                world[triangle[1] as usize],
-                world[triangle[2] as usize],
-            );
-            if let Some(distance) = hit {
-                if best.is_none_or(|(_, nearest)| distance < nearest) {
-                    best = Some((packet.state.id, distance));
+        for (triangle, indices) in geometry.indices.chunks_exact(3).enumerate() {
+            let a = world[indices[0] as usize];
+            let b = world[indices[1] as usize];
+            let c = world[indices[2] as usize];
+            if let Some(distance) = ray.triangle_distance(a, b, c) {
+                if best.is_none_or(|hit| distance < hit.distance) {
+                    let point = add(ray.origin, scale(ray.direction, distance));
+                    best = Some(Hit {
+                        id: packet.state.id,
+                        point: to_f32(point),
+                        normal: to_f32(normalize(cross(sub(b, a), sub(c, a)))),
+                        triangle: triangle as u32,
+                        distance,
+                    });
                 }
             }
         }
@@ -103,14 +131,31 @@ pub fn pick(queue: &RenderQueue, ray: &Ray) -> Option<(PickId, f64)> {
 
 /// The [`PickId`] under a device position, if any.
 pub fn pick_at(queue: &RenderQueue, camera: &Camera, device: [i32; 2]) -> Option<PickId> {
+    pick_at_hit(queue, camera, device).map(|hit| hit.id)
+}
+
+/// The [`Hit`] under a device position, if any.
+pub fn pick_at_hit(queue: &RenderQueue, camera: &Camera, device: [i32; 2]) -> Option<Hit> {
     let ray = camera.ray_through(device)?;
-    pick(queue, &ray).map(|(id, _)| id)
+    pick_hit(queue, &ray)
 }
 
 // --- small vector/matrix helpers (f64, row-major) --------------------------------
 
 fn sub(a: [f64; 3], b: [f64; 3]) -> [f64; 3] {
     [a[0] - b[0], a[1] - b[1], a[2] - b[2]]
+}
+
+fn add(a: [f64; 3], b: [f64; 3]) -> [f64; 3] {
+    [a[0] + b[0], a[1] + b[1], a[2] + b[2]]
+}
+
+fn scale(v: [f64; 3], s: f64) -> [f64; 3] {
+    [v[0] * s, v[1] * s, v[2] * s]
+}
+
+fn to_f32(v: [f64; 3]) -> [f32; 3] {
+    [v[0] as f32, v[1] as f32, v[2] as f32]
 }
 
 fn dot(a: [f64; 3], b: [f64; 3]) -> f64 {
@@ -262,6 +307,7 @@ mod tests {
                     Node {
                         kind: NodeKind::Mesh {
                             indices: vec![0, 1, 2],
+                            normal_indices: vec![],
                             topology: Topology::Triangles,
                         },
                         children: vec![],

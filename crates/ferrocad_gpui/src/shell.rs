@@ -153,15 +153,21 @@ impl Shell {
     /// Called by the app after `from_model` (not by `from_model` itself), so headless
     /// tests stay GPU-free and render the placeholder. If no adapter is available the
     /// pane keeps the placeholder too.
+    ///
+    /// The scene is built the workbench way — a `from pivy import coin` script
+    /// extracted into a [`ferrocad_inventor::Scene`] ([`python::inventor_scene`]) —
+    /// falling back to the Rust sample if the interpreter is unavailable.
     pub fn enable_viewport(&mut self, cx: &mut Context<Self>) {
         const SIZE: [u32; 2] = [640, 480];
         let Ok(renderer) = WgpuRenderer::new_default(SIZE) else {
             return;
         };
         let camera = scene::sample_camera(Viewport::new(SIZE, 1.0));
+        let scene = python::inventor_scene().unwrap_or_else(|_| scene::sample_scene());
         self.viewport = Some(cx.new(move |_cx| {
-            InventorViewport::new(renderer, camera, scene::sample_scene())
+            InventorViewport::new(renderer, camera, scene)
                 .with_listener(Box::new(scene::HoverHighlight::default()))
+                .with_listener(Box::new(python::PythonEventCallbacks))
         }));
     }
 

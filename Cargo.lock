@@ -2334,6 +2334,7 @@ version = "0.1.2"
 dependencies = [
  "bite-gpui",
  "ferrocad_inventor",
+ "ferrocad_inventor_py",
  "ferrocad_types",
  "ferrocad_wgpu",
  "ferrocad_widgets",
@@ -2355,6 +2356,7 @@ name = "ferrocad_inventor_py"
 version = "0.1.2"
 dependencies = [
  "ferrocad_inventor",
+ "ferrocad_types",
  "pyo3",
 ]
 

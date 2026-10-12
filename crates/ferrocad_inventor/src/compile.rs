@@ -11,7 +11,7 @@
 
 use crate::batch::{DrawPacket, Generation, MeshId, RenderQueue};
 use crate::geometry::{Geometry, Topology, Vertex};
-use crate::node::{Node, NodeKind, Scene};
+use crate::node::{Node, NodeKind, Scene, SO_SWITCH_ALL};
 use crate::pixels::Viewport;
 use crate::state::State;
 
@@ -76,20 +76,35 @@ fn walk_children(
             NodeKind::Transform(placement) => {
                 state.transform = state.transform.mul(&placement.to_matrix());
             }
-            NodeKind::Material(color) => {
-                state.color = *color;
+            // A material list sets the draw colour to its first (diffuse) entry;
+            // an empty list leaves the inherited colour in place.
+            NodeKind::Material(colors) => {
+                if let Some(color) = colors.first() {
+                    state.color = *color;
+                }
             }
             NodeKind::Coordinate3(points) => {
                 *coordinates = points.clone();
             }
-            NodeKind::Switch { which } => {
-                if let Some(active) = child.children.get(*which) {
-                    let saved = std::mem::take(coordinates);
-                    walk_children(std::slice::from_ref(active), &state, coordinates, ctx);
-                    *coordinates = saved;
+            // Normals round-trip through the model but are not consumed yet
+            // (flat shading); Phase 3 will thread them into the mesh compiler.
+            NodeKind::Normal(_) => {}
+            // `SoSwitch` derives from `SoGroup`, so it does not isolate state: the
+            // selected child(ren) inherit (and may leak) the current state.
+            NodeKind::Switch { which } => match *which {
+                SO_SWITCH_ALL => {
+                    walk_children(&child.children, &state, coordinates, ctx);
                 }
-            }
-            NodeKind::Mesh { indices, topology } => {
+                n if n < 0 => {}
+                n => {
+                    if let Some(active) = child.children.get(n as usize) {
+                        walk_children(std::slice::from_ref(active), &state, coordinates, ctx);
+                    }
+                }
+            },
+            NodeKind::Mesh {
+                indices, topology, ..
+            } => {
                 if let Some(geometry) = build_geometry(coordinates, indices, *topology) {
                     let mesh_id = MeshId(ctx.next_mesh);
                     ctx.next_mesh += 1;
@@ -104,6 +119,8 @@ fn walk_children(
             }
             // Custom node classes carry no geometry the core understands yet.
             NodeKind::Custom(_) => {}
+            // `SoEventCallback` is a leaf: it draws nothing.
+            NodeKind::EventCallback(_) => {}
         }
     }
 }
@@ -178,6 +195,7 @@ mod tests {
         Node {
             kind: NodeKind::Mesh {
                 indices: vec![0, 1, 2],
+                normal_indices: vec![],
                 topology: Topology::Triangles,
             },
             children: vec![],
@@ -220,7 +238,7 @@ mod tests {
                 // A red material applies to the mesh that follows it...
                 separator(vec![
                     Node {
-                        kind: NodeKind::Material([1.0, 0.0, 0.0, 1.0]),
+                        kind: NodeKind::Material(vec![[1.0, 0.0, 0.0, 1.0]]),
                         children: vec![],
                     },
                     Node {
@@ -243,5 +261,51 @@ mod tests {
         assert_eq!(queue.len(), 2);
         assert_eq!(queue.packets[0].state.color, [1.0, 0.0, 0.0, 1.0]);
         assert_eq!(queue.packets[1].state.color, [1.0, 1.0, 1.0, 1.0]);
+    }
+
+    #[test]
+    fn material_list_binds_its_first_entry() {
+        let scene = Scene {
+            root: separator(vec![
+                Node {
+                    kind: NodeKind::Material(vec![[0.1, 0.2, 0.3, 1.0], [1.0, 0.0, 0.0, 1.0]]),
+                    children: vec![],
+                },
+                Node {
+                    kind: NodeKind::Coordinate3(POINTS.to_vec()),
+                    children: vec![],
+                },
+                mesh(),
+            ]),
+        };
+        let queue = compile(&scene);
+        assert_eq!(queue.len(), 1);
+        assert_eq!(queue.packets[0].state.color, [0.1, 0.2, 0.3, 1.0]);
+    }
+
+    /// A `SoSwitch` draws only the child(ren) its `whichChild` selects: an index
+    /// picks one, `SO_SWITCH_NONE` draws nothing, `SO_SWITCH_ALL` draws all. It
+    /// inherits the sibling coordinates (it is a group, not a separator).
+    fn switch_scene(which: i32) -> Scene {
+        Scene {
+            root: separator(vec![
+                Node {
+                    kind: NodeKind::Coordinate3(POINTS.to_vec()),
+                    children: vec![],
+                },
+                Node {
+                    kind: NodeKind::Switch { which },
+                    children: vec![mesh(), mesh()],
+                },
+            ]),
+        }
+    }
+
+    #[test]
+    fn switch_honours_which_child_sentinels() {
+        assert_eq!(compile(&switch_scene(0)).len(), 1);
+        assert_eq!(compile(&switch_scene(1)).len(), 1);
+        assert_eq!(compile(&switch_scene(crate::node::SO_SWITCH_NONE)).len(), 0);
+        assert_eq!(compile(&switch_scene(crate::node::SO_SWITCH_ALL)).len(), 2);
     }
 }

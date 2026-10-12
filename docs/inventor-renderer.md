@@ -15,8 +15,8 @@ and a gpui viewport wired into the app shell — exercised end to end by an exam
 | --- | --- | --- |
 | `ferrocad_inventor` | The **scene core**: node AST, traversal/state accumulator, mesh compiler, picking, events, viewport/DPI. Renderer-agnostic. A **leaf** above `ferrocad_types`. | `ferrocad_types` |
 | `ferrocad_wgpu` | The **backend**: consumes compiled batches, WGSL pipelines, dynamic uniforms, MSAA, offscreen target, readback. | `ferrocad_inventor`, `ferrocad_types`, `wgpu`, `bytemuck` |
-| `ferrocad_inventor_py` | The **`pivy.coin` facade** (PyO3): scaffolding for the Python `coin` namespace over `ferrocad_inventor`. | `ferrocad_inventor`, `pyo3` |
-| `ferrocad_gpui` | The **host/glue**: `InventorViewport` (element + interaction loop), `scene` (sample scene), the shell wiring. | `ferrocad_inventor`, `ferrocad_wgpu`, `ferrocad_types`, `bite-gpui`, `pyo3` |
+| `ferrocad_inventor_py` | The **`pivy.coin` facade** (PyO3): the class spine, type registry, geometry field objects, and the `install`/`extract_scene` bridge (slices S1–S3). | `ferrocad_inventor`, `ferrocad_types`, `pyo3` |
+| `ferrocad_gpui` | The **host/glue**: `InventorViewport` (element + interaction loop), `scene` (the Rust sample), `python::inventor_scene` (the `pivy.coin` scene builder), the shell wiring. | `ferrocad_inventor`, `ferrocad_inventor_py`, `ferrocad_wgpu`, `ferrocad_types`, `bite-gpui`, `pyo3` |
 
 The split follows the assessment's seam: the glossary of scene semantics stays in
 `ferrocad_inventor`; the graphics API stays behind a trait; the host owns the
@@ -52,12 +52,18 @@ backend sit behind it without touching the node model or compiler.
 - **Picking** is a CPU ray cast (`ferrocad_inventor::pick`): unproject a device
   position through the camera (`Camera::ray_through`, using a local 4×4 inverse)
   and intersect Möller–Trumbore against the world-space triangles. This is the
-  `SoRayPickAction` analogue and needs no GPU. A g-buffer pick in `ferrocad_wgpu`
-  remains the stub for later.
-- **Events** are `ferrocad_inventor::Event` (`MouseMove`/`MouseLeave`) delivered to
-  an `EventListener` — the `SoEventCallback` analogue. The listener may edit the
-  scene and reports whether it did; the viewport recompiles when it did. Hover
-  highlight is implemented exactly this way (recolour the object's `Material`).
+  `SoRayPickAction` analogue and needs no GPU. `pick_hit`/`pick_at_hit` return a
+  [`Hit`](../crates/ferrocad_inventor/src/pick.rs) (object id, world point, surface
+  normal, triangle index) — what `SoPickedPoint`/`SoFaceDetail` expose to Python. A
+  g-buffer pick in `ferrocad_wgpu` remains the stub for later.
+- **Events** are `ferrocad_inventor::Event` (`MouseMove`/`MouseButton`/`MouseLeave`)
+  delivered to an `EventListener` (`on_event(event, hit, scene)`) — the
+  `SoEventCallback` analogue. The listener may edit the scene and reports whether it
+  did; the viewport recompiles when it did. Hover highlight is implemented exactly
+  this way (recolour the object's `Material`). **Scripted** callbacks are the other
+  half (S4): an `SoEventCallback` node sits in the AST, the host finds it via
+  `event_callbacks`, and `ferrocad_inventor_py::dispatch_event` delivers the event and
+  pick to the registered Python callables (`event_cb.getEvent()`/`getPickedPoint()`).
 
 ## 4. HiDPI: everything is physical pixels
 
@@ -83,17 +89,29 @@ The contract, matching FreeCAD (see the assessment and `InputDevice`/
 
 **Implemented**
 
-- Node AST (`Separator`/`Switch`/`Coordinate3`/`Material`/`Transform`/`Mesh`),
+- Node AST (`Separator`/`Switch`/`Coordinate3`/`Normal`/`Material`/`Transform`/`Mesh`),
   Coin-style field scoping (fields affect following siblings; `Separator`
-  isolates), flat-shaded mesh compilation to packets.
-- `SoType`-style registry scaffolding (`TypeRegistry`).
+  isolates; `SoSwitch` is group-like and honours `whichChild`), flat-shaded mesh
+  compilation to packets.
+- `SoType`-style registry (`TypeRegistry`) and the `pivy.coin` facade: the PyO3
+  class spine (`isinstance`), `SoType.fromName(...).createInstance()`, and the
+  geometry field objects (`SoCoordinate3.point`, `SoMaterial.diffuseColor`, …).
+- The **scene bridge** (S3): `ferrocad_inventor_py::install` registers `pivy.coin`
+  in the embedded interpreter; a `from pivy import coin` script builds a tree that
+  `extract_scene` copies into a `Scene` — the same `compile` path the Rust sample
+  uses.
+- The **event bridge** (S4): the `SoEvent`/`SoButtonEvent`/`SoMouseButtonEvent`/
+  `SoLocation2Event` classes, `SoPickedPoint`/`SoDetail`/`SoFaceDetail`/`SoLineDetail`,
+  and the `SoEventCallback` node; the host routes pointer moves and button down/up
+  through `python::PythonEventCallbacks` → `dispatch_event`.
 - wgpu renderer: triangle pipeline with depth, dynamic-offset uniforms, 4× MSAA,
   offscreen target, RGBA readback, mesh upload cache.
 - CPU ray picking; event/listener dispatch; `Viewport`/DPI primitives.
 - gpui `InventorViewport`: image path (readback → `RenderImage` → `img`), pointer
   events → pick → listener → recompile, `with_listener`.
 - Wired into the app shell: `Shell::enable_viewport` (best-effort, needs a GPU)
-  shows the sample scene in the 3D pane; the `inventor_roundtrip` example renders
+  shows a scene built from a `pivy.coin` script (`python::inventor_scene`, with the
+  Rust `scene::sample_scene` as fallback); the `inventor_roundtrip` example renders
   both windowed and headless (`--headless out.png`).
 
 **Not implemented**
@@ -101,7 +119,9 @@ The contract, matching FreeCAD (see the assessment and `InputDevice`/
 - The g-buffer pick pass (`ferrocad_wgpu::pick` is a stub); line/point and
   transparent pipelines; overlays and multi-viewport rendering (needed for the
   NaviCube and other screen-space decoration).
-- The `pivy.coin` facade (only scaffolding exists: a minimal `SoSeparator`).
+- The `pivy.coin` facade is deliberately narrow: no arena/object identity, no
+  `SoPath`/`SoSearchAction`, no NumPy zero-copy or generational dirty counters, and
+  no `-1` polygon delimiters (see [`inventor-plan.md`](inventor-plan.md) §8).
 - Real document geometry: the MVP engine is geometry-free, so the viewport draws
   the sample scene until the kernel and workbench `ViewProvider`s produce scene
   nodes.
@@ -112,20 +132,32 @@ The contract, matching FreeCAD (see the assessment and `InputDevice`/
 - `cargo test -p ferrocad_inventor` — compiler, scoping, registry, `Viewport`
   conversions, ray pick, event/listener.
 - `cargo test -p ferrocad_wgpu` — offscreen render + readback (skips without a GPU).
+- `cargo test -p ferrocad_inventor_py` — the facade spine, `SoType`, the field
+  objects, the S3 scene-extraction bridge, and the S4 event/dispatch surface
+  (`tests/coin_boot.rs`, `coin_fields.rs`, `coin_scene.rs`, `coin_events.rs`).
 - `cargo test -p ferrocad_gpui --lib` — viewport wiring, `RenderImage` swizzle,
-  pointer→pick→listener, and a headless shell paint that attaches the viewport
+  pointer→pick→listener, the `pivy.coin` scene builder, the scripted
+  `SoEventCallback` dispatch, and a headless shell paint that attaches the viewport
   when a GPU exists.
 - `cargo run -p ferrocad_gpui --example inventor_roundtrip -- --headless out.png`
   — `pick at centre -> Some(PickId(0))`, writes the (highlighted) frame.
 
 ## 7. Next
 
+The full Open-Inventor-emulation roadmap (four phases — AST/type spine, fields,
+traversal/compile, picking/events — adapted to the code as it stands) is in
+[`inventor-plan.md`](inventor-plan.md). In short:
+
 1. **Layout-driven sizing**: an `Element` that reads its bounds ×
    `window.scale_factor()` to size the target and place the camera, making hover
    coordinates exact in a docked pane (and removing the fixed-size stretch).
 2. **Overlays / multi-viewport** in `ferrocad_wgpu` (corner viewport + scissor +
-   its own camera) — the prerequisite for the NaviCube.
+   its own camera) — the prerequisite for the NaviCube (see
+   [`navicube.md`](navicube.md)).
 3. **The g-buffer pick** and line/point pipelines.
 4. **Grow the `pivy.coin` facade** and the `TypeRegistry` toward the ~63
    registered node/kit classes and the `SoType.fromName` surface the workbenches
-   use.
+   use. S1–S4 cover the class spine, the geometry fields, the scene-extraction
+   bridge, and the event/pick surface; the arena (object identity, detached fields),
+   triangulation, field-driven generations, and the g-buffer pick are the next
+   depth items.

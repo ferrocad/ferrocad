@@ -14,8 +14,10 @@ use std::path::PathBuf;
 use std::sync::OnceLock;
 
 use pyo3::prelude::*;
-use pyo3::types::PyAnyMethods;
+use pyo3::types::{PyAnyMethods, PyDict, PyDictMethods};
 use serde::Deserialize;
+
+use ferrocad_inventor::{Event, EventListener, Hit, Scene};
 
 /// The Python module the shell boots and then calls. It is the app's script, so
 /// the library ships no copy; [`configure`] sets it before boot.
@@ -213,6 +215,10 @@ pub fn bootstrap() -> Result<Bootstrap, String> {
         }
         path.call_method1("insert", (0, dir.as_str())).map_err(|e| e.to_string())?;
 
+        // Bring the scene layer (`pivy.coin`) up before any script imports it — the
+        // analogue of `SoFCDB::init()` at GUI startup.
+        ferrocad_inventor_py::install(py).map_err(|e| e.to_string())?;
+
         let module = py.import(entry_module()).map_err(|e| e.to_string())?;
         module
             .getattr("bootstrap")
@@ -302,4 +308,157 @@ pub fn set_property(object: &str, property: &str, value: &str) -> Result<SetResu
             .map_err(|e| e.to_string())
     })?;
     serde_json::from_str(&raw).map_err(|e| e.to_string())
+}
+
+/// The `pivy.coin` script that builds the demo cube, the way a workbench would.
+///
+/// It is the Python twin of [`crate::scene::sample_scene`], so the viewport shows
+/// the same object however the scene is built. The host runs it and extracts the
+/// tree it leaves in `root`.
+const INVENTOR_SCENE_SCRIPT: &str = r#"
+from pivy import coin
+
+root = coin.SoSeparator()
+
+material = coin.SoMaterial()
+material.diffuseColor.setValue((0.9, 0.6, 0.2, 1.0))
+root.addChild(material)
+
+transform = coin.SoTransform()
+transform.rotation = (1.0, 1.0, 0.0, 0.6)
+root.addChild(transform)
+
+coords = coin.SoCoordinate3()
+coords.point.setValues(0, [
+    (-1.0, -1.0, -1.0), (1.0, -1.0, -1.0), (1.0, 1.0, -1.0), (-1.0, 1.0, -1.0),
+    (-1.0, -1.0, 1.0), (1.0, -1.0, 1.0), (1.0, 1.0, 1.0), (-1.0, 1.0, 1.0),
+])
+root.addChild(coords)
+
+faces = coin.SoIndexedFaceSet()
+faces.coordIndex.setValues(0, [
+    4, 5, 6, 4, 6, 7,
+    1, 0, 3, 1, 3, 2,
+    0, 4, 7, 0, 7, 3,
+    5, 1, 2, 5, 2, 6,
+    7, 6, 2, 7, 2, 3,
+    0, 1, 5, 0, 5, 4,
+])
+root.addChild(faces)
+
+# A workbench-style callback: report the pick when a mouse button is released.
+def _report(event_cb):
+    event = event_cb.getEvent()
+    picked = event_cb.getPickedPoint()
+    if picked is not None:
+        print("ferrocad: SoEventCallback picked", picked.getPoint(),
+              "face", picked.getDetail().getFaceIndex())
+
+_events = coin.SoEventCallback()
+_events.addEventCallback(coin.SoMouseButtonEvent.getClassTypeId(), _report)
+root.addChild(_events)
+"#;
+
+/// Build the viewport scene the workbench way (slice **S3**): run a
+/// `from pivy import coin` script and extract the tree it builds.
+///
+/// The scene layer is registered into the embedded interpreter on demand (so the
+/// demo works without a full [`bootstrap`]), and the tree is copied into a
+/// [`Scene`] the renderer compiles — the same path the Rust sample uses.
+pub fn inventor_scene() -> Result<Scene, String> {
+    Python::with_gil(|py| -> Result<Scene, String> {
+        ferrocad_inventor_py::install(py).map_err(|e| e.to_string())?;
+        let globals = PyDict::new(py);
+        let code = std::ffi::CString::new(INVENTOR_SCENE_SCRIPT).map_err(|e| e.to_string())?;
+        py.run(&code, Some(&globals), None).map_err(|e| e.to_string())?;
+        let root = globals
+            .get_item("root")
+            .map_err(|e| e.to_string())?
+            .ok_or_else(|| "the scene script did not leave a `root` node".to_string())?;
+        ferrocad_inventor_py::extract_scene(&root).map_err(|e| e.to_string())
+    })
+}
+
+/// Dispatch an input event (with its pick) to the scene's Python `SoEventCallback`s.
+///
+/// Returns whether any callback ran. The scene's callback nodes are found through
+/// [`ferrocad_inventor::event_callbacks`]; the callables live on the facade side, so
+/// the tree does not need to be re-extracted to reach them.
+pub fn dispatch(scene: &Scene, event: &Event, hit: Option<&Hit>) -> bool {
+    Python::with_gil(|py| {
+        let result = ferrocad_inventor_py::dispatch_event(py, scene, event, hit).unwrap_or_else(|e| {
+            eprintln!("ferrocad: event dispatch failed: {e}");
+            false
+        });
+        // A callback's `print` is block-buffered and the embedded interpreter is not
+        // finalized, so flush the streams here rather than lose the output.
+        flush_output(py);
+        result
+    })
+}
+
+/// Flush Python's standard streams, so `print` from a script reaches the terminal.
+pub fn flush_output(py: Python<'_>) {
+    if let Ok(sys) = py.import("sys") {
+        for name in ["stdout", "stderr"] {
+            if let Ok(stream) = sys.getattr(name) {
+                let _ = stream.call_method0("flush");
+            }
+        }
+    }
+}
+
+/// An [`EventListener`] that forwards pointer events to the Python
+/// `SoEventCallback`s in the scene (the scripted counterpart of the Rust listeners).
+///
+/// It only delivers the event: because the extracted scene is a copy, a callback
+/// does not yet change what is rendered, so it reports no scene change.
+pub struct PythonEventCallbacks;
+
+impl EventListener for PythonEventCallbacks {
+    fn on_event(&mut self, event: &Event, hit: Option<&Hit>, scene: &mut Scene) -> bool {
+        let _ = dispatch(scene, event, hit);
+        false
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use ferrocad_inventor::compile;
+
+    /// The host builds its viewport scene from a `pivy.coin` script (S3); check
+    /// that it extracts and compiles to the expected cube without a GPU.
+    #[test]
+    fn inventor_scene_script_builds_a_compilable_cube() {
+        let _guard = crate::PYTHON_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let scene = inventor_scene().expect("build the scene from Python");
+        let queue = compile(&scene);
+        assert_eq!(queue.len(), 1, "one mesh in the cube");
+        assert_eq!(queue.packets[0].state.color, [0.9, 0.6, 0.2, 1.0]);
+    }
+
+    /// The script registers an `SoEventCallback`; dispatching a mouse-button event
+    /// (S4) must reach it.
+    #[test]
+    fn dispatch_reaches_the_scripted_event_callback() {
+        let _guard = crate::PYTHON_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let scene = inventor_scene().expect("build the scene from Python");
+        let hit = Hit {
+            id: ferrocad_inventor::PickId(0),
+            point: [0.0, 0.0, 1.0],
+            normal: [0.0, 0.0, 1.0],
+            triangle: 1,
+            distance: 1.0,
+        };
+        let event = Event::MouseButton {
+            position: [10, 10],
+            button: 1,
+            down: true,
+        };
+        assert!(
+            dispatch(&scene, &event, Some(&hit)),
+            "the scripted SoEventCallback should have run"
+        );
+    }
 }

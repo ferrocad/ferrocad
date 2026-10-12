@@ -1,7 +1,7 @@
 //! G-buffer picking: render pick ids offscreen, read them back per pixel.
 //!
 //! The scene is drawn once more with the pick pipeline, encoding each packet's
-//! [`StateSnapshot::id`](ferrocad_inventor::StateSnapshot::id) into a colour target.
+//! [`StateSnapshot::id`](ferrocad_graphics::StateSnapshot::id) into a colour target.
 //! A click reads one texel to learn which object is under the cursor, which is the
 //! selection path workbench code relies on.
 

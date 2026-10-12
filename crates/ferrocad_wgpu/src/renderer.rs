@@ -15,10 +15,8 @@
 use std::collections::HashMap;
 use std::fmt;
 
-use ferrocad_inventor::{
-    Camera, DrawBatch, DrawPacket, Generation, ImageData, InventorView, MeshId, Rect, RenderQueue,
-    ViewSpec,
-};
+use ferrocad_graphics::{Camera, DrawBatch, DrawPacket, Generation, MeshId, Rect, RenderQueue};
+use ferrocad_inventor::{ImageData, InventorView, ViewSpec};
 use ferrocad_types::Matrix4;
 
 use crate::batch::GpuMesh;
@@ -222,7 +220,7 @@ impl WgpuRenderer {
     /// Encode and submit a frame drawing `batches` into `target`.
     ///
     /// Fresh geometry (cache misses) is uploaded first; each packet is then drawn
-    /// with its [`StateSnapshot`](ferrocad_inventor::StateSnapshot) bound and
+    /// with its [`StateSnapshot`](ferrocad_graphics::StateSnapshot) bound and
     /// `camera`'s view-projection.
     pub fn render<B: DrawBatch>(
         &mut self,
@@ -712,9 +710,8 @@ fn block_on<F: std::future::Future>(future: F) -> F::Output {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use ferrocad_inventor::{
-        Node, NodeKind, PickId, Scene, Topology, Viewport, compile, compile_with,
-    };
+    use ferrocad_graphics::{PickId, Topology, Viewport};
+    use ferrocad_inventor::{Node, NodeKind, Scene, compile, compile_with};
 
     /// A triangle already in clip space, for use with [`Camera::identity`].
     fn clip_space_triangle() -> Scene {

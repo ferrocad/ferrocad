@@ -1,7 +1,7 @@
 //! # FerroCAD wgpu backend (`ferrocad_wgpu`)
 //!
 //! One backend behind the renderer-agnostic batch boundary defined by
-//! [`ferrocad_inventor`]. It consumes the [`DrawBatch`] trait — never the node
+//! [`ferrocad_graphics`]. It consumes the [`DrawBatch`] trait — never the node
 //! model — so a D3D or Metal backend can sit in its place without the compiler or
 //! scene graph changing.
 //!
@@ -20,12 +20,12 @@
 //!   state in one allocation).
 //! - [`pick`] — the g-buffer picking pass that maps a pixel back to a pick id.
 //!
-//! [`DrawBatch`]: ferrocad_inventor::DrawBatch
+//! [`DrawBatch`]: ferrocad_graphics::DrawBatch
 //! [`InventorView`]: ferrocad_inventor::InventorView
 //! [`ImageData`]: ferrocad_inventor::ImageData
-//! [`mesh_id`]: ferrocad_inventor::MeshId
-//! [`generation`]: ferrocad_inventor::Generation
-//! [`StateSnapshot`]: ferrocad_inventor::StateSnapshot
+//! [`mesh_id`]: ferrocad_graphics::MeshId
+//! [`generation`]: ferrocad_graphics::Generation
+//! [`StateSnapshot`]: ferrocad_graphics::StateSnapshot
 
 pub mod batch;
 pub mod context;

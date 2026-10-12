@@ -10,9 +10,10 @@
 //! translucent away-facing faces and the animated snap are built (see
 //! `docs/navicube.md` §4–§5).
 
+use ferrocad_graphics::{Camera, Rect, RenderQueue, Viewport, pick_at_rect};
 use ferrocad_inventor::{
-    Camera, Rect, RenderQueue, Scene, ViewSpec, Viewport, compile_with, navicube,
-    navicube::{Piece, PieceKind}, pick_at_rect,
+    Scene, ViewSpec, compile_with, navicube,
+    navicube::{Piece, PieceKind},
 };
 use ferrocad_types::{Matrix4, Placement, Rotation, Vector3};
 

@@ -1,6 +1,6 @@
 //! The stage: an ordered collection of declarative visual items.
 
-use ferrocad_inventor::RenderQueue;
+use ferrocad_graphics::RenderQueue;
 
 use crate::shape::ShapeItem;
 
@@ -73,7 +73,7 @@ impl Stage {
 mod tests {
     use super::*;
     use crate::shape::DrawMode;
-    use ferrocad_inventor::{PickId, RenderQueue, Topology};
+    use ferrocad_graphics::{PickId, RenderQueue, Topology};
 
     fn triangle(entity_id: u32) -> ShapeItem {
         ShapeItem::new(entity_id)

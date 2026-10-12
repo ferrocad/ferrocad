@@ -15,9 +15,9 @@
 use std::sync::Arc;
 use std::time::Duration;
 
+use ferrocad_graphics::{Camera, Hit, PickId, RenderQueue, Viewport, pick_at_hit};
 use ferrocad_inventor::{
-    Camera, Event, EventListener, Hit, ImageData, InventorView, PickId, RenderQueue, Scene,
-    ViewSpec, Viewport, compile_with, pick_at_hit,
+    Event, EventListener, ImageData, InventorView, Scene, ViewSpec, compile_with,
 };
 use ferrocad_stage::Stage;
 use ferrocad_stage::{
@@ -666,7 +666,8 @@ pub fn render_image(image: ImageData) -> RenderImage {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use ferrocad_inventor::{Node, NodeKind, Topology, compile_with};
+    use ferrocad_graphics::Topology;
+    use ferrocad_inventor::{Node, NodeKind, compile_with};
 
     /// A view that returns fixed pixels, so the gpui side needs no GPU.
     struct FakeView {
@@ -755,7 +756,7 @@ mod tests {
     #[test]
     fn pointer_events_drive_picking_and_the_listener() {
         let camera = Camera {
-            viewport: ferrocad_inventor::Viewport::new([100, 100], 1.0),
+            viewport: ferrocad_graphics::Viewport::new([100, 100], 1.0),
             ..Camera::identity()
         };
         let mut viewport =
@@ -774,7 +775,7 @@ mod tests {
     #[test]
     fn viewport_compiles_the_scene_it_is_given() {
         let camera = Camera {
-            viewport: ferrocad_inventor::Viewport::new([100, 100], 1.0),
+            viewport: ferrocad_graphics::Viewport::new([100, 100], 1.0),
             ..Camera::identity()
         };
         let scene = triangle_scene();
@@ -789,7 +790,7 @@ mod tests {
         use ferrocad_stage::{DrawMode, ShapeItem, Stage};
 
         let camera = Camera {
-            viewport: ferrocad_inventor::Viewport::new([100, 100], 1.0),
+            viewport: ferrocad_graphics::Viewport::new([100, 100], 1.0),
             ..Camera::identity()
         };
         let mut viewport = InventorViewport::new(
@@ -828,11 +829,11 @@ mod tests {
 
     #[test]
     fn a_tool_receives_pointer_events_and_its_items_are_drawn() {
-        use ferrocad_inventor::Topology;
+        use ferrocad_graphics::Topology;
         use ferrocad_stage::PolylineTool;
 
         let camera = Camera {
-            viewport: ferrocad_inventor::Viewport::new([100, 100], 1.0),
+            viewport: ferrocad_graphics::Viewport::new([100, 100], 1.0),
             ..Camera::identity()
         };
         let mut viewport = InventorViewport::new(
@@ -883,13 +884,13 @@ mod tests {
         Camera {
             view: Placement::new(Vector3::new(0.0, 0.0, -5.0), Rotation::identity()).to_matrix(),
             projection: ferrocad_types::Matrix4::from_values(m),
-            viewport: ferrocad_inventor::Viewport::new(size, 1.0),
+            viewport: ferrocad_graphics::Viewport::new(size, 1.0),
         }
     }
 
     #[test]
     fn a_gizmo_drag_previews_a_transform_on_the_target_item() {
-        use ferrocad_inventor::pick_at_hit;
+        use ferrocad_graphics::pick_at_hit;
         use ferrocad_stage::{GizmoHandle, GizmoMode, ShapeItem, Stage, TransformGizmo};
         use ferrocad_types::Vector3;
 

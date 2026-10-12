@@ -13,8 +13,8 @@ categories = ["graphics"]
 documentation = "https://docs.rs/ferrocad_stage"
 
 [dependencies]
-# The shared batch vocabulary (DrawPacket/RenderQueue/Geometry/Topology/Vertex,
-# MeshId/Generation/PickId, StateSnapshot). The stage compiles into it directly —
-# no intermediate scene graph. `ferrocad_inventor` is a leaf, so this stays cheap.
-ferrocad_inventor.workspace = true
+# The neutral draw contract (DrawPacket/RenderQueue/Geometry/Camera/Hit/…). The stage
+# compiles into it directly — no intermediate scene graph, and **no dependency on
+# `ferrocad_inventor`**: the modern stack is fully decoupled from Open Inventor.
+ferrocad_graphics.workspace = true
 ferrocad_types.workspace = true

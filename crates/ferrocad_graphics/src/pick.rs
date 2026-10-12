@@ -367,45 +367,61 @@ fn invert(m: &Matrix4) -> Option<Matrix4> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::node::{Node, NodeKind, Scene};
-    use crate::{compile, PickId};
+    use crate::batch::{DrawPacket, Generation, MeshId, PickId, RenderQueue};
+    use crate::geometry::{Geometry, Vertex};
+    use crate::state::StateSnapshot;
+    use ferrocad_types::Matrix4;
+
+    fn packet(topology: Topology, positions: &[[f32; 3]], indices: Vec<u32>) -> DrawPacket {
+        let vertices = positions
+            .iter()
+            .map(|position| Vertex {
+                position: *position,
+                normal: [0.0, 0.0, 1.0],
+                uv: [0.0, 0.0],
+            })
+            .collect();
+        DrawPacket {
+            mesh_id: MeshId(0),
+            generation: Generation(0),
+            topology,
+            geometry: Some(Geometry { vertices, indices }),
+            state: StateSnapshot {
+                world_transform: Matrix4::identity(),
+                color: [1.0, 1.0, 1.0, 1.0],
+                depth_bias: 0.0,
+                texture: None,
+                id: PickId(0),
+            },
+        }
+    }
 
     /// A triangle at z = 0.5 spanning [-0.5, 0.5] in x and y.
-    fn triangle_scene() -> Scene {
-        Scene {
-            root: Node {
-                kind: NodeKind::Separator,
-                children: vec![
-                    Node {
-                        kind: NodeKind::Coordinate3(vec![
-                            [-0.5, -0.5, 0.5],
-                            [0.5, -0.5, 0.5],
-                            [0.0, 0.5, 0.5],
-                        ]),
-                        children: vec![],
-                    },
-                    Node {
-                        kind: NodeKind::Mesh {
-                            indices: vec![0, 1, 2],
-                            normal_indices: vec![],
-                            topology: Topology::Triangles,
-                        },
-                        children: vec![],
-                    },
-                ],
-            },
+    fn triangle_queue() -> RenderQueue {
+        RenderQueue {
+            packets: vec![packet(
+                Topology::Triangles,
+                &[[-0.5, -0.5, 0.5], [0.5, -0.5, 0.5], [0.0, 0.5, 0.5]],
+                vec![0, 1, 2],
+            )],
+        }
+    }
+
+    /// A single horizontal segment at z = 0.
+    fn line_queue() -> RenderQueue {
+        RenderQueue {
+            packets: vec![packet(Topology::Lines, &[[-1.0, 0.0, 0.0], [1.0, 0.0, 0.0]], vec![0, 1])],
         }
     }
 
     #[test]
     fn identity_camera_ray_through_center_hits_the_triangle() {
-        let queue = compile(&triangle_scene());
+        let queue = triangle_queue();
         // Identity view/projection: view_projection is identity, so device (50,50)
         // of a 100x100 viewport is NDC (0, 0) and the ray runs along +z.
-        let camera = Camera::identity();
         let camera = Camera {
             viewport: crate::Viewport::new([100, 100], 1.0),
-            ..camera
+            ..Camera::identity()
         };
         assert_eq!(pick_at(&queue, &camera, [50, 50]), Some(PickId(0)));
         assert_eq!(pick_at(&queue, &camera, [5, 5]), None);
@@ -445,28 +461,7 @@ mod tests {
 
     #[test]
     fn pick_hit_reports_line_topology() {
-        use crate::geometry::Topology;
-        use crate::node::{Node, NodeKind, Scene};
-        let scene = Scene {
-            root: Node {
-                kind: NodeKind::Separator,
-                children: vec![
-                    Node {
-                        kind: NodeKind::Coordinate3(vec![[-1.0, 0.0, 0.0], [1.0, 0.0, 0.0]]),
-                        children: vec![],
-                    },
-                    Node {
-                        kind: NodeKind::Mesh {
-                            indices: vec![0, 1],
-                            normal_indices: vec![],
-                            topology: Topology::Lines,
-                        },
-                        children: vec![],
-                    },
-                ],
-            },
-        };
-        let queue = compile(&scene);
+        let queue = line_queue();
         let ray = Ray {
             origin: [0.0, 0.0, -5.0],
             direction: [0.0, 0.0, 1.0],

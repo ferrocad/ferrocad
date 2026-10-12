@@ -2346,9 +2346,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "ferrocad_graphics"
+version = "0.1.2"
+dependencies = [
+ "ferrocad_types",
+]
+
+[[package]]
 name = "ferrocad_inventor"
 version = "0.1.2"
 dependencies = [
+ "ferrocad_graphics",
  "ferrocad_types",
 ]
 
@@ -2416,7 +2424,7 @@ dependencies = [
 name = "ferrocad_stage"
 version = "0.1.2"
 dependencies = [
- "ferrocad_inventor",
+ "ferrocad_graphics",
  "ferrocad_types",
 ]
 
@@ -2432,6 +2440,7 @@ name = "ferrocad_viewport"
 version = "0.1.2"
 dependencies = [
  "bite-gpui",
+ "ferrocad_graphics",
  "ferrocad_inventor",
  "ferrocad_stage",
  "ferrocad_types",
@@ -2443,6 +2452,7 @@ name = "ferrocad_wgpu"
 version = "0.1.2"
 dependencies = [
  "bytemuck",
+ "ferrocad_graphics",
  "ferrocad_inventor",
  "ferrocad_stage",
  "ferrocad_types",

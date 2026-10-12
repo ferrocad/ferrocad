@@ -39,27 +39,29 @@
 //! assert!(queue.is_empty());
 //! ```
 
-pub mod batch;
-pub mod camera;
 pub mod compile;
 pub mod event;
-pub mod geometry;
 pub mod navicube;
 pub mod node;
-pub mod pick;
-pub mod pixels;
 pub mod registry;
 pub mod state;
 pub mod view;
 
-pub use batch::{DrawBatch, DrawPacket, Generation, MeshId, PickId, RenderQueue};
-pub use camera::Camera;
+// The neutral draw contract, camera/viewport and picking live in `ferrocad_graphics`;
+// they are re-exported (modules and types) so existing `ferrocad_inventor::…` paths
+// keep working. New code should depend on `ferrocad_graphics` directly.
+pub use ferrocad_graphics::{batch, camera, geometry, pick, pixels};
+pub use ferrocad_graphics::pick::{
+    pick_at, pick_at_hit, pick_at_rect, pick_at_rect_hit, pick_hit,
+};
+pub use ferrocad_graphics::{
+    Camera, DrawBatch, DrawPacket, Generation, Geometry, Hit, MeshId, PickId, Ray, Rect,
+    RenderQueue, StateSnapshot, Texture2, Topology, Vertex, Viewport,
+};
+
 pub use compile::{compile, compile_with};
 pub use event::{Event, EventListener, event_callbacks};
-pub use geometry::{Geometry, Texture2, Topology, Vertex};
 pub use node::{Node, NodeKind, Scene, SO_SWITCH_ALL, SO_SWITCH_NONE};
-pub use pick::{Hit, Ray, pick, pick_at, pick_at_hit, pick_at_rect, pick_at_rect_hit, pick_hit};
-pub use pixels::{Rect, Viewport};
 pub use registry::TypeRegistry;
-pub use state::{State, StateSnapshot};
+pub use state::State;
 pub use view::{ImageData, InventorView, ViewSpec};

@@ -4,7 +4,7 @@
 //! otherwise to a grid node on the `z = 0` plane. Feature snaps (vertex, edge midpoint,
 //! centre) need the hit mesh's vertices and land with the richer pick in T4.
 
-use ferrocad_inventor::Camera;
+use ferrocad_graphics::Camera;
 
 use crate::input::PointerEvent;
 
@@ -69,7 +69,7 @@ fn round_to(value: f64, step: f64) -> f64 {
 mod tests {
     use super::*;
     use crate::input::{PointerKind, PointerEvent};
-    use ferrocad_inventor::{Hit, PickId, Topology, Viewport};
+    use ferrocad_graphics::{Hit, PickId, Topology, Viewport};
 
     fn event(kind: PointerKind, position: [i32; 2], hit: Option<Hit>) -> PointerEvent {
         PointerEvent {

@@ -1,16 +1,16 @@
 //! Uploading fresh geometry into GPU meshes.
 //!
 //! A [`Geometry`] arrives on the CPU (only on a cache miss — see
-//! [`DrawBatch::geometry`](ferrocad_inventor::DrawBatch::geometry)); [`GpuMesh`] is
+//! [`DrawBatch::geometry`](ferrocad_graphics::DrawBatch::geometry)); [`GpuMesh`] is
 //! its uploaded form, cached by `(mesh_id, generation)`.
 
 use bytemuck::{Pod, Zeroable};
-use ferrocad_inventor::Geometry;
+use ferrocad_graphics::Geometry;
 use wgpu::util::DeviceExt;
 
 /// A vertex as laid out in a GPU buffer.
 ///
-/// Mirrors [`ferrocad_inventor::Vertex`] and derives `bytemuck::Pod`, so a slice of
+/// Mirrors [`ferrocad_graphics::Vertex`] and derives `bytemuck::Pod`, so a slice of
 /// these can be uploaded directly. `#[repr(C)]` with two `vec3`s has no padding.
 #[repr(C)]
 #[derive(Clone, Copy, Debug, Default, Pod, Zeroable)]
@@ -23,8 +23,8 @@ pub struct GpuVertex {
     pub uv: [f32; 2],
 }
 
-impl From<&ferrocad_inventor::Vertex> for GpuVertex {
-    fn from(v: &ferrocad_inventor::Vertex) -> Self {
+impl From<&ferrocad_graphics::Vertex> for GpuVertex {
+    fn from(v: &ferrocad_graphics::Vertex) -> Self {
         Self {
             position: v.position,
             normal: v.normal,

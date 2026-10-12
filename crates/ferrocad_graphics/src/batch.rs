@@ -1,4 +1,5 @@
-//! The batch boundary: what the inventor state machine emits and a renderer draws.
+//! The batch boundary: what a producer emits (the inventor state machine, or the modern
+//! `ferrocad_stage`) and a renderer draws.
 //!
 //! The pipeline is:
 //!

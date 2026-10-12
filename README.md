@@ -99,14 +99,15 @@ FerroCAD is a Cargo workspace (edition 2024). Crate status:
 | --- | --- | --- |
 | `crates/ferrocad` | the base app: runs the general edition (`cargo run -p ferrocad`) | published (app binary) |
 | `crates/ferrocad_types` | base value types: quantities, units, geometry (`Vector3`, `Placement`, …) | primary |
+| `crates/ferrocad_graphics` | the neutral graphics primitives: the draw contract (`DrawPacket`/`RenderQueue`/`Geometry`/…), camera/viewport, and CPU picking | primary |
 | `crates/ferrocad_core` | pure-Rust model: properties, documents, recompute DAG (re-exports `ferrocad_types`) | primary |
 | `crates/ferrocad_geom` | the geometry seam: opaque `Shape`, `History`/`ElementMap`, the `GeometryBackend` trait | new |
 | `crates/ferrocad_occt` | the OCCT backend: implements `GeometryBackend` (box/fuse/cut/fillet/place) | new — needs OCCT 7.8+ |
 | `crates/ferrocad_part` | the Part workbench: registers `Part::Feature` and `Part::PropertyPartShape` | new — needs OCCT 7.8+ |
 | `crates/ferrocad_part_py` | the `Part` Python module (`makeBox`, `Shape`); the composition root that links OCCT | new — needs OCCT 7.8+ |
 | `crates/ferrocad_py` | PyO3 extension over `ferrocad_core` (module `ferrocad`) | primary |
-| `crates/ferrocad_inventor` | the Coin/Inventor scene core: node AST, state accumulator, mesh compiler, picking, events, viewport/DPI | primary |
-| `crates/ferrocad_stage` | the modern declarative CAD presentation: `ShapeItem`s on a `Stage`, tools and a `TransformGizmo`, compiled straight to draw batches (no scene graph) | primary |
+| `crates/ferrocad_inventor` | the Coin/Inventor scene core: node AST, state accumulator, mesh compiler, events (re-exports `ferrocad_graphics`) | primary |
+| `crates/ferrocad_stage` | the modern declarative CAD presentation: `ShapeItem`s on a `Stage`, tools and a `TransformGizmo`, compiled straight to `ferrocad_graphics` (no scene graph) | primary |
 | `crates/ferrocad_wgpu` | the wgpu backend: pipelines, dynamic uniforms, MSAA, offscreen target, readback | primary |
 | `crates/ferrocad_inventor_py` | the pivy-compatible `coin` facade (scaffolding, surfaced as `pivy.coin`) | new |
 | `crates/ferrocad_gen` | generated PyO3 skeleton bindings from the `.pyi` model (M3c) | useful — drives the codegen tests |

@@ -11,7 +11,7 @@
 
 use std::f64::consts::TAU;
 
-use ferrocad_inventor::{Camera, Ray};
+use ferrocad_graphics::{Camera, Ray};
 use ferrocad_types::{Matrix4, Placement, Rotation, Vector3};
 
 use crate::shape::{DrawMode, ShapeItem};
@@ -649,7 +649,7 @@ fn to_vec(v: [f64; 3]) -> Vector3 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use ferrocad_inventor::Viewport;
+    use ferrocad_graphics::Viewport;
 
     /// A 45° perspective camera at `(0, 0, eye_z)` looking toward the origin.
     fn camera(eye_z: f64) -> Camera {
@@ -706,7 +706,7 @@ mod tests {
             gizmo.items()
                 .iter()
                 .filter(|item| {
-                    let mut queue = ferrocad_inventor::RenderQueue::default();
+                    let mut queue = ferrocad_graphics::RenderQueue::default();
                     item.emit(&mut queue);
                     !queue.is_empty()
                 })

@@ -1,8 +1,8 @@
 # The modern stack: `ferrocad_stage` — plan and status
 
-Status: **T0 (crate + declarative spine), T1 (render + coexistence), T1.5 (the
-viewport bridge), T2 (tools & pointer events) and T3 (the transform gizmo) built
-(2026-10-12); T4–T5 planned.**
+Status: **T0–T3 built, and T4 in progress (2026-10-12): sub-slice 1 (the
+`ferrocad_graphics` extraction) is done; sub-slices 2–4 (depth bias + `part_idx`, cache
+eviction, the G-buffer pick pass) are pending.**
 Companion to [`inventor-renderer.md`](inventor-renderer.md) (the legacy `pivy.coin`
 stack this runs beside), [`inventor-plan.md`](inventor-plan.md) (the emulation roadmap),
 and [`architecture.md`](architecture.md) (crate layering).
@@ -23,7 +23,7 @@ no intermediate scene graph, no traversal, and no node arena.
 ## 2. Two producers, one batch contract
 
 Both stacks emit the **same** batch vocabulary
-([`DrawPacket`](../crates/ferrocad_inventor/src/batch.rs)), which is the whole point: a
+([`DrawPacket`](../crates/ferrocad_graphics/src/batch.rs)), which is the whole point: a
 renderer draws them in one pass against one depth buffer, so there are no layering
 artifacts and one pick path serves both.
 
@@ -33,10 +33,9 @@ legacy:  Scene ──compile──────────▶ RenderQueue ─┐
 modern:  Stage ──emit_batches─────▶ ─────────────┘
 ```
 
-The stage does **not** depend on the Inventor *semantics* (no `Scene`, no traversal); it
-depends on `ferrocad_inventor` only for the shared batch types, which are already the
-neutral, renderer-facing seam. If a second consumer ever justifies it, the vocabulary
-moves to a neutral `ferrocad_batch` crate (see §5).
+The stage does **not** depend on Open Inventor at all: it compiles to
+[`ferrocad_graphics`](../crates/ferrocad_graphics), the neutral draw contract (the batch
+vocabulary, camera and picking) shared with the legacy stack (T4, sub-slice 1).
 
 ## 3. Slice path
 
@@ -47,7 +46,7 @@ moves to a neutral `ferrocad_batch` crate (see §5).
 | **T1.5 — viewport bridge** | `InventorViewport` holds a `Stage` (`stage_mut`/`set_stage`); its queue is the inventor compile plus `stage.emit_batches`, so the shell renders both producers. | ✅ |
 | **T2 — tools** | `Tool`/`PointerEvent`/`MouseButton`, snapping (`snap_to_geometry`), transient items (`PolylineTool`), and host dispatch from the viewport (drawn as a transient overlay, never picked). | ✅ |
 | **T3 — `TransformGizmo`** | Draggers with drag/commit delta events; transient transform override. | ✅ |
-| **T4 — G-buffer pick pass** | The offscreen `Rg32Uint`/normal/depth pass + 1×1 readback + `part_index` unprojection — the shared enabler for O(1) picking in both stacks. **This is where the batch contract is extended and (likely) extracted.** | ▢ |
+| **T4 — G-buffer pick pass** ◐ | *(1/4, done)* `ferrocad_graphics`: the neutral draw contract extracted, `ferrocad_stage` fully decoupled from inventor. *(todo)* triangle slope/constant depth bias + a vertex `part_idx`; mesh-cache generation eviction; the offscreen `Rg32Uint` pass + 1×1 readback + `part_index` unprojection. | ◐ |
 | **T5 — `ferrocad.stage` bindings** | PyO3 module exposing `ShapeItem`/`Tool`/`TransformGizmo`. | ▢ |
 
 ## 4. As built (T0–T1)
@@ -175,10 +174,10 @@ commit and the cleared preview.
 
 ## 5. Deferred decisions
 
-1. **Batch vocabulary home.** Kept in `ferrocad_inventor` for T0/T1 (`DrawPacket` is
-   already the neutral seam); extract a neutral `ferrocad_batch` crate at T4, the moment
-   the contract must change for the G-buffer pass. Doing it then is one motivated
-   refactor instead of two.
+1. **Batch vocabulary home.** *Done (T4, sub-slice 1):* the vocabulary now lives in the
+   neutral `ferrocad_graphics` crate. `ferrocad_inventor` re-exports it, `ferrocad_stage`
+   is fully decoupled from Inventor, and `ferrocad_wgpu`/`ferrocad_viewport` depend on it
+   directly.
 2. **Contract extension.** `pipeline_kind`, `entity_id`, and interleaved `part_idx` are
    deliberately **not** added yet: `ShadedWithEdges` already decomposes into existing
    `Topology` packets, and surface/wireframe/overlay is already expressible. Add them at

@@ -13,8 +13,9 @@ categories = ["gui"]
 documentation = "https://docs.rs/ferrocad_viewport"
 
 [dependencies]
-# The scene vocabulary the viewport presents (Scene/Camera/RenderQueue/Event/PickId
-# and the `InventorView` capability trait). No concrete renderer or Python here.
+# The neutral primitives the viewport presents (Camera/RenderQueue/PickId/Rect/…).
+ferrocad_graphics.workspace = true
+# The scene vocabulary it presents (Scene/Event/InventorView/ViewSpec) and the sample.
 ferrocad_inventor.workspace = true
 # The modern declarative producer: a Stage of items drawn beside the inventor scene.
 ferrocad_stage.workspace = true

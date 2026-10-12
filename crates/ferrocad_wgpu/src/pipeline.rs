@@ -7,7 +7,7 @@
 
 use std::mem::size_of;
 
-use ferrocad_inventor::Topology;
+use ferrocad_graphics::Topology;
 
 use crate::batch::GpuVertex;
 

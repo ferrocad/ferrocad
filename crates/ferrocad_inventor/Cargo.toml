@@ -22,4 +22,7 @@ documentation = "https://docs.rs/ferrocad_inventor"
 name = "ferrocad_inventor"
 
 [dependencies]
+# The neutral draw contract (DrawPacket/RenderQueue/Geometry/Camera/…): the inventor
+# stack compiles down to it and re-exports it.
+ferrocad_graphics.workspace = true
 ferrocad_types.workspace = true

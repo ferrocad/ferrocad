@@ -173,7 +173,7 @@ fn set_marker(item: &mut ShapeItem, at: Option<[f32; 3]>) {
 mod tests {
     use super::*;
     use crate::snap::SnapKind;
-    use ferrocad_inventor::{Hit, PickId, RenderQueue, Topology};
+    use ferrocad_graphics::{Hit, PickId, RenderQueue, Topology};
 
     fn event(kind: PointerKind, button: Option<MouseButton>, world: Option<[f32; 3]>) -> PointerEvent {
         PointerEvent {

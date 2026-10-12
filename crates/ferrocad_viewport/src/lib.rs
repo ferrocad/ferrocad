@@ -10,16 +10,18 @@
 //! - [`scene`] — a sample scene/camera and a hover listener, so the pipeline and the
 //!   interaction path are exercised before real document geometry exists.
 //!
-//! It depends only on the `ferrocad_inventor` **vocabulary** — `Scene`, `Camera`,
-//! `RenderQueue`, `Event`/`EventListener`, `PickId`, and the `InventorView` capability
-//! trait — and on no concrete renderer or Python. `ferrocad_wgpu` implements
-//! `InventorView`; the host (`ferrocad_gpui`) supplies it and owns the window.
+//! It builds on two crates: the [`ferrocad_graphics`] primitives (`Camera`,
+//! `RenderQueue`, `PickId`, `Rect`, `Hit`, picking) and the [`ferrocad_inventor`] scene
+//! vocabulary (`Scene`, `Event`/`EventListener`, `ViewSpec`, the `InventorView`
+//! capability trait) — and on no concrete renderer or Python. `ferrocad_wgpu`
+//! implements `InventorView`; the host (`ferrocad_gpui`) supplies it and owns the window.
 //!
 //! ```text
-//! ferrocad_viewport ── uses ──▶ ferrocad_inventor   (Scene, Camera, InventorView, …)
-//!        ▲                              ▲
-//!        │ host supplies                │ backend implements
-//! ferrocad_gpui (window)          ferrocad_wgpu (InventorView)
+//! ferrocad_viewport ── uses ──▶ ferrocad_graphics  (Camera, RenderQueue, PickId, …)
+//!                   ── uses ──▶ ferrocad_inventor  (Scene, Event, InventorView, …)
+//!        ▲
+//!        │ host supplies the window          backend implements InventorView
+//! ferrocad_gpui                        ferrocad_wgpu
 //! ```
 
 pub mod inventor_view;

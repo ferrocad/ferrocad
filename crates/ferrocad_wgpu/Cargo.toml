@@ -16,6 +16,10 @@ documentation = "https://docs.rs/ferrocad_wgpu"
 name = "ferrocad_wgpu"
 
 [dependencies]
+# The neutral draw contract it consumes (DrawPacket/Geometry/Camera/Rect/…).
+ferrocad_graphics.workspace = true
+# The presentation seam (`InventorView`/`ViewSpec`/`ImageData`) still lives with the
+# inventor core.
 ferrocad_inventor.workspace = true
 ferrocad_types.workspace = true
 wgpu = "29"

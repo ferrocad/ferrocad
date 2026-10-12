@@ -69,16 +69,7 @@ impl State {
 }
 
 /// The resolved traversal state bound to a draw, independent of the node model.
-#[derive(Clone, Debug)]
-pub struct StateSnapshot {
-    /// The world transform to apply to the mesh.
-    pub world_transform: Matrix4,
-    /// Linear RGBA colour.
-    pub color: [f32; 4],
-    /// Depth bias applied before rasterisation.
-    pub depth_bias: f32,
-    /// The texture to sample, if any (multiplied into the colour).
-    pub texture: Option<Arc<Texture2>>,
-    /// Selection identity, written to the picking buffer.
-    pub id: PickId,
-}
+///
+/// It lives in `ferrocad_graphics` (part of the neutral draw contract); re-exported
+/// here so `crate::state::StateSnapshot` still resolves.
+pub use ferrocad_graphics::state::StateSnapshot;

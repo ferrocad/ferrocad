@@ -5,9 +5,8 @@
 //! the interaction path (hover → pick → highlight) are exercised end to end. It is
 //! also what the `inventor_roundtrip` example renders.
 
-use ferrocad_inventor::{
-    Camera, Event, EventListener, Hit, Node, NodeKind, Scene, Topology, Viewport,
-};
+use ferrocad_graphics::{Camera, Hit, Topology, Viewport};
+use ferrocad_inventor::{Event, EventListener, Node, NodeKind, Scene};
 use ferrocad_types::{Matrix4, Placement, Rotation, Vector3};
 
 /// The cube's resting colour.

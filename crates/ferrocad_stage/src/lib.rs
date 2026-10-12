@@ -6,7 +6,7 @@
 //!
 //! A workbench declares high-level visual items (a [`ShapeItem`] with tessellation and
 //! display attributes) on a [`Stage`]; [`Stage::emit_batches`] decomposes each into
-//! [`DrawPacket`](ferrocad_inventor::DrawPacket)s. There is **no intermediate scene
+//! [`DrawPacket`](ferrocad_graphics::DrawPacket)s. There is **no intermediate scene
 //! graph** — no node arena, no traversal — so a stage is cheap to rebuild each frame.
 //!
 //! ```text
@@ -16,8 +16,8 @@
 //! ```
 //!
 //! Because both stacks emit the **same** batch vocabulary, a renderer draws them in one
-//! pass against one depth buffer — no visual layering artifacts (see the module docs of
-//! [`ferrocad_inventor`](ferrocad_inventor)).
+//! pass against one depth buffer — no visual layering artifacts (see
+//! [`ferrocad_graphics`]).
 //!
 //! This crate is pure Rust: no `pyo3`, no `wgpu`. The Python surface (`ferrocad.stage`)
 //! and the interactive gizmos are later slices; see `docs/stage.md`.

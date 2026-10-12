@@ -2,7 +2,7 @@
 
 use std::sync::atomic::{AtomicU64, Ordering};
 
-use ferrocad_inventor::{
+use ferrocad_graphics::{
     DrawPacket, Generation, Geometry, MeshId, PickId, RenderQueue, StateSnapshot, Topology, Vertex,
 };
 use ferrocad_types::{Matrix4, Placement};
@@ -39,7 +39,7 @@ impl DrawMode {
 /// The item owns raw buffers — vertex positions, optional per-vertex normals, triangle
 /// indices and edge segment indices — plus display attributes. It carries no document
 /// object and no scene-graph node: [`emit`](Self::emit) turns it into
-/// [`DrawPacket`](ferrocad_inventor::DrawPacket)s.
+/// [`DrawPacket`](ferrocad_graphics::DrawPacket)s.
 ///
 /// The mesh identity is allocated once at construction and is **stable** across
 /// `emit` calls, so a renderer's `(mesh_id, generation)` upload cache hits; changing the

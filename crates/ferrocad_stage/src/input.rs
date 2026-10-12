@@ -5,7 +5,7 @@
 //! Positions are **device pixels** (bottom-left origin, Coin's convention), like the
 //! rest of the stack below the host.
 
-use ferrocad_inventor::Hit;
+use ferrocad_graphics::Hit;
 
 /// Which pointer event occurred.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

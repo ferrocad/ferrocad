@@ -1,10 +1,10 @@
 //! Texture support: the shape texture bind group (group 1) and its uploads.
 //!
-//! A shape may name a [`Texture2`](ferrocad_inventor::Texture2) (the `SoTexture2`
+//! A shape may name a [`Texture2`](ferrocad_graphics::Texture2) (the `SoTexture2`
 //! payload); the fragment shader samples it and multiplies it into the colour. Shapes
 //! without a texture bind a 1×1 opaque-white default, so the layout is uniform.
 
-use ferrocad_inventor::Texture2;
+use ferrocad_graphics::Texture2;
 
 /// The bind group layout for a shape's texture and sampler (group 1).
 pub fn layout(device: &wgpu::Device) -> wgpu::BindGroupLayout {

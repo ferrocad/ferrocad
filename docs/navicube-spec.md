@@ -7,13 +7,13 @@ producer-independent), and [`inventor-renderer.md`](inventor-renderer.md) (the r
 stack it rides).
 
 This note states the NaviCube **normatively**: the coordinate conventions, the piece
-taxonomy and ids, the geometry, colours, overlay camera, placement, interaction, and the
-**build contract** a producer must satisfy. Upstream (`Gui::NaviCube` +
-`Gui::SoNaviCube`) is the reference; where the current FerroCAD build deviates, §14 records
-it. It is written so the cube can be produced by either the legacy `pivy.coin` stack
-(`ferrocad_inventor`) or the modern declarative stack (`ferrocad_stage`) and hosted by one
-controller (`ferrocad_viewport`) — see [`navicube-plan.md`](navicube-plan.md) for that
-layering.
+taxonomy and ids, the geometry, the appearance **roles**, the overlay camera, placement,
+interaction, and the **build contract** a producer must satisfy. Upstream (`Gui::NaviCube`
++ `Gui::SoNaviCube`) is the reference; where the current FerroCAD build deviates, §14
+records it. It is written so the cube can be produced by either the legacy `pivy.coin`
+stack (`ferrocad_inventor`) or the modern declarative stack (`ferrocad_stage`) and hosted
+by one controller (`ferrocad_viewport`) — see [`navicube-plan.md`](navicube-plan.md) for
+that layering.
 
 ## 1. Scope
 
@@ -24,6 +24,12 @@ A **NaviCube** is a screen-space orientation gizmo in a viewport corner. It:
 - responds to hover (highlight), click (re-orient the view), and drag (orbit the view);
 - carries 6 faces, 12 edges, 8 corners, a **Home** button, and (upstream) a coordinate
   system, six arrow buttons, `Backside` and a `ViewMenu` button.
+
+**Behaviour, not styling.** This spec fixes *geometry, taxonomy, interaction and the
+semantic appearance roles* the cube uses. It does **not** fix colours, opacity, fonts or
+glyph bitmaps: those are the concern of a **theme** over the draw-batch primitives (§5),
+shared with every other producer. The concrete palettes upstream and the current build use
+are recorded as *reference theme values* (§13), not spec constants.
 
 **Normative vs upstream.** The behaviour, taxonomy and interaction model follow upstream.
 The **axis naming** and the compact **pick-id numbering** are FerroCAD's own (upstream is
@@ -36,7 +42,8 @@ Everything a producer emits is expressed in the shared draw vocabulary
 (`ferrocad_graphics`): a `DrawPacket` names a mesh (`mesh_id` + `generation`), a
 `Topology`, an optional `Geometry` (on a cache miss), and a `StateSnapshot`
 (`world_transform`, `color`, `depth_bias`, `texture`, `id`). A NaviCube adds **no** new
-node kinds, node classes or draw-contract fields.
+node kinds, node classes or draw-contract fields; appearance is resolved through a theme
+into the existing `StateSnapshot` fields.
 
 ## 2. Conventions
 
@@ -136,8 +143,8 @@ at `center + (±CORNER_HALF, ±CORNER_HALF, ±CORNER_HALF)`; twelve outward-woun
 
 **Home button.** A fixed quad (a sibling of the rotating subtree, **not** rotated):
 corners `(HOME_CENTER.x ± HOME_HALF.x, HOME_CENTER.y ± HOME_HALF.y, 0)`, wound
-counter-clockwise toward the viewer; indices `[0,1,2, 0,2,3]`; UV `FACE_UV`; a baked `H`
-label.
+counter-clockwise toward the viewer; indices `[0,1,2, 0,2,3]`; UV `FACE_UV`. Its label is
+themed (§5).
 
 ### 4.2 Upstream reference (single chamfered cube)
 
@@ -159,52 +166,47 @@ Each region is placed from two unit axes `x` (in-plane) and `z` (outward normal)
   zC − 2xC,  (zC − xC) − yC,  (zC + xC) − yC,  zC + 2xC,  (zC + xC) + yC,  (zC − xC) + yC
   ```
 - **Coordinate system** (`showCS`, upstream default **on**) — three line segments from
-  `(a,b,a)`… per axis, with `a = −1.1`, `b = −1.05`, `c = 0.5`, coloured
-  `axisX/Y/ZColor` (default red/green/blue).
+  `(a,b,a)`… per axis, with `a = −1.1`, `b = −1.05`, `c = 0.5`, coloured from the theme
+  (upstream default: red/green/blue).
 
-## 5. Visual state and colours
+## 5. Appearance: roles and the theme
 
-**Current build palette** (FerroCAD):
+The cube declares, per piece, a **semantic role**; it never chooses a colour. A **theme**
+maps each role to concrete appearance (`StateSnapshot.color`, opacity, and an optional
+`Texture2` for labels). The theme belongs to the theming layer over the draw-batch
+primitives (`ferrocad_graphics`) — it is shared with every producer and is **not** part of
+the NaviCube.
 
-| Constant | RGBA |
+`NavicubeRole` is the closed vocabulary a NaviCube emits:
+
+| Role | Meaning |
 | --- | --- |
-| `BASE_COLOR` | `[0.55, 0.6, 0.66, 1.0]` |
-| `HILITE_COLOR` | `[0.2, 0.6, 0.95, 1.0]` |
-| `INACTIVE_COLOR` | `[0.38, 0.42, 0.48, 0.5]` |
-| `HOME_COLOR` | `[0.5, 0.55, 0.62, 1.0]` |
+| `Face` / `FaceHighlighted` / `FaceAway` | a cube face: resting / hovered / pointing away |
+| `Edge` / `EdgeHighlighted` | an edge segment: resting / hovered |
+| `Corner` / `CornerHighlighted` | a corner cube: resting / hovered |
+| `Home` / `HomeHighlighted` | the Home button: resting / hovered |
 
-**Upstream defaults** (reference): `baseColor #E2E8EF`, `hiliteColor #AAE2FF`,
-`emphaseColor #000000` — where **`emphaseColor` colours the cube's edges/border**, not a
-highlighted face; a hovered face swaps to `hiliteColor` via a per-face material index;
-per-colour alpha (`baseAlpha`/`hiliteAlpha`/`emphaseAlpha`) multiplies a **whole-cube
-opacity** that is `1.0` while hovering and `inactiveOpacity` (**0.5**) otherwise.
-
-**Colour rule** (current build — a pure function of the requested state), per piece:
+**Role rule** (a pure function of the requested state), per clickable target — priority
+highlight, then away:
 
 ```
-color(piece) =
-    HILITE_COLOR    if piece == hilite
-    INACTIVE_COLOR  if piece ∈ away
-    BASE_COLOR      otherwise
+role(target) =
+    <kind>Highlighted    if target == hilite          (kind ∈ Face | Edge | Corner | Home)
+    FaceAway             if target is a Face and target ∈ away
+    <kind>               otherwise
 ```
 
 `away` is the set of **face** pieces pointing away from the viewer given the cube's
-current orientation; they are drawn **first** and translucent, so the cube reads as a
-solid but see-through box. The Home quad is always `HOME_COLOR`. (Upstream has no
-"away" concept; it makes the *whole* cube translucent when not hovered.)
+current orientation; the Home quad is never `away`. Away faces are emitted **first** (a
+draw-order/compositing requirement, e.g. as translucent surfaces) so the cube reads as a
+solid but see-through box; the theme decides their actual opacity. (Upstream has no
+"away" concept; it dims the *whole* cube when not hovered — a theme choice.)
 
-**Labels.** Faces and the Home button carry a baked label texture (`SoTexture2`-style)
-multiplied into the face colour. Current build: a light background (`#FFFFFF`) with a
-dark glyph (`#282828`) in a `LABEL_SIZE = 64` square (256 bytes/row, the upload
-alignment); 5×7 block letters in an 8-pixel cell, centred. Face letters: Front `F`,
-Back `B`, Top `T`, Bottom `D`, Right `R`, Left `L`; Home `H`. Untextured pieces sample
-white. Upstream: a **192**×192 texture, **Arial**, **white** text on a transparent
-background, `fontZoom` (0.3) sizing, vertically mirrored for the GL texture origin, for
-the six faces in the order Front, Top, Right, Rear, Bottom, Left.
-
-> Labels are a **producer capability**, not a model requirement (§10): the legacy
-> producer bakes textures; a producer without a texture path draws untextured faces and
-> still conforms (§11).
+**Labels.** A face (and the Home button) may carry a **label**; the label *text* and its
+rendering (font, size, bitmap) are theme values, and the labelled piece set is semantic
+(the six faces + Home). Labels are a **producer capability** (§10, §11): a producer with a
+texture path bakes the theme's label appearance into a texture; one without draws the
+piece untextured and still conforms.
 
 ## 6. Overlay camera
 
@@ -261,12 +263,12 @@ camera viewport are refreshed whenever the main viewport size or scale changes.
 
 ## 8. Interaction
 
-State: `hilite: Option<Piece>` (hover) and the cube's synced orientation. All thresholds
-are **logical** pixels unless noted.
+State: `hilite: Option<NaviTarget>` (hover) and the cube's synced orientation. All
+thresholds are **logical** pixels unless noted.
 
 | Gesture | Condition | Effect |
 | --- | --- | --- |
-| **Hover** | pointer inside `rect`, over a piece / Home | set `hilite` to it (recolour), clear otherwise |
+| **Hover** | pointer inside `rect`, over a piece / Home | set `hilite` to it (recolour via its Highlighted role), clear otherwise |
 | **Click** | press+release inside `rect`, movement ≤ `drag_threshold` | snap the **main camera** onto the target (§ below) |
 | **Drag** | movement > `drag_threshold` while over a piece | orbit the main camera |
 
@@ -286,8 +288,8 @@ roll with an explicit in-plane `x` axis and (for corners/edges) an extra `rotZ` 
 `π/2` or `π` via `getFaceRotation` — e.g. `Top → (x, z, 0)`, `Front → (x, −y, 0)`,
 `FrontTopRight → (−x−y, x−y+z, π)`, `FrontTop → (x, z−y, 0)`.
 
-**Nearest orientation** (`rotateToNearest`, upstream default **on**): snap to the closest
-of the discrete in-plane orientations instead of the exact roll — **4** candidates
+**Nearest orientation** (`rotate_to_nearest`, upstream default **on**): snap to the
+closest of the discrete in-plane orientations instead of the exact roll — **4** candidates
 (0, π/2, π, 3π/2) for a main/edge face, **6** (multiples of π/3) for a corner, chosen by
 the smallest rotation angle about the snapped axis.
 
@@ -304,13 +306,11 @@ rotation, **smoothstep**-eased, over **220 ms**, preserving the camera distance.
 a `FixedTimeAnimation` over **500 ms** (`View/AnimationDuration`) with an
 **InOutCubic** ease (`View/NavigationAnimationEasingCurve`).
 
-**Hover damping.** Current build: hilite is immediate; the whole cube is fully opaque
-only while a piece is hovered, otherwise `INACTIVE_COLOR` faces are translucent.
-Upstream: whole-cube `opacity` is `1.0` while hovering else `inactiveOpacity` (0.5), and
-an optional **pick hysteresis** (`FREECAD_NAVICUBE_PICK_STABLE_FRAMES`, default 0 =
-off) can require a hover to persist over several frames.
+**Hover damping.** Hover sets the Highlighted roles immediately. Optionally a **pick
+hysteresis** (upstream `FREECAD_NAVICUBE_PICK_STABLE_FRAMES`, default 0 = off) can require
+a hover to persist over several frames before it takes.
 
-**Config** (`NaviCubeConfig`; §12 lists what is deferred):
+**Config** (`NaviCubeConfig`) — structural only; appearance is the theme's (§5):
 
 | Field | Current build | Upstream reference |
 | --- | --- | --- |
@@ -319,35 +319,32 @@ off) can require a hover to persist over several frames.
 | `margin` | `8.0` logical px | `0.05·size` near-edge (centre at `0.55·size`) |
 | `offset` | — | `posOffset (0,0)`, device px |
 | `chamfer` | — (inset model) | `0.12`, clamp `[0.05, 0.18]` |
-| `base_color` / `hilite_color` | §5 | `#E2E8EF` / `#AAE2FF` |
-| `emphase_color` | — | `#000000` (edge/border colour) |
-| `inactive_opacity` | `0.5` (baked into `INACTIVE_COLOR`) | `0.5` |
-| `border_width` | — | `1.1` |
 | `show_cs` | — | `true` |
 | `draggable` | `false` | `false` |
 | `rotate_to_nearest` | `false` | **`true`** |
 | `step_by_turn` | `0` | `8` (`rotStepAngle = 2π/step`) |
+| `border_width` | — | `1.1` (a line-style theme value) |
 
 ## 9. The build contract (visual state)
 
-A producer renders the cube **on demand** from a producer-neutral state. Highlight and
-away-face translucency are *not* draw-contract features — the contract carries only
-`color` and `world_transform` per packet — so a producer realises them by **recolouring
-pieces** (and drawing away faces first), exactly as the model's colour rule (§5) says.
+A producer renders the cube **on demand** from a producer-neutral state and a theme. It
+resolves each piece's **role** (§5) through the theme to a `StateSnapshot` and emits the
+piece's geometry. Highlight and away-face appearance are therefore **not** hard-coded —
+the producer tags a piece and the theme decides how it looks.
 
 ```rust
-/// What to draw this frame: the cube's current orientation, the highlighted target, and
-/// the away-facing faces (drawn first, translucent).
+/// What to draw this frame — the cube's interaction state, independent of styling.
 pub struct NavicubeVisual {
     pub orientation: Rotation,       // the main camera's view rotation, mirrored
     pub hilite: Option<NaviTarget>,  // the hovered piece / Home, if any
-    pub away: Vec<Piece>,            // away-facing faces (recoloured, drawn first)
+    pub away: Vec<Piece>,            // away-facing faces (emitted first)
 }
 ```
 
-The controller recomputes `away` (§5) from `orientation` and calls the producer **only
-when the visual changed** (orientation, `hilite`, or `away`). The Home button is a
-sibling of the rotating subtree and is unaffected by `orientation`.
+Given `visual`, a piece's `NavicubeRole` is a pure function (§5); the theme maps the
+role to appearance. The controller recomputes `away` from `orientation` and calls the
+producer **only when the visual changed** (orientation, `hilite`, or `away`). The Home
+button is a sibling of the rotating subtree and is unaffected by `orientation`.
 
 ## 10. The `NavicubeView` capability trait
 
@@ -356,10 +353,10 @@ A producer implements one trait and advertises its capabilities:
 ```rust
 /// A producer's rendering of the navigation cube (a legacy `Scene`, or modern items).
 pub trait NavicubeView {
-    /// Rebuild the overlay packets for `visual`, compiled at `viewport`
-    /// (its device-pixel ratio seeds any screen-space geometry). Called only when the
-    /// visual state changed.
-    fn rebuild(&mut self, viewport: &Viewport, visual: &NavicubeVisual);
+    /// Rebuild the overlay packets for `visual`, resolving each piece's role (§5)
+    /// through `theme`, compiled at `viewport` (its device-pixel ratio seeds any
+    /// screen-space geometry). Called only when the visual state changed.
+    fn rebuild(&mut self, viewport: &Viewport, visual: &NavicubeVisual, theme: &NavicubeTheme);
 
     /// The current overlay draw packets.
     fn queue(&self) -> &RenderQueue;
@@ -372,11 +369,12 @@ pub trait NavicubeView {
 }
 ```
 
-The trait is **object-safe** (no generics, no `Self`-typed returns), so a controller can
-hold a `Box<dyn NavicubeView>` and the viewport stays non-generic. The model, the trait,
-the visual state and both producers live with the widget in `ferrocad_viewport`, which
-sits on top of `ferrocad_inventor` and `ferrocad_stage` (see
-[`navicube-plan.md`](navicube-plan.md) §2).
+`NavicubeTheme` is the role→appearance mapping (§5); its concrete type lives in the
+theming layer over `ferrocad_graphics`, not here. The trait is **object-safe** (no
+generics, no `Self`-typed returns), so a controller can hold a `Box<dyn NavicubeView>` and
+the viewport stays non-generic. The model, the trait, the visual state and both producers
+live with the widget in `ferrocad_viewport`, which sits on top of `ferrocad_inventor` and
+`ferrocad_stage` (see [`navicube-plan.md`](navicube-plan.md) §2).
 
 ## 11. Conformance
 
@@ -387,8 +385,9 @@ matches the reference producer in:
    piece's `StateSnapshot.id` is its `pick_id()`.
 2. **Geometry** — each piece's vertices/topology per §4.1 (faces `Triangles`, edges
    `Lines`, corners `Triangles`); identical positions across producers.
-3. **Colours** — per the §5 rule, including the translucent away faces and the highlighted
-   target.
+3. **Roles** — each piece carries the role the §5 rule assigns it (highlighted > away >
+   base). Conformance compares **roles**, not resolved colours: appearance is the theme's,
+   and a producer is compared under the same theme (or on the roles alone).
 4. **Placement/camera** — the rect from §7 and the camera from §6, such that a
    rect-relative pick at the cube centre resolves `FRONT`.
 5. **Stability** — a second `rebuild` with an unchanged `visual` reuses each
@@ -408,7 +407,6 @@ The reference is the inventor producer; the conformance test lives with the widg
 - `rotate_to_nearest` rounding and `step_by_turn` quantization (§13 values recorded).
 - `draggable` **cube** movement (drag orbits the view today).
 - Double-click **recenter** on the scene bounding box.
-- Per-viewer colour/label overrides beyond `NaviCubeConfig`.
 - A **text/glyph-run** node (labels exist only as baked textures).
 
 ## 13. Upstream mapping and reference values
@@ -421,12 +419,21 @@ The reference is the inventor producer; the conformance test lives with the widg
 | `Home` | Home (id 27) |
 | `ArrowNorth…ArrowLeft`, `Backside`, `ViewMenu` | deferred (§12) |
 
-Reference defaults (`NaviCubeImplementation`): `showCS = true`, `borderWidth = 1.1`,
+**Structural reference defaults** (`NaviCubeImplementation`): `showCS = true`,
 `rotateToNearest = true`, `naviStepByTurn = 8` (`rotStepAngle = 2π/step`, `step` clamped
-`[4, 36]`), `chamfer = 0.12`, `fontZoom = 0.3`, Arial, `inactiveOpacity = 0.5`,
-`posOffset = (0,0)`, `cubeWidgetSize = 132`, axis colours red/green/blue. Buttons: a
-click rotates the camera by `rotStepAngle` about the button's axis, `Backside` by `π`;
-`Home` calls `viewHome`; `ViewMenu` opens the context menu. Animation: 500 ms, InOutCubic.
+`[4, 36]`), `chamfer = 0.12`, `posOffset = (0,0)`, `cubeWidgetSize = 132`, `borderWidth =
+1.1`. Buttons: a click rotates the camera by `rotStepAngle` about the button's axis,
+`Backside` by `π`; `Home` calls `viewHome`; `ViewMenu` opens the context menu. Animation:
+500 ms, InOutCubic.
+
+**Reference theme values** (informative — styling is not normative, §1). Current build:
+base `[0.55,0.6,0.66]`, hilite `[0.2,0.6,0.95]`, away `INACTIVE_COLOR`
+`[0.38,0.42,0.48,0.5]`, Home `[0.5,0.55,0.62]`; labels are a 64² dark glyph on a light
+background. Upstream: `baseColor #E2E8EF`, `hiliteColor #AAE2FF`, `emphaseColor #000000`
+(the **edge/border** colour), `inactiveOpacity 0.5`, `fontZoom 0.3`, Arial; labels are a
+**192**² texture with **white** text on a transparent background, vertically mirrored for
+the GL texture origin, for the six faces in the order Front, Top, Right, Rear, Bottom,
+Left.
 
 - `src/Gui/NaviCube.{h,cpp}` — controller, config defaults, interaction, animation
   (`NavigationStyle::setCameraOrientation`, `NavigationAnimator`).
@@ -442,17 +449,16 @@ click rotates the camera by `rotStepAngle` about the button's axis, `Backside` b
 
 The current build (`docs/navicube.md` §7) realises §2–§9 and §11 for the
 `ferrocad_inventor` producer; [`navicube-plan.md`](navicube-plan.md) makes it
-producer-neutral. Deviations to reconcile (a fidelity backlog, not blockers):
+producer-neutral. Structural deviations to reconcile (a fidelity backlog, not blockers) —
+**appearance differences are theme choices, recorded in §13, not deviations**:
 
 | Area | Current build | Upstream reference |
 | --- | --- | --- |
 | Geometry | inset quads + line segments + small corner cubes, with gaps (§4.1) | one chamfered cube — octagon/quad/hexagon faces, no gaps (§4.2) |
-| Palette | base `[0.55,0.6,0.66]`, hilite `[0.2,0.6,0.95]` | base `#E2E8EF`, hilite `#AAE2FF`, black edges |
-| Away faces | translucent `INACTIVE_COLOR` faces | whole cube at `inactiveOpacity` when not hovered |
-| Labels | 64² dark glyph on light bg | 192² Arial white on transparent, mirrored |
 | Snap animation | 220 ms smoothstep | 500 ms InOutCubic |
 | Orbit drag | fixed `0.012` rad/px yaw·pitch | navigation-style orbit (sensitivity 0.45, scene-bound centre) |
 | Placement | rect with an 8-px margin | centre at `0.55·size`, `posOffset` |
 | Size | 96 logical px | 132 logical px |
 | Min-drag threshold | movement tracked, not gated (§8) | `max(3, round(3·dpr))` gates click vs drag |
+| `rotate_to_nearest` / `step_by_turn` | off / n/a | on / 8 |
 | Coordinate system, arrows, menu | absent | present (§12–§13) |

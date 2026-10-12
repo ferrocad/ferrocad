@@ -30,8 +30,8 @@ is the `FreeCAD` Python API, documented by convention and by upstream.
 - [navicube.md](navicube.md) — the navigation cube: what it is upstream, the slice
   plan, and the as-built map (implemented, N1–N4b).
 - [navicube-spec.md](navicube-spec.md) — the navigation cube **specification**: the
-  coordinate conventions, piece taxonomy and ids, geometry, colours, overlay camera,
-  placement, interaction, and the producer build contract.
+  coordinate conventions, piece taxonomy and ids, geometry, appearance **roles** (styling
+  is a theme), overlay camera, placement, interaction, and the producer build contract.
 - [navicube-plan.md](navicube-plan.md) — making the navigation cube **producer-
   independent**: the model/producer/controller layering and the V1–V3 slice path.
 - [inventor-plan.md](inventor-plan.md) — the Inventor/Coin emulation roadmap (four

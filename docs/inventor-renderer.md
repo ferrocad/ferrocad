@@ -155,8 +155,8 @@ The contract, matching FreeCAD (see the assessment and `InputDevice`/
 - **Overlays / multi-view** (the navigation cube, `docs/navicube.md`):
   `ferrocad_inventor::ViewSpec` + `InventorView::draw_frame`,
   `WgpuRenderer::render_views` (per-view `set_viewport`/`set_scissor_rect`, an overlay
-  pipeline with depth off and alpha blending), `ferrocad_inventor::navicube` (the
-  cube scene + ortho camera), and `ferrocad_viewport::navicube::NaviCube` +
+  pipeline with depth off and alpha blending), `ferrocad_viewport::navicube` (the
+  cube model, the inventor/stage producers and their overlay camera), and `NaviCube` +
   `InventorViewport::with_navicube` (placement, camera mirroring, hover, click-snap,
   drag-orbit, the animated snap). The cube carries baked face labels and a fixed
   `Home` button (N4b; see [`navicube.md`](navicube.md)).

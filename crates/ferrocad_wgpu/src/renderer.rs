@@ -1058,20 +1058,70 @@ mod tests {
         );
     }
 
-    /// An overlay (the navigation cube) draws into its rectangle only, over the main
-    /// view; the readback shows its colour in the corner. Skips without a GPU.
+    /// A quad covering the overlay's ortho view, for [`overlay_draws_into_its_rect`].
+    fn overlay_quad() -> Scene {
+        Scene {
+            root: Node {
+                kind: NodeKind::Separator,
+                children: vec![
+                    Node {
+                        kind: NodeKind::Material(vec![[0.8, 0.2, 0.2, 1.0]]),
+                        children: vec![],
+                    },
+                    Node {
+                        kind: NodeKind::Coordinate3(vec![
+                            [-1.0, -1.0, 0.0],
+                            [1.0, -1.0, 0.0],
+                            [1.0, 1.0, 0.0],
+                            [-1.0, 1.0, 0.0],
+                        ]),
+                        children: vec![],
+                    },
+                    Node {
+                        kind: NodeKind::Mesh {
+                            indices: vec![0, 1, 2, 0, 2, 3],
+                            normal_indices: vec![],
+                            topology: Topology::Triangles,
+                        },
+                        children: vec![],
+                    },
+                ],
+            },
+        }
+    }
+
+    /// The fixed orthographic overlay camera for `rect` (the navicube's overlay camera,
+    /// inlined here so the backend does not depend on the viewport).
+    fn overlay_camera(rect: Rect) -> Camera {
+        Camera {
+            view: ferrocad_types::Placement::new(
+                ferrocad_types::Vector3::new(0.0, 0.0, -3.0),
+                ferrocad_types::Rotation::identity(),
+            )
+            .to_matrix(),
+            projection: ferrocad_graphics::Projection::Orthographic {
+                extent: 1.1,
+                near: 0.1,
+                far: 100.0,
+            },
+            viewport: Viewport::new([rect.width.max(1), rect.height.max(1)], 1.0),
+        }
+    }
+
+    /// An overlay draws into its rectangle only, over the main view; the readback shows
+    /// its colour in the corner. Skips without a GPU.
     #[test]
     fn overlay_draws_into_its_rect() {
         let _gpu = gpu_guard();
         let main = compile(&clip_space_triangle());
-        let cube = compile(&ferrocad_inventor::navicube::scene(None));
+        let cube = compile(&overlay_quad());
         let Ok(mut renderer) = WgpuRenderer::new_default([128, 128]) else {
             eprintln!("no GPU adapter available; skipping overlay test");
             return;
         };
         // A 50x50 overlay in the top-right corner (device rect, bottom-left origin).
         let rect = Rect::new(78, 78, 50, 50);
-        let cube_camera = ferrocad_inventor::navicube::camera(rect);
+        let cube_camera = overlay_camera(rect);
         let main_camera = Camera::identity();
         let views = [
             ViewSpec {

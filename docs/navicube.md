@@ -174,10 +174,10 @@ removed. V1 moved the model + inventor producer (behaviour unchanged); V2 added 
 modern `StageProducer` and a cross-producer conformance test. See
 [`navicube-plan.md`](navicube-plan.md).
 
-**Verification:** `ferrocad_inventor::navicube` unit tests (ids, kinds, orientation,
-compilation, labels, Home) + `pick` segment tests; `ferrocad_wgpu`
-`overlay_draws_into_its_rect`; `ferrocad_viewport::navicube` tests (corner rect,
-centre→Front, corner hit, Home hit, mirroring, hilite, snap, orbit); the
+**Verification:** `ferrocad_viewport::navicube` tests — the model/producer units (ids,
+kinds, orientation, compilation, labels, Home) and the controller (corner rect,
+centre→Front, corner hit, Home hit, mirroring, hilite, snap, orbit) — plus the
+cross-producer conformance suite; `ferrocad_wgpu` `overlay_draws_into_its_rect`; the
 `inventor_roundtrip` example shows the labeled cube with the Home button
 (`--headless out.png`).
 

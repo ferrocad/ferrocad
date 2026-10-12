@@ -2,7 +2,8 @@
 
 Status: **N1–N3, the N4 core (edges/corners, drag) and N4b (animated snap,
 translucent faces, baked labels and the Home button) built (2026-10-12); the context
-menu and arrow buttons remain deferred.**
+menu and arrow buttons remain deferred.** §8 records the upstream Python surface and the
+snapshot test that exercises it.
 Companion to [`inventor-renderer.md`](inventor-renderer.md) (the render stack this
 builds on), [`inventor-plan.md`](inventor-plan.md) (the emulation phase roadmap), and
 the [`coin-bridge-reuse-assessment.md`](coin-bridge-reuse-assessment.md) evidence.
@@ -179,3 +180,44 @@ compilation, labels, Home) + `pick` segment tests; `ferrocad_wgpu`
 centre→Front, corner hit, Home hit, mirroring, hilite, snap, orbit); the
 `inventor_roundtrip` example shows the labeled cube with the Home button
 (`--headless out.png`).
+
+## 8. The Python surface and conformance (upstream)
+
+The cube is **not** hidden from Python: it is reachable on two levels, and one upstream
+test module exercises it.
+
+**The Coin node (`pivy.coin`).** `Gui::SoNaviCube` registers itself in Coin's type system
+(`SoNaviCube::initClass`), so a script can build one through pivy — exactly the form
+`TestCoinNodeSnapshots.py` uses:
+
+```python
+cube = coin.SoType.fromName("SoNaviCube").createInstance()
+```
+
+Its fields: `size`, `opacity`, `borderWidth`, `showCoordinateSystem`, `hiliteId`
+(`SoSFInt32`, a `PickId`), `cameraOrientation` (`SoSFRotation`), `cameraIsOrthographic`,
+`viewportRect` (`SoSFVec4f`), `baseColor`/`baseAlpha`, `emphaseColor`/`emphaseAlpha`,
+`hiliteColor`/`hiliteAlpha`, and `axisX/Y/ZColor`.
+
+**The viewer (`FreeCADGui`).** The controller is not a Python class, but
+`FreeCADGui.ActiveDocument.ActiveView.getViewer()` returns a `_View3DInventorViewer`
+exposing `setEnabledNaviCube(bool)`, `isEnabledNaviCube()`, and `setNaviCubeCorner(int)`
+(0 top-left, 1 top-right, 2 bottom-left, 3 bottom-right — `View3DViewerPy.cpp`). So
+consumer code can toggle and corner the cube; hover / click / drag stay controller-side.
+
+**Tests.** `src/Mod/Test/TestCoinNodeSnapshots.py` (run `FreeCAD -t
+TestCoinNodeSnapshots`) is a **visual snapshot** suite: it renders each curated node
+through the live viewer and compares the PNG against a checked-in baseline (pixel
+tolerance 8, max mismatch 20%), requiring GUI + pivy + a display. It carries three
+NaviCube fixtures — `SoNaviCube`, `SoNaviCubeTranslucent`, `SoNaviCubeHiliteFront` —
+built with `size`, `opacity` (`0.55` for the translucent one), `borderWidth`,
+`showCoordinateSystem = true`, `cameraIsOrthographic = true`, and `hiliteId = 1` (Front)
+for the hilite one. Other tests (`TestCornerAxisCrossVisual`, `TestSelectionVisual`,
+`TestView3DFramebufferCapture`, `TestRubberbandSelection`) touch the cube only to
+**disable** it for framebuffer determinism, and `src/Tools/typing/smoke/smoke.py`
+type-checks `isEnabledNaviCube()`.
+
+**Implication for FerroCAD.** The `pivy.coin` facade does not yet register `SoNaviCube`
+(or its fields), and the `FreeCADGui` facade does not yet expose the viewer's NaviCube
+methods — so the NaviCube fixtures in `TestCoinNodeSnapshots` are a **tracked gap**, not
+a covered surface.

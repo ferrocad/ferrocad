@@ -446,7 +446,11 @@ Left.
   (`NavigationStyle::setCameraOrientation`, `NavigationAnimator`).
 - `src/Gui/Inventor/SoNaviCube.{h,cpp}` — the Coin node: `PickId`, `pickAt`,
   `viewportRect`, `getFaceRotation`, the chamfer geometry, the overlay cameras and
-  `clearOverlayDepth`, the `StyleState`.
+  `clearOverlayDepth`, the `StyleState`. It registers in Coin's type system, so it is
+  instantiable from Python (`coin.SoType.fromName("SoNaviCube").createInstance()`).
+- `src/Gui/View3DViewerPy.cpp` — the viewer's Python methods
+  (`setEnabledNaviCube`/`isEnabledNaviCube`/`setNaviCubeCorner`) exposed on
+  `FreeCADGui`'s `_View3DInventorViewer`.
 - `src/Gui/View3DInventorViewer.cpp` — `naviCubeAnnotation`/`decorationroot`, event
   forwarding, `getNaviCube`, `viewHome`, `startAnimation`.
 - `src/Mod/Test/TestCoinNodeSnapshots.py` — curates `SoNaviCube`,

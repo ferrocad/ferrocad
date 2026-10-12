@@ -37,6 +37,12 @@ impl Stage {
         &self.items
     }
 
+    /// The items, mutably — for previewing a transform (a gizmo drag) or recolouring
+    /// without rebuilding the list.
+    pub fn items_mut(&mut self) -> &mut [ShapeItem] {
+        &mut self.items
+    }
+
     /// The number of items.
     pub fn len(&self) -> usize {
         self.items.len()

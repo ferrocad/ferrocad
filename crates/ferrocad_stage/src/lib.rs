@@ -24,9 +24,11 @@
 //!
 //! Beyond shapes, the crate carries the interactive layer: [`PointerEvent`]/
 //! [`PointerKind`]/[`MouseButton`] (the structured replacement for `SoEventCallback`),
-//! [`snap_to_geometry`] ([`Snap`]/[`SnapKind`]), and the [`Tool`] trait with a reference
-//! [`PolylineTool`]. A tool turns pointer events into transient visuals the host draws
-//! beside the document geometry.
+//! [`snap_to_geometry`] ([`Snap`]/[`SnapKind`]), the [`Tool`] trait with a reference
+//! [`PolylineTool`], and a [`TransformGizmo`] (the `SoDragger` replacement) with its
+//! constraint-projection math and screen-space-invariant scale. A tool turns pointer
+//! events into transient visuals; a gizmo turns a handle drag into a delta transform the
+//! host previews on the target item without touching the document.
 //!
 //! # Example
 //!
@@ -48,12 +50,17 @@
 //! assert_eq!(queue.len(), 2);
 //! ```
 
+pub mod gizmo;
 pub mod input;
 pub mod shape;
 pub mod snap;
 pub mod stage;
 pub mod tool;
 
+pub use gizmo::{
+    GIZMO_BASE_ID, GizmoCommitEvent, GizmoDragEvent, GizmoHandle, GizmoMode, HandleKind,
+    TransformGizmo, scale_for,
+};
 pub use input::{MouseButton, PointerEvent, PointerKind};
 pub use shape::{DrawMode, ShapeItem};
 pub use snap::{Snap, SnapKind, snap_to_geometry};

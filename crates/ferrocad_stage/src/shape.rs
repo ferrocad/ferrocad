@@ -5,7 +5,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use ferrocad_inventor::{
     DrawPacket, Generation, Geometry, MeshId, PickId, RenderQueue, StateSnapshot, Topology, Vertex,
 };
-use ferrocad_types::Placement;
+use ferrocad_types::{Matrix4, Placement};
 
 /// How a [`ShapeItem`] is drawn.
 ///
@@ -49,6 +49,10 @@ impl DrawMode {
 pub struct ShapeItem {
     entity_id: u32,
     placement: Placement,
+    /// An optional preview transform composed after [`placement`](Self::placement)
+    /// (`world = placement * temporary`). Used by interactive gizmos to preview a drag
+    /// without touching the document; `None` in the resting state.
+    temporary_transform: Option<Matrix4>,
     draw_mode: DrawMode,
     surface_color: [f32; 4],
     edge_color: [f32; 4],
@@ -69,6 +73,7 @@ impl ShapeItem {
         Self {
             entity_id,
             placement: Placement::identity(),
+            temporary_transform: None,
             draw_mode: DrawMode::default(),
             surface_color: [0.8, 0.8, 0.8, 1.0],
             edge_color: [0.1, 0.1, 0.1, 1.0],
@@ -156,6 +161,29 @@ impl ShapeItem {
         self
     }
 
+    /// The temporary preview transform (see [`temporary_transform`](Self::temporary_transform)).
+    pub fn with_temporary_transform(mut self, transform: Option<Matrix4>) -> Self {
+        self.temporary_transform = transform;
+        self
+    }
+
+    /// Set or clear the temporary preview transform composed after the placement. A
+    /// gizmo uses this for a live drag preview; it does not change the mesh, so no
+    /// re-upload is triggered.
+    pub fn set_temporary_transform(&mut self, transform: Option<Matrix4>) {
+        self.temporary_transform = transform;
+    }
+
+    /// Set the surface colour (a state change; no re-upload).
+    pub fn set_surface_color(&mut self, color: [f32; 4]) {
+        self.surface_color = color;
+    }
+
+    /// Set the edge colour (a state change; no re-upload).
+    pub fn set_edge_color(&mut self, color: [f32; 4]) {
+        self.edge_color = color;
+    }
+
     /// The picking identity.
     pub fn entity_id(&self) -> u32 {
         self.entity_id
@@ -164,6 +192,11 @@ impl ShapeItem {
     /// The item's placement.
     pub fn placement(&self) -> Placement {
         self.placement
+    }
+
+    /// The temporary preview transform, if any.
+    pub fn temporary_transform(&self) -> Option<Matrix4> {
+        self.temporary_transform
     }
 
     /// The display mode.
@@ -198,7 +231,11 @@ impl ShapeItem {
 
     /// Emit the item's draw packets (surface and/or wireframe) into `queue`.
     pub fn emit(&self, queue: &mut RenderQueue) {
-        let world = self.placement.to_matrix();
+        // The world transform: the placement, with the temporary preview composed after it.
+        let mut world = self.placement.to_matrix();
+        if let Some(temporary) = &self.temporary_transform {
+            world = world.mul(temporary);
+        }
         if self.draw_mode.has_surface() {
             if let Some(geometry) = self.surface_geometry() {
                 queue.packets.push(self.packet(

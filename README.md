@@ -106,7 +106,7 @@ FerroCAD is a Cargo workspace (edition 2024). Crate status:
 | `crates/ferrocad_part_py` | the `Part` Python module (`makeBox`, `Shape`); the composition root that links OCCT | new — needs OCCT 7.8+ |
 | `crates/ferrocad_py` | PyO3 extension over `ferrocad_core` (module `ferrocad`) | primary |
 | `crates/ferrocad_inventor` | the Coin/Inventor scene core: node AST, state accumulator, mesh compiler, picking, events, viewport/DPI | primary |
-| `crates/ferrocad_stage` | the modern declarative CAD presentation: `ShapeItem`s on a `Stage`, compiled straight to draw batches (no scene graph) | primary |
+| `crates/ferrocad_stage` | the modern declarative CAD presentation: `ShapeItem`s on a `Stage`, tools and a `TransformGizmo`, compiled straight to draw batches (no scene graph) | primary |
 | `crates/ferrocad_wgpu` | the wgpu backend: pipelines, dynamic uniforms, MSAA, offscreen target, readback | primary |
 | `crates/ferrocad_inventor_py` | the pivy-compatible `coin` facade (scaffolding, surfaced as `pivy.coin`) | new |
 | `crates/ferrocad_gen` | generated PyO3 skeleton bindings from the `.pyi` model (M3c) | useful — drives the codegen tests |

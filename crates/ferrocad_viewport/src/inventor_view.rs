@@ -21,8 +21,10 @@ use ferrocad_inventor::{
 };
 use ferrocad_stage::Stage;
 use ferrocad_stage::{
-    MouseButton as StageButton, PointerEvent, PointerKind, Tool, snap_to_geometry,
+    GizmoCommitEvent, GizmoHandle, MouseButton as StageButton, PointerEvent, PointerKind, Tool,
+    TransformGizmo, snap_to_geometry,
 };
+use ferrocad_types::Matrix4;
 use gpui::{
     AnyElement, AppContext, Context, DragMoveEvent, IntoElement, MouseButton, MouseDownEvent,
     MouseExitEvent, MouseMoveEvent, MouseUpEvent, ObjectFit, Render, RenderImage, Window, div, img,
@@ -51,6 +53,13 @@ pub struct InventorViewport<V: InventorView> {
     transient: RenderQueue,
     /// The grid spacing for grid snapping, if enabled.
     snap_grid: Option<f64>,
+    /// The active transform gizmo, if any. Drawn on top and picked **before** the tool
+    /// and the scene, so a drag on a handle takes priority.
+    gizmo: Option<TransformGizmo>,
+    /// The gizmo's handle batches (rebuilt when its scale, origin, mode or hover change).
+    gizmo_queue: RenderQueue,
+    /// The last gizmo commit, for the host to apply to the document.
+    gizmo_commit: Option<GizmoCommitEvent>,
     queue: RenderQueue,
     listeners: Vec<Box<dyn EventListener>>,
     /// The navigation-cube overlay, when enabled.
@@ -100,6 +109,9 @@ impl<V: InventorView> InventorViewport<V> {
             tool: None,
             transient: RenderQueue::default(),
             snap_grid: None,
+            gizmo: None,
+            gizmo_queue: RenderQueue::default(),
+            gizmo_commit: None,
             queue,
             listeners: Vec::new(),
             navicube: None,
@@ -147,6 +159,34 @@ impl<V: InventorView> InventorViewport<V> {
         self.snap_grid = grid;
     }
 
+    /// Show a transform gizmo (drawn on top, picked before the tool and the scene).
+    pub fn with_gizmo(mut self, gizmo: TransformGizmo) -> Self {
+        self.gizmo = Some(gizmo);
+        self
+    }
+
+    /// Replace (or clear) the transform gizmo.
+    pub fn set_gizmo(&mut self, gizmo: Option<TransformGizmo>) {
+        self.gizmo = gizmo;
+        self.gizmo_commit = None;
+        self.rebuild_gizmo_queue();
+    }
+
+    /// The active gizmo, if any.
+    pub fn gizmo(&self) -> Option<&TransformGizmo> {
+        self.gizmo.as_ref()
+    }
+
+    /// The active gizmo, mutably (e.g. to move its origin).
+    pub fn gizmo_mut(&mut self) -> Option<&mut TransformGizmo> {
+        self.gizmo.as_mut()
+    }
+
+    /// The last gizmo commit (a drag's final transform), if a drag has ended.
+    pub fn last_gizmo_commit(&self) -> Option<&GizmoCommitEvent> {
+        self.gizmo_commit.as_ref()
+    }
+
     /// The wrapped view (e.g. to borrow its shared surface once that path exists).
     pub fn view(&self) -> &V {
         &self.view
@@ -188,8 +228,9 @@ impl<V: InventorView> InventorViewport<V> {
 
     /// Deliver a pointer move, in **logical** window coordinates (top-left origin).
     ///
-    /// Over the navigation cube this hovers its faces; otherwise it picks the main
-    /// scene. Returns whether the scene changed (and so needs repainting).
+    /// Over the navigation cube this hovers its faces; over the gizmo it drags or
+    /// hovers a handle; over the scene it picks the main scene. Returns whether the
+    /// scene changed (and so needs repainting).
     pub fn handle_pointer(&mut self, logical: [f32; 2]) -> bool {
         let device = self.camera.viewport.to_device(logical);
         let mut changed = false;
@@ -204,6 +245,29 @@ impl<V: InventorView> InventorViewport<V> {
             }
             changed = cube.set_hilite(None);
         }
+
+        // The gizmo takes priority: an active drag consumes the move; otherwise hover.
+        if self.gizmo.as_ref().is_some_and(|gizmo| gizmo.is_dragging()) {
+            let event = match self.gizmo.as_mut() {
+                Some(gizmo) => gizmo.drag_to(&self.camera, device),
+                None => None,
+            };
+            if let Some(event) = event {
+                self.apply_gizmo_preview(Some(event.total_transform));
+                return true;
+            }
+        } else if self.gizmo.is_some() {
+            let handle = self.gizmo_handle_at(device);
+            let recoloured = match self.gizmo.as_mut() {
+                Some(gizmo) => gizmo.set_hovered(handle),
+                None => false,
+            };
+            if recoloured {
+                self.rebuild_gizmo_queue();
+                return true;
+            }
+        }
+
         changed |= self.dispatch_tool(PointerKind::Move, device, None);
         changed | self.pick_main(device)
     }
@@ -238,6 +302,35 @@ impl<V: InventorView> InventorViewport<V> {
             }
             return false;
         }
+        // The gizmo takes priority over the tool and the scene.
+        if self.gizmo.is_some() {
+            if down {
+                if let Some(handle) = self.gizmo_handle_at(device) {
+                    let started = match self.gizmo.as_mut() {
+                        Some(gizmo) => gizmo.begin_drag(handle, &self.camera, device),
+                        None => false,
+                    };
+                    if started {
+                        self.rebuild_gizmo_queue();
+                        return true;
+                    }
+                }
+            } else if self.gizmo.as_ref().is_some_and(|gizmo| gizmo.is_dragging()) {
+                let commit = match self.gizmo.as_mut() {
+                    Some(gizmo) => gizmo.end_drag(),
+                    None => None,
+                };
+                if let Some(commit) = commit {
+                    self.gizmo_commit = Some(commit);
+                    // The host applies the committed transform to the document; clear the
+                    // preview it was showing.
+                    self.apply_gizmo_preview(None);
+                    self.rebuild_gizmo_queue();
+                    return true;
+                }
+            }
+        }
+
         let kind = if down {
             PointerKind::Down
         } else {
@@ -290,6 +383,40 @@ impl<V: InventorView> InventorViewport<V> {
             }
         }
         self.transient = queue;
+    }
+
+    /// The gizmo handle under a device position, if any.
+    fn gizmo_handle_at(&self, device: [i32; 2]) -> Option<GizmoHandle> {
+        let hit = pick_at_hit(&self.gizmo_queue, &self.camera, device)?;
+        GizmoHandle::from_pick_id(hit.id.0)
+    }
+
+    /// Rebuild the gizmo's handle batches from the active gizmo.
+    fn rebuild_gizmo_queue(&mut self) {
+        let mut queue = RenderQueue::default();
+        if let Some(gizmo) = self.gizmo.as_ref() {
+            for item in gizmo.items() {
+                item.emit(&mut queue);
+            }
+        }
+        self.gizmo_queue = queue;
+    }
+
+    /// Preview `transform` on the gizmo's target stage item (or clear the preview).
+    fn apply_gizmo_preview(&mut self, transform: Option<Matrix4>) {
+        let Some(target) = self.gizmo.as_ref().map(TransformGizmo::target_id) else {
+            return;
+        };
+        let mut touched = false;
+        for item in self.stage.items_mut() {
+            if item.entity_id() == target {
+                item.set_temporary_transform(transform);
+                touched = true;
+            }
+        }
+        if touched {
+            self.stage_dirty = true;
+        }
     }
 
     /// Handle a gpui drag-move: orbit the main camera when the drag began over the
@@ -381,9 +508,18 @@ impl<V: InventorView> InventorViewport<V> {
             cube.sync(&self.camera);
         }
 
-        // One pass: the scene (legacy + stage) first, then the tool's transient overlay
-        // (depth off, on top), then the navigation cube.
-        let mut views = Vec::with_capacity(3);
+        // The gizmo's screen-invariant scale follows the camera; rebuild when it changes.
+        let gizmo_rebuilt = match self.gizmo.as_mut() {
+            Some(gizmo) => gizmo.update(&self.camera),
+            None => false,
+        };
+        if gizmo_rebuilt {
+            self.rebuild_gizmo_queue();
+        }
+
+        // One pass: the scene (legacy + stage) first, then the overlays (the tool's
+        // transient visuals and the gizmo, depth off and on top), then the navigation cube.
+        let mut views = Vec::with_capacity(4);
         views.push(ViewSpec {
             queue: &self.queue,
             camera: &self.camera,
@@ -393,6 +529,14 @@ impl<V: InventorView> InventorViewport<V> {
         if !self.transient.is_empty() {
             views.push(ViewSpec {
                 queue: &self.transient,
+                camera: &self.camera,
+                rect: None,
+                overlay: true,
+            });
+        }
+        if !self.gizmo_queue.is_empty() {
+            views.push(ViewSpec {
+                queue: &self.gizmo_queue,
                 camera: &self.camera,
                 rect: None,
                 overlay: true,
@@ -723,5 +867,92 @@ mod tests {
 
         // The draw path (scene + transient overlay) runs cleanly on the fake view.
         viewport.refresh();
+    }
+
+    /// A 45° perspective camera at `(0, 0, 5)` looking toward the origin.
+    fn perspective_camera(size: [u32; 2]) -> Camera {
+        use ferrocad_types::{Placement, Rotation, Vector3};
+        let f = 1.0 / (45.0f64.to_radians() / 2.0).tan();
+        let (near, far) = (0.1f64, 100.0f64);
+        let mut m = [0.0f64; 16];
+        m[0] = f;
+        m[5] = f;
+        m[10] = (far + near) / (near - far);
+        m[11] = (2.0 * far * near) / (near - far);
+        m[14] = -1.0;
+        Camera {
+            view: Placement::new(Vector3::new(0.0, 0.0, -5.0), Rotation::identity()).to_matrix(),
+            projection: ferrocad_types::Matrix4::from_values(m),
+            viewport: ferrocad_inventor::Viewport::new(size, 1.0),
+        }
+    }
+
+    #[test]
+    fn a_gizmo_drag_previews_a_transform_on_the_target_item() {
+        use ferrocad_inventor::pick_at_hit;
+        use ferrocad_stage::{GizmoHandle, GizmoMode, ShapeItem, Stage, TransformGizmo};
+        use ferrocad_types::Vector3;
+
+        let size = [100u32, 100u32];
+        let camera = perspective_camera(size);
+        let viewport = camera.viewport;
+
+        let mut stage = Stage::new();
+        stage.add_item(ShapeItem::new(42).with_shape(
+            vec![[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0]],
+            vec![],
+            vec![0, 1, 2],
+            vec![],
+        ));
+
+        let mut view = InventorViewport::new(
+            fake(ImageData {
+                width: 1,
+                height: 1,
+                rgba: vec![0, 0, 0, 255],
+            }),
+            camera,
+            triangle_scene(),
+        );
+        view.set_stage(stage);
+        view.set_gizmo(Some(TransformGizmo::new(
+            42,
+            Vector3::zero(),
+            GizmoMode::Translate,
+        )));
+        view.refresh();
+
+        // Find a device position that hits the X axis handle.
+        let mut grab = None;
+        for x in 0..100i32 {
+            for y in 0..100i32 {
+                if let Some(hit) = pick_at_hit(&view.gizmo_queue, &view.camera, [x, y]) {
+                    if GizmoHandle::from_pick_id(hit.id.0) == Some(GizmoHandle::AxisX) {
+                        grab = Some([x, y]);
+                    }
+                }
+            }
+        }
+        let grab = grab.expect("the X axis handle should be pickable");
+
+        let preview = |view: &InventorViewport<FakeView>| {
+            view.stage()
+                .items()
+                .iter()
+                .find(|item| item.entity_id() == 42)
+                .and_then(|item| item.temporary_transform())
+        };
+
+        // Press on the handle, then drag right: the target shows a live preview.
+        assert!(view.handle_button(viewport.to_logical(grab), 1, true));
+        assert!(view.gizmo().expect("gizmo").is_dragging());
+        assert!(view.handle_pointer(viewport.to_logical([grab[0] + 12, grab[1]])));
+        assert!(preview(&view).is_some(), "the drag previews a transform");
+        assert!(view.last_gizmo_commit().is_none());
+
+        // Release: a commit is recorded and the preview cleared.
+        assert!(view.handle_button(viewport.to_logical([grab[0] + 12, grab[1]]), 1, false));
+        assert!(view.last_gizmo_commit().is_some());
+        assert!(preview(&view).is_none(), "the preview is cleared on commit");
     }
 }

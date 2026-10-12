@@ -1,7 +1,8 @@
 # The modern stack: `ferrocad_stage` — plan and status
 
 Status: **T0 (crate + declarative spine), T1 (render + coexistence), T1.5 (the
-viewport bridge) and T2 (tools & pointer events) built (2026-10-12); T3–T5 planned.**
+viewport bridge), T2 (tools & pointer events) and T3 (the transform gizmo) built
+(2026-10-12); T4–T5 planned.**
 Companion to [`inventor-renderer.md`](inventor-renderer.md) (the legacy `pivy.coin`
 stack this runs beside), [`inventor-plan.md`](inventor-plan.md) (the emulation roadmap),
 and [`architecture.md`](architecture.md) (crate layering).
@@ -45,7 +46,7 @@ moves to a neutral `ferrocad_batch` crate (see §5).
 | **T1 — render + coexistence** | Draw a stage beside a compiled inventor queue in one pass; headless readback asserts both rasterize and that frame 2 reuses the upload cache. | ✅ |
 | **T1.5 — viewport bridge** | `InventorViewport` holds a `Stage` (`stage_mut`/`set_stage`); its queue is the inventor compile plus `stage.emit_batches`, so the shell renders both producers. | ✅ |
 | **T2 — tools** | `Tool`/`PointerEvent`/`MouseButton`, snapping (`snap_to_geometry`), transient items (`PolylineTool`), and host dispatch from the viewport (drawn as a transient overlay, never picked). | ✅ |
-| **T3 — `TransformGizmo`** | Draggers with drag/commit delta events; transient transform override. | ▢ |
+| **T3 — `TransformGizmo`** | Draggers with drag/commit delta events; transient transform override. | ✅ |
 | **T4 — G-buffer pick pass** | The offscreen `Rg32Uint`/normal/depth pass + 1×1 readback + `part_index` unprojection — the shared enabler for O(1) picking in both stacks. **This is where the batch contract is extended and (likely) extracted.** | ▢ |
 | **T5 — `ferrocad.stage` bindings** | PyO3 module exposing `ShapeItem`/`Tool`/`TransformGizmo`. | ▢ |
 
@@ -143,6 +144,34 @@ left-click placement, band/marker emission, and right-click ignoring;
 `ferrocad_viewport`'s `a_tool_receives_pointer_events_and_its_items_are_drawn` drops a
 `PolylineTool` into the viewport, dispatches a click, and asserts the transient
 (wireframe) overlay was populated.
+
+### T3 — the transform gizmo
+
+`ferrocad_stage::gizmo` implements the manipulator (the `SoDragger` replacement):
+
+- **Handles** — `GizmoHandle` gives 9 sub-handles (3 axes, 3 planes, 3 rings), each with
+  a distinct `PickId` (`GIZMO_BASE_ID + 0..8`); `GizmoMode` selects which are built
+  (`Translate` → axes + planes, `Rotate` → rings, `Universal` → all). An axis is a shaft
+  line plus a cone arrowhead, a plane is a translucent quad, a ring is a circle.
+- **Screen-space invariance** — `scale_for(camera, origin, pixels)` keeps the triad a
+  fixed device-pixel radius (`∝ distance / (m5 · height)`), recomputed each frame by
+  `TransformGizmo::update`, so zooming and orbiting never shrink or explode it.
+- **Constraint projection** — `begin_drag`/`drag_to`/`end_drag` implement the ray math:
+  `closest_axis_parameter` (1D skew-line closest point), `ray_plane` (2D), and
+  `ring_angle` (arc, via `atan2`), emitting a `GizmoDragEvent` (`delta_transform` +
+  `total_transform`) per tick and a `GizmoCommitEvent` on release.
+- **Transient override** — `ShapeItem` gained `temporary_transform` (`world = placement ·
+  temporary`), used as a live preview: the viewport sets it on the target item during a
+  drag and clears it on commit, when the document applies the committed transform.
+
+The gizmo is drawn as an overlay and picked **before** the tool and the scene, so a drag
+on a handle wins.
+
+**Verification:** `ferrocad_stage` tests cover the distinct pick ids, the distance-
+invariant scale, the per-mode handle set, axis/plane/ring drags, the commit, and hover;
+`ferrocad_viewport`'s `a_gizmo_drag_previews_a_transform_on_the_target_item` presses an
+axis handle, drags, asserts the target item's preview, then releases and asserts the
+commit and the cleared preview.
 
 ## 5. Deferred decisions
 

@@ -110,6 +110,7 @@ FerroCAD is a Cargo workspace (edition 2024). Crate status:
 | `crates/ferrocad_stage` | the modern declarative CAD presentation: `ShapeItem`s on a `Stage`, tools and a `TransformGizmo`, compiled straight to `ferrocad_graphics` (no scene graph) | primary |
 | `crates/ferrocad_wgpu` | the wgpu backend: pipelines, dynamic uniforms, MSAA, offscreen target, readback | primary |
 | `crates/ferrocad_inventor_py` | the pivy-compatible `coin` facade (scaffolding, surfaced as `pivy.coin`) | new |
+| `crates/ferrocad_stage_py` | the modern-stack Python surface (surfaced as `ferrocad.stage`) | new |
 | `crates/ferrocad_gen` | generated PyO3 skeleton bindings from the `.pyi` model (M3c) | useful — drives the codegen tests |
 | `crates/ferrocad_widgets` | reusable `bite-gpui` widgets (window chrome, field, console) | published |
 | `crates/ferrocad_viewport` | the `bite-gpui` viewport: `InventorViewport` (image path), the navigation cube (`NaviCube`), the sample scene | primary |

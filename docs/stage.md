@@ -1,9 +1,9 @@
 # The modern stack: `ferrocad_stage` — plan and status
 
-Status: **T0–T4 built (2026-10-12).** T4's four sub-slices are done:
-`ferrocad_graphics` extracted, surface depth bias, mesh-cache generational eviction, and
-the offscreen G-buffer pick pass (vertex `part_idx`). T5 (`ferrocad.stage` PyO3 bindings)
-remains.
+Status: **T0–T5 built (2026-10-12).** T4's four sub-slices are done
+(`ferrocad_graphics` extracted, surface depth bias, mesh-cache generational eviction, and
+the offscreen G-buffer pick pass with vertex `part_idx`), and T5 exposes the whole modern
+stack to Python as `ferrocad.stage` (`ferrocad_stage_py`).
 Companion to [`inventor-renderer.md`](inventor-renderer.md) (the legacy `pivy.coin`
 stack this runs beside), [`inventor-plan.md`](inventor-plan.md) (the emulation roadmap),
 and [`architecture.md`](architecture.md) (crate layering).
@@ -48,9 +48,9 @@ vocabulary, camera and picking) shared with the legacy stack (T4, sub-slice 1).
 | **T2 — tools** | `Tool`/`PointerEvent`/`MouseButton`, snapping (`snap_to_geometry`), transient items (`PolylineTool`), and host dispatch from the viewport (drawn as a transient overlay, never picked). | ✅ |
 | **T3 — `TransformGizmo`** | Draggers with drag/commit delta events; transient transform override. | ✅ |
 | **T4 — G-buffer pick pass** | *(1/4)* `ferrocad_graphics` extracted, `ferrocad_stage` decoupled from inventor. *(2/4)* surface slope/constant depth bias (coplanar shaded-with-edges). *(3/4)* mesh-cache generational eviction. *(4/4)* vertex `part_idx` + the offscreen `Rg32Uint` pass + 1×1 readback + world-point unprojection, wired into the viewport. | ✅ |
-| **T5 — `ferrocad.stage` bindings** | PyO3 module exposing `ShapeItem`/`Tool`/`TransformGizmo`. | ▢ |
+| **T5 — `ferrocad.stage` bindings** | `ferrocad_stage_py`: the PyO3 surface of the modern stack (`ShapeItem`/`Stage`/`Tool`/`TransformGizmo`, hits/events, the enums), surfaced as `ferrocad.stage`. | ✅ |
 
-## 4. As built (T0–T4)
+## 4. As built (T0–T5)
 
 ### T0 — declarative spine
 
@@ -221,6 +221,51 @@ point/normal of the hit) and `pick_at_reports_the_sub_element_index_and_topology
 sub-element index and `Topology` come back for a triangle and a line);
 `ferrocad_viewport`'s `the_viewport_prefers_a_hardware_pick_when_the_backend_has_one`
 proves the viewport prefers a backend's `pick_at` over the CPU ray cast.
+
+### T5 — the `ferrocad.stage` Python bindings
+
+`crates/ferrocad_stage_py` is the modern-stack counterpart of `ferrocad_inventor_py`: the
+PyO3 bindings over `ferrocad_stage`/`ferrocad_graphics`, surfaced as **`ferrocad.stage`**
+(and importable standalone as the `ferrocad_stage` extension). It is **pure binding
+glue** — every class wraps its Rust counterpart, so no behaviour lives only in Python.
+
+- **`ShapeItem`** — `ShapeItem(entity_id)` with `set_shape(positions, normals=None,
+  triangles=None, edges=None)`. Ingestion has a **buffer fast path** (a NumPy
+  `float32`/`uint32` array, `array.array`, `memoryview`): the buffer is read as one
+  C-level copy via `memoryview.tobytes()` rather than element by element, with a
+  sequence fallback (a list of `(x, y, z)` triples). (The stable ABI below 3.11 has no
+  `PyBuffer`, so this crate stays `abi3-py310` like the other facades and uses
+  `memoryview`.) Display attributes are properties:
+  `draw_mode`, `surface_color`, `edge_color`, `edge_width`, `selectable`,
+  `temporary_transform`; `positions`/`normals`/`triangles`/`edges` read the tessellation
+  back.
+- **`Stage`** — `add`, `clear`, `len`, `entities`, and `batch_count()` (compile to draw
+  packets) so a script can assert what it will draw. `extract_stage` is the host-facing
+  analogue of `ferrocad_inventor_py::extract_scene`.
+- **`Hit`/`PointerEvent`** and the `MouseButton`/`PointerKind` enums — the typed input
+  surface.
+- **`Tool`** — a Python base class (`on_event`, `add_item`/`set_items`/`clear_items`);
+  `PyTool` drives an instance through the native `ferrocad_stage::Tool` interface, so a
+  scripted tool drops into the viewport exactly like `PolylineTool`.
+- **`TransformGizmo`** — with `Camera` (`perspective`/`identity`), the
+  `GizmoMode`/`GizmoHandle` enums, and `GizmoDragEvent`/`GizmoCommitEvent` (row-major
+  16-float matrices). `begin_drag`/`drag_to`/`end_drag` mirror the Rust API; `handle_event`
+  dispatches a `PointerEvent` end to end.
+
+`ferrocad_stage_py::install(py)` registers the module as both `ferrocad_stage` and
+`ferrocad.stage`, and attaches `stage` to the `ferrocad` extension when it is loaded (so
+the host calls it after booting `ferrocad`; unlike `ferrocad_inventor_py::install` it
+never fabricates a `ferrocad` module, which would shadow the real extension).
+
+**Verification:** the acceptance suite lives in
+[`tests/test_stage_py.py`](../tests/test_stage_py.py) (9 cases: buffer + sequence
+ingestion, the misaligned-buffer error, attribute round-trip, `Stage` emission, a
+scripted `Tool` receiving events, and two gizmo drags asserting the emitted events). It is
+the single source of truth: `crates/ferrocad_stage_py/tests/stage_py.rs` runs it against an
+**embedded** CPython, and `PYTHONPATH=python python3 tests/test_stage_py.py` runs it
+against the **built** `ferrocad_stage` extension. A second Rust test
+(`the_native_adapter_drives_a_python_tool`) drives a Python `Tool` through the native
+`PyTool` adapter.
 
 ## 5. Deferred decisions
 

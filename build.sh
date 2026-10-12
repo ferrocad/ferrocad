@@ -53,4 +53,17 @@ if [ -f "$gen_src" ]; then
     echo "packaged python/ferrocad_gen.abi3.so"
 fi
 
+# Package the modern-stack Python surface (`ferrocad.stage`), importable as the
+# top-level `ferrocad_stage` extension module. Built separately because it is not a
+# workspace `default-member`.
+echo "== building ferrocad_stage_py (ferrocad.stage) =="
+cargo build --release --offline --manifest-path "$HERE/Cargo.toml" \
+    -p ferrocad_stage_py --features ferrocad_stage_py/extension-module
+
+stage_src="$TARGET/libferrocad_stage_py.so"
+if [ -f "$stage_src" ]; then
+    cp "$stage_src" "$HERE/python/ferrocad_stage.abi3.so"
+    echo "packaged python/ferrocad_stage.abi3.so"
+fi
+
 echo "build OK"

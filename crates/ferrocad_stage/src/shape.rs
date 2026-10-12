@@ -229,6 +229,26 @@ impl ShapeItem {
         self.generation
     }
 
+    /// The vertex positions.
+    pub fn positions(&self) -> &[[f32; 3]] {
+        &self.positions
+    }
+
+    /// The per-vertex normals (empty when the surface is flat-shaded per triangle).
+    pub fn normals(&self) -> &[[f32; 3]] {
+        &self.normals
+    }
+
+    /// The flat triangle indices, three per triangle.
+    pub fn triangles(&self) -> &[u32] {
+        &self.triangles
+    }
+
+    /// The flat edge segment indices, two per segment.
+    pub fn edges(&self) -> &[u32] {
+        &self.edges
+    }
+
     /// Emit the item's draw packets (surface and/or wireframe) into `queue`.
     pub fn emit(&self, queue: &mut RenderQueue) {
         // The world transform: the placement, with the temporary preview composed after it.

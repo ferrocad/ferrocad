@@ -2335,6 +2335,7 @@ dependencies = [
  "bite-gpui",
  "ferrocad_inventor",
  "ferrocad_inventor_py",
+ "ferrocad_stage_py",
  "ferrocad_types",
  "ferrocad_viewport",
  "ferrocad_wgpu",
@@ -2426,6 +2427,16 @@ version = "0.1.2"
 dependencies = [
  "ferrocad_graphics",
  "ferrocad_types",
+]
+
+[[package]]
+name = "ferrocad_stage_py"
+version = "0.1.2"
+dependencies = [
+ "ferrocad_graphics",
+ "ferrocad_stage",
+ "ferrocad_types",
+ "pyo3",
 ]
 
 [[package]]

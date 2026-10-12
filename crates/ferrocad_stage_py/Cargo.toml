@@ -1,0 +1,46 @@
+# The modern-stack Python surface: `ferrocad.stage`.
+#
+# The legacy path reaches Python through `ferrocad_inventor_py` (`pivy.coin`); this is
+# its modern counterpart, exposing the declarative `ferrocad_stage` API — `ShapeItem`,
+# `Stage`, tools, hits/events and the `TransformGizmo` — to workbench scripts.
+#
+# `rlib` so a host can register it into an embedded interpreter (like
+# `ferrocad_inventor_py`); `cdylib` so it can also ship as a standalone extension.
+# Needs CPython headers, so it is a workspace member but NOT in `default-members`.
+[package]
+name = "ferrocad_stage_py"
+version = "0.1.2"
+edition.workspace = true
+license.workspace = true
+readme.workspace = true
+repository.workspace = true
+homepage.workspace = true
+rust-version.workspace = true
+description = "The PyO3 surface of ferrocad_stage (surfaced as `ferrocad.stage`)"
+keywords = ["cad", "freecad", "python", "stage"]
+categories = ["api-bindings"]
+documentation = "https://docs.rs/ferrocad_stage_py"
+
+[lib]
+name = "ferrocad_stage_py"
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+ferrocad_stage.workspace = true
+# For `Camera`/`Hit` (the gizmo and pointer-event surface).
+ferrocad_graphics.workspace = true
+# For `Matrix4` (gizmo drag/commit transforms).
+ferrocad_types.workspace = true
+# `extension-module` is deliberately *not* a hard feature (see ferrocad_py): it is
+# enabled only when packaging the standalone extension module.
+# `abi3-py310`, like every other facade: `Py_LIMITED_API` unification across the
+# workspace means a different level here would not compose with `ferrocad_gpui`.
+pyo3 = { version = "0.25", features = ["abi3-py310"] }
+
+[dev-dependencies]
+# `auto-initialize` lets the boot tests embed CPython.
+pyo3 = { version = "0.25", features = ["abi3-py310", "auto-initialize"] }
+
+[features]
+# Enabled by maturin / build.sh when producing the Python extension module.
+extension-module = ["pyo3/extension-module"]

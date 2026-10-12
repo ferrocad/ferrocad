@@ -220,6 +220,9 @@ pub fn bootstrap() -> Result<Bootstrap, String> {
         ferrocad_inventor_py::install(py).map_err(|e| e.to_string())?;
 
         let module = py.import(entry_module()).map_err(|e| e.to_string())?;
+        // The modern presentation layer (`ferrocad.stage`) attaches itself to the
+        // `ferrocad` extension, so register it now that booting has imported it.
+        ferrocad_stage_py::install(py).map_err(|e| e.to_string())?;
         module
             .getattr("bootstrap")
             .map_err(|e| e.to_string())?
@@ -462,5 +465,26 @@ mod tests {
             dispatch(&scene, &event, Some(&hit)),
             "the scripted SoEventCallback should have run"
         );
+    }
+
+    /// The host registers the modern-stack facade after `ferrocad` is imported, so a
+    /// script can reach it as `ferrocad.stage`.
+    #[test]
+    fn the_stage_facade_attaches_to_ferrocad() {
+        let _guard = crate::PYTHON_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        Python::with_gil(|py| {
+            // What the host does: put the facade directory on `sys.path`.
+            let dir = find_python_dir().expect("locate python/");
+            let sys = py.import("sys").unwrap();
+            sys.getattr("path")
+                .unwrap()
+                .call_method1("insert", (0, dir.to_string_lossy().to_string()))
+                .unwrap();
+
+            let ferrocad = py.import("ferrocad").expect("import the ferrocad extension");
+            ferrocad_stage_py::install(py).expect("install ferrocad.stage");
+            let stage = ferrocad.getattr("stage").expect("ferrocad.stage");
+            assert!(stage.getattr("ShapeItem").is_ok(), "stage.ShapeItem");
+        });
     }
 }

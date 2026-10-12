@@ -14,10 +14,15 @@
 
 mod inventor;
 mod model;
+mod stage;
 mod view;
+
+#[cfg(test)]
+mod conformance;
 
 pub use inventor::InventorProducer;
 pub use model::{Corner, NaviTarget, Piece, PieceKind, home_orientation};
+pub use stage::StageProducer;
 pub use view::{NavicubeView, NavicubeVisual};
 
 use ferrocad_graphics::{Camera, Rect, Viewport, pick_at_rect};
@@ -42,21 +47,23 @@ pub struct NaviCube {
 }
 
 impl NaviCube {
-    /// A cube in `viewport`'s top-right corner.
+    /// A cube in `viewport`'s top-right corner, built by the legacy inventor producer.
     pub fn new(viewport: Viewport) -> Self {
+        Self::with_producer(viewport, Box::new(InventorProducer::new()))
+    }
+
+    /// A cube in `viewport`'s top-right corner, built by the modern `ferrocad_stage`
+    /// producer.
+    pub fn stage(viewport: Viewport) -> Self {
+        Self::with_producer(viewport, Box::new(StageProducer::new()))
+    }
+
+    /// A cube in `viewport`'s top-right corner, built by `producer`.
+    pub fn with_producer(viewport: Viewport, producer: Box<dyn NavicubeView>) -> Self {
         let corner = Corner::TopRight;
         let rect = corner_rect(viewport, corner, 96.0, 8.0);
         let camera = model::camera(rect);
-        let mut producer: Box<dyn NavicubeView> = Box::new(InventorProducer::new());
-        producer.rebuild(
-            &viewport,
-            &NavicubeVisual {
-                orientation: Rotation::identity(),
-                hilite: None,
-                away: Vec::new(),
-            },
-        );
-        Self {
+        let mut cube = Self {
             producer,
             camera,
             viewport,
@@ -66,7 +73,9 @@ impl NaviCube {
             margin: 8.0,
             hilite: None,
             synced: None,
-        }
+        };
+        cube.rebuild();
+        cube
     }
 
     /// The device-pixel rectangle the cube occupies.

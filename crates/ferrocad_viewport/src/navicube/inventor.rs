@@ -9,8 +9,8 @@ use ferrocad_inventor::{Node, NodeKind, Scene, compile_with};
 use ferrocad_types::{Placement, Rotation, Vector3};
 
 use super::model::{
-    BASE_COLOR, FACE_UV, HOME_CENTER, HOME_COLOR, HOME_HALF, HOME_PICK_ID, HILITE_COLOR,
-    INACTIVE_COLOR, NaviTarget, Piece, PieceKind, face_letter, label,
+    BASE_COLOR, FACE_UV, HOME_COLOR, HOME_PICK_ID, HILITE_COLOR, INACTIVE_COLOR, NaviTarget, Piece,
+    PieceKind, face_letter, home_quad, label,
 };
 use super::view::{NavicubeView, NavicubeVisual};
 
@@ -85,18 +85,6 @@ fn home_button(hilite: Option<NaviTarget>) -> Node {
             topology: Topology::Triangles,
         }),
     ])
-}
-
-/// The four corners of the Home quad, wound counter-clockwise toward the viewer.
-fn home_quad() -> Vec<[f32; 3]> {
-    let (cx, cy) = (HOME_CENTER[0] as f32, HOME_CENTER[1] as f32);
-    let (hw, hh) = (HOME_HALF[0] as f32, HOME_HALF[1] as f32);
-    vec![
-        [cx - hw, cy - hh, 0.0],
-        [cx + hw, cy - hh, 0.0],
-        [cx + hw, cy + hh, 0.0],
-        [cx - hw, cy + hh, 0.0],
-    ]
 }
 
 /// Append a piece, isolated in its own [`NodeKind::Separator`] so its fields do not

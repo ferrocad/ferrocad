@@ -345,6 +345,19 @@ impl NaviTarget {
     }
 }
 
+/// The four corners of the Home button's quad, wound counter-clockwise toward the
+/// viewer.
+pub(crate) fn home_quad() -> Vec<[f32; 3]> {
+    let (cx, cy) = (HOME_CENTER[0] as f32, HOME_CENTER[1] as f32);
+    let (hw, hh) = (HOME_HALF[0] as f32, HOME_HALF[1] as f32);
+    vec![
+        [cx - hw, cy - hh, 0.0],
+        [cx + hw, cy - hh, 0.0],
+        [cx + hw, cy + hh, 0.0],
+        [cx - hw, cy + hh, 0.0],
+    ]
+}
+
 /// Which corner of the viewport the cube sits in.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Corner {

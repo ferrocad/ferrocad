@@ -49,7 +49,7 @@ vocabulary, camera and picking) shared with the legacy stack (T4, sub-slice 1).
 | **T3 — `TransformGizmo`** | Draggers with drag/commit delta events; transient transform override. | ✅ |
 | **T4 — G-buffer pick pass** | *(1/4)* `ferrocad_graphics` extracted, `ferrocad_stage` decoupled from inventor. *(2/4)* surface slope/constant depth bias (coplanar shaded-with-edges). *(3/4)* mesh-cache generational eviction. *(4/4)* vertex `part_idx` + the offscreen `Rg32Uint` pass + 1×1 readback + world-point unprojection, wired into the viewport. | ✅ |
 | **T5 — `ferrocad.stage` bindings** | `ferrocad_stage_py`: the PyO3 surface of the modern stack (`ShapeItem`/`Stage`/`Tool`/`TransformGizmo`, hits/events, the enums), surfaced as `ferrocad.stage`. | ✅ |
-| **T6 — navigation-cube producer** | A second `NavicubeView` producer (in `ferrocad_viewport::navicube`) that builds the NaviCube from `ShapeItem`s, so the modern stack draws it beside the legacy one (see [`navicube-plan.md`](navicube-plan.md), V2). | ▢ |
+| **T6 — navigation-cube producer** | A second `NavicubeView` producer (in `ferrocad_viewport::navicube`) that builds the NaviCube from `ShapeItem`s, so the modern stack draws it beside the legacy one (see [`navicube-plan.md`](navicube-plan.md), V2). | ✅ |
 
 ## 4. As built (T0–T5)
 

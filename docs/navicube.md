@@ -129,7 +129,7 @@ built vertical slice (state accumulator, packets, CPU pick, events, DPR, viewpor
 | --- | --- |
 | Sub-rect + rect-relative pick | `ferrocad_inventor::pixels::Rect`; `Camera::ray_through_rect`; `pick_at_rect`/`pick_at_rect_hit` |
 | Selection id (per-face pick ids) | `ferrocad_inventor::node::NodeKind::PickId(u32)` |
-| Cube model (`Piece`, `NaviTarget`, `camera(rect)`) + the inventor producer | `ferrocad_viewport::navicube::{model, inventor}` |
+| Cube model (`Piece`, `NaviTarget`, `camera(rect)`) + the producers | `ferrocad_viewport::navicube::{model, inventor, stage}` |
 | Multi-view hook | `ferrocad_inventor::view::ViewSpec` + `InventorView::draw_frame` |
 | Multi-view pass (overlay pipeline, `set_viewport`/`set_scissor_rect`) | `ferrocad_wgpu::WgpuRenderer::render_views` |
 | Controller (placement × DPR, camera sync, hit-test, hover, snap, orbit) | `ferrocad_viewport::navicube::NaviCube` |
@@ -166,11 +166,12 @@ without movement snaps to the piece under the pointer.
 `ferrocad_inventor` (no `ferrocad_wgpu`, no Python). The `InventorView` capability
 trait — implemented by `ferrocad_wgpu`, supplied by the shell — is the seam.
 
-**V1 (producer split).** The cube's model and its inventor producer now live in
-`ferrocad_viewport::navicube` (`model`/`inventor`) behind a `NavicubeView` trait, and the
-controller drives a `Box<dyn NavicubeView>`; `ferrocad_inventor::navicube` was removed.
-This is the first step of [`navicube-plan.md`](navicube-plan.md) — a second (stage)
-producer lands in V2. Behaviour is unchanged.
+**Producer split (V1–V2).** The cube's model and its producers now live in
+`ferrocad_viewport::navicube` (`model`/`inventor`/`stage`) behind a `NavicubeView` trait,
+and the controller drives a `Box<dyn NavicubeView>`; `ferrocad_inventor::navicube` was
+removed. V1 moved the model + inventor producer (behaviour unchanged); V2 added the
+modern `StageProducer` and a cross-producer conformance test. See
+[`navicube-plan.md`](navicube-plan.md).
 
 **Verification:** `ferrocad_inventor::navicube` unit tests (ids, kinds, orientation,
 compilation, labels, Home) + `pick` segment tests; `ferrocad_wgpu`

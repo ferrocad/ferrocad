@@ -123,25 +123,31 @@ controller drives `Box<dyn NavicubeView>`. Tests moved with the code: `ferrocad_
 is an `Option<NaviTarget>` (the producer can highlight the Home button, though the
 controller only hovers pieces today, as `inventor_view` filters to `Piece`).
 
-### V2 — the stage producer + conformance
+### V2 — the stage producer + conformance ✅ built 2026-10-12
 
 Deliverable: a NaviCube the modern stack can build, driven by the same controller.
 
-- `navicube::stage`: `StageProducer` implements `NavicubeView` by building `ShapeItem`s
-  from the model geometry (`ShapeItem::new(entity_id = piece.pick_id().0)`,
-  `DrawMode::Shaded` for faces/corners, `DrawMode::Wireframe` for edges), assigning each
-  piece its [`navicube-spec.md`](navicube-spec.md) §5 role and resolving it through the
-  theme, and baking the orientation into each item's placement (no `Transform` node in the
-  stage). `has_labels() == false`.
-- The controller gains a way to pick the producer (`NaviCube::with_backend(Box<dyn
-  NavicubeView>)`, or a `NaviCube::stage(…)` / `NaviCube::inventor(…)` pair).
-- A **conformance test** in `ferrocad_viewport` drives both producers with the same
-  `NavicubeVisual` and asserts the spec's §11 items: 26 pieces + Home with the right ids,
-  identical geometry, per-piece **roles** (highlighted/away/base), and reuse of
-  `(mesh_id, generation)` on an unchanged rebuild.
+- `navicube::stage`: `StageProducer` implements `NavicubeView` by building the 26 pieces
+  + Home as `ShapeItem`s **once** (`ShapeItem::new(piece.pick_id().0)`, `DrawMode::Shaded`
+  for faces/corners, `DrawMode::Wireframe` for edges), then on each rebuild recolouring
+  them per its [`navicube-spec.md`](navicube-spec.md) §5 role and baking the orientation
+  into each piece's transform (no `Transform` node in the stage; Home stays fixed). The
+  items are built once so their mesh ids are stable — a rebuild never re-uploads.
+  `has_labels() == false`.
+- The controller picks its producer: `NaviCube::with_producer(Box<dyn NavicubeView>)`, with
+  `NaviCube::new` (inventor) and `NaviCube::stage` (stage) as the two conveniences.
+- A **conformance test** (`navicube::conformance`) drives both producers with the same
+  `NavicubeVisual` and asserts the spec's §11 items: 26 pieces + Home with the right ids
+  and draw order, identical geometry (positions/normals/indices) and transforms, the §5
+  per-piece roles, and stable `(mesh_id, generation)` across a rebuild.
 
 **Gate:** the stage cube renders headlessly in a viewport; conformance passes; existing
 tests pass.
+
+**Built.** `navicube/stage.rs` holds `StageProducer`; `NaviCube::{with_producer, stage}`
+wire it in. The conformance suite (`navicube/conformance.rs`) passes for both producers.
+`ferrocad_viewport` is now **32** tests (was 27). No theme yet — V2 assigns the model's
+role colours directly; V3 threads the viewport theme through.
 
 ### V3 — config and polish
 
@@ -193,8 +199,8 @@ Deliverable: the reserved config becomes real, and the specified thresholds are 
 | **V3** | config tests (corner/size, thresholds), a theme test, the min-drag threshold test, a warning test. |
 
 Runs: `cargo test -p ferrocad_viewport -p ferrocad_inventor -p ferrocad_stage`
-(plus `-p ferrocad_wgpu` headless). After V1 the navicube tests live in
-`ferrocad_viewport` (**19 → 27**); `ferrocad_inventor` drops to **6**. The other counts
+(plus `-p ferrocad_wgpu` headless). After V1/V2 the navicube tests live in
+`ferrocad_viewport` (**19 → 32**); `ferrocad_inventor` drops to **6**. The other counts
 (stage 27, wgpu 7) must not regress.
 
 ## 7. Slice path at a glance
@@ -202,5 +208,5 @@ Runs: `cargo test -p ferrocad_viewport -p ferrocad_inventor -p ferrocad_stage`
 | Slice | Deliverable | Where | Status |
 | --- | --- | --- | --- |
 | **V1** | Move the model + inventor producer into `ferrocad_viewport::navicube`; add the `NavicubeView` seam and `NavicubeVisual`; the controller drives `Box<dyn NavicubeView>`. No behaviour change. | `ferrocad_viewport`, `ferrocad_inventor` | ✅ |
-| **V2** | `navicube::stage::StageProducer` + the producer-conformance test. | `ferrocad_viewport` | ▢ |
+| **V2** | `navicube::stage::StageProducer` + the producer-conformance test. | `ferrocad_viewport` | ✅ |
 | **V3** | `NaviCubeConfig`, the viewport `Theme`, the min-drag threshold, `draggable`/`rotate_to_nearest`, docs. | `ferrocad_viewport`, docs | ▢ |

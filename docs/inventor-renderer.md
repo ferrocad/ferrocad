@@ -161,9 +161,10 @@ traversal/compile, picking/events — adapted to the code as it stands) is in
 1. **Layout-driven sizing**: an `Element` that reads its bounds ×
    `window.scale_factor()` to size the target and place the camera, making hover
    coordinates exact in a docked pane (and removing the fixed-size stretch).
-2. **Navigation-cube polish** (N4b): labels, translucent inactive faces, and
-   `Home`/arrow buttons with an animated snap (see [`navicube.md`](navicube.md)). The
-   pieces (faces/edges/corners), the overlay pass and drag-orbit are built.
+2. **Navigation-cube polish** (N4b, remaining): face labels (need a texture path),
+   a context menu, and `Home`/arrow buttons (see [`navicube.md`](navicube.md)). The
+   pieces, the overlay pass, drag-orbit, animated snap and translucent away-facing
+   faces are built.
 3. **The g-buffer pick** and line/point pipelines.
 4. **Grow the `pivy.coin` facade** and the `TypeRegistry` toward the ~63
    registered node/kit classes and the `SoType.fromName` surface the workbenches

@@ -11,7 +11,7 @@
 
 use ferrocad_inventor::{
     Camera, NodeKind, Rect, RenderQueue, Scene, ViewSpec, Viewport, compile_with, navicube,
-    navicube::Piece, pick_at_rect,
+    navicube::{Piece, PieceKind}, pick_at_rect,
 };
 use ferrocad_types::{Matrix4, Placement, Rotation, Vector3};
 
@@ -96,8 +96,7 @@ impl NaviCube {
             return;
         }
         self.synced = Some(rotation);
-        self.apply_rotation(rotation);
-        self.recompile();
+        self.rebuild();
     }
 
     /// The face, edge or corner under a device position, if it is over the cube.
@@ -115,12 +114,34 @@ impl NaviCube {
             return false;
         }
         self.hilite = piece;
-        self.scene = navicube::scene(piece);
+        self.rebuild();
+        true
+    }
+
+    /// Rebuild the cube scene: the camera rotation plus the away-facing faces drawn
+    /// translucent.
+    fn rebuild(&mut self) {
+        let away = self.away_faces();
+        self.scene = navicube::scene_with(self.hilite, &away);
         if let Some(rotation) = self.synced {
             self.apply_rotation(rotation);
         }
         self.recompile();
-        true
+    }
+
+    /// The faces pointing away from the viewer, given the synced camera rotation.
+    fn away_faces(&self) -> Vec<Piece> {
+        let Some(rotation) = self.synced else {
+            return Vec::new();
+        };
+        let matrix = rotation.to_matrix();
+        Piece::ALL
+            .iter()
+            .copied()
+            .filter(|piece| {
+                piece.kind() == PieceKind::Face && matrix.transform(&piece.direction()).z < 0.0
+            })
+            .collect()
     }
 
     fn apply_rotation(&mut self, rotation: Rotation) {
@@ -157,6 +178,86 @@ pub fn drag_view(main: &Camera, delta: [f32; 2]) -> Matrix4 {
     Placement::new(base, rotation).to_matrix()
 }
 
+/// Spherical linear interpolation between two rotations (`t` in `[0, 1]`).
+pub fn slerp(a: &Rotation, b: &Rotation, t: f64) -> Rotation {
+    let a_q = a.q;
+    let mut b_q = b.q;
+    let mut dot = a_q[0] * b_q[0] + a_q[1] * b_q[1] + a_q[2] * b_q[2] + a_q[3] * b_q[3];
+    // Take the shorter arc: a quaternion and its negation are the same rotation.
+    if dot < 0.0 {
+        b_q = [-b_q[0], -b_q[1], -b_q[2], -b_q[3]];
+        dot = -dot;
+    }
+    let q = if dot > 0.9995 {
+        // Nearly parallel: a normalized linear blend avoids a 0/0 in the sin terms.
+        let mut q = [0.0; 4];
+        for i in 0..4 {
+            q[i] = a_q[i] + (b_q[i] - a_q[i]) * t;
+        }
+        let length = (q[0] * q[0] + q[1] * q[1] + q[2] * q[2] + q[3] * q[3]).sqrt();
+        if length > 0.0 {
+            for value in &mut q {
+                *value /= length;
+            }
+        }
+        q
+    } else {
+        let theta = dot.clamp(-1.0, 1.0).acos();
+        let sin = theta.sin();
+        let wa = ((1.0 - t) * theta).sin() / sin;
+        let wb = (t * theta).sin() / sin;
+        let mut q = [0.0; 4];
+        for i in 0..4 {
+            q[i] = wa * a_q[i] + wb * b_q[i];
+        }
+        q
+    };
+    Rotation {
+        q,
+        raw_axis: None,
+    }
+}
+
+/// An in-progress animated snap of the main camera onto a piece.
+#[derive(Clone, Debug)]
+pub struct SnapAnimation {
+    start: Rotation,
+    end: Rotation,
+    base: Vector3,
+    start_time: std::time::Instant,
+    duration: std::time::Duration,
+}
+
+impl SnapAnimation {
+    /// Begin a snap from `main`'s current orientation onto `piece`.
+    pub fn begin(piece: Piece, main: &Camera, duration: std::time::Duration) -> Self {
+        Self {
+            start: Rotation::from_matrix(&main.view),
+            end: piece.orientation(),
+            base: Vector3::new(main.view.m[3], main.view.m[7], main.view.m[11]),
+            start_time: std::time::Instant::now(),
+            duration,
+        }
+    }
+
+    /// The camera view at `elapsed` since [`begin`](Self::begin) (eased).
+    pub fn view_at(&self, elapsed: std::time::Duration) -> Matrix4 {
+        let t = (elapsed.as_secs_f64() / self.duration.as_secs_f64().max(1e-9)).clamp(0.0, 1.0);
+        let eased = t * t * (3.0 - 2.0 * t); // smoothstep
+        Placement::new(self.base, slerp(&self.start, &self.end, eased)).to_matrix()
+    }
+
+    /// Whether the snap has finished.
+    pub fn is_done(&self) -> bool {
+        self.start_time.elapsed() >= self.duration
+    }
+
+    /// The elapsed time since [`begin`](Self::begin).
+    pub fn elapsed(&self) -> std::time::Duration {
+        self.start_time.elapsed()
+    }
+}
+
 /// The cube's device-pixel rectangle for a corner, size and margin (both logical).
 fn corner_rect(viewport: Viewport, corner: Corner, size: f32, margin: f32) -> Rect {
     let dpr = viewport.device_pixel_ratio();
@@ -187,10 +288,19 @@ fn camera_distance(camera: &Camera) -> f64 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use ferrocad_inventor::navicube::{BASE_COLOR, HILITE_COLOR};
+    use ferrocad_inventor::navicube::{BASE_COLOR, HILITE_COLOR, INACTIVE_COLOR};
 
     fn viewport() -> Viewport {
         Viewport::new([640, 480], 1.0)
+    }
+
+    fn colour_of(cube: &NaviCube, piece: Piece) -> [f32; 4] {
+        cube.queue
+            .packets
+            .iter()
+            .find(|packet| packet.state.id == piece.pick_id())
+            .map(|packet| packet.state.color)
+            .expect("piece packet")
     }
 
     fn centre(cube: &NaviCube) -> [i32; 2] {
@@ -247,16 +357,17 @@ mod tests {
         let mut cube = NaviCube::new(viewport());
         assert!(cube.set_hilite(Some(Piece::TOP)));
         assert!(!cube.set_hilite(Some(Piece::TOP)), "no-op when unchanged");
-        let colour_of = |cube: &NaviCube, piece: Piece| {
-            cube.queue
-                .packets
-                .iter()
-                .find(|packet| packet.state.id == piece.pick_id())
-                .map(|packet| packet.state.color)
-                .expect("piece packet")
-        };
         assert_eq!(colour_of(&cube, Piece::TOP), HILITE_COLOR);
         assert_eq!(colour_of(&cube, Piece::FRONT), BASE_COLOR);
+    }
+
+    #[test]
+    fn away_faces_are_drawn_translucent() {
+        let mut cube = NaviCube::new(viewport());
+        cube.sync(&Camera::identity());
+        // With the identity camera, +Z (Front) faces the viewer and Back points away.
+        assert_eq!(colour_of(&cube, Piece::FRONT), BASE_COLOR);
+        assert_eq!(colour_of(&cube, Piece::BACK), INACTIVE_COLOR);
     }
 
     #[test]
@@ -288,6 +399,23 @@ mod tests {
                 .transform(&piece.direction());
             assert!(rotated.sub(&Vector3::new(0.0, 0.0, 1.0)).length() < 1e-9);
         }
+    }
+
+    #[test]
+    fn slerp_interpolates_between_rotations() {
+        use std::time::Duration;
+        let start = Camera::identity();
+        let anim = SnapAnimation::begin(Piece::RIGHT, &start, Duration::from_millis(200));
+        // At the end the view looks along the piece direction.
+        let end = Rotation::from_matrix(&anim.view_at(Duration::from_millis(200)));
+        let rotated = end.to_matrix().transform(&Piece::RIGHT.direction());
+        assert!(rotated.sub(&Vector3::new(0.0, 0.0, 1.0)).length() < 1e-9);
+        // Halfway is between the two orientations (neither the start nor the end).
+        let mid = Rotation::from_matrix(&anim.view_at(Duration::from_millis(100)));
+        assert!(!mid.to_matrix().is_unity(1e-6));
+        assert!(mid.q != end.q);
+        // A zero-length duration is instant.
+        assert!(anim.is_done() == false || anim.start_time.elapsed() >= Duration::from_millis(200));
     }
 
     #[test]

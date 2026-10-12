@@ -1022,15 +1022,17 @@ first real overlay on the render stack. Plan and status: [`navicube.md`](navicub
   builds a `SoLineDetail`); the cube's 12 **edges** (lines) and 8 **corners** (small
   cubes) as pieces, so all 26 pieces hover and snap; **drag-orbit** via gpui's
   `on_drag`/`on_drag_move`.
+- **Polish (N4b):** an **animated snap** on click (quaternion slerp, eased, driven by
+  `request_animation_frame`) and **translucent away-facing faces** (drawn first).
 
 **Verification:** `ferrocad_inventor` 19 · `ferrocad_inventor_py` 17 · `ferrocad_wgpu`
-**2** (incl. `overlay_draws_into_its_rect`) · `ferrocad_gpui` 17 (incl. NaviCube unit
-tests for the corner rect, centre→Front, corner hit, mirroring, hilite, snap, orbit).
-The `inventor_roundtrip` example renders the faceted cube (faces, edges, corners) and
-mirrors a tilted camera.
+**2** (incl. `overlay_draws_into_its_rect`) · `ferrocad_gpui` 19 (incl. NaviCube unit
+tests for the corner rect, centre→Front, corner hit, mirroring, hilite, snap, orbit,
+slerp, away faces). The `inventor_roundtrip` example renders the faceted cube (faces,
+edges, corners) and mirrors a tilted camera.
 
-**Deferred (N4b):** face labels (need a texture path), translucent inactive faces, a
-context menu, and `Home`/arrow buttons with an animated snap.
+**Deferred (N4b, remaining):** face labels (need a texture path), a context menu, and
+`Home`/arrow buttons.
 
 ---
 

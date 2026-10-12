@@ -13,6 +13,7 @@
 //! analogue) which may edit the scene — for example, to highlight a hovered object.
 
 use std::sync::Arc;
+use std::time::Duration;
 
 use ferrocad_inventor::{
     Camera, Event, EventListener, Hit, ImageData, InventorView, PickId, RenderQueue, Scene,
@@ -25,7 +26,7 @@ use gpui::{
 };
 use image::{Frame, ImageBuffer, Rgba};
 
-use crate::navicube::NaviCube;
+use crate::navicube::{NaviCube, SnapAnimation};
 
 /// A gpui view that presents an [`InventorView`] (image path) and routes pointer
 /// events into the scene.
@@ -39,6 +40,8 @@ pub struct InventorViewport<V: InventorView> {
     navicube: Option<NaviCube>,
     /// An in-progress navigation-cube orbit drag (from the first `on_drag_move`).
     navicube_drag: Option<NavicubeDrag>,
+    /// An in-progress animated snap of the camera onto a cube piece.
+    snap: Option<SnapAnimation>,
     /// The object currently under the pointer.
     hover: Option<PickId>,
     frame: Option<Arc<RenderImage>>,
@@ -78,6 +81,7 @@ impl<V: InventorView> InventorViewport<V> {
             listeners: Vec::new(),
             navicube: None,
             navicube_drag: None,
+            snap: None,
             hover: None,
             frame: None,
         }
@@ -141,8 +145,9 @@ impl<V: InventorView> InventorViewport<V> {
     /// snaps the main camera onto the piece under the pointer. Otherwise the event
     /// goes to the main scene.
     pub fn handle_button(&mut self, logical: [f32; 2], button: u8, down: bool) -> bool {
-        // Any button event ends a (possibly stale) orbit drag.
+        // Any button event ends a (possibly stale) orbit drag or snap.
         self.navicube_drag = None;
+        self.snap = None;
         let device = self.camera.viewport.to_device(logical);
         if self
             .navicube
@@ -153,8 +158,12 @@ impl<V: InventorView> InventorViewport<V> {
                 return false; // the orbit starts on the first drag-move
             }
             if let Some(piece) = self.navicube.as_ref().and_then(|cube| cube.hit(device)) {
-                self.camera.view = crate::navicube::snap_view(piece, &self.camera);
-                self.recompile();
+                // Animate the snap rather than jumping.
+                self.snap = Some(SnapAnimation::begin(
+                    piece,
+                    &self.camera,
+                    Duration::from_millis(220),
+                ));
                 return true;
             }
             return false;
@@ -171,6 +180,7 @@ impl<V: InventorView> InventorViewport<V> {
     /// Handle a gpui drag-move: orbit the main camera when the drag began over the
     /// navigation cube. Reports whether the view changed.
     fn navicube_drag_move(&mut self, logical: [f32; 2]) -> bool {
+        self.snap = None; // a drag cancels any in-progress snap
         let device = self.camera.viewport.to_device(logical);
         let on_cube = self
             .navicube
@@ -227,6 +237,24 @@ impl<V: InventorView> InventorViewport<V> {
         self.queue = compile_with(&self.scene, &self.camera.viewport);
     }
 
+    /// Step a running snap animation, applying the interpolated camera. Returns
+    /// whether another frame is needed.
+    fn step_snap(&mut self) -> bool {
+        let Some(snap) = self.snap.as_ref() else {
+            return false;
+        };
+        let view = snap.view_at(snap.elapsed());
+        let done = snap.is_done();
+        self.camera.view = view;
+        self.recompile();
+        if done {
+            self.snap = None;
+            false
+        } else {
+            true
+        }
+    }
+
     /// Draw the scene (and the navigation cube, when enabled) and read it back,
     /// refreshing the cached frame.
     fn refresh(&mut self) {
@@ -265,8 +293,12 @@ impl<V: InventorView> InventorViewport<V> {
 }
 
 impl<V: InventorView + 'static> Render for InventorViewport<V> {
-    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        // MVP: render and read back during paint, on the UI thread.
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        // MVP: render and read back during paint, on the UI thread. A snap animation
+        // keeps requesting frames until it settles.
+        if self.step_snap() {
+            window.request_animation_frame();
+        }
         self.refresh();
 
         let content: AnyElement = match &self.frame {

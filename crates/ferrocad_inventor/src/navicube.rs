@@ -39,6 +39,9 @@ const CAMERA_DISTANCE: f64 = 3.0;
 pub const BASE_COLOR: [f32; 4] = [0.55, 0.6, 0.66, 1.0];
 /// The colour a piece takes while hovered.
 pub const HILITE_COLOR: [f32; 4] = [0.2, 0.6, 0.95, 1.0];
+/// The translucent colour of a face pointing away from the viewer (drawn first, so the
+/// cube reads as a solid but see-through box).
+pub const INACTIVE_COLOR: [f32; 4] = [0.38, 0.42, 0.48, 0.5];
 
 /// What kind of region a [`Piece`] is.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -237,35 +240,37 @@ impl Piece {
     }
 }
 
-/// Build the cube scene: a synced transform, then one piece per [`Piece::ALL`], each
-/// carrying its [`Piece::pick_id`]. The piece in `hilite` is drawn in [`HILITE_COLOR`].
+/// Build the cube scene with every piece opaque.
 ///
 /// The first child is always the [`NodeKind::Transform`] the controller writes the
 /// camera orientation into.
 pub fn scene(hilite: Option<Piece>) -> Scene {
+    scene_with(hilite, &[])
+}
+
+/// Build the cube scene, drawing the faces in `away` (those pointing away from the
+/// viewer) first and translucent ([`INACTIVE_COLOR`]) so the cube reads through. The
+/// piece in `hilite` is drawn in [`HILITE_COLOR`].
+pub fn scene_with(hilite: Option<Piece>, away: &[Piece]) -> Scene {
     let mut children = vec![field(NodeKind::Transform(Placement::identity()))];
-    for piece in Piece::ALL {
-        let color = if Some(piece) == hilite {
+    let color_of = |piece: Piece| {
+        if Some(piece) == hilite {
             HILITE_COLOR
+        } else if away.contains(&piece) {
+            INACTIVE_COLOR
         } else {
             BASE_COLOR
-        };
-        let (coordinates, indices, topology) = match piece.kind() {
-            PieceKind::Face => (piece.quad(), vec![0, 1, 2, 0, 2, 3], Topology::Triangles),
-            PieceKind::Edge => (piece.segment(), vec![0, 1], Topology::Lines),
-            PieceKind::Corner => {
-                let (vertices, indices) = piece.corner_cube();
-                (vertices, indices, Topology::Triangles)
-            }
-        };
-        children.push(field(NodeKind::PickId(piece.pick_id().0)));
-        children.push(field(NodeKind::Material(vec![color])));
-        children.push(field(NodeKind::Coordinate3(coordinates)));
-        children.push(field(NodeKind::Mesh {
-            indices,
-            normal_indices: vec![],
-            topology,
-        }));
+        }
+    };
+    // Away-facing faces first (translucent, behind), then everything else.
+    for &piece in away {
+        push_piece(&mut children, piece, color_of(piece));
+    }
+    for piece in Piece::ALL {
+        if away.contains(&piece) {
+            continue;
+        }
+        push_piece(&mut children, piece, color_of(piece));
     }
     Scene {
         root: Node {
@@ -273,6 +278,26 @@ pub fn scene(hilite: Option<Piece>) -> Scene {
             children,
         },
     }
+}
+
+/// Append a piece's field nodes (`PickId`, `Material`, `Coordinate3`, `Mesh`).
+fn push_piece(children: &mut Vec<Node>, piece: Piece, color: [f32; 4]) {
+    let (coordinates, indices, topology) = match piece.kind() {
+        PieceKind::Face => (piece.quad(), vec![0, 1, 2, 0, 2, 3], Topology::Triangles),
+        PieceKind::Edge => (piece.segment(), vec![0, 1], Topology::Lines),
+        PieceKind::Corner => {
+            let (vertices, indices) = piece.corner_cube();
+            (vertices, indices, Topology::Triangles)
+        }
+    };
+    children.push(field(NodeKind::PickId(piece.pick_id().0)));
+    children.push(field(NodeKind::Material(vec![color])));
+    children.push(field(NodeKind::Coordinate3(coordinates)));
+    children.push(field(NodeKind::Mesh {
+        indices,
+        normal_indices: vec![],
+        topology,
+    }));
 }
 
 fn field(kind: NodeKind) -> Node {

@@ -1,14 +1,9 @@
-//! The navigation cube: a small orientation gizmo for the viewer corner.
+//! The navigation-cube model: the piece taxonomy, ids, geometry, labels and overlay
+//! camera.
 //!
-//! The counterpart of FreeCAD's `Gui::NaviCube` + `SoNaviCube`: a cube whose faces,
-//! edges and corners point along the world axes, drawn as a screen-space overlay and
-//! rotated to mirror the main camera's orientation. Clicking a piece reorients the
-//! view onto it (a face looks straight at it; an edge or corner gives a diagonal
-//! view).
-//!
-//! This module is the **pure** part — the cube scene and its orthographic overlay
-//! camera. The controller (placement, camera sync, hit-testing, snapping) lives in
-//! `ferrocad_viewport::navicube`, and the overlay render pass in `ferrocad_wgpu`.
+//! Producer-neutral and pure — no scene graph, no GPU, no Python. A **producer**
+//! ([`super::inventor`], and later `super::stage`) turns a [`Piece`] into draw packets;
+//! the controller ([`super`]) places the cube, mirrors the camera and picks it.
 //!
 //! Our axes follow the engine's default view: **+Z toward the viewer**, **+Y up**,
 //! **+X right**. (FreeCAD is Z-up; the piece *names* differ, the behaviour does not.)
@@ -16,14 +11,8 @@
 use std::collections::HashMap;
 use std::sync::{Arc, OnceLock};
 
+use ferrocad_graphics::{Camera, PickId, Projection, Rect, Texture2, Viewport};
 use ferrocad_types::{Placement, Rotation, Vector3};
-
-use crate::batch::PickId;
-use crate::camera::Camera;
-use crate::geometry::{Texture2, Topology};
-use crate::Projection;
-use crate::node::{Node, NodeKind, Scene};
-use crate::pixels::{Rect, Viewport};
 
 /// Half the extent of the cube (each face sits at ±`CUBE_HALF`).
 const CUBE_HALF: f64 = 0.5;
@@ -53,20 +42,20 @@ pub const HOME_COLOR: [f32; 4] = [0.5, 0.55, 0.62, 1.0];
 pub const HOME_PICK_ID: PickId = PickId(27);
 
 /// The Home button's centre, in cube space (below the cube, facing the viewer).
-const HOME_CENTER: [f64; 2] = [0.0, -0.82];
+pub(crate) const HOME_CENTER: [f64; 2] = [0.0, -0.82];
 /// Half the Home button's width and height, in cube space.
-const HOME_HALF: [f64; 2] = [0.24, 0.18];
+pub(crate) const HOME_HALF: [f64; 2] = [0.24, 0.18];
 
 /// The side of a baked label texture, in pixels (64×4 = 256 bytes/row, which the
 /// texture upload wants aligned).
 pub const LABEL_SIZE: u32 = 64;
 
-/// The texture coordinates of a unit face quad, in the winding of
-/// [`Piece::quad`] (bottom-left, bottom-right, top-right, top-left).
-const FACE_UV: [[f32; 2]; 4] = [[0.0, 1.0], [1.0, 1.0], [1.0, 0.0], [0.0, 0.0]];
+/// The texture coordinates of a unit face quad, in the winding of [`Piece::quad`]
+/// (bottom-left, bottom-right, top-right, top-left).
+pub(crate) const FACE_UV: [[f32; 2]; 4] = [[0.0, 1.0], [1.0, 1.0], [1.0, 0.0], [0.0, 0.0]];
 
 /// A letter for a face: Front/Back/Top/Down/Left/Right.
-fn face_letter(piece: Piece) -> char {
+pub(crate) fn face_letter(piece: Piece) -> char {
     match piece {
         Piece::FRONT => 'F',
         Piece::BACK => 'B',
@@ -95,7 +84,7 @@ fn glyph(letter: char) -> [&'static str; 7] {
 /// A baked label texture: a light background with a dark letter (so multiplying it
 /// into the face colour paints the letter). Cached per letter, so the renderer uploads
 /// each once.
-fn label(letter: char) -> &'static Arc<Texture2> {
+pub(crate) fn label(letter: char) -> &'static Arc<Texture2> {
     static CACHE: OnceLock<HashMap<char, Arc<Texture2>>> = OnceLock::new();
     let cache = CACHE.get_or_init(|| {
         ['F', 'B', 'T', 'D', 'L', 'R', 'H']
@@ -255,7 +244,7 @@ impl Piece {
     /// rotation the camera takes when it snaps onto this face — so the baked label
     /// reads upright exactly when the face is turned to the viewer: `u` (the letter's
     /// right) is the world direction that maps to view +X and `v` (its up) to view +Y.
-    fn quad(self) -> Vec<[f32; 3]> {
+    pub(crate) fn quad(self) -> Vec<[f32; 3]> {
         let inverse = self.orientation().inverse().to_matrix();
         let u = inverse.transform(&Vector3::new(1.0, 0.0, 0.0));
         let v = inverse.transform(&Vector3::new(0.0, 1.0, 0.0));
@@ -275,7 +264,7 @@ impl Piece {
     }
 
     /// The two endpoints of an edge segment. Only valid for [`PieceKind::Edge`].
-    fn segment(self) -> Vec<[f32; 3]> {
+    pub(crate) fn segment(self) -> Vec<[f32; 3]> {
         let along = (0..3)
             .find(|&i| self.axes[i] == 0)
             .expect("an edge has a free axis");
@@ -296,7 +285,7 @@ impl Piece {
 
     /// The 8 vertices and 12 triangle indices of a small cube at a corner. Only valid
     /// for [`PieceKind::Corner`].
-    fn corner_cube(self) -> (Vec<[f32; 3]>, Vec<u32>) {
+    pub(crate) fn corner_cube(self) -> (Vec<[f32; 3]>, Vec<u32>) {
         let c = self.direction().scale(CUBE_HALF * 3.0_f64.sqrt());
         let h = CORNER_HALF;
         let vertex = |sx: f64, sy: f64, sz: f64| {
@@ -356,132 +345,25 @@ impl NaviTarget {
     }
 }
 
-/// Build the cube scene with every piece opaque.
-pub fn scene(hilite: Option<Piece>) -> Scene {
-    scene_with(hilite, &[])
+/// Which corner of the viewport the cube sits in.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Corner {
+    /// Top-left.
+    TopLeft,
+    /// Top-right.
+    TopRight,
+    /// Bottom-left.
+    BottomLeft,
+    /// Bottom-right.
+    BottomRight,
 }
 
-/// Build the cube scene, drawing the faces in `away` (those pointing away from the
-/// viewer) first and translucent ([`INACTIVE_COLOR`]) so the cube reads through. The
-/// piece in `hilite` is drawn in [`HILITE_COLOR`].
-///
-/// The root has two children: a **rotating subtree** whose first node is the
-/// [`NodeKind::Transform`] the controller writes the camera orientation into (see
-/// [`set_orientation`]), and the fixed **Home button** (drawn last, so it sits on top).
-/// The Home button is a sibling of the rotating subtree, so it stays put as the cube
-/// turns.
-pub fn scene_with(hilite: Option<Piece>, away: &[Piece]) -> Scene {
-    let color_of = |piece: Piece| {
-        if Some(piece) == hilite {
-            HILITE_COLOR
-        } else if away.contains(&piece) {
-            INACTIVE_COLOR
-        } else {
-            BASE_COLOR
-        }
-    };
-    // The rotating subtree: the transform slot, then away-facing faces (translucent,
-    // behind), then everything else.
-    let mut cube = vec![field(NodeKind::Transform(Placement::identity()))];
-    for &piece in away {
-        push_piece(&mut cube, piece, color_of(piece));
-    }
-    for piece in Piece::ALL {
-        if away.contains(&piece) {
-            continue;
-        }
-        push_piece(&mut cube, piece, color_of(piece));
-    }
-    Scene {
-        root: Node {
-            kind: NodeKind::Separator,
-            children: vec![separator(cube), home_button()],
-        },
-    }
-}
-
-/// Write the cube's orientation into `scene`, which must be a scene from [`scene`] or
-/// [`scene_with`]: the fixup finds the transform slot of the rotating subtree.
-pub fn set_orientation(scene: &mut Scene, rotation: Rotation) {
-    let slot = scene
-        .root
-        .children
-        .first_mut()
-        .and_then(|cube| cube.children.first_mut());
-    if let Some(transform) = slot {
-        transform.kind = NodeKind::Transform(Placement::new(Vector3::zero(), rotation));
-    }
-}
-
-/// The fixed Home button: a small labeled quad below the cube.
-fn home_button() -> Node {
-    separator(vec![
-        field(NodeKind::PickId(HOME_PICK_ID.0)),
-        field(NodeKind::Material(vec![HOME_COLOR])),
-        field(NodeKind::Texture2(label('H').clone())),
-        field(NodeKind::TextureCoordinate2(FACE_UV.to_vec())),
-        field(NodeKind::Coordinate3(home_quad())),
-        field(NodeKind::Mesh {
-            indices: vec![0, 1, 2, 0, 2, 3],
-            normal_indices: vec![],
-            topology: Topology::Triangles,
-        }),
-    ])
-}
-
-/// The four corners of the Home quad, wound counter-clockwise toward the viewer.
-fn home_quad() -> Vec<[f32; 3]> {
-    let (cx, cy) = (HOME_CENTER[0] as f32, HOME_CENTER[1] as f32);
-    let (hw, hh) = (HOME_HALF[0] as f32, HOME_HALF[1] as f32);
-    vec![
-        [cx - hw, cy - hh, 0.0],
-        [cx + hw, cy - hh, 0.0],
-        [cx + hw, cy + hh, 0.0],
-        [cx - hw, cy + hh, 0.0],
-    ]
-}
-
-/// Append a piece, isolated in its own [`NodeKind::Separator`] so its fields do not
-/// leak to the next piece. Faces carry a baked label texture; edges and corners are
-/// untextured (they sample the white default).
-fn push_piece(children: &mut Vec<Node>, piece: Piece, color: [f32; 4]) {
-    let (coordinates, indices, topology) = match piece.kind() {
-        PieceKind::Face => (piece.quad(), vec![0, 1, 2, 0, 2, 3], Topology::Triangles),
-        PieceKind::Edge => (piece.segment(), vec![0, 1], Topology::Lines),
-        PieceKind::Corner => {
-            let (vertices, indices) = piece.corner_cube();
-            (vertices, indices, Topology::Triangles)
-        }
-    };
-    let mut nodes = vec![
-        field(NodeKind::PickId(piece.pick_id().0)),
-        field(NodeKind::Material(vec![color])),
-    ];
-    if piece.kind() == PieceKind::Face {
-        nodes.push(field(NodeKind::Texture2(label(face_letter(piece)).clone())));
-        nodes.push(field(NodeKind::TextureCoordinate2(FACE_UV.to_vec())));
-    }
-    nodes.push(field(NodeKind::Coordinate3(coordinates)));
-    nodes.push(field(NodeKind::Mesh {
-        indices,
-        normal_indices: vec![],
-        topology,
-    }));
-    children.push(separator(nodes));
-}
-
-fn separator(children: Vec<Node>) -> Node {
-    Node {
-        kind: NodeKind::Separator,
-        children,
-    }
-}
-
-fn field(kind: NodeKind) -> Node {
-    Node {
-        kind,
-        children: vec![],
-    }
+/// The default "home" orientation the Home button snaps to: an axonometric view with the
+/// front-top-right corner toward the viewer. Upstream's Home restores the configurable
+/// `NewDocumentCameraOrientation` (default `Top`); a fixed default keeps this build
+/// self-contained.
+pub fn home_orientation() -> Rotation {
+    Piece { axes: [1, 1, 1] }.orientation()
 }
 
 /// The fixed orthographic overlay camera for `rect`, looking down −Z at the cube at
@@ -502,7 +384,6 @@ pub fn camera(rect: Rect) -> Camera {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::compile::compile;
 
     #[test]
     fn pick_ids_round_trip() {
@@ -560,73 +441,6 @@ mod tests {
                 "{piece:?} up -> {up_view:?}"
             );
         }
-    }
-
-    #[test]
-    fn scene_compiles_to_all_pieces_and_the_home_button() {
-        let queue = compile(&scene(None));
-        assert_eq!(queue.len(), 27, "26 pieces plus the Home button");
-        let ids: Vec<u32> = queue.packets.iter().map(|p| p.state.id.0).collect();
-        assert_eq!(ids, (1..=27).collect::<Vec<u32>>());
-        // Faces and corners are triangles; edges are lines (the Home button is a
-        // triangle, so it does not add to the line count).
-        let lines = queue
-            .packets
-            .iter()
-            .filter(|p| p.topology == Topology::Lines)
-            .count();
-        assert_eq!(lines, 12);
-        // The highlight recolours exactly one piece.
-        let queue = compile(&scene(Some(Piece::TOP)));
-        let top = queue
-            .packets
-            .iter()
-            .find(|p| p.state.id == Piece::TOP.pick_id())
-            .unwrap();
-        assert_eq!(top.state.color, HILITE_COLOR);
-    }
-
-    #[test]
-    fn faces_carry_a_label_texture() {
-        let queue = compile(&scene(None));
-        for piece in Piece::ALL.iter().filter(|p| p.kind() == PieceKind::Face) {
-            let packet = queue
-                .packets
-                .iter()
-                .find(|p| p.state.id == piece.pick_id())
-                .expect("a packet per face");
-            assert!(packet.state.texture.is_some(), "{piece:?} should be labeled");
-        }
-        // Edges and corners are untextured (they sample the white default).
-        let edge = queue
-            .packets
-            .iter()
-            .find(|p| p.state.id == Piece::ALL[6].pick_id())
-            .unwrap();
-        assert!(edge.state.texture.is_none());
-    }
-
-    #[test]
-    fn the_home_button_is_a_fixed_labeled_quad() {
-        let queue = compile(&scene(None));
-        let home = queue
-            .packets
-            .iter()
-            .find(|p| p.state.id == HOME_PICK_ID)
-            .expect("the Home button packet");
-        assert_eq!(home.topology, Topology::Triangles);
-        assert_eq!(home.state.color, HOME_COLOR);
-        assert!(home.state.texture.is_some(), "the Home button is labeled");
-        // Its transform is the identity: it is a sibling of the (rotating) cube
-        // subtree, so the camera orientation never reaches it.
-        let mut oriented = scene(None);
-        set_orientation(&mut oriented, Piece::TOP.orientation());
-        let home = compile(&oriented)
-            .packets
-            .into_iter()
-            .find(|p| p.state.id == HOME_PICK_ID)
-            .unwrap();
-        assert!(home.state.world_transform.is_unity(1e-9), "Home does not rotate");
     }
 
     #[test]

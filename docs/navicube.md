@@ -129,13 +129,13 @@ built vertical slice (state accumulator, packets, CPU pick, events, DPR, viewpor
 | --- | --- |
 | Sub-rect + rect-relative pick | `ferrocad_inventor::pixels::Rect`; `Camera::ray_through_rect`; `pick_at_rect`/`pick_at_rect_hit` |
 | Selection id (per-face pick ids) | `ferrocad_inventor::node::NodeKind::PickId(u32)` |
-| Cube scene (`Piece`, `scene(hilite)`, `camera(rect)`, `snap_view`) | `ferrocad_inventor::navicube` |
+| Cube model (`Piece`, `NaviTarget`, `camera(rect)`) + the inventor producer | `ferrocad_viewport::navicube::{model, inventor}` |
 | Multi-view hook | `ferrocad_inventor::view::ViewSpec` + `InventorView::draw_frame` |
 | Multi-view pass (overlay pipeline, `set_viewport`/`set_scissor_rect`) | `ferrocad_wgpu::WgpuRenderer::render_views` |
 | Controller (placement × DPR, camera sync, hit-test, hover, snap, orbit) | `ferrocad_viewport::navicube::NaviCube` |
 | Viewport integration (`with_navicube`, event routing) | `ferrocad_viewport::InventorViewport` |
 | Texture path (`State.texture`, `Texture2`, wgpu bind group 1) | `ferrocad_inventor::{state,geometry,node}`, `ferrocad_wgpu::textures` |
-| Baked face labels + fixed Home button + `NaviTarget` | `ferrocad_inventor::navicube` |
+| Baked face labels + fixed Home button | `ferrocad_viewport::navicube::model` |
 | Animated snap (`SnapAnimation`, `navicube::slerp`) + away-face translucency | `ferrocad_viewport::navicube` |
 
 **Behaviour:** the cube mirrors the main camera's **view rotation** (its `Transform`
@@ -161,10 +161,16 @@ documented path for non-D&D drags "like resizing"); `on_drag_move` gives the poi
 position, the controller accumulates the delta into `drag_view`. A press/release
 without movement snaps to the piece under the pointer.
 
-**Crate:** these viewport pieces (the element, the controller, and the sample scene)
-live in **`ferrocad_viewport`**, extracted from `ferrocad_gpui`; it depends only on
+**Crate:** these viewport pieces (the element, the controller and the cube) live in
+**`ferrocad_viewport`**, extracted from `ferrocad_gpui`; it depends only on
 `ferrocad_inventor` (no `ferrocad_wgpu`, no Python). The `InventorView` capability
 trait — implemented by `ferrocad_wgpu`, supplied by the shell — is the seam.
+
+**V1 (producer split).** The cube's model and its inventor producer now live in
+`ferrocad_viewport::navicube` (`model`/`inventor`) behind a `NavicubeView` trait, and the
+controller drives a `Box<dyn NavicubeView>`; `ferrocad_inventor::navicube` was removed.
+This is the first step of [`navicube-plan.md`](navicube-plan.md) — a second (stage)
+producer lands in V2. Behaviour is unchanged.
 
 **Verification:** `ferrocad_inventor::navicube` unit tests (ids, kinds, orientation,
 compilation, labels, Home) + `pick` segment tests; `ferrocad_wgpu`

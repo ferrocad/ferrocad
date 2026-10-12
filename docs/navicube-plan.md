@@ -89,25 +89,26 @@ the viewport rather than staying behind a new crate.
 
 ## 4. Slices
 
-### V1 — move the model in, add the seam, genericize the controller (no behaviour change)
+### V1 — move the model in, add the seam, genericize the controller (no behaviour change) ✅ built 2026-10-12
 
 Deliverable: the cube behaves exactly as today, but the model, the producers and the
 controller are one viewport module tree and the controller drives a trait object.
 
-- Turn `ferrocad_viewport/src/navicube.rs` into a directory module
-  `ferrocad_viewport/src/navicube/`:
+- Turn `ferrocad_viewport/src/navicube.rs` into a module root beside a
+  `ferrocad_viewport/src/navicube/` submodule directory:
   - `model`: `Piece`, `PieceKind`, `NaviTarget`, `Piece::ALL`/constants, the geometry
-    generators (`quad`/`segment`/`corner_cube`/`home_quad`), the **`NavicubeRole` rule**,
-    `camera(rect)`, `Corner`, `NaviCubeConfig`, `home_orientation` — moved in from
-    `ferrocad_inventor::navicube`.
-  - `view`: `NavicubeVisual { orientation, hilite, away }`, `NavicubeRole`, and the
-    `NavicubeView` trait (whose `rebuild` takes the viewport theme).
-  - `inventor`: `InventorProducer` — the existing `Scene` + `RenderQueue` + `synced` cache
-    (`scene`/`scene_with`/`set_orientation`), now implementing `NavicubeView`.
-  - `mod`: the `NaviCube` controller (placement, camera sync, hit-test, hilite, snap,
-    orbit) holding a `Box<dyn NavicubeView>` defaulting to `InventorProducer`.
-- Delete `ferrocad_inventor/src/navicube.rs` and its `lib.rs` module/re-export; move its
-  unit tests with it. `ferrocad_viewport/src/inventor_view.rs` keeps its imports via
+    generators (`quad`/`segment`/`corner_cube`), `camera(rect)`, `Corner`,
+    `home_orientation` — moved in from `ferrocad_inventor::navicube`.
+  - `view`: `NavicubeVisual { orientation, hilite, away }` and the `NavicubeView` trait.
+    (The appearance roles and the viewport theme land in V3; V1 keeps the producer's
+    colours.)
+  - `inventor`: `InventorProducer` — `scene_with`/`set_orientation` compiled to a
+    `RenderQueue`, now implementing `NavicubeView`.
+  - `mod` (the `navicube.rs` root): the `NaviCube` controller (placement, camera sync,
+    hit-test, hilite, snap, orbit) holding a `Box<dyn NavicubeView>` defaulting to
+    `InventorProducer`.
+- Delete `ferrocad_inventor/src/navicube.rs` and its `lib.rs` module; move its unit
+  tests with it. `ferrocad_viewport/src/inventor_view.rs` keeps its imports via
   `crate::navicube::…`.
 - `InventorViewport` is unchanged externally; the shell/example
   (`ferrocad_gpui`) `NaviCube::new(viewport)` call is unchanged.
@@ -115,6 +116,12 @@ controller are one viewport module tree and the controller drives a trait object
 **Gate:** every existing test passes unchanged (behaviour identical); new model tests
 (ids round-trip, orientation, geometry constants) and a trait-object controller test; the
 navicube test count moves from `ferrocad_inventor` to `ferrocad_viewport`.
+
+**Built.** `model.rs`/`inventor.rs`/`view.rs` live under the `navicube.rs` root; the
+controller drives `Box<dyn NavicubeView>`. Tests moved with the code: `ferrocad_inventor`
+**14 → 6**, `ferrocad_viewport` **19 → 27**, no behaviour change. `NavicubeVisual.hilite`
+is an `Option<NaviTarget>` (the producer can highlight the Home button, though the
+controller only hovers pieces today, as `inventor_view` filters to `Piece`).
 
 ### V2 — the stage producer + conformance
 
@@ -186,14 +193,14 @@ Deliverable: the reserved config becomes real, and the specified thresholds are 
 | **V3** | config tests (corner/size, thresholds), a theme test, the min-drag threshold test, a warning test. |
 
 Runs: `cargo test -p ferrocad_viewport -p ferrocad_inventor -p ferrocad_stage`
-(plus `-p ferrocad_wgpu` headless). The navicube tests shift crate (out of the current
-inventor 14, into the current viewport 19); the other counts (stage 27, wgpu 7) must not
-regress.
+(plus `-p ferrocad_wgpu` headless). After V1 the navicube tests live in
+`ferrocad_viewport` (**19 → 27**); `ferrocad_inventor` drops to **6**. The other counts
+(stage 27, wgpu 7) must not regress.
 
 ## 7. Slice path at a glance
 
 | Slice | Deliverable | Where | Status |
 | --- | --- | --- | --- |
-| **V1** | Move the model + inventor producer into `ferrocad_viewport::navicube`; add the `NavicubeView` seam and `NavicubeVisual`; the controller drives `Box<dyn NavicubeView>`. No behaviour change. | `ferrocad_viewport`, `ferrocad_inventor` | ▢ |
+| **V1** | Move the model + inventor producer into `ferrocad_viewport::navicube`; add the `NavicubeView` seam and `NavicubeVisual`; the controller drives `Box<dyn NavicubeView>`. No behaviour change. | `ferrocad_viewport`, `ferrocad_inventor` | ✅ |
 | **V2** | `navicube::stage::StageProducer` + the producer-conformance test. | `ferrocad_viewport` | ▢ |
 | **V3** | `NaviCubeConfig`, the viewport `Theme`, the min-drag threshold, `draggable`/`rotate_to_nearest`, docs. | `ferrocad_viewport`, docs | ▢ |

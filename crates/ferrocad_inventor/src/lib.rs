@@ -41,7 +41,6 @@
 
 pub mod compile;
 pub mod event;
-pub mod navicube;
 pub mod node;
 pub mod registry;
 pub mod state;

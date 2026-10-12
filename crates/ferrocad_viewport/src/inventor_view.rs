@@ -297,12 +297,12 @@ impl<V: InventorView> InventorViewport<V> {
         let mut changed = false;
         if let Some(cube) = self.navicube.as_mut() {
             if cube.rect().contains(device) {
-                let piece = match cube.hit(device) {
-                    Some(NaviTarget::Piece(piece)) => Some(piece),
-                    _ => None,
-                };
+                // Hover highlights pieces only (not the Home button), as before.
+                let target = cube
+                    .hit(device)
+                    .filter(|target| matches!(target, NaviTarget::Piece(_)));
                 self.hover = None;
-                return cube.set_hilite(piece);
+                return cube.set_hilite(target);
             }
             changed = cube.set_hilite(None);
         }

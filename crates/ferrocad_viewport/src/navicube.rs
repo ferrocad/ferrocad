@@ -1,43 +1,33 @@
 //! The navigation-cube controller: placement, camera sync, hit-testing and snapping.
 //!
-//! The counterpart of FreeCAD's `Gui::NaviCube`. The cube *scene* and its overlay
-//! camera are pure (`ferrocad_inventor::navicube`); this is the viewer glue that
-//! places the cube in a viewport corner, mirrors the main camera's orientation into
-//! the cube, hit-tests the corner rectangle, highlights the hovered piece, and — on a
-//! click — snaps the main camera onto that face, edge or corner.
+//! The counterpart of FreeCAD's `Gui::NaviCube`. The **model** ([`model`]) and the
+//! **producers** ([`inventor`], and later a stage one) live beside it; this is the
+//! viewer glue that places the cube in a viewport corner, mirrors the main camera's
+//! orientation into the cube, hit-tests the corner rectangle, highlights the hovered
+//! piece, and — on a click — snaps the main camera onto that face, edge or corner.
 //!
-//! Labels, the context menu and the arrow buttons are deferred; the Home button, the
-//! translucent away-facing faces and the animated snap are built (see
-//! `docs/navicube.md` §4–§5).
+//! The controller drives a [`NavicubeView`], so the same cube is built from either the
+//! legacy `pivy.coin` stack or (later) the modern `ferrocad_stage` stack. Labels, the
+//! context menu and the arrow buttons are deferred; the Home button, the translucent
+//! away-facing faces and the animated snap are built (see `docs/navicube.md` §4–§5 and
+//! `docs/navicube-spec.md`).
 
-use ferrocad_graphics::{Camera, Rect, RenderQueue, Viewport, pick_at_rect};
-use ferrocad_inventor::{
-    Scene, ViewSpec, compile_with, navicube,
-    navicube::{Piece, PieceKind},
-};
+mod inventor;
+mod model;
+mod view;
+
+pub use inventor::InventorProducer;
+pub use model::{Corner, NaviTarget, Piece, PieceKind, home_orientation};
+pub use view::{NavicubeView, NavicubeVisual};
+
+use ferrocad_graphics::{Camera, Rect, Viewport, pick_at_rect};
+use ferrocad_inventor::ViewSpec;
 use ferrocad_types::{Matrix4, Placement, Rotation, Vector3};
-
-/// A navigation target (a cube piece or the Home button), re-exported so callers of
-/// [`NaviCube::hit`] can name it.
-pub use ferrocad_inventor::navicube::NaviTarget;
-
-/// Which corner of the viewport the cube sits in.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Corner {
-    /// Top-left.
-    TopLeft,
-    /// Top-right.
-    TopRight,
-    /// Bottom-left.
-    BottomLeft,
-    /// Bottom-right.
-    BottomRight,
-}
 
 /// The navigation cube: a corner overlay showing the view orientation.
 pub struct NaviCube {
-    scene: Scene,
-    queue: RenderQueue,
+    /// The producer drawing the cube (the legacy inventor producer by default).
+    producer: Box<dyn NavicubeView>,
     camera: Camera,
     viewport: Viewport,
     rect: Rect,
@@ -46,7 +36,7 @@ pub struct NaviCube {
     size: f32,
     /// The margin from the corner, in logical pixels.
     margin: f32,
-    hilite: Option<Piece>,
+    hilite: Option<NaviTarget>,
     /// The camera rotation last synced into the cube (so we only recompile on change).
     synced: Option<Rotation>,
 }
@@ -56,11 +46,19 @@ impl NaviCube {
     pub fn new(viewport: Viewport) -> Self {
         let corner = Corner::TopRight;
         let rect = corner_rect(viewport, corner, 96.0, 8.0);
-        let scene = navicube::scene(None);
+        let camera = model::camera(rect);
+        let mut producer: Box<dyn NavicubeView> = Box::new(InventorProducer::new());
+        producer.rebuild(
+            &viewport,
+            &NavicubeVisual {
+                orientation: Rotation::identity(),
+                hilite: None,
+                away: Vec::new(),
+            },
+        );
         Self {
-            queue: compile_with(&scene, &viewport),
-            camera: navicube::camera(rect),
-            scene,
+            producer,
+            camera,
             viewport,
             rect,
             corner,
@@ -79,7 +77,7 @@ impl NaviCube {
     /// The overlay view for the renderer.
     pub fn view(&self) -> ViewSpec<'_> {
         ViewSpec {
-            queue: &self.queue,
+            queue: self.producer.queue(),
             camera: &self.camera,
             rect: Some(self.rect),
             overlay: true,
@@ -90,8 +88,8 @@ impl NaviCube {
     pub fn set_viewport(&mut self, viewport: Viewport) {
         self.viewport = viewport;
         self.rect = corner_rect(viewport, self.corner, self.size, self.margin);
-        self.camera = navicube::camera(self.rect);
-        self.recompile();
+        self.camera = model::camera(self.rect);
+        self.rebuild();
     }
 
     /// Mirror the main camera's orientation into the cube. Recompiles only when the
@@ -111,29 +109,30 @@ impl NaviCube {
         if !self.rect.contains(device) {
             return None;
         }
-        pick_at_rect(&self.queue, &self.camera, self.rect, device).and_then(NaviTarget::from_pick_id)
+        pick_at_rect(self.producer.queue(), &self.camera, self.rect, device)
+            .and_then(NaviTarget::from_pick_id)
     }
 
-    /// Highlight `piece` (or clear), rebuilding the scene when the highlight changes.
-    /// Returns whether anything changed.
-    pub fn set_hilite(&mut self, piece: Option<Piece>) -> bool {
-        if self.hilite == piece {
+    /// Highlight `target` (a piece, or Home) or clear it, rebuilding the cube when the
+    /// highlight changes. Returns whether anything changed.
+    pub fn set_hilite(&mut self, target: Option<NaviTarget>) -> bool {
+        if self.hilite == target {
             return false;
         }
-        self.hilite = piece;
+        self.hilite = target;
         self.rebuild();
         true
     }
 
-    /// Rebuild the cube scene: the camera rotation plus the away-facing faces drawn
+    /// Rebuild the cube: the camera orientation plus the away-facing faces drawn
     /// translucent.
     fn rebuild(&mut self) {
-        let away = self.away_faces();
-        self.scene = navicube::scene_with(self.hilite, &away);
-        if let Some(rotation) = self.synced {
-            navicube::set_orientation(&mut self.scene, rotation);
-        }
-        self.recompile();
+        let visual = NavicubeVisual {
+            orientation: self.synced.unwrap_or_else(Rotation::identity),
+            hilite: self.hilite,
+            away: self.away_faces(),
+        };
+        self.producer.rebuild(&self.viewport, &visual);
     }
 
     /// The faces pointing away from the viewer, given the synced camera rotation.
@@ -150,18 +149,6 @@ impl NaviCube {
             })
             .collect()
     }
-
-    fn recompile(&mut self) {
-        self.queue = compile_with(&self.scene, &self.viewport);
-    }
-}
-
-/// The default "home" orientation the Home button snaps to: an axonometric view with the
-/// front-top-right corner toward the viewer. Upstream's Home restores the configurable
-/// `NewDocumentCameraOrientation` (default `Top`); a fixed default keeps this build
-/// self-contained.
-pub fn home_orientation() -> Rotation {
-    Piece { axes: [1, 1, 1] }.orientation()
 }
 
 /// The main-camera **view matrix** that snaps the view onto `piece`, keeping the
@@ -303,14 +290,15 @@ fn camera_distance(camera: &Camera) -> f64 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use ferrocad_inventor::navicube::{BASE_COLOR, HILITE_COLOR, INACTIVE_COLOR};
+    use super::model::{BASE_COLOR, HILITE_COLOR, INACTIVE_COLOR};
 
     fn viewport() -> Viewport {
         Viewport::new([640, 480], 1.0)
     }
 
     fn colour_of(cube: &NaviCube, piece: Piece) -> [f32; 4] {
-        cube.queue
+        cube.producer
+            .queue()
             .packets
             .iter()
             .find(|packet| packet.state.id == piece.pick_id())
@@ -394,8 +382,11 @@ mod tests {
     #[test]
     fn hilite_changes_the_piece_colour_and_only_recompiles_on_change() {
         let mut cube = NaviCube::new(viewport());
-        assert!(cube.set_hilite(Some(Piece::TOP)));
-        assert!(!cube.set_hilite(Some(Piece::TOP)), "no-op when unchanged");
+        assert!(cube.set_hilite(Some(NaviTarget::Piece(Piece::TOP))));
+        assert!(
+            !cube.set_hilite(Some(NaviTarget::Piece(Piece::TOP))),
+            "no-op when unchanged"
+        );
         assert_eq!(colour_of(&cube, Piece::TOP), HILITE_COLOR);
         assert_eq!(colour_of(&cube, Piece::FRONT), BASE_COLOR);
     }

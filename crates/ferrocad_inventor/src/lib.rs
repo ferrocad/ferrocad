@@ -60,7 +60,7 @@ pub use ferrocad_graphics::{
 };
 
 pub use compile::{compile, compile_with};
-pub use event::{Event, EventListener, event_callbacks};
+pub use event::{Event, EventListener};
 pub use node::{Node, NodeKind, Scene, SO_SWITCH_ALL, SO_SWITCH_NONE};
 pub use registry::TypeRegistry;
 pub use state::State;

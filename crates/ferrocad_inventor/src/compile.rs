@@ -158,8 +158,12 @@ fn walk_children(
             }
             // Custom node classes carry no geometry the core understands yet.
             NodeKind::Custom(_) => {}
-            // `SoEventCallback` is a leaf: it draws nothing.
-            NodeKind::EventCallback(_) => {}
+            // `SoEventCallback` draws nothing; it becomes a host-facing directive so the
+            // viewport can route input to the callables keyed by its id (same traversal,
+            // so `SoSwitch` state is honoured without a rescan).
+            NodeKind::EventCallback(id) => {
+                ctx.directives.push(Directive::EventCallback(*id));
+            }
         }
     }
 }
@@ -379,5 +383,28 @@ mod tests {
             directives.navicubes().copied().collect::<Vec<_>>(),
             vec![directive]
         );
+    }
+
+    #[test]
+    fn event_callback_nodes_become_directives_and_honour_switch_state() {
+        let callback = |id| Node {
+            kind: NodeKind::EventCallback(id),
+            children: vec![],
+        };
+        let switch = |which, children| Node {
+            kind: NodeKind::Switch { which },
+            children,
+        };
+        let scene = Scene {
+            root: separator(vec![
+                callback(1),
+                switch(1, vec![callback(2), callback(3)]),
+                switch(crate::node::SO_SWITCH_NONE, vec![callback(4)]),
+            ]),
+        };
+        let (queue, directives) = compile(&scene);
+        assert!(queue.is_empty(), "event callbacks draw nothing");
+        // Only the callback outside the switch and the active (index 1) child.
+        assert_eq!(directives.event_callbacks().collect::<Vec<_>>(), vec![1, 3]);
     }
 }

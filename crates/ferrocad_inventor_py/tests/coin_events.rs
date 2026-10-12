@@ -69,13 +69,14 @@ fn dispatch_delivers_the_event_and_pick_to_the_matching_callback() {
     Python::with_gil(|py| {
         let (root, globals) = build(py);
         let scene = ferrocad_inventor_py::extract_scene(&root).expect("extract");
+        let (_, directives) = ferrocad_inventor::compile(&scene);
 
         let event = Event::MouseButton {
             position: [10, 20],
             button: 1,
             down: true,
         };
-        let fired = ferrocad_inventor_py::dispatch_event(py, &scene, &event, Some(&hit()))
+        let fired = ferrocad_inventor_py::dispatch_event(py, &directives, &event, Some(&hit()))
             .expect("dispatch");
         assert!(fired, "a button callback should have run");
 
@@ -103,12 +104,13 @@ fn dispatch_clears_the_context_after_the_call() {
     Python::with_gil(|py| {
         let (root, globals) = build(py);
         let scene = ferrocad_inventor_py::extract_scene(&root).expect("extract");
+        let (_, directives) = ferrocad_inventor::compile(&scene);
         let event = Event::MouseButton {
             position: [1, 1],
             button: 3,
             down: false,
         };
-        ferrocad_inventor_py::dispatch_event(py, &scene, &event, None).expect("dispatch");
+        ferrocad_inventor_py::dispatch_event(py, &directives, &event, None).expect("dispatch");
 
         // The callback saw no pick (the dispatch carried none)...
         let seen: Vec<(String, String)> = globals

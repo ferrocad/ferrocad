@@ -176,6 +176,15 @@ appearance **theme** (`NavicubeRole`/`NavicubeTheme` — the Rust core owns styl
 [`navicube-spec.md`](navicube-spec.md)), `NaviCubeConfig`, and the min-drag threshold. See
 [`navicube-plan.md`](navicube-plan.md).
 
+**Directives channel (V4.1–V4.2).** A `SoNaviCube` scene node drives the neutral cube
+through the neutral `Directives` channel ([`directives.md`](directives.md)) rather than a
+bespoke overlay API: the compiler lifts it into a `Directive::NaviCube`, and the viewport
+hosts one overlay per directive (a `NaviCube::from_directive` in explicit-placement mode).
+The same channel carries `Directive::EventCallback`, so `SoEventCallback` routing and the
+navicube overlay share one traversal and one `EventListener` argument — the old
+`event_callbacks(scene)` rescan is gone. The `pivy.coin` `SoNaviCube` constructor (so a
+Python script can build the node) is V4.3, still pending (§8).
+
 **Verification:** `ferrocad_viewport::navicube` tests — the model/producer units (ids,
 kinds, orientation, compilation, labels, Home) and the controller (corner rect,
 centre→Front, corner hit, Home hit, mirroring, hilite, snap, orbit) — plus the
@@ -219,7 +228,9 @@ for the hilite one. Other tests (`TestCornerAxisCrossVisual`, `TestSelectionVisu
 **disable** it for framebuffer determinism, and `src/Tools/typing/smoke/smoke.py`
 type-checks `isEnabledNaviCube()`.
 
-**Implication for FerroCAD.** The `pivy.coin` facade does not yet register `SoNaviCube`
-(or its fields), and the `FreeCADGui` facade does not yet expose the viewer's NaviCube
-methods — so the NaviCube fixtures in `TestCoinNodeSnapshots` are a **tracked gap**, not
-a covered surface.
+**Implication for FerroCAD.** The neutral scene node and its viewport host are in place
+(V4.1–V4.2: a `NodeKind::NaviCube` compiles to a `Directive::NaviCube` and the viewport
+hosts it), but the `pivy.coin` facade does not yet register `SoNaviCube` (or its fields)
+— so a Python script cannot construct one, and the `FreeCADGui` facade does not yet
+expose the viewer's NaviCube methods. Both are a **tracked gap** (V4.3), not a covered
+surface.

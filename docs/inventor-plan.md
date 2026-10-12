@@ -117,11 +117,11 @@ shared coords → surface + wireframe batches, concave triangulation, cache reus
   — the `SoRayPickAction` analogue; `Hit` carries the object `PickId`, the world point,
   the surface normal and the primitive index.
 * ✅ **Events**: `ferrocad_inventor::Event` (`MouseMove`/`MouseButton`/`MouseLeave`)
-  + `EventListener` (`on_event(event, hit, scene)`, with the full `Hit`) →
+  + `EventListener` (`on_event(event, hit, scene, directives)`, with the full `Hit`) →
   recompile/highlight; the host delivers device-pixel events and the viewport routes
   them (`ferrocad_viewport::InventorViewport`). **S4** adds the `SoEventCallback` node
-  (found via `event_callbacks`), the `SoEvent`/`SoButtonEvent`/`SoMouseButtonEvent`/
-  `SoLocation2Event` classes, and the dispatch bridge
+  (lifted into `Directive::EventCallback`), the `SoEvent`/`SoButtonEvent`/
+  `SoMouseButtonEvent`/`SoLocation2Event` classes, and the dispatch bridge
   (`ferrocad_inventor_py::dispatch_event`; `ferrocad_gpui::python::PythonEventCallbacks`).
   **Deferred:** the global thread-local context Coin uses (ours lives on the node for
   the duration of the call) and callbacks that change what is *rendered* (the
@@ -188,7 +188,7 @@ parts later.
 | **S1 — facade spine** ✅ | 1 (selective) | PyO3 class hierarchy `SoBase`→`SoFieldContainer`→`SoNode`→`SoGroup`→`SoSeparator`/`SoSwitch` via `PyClassInitializer`, wrapping the existing `Node`/`NodeKind` (**owned tree, no arena**); `SoType` (`fromName`/`createInstance`/`isDerivedFrom`) over `TypeRegistry`; `SoGroup.addChild`/`getNumChildren`/`__len__`. *Built — `tests/coin_boot.rs`.* | arena, weakref identity, detached fields, `SoPath`/`SoSearchAction` |
 | **S2 — geometry fields** ✅ | 2 (selective) | PyO3 field wrappers with the sequence protocol over `Vec`: `SoCoordinate3.point`, `SoNormal.vector`, `SoMaterial.diffuseColor`, `SoIndexedFaceSet.coordIndex`/`normalIndex`, `SoIndexedLineSet.coordIndex`, `SoTransform`, `SoSwitch.whichChild`; edits mutate the wrapped `NodeKind`. *Built — `tests/coin_fields.rs`.* | NumPy `PyBuffer` zero-copy, detached-field RAII, generational dirty counters, slicing, `-1` polygon delimiters |
 | **S3 — scene extraction (bridge)** ✅ | 3 | A Python-built root → `Scene`/`RenderQueue` (reuse `compile`), so a `pivy.coin` tree renders in the viewport and the example. The payoff; also lets the sample cube be built from Python. *Built — `ferrocad_inventor_py::install`/`extract_scene`, `ferrocad_gpui::python::inventor_scene`; `tests/coin_scene.rs` + the host test.* | Newell/earcut triangulation, split-vertex unroll, `-1` delimiters, `SoDrawStyle` |
-| **S4 — events + pick** ✅ | 4 (selective) | `SoEvent`/`SoButtonEvent`/`SoMouseButtonEvent`/`SoLocation2Event` classes; an `SoEventCallback` node in the AST (found via `ferrocad_inventor::event_callbacks`); dispatch bridging host pointer events → `pick_hit` → `SoPickedPoint` (world point + normal) + `SoFaceDetail`/`SoLineDetail`; `event_cb.getPickedPoint()`/`getEvent()`. *Built — `tests/coin_events.rs` + the host `dispatch` test; the `InventorViewport` routes moves and button down/up.* | G-buffer pass, 1-based sub-shape `part_index` (needs topological naming), global thread-local context, callbacks that change the rendered scene |
+| **S4 — events + pick** ✅ | 4 (selective) | `SoEvent`/`SoButtonEvent`/`SoMouseButtonEvent`/`SoLocation2Event` classes; an `SoEventCallback` node in the AST (lifted into `Directive::EventCallback` since V4.2); dispatch bridging host pointer events → `pick_hit` → `SoPickedPoint` (world point + normal) + `SoFaceDetail`/`SoLineDetail`; `event_cb.getPickedPoint()`/`getEvent()`. *Built — `tests/coin_events.rs` + the host `dispatch` test; the `InventorViewport` routes moves and button down/up.* | G-buffer pass, 1-based sub-shape `part_index` (needs topological naming), global thread-local context, callbacks that change the rendered scene |
 
 **Ordering:** S1 → S2 → S3 → S4. S1 is the biggest new work (the PyO3 spine);
 S3 is small (wiring); S4 reuses the built CPU pick and event path.

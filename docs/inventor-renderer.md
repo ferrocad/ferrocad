@@ -72,13 +72,14 @@ semantic channel the renderer ignores and the viewport consumes (see
   whether `InventorViewport::pick_main` uses the backend's `pick_at` or falls back to the
   CPU ray cast. The two agree on the object id and the sub-element index.
 - **Events** are `ferrocad_inventor::Event` (`MouseMove`/`MouseButton`/`MouseLeave`)
-  delivered to an `EventListener` (`on_event(event, hit, scene)`) — the
-  `SoEventCallback` analogue. The listener may edit the scene and reports whether it
+  delivered to an `EventListener` (`on_event(event, hit, scene, directives)`) — the
+  `SoEventCallback` analogue. The listener may edit the scene and report whether it
   did; the viewport recompiles when it did. Hover highlight is implemented exactly
   this way (recolour the object's `Material`). **Scripted** callbacks are the other
-  half (S4): an `SoEventCallback` node sits in the AST, the host finds it via
-  `event_callbacks`, and `ferrocad_inventor_py::dispatch_event` delivers the event and
-  pick to the registered Python callables (`event_cb.getEvent()`/`getPickedPoint()`).
+  half (S4): an `SoEventCallback` node sits in the AST, the compiler lifts it into a
+  `Directive::EventCallback` beside the draw queue, and
+  `ferrocad_inventor_py::dispatch_event` delivers the event and pick to the registered
+  Python callables (`event_cb.getEvent()`/`getPickedPoint()`).
 
 ## 4. HiDPI: everything is physical pixels
 

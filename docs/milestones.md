@@ -984,10 +984,12 @@ that builds scene graphs (`from pivy import coin`) keeps working. Plan and statu
   `ferrocad_gpui::python::inventor_scene` — a `from pivy import coin` script is copied
   into a `Scene` and rendered through the same `compile` path.
 - **S4 — events + pick:** `Hit` (object, point, normal, triangle), `Event::MouseButton`,
-  `event_callbacks(&Scene)`, the `SoEvent`/`SoButtonEvent`/`SoMouseButtonEvent`/
+  the `SoEvent`/`SoButtonEvent`/`SoMouseButtonEvent`/
   `SoLocation2Event` and `SoPickedPoint`/`SoDetail`/`SoFaceDetail`/`SoLineDetail` classes,
   the `SoEventCallback` node, and the dispatch bridge
   (`ferrocad_inventor_py::dispatch_event`; `ferrocad_gpui::python::PythonEventCallbacks`).
+  The node is lifted into a `Directive::EventCallback` by the compiler (V4.2), replacing
+  the original `event_callbacks(&Scene)` rescan.
 
 **Verification:** `cargo test -p ferrocad_inventor` **12** · `-p ferrocad_inventor_py`
 **17** (`coin_boot` 5, `coin_fields` 7, `coin_scene` 2, `coin_events` 3) · `-p

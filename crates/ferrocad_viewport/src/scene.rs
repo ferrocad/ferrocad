@@ -6,7 +6,7 @@
 //! also what the `inventor_roundtrip` example renders.
 
 use ferrocad_graphics::{Camera, Hit, Projection, Topology, Viewport};
-use ferrocad_inventor::{Event, EventListener, Node, NodeKind, Scene};
+use ferrocad_inventor::{Directives, Event, EventListener, Node, NodeKind, Scene};
 use ferrocad_types::{Placement, Rotation, Vector3};
 
 /// The cube's resting colour.
@@ -93,7 +93,13 @@ pub struct HoverHighlight {
 }
 
 impl EventListener for HoverHighlight {
-    fn on_event(&mut self, event: &Event, hit: Option<&Hit>, scene: &mut Scene) -> bool {
+    fn on_event(
+        &mut self,
+        event: &Event,
+        hit: Option<&Hit>,
+        scene: &mut Scene,
+        _directives: &Directives,
+    ) -> bool {
         let now_hovered = matches!(event, Event::MouseMove { .. }) && hit.is_some();
         if now_hovered == self.hovered {
             return false;

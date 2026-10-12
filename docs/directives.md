@@ -9,14 +9,13 @@ Status: **decision** (2026-10-12). Companion to
 ## 1. Why
 
 Some of what a scene or a stack produces is **semantic, not drawable**: a renderer must
-ignore it, but the viewport must consume it. Today `SoEventCallback` is the only such
-thing, and it is found by an ad-hoc rescan of the AST
-(`ferrocad_inventor::event_callbacks`). `SoNaviCube` needs the same treatment, and the
-rescan shape is wrong for it:
+ignore it, but the viewport must consume it. `SoEventCallback` and `SoNaviCube` are both
+such things, and the original `SoEventCallback` handling was an ad-hoc rescan of the AST
+(`ferrocad_inventor::event_callbacks`, since removed) that the directive shape replaces:
 
-- it is a **second traversal** of the scene;
-- it **leaks scene node types** up to the host;
-- it ties the mechanism to `ferrocad_inventor`, so a modern `ferrocad_stage` workbench
+- it did a **second traversal** of the scene;
+- it **leaked scene node types** up to the host;
+- it tied the mechanism to `ferrocad_inventor`, so a modern `ferrocad_stage` workbench
   could not drive the same overlays without depending on Inventor.
 
 ## 2. Decision
@@ -46,7 +45,9 @@ either depending on the other.
 pub enum Directive {
     /// A host-rendered navicube overlay (from a `SoNaviCube` node).
     NaviCube(NaviCubeDirective),
-    // `EventCallback(u64)` joins when the `SoEventCallback` path migrates (V4.2).
+    /// An active `SoEventCallback`: the host routes input to the callables keyed by
+    /// this id. It draws nothing.
+    EventCallback(u64),
 }
 
 /// A navicube overlay request — structural only; **styling is the Rust core's** (§5).
@@ -62,7 +63,8 @@ pub struct NaviCubeDirective {
 
 A **flat enum**, not `Overlay(kind)`: `EventCallback` is a directive but not an overlay,
 so a shared `Overlay` supertype would be false. Generalising to gizmos / HUD /
-annotations is **adding variants**.
+annotations is **adding variants**. `Directives::{navicubes, event_callbacks}` filter it
+by variant for the two consumers.
 
 ## 4. The invariant
 
@@ -101,14 +103,17 @@ ferrocad_graphics   RenderQueue · Camera · ViewSpec · Directives · Directive
 ## 7. Producers and consumers
 
 - **`ferrocad_inventor`** — a `NodeKind::NaviCube(NaviCubeDirective)` node emits **no**
-  packet; the compiler lifts it into `Directives`. (`SoEventCallback` migrates from
-  `event_callbacks(scene)` into `Directive::EventCallback` in V4.2, threading the
-  directives through the `EventListener` API — so there is then one channel, not two.)
+  packet; the compiler lifts it into `Directives`. A `NodeKind::EventCallback(id)` node
+  does the same, so `SoEventCallback` is found in the **same traversal** that emits
+  geometry (honouring `SoSwitch` state) rather than by a second walk
+  (`event_callbacks(scene)` was removed). The `EventListener` API carries the
+  `Directives` to the listener, so there is one channel, not two.
 - **`ferrocad_stage`** — the channel is neutral, so a stage can emit directives (e.g. a
   stage-side navicube); that is why this lives in `ferrocad_graphics`.
 - **`ferrocad_viewport`** — consumes `Directive::NaviCube` (`NaviCubeDirective` + the
   viewport theme → `NavicubeVisual` + `Rect` → the producer → overlay `ViewSpec`) and
-  routes `Directive::EventCallback` to the Python callables.
+  routes `Directive::EventCallback` to the Python callables (`dispatch_event` iterates
+  `Directives::event_callbacks`).
 
 ## 8. Ratified decisions
 

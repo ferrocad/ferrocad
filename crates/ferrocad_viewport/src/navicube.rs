@@ -28,7 +28,7 @@ pub use theme::{NavicubeRole, NavicubeTheme};
 pub use view::{NavicubeView, NavicubeVisual};
 
 use ferrocad_graphics::{Camera, Rect, Viewport, pick_at_rect};
-use ferrocad_inventor::ViewSpec;
+use ferrocad_inventor::{NaviCubeDirective, ViewSpec};
 use ferrocad_types::{Matrix4, Placement, Rotation, Vector3};
 
 /// The navigation cube's structural config: where it sits and how big it is (sizes in
@@ -60,6 +60,9 @@ pub struct NaviCube {
     camera: Camera,
     viewport: Viewport,
     rect: Rect,
+    /// An explicit device-pixel placement (from a [`NaviCubeDirective`]); `None` places
+    /// the cube in a corner from `config`.
+    placement: Option<Rect>,
     /// The structural config: corner, size and margin (both logical pixels).
     config: NaviCubeConfig,
     /// The appearance theme (the Rust core owns styling).
@@ -91,10 +94,32 @@ impl NaviCube {
             camera,
             viewport,
             rect,
+            placement: None,
             config,
             theme: NavicubeTheme::default(),
             hilite: None,
             synced: None,
+        };
+        cube.rebuild();
+        cube
+    }
+
+    /// A cube placed by a [`NaviCubeDirective`]: an explicit device-pixel rectangle and
+    /// orientation (or the main camera when the directive's orientation is `None`), with
+    /// the directive's highlight. The viewport hosts one per `Directive::NaviCube`
+    /// ([`docs/directives.md`](../../../docs/directives.md)).
+    pub fn from_directive(viewport: Viewport, directive: NaviCubeDirective) -> Self {
+        let rect = directive.rect;
+        let mut cube = Self {
+            producer: Box::new(InventorProducer::new()),
+            camera: model::camera(rect),
+            viewport,
+            rect,
+            placement: Some(rect),
+            config: NaviCubeConfig::default(),
+            theme: NavicubeTheme::default(),
+            hilite: directive.hilite.and_then(NaviTarget::from_pick_id),
+            synced: directive.orientation,
         };
         cube.rebuild();
         cube
@@ -135,14 +160,18 @@ impl NaviCube {
         self.relayout();
     }
 
-    /// Recompute the rect and overlay camera from the config and rebuild.
+    /// Recompute the rect and overlay camera from the explicit placement (or the config)
+    /// and rebuild.
     fn relayout(&mut self) {
-        self.rect = corner_rect(
-            self.viewport,
-            self.config.corner,
-            self.config.size,
-            self.config.margin,
-        );
+        self.rect = match self.placement {
+            Some(rect) => rect,
+            None => corner_rect(
+                self.viewport,
+                self.config.corner,
+                self.config.size,
+                self.config.margin,
+            ),
+        };
         self.camera = model::camera(self.rect);
         self.rebuild();
     }

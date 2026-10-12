@@ -86,7 +86,7 @@ fn main() {
 
 /// Headless: simulate a hover over the cube's centre, render, and write a PNG.
 fn render_headless(mut scene: Scene, camera: ferrocad_inventor::Camera, path: &str) {
-    let (queue, _) = compile_with(&scene, &camera.viewport);
+    let (queue, directives) = compile_with(&scene, &camera.viewport);
     let [width, height] = camera.viewport.device_size();
     let centre = camera
         .viewport
@@ -99,11 +99,12 @@ fn render_headless(mut scene: Scene, camera: ferrocad_inventor::Camera, path: &s
         &Event::MouseMove { position: centre },
         hit.as_ref(),
         &mut scene,
+        &directives,
     );
 
     // Deliver the pick to any Python `SoEventCallback`: a click at the centre.
     ferrocad_gpui::python::dispatch(
-        &scene,
+        &directives,
         &Event::MouseButton {
             position: centre,
             button: 1,

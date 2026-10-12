@@ -49,6 +49,16 @@ impl Directives {
     pub fn navicubes(&self) -> impl Iterator<Item = &NaviCubeDirective> {
         self.directives.iter().filter_map(|directive| match directive {
             Directive::NaviCube(navicube) => Some(navicube),
+            Directive::EventCallback(_) => None,
+        })
+    }
+
+    /// The active `SoEventCallback` ids, in scene order — the callback nodes the
+    /// traversal reached (an inactive `SoSwitch` branch contributes none).
+    pub fn event_callbacks(&self) -> impl Iterator<Item = u64> + '_ {
+        self.directives.iter().filter_map(|directive| match directive {
+            Directive::EventCallback(id) => Some(*id),
+            Directive::NaviCube(_) => None,
         })
     }
 }
@@ -58,6 +68,9 @@ impl Directives {
 pub enum Directive {
     /// A host-rendered navicube overlay (produced by a `SoNaviCube` node).
     NaviCube(NaviCubeDirective),
+    /// An active `SoEventCallback` node: the host routes input events to the Python
+    /// callables keyed by this id. It draws nothing.
+    EventCallback(u64),
 }
 
 /// A neutral navicube overlay request — structural only. Styling is the viewport theme's
@@ -74,4 +87,28 @@ pub struct NaviCubeDirective {
     /// Whether the overlay uses an orthographic camera (the perspective fallback is
     /// deferred).
     pub orthographic: bool,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::pixels::Rect;
+
+    #[test]
+    fn filters_navicubes_and_event_callbacks_by_variant() {
+        let mut directives = Directives::new();
+        directives.push(Directive::EventCallback(7));
+        directives.push(Directive::NaviCube(NaviCubeDirective {
+            rect: Rect::new(0, 0, 10, 10),
+            orientation: None,
+            hilite: None,
+            orthographic: true,
+        }));
+        directives.push(Directive::EventCallback(9));
+
+        assert_eq!(directives.event_callbacks().collect::<Vec<_>>(), vec![7, 9]);
+        assert_eq!(directives.navicubes().count(), 1);
+        assert_eq!(directives.len(), 3);
+        assert!(!directives.is_empty());
+    }
 }

@@ -18,7 +18,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{LazyLock, Mutex};
 use std::time::Instant;
 
-use ferrocad_inventor::{Event, Hit, NodeKind, Scene, Topology, event_callbacks};
+use ferrocad_inventor::{Directives, Event, Hit, NodeKind, Topology};
 use pyo3::prelude::*;
 
 use crate::{SoNode, SoType, derives_from, node_initializer};
@@ -244,8 +244,9 @@ static NEXT_ID: AtomicU64 = AtomicU64::new(1);
 
 /// Reacts to input events (Coin `SoEventCallback`).
 ///
-/// A node (so it can sit in the scene graph); the host finds it through
-/// [`ferrocad_inventor::event_callbacks`] and calls the registered Python
+/// A node (so it can sit in the scene graph); the compiler lifts it into a
+/// [`Directive::EventCallback`](ferrocad_inventor::Directive) beside the draw queue,
+/// and the host calls the registered Python
 /// callables, with the current event and pick available via [`getEvent`](Self::get_event)
 /// and [`getPickedPoint`](Self::get_picked_point).
 #[pyclass(extends = SoNode)]
@@ -306,19 +307,20 @@ impl SoEventCallback {
 // Dispatch
 // ---------------------------------------------------------------------------
 
-/// Dispatch `event` (with its `hit`, if any) to the active `SoEventCallback` nodes
-/// in `scene`, returning whether any callback was invoked.
+/// Dispatch `event` (with its `hit`, if any) to the active `SoEventCallback` nodes,
+/// returning whether any callback was invoked.
 ///
-/// The node carries the event and pick for the duration of each call and clears
-/// them afterwards. A callback that raises is reported and skipped, so one broken
-/// handler does not stop the rest.
+/// The active callback ids travel in the neutral [`Directives`] the last compile
+/// produced, so the host does not rescan the scene. The node carries the event and
+/// pick for the duration of each call and clears them afterwards. A callback that
+/// raises is reported and skipped, so one broken handler does not stop the rest.
 pub fn dispatch_event(
     py: Python<'_>,
-    scene: &Scene,
+    directives: &Directives,
     event: &Event,
     hit: Option<&Hit>,
 ) -> PyResult<bool> {
-    let ids = event_callbacks(scene);
+    let ids: Vec<u64> = directives.event_callbacks().collect();
     if ids.is_empty() {
         return Ok(false);
     }

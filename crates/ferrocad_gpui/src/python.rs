@@ -17,7 +17,7 @@ use pyo3::prelude::*;
 use pyo3::types::{PyAnyMethods, PyDict, PyDictMethods};
 use serde::Deserialize;
 
-use ferrocad_inventor::{Event, EventListener, Hit, Scene};
+use ferrocad_inventor::{Directives, Event, EventListener, Hit, Scene};
 
 /// The Python module the shell boots and then calls. It is the app's script, so
 /// the library ships no copy; [`configure`] sets it before boot.
@@ -383,17 +383,18 @@ pub fn inventor_scene() -> Result<Scene, String> {
     })
 }
 
-/// Dispatch an input event (with its pick) to the scene's Python `SoEventCallback`s.
+/// Dispatch an input event (with its pick) to the active Python `SoEventCallback`s.
 ///
-/// Returns whether any callback ran. The scene's callback nodes are found through
-/// [`ferrocad_inventor::event_callbacks`]; the callables live on the facade side, so
-/// the tree does not need to be re-extracted to reach them.
-pub fn dispatch(scene: &Scene, event: &Event, hit: Option<&Hit>) -> bool {
+/// Returns whether any callback ran. The active callback ids travel in the neutral
+/// [`Directives`] beside the draw queue (see `docs/directives.md`); the callables live
+/// on the facade side, so the tree does not need to be re-extracted to reach them.
+pub fn dispatch(directives: &Directives, event: &Event, hit: Option<&Hit>) -> bool {
     Python::with_gil(|py| {
-        let result = ferrocad_inventor_py::dispatch_event(py, scene, event, hit).unwrap_or_else(|e| {
-            eprintln!("ferrocad: event dispatch failed: {e}");
-            false
-        });
+        let result = ferrocad_inventor_py::dispatch_event(py, directives, event, hit)
+            .unwrap_or_else(|e| {
+                eprintln!("ferrocad: event dispatch failed: {e}");
+                false
+            });
         // A callback's `print` is block-buffered and the embedded interpreter is not
         // finalized, so flush the streams here rather than lose the output.
         flush_output(py);
@@ -420,8 +421,14 @@ pub fn flush_output(py: Python<'_>) {
 pub struct PythonEventCallbacks;
 
 impl EventListener for PythonEventCallbacks {
-    fn on_event(&mut self, event: &Event, hit: Option<&Hit>, scene: &mut Scene) -> bool {
-        let _ = dispatch(scene, event, hit);
+    fn on_event(
+        &mut self,
+        event: &Event,
+        hit: Option<&Hit>,
+        _scene: &mut Scene,
+        directives: &Directives,
+    ) -> bool {
+        let _ = dispatch(directives, event, hit);
         false
     }
 }
@@ -448,6 +455,7 @@ mod tests {
     fn dispatch_reaches_the_scripted_event_callback() {
         let _guard = crate::PYTHON_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let scene = inventor_scene().expect("build the scene from Python");
+        let (_, directives) = compile(&scene);
         let hit = Hit {
             id: ferrocad_inventor::PickId(0),
             point: [0.0, 0.0, 1.0],
@@ -462,7 +470,7 @@ mod tests {
             down: true,
         };
         assert!(
-            dispatch(&scene, &event, Some(&hit)),
+            dispatch(&directives, &event, Some(&hit)),
             "the scripted SoEventCallback should have run"
         );
     }

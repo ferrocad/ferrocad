@@ -17,7 +17,8 @@ use std::time::Duration;
 
 use ferrocad_graphics::{Camera, Hit, PickId, RenderQueue, Viewport, pick_at_hit};
 use ferrocad_inventor::{
-    Event, EventListener, ImageData, InventorView, Scene, ViewSpec, compile_with,
+    Directives, Event, EventListener, ImageData, InventorView, NaviCubeDirective, Scene, ViewSpec,
+    compile_with,
 };
 use ferrocad_stage::Stage;
 use ferrocad_stage::{
@@ -61,9 +62,16 @@ pub struct InventorViewport<V: InventorView> {
     /// The last gizmo commit, for the host to apply to the document.
     gizmo_commit: Option<GizmoCommitEvent>,
     queue: RenderQueue,
+    /// The semantic directives the last compile produced (active `SoEventCallback` ids,
+    /// navicube overlays). Invisible to the renderer; the viewport consumes them.
+    directives: Directives,
     listeners: Vec<Box<dyn EventListener>>,
     /// The navigation-cube overlay, when enabled.
     navicube: Option<NaviCube>,
+    /// Overlays built from `Directive::NaviCube` — one per directive, in scene order,
+    /// beside the Rust-constructed `navicube`. Rebuilt only when the directive set
+    /// changes (a camera move leaves it alone).
+    directive_cubes: Vec<(NaviCubeDirective, NaviCube)>,
     /// An in-progress navigation-cube orbit drag (from the first `on_drag_move`).
     navicube_drag: Option<NavicubeDrag>,
     /// An in-progress animated snap of the camera onto a cube piece.
@@ -103,8 +111,8 @@ impl<V: InventorView> InventorViewport<V> {
     /// Wrap `view`, drawing `scene` with `camera`.
     pub fn new(view: V, camera: Camera, scene: Scene) -> Self {
         let stage = Stage::new();
-        let queue = merge_queue(&scene, &stage, &camera.viewport);
-        Self {
+        let (queue, directives) = merge_queue(&scene, &stage, &camera.viewport);
+        let mut viewport = Self {
             view,
             camera,
             scene,
@@ -117,14 +125,18 @@ impl<V: InventorView> InventorViewport<V> {
             gizmo_queue: RenderQueue::default(),
             gizmo_commit: None,
             queue,
+            directives,
             listeners: Vec::new(),
             navicube: None,
+            directive_cubes: Vec::new(),
             navicube_drag: None,
             snap: None,
             hover: None,
             frame: None,
             last_bounds: None,
-        }
+        };
+        viewport.sync_directive_cubes();
+        viewport
     }
 
     /// Add a listener that reacts to pointer events (a `SoEventCallback`). Every
@@ -281,6 +293,9 @@ impl<V: InventorView> InventorViewport<V> {
         self.camera.viewport = viewport;
         self.view.resize(device);
         if let Some(cube) = self.navicube.as_mut() {
+            cube.set_viewport(viewport);
+        }
+        for (_, cube) in &mut self.directive_cubes {
             cube.set_viewport(viewport);
         }
         self.recompile();
@@ -541,11 +556,13 @@ impl<V: InventorView> InventorViewport<V> {
     /// Run the listeners on an event and recompile if any changed the scene.
     ///
     /// Every listener sees every event (an observation-only listener, like the
-    /// Python `SoEventCallback` bridge, must not stop a later one from running).
+    /// Python `SoEventCallback` bridge, must not stop a later one from running). The
+    /// listeners also receive the last compile's directives, so a Python bridge can
+    /// route the event to the active callbacks without rescanning the scene.
     fn dispatch(&mut self, event: &Event, hit: Option<&Hit>) -> bool {
         let mut changed = false;
         for listener in &mut self.listeners {
-            if listener.on_event(event, hit, &mut self.scene) {
+            if listener.on_event(event, hit, &mut self.scene, &self.directives) {
                 changed = true;
             }
         }
@@ -556,8 +573,36 @@ impl<V: InventorView> InventorViewport<V> {
     }
 
     fn recompile(&mut self) {
-        self.queue = merge_queue(&self.scene, &self.stage, &self.camera.viewport);
+        let (queue, directives) = merge_queue(&self.scene, &self.stage, &self.camera.viewport);
+        self.queue = queue;
+        self.directives = directives;
         self.stage_dirty = false;
+        self.sync_directive_cubes();
+    }
+
+    /// Rebuild the `Directive::NaviCube` overlays when the set of requests changed.
+    ///
+    /// The set is stable across camera moves, so this is usually a no-op; a scene that
+    /// adds, removes or reconfigures a `SoNaviCube` rebuilds only the affected overlays.
+    fn sync_directive_cubes(&mut self) {
+        let wanted: Vec<NaviCubeDirective> = self.directives.navicubes().copied().collect();
+        let unchanged = wanted.len() == self.directive_cubes.len()
+            && wanted
+                .iter()
+                .zip(&self.directive_cubes)
+                .all(|(directive, (current, _))| directive == current);
+        if unchanged {
+            return;
+        }
+        self.directive_cubes = wanted
+            .into_iter()
+            .map(|directive| {
+                (
+                    directive,
+                    NaviCube::from_directive(self.camera.viewport, directive),
+                )
+            })
+            .collect();
     }
 
     /// Step a running snap animation, applying the interpolated camera. Returns
@@ -587,6 +632,13 @@ impl<V: InventorView> InventorViewport<V> {
         if let Some(cube) = self.navicube.as_mut() {
             cube.sync(&self.camera);
         }
+        // A directive-driven overlay with no explicit orientation mirrors the main
+        // camera; one with an orientation is fixed (set once from the directive).
+        for (directive, cube) in &mut self.directive_cubes {
+            if directive.orientation.is_none() {
+                cube.sync(&self.camera);
+            }
+        }
 
         // The gizmo's screen-invariant scale follows the camera; rebuild when it changes.
         let gizmo_rebuilt = match self.gizmo.as_mut() {
@@ -598,8 +650,8 @@ impl<V: InventorView> InventorViewport<V> {
         }
 
         // One pass: the scene (legacy + stage) first, then the overlays (the tool's
-        // transient visuals and the gizmo, depth off and on top), then the navigation cube.
-        let mut views = Vec::with_capacity(4);
+        // transient visuals, the gizmo and the navigation cubes, depth off and on top).
+        let mut views = Vec::with_capacity(6);
         views.push(ViewSpec {
             queue: &self.queue,
             camera: &self.camera,
@@ -623,6 +675,9 @@ impl<V: InventorView> InventorViewport<V> {
             });
         }
         if let Some(cube) = self.navicube.as_ref() {
+            views.push(cube.view());
+        }
+        for (_, cube) in &self.directive_cubes {
             views.push(cube.view());
         }
 
@@ -707,12 +762,13 @@ impl<V: InventorView + 'static> Render for InventorViewport<V> {
     }
 }
 
-/// Compile the inventor scene and append the stage's batches, so the two producers
-/// share one queue (and thus one render pass and one depth buffer).
-fn merge_queue(scene: &Scene, stage: &Stage, viewport: &Viewport) -> RenderQueue {
-    let (mut queue, _directives) = compile_with(scene, viewport);
+/// Compile the inventor scene — its draw packets and its semantic directives — and
+/// append the stage's batches, so the two producers share one queue (and thus one
+/// render pass and one depth buffer).
+fn merge_queue(scene: &Scene, stage: &Stage, viewport: &Viewport) -> (RenderQueue, Directives) {
+    let (mut queue, directives) = compile_with(scene, viewport);
     stage.emit_batches(&mut queue);
-    queue
+    (queue, directives)
 }
 
 /// The navigation cube's minimum drag distance, in **logical** pixels — upstream's
@@ -851,7 +907,13 @@ mod tests {
     }
 
     impl EventListener for HoverProbe {
-        fn on_event(&mut self, _event: &Event, hit: Option<&Hit>, _scene: &mut Scene) -> bool {
+        fn on_event(
+            &mut self,
+            _event: &Event,
+            hit: Option<&Hit>,
+            _scene: &mut Scene,
+            _directives: &Directives,
+        ) -> bool {
             let next = hit.is_some();
             let changed = next != self.hovered;
             self.hovered = next;
@@ -1023,6 +1085,39 @@ mod tests {
         let viewport = InventorViewport::new(fake(ImageData::default()), camera, scene);
         assert_eq!(viewport.queue.len(), expected);
         assert_eq!(viewport.scene().root.children.len(), 3);
+    }
+
+    #[test]
+    fn a_navicube_directive_hosts_an_overlay() {
+        use ferrocad_graphics::Rect;
+
+        let camera = Camera {
+            viewport: ferrocad_graphics::Viewport::new([100, 100], 1.0),
+            ..Camera::identity()
+        };
+        let directive = NaviCubeDirective {
+            rect: Rect::new(60, 60, 40, 40),
+            orientation: None,
+            hilite: None,
+            orthographic: true,
+        };
+        let mut scene = triangle_scene();
+        scene.root.children.push(Node {
+            kind: NodeKind::NaviCube(directive),
+            children: vec![],
+        });
+
+        let mut viewport = InventorViewport::new(fake(ImageData::default()), camera, scene);
+
+        // The directive hosts exactly one overlay at its rect, with geometry of its own,
+        // while the main queue still holds only the triangle.
+        assert_eq!(viewport.directive_cubes.len(), 1);
+        assert_eq!(viewport.directive_cubes[0].1.rect(), Rect::new(60, 60, 40, 40));
+        assert!(!viewport.directive_cubes[0].1.view().queue.is_empty());
+        assert_eq!(viewport.queue.len(), 1);
+
+        // Drawing routes the overlay through the fake view without panicking.
+        viewport.refresh();
     }
 
     #[test]

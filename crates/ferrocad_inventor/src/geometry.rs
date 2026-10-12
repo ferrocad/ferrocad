@@ -15,6 +15,39 @@ pub struct Vertex {
     pub position: [f32; 3],
     /// Model-space normal.
     pub normal: [f32; 3],
+    /// Texture coordinates (`[0, 0]` when the shape has no texture).
+    pub uv: [f32; 2],
+}
+
+/// A CPU-side RGBA8 texture: the `SoTexture2` payload a shape samples.
+///
+/// The `id` is a stable identity assigned on creation, so a renderer can key its
+/// upload cache on it (and a node can be cloned — and the scene rebuilt — without
+/// re-uploading, as long as the same `Arc` is reused).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Texture2 {
+    /// A process-unique identity for the renderer's upload cache.
+    pub id: u64,
+    /// Width in pixels.
+    pub width: u32,
+    /// Height in pixels.
+    pub height: u32,
+    /// `width * height * 4` bytes, RGBA8.
+    pub rgba: Vec<u8>,
+}
+
+impl Texture2 {
+    /// Wrap RGBA8 pixels, assigning a fresh identity.
+    pub fn new(width: u32, height: u32, rgba: Vec<u8>) -> Self {
+        use std::sync::atomic::{AtomicU64, Ordering};
+        static NEXT: AtomicU64 = AtomicU64::new(1);
+        Self {
+            id: NEXT.fetch_add(1, Ordering::Relaxed),
+            width,
+            height,
+            rgba,
+        }
+    }
 }
 
 /// How a primitive's vertices are assembled.

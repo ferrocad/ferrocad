@@ -41,8 +41,8 @@ the concrete packet the compiler emits. A packet carries:
   stable scene uploads once and reuses;
 - `topology` (`Triangles`/`Lines`/`Points`);
 - `geometry: Option<Geometry>` — **present only on a cache miss**;
-- a `StateSnapshot` — `world_transform` (a `Matrix4`), `color`, `depth_bias`, `id`
-  (the `PickId`).
+- a `StateSnapshot` — `world_transform` (a `Matrix4`), `color`, `depth_bias`,
+  `texture` (an optional `Texture2`), `id` (the `PickId`).
 
 Keeping the boundary a trait (not a struct) is what lets a future D3D/Metal
 backend sit behind it without touching the node model or compiler.
@@ -119,16 +119,23 @@ The contract, matching FreeCAD (see the assessment and `InputDevice`/
   pipeline with depth off and alpha blending), `ferrocad_inventor::navicube` (the
   cube scene + ortho camera), and `ferrocad_gpui::navicube::NaviCube` +
   `InventorViewport::with_navicube` (placement, camera mirroring, hover, click-snap,
-  drag-orbit).
+  drag-orbit, the animated snap). The cube carries baked face labels and a fixed
+  `Home` button (N4b; see [`navicube.md`](navicube.md)).
 - **Line and point pipelines**, routed by `Topology` (scene and overlay variants), so
   `Topology::Lines`/`Points` packets draw correctly; **line (segment) picking**
   (`Hit` carries its `Topology` + `element`, and the facade builds a `SoLineDetail`
   for a line hit). The navigation cube's edges are lines and its corners small cubes.
+- A **texture path** (`SoTexture2` analogue): `NodeKind::Texture2` +
+  `TextureCoordinate2`, a vertex `uv`, `State.texture` (an `Arc<Texture2>`, RGBA8 with
+  a stable id), and a wgpu bind group (group 1) sampling the shape texture (a 1×1
+  white default when absent). The navigation cube's face **labels** and **Home**
+  button bake glyphs into `Texture2`s.
 
 **Not implemented**
 
 - The g-buffer pick pass (`ferrocad_wgpu::pick` is a stub); a **transparent** (order-
-  independent) pipeline; screen-space overlay **labels** (need a texture path).
+  independent) pipeline; a **text/glyph-run** node (labels exist, but as baked
+  textures, not text nodes).
 - The `pivy.coin` facade is deliberately narrow: no arena/object identity, no
   `SoPath`/`SoSearchAction`, no NumPy zero-copy or generational dirty counters, and
   no `-1` polygon delimiters (see [`inventor-plan.md`](inventor-plan.md) §8).
@@ -161,10 +168,10 @@ traversal/compile, picking/events — adapted to the code as it stands) is in
 1. **Layout-driven sizing**: an `Element` that reads its bounds ×
    `window.scale_factor()` to size the target and place the camera, making hover
    coordinates exact in a docked pane (and removing the fixed-size stretch).
-2. **Navigation-cube polish** (N4b, remaining): face labels (need a texture path),
-   a context menu, and `Home`/arrow buttons (see [`navicube.md`](navicube.md)). The
-   pieces, the overlay pass, drag-orbit, animated snap and translucent away-facing
-   faces are built.
+2. **Navigation-cube polish** (N4b, remaining): a context menu and the arrow buttons
+   (see [`navicube.md`](navicube.md)). The pieces, the overlay pass, drag-orbit, the
+   animated snap, translucent away-facing faces, baked face labels and the `Home`
+   button are built.
 3. **The g-buffer pick** and line/point pipelines.
 4. **Grow the `pivy.coin` facade** and the `TypeRegistry` toward the ~63
    registered node/kit classes and the `SoType.fromName` surface the workbenches

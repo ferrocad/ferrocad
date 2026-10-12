@@ -6,14 +6,19 @@
 //! the cube, hit-tests the corner rectangle, highlights the hovered piece, and — on a
 //! click — snaps the main camera onto that face, edge or corner.
 //!
-//! Labels, the context menu, `Home`/arrows, translucent inactive faces and animated
-//! snapping are deferred (see `docs/navicube.md` §4–§5).
+//! Labels, the context menu and the arrow buttons are deferred; the Home button, the
+//! translucent away-facing faces and the animated snap are built (see
+//! `docs/navicube.md` §4–§5).
 
 use ferrocad_inventor::{
-    Camera, NodeKind, Rect, RenderQueue, Scene, ViewSpec, Viewport, compile_with, navicube,
+    Camera, Rect, RenderQueue, Scene, ViewSpec, Viewport, compile_with, navicube,
     navicube::{Piece, PieceKind}, pick_at_rect,
 };
 use ferrocad_types::{Matrix4, Placement, Rotation, Vector3};
+
+/// A navigation target (a cube piece or the Home button), re-exported so callers of
+/// [`NaviCube::hit`] can name it.
+pub use ferrocad_inventor::navicube::NaviTarget;
 
 /// Which corner of the viewport the cube sits in.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -99,12 +104,13 @@ impl NaviCube {
         self.rebuild();
     }
 
-    /// The face, edge or corner under a device position, if it is over the cube.
-    pub fn hit(&self, device: [i32; 2]) -> Option<Piece> {
+    /// The face, edge, corner or Home button under a device position, if it is over
+    /// the cube.
+    pub fn hit(&self, device: [i32; 2]) -> Option<NaviTarget> {
         if !self.rect.contains(device) {
             return None;
         }
-        pick_at_rect(&self.queue, &self.camera, self.rect, device).and_then(Piece::from_pick_id)
+        pick_at_rect(&self.queue, &self.camera, self.rect, device).and_then(NaviTarget::from_pick_id)
     }
 
     /// Highlight `piece` (or clear), rebuilding the scene when the highlight changes.
@@ -124,7 +130,7 @@ impl NaviCube {
         let away = self.away_faces();
         self.scene = navicube::scene_with(self.hilite, &away);
         if let Some(rotation) = self.synced {
-            self.apply_rotation(rotation);
+            navicube::set_orientation(&mut self.scene, rotation);
         }
         self.recompile();
     }
@@ -144,15 +150,17 @@ impl NaviCube {
             .collect()
     }
 
-    fn apply_rotation(&mut self, rotation: Rotation) {
-        if let Some(node) = self.scene.root.children.first_mut() {
-            node.kind = NodeKind::Transform(Placement::new(Vector3::zero(), rotation));
-        }
-    }
-
     fn recompile(&mut self) {
         self.queue = compile_with(&self.scene, &self.viewport);
     }
+}
+
+/// The default "home" orientation the Home button snaps to: an axonometric view with the
+/// front-top-right corner toward the viewer. Upstream's Home restores the configurable
+/// `NewDocumentCameraOrientation` (default `Top`); a fixed default keeps this build
+/// self-contained.
+pub fn home_orientation() -> Rotation {
+    Piece { axes: [1, 1, 1] }.orientation()
 }
 
 /// The main-camera **view matrix** that snaps the view onto `piece`, keeping the
@@ -231,9 +239,15 @@ pub struct SnapAnimation {
 impl SnapAnimation {
     /// Begin a snap from `main`'s current orientation onto `piece`.
     pub fn begin(piece: Piece, main: &Camera, duration: std::time::Duration) -> Self {
+        Self::to(piece.orientation(), main, duration)
+    }
+
+    /// Begin a snap from `main`'s current orientation onto the target `end` rotation
+    /// (e.g. the Home button's [`home_orientation`]).
+    pub fn to(end: Rotation, main: &Camera, duration: std::time::Duration) -> Self {
         Self {
             start: Rotation::from_matrix(&main.view),
-            end: piece.orientation(),
+            end,
             base: Vector3::new(main.view.m[3], main.view.m[7], main.view.m[11]),
             start_time: std::time::Instant::now(),
             duration,
@@ -325,7 +339,7 @@ mod tests {
         let mut cube = NaviCube::new(viewport());
         // With the default (identity) camera orientation, Front faces the viewer.
         cube.sync(&Camera::identity());
-        assert_eq!(cube.hit(centre(&cube)), Some(Piece::FRONT));
+        assert_eq!(cube.hit(centre(&cube)), Some(NaviTarget::Piece(Piece::FRONT)));
         // Outside the rectangle there is no hit.
         assert_eq!(cube.hit([5, 5]), None);
     }
@@ -344,12 +358,36 @@ mod tests {
                     rect.x + rect.width as i32 * i / 12,
                     rect.y + rect.height as i32 * j / 12,
                 ];
-                if cube.hit(probe) == Some(Piece { axes: [1, 1, 1] }) {
+                if cube.hit(probe) == Some(NaviTarget::Piece(Piece { axes: [1, 1, 1] })) {
                     found = Some(probe);
                 }
             }
         }
         assert!(found.is_some(), "a corner piece should be clickable");
+    }
+
+    #[test]
+    fn the_home_button_is_hit_below_the_cube() {
+        let cube = NaviCube::new(viewport());
+        let rect = cube.rect();
+        let mut found = None;
+        for i in 0..24 {
+            for j in 0..24 {
+                let probe = [
+                    rect.x + rect.width as i32 * i / 24,
+                    rect.y + rect.height as i32 * j / 24,
+                ];
+                if cube.hit(probe) == Some(NaviTarget::Home) {
+                    found = Some(probe);
+                }
+            }
+        }
+        let probe = found.expect("the Home button should be clickable");
+        // Device y is bottom-left origin, so "below the cube" is a lower y.
+        assert!(
+            probe[1] < rect.y + rect.height as i32 / 2,
+            "Home sits below the cube's centre"
+        );
     }
 
     #[test]
@@ -380,14 +418,14 @@ mod tests {
             ..Camera::identity()
         };
         cube.sync(&camera);
-        assert_eq!(cube.hit(centre(&cube)), Some(Piece::RIGHT));
+        assert_eq!(cube.hit(centre(&cube)), Some(NaviTarget::Piece(Piece::RIGHT)));
 
         // Snapping back to Front and re-syncing turns the Front face to the viewer.
         cube.sync(&Camera {
             view: snap_view(Piece::FRONT, &Camera::identity()),
             ..Camera::identity()
         });
-        assert_eq!(cube.hit(centre(&cube)), Some(Piece::FRONT));
+        assert_eq!(cube.hit(centre(&cube)), Some(NaviTarget::Piece(Piece::FRONT)));
     }
 
     #[test]

@@ -26,7 +26,7 @@ use gpui::{
 };
 use image::{Frame, ImageBuffer, Rgba};
 
-use crate::navicube::{NaviCube, SnapAnimation};
+use crate::navicube::{NaviCube, NaviTarget, SnapAnimation};
 
 /// A gpui view that presents an [`InventorView`] (image path) and routes pointer
 /// events into the scene.
@@ -130,9 +130,12 @@ impl<V: InventorView> InventorViewport<V> {
         let mut changed = false;
         if let Some(cube) = self.navicube.as_mut() {
             if cube.rect().contains(device) {
-                let face = cube.hit(device);
+                let piece = match cube.hit(device) {
+                    Some(NaviTarget::Piece(piece)) => Some(piece),
+                    _ => None,
+                };
                 self.hover = None;
-                return cube.set_hilite(face);
+                return cube.set_hilite(piece);
             }
             changed = cube.set_hilite(None);
         }
@@ -157,13 +160,14 @@ impl<V: InventorView> InventorViewport<V> {
             if down {
                 return false; // the orbit starts on the first drag-move
             }
-            if let Some(piece) = self.navicube.as_ref().and_then(|cube| cube.hit(device)) {
-                // Animate the snap rather than jumping.
-                self.snap = Some(SnapAnimation::begin(
-                    piece,
-                    &self.camera,
-                    Duration::from_millis(220),
-                ));
+            if let Some(target) = self.navicube.as_ref().and_then(|cube| cube.hit(device)) {
+                // Animate the snap rather than jumping: a piece snaps onto its face,
+                // edge or corner; the Home button restores the default orientation.
+                let end = match target {
+                    NaviTarget::Piece(piece) => piece.orientation(),
+                    NaviTarget::Home => crate::navicube::home_orientation(),
+                };
+                self.snap = Some(SnapAnimation::to(end, &self.camera, Duration::from_millis(220)));
                 return true;
             }
             return false;

@@ -32,13 +32,14 @@ pub struct ScenePipelines {
 }
 
 impl ScenePipelines {
-    /// Build the pipelines for `color_format`, using `uniforms` as the only bind
-    /// group (binding 0, dynamic offset). `sample_count` must match the render
+    /// Build the pipelines for `color_format`, using `uniforms` (group 0) and
+    /// `textures` (group 1) as bind groups. `sample_count` must match the render
     /// target's (multisampling for anti-aliasing).
     pub fn new(
         device: &wgpu::Device,
         color_format: wgpu::TextureFormat,
         uniforms: &wgpu::BindGroupLayout,
+        textures: &wgpu::BindGroupLayout,
         sample_count: u32,
     ) -> Self {
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
@@ -48,11 +49,11 @@ impl ScenePipelines {
 
         let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("ferrocad scene"),
-            bind_group_layouts: &[Some(uniforms)],
+            bind_group_layouts: &[Some(uniforms), Some(textures)],
             immediate_size: 0,
         });
 
-        let attributes = wgpu::vertex_attr_array![0 => Float32x3, 1 => Float32x3];
+        let attributes = wgpu::vertex_attr_array![0 => Float32x3, 1 => Float32x3, 2 => Float32x2];
         let vertex_buffers = [wgpu::VertexBufferLayout {
             array_stride: size_of::<GpuVertex>() as u64,
             step_mode: wgpu::VertexStepMode::Vertex,

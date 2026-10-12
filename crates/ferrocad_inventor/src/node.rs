@@ -5,9 +5,11 @@
 //! lives in [`state`](crate::state) and [`compile`](crate::compile), and the
 //! Python-facing constructors live in `ferrocad_inventor_py`.
 
+use std::sync::Arc;
+
 use ferrocad_types::Placement;
 
-use crate::geometry::Topology;
+use crate::geometry::{Texture2, Topology};
 
 /// A scene: a root node. The compiler walks this to produce a render queue.
 #[derive(Clone, Debug, Default)]
@@ -38,6 +40,10 @@ pub enum NodeKind {
     },
     /// Vertex positions for the following shape (`SoCoordinate3`).
     Coordinate3(Vec<[f32; 3]>),
+    /// Texture coordinates for the following shape (`SoTextureCoordinate2`).
+    TextureCoordinate2(Vec<[f32; 2]>),
+    /// The texture for the following shapes (`SoTexture2`).
+    Texture2(Arc<Texture2>),
     /// Vertex normals for the following shape (`SoNormal`).
     ///
     /// Stored for round-tripping: the compiler flat-shades today and does not

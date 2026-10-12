@@ -32,6 +32,7 @@ pub mod context;
 pub mod pick;
 pub mod pipeline;
 pub mod renderer;
+pub mod textures;
 pub mod uniforms;
 
 pub use context::GpuContext;

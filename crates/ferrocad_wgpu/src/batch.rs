@@ -19,6 +19,8 @@ pub struct GpuVertex {
     pub position: [f32; 3],
     /// Model-space normal.
     pub normal: [f32; 3],
+    /// Texture coordinates.
+    pub uv: [f32; 2],
 }
 
 impl From<&ferrocad_inventor::Vertex> for GpuVertex {
@@ -26,6 +28,7 @@ impl From<&ferrocad_inventor::Vertex> for GpuVertex {
         Self {
             position: v.position,
             normal: v.normal,
+            uv: v.uv,
         }
     }
 }

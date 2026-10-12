@@ -6,9 +6,12 @@
 //! traversal in [`compile`](crate::compile) advances it, and [`StateSnapshot`] is
 //! the frozen result bound to a [`DrawPacket`](crate::DrawPacket).
 
+use std::sync::Arc;
+
 use ferrocad_types::Matrix4;
 
 use crate::batch::PickId;
+use crate::geometry::Texture2;
 
 /// The inherited state at a point in the scene graph, as the traversal advances it.
 #[derive(Clone, Debug)]
@@ -22,6 +25,8 @@ pub struct State {
     pub color: [f32; 4],
     /// Depth bias for the following shapes (`SoPolygonOffset`).
     pub depth_bias: f32,
+    /// The texture bound for the following shapes (`SoTexture2`).
+    pub texture: Option<Arc<Texture2>>,
     /// The selection identity of the shape being traversed.
     pub id: PickId,
     /// Device pixels per logical pixel (the display scale factor).
@@ -40,6 +45,7 @@ impl Default for State {
             transform: Matrix4::identity(),
             color: [1.0, 1.0, 1.0, 1.0],
             depth_bias: 0.0,
+            texture: None,
             id: PickId::default(),
             device_pixel_ratio: 1.0,
             visible: true,
@@ -56,13 +62,14 @@ impl State {
             world_transform: self.transform,
             color: self.color,
             depth_bias: self.depth_bias,
+            texture: self.texture.clone(),
             id: self.id,
         }
     }
 }
 
 /// The resolved traversal state bound to a draw, independent of the node model.
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Debug)]
 pub struct StateSnapshot {
     /// The world transform to apply to the mesh.
     pub world_transform: Matrix4,
@@ -70,6 +77,8 @@ pub struct StateSnapshot {
     pub color: [f32; 4],
     /// Depth bias applied before rasterisation.
     pub depth_bias: f32,
+    /// The texture to sample, if any (multiplied into the colour).
+    pub texture: Option<Arc<Texture2>>,
     /// Selection identity, written to the picking buffer.
     pub id: PickId,
 }

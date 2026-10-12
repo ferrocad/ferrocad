@@ -24,6 +24,7 @@ use ferrocad_types::Matrix4;
 use crate::batch::GpuMesh;
 use crate::context::GpuContext;
 use crate::pipeline::{self, ScenePipelines};
+use crate::textures;
 use crate::uniforms::{self, DynamicUniforms, UniformData};
 
 /// What can go wrong while creating a device, encoding, or reading back a frame.
@@ -115,7 +116,12 @@ pub struct WgpuRenderer {
     targets: Targets,
     size: [u32; 2],
     uniform_layout: wgpu::BindGroupLayout,
+    textures_layout: wgpu::BindGroupLayout,
     uniforms: DynamicUniforms,
+    /// Bound by shapes with no texture.
+    default_texture: wgpu::BindGroup,
+    /// Uploaded textures, keyed on the `Texture2` id.
+    texture_cache: HashMap<u64, (wgpu::Texture, wgpu::BindGroup)>,
     pipelines: ScenePipelines,
     /// Uploaded meshes, keyed on `(mesh_id, generation)`.
     mesh_cache: HashMap<(MeshId, Generation), GpuMesh>,
@@ -134,6 +140,9 @@ impl WgpuRenderer {
         let size = clamp_size(size);
         let targets = Targets::new(&context.device, size, sample_count);
         let uniform_layout = uniforms::layout(&context.device);
+        let textures_layout = textures::layout(&context.device);
+        let (_, default_texture) =
+            textures::default_texture(&context.device, &context.queue, &textures_layout);
         let uniforms = DynamicUniforms::new(
             &context.device,
             &uniform_layout,
@@ -144,6 +153,7 @@ impl WgpuRenderer {
             &context.device,
             TARGET_FORMAT,
             &uniform_layout,
+            &textures_layout,
             targets.sample_count,
         );
         Self {
@@ -151,7 +161,10 @@ impl WgpuRenderer {
             targets,
             size,
             uniform_layout,
+            textures_layout,
             uniforms,
+            default_texture,
+            texture_cache: HashMap::new(),
             pipelines,
             mesh_cache: HashMap::new(),
         }
@@ -232,6 +245,7 @@ impl WgpuRenderer {
                 }
             }
         }
+        self.ensure_textures(batches);
 
         let view_proj = mat4_to_wgsl(&camera.view_projection());
         for (index, batch) in batches.iter().enumerate() {
@@ -296,6 +310,7 @@ impl WgpuRenderer {
                     &self.uniforms.bind_group,
                     &[self.uniforms.offset(index as u32)],
                 );
+                pass.set_bind_group(1, self.texture_bind_group(batch), &[]);
                 pass.set_vertex_buffer(0, mesh.vertex_buffer.slice(..));
                 pass.set_index_buffer(mesh.index_buffer.slice(..), wgpu::IndexFormat::Uint32);
                 pass.draw_indexed(0..mesh.index_count, 0, 0..1);
@@ -327,6 +342,7 @@ impl WgpuRenderer {
         // (in view order) with that view's view-projection.
         for view in views {
             self.upload_packets(&view.queue.packets);
+            self.ensure_textures(&view.queue.packets);
         }
         let mut slot = 0u32;
         for view in views {
@@ -407,6 +423,7 @@ impl WgpuRenderer {
                             &self.uniforms.bind_group,
                             &[self.uniforms.offset(slot)],
                         );
+                        pass.set_bind_group(1, self.texture_bind_group(batch), &[]);
                         pass.set_vertex_buffer(0, mesh.vertex_buffer.slice(..));
                         pass.set_index_buffer(mesh.index_buffer.slice(..), wgpu::IndexFormat::Uint32);
                         pass.draw_indexed(0..mesh.index_count, 0, 0..1);
@@ -442,6 +459,34 @@ impl WgpuRenderer {
                 }
             }
         }
+    }
+
+    /// Upload any texture a batch names that is not already cached (keyed on its id).
+    fn ensure_textures<B: DrawBatch>(&mut self, batches: &[B]) {
+        for batch in batches {
+            if let Some(texture) = batch.state().texture.as_ref() {
+                if !self.texture_cache.contains_key(&texture.id) {
+                    let entry = textures::upload_texture2(
+                        &self.context.device,
+                        &self.context.queue,
+                        &self.textures_layout,
+                        texture,
+                    );
+                    self.texture_cache.insert(texture.id, entry);
+                }
+            }
+        }
+    }
+
+    /// The texture bind group (group 1) for a batch: its texture, or the white default.
+    fn texture_bind_group<B: DrawBatch>(&self, batch: &B) -> &wgpu::BindGroup {
+        batch
+            .state()
+            .texture
+            .as_ref()
+            .and_then(|texture| self.texture_cache.get(&texture.id))
+            .map(|(_, group)| group)
+            .unwrap_or(&self.default_texture)
     }
 
     /// Read `texture` back into RGBA8, stripping the row padding wgpu requires.

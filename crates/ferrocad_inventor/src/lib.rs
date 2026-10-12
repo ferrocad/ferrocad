@@ -56,7 +56,7 @@ pub use batch::{DrawBatch, DrawPacket, Generation, MeshId, PickId, RenderQueue};
 pub use camera::Camera;
 pub use compile::{compile, compile_with};
 pub use event::{Event, EventListener, event_callbacks};
-pub use geometry::{Geometry, Topology, Vertex};
+pub use geometry::{Geometry, Texture2, Topology, Vertex};
 pub use node::{Node, NodeKind, Scene, SO_SWITCH_ALL, SO_SWITCH_NONE};
 pub use pick::{Hit, Ray, pick, pick_at, pick_at_hit, pick_at_rect, pick_at_rect_hit, pick_hit};
 pub use pixels::{Rect, Viewport};

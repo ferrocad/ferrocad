@@ -45,7 +45,14 @@ pub fn compile_with(scene: &Scene, viewport: &Viewport) -> RenderQueue {
         packets: Vec::new(),
     };
     let mut coordinates = Vec::new();
-    walk_children(&scene.root.children, &state, &mut coordinates, &mut ctx);
+    let mut tex_coords = Vec::new();
+    walk_children(
+        &scene.root.children,
+        &state,
+        &mut coordinates,
+        &mut tex_coords,
+        &mut ctx,
+    );
     RenderQueue {
         packets: ctx.packets,
     }
@@ -56,22 +63,25 @@ struct Compiler {
     packets: Vec<DrawPacket>,
 }
 
-/// Walk a list of siblings in order, threading `state` and `coordinates` forward
-/// across them (so a field node affects the siblings that follow it).
+/// Walk a list of siblings in order, threading `state` and the coordinate/texture
+/// buffers forward across them (so a field node affects the siblings that follow it).
 fn walk_children(
     children: &[Node],
     state: &State,
     coordinates: &mut Vec<[f32; 3]>,
+    tex_coords: &mut Vec<[f32; 2]>,
     ctx: &mut Compiler,
 ) {
     let mut state = state.clone();
     for child in children {
         match &child.kind {
-            // A separator isolates fields (and the coordinate field) to its subtree.
+            // A separator isolates fields (and the coordinate fields) to its subtree.
             NodeKind::Separator => {
-                let saved = std::mem::take(coordinates);
-                walk_children(&child.children, &state, coordinates, ctx);
-                *coordinates = saved;
+                let saved_coords = std::mem::take(coordinates);
+                let saved_uv = std::mem::take(tex_coords);
+                walk_children(&child.children, &state, coordinates, tex_coords, ctx);
+                *coordinates = saved_coords;
+                *tex_coords = saved_uv;
             }
             NodeKind::Transform(placement) => {
                 state.transform = state.transform.mul(&placement.to_matrix());
@@ -86,6 +96,12 @@ fn walk_children(
             NodeKind::Coordinate3(points) => {
                 *coordinates = points.clone();
             }
+            NodeKind::TextureCoordinate2(uv) => {
+                *tex_coords = uv.clone();
+            }
+            NodeKind::Texture2(texture) => {
+                state.texture = Some(texture.clone());
+            }
             // A selection id applies to the shapes that follow it.
             NodeKind::PickId(id) => {
                 state.id = PickId(*id);
@@ -97,19 +113,25 @@ fn walk_children(
             // selected child(ren) inherit (and may leak) the current state.
             NodeKind::Switch { which } => match *which {
                 SO_SWITCH_ALL => {
-                    walk_children(&child.children, &state, coordinates, ctx);
+                    walk_children(&child.children, &state, coordinates, tex_coords, ctx);
                 }
                 n if n < 0 => {}
                 n => {
                     if let Some(active) = child.children.get(n as usize) {
-                        walk_children(std::slice::from_ref(active), &state, coordinates, ctx);
+                        walk_children(
+                            std::slice::from_ref(active),
+                            &state,
+                            coordinates,
+                            tex_coords,
+                            ctx,
+                        );
                     }
                 }
             },
             NodeKind::Mesh {
                 indices, topology, ..
             } => {
-                if let Some(geometry) = build_geometry(coordinates, indices, *topology) {
+                if let Some(geometry) = build_geometry(coordinates, tex_coords, indices, *topology) {
                     let mesh_id = MeshId(ctx.next_mesh);
                     ctx.next_mesh += 1;
                     ctx.packets.push(DrawPacket {
@@ -132,6 +154,7 @@ fn walk_children(
 /// Flatten coordinates + indices into flat-shaded vertices (one normal per face).
 fn build_geometry(
     coordinates: &[[f32; 3]],
+    tex_coords: &[[f32; 2]],
     indices: &[u32],
     topology: Topology,
 ) -> Option<Geometry> {
@@ -161,8 +184,12 @@ fn build_geometry(
         };
         for &index in face {
             let position = *coordinates.get(index as usize)?;
+            let uv = tex_coords
+                .get(index as usize)
+                .copied()
+                .unwrap_or([0.0, 0.0]);
             indices_out.push(vertices.len() as u32);
-            vertices.push(Vertex { position, normal });
+            vertices.push(Vertex { position, normal, uv });
         }
     }
 

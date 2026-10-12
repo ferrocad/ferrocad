@@ -26,9 +26,9 @@ use ferrocad_stage::{
 };
 use ferrocad_types::Matrix4;
 use gpui::{
-    AnyElement, AppContext, Context, DragMoveEvent, IntoElement, MouseButton, MouseDownEvent,
-    MouseExitEvent, MouseMoveEvent, MouseUpEvent, ObjectFit, Render, RenderImage, Window, div, img,
-    prelude::*,
+    AnyElement, AppContext, Bounds, Context, DragMoveEvent, IntoElement, MouseButton, MouseDownEvent,
+    MouseExitEvent, MouseMoveEvent, MouseUpEvent, ObjectFit, Pixels, Point, Render, RenderImage,
+    Window, div, img, prelude::*,
 };
 use image::{Frame, ImageBuffer, Rgba};
 
@@ -71,6 +71,10 @@ pub struct InventorViewport<V: InventorView> {
     /// The object currently under the pointer.
     hover: Option<PickId>,
     frame: Option<Arc<RenderImage>>,
+    /// The element's window-space bounds, captured at prepaint. gpui reports pointer
+    /// positions relative to the **window**, so this is subtracted to make them
+    /// viewport-local (see [`to_local`](Self::to_local)).
+    last_bounds: Option<Bounds<Pixels>>,
 }
 
 /// A navigation-cube orbit drag in progress.
@@ -119,6 +123,7 @@ impl<V: InventorView> InventorViewport<V> {
             snap: None,
             hover: None,
             frame: None,
+            last_bounds: None,
         }
     }
 
@@ -226,7 +231,25 @@ impl<V: InventorView> InventorViewport<V> {
         self.hover
     }
 
-    /// Deliver a pointer move, in **logical** window coordinates (top-left origin).
+    /// Convert a **window-relative** logical point (what gpui reports to an element's
+    /// mouse listeners) into a **viewport-local** logical point, by subtracting the
+    /// element's window-space origin captured at prepaint.
+    ///
+    /// Everything below the host — [`handle_pointer`](Self::handle_pointer), picking and
+    /// the camera's [`Viewport`] — works in viewport-local coordinates, so this runs at
+    /// the gpui boundary. Before the first prepaint (no bounds yet) the point is passed
+    /// through unchanged.
+    pub(crate) fn to_local(&self, position: Point<Pixels>) -> [f32; 2] {
+        match self.last_bounds {
+            Some(bounds) => [
+                (position.x - bounds.origin.x).0,
+                (position.y - bounds.origin.y).0,
+            ],
+            None => [position.x.0, position.y.0],
+        }
+    }
+
+    /// Deliver a pointer move, in **viewport-local logical** pixels (top-left origin).
     ///
     /// Over the navigation cube this hovers its faces; over the gizmo it drags or
     /// hovers a handle; over the scene it picks the main scene. Returns whether the
@@ -272,7 +295,7 @@ impl<V: InventorView> InventorViewport<V> {
         changed | self.pick_main(device)
     }
 
-    /// Deliver a mouse-button change, in **logical** window coordinates.
+    /// Deliver a mouse-button change, in **viewport-local logical** pixels.
     ///
     /// A press on the cube begins a possible orbit drag; a release that did not orbit
     /// snaps the main camera onto the piece under the pointer. Otherwise the event
@@ -579,30 +602,33 @@ impl<V: InventorView + 'static> Render for InventorViewport<V> {
             None => div().w_full().h_full().into_any_element(),
         };
 
+        let entity = cx.entity();
         div()
             .w_full()
             .h_full()
+            // Record the element's window-space bounds each frame, so the window-relative
+            // positions gpui reports can be made viewport-local (see `to_local`).
+            .on_children_prepainted(move |bounds: Vec<Bounds<Pixels>>, _window, cx| {
+                if let Some(bounds) = bounds.first().copied() {
+                    entity.update(cx, |this, _cx| this.last_bounds = Some(bounds));
+                }
+            })
             .id("ferrocad-inventor-viewport")
             .on_mouse_move(cx.listener(|this, event: &MouseMoveEvent, _window, cx| {
-                if this.handle_pointer([event.position.x.0, event.position.y.0]) {
+                let local = this.to_local(event.position);
+                if this.handle_pointer(local) {
                     cx.notify();
                 }
             }))
             .on_any_mouse_down(cx.listener(|this, event: &MouseDownEvent, _window, cx| {
-                if this.handle_button(
-                    [event.position.x.0, event.position.y.0],
-                    mouse_button(event.button),
-                    true,
-                ) {
+                let local = this.to_local(event.position);
+                if this.handle_button(local, mouse_button(event.button), true) {
                     cx.notify();
                 }
             }))
             .capture_any_mouse_up(cx.listener(|this, event: &MouseUpEvent, _window, cx| {
-                if this.handle_button(
-                    [event.position.x.0, event.position.y.0],
-                    mouse_button(event.button),
-                    false,
-                ) {
+                let local = this.to_local(event.position);
+                if this.handle_button(local, mouse_button(event.button), false) {
                     cx.notify();
                 }
             }))
@@ -611,7 +637,7 @@ impl<V: InventorView + 'static> Render for InventorViewport<V> {
             })
             .on_drag_move::<NavicubeDragMarker>(cx.listener(
                 |this, event: &DragMoveEvent<NavicubeDragMarker>, _window, cx| {
-                    let position = [event.event.position.x.0, event.event.position.y.0];
+                    let position = this.to_local(event.event.position);
                     if this.navicube_drag_move(position) {
                         cx.notify();
                     }
@@ -675,6 +701,7 @@ mod tests {
     use super::*;
     use ferrocad_graphics::Topology;
     use ferrocad_inventor::{Node, NodeKind, compile_with};
+    use gpui::{Bounds, point, px, size};
 
     /// A view that returns fixed pixels, so the gpui side needs no GPU.
     struct FakeView {
@@ -777,6 +804,28 @@ mod tests {
         assert_eq!(viewport.hovered(), None);
         // Leaving is a no-op once nothing is hovered.
         assert!(!viewport.handle_pointer_leave());
+    }
+
+    #[test]
+    fn to_local_subtracts_the_element_window_origin() {
+        let camera = Camera {
+            viewport: ferrocad_graphics::Viewport::new([100, 100], 1.0),
+            ..Camera::identity()
+        };
+        let mut viewport =
+            InventorViewport::new(fake(ImageData::default()), camera, triangle_scene());
+
+        // gpui reports window-relative positions; with the element at window (80, 40) a
+        // report of (100, 60) is element-local (20, 20).
+        viewport.last_bounds = Some(Bounds::new(
+            point(px(80.0), px(40.0)),
+            size(px(640.0), px(480.0)),
+        ));
+        assert_eq!(viewport.to_local(point(px(100.0), px(60.0))), [20.0, 20.0]);
+
+        // Before the first prepaint there is no origin; pass the point through.
+        viewport.last_bounds = None;
+        assert_eq!(viewport.to_local(point(px(100.0), px(60.0))), [100.0, 60.0]);
     }
 
     /// A view with a hardware pick path: it reports id `42` wherever there is a queue to

@@ -93,8 +93,19 @@ The contract, matching FreeCAD (see the assessment and `InputDevice`/
   positions to Python, exactly as pivy does under FreeCAD (verified: workbench
   code such as `Sketcher`'s `viewport_to_qpoint` divides by the ratio to reach a
   Qt logical point).
+- **The host converts window → element → device.** gpui reports a pointer position
+  **relative to the window** (`MouseMoveEvent.position` is documented "on the window";
+  the platform layer divides the physical position by the scale factor, so it is
+  **logical** pixels). `InventorViewport` subtracts its own window-space origin —
+  captured each frame at prepaint via `on_children_prepainted` — to get a
+  **viewport-local** logical point before `Viewport::to_device` yields device pixels.
+  Every `handle_pointer`/`handle_button` caller passes viewport-local coordinates.
 - The render target is sized in physical pixels; MSAA (4× by default) resolves
-  into the single-sampled target that is read back or shared.
+  into the single-sampled target that is read back or shared. **MVP caveat:** the
+  target is still the fixed size chosen when the viewport was created (`640×480`),
+  not the element's physical bounds — so the image is stretched to the pane and the
+  pick scale does not yet follow a resize. Driving the target (and the camera's
+  [`Viewport`]) from the element bounds is the next step.
 
 ## 5. What is implemented vs not
 

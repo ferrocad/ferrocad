@@ -141,9 +141,11 @@ in `HILITE_COLOR`; a click **animates** the main camera onto that piece
 (`SnapAnimation` + `navicube::slerp`), a drag **orbits** it (`navicube::drag_view`),
 keeping the camera distance. Away-facing faces are drawn first, translucent, so the
 cube reads as a solid-but-see-through box. Every face carries a baked **label** (a
-letter texture, `SoTexture2`-style) and a fixed **Home** button sits below the cube
-(outside the rotating subtree, so it does not turn) and snaps the view to the default
-axonometric orientation. The overlay is drawn in one pass.
+letter texture, `SoTexture2`-style), oriented from the face's *snap* rotation
+([`Piece::orientation`]) so it reads upright when that face turns to the viewer; a
+fixed **Home** button sits below the cube (outside the rotating subtree, so it does
+not turn) and snaps the view to the default axonometric orientation. The overlay is
+drawn in one pass.
 
 **Pieces:** `Piece` is the signed axis direction (1/2/3 non-zero components);
 `Piece::ALL` orders 6 faces (ids 1–6), 12 edges (7–18) and 8 corners (19–26). Faces

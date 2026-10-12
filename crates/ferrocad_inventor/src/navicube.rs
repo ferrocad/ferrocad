@@ -247,26 +247,17 @@ impl Piece {
         Rotation::from_vectors(self.direction(), Vector3::new(0.0, 0.0, 1.0))
     }
 
-    /// The index of the single non-zero axis (for faces).
-    fn axis(self) -> usize {
-        (0..3)
-            .find(|&i| self.axes[i] != 0)
-            .expect("a piece has at least one axis")
-    }
-
     /// The four corners of a face's (inset) quad, wound so the flat normal points
     /// outward. Only valid for [`PieceKind::Face`].
+    ///
+    /// The in-plane axes come from [`orientation`](Self::orientation) — the *same*
+    /// rotation the camera takes when it snaps onto this face — so the baked label
+    /// reads upright exactly when the face is turned to the viewer: `u` (the letter's
+    /// right) is the world direction that maps to view +X and `v` (its up) to view +Y.
     fn quad(self) -> Vec<[f32; 3]> {
-        let x = Vector3::new(1.0, 0.0, 0.0);
-        let y = Vector3::new(0.0, 1.0, 0.0);
-        let z = Vector3::new(0.0, 0.0, 1.0);
-        let sign = f64::from(self.axes[self.axis()]);
-        // In-plane axes (u, v) with u × v = the face normal.
-        let (u, v) = match self.axis() {
-            0 => (y, z.scale(sign)),
-            1 => (z, x.scale(sign)),
-            _ => (x, y.scale(sign)),
-        };
+        let inverse = self.orientation().inverse().to_matrix();
+        let u = inverse.transform(&Vector3::new(1.0, 0.0, 0.0));
+        let v = inverse.transform(&Vector3::new(0.0, 1.0, 0.0));
         let center = self.direction().scale(CUBE_HALF);
         let corner = |su: f64, sv: f64| {
             let p = center
@@ -550,6 +541,31 @@ mod tests {
             assert!(
                 rotated.sub(&Vector3::new(0.0, 0.0, 1.0)).length() < 1e-9,
                 "{piece:?} maps to {rotated:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn face_labels_are_upright_in_the_snapped_view() {
+        let v = |p: [f32; 3]| Vector3::new(f64::from(p[0]), f64::from(p[1]), f64::from(p[2]));
+        for piece in Piece::ALL.iter().filter(|p| p.kind() == PieceKind::Face) {
+            let rotation = piece.orientation().to_matrix();
+            let quad = piece.quad();
+            // Vertex order is (su, sv) = (-1,-1), (1,-1), (1,1), (-1,1): +u runs v0 -> v1
+            // (the letter's right) and +v runs v0 -> v3 (the letter's up).
+            let right = v(quad[1]).sub(&v(quad[0])).normalize();
+            let up = v(quad[3]).sub(&v(quad[0])).normalize();
+            // In the view that snaps onto this face, its right lands on +X and its up on
+            // +Y — i.e. the label reads upright.
+            let right_view = rotation.transform(&right);
+            let up_view = rotation.transform(&up);
+            assert!(
+                right_view.sub(&Vector3::new(1.0, 0.0, 0.0)).length() < 1e-9,
+                "{piece:?} right -> {right_view:?}"
+            );
+            assert!(
+                up_view.sub(&Vector3::new(0.0, 1.0, 0.0)).length() < 1e-9,
+                "{piece:?} up -> {up_view:?}"
             );
         }
     }

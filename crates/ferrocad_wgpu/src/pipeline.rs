@@ -4,6 +4,11 @@
 //! (triangle/line/point) and by **depth behaviour**: the scene pipelines write depth
 //! and compare `Less`, while the **overlay** pipelines (the navigation cube) write no
 //! depth, compare `Always`, and alpha-blend, so they draw on top of the scene.
+//!
+//! The **surface** (triangle) pipeline additionally carries a slope/constant depth bias,
+//! pushing shaded faces slightly away from the camera so a coplanar edge wireframe (CAD's
+//! shaded-with-edges) renders cleanly on top instead of z-fighting. The line and point
+//! pipelines keep a zero bias.
 
 use std::mem::size_of;
 
@@ -60,10 +65,18 @@ impl ScenePipelines {
             attributes: &attributes,
         }];
 
+        // Push shaded surfaces slightly away from the camera, so a coplanar edge
+        // wireframe wins the depth test (CAD's shaded-with-edges, without z-fighting).
+        let surface_bias = wgpu::DepthBiasState {
+            constant: 1,
+            slope_scale: 1.0,
+            clamp: 0.0,
+        };
         let make = |label: &str,
                     topology: wgpu::PrimitiveTopology,
                     overlay: bool,
-                    blend: wgpu::BlendState| {
+                    blend: wgpu::BlendState,
+                    bias: wgpu::DepthBiasState| {
             let (depth_write_enabled, depth_compare) = if overlay {
                 (false, wgpu::CompareFunction::Always)
             } else {
@@ -87,7 +100,7 @@ impl ScenePipelines {
                     depth_write_enabled: Some(depth_write_enabled),
                     depth_compare: Some(depth_compare),
                     stencil: wgpu::StencilState::default(),
-                    bias: wgpu::DepthBiasState::default(),
+                    bias,
                 }),
                 multisample: wgpu::MultisampleState {
                     count: sample_count,
@@ -110,42 +123,49 @@ impl ScenePipelines {
         };
 
         let scene = wgpu::BlendState::REPLACE;
+        let none = wgpu::DepthBiasState::default();
         Self {
             opaque: make(
                 "ferrocad opaque",
                 wgpu::PrimitiveTopology::TriangleList,
                 false,
                 scene,
+                surface_bias,
             ),
             overlay: make(
                 "ferrocad overlay",
                 wgpu::PrimitiveTopology::TriangleList,
                 true,
                 wgpu::BlendState::ALPHA_BLENDING,
+                none,
             ),
             lines: make(
                 "ferrocad lines",
                 wgpu::PrimitiveTopology::LineList,
                 false,
                 scene,
+                none,
             ),
             overlay_lines: make(
                 "ferrocad overlay lines",
                 wgpu::PrimitiveTopology::LineList,
                 true,
                 wgpu::BlendState::ALPHA_BLENDING,
+                none,
             ),
             points: make(
                 "ferrocad points",
                 wgpu::PrimitiveTopology::PointList,
                 false,
                 scene,
+                none,
             ),
             overlay_points: make(
                 "ferrocad overlay points",
                 wgpu::PrimitiveTopology::PointList,
                 true,
                 wgpu::BlendState::ALPHA_BLENDING,
+                none,
             ),
         }
     }

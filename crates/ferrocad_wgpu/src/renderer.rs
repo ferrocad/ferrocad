@@ -15,7 +15,9 @@
 use std::collections::HashMap;
 use std::fmt;
 
-use ferrocad_graphics::{Camera, DrawBatch, DrawPacket, Generation, MeshId, Rect, RenderQueue};
+use ferrocad_graphics::{
+    Camera, DrawBatch, DrawPacket, Generation, Geometry, MeshId, Rect, RenderQueue,
+};
 use ferrocad_inventor::{ImageData, InventorView, ViewSpec};
 use ferrocad_types::Matrix4;
 
@@ -121,8 +123,10 @@ pub struct WgpuRenderer {
     /// Uploaded textures, keyed on the `Texture2` id.
     texture_cache: HashMap<u64, (wgpu::Texture, wgpu::BindGroup)>,
     pipelines: ScenePipelines,
-    /// Uploaded meshes, keyed on `(mesh_id, generation)`.
-    mesh_cache: HashMap<(MeshId, Generation), GpuMesh>,
+    /// Uploaded meshes, keyed on `mesh_id`. A newer generation **replaces** (and drops)
+    /// the older GPU buffers, so transient rewrites (tool cursor moves, gizmo drags) do
+    /// not leak entries across frames.
+    mesh_cache: HashMap<MeshId, GpuMesh>,
 }
 
 impl WgpuRenderer {
@@ -234,13 +238,8 @@ impl WgpuRenderer {
         // Upload anything not already cached. A stable scene keeps the same
         // `(mesh_id, generation)`, so this uploads once and reuses thereafter.
         for batch in batches {
-            if batch.geometry().is_some() {
-                let key = (batch.mesh_id(), batch.generation());
-                if !self.mesh_cache.contains_key(&key) {
-                    let geometry = batch.geometry().expect("checked above");
-                    self.mesh_cache
-                        .insert(key, GpuMesh::upload(&self.context.device, geometry));
-                }
+            if let Some(geometry) = batch.geometry() {
+                self.upload_geometry(batch.mesh_id(), batch.generation(), geometry);
             }
         }
         self.ensure_textures(batches);
@@ -298,10 +297,12 @@ impl WgpuRenderer {
             });
 
             for (index, batch) in batches.iter().enumerate() {
-                let key = (batch.mesh_id(), batch.generation());
-                let Some(mesh) = self.mesh_cache.get(&key) else {
+                let Some(mesh) = self.mesh_cache.get(&batch.mesh_id()) else {
                     continue;
                 };
+                if mesh.generation != batch.generation() {
+                    continue;
+                }
                 pass.set_pipeline(self.pipelines.for_draw(false, batch.topology()));
                 pass.set_bind_group(
                     0,
@@ -413,8 +414,11 @@ impl WgpuRenderer {
                 pass.set_viewport(x, y, w, h, 0.0, 1.0);
                 pass.set_scissor_rect(x as u32, y as u32, w as u32, h as u32);
                 for batch in &view.queue.packets {
-                    let key = (batch.mesh_id, batch.generation);
-                    if let Some(mesh) = self.mesh_cache.get(&key) {
+                    let Some(mesh) = self.mesh_cache.get(&batch.mesh_id) else {
+                        slot += 1;
+                        continue;
+                    };
+                    if mesh.generation == batch.generation {
                         pass.set_pipeline(self.pipelines.for_draw(view.overlay, batch.topology));
                         pass.set_bind_group(
                             0,
@@ -446,17 +450,26 @@ impl WgpuRenderer {
         }
     }
 
-    /// Upload the fresh geometry of each packet, keyed on `(mesh_id, generation)`.
+    /// Upload the fresh geometry of each packet, evicting a stale generation for the
+    /// same `mesh_id`.
     fn upload_packets(&mut self, packets: &[DrawPacket]) {
         for packet in packets {
             if let Some(geometry) = packet.geometry.as_ref() {
-                let key = (packet.mesh_id, packet.generation);
-                if !self.mesh_cache.contains_key(&key) {
-                    self.mesh_cache
-                        .insert(key, GpuMesh::upload(&self.context.device, geometry));
-                }
+                self.upload_geometry(packet.mesh_id, packet.generation, geometry);
             }
         }
+    }
+
+    /// Upload `geometry` for `mesh_id`, unless that exact generation is already resident.
+    ///
+    /// A changed generation **replaces** the cache entry, so the previous GPU buffers are
+    /// dropped immediately (generational eviction) rather than accumulating per edit.
+    fn upload_geometry(&mut self, mesh_id: MeshId, generation: Generation, geometry: &Geometry) {
+        if self.mesh_cache.get(&mesh_id).map(|mesh| mesh.generation) == Some(generation) {
+            return;
+        }
+        let uploaded = GpuMesh::upload(&self.context.device, geometry, generation);
+        self.mesh_cache.insert(mesh_id, uploaded);
     }
 
     /// Upload any texture a batch names that is not already cached (keyed on its id).
@@ -941,5 +954,112 @@ mod tests {
         assert_ne!(legacy, modern, "the two producers are distinct objects");
         assert!(legacy[0] > legacy[2], "the inventor triangle is red-dominant: {legacy:?}");
         assert!(modern[2] > modern[0], "the stage triangle is blue-dominant: {modern:?}");
+    }
+
+    /// A coplanar edge wireframe (CAD shaded-with-edges) must win over its surface: the
+    /// surface pipeline carries a depth bias, so the unbiased lines render on top with no
+    /// z-fighting. Skips (rather than fails) without a GPU adapter.
+    #[test]
+    fn coplanar_edges_render_over_the_shaded_surface() {
+        use ferrocad_stage::{DrawMode, ShapeItem, Stage};
+
+        let Ok(mut renderer) = WgpuRenderer::new_default([64, 64]) else {
+            eprintln!("no GPU adapter available; skipping depth-bias test");
+            return;
+        };
+
+        // A quad at z = 0.5 (clip space, identity camera) with coplanar hatch lines across
+        // it, each aligned to a pixel-row centre so the 1px lines are fully covered.
+        let mut positions = vec![
+            [-0.8, -0.8, 0.5],
+            [0.8, -0.8, 0.5],
+            [0.8, 0.8, 0.5],
+            [-0.8, 0.8, 0.5],
+        ];
+        let mut edges = Vec::new();
+        for row in [10u32, 16, 22, 28, 34, 40] {
+            let y = 2.0 * (row as f32 + 0.5) / 64.0 - 1.0;
+            let base = positions.len() as u32;
+            positions.push([-0.8, y, 0.5]);
+            positions.push([0.8, y, 0.5]);
+            edges.extend_from_slice(&[base, base + 1]);
+        }
+        let item = ShapeItem::new(1)
+            .with_draw_mode(DrawMode::ShadedWithEdges)
+            .with_surface_color([0.2, 0.3, 0.95, 1.0])
+            .with_edge_color([0.9, 0.2, 0.2, 1.0])
+            .with_shape(positions, vec![], vec![0, 1, 2, 0, 2, 3], edges);
+        let queue = Stage::new().with_item(item).to_queue();
+
+        let camera = Camera::identity();
+        renderer
+            .draw_frame(&[ViewSpec {
+                queue: &queue,
+                camera: &camera,
+                rect: None,
+                overlay: false,
+            }])
+            .expect("draw");
+        let image = renderer.image().expect("readback");
+
+        // Red-dominant pixels are the edge wireframe (blue-dominant ones are the surface,
+        // and the clear colour is near-neutral).
+        let edge_pixels = image
+            .rgba
+            .chunks_exact(4)
+            .filter(|pixel| i32::from(pixel[0]) - i32::from(pixel[2]) > 30)
+            .count();
+        assert!(
+            edge_pixels > 100,
+            "the coplanar edge wireframe should win over the surface ({edge_pixels} edge pixels)"
+        );
+    }
+
+    /// Generational eviction: repeated geometry rewrites of one item keep the cache a
+    /// constant size, with no leak across tool cursor moves or gizmo drags. Skips without
+    /// a GPU adapter.
+    #[test]
+    fn repeated_shape_rewrites_do_not_grow_the_mesh_cache() {
+        use ferrocad_stage::{DrawMode, ShapeItem};
+
+        let Ok(mut renderer) = WgpuRenderer::new_default([32, 32]) else {
+            eprintln!("no GPU adapter available; skipping cache-eviction test");
+            return;
+        };
+
+        let mut item = ShapeItem::new(1)
+            .with_draw_mode(DrawMode::Shaded)
+            .with_shape(
+                vec![[0.0, 0.0, 0.5], [1.0, 0.0, 0.5], [0.0, 1.0, 0.5]],
+                vec![],
+                vec![0, 1, 2],
+                vec![],
+            );
+
+        let camera = Camera::identity();
+        for step in 0..25u32 {
+            let offset = step as f32 * 0.01;
+            item.set_shape(
+                vec![[0.0, 0.0, 0.5], [1.0 + offset, 0.0, 0.5], [0.0, 1.0, 0.5]],
+                vec![],
+                vec![0, 1, 2],
+                vec![],
+            );
+            let mut queue = RenderQueue::default();
+            item.emit(&mut queue);
+            renderer
+                .draw_frame(&[ViewSpec {
+                    queue: &queue,
+                    camera: &camera,
+                    rect: None,
+                    overlay: false,
+                }])
+                .expect("draw");
+            assert_eq!(
+                renderer.mesh_cache.len(),
+                1,
+                "the cache holds one mesh after {step} rewrites (no leak)"
+            );
+        }
     }
 }

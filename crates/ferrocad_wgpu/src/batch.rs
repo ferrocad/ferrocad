@@ -2,10 +2,11 @@
 //!
 //! A [`Geometry`] arrives on the CPU (only on a cache miss — see
 //! [`DrawBatch::geometry`](ferrocad_graphics::DrawBatch::geometry)); [`GpuMesh`] is
-//! its uploaded form, cached by `(mesh_id, generation)`.
+//! its uploaded form, cached by `mesh_id`. A newer generation replaces (and drops) the
+//! older buffers.
 
 use bytemuck::{Pod, Zeroable};
-use ferrocad_graphics::Geometry;
+use ferrocad_graphics::{Generation, Geometry};
 use wgpu::util::DeviceExt;
 
 /// A vertex as laid out in a GPU buffer.
@@ -36,7 +37,7 @@ impl From<&ferrocad_graphics::Vertex> for GpuVertex {
 /// Placeholder bytes for an empty mesh's dummy buffer.
 const DUMMY_BYTES: &[u8] = &[0u8; 16];
 
-/// Geometry resident on the GPU for one `(mesh_id, generation)`.
+/// Geometry resident on the GPU for one `mesh_id` at one generation.
 pub struct GpuMesh {
     /// The uploaded vertex buffer.
     pub vertex_buffer: wgpu::Buffer,
@@ -44,11 +45,13 @@ pub struct GpuMesh {
     pub index_buffer: wgpu::Buffer,
     /// Number of indices to draw.
     pub index_count: u32,
+    /// The generation this upload satisfies. A packet must match it to be drawn.
+    pub generation: Generation,
 }
 
 impl GpuMesh {
-    /// Upload `geometry` into GPU buffers.
-    pub fn upload(device: &wgpu::Device, geometry: &Geometry) -> Self {
+    /// Upload `geometry` into GPU buffers, tagged with `generation`.
+    pub fn upload(device: &wgpu::Device, geometry: &Geometry, generation: Generation) -> Self {
         let vertices: Vec<GpuVertex> = geometry.vertices.iter().map(GpuVertex::from).collect();
         let vertex_bytes: &[u8] = bytemuck::cast_slice(&vertices);
         let index_bytes: &[u8] = bytemuck::cast_slice(&geometry.indices);
@@ -72,6 +75,7 @@ impl GpuMesh {
             vertex_buffer,
             index_buffer,
             index_count: geometry.indices.len() as u32,
+            generation,
         }
     }
 }

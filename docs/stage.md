@@ -1,8 +1,8 @@
 # The modern stack: `ferrocad_stage` — plan and status
 
-Status: **T0–T3 built, and T4 in progress (2026-10-12): sub-slice 1 (the
-`ferrocad_graphics` extraction) is done; sub-slices 2–4 (depth bias + `part_idx`, cache
-eviction, the G-buffer pick pass) are pending.**
+Status: **T0–T3 built, and T4 in progress (2026-10-12): sub-slices 1–3 done
+(`ferrocad_graphics` extracted, surface depth bias, mesh-cache generational eviction);
+sub-slice 4 (the G-buffer pick pass + `part_idx`) is pending.**
 Companion to [`inventor-renderer.md`](inventor-renderer.md) (the legacy `pivy.coin`
 stack this runs beside), [`inventor-plan.md`](inventor-plan.md) (the emulation roadmap),
 and [`architecture.md`](architecture.md) (crate layering).
@@ -46,7 +46,7 @@ vocabulary, camera and picking) shared with the legacy stack (T4, sub-slice 1).
 | **T1.5 — viewport bridge** | `InventorViewport` holds a `Stage` (`stage_mut`/`set_stage`); its queue is the inventor compile plus `stage.emit_batches`, so the shell renders both producers. | ✅ |
 | **T2 — tools** | `Tool`/`PointerEvent`/`MouseButton`, snapping (`snap_to_geometry`), transient items (`PolylineTool`), and host dispatch from the viewport (drawn as a transient overlay, never picked). | ✅ |
 | **T3 — `TransformGizmo`** | Draggers with drag/commit delta events; transient transform override. | ✅ |
-| **T4 — G-buffer pick pass** ◐ | *(1/4, done)* `ferrocad_graphics`: the neutral draw contract extracted, `ferrocad_stage` fully decoupled from inventor. *(todo)* triangle slope/constant depth bias + a vertex `part_idx`; mesh-cache generation eviction; the offscreen `Rg32Uint` pass + 1×1 readback + `part_index` unprojection. | ◐ |
+| **T4 — G-buffer pick pass** ◐ | *(1/4)* `ferrocad_graphics` extracted, `ferrocad_stage` decoupled from inventor. *(2/4)* surface slope/constant depth bias (coplanar shaded-with-edges). *(3/4)* mesh-cache generational eviction. *(todo, 4/4)* vertex `part_idx` + the offscreen `Rg32Uint` pass + 1×1 readback + `part_index` unprojection. | ◐ |
 | **T5 — `ferrocad.stage` bindings** | PyO3 module exposing `ShapeItem`/`Tool`/`TransformGizmo`. | ▢ |
 
 ## 4. As built (T0–T1)
@@ -130,7 +130,7 @@ carrying its `PickId`, and that `set_stage(Stage::new())` drops it again.
   marker following the cursor. The three transient visuals are **fixed slots** with
   stable mesh identities — only their geometry is rewritten — so the renderer's upload
   cache is not flooded with new meshes. (Each rewrite bumps the generation to force a
-  re-upload; reclaiming old generations is a T4 cache-eviction item.)
+  re-upload; reclaiming old generations landed in T4, sub-slice 3.)
 
 `InventorViewport` hosts a tool (`with_tool`/`set_tool`): `handle_pointer`/`handle_button`
 build a `PointerEvent`, snap it, dispatch to the tool, and rebuild the transient queue.
@@ -185,10 +185,10 @@ commit and the cleared preview.
 3. **Math crates.** Stay on `ferrocad_types` (CAD-grade f64 `Matrix4`/`Placement`/
    `Rotation`); do **not** introduce `glam` alongside it. The renderer converts f64→f32
    at the WGSL boundary.
-4. **Coplanar CAD edges.** The current scene pipelines use `DepthBiasState::default()`
-   (zero bias), so an edge coplanar with its shaded surface will z-fight. T1 therefore
-   verified **spatially separated** `Shaded`/`Wireframe` items (see §4); the slope/constant
-   depth bias is T4 work.
+4. **Coplanar CAD edges.** *Resolved (T4, sub-slice 2):* the surface (triangle) pipeline
+   carries a slope/constant depth bias (`constant: 1, slope_scale: 1.0`), so a coplanar
+   edge wireframe wins the depth test; `ferrocad_wgpu` verifies it headlessly
+   (`coplanar_edges_render_over_the_shaded_surface`).
 
 ## 6. Naming reconciliation
 

@@ -108,7 +108,10 @@ The contract, matching FreeCAD (see the assessment and `InputDevice`/
   and the `SoEventCallback` node; the host routes pointer moves and button down/up
   through `python::PythonEventCallbacks` → `dispatch_event`.
 - wgpu renderer: triangle pipeline with depth, dynamic-offset uniforms, 4× MSAA,
-  offscreen target, RGBA readback, mesh upload cache.
+  offscreen target, RGBA readback, mesh upload cache. The **surface pipeline carries a
+  slope/constant depth bias** (so a coplanar shaded-with-edges wireframe wins the depth
+  test), and the mesh cache is keyed by `mesh_id`, **evicting the previous generation**
+  (T4.2–T4.3) instead of accumulating.
 - CPU ray picking; event/listener dispatch; `Viewport`/DPI primitives.
 - `ferrocad_viewport::InventorViewport` (gpui): image path (readback → `RenderImage`
   → `img`), pointer events → pick → listener → recompile, `with_listener`.

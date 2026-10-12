@@ -25,7 +25,7 @@ obvious:
 | `ferrocad_stage` | `rlib` | The modern declarative CAD presentation: `ShapeItem`s on a `Stage`, compiled straight to the shared draw-batch vocabulary (no scene graph, no arena). Pure; depends on `ferrocad_inventor` for the batch types only. |
 | `ferrocad_wgpu` | `rlib` | The wgpu backend: consumes compiled draw batches, pipelines, uniforms, MSAA, offscreen target, readback. |
 | `ferrocad_inventor_py` | `cdylib` | The `pivy.coin` facade (scaffolding) over `ferrocad_inventor`. |
-| `ferrocad_viewport` | `rlib` | The `bite-gpui` viewport over an invented scene: `InventorViewport` (image path, pointer→pick→listener), the navigation cube (`NaviCube`), and the sample scene. Depends only on `ferrocad_inventor`. |
+| `ferrocad_viewport` | `rlib` | The `bite-gpui` viewport over an invented scene: `InventorViewport` (image path, pointer→pick→listener) plus a hosted `ferrocad_stage` (declarative items and interactive tools), the navigation cube (`NaviCube`), and the sample scene. Depends on `ferrocad_inventor`/`ferrocad_stage` only. |
 | `ferrocad_gpui` | `rlib` | The `bite-gpui` application-shell library: boots CPython and provides `Shell`, `run`/`run_with`, `HostConfig`, and mounts the `ferrocad_viewport`. Ships no application scripts. |
 | `ferrocad` | `bin` | The base app (the general edition). Owns the app's Python entry module and, when packaged, its mods and interpreter; calls `ferrocad_gpui::run_with`. |
 | `python/FreeCAD` | package | The public, pure-Python `import FreeCAD` facade. |
@@ -167,8 +167,8 @@ ferrocad_stage     -> ferrocad_inventor, ferrocad_types
                                                      [modern presentation; emits the batch vocabulary]
 ferrocad_wgpu      -> ferrocad_inventor, ferrocad_types, wgpu, bytemuck
 ferrocad_inventor_py -> ferrocad_inventor            [pivy.coin facade; + pyo3]
-ferrocad_viewport  -> ferrocad_inventor, ferrocad_types,
-                      bite-gpui                      [the gpui viewport; no wgpu, no pyo3]
+ferrocad_viewport  -> ferrocad_inventor, ferrocad_stage,
+                      ferrocad_types, bite-gpui       [the gpui viewport; no wgpu, no pyo3]
 ferrocad_gpui      -> ferrocad_widgets, ferrocad_viewport,
                       ferrocad_inventor, ferrocad_wgpu,
                       ferrocad_types, pyo3 (embed)   [the host/glue owns the window]

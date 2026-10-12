@@ -20,7 +20,13 @@
 //! [`ferrocad_inventor`](ferrocad_inventor)).
 //!
 //! This crate is pure Rust: no `pyo3`, no `wgpu`. The Python surface (`ferrocad.stage`)
-//! and the interactive tools/gizmos are later slices; see `docs/stage.md`.
+//! and the interactive gizmos are later slices; see `docs/stage.md`.
+//!
+//! Beyond shapes, the crate carries the interactive layer: [`PointerEvent`]/
+//! [`PointerKind`]/[`MouseButton`] (the structured replacement for `SoEventCallback`),
+//! [`snap_to_geometry`] ([`Snap`]/[`SnapKind`]), and the [`Tool`] trait with a reference
+//! [`PolylineTool`]. A tool turns pointer events into transient visuals the host draws
+//! beside the document geometry.
 //!
 //! # Example
 //!
@@ -42,8 +48,14 @@
 //! assert_eq!(queue.len(), 2);
 //! ```
 
+pub mod input;
 pub mod shape;
+pub mod snap;
 pub mod stage;
+pub mod tool;
 
+pub use input::{MouseButton, PointerEvent, PointerKind};
 pub use shape::{DrawMode, ShapeItem};
+pub use snap::{Snap, SnapKind, snap_to_geometry};
 pub use stage::Stage;
+pub use tool::{PolylineTool, Tool};

@@ -20,6 +20,9 @@ use ferrocad_inventor::{
     ViewSpec, Viewport, compile_with, pick_at_hit,
 };
 use ferrocad_stage::Stage;
+use ferrocad_stage::{
+    MouseButton as StageButton, PointerEvent, PointerKind, Tool, snap_to_geometry,
+};
 use gpui::{
     AnyElement, AppContext, Context, DragMoveEvent, IntoElement, MouseButton, MouseDownEvent,
     MouseExitEvent, MouseMoveEvent, MouseUpEvent, ObjectFit, Render, RenderImage, Window, div, img,
@@ -40,6 +43,14 @@ pub struct InventorViewport<V: InventorView> {
     stage: Stage,
     /// Set when the stage changed, so the queue is rebuilt before the next draw.
     stage_dirty: bool,
+    /// The active interactive tool (the `SoEventCallback` replacement), if any.
+    tool: Option<Box<dyn Tool>>,
+    /// The tool's transient visuals, rebuilt on every dispatched event. Drawn as an
+    /// overlay (on top, depth off) and never picked, so a rubber band cannot shadow the
+    /// geometry under the cursor.
+    transient: RenderQueue,
+    /// The grid spacing for grid snapping, if enabled.
+    snap_grid: Option<f64>,
     queue: RenderQueue,
     listeners: Vec<Box<dyn EventListener>>,
     /// The navigation-cube overlay, when enabled.
@@ -86,6 +97,9 @@ impl<V: InventorView> InventorViewport<V> {
             scene,
             stage,
             stage_dirty: false,
+            tool: None,
+            transient: RenderQueue::default(),
+            snap_grid: None,
             queue,
             listeners: Vec::new(),
             navicube: None,
@@ -107,6 +121,30 @@ impl<V: InventorView> InventorViewport<V> {
     pub fn with_navicube(mut self, navicube: NaviCube) -> Self {
         self.navicube = Some(navicube);
         self
+    }
+
+    /// Activate an interactive tool: pointer events are dispatched to it and its
+    /// transient visuals are drawn over the scene (see [`Tool`]).
+    pub fn with_tool(mut self, tool: Box<dyn Tool>) -> Self {
+        self.tool = Some(tool);
+        self
+    }
+
+    /// Replace (or clear) the active tool.
+    pub fn set_tool(&mut self, tool: Option<Box<dyn Tool>>) {
+        self.tool = tool;
+        self.rebuild_transient();
+    }
+
+    /// The active tool, if any.
+    pub fn tool(&self) -> Option<&dyn Tool> {
+        self.tool.as_deref()
+    }
+
+    /// Set the grid snapping spacing (device-independent world units); `None` disables
+    /// grid snapping (geometry snapping still applies over a hit).
+    pub fn set_snap_grid(&mut self, grid: Option<f64>) {
+        self.snap_grid = grid;
     }
 
     /// The wrapped view (e.g. to borrow its shared surface once that path exists).
@@ -166,6 +204,7 @@ impl<V: InventorView> InventorViewport<V> {
             }
             changed = cube.set_hilite(None);
         }
+        changed |= self.dispatch_tool(PointerKind::Move, device, None);
         changed | self.pick_main(device)
     }
 
@@ -199,13 +238,58 @@ impl<V: InventorView> InventorViewport<V> {
             }
             return false;
         }
+        let kind = if down {
+            PointerKind::Down
+        } else {
+            PointerKind::Up
+        };
+        let mut changed = self.dispatch_tool(kind, device, stage_button(button));
         let hit = pick_at_hit(&self.queue, &self.camera, device);
         let event = Event::MouseButton {
             position: device,
             button,
             down,
         };
-        self.dispatch(&event, hit.as_ref())
+        changed |= self.dispatch(&event, hit.as_ref());
+        changed
+    }
+
+    /// Deliver a pointer event to the active tool (if any) and rebuild its transient
+    /// visuals. The pick is taken from the scene-and-stage queue, so a tool never snaps
+    /// to its own transient items. Returns whether a tool is active.
+    fn dispatch_tool(
+        &mut self,
+        kind: PointerKind,
+        device: [i32; 2],
+        button: Option<StageButton>,
+    ) -> bool {
+        if self.tool.is_none() {
+            return false;
+        }
+        let hit = pick_at_hit(&self.queue, &self.camera, device);
+        let event = PointerEvent {
+            kind,
+            position: device,
+            button,
+            hit,
+        };
+        let snap = snap_to_geometry(&event, &self.camera, self.snap_grid);
+        if let Some(tool) = self.tool.as_mut() {
+            tool.on_event(&event, snap);
+        }
+        self.rebuild_transient();
+        true
+    }
+
+    /// Rebuild the transient queue from the active tool's items.
+    fn rebuild_transient(&mut self) {
+        let mut queue = RenderQueue::default();
+        if let Some(tool) = self.tool.as_ref() {
+            for item in tool.items() {
+                item.emit(&mut queue);
+            }
+        }
+        self.transient = queue;
     }
 
     /// Handle a gpui drag-move: orbit the main camera when the drag began over the
@@ -296,30 +380,29 @@ impl<V: InventorView> InventorViewport<V> {
         if let Some(cube) = self.navicube.as_mut() {
             cube.sync(&self.camera);
         }
-        let drawn = match self.navicube.as_ref() {
-            Some(cube) => {
-                let views = [
-                    ViewSpec {
-                        queue: &self.queue,
-                        camera: &self.camera,
-                        rect: None,
-                        overlay: false,
-                    },
-                    cube.view(),
-                ];
-                self.view.draw_frame(&views).is_ok()
-            }
-            None => {
-                let views = [ViewSpec {
-                    queue: &self.queue,
-                    camera: &self.camera,
-                    rect: None,
-                    overlay: false,
-                }];
-                self.view.draw_frame(&views).is_ok()
-            }
-        };
-        if drawn {
+
+        // One pass: the scene (legacy + stage) first, then the tool's transient overlay
+        // (depth off, on top), then the navigation cube.
+        let mut views = Vec::with_capacity(3);
+        views.push(ViewSpec {
+            queue: &self.queue,
+            camera: &self.camera,
+            rect: None,
+            overlay: false,
+        });
+        if !self.transient.is_empty() {
+            views.push(ViewSpec {
+                queue: &self.transient,
+                camera: &self.camera,
+                rect: None,
+                overlay: true,
+            });
+        }
+        if let Some(cube) = self.navicube.as_ref() {
+            views.push(cube.view());
+        }
+
+        if self.view.draw_frame(&views).is_ok() {
             if let Ok(image) = self.view.image() {
                 self.frame = Some(Arc::new(render_image(image)));
             }
@@ -407,6 +490,16 @@ fn mouse_button(button: MouseButton) -> u8 {
         MouseButton::Middle => 2,
         MouseButton::Right => 3,
         _ => 0,
+    }
+}
+
+/// Map Coin's 1-based button number to a stage mouse button.
+fn stage_button(button: u8) -> Option<StageButton> {
+    match button {
+        1 => Some(StageButton::Left),
+        2 => Some(StageButton::Middle),
+        3 => Some(StageButton::Right),
+        _ => None,
     }
 }
 
@@ -587,5 +680,48 @@ mod tests {
         viewport.set_stage(Stage::new());
         viewport.refresh();
         assert_eq!(viewport.queue.len(), base);
+    }
+
+    #[test]
+    fn a_tool_receives_pointer_events_and_its_items_are_drawn() {
+        use ferrocad_inventor::Topology;
+        use ferrocad_stage::PolylineTool;
+
+        let camera = Camera {
+            viewport: ferrocad_inventor::Viewport::new([100, 100], 1.0),
+            ..Camera::identity()
+        };
+        let mut viewport = InventorViewport::new(
+            fake(ImageData {
+                width: 1,
+                height: 1,
+                rgba: vec![0, 0, 0, 255],
+            }),
+            camera,
+            triangle_scene(),
+        )
+        .with_tool(Box::new(PolylineTool::new()));
+
+        // Nothing transient is drawn until the tool sees an event.
+        assert!(viewport.transient.is_empty());
+
+        // A left press over the scene is dispatched to the tool, which emits a band and a
+        // marker (wireframe) for the overlay.
+        assert!(viewport.handle_button([50.0, 50.0], 1, true));
+        assert!(
+            !viewport.transient.is_empty(),
+            "the tool should emit transient visuals"
+        );
+        assert!(
+            viewport
+                .transient
+                .packets
+                .iter()
+                .all(|packet| packet.topology == Topology::Lines),
+            "transient visuals are wireframe"
+        );
+
+        // The draw path (scene + transient overlay) runs cleanly on the fake view.
+        viewport.refresh();
     }
 }

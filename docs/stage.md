@@ -1,7 +1,7 @@
 # The modern stack: `ferrocad_stage` — plan and status
 
-Status: **T0 (crate + declarative spine), T1 (render + coexistence) and T1.5 (the
-viewport bridge) built (2026-10-12); T2–T5 planned.**
+Status: **T0 (crate + declarative spine), T1 (render + coexistence), T1.5 (the
+viewport bridge) and T2 (tools & pointer events) built (2026-10-12); T3–T5 planned.**
 Companion to [`inventor-renderer.md`](inventor-renderer.md) (the legacy `pivy.coin`
 stack this runs beside), [`inventor-plan.md`](inventor-plan.md) (the emulation roadmap),
 and [`architecture.md`](architecture.md) (crate layering).
@@ -44,7 +44,7 @@ moves to a neutral `ferrocad_batch` crate (see §5).
 | **T0 — crate + declarative spine** | `ferrocad_stage`: a `Stage` of items and a `ShapeItem` (positions/normals/triangles/edges + `DrawMode`/colours/`entity_id`), with `Stage::emit_batches(&mut RenderQueue)`. No pyo3, no wgpu, no scene graph. | ✅ |
 | **T1 — render + coexistence** | Draw a stage beside a compiled inventor queue in one pass; headless readback asserts both rasterize and that frame 2 reuses the upload cache. | ✅ |
 | **T1.5 — viewport bridge** | `InventorViewport` holds a `Stage` (`stage_mut`/`set_stage`); its queue is the inventor compile plus `stage.emit_batches`, so the shell renders both producers. | ✅ |
-| **T2 — tools** | `Tool`/`PointerEvent`, transient items (rubber-band, snap marker), `snap_to_geometry`, host dispatch. | ▢ |
+| **T2 — tools** | `Tool`/`PointerEvent`/`MouseButton`, snapping (`snap_to_geometry`), transient items (`PolylineTool`), and host dispatch from the viewport (drawn as a transient overlay, never picked). | ✅ |
 | **T3 — `TransformGizmo`** | Draggers with drag/commit delta events; transient transform override. | ▢ |
 | **T4 — G-buffer pick pass** | The offscreen `Rg32Uint`/normal/depth pass + 1×1 readback + `part_index` unprojection — the shared enabler for O(1) picking in both stacks. **This is where the batch contract is extended and (likely) extracted.** | ▢ |
 | **T5 — `ferrocad.stage` bindings** | PyO3 module exposing `ShapeItem`/`Tool`/`TransformGizmo`. | ▢ |
@@ -114,6 +114,35 @@ markers) have a place to live without a combined render+dispatch refactor.
 **Verification:** `ferrocad_viewport`'s `a_stage_item_is_merged_into_the_viewport_queue`
 adds a `ShapeItem` via `stage_mut()`, asserts the rebuilt queue gained exactly one packet
 carrying its `PickId`, and that `set_stage(Stage::new())` drops it again.
+
+### T2 — tools & pointer events
+
+`ferrocad_stage` gains the interactive layer:
+
+- `input` — `PointerKind` (`Move`/`Down`/`Up`), `MouseButton`, and `PointerEvent`
+  (device-pixel position + the CPU `Hit` under the pointer): the structured replacement
+  for `SoEventCallback`.
+- `snap` — `snap_to_geometry(event, camera, grid)`: snaps to the picked world point over
+  geometry (`SnapKind::Point`), else to a `z = 0` grid node (`SnapKind::Grid`). Feature
+  snaps (vertex/edge/centre) wait on the richer pick in T4.
+- `tool` — the `Tool` trait (`on_event`, `items`) and a reference `PolylineTool` (the
+  `DraftWireTool` analogue): left-click places vertices, with a rubber band and a snap
+  marker following the cursor. The three transient visuals are **fixed slots** with
+  stable mesh identities — only their geometry is rewritten — so the renderer's upload
+  cache is not flooded with new meshes. (Each rewrite bumps the generation to force a
+  re-upload; reclaiming old generations is a T4 cache-eviction item.)
+
+`InventorViewport` hosts a tool (`with_tool`/`set_tool`): `handle_pointer`/`handle_button`
+build a `PointerEvent`, snap it, dispatch to the tool, and rebuild the transient queue.
+The transient visuals are drawn as a **separate overlay view** (depth off, on top) and
+picked against the scene-and-stage queue only — so a rubber band at the cursor can never
+shadow the geometry it is snapping to, and needs no depth-bias fix.
+
+**Verification:** `ferrocad_stage` tests cover point/grid snapping, snap-over-hit,
+left-click placement, band/marker emission, and right-click ignoring;
+`ferrocad_viewport`'s `a_tool_receives_pointer_events_and_its_items_are_drawn` drops a
+`PolylineTool` into the viewport, dispatches a click, and asserts the transient
+(wireframe) overlay was populated.
 
 ## 5. Deferred decisions
 

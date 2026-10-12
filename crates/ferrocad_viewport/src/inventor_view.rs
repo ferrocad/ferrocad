@@ -17,8 +17,9 @@ use std::time::Duration;
 
 use ferrocad_inventor::{
     Camera, Event, EventListener, Hit, ImageData, InventorView, PickId, RenderQueue, Scene,
-    ViewSpec, compile_with, pick_at_hit,
+    ViewSpec, Viewport, compile_with, pick_at_hit,
 };
+use ferrocad_stage::Stage;
 use gpui::{
     AnyElement, AppContext, Context, DragMoveEvent, IntoElement, MouseButton, MouseDownEvent,
     MouseExitEvent, MouseMoveEvent, MouseUpEvent, ObjectFit, Render, RenderImage, Window, div, img,
@@ -34,6 +35,11 @@ pub struct InventorViewport<V: InventorView> {
     view: V,
     camera: Camera,
     scene: Scene,
+    /// Declarative items drawn beside the inventor scene (the modern stack). They are
+    /// compiled into the same queue, so both render in one pass over one depth buffer.
+    stage: Stage,
+    /// Set when the stage changed, so the queue is rebuilt before the next draw.
+    stage_dirty: bool,
     queue: RenderQueue,
     listeners: Vec<Box<dyn EventListener>>,
     /// The navigation-cube overlay, when enabled.
@@ -72,11 +78,14 @@ impl Render for NavicubeDragPreview {
 impl<V: InventorView> InventorViewport<V> {
     /// Wrap `view`, drawing `scene` with `camera`.
     pub fn new(view: V, camera: Camera, scene: Scene) -> Self {
-        let queue = compile_with(&scene, &camera.viewport);
+        let stage = Stage::new();
+        let queue = merge_queue(&scene, &stage, &camera.viewport);
         Self {
             view,
             camera,
             scene,
+            stage,
+            stage_dirty: false,
             queue,
             listeners: Vec::new(),
             navicube: None,
@@ -108,6 +117,24 @@ impl<V: InventorView> InventorViewport<V> {
     /// The scene currently being drawn.
     pub fn scene(&self) -> &Scene {
         &self.scene
+    }
+
+    /// The declarative stage drawn beside the inventor scene.
+    pub fn stage(&self) -> &Stage {
+        &self.stage
+    }
+
+    /// The stage, for adding or removing items. The queue is rebuilt before the next
+    /// draw (call this from an event handler that then notifies, e.g. `cx.notify()`).
+    pub fn stage_mut(&mut self) -> &mut Stage {
+        self.stage_dirty = true;
+        &mut self.stage
+    }
+
+    /// Replace the stage wholesale; the queue is rebuilt before the next draw.
+    pub fn set_stage(&mut self, stage: Stage) {
+        self.stage = stage;
+        self.stage_dirty = true;
     }
 
     /// Replace the camera and recompile (the device-pixel ratio lives in the camera).
@@ -238,7 +265,8 @@ impl<V: InventorView> InventorViewport<V> {
     }
 
     fn recompile(&mut self) {
-        self.queue = compile_with(&self.scene, &self.camera.viewport);
+        self.queue = merge_queue(&self.scene, &self.stage, &self.camera.viewport);
+        self.stage_dirty = false;
     }
 
     /// Step a running snap animation, applying the interpolated camera. Returns
@@ -262,6 +290,9 @@ impl<V: InventorView> InventorViewport<V> {
     /// Draw the scene (and the navigation cube, when enabled) and read it back,
     /// refreshing the cached frame.
     fn refresh(&mut self) {
+        if self.stage_dirty {
+            self.recompile();
+        }
         if let Some(cube) = self.navicube.as_mut() {
             cube.sync(&self.camera);
         }
@@ -359,6 +390,14 @@ impl<V: InventorView + 'static> Render for InventorViewport<V> {
             }))
             .child(content)
     }
+}
+
+/// Compile the inventor scene and append the stage's batches, so the two producers
+/// share one queue (and thus one render pass and one depth buffer).
+fn merge_queue(scene: &Scene, stage: &Stage, viewport: &Viewport) -> RenderQueue {
+    let mut queue = compile_with(scene, viewport);
+    stage.emit_batches(&mut queue);
+    queue
 }
 
 /// Map a gpui mouse button to Coin's 1-based button number.
@@ -506,5 +545,47 @@ mod tests {
         let viewport = InventorViewport::new(fake(ImageData::default()), camera, scene);
         assert_eq!(viewport.queue.len(), expected);
         assert_eq!(viewport.scene().root.children.len(), 3);
+    }
+
+    #[test]
+    fn a_stage_item_is_merged_into_the_viewport_queue() {
+        use ferrocad_stage::{DrawMode, ShapeItem, Stage};
+
+        let camera = Camera {
+            viewport: ferrocad_inventor::Viewport::new([100, 100], 1.0),
+            ..Camera::identity()
+        };
+        let mut viewport = InventorViewport::new(
+            fake(ImageData {
+                width: 1,
+                height: 1,
+                rgba: vec![0, 0, 0, 255],
+            }),
+            camera,
+            triangle_scene(),
+        );
+        let base = viewport.queue.len();
+        assert!(base >= 1, "the inventor scene compiles to at least one packet");
+
+        // An item added through the stage accessor is merged on the next draw (refresh
+        // rebuilds the queue, then renders it).
+        viewport.stage_mut().add_item(
+            ShapeItem::new(5)
+                .with_draw_mode(DrawMode::Shaded)
+                .with_shape(
+                    vec![[0.0, 0.0, 0.5], [1.0, 0.0, 0.5], [0.0, 1.0, 0.5]],
+                    vec![],
+                    vec![0, 1, 2],
+                    vec![],
+                ),
+        );
+        viewport.refresh();
+        assert_eq!(viewport.queue.len(), base + 1);
+        assert!(viewport.queue.packets.iter().any(|p| p.state.id == PickId(5)));
+
+        // Replacing the stage drops the item again.
+        viewport.set_stage(Stage::new());
+        viewport.refresh();
+        assert_eq!(viewport.queue.len(), base);
     }
 }

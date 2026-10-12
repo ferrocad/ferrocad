@@ -1,7 +1,7 @@
 # The modern stack: `ferrocad_stage` — plan and status
 
-Status: **T0 (crate + declarative spine) and T1 (render + coexistence) built
-(2026-10-12); T2–T5 planned.**
+Status: **T0 (crate + declarative spine), T1 (render + coexistence) and T1.5 (the
+viewport bridge) built (2026-10-12); T2–T5 planned.**
 Companion to [`inventor-renderer.md`](inventor-renderer.md) (the legacy `pivy.coin`
 stack this runs beside), [`inventor-plan.md`](inventor-plan.md) (the emulation roadmap),
 and [`architecture.md`](architecture.md) (crate layering).
@@ -43,6 +43,7 @@ moves to a neutral `ferrocad_batch` crate (see §5).
 | --- | --- | --- |
 | **T0 — crate + declarative spine** | `ferrocad_stage`: a `Stage` of items and a `ShapeItem` (positions/normals/triangles/edges + `DrawMode`/colours/`entity_id`), with `Stage::emit_batches(&mut RenderQueue)`. No pyo3, no wgpu, no scene graph. | ✅ |
 | **T1 — render + coexistence** | Draw a stage beside a compiled inventor queue in one pass; headless readback asserts both rasterize and that frame 2 reuses the upload cache. | ✅ |
+| **T1.5 — viewport bridge** | `InventorViewport` holds a `Stage` (`stage_mut`/`set_stage`); its queue is the inventor compile plus `stage.emit_batches`, so the shell renders both producers. | ✅ |
 | **T2 — tools** | `Tool`/`PointerEvent`, transient items (rubber-band, snap marker), `snap_to_geometry`, host dispatch. | ▢ |
 | **T3 — `TransformGizmo`** | Draggers with drag/commit delta events; transient transform override. | ▢ |
 | **T4 — G-buffer pick pass** | The offscreen `Rg32Uint`/normal/depth pass + 1×1 readback + `part_index` unprojection — the shared enabler for O(1) picking in both stacks. **This is where the batch contract is extended and (likely) extracted.** | ▢ |
@@ -96,6 +97,23 @@ one `draw_frame` (the renderer's `InventorView` impl — what `ferrocad_viewport
 
 The two producers are spatially separated; the coplanar-edge case is deliberately left
 to T4 (see §5.4).
+
+### T1.5 — viewport bridge
+
+`InventorViewport` now holds a `Stage` (empty by default) and compiles it into the same
+queue as the inventor scene: `recompile` is `compile_with(scene)`, then
+`stage.emit_batches(&mut queue)`. The accessors are `stage()`, `stage_mut()` and
+`set_stage()`; a mutation marks the queue stale and the next draw (`refresh`) rebuilds
+it — so an event handler that edits the stage and calls `cx.notify()` gets it rendered
+on the next frame. `stage_mut`/`set_stage` are additive: existing callers are unchanged.
+
+This closes the app-level loop: the shell's 3D pane can now draw legacy `pivy.coin`
+shapes and modern stage items together, and T2's transient tool items (rubber-bands, snap
+markers) have a place to live without a combined render+dispatch refactor.
+
+**Verification:** `ferrocad_viewport`'s `a_stage_item_is_merged_into_the_viewport_queue`
+adds a `ShapeItem` via `stage_mut()`, asserts the rebuilt queue gained exactly one packet
+carrying its `PickId`, and that `set_stage(Stage::new())` drops it again.
 
 ## 5. Deferred decisions
 

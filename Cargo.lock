@@ -2433,6 +2433,7 @@ version = "0.1.2"
 dependencies = [
  "bite-gpui",
  "ferrocad_inventor",
+ "ferrocad_stage",
  "ferrocad_types",
  "image",
 ]

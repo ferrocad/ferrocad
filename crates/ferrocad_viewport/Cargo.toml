@@ -16,6 +16,8 @@ documentation = "https://docs.rs/ferrocad_viewport"
 # The scene vocabulary the viewport presents (Scene/Camera/RenderQueue/Event/PickId
 # and the `InventorView` capability trait). No concrete renderer or Python here.
 ferrocad_inventor.workspace = true
+# The modern declarative producer: a Stage of items drawn beside the inventor scene.
+ferrocad_stage.workspace = true
 ferrocad_types.workspace = true
 bite-gpui = { version = "1.21.1" }
 # The image path wraps readback pixels as a gpui `RenderImage`, which holds

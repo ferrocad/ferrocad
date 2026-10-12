@@ -19,8 +19,9 @@ for the modern stack — so a NaviCube can be built from either `pivy.coin` node
 
 - a **model** (taxonomy, ids, geometry, appearance **roles**, camera, config);
 - a **`NavicubeView`** seam and a producer-neutral **visual state**;
-- an appearance **theme** seam so styling is a theming concern over the draw-batch
-  primitives (`ferrocad_graphics`), not the widget's ([`navicube-spec.md`](navicube-spec.md) §5);
+- an appearance **theme** — a viewport-level policy that assigns colour/width/opacity to
+  the draw primitives **through the producer API** (`SoMaterial`/`SoDrawStyle`, or
+  `ShapeItem` colours/`edge_width`), not the widget's ([`navicube-spec.md`](navicube-spec.md) §5);
 - an **inventor producer** (as today, moved in) and a **stage producer** (new);
 - the whole widget in **`ferrocad_viewport::navicube`**, with **no** dependency on
   `ferrocad_wgpu` or `pyo3`.
@@ -44,7 +45,7 @@ and `ferrocad_stage`. So the whole widget lives in one module tree in the viewpo
 ```
 ferrocad_viewport::navicube   ── the NaviCube widget: sits ON TOP of both scene stacks
   ├── model     Piece / NaviTarget / geometry / roles / camera / config               [pure]
-  ├── view      NavicubeVisual + the NavicubeView seam + the NavicubeTheme mapping      [pure]
+  ├── view      NavicubeVisual + the NavicubeView seam (theme passed in)              [pure]
   ├── inventor  builds a `Scene` → compile_with        ─┐  two producers for one model;
   ├── stage     builds `ShapeItem`s → emit into a queue ─┘  both are viewport-local
   └── NaviCube  the controller: Box<dyn NavicubeView> (placement, sync, hit, snap, orbit)
@@ -78,11 +79,13 @@ the viewport rather than staying behind a new crate.
    and **roles**, not labels or resolved colours ([`navicube-spec.md`](navicube-spec.md) §11).
 4. **Both producers are viewport-local.** `NavicubeView` is the internal seam between the
    controller and the two producers; it is not a public extension point.
-5. **Appearance is themed, not hard-coded.** Producers tag each piece with a
-   appearance **role** (base / highlighted / away) and resolve it through a
-   `NavicubeTheme`; the widget owns no colours ([`navicube-spec.md`](navicube-spec.md) §5).
-   The first theme reproduces the current palette, so V1 stays a no-behaviour-change
-   refactor.
+5. **Appearance is themed at the viewport level.** The primitives already carry colour
+   (and geometry a width); a **theme** is the higher-level policy that assigns them. It
+   lives at the viewport level and flows **through the producer API** — the inventor
+   producer sets `SoMaterial`/`SoDrawStyle`, the stage producer sets `ShapeItem`
+   colours/`edge_width` ([`navicube-spec.md`](navicube-spec.md) §5). Producers tag each
+   piece with a role (base / highlighted / away) and the theme resolves it. The first theme
+   reproduces the current palette, so V1 stays a no-behaviour-change refactor.
 
 ## 4. Slices
 
@@ -97,8 +100,8 @@ controller are one viewport module tree and the controller drives a trait object
     generators (`quad`/`segment`/`corner_cube`/`home_quad`), the **`NavicubeRole` rule**,
     `camera(rect)`, `Corner`, `NaviCubeConfig`, `home_orientation` — moved in from
     `ferrocad_inventor::navicube`.
-  - `view`: `NavicubeVisual { orientation, hilite, away }`, `NavicubeRole`, the
-    `NavicubeTheme` mapping, and the `NavicubeView` trait (whose `rebuild` takes a theme).
+  - `view`: `NavicubeVisual { orientation, hilite, away }`, `NavicubeRole`, and the
+    `NavicubeView` trait (whose `rebuild` takes the viewport theme).
   - `inventor`: `InventorProducer` — the existing `Scene` + `RenderQueue` + `synced` cache
     (`scene`/`scene_with`/`set_orientation`), now implementing `NavicubeView`.
   - `mod`: the `NaviCube` controller (placement, camera sync, hit-test, hilite, snap,
@@ -139,8 +142,9 @@ Deliverable: the reserved config becomes real, and the specified thresholds are 
 
 - Apply `NaviCubeConfig` (corner, size, margin, `chamfer`, thresholds) to the controller
   and producers; add a `NaviCube::with_config`.
-- Formalise `NavicubeTheme` (role→appearance) with the current palette as the default
-  theme, in the theming layer over `ferrocad_graphics`; add a `NaviCube::with_theme`.
+- Formalise the viewport **theme** (colour/width/opacity/label attributes) with the
+  current palette as the default, and thread it through both producers (inventor
+  `Material`/`DrawStyle`, stage `ShapeItem` colours/`edge_width`); add `NaviCube::with_theme`.
 - Enforce the **min-drag threshold** (`3 logical px × dpr`) in the click-vs-drag decision
   ([`navicube-spec.md`](navicube-spec.md) §8, §14) — the build currently accumulates
   movement but never gates on it.
@@ -186,4 +190,4 @@ regress.
 | --- | --- | --- | --- |
 | **V1** | Move the model + inventor producer into `ferrocad_viewport::navicube`; add the `NavicubeView` seam and `NavicubeVisual`; the controller drives `Box<dyn NavicubeView>`. No behaviour change. | `ferrocad_viewport`, `ferrocad_inventor` | ▢ |
 | **V2** | `navicube::stage::StageProducer` + the producer-conformance test. | `ferrocad_viewport` | ▢ |
-| **V3** | `NaviCubeConfig`, `NavicubeTheme`, the min-drag threshold, `draggable`/`rotate_to_nearest`, docs. | `ferrocad_viewport`, docs | ▢ |
+| **V3** | `NaviCubeConfig`, the viewport `Theme`, the min-drag threshold, `draggable`/`rotate_to_nearest`, docs. | `ferrocad_viewport`, docs | ▢ |

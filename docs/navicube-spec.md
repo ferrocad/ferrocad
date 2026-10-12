@@ -27,9 +27,9 @@ A **NaviCube** is a screen-space orientation gizmo in a viewport corner. It:
 
 **Behaviour, not styling.** This spec fixes *geometry, taxonomy, interaction and the
 semantic appearance roles* the cube uses. It does **not** fix colours, opacity, fonts or
-glyph bitmaps: those are the concern of a **theme** over the draw-batch primitives (§5),
-shared with every other producer. The concrete palettes upstream and the current build use
-are recorded as *reference theme values* (§13), not spec constants.
+glyph bitmaps: assigning those to the draw primitives is a **theme**, a viewport-level
+policy applied through the producer's API (§5). The concrete palettes upstream and the
+current build use are recorded as *reference theme values* (§13), not spec constants.
 
 **Normative vs upstream.** The behaviour, taxonomy and interaction model follow upstream.
 The **axis naming** and the compact **pick-id numbering** are FerroCAD's own (upstream is
@@ -169,13 +169,18 @@ Each region is placed from two unit axes `x` (in-plane) and `z` (outward normal)
   `(a,b,a)`… per axis, with `a = −1.1`, `b = −1.05`, `c = 0.5`, coloured from the theme
   (upstream default: red/green/blue).
 
-## 5. Appearance: roles and the theme
+## 5. Appearance: roles and theming
 
-The cube declares, per piece, a **semantic role**; it never chooses a colour. A **theme**
-maps each role to concrete appearance (`StateSnapshot.color`, opacity, and an optional
-`Texture2` for labels). The theme belongs to the theming layer over the draw-batch
-primitives (`ferrocad_graphics`) — it is shared with every producer and is **not** part of
-the NaviCube.
+A producer does not choose colours; it tags each piece with a **semantic role** and a
+**theme** assigns the appearance. The draw primitives already carry colour, and geometry
+carries line/edge width, so theming is a *higher-level assignment* of those attributes —
+a **viewport-level** concern that flows through the producer's own API:
+
+- the legacy producer sets `SoMaterial` (colour) and `SoDrawStyle` (line width);
+- the modern producer sets `ShapeItem` surface/edge colours and `edge_width`.
+
+The primitives stay generic; the theme supplies the policy, so no `ferrocad_graphics`
+change is implied.
 
 `NavicubeRole` is the closed vocabulary a NaviCube emits:
 
@@ -328,9 +333,10 @@ a hover to persist over several frames before it takes.
 ## 9. The build contract (visual state)
 
 A producer renders the cube **on demand** from a producer-neutral state and a theme. It
-resolves each piece's **role** (§5) through the theme to a `StateSnapshot` and emits the
-piece's geometry. Highlight and away-face appearance are therefore **not** hard-coded —
-the producer tags a piece and the theme decides how it looks.
+resolves each piece's **role** (§5) through the viewport theme to concrete attributes
+(colour, edge width, label texture) and applies them through its stack's API while
+emitting the piece's geometry. Highlight and away-face appearance are therefore **not**
+hard-coded — the producer tags a piece and the theme decides how it looks.
 
 ```rust
 /// What to draw this frame — the cube's interaction state, independent of styling.
@@ -356,7 +362,7 @@ pub trait NavicubeView {
     /// Rebuild the overlay packets for `visual`, resolving each piece's role (§5)
     /// through `theme`, compiled at `viewport` (its device-pixel ratio seeds any
     /// screen-space geometry). Called only when the visual state changed.
-    fn rebuild(&mut self, viewport: &Viewport, visual: &NavicubeVisual, theme: &NavicubeTheme);
+    fn rebuild(&mut self, viewport: &Viewport, visual: &NavicubeVisual, theme: &Theme);
 
     /// The current overlay draw packets.
     fn queue(&self) -> &RenderQueue;
@@ -369,11 +375,12 @@ pub trait NavicubeView {
 }
 ```
 
-`NavicubeTheme` is the role→appearance mapping (§5); its concrete type lives in the
-theming layer over `ferrocad_graphics`, not here. The trait is **object-safe** (no
-generics, no `Self`-typed returns), so a controller can hold a `Box<dyn NavicubeView>` and
-the viewport stays non-generic. The model, the trait, the visual state and both producers
-live with the widget in `ferrocad_viewport`, which sits on top of `ferrocad_inventor` and
+`Theme` is the viewport-level appearance policy (§5); it carries the attributes the cube
+needs (base/highlighted/away colours, an edge width, label styling) and is threaded
+through the producer API, not defined here. The trait is **object-safe** (no generics, no
+`Self`-typed returns), so a controller can hold a `Box<dyn NavicubeView>` and the viewport
+stays non-generic. The model, the trait, the visual state and both producers live with the
+widget in `ferrocad_viewport`, which sits on top of `ferrocad_inventor` and
 `ferrocad_stage` (see [`navicube-plan.md`](navicube-plan.md) §2).
 
 ## 11. Conformance

@@ -67,9 +67,9 @@ fn py_install(py: Python<'_>) -> PyResult<Bound<'_, PyModule>> {
 /// import stage` resolves; a host that imports `ferrocad` as part of its boot should
 /// call this **after** doing so.
 ///
-/// Unlike `ferrocad_inventor_py::install`, this never fabricates a `ferrocad` module:
-/// `ferrocad` is the real extension, and shadowing it would hide its classes.
-/// Idempotent: a second call returns the registered module.
+/// Unlike `ferrocad_inventor_py::install` (which fabricates a synthetic `pivy` package)
+/// this fabricates nothing: `ferrocad` is a real extension module, and creating a
+/// synthetic one would shadow it and hide its classes. Idempotent.
 pub fn install(py: Python<'_>) -> PyResult<Bound<'_, PyModule>> {
     let modules: Bound<'_, PyDict> = py.import("sys")?.getattr("modules")?.downcast_into()?;
 

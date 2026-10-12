@@ -33,13 +33,15 @@ ferrocad_graphics.workspace = true
 ferrocad_types.workspace = true
 # `extension-module` is deliberately *not* a hard feature (see ferrocad_py): it is
 # enabled only when packaging the standalone extension module.
-# `abi3-py310`, like every other facade: `Py_LIMITED_API` unification across the
-# workspace means a different level here would not compose with `ferrocad_gpui`.
-pyo3 = { version = "0.25", features = ["abi3-py310"] }
+# `abi3-py311` matches the rest of the workspace: PyO3 resolves to the **lowest**
+# enabled `abi3-py3NN`, so mixing levels silently lowers the floor, and 3.11 is the
+# FreeCAD 1.0 baseline (it is also where `pyo3::buffer`/`PyBuffer` enters the stable
+# ABI, which `set_shape` uses for zero-copy ingestion).
+pyo3 = { version = "0.25", features = ["abi3-py311"] }
 
 [dev-dependencies]
 # `auto-initialize` lets the boot tests embed CPython.
-pyo3 = { version = "0.25", features = ["abi3-py310", "auto-initialize"] }
+pyo3 = { version = "0.25", features = ["abi3-py311", "auto-initialize"] }
 
 [features]
 # Enabled by maturin / build.sh when producing the Python extension module.

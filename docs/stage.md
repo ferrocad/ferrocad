@@ -204,7 +204,8 @@ multisampled, so it cannot share the MSAA attachments):
 the pass, copies the 1×1 texel at `device` (bottom-left origin) from each target with
 256-byte-aligned staging buffers, and reconstructs the world point by unprojecting the
 pixel-centre NDC (`ndc = 2·(p + 0.5)/size − 1`) through the inverse view-projection. A
-zero entity id means empty space (`PickId(0)` is the "not pickable" id).
+zero G-buffer id means empty space: the shader writes `pick + 1`, so an object that
+carries `PickId(0)` (the compiler's default) is still a valid hit.
 
 It is exposed through the **`InventorView` seam** (in `ferrocad_inventor`): the trait
 gains `supports_pick()` (default `false`) and `pick_at(...)` (default `None`).
@@ -230,15 +231,13 @@ PyO3 bindings over `ferrocad_stage`/`ferrocad_graphics`, surfaced as **`ferrocad
 glue** — every class wraps its Rust counterpart, so no behaviour lives only in Python.
 
 - **`ShapeItem`** — `ShapeItem(entity_id)` with `set_shape(positions, normals=None,
-  triangles=None, edges=None)`. Ingestion has a **buffer fast path** (a NumPy
-  `float32`/`uint32` array, `array.array`, `memoryview`): the buffer is read as one
-  C-level copy via `memoryview.tobytes()` rather than element by element, with a
-  sequence fallback (a list of `(x, y, z)` triples). (The stable ABI below 3.11 has no
-  `PyBuffer`, so this crate stays `abi3-py310` like the other facades and uses
-  `memoryview`.) Display attributes are properties:
-  `draw_mode`, `surface_color`, `edge_color`, `edge_width`, `selectable`,
-  `temporary_transform`; `positions`/`normals`/`triangles`/`edges` read the tessellation
-  back.
+  triangles=None, edges=None)`. Ingestion goes through the **buffer protocol**: a
+  contiguous `float32`/`uint32` buffer (a NumPy array, `array.array`, `memoryview`) is
+  read directly — validated by element type and contiguity, no per-element Python
+  objects — with a sequence fallback (a list of `(x, y, z)` triples). Display attributes
+  are properties: `draw_mode`, `surface_color`, `edge_color`, `edge_width`,
+  `selectable`, `temporary_transform`; `positions`/`normals`/`triangles`/`edges` read the
+  tessellation back.
 - **`Stage`** — `add`, `clear`, `len`, `entities`, and `batch_count()` (compile to draw
   packets) so a script can assert what it will draw. `extract_stage` is the host-facing
   analogue of `ferrocad_inventor_py::extract_scene`.
@@ -254,8 +253,10 @@ glue** — every class wraps its Rust counterpart, so no behaviour lives only in
 
 `ferrocad_stage_py::install(py)` registers the module as both `ferrocad_stage` and
 `ferrocad.stage`, and attaches `stage` to the `ferrocad` extension when it is loaded (so
-the host calls it after booting `ferrocad`; unlike `ferrocad_inventor_py::install` it
-never fabricates a `ferrocad` module, which would shadow the real extension).
+the host calls it after booting `ferrocad`). Where `ferrocad_inventor_py::install`
+fabricates a synthetic **`pivy`** package (so `from pivy import coin` resolves) and the
+App-side facades own the **`FreeCAD`** namespace, this one fabricates nothing: `ferrocad`
+is a real extension module, and creating a synthetic one would shadow it.
 
 **Verification:** the acceptance suite lives in
 [`tests/test_stage_py.py`](../tests/test_stage_py.py) (9 cases: buffer + sequence
@@ -289,6 +290,10 @@ against the **built** `ferrocad_stage` extension. A second Rust test
    where a GPU exists; the CPU ray cast is retained as the fallback (it needs geometry in
    the queue, which a fresh compile always carries). The two agree on the object id and
    the sub-element index, so a switch is invisible to a listener.
+6. **Python floor.** Raised 3.10 → 3.11 with T5: FreeCAD 1.0 targets Python 3.11, and
+   the stable-ABI `PyBuffer` (the buffer-protocol ingestion `ShapeItem.set_shape` uses)
+   only enters the limited API at 3.11. Every facade now names `abi3-py311` — PyO3
+   resolves to the *lowest* enabled `abi3-py3NN`, so a mix silently lowers the floor.
 
 ## 6. Naming reconciliation
 

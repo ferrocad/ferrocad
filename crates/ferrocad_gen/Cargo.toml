@@ -14,7 +14,7 @@ crate-type = ["cdylib"]
 [dependencies]
 # `extension-module` is opt-in (see ferrocad_py) so a plain workspace build keeps
 # linking libpython and the `ferrocad_gpui` binary links cleanly.
-pyo3 = { version = "0.25", features = ["abi3-py310"] }
+pyo3 = { version = "0.25", features = ["abi3-py311"] }
 
 [features]
 # Enabled by build.sh when producing the generated extension module.

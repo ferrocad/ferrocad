@@ -120,7 +120,10 @@ binaries are built separately. This is the concrete reason the workspace keeps
 `abi3` builds against CPython's stable ABI: one wheel works on every CPython from
 the floor upward, so the wheel matrix is platform times architecture, not platform
 times interpreter. The costs are a reduced C-API surface (only the stable subset)
-and a floor to keep current (`requires-python`, currently 3.10). This sandbox runs
+and a floor to keep current (`requires-python`, currently 3.11 — the FreeCAD 1.0
+baseline, and where `PyBuffer`/the buffer protocol enters the stable ABI). PyO3
+resolves to the **lowest** enabled `abi3-py3NN` feature, so every crate in the
+workspace must name the same level or the floor silently drops. This sandbox runs
 CPython 3.14, newer than PyO3 0.25 targets, so the build sets
 `PYO3_USE_ABI3_FORWARD_COMPATIBILITY=1`; that is an escape hatch, not something to
 ship a policy around.

@@ -24,7 +24,7 @@ ferrocad_core.workspace = true
 # tells PyO3 not to link libpython, which is correct for a packaged extension
 # module but breaks `cargo build --workspace` (the `ferrocad_gpui` bin needs the
 # libpython symbols). It is enabled only when packaging the extension.
-pyo3 = { version = "0.25", features = ["abi3-py310"] }
+pyo3 = { version = "0.25", features = ["abi3-py311"] }
 
 [features]
 # Enabled by maturin / build.sh when producing the Python extension module.

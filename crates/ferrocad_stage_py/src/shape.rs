@@ -1,13 +1,14 @@
 //! `ShapeItem`: a tessellated CAD shape with its display attributes.
 //!
-//! Geometry is ingested with a **buffer fast path**: an object exposing a contiguous
-//! `float32`/`uint32` buffer (a NumPy array, `array.array`, `memoryview`) is read as one
-//! C-level copy through `memoryview.tobytes()` rather than element by element; anything
-//! else falls back to iterating Python sequences, so a plain list of `(x, y, z)` tuples
-//! works too. (The stable ABI below 3.11 has no `PyBuffer`, so this uses `memoryview`.)
+//! Geometry is ingested through the **buffer protocol**: a contiguous `float32`/`uint32`
+//! buffer (a NumPy array, `array.array`, `memoryview`) is read directly, validated by
+//! element type and contiguity, and copied once into the item's owned storage — with no
+//! per-element Python objects. Anything else falls back to iterating Python sequences, so
+//! a plain list of `(x, y, z)` tuples works too.
 
 use ferrocad_stage as fs;
 use ferrocad_types::Matrix4;
+use pyo3::buffer::PyBuffer;
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 
@@ -175,17 +176,23 @@ pub(crate) fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     Ok(())
 }
 
-/// Ingest `N` 3-vectors: a contiguous `float32` buffer (a fast copy) or a sequence of
-/// triples.
+/// Ingest `N` 3-vectors: a contiguous `float32` buffer (the buffer protocol) or a
+/// sequence of triples.
 fn ingest_vec3(py: Python<'_>, obj: &Bound<'_, PyAny>, what: &str) -> PyResult<Vec<[f32; 3]>> {
-    if let Some(values) = f32_buffer(py, obj)? {
-        if values.len() % 3 != 0 {
-            return Err(PyValueError::new_err(format!(
-                "{what} needs a multiple of 3 floats, got {}",
-                values.len()
-            )));
+    if let Ok(buffer) = PyBuffer::<f32>::get(obj) {
+        // `as_slice` is `None` for a non-contiguous buffer; fall through to iterate it.
+        if let Some(slice) = buffer.as_slice(py) {
+            if slice.len() % 3 != 0 {
+                return Err(PyValueError::new_err(format!(
+                    "{what} needs a multiple of 3 floats, got {}",
+                    slice.len()
+                )));
+            }
+            return Ok(slice
+                .chunks_exact(3)
+                .map(|c| [c[0].get(), c[1].get(), c[2].get()])
+                .collect());
         }
-        return Ok(values.chunks_exact(3).map(|c| [c[0], c[1], c[2]]).collect());
     }
     let mut out = Vec::new();
     for item in obj.try_iter()? {
@@ -203,8 +210,10 @@ fn ingest_vec3(py: Python<'_>, obj: &Bound<'_, PyAny>, what: &str) -> PyResult<V
 
 /// Ingest a flat `u32` index array (a contiguous buffer, or any int sequence).
 fn ingest_u32(py: Python<'_>, obj: &Bound<'_, PyAny>, what: &str) -> PyResult<Vec<u32>> {
-    if let Some(values) = u32_buffer(py, obj)? {
-        return Ok(values);
+    if let Ok(buffer) = PyBuffer::<u32>::get(obj) {
+        if let Some(slice) = buffer.as_slice(py) {
+            return Ok(slice.iter().map(|cell| cell.get()).collect());
+        }
     }
     let mut out = Vec::new();
     for item in obj.try_iter()? {
@@ -214,50 +223,6 @@ fn ingest_u32(py: Python<'_>, obj: &Bound<'_, PyAny>, what: &str) -> PyResult<Ve
         out.push(value);
     }
     Ok(out)
-}
-
-/// Read a contiguous `float32` buffer (`memoryview.format == "f"`) into a `Vec<f32>`.
-///
-/// `None` when `obj` is not a buffer or is not 4-byte floats (the caller then iterates).
-fn f32_buffer(py: Python<'_>, obj: &Bound<'_, PyAny>) -> PyResult<Option<Vec<f32>>> {
-    let Some((format, itemsize, bytes)) = buffer_bytes(py, obj)? else {
-        return Ok(None);
-    };
-    if format != "f" || itemsize != 4 {
-        return Ok(None);
-    }
-    Ok(Some(decode(&bytes, f32::from_ne_bytes)))
-}
-
-/// Read a contiguous `uint32` buffer (`memoryview.format == "I"/"L"`) into a `Vec<u32>`.
-fn u32_buffer(py: Python<'_>, obj: &Bound<'_, PyAny>) -> PyResult<Option<Vec<u32>>> {
-    let Some((format, itemsize, bytes)) = buffer_bytes(py, obj)? else {
-        return Ok(None);
-    };
-    if !matches!(format.as_str(), "I" | "L") || itemsize != 4 {
-        return Ok(None);
-    }
-    Ok(Some(decode(&bytes, u32::from_ne_bytes)))
-}
-
-/// A `(format, itemsize, bytes)` view of `obj`'s buffer, or `None` when it has none.
-fn buffer_bytes(py: Python<'_>, obj: &Bound<'_, PyAny>) -> PyResult<Option<(String, usize, Vec<u8>)>> {
-    let view = match py.import("builtins")?.getattr("memoryview")?.call1((obj,)) {
-        Ok(view) => view,
-        Err(_) => return Ok(None), // not a buffer-protocol object
-    };
-    let format: String = view.getattr("format")?.extract()?;
-    let itemsize: usize = view.getattr("itemsize")?.extract()?;
-    let bytes: Vec<u8> = view.call_method0("tobytes")?.extract()?;
-    Ok(Some((format, itemsize, bytes)))
-}
-
-/// Decode a byte buffer as `T`, four bytes (native order) at a time.
-fn decode<T>(bytes: &[u8], from: fn([u8; 4]) -> T) -> Vec<T> {
-    bytes
-        .chunks_exact(4)
-        .map(|c| from([c[0], c[1], c[2], c[3]]))
-        .collect()
 }
 
 fn opt_vec3(

@@ -209,8 +209,10 @@ the crates and copies the `.so`s next to `python/FreeCAD`.
 
 ### 3.1 The `abi3` and forward-compatibility notes
 
-The extension is built with PyO3 `abi3-py310`, so one wheel covers CPython 3.10
-and later. The sandbox runs CPython 3.14, which is newer than PyO3 0.25
+The extension is built with PyO3 `abi3-py311`, so one wheel covers CPython 3.11
+and later. (Every workspace crate names the same level: PyO3 resolves to the
+*lowest* enabled `abi3-py3NN`, so a mix would silently lower the floor.) The
+sandbox runs CPython 3.14, which is newer than PyO3 0.25
 officially targets, so builds set:
 
 ```sh

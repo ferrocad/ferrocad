@@ -37,11 +37,11 @@ ferrocad_part.workspace = true
 ferrocad_py.workspace = true
 # `extension-module` is deliberately *not* a hard feature (see ferrocad_py): it is
 # enabled only when packaging the standalone extension module.
-pyo3 = { version = "0.25", features = ["abi3-py310"] }
+pyo3 = { version = "0.25", features = ["abi3-py311"] }
 
 [dev-dependencies]
 # `auto-initialize` lets the boot test embed CPython (as the app does).
-pyo3 = { version = "0.25", features = ["abi3-py310", "auto-initialize"] }
+pyo3 = { version = "0.25", features = ["abi3-py311", "auto-initialize"] }
 
 [features]
 # Enabled when producing the standalone `Part` extension module.

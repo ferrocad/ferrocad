@@ -49,6 +49,39 @@ impl Ray {
         let t = dot(edge2, qvec) * inv_det;
         (t > 0.0).then_some(t)
     }
+
+    /// The distance to the line segment `ab`, if the ray passes within `radius` of it
+    /// (a "thick ray", for picking polylines like the navigation cube's edges).
+    pub fn segment_distance(&self, a: [f64; 3], b: [f64; 3], radius: f64) -> Option<f64> {
+        let d1 = self.direction;
+        let d2 = sub(b, a);
+        let r = sub(self.origin, a);
+        let a11 = dot(d1, d1);
+        let a12 = dot(d1, d2);
+        let a22 = dot(d2, d2);
+        let b1 = dot(d1, r);
+        let b2 = dot(d2, r);
+        let denom = a11 * a22 - a12 * a12;
+        // Closest approach: t on the ray, s on the segment. Solve the two
+        // perpendicularity conditions, then clamp to the segment and in front of the
+        // eye, refining against the constraint we clamped.
+        let (s, t) = if denom.abs() < 1e-12 {
+            (0.0, (b1 / a11).max(0.0))
+        } else {
+            let t = (a12 * b2 - b1 * a22) / denom;
+            let s = (b2 + t * a12) / a22;
+            if (0.0..=1.0).contains(&s) {
+                (s, t.max(0.0))
+            } else {
+                let s = s.clamp(0.0, 1.0);
+                (s, ((s * a12 - b1) / a11).max(0.0))
+            }
+        };
+        let point = add(self.origin, scale(d1, t));
+        let closest = add(a, scale(d2, s));
+        let gap = sub(point, closest);
+        (dot(gap, gap).sqrt() <= radius).then_some(t)
+    }
 }
 
 impl Camera {
@@ -79,34 +112,41 @@ impl Camera {
     }
 }
 
-/// A ray hit: which object, where on it, and on which triangle.
+/// A ray hit: which object, where on it, and on which primitive.
 ///
-/// The richer form of [`pick`], carrying what `SoPickedPoint` and `SoFaceDetail`
-/// expose to Python (world point, surface normal, and the triangle index).
+/// The richer form of [`pick`], carrying what `SoPickedPoint` and the detail classes
+/// expose to Python (world point, surface normal, and the primitive index).
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Hit {
     /// The object that was hit (the packet's [`PickId`]).
     pub id: PickId,
     /// The world-space intersection point.
     pub point: [f32; 3],
-    /// The world-space triangle normal (normalised).
+    /// The world-space normal (triangle normal; `+Z` for a line hit).
     pub normal: [f32; 3],
-    /// The triangle index within the hit mesh (0-based; the `SoFaceDetail` index).
-    pub triangle: u32,
+    /// The index of the primitive within its mesh: a triangle index for
+    /// [`Topology::Triangles`], a segment index for [`Topology::Lines`]. This is the
+    /// `SoFaceDetail`/`SoLineDetail` index.
+    pub element: u32,
+    /// The topology of the mesh that was hit.
+    pub topology: Topology,
     /// The distance along the ray from its origin.
     pub distance: f64,
 }
+
+/// How close a ray must pass to a line segment to pick it (world units).
+const LINE_PICK_RADIUS: f64 = 0.04;
 
 /// The nearest packet under `ray`, with its hit distance.
 pub fn pick(queue: &RenderQueue, ray: &Ray) -> Option<(PickId, f64)> {
     pick_hit(queue, ray).map(|hit| (hit.id, hit.distance))
 }
 
-/// The nearest triangle under `ray`, with its point, normal and index.
+/// The nearest triangle or line segment under `ray`, with its point and index.
 pub fn pick_hit(queue: &RenderQueue, ray: &Ray) -> Option<Hit> {
     let mut best: Option<Hit> = None;
     for packet in &queue.packets {
-        if packet.topology != Topology::Triangles {
+        if packet.topology == Topology::Points {
             continue;
         }
         let Some(geometry) = &packet.geometry else {
@@ -117,21 +157,36 @@ pub fn pick_hit(queue: &RenderQueue, ray: &Ray) -> Option<Hit> {
             .iter()
             .map(|vertex| transform_point(&packet.state.world_transform, vertex.position))
             .collect();
-        for (triangle, indices) in geometry.indices.chunks_exact(3).enumerate() {
+        let chunk = match packet.topology {
+            Topology::Triangles => 3,
+            Topology::Lines => 2,
+            Topology::Points => continue,
+        };
+        for (element, indices) in geometry.indices.chunks_exact(chunk).enumerate() {
             let a = world[indices[0] as usize];
             let b = world[indices[1] as usize];
-            let c = world[indices[2] as usize];
-            if let Some(distance) = ray.triangle_distance(a, b, c) {
-                if best.is_none_or(|hit| distance < hit.distance) {
-                    let point = add(ray.origin, scale(ray.direction, distance));
-                    best = Some(Hit {
-                        id: packet.state.id,
-                        point: to_f32(point),
-                        normal: to_f32(normalize(cross(sub(b, a), sub(c, a)))),
-                        triangle: triangle as u32,
-                        distance,
-                    });
-                }
+            let (distance, normal) = if chunk == 3 {
+                let c = world[indices[2] as usize];
+                let Some(distance) = ray.triangle_distance(a, b, c) else {
+                    continue;
+                };
+                (distance, to_f32(normalize(cross(sub(b, a), sub(c, a)))))
+            } else {
+                let Some(distance) = ray.segment_distance(a, b, LINE_PICK_RADIUS) else {
+                    continue;
+                };
+                (distance, [0.0, 0.0, 1.0])
+            };
+            if best.is_none_or(|hit| distance < hit.distance) {
+                let point = add(ray.origin, scale(ray.direction, distance));
+                best = Some(Hit {
+                    id: packet.state.id,
+                    point: to_f32(point),
+                    normal,
+                    element: element as u32,
+                    topology: packet.topology,
+                    distance,
+                });
             }
         }
     }
@@ -372,5 +427,52 @@ mod tests {
             direction: [0.0, 0.0, 1.0],
         };
         assert_eq!(behind.triangle_distance(a, b, c), None);
+    }
+
+    #[test]
+    fn segment_distance_picks_within_the_radius() {
+        let ray = Ray {
+            origin: [0.0, 0.0, -5.0],
+            direction: [0.0, 0.0, 1.0],
+        };
+        // A segment crossing the view axis at z = 0.
+        assert!((ray.segment_distance([-1.0, 0.0, 0.0], [1.0, 0.0, 0.0], 0.1).unwrap() - 5.0).abs() < 1e-9);
+        // Offset beyond the radius.
+        assert_eq!(ray.segment_distance([-1.0, 0.5, 0.0], [1.0, 0.5, 0.0], 0.1), None);
+        // Behind the ray origin.
+        assert_eq!(ray.segment_distance([-1.0, 0.0, -10.0], [1.0, 0.0, -10.0], 0.1), None);
+    }
+
+    #[test]
+    fn pick_hit_reports_line_topology() {
+        use crate::geometry::Topology;
+        use crate::node::{Node, NodeKind, Scene};
+        let scene = Scene {
+            root: Node {
+                kind: NodeKind::Separator,
+                children: vec![
+                    Node {
+                        kind: NodeKind::Coordinate3(vec![[-1.0, 0.0, 0.0], [1.0, 0.0, 0.0]]),
+                        children: vec![],
+                    },
+                    Node {
+                        kind: NodeKind::Mesh {
+                            indices: vec![0, 1],
+                            normal_indices: vec![],
+                            topology: Topology::Lines,
+                        },
+                        children: vec![],
+                    },
+                ],
+            },
+        };
+        let queue = compile(&scene);
+        let ray = Ray {
+            origin: [0.0, 0.0, -5.0],
+            direction: [0.0, 0.0, 1.0],
+        };
+        let hit = pick_hit(&queue, &ray).expect("line hit");
+        assert_eq!(hit.topology, Topology::Lines);
+        assert_eq!(hit.element, 0);
     }
 }

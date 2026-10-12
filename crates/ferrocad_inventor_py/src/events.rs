@@ -18,7 +18,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{LazyLock, Mutex};
 use std::time::Instant;
 
-use ferrocad_inventor::{Event, Hit, NodeKind, Scene, event_callbacks};
+use ferrocad_inventor::{Event, Hit, NodeKind, Scene, Topology, event_callbacks};
 use pyo3::prelude::*;
 
 use crate::{SoNode, SoType, derives_from, node_initializer};
@@ -401,20 +401,31 @@ fn build_event(py: Python<'_>, event: &Event) -> PyResult<Option<(Py<PyAny>, &'s
     Ok(Some(built))
 }
 
-/// Build a `SoPickedPoint` (with an `SoFaceDetail`) for `hit`.
+/// Build a `SoPickedPoint` (with an `SoFaceDetail` or `SoLineDetail` for `hit`).
 fn build_picked_point(py: Python<'_>, hit: &Hit) -> PyResult<Py<PyAny>> {
-    let detail = Py::new(
-        py,
-        PyClassInitializer::from(SoDetail).add_subclass(SoFaceDetail {
-            face_index: hit.triangle as i32,
-            part_index: 0,
-            point: hit.point,
-        }),
-    )?;
+    let detail: Py<PyAny> = match hit.topology {
+        Topology::Lines => Py::new(
+            py,
+            PyClassInitializer::from(SoDetail).add_subclass(SoLineDetail {
+                line_index: hit.element as i32,
+                part_index: 0,
+            }),
+        )?
+        .into_any(),
+        _ => Py::new(
+            py,
+            PyClassInitializer::from(SoDetail).add_subclass(SoFaceDetail {
+                face_index: hit.element as i32,
+                part_index: 0,
+                point: hit.point,
+            }),
+        )?
+        .into_any(),
+    };
     let picked = SoPickedPoint {
         point: hit.point,
         normal: hit.normal,
-        detail: detail.into_any(),
+        detail,
     };
     Ok(Py::new(py, picked)?.into_any())
 }

@@ -4,7 +4,7 @@
 //! each input event (with its pick) through it, and the callback reads the event and
 //! the point it hit via `getEvent()`/`getPickedPoint()`.
 
-use ferrocad_inventor::{Event, Hit, PickId};
+use ferrocad_inventor::{Event, Hit, PickId, Topology};
 use pyo3::prelude::*;
 use pyo3::types::{PyAny, PyDict};
 
@@ -58,7 +58,8 @@ fn hit() -> Hit {
         id: PickId(0),
         point: [1.0, 2.0, 3.0],
         normal: [0.0, 1.0, 0.0],
-        triangle: 4,
+        element: 4,
+        topology: Topology::Triangles,
         distance: 5.0,
     }
 }

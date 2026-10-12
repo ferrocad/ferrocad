@@ -1001,7 +1001,7 @@ extracted `Scene` is a copy).
 
 ---
 
-### Navigation cube (NaviCube) — slices N1–N3 ✅
+### Navigation cube (NaviCube) — slices N1–N3 and the N4 core ✅
 
 **Goal:** the viewer-corner orientation gizmo (FreeCAD's `Gui::NaviCube`), as the
 first real overlay on the render stack. Plan and status: [`navicube.md`](navicube.md).
@@ -1016,16 +1016,21 @@ first real overlay on the render stack. Plan and status: [`navicube.md`](navicub
   `camera(rect)`, `snap_view`) and `ferrocad_gpui::navicube::NaviCube` (corner rect ×
   DPR, camera mirroring, base/hilite colours); `InventorViewport::with_navicube`.
 - **Interaction (N3):** rect hit-test → hover highlight (recompile on change); a click
-  snaps the main camera onto the picked face, keeping the camera distance.
+  snaps the main camera onto the picked piece, keeping the camera distance.
+- **Edges, corners & drag (N4 core):** line/point render **pipelines** routed by
+  `Topology`, with **line (segment) picking** (`Hit.topology` + `element`; the facade
+  builds a `SoLineDetail`); the cube's 12 **edges** (lines) and 8 **corners** (small
+  cubes) as pieces, so all 26 pieces hover and snap; **drag-orbit** via gpui's
+  `on_drag`/`on_drag_move`.
 
-**Verification:** `ferrocad_inventor` 16 · `ferrocad_inventor_py` 17 · `ferrocad_wgpu`
-**2** (incl. `overlay_draws_into_its_rect`) · `ferrocad_gpui` 15 (incl. 6 NaviCube
-unit tests). The `inventor_roundtrip` example renders the cube in the corner and
+**Verification:** `ferrocad_inventor` 19 · `ferrocad_inventor_py` 17 · `ferrocad_wgpu`
+**2** (incl. `overlay_draws_into_its_rect`) · `ferrocad_gpui` 17 (incl. NaviCube unit
+tests for the corner rect, centre→Front, corner hit, mirroring, hilite, snap, orbit).
+The `inventor_roundtrip` example renders the faceted cube (faces, edges, corners) and
 mirrors a tilted camera.
 
-**Deferred (N4):** face labels (need a texture path), edge/corner picks (need
-line/point pipelines + pick), translucent inactive faces, drag-rotate, animated snap,
-`Home`/arrows.
+**Deferred (N4b):** face labels (need a texture path), translucent inactive faces, a
+context menu, and `Home`/arrow buttons with an animated snap.
 
 ---
 

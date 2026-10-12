@@ -285,12 +285,12 @@ impl WgpuRenderer {
                 multiview_mask: None,
             });
 
-            pass.set_pipeline(&self.pipelines.opaque);
             for (index, batch) in batches.iter().enumerate() {
                 let key = (batch.mesh_id(), batch.generation());
                 let Some(mesh) = self.mesh_cache.get(&key) else {
                     continue;
                 };
+                pass.set_pipeline(self.pipelines.for_draw(false, batch.topology()));
                 pass.set_bind_group(
                     0,
                     &self.uniforms.bind_group,
@@ -398,14 +398,10 @@ impl WgpuRenderer {
                 };
                 pass.set_viewport(x, y, w, h, 0.0, 1.0);
                 pass.set_scissor_rect(x as u32, y as u32, w as u32, h as u32);
-                pass.set_pipeline(if view.overlay {
-                    &self.pipelines.overlay
-                } else {
-                    &self.pipelines.opaque
-                });
                 for batch in &view.queue.packets {
                     let key = (batch.mesh_id, batch.generation);
                     if let Some(mesh) = self.mesh_cache.get(&key) {
+                        pass.set_pipeline(self.pipelines.for_draw(view.overlay, batch.topology));
                         pass.set_bind_group(
                             0,
                             &self.uniforms.bind_group,

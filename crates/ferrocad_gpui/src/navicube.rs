@@ -3,15 +3,15 @@
 //! The counterpart of FreeCAD's `Gui::NaviCube`. The cube *scene* and its overlay
 //! camera are pure (`ferrocad_inventor::navicube`); this is the viewer glue that
 //! places the cube in a viewport corner, mirrors the main camera's orientation into
-//! the cube, hit-tests the corner rectangle, highlights the hovered face, and — on a
-//! click — snaps the main camera onto that face.
+//! the cube, hit-tests the corner rectangle, highlights the hovered piece, and — on a
+//! click — snaps the main camera onto that face, edge or corner.
 //!
-//! Labels, the edge/corner picks, drag-rotate, animation and `Home`/arrows are
-//! deferred (see `docs/navicube.md` §4–§5).
+//! Labels, the context menu, `Home`/arrows, translucent inactive faces and animated
+//! snapping are deferred (see `docs/navicube.md` §4–§5).
 
 use ferrocad_inventor::{
     Camera, NodeKind, Rect, RenderQueue, Scene, ViewSpec, Viewport, compile_with, navicube,
-    navicube::Face, pick_at_rect,
+    navicube::Piece, pick_at_rect,
 };
 use ferrocad_types::{Matrix4, Placement, Rotation, Vector3};
 
@@ -40,7 +40,7 @@ pub struct NaviCube {
     size: f32,
     /// The margin from the corner, in logical pixels.
     margin: f32,
-    hilite: Option<Face>,
+    hilite: Option<Piece>,
     /// The camera rotation last synced into the cube (so we only recompile on change).
     synced: Option<Rotation>,
 }
@@ -100,22 +100,22 @@ impl NaviCube {
         self.recompile();
     }
 
-    /// The face under a device position, if it is over the cube.
-    pub fn hit(&self, device: [i32; 2]) -> Option<Face> {
+    /// The face, edge or corner under a device position, if it is over the cube.
+    pub fn hit(&self, device: [i32; 2]) -> Option<Piece> {
         if !self.rect.contains(device) {
             return None;
         }
-        pick_at_rect(&self.queue, &self.camera, self.rect, device).and_then(Face::from_pick_id)
+        pick_at_rect(&self.queue, &self.camera, self.rect, device).and_then(Piece::from_pick_id)
     }
 
-    /// Highlight `face` (or clear), rebuilding the scene when the highlight changes.
+    /// Highlight `piece` (or clear), rebuilding the scene when the highlight changes.
     /// Returns whether anything changed.
-    pub fn set_hilite(&mut self, face: Option<Face>) -> bool {
-        if self.hilite == face {
+    pub fn set_hilite(&mut self, piece: Option<Piece>) -> bool {
+        if self.hilite == piece {
             return false;
         }
-        self.hilite = face;
-        self.scene = navicube::scene(face);
+        self.hilite = piece;
+        self.scene = navicube::scene(piece);
         if let Some(rotation) = self.synced {
             self.apply_rotation(rotation);
         }
@@ -134,11 +134,27 @@ impl NaviCube {
     }
 }
 
-/// The main-camera **view matrix** that snaps the view onto `face`, keeping the
+/// The main-camera **view matrix** that snaps the view onto `piece`, keeping the
 /// current camera distance.
-pub fn snap_view(face: Face, main: &Camera) -> Matrix4 {
+pub fn snap_view(piece: Piece, main: &Camera) -> Matrix4 {
     let base = Vector3::new(0.0, 0.0, -camera_distance(main));
-    Placement::new(base, face.orientation()).to_matrix()
+    Placement::new(base, piece.orientation()).to_matrix()
+}
+
+/// The camera **view matrix** orbited by a drag of `delta` logical pixels.
+pub fn drag_view(main: &Camera, delta: [f32; 2]) -> Matrix4 {
+    const RADIANS_PER_PIXEL: f64 = 0.012;
+    let yaw = Rotation::from_axis_angle(
+        &Vector3::new(0.0, 1.0, 0.0),
+        f64::from(delta[0]) * RADIANS_PER_PIXEL,
+    );
+    let pitch = Rotation::from_axis_angle(
+        &Vector3::new(1.0, 0.0, 0.0),
+        f64::from(delta[1]) * RADIANS_PER_PIXEL,
+    );
+    let base = Vector3::new(main.view.m[3], main.view.m[7], main.view.m[11]);
+    let rotation = yaw.multiply(&pitch).multiply(&Rotation::from_matrix(&main.view));
+    Placement::new(base, rotation).to_matrix()
 }
 
 /// The cube's device-pixel rectangle for a corner, size and margin (both logical).
@@ -171,10 +187,18 @@ fn camera_distance(camera: &Camera) -> f64 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use ferrocad_inventor::navicube::{HILITE_COLOR, BASE_COLOR};
+    use ferrocad_inventor::navicube::{BASE_COLOR, HILITE_COLOR};
 
     fn viewport() -> Viewport {
         Viewport::new([640, 480], 1.0)
+    }
+
+    fn centre(cube: &NaviCube) -> [i32; 2] {
+        let rect = cube.rect();
+        [
+            rect.x + rect.width as i32 / 2,
+            rect.y + rect.height as i32 / 2,
+        ]
     }
 
     #[test]
@@ -191,32 +215,48 @@ mod tests {
         let mut cube = NaviCube::new(viewport());
         // With the default (identity) camera orientation, Front faces the viewer.
         cube.sync(&Camera::identity());
-        let rect = cube.rect();
-        let centre = [rect.x + rect.width as i32 / 2, rect.y + rect.height as i32 / 2];
-        assert_eq!(cube.hit(centre), Some(Face::Front));
+        assert_eq!(cube.hit(centre(&cube)), Some(Piece::FRONT));
         // Outside the rectangle there is no hit.
         assert_eq!(cube.hit([5, 5]), None);
     }
 
     #[test]
-    fn hilite_changes_the_face_colour_and_only_recompiles_on_change() {
+    fn a_corner_region_maps_to_a_corner_piece() {
         let mut cube = NaviCube::new(viewport());
-        assert!(cube.set_hilite(Some(Face::Top)));
-        assert!(!cube.set_hilite(Some(Face::Top)), "no-op when unchanged");
-        let top = cube
-            .queue
-            .packets
-            .iter()
-            .find(|packet| packet.state.id == Face::Top.pick_id())
-            .expect("top packet");
-        assert_eq!(top.state.color, HILITE_COLOR);
-        let front = cube
-            .queue
-            .packets
-            .iter()
-            .find(|packet| packet.state.id == Face::Front.pick_id())
-            .expect("front packet");
-        assert_eq!(front.state.color, BASE_COLOR);
+        cube.sync(&Camera::identity());
+        // Somewhere in the cube rect there is a clickable corner (the +X+Y+Z nub);
+        // scanning avoids depending on the exact ortho scale.
+        let rect = cube.rect();
+        let mut found = None;
+        for i in 0..12 {
+            for j in 0..12 {
+                let probe = [
+                    rect.x + rect.width as i32 * i / 12,
+                    rect.y + rect.height as i32 * j / 12,
+                ];
+                if cube.hit(probe) == Some(Piece { axes: [1, 1, 1] }) {
+                    found = Some(probe);
+                }
+            }
+        }
+        assert!(found.is_some(), "a corner piece should be clickable");
+    }
+
+    #[test]
+    fn hilite_changes_the_piece_colour_and_only_recompiles_on_change() {
+        let mut cube = NaviCube::new(viewport());
+        assert!(cube.set_hilite(Some(Piece::TOP)));
+        assert!(!cube.set_hilite(Some(Piece::TOP)), "no-op when unchanged");
+        let colour_of = |cube: &NaviCube, piece: Piece| {
+            cube.queue
+                .packets
+                .iter()
+                .find(|packet| packet.state.id == piece.pick_id())
+                .map(|packet| packet.state.color)
+                .expect("piece packet")
+        };
+        assert_eq!(colour_of(&cube, Piece::TOP), HILITE_COLOR);
+        assert_eq!(colour_of(&cube, Piece::FRONT), BASE_COLOR);
     }
 
     #[test]
@@ -224,31 +264,40 @@ mod tests {
         let mut cube = NaviCube::new(viewport());
         // A camera looking from +X makes the Right face point at the viewer.
         let camera = Camera {
-            view: Placement::new(Vector3::new(0.0, 0.0, -4.0), Face::Right.orientation())
+            view: Placement::new(Vector3::new(0.0, 0.0, -4.0), Piece::RIGHT.orientation())
                 .to_matrix(),
             ..Camera::identity()
         };
         cube.sync(&camera);
-        let rect = cube.rect();
-        let centre = [
-            rect.x + rect.width as i32 / 2,
-            rect.y + rect.height as i32 / 2,
-        ];
-        assert_eq!(cube.hit(centre), Some(Face::Right));
+        assert_eq!(cube.hit(centre(&cube)), Some(Piece::RIGHT));
 
         // Snapping back to Front and re-syncing turns the Front face to the viewer.
         cube.sync(&Camera {
-            view: snap_view(Face::Front, &Camera::identity()),
+            view: snap_view(Piece::FRONT, &Camera::identity()),
             ..Camera::identity()
         });
-        assert_eq!(cube.hit(centre), Some(Face::Front));
+        assert_eq!(cube.hit(centre(&cube)), Some(Piece::FRONT));
     }
 
     #[test]
-    fn snap_view_looks_along_the_face_normal() {
-        let view = snap_view(Face::Right, &Camera::identity());
-        // The view rotation maps the face normal onto +Z (toward the viewer).
-        let rotated = Rotation::from_matrix(&view).to_matrix().transform(&Face::Right.normal());
-        assert!(rotated.sub(&Vector3::new(0.0, 0.0, 1.0)).length() < 1e-9);
+    fn snap_view_looks_along_the_piece_direction() {
+        for piece in [Piece::RIGHT, Piece::TOP, Piece { axes: [1, 1, 1] }] {
+            let view = snap_view(piece, &Camera::identity());
+            let rotated = Rotation::from_matrix(&view)
+                .to_matrix()
+                .transform(&piece.direction());
+            assert!(rotated.sub(&Vector3::new(0.0, 0.0, 1.0)).length() < 1e-9);
+        }
+    }
+
+    #[test]
+    fn drag_view_orbits_around_the_camera() {
+        let camera = Camera::identity();
+        let view = drag_view(&camera, [50.0, 0.0]);
+        // A horizontal drag rotates the view (not the identity anymore) but keeps the
+        // camera distance.
+        assert!(!Rotation::from_matrix(&view).to_matrix().is_unity(1e-9));
+        let base = Vector3::new(view.m[3], view.m[7], view.m[11]);
+        assert!(base.is_null());
     }
 }

@@ -19,8 +19,9 @@ use ferrocad_inventor::{
     ViewSpec, compile_with, pick_at_hit,
 };
 use gpui::{
-    AnyElement, Context, IntoElement, MouseButton, MouseDownEvent, MouseExitEvent, MouseMoveEvent,
-    MouseUpEvent, ObjectFit, Render, RenderImage, Window, div, img, prelude::*,
+    AnyElement, AppContext, Context, DragMoveEvent, IntoElement, MouseButton, MouseDownEvent,
+    MouseExitEvent, MouseMoveEvent, MouseUpEvent, ObjectFit, Render, RenderImage, Window, div, img,
+    prelude::*,
 };
 use image::{Frame, ImageBuffer, Rgba};
 
@@ -36,9 +37,33 @@ pub struct InventorViewport<V: InventorView> {
     listeners: Vec<Box<dyn EventListener>>,
     /// The navigation-cube overlay, when enabled.
     navicube: Option<NaviCube>,
+    /// An in-progress navigation-cube orbit drag (from the first `on_drag_move`).
+    navicube_drag: Option<NavicubeDrag>,
     /// The object currently under the pointer.
     hover: Option<PickId>,
     frame: Option<Arc<RenderImage>>,
+}
+
+/// A navigation-cube orbit drag in progress.
+struct NavicubeDrag {
+    /// Whether the drag began over the cube (otherwise it is ignored).
+    on_cube: bool,
+    /// The last logical pointer position, for the next delta.
+    last: [f32; 2],
+    /// Accumulated movement, so a click (no drag) can snap instead of orbiting.
+    moved: f32,
+}
+
+/// The marker type gpui's drag system tracks for the navigation cube.
+struct NavicubeDragMarker;
+
+/// The (invisible) preview gpui renders while a navigation-cube drag is active.
+struct NavicubeDragPreview;
+
+impl Render for NavicubeDragPreview {
+    fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
+        div()
+    }
 }
 
 impl<V: InventorView> InventorViewport<V> {
@@ -52,6 +77,7 @@ impl<V: InventorView> InventorViewport<V> {
             queue,
             listeners: Vec::new(),
             navicube: None,
+            navicube_drag: None,
             hover: None,
             frame: None,
         }
@@ -111,26 +137,25 @@ impl<V: InventorView> InventorViewport<V> {
 
     /// Deliver a mouse-button change, in **logical** window coordinates.
     ///
-    /// A press on a navigation-cube face snaps the main camera onto it; otherwise the
-    /// event goes to the main scene's listeners.
+    /// A press on the cube begins a possible orbit drag; a release that did not orbit
+    /// snaps the main camera onto the piece under the pointer. Otherwise the event
+    /// goes to the main scene.
     pub fn handle_button(&mut self, logical: [f32; 2], button: u8, down: bool) -> bool {
+        // Any button event ends a (possibly stale) orbit drag.
+        self.navicube_drag = None;
         let device = self.camera.viewport.to_device(logical);
-        let navicube_face = self
-            .navicube
-            .as_ref()
-            .filter(|cube| cube.rect().contains(device))
-            .and_then(|cube| cube.hit(device));
         if self
             .navicube
             .as_ref()
             .is_some_and(|cube| cube.rect().contains(device))
         {
             if down {
-                if let Some(face) = navicube_face {
-                    self.camera.view = crate::navicube::snap_view(face, &self.camera);
-                    self.recompile();
-                    return true;
-                }
+                return false; // the orbit starts on the first drag-move
+            }
+            if let Some(piece) = self.navicube.as_ref().and_then(|cube| cube.hit(device)) {
+                self.camera.view = crate::navicube::snap_view(piece, &self.camera);
+                self.recompile();
+                return true;
             }
             return false;
         }
@@ -141,6 +166,30 @@ impl<V: InventorView> InventorViewport<V> {
             down,
         };
         self.dispatch(&event, hit.as_ref())
+    }
+
+    /// Handle a gpui drag-move: orbit the main camera when the drag began over the
+    /// navigation cube. Reports whether the view changed.
+    fn navicube_drag_move(&mut self, logical: [f32; 2]) -> bool {
+        let device = self.camera.viewport.to_device(logical);
+        let on_cube = self
+            .navicube
+            .as_ref()
+            .is_some_and(|cube| cube.rect().contains(device));
+        let state = self.navicube_drag.get_or_insert(NavicubeDrag {
+            on_cube,
+            last: logical,
+            moved: 0.0,
+        });
+        if !state.on_cube {
+            return false;
+        }
+        let delta = [logical[0] - state.last[0], logical[1] - state.last[1]];
+        state.last = logical;
+        state.moved += (delta[0] * delta[0] + delta[1] * delta[1]).sqrt();
+        self.camera.view = crate::navicube::drag_view(&self.camera, delta);
+        self.recompile();
+        true
     }
 
     /// Deliver a pointer leave.
@@ -256,6 +305,17 @@ impl<V: InventorView + 'static> Render for InventorViewport<V> {
                     cx.notify();
                 }
             }))
+            .on_drag(NavicubeDragMarker, |_, _, _, cx| {
+                cx.new(|_| NavicubeDragPreview)
+            })
+            .on_drag_move::<NavicubeDragMarker>(cx.listener(
+                |this, event: &DragMoveEvent<NavicubeDragMarker>, _window, cx| {
+                    let position = [event.event.position.x.0, event.event.position.y.0];
+                    if this.navicube_drag_move(position) {
+                        cx.notify();
+                    }
+                },
+            ))
             .on_mouse_exit(cx.listener(|this, _event: &MouseExitEvent, _window, cx| {
                 if this.handle_pointer_leave() {
                     cx.notify();

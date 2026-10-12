@@ -100,12 +100,16 @@ The contract, matching FreeCAD (see the assessment and `InputDevice`/
   captured each frame at prepaint via `on_children_prepainted` — to get a
   **viewport-local** logical point before `Viewport::to_device` yields device pixels.
   Every `handle_pointer`/`handle_button` caller passes viewport-local coordinates.
-- The render target is sized in physical pixels; MSAA (4× by default) resolves
-  into the single-sampled target that is read back or shared. **MVP caveat:** the
-  target is still the fixed size chosen when the viewport was created (`640×480`),
-  not the element's physical bounds — so the image is stretched to the pane and the
-  pick scale does not yet follow a resize. Driving the target (and the camera's
-  [`Viewport`]) from the element bounds is the next step.
+- **The render target follows the element.** The target is sized in physical pixels;
+  MSAA (4× by default) resolves into the single-sampled target that is read back or
+  shared. `InventorViewport` keeps it — and the camera's [`Viewport`], and the
+  navigation-cube overlay — at the element's physical size: at prepaint it records the
+  element bounds, and at the next frame it calls `InventorView::resize` and sets
+  `Camera.viewport` from `bounds × window.scale_factor` (requesting one more frame so
+  the change lands). The projection's *aspect* is still the host's: `Camera` carries a
+  baked projection, so a pane whose aspect differs from the one the camera was built for
+  renders with that aspect until the host rebuilds it (a camera fov/aspect model is the
+  next step).
 
 ## 5. What is implemented vs not
 
@@ -131,7 +135,8 @@ The contract, matching FreeCAD (see the assessment and `InputDevice`/
   slope/constant depth bias** (so a coplanar shaded-with-edges wireframe wins the depth
   test), and the mesh cache is keyed by `mesh_id`, **evicting the previous generation**
   (T4.2–T4.3) instead of accumulating.
-- CPU ray picking; event/listener dispatch; `Viewport`/DPI primitives.
+- CPU ray picking; event/listener dispatch; `Viewport`/DPI primitives; the render
+  target tracking the element's physical size (`InventorView::resize`).
 - **Hardware G-buffer picking** (`ferrocad_wgpu::pick`): `WgpuRenderer::pick_at` renders
   the `[entity_id, part_idx]` / `[normal, topology]` / depth targets and reads one texel
   back, unprojecting the world point via the inverse view-projection. Exposed through

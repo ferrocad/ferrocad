@@ -50,6 +50,15 @@ pub trait InventorView {
     /// The target's size in physical pixels.
     fn size(&self) -> [u32; 2];
 
+    /// Resize the view's render target to `size`, in physical pixels.
+    ///
+    /// A host calls this when the element it presents into changes size, so the target
+    /// (and the host's camera viewport) stay at the element's physical size. The default
+    /// is a no-op, for backends with a fixed target.
+    fn resize(&mut self, size: [u32; 2]) {
+        let _ = size;
+    }
+
     /// Draw a compiled queue into the view's own target.
     fn draw(&mut self, queue: &RenderQueue, camera: &Camera) -> Result<(), Self::Error>;
 

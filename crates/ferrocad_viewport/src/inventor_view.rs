@@ -249,6 +249,44 @@ impl<V: InventorView> InventorViewport<V> {
         }
     }
 
+    /// Keep the camera's [`Viewport`] (and the backend's render target) at the element's
+    /// **physical** size, from the window-space bounds captured at the last prepaint.
+    ///
+    /// gpui reports an element's bounds in **logical** window pixels; multiplied by the
+    /// window scale factor that is the device size the renderer, picking and the overlays
+    /// work in. Returns whether the size changed. A no-op until the first prepaint.
+    fn sync_size(&mut self, window: &Window) -> bool {
+        match self.last_bounds {
+            Some(bounds) => self.apply_element_size(
+                [bounds.size.width.0, bounds.size.height.0],
+                window.scale_factor(),
+            ),
+            None => false,
+        }
+    }
+
+    /// Apply a logical element size (and display scale) to the camera viewport, the
+    /// render target and the navigation-cube overlay, recompiling if the device-pixel
+    /// ratio changed (it seeds screen-space nodes). Returns whether anything changed.
+    fn apply_element_size(&mut self, logical: [f32; 2], scale: f32) -> bool {
+        let scale = scale.max(1.0);
+        let device = [
+            (logical[0] * scale).round().max(1.0) as u32,
+            (logical[1] * scale).round().max(1.0) as u32,
+        ];
+        let viewport = Viewport::new(device, scale);
+        if viewport == self.camera.viewport {
+            return false;
+        }
+        self.camera.viewport = viewport;
+        self.view.resize(device);
+        if let Some(cube) = self.navicube.as_mut() {
+            cube.set_viewport(viewport);
+        }
+        self.recompile();
+        true
+    }
+
     /// Deliver a pointer move, in **viewport-local logical** pixels (top-left origin).
     ///
     /// Over the navigation cube this hovers its faces; over the gizmo it drags or
@@ -586,6 +624,11 @@ impl<V: InventorView> InventorViewport<V> {
 
 impl<V: InventorView + 'static> Render for InventorViewport<V> {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        // Follow the element's physical size before drawing (the bounds were captured at
+        // the previous prepaint). A change needs one more frame to take effect.
+        if self.sync_size(window) {
+            window.request_animation_frame();
+        }
         // MVP: render and read back during paint, on the UI thread. A snap animation
         // keeps requesting frames until it settles.
         if self.step_snap() {
@@ -706,6 +749,8 @@ mod tests {
     /// A view that returns fixed pixels, so the gpui side needs no GPU.
     struct FakeView {
         pixels: ImageData,
+        resize_calls: u32,
+        last_resize: Option<[u32; 2]>,
     }
 
     impl InventorView for FakeView {
@@ -714,6 +759,10 @@ mod tests {
 
         fn size(&self) -> [u32; 2] {
             [self.pixels.width, self.pixels.height]
+        }
+        fn resize(&mut self, size: [u32; 2]) {
+            self.resize_calls += 1;
+            self.last_resize = Some(size);
         }
         fn draw(&mut self, _queue: &RenderQueue, _camera: &Camera) -> Result<(), Self::Error> {
             Ok(())
@@ -727,7 +776,11 @@ mod tests {
     }
 
     fn fake(pixels: ImageData) -> FakeView {
-        FakeView { pixels }
+        FakeView {
+            pixels,
+            resize_calls: 0,
+            last_resize: None,
+        }
     }
 
     #[test]
@@ -826,6 +879,34 @@ mod tests {
         // Before the first prepaint there is no origin; pass the point through.
         viewport.last_bounds = None;
         assert_eq!(viewport.to_local(point(px(100.0), px(60.0))), [100.0, 60.0]);
+    }
+
+    #[test]
+    fn the_element_size_drives_the_camera_viewport_and_the_backend() {
+        let camera = Camera {
+            viewport: Viewport::new([640, 480], 1.0),
+            ..Camera::identity()
+        };
+        let mut viewport =
+            InventorViewport::new(fake(ImageData::default()), camera, triangle_scene())
+                .with_navicube(NaviCube::new(Viewport::new([640, 480], 1.0)));
+        let cube_before = viewport.navicube.as_ref().unwrap().rect();
+
+        // An 800x600 logical element at 2x is 1600x1200 device pixels.
+        assert!(viewport.apply_element_size([800.0, 600.0], 2.0));
+        assert_eq!(viewport.camera.viewport.device_size(), [1600, 1200]);
+        assert_eq!(viewport.camera.viewport.device_pixel_ratio(), 2.0);
+        assert_eq!(viewport.view().last_resize, Some([1600, 1200]));
+        assert_eq!(viewport.view().resize_calls, 1);
+        assert_ne!(
+            viewport.navicube.as_ref().unwrap().rect(),
+            cube_before,
+            "the navigation cube follows the resize"
+        );
+
+        // A redundant report does not touch the backend again.
+        assert!(!viewport.apply_element_size([800.0, 600.0], 2.0));
+        assert_eq!(viewport.view().resize_calls, 1, "an unchanged size is a no-op");
     }
 
     /// A view with a hardware pick path: it reports id `42` wherever there is a queue to

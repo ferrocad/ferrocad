@@ -158,6 +158,8 @@ impl Shell {
     /// extracted into a [`ferrocad_inventor::Scene`] ([`python::inventor_scene`]) —
     /// falling back to the Rust sample if the interpreter is unavailable.
     pub fn enable_viewport(&mut self, cx: &mut Context<Self>) {
+        // A bootstrap size only: `InventorViewport` resizes the render target and the
+        // camera to its element's physical size on the first frame (see `sync_size`).
         const SIZE: [u32; 2] = [640, 480];
         let Ok(renderer) = WgpuRenderer::new_default(SIZE) else {
             return;

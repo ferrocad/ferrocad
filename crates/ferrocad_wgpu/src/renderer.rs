@@ -791,6 +791,10 @@ impl InventorView for WgpuRenderer {
         self.size
     }
 
+    fn resize(&mut self, size: [u32; 2]) {
+        WgpuRenderer::resize(self, size);
+    }
+
     fn draw(&mut self, queue: &RenderQueue, camera: &Camera) -> Result<(), Self::Error> {
         // Clone the view handle so the borrow of the target view does not alias the
         // `&mut self` needed by `render` (a `TextureView` is a cheap handle).

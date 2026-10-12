@@ -25,7 +25,7 @@ pub mod pixels;
 pub mod state;
 
 pub use batch::{DrawBatch, DrawPacket, Generation, MeshId, PickId, RenderQueue};
-pub use camera::Camera;
+pub use camera::{Camera, Projection};
 pub use geometry::{Geometry, Texture2, Topology, Vertex};
 pub use pick::{Hit, Ray, pick_at, pick_at_hit, pick_at_rect, pick_at_rect_hit, pick_hit};
 pub use pixels::{Rect, Viewport};

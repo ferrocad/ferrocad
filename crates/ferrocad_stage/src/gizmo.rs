@@ -535,7 +535,7 @@ fn color_for(handle: GizmoHandle, hovered: bool) -> [f32; 4] {
 pub fn scale_for(camera: &Camera, origin: Vector3, pixels: f64) -> f64 {
     let eye = camera_position(&camera.view);
     let distance = eye.sub(&origin).length().max(1e-6);
-    let m5 = camera.projection.m[5].abs().max(1e-6);
+    let m5 = camera.projection_matrix().m[5].abs().max(1e-6);
     let height = f64::from(camera.viewport.device_size()[1].max(1));
     2.0 * pixels * distance / (m5 * height)
 }
@@ -649,21 +649,17 @@ fn to_vec(v: [f64; 3]) -> Vector3 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use ferrocad_graphics::Viewport;
+    use ferrocad_graphics::{Projection, Viewport};
 
     /// A 45° perspective camera at `(0, 0, eye_z)` looking toward the origin.
     fn camera(eye_z: f64) -> Camera {
-        let f = 1.0 / (45.0f64.to_radians() / 2.0).tan();
-        let (near, far) = (0.1f64, 100.0f64);
-        let mut m = [0.0f64; 16];
-        m[0] = f;
-        m[5] = f;
-        m[10] = (far + near) / (near - far);
-        m[11] = (2.0 * far * near) / (near - far);
-        m[14] = -1.0;
         Camera {
             view: Placement::new(Vector3::new(0.0, 0.0, -eye_z), Rotation::identity()).to_matrix(),
-            projection: Matrix4::from_values(m),
+            projection: Projection::Perspective {
+                fov_y: 45.0f64.to_radians(),
+                near: 0.1,
+                far: 100.0,
+            },
             viewport: Viewport::new([100, 100], 1.0),
         }
     }

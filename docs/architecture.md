@@ -16,7 +16,7 @@ obvious:
 | Component | Kind | Role |
 | --- | --- | --- |
 | `ferrocad_types` | `rlib` | Base value types (FreeCAD's `Base`): `Quantity`/`Unit`, `Vector3`/`Matrix4`/`Rotation`/`Placement`. A **leaf**. |
-| `ferrocad_graphics` | `rlib` | The **neutral graphics primitives**: the draw contract (`DrawPacket`/`RenderQueue`/`DrawBatch`/`Geometry`/`Vertex`/`Topology`, `MeshId`/`Generation`/`PickId`, `StateSnapshot`), the camera/viewport (`Camera`/`Viewport`/`Rect`) and CPU picking (`Ray`/`Hit`). A **leaf** above `ferrocad_types`. |
+| `ferrocad_graphics` | `rlib` | The **neutral graphics primitives**: the draw contract (`DrawPacket`/`RenderQueue`/`DrawBatch`/`Geometry`/`Vertex`/`Topology`, `MeshId`/`Generation`/`PickId`, `StateSnapshot`), the camera/viewport (`Camera`/`Projection`/`Viewport`/`Rect`) and CPU picking (`Ray`/`Hit`). A **leaf** above `ferrocad_types`. |
 | `ferrocad_geom` | `rlib` | The geometry seam: opaque `Shape`, `History`/`ElementRef`/`ElementMap`, and the `GeometryBackend` trait (+ `NullBackend`). No kernel. A **leaf** above `ferrocad_types`. |
 | `ferrocad_occt` | `rlib` | The OCCT implementation of `GeometryBackend` (box/fuse/cut/fillet/place), via `opencascade-sys` + the sibling history bridge. Needs OCCT to build; **not** a default member. |
 | `ferrocad_core` | `rlib` | The pure-Rust engine: documents, properties, DAG, transactions, observers, expressions. No Python, no UI, no OCCT. Depends on `ferrocad_types` (and re-exports it). A **leaf** wrt the kernel. |

@@ -16,11 +16,12 @@
 use std::collections::HashMap;
 use std::sync::{Arc, OnceLock};
 
-use ferrocad_types::{Matrix4, Placement, Rotation, Vector3};
+use ferrocad_types::{Placement, Rotation, Vector3};
 
 use crate::batch::PickId;
 use crate::camera::Camera;
 use crate::geometry::{Texture2, Topology};
+use crate::Projection;
 use crate::node::{Node, NodeKind, Scene};
 use crate::pixels::{Rect, Viewport};
 
@@ -489,22 +490,13 @@ pub fn camera(rect: Rect) -> Camera {
     Camera {
         view: Placement::new(Vector3::new(0.0, 0.0, -CAMERA_DISTANCE), Rotation::identity())
             .to_matrix(),
-        projection: ortho(ORTHO_EXTENT),
+        projection: Projection::Orthographic {
+            extent: ORTHO_EXTENT,
+            near: 0.1,
+            far: 100.0,
+        },
         viewport: Viewport::new([rect.width.max(1), rect.height.max(1)], 1.0),
     }
-}
-
-/// A symmetric orthographic projection mapping `[-extent, extent]` to the clip volume
-/// (wgpu's `z ∈ [0, 1]`).
-fn ortho(extent: f64) -> Matrix4 {
-    let (near, far) = (0.1_f64, 100.0_f64);
-    let mut m = [0.0_f64; 16];
-    m[0] = 1.0 / extent;
-    m[5] = 1.0 / extent;
-    m[10] = 1.0 / (near - far);
-    m[11] = near / (near - far);
-    m[15] = 1.0;
-    Matrix4::from_values(m)
 }
 
 #[cfg(test)]

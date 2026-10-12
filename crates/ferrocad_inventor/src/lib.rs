@@ -55,8 +55,8 @@ pub use ferrocad_graphics::pick::{
     pick_at, pick_at_hit, pick_at_rect, pick_at_rect_hit, pick_hit,
 };
 pub use ferrocad_graphics::{
-    Camera, DrawBatch, DrawPacket, Generation, Geometry, Hit, MeshId, PickId, Ray, Rect,
-    RenderQueue, StateSnapshot, Texture2, Topology, Vertex, Viewport,
+    Camera, DrawBatch, DrawPacket, Generation, Geometry, Hit, MeshId, PickId, Projection, Ray,
+    Rect, RenderQueue, StateSnapshot, Texture2, Topology, Vertex, Viewport,
 };
 
 pub use compile::{compile, compile_with};

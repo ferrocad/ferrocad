@@ -742,7 +742,7 @@ pub fn render_image(image: ImageData) -> RenderImage {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use ferrocad_graphics::Topology;
+    use ferrocad_graphics::{Projection, Topology};
     use ferrocad_inventor::{Node, NodeKind, compile_with};
     use gpui::{Bounds, point, px, size};
 
@@ -1066,17 +1066,13 @@ mod tests {
     /// A 45° perspective camera at `(0, 0, 5)` looking toward the origin.
     fn perspective_camera(size: [u32; 2]) -> Camera {
         use ferrocad_types::{Placement, Rotation, Vector3};
-        let f = 1.0 / (45.0f64.to_radians() / 2.0).tan();
-        let (near, far) = (0.1f64, 100.0f64);
-        let mut m = [0.0f64; 16];
-        m[0] = f;
-        m[5] = f;
-        m[10] = (far + near) / (near - far);
-        m[11] = (2.0 * far * near) / (near - far);
-        m[14] = -1.0;
         Camera {
             view: Placement::new(Vector3::new(0.0, 0.0, -5.0), Rotation::identity()).to_matrix(),
-            projection: ferrocad_types::Matrix4::from_values(m),
+            projection: Projection::Perspective {
+                fov_y: 45.0f64.to_radians(),
+                near: 0.1,
+                far: 100.0,
+            },
             viewport: ferrocad_graphics::Viewport::new(size, 1.0),
         }
     }

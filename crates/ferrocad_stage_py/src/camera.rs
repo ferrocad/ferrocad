@@ -32,7 +32,7 @@ impl Camera {
         Ok(Self {
             inner: gfx::Camera {
                 view: matrix(&view, "view")?,
-                projection: matrix(&projection, "projection")?,
+                projection: gfx::Projection::Matrix(matrix(&projection, "projection")?),
                 viewport: gfx::Viewport::new([size.0, size.1], device_pixel_ratio),
             },
         })
@@ -58,21 +58,17 @@ impl Camera {
         near: f64,
         far: f64,
     ) -> Self {
-        let aspect = f64::from(size.0.max(1)) / f64::from(size.1.max(1));
-        let f = 1.0 / (fov_deg.to_radians() / 2.0).tan();
-        let mut projection = [0.0f64; 16];
-        projection[0] = f / aspect;
-        projection[5] = f;
-        projection[10] = (far + near) / (near - far);
-        projection[11] = (2.0 * far * near) / (near - far);
-        projection[14] = -1.0;
         // The camera sits at `+eye_z`, looking down −Z, so the world → view matrix is the
         // inverse: a translation by `−eye_z`.
         let view = Placement::new(Vector3::new(0.0, 0.0, -eye_z), Rotation::identity()).to_matrix();
         Self {
             inner: gfx::Camera {
                 view,
-                projection: Matrix4::from_values(projection),
+                projection: gfx::Projection::Perspective {
+                    fov_y: fov_deg.to_radians(),
+                    near,
+                    far,
+                },
                 viewport: gfx::Viewport::new([size.0, size.1], device_pixel_ratio),
             },
         }

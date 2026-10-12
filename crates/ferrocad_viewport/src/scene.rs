@@ -5,9 +5,9 @@
 //! the interaction path (hover → pick → highlight) are exercised end to end. It is
 //! also what the `inventor_roundtrip` example renders.
 
-use ferrocad_graphics::{Camera, Hit, Topology, Viewport};
+use ferrocad_graphics::{Camera, Hit, Projection, Topology, Viewport};
 use ferrocad_inventor::{Event, EventListener, Node, NodeKind, Scene};
-use ferrocad_types::{Matrix4, Placement, Rotation, Vector3};
+use ferrocad_types::{Placement, Rotation, Vector3};
 
 /// The cube's resting colour.
 pub const BASE_COLOR: [f32; 4] = [0.9, 0.6, 0.2, 1.0];
@@ -72,10 +72,13 @@ pub fn sample_scene() -> Scene {
 
 /// A perspective camera looking at the origin from `(0, 0, 4)`.
 pub fn sample_camera(viewport: Viewport) -> Camera {
-    let [width, height] = viewport.device_size();
     Camera {
         view: Placement::new(Vector3::new(0.0, 0.0, -4.0), Rotation::identity()).to_matrix(),
-        projection: perspective(f64::from(width) / f64::from(height)),
+        projection: Projection::Perspective {
+            fov_y: 45.0_f64.to_radians(),
+            near: 0.1,
+            far: 100.0,
+        },
         viewport,
     }
 }
@@ -107,17 +110,4 @@ fn set_object_color(scene: &mut Scene, color: [f32; 4]) {
             *colors = vec![color];
         }
     }
-}
-
-/// A right-handed perspective projection (row-major, matching `Matrix4`).
-fn perspective(aspect: f64) -> Matrix4 {
-    let f = 1.0 / (45.0_f64.to_radians() / 2.0).tan();
-    let (near, far) = (0.1_f64, 100.0_f64);
-    let mut m = [0.0_f64; 16];
-    m[0] = f / aspect;
-    m[5] = f;
-    m[10] = (far + near) / (near - far);
-    m[11] = (2.0 * far * near) / (near - far);
-    m[14] = -1.0;
-    Matrix4::from_values(m)
 }

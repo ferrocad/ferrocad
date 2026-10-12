@@ -106,10 +106,13 @@ The contract, matching FreeCAD (see the assessment and `InputDevice`/
   navigation-cube overlay — at the element's physical size: at prepaint it records the
   element bounds, and at the next frame it calls `InventorView::resize` and sets
   `Camera.viewport` from `bounds × window.scale_factor` (requesting one more frame so
-  the change lands). The projection's *aspect* is still the host's: `Camera` carries a
-  baked projection, so a pane whose aspect differs from the one the camera was built for
-  renders with that aspect until the host rebuilds it (a camera fov/aspect model is the
-  next step).
+  the change lands).
+- **The projection follows the aspect.** `Camera` stores its [`Projection`] as
+  *parameters* — `Perspective { fov_y, near, far }`, `Orthographic { extent, near, far }`,
+  or an explicit `Matrix` escape hatch — and rebuilds the matrix from the viewport aspect
+  on demand (`Camera::projection_matrix`). So resizing a pane no longer stretches the
+  scene. Clip depth is in the backend's `[0, 1]` (the sample's old baked perspective used
+  the GL-style `[-1, 1]`, which mis-clipped near geometry).
 
 ## 5. What is implemented vs not
 
@@ -136,7 +139,8 @@ The contract, matching FreeCAD (see the assessment and `InputDevice`/
   test), and the mesh cache is keyed by `mesh_id`, **evicting the previous generation**
   (T4.2–T4.3) instead of accumulating.
 - CPU ray picking; event/listener dispatch; `Viewport`/DPI primitives; the render
-  target tracking the element's physical size (`InventorView::resize`).
+  target tracking the element's physical size (`InventorView::resize`) and an
+  aspect-aware camera [`Projection`].
 - **Hardware G-buffer picking** (`ferrocad_wgpu::pick`): `WgpuRenderer::pick_at` renders
   the `[entity_id, part_idx]` / `[normal, topology]` / depth targets and reads one texel
   back, unprojecting the world point via the inverse view-projection. Exposed through

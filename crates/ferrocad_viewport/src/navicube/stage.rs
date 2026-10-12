@@ -12,10 +12,8 @@ use ferrocad_graphics::{RenderQueue, Viewport};
 use ferrocad_stage::{DrawMode, ShapeItem};
 use ferrocad_types::{Placement, Vector3};
 
-use super::model::{
-    BASE_COLOR, HILITE_COLOR, HOME_COLOR, HOME_PICK_ID, INACTIVE_COLOR, NaviTarget, Piece, PieceKind,
-    home_quad,
-};
+use super::model::{HOME_PICK_ID, NaviTarget, Piece, PieceKind, home_quad};
+use super::theme::NavicubeTheme;
 use super::view::{NavicubeView, NavicubeVisual};
 
 /// The navigation cube as a `Stage` of declarative items: the modern [`NavicubeView`].
@@ -48,17 +46,10 @@ impl Default for StageProducer {
 }
 
 impl NavicubeView for StageProducer {
-    fn rebuild(&mut self, _viewport: &Viewport, visual: &NavicubeVisual) {
+    fn rebuild(&mut self, _viewport: &Viewport, visual: &NavicubeVisual, theme: &NavicubeTheme) {
         let rotation = Placement::new(Vector3::zero(), visual.orientation).to_matrix();
-        let color_of = |piece: Piece| {
-            if visual.hilite == Some(NaviTarget::Piece(piece)) {
-                HILITE_COLOR
-            } else if visual.away.contains(&piece) {
-                INACTIVE_COLOR
-            } else {
-                BASE_COLOR
-            }
-        };
+        let color_of =
+            |piece: Piece| theme.color(NaviTarget::Piece(piece).role(visual.hilite, &visual.away));
 
         // Recolour and re-orient every item (no geometry change, so no re-upload).
         for (index, piece) in Piece::ALL.iter().copied().enumerate() {
@@ -68,11 +59,7 @@ impl NavicubeView for StageProducer {
             item.set_edge_color(color);
             item.set_temporary_transform(Some(rotation));
         }
-        let home_color = if visual.hilite == Some(NaviTarget::Home) {
-            HILITE_COLOR
-        } else {
-            HOME_COLOR
-        };
+        let home_color = theme.color(NaviTarget::Home.role(visual.hilite, &[]));
         self.home.set_surface_color(home_color);
         self.home.set_temporary_transform(None);
 

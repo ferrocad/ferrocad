@@ -171,7 +171,9 @@ trait — implemented by `ferrocad_wgpu`, supplied by the shell — is the seam.
 `ferrocad_viewport::navicube` (`model`/`inventor`/`stage`) behind a `NavicubeView` trait,
 and the controller drives a `Box<dyn NavicubeView>`; `ferrocad_inventor::navicube` was
 removed. V1 moved the model + inventor producer (behaviour unchanged); V2 added the
-modern `StageProducer` and a cross-producer conformance test. See
+modern `StageProducer` and a cross-producer conformance test. V3 formalised the
+appearance **theme** (`NavicubeRole`/`NavicubeTheme` — the Rust core owns styling, §5 of
+[`navicube-spec.md`](navicube-spec.md)), `NaviCubeConfig`, and the min-drag threshold. See
 [`navicube-plan.md`](navicube-plan.md).
 
 **Verification:** `ferrocad_viewport::navicube` tests — the model/producer units (ids,

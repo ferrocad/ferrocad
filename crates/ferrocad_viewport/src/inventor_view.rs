@@ -339,6 +339,13 @@ impl<V: InventorView> InventorViewport<V> {
     /// snaps the main camera onto the piece under the pointer. Otherwise the event
     /// goes to the main scene.
     pub fn handle_button(&mut self, logical: [f32; 2], button: u8, down: bool) -> bool {
+        // Whether the gesture was an orbit (past the min-drag threshold) rather than a
+        // click: an orbit must not also snap on release.
+        let threshold = navicube_drag_threshold(self.camera.viewport.device_pixel_ratio());
+        let orbited = self
+            .navicube_drag
+            .as_ref()
+            .is_some_and(|drag| drag.on_cube && drag.moved >= threshold);
         // Any button event ends a (possibly stale) orbit drag or snap.
         self.navicube_drag = None;
         self.snap = None;
@@ -348,8 +355,8 @@ impl<V: InventorView> InventorViewport<V> {
             .as_ref()
             .is_some_and(|cube| cube.rect().contains(device))
         {
-            if down {
-                return false; // the orbit starts on the first drag-move
+            if down || orbited {
+                return false; // the orbit starts on the first drag-move; an orbit does not snap
             }
             if let Some(target) = self.navicube.as_ref().and_then(|cube| cube.hit(device)) {
                 // Animate the snap rather than jumping: a piece snaps onto its face,
@@ -500,6 +507,11 @@ impl<V: InventorView> InventorViewport<V> {
         let delta = [logical[0] - state.last[0], logical[1] - state.last[1]];
         state.last = logical;
         state.moved += (delta[0] * delta[0] + delta[1] * delta[1]).sqrt();
+        // Below the threshold the gesture is still a click (a snap on release), not an orbit.
+        let threshold = navicube_drag_threshold(self.camera.viewport.device_pixel_ratio());
+        if state.moved < threshold {
+            return false;
+        }
         self.camera.view = crate::navicube::drag_view(&self.camera, delta);
         self.recompile();
         true
@@ -701,6 +713,13 @@ fn merge_queue(scene: &Scene, stage: &Stage, viewport: &Viewport) -> RenderQueue
     let mut queue = compile_with(scene, viewport);
     stage.emit_batches(&mut queue);
     queue
+}
+
+/// The navigation cube's minimum drag distance, in **logical** pixels — upstream's
+/// `max(3, round(3·dpr))` device pixels converted back to logical; a shorter movement
+/// is a click (a snap on release), not an orbit.
+fn navicube_drag_threshold(dpr: f32) -> f32 {
+    (3.0 * dpr).round().max(3.0) / dpr
 }
 
 /// Map a gpui mouse button to Coin's 1-based button number.
@@ -907,6 +926,34 @@ mod tests {
         // A redundant report does not touch the backend again.
         assert!(!viewport.apply_element_size([800.0, 600.0], 2.0));
         assert_eq!(viewport.view().resize_calls, 1, "an unchanged size is a no-op");
+    }
+
+    #[test]
+    fn a_short_navicube_drag_is_a_click_not_an_orbit() {
+        let camera = Camera {
+            viewport: Viewport::new([640, 480], 1.0),
+            ..Camera::identity()
+        };
+        let viewport_size = camera.viewport;
+        let mut view = InventorViewport::new(fake(ImageData::default()), camera, triangle_scene())
+            .with_navicube(NaviCube::new(viewport_size));
+
+        let rect = view.navicube.as_ref().unwrap().rect();
+        let centre = [
+            rect.x + rect.width as i32 / 2,
+            rect.y + rect.height as i32 / 2,
+        ];
+        let start = viewport_size.to_logical(centre);
+        let before = view.camera.view.m;
+
+        // Movement under the min-drag threshold is still a click: no orbit.
+        assert!(!view.navicube_drag_move(start));
+        assert!(!view.navicube_drag_move([start[0] + 1.0, start[1]]));
+        assert_eq!(view.camera.view.m, before, "a short drag must not orbit");
+
+        // Past the threshold the drag orbits the camera.
+        assert!(view.navicube_drag_move([start[0] + 20.0, start[1]]));
+        assert_ne!(view.camera.view.m, before, "a long drag orbits");
     }
 
     /// A view with a hardware pick path: it reports id `42` wherever there is a queue to

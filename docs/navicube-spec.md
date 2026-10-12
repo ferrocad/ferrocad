@@ -473,6 +473,5 @@ producer-neutral. Structural deviations to reconcile (a fidelity backlog, not bl
 | Orbit drag | fixed `0.012` rad/px yaw·pitch | navigation-style orbit (sensitivity 0.45, scene-bound centre) |
 | Placement | rect with an 8-px margin | centre at `0.55·size`, `posOffset` |
 | Size | 96 logical px | 132 logical px |
-| Min-drag threshold | movement tracked, not gated (§8) | `max(3, round(3·dpr))` gates click vs drag |
 | `rotate_to_nearest` / `step_by_turn` | off / n/a | on / 8 |
 | Coordinate system, arrows, menu | absent | present (§12–§13) |

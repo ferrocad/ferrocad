@@ -9,30 +9,23 @@ use ferrocad_inventor::{Node, NodeKind, Scene, compile_with};
 use ferrocad_types::{Placement, Rotation, Vector3};
 
 use super::model::{
-    BASE_COLOR, FACE_UV, HOME_COLOR, HOME_PICK_ID, HILITE_COLOR, INACTIVE_COLOR, NaviTarget, Piece,
-    PieceKind, face_letter, home_quad, label,
+    FACE_UV, HOME_PICK_ID, NaviTarget, Piece, PieceKind, face_letter, home_quad, label,
 };
+use super::theme::NavicubeTheme;
 use super::view::{NavicubeView, NavicubeVisual};
 
 /// Build the cube scene, drawing the faces in `away` (those pointing away from the
-/// viewer) first and translucent ([`INACTIVE_COLOR`]) so the cube reads through. The
-/// piece in `hilite` (or the Home button) is drawn in [`HILITE_COLOR`].
+/// viewer) first so the cube reads through, and the piece in `hilite` (or the Home
+/// button) in the theme's highlight colour. Colours come from `theme` (§5 of
+/// `docs/navicube-spec.md`).
 ///
 /// The root has two children: a **rotating subtree** whose first node is the
 /// [`NodeKind::Transform`] the controller writes the camera orientation into (see
 /// [`set_orientation`]), and the fixed **Home button** (drawn last, so it sits on top).
 /// The Home button is a sibling of the rotating subtree, so it stays put as the cube
 /// turns.
-pub fn scene_with(hilite: Option<NaviTarget>, away: &[Piece]) -> Scene {
-    let color_of = |piece: Piece| {
-        if hilite == Some(NaviTarget::Piece(piece)) {
-            HILITE_COLOR
-        } else if away.contains(&piece) {
-            INACTIVE_COLOR
-        } else {
-            BASE_COLOR
-        }
-    };
+pub fn scene_with(hilite: Option<NaviTarget>, away: &[Piece], theme: &NavicubeTheme) -> Scene {
+    let color_of = |piece: Piece| theme.color(NaviTarget::Piece(piece).role(hilite, away));
     // The rotating subtree: the transform slot, then away-facing faces (translucent,
     // behind), then everything else.
     let mut cube = vec![field(NodeKind::Transform(Placement::identity()))];
@@ -48,7 +41,7 @@ pub fn scene_with(hilite: Option<NaviTarget>, away: &[Piece]) -> Scene {
     Scene {
         root: Node {
             kind: NodeKind::Separator,
-            children: vec![separator(cube), home_button(hilite)],
+            children: vec![separator(cube), home_button(hilite, theme)],
         },
     }
 }
@@ -67,12 +60,8 @@ pub fn set_orientation(scene: &mut Scene, rotation: Rotation) {
 }
 
 /// The fixed Home button: a small labeled quad below the cube.
-fn home_button(hilite: Option<NaviTarget>) -> Node {
-    let color = if hilite == Some(NaviTarget::Home) {
-        HILITE_COLOR
-    } else {
-        HOME_COLOR
-    };
+fn home_button(hilite: Option<NaviTarget>, theme: &NavicubeTheme) -> Node {
+    let color = theme.color(NaviTarget::Home.role(hilite, &[]));
     separator(vec![
         field(NodeKind::PickId(HOME_PICK_ID.0)),
         field(NodeKind::Material(vec![color])),
@@ -149,8 +138,8 @@ impl InventorProducer {
 }
 
 impl NavicubeView for InventorProducer {
-    fn rebuild(&mut self, viewport: &Viewport, visual: &NavicubeVisual) {
-        let mut scene = scene_with(visual.hilite, &visual.away);
+    fn rebuild(&mut self, viewport: &Viewport, visual: &NavicubeVisual, theme: &NavicubeTheme) {
+        let mut scene = scene_with(visual.hilite, &visual.away, theme);
         set_orientation(&mut scene, visual.orientation);
         self.queue = compile_with(&scene, viewport);
     }
@@ -169,9 +158,11 @@ mod tests {
     use super::*;
     use ferrocad_inventor::compile;
 
+    use super::super::theme::{HILITE_COLOR, HOME_COLOR};
+
     /// The cube scene with every piece opaque (no away-facing faces).
     fn scene(hilite: Option<NaviTarget>) -> Scene {
-        scene_with(hilite, &[])
+        scene_with(hilite, &[], &NavicubeTheme::default())
     }
 
     #[test]

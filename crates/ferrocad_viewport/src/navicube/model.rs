@@ -28,16 +28,6 @@ const ORTHO_EXTENT: f64 = 1.1;
 /// How far the fixed overlay camera sits along +Z.
 const CAMERA_DISTANCE: f64 = 3.0;
 
-/// The cube's resting piece colour.
-pub const BASE_COLOR: [f32; 4] = [0.55, 0.6, 0.66, 1.0];
-/// The colour a piece takes while hovered.
-pub const HILITE_COLOR: [f32; 4] = [0.2, 0.6, 0.95, 1.0];
-/// The translucent colour of a face pointing away from the viewer (drawn first, so the
-/// cube reads as a solid but see-through box).
-pub const INACTIVE_COLOR: [f32; 4] = [0.38, 0.42, 0.48, 0.5];
-/// The Home button's face colour.
-pub const HOME_COLOR: [f32; 4] = [0.5, 0.55, 0.62, 1.0];
-
 /// The pick id of the Home button (the pieces occupy 1–26).
 pub const HOME_PICK_ID: PickId = PickId(27);
 

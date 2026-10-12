@@ -6,13 +6,19 @@
 use ferrocad_graphics::{Camera, PickId, RenderQueue, Viewport};
 use ferrocad_types::{Matrix4, Rotation};
 
-use super::model::{BASE_COLOR, HILITE_COLOR, HOME_COLOR, HOME_PICK_ID, INACTIVE_COLOR};
+use super::model::HOME_PICK_ID;
+use super::theme::{BASE_COLOR, HILITE_COLOR, HOME_COLOR, INACTIVE_COLOR};
 use super::{
-    InventorProducer, NaviCube, NaviTarget, NavicubeView, NavicubeVisual, Piece, StageProducer,
+    InventorProducer, NaviCube, NaviTarget, NavicubeTheme, NavicubeView, NavicubeVisual, Piece,
+    StageProducer,
 };
 
 fn viewport() -> Viewport {
     Viewport::new([640, 480], 1.0)
+}
+
+fn theme() -> NavicubeTheme {
+    NavicubeTheme::default()
 }
 
 fn visual(hilite: Option<NaviTarget>, away: Vec<Piece>) -> NavicubeVisual {
@@ -21,6 +27,11 @@ fn visual(hilite: Option<NaviTarget>, away: Vec<Piece>) -> NavicubeVisual {
         hilite,
         away,
     }
+}
+
+/// Rebuild `producer` with the default theme.
+fn rebuild(producer: &mut dyn NavicubeView, visual: &NavicubeVisual) {
+    producer.rebuild(&viewport(), visual, &theme());
 }
 
 /// The colour the spec's role rule assigns a piece.
@@ -109,8 +120,8 @@ fn both_producers_emit_the_same_cube() {
     let visual = visual(Some(NaviTarget::Piece(Piece::TOP)), vec![Piece::BACK]);
     let mut inventor = InventorProducer::new();
     let mut stage = StageProducer::new();
-    inventor.rebuild(&viewport(), &visual);
-    stage.rebuild(&viewport(), &visual);
+    rebuild(&mut inventor, &visual);
+    rebuild(&mut stage, &visual);
     compare(inventor.queue(), stage.queue());
 }
 
@@ -126,7 +137,7 @@ fn both_producers_assign_the_documented_roles() {
         &mut inventor as &mut dyn NavicubeView,
         &mut stage as &mut dyn NavicubeView,
     ] {
-        producer.rebuild(&viewport(), &visual);
+        rebuild(producer, &visual);
         let queue = producer.queue();
         for piece in Piece::ALL {
             let color = color_of(queue, piece.pick_id()).expect("a packet per piece");
@@ -141,6 +152,35 @@ fn both_producers_assign_the_documented_roles() {
 }
 
 #[test]
+fn a_custom_theme_recolours_both_producers() {
+    let theme = NavicubeTheme {
+        base: [0.1, 0.2, 0.3, 1.0],
+        highlighted: [0.9, 0.8, 0.7, 1.0],
+        away: [0.4, 0.4, 0.4, 0.5],
+        home: [0.2, 0.4, 0.6, 1.0],
+        edge_width: 2.0,
+    };
+    let visual = visual(Some(NaviTarget::Piece(Piece::TOP)), vec![Piece::BACK]);
+    let mut inventor = InventorProducer::new();
+    let mut stage = StageProducer::new();
+    inventor.rebuild(&viewport(), &visual, &theme);
+    stage.rebuild(&viewport(), &visual, &theme);
+    for producer in [
+        &inventor as &dyn NavicubeView,
+        &stage as &dyn NavicubeView,
+    ] {
+        let queue = producer.queue();
+        assert!(close4(
+            color_of(queue, Piece::TOP.pick_id()).unwrap(),
+            theme.highlighted
+        ));
+        assert!(close4(color_of(queue, Piece::BACK.pick_id()).unwrap(), theme.away));
+        assert!(close4(color_of(queue, Piece::FRONT.pick_id()).unwrap(), theme.base));
+        assert!(close4(color_of(queue, HOME_PICK_ID).unwrap(), theme.home));
+    }
+}
+
+#[test]
 fn both_producers_highlight_the_home_button() {
     let visual = visual(Some(NaviTarget::Home), vec![]);
     let mut inventor = InventorProducer::new();
@@ -149,7 +189,7 @@ fn both_producers_highlight_the_home_button() {
         &mut inventor as &mut dyn NavicubeView,
         &mut stage as &mut dyn NavicubeView,
     ] {
-        producer.rebuild(&viewport(), &visual);
+        rebuild(producer, &visual);
         let home = color_of(producer.queue(), HOME_PICK_ID).expect("the Home packet");
         assert!(close4(home, HILITE_COLOR), "the Home button should be highlighted");
     }
@@ -164,9 +204,9 @@ fn rebuild_is_stable_within_each_producer() {
         &mut inventor as &mut dyn NavicubeView,
         &mut stage as &mut dyn NavicubeView,
     ] {
-        producer.rebuild(&viewport(), &visual);
+        rebuild(producer, &visual);
         let first = keys(producer.queue());
-        producer.rebuild(&viewport(), &visual);
+        rebuild(producer, &visual);
         let second = keys(producer.queue());
         assert_eq!(first, second, "mesh ids and generations must be stable");
     }
@@ -182,4 +222,18 @@ fn the_stage_cube_hosts_and_picks() {
         rect.y + rect.height as i32 / 2,
     ];
     assert_eq!(cube.hit(centre), Some(NaviTarget::Piece(Piece::FRONT)));
+}
+
+#[test]
+fn a_config_repositions_the_cube() {
+    use super::{Corner, NaviCubeConfig};
+    let cube = NaviCube::new(viewport()).with_config(NaviCubeConfig {
+        corner: Corner::BottomLeft,
+        size: 48.0,
+        margin: 4.0,
+    });
+    let rect = cube.rect();
+    assert_eq!(rect.width, 48);
+    assert_eq!(rect.x, 4);
+    assert_eq!(rect.y, 4);
 }

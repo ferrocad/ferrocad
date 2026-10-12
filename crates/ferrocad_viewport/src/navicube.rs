@@ -15,6 +15,7 @@
 mod inventor;
 mod model;
 mod stage;
+mod theme;
 mod view;
 
 #[cfg(test)]
@@ -23,11 +24,34 @@ mod conformance;
 pub use inventor::InventorProducer;
 pub use model::{Corner, NaviTarget, Piece, PieceKind, home_orientation};
 pub use stage::StageProducer;
+pub use theme::{NavicubeRole, NavicubeTheme};
 pub use view::{NavicubeView, NavicubeVisual};
 
 use ferrocad_graphics::{Camera, Rect, Viewport, pick_at_rect};
 use ferrocad_inventor::ViewSpec;
 use ferrocad_types::{Matrix4, Placement, Rotation, Vector3};
+
+/// The navigation cube's structural config: where it sits and how big it is (sizes in
+/// **logical** pixels).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct NaviCubeConfig {
+    /// Which corner of the viewport.
+    pub corner: Corner,
+    /// The cube's size, in logical pixels.
+    pub size: f32,
+    /// The margin from the corner, in logical pixels.
+    pub margin: f32,
+}
+
+impl Default for NaviCubeConfig {
+    fn default() -> Self {
+        Self {
+            corner: Corner::TopRight,
+            size: 96.0,
+            margin: 8.0,
+        }
+    }
+}
 
 /// The navigation cube: a corner overlay showing the view orientation.
 pub struct NaviCube {
@@ -36,11 +60,10 @@ pub struct NaviCube {
     camera: Camera,
     viewport: Viewport,
     rect: Rect,
-    corner: Corner,
-    /// The cube's size in **logical** pixels (scaled by the DPR into `rect`).
-    size: f32,
-    /// The margin from the corner, in logical pixels.
-    margin: f32,
+    /// The structural config: corner, size and margin (both logical pixels).
+    config: NaviCubeConfig,
+    /// The appearance theme (the Rust core owns styling).
+    theme: NavicubeTheme,
     hilite: Option<NaviTarget>,
     /// The camera rotation last synced into the cube (so we only recompile on change).
     synced: Option<Rotation>,
@@ -60,22 +83,35 @@ impl NaviCube {
 
     /// A cube in `viewport`'s top-right corner, built by `producer`.
     pub fn with_producer(viewport: Viewport, producer: Box<dyn NavicubeView>) -> Self {
-        let corner = Corner::TopRight;
-        let rect = corner_rect(viewport, corner, 96.0, 8.0);
+        let config = NaviCubeConfig::default();
+        let rect = corner_rect(viewport, config.corner, config.size, config.margin);
         let camera = model::camera(rect);
         let mut cube = Self {
             producer,
             camera,
             viewport,
             rect,
-            corner,
-            size: 96.0,
-            margin: 8.0,
+            config,
+            theme: NavicubeTheme::default(),
             hilite: None,
             synced: None,
         };
         cube.rebuild();
         cube
+    }
+
+    /// Replace the structural config (corner, size, margin) and relayout.
+    pub fn with_config(mut self, config: NaviCubeConfig) -> Self {
+        self.config = config;
+        self.relayout();
+        self
+    }
+
+    /// Replace the appearance theme and rebuild.
+    pub fn with_theme(mut self, theme: NavicubeTheme) -> Self {
+        self.theme = theme;
+        self.rebuild();
+        self
     }
 
     /// The device-pixel rectangle the cube occupies.
@@ -96,7 +132,17 @@ impl NaviCube {
     /// Update the placement for a new viewport (its size or scale factor changed).
     pub fn set_viewport(&mut self, viewport: Viewport) {
         self.viewport = viewport;
-        self.rect = corner_rect(viewport, self.corner, self.size, self.margin);
+        self.relayout();
+    }
+
+    /// Recompute the rect and overlay camera from the config and rebuild.
+    fn relayout(&mut self) {
+        self.rect = corner_rect(
+            self.viewport,
+            self.config.corner,
+            self.config.size,
+            self.config.margin,
+        );
         self.camera = model::camera(self.rect);
         self.rebuild();
     }
@@ -141,7 +187,7 @@ impl NaviCube {
             hilite: self.hilite,
             away: self.away_faces(),
         };
-        self.producer.rebuild(&self.viewport, &visual);
+        self.producer.rebuild(&self.viewport, &visual, &self.theme);
     }
 
     /// The faces pointing away from the viewer, given the synced camera rotation.
@@ -299,7 +345,7 @@ fn camera_distance(camera: &Camera) -> f64 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use super::model::{BASE_COLOR, HILITE_COLOR, INACTIVE_COLOR};
+    use super::theme::{BASE_COLOR, HILITE_COLOR, INACTIVE_COLOR};
 
     fn viewport() -> Viewport {
         Viewport::new([640, 480], 1.0)

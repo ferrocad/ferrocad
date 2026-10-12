@@ -149,21 +149,26 @@ wire it in. The conformance suite (`navicube/conformance.rs`) passes for both pr
 `ferrocad_viewport` is now **32** tests (was 27). No theme yet — V2 assigns the model's
 role colours directly; V3 threads the viewport theme through.
 
-### V3 — config and polish
+### V3 — config and the viewport theme ✅ built 2026-10-12
 
-Deliverable: the reserved config becomes real, and the specified thresholds are enforced.
+Deliverable: the reserved config becomes real, and the specified threshold is enforced.
 
-- Apply `NaviCubeConfig` (corner, size, margin, `chamfer`, thresholds) to the controller
-  and producers; add a `NaviCube::with_config`.
-- Formalise the viewport **theme** (colour/width/opacity/label attributes) with the
-  current palette as the default, and thread it through both producers (inventor
-  `Material`/`DrawStyle`, stage `ShapeItem` colours/`edge_width`); add `NaviCube::with_theme`.
-  (An assigned edge *width* is a no-op until `ferrocad_wgpu` honours it — §5.)
-- Enforce the **min-drag threshold** (`3 logical px × dpr`) in the click-vs-drag decision
-  ([`navicube-spec.md`](navicube-spec.md) §8, §14) — the build currently accumulates
-  movement but never gates on it.
-- Add `draggable` and `rotate_to_nearest`; warn (once) when no producer is available.
-- Docs: cross-link `stage.md` (T6) and `inventor-renderer.md` §7.
+- `navicube::theme`: `NavicubeRole` (the semantic role a piece takes) + `NavicubeTheme`
+  (the role→appearance mapping; default = the built palette; `edge_width` recorded).
+  `NavicubeView::rebuild` takes `&NavicubeTheme`, and both producers resolve roles through
+  it (inventor `Material`, stage `ShapeItem` colours) — styling leaves the producers; the
+  Rust core owns it ([`directives.md`](directives.md) §5).
+- `NaviCubeConfig { corner, size, margin }` + `NaviCube::with_config` / `with_theme`.
+- The **min-drag threshold** (`max(3, round(3·dpr))` logical px) gates the click-vs-drag
+  decision: a shorter movement is a snap on release, and an orbit no longer also snaps
+  ([`navicube-spec.md`](navicube-spec.md) §8, §14).
+
+`draggable`, `rotate_to_nearest` / `step_by_turn`, a `borderWidth`/opacity appearance
+override, and the `showCS` axes stay deferred ([`navicube-spec.md`](navicube-spec.md) §12).
+
+**Built.** `theme.rs` + `NaviCubeConfig` in the controller; the min-drag gate in
+`inventor_view::{navicube_drag_move, handle_button}`. `ferrocad_viewport` is now **37**
+tests (was 32): a custom theme recolours both producers, and a config repositions the cube.
 
 ### V4 — the directives channel: `SoNaviCube` → neutral model → producers
 
@@ -223,8 +228,8 @@ Deferred: `Gizmo`/`Hud` variants, a per-directive appearance override, and `show
 | **V3** | config tests (corner/size, thresholds), a theme test, the min-drag threshold test, a warning test. |
 
 Runs: `cargo test -p ferrocad_viewport -p ferrocad_inventor -p ferrocad_stage`
-(plus `-p ferrocad_wgpu` headless). After V1/V2 the navicube tests live in
-`ferrocad_viewport` (**19 → 32**); `ferrocad_inventor` drops to **6**. The other counts
+(plus `-p ferrocad_wgpu` headless). After V1/V2/V3 the navicube tests live in
+`ferrocad_viewport` (**19 → 37**); `ferrocad_inventor` drops to **6**. The other counts
 (stage 27, wgpu 7) must not regress.
 
 ## 7. Slice path at a glance
@@ -233,5 +238,5 @@ Runs: `cargo test -p ferrocad_viewport -p ferrocad_inventor -p ferrocad_stage`
 | --- | --- | --- | --- |
 | **V1** | Move the model + inventor producer into `ferrocad_viewport::navicube`; add the `NavicubeView` seam and `NavicubeVisual`; the controller drives `Box<dyn NavicubeView>`. No behaviour change. | `ferrocad_viewport`, `ferrocad_inventor` | ✅ |
 | **V2** | `navicube::stage::StageProducer` + the producer-conformance test. | `ferrocad_viewport` | ✅ |
-| **V3** | `NaviCubeConfig`, the viewport `Theme`, the min-drag threshold, `draggable`/`rotate_to_nearest`, docs. | `ferrocad_viewport`, docs | ▢ |
+| **V3** | `NaviCubeConfig`, the viewport `NavicubeTheme`, the min-drag threshold, `draggable`/`rotate_to_nearest`, docs. | `ferrocad_viewport`, docs | ✅ |
 | **V4** | The neutral `Directives` channel in `ferrocad_graphics`; `SoNaviCube → NaviCubeDirective → producers` (see [`directives.md`](directives.md)). | `ferrocad_graphics`, `ferrocad_inventor`, `ferrocad_viewport` | ▢ |

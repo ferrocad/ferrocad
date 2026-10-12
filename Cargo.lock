@@ -2413,6 +2413,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "ferrocad_stage"
+version = "0.1.2"
+dependencies = [
+ "ferrocad_inventor",
+ "ferrocad_types",
+]
+
+[[package]]
 name = "ferrocad_types"
 version = "0.1.2"
 dependencies = [

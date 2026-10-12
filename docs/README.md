@@ -31,6 +31,8 @@ is the `FreeCAD` Python API, documented by convention and by upstream.
   plan, and the as-built map (implemented, N1–N4b).
 - [inventor-plan.md](inventor-plan.md) — the Inventor/Coin emulation roadmap (four
   phases), adapted to the code as it stands (plan, with per-item status).
+- [stage.md](stage.md) — the modern declarative stack (`ferrocad_stage`): the slice
+  path (T0–T5), T0 as built, and the deferred decisions.
 - [geometry-and-topology.md](geometry-and-topology.md) — topological sorting vs
   topological naming, and the seam for a future OCCT geometry engine.
 - [occt-history-spike.md](occt-history-spike.md) — the first geometry spike: what

@@ -22,6 +22,7 @@ obvious:
 | `ferrocad_py` | `cdylib` | The PyO3 extension, importable as the module `ferrocad`. The only bridge into `ferrocad_core`. |
 | `ferrocad_widgets` | `rlib` | Reusable `bite-gpui` widgets. Depends on **neither** `ferrocad_core` nor `ferrocad_py`. |
 | `ferrocad_inventor` | `rlib` | The Coin/Inventor scene core: node AST, state accumulator, mesh compiler, picking, events, viewport/DPI. Renderer-agnostic; a **leaf** above `ferrocad_types`. |
+| `ferrocad_stage` | `rlib` | The modern declarative CAD presentation: `ShapeItem`s on a `Stage`, compiled straight to the shared draw-batch vocabulary (no scene graph, no arena). Pure; depends on `ferrocad_inventor` for the batch types only. |
 | `ferrocad_wgpu` | `rlib` | The wgpu backend: consumes compiled draw batches, pipelines, uniforms, MSAA, offscreen target, readback. |
 | `ferrocad_inventor_py` | `cdylib` | The `pivy.coin` facade (scaffolding) over `ferrocad_inventor`. |
 | `ferrocad_viewport` | `rlib` | The `bite-gpui` viewport over an invented scene: `InventorViewport` (image path, pointer→pick→listener), the navigation cube (`NaviCube`), and the sample scene. Depends only on `ferrocad_inventor`. |
@@ -162,6 +163,8 @@ ferrocad_core      -> ferrocad_types                 [re-exports; no OCCT]
 ferrocad_py        -> ferrocad_core                  [rlib + cdylib]
 ferrocad_widgets   -> (bite-gpui only)               [must not depend on core or py]
 ferrocad_inventor  -> ferrocad_types                 [renderer-agnostic scene core; leaf]
+ferrocad_stage     -> ferrocad_inventor, ferrocad_types
+                                                     [modern presentation; emits the batch vocabulary]
 ferrocad_wgpu      -> ferrocad_inventor, ferrocad_types, wgpu, bytemuck
 ferrocad_inventor_py -> ferrocad_inventor            [pivy.coin facade; + pyo3]
 ferrocad_viewport  -> ferrocad_inventor, ferrocad_types,

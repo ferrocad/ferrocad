@@ -1,0 +1,20 @@
+[package]
+name = "ferrocad_stage"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+readme.workspace = true
+repository.workspace = true
+homepage.workspace = true
+rust-version.workspace = true
+description = "FerroCAD's modern declarative CAD presentation: stage items that compile straight to the shared draw-batch vocabulary"
+keywords = ["cad", "graphics", "rendering", "freecad"]
+categories = ["graphics"]
+documentation = "https://docs.rs/ferrocad_stage"
+
+[dependencies]
+# The shared batch vocabulary (DrawPacket/RenderQueue/Geometry/Topology/Vertex,
+# MeshId/Generation/PickId, StateSnapshot). The stage compiles into it directly —
+# no intermediate scene graph. `ferrocad_inventor` is a leaf, so this stays cheap.
+ferrocad_inventor.workspace = true
+ferrocad_types.workspace = true

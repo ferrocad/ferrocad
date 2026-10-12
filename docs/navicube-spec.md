@@ -415,6 +415,9 @@ The reference is the inventor producer; the conformance test lives with the widg
 - `draggable` **cube** movement (drag orbits the view today).
 - Double-click **recenter** on the scene bounding box.
 - A **text/glyph-run** node (labels exist only as baked textures).
+- The **`SoNaviCube` Python node** — a scene node driving the cube through the neutral
+  **directives** channel, on either producer (see [`directives.md`](directives.md) and
+  [`navicube-plan.md`](navicube-plan.md) V4).
 
 ## 13. Upstream mapping and reference values
 

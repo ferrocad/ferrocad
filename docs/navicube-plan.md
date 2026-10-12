@@ -31,7 +31,7 @@ change to the existing cube (V1 is a pure refactor). The arrow buttons, context 
 `Backside`/`ViewMenu`, `stepByTurn`, rotate-to-nearest rounding and draggable-cube
 movement stay deferred ([`navicube-spec.md`](navicube-spec.md) §12). Upstream-fidelity
 gaps the current build has (chamfer geometry, animation timing, orbit, placement) are
-catalogued in [`navicube-spec.md`](navicube-spec.md) §14 and are **not** part of V1–V3;
+catalogued in [`navicube-spec.md`](navicube-spec.md) §14 and are **not** part of V1–V4;
 palette and label *rendering* are theme choices, not fidelity gaps (§13).
 
 ## 2. Where it sits
@@ -165,6 +165,30 @@ Deliverable: the reserved config becomes real, and the specified thresholds are 
 - Add `draggable` and `rotate_to_nearest`; warn (once) when no producer is available.
 - Docs: cross-link `stage.md` (T6) and `inventor-renderer.md` §7.
 
+### V4 — the directives channel: `SoNaviCube` → neutral model → producers
+
+Deliverable: a `SoNaviCube` scene node drives the neutral navicube on **either**
+producer, through the neutral directives channel ([`directives.md`](directives.md)).
+
+- `ferrocad_graphics`: `Directives` + `Directive { NaviCube(NaviCubeDirective),
+  EventCallback(u64) }` and `NaviCubeDirective { rect, orientation: Option<Rotation>,
+  hilite: Option<PickId>, orthographic }`; `compile_with` returns `(RenderQueue,
+  Directives)`.
+- `ferrocad_inventor`: `NodeKind::NaviCube(NaviCubeDirective)` (no packet emitted); the
+  compiler lifts it into the directives and migrates `event_callbacks(scene)` into
+  `Directive::EventCallback`.
+- `ferrocad_inventor_py`: `extract_scene` recognises a Python `SoNaviCube` and captures
+  its `SoSF*` fields (the `pivy.coin` surface); the node's colours are ignored (§5 of
+  [`directives.md`](directives.md)).
+- `ferrocad_viewport`: consume `Directive::NaviCube` → `NavicubeVisual` + theme + `Rect`
+  → the producer → overlay `ViewSpec`.
+
+**Gate:** a `SoNaviCube` in the scene drives the stage producer (structural); the
+`TestCoinNodeSnapshots` NaviCube fixtures *render*, with pixel-conformance gated on the
+§14 fidelity backlog.
+
+Deferred: `Gizmo`/`Hud` variants, a per-directive appearance override, and `showCS`.
+
 ## 5. Risks and pitfalls
 
 - **Stage mesh churn.** `ShapeItem::set_shape` bumps `Generation`; the stage producer must
@@ -210,3 +234,4 @@ Runs: `cargo test -p ferrocad_viewport -p ferrocad_inventor -p ferrocad_stage`
 | **V1** | Move the model + inventor producer into `ferrocad_viewport::navicube`; add the `NavicubeView` seam and `NavicubeVisual`; the controller drives `Box<dyn NavicubeView>`. No behaviour change. | `ferrocad_viewport`, `ferrocad_inventor` | ✅ |
 | **V2** | `navicube::stage::StageProducer` + the producer-conformance test. | `ferrocad_viewport` | ✅ |
 | **V3** | `NaviCubeConfig`, the viewport `Theme`, the min-drag threshold, `draggable`/`rotate_to_nearest`, docs. | `ferrocad_viewport`, docs | ▢ |
+| **V4** | The neutral `Directives` channel in `ferrocad_graphics`; `SoNaviCube → NaviCubeDirective → producers` (see [`directives.md`](directives.md)). | `ferrocad_graphics`, `ferrocad_inventor`, `ferrocad_viewport` | ▢ |

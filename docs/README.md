@@ -33,7 +33,10 @@ is the `FreeCAD` Python API, documented by convention and by upstream.
   coordinate conventions, piece taxonomy and ids, geometry, appearance **roles** (styling
   is a theme), overlay camera, placement, interaction, and the producer build contract.
 - [navicube-plan.md](navicube-plan.md) — making the navigation cube **producer-
-  independent**: the model/producer/controller layering and the V1–V3 slice path.
+  independent**: the model/producer/controller layering and the V1–V4 slice path.
+- [directives.md](directives.md) — the neutral **directives** channel: semantic scene data
+  the renderer ignores and the viewport consumes (the `SoNaviCube` / `SoEventCallback`
+  bridge).
 - [inventor-plan.md](inventor-plan.md) — the Inventor/Coin emulation roadmap (four
   phases), adapted to the code as it stands (plan, with per-item status).
 - [stage.md](stage.md) — the modern declarative stack (`ferrocad_stage`): the slice

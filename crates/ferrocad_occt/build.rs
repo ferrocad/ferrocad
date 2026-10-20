@@ -10,6 +10,7 @@
 fn main() {
     println!("cargo:rerun-if-env-changed=OCCT_INCLUDE_DIR");
     println!("cargo:rerun-if-changed=include/fc_history.hxx");
+    println!("cargo:rerun-if-changed=include/fc_topology.hxx");
     println!("cargo:rerun-if-changed=src/bridge.rs");
 
     let occt_include = std::env::var("OCCT_INCLUDE_DIR").expect(

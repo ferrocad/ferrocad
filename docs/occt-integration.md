@@ -239,6 +239,11 @@ The extraction is a refactor with its own tests, so it lands in stages:
    into the shipped artifacts still needs OCCT staged beside the binary
    ([`occt-bundling.md`](occt-bundling.md)); the `real-window` CI job smoke-tests it under
    Xvfb in the meantime.
+9. **[x] Topology and tessellation** (2026-10-20) — `ferrocad_occt` implements
+   `capabilities`, `tessellate`, `elements`, `ancestors`, `continuity` and `chamfer`, and
+   fillet/chamfer now report lineage. The sibling bridge gained `fc_topology.hxx`
+   (list access, `IsSame` lookups, the two-distance chamfer, fillet/chamfer history and
+   edge tangents). See [`topology-selection.md`](topology-selection.md) (F0.2).
 
 `ferrocad_occt` is deliberately **not** in `default-members`, so an ordinary
 `cargo build`/`cargo test` needs no kernel; only the `geometry` CI job (and geometry

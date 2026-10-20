@@ -11,17 +11,21 @@
 //! `spikes/occt-history-rs`.)
 
 use cxx::UniquePtr;
-use ferrocad_geom::{ElementRef, GeomError, GeometryBackend, History, OpResult, Shape};
+use ferrocad_geom::{
+    Capabilities, Continuity, ElementKind, ElementRef, GeomError, GeometryBackend, History,
+    OpResult, Shape, Tessellation, TessellationOptions,
+};
 use ferrocad_types::Placement;
 use opencascade_sys as ffi;
 
 use ffi::top_abs::TopAbs_ShapeEnum;
 use ffi::top_tools::TopTools_IndexedMapOfShape;
-use ffi::topo_ds::{TopoDS, TopoDS_Shape};
+use ffi::topo_ds::TopoDS_Shape;
 
 use crate::bridge;
 use crate::error::OcctError;
 use crate::shape::{downcast, erase, new_map, sub_shape_map};
+use crate::topology;
 
 type Map = TopTools_IndexedMapOfShape;
 
@@ -101,33 +105,7 @@ impl GeometryBackend for OcctBackend {
         edges: &[ElementRef],
         radius: f64,
     ) -> Result<OpResult, GeomError> {
-        if edges.is_empty() {
-            return Err(OcctError::InvalidInput {
-                what: "fillet needs at least one edge",
-            }
-            .into());
-        }
-        let shape_occt = downcast(shape)?;
-        let shape_guard = shape_occt.borrow();
-        let s = shape_guard
-            .as_ref()
-            .ok_or(OcctError::InvalidInput { what: "null shape" })?;
-        let mut op = ffi::b_rep_fillet_api::BRepFilletAPI_MakeFillet_new(s);
-        for edge_ref in edges {
-            let edge_occt = downcast(&edge_ref.shape)?;
-            let edge_guard = edge_occt.borrow();
-            let es = edge_guard
-                .as_ref()
-                .ok_or(OcctError::InvalidInput { what: "null edge" })?;
-            op.pin_mut().add_edge(radius, TopoDS::Edge(es));
-        }
-        // `Shape()` triggers the build; `IsDone()` is meaningful afterwards.
-        let out = erase(op.pin_mut().Shape());
-        if !op.IsDone() {
-            return Err(OcctError::NotDone { operation: "fillet" }.into());
-        }
-        // Fillet history is not built yet (the bridge would need the fillet class).
-        Ok(OpResult::new(out, History::default()))
+        topology::fillet(shape, edges, radius)
     }
 
     fn place(&self, shape: &Shape, placement: &Placement) -> Result<Shape, GeomError> {
@@ -167,6 +145,44 @@ impl GeometryBackend for OcctBackend {
 
     fn load_shape(&self, bytes: &[u8]) -> Option<Shape> {
         crate::shape::read_brep(bytes)
+    }
+
+    fn capabilities(&self) -> Capabilities {
+        Capabilities::BOOLEANS
+            | Capabilities::FILLET
+            | Capabilities::CHAMFER
+            | Capabilities::TESSELLATION
+            | Capabilities::TOPOLOGY
+    }
+
+    fn tessellate(
+        &self,
+        shape: &Shape,
+        options: &TessellationOptions,
+    ) -> Result<Tessellation, GeomError> {
+        topology::tessellate(shape, options)
+    }
+
+    fn elements(&self, shape: &Shape, kind: ElementKind) -> Vec<ElementRef> {
+        topology::elements(shape, kind)
+    }
+
+    fn ancestors(&self, shape: &Shape, element: &ElementRef, kind: ElementKind) -> Vec<ElementRef> {
+        topology::ancestors(shape, element, kind)
+    }
+
+    fn continuity(&self, shape: &Shape, a: &ElementRef, b: &ElementRef) -> Option<Continuity> {
+        topology::continuity(shape, a, b)
+    }
+
+    fn chamfer(
+        &self,
+        shape: &Shape,
+        edges: &[ElementRef],
+        d1: f64,
+        d2: Option<f64>,
+    ) -> Result<OpResult, GeomError> {
+        topology::chamfer(shape, edges, d1, d2)
     }
 }
 
@@ -246,8 +262,12 @@ fn transform_from(placement: &Placement) -> UniquePtr<ffi::gp::gp_Trsf> {
 /// Parse a positional sub-element name (`Face6`, `Edge12`).
 fn parse_sub_name(name: &str) -> Option<(TopAbs_ShapeEnum, i32)> {
     for (prefix, kind) in [
+        ("Solid", TopAbs_ShapeEnum::TopAbs_SOLID),
+        ("Shell", TopAbs_ShapeEnum::TopAbs_SHELL),
         ("Face", TopAbs_ShapeEnum::TopAbs_FACE),
+        ("Wire", TopAbs_ShapeEnum::TopAbs_WIRE),
         ("Edge", TopAbs_ShapeEnum::TopAbs_EDGE),
+        ("Vertex", TopAbs_ShapeEnum::TopAbs_VERTEX),
     ] {
         if let Some(rest) = name.strip_prefix(prefix) {
             if let Ok(index) = rest.parse::<i32>() {

@@ -1,7 +1,8 @@
 # Topology, selection, and the F0 prerequisite
 
-Status: **F0.0 (binding reconnaissance and the tessellation/topology spike) and F0.1
-(the kernel-neutral vocabulary) are built (2026-10-20); F0.2–F0.6 are planned.** Companion to [`geometry-and-topology.md`](geometry-and-topology.md)
+Status: **F0.0 (binding reconnaissance and the tessellation/topology spike), F0.1
+(the kernel-neutral vocabulary) and F0.2 (the OCCT implementation) are built
+(2026-10-20); F0.3–F0.6 are planned.** Companion to [`geometry-and-topology.md`](geometry-and-topology.md)
 (the naming problem and the lineage engine), [`occt-integration.md`](occt-integration.md)
 (the crate layout), [`occt-history-spike.md`](occt-history-spike.md) (the verified
 history bridge), and [`gizmo-manipulators.md`](gizmo-manipulators.md) (the manipulators
@@ -137,6 +138,27 @@ first output wins, deleted names retired). Six new tests cover the bitflags, the
 fold, the null backend's empty topology, the mesh accessors and the selection
 constructors; `cargo test -p ferrocad_geom` is 11 tests + the doctest.
 
+**F0.2 as built (2026-10-20).** `ferrocad_occt` gained `src/topology.rs` and
+`include/fc_topology.hxx`. `OcctBackend` now advertises
+`BOOLEANS | FILLET | CHAMFER | TESSELLATION | TOPOLOGY`, tessellates with
+`BRepMesh_IncrementalMesh` (deflection from `TessellationOptions`, or 1e-3 of the
+bounding diagonal), enumerates elements with `TopExp::MapShapes`, answers adjacency in
+both directions, reports edge-to-edge continuity from their shared-vertex tangents,
+and implements `chamfer`. Fillet and chamfer now report lineage (`Generated` faces and
+the consumed edge) instead of an empty `History`.
+
+Implementation notes worth keeping:
+
+- `resolve` understands `SolidN`/`ShellN`/`FaceN`/`WireN`/`EdgeN`/`VertexN`, matching
+  `elements` names.
+- Adjacency looks keys up with `IsSame` (`fc_indexed_map_find_index_same` /
+  `fc_data_map_find_index_same`), because an ancestor list stores shapes with the
+  orientation they have in the parent.
+- The mesh is flat-shaded. Face, edge and vertex positions share one array, so
+  per-vertex normals would have to cover all three; the renderer flat-shades instead.
+- An input edge can be both `deleted` and the source of a `generated` face (a fillet);
+  the lineage records both, and `ElementMap::apply` retires the edge name.
+
 ## 5. F0.0 findings: `opencascade-sys` 0.3.0
 
 Checked against the published crate sources and then **verified by running**
@@ -158,12 +180,16 @@ Checked against the published crate sources and then **verified by running**
 | Exact face hit (optional) | `IntCurvesFace_ShapeIntersector` | **not bound** |
 
 Three C++-side additions cover the gaps, in the proven sibling-bridge pattern
-(`spikes/occt-tessellation/bridge/include/fc_topology.hxx`; the real one will live at
+(`spikes/occt-tessellation/bridge/include/fc_topology.hxx`; the real one is at
 `crates/ferrocad_occt/include/fc_topology.hxx`):
 
-- `fc_list_size` / `fc_list_value` for `TopTools_ListOfShape` (ancestors);
+- `fc_list_size` / `fc_list_value` for `TopTools_ListOfShape`, plus `IsSame`-based
+  index lookups for both the indexed map and the ancestor data map;
 - `fc_chamfer_add_asym(op, d1, d2, edge, face)`;
-- `fc_fillet_modified/generated/is_deleted` and the chamfer equivalents.
+- `fc_fillet_*` / `fc_chamfer_modified/generated/is_deleted` lineage;
+- `fc_edge_tangents(edge1, edge2, out)` for tangent continuity. The earlier plan used
+  `BRep_Tool::Continuity`, but its signature is `(edge, face1, face2)` — *surface*
+  continuity across one edge, not continuity between two adjacent edges.
 
 No `opencascade-sys` fork or patch is needed, which keeps the bundling story
 ([`occt-bundling.md`](occt-bundling.md)) unchanged.
@@ -213,8 +239,12 @@ cargo run
   across faces.
 - **Winding.** OCCT face orientation (`TopAbs_REVERSED`) is applied when flattening a
   triangulation, so the renderer's flat normal points outward.
-- **Normals.** Use the triangulation's per-vertex normals when `HasNormals`, otherwise
-  emit none and let the renderer flat-shade. No smoothing across faces.
+- **Normals.** F0.2 emits none and lets the renderer flat-shade. Faces, edges and
+  vertices share one position array, so per-vertex normals would have to cover all
+  three; a later slice can split the buffers if smooth shading is wanted.
+- **Continuity.** Two edges that share a vertex are compared by their unit tangents at
+  that vertex: equal up to sign ⇒ `G1`, otherwise `C0`. Higher orders need curvature
+  and are not distinguished; fillet propagation only needs the tangent test.
 - **Edges are topological, not mesh seams.** Each topological edge is emitted once as a
   polyline sampled from its polygon-on-triangulation, so the edge lines coincide with
   the face boundaries. `segment_parts` carries the edge ordinal.
@@ -271,7 +301,7 @@ returns none.
 | **F0.0 recon** ✅ | Check the `opencascade-sys` 0.3.0 surface (§5); list the sibling-bridge gaps | §5; no code |
 | **F0.0b spike** ✅ | `spikes/occt-tessellation/` against OCCT 7.8.1, with `fc_topology.hxx` | box: 6 faces / 12 edges / 8 vertices, 12 triangles, 1-based nodes, adjacency both ways, equal + two-distance chamfer, fillet lineage |
 | **F0.1 vocabulary** ✅ | §4 types and trait additions; `ElementMap::apply`; defaulted trait methods | `cargo test -p ferrocad_geom` — 11 tests, no OCCT |
-| **F0.2 OCCT** | `tessellate`, `elements`, `ancestors`, `continuity`, `chamfer`, fillet history | box → 6 faces / 12 edges / 8 vertices; a fillet and a chamfer report lineage; `geometry` CI job green |
+| **F0.2 OCCT** ✅ | `tessellate`, `elements`, `ancestors`, `continuity`, `chamfer`, fillet history | `cargo test -p ferrocad_occt` — 13 tests: part identity, name round-trip, both adjacency directions, C0 corners, equal/asymmetric chamfer, fillet lineage, placed tessellation |
 | **F0.3 pick coherence** | `Hit { part, element }`; the CPU path reads `Vertex.part_idx`; Python `Hit.part_idx` returns the part; screen-space line tolerance | a two-group mesh picks group 0 vs 1; CPU and GPU agree on `(part, element)` |
 | **F0.4 stage view** | `ShapeItem` carries per-vertex part ids; a builder from `Tessellation`; per-part highlight sub-mesh; edge/vertex packets | a face highlight draws only that face; part count matches the kernel |
 | **F0.5 selection bridge** | viewport selection event; edition name resolution; `ShapeView` cache | clicking a face yields `("Box", "Face6")`; no viewport → Part dependency |

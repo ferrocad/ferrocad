@@ -6,6 +6,14 @@
 
 use ferrocad_types::Vector3;
 
+/// How far a face grid may extend beyond its face, as a multiplier on the face's
+/// in-plane radius.
+pub const FACE_MARGIN: f64 = 1.1;
+
+/// The cosine below which a triangle is not considered coplanar with the face
+/// (about 2.6 degrees).
+pub const PLANAR_TOLERANCE: f32 = 0.999;
+
 /// Where a frame came from (for the UI and the grid's extent rule).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum WorkplaneKind {
@@ -89,6 +97,122 @@ impl Workplane {
     }
 }
 
+/// A **planar** face resolved into a workplane, plus the extent of its grid.
+#[derive(Clone, Debug, PartialEq)]
+pub struct FaceFrame {
+    /// The frame: origin at the face centroid, `u`/`v` in the face plane.
+    pub plane: Workplane,
+    /// The in-plane radius of the face, already grown by [`FACE_MARGIN`].
+    pub radius: f64,
+}
+
+impl FaceFrame {
+    /// Resolve the face `part` of a display tessellation into a frame.
+    ///
+    /// `positions`/`triangles`/`parts` are the stage item's buffers: triangles index
+    /// world-space positions and `parts[i]` is position `i`'s sub-element id (empty
+    /// means every position is part `0`). Only a **planar** part with at least one
+    /// non-degenerate triangle resolves; `None` is a curved face, an edge, or an empty
+    /// part.
+    ///
+    /// The frame is the area-weighted centroid and normal of the part's triangles, with
+    /// `u` the projection of world `+X` (or `+Y` when the face is perpendicular to
+    /// `X`) and `v = n × u`.
+    pub fn resolve(
+        entity: u32,
+        element: &str,
+        positions: &[[f32; 3]],
+        triangles: &[u32],
+        parts: &[u32],
+        part: u32,
+    ) -> Option<Self> {
+        let part_of = |index: u32| -> u32 { parts.get(index as usize).copied().unwrap_or(0) };
+        let point = |index: u32| -> Option<Vector3> {
+            let [x, y, z] = *positions.get(index as usize)?;
+            Some(Vector3::new(f64::from(x), f64::from(y), f64::from(z)))
+        };
+
+        // The part's triangles: all three corners tagged with it.
+        let mut area_sum = 0.0f64;
+        let mut normal_sum = Vector3::zero();
+        let mut centroid_sum = Vector3::zero();
+        let mut face_indices: Vec<u32> = Vec::new();
+        let mut triangle_normals: Vec<Vector3> = Vec::new();
+
+        for corner in triangles.chunks_exact(3) {
+            let [a, b, c] = [corner[0], corner[1], corner[2]];
+            if [a, b, c].iter().any(|index| part_of(*index) != part) {
+                continue;
+            }
+            let (Some(pa), Some(pb), Some(pc)) = (point(a), point(b), point(c)) else {
+                continue;
+            };
+            let cross = pb.sub(&pa).cross(&pc.sub(&pa));
+            let area = cross.length() * 0.5;
+            if area < 1e-12 {
+                continue;
+            }
+            let normal = cross.normalize();
+            area_sum += area;
+            normal_sum = normal_sum.add(&cross.scale(0.5));
+            centroid_sum = centroid_sum.add(&pa.add(&pb).add(&pc).scale(area / 3.0));
+            triangle_normals.push(normal);
+            face_indices.extend_from_slice(&[a, b, c]);
+        }
+
+        if area_sum <= 1e-12 || normal_sum.length() < 1e-12 {
+            return None;
+        }
+        let normal = normal_sum.normalize();
+        // A curved part (two facets at an angle) is not a workplane.
+        if triangle_normals
+            .iter()
+            .any(|facet| facet.dot(&normal) < f64::from(PLANAR_TOLERANCE))
+        {
+            return None;
+        }
+
+        let origin = centroid_sum.scale(1.0 / area_sum);
+        // `u` is world +X projected into the plane; `+Y` when the face is normal to X.
+        let mut u = project_onto_plane(Vector3::new(1.0, 0.0, 0.0), &normal);
+        if u.length() < 1e-6 {
+            u = project_onto_plane(Vector3::new(0.0, 1.0, 0.0), &normal);
+        }
+        let v = normal.cross(&u);
+        let kind = WorkplaneKind::Face {
+            entity,
+            element: element.to_string(),
+        };
+        let plane = Workplane::new(origin, u, v, kind)?;
+
+        // The extent covers the part's own vertices, not just the triangle corners.
+        let mut radius = 0.0f64;
+        for (index, position) in positions.iter().enumerate() {
+            if part_of(index as u32) != part {
+                continue;
+            }
+            let local = plane.project(Vector3::new(
+                f64::from(position[0]),
+                f64::from(position[1]),
+                f64::from(position[2]),
+            ));
+            radius = radius.max(local[0].hypot(local[1]));
+        }
+        if radius < 1e-9 {
+            return None;
+        }
+        Some(Self {
+            plane,
+            radius: radius * FACE_MARGIN,
+        })
+    }
+}
+
+/// `direction` with its component along `normal` removed (not normalised).
+fn project_onto_plane(direction: Vector3, normal: &Vector3) -> Vector3 {
+    direction.sub(&normal.scale(direction.dot(normal)))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -169,5 +293,113 @@ mod tests {
                 .ray_local(Vector3::new(0.0, 10.0, 0.0), Vector3::new(1.0, 0.0, 0.0))
                 .is_none()
         );
+    }
+
+    /// The top face of a 10 mm box: two triangles, all part `0`.
+    fn box_top() -> (Vec<[f32; 3]>, Vec<u32>, Vec<u32>) {
+        (
+            vec![
+                [0.0, 0.0, 10.0],
+                [10.0, 0.0, 10.0],
+                [10.0, 10.0, 10.0],
+                [0.0, 10.0, 10.0],
+            ],
+            vec![0, 1, 2, 0, 2, 3],
+            vec![0, 0, 0, 0],
+        )
+    }
+
+    fn close(a: Vector3, b: Vector3) -> bool {
+        (a.x - b.x).abs() < 1e-9 && (a.y - b.y).abs() < 1e-9 && (a.z - b.z).abs() < 1e-9
+    }
+
+    #[test]
+    fn a_planar_face_resolves_to_a_frame_at_its_centroid() {
+        let (positions, triangles, parts) = box_top();
+        let frame = FaceFrame::resolve(7, "Face6", &positions, &triangles, &parts, 0)
+            .expect("a planar face");
+
+        assert_eq!(
+            frame.plane.kind,
+            WorkplaneKind::Face {
+                entity: 7,
+                element: "Face6".into()
+            }
+        );
+        assert!(close(frame.plane.origin, Vector3::new(5.0, 5.0, 10.0)));
+        assert_eq!(frame.plane.n, Vector3::new(0.0, 0.0, 1.0));
+        assert_eq!(frame.plane.u, Vector3::new(1.0, 0.0, 0.0));
+        assert_eq!(frame.plane.v, Vector3::new(0.0, 1.0, 0.0));
+        // In-plane corner radius with the 10 % margin.
+        assert!((frame.radius - 50.0f64.sqrt() * FACE_MARGIN).abs() < 1e-9);
+    }
+
+    #[test]
+    fn a_tilted_face_uses_its_own_normal() {
+        let positions = vec![[0.0, 0.0, 0.0], [1.0, 0.0, 1.0], [0.0, 1.0, 0.0]];
+        let frame = FaceFrame::resolve(1, "Face1", &positions, &[0, 1, 2], &[], 0).unwrap();
+        let s = 0.5f64.sqrt();
+        assert!(
+            (frame.plane.n.x + s).abs() < 1e-9,
+            "n = {:?}",
+            frame.plane.n
+        );
+        assert!(
+            (frame.plane.n.z - s).abs() < 1e-9,
+            "n = {:?}",
+            frame.plane.n
+        );
+        // Right-handed: n = u × v.
+        let cross = frame.plane.u.cross(&frame.plane.v);
+        assert!((cross.dot(&frame.plane.n) - 1.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn a_face_normal_to_x_falls_back_to_world_y_for_u() {
+        let positions = vec![[5.0, 0.0, 0.0], [5.0, 1.0, 0.0], [5.0, 0.0, 1.0]];
+        let frame = FaceFrame::resolve(1, "Face3", &positions, &[0, 1, 2], &[], 0).unwrap();
+        assert_eq!(frame.plane.n, Vector3::new(1.0, 0.0, 0.0));
+        assert_eq!(frame.plane.u, Vector3::new(0.0, 1.0, 0.0));
+        assert_eq!(frame.plane.v, Vector3::new(0.0, 0.0, 1.0));
+    }
+
+    #[test]
+    fn a_curved_or_mixed_part_is_not_a_workplane() {
+        // Two facets at a right angle, tagged as one part.
+        let positions = vec![
+            [0.0, 0.0, 0.0],
+            [1.0, 0.0, 0.0],
+            [0.0, 1.0, 0.0],
+            [0.0, 0.0, 1.0],
+        ];
+        assert!(FaceFrame::resolve(1, "Face1", &positions, &[0, 1, 2, 0, 3, 2], &[], 0).is_none());
+        // An edge (no triangles) has no frame either.
+        let (positions, _, parts) = box_top();
+        assert!(FaceFrame::resolve(1, "Edge2", &positions, &[], &parts, 0).is_none());
+    }
+
+    #[test]
+    fn only_the_requested_part_is_resolved() {
+        // Part 0 is the z = 10 cap, part 1 the z = 0 cap.
+        let positions = vec![
+            [0.0, 0.0, 10.0],
+            [10.0, 0.0, 10.0],
+            [10.0, 10.0, 10.0],
+            [0.0, 0.0, 0.0],
+            [10.0, 0.0, 0.0],
+            [10.0, 10.0, 0.0],
+        ];
+        let triangles = vec![0, 1, 2, 3, 4, 5];
+        let parts = vec![0, 0, 0, 1, 1, 1];
+        let top = FaceFrame::resolve(9, "Face1", &positions, &triangles, &parts, 0).unwrap();
+        let bottom = FaceFrame::resolve(9, "Face2", &positions, &triangles, &parts, 1).unwrap();
+        assert!(close(
+            top.plane.origin,
+            Vector3::new(20.0 / 3.0, 10.0 / 3.0, 10.0)
+        ));
+        assert!(close(
+            bottom.plane.origin,
+            Vector3::new(20.0 / 3.0, 10.0 / 3.0, 0.0)
+        ));
     }
 }

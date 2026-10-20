@@ -79,4 +79,4 @@ pub use shape::{DrawMode, ShapeItem};
 pub use snap::{Snap, SnapContext, SnapKind, snap_to_geometry};
 pub use stage::Stage;
 pub use tool::{PolylineTool, Tool};
-pub use workplane::{Workplane, WorkplaneKind};
+pub use workplane::{FaceFrame, Workplane, WorkplaneKind};

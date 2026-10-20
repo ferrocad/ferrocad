@@ -1,13 +1,13 @@
 # Axis, origin and grids: the spatial reference model
 
-Status: design + G0–G2 built (2026-10-20). Companion to [`gizmo-manipulators.md`](gizmo-manipulators.md),
+Status: design + G0–G3 built (2026-10-20). Companion to [`gizmo-manipulators.md`](gizmo-manipulators.md),
 [`navicube-spec.md`](navicube-spec.md), [`stage.md`](stage.md) and
 [`architecture.md`](architecture.md) §10.
 
 This note defines **one** model for the things that tell a user where they are: the
 world triad, the ground grid, local workplanes, face grids, and the snap feedback that
 ties them together. It records the visual language, the data model, the render
-mapping, and the slice path. **G0–G2 are built** (§1, §8); G3+ are still a plan.
+mapping, and the slice path. **G0–G3 are built** (§1, §8); G4+ are still a plan.
 
 ---
 
@@ -24,11 +24,11 @@ mapping, and the slice path. **G0–G2 are built** (§1, §8); G3+ are still a p
 | Navigation cube | ✅ world-oriented; six faces + corners/edges, a compass ring, labels |
 | Grid state | ✅ an in-memory flag (`ViewState.grid`, A5), toggled by `App_ToggleGrid`, mirrored to `FreeCADGui.ViewState`, and applied to the viewport (`set_grid`) |
 | Grid rendering | ✅ **G2** — `ferrocad_stage::grid` emits dots, major lines and the triad; the viewport draws them in the scene's depth pass |
-| Workplane / UCS | ◐ **G1** — the `Workplane`/`WorkplaneKind` vocabulary and the grid/snap context; no face workplane yet (G3) |
+| Workplane / UCS | ✅ **G1/G3** — the vocabulary, and a face resolved from the display tessellation (`FaceFrame`) with hover preview, activation and `Esc` |
 | Per-vertex colour/alpha | ✅ **G0** — `Vertex.color` multiplies the packet colour; the grid carries its radial fade in it |
 
-G0–G2 closed the first three gaps. What remains: resolving a **face** into a
-workplane (G3), the snap aurora/pill (G4), and the policy/chrome (G5).
+G0–G3 closed the first three gaps. What remains: the snap aurora/pill (G4) and the
+policy/chrome (G5).
 
 ---
 
@@ -289,8 +289,8 @@ active `n`. Keeping the cube world-only is deliberate: mixing the two would make
 | Layer | Owns |
 | --- | --- |
 | `ferrocad_graphics` | `Vertex.color` (G0); `Topology::{Points, Lines}` already |
-| `ferrocad_stage` | `Workplane`, `GridSpec`, `GridStyle`, `SnapContext`, the grid producer, the triad builder, `SnapKind` extensions. Pure math: no kernel, no gpui, no Python |
-| `ferrocad_viewport` | building the frames from the display tessellation (`SelectionRef` → `WorkplaneKind::Face`), drawing the producer, routing hover/clicks, the aurora and pill, `set_workplane`/`set_grid` |
+| `ferrocad_stage` | `Workplane`, `FaceFrame` (face → frame from the tessellation), `GridSpec`, `GridStyle`, `SnapContext`, the grid producer, the triad builder, `SnapKind` extensions. Pure math: no kernel, no gpui, no Python |
+| `ferrocad_viewport` | building the frames from the display tessellation (`SelectionRef` → `WorkplaneKind::Face`), drawing the producer and the local layers, routing hover/clicks, the aurora and pill, `set_workplane`/`set_grid` |
 | `ferrocad_gpui` / the edition | the **policy**: grid on/off, steps, units, sketch mode, the command that activates a datum plane. Preferences come from `App::ParamGet` |
 | `ferrocad_part` and others | nothing — a workplane is a frame, not a shape |
 
@@ -309,9 +309,41 @@ the visual work can use it.
 | **G0 — per-vertex colour** ✅ | `Vertex.color`; shader multiply; producers emit white; line/point blending | existing suites green; `per_vertex_colour_multiplies_the_packet_colour` reads back red/blue halves under a white packet colour |
 | **G1 — vocabulary** ✅ | `Workplane` (+ kind), `GridSpec`/`GridStyle`, `SnapContext`; `snap_to_geometry` workplane-aware; `Snap.local`/`Snap.major` | unit tests: a tilted plane's unprojection and rounding, major-before-minor priority, `z = 0` world behaviour unchanged, local `(u, v)` of a snap |
 | **G2 — world grid + triad** ✅ | `ferrocad_stage::grid` producer and triad builder; the viewport draws them from their own queue; pick-through | viewport: `grid_queue` gains `Points`/`Lines`/`Triangles`; a click over a dot resolves to nothing; the ground cache survives an orbit while the triad rebuilds; `set_grid` toggles it; the shell forwards `ViewState.grid` |
-| **G3 — face workplane** | `SelectionRef` → `WorkplaneKind::Face`; hover blooms the face grid; activation/dimming; bounded extent; `depth_bias` | hovering a box face emits a local grid packet whose basis matches the face normal; activating it changes the snap plane; `Esc` clears |
+| **G3 — face workplane** ✅ | `SelectionRef` → `WorkplaneKind::Face`; hover blooms the face grid; activation/dimming; bounded extent; `depth_bias` | hovering a box face emits a local grid packet whose basis matches the face normal; activating it changes the snap plane; `Esc` clears |
 | **G4 — snap feedback** | aurora, projection rays, `ΔU`/`ΔV` pill; origin proximity; feature snaps | dragging across the workplane shows an aurora at major nodes, rays to U/V, and the pill's numbers match `Snap.local` |
 | **G5 — chrome + policy** | step/radius preferences, the workplane view command, ring-heading sync, origin labels | a preference change re-emits the grid without a restart; `View → Workplane` looks down `n`; the ring follows the active heading |
+
+### G3 as built (2026-10-20) — the face workplane
+
+- **`ferrocad_stage::FaceFrame`** — `resolve(entity, element, positions, triangles, parts,
+  part)` reads only the display tessellation: the part's triangles give an area-weighted
+  centroid and normal; any facet more than ~2.6° off the mean (cos `< PLANAR_TOLERANCE`)
+  rejects the part as curved; `u` is world `+X` projected into the plane (falling back to
+  `+Y` when the face is normal to `X`), `v = n × u`; the grid radius is the widest
+  in-plane vertex distance, grown by `FACE_MARGIN` (10 %). No kernel call.
+- **Hover preview** — the viewport resolves the hovered `(entity, part)` into a frame on
+  every pointer move (`refresh_hover_face`), keyed on the item's geometry generation so a
+  reshaped item re-resolves without resetting the dwell. The grid **blooms after
+  `FACE_DWELL` (120 ms)**; the immediate feedback is the hover report, as decided in §10.3.
+  The render loop requests animation frames while the dwell is pending, so the bloom
+  arrives without further pointer motion.
+- **Layers** — `GridLayer` gained a `depth_bias`; `GridMesh` now owns the world layer plus
+  an **active** and a **hover** layer. A local layer uses 1 mm dots / 10 mm lines
+  (`GridStyle::workplane`), its face's radius, and `WIRE_DEPTH_BIAS` so it sits on the
+  surface instead of z-fighting with it. While a local layer exists the world ground drops
+  to `WORLD_DIM` (25 %) and the world triad to `WORLD_TRIAD_DIM` (30 %).
+- **Activation** — `set_workplane(Some(FaceFrame))` / `activate_hovered_workplane()` /
+  `clear_workplane()`. The plane is **sticky** (§10.4): it survives pointer moves and
+  empty-space clicks. `Esc` clears it (after it has had the chance to cancel a manipulator
+  or gizmo drag). Snapping switches to `SnapContext { minor: 1, major: 10 }` on the active
+  plane; the world grid snapping step applies when none is active.
+- **Caching** — the ground and triad keys now include the ink. A dimmed grid bakes
+  different per-vertex alpha, so it is different geometry, not a different packet colour;
+  without this the world level never receded.
+
+**Deferred:** the command that activates a face and the ring-heading sync belong to G5;
+until then a host calls `activate_hovered_workplane()` (a click handler or a command).
+The active face itself is never re-previewed.
 
 ### G0–G2 as built (2026-10-20)
 
@@ -326,15 +358,16 @@ the visual work can use it.
     `RADIUS_RANGE = (500, 5_000)`, `MINOR_PIXELS = 4`, `MAX_DOTS = 40_000`.
   - `ground(spec, style)` — dots (skipping major lines) plus major lines subdivided at
     the minor step, alpha `α₀ · max(0, 1 − d / R)` per vertex.
-  - `triad(workplane, camera)` — three screen-facing ribbons via `screen_ribbon`,
-    axis colours at 65 %.
+  - `triad(workplane, camera, dim)` — three screen-facing ribbons via `screen_ribbon`,
+    axis colours at 65 %, scaled by `dim`.
   - `effective_steps` — drops the minor level below 4 projected px, promoting a decade.
   - **Unlit by construction:** every vertex's normal is the shader's light direction,
     so the diffuse term is exactly 1 and the per-vertex colour reaches the screen.
-- **`ferrocad_viewport`** — `GridMesh` owns three mesh ids (allocated from a private
-  counter) and two cache keys: the ground is keyed on the `GridSpec` (camera-independent,
-  so an orbit does not rebuild it), the triad on the camera's view/projection and device
-  height. `set_grid`/`grid_enabled` toggle it; `sync_grid` runs on every `recompile`.
+- **`ferrocad_viewport`** — `GridMesh` (now three `GridLayer`s since G3) owns nine mesh
+  ids (allocated from a private counter) and two cache keys per layer: the ground is
+  keyed on the `GridSpec` and its ink (camera-independent, so an orbit does not rebuild
+  it), the triad on the camera's view/projection, device height and alpha. `set_grid` /
+  `grid_enabled` toggle it; `sync_grid` runs on every `recompile` and every paint.
 - **`ferrocad_gpui`** — `apply_view` forwards `ViewState.grid` to the viewport, and
   `enable_viewport` applies the current state at creation.
 
@@ -357,10 +390,12 @@ the visual work can use it.
 
 ## 10. Decisions to settle
 
-**Settled by G0–G2:** 1 (per-vertex colour), 2 (1 px points, with the 4 px culling rule),
-6 (`2.5 ×` eye distance, clamped 500–5 000 mm; the cache key is the exact spec, so a zoom
-rebuilds and an orbit does not — the 10 % hysteresis can come with G5's preferences).
-The rest remain open; 0 is settled in favour of Z-up.
+**Settled by G0–G3:** 0 (Z-up), 1 (per-vertex colour), 2 (1 px points, with the 4 px
+culling rule), 3 (the 120 ms hover dwell, with an immediate hover report), 4 (sticky
+until `Esc` or another activation), 6 (`2.5 ×` eye distance, clamped 500–5 000 mm; the
+cache key is the exact spec, so a zoom rebuilds and an orbit does not — the 10 %
+hysteresis can come with G5's preferences), 7 (the world grid drops to 25 % under a local
+plane; its triad to 30 %). The rest remain open.
 
 0. **World up-axis.** The grid model assumes **Z-up** (`XY` ground), consistent with
    `snap_to_geometry`'s `z = 0`, the toy's `Height`, and OCCT. `navicube-spec.md` §2
@@ -397,8 +432,9 @@ pattern (G0–G2 are built; the entries for them are live tests):
   unprojection on a tilted plane, major/minor priority, screen-space culling, the grid
   generator's segment counts and per-vertex alpha at `d = 0`, `d = R_max`.
 - **`ferrocad_viewport` (headless)** — the grid's packets (topology, ids, separate
-  queue, pick-through, the two cache keys), and `set_grid`; G3 adds face-frame
-  resolution from a tessellated box and the aurora/pill on a synthetic drag.
+  queue, pick-through, the two cache keys), `set_grid`, and the face workplane: hover
+  resolution from a named slab, the dwell, the bloom's plane and depth bias, the world
+  dimming, activation changing the snap context, and `Esc`.
 - **`ferrocad_wgpu`** — the per-vertex colour multiply (a readback of a two-colour
   triangle), and the grid's line/point primitives in a real pass.
 

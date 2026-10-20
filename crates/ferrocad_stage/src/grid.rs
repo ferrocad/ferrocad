@@ -18,6 +18,10 @@ use crate::workplane::Workplane;
 pub const MINOR_STEP: f64 = 10.0;
 /// The default major spacing (100 mm).
 pub const MAJOR_STEP: f64 = 100.0;
+/// A local workplane's minor spacing (1 mm).
+pub const LOCAL_MINOR_STEP: f64 = 1.0;
+/// A local workplane's major spacing (10 mm).
+pub const LOCAL_MAJOR_STEP: f64 = 10.0;
 /// The triad stem length, in device pixels.
 pub const TRIAD_PIXELS: f64 = 80.0;
 /// The radius clamp (`0.5 m .. 5 m`, in millimetres).
@@ -78,6 +82,13 @@ pub struct GridStyle {
     pub color: [f32; 4],
     pub minor_alpha: f32,
     pub major_alpha: f32,
+    /// A global alpha multiplier for the ground. The world grid recedes to
+    /// [`WORLD_DIM`] while a local workplane is active.
+    pub dim: f32,
+    /// The triad's own alpha multiplier; the world triad recedes to
+    /// [`WORLD_TRIAD_DIM`], a little stronger than the ground so the global anchor
+    /// never vanishes.
+    pub triad_dim: f32,
 }
 
 impl Default for GridStyle {
@@ -86,9 +97,37 @@ impl Default for GridStyle {
             color: GRID_COLOR,
             minor_alpha: GRID_ALPHA,
             major_alpha: GRID_ALPHA,
+            dim: 1.0,
+            triad_dim: 1.0,
         }
     }
 }
+
+impl GridStyle {
+    /// The same ink, scaled back so a lower level of the hierarchy recedes.
+    pub fn dimmed(mut self, factor: f32) -> Self {
+        self.dim = factor;
+        self.triad_dim = factor;
+        self
+    }
+
+    /// A workplane grid: 1 mm minor dots, 10 mm major lines, the major level twice as
+    /// strong as the minor one.
+    pub fn workplane() -> Self {
+        Self {
+            color: GRID_COLOR,
+            minor_alpha: GRID_ALPHA,
+            major_alpha: GRID_ALPHA * 2.0,
+            dim: 1.0,
+            triad_dim: 1.0,
+        }
+    }
+}
+
+/// The world grid's alpha multiplier under an active local workplane.
+pub const WORLD_DIM: f32 = 0.25;
+/// The world triad's alpha multiplier under an active local workplane.
+pub const WORLD_TRIAD_DIM: f32 = 0.30;
 
 /// The steps that survive the screen-space cull.
 ///
@@ -132,7 +171,7 @@ pub struct GridGeometry {
 /// invariant (`TRIAD_PIXELS` long, `STROKE_PIXELS` wide) and uses the axis hues.
 pub fn build(spec: &GridSpec, style: &GridStyle, camera: &Camera) -> GridGeometry {
     let (dots, lines) = ground(spec, style);
-    let (triangles, triangle_indices) = triad(&spec.workplane, camera);
+    let (triangles, triangle_indices) = triad(&spec.workplane, camera, style.triad_dim);
     GridGeometry {
         dots,
         lines,
@@ -165,7 +204,7 @@ pub fn ground(spec: &GridSpec, style: &GridStyle) -> (Vec<Vertex>, Vec<Vertex>) 
                 if distance > radius {
                     continue;
                 }
-                let alpha = fade(style.minor_alpha, distance, radius);
+                let alpha = fade(style.minor_alpha * style.dim, distance, radius);
                 if alpha <= 0.0 {
                     continue;
                 }
@@ -197,7 +236,9 @@ pub fn ground(spec: &GridSpec, style: &GridStyle) -> (Vec<Vertex>, Vec<Vertex>) 
 }
 
 /// The triad's screen-facing ribbons at the workplane origin: three stems.
-pub fn triad(workplane: &Workplane, camera: &Camera) -> (Vec<Vertex>, Vec<u32>) {
+///
+/// `dim` scales every stem's alpha, so a lower level of the hierarchy can recede.
+pub fn triad(workplane: &Workplane, camera: &Camera, dim: f32) -> (Vec<Vertex>, Vec<u32>) {
     let mut vertices = Vec::with_capacity(12);
     let mut indices = Vec::with_capacity(18);
     let forward = camera_forward(camera);
@@ -209,7 +250,8 @@ pub fn triad(workplane: &Workplane, camera: &Camera) -> (Vec<Vertex>, Vec<u32>) 
         (workplane.v, AXIS_COLORS[1]),
         (workplane.n, AXIS_COLORS[2]),
     ];
-    for (axis, color) in axes {
+    for (axis, mut color) in axes {
+        color[3] *= dim;
         let tip = origin.add(&axis.scale(length));
         let Some(quad) = screen_ribbon(origin, tip, half_width, forward) else {
             continue;
@@ -223,13 +265,23 @@ pub fn triad(workplane: &Workplane, camera: &Camera) -> (Vec<Vertex>, Vec<u32>) 
     (vertices, indices)
 }
 
-/// A key for the ground cache: the spec's numbers and plane.
-pub fn ground_key(spec: &GridSpec) -> u64 {
+/// A key for the ground cache: the spec's numbers, its plane, and the ink.
+///
+/// The ink is part of the key because the vertices bake alpha per dot and per line
+/// segment: a dimmed world grid is different geometry, not a different packet colour.
+pub fn ground_key(spec: &GridSpec, style: &GridStyle) -> u64 {
     let plane = &spec.workplane;
     let mut parts = vec![
         spec.minor.to_bits(),
         spec.major.to_bits(),
         spec.radius.to_bits(),
+        u64::from(style.color[0].to_bits()),
+        u64::from(style.color[1].to_bits()),
+        u64::from(style.color[2].to_bits()),
+        u64::from(style.color[3].to_bits()),
+        u64::from(style.minor_alpha.to_bits()),
+        u64::from(style.major_alpha.to_bits()),
+        u64::from(style.dim.to_bits()),
     ];
     for v in [plane.origin, plane.u, plane.v, plane.n] {
         parts.extend_from_slice(&[v.x.to_bits(), v.y.to_bits(), v.z.to_bits()]);
@@ -237,9 +289,11 @@ pub fn ground_key(spec: &GridSpec) -> u64 {
     hash(&parts)
 }
 
-/// A key for the triad cache: the plane and the camera's view matrix.
-pub fn triad_key(workplane: &Workplane, camera: &Camera) -> u64 {
+/// A key for the triad cache: the plane, the camera's view matrix, and the ink's alpha
+/// multiplier (a dimmed triad bakes different colours into its vertices).
+pub fn triad_key(workplane: &Workplane, camera: &Camera, dim: f32) -> u64 {
     let mut parts = Vec::with_capacity(24 + 16);
+    parts.push(u64::from(dim.to_bits()));
     for v in [workplane.origin, workplane.u, workplane.v, workplane.n] {
         parts.extend_from_slice(&[v.x.to_bits(), v.y.to_bits(), v.z.to_bits()]);
     }
@@ -297,8 +351,16 @@ fn add_line(
         } else {
             (offset, next)
         };
-        let alpha0 = fade(style.major_alpha, (a0 * a0 + b0 * b0).sqrt(), radius);
-        let alpha1 = fade(style.major_alpha, (a1 * a1 + b1 * b1).sqrt(), radius);
+        let alpha0 = fade(
+            style.major_alpha * style.dim,
+            (a0 * a0 + b0 * b0).sqrt(),
+            radius,
+        );
+        let alpha1 = fade(
+            style.major_alpha * style.dim,
+            (a1 * a1 + b1 * b1).sqrt(),
+            radius,
+        );
         lines.push(vertex(spec.workplane.point(a0, b0), ink(style, alpha0)));
         lines.push(vertex(spec.workplane.point(a1, b1), ink(style, alpha1)));
         t = next;
@@ -378,6 +440,28 @@ mod tests {
         assert!((fade(0.15, 50.0, 100.0) - 0.075).abs() < 1e-6);
         assert_eq!(fade(0.15, 100.0, 100.0), 0.0);
         assert_eq!(fade(0.15, 120.0, 100.0), 0.0);
+    }
+
+    #[test]
+    fn a_dimmed_style_scales_the_ground_and_the_triad() {
+        let full = GridStyle::default();
+        let dimmed = full.clone().dimmed(WORLD_DIM);
+        let (bright, _) = ground(&spec(100.0), &full);
+        let (dim, _) = ground(&spec(100.0), &dimmed);
+        let peak = |dots: &[Vertex]| dots.iter().map(|dot| dot.color[3]).fold(0.0, f32::max);
+        assert!((peak(&dim) - peak(&bright) * WORLD_DIM).abs() < 1e-6);
+
+        let (triad_full, _) = triad(&Workplane::world(), &tilted_camera(), 1.0);
+        let (triad_dim, _) = triad(&Workplane::world(), &tilted_camera(), WORLD_TRIAD_DIM);
+        assert!((triad_full[0].color[3] - AXIS_COLORS[0][3]).abs() < 1e-9);
+        assert!((triad_dim[0].color[3] - AXIS_COLORS[0][3] * WORLD_TRIAD_DIM).abs() < 1e-6);
+    }
+
+    #[test]
+    fn a_workplane_grid_has_finer_steps_and_a_stronger_major() {
+        let style = GridStyle::workplane();
+        assert!(style.major_alpha > style.minor_alpha * 2.0 - 1e-6);
+        assert_eq!(style.dim, 1.0);
     }
 
     #[test]

@@ -15,7 +15,7 @@
 use std::cell::RefCell;
 use std::rc::Rc;
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use ferrocad_geom::SelectionRef;
 use ferrocad_graphics::{
@@ -27,8 +27,9 @@ use ferrocad_inventor::{
     compile_with,
 };
 use ferrocad_stage::Stage;
+use ferrocad_stage::shape::WIRE_DEPTH_BIAS;
 use ferrocad_stage::{
-    GizmoCommitEvent, GizmoHandle, GizmoModifiers, GizmoValue, GridSpec, GridStyle,
+    FaceFrame, GizmoCommitEvent, GizmoHandle, GizmoModifiers, GizmoValue, GridSpec, GridStyle,
     InteractionCommit, Manipulator, MouseButton as StageButton, PointerEvent, PointerKind,
     SnapContext, Tool, TransformGizmo, Workplane, grid, snap_to_geometry,
 };
@@ -165,6 +166,11 @@ pub struct InventorViewport<V: InventorView> {
     hover_report: HoverReport,
     /// The reference grid (G2), when enabled.
     grid: Option<GridMesh>,
+    /// The active local workplane (G3): sticky until `Esc` or another activation.
+    active_workplane: Option<FaceFrame>,
+    /// The face under the pointer, resolved from the stage's display tessellation. Its
+    /// grid blooms after [`FACE_DWELL`].
+    hover_face: Option<FaceHover>,
     /// The grid's packets. Kept apart from [`queue`](Self::queue) so the grid draws in
     /// the same depth pass but never enters a pick: it is scaffolding, not geometry.
     grid_queue: RenderQueue,
@@ -221,10 +227,68 @@ const RING_DETENT_CAPTURE: f64 = 10.0;
 
 /// The reference grid's cached geometry and its stable mesh identities.
 ///
-/// The ground (dots and major lines) is keyed on its spec, so an orbit does not rebuild
-/// it; the triad is keyed on the camera, because its ribbons are screen-facing. A
-/// rebuild bumps only that half's generation, so the renderer re-uploads just it.
+/// One [`GridLayer`] is the world ground; two more are local: the **active** workplane
+/// and a **hovered** face being previewed. The local layers are allocated once and
+/// hidden when unused, so their mesh identities stay stable (a hover that comes and
+/// goes never leaks a mesh the renderer has to keep). A layer's ground (dots and major
+/// lines) is keyed on its spec and ink, so an orbit does not rebuild it; its triad is
+/// keyed on the camera, because its ribbons are screen-facing. A rebuild bumps only
+/// that half's generation, so the renderer re-uploads just it.
 struct GridMesh {
+    world: GridLayer,
+    active: GridLayer,
+    hover: GridLayer,
+}
+
+impl GridMesh {
+    fn new() -> Self {
+        Self {
+            world: GridLayer::new(0.0),
+            active: GridLayer::new(WIRE_DEPTH_BIAS),
+            hover: GridLayer::new(WIRE_DEPTH_BIAS),
+        }
+    }
+
+    /// Sync the world layer and the two local layers (each hidden while its spec is
+    /// absent).
+    fn sync(
+        &mut self,
+        camera: &Camera,
+        world_spec: &GridSpec,
+        world_style: &GridStyle,
+        active: Option<(&GridSpec, &GridStyle)>,
+        hover: Option<(&GridSpec, &GridStyle)>,
+    ) {
+        self.world.visible = true;
+        self.world.sync(camera, world_spec, world_style);
+        sync_layer(&mut self.active, camera, active);
+        sync_layer(&mut self.hover, camera, hover);
+    }
+
+    fn emit(&self, queue: &mut RenderQueue) {
+        self.world.emit(queue);
+        self.active.emit(queue);
+        self.hover.emit(queue);
+    }
+}
+
+/// Sync one local layer, or hide it when its spec is absent.
+fn sync_layer(
+    layer: &mut GridLayer,
+    camera: &Camera,
+    spec: Option<(&GridSpec, &GridStyle)>,
+) {
+    match spec {
+        Some((spec, style)) => {
+            layer.visible = true;
+            layer.sync(camera, spec, style);
+        }
+        None => layer.visible = false,
+    }
+}
+
+/// One grid's cached geometry: dots, major lines and the triad at its origin.
+struct GridLayer {
     dots_mesh: MeshId,
     lines_mesh: MeshId,
     triad_mesh: MeshId,
@@ -236,10 +300,15 @@ struct GridMesh {
     lines: Vec<Vertex>,
     triad: Vec<Vertex>,
     triad_indices: Vec<u32>,
+    /// The coplanar lift for a face grid; `0` for the world ground.
+    depth_bias: f32,
+    /// Whether this layer contributes packets (a local layer is hidden when no face or
+    /// datum owns it).
+    visible: bool,
 }
 
-impl GridMesh {
-    fn new() -> Self {
+impl GridLayer {
+    fn new(depth_bias: f32) -> Self {
         use std::sync::atomic::{AtomicU64, Ordering};
         // A range above the stage's ids (which start at 1 << 40) is not needed: the
         // stage's allocator is a different counter, so a shared range is fine as long
@@ -258,11 +327,13 @@ impl GridMesh {
             lines: Vec::new(),
             triad: Vec::new(),
             triad_indices: Vec::new(),
+            depth_bias,
+            visible: false,
         }
     }
 
     fn sync(&mut self, camera: &Camera, spec: &GridSpec, style: &GridStyle) {
-        let key = grid::ground_key(spec);
+        let key = grid::ground_key(spec, style);
         if self.ground_key != Some(key) {
             let (dots, lines) = grid::ground(spec, style);
             self.dots = dots;
@@ -270,9 +341,9 @@ impl GridMesh {
             self.ground_generation = Generation(self.ground_generation.0 + 1);
             self.ground_key = Some(key);
         }
-        let key = grid::triad_key(&spec.workplane, camera);
+        let key = grid::triad_key(&spec.workplane, camera, style.triad_dim);
         if self.triad_key != Some(key) {
-            let (vertices, indices) = grid::triad(&spec.workplane, camera);
+            let (vertices, indices) = grid::triad(&spec.workplane, camera, style.triad_dim);
             self.triad = vertices;
             self.triad_indices = indices;
             self.triad_generation = Generation(self.triad_generation.0 + 1);
@@ -281,6 +352,9 @@ impl GridMesh {
     }
 
     fn emit(&self, queue: &mut RenderQueue) {
+        if !self.visible {
+            return;
+        }
         if !self.dots.is_empty() {
             let indices = (0..self.dots.len() as u32).collect();
             queue.packets.push(self.packet(
@@ -312,8 +386,8 @@ impl GridMesh {
         }
     }
 
-    /// The grid is deliberately **not pickable**: `PickId(0)` is the untagged id, which
-    /// resolves to nothing, so a click falls through to the geometry behind it.
+    /// The grid is deliberately **not pickable**: it is emitted into its own queue that
+    /// no pick path sees, and it carries the untagged id besides.
     fn packet(
         &self,
         mesh_id: MeshId,
@@ -330,13 +404,49 @@ impl GridMesh {
             state: StateSnapshot {
                 world_transform: Matrix4::identity(),
                 color: [1.0, 1.0, 1.0, 1.0],
-                depth_bias: 0.0,
+                depth_bias: self.depth_bias,
                 texture: None,
                 id: PickId(0),
             },
         }
     }
 }
+
+/// The spec and style of a workplane's own grid: 1 mm dots, 10 mm lines, bounded by the
+/// face (plus its margin).
+fn local_grid(camera: &Camera, frame: &FaceFrame) -> (GridSpec, GridStyle) {
+    let (minor, major) = grid::effective_steps(
+        camera,
+        &frame.plane,
+        grid::LOCAL_MINOR_STEP,
+        grid::LOCAL_MAJOR_STEP,
+    );
+    (
+        GridSpec {
+            workplane: frame.plane.clone(),
+            minor,
+            major,
+            radius: frame.radius,
+        },
+        GridStyle::workplane(),
+    )
+}
+
+/// The face under the pointer, resolved to a workplane the pointer may activate.
+struct FaceHover {
+    entity: u32,
+    part: u32,
+    /// The stage item's geometry generation at resolution time, so a reshaped item is
+    /// re-resolved without resetting the dwell.
+    generation: Generation,
+    frame: FaceFrame,
+    /// When the pointer first rested on this face; the grid blooms after [`FACE_DWELL`].
+    since: Instant,
+}
+
+/// How long the pointer rests on a face before its grid blooms. An immediate bloom
+/// flickers while crossing an edge; the face highlight stays instant.
+const FACE_DWELL: Duration = Duration::from_millis(120);
 
 /// How quickly a released orbit slows down (the velocity's time constant).
 const ORBIT_INERTIA_TAU: f32 = 0.18;
@@ -397,6 +507,8 @@ impl<V: InventorView> InventorViewport<V> {
             selection: None,
             hover_report: HoverReport::default(),
             grid: None,
+            active_workplane: None,
+            hover_face: None,
             grid_queue: RenderQueue::default(),
             frame: None,
             presenter: None,
@@ -506,13 +618,17 @@ impl<V: InventorView> InventorViewport<V> {
         cancelled
     }
 
-    /// Handle a key press. `Esc` cancels an active manipulator drag, then a gizmo drag.
+    /// Handle a key press. `Esc` cancels an active manipulator drag, then a gizmo drag,
+    /// then clears an active workplane.
     pub fn handle_key(&mut self, event: &KeyDownEvent) -> bool {
         if event.keystroke.key == "escape" {
             if self.cancel_manipulator_drag() {
                 return true;
             }
-            return self.cancel_gizmo_drag();
+            if self.cancel_gizmo_drag() {
+                return true;
+            }
+            return self.clear_workplane();
         }
         false
     }
@@ -1330,7 +1446,7 @@ impl<V: InventorView> InventorViewport<V> {
             button,
             hit: hit.copied(),
         };
-        let context = self.snap_grid.map(SnapContext::world);
+        let context = self.snap_context();
         let snap = snap_to_geometry(&event, &self.camera, context.as_ref());
         if let Some(tool) = self.tool.as_mut() {
             tool.on_event(&event, snap);
@@ -1644,10 +1760,14 @@ impl<V: InventorView> InventorViewport<V> {
 
     /// Update the hover target and run the `MouseMove` listeners for `hit`.
     fn dispatch_hover(&mut self, device: [i32; 2], hit: Option<&Hit>) -> bool {
-        self.hover = hit.map(|hit| hit.id);
-        self.hovered_part = hit.map(|hit| hit.part);
+        let next_hover = hit.map(|hit| hit.id);
+        let next_part = hit.map(|hit| hit.part);
+        let changed = self.hover != next_hover || self.hovered_part != next_part;
+        self.hover = next_hover;
+        self.hovered_part = next_part;
+        self.refresh_hover_face();
         let event = Event::MouseMove { position: device };
-        self.dispatch(&event, hit)
+        changed | self.dispatch(&event, hit)
     }
 
     /// Run the listeners on an event and recompile if any changed the scene.
@@ -1721,24 +1841,161 @@ impl<V: InventorView> InventorViewport<V> {
     /// Rebuild the grid for the current camera: the effective steps (screen-space
     /// culling), the radius, and the screen-facing triad.
     ///
-    /// The packets go to their own queue ([`grid_queue`](Self::grid_queue)) so the grid
-    /// is drawn but never picked.
+    /// Three layers can contribute: the world ground (always), the active workplane and a
+    /// hovered face (each when present). A local layer dims the world level so the local
+    /// frame reads first. The packets go to their own queue
+    /// ([`grid_queue`](Self::grid_queue)) so the grid is drawn but never picked.
     fn sync_grid(&mut self) {
         self.grid_queue = RenderQueue::default();
-        let Some(mesh) = self.grid.as_mut() else {
-            return;
-        };
-        let workplane = Workplane::world();
-        let (minor, major) =
-            grid::effective_steps(&self.camera, &workplane, grid::MINOR_STEP, grid::MAJOR_STEP);
-        let spec = GridSpec {
-            workplane,
+        self.refresh_hover_face();
+
+        let active = self.active_workplane.clone();
+        // Do not preview the face that is already active.
+        let hover = self
+            .hover_face
+            .as_ref()
+            .filter(|face| face.since.elapsed() >= FACE_DWELL)
+            .filter(|face| {
+                active
+                    .as_ref()
+                    .is_none_or(|active| active.plane.kind != face.frame.plane.kind)
+            })
+            .map(|face| face.frame.clone());
+
+        let world_plane = Workplane::world();
+        let (minor, major) = grid::effective_steps(
+            &self.camera,
+            &world_plane,
+            grid::MINOR_STEP,
+            grid::MAJOR_STEP,
+        );
+        let world_spec = GridSpec {
+            workplane: world_plane,
             minor,
             major,
             radius: GridSpec::radius_for(&self.camera),
         };
-        mesh.sync(&self.camera, &spec, &GridStyle::default());
+        let mut world_style = GridStyle::default();
+        if active.is_some() || hover.is_some() {
+            world_style.dim = grid::WORLD_DIM;
+            world_style.triad_dim = grid::WORLD_TRIAD_DIM;
+        }
+        let active_layer = active.as_ref().map(|frame| local_grid(&self.camera, frame));
+        let hover_layer = hover.as_ref().map(|frame| local_grid(&self.camera, frame));
+
+        let Some(mesh) = self.grid.as_mut() else {
+            return;
+        };
+        mesh.sync(
+            &self.camera,
+            &world_spec,
+            &world_style,
+            active_layer.as_ref().map(|(spec, style)| (spec, style)),
+            hover_layer.as_ref().map(|(spec, style)| (spec, style)),
+        );
         mesh.emit(&mut self.grid_queue);
+    }
+
+    /// Resolve the face under the pointer into a [`FaceFrame`], keeping the dwell timer
+    /// across frames unless the face (or its geometry) actually changed.
+    fn refresh_hover_face(&mut self) {
+        let key = self.hover.map(|id| (id.0, self.hovered_part.unwrap_or(0)));
+        let item = key.and_then(|(entity, _)| {
+            self.stage
+                .items()
+                .iter()
+                .find(|item| item.entity_id() == entity)
+        });
+        let generation = item.map(|item| item.generation());
+        let same = match key {
+            Some(key) => self.hover_face.as_ref().is_some_and(|face| {
+                (face.entity, face.part) == key && Some(face.generation) == generation
+            }),
+            None => self.hover_face.is_none(),
+        };
+        if same {
+            return;
+        }
+
+        let since = match (&key, &self.hover_face) {
+            (Some(key), Some(face)) if (face.entity, face.part) == *key => face.since,
+            _ => Instant::now(),
+        };
+        self.hover_face = key.and_then(|(entity, part)| {
+            let item = item?;
+            let name = item.part_name(part)?;
+            let frame = FaceFrame::resolve(
+                entity,
+                name,
+                item.positions(),
+                item.triangles(),
+                item.parts(),
+                part,
+            )?;
+            Some(FaceHover {
+                entity,
+                part,
+                generation: item.generation(),
+                frame,
+                since,
+            })
+        });
+    }
+
+    /// The active local workplane and its grid extent, if one is active.
+    pub fn active_workplane(&self) -> Option<&FaceFrame> {
+        self.active_workplane.as_ref()
+    }
+
+    /// Activate `frame` as the workplane, or clear it with `None`. Returns whether the
+    /// active plane changed.
+    ///
+    /// The plane is **sticky**: it survives pointer moves and empty-space clicks, and is
+    /// only replaced by another activation or cleared by `Esc`.
+    pub fn set_workplane(&mut self, frame: Option<FaceFrame>) -> bool {
+        if self.active_workplane == frame {
+            return false;
+        }
+        self.active_workplane = frame;
+        self.hover_face = None;
+        self.recompile();
+        true
+    }
+
+    /// Activate the face under the pointer, if one resolved. Returns whether a workplane
+    /// became active.
+    pub fn activate_hovered_workplane(&mut self) -> bool {
+        self.refresh_hover_face();
+        let Some(frame) = self.hover_face.as_ref().map(|face| face.frame.clone()) else {
+            return false;
+        };
+        self.set_workplane(Some(frame))
+    }
+
+    /// Drop the active workplane, returning to the world ground. Returns whether one was
+    /// active.
+    pub fn clear_workplane(&mut self) -> bool {
+        self.set_workplane(None)
+    }
+
+    /// The snap plane: the active workplane when one is set, else the world grid.
+    fn snap_context(&self) -> Option<SnapContext> {
+        match &self.active_workplane {
+            Some(frame) => Some(SnapContext {
+                workplane: frame.plane.clone(),
+                minor: grid::LOCAL_MINOR_STEP,
+                major: grid::LOCAL_MAJOR_STEP,
+            }),
+            None => self.snap_grid.map(SnapContext::world),
+        }
+    }
+
+    /// Whether a hovered face's grid is still waiting out [`FACE_DWELL`]. The renderer
+    /// requests frames while this holds, so the bloom arrives without pointer motion.
+    fn face_dwell_pending(&self) -> bool {
+        self.hover_face
+            .as_ref()
+            .is_some_and(|face| face.since.elapsed() < FACE_DWELL)
     }
 
     /// Step a running snap animation, applying the interpolated camera. Returns
@@ -1764,6 +2021,11 @@ impl<V: InventorView> InventorViewport<V> {
     fn refresh(&mut self) {
         if self.stage_dirty {
             self.recompile();
+        }
+        // The grid follows the camera and the hovered face, neither of which marks the
+        // stage dirty. `sync_grid` is a key comparison when nothing changed.
+        if self.grid.is_some() {
+            self.sync_grid();
         }
         if let Some(cube) = self.navicube.as_mut() {
             cube.sync(&self.camera);
@@ -1876,6 +2138,10 @@ impl<V: InventorView + 'static> Render for InventorViewport<V> {
             window.request_animation_frame();
         }
         if self.step_snap() {
+            window.request_animation_frame();
+        }
+        // A hovered face's grid blooms after a dwell; keep painting until it does.
+        if self.face_dwell_pending() {
             window.request_animation_frame();
         }
         // The presenter negotiates with the window's device on its first paint; ask for
@@ -4250,5 +4516,171 @@ mod tests {
             triad, triad_after,
             "the screen-facing triad follows the camera"
         );
+    }
+
+    /// The identity camera with the named slab (`Face1`/`Face2` at `z = 0.5`) and the
+    /// grid on.
+    fn slab_view() -> InventorViewport<FakeView> {
+        let mut view = identity_viewport(Scene::default());
+        view.set_stage(ferrocad_stage::Stage::new().with_item(named_slab()));
+        view.set_grid(true);
+        view.refresh();
+        view
+    }
+
+    /// The strongest alpha in a packet's vertices.
+    fn max_alpha(packet: &DrawPacket) -> f32 {
+        packet
+            .geometry
+            .as_ref()
+            .expect("fresh geometry")
+            .vertices
+            .iter()
+            .map(|vertex| vertex.color[3])
+            .fold(0.0, f32::max)
+    }
+
+    fn escape_key() -> KeyDownEvent {
+        KeyDownEvent {
+            keystroke: gpui::Keystroke {
+                key: "escape".to_string(),
+                ..Default::default()
+            },
+            is_held: false,
+            prefer_character_input: false,
+        }
+    }
+
+    #[test]
+    fn hovering_a_face_resolves_its_workplane_and_blooms_a_grid() {
+        use ferrocad_stage::WorkplaneKind;
+
+        let mut view = slab_view();
+        assert!(view.handle_pointer([30.0, 50.0]), "the hover changed");
+
+        // The frame is resolved from the tessellation: centroid, normal, and the part
+        // name it came from.
+        let face = view.hover_face.as_ref().expect("Face1 under the pointer");
+        assert_eq!(face.entity, 7);
+        assert_eq!(
+            face.frame.plane.kind,
+            WorkplaneKind::Face {
+                entity: 7,
+                element: "Face1".into()
+            }
+        );
+        assert_eq!(face.frame.plane.n, Vector3::new(0.0, 0.0, 1.0));
+        assert!((face.frame.plane.origin.x + 0.25).abs() < 1e-6);
+        assert!((face.frame.plane.origin.z - 0.5).abs() < 1e-6);
+
+        // Before the dwell only the world layer is drawn, at full strength.
+        assert_eq!(view.grid_queue.len(), 3);
+        let world_alpha = max_alpha(&view.grid_queue.packets[0]);
+
+        // Past the dwell the local layer blooms: coplanar with the face, depth-biased,
+        // and the world level recedes.
+        view.hover_face.as_mut().unwrap().since -= FACE_DWELL;
+        view.sync_grid();
+        assert_eq!(
+            view.grid_queue.len(),
+            5,
+            "the local layer adds its major lines and triad"
+        );
+        for packet in &view.grid_queue.packets[3..] {
+            assert!(packet.state.depth_bias > 0.0, "a face grid is coplanar");
+            for vertex in &packet.geometry.as_ref().unwrap().vertices {
+                assert!(
+                    (vertex.position[2] - 0.5).abs() < 1e-4,
+                    "the local grid lies on the face: {vertex:?}"
+                );
+            }
+        }
+        assert!(
+            max_alpha(&view.grid_queue.packets[0]) < world_alpha * 0.5,
+            "the world grid recedes under a local plane"
+        );
+    }
+
+    #[test]
+    fn crossing_to_another_face_restarts_the_dwell() {
+        let mut view = slab_view();
+        view.handle_pointer([30.0, 50.0]);
+        view.hover_face.as_mut().unwrap().since -= FACE_DWELL;
+        view.sync_grid();
+        assert_eq!(view.grid_queue.len(), 5, "Face1 bloomed");
+
+        // Face2 is a different part, so its grid must wait out its own dwell.
+        assert!(view.handle_pointer([70.0, 50.0]));
+        view.sync_grid();
+        assert_eq!(view.hover_face.as_ref().unwrap().part, 1);
+        assert_eq!(view.grid_queue.len(), 3, "the new face has not rested yet");
+    }
+
+    #[test]
+    fn a_second_bloom_reuses_the_local_mesh_ids() {
+        let mut view = slab_view();
+        view.handle_pointer([30.0, 50.0]);
+        view.hover_face.as_mut().unwrap().since -= FACE_DWELL;
+        view.sync_grid();
+        let first: Vec<MeshId> = view.grid_queue.packets[3..]
+            .iter()
+            .map(|packet| packet.mesh_id)
+            .collect();
+        assert!(!first.is_empty());
+
+        // Away, then back onto the same face: a fresh dwell, the same meshes. The local
+        // layers are allocated once, so a hover that comes and goes leaks nothing.
+        assert!(view.handle_pointer([98.0, 2.0]));
+        view.sync_grid();
+        assert_eq!(view.grid_queue.len(), 3);
+        view.handle_pointer([30.0, 50.0]);
+        view.hover_face.as_mut().unwrap().since -= FACE_DWELL;
+        view.sync_grid();
+        let second: Vec<MeshId> = view.grid_queue.packets[3..]
+            .iter()
+            .map(|packet| packet.mesh_id)
+            .collect();
+        assert_eq!(first, second);
+    }
+
+    #[test]
+    fn activating_the_face_makes_it_the_snap_plane_and_escape_clears_it() {
+        use ferrocad_stage::WorkplaneKind;
+        use ferrocad_stage::grid;
+
+        let mut view = slab_view();
+        view.handle_pointer([30.0, 50.0]);
+        assert!(view.activate_hovered_workplane());
+
+        let active = view.active_workplane().expect("an active workplane");
+        assert_eq!(
+            active.plane.kind,
+            WorkplaneKind::Face {
+                entity: 7,
+                element: "Face1".into()
+            }
+        );
+        let context = view.snap_context().expect("a snap plane");
+        assert_eq!(context.workplane.kind, active.plane.kind);
+        assert_eq!(context.minor, grid::LOCAL_MINOR_STEP);
+        assert_eq!(context.major, grid::LOCAL_MAJOR_STEP);
+
+        // The active plane is drawn without a dwell, and hovering it adds no second
+        // layer.
+        assert_eq!(view.grid_queue.len(), 5);
+        view.handle_pointer([30.0, 50.0]);
+        view.sync_grid();
+        assert_eq!(view.grid_queue.len(), 5, "the active face is not previewed");
+
+        // Esc clears it: snapping returns to the world and the world layer brightens.
+        let dimmed = max_alpha(&view.grid_queue.packets[0]);
+        assert!(view.handle_key(&escape_key()));
+        assert!(view.active_workplane().is_none());
+        assert!(
+            view.snap_context().is_none(),
+            "no world grid snapping by default"
+        );
+        assert_eq!(view.grid_queue.len(), 3);
+        assert!(max_alpha(&view.grid_queue.packets[0]) > dimmed);
     }
 }

@@ -71,6 +71,8 @@ is the `FreeCAD` Python API, documented by convention and by upstream.
   bundled runtime, artifacts).
 - [releasing.md](releasing.md) — how a release is cut (crates.io, the tag, the
   artifacts).
+- [conformance.md](conformance.md) — running the upstream FreeCAD test suite against
+  the facade: the sparse checkout, the extension build, the commands and the baseline.
 - [repackaging.md](repackaging.md) — editions and the repackaging vision.
 - [axis-origin-grid.md](axis-origin-grid.md) — the spatial reference model: the world
   triad, the ground and workplane grids, face frames, snapping, and how the navicube

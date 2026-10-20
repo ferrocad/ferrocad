@@ -162,6 +162,8 @@ literals, `0`, `false`, …), generates attribute getters/setters (`Final` → r
 
 **Goal:** run upstream headless tests against our `FreeCAD` and make the parity gap measurable.
 
+Setup and the current runbook: [`conformance.md`](conformance.md).
+
 **Built** (`tools/conformance.py`, `tools/test_conformance.py`): a runner that loads a curated set
 of `src/Mod/Test` files (as modules) against our `FreeCAD`, runs their `unittest` cases, and
 reports per-test pass/fail/error plus a *classified* load error (e.g. ``missing 'FreeCAD.Base'``)

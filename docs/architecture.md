@@ -23,7 +23,7 @@ obvious:
 | `ferrocad_py` | `cdylib` | The PyO3 extension, importable as the module `ferrocad`. The only bridge into `ferrocad_core`. |
 | `ferrocad_widgets` | `rlib` | Reusable `bite-gpui` widgets. Depends on **neither** `ferrocad_core` nor `ferrocad_py`. |
 | `ferrocad_inventor` | `rlib` | The Coin/Inventor scene core: node AST, state accumulator, mesh compiler, events. Renderer-agnostic; re-exports `ferrocad_graphics`. |
-| `ferrocad_stage` | `rlib` | The modern declarative CAD presentation: `ShapeItem`s on a `Stage`, interactive tools and a `TransformGizmo`, all compiled straight to `ferrocad_graphics` (no scene graph, no arena). **Decoupled from `ferrocad_inventor`.** |
+| `ferrocad_stage` | `rlib` | The modern declarative CAD presentation: `ShapeItem`s on a `Stage`, interactive tools and a `TransformGizmo`, all compiled straight to `ferrocad_graphics` (no scene graph, no arena). Consumes `ferrocad_geom`'s tessellation vocabulary. **Decoupled from `ferrocad_inventor`.** |
 | `ferrocad_wgpu` | `rlib` | The wgpu backend: consumes `ferrocad_graphics` draw batches (pipelines, uniforms, MSAA, offscreen target, readback). |
 | `ferrocad_inventor_py` | `cdylib` | The `pivy.coin` facade (scaffolding) over `ferrocad_inventor`. |
 | `ferrocad_stage_py` | `cdylib` | The `ferrocad.stage` facade over `ferrocad_stage` (the modern stack's Python surface). |
@@ -167,7 +167,7 @@ ferrocad_py        -> ferrocad_core                  [rlib + cdylib]
 ferrocad_widgets   -> (bite-gpui only)               [must not depend on core or py]
 ferrocad_inventor  -> ferrocad_graphics, ferrocad_types
                                                      [scene core; re-exports graphics]
-ferrocad_stage     -> ferrocad_graphics, ferrocad_types
+ferrocad_stage     -> ferrocad_graphics, ferrocad_types, ferrocad_geom
                                                      [modern presentation; no inventor]
 ferrocad_wgpu      -> ferrocad_graphics, ferrocad_types, wgpu, bytemuck
                       (+ ferrocad_inventor for the InventorView seam)

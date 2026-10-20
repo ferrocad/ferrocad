@@ -9,6 +9,8 @@ struct Globals {
     color: vec4<f32>,
     pick: u32,
     topology: u32,
+    depth_bias: f32,
+    _padding: u32,
 };
 
 @group(0) @binding(0) var<uniform> globals: Globals;
@@ -34,7 +36,11 @@ fn vs_main(input: VertexInput) -> VertexOutput {
     // Uniform scale is assumed, so the model matrix doubles as the normal matrix.
     output.normal = (globals.model * vec4<f32>(input.normal, 0.0)).xyz;
     output.uv = input.uv;
-    output.clip_position = globals.view_proj * world;
+    var clip = globals.view_proj * world;
+    // A positive bias moves the fragment towards the camera (smaller depth), so a
+    // coplanar selection highlight wins the depth test against the surface it marks.
+    clip.z -= globals.depth_bias * clip.w;
+    output.clip_position = clip;
     return output;
 }
 

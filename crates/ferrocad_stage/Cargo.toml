@@ -17,4 +17,7 @@ documentation = "https://docs.rs/ferrocad_stage"
 # compiles into it directly — no intermediate scene graph, and **no dependency on
 # `ferrocad_inventor`**: the modern stack is fully decoupled from Open Inventor.
 ferrocad_graphics.workspace = true
+# The kernel-neutral tessellation vocabulary (Tessellation, part ids/names). The stage
+# consumes it directly; `ferrocad_core` still stays geometry-free.
+ferrocad_geom.workspace = true
 ferrocad_types.workspace = true

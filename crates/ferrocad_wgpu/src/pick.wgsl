@@ -8,6 +8,8 @@ struct Globals {
     color: vec4<f32>,
     pick: u32,
     topology: u32,
+    depth_bias: f32,
+    _padding: u32,
 };
 
 @group(0) @binding(0) var<uniform> globals: Globals;
@@ -32,7 +34,10 @@ fn vs_main(input: VertexInput) -> VertexOutput {
     // Uniform scale is assumed, so the model matrix doubles as the normal matrix.
     output.world_normal = (globals.model * vec4<f32>(input.normal, 0.0)).xyz;
     output.part_idx = input.part_idx;
-    output.position = globals.view_proj * world;
+    var position = globals.view_proj * world;
+    // Match the scene pass: a highlighted overlay is also the thing under the cursor.
+    position.z -= globals.depth_bias * position.w;
+    output.position = position;
     return output;
 }
 

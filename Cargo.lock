@@ -2458,6 +2458,7 @@ dependencies = [
 name = "ferrocad_stage"
 version = "0.1.2"
 dependencies = [
+ "ferrocad_geom",
  "ferrocad_graphics",
  "ferrocad_types",
 ]

@@ -26,8 +26,11 @@ pub struct UniformData {
     pub pick: u32,
     /// The topology ordinal written to the G-buffer's normal target's `w` channel.
     pub topology: u32,
-    /// Keeps the block a multiple of 16 bytes (`u32` pairs need the tail padding).
-    pub _padding: [u32; 2],
+    /// A clip-space depth offset (positive = towards the camera) for coplanar overlays
+    /// such as a selection highlight.
+    pub depth_bias: f32,
+    /// Keeps the block a multiple of 16 bytes.
+    pub _padding: u32,
 }
 
 /// The size of one [`UniformData`] in bytes.

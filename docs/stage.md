@@ -1,9 +1,9 @@
 # The modern stack: `ferrocad_stage` — plan and status
 
-Status: **T0–T5 built (2026-10-12).** T4's four sub-slices are done
-(`ferrocad_graphics` extracted, surface depth bias, mesh-cache generational eviction, and
-the offscreen G-buffer pick pass with vertex `part_idx`), and T5 exposes the whole modern
-stack to Python as `ferrocad.stage` (`ferrocad_stage_py`).
+Status: **T0–T5 built (2026-10-12); F0.4 adds the topology view (2026-10-20).** T4's
+four sub-slices are done (`ferrocad_graphics` extracted, surface depth bias, mesh-cache
+generational eviction, and the offscreen G-buffer pick pass with vertex `part_idx`), and
+T5 exposes the whole modern stack to Python as `ferrocad.stage` (`ferrocad_stage_py`).
 Companion to [`inventor-renderer.md`](inventor-renderer.md) (the legacy `pivy.coin`
 stack this runs beside), [`inventor-plan.md`](inventor-plan.md) (the emulation roadmap),
 and [`architecture.md`](architecture.md) (crate layering).
@@ -241,9 +241,10 @@ carries `PickId(0)` (the compiler's default) is still a valid hit.
 
 It is exposed through the **`InventorView` seam** (in `ferrocad_inventor`): the trait
 gains `supports_pick()` (default `false`) and `pick_at(...)` (default `None`).
-`InventorViewport::pick_main` calls the backend's pick when `supports_pick()` is true and
-the CPU ray cast (`ferrocad_graphics::pick_at_hit`) otherwise, so the CPU path stays the
-fallback for headless/CPU hosts and every listener/tool/gizmo keeps working unchanged.
+`InventorViewport::pick` prefers the presenter's G-buffer (when it supports picking),
+then the backend's pick when `supports_pick()` is true, and the CPU ray cast
+(`ferrocad_graphics::pick_at_hit`) otherwise, so the CPU path stays the fallback for
+headless/CPU hosts and every listener/tool/gizmo keeps working unchanged.
 The vertex `part_idx` (`Vertex { pos, norm, uv, part_idx }`, a `u32`) is the green
 channel; `Hit::part` carries it, and `Hit::element` is the primitive ordinal when the
 CPU ray cast resolves one (the G-buffer resolves a pixel, so it reports `None`).
@@ -251,12 +252,26 @@ CPU ray cast resolves one (the G-buffer resolves a pixel, so it reports `None`).
 `SoLineDetail` now receive both (`part_index` = `part`, `face_index`/`line_index` =
 `element`).
 
+**Topology view (F0.4).** `ShapeItem::from_tessellation` accepts a
+`ferrocad_geom::Tessellation`, derives per-position part ids from the per-triangle and
+per-segment ids, and keeps the part names (`Face6`, `Edge3`) for `Hit::part`.
+`set_highlight` emits a separate flat-shaded surface (and wire) for the selected parts,
+in `HIGHLIGHT_COLOR` with `HIGHLIGHT_DEPTH_BIAS`; `with_vertices(true)` adds a
+`Topology::Points` packet. The highlight has its own generation, so changing the
+selection does not re-upload the base mesh. `StateSnapshot.depth_bias` is now applied
+in the scene and pick shaders (`clip.z -= bias * clip.w`).
+
 **Verification:** `ferrocad_wgpu`'s `pick_at_resolves_the_object_and_its_world_point`
 (two clip-space triangles, distinct ids — a pixel picks the right id and the world
 point/normal of the hit) and `pick_at_reports_the_sub_element_index_and_topology` (the
 sub-element index and `Topology` come back for a triangle and a line);
 `ferrocad_viewport`'s `the_viewport_prefers_a_hardware_pick_when_the_backend_has_one`
-proves the viewport prefers a backend's `pick_at` over the CPU ray cast.
+proves the viewport prefers a backend's `pick_at` over the CPU ray cast, and
+`a_ready_presenters_g_buffer_pick_is_preferred` proves a ready presenter's pick wins for
+both hover and button events. `ferrocad_stage`'s `a_tessellation_becomes_a_pickable_stage_item`,
+`a_highlight_draws_only_the_selected_part` and `clearing_the_highlight_removes_the_packet`
+cover the F0.4 bridge; `ferrocad_wgpu`'s
+`a_depth_biased_overlay_draws_over_a_coplanar_surface` proves the bias reaches the GPU.
 
 ### T5 — the `ferrocad.stage` Python bindings
 

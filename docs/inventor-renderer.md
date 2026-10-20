@@ -49,7 +49,9 @@ the concrete packet the compiler emits. A packet carries:
 - `topology` (`Triangles`/`Lines`/`Points`);
 - `geometry: Option<Geometry>` — **present only on a cache miss**;
 - a `StateSnapshot` — `world_transform` (a `Matrix4`), `color`, `depth_bias`,
-  `texture` (an optional `Texture2`), `id` (the `PickId`).
+  `texture` (an optional `Texture2`), `id` (the `PickId`). `depth_bias` is applied in
+  the vertex shader (`clip.z -= bias * clip.w`), so a coplanar overlay such as the
+  stage selection highlight wins the depth test against the surface it marks.
 
 Keeping the boundary a trait (not a struct) is what lets a future D3D/Metal
 backend sit behind it without touching the node model or compiler.

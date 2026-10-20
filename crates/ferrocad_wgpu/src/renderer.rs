@@ -266,7 +266,8 @@ impl WgpuRenderer {
                 color: snapshot.color,
                 pick: snapshot.id.0,
                 topology: topology_ordinal(batch.topology()),
-                _padding: [0; 2],
+                depth_bias: snapshot.depth_bias,
+                _padding: 0,
             };
             self.uniforms.write(&self.context.queue, index as u32, &data);
         }
@@ -389,7 +390,8 @@ impl WgpuRenderer {
                         color: snapshot.color,
                         pick: snapshot.id.0,
                         topology: topology_ordinal(batch.topology),
-                        _padding: [0; 2],
+                        depth_bias: snapshot.depth_bias,
+                        _padding: 0,
                     },
                 );
                 slot += 1;
@@ -512,7 +514,8 @@ impl WgpuRenderer {
                     color: packet.state.color,
                     pick: packet.state.id.0,
                     topology: topology_ordinal(packet.topology),
-                    _padding: [0; 2],
+                    depth_bias: packet.state.depth_bias,
+                    _padding: 0,
                 },
             );
         }
@@ -1695,5 +1698,55 @@ mod tests {
         assert_eq!(edge.part, 7, "the edge's sub-element index");
         assert_eq!(edge.element, None);
         assert_eq!(edge.topology, Topology::Lines);
+    }
+
+    /// A positive `depth_bias` lets a coplanar overlay win the depth test — what the
+    /// selection highlight relies on. Skips without a GPU adapter.
+    #[test]
+    fn a_depth_biased_overlay_draws_over_a_coplanar_surface() {
+        let _gpu = gpu_guard();
+        let Ok(mut renderer) = WgpuRenderer::new_default([32, 32]) else {
+            eprintln!("no GPU adapter available; skipping depth-bias test");
+            return;
+        };
+        let camera = Camera::identity();
+        let quad = |id: u32, color: [f32; 4], depth_bias: f32| {
+            let mut packet = pick_packet(
+                10 + u64::from(id),
+                id,
+                0,
+                Topology::Triangles,
+                vec![
+                    [-1.0, -1.0, 0.5],
+                    [1.0, -1.0, 0.5],
+                    [1.0, 1.0, 0.5],
+                    [-1.0, 1.0, 0.5],
+                ],
+                vec![0, 1, 2, 0, 2, 3],
+            );
+            packet.state.color = color;
+            packet.state.depth_bias = depth_bias;
+            packet
+        };
+
+        let mut queue = RenderQueue::default();
+        queue.packets.push(quad(1, [1.0, 0.0, 0.0, 1.0], 0.0));
+        queue.packets.push(quad(2, [0.0, 1.0, 0.0, 1.0], 1e-5));
+        renderer
+            .draw_frame(&[ViewSpec {
+                queue: &queue,
+                camera: &camera,
+                rect: None,
+                overlay: false,
+            }])
+            .expect("draw");
+
+        let image = renderer.image().expect("readback");
+        let i = ((16 * 32 + 16) * 4) as usize;
+        let (red, green) = (image.rgba[i], image.rgba[i + 1]);
+        assert!(
+            green > 100 && green > red,
+            "the biased overlay must win: r={red} g={green}"
+        );
     }
 }

@@ -2,6 +2,7 @@
 
 use std::sync::atomic::{AtomicU64, Ordering};
 
+use ferrocad_geom::Tessellation;
 use ferrocad_graphics::{
     DrawPacket, Generation, Geometry, MeshId, PickId, RenderQueue, StateSnapshot, Topology, Vertex,
 };
@@ -34,6 +35,13 @@ impl DrawMode {
     }
 }
 
+/// The selection highlight colour (linear `#38BDF8`, the manipulators' active cyan).
+pub const HIGHLIGHT_COLOR: [f32; 4] = [0.040, 0.509, 0.939, 1.0];
+
+/// How far towards the camera the highlight is pushed in clip space, so it wins the
+/// depth test against the coplanar surface it marks.
+pub const HIGHLIGHT_DEPTH_BIAS: f32 = 1e-5;
+
 /// A declarative, already-tessellated CAD shape.
 ///
 /// The item owns raw buffers — vertex positions, optional per-vertex normals, triangle
@@ -65,9 +73,23 @@ pub struct ShapeItem {
     /// The sub-element id of each position ([`ferrocad_graphics::Vertex::part_idx`]);
     /// empty means every vertex is part `0`.
     parts: Vec<u32>,
+    /// Part id → sub-element name (`Face6`), copied from [`Tessellation::parts`].
+    part_names: Vec<String>,
+    /// The position indices of the topological vertices.
+    vertices: Vec<u32>,
+    /// Whether to emit [`Topology::Points`] for [`vertices`](Self::vertices).
+    show_vertices: bool,
+    /// The part ids to highlight (sorted and deduplicated).
+    highlight: Vec<u32>,
     surface_mesh: MeshId,
     wire_mesh: MeshId,
+    points_mesh: MeshId,
+    highlight_surface_mesh: MeshId,
+    highlight_wire_mesh: MeshId,
     generation: Generation,
+    /// Bumped when the highlight changes, so its sub-meshes re-upload without
+    /// invalidating the base mesh.
+    highlight_generation: Generation,
 }
 
 impl ShapeItem {
@@ -87,9 +109,17 @@ impl ShapeItem {
             triangles: Vec::new(),
             edges: Vec::new(),
             parts: Vec::new(),
+            part_names: Vec::new(),
+            vertices: Vec::new(),
+            show_vertices: false,
+            highlight: Vec::new(),
             surface_mesh: next_mesh_id(),
             wire_mesh: next_mesh_id(),
+            points_mesh: next_mesh_id(),
+            highlight_surface_mesh: next_mesh_id(),
+            highlight_wire_mesh: next_mesh_id(),
             generation: Generation(0),
+            highlight_generation: Generation(0),
         }
     }
 
@@ -129,8 +159,12 @@ impl ShapeItem {
         self.triangles = triangles;
         self.edges = edges;
         self.parts = parts;
+        self.part_names.clear();
+        self.vertices.clear();
         // Any geometry change invalidates a renderer's cached upload for this mesh.
         self.generation = Generation(self.generation.0 + 1);
+        // The highlight is derived from the geometry, so its cache is stale too.
+        self.highlight_generation = Generation(self.highlight_generation.0 + 1);
     }
 
     /// The builder form of [`set_mesh`](Self::set_mesh).
@@ -149,6 +183,85 @@ impl ShapeItem {
     /// The per-position sub-element ids.
     pub fn parts(&self) -> &[u32] {
         &self.parts
+    }
+
+    /// Replace the tessellation from a kernel's [`Tessellation`].
+    ///
+    /// The per-primitive part ids are flattened into per-position ids (the OCCT
+    /// tessellation duplicates vertices per face and per edge, so a position belongs
+    /// to exactly one part), and the part **names** are kept so a hit's `part` can be
+    /// resolved to `Face6`/`Edge3` without the original mesh.
+    pub fn set_tessellation(&mut self, mesh: &Tessellation) {
+        let normals = if mesh.normals.len() == mesh.positions.len() {
+            mesh.normals.clone()
+        } else {
+            Vec::new()
+        };
+        let parts = parts_from_tessellation(mesh);
+        self.set_mesh(
+            mesh.positions.clone(),
+            normals,
+            mesh.triangles.clone(),
+            mesh.edges.clone(),
+            parts,
+        );
+        self.part_names = mesh.parts.clone();
+        self.vertices = mesh.vertices.clone();
+    }
+
+    /// The builder form of [`set_tessellation`](Self::set_tessellation).
+    pub fn with_tessellation(mut self, mesh: &Tessellation) -> Self {
+        self.set_tessellation(mesh);
+        self
+    }
+
+    /// A new item from a kernel tessellation.
+    pub fn from_tessellation(entity_id: u32, mesh: &Tessellation) -> Self {
+        Self::new(entity_id).with_tessellation(mesh)
+    }
+
+    /// The part id → element name table (`Face6`, `Edge3`).
+    pub fn part_names(&self) -> &[String] {
+        &self.part_names
+    }
+
+    /// The element name for part `id`.
+    pub fn part_name(&self, id: u32) -> Option<&str> {
+        self.part_names.get(id as usize).map(String::as_str)
+    }
+
+    /// The position indices of the topological vertices.
+    pub fn vertices(&self) -> &[u32] {
+        &self.vertices
+    }
+
+    /// Emit the vertices as points (off by default).
+    pub fn with_vertices(mut self, show: bool) -> Self {
+        self.show_vertices = show;
+        self
+    }
+
+    /// The part ids currently highlighted.
+    pub fn highlight(&self) -> &[u32] {
+        &self.highlight
+    }
+
+    /// Highlight the given parts (an empty iterator clears it).
+    pub fn set_highlight(&mut self, parts: impl IntoIterator<Item = u32>) {
+        let mut next: Vec<u32> = parts.into_iter().collect();
+        next.sort_unstable();
+        next.dedup();
+        if next == self.highlight {
+            return;
+        }
+        self.highlight = next;
+        self.highlight_generation = Generation(self.highlight_generation.0 + 1);
+    }
+
+    /// The builder form of [`set_highlight`](Self::set_highlight).
+    pub fn with_highlight(mut self, parts: impl IntoIterator<Item = u32>) -> Self {
+        self.set_highlight(parts);
+        self
     }
 
     /// The builder form of [`set_shape`](Self::set_shape).
@@ -288,7 +401,11 @@ impl ShapeItem {
         &self.edges
     }
 
-    /// Emit the item's draw packets (surface and/or wireframe) into `queue`.
+    /// Emit the item's draw packets into `queue`.
+    ///
+    /// Order: surface, wire, points, then the selection highlight (surface and wire)
+    /// with [`HIGHLIGHT_DEPTH_BIAS`], so it wins the depth test against the coplanar
+    /// base geometry it marks.
     pub fn emit(&self, queue: &mut RenderQueue) {
         // The world transform: the placement, with the temporary preview composed after it.
         let mut world = self.placement.to_matrix();
@@ -303,6 +420,8 @@ impl ShapeItem {
                     geometry,
                     world,
                     self.surface_color,
+                    0.0,
+                    self.generation,
                 ));
             }
         }
@@ -314,6 +433,51 @@ impl ShapeItem {
                     geometry,
                     world,
                     self.edge_color,
+                    0.0,
+                    self.generation,
+                ));
+            }
+        }
+        if self.show_vertices {
+            if let Some(geometry) = self.points_geometry() {
+                queue.packets.push(self.packet(
+                    self.points_mesh,
+                    Topology::Points,
+                    geometry,
+                    world,
+                    self.edge_color,
+                    0.0,
+                    self.generation,
+                ));
+            }
+        }
+
+        if self.highlight.is_empty() {
+            return;
+        }
+        if self.draw_mode.has_surface() {
+            if let Some(geometry) = self.highlight_surface_geometry() {
+                queue.packets.push(self.packet(
+                    self.highlight_surface_mesh,
+                    Topology::Triangles,
+                    geometry,
+                    world,
+                    HIGHLIGHT_COLOR,
+                    HIGHLIGHT_DEPTH_BIAS,
+                    self.highlight_generation,
+                ));
+            }
+        }
+        if self.draw_mode.has_edges() {
+            if let Some(geometry) = self.highlight_wire_geometry() {
+                queue.packets.push(self.packet(
+                    self.highlight_wire_mesh,
+                    Topology::Lines,
+                    geometry,
+                    world,
+                    HIGHLIGHT_COLOR,
+                    HIGHLIGHT_DEPTH_BIAS,
+                    self.highlight_generation,
                 ));
             }
         }
@@ -335,16 +499,18 @@ impl ShapeItem {
         geometry: Geometry,
         world_transform: ferrocad_types::Matrix4,
         color: [f32; 4],
+        depth_bias: f32,
+        generation: Generation,
     ) -> DrawPacket {
         DrawPacket {
             mesh_id,
-            generation: self.generation,
+            generation,
             topology,
             geometry: Some(geometry),
             state: StateSnapshot {
                 world_transform,
                 color,
-                depth_bias: 0.0,
+                depth_bias,
                 texture: None,
                 id: self.pick_id(),
             },
@@ -381,7 +547,12 @@ impl ShapeItem {
 
     /// The wireframe: the position buffer indexed by the edge segments.
     fn wire_geometry(&self) -> Option<Geometry> {
-        if self.edges.len() < 2 {
+        self.wire_geometry_for(&self.edges)
+    }
+
+    /// The wireframe for a subset of segment indices.
+    fn wire_geometry_for(&self, indices: &[u32]) -> Option<Geometry> {
+        if indices.len() < 2 {
             return None;
         }
         let vertices = self
@@ -397,9 +568,104 @@ impl ShapeItem {
             .collect();
         Some(Geometry {
             vertices,
-            indices: self.edges.clone(),
+            indices: indices.to_vec(),
         })
     }
+
+    /// The topological vertices, as a point list.
+    fn points_geometry(&self) -> Option<Geometry> {
+        let mut vertices = Vec::with_capacity(self.vertices.len());
+        let mut indices = Vec::with_capacity(self.vertices.len());
+        for &position_index in &self.vertices {
+            let Some(position) = self.positions.get(position_index as usize) else {
+                continue;
+            };
+            indices.push(vertices.len() as u32);
+            vertices.push(Vertex {
+                position: *position,
+                normal: [0.0, 0.0, 1.0],
+                uv: [0.0, 0.0],
+                part_idx: self
+                    .parts
+                    .get(position_index as usize)
+                    .copied()
+                    .unwrap_or(0),
+            });
+        }
+        (!vertices.is_empty()).then_some(Geometry { vertices, indices })
+    }
+
+    /// The part id at a position (the triangles and segments that use it agree).
+    fn part_at(&self, position: u32) -> u32 {
+        self.parts.get(position as usize).copied().unwrap_or(0)
+    }
+
+    fn is_highlighted(&self, part: u32) -> bool {
+        self.highlight.binary_search(&part).is_ok()
+    }
+
+    /// The highlighted triangles, flat-shaded so each carries its part id.
+    fn highlight_surface_geometry(&self) -> Option<Geometry> {
+        let mut selected = Vec::new();
+        for triangle in self.triangles.chunks_exact(3) {
+            if self.is_highlighted(self.part_at(triangle[0])) {
+                selected.extend_from_slice(triangle);
+            }
+        }
+        if selected.is_empty() {
+            return None;
+        }
+        Some(flat_surface(&self.positions, &selected, &self.parts))
+    }
+
+    /// The highlighted edge segments.
+    fn highlight_wire_geometry(&self) -> Option<Geometry> {
+        let mut selected = Vec::new();
+        for segment in self.edges.chunks_exact(2) {
+            if self.is_highlighted(self.part_at(segment[0])) {
+                selected.extend_from_slice(segment);
+            }
+        }
+        if selected.is_empty() {
+            return None;
+        }
+        self.wire_geometry_for(&selected)
+    }
+}
+
+/// Per-position part ids derived from a tessellation's per-primitive ids.
+///
+/// The OCCT tessellation duplicates vertices per face (and per edge), so a position
+/// belongs to exactly one part. If a producer shares a position across parts, the
+/// later primitive wins; that is why the seam documents per-face duplication.
+fn parts_from_tessellation(mesh: &Tessellation) -> Vec<u32> {
+    let mut parts = vec![0; mesh.positions.len()];
+    for (index, triangle) in mesh.triangles.chunks_exact(3).enumerate() {
+        if let Some(part) = mesh.triangle_parts.get(index) {
+            for &position in triangle {
+                if let Some(slot) = parts.get_mut(position as usize) {
+                    *slot = *part;
+                }
+            }
+        }
+    }
+    for (index, segment) in mesh.edges.chunks_exact(2).enumerate() {
+        if let Some(part) = mesh.segment_parts.get(index) {
+            for &position in segment {
+                if let Some(slot) = parts.get_mut(position as usize) {
+                    *slot = *part;
+                }
+            }
+        }
+    }
+    for (index, &position) in mesh.vertices.iter().enumerate() {
+        if let Some(part) = mesh.vertex_parts.get(index) {
+            if let Some(slot) = parts.get_mut(position as usize) {
+                *slot = *part;
+            }
+        }
+    }
+    parts
 }
 
 /// Flat-shade `triangles`: one unrolled vertex per index, each carrying its triangle's
@@ -552,6 +818,93 @@ mod tests {
         let geometry = wire.geometry.as_ref().expect("fresh geometry");
         assert_eq!(geometry.vertices[0].part_idx, 4);
         assert_eq!(geometry.vertices[2].part_idx, 1);
+    }
+
+    /// Two faces (parts 0 and 1), one edge (part 2) and one vertex (part 3).
+    fn two_part_tessellation() -> ferrocad_geom::Tessellation {
+        ferrocad_geom::Tessellation {
+            positions: vec![
+                [0.0, 0.0, 0.0],
+                [1.0, 0.0, 0.0],
+                [0.0, 1.0, 0.0],
+                [1.0, 0.0, 0.0],
+                [1.0, 1.0, 0.0],
+                [0.0, 1.0, 0.0],
+                [0.0, 0.0, 0.0],
+                [1.0, 0.0, 0.0],
+                [0.0, 0.0, 0.0],
+            ],
+            normals: Vec::new(),
+            triangles: vec![0, 1, 2, 3, 4, 5],
+            triangle_parts: vec![0, 1],
+            edges: vec![6, 7],
+            segment_parts: vec![2],
+            vertices: vec![8],
+            vertex_parts: vec![3],
+            parts: vec![
+                "Face1".to_string(),
+                "Face2".to_string(),
+                "Edge1".to_string(),
+                "Vertex1".to_string(),
+            ],
+        }
+    }
+
+    #[test]
+    fn a_tessellation_becomes_a_pickable_stage_item() {
+        let mesh = two_part_tessellation();
+        let item = ShapeItem::from_tessellation(7, &mesh)
+            .with_draw_mode(DrawMode::ShadedWithEdges)
+            .with_vertices(true);
+
+        assert_eq!(item.entity_id(), 7);
+        assert_eq!(item.parts(), &[0, 0, 0, 1, 1, 1, 2, 2, 3]);
+        assert_eq!(item.part_name(2), Some("Edge1"));
+        assert_eq!(item.part_name(9), None);
+        assert_eq!(item.vertices(), &[8]);
+
+        let queue = emit(&item);
+        assert_eq!(queue.len(), 3, "surface, wire and points");
+        let points = queue
+            .packets
+            .iter()
+            .find(|packet| packet.topology == Topology::Points)
+            .expect("a points packet");
+        let geometry = points.geometry.as_ref().expect("fresh geometry");
+        assert_eq!(geometry.vertices.len(), 1);
+        assert_eq!(geometry.vertices[0].part_idx, 3);
+    }
+
+    #[test]
+    fn a_highlight_draws_only_the_selected_part() {
+        let mesh = two_part_tessellation();
+        let item = ShapeItem::from_tessellation(7, &mesh)
+            .with_draw_mode(DrawMode::ShadedWithEdges)
+            .with_highlight([1]);
+
+        let queue = emit(&item);
+        let highlight = queue
+            .packets
+            .iter()
+            .find(|packet| packet.state.color == HIGHLIGHT_COLOR)
+            .expect("a highlight packet");
+        assert_eq!(highlight.topology, Topology::Triangles);
+        assert_eq!(highlight.state.depth_bias, HIGHLIGHT_DEPTH_BIAS);
+        let geometry = highlight.geometry.as_ref().expect("fresh geometry");
+        assert_eq!(geometry.vertices.len(), 3, "only the part-1 triangle");
+        assert!(geometry.vertices.iter().all(|vertex| vertex.part_idx == 1));
+        assert_eq!(queue.len(), 3, "base surface, base wire, highlight surface");
+    }
+
+    #[test]
+    fn clearing_the_highlight_removes_the_packet() {
+        let mesh = two_part_tessellation();
+        let mut item = ShapeItem::from_tessellation(7, &mesh).with_highlight([0, 1]);
+        assert_eq!(emit(&item).len(), 2, "surface + highlight surface");
+
+        item.set_highlight(std::iter::empty());
+        assert!(item.highlight().is_empty());
+        assert_eq!(emit(&item).len(), 1, "surface only");
     }
 
     #[test]

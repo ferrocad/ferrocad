@@ -9,10 +9,13 @@ What is here today:
 * the **command registry** — ``addCommand`` / ``removeCommand`` /
   ``listCommands`` / ``runCommand``, with FreeCAD's ``Command`` shape
   (``Activated``, ``IsActive``, ``IsChecked``, ``GetResources``);
+* the **dialog protocol** — a command's ``on_accept`` callback stays here under a
+  single-use token, and ``_accept`` / ``_cancel`` are the later half of the
+  non-blocking modal;
 * a **read-only selection snapshot** (``Selection.getSelection`` etc.), filled by
   the shell;
 * the private bridge helpers the app script calls (``_command_list``,
-  ``_run``).
+  ``_run``, ``_accept``, ``_cancel``).
 
 What is deliberately absent: ``activeDocument()`` and view objects
 (``ViewProvider``); those are M5 work. See ``docs/actions-and-tools.md``.
@@ -32,6 +35,14 @@ _COMMANDS: dict = {}
 #: ``(command, method)`` pairs already reported, so a broken command does not
 #: spam the console on every refresh.
 _REPORTED: set = set()
+
+#: Open dialog callbacks by single-use token (``d1``, ``d2``, …). The callback
+#: cannot cross the JSON boundary, so it stays here until the shell accepts or
+#: cancels the dialog.
+_DIALOGS: dict = {}
+
+#: Monotonic token counter (tokens are never reused, even after a cancel).
+_DIALOG_SERIAL: int = 0
 
 
 def _error_text(exc: BaseException) -> str:
@@ -160,7 +171,7 @@ def _run(name: str) -> dict:
     """Invoke a command for the shell; never raises.
 
     The returned dict always has ``ok``; a command may add ``status``,
-    ``dialog``, ``token``, ``view`` or ``tool`` (see
+    ``value``, or a ``dialog`` spec with a single-use ``token`` (see
     ``docs/actions-and-tools.md``).
     """
     command = _COMMANDS.get(name)
@@ -170,12 +181,67 @@ def _run(name: str) -> dict:
         result = command.Activated()
     except Exception as exc:  # noqa: BLE001 - one broken command is not fatal
         return {"ok": False, "error": _error_text(exc)}
+    return _payload(result)
+
+
+def _register_dialog(callback) -> str:
+    """Keep a dialog callback and return its single-use token."""
+    global _DIALOG_SERIAL
+    _DIALOG_SERIAL += 1
+    token = f"d{_DIALOG_SERIAL}"
+    _DIALOGS[token] = callback
+    return token
+
+
+def _payload(result) -> dict:
+    """Shape a command's return value for the shell.
+
+    A dict with ``on_accept`` is a dialog spec: the callback stays here under a
+    token, and the spec goes out under ``dialog`` (the callable must never reach
+    JSON). ``status`` and ``value`` stay top-level; everything else is ignored
+    until a later slice gives it meaning.
+    """
     payload = {"ok": True}
-    if isinstance(result, dict):
-        payload.update(result)
-    elif result is not None:
-        payload["value"] = repr(result)
+    if not isinstance(result, dict):
+        if result is not None:
+            payload["value"] = repr(result)
+        return payload
+    callback = result.get("on_accept")
+    if callback is not None:
+        payload["dialog"] = {
+            key: result[key]
+            for key in ("title", "fields", "accept", "cancel")
+            if key in result
+        }
+        payload["token"] = _register_dialog(callback)
+    if "status" in result:
+        payload["status"] = result["status"]
+    if "value" in result:
+        payload["value"] = result["value"]
     return payload
+
+
+def _accept(token: str, values: dict) -> dict:
+    """Run an open dialog's callback and drop the token (single use)."""
+    callback = _DIALOGS.pop(token, None)
+    if callback is None:
+        return {"ok": False, "error": f"no open dialog {token!r}"}
+    try:
+        result = callback(values)
+    except Exception as exc:  # noqa: BLE001 - a broken callback is reported
+        return {"ok": False, "error": _error_text(exc)}
+    return _payload(result)
+
+
+def _cancel(token: str) -> dict:
+    """Drop a dialog's token; a no-op when it is already gone."""
+    _DIALOGS.pop(token, None)
+    return {"ok": True}
+
+
+def _cancel_all() -> None:
+    """Drop every open dialog (document close, boot, quit)."""
+    _DIALOGS.clear()
 
 
 # ---------------------------------------------------------------------------

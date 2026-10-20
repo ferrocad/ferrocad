@@ -94,11 +94,16 @@ class SelectionTests(unittest.TestCase):
         for obj in (self.a, self.b):
             self.assertAlmostEqual(obj.Placement.Base.x, 0.0, places=6)
 
-    def test_a_bare_move_asks_for_a_delta(self):
+    def test_a_bare_move_opens_its_dialog_and_cancel_keeps_the_object(self):
         FreeCADGui.Selection._set([("A", [])])
         result = FreeCADGui._run("App_Move")
         self.assertTrue(result["ok"])
-        self.assertIn("delta", result["status"])
+        self.assertEqual(result["dialog"]["title"], "Move")
+        self.assertEqual(len(result["dialog"]["fields"]), 3)
+        token = result["token"]
+
+        self.assertTrue(FreeCADGui._cancel(token)["ok"])
+        self.assertFalse(FreeCADGui._accept(token, {})["ok"], "the token is spent")
         self.assertAlmostEqual(self.a.Placement.Base.x, 0.0, places=6)
 
 

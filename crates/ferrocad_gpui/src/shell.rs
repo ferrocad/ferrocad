@@ -11,8 +11,8 @@ use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
 use gpui::{
-    AnyElement, App, Context, Entity, FocusHandle, Focusable, IntoElement, Render, SharedString,
-    Subscription, Window, div, prelude::*, px, rgb, rgba,
+    AnyElement, App, Context, Entity, FocusHandle, Focusable, IntoElement, KeyDownEvent, Render,
+    SharedString, Subscription, Window, div, prelude::*, px, rgb, rgba,
 };
 
 use ferrocad_geom::SelectionRef;
@@ -25,6 +25,7 @@ use ferrocad_widgets::{SubmitEvent, TextAreaState, TextInput, window_frame};
 
 use crate::commands::{self, CommandInfo};
 use crate::contributions::Contributions;
+use crate::dialog::{self, DialogSpec, Kind, ValueState};
 use crate::display::{DisplaySync, StageMesh};
 use crate::python::{self, Bootstrap, DocumentNode, PropRow};
 use crate::selection::{self, SelectionItem};
@@ -74,6 +75,12 @@ pub struct Shell {
     display: DisplaySync,
     /// The workbench manipulators the edition contributes (none in the base app).
     contributions: Contributions,
+    /// The open command dialog (A3); one at a time.
+    dialog: Option<OpenDialog>,
+    /// Focus for the modal, so Esc cancels and Enter in a field accepts.
+    dialog_focus: FocusHandle,
+    /// Focus the modal on the next render (it is opened outside a window context).
+    focus_dialog: bool,
     /// The viewport's event subscription (selection and interaction commits).
     _viewport_events: Option<Subscription>,
     _submit: Subscription,
@@ -84,6 +91,20 @@ struct PropInput {
     state: Entity<TextInput>,
     seeded: String,
     _submit: Subscription,
+}
+
+/// The open modal: the spec, the collected values, and its single-use token.
+struct OpenDialog {
+    token: String,
+    spec: DialogSpec,
+    /// One per field: text (text-like), flag (bool) or choice index (enum).
+    states: Vec<ValueState>,
+    /// The text input for a text-like field; `None` for a bool/enum row.
+    inputs: Vec<Option<Entity<TextInput>>>,
+    /// The first validation or callback error, shown inside the modal.
+    error: Option<String>,
+    /// Keep the per-field submit subscriptions alive for the dialog's lifetime.
+    _submits: Vec<Subscription>,
 }
 
 impl Shell {
@@ -164,6 +185,9 @@ impl Shell {
             prop_inputs: HashMap::new(),
             display: DisplaySync::new(),
             contributions: Contributions::new(),
+            dialog: None,
+            dialog_focus: cx.focus_handle(),
+            focus_dialog: false,
             _viewport_events: None,
             _submit: submit,
         }
@@ -398,23 +422,236 @@ impl Shell {
     }
 
     /// Run a workbench command by id, then refresh the model and the stage.
+    ///
+    /// A command may instead return a **dialog** (A3): the spec is rendered as a
+    /// modal and the shell accepts or cancels it later through its token. One
+    /// dialog at a time — a second request while one is open is rejected and its
+    /// token dropped, so the facade never keeps an unreachable callback.
     fn run_command(&mut self, id: &str, cx: &mut Context<Self>) {
-        let status = match commands::run(id) {
-            Ok(outcome) if outcome.ok => {
-                self.refresh(cx);
-                self.sync_stage(cx);
-                if outcome.status.is_empty() {
-                    format!("ran {id}")
-                } else {
-                    outcome.status
-                }
+        let outcome = match commands::run(id) {
+            Ok(outcome) => outcome,
+            Err(error) => {
+                let status = format!("{id}: {error}");
+                self.model.lock().unwrap().status = status.clone();
+                self.console_line(status, cx);
+                cx.notify();
+                return;
             }
-            Ok(outcome) if outcome.error.is_empty() => format!("{id} failed"),
-            Ok(outcome) => format!("{id}: {}", outcome.error),
-            Err(error) => format!("{id}: {error}"),
+        };
+
+        if !outcome.ok {
+            let status = if outcome.error.is_empty() {
+                format!("{id} failed")
+            } else {
+                format!("{id}: {}", outcome.error)
+            };
+            self.model.lock().unwrap().status = status.clone();
+            self.console_line(status, cx);
+            cx.notify();
+            return;
+        }
+
+        if let (Some(spec), Some(token)) = (outcome.dialog.clone(), outcome.token.clone()) {
+            let status = if self.dialog.is_some() {
+                let _ = commands::cancel(&token);
+                "a dialog is already open".to_string()
+            } else {
+                self.open_dialog_state(token, spec, cx);
+                if outcome.status.is_empty() {
+                    format!("{id}: fill the dialog")
+                } else {
+                    outcome.status.clone()
+                }
+            };
+            self.model.lock().unwrap().status = status.clone();
+            self.console_line(status, cx);
+            // A command can return a dialog *and* have changed the document.
+            self.refresh(cx);
+            self.sync_stage(cx);
+            cx.notify();
+            return;
+        }
+
+        self.refresh(cx);
+        self.sync_stage(cx);
+        let status = if outcome.status.is_empty() {
+            format!("ran {id}")
+        } else {
+            outcome.status
         };
         self.model.lock().unwrap().status = status.clone();
         self.console_line(status, cx);
+        cx.notify();
+    }
+
+    /// Open a command's dialog, seeding one control per field.
+    fn open_dialog_state(&mut self, token: String, spec: DialogSpec, cx: &mut Context<Self>) {
+        let mut states = Vec::with_capacity(spec.fields.len());
+        let mut inputs = Vec::with_capacity(spec.fields.len());
+        let mut submits = Vec::new();
+        for field in &spec.fields {
+            states.push(ValueState::for_field(field));
+            if field.kind().is_textual() {
+                let seed = field.seed_text();
+                let input = cx.new(|cx| {
+                    let mut input = TextInput::new(cx, "");
+                    input.set_text(seed, cx);
+                    input
+                });
+                // Enter in a field accepts: the same path as the button.
+                let submit = cx.subscribe(
+                    &input,
+                    |this: &mut Shell, _emitter, _event: &SubmitEvent, cx| {
+                        this.accept_dialog(cx);
+                    },
+                );
+                inputs.push(Some(input));
+                submits.push(submit);
+            } else {
+                inputs.push(None);
+            }
+        }
+        self.dialog = Some(OpenDialog {
+            token,
+            spec,
+            states,
+            inputs,
+            error: None,
+            _submits: submits,
+        });
+        self.focus_dialog = true;
+        cx.notify();
+    }
+
+    /// The collected state of every field; the text inputs are authoritative.
+    fn dialog_states(&self, cx: &App) -> Vec<ValueState> {
+        let Some(dialog) = self.dialog.as_ref() else {
+            return Vec::new();
+        };
+        dialog
+            .spec
+            .fields
+            .iter()
+            .enumerate()
+            .map(
+                |(index, field)| match dialog.inputs.get(index).and_then(Option::as_ref) {
+                    Some(input) => ValueState::Text(input.read(cx).text().to_string()),
+                    None => dialog
+                        .states
+                        .get(index)
+                        .cloned()
+                        .unwrap_or_else(|| ValueState::for_field(field)),
+                },
+            )
+            .collect()
+    }
+
+    /// Validate and hand the dialog's values to the facade. Validation errors stay
+    /// in the modal; a callback error is reported there too.
+    fn accept_dialog(&mut self, cx: &mut Context<Self>) {
+        let Some(dialog) = self.dialog.as_ref() else {
+            return;
+        };
+        let token = dialog.token.clone();
+        let spec = dialog.spec.clone();
+        let states = self.dialog_states(cx);
+        match dialog::collect(&spec, &states) {
+            Err(error) => {
+                if let Some(dialog) = self.dialog.as_mut() {
+                    dialog.error = Some(error.clone());
+                }
+                self.model.lock().unwrap().status = format!("dialog: {error}");
+                cx.notify();
+            }
+            Ok(values) => {
+                let outcome = commands::accept(&token, &values);
+                self.finish_dialog(outcome, cx);
+            }
+        }
+    }
+
+    /// Finish an accept: close, replace with a new dialog (a wizard), or keep the
+    /// modal open with the callback's error.
+    fn finish_dialog(
+        &mut self,
+        result: Result<commands::CommandOutcome, String>,
+        cx: &mut Context<Self>,
+    ) {
+        match result {
+            Ok(outcome) if outcome.ok => {
+                if let (Some(spec), Some(token)) = (outcome.dialog.clone(), outcome.token.clone()) {
+                    self.open_dialog_state(token, spec, cx);
+                } else {
+                    self.dialog = None;
+                }
+                let status = if outcome.status.is_empty() {
+                    "ok".to_string()
+                } else {
+                    outcome.status
+                };
+                self.model.lock().unwrap().status = status.clone();
+                self.console_line(status, cx);
+                self.refresh(cx);
+                self.sync_stage(cx);
+            }
+            Ok(outcome) => {
+                let error = if outcome.error.is_empty() {
+                    "the command failed".to_string()
+                } else {
+                    outcome.error
+                };
+                if let Some(dialog) = self.dialog.as_mut() {
+                    dialog.error = Some(error.clone());
+                }
+                self.model.lock().unwrap().status = error;
+            }
+            Err(error) => {
+                if let Some(dialog) = self.dialog.as_mut() {
+                    dialog.error = Some(error.clone());
+                }
+                self.model.lock().unwrap().status = error;
+            }
+        }
+        cx.notify();
+    }
+
+    /// Cancel the open dialog and drop its token (the callback is never run).
+    fn cancel_dialog(&mut self, cx: &mut Context<Self>) {
+        let Some(dialog) = self.dialog.take() else {
+            return;
+        };
+        let _ = commands::cancel(&dialog.token);
+        self.model.lock().unwrap().status = "dialog cancelled".to_string();
+        cx.notify();
+    }
+
+    /// Flip a bool field.
+    fn toggle_flag(&mut self, index: usize, cx: &mut Context<Self>) {
+        if let Some(dialog) = self.dialog.as_mut() {
+            if let Some(ValueState::Flag(flag)) = dialog.states.get_mut(index) {
+                *flag = !*flag;
+                dialog.error = None;
+            }
+        }
+        cx.notify();
+    }
+
+    /// Move an enum field by `delta` options, wrapping.
+    fn cycle_choice(&mut self, index: usize, delta: isize, cx: &mut Context<Self>) {
+        if let Some(dialog) = self.dialog.as_mut() {
+            let len = dialog
+                .spec
+                .fields
+                .get(index)
+                .map(|field| field.values.len())
+                .unwrap_or(0);
+            if len > 0 {
+                if let Some(ValueState::Choice(choice)) = dialog.states.get_mut(index) {
+                    *choice = (*choice as isize + delta).rem_euclid(len as isize) as usize;
+                    dialog.error = None;
+                }
+            }
+        }
         cx.notify();
     }
 
@@ -679,6 +916,195 @@ fn actions_bar(model: &ShellModel, cx: &mut Context<Shell>) -> impl IntoElement 
     bar
 }
 
+/// The modal for an open command dialog (A3): a glass panel over a dimmed shell.
+///
+/// The panel holds keyboard focus so `Esc` cancels; a text field's `Enter`
+/// submits through its own `SubmitEvent`, which is wired to the same accept path.
+fn dialog_overlay(shell: &mut Shell, cx: &mut Context<Shell>) -> AnyElement {
+    let Some(dialog) = shell.dialog.as_ref() else {
+        return div().into_any_element();
+    };
+    let spec = dialog.spec.clone();
+    let states = dialog.states.clone();
+    let inputs = dialog.inputs.clone();
+    let error = dialog.error.clone();
+    let focus = shell.dialog_focus.clone();
+
+    let mut fields = div().flex().flex_col().gap_2();
+    for (index, field) in spec.fields.iter().enumerate() {
+        let control: AnyElement = match field.kind() {
+            Kind::Bool => {
+                let checked = matches!(states.get(index), Some(ValueState::Flag(true)));
+                let label = if checked { "on" } else { "off" };
+                div()
+                    .id(SharedString::from(format!("dialog-bool-{index}")))
+                    .px_2()
+                    .py_1()
+                    .rounded_sm()
+                    .bg(rgb(if checked { ACCENT } else { PANEL_ALT }))
+                    .text_xs()
+                    .text_color(rgb(FG))
+                    .child(label)
+                    .on_click(
+                        cx.listener(move |this, _event, _window, cx| this.toggle_flag(index, cx)),
+                    )
+                    .into_any_element()
+            }
+            Kind::Enum => {
+                let choice = match states.get(index) {
+                    Some(ValueState::Choice(choice)) => *choice,
+                    _ => 0,
+                };
+                let value = field.values.get(choice).cloned().unwrap_or_default();
+                div()
+                    .flex()
+                    .flex_row()
+                    .items_center()
+                    .gap_1()
+                    .child(dialog_arrow("‹", index, -1, cx))
+                    .child(
+                        div()
+                            .min_w(px(84.))
+                            .text_xs()
+                            .text_color(rgb(FG))
+                            .child(value),
+                    )
+                    .child(dialog_arrow("›", index, 1, cx))
+                    .into_any_element()
+            }
+            Kind::Unknown => div()
+                .text_xs()
+                .text_color(rgb(0xef4444))
+                .child(format!("unsupported kind {}", field.kind))
+                .into_any_element(),
+            _ => match inputs.get(index).and_then(Option::as_ref) {
+                Some(input) => div()
+                    .w(px(170.))
+                    .flex_shrink_0()
+                    .child(input.clone())
+                    .into_any_element(),
+                None => div().into_any_element(),
+            },
+        };
+        fields = fields.child(
+            div()
+                .flex()
+                .flex_row()
+                .items_center()
+                .justify_between()
+                .gap_3()
+                .child(
+                    div()
+                        .text_xs()
+                        .text_color(rgb(MUTED))
+                        .child(field.label().to_string()),
+                )
+                .child(control),
+        );
+    }
+
+    let mut panel = div()
+        .id("dialog-panel")
+        .w(px(380.))
+        .flex()
+        .flex_col()
+        .gap_3()
+        .p_4()
+        .rounded_md()
+        .bg(rgba(0x16181df2))
+        .border_1()
+        .border_color(rgba(0xffffff26))
+        .track_focus(&focus)
+        .focusable()
+        .on_key_down(cx.listener(|this, event: &KeyDownEvent, _window, cx| {
+            match event.keystroke.key.as_str() {
+                "escape" => this.cancel_dialog(cx),
+                "enter" => this.accept_dialog(cx),
+                _ => {}
+            }
+        }))
+        .child(
+            div()
+                .text_sm()
+                .text_color(rgb(FG))
+                .child(spec.title.clone()),
+        )
+        .child(fields);
+    if let Some(error) = &error {
+        panel = panel.child(
+            div()
+                .text_xs()
+                .text_color(rgb(0xef4444))
+                .child(error.clone()),
+        );
+    }
+    let accept = spec.accept_label().to_string();
+    let cancel = spec.cancel_label().to_string();
+    panel = panel.child(
+        div()
+            .flex()
+            .flex_row()
+            .justify_end()
+            .gap_2()
+            .child(
+                div()
+                    .id("dialog-cancel")
+                    .px_3()
+                    .py_1()
+                    .rounded_sm()
+                    .bg(rgb(PANEL_ALT))
+                    .text_xs()
+                    .text_color(rgb(FG))
+                    .child(cancel)
+                    .on_click(cx.listener(|this, _event, _window, cx| this.cancel_dialog(cx))),
+            )
+            .child(
+                div()
+                    .id("dialog-accept")
+                    .px_3()
+                    .py_1()
+                    .rounded_sm()
+                    .bg(rgb(ACCENT))
+                    .text_xs()
+                    .text_color(rgb(FG))
+                    .child(accept)
+                    .on_click(cx.listener(|this, _event, _window, cx| this.accept_dialog(cx))),
+            ),
+    );
+
+    div()
+        .id("dialog-backdrop")
+        .absolute()
+        .left(px(0.))
+        .top(px(0.))
+        .size_full()
+        .flex()
+        .items_center()
+        .justify_center()
+        .bg(rgba(0x0f1218cc))
+        .occlude()
+        .child(panel)
+        .into_any_element()
+}
+
+/// An enum field's `‹` / `›` button.
+fn dialog_arrow(
+    label: &str,
+    index: usize,
+    delta: isize,
+    cx: &mut Context<Shell>,
+) -> impl IntoElement {
+    div()
+        .id(SharedString::from(format!("dialog-arrow-{index}-{delta}")))
+        .px_1()
+        .rounded_sm()
+        .bg(rgb(PANEL_ALT))
+        .text_xs()
+        .text_color(rgb(FG))
+        .child(label.to_string())
+        .on_click(cx.listener(move |this, _event, _window, cx| this.cycle_choice(index, delta, cx)))
+}
+
 /// The model inspector: documents and their objects.
 fn tree_panel(model: &ShellModel, cx: &mut Context<Shell>) -> impl IntoElement {
     let mut rows = div()
@@ -902,6 +1328,12 @@ impl Render for Shell {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let model = self.snapshot();
 
+        // A modal was opened outside a window context; focus it once rendered so
+        // Esc cancels and the panel receives bubbled keys.
+        if std::mem::take(&mut self.focus_dialog) {
+            window.focus(&self.dialog_focus, cx);
+        }
+
         let viewport = div()
             .flex()
             .flex_col()
@@ -961,7 +1393,15 @@ impl Render for Shell {
             .child(console_panel(&self.console, cx))
             .child(status);
 
-        window_frame(window, model.title.clone(), content)
+        // The modal sits above the whole shell, with a backdrop that blocks the
+        // panes underneath.
+        let body = div().relative().size_full().child(content);
+        let body = if self.dialog.is_some() {
+            body.child(dialog_overlay(self, cx))
+        } else {
+            body
+        };
+        window_frame(window, model.title.clone(), body)
     }
 }
 
@@ -1142,6 +1582,138 @@ mod tests {
         shell.update(cx, |shell, cx| shell.clear_selection(cx));
         assert!(!command_enabled("App_Delete"));
         assert!(model.lock().unwrap().selection.is_empty());
+    }
+
+    /// A3: a command's dialog is validated in the shell, accepted once, and a bad
+    /// value keeps the modal open. The command is registered through the console,
+    /// so the test exercises the same registry a workbench uses.
+    #[gpui::test]
+    fn a_command_dialog_validates_accepts_and_cancels(cx: &mut TestAppContext) {
+        let _guard = crate::PYTHON_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let model = Shell::boot().expect("boot shell");
+        let shell = cx.update(|cx| cx.new(|cx| Shell::from_model(model.clone(), cx)));
+
+        let script = r#"
+import FreeCADGui
+class _TestDialog:
+    def GetResources(self):
+        return {"MenuText": "Test Dialog"}
+    def Activated(self):
+        return {
+            "title": "Test Dialog",
+            "accept": "Do it",
+            "fields": [
+                {"name": "Count", "label": "Count", "kind": "int", "value": 2, "min": 1, "max": 9},
+                {"name": "Mode", "kind": "enum", "values": ["a", "b"], "value": "a"},
+                {"name": "Solid", "kind": "bool", "value": False},
+            ],
+            "on_accept": lambda values: {"status": f"got {values['Count']} {values['Mode']} {values['Solid']}"},
+        }
+if "Test_Dialog" not in FreeCADGui.listCommands():
+    FreeCADGui.addCommand("Test_Dialog", _TestDialog())
+"#;
+        let registered = crate::python::evaluate(script).expect("evaluate");
+        assert!(registered.ok, "{}", registered.output);
+
+        // The command opens a modal: a spec, a token, and no document change.
+        cx.update(|cx| shell.update(cx, |shell, cx| shell.run_command("Test_Dialog", cx)));
+        let (token, error) = cx.update(|cx| {
+            let shell = shell.read(cx);
+            let dialog = shell.dialog.as_ref().expect("the dialog opened");
+            assert_eq!(dialog.spec.fields.len(), 3);
+            (dialog.token.clone(), dialog.error.clone())
+        });
+        assert!(token.starts_with('d'), "token: {token}");
+        assert!(error.is_none());
+
+        // A value below the minimum stays in the modal and names the field.
+        cx.update(|cx| {
+            shell.update(cx, |shell, cx| {
+                let input = shell.dialog.as_ref().unwrap().inputs[0].clone().unwrap();
+                input.update(cx, |input, cx| input.set_text("0", cx));
+                shell.accept_dialog(cx);
+            });
+        });
+        let error = cx.update(|cx| {
+            shell
+                .read(cx)
+                .dialog
+                .as_ref()
+                .and_then(|dialog| dialog.error.clone())
+        });
+        assert!(
+            error.as_deref().unwrap_or_default().contains("Count"),
+            "error: {error:?}"
+        );
+
+        // A valid value runs the callback and closes the modal.
+        cx.update(|cx| {
+            shell.update(cx, |shell, cx| {
+                let input = shell.dialog.as_ref().unwrap().inputs[0].clone().unwrap();
+                input.update(cx, |input, cx| input.set_text("7", cx));
+                shell.accept_dialog(cx);
+            });
+        });
+        assert!(cx.update(|cx| shell.read(cx).dialog.is_none()));
+        let status = model.lock().unwrap().status.clone();
+        assert!(status.contains("got 7 a False"), "status: {status}");
+
+        // Cancel drops the facade's token: a later accept finds nothing.
+        cx.update(|cx| shell.update(cx, |shell, cx| shell.run_command("Test_Dialog", cx)));
+        let token = cx.update(|cx| shell.read(cx).dialog.as_ref().unwrap().token.clone());
+        cx.update(|cx| shell.update(cx, |shell, cx| shell.cancel_dialog(cx)));
+        assert!(cx.update(|cx| shell.read(cx).dialog.is_none()));
+        let spent = crate::commands::accept(&token, &serde_json::json!({})).expect("accept");
+        assert!(!spent.ok, "the cancelled token is gone");
+    }
+
+    /// A3: the modal renders headlessly over the shell, and `Esc` cancels it.
+    #[gpui::test]
+    fn the_command_dialog_renders_and_escape_cancels(cx: &mut TestAppContext) {
+        let _guard = crate::PYTHON_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let model = Shell::boot().expect("boot shell");
+        let window = cx.update(|cx| {
+            let model = model.clone();
+            cx.open_window(Default::default(), move |_window, cx| {
+                cx.new(|cx| Shell::from_model(model.clone(), cx))
+            })
+            .unwrap()
+        });
+        let mut cx = VisualTestContext::from_window(window.into(), cx);
+        let shell: Entity<Shell> = window.root(&mut cx).unwrap();
+
+        // `App_Move` with a selection opens its dialog; the shell is built-ins only.
+        cx.update(|_window, cx| {
+            shell.update(cx, |shell, cx| {
+                shell.select("Params", cx);
+                shell.run_command("App_Move", cx);
+            })
+        });
+        let (open, fields) = cx.update(|_window, cx| {
+            let shell = shell.read(cx);
+            (
+                shell.dialog.is_some(),
+                shell
+                    .dialog
+                    .as_ref()
+                    .map(|dialog| dialog.spec.fields.len())
+                    .unwrap_or(0),
+            )
+        });
+        assert!(open, "the dialog opened");
+        assert_eq!(fields, 3, "ΔX, ΔY, ΔZ");
+
+        // Force a full paint: the backdrop, fields and buttons are built.
+        cx.update(|window, cx| {
+            let _ = window.draw(cx);
+        });
+
+        // The modal held focus, so Escape cancels and drops its token.
+        cx.simulate_keystrokes("escape");
+        assert!(
+            cx.update(|_window, cx| shell.read(cx).dialog.is_none()),
+            "Escape cancelled the modal"
+        );
     }
 
     fn command_enabled(id: &str) -> bool {

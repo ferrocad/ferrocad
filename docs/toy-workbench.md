@@ -92,9 +92,10 @@ console can create objects without an import:
 
 The same creation is offered as a command, `Toy_MakeSlab` (registered with
 `FreeCADGui.addCommand` in this module's `Init`), so the shell's actions bar shows
-**Create Slab** and runs it without knowing what a slab is. A command owns its own
-transaction, so one click is one undo step (see
-[`actions-and-tools.md`](actions-and-tools.md) §16).
+**Create Slab** and runs it without knowing what a slab is. The command returns a
+**dialog** for Width/Depth/Height; the shell validates it and calls back, and the
+callback opens one transaction, so one click is one undo step (see
+[`actions-and-tools.md`](actions-and-tools.md) §6 and §16).
 
 The inspector refreshes and the viewport re-syncs through the ordinary observers —
 `evaluate` in the shell already does both.
@@ -117,8 +118,8 @@ or a transform means.
 
 The **app-level** built-ins come for free: `ferrocad_shell` registers `App_Delete` and
 `App_Move`, so every edition (the toy included) has them in the actions bar. Delete
-removes the whole selection as one transaction; Move takes a delta through
-`FreeCADGui.runCommand("App_Move", dx, dy, dz)` until the A3 dialog supplies one. A
+removes the whole selection as one transaction; Move opens a ΔX/ΔY/ΔZ dialog (its
+non-interactive form, `runCommand("App_Move", dx, dy, dz)`, skips the modal). A
 Ctrl/Cmd-click in the inspector builds the multi-selection they act on.
 
 ## Document semantics

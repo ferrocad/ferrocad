@@ -2502,6 +2502,7 @@ dependencies = [
  "ferrocad_graphics",
  "ferrocad_stage",
  "ferrocad_types",
+ "serde_json",
 ]
 
 [[package]]

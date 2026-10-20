@@ -177,7 +177,7 @@ FreeCAD.register_interaction_provider(_interaction)
 
 
 class _MakeSlabCommand:
-    """``Toy_MakeSlab`` — create a slab with the current defaults."""
+    """``Toy_MakeSlab`` — ask for the dimensions, then create the slab."""
 
     def GetResources(self):
         return {
@@ -192,8 +192,47 @@ class _MakeSlabCommand:
         return FreeCAD.ActiveDocument is not None
 
     def Activated(self):
-        makeSlab()
-        return {"status": "created a slab"}
+        return {
+            "title": "Create Slab",
+            "accept": "Create",
+            "fields": [
+                {
+                    "name": "Width",
+                    "label": "Width",
+                    "kind": "quantity",
+                    "value": DEFAULT_WIDTH,
+                    "min": 0.1,
+                },
+                {
+                    "name": "Depth",
+                    "label": "Depth",
+                    "kind": "quantity",
+                    "value": DEFAULT_DEPTH,
+                    "min": 0.1,
+                },
+                {
+                    "name": "Height",
+                    "label": "Height",
+                    "kind": "quantity",
+                    "value": DEFAULT_HEIGHT,
+                    "min": 0.1,
+                },
+            ],
+            "on_accept": _make_from_dialog,
+        }
+
+
+def _make_from_dialog(values):
+    """The dialog callback: create the slab the user described.
+
+    ``makeSlab`` owns its transaction, so an accepted dialog is one undo step.
+    """
+    slab = makeSlab(
+        width=float(values.get("Width", DEFAULT_WIDTH)),
+        depth=float(values.get("Depth", DEFAULT_DEPTH)),
+        height=float(values.get("Height", DEFAULT_HEIGHT)),
+    )
+    return {"status": f"created {slab.Name}"}
 
 
 FreeCADGui.addCommand("Toy_MakeSlab", _MakeSlabCommand())

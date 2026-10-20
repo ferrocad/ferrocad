@@ -27,3 +27,7 @@ ferrocad_geom.workspace = true
 # The camera the grip is projected with.
 ferrocad_graphics.workspace = true
 ferrocad_types.workspace = true
+
+[dev-dependencies]
+# The dialog test builds the typed values an accepted dialog hands to Python.
+serde_json.workspace = true

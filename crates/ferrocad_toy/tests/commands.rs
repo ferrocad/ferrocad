@@ -48,11 +48,38 @@ fn the_toy_command_is_listed_and_creates_an_object() {
     assert!(command.enabled, "the command is active with a document");
     assert!(!command.checked);
 
-    // Invoking it is the shell's path: run, then re-read the model and the stage.
+    // Invoking it is the shell's path: the command asks first, then the callback
+    // creates the object (A3).
     let outcome = python::run_command("Toy_MakeSlab").expect("the bridge returned");
     assert!(outcome.ok, "command failed: {}", outcome.error);
-    assert_eq!(outcome.status, "created a slab");
-    assert_eq!(slab_count(), 2, "the command created a slab");
+    let spec = outcome.dialog.clone().expect("a dialog spec");
+    assert_eq!(spec.title, "Create Slab");
+    assert_eq!(spec.fields.len(), 3);
+    let token = outcome.token.clone().expect("a dialog token");
+    assert_eq!(
+        slab_count(),
+        1,
+        "nothing is created before the dialog is accepted"
+    );
+
+    let values = serde_json::json!({"Width": 50.0, "Depth": 40.0, "Height": 25.0});
+    let accepted = ferrocad_gpui::commands::accept(&token, &values).expect("the bridge returned");
+    assert!(accepted.ok, "accept failed: {}", accepted.error);
+    assert!(
+        accepted.status.starts_with("created"),
+        "status: {}",
+        accepted.status
+    );
+    assert_eq!(slab_count(), 2, "the callback created the slab");
+
+    // A token is single use.
+    let again = ferrocad_gpui::commands::accept(&token, &values).expect("the bridge returned");
+    assert!(!again.ok, "a spent token is rejected");
+    assert!(
+        again.error.contains("no open dialog"),
+        "error: {}",
+        again.error
+    );
 
     // One command, one transaction: a single undo removes it again.
     let undo = python::evaluate("doc.undo()").expect("undo ran");

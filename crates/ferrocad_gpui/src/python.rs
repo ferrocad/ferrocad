@@ -378,6 +378,20 @@ pub fn run_command(name: &str) -> Result<crate::commands::CommandOutcome, String
     call_json("run_command", Some(name))
 }
 
+/// Accept an open dialog: one JSON payload (the token and the typed values).
+pub fn dialog_accept(
+    token: &str,
+    values: &serde_json::Value,
+) -> Result<crate::commands::CommandOutcome, String> {
+    let payload = serde_json::json!({ "token": token, "values": values }).to_string();
+    call_json("dialog_accept", Some(&payload))
+}
+
+/// Cancel an open dialog; the facade drops its token.
+pub fn dialog_cancel(token: &str) -> Result<crate::commands::CommandOutcome, String> {
+    call_json("dialog_cancel", Some(token))
+}
+
 pub fn properties(object: &str) -> Result<Vec<PropRow>, String> {
     call_json("properties", Some(object))
 }

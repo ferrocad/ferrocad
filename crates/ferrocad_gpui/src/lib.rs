@@ -11,6 +11,7 @@
 
 pub mod commands;
 pub mod contributions;
+pub mod dialog;
 pub mod display;
 pub mod python;
 pub mod selection;
@@ -34,6 +35,7 @@ use gpui::{
 
 pub use commands::{CommandInfo, CommandOutcome};
 pub use contributions::{Contributions, GizmoFactory, ManipulatorFactory};
+pub use dialog::{DialogField, DialogSpec};
 pub use display::{DisplaySync, StageMesh};
 pub use selection::SelectionItem;
 pub use shell::{Shell, ShellModel};

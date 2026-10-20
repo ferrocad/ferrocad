@@ -103,6 +103,16 @@ override per object (the toy does).
 | Glass background | `rgba(15, 18, 24, 0.75)` | pill `0x0f1218cc` (0.80) — align to 0.75 |
 | Glass border | `#FFFFFF14` | pill, chrome `CHROME_BORDER` |
 | Chrome accent | `#67D7FF` | `CHROME_ACTIVE` (navicube bar) |
+| Error | `#EF4444` | dialog validation line |
+
+**Modal surface (A3).** An open command dialog is the one **modal** layer, and it is
+not a floating pill: a centred `380 px` panel on `rgba(22, 24, 29, 0.95)` with a
+`#FFFFFF26` border and a `rgba(15, 18, 24, 0.80)` backdrop. The backdrop blocks the
+panes underneath; the panel carries the app text scale (`text_sm` title, `text_xs`
+rows), the muted labels and the accent accept button. Validation errors are the
+subtractive crimson above, inline under the fields. No animation, no drop shadow —
+the contrast step does the layering. The panel does not scroll yet; a long wizard is
+an S6 concern.
 
 ### 1.6 The convention problem (important)
 

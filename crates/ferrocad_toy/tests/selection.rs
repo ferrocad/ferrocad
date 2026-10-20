@@ -62,9 +62,13 @@ fn the_delete_command_removes_two_selected_slabs_in_one_step() {
     fresh_slab_document();
     assert_eq!(slab_names().len(), 1, "the fresh document has one slab");
 
-    // A second slab through the toy's own command: the bar can make one.
+    // A second slab through the toy's own command: the bar asks for its size first.
     let created = python::run_command("Toy_MakeSlab").expect("the bridge");
     assert!(created.ok, "{}", created.error);
+    let token = created.token.expect("a dialog token");
+    let values = serde_json::json!({"Width": 40.0, "Depth": 40.0, "Height": 20.0});
+    let accepted = ferrocad_gpui::commands::accept(&token, &values).expect("accept");
+    assert!(accepted.ok, "{}", accepted.error);
     assert_eq!(slab_names().len(), 2);
 
     // The shell's path: push the selection, then ask the registry. `IsActive` must
@@ -103,14 +107,14 @@ fn the_move_command_translates_the_selection_as_one_step() {
         "the slab starts at the origin"
     );
 
-    // Without a delta the command asks for one (A3 supplies the dialog).
+    // Without a delta the command opens the move dialog; nothing moves until it is
+    // accepted, and cancelling leaves the object alone.
     let pending = python::run_command("App_Move").expect("the bridge");
     assert!(pending.ok);
-    assert!(
-        pending.status.contains("delta"),
-        "status: {}",
-        pending.status
-    );
+    assert_eq!(pending.dialog.as_ref().expect("a dialog").fields.len(), 3);
+    let token = pending.token.expect("a dialog token");
+    let cancelled = ferrocad_gpui::commands::cancel(&token).expect("cancel");
+    assert!(cancelled.ok);
     assert!(placement_x(&name).abs() < 1e-9, "nothing moved");
 
     // With a delta it is the non-interactive twin of the gizmo.

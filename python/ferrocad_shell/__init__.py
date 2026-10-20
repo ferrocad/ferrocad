@@ -95,6 +95,9 @@ def load_workbenches(dirs_json: str = "[]") -> str:
 
 def bootstrap(doc_name: str = "Shell") -> str:
     """Create (or recreate) the sample document and report host status."""
+    # A dialog token belongs to the document that requested it: opening a fresh
+    # document drops any callback still waiting for the old one.
+    FreeCADGui._cancel_all()
     if FreeCAD.getDocument(doc_name) is not None:
         FreeCAD.closeDocument(doc_name)
     doc = FreeCAD.newDocument(doc_name)
@@ -365,8 +368,25 @@ def commands() -> str:
 
 
 def run_command(name: str) -> str:
-    """Invoke a workbench command by id; returns ``{ok, status?, error?, ...}``."""
+    """Invoke a workbench command by id; returns ``{ok, status?, dialog?, token?}``."""
     return _json(FreeCADGui._run(name))
+
+
+def dialog_accept(payload_json: str) -> str:
+    """Accept an open dialog: ``{"token": ..., "values": {...}}``.
+
+    The shell has already validated and typed the values; this hands them to the
+    command's ``on_accept`` (which owns its transaction) and returns its result.
+    """
+    payload = json.loads(payload_json)
+    return _json(
+        FreeCADGui._accept(payload["token"], payload.get("values") or {})
+    )
+
+
+def dialog_cancel(token: str) -> str:
+    """Cancel an open dialog and drop its token."""
+    return _json(FreeCADGui._cancel(token))
 
 
 def set_selection(pairs_json: str) -> str:
@@ -433,9 +453,9 @@ class _DeleteCommand:
 class _MoveCommand:
     """``App_Move`` — translate the selection by ``(dx, dy, dz)``.
 
-    The non-interactive twin of the gizmo. A3 replaces the pending-dialog branch
-    with the shell's non-blocking dialog; until then the command is usable from
-    Python: ``FreeCADGui.runCommand("App_Move", 10, 0, 0)``.
+    The non-interactive twin of the gizmo. With explicit arguments it applies them
+    and returns a status; with none it returns a **dialog** the shell hosts, whose
+    callback owns the transaction (A3).
     """
 
     def GetResources(self):
@@ -451,25 +471,41 @@ class _MoveCommand:
         return FreeCAD.ActiveDocument is not None and bool(_selection())
 
     def Activated(self, dx=None, dy=None, dz=None):
-        if dx is None and dy is None and dz is None:
-            return {"status": "Move needs a delta (the dialog arrives with A3)"}
-        doc = FreeCAD.ActiveDocument
-        objects = _selection()
-        if not objects:
-            return {"status": "nothing selected"}
-        delta = FreeCAD.Placement(
-            FreeCAD.Vector(float(dx or 0.0), float(dy or 0.0), float(dz or 0.0))
-        )
-        doc.openTransaction("Move")
-        try:
-            for obj in objects:
-                obj.Placement = delta * obj.Placement
-            doc.recompute()
-            doc.commitTransaction()
-        except Exception as exc:  # noqa: BLE001
-            doc.abortTransaction()
-            return {"status": f"move failed: {exc}"}
-        return {"status": f"moved {len(objects)} object(s)"}
+        if dx is not None or dy is not None or dz is not None:
+            return _move_selection(float(dx or 0.0), float(dy or 0.0), float(dz or 0.0))
+        return {
+            "title": "Move",
+            "accept": "Move",
+            "fields": [
+                {"name": "dx", "label": "ΔX", "kind": "quantity", "value": 0.0},
+                {"name": "dy", "label": "ΔY", "kind": "quantity", "value": 0.0},
+                {"name": "dz", "label": "ΔZ", "kind": "quantity", "value": 0.0},
+            ],
+            "on_accept": lambda values: _move_selection(
+                float(values.get("dx", 0.0)),
+                float(values.get("dy", 0.0)),
+                float(values.get("dz", 0.0)),
+            ),
+        }
+
+
+def _move_selection(dx, dy, dz):
+    """Translate the current selection as one transaction."""
+    doc = FreeCAD.ActiveDocument
+    objects = _selection()
+    if not objects:
+        return {"status": "nothing selected"}
+    delta = FreeCAD.Placement(FreeCAD.Vector(dx, dy, dz))
+    doc.openTransaction("Move")
+    try:
+        for obj in objects:
+            obj.Placement = delta * obj.Placement
+        doc.recompute()
+        doc.commitTransaction()
+    except Exception as exc:  # noqa: BLE001 - one transaction, then report
+        doc.abortTransaction()
+        return {"status": f"move failed: {exc}"}
+    return {"status": f"moved {len(objects)} object(s)"}
 
 
 FreeCADGui.addCommand("App_Delete", _DeleteCommand())

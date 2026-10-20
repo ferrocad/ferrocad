@@ -52,7 +52,7 @@ impl CommandInfo {
 /// What running a command produced.
 ///
 /// `ok` is false for an unknown id or a raising `Activated`; the command may add
-/// a human `status`, and A3+ adds the dialog/token/view fields.
+/// a human `status`, and A3 adds the dialog spec and its single-use token.
 #[derive(Debug, Clone, Default, Deserialize, PartialEq)]
 pub struct CommandOutcome {
     pub ok: bool,
@@ -63,6 +63,12 @@ pub struct CommandOutcome {
     /// The `repr` of a non-dict return value, when the command returned one.
     #[serde(default)]
     pub value: Option<String>,
+    /// A modal the command wants the shell to show.
+    #[serde(default)]
+    pub dialog: Option<crate::dialog::DialogSpec>,
+    /// The single-use token for the dialog's `on_accept` callback.
+    #[serde(default)]
+    pub token: Option<String>,
 }
 
 /// The registered commands, with their live state.
@@ -73,6 +79,21 @@ pub fn list() -> Result<Vec<CommandInfo>, String> {
 /// Run a command by id.
 pub fn run(id: &str) -> Result<CommandOutcome, String> {
     crate::python::run_command(id)
+}
+
+/// Accept an open dialog: hand the shell's typed values to its callback.
+///
+/// The facade has already validated nothing; the shell did. The callback owns its
+/// transaction and may return a new dialog spec (a wizard), which arrives in the
+/// returned outcome.
+pub fn accept(token: &str, values: &serde_json::Value) -> Result<CommandOutcome, String> {
+    crate::python::dialog_accept(token, values)
+}
+
+/// Cancel an open dialog and drop its token.
+///
+pub fn cancel(token: &str) -> Result<CommandOutcome, String> {
+    crate::python::dialog_cancel(token)
 }
 
 #[cfg(test)]

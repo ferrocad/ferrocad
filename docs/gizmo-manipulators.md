@@ -2,8 +2,9 @@
 
 Status: **T1 (Spatial Transactor math), T2 (analytic screen-space hit-testing), T3
 (modifiers, typed values and the readout) and T4 (visual language and ribbons) built
-(2026-10-20), and the F0 topology prerequisite is complete (F0.1–F0.6): selection,
-tangent chains and the parametric `Part::Fillet`/`Part::Chamfer` features exist.**
+(2026-10-20), the F0 topology prerequisite is complete (F0.1–F0.6), and F1 (the edge
+dress-up arc) is built: selection, tangent chains, the parametric
+`Part::Fillet`/`Part::Chamfer` features, and the arc scrubber that drives them.**
 
 Companions: [`stage.md`](stage.md) (the stage gizmo), [`geometry-and-topology.md`](geometry-and-topology.md)
 (the `ElementRef`/`ElementMap` seam), [`occt-integration.md`](occt-integration.md) (the
@@ -262,6 +263,7 @@ only its padded outline/area is pickable.
 | **T3 — modifiers and readout** | gpui modifier/key plumbing, `GizmoValue` on the event, projected numeric tag, Esc cancel, linear grid snapping | ✅ built |
 | **T4 — visual language** | cyan/slate tokens, micro-chevrons, glass planes, shared 1.5 px ribbon | ✅ built |
 | **F0 — topology prerequisite** | pixel → `ElementRef` selection (faces/edges), tangent-chain traversal, `chamfer` in `GeometryBackend`, parametric feature objects | ✅ built (F0.1–F0.6) |
+| **F1 — edge dress-up arc** | `DressUpScrubber`: camera-facing arc over the selected edge, screen-space hit test, radial scrub with snap/bounds, typed readout, viewport commit | ✅ built |
 
 ## 10. T1 as built (2026-10-20)
 
@@ -371,22 +373,67 @@ Verification: `cargo test -p ferrocad_graphics --lib` — 20 tests (3 new ribbon
 active/inactive tokens and the 1.5 px width); the viewport's 86 tests and the Python
 binding remain green.
 
-## 14. Deferred and why
+## 14. F1 as built (2026-10-20) — the edge dress-up arc
+
+`ferrocad_stage::dress_up`:
+
+- **Modes and values.** `DressUpMode::{Fillet, Chamfer}`; `DressUpValue::{Fillet{radius},
+  Chamfer{first, second}}` with `primary()` and `readout()` — `R 3.50 mm`,
+  `2.00 × 1.00 mm` (asymmetric chamfer), `2.00 mm` (symmetric).
+- **Geometry.** `DressUpScrubber::new(target_id, mode, edge, points)` takes the edge's
+  world polyline (`ShapeItem::edge_polyline("Edge3")` resolves the selection name to its
+  ordered points; the anchor is the middle segment's midpoint). The arc lies in the **camera-facing plane** through the anchor, spanned by the
+  edge's projected direction `u` and the in-plane perpendicular `n = forward × u`; it runs
+  from `anchor + r·u` through `anchor + r·n` to `anchor − r·u`. Because `r` **is** the
+  fillet radius, the drawing is a true dimension: growing the radius grows the arc. A
+  1.5 px ribbon (32 segments) and the radius tick `anchor → apex` share the T4 tokens.
+- **Degeneracy.** An edge projecting under 4 px (seen end-on, or behind the eye) falls
+  back to a stable screen-horizontal, so the arc keeps a usable orientation and stays
+  scrubbable; a polyline with fewer than two points still gets an arc (and no hit).
+- **Hit test.** Analytic screen distance to the arc polyline and the tick, within the
+  shared `HIT_SLOP` (2 px stroke + 10 px padding). The area between the edge and the arc
+  is **not** part of the target, so a click there reaches the scene.
+- **Scrub.** The value changes by the pointer's **radial travel** from the press
+  (`Δpx · scale_for(camera, anchor, 1)`), never by an absolute projection, so grabbing the
+  arc anywhere does not jump. The result is snapped (`step`) and clamped
+  (`min ≥ MIN_RADIUS`, optional `max`); `cancel_drag` restores the press value;
+  `update(camera)` rebuilds only when the view or the value changed.
+- **Readout.** `readout_anchor(camera)` projects the apex; the viewport renders the pill
+  as a plain gpui text layer (no hitbox).
+
+`ferrocad_viewport`:
+
+- `with_dress_up_scrubber` / `set_dress_up_scrubber` / `dress_up_scrubber(_mut)`,
+  `last_dress_up_commit` / `take_dress_up_commit`, `cancel_dress_up_drag`.
+- Priority is **navigation cube → dress-up arc → gizmo → tool → scene**. A press on the
+  arc starts a scrub (no orbit, no selection); a press anywhere else falls through. The
+  stroke is drawn as a depth-off overlay, hover recolours it cyan, and the pill is always
+  shown for the selected edge. `Esc` cancels a scrub before a gizmo drag.
+- The host writes the commit to a feature: `Radius` (or `Distance`/`Distance2`) then a
+  recompute — the F0.6 features rebuild `Shape` from there.
+
+Verification: `ferrocad_stage` 72 tests (11 new dress-up cases: readout strings, anchor,
+arc sizing, stroke-only hit test, outward scrub, step snap, cancel, rebuild-on-change,
+hover tokens, degenerate and view-aligned edges; plus 2 `ShapeItem::edge_polyline`
+cases); `ferrocad_viewport` 98 tests (5 new: commit, pass-through, hover/draw, cancel,
+priority over the gizmo).
+
+## 15. Deferred and why
 
 - **Push-Pull** needs a sketch-region / face selection and a solid/sketch model to preview
   an additive boss or subtractive pocket. The interaction is a 1D constraint plus a
   volume preview; it can reuse T1's axis solver once the context exists.
-- **Fillet/Chamfer** is now unblocked: `GeometryBackend::{fillet, chamfer}` and
-  `tangent_chain` exist, the viewport reports pixel → `ElementRef` selections (F0.5), and
-  `Part::Fillet`/`Part::Chamfer` are parametric features whose `execute` resolves the
-  selected names and rebuilds the shape (F0.6). What remains for the arc scrubber is the
-  UI slice: project the arc on the selected edge, write `Radius`/`Distance` during the
-  drag, and commit on release. See [`topology-selection.md`](topology-selection.md).
+- **Fillet/Chamfer** is unblocked and the arc scrubber is built (F0.6 + F1):
+  `GeometryBackend::{fillet, chamfer}`, `tangent_chain`, click selection, the parametric
+  features and the `DressUpScrubber`. What remains is **type-ahead numerics** (digits
+  targeting the pill), the **`Alt` asymmetric split** (two distance handles instead of
+  one), and the **host wiring** (selection → feature → scrubber → property write) in the
+  app shell, which has no document-selection model yet.
 - **Draft** additionally needs a wall-face selection, a pull direction and an angular
   offset operation; its protractor arc is a ring-like scrub (T1) with a degree readout
   (T3).
 
-## 15. Non-goals
+## 16. Non-goals
 
 - No modal tool modes: the manipulator is chosen by the selection.
 - No per-frame allocation in the solver; the frame and press state are captured once.

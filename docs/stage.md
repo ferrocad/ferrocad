@@ -288,6 +288,24 @@ The F0.5 bridge is covered by `ferrocad_viewport`'s
 `an_untagged_mesh_selects_the_whole_object`, `clicking_empty_space_clears_the_selection`,
 `an_orbit_drag_is_not_a_selection` and `a_non_selectable_item_is_not_selected`.
 
+**Dress-up scrubber (F1).** `ferrocad_stage::dress_up` adds `DressUpScrubber`, the
+edge fillet/chamfer arc. It is built from the selected edge's world polyline
+(`ShapeItem::edge_polyline("Edge3")` resolves a click's element name to ordered points;
+the anchor is the middle segment's midpoint) and draws a camera-facing arc whose **world
+radius is the feature's radius**, plus the radius tick to its apex. The hit test is
+analytic and screen-space (the arc and the tick, within the shared 2 + 10 px slop); the
+interior between the edge and the arc passes through. A drag changes the value by the
+pointer's radial travel, snapped and clamped, and emits a typed `DressUpChange` with the
+`R 3.50 mm`-style readout. `InventorViewport` hosts it
+(`with_dress_up_scrubber`, `take_dress_up_commit`, `cancel_dress_up_drag`), picks it
+before the gizmo, draws its stroke as a depth-off overlay, and always shows the dimension
+pill. The host writes the committed value to a `Part::Fillet`/`Part::Chamfer` feature and
+recomputes. Covered by `ferrocad_stage`'s 11 dress-up tests and 2 `edge_polyline` tests,
+and `ferrocad_viewport`'s `a_dress_up_scrub_commits_a_larger_radius`,
+`a_click_away_from_the_arc_falls_through_to_the_scene`,
+`the_scrubber_stroke_is_drawn_and_hovers`, `cancelling_a_dress_up_scrub_restores_the_radius`
+and `a_dress_up_arc_takes_priority_over_the_gizmo`.
+
 ### T5 — the `ferrocad.stage` Python bindings
 
 `crates/ferrocad_stage_py` is the modern-stack counterpart of `ferrocad_inventor_py`: the

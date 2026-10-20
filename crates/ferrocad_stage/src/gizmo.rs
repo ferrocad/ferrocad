@@ -38,7 +38,7 @@ pub const PUSH_PULL_COLOR: [f32; 4] = [0.913, 0.342, 0.003, 1.0];
 pub const SUBTRACT_COLOR: [f32; 4] = [0.863, 0.058, 0.058, 1.0];
 
 /// The visual stroke width, in device pixels.
-const STROKE_PIXELS: f64 = 1.5;
+pub(crate) const STROKE_PIXELS: f64 = 1.5;
 
 /// Which handles a gizmo shows.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -166,7 +166,7 @@ const HIT_TOLERANCE_PIXELS: f64 = 2.0;
 /// Extra grab padding around a handle, in device pixels.
 const HIT_PADDING_PIXELS: f64 = 10.0;
 /// The total screen-space grab radius: stroke tolerance + padding.
-const HIT_SLOP: f64 = HIT_TOLERANCE_PIXELS + HIT_PADDING_PIXELS;
+pub(crate) const HIT_SLOP: f64 = HIT_TOLERANCE_PIXELS + HIT_PADDING_PIXELS;
 /// Where an axis becomes pickable along its stem, as a fraction of the world scale. The
 /// inner part is where all three axes meet; excluding it keeps the triad centre
 /// transparent to pointer events.
@@ -1089,7 +1089,7 @@ fn new_handle(index: usize) -> ShapeItem {
 }
 
 /// Append a ribbon quad (two triangles) when the segment is not view-parallel.
-fn push_ribbon(
+pub(crate) fn push_ribbon(
     positions: &mut Vec<[f32; 3]>,
     triangles: &mut Vec<u32>,
     quad: Option<[Vector3; 4]>,
@@ -1286,7 +1286,8 @@ fn ray_plane(ray: &Ray, point: Vector3, normal: Vector3) -> Option<Vector3> {
 }
 
 /// The world direction the camera looks along (view space −Z in world space).
-fn camera_forward(camera: &Camera) -> Vector3 {
+/// The world direction the camera looks along (view space −Z in world space).
+pub(crate) fn camera_forward(camera: &Camera) -> Vector3 {
     // The view matrix's third row is the world direction of view-space +Z (toward the
     // eye); the camera looks along its negation.
     Vector3::new(camera.view.m[8], camera.view.m[9], camera.view.m[10]).scale(-1.0)
@@ -1294,7 +1295,7 @@ fn camera_forward(camera: &Camera) -> Vector3 {
 
 /// Project a world point to device pixels (bottom-left origin), or `None` when it is on
 /// the camera's w=0 plane.
-fn project_device(camera: &Camera, point: Vector3) -> Option<[f64; 2]> {
+pub(crate) fn project_device(camera: &Camera, point: Vector3) -> Option<[f64; 2]> {
     let m = camera.view_projection().m;
     let w = m[12] * point.x + m[13] * point.y + m[14] * point.z + m[15];
     if w.abs() < 1e-9 {
@@ -1326,7 +1327,7 @@ fn project_quad(camera: &Camera, points: &[Vector3; 4]) -> Option<[[f64; 2]; 4]>
 
 /// The distance from `point` to the segment `a`–`b`, plus the segment parameter of the
 /// closest point.
-fn point_segment_distance(point: [f64; 2], a: [f64; 2], b: [f64; 2]) -> (f64, f64) {
+pub(crate) fn point_segment_distance(point: [f64; 2], a: [f64; 2], b: [f64; 2]) -> (f64, f64) {
     let (dx, dy) = (b[0] - a[0], b[1] - a[1]);
     let length_squared = dx * dx + dy * dy;
     if length_squared < 1e-12 {
@@ -1525,7 +1526,7 @@ fn rotate(axis: Vector3, angle: f64) -> Matrix4 {
     Placement::new(Vector3::zero(), Rotation::from_axis_angle(&axis, angle)).to_matrix()
 }
 
-fn to3(v: Vector3) -> [f32; 3] {
+pub(crate) fn to3(v: Vector3) -> [f32; 3] {
     [v.x as f32, v.y as f32, v.z as f32]
 }
 

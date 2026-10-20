@@ -31,8 +31,8 @@ is the `FreeCAD` Python API, documented by convention and by upstream.
   through `gpui_interop`: the dma-buf hand-off, the same-device fallback, the platform
   matrix, and the implemented first slice.
 - [gizmo-manipulators.md](gizmo-manipulators.md) — the context-driven manipulator suite:
-  the Spatial Transactor math (T1 built), the analytic hit-test/readout/visual slices
-  T2–T4, and the topology prerequisite F0 for fillet/chamfer/draft.
+  the Spatial Transactor (T1–T4 built), the topology prerequisite F0, and the edge
+  dress-up arc F1.
 - [navicube.md](navicube.md) — the navigation cube: what it is upstream, the slice
   plan, and the as-built map (implemented, N1–N4b).
 - [navicube-gpui-design.md](navicube-gpui-design.md) — the GPUI-native redesign: the

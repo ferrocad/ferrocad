@@ -8,7 +8,9 @@
 //!   pointer events into the scene (pick → listener → recompile). A click is reported
 //!   as a [`SelectionEvent`] carrying a kernel-neutral
 //!   [`SelectionRef`](ferrocad_geom::SelectionRef): the host maps its object id to a
-//!   document object.
+//!   document object. A selected edge can carry a [`DressUpScrubber`](ferrocad_stage::DressUpScrubber)
+//!   — the fillet/chamfer arc — whose scrub commits a radius for the host to write to a
+//!   feature.
 //! - [`navicube`] — the navigation-cube controller overlay ([`NaviCube`]).
 //! - [`scene`] — a sample scene/camera and a hover listener, so the pipeline and the
 //!   interaction path are exercised before real document geometry exists.

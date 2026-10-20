@@ -401,6 +401,46 @@ impl ShapeItem {
         &self.edges
     }
 
+    /// The model-space polyline of the topological edge named `name`, if the item
+    /// carries one.
+    ///
+    /// Wire segments are tagged with the part id of the edge they belong to (a kernel
+    /// tessellation emits one contiguous run per edge), so this collects that run and
+    /// chains it end to end. It is what an edge manipulator (the F1 dress-up arc) anchors
+    /// on: a click reports `Edge3`, and this resolves it to points. A run that cannot be
+    /// chained is returned in emission order rather than dropped.
+    pub fn edge_polyline(&self, name: &str) -> Option<Vec<[f32; 3]>> {
+        let part = self
+            .part_names
+            .iter()
+            .position(|candidate| candidate == name)? as u32;
+        let mut segments = Vec::new();
+        for pair in self.edges.chunks_exact(2) {
+            let (a, b) = (pair[0] as usize, pair[1] as usize);
+            if self.part_at(pair[0]) != part && self.part_at(pair[1]) != part {
+                continue;
+            }
+            let (Some(from), Some(to)) = (self.positions.get(a), self.positions.get(b)) else {
+                continue;
+            };
+            segments.push((*from, *to));
+        }
+        let (first, second) = segments.first().copied()?;
+        let mut points = vec![first, second];
+        for (from, to) in segments.iter().skip(1) {
+            let last = *points.last().expect("a seeded polyline");
+            if *from == last {
+                points.push(*to);
+            } else if *to == last {
+                points.push(*from);
+            } else {
+                points.push(*from);
+                points.push(*to);
+            }
+        }
+        Some(points)
+    }
+
     /// Emit the item's draw packets into `queue`.
     ///
     /// Order: surface, wire, points, then the selection highlight (surface and wire)
@@ -873,6 +913,38 @@ mod tests {
         let geometry = points.geometry.as_ref().expect("fresh geometry");
         assert_eq!(geometry.vertices.len(), 1);
         assert_eq!(geometry.vertices[0].part_idx, 3);
+    }
+
+    #[test]
+    fn an_edge_name_resolves_to_its_polyline() {
+        let item = ShapeItem::from_tessellation(7, &two_part_tessellation());
+        assert_eq!(
+            item.edge_polyline("Edge1"),
+            Some(vec![[0.0, 0.0, 0.0], [1.0, 0.0, 0.0]])
+        );
+        assert_eq!(item.edge_polyline("Face1"), None, "a face has no wire run");
+        assert_eq!(item.edge_polyline("Edge9"), None, "no such part");
+    }
+
+    #[test]
+    fn an_edge_polyline_chains_its_segments_in_order() {
+        let mesh = ferrocad_geom::Tessellation {
+            positions: vec![[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [2.0, 0.0, 0.0]],
+            normals: vec![],
+            triangles: vec![],
+            triangle_parts: vec![],
+            // The second segment is emitted reversed.
+            edges: vec![0, 1, 2, 1],
+            segment_parts: vec![0, 0],
+            vertices: vec![],
+            vertex_parts: vec![],
+            parts: vec!["Edge1".to_string()],
+        };
+        let item = ShapeItem::from_tessellation(7, &mesh);
+        assert_eq!(
+            item.edge_polyline("Edge1"),
+            Some(vec![[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [2.0, 0.0, 0.0]])
+        );
     }
 
     #[test]

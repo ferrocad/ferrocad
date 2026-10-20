@@ -25,10 +25,12 @@
 //! Beyond shapes, the crate carries the interactive layer: [`PointerEvent`]/
 //! [`PointerKind`]/[`MouseButton`] (the structured replacement for `SoEventCallback`),
 //! [`snap_to_geometry`] ([`Snap`]/[`SnapKind`]), the [`Tool`] trait with a reference
-//! [`PolylineTool`], and a [`TransformGizmo`] (the `SoDragger` replacement) with its
-//! constraint-projection math and screen-space-invariant scale. A tool turns pointer
-//! events into transient visuals; a gizmo turns a handle drag into a delta transform the
-//! host previews on the target item without touching the document.
+//! [`PolylineTool`], a [`TransformGizmo`] (the `SoDragger` replacement) with its
+//! constraint-projection math and screen-space-invariant scale, and a
+//! [`DressUpScrubber`] (the edge fillet/chamfer arc). A tool turns pointer events into
+//! transient visuals; a gizmo turns a handle drag into a delta transform the host
+//! previews on the target item without touching the document; a scrubber turns a
+//! radial drag into the radius the host writes to a feature.
 //!
 //! # Example
 //!
@@ -50,6 +52,7 @@
 //! assert_eq!(queue.len(), 2);
 //! ```
 
+pub mod dress_up;
 pub mod gizmo;
 pub mod input;
 pub mod shape;
@@ -57,6 +60,7 @@ pub mod snap;
 pub mod stage;
 pub mod tool;
 
+pub use dress_up::{DressUpChange, DressUpMode, DressUpScrubber, DressUpValue, MIN_RADIUS};
 pub use gizmo::{
     GIZMO_BASE_ID, GizmoAxis, GizmoCommitEvent, GizmoConstraint, GizmoDragEvent, GizmoHandle,
     GizmoMode, GizmoModifiers, GizmoValue, HandleKind, ManipulatorFrame, TransformGizmo,

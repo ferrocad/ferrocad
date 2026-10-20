@@ -265,6 +265,7 @@ impl Shell {
         {
             let state = self.model.lock().unwrap().view.clone();
             viewport.set_grid(state.grid);
+            viewport.set_axis_cross(state.axis_cross);
             viewport.set_grid_steps(state.grid_minor, state.grid_major);
             viewport.set_grid_radius(state.grid_radius);
         }
@@ -751,10 +752,12 @@ impl Shell {
         if let Some(viewport) = self.viewport.clone() {
             let orthographic = state.projection == ProjectionName::Orthographic;
             let grid = state.grid;
+            let axis_cross = state.axis_cross;
             let (minor, major, radius) = (state.grid_minor, state.grid_major, state.grid_radius);
             viewport.update(cx, |viewport, cx| {
                 let mut changed = viewport.set_orthographic(orthographic);
                 changed |= viewport.set_grid(grid);
+                changed |= viewport.set_axis_cross(axis_cross);
                 changed |= viewport.set_grid_steps(minor, major);
                 changed |= viewport.set_grid_radius(radius);
                 if changed {
@@ -2065,6 +2068,25 @@ if "Test_Shortcut" not in FreeCADGui.listCommands():
         cx.update(|cx| shell.update(cx, |shell, cx| shell.run_command("App_ToggleGrid", cx)));
         assert!(!model.lock().unwrap().view.grid);
         assert!(!command_checked("App_ToggleGrid"));
+    }
+
+    /// G5: the axis cross is its own checkable flag, independent of the grid.
+    #[gpui::test]
+    fn the_axis_cross_is_toggled_separately(cx: &mut TestAppContext) {
+        let _guard = crate::PYTHON_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let model = Shell::boot().expect("boot shell");
+        let shell = cx.update(|cx| cx.new(|cx| Shell::from_model(model.clone(), cx)));
+
+        assert!(model.lock().unwrap().view.axis_cross, "on by default");
+        assert!(command_checked("App_ToggleAxisCross"));
+
+        cx.update(|cx| {
+            shell.update(cx, |shell, cx| shell.run_command("App_ToggleAxisCross", cx))
+        });
+        assert_eq!(model.lock().unwrap().status, "axis cross off");
+        assert!(!model.lock().unwrap().view.axis_cross);
+        assert!(!model.lock().unwrap().view.grid, "the grid is untouched");
+        assert!(!command_checked("App_ToggleAxisCross"));
     }
 
     /// A5: a tool id resolves through the edition's registry; an unknown id reports

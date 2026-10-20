@@ -412,6 +412,7 @@ def set_view_state(state_json: str) -> str:
     """
     state = json.loads(state_json)
     FreeCADGui.ViewState.grid = bool(state.get("grid", False))
+    FreeCADGui.ViewState.axis_cross = bool(state.get("axis_cross", True))
     FreeCADGui.ViewState.projection = str(state.get("projection", "persp"))
     FreeCADGui.ViewState.grid_minor = float(state.get("grid_minor", 10.0))
     FreeCADGui.ViewState.grid_major = float(state.get("grid_major", 100.0))
@@ -552,6 +553,31 @@ class _GridCommand:
 
 
 FreeCADGui.addCommand("App_ToggleGrid", _GridCommand())
+
+
+class _AxisCrossCommand:
+    """``App_ToggleAxisCross`` — show or hide the world axis cross (presentation only).
+
+    Upstream's equivalent is ``Std_ToggleAxisCross``. It is a checkable ``view`` request
+    and is **independent of the grid**: one is orientation, the other placement.
+    """
+
+    def GetResources(self):
+        return {
+            "MenuText": "Axis cross",
+            "ToolTip": "Show the world axis cross",
+            "Group": "View",
+            "CmdType": "ForView",
+        }
+
+    def IsChecked(self):
+        return bool(FreeCADGui.ViewState.axis_cross)
+
+    def Activated(self):
+        return {"view": {"axis_cross": not FreeCADGui.ViewState.axis_cross}}
+
+
+FreeCADGui.addCommand("App_ToggleAxisCross", _AxisCrossCommand())
 
 
 class _ReloadGridSettingsCommand:

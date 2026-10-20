@@ -95,9 +95,6 @@ pub struct NaviCube {
     proximity: bool,
     /// Whether the pointer is on the compass ring (hovering or scrubbing it).
     ring_active: bool,
-    /// The extra bearing applied to the compass letters when a local workplane is active
-    /// (radians, CCW in the ring plane). The ring geometry itself stays fixed.
-    heading_offset: f64,
     /// The camera rotation last synced into the cube (so we only recompile on change).
     synced: Option<Rotation>,
 }
@@ -130,7 +127,6 @@ impl NaviCube {
             hilite: None,
             proximity: false,
             ring_active: false,
-            heading_offset: 0.0,
             synced: None,
         };
         cube.rebuild();
@@ -154,7 +150,6 @@ impl NaviCube {
             hilite: directive.hilite.and_then(Piece::from_pick_id),
             proximity: false,
             ring_active: false,
-            heading_offset: 0.0,
             synced: directive.orientation,
         };
         cube.rebuild();
@@ -207,7 +202,7 @@ impl NaviCube {
         let matrix = rotation.to_matrix();
         let mut labels = Vec::with_capacity(4);
         for (text, angle) in model::COMPASS_LABELS {
-            let point = model::ring_label_position(angle + self.heading_offset);
+            let point = model::ring_label_position(angle);
             let view = matrix.transform(&Vector3::new(
                 f64::from(point[0]),
                 f64::from(point[1]),
@@ -335,24 +330,6 @@ impl NaviCube {
         self.hilite = target;
         self.rebuild();
         true
-    }
-
-    /// Rotate the compass letters by `offset` radians (CCW in the ring plane), or clear
-    /// the offset with `None`. Used when a local workplane is active, so the ring's
-    /// cardinal heading matches the sketch's `U`. The ring geometry itself is unchanged
-    /// (`axis-origin-grid.md` §10.5).
-    pub fn set_heading_offset(&mut self, offset: Option<f64>) -> bool {
-        let next = offset.unwrap_or(0.0);
-        if (self.heading_offset - next).abs() < 1e-12 {
-            return false;
-        }
-        self.heading_offset = next;
-        true
-    }
-
-    /// The bearing applied to the compass letters (radians).
-    pub fn heading_offset(&self) -> f64 {
-        self.heading_offset
     }
 
     /// Light the compass ring while the pointer is over it (hover or scrub). Returns
@@ -938,38 +915,6 @@ mod tests {
         assert_eq!(cube.hit(centre(&cube)), Some(Piece::FRONT));
         // Outside the rectangle there is no hit.
         assert_eq!(cube.hit([5, 5]), None);
-    }
-
-    #[test]
-    fn the_heading_offset_turns_the_compass_letters() {
-        use std::f64::consts::FRAC_PI_2;
-
-        let mut cube = NaviCube::new(viewport());
-        // A top view keeps all four compass letters visible (none is culled near the
-        // cube's silhouette), so a rotation is observable for every letter.
-        let top = Camera {
-            view: Placement::new(
-                Vector3::new(0.0, 0.0, -4.0),
-                Rotation::from_vectors(Vector3::new(0.0, 1.0, 0.0), Vector3::new(0.0, 0.0, 1.0)),
-            )
-            .to_matrix(),
-            ..Camera::identity()
-        };
-        cube.sync(&top);
-        let before = cube.labels();
-        assert_eq!(before.len(), 4);
-        let north = before.iter().find(|label| label.text == 'N').expect("N");
-
-        assert!(cube.set_heading_offset(Some(FRAC_PI_2)));
-        assert!((cube.heading_offset() - FRAC_PI_2).abs() < 1e-12);
-        let after = cube.labels();
-        let turned = after.iter().find(|label| label.text == 'N').expect("N");
-        assert_ne!(north.position, turned.position, "the lettering turned");
-
-        // Setting the same offset again is a no-op; `None` restores the world heading.
-        assert!(!cube.set_heading_offset(Some(FRAC_PI_2)));
-        assert!(cube.set_heading_offset(None));
-        assert_eq!(cube.heading_offset(), 0.0);
     }
 
     #[test]

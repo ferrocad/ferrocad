@@ -166,8 +166,14 @@ pub struct InventorViewport<V: InventorView> {
     selection: Option<SelectionEvent>,
     /// A neutral summary of what a click would do under the pointer (A4).
     hover_report: HoverReport,
-    /// The reference grid (G2), when enabled.
-    grid: Option<GridMesh>,
+    /// The reference grid's geometry (G2). Always allocated: `grid_enabled` decides
+    /// whether the ground field is drawn and `axis_cross` whether the triads are.
+    grid: GridMesh,
+    /// The world grid's visibility (`App_ToggleGrid`).
+    grid_enabled: bool,
+    /// The world triad, its origin node and axis tags (`App_ToggleAxisCross`). On by
+    /// default, as upstream's axis cross is.
+    axis_cross: bool,
     /// The world grid's minor and major steps (mm, G5 preferences; the local face grid
     /// keeps its own 1/10 mm levels).
     grid_minor: f64,
@@ -270,32 +276,34 @@ impl GridMesh {
         }
     }
 
-    /// Sync the world layer and the two local layers (each hidden while its spec is
-    /// absent).
+    /// Sync the world layer and the two local layers. Each layer draws its ground field
+    /// and its triad independently: `App_ToggleGrid` owns the fields, `App_ToggleAxisCross`
+    /// owns the triads.
     fn sync(
         &mut self,
         camera: &Camera,
-        world_spec: &GridSpec,
-        world_style: &GridStyle,
-        active: Option<(&GridSpec, &GridStyle)>,
-        hover: Option<(&GridSpec, &GridStyle)>,
+        world: LayerSpec<'_>,
+        active: Option<LayerSpec<'_>>,
+        hover: Option<LayerSpec<'_>>,
     ) {
-        self.world.visible = true;
-        self.world.sync(camera, world_spec, world_style);
+        sync_layer(&mut self.world, camera, Some(world));
         sync_layer(&mut self.active, camera, active);
         sync_layer(&mut self.hover, camera, hover);
     }
 
     /// Sync the origin node: on the active workplane when one is live (coplanar, so
-    /// depth-biased), else on the world frame under the world triad.
+    /// depth-biased), else on the world frame under the world triad. It belongs to the
+    /// axis cross, not the grid.
     fn sync_origin(
         &mut self,
         workplane: &Workplane,
         camera: &Camera,
         bloomed: bool,
         depth_bias: f32,
+        visible: bool,
     ) {
         self.origin.depth_bias = depth_bias;
+        self.origin.visible = visible;
         self.origin.sync(workplane, camera, bloomed);
     }
 
@@ -307,6 +315,17 @@ impl GridMesh {
     }
 }
 
+/// What one grid layer should draw this frame.
+#[derive(Clone, Copy)]
+struct LayerSpec<'a> {
+    spec: &'a GridSpec,
+    style: &'a GridStyle,
+    /// The dots and major lines (the grid toggle).
+    ground: bool,
+    /// The triad stems at the layer's origin (the axis-cross toggle).
+    triad: bool,
+}
+
 /// A single-mesh layer in the grid queue (the workplane origin node).
 struct MarkerLayer {
     mesh: MeshId,
@@ -315,6 +334,8 @@ struct MarkerLayer {
     vertices: Vec<Vertex>,
     indices: Vec<u32>,
     depth_bias: f32,
+    /// The axis-cross toggle owns this node, not the grid.
+    visible: bool,
 }
 
 impl MarkerLayer {
@@ -328,6 +349,7 @@ impl MarkerLayer {
             vertices: Vec::new(),
             indices: Vec::new(),
             depth_bias: 0.0,
+            visible: false,
         }
     }
 
@@ -343,7 +365,7 @@ impl MarkerLayer {
     }
 
     fn emit(&self, queue: &mut RenderQueue) {
-        if self.vertices.is_empty() {
+        if !self.visible || self.vertices.is_empty() {
             return;
         }
         queue.packets.push(DrawPacket {
@@ -365,18 +387,18 @@ impl MarkerLayer {
     }
 }
 
-/// Sync one local layer, or hide it when its spec is absent.
-fn sync_layer(
-    layer: &mut GridLayer,
-    camera: &Camera,
-    spec: Option<(&GridSpec, &GridStyle)>,
-) {
+/// Sync one layer, or hide both halves when it has no spec.
+fn sync_layer(layer: &mut GridLayer, camera: &Camera, spec: Option<LayerSpec<'_>>) {
     match spec {
-        Some((spec, style)) => {
-            layer.visible = true;
-            layer.sync(camera, spec, style);
+        Some(spec) => {
+            layer.show_ground = spec.ground;
+            layer.show_triad = spec.triad;
+            layer.sync(camera, spec.spec, spec.style);
         }
-        None => layer.visible = false,
+        None => {
+            layer.show_ground = false;
+            layer.show_triad = false;
+        }
     }
 }
 
@@ -395,9 +417,10 @@ struct GridLayer {
     triad_indices: Vec<u32>,
     /// The coplanar lift for a face grid; `0` for the world ground.
     depth_bias: f32,
-    /// Whether this layer contributes packets (a local layer is hidden when no face or
-    /// datum owns it).
-    visible: bool,
+    /// The dots and major lines (`App_ToggleGrid`).
+    show_ground: bool,
+    /// The triad stems (`App_ToggleAxisCross`).
+    show_triad: bool,
 }
 
 impl GridLayer {
@@ -421,7 +444,8 @@ impl GridLayer {
             triad: Vec::new(),
             triad_indices: Vec::new(),
             depth_bias,
-            visible: false,
+            show_ground: false,
+            show_triad: false,
         }
     }
 
@@ -445,10 +469,7 @@ impl GridLayer {
     }
 
     fn emit(&self, queue: &mut RenderQueue) {
-        if !self.visible {
-            return;
-        }
-        if !self.dots.is_empty() {
+        if self.show_ground && !self.dots.is_empty() {
             let indices = (0..self.dots.len() as u32).collect();
             queue.packets.push(self.packet(
                 self.dots_mesh,
@@ -458,7 +479,7 @@ impl GridLayer {
                 indices,
             ));
         }
-        if !self.lines.is_empty() {
+        if self.show_ground && !self.lines.is_empty() {
             let indices = (0..self.lines.len() as u32).collect();
             queue.packets.push(self.packet(
                 self.lines_mesh,
@@ -468,7 +489,7 @@ impl GridLayer {
                 indices,
             ));
         }
-        if !self.triad.is_empty() {
+        if self.show_triad && !self.triad.is_empty() {
             queue.packets.push(self.packet(
                 self.triad_mesh,
                 self.triad_generation,
@@ -673,7 +694,9 @@ impl<V: InventorView> InventorViewport<V> {
             hovered_part: None,
             selection: None,
             hover_report: HoverReport::default(),
-            grid: None,
+            grid: GridMesh::new(),
+            grid_enabled: false,
+            axis_cross: true,
             grid_minor: grid::MINOR_STEP,
             grid_major: grid::MAJOR_STEP,
             grid_radius: None,
@@ -2009,19 +2032,37 @@ impl<V: InventorView> InventorViewport<V> {
             .collect();
     }
 
-    /// Enable or disable the reference grid (G2). Returns whether it changed.
+    /// Show or hide the reference grid's ground field (G2, `App_ToggleGrid`). The
+    /// triads are the axis cross's business, not the grid's. Returns whether it changed.
     pub fn set_grid(&mut self, enabled: bool) -> bool {
-        if enabled == self.grid.is_some() {
+        if enabled == self.grid_enabled {
             return false;
         }
-        self.grid = enabled.then(GridMesh::new);
+        self.grid_enabled = enabled;
         self.recompile();
         true
     }
 
-    /// Whether the reference grid is shown.
+    /// Whether the reference grid's ground field is shown.
     pub fn grid_enabled(&self) -> bool {
-        self.grid.is_some()
+        self.grid_enabled
+    }
+
+    /// Show or hide the axis cross: the world triad, its origin node and the axis tags
+    /// (`App_ToggleAxisCross`, on by default as upstream's axis cross is). Returns
+    /// whether it changed.
+    pub fn set_axis_cross(&mut self, enabled: bool) -> bool {
+        if enabled == self.axis_cross {
+            return false;
+        }
+        self.axis_cross = enabled;
+        self.recompile();
+        true
+    }
+
+    /// Whether the axis cross is shown.
+    pub fn axis_cross(&self) -> bool {
+        self.axis_cross
     }
 
     /// Set the world grid's minor and major steps (mm). Invalid pairs (non-positive, or
@@ -2065,22 +2106,26 @@ impl<V: InventorView> InventorViewport<V> {
         self.grid_radius
     }
 
-    /// Rebuild the grid for the current camera: the effective steps (screen-space
-    /// culling), the radius, and the screen-facing triad.
+    /// Rebuild the reference geometry for the current camera: the effective steps
+    /// (screen-space culling), the radius, and the screen-facing triads.
     ///
-    /// Three layers can contribute: the world ground (always), the active workplane and a
-    /// hovered face (each when present). A local layer dims the world level so the local
-    /// frame reads first. The packets go to their own queue
-    /// ([`grid_queue`](Self::grid_queue)) so the grid is drawn but never picked.
+    /// Three layers can contribute: the world layer, the active workplane and a hovered
+    /// face (each when present). `App_ToggleGrid` owns the ground fields, the axis-cross
+    /// flag owns the triads and the origin node, so they can be shown independently. A
+    /// local layer dims the world level so the local frame reads first. The packets go to
+    /// their own queue ([`grid_queue`](Self::grid_queue)) so nothing here is ever picked.
     fn sync_grid(&mut self) {
         self.grid_queue = RenderQueue::default();
         self.refresh_hover_face();
 
+        let grid_on = self.grid_enabled;
+        let cross = self.axis_cross;
         let active = self.active_workplane.clone();
         // Do not preview the face that is already active.
         let hover = self
             .hover_face
             .as_ref()
+            .filter(|_| grid_on)
             .filter(|face| face.since.elapsed() >= FACE_DWELL)
             .filter(|face| {
                 active
@@ -2106,13 +2151,23 @@ impl<V: InventorView> InventorViewport<V> {
             major,
             radius,
         };
+        // A local frame is present when its grid is on, or (for the triad alone) when the
+        // axis cross is on with an active workplane.
+        let local_present = (grid_on && hover.is_some()) || active.is_some();
         let mut world_style = GridStyle::default();
-        if active.is_some() || hover.is_some() {
+        if local_present {
             world_style.dim = grid::WORLD_DIM;
             world_style.triad_dim = grid::WORLD_TRIAD_DIM;
         }
-        let active_layer = active.as_ref().map(|frame| local_grid(&self.camera, frame));
-        let hover_layer = hover.as_ref().map(|frame| local_grid(&self.camera, frame));
+        let active_layer = active.as_ref().and_then(|frame| {
+            (grid_on || cross).then(|| {
+                let (spec, style) = local_grid(&self.camera, frame);
+                (spec, style, grid_on)
+            })
+        });
+        let hover_layer = hover
+            .as_ref()
+            .map(|frame| local_grid(&self.camera, frame));
         // The origin node sits on the active workplane, or under the world triad.
         let origin_plane = active
             .as_ref()
@@ -2125,17 +2180,28 @@ impl<V: InventorView> InventorViewport<V> {
             0.0
         };
 
-        let Some(mesh) = self.grid.as_mut() else {
-            return;
+        let world = LayerSpec {
+            spec: &world_spec,
+            style: &world_style,
+            ground: grid_on,
+            triad: cross,
         };
-        mesh.sync(
-            &self.camera,
-            &world_spec,
-            &world_style,
-            active_layer.as_ref().map(|(spec, style)| (spec, style)),
-            hover_layer.as_ref().map(|(spec, style)| (spec, style)),
-        );
-        mesh.sync_origin(&origin_plane, &self.camera, bloomed, origin_bias);
+        let active = active_layer.as_ref().map(|(spec, style, ground)| LayerSpec {
+            spec,
+            style,
+            ground: *ground,
+            triad: cross,
+        });
+        let hover = hover_layer.as_ref().map(|(spec, style)| LayerSpec {
+            spec,
+            style,
+            ground: true,
+            triad: cross,
+        });
+
+        let mesh = &mut self.grid;
+        mesh.sync(&self.camera, world, active, hover);
+        mesh.sync_origin(&origin_plane, &self.camera, bloomed, origin_bias, cross);
         mesh.emit(&mut self.grid_queue);
     }
 
@@ -2245,21 +2311,10 @@ impl<V: InventorView> InventorViewport<V> {
         true
     }
 
-    /// The bearing of the active workplane's `U` axis in the ground plane (radians CCW
-    /// from world +X), for the compass ring. `None` for a vertical `U` or no workplane.
-    fn workplane_heading(&self) -> Option<f64> {
-        let plane = &self.active_workplane.as_ref()?.plane;
-        let horizontal = (plane.u.x * plane.u.x + plane.u.y * plane.u.y).sqrt();
-        if horizontal < 1e-9 {
-            return None;
-        }
-        Some(plane.u.y.atan2(plane.u.x))
-    }
-
     /// The triad's axis tags (`X`/`Y`/`Z` for the world, `U`/`V`/`N` for a workplane),
-    /// projected at the stem tips. Empty while the grid (and so the triad) is off.
+    /// projected at the stem tips. Empty while the axis cross is off.
     fn axis_labels(&self) -> Vec<AxisLabel> {
-        if self.grid.is_none() {
+        if !self.axis_cross {
             return Vec::new();
         }
         let (plane, letters) = match &self.active_workplane {
@@ -2529,20 +2584,14 @@ impl<V: InventorView> InventorViewport<V> {
         if self.stage_dirty {
             self.recompile();
         }
-        // The grid follows the camera and the hovered face, neither of which marks the
-        // stage dirty. `sync_grid` is a key comparison when nothing changed.
-        if self.grid.is_some() {
-            self.sync_grid();
-        }
+        // The grid and axis cross follow the camera and the hovered face, none of which
+        // marks the stage dirty. `sync_grid` is a key comparison when nothing changed.
+        self.sync_grid();
         // The aurora's flash decays over 120 ms and the camera sets its size, so the
         // feedback is rebuilt per paint (a handful of vertices).
         self.rebuild_feedback();
-        let heading = self.workplane_heading();
         if let Some(cube) = self.navicube.as_mut() {
             cube.sync(&self.camera);
-            // A local workplane turns the compass lettering to its own heading (the
-            // ring geometry stays fixed).
-            cube.set_heading_offset(heading);
         }
         // A directive-driven overlay with no explicit orientation mirrors the main
         // camera; one with an orientation is fixed (set once from the directive).
@@ -5085,14 +5134,48 @@ mod tests {
         assert_eq!(
             viewport.grid_queue.len(),
             4,
-            "three grid layers + the origin node"
+            "the ground (dots, lines), the triad and the origin node"
         );
 
         assert!(!viewport.set_grid(true), "enabling twice is a no-op");
 
+        // The axis cross is separate: hiding the grid leaves the triad and its node.
         assert!(viewport.set_grid(false));
         assert!(!viewport.grid_enabled());
+        assert_eq!(viewport.grid_queue.len(), 2);
+        assert!(viewport.set_axis_cross(false));
         assert!(viewport.grid_queue.is_empty());
+    }
+
+    #[test]
+    fn the_axis_cross_is_independent_of_the_grid() {
+        let mut viewport = grid_view();
+        assert!(viewport.axis_cross(), "on by default, as upstream's is");
+
+        // Cross alone: the triad, then the origin node (drawn last).
+        assert!(viewport.set_grid(false));
+        let topologies: Vec<Topology> = viewport
+            .grid_queue
+            .packets
+            .iter()
+            .map(|packet| packet.topology)
+            .collect();
+        assert_eq!(topologies, vec![Topology::Triangles, Topology::Lines]);
+        assert_eq!(
+            viewport.axis_labels().len(),
+            3,
+            "the axis tags belong to the cross"
+        );
+
+        // Neither: nothing at all.
+        assert!(viewport.set_axis_cross(false));
+        assert!(viewport.grid_queue.is_empty());
+        assert!(viewport.axis_labels().is_empty());
+
+        // Grid alone: no triad and no tags.
+        assert!(viewport.set_grid(true));
+        assert_eq!(viewport.grid_queue.len(), 2, "dots and major lines");
+        assert!(viewport.axis_labels().is_empty());
     }
 
     #[test]
@@ -5509,7 +5592,7 @@ mod tests {
     }
 
     #[test]
-    fn the_compass_follows_the_active_workplane_heading() {
+    fn a_local_workplane_never_re_labels_the_compass() {
         use ferrocad_stage::WorkplaneKind;
 
         let camera = Camera {
@@ -5519,7 +5602,17 @@ mod tests {
         let cube = NaviCube::new(camera.viewport);
         let mut view = InventorViewport::new(fake(ImageData::default()), camera, Scene::default())
             .with_navicube(cube);
-        // A frame whose `U` points along world +Y: the ring's heading turns 90°.
+        let before: Vec<(char, [f32; 2])> = view
+            .navicube
+            .as_ref()
+            .expect("a navicube")
+            .labels()
+            .into_iter()
+            .map(|label| (label.text, label.position))
+            .collect();
+
+        // A frame whose `U` points along world +Y must not turn the letters: the cube is
+        // the world compass (FreeCAD has no local compass either).
         let plane = Workplane::new(
             Vector3::new(0.0, 0.0, 0.5),
             Vector3::new(0.0, 1.0, 0.0),
@@ -5530,11 +5623,15 @@ mod tests {
         view.set_workplane(Some(FaceFrame { plane, radius: 5.0 }));
         view.refresh();
 
-        let offset = view.navicube.as_ref().expect("a navicube").heading_offset();
-        assert!(
-            (offset - std::f64::consts::FRAC_PI_2).abs() < 1e-9,
-            "the ring follows U: {offset}"
-        );
+        let after: Vec<(char, [f32; 2])> = view
+            .navicube
+            .as_ref()
+            .expect("a navicube")
+            .labels()
+            .into_iter()
+            .map(|label| (label.text, label.position))
+            .collect();
+        assert_eq!(before, after);
     }
 
     #[test]

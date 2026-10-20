@@ -304,17 +304,20 @@ interactive tool without a second hook:
 
 ```python
 return {"view": {"grid": False}}                       # applied by the shell, not undoable
+return {"view": {"axis_cross": False}}                 # the world triad, independent of the grid
 return {"view": {"grid_minor": 1.0, "grid_major": 10.0}}  # grid preferences (G5)
 return {"view": {"workplane": "activate"}}              # G5: the hovered face becomes the UCS
 return {"tool": "toy_measure"}                         # starts a registered tool session
 ```
 
 - A `view` request is applied by the shell and mirrored to `FreeCADGui.ViewState`:
-  `{"grid": true}` flips the reference-grid flag, `{"projection": "ortho"}` switches
-  the viewport's projection (framing preserved), and `grid_minor`/`grid_major`
-  (mm) / `grid_radius` (mm, 0 = camera-derived) change the world grid's steps and
-  extent. An unknown projection, a non-positive step or a major below the minor is
-  rejected and **nothing** is applied (`ViewState::apply` validates before it mutates).
+  `{"grid": true}` flips the reference-grid flag, `{"axis_cross": false}` hides the world
+  triad (they are independent — the grid is placement, the cross is orientation), and
+  `{"projection": "ortho"}` switches the viewport's projection (framing preserved);
+  `grid_minor`/`grid_major` (mm) / `grid_radius` (mm, 0 = camera-derived) change the world
+  grid's steps and extent. An unknown projection, a non-positive step or a major below
+  the minor is rejected and **nothing** is applied (`ViewState::apply` validates before it
+  mutates).
 - A `workplane` request is an **action**, not state: `"activate"` (the face under the
   pointer), `"clear"` or `"view"` (look down the active normal). The shell performs it
   on the viewport and reports the outcome; without a viewport it reports
@@ -357,6 +360,7 @@ registry.
 | `Toy_MakeSlab` | create a slab | the toy's `makeSlab`, wrapped as a command (asks for Width/Depth/Height) |
 | `Toy_Polyline` | start the polyline tool | `ForView`; returns `{"tool": "toy_polyline"}` |
 | `App_ToggleGrid` ✅ | show or hide the reference grid | `ForView`, checkable; `IsChecked` reads the mirrored `ViewState` |
+| `App_ToggleAxisCross` ✅ | show or hide the world triad | `ForView`, checkable, **independent of the grid**; on by default (upstream's `Std_ToggleAxisCross`) |
 | `App_ReloadGridSettings` ✅ | apply the grid step/extent preferences | `ForView`; reads `User parameter:BaseApp/Preferences/View` (`GridMinorStep`, `GridMajorStep`, `GridRadius`, 0 = auto) |
 | `App_ActivateWorkplane` ✅ | make the face under the pointer the workplane | `ForView`; returns `{"view": {"workplane": "activate"}}` |
 | `App_ClearWorkplane` ✅ | return to the world ground plane | `ForView` |

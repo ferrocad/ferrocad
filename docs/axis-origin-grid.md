@@ -25,6 +25,7 @@ mapping, and the slice path. **G0–G5 are built** (§1, §8).
 | Depth-bias overlays | ✅ `StateSnapshot.depth_bias`; `WIRE_DEPTH_BIAS` for a coplanar wire over a face |
 | Navigation cube | ✅ world-oriented; six faces + corners/edges, a compass ring, labels |
 | Grid state | ✅ an in-memory flag (`ViewState.grid`, A5), toggled by `App_ToggleGrid`, mirrored to `FreeCADGui.ViewState`, and applied to the viewport (`set_grid`); **G5** adds step/extent preferences |
+| Axis cross | ✅ **G5** — its own flag (`ViewState.axis_cross`, `App_ToggleAxisCross`), on by default like upstream's: the world triad, the origin node and the axis tags, independent of the grid |
 | Grid rendering | ✅ **G2** — `ferrocad_stage::grid` emits dots, major lines and the triad; the viewport draws them in the scene's depth pass |
 | Workplane / UCS | ✅ **G1/G3** — the vocabulary, and a face resolved from the display tessellation (`FaceFrame`) with hover preview, activation and `Esc` |
 | Per-vertex colour/alpha | ✅ **G0** — `Vertex.color` multiplies the packet colour; the grid carries its radial fade in it |
@@ -271,16 +272,13 @@ the triangle pipeline stays opaque.
 The navicube remains the **world camera compass**: its faces always mean world
 `Front/Top/Right/…`, and a click snaps the camera to a world direction, exactly as
 specified in [`navicube-spec.md`](navicube-spec.md). A local workplane never re-labels
-the cube.
-
-The compass ring is the one place a local frame may show through: when a workplane is
-active, the ring's cardinal heading is rotated by the workplane's `u` projected onto
-the world XY plane, so "heading left" on screen matches the sketch's `−U`. The ring is
-a heading aid, not a second coordinate system. **Decision flag** (§10.5): whether the
-ring rotates or gains a secondary inner tick set that shows both headings.
+the cube **or the compass ring**: the ring's cardinal letters are world bearings at all
+times. That matches upstream, whose navicube has no compass at all; a local frame is
+signalled in the scene (the local triad, its `U`/`V`/`N` tags and the bounded grid),
+never by rotating the compass.
 
 When the user clicks `TOP` while a workplane is active, the camera snaps to the
-**world** top; a separate command (`View → Workplane`) is the way to look down the
+**world** top; a separate command (`App_ViewWorkplane`) is the way to look down the
 active `n`. Keeping the cube world-only is deliberate: mixing the two would make
 "which way is up" ambiguous.
 
@@ -330,13 +328,18 @@ the visual work can use it.
   `view_workplane`) and reports the outcome; without a viewport it reports
   `view: no viewport`. `view_workplane` snaps the camera to the plane's frame
   (`U` right, `V` up, `N` toward the eye) with the usual 220 ms animation.
-- **Compass heading** — `NaviCube::set_heading_offset(Option<f64>)` rotates the
-  cardinal letters (the ring geometry stays fixed, §10.5). The viewport derives the
-  offset from the active plane's `U` in the ground plane, so a local frame turns the
-  lettering; clearing the plane restores the world heading.
+- **Axis cross** — `App_ToggleAxisCross` (checkable; on by default, as upstream's
+  `Std_ToggleAxisCross` is) drives `set_axis_cross`, independent of the grid: the triads,
+  the origin node and the `X`/`Y`/`Z` (or `U`/`V`/`N`) tags follow it, while
+  `App_ToggleGrid` owns only the dots and major lines. A local triad is drawn when the
+  cross is on with a workplane active, even if the grid is off.
+- **Compass** — world-locked. G5 first rotated the cardinal letters to the local `U`;
+  checking upstream (`NaviCube.cpp` has no compass at all) against the note's own
+  "the navicube is the world compass" rule, that was reverted. A local frame is
+  signalled in the scene only.
 - **Axis labels** — `X`/`Y`/`Z` (or `U`/`V`/`N` on a local frame) as 10 px monospace text
   at the projected triad-tip points, in the axis hues, drawn in the same gpui text layer
-  as the navicube labels.
+  as the navicube labels and hidden with the axis cross.
 
 ### G4 as built (2026-10-20) — snap feedback
 
@@ -398,9 +401,8 @@ the visual work can use it.
   different per-vertex alpha, so it is different geometry, not a different packet colour;
   without this the world level never receded.
 
-**Deferred:** the command that activates a face and the ring-heading sync belong to G5;
-until then a host calls `activate_hovered_workplane()` (a click handler or a command).
-The active face itself is never re-previewed.
+**Deferred:** the active face itself is never re-previewed. (The activating command
+landed in G5.)
 
 ### G0–G2 as built (2026-10-20)
 
@@ -438,8 +440,8 @@ The active face itself is never re-previewed.
   only planar faces and datums.
 - **No second renderer.** Grids are packets in the existing pass, not a screen-space
   compositing layer.
-- **No navicube relabelling.** The cube stays world; only the ring's heading may track a
-  local frame.
+- **No navicube relabelling.** The cube and its compass ring stay world; the local frame
+  is drawn in the scene (its triad, tags and grid), never in the navicube.
 - **No kernel dependency.** A workplane is an origin and a basis; resolving a face frame
   reads the tessellation.
 
@@ -472,8 +474,9 @@ open.
    immediate *highlight*.
 4. **Workplane stickiness.** Recommend sticky until `Esc` or a new face/datum click;
    never auto-clear on empty space (an accidental click must not drop the sketch).
-5. **Compass ring with a local plane.** Rotate the ring, or add a secondary tick set?
-   Recommend rotating the cardinal labels, keeping the ring geometry fixed.
+5. **Compass ring with a local plane.** Settled: the ring stays **world-locked**. A
+   local frame is shown by its own triad and grid instead. (Upstream has no compass; a
+   secondary tick at the local `U` remains an option if the ring ever needs it.)
 6. **`R_max` and regeneration.** Recommend `2.5 × camera distance`, clamped to 0.5–5 m,
    regenerated at 10 % pivot movement.
 7. **World grid under a local plane.** Recommend visible at 25 % alpha; a fully hidden
@@ -497,8 +500,8 @@ pattern (G0–G2 are built; the entries for them are live tests):
 - **`ferrocad_wgpu`** — the per-vertex colour multiply (a readback of a two-colour
   triangle), and the grid's line/point primitives in a real pass.
 - **`ferrocad_gpui`** — `ViewState::apply` validation and summaries, `App_ToggleGrid` /
-  `App_ReloadGridSettings` reaching the viewport (steps, radius), and a workplane action
-  reporting cleanly without a viewport.
+  `App_ToggleAxisCross` staying independent, `App_ReloadGridSettings` reaching the
+  viewport (steps, radius), and a workplane action reporting cleanly without a viewport.
 
 The visual language is not unit-testable beyond colour tokens, spacing and ordering;
 those are asserted, and the rest stays a spec.

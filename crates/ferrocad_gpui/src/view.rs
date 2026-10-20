@@ -17,6 +17,9 @@ pub struct ViewRequest {
     /// Show or hide the reference grid.
     #[serde(default)]
     pub grid: Option<bool>,
+    /// Show or hide the axis cross (the world triad, its origin node and axis tags).
+    #[serde(default)]
+    pub axis_cross: Option<bool>,
     /// `"persp"`/`"perspective"` or `"ortho"`/`"orthographic"`.
     #[serde(default)]
     pub projection: Option<String>,
@@ -94,6 +97,8 @@ impl ProjectionName {
 #[derive(Debug, Clone, PartialEq)]
 pub struct ViewState {
     pub grid: bool,
+    /// Whether the axis cross is shown (on by default, as upstream's is).
+    pub axis_cross: bool,
     pub projection: ProjectionName,
     /// The world grid's minor step (mm).
     pub grid_minor: f64,
@@ -107,6 +112,7 @@ impl Default for ViewState {
     fn default() -> Self {
         Self {
             grid: false,
+            axis_cross: true,
             projection: ProjectionName::Perspective,
             grid_minor: grid::MINOR_STEP,
             grid_major: grid::MAJOR_STEP,
@@ -160,6 +166,15 @@ impl ViewState {
                 changes.push(format!("grid {}", if grid { "on" } else { "off" }));
             }
         }
+        if let Some(axis_cross) = request.axis_cross {
+            if self.axis_cross != axis_cross {
+                self.axis_cross = axis_cross;
+                changes.push(format!(
+                    "axis cross {}",
+                    if axis_cross { "on" } else { "off" }
+                ));
+            }
+        }
         if let Some(projection) = projection {
             if self.projection != projection {
                 self.projection = projection;
@@ -211,6 +226,7 @@ mod tests {
     fn the_default_is_a_perspective_view_without_a_grid() {
         let state = ViewState::default();
         assert!(!state.grid);
+        assert!(state.axis_cross, "the axis cross is on by default");
         assert_eq!(state.projection, ProjectionName::Perspective);
         assert_eq!(state.projection.as_str(), "persp");
         assert_eq!(state.grid_minor, grid::MINOR_STEP);
@@ -246,6 +262,26 @@ mod tests {
         assert!(error.contains("isometric"), "{error}");
         assert!(!state.grid, "grid was not applied either");
         assert_eq!(state.projection, ProjectionName::Perspective);
+    }
+
+    #[test]
+    fn the_axis_cross_is_a_separate_flag() {
+        let mut state = ViewState::default();
+        let off = ViewRequest {
+            axis_cross: Some(false),
+            ..Default::default()
+        };
+        assert_eq!(state.apply(&off).unwrap(), "axis cross off");
+        assert!(!state.axis_cross);
+        assert!(!state.grid, "the grid is untouched");
+
+        // The grid does not imply the cross.
+        let grid = ViewRequest {
+            grid: Some(true),
+            ..Default::default()
+        };
+        assert_eq!(state.apply(&grid).unwrap(), "grid on");
+        assert!(!state.axis_cross);
     }
 
     #[test]

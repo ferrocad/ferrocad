@@ -303,14 +303,15 @@ Selection = _Selection()
 class _ViewState:
     """The shell's presentation state, pushed by the shell (read-only here).
 
-    ``grid`` is the reference-grid flag, ``projection`` is ``"persp"`` or
-    ``"ortho"``, ``grid_minor``/``grid_major`` are the world grid's steps (mm) and
-    ``grid_radius`` is a fixed extent (mm, or ``None`` for the camera-derived one). A
-    checkable command reads these in ``IsChecked``, which is what makes a
-    ``{"view": …}`` request close the loop.
+    ``grid`` is the reference-grid flag, ``axis_cross`` the world triad's, ``projection``
+    is ``"persp"`` or ``"ortho"``, ``grid_minor``/``grid_major`` are the world grid's
+    steps (mm) and ``grid_radius`` is a fixed extent (mm, or ``None`` for the
+    camera-derived one). A checkable command reads these in ``IsChecked``, which is what
+    makes a ``{"view": …}`` request close the loop.
     """
 
     grid = False
+    axis_cross = True
     projection = "persp"
     grid_minor = 10.0
     grid_major = 100.0

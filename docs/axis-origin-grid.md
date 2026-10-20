@@ -1,13 +1,13 @@
 # Axis, origin and grids: the spatial reference model
 
-Status: design + G0–G4 built (2026-10-20). Companion to [`gizmo-manipulators.md`](gizmo-manipulators.md),
+Status: design + G0–G5 built (2026-10-20). Companion to [`gizmo-manipulators.md`](gizmo-manipulators.md),
 [`navicube-spec.md`](navicube-spec.md), [`stage.md`](stage.md) and
 [`architecture.md`](architecture.md) §10.
 
 This note defines **one** model for the things that tell a user where they are: the
 world triad, the ground grid, local workplanes, face grids, and the snap feedback that
 ties them together. It records the visual language, the data model, the render
-mapping, and the slice path. **G0–G4 are built** (§1, §8); G5 is still a plan.
+mapping, and the slice path. **G0–G5 are built** (§1, §8).
 
 ---
 
@@ -24,12 +24,13 @@ mapping, and the slice path. **G0–G4 are built** (§1, §8); G5 is still a pla
 | Numeric pill | ✅ `readout_pill` in the viewport: 11 px monospace, `rgba(15,18,24,0.8)`, 1 px `#FFFFFF14` border |
 | Depth-bias overlays | ✅ `StateSnapshot.depth_bias`; `WIRE_DEPTH_BIAS` for a coplanar wire over a face |
 | Navigation cube | ✅ world-oriented; six faces + corners/edges, a compass ring, labels |
-| Grid state | ✅ an in-memory flag (`ViewState.grid`, A5), toggled by `App_ToggleGrid`, mirrored to `FreeCADGui.ViewState`, and applied to the viewport (`set_grid`) |
+| Grid state | ✅ an in-memory flag (`ViewState.grid`, A5), toggled by `App_ToggleGrid`, mirrored to `FreeCADGui.ViewState`, and applied to the viewport (`set_grid`); **G5** adds step/extent preferences |
 | Grid rendering | ✅ **G2** — `ferrocad_stage::grid` emits dots, major lines and the triad; the viewport draws them in the scene's depth pass |
 | Workplane / UCS | ✅ **G1/G3** — the vocabulary, and a face resolved from the display tessellation (`FaceFrame`) with hover preview, activation and `Esc` |
 | Per-vertex colour/alpha | ✅ **G0** — `Vertex.color` multiplies the packet colour; the grid carries its radial fade in it |
 
-G0–G4 closed the first three gaps. What remains is the policy/chrome (G5).
+G0–G5 closed the first three gaps. The model is fully built; what is left is tuning the
+visual tokens as the theme lands.
 
 ---
 
@@ -312,7 +313,30 @@ the visual work can use it.
 | **G2 — world grid + triad** ✅ | `ferrocad_stage::grid` producer and triad builder; the viewport draws them from their own queue; pick-through | viewport: `grid_queue` gains `Points`/`Lines`/`Triangles`; a click over a dot resolves to nothing; the ground cache survives an orbit while the triad rebuilds; `set_grid` toggles it; the shell forwards `ViewState.grid` |
 | **G3 — face workplane** ✅ | `SelectionRef` → `WorkplaneKind::Face`; hover blooms the face grid; activation/dimming; bounded extent; `depth_bias` | hovering a box face emits a local grid packet whose basis matches the face normal; activating it changes the snap plane; `Esc` clears |
 | **G4 — snap feedback** ✅ | aurora, projection rays, `ΔU`/`ΔV` pill; origin proximity; feature snaps | dragging across the workplane shows an aurora at major nodes, rays to U/V, and the pill's numbers match `Snap.local` |
-| **G5 — chrome + policy** | step/radius preferences, the workplane view command, ring-heading sync, origin labels | a preference change re-emits the grid without a restart; `View → Workplane` looks down `n`; the ring follows the active heading |
+| **G5 — chrome + policy** ✅ | step/radius preferences, the workplane view command, ring-heading sync, origin labels | a preference change re-emits the grid without a restart; `View → Workplane` looks down `n`; the ring follows the active heading |
+
+### G5 as built (2026-10-20) — policy and chrome
+
+- **Preferences** — `ViewState` gained `grid_minor`, `grid_major` (mm) and `grid_radius`
+  (mm; `0` means auto). `ViewRequest` carries them; `ViewState::apply` validates
+  (positive, major ≥ minor) before mutating, and summarises (`grid minor 2, grid major
+  20, grid radius 750`). The shell forwards them to `set_grid_steps` / `set_grid_radius`,
+  which recompile the grid, so a change lands without a restart. `App_ReloadGridSettings`
+  reads `User parameter:BaseApp/Preferences/View`, so a preference is a parameter write
+  plus one command.
+- **Workplane commands** — `App_ActivateWorkplane`, `App_ClearWorkplane`,
+  `App_ViewWorkplane` return `{"view": {"workplane": …}}`. The shell performs the
+  action on the viewport (`activate_hovered_workplane` / `clear_workplane` /
+  `view_workplane`) and reports the outcome; without a viewport it reports
+  `view: no viewport`. `view_workplane` snaps the camera to the plane's frame
+  (`U` right, `V` up, `N` toward the eye) with the usual 220 ms animation.
+- **Compass heading** — `NaviCube::set_heading_offset(Option<f64>)` rotates the
+  cardinal letters (the ring geometry stays fixed, §10.5). The viewport derives the
+  offset from the active plane's `U` in the ground plane, so a local frame turns the
+  lettering; clearing the plane restores the world heading.
+- **Axis labels** — `X`/`Y`/`Z` (or `U`/`V`/`N` on a local frame) as 10 px monospace text
+  at the projected triad-tip points, in the axis hues, drawn in the same gpui text layer
+  as the navicube labels.
 
 ### G4 as built (2026-10-20) — snap feedback
 
@@ -423,12 +447,13 @@ The active face itself is never re-previewed.
 
 ## 10. Decisions to settle
 
-**Settled by G0–G3:** 0 (Z-up), 1 (per-vertex colour), 2 (1 px points, with the 4 px
+**Settled by G0–G5:** 0 (Z-up), 1 (per-vertex colour), 2 (1 px points, with the 4 px
 culling rule), 3 (the 120 ms hover dwell, with an immediate hover report), 4 (sticky
-until `Esc` or another activation), 6 (`2.5 ×` eye distance, clamped 500–5 000 mm; the
-cache key is the exact spec, so a zoom rebuilds and an orbit does not — the 10 %
-hysteresis can come with G5's preferences), 7 (the world grid drops to 25 % under a local
-plane; its triad to 30 %). The rest remain open.
+until `Esc` or another activation), 5 (rotate the compass letters, keep the ring fixed),
+6 (`2.5 ×` eye distance, clamped 500–5 000 mm, overridable by the `grid_radius`
+preference; the cache key is the exact spec, so a zoom rebuilds and an orbit does not),
+7 (the world grid drops to 25 % under a local plane; its triad to 30 %). The rest remain
+open.
 
 0. **World up-axis.** The grid model assumes **Z-up** (`XY` ground), consistent with
    `snap_to_geometry`'s `z = 0`, the toy's `Height`, and OCCT. `navicube-spec.md` §2
@@ -471,6 +496,9 @@ pattern (G0–G2 are built; the entries for them are live tests):
   settle, a vertex snap, a grid snap's rays and local coordinates, and the origin bloom.
 - **`ferrocad_wgpu`** — the per-vertex colour multiply (a readback of a two-colour
   triangle), and the grid's line/point primitives in a real pass.
+- **`ferrocad_gpui`** — `ViewState::apply` validation and summaries, `App_ToggleGrid` /
+  `App_ReloadGridSettings` reaching the viewport (steps, radius), and a workplane action
+  reporting cleanly without a viewport.
 
 The visual language is not unit-testable beyond colour tokens, spacing and ordering;
 those are asserted, and the rest stays a spec.

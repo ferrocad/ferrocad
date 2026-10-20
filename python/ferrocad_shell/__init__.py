@@ -413,6 +413,10 @@ def set_view_state(state_json: str) -> str:
     state = json.loads(state_json)
     FreeCADGui.ViewState.grid = bool(state.get("grid", False))
     FreeCADGui.ViewState.projection = str(state.get("projection", "persp"))
+    FreeCADGui.ViewState.grid_minor = float(state.get("grid_minor", 10.0))
+    FreeCADGui.ViewState.grid_major = float(state.get("grid_major", 100.0))
+    radius = state.get("grid_radius")
+    FreeCADGui.ViewState.grid_radius = None if radius is None else float(radius)
     return _json({"ok": True})
 
 
@@ -548,3 +552,83 @@ class _GridCommand:
 
 
 FreeCADGui.addCommand("App_ToggleGrid", _GridCommand())
+
+
+class _ReloadGridSettingsCommand:
+    """``App_ReloadGridSettings`` — apply the grid preferences without a restart.
+
+    Reads ``User parameter:BaseApp/Preferences/View`` (``GridMinorStep``,
+    ``GridMajorStep`` and ``GridRadius``) and returns them as a ``view`` request. A
+    radius of 0 restores the camera-derived extent.
+    """
+
+    def GetResources(self):
+        return {
+            "MenuText": "Reload grid settings",
+            "ToolTip": "Apply the grid step and extent preferences",
+            "Group": "View",
+            "CmdType": "ForView",
+        }
+
+    def Activated(self):
+        prefs = FreeCAD.ParamGet("User parameter:BaseApp/Preferences/View")
+        return {
+            "view": {
+                "grid_minor": float(prefs.GetFloat("GridMinorStep", 10.0)),
+                "grid_major": float(prefs.GetFloat("GridMajorStep", 100.0)),
+                "grid_radius": float(prefs.GetFloat("GridRadius", 0.0)),
+            }
+        }
+
+
+FreeCADGui.addCommand("App_ReloadGridSettings", _ReloadGridSettingsCommand())
+
+
+class _ActivateWorkplaneCommand:
+    """``App_ActivateWorkplane`` — make the face under the pointer the workplane."""
+
+    def GetResources(self):
+        return {
+            "MenuText": "Activate workplane",
+            "ToolTip": "Sketch on the face under the pointer",
+            "Group": "View",
+            "CmdType": "ForView",
+        }
+
+    def Activated(self):
+        return {"view": {"workplane": "activate"}}
+
+
+class _ClearWorkplaneCommand:
+    """``App_ClearWorkplane`` — return to the world ground plane."""
+
+    def GetResources(self):
+        return {
+            "MenuText": "Clear workplane",
+            "ToolTip": "Return to the world frame",
+            "Group": "View",
+            "CmdType": "ForView",
+        }
+
+    def Activated(self):
+        return {"view": {"workplane": "clear"}}
+
+
+class _ViewWorkplaneCommand:
+    """``App_ViewWorkplane`` — look down the active workplane's normal."""
+
+    def GetResources(self):
+        return {
+            "MenuText": "View workplane",
+            "ToolTip": "Look down the active workplane's normal",
+            "Group": "View",
+            "CmdType": "ForView",
+        }
+
+    def Activated(self):
+        return {"view": {"workplane": "view"}}
+
+
+FreeCADGui.addCommand("App_ActivateWorkplane", _ActivateWorkplaneCommand())
+FreeCADGui.addCommand("App_ClearWorkplane", _ClearWorkplaneCommand())
+FreeCADGui.addCommand("App_ViewWorkplane", _ViewWorkplaneCommand())

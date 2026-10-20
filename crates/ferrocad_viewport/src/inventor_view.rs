@@ -34,7 +34,7 @@ use ferrocad_stage::{
     SnapCandidate, SnapContext, SnapKind, Tool, TransformGizmo, Workplane, feedback, grid,
     snap_to_geometry_with,
 };
-use ferrocad_stage::screen::project_device;
+use ferrocad_stage::screen::{project_device, scale_for};
 use ferrocad_types::{Matrix4, Placement, Rotation, Vector3};
 use gpui::{
     AnyElement, AppContext, Bounds, Context, DragMoveEvent, EventEmitter, FocusHandle, IntoElement,
@@ -168,6 +168,12 @@ pub struct InventorViewport<V: InventorView> {
     hover_report: HoverReport,
     /// The reference grid (G2), when enabled.
     grid: Option<GridMesh>,
+    /// The world grid's minor and major steps (mm, G5 preferences; the local face grid
+    /// keeps its own 1/10 mm levels).
+    grid_minor: f64,
+    grid_major: f64,
+    /// A fixed world-grid extent (mm); `None` derives it from the camera.
+    grid_radius: Option<f64>,
     /// The active local workplane (G3): sticky until `Esc` or another activation.
     active_workplane: Option<FaceFrame>,
     /// The face under the pointer, resolved from the stage's display tessellation. Its
@@ -568,6 +574,23 @@ impl FeedbackMeshes {
 /// it the mesh is too dense for a midpoint to mean anything.
 const MAX_EDGE_CANDIDATES: usize = 1024;
 
+/// The world triad's axis tags, in the visual language's hues (sRGB, `#F87171` /
+/// `#4ADE80` / `#38BDF8`).
+const AXIS_X_COLOR: u32 = 0xf87171;
+const AXIS_Y_COLOR: u32 = 0x4ade80;
+const AXIS_Z_COLOR: u32 = 0x38bdf8;
+const AXIS_LABEL_ALPHA: f32 = 0.65;
+
+/// A triad axis tag: `X`/`Y`/`Z` at a workplane's `U`/`V`/`N` stem tip.
+#[derive(Clone, Copy, Debug)]
+struct AxisLabel {
+    text: char,
+    /// Element-local logical pixels.
+    position: [f32; 2],
+    /// sRGB ink.
+    color: u32,
+}
+
 /// A draw packet for the feedback overlay: untagged (never picked) and depth-free, so
 /// the aurora and rays are drawn over the scene.
 fn feedback_packet(
@@ -651,6 +674,9 @@ impl<V: InventorView> InventorViewport<V> {
             selection: None,
             hover_report: HoverReport::default(),
             grid: None,
+            grid_minor: grid::MINOR_STEP,
+            grid_major: grid::MAJOR_STEP,
+            grid_radius: None,
             active_workplane: None,
             hover_face: None,
             grid_queue: RenderQueue::default(),
@@ -1998,6 +2024,47 @@ impl<V: InventorView> InventorViewport<V> {
         self.grid.is_some()
     }
 
+    /// Set the world grid's minor and major steps (mm). Invalid pairs (non-positive, or
+    /// a major below the minor) are ignored. Returns whether the grid changed.
+    pub fn set_grid_steps(&mut self, minor: f64, major: f64) -> bool {
+        if !(minor.is_finite() && minor > 0.0 && major.is_finite() && major > 0.0)
+            || major < minor - 1e-9
+        {
+            return false;
+        }
+        if (self.grid_minor - minor).abs() < 1e-12 && (self.grid_major - major).abs() < 1e-12 {
+            return false;
+        }
+        self.grid_minor = minor;
+        self.grid_major = major;
+        self.recompile();
+        true
+    }
+
+    /// The world grid's `(minor, major)` steps, in millimetres.
+    pub fn grid_steps(&self) -> (f64, f64) {
+        (self.grid_minor, self.grid_major)
+    }
+
+    /// Fix the world grid's extent (mm), or return to the camera-derived radius with
+    /// `None`. A non-positive radius is ignored.
+    pub fn set_grid_radius(&mut self, radius: Option<f64>) -> bool {
+        if radius.is_some_and(|radius| !(radius.is_finite() && radius > 0.0)) {
+            return false;
+        }
+        if self.grid_radius == radius {
+            return false;
+        }
+        self.grid_radius = radius;
+        self.recompile();
+        true
+    }
+
+    /// The fixed world-grid extent, or `None` when it follows the camera.
+    pub fn grid_radius(&self) -> Option<f64> {
+        self.grid_radius
+    }
+
     /// Rebuild the grid for the current camera: the effective steps (screen-space
     /// culling), the radius, and the screen-facing triad.
     ///
@@ -2026,14 +2093,18 @@ impl<V: InventorView> InventorViewport<V> {
         let (minor, major) = grid::effective_steps(
             &self.camera,
             &world_plane,
-            grid::MINOR_STEP,
-            grid::MAJOR_STEP,
+            self.grid_minor,
+            self.grid_major,
+        );
+        let radius = self.grid_radius.map_or_else(
+            || GridSpec::radius_for(&self.camera),
+            |radius| radius.clamp(grid::RADIUS_RANGE.0, grid::RADIUS_RANGE.1),
         );
         let world_spec = GridSpec {
             workplane: world_plane,
             minor,
             major,
-            radius: GridSpec::radius_for(&self.camera),
+            radius,
         };
         let mut world_style = GridStyle::default();
         if active.is_some() || hover.is_some() {
@@ -2148,6 +2219,73 @@ impl<V: InventorView> InventorViewport<V> {
     /// active.
     pub fn clear_workplane(&mut self) -> bool {
         self.set_workplane(None)
+    }
+
+    /// Orient the camera down the active workplane's normal, with the plane's `V` axis
+    /// up (the `View → Workplane` command, G5). The camera keeps its eye distance and
+    /// animates there. Returns whether a workplane is active.
+    pub fn view_workplane(&mut self) -> bool {
+        let Some(frame) = self.active_workplane.as_ref() else {
+            return false;
+        };
+        let plane = &frame.plane;
+        // The view basis: `U` right, `V` up, `N` toward the eye (view-space +Z).
+        let view = Matrix4 {
+            m: [
+                plane.u.x, plane.u.y, plane.u.z, 0.0, plane.v.x, plane.v.y, plane.v.z, 0.0,
+                plane.n.x, plane.n.y, plane.n.z, 0.0, 0.0, 0.0, 0.0, 1.0,
+            ],
+        };
+        let target = Rotation::from_matrix(&view);
+        self.snap = Some(SnapAnimation::to(
+            target,
+            &self.camera,
+            Duration::from_millis(220),
+        ));
+        true
+    }
+
+    /// The bearing of the active workplane's `U` axis in the ground plane (radians CCW
+    /// from world +X), for the compass ring. `None` for a vertical `U` or no workplane.
+    fn workplane_heading(&self) -> Option<f64> {
+        let plane = &self.active_workplane.as_ref()?.plane;
+        let horizontal = (plane.u.x * plane.u.x + plane.u.y * plane.u.y).sqrt();
+        if horizontal < 1e-9 {
+            return None;
+        }
+        Some(plane.u.y.atan2(plane.u.x))
+    }
+
+    /// The triad's axis tags (`X`/`Y`/`Z` for the world, `U`/`V`/`N` for a workplane),
+    /// projected at the stem tips. Empty while the grid (and so the triad) is off.
+    fn axis_labels(&self) -> Vec<AxisLabel> {
+        if self.grid.is_none() {
+            return Vec::new();
+        }
+        let (plane, letters) = match &self.active_workplane {
+            Some(frame) => (frame.plane.clone(), ['U', 'V', 'N']),
+            None => (Workplane::world(), ['X', 'Y', 'Z']),
+        };
+        let colors = [AXIS_X_COLOR, AXIS_Y_COLOR, AXIS_Z_COLOR];
+        let axes = [plane.u, plane.v, plane.n];
+        // A hair beyond the ribbon tip, so the glyph does not sit on the stem.
+        let length = scale_for(&self.camera, plane.origin, grid::TRIAD_PIXELS * 1.08);
+        axes.iter()
+            .zip(letters)
+            .zip(colors)
+            .filter_map(|((axis, text), color)| {
+                let tip = plane.origin.add(&axis.scale(length));
+                let device = project_device(&self.camera, tip)?;
+                Some(AxisLabel {
+                    text,
+                    position: self.camera.viewport.to_logical([
+                        device[0].round() as i32,
+                        device[1].round() as i32,
+                    ]),
+                    color,
+                })
+            })
+            .collect()
     }
 
     /// The snap plane: the active workplane when one is set, else the world grid.
@@ -2323,12 +2461,16 @@ impl<V: InventorView> InventorViewport<V> {
     /// The local `(u, v)` of the tool's current snap, for the host and the dimension
     /// pill. `None` when no tool is snapping or no workplane is known.
     pub fn snap_local(&self) -> Option<[f64; 2]> {
-        self.snap_feedback.as_ref().and_then(|feedback| feedback.snap.local)
+        self.snap_feedback
+            .as_ref()
+            .and_then(|feedback| feedback.snap.local)
     }
 
     /// What the tool's pointer snapped to, if anything.
     pub fn snap_kind(&self) -> Option<SnapKind> {
-        self.snap_feedback.as_ref().map(|feedback| feedback.snap.kind)
+        self.snap_feedback
+            .as_ref()
+            .map(|feedback| feedback.snap.kind)
     }
 
     /// The logical anchor of the snap's dimension pill: the snapped point, projected.
@@ -2395,8 +2537,12 @@ impl<V: InventorView> InventorViewport<V> {
         // The aurora's flash decays over 120 ms and the camera sets its size, so the
         // feedback is rebuilt per paint (a handful of vertices).
         self.rebuild_feedback();
+        let heading = self.workplane_heading();
         if let Some(cube) = self.navicube.as_mut() {
             cube.sync(&self.camera);
+            // A local workplane turns the compass lettering to its own heading (the
+            // ring geometry stays fixed).
+            cube.set_heading_offset(heading);
         }
         // A directive-driven overlay with no explicit orientation mirrors the main
         // camera; one with an orientation is fixed (set once from the directive).
@@ -2706,6 +2852,14 @@ impl<V: InventorView + 'static> Render for InventorViewport<V> {
             root
         } else {
             root.child(navicube_labels(&labels))
+        };
+
+        // The triad's `X`/`Y`/`Z` (or `U`/`V`/`N`) tags, at the projected stem tips.
+        let axis = self.axis_labels();
+        let root = if axis.is_empty() {
+            root
+        } else {
+            root.child(axis_labels(&axis))
         };
 
         // The gizmo's numeric tag follows the active drag: anchored at the stem tip or
@@ -3068,6 +3222,31 @@ fn gizmo_modifiers(modifiers: gpui::Modifiers) -> GizmoModifiers {
 
 /// The gizmo's or scrubber's projected numeric tag. A plain text layer: no id or
 /// hitbox, so it never steals pointer events from the viewport or the chrome.
+/// The triad's axis tags: 10 px monospace at the stem tips, in the axis hues.
+fn axis_labels(labels: &[AxisLabel]) -> impl IntoElement {
+    let mut layer = div().absolute().left(px(0.)).top(px(0.)).w_full().h_full();
+    for label in labels {
+        let alpha = (AXIS_LABEL_ALPHA * 255.0).round() as u32;
+        layer = layer.child(
+            div()
+                .absolute()
+                .left(px(label.position[0] - 5.0))
+                .top(px(label.position[1] - 6.0))
+                .w(px(10.0))
+                .h(px(12.0))
+                .flex()
+                .items_center()
+                .justify_center()
+                .text_size(px(10.0))
+                .line_height(px(11.5))
+                .font_family("monospace")
+                .text_color(rgba(label.color << 8 | alpha))
+                .child(label.text.to_string()),
+        );
+    }
+    layer
+}
+
 /// A snap's dimension pill: `ΔU` over `ΔV`, in the readout tokens.
 fn snap_pill(local: [f64; 2], anchor: [f32; 2]) -> impl IntoElement {
     div()
@@ -5239,5 +5418,142 @@ mod tests {
         assert!(view.snap_feedback.is_none());
         assert!(view.feedback_queue.is_empty());
         assert_eq!(view.snap_kind(), None);
+    }
+
+    #[test]
+    fn the_grid_steps_are_a_preference() {
+        let mut view = grid_view();
+        assert_eq!(
+            view.grid_steps(),
+            (
+                ferrocad_stage::grid::MINOR_STEP,
+                ferrocad_stage::grid::MAJOR_STEP
+            )
+        );
+        assert!(view.set_grid_steps(20.0, 200.0));
+        assert_eq!(view.grid_steps(), (20.0, 200.0));
+
+        // Every dot sits on the new pitch (the major lines are 200).
+        let dots = &view.grid_queue.packets[0]
+            .geometry
+            .as_ref()
+            .expect("fresh geometry")
+            .vertices;
+        assert!(!dots.is_empty());
+        assert!(dots.iter().all(|dot| {
+            let x = f64::from(dot.position[0]) / 20.0;
+            let y = f64::from(dot.position[1]) / 20.0;
+            (x - x.round()).abs() < 1e-4 && (y - y.round()).abs() < 1e-4
+        }));
+
+        // An invalid pair leaves the preference alone.
+        assert!(!view.set_grid_steps(0.0, 100.0));
+        assert!(!view.set_grid_steps(100.0, 10.0));
+        assert_eq!(view.grid_steps(), (20.0, 200.0));
+    }
+
+    #[test]
+    fn a_fixed_grid_radius_sets_the_extent() {
+        let mut view = grid_view();
+        assert_eq!(view.grid_radius(), None, "camera-derived by default");
+        assert!(view.set_grid_radius(Some(1000.0)));
+        assert_eq!(view.grid_radius(), Some(1000.0));
+
+        let dots = &view.grid_queue.packets[0]
+            .geometry
+            .as_ref()
+            .expect("fresh geometry")
+            .vertices;
+        let furthest = dots
+            .iter()
+            .map(|dot| {
+                (f64::from(dot.position[0]).powi(2) + f64::from(dot.position[1]).powi(2)).sqrt()
+            })
+            .fold(0.0, f64::max);
+        assert!(
+            furthest > 500.0,
+            "beyond the identity camera's default: {furthest}"
+        );
+        assert!(
+            furthest <= 1000.0 + 1e-3,
+            "inside the fixed radius: {furthest}"
+        );
+
+        assert!(view.set_grid_radius(None));
+        assert_eq!(view.grid_radius(), None);
+        assert!(
+            !view.set_grid_radius(Some(-1.0)),
+            "a negative radius is ignored"
+        );
+    }
+
+    #[test]
+    fn view_workplane_looks_down_the_active_normal() {
+        let mut view = slab_view();
+        view.handle_pointer([30.0, 50.0]);
+        assert!(view.activate_hovered_workplane());
+        assert!(view.view_workplane());
+
+        let target = view
+            .snap
+            .as_ref()
+            .expect("a camera snap")
+            .target()
+            .to_matrix();
+        let normal = view.active_workplane().expect("a plane").plane.n;
+        let in_view = target.transform(&normal);
+        assert!(
+            (in_view.z - 1.0).abs() < 1e-6 && in_view.x.abs() < 1e-6 && in_view.y.abs() < 1e-6,
+            "the normal points at the eye: {in_view:?}"
+        );
+    }
+
+    #[test]
+    fn the_compass_follows_the_active_workplane_heading() {
+        use ferrocad_stage::WorkplaneKind;
+
+        let camera = Camera {
+            viewport: ferrocad_graphics::Viewport::new([100, 100], 1.0),
+            ..Camera::identity()
+        };
+        let cube = NaviCube::new(camera.viewport);
+        let mut view = InventorViewport::new(fake(ImageData::default()), camera, Scene::default())
+            .with_navicube(cube);
+        // A frame whose `U` points along world +Y: the ring's heading turns 90°.
+        let plane = Workplane::new(
+            Vector3::new(0.0, 0.0, 0.5),
+            Vector3::new(0.0, 1.0, 0.0),
+            Vector3::new(-1.0, 0.0, 0.0),
+            WorkplaneKind::Datum("Rotated".into()),
+        )
+        .expect("a frame");
+        view.set_workplane(Some(FaceFrame { plane, radius: 5.0 }));
+        view.refresh();
+
+        let offset = view.navicube.as_ref().expect("a navicube").heading_offset();
+        assert!(
+            (offset - std::f64::consts::FRAC_PI_2).abs() < 1e-9,
+            "the ring follows U: {offset}"
+        );
+    }
+
+    #[test]
+    fn the_triad_tips_carry_axis_tags() {
+        use ferrocad_stage::WorkplaneKind;
+
+        let mut view = grid_view();
+        let texts: Vec<char> = view.axis_labels().iter().map(|label| label.text).collect();
+        assert_eq!(texts, vec!['X', 'Y', 'Z']);
+
+        let plane = Workplane::new(
+            Vector3::new(0.0, 0.0, 0.5),
+            Vector3::new(1.0, 0.0, 0.0),
+            Vector3::new(0.0, 1.0, 0.0),
+            WorkplaneKind::Datum("Local".into()),
+        )
+        .expect("a frame");
+        view.set_workplane(Some(FaceFrame { plane, radius: 5.0 }));
+        let texts: Vec<char> = view.axis_labels().iter().map(|label| label.text).collect();
+        assert_eq!(texts, vec!['U', 'V', 'N']);
     }
 }

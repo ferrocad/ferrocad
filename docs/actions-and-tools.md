@@ -303,15 +303,22 @@ same dict. This is what lets a **Python** workbench toggle the grid (G5) or star
 interactive tool without a second hook:
 
 ```python
-return {"view": {"grid": False}}          # applied by the shell, not undoable
-return {"tool": "toy_measure"}            # starts a registered tool session
+return {"view": {"grid": False}}                       # applied by the shell, not undoable
+return {"view": {"grid_minor": 1.0, "grid_major": 10.0}}  # grid preferences (G5)
+return {"view": {"workplane": "activate"}}              # G5: the hovered face becomes the UCS
+return {"tool": "toy_measure"}                         # starts a registered tool session
 ```
 
 - A `view` request is applied by the shell and mirrored to `FreeCADGui.ViewState`:
-  `{"grid": true}` flips the reference-grid flag (rendering is G5), and
-  `{"projection": "ortho"}` switches the viewport's projection (framing preserved).
-  An unknown projection is rejected and **nothing** is applied (`ViewState::apply`
-  validates before it mutates).
+  `{"grid": true}` flips the reference-grid flag, `{"projection": "ortho"}` switches
+  the viewport's projection (framing preserved), and `grid_minor`/`grid_major`
+  (mm) / `grid_radius` (mm, 0 = camera-derived) change the world grid's steps and
+  extent. An unknown projection, a non-positive step or a major below the minor is
+  rejected and **nothing** is applied (`ViewState::apply` validates before it mutates).
+- A `workplane` request is an **action**, not state: `"activate"` (the face under the
+  pointer), `"clear"` or `"view"` (look down the active normal). The shell performs it
+  on the viewport and reports the outcome; without a viewport it reports
+  `view: no viewport`.
 - A `tool` request resolves through `Contributions::with_tool(id, factory)`, the same
   edition-level registry as the manipulators. The tool owns pointer events and draws
   transient geometry; the shell clears the selection's manipulators/gizmo while it
@@ -349,7 +356,11 @@ registry.
 | `App_Undo` / `App_Redo` | S2 | `IsActive` from `getAvailableUndos` |
 | `Toy_MakeSlab` | create a slab | the toy's `makeSlab`, wrapped as a command (asks for Width/Depth/Height) |
 | `Toy_Polyline` | start the polyline tool | `ForView`; returns `{"tool": "toy_polyline"}` |
-| `App_ToggleGrid` ✅ | show or hide the reference grid | `ForView`, checkable; `IsChecked` reads the mirrored `ViewState`; rendering lands with G5 |
+| `App_ToggleGrid` ✅ | show or hide the reference grid | `ForView`, checkable; `IsChecked` reads the mirrored `ViewState` |
+| `App_ReloadGridSettings` ✅ | apply the grid step/extent preferences | `ForView`; reads `User parameter:BaseApp/Preferences/View` (`GridMinorStep`, `GridMajorStep`, `GridRadius`, 0 = auto) |
+| `App_ActivateWorkplane` ✅ | make the face under the pointer the workplane | `ForView`; returns `{"view": {"workplane": "activate"}}` |
+| `App_ClearWorkplane` ✅ | return to the world ground plane | `ForView` |
+| `App_ViewWorkplane` ✅ | look down the active workplane's normal | `ForView`; the camera snaps to the plane's `V`-up frame |
 | `Part_Box` (later) | create a Part box | the edition's script |
 
 `CmdType` is carried as metadata: `ForEdit` commands are undoable document edits,

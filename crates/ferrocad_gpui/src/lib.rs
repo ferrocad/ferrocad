@@ -42,7 +42,7 @@ pub use display::{DisplaySync, StageMesh};
 pub use selection::SelectionItem;
 pub use shell::{Shell, ShellModel};
 pub use shortcuts::Accelerator;
-pub use view::{ProjectionName, ViewRequest, ViewState};
+pub use view::{ProjectionName, ViewRequest, ViewState, WorkplaneAction};
 
 /// A zero-copy viewport presenter for this build and platform, if one is available.
 ///

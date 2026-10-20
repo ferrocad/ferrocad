@@ -30,7 +30,7 @@ use crate::display::{DisplaySync, StageMesh};
 use crate::python::{self, Bootstrap, DocumentNode, PropRow};
 use crate::selection::{self, SelectionItem};
 use crate::shortcuts::Accelerator;
-use crate::view::{ProjectionName, ViewRequest, ViewState};
+use crate::view::{ProjectionName, ViewRequest, ViewState, WorkplaneAction};
 
 const BG: u32 = 0x101216;
 const PANEL: u32 = 0x16181d;
@@ -261,8 +261,13 @@ impl Shell {
             viewport.set_stage(stage);
         }
         // The view state is the source of truth: a grid toggled before the viewport
-        // existed is applied now.
-        viewport.set_grid(self.model.lock().unwrap().view.grid);
+        // existed is applied now, with its steps.
+        {
+            let state = self.model.lock().unwrap().view.clone();
+            viewport.set_grid(state.grid);
+            viewport.set_grid_steps(state.grid_minor, state.grid_major);
+            viewport.set_grid_radius(state.grid_radius);
+        }
         // A tool started before the viewport existed (a script, a command while no
         // GPU was available) is applied now that there is one.
         if let Some(id) = self.active_tool.as_deref() {
@@ -726,14 +731,17 @@ impl Shell {
         cx.notify();
     }
 
-    /// Apply a command's presentation request (A5): update the shell's view state,
-    /// mirror it to `FreeCADGui.ViewState`, and apply the projection to the viewport
-    /// when one exists. Returns a one-line summary for the status bar.
+    /// Apply a command's presentation request (A5, G5): perform a workplane action, or
+    /// update the shell's view state, mirror it to `FreeCADGui.ViewState`, and apply it
+    /// to the viewport when one exists. Returns a one-line summary for the status bar.
     fn apply_view(
         &mut self,
         request: &ViewRequest,
         cx: &mut Context<Self>,
     ) -> Result<String, String> {
+        if let Some(action) = request.workplane_action()? {
+            return self.apply_workplane(action, cx);
+        }
         let mut state = self.model.lock().unwrap().view.clone();
         let summary = state.apply(request)?;
         self.model.lock().unwrap().view = state.clone();
@@ -743,9 +751,12 @@ impl Shell {
         if let Some(viewport) = self.viewport.clone() {
             let orthographic = state.projection == ProjectionName::Orthographic;
             let grid = state.grid;
+            let (minor, major, radius) = (state.grid_minor, state.grid_major, state.grid_radius);
             viewport.update(cx, |viewport, cx| {
                 let mut changed = viewport.set_orthographic(orthographic);
                 changed |= viewport.set_grid(grid);
+                changed |= viewport.set_grid_steps(minor, major);
+                changed |= viewport.set_grid_radius(radius);
                 if changed {
                     cx.notify();
                 }
@@ -754,6 +765,45 @@ impl Shell {
         // The mirror above makes `IsChecked` see the new state.
         self.refresh_commands(cx);
         Ok(summary)
+    }
+
+    /// Perform a workplane action on the viewport (G5). These are not presentation
+    /// state: they act on the pointer hover, the sticky plane and the camera.
+    fn apply_workplane(
+        &mut self,
+        action: WorkplaneAction,
+        cx: &mut Context<Self>,
+    ) -> Result<String, String> {
+        let Some(viewport) = self.viewport.clone() else {
+            return Err("no viewport".to_string());
+        };
+        Ok(viewport.update(cx, |viewport, cx| {
+            let summary = match action {
+                WorkplaneAction::Activate => {
+                    if viewport.activate_hovered_workplane() {
+                        "workplane activated".to_string()
+                    } else {
+                        "no face under the pointer".to_string()
+                    }
+                }
+                WorkplaneAction::Clear => {
+                    if viewport.clear_workplane() {
+                        "workplane cleared".to_string()
+                    } else {
+                        "no active workplane".to_string()
+                    }
+                }
+                WorkplaneAction::View => {
+                    if viewport.view_workplane() {
+                        "looking down the workplane".to_string()
+                    } else {
+                        "no active workplane".to_string()
+                    }
+                }
+            };
+            cx.notify();
+            summary
+        }))
     }
 
     /// Start an interactive tool through the edition's registry (A5). The tool owns
@@ -2157,5 +2207,78 @@ if "Test_Tool" not in FreeCADGui.listCommands():
         cx.update(|_window, cx| {
             assert!(viewport.read(cx).grid_enabled(), "and back on");
         });
+    }
+
+    /// G5: the grid preferences (steps and extent) are read from the parameter group by
+    /// `App_ReloadGridSettings` and reach the viewport without a restart.
+    #[gpui::test]
+    fn a_grid_settings_request_reaches_the_viewport(cx: &mut TestAppContext) {
+        let _guard = crate::PYTHON_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let model = Shell::boot().expect("boot shell");
+        let window = cx.update(|cx| {
+            let model = model.clone();
+            cx.open_window(Default::default(), move |_window, cx| {
+                cx.new(|cx| Shell::from_model(model.clone(), cx))
+            })
+            .unwrap()
+        });
+        let mut cx = VisualTestContext::from_window(window.into(), cx);
+        let shell: Entity<Shell> = window.root(&mut cx).unwrap();
+
+        let attached = cx.update(|_window, cx| {
+            shell.update(cx, |shell, cx| {
+                shell.enable_viewport(cx);
+                shell.viewport.is_some()
+            })
+        });
+
+        // A preference change is just a parameter write; the command applies it.
+        let script = r#"
+import FreeCAD
+prefs = FreeCAD.ParamGet("User parameter:BaseApp/Preferences/View")
+prefs.SetFloat("GridMinorStep", 2.0)
+prefs.SetFloat("GridMajorStep", 20.0)
+prefs.SetFloat("GridRadius", 750.0)
+"#;
+        let evaluated = cx.update(|_window, _cx| crate::python::evaluate(script));
+        assert!(evaluated.unwrap().ok);
+        cx.update(|_window, cx| {
+            shell.update(cx, |shell, cx| {
+                shell.run_command("App_ReloadGridSettings", cx)
+            })
+        });
+
+        assert_eq!(
+            model.lock().unwrap().status,
+            "grid minor 2, grid major 20, grid radius 750"
+        );
+        assert_eq!(model.lock().unwrap().view.grid_minor, 2.0);
+        assert_eq!(model.lock().unwrap().view.grid_major, 20.0);
+        assert_eq!(model.lock().unwrap().view.grid_radius, Some(750.0));
+
+        if !attached {
+            eprintln!("no GPU adapter available; skipping the viewport step assertion");
+            return;
+        }
+        let viewport = cx.update(|_window, cx| shell.read(cx).viewport.clone().unwrap());
+        cx.update(|_window, cx| {
+            assert_eq!(viewport.read(cx).grid_steps(), (2.0, 20.0));
+            assert_eq!(viewport.read(cx).grid_radius(), Some(750.0));
+        });
+    }
+
+    /// G5: a workplane action is viewport work, so a headless shell reports it cleanly.
+    #[gpui::test]
+    fn a_workplane_request_needs_a_viewport(cx: &mut TestAppContext) {
+        let _guard = crate::PYTHON_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let model = Shell::boot().expect("boot shell");
+        let shell = cx.update(|cx| cx.new(|cx| Shell::from_model(model.clone(), cx)));
+
+        cx.update(|cx| {
+            shell.update(cx, |shell, cx| {
+                shell.run_command("App_ActivateWorkplane", cx)
+            })
+        });
+        assert_eq!(model.lock().unwrap().status, "view: no viewport");
     }
 }

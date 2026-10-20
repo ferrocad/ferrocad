@@ -376,6 +376,9 @@ pub fn set_view_state(state: &crate::view::ViewState) -> Result<(), String> {
     let payload = serde_json::json!({
         "grid": state.grid,
         "projection": state.projection.as_str(),
+        "grid_minor": state.grid_minor,
+        "grid_major": state.grid_major,
+        "grid_radius": state.grid_radius,
     })
     .to_string();
     let _: serde_json::Value = call_json("set_view_state", Some(&payload))?;

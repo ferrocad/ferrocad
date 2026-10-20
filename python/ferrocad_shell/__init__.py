@@ -245,6 +245,16 @@ def set_property(object_name: str, prop: str, text: str) -> str:
     return _json({"ok": True, "error": ""})
 
 
+def add_namespace(name: str, value) -> None:
+    """Expose ``value`` to the console under ``name``.
+
+    Workbenches call this from their app script after ``bootstrap`` so their commands
+    are reachable at the prompt (``Toy.makeSlab(...)``) without an import. The
+    namespace survives console submissions; it is rebuilt only by ``bootstrap``.
+    """
+    _NAMESPACE[name] = value
+
+
 def evaluate(code: str) -> str:
     """Evaluate one console line, capturing stdout/stderr and any traceback."""
     buf = io.StringIO()

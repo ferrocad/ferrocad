@@ -30,7 +30,7 @@ use gpui::{
     application, bounds, point, prelude::*, px, size,
 };
 
-pub use contributions::{Contributions, ManipulatorFactory};
+pub use contributions::{Contributions, GizmoFactory, ManipulatorFactory};
 pub use display::{DisplaySync, StageMesh};
 pub use shell::{Shell, ShellModel};
 

@@ -31,7 +31,7 @@ obvious:
 | `ferrocad_viewport` | `rlib` | The `bite-gpui` viewport over an invented scene: `InventorViewport` (image path, pointer→pick→listener, clicks → `SelectionEvent`/`SelectionRef`, and the workbench `Manipulator` registry) plus a hosted `ferrocad_stage` (declarative items and interactive tools), the navigation cube (`NaviCube`), and the sample scene. Depends on `ferrocad_graphics`/`ferrocad_geom`/`ferrocad_inventor`/`ferrocad_stage` only. |
 | `ferrocad_gpui` | `rlib` | The `bite-gpui` application-shell library: boots CPython, provides `Shell`, `run`/`run_with`/`run_edition_with`, `HostConfig`, mounts the `ferrocad_viewport`, syncs document meshes into the stage (`display::DisplaySync`), and hosts the edition's workbench manipulators (`contributions::Contributions`). Ships no application scripts and names no workbench. |
 | `ferrocad` | `bin` | The base app (the general edition). Owns the app's Python entry module and, when packaged, its mods and interpreter; exposes `run`/`run_as`/`run_edition`/`run_edition_with`, which call `ferrocad_gpui::run_with`. |
-| `ferrocad_toy` | `bin` + `rlib` | A **kernel-free edition** and testbed: a document object with a `Height` property, a script-generated mesh, and one `HeightGrip` manipulator. It links no geometry module; it exists to prove the interaction registry is generic and to run that loop in the fast CI job. See [`toy-workbench.md`](toy-workbench.md). |
+| `ferrocad_toy` | `bin` + `rlib` | A **kernel-free edition** and testbed: it creates a typed object (`Height`/`Width`/`Depth`/`Placement`/`DisplayMode`/`Color`), represents it through the display hook, and manipulates it with a `HeightGrip` **and** the generic `TransformGizmo`. It links no geometry module; it exists to prove the whole workbench surface is generic and to run that loop in the fast CI job. See [`toy-workbench.md`](toy-workbench.md). |
 | `python/FreeCAD` | package | The public, pure-Python `import FreeCAD` facade. |
 | `ferrocad_gen` | `cdylib` | Generated PyO3 skeletons (M3c). A build-time experiment, not wired into the facade. |
 | `ferrocad_ctypes` | `cdylib` | The legacy M0 C-ABI backend, **removed** (kept in §4 as the rationale). |
@@ -338,8 +338,16 @@ What a workbench registers, and what the base app does not:
 | --- | --- | --- |
 | base (`ferrocad`) | none | none (`display_mesh` yields nothing) |
 | Parametric | `ferrocad_part_gui::fillet_manipulator` | `Part::Fillet` / `Part::Chamfer` |
-| Toy | `ferrocad_toy::height_grip` | `Height` (a `PropertyLength`) |
-| BIM (future) | its own factory, or none | its own `interaction` provider |
+| Toy | `ferrocad_toy::height_grip` + `move_gizmo` | `Height`, `Placement`, the display properties |
+| BIM (future) | its own factories, or none | its own `interaction` provider |
+
+The gizmo is a contribution too: `Contributions::with_gizmo(factory)` returns a
+`TransformGizmo` for a selection. The viewport reports a drag as
+`ViewportEvent::Transform`, and `GizmoCommitEvent::to_interaction` turns it into the
+same neutral commit (`"transform"` / `"apply"`, 16 matrix elements), so the workbench
+receives it through the **same** `interaction` hook as any other manipulation. The
+shell therefore has one route for every edit, whether it came from a workbench
+manipulator, the generic gizmo, or (later) a toolbar.
 
 The viewport picks manipulators **before** the gizmo and the scene, most recently
 added first. The shell calls the registered factories on every selection and hosts
@@ -355,11 +363,12 @@ The guarantees in this note are checked by the default test suite:
   round-trip (`DressUpChange::from_commit`);
 * `ferrocad_viewport` — a **fake** manipulator (no Part linked) is hovered, dragged,
   committed, cancelled, and wins over the gizmo;
-* `ferrocad_gpui` — `Contributions` routing and `DisplaySync`'s entity map;
-* `ferrocad_toy` — the whole loop with **no kernel**: a real document object, the
-  edition's factory, a drag, the neutral commit, the app script's `interaction`
-  provider, the `Height` property, and a re-synced stage
-  (`a_toy_manipulator_drives_a_document_property`);
+* `ferrocad_gpui` — `Contributions` routing (manipulator **and** gizmo factories) and
+  `DisplaySync`'s entity map, colour and draw-mode plumbing;
+* `ferrocad_toy` — the whole workbench surface with **no kernel**: it creates an
+  object (and undoes/redoes it), represents it, resizes it with the grip, moves it
+  with the gizmo (and undoes that), and round-trips it through save/open
+  (`the_toy_workbench_creates_represents_manipulates_and_records`);
 * `ferrocad_parametric` — the same loop with the real Part arc
   (`the_part_fillet_manipulator_drives_the_document`);
 * `ferrocad_part_py` — the edition's `interaction` hook creates a `Part::Fillet`

@@ -28,6 +28,7 @@ use ferrocad_graphics::Camera;
 use ferrocad_stage::gizmo::{ACTIVE_COLOR, INACTIVE_COLOR};
 use ferrocad_stage::screen::{HIT_SLOP, project_device, scale_for, to3};
 use ferrocad_stage::{DrawMode, InteractionCommit, Manipulator, ShapeItem, Stage};
+use ferrocad_stage::{GizmoMode, TransformGizmo};
 use ferrocad_types::{Matrix4, Vector3};
 
 /// The manipulator's registry id (`InteractionCommit::manipulator`).
@@ -269,6 +270,25 @@ impl Manipulator for HeightGrip {
     }
 }
 
+/// The world-space bounds `(min, max)` of a stage item's positions.
+fn bounds(item: &ShapeItem) -> Option<(Vector3, Vector3)> {
+    let positions = item.positions();
+    if positions.is_empty() {
+        return None;
+    }
+    let mut min = Vector3::new(f64::INFINITY, f64::INFINITY, f64::INFINITY);
+    let mut max = Vector3::new(f64::NEG_INFINITY, f64::NEG_INFINITY, f64::NEG_INFINITY);
+    for [x, y, z] in positions {
+        min.x = min.x.min(f64::from(*x));
+        min.y = min.y.min(f64::from(*y));
+        min.z = min.z.min(f64::from(*z));
+        max.x = max.x.max(f64::from(*x));
+        max.y = max.y.max(f64::from(*y));
+        max.z = max.z.max(f64::from(*z));
+    }
+    Some((min, max))
+}
+
 /// The toy workbench's manipulator factory: a **whole-object** selection arms a height
 /// grip over the item's top centre.
 ///
@@ -280,31 +300,33 @@ pub fn height_grip(selection: &SelectionRef, stage: &Stage) -> Option<Box<dyn Ma
         return None;
     }
     let item = stage.item(selection.object)?;
-    let positions = item.positions();
-    if positions.is_empty() {
+    let (min, max) = bounds(item)?;
+    let top = Vector3::new((min.x + max.x) * 0.5, (min.y + max.y) * 0.5, max.z);
+    Some(Box::new(HeightGrip::new(
+        selection.object,
+        top,
+        max.z - min.z,
+    )))
+}
+
+/// The toy workbench's gizmo factory: a **whole-object** selection gets a translate
+/// gizmo at the item's centre.
+///
+/// The gizmo is the generic move/rotate handle; whether an object responds is the
+/// workbench's decision. The toy offers translation (its document provider composes the
+/// committed matrix with the object's placement).
+pub fn move_gizmo(selection: &SelectionRef, stage: &Stage) -> Option<TransformGizmo> {
+    if !selection.is_whole() {
         return None;
     }
-    let mut min_x = f32::INFINITY;
-    let mut max_x = f32::NEG_INFINITY;
-    let mut min_y = f32::INFINITY;
-    let mut max_y = f32::NEG_INFINITY;
-    let mut min_z = f32::INFINITY;
-    let mut max_z = f32::NEG_INFINITY;
-    for [x, y, z] in positions {
-        min_x = min_x.min(*x);
-        max_x = max_x.max(*x);
-        min_y = min_y.min(*y);
-        max_y = max_y.max(*y);
-        min_z = min_z.min(*z);
-        max_z = max_z.max(*z);
-    }
-    let top = Vector3::new(
-        f64::from((min_x + max_x) * 0.5),
-        f64::from((min_y + max_y) * 0.5),
-        f64::from(max_z),
-    );
-    let height = f64::from(max_z - min_z);
-    Some(Box::new(HeightGrip::new(selection.object, top, height)))
+    let item = stage.item(selection.object)?;
+    let (min, max) = bounds(item)?;
+    let centre = min.add(&max).scale(0.5);
+    Some(TransformGizmo::new(
+        selection.object,
+        centre,
+        GizmoMode::Translate,
+    ))
 }
 
 #[cfg(test)]
@@ -377,6 +399,18 @@ mod tests {
         assert!(height_grip(&SelectionRef::element(7, "Edge1"), &stage).is_none());
         assert!(height_grip(&SelectionRef::whole(9), &stage).is_none());
         assert!(height_grip(&SelectionRef::whole(7), &Stage::new()).is_none());
+    }
+
+    #[test]
+    fn the_gizmo_sits_at_the_item_centre() {
+        let stage = slab(7);
+        let gizmo = move_gizmo(&SelectionRef::whole(7), &stage).expect("a gizmo");
+        assert_eq!(gizmo.target_id(), 7);
+        let origin = gizmo.origin();
+        assert!((origin.x).abs() < 1e-9);
+        assert!((origin.y).abs() < 1e-9);
+        assert!((origin.z - 10.0).abs() < 1e-9);
+        assert!(move_gizmo(&SelectionRef::element(7, "Face1"), &stage).is_none());
     }
 
     #[test]

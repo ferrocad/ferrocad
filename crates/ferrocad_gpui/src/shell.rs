@@ -17,7 +17,7 @@ use gpui::{
 
 use ferrocad_geom::SelectionRef;
 use ferrocad_inventor::{Scene, Viewport};
-use ferrocad_stage::{InteractionCommit, Manipulator};
+use ferrocad_stage::{InteractionCommit, Manipulator, TransformGizmo};
 use ferrocad_viewport::scene;
 use ferrocad_viewport::{InventorViewport, SelectionEvent, ViewportEvent};
 use ferrocad_wgpu::WgpuRenderer;
@@ -259,50 +259,59 @@ impl Shell {
         Ok(self.display.build(meshes))
     }
 
-    /// React to a viewport event: a click selection or a manipulator commit.
+    /// React to a viewport event: a click selection, a manipulator commit, or a
+    /// gizmo drag.
     fn on_viewport_event(&mut self, event: &ViewportEvent, cx: &mut Context<Self>) {
         match event {
             ViewportEvent::Selection(selection) => self.on_selection(selection, cx),
             ViewportEvent::Interaction(commit) => self.on_interaction(commit, cx),
+            ViewportEvent::Transform(event) => self.on_interaction(&event.to_interaction(), cx),
         }
     }
 
-    /// A click: select the object in the inspector, and arm the manipulator the
-    /// edition's workbenches contribute for that selection.
+    /// A click: select the object in the inspector, and arm the manipulator and gizmo
+    /// the edition's workbenches contribute for that selection.
     fn on_selection(&mut self, selection: &SelectionEvent, cx: &mut Context<Self>) {
-        let manipulator = match selection {
+        let (manipulator, gizmo) = match selection {
             SelectionEvent::Picked(reference) => {
                 if let Some(name) = self.display.object_of(reference.object).map(str::to_string) {
                     self.select(&name);
                 }
-                self.arm_manipulator(reference, cx)
+                self.arm(reference, cx)
             }
-            SelectionEvent::Cleared => None,
+            SelectionEvent::Cleared => (None, None),
         };
         if let Some(viewport) = self.viewport.clone() {
             viewport.update(cx, |viewport, cx| {
                 viewport.set_manipulators(manipulator.into_iter().collect());
+                viewport.set_gizmo(gizmo);
                 cx.notify();
             });
         }
         cx.notify();
     }
 
-    /// The manipulator to host for a selection, if the edition contributes one.
+    /// The manipulator and gizmo to host for a selection, if the edition contributes
+    /// them.
     ///
     /// The stage is cloned out of the viewport before anything is updated: a re-entrant
     /// `update` on the same entity panics.
-    fn arm_manipulator(
+    fn arm(
         &self,
         reference: &SelectionRef,
         cx: &mut Context<Self>,
-    ) -> Option<Box<dyn Manipulator>> {
+    ) -> (Option<Box<dyn Manipulator>>, Option<TransformGizmo>) {
         if self.contributions.is_empty() {
-            return None;
+            return (None, None);
         }
-        let viewport = self.viewport.as_ref()?;
+        let Some(viewport) = self.viewport.as_ref() else {
+            return (None, None);
+        };
         let stage = viewport.read(cx).stage().clone();
-        self.contributions.manipulator_for(reference, &stage)
+        (
+            self.contributions.manipulator_for(reference, &stage),
+            self.contributions.gizmo_for(reference, &stage),
+        )
     }
 
     /// A manipulator drag ended: apply the commit through the app script's
@@ -343,6 +352,7 @@ impl Shell {
                 Ok(stage) => viewport.update(cx, |viewport, cx| {
                     viewport.set_stage(stage);
                     viewport.set_manipulators(Vec::new());
+                    viewport.set_gizmo(None);
                     cx.notify();
                 }),
                 Err(error) => self.console_line(format!("stage: {error}"), cx),

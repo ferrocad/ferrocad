@@ -12,7 +12,7 @@
 use std::sync::Arc;
 
 use ferrocad_geom::SelectionRef;
-use ferrocad_stage::{Manipulator, Stage};
+use ferrocad_stage::{Manipulator, Stage, TransformGizmo};
 
 /// The manipulator a selection asks for, if the workbench has one.
 ///
@@ -32,10 +32,29 @@ where
     }
 }
 
+/// The transform gizmo a selection asks for, if the workbench offers one.
+///
+/// The gizmo is the generic move/rotate handle; a workbench decides whether its
+/// objects respond to it (a sketch may want it, a spreadsheet cell may not).
+pub trait GizmoFactory: Send + Sync {
+    /// The gizmo to show for `selection`, if this workbench offers one.
+    fn create(&self, selection: &SelectionRef, stage: &Stage) -> Option<TransformGizmo>;
+}
+
+impl<F> GizmoFactory for F
+where
+    F: Fn(&SelectionRef, &Stage) -> Option<TransformGizmo> + Send + Sync,
+{
+    fn create(&self, selection: &SelectionRef, stage: &Stage) -> Option<TransformGizmo> {
+        self(selection, stage)
+    }
+}
+
 /// The manipulators an edition contributes, in registration order.
 #[derive(Clone, Default)]
 pub struct Contributions {
     factories: Vec<Arc<dyn ManipulatorFactory>>,
+    gizmos: Vec<Arc<dyn GizmoFactory>>,
 }
 
 impl Contributions {
@@ -55,6 +74,17 @@ impl Contributions {
         self.factories.push(Arc::new(factory));
     }
 
+    /// The builder form of [`register_gizmo`](Self::register_gizmo).
+    pub fn with_gizmo(mut self, factory: impl GizmoFactory + 'static) -> Self {
+        self.register_gizmo(factory);
+        self
+    }
+
+    /// Register a transform-gizmo factory. Later registrations are tried first.
+    pub fn register_gizmo(&mut self, factory: impl GizmoFactory + 'static) {
+        self.gizmos.push(Arc::new(factory));
+    }
+
     /// The manipulator for `selection`: the last registered factory that claims it wins.
     pub fn manipulator_for(
         &self,
@@ -67,9 +97,17 @@ impl Contributions {
             .find_map(|factory| factory.create(selection, stage))
     }
 
-    /// Whether the edition contributes any manipulator.
+    /// The transform gizmo for `selection`, if a workbench offers one.
+    pub fn gizmo_for(&self, selection: &SelectionRef, stage: &Stage) -> Option<TransformGizmo> {
+        self.gizmos
+            .iter()
+            .rev()
+            .find_map(|factory| factory.create(selection, stage))
+    }
+
+    /// Whether the edition contributes any manipulator or gizmo.
     pub fn is_empty(&self) -> bool {
-        self.factories.is_empty()
+        self.factories.is_empty() && self.gizmos.is_empty()
     }
 }
 
@@ -77,6 +115,7 @@ impl std::fmt::Debug for Contributions {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("Contributions")
             .field("factories", &self.factories.len())
+            .field("gizmos", &self.gizmos.len())
             .finish()
     }
 }
@@ -181,6 +220,29 @@ mod tests {
             contributions
                 .manipulator_for(&SelectionRef::whole(1), &stage())
                 .is_some()
+        );
+    }
+
+    #[test]
+    fn a_registered_gizmo_factory_claims_its_objects() {
+        use ferrocad_stage::{GizmoMode, TransformGizmo};
+        use ferrocad_types::Vector3;
+
+        let contributions =
+            Contributions::new().with_gizmo(|selection: &SelectionRef, _stage: &Stage| {
+                selection.is_whole().then(|| {
+                    TransformGizmo::new(selection.object, Vector3::zero(), GizmoMode::Translate)
+                })
+            });
+        assert!(!contributions.is_empty());
+        let gizmo = contributions
+            .gizmo_for(&SelectionRef::whole(3), &stage())
+            .expect("a gizmo");
+        assert_eq!(gizmo.target_id(), 3);
+        assert!(
+            contributions
+                .gizmo_for(&SelectionRef::element(3, "Face1"), &stage())
+                .is_none()
         );
     }
 }

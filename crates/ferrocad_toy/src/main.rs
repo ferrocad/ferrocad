@@ -12,6 +12,8 @@ fn main() {
     ferrocad::run_edition_with(
         "FerroCAD: Toy",
         "ferrocad_toy",
-        ferrocad::Contributions::default().with_manipulator(ferrocad_toy::height_grip),
+        ferrocad::Contributions::default()
+            .with_manipulator(ferrocad_toy::height_grip)
+            .with_gizmo(ferrocad_toy::move_gizmo),
     );
 }

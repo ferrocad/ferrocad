@@ -65,6 +65,9 @@ pub enum ViewportEvent {
     Selection(SelectionEvent),
     /// A workbench manipulator committed a value for the host to apply.
     Interaction(InteractionCommit),
+    /// A gizmo drag ended. The host converts it with
+    /// [`GizmoCommitEvent::to_interaction`] and routes it like any other commit.
+    Transform(GizmoCommitEvent),
 }
 
 /// A gpui view that presents an [`InventorView`] (image path) and routes pointer
@@ -375,6 +378,11 @@ impl<V: InventorView> InventorViewport<V> {
     /// The last gizmo commit (a drag's final transform), if a drag has ended.
     pub fn last_gizmo_commit(&self) -> Option<&GizmoCommitEvent> {
         self.gizmo_commit.as_ref()
+    }
+
+    /// Take the last gizmo commit, for the host to route to the document.
+    pub fn take_gizmo_commit(&mut self) -> Option<GizmoCommitEvent> {
+        self.gizmo_commit.take()
     }
 
     /// Add a workbench manipulator (the edge fillet arc, a thickness grip, …).
@@ -1773,6 +1781,7 @@ impl<V: InventorView + 'static> Render for InventorViewport<V> {
                 // update returns, so the host may update this viewport in response.
                 let selection = this.take_selection();
                 let commit = this.take_interaction_commit();
+                let transform = this.take_gizmo_commit();
                 if changed {
                     cx.notify();
                 }
@@ -1781,6 +1790,9 @@ impl<V: InventorView + 'static> Render for InventorViewport<V> {
                 }
                 if let Some(commit) = commit {
                     cx.emit(ViewportEvent::Interaction(commit));
+                }
+                if let Some(transform) = transform {
+                    cx.emit(ViewportEvent::Transform(transform));
                 }
             }))
             .on_drag(ViewportDragMarker, |_, _, _, cx| {
@@ -3851,6 +3863,14 @@ mod tests {
         let commit = view.last_gizmo_commit().expect("a commit");
         assert!(matches!(commit.value, GizmoValue::Linear { .. }));
         assert!(commit.value.readout().contains("ΔX"));
+
+        // The host route: take it, then convert it to the neutral commit.
+        let commit = view.take_gizmo_commit().expect("a taken commit");
+        let interaction = commit.to_interaction();
+        assert_eq!(interaction.manipulator, ferrocad_stage::TRANSFORM_ID);
+        assert_eq!(interaction.action, "apply");
+        assert_eq!(interaction.values.len(), 16);
+        assert!(view.last_gizmo_commit().is_none(), "taking consumes it");
     }
 
     #[test]

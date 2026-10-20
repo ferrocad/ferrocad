@@ -434,6 +434,26 @@ display/`Contributions` tests; `ferrocad_part_py`'s
 through the edition script (hooks registered → tessellate with names → `interaction` →
 base hidden, feature displayed, reused).
 
+### The gizmo reaches the document (2026-10-20)
+
+Until the toy workbench, the gizmo was built and tested but no host wired it. It is now
+a **contribution** like a manipulator, and it shares the same document route:
+
+- `Contributions::with_gizmo(factory)` — the edition decides which objects get one;
+  `ferrocad_toy::move_gizmo` claims whole-object selections and places it at the item's
+  centre.
+- `ViewportEvent::Transform(GizmoCommitEvent)` — the viewport emits the drag commit on
+  release (`take_gizmo_commit` is the poll form).
+- `GizmoCommitEvent::to_interaction` — the commit becomes `"transform"` / `"apply"`
+  with the 16 row-major matrix elements, so the app script's **existing** `interaction`
+  hook receives it. There is no second document hook.
+- The toy's provider composes the matrix with the object's `Placement` in one
+  transaction; its end-to-end test asserts the move and its undo.
+
+Covered by `ferrocad_viewport`'s `the_gizmo_readout_tracks_the_drag_and_clears_on_release`
+(take + `to_interaction`), `ferrocad_gpui`'s `a_registered_gizmo_factory_claims_its_objects`,
+and `ferrocad_toy`'s `the_toy_workbench_creates_represents_manipulates_and_records`.
+
 ## 15. Deferred and why
 
 - **Push-Pull** needs a sketch-region / face selection and a solid/sketch model to preview

@@ -66,11 +66,12 @@ pub mod tool;
 
 pub use gizmo::{
     GIZMO_BASE_ID, GizmoAxis, GizmoCommitEvent, GizmoConstraint, GizmoDragEvent, GizmoHandle,
-    GizmoMode, GizmoModifiers, GizmoValue, HandleKind, ManipulatorFrame, TransformGizmo,
+    GizmoMode, GizmoModifiers, GizmoValue, HandleKind, ManipulatorFrame, TRANSFORM_ID,
+    TransformGizmo,
 };
 pub use input::{MouseButton, PointerEvent, PointerKind};
 pub use interaction::{InteractionCommit, Manipulator};
-pub use screen::{HIT_SLOP, HIT_TOLERANCE_PIXELS, HIT_PADDING_PIXELS, STROKE_PIXELS, scale_for};
+pub use screen::{HIT_PADDING_PIXELS, HIT_SLOP, HIT_TOLERANCE_PIXELS, STROKE_PIXELS, scale_for};
 pub use shape::{DrawMode, ShapeItem};
 pub use snap::{Snap, SnapKind, snap_to_geometry};
 pub use stage::Stage;

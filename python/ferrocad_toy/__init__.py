@@ -1,17 +1,27 @@
 """App-shell script for the **toy workbench**.
 
-The kernel-free reference edition. It demonstrates the two module hooks a workbench
-needs, with no geometry kernel behind them:
+The kernel-free reference edition. It demonstrates the four things a workbench does,
+with no geometry kernel behind any of them:
 
-* ``FreeCAD.register_display_provider`` — the slab is a cube generated from its
-  ``Height`` property (24 vertices, 6 faces, untagged);
-* ``FreeCAD.register_interaction_provider`` — ``toy_height`` / ``set`` writes that
-  property in one transaction and recomputes.
+1. **Create objects** — :func:`makeSlab` adds a typed, property-bearing
+   ``App::FeaturePython`` inside one named transaction (so it is undoable).
+2. **Represent them** — the display provider builds the mesh from the object's
+   ``Width``/``Depth``/``Height``/``Placement`` and honours its ``Color`` and
+   ``DisplayMode`` properties.
+3. **Manipulate them** — two generic mechanisms drive the same document:
+   the ``toy_height`` interaction (the Rust ``HeightGrip`` manipulator) and the
+   ``transform`` interaction (the Rust ``TransformGizmo``, applied as a placement).
+4. **Record it** — every creation and edit is a transaction, so undo/redo and save/
+   open work through the engine, not through this script.
 
-The matching Rust manipulator is ``ferrocad_toy::height_grip``, which the edition's
-``main`` registers with the shell. Everything that makes the grip work is generic
-(``ferrocad_stage::Manipulator`` → ``InteractionCommit`` → this script): swap this
-script and the factory for the Part ones and the shell is unchanged.
+The console surface is ``Toy.makeSlab(...)`` (exposed through
+``ferrocad_shell.add_namespace``).
+
+The matching Rust half is ``ferrocad_toy``: ``height_grip`` and ``move_gizmo`` are
+contributed by the edition's ``main``. Everything that makes them work is generic:
+``ferrocad_stage::Manipulator``/``TransformGizmo`` → ``InteractionCommit`` → this
+script. Swap this script and the factories for the Part ones and the shell is
+unchanged.
 
 The shell imports this module by name (``HostConfig.entry_module``), so it must
 re-export every entry point the shell calls.
@@ -22,14 +32,24 @@ from __future__ import annotations
 import FreeCAD
 
 # The shell's data functions (`bootstrap`, `model_tree`, `properties`,
-# `set_property`, `evaluate`, `stage_meshes`, `interaction`, ...).
+# `set_property`, `evaluate`, `add_namespace`, `stage_meshes`, `interaction`, ...).
 from ferrocad_shell import *  # noqa: F401,F403
 from ferrocad_shell import bootstrap as _base_bootstrap
 
-# Half the slab's footprint, in mm.
-HALF = 20.0
+DEFAULT_WIDTH = 40.0
+DEFAULT_DEPTH = 40.0
+DEFAULT_HEIGHT = 20.0
+# RGBA in the 0..1 range; alpha is unused by the toy.
+DEFAULT_COLOR = (0.26, 0.55, 0.85, 1.0)
 
-# Faces of the cube, each counter-clockwise seen from outside. The renderer culls
+_DISPLAY_MODES = ("Shaded", "ShadedWithEdges", "Wireframe")
+_DISPLAY_KEYS = {
+    "Shaded": "shaded",
+    "ShadedWithEdges": "shaded_edges",
+    "Wireframe": "wireframe",
+}
+
+# Faces of the box, each counter-clockwise seen from outside. The renderer culls
 # back faces, so the winding is the outside.
 _FACES = (
     (0, 3, 2, 1),  # bottom (−Z)
@@ -41,28 +61,29 @@ _FACES = (
 )
 
 
-def _slab(height: float) -> dict:
-    """The tessellation of a ``2·HALF`` square slab, ``height`` tall, from z = 0."""
-    h = max(float(height), 0.001)
-    x0, x1 = -HALF, HALF
-    y0, y1 = -HALF, HALF
-    corners = [
-        (x0, y0, 0.0),
-        (x1, y0, 0.0),
-        (x1, y1, 0.0),
-        (x0, y1, 0.0),
-        (x0, y0, h),
-        (x1, y0, h),
-        (x1, y1, h),
-        (x0, y1, h),
+def _slab_mesh(width: float, depth: float, height: float, placement) -> dict:
+    """The world-space tessellation of a slab, placed by `placement`."""
+    half_width = width / 2.0
+    half_depth = depth / 2.0
+    local = [
+        (-half_width, -half_depth, 0.0),
+        (half_width, -half_depth, 0.0),
+        (half_width, half_depth, 0.0),
+        (-half_width, half_depth, 0.0),
+        (-half_width, -half_depth, height),
+        (half_width, -half_depth, height),
+        (half_width, half_depth, height),
+        (-half_width, half_depth, height),
     ]
+    corners = [placement.multVec(FreeCAD.Vector(*corner)) for corner in local]
     positions = []
     triangles = []
     edges = []
     for face in _FACES:
         base = len(positions)
         for index in face:
-            positions.append(corners[index])
+            corner = corners[index]
+            positions.append((corner.x, corner.y, corner.z))
         triangles.extend((base, base + 1, base + 2, base, base + 2, base + 3))
         edges.extend(
             (
@@ -79,7 +100,7 @@ def _slab(height: float) -> dict:
     return {
         "positions": positions,
         "triangles": triangles,
-        # One untagged part: a click selects the whole object (the toy factory's rule).
+        # One untagged part: a click selects the whole object (the toy's rule).
         "triangle_parts": [0] * (len(triangles) // 3),
         "edges": edges,
         "segment_parts": [0] * (len(edges) // 2),
@@ -90,28 +111,32 @@ def _slab(height: float) -> dict:
 
 
 def _display_mesh(obj):
-    """The slab mesh for an object with a ``Height``, or ``None``."""
-    height = getattr(obj, "Height", None)
-    if height is None:
+    """The slab mesh for a toy object, or ``None`` for anything else."""
+    width = getattr(obj, "Width", None)
+    if width is None:
         return None
     try:
-        return _slab(float(height))
+        placement = getattr(obj, "Placement", None)
+        if placement is None:
+            placement = FreeCAD.Placement()
+        mesh = _slab_mesh(
+            float(width), float(obj.Depth), float(obj.Height), placement
+        )
+        colors = getattr(obj, "Color", None)
+        mesh["color"] = list(colors[0]) if colors else list(DEFAULT_COLOR)
+        mode = str(getattr(obj, "DisplayMode", "") or "")
+        mesh["display"] = _DISPLAY_KEYS.get(mode, "shaded_edges")
+        return mesh
     except Exception:
         return None
 
 
-def _interaction(obj, manipulator, action, element, values):
-    """Apply the toy height grip: set ``Height`` and recompute.
-
-    The manipulator names its operation and orders the numbers; this hook owns what
-    that means for the toy. The edit is one named transaction (a single undo step).
-    """
-    if manipulator != "toy_height" or action != "set" or not values:
-        return None
+def _transaction(obj, name: str, apply):
+    """Run `apply` as one named transaction, then recompute."""
     doc = obj.Document
-    doc.openTransaction(f"Height {obj.Name}")
+    doc.openTransaction(f"{name} {obj.Name}")
     try:
-        obj.Height = float(values[0])
+        apply()
         doc.recompute()
         doc.commitTransaction()
     except Exception as exc:
@@ -120,16 +145,96 @@ def _interaction(obj, manipulator, action, element, values):
     return {"ok": True}
 
 
+def _interaction(obj, manipulator, action, element, values):
+    """Apply a manipulator commit.
+
+    Two operations reach this workbench:
+
+    * ``toy_height`` / ``set`` — the Rust ``HeightGrip``; ``values[0]`` is the height.
+    * ``transform`` / ``apply`` — the generic ``TransformGizmo``; ``values`` are the 16
+      row-major elements of the world-space transform and are composed with the
+      object's current placement.
+
+    Both are one transaction, so both are undoable.
+    """
+    if manipulator == "toy_height" and action == "set" and values:
+        return _transaction(
+            obj, "Height", lambda: setattr(obj, "Height", float(values[0]))
+        )
+    if manipulator == "transform" and action == "apply" and len(values) == 16:
+        delta = FreeCAD.Placement(FreeCAD.Matrix(*values))
+        return _transaction(
+            obj,
+            "Move",
+            lambda: setattr(obj, "Placement", delta * obj.Placement),
+        )
+    return None
+
+
 FreeCAD.register_display_provider(_display_mesh)
 FreeCAD.register_interaction_provider(_interaction)
 
 
+def _add_slab(doc, width, depth, height, x, y, name):
+    """Add the object and its properties; the caller owns the transaction."""
+    slab = doc.addObject("App::FeaturePython", name)
+    slab.addProperty("App::PropertyLength", "Width", "Toy", "Footprint width")
+    slab.addProperty("App::PropertyLength", "Depth", "Toy", "Footprint depth")
+    slab.addProperty("App::PropertyLength", "Height", "Toy", "Slab height")
+    slab.addProperty("App::PropertyPlacement", "Placement", "Toy", "Placement")
+    slab.addProperty(
+        "App::PropertyEnumeration", "DisplayMode", "Toy", "How the slab is drawn"
+    )
+    slab.DisplayMode = list(_DISPLAY_MODES)
+    slab.addProperty("App::PropertyColor", "Color", "Toy", "Surface colour")
+
+    slab.Width = float(width)
+    slab.Depth = float(depth)
+    slab.Height = float(height)
+    slab.DisplayMode = "ShadedWithEdges"
+    slab.Color = [DEFAULT_COLOR]
+    slab.Placement = FreeCAD.Placement(FreeCAD.Vector(float(x), float(y), 0.0))
+    return slab
+
+
+def makeSlab(
+    width=DEFAULT_WIDTH,
+    depth=DEFAULT_DEPTH,
+    height=DEFAULT_HEIGHT,
+    x=0.0,
+    y=0.0,
+    name="Slab",
+):
+    """Create a toy slab in the active document as one undoable transaction.
+
+    This is the workbench's creation command: it adds a typed object with its
+    properties, and the shell picks it up through the display hook on the next sync.
+    """
+    doc = FreeCAD.ActiveDocument
+    if doc is None:
+        doc = FreeCAD.newDocument("Unnamed")
+    doc.openTransaction("Create Slab")
+    try:
+        slab = _add_slab(doc, width, depth, height, x, y, name)
+        doc.recompute()
+        doc.commitTransaction()
+    except Exception:
+        doc.abortTransaction()
+        raise
+    return slab
+
+
+class _Console:
+    """The console surface: ``Toy.makeSlab(40, 40, 20)``."""
+
+    makeSlab = staticmethod(makeSlab)
+
+
 def bootstrap(doc_name: str = "Toy") -> str:
-    """The base sample document plus the toy slab."""
+    """The base sample document plus one toy slab, and the ``Toy`` console name."""
     payload = _base_bootstrap(doc_name)
     doc = FreeCAD.ActiveDocument
-    slab = doc.addObject("App::FeaturePython", "Slab")
-    slab.addProperty("App::PropertyLength", "Height", "Toy", "The slab height")
-    slab.Height = 20.0
+    _add_slab(doc, DEFAULT_WIDTH, DEFAULT_DEPTH, DEFAULT_HEIGHT, 0.0, 0.0, "Slab")
     doc.recompute()
+    add_namespace("Toy", _Console)
     return payload

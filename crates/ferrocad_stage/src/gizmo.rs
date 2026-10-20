@@ -14,6 +14,7 @@ use std::f64::consts::TAU;
 use ferrocad_graphics::{Camera, Ray, screen_ribbon};
 use ferrocad_types::{Matrix4, Placement, Rotation, Vector3};
 
+use crate::interaction::InteractionCommit;
 use crate::screen::{
     HIT_SLOP, STROKE_PIXELS, camera_forward, camera_position, point_segment_distance,
     project_device, push_ribbon, scale_for, to3,
@@ -390,6 +391,24 @@ pub struct GizmoCommitEvent {
     pub value: GizmoValue,
     /// The final transform to commit to the document.
     pub total_transform: Matrix4,
+}
+
+/// The manipulator id a gizmo commit carries (`InteractionCommit::manipulator`).
+pub const TRANSFORM_ID: &str = "transform";
+
+impl GizmoCommitEvent {
+    /// The neutral commit a host routes to the workbench that owns the object.
+    ///
+    /// The gizmo is a manipulator like any other: the commit names [`TRANSFORM_ID`],
+    /// the action `"apply"`, and carries the 16 row-major elements of the
+    /// world-space transform accumulated during the drag. A workbench composes it
+    /// with the object's current placement; the shell never needs to know what the
+    /// transform means.
+    pub fn to_interaction(&self) -> InteractionCommit {
+        InteractionCommit::new(TRANSFORM_ID, self.target_id, "apply")
+            .with_values(self.total_transform.m)
+            .with_readout(self.value.readout())
+    }
 }
 
 /// The in-progress drag's bookkeeping.

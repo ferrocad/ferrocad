@@ -127,9 +127,10 @@ the edition is run from a source checkout (`cargo run -p ferrocad_parametric`).
 [`edition-publishing.md`](edition-publishing.md) plans the step that ships it.
 
 `ferrocad_toy` is the **minimal** edition, and the reference for a new workbench: it
-links no kernel, its app script generates a mesh from a document property, and it
-contributes one manipulator through the same `Contributions` registry. Run it with
-`cargo run -p ferrocad_toy`; see [`toy-workbench.md`](toy-workbench.md).
+links no kernel, its app script creates a typed object and generates its mesh from the
+object's properties, and it contributes a manipulator **and** a gizmo through the same
+`Contributions` registry. Run it with `cargo run -p ferrocad_toy`; see
+[`toy-workbench.md`](toy-workbench.md).
 
 The boundary between the two crates: `ferrocad_gpui` owns the **interpreter**
 (boot, `sys.path`, JSON) and ships no application script; the **app** owns the

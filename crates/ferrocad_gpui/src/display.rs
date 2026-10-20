@@ -47,6 +47,12 @@ pub struct StageMesh {
     pub vertex_parts: Vec<u32>,
     #[serde(default)]
     pub parts: Vec<String>,
+    /// The object's RGBA surface colour (linear, 0..1), if the provider supplies one.
+    #[serde(default)]
+    pub color: Option<[f32; 4]>,
+    /// How to draw it: `"shaded"`, `"wireframe"` or `"shaded_edges"` (the default).
+    #[serde(default)]
+    pub display: Option<String>,
 }
 
 impl StageMesh {
@@ -94,8 +100,13 @@ impl DisplaySync {
             if mesh.positions.is_empty() {
                 continue;
             }
-            let item = ShapeItem::from_tessellation(mesh.entity, &mesh.tessellation())
-                .with_draw_mode(DrawMode::ShadedWithEdges);
+            let mut item = ShapeItem::from_tessellation(mesh.entity, &mesh.tessellation())
+                .with_draw_mode(display_mode(mesh.display.as_deref()));
+            if let Some(color) = mesh.color {
+                // The edge colour follows the surface, so a wireframe shows the same
+                // colour as the shaded item.
+                item = item.with_surface_color(color).with_edge_color(color);
+            }
             self.objects.insert(mesh.entity, mesh.object);
             stage.add_item(item);
         }
@@ -118,6 +129,18 @@ impl DisplaySync {
     }
 }
 
+/// The draw mode a provider's `display` string names.
+///
+/// Unknown or absent values mean "shaded with edges", the CAD default; a provider
+/// controls representation without the host knowing its vocabulary.
+fn display_mode(display: Option<&str>) -> DrawMode {
+    match display {
+        Some("wireframe") => DrawMode::Wireframe,
+        Some("shaded") => DrawMode::Shaded,
+        _ => DrawMode::ShadedWithEdges,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -137,6 +160,8 @@ mod tests {
             vertices: Vec::new(),
             vertex_parts: Vec::new(),
             parts: vec!["Face1".to_string(), "Edge1".to_string()],
+            color: None,
+            display: None,
         }
     }
 
@@ -178,5 +203,33 @@ mod tests {
         display.build(vec![slab(9, "Cylinder")]);
         assert_eq!(display.object_of(7), None);
         assert_eq!(display.object_of(9), Some("Cylinder"));
+    }
+
+    #[test]
+    fn a_provider_controls_the_colour_and_the_draw_mode() {
+        let mut display = DisplaySync::new();
+        let mut shaded = slab(7, "Box");
+        shaded.color = Some([0.2, 0.4, 0.8, 1.0]);
+        shaded.display = Some("shaded".to_string());
+        let stage = display.build(vec![shaded]);
+        let item = stage.item(7).expect("the item");
+        assert_eq!(item.draw_mode(), DrawMode::Shaded);
+        assert_eq!(item.surface_color(), [0.2, 0.4, 0.8, 1.0]);
+        assert_eq!(item.edge_color(), [0.2, 0.4, 0.8, 1.0]);
+
+        let mut wire = slab(8, "Cage");
+        wire.display = Some("wireframe".to_string());
+        let stage = display.build(vec![wire]);
+        assert_eq!(
+            stage.item(8).expect("the item").draw_mode(),
+            DrawMode::Wireframe
+        );
+
+        // An absent or unknown mode falls back to shaded-with-edges.
+        let stage = display.build(vec![slab(9, "Plain")]);
+        assert_eq!(
+            stage.item(9).expect("the item").draw_mode(),
+            DrawMode::ShadedWithEdges
+        );
     }
 }

@@ -72,6 +72,9 @@ is the `FreeCAD` Python API, documented by convention and by upstream.
 - [releasing.md](releasing.md) — how a release is cut (crates.io, the tag, the
   artifacts).
 - [repackaging.md](repackaging.md) — editions and the repackaging vision.
+- [axis-origin-grid.md](axis-origin-grid.md) — the spatial reference model: the world
+  triad, the ground and workplane grids, face frames, snapping, and how the navicube
+  relates to them.
 - [toy-workbench.md](toy-workbench.md) — the kernel-free edition that exercises the
   generic interaction registry end to end (and the template for a new workbench).
 - [edition-publishing.md](edition-publishing.md) — how the first edition

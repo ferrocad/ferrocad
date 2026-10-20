@@ -67,6 +67,11 @@ rotation into a subtree transform (§6). Upstream forces `aspectRatio = 1` and
 `viewportMapping = LEAVE_ALONE`, so a non-square rect stretches the overlay; the same
 holds here (and the rect is square by construction, §7).
 
+**Relationship to grids and workplanes.** The cube is the **world** compass and is never
+re-labelled by a local workplane; how a local frame shows through (the compass heading)
+is specified in [`axis-origin-grid.md`](axis-origin-grid.md) §6. That note also settles
+the world up-axis question (§10.0 there) before either is implemented.
+
 ## 3. Anatomy and pick taxonomy
 
 ```

@@ -58,8 +58,9 @@ pub mod stage;
 pub mod tool;
 
 pub use gizmo::{
-    GIZMO_BASE_ID, GizmoCommitEvent, GizmoDragEvent, GizmoHandle, GizmoMode, HandleKind,
-    TransformGizmo, scale_for,
+    GIZMO_BASE_ID, GizmoAxis, GizmoCommitEvent, GizmoConstraint, GizmoDragEvent, GizmoHandle,
+    GizmoMode, GizmoModifiers, GizmoValue, HandleKind, ManipulatorFrame, TransformGizmo,
+    scale_for,
 };
 pub use input::{MouseButton, PointerEvent, PointerKind};
 pub use shape::{DrawMode, ShapeItem};

@@ -24,14 +24,15 @@ use ferrocad_inventor::{
 };
 use ferrocad_stage::Stage;
 use ferrocad_stage::{
-    GizmoCommitEvent, GizmoHandle, MouseButton as StageButton, PointerEvent, PointerKind, Tool,
-    TransformGizmo, snap_to_geometry,
+    GizmoCommitEvent, GizmoHandle, GizmoModifiers, GizmoValue, MouseButton as StageButton,
+    PointerEvent, PointerKind, Tool, TransformGizmo, snap_to_geometry,
 };
 use ferrocad_types::{Matrix4, Placement, Rotation, Vector3};
 use gpui::{
-    AnyElement, AppContext, Bounds, Context, DragMoveEvent, IntoElement, MouseButton, MouseDownEvent,
-    MouseExitEvent, MouseMoveEvent, MouseUpEvent, ObjectFit, Pixels, Point, Render, RenderImage,
-    ScrollDelta, ScrollWheelEvent, Window, div, gpu_canvas, img, prelude::*, px, rgb, rgba,
+    AnyElement, AppContext, Bounds, Context, DragMoveEvent, FocusHandle, IntoElement, KeyDownEvent,
+    MouseButton, MouseDownEvent, MouseExitEvent, MouseMoveEvent, MouseUpEvent, ObjectFit, Pixels,
+    Point, Render, RenderImage, ScrollDelta, ScrollWheelEvent, Window, div, gpu_canvas, img,
+    prelude::*, px, rgb, rgba,
 };
 use image::{Frame, ImageBuffer, Rgba};
 
@@ -64,6 +65,13 @@ pub struct InventorViewport<V: InventorView> {
     gizmo_queue: RenderQueue,
     /// The last gizmo commit, for the host to apply to the document.
     gizmo_commit: Option<GizmoCommitEvent>,
+    /// The viewport's focus handle, created on the first paint. The Esc handler and the
+    /// modifier state make the element focusable.
+    focus: Option<FocusHandle>,
+    /// The latest gizmo drag readout, while a drag is in progress.
+    gizmo_value: Option<GizmoValue>,
+    /// The logical pointer position of the latest gizmo drag tick (the ring tag anchor).
+    gizmo_pointer: Option<[f32; 2]>,
     queue: RenderQueue,
     /// The semantic directives the last compile produced (active `SoEventCallback` ids,
     /// navicube overlays). Invisible to the renderer; the viewport consumes them.
@@ -178,6 +186,9 @@ impl<V: InventorView> InventorViewport<V> {
             gizmo: None,
             gizmo_queue: RenderQueue::default(),
             gizmo_commit: None,
+            focus: None,
+            gizmo_value: None,
+            gizmo_pointer: None,
             queue,
             directives,
             listeners: Vec::new(),
@@ -247,27 +258,64 @@ impl<V: InventorView> InventorViewport<V> {
     }
 
     /// Set the grid snapping spacing (device-independent world units); `None` disables
-    /// grid snapping (geometry snapping still applies over a hit).
+    /// grid snapping (geometry snapping still applies over a hit). The active gizmo uses
+    /// the same step for its linear drags.
     pub fn set_snap_grid(&mut self, grid: Option<f64>) {
         self.snap_grid = grid;
+        if let Some(gizmo) = self.gizmo.as_mut() {
+            gizmo.set_linear_snap(grid);
+        }
     }
 
     /// Show a transform gizmo (drawn on top, picked before the tool and the scene).
-    pub fn with_gizmo(mut self, gizmo: TransformGizmo) -> Self {
+    pub fn with_gizmo(mut self, mut gizmo: TransformGizmo) -> Self {
+        gizmo.set_linear_snap(self.snap_grid);
         self.gizmo = Some(gizmo);
         self
     }
 
     /// Replace (or clear) the transform gizmo.
-    pub fn set_gizmo(&mut self, gizmo: Option<TransformGizmo>) {
+    pub fn set_gizmo(&mut self, mut gizmo: Option<TransformGizmo>) {
+        if let Some(gizmo) = gizmo.as_mut() {
+            gizmo.set_linear_snap(self.snap_grid);
+        }
         self.gizmo = gizmo;
         self.gizmo_commit = None;
+        self.gizmo_value = None;
+        self.gizmo_pointer = None;
         self.rebuild_gizmo_queue();
     }
 
     /// The active gizmo, if any.
     pub fn gizmo(&self) -> Option<&TransformGizmo> {
         self.gizmo.as_ref()
+    }
+
+    /// The latest gizmo drag readout, if a drag is in progress.
+    pub fn gizmo_value(&self) -> Option<GizmoValue> {
+        self.gizmo_value
+    }
+
+    /// Cancel the active gizmo drag and clear its preview and readout, restoring the
+    /// target's pre-drag transform. Returns whether a drag was active.
+    pub fn cancel_gizmo_drag(&mut self) -> bool {
+        let cancelled = self.gizmo.as_mut().is_some_and(|gizmo| gizmo.cancel_drag());
+        if cancelled {
+            self.apply_gizmo_preview(None);
+            self.gizmo_commit = None;
+            self.gizmo_value = None;
+            self.gizmo_pointer = None;
+            self.rebuild_gizmo_queue();
+        }
+        cancelled
+    }
+
+    /// Handle a key press. `Esc` cancels an active gizmo drag.
+    pub fn handle_key(&mut self, event: &KeyDownEvent) -> bool {
+        if event.keystroke.key == "escape" {
+            return self.cancel_gizmo_drag();
+        }
+        false
     }
 
     /// The active gizmo, mutably (e.g. to move its origin).
@@ -387,6 +435,16 @@ impl<V: InventorView> InventorViewport<V> {
     /// hovers a handle; over the scene it picks the main scene. Returns whether the
     /// scene changed (and so needs repainting).
     pub fn handle_pointer(&mut self, logical: [f32; 2]) -> bool {
+        self.handle_pointer_with_modifiers(logical, GizmoModifiers::default())
+    }
+
+    /// [`handle_pointer`](Self::handle_pointer) with the current keyboard modifiers. The
+    /// modifiers drive an active gizmo drag (`Ctrl` frees the ring detents).
+    pub fn handle_pointer_with_modifiers(
+        &mut self,
+        logical: [f32; 2],
+        modifiers: GizmoModifiers,
+    ) -> bool {
         // An active drag is owned by `drag_move`: hovering here would rebuild the cube per
         // event and can clear the ring's active state mid-scrub.
         if self.ring_drag.is_some() || self.navicube_drag.is_some() || self.orbit_drag.is_some() {
@@ -440,11 +498,13 @@ impl<V: InventorView> InventorViewport<V> {
         // The gizmo takes priority: an active drag consumes the move; otherwise hover.
         if self.gizmo.as_ref().is_some_and(|gizmo| gizmo.is_dragging()) {
             let event = match self.gizmo.as_mut() {
-                Some(gizmo) => gizmo.drag_to(&self.camera, device),
+                Some(gizmo) => gizmo.drag_to_with_modifiers(&self.camera, device, modifiers),
                 None => None,
             };
             if let Some(event) = event {
                 self.apply_gizmo_preview(Some(event.total_transform));
+                self.gizmo_value = Some(event.value);
+                self.gizmo_pointer = Some(logical);
                 return true;
             }
         } else if self.gizmo.is_some() {
@@ -470,6 +530,22 @@ impl<V: InventorView> InventorViewport<V> {
     /// scene starts a possible main-camera orbit, which becomes real once the drag
     /// passes the threshold. Gizmo handles and active tools keep priority.
     pub fn handle_button(&mut self, logical: [f32; 2], button: u8, down: bool) -> bool {
+        self.handle_button_with_modifiers(logical, button, down, GizmoModifiers::default())
+    }
+
+    /// [`handle_button`](Self::handle_button) with the keyboard state captured at the
+    /// press. `Shift` on a gizmo axis starts a planar drag; the value is carried into the
+    /// drag/commit events.
+    pub fn handle_button_with_modifiers(
+        &mut self,
+        logical: [f32; 2],
+        button: u8,
+        down: bool,
+        modifiers: GizmoModifiers,
+    ) -> bool {
+        // A button change ends the readout; the drag/commit event carries the value.
+        self.gizmo_value = None;
+        self.gizmo_pointer = None;
         // Whether the gesture was an orbit (past the min-drag threshold) rather than a
         // click: an orbit must not also snap on release.
         let threshold = navicube_drag_threshold(self.camera.viewport.device_pixel_ratio());
@@ -570,7 +646,9 @@ impl<V: InventorView> InventorViewport<V> {
             if down {
                 if let Some(handle) = self.gizmo_handle_at(device) {
                     let started = match self.gizmo.as_mut() {
-                        Some(gizmo) => gizmo.begin_drag(handle, &self.camera, device),
+                        Some(gizmo) => {
+                            gizmo.begin_drag_with_modifiers(handle, &self.camera, device, modifiers)
+                        }
                         None => false,
                     };
                     if started {
@@ -785,10 +863,13 @@ impl<V: InventorView> InventorViewport<V> {
         self.transient = queue;
     }
 
-    /// The gizmo handle under a device position, if any.
+    /// The gizmo handle under a device position, if any. The gizmo owns an **analytic**
+    /// screen-space hit test (2 px stroke + 10 px grab padding), so the triad's empty
+    /// interior never claims a click meant for the scene.
     fn gizmo_handle_at(&self, device: [i32; 2]) -> Option<GizmoHandle> {
-        let hit = pick_at_hit(&self.gizmo_queue, &self.camera, device)?;
-        GizmoHandle::from_pick_id(hit.id.0)
+        self.gizmo
+            .as_ref()
+            .and_then(|gizmo| gizmo.hit(&self.camera, device))
     }
 
     /// Rebuild the gizmo's handle batches from the active gizmo.
@@ -820,9 +901,32 @@ impl<V: InventorView> InventorViewport<V> {
     }
 
     /// Handle a gpui drag-move: orbit the navigation cube or the main camera,
-    /// depending on where the press began. Reports whether the view changed.
+    /// depending on where the press began. Reports whether the view changed. The
+    /// modifier-aware form is the production path; this convenience is for tests.
+    #[cfg(test)]
     fn drag_move(&mut self, logical: [f32; 2]) -> bool {
+        self.drag_move_with_modifiers(logical, GizmoModifiers::default())
+    }
+
+    /// [`drag_move`](Self::drag_move) with the current keyboard modifiers. Gizmo drags
+    /// are also serviced here so a pointer that leaves the element still updates them
+    /// through gpui's drag system.
+    fn drag_move_with_modifiers(&mut self, logical: [f32; 2], modifiers: GizmoModifiers) -> bool {
         if self.chrome_contains(logical) {
+            return false;
+        }
+        if self.gizmo.as_ref().is_some_and(|gizmo| gizmo.is_dragging()) {
+            let device = self.camera.viewport.to_device(logical);
+            let event = self
+                .gizmo
+                .as_mut()
+                .and_then(|gizmo| gizmo.drag_to_with_modifiers(&self.camera, device, modifiers));
+            if let Some(event) = event {
+                self.apply_gizmo_preview(Some(event.total_transform));
+                self.gizmo_value = Some(event.value);
+                self.gizmo_pointer = Some(logical);
+                return true;
+            }
             return false;
         }
         self.snap = None; // a drag cancels any in-progress snap
@@ -1223,6 +1327,7 @@ impl<V: InventorView + 'static> Render for InventorViewport<V> {
         };
 
         let entity = cx.entity();
+        let focus = self.focus.get_or_insert_with(|| cx.focus_handle()).clone();
         let root = div()
             .relative()
             .w_full()
@@ -1246,6 +1351,13 @@ impl<V: InventorView + 'static> Render for InventorViewport<V> {
                 }
             })
             .id("ferrocad-inventor-viewport")
+            .track_focus(&focus)
+            .focusable()
+            .on_key_down(cx.listener(|this, event: &KeyDownEvent, _window, cx| {
+                if this.handle_key(event) {
+                    cx.notify();
+                }
+            }))
             .on_scroll_wheel(cx.listener(|this, event: &ScrollWheelEvent, _window, cx| {
                 // Scrolling over the chrome bar must not zoom the scene.
                 if this.chrome_contains(this.to_local(event.position)) {
@@ -1262,27 +1374,43 @@ impl<V: InventorView + 'static> Render for InventorViewport<V> {
             }))
             .on_mouse_move(cx.listener(|this, event: &MouseMoveEvent, _window, cx| {
                 let local = this.to_local(event.position);
+                let modifiers = gizmo_modifiers(event.modifiers);
                 let mut changed = false;
                 // gpui's drag system carries a left-button drag (and its moves outside
                 // the element) through `on_drag_move`; a middle-button orbit has no
                 // such gesture, so it is read from the pressed state here.
                 if event.pressed_button == Some(MouseButton::Middle) {
-                    changed |= this.drag_move(local);
+                    changed |= this.drag_move_with_modifiers(local, modifiers);
                 }
-                changed |= this.handle_pointer(local);
+                changed |= this.handle_pointer_with_modifiers(local, modifiers);
                 if changed {
                     cx.notify();
                 }
             }))
-            .on_any_mouse_down(cx.listener(|this, event: &MouseDownEvent, _window, cx| {
+            .on_any_mouse_down(cx.listener(|this, event: &MouseDownEvent, window, cx| {
+                if let Some(focus) = &this.focus {
+                    window.focus(focus, cx);
+                }
                 let local = this.to_local(event.position);
-                if this.handle_button(local, mouse_button(event.button), true) {
+                let modifiers = gizmo_modifiers(event.modifiers);
+                if this.handle_button_with_modifiers(
+                    local,
+                    mouse_button(event.button),
+                    true,
+                    modifiers,
+                ) {
                     cx.notify();
                 }
             }))
             .capture_any_mouse_up(cx.listener(|this, event: &MouseUpEvent, _window, cx| {
                 let local = this.to_local(event.position);
-                if this.handle_button(local, mouse_button(event.button), false) {
+                let modifiers = gizmo_modifiers(event.modifiers);
+                if this.handle_button_with_modifiers(
+                    local,
+                    mouse_button(event.button),
+                    false,
+                    modifiers,
+                ) {
                     cx.notify();
                 }
             }))
@@ -1292,7 +1420,9 @@ impl<V: InventorView + 'static> Render for InventorViewport<V> {
             .on_drag_move::<ViewportDragMarker>(cx.listener(
                 |this, event: &DragMoveEvent<ViewportDragMarker>, _window, cx| {
                     let position = this.to_local(event.event.position);
-                    if this.drag_move(position) {
+                    if this
+                        .drag_move_with_modifiers(position, gizmo_modifiers(event.event.modifiers))
+                    {
                         cx.notify();
                     }
                 },
@@ -1311,6 +1441,29 @@ impl<V: InventorView + 'static> Render for InventorViewport<V> {
             root
         } else {
             root.child(navicube_labels(&labels))
+        };
+
+        // The gizmo's numeric tag follows the active drag: anchored at the stem tip or
+        // plane, or at the pointer for a ring. It is a text layer with no hitboxes.
+        let root = if let Some(value) = self.gizmo_value {
+            if self.gizmo.as_ref().is_some_and(|gizmo| gizmo.is_dragging()) {
+                let anchor = self
+                    .gizmo
+                    .as_ref()
+                    .and_then(|gizmo| gizmo.readout_anchor(&self.camera))
+                    .map(|device| {
+                        self.camera
+                            .viewport
+                            .to_logical([device[0].round() as i32, device[1].round() as i32])
+                    })
+                    .or(self.gizmo_pointer)
+                    .unwrap_or([0.0, 0.0]);
+                root.child(gizmo_readout(value.readout(), anchor))
+            } else {
+                root
+            }
+        } else {
+            root
         };
 
         // The chrome bar is gpui, beside the 3D overlay. It is positioned from the
@@ -1605,6 +1758,35 @@ fn stage_button(button: u8) -> Option<StageButton> {
         3 => Some(StageButton::Right),
         _ => None,
     }
+}
+
+/// Map gpui's modifiers to the gizmo's solver flags. `Ctrl` (or the platform's
+/// secondary modifier on macOS) frees the rotation detents; `Shift` turns an axis drag
+/// into a plane drag.
+fn gizmo_modifiers(modifiers: gpui::Modifiers) -> GizmoModifiers {
+    GizmoModifiers {
+        shift: modifiers.shift,
+        ctrl: modifiers.secondary(),
+    }
+}
+
+/// The gizmo's projected numeric tag. A plain text layer: no id or hitbox, so it never
+/// steals pointer events from the viewport or the chrome.
+fn gizmo_readout(text: String, anchor: [f32; 2]) -> impl IntoElement {
+    div()
+        .absolute()
+        .left(px(anchor[0] + 12.0))
+        .top(px(anchor[1] - 28.0))
+        .px(px(6.))
+        .py(px(2.))
+        .rounded_sm()
+        .bg(rgba(0x0f1218cc))
+        .border_1()
+        .border_color(rgba(0xffffff14))
+        .text_size(px(11.))
+        .font_family("monospace")
+        .text_color(rgb(CHROME_ACTIVE))
+        .child(text)
 }
 
 /// Wrap readback pixels as a gpui [`RenderImage`].
@@ -2620,9 +2802,46 @@ mod tests {
         }
     }
 
+    /// A 100×100 viewport with a triangle at the origin and one gizmo target.
+    fn gizmo_view(
+        gizmo: TransformGizmo,
+    ) -> (InventorViewport<FakeView>, ferrocad_graphics::Viewport) {
+        use ferrocad_stage::ShapeItem;
+
+        let camera = perspective_camera([100, 100]);
+        let viewport = camera.viewport;
+        let mut stage = Stage::new();
+        stage.add_item(ShapeItem::new(42).with_shape(
+            vec![[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0]],
+            vec![],
+            vec![0, 1, 2],
+            vec![],
+        ));
+        let mut view = InventorViewport::new(
+            fake(ImageData {
+                width: 1,
+                height: 1,
+                rgba: vec![0, 0, 0, 255],
+            }),
+            camera,
+            triangle_scene(),
+        );
+        view.set_stage(stage);
+        view.set_gizmo(Some(gizmo));
+        view.refresh();
+        (view, viewport)
+    }
+
+    fn preview(view: &InventorViewport<FakeView>) -> Option<ferrocad_types::Matrix4> {
+        view.stage()
+            .items()
+            .iter()
+            .find(|item| item.entity_id() == 42)
+            .and_then(|item| item.temporary_transform())
+    }
+
     #[test]
     fn a_gizmo_drag_previews_a_transform_on_the_target_item() {
-        use ferrocad_graphics::pick_at_hit;
         use ferrocad_stage::{GizmoHandle, GizmoMode, ShapeItem, Stage, TransformGizmo};
         use ferrocad_types::Vector3;
 
@@ -2655,14 +2874,15 @@ mod tests {
         )));
         view.refresh();
 
-        // Find a device position that hits the X axis handle.
+        // Find a device position that hits the X axis handle through the analytic
+        // screen-space test the viewport now uses.
         let mut grab = None;
         for x in 0..100i32 {
             for y in 0..100i32 {
-                if let Some(hit) = pick_at_hit(&view.gizmo_queue, &view.camera, [x, y]) {
-                    if GizmoHandle::from_pick_id(hit.id.0) == Some(GizmoHandle::AxisX) {
-                        grab = Some([x, y]);
-                    }
+                if view.gizmo().expect("gizmo").hit(&view.camera, [x, y])
+                    == Some(GizmoHandle::AxisX)
+                {
+                    grab = Some([x, y]);
                 }
             }
         }
@@ -2687,5 +2907,156 @@ mod tests {
         assert!(view.handle_button(viewport.to_logical([grab[0] + 12, grab[1]]), 1, false));
         assert!(view.last_gizmo_commit().is_some());
         assert!(preview(&view).is_none(), "the preview is cleared on commit");
+    }
+
+    #[test]
+    fn the_gizmo_interior_falls_through_to_the_scene() {
+        use ferrocad_stage::{GizmoMode, ShapeItem, Stage, TransformGizmo};
+        use ferrocad_types::Vector3;
+
+        let size = [100u32, 100u32];
+        let camera = perspective_camera(size);
+        let viewport = camera.viewport;
+        let mut stage = Stage::new();
+        stage.add_item(ShapeItem::new(42).with_shape(
+            vec![[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0]],
+            vec![],
+            vec![0, 1, 2],
+            vec![],
+        ));
+        let mut view = InventorViewport::new(
+            fake(ImageData {
+                width: 1,
+                height: 1,
+                rgba: vec![0, 0, 0, 255],
+            }),
+            camera,
+            triangle_scene(),
+        );
+        view.set_stage(stage);
+        view.set_gizmo(Some(TransformGizmo::new(
+            42,
+            Vector3::zero(),
+            GizmoMode::Universal,
+        )));
+        view.refresh();
+
+        assert_eq!(
+            view.gizmo().expect("gizmo").hit(&view.camera, [50, 50]),
+            None
+        );
+        // A press in the empty interior leaves the gizmo alone and starts a scene orbit.
+        assert!(!view.handle_button(viewport.to_logical([50, 50]), 1, true));
+        assert!(!view.gizmo().expect("gizmo").is_dragging());
+        assert!(
+            view.orbit_drag.is_some(),
+            "the empty interior orbits the scene"
+        );
+    }
+
+    #[test]
+    fn the_escape_key_cancels_a_gizmo_drag() {
+        use ferrocad_stage::{GizmoMode, TransformGizmo};
+        use ferrocad_types::Vector3;
+
+        let (mut view, viewport) = gizmo_view(TransformGizmo::new(
+            42,
+            Vector3::zero(),
+            GizmoMode::Translate,
+        ));
+        assert!(view.handle_button(viewport.to_logical([80, 50]), 1, true));
+        assert!(view.handle_pointer(viewport.to_logical([92, 50])));
+        assert!(preview(&view).is_some(), "the drag previews a transform");
+        assert!(view.gizmo_value().is_some());
+
+        let escape = KeyDownEvent {
+            keystroke: gpui::Keystroke {
+                key: "escape".to_string(),
+                ..Default::default()
+            },
+            is_held: false,
+            prefer_character_input: false,
+        };
+        let other = KeyDownEvent {
+            keystroke: gpui::Keystroke {
+                key: "a".to_string(),
+                ..Default::default()
+            },
+            ..escape.clone()
+        };
+        assert!(!view.handle_key(&other), "only Escape cancels");
+        assert!(view.handle_key(&escape));
+        assert!(!view.gizmo().expect("gizmo").is_dragging());
+        assert!(preview(&view).is_none(), "the preview is restored");
+        assert!(view.gizmo_value().is_none());
+        assert!(view.last_gizmo_commit().is_none());
+    }
+
+    #[test]
+    fn the_gizmo_readout_tracks_the_drag_and_clears_on_release() {
+        use ferrocad_stage::{GizmoMode, TransformGizmo};
+        use ferrocad_types::Vector3;
+
+        let (mut view, viewport) = gizmo_view(TransformGizmo::new(
+            42,
+            Vector3::zero(),
+            GizmoMode::Translate,
+        ));
+        assert!(view.handle_button(viewport.to_logical([80, 50]), 1, true));
+        assert!(view.handle_pointer(viewport.to_logical([92, 50])));
+        let value = view.gizmo_value().expect("a readout value");
+        assert!(matches!(value, GizmoValue::Linear { .. }));
+        assert!(value.readout().contains("ΔX"), "{}", value.readout());
+
+        assert!(view.handle_button(viewport.to_logical([92, 50]), 1, false));
+        assert!(view.gizmo_value().is_none(), "the tag clears on release");
+        let commit = view.last_gizmo_commit().expect("a commit");
+        assert!(matches!(commit.value, GizmoValue::Linear { .. }));
+        assert!(commit.value.readout().contains("ΔX"));
+    }
+
+    #[test]
+    fn shift_reaches_the_gizmo_as_a_planar_drag() {
+        use ferrocad_stage::{GizmoMode, TransformGizmo};
+        use ferrocad_types::Vector3;
+
+        let (mut view, viewport) = gizmo_view(TransformGizmo::new(
+            42,
+            Vector3::zero(),
+            GizmoMode::Translate,
+        ));
+        let shift = GizmoModifiers {
+            shift: true,
+            ..Default::default()
+        };
+        assert!(view.handle_button_with_modifiers(viewport.to_logical([80, 50]), 1, true, shift));
+        assert!(view.handle_pointer_with_modifiers(
+            viewport.to_logical([80, 65]),
+            GizmoModifiers::default()
+        ));
+        assert!(
+            matches!(view.gizmo_value(), Some(GizmoValue::Planar { .. })),
+            "Shift on an axis starts a plane drag"
+        );
+    }
+
+    #[test]
+    fn gpui_modifiers_map_to_the_gizmo_flags() {
+        let shift = gizmo_modifiers(gpui::Modifiers {
+            shift: true,
+            ..Default::default()
+        });
+        assert!(shift.shift && !shift.ctrl);
+
+        let mut secondary = gpui::Modifiers::default();
+        #[cfg(target_os = "macos")]
+        {
+            secondary.platform = true;
+        }
+        #[cfg(not(target_os = "macos"))]
+        {
+            secondary.control = true;
+        }
+        assert!(gizmo_modifiers(secondary).ctrl);
     }
 }

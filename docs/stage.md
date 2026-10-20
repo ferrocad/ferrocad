@@ -161,6 +161,30 @@ left-click placement, band/marker emission, and right-click ignoring;
   `closest_axis_parameter` (1D skew-line closest point), `ray_plane` (2D), and
   `ring_angle` (arc, via `atan2`), emitting a `GizmoDragEvent` (`delta_transform` +
   `total_transform`) per tick and a `GizmoCommitEvent` on release.
+- **Solver backbone (T1, `docs/gizmo-manipulators.md`)** — `ManipulatorFrame` gives the
+  triad an orthonormal origin/basis (world by default, object-local via
+  `from_rotation`); a near view-aligned axis switches to a screen-space projection
+  (`ScreenAxis`) and is disabled below 1 px; edge-on planes/rings fall back to a
+  view-facing plane; rotation rings use relative 15° detents, with `Ctrl` free via
+  `drag_to_with_modifiers`/`GizmoModifiers`. The existing `begin_drag`/`drag_to`
+  signatures are unchanged, so the Python binding and viewport need no changes.
+- **Analytic hit test (T2)** — `TransformGizmo::hit` projects the axis stems, plane quads
+  and rings and applies a 2 px stroke + 10 px grab padding. Priority is axis > plane >
+  ring, then nearest/front-most; the triad interior is not in the pick set, so it passes
+  through to the scene. `InventorViewport::gizmo_handle_at` delegates to it; the
+  `gizmo_queue` is now draw-only.
+- **Typed values and readout (T3)** — the drag/commit events carry `GizmoAxis`,
+  `GizmoConstraint` and `GizmoValue` (`Linear`/`Planar`/`Angular`); `readout()` formats
+  `ΔX +24.5 mm` / `ΔθZ +15.0°`. `begin_drag_with_modifiers` resolves Shift into a plane,
+  `drag_to_with_modifiers` applies Ctrl to the ring detents, and `set_linear_snap` uses
+  the viewport grid for axis/plane drags. `cancel_drag` aborts without a commit. The
+  viewport threads gpui modifiers, focuses on mouse-down (Esc cancels) and paints the
+  projected tag as a text layer.
+- **Visual language (T4)** — active cyan (`#38BDF8`) / inactive slate (`#94A3B8`) tokens
+  (linear), a 1.5 px shaft/ring ribbon via the shared
+  `ferrocad_graphics::screen_ribbon`, V-shaped micro-chevrons instead of cones, and
+  translucent glass planes with a 1 px rim. The gizmo rebuilds when the camera view
+  changes because the ribbons depend on the view direction.
 - **Transient override** — `ShapeItem` gained `temporary_transform` (`world = placement ·
   temporary`), used as a live preview: the viewport sets it on the target item during a
   drag and clears it on commit, when the document applies the committed transform.
@@ -169,10 +193,17 @@ The gizmo is drawn as an overlay and picked **before** the tool and the scene, s
 on a handle wins.
 
 **Verification:** `ferrocad_stage` tests cover the distinct pick ids, the distance-
-invariant scale, the per-mode handle set, axis/plane/ring drags, the commit, and hover;
+invariant scale, the per-mode handle set, axis/plane/ring drags, the commit, hover, the
+`ManipulatorFrame` basis/local-frame drag, the view-aligned axis fallback, the point-at-eye
+disable rule, the edge-on plane fallback, relative 15° detents/`Ctrl` free rotation,
+frame-change cancellation, the analytic hit test (padding, priority, mode filtering,
+interior pass-through), the typed `GizmoValue`/readout, Shift plane drags, linear grid
+snapping, readout anchors, the ribbon draw modes and the 1.5 px stroke;
 `ferrocad_viewport`'s `a_gizmo_drag_previews_a_transform_on_the_target_item` presses an
 axis handle, drags, asserts the target item's preview, then releases and asserts the
-commit and the cleared preview.
+commit and the cleared preview, `the_gizmo_interior_falls_through_to_the_scene` presses
+the empty interior and asserts a scene orbit instead, and the T3 tests cover Esc cancel,
+the readout lifecycle, Shift planarity and the gpui modifier mapping.
 
 ### T4 — the G-buffer pick pass
 

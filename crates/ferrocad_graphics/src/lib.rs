@@ -23,6 +23,7 @@ pub mod directive;
 pub mod geometry;
 pub mod pick;
 pub mod pixels;
+pub mod ribbon;
 pub mod state;
 
 pub use batch::{DrawBatch, DrawPacket, Generation, MeshId, PickId, RenderQueue};
@@ -31,4 +32,5 @@ pub use directive::{Directive, Directives, NaviCubeDirective};
 pub use geometry::{Geometry, Texture2, Topology, Vertex};
 pub use pick::{Hit, Ray, pick_at, pick_at_hit, pick_at_rect, pick_at_rect_hit, pick_hit};
 pub use pixels::{Rect, Viewport};
+pub use ribbon::screen_ribbon;
 pub use state::StateSnapshot;

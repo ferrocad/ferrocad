@@ -8,7 +8,7 @@
 //! Our axes follow the engine's default view: **+Z toward the viewer**, **+Y up**,
 //! **+X right**. (FreeCAD is Z-up; the piece *names* differ, the behaviour does not.)
 
-use ferrocad_graphics::{Camera, PickId, Projection, Rect, Viewport};
+use ferrocad_graphics::{Camera, PickId, Projection, Rect, Viewport, screen_ribbon};
 use ferrocad_types::{Placement, Rotation, Vector3};
 
 /// Half the extent of the cube (each face sits at ±`CUBE_HALF`).
@@ -441,22 +441,14 @@ impl Piece {
             f64::from(b[1]),
             f64::from(b[2]),
         ));
-        let d = Vector3::new(b.x - a.x, b.y - a.y, 0.0);
-        let length = d.length();
-        if length < f64::EPSILON {
+        let Some(quad) = screen_ribbon(a, b, EDGE_GLOW_HALF, Vector3::new(0.0, 0.0, -1.0)) else {
             return Vec::new();
-        }
-        let n = Vector3::new(-d.y / length, d.x / length, 0.0).scale(EDGE_GLOW_HALF);
+        };
         let local = |point: &Vector3| {
             let p = inverse.transform(point);
             [p.x as f32, p.y as f32, p.z as f32]
         };
-        vec![
-            local(&a.add(&n)),
-            local(&b.add(&n)),
-            local(&b.sub(&n)),
-            local(&a.sub(&n)),
-        ]
+        quad.iter().map(local).collect()
     }
 
     /// Whether this piece is fully behind the cube from the viewer's side: a face whose

@@ -33,6 +33,12 @@ impl GizmoDragEvent {
         self.inner.active_handle.into()
     }
 
+    /// The projected numeric readout (`ΔX +24.5 mm`, `ΔθZ +15.0°`).
+    #[getter]
+    fn readout(&self) -> String {
+        self.inner.value.readout()
+    }
+
     /// The transform delta since the previous tick (16 row-major floats).
     #[getter]
     fn delta_transform(&self) -> Vec<f64> {
@@ -72,6 +78,12 @@ impl GizmoCommitEvent {
     #[getter]
     fn total_transform(&self) -> Vec<f64> {
         self.inner.total_transform.values().to_vec()
+    }
+
+    /// The final numeric readout (`ΔX +24.5 mm`, `ΔθZ +15.0°`).
+    #[getter]
+    fn readout(&self) -> String {
+        self.inner.value.readout()
     }
 
     fn __repr__(&self) -> String {

@@ -94,13 +94,19 @@ and sets its window title.
 fn main() {
     use ferrocad_part_py::Part as part_module;
     pyo3::append_to_inittab!(part_module); // same image => one core
-    ferrocad::run_edition("FerroCAD: Parametric", "ferrocad_parametric");
+    ferrocad::run_edition_with(
+        "FerroCAD: Parametric",
+        "ferrocad_parametric",
+        // The workbench's manipulator; the shell hosts it generically.
+        ferrocad::Contributions::default()
+            .with_manipulator(ferrocad_part_gui::fillet_manipulator),
+    );
 }
 ```
 
 The app script is ordinary Python, re-exporting the base shell's entry points and
-telling the shell how the edition's objects are displayed and edited (the module
-hooks in [`architecture.md`](architecture.md) §9):
+telling the shell how the edition's objects are displayed and how a manipulator's
+commit is applied (the module hooks in [`architecture.md`](architecture.md) §9):
 
 ```python
 # python/ferrocad_parametric/__init__.py
@@ -109,7 +115,7 @@ import Part
 from ferrocad_shell import *          # the shell's data functions
 
 FreeCAD.register_display_provider(_display_mesh)
-FreeCAD.register_dress_up_provider(_dress_up)
+FreeCAD.register_interaction_provider(_interaction)
 ```
 
 Linking the module into the **same image** is required: both `import Part` and

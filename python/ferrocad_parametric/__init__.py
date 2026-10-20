@@ -6,7 +6,13 @@ it registers the two **module hooks** Part needs and seeds the demo solid:
 
 * `FreeCAD.register_display_provider` — how a `Part` object is tessellated for the
   viewport;
-* `FreeCAD.register_dress_up_provider` — how a fillet/chamfer edit is applied.
+* `FreeCAD.register_interaction_provider` — what a manipulator commit means (the edge
+  dress-up arc's `dress_up` / `fillet` / `chamfer`).
+
+The Rust half of the same contribution (the scrubber itself) is
+`ferrocad_part_gui::fillet_manipulator`, which the edition's `main` registers with
+the shell. The shell hosts it through the generic `Manipulator` seam, so it never
+names Part.
 
 The shell imports this module by name (the edition's `HostConfig.entry_module`), so
 it must re-export every entry point the shell calls.
@@ -18,7 +24,7 @@ import FreeCAD
 import Part  # noqa: F401  (links the kernel; registers Part::Feature/Fillet/Chamfer)
 
 # The shell's data functions (`bootstrap`, `model_tree`, `properties`,
-# `set_property`, `evaluate`, `stage_meshes`, `dress_up`, ...).
+# `set_property`, `evaluate`, `stage_meshes`, `interaction`, ...).
 from ferrocad_shell import *  # noqa: F401,F403
 from ferrocad_shell import bootstrap as _base_bootstrap
 
@@ -36,15 +42,24 @@ def _display_mesh(obj):
         return None
 
 
-def _dress_up(obj, mode, edges, first, second):
-    """Create or update a ``Part::Fillet``/``Part::Chamfer`` over `obj`.
+def _interaction(obj, manipulator, action, element, values):
+    """Apply a manipulator commit: the Part edge dress-up (fillet/chamfer).
 
-    The feature is named ``<object>_<mode>`` and reused on later scrubs. The edit is
-    one named transaction (a single undo step), and the document is recomputed before
-    returning, so the caller can re-read :func:`stage_meshes` straight away.
+    The manipulator names its operation and orders the numbers; this hook owns what
+    that means for Part. The feature is named ``<object>_<mode>`` and reused on later
+    scrubs. The edit is one named transaction (a single undo step), and the document
+    is recomputed before returning, so the caller can re-read :func:`stage_meshes`
+    straight away.
     """
-    if mode not in ("Fillet", "Chamfer"):
+    if manipulator != "dress_up":
         return None
+    mode = {"fillet": "Fillet", "chamfer": "Chamfer"}.get(action)
+    if mode is None:
+        return None
+    edges = [element] if element else []
+    first = float(values[0]) if values else 0.0
+    second = float(values[1]) if len(values) > 1 else 0.0
+
     doc = obj.Document
     feature_name = f"{obj.Name}_{mode}"
     doc.openTransaction(f"{mode} {obj.Name}")
@@ -54,10 +69,10 @@ def _dress_up(obj, mode, edges, first, second):
             feature = doc.addObject(f"Part::{mode}", feature_name)
         feature.Base = (obj, edges)
         if mode == "Fillet":
-            feature.Radius = float(first)
+            feature.Radius = first
         else:
-            feature.Distance = float(first)
-            feature.Distance2 = float(second)
+            feature.Distance = first
+            feature.Distance2 = second
         doc.recompute()
         doc.commitTransaction()
     except Exception as exc:
@@ -67,7 +82,7 @@ def _dress_up(obj, mode, edges, first, second):
 
 
 FreeCAD.register_display_provider(_display_mesh)
-FreeCAD.register_dress_up_provider(_dress_up)
+FreeCAD.register_interaction_provider(_interaction)
 
 
 def bootstrap(doc_name: str = "Shell") -> str:

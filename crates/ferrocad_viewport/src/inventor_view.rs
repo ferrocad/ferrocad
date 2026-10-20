@@ -25,7 +25,7 @@ use ferrocad_inventor::{
 };
 use ferrocad_stage::Stage;
 use ferrocad_stage::{
-    DressUpChange, DressUpScrubber, GizmoCommitEvent, GizmoHandle, GizmoModifiers, GizmoValue,
+    GizmoCommitEvent, GizmoHandle, GizmoModifiers, GizmoValue, InteractionCommit, Manipulator,
     MouseButton as StageButton, PointerEvent, PointerKind, Tool, TransformGizmo, snap_to_geometry,
 };
 use ferrocad_types::{Matrix4, Placement, Rotation, Vector3};
@@ -63,8 +63,8 @@ pub enum SelectionEvent {
 pub enum ViewportEvent {
     /// A click selected an object or sub-element, or cleared the selection.
     Selection(SelectionEvent),
-    /// An edge dress-up scrub committed a value for the host to write to a feature.
-    DressUpCommit(DressUpChange),
+    /// A workbench manipulator committed a value for the host to apply.
+    Interaction(InteractionCommit),
 }
 
 /// A gpui view that presents an [`InventorView`] (image path) and routes pointer
@@ -93,13 +93,14 @@ pub struct InventorViewport<V: InventorView> {
     gizmo_queue: RenderQueue,
     /// The last gizmo commit, for the host to apply to the document.
     gizmo_commit: Option<GizmoCommitEvent>,
-    /// The active dress-up scrubber (the edge fillet/chamfer arc), if any. It is the
-    /// most specific manipulator, so it is picked before the gizmo.
-    dress_up: Option<DressUpScrubber>,
-    /// The scrubber's stroke batches, rebuilt when its arc changes.
-    dress_up_queue: RenderQueue,
-    /// The last dress-up commit, for the host to write to the feature.
-    dress_up_commit: Option<DressUpChange>,
+    /// The workbench manipulators (the edge fillet arc, a thickness grip, …), in
+    /// registration order. They are the most specific overlays: dispatched in reverse
+    /// order, before the gizmo, the tool and the scene.
+    manipulators: Vec<Box<dyn Manipulator>>,
+    /// Their compiled overlay, rebuilt when any of them reports a change.
+    manipulator_queue: RenderQueue,
+    /// The last manipulator commit, for the host to apply.
+    interaction_commit: Option<InteractionCommit>,
     /// The viewport's focus handle, created on the first paint. The Esc handler and the
     /// modifier state make the element focusable.
     focus: Option<FocusHandle>,
@@ -226,9 +227,9 @@ impl<V: InventorView> InventorViewport<V> {
             gizmo: None,
             gizmo_queue: RenderQueue::default(),
             gizmo_commit: None,
-            dress_up: None,
-            dress_up_queue: RenderQueue::default(),
-            dress_up_commit: None,
+            manipulators: Vec::new(),
+            manipulator_queue: RenderQueue::default(),
+            interaction_commit: None,
             focus: None,
             gizmo_value: None,
             gizmo_pointer: None,
@@ -355,10 +356,10 @@ impl<V: InventorView> InventorViewport<V> {
         cancelled
     }
 
-    /// Handle a key press. `Esc` cancels an active dress-up scrub, then a gizmo drag.
+    /// Handle a key press. `Esc` cancels an active manipulator drag, then a gizmo drag.
     pub fn handle_key(&mut self, event: &KeyDownEvent) -> bool {
         if event.keystroke.key == "escape" {
-            if self.cancel_dress_up_drag() {
+            if self.cancel_manipulator_drag() {
                 return true;
             }
             return self.cancel_gizmo_drag();
@@ -376,50 +377,98 @@ impl<V: InventorView> InventorViewport<V> {
         self.gizmo_commit.as_ref()
     }
 
-    /// Show an edge dress-up scrubber (the fillet/chamfer arc).
-    pub fn with_dress_up_scrubber(mut self, scrubber: DressUpScrubber) -> Self {
-        self.set_dress_up_scrubber(Some(scrubber));
+    /// Add a workbench manipulator (the edge fillet arc, a thickness grip, …).
+    ///
+    /// Manipulators are picked in reverse registration order, so the most recently
+    /// added one wins. The viewport knows nothing about what a manipulator commits: it
+    /// reports [`InteractionCommit`]s and lets the host route them to the workbench
+    /// that registered the manipulator.
+    pub fn with_manipulator(mut self, manipulator: Box<dyn Manipulator>) -> Self {
+        self.add_manipulator(manipulator);
         self
     }
 
-    /// Replace (or clear) the edge dress-up scrubber.
-    pub fn set_dress_up_scrubber(&mut self, scrubber: Option<DressUpScrubber>) {
-        self.dress_up = scrubber;
-        self.dress_up_commit = None;
-        self.rebuild_dress_up_queue();
+    /// Add a manipulator, replacing any with the same [`Manipulator::id`].
+    pub fn add_manipulator(&mut self, manipulator: Box<dyn Manipulator>) {
+        self.remove_manipulator(manipulator.id());
+        self.manipulators.push(manipulator);
+        self.interaction_commit = None;
+        self.rebuild_manipulator_queue();
     }
 
-    /// The active dress-up scrubber, if any.
-    pub fn dress_up_scrubber(&self) -> Option<&DressUpScrubber> {
-        self.dress_up.as_ref()
+    /// Replace every manipulator: the shape of a selection (one target, one manipulator).
+    pub fn set_manipulators(&mut self, manipulators: Vec<Box<dyn Manipulator>>) {
+        self.manipulators = manipulators;
+        self.interaction_commit = None;
+        self.rebuild_manipulator_queue();
     }
 
-    /// The active dress-up scrubber, mutably (e.g. to bound its range from the document).
-    ///
-    /// The stroke is rebuilt before the next draw, so a value written here is shown.
-    pub fn dress_up_scrubber_mut(&mut self) -> Option<&mut DressUpScrubber> {
-        self.dress_up.as_mut()
+    /// Remove the manipulator registered as `id`, if any.
+    pub fn remove_manipulator(&mut self, id: &str) {
+        let before = self.manipulators.len();
+        self.manipulators
+            .retain(|manipulator| manipulator.id() != id);
+        if self.manipulators.len() != before {
+            self.interaction_commit = None;
+            self.rebuild_manipulator_queue();
+        }
     }
 
-    /// The last committed dress-up value, if a scrub has ended.
-    pub fn last_dress_up_commit(&self) -> Option<&DressUpChange> {
-        self.dress_up_commit.as_ref()
+    /// The manipulator registered as `id`.
+    pub fn manipulator(&self, id: &str) -> Option<&dyn Manipulator> {
+        self.manipulators
+            .iter()
+            .find(|manipulator| manipulator.id() == id)
+            .map(|manipulator| &**manipulator)
     }
 
-    /// Take the last committed dress-up value, for the host to write to the feature.
-    pub fn take_dress_up_commit(&mut self) -> Option<DressUpChange> {
-        self.dress_up_commit.take()
+    /// The manipulator registered as `id`, mutably (e.g. to bound its range from the
+    /// document). The overlay is rebuilt before the next draw, so a value written here
+    /// is shown.
+    pub fn manipulator_mut(&mut self, id: &str) -> Option<&mut dyn Manipulator> {
+        for manipulator in &mut self.manipulators {
+            if manipulator.id() == id {
+                return Some(&mut **manipulator);
+            }
+        }
+        None
     }
 
-    /// Cancel an active dress-up scrub, restoring its press value. Returns whether a
+    /// The manipulators, in registration order.
+    pub fn manipulators(&self) -> &[Box<dyn Manipulator>] {
+        &self.manipulators
+    }
+
+    /// Drop every manipulator.
+    pub fn clear_manipulators(&mut self) {
+        if self.manipulators.is_empty() {
+            return;
+        }
+        self.manipulators.clear();
+        self.interaction_commit = None;
+        self.rebuild_manipulator_queue();
+    }
+
+    /// The last manipulator commit, if a drag has ended.
+    pub fn last_interaction_commit(&self) -> Option<&InteractionCommit> {
+        self.interaction_commit.as_ref()
+    }
+
+    /// Take the last manipulator commit, for the host to apply.
+    pub fn take_interaction_commit(&mut self) -> Option<InteractionCommit> {
+        self.interaction_commit.take()
+    }
+
+    /// Cancel an active manipulator drag, restoring its press value. Returns whether a
     /// drag was active.
-    pub fn cancel_dress_up_drag(&mut self) -> bool {
+    pub fn cancel_manipulator_drag(&mut self) -> bool {
         let cancelled = self
-            .dress_up
-            .as_mut()
-            .is_some_and(DressUpScrubber::cancel_drag);
+            .manipulators
+            .iter_mut()
+            .find(|manipulator| manipulator.is_dragging())
+            .is_some_and(|manipulator| manipulator.drag_cancel());
         if cancelled {
-            self.rebuild_dress_up_queue();
+            self.rebuild_manipulator_queue();
         }
         cancelled
     }
@@ -655,19 +704,37 @@ impl<V: InventorView> InventorViewport<V> {
             return changed;
         }
 
-        // The dress-up arc is the most specific manipulator: an active scrub consumes
-        // the move; otherwise it claims only its stroke, and its interior falls through.
-        if let Some(scrubber) = self.dress_up.as_mut() {
-            if scrubber.is_dragging() {
-                if scrubber.drag_to(&self.camera, device).is_some() {
-                    self.rebuild_dress_up_queue();
-                    return true;
-                }
-                return false;
+        // Workbench manipulators are the most specific overlays: an active drag
+        // consumes the move; otherwise each claims only its grab targets, and its
+        // interior falls through. The most recently added manipulator owns the hover.
+        if self
+            .manipulators
+            .iter()
+            .any(|manipulator| manipulator.is_dragging())
+        {
+            let changed = self
+                .manipulators
+                .iter_mut()
+                .find(|manipulator| manipulator.is_dragging())
+                .is_some_and(|manipulator| manipulator.drag_update(&self.camera, device));
+            if changed {
+                self.rebuild_manipulator_queue();
             }
-            let hovered = scrubber.hit(&self.camera, device);
-            if scrubber.set_hovered(hovered) {
-                self.rebuild_dress_up_queue();
+            return changed;
+        }
+        {
+            let hits: Vec<bool> = self
+                .manipulators
+                .iter()
+                .map(|manipulator| manipulator.hit(&self.camera, device))
+                .collect();
+            let top = hits.iter().rposition(|hit| *hit);
+            let mut changed = false;
+            for (index, manipulator) in self.manipulators.iter_mut().enumerate() {
+                changed |= manipulator.set_hovered(Some(index) == top);
+            }
+            if changed {
+                self.rebuild_manipulator_queue();
                 return true;
             }
         }
@@ -824,28 +891,29 @@ impl<V: InventorView> InventorViewport<V> {
         }
         // Negative space inside the gizmo rect (or a click outside it) continues to the
         // gizmo, tool and scene below.
-        // The dress-up arc takes priority over the gizmo and the scene: it is the
-        // manipulator the current selection asked for.
-        if self.dress_up.is_some() {
-            if down {
-                let started = match self.dress_up.as_mut() {
-                    Some(scrubber) => scrubber.begin_drag(&self.camera, device),
-                    None => false,
-                };
-                if started {
-                    self.rebuild_dress_up_queue();
-                    return true;
-                }
-            } else {
-                let commit = match self.dress_up.as_mut() {
-                    Some(scrubber) => scrubber.end_drag(),
-                    None => None,
-                };
-                if let Some(commit) = commit {
-                    self.dress_up_commit = Some(commit);
-                    self.rebuild_dress_up_queue();
-                    return true;
-                }
+        // A workbench manipulator takes priority over the gizmo and the scene: it is
+        // the interaction the current selection asked for.
+        if down {
+            let started = self
+                .manipulators
+                .iter_mut()
+                .rev()
+                .any(|manipulator| manipulator.drag_begin(&self.camera, device));
+            if started {
+                self.rebuild_manipulator_queue();
+                return true;
+            }
+        } else {
+            let commit = self
+                .manipulators
+                .iter_mut()
+                .rev()
+                .find(|manipulator| manipulator.is_dragging())
+                .and_then(|manipulator| manipulator.drag_end());
+            if let Some(commit) = commit {
+                self.interaction_commit = Some(commit);
+                self.rebuild_manipulator_queue();
+                return true;
             }
         }
 
@@ -1108,18 +1176,18 @@ impl<V: InventorView> InventorViewport<V> {
         self.gizmo_queue = queue;
     }
 
-    /// Rebuild the dress-up stroke from the scrubber's current value and camera.
-    fn rebuild_dress_up_queue(&mut self) {
-        if let Some(scrubber) = self.dress_up.as_mut() {
-            scrubber.update(&self.camera);
+    /// Rebuild the manipulators' overlay from their current items.
+    fn rebuild_manipulator_queue(&mut self) {
+        for manipulator in &mut self.manipulators {
+            manipulator.refresh(&self.camera);
         }
         let mut queue = RenderQueue::default();
-        if let Some(scrubber) = self.dress_up.as_ref() {
-            for item in scrubber.items() {
+        for manipulator in &self.manipulators {
+            for item in manipulator.items() {
                 item.emit(&mut queue);
             }
         }
-        self.dress_up_queue = queue;
+        self.manipulator_queue = queue;
     }
 
     /// Preview `transform` on the gizmo's target stage item (or clear the preview).
@@ -1154,20 +1222,21 @@ impl<V: InventorView> InventorViewport<V> {
         if self.chrome_contains(logical) {
             return false;
         }
-        // An active dress-up scrub owns the gesture, even when the pointer leaves the
+        // An active manipulator drag owns the gesture, even when the pointer leaves the
         // element (gpui keeps delivering the drag).
         if self
-            .dress_up
-            .as_ref()
-            .is_some_and(|scrubber| scrubber.is_dragging())
+            .manipulators
+            .iter()
+            .any(|manipulator| manipulator.is_dragging())
         {
             let device = self.camera.viewport.to_device(logical);
-            let changed = match self.dress_up.as_mut() {
-                Some(scrubber) => scrubber.drag_to(&self.camera, device).is_some(),
-                None => false,
-            };
+            let changed = self
+                .manipulators
+                .iter_mut()
+                .find(|manipulator| manipulator.is_dragging())
+                .is_some_and(|manipulator| manipulator.drag_update(&self.camera, device));
             if changed {
-                self.rebuild_dress_up_queue();
+                self.rebuild_manipulator_queue();
             }
             return changed;
         }
@@ -1480,13 +1549,13 @@ impl<V: InventorView> InventorViewport<V> {
         if gizmo_rebuilt {
             self.rebuild_gizmo_queue();
         }
-        // The dress-up arc is camera-facing, so it rebuilds with the view too.
-        let dress_up_rebuilt = match self.dress_up.as_mut() {
-            Some(scrubber) => scrubber.update(&self.camera),
-            None => false,
-        };
-        if dress_up_rebuilt {
-            self.rebuild_dress_up_queue();
+        // A manipulator's overlay is camera-facing, so it rebuilds with the view too.
+        let mut manipulators_rebuilt = false;
+        for manipulator in &mut self.manipulators {
+            manipulators_rebuilt |= manipulator.refresh(&self.camera);
+        }
+        if manipulators_rebuilt {
+            self.rebuild_manipulator_queue();
         }
 
         // One pass: the scene (legacy + stage) first, then the overlays (the tool's
@@ -1514,9 +1583,9 @@ impl<V: InventorView> InventorViewport<V> {
                 overlay: true,
             });
         }
-        if !self.dress_up_queue.is_empty() {
+        if !self.manipulator_queue.is_empty() {
             views.push(ViewSpec {
-                queue: &self.dress_up_queue,
+                queue: &self.manipulator_queue,
                 camera: &self.camera,
                 rect: None,
                 overlay: true,
@@ -1703,7 +1772,7 @@ impl<V: InventorView + 'static> Render for InventorViewport<V> {
                 // Report what the click produced. `emit` queues the effect until this
                 // update returns, so the host may update this viewport in response.
                 let selection = this.take_selection();
-                let commit = this.take_dress_up_commit();
+                let commit = this.take_interaction_commit();
                 if changed {
                     cx.notify();
                 }
@@ -1711,7 +1780,7 @@ impl<V: InventorView + 'static> Render for InventorViewport<V> {
                     cx.emit(ViewportEvent::Selection(selection));
                 }
                 if let Some(commit) = commit {
-                    cx.emit(ViewportEvent::DressUpCommit(commit));
+                    cx.emit(ViewportEvent::Interaction(commit));
                 }
             }))
             .on_drag(ViewportDragMarker, |_, _, _, cx| {
@@ -1766,19 +1835,23 @@ impl<V: InventorView + 'static> Render for InventorViewport<V> {
             root
         };
 
-        // The dress-up dimension pill: `R 3.50 mm`, always shown for the selected edge.
-        let root = if let Some(scrubber) = self.dress_up.as_ref() {
-            if let Some(anchor) = scrubber.readout_anchor(&self.camera) {
+        // A manipulator's dimension pill (the edge arc's `R 3.50 mm`): the manipulator
+        // supplies both the text and where it sits, so the viewport names none of them.
+        let readout = self.manipulators.iter().rev().find_map(|manipulator| {
+            Some((
+                manipulator.readout()?,
+                manipulator.readout_anchor(&self.camera)?,
+            ))
+        });
+        let root = match readout {
+            Some((text, anchor)) => {
                 let logical = self
                     .camera
                     .viewport
                     .to_logical([anchor[0].round() as i32, anchor[1].round() as i32]);
-                root.child(readout_pill(scrubber.readout(), logical))
-            } else {
-                root
+                root.child(readout_pill(text, logical))
             }
-        } else {
-            root
+            None => root,
         };
 
         // The chrome bar is gpui, beside the 3D overlay. It is positioned from the
@@ -2125,6 +2198,7 @@ mod tests {
     use super::*;
     use ferrocad_graphics::{Projection, Topology};
     use ferrocad_inventor::{Node, NodeKind, compile_with};
+    use ferrocad_stage::{DrawMode, ShapeItem};
     use ferrocad_types::{Placement, Rotation, Vector3};
     use gpui::{Bounds, point, px, size};
 
@@ -3493,110 +3567,213 @@ mod tests {
         );
     }
 
-    /// A viewport with a fillet scrubber on an edge spanning x = −1..1 through the
-    /// origin, seen by `perspective_camera` (the edge projects horizontally).
-    fn dress_up_view() -> (InventorViewport<FakeView>, Viewport) {
-        use ferrocad_stage::{DressUpMode, DressUpScrubber};
-        use ferrocad_types::Vector3;
+    /// A minimal workbench manipulator: a grab disc at the origin's projection; a
+    /// horizontal drag adds one unit per 20 device pixels, and the commit reports the
+    /// value. It exists to prove the viewport routes **any** manipulator without naming
+    /// one — the Part workbench's arc is not linked here.
+    struct FakeManipulator {
+        value: f64,
+        press: Option<(f64, f64)>,
+        hovered: bool,
+        view: Option<Matrix4>,
+        item: ShapeItem,
+    }
 
+    impl FakeManipulator {
+        fn new() -> Self {
+            Self {
+                value: 1.0,
+                press: None,
+                hovered: false,
+                view: None,
+                item: ShapeItem::new(777)
+                    .with_draw_mode(DrawMode::Wireframe)
+                    .with_selectable(false),
+            }
+        }
+    }
+
+    impl Manipulator for FakeManipulator {
+        fn id(&self) -> &'static str {
+            "fake"
+        }
+
+        fn items(&self) -> &[ShapeItem] {
+            std::slice::from_ref(&self.item)
+        }
+
+        fn hit(&self, camera: &Camera, device: [i32; 2]) -> bool {
+            let Some(point) = ferrocad_stage::screen::project_device(camera, Vector3::zero())
+            else {
+                return false;
+            };
+            let centre = [point[0].round() as i32, point[1].round() as i32];
+            (device[0] - centre[0]).abs() <= 20 && (device[1] - centre[1]).abs() <= 20
+        }
+
+        fn drag_begin(&mut self, camera: &Camera, device: [i32; 2]) -> bool {
+            if !self.hit(camera, device) {
+                return false;
+            }
+            self.press = Some((f64::from(device[0]), self.value));
+            true
+        }
+
+        fn drag_update(&mut self, _camera: &Camera, device: [i32; 2]) -> bool {
+            let Some((press_x, press_value)) = self.press else {
+                return false;
+            };
+            let value = press_value + (f64::from(device[0]) - press_x) / 20.0;
+            if (value - self.value).abs() <= 1e-12 {
+                return false;
+            }
+            self.value = value;
+            true
+        }
+
+        fn drag_end(&mut self) -> Option<InteractionCommit> {
+            self.press.take()?;
+            Some(
+                InteractionCommit::new("fake", 7, "set")
+                    .with_values([self.value])
+                    .with_readout(format!("{:.2}", self.value)),
+            )
+        }
+
+        fn drag_cancel(&mut self) -> bool {
+            let Some((_, value)) = self.press.take() else {
+                return false;
+            };
+            self.value = value;
+            true
+        }
+
+        fn is_dragging(&self) -> bool {
+            self.press.is_some()
+        }
+
+        fn set_hovered(&mut self, hovered: bool) -> bool {
+            if self.hovered == hovered {
+                return false;
+            }
+            self.hovered = hovered;
+            true
+        }
+
+        fn refresh(&mut self, camera: &Camera) -> bool {
+            if self.view == Some(camera.view) {
+                return false;
+            }
+            self.view = Some(camera.view);
+            self.item.set_shape(
+                vec![[0.0, 0.0, 0.0], [0.5, 0.0, 0.0]],
+                Vec::new(),
+                Vec::new(),
+                vec![0, 1],
+            );
+            true
+        }
+
+        fn readout(&self) -> Option<String> {
+            Some(format!("{:.2}", self.value))
+        }
+
+        fn readout_anchor(&self, camera: &Camera) -> Option<[f64; 2]> {
+            ferrocad_stage::screen::project_device(camera, Vector3::zero())
+        }
+    }
+
+    /// A viewport with the fake manipulator at the origin (device `[50, 50]`).
+    fn manipulator_view() -> (InventorViewport<FakeView>, Viewport) {
         let camera = perspective_camera([100, 100]);
         let viewport = camera.viewport;
-        let scrubber = DressUpScrubber::new(
-            7,
-            DressUpMode::Fillet,
-            "Edge1",
-            vec![Vector3::new(-1.0, 0.0, 0.0), Vector3::new(1.0, 0.0, 0.0)],
-        )
-        .with_value(1.0);
-        let mut view =
-            InventorViewport::new(fake(ImageData::default()), camera, Scene::default())
-                .with_dress_up_scrubber(scrubber);
+        let mut view = InventorViewport::new(fake(ImageData::default()), camera, Scene::default())
+            .with_manipulator(Box::new(FakeManipulator::new()));
         view.refresh();
         (view, viewport)
     }
 
-    /// The apex device position and the outward unit direction from the anchor.
-    fn dress_up_grip(view: &InventorViewport<FakeView>) -> ([i32; 2], [f64; 2]) {
-        let scrubber = view.dress_up_scrubber().expect("a scrubber");
-        let anchor = scrubber
-            .screen_anchor(view.camera())
-            .expect("a projected anchor");
-        let apex = scrubber
-            .readout_anchor(view.camera())
-            .expect("a projected apex");
-        let (dx, dy) = (apex[0] - anchor[0], apex[1] - anchor[1]);
-        let length = dx.hypot(dy).max(1e-9);
-        (
-            [apex[0].round() as i32, apex[1].round() as i32],
-            [dx / length, dy / length],
-        )
+    #[test]
+    fn a_manipulator_drag_commits_neutral_data() {
+        let (mut view, viewport) = manipulator_view();
+        assert!(view.handle_button(viewport.to_logical([50, 50]), 1, true));
+        assert!(
+            view.manipulator("fake")
+                .expect("a manipulator")
+                .is_dragging()
+        );
+        assert!(view.handle_pointer(viewport.to_logical([70, 50])));
+        assert!(view.handle_button(viewport.to_logical([70, 50]), 1, false));
+
+        let commit = view.last_interaction_commit().expect("a commit");
+        assert_eq!(commit.manipulator, "fake");
+        assert_eq!(commit.target, 7);
+        assert_eq!(commit.action, "set");
+        assert!(commit.values[0] > 1.0, "the drag grew the value");
+        assert!(
+            !view
+                .manipulator("fake")
+                .expect("a manipulator")
+                .is_dragging()
+        );
+        assert!(view.take_interaction_commit().is_some());
+        assert!(
+            view.last_interaction_commit().is_none(),
+            "taking consumes it"
+        );
     }
 
     #[test]
-    fn a_dress_up_scrub_commits_a_larger_radius() {
-        let (mut view, viewport) = dress_up_view();
-        let (grab, outward) = dress_up_grip(&view);
-        let target = [
-            (f64::from(grab[0]) + outward[0] * 20.0).round() as i32,
-            (f64::from(grab[1]) + outward[1] * 20.0).round() as i32,
-        ];
-
-        assert!(view.handle_button(viewport.to_logical(grab), 1, true));
-        assert!(view.dress_up_scrubber().expect("scrubber").is_dragging());
-        assert!(view.handle_pointer(viewport.to_logical(target)));
-        assert!(view.handle_button(viewport.to_logical(target), 1, false));
-
-        let commit = view.last_dress_up_commit().expect("a commit");
-        assert_eq!(commit.target_id, 7);
-        assert_eq!(commit.edge, "Edge1");
-        assert!(commit.value.primary() > 1.0, "the drag grew the radius");
-        assert!(!view.dress_up_scrubber().expect("scrubber").is_dragging());
-        assert!(view.take_dress_up_commit().is_some());
-        assert!(view.last_dress_up_commit().is_none(), "taking consumes it");
-    }
-
-    #[test]
-    fn a_click_away_from_the_arc_falls_through_to_the_scene() {
-        let (mut view, viewport) = dress_up_view();
-        // A corner far from the edge, the arc and the radius tick.
+    fn a_click_away_from_a_manipulator_falls_through_to_the_scene() {
+        let (mut view, viewport) = manipulator_view();
+        // A corner far from the grab disc.
         assert!(!view.handle_button(viewport.to_logical([5, 5]), 1, true));
-        assert!(!view.dress_up_scrubber().expect("scrubber").is_dragging());
+        assert!(
+            !view
+                .manipulator("fake")
+                .expect("a manipulator")
+                .is_dragging()
+        );
         assert!(view.orbit_drag.is_some(), "the scene gesture still starts");
         view.handle_button(viewport.to_logical([5, 5]), 1, false);
-        assert!(view.last_dress_up_commit().is_none());
+        assert!(view.last_interaction_commit().is_none());
     }
 
     #[test]
-    fn the_scrubber_stroke_is_drawn_and_hovers() {
-        let (mut view, viewport) = dress_up_view();
-        assert!(!view.dress_up_queue.is_empty(), "the arc is drawn");
-        let (grab, _) = dress_up_grip(&view);
-        assert!(view.handle_pointer(viewport.to_logical(grab)));
-        assert!(view.dress_up_scrubber().expect("scrubber").hovered());
+    fn the_manipulator_overlay_is_drawn_and_hovers() {
+        let (mut view, viewport) = manipulator_view();
+        assert!(!view.manipulator_queue.is_empty(), "the overlay is drawn");
+        assert!(view.handle_pointer(viewport.to_logical([50, 50])));
+        assert!(
+            !view.handle_pointer(viewport.to_logical([50, 50])),
+            "an unchanged hover is a no-op"
+        );
+        assert!(
+            view.handle_pointer(viewport.to_logical([5, 5])),
+            "moving away clears the hover"
+        );
     }
 
     #[test]
-    fn cancelling_a_dress_up_scrub_restores_the_radius() {
-        let (mut view, viewport) = dress_up_view();
-        let (grab, outward) = dress_up_grip(&view);
-        let target = [
-            (f64::from(grab[0]) + outward[0] * 20.0).round() as i32,
-            (f64::from(grab[1]) + outward[1] * 20.0).round() as i32,
-        ];
-        assert!(view.handle_button(viewport.to_logical(grab), 1, true));
-        assert!(view.handle_pointer(viewport.to_logical(target)));
-        assert!(view.dress_up_scrubber().expect("scrubber").value() > 1.0);
-        assert!(view.cancel_dress_up_drag());
-        assert!((view.dress_up_scrubber().expect("scrubber").value() - 1.0).abs() < 1e-12);
-        assert!(view.last_dress_up_commit().is_none());
+    fn cancelling_a_manipulator_drag_ends_it_without_a_commit() {
+        let (mut view, viewport) = manipulator_view();
+        assert!(view.handle_button(viewport.to_logical([50, 50]), 1, true));
+        assert!(view.handle_pointer(viewport.to_logical([70, 50])));
+        assert!(view.cancel_manipulator_drag());
+        assert!(
+            !view
+                .manipulator("fake")
+                .expect("a manipulator")
+                .is_dragging()
+        );
+        assert!(view.last_interaction_commit().is_none());
     }
 
     #[test]
-    fn a_dress_up_arc_takes_priority_over_the_gizmo() {
+    fn a_manipulator_takes_priority_over_the_gizmo() {
         use ferrocad_stage::{GizmoMode, TransformGizmo};
-        use ferrocad_types::Vector3;
 
-        let (mut view, viewport) = dress_up_view();
+        let (mut view, viewport) = manipulator_view();
         view.set_gizmo(Some(TransformGizmo::new(
             7,
             Vector3::zero(),
@@ -3604,11 +3781,13 @@ mod tests {
         )));
         view.refresh();
 
-        let (grab, _) = dress_up_grip(&view);
-        assert!(view.handle_button(viewport.to_logical(grab), 1, true));
+        // 15 px from the origin: inside the fake's grab disc, and on the gizmo's X stem.
+        assert!(view.handle_button(viewport.to_logical([65, 50]), 1, true));
         assert!(
-            view.dress_up_scrubber().expect("scrubber").is_dragging(),
-            "the arc owns the press"
+            view.manipulator("fake")
+                .expect("a manipulator")
+                .is_dragging(),
+            "the manipulator owns the press"
         );
         assert!(!view.gizmo().expect("gizmo").is_dragging());
     }

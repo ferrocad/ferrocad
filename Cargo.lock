@@ -2421,6 +2421,7 @@ name = "ferrocad_parametric"
 version = "0.1.2"
 dependencies = [
  "ferrocad",
+ "ferrocad_part_gui",
  "ferrocad_part_py",
  "pyo3",
 ]
@@ -2434,6 +2435,16 @@ dependencies = [
  "ferrocad_occt",
  "ferrocad_types",
  "serde_json",
+]
+
+[[package]]
+name = "ferrocad_part_gui"
+version = "0.1.2"
+dependencies = [
+ "ferrocad_geom",
+ "ferrocad_graphics",
+ "ferrocad_stage",
+ "ferrocad_types",
 ]
 
 [[package]]

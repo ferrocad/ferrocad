@@ -18,9 +18,9 @@ import FreeCAD
 _NAMESPACE: dict = {}
 
 # Beyond the model, the shell asks for the two pieces the viewport needs: the
-# tessellated shapes to draw (:func:`stage_meshes`) and the parametric feature a
-# dress-up scrub writes (:func:`dress_up`). Both go through the module hooks on
-# ``FreeCAD``, so this script names no workbench.
+# tessellated shapes to draw (:func:`stage_meshes`) and the document edit a
+# manipulator commit produces (:func:`interaction`). Both go through the module
+# hooks on ``FreeCAD``, so this script names no workbench.
 
 # Property type id -> editor kind. A type absent here is read-only in the pane.
 _EDITABLE_KINDS = {
@@ -312,14 +312,15 @@ def stage_meshes() -> str:
     return _json(meshes)
 
 
-def dress_up(
-    object_name: str, mode: str, edges_json: str, first: float, second: float = 0.0
+def interaction(
+    object_name: str, manipulator: str, action: str, element: str, values_json: str
 ) -> str:
-    """Apply a dress-up edit through the module that supports it.
+    """Apply a manipulator commit through the module that supports it.
 
-    The feature type, its properties and the transaction belong to the workbench
-    (``FreeCAD.register_dress_up_provider``); this function only resolves the object
-    and marshals the request. Returns ``{"ok": ...}``.
+    The manipulator is presentation-side (`ferrocad_stage::Manipulator`); the edit it
+    implies belongs to the workbench (``FreeCAD.register_interaction_provider``). This
+    function only resolves the object and marshals the request; the shell names no
+    workbench and links no kernel. Returns ``{"ok": ...}``.
     """
     try:
         doc = _active_doc()
@@ -329,11 +330,13 @@ def dress_up(
     if base is None:
         return _json({"ok": False, "error": f"no object named {object_name}"})
     try:
-        edges = [str(edge) for edge in json.loads(edges_json)]
+        values = [float(value) for value in json.loads(values_json)]
     except Exception as exc:
-        return _json({"ok": False, "error": f"bad edge list: {exc}"})
+        return _json({"ok": False, "error": f"bad values: {exc}"})
 
-    result = FreeCAD.dress_up(base, mode, edges, float(first), float(second))
+    result = FreeCAD.interaction(base, manipulator, action, element, values)
     if result is None:
-        return _json({"ok": False, "error": f"no module can apply a {mode}"})
+        return _json(
+            {"ok": False, "error": f"no module handles {manipulator} {action}"}
+        )
     return _json(result)

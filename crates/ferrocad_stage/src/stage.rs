@@ -1,10 +1,7 @@
 //! The stage: an ordered collection of declarative visual items.
 
-use ferrocad_geom::SelectionRef;
 use ferrocad_graphics::RenderQueue;
-use ferrocad_types::Vector3;
 
-use crate::dress_up::{DressUpMode, DressUpScrubber};
 use crate::shape::ShapeItem;
 
 /// A collection of declarative visual items.
@@ -59,43 +56,6 @@ impl Stage {
     /// The item carrying `entity`, if the stage has one.
     pub fn item(&self, entity: u32) -> Option<&ShapeItem> {
         self.items.iter().find(|item| item.entity_id() == entity)
-    }
-
-    /// The dress-up scrubber for a selection, when it names an **edge** of an item.
-    ///
-    /// This is the presentation half of the edge manipulator: the viewport already
-    /// knows the selection and the stage, so the mapping from `Edge3` to the scrubber
-    /// lives here rather than in a host. A face or vertex selection, an unknown entity
-    /// or a mesh without a wire run returns `None`.
-    pub fn scrubber_for(
-        &self,
-        selection: &SelectionRef,
-        mode: DressUpMode,
-    ) -> Option<DressUpScrubber> {
-        let edge = selection.elements.first()?;
-        if !edge.starts_with("Edge") {
-            return None;
-        }
-        let points = self.item(selection.object)?.edge_polyline(edge)?;
-        if points.len() < 2 {
-            return None;
-        }
-        let points = points
-            .into_iter()
-            .map(|point| {
-                Vector3::new(
-                    f64::from(point[0]),
-                    f64::from(point[1]),
-                    f64::from(point[2]),
-                )
-            })
-            .collect();
-        Some(DressUpScrubber::new(
-            selection.object,
-            mode,
-            edge.clone(),
-            points,
-        ))
     }
 
     /// Compile every item into `queue`, appending after whatever is already there (so a
@@ -182,52 +142,5 @@ mod tests {
         let stage = Stage::new().with_item(slab(7)).with_item(triangle(8));
         assert_eq!(stage.item(7).map(|item| item.entity_id()), Some(7));
         assert!(stage.item(9).is_none());
-    }
-
-    #[test]
-    fn an_edge_selection_makes_a_scrubber_over_the_edge() {
-        use crate::dress_up::DressUpMode;
-        use ferrocad_geom::SelectionRef;
-
-        let stage = Stage::new().with_item(slab(7));
-        let scrubber = stage
-            .scrubber_for(&SelectionRef::element(7, "Edge1"), DressUpMode::Fillet)
-            .expect("a scrubber");
-        assert_eq!(scrubber.target_id(), 7);
-        assert_eq!(scrubber.edge_name(), "Edge1");
-        assert_eq!(scrubber.mode(), DressUpMode::Fillet);
-
-        // The edge runs from (0,0,0) to (10,0,0); the anchor is its midpoint.
-        let anchor = scrubber.anchor().expect("an anchor");
-        assert!((anchor.x - 5.0).abs() < 1e-9);
-        assert!(anchor.y.abs() < 1e-9);
-    }
-
-    #[test]
-    fn a_face_or_unknown_selection_makes_no_scrubber() {
-        use crate::dress_up::DressUpMode;
-        use ferrocad_geom::SelectionRef;
-
-        let stage = Stage::new().with_item(slab(7));
-        assert!(
-            stage
-                .scrubber_for(&SelectionRef::element(7, "Face1"), DressUpMode::Fillet)
-                .is_none()
-        );
-        assert!(
-            stage
-                .scrubber_for(&SelectionRef::whole(7), DressUpMode::Fillet)
-                .is_none()
-        );
-        assert!(
-            stage
-                .scrubber_for(&SelectionRef::element(9, "Edge1"), DressUpMode::Fillet)
-                .is_none()
-        );
-        assert!(
-            stage
-                .scrubber_for(&SelectionRef::element(7, "Edge9"), DressUpMode::Fillet)
-                .is_none()
-        );
     }
 }

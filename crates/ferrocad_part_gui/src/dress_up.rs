@@ -6,6 +6,14 @@
 //! screen-invariant arc drawn over the selected edge plus the drag that turns into a
 //! radius.
 //!
+//! This is **Part-specific presentation**, so it lives beside the workbench rather than
+//! in the generic stage. It implements [`Manipulator`], which means any viewport can
+//! host it and the shell can route its commit without naming `Part`:
+//! [`DressUpScrubber`] commits an [`InteractionCommit`] with
+//! [`DRESS_UP_ID`](Self::DRESS_UP_ID) as the manipulator id, and
+//! [`DressUpChange::from_commit`] turns that neutral data back into the typed value the
+//! document layer writes to the feature.
+//!
 //! ```text
 //!                  (arc, screen-space stroke)
 //!                        ╭━━━━━╮
@@ -27,7 +35,7 @@
 //! # Example
 //!
 //! ```
-//! use ferrocad_stage::{DressUpMode, DressUpScrubber};
+//! use ferrocad_part_gui::{DressUpMode, DressUpScrubber};
 //! use ferrocad_types::Vector3;
 //!
 //! let scrubber = DressUpScrubber::new(
@@ -42,14 +50,18 @@
 
 use std::f64::consts::PI;
 
+use ferrocad_geom::SelectionRef;
 use ferrocad_graphics::Camera;
+use ferrocad_stage::gizmo::{ACTIVE_COLOR, INACTIVE_COLOR};
+use ferrocad_stage::screen::{
+    HIT_SLOP, STROKE_PIXELS, camera_forward, point_segment_distance, project_device, push_ribbon,
+    scale_for,
+};
+use ferrocad_stage::{DrawMode, InteractionCommit, Manipulator, ShapeItem, Stage};
 use ferrocad_types::{Matrix4, Vector3};
 
-use crate::gizmo::{
-    ACTIVE_COLOR, HIT_SLOP, INACTIVE_COLOR, STROKE_PIXELS, camera_forward, point_segment_distance,
-    project_device, push_ribbon, scale_for,
-};
-use crate::shape::{DrawMode, ShapeItem};
+/// The scrubber's registry id (`InteractionCommit::manipulator`).
+pub const DRESS_UP_ID: &str = "dress_up";
 
 /// The scrubber's fixed picking id. It is drawn as an overlay (not picked through the
 /// buffer), so this only has to stay clear of document and gizmo ids.
@@ -569,6 +581,145 @@ impl DressUpScrubber {
     }
 }
 
+impl DressUpChange {
+    /// The neutral commit that carries this change.
+    pub fn into_commit(self) -> InteractionCommit {
+        let action = match self.value {
+            DressUpValue::Fillet { .. } => "fillet",
+            DressUpValue::Chamfer { .. } => "chamfer",
+        };
+        let values = match self.value {
+            DressUpValue::Fillet { radius } => vec![radius],
+            DressUpValue::Chamfer { first, second } => vec![first, second],
+        };
+        InteractionCommit::new(DRESS_UP_ID, self.target_id, action)
+            .with_element(self.edge)
+            .with_values(values)
+            .with_readout(self.value.readout())
+    }
+
+    /// The typed change a dress-up commit carries, if it is one.
+    ///
+    /// This is the inverse of [`Manipulator::drag_end`]: the neutral commit names the
+    /// operation and orders the numbers; the document layer wants the enum.
+    pub fn from_commit(commit: &InteractionCommit) -> Option<Self> {
+        if commit.manipulator != DRESS_UP_ID {
+            return None;
+        }
+        let edge = commit.element.clone()?;
+        let value = match commit.action.as_str() {
+            "fillet" => DressUpValue::Fillet {
+                radius: *commit.values.first()?,
+            },
+            "chamfer" => DressUpValue::Chamfer {
+                first: *commit.values.first()?,
+                second: commit.values.get(1).copied().unwrap_or(0.0),
+            },
+            _ => return None,
+        };
+        Some(Self {
+            target_id: commit.target,
+            edge,
+            value,
+        })
+    }
+}
+
+impl Manipulator for DressUpScrubber {
+    fn id(&self) -> &'static str {
+        DRESS_UP_ID
+    }
+
+    fn items(&self) -> &[ShapeItem] {
+        DressUpScrubber::items(self)
+    }
+
+    fn hit(&self, camera: &Camera, device: [i32; 2]) -> bool {
+        DressUpScrubber::hit(self, camera, device)
+    }
+
+    fn drag_begin(&mut self, camera: &Camera, device: [i32; 2]) -> bool {
+        DressUpScrubber::begin_drag(self, camera, device)
+    }
+
+    fn drag_update(&mut self, camera: &Camera, device: [i32; 2]) -> bool {
+        DressUpScrubber::drag_to(self, camera, device).is_some()
+    }
+
+    fn drag_end(&mut self) -> Option<InteractionCommit> {
+        DressUpScrubber::end_drag(self).map(DressUpChange::into_commit)
+    }
+
+    fn drag_cancel(&mut self) -> bool {
+        DressUpScrubber::cancel_drag(self)
+    }
+
+    fn is_dragging(&self) -> bool {
+        DressUpScrubber::is_dragging(self)
+    }
+
+    fn set_hovered(&mut self, hovered: bool) -> bool {
+        DressUpScrubber::set_hovered(self, hovered)
+    }
+
+    fn refresh(&mut self, camera: &Camera) -> bool {
+        self.update(camera)
+    }
+
+    fn readout(&self) -> Option<String> {
+        Some(DressUpScrubber::readout(self))
+    }
+
+    fn readout_anchor(&self, camera: &Camera) -> Option<[f64; 2]> {
+        DressUpScrubber::readout_anchor(self, camera)
+    }
+}
+
+/// The scrubber a selection asks for, when it names an **edge** of a displayed item.
+///
+/// This is the presentation half of the edge manipulator: a workbench registers it as
+/// a manipulator factory and the host calls it on every selection. A face or vertex
+/// selection, an unknown entity or a mesh without a wire run returns `None`.
+pub fn dress_up_scrubber_for(
+    selection: &SelectionRef,
+    stage: &Stage,
+    mode: DressUpMode,
+) -> Option<DressUpScrubber> {
+    let edge = selection.elements.first()?;
+    if !edge.starts_with("Edge") {
+        return None;
+    }
+    let points = stage.item(selection.object)?.edge_polyline(edge)?;
+    if points.len() < 2 {
+        return None;
+    }
+    let points = points
+        .into_iter()
+        .map(|point| {
+            Vector3::new(
+                f64::from(point[0]),
+                f64::from(point[1]),
+                f64::from(point[2]),
+            )
+        })
+        .collect();
+    Some(DressUpScrubber::new(
+        selection.object,
+        mode,
+        edge.clone(),
+        points,
+    ))
+}
+
+/// The Part GUI's manipulator factory: an edge selection arms a fillet scrubber.
+///
+/// `ferrocad_gpui::Contributions` accepts a factory of this shape, so an edition wires
+/// the manipulator in one line and the base app stays Part-free.
+pub fn fillet_manipulator(selection: &SelectionRef, stage: &Stage) -> Option<Box<dyn Manipulator>> {
+    dress_up_scrubber_for(selection, stage, DressUpMode::Fillet)
+        .map(|scrubber| Box::new(scrubber) as Box<dyn Manipulator>)
+}
+
 /// A stable screen-horizontal in the camera-facing plane, used when the edge projects
 /// too short to define a direction.
 fn fallback_u(forward: Vector3) -> Vector3 {
@@ -610,7 +761,7 @@ mod tests {
 
     /// The apex's device position and the outward unit direction from the anchor.
     fn grip(camera: &Camera, scrubber: &DressUpScrubber) -> ([i32; 2], [f64; 2]) {
-        use crate::gizmo::project_device;
+        use ferrocad_stage::screen::project_device;
 
         let anchor = scrubber.anchor().expect("an anchor");
         let anchor_px = project_device(camera, anchor).expect("a projected anchor");
@@ -677,7 +828,7 @@ mod tests {
 
     #[test]
     fn the_arc_hit_target_is_the_stroke_not_the_interior() {
-        use crate::gizmo::project_device;
+        use ferrocad_stage::screen::project_device;
 
         let camera = camera(5.0);
         let scrubber =
@@ -829,5 +980,108 @@ mod tests {
         .with_value(0.25);
         assert_eq!(scrubber.arc_points(&camera).len(), ARC_SEGMENTS + 1);
         assert!(scrubber.readout_anchor(&camera).is_some());
+    }
+
+    /// A slab whose `Edge1` runs from (0,0,0) to (10,0,0), tagged `Face1`/`Edge1`.
+    fn slab(entity: u32) -> Stage {
+        use ferrocad_geom::Tessellation;
+
+        let mesh = Tessellation {
+            positions: vec![[0.0, 0.0, 0.0], [10.0, 0.0, 0.0], [0.0, 10.0, 0.0]],
+            normals: Vec::new(),
+            triangles: vec![0, 1, 2],
+            triangle_parts: vec![0],
+            edges: vec![0, 1],
+            segment_parts: vec![1],
+            vertices: Vec::new(),
+            vertex_parts: Vec::new(),
+            parts: vec!["Face1".to_string(), "Edge1".to_string()],
+        };
+        Stage::new().with_item(ShapeItem::from_tessellation(entity, &mesh))
+    }
+
+    #[test]
+    fn an_edge_selection_makes_a_scrubber_over_the_edge() {
+        let stage = slab(7);
+        let scrubber = dress_up_scrubber_for(
+            &SelectionRef::element(7, "Edge1"),
+            &stage,
+            DressUpMode::Fillet,
+        )
+        .expect("a scrubber");
+        assert_eq!(scrubber.target_id(), 7);
+        assert_eq!(scrubber.edge_name(), "Edge1");
+        assert_eq!(scrubber.mode(), DressUpMode::Fillet);
+
+        // The edge runs from (0,0,0) to (10,0,0); the anchor is its midpoint.
+        let anchor = scrubber.anchor().expect("an anchor");
+        assert!((anchor.x - 5.0).abs() < 1e-9);
+        assert!(anchor.y.abs() < 1e-9);
+    }
+
+    #[test]
+    fn a_face_or_unknown_selection_makes_no_scrubber() {
+        let stage = slab(7);
+        assert!(
+            dress_up_scrubber_for(
+                &SelectionRef::element(7, "Face1"),
+                &stage,
+                DressUpMode::Fillet
+            )
+            .is_none()
+        );
+        assert!(
+            dress_up_scrubber_for(&SelectionRef::whole(7), &stage, DressUpMode::Fillet).is_none()
+        );
+        assert!(
+            dress_up_scrubber_for(
+                &SelectionRef::element(9, "Edge1"),
+                &stage,
+                DressUpMode::Fillet
+            )
+            .is_none()
+        );
+        assert!(
+            dress_up_scrubber_for(
+                &SelectionRef::element(7, "Edge9"),
+                &stage,
+                DressUpMode::Fillet
+            )
+            .is_none()
+        );
+    }
+
+    #[test]
+    fn the_manipulator_commits_neutral_data_that_round_trips() {
+        let mut scrubber = scrubber(DressUpMode::Chamfer).with_second(0.5);
+        let camera = camera(5.0);
+        let (grab, _) = grip(&camera, &scrubber);
+        assert!(Manipulator::drag_begin(&mut scrubber, &camera, grab));
+        let commit = Manipulator::drag_end(&mut scrubber).expect("a commit");
+
+        assert_eq!(commit.manipulator, DRESS_UP_ID);
+        assert_eq!(commit.target, 7);
+        assert_eq!(commit.element.as_deref(), Some("Edge1"));
+        assert_eq!(commit.action, "chamfer");
+        assert_eq!(commit.values, vec![0.25, 0.5]);
+        assert_eq!(commit.readout, "0.25 × 0.50 mm");
+
+        // The typed change comes back, so the document layer never parses the numbers.
+        let change = DressUpChange::from_commit(&commit).expect("a dress-up change");
+        assert_eq!(change.target_id, 7);
+        assert_eq!(change.edge, "Edge1");
+        assert_eq!(
+            change.value,
+            DressUpValue::Chamfer {
+                first: 0.25,
+                second: 0.5
+            }
+        );
+    }
+
+    #[test]
+    fn a_commit_for_another_manipulator_is_not_a_dress_up() {
+        let commit = InteractionCommit::new("some_other", 1, "fillet").with_element("Edge1");
+        assert!(DressUpChange::from_commit(&commit).is_none());
     }
 }

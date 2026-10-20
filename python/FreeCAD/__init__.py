@@ -95,16 +95,17 @@ def getResourceDir():
 
 
 # ---------------------------------------------------------------------------
-# Module hooks: display and edit providers
+# Module hooks: display and interaction providers
 # ---------------------------------------------------------------------------
-# A workbench registers how **its** objects are drawn and edited, so the shell
-# never names a module (the shell must serve any edition). Upstream puts this on
-# `FreeCADGui` (one `ViewProvider` per object, plus commands); until the M5 GUI
-# module exists these two hooks are the minimal equivalent. A provider returns
-# `None` for an object it does not own, and the next provider is asked.
+# A workbench registers how **its** objects are drawn and how a manipulator's
+# commit is applied, so the shell never names a module (the shell must serve any
+# edition). Upstream puts this on `FreeCADGui` (one `ViewProvider` per object,
+# plus commands); until the M5 GUI module exists these two hooks are the minimal
+# equivalent. A provider returns `None` for a request it does not own, and the
+# next provider is asked.
 
 _DISPLAY_PROVIDERS = []
-_DRESS_UP_PROVIDERS = []
+_INTERACTION_PROVIDERS = []
 
 
 def register_display_provider(provider):
@@ -127,21 +128,26 @@ def display_mesh(obj):
     return None
 
 
-def register_dress_up_provider(provider):
-    """Let ``provider(obj, mode, edges, first, second)`` apply a dress-up edit.
+def register_interaction_provider(provider):
+    """Let ``provider(obj, manipulator, action, element, values)`` apply an edit.
 
-    The provider returns a dict ``{"ok": bool, ...}`` (or ``None`` when it does
-    not own the object). The edit itself — creating the feature, wrapping it in a
-    transaction, recomputing — belongs to the module.
+    ``manipulator`` is the registry id of the manipulator that committed
+    (``"dress_up"``), ``action`` the operation within it (``"fillet"``,
+    ``"chamfer"``), ``element`` the sub-element name (or ``""``), and ``values``
+    the numbers in the manipulator's documented order. The provider returns a dict
+    ``{"ok": bool, ...}`` (or ``None`` when it does not own the manipulator). The
+    edit itself — creating the feature, wrapping it in a transaction, recomputing —
+    belongs to the module, not to the shell.
     """
-    if provider not in _DRESS_UP_PROVIDERS:
-        _DRESS_UP_PROVIDERS.append(provider)
+    if provider not in _INTERACTION_PROVIDERS:
+        _INTERACTION_PROVIDERS.append(provider)
 
 
-def dress_up(obj, mode, edges, first, second=0.0):
-    """Apply a dress-up edit through the first module that supports it."""
-    for provider in _DRESS_UP_PROVIDERS:
-        result = provider(obj, mode, edges, first, second)
+def interaction(obj, manipulator, action, element="", values=None):
+    """Apply a manipulator commit through the first module that supports it."""
+    values = list(values or [])
+    for provider in _INTERACTION_PROVIDERS:
+        result = provider(obj, manipulator, action, element, values)
         if result is not None:
             return result
     return None
@@ -164,8 +170,8 @@ __all__ = [
     "writeRecoverySnapshotToTransientDir",
     "register_display_provider",
     "display_mesh",
-    "register_dress_up_provider",
-    "dress_up",
+    "register_interaction_provider",
+    "interaction",
 ]
 
 

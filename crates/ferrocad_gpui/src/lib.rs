@@ -9,7 +9,8 @@
 //! public `FreeCAD` Python API, exactly like a workbench (see
 //! `docs/architecture.md` and `docs/repackaging.md`).
 
-pub mod dress_up;
+pub mod contributions;
+pub mod display;
 pub mod python;
 pub mod shell;
 
@@ -29,7 +30,8 @@ use gpui::{
     application, bounds, point, prelude::*, px, size,
 };
 
-pub use dress_up::{DressUpDocument, HostDressUp, PythonDocument, StageMesh};
+pub use contributions::{Contributions, ManipulatorFactory};
+pub use display::{DisplaySync, StageMesh};
 pub use shell::{Shell, ShellModel};
 
 /// A zero-copy viewport presenter for this build and platform, if one is available.
@@ -81,12 +83,15 @@ pub struct HostConfig {
     pub mods_paths: Vec<std::path::PathBuf>,
     /// The app's Python entry module, imported at boot. It must expose the shell
     /// data functions (`bootstrap`, `model_tree`, `properties`, `set_property`,
-    /// `evaluate`) and, for the 3D viewport, `stage_meshes` and `dress_up` (see
-    /// `dress_up` in the shell helpers). Workbenches contribute display meshes and
-    /// edits through the `FreeCAD` module hooks, never through this module. The
-    /// library ships no copy of this script: it lives with the app (see
+    /// `evaluate`) and, for the 3D viewport, `stage_meshes` and `interaction` (see
+    /// `display` and `shell` in the shell helpers). Workbenches contribute display
+    /// meshes and edits through the `FreeCAD` module hooks, never through this module.
+    /// The library ships no copy of this script: it lives with the app (see
     /// `docs/repackaging.md`).
     pub entry_module: String,
+    /// The manipulators the edition's workbenches contribute (the Part edge arc, a BIM
+    /// grip, …). The base app registers none, and the shell names no workbench.
+    pub contributions: Contributions,
 }
 
 impl Default for HostConfig {
@@ -96,6 +101,7 @@ impl Default for HostConfig {
             python_paths: Vec::new(),
             mods_paths: Vec::new(),
             entry_module: "ferrocad_shell".to_string(),
+            contributions: Contributions::default(),
         }
     }
 }
@@ -122,7 +128,12 @@ pub fn run_with(config: HostConfig) {
     application().run(move |cx: &mut App| {
         let model = model.clone();
         cx.open_window(window_options(&config), move |window, cx| {
-            let shell = cx.new(|cx| Shell::from_model(model.clone(), cx));
+            let contributions = config.contributions.clone();
+            let shell = cx.new(|cx| {
+                let mut shell = Shell::from_model(model.clone(), cx);
+                shell.set_contributions(contributions.clone());
+                shell
+            });
             // Best-effort: needs a GPU. Headless tests skip this and keep the
             // placeholder (see `Shell::enable_viewport`).
             shell.update(cx, |shell, cx| shell.enable_viewport(cx));

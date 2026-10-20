@@ -288,27 +288,36 @@ The F0.5 bridge is covered by `ferrocad_viewport`'s
 `an_untagged_mesh_selects_the_whole_object`, `clicking_empty_space_clears_the_selection`,
 `an_orbit_drag_is_not_a_selection` and `a_non_selectable_item_is_not_selected`.
 
-**Dress-up scrubber (F1).** `ferrocad_stage::dress_up` adds `DressUpScrubber`, the
-edge fillet/chamfer arc. It is built from the selected edge's world polyline
-(`ShapeItem::edge_polyline("Edge3")` resolves a click's element name to ordered points;
-the anchor is the middle segment's midpoint) and draws a camera-facing arc whose **world
-radius is the feature's radius**, plus the radius tick to its apex. The hit test is
-analytic and screen-space (the arc and the tick, within the shared 2 + 10 px slop); the
-interior between the edge and the arc passes through. A drag changes the value by the
-pointer's radial travel, snapped and clamped, and emits a typed `DressUpChange` with the
-`R 3.50 mm`-style readout. `InventorViewport` hosts it
-(`with_dress_up_scrubber`, `take_dress_up_commit`, `cancel_dress_up_drag`), picks it
-before the gizmo, draws its stroke as a depth-off overlay, and always shows the dimension
-pill. The host writes the committed value to a `Part::Fillet`/`Part::Chamfer` feature and
-recomputes. The selection → scrubber mapping is `Stage::scrubber_for` (the viewport owns
-the stage); `ferrocad_gpui::dress_up::HostDressUp` maps a pick to the object and calls
-the document through the `DressUpDocument` trait, implemented over the app's module
-hooks (`FreeCAD.display_mesh`/`FreeCAD.dress_up`, registered by the edition's script).
-Covered by `ferrocad_stage`'s 11 dress-up tests, 3 `Stage::scrubber_for` tests and 2
-`edge_polyline` tests, `ferrocad_viewport`'s `a_dress_up_scrub_commits_a_larger_radius`,
-`a_click_away_from_the_arc_falls_through_to_the_scene`,
-`the_scrubber_stroke_is_drawn_and_hovers`, `cancelling_a_dress_up_scrub_restores_the_radius`
-and `a_dress_up_arc_takes_priority_over_the_gizmo`, `ferrocad_gpui`'s 5 host tests, and
+**Manipulators (F1).** `ferrocad_stage` owns the *seam*, not the feature:
+`Manipulator` + `InteractionCommit` (see `architecture.md` §10). A workbench's
+draggable overlay implements it in its own presentation crate;
+`ferrocad_part_gui::DressUpScrubber` is the Part edge fillet/chamfer arc. It is built
+from the selected edge's world polyline (`ShapeItem::edge_polyline("Edge3")` resolves
+a click's element name to ordered points; the anchor is the middle segment's midpoint)
+and draws a camera-facing arc whose **world radius is the feature's radius**, plus the
+radius tick to its apex. The hit test is analytic and screen-space (the arc and the
+tick, within the shared 2 + 10 px slop); the interior between the edge and the arc
+passes through. A drag changes the value by the pointer's radial travel, snapped and
+clamped, and `drag_end` commits a neutral `InteractionCommit`
+(`manipulator: "dress_up"`, `action: "fillet"|"chamfer"`, `values: [radius]` or
+`[first, second]`, with the `R 3.50 mm`-style readout);
+`DressUpChange::from_commit` is the typed inverse. `InventorViewport` hosts any
+manipulator (`with_manipulator`, `add_manipulator`/`set_manipulators`,
+`take_interaction_commit`, `cancel_manipulator_drag`), picks manipulators **before**
+the gizmo, draws their items as depth-off overlays, and renders the readout pill the
+manipulator supplies. The edition contributes the manipulator
+(`Contributions::with_manipulator(ferrocad_part_gui::fillet_manipulator)`);
+`ferrocad_gpui` maps a commit's entity to the object and calls the app script's
+`interaction` hook, which Part implements with `Part::Fillet`/`Part::Chamfer`.
+Neither the viewport nor the shell links a kernel, and the base app links nothing at
+all. Covered by `ferrocad_part_gui`'s 15 tests (11 arc cases plus the factory and the
+commit round-trip), `ferrocad_stage`'s `Manipulator`/`InteractionCommit` test and 2
+`edge_polyline` tests, `ferrocad_viewport`'s `a_manipulator_drag_commits_neutral_data`,
+`a_click_away_from_a_manipulator_falls_through_to_the_scene`,
+`the_manipulator_overlay_is_drawn_and_hovers`,
+`cancelling_a_manipulator_drag_ends_it_without_a_commit` and
+`a_manipulator_takes_priority_over_the_gizmo` (all driven by a **fake** manipulator,
+so no Part code is linked), `ferrocad_gpui`'s `Contributions`/`DisplaySync` tests, and
 `ferrocad_part_py`'s `the_shell_helpers_tessellate_and_dress_up_a_document_shape`.
 
 ### T5 — the `ferrocad.stage` Python bindings

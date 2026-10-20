@@ -261,13 +261,15 @@ The extraction is a refactor with its own tests, so it lands in stages:
     checked by `ferrocad_part_py`'s `a_fillet_feature_rebuilds_through_python`.
 12. **[x] The host wiring** (2026-10-20) — the viewport's stage is filled from the
     document through **module hooks**: a workbench registers
-    `FreeCAD.display_mesh`/`FreeCAD.dress_up` providers (`architecture.md` §9), so
+    `FreeCAD.display_mesh`/`FreeCAD.interaction` providers (`architecture.md` §9), so
     `ferrocad_shell` names no workbench. The Part edition's app script
-    (`python/ferrocad_parametric`, selected with `run_edition`) imports `Part`, registers
-    the hooks (the tessellation via `Part.Shape.mesh` and the feature edit as one
-    transaction) and seeds the demo solid. `ferrocad_gpui::dress_up` maps a picked entity
-    to the object and applies the commit through a `DressUpDocument` trait, tested with
-    a fake; the shell still links no kernel (`ferrocad_part`/OCCT remain Python-side).
+    (`python/ferrocad_parametric`, selected with `run_edition_with`) imports `Part`,
+    registers the hooks (the tessellation via `Part.Shape.mesh` and the feature edit as
+    one transaction) and seeds the demo solid. The Rust-side manipulator is
+    `ferrocad_part_gui::fillet_manipulator`, contributed through
+    `Contributions`; `ferrocad_gpui` maps a picked entity to the object and applies the
+    neutral commit through the script's `interaction` hook. The shell still links no
+    kernel (`ferrocad_part`/OCCT remain Python-side), and the base app links neither.
 
 `ferrocad_occt` is deliberately **not** in `default-members`, so an ordinary
 `cargo build`/`cargo test` needs no kernel; only the `geometry` CI job (and geometry

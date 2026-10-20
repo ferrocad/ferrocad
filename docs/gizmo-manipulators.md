@@ -375,7 +375,8 @@ binding remain green.
 
 ## 14. F1 as built (2026-10-20) — the edge dress-up arc
 
-`ferrocad_stage::dress_up`:
+`ferrocad_part_gui` (the Part workbench's presentation crate — **not** the generic
+stage, and **not** the shell; see `architecture.md` §10):
 
 - **Modes and values.** `DressUpMode::{Fillet, Chamfer}`; `DressUpValue::{Fillet{radius},
   Chamfer{first, second}}` with `primary()` and `readout()` — `R 3.50 mm`,
@@ -401,32 +402,37 @@ binding remain green.
 - **Readout.** `readout_anchor(camera)` projects the apex; the viewport renders the pill
   as a plain gpui text layer (no hitbox).
 
-`ferrocad_viewport`:
+`ferrocad_viewport` (generic: it names no manipulator):
 
-- `with_dress_up_scrubber` / `set_dress_up_scrubber` / `dress_up_scrubber(_mut)`,
-  `last_dress_up_commit` / `take_dress_up_commit`, `cancel_dress_up_drag`.
-- Priority is **navigation cube → dress-up arc → gizmo → tool → scene**. A press on the
-  arc starts a scrub (no orbit, no selection); a press anywhere else falls through. The
-  stroke is drawn as a depth-off overlay, hover recolours it cyan, and the pill is always
-  shown for the selected edge. `Esc` cancels a scrub before a gizmo drag.
-- The host writes the commit to a feature: `Radius` (or `Distance`/`Distance2`) then a
-  recompute — the F0.6 features rebuild `Shape` from there. The mapping from a
-  selection to a scrubber is `ferrocad_stage::Stage::scrubber_for` (the viewport owns
-  the stage); the host only maps entity → object and calls the document through the
-  `DressUpDocument` trait, implemented over the app's module hooks (architecture §9).
-  Part registers `display_mesh`/`dress_up` in `python/ferrocad_parametric`, so the
-  shell names no workbench.
+- `with_manipulator` / `add_manipulator` / `set_manipulators` / `remove_manipulator`,
+  `manipulator(id)` / `manipulator_mut(id)`, `last_interaction_commit` /
+  `take_interaction_commit`, `cancel_manipulator_drag`.
+- Priority is **navigation cube → workbench manipulators (most recent first) → gizmo →
+  tool → scene**. The cursor hovers only the topmost manipulator under it; a press on a
+  grab target starts a drag (no orbit, no selection); a press anywhere else falls
+  through. Their items are drawn as depth-off overlays (one combined queue), and the
+  readout pill comes from `Manipulator::readout`/`readout_anchor`. `Esc` cancels a
+  manipulator drag before a gizmo drag.
+- The commit is **neutral data** (`InteractionCommit`); the shell maps its entity to a
+  document object and calls the app script's `interaction` hook, which Part implements
+  with `Part::Fillet`/`Part::Chamfer` (`Radius`, or `Distance`/`Distance2`, then a
+  recompute — the F0.6 features rebuild `Shape` from there).
+- `ferrocad_viewport` and `ferrocad_gpui` link no kernel: the manipulator is
+  contributed by the edition
+  (`Contributions::with_manipulator(ferrocad_part_gui::fillet_manipulator)`), and Part
+  registers `display_mesh`/`interaction` in `python/ferrocad_parametric`.
 
-Verification: `ferrocad_stage` 75 tests (11 new dress-up cases: readout strings, anchor,
+Verification: `ferrocad_part_gui` 15 tests (11 dress-up cases: readout strings, anchor,
 arc sizing, stroke-only hit test, outward scrub, step snap, cancel, rebuild-on-change,
-hover tokens, degenerate and view-aligned edges; 3 `Stage::scrubber_for` cases; plus 2
-`ShapeItem::edge_polyline` cases); `ferrocad_viewport` 98 tests (5 new: commit,
-pass-through, hover/draw, cancel, priority over the gizmo); `ferrocad_gpui` 5 host tests
-(`ferrocad_gpui::dress_up`: sync/entity map, mode, chamfer commit, commit forwarding,
-unknown entity); `ferrocad_part_py`'s
+hover tokens, degenerate and view-aligned edges; plus the selection → scrubber factory
+and the neutral-commit round-trip); `ferrocad_stage`'s `InteractionCommit` case and 2
+`ShapeItem::edge_polyline` cases; `ferrocad_viewport` 98 tests (5 manipulator cases:
+commit, pass-through, hover/draw, cancel, priority over the gizmo — all with a **fake**
+manipulator, proving the viewport names none); `ferrocad_gpui` 7
+display/`Contributions` tests; `ferrocad_part_py`'s
 `the_shell_helpers_tessellate_and_dress_up_a_document_shape` covers the Python half
-through the edition script (hooks registered → tessellate with names → `dress_up` → base
-hidden, feature displayed, reused).
+through the edition script (hooks registered → tessellate with names → `interaction` →
+base hidden, feature displayed, reused).
 
 ## 15. Deferred and why
 
@@ -434,12 +440,12 @@ hidden, feature displayed, reused).
   an additive boss or subtractive pocket. The interaction is a 1D constraint plus a
   volume preview; it can reuse T1's axis solver once the context exists.
 - **Fillet/Chamfer** is end-to-end: `GeometryBackend::{fillet, chamfer}`, `tangent_chain`,
-  click selection, the parametric features, the `DressUpScrubber`, and the host wiring
-  (`ferrocad_gpui::dress_up`: stage sync, edge selection → scrubber, commit →
-  `Part::Fillet` → recompute → re-sync). What remains is **type-ahead numerics** (digits
-  targeting the pill), an **`Alt` asymmetric split** (two distance handles), and a
-  chrome control to choose fillet vs chamfer (the host supports both; the UI picks
-  fillet).
+  click selection, the parametric features, the `Manipulator` seam and the
+  `ferrocad_part_gui::DressUpScrubber`, and the host wiring
+  (`Contributions` factory → viewport → neutral commit → app script's `interaction`
+  hook → `Part::Fillet` → recompute → re-sync). What remains is **type-ahead numerics**
+  (digits targeting the pill), an **`Alt` asymmetric split** (two distance handles), and
+  a chrome control to choose fillet vs chamfer (the factory picks fillet).
 - **Draft** additionally needs a wall-face selection, a pull direction and an angular
   offset operation; its protractor arc is a ring-like scrub (T1) with a degree readout
   (T3).

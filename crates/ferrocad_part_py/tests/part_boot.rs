@@ -146,10 +146,10 @@ fn the_shell_helpers_tessellate_and_dress_up_a_document_shape() {
         let shell = PyModule::import(py, "ferrocad_parametric")
             .expect("import the edition's app script");
 
-        // The edition registers Part's display/dress-up hooks on `FreeCAD`.
+        // The edition registers Part's display/interaction hooks on `FreeCAD`.
         let freecad = PyModule::import(py, "FreeCAD").expect("import FreeCAD");
         assert!(freecad.hasattr("display_mesh").unwrap());
-        assert!(freecad.hasattr("dress_up").unwrap());
+        assert!(freecad.hasattr("interaction").unwrap());
 
         // `bootstrap` adds the Box because Part is linked in this image.
         let _: String = shell
@@ -182,14 +182,17 @@ fn the_shell_helpers_tessellate_and_dress_up_a_document_shape() {
         );
         assert!(!box_mesh["edges"].as_array().unwrap().is_empty());
 
-        // A scrub commit: create the fillet, recompute, and re-read the display.
+        // A manipulator commit: create the fillet, recompute, and re-read the display.
         let result: String = shell
-            .call_method1("dress_up", ("Box", "Fillet", r#"["Edge1"]"#, 2.0, 0.0))
-            .expect("dress_up")
+            .call_method1(
+                "interaction",
+                ("Box", "dress_up", "fillet", "Edge1", "[2.0]"),
+            )
+            .expect("interaction")
             .extract()
             .unwrap();
         let result: serde_json::Value = serde_json::from_str(&result).unwrap();
-        assert_eq!(result["ok"], true, "dress_up: {result}");
+        assert_eq!(result["ok"], true, "interaction: {result}");
 
         let after: String = shell
             .call_method0("stage_meshes")
@@ -221,13 +224,16 @@ fn the_shell_helpers_tessellate_and_dress_up_a_document_shape() {
             .count();
         assert!(faces > 6, "the fillet adds faces: {faces}");
 
-        // Scrubbing again reuses the feature.
+        // Committing again reuses the feature.
         let again: String = shell
-            .call_method1("dress_up", ("Box", "Fillet", r#"["Edge1"]"#, 3.0, 0.0))
+            .call_method1(
+                "interaction",
+                ("Box", "dress_up", "fillet", "Edge1", "[3.0]"),
+            )
             .unwrap()
             .extract()
             .unwrap();
         let again: serde_json::Value = serde_json::from_str(&again).unwrap();
-        assert_eq!(again["ok"], true, "second dress_up: {again}");
+        assert_eq!(again["ok"], true, "second interaction: {again}");
     });
 }

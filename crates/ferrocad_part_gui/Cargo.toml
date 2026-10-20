@@ -1,0 +1,23 @@
+[package]
+name = "ferrocad_part_gui"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+readme.workspace = true
+repository.workspace = true
+homepage.workspace = true
+rust-version.workspace = true
+description = "FerroCAD's Part workbench presentation: the edge dress-up manipulator, over the generic stage interaction model"
+keywords = ["cad", "gui", "freecad", "part"]
+categories = ["gui"]
+documentation = "https://docs.rs/ferrocad_part_gui"
+
+[dependencies]
+# The generic presentation vocabulary: Stage, ShapeItem, Manipulator, InteractionCommit,
+# the screen-space helpers and the stroke colours.
+ferrocad_stage.workspace = true
+# `SelectionRef` (what a pick names) — a kernel-neutral leaf.
+ferrocad_geom.workspace = true
+# The camera the arc is projected with.
+ferrocad_graphics.workspace = true
+ferrocad_types.workspace = true

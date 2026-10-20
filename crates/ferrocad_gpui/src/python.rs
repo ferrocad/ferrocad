@@ -33,7 +33,7 @@ static MODS_PATHS: OnceLock<Vec<PathBuf>> = OnceLock::new();
 ///
 /// `entry_module` must expose the shell's data functions (`bootstrap`,
 /// `model_tree`, `properties`, `set_property`, `evaluate`) and the viewport
-/// functions (`stage_meshes`, `dress_up`). `python_paths` are the app's script and
+/// functions (`stage_meshes`, `interaction`). `python_paths` are the app's script and
 /// mod directories, added to `sys.path`. `mods_paths` are the workbench directories
 /// scanned for `Init.py`/`InitGui.py`.
 pub fn configure(entry_module: &str, python_paths: &[PathBuf], mods_paths: &[PathBuf]) {
@@ -300,27 +300,37 @@ pub fn model_tree() -> Result<Vec<DocumentNode>, String> {
 
 /// The tessellated document shapes the viewport draws.
 ///
-/// Empty when the Part workbench is not linked, which the shell treats as "keep the
+/// Empty when no module can display the document, which the shell treats as "keep the
 /// sample scene".
-pub fn stage_meshes() -> Result<Vec<crate::dress_up::StageMesh>, String> {
+pub fn stage_meshes() -> Result<Vec<crate::display::StageMesh>, String> {
     call_json("stage_meshes", None)
 }
 
-/// Create or update a `Part::Fillet`/`Part::Chamfer` and recompute.
-pub fn apply_dress_up(
+/// Apply a manipulator commit to the document through the app script's `interaction`
+/// hook.
+///
+/// The shell does not know what the manipulator means: the script routes the commit to
+/// the workbench that registered an interaction provider (for Part, a
+/// `Part::Fillet`/`Part::Chamfer`). `values` are the manipulator's numbers in its
+/// documented order.
+pub fn apply_interaction(
+    commit: &ferrocad_stage::InteractionCommit,
     object: &str,
-    mode: &str,
-    edge: &str,
-    first: f64,
-    second: f64,
 ) -> Result<ApplyResult, String> {
-    let edges = serde_json::to_string(&[edge]).map_err(|e| e.to_string())?;
+    let values = serde_json::to_string(&commit.values).map_err(|e| e.to_string())?;
+    let element = commit.element.clone().unwrap_or_default();
     let raw = Python::with_gil(|py| -> Result<String, String> {
         let module = py.import(entry_module()).map_err(|e| e.to_string())?;
         module
-            .getattr("dress_up")
+            .getattr("interaction")
             .map_err(|e| e.to_string())?
-            .call1((object, mode, edges.as_str(), first, second))
+            .call1((
+                object,
+                commit.manipulator,
+                commit.action.as_str(),
+                element,
+                values,
+            ))
             .map_err(|e| e.to_string())?
             .extract::<String>()
             .map_err(|e| e.to_string())

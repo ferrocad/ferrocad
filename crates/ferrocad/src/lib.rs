@@ -22,6 +22,9 @@ use ferrocad_gpui::HostConfig;
 
 pub mod payload;
 
+/// The workbench contributions an edition registers (its manipulators).
+pub use ferrocad_gpui::Contributions;
+
 /// Register the core `ferrocad` PyO3 extension as a built-in module, so `import
 /// ferrocad` resolves without a separate `ferrocad.abi3.so` on disk. `#[pymodule]`
 /// expands `ferrocad_py::ferrocad` into a hidden module, which the macro needs in
@@ -52,8 +55,23 @@ pub fn run_as(app_name: &str) {
 
 /// [`run_as`] with an explicit entry module (the edition's app script).
 pub fn run_edition(app_name: &str, entry_module: &str) {
+    run_edition_with(app_name, entry_module, Contributions::default());
+}
+
+/// [`run_edition`] with the workbench contributions the edition registers.
+///
+/// An edition that links a workbench with a manipulator (Part's edge dress-up) passes
+/// its factories here, so the shell can host them without naming the workbench. An
+/// edition with no manipulators passes [`Contributions::default`].
+pub fn run_edition_with(
+    app_name: &str,
+    entry_module: &str,
+    contributions: Contributions,
+) {
     register_core_module();
-    ferrocad_gpui::run_with(app_config(app_name, entry_module));
+    let mut config = app_config(app_name, entry_module);
+    config.contributions = contributions;
+    ferrocad_gpui::run_with(config);
 }
 
 /// Boot the interpreter and the payload, then exit without opening a window.
@@ -80,5 +98,6 @@ fn app_config(app_name: &str, entry_module: &str) -> HostConfig {
         entry_module: entry_module.to_string(),
         python_paths: payload.python_paths,
         mods_paths: payload.mods_paths,
+        contributions: Contributions::default(),
     }
 }

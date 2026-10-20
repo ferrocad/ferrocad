@@ -26,11 +26,14 @@
 //! [`PointerKind`]/[`MouseButton`] (the structured replacement for `SoEventCallback`),
 //! [`snap_to_geometry`] ([`Snap`]/[`SnapKind`]), the [`Tool`] trait with a reference
 //! [`PolylineTool`], a [`TransformGizmo`] (the `SoDragger` replacement) with its
-//! constraint-projection math and screen-space-invariant scale, and a
-//! [`DressUpScrubber`] (the edge fillet/chamfer arc). A tool turns pointer events into
-//! transient visuals; a gizmo turns a handle drag into a delta transform the host
-//! previews on the target item without touching the document; a scrubber turns a
-//! radial drag into the radius the host writes to a feature.
+//! constraint-projection math and screen-space-invariant scale, and the
+//! [`Manipulator`] trait with its [`InteractionCommit`]. A tool turns pointer events
+//! into transient visuals; a gizmo turns a handle drag into a delta transform the host
+//! previews on the target item without touching the document; a manipulator is a
+//! **workbench's own** draggable overlay (the edge fillet arc is one, in
+//! `ferrocad_part_gui`), and it commits neutral data the workbench interprets.
+//! Everything in this crate is workbench-agnostic: it names no kernel, no document and
+//! no module.
 //!
 //! # Example
 //!
@@ -52,21 +55,22 @@
 //! assert_eq!(queue.len(), 2);
 //! ```
 
-pub mod dress_up;
 pub mod gizmo;
 pub mod input;
+pub mod interaction;
+pub mod screen;
 pub mod shape;
 pub mod snap;
 pub mod stage;
 pub mod tool;
 
-pub use dress_up::{DressUpChange, DressUpMode, DressUpScrubber, DressUpValue, MIN_RADIUS};
 pub use gizmo::{
     GIZMO_BASE_ID, GizmoAxis, GizmoCommitEvent, GizmoConstraint, GizmoDragEvent, GizmoHandle,
     GizmoMode, GizmoModifiers, GizmoValue, HandleKind, ManipulatorFrame, TransformGizmo,
-    scale_for,
 };
 pub use input::{MouseButton, PointerEvent, PointerKind};
+pub use interaction::{InteractionCommit, Manipulator};
+pub use screen::{HIT_SLOP, HIT_TOLERANCE_PIXELS, HIT_PADDING_PIXELS, STROKE_PIXELS, scale_for};
 pub use shape::{DrawMode, ShapeItem};
 pub use snap::{Snap, SnapKind, snap_to_geometry};
 pub use stage::Stage;

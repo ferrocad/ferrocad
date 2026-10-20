@@ -15,14 +15,16 @@ use gpui::{
     Subscription, Window, div, prelude::*, px, rgb,
 };
 
+use ferrocad_geom::SelectionRef;
 use ferrocad_inventor::{Scene, Viewport};
-use ferrocad_stage::{DressUpChange, DressUpValue};
+use ferrocad_stage::{InteractionCommit, Manipulator};
 use ferrocad_viewport::scene;
 use ferrocad_viewport::{InventorViewport, SelectionEvent, ViewportEvent};
 use ferrocad_wgpu::WgpuRenderer;
 use ferrocad_widgets::{SubmitEvent, TextAreaState, TextInput, window_frame};
 
-use crate::dress_up::{HostDressUp, PythonDocument};
+use crate::contributions::Contributions;
+use crate::display::{DisplaySync, StageMesh};
 use crate::python::{self, Bootstrap, DocumentNode, PropRow};
 
 const BG: u32 = 0x101216;
@@ -36,14 +38,6 @@ const ACCENT: u32 = 0x2f4a6d;
 fn transcript_of(model: &Arc<Mutex<ShellModel>>) -> String {
     let m = model.lock().unwrap();
     format!("{}\n>>> ", m.console.join("\n"))
-}
-
-/// `fillet` or `chamfer`, for the status line and the console.
-fn kind_of(change: &DressUpChange) -> &'static str {
-    match change.value {
-        DressUpValue::Fillet { .. } => "fillet",
-        DressUpValue::Chamfer { .. } => "chamfer",
-    }
 }
 
 /// Everything the window renders, kept in an `Arc<Mutex<_>>` so click handlers
@@ -69,9 +63,11 @@ pub struct Shell {
     viewport: Option<Entity<InventorViewport<WgpuRenderer>>>,
     /// One uncontrolled field per editable property, keyed by `object.property`.
     prop_inputs: HashMap<String, PropInput>,
-    /// The document side of the dress-up interaction: selection → feature → stage.
-    host: HostDressUp<PythonDocument>,
-    /// The viewport's event subscription (selection and scrub commits).
+    /// The entity → document-object map, rebuilt from the app script's display meshes.
+    display: DisplaySync,
+    /// The workbench manipulators the edition contributes (none in the base app).
+    contributions: Contributions,
+    /// The viewport's event subscription (selection and interaction commits).
     _viewport_events: Option<Subscription>,
     _submit: Subscription,
 }
@@ -153,10 +149,19 @@ impl Shell {
             console,
             viewport: None,
             prop_inputs: HashMap::new(),
-            host: HostDressUp::new(PythonDocument),
+            display: DisplaySync::new(),
+            contributions: Contributions::new(),
             _viewport_events: None,
             _submit: submit,
         }
+    }
+
+    /// Set the edition's workbench contributions (its manipulators).
+    ///
+    /// Call once, before [`enable_viewport`](Self::enable_viewport). The base app
+    /// contributes none, so it links no workbench.
+    pub fn set_contributions(&mut self, contributions: Contributions) {
+        self.contributions = contributions;
     }
 
     /// The console's focus handle, so the window can put the caret there at boot.
@@ -182,9 +187,9 @@ impl Shell {
         };
         let camera = scene::sample_camera(Viewport::new(SIZE, 1.0));
 
-        // The document's own shapes, when a geometry workbench is linked. Without
-        // them (the base app has no kernel) the `pivy.coin` sample scene stays.
-        let stage = match self.host.sync() {
+        // The document's own shapes, when a display workbench is linked. Without them
+        // (the base app has no kernel) the `pivy.coin` sample scene stays.
+        let stage = match self.build_stage() {
             Ok(stage) if !stage.is_empty() => Some(stage),
             Ok(_) => None,
             Err(error) => {
@@ -230,13 +235,13 @@ impl Shell {
     /// Re-read the document's shapes into the viewport's stage.
     ///
     /// Call after any edit that can change geometry: a property commit, a console
-    /// snippet, or a dress-up scrub (which syncs itself). An empty document or a build
-    /// without the Part workbench simply yields an empty stage.
+    /// snippet, or an interaction commit (which syncs itself). An empty document or a
+    /// build without a display workbench simply yields an empty stage.
     fn sync_stage(&mut self, cx: &mut Context<Self>) {
         let Some(viewport) = self.viewport.clone() else {
             return;
         };
-        match self.host.sync() {
+        match self.build_stage() {
             Ok(stage) => viewport.update(cx, |viewport, cx| {
                 viewport.set_stage(stage);
                 cx.notify();
@@ -245,73 +250,105 @@ impl Shell {
         }
     }
 
-    /// React to a viewport event: a click selection or a committed dress-up scrub.
+    /// Ask the app script for the display meshes and build a stage from them.
+    ///
+    /// The shell names no workbench: the script routes `stage_meshes` through
+    /// `FreeCAD.display_mesh`, so whatever module owns the objects supplies the mesh.
+    fn build_stage(&mut self) -> Result<ferrocad_stage::Stage, String> {
+        let meshes: Vec<StageMesh> = python::stage_meshes()?;
+        Ok(self.display.build(meshes))
+    }
+
+    /// React to a viewport event: a click selection or a manipulator commit.
     fn on_viewport_event(&mut self, event: &ViewportEvent, cx: &mut Context<Self>) {
         match event {
             ViewportEvent::Selection(selection) => self.on_selection(selection, cx),
-            ViewportEvent::DressUpCommit(change) => self.on_dress_up_commit(change, cx),
+            ViewportEvent::Interaction(commit) => self.on_interaction(commit, cx),
         }
     }
 
-    /// A click: select the object in the inspector, and arm the edge scrubber when the
-    /// pick is an edge of a displayed shape.
+    /// A click: select the object in the inspector, and arm the manipulator the
+    /// edition's workbenches contribute for that selection.
     fn on_selection(&mut self, selection: &SelectionEvent, cx: &mut Context<Self>) {
-        // The scrubber is a stage concern (the viewport owns the stage); the host only
-        // supplies the mode and maps the entity back to the document object.
-        let mode = self.host.mode();
-        let scrubber = match selection {
-            SelectionEvent::Picked(reference) => self
-                .viewport
-                .as_ref()
-                .and_then(|viewport| viewport.read(cx).stage().scrubber_for(reference, mode)),
+        let manipulator = match selection {
+            SelectionEvent::Picked(reference) => {
+                if let Some(name) = self.display.object_of(reference.object).map(str::to_string) {
+                    self.select(&name);
+                }
+                self.arm_manipulator(reference, cx)
+            }
             SelectionEvent::Cleared => None,
         };
-        if let SelectionEvent::Picked(reference) = selection {
-            if let Some(name) = self.host.object_of(reference.object).map(str::to_string) {
-                self.select(&name);
-            }
-        }
         if let Some(viewport) = self.viewport.clone() {
             viewport.update(cx, |viewport, cx| {
-                viewport.set_dress_up_scrubber(scrubber);
+                viewport.set_manipulators(manipulator.into_iter().collect());
                 cx.notify();
             });
         }
         cx.notify();
     }
 
-    /// The scrub ended: write the value to a `Part::Fillet`/`Part::Chamfer`, recompute,
-    /// and re-read the shapes the viewport draws.
-    fn on_dress_up_commit(&mut self, change: &DressUpChange, cx: &mut Context<Self>) {
-        let status = match self.host.apply(change) {
-            Ok(()) => {
-                match self.host.sync() {
-                    Ok(stage) => {
-                        if let Some(viewport) = self.viewport.clone() {
-                            viewport.update(cx, |viewport, cx| {
-                                viewport.set_stage(stage);
-                                viewport.set_dress_up_scrubber(None);
-                                cx.notify();
-                            });
-                        }
+    /// The manipulator to host for a selection, if the edition contributes one.
+    ///
+    /// The stage is cloned out of the viewport before anything is updated: a re-entrant
+    /// `update` on the same entity panics.
+    fn arm_manipulator(
+        &self,
+        reference: &SelectionRef,
+        cx: &mut Context<Self>,
+    ) -> Option<Box<dyn Manipulator>> {
+        if self.contributions.is_empty() {
+            return None;
+        }
+        let viewport = self.viewport.as_ref()?;
+        let stage = viewport.read(cx).stage().clone();
+        self.contributions.manipulator_for(reference, &stage)
+    }
+
+    /// A manipulator drag ended: apply the commit through the app script's
+    /// `interaction` hook, recompute, and re-read the shapes.
+    fn on_interaction(&mut self, commit: &InteractionCommit, cx: &mut Context<Self>) {
+        let Some(object) = self.display.object_of(commit.target).map(str::to_string) else {
+            let status = format!("no document object for entity {}", commit.target);
+            self.model.lock().unwrap().status = status.clone();
+            self.console_line(status, cx);
+            cx.notify();
+            return;
+        };
+        let status = match python::apply_interaction(commit, &object) {
+            Ok(result) if result.ok => {
+                self.after_document_edit(cx);
+                match (commit.element.as_deref(), commit.readout.is_empty()) {
+                    (Some(element), false) => {
+                        format!("{element} {} = {}", commit.action, commit.readout)
                     }
-                    Err(error) => {
-                        self.console_line(format!("stage: {error}"), cx);
-                    }
+                    (Some(element), true) => format!("{element} {}", commit.action),
+                    (None, false) => commit.readout.clone(),
+                    (None, true) => commit.action.clone(),
                 }
-                self.refresh(cx);
-                format!(
-                    "{} {} = {}",
-                    change.edge,
-                    kind_of(change),
-                    change.value.readout()
-                )
             }
-            Err(error) => format!("dress-up error: {error}"),
+            Ok(result) if result.error.is_empty() => "interaction failed".to_string(),
+            Ok(result) => format!("interaction error: {}", result.error),
+            Err(error) => format!("interaction error: {error}"),
         };
         self.model.lock().unwrap().status = status.clone();
         self.console_line(status, cx);
         cx.notify();
+    }
+
+    /// Refresh the model panes and the stage after the document changed.
+    fn after_document_edit(&mut self, cx: &mut Context<Self>) {
+        if let Some(viewport) = self.viewport.clone() {
+            match self.build_stage() {
+                Ok(stage) => viewport.update(cx, |viewport, cx| {
+                    viewport.set_stage(stage);
+                    viewport.set_manipulators(Vec::new());
+                    cx.notify();
+                }),
+                Err(error) => self.console_line(format!("stage: {error}"), cx),
+            }
+        }
+        self.refresh(cx);
     }
 
     /// Select an object; the property editor is filled from the live model. The

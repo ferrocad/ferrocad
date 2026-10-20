@@ -13,6 +13,7 @@ members = [
     "crates/ferrocad_geom",
     "crates/ferrocad_occt",
     "crates/ferrocad_part",
+    "crates/ferrocad_part_gui",
     "crates/ferrocad_part_py",
     "crates/ferrocad_py",
     "crates/ferrocad_gen",
@@ -33,8 +34,9 @@ members = [
 # the pivy facade (`ferrocad_inventor_py`, which needs CPython headers), plus the
 # OCCT-backed editions (`ferrocad_parametric`, via `ferrocad_part_py`), are workspace
 # members so `-p <crate>` works, but they are excluded from `default-members` because
-# building them is slow. The pure `ferrocad_graphics`, scene core `ferrocad_inventor` and
-# `ferrocad_stage` stay in `default-members`.
+# building them is slow. The pure `ferrocad_graphics`, scene core `ferrocad_inventor`,
+# `ferrocad_stage` and `ferrocad_part_gui` (presentation only: no kernel, no GPU, no
+# CPython) stay in `default-members`.
 # `ferrocad_gpui` embeds CPython via PyO3 `auto-initialize`; it links fine in a
 # full `cargo build --workspace` because the extension crates keep
 # `pyo3/extension-module` opt-in (see their manifests), avoiding the libpython
@@ -46,6 +48,7 @@ default-members = [
     "crates/ferrocad_graphics",
     "crates/ferrocad_inventor",
     "crates/ferrocad_stage",
+    "crates/ferrocad_part_gui",
     "crates/ferrocad_py",
     "crates/ferrocad_gen",
 ]
@@ -69,8 +72,8 @@ unicode-segmentation = "1"
 # crates.io requires). Publish them in dependency order: `ferrocad_types`,
 # `ferrocad_graphics`, `ferrocad_core`, `ferrocad_geom`, `ferrocad_occt`,
 # `ferrocad_part`, `ferrocad_py`, `ferrocad_part_py`, `ferrocad_stage`,
-# `ferrocad_stage_py`, `ferrocad_viewport`, `ferrocad_widgets`, `ferrocad_gpui` and
-# finally the `ferrocad` app. See ../docs/releasing.md.
+# `ferrocad_part_gui`, `ferrocad_stage_py`, `ferrocad_viewport`, `ferrocad_widgets`,
+# `ferrocad_gpui` and finally the `ferrocad` app. See ../docs/releasing.md.
 #
 # Versions are per crate, not workspace-wide: a release may bump only the crates
 # whose sources changed, so the publish workflow skips the rest (their version is
@@ -87,6 +90,7 @@ ferrocad_py = { path = "crates/ferrocad_py", version = "0.1.2" }
 ferrocad_graphics = { path = "crates/ferrocad_graphics", version = "0.1.2" }
 ferrocad_inventor = { path = "crates/ferrocad_inventor", version = "0.1.2" }
 ferrocad_stage = { path = "crates/ferrocad_stage", version = "0.1.2" }
+ferrocad_part_gui = { path = "crates/ferrocad_part_gui", version = "0.1.2" }
 ferrocad_wgpu = { path = "crates/ferrocad_wgpu", version = "0.1.2" }
 ferrocad_viewport = { path = "crates/ferrocad_viewport", version = "0.1.2" }
 ferrocad_inventor_py = { path = "crates/ferrocad_inventor_py", version = "0.1.2" }

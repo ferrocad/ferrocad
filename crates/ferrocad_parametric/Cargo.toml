@@ -29,3 +29,11 @@ ferrocad_part_py.workspace = true
 # The Part workbench's manipulator (the edge dress-up arc), contributed to the shell.
 ferrocad_part_gui.workspace = true
 pyo3 = { version = "0.25", features = ["auto-initialize"] }
+
+[dev-dependencies]
+# The end-to-end test drives the same registry + Python bridge the shell uses.
+ferrocad_gpui.workspace = true
+ferrocad_geom.workspace = true
+ferrocad_graphics.workspace = true
+ferrocad_stage.workspace = true
+ferrocad_types.workspace = true

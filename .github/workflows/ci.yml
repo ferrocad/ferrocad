@@ -40,6 +40,10 @@ jobs:
         working-directory: crates/ferrocad_gpui
         run: cargo test
 
+      - name: ferrocad_toy end-to-end test (the generic interaction registry, no kernel)
+        working-directory: crates/ferrocad_toy
+        run: cargo test
+
       - name: ferrocad_py + ferrocad_gen (primary + generated bindings) build
         working-directory: crates/ferrocad_py
         run: cargo build
@@ -66,8 +70,8 @@ jobs:
           cargo build -p ferrocad_py --features extension-module
           Copy-Item target\debug\ferrocad_py.dll python\ferrocad.pyd
 
-      - name: ferrocad_widgets + ferrocad_gpui headless tests (bite-gpui + CPython)
-        run: cargo test -p ferrocad_widgets -p ferrocad_gpui
+      - name: ferrocad_widgets + ferrocad_gpui + ferrocad_toy headless tests
+        run: cargo test -p ferrocad_widgets -p ferrocad_gpui -p ferrocad_toy
 
   # Real-window smoke test: opens a bite-gpui window under Xvfb using the
   # lavapipe software Vulkan driver. This exercises the non-headless path that
@@ -134,4 +138,4 @@ jobs:
           export OpenCASCADE_DIR="$PWD/.occt/prefix/lib/cmake/opencascade"
           export OCCT_INCLUDE_DIR="$PWD/.occt/prefix/include/opencascade"
           export LD_LIBRARY_PATH="$PWD/.occt/prefix/lib:$LD_LIBRARY_PATH"
-          cargo test -p ferrocad_occt -p ferrocad_part -p ferrocad_part_py
+          cargo test -p ferrocad_occt -p ferrocad_part -p ferrocad_part_py -p ferrocad_parametric

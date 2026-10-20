@@ -1,0 +1,29 @@
+[package]
+name = "ferrocad_toy"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+readme.workspace = true
+repository.workspace = true
+homepage.workspace = true
+rust-version.workspace = true
+publish = false
+description = "FerroCAD: Toy — a kernel-free edition that exercises the generic manipulator registry"
+
+[[bin]]
+name = "ferrocad_toy"
+path = "src/main.rs"
+
+[dependencies]
+# The edition shell (the binary calls `run_edition_with`).
+ferrocad.workspace = true
+# The contribution registry the edition registers its factory with, and the Python
+# bridge the end-to-end test drives.
+ferrocad_gpui.workspace = true
+# The generic interaction seam (`Manipulator`, `InteractionCommit`, `Stage`).
+ferrocad_stage.workspace = true
+# `SelectionRef` and the tessellation an item is built from.
+ferrocad_geom.workspace = true
+# The camera the grip is projected with.
+ferrocad_graphics.workspace = true
+ferrocad_types.workspace = true

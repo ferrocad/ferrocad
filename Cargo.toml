@@ -27,6 +27,7 @@ members = [
     "crates/ferrocad_widgets",
     "crates/ferrocad_gpui",
     "crates/ferrocad_parametric",
+    "crates/ferrocad_toy",
     "crates/xtask",
 ]
 # The GUI crates (`ferrocad_viewport`, `ferrocad_widgets`, `ferrocad_gpui`,

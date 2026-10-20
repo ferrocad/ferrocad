@@ -126,6 +126,11 @@ That is why the packaged artifacts still build the base `ferrocad` binary for no
 the edition is run from a source checkout (`cargo run -p ferrocad_parametric`).
 [`edition-publishing.md`](edition-publishing.md) plans the step that ships it.
 
+`ferrocad_toy` is the **minimal** edition, and the reference for a new workbench: it
+links no kernel, its app script generates a mesh from a document property, and it
+contributes one manipulator through the same `Contributions` registry. Run it with
+`cargo run -p ferrocad_toy`; see [`toy-workbench.md`](toy-workbench.md).
+
 The boundary between the two crates: `ferrocad_gpui` owns the **interpreter**
 (boot, `sys.path`, JSON) and ships no application script; the **app** owns the
 scripts. The app's `main` sets `HostConfig.entry_module` and

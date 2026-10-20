@@ -2421,8 +2421,13 @@ name = "ferrocad_parametric"
 version = "0.1.2"
 dependencies = [
  "ferrocad",
+ "ferrocad_geom",
+ "ferrocad_gpui",
+ "ferrocad_graphics",
  "ferrocad_part_gui",
  "ferrocad_part_py",
+ "ferrocad_stage",
+ "ferrocad_types",
  "pyo3",
 ]
 
@@ -2485,6 +2490,18 @@ dependencies = [
  "ferrocad_stage",
  "ferrocad_types",
  "pyo3",
+]
+
+[[package]]
+name = "ferrocad_toy"
+version = "0.1.2"
+dependencies = [
+ "ferrocad",
+ "ferrocad_geom",
+ "ferrocad_gpui",
+ "ferrocad_graphics",
+ "ferrocad_stage",
+ "ferrocad_types",
 ]
 
 [[package]]

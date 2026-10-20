@@ -31,6 +31,7 @@ obvious:
 | `ferrocad_viewport` | `rlib` | The `bite-gpui` viewport over an invented scene: `InventorViewport` (image path, pointer→pick→listener, clicks → `SelectionEvent`/`SelectionRef`, and the workbench `Manipulator` registry) plus a hosted `ferrocad_stage` (declarative items and interactive tools), the navigation cube (`NaviCube`), and the sample scene. Depends on `ferrocad_graphics`/`ferrocad_geom`/`ferrocad_inventor`/`ferrocad_stage` only. |
 | `ferrocad_gpui` | `rlib` | The `bite-gpui` application-shell library: boots CPython, provides `Shell`, `run`/`run_with`/`run_edition_with`, `HostConfig`, mounts the `ferrocad_viewport`, syncs document meshes into the stage (`display::DisplaySync`), and hosts the edition's workbench manipulators (`contributions::Contributions`). Ships no application scripts and names no workbench. |
 | `ferrocad` | `bin` | The base app (the general edition). Owns the app's Python entry module and, when packaged, its mods and interpreter; exposes `run`/`run_as`/`run_edition`/`run_edition_with`, which call `ferrocad_gpui::run_with`. |
+| `ferrocad_toy` | `bin` + `rlib` | A **kernel-free edition** and testbed: a document object with a `Height` property, a script-generated mesh, and one `HeightGrip` manipulator. It links no geometry module; it exists to prove the interaction registry is generic and to run that loop in the fast CI job. See [`toy-workbench.md`](toy-workbench.md). |
 | `python/FreeCAD` | package | The public, pure-Python `import FreeCAD` facade. |
 | `ferrocad_gen` | `cdylib` | Generated PyO3 skeletons (M3c). A build-time experiment, not wired into the facade. |
 | `ferrocad_ctypes` | `cdylib` | The legacy M0 C-ABI backend, **removed** (kept in §4 as the rationale). |
@@ -192,6 +193,9 @@ ferrocad           -> ferrocad_gpui, ferrocad_py     [base app: links the module
                                                      [run_edition: an edition's app script]
 ferrocad_parametric -> ferrocad, ferrocad_part_py,
                        ferrocad_part_gui             [the edition registers Part's manipulator]
+ferrocad_toy       -> ferrocad, ferrocad_gpui, ferrocad_stage,
+                      ferrocad_geom, ferrocad_graphics,
+                      ferrocad_types                 [kernel-free edition + testbed]
 python/FreeCAD     -> ferrocad (built-in module when linked, else a .so on sys.path)
 ```
 
@@ -334,6 +338,7 @@ What a workbench registers, and what the base app does not:
 | --- | --- | --- |
 | base (`ferrocad`) | none | none (`display_mesh` yields nothing) |
 | Parametric | `ferrocad_part_gui::fillet_manipulator` | `Part::Fillet` / `Part::Chamfer` |
+| Toy | `ferrocad_toy::height_grip` | `Height` (a `PropertyLength`) |
 | BIM (future) | its own factory, or none | its own `interaction` provider |
 
 The viewport picks manipulators **before** the gizmo and the scene, most recently
@@ -351,6 +356,12 @@ The guarantees in this note are checked by the default test suite:
 * `ferrocad_viewport` — a **fake** manipulator (no Part linked) is hovered, dragged,
   committed, cancelled, and wins over the gizmo;
 * `ferrocad_gpui` — `Contributions` routing and `DisplaySync`'s entity map;
+* `ferrocad_toy` — the whole loop with **no kernel**: a real document object, the
+  edition's factory, a drag, the neutral commit, the app script's `interaction`
+  provider, the `Height` property, and a re-synced stage
+  (`a_toy_manipulator_drives_a_document_property`);
+* `ferrocad_parametric` — the same loop with the real Part arc
+  (`the_part_fillet_manipulator_drives_the_document`);
 * `ferrocad_part_py` — the edition's `interaction` hook creates a `Part::Fillet`
   through the app script.
 

@@ -1,13 +1,13 @@
 # Axis, origin and grids: the spatial reference model
 
-Status: design + G0–G3 built (2026-10-20). Companion to [`gizmo-manipulators.md`](gizmo-manipulators.md),
+Status: design + G0–G4 built (2026-10-20). Companion to [`gizmo-manipulators.md`](gizmo-manipulators.md),
 [`navicube-spec.md`](navicube-spec.md), [`stage.md`](stage.md) and
 [`architecture.md`](architecture.md) §10.
 
 This note defines **one** model for the things that tell a user where they are: the
 world triad, the ground grid, local workplanes, face grids, and the snap feedback that
 ties them together. It records the visual language, the data model, the render
-mapping, and the slice path. **G0–G3 are built** (§1, §8); G4+ are still a plan.
+mapping, and the slice path. **G0–G4 are built** (§1, §8); G5 is still a plan.
 
 ---
 
@@ -18,6 +18,8 @@ mapping, and the slice path. **G0–G3 are built** (§1, §8); G4+ are still a p
 | `Topology::Points` / `Topology::Lines` | ✅ in the draw contract (`ferrocad_graphics`), rendered and picked by `ferrocad_wgpu` as **1 px** primitives |
 | 1.5 px strokes | ✅ as **ribbons** (triangles) via `screen_ribbon`/`push_ribbon`; WebGPU has no line width, so the gizmo and the dress-up arc already do this |
 | Grid snapping | ✅ workplane-aware `snap_to_geometry(event, camera, context: Option<&SnapContext>)` — unprojects onto the workplane (the world `z = 0` plane by default), rounds to the minor step and reports `Snap.local` + `Snap.major` |
+| Feature snapping | ✅ **G4** — vertex, edge midpoint, face centre and workplane origin, resolved in screen space from the display tessellation |
+| Snap feedback | ✅ **G4** — the aurora, the dashed rays and the `ΔU`/`ΔV` pill, plus the origin node's proximity bloom |
 | Gizmo linear snap | ✅ `set_linear_snap(step)` snaps world components (T3) |
 | Numeric pill | ✅ `readout_pill` in the viewport: 11 px monospace, `rgba(15,18,24,0.8)`, 1 px `#FFFFFF14` border |
 | Depth-bias overlays | ✅ `StateSnapshot.depth_bias`; `WIRE_DEPTH_BIAS` for a coplanar wire over a face |
@@ -27,8 +29,7 @@ mapping, and the slice path. **G0–G3 are built** (§1, §8); G4+ are still a p
 | Workplane / UCS | ✅ **G1/G3** — the vocabulary, and a face resolved from the display tessellation (`FaceFrame`) with hover preview, activation and `Esc` |
 | Per-vertex colour/alpha | ✅ **G0** — `Vertex.color` multiplies the packet colour; the grid carries its radial fade in it |
 
-G0–G3 closed the first three gaps. What remains: the snap aurora/pill (G4) and the
-policy/chrome (G5).
+G0–G4 closed the first three gaps. What remains is the policy/chrome (G5).
 
 ---
 
@@ -310,8 +311,40 @@ the visual work can use it.
 | **G1 — vocabulary** ✅ | `Workplane` (+ kind), `GridSpec`/`GridStyle`, `SnapContext`; `snap_to_geometry` workplane-aware; `Snap.local`/`Snap.major` | unit tests: a tilted plane's unprojection and rounding, major-before-minor priority, `z = 0` world behaviour unchanged, local `(u, v)` of a snap |
 | **G2 — world grid + triad** ✅ | `ferrocad_stage::grid` producer and triad builder; the viewport draws them from their own queue; pick-through | viewport: `grid_queue` gains `Points`/`Lines`/`Triangles`; a click over a dot resolves to nothing; the ground cache survives an orbit while the triad rebuilds; `set_grid` toggles it; the shell forwards `ViewState.grid` |
 | **G3 — face workplane** ✅ | `SelectionRef` → `WorkplaneKind::Face`; hover blooms the face grid; activation/dimming; bounded extent; `depth_bias` | hovering a box face emits a local grid packet whose basis matches the face normal; activating it changes the snap plane; `Esc` clears |
-| **G4 — snap feedback** | aurora, projection rays, `ΔU`/`ΔV` pill; origin proximity; feature snaps | dragging across the workplane shows an aurora at major nodes, rays to U/V, and the pill's numbers match `Snap.local` |
+| **G4 — snap feedback** ✅ | aurora, projection rays, `ΔU`/`ΔV` pill; origin proximity; feature snaps | dragging across the workplane shows an aurora at major nodes, rays to U/V, and the pill's numbers match `Snap.local` |
 | **G5 — chrome + policy** | step/radius preferences, the workplane view command, ring-heading sync, origin labels | a preference change re-emits the grid without a restart; `View → Workplane` looks down `n`; the ring follows the active heading |
+
+### G4 as built (2026-10-20) — snap feedback
+
+- **Feature snaps** — `SnapKind` gained `Vertex`, `EdgeMid`, `Centre`, `Origin`.
+  `nearest_feature(camera, device, candidates, FEATURE_PIXELS)` projects each candidate and
+  keeps the strictly nearest within 10 px; ties go to the earlier candidate, so the
+  viewport orders them most-specific-first. `snap_to_geometry_with` tries features, then
+  the picked point, then the grid. The candidates come from the **current hit** (not the
+  stored hover — a tool is dispatched before the hover is published): the item's
+  topological vertices, its tessellated edge midpoints (when the mesh is not dense:
+  `MAX_EDGE_CANDIDATES`), its face centre via `FaceFrame::resolve`, and the workplane
+  origin.
+- **Aurora** — a screen-facing diamond (`AURORA_PIXELS = 7`) at the snapped point. On
+  acquiring a **new** snap point it starts at `#38BDF8 @ 0.85` and decays to
+  `AURORA_REST_ALPHA = 0.55` over `FLASH = 120 ms`; the render loop requests frames while
+  the flash is pending.
+- **Rays** — for a `Grid` snap only (the only kind that is on the plane by construction),
+  dashed 4 px segments from the point to the `U` and `V` axes. A run shorter than a dash
+  is drawn whole. They are emitted as overlay geometry (depth off), like the aurora.
+- **Pill** — `snap_pill` in the viewport: two monospace rows (`ΔU: … mm`, `ΔV: … mm`) in
+  the readout tokens, anchored on the projected snap point (not the cursor, so it does
+  not jitter inside one cell). `snap_local()` exposes the value to the host.
+- **Origin node** — a hollow, screen-facing diamond at the active workplane's origin (the
+  world origin when none is active). It rests at `ORIGIN_ALPHA = 0.65` and blooms to
+  `1.0` when the pointer is within `ORIGIN_PROXIMITY_PIXELS = 5` of the projected point.
+  The marker rides in the grid queue (behind geometry), depth-biased when it is on a face.
+- **Lifecycle** — the feedback lives while a tool is active; it is cleared by
+  `set_tool(None)` and by the pointer leaving the viewport. A new snap point restarts the
+  flash; moving within an unchanged snap does not.
+
+**Deferred:** the feedback is tied to the tool session (the gizmo and manipulators have
+ their own readouts); a standalone hover-snap readout would come with G5's policy.
 
 ### G3 as built (2026-10-20) — the face workplane
 
@@ -434,7 +467,8 @@ pattern (G0–G2 are built; the entries for them are live tests):
 - **`ferrocad_viewport` (headless)** — the grid's packets (topology, ids, separate
   queue, pick-through, the two cache keys), `set_grid`, and the face workplane: hover
   resolution from a named slab, the dwell, the bloom's plane and depth bias, the world
-  dimming, activation changing the snap context, and `Esc`.
+  dimming, activation changing the snap context, and `Esc`. G4 adds the aurora's flash and
+  settle, a vertex snap, a grid snap's rays and local coordinates, and the origin bloom.
 - **`ferrocad_wgpu`** — the per-vertex colour multiply (a readback of a two-colour
   triangle), and the grid's line/point primitives in a real pass.
 

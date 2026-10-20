@@ -27,12 +27,24 @@ pub fn camera_forward(camera: &Camera) -> Vector3 {
     Vector3::new(camera.view.m[8], camera.view.m[9], camera.view.m[10]).scale(-1.0)
 }
 
-/// Project a world point to device pixels (bottom-left origin), or `None` when it is on
-/// the camera's w=0 plane.
+/// The camera's screen-right direction in world space (the view matrix's first row).
+pub fn camera_right(camera: &Camera) -> Vector3 {
+    Vector3::new(camera.view.m[0], camera.view.m[1], camera.view.m[2])
+}
+
+/// The camera's screen-up direction in world space (the view matrix's second row).
+pub fn camera_up(camera: &Camera) -> Vector3 {
+    Vector3::new(camera.view.m[4], camera.view.m[5], camera.view.m[6])
+}
+
+/// Project a world point to device pixels (bottom-left origin).
+///
+/// `None` when the point is on (or behind) the camera's `w = 0` plane: a point behind a
+/// perspective eye would otherwise project to a mirrored screen position.
 pub fn project_device(camera: &Camera, point: Vector3) -> Option<[f64; 2]> {
     let m = camera.view_projection().m;
     let w = m[12] * point.x + m[13] * point.y + m[14] * point.z + m[15];
-    if w.abs() < 1e-9 {
+    if w <= 1e-9 {
         return None;
     }
     let x = (m[0] * point.x + m[1] * point.y + m[2] * point.z + m[3]) / w;

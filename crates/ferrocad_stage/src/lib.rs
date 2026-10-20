@@ -55,6 +55,7 @@
 //! assert_eq!(queue.len(), 2);
 //! ```
 
+pub mod feedback;
 pub mod gizmo;
 pub mod grid;
 pub mod input;
@@ -76,7 +77,10 @@ pub use input::{MouseButton, PointerEvent, PointerKind};
 pub use interaction::{InteractionCommit, Manipulator};
 pub use screen::{HIT_PADDING_PIXELS, HIT_SLOP, HIT_TOLERANCE_PIXELS, STROKE_PIXELS, scale_for};
 pub use shape::{DrawMode, ShapeItem};
-pub use snap::{Snap, SnapContext, SnapKind, snap_to_geometry};
+pub use snap::{
+    Snap, SnapCandidate, SnapContext, SnapKind, nearest_feature, snap_to_geometry,
+    snap_to_geometry_with,
+};
 pub use stage::Stage;
 pub use tool::{PolylineTool, Tool};
 pub use workplane::{FaceFrame, Workplane, WorkplaneKind};

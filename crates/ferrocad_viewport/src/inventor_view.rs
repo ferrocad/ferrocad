@@ -31,8 +31,10 @@ use ferrocad_stage::shape::WIRE_DEPTH_BIAS;
 use ferrocad_stage::{
     FaceFrame, GizmoCommitEvent, GizmoHandle, GizmoModifiers, GizmoValue, GridSpec, GridStyle,
     InteractionCommit, Manipulator, MouseButton as StageButton, PointerEvent, PointerKind,
-    SnapContext, Tool, TransformGizmo, Workplane, grid, snap_to_geometry,
+    SnapCandidate, SnapContext, SnapKind, Tool, TransformGizmo, Workplane, feedback, grid,
+    snap_to_geometry_with,
 };
+use ferrocad_stage::screen::project_device;
 use ferrocad_types::{Matrix4, Placement, Rotation, Vector3};
 use gpui::{
     AnyElement, AppContext, Bounds, Context, DragMoveEvent, EventEmitter, FocusHandle, IntoElement,
@@ -174,6 +176,16 @@ pub struct InventorViewport<V: InventorView> {
     /// The grid's packets. Kept apart from [`queue`](Self::queue) so the grid draws in
     /// the same depth pass but never enters a pick: it is scaffolding, not geometry.
     grid_queue: RenderQueue,
+    /// The last pointer position in **device** pixels (bottom-left origin), for the
+    /// workplane origin's proximity bloom.
+    pointer: Option<[i32; 2]>,
+    /// The snap under a tool's pointer (G4): the aurora, the rays and the pill's data.
+    snap_feedback: Option<SnapFeedback>,
+    /// The feedback's packets, drawn as an overlay above the scene.
+    feedback_queue: RenderQueue,
+    /// Stable meshes for the feedback, so a per-frame rebuild re-uploads rather than
+    /// leaking a mesh identity.
+    feedback_meshes: FeedbackMeshes,
     frame: Option<Arc<RenderImage>>,
     /// A host-supplied zero-copy presenter. When ready, its GPU target replaces the
     /// readback `frame`; `None` (the default) is the image path.
@@ -238,6 +250,8 @@ struct GridMesh {
     world: GridLayer,
     active: GridLayer,
     hover: GridLayer,
+    /// The workplane origin's proximity node (G4).
+    origin: MarkerLayer,
 }
 
 impl GridMesh {
@@ -246,6 +260,7 @@ impl GridMesh {
             world: GridLayer::new(0.0),
             active: GridLayer::new(WIRE_DEPTH_BIAS),
             hover: GridLayer::new(WIRE_DEPTH_BIAS),
+            origin: MarkerLayer::new(),
         }
     }
 
@@ -265,10 +280,82 @@ impl GridMesh {
         sync_layer(&mut self.hover, camera, hover);
     }
 
+    /// Sync the origin node: on the active workplane when one is live (coplanar, so
+    /// depth-biased), else on the world frame under the world triad.
+    fn sync_origin(
+        &mut self,
+        workplane: &Workplane,
+        camera: &Camera,
+        bloomed: bool,
+        depth_bias: f32,
+    ) {
+        self.origin.depth_bias = depth_bias;
+        self.origin.sync(workplane, camera, bloomed);
+    }
+
     fn emit(&self, queue: &mut RenderQueue) {
         self.world.emit(queue);
         self.active.emit(queue);
         self.hover.emit(queue);
+        self.origin.emit(queue);
+    }
+}
+
+/// A single-mesh layer in the grid queue (the workplane origin node).
+struct MarkerLayer {
+    mesh: MeshId,
+    generation: Generation,
+    key: Option<u64>,
+    vertices: Vec<Vertex>,
+    indices: Vec<u32>,
+    depth_bias: f32,
+}
+
+impl MarkerLayer {
+    fn new() -> Self {
+        use std::sync::atomic::{AtomicU64, Ordering};
+        static NEXT: AtomicU64 = AtomicU64::new(1 << 39);
+        Self {
+            mesh: MeshId(NEXT.fetch_add(1, Ordering::Relaxed)),
+            generation: Generation(0),
+            key: None,
+            vertices: Vec::new(),
+            indices: Vec::new(),
+            depth_bias: 0.0,
+        }
+    }
+
+    fn sync(&mut self, workplane: &Workplane, camera: &Camera, bloomed: bool) {
+        let key = feedback::origin_key(workplane, camera, bloomed);
+        if self.key == Some(key) {
+            return;
+        }
+        self.vertices = feedback::origin_node(workplane, camera, bloomed);
+        self.indices = (0..self.vertices.len() as u32).collect();
+        self.generation = Generation(self.generation.0 + 1);
+        self.key = Some(key);
+    }
+
+    fn emit(&self, queue: &mut RenderQueue) {
+        if self.vertices.is_empty() {
+            return;
+        }
+        queue.packets.push(DrawPacket {
+            mesh_id: self.mesh,
+            generation: self.generation,
+            topology: Topology::Lines,
+            geometry: Some(Geometry {
+                vertices: self.vertices.clone(),
+                indices: self.indices.clone(),
+            }),
+            state: StateSnapshot {
+                world_transform: Matrix4::identity(),
+                color: [1.0, 1.0, 1.0, 1.0],
+                depth_bias: self.depth_bias,
+                texture: None,
+                id: PickId(0),
+            },
+        });
     }
 }
 
@@ -448,6 +535,63 @@ struct FaceHover {
 /// flickers while crossing an edge; the face highlight stays instant.
 const FACE_DWELL: Duration = Duration::from_millis(120);
 
+/// The snap a tool is currently working from, for the aurora, the rays and the pill.
+struct SnapFeedback {
+    snap: ferrocad_stage::Snap,
+    /// The plane the snap's local coordinates refer to (the rays lie in it).
+    plane: Option<Workplane>,
+    /// When this snap point was acquired; the aurora flashes for [`feedback::FLASH`].
+    since: Instant,
+}
+
+/// Stable mesh identities for the feedback overlay.
+struct FeedbackMeshes {
+    aurora: MeshId,
+    rays: MeshId,
+    generation: Generation,
+}
+
+impl FeedbackMeshes {
+    fn new() -> Self {
+        use std::sync::atomic::{AtomicU64, Ordering};
+        static NEXT: AtomicU64 = AtomicU64::new(1 << 38);
+        let next = || MeshId(NEXT.fetch_add(1, Ordering::Relaxed));
+        Self {
+            aurora: next(),
+            rays: next(),
+            generation: Generation(0),
+        }
+    }
+}
+
+/// A cap on the tessellated edge segments considered for an edge-midpoint snap; beyond
+/// it the mesh is too dense for a midpoint to mean anything.
+const MAX_EDGE_CANDIDATES: usize = 1024;
+
+/// A draw packet for the feedback overlay: untagged (never picked) and depth-free, so
+/// the aurora and rays are drawn over the scene.
+fn feedback_packet(
+    mesh_id: MeshId,
+    generation: Generation,
+    topology: Topology,
+    vertices: Vec<Vertex>,
+    indices: Vec<u32>,
+) -> DrawPacket {
+    DrawPacket {
+        mesh_id,
+        generation,
+        topology,
+        geometry: Some(Geometry { vertices, indices }),
+        state: StateSnapshot {
+            world_transform: Matrix4::identity(),
+            color: [1.0, 1.0, 1.0, 1.0],
+            depth_bias: 0.0,
+            texture: None,
+            id: PickId(0),
+        },
+    }
+}
+
 /// How quickly a released orbit slows down (the velocity's time constant).
 const ORBIT_INERTIA_TAU: f32 = 0.18;
 /// The minimum release speed (logical px/s) that starts a glide.
@@ -510,6 +654,10 @@ impl<V: InventorView> InventorViewport<V> {
             active_workplane: None,
             hover_face: None,
             grid_queue: RenderQueue::default(),
+            pointer: None,
+            snap_feedback: None,
+            feedback_queue: RenderQueue::default(),
+            feedback_meshes: FeedbackMeshes::new(),
             frame: None,
             presenter: None,
             presenter_frames: 0,
@@ -556,6 +704,9 @@ impl<V: InventorView> InventorViewport<V> {
 
     /// Replace (or clear) the active tool.
     pub fn set_tool(&mut self, tool: Option<Box<dyn Tool>>) {
+        if tool.is_none() {
+            self.set_snap_feedback(None, None);
+        }
         self.tool = tool;
         self.rebuild_transient();
     }
@@ -932,6 +1083,10 @@ impl<V: InventorView> InventorViewport<V> {
         logical: [f32; 2],
         modifiers: GizmoModifiers,
     ) -> bool {
+        let device = self.camera.viewport.to_device(logical);
+        // Kept even during a drag or over the chrome: the origin node's proximity bloom
+        // reads it, and stale coordinates would bloom the wrong node.
+        self.pointer = Some(device);
         // An active drag is owned by `drag_move`: hovering here would rebuild the cube per
         // event and can clear the ring's active state mid-scrub.
         if self.ring_drag.is_some() || self.navicube_drag.is_some() || self.orbit_drag.is_some() {
@@ -949,7 +1104,6 @@ impl<V: InventorView> InventorViewport<V> {
             }
             return changed;
         }
-        let device = self.camera.viewport.to_device(logical);
         let mut changed = false;
         let mut in_cube = false;
         let mut cube_hit = None;
@@ -1447,7 +1601,9 @@ impl<V: InventorView> InventorViewport<V> {
             hit: hit.copied(),
         };
         let context = self.snap_context();
-        let snap = snap_to_geometry(&event, &self.camera, context.as_ref());
+        let candidates = self.snap_candidates(hit);
+        let snap = snap_to_geometry_with(&event, &self.camera, context.as_ref(), &candidates);
+        self.set_snap_feedback(snap, context.map(|context| context.workplane));
         if let Some(tool) = self.tool.as_mut() {
             tool.on_event(&event, snap);
         }
@@ -1724,10 +1880,14 @@ impl<V: InventorView> InventorViewport<V> {
 
     /// Deliver a pointer leave.
     pub fn handle_pointer_leave(&mut self) -> bool {
+        let had_bloom = self.origin_bloomed();
         self.hover = None;
         self.hovered_part = None;
+        self.pointer = None;
         self.hover_report = HoverReport::default();
-        let mut changed = false;
+        let had_feedback = self.snap_feedback.is_some();
+        self.set_snap_feedback(None, None);
+        let mut changed = had_feedback || had_bloom;
         if let Some(cube) = self.navicube.as_mut() {
             changed |= cube.set_hilite(None);
             changed |= cube.set_proximity(false);
@@ -1882,6 +2042,17 @@ impl<V: InventorView> InventorViewport<V> {
         }
         let active_layer = active.as_ref().map(|frame| local_grid(&self.camera, frame));
         let hover_layer = hover.as_ref().map(|frame| local_grid(&self.camera, frame));
+        // The origin node sits on the active workplane, or under the world triad.
+        let origin_plane = active
+            .as_ref()
+            .map(|frame| frame.plane.clone())
+            .unwrap_or_else(Workplane::world);
+        let bloomed = self.origin_bloomed();
+        let origin_bias = if active.is_some() {
+            WIRE_DEPTH_BIAS
+        } else {
+            0.0
+        };
 
         let Some(mesh) = self.grid.as_mut() else {
             return;
@@ -1893,6 +2064,7 @@ impl<V: InventorView> InventorViewport<V> {
             active_layer.as_ref().map(|(spec, style)| (spec, style)),
             hover_layer.as_ref().map(|(spec, style)| (spec, style)),
         );
+        mesh.sync_origin(&origin_plane, &self.camera, bloomed, origin_bias);
         mesh.emit(&mut self.grid_queue);
     }
 
@@ -1998,6 +2170,199 @@ impl<V: InventorView> InventorViewport<V> {
             .is_some_and(|face| face.since.elapsed() < FACE_DWELL)
     }
 
+    /// The candidates the pointer may snap to: the hovered item's topological vertices
+    /// and edge midpoints, its face centre, and the workplane origin. Ordered from most
+    /// to least specific, which breaks ties in [`nearest_feature`].
+    ///
+    /// The item comes from the **current** hit rather than the stored hover: a tool is
+    /// dispatched before the hover state is published, and must still snap.
+    fn snap_candidates(&self, hit: Option<&Hit>) -> Vec<SnapCandidate> {
+        let mut candidates = Vec::new();
+        let item = hit.and_then(|hit| {
+            self.stage
+                .items()
+                .iter()
+                .find(|item| item.entity_id() == hit.id.0)
+        });
+        if let (Some(hit), Some(item)) = (hit, item) {
+            let positions = item.positions();
+            let at = |index: u32| {
+                positions.get(index as usize).map(|position| {
+                    Vector3::new(
+                        f64::from(position[0]),
+                        f64::from(position[1]),
+                        f64::from(position[2]),
+                    )
+                })
+            };
+            for index in item.vertices() {
+                if let Some(point) = at(*index) {
+                    candidates.push(SnapCandidate {
+                        point,
+                        kind: SnapKind::Vertex,
+                    });
+                }
+            }
+            if item.edges().len() <= 2 * MAX_EDGE_CANDIDATES {
+                for pair in item.edges().chunks_exact(2) {
+                    if let (Some(a), Some(b)) = (at(pair[0]), at(pair[1])) {
+                        candidates.push(SnapCandidate {
+                            point: a.add(&b).scale(0.5),
+                            kind: SnapKind::EdgeMid,
+                        });
+                    }
+                }
+            }
+            if let Some(name) = item.part_name(hit.part) {
+                if let Some(frame) = FaceFrame::resolve(
+                    hit.id.0,
+                    name,
+                    item.positions(),
+                    item.triangles(),
+                    item.parts(),
+                    hit.part,
+                ) {
+                    candidates.push(SnapCandidate {
+                        point: frame.plane.origin,
+                        kind: SnapKind::Centre,
+                    });
+                }
+            }
+        }
+        let origin = self
+            .active_workplane
+            .as_ref()
+            .map(|frame| frame.plane.origin)
+            .unwrap_or_else(|| Workplane::world().origin);
+        candidates.push(SnapCandidate {
+            point: origin,
+            kind: SnapKind::Origin,
+        });
+        candidates
+    }
+
+    /// Record (or clear) the snap a tool is working from, restarting the aurora's flash
+    /// only when the snapped point actually changed.
+    fn set_snap_feedback(&mut self, snap: Option<ferrocad_stage::Snap>, plane: Option<Workplane>) {
+        let same = match (&self.snap_feedback, &snap) {
+            (Some(current), Some(next)) => {
+                current.snap.point == next.point && current.snap.kind == next.kind
+            }
+            (None, None) => true,
+            _ => false,
+        };
+        if same {
+            return;
+        }
+        self.snap_feedback = snap.map(|snap| SnapFeedback {
+            snap,
+            plane,
+            since: Instant::now(),
+        });
+        self.rebuild_feedback();
+    }
+
+    /// Rebuild the feedback overlay: the aurora at the snap, and (for a grid snap) the
+    /// dashed rays to the workplane's axes.
+    fn rebuild_feedback(&mut self) {
+        let Some(feedback) = self.snap_feedback.as_ref().map(|feedback| {
+            (
+                Vector3::new(
+                    f64::from(feedback.snap.point[0]),
+                    f64::from(feedback.snap.point[1]),
+                    f64::from(feedback.snap.point[2]),
+                ),
+                feedback::aurora_alpha(feedback.since.elapsed()),
+                feedback.snap.kind,
+                feedback.snap.local,
+                feedback.plane.clone(),
+            )
+        }) else {
+            self.feedback_queue = RenderQueue::default();
+            return;
+        };
+        let (point, alpha, kind, local, plane) = feedback;
+        self.feedback_meshes.generation = Generation(self.feedback_meshes.generation.0 + 1);
+        let generation = self.feedback_meshes.generation;
+
+        let mut queue = RenderQueue::default();
+        let (vertices, indices) = feedback::aurora(point, &self.camera, alpha);
+        queue.packets.push(feedback_packet(
+            self.feedback_meshes.aurora,
+            generation,
+            Topology::Triangles,
+            vertices,
+            indices,
+        ));
+        // The rays only make sense for a point that lies **on** the plane, which a grid
+        // snap does by construction.
+        if kind == SnapKind::Grid {
+            if let (Some(plane), Some(local)) = (plane.as_ref(), local) {
+                let vertices = feedback::rays(plane, local, &self.camera);
+                let indices = (0..vertices.len() as u32).collect();
+                queue.packets.push(feedback_packet(
+                    self.feedback_meshes.rays,
+                    generation,
+                    Topology::Lines,
+                    vertices,
+                    indices,
+                ));
+            }
+        }
+        self.feedback_queue = queue;
+    }
+
+    /// Whether the aurora is still in its acquisition flash (the renderer keeps asking
+    /// for frames until it settles).
+    fn feedback_flash_pending(&self) -> bool {
+        self.snap_feedback
+            .as_ref()
+            .is_some_and(|feedback| feedback.since.elapsed() < feedback::FLASH)
+    }
+
+    /// The local `(u, v)` of the tool's current snap, for the host and the dimension
+    /// pill. `None` when no tool is snapping or no workplane is known.
+    pub fn snap_local(&self) -> Option<[f64; 2]> {
+        self.snap_feedback.as_ref().and_then(|feedback| feedback.snap.local)
+    }
+
+    /// What the tool's pointer snapped to, if anything.
+    pub fn snap_kind(&self) -> Option<SnapKind> {
+        self.snap_feedback.as_ref().map(|feedback| feedback.snap.kind)
+    }
+
+    /// The logical anchor of the snap's dimension pill: the snapped point, projected.
+    fn snap_pill_anchor(&self) -> Option<[f32; 2]> {
+        let feedback = self.snap_feedback.as_ref()?;
+        let point = Vector3::new(
+            f64::from(feedback.snap.point[0]),
+            f64::from(feedback.snap.point[1]),
+            f64::from(feedback.snap.point[2]),
+        );
+        let device = project_device(&self.camera, point)?;
+        Some(
+            self.camera
+                .viewport
+                .to_logical([device[0].round() as i32, device[1].round() as i32]),
+        )
+    }
+
+    /// Whether the pointer is within the origin node's proximity radius (G4).
+    fn origin_bloomed(&self) -> bool {
+        let Some(device) = self.pointer else {
+            return false;
+        };
+        let origin = self
+            .active_workplane
+            .as_ref()
+            .map(|frame| frame.plane.origin)
+            .unwrap_or_else(|| Workplane::world().origin);
+        project_device(&self.camera, origin).is_some_and(|projected| {
+            (projected[0] - f64::from(device[0])).hypot(projected[1] - f64::from(device[1]))
+                <= feedback::ORIGIN_PROXIMITY_PIXELS
+        })
+    }
+
     /// Step a running snap animation, applying the interpolated camera. Returns
     /// whether another frame is needed.
     fn step_snap(&mut self) -> bool {
@@ -2027,6 +2392,9 @@ impl<V: InventorView> InventorViewport<V> {
         if self.grid.is_some() {
             self.sync_grid();
         }
+        // The aurora's flash decays over 120 ms and the camera sets its size, so the
+        // feedback is rebuilt per paint (a handful of vertices).
+        self.rebuild_feedback();
         if let Some(cube) = self.navicube.as_mut() {
             cube.sync(&self.camera);
         }
@@ -2077,6 +2445,15 @@ impl<V: InventorView> InventorViewport<V> {
         if !self.transient.is_empty() {
             views.push(ViewSpec {
                 queue: &self.transient,
+                camera: &self.camera,
+                rect: None,
+                overlay: true,
+            });
+        }
+        if !self.feedback_queue.is_empty() {
+            // The aurora and its rays are pointer feedback: depth-free, on top.
+            views.push(ViewSpec {
+                queue: &self.feedback_queue,
                 camera: &self.camera,
                 rect: None,
                 overlay: true,
@@ -2142,6 +2519,10 @@ impl<V: InventorView + 'static> Render for InventorViewport<V> {
         }
         // A hovered face's grid blooms after a dwell; keep painting until it does.
         if self.face_dwell_pending() {
+            window.request_animation_frame();
+        }
+        // The snap aurora's flash decays over 120 ms.
+        if self.feedback_flash_pending() {
             window.request_animation_frame();
         }
         // The presenter negotiates with the window's device on its first paint; ask for
@@ -2348,6 +2729,18 @@ impl<V: InventorView + 'static> Render for InventorViewport<V> {
             }
         } else {
             root
+        };
+
+        // The snap's dimension pill: `ΔU`/`ΔV` in the active workplane's coordinates
+        // (G4). It follows the snapped point, not the raw cursor, so it does not jitter
+        // while the pointer moves inside one grid cell.
+        let root = match self
+            .snap_feedback
+            .as_ref()
+            .and_then(|feedback| Some((feedback.snap.local?, self.snap_pill_anchor()?)))
+        {
+            Some((local, anchor)) => root.child(snap_pill(local, anchor)),
+            None => root,
         };
 
         // A manipulator's dimension pill (the edge arc's `R 3.50 mm`): the manipulator
@@ -2675,6 +3068,27 @@ fn gizmo_modifiers(modifiers: gpui::Modifiers) -> GizmoModifiers {
 
 /// The gizmo's or scrubber's projected numeric tag. A plain text layer: no id or
 /// hitbox, so it never steals pointer events from the viewport or the chrome.
+/// A snap's dimension pill: `ΔU` over `ΔV`, in the readout tokens.
+fn snap_pill(local: [f64; 2], anchor: [f32; 2]) -> impl IntoElement {
+    div()
+        .absolute()
+        .left(px(anchor[0] + 12.0))
+        .top(px(anchor[1] - 40.0))
+        .flex()
+        .flex_col()
+        .px(px(6.))
+        .py(px(2.))
+        .rounded_sm()
+        .bg(rgba(0x0f1218cc))
+        .border_1()
+        .border_color(rgba(0xffffff14))
+        .text_size(px(11.))
+        .font_family("monospace")
+        .text_color(rgb(CHROME_ACTIVE))
+        .child(format!("ΔU: {:.2} mm", local[0]))
+        .child(format!("ΔV: {:.2} mm", local[1]))
+}
+
 fn readout_pill(text: String, anchor: [f32; 2]) -> impl IntoElement {
     div()
         .absolute()
@@ -2881,7 +3295,7 @@ mod tests {
             triangle_parts: vec![0, 0, 1, 1],
             edges: vec![0, 1, 1, 2, 2, 3, 3, 0, 4, 5, 5, 6, 6, 7, 7, 4],
             segment_parts: vec![0, 0, 0, 0, 1, 1, 1, 1],
-            vertices: Vec::new(),
+            vertices: vec![0, 1, 2, 3, 4, 5, 6, 7],
             vertex_parts: Vec::new(),
             parts: vec!["Face1".to_owned(), "Face2".to_owned()],
         };
@@ -4452,7 +4866,8 @@ mod tests {
     fn the_grid_draws_but_is_never_picked() {
         let mut viewport = grid_view();
 
-        // Three packets: the dots, the major lines, the triad ribbons.
+        // Four packets: the dots, the major lines, the triad ribbons, and the origin
+        // node.
         let topologies: Vec<Topology> = viewport
             .grid_queue
             .packets
@@ -4461,7 +4876,12 @@ mod tests {
             .collect();
         assert_eq!(
             topologies,
-            vec![Topology::Points, Topology::Lines, Topology::Triangles]
+            vec![
+                Topology::Points,
+                Topology::Lines,
+                Topology::Triangles,
+                Topology::Lines
+            ]
         );
 
         // The grid is scaffolding, not geometry: it lives outside the scene queue and
@@ -4483,7 +4903,11 @@ mod tests {
     fn set_grid_toggles_the_grid_queue() {
         let mut viewport = grid_view();
         assert!(viewport.grid_enabled());
-        assert_eq!(viewport.grid_queue.len(), 3);
+        assert_eq!(
+            viewport.grid_queue.len(),
+            4,
+            "three grid layers + the origin node"
+        );
 
         assert!(!viewport.set_grid(true), "enabling twice is a no-op");
 
@@ -4574,7 +4998,7 @@ mod tests {
         assert!((face.frame.plane.origin.z - 0.5).abs() < 1e-6);
 
         // Before the dwell only the world layer is drawn, at full strength.
-        assert_eq!(view.grid_queue.len(), 3);
+        assert_eq!(view.grid_queue.len(), 4);
         let world_alpha = max_alpha(&view.grid_queue.packets[0]);
 
         // Past the dwell the local layer blooms: coplanar with the face, depth-biased,
@@ -4583,10 +5007,15 @@ mod tests {
         view.sync_grid();
         assert_eq!(
             view.grid_queue.len(),
-            5,
+            6,
             "the local layer adds its major lines and triad"
         );
-        for packet in &view.grid_queue.packets[3..] {
+        for packet in view
+            .grid_queue
+            .packets
+            .iter()
+            .filter(|packet| packet.state.depth_bias > 0.0)
+        {
             assert!(packet.state.depth_bias > 0.0, "a face grid is coplanar");
             for vertex in &packet.geometry.as_ref().unwrap().vertices {
                 assert!(
@@ -4607,13 +5036,13 @@ mod tests {
         view.handle_pointer([30.0, 50.0]);
         view.hover_face.as_mut().unwrap().since -= FACE_DWELL;
         view.sync_grid();
-        assert_eq!(view.grid_queue.len(), 5, "Face1 bloomed");
+        assert_eq!(view.grid_queue.len(), 6, "Face1 bloomed");
 
         // Face2 is a different part, so its grid must wait out its own dwell.
         assert!(view.handle_pointer([70.0, 50.0]));
         view.sync_grid();
         assert_eq!(view.hover_face.as_ref().unwrap().part, 1);
-        assert_eq!(view.grid_queue.len(), 3, "the new face has not rested yet");
+        assert_eq!(view.grid_queue.len(), 4, "the new face has not rested yet");
     }
 
     #[test]
@@ -4622,24 +5051,26 @@ mod tests {
         view.handle_pointer([30.0, 50.0]);
         view.hover_face.as_mut().unwrap().since -= FACE_DWELL;
         view.sync_grid();
-        let first: Vec<MeshId> = view.grid_queue.packets[3..]
-            .iter()
-            .map(|packet| packet.mesh_id)
-            .collect();
+        let local_meshes = |view: &InventorViewport<FakeView>| -> Vec<MeshId> {
+            view.grid_queue
+                .packets
+                .iter()
+                .filter(|packet| packet.state.depth_bias > 0.0)
+                .map(|packet| packet.mesh_id)
+                .collect()
+        };
+        let first = local_meshes(&view);
         assert!(!first.is_empty());
 
         // Away, then back onto the same face: a fresh dwell, the same meshes. The local
         // layers are allocated once, so a hover that comes and goes leaks nothing.
         assert!(view.handle_pointer([98.0, 2.0]));
         view.sync_grid();
-        assert_eq!(view.grid_queue.len(), 3);
+        assert_eq!(view.grid_queue.len(), 4);
         view.handle_pointer([30.0, 50.0]);
         view.hover_face.as_mut().unwrap().since -= FACE_DWELL;
         view.sync_grid();
-        let second: Vec<MeshId> = view.grid_queue.packets[3..]
-            .iter()
-            .map(|packet| packet.mesh_id)
-            .collect();
+        let second = local_meshes(&view);
         assert_eq!(first, second);
     }
 
@@ -4667,10 +5098,10 @@ mod tests {
 
         // The active plane is drawn without a dwell, and hovering it adds no second
         // layer.
-        assert_eq!(view.grid_queue.len(), 5);
+        assert_eq!(view.grid_queue.len(), 6);
         view.handle_pointer([30.0, 50.0]);
         view.sync_grid();
-        assert_eq!(view.grid_queue.len(), 5, "the active face is not previewed");
+        assert_eq!(view.grid_queue.len(), 6, "the active face is not previewed");
 
         // Esc clears it: snapping returns to the world and the world layer brightens.
         let dimmed = max_alpha(&view.grid_queue.packets[0]);
@@ -4680,7 +5111,133 @@ mod tests {
             view.snap_context().is_none(),
             "no world grid snapping by default"
         );
-        assert_eq!(view.grid_queue.len(), 3);
+        assert_eq!(view.grid_queue.len(), 4);
         assert!(max_alpha(&view.grid_queue.packets[0]) > dimmed);
+    }
+
+    /// A slab viewport with a tool active, so pointer moves resolve a snap.
+    fn tool_view() -> InventorViewport<FakeView> {
+        let mut view = identity_viewport(Scene::default());
+        view.set_stage(ferrocad_stage::Stage::new().with_item(named_slab()));
+        view.set_grid(true);
+        view.set_tool(Some(Box::new(ferrocad_stage::PolylineTool::new())));
+        view.refresh();
+        view
+    }
+
+    /// The **logical** (top-left origin) position of a world XY point under the identity
+    /// camera at 1x in a 100×100 viewport.
+    fn identity_logical(world: [f64; 2]) -> [f32; 2] {
+        [
+            ((world[0] * 0.5 + 0.5) * 100.0) as f32,
+            ((0.5 - world[1] * 0.5) * 100.0) as f32,
+        ]
+    }
+
+    #[test]
+    fn a_pointer_near_a_vertex_snaps_to_the_vertex_and_flashes() {
+        use ferrocad_stage::SnapKind;
+
+        let mut view = tool_view();
+        assert!(
+            view.handle_pointer(identity_logical([-0.48, -0.48])),
+            "the hover changed"
+        );
+
+        assert_eq!(view.snap_kind(), Some(SnapKind::Vertex));
+        let snap = view.snap_feedback.as_ref().expect("a snap").snap;
+        assert!(
+            (f64::from(snap.point[0]) + 0.5).abs() < 1e-6
+                && (f64::from(snap.point[1]) + 0.5).abs() < 1e-6,
+            "the exact vertex, not the pointer: {snap:?}"
+        );
+
+        // The aurora is live and starts at its flash alpha. A vertex snap gets no rays.
+        assert!(view.feedback_flash_pending());
+        assert_eq!(view.feedback_queue.len(), 1);
+        assert_eq!(view.feedback_queue.packets[0].topology, Topology::Triangles);
+        assert!((max_alpha(&view.feedback_queue.packets[0]) - 0.85).abs() < 1e-5);
+
+        // Past the flash it settles.
+        view.snap_feedback.as_mut().unwrap().since -= feedback::FLASH;
+        view.rebuild_feedback();
+        assert!(
+            (max_alpha(&view.feedback_queue.packets[0]) - feedback::AURORA_REST_ALPHA).abs() < 1e-5
+        );
+    }
+
+    #[test]
+    fn a_grid_snap_emits_the_aurora_and_rays_to_both_axes() {
+        use ferrocad_stage::SnapKind;
+
+        let mut view = tool_view();
+        // Empty space over the world grid; a 0.25 step makes the snap predictable.
+        view.set_snap_grid(Some(0.25));
+        assert!(view.handle_pointer(identity_logical([0.8, 0.8])));
+
+        assert_eq!(view.snap_kind(), Some(SnapKind::Grid));
+        let local = view.snap_local().expect("local coordinates");
+        assert!((local[0] - 0.75).abs() < 1e-9, "{local:?}");
+        assert!((local[1] - 0.75).abs() < 1e-9, "{local:?}");
+
+        // Aurora + rays, both overlays and both untagged.
+        assert_eq!(view.feedback_queue.len(), 2);
+        assert_eq!(view.feedback_queue.packets[0].topology, Topology::Triangles);
+        assert_eq!(view.feedback_queue.packets[1].topology, Topology::Lines);
+        assert!(
+            view.feedback_queue
+                .packets
+                .iter()
+                .all(|packet| packet.state.id == PickId(0))
+        );
+        // The rays stay in the plane and reach for an axis.
+        let rays = view.feedback_queue.packets[1]
+            .geometry
+            .as_ref()
+            .expect("fresh geometry");
+        assert!(!rays.vertices.is_empty());
+        assert!(
+            rays.vertices
+                .iter()
+                .all(|vertex| vertex.position[2].abs() < 1e-6)
+        );
+        assert!(
+            rays.vertices
+                .iter()
+                .any(|vertex| vertex.position[0].abs() < 1e-6 || vertex.position[1].abs() < 1e-6),
+            "a ray should reach an axis"
+        );
+    }
+
+    #[test]
+    fn the_origin_node_blooms_near_the_pointer() {
+        let mut view = grid_view();
+        // The identity camera maps the world origin to the viewport centre.
+        view.handle_pointer([50.0, 50.0]);
+        view.sync_grid();
+        let marker = view.grid_queue.packets.last().expect("the origin node");
+        assert_eq!(marker.topology, Topology::Lines);
+        assert_eq!(max_alpha(marker), 1.0, "bloomed within 5 px");
+
+        view.handle_pointer([95.0, 95.0]);
+        view.sync_grid();
+        let marker = view.grid_queue.packets.last().expect("the origin node");
+        assert!(
+            (max_alpha(marker) - feedback::ORIGIN_ALPHA).abs() < 1e-6,
+            "rests when the pointer is away"
+        );
+    }
+
+    #[test]
+    fn ending_the_tool_clears_the_snap_feedback() {
+        let mut view = tool_view();
+        view.set_snap_grid(Some(0.25));
+        view.handle_pointer(identity_logical([0.8, 0.8]));
+        assert!(!view.feedback_queue.is_empty());
+
+        view.set_tool(None);
+        assert!(view.snap_feedback.is_none());
+        assert!(view.feedback_queue.is_empty());
+        assert_eq!(view.snap_kind(), None);
     }
 }

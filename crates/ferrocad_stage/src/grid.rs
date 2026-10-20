@@ -41,9 +41,9 @@ pub const AXIS_COLORS: [[f32; 4]; 3] = [
 ];
 
 /// The direction the fragment shader's light comes from, normalized. Emitting it as the
-/// vertex normal makes the diffuse term `1`, so the grid and the triad render unlit —
-/// their per-vertex colour is exactly what reaches the screen.
-const LIGHT: [f32; 3] = [0.3714, 0.7428, 0.5571];
+/// vertex normal makes the diffuse term `1`, so the grid, the triad and the snap
+/// feedback render unlit — their per-vertex colour is exactly what reaches the screen.
+pub(crate) const LIGHT: [f32; 3] = [0.3714, 0.7428, 0.5571];
 
 /// The plane, steps and extent of one grid.
 #[derive(Clone, Debug, PartialEq)]
@@ -318,7 +318,7 @@ pub fn triad_key(workplane: &Workplane, camera: &Camera, dim: f32) -> u64 {
     hash(&parts)
 }
 
-fn hash(parts: &[u64]) -> u64 {
+pub(crate) fn hash(parts: &[u64]) -> u64 {
     let mut hash = 0xcbf2_9ce4_8422_2325u64;
     for part in parts {
         hash ^= part;

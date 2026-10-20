@@ -2,14 +2,20 @@
 //!
 //! A snap is resolved against a [`SnapContext`] (a workplane plus its minor/major
 //! steps). The world `XY` plane is the default context, so the old `z = 0` behaviour is
-//! `SnapContext::world(step)`. Feature snaps (vertex/edge midpoint/centre) still arrive
-//! with the richer pick; [`SnapKind::Point`] is the fallback over geometry.
+//! `SnapContext::world(step)`. Feature snaps (a topological vertex, an edge midpoint, a
+//! face centre or the workplane origin) are supplied by the caller as
+//! [`SnapCandidate`]s — the viewport reads them from the stage's display tessellation —
+//! and win over the picked point and the grid.
 
 use ferrocad_graphics::Camera;
 use ferrocad_types::Vector3;
 
 use crate::input::PointerEvent;
+use crate::screen::project_device;
 use crate::workplane::Workplane;
+
+/// The screen-space tolerance for a feature snap, in device pixels.
+pub const FEATURE_PIXELS: f64 = 10.0;
 
 /// What the pointer snapped to.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -18,6 +24,32 @@ pub enum SnapKind {
     Point,
     /// A node of the active workplane's grid.
     Grid,
+    /// A topological vertex of the hovered object.
+    Vertex,
+    /// The midpoint of a topological edge of the hovered object.
+    EdgeMid,
+    /// The centroid of the hovered planar face.
+    Centre,
+    /// The active workplane's origin.
+    Origin,
+}
+
+impl SnapKind {
+    /// Whether this is a feature snap (a named topological point) rather than a point on
+    /// the surface or the grid.
+    pub fn is_feature(self) -> bool {
+        matches!(
+            self,
+            SnapKind::Vertex | SnapKind::EdgeMid | SnapKind::Centre | SnapKind::Origin
+        )
+    }
+}
+
+/// A world-space point the pointer may snap to.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct SnapCandidate {
+    pub point: Vector3,
+    pub kind: SnapKind,
 }
 
 /// A resolved snap: where the pointer effectively is.
@@ -50,6 +82,59 @@ impl SnapContext {
             major: minor * 10.0,
         }
     }
+}
+
+/// Resolve a snap for `event`, preferring a feature over the picked point and the grid.
+///
+/// Feature snaps are resolved first (see [`nearest_feature`]); then the picked point;
+/// then, when a `context` is given, the nearest **major** or **minor** grid node on its
+/// plane. `None` when none applies.
+pub fn snap_to_geometry_with(
+    event: &PointerEvent,
+    camera: &Camera,
+    context: Option<&SnapContext>,
+    candidates: &[SnapCandidate],
+) -> Option<Snap> {
+    if let Some(feature) = nearest_feature(camera, event.position, candidates, FEATURE_PIXELS) {
+        return Some(Snap {
+            point: [
+                feature.point.x as f32,
+                feature.point.y as f32,
+                feature.point.z as f32,
+            ],
+            kind: feature.kind,
+            local: context.map(|context| context.workplane.project(feature.point)),
+            major: false,
+        });
+    }
+    snap_to_geometry(event, camera, context)
+}
+
+/// The nearest candidate within `max_pixels` of `device`, projected through `camera`.
+///
+/// Candidates are tested in order and only a **strictly** closer point replaces the
+/// current best, so the caller's order breaks ties (most specific first).
+pub fn nearest_feature(
+    camera: &Camera,
+    device: [i32; 2],
+    candidates: &[SnapCandidate],
+    max_pixels: f64,
+) -> Option<SnapCandidate> {
+    let target = [f64::from(device[0]), f64::from(device[1])];
+    let mut best: Option<(f64, SnapCandidate)> = None;
+    for candidate in candidates {
+        let Some(projected) = project_device(camera, candidate.point) else {
+            continue;
+        };
+        let distance = (projected[0] - target[0]).hypot(projected[1] - target[1]);
+        if distance > max_pixels {
+            continue;
+        }
+        if best.as_ref().is_none_or(|(closest, _)| distance < *closest) {
+            best = Some((distance, *candidate));
+        }
+    }
+    best.map(|(_, candidate)| candidate)
 }
 
 /// Resolve a snap for `event`.

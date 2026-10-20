@@ -2,7 +2,8 @@
 
 Status: **F0.0 (binding reconnaissance and the tessellation/topology spike), F0.1
 (the kernel-neutral vocabulary), F0.2 (the OCCT implementation), F0.3 (pick
-coherence) and F0.4 (the stage view) are built (2026-10-20); F0.5–F0.6 are planned.** Companion to [`geometry-and-topology.md`](geometry-and-topology.md)
+coherence), F0.4 (the stage view) and F0.5 (the selection bridge) are built
+(2026-10-20); F0.6 is planned.** Companion to [`geometry-and-topology.md`](geometry-and-topology.md)
 (the naming problem and the lineage engine), [`occt-integration.md`](occt-integration.md)
 (the crate layout), [`occt-history-spike.md`](occt-history-spike.md) (the verified
 history bridge), and [`gizmo-manipulators.md`](gizmo-manipulators.md) (the manipulators
@@ -34,15 +35,18 @@ Transactor, because the manipulators consume neutral `ElementRef`/`Hit` data.
 
 | Crate | Has | Does not have |
 | --- | --- | --- |
-| `ferrocad_geom` | `Shape`, `ElementRef`, `History`, `ElementMap`, `OpResult`, `GeometryBackend` (`make_box/fuse/cut/fillet/place/resolve/save/load`), `NullBackend` | tessellation, element enumeration, adjacency, `chamfer`, capability query, lineage folding into `ElementMap` (it is a bare `BTreeMap`) |
-| `ferrocad_occt` | box/fuse/cut/fillet/place, BREP save/load, face-level history for **fuse/cut only**, positional `FaceN`/`EdgeN` resolve | fillet history (returns `History::default()`), chamfer, tessellation, `ancestors`, named resolve |
-| `ferrocad_part` | `Part::Feature` (Shape + Placement), `Part::PropertyPartShape`, `register(backend)`, `make_box` | feature `execute` for booleans/fillet, fillet/chamfer object types, tessellation, element maps, a selection service |
+| `ferrocad_geom` | `Shape`, `ElementRef`, `History`, `ElementMap` (+`apply`/`from_history`), `SelectionRef`, `ElementKind`, `Continuity`, `Tessellation`/`TessellationOptions`, `Capabilities`; `GeometryBackend` gains `capabilities`, `tessellate`, `elements`, `ancestors`, `continuity`, `chamfer` (defaulted, so `NullBackend` need not implement them) | — |
+| `ferrocad_occt` | box/fuse/cut/fillet/place/chamfer, BREP save/load, the six seam methods, fillet/chamfer lineage, `fc_topology.hxx` (list access, `IsSame` lookups, edge tangents) | — |
+| `ferrocad_part` | `Part::Feature` (Shape + Placement), `Part::PropertyPartShape`, `register(backend)`, `make_box` | `Part::Fillet`/`Part::Chamfer` object types, element maps, a selection service |
 | `ferrocad_part_py` | `Part.makeBox`, `Part.Shape` (`isNull`, `isSame`, `exportBrep`, `exportBrepToString`), the extension converter hook | `Faces`/`Edges`/`Vertexes`, `ShapeType`, `tessellate`, `Part.show`, booleans, fillet |
-| renderer | `Vertex.part_idx`; the GPU pick pass writes `[entity_id, part_idx]` into `Rg32Uint` | any producer fills `part_idx` (all zeros); the CPU `pick_hit` returns the **triangle ordinal** in `Hit.element`, so CPU and GPU disagree; `stage_py.Hit.part_idx` actually returns `element` |
+| renderer | `Vertex.part_idx`; the GPU pick pass writes `[entity_id, part_idx]`; the CPU path reports `Hit { part, element }`; screen-space line tolerance (2 px) | — |
+| viewport | a click resolves `(entity, part)` through the stage item's name table and reports `SelectionEvent`/`SelectionRef`; `hovered_part`/`hovered_selection` mirror it | the entity → document-object mapping (the edition's job, F0.6/commands) |
 | conformance | `part_conformance` runs upstream Part tests when `FERROCAD_UPSTREAM` is set; CI `geometry` job | tessellation/topology coverage |
 
-So Part is currently a **shape carrier**: enough to persist a BREP and round-trip
-`obj.Shape`, not enough to click a face.
+So Part is still a **shape carrier** at the document level: it persists a BREP and
+round-trips `obj.Shape`, but it does not yet own fillet/chamfer features. The **picking
+and selection halves are done**: a click on a tessellated shape now reports
+`SelectionRef { object, elements: ["Face6"] }`.
 
 ## 2. Why not the two alternatives
 
@@ -66,12 +70,14 @@ ferrocad_geom   -> ferrocad_types                          [seam; never OCCT]
 ferrocad_occt   -> ferrocad_geom, ferrocad_types, opencascade-sys
 ferrocad_part   -> ferrocad_core, ferrocad_geom, ferrocad_types
 ferrocad_stage  -> ferrocad_graphics, ferrocad_types, ferrocad_geom
-ferrocad_viewport -> ferrocad_stage, ferrocad_inventor, ...           [unchanged]
+ferrocad_viewport -> ferrocad_stage, ferrocad_geom, ferrocad_inventor, ...
+                                                             [+ geom for SelectionRef]
 edition (ferrocad_parametric) -> ferrocad_part_py, ferrocad, ...      [composition root]
 ```
 
 `ferrocad_stage` gains `ferrocad_geom` so a `ShapeItem` can be built from a
-`Tessellation` without a second mesh type. `ferrocad_geom` is a leaf above
+`Tessellation` without a second mesh type. F0.5 adds the same leaf dependency to
+`ferrocad_viewport`, so a click can report a `SelectionRef`. `ferrocad_geom` is a leaf above
 `ferrocad_types`, so the presentation crates still link no kernel.
 
 ## 4. The seam: what F0.1 adds to `ferrocad_geom`
@@ -290,9 +296,9 @@ cargo run
 ```mermaid
 flowchart LR
     CLICK["pointer"] --> HIT["InventorViewport::pick<br/>Hit { entity, part, point }"]
-    HIT --> RES["edition resolver<br/>entity → object, part → name"]
-    RES --> REF["SelectionRef<br/>{ object, elements: [\"Face6\"] }"]
-    REF --> CMD["command / feature"]
+    HIT --> REF["viewport resolves the part name → SelectionRef"]
+    REF --> RES["edition resolver<br/>object id → document object"]
+    RES --> CMD["command / feature"]
     CMD --> EXEC["Part::Feature::execute"]
     EXEC --> BACK["GeometryBackend"]
     BACK --> SHAPE["Shape + History"]
@@ -300,11 +306,27 @@ flowchart LR
     MAP --> RES
 ```
 
-- The **viewport** owns `Hit`; it never learns document names.
-- The **edition** maps `entity → object name` and `part → element name`; that mapping is
-  the Lineage Engine's job ([`geometry-and-topology.md`](geometry-and-topology.md) §9).
-- A **command** stores `(object, [names])` (FreeCAD's `LinkSub`) and a feature
-  `execute` resolves the names through the injected backend.
+- The **viewport** owns `Hit`, resolves `part` through the **name table the stage item
+  already carries** (`ShapeItem::part_names`, copied from `Tessellation::parts`), and
+  reports a `SelectionEvent` (`Picked(SelectionRef)` or `Cleared`). It never learns
+  document names and never links `ferrocad_part`.
+- Names are read from the live stage item, not a cache, so a host that assembles a stage
+  with `stage_mut` and clicks before the next paint still resolves the current names. A
+  click costs one pass over the stage items (not over geometry).
+- `PickId(0)` is the compiler's untagged default (and what a non-selectable `ShapeItem`
+  emits), so it resolves to `Cleared` rather than an object.
+- The **edition** maps `SelectionRef::object` to a document object; the part names are
+  already the persisted contract (`LinkSub`).
+- A **command** stores `(object, [names])` and a feature `execute` resolves the names
+  through the injected backend.
+
+**F0.5 as built.** `InventorViewport` emits a selection on a left press+release that did
+not orbit the camera or the navigation cube, did not move a gizmo handle, and was not
+consumed by an active tool or the chrome (`orbit_clicked` is the drag-threshold check
+captured before the gesture state is cleared). A click that moves a gizmo handle returns
+at the commit, so a drag never also selects. `take_selection()` consumes the update;
+`hovered_part()`/`hovered_selection()` mirror it for hover previews. The viewport gained
+one dependency, `ferrocad_geom` (a leaf: `SelectionRef`), so no kernel reaches presentation.
 
 ## 8. Naming and lineage
 
@@ -335,7 +357,7 @@ returns none.
 | **F0.2 OCCT** ✅ | `tessellate`, `elements`, `ancestors`, `continuity`, `chamfer`, fillet history | `cargo test -p ferrocad_occt` — 13 tests: part identity, name round-trip, both adjacency directions, C0 corners, equal/asymmetric chamfer, fillet lineage, placed tessellation |
 | **F0.3 pick coherence** ✅ | `Hit { part, element: Option<u32> }`; the CPU path reads `Vertex.part_idx`; Python `Hit.part_idx` returns the part; screen-space line tolerance | `ferrocad_graphics` 22 tests (two-group part id, screen-space line hit) and `ferrocad_stage`'s part-tagged mesh test; CPU and GPU agree on `part` |
 | **F0.4 stage view** ✅ | `ShapeItem` from `Tessellation`, part names, per-part highlight sub-mesh, vertex packets, honour `depth_bias` | `ferrocad_stage` 59 tests (tessellation→item, highlight only the selected part, clearing it, a points packet); a wgpu test draws a depth-biased coplanar overlay over the base |
-| **F0.5 selection bridge** | viewport selection event; edition name resolution; `ShapeView` cache | clicking a face yields `("Box", "Face6")`; no viewport → Part dependency |
+| **F0.5 selection bridge** ✅ | `SelectionEvent`/`SelectionRef` from `InventorViewport`, part-name resolution from the stage item, hover mirror | `ferrocad_viewport` 93 tests: a click on each half of a two-face slab yields `("Face1")`/`("Face2")`, an untagged mesh yields the whole object, empty space clears, an orbit and a gizmo commit do not select, a non-selectable item is not selected; no viewport → Part dependency |
 | **F0.6 parametric edit** | `Part::Fillet` / `Part::Chamfer` object types (`Base` LinkSub + `Edges` + `Radius`/distances) whose `execute` resolves names and calls the backend; tangent-chain walk over `ancestors` + `continuity` | changing `Radius` and recomputing rebuilds the shape; undo/redo is a document transaction; the F1 arc scrubber only has to update a property |
 
 The first slice to write is **F0.1**, because it is testable without a kernel and pins
@@ -357,7 +379,7 @@ machine with OCCT.
 
 ## 12. Verification
 
-Planned commands for the slices:
+Planned commands for the slices (all green at F0.5; counts are the current suites):
 
 ```sh
 cargo test -p ferrocad_geom                      # F0.1, no kernel
@@ -366,6 +388,12 @@ cargo test -p ferrocad_occt                      # needs OCCT 7.8+ (the geometry
 cargo test -p ferrocad_part
 cargo test -p ferrocad_stage_py                  # Hit.part, the Python surface
 ```
+
+`ferrocad_viewport`'s F0.5 tests are `a_click_selects_the_named_sub_element_under_the_pointer`
+(press+release on each half of a two-face slab), `hover_mirrors_the_selection_without_consuming_it`,
+`an_untagged_mesh_selects_the_whole_object`, `clicking_empty_space_clears_the_selection`,
+`an_orbit_drag_is_not_a_selection` and `a_non_selectable_item_is_not_selected`; the gizmo
+test also asserts a commit produces no selection.
 
 The geometry job sets `OCCT_INCLUDE_DIR` / `OpenCASCADE_DIR` / `LD_LIBRARY_PATH` from a
 fetched OCCT prefix, as [`occt-integration.md`](occt-integration.md) §8 describes.

@@ -17,6 +17,9 @@ documentation = "https://docs.rs/ferrocad_viewport"
 ferrocad_graphics.workspace = true
 # The scene vocabulary it presents (Scene/Event/InventorView/ViewSpec) and the sample.
 ferrocad_inventor.workspace = true
+# The kernel-neutral vocabulary a selection carries (`SelectionRef`). A leaf: no
+# kernel reaches the viewport.
+ferrocad_geom.workspace = true
 # The modern declarative producer: a Stage of items drawn beside the inventor scene.
 ferrocad_stage.workspace = true
 ferrocad_types.workspace = true

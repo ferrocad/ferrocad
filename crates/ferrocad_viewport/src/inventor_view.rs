@@ -17,6 +17,7 @@ use std::rc::Rc;
 use std::sync::Arc;
 use std::time::Duration;
 
+use ferrocad_geom::SelectionRef;
 use ferrocad_graphics::{Camera, Hit, PickId, Projection, RenderQueue, Viewport, pick_at_hit};
 use ferrocad_inventor::{
     Directives, Event, EventListener, ImageData, InventorView, NaviCubeDirective, Scene, ViewSpec,
@@ -38,6 +39,20 @@ use image::{Frame, ImageBuffer, Rgba};
 
 use crate::navicube::{CHROME_WIDTH, Corner, NaviCube, NavicubeLabel, YawDirection, SnapAnimation};
 use crate::presenter::{Presenter, PresenterStatus};
+
+/// A selection update the viewport reports after a click.
+///
+/// The viewport reports **what was hit**, never a document object:
+/// [`SelectionRef::object`] is the picked [`PickId`] and its `elements` are the kernel
+/// names the mesh carries (`Face6`). The host maps the id to a document object; a
+/// viewport never depends on the document or on a kernel.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum SelectionEvent {
+    /// The click hit an object, whole or through one of its named sub-elements.
+    Picked(SelectionRef),
+    /// The click hit nothing identifiable, so the selection should clear.
+    Cleared,
+}
 
 /// A gpui view that presents an [`InventorView`] (image path) and routes pointer
 /// events into the scene.
@@ -99,6 +114,11 @@ pub struct InventorViewport<V: InventorView> {
     snap: Option<SnapAnimation>,
     /// The object currently under the pointer.
     hover: Option<PickId>,
+    /// The sub-element id ([`Hit::part`]) under the pointer, mirroring
+    /// [`hover`](Self::hover).
+    hovered_part: Option<u32>,
+    /// The selection update produced by the last click, for the host to consume.
+    selection: Option<SelectionEvent>,
     frame: Option<Arc<RenderImage>>,
     /// A host-supplied zero-copy presenter. When ready, its GPU target replaces the
     /// readback `frame`; `None` (the default) is the image path.
@@ -202,6 +222,8 @@ impl<V: InventorView> InventorViewport<V> {
             inertia: None,
             snap: None,
             hover: None,
+            hovered_part: None,
+            selection: None,
             frame: None,
             presenter: None,
             presenter_frames: 0,
@@ -367,6 +389,68 @@ impl<V: InventorView> InventorViewport<V> {
         self.hover
     }
 
+    /// The sub-element id ([`Hit::part`]) under the pointer, if the pointer is over
+    /// geometry. `0` when the producer does not tag sub-elements.
+    pub fn hovered_part(&self) -> Option<u32> {
+        self.hovered_part
+    }
+
+    /// The object under the pointer resolved to a [`SelectionRef`], if it is
+    /// identifiable.
+    ///
+    /// This is the hover mirror of [`take_selection`](Self::take_selection): the same
+    /// entity/part resolution, without consuming anything. A host that previews a
+    /// selection on hover can read it in `render`.
+    pub fn hovered_selection(&self) -> Option<SelectionRef> {
+        let id = self.hover?;
+        self.selection_ref(id.0, self.hovered_part.unwrap_or(0))
+    }
+
+    /// Take the selection update produced by the last click, if any.
+    ///
+    /// A click is a left press and release that did **not** orbit the camera (or the
+    /// navigation cube), did **not** move a gizmo handle, and was not consumed by an
+    /// active tool or the chrome. The host maps [`SelectionRef::object`] to a document
+    /// object; the viewport only ever reports pick ids and element names.
+    pub fn take_selection(&mut self) -> Option<SelectionEvent> {
+        self.selection.take()
+    }
+
+    /// The last selection update, without consuming it.
+    pub fn selection(&self) -> Option<&SelectionEvent> {
+        self.selection.as_ref()
+    }
+
+    /// Resolve a hit's `(entity, part)` into a [`SelectionRef`].
+    ///
+    /// The part id indexes the stage item's name table, so a click on `Face6` reports
+    /// `Face6`; a mesh with no names reports the whole object. `PickId(0)` is the
+    /// compiler's untagged default (and what a non-selectable
+    /// [`ShapeItem`](ferrocad_stage::ShapeItem) emits), so it never resolves to an
+    /// object.
+    fn selection_ref(&self, entity: u32, part: u32) -> Option<SelectionRef> {
+        if entity == PickId::default().0 {
+            return None;
+        }
+        Some(match self.part_name(entity, part) {
+            Some(name) => SelectionRef::element(entity, name),
+            None => SelectionRef::whole(entity),
+        })
+    }
+
+    /// The element name a stage item carries for `(entity, part)`.
+    ///
+    /// Read from the live stage rather than a cache, so a host that assembles a stage
+    /// with [`stage_mut`](Self::stage_mut) and clicks before the next paint still gets
+    /// the current names.
+    fn part_name(&self, entity: u32, part: u32) -> Option<&str> {
+        self.stage
+            .items()
+            .iter()
+            .find(|item| item.entity_id() == entity)
+            .and_then(|item| item.part_name(part))
+    }
+
     /// Convert a **window-relative** logical point (what gpui reports to an element's
     /// mouse listeners) into a **viewport-local** logical point, by subtracting the
     /// element's window-space origin captured at prepaint.
@@ -474,6 +558,7 @@ impl<V: InventorView> InventorViewport<V> {
                 let hit = cube.hit(device);
                 if let Some(piece) = hit {
                     self.hover = None;
+                    self.hovered_part = None;
                     changed |= cube.set_hilite(Some(piece));
                     changed |= cube.set_ring_active(false);
                     cube_hit = Some(piece);
@@ -483,6 +568,7 @@ impl<V: InventorView> InventorViewport<V> {
                     changed |= cube.set_ring_active(ring);
                     changed |= cube.set_hilite(None);
                     self.hover = None;
+                    self.hovered_part = None;
                 }
             } else {
                 changed |= cube.set_hilite(None);
@@ -556,6 +642,11 @@ impl<V: InventorView> InventorViewport<V> {
             .is_some_and(|drag| drag.moved >= threshold);
         // Any button event ends the gesture state it observed.
         let was_orbiting = self.navicube_drag.is_some() || self.orbit_drag.is_some();
+        // A click that never passed the orbit threshold selects instead of navigating.
+        let orbit_clicked = self
+            .orbit_drag
+            .as_ref()
+            .is_some_and(|drag| drag.moved < threshold);
         let ring_was_active = self.ring_drag.is_some();
         self.navicube_drag = None;
         self.orbit_drag = None;
@@ -695,6 +786,23 @@ impl<V: InventorView> InventorViewport<V> {
             down,
         };
         changed |= self.dispatch(&event, hit.as_ref());
+
+        // A left click that reached the scene selects what is under the pointer (or
+        // clears the selection on empty space). A gizmo commit, the navigation cube, a
+        // ring scrub, an orbit drag and an active tool all returned or are excluded
+        // above, so their gestures never also select.
+        if !down && button == 1 && self.tool.is_none() && orbit_clicked {
+            self.selection = Some(
+                match hit
+                    .as_ref()
+                    .and_then(|hit| self.selection_ref(hit.id.0, hit.part))
+                {
+                    Some(reference) => SelectionEvent::Picked(reference),
+                    None => SelectionEvent::Cleared,
+                },
+            );
+            changed = true;
+        }
         changed
     }
 
@@ -1091,6 +1199,7 @@ impl<V: InventorView> InventorViewport<V> {
     /// Deliver a pointer leave.
     pub fn handle_pointer_leave(&mut self) -> bool {
         self.hover = None;
+        self.hovered_part = None;
         let mut changed = false;
         if let Some(cube) = self.navicube.as_mut() {
             changed |= cube.set_hilite(None);
@@ -1124,6 +1233,7 @@ impl<V: InventorView> InventorViewport<V> {
     /// Update the hover target and run the `MouseMove` listeners for `hit`.
     fn dispatch_hover(&mut self, device: [i32; 2], hit: Option<&Hit>) -> bool {
         self.hover = hit.map(|hit| hit.id);
+        self.hovered_part = hit.map(|hit| hit.part);
         let event = Event::MouseMove { position: device };
         self.dispatch(&event, hit)
     }
@@ -1966,6 +2076,151 @@ mod tests {
         assert_eq!(viewport.hovered(), None);
         // Leaving is a no-op once nothing is hovered.
         assert!(!viewport.handle_pointer_leave());
+    }
+
+    /// A two-face slab at `z = 0.5` (the identity camera looks along +Z), tagged
+    /// `Face1`/`Face2` the way a kernel tessellation lays one out: vertices duplicated
+    /// per face, every primitive carrying its part id, names in `parts`.
+    fn named_slab() -> ferrocad_stage::ShapeItem {
+        use ferrocad_geom::Tessellation;
+        use ferrocad_stage::ShapeItem;
+
+        let mesh = Tessellation {
+            positions: vec![
+                [-0.5, -0.5, 0.5],
+                [0.0, -0.5, 0.5],
+                [0.0, 0.5, 0.5],
+                [-0.5, 0.5, 0.5],
+                [0.0, -0.5, 0.5],
+                [0.5, -0.5, 0.5],
+                [0.5, 0.5, 0.5],
+                [0.0, 0.5, 0.5],
+            ],
+            normals: Vec::new(),
+            triangles: vec![0, 1, 2, 0, 2, 3, 4, 5, 6, 4, 6, 7],
+            triangle_parts: vec![0, 0, 1, 1],
+            edges: vec![0, 1, 1, 2, 2, 3, 3, 0, 4, 5, 5, 6, 6, 7, 7, 4],
+            segment_parts: vec![0, 0, 0, 0, 1, 1, 1, 1],
+            vertices: Vec::new(),
+            vertex_parts: Vec::new(),
+            parts: vec!["Face1".to_owned(), "Face2".to_owned()],
+        };
+        ShapeItem::from_tessellation(7, &mesh)
+    }
+
+    /// The identity camera at 1x, where device and world coordinates coincide in XY.
+    fn identity_viewport(scene: Scene) -> InventorViewport<FakeView> {
+        let camera = Camera {
+            viewport: ferrocad_graphics::Viewport::new([100, 100], 1.0),
+            ..Camera::identity()
+        };
+        InventorViewport::new(fake(ImageData::default()), camera, scene)
+    }
+
+    /// The sample triangle carrying a pick id, so a scene object is identifiable.
+    fn triangle_scene_with_id(id: u32) -> Scene {
+        let mut scene = triangle_scene();
+        scene.root.children.insert(
+            0,
+            Node {
+                kind: NodeKind::PickId(id),
+                children: vec![],
+            },
+        );
+        scene
+    }
+
+    #[test]
+    fn a_click_selects_the_named_sub_element_under_the_pointer() {
+        use ferrocad_stage::Stage;
+
+        let mut view = identity_viewport(Scene::default());
+        view.set_stage(Stage::new().with_item(named_slab()));
+        view.refresh();
+
+        // A click is a press and release without movement: left half → Face1.
+        assert!(!view.handle_button([30.0, 50.0], 1, true));
+        assert!(
+            view.handle_button([30.0, 50.0], 1, false),
+            "the selection update repaints"
+        );
+        assert_eq!(
+            view.take_selection(),
+            Some(SelectionEvent::Picked(SelectionRef::element(7, "Face1")))
+        );
+        // Taking the update consumes it.
+        assert_eq!(view.take_selection(), None);
+
+        view.handle_button([70.0, 50.0], 1, true);
+        view.handle_button([70.0, 50.0], 1, false);
+        assert_eq!(
+            view.take_selection(),
+            Some(SelectionEvent::Picked(SelectionRef::element(7, "Face2")))
+        );
+    }
+
+    #[test]
+    fn hover_mirrors_the_selection_without_consuming_it() {
+        use ferrocad_stage::Stage;
+
+        let mut view = identity_viewport(Scene::default());
+        view.set_stage(Stage::new().with_item(named_slab()));
+        view.refresh();
+
+        view.handle_pointer([70.0, 50.0]);
+        assert_eq!(view.hovered(), Some(PickId(7)));
+        assert_eq!(view.hovered_part(), Some(1));
+        assert_eq!(
+            view.hovered_selection(),
+            Some(SelectionRef::element(7, "Face2"))
+        );
+        assert_eq!(view.take_selection(), None, "hover is not a click");
+
+        view.handle_pointer([98.0, 2.0]);
+        assert_eq!(view.hovered(), None);
+        assert_eq!(view.hovered_part(), None);
+        assert_eq!(view.hovered_selection(), None);
+    }
+
+    #[test]
+    fn an_untagged_mesh_selects_the_whole_object() {
+        let mut view = identity_viewport(triangle_scene_with_id(9));
+        view.handle_button([50.0, 50.0], 1, true);
+        view.handle_button([50.0, 50.0], 1, false);
+        assert_eq!(
+            view.take_selection(),
+            Some(SelectionEvent::Picked(SelectionRef::whole(9)))
+        );
+    }
+
+    #[test]
+    fn clicking_empty_space_clears_the_selection() {
+        let mut view = identity_viewport(triangle_scene_with_id(9));
+        view.handle_button([5.0, 5.0], 1, true);
+        assert!(view.handle_button([5.0, 5.0], 1, false));
+        assert_eq!(view.take_selection(), Some(SelectionEvent::Cleared));
+    }
+
+    #[test]
+    fn an_orbit_drag_is_not_a_selection() {
+        let mut view = identity_viewport(triangle_scene_with_id(9));
+        assert!(!view.handle_button([50.0, 50.0], 1, true));
+        assert!(view.drag_move([70.0, 50.0]));
+        view.handle_button([70.0, 50.0], 1, false);
+        assert_eq!(view.take_selection(), None, "an orbit selects nothing");
+    }
+
+    #[test]
+    fn a_non_selectable_item_is_not_selected() {
+        use ferrocad_stage::Stage;
+
+        let mut view = identity_viewport(Scene::default());
+        view.set_stage(Stage::new().with_item(named_slab().with_selectable(false)));
+        view.refresh();
+
+        view.handle_button([30.0, 50.0], 1, true);
+        view.handle_button([30.0, 50.0], 1, false);
+        assert_eq!(view.take_selection(), Some(SelectionEvent::Cleared));
     }
 
     #[test]
@@ -2995,6 +3250,11 @@ mod tests {
         assert!(view.handle_button(viewport.to_logical([grab[0] + 12, grab[1]]), 1, false));
         assert!(view.last_gizmo_commit().is_some());
         assert!(preview(&view).is_none(), "the preview is cleared on commit");
+        assert_eq!(
+            view.take_selection(),
+            None,
+            "a gizmo commit is not a click selection"
+        );
     }
 
     #[test]

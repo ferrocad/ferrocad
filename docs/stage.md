@@ -261,6 +261,16 @@ in `HIGHLIGHT_COLOR` with `HIGHLIGHT_DEPTH_BIAS`; `with_vertices(true)` adds a
 selection does not re-upload the base mesh. `StateSnapshot.depth_bias` is now applied
 in the scene and pick shaders (`clip.z -= bias * clip.w`).
 
+**Selection bridge (F0.5).** `InventorViewport` turns a click into a
+`SelectionEvent` (`Picked(SelectionRef)` or `Cleared`). It resolves `Hit::part` through
+the stage item's name table, so a click on a kernel mesh reports `Face6`; a mesh with no
+names reports `SelectionRef::whole(entity)`. The gesture rules are explicit: a click is a
+left press+release that stayed under the orbit threshold and was not consumed by a gizmo
+handle, the navigation cube, the chrome or an active tool. `PickId(0)` (the compiler's
+untagged default, and what `with_selectable(false)` emits) never selects. The host owns
+the object-id → document mapping; the viewport only gained `ferrocad_geom` for the
+vocabulary.
+
 **Verification:** `ferrocad_wgpu`'s `pick_at_resolves_the_object_and_its_world_point`
 (two clip-space triangles, distinct ids — a pixel picks the right id and the world
 point/normal of the hit) and `pick_at_reports_the_sub_element_index_and_topology` (the
@@ -272,6 +282,11 @@ both hover and button events. `ferrocad_stage`'s `a_tessellation_becomes_a_picka
 `a_highlight_draws_only_the_selected_part` and `clearing_the_highlight_removes_the_packet`
 cover the F0.4 bridge; `ferrocad_wgpu`'s
 `a_depth_biased_overlay_draws_over_a_coplanar_surface` proves the bias reaches the GPU.
+The F0.5 bridge is covered by `ferrocad_viewport`'s
+`a_click_selects_the_named_sub_element_under_the_pointer`,
+`hover_mirrors_the_selection_without_consuming_it`,
+`an_untagged_mesh_selects_the_whole_object`, `clicking_empty_space_clears_the_selection`,
+`an_orbit_drag_is_not_a_selection` and `a_non_selectable_item_is_not_selected`.
 
 ### T5 — the `ferrocad.stage` Python bindings
 

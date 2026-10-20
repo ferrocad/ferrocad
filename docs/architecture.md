@@ -27,7 +27,7 @@ obvious:
 | `ferrocad_wgpu` | `rlib` | The wgpu backend: consumes `ferrocad_graphics` draw batches (pipelines, uniforms, MSAA, offscreen target, readback). |
 | `ferrocad_inventor_py` | `cdylib` | The `pivy.coin` facade (scaffolding) over `ferrocad_inventor`. |
 | `ferrocad_stage_py` | `cdylib` | The `ferrocad.stage` facade over `ferrocad_stage` (the modern stack's Python surface). |
-| `ferrocad_viewport` | `rlib` | The `bite-gpui` viewport over an invented scene: `InventorViewport` (image path, pointer→pick→listener) plus a hosted `ferrocad_stage` (declarative items and interactive tools), the navigation cube (`NaviCube`), and the sample scene. Depends on `ferrocad_graphics`/`ferrocad_inventor`/`ferrocad_stage` only. |
+| `ferrocad_viewport` | `rlib` | The `bite-gpui` viewport over an invented scene: `InventorViewport` (image path, pointer→pick→listener, and clicks → `SelectionEvent`/`SelectionRef`) plus a hosted `ferrocad_stage` (declarative items and interactive tools), the navigation cube (`NaviCube`), and the sample scene. Depends on `ferrocad_graphics`/`ferrocad_geom`/`ferrocad_inventor`/`ferrocad_stage` only. |
 | `ferrocad_gpui` | `rlib` | The `bite-gpui` application-shell library: boots CPython and provides `Shell`, `run`/`run_with`, `HostConfig`, and mounts the `ferrocad_viewport`. Ships no application scripts. |
 | `ferrocad` | `bin` | The base app (the general edition). Owns the app's Python entry module and, when packaged, its mods and interpreter; calls `ferrocad_gpui::run_with`. |
 | `python/FreeCAD` | package | The public, pure-Python `import FreeCAD` facade. |
@@ -174,9 +174,10 @@ ferrocad_wgpu      -> ferrocad_graphics, ferrocad_types, wgpu, bytemuck
 ferrocad_inventor_py -> ferrocad_inventor            [pivy.coin facade; + pyo3]
 ferrocad_stage_py  -> ferrocad_stage, ferrocad_graphics,
                       ferrocad_types, pyo3            [ferrocad.stage facade]
-ferrocad_viewport  -> ferrocad_graphics, ferrocad_inventor,
-                      ferrocad_stage, ferrocad_types,
-                      bite-gpui                      [the gpui viewport; no wgpu, no pyo3]
+ferrocad_viewport  -> ferrocad_graphics, ferrocad_geom,
+                      ferrocad_inventor, ferrocad_stage,
+                      ferrocad_types, bite-gpui            [the gpui viewport; no wgpu, no pyo3]
+                                                     [geom is a leaf: SelectionRef]
 ferrocad_gpui      -> ferrocad_widgets, ferrocad_viewport,
                       ferrocad_inventor, ferrocad_wgpu,
                       ferrocad_types, pyo3 (embed)   [the host/glue owns the window]

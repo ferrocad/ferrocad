@@ -5,7 +5,10 @@
 //!
 //! - [`inventor_view`] — [`InventorViewport`], a gpui element that presents an
 //!   [`InventorView`](ferrocad_inventor::InventorView) (the image path) and routes
-//!   pointer events into the scene (pick → listener → recompile).
+//!   pointer events into the scene (pick → listener → recompile). A click is reported
+//!   as a [`SelectionEvent`] carrying a kernel-neutral
+//!   [`SelectionRef`](ferrocad_geom::SelectionRef): the host maps its object id to a
+//!   document object.
 //! - [`navicube`] — the navigation-cube controller overlay ([`NaviCube`]).
 //! - [`scene`] — a sample scene/camera and a hover listener, so the pipeline and the
 //!   interaction path are exercised before real document geometry exists.
@@ -18,6 +21,7 @@
 //!
 //! ```text
 //! ferrocad_viewport ── uses ──▶ ferrocad_graphics  (Camera, RenderQueue, PickId, …)
+//!                   ── uses ──▶ ferrocad_geom      (SelectionRef)
 //!                   ── uses ──▶ ferrocad_inventor  (Scene, Event, InventorView, …)
 //!        ▲
 //!        │ host supplies the window          backend implements InventorView
@@ -29,6 +33,6 @@ pub mod navicube;
 pub mod presenter;
 pub mod scene;
 
-pub use inventor_view::InventorViewport;
+pub use inventor_view::{InventorViewport, SelectionEvent};
 pub use navicube::NaviCube;
 pub use presenter::{Presenter, PresenterStatus};

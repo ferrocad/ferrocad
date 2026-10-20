@@ -244,6 +244,13 @@ The extraction is a refactor with its own tests, so it lands in stages:
    fillet/chamfer now report lineage. The sibling bridge gained `fc_topology.hxx`
    (list access, `IsSame` lookups, the two-distance chamfer, fillet/chamfer history and
    edge tangents). See [`topology-selection.md`](topology-selection.md) (F0.2).
+10. **[x] The selection bridge** (2026-10-20) — a click in `InventorViewport` reports a
+    kernel-neutral `SelectionRef` (`SelectionEvent::Picked`), resolving the hit's part id
+    through the stage item's name table (`Face6`, `Edge3`); empty space reports
+    `Cleared`. The viewport depends on `ferrocad_geom` (a leaf) and never on
+    `ferrocad_part` or OCCT, so presentation stays kernel-free. See
+    [`topology-selection.md`](topology-selection.md) (F0.5). F0.6 (parametric
+    `Part::Fillet`/`Part::Chamfer` object types) is next.
 
 `ferrocad_occt` is deliberately **not** in `default-members`, so an ordinary
 `cargo build`/`cargo test` needs no kernel; only the `geometry` CI job (and geometry

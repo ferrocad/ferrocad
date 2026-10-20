@@ -2485,6 +2485,7 @@ name = "ferrocad_viewport"
 version = "0.1.2"
 dependencies = [
  "bite-gpui",
+ "ferrocad_geom",
  "ferrocad_graphics",
  "ferrocad_inventor",
  "ferrocad_stage",

@@ -52,6 +52,9 @@ is the `FreeCAD` Python API, documented by convention and by upstream.
   path (T0–T6, T6 planned), the T0–T5 build, and the deferred decisions.
 - [geometry-and-topology.md](geometry-and-topology.md) — topological sorting vs
   topological naming, and the seam for a future OCCT geometry engine.
+- [topology-selection.md](topology-selection.md) — the F0 prerequisite for the
+  manipulators: the topology/selection seam, the tessellation contract, the
+  `opencascade-sys` binding findings, and the F0.0–F0.6 slice plan.
 - [occt-history-spike.md](occt-history-spike.md) — the first geometry spike: what
   OCCT history FreeCAD depends on, and what it implies for the trait and the B slices.
 - [occt-integration.md](occt-integration.md) — the crate layout for OCCT: the

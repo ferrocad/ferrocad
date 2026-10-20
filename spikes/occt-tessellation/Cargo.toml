@@ -1,0 +1,21 @@
+# Throwaway spike: tessellate an OCCT shape and recover per-face/edge identity.
+#
+# This is deliberately NOT a member of the FerroCAD workspace. This `[workspace]`
+# table makes the spike its own workspace root (with the sibling bridge crate as a
+# member), exactly like `spikes/occt-history-rs`.
+#
+# Uses `opencascade-sys` directly: the high-level `opencascade` crate hides
+# `TopoDS_Shape` (pub(crate)), so it cannot reach `TopExp`/`BRep_Tool`.
+[package]
+name = "occt-tessellation"
+version = "0.0.0"
+edition = "2021"
+publish = false
+
+[workspace]
+members = ["bridge"]
+
+[dependencies]
+opencascade-sys = "0.3"
+cxx = "1"
+occt-topology-bridge = { path = "bridge" }

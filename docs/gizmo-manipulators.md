@@ -378,7 +378,8 @@ binding remain green.
 - **Fillet/Chamfer** has a kernel operation (`GeometryBackend::fillet`; OCCT
   `BRepFilletAPI_MakeFillet`) but the viewport has no pixel → sub-shape translation, no
   tangent-chain traversal, and no `chamfer` in the backend trait. Building the arc
-  scrubber before those would design UI against phantom interfaces.
+  scrubber before those would design UI against phantom interfaces. The prerequisite is
+  sliced in [`topology-selection.md`](topology-selection.md) (F0).
 - **Draft** additionally needs a wall-face selection, a pull direction and an angular
   offset operation; its protractor arc is a ring-like scrub (T1) with a degree readout
   (T3).

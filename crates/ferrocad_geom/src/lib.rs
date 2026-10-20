@@ -4,12 +4,15 @@
 //! expression and recompute layers can be written and tested **now**, without a
 //! geometry kernel, and gain one later without touching them.
 //!
-//! It provides three things:
+//! It provides four things:
 //!
 //! - [`Shape`] — an opaque, cheap-to-clone handle to a kernel shape. The kernel owns
 //!   the data; Rust owns the handle.
 //! - [`History`], [`ElementRef`] and [`ElementMap`] — what an operation did, in the
 //!   kernel's own terms, and the stable-name registry derived from it.
+//! - [`Tessellation`], [`ElementKind`] and [`SelectionRef`] — the display mesh with
+//!   per-primitive sub-element ids, and the neutral vocabulary a viewport or a
+//!   workbench needs to turn a pick into a topology reference.
 //! - [`GeometryBackend`] — the trait a kernel implements (OCCT, or [`NullBackend`]).
 //!
 //! This crate depends on [`ferrocad_types`] for values such as [`Placement`], and on
@@ -207,6 +210,295 @@ impl ElementMap {
     pub fn iter(&self) -> impl Iterator<Item = (&str, &Shape)> {
         self.entries.iter().map(|(k, v)| (k.as_str(), v))
     }
+
+    /// Fold an operation's [`History`] into the map.
+    ///
+    /// Each `generated`/`modified` input name comes to mean its output sub-shape, so a
+    /// reference recorded before the operation still resolves after the rebuild. When
+    /// one input maps to several outputs, the **first** output wins: a single name
+    /// cannot denote a set, and composing names (`Face6a`, `Face6b`) is the mapper's
+    /// job (see `docs/geometry-and-topology.md` §9). An input the operation deleted is
+    /// removed, so a stale reference fails to resolve instead of pointing at geometry
+    /// that is no longer there.
+    ///
+    /// Input names are the names the history was built with. With positional names
+    /// that is the input shape's own ordinal; a lineage-derived naming scheme can feed
+    /// the same method with better names later.
+    pub fn apply(&mut self, history: &History) {
+        for (input, output) in history.modified.iter().chain(&history.generated) {
+            self.entries
+                .entry(input.name.clone())
+                .or_insert_with(|| output.shape.clone());
+        }
+        for deleted in &history.deleted {
+            self.entries.remove(&deleted.name);
+        }
+    }
+
+    /// A map seeded from one operation's history.
+    pub fn from_history(history: &History) -> Self {
+        let mut map = Self::new();
+        map.apply(history);
+        map
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Topology and selection vocabulary
+// ---------------------------------------------------------------------------
+
+/// The kind of a topological element, in FreeCAD's terms.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub enum ElementKind {
+    Solid,
+    Shell,
+    Face,
+    Wire,
+    Edge,
+    Vertex,
+}
+
+impl ElementKind {
+    /// The FreeCAD name prefix (`Face` in `Face6`).
+    pub fn prefix(self) -> &'static str {
+        match self {
+            Self::Solid => "Solid",
+            Self::Shell => "Shell",
+            Self::Face => "Face",
+            Self::Wire => "Wire",
+            Self::Edge => "Edge",
+            Self::Vertex => "Vertex",
+        }
+    }
+
+    /// The element kinds a pick can resolve to, coarsest first.
+    pub const ALL: [Self; 6] = [
+        Self::Solid,
+        Self::Shell,
+        Self::Face,
+        Self::Wire,
+        Self::Edge,
+        Self::Vertex,
+    ];
+}
+
+/// How smoothly two elements meet, as far as tangent propagation is concerned.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Continuity {
+    /// Positional only (a sharp corner).
+    C0,
+    /// Tangent direction continuous; magnitude may jump (the usual fillet target).
+    G1,
+    /// Tangent direction and magnitude continuous.
+    C1,
+    /// Curvature continuous.
+    G2,
+    /// Curvature and its derivative continuous.
+    C2,
+}
+
+/// How finely a kernel should tessellate a shape.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct TessellationOptions {
+    /// Linear deflection in model units. `None` lets the backend derive it from the
+    /// shape's bounding box, because a fixed number is wrong at some model scale.
+    pub linear_deflection: Option<f64>,
+    /// Angular deflection in radians (OCCT's default is `0.5`).
+    pub angular_deflection: f64,
+    /// Whether the linear deflection is relative to the edge length (OCCT's
+    /// `isRelative`).
+    pub relative: bool,
+}
+
+impl Default for TessellationOptions {
+    fn default() -> Self {
+        Self {
+            linear_deflection: None,
+            angular_deflection: 0.5,
+            relative: false,
+        }
+    }
+}
+
+impl TessellationOptions {
+    /// Options with an explicit absolute linear deflection.
+    pub fn absolute(linear_deflection: f64) -> Self {
+        Self {
+            linear_deflection: Some(linear_deflection),
+            ..Self::default()
+        }
+    }
+}
+
+/// A display mesh with per-primitive sub-element ids.
+///
+/// This is the neutral bridge between a kernel and a renderer. It carries no kernel
+/// types: `parts` holds the **names** a selection is expressed in (`Face6`, `Edge3`),
+/// and a backend resolves a name to a sub-shape on demand.
+///
+/// The index bases are deliberately different from the names: `parts` ids are
+/// **0-based**, while the names they denote are the kernel's own, usually 1-based
+/// (`Face6` is `parts[5]`). Convert once, where the mesh is built.
+///
+/// `positions` are duplicated per face. A geometric vertex shared by two faces cannot
+/// carry two part ids, and per-face triangulation keeps picking exact.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct Tessellation {
+    /// Model-space positions.
+    pub positions: Vec<[f32; 3]>,
+    /// Model-space per-vertex normals; empty ⇒ flat-shaded per triangle.
+    pub normals: Vec<[f32; 3]>,
+    /// Flat triangle indices, three per triangle.
+    pub triangles: Vec<u32>,
+    /// The part id of each triangle (`triangles.len() / 3` entries).
+    pub triangle_parts: Vec<u32>,
+    /// Flat line indices, two per segment; one run per topological edge.
+    pub edges: Vec<u32>,
+    /// The part id of each segment (`edges.len() / 2` entries).
+    pub segment_parts: Vec<u32>,
+    /// One position index per topological vertex.
+    pub vertices: Vec<u32>,
+    /// The part id of each vertex (`vertices.len()` entries).
+    pub vertex_parts: Vec<u32>,
+    /// Part id → element name (`Face6`, `Edge3`, …).
+    pub parts: Vec<String>,
+}
+
+impl Tessellation {
+    /// Whether there is nothing to draw.
+    pub fn is_empty(&self) -> bool {
+        self.positions.is_empty()
+    }
+
+    /// The number of triangles.
+    pub fn triangle_count(&self) -> usize {
+        self.triangles.len() / 3
+    }
+
+    /// The number of line segments.
+    pub fn segment_count(&self) -> usize {
+        self.edges.len() / 2
+    }
+
+    /// The part id of triangle `index`, if the mesh is well-formed.
+    pub fn part_id_of_triangle(&self, index: usize) -> Option<u32> {
+        self.triangle_parts.get(index).copied()
+    }
+
+    /// The part id of segment `index`, if the mesh is well-formed.
+    pub fn part_id_of_segment(&self, index: usize) -> Option<u32> {
+        self.segment_parts.get(index).copied()
+    }
+
+    /// The part id of vertex `index`, if the mesh is well-formed.
+    pub fn part_id_of_vertex(&self, index: usize) -> Option<u32> {
+        self.vertex_parts.get(index).copied()
+    }
+
+    /// The element name for part `id`.
+    pub fn part_name(&self, id: u32) -> Option<&str> {
+        self.parts.get(id as usize).map(String::as_str)
+    }
+
+    /// The part id carrying `name`, if present.
+    pub fn part_id(&self, name: &str) -> Option<u32> {
+        self.parts
+            .iter()
+            .position(|candidate| candidate == name)
+            .map(|index| index as u32)
+    }
+}
+
+/// The operations a backend supports.
+///
+/// Presentation code consults this before offering a manipulator: a mesh-only backend
+/// can return [`Capabilities::empty`], and the fillet or draft tools simply never
+/// materialise, rather than every backend stubbing `fillet` with an error.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Capabilities(u32);
+
+impl Capabilities {
+    /// Boolean union/difference.
+    pub const BOOLEANS: Self = Self(1 << 0);
+    /// Edge filleting.
+    pub const FILLET: Self = Self(1 << 1);
+    /// Edge chamfering, including the asymmetric form.
+    pub const CHAMFER: Self = Self(1 << 2);
+    /// Display tessellation.
+    pub const TESSELLATION: Self = Self(1 << 3);
+    /// Sub-element enumeration and adjacency.
+    pub const TOPOLOGY: Self = Self(1 << 4);
+
+    /// No operations (a null or display-only backend).
+    pub const fn empty() -> Self {
+        Self(0)
+    }
+
+    /// Every operation defined above.
+    pub const fn all() -> Self {
+        Self::BOOLEANS
+            .union(Self::FILLET)
+            .union(Self::CHAMFER)
+            .union(Self::TESSELLATION)
+            .union(Self::TOPOLOGY)
+    }
+
+    /// Combine two capability sets.
+    pub const fn union(self, other: Self) -> Self {
+        Self(self.0 | other.0)
+    }
+
+    /// Whether **every** capability in `other` is present.
+    pub const fn contains(self, other: Self) -> bool {
+        self.0 & other.0 == other.0
+    }
+
+    /// Whether the set is empty.
+    pub const fn is_empty(self) -> bool {
+        self.0 == 0
+    }
+}
+
+impl std::ops::BitOr for Capabilities {
+    type Output = Self;
+
+    fn bitor(self, rhs: Self) -> Self {
+        self.union(rhs)
+    }
+}
+
+/// One object plus the sub-elements selected on it.
+///
+/// `object` is the picking identity the viewport reports (a stage item's entity id);
+/// the host maps it to a document object. `elements` are kernel names (`Face6`); an
+/// empty list means the whole shape.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct SelectionRef {
+    pub object: u32,
+    pub elements: Vec<String>,
+}
+
+impl SelectionRef {
+    /// The whole object, with no sub-element.
+    pub fn whole(object: u32) -> Self {
+        Self {
+            object,
+            elements: Vec::new(),
+        }
+    }
+
+    /// One named sub-element of `object`.
+    pub fn element(object: u32, name: impl Into<String>) -> Self {
+        Self {
+            object,
+            elements: vec![name.into()],
+        }
+    }
+
+    /// Whether the whole object is selected.
+    pub fn is_whole(&self) -> bool {
+        self.elements.is_empty()
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -233,6 +525,23 @@ impl OpResult {
 /// keeps its own concrete error enum (for its own tests and diagnostics) and boxes it
 /// here — via `?` or `.into()` at the seam. Callers still read a real `Display` message.
 pub type GeomError = Box<dyn std::error::Error + Send + Sync + 'static>;
+
+/// An operation this backend does not implement.
+#[derive(Debug)]
+pub struct UnsupportedOperation(pub &'static str);
+
+impl fmt::Display for UnsupportedOperation {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "the geometry backend does not support {}.", self.0)
+    }
+}
+
+impl std::error::Error for UnsupportedOperation {}
+
+/// The error a backend returns for an operation it does not implement.
+pub fn unsupported(operation: &'static str) -> GeomError {
+    Box::new(UnsupportedOperation(operation))
+}
 
 /// A geometry kernel.
 ///
@@ -270,6 +579,67 @@ pub trait GeometryBackend: Send + Sync {
     /// Reconstruct a shape from [`save_shape`](GeometryBackend::save_shape) bytes,
     /// or `None` if they are not valid.
     fn load_shape(&self, bytes: &[u8]) -> Option<Shape>;
+
+    /// The operations this backend implements.
+    ///
+    /// The default is [`Capabilities::empty`], so a backend opts in explicitly and a
+    /// host can decide which manipulators to offer without probing with failures.
+    fn capabilities(&self) -> Capabilities {
+        Capabilities::empty()
+    }
+
+    /// Tessellate `shape` for display, tagging every triangle and segment with the
+    /// part id of the sub-element it belongs to.
+    ///
+    /// The default reports the operation as unsupported; a backend that returns
+    /// [`Capabilities::TESSELLATION`] must implement it.
+    fn tessellate(
+        &self,
+        _shape: &Shape,
+        _options: &TessellationOptions,
+    ) -> Result<Tessellation, GeomError> {
+        Err(unsupported("tessellation"))
+    }
+
+    /// Enumerate the sub-elements of `kind`, in the kernel's own order.
+    ///
+    /// Position `i` in the result is the element whose name is `format!("{}{}",
+    /// kind.prefix(), i + 1)`, so a positional name round-trips through
+    /// [`resolve`](GeometryBackend::resolve).
+    fn elements(&self, _shape: &Shape, _kind: ElementKind) -> Vec<ElementRef> {
+        Vec::new()
+    }
+
+    /// The sub-elements of `kind` that contain (or are contained by) `element` — the
+    /// faces of an edge, the edges of a face, and so on.
+    fn ancestors(
+        &self,
+        _shape: &Shape,
+        _element: &ElementRef,
+        _kind: ElementKind,
+    ) -> Vec<ElementRef> {
+        Vec::new()
+    }
+
+    /// How smoothly `a` and `b` meet, when they are adjacent.
+    fn continuity(&self, _shape: &Shape, _a: &ElementRef, _b: &ElementRef) -> Option<Continuity> {
+        None
+    }
+
+    /// Chamfer `edges`.
+    ///
+    /// `d2` is `None` for a symmetric chamfer and `Some(distance)` for the
+    /// two-distance form, where `d1` and `d2` are measured on the two adjacent
+    /// faces.
+    fn chamfer(
+        &self,
+        _shape: &Shape,
+        _edges: &[ElementRef],
+        _d1: f64,
+        _d2: Option<f64>,
+    ) -> Result<OpResult, GeomError> {
+        Err(unsupported("chamfer"))
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -393,5 +763,138 @@ mod tests {
         assert_eq!(map.len(), 1);
         assert!(map.get("Face1").is_some());
         assert!(map.get("Face2").is_none());
+    }
+
+    #[test]
+    fn element_kinds_carry_their_freecad_prefixes() {
+        assert_eq!(ElementKind::Face.prefix(), "Face");
+        assert_eq!(ElementKind::Vertex.prefix(), "Vertex");
+        assert_eq!(ElementKind::ALL.len(), 6);
+    }
+
+    #[test]
+    fn capabilities_compose_and_test_membership() {
+        let solid = Capabilities::BOOLEANS | Capabilities::FILLET;
+        assert!(solid.contains(Capabilities::FILLET));
+        assert!(!solid.contains(Capabilities::CHAMFER));
+        assert!(Capabilities::all().contains(Capabilities::all()));
+        assert!(Capabilities::empty().is_empty());
+        assert!(solid.contains(Capabilities::empty()));
+        assert!(!Capabilities::empty().contains(Capabilities::TESSELLATION));
+    }
+
+    #[test]
+    fn element_map_folds_history() {
+        let input = ElementRef {
+            shape: Shape::new("in"),
+            name: "Face1".to_string(),
+        };
+        let modified = ElementRef {
+            shape: Shape::new("out-m"),
+            name: "Face2".to_string(),
+        };
+        let generated = ElementRef {
+            shape: Shape::new("out-g"),
+            name: "Face3".to_string(),
+        };
+        let deleted = ElementRef {
+            shape: Shape::new("gone"),
+            name: "Face9".to_string(),
+        };
+        let mut history = History::default();
+        history.modified.push((input.clone(), modified.clone()));
+        history.generated.push((input, generated));
+        history.deleted.push(deleted);
+
+        let mut map = ElementMap::from_history(&history);
+        let resolved = map.get("Face1").expect("the input name survives");
+        assert!(resolved.is_same(&modified.shape), "the first output wins");
+        assert!(map.get("Face9").is_none(), "a deleted element is absent");
+
+        // A later rebuild that deletes the element removes the name.
+        let deleted_now = History {
+            deleted: vec![ElementRef {
+                shape: Shape::new("gone"),
+                name: "Face1".to_string(),
+            }],
+            ..History::default()
+        };
+        map.apply(&deleted_now);
+        assert!(map.get("Face1").is_none(), "the name is retired");
+    }
+
+    #[test]
+    fn null_backend_reports_no_topology() {
+        let backend = NullBackend;
+        let shape = backend.make_box(1.0, 1.0, 1.0).unwrap();
+        let face = ElementRef {
+            shape: shape.clone(),
+            name: "Face1".to_string(),
+        };
+
+        assert!(backend.capabilities().is_empty());
+        assert!(backend.elements(&shape, ElementKind::Face).is_empty());
+        assert!(
+            backend
+                .ancestors(&shape, &face, ElementKind::Edge)
+                .is_empty()
+        );
+        assert!(backend.continuity(&shape, &face, &face).is_none());
+        assert!(
+            backend
+                .tessellate(&shape, &TessellationOptions::default())
+                .is_err()
+        );
+        assert!(backend.chamfer(&shape, &[face], 1.0, None).is_err());
+    }
+
+    #[test]
+    fn tessellation_reports_parts_and_primitives() {
+        let mesh = Tessellation {
+            positions: vec![[0.0_f32; 3]; 6],
+            normals: Vec::new(),
+            triangles: vec![0, 1, 2, 3, 4, 5],
+            triangle_parts: vec![0, 1],
+            edges: vec![0, 1, 2, 3, 4, 5],
+            segment_parts: vec![0, 1, 0],
+            vertices: vec![0, 2, 4],
+            vertex_parts: vec![0, 0, 1],
+            parts: vec!["Face1".to_string(), "Face2".to_string()],
+        };
+
+        assert!(!mesh.is_empty());
+        assert_eq!(mesh.triangle_count(), 2);
+        assert_eq!(mesh.segment_count(), 3);
+        assert_eq!(mesh.part_id_of_triangle(1), Some(1));
+        assert_eq!(mesh.part_id_of_segment(2), Some(0));
+        assert_eq!(mesh.part_id_of_vertex(2), Some(1));
+        assert_eq!(mesh.part_id_of_vertex(3), None);
+        assert_eq!(mesh.part_name(1), Some("Face2"));
+        assert_eq!(mesh.part_id("Face2"), Some(1));
+        assert_eq!(mesh.part_id("Face3"), None);
+        assert_eq!(mesh.part_id_of_triangle(2), None);
+    }
+
+    #[test]
+    fn selection_refs_describe_whole_objects_and_elements() {
+        let whole = SelectionRef::whole(7);
+        assert_eq!(whole.object, 7);
+        assert!(whole.is_whole());
+
+        let face = SelectionRef::element(7, "Face6");
+        assert_eq!(face.elements, vec!["Face6".to_string()]);
+        assert!(!face.is_whole());
+    }
+
+    #[test]
+    fn default_tessellation_options_are_scale_free() {
+        let options = TessellationOptions::default();
+        assert_eq!(options.linear_deflection, None);
+        assert_eq!(options.angular_deflection, 0.5);
+        assert!(!options.relative);
+        assert_eq!(
+            TessellationOptions::absolute(0.1).linear_deflection,
+            Some(0.1)
+        );
     }
 }

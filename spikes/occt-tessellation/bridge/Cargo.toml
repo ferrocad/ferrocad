@@ -1,0 +1,27 @@
+# A sibling cxx bridge over OCCT, reusing `opencascade-sys`'s types.
+#
+# Adds the two calls the crate does not bridge and F0 needs:
+#
+#   * iteration of `TopTools_ListOfShape` (for `TopExp::MapShapesAndAncestors`);
+#   * the two-distance chamfer `Add(d1, d2, face, edge)` (the `Alt` mode);
+#   * fillet/chamfer lineage (`BRepFilletAPI_MakeShape::Modified/Generated/IsDeleted`).
+#
+# No patch, no fork: a second `#[cxx::bridge]` declares the same OCCT types
+# (`type X = opencascade_sys::...`) and links the same libraries.
+#
+# Requires OCCT_INCLUDE_DIR at build time (the OCCT `include/opencascade` dir).
+[package]
+name = "occt-topology-bridge"
+version = "0.0.0"
+edition = "2021"
+publish = false
+
+[lib]
+crate-type = ["rlib"]
+
+[dependencies]
+opencascade-sys = "0.3"
+cxx = "1"
+
+[build-dependencies]
+cxx-build = "1"

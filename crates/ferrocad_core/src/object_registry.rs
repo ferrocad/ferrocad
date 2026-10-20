@@ -30,7 +30,9 @@ pub trait ObjectType: Send + Sync {
         None
     }
     /// Type-specific recompute behaviour. Set properties with
-    /// [`Document::set_property_raw`] so execution does not re-touch the object.
+    /// [`Document::set_property_raw`] so execution does not re-touch the object, and mark
+    /// the object with [`Document::mark_invalid`] when the rebuild cannot run; recompute
+    /// reports the failure and leaves the flag set until an execute succeeds.
     fn execute(&self, doc: &mut Document, id: ObjectId) {
         let _ = (doc, id);
     }

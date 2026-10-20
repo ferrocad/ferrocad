@@ -1,9 +1,9 @@
 # Topology, selection, and the F0 prerequisite
 
-Status: **F0.0 (binding reconnaissance and the tessellation/topology spike), F0.1
-(the kernel-neutral vocabulary), F0.2 (the OCCT implementation), F0.3 (pick
-coherence), F0.4 (the stage view) and F0.5 (the selection bridge) are built
-(2026-10-20); F0.6 is planned.** Companion to [`geometry-and-topology.md`](geometry-and-topology.md)
+Status: **F0 is complete (2026-10-20): F0.0 (binding reconnaissance and the
+tessellation/topology spike), F0.1 (the kernel-neutral vocabulary), F0.2 (the OCCT
+implementation), F0.3 (pick coherence), F0.4 (the stage view), F0.5 (the selection
+bridge) and F0.6 (parametric dress-up features) are built.** Companion to [`geometry-and-topology.md`](geometry-and-topology.md)
 (the naming problem and the lineage engine), [`occt-integration.md`](occt-integration.md)
 (the crate layout), [`occt-history-spike.md`](occt-history-spike.md) (the verified
 history bridge), and [`gizmo-manipulators.md`](gizmo-manipulators.md) (the manipulators
@@ -35,18 +35,20 @@ Transactor, because the manipulators consume neutral `ElementRef`/`Hit` data.
 
 | Crate | Has | Does not have |
 | --- | --- | --- |
-| `ferrocad_geom` | `Shape`, `ElementRef`, `History`, `ElementMap` (+`apply`/`from_history`), `SelectionRef`, `ElementKind`, `Continuity`, `Tessellation`/`TessellationOptions`, `Capabilities`; `GeometryBackend` gains `capabilities`, `tessellate`, `elements`, `ancestors`, `continuity`, `chamfer` (defaulted, so `NullBackend` need not implement them) | — |
+| `ferrocad_geom` | `Shape`, `ElementRef`, `History`, `ElementMap` (+`apply`/`from_history`), `SelectionRef`, `ElementKind`, `Continuity`, `Tessellation`/`TessellationOptions`, `Capabilities`, `tangent_chain`; `GeometryBackend` gains `capabilities`, `tessellate`, `elements`, `ancestors`, `continuity`, `chamfer` (defaulted, so `NullBackend` need not implement them) | — |
 | `ferrocad_occt` | box/fuse/cut/fillet/place/chamfer, BREP save/load, the six seam methods, fillet/chamfer lineage, `fc_topology.hxx` (list access, `IsSame` lookups, edge tangents) | — |
-| `ferrocad_part` | `Part::Feature` (Shape + Placement), `Part::PropertyPartShape`, `register(backend)`, `make_box` | `Part::Fillet`/`Part::Chamfer` object types, element maps, a selection service |
+| `ferrocad_part` | `Part::Feature` (Shape + Placement), `Part::Fillet` / `Part::Chamfer` (Base LinkSub + Edges + Radius/Distance + Propagate, rebuilt in `execute`), `Part::PropertyPartShape`, `register(backend)`, `make_box` | per-edge radii, a selection service |
 | `ferrocad_part_py` | `Part.makeBox`, `Part.Shape` (`isNull`, `isSame`, `exportBrep`, `exportBrepToString`), the extension converter hook | `Faces`/`Edges`/`Vertexes`, `ShapeType`, `tessellate`, `Part.show`, booleans, fillet |
 | renderer | `Vertex.part_idx`; the GPU pick pass writes `[entity_id, part_idx]`; the CPU path reports `Hit { part, element }`; screen-space line tolerance (2 px) | — |
 | viewport | a click resolves `(entity, part)` through the stage item's name table and reports `SelectionEvent`/`SelectionRef`; `hovered_part`/`hovered_selection` mirror it | the entity → document-object mapping (the edition's job, F0.6/commands) |
 | conformance | `part_conformance` runs upstream Part tests when `FERROCAD_UPSTREAM` is set; CI `geometry` job | tessellation/topology coverage |
 
-So Part is still a **shape carrier** at the document level: it persists a BREP and
-round-trips `obj.Shape`, but it does not yet own fillet/chamfer features. The **picking
-and selection halves are done**: a click on a tessellated shape now reports
-`SelectionRef { object, elements: ["Face6"] }`.
+So Part is no longer only a **shape carrier**: it owns the first parametric edit
+features (`Part::Fillet`, `Part::Chamfer`), and the picking/selection halves are done —
+a click on a tessellated shape reports `SelectionRef { object, elements: ["Face6"] }`,
+and a feature resolves those names back into kernel edges. What is still missing is
+stable *lineage* naming (the positional `FaceN`/`EdgeN` fallback is all the backend
+resolves today) and a per-edge parameter surface.
 
 ## 2. Why not the two alternatives
 
@@ -358,7 +360,7 @@ returns none.
 | **F0.3 pick coherence** ✅ | `Hit { part, element: Option<u32> }`; the CPU path reads `Vertex.part_idx`; Python `Hit.part_idx` returns the part; screen-space line tolerance | `ferrocad_graphics` 22 tests (two-group part id, screen-space line hit) and `ferrocad_stage`'s part-tagged mesh test; CPU and GPU agree on `part` |
 | **F0.4 stage view** ✅ | `ShapeItem` from `Tessellation`, part names, per-part highlight sub-mesh, vertex packets, honour `depth_bias` | `ferrocad_stage` 59 tests (tessellation→item, highlight only the selected part, clearing it, a points packet); a wgpu test draws a depth-biased coplanar overlay over the base |
 | **F0.5 selection bridge** ✅ | `SelectionEvent`/`SelectionRef` from `InventorViewport`, part-name resolution from the stage item, hover mirror | `ferrocad_viewport` 93 tests: a click on each half of a two-face slab yields `("Face1")`/`("Face2")`, an untagged mesh yields the whole object, empty space clears, an orbit and a gizmo commit do not select, a non-selectable item is not selected; no viewport → Part dependency |
-| **F0.6 parametric edit** | `Part::Fillet` / `Part::Chamfer` object types (`Base` LinkSub + `Edges` + `Radius`/distances) whose `execute` resolves names and calls the backend; tangent-chain walk over `ancestors` + `continuity` | changing `Radius` and recomputing rebuilds the shape; undo/redo is a document transaction; the F1 arc scrubber only has to update a property |
+| **F0.6 parametric edit** ✅ | `Part::Fillet` / `Part::Chamfer` object types (`Base` LinkSub + `Edges` + `Radius`/distances + `Propagate`) whose `execute` resolves names and calls the backend; `ferrocad_geom::tangent_chain` over `ancestors` + `continuity`; `Document` keeps an `execute` failure `invalid`, and undo/redo rebuild computed outputs | `ferrocad_part` 17 tests: a fillet/chamfer changes the face count, a radius change rebuilds a new shape, undo/redo round-trips the geometry, a base-shape change propagates through the dependency graph, a missing edge leaves the output null and the object invalid and recovers when fixed, a self-link and a non-positive radius are rejected; `ferrocad_geom` 13 tests (the chain walk over a fake edge graph); `ferrocad_occt` 15 tests (a box has no chain, a fillet boundary does) |
 
 The first slice to write is **F0.1**, because it is testable without a kernel and pins
 the vocabulary the other five slices code against. **F0.0b** can run in parallel on a
@@ -366,6 +368,10 @@ machine with OCCT.
 
 ## 11. Deferred and non-goals
 
+- **No per-edge parameters.** `Radius`/`Distance` apply to every edge a feature
+  selects. Upstream's `PropertyFilletEdges` triples (`(edge, r1, r2)`) and a per-edge
+  `Edges` list are a later slice; `Edges` here is a plain name list (an override for
+  `Base`'s sub-values).
 - **No stable naming beyond `ElementMap::apply`.** FreeCAD's `MappedName` tokens and
   `.FCStd` sub-shape compatibility are a later slice.
 - **No exact intersector.** Face selection uses the rendered tessellation, so the pick
@@ -394,6 +400,20 @@ cargo test -p ferrocad_stage_py                  # Hit.part, the Python surface
 `an_untagged_mesh_selects_the_whole_object`, `clicking_empty_space_clears_the_selection`,
 `an_orbit_drag_is_not_a_selection` and `a_non_selectable_item_is_not_selected`; the gizmo
 test also asserts a commit produces no selection.
+
+F0.6 is covered by `ferrocad_part`'s `a_fillet_feature_fillets_the_linked_edge`,
+`changing_the_radius_rebuilds_the_shape`, `the_feature_follows_changes_to_its_base_shape`,
+`a_chamfer_feature_bevels_the_linked_edge`,
+`a_second_distance_makes_the_chamfer_asymmetric`,
+`a_missing_edge_marks_the_feature_invalid_and_leaves_a_null_shape`,
+`the_edges_property_overrides_the_base_selection`, `a_feature_without_a_base_is_invalid`,
+`a_feature_cannot_use_itself_as_its_base`, `a_negative_radius_is_rejected` and
+`undoing_a_radius_change_rebuilds_the_previous_shape`; `ferrocad_geom`'s two tangent-chain
+tests (the `GraphBackend` edge graph); `ferrocad_occt`'s `a_box_edge_has_no_tangent_chain`
+and `a_fillet_leaves_a_tangent_chain_at_its_boundary`; `ferrocad_core`'s
+`recompute_keeps_an_object_invalid_when_execute_fails`; and `ferrocad_part_py`'s
+`a_fillet_feature_rebuilds_through_python` (a `Part::Fillet` added through the Python
+API, `Base = (box, ["Edge1"])`, recompute, a non-null `Shape`).
 
 The geometry job sets `OCCT_INCLUDE_DIR` / `OpenCASCADE_DIR` / `LD_LIBRARY_PATH` from a
 fetched OCCT prefix, as [`occt-integration.md`](occt-integration.md) §8 describes.

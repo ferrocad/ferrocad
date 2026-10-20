@@ -212,6 +212,47 @@ mod tests {
     }
 
     #[test]
+    fn a_box_edge_has_no_tangent_chain() {
+        let backend = OcctBackend::new();
+        let cube = backend.make_box(10.0, 10.0, 10.0).unwrap();
+        let edge = backend.elements(&cube, ElementKind::Edge)[0].clone();
+        // Every box edge meets its neighbours at a sharp corner.
+        let chain = ferrocad_geom::tangent_chain(&backend, &cube, &edge);
+        assert_eq!(chain.len(), 1);
+        assert_eq!(chain[0].name, edge.name);
+    }
+
+    #[test]
+    fn a_fillet_leaves_a_tangent_chain_at_its_boundary() {
+        let backend = OcctBackend::new();
+        let cube = backend.make_box(10.0, 10.0, 10.0).unwrap();
+        let edge = backend.elements(&cube, ElementKind::Edge)[0].clone();
+        let out = backend
+            .fillet(&cube, std::slice::from_ref(&edge), 2.0)
+            .unwrap()
+            .shape;
+        let edges = backend.elements(&out, ElementKind::Edge);
+
+        // The new cylindrical face meets the trimmed planes tangentially, so at least
+        // one adjacent edge pair is `G1`.
+        let mut tangent = None;
+        for i in 0..edges.len() {
+            for j in (i + 1)..edges.len() {
+                if backend.continuity(&out, &edges[i], &edges[j]) == Some(Continuity::G1) {
+                    tangent = Some((i, j));
+                }
+            }
+        }
+        let (i, j) = tangent.expect("the fillet boundary is tangent");
+
+        let chain = ferrocad_geom::tangent_chain(&backend, &out, &edges[i]);
+        assert!(
+            chain.iter().any(|chained| chained.name == edges[j].name),
+            "the smooth neighbour joins the chain"
+        );
+    }
+
+    #[test]
     fn asymmetric_chamfer_builds() {
         let backend = OcctBackend::new();
         let cube = backend.make_box(10.0, 10.0, 10.0).unwrap();

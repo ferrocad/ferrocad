@@ -685,8 +685,9 @@ impl Document {
             self.eval_expressions(id)?;
 
             let do_recompute = self.objects.get(&id).is_some_and(|o| o.must_execute);
+            let mut executed_ok = true;
             if do_recompute {
-                self.execute_object(id);
+                executed_ok = self.execute_object(id);
                 executed.push(id);
             }
 
@@ -698,7 +699,11 @@ impl Document {
                 if let Some(obj) = self.objects.get_mut(&id) {
                     obj.touched = false;
                     obj.must_execute = false;
-                    obj.invalid = false;
+                    // A failed `execute` (one that marked the object invalid) keeps the
+                    // flag, so the failure survives the recompute that reported it.
+                    if executed_ok {
+                        obj.invalid = false;
+                    }
                 }
                 if let Some(deps) = dependents.get(&id).cloned() {
                     for dep in deps {
@@ -752,24 +757,29 @@ impl Document {
         Ok(())
     }
 
-    /// Run an object's type-specific `execute()` behaviour.
+    /// Run an object's type-specific `execute()` behaviour. Returns whether it
+    /// succeeded (it did not mark the object invalid).
     ///
     /// `App::FeatureTest*` mirrors the C++ fixture: it bumps `ExecCount` and
     /// sets `ExecResult`. The writes are raw so execution does not re-touch the
     /// object (which would schedule an endless recompute).
-    fn execute_object(&mut self, id: ObjectId) {
+    fn execute_object(&mut self, id: ObjectId) -> bool {
+        // A rebuild starts from a clean slate; an execute that fails marks it again.
+        if let Some(object) = self.objects.get_mut(&id) {
+            object.invalid = false;
+        }
         let type_id = match self.objects.get(&id) {
             Some(obj) => obj.type_id.clone(),
-            None => return,
+            None => return true,
         };
         // A module-registered behaviour runs first; the built-in FeatureTest fixture
         // behaviour is the fallback for core types.
         if let Some(behavior) = crate::object_registry::get(&type_id) {
             behavior.execute(self, id);
-            return;
+            return !self.objects.get(&id).is_some_and(|object| object.invalid);
         }
         if !type_id.starts_with("App::FeatureTest") {
-            return;
+            return true;
         }
         let count = self
             .objects
@@ -790,6 +800,7 @@ impl Document {
                     .set("ExecResult".to_string(), Property::String("Exec".to_string()));
             }
         }
+        true
     }
 
     /// Set a property without marking the object dirty.
@@ -808,7 +819,13 @@ impl Document {
         }
     }
 
-    fn mark_invalid(&mut self, id: ObjectId) {
+    /// Mark an object invalid: its last `execute` could not produce a result.
+    ///
+    /// A module's [`crate::object_registry::ObjectType::execute`] calls this when the
+    /// rebuild fails (a fillet with a missing edge, a boolean with an empty operand).
+    /// Recompute keeps the flag set, so `DocumentObject::invalid` reports the failure
+    /// until a later execute succeeds.
+    pub fn mark_invalid(&mut self, id: ObjectId) {
         if let Some(obj) = self.objects.get_mut(&id) {
             obj.invalid = true;
         }

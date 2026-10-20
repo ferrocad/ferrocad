@@ -13,6 +13,7 @@
 //! - [`Tessellation`], [`ElementKind`] and [`SelectionRef`] — the display mesh with
 //!   per-primitive sub-element ids, and the neutral vocabulary a viewport or a
 //!   workbench needs to turn a pick into a topology reference.
+//! - [`tangent_chain`] — the smooth edge chain a fillet or chamfer applies to.
 //! - [`GeometryBackend`] — the trait a kernel implements (OCCT, or [`NullBackend`]).
 //!
 //! This crate depends on [`ferrocad_types`] for values such as [`Placement`], and on
@@ -643,6 +644,85 @@ pub trait GeometryBackend: Send + Sync {
 }
 
 // ---------------------------------------------------------------------------
+// Tangent chains
+// ---------------------------------------------------------------------------
+
+/// The edges tangent-continuous with `seed`, in the order the walk reaches them.
+///
+/// A fillet or chamfer applies to a whole smooth chain, not to the one segment the
+/// user happened to click: the edges either side of a rounded corner are tangent, and
+/// filleting only one leaves a visible step. The walk is over the kernel's own
+/// topology — [`elements`](GeometryBackend::elements) for the candidate edges,
+/// [`ancestors`](GeometryBackend::ancestors) for shared vertices, and
+/// [`continuity`](GeometryBackend::continuity) for the join — so it works for any
+/// backend that reports them.
+///
+/// Two edges are neighbours when they share a vertex. A neighbour joins the chain when
+/// the join is smoother than [`Continuity::C0`] (`G1` or better; OCCT reports tangency
+/// only). The seed is always first in the result, even when the backend cannot
+/// enumerate it.
+pub fn tangent_chain(
+    backend: &dyn GeometryBackend,
+    shape: &Shape,
+    seed: &ElementRef,
+) -> Vec<ElementRef> {
+    let mut edges = backend.elements(shape, ElementKind::Edge);
+    if !edges.iter().any(|edge| edge.name == seed.name) {
+        edges.push(seed.clone());
+    }
+
+    // Vertex name → the edges that touch it. Names are the kernel's positional ones
+    // (`Vertex3`), so they are the same for `elements` and `ancestors`.
+    let mut by_vertex: BTreeMap<String, Vec<usize>> = BTreeMap::new();
+    for (index, edge) in edges.iter().enumerate() {
+        for vertex in backend.ancestors(shape, edge, ElementKind::Vertex) {
+            by_vertex.entry(vertex.name).or_default().push(index);
+        }
+    }
+
+    let Some(seed_index) = edges.iter().position(|edge| edge.name == seed.name) else {
+        return vec![seed.clone()];
+    };
+
+    let mut visited = vec![false; edges.len()];
+    visited[seed_index] = true;
+    let mut chain = vec![seed_index];
+    let mut cursor = 0;
+    while cursor < chain.len() {
+        let current = chain[cursor];
+        cursor += 1;
+
+        let mut candidates = Vec::new();
+        for vertex in backend.ancestors(shape, &edges[current], ElementKind::Vertex) {
+            if let Some(indices) = by_vertex.get(&vertex.name) {
+                candidates.extend(indices.iter().copied());
+            }
+        }
+        candidates.sort_unstable();
+        candidates.dedup();
+
+        for candidate in candidates {
+            if visited[candidate] {
+                continue;
+            }
+            let smoother_than_sharp = matches!(
+                backend.continuity(shape, &edges[current], &edges[candidate]),
+                Some(Continuity::G1 | Continuity::C1 | Continuity::G2 | Continuity::C2)
+            );
+            if smoother_than_sharp {
+                visited[candidate] = true;
+                chain.push(candidate);
+            }
+        }
+    }
+
+    chain
+        .into_iter()
+        .map(|index| edges[index].clone())
+        .collect()
+}
+
+// ---------------------------------------------------------------------------
 // The null backend
 // ---------------------------------------------------------------------------
 
@@ -896,5 +976,135 @@ mod tests {
             TessellationOptions::absolute(0.1).linear_deflection,
             Some(0.1)
         );
+    }
+
+    /// A tiny edge graph, so the tangent-chain walk is tested without a kernel:
+    /// `Edge1` and `Edge2` meet at `Vertex1` tangentially, `Edge2` and `Edge3` meet at
+    /// `Vertex2` sharply.
+    struct GraphBackend;
+
+    fn edge(name: &str) -> ElementRef {
+        ElementRef {
+            shape: Shape::new(NullShape {
+                kind: name.to_string(),
+            }),
+            name: name.to_string(),
+        }
+    }
+
+    impl GeometryBackend for GraphBackend {
+        fn make_box(&self, _l: f64, _w: f64, _h: f64) -> Result<Shape, GeomError> {
+            Err(unsupported("make box"))
+        }
+
+        fn fuse(&self, _a: &Shape, _b: &Shape) -> Result<OpResult, GeomError> {
+            Err(unsupported("fuse"))
+        }
+
+        fn cut(&self, _a: &Shape, _b: &Shape) -> Result<OpResult, GeomError> {
+            Err(unsupported("cut"))
+        }
+
+        fn fillet(
+            &self,
+            _shape: &Shape,
+            _edges: &[ElementRef],
+            _radius: f64,
+        ) -> Result<OpResult, GeomError> {
+            Err(unsupported("fillet"))
+        }
+
+        fn place(&self, _shape: &Shape, _placement: &Placement) -> Result<Shape, GeomError> {
+            Err(unsupported("place"))
+        }
+
+        fn resolve(&self, _shape: &Shape, _name: &str) -> Option<Shape> {
+            None
+        }
+
+        fn save_shape(&self, _shape: &Shape) -> Vec<u8> {
+            Vec::new()
+        }
+
+        fn load_shape(&self, _bytes: &[u8]) -> Option<Shape> {
+            None
+        }
+
+        fn elements(&self, _shape: &Shape, kind: ElementKind) -> Vec<ElementRef> {
+            if kind == ElementKind::Edge {
+                vec![edge("Edge1"), edge("Edge2"), edge("Edge3")]
+            } else {
+                Vec::new()
+            }
+        }
+
+        fn ancestors(
+            &self,
+            _shape: &Shape,
+            element: &ElementRef,
+            kind: ElementKind,
+        ) -> Vec<ElementRef> {
+            if kind != ElementKind::Vertex {
+                return Vec::new();
+            }
+            let vertices: &[&str] = match element.name.as_str() {
+                "Edge1" => &["Vertex1"],
+                "Edge2" => &["Vertex1", "Vertex2"],
+                "Edge3" => &["Vertex2"],
+                _ => &[],
+            };
+            vertices.iter().map(|name| edge(name)).collect()
+        }
+
+        fn continuity(&self, _shape: &Shape, a: &ElementRef, b: &ElementRef) -> Option<Continuity> {
+            match (a.name.as_str(), b.name.as_str()) {
+                ("Edge1", "Edge2") | ("Edge2", "Edge1") => Some(Continuity::G1),
+                ("Edge2", "Edge3") | ("Edge3", "Edge2") => Some(Continuity::C0),
+                _ => None,
+            }
+        }
+    }
+
+    fn graph_shape() -> Shape {
+        Shape::new(NullShape {
+            kind: "graph".to_string(),
+        })
+    }
+
+    #[test]
+    fn a_tangent_chain_follows_smooth_neighbours_only() {
+        let shape = graph_shape();
+        let chain = tangent_chain(&GraphBackend, &shape, &edge("Edge1"));
+        assert_eq!(
+            chain.iter().map(|e| e.name.as_str()).collect::<Vec<_>>(),
+            ["Edge1", "Edge2"],
+            "the sharp Edge3 does not join the chain"
+        );
+
+        // Starting mid-chain reaches the smooth side and stops at the sharp one.
+        let chain = tangent_chain(&GraphBackend, &shape, &edge("Edge2"));
+        assert_eq!(
+            chain.iter().map(|e| e.name.as_str()).collect::<Vec<_>>(),
+            ["Edge2", "Edge1"]
+        );
+    }
+
+    #[test]
+    fn a_tangent_chain_of_an_isolated_edge_is_just_that_edge() {
+        let shape = graph_shape();
+        let seed = edge("Edge3");
+        let names = |chain: Vec<ElementRef>| {
+            chain
+                .iter()
+                .map(|edge| edge.name.clone())
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(
+            names(tangent_chain(&GraphBackend, &shape, &seed)),
+            ["Edge3"]
+        );
+
+        // A backend that reports no topology still returns the seed.
+        assert_eq!(names(tangent_chain(&NullBackend, &shape, &seed)), ["Edge3"]);
     }
 }

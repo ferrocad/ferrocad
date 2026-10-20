@@ -5,6 +5,9 @@
 //!
 //! - **`Part::Feature`** — an object type with a `Shape` and a `Placement`, via
 //!   [`ferrocad_core::object_registry::ObjectType`];
+//! - **`Part::Fillet`** / **`Part::Chamfer`** — parametric dress-up features whose
+//!   `execute` resolves their selected edge names through the backend, expands them to
+//!   tangent chains, and writes the rebuilt shape to their output `Shape`;
 //! - **`Part::PropertyPartShape`** — a property *value* type holding a
 //!   [`ferrocad_geom::Shape`], via [`ferrocad_core::extension`].
 //!
@@ -18,6 +21,7 @@
 //! The library needs no kernel. Its tests use OCCT through a dev-dependency, so they
 //! still need OCCT 7.8+; the crate is **not** a default member.
 
+mod dress_up;
 mod shape_property;
 
 use std::sync::{Arc, OnceLock};
@@ -27,6 +31,7 @@ use ferrocad_core::{prop_status, Property};
 use ferrocad_geom::{GeometryBackend, Shape};
 use ferrocad_types::Placement;
 
+pub use dress_up::{CHAMFER_TYPE, FILLET_TYPE};
 pub use shape_property::{make_shape_property, shape_of, ShapeProperty, TYPE_NAME};
 
 /// The kernel the Part workbench was composed with.
@@ -50,6 +55,8 @@ pub fn register(backend: Arc<dyn GeometryBackend>) {
     let _ = BACKEND.set(backend);
     shape_property::register();
     object_registry::register("Part::Feature", Arc::new(Feature));
+    object_registry::register(FILLET_TYPE, Arc::new(dress_up::Fillet));
+    object_registry::register(CHAMFER_TYPE, Arc::new(dress_up::Chamfer));
 }
 
 /// A convenience box from the injected backend (what a script's `Part.makeBox` calls).

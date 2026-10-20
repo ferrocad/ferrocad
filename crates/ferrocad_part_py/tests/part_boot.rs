@@ -9,11 +9,19 @@ use pyo3::types::PyModule;
 
 /// Register both built-in modules. Must run before the interpreter initialises
 /// (`auto-initialize` does that on the first `Python::with_gil`).
+///
+/// `append_to_inittab` panics once an interpreter is running, so the registration is
+/// guarded: whichever test boots first appends both modules, and the others reuse them.
 fn boot() {
-    use ferrocad_part_py::Part as part_module;
-    use ferrocad_py::ferrocad as ferrocad_module;
-    pyo3::append_to_inittab!(ferrocad_module);
-    pyo3::append_to_inittab!(part_module);
+    use std::sync::Once;
+
+    static BOOT: Once = Once::new();
+    BOOT.call_once(|| {
+        use ferrocad_part_py::Part as part_module;
+        use ferrocad_py::ferrocad as ferrocad_module;
+        pyo3::append_to_inittab!(ferrocad_module);
+        pyo3::append_to_inittab!(part_module);
+    });
 }
 
 #[test]
@@ -70,5 +78,48 @@ fn part_shares_one_core_with_ferrocad() {
             .extract()
             .expect("BREP bytes");
         assert!(!brep.is_empty(), "an OCCT box must serialise to BREP");
+    });
+}
+
+#[test]
+fn a_fillet_feature_rebuilds_through_python() {
+    boot();
+    Python::with_gil(|py| {
+        let part = PyModule::import(py, "Part").expect("import Part");
+        let ferrocad = PyModule::import(py, "ferrocad").expect("import ferrocad");
+
+        let doc = ferrocad
+            .call_method1("newDocument", ("FilletDemo",))
+            .expect("newDocument");
+        let base = doc
+            .call_method1("addObject", ("Part::Feature", "Box"))
+            .expect("addObject Part::Feature");
+        let shape = part
+            .call_method1("makeBox", (10.0, 10.0, 10.0))
+            .expect("Part.makeBox");
+        base.setattr("Shape", &shape).expect("box.Shape");
+
+        // `Part::Fillet` is a registered document-object type; `Base` is a LinkSub.
+        let fillet = doc
+            .call_method1("addObject", ("Part::Fillet", "Fillet"))
+            .expect("addObject Part::Fillet");
+        let subs = pyo3::types::PyList::new(py, ["Edge1"]).unwrap();
+        fillet
+            .setattr("Base", (&base, subs))
+            .expect("fillet.Base = (box, [\"Edge1\"])");
+        fillet.setattr("Radius", 2.0).expect("fillet.Radius = 2.0");
+
+        doc.call_method0("recompute").expect("recompute");
+
+        let output = fillet.getattr("Shape").expect("fillet.Shape");
+        assert_eq!(output.get_type().name().unwrap(), "Shape");
+        assert!(
+            !output
+                .call_method0("isNull")
+                .unwrap()
+                .extract::<bool>()
+                .unwrap(),
+            "the fillet feature computed a shape"
+        );
     });
 }

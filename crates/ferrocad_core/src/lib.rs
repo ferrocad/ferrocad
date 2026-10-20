@@ -48,6 +48,9 @@
 //! - **Persist a document**: [`Document::save_to_file`] / [`Document::load_from_file`]
 //!   (JSON). Properties flagged `NoPersist` are dropped from the saved form.
 //! - **React to changes**: register an [`Observer`] with [`Document::add_observer`].
+//! - **Report a failed rebuild**: an [`object_registry::ObjectType::execute`] marks the
+//!   object with [`Document::mark_invalid`]; recompute keeps the flag until a later
+//!   execute succeeds.
 //! - **Name objects**: [`Document::add_object_with`] applies FreeCAD's rules — names
 //!   are sanitized ([`sanitize_name`]) and made unique, labels are unique unless
 //!   duplicates are allowed.

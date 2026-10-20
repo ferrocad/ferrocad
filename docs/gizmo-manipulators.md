@@ -2,7 +2,8 @@
 
 Status: **T1 (Spatial Transactor math), T2 (analytic screen-space hit-testing), T3
 (modifiers, typed values and the readout) and T4 (visual language and ribbons) built
-(2026-10-20); F0 planned.**
+(2026-10-20), and the F0 topology prerequisite is complete (F0.1–F0.6): selection,
+tangent chains and the parametric `Part::Fillet`/`Part::Chamfer` features exist.**
 
 Companions: [`stage.md`](stage.md) (the stage gizmo), [`geometry-and-topology.md`](geometry-and-topology.md)
 (the `ElementRef`/`ElementMap` seam), [`occt-integration.md`](occt-integration.md) (the
@@ -260,7 +261,7 @@ only its padded outline/area is pickable.
 | **T2 — analytic hit test** | projected segment/quad/polyline tests, 2 + 10 px tolerance, priority, pass-through tests | ✅ built |
 | **T3 — modifiers and readout** | gpui modifier/key plumbing, `GizmoValue` on the event, projected numeric tag, Esc cancel, linear grid snapping | ✅ built |
 | **T4 — visual language** | cyan/slate tokens, micro-chevrons, glass planes, shared 1.5 px ribbon | ✅ built |
-| **F0 — topology prerequisite** | pixel → `ElementRef` selection (faces/edges), tangent-chain traversal, `chamfer` in `GeometryBackend`, feature transaction | not started |
+| **F0 — topology prerequisite** | pixel → `ElementRef` selection (faces/edges), tangent-chain traversal, `chamfer` in `GeometryBackend`, parametric feature objects | ✅ built (F0.1–F0.6) |
 
 ## 10. T1 as built (2026-10-20)
 
@@ -375,11 +376,12 @@ binding remain green.
 - **Push-Pull** needs a sketch-region / face selection and a solid/sketch model to preview
   an additive boss or subtractive pocket. The interaction is a 1D constraint plus a
   volume preview; it can reuse T1's axis solver once the context exists.
-- **Fillet/Chamfer** has a kernel operation (`GeometryBackend::fillet`; OCCT
-  `BRepFilletAPI_MakeFillet`) but the viewport has no pixel → sub-shape translation, no
-  tangent-chain traversal, and no `chamfer` in the backend trait. Building the arc
-  scrubber before those would design UI against phantom interfaces. The prerequisite is
-  sliced in [`topology-selection.md`](topology-selection.md) (F0).
+- **Fillet/Chamfer** is now unblocked: `GeometryBackend::{fillet, chamfer}` and
+  `tangent_chain` exist, the viewport reports pixel → `ElementRef` selections (F0.5), and
+  `Part::Fillet`/`Part::Chamfer` are parametric features whose `execute` resolves the
+  selected names and rebuilds the shape (F0.6). What remains for the arc scrubber is the
+  UI slice: project the arc on the selected edge, write `Radius`/`Distance` during the
+  drag, and commit on release. See [`topology-selection.md`](topology-selection.md).
 - **Draft** additionally needs a wall-face selection, a pull direction and an angular
   offset operation; its protractor arc is a ring-like scrub (T1) with a degree readout
   (T3).

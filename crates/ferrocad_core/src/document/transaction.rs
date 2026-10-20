@@ -383,9 +383,7 @@ impl Document {
     fn apply(&mut self, change: &Change) {
         match change {
             Change::Property(c) => {
-                if let Some(obj) = self.objects.get_mut(&c.object) {
-                    obj.properties.set(c.name.clone(), c.new.clone());
-                }
+                self.restore_property_value(c.object, &c.name, Some(&c.new));
             }
             Change::AddObject { id, saved } => self.insert_saved_object(*id, saved),
             Change::RemoveObject { id, .. } => {
@@ -409,16 +407,7 @@ impl Document {
     /// Undo a change (the reverse direction).
     fn revert(&mut self, change: &Change) {
         match change {
-            Change::Property(c) => {
-                if let Some(obj) = self.objects.get_mut(&c.object) {
-                    match &c.old {
-                        Some(old) => obj.properties.set(c.name.clone(), old.clone()),
-                        None => {
-                            obj.properties.remove(&c.name);
-                        }
-                    }
-                }
-            }
+            Change::Property(c) => self.restore_property_value(c.object, &c.name, c.old.as_ref()),
             Change::AddObject { id, .. } => {
                 self.remove_object_raw(*id, false);
             }
@@ -439,6 +428,34 @@ impl Document {
             },
             Change::RemoveExpression { object, prop, old } => {
                 self.set_expression_raw(*object, prop, old);
+            }
+        }
+    }
+
+    /// Restore a recorded property value and mark the object for recompute.
+    ///
+    /// Undo and redo apply the edit's old/new value directly, so they must also
+    /// reproduce the side effect of [`Document::set_property`]: a computed output (a
+    /// feature's `Shape`) is rebuilt by the next recompute instead of staying stale.
+    /// `Output`/`NoRecompute` properties keep their flags, exactly as a normal edit.
+    fn restore_property_value(&mut self, object: ObjectId, name: &str, value: Option<&Property>) {
+        let Some(obj) = self.objects.get_mut(&object) else {
+            return;
+        };
+        match value {
+            Some(value) => obj.properties.set(name.to_string(), value.clone()),
+            None => {
+                obj.properties.remove(name);
+            }
+        }
+        let status = obj
+            .properties
+            .status(name)
+            .unwrap_or(crate::prop_status::NONE);
+        if status & crate::prop_status::OUTPUT == 0 {
+            obj.touched = true;
+            if status & crate::prop_status::NORECOMPUTE == 0 {
+                obj.must_execute = true;
             }
         }
     }

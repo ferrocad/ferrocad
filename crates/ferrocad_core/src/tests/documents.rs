@@ -178,6 +178,37 @@ fn recompute_executes_the_feature_test_fixture() {
 }
 
 #[test]
+fn recompute_keeps_an_object_invalid_when_execute_fails() {
+    use crate::object_registry::{self, ObjectType};
+
+    /// An execute that always fails, the way a feature whose input went missing does.
+    struct Failing;
+    impl ObjectType for Failing {
+        fn execute(&self, doc: &mut Document, id: ObjectId) {
+            doc.mark_invalid(id);
+        }
+    }
+    object_registry::register("Test::AlwaysFails", Arc::new(Failing));
+
+    let mut doc = Document::new();
+    let id = doc.add_object("Failing", "Test::AlwaysFails");
+    doc.touch(id, false);
+    doc.recompute().unwrap();
+    assert!(
+        doc.object(id).unwrap().invalid,
+        "a failed execute stays invalid after the recompute that reported it"
+    );
+
+    // A later successful recompute clears it.
+    struct Passing;
+    impl ObjectType for Passing {}
+    object_registry::register("Test::AlwaysFails", Arc::new(Passing));
+    doc.touch(id, false);
+    doc.recompute().unwrap();
+    assert!(!doc.object(id).unwrap().invalid);
+}
+
+#[test]
 fn no_recompute_touches_dependents_without_executing_itself() {
     let mut doc = Document::new();
     let child = doc.add_object("Child", "App::FeatureTest");

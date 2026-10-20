@@ -7,6 +7,10 @@
 use pyo3::prelude::*;
 use pyo3::types::PyModule;
 
+/// The tests share one interpreter and one document registry; run them one at a time so
+/// `ActiveDocument` is not changed underneath a test.
+static TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
 /// Register both built-in modules. Must run before the interpreter initialises
 /// (`auto-initialize` does that on the first `Python::with_gil`).
 ///
@@ -26,6 +30,7 @@ fn boot() {
 
 #[test]
 fn part_shares_one_core_with_ferrocad() {
+    let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     boot();
     Python::with_gil(|py| {
         let part = PyModule::import(py, "Part").expect("import Part");
@@ -83,6 +88,7 @@ fn part_shares_one_core_with_ferrocad() {
 
 #[test]
 fn a_fillet_feature_rebuilds_through_python() {
+    let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     boot();
     Python::with_gil(|py| {
         let part = PyModule::import(py, "Part").expect("import Part");
@@ -121,5 +127,101 @@ fn a_fillet_feature_rebuilds_through_python() {
                 .unwrap(),
             "the fillet feature computed a shape"
         );
+    });
+}
+
+#[test]
+fn the_shell_helpers_tessellate_and_dress_up_a_document_shape() {
+    let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    boot();
+    Python::with_gil(|py| {
+        // The shell library puts the facade on `sys.path`; do the same here.
+        let facade = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../python");
+        py.import("sys")
+            .unwrap()
+            .getattr("path")
+            .unwrap()
+            .call_method1("insert", (0, facade.to_string_lossy().to_string()))
+            .unwrap();
+        let shell = PyModule::import(py, "ferrocad_shell").expect("import ferrocad_shell");
+
+        // `bootstrap` adds the Box because Part is linked in this image.
+        let _: String = shell
+            .call_method0("bootstrap")
+            .expect("bootstrap")
+            .extract()
+            .unwrap();
+
+        let meshes: String = shell
+            .call_method0("stage_meshes")
+            .expect("stage_meshes")
+            .extract()
+            .unwrap();
+        let meshes: serde_json::Value = serde_json::from_str(&meshes).unwrap();
+        let box_mesh = meshes
+            .as_array()
+            .expect("an array")
+            .iter()
+            .find(|mesh| mesh["object"] == "Box")
+            .expect("the Box is tessellated");
+        let parts: Vec<&str> = box_mesh["parts"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter_map(|part| part.as_str())
+            .collect();
+        assert!(
+            parts.contains(&"Edge1"),
+            "the mesh names its edges: {parts:?}"
+        );
+        assert!(!box_mesh["edges"].as_array().unwrap().is_empty());
+
+        // A scrub commit: create the fillet, recompute, and re-read the display.
+        let result: String = shell
+            .call_method1("dress_up", ("Box", "Fillet", r#"["Edge1"]"#, 2.0, 0.0))
+            .expect("dress_up")
+            .extract()
+            .unwrap();
+        let result: serde_json::Value = serde_json::from_str(&result).unwrap();
+        assert_eq!(result["ok"], true, "dress_up: {result}");
+
+        let after: String = shell
+            .call_method0("stage_meshes")
+            .unwrap()
+            .extract()
+            .unwrap();
+        let after: serde_json::Value = serde_json::from_str(&after).unwrap();
+        let objects: Vec<&str> = after
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter_map(|mesh| mesh["object"].as_str())
+            .collect();
+        assert!(
+            !objects.contains(&"Box"),
+            "the base is replaced by the feature: {objects:?}"
+        );
+        let feature = after
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|mesh| mesh["object"] == "Box_Fillet")
+            .expect("the fillet is displayed");
+        let faces = feature["parts"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|part| part.as_str().is_some_and(|name| name.starts_with("Face")))
+            .count();
+        assert!(faces > 6, "the fillet adds faces: {faces}");
+
+        // Scrubbing again reuses the feature.
+        let again: String = shell
+            .call_method1("dress_up", ("Box", "Fillet", r#"["Edge1"]"#, 3.0, 0.0))
+            .unwrap()
+            .extract()
+            .unwrap();
+        let again: serde_json::Value = serde_json::from_str(&again).unwrap();
+        assert_eq!(again["ok"], true, "second dress_up: {again}");
     });
 }

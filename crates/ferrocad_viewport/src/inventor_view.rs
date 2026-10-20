@@ -30,10 +30,10 @@ use ferrocad_stage::{
 };
 use ferrocad_types::{Matrix4, Placement, Rotation, Vector3};
 use gpui::{
-    AnyElement, AppContext, Bounds, Context, DragMoveEvent, FocusHandle, IntoElement, KeyDownEvent,
-    MouseButton, MouseDownEvent, MouseExitEvent, MouseMoveEvent, MouseUpEvent, ObjectFit, Pixels,
-    Point, Render, RenderImage, ScrollDelta, ScrollWheelEvent, Window, div, gpu_canvas, img,
-    prelude::*, px, rgb, rgba,
+    AnyElement, AppContext, Bounds, Context, DragMoveEvent, EventEmitter, FocusHandle, IntoElement,
+    KeyDownEvent, MouseButton, MouseDownEvent, MouseExitEvent, MouseMoveEvent, MouseUpEvent,
+    ObjectFit, Pixels, Point, Render, RenderImage, ScrollDelta, ScrollWheelEvent, Window, div,
+    gpu_canvas, img, prelude::*, px, rgb, rgba,
 };
 use image::{Frame, ImageBuffer, Rgba};
 
@@ -52,6 +52,19 @@ pub enum SelectionEvent {
     Picked(SelectionRef),
     /// The click hit nothing identifiable, so the selection should clear.
     Cleared,
+}
+
+/// A state change the viewport reports to its host on gpui's event channel.
+///
+/// The viewport itself never applies a selection or writes a document; it reports what
+/// happened and lets the host (the shell) decide. [`EventEmitter`] queues the emission
+/// until the current update returns, so a subscriber may update the viewport in turn.
+#[derive(Clone, Debug)]
+pub enum ViewportEvent {
+    /// A click selected an object or sub-element, or cleared the selection.
+    Selection(SelectionEvent),
+    /// An edge dress-up scrub committed a value for the host to write to a feature.
+    DressUpCommit(DressUpChange),
 }
 
 /// A gpui view that presents an [`InventorView`] (image path) and routes pointer
@@ -1534,6 +1547,8 @@ impl<V: InventorView> InventorViewport<V> {
     }
 }
 
+impl<V: InventorView + 'static> EventEmitter<ViewportEvent> for InventorViewport<V> {}
+
 impl<V: InventorView + 'static> Render for InventorViewport<V> {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         // Follow the element's physical size before drawing (the bounds were captured at
@@ -1679,13 +1694,24 @@ impl<V: InventorView + 'static> Render for InventorViewport<V> {
             .capture_any_mouse_up(cx.listener(|this, event: &MouseUpEvent, _window, cx| {
                 let local = this.to_local(event.position);
                 let modifiers = gizmo_modifiers(event.modifiers);
-                if this.handle_button_with_modifiers(
+                let changed = this.handle_button_with_modifiers(
                     local,
                     mouse_button(event.button),
                     false,
                     modifiers,
-                ) {
+                );
+                // Report what the click produced. `emit` queues the effect until this
+                // update returns, so the host may update this viewport in response.
+                let selection = this.take_selection();
+                let commit = this.take_dress_up_commit();
+                if changed {
                     cx.notify();
+                }
+                if let Some(selection) = selection {
+                    cx.emit(ViewportEvent::Selection(selection));
+                }
+                if let Some(commit) = commit {
+                    cx.emit(ViewportEvent::DressUpCommit(commit));
                 }
             }))
             .on_drag(ViewportDragMarker, |_, _, _, cx| {

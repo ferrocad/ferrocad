@@ -42,6 +42,7 @@ pyo3 = { version = "0.25", features = ["abi3-py311"] }
 [dev-dependencies]
 # `auto-initialize` lets the boot test embed CPython (as the app does).
 pyo3 = { version = "0.25", features = ["abi3-py311", "auto-initialize"] }
+serde_json.workspace = true
 
 [features]
 # Enabled when producing the standalone `Part` extension module.

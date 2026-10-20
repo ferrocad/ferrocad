@@ -28,7 +28,7 @@ obvious:
 | `ferrocad_inventor_py` | `cdylib` | The `pivy.coin` facade (scaffolding) over `ferrocad_inventor`. |
 | `ferrocad_stage_py` | `cdylib` | The `ferrocad.stage` facade over `ferrocad_stage` (the modern stack's Python surface). |
 | `ferrocad_viewport` | `rlib` | The `bite-gpui` viewport over an invented scene: `InventorViewport` (image path, pointer→pick→listener, and clicks → `SelectionEvent`/`SelectionRef`) plus a hosted `ferrocad_stage` (declarative items and interactive tools), the navigation cube (`NaviCube`), and the sample scene. Depends on `ferrocad_graphics`/`ferrocad_geom`/`ferrocad_inventor`/`ferrocad_stage` only. |
-| `ferrocad_gpui` | `rlib` | The `bite-gpui` application-shell library: boots CPython and provides `Shell`, `run`/`run_with`, `HostConfig`, and mounts the `ferrocad_viewport`. Ships no application scripts. |
+| `ferrocad_gpui` | `rlib` | The `bite-gpui` application-shell library: boots CPython and provides `Shell`, `run`/`run_with`, `HostConfig`, mounts the `ferrocad_viewport`, and wires the document to it (`dress_up::HostDressUp`: stage sync, selection → scrubber, commit → feature). Ships no application scripts. |
 | `ferrocad` | `bin` | The base app (the general edition). Owns the app's Python entry module and, when packaged, its mods and interpreter; calls `ferrocad_gpui::run_with`. |
 | `python/FreeCAD` | package | The public, pure-Python `import FreeCAD` facade. |
 | `ferrocad_gen` | `cdylib` | Generated PyO3 skeletons (M3c). A build-time experiment, not wired into the facade. |
@@ -180,8 +180,10 @@ ferrocad_viewport  -> ferrocad_graphics, ferrocad_geom,
                                                      [geom is a leaf: SelectionRef]
 ferrocad_gpui      -> ferrocad_widgets, ferrocad_viewport,
                       ferrocad_inventor, ferrocad_wgpu,
+                      ferrocad_geom, ferrocad_stage,
                       ferrocad_types, pyo3 (embed)   [the host/glue owns the window]
                       must NOT -> ferrocad_py        [the *app* links it, not the shell]
+                      must NOT -> ferrocad_part/occt [the document side is Python]
 ferrocad           -> ferrocad_gpui, ferrocad_py     [base app: links the module in, embeds payload]
 python/FreeCAD     -> ferrocad (built-in module when linked, else a .so on sys.path)
 ```

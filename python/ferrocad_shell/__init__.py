@@ -17,6 +17,10 @@ import FreeCAD
 # The namespace the console evaluates in; populated by :func:`bootstrap`.
 _NAMESPACE: dict = {}
 
+# Beyond the model, the shell asks for the two pieces the viewport needs: the
+# tessellated shapes to draw (:func:`stage_meshes`) and the parametric feature a
+# dress-up scrub writes (:func:`dress_up`).
+
 # Property type id -> editor kind. A type absent here is read-only in the pane.
 _EDITABLE_KINDS = {
     "App::PropertyString": "text",
@@ -103,6 +107,16 @@ def bootstrap(doc_name: str = "Shell") -> str:
     derived = doc.addObject("App::FeaturePython", "Derived")
     derived.addProperty("App::PropertyLength", "Result", "Base", "Computed result")
     derived.setExpression("Result", "Params.Length * 2")
+
+    # A solid for the viewport, when the Part workbench is linked (the edition).
+    # Without Part the shell keeps its `pivy.coin` sample scene.
+    try:
+        import Part  # noqa: F401
+
+        box = doc.addObject("Part::Feature", "Box")
+        box.Shape = Part.makeBox(20.0, 20.0, 20.0)
+    except Exception:
+        pass
 
     group = doc.addObject("App::DocumentObjectGroup", "Group")
     group.addObject(params)
@@ -252,3 +266,107 @@ def evaluate(code: str) -> str:
         except Exception:
             buf.write(traceback.format_exc())
             return _json({"ok": False, "output": buf.getvalue().rstrip("\n")})
+
+
+def _base_link(obj):
+    """The ``(object_name, [subnames])`` a `Base` link-sub property holds, if any."""
+    try:
+        link = obj.Base
+    except Exception:
+        return None
+    if not isinstance(link, tuple) or not link:
+        return None
+    linked = link[0]
+    name = getattr(linked, "Name", None)
+    if name is None:
+        return None
+    return name, list(link[1]) if len(link) > 1 else []
+
+
+def stage_meshes(deflection: float = 0.5) -> str:
+    """The tessellated shapes the viewport draws, as JSON.
+
+    Only objects with a non-null ``Shape`` are included, and an object consumed by a
+    dress-up feature (its ``Base``) is skipped: the feature's shape replaces it, the
+    way a feature's output replaces its input in the tree. ``entity`` is the object's
+    1-based position in the document, so the host can map a pick back to a name.
+
+    Returns ``[]`` when the Part workbench is not linked (the base app), leaving the
+    shell's `pivy.coin` sample scene in place.
+    """
+    try:
+        import Part  # noqa: F401
+    except Exception:
+        return "[]"
+    try:
+        doc = _active_doc()
+    except Exception:
+        return "[]"
+
+    objects = list(doc.Objects)
+    consumed = set()
+    for obj in objects:
+        link = _base_link(obj)
+        if link is not None:
+            consumed.add(link[0])
+
+    meshes = []
+    for index, obj in enumerate(objects, start=1):
+        if obj.Name in consumed:
+            continue
+        shape = getattr(obj, "Shape", None)
+        if shape is None:
+            continue
+        try:
+            if shape.isNull():
+                continue
+            mesh = shape.mesh(deflection)
+        except Exception:
+            continue
+        meshes.append({"object": obj.Name, "label": obj.Label, "entity": index, **mesh})
+    return _json(meshes)
+
+
+def dress_up(
+    object_name: str, mode: str, edges_json: str, first: float, second: float = 0.0
+) -> str:
+    """Create or update a ``Part::Fillet``/``Part::Chamfer`` over ``object_name``.
+
+    The feature is named ``<object>_<mode>`` and reused on later scrubs. The edit is
+    one named transaction, so it is a single undo step, and the document is recomputed
+    before this returns: the caller can re-read :func:`stage_meshes` straight away.
+    """
+    try:
+        import Part  # noqa: F401
+    except Exception:
+        return _json({"ok": False, "error": "the Part workbench is not available"})
+    try:
+        doc = _active_doc()
+    except Exception as exc:
+        return _json({"ok": False, "error": str(exc)})
+    base = doc.getObject(object_name)
+    if base is None:
+        return _json({"ok": False, "error": f"no object named {object_name}"})
+    try:
+        edges = [str(edge) for edge in json.loads(edges_json)]
+    except Exception as exc:
+        return _json({"ok": False, "error": f"bad edge list: {exc}"})
+
+    feature_name = f"{object_name}_{mode}"
+    doc.openTransaction(f"{mode} {object_name}")
+    try:
+        feature = doc.getObject(feature_name)
+        if feature is None:
+            feature = doc.addObject(f"Part::{mode}", feature_name)
+        feature.Base = (base, edges)
+        if mode == "Fillet":
+            feature.Radius = float(first)
+        else:
+            feature.Distance = float(first)
+            feature.Distance2 = float(second)
+        doc.recompute()
+        doc.commitTransaction()
+    except Exception as exc:
+        doc.abortTransaction()
+        return _json({"ok": False, "error": str(exc)})
+    return _json({"ok": True, "feature": feature_name})

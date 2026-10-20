@@ -9,6 +9,7 @@
 //! public `FreeCAD` Python API, exactly like a workbench (see
 //! `docs/architecture.md` and `docs/repackaging.md`).
 
+pub mod dress_up;
 pub mod python;
 pub mod shell;
 
@@ -28,6 +29,7 @@ use gpui::{
     application, bounds, point, prelude::*, px, size,
 };
 
+pub use dress_up::{DressUpDocument, HostDressUp, PythonDocument, StageMesh};
 pub use shell::{Shell, ShellModel};
 
 /// A zero-copy viewport presenter for this build and platform, if one is available.
@@ -79,8 +81,9 @@ pub struct HostConfig {
     pub mods_paths: Vec<std::path::PathBuf>,
     /// The app's Python entry module, imported at boot. It must expose the shell
     /// data functions (`bootstrap`, `model_tree`, `properties`, `set_property`,
-    /// `evaluate`). The library ships no copy of this script: it lives with the
-    /// app (see `docs/repackaging.md`).
+    /// `evaluate`) and, for the 3D viewport, `stage_meshes` and `dress_up` (see
+    /// `dress_up` in the shell helpers). The library ships no copy of this script: it
+    /// lives with the app (see `docs/repackaging.md`).
     pub entry_module: String,
 }
 

@@ -32,9 +32,10 @@ static MODS_PATHS: OnceLock<Vec<PathBuf>> = OnceLock::new();
 /// Configure the app side of the boundary, before boot.
 ///
 /// `entry_module` must expose the shell's data functions (`bootstrap`,
-/// `model_tree`, `properties`, `set_property`, `evaluate`). `python_paths` are
-/// the app's script and mod directories, added to `sys.path`. `mods_paths` are
-/// the workbench directories scanned for `Init.py`/`InitGui.py`.
+/// `model_tree`, `properties`, `set_property`, `evaluate`) and the viewport
+/// functions (`stage_meshes`, `dress_up`). `python_paths` are the app's script and
+/// mod directories, added to `sys.path`. `mods_paths` are the workbench directories
+/// scanned for `Init.py`/`InitGui.py`.
 pub fn configure(entry_module: &str, python_paths: &[PathBuf], mods_paths: &[PathBuf]) {
     let _ = ENTRY_MODULE.set(entry_module.to_string());
     let _ = APP_PATHS.set(python_paths.to_vec());
@@ -124,6 +125,14 @@ pub struct SetResult {
 pub struct EvalResult {
     pub ok: bool,
     pub output: String,
+}
+
+/// The outcome of a dress-up edit.
+#[derive(Debug, Clone, Deserialize)]
+pub struct ApplyResult {
+    pub ok: bool,
+    #[serde(default)]
+    pub error: String,
 }
 
 /// Locate the `python/` facade directory (the one containing `FreeCAD/`).
@@ -287,6 +296,36 @@ pub fn hello() -> Result<String, String> {
 
 pub fn model_tree() -> Result<Vec<DocumentNode>, String> {
     call_json("model_tree", None)
+}
+
+/// The tessellated document shapes the viewport draws.
+///
+/// Empty when the Part workbench is not linked, which the shell treats as "keep the
+/// sample scene".
+pub fn stage_meshes() -> Result<Vec<crate::dress_up::StageMesh>, String> {
+    call_json("stage_meshes", None)
+}
+
+/// Create or update a `Part::Fillet`/`Part::Chamfer` and recompute.
+pub fn apply_dress_up(
+    object: &str,
+    mode: &str,
+    edge: &str,
+    first: f64,
+    second: f64,
+) -> Result<ApplyResult, String> {
+    let edges = serde_json::to_string(&[edge]).map_err(|e| e.to_string())?;
+    let raw = Python::with_gil(|py| -> Result<String, String> {
+        let module = py.import(entry_module()).map_err(|e| e.to_string())?;
+        module
+            .getattr("dress_up")
+            .map_err(|e| e.to_string())?
+            .call1((object, mode, edges.as_str(), first, second))
+            .map_err(|e| e.to_string())?
+            .extract::<String>()
+            .map_err(|e| e.to_string())
+    })?;
+    serde_json::from_str(&raw).map_err(|e| e.to_string())
 }
 
 pub fn properties(object: &str) -> Result<Vec<PropRow>, String> {

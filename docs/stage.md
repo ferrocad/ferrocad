@@ -300,11 +300,15 @@ pointer's radial travel, snapped and clamped, and emits a typed `DressUpChange` 
 (`with_dress_up_scrubber`, `take_dress_up_commit`, `cancel_dress_up_drag`), picks it
 before the gizmo, draws its stroke as a depth-off overlay, and always shows the dimension
 pill. The host writes the committed value to a `Part::Fillet`/`Part::Chamfer` feature and
-recomputes. Covered by `ferrocad_stage`'s 11 dress-up tests and 2 `edge_polyline` tests,
-and `ferrocad_viewport`'s `a_dress_up_scrub_commits_a_larger_radius`,
+recomputes: `ferrocad_gpui::dress_up::HostDressUp` builds the stage from
+`ferrocad_shell.stage_meshes`, maps a pick to the object, and on commit calls
+`ferrocad_shell.dress_up` before re-syncing. Covered by `ferrocad_stage`'s 11 dress-up
+tests and 2 `edge_polyline` tests, `ferrocad_viewport`'s
+`a_dress_up_scrub_commits_a_larger_radius`,
 `a_click_away_from_the_arc_falls_through_to_the_scene`,
 `the_scrubber_stroke_is_drawn_and_hovers`, `cancelling_a_dress_up_scrub_restores_the_radius`
-and `a_dress_up_arc_takes_priority_over_the_gizmo`.
+and `a_dress_up_arc_takes_priority_over_the_gizmo`, `ferrocad_gpui`'s 7 host tests, and
+`ferrocad_part_py`'s `the_shell_helpers_tessellate_and_dress_up_a_document_shape`.
 
 ### T5 — the `ferrocad.stage` Python bindings
 

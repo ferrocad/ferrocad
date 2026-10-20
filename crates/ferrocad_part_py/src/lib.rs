@@ -37,12 +37,12 @@
 use std::sync::{Arc, Mutex};
 
 use ferrocad_core::{ExtensionData, ExtensionValue};
-use ferrocad_geom::Shape;
+use ferrocad_geom::{Shape, TessellationOptions};
 use ferrocad_occt::OcctBackend;
 use ferrocad_part::{ShapeProperty, TYPE_NAME};
 use pyo3::exceptions::{PyIOError, PyRuntimeError, PyValueError};
 use pyo3::prelude::*;
-use pyo3::types::{PyBytes, PyModule};
+use pyo3::types::{PyBytes, PyDict, PyList, PyModule};
 
 /// Register the Part kernel (OCCT) and its core types. Idempotent; every entry
 /// point that can build a shape calls it first.
@@ -110,6 +110,43 @@ impl PartShape {
             .ok_or_else(|| PyValueError::new_err("cannot export a null shape"))?;
         let bytes = ferrocad_part::backend().save_shape(&shape);
         Ok(PyBytes::new(py, &bytes).unbind())
+    }
+
+    /// A display mesh with per-primitive sub-element ids and names.
+    ///
+    /// A FerroCAD extension (upstream `Shape.tessellate` returns bare vertices and
+    /// facets): the dict carries the arrays of a `ferrocad_geom::Tessellation`, so a
+    /// host can draw the shape **and** map a pick back to `Face6`/`Edge3`.
+    ///
+    /// `deflection` is the linear deflection in model units; `angular` is the angular
+    /// deflection in radians.
+    #[pyo3(signature = (deflection = 0.5, angular = 0.5))]
+    fn mesh(&self, py: Python<'_>, deflection: f64, angular: f64) -> PyResult<Py<PyAny>> {
+        let shape = self
+            .shape()
+            .ok_or_else(|| PyValueError::new_err("cannot tessellate a null shape"))?;
+        let options = TessellationOptions {
+            linear_deflection: Some(deflection),
+            angular_deflection: angular,
+            relative: false,
+        };
+        let mesh = ferrocad_part::backend()
+            .tessellate(&shape, &options)
+            .map_err(|error| PyRuntimeError::new_err(error.to_string()))?;
+
+        let dict = PyDict::new(py);
+        dict.set_item(
+            "positions",
+            PyList::new(py, mesh.positions.iter().map(|p| (p[0], p[1], p[2])))?,
+        )?;
+        dict.set_item("triangles", mesh.triangles)?;
+        dict.set_item("triangle_parts", mesh.triangle_parts)?;
+        dict.set_item("edges", mesh.edges)?;
+        dict.set_item("segment_parts", mesh.segment_parts)?;
+        dict.set_item("vertices", mesh.vertices)?;
+        dict.set_item("vertex_parts", mesh.vertex_parts)?;
+        dict.set_item("parts", mesh.parts)?;
+        Ok(dict.into_any().unbind())
     }
 
     fn __repr__(&self) -> String {

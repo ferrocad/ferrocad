@@ -259,6 +259,14 @@ The extraction is a refactor with its own tests, so it lands in stages:
     `ferrocad_geom`, never of OCCT. See [`topology-selection.md`](topology-selection.md)
     (F0.6); the F1 arc scrubber now only has to write `Radius`. The Python path is
     checked by `ferrocad_part_py`'s `a_fillet_feature_rebuilds_through_python`.
+12. **[x] The host wiring** (2026-10-20) — `ferrocad_gpui::dress_up` connects the shell to
+    the document: `ferrocad_shell.stage_meshes` tessellates each object's `Shape`
+    (through the new `Part.Shape.mesh`, carrying part names), the shell maps a picked
+    entity to the object, a click on an edge arms the scrubber, and a commit calls
+    `ferrocad_shell.dress_up` (create/update a `Part::Fillet`/`Part::Chamfer` in one
+    transaction, recompute) before re-syncing the stage. The document is behind a
+    `DressUpDocument` trait, so the interaction is tested with a fake; the shell still
+    links no kernel (`ferrocad_part`/OCCT remain Python-side).
 
 `ferrocad_occt` is deliberately **not** in `default-members`, so an ordinary
 `cargo build`/`cargo test` needs no kernel; only the `geometry` CI job (and geometry

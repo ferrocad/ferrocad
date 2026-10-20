@@ -15,6 +15,10 @@ documentation = "https://docs.rs/ferrocad_gpui"
 [dependencies]
 ferrocad_widgets.workspace = true
 ferrocad_inventor.workspace = true
+# The selection vocabulary (`SelectionRef`) and tessellation the host fills a stage from.
+ferrocad_geom.workspace = true
+# The declarative stage and the dress-up types the host wires to the document.
+ferrocad_stage.workspace = true
 # The viewport: presents the invented scene (image path) and the navigation cube.
 ferrocad_viewport.workspace = true
 # The `pivy.coin` facade: the host registers it into the embedded interpreter and

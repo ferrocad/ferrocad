@@ -15,12 +15,14 @@ use gpui::{
     Subscription, Window, div, prelude::*, px, rgb,
 };
 
-use ferrocad_inventor::Viewport;
-use ferrocad_viewport::InventorViewport;
+use ferrocad_inventor::{Scene, Viewport};
+use ferrocad_stage::{DressUpChange, DressUpValue};
 use ferrocad_viewport::scene;
+use ferrocad_viewport::{InventorViewport, SelectionEvent, ViewportEvent};
 use ferrocad_wgpu::WgpuRenderer;
 use ferrocad_widgets::{SubmitEvent, TextAreaState, TextInput, window_frame};
 
+use crate::dress_up::{HostDressUp, PythonDocument};
 use crate::python::{self, Bootstrap, DocumentNode, PropRow};
 
 const BG: u32 = 0x101216;
@@ -34,6 +36,14 @@ const ACCENT: u32 = 0x2f4a6d;
 fn transcript_of(model: &Arc<Mutex<ShellModel>>) -> String {
     let m = model.lock().unwrap();
     format!("{}\n>>> ", m.console.join("\n"))
+}
+
+/// `fillet` or `chamfer`, for the status line and the console.
+fn kind_of(change: &DressUpChange) -> &'static str {
+    match change.value {
+        DressUpValue::Fillet { .. } => "fillet",
+        DressUpValue::Chamfer { .. } => "chamfer",
+    }
 }
 
 /// Everything the window renders, kept in an `Arc<Mutex<_>>` so click handlers
@@ -59,6 +69,10 @@ pub struct Shell {
     viewport: Option<Entity<InventorViewport<WgpuRenderer>>>,
     /// One uncontrolled field per editable property, keyed by `object.property`.
     prop_inputs: HashMap<String, PropInput>,
+    /// The document side of the dress-up interaction: selection → feature → stage.
+    host: HostDressUp<PythonDocument>,
+    /// The viewport's event subscription (selection and scrub commits).
+    _viewport_events: Option<Subscription>,
     _submit: Subscription,
 }
 
@@ -139,6 +153,8 @@ impl Shell {
             console,
             viewport: None,
             prop_inputs: HashMap::new(),
+            host: HostDressUp::new(PythonDocument),
+            _viewport_events: None,
             _submit: submit,
         }
     }
@@ -165,19 +181,131 @@ impl Shell {
             return;
         };
         let camera = scene::sample_camera(Viewport::new(SIZE, 1.0));
-        let scene = python::inventor_scene().unwrap_or_else(|_| scene::sample_scene());
+
+        // The document's own shapes, when a geometry workbench is linked. Without
+        // them (the base app has no kernel) the `pivy.coin` sample scene stays.
+        let stage = match self.host.sync() {
+            Ok(stage) if !stage.is_empty() => Some(stage),
+            Ok(_) => None,
+            Err(error) => {
+                self.console_line(format!("stage: {error}"), cx);
+                None
+            }
+        };
+        let scene = if stage.is_some() {
+            Scene::default()
+        } else {
+            python::inventor_scene().unwrap_or_else(|_| scene::sample_scene())
+        };
         let navicube = ferrocad_viewport::NaviCube::new(camera.viewport);
-        let viewport = InventorViewport::new(renderer, camera, scene)
+        let mut viewport = InventorViewport::new(renderer, camera, scene)
             .with_listener(Box::new(scene::HoverHighlight::default()))
             .with_listener(Box::new(python::PythonEventCallbacks))
             .with_navicube(navicube);
+        if let Some(stage) = stage {
+            viewport.set_stage(stage);
+        }
         // The presenter is always safe to install: it falls back to the image path
         // when the window's device cannot be shared.
         let viewport = match crate::zero_copy_presenter() {
             Some(presenter) => viewport.with_presenter(presenter),
             None => viewport,
         };
-        self.viewport = Some(cx.new(move |_cx| viewport));
+        let viewport = cx.new(move |_cx| viewport);
+        let events = cx.subscribe(&viewport, |this, _viewport, event: &ViewportEvent, cx| {
+            this.on_viewport_event(event, cx)
+        });
+        self.viewport = Some(viewport);
+        self._viewport_events = Some(events);
+    }
+
+    /// Append a line to the console transcript.
+    fn console_line(&mut self, line: String, cx: &mut Context<Self>) {
+        self.model.lock().unwrap().console.push(line);
+        let transcript = transcript_of(&self.model);
+        self.console
+            .update(cx, |area, cx| area.set_transcript(transcript, cx));
+    }
+
+    /// Re-read the document's shapes into the viewport's stage.
+    ///
+    /// Call after any edit that can change geometry: a property commit, a console
+    /// snippet, or a dress-up scrub (which syncs itself). An empty document or a build
+    /// without the Part workbench simply yields an empty stage.
+    fn sync_stage(&mut self, cx: &mut Context<Self>) {
+        let Some(viewport) = self.viewport.clone() else {
+            return;
+        };
+        match self.host.sync() {
+            Ok(stage) => viewport.update(cx, |viewport, cx| {
+                viewport.set_stage(stage);
+                cx.notify();
+            }),
+            Err(error) => self.console_line(format!("stage: {error}"), cx),
+        }
+    }
+
+    /// React to a viewport event: a click selection or a committed dress-up scrub.
+    fn on_viewport_event(&mut self, event: &ViewportEvent, cx: &mut Context<Self>) {
+        match event {
+            ViewportEvent::Selection(selection) => self.on_selection(selection, cx),
+            ViewportEvent::DressUpCommit(change) => self.on_dress_up_commit(change, cx),
+        }
+    }
+
+    /// A click: select the object in the inspector, and arm the edge scrubber when the
+    /// pick is an edge of a displayed shape.
+    fn on_selection(&mut self, selection: &SelectionEvent, cx: &mut Context<Self>) {
+        let scrubber = match selection {
+            SelectionEvent::Picked(reference) => self.host.scrubber_for(reference),
+            SelectionEvent::Cleared => None,
+        };
+        if let SelectionEvent::Picked(reference) = selection {
+            if let Some(name) = self.host.object_of(reference.object).map(str::to_string) {
+                self.select(&name);
+            }
+        }
+        if let Some(viewport) = self.viewport.clone() {
+            viewport.update(cx, |viewport, cx| {
+                viewport.set_dress_up_scrubber(scrubber);
+                cx.notify();
+            });
+        }
+        cx.notify();
+    }
+
+    /// The scrub ended: write the value to a `Part::Fillet`/`Part::Chamfer`, recompute,
+    /// and re-read the shapes the viewport draws.
+    fn on_dress_up_commit(&mut self, change: &DressUpChange, cx: &mut Context<Self>) {
+        let status = match self.host.apply(change) {
+            Ok(()) => {
+                match self.host.sync() {
+                    Ok(stage) => {
+                        if let Some(viewport) = self.viewport.clone() {
+                            viewport.update(cx, |viewport, cx| {
+                                viewport.set_stage(stage);
+                                viewport.set_dress_up_scrubber(None);
+                                cx.notify();
+                            });
+                        }
+                    }
+                    Err(error) => {
+                        self.console_line(format!("stage: {error}"), cx);
+                    }
+                }
+                self.refresh(cx);
+                format!(
+                    "{} {} = {}",
+                    change.edge,
+                    kind_of(change),
+                    change.value.readout()
+                )
+            }
+            Err(error) => format!("dress-up error: {error}"),
+        };
+        self.model.lock().unwrap().status = status.clone();
+        self.console_line(status, cx);
+        cx.notify();
     }
 
     /// Select an object; the property editor is filled from the live model. The
@@ -263,6 +391,7 @@ impl Shell {
                     input.seeded = text.to_string();
                 }
                 self.refresh(cx);
+                self.sync_stage(cx);
                 format!("set {key}")
             }
             Ok(result) => format!("property error: {}", result.error),
@@ -296,6 +425,7 @@ impl Shell {
         }
         // A console line can add objects or change values; re-read the model.
         self.refresh(cx);
+        self.sync_stage(cx);
         let transcript = transcript_of(&self.model);
         self.console
             .update(cx, |area, cx| area.set_transcript(transcript, cx));

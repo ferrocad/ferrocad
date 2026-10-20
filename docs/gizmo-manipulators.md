@@ -416,19 +416,24 @@ Verification: `ferrocad_stage` 72 tests (11 new dress-up cases: readout strings,
 arc sizing, stroke-only hit test, outward scrub, step snap, cancel, rebuild-on-change,
 hover tokens, degenerate and view-aligned edges; plus 2 `ShapeItem::edge_polyline`
 cases); `ferrocad_viewport` 98 tests (5 new: commit, pass-through, hover/draw, cancel,
-priority over the gizmo).
+priority over the gizmo); `ferrocad_gpui` 7 host tests
+(`ferrocad_gpui::dress_up`: sync/entity map, edge vs face selection, chamfer mode, commit
+forwarding, unknown entity); `ferrocad_part_py`'s
+`the_shell_helpers_tessellate_and_dress_up_a_document_shape` covers the Python half
+(tessellate with names → `dress_up` → base hidden, feature displayed, reused).
 
 ## 15. Deferred and why
 
 - **Push-Pull** needs a sketch-region / face selection and a solid/sketch model to preview
   an additive boss or subtractive pocket. The interaction is a 1D constraint plus a
   volume preview; it can reuse T1's axis solver once the context exists.
-- **Fillet/Chamfer** is unblocked and the arc scrubber is built (F0.6 + F1):
-  `GeometryBackend::{fillet, chamfer}`, `tangent_chain`, click selection, the parametric
-  features and the `DressUpScrubber`. What remains is **type-ahead numerics** (digits
-  targeting the pill), the **`Alt` asymmetric split** (two distance handles instead of
-  one), and the **host wiring** (selection → feature → scrubber → property write) in the
-  app shell, which has no document-selection model yet.
+- **Fillet/Chamfer** is end-to-end: `GeometryBackend::{fillet, chamfer}`, `tangent_chain`,
+  click selection, the parametric features, the `DressUpScrubber`, and the host wiring
+  (`ferrocad_gpui::dress_up`: stage sync, edge selection → scrubber, commit →
+  `Part::Fillet` → recompute → re-sync). What remains is **type-ahead numerics** (digits
+  targeting the pill), an **`Alt` asymmetric split** (two distance handles), and a
+  chrome control to choose fillet vs chamfer (the host supports both; the UI picks
+  fillet).
 - **Draft** additionally needs a wall-face selection, a pull direction and an angular
   offset operation; its protractor arc is a ring-like scrub (T1) with a degree readout
   (T3).

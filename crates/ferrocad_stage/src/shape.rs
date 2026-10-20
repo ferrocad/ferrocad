@@ -42,6 +42,13 @@ pub const HIGHLIGHT_COLOR: [f32; 4] = [0.040, 0.509, 0.939, 1.0];
 /// depth test against the coplanar surface it marks.
 pub const HIGHLIGHT_DEPTH_BIAS: f32 = 1e-5;
 
+/// How far towards the camera an edge is pushed in clip space.
+///
+/// A wireframe lies exactly on the surface it bounds, so without a bias it z-fights with
+/// it (and loses the picking depth test to it). A hair in front makes the drawn edge
+/// stable and lets an exact click on it select the edge rather than the face.
+pub const WIRE_DEPTH_BIAS: f32 = 1e-5;
+
 /// A declarative, already-tessellated CAD shape.
 ///
 /// The item owns raw buffers — vertex positions, optional per-vertex normals, triangle
@@ -473,7 +480,7 @@ impl ShapeItem {
                     geometry,
                     world,
                     self.edge_color,
-                    0.0,
+                    WIRE_DEPTH_BIAS,
                     self.generation,
                 ));
             }

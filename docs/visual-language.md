@@ -232,7 +232,7 @@ is to keep the split and treat the bloom as a hint. Decision §9.2.
 ## 6. Pass-through indication
 
 When an overlay's interior passes a click through to the model, the status bar says so
-(`clicked through: recompute()`). The mechanism is a small, neutral hover report from
+(`clicked through: navicube → Slab`). The mechanism is a small, neutral hover report from
 the viewport, not a workbench concept:
 
 ```rust
@@ -245,10 +245,12 @@ pub struct HoverReport {
 }
 ```
 
-The viewport already knows both (its pick and its manipulator/gizmo hit tests); the
-shell renders it in the status line. This is also the natural feed for the actions/tool
-registry's status text ([`actions-and-tools.md`](actions-and-tools.md)), so it is
-designed here and wired there.
+The viewport updates it on every pointer move from the same pick and overlay tests the
+click uses (`InventorViewport::hover_report`), and the shell renders it beside the
+command's status text. **As built (A4):** `through` is `"navicube"` on the ring's
+negative space; a gizmo/manipulator grab target suppresses both fields (the click is
+consumed), and those interiors report nothing yet because they have no `contains`
+query. A command's `{"status": …}` result and the hover segment share one line.
 
 ---
 

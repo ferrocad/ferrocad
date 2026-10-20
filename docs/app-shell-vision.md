@@ -154,15 +154,17 @@ Ordered by value; each slice is independently demoable. Sizes are rough.
   keyboard shortcuts, a command registry, and dirty-state tracking.
   The registry and the workbench command contract are specified in
   [`actions-and-tools.md`](actions-and-tools.md).
-  *Preview:* the registry and its first consumers are built (**A0–A3**).
+  *Preview:* the registry and its first consumers are built (**A0–A4**).
   `python/FreeCADGui` holds the commands, `ferrocad_gpui::commands` types them, and the
   shell renders an **actions bar** above the panes whenever the app or a workbench
   registered something — with live `IsActive`/`IsChecked` state,
   rebuilt after a selection or a document edit rather than per frame. A command can
   also return a **dialog** spec, which the shell hosts as a glass modal (validated
-  in Rust, accepted through a single-use token). The base app's **Delete**/**Move**
-  and the toy edition's **Create Slab** are the first entries; both of the latter
-  open dialogs. Menus, `Accel` bindings and the File/Edit menu remain S2/A4.
+  in Rust, accepted through a single-use token). `Accel` chords are bound at the
+  window root, the bar buttons carry `ToolTip + Accel` tooltips, and the status line
+  adds the viewport's pass-through report. The base app's **Delete**/**Move** and the
+  toy edition's **Create Slab** are the first entries; both of the latter open
+  dialogs. Menus, docks and the File/Edit menu remain S2.
   *Acceptance:* a headless test drives commands by id; save→close→open
   round-trips a document; Undo/Redo light up correctly.
 - **S3 · Inspector.** A document tree (Documents → Objects → Properties) built

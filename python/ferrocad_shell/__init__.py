@@ -462,7 +462,7 @@ class _MoveCommand:
         return {
             "MenuText": "Move",
             "ToolTip": "Move the selected objects by a delta",
-            "Accel": "M",
+            "Accel": "Ctrl+Shift+M",
             "Group": "Edit",
             "CmdType": "ForEdit",
         }

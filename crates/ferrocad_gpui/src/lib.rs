@@ -16,6 +16,7 @@ pub mod display;
 pub mod python;
 pub mod selection;
 pub mod shell;
+pub mod shortcuts;
 
 /// Zero-copy viewport presentation through gpui's wgpu window renderer.
 #[cfg(all(
@@ -39,6 +40,7 @@ pub use dialog::{DialogField, DialogSpec};
 pub use display::{DisplaySync, StageMesh};
 pub use selection::SelectionItem;
 pub use shell::{Shell, ShellModel};
+pub use shortcuts::Accelerator;
 
 /// A zero-copy viewport presenter for this build and platform, if one is available.
 ///

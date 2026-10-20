@@ -19,7 +19,7 @@ use ferrocad_geom::SelectionRef;
 use ferrocad_inventor::{Scene, Viewport};
 use ferrocad_stage::{InteractionCommit, Manipulator, TransformGizmo};
 use ferrocad_viewport::scene;
-use ferrocad_viewport::{InventorViewport, SelectionEvent, ViewportEvent};
+use ferrocad_viewport::{HoverReport, InventorViewport, SelectionEvent, ViewportEvent};
 use ferrocad_wgpu::WgpuRenderer;
 use ferrocad_widgets::{SubmitEvent, TextAreaState, TextInput, window_frame};
 
@@ -29,6 +29,7 @@ use crate::dialog::{self, DialogSpec, Kind, ValueState};
 use crate::display::{DisplaySync, StageMesh};
 use crate::python::{self, Bootstrap, DocumentNode, PropRow};
 use crate::selection::{self, SelectionItem};
+use crate::shortcuts::Accelerator;
 
 const BG: u32 = 0x101216;
 const PANEL: u32 = 0x16181d;
@@ -75,6 +76,8 @@ pub struct Shell {
     display: DisplaySync,
     /// The workbench manipulators the edition contributes (none in the base app).
     contributions: Contributions,
+    /// The enabled global accelerators, rebuilt with the command list (A4).
+    shortcuts: Vec<(Accelerator, String)>,
     /// The open command dialog (A3); one at a time.
     dialog: Option<OpenDialog>,
     /// Focus for the modal, so Esc cancels and Enter in a field accepts.
@@ -167,6 +170,7 @@ impl Shell {
     /// Build a shell around an existing model (the window and tests use this).
     pub fn from_model(model: Arc<Mutex<ShellModel>>, cx: &mut Context<Self>) -> Self {
         let transcript = transcript_of(&model);
+        let shortcuts = global_shortcuts(&model.lock().unwrap().commands);
         let console = cx.new(|cx| {
             let mut area = TextAreaState::new(cx);
             area.set_transcript(transcript, cx);
@@ -185,6 +189,7 @@ impl Shell {
             prop_inputs: HashMap::new(),
             display: DisplaySync::new(),
             contributions: Contributions::new(),
+            shortcuts,
             dialog: None,
             dialog_focus: cx.focus_handle(),
             focus_dialog: false,
@@ -416,9 +421,34 @@ impl Shell {
     /// crosses into the interpreter.
     fn refresh_commands(&mut self, cx: &mut Context<Self>) {
         match commands::list() {
-            Ok(commands) => self.model.lock().unwrap().commands = commands,
+            Ok(commands) => {
+                self.shortcuts = global_shortcuts(&commands);
+                self.model.lock().unwrap().commands = commands;
+            }
             Err(error) => self.console_line(format!("commands: {error}"), cx),
         }
+    }
+
+    /// The command a key event should run, if any.
+    ///
+    /// A modal owns the keyboard while it is open, and a disabled command does not
+    /// fire (the same rule the bar shows).
+    fn shortcut_for(&self, event: &KeyDownEvent) -> Option<String> {
+        if self.dialog.is_some() {
+            return None;
+        }
+        let (_, id) = self
+            .shortcuts
+            .iter()
+            .find(|(accelerator, _)| accelerator.matches(&event.keystroke))?;
+        let enabled = self
+            .model
+            .lock()
+            .unwrap()
+            .commands
+            .iter()
+            .any(|command| command.id == *id && command.enabled);
+        enabled.then(|| id.clone())
     }
 
     /// Run a workbench command by id, then refresh the model and the stage.
@@ -719,6 +749,20 @@ impl Shell {
         selection::push(&items)
     }
 
+    /// The status line's pass-through segment: the overlay the pointer would click
+    /// through, plus the document object beneath it. Empty when there is none.
+    fn hover_line(&self, cx: &App) -> String {
+        let Some(viewport) = self.viewport.as_ref() else {
+            return String::new();
+        };
+        let report = viewport.read(cx).hover_report();
+        let target = report
+            .target
+            .as_ref()
+            .and_then(|reference| self.display.object_of(reference.object));
+        hover_status(report, target)
+    }
+
     /// Re-read the tree and the selected object's properties after a change.
     ///
     /// Selection names the document no longer has (a delete, or an undo of a
@@ -907,6 +951,19 @@ fn actions_bar(model: &ShellModel, cx: &mut Context<Shell>) -> impl IntoElement 
                 el.cursor_pointer().hover(|style| style.bg(rgb(PANEL_ALT)))
             })
             .child(command.label().to_string());
+        if !command.tooltip.is_empty() {
+            let mut tip = command.tooltip.clone();
+            if !command.accel.is_empty() {
+                tip.push_str("  ·  ");
+                tip.push_str(&command.accel);
+            }
+            button = button.tooltip(move |_window, cx| {
+                cx.new(|_| CommandTooltip {
+                    text: tip.clone().into(),
+                })
+                .into()
+            });
+        }
         if enabled {
             button = button
                 .on_click(cx.listener(move |this, _event, _window, cx| this.run_command(&id, cx)));
@@ -914,6 +971,26 @@ fn actions_bar(model: &ShellModel, cx: &mut Context<Shell>) -> impl IntoElement 
         bar = bar.child(button);
     }
     bar
+}
+
+/// The actions bar's hover text: the command's `ToolTip` and its accelerator.
+struct CommandTooltip {
+    text: SharedString,
+}
+
+impl Render for CommandTooltip {
+    fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
+        div()
+            .px_2()
+            .py_1()
+            .rounded_sm()
+            .bg(rgb(PANEL_ALT))
+            .border_1()
+            .border_color(rgba(0xffffff14))
+            .text_xs()
+            .text_color(rgb(FG))
+            .child(self.text.clone())
+    }
 }
 
 /// The modal for an open command dialog (A3): a glass panel over a dimmed shell.
@@ -1279,6 +1356,36 @@ fn properties_panel(
         .child(rows)
 }
 
+/// The globally bindable accelerators for `commands`.
+///
+/// A shortcut is bound only when it is a safe global chord; a bare letter would
+/// shadow typing in the console and the property editor (see [`Accelerator`]).
+fn global_shortcuts(commands: &[CommandInfo]) -> Vec<(Accelerator, String)> {
+    commands
+        .iter()
+        .filter_map(|command| {
+            let accelerator = Accelerator::parse(&command.accel)?;
+            accelerator
+                .is_global()
+                .then(|| (accelerator, command.id.clone()))
+        })
+        .collect()
+}
+
+/// The status line's pass-through text: `"clicked through: navicube → Slab"`.
+///
+/// Empty when no overlay is under the pointer, so the segment disappears rather
+/// than saying "nothing".
+fn hover_status(report: &HoverReport, target: Option<&str>) -> String {
+    let Some(through) = report.through else {
+        return String::new();
+    };
+    match target {
+        Some(name) => format!("clicked through: {through} → {name}"),
+        None => format!("clicked through: {through}"),
+    }
+}
+
 /// A console action button.
 fn console_button(
     id: &str,
@@ -1355,6 +1462,7 @@ impl Render for Shell {
                     .into_any_element(),
             });
 
+        let hover = self.hover_line(cx);
         let status = div()
             .flex()
             .flex_row()
@@ -1365,7 +1473,17 @@ impl Render for Shell {
             .bg(rgb(PANEL_ALT))
             .text_xs()
             .text_color(rgb(MUTED))
-            .child(model.status.clone())
+            .child(
+                div()
+                    .flex()
+                    .flex_row()
+                    .items_center()
+                    .gap_3()
+                    .child(model.status.clone())
+                    .when(!hover.is_empty(), |el| {
+                        el.child(div().text_color(rgb(0x38bdf8)).child(hover.clone()))
+                    }),
+            )
             .child(format!("FreeCAD {} · {}", model.version, model.backend));
 
         let content = div()
@@ -1395,7 +1513,17 @@ impl Render for Shell {
 
         // The modal sits above the whole shell, with a backdrop that blocks the
         // panes underneath.
-        let body = div().relative().size_full().child(content);
+        let body = div()
+            .id("shell-root")
+            .relative()
+            .size_full()
+            .on_key_down(cx.listener(|this, event: &KeyDownEvent, _window, cx| {
+                if let Some(id) = this.shortcut_for(event) {
+                    cx.stop_propagation();
+                    this.run_command(&id, cx);
+                }
+            }))
+            .child(content);
         let body = if self.dialog.is_some() {
             body.child(dialog_overlay(self, cx))
         } else {
@@ -1714,6 +1842,59 @@ if "Test_Dialog" not in FreeCADGui.listCommands():
             cx.update(|_window, cx| shell.read(cx).dialog.is_none()),
             "Escape cancelled the modal"
         );
+    }
+
+    /// A4: a registered accelerator runs the same command path as a click, even
+    /// while a text field has focus (the chord is unhandled there and bubbles).
+    #[gpui::test]
+    fn a_shortcut_runs_the_command(cx: &mut TestAppContext) {
+        let _guard = crate::PYTHON_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let model = Shell::boot().expect("boot shell");
+        let window = cx.update(|cx| {
+            let model = model.clone();
+            cx.open_window(Default::default(), move |_window, cx| {
+                cx.new(|cx| Shell::from_model(model.clone(), cx))
+            })
+            .unwrap()
+        });
+        let mut cx = VisualTestContext::from_window(window.into(), cx);
+        let shell: Entity<Shell> = window.root(&mut cx).unwrap();
+
+        let script = r#"
+import FreeCADGui
+class _TestShortcut:
+    def GetResources(self):
+        return {"MenuText": "Shortcut", "Accel": "Ctrl+Shift+K"}
+    def Activated(self):
+        return {"status": "shortcut ran"}
+if "Test_Shortcut" not in FreeCADGui.listCommands():
+    FreeCADGui.addCommand("Test_Shortcut", _TestShortcut())
+"#;
+        let registered = cx.update(|_window, _cx| crate::python::evaluate(script));
+        assert!(registered.unwrap().ok);
+        cx.update(|_window, cx| shell.update(cx, |shell, cx| shell.refresh_commands(cx)));
+
+        // The console owns focus; Ctrl+Shift+K is not a text-editing chord, so it
+        // bubbles to the shell root and runs the command.
+        let console = shell.read_with(&cx, |shell, cx| shell.console_focus_handle(cx));
+        cx.update(|window, cx| window.focus(&console, cx));
+        cx.simulate_keystrokes("ctrl-shift-k");
+
+        assert_eq!(model.lock().unwrap().status, "shortcut ran");
+    }
+
+    #[test]
+    fn the_pass_through_line_names_the_overlay_and_target() {
+        let report = HoverReport {
+            target: Some(SelectionRef::element(7, "Face1")),
+            through: Some("navicube"),
+        };
+        assert_eq!(
+            hover_status(&report, Some("Slab")),
+            "clicked through: navicube → Slab"
+        );
+        assert_eq!(hover_status(&report, None), "clicked through: navicube");
+        assert!(hover_status(&HoverReport::default(), Some("Slab")).is_empty());
     }
 
     fn command_enabled(id: &str) -> bool {

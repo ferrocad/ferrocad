@@ -183,7 +183,7 @@ class _MakeSlabCommand:
         return {
             "MenuText": "Create Slab",
             "ToolTip": "Add a slab to the document",
-            "Accel": "Shift+S",
+            "Accel": "Ctrl+Shift+S",
             "Group": "Toy",
             "CmdType": "ForEdit",
         }

@@ -95,7 +95,8 @@ The same creation is offered as a command, `Toy_MakeSlab` (registered with
 **Create Slab** and runs it without knowing what a slab is. The command returns a
 **dialog** for Width/Depth/Height; the shell validates it and calls back, and the
 callback opens one transaction, so one click is one undo step (see
-[`actions-and-tools.md`](actions-and-tools.md) §6 and §16).
+[`actions-and-tools.md`](actions-and-tools.md) §6 and §16). Its `Ctrl+Shift+S` chord
+is bound at the window root, so the same command runs from the keyboard.
 
 The inspector refreshes and the viewport re-syncs through the ordinary observers —
 `evaluate` in the shell already does both.

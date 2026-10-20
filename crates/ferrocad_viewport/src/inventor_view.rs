@@ -54,6 +54,20 @@ pub enum SelectionEvent {
     Cleared,
 }
 
+/// What a click under the pointer would do, for the host's status line.
+///
+/// The viewport reports only neutral data: the scene target a click would select
+/// (if any), and the overlay whose **interior** is under the pointer but will not
+/// consume the click (`"navicube"` today). The shell turns this into text; no
+/// document or workbench concept enters the viewport.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct HoverReport {
+    /// What the click would hit in the document.
+    pub target: Option<SelectionRef>,
+    /// The overlay under the pointer that will not consume the click.
+    pub through: Option<&'static str>,
+}
+
 /// A state change the viewport reports to its host on gpui's event channel.
 ///
 /// The viewport itself never applies a selection or writes a document; it reports what
@@ -143,6 +157,8 @@ pub struct InventorViewport<V: InventorView> {
     hovered_part: Option<u32>,
     /// The selection update produced by the last click, for the host to consume.
     selection: Option<SelectionEvent>,
+    /// A neutral summary of what a click would do under the pointer (A4).
+    hover_report: HoverReport,
     frame: Option<Arc<RenderImage>>,
     /// A host-supplied zero-copy presenter. When ready, its GPU target replaces the
     /// readback `frame`; `None` (the default) is the image path.
@@ -251,6 +267,7 @@ impl<V: InventorView> InventorViewport<V> {
             hover: None,
             hovered_part: None,
             selection: None,
+            hover_report: HoverReport::default(),
             frame: None,
             presenter: None,
             presenter_frames: 0,
@@ -552,6 +569,15 @@ impl<V: InventorView> InventorViewport<V> {
         self.selection.as_ref()
     }
 
+    /// What a click under the pointer would do (the neutral hover report).
+    ///
+    /// `target` is the scene object a click would select and `through` names the
+    /// overlay whose interior is under the pointer but will not consume the click.
+    /// Empty when the pointer is away, over a consuming overlay, or in a drag.
+    pub fn hover_report(&self) -> &HoverReport {
+        &self.hover_report
+    }
+
     /// Resolve a hit's `(entity, part)` into a [`SelectionRef`].
     ///
     /// The part id indexes the stage item's name table, so a click on `Face6` reports
@@ -663,11 +689,13 @@ impl<V: InventorView> InventorViewport<V> {
         // An active drag is owned by `drag_move`: hovering here would rebuild the cube per
         // event and can clear the ring's active state mid-scrub.
         if self.ring_drag.is_some() || self.navicube_drag.is_some() || self.orbit_drag.is_some() {
+            self.hover_report = HoverReport::default();
             return false;
         }
         // The chrome bar is gpui, not the 3D scene: keep the pointer out of picking and
         // out of the cube's proximity state.
         if self.chrome_contains(logical) {
+            self.hover_report = HoverReport::default();
             let mut changed = false;
             if let Some(cube) = self.navicube.as_mut() {
                 changed |= cube.set_hilite(None);
@@ -709,6 +737,7 @@ impl<V: InventorView> InventorViewport<V> {
         // A piece or the ring consumes the hover; the negative space around them falls
         // through to the gizmo/tool/scene beneath.
         if in_cube && (ring || cube_hit.is_some()) {
+            self.hover_report = HoverReport::default();
             return changed;
         }
 
@@ -720,6 +749,7 @@ impl<V: InventorView> InventorViewport<V> {
             .iter()
             .any(|manipulator| manipulator.is_dragging())
         {
+            self.hover_report = HoverReport::default();
             let changed = self
                 .manipulators
                 .iter_mut()
@@ -730,7 +760,7 @@ impl<V: InventorView> InventorViewport<V> {
             }
             return changed;
         }
-        {
+        let manipulator_hover = {
             let hits: Vec<bool> = self
                 .manipulators
                 .iter()
@@ -743,11 +773,17 @@ impl<V: InventorView> InventorViewport<V> {
             }
             if changed {
                 self.rebuild_manipulator_queue();
-                return true;
             }
+            (top.is_some(), changed)
+        };
+        if manipulator_hover.1 {
+            self.hover_report = HoverReport::default();
+            return true;
         }
+        let manipulator_hover = manipulator_hover.0;
 
         // The gizmo takes priority: an active drag consumes the move; otherwise hover.
+        let mut gizmo_hover = self.gizmo.as_ref().is_some_and(|gizmo| gizmo.is_dragging());
         if self.gizmo.as_ref().is_some_and(|gizmo| gizmo.is_dragging()) {
             let event = match self.gizmo.as_mut() {
                 Some(gizmo) => gizmo.drag_to_with_modifiers(&self.camera, device, modifiers),
@@ -757,21 +793,40 @@ impl<V: InventorView> InventorViewport<V> {
                 self.apply_gizmo_preview(Some(event.total_transform));
                 self.gizmo_value = Some(event.value);
                 self.gizmo_pointer = Some(logical);
+                self.hover_report = HoverReport::default();
                 return true;
             }
         } else if self.gizmo.is_some() {
             let handle = self.gizmo_handle_at(device);
+            gizmo_hover = handle.is_some();
             let recoloured = match self.gizmo.as_mut() {
                 Some(gizmo) => gizmo.set_hovered(handle),
                 None => false,
             };
             if recoloured {
                 self.rebuild_gizmo_queue();
+                self.hover_report = HoverReport::default();
                 return true;
             }
         }
 
         let hit = self.pick(device);
+        let consumed = manipulator_hover || gizmo_hover;
+        self.hover_report = HoverReport {
+            target: if consumed {
+                None
+            } else {
+                hit.as_ref()
+                    .and_then(|hit| self.selection_ref(hit.id.0, hit.part))
+            },
+            through: if consumed {
+                None
+            } else if in_cube {
+                Some("navicube")
+            } else {
+                None
+            },
+        };
         changed |= self.dispatch_tool(PointerKind::Move, device, None, hit.as_ref());
         changed | self.dispatch_hover(device, hit.as_ref())
     }
@@ -1424,6 +1479,7 @@ impl<V: InventorView> InventorViewport<V> {
     pub fn handle_pointer_leave(&mut self) -> bool {
         self.hover = None;
         self.hovered_part = None;
+        self.hover_report = HoverReport::default();
         let mut changed = false;
         if let Some(cube) = self.navicube.as_mut() {
             changed |= cube.set_hilite(None);
@@ -2710,6 +2766,12 @@ mod tests {
             "the probe point must be negative space"
         );
         let empty = viewport_size.to_logical(device);
+
+        // The neutral hover report names the overlay the click passes through.
+        view.handle_pointer(empty);
+        let report = view.hover_report().clone();
+        assert_eq!(report.through, Some("navicube"));
+        assert!(report.target.is_none(), "the probe point is empty space");
 
         // The press belongs to the scene: the camera orbit starts, the cube does not
         // capture a drag.

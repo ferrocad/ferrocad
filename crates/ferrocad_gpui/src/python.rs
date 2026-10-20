@@ -29,17 +29,28 @@ static APP_PATHS: OnceLock<Vec<PathBuf>> = OnceLock::new();
 /// Workbench (`mods/`) directories scanned at boot.
 static MODS_PATHS: OnceLock<Vec<PathBuf>> = OnceLock::new();
 
+/// Whether the shell is a GUI (`FreeCAD.GuiUp`). Set by [`configure`].
+static GUI: OnceLock<bool> = OnceLock::new();
+
 /// Configure the app side of the boundary, before boot.
 ///
 /// `entry_module` must expose the shell's data functions (`bootstrap`,
 /// `model_tree`, `properties`, `set_property`, `evaluate`) and the viewport
-/// functions (`stage_meshes`, `interaction`). `python_paths` are the app's script and
-/// mod directories, added to `sys.path`. `mods_paths` are the workbench directories
-/// scanned for `Init.py`/`InitGui.py`.
-pub fn configure(entry_module: &str, python_paths: &[PathBuf], mods_paths: &[PathBuf]) {
+/// functions (`stage_meshes`, `interaction`, `commands`, `run_command`).
+/// `python_paths` are the app's script and mod directories, added to `sys.path`.
+/// `mods_paths` are the workbench directories scanned for `Init.py`/`InitGui.py`.
+/// `gui` sets `FreeCAD.GuiUp`: true for the app window, false for `--check-init`
+/// and headless tests.
+pub fn configure(entry_module: &str, python_paths: &[PathBuf], mods_paths: &[PathBuf], gui: bool) {
     let _ = ENTRY_MODULE.set(entry_module.to_string());
     let _ = APP_PATHS.set(python_paths.to_vec());
     let _ = MODS_PATHS.set(mods_paths.to_vec());
+    let _ = GUI.set(gui);
+}
+
+/// Whether the shell is running as a GUI.
+fn gui() -> bool {
+    GUI.get().copied().unwrap_or(false)
 }
 
 /// The app's entry module.
@@ -228,6 +239,15 @@ pub fn bootstrap() -> Result<Bootstrap, String> {
         // analogue of `SoFCDB::init()` at GUI startup.
         ferrocad_inventor_py::install(py).map_err(|e| e.to_string())?;
 
+        // The app is a GUI: tell the facade before the app script imports, so
+        // import-time workbench code sees the same `GuiUp` upstream has.
+        if gui() {
+            py.import("FreeCAD")
+                .map_err(|e| e.to_string())?
+                .setattr("GuiUp", 1)
+                .map_err(|e| e.to_string())?;
+        }
+
         let module = py.import(entry_module()).map_err(|e| e.to_string())?;
         // The modern presentation layer (`ferrocad.stage`) attaches itself to the
         // `ferrocad` extension, so register it now that booting has imported it.
@@ -336,6 +356,16 @@ pub fn apply_interaction(
             .map_err(|e| e.to_string())
     })?;
     serde_json::from_str(&raw).map_err(|e| e.to_string())
+}
+
+/// The registered workbench commands, with their live state.
+pub fn commands() -> Result<Vec<crate::commands::CommandInfo>, String> {
+    call_json("commands", None)
+}
+
+/// Run a workbench command by id.
+pub fn run_command(name: &str) -> Result<crate::commands::CommandOutcome, String> {
+    call_json("run_command", Some(name))
 }
 
 pub fn properties(object: &str) -> Result<Vec<PropRow>, String> {

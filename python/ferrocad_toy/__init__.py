@@ -30,6 +30,7 @@ re-export every entry point the shell calls.
 from __future__ import annotations
 
 import FreeCAD
+import FreeCADGui
 
 # The shell's data functions (`bootstrap`, `model_tree`, `properties`,
 # `set_property`, `evaluate`, `add_namespace`, `stage_meshes`, `interaction`, ...).
@@ -173,6 +174,29 @@ def _interaction(obj, manipulator, action, element, values):
 
 FreeCAD.register_display_provider(_display_mesh)
 FreeCAD.register_interaction_provider(_interaction)
+
+
+class _MakeSlabCommand:
+    """``Toy_MakeSlab`` — create a slab with the current defaults."""
+
+    def GetResources(self):
+        return {
+            "MenuText": "Create Slab",
+            "ToolTip": "Add a slab to the document",
+            "Accel": "Shift+S",
+            "Group": "Toy",
+            "CmdType": "ForEdit",
+        }
+
+    def IsActive(self):
+        return FreeCAD.ActiveDocument is not None
+
+    def Activated(self):
+        makeSlab()
+        return {"status": "created a slab"}
+
+
+FreeCADGui.addCommand("Toy_MakeSlab", _MakeSlabCommand())
 
 
 def _add_slab(doc, width, depth, height, x, y, name):

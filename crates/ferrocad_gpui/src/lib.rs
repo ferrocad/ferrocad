@@ -9,6 +9,7 @@
 //! public `FreeCAD` Python API, exactly like a workbench (see
 //! `docs/architecture.md` and `docs/repackaging.md`).
 
+pub mod commands;
 pub mod contributions;
 pub mod display;
 pub mod python;
@@ -30,6 +31,7 @@ use gpui::{
     application, bounds, point, prelude::*, px, size,
 };
 
+pub use commands::{CommandInfo, CommandOutcome};
 pub use contributions::{Contributions, GizmoFactory, ManipulatorFactory};
 pub use display::{DisplaySync, StageMesh};
 pub use shell::{Shell, ShellModel};
@@ -115,7 +117,12 @@ pub fn run() {
 pub fn run_with(config: HostConfig) {
     // Hand the app's scripts to the interpreter bridge before it boots. The
     // interpreter belongs to the shell; the scripts belong to the app.
-    python::configure(&config.entry_module, &config.python_paths, &config.mods_paths);
+    python::configure(
+        &config.entry_module,
+        &config.python_paths,
+        &config.mods_paths,
+        true,
+    );
 
     let model = match Shell::boot() {
         Ok(model) => model,
@@ -154,7 +161,12 @@ pub fn run_with(config: HostConfig) {
 /// packaged layout that is missing a DLL or an entry point fails here instead of
 /// on a user's machine.
 pub fn check_init(config: HostConfig) -> Result<(), String> {
-    python::configure(&config.entry_module, &config.python_paths, &config.mods_paths);
+    python::configure(
+        &config.entry_module,
+        &config.python_paths,
+        &config.mods_paths,
+        false,
+    );
     Shell::boot().map(|_| ())
 }
 

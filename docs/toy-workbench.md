@@ -73,9 +73,9 @@ Every arrow is the same code the Part edition uses. Only the two endpoints diffe
 
 ## Creation and the console
 
-`makeSlab` is the workbench's command. It adds the object and its properties, commits
-the transaction, and returns the object. The console name is a convenience; the
-first-class form is `Toy_MakeSlab`, registered with `FreeCADGui.addCommand` (see
+`makeSlab` is the workbench's creation API. It adds the object and its properties,
+commits the transaction, and returns the object. The console name is a convenience;
+the first-class form is `Toy_MakeSlab`, registered with `FreeCADGui.addCommand` (see
 [`actions-and-tools.md`](actions-and-tools.md)):
 
 ```python
@@ -89,6 +89,12 @@ console can create objects without an import:
 ```text
 >>> Toy.makeSlab(30, 30, 10, 60)
 ```
+
+The same creation is offered as a command, `Toy_MakeSlab` (registered with
+`FreeCADGui.addCommand` in this module's `Init`), so the shell's actions bar shows
+**Create Slab** and runs it without knowing what a slab is. A command owns its own
+transaction, so one click is one undo step (see
+[`actions-and-tools.md`](actions-and-tools.md) §16).
 
 The inspector refreshes and the viewport re-syncs through the ordinary observers —
 `evaluate` in the shell already does both.

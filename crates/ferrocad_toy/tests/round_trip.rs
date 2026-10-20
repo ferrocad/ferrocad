@@ -32,7 +32,7 @@ static BOOT: Once = Once::new();
 fn boot() {
     BOOT.call_once(|| {
         ferrocad::register_core_module();
-        python::configure("ferrocad_toy", &[], &[]);
+        python::configure("ferrocad_toy", &[], &[], false);
     });
     python::bootstrap().expect("boot the toy app");
 }

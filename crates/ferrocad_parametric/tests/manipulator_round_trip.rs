@@ -29,7 +29,7 @@ fn boot() {
         ferrocad::register_core_module();
         use ferrocad_part_py::Part as part_module;
         pyo3::append_to_inittab!(part_module);
-        python::configure("ferrocad_parametric", &[], &[]);
+        python::configure("ferrocad_parametric", &[], &[], false);
     });
     python::bootstrap().expect("boot the edition");
 }

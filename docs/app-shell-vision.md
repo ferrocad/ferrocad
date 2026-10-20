@@ -154,6 +154,12 @@ Ordered by value; each slice is independently demoable. Sizes are rough.
   keyboard shortcuts, a command registry, and dirty-state tracking.
   The registry and the workbench command contract are specified in
   [`actions-and-tools.md`](actions-and-tools.md).
+  *Preview:* the registry and its first consumer are built (**A0/A1**).
+  `python/FreeCADGui` holds the commands, `ferrocad_gpui::commands` types them, and the
+  shell renders an **actions bar** above the panes whenever a workbench registered
+  something — with live `IsActive`/`IsChecked` state, rebuilt after a selection or a
+  document edit rather than per frame. The toy edition's **Create Slab** is the first
+  entry. Menus, `Accel` bindings and the File/Edit commands remain S2/A4.
   *Acceptance:* a headless test drives commands by id; save→close→open
   round-trips a document; Undo/Redo light up correctly.
 - **S3 · Inspector.** A document tree (Documents → Objects → Properties) built

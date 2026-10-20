@@ -13,14 +13,16 @@ import json
 import traceback
 
 import FreeCAD
+import FreeCADGui
 
 # The namespace the console evaluates in; populated by :func:`bootstrap`.
 _NAMESPACE: dict = {}
 
-# Beyond the model, the shell asks for the two pieces the viewport needs: the
-# tessellated shapes to draw (:func:`stage_meshes`) and the document edit a
-# manipulator commit produces (:func:`interaction`). Both go through the module
-# hooks on ``FreeCAD``, so this script names no workbench.
+# Beyond the model, the shell asks for the pieces the UI needs: the tessellated
+# shapes to draw (:func:`stage_meshes`), the document edit a manipulator commit
+# produces (:func:`interaction`), and the workbench actions (:func:`commands`,
+# :func:`run_command`). All go through the module hooks or ``FreeCADGui``, so this
+# script names no workbench.
 
 # Property type id -> editor kind. A type absent here is read-only in the pane.
 _EDITABLE_KINDS = {
@@ -350,3 +352,18 @@ def interaction(
             {"ok": False, "error": f"no module handles {manipulator} {action}"}
         )
     return _json(result)
+
+
+def commands() -> str:
+    """The registered workbench commands, with resources and live state, as JSON.
+
+    A command is `FreeCADGui`-registered by the workbench (see
+    ``docs/actions-and-tools.md``); this script only marshals the list, so the
+    shell names no workbench either.
+    """
+    return _json(FreeCADGui._command_list())
+
+
+def run_command(name: str) -> str:
+    """Invoke a workbench command by id; returns ``{ok, status?, error?, ...}``."""
+    return _json(FreeCADGui._run(name))

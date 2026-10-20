@@ -12,7 +12,7 @@ use std::sync::{Arc, Mutex};
 
 use gpui::{
     AnyElement, App, Context, Entity, FocusHandle, Focusable, IntoElement, Render, SharedString,
-    Subscription, Window, div, prelude::*, px, rgb,
+    Subscription, Window, div, prelude::*, px, rgb, rgba,
 };
 
 use ferrocad_geom::SelectionRef;
@@ -23,6 +23,7 @@ use ferrocad_viewport::{InventorViewport, SelectionEvent, ViewportEvent};
 use ferrocad_wgpu::WgpuRenderer;
 use ferrocad_widgets::{SubmitEvent, TextAreaState, TextInput, window_frame};
 
+use crate::commands::{self, CommandInfo};
 use crate::contributions::Contributions;
 use crate::display::{DisplaySync, StageMesh};
 use crate::python::{self, Bootstrap, DocumentNode, PropRow};
@@ -50,6 +51,8 @@ pub struct ShellModel {
     pub tree: Vec<DocumentNode>,
     pub selected: Option<String>,
     pub properties: Vec<PropRow>,
+    /// The workbench actions, with their live enablement (A1).
+    pub commands: Vec<CommandInfo>,
     pub console: Vec<String>,
     pub status: String,
 }
@@ -118,6 +121,7 @@ impl Shell {
         }
         let objects: usize = tree.iter().map(|d| d.objects.len()).sum();
         let status = format!("{objects} object(s) · {}", boot.document);
+        let commands = commands::list().unwrap_or_default();
         Ok(Arc::new(Mutex::new(ShellModel {
             title: format!("FerroCAD — {}", boot.document),
             version: boot.version,
@@ -125,6 +129,7 @@ impl Shell {
             tree,
             selected: None,
             properties: Vec::new(),
+            commands,
             console,
             status,
         })))
@@ -288,6 +293,7 @@ impl Shell {
                 cx.notify();
             });
         }
+        self.refresh_commands(cx);
         cx.notify();
     }
 
@@ -361,6 +367,39 @@ impl Shell {
         self.refresh(cx);
     }
 
+    /// Re-read the workbench commands and their enablement.
+    ///
+    /// Called after anything that can change `IsActive()`: a selection, a document
+    /// edit, undo/redo, an open/close. It is deliberately not per frame — each call
+    /// crosses into the interpreter.
+    fn refresh_commands(&mut self, cx: &mut Context<Self>) {
+        match commands::list() {
+            Ok(commands) => self.model.lock().unwrap().commands = commands,
+            Err(error) => self.console_line(format!("commands: {error}"), cx),
+        }
+    }
+
+    /// Run a workbench command by id, then refresh the model and the stage.
+    fn run_command(&mut self, id: &str, cx: &mut Context<Self>) {
+        let status = match commands::run(id) {
+            Ok(outcome) if outcome.ok => {
+                self.refresh(cx);
+                self.sync_stage(cx);
+                if outcome.status.is_empty() {
+                    format!("ran {id}")
+                } else {
+                    outcome.status
+                }
+            }
+            Ok(outcome) if outcome.error.is_empty() => format!("{id} failed"),
+            Ok(outcome) => format!("{id}: {}", outcome.error),
+            Err(error) => format!("{id}: {error}"),
+        };
+        self.model.lock().unwrap().status = status.clone();
+        self.console_line(status, cx);
+        cx.notify();
+    }
+
     /// Select an object; the property editor is filled from the live model. The
     /// property fields are dropped so they re-seed from the new object's values.
     fn select(&mut self, name: &str) {
@@ -385,6 +424,7 @@ impl Shell {
             m.tree = tree;
             m.properties = properties;
         }
+        self.refresh_commands(cx);
         cx.notify();
     }
 
@@ -502,6 +542,47 @@ fn panel_header(text: &str) -> impl IntoElement {
         .text_xs()
         .text_color(rgb(MUTED))
         .child(text.to_string())
+}
+
+/// The workbench actions bar: one button per registered command (A1).
+///
+/// A disabled command stays visible — the user should see that the action exists —
+/// and a checkable one carries the accent. The bar appears only when the edition's
+/// workbenches registered something, so the base app keeps its old layout.
+fn actions_bar(model: &ShellModel, cx: &mut Context<Shell>) -> impl IntoElement {
+    let mut bar = div()
+        .flex()
+        .flex_row()
+        .items_center()
+        .gap_1()
+        .px_2()
+        .py_1()
+        .bg(rgb(PANEL))
+        .border_1()
+        .border_color(rgba(0xffffff14));
+    for command in &model.commands {
+        let id = command.id.clone();
+        let enabled = command.enabled;
+        let checked = command.checked;
+        let mut button = div()
+            .id(SharedString::from(format!("command-{id}")))
+            .px_2()
+            .py_1()
+            .rounded_sm()
+            .text_xs()
+            .text_color(rgb(if enabled { FG } else { MUTED }))
+            .when(checked, |el| el.bg(rgb(ACCENT)))
+            .when(enabled, |el| {
+                el.cursor_pointer().hover(|style| style.bg(rgb(PANEL_ALT)))
+            })
+            .child(command.label().to_string());
+        if enabled {
+            button = button
+                .on_click(cx.listener(move |this, _event, _window, cx| this.run_command(&id, cx)));
+        }
+        bar = bar.child(button);
+    }
+    bar
 }
 
 /// The model inspector: documents and their objects.
@@ -758,7 +839,13 @@ impl Render for Shell {
             .flex_col()
             .size_full()
             .bg(rgb(BG))
-            .text_color(rgb(FG))
+            .text_color(rgb(FG));
+        let content = if model.commands.is_empty() {
+            content
+        } else {
+            content.child(actions_bar(&model, cx))
+        };
+        let content = content
             .child(
                 div()
                     .flex()

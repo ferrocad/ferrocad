@@ -1,17 +1,228 @@
-"""Console-mode stand-in for FreeCAD's ``Gui`` module.
+"""The ``Gui`` module: the command registry, and (later) the viewer.
 
-When FreeCAD runs headless (``FreeCAD.GuiUp == 0``), ``import FreeCADGui``
-succeeds but exposes only a minimal, non-interactive surface. Workbenches and
-tests import it defensively (e.g. ``if FreeCAD.GuiUp:``) and probe for attributes
-like ``getDocument`` — which must *not* exist here, mirroring upstream's dummy
-GUI module in console mode.
+In **headless** mode (``FreeCAD.GuiUp == 0``) this is a stand-in: there is no
+viewer, no document view, no ``getDocument``. In the app (``GuiUp == 1``) the
+``bite-gpui`` shell supplies the chrome and consumes the registry below.
 
-The real GUI module (M5: the ``bite-gpui`` shell) will replace this stub.
+What is here today:
+
+* the **command registry** — ``addCommand`` / ``removeCommand`` /
+  ``listCommands`` / ``runCommand``, with FreeCAD's ``Command`` shape
+  (``Activated``, ``IsActive``, ``IsChecked``, ``GetResources``);
+* a **read-only selection snapshot** (``Selection.getSelection`` etc.), filled by
+  the shell;
+* the private bridge helpers the app script calls (``_command_list``,
+  ``_run``).
+
+What is deliberately absent: ``activeDocument()`` and view objects
+(``ViewProvider``); those are M5 work. See ``docs/actions-and-tools.md``.
 """
 
 from __future__ import annotations
 
+import sys
+
+import FreeCAD
+
 __version__ = "0.1.0"
 
-# Deliberately minimal: no `getDocument`, no `showMainWindow`, no viewer. The
-# `FreeCAD.GuiUp` flag (0 in the facade) is what tests check before touching GUI.
+#: Registered commands, in registration order.
+_COMMANDS: dict = {}
+
+#: ``(command, method)`` pairs already reported, so a broken command does not
+#: spam the console on every refresh.
+_REPORTED: set = set()
+
+
+def _error_text(exc: BaseException) -> str:
+    message = str(exc).strip().splitlines()
+    detail = message[0] if message else ""
+    return f"{type(exc).__name__}: {detail}".strip()
+
+
+def _report_once(name: str, method: str, exc: BaseException) -> None:
+    key = (name, method)
+    if key in _REPORTED:
+        return
+    _REPORTED.add(key)
+    print(f"FreeCADGui: command {name!r} {method} raised: {_error_text(exc)}", file=sys.stderr)
+
+
+# ---------------------------------------------------------------------------
+# The registry
+# ---------------------------------------------------------------------------
+
+
+def addCommand(name: str, command) -> None:
+    """Register ``command`` under ``name`` (``"<Workbench>_<Action>"``).
+
+    A duplicate id raises: a silent overwrite would hide workbench collisions.
+    """
+    if not isinstance(name, str) or not name:
+        raise ValueError("a command name must be a non-empty string")
+    if not callable(getattr(command, "Activated", None)):
+        raise TypeError(f"command {name!r} has no callable Activated")
+    if name in _COMMANDS:
+        raise ValueError(f"command {name!r} is already registered")
+    _COMMANDS[name] = command
+
+
+def removeCommand(name: str) -> None:
+    """Drop ``name`` from the registry (a no-op when absent)."""
+    _COMMANDS.pop(name, None)
+    _REPORTED.difference_update({key for key in _REPORTED if key[0] == name})
+
+
+def listCommands() -> list:
+    """The registered command ids, in registration order."""
+    return list(_COMMANDS)
+
+
+def runCommand(name: str, *args):
+    """Invoke ``name`` and return whatever ``Activated`` returned.
+
+    Arguments are forwarded, as upstream does; a command that takes none raises
+    if the caller passes some. An unknown id raises ``KeyError``.
+    """
+    command = _COMMANDS.get(name)
+    if command is None:
+        raise KeyError(name)
+    return command.Activated(*args)
+
+
+# ---------------------------------------------------------------------------
+# Enablement, checked state, and the shell bridge
+# ---------------------------------------------------------------------------
+
+
+def _resources(command) -> dict:
+    get = getattr(command, "GetResources", None)
+    if get is None:
+        return {}
+    try:
+        resources = get()
+    except Exception as exc:  # noqa: BLE001 - isolated on purpose
+        _report_once(_name_of(command), "GetResources", exc)
+        return {}
+    return resources if isinstance(resources, dict) else {}
+
+
+def _name_of(command) -> str:
+    for name, candidate in _COMMANDS.items():
+        if candidate is command:
+            return name
+    return repr(command)
+
+
+def _enabled(name: str, command) -> bool:
+    is_active = getattr(command, "IsActive", None)
+    if is_active is None:
+        return True
+    try:
+        return bool(is_active())
+    except Exception as exc:  # noqa: BLE001 - a broken predicate disables one command
+        _report_once(name, "IsActive", exc)
+        return False
+
+
+def _checked(name: str, command) -> bool:
+    is_checked = getattr(command, "IsChecked", None)
+    if is_checked is None:
+        return False
+    try:
+        return bool(is_checked())
+    except Exception as exc:  # noqa: BLE001
+        _report_once(name, "IsChecked", exc)
+        return False
+
+
+def _command_list() -> list:
+    """Every command with its resources and live state, for the shell's bar."""
+    commands = []
+    for name, command in _COMMANDS.items():
+        resources = _resources(command)
+        commands.append(
+            {
+                "id": name,
+                "menu": str(resources.get("MenuText") or name),
+                "tooltip": str(resources.get("ToolTip") or ""),
+                "accel": str(resources.get("Accel") or ""),
+                "group": str(resources.get("Group") or ""),
+                "cmd_type": str(resources.get("CmdType") or ""),
+                "enabled": _enabled(name, command),
+                "checked": _checked(name, command),
+            }
+        )
+    return commands
+
+
+def _run(name: str) -> dict:
+    """Invoke a command for the shell; never raises.
+
+    The returned dict always has ``ok``; a command may add ``status``,
+    ``dialog``, ``token``, ``view`` or ``tool`` (see
+    ``docs/actions-and-tools.md``).
+    """
+    command = _COMMANDS.get(name)
+    if command is None:
+        return {"ok": False, "error": f"unknown command {name!r}"}
+    try:
+        result = command.Activated()
+    except Exception as exc:  # noqa: BLE001 - one broken command is not fatal
+        return {"ok": False, "error": _error_text(exc)}
+    payload = {"ok": True}
+    if isinstance(result, dict):
+        payload.update(result)
+    elif result is not None:
+        payload["value"] = repr(result)
+    return payload
+
+
+# ---------------------------------------------------------------------------
+# Selection (read-only; writes arrive with the multi-selection service)
+# ---------------------------------------------------------------------------
+
+
+class _Selection:
+    """A snapshot of what the shell has selected.
+
+    The facade keeps no document state; this is UI state, pushed by the shell
+    after each viewport selection. Entries are ``(object name, [subelements])``.
+    """
+
+    def __init__(self) -> None:
+        self._pairs: list = []
+
+    def _objects(self) -> list:
+        doc = FreeCAD.ActiveDocument
+        if doc is None:
+            return []
+        resolved = []
+        for name, elements in self._pairs:
+            obj = doc.getObject(name)
+            if obj is not None:
+                resolved.append((obj, list(elements)))
+        return resolved
+
+    def getSelection(self) -> list:
+        """The selected document objects (upstream ``Gui.Selection``)."""
+        return [obj for obj, _ in self._objects()]
+
+    def getSelectionEx(self) -> list:
+        """``[(object, [subelement names])]`` for the current selection."""
+        return self._objects()
+
+    def isSelected(self, obj) -> bool:
+        """Whether ``obj`` (or an object name) is in the selection."""
+        name = obj if isinstance(obj, str) else getattr(obj, "Name", None)
+        return any(candidate == name for candidate, _ in self._pairs)
+
+    def _set(self, pairs) -> None:
+        """Replace the snapshot (called by the shell bridge)."""
+        self._pairs = [
+            (str(name), [str(element) for element in (elements or [])])
+            for name, elements in pairs
+        ]
+
+
+Selection = _Selection()

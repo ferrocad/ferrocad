@@ -154,16 +154,22 @@ Ordered by value; each slice is independently demoable. Sizes are rough.
   keyboard shortcuts, a command registry, and dirty-state tracking.
   The registry and the workbench command contract are specified in
   [`actions-and-tools.md`](actions-and-tools.md).
-  *Preview:* the registry and its first consumer are built (**A0/A1**).
+  *Preview:* the registry and its first consumers are built (**A0–A2**).
   `python/FreeCADGui` holds the commands, `ferrocad_gpui::commands` types them, and the
-  shell renders an **actions bar** above the panes whenever a workbench registered
-  something — with live `IsActive`/`IsChecked` state, rebuilt after a selection or a
-  document edit rather than per frame. The toy edition's **Create Slab** is the first
-  entry. Menus, `Accel` bindings and the File/Edit commands remain S2/A4.
+  shell renders an **actions bar** above the panes whenever the app or a workbench
+  registered something — with live `IsActive`/`IsChecked` state,
+  rebuilt after a selection or a document edit rather than per frame. The base app's
+  **Delete**/**Move** and the toy edition's **Create Slab** are the first entries.
+  Menus, `Accel` bindings and the File/Edit menu remain S2/A4.
   *Acceptance:* a headless test drives commands by id; save→close→open
   round-trips a document; Undo/Redo light up correctly.
 - **S3 · Inspector.** A document tree (Documents → Objects → Properties) built
   from the model, with a selection service and refresh on observer signals.
+  *Preview:* the tree is live and selecting a row fills the property editor.
+  A selection is an ordered list (plain click replaces; Ctrl/Cmd- or Shift-click
+  toggles), it is pushed to `FreeCADGui.Selection`, and a viewport pick carries the
+  hit sub-elements. S3 adds Python-driven selection writes and modifier-aware
+  picking, so a selection can be extended from the 3D view as well as the tree.
   *Acceptance:* `addObject` in the console makes a node appear; `removeObject`
   makes it disappear; selecting a node shows its properties in S4.
 - **S4 · Property editor.** Editors for the core property types, grouped by

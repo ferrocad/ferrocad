@@ -358,6 +358,16 @@ pub fn apply_interaction(
     serde_json::from_str(&raw).map_err(|e| e.to_string())
 }
 
+/// Replace the facade's selection snapshot (`FreeCADGui.Selection`).
+///
+/// The shell owns the selection; the facade mirrors it so a command's `IsActive`
+/// and `Activated` see what the UI shows. Called after every selection change.
+pub fn set_selection(items: &[crate::selection::SelectionItem]) -> Result<(), String> {
+    let payload = serde_json::to_string(items).map_err(|e| e.to_string())?;
+    let _: serde_json::Value = call_json("set_selection", Some(&payload))?;
+    Ok(())
+}
+
 /// The registered workbench commands, with their live state.
 pub fn commands() -> Result<Vec<crate::commands::CommandInfo>, String> {
     call_json("commands", None)

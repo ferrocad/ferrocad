@@ -27,6 +27,7 @@ use crate::commands::{self, CommandInfo};
 use crate::contributions::Contributions;
 use crate::display::{DisplaySync, StageMesh};
 use crate::python::{self, Bootstrap, DocumentNode, PropRow};
+use crate::selection::{self, SelectionItem};
 
 const BG: u32 = 0x101216;
 const PANEL: u32 = 0x16181d;
@@ -49,7 +50,10 @@ pub struct ShellModel {
     pub version: String,
     pub backend: String,
     pub tree: Vec<DocumentNode>,
+    /// The primary selected object (the property editor's subject).
     pub selected: Option<String>,
+    /// The full selection in click order (A2); the last item is the primary.
+    pub selection: Vec<SelectionItem>,
     pub properties: Vec<PropRow>,
     /// The workbench actions, with their live enablement (A1).
     pub commands: Vec<CommandInfo>,
@@ -121,6 +125,9 @@ impl Shell {
         }
         let objects: usize = tree.iter().map(|d| d.objects.len()).sum();
         let status = format!("{objects} object(s) · {}", boot.document);
+        // A fresh document starts with an empty selection snapshot: the process may
+        // have booted before (tests), and stale names must not leak into `IsActive`.
+        let _ = selection::push(&[]);
         let commands = commands::list().unwrap_or_default();
         Ok(Arc::new(Mutex::new(ShellModel {
             title: format!("FerroCAD — {}", boot.document),
@@ -128,6 +135,7 @@ impl Shell {
             backend: boot.backend,
             tree,
             selected: None,
+            selection: Vec::new(),
             properties: Vec::new(),
             commands,
             console,
@@ -280,11 +288,22 @@ impl Shell {
         let (manipulator, gizmo) = match selection {
             SelectionEvent::Picked(reference) => {
                 if let Some(name) = self.display.object_of(reference.object).map(str::to_string) {
-                    self.select(&name);
+                    // The viewport reports sub-elements too (`Face6`), which the facade
+                    // snapshot carries for `getSelectionEx`.
+                    self.replace_selection(
+                        vec![SelectionItem::with_elements(
+                            name,
+                            reference.elements.clone(),
+                        )],
+                        cx,
+                    );
                 }
                 self.arm(reference, cx)
             }
-            SelectionEvent::Cleared => (None, None),
+            SelectionEvent::Cleared => {
+                self.clear_selection(cx);
+                (None, None)
+            }
         };
         if let Some(viewport) = self.viewport.clone() {
             viewport.update(cx, |viewport, cx| {
@@ -293,7 +312,6 @@ impl Shell {
                 cx.notify();
             });
         }
-        self.refresh_commands(cx);
         cx.notify();
     }
 
@@ -400,29 +418,104 @@ impl Shell {
         cx.notify();
     }
 
-    /// Select an object; the property editor is filled from the live model. The
-    /// property fields are dropped so they re-seed from the new object's values.
-    fn select(&mut self, name: &str) {
-        let properties = python::properties(name).unwrap_or_default();
+    /// Replace the selection with one whole object (a plain click).
+    fn select(&mut self, name: &str, cx: &mut Context<Self>) {
+        self.replace_selection(vec![SelectionItem::new(name)], cx);
+    }
+
+    /// Add or remove one object (Ctrl/Cmd- or Shift-click), keeping the rest.
+    fn toggle_select(&mut self, name: &str, cx: &mut Context<Self>) {
+        let mut items = {
+            let m = self.model.lock().unwrap();
+            m.selection.clone()
+        };
+        if let Some(index) = items.iter().position(|item| item.is(name)) {
+            items.remove(index);
+        } else {
+            items.push(SelectionItem::new(name));
+        }
+        self.replace_selection(items, cx);
+    }
+
+    /// Clear the selection.
+    fn clear_selection(&mut self, cx: &mut Context<Self>) {
+        self.replace_selection(Vec::new(), cx);
+    }
+
+    /// Replace the whole selection: re-seed the property editor from the primary
+    /// (last-clicked) object, push the facade snapshot, and re-evaluate enablement.
+    ///
+    /// The push happens **before** the commands are listed, so `IsActive` sees the
+    /// selection the user just made.
+    fn replace_selection(&mut self, items: Vec<SelectionItem>, cx: &mut Context<Self>) {
+        let primary = items.last().map(|item| item.object.clone());
+        let properties = primary
+            .as_deref()
+            .map(|name| python::properties(name).unwrap_or_default())
+            .unwrap_or_default();
         self.prop_inputs.clear();
-        let mut m = self.model.lock().unwrap();
-        m.selected = Some(name.to_string());
-        m.properties = properties;
-        m.status = format!("selected {name}");
+        let status = match (items.len(), primary.as_deref()) {
+            (0, _) | (_, None) => "selection cleared".to_string(),
+            (1, Some(name)) => format!("selected {name}"),
+            (count, Some(name)) => format!("selected {count} · {name}"),
+        };
+        {
+            let mut m = self.model.lock().unwrap();
+            m.selection = items;
+            m.selected = primary;
+            m.properties = properties;
+            m.status = status;
+        }
+        if let Err(error) = self.push_selection() {
+            self.console_line(format!("selection: {error}"), cx);
+        }
+        self.refresh_commands(cx);
+        cx.notify();
+    }
+
+    /// Push the shell's selection to `FreeCADGui.Selection` (the facade snapshot).
+    fn push_selection(&self) -> Result<(), String> {
+        let items = {
+            let m = self.model.lock().unwrap();
+            m.selection.clone()
+        };
+        selection::push(&items)
     }
 
     /// Re-read the tree and the selected object's properties after a change.
+    ///
+    /// Selection names the document no longer has (a delete, or an undo of a
+    /// creation) are dropped here, and the pruned set is pushed to the facade so a
+    /// command's `IsActive` cannot see a deleted object.
     fn refresh(&mut self, cx: &mut Context<Self>) {
-        let selected = self.model.lock().unwrap().selected.clone();
         let tree = python::model_tree().unwrap_or_default();
-        let properties = selected
+        let live: std::collections::HashSet<String> = tree
+            .iter()
+            .flat_map(|doc| doc.objects.iter().map(|obj| obj.name.clone()))
+            .collect();
+        let (next, primary) = {
+            let m = self.model.lock().unwrap();
+            let mut next = m.selection.clone();
+            next.retain(|item| live.contains(&item.object));
+            let primary = next
+                .last()
+                .map(|item| item.object.clone())
+                .or_else(|| m.selected.clone().filter(|name| live.contains(name)));
+            (next, primary)
+        };
+        let properties = primary
             .as_deref()
             .map(|name| python::properties(name).unwrap_or_default())
             .unwrap_or_default();
         {
             let mut m = self.model.lock().unwrap();
             m.tree = tree;
+            m.selection = next;
+            m.selected = primary;
             m.properties = properties;
+        }
+        if let Err(error) = self.push_selection() {
+            self.console_line(format!("selection: {error}"), cx);
         }
         self.refresh_commands(cx);
         cx.notify();
@@ -547,8 +640,9 @@ fn panel_header(text: &str) -> impl IntoElement {
 /// The workbench actions bar: one button per registered command (A1).
 ///
 /// A disabled command stays visible — the user should see that the action exists —
-/// and a checkable one carries the accent. The bar appears only when the edition's
-/// workbenches registered something, so the base app keeps its old layout.
+/// and a checkable one carries the accent. The bar appears whenever the app or a
+/// workbench registered something; the built-ins (`App_Delete`, `App_Move`) mean
+/// even the base app has a bar, with its actions greyed until a selection.
 fn actions_bar(model: &ShellModel, cx: &mut Context<Shell>) -> impl IntoElement {
     let mut bar = div()
         .flex()
@@ -623,13 +717,21 @@ fn tree_panel(model: &ShellModel, cx: &mut Context<Shell>) -> impl IntoElement {
                         .text_color(rgb(MUTED))
                         .child(obj.type_id.clone()),
                 );
-            if model.selected.as_deref() == Some(name.as_str()) {
+            if model.selection.iter().any(|item| item.is(&name)) {
                 row = row.bg(rgb(ACCENT));
             }
-            rows = rows.child(row.on_click(cx.listener(move |this, _ev, _win, cx| {
-                this.select(&name);
-                cx.notify();
-            })));
+            rows = rows.child(row.on_click(cx.listener(
+                move |this, event: &gpui::ClickEvent, _window, cx| {
+                    // Ctrl/Cmd (the secondary modifier) or Shift extends the selection;
+                    // a plain click replaces it.
+                    let modifiers = event.modifiers();
+                    if modifiers.secondary() || modifiers.shift {
+                        this.toggle_select(&name, cx);
+                    } else {
+                        this.select(&name, cx);
+                    }
+                },
+            )));
         }
     }
 
@@ -949,7 +1051,7 @@ mod tests {
         // Select Params so the editor builds one field per editable property.
         cx.update(|_window, cx| {
             shell.update(cx, |shell, cx| {
-                shell.select("Params");
+                shell.select("Params", cx);
                 cx.notify();
             });
         });
@@ -991,6 +1093,64 @@ mod tests {
             .map(|row| row.value.clone())
             .unwrap_or_default();
         assert!(result.contains("50"), "Derived.Result = {result:?}");
+    }
+
+    /// A2: the shell owns the selection, pushes it to `FreeCADGui.Selection`, and a
+    /// multi-selection enables the built-ins. The inspector's Ctrl/Shift-click path
+    /// is `toggle_select`, so this drives the same methods the click handler does.
+    #[gpui::test]
+    fn a_multi_selection_is_pushed_and_enables_the_built_ins(cx: &mut TestAppContext) {
+        let _guard = crate::PYTHON_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let model = Shell::boot().expect("boot shell");
+        let shell = cx.update(|cx| cx.new(|cx| Shell::from_model(model.clone(), cx)));
+
+        // Nothing selected: Delete and Move are visible but disabled.
+        assert!(!command_enabled("App_Delete"));
+        assert!(!command_enabled("App_Move"));
+        assert!(!crate::python::commands().unwrap().is_empty());
+
+        // A plain select replaces; a toggle extends (the inspector's modifier path).
+        shell.update(cx, |shell, cx| {
+            shell.select("Params", cx);
+            shell.toggle_select("Derived", cx);
+        });
+        {
+            let m = model.lock().unwrap();
+            assert_eq!(m.selection.len(), 2, "selection: {:?}", m.selection);
+            assert_eq!(
+                m.selected.as_deref(),
+                Some("Derived"),
+                "the last click is the property editor's subject"
+            );
+            assert!(m.status.contains('2'), "status: {}", m.status);
+        }
+        assert!(
+            command_enabled("App_Delete"),
+            "the snapshot reached the facade"
+        );
+        assert!(command_enabled("App_Move"));
+
+        // Toggling an object off keeps the rest, and the primary follows.
+        shell.update(cx, |shell, cx| shell.toggle_select("Derived", cx));
+        {
+            let m = model.lock().unwrap();
+            assert_eq!(m.selection.len(), 1);
+            assert_eq!(m.selected.as_deref(), Some("Params"));
+        }
+
+        // Clearing empties the facade too, so IsActive flips back.
+        shell.update(cx, |shell, cx| shell.clear_selection(cx));
+        assert!(!command_enabled("App_Delete"));
+        assert!(model.lock().unwrap().selection.is_empty());
+    }
+
+    fn command_enabled(id: &str) -> bool {
+        crate::python::commands()
+            .expect("the command list")
+            .into_iter()
+            .find(|command| command.id == id)
+            .map(|command| command.enabled)
+            .unwrap_or(false)
     }
 
     /// The shell attaches and paints the 3D viewport headlessly. No CPython needed:

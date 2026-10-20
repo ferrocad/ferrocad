@@ -115,6 +115,12 @@ Two generic mechanisms, one document path:
 The shell hosts both from the edition's `Contributions`; it never learns what a height
 or a transform means.
 
+The **app-level** built-ins come for free: `ferrocad_shell` registers `App_Delete` and
+`App_Move`, so every edition (the toy included) has them in the actions bar. Delete
+removes the whole selection as one transaction; Move takes a delta through
+`FreeCADGui.runCommand("App_Move", dx, dy, dz)` until the A3 dialog supplies one. A
+Ctrl/Cmd-click in the inspector builds the multi-selection they act on.
+
 ## Document semantics
 
 - **Creation is one transaction.** `makeSlab` opens `"Create Slab"`; `doc.undo()`

@@ -13,6 +13,7 @@ pub mod commands;
 pub mod contributions;
 pub mod display;
 pub mod python;
+pub mod selection;
 pub mod shell;
 
 /// Zero-copy viewport presentation through gpui's wgpu window renderer.
@@ -34,6 +35,7 @@ use gpui::{
 pub use commands::{CommandInfo, CommandOutcome};
 pub use contributions::{Contributions, GizmoFactory, ManipulatorFactory};
 pub use display::{DisplaySync, StageMesh};
+pub use selection::SelectionItem;
 pub use shell::{Shell, ShellModel};
 
 /// A zero-copy viewport presenter for this build and platform, if one is available.

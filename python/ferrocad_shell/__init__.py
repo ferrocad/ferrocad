@@ -20,9 +20,9 @@ _NAMESPACE: dict = {}
 
 # Beyond the model, the shell asks for the pieces the UI needs: the tessellated
 # shapes to draw (:func:`stage_meshes`), the document edit a manipulator commit
-# produces (:func:`interaction`), and the workbench actions (:func:`commands`,
-# :func:`run_command`). All go through the module hooks or ``FreeCADGui``, so this
-# script names no workbench.
+# produces (:func:`interaction`), the workbench actions (:func:`commands`,
+# :func:`run_command`), and the selection snapshot (:func:`set_selection`). All go
+# through the module hooks or ``FreeCADGui``, so this script names no workbench.
 
 # Property type id -> editor kind. A type absent here is read-only in the pane.
 _EDITABLE_KINDS = {
@@ -367,3 +367,110 @@ def commands() -> str:
 def run_command(name: str) -> str:
     """Invoke a workbench command by id; returns ``{ok, status?, error?, ...}``."""
     return _json(FreeCADGui._run(name))
+
+
+def set_selection(pairs_json: str) -> str:
+    """Replace ``FreeCADGui.Selection`` with the shell's selection.
+
+    The payload is ``[{"object": name, "elements": [...]}, ...]``; the facade
+    snapshot takes ``(name, elements)`` pairs, so the two are translated here. The
+    shell owns the selection; this push is what makes it visible to a command's
+    ``IsActive`` and ``Activated`` (see ``docs/actions-and-tools.md`` §5).
+    """
+    items = json.loads(pairs_json)
+    FreeCADGui.Selection._set(
+        [(item["object"], item.get("elements") or []) for item in items]
+    )
+    return _json({"ok": True})
+
+
+# ---------------------------------------------------------------------------
+# Built-in commands (A2)
+#
+# These are app-level, not workbench-level: they act on any document object and
+# every edition gets them because every edition imports this module. They follow
+# the same contract as a workbench command, and each owns its transaction.
+# ---------------------------------------------------------------------------
+
+
+def _selection() -> list:
+    """The selected document objects (empty when nothing resolves)."""
+    return list(FreeCADGui.Selection.getSelection())
+
+
+class _DeleteCommand:
+    """``App_Delete`` — remove the selected objects as one undo step."""
+
+    def GetResources(self):
+        return {
+            "MenuText": "Delete",
+            "ToolTip": "Delete the selected objects",
+            "Accel": "Del",
+            "Group": "Edit",
+            "CmdType": "ForEdit",
+        }
+
+    def IsActive(self):
+        return FreeCAD.ActiveDocument is not None and bool(_selection())
+
+    def Activated(self):
+        doc = FreeCAD.ActiveDocument
+        objects = _selection()
+        if not objects:
+            return {"status": "nothing selected"}
+        doc.openTransaction("Delete")
+        try:
+            for obj in objects:
+                doc.removeObject(obj.Name)
+            doc.recompute()
+            doc.commitTransaction()
+        except Exception as exc:  # noqa: BLE001 - one transaction, then report
+            doc.abortTransaction()
+            return {"status": f"delete failed: {exc}"}
+        return {"status": f"deleted {len(objects)} object(s)"}
+
+
+class _MoveCommand:
+    """``App_Move`` — translate the selection by ``(dx, dy, dz)``.
+
+    The non-interactive twin of the gizmo. A3 replaces the pending-dialog branch
+    with the shell's non-blocking dialog; until then the command is usable from
+    Python: ``FreeCADGui.runCommand("App_Move", 10, 0, 0)``.
+    """
+
+    def GetResources(self):
+        return {
+            "MenuText": "Move",
+            "ToolTip": "Move the selected objects by a delta",
+            "Accel": "M",
+            "Group": "Edit",
+            "CmdType": "ForEdit",
+        }
+
+    def IsActive(self):
+        return FreeCAD.ActiveDocument is not None and bool(_selection())
+
+    def Activated(self, dx=None, dy=None, dz=None):
+        if dx is None and dy is None and dz is None:
+            return {"status": "Move needs a delta (the dialog arrives with A3)"}
+        doc = FreeCAD.ActiveDocument
+        objects = _selection()
+        if not objects:
+            return {"status": "nothing selected"}
+        delta = FreeCAD.Placement(
+            FreeCAD.Vector(float(dx or 0.0), float(dy or 0.0), float(dz or 0.0))
+        )
+        doc.openTransaction("Move")
+        try:
+            for obj in objects:
+                obj.Placement = delta * obj.Placement
+            doc.recompute()
+            doc.commitTransaction()
+        except Exception as exc:  # noqa: BLE001
+            doc.abortTransaction()
+            return {"status": f"move failed: {exc}"}
+        return {"status": f"moved {len(objects)} object(s)"}
+
+
+FreeCADGui.addCommand("App_Delete", _DeleteCommand())
+FreeCADGui.addCommand("App_Move", _MoveCommand())

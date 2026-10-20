@@ -1,6 +1,6 @@
 # Actions and tools: the workbench command model
 
-Status: design; A0 (registry) and A1 (actions bar) as built (2026-10-20). Companion to
+Status: design; A0–A2 as built (2026-10-20). Companion to
 [`visual-language.md`](visual-language.md) §6
 (the status channel), [`axis-origin-grid.md`](axis-origin-grid.md) (the view requests a
 command can make), [`gizmo-manipulators.md`](gizmo-manipulators.md) (the interactive
@@ -17,9 +17,11 @@ workbench scripts port, and it keeps the shell naming no workbench.
 
 | Piece | State then | Now |
 | --- | --- | --- |
-| `python/FreeCADGui/__init__.py` | a **console stub**: deliberately no `addCommand`, no `Selection`, no `activeDocument` | ✅ registry + read-only `Selection` (§16) |
+| `python/FreeCADGui/__init__.py` | a **console stub**: deliberately no `addCommand`, no `Selection`, no `activeDocument` | ✅ registry + `Selection` snapshot (§16) |
 | `FreeCAD.GuiUp` | `0`, hardcoded in the facade | ✅ `1` in the app, `0` headless (§8, §16) |
 | Command registry in the shell | ▢ none; the console has three hardcoded buttons (`version()`, `objects`, `recompute()`) | ✅ actions bar over the registry (A1) |
+| Multi-selection | ▢ the inspector held one name; nothing pushed it to Python | ✅ click / Ctrl·Shift-click, pushed to the facade (A2) |
+| Built-in commands | ▢ none | ✅ `App_Delete`, `App_Move` (A2) |
 | Menu bar / toolbar / shortcuts | ▢ none (S2) | ◐ the actions bar; menus and `Accel` bindings are A4 |
 | Workbench entry points | module hooks (`register_display_provider`, `register_interaction_provider`) and `ferrocad_shell.add_namespace` | ✅ plus `FreeCADGui.addCommand` |
 | Interactive tools | `ferrocad_stage::Tool` (polyline), `Manipulator`, `TransformGizmo`; contributed in Rust | same |
@@ -192,9 +194,9 @@ tooltip can carry `GetResources()["ToolTip"]`).
 
 ## 5. Selection
 
-`IsActive` needs a selection without a GUI document. The facade keeps a **snapshot**,
-pushed by the shell after every viewport selection (the same place that fills the
-inspector today):
+`IsActive` needs a selection without a GUI document. The shell owns the selection
+and pushes a **snapshot** to the facade after every change — a click in the
+inspector, a pick in the viewport, a delete, or an undo:
 
 ```python
 FreeCADGui.Selection.getSelection()     # [DocumentObject, ...]
@@ -202,9 +204,18 @@ FreeCADGui.Selection.getSelectionEx()   # [(DocumentObject, ["Face6", ...]), ...
 FreeCADGui.Selection.isSelected(obj)    # bool
 ```
 
-Read-only in the first slice. `addSelection` / `removeSelection` / `clearSelection`
-arrive with the multi-selection service (S3); they also make a selection change
-observable, which the shell already has from the viewport.
+The snapshot is **read-only**: `addSelection` / `removeSelection` /
+`clearSelection` are still absent, because selection changes originate in the
+shell (the inspector and the viewport) and a script cannot yet drive them. The
+push is one JSON call, `ferrocad_shell.set_selection(payload)`, where the payload
+is `[{"object": name, "elements": [...]}, ...]`.
+
+A selection is an ordered list; the **last** item is the primary (what the
+property editor shows). A plain click replaces the list; Ctrl/Cmd- or Shift-click
+toggles one object in or out. A viewport pick replaces the list with one object
+plus the sub-elements it hit, so `getSelectionEx` carries `Face6`. Names the
+document no longer has are pruned on every refresh, so a deleted object cannot
+keep a command enabled.
 
 `FreeCADGui.activeDocument()` (a **Gui** document with `getObject(name)` returning a
 view object) is deliberately still absent — it is M5 (`ViewProvider`) work. Commands
@@ -286,8 +297,8 @@ registry.
 
 | Id | Action | Notes |
 | --- | --- | --- |
-| `App_Delete` | remove the selected objects | one transaction; `IsActive` = selection non-empty |
-| `App_Move` | move the selection by `(dx, dy, dz)` | dialog; the non-interactive twin of the gizmo |
+| `App_Delete` ✅ | remove the selected objects | one transaction; `IsActive` = selection non-empty |
+| `App_Move` ◐ | move the selection by `(dx, dy, dz)` | the transaction and placement math are built; the dialog is A3. Until then `runCommand("App_Move", dx, dy, dz)` works, and a bar click reports that it needs a delta |
 | `File_New` / `File_Open` / `File_Save` / `File_SaveAs` / `File_Close` | S2 | base app, not a workbench |
 | `App_Undo` / `App_Redo` | S2 | `IsActive` from `getAvailableUndos` |
 | `Toy_MakeSlab` | create a slab | the toy's `makeSlab`, wrapped as a command |
@@ -338,7 +349,7 @@ using it to auto-wrap transactions is deliberately not done (§3.3).
 | --- | --- | --- |
 | **A0 — registry** ✅ | `FreeCADGui.addCommand/runCommand/listCommands`, resource defaults, duplicate/error isolation; `GuiUp` flag plumbing; Python conformance tests | a registered command runs and returns its value; a raising `Activated`/`IsActive` is isolated; duplicates raise |
 | **A1 — shell bridge + bar** ✅ | `ferrocad_shell.commands()/run_command()`, `ferrocad_gpui::commands`, an actions bar with enabled/checked, rebuild on selection/doc events; `Toy_MakeSlab` registered | headless toy test: the bar lists the toy command, a run creates the object, undo removes it |
-| **A2 — selection + built-ins** | `FreeCADGui.Selection` snapshot (read-only), `App_Delete`, `App_Move` (no dialog yet) | deleting two selected objects is one undo step; `IsActive` flips with the selection |
+| **A2 — selection + built-ins** ✅ | `FreeCADGui.Selection` snapshot pushed by the shell, multi-selection in the inspector (Ctrl/Cmd·Shift toggle), `App_Delete`, `App_Move` (delta via `runCommand`; the dialog is A3) | deleting two selected objects is one undo step; `IsActive` flips with the selection |
 | **A3 — dialogs** | the spec + token protocol, the glass modal, `text/int/float/quantity/bool/enum` fields, validation, cancel; `Toy_MakeSlab` and `App_Move` use it | create via the dialog; cancel creates nothing and leaves no transaction or token; a bad value is rejected in the shell |
 | **A4 — shortcuts + status** | `Accel` bindings, tooltips, `{"status"}` results, the `HoverReport` pass-through line | a shortcut runs the same command as a click; the status bar shows the command's message and the overlay pass-through |
 | **A5 — view/tool requests** | `{"view": …}` applied by the shell (grid toggle, workplane); `Contributions::with_tool` + `{"tool": id}` | a checkable grid command toggles G5's grid; an unknown tool id reports cleanly |
@@ -382,14 +393,14 @@ what makes it able to ask the user something.
 
 - **Python (A0)** — `tests/test_commands.py`: registration, duplicate ids, resource
   defaults, `runCommand` return, `IsActive`/`IsChecked`, error isolation. ✅
-- **Shell (A1–A4)** — headless gpui tests: the bar's entries and states, a run refreshes
-  the model, dialog accept/cancel tokens, the status line. The shell tests need the
-  `ferrocad` extension built into `python/`, as the existing shell tests do. ✅ for
-  `ferrocad_gpui::commands` (the JSON shape); the bar→model→undo path is asserted in
-  `crates/ferrocad_toy/tests/commands.rs`, where a workbench is registered.
-- **Toy e2e (A1–A3)** — extend
-  `the_toy_workbench_creates_represents_manipulates_and_records`: create via
-  `run_command`, delete via `App_Delete`, move via the `App_Move` dialog, and undo each.
+- **Shell (A1–A2)** — headless gpui tests: the bar's entries and states, a run refreshes
+  the model, and a multi-selection is pushed and flips `IsActive`. ✅
+  `crates/ferrocad_gpui/src/shell.rs` has
+  `a_multi_selection_is_pushed_and_enables_the_built_ins`; the bar→model→undo path is
+  asserted in `crates/ferrocad_toy/tests/commands.rs`.
+- **Toy e2e (A1–A2)** — `crates/ferrocad_toy/tests/selection.rs`: push a selection,
+  delete two slabs in one undo step, and move by a delta in one undo step. ✅
+  *(A3 adds the dialog path.)*
 - **Part e2e (A5, later)** — `Part_Box` through the same registry, proving a kernel
   workbench uses the identical contract.
 
@@ -399,17 +410,18 @@ with two undo steps and no terminal.
 
 ---
 
-## 16. As built (A0 + A1, 2026-10-20)
+## 16. As built (A0–A2, 2026-10-20)
 
-The vertical slice is in. It is deliberately small: a workbench can **offer** an
-action, and the shell can **run** it, without the shell naming the workbench.
+The vertical slice is in: a workbench can **offer** an action, the shell can **run**
+it, and a selection reaches both the UI and the command predicates — without the
+shell naming the workbench.
 
 ### Python
 
 | File | What it does |
 | --- | --- |
 | `python/FreeCADGui/__init__.py` | the registry (`addCommand`, `removeCommand`, `listCommands`, `runCommand`); `Command` duck-typing (`Activated` required, `GetResources`/`IsActive`/`IsChecked` optional); per-command error isolation with `_report_once`; the private bridge `_command_list()` / `_run(name)`; the read-only `Selection` snapshot |
-| `python/ferrocad_shell/__init__.py` | `commands()` and `run_command(name)` — the two functions `ferrocad_gpui::python::call_json` calls |
+| `python/ferrocad_shell/__init__.py` | `commands()` and `run_command(name)` — the two functions `ferrocad_gpui::python::call_json` calls; `set_selection(payload)` (the snapshot push); the built-in `App_Delete` and `App_Move` |
 | `python/ferrocad_toy/__init__.py` | `Toy_MakeSlab` (`MenuText` "Create Slab", `ToolTip`, `Accel` "Shift+S", `Group` "Toy", `CmdType` "ForEdit"); `Activated` returns `{"status": "created a slab"}` |
 
 Two shape decisions fell out of the build:
@@ -426,22 +438,33 @@ Two shape decisions fell out of the build:
 | File | What it does |
 | --- | --- |
 | `ferrocad_gpui/src/commands.rs` | `CommandInfo` (id/menu/tooltip/accel/group/cmd_type/enabled/checked + `label()`) and `CommandOutcome` (`ok`/`error`/`status`/`value`); `list()` and `run(id)` |
-| `ferrocad_gpui/src/python.rs` | `GUI: OnceLock<bool>`; `gui()`; `configure(..., gui)`; `FreeCAD.GuiUp = 1` set **before** the app script is imported so import-time workbench code sees it; `commands()` / `run_command(name)` |
-| `ferrocad_gpui/src/shell.rs` | `ShellModel.commands`; `refresh_commands` (after a refresh or a selection, never per frame); `run_command` (run → refresh model → re-sync stage → status line → console line); `actions_bar` above the main columns |
+| `ferrocad_gpui/src/selection.rs` | `SelectionItem` (`object` + `elements`, the last item is primary); `push()` — the one call that makes the UI selection visible to Python |
+| `ferrocad_gpui/src/python.rs` | `GUI: OnceLock<bool>`; `gui()`; `configure(..., gui)`; `FreeCAD.GuiUp = 1` set **before** the app script is imported so import-time workbench code sees it; `commands()` / `run_command(name)` / `set_selection(items)` |
+| `ferrocad_gpui/src/shell.rs` | `ShellModel.commands` and `.selection`; `refresh_commands` (after a refresh or a selection, never per frame); `run_command` (run → refresh model → re-sync stage → status line → console line); `replace_selection` / `toggle_select` / `clear_selection` (push, then re-list); `actions_bar` above the main columns |
 
-The bar is rendered only when the registry is non-empty, so the base app keeps its old
-layout. A disabled command **stays visible** (its label in the muted token) — a user
-should see that the action exists and why it is unavailable. A checked command carries
-the accent background. There is no tooltip: `bite-gpui` 1.21 has no `.tooltip()` API,
+The bar appears whenever the registry is non-empty. Because `App_Delete`/`App_Move`
+are registered by the base app script, **every** edition now has a bar; they are
+greyed until something is selected. A disabled command stays visible (its label in
+the muted token) — the user should see that the action exists. A checked command
+carries the accent. There is no tooltip: `bite-gpui` 1.21 has no `.tooltip()` API,
 so `CommandInfo.tooltip` is stored for A4 and unused today.
+
+The selection is an ordered list. A plain click replaces it, Ctrl/Cmd- or
+Shift-click toggles one object, and a viewport pick replaces it with the object plus
+the sub-elements it hit. The last item is the primary — the property editor's
+subject, which is why a multi-selection still edits its last object. `refresh`
+prunes names the document no longer has (a delete, or an undo of a creation) and
+pushes the pruned set, so `IsActive` cannot latch onto a dead object.
 
 ### Tests
 
 | Test | Asserts |
 | --- | --- |
 | `tests/test_commands.py` (7) | register/list/run, resource defaults, duplicate id raises, a command without `Activated` raises, a raising `Activated` is isolated, a raising `IsActive` disables only that command, an unknown id raises |
+| `tests/test_selection.py` (7) | the snapshot resolves objects and `Face6` sub-elements; a deleted name drops out; `IsActive` flips with the snapshot; two selected objects delete in one undo step; `App_Move` translates every selected object and undoes as one step |
 | `crates/ferrocad_toy/tests/commands.rs` | `Toy_MakeSlab` is listed with its label/group/type and enabled; running it takes the slab count 1 → 2; one undo removes it; an unknown id returns `ok: false` |
-| `crates/ferrocad_gpui/src/commands.rs` (3) | the JSON shape and its defaults (`MenuText` wins, absent fields are empty/false) |
+| `crates/ferrocad_toy/tests/selection.rs` | the shell bridge's push flips `App_Delete`/`App_Move` enabled; two slabs delete in one undo step; a delta moves the slab and one undo restores it |
+| `ferrocad_gpui` unit tests | the JSON shapes (`CommandInfo`, `SelectionItem`); `a_multi_selection_is_pushed_and_enables_the_built_ins` drives `select`/`toggle_select`/`clear_selection` and asserts the model and the registry |
 
 ### Known gaps
 
@@ -450,7 +473,12 @@ so `CommandInfo.tooltip` is stored for A4 and unused today.
   showing the reason needs a FerrroCAD extension (or the A4 status pass-through).
 - **The bar is rebuilt, not diffed.** That is fine at toy scale; a large Part registry
   may want a keyed list (the same retained-vs-rebuild question as the inspector).
-- **No default commands yet.** `App_Delete`/`App_Move` are A2; the base app's
-  File/Edit menu is S2.
-- **`Selection` is read-only and empty** until the shell pushes a snapshot (§5); the
-  selection service is S3.
+- **`App_Move` has no dialog yet.** Its placement math and transaction are built, so
+  `FreeCADGui.runCommand("App_Move", dx, dy, dz)` works, but the bar's click reports
+  that it needs a delta. A3 supplies the non-blocking dialog.
+- **Selection changes cannot be driven from Python.** `FreeCADGui.Selection` is a
+  snapshot and `addSelection`/`clearSelection` are absent; a script that wants to
+  change the selection must wait for that API (S3), because the shell owns the state.
+- **The viewport pick is single.** Ctrl-click in the inspector builds a
+  multi-selection; extending one from the 3D view needs the pick to carry modifiers
+  and is left for S3.

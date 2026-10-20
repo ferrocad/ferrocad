@@ -972,6 +972,65 @@ impl<V: InventorView> InventorViewport<V> {
         self.stage_dirty = true;
     }
 
+    /// Frame the stage: move the eye along the current view direction so the document's
+    /// bounding sphere around the pivot fits the view. Returns whether the stage has any
+    /// geometry.
+    ///
+    /// A host calls this once, after it has built the stage, so a document whose scene is
+    /// much larger or smaller than the default camera is not opened from inside it. The
+    /// pivot stays the world origin (the camera's orbit centre) and the clip window
+    /// follows the new distance.
+    pub fn frame_stage(&mut self) -> bool {
+        let radius = self.stage.items().iter().fold(0.0f64, |radius, item| {
+            let matrix = item.placement().to_matrix();
+            item.positions().iter().fold(radius, |radius, position| {
+                let world = matrix.transform(&Vector3::new(
+                    f64::from(position[0]),
+                    f64::from(position[1]),
+                    f64::from(position[2]),
+                ));
+                radius.max(world.length())
+            })
+        });
+        if radius <= 1e-9 {
+            return false;
+        }
+
+        match &mut self.camera.projection {
+            Projection::Perspective { fov_y, .. } => {
+                let distance = radius / ((*fov_y) / 2.0).sin().max(1e-6) * 1.15;
+                self.set_camera_distance(distance);
+            }
+            Projection::Orthographic { extent, .. } => {
+                *extent = radius * 1.15;
+            }
+            Projection::Matrix(_) => return false,
+        }
+        self.camera.fit_clip();
+        self.recompile();
+        true
+    }
+
+    /// Put the eye `distance` from the pivot along the current view direction, keeping
+    /// the orientation. The view matrix's translation is `-R·eye`, so scaling it scales
+    /// the distance.
+    fn set_camera_distance(&mut self, distance: f64) {
+        let base = Vector3::new(
+            self.camera.view.m[3],
+            self.camera.view.m[7],
+            self.camera.view.m[11],
+        );
+        let current = base.length();
+        if current <= 1e-9 || distance <= 1e-9 {
+            return;
+        }
+        self.camera.view = Placement::new(
+            base.scale(distance / current),
+            Rotation::from_matrix(&self.camera.view),
+        )
+        .to_matrix();
+    }
+
     /// Replace the camera and recompile (the device-pixel ratio lives in the camera).
     pub fn set_camera(&mut self, camera: Camera) {
         self.camera = camera;
@@ -1522,6 +1581,9 @@ impl<V: InventorView> InventorViewport<V> {
         self.camera.view = next;
         // Perspective zoom is the eye distance; an orthographic view zooms by its extent.
         self.camera.zoom_projection(factor);
+        // Keep the clip window around the new distance: a fixed near/far would cut the
+        // scene off when zoomed in (near) or out (far).
+        self.camera.fit_clip();
         self.recompile();
         true
     }
@@ -2135,12 +2197,8 @@ impl<V: InventorView> InventorViewport<V> {
             .map(|face| face.frame.clone());
 
         let world_plane = Workplane::world();
-        let (minor, major) = grid::effective_steps(
-            &self.camera,
-            &world_plane,
-            self.grid_minor,
-            self.grid_major,
-        );
+        let (minor, major) =
+            grid::effective_steps(&self.camera, &world_plane, self.grid_minor, self.grid_major);
         let radius = self.grid_radius.map_or_else(
             || GridSpec::radius_for(&self.camera),
             |radius| radius.clamp(grid::RADIUS_RANGE.0, grid::RADIUS_RANGE.1),
@@ -2165,9 +2223,7 @@ impl<V: InventorView> InventorViewport<V> {
                 (spec, style, grid_on)
             })
         });
-        let hover_layer = hover
-            .as_ref()
-            .map(|frame| local_grid(&self.camera, frame));
+        let hover_layer = hover.as_ref().map(|frame| local_grid(&self.camera, frame));
         // The origin node sits on the active workplane, or under the world triad.
         let origin_plane = active
             .as_ref()
@@ -2186,12 +2242,14 @@ impl<V: InventorView> InventorViewport<V> {
             ground: grid_on,
             triad: cross,
         };
-        let active = active_layer.as_ref().map(|(spec, style, ground)| LayerSpec {
-            spec,
-            style,
-            ground: *ground,
-            triad: cross,
-        });
+        let active = active_layer
+            .as_ref()
+            .map(|(spec, style, ground)| LayerSpec {
+                spec,
+                style,
+                ground: *ground,
+                triad: cross,
+            });
         let hover = hover_layer.as_ref().map(|(spec, style)| LayerSpec {
             spec,
             style,
@@ -2295,11 +2353,26 @@ impl<V: InventorView> InventorViewport<V> {
             return false;
         };
         let plane = &frame.plane;
-        // The view basis: `U` right, `V` up, `N` toward the eye (view-space +Z).
+        let n = plane.n;
+        // Roll-free: the screen up is the world vertical (the view model's +Y, the axis
+        // the navicube canonicalises on) projected into the plane. Looking down a face
+        // whose normal is nearly the world vertical has no such up, so fall back to the
+        // plane's own `V`. A rolled camera could not be represented by the navicube.
+        let world_up = Vector3::new(0.0, 1.0, 0.0);
+        let mut up = world_up.sub(&n.scale(world_up.dot(&n)));
+        if up.length() < 1e-6 {
+            up = plane.v.sub(&n.scale(plane.v.dot(&n)));
+        }
+        if up.length() < 1e-6 {
+            up = plane.u;
+        }
+        let up = up.normalize();
+        let right = up.cross(&n).normalize();
+        // The view basis: `right`, `up`, and `N` toward the eye (view-space +Z).
         let view = Matrix4 {
             m: [
-                plane.u.x, plane.u.y, plane.u.z, 0.0, plane.v.x, plane.v.y, plane.v.z, 0.0,
-                plane.n.x, plane.n.y, plane.n.z, 0.0, 0.0, 0.0, 0.0, 1.0,
+                right.x, right.y, right.z, 0.0, up.x, up.y, up.z, 0.0, n.x, n.y, n.z, 0.0, 0.0,
+                0.0, 0.0, 1.0,
             ],
         };
         let target = Rotation::from_matrix(&view);
@@ -2333,10 +2406,10 @@ impl<V: InventorView> InventorViewport<V> {
                 let device = project_device(&self.camera, tip)?;
                 Some(AxisLabel {
                     text,
-                    position: self.camera.viewport.to_logical([
-                        device[0].round() as i32,
-                        device[1].round() as i32,
-                    ]),
+                    position: self
+                        .camera
+                        .viewport
+                        .to_logical([device[0].round() as i32, device[1].round() as i32]),
                     color,
                 })
             })
@@ -5148,6 +5221,83 @@ mod tests {
     }
 
     #[test]
+    fn zooming_keeps_the_pivot_inside_the_clip_window() {
+        let camera = Camera {
+            view: Placement::new(Vector3::new(0.0, 0.0, -4.0), Rotation::identity()).to_matrix(),
+            projection: Projection::Perspective {
+                fov_y: 45.0_f64.to_radians(),
+                near: 0.1,
+                far: 100.0,
+            },
+            viewport: ferrocad_graphics::Viewport::new([100, 100], 1.0),
+        };
+        let mut view = InventorViewport::new(fake(ImageData::default()), camera, empty_scene());
+        view.set_grid(true);
+        let clip = |view: &InventorViewport<FakeView>| {
+            let Projection::Perspective { near, far, .. } = view.camera().projection else {
+                panic!("a perspective camera")
+            };
+            (view.camera().eye_distance(), near, far)
+        };
+
+        // Zoom right in: the near plane follows instead of clipping at its old value.
+        for _ in 0..20 {
+            view.handle_scroll(3.0);
+        }
+        let (distance, near, far) = clip(&view);
+        assert!(near < distance, "near {near} vs distance {distance}");
+        assert!(far > distance, "far {far} vs distance {distance}");
+
+        // And right out: the far plane follows instead of clipping the scene away.
+        for _ in 0..60 {
+            view.handle_scroll(-3.0);
+        }
+        let (distance, near, far) = clip(&view);
+        assert!(near < distance && far > distance, "{near}..{far} at {distance}");
+    }
+
+    #[test]
+    fn framing_a_large_stage_pulls_the_camera_back() {
+        let camera = Camera {
+            view: Placement::new(Vector3::new(0.0, 0.0, -4.0), Rotation::identity()).to_matrix(),
+            projection: Projection::Perspective {
+                fov_y: 45.0_f64.to_radians(),
+                near: 0.1,
+                far: 100.0,
+            },
+            viewport: ferrocad_graphics::Viewport::new([100, 100], 1.0),
+        };
+        let mut view = InventorViewport::new(fake(ImageData::default()), camera, empty_scene());
+
+        // The toy's slab: 40 x 40 x 20, base at z = 0.
+        let mut stage = ferrocad_stage::Stage::new();
+        stage.add_item(ferrocad_stage::ShapeItem::new(1).with_shape(
+            vec![
+                [-20.0, -20.0, 0.0],
+                [20.0, -20.0, 0.0],
+                [20.0, 20.0, 0.0],
+                [-20.0, 20.0, 0.0],
+                [-20.0, -20.0, 20.0],
+                [20.0, -20.0, 20.0],
+                [20.0, 20.0, 20.0],
+                [-20.0, 20.0, 20.0],
+            ],
+            Vec::new(),
+            vec![0, 1, 2, 0, 2, 3],
+            Vec::new(),
+        ));
+        view.set_stage(stage);
+
+        assert!(view.frame_stage());
+        let distance = view.camera().eye_distance();
+        assert!(distance > 34.0, "outside the bounding sphere: {distance}");
+        let Projection::Perspective { near, far, .. } = view.camera().projection else {
+            panic!("a perspective camera")
+        };
+        assert!(near < distance && far > distance, "{near}..{far}");
+    }
+
+    #[test]
     fn the_axis_cross_is_independent_of_the_grid() {
         let mut viewport = grid_view();
         assert!(viewport.axis_cross(), "on by default, as upstream's is");
@@ -5589,6 +5739,9 @@ mod tests {
             (in_view.z - 1.0).abs() < 1e-6 && in_view.x.abs() < 1e-6 && in_view.y.abs() < 1e-6,
             "the normal points at the eye: {in_view:?}"
         );
+        // And the view is roll-free, so the navicube can represent it.
+        let up = target.transform(&Vector3::new(0.0, 1.0, 0.0));
+        assert!(up.x.abs() < 1e-9, "the horizon is level: {up:?}");
     }
 
     #[test]

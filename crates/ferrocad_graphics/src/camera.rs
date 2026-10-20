@@ -159,6 +159,52 @@ impl Camera {
         }
         false
     }
+
+    /// Recompute the clip planes from the camera's current distance (and, for an
+    /// orthographic camera, its extent), so zooming in or out cannot clip the scene.
+    ///
+    /// The zoom paths move the eye (perspective) or scale the extent (orthographic) but
+    /// keep the projection's `near`/`far`; a fixed `0.1 .. 100` window then cuts the near
+    /// face off when you zoom in and the far side away when you zoom out. The rule here is
+    /// relative to `d = eye_distance`:
+    ///
+    /// - perspective: `near = d / 1000`, `far = d * 1000`, with a `1e-4` floor on `near`;
+    /// - orthographic: the eye is held at `d`, so the window spans `d ± 4·extent` (a
+    ///   parallel camera may legitimately see geometry behind its eye, so `near` can be
+    ///   negative).
+    ///
+    /// Returns whether either plane moved. A host-supplied [`Projection::Matrix`] is left
+    /// alone (its clip planes are the host's business).
+    pub fn fit_clip(&mut self) -> bool {
+        let distance = self.eye_distance().max(1e-6);
+        let (near, far) = match self.projection {
+            Projection::Perspective { .. } => {
+                let near = (distance / 1_000.0).max(1e-4);
+                (near, (distance * 1_000.0).max(near * 10.0))
+            }
+            Projection::Orthographic { extent, .. } => {
+                let reach = extent.abs().max(1e-3) * 4.0;
+                (distance - reach, distance + reach)
+            }
+            Projection::Matrix(_) => return false,
+        };
+        match &mut self.projection {
+            Projection::Perspective {
+                near: n, far: f, ..
+            }
+            | Projection::Orthographic {
+                near: n, far: f, ..
+            } => {
+                if (*n - near).abs() < 1e-12 && (*f - far).abs() < 1e-12 {
+                    return false;
+                }
+                *n = near;
+                *f = far;
+                true
+            }
+            Projection::Matrix(_) => false,
+        }
+    }
 }
 
 /// A symmetric perspective projection with clip depth in `[0, 1]`.
@@ -194,6 +240,61 @@ mod tests {
             projection,
             viewport: Viewport::new(size, 1.0),
         }
+    }
+
+    #[test]
+    fn fitting_the_clip_follows_the_zoom() {
+        use ferrocad_types::{Placement, Rotation, Vector3};
+
+        let at = |distance: f64| Camera {
+            view: Placement::new(Vector3::new(0.0, 0.0, -distance), Rotation::identity())
+                .to_matrix(),
+            projection: Projection::Perspective {
+                fov_y: 45.0_f64.to_radians(),
+                near: 0.1,
+                far: 100.0,
+            },
+            viewport: Viewport::new([100, 100], 1.0),
+        };
+
+        // At the default distance the window is generous in both directions.
+        let mut camera = at(4.0);
+        assert!(camera.fit_clip());
+        let Projection::Perspective { near, far, .. } = camera.projection else {
+            panic!("perspective")
+        };
+        assert!(near < 0.01 && far > 400.0, "{near}..{far}");
+        assert!(!camera.fit_clip(), "a second call is a no-op");
+
+        // Zoomed right in, the near plane follows instead of clipping at 0.1.
+        let mut camera = at(0.01);
+        camera.fit_clip();
+        let Projection::Perspective { near, far, .. } = camera.projection else {
+            panic!("perspective")
+        };
+        assert!(near <= 1e-4 + 1e-12 && near < 0.01, "near {near}");
+        assert!(far > 0.01, "far {far}");
+
+        // Zoomed far out, the far plane follows instead of clipping at 100.
+        let mut camera = at(5_000.0);
+        camera.fit_clip();
+        let Projection::Perspective { near, far, .. } = camera.projection else {
+            panic!("perspective")
+        };
+        assert!(near < 5_000.0 && far > 5_000.0, "{near}..{far}");
+
+        // Orthographic: the eye is held, so the window spans around it (behind too).
+        let mut camera = at(4.0);
+        camera.projection = Projection::Orthographic {
+            extent: 2.0,
+            near: 0.1,
+            far: 100.0,
+        };
+        camera.fit_clip();
+        let Projection::Orthographic { near, far, .. } = camera.projection else {
+            panic!("orthographic")
+        };
+        assert!(near < 0.0 && near < 4.0 && far > 4.0, "{near}..{far}");
     }
 
     #[test]

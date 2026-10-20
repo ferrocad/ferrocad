@@ -259,6 +259,9 @@ impl Shell {
             .with_navicube(navicube);
         if let Some(stage) = stage {
             viewport.set_stage(stage);
+            // A document's scene is usually not the sample camera's scale: frame it once
+            // so the viewport does not open from inside the model.
+            viewport.frame_stage();
         }
         // The view state is the source of truth: a grid toggled before the viewport
         // existed is applied now, with its steps.

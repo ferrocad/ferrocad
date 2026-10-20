@@ -547,21 +547,25 @@ pub fn yaw_view(main: &Camera, angle: f64) -> Matrix4 {
 }
 
 /// The camera **view matrix** orbited by a drag of `delta` logical pixels.
+///
+/// Both rotations are **world** rotations composed on the right, so the camera orbits
+/// its pivot without ever rolling: the pitch is about the current screen-right axis and
+/// the yaw about the world vertical. A yaw composed on the wrong side (or a pitch about
+/// a fixed world axis) tilts the horizon, which the navicube cannot represent — it
+/// rebuilds a roll-free rotation — and the two drift apart.
 pub fn drag_view(main: &Camera, delta: [f32; 2]) -> Matrix4 {
     const RADIANS_PER_PIXEL: f64 = 0.012;
+    // The screen-right axis in world space: the view matrix's first row.
+    let right = Vector3::new(main.view.m[0], main.view.m[1], main.view.m[2]);
+    let pitch = Rotation::from_axis_angle(&right, f64::from(delta[1]) * RADIANS_PER_PIXEL);
     let yaw = Rotation::from_axis_angle(
         &Vector3::new(0.0, 1.0, 0.0),
         f64::from(delta[0]) * RADIANS_PER_PIXEL,
     );
-    let pitch = Rotation::from_axis_angle(
-        &Vector3::new(1.0, 0.0, 0.0),
-        f64::from(delta[1]) * RADIANS_PER_PIXEL,
-    );
     let base = Vector3::new(main.view.m[3], main.view.m[7], main.view.m[11]);
-    // Pitch * yaw (not yaw * pitch): the vertical axis is applied last, so a diagonal
-    // drag does not roll the horizon. The previous order tilted the world-up vector on
-    // screen whenever both deltas were non-zero, which made the navicube tumble.
-    let rotation = pitch.multiply(&yaw).multiply(&Rotation::from_matrix(&main.view));
+    let rotation = Rotation::from_matrix(&main.view)
+        .multiply(&pitch)
+        .multiply(&yaw);
     Placement::new(base, rotation).to_matrix()
 }
 
@@ -1077,6 +1081,32 @@ mod tests {
         );
         // The studio light sits above, so the top facet reads brighter than the front.
         assert!(colour_of(&cube, Piece::TOP)[3] > front[3]);
+    }
+
+    #[test]
+    fn an_orbit_drag_never_rolls_the_horizon() {
+        // A camera already yawed and pitched: a drag must keep world up in the screen's
+        // vertical plane, or the navicube (which rebuilds a roll-free rotation) desyncs.
+        let mut camera = Camera {
+            view: Placement::new(Vector3::new(0.0, 0.0, -4.0), view_rotation(0.7, 0.5)).to_matrix(),
+            ..Camera::identity()
+        };
+        for delta in [[0.0f32, -40.0], [60.0, 0.0], [35.0, -25.0], [-80.0, 40.0]] {
+            let view = drag_view(&camera, delta);
+            let rotation = Rotation::from_matrix(&view).to_matrix();
+            let up = rotation.transform(&Vector3::new(0.0, 1.0, 0.0));
+            assert!(up.x.abs() < 1e-9, "the horizon rolled on {delta:?}: {up:?}");
+            camera.view = view;
+        }
+
+        // The cube sees exactly the camera's canonical rotation: no lag, no desync.
+        let (azimuth, elevation) = crate::inventor_view::camera_angles(&camera);
+        let canonical = view_rotation(azimuth.to_radians(), elevation.to_radians());
+        let mut cube = NaviCube::new(viewport());
+        cube.sync(&camera);
+        let synced = cube.synced.expect("a synced rotation");
+        let lag = synced.inverse().multiply(&canonical).angle().abs();
+        assert!(lag < 1e-9, "the cube lags the camera by {lag} rad");
     }
 
     #[test]

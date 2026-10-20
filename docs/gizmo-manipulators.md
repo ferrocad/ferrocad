@@ -230,6 +230,9 @@ stateDiagram-v2
 
 ## 8. Visual tokens and the 1.5 px stroke
 
+The token set is shared with the rest of the UI; [`visual-language.md`](visual-language.md)
+is the authority, and the table below is the subset this manipulator uses.
+
 | Element | Token |
 | --- | --- |
 | Active axis / ring | `#38BDF8` |

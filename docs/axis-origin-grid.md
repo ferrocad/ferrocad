@@ -93,7 +93,9 @@ global anchor.
 
 All colours below are **sRGB hex + alpha**; the renderer consumes **linear** RGBA, so a
 token is stored linear at definition time (the existing `gizmo::ACTIVE_COLOR`
-(`#38BDF8`) and `gizmo::INACTIVE_COLOR` (`#94A3B8`) already match two of these).
+(`#38BDF8`) and `gizmo::INACTIVE_COLOR` (`#94A3B8`) already match two of these). The
+full token set, type scale, stroke rules and state model are in
+[`visual-language.md`](visual-language.md).
 
 ### 3.1 World origin triad
 

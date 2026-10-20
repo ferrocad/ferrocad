@@ -241,6 +241,9 @@ Each region is placed from two unit axes `x` (in-plane) and `z` (outward normal)
 
 ## 5. Appearance: roles and theming
 
+The role layer below is the cube's own; the **token values** it resolves to come from
+[`visual-language.md`](visual-language.md), which is the single source for the UI palette.
+
 A producer does not choose colours; it tags each piece with a **semantic role** and a
 **theme** assigns the appearance. The draw primitives already carry colour, and geometry
 carries line/edge width, so theming is a *higher-level assignment* of those attributes —

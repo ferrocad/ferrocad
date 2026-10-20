@@ -516,7 +516,7 @@ pub fn home_orientation() -> Rotation {
 
 /// The camera's compass bearing: the eye direction's angle in the horizontal **XZ** plane,
 /// measured CCW from +X, in radians. The ring's fixed labels map `+X` to east (0),
-/// `+Z` to north (π/2), `−X` to west (π) and `−Z` to south (3π/2).
+/// `+Z` to south (π/2), `−X` to west (π) and `−Z` to north (3π/2).
 pub(crate) fn compass_angle(orientation: &Rotation) -> f64 {
     let eye = orientation
         .inverse()
@@ -533,10 +533,14 @@ pub(crate) fn compass_angle(orientation: &Rotation) -> f64 {
 
 /// The fixed compass labels, `(letter, screen angle)` — north at the top, east right,
 /// south bottom, west left.
+///
+/// North is `−Z`: the top view looks down `+Y` with `−Z` screen-up, so this puts `N` at
+/// the top of the turntable in the canonical top view (and the heading marker, which
+/// follows the eye, on the camera's side — south in a front view).
 pub(crate) const COMPASS_LABELS: [(char, f64); 4] = [
-    ('N', std::f64::consts::FRAC_PI_2),
+    ('N', -std::f64::consts::FRAC_PI_2),
     ('E', 0.0),
-    ('S', -std::f64::consts::FRAC_PI_2),
+    ('S', std::f64::consts::FRAC_PI_2),
     ('W', std::f64::consts::PI),
 ];
 
@@ -837,7 +841,7 @@ mod tests {
 
     #[test]
     fn the_compass_angle_follows_the_eye_in_xz() {
-        // Identity: the eye is +Z, which the ring calls north (π/2).
+        // Identity: the eye is +Z, which the ring calls south (π/2).
         assert!((compass_angle(&Rotation::identity()) - std::f64::consts::FRAC_PI_2).abs() < 1e-9);
         // A view yawed by −90° puts the eye on +X (east, angle 0).
         let east = Rotation::from_axis_angle(

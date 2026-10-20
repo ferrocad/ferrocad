@@ -2943,7 +2943,7 @@ mod tests {
         assert!(view.ring_drag.is_some());
         assert!(view.orbit_drag.is_none());
 
-        // A quarter turn clockwise around the plane (N -> E) moves the azimuth by −90°.
+        // A quarter turn clockwise around the plane (S -> E) moves the azimuth by −90°.
         assert!(view.drag_move(end));
         let (azimuth, elevation) = camera_angles(view.camera());
         assert!(

@@ -812,12 +812,12 @@ mod tests {
     fn compass_labels_fade_on_the_far_side_and_are_culled_when_occluded() {
         let mut cube = NaviCube::new(viewport());
         cube.sync(&Camera::identity());
-        // Looking down −Z the ground ring is edge-on: S projects at the ring's y offset,
+        // Looking down −Z the ground ring is edge-on: N projects at the ring's y offset,
         // behind the cube, so it is culled. The face letters are 3D stroke geometry now,
-        // so N/E/W are the only screen text.
+        // so E/S/W are the only screen text.
         let mut text: Vec<char> = cube.labels().iter().map(|label| label.text).collect();
         text.sort_unstable();
-        assert_eq!(text, vec!['E', 'N', 'W'], "the far S is culled");
+        assert_eq!(text, vec!['E', 'S', 'W'], "the far N is culled");
 
         // From the top the whole ring is far, so every letter fades — but all four stay
         // outside the cube's silhouette (1.38 > 0.707), so none is culled.
@@ -837,7 +837,7 @@ mod tests {
             "far-side letters fade so they cannot stamp over a face"
         );
 
-        // A 45° elevated view projects the far S letter inside the cube's silhouette; it
+        // A 45° elevated view projects the far N letter inside the cube's silhouette; it
         // is culled rather than drawn over the front faces. The survivors sit outside the
         // cube's projected corner radius (0.707 in cube space).
         let camera = Camera {
@@ -859,7 +859,7 @@ mod tests {
         let labels = cube.labels();
         let mut text: Vec<char> = labels.iter().map(|label| label.text).collect();
         text.sort_unstable();
-        assert_eq!(text, vec!['E', 'N', 'W'], "S is hidden behind the cube");
+        assert_eq!(text, vec!['E', 'S', 'W'], "N is hidden behind the cube");
         let [left, top, right, bottom] = cube.logical_rect();
         let [cx, cy] = [(left + right) / 2.0, (top + bottom) / 2.0];
         let scale = (right - left) / (2.0 * model::ORTHO_EXTENT as f32);
@@ -872,6 +872,39 @@ mod tests {
                 label.text
             );
         }
+    }
+
+    #[test]
+    fn north_is_at_the_top_of_the_compass() {
+        // The top view looks down +Y with −Z screen-up, so the compass must read N at the
+        // top, S at the bottom, E right and W left.
+        let top = Camera {
+            view: Placement::new(
+                Vector3::new(0.0, 0.0, -4.0),
+                Rotation::from_vectors(Vector3::new(0.0, 1.0, 0.0), Vector3::new(0.0, 0.0, 1.0)),
+            )
+            .to_matrix(),
+            ..Camera::identity()
+        };
+        let mut cube = NaviCube::new(viewport());
+        cube.sync(&top);
+        let labels = cube.labels();
+        let letter = |text: char| {
+            labels
+                .iter()
+                .find(|label| label.text == text)
+                .unwrap_or_else(|| panic!("{text} is on screen"))
+                .position
+        };
+        let (north, south, east, west) = (letter('N'), letter('S'), letter('E'), letter('W'));
+        assert!(
+            north[1] < south[1],
+            "north sits above south: {north:?} vs {south:?}"
+        );
+        assert!(
+            east[0] > west[0],
+            "east sits right of west: {east:?} vs {west:?}"
+        );
     }
 
     #[test]

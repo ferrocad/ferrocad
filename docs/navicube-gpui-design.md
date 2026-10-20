@@ -272,8 +272,9 @@ D3/D4 make it an instrument rather than a widget. D5 is polish.
   cardinals), fixed `N/E/S/W` glyph labels at radius `1.18`, and a filled diamond
   **heading marker** at the camera's azimuth. Emitted by the inventor producer after the
   cube as one line packet (pick id 27), four label packets and one triangle packet.
-- **Compass semantics.** The rose is screen-fixed: E = azimuth 0 (+X), N = 90 (+Z, the
-  default front view), W = 180, S = 270 — consistent with the Y-up `AZ` readout.
+- **Compass semantics.** E = azimuth 0 (+X), S = 90 (+Z), W = 180, N = 270 (−Z),
+  consistent with the Y-up `AZ` readout. North is `−Z` because the canonical top view
+  looks down `+Y` with `−Z` screen-up, so N reads at the top of the turntable.
   `compass_angle` derives the marker from the view rotation, so the controller carries no
   extra state.
 - **Scrub.** `NaviCube::{ring_hit, ring_angle}` test an annulus in device pixels (pieces

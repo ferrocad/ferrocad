@@ -201,8 +201,9 @@ remains for the chrome's Home.
 **D3 — compass ring (2026-10-20).** The widget grew to 132×132 (ortho half-extent 1.3) and
 a **screen-fixed compass ring** now surrounds the cube: a 64-segment circle, 30° ticks,
 `N/E/S/W` labels and a diamond heading marker at the camera's azimuth. `compass_angle`
-derives the marker from the view rotation with the Y-up convention (E = 0/+X, N = 90/+Z,
-W = 180, S = 270); the controller keeps no extra state. `NaviCube::{ring_hit,
+derives the marker from the view rotation with the Y-up convention (E = 0/+X, S = 90/+Z,
+W = 180, N = 270/−Z — north is `−Z` so the canonical top view reads N at the top); the
+controller keeps no extra state. `NaviCube::{ring_hit,
 ring_angle}` test the annulus in device pixels (pieces win where their pick targets
 overlap). A press starts a scrub; `drag_move` applies `navicube::yaw_view` by the pointer
 angle delta, a view-space yaw that leaves the horizon level. Releasing within 10° of a

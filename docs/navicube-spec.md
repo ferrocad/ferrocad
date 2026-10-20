@@ -201,8 +201,9 @@ rotating subtree:
 - a filled in-plane diamond heading marker (half 0.06) at the camera's compass angle.
 
 The view rotation projects it into a flat line at elevation 0 and an ellipse as the camera
-tilts. **E** = azimuth 0 (+X), **N** = 90 (+Z), **W** = 180, **S** = 270; the marker angle
-is `compass_angle(rotation)`. All packets share `RING_PICK_ID` = 27.
+tilts. **E** = azimuth 0 (+X), **S** = 90 (+Z), **W** = 180, **N** = 270 (−Z); the marker
+angle is `compass_angle(rotation)`. North is `−Z` so that the canonical top view (down
+`+Y`, `−Z` screen-up) reads N at the top. All packets share `RING_PICK_ID` = 27.
 
 The rim band and loops are split at build time by view-space depth into a **far** half
 (drawn before the cube) and a **near** half (drawn after it). The far half fades to

@@ -237,7 +237,8 @@ pub struct HoverReport {
 
 The viewport already knows both (its pick and its manipulator/gizmo hit tests); the
 shell renders it in the status line. This is also the natural feed for the actions/tool
-registry's status text, so it is designed here and wired there.
+registry's status text ([`actions-and-tools.md`](actions-and-tools.md)), so it is
+designed here and wired there.
 
 ---
 

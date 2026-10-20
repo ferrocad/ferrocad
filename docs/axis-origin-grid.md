@@ -302,7 +302,7 @@ the visual work can use it.
 | **G2 — world grid + triad** | `ferrocad_stage::grid` producer and triad builder; the viewport draws them; labels; depth; pick-through | a viewport test: the queue gains `Points`/`Lines` packets with `PickId(0)`; a click over a dot still selects the object behind it |
 | **G3 — face workplane** | `SelectionRef` → `WorkplaneKind::Face`; hover blooms the face grid; activation/dimming; bounded extent; `depth_bias` | hovering a box face emits a local grid packet whose basis matches the face normal; activating it changes the snap plane; `Esc` clears |
 | **G4 — snap feedback** | aurora, projection rays, `ΔU`/`ΔV` pill; origin proximity; feature snaps | dragging across the workplane shows an aurora at major nodes, rays to U/V, and the pill's numbers match `Snap.local` |
-| **G5 — chrome + policy** | grid on/off and step preferences, the workplane view command, ring-heading sync; the toolbar toggle from the actions slice | a preference change re-emits the grid without a restart; `View → Workplane` looks down `n`; the ring follows the active heading |
+| **G5 — chrome + policy** | grid on/off and step preferences, the workplane view command, ring-heading sync; the toolbar toggle from [`actions-and-tools.md`](actions-and-tools.md) | a preference change re-emits the grid without a restart; `View → Workplane` looks down `n`; the ring follows the active heading |
 
 ---
 

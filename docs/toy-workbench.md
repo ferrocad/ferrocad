@@ -74,7 +74,9 @@ Every arrow is the same code the Part edition uses. Only the two endpoints diffe
 ## Creation and the console
 
 `makeSlab` is the workbench's command. It adds the object and its properties, commits
-the transaction, and returns the object:
+the transaction, and returns the object. The console name is a convenience; the
+first-class form is `Toy_MakeSlab`, registered with `FreeCADGui.addCommand` (see
+[`actions-and-tools.md`](actions-and-tools.md)):
 
 ```python
 import ferrocad_toy   # the app script; or use the console name below

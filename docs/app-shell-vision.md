@@ -152,6 +152,8 @@ Ordered by value; each slice is independently demoable. Sizes are rough.
 - **S2 · Document lifecycle + commands.** File (New/Open/Close/Save/Save As/
   Quit) and Edit (Undo/Redo, with `getAvailableUndos`-driven enablement) menus,
   keyboard shortcuts, a command registry, and dirty-state tracking.
+  The registry and the workbench command contract are specified in
+  [`actions-and-tools.md`](actions-and-tools.md).
   *Acceptance:* a headless test drives commands by id; save→close→open
   round-trips a document; Undo/Redo light up correctly.
 - **S3 · Inspector.** A document tree (Documents → Objects → Properties) built

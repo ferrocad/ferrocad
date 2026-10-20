@@ -78,6 +78,9 @@ is the `FreeCAD` Python API, documented by convention and by upstream.
 - [visual-language.md](visual-language.md) — the token set (canvas, accents, glass,
   edges, text), the type scale, stroke/occlusion rules and the idle → hover → drag
   state model.
+- [actions-and-tools.md](actions-and-tools.md) — the workbench command model: `Gui`
+  command registration, enablement, dialogs, the actions bar, and the command/tool
+  split.
 - [toy-workbench.md](toy-workbench.md) — the kernel-free edition that exercises the
   generic interaction registry end to end (and the template for a new workbench).
 - [edition-publishing.md](edition-publishing.md) — how the first edition

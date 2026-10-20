@@ -22,7 +22,8 @@ mapping, and the slice path. Nothing here is built yet except where marked.
 | Numeric pill | ✅ `readout_pill` in the viewport: 11 px monospace, `rgba(15,18,24,0.8)`, 1 px `#FFFFFF14` border |
 | Depth-bias overlays | ✅ `StateSnapshot.depth_bias`; `WIRE_DEPTH_BIAS` for a coplanar wire over a face |
 | Navigation cube | ✅ world-oriented; six faces + corners/edges, a compass ring, labels |
-| Grid rendering | ▢ **none** |
+| Grid state | ✅ an in-memory flag (`ViewState.grid`, A5), toggled by `App_ToggleGrid` and mirrored to `FreeCADGui.ViewState`; the draw contract has no grid producer yet |
+| Grid rendering | ▢ **none** (G5) |
 | Workplane / UCS | ▢ **none** |
 | Per-vertex colour/alpha | ▢ **none** — colour is per packet (`StateSnapshot.color`) |
 

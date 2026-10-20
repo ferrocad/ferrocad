@@ -69,6 +69,12 @@ pub struct CommandOutcome {
     /// The single-use token for the dialog's `on_accept` callback.
     #[serde(default)]
     pub token: Option<String>,
+    /// A presentation-only change (A5); applies no transaction.
+    #[serde(default)]
+    pub view: Option<crate::view::ViewRequest>,
+    /// An interactive tool id to start (A5); resolved by the edition's registry.
+    #[serde(default)]
+    pub tool: Option<String>,
 }
 
 /// The registered commands, with their live state.
@@ -128,5 +134,16 @@ mod tests {
         assert_eq!(outcome.status, "created a slab");
         assert!(outcome.error.is_empty());
         assert!(outcome.value.is_none());
+        assert!(outcome.view.is_none());
+        assert!(outcome.tool.is_none());
+    }
+
+    #[test]
+    fn view_and_tool_requests_deserialize() {
+        let outcome: CommandOutcome =
+            serde_json::from_str(r#"{"ok": true, "view": {"grid": true}, "tool": "toy_polyline"}"#)
+                .unwrap();
+        assert_eq!(outcome.view.unwrap().grid, Some(true));
+        assert_eq!(outcome.tool.as_deref(), Some("toy_polyline"));
     }
 }

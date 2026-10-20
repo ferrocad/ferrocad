@@ -238,6 +238,32 @@ def _make_from_dialog(values):
 FreeCADGui.addCommand("Toy_MakeSlab", _MakeSlabCommand())
 
 
+class _PolylineCommand:
+    """``Toy_Polyline`` — start the generic polyline tool (transient visuals).
+
+    The tool itself is a Rust contribution (`Contributions::with_tool`); the command
+    only names it, which is why a workbench can offer a tool without the shell
+    knowing what it draws.
+    """
+
+    def GetResources(self):
+        return {
+            "MenuText": "Polyline",
+            "ToolTip": "Draw a polyline in the viewport",
+            "Group": "Toy",
+            "CmdType": "ForView",
+        }
+
+    def IsActive(self):
+        return True
+
+    def Activated(self):
+        return {"tool": "toy_polyline"}
+
+
+FreeCADGui.addCommand("Toy_Polyline", _PolylineCommand())
+
+
 def _add_slab(doc, width, depth, height, x, y, name):
     """Add the object and its properties; the caller owns the transaction."""
     slab = doc.addObject("App::FeaturePython", name)

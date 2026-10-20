@@ -164,7 +164,14 @@ fn the_toy_workbench_creates_represents_manipulates_and_records() {
     let stage = display.build(displayed);
     let contributions = Contributions::new()
         .with_manipulator(ferrocad_toy::height_grip)
-        .with_gizmo(ferrocad_toy::move_gizmo);
+        .with_gizmo(ferrocad_toy::move_gizmo)
+        .with_tool("toy_polyline", || {
+            Box::new(ferrocad_stage::PolylineTool::new()) as Box<dyn ferrocad_stage::Tool>
+        });
+    assert!(
+        contributions.tool_for("toy_polyline").is_some(),
+        "the edition's polyline tool resolves by id"
+    );
 
     let mut grip = contributions
         .manipulator_for(&SelectionRef::whole(entity), &stage)

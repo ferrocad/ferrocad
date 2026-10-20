@@ -404,6 +404,18 @@ def set_selection(pairs_json: str) -> str:
     return _json({"ok": True})
 
 
+def set_view_state(state_json: str) -> str:
+    """Mirror the shell's presentation state to ``FreeCADGui.ViewState``.
+
+    A checkable command reads it in ``IsChecked``; the shell pushes it before it
+    re-lists the commands, so a ``{"view": …}`` request closes the loop.
+    """
+    state = json.loads(state_json)
+    FreeCADGui.ViewState.grid = bool(state.get("grid", False))
+    FreeCADGui.ViewState.projection = str(state.get("projection", "persp"))
+    return _json({"ok": True})
+
+
 # ---------------------------------------------------------------------------
 # Built-in commands (A2)
 #
@@ -510,3 +522,29 @@ def _move_selection(dx, dy, dz):
 
 FreeCADGui.addCommand("App_Delete", _DeleteCommand())
 FreeCADGui.addCommand("App_Move", _MoveCommand())
+
+
+class _GridCommand:
+    """``App_ToggleGrid`` — show or hide the reference grid (presentation only).
+
+    The command flips the shell's state through a ``view`` request; it is checkable,
+    and ``IsChecked`` reads the snapshot the shell mirrors back. Rendering the grid
+    itself is G5.
+    """
+
+    def GetResources(self):
+        return {
+            "MenuText": "Grid",
+            "ToolTip": "Show the reference grid",
+            "Group": "View",
+            "CmdType": "ForView",
+        }
+
+    def IsChecked(self):
+        return bool(FreeCADGui.ViewState.grid)
+
+    def Activated(self):
+        return {"view": {"grid": not FreeCADGui.ViewState.grid}}
+
+
+FreeCADGui.addCommand("App_ToggleGrid", _GridCommand())

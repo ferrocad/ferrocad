@@ -14,6 +14,8 @@ What is here today:
   non-blocking modal;
 * a **read-only selection snapshot** (``Selection.getSelection`` etc.), filled by
   the shell;
+* a **read-only view state** (``ViewState.grid``, ``ViewState.projection``), filled
+  by the shell for a checkable command's ``IsChecked``;
 * the private bridge helpers the app script calls (``_command_list``,
   ``_run``, ``_accept``, ``_cancel``).
 
@@ -218,6 +220,10 @@ def _payload(result) -> dict:
         payload["status"] = result["status"]
     if "value" in result:
         payload["value"] = result["value"]
+    if "view" in result:
+        payload["view"] = result["view"]
+    if "tool" in result:
+        payload["tool"] = result["tool"]
     return payload
 
 
@@ -292,3 +298,18 @@ class _Selection:
 
 
 Selection = _Selection()
+
+
+class _ViewState:
+    """The shell's presentation state, pushed by the shell (read-only here).
+
+    ``grid`` is the reference-grid flag (rendering lands with G5); ``projection``
+    is ``"persp"`` or ``"ortho"``. A checkable command reads these in
+    ``IsChecked``, which is what makes a ``{"view": …}`` request close the loop.
+    """
+
+    grid = False
+    projection = "persp"
+
+
+ViewState = _ViewState()

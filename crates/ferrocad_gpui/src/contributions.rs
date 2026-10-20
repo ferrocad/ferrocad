@@ -12,7 +12,7 @@
 use std::sync::Arc;
 
 use ferrocad_geom::SelectionRef;
-use ferrocad_stage::{Manipulator, Stage, TransformGizmo};
+use ferrocad_stage::{Manipulator, Stage, Tool, TransformGizmo};
 
 /// The manipulator a selection asks for, if the workbench has one.
 ///
@@ -50,11 +50,32 @@ where
     }
 }
 
+/// The interactive tool a command id starts, if the edition offers one.
+///
+/// A command's `{"tool": id}` is presentation-level: the shell resolves the id here
+/// and hands the tool to the viewport. The registry is Rust (a tool owns pointer
+/// events and transient geometry); Python only names it.
+pub trait ToolFactory: Send + Sync {
+    /// A fresh tool session.
+    fn create(&self) -> Box<dyn Tool>;
+}
+
+impl<F> ToolFactory for F
+where
+    F: Fn() -> Box<dyn Tool> + Send + Sync,
+{
+    fn create(&self) -> Box<dyn Tool> {
+        self()
+    }
+}
+
 /// The manipulators an edition contributes, in registration order.
 #[derive(Clone, Default)]
 pub struct Contributions {
     factories: Vec<Arc<dyn ManipulatorFactory>>,
     gizmos: Vec<Arc<dyn GizmoFactory>>,
+    /// `(tool id, factory)`, in registration order.
+    tools: Vec<(String, Arc<dyn ToolFactory>)>,
 }
 
 impl Contributions {
@@ -85,6 +106,27 @@ impl Contributions {
         self.gizmos.push(Arc::new(factory));
     }
 
+    /// The builder form of [`register_tool`](Self::register_tool).
+    pub fn with_tool(mut self, id: impl Into<String>, factory: impl ToolFactory + 'static) -> Self {
+        self.register_tool(id, factory);
+        self
+    }
+
+    /// Register an interactive tool under a command-facing id. A later registration
+    /// with the same id wins.
+    pub fn register_tool(&mut self, id: impl Into<String>, factory: impl ToolFactory + 'static) {
+        self.tools.push((id.into(), Arc::new(factory)));
+    }
+
+    /// A fresh tool session for `id`, if the edition registered one.
+    pub fn tool_for(&self, id: &str) -> Option<Box<dyn Tool>> {
+        self.tools
+            .iter()
+            .rev()
+            .find(|(registered, _)| registered == id)
+            .map(|(_, factory)| factory.create())
+    }
+
     /// The manipulator for `selection`: the last registered factory that claims it wins.
     pub fn manipulator_for(
         &self,
@@ -105,9 +147,9 @@ impl Contributions {
             .find_map(|factory| factory.create(selection, stage))
     }
 
-    /// Whether the edition contributes any manipulator or gizmo.
+    /// Whether the edition contributes any manipulator, gizmo or tool.
     pub fn is_empty(&self) -> bool {
-        self.factories.is_empty() && self.gizmos.is_empty()
+        self.factories.is_empty() && self.gizmos.is_empty() && self.tools.is_empty()
     }
 }
 
@@ -172,6 +214,39 @@ mod tests {
 
     fn stage() -> Stage {
         Stage::new()
+    }
+
+    /// A tool that draws nothing; only the registry routing is under test.
+    struct StubTool;
+
+    impl Tool for StubTool {
+        fn on_event(
+            &mut self,
+            _event: &ferrocad_stage::PointerEvent,
+            _snap: Option<ferrocad_stage::Snap>,
+        ) {
+        }
+
+        fn items(&self) -> &[ferrocad_stage::ShapeItem] {
+            &[]
+        }
+    }
+
+    #[test]
+    fn a_registered_tool_is_found_by_id() {
+        let contributions =
+            Contributions::new().with_tool("stub", || Box::new(StubTool) as Box<dyn Tool>);
+        assert!(!contributions.is_empty());
+        assert!(contributions.tool_for("stub").is_some());
+        assert!(contributions.tool_for("missing").is_none());
+    }
+
+    #[test]
+    fn a_later_tool_registration_wins() {
+        let contributions = Contributions::new()
+            .with_tool("stub", || Box::new(StubTool) as Box<dyn Tool>)
+            .with_tool("stub", || Box::new(StubTool) as Box<dyn Tool>);
+        assert!(contributions.tool_for("stub").is_some());
     }
 
     #[test]

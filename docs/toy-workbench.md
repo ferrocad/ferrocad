@@ -117,11 +117,18 @@ Two generic mechanisms, one document path:
 The shell hosts both from the edition's `Contributions`; it never learns what a height
 or a transform means.
 
-The **app-level** built-ins come for free: `ferrocad_shell` registers `App_Delete` and
-`App_Move`, so every edition (the toy included) has them in the actions bar. Delete
-removes the whole selection as one transaction; Move opens a ΔX/ΔY/ΔZ dialog (its
-non-interactive form, `runCommand("App_Move", dx, dy, dz)`, skips the modal). A
-Ctrl/Cmd-click in the inspector builds the multi-selection they act on.
+The **app-level** built-ins come for free: `ferrocad_shell` registers `App_Delete`,
+`App_Move` and the checkable `App_ToggleGrid`, so every edition (the toy included)
+has them in the actions bar. Delete removes the whole selection as one transaction;
+Move opens a ΔX/ΔY/ΔZ dialog (its non-interactive form,
+`runCommand("App_Move", dx, dy, dz)`, skips the modal); Grid flips the shell's grid
+state through a `view` request (rendering is G5). A Ctrl/Cmd-click in the inspector
+builds the multi-selection they act on.
+
+The toy also contributes a **tool**: `Toy_Polyline` returns `{"tool":
+"toy_polyline"}`, and the edition registers `ferrocad_stage::PolylineTool` under that
+id in its `main`. The tool owns pointer events and draws transient geometry; committing
+a polyline to the document is a later slice.
 
 ## Document semantics
 

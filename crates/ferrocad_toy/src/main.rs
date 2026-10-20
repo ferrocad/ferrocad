@@ -14,6 +14,9 @@ fn main() {
         "ferrocad_toy",
         ferrocad::Contributions::default()
             .with_manipulator(ferrocad_toy::height_grip)
-            .with_gizmo(ferrocad_toy::move_gizmo),
+            .with_gizmo(ferrocad_toy::move_gizmo)
+            .with_tool("toy_polyline", || {
+                Box::new(ferrocad_stage::PolylineTool::new()) as Box<dyn ferrocad_stage::Tool>
+            }),
     );
 }

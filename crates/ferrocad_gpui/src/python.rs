@@ -368,6 +368,20 @@ pub fn set_selection(items: &[crate::selection::SelectionItem]) -> Result<(), St
     Ok(())
 }
 
+/// Mirror the shell's presentation state to `FreeCADGui.ViewState`.
+///
+/// A checkable command (`App_ToggleGrid`) reads this in `IsChecked`, so the push
+/// happens before the command list is refreshed.
+pub fn set_view_state(state: &crate::view::ViewState) -> Result<(), String> {
+    let payload = serde_json::json!({
+        "grid": state.grid,
+        "projection": state.projection.as_str(),
+    })
+    .to_string();
+    let _: serde_json::Value = call_json("set_view_state", Some(&payload))?;
+    Ok(())
+}
+
 /// The registered workbench commands, with their live state.
 pub fn commands() -> Result<Vec<crate::commands::CommandInfo>, String> {
     call_json("commands", None)

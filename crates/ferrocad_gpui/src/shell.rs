@@ -30,6 +30,7 @@ use crate::display::{DisplaySync, StageMesh};
 use crate::python::{self, Bootstrap, DocumentNode, PropRow};
 use crate::selection::{self, SelectionItem};
 use crate::shortcuts::Accelerator;
+use crate::view::{ProjectionName, ViewRequest, ViewState};
 
 const BG: u32 = 0x101216;
 const PANEL: u32 = 0x16181d;
@@ -59,6 +60,8 @@ pub struct ShellModel {
     pub properties: Vec<PropRow>,
     /// The workbench actions, with their live enablement (A1).
     pub commands: Vec<CommandInfo>,
+    /// The presentation state: grid and projection (A5).
+    pub view: ViewState,
     pub console: Vec<String>,
     pub status: String,
 }
@@ -78,6 +81,8 @@ pub struct Shell {
     contributions: Contributions,
     /// The enabled global accelerators, rebuilt with the command list (A4).
     shortcuts: Vec<(Accelerator, String)>,
+    /// The interactive tool the last `{"tool": id}` started (A5).
+    active_tool: Option<String>,
     /// The open command dialog (A3); one at a time.
     dialog: Option<OpenDialog>,
     /// Focus for the modal, so Esc cancels and Enter in a field accepts.
@@ -152,6 +157,7 @@ impl Shell {
         // A fresh document starts with an empty selection snapshot: the process may
         // have booted before (tests), and stale names must not leak into `IsActive`.
         let _ = selection::push(&[]);
+        let _ = python::set_view_state(&ViewState::default());
         let commands = commands::list().unwrap_or_default();
         Ok(Arc::new(Mutex::new(ShellModel {
             title: format!("FerroCAD — {}", boot.document),
@@ -162,6 +168,7 @@ impl Shell {
             selection: Vec::new(),
             properties: Vec::new(),
             commands,
+            view: ViewState::default(),
             console,
             status,
         })))
@@ -190,6 +197,7 @@ impl Shell {
             display: DisplaySync::new(),
             contributions: Contributions::new(),
             shortcuts,
+            active_tool: None,
             dialog: None,
             dialog_focus: cx.focus_handle(),
             focus_dialog: false,
@@ -251,6 +259,13 @@ impl Shell {
             .with_navicube(navicube);
         if let Some(stage) = stage {
             viewport.set_stage(stage);
+        }
+        // A tool started before the viewport existed (a script, a command while no
+        // GPU was available) is applied now that there is one.
+        if let Some(id) = self.active_tool.as_deref() {
+            if let Some(tool) = self.contributions.tool_for(id) {
+                viewport.set_tool(Some(tool));
+            }
         }
         // The presenter is always safe to install: it falls back to the image path
         // when the window's device cannot be shared.
@@ -502,6 +517,29 @@ impl Shell {
             return;
         }
 
+        // A view request is presentation-only: apply it, mirror the state, and
+        // re-list so a checkable command's `IsChecked` reflects the change.
+        if let Some(request) = &outcome.view {
+            let status = match self.apply_view(request, cx) {
+                Ok(summary) => summary,
+                Err(error) => format!("view: {error}"),
+            };
+            self.model.lock().unwrap().status = status.clone();
+            self.console_line(status, cx);
+            cx.notify();
+            return;
+        }
+
+        // A tool request starts a session from the edition's Rust registry; it never
+        // opens a transaction.
+        if let Some(tool) = &outcome.tool {
+            let status = self.start_tool(tool, cx);
+            self.model.lock().unwrap().status = status.clone();
+            self.console_line(status, cx);
+            cx.notify();
+            return;
+        }
+
         self.refresh(cx);
         self.sync_stage(cx);
         let status = if outcome.status.is_empty() {
@@ -683,6 +721,52 @@ impl Shell {
             }
         }
         cx.notify();
+    }
+
+    /// Apply a command's presentation request (A5): update the shell's view state,
+    /// mirror it to `FreeCADGui.ViewState`, and apply the projection to the viewport
+    /// when one exists. Returns a one-line summary for the status bar.
+    fn apply_view(
+        &mut self,
+        request: &ViewRequest,
+        cx: &mut Context<Self>,
+    ) -> Result<String, String> {
+        let mut state = self.model.lock().unwrap().view.clone();
+        let summary = state.apply(request)?;
+        self.model.lock().unwrap().view = state.clone();
+        if let Err(error) = python::set_view_state(&state) {
+            self.console_line(format!("view state: {error}"), cx);
+        }
+        if let Some(viewport) = self.viewport.clone() {
+            let orthographic = state.projection == ProjectionName::Orthographic;
+            viewport.update(cx, |viewport, cx| {
+                if viewport.set_orthographic(orthographic) {
+                    cx.notify();
+                }
+            });
+        }
+        // The mirror above makes `IsChecked` see the new state.
+        self.refresh_commands(cx);
+        Ok(summary)
+    }
+
+    /// Start an interactive tool through the edition's registry (A5). The tool owns
+    /// pointer events until it ends; no document transaction is opened.
+    fn start_tool(&mut self, id: &str, cx: &mut Context<Self>) -> String {
+        let Some(tool) = self.contributions.tool_for(id) else {
+            return format!("no such tool {id}");
+        };
+        self.active_tool = Some(id.to_string());
+        if let Some(viewport) = self.viewport.clone() {
+            viewport.update(cx, |viewport, cx| {
+                // A tool session owns the pointer: the selection handles step aside.
+                viewport.set_manipulators(Vec::new());
+                viewport.set_gizmo(None);
+                viewport.set_tool(Some(tool));
+                cx.notify();
+            });
+        }
+        format!("tool: {id}")
     }
 
     /// Replace the selection with one whole object (a plain click).
@@ -1897,12 +1981,91 @@ if "Test_Shortcut" not in FreeCADGui.listCommands():
         assert!(hover_status(&HoverReport::default(), Some("Slab")).is_empty());
     }
 
+    /// A5: a `{"view": ...}` request flips the shell state, the mirrored facade
+    /// snapshot, and the command's check mark.
+    #[gpui::test]
+    fn a_view_request_toggles_the_grid_and_its_check_mark(cx: &mut TestAppContext) {
+        let _guard = crate::PYTHON_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let model = Shell::boot().expect("boot shell");
+        let shell = cx.update(|cx| cx.new(|cx| Shell::from_model(model.clone(), cx)));
+
+        assert!(!model.lock().unwrap().view.grid);
+        assert!(command_enabled("App_ToggleGrid"));
+        assert!(!command_checked("App_ToggleGrid"));
+
+        cx.update(|cx| shell.update(cx, |shell, cx| shell.run_command("App_ToggleGrid", cx)));
+        let (grid, status) = {
+            let m = model.lock().unwrap();
+            (m.view.grid, m.status.clone())
+        };
+        assert!(grid, "the request turned the grid on");
+        assert_eq!(status, "grid on");
+        assert!(
+            command_checked("App_ToggleGrid"),
+            "IsChecked reads the mirrored ViewState"
+        );
+
+        // A second run flips it back; the state is not a document edit.
+        cx.update(|cx| shell.update(cx, |shell, cx| shell.run_command("App_ToggleGrid", cx)));
+        assert!(!model.lock().unwrap().view.grid);
+        assert!(!command_checked("App_ToggleGrid"));
+    }
+
+    /// A5: a tool id resolves through the edition's registry; an unknown id reports
+    /// cleanly and starts nothing.
+    #[gpui::test]
+    fn a_tool_request_resolves_by_id(cx: &mut TestAppContext) {
+        let _guard = crate::PYTHON_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let model = Shell::boot().expect("boot shell");
+        let shell = cx.update(|cx| cx.new(|cx| Shell::from_model(model.clone(), cx)));
+        cx.update(|cx| {
+            shell.update(cx, |shell, _| {
+                shell.set_contributions(Contributions::new().with_tool("test_tool", || {
+                    Box::new(ferrocad_stage::PolylineTool::new()) as Box<dyn ferrocad_stage::Tool>
+                }));
+            })
+        });
+
+        let script = r#"
+import FreeCADGui
+class _TestTool:
+    def Activated(self):
+        return {"tool": "test_tool"}
+class _TestMissingTool:
+    def Activated(self):
+        return {"tool": "no_such_tool"}
+if "Test_Tool" not in FreeCADGui.listCommands():
+    FreeCADGui.addCommand("Test_Tool", _TestTool())
+    FreeCADGui.addCommand("Test_MissingTool", _TestMissingTool())
+"#;
+        let registered = cx.update(|cx| crate::python::evaluate(script));
+        assert!(registered.unwrap().ok);
+        cx.update(|cx| shell.update(cx, |shell, cx| shell.refresh_commands(cx)));
+
+        cx.update(|cx| shell.update(cx, |shell, cx| shell.run_command("Test_Tool", cx)));
+        assert_eq!(model.lock().unwrap().status, "tool: test_tool");
+        let active = cx.update(|cx| shell.read(cx).active_tool.clone());
+        assert_eq!(active.as_deref(), Some("test_tool"));
+
+        cx.update(|cx| shell.update(cx, |shell, cx| shell.run_command("Test_MissingTool", cx)));
+        assert_eq!(model.lock().unwrap().status, "no such tool no_such_tool");
+    }
+
     fn command_enabled(id: &str) -> bool {
         crate::python::commands()
             .expect("the command list")
             .into_iter()
             .find(|command| command.id == id)
             .map(|command| command.enabled)
+            .unwrap_or(false)
+    }
+
+    fn command_checked(id: &str) -> bool {
+        crate::python::commands()
+            .expect("the command list")
+            .into_iter()
+            .find(|command| command.id == id)
+            .map(|command| command.checked)
             .unwrap_or(false)
     }
 

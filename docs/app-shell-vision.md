@@ -162,9 +162,11 @@ Ordered by value; each slice is independently demoable. Sizes are rough.
   also return a **dialog** spec, which the shell hosts as a glass modal (validated
   in Rust, accepted through a single-use token). `Accel` chords are bound at the
   window root, the bar buttons carry `ToolTip + Accel` tooltips, and the status line
-  adds the viewport's pass-through report. The base app's **Delete**/**Move** and the
-  toy edition's **Create Slab** are the first entries; both of the latter open
-  dialogs. Menus, docks and the File/Edit menu remain S2.
+  adds the viewport's pass-through report. A command may also return a **view**
+  request (the grid state and the projection) or a **tool** id the edition
+  contributed, so presentation is scriptable without a second hook. The base app's
+  **Delete**/**Move**/**Grid** and the toy edition's **Create Slab**/**Polyline** are
+  the first entries. Menus, docks and the File/Edit menu remain S2.
   *Acceptance:* a headless test drives commands by id; save→close→open
   round-trips a document; Undo/Redo light up correctly.
 - **S3 · Inspector.** A document tree (Documents → Objects → Properties) built

@@ -260,6 +260,9 @@ impl Shell {
         if let Some(stage) = stage {
             viewport.set_stage(stage);
         }
+        // The view state is the source of truth: a grid toggled before the viewport
+        // existed is applied now.
+        viewport.set_grid(self.model.lock().unwrap().view.grid);
         // A tool started before the viewport existed (a script, a command while no
         // GPU was available) is applied now that there is one.
         if let Some(id) = self.active_tool.as_deref() {
@@ -739,8 +742,11 @@ impl Shell {
         }
         if let Some(viewport) = self.viewport.clone() {
             let orthographic = state.projection == ProjectionName::Orthographic;
+            let grid = state.grid;
             viewport.update(cx, |viewport, cx| {
-                if viewport.set_orthographic(orthographic) {
+                let mut changed = viewport.set_orthographic(orthographic);
+                changed |= viewport.set_grid(grid);
+                if changed {
                     cx.notify();
                 }
             });
@@ -2097,6 +2103,59 @@ if "Test_Tool" not in FreeCADGui.listCommands():
         // reads the frame back). Works with the placeholder too when no GPU exists.
         cx.update(|window, cx| {
             let _ = window.draw(cx);
+        });
+    }
+
+    /// G2: the `App_ToggleGrid` view request reaches the viewport, and a viewport that
+    /// starts after the toggle picks the state up. Skips without a GPU adapter.
+    #[gpui::test]
+    fn a_grid_request_reaches_the_viewport(cx: &mut TestAppContext) {
+        let _guard = crate::PYTHON_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let model = Shell::boot().expect("boot shell");
+        let window = cx.update(|cx| {
+            let model = model.clone();
+            cx.open_window(Default::default(), move |_window, cx| {
+                cx.new(|cx| Shell::from_model(model.clone(), cx))
+            })
+            .unwrap()
+        });
+        let mut cx = VisualTestContext::from_window(window.into(), cx);
+        let shell: Entity<Shell> = window.root(&mut cx).unwrap();
+
+        // Turn the grid on **before** the viewport exists: `enable_viewport` must apply
+        // the mirrored view state on creation.
+        cx.update(|_window, cx| {
+            shell.update(cx, |shell, cx| shell.run_command("App_ToggleGrid", cx))
+        });
+
+        let attached = cx.update(|_window, cx| {
+            shell.update(cx, |shell, cx| {
+                shell.enable_viewport(cx);
+                shell.viewport.is_some()
+            })
+        });
+        if !attached {
+            eprintln!("no GPU adapter available; skipping grid-to-viewport test");
+            return;
+        }
+
+        let viewport = cx.update(|_window, cx| shell.read(cx).viewport.clone().unwrap());
+        cx.update(|_window, cx| {
+            assert!(viewport.read(cx).grid_enabled(), "the boot state wins");
+        });
+
+        cx.update(|_window, cx| {
+            shell.update(cx, |shell, cx| shell.run_command("App_ToggleGrid", cx))
+        });
+        cx.update(|_window, cx| {
+            assert!(!viewport.read(cx).grid_enabled(), "the toggle turns it off");
+        });
+
+        cx.update(|_window, cx| {
+            shell.update(cx, |shell, cx| shell.run_command("App_ToggleGrid", cx))
+        });
+        cx.update(|_window, cx| {
+            assert!(viewport.read(cx).grid_enabled(), "and back on");
         });
     }
 }

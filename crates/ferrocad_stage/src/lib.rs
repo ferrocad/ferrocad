@@ -56,6 +56,7 @@
 //! ```
 
 pub mod gizmo;
+pub mod grid;
 pub mod input;
 pub mod interaction;
 pub mod screen;
@@ -63,16 +64,19 @@ pub mod shape;
 pub mod snap;
 pub mod stage;
 pub mod tool;
+pub mod workplane;
 
 pub use gizmo::{
     GIZMO_BASE_ID, GizmoAxis, GizmoCommitEvent, GizmoConstraint, GizmoDragEvent, GizmoHandle,
     GizmoMode, GizmoModifiers, GizmoValue, HandleKind, ManipulatorFrame, TRANSFORM_ID,
     TransformGizmo,
 };
+pub use grid::{GridGeometry, GridSpec, GridStyle};
 pub use input::{MouseButton, PointerEvent, PointerKind};
 pub use interaction::{InteractionCommit, Manipulator};
 pub use screen::{HIT_PADDING_PIXELS, HIT_SLOP, HIT_TOLERANCE_PIXELS, STROKE_PIXELS, scale_for};
 pub use shape::{DrawMode, ShapeItem};
-pub use snap::{Snap, SnapKind, snap_to_geometry};
+pub use snap::{Snap, SnapContext, SnapKind, snap_to_geometry};
 pub use stage::Stage;
 pub use tool::{PolylineTool, Tool};
+pub use workplane::{Workplane, WorkplaneKind};

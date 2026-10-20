@@ -240,6 +240,7 @@ fn build_geometry(
                 normal,
                 uv,
                 part_idx: 0,
+                color: [1.0, 1.0, 1.0, 1.0],
             });
         }
     }

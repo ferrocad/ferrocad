@@ -24,6 +24,8 @@ pub struct GpuVertex {
     pub uv: [f32; 2],
     /// Topological sub-element index (the pick G-buffer's green channel).
     pub part_idx: u32,
+    /// Per-vertex linear RGBA multiplier (the grid's radial fade).
+    pub color: [f32; 4],
 }
 
 impl From<&ferrocad_graphics::Vertex> for GpuVertex {
@@ -33,6 +35,7 @@ impl From<&ferrocad_graphics::Vertex> for GpuVertex {
             normal: v.normal,
             uv: v.uv,
             part_idx: v.part_idx,
+            color: v.color,
         }
     }
 }

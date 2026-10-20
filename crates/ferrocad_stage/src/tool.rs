@@ -196,6 +196,8 @@ mod tests {
         Some(Snap {
             point,
             kind: SnapKind::Point,
+            local: None,
+            major: false,
         })
     }
 

@@ -20,6 +20,10 @@ pub struct Vertex {
     /// The topological sub-element index — a face/edge ordinal the G-buffer picking
     /// pass writes to its green channel. `0` until topological naming lands.
     pub part_idx: u32,
+    /// A per-vertex RGBA multiplier (linear), applied to the packet colour. It is
+    /// `[1, 1, 1, 1]` for a producer that does not care; the ground grid uses it for
+    /// the radial alpha fade, and it also serves gradients and per-face tints.
+    pub color: [f32; 4],
 }
 
 /// A CPU-side RGBA8 texture: the `SoTexture2` payload a shape samples.

@@ -59,7 +59,7 @@ impl ScenePipelines {
         });
 
         let attributes = wgpu::vertex_attr_array![
-            0 => Float32x3, 1 => Float32x3, 2 => Float32x2, 3 => Uint32
+            0 => Float32x3, 1 => Float32x3, 2 => Float32x2, 3 => Uint32, 4 => Float32x4
         ];
         let vertex_buffers = [wgpu::VertexBufferLayout {
             array_stride: size_of::<GpuVertex>() as u64,
@@ -145,7 +145,9 @@ impl ScenePipelines {
                 "ferrocad lines",
                 wgpu::PrimitiveTopology::LineList,
                 false,
-                scene,
+                // Alpha blending (with depth still tested/written) so a producer can
+                // fade a line per vertex, as the ground grid's falloff does.
+                wgpu::BlendState::ALPHA_BLENDING,
                 none,
             ),
             overlay_lines: make(
@@ -159,7 +161,8 @@ impl ScenePipelines {
                 "ferrocad points",
                 wgpu::PrimitiveTopology::PointList,
                 false,
-                scene,
+                // See `lines`: per-vertex alpha must blend, not replace.
+                wgpu::BlendState::ALPHA_BLENDING,
                 none,
             ),
             overlay_points: make(

@@ -581,6 +581,7 @@ impl ShapeItem {
                     normal: *normal,
                     uv: [0.0, 0.0],
                     part_idx: self.parts.get(index).copied().unwrap_or(0),
+                    color: [1.0, 1.0, 1.0, 1.0],
                 })
                 .collect();
             Some(Geometry {
@@ -611,6 +612,7 @@ impl ShapeItem {
                 normal: [0.0, 0.0, 1.0],
                 uv: [0.0, 0.0],
                 part_idx: self.parts.get(index).copied().unwrap_or(0),
+                color: [1.0, 1.0, 1.0, 1.0],
             })
             .collect();
         Some(Geometry {
@@ -637,6 +639,7 @@ impl ShapeItem {
                     .get(position_index as usize)
                     .copied()
                     .unwrap_or(0),
+                color: [1.0, 1.0, 1.0, 1.0],
             });
         }
         (!vertices.is_empty()).then_some(Geometry { vertices, indices })
@@ -739,6 +742,7 @@ fn flat_surface(positions: &[[f32; 3]], triangles: &[u32], parts: &[u32]) -> Geo
                 normal,
                 uv: [0.0, 0.0],
                 part_idx: parts.get(index as usize).copied().unwrap_or(0),
+                color: [1.0, 1.0, 1.0, 1.0],
             });
         }
     }

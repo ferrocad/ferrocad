@@ -1,13 +1,13 @@
 # Axis, origin and grids: the spatial reference model
 
-Status: design (2026-10-20). Companion to [`gizmo-manipulators.md`](gizmo-manipulators.md),
+Status: design + G0–G2 built (2026-10-20). Companion to [`gizmo-manipulators.md`](gizmo-manipulators.md),
 [`navicube-spec.md`](navicube-spec.md), [`stage.md`](stage.md) and
 [`architecture.md`](architecture.md) §10.
 
 This note defines **one** model for the things that tell a user where they are: the
 world triad, the ground grid, local workplanes, face grids, and the snap feedback that
 ties them together. It records the visual language, the data model, the render
-mapping, and the slice path. Nothing here is built yet except where marked.
+mapping, and the slice path. **G0–G2 are built** (§1, §8); G3+ are still a plan.
 
 ---
 
@@ -17,19 +17,18 @@ mapping, and the slice path. Nothing here is built yet except where marked.
 | --- | --- |
 | `Topology::Points` / `Topology::Lines` | ✅ in the draw contract (`ferrocad_graphics`), rendered and picked by `ferrocad_wgpu` as **1 px** primitives |
 | 1.5 px strokes | ✅ as **ribbons** (triangles) via `screen_ribbon`/`push_ribbon`; WebGPU has no line width, so the gizmo and the dress-up arc already do this |
-| Grid snapping | ◐ `snap_to_geometry(event, camera, grid: Option<f64>)` — unprojects onto the **world `z = 0` plane**, rounds to the step. `SnapKind::{Point, Grid}` |
+| Grid snapping | ✅ workplane-aware `snap_to_geometry(event, camera, context: Option<&SnapContext>)` — unprojects onto the workplane (the world `z = 0` plane by default), rounds to the minor step and reports `Snap.local` + `Snap.major` |
 | Gizmo linear snap | ✅ `set_linear_snap(step)` snaps world components (T3) |
 | Numeric pill | ✅ `readout_pill` in the viewport: 11 px monospace, `rgba(15,18,24,0.8)`, 1 px `#FFFFFF14` border |
 | Depth-bias overlays | ✅ `StateSnapshot.depth_bias`; `WIRE_DEPTH_BIAS` for a coplanar wire over a face |
 | Navigation cube | ✅ world-oriented; six faces + corners/edges, a compass ring, labels |
-| Grid state | ✅ an in-memory flag (`ViewState.grid`, A5), toggled by `App_ToggleGrid` and mirrored to `FreeCADGui.ViewState`; the draw contract has no grid producer yet |
-| Grid rendering | ▢ **none** (G5) |
-| Workplane / UCS | ▢ **none** |
-| Per-vertex colour/alpha | ▢ **none** — colour is per packet (`StateSnapshot.color`) |
+| Grid state | ✅ an in-memory flag (`ViewState.grid`, A5), toggled by `App_ToggleGrid`, mirrored to `FreeCADGui.ViewState`, and applied to the viewport (`set_grid`) |
+| Grid rendering | ✅ **G2** — `ferrocad_stage::grid` emits dots, major lines and the triad; the viewport draws them in the scene's depth pass |
+| Workplane / UCS | ◐ **G1** — the `Workplane`/`WorkplaneKind` vocabulary and the grid/snap context; no face workplane yet (G3) |
+| Per-vertex colour/alpha | ✅ **G0** — `Vertex.color` multiplies the packet colour; the grid carries its radial fade in it |
 
-Three gaps drive the plan: there is no grid producer, snapping knows only the world
-ground plane, and a smooth radial fade needs a per-vertex alpha the vertex layout does
-not carry.
+G0–G2 closed the first three gaps. What remains: resolving a **face** into a
+workplane (G3), the snap aurora/pill (G4), and the policy/chrome (G5).
 
 ---
 
@@ -224,8 +223,12 @@ renderer or a screen-space effect.
 | Labels, pill | gpui text layer | `readout_pill` / the navicube label path |
 | Snap aurora | triangles | a small screen-facing diamond |
 
-- **Not pickable.** `PickId(0)` and `selectable(false)`; the GPU pick writes the
-  untagged id, which resolves to `Cleared`. Clicks fall through to geometry.
+- **Not pickable.** The grid is emitted into its **own non-overlay queue**
+  (`InventorViewport::grid_queue`) that is drawn in the same pass — so it shares the
+  depth buffer — but is never handed to a pick path. Clicks fall through to geometry.
+  (The earlier plan — the untagged `PickId(0)` plus a filter in `pick()` — was rejected
+  once built: untagged scene packets also compile to `PickId(0)`, so the filter
+discarded real hits.)
 - **Depth.** The ground grid uses normal depth so geometry occludes it. A **face** grid
   is coplanar with the face, so it uses a positive `depth_bias` (the wire-over-surface
   mechanism) rather than being drawn as an overlay on top of everything.
@@ -236,7 +239,7 @@ renderer or a screen-space effect.
 ### The one contract addition: per-vertex colour
 
 The radial falloff needs alpha **per vertex**; `StateSnapshot.color` is per packet and
-`Vertex` has no colour. The plan adds
+`Vertex` has no colour. **As built (G0)**, `Vertex` gained
 
 ```rust
 pub struct Vertex {
@@ -244,15 +247,20 @@ pub struct Vertex {
     pub normal: [f32; 3],
     pub uv: [f32; 2],
     pub part_idx: u32,
-    pub color: [f32; 4],   // NEW: multiplied by the packet colour; [1,1,1,1] = no-op
+    pub color: [f32; 4],   // multiplied by the packet colour; [1,1,1,1] = no-op
 }
 ```
 
-and multiplies it into the fragment colour in both render and pick shaders. This is
-generic (per-face tint, gradients, the grid fade) and cheap: one `Float32x4` attribute.
+`GpuVertex` carries it as attribute location 4 and `scene.wgsl` computes
+`albedo = globals.color * input.color * textureSample(...)`. The pick shader keeps the
+attribute in the layout (one vertex layout for both passes) and ignores it.
 Producers that do not care emit white. **Rejected alternative:** concentric ring
 batches with one alpha each — quantised, more packets, and it still misses the fade
 along a line.
+
+One consequence: the non-overlay **line** and **point** pipelines switched from
+`REPLACE` to alpha blending (depth test/write unchanged) so the fade actually blends;
+the triangle pipeline stays opaque.
 
 ---
 
@@ -298,12 +306,37 @@ the visual work can use it.
 
 | Slice | Deliverable | Acceptance |
 | --- | --- | --- |
-| **G0 — per-vertex colour** | `Vertex.color`; shader multiply in render + pick; producers emit white | existing suites green; a two-colour triangle renders (readback test); the pick pass still returns the same ids |
-| **G1 — vocabulary** | `Workplane` (+ kind), `GridSpec`/`GridStyle`, `SnapContext`; `snap_to_geometry` becomes workplane-aware; `Snap.local` | unit tests: a tilted plane's unprojection and rounding, major-before-minor priority, `z = 0` world behaviour unchanged, local `(u, v)` of a snap |
-| **G2 — world grid + triad** | `ferrocad_stage::grid` producer and triad builder; the viewport draws them; labels; depth; pick-through | a viewport test: the queue gains `Points`/`Lines` packets with `PickId(0)`; a click over a dot still selects the object behind it |
+| **G0 — per-vertex colour** ✅ | `Vertex.color`; shader multiply; producers emit white; line/point blending | existing suites green; `per_vertex_colour_multiplies_the_packet_colour` reads back red/blue halves under a white packet colour |
+| **G1 — vocabulary** ✅ | `Workplane` (+ kind), `GridSpec`/`GridStyle`, `SnapContext`; `snap_to_geometry` workplane-aware; `Snap.local`/`Snap.major` | unit tests: a tilted plane's unprojection and rounding, major-before-minor priority, `z = 0` world behaviour unchanged, local `(u, v)` of a snap |
+| **G2 — world grid + triad** ✅ | `ferrocad_stage::grid` producer and triad builder; the viewport draws them from their own queue; pick-through | viewport: `grid_queue` gains `Points`/`Lines`/`Triangles`; a click over a dot resolves to nothing; the ground cache survives an orbit while the triad rebuilds; `set_grid` toggles it; the shell forwards `ViewState.grid` |
 | **G3 — face workplane** | `SelectionRef` → `WorkplaneKind::Face`; hover blooms the face grid; activation/dimming; bounded extent; `depth_bias` | hovering a box face emits a local grid packet whose basis matches the face normal; activating it changes the snap plane; `Esc` clears |
 | **G4 — snap feedback** | aurora, projection rays, `ΔU`/`ΔV` pill; origin proximity; feature snaps | dragging across the workplane shows an aurora at major nodes, rays to U/V, and the pill's numbers match `Snap.local` |
-| **G5 — chrome + policy** | grid on/off and step preferences, the workplane view command, ring-heading sync; the toolbar toggle from [`actions-and-tools.md`](actions-and-tools.md) | a preference change re-emits the grid without a restart; `View → Workplane` looks down `n`; the ring follows the active heading |
+| **G5 — chrome + policy** | step/radius preferences, the workplane view command, ring-heading sync, origin labels | a preference change re-emits the grid without a restart; `View → Workplane` looks down `n`; the ring follows the active heading |
+
+### G0–G2 as built (2026-10-20)
+
+- **`ferrocad_graphics`** — `Vertex.color: [f32; 4]` (linear), default white.
+- **`ferrocad_stage::workplane`** — `Workplane { origin, u, v, n, kind }` with
+  `world()`, `new()` (normalises, forces a right-handed basis, rejects degenerate
+  axes), `point(a, b)`, `project(world) -> [u, v]` and `ray_local(origin, direction)`.
+- **`ferrocad_stage::snap`** — `SnapContext { workplane, minor, major }`, whose
+  `world(minor)` is the `z = 0` case; `Snap { point, kind, local, major }`.
+- **`ferrocad_stage::grid`** — pure arithmetic, no kernel/gpui/Python:
+  - `MINOR_STEP = 10`, `MAJOR_STEP = 100`, `TRIAD_PIXELS = 80`,
+    `RADIUS_RANGE = (500, 5_000)`, `MINOR_PIXELS = 4`, `MAX_DOTS = 40_000`.
+  - `ground(spec, style)` — dots (skipping major lines) plus major lines subdivided at
+    the minor step, alpha `α₀ · max(0, 1 − d / R)` per vertex.
+  - `triad(workplane, camera)` — three screen-facing ribbons via `screen_ribbon`,
+    axis colours at 65 %.
+  - `effective_steps` — drops the minor level below 4 projected px, promoting a decade.
+  - **Unlit by construction:** every vertex's normal is the shader's light direction,
+    so the diffuse term is exactly 1 and the per-vertex colour reaches the screen.
+- **`ferrocad_viewport`** — `GridMesh` owns three mesh ids (allocated from a private
+  counter) and two cache keys: the ground is keyed on the `GridSpec` (camera-independent,
+  so an orbit does not rebuild it), the triad on the camera's view/projection and device
+  height. `set_grid`/`grid_enabled` toggle it; `sync_grid` runs on every `recompile`.
+- **`ferrocad_gpui`** — `apply_view` forwards `ViewState.grid` to the viewport, and
+  `enable_viewport` applies the current state at creation.
 
 ---
 
@@ -323,6 +356,11 @@ the visual work can use it.
 ---
 
 ## 10. Decisions to settle
+
+**Settled by G0–G2:** 1 (per-vertex colour), 2 (1 px points, with the 4 px culling rule),
+6 (`2.5 ×` eye distance, clamped 500–5 000 mm; the cache key is the exact spec, so a zoom
+rebuilds and an orbit does not — the 10 % hysteresis can come with G5's preferences).
+The rest remain open; 0 is settled in favour of Z-up.
 
 0. **World up-axis.** The grid model assumes **Z-up** (`XY` ground), consistent with
    `snap_to_geometry`'s `z = 0`, the toy's `Height`, and OCCT. `navicube-spec.md` §2
@@ -353,14 +391,14 @@ the visual work can use it.
 ## 11. Verification
 
 Once built, the note's guarantees are checked at three levels, matching the existing
-pattern:
+pattern (G0–G2 are built; the entries for them are live tests):
 
 - **`ferrocad_stage` (pure math)** — workplane construction (right-handedness), snap
   unprojection on a tilted plane, major/minor priority, screen-space culling, the grid
   generator's segment counts and per-vertex alpha at `d = 0`, `d = R_max`.
-- **`ferrocad_viewport` (headless)** — the grid's packets (topology, ids, depth bias),
-  pick-through, face-frame resolution from a tessellated box, the aurora/pill on a
-  synthetic drag.
+- **`ferrocad_viewport` (headless)** — the grid's packets (topology, ids, separate
+  queue, pick-through, the two cache keys), and `set_grid`; G3 adds face-frame
+  resolution from a tessellated box and the aurora/pill on a synthetic drag.
 - **`ferrocad_wgpu`** — the per-vertex colour multiply (a readback of a two-colour
   triangle), and the grid's line/point primitives in a real pass.
 

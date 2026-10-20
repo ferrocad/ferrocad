@@ -1564,6 +1564,7 @@ mod tests {
                         normal: [0.0, 0.0, 1.0],
                         uv: [0.0, 0.0],
                         part_idx: part,
+                        color: [1.0, 1.0, 1.0, 1.0],
                     })
                     .collect(),
                 indices,
@@ -1698,6 +1699,62 @@ mod tests {
         assert_eq!(edge.part, 7, "the edge's sub-element index");
         assert_eq!(edge.element, None);
         assert_eq!(edge.topology, Topology::Lines);
+    }
+
+    /// G0: a vertex's colour multiplies the packet colour. Two triangles sharing a white
+    /// packet colour but carrying per-vertex red and blue must read as red and blue
+    /// halves — what the grid's radial fade relies on. Skips without a GPU adapter.
+    #[test]
+    fn per_vertex_colour_multiplies_the_packet_colour() {
+        let _gpu = gpu_guard();
+        let Ok(mut renderer) = WgpuRenderer::new_default([64, 64]) else {
+            eprintln!("no GPU adapter available; skipping vertex-colour test");
+            return;
+        };
+
+        let mut packet = pick_packet(
+            77,
+            1,
+            0,
+            Topology::Triangles,
+            vec![
+                [-1.0, -1.0, 0.5],
+                [0.0, -1.0, 0.5],
+                [0.0, 1.0, 0.5],
+                [0.0, -1.0, 0.5],
+                [1.0, -1.0, 0.5],
+                [1.0, 1.0, 0.5],
+            ],
+            vec![0, 1, 2, 3, 4, 5],
+        );
+        let geometry = packet.geometry.as_mut().expect("fresh geometry");
+        for (index, vertex) in geometry.vertices.iter_mut().enumerate() {
+            vertex.color = if index < 3 {
+                [1.0, 0.0, 0.0, 1.0]
+            } else {
+                [0.0, 0.0, 1.0, 1.0]
+            };
+        }
+
+        let mut queue = RenderQueue::default();
+        queue.packets.push(packet);
+        renderer.draw(&queue, &Camera::identity()).expect("draw");
+        let image = renderer.image().expect("readback");
+        let texel = |x: u32, y: u32| {
+            let i = ((y * 64 + x) * 4) as usize;
+            [image.rgba[i], image.rgba[i + 1], image.rgba[i + 2]]
+        };
+
+        let [red, green, blue] = texel(16, 32);
+        assert!(
+            red > 100 && blue < 60,
+            "the left triangle is red: {red},{green},{blue}"
+        );
+        let [red, green, blue] = texel(48, 32);
+        assert!(
+            blue > 100 && red < 60,
+            "the right triangle is blue: {red},{green},{blue}"
+        );
     }
 
     /// A positive `depth_bias` lets a coplanar overlay win the depth test — what the

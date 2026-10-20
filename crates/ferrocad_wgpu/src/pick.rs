@@ -119,9 +119,10 @@ impl PickPipelines {
             immediate_size: 0,
         });
         // The vertex buffer is the same interleaved layout the scene uses; the shader
-        // reads locations 0/1/3 (position, normal, part index) and ignores the uv.
+        // reads locations 0/1/3 (position, normal, part index) and ignores the uv and
+        // the per-vertex colour (declared so both passes share one layout).
         let attributes = wgpu::vertex_attr_array![
-            0 => Float32x3, 1 => Float32x3, 2 => Float32x2, 3 => Uint32
+            0 => Float32x3, 1 => Float32x3, 2 => Float32x2, 3 => Uint32, 4 => Float32x4
         ];
         let vertex_buffers = [wgpu::VertexBufferLayout {
             array_stride: size_of::<GpuVertex>() as u64,

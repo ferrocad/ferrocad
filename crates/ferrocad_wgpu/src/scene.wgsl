@@ -21,12 +21,14 @@ struct VertexInput {
     @location(0) position: vec3<f32>,
     @location(1) normal: vec3<f32>,
     @location(2) uv: vec2<f32>,
+    @location(4) color: vec4<f32>,
 };
 
 struct VertexOutput {
     @builtin(position) clip_position: vec4<f32>,
     @location(0) normal: vec3<f32>,
     @location(1) uv: vec2<f32>,
+    @location(2) color: vec4<f32>,
 };
 
 @vertex
@@ -36,6 +38,7 @@ fn vs_main(input: VertexInput) -> VertexOutput {
     // Uniform scale is assumed, so the model matrix doubles as the normal matrix.
     output.normal = (globals.model * vec4<f32>(input.normal, 0.0)).xyz;
     output.uv = input.uv;
+    output.color = input.color;
     var clip = globals.view_proj * world;
     // A positive bias moves the fragment towards the camera (smaller depth), so a
     // coplanar selection highlight wins the depth test against the surface it marks.
@@ -51,8 +54,9 @@ fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
     // Two-sided: culling is off for the POC, so accept either face orientation.
     let diffuse = abs(dot(normal, light_dir));
     let ambient = 0.25;
-    // The texture (the default is opaque white) multiplies into the colour.
-    let albedo = globals.color * textureSample(shape_texture, shape_sampler, input.uv);
+    // The texture (the default is opaque white) and the per-vertex colour both
+    // multiply into the packet colour.
+    let albedo = globals.color * input.color * textureSample(shape_texture, shape_sampler, input.uv);
     let lit = albedo.rgb * (ambient + (1.0 - ambient) * diffuse);
     return vec4<f32>(lit, albedo.a);
 }

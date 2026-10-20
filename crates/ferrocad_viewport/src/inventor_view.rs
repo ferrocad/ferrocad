@@ -18,15 +18,19 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use ferrocad_geom::SelectionRef;
-use ferrocad_graphics::{Camera, Hit, PickId, Projection, RenderQueue, Viewport, pick_at_hit};
+use ferrocad_graphics::{
+    Camera, DrawPacket, Generation, Geometry, Hit, MeshId, PickId, Projection, RenderQueue,
+    StateSnapshot, Topology, Vertex, Viewport, pick_at_hit,
+};
 use ferrocad_inventor::{
     Directives, Event, EventListener, ImageData, InventorView, NaviCubeDirective, Scene, ViewSpec,
     compile_with,
 };
 use ferrocad_stage::Stage;
 use ferrocad_stage::{
-    GizmoCommitEvent, GizmoHandle, GizmoModifiers, GizmoValue, InteractionCommit, Manipulator,
-    MouseButton as StageButton, PointerEvent, PointerKind, Tool, TransformGizmo, snap_to_geometry,
+    GizmoCommitEvent, GizmoHandle, GizmoModifiers, GizmoValue, GridSpec, GridStyle,
+    InteractionCommit, Manipulator, MouseButton as StageButton, PointerEvent, PointerKind,
+    SnapContext, Tool, TransformGizmo, Workplane, grid, snap_to_geometry,
 };
 use ferrocad_types::{Matrix4, Placement, Rotation, Vector3};
 use gpui::{
@@ -159,6 +163,11 @@ pub struct InventorViewport<V: InventorView> {
     selection: Option<SelectionEvent>,
     /// A neutral summary of what a click would do under the pointer (A4).
     hover_report: HoverReport,
+    /// The reference grid (G2), when enabled.
+    grid: Option<GridMesh>,
+    /// The grid's packets. Kept apart from [`queue`](Self::queue) so the grid draws in
+    /// the same depth pass but never enters a pick: it is scaffolding, not geometry.
+    grid_queue: RenderQueue,
     frame: Option<Arc<RenderImage>>,
     /// A host-supplied zero-copy presenter. When ready, its GPU target replaces the
     /// readback `frame`; `None` (the default) is the image path.
@@ -209,6 +218,125 @@ struct RingDrag {
 const RING_DETENT_DEGREES: f64 = 90.0;
 /// How close (in degrees) a release must be to a detent to be captured.
 const RING_DETENT_CAPTURE: f64 = 10.0;
+
+/// The reference grid's cached geometry and its stable mesh identities.
+///
+/// The ground (dots and major lines) is keyed on its spec, so an orbit does not rebuild
+/// it; the triad is keyed on the camera, because its ribbons are screen-facing. A
+/// rebuild bumps only that half's generation, so the renderer re-uploads just it.
+struct GridMesh {
+    dots_mesh: MeshId,
+    lines_mesh: MeshId,
+    triad_mesh: MeshId,
+    ground_generation: Generation,
+    triad_generation: Generation,
+    ground_key: Option<u64>,
+    triad_key: Option<u64>,
+    dots: Vec<Vertex>,
+    lines: Vec<Vertex>,
+    triad: Vec<Vertex>,
+    triad_indices: Vec<u32>,
+}
+
+impl GridMesh {
+    fn new() -> Self {
+        use std::sync::atomic::{AtomicU64, Ordering};
+        // A range above the stage's ids (which start at 1 << 40) is not needed: the
+        // stage's allocator is a different counter, so a shared range is fine as long
+        // as the values are distinct in practice.
+        static NEXT: AtomicU64 = AtomicU64::new(1 << 36);
+        let next = || MeshId(NEXT.fetch_add(1, Ordering::Relaxed));
+        Self {
+            dots_mesh: next(),
+            lines_mesh: next(),
+            triad_mesh: next(),
+            ground_generation: Generation(0),
+            triad_generation: Generation(0),
+            ground_key: None,
+            triad_key: None,
+            dots: Vec::new(),
+            lines: Vec::new(),
+            triad: Vec::new(),
+            triad_indices: Vec::new(),
+        }
+    }
+
+    fn sync(&mut self, camera: &Camera, spec: &GridSpec, style: &GridStyle) {
+        let key = grid::ground_key(spec);
+        if self.ground_key != Some(key) {
+            let (dots, lines) = grid::ground(spec, style);
+            self.dots = dots;
+            self.lines = lines;
+            self.ground_generation = Generation(self.ground_generation.0 + 1);
+            self.ground_key = Some(key);
+        }
+        let key = grid::triad_key(&spec.workplane, camera);
+        if self.triad_key != Some(key) {
+            let (vertices, indices) = grid::triad(&spec.workplane, camera);
+            self.triad = vertices;
+            self.triad_indices = indices;
+            self.triad_generation = Generation(self.triad_generation.0 + 1);
+            self.triad_key = Some(key);
+        }
+    }
+
+    fn emit(&self, queue: &mut RenderQueue) {
+        if !self.dots.is_empty() {
+            let indices = (0..self.dots.len() as u32).collect();
+            queue.packets.push(self.packet(
+                self.dots_mesh,
+                self.ground_generation,
+                Topology::Points,
+                self.dots.clone(),
+                indices,
+            ));
+        }
+        if !self.lines.is_empty() {
+            let indices = (0..self.lines.len() as u32).collect();
+            queue.packets.push(self.packet(
+                self.lines_mesh,
+                self.ground_generation,
+                Topology::Lines,
+                self.lines.clone(),
+                indices,
+            ));
+        }
+        if !self.triad.is_empty() {
+            queue.packets.push(self.packet(
+                self.triad_mesh,
+                self.triad_generation,
+                Topology::Triangles,
+                self.triad.clone(),
+                self.triad_indices.clone(),
+            ));
+        }
+    }
+
+    /// The grid is deliberately **not pickable**: `PickId(0)` is the untagged id, which
+    /// resolves to nothing, so a click falls through to the geometry behind it.
+    fn packet(
+        &self,
+        mesh_id: MeshId,
+        generation: Generation,
+        topology: Topology,
+        vertices: Vec<Vertex>,
+        indices: Vec<u32>,
+    ) -> DrawPacket {
+        DrawPacket {
+            mesh_id,
+            generation,
+            topology,
+            geometry: Some(Geometry { vertices, indices }),
+            state: StateSnapshot {
+                world_transform: Matrix4::identity(),
+                color: [1.0, 1.0, 1.0, 1.0],
+                depth_bias: 0.0,
+                texture: None,
+                id: PickId(0),
+            },
+        }
+    }
+}
 
 /// How quickly a released orbit slows down (the velocity's time constant).
 const ORBIT_INERTIA_TAU: f32 = 0.18;
@@ -268,6 +396,8 @@ impl<V: InventorView> InventorViewport<V> {
             hovered_part: None,
             selection: None,
             hover_report: HoverReport::default(),
+            grid: None,
+            grid_queue: RenderQueue::default(),
             frame: None,
             presenter: None,
             presenter_frames: 0,
@@ -1200,7 +1330,8 @@ impl<V: InventorView> InventorViewport<V> {
             button,
             hit: hit.copied(),
         };
-        let snap = snap_to_geometry(&event, &self.camera, self.snap_grid);
+        let context = self.snap_grid.map(SnapContext::world);
+        let snap = snap_to_geometry(&event, &self.camera, context.as_ref());
         if let Some(tool) = self.tool.as_mut() {
             tool.on_event(&event, snap);
         }
@@ -1500,6 +1631,7 @@ impl<V: InventorView> InventorViewport<V> {
             let mut presenter = presenter.borrow_mut();
             if presenter.supports_pick() {
                 // Authoritative: `None` here means empty space, not "try elsewhere".
+                // The grid lives in its own queue, so the pick never sees it.
                 return presenter.pick_at(&self.queue, &self.camera, device);
             }
         }
@@ -1542,6 +1674,7 @@ impl<V: InventorView> InventorViewport<V> {
         self.queue = queue;
         self.directives = directives;
         self.stage_dirty = false;
+        self.sync_grid();
         self.sync_directive_cubes();
     }
 
@@ -1568,6 +1701,44 @@ impl<V: InventorView> InventorViewport<V> {
                 )
             })
             .collect();
+    }
+
+    /// Enable or disable the reference grid (G2). Returns whether it changed.
+    pub fn set_grid(&mut self, enabled: bool) -> bool {
+        if enabled == self.grid.is_some() {
+            return false;
+        }
+        self.grid = enabled.then(GridMesh::new);
+        self.recompile();
+        true
+    }
+
+    /// Whether the reference grid is shown.
+    pub fn grid_enabled(&self) -> bool {
+        self.grid.is_some()
+    }
+
+    /// Rebuild the grid for the current camera: the effective steps (screen-space
+    /// culling), the radius, and the screen-facing triad.
+    ///
+    /// The packets go to their own queue ([`grid_queue`](Self::grid_queue)) so the grid
+    /// is drawn but never picked.
+    fn sync_grid(&mut self) {
+        self.grid_queue = RenderQueue::default();
+        let Some(mesh) = self.grid.as_mut() else {
+            return;
+        };
+        let workplane = Workplane::world();
+        let (minor, major) =
+            grid::effective_steps(&self.camera, &workplane, grid::MINOR_STEP, grid::MAJOR_STEP);
+        let spec = GridSpec {
+            workplane,
+            minor,
+            major,
+            radius: GridSpec::radius_for(&self.camera),
+        };
+        mesh.sync(&self.camera, &spec, &GridStyle::default());
+        mesh.emit(&mut self.grid_queue);
     }
 
     /// Step a running snap animation, applying the interpolated camera. Returns
@@ -1631,6 +1802,16 @@ impl<V: InventorView> InventorViewport<V> {
             rect: None,
             overlay: false,
         });
+        if !self.grid_queue.is_empty() {
+            // A second non-overlay view: the same depth pass, so the grid occludes and is
+            // occluded by the scene, but it is never part of a pick.
+            views.push(ViewSpec {
+                queue: &self.grid_queue,
+                camera: &self.camera,
+                rect: None,
+                overlay: false,
+            });
+        }
         if !self.transient.is_empty() {
             views.push(ViewSpec {
                 queue: &self.transient,
@@ -3978,5 +4159,96 @@ mod tests {
             secondary.control = true;
         }
         assert!(gizmo_modifiers(secondary).ctrl);
+    }
+
+    /// An empty inventor scene, for a viewport that draws nothing but the grid.
+    fn empty_scene() -> Scene {
+        Scene {
+            root: Node {
+                kind: NodeKind::Separator,
+                children: vec![],
+            },
+        }
+    }
+
+    /// An identity-camera viewport with the reference grid on.
+    fn grid_view() -> InventorViewport<FakeView> {
+        let camera = Camera {
+            viewport: ferrocad_graphics::Viewport::new([100, 100], 1.0),
+            ..Camera::identity()
+        };
+        let mut viewport = InventorViewport::new(fake(ImageData::default()), camera, empty_scene());
+        assert!(viewport.set_grid(true));
+        viewport
+    }
+
+    #[test]
+    fn the_grid_draws_but_is_never_picked() {
+        let mut viewport = grid_view();
+
+        // Three packets: the dots, the major lines, the triad ribbons.
+        let topologies: Vec<Topology> = viewport
+            .grid_queue
+            .packets
+            .iter()
+            .map(|packet| packet.topology)
+            .collect();
+        assert_eq!(
+            topologies,
+            vec![Topology::Points, Topology::Lines, Topology::Triangles]
+        );
+
+        // The grid is scaffolding, not geometry: it lives outside the scene queue and
+        // carries the untagged id, so no pick path can reach it.
+        assert!(viewport.queue.is_empty());
+        assert!(
+            viewport
+                .grid_queue
+                .packets
+                .iter()
+                .all(|packet| packet.state.id == PickId(0))
+        );
+
+        // The origin is a dot under the pointer, and a click there resolves to nothing.
+        assert!(viewport.pick([50, 50]).is_none());
+    }
+
+    #[test]
+    fn set_grid_toggles_the_grid_queue() {
+        let mut viewport = grid_view();
+        assert!(viewport.grid_enabled());
+        assert_eq!(viewport.grid_queue.len(), 3);
+
+        assert!(!viewport.set_grid(true), "enabling twice is a no-op");
+
+        assert!(viewport.set_grid(false));
+        assert!(!viewport.grid_enabled());
+        assert!(viewport.grid_queue.is_empty());
+    }
+
+    #[test]
+    fn an_orbit_rebuilds_the_triad_but_not_the_ground() {
+        let mut viewport = grid_view();
+        let generations = |viewport: &InventorViewport<FakeView>| {
+            let packets = &viewport.grid_queue.packets;
+            (
+                packets[0].generation,
+                packets[1].generation,
+                packets[2].generation,
+            )
+        };
+        let (ground, lines, triad) = generations(&viewport);
+
+        viewport.camera.view =
+            Placement::new(Vector3::new(0.0, 0.0, -5.0), Rotation::identity()).to_matrix();
+        viewport.recompile();
+
+        let (ground_after, lines_after, triad_after) = generations(&viewport);
+        assert_eq!(ground, ground_after, "the dot field is camera-independent");
+        assert_eq!(lines, lines_after, "the major lines are camera-independent");
+        assert_ne!(
+            triad, triad_after,
+            "the screen-facing triad follows the camera"
+        );
     }
 }

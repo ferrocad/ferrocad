@@ -1,8 +1,8 @@
 # Topology, selection, and the F0 prerequisite
 
 Status: **F0.0 (binding reconnaissance and the tessellation/topology spike), F0.1
-(the kernel-neutral vocabulary) and F0.2 (the OCCT implementation) are built
-(2026-10-20); F0.3–F0.6 are planned.** Companion to [`geometry-and-topology.md`](geometry-and-topology.md)
+(the kernel-neutral vocabulary), F0.2 (the OCCT implementation) and F0.3 (pick
+coherence) are built (2026-10-20); F0.4–F0.6 are planned.** Companion to [`geometry-and-topology.md`](geometry-and-topology.md)
 (the naming problem and the lineage engine), [`occt-integration.md`](occt-integration.md)
 (the crate layout), [`occt-history-spike.md`](occt-history-spike.md) (the verified
 history bridge), and [`gizmo-manipulators.md`](gizmo-manipulators.md) (the manipulators
@@ -159,6 +159,26 @@ Implementation notes worth keeping:
 - An input edge can be both `deleted` and the source of a `generated` face (a fillet);
   the lineage records both, and `ElementMap::apply` retires the edge name.
 
+**F0.3 as built (2026-10-20).** `ferrocad_graphics::Hit` gained `part` (the
+`Vertex.part_idx` of the hit primitive) and `element` is now `Option<u32>` — the
+primitive ordinal when the CPU ray cast resolves one, `None` from the G-buffer (it
+resolves a pixel). CPU picking reads `part` from the primitive's first vertex; the GPU
+path writes the same field from the `[entity_id, part_idx]` target. Line picking uses a
+screen-space tolerance (`LINE_PICK_PIXELS = 2`) derived from the camera and the
+segment's distance; `pick_hit` without a camera keeps a fixed 0.04-world fallback.
+`ferrocad_stage::ShapeItem` gained `set_mesh`/`with_mesh` (and `parts()`), which tags
+each position and flows into `Vertex.part_idx` for both the surface and wire packets.
+`ferrocad_stage_py::Hit.part_idx` now returns `part`, and `element` is optional; the
+inventor facade sets `SoFaceDetail`/`SoLineDetail` `part_index = part` and
+`face_index`/`line_index = element` (or `-1` when the G-buffer answered).
+
+Zero-copy presentation picks on the window's device: `Presenter` gained defaulted
+`pick_at` and `supports_pick`, `GpuiInteropPresenter` delegates to its
+`FerrocadRenderer`, and `InventorViewport::pick` prefers the presenter when it supports
+picking (an empty hit is authoritative), then the fallback view's G-buffer, then the CPU
+ray cast. Hover, button events and tool dispatch share that one pick (they previously
+picked separately, and the button/tool paths always used the CPU ray).
+
 ## 5. F0.0 findings: `opencascade-sys` 0.3.0
 
 Checked against the published crate sources and then **verified by running**
@@ -302,7 +322,7 @@ returns none.
 | **F0.0b spike** ✅ | `spikes/occt-tessellation/` against OCCT 7.8.1, with `fc_topology.hxx` | box: 6 faces / 12 edges / 8 vertices, 12 triangles, 1-based nodes, adjacency both ways, equal + two-distance chamfer, fillet lineage |
 | **F0.1 vocabulary** ✅ | §4 types and trait additions; `ElementMap::apply`; defaulted trait methods | `cargo test -p ferrocad_geom` — 11 tests, no OCCT |
 | **F0.2 OCCT** ✅ | `tessellate`, `elements`, `ancestors`, `continuity`, `chamfer`, fillet history | `cargo test -p ferrocad_occt` — 13 tests: part identity, name round-trip, both adjacency directions, C0 corners, equal/asymmetric chamfer, fillet lineage, placed tessellation |
-| **F0.3 pick coherence** | `Hit { part, element }`; the CPU path reads `Vertex.part_idx`; Python `Hit.part_idx` returns the part; screen-space line tolerance | a two-group mesh picks group 0 vs 1; CPU and GPU agree on `(part, element)` |
+| **F0.3 pick coherence** ✅ | `Hit { part, element: Option<u32> }`; the CPU path reads `Vertex.part_idx`; Python `Hit.part_idx` returns the part; screen-space line tolerance | `ferrocad_graphics` 22 tests (two-group part id, screen-space line hit) and `ferrocad_stage`'s part-tagged mesh test; CPU and GPU agree on `part` |
 | **F0.4 stage view** | `ShapeItem` carries per-vertex part ids; a builder from `Tessellation`; per-part highlight sub-mesh; edge/vertex packets | a face highlight draws only that face; part count matches the kernel |
 | **F0.5 selection bridge** | viewport selection event; edition name resolution; `ShapeView` cache | clicking a face yields `("Box", "Face6")`; no viewport → Part dependency |
 | **F0.6 parametric edit** | `Part::Fillet` / `Part::Chamfer` object types (`Base` LinkSub + `Edges` + `Radius`/distances) whose `execute` resolves names and calls the backend; tangent-chain walk over `ancestors` + `continuity` | changing `Radius` and recomputing rebuilds the shape; undo/redo is a document transaction; the F1 arc scrubber only has to update a property |

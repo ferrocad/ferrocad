@@ -238,8 +238,11 @@ second device is created when interop succeeds.
 
 - `ferrocad_wgpu`'s pipelines, mesh/texture caches, pick pass and `render_views`
   all stay; only the device/queue and the target view change.
-- Picking keeps working: the G-buffer pass uses the renderer's device and reads one
-  texel, not the whole frame.
+- Picking keeps working, and now goes through the presenter: `Presenter::pick_at`
+  delegates to the window-device renderer's G-buffer pass (one texel, not the whole
+  frame), and `Presenter::supports_pick` makes that answer authoritative, so an empty
+  hit does not run a second pass. The viewport prefers it over its image-path renderer
+  and the CPU ray cast; hover, button events and tool dispatch all use that one pick.
 - The scene compiler, directives, navicube, tools and gizmo are untouched.
 - `ferrocad_inventor_py` and the Python surface are untouched.
 - The headless example (`inventor_roundtrip --headless`), tests and the image
@@ -341,7 +344,8 @@ writes a frame.
   the readback path still works.
 - Windowed, Linux: assert that `InventorView::image()` is not called once the
   presenter is ready (a counter/logging); resize the window and check the aspect;
-  hover/click the sample cube (CPU pick) and the navicube (overlay) still work.
+  hover/click the sample cube (the presenter's G-buffer pick) and the navicube
+  (overlay) still work.
 - Compare frame time with the current readback path at 1920×1080; the expected win
   is the elimination of the `poll(wait_indefinitely())` stall and the two copies.
 

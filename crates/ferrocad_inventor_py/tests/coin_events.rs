@@ -58,7 +58,8 @@ fn hit() -> Hit {
         id: PickId(0),
         point: [1.0, 2.0, 3.0],
         normal: [0.0, 1.0, 0.0],
-        element: 4,
+        part: 0,
+        element: Some(4),
         topology: Topology::Triangles,
         distance: 5.0,
     }

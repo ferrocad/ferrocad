@@ -635,7 +635,7 @@ impl WgpuRenderer {
             return None;
         }
         let entity = entity_raw - 1;
-        let element = read_u32(&ids[4..])?;
+        let part = read_u32(&ids[4..])?;
         let normal = [
             read_f32(&normals)?,
             read_f32(&normals[4..])?,
@@ -667,7 +667,9 @@ impl WgpuRenderer {
             id: PickId(entity),
             point,
             normal,
-            element,
+            part,
+            // The G-buffer resolves a pixel, not a primitive ordinal.
+            element: None,
             topology,
             distance,
         })
@@ -1684,12 +1686,14 @@ mod tests {
 
         let face = renderer.pick_at(&queue, &camera, [16, 32]).expect("triangle hit");
         assert_eq!(face.id, PickId(0), "PickId(0) is a valid hit, not empty space");
-        assert_eq!(face.element, 5, "the face's sub-element index");
+        assert_eq!(face.part, 5, "the face's sub-element index");
+        assert_eq!(face.element, None, "the G-buffer has no primitive ordinal");
         assert_eq!(face.topology, Topology::Triangles);
 
         let edge = renderer.pick_at(&queue, &camera, [48, 32]).expect("line hit");
         assert_eq!(edge.id, PickId(4));
-        assert_eq!(edge.element, 7, "the edge's sub-element index");
+        assert_eq!(edge.part, 7, "the edge's sub-element index");
+        assert_eq!(edge.element, None);
         assert_eq!(edge.topology, Topology::Lines);
     }
 }

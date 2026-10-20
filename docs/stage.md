@@ -245,8 +245,11 @@ gains `supports_pick()` (default `false`) and `pick_at(...)` (default `None`).
 the CPU ray cast (`ferrocad_graphics::pick_at_hit`) otherwise, so the CPU path stays the
 fallback for headless/CPU hosts and every listener/tool/gizmo keeps working unchanged.
 The vertex `part_idx` (`Vertex { pos, norm, uv, part_idx }`, a `u32`) is the green
-channel; `Hit::element` carries it, which is what `SoFaceDetail`/`SoLineDetail` and
-`stage`'s snapping will consume.
+channel; `Hit::part` carries it, and `Hit::element` is the primitive ordinal when the
+CPU ray cast resolves one (the G-buffer resolves a pixel, so it reports `None`).
+`ShapeItem::set_mesh` tags each position with its part id, and `SoFaceDetail`/
+`SoLineDetail` now receive both (`part_index` = `part`, `face_index`/`line_index` =
+`element`).
 
 **Verification:** `ferrocad_wgpu`'s `pick_at_resolves_the_object_and_its_world_point`
 (two clip-space triangles, distinct ids — a pixel picks the right id and the world

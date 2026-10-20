@@ -10,6 +10,7 @@
 //! neutral [`ViewSpec`] batch vocabulary, so `ferrocad_viewport` keeps its "no wgpu,
 //! no Python" boundary. The host (`ferrocad_gpui`) implements it.
 
+use ferrocad_graphics::{Camera, Hit, RenderQueue};
 use ferrocad_inventor::ViewSpec;
 use gpui::GpuCanvasContext;
 
@@ -57,4 +58,28 @@ pub trait Presenter {
 
     /// Composite the last drawn frame into the canvas. Called after `prepare`.
     fn present(&mut self, gpu: &mut GpuCanvasContext);
+
+    /// The G-buffer pick on the presenter's device, when it has one.
+    ///
+    /// The viewport prefers this over its fallback view and the CPU ray cast: with
+    /// zero-copy presentation the presenter already owns the window's device and the
+    /// frame it just drew, so a pick there needs no second renderer. A presenter that
+    /// cannot pick returns `None`, and the viewport falls back.
+    fn pick_at(
+        &mut self,
+        _queue: &RenderQueue,
+        _camera: &Camera,
+        _device: [i32; 2],
+    ) -> Option<Hit> {
+        None
+    }
+
+    /// Whether [`pick_at`](Self::pick_at) is authoritative.
+    ///
+    /// When true, the viewport uses the presenter's answer even when it is `None`
+    /// (empty space), so it does not run a second pick pass. A presenter without a
+    /// pick keeps the default `false` and the viewport falls through to the backend.
+    fn supports_pick(&self) -> bool {
+        false
+    }
 }

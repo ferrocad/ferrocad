@@ -409,16 +409,16 @@ fn build_picked_point(py: Python<'_>, hit: &Hit) -> PyResult<Py<PyAny>> {
         Topology::Lines => Py::new(
             py,
             PyClassInitializer::from(SoDetail).add_subclass(SoLineDetail {
-                line_index: hit.element as i32,
-                part_index: 0,
+                line_index: hit.element.map_or(-1, |element| element as i32),
+                part_index: hit.part as i32,
             }),
         )?
         .into_any(),
         _ => Py::new(
             py,
             PyClassInitializer::from(SoDetail).add_subclass(SoFaceDetail {
-                face_index: hit.element as i32,
-                part_index: 0,
+                face_index: hit.element.map_or(-1, |element| element as i32),
+                part_index: hit.part as i32,
                 point: hit.point,
             }),
         )?

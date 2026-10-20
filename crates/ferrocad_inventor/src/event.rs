@@ -126,7 +126,8 @@ mod tests {
             id,
             point: [0.0, 0.0, 0.0],
             normal: [0.0, 0.0, 1.0],
-            element: 0,
+            part: 0,
+            element: Some(0),
             topology: crate::geometry::Topology::Triangles,
             distance: 1.0,
         }

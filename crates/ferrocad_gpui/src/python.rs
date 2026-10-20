@@ -460,7 +460,8 @@ mod tests {
             id: ferrocad_inventor::PickId(0),
             point: [0.0, 0.0, 1.0],
             normal: [0.0, 0.0, 1.0],
-            element: 1,
+            part: 0,
+            element: Some(1),
             topology: ferrocad_inventor::Topology::Triangles,
             distance: 1.0,
         };

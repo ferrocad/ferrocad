@@ -33,15 +33,16 @@ impl Hit {
         self.inner.id.0
     }
 
-    /// The topological sub-element index (`0` until topological naming lands).
+    /// The topological sub-element id (`Vertex.part_idx`); `0` when untagged.
     #[getter]
     fn part_idx(&self) -> u32 {
-        self.inner.element
+        self.inner.part
     }
 
-    /// The primitive index within the mesh (a triangle or segment ordinal).
+    /// The primitive index within the mesh (a triangle or segment ordinal), when the
+    /// pick path knows it. The GPU pick resolves a pixel, so it reports `None`.
     #[getter]
-    fn element(&self) -> u32 {
+    fn element(&self) -> Option<u32> {
         self.inner.element
     }
 
@@ -77,7 +78,7 @@ impl Hit {
         format!(
             "Hit(entity_id={}, part_idx={}, point={:?})",
             self.inner.id.0,
-            self.inner.element,
+            self.inner.part,
             triple(self.inner.point)
         )
     }

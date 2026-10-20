@@ -6,10 +6,10 @@
 //! neither a GPU nor a live scene graph — the same reason the g-buffer pass in
 //! `ferrocad_wgpu` is optional.
 
-use ferrocad_types::Matrix4;
+use ferrocad_types::{Matrix4, Vector3};
 
 use crate::batch::{PickId, RenderQueue};
-use crate::camera::Camera;
+use crate::camera::{Camera, Projection};
 use crate::geometry::Topology;
 use crate::pixels::Rect;
 
@@ -112,10 +112,10 @@ impl Camera {
     }
 }
 
-/// A ray hit: which object, where on it, and on which primitive.
+/// A ray hit: which object, where on it, and which sub-element.
 ///
 /// The richer form of [`pick`], carrying what `SoPickedPoint` and the detail classes
-/// expose to Python (world point, surface normal, and the primitive index).
+/// expose to Python (world point, surface normal, and the primitive/sub-element ids).
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Hit {
     /// The object that was hit (the packet's [`PickId`]).
@@ -124,26 +124,41 @@ pub struct Hit {
     pub point: [f32; 3],
     /// The world-space normal (triangle normal; `+Z` for a line hit).
     pub normal: [f32; 3],
-    /// The index of the primitive within its mesh: a triangle index for
-    /// [`Topology::Triangles`], a segment index for [`Topology::Lines`]. This is the
-    /// `SoFaceDetail`/`SoLineDetail` index.
-    pub element: u32,
+    /// The topological sub-element id carried by the hit primitive's vertices
+    /// ([`Vertex::part_idx`](crate::geometry::Vertex::part_idx)). `0` when the
+    /// producer does not tag sub-elements.
+    pub part: u32,
+    /// The primitive ordinal within its mesh: a triangle index for
+    /// [`Topology::Triangles`], a segment index for [`Topology::Lines`].
+    ///
+    /// The G-buffer path resolves a pixel rather than a primitive, so it reports
+    /// `None` there; it always reports [`part`](Self::part).
+    pub element: Option<u32>,
     /// The topology of the mesh that was hit.
     pub topology: Topology,
     /// The distance along the ray from its origin.
     pub distance: f64,
 }
 
-/// How close a ray must pass to a line segment to pick it (world units).
-const LINE_PICK_RADIUS: f64 = 0.04;
+/// A fixed world-space line radius for [`pick_hit`], which has no camera from which to
+/// derive a screen-space tolerance. [`pick_at_hit`] uses [`LINE_PICK_PIXELS`] instead.
+const DEFAULT_LINE_PICK_RADIUS: f64 = 0.04;
+
+/// The screen-space line tolerance: a 1 px stroke plus one pixel of padding.
+pub const LINE_PICK_PIXELS: f64 = 2.0;
 
 /// The nearest packet under `ray`, with its hit distance.
 pub fn pick(queue: &RenderQueue, ray: &Ray) -> Option<(PickId, f64)> {
     pick_hit(queue, ray).map(|hit| (hit.id, hit.distance))
 }
 
-/// The nearest triangle or line segment under `ray`, with its point and index.
+/// The nearest triangle or line segment under `ray`, with its point and indices.
 pub fn pick_hit(queue: &RenderQueue, ray: &Ray) -> Option<Hit> {
+    pick_hit_impl(queue, ray, None)
+}
+
+/// [`pick_hit`], with a camera to derive a screen-space tolerance for line segments.
+fn pick_hit_impl(queue: &RenderQueue, ray: &Ray, camera: Option<&Camera>) -> Option<Hit> {
     let mut best: Option<Hit> = None;
     for packet in &queue.packets {
         if packet.topology == Topology::Points {
@@ -172,18 +187,29 @@ pub fn pick_hit(queue: &RenderQueue, ray: &Ray) -> Option<Hit> {
                 };
                 (distance, to_f32(normalize(cross(sub(b, a), sub(c, a)))))
             } else {
-                let Some(distance) = ray.segment_distance(a, b, LINE_PICK_RADIUS) else {
+                // A polyline is picked through a "thick ray". With a camera the
+                // thickness is derived from the segment's distance (screen-space);
+                // without one it falls back to a fixed world radius.
+                let tolerance = camera.map_or(DEFAULT_LINE_PICK_RADIUS, |camera| {
+                    world_per_pixel(camera, scale(add(a, b), 0.5)) * LINE_PICK_PIXELS
+                });
+                let Some(distance) = ray.segment_distance(a, b, tolerance) else {
                     continue;
                 };
                 (distance, [0.0, 0.0, 1.0])
             };
             if best.is_none_or(|hit| distance < hit.distance) {
                 let point = add(ray.origin, scale(ray.direction, distance));
+                let part = geometry
+                    .vertices
+                    .get(indices[0] as usize)
+                    .map_or(0, |vertex| vertex.part_idx);
                 best = Some(Hit {
                     id: packet.state.id,
                     point: to_f32(point),
                     normal,
-                    element: element as u32,
+                    part,
+                    element: Some(element as u32),
                     topology: packet.topology,
                     distance,
                 });
@@ -191,6 +217,24 @@ pub fn pick_hit(queue: &RenderQueue, ray: &Ray) -> Option<Hit> {
         }
     }
     best
+}
+
+/// The world size of one device pixel at `point`.
+fn world_per_pixel(camera: &Camera, point: [f64; 3]) -> f64 {
+    let height = f64::from(camera.viewport.device_size()[1].max(1));
+    if let Projection::Orthographic { extent, .. } = camera.projection {
+        return 2.0 * extent / height;
+    }
+    let Some(inverse) = camera.view.inverse() else {
+        return DEFAULT_LINE_PICK_RADIUS;
+    };
+    let eye = inverse.transform(&Vector3::zero());
+    let distance = Vector3::new(point[0], point[1], point[2])
+        .sub(&eye)
+        .length()
+        .max(1e-6);
+    let m5 = camera.projection_matrix().m[5].abs().max(1e-6);
+    distance * 2.0 / (height * m5)
 }
 
 /// The [`PickId`] under a device position, if any.
@@ -201,7 +245,7 @@ pub fn pick_at(queue: &RenderQueue, camera: &Camera, device: [i32; 2]) -> Option
 /// The [`Hit`] under a device position, if any.
 pub fn pick_at_hit(queue: &RenderQueue, camera: &Camera, device: [i32; 2]) -> Option<Hit> {
     let ray = camera.ray_through(device)?;
-    pick_hit(queue, &ray)
+    pick_hit_impl(queue, &ray, Some(camera))
 }
 
 /// The [`PickId`] under a device position **within `rect`** (an overlay), if any.
@@ -217,7 +261,7 @@ pub fn pick_at_rect_hit(
     device: [i32; 2],
 ) -> Option<Hit> {
     let ray = camera.ray_through_rect(rect, device)?;
-    pick_hit(queue, &ray)
+    pick_hit_impl(queue, &ray, Some(camera))
 }
 
 // --- small vector/matrix helpers (f64, row-major) --------------------------------
@@ -370,16 +414,21 @@ mod tests {
     use crate::batch::{DrawPacket, Generation, MeshId, PickId, RenderQueue};
     use crate::geometry::{Geometry, Vertex};
     use crate::state::StateSnapshot;
-    use ferrocad_types::Matrix4;
+    use ferrocad_types::{Matrix4, Placement, Rotation, Vector3};
 
-    fn packet(topology: Topology, positions: &[[f32; 3]], indices: Vec<u32>) -> DrawPacket {
+    fn packet_with_part(
+        topology: Topology,
+        positions: &[[f32; 3]],
+        indices: Vec<u32>,
+        part: u32,
+    ) -> DrawPacket {
         let vertices = positions
             .iter()
             .map(|position| Vertex {
                 position: *position,
                 normal: [0.0, 0.0, 1.0],
                 uv: [0.0, 0.0],
-                part_idx: 0,
+                part_idx: part,
             })
             .collect();
         DrawPacket {
@@ -395,6 +444,10 @@ mod tests {
                 id: PickId(0),
             },
         }
+    }
+
+    fn packet(topology: Topology, positions: &[[f32; 3]], indices: Vec<u32>) -> DrawPacket {
+        packet_with_part(topology, positions, indices, 0)
     }
 
     /// A triangle at z = 0.5 spanning [-0.5, 0.5] in x and y.
@@ -469,6 +522,59 @@ mod tests {
         };
         let hit = pick_hit(&queue, &ray).expect("line hit");
         assert_eq!(hit.topology, Topology::Lines);
-        assert_eq!(hit.element, 0);
+        assert_eq!(hit.element, Some(0));
+        assert_eq!(hit.part, 0);
+    }
+
+    #[test]
+    fn a_cpu_pick_carries_the_vertex_part_id() {
+        let queue = RenderQueue {
+            packets: vec![packet_with_part(
+                Topology::Triangles,
+                &[[-0.5, -0.5, 0.5], [0.5, -0.5, 0.5], [0.0, 0.5, 0.5]],
+                vec![0, 1, 2],
+                7,
+            )],
+        };
+        let ray = Ray {
+            origin: [0.0, 0.0, -5.0],
+            direction: [0.0, 0.0, 1.0],
+        };
+        let hit = pick_hit(&queue, &ray).expect("triangle hit");
+        assert_eq!(hit.part, 7, "the triangle's part id");
+        assert_eq!(hit.element, Some(0), "the triangle ordinal");
+    }
+
+    #[test]
+    fn a_line_pick_is_screen_space_when_the_camera_is_known() {
+        // The eye ends up at world z = +100 looking down -Z.
+        let camera = Camera {
+            view: Placement::new(Vector3::new(0.0, 0.0, -100.0), Rotation::identity()).to_matrix(),
+            projection: Projection::Perspective {
+                fov_y: 45.0_f64.to_radians(),
+                near: 0.1,
+                far: 1000.0,
+            },
+            viewport: crate::Viewport::new([100, 100], 1.0),
+        };
+        // One world unit off the view axis at ~100 units: a little over one pixel at
+        // this depth. The screen-space tolerance picks it; the fixed world radius
+        // used by the camera-less API does not.
+        let queue = RenderQueue {
+            packets: vec![packet(
+                Topology::Lines,
+                &[[-1.0, 1.0, 0.0], [1.0, 1.0, 0.0]],
+                vec![0, 1],
+            )],
+        };
+        let device = [50, 50];
+        let hit = pick_at_hit(&queue, &camera, device).expect("screen-space line hit");
+        assert_eq!(hit.topology, Topology::Lines);
+
+        let ray = camera.ray_through(device).expect("a ray");
+        assert!(
+            pick_hit(&queue, &ray).is_none(),
+            "the fixed world radius (0.04) misses a one-unit offset"
+        );
     }
 }

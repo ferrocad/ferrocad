@@ -131,8 +131,8 @@ shared coords → surface + wireframe batches, concave triangulation, cache reus
   1×1 readback, and NDC unprojection through the inverse view-projection, exposed via
   `InventorView::supports_pick`/`pick_at` and preferred by `InventorViewport` (the CPU
   ray cast is the fallback). The **`part_index`** it reports is the per-vertex
-  `Vertex::part_idx`; filling it with the real (1-based) sub-shape id still depends on
-  the OCCT topological-naming work, not the renderer.
+  `Vertex::part_idx`; F0.3 fills it (`ShapeItem::set_mesh`, `ferrocad_occt`'s
+  tessellation), and `Hit::part` now exposes it on both pick paths.
 * ◐ **`SoPickedPoint`** (world point, normal, `SoDetail`) and the **`SoDetail`
   classes** (`SoFaceDetail.getFaceIndex()`/`getPartIndex()`,
   `SoLineDetail.getLineIndex()`, `getPoint()`). Built in **S4** with 0-based indices;

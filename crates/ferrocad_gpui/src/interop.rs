@@ -21,7 +21,7 @@
 
 use std::sync::Arc;
 
-use ferrocad_inventor::ViewSpec;
+use ferrocad_inventor::{Camera, Hit, RenderQueue, ViewSpec};
 use ferrocad_viewport::{Presenter, PresenterStatus};
 use ferrocad_wgpu::{GpuContext, WgpuRenderer as FerrocadRenderer};
 use gpui::{Corners, GpuCanvasContext};
@@ -250,5 +250,18 @@ impl Presenter for GpuiInteropPresenter {
         if failed {
             self.status = PresenterStatus::Unsupported;
         }
+    }
+
+    fn pick_at(&mut self, queue: &RenderQueue, camera: &Camera, device: [i32; 2]) -> Option<Hit> {
+        if self.status != PresenterStatus::Ready {
+            return None;
+        }
+        // The renderer already lives on the window's device, so this is the same
+        // G-buffer pass the image path uses, just without a second device.
+        self.renderer.as_mut()?.pick_at(queue, camera, device)
+    }
+
+    fn supports_pick(&self) -> bool {
+        self.status == PresenterStatus::Ready && self.renderer.is_some()
     }
 }

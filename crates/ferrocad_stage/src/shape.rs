@@ -62,6 +62,9 @@ pub struct ShapeItem {
     normals: Vec<[f32; 3]>,
     triangles: Vec<u32>,
     edges: Vec<u32>,
+    /// The sub-element id of each position ([`ferrocad_graphics::Vertex::part_idx`]);
+    /// empty means every vertex is part `0`.
+    parts: Vec<u32>,
     surface_mesh: MeshId,
     wire_mesh: MeshId,
     generation: Generation,
@@ -83,6 +86,7 @@ impl ShapeItem {
             normals: Vec::new(),
             triangles: Vec::new(),
             edges: Vec::new(),
+            parts: Vec::new(),
             surface_mesh: next_mesh_id(),
             wire_mesh: next_mesh_id(),
             generation: Generation(0),
@@ -104,12 +108,47 @@ impl ShapeItem {
         triangles: Vec<u32>,
         edges: Vec<u32>,
     ) {
+        self.set_mesh(positions, normals, triangles, edges, Vec::new());
+    }
+
+    /// Replace the tessellation **and** tag each position with its sub-element id.
+    ///
+    /// `parts` is indexed by position, matching what a
+    /// [`ferrocad_geom::Tessellation`] carries; a shorter (or empty) list leaves the
+    /// remaining vertices at part `0`.
+    pub fn set_mesh(
+        &mut self,
+        positions: Vec<[f32; 3]>,
+        normals: Vec<[f32; 3]>,
+        triangles: Vec<u32>,
+        edges: Vec<u32>,
+        parts: Vec<u32>,
+    ) {
         self.positions = positions;
         self.normals = normals;
         self.triangles = triangles;
         self.edges = edges;
+        self.parts = parts;
         // Any geometry change invalidates a renderer's cached upload for this mesh.
         self.generation = Generation(self.generation.0 + 1);
+    }
+
+    /// The builder form of [`set_mesh`](Self::set_mesh).
+    pub fn with_mesh(
+        mut self,
+        positions: Vec<[f32; 3]>,
+        normals: Vec<[f32; 3]>,
+        triangles: Vec<u32>,
+        edges: Vec<u32>,
+        parts: Vec<u32>,
+    ) -> Self {
+        self.set_mesh(positions, normals, triangles, edges, parts);
+        self
+    }
+
+    /// The per-position sub-element ids.
+    pub fn parts(&self) -> &[u32] {
+        &self.parts
     }
 
     /// The builder form of [`set_shape`](Self::set_shape).
@@ -322,12 +361,13 @@ impl ShapeItem {
             let vertices = self
                 .positions
                 .iter()
+                .enumerate()
                 .zip(&self.normals)
-                .map(|(position, normal)| Vertex {
+                .map(|((index, position), normal)| Vertex {
                     position: *position,
                     normal: *normal,
                     uv: [0.0, 0.0],
-                    part_idx: 0,
+                    part_idx: self.parts.get(index).copied().unwrap_or(0),
                 })
                 .collect();
             Some(Geometry {
@@ -335,7 +375,7 @@ impl ShapeItem {
                 indices: self.triangles.clone(),
             })
         } else {
-            Some(flat_surface(&self.positions, &self.triangles))
+            Some(flat_surface(&self.positions, &self.triangles, &self.parts))
         }
     }
 
@@ -347,11 +387,12 @@ impl ShapeItem {
         let vertices = self
             .positions
             .iter()
-            .map(|position| Vertex {
+            .enumerate()
+            .map(|(index, position)| Vertex {
                 position: *position,
                 normal: [0.0, 0.0, 1.0],
                 uv: [0.0, 0.0],
-                part_idx: 0,
+                part_idx: self.parts.get(index).copied().unwrap_or(0),
             })
             .collect();
         Some(Geometry {
@@ -363,7 +404,7 @@ impl ShapeItem {
 
 /// Flat-shade `triangles`: one unrolled vertex per index, each carrying its triangle's
 /// face normal. Malformed triangles (an out-of-range index) are skipped.
-fn flat_surface(positions: &[[f32; 3]], triangles: &[u32]) -> Geometry {
+fn flat_surface(positions: &[[f32; 3]], triangles: &[u32], parts: &[u32]) -> Geometry {
     let mut vertices = Vec::with_capacity(triangles.len());
     let mut indices = Vec::with_capacity(triangles.len());
     for tri in triangles.chunks_exact(3) {
@@ -384,7 +425,7 @@ fn flat_surface(positions: &[[f32; 3]], triangles: &[u32]) -> Geometry {
                 position: *position,
                 normal,
                 uv: [0.0, 0.0],
-                part_idx: 0,
+                part_idx: parts.get(index as usize).copied().unwrap_or(0),
             });
         }
     }
@@ -471,6 +512,46 @@ mod tests {
         assert_eq!(queue.len(), 1);
         assert_eq!(queue.packets[0].topology, Topology::Lines);
         assert_eq!(queue.packets[0].state.color, item.edge_color());
+    }
+
+    #[test]
+    fn part_ids_reach_the_surface_and_wire_vertices() {
+        let parts = vec![4, 4, 1, 1];
+        let item = ShapeItem::new(3)
+            .with_mesh(
+                vec![
+                    [0.0, 0.0, 0.0],
+                    [1.0, 0.0, 0.0],
+                    [0.0, 1.0, 0.0],
+                    [1.0, 1.0, 0.0],
+                ],
+                Vec::new(),
+                vec![0, 1, 2, 1, 3, 2],
+                vec![0, 1, 3, 2],
+                parts.clone(),
+            )
+            .with_draw_mode(DrawMode::ShadedWithEdges);
+        assert_eq!(item.parts(), parts.as_slice());
+
+        let queue = emit(&item);
+        let surface = queue
+            .packets
+            .iter()
+            .find(|packet| packet.topology == Topology::Triangles)
+            .expect("a surface packet");
+        let geometry = surface.geometry.as_ref().expect("fresh geometry");
+        // Flat-shaded: each unrolled vertex carries its source position's part.
+        let ids: Vec<u32> = geometry.vertices.iter().map(|v| v.part_idx).collect();
+        assert_eq!(ids, vec![4, 4, 1, 4, 1, 1]);
+
+        let wire = queue
+            .packets
+            .iter()
+            .find(|packet| packet.topology == Topology::Lines)
+            .expect("a wire packet");
+        let geometry = wire.geometry.as_ref().expect("fresh geometry");
+        assert_eq!(geometry.vertices[0].part_idx, 4);
+        assert_eq!(geometry.vertices[2].part_idx, 1);
     }
 
     #[test]

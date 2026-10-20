@@ -66,14 +66,20 @@ semantic channel the renderer ignores and the viewport consumes (see
     Möller–Trumbore against the world-space triangles. This is the `SoRayPickAction`
     analogue and needs no GPU. `pick_hit`/`pick_at_hit` return a
     [`Hit`](../crates/ferrocad_graphics/src/pick.rs) (object id, world point, surface
-    normal, primitive index) — what `SoPickedPoint`/`SoFaceDetail` expose to Python.
+    normal, sub-element `part`, and the primitive `element`) — what
+    `SoPickedPoint`/`SoFaceDetail` expose to Python. Line picking is screen-space when
+    a camera is available.
   - the **hardware G-buffer pass** (`ferrocad_wgpu::pick`, T4 sub-slice 4): the scene
     view is re-drawn into offscreen single-sampled targets (`Rg32Uint`
     `[entity_id, part_idx]`, `Rgba32Float` `[normal, topology]`, `R32Float` depth), and a
-    1×1 texel is read back and unprojected — the exact rasterised pixel, O(1).
+    1×1 texel is read back and unprojected — the exact rasterised pixel, O(1). It knows
+    the sub-element `part`, not the primitive ordinal (`Hit::element` is `None`).
   The `InventorView` seam carries both: `supports_pick()` (default `false`) selects
-  whether `InventorViewport::pick_main` uses the backend's `pick_at` or falls back to the
-  CPU ray cast. The two agree on the object id and the sub-element index.
+  whether the backend's `pick_at` is used or the CPU ray cast. `InventorViewport::pick`
+  also consults a ready [`Presenter`](gpu-interop-assessment.md) first: its
+  `supports_pick`/`pick_at` make the window-device G-buffer authoritative, so an empty
+  hit does not run a second pass. Hover, button events and tool dispatch all use that
+  one pick. The paths agree on the object id and `part`.
 - **Events** are `ferrocad_inventor::Event` (`MouseMove`/`MouseButton`/`MouseLeave`)
   delivered to an `EventListener` (`on_event(event, hit, scene, directives)`) — the
   `SoEventCallback` analogue. The listener may edit the scene and report whether it
@@ -178,8 +184,11 @@ The contract, matching FreeCAD (see the assessment and `InputDevice`/
   `Home` button (N4b; see [`navicube.md`](navicube.md)).
 - **Line and point pipelines**, routed by `Topology` (scene and overlay variants), so
   `Topology::Lines`/`Points` packets draw correctly; **line (segment) picking**
-  (`Hit` carries its `Topology` + `element`, and the facade builds a `SoLineDetail`
-  for a line hit). The navigation cube's edges are lines and its corners small cubes.
+  (`Hit` carries its `Topology`, its sub-element `part`, and the primitive `element`
+  when the CPU ray cast resolves one; the facade builds a `SoLineDetail` for a line
+  hit). Line picking is screen-space when a camera is available (2 px), so it does not
+  depend on model scale. The navigation cube's edges are lines and its corners small
+  cubes.
 - A **texture path** (`SoTexture2` analogue): `NodeKind::Texture2` +
   `TextureCoordinate2`, a vertex `uv`, `State.texture` (an `Arc<Texture2>`, RGBA8 with
   a stable id), and a wgpu bind group (group 1) sampling the shape texture (a 1×1

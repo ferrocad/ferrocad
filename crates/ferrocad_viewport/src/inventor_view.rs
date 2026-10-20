@@ -519,8 +519,9 @@ impl<V: InventorView> InventorViewport<V> {
             }
         }
 
-        changed |= self.dispatch_tool(PointerKind::Move, device, None);
-        changed | self.pick_main(device)
+        let hit = self.pick(device);
+        changed |= self.dispatch_tool(PointerKind::Move, device, None, hit.as_ref());
+        changed | self.dispatch_hover(device, hit.as_ref())
     }
 
     /// Deliver a mouse-button change, in **viewport-local logical** pixels.
@@ -686,8 +687,8 @@ impl<V: InventorView> InventorViewport<V> {
         } else {
             PointerKind::Up
         };
-        let mut changed = self.dispatch_tool(kind, device, stage_button(button));
-        let hit = pick_at_hit(&self.queue, &self.camera, device);
+        let hit = self.pick(device);
+        let mut changed = self.dispatch_tool(kind, device, stage_button(button), hit.as_ref());
         let event = Event::MouseButton {
             position: device,
             button,
@@ -833,16 +834,16 @@ impl<V: InventorView> InventorViewport<V> {
         kind: PointerKind,
         device: [i32; 2],
         button: Option<StageButton>,
+        hit: Option<&Hit>,
     ) -> bool {
         if self.tool.is_none() {
             return false;
         }
-        let hit = pick_at_hit(&self.queue, &self.camera, device);
         let event = PointerEvent {
             kind,
             position: device,
             button,
-            hit,
+            hit: hit.copied(),
         };
         let snap = snap_to_geometry(&event, &self.camera, self.snap_grid);
         if let Some(tool) = self.tool.as_mut() {
@@ -1099,19 +1100,32 @@ impl<V: InventorView> InventorViewport<V> {
         changed | self.dispatch(&Event::MouseLeave, None)
     }
 
-    /// Pick the main scene at a device position and run the listeners.
+    /// The hit under a device position.
     ///
-    /// The backend's hardware G-buffer pick is preferred (it resolves the exact
-    /// rasterised pixel); a backend without one falls back to the CPU ray cast.
-    fn pick_main(&mut self, device: [i32; 2]) -> bool {
-        let hit = if self.view.supports_pick() {
+    /// Priority: the presenter's G-buffer pick (the window's device, which already
+    /// holds the frame it drew), then the fallback view's hardware pick, then the CPU
+    /// ray cast. All three consume the same scene-and-stage queue and camera, so this
+    /// is one pick, not three parallel implementations.
+    fn pick(&mut self, device: [i32; 2]) -> Option<Hit> {
+        if let Some(presenter) = self.presenter.as_ref() {
+            let mut presenter = presenter.borrow_mut();
+            if presenter.supports_pick() {
+                // Authoritative: `None` here means empty space, not "try elsewhere".
+                return presenter.pick_at(&self.queue, &self.camera, device);
+            }
+        }
+        if self.view.supports_pick() {
             self.view.pick_at(&self.queue, &self.camera, device)
         } else {
             pick_at_hit(&self.queue, &self.camera, device)
-        };
-        self.hover = hit.as_ref().map(|hit| hit.id);
+        }
+    }
+
+    /// Update the hover target and run the `MouseMove` listeners for `hit`.
+    fn dispatch_hover(&mut self, device: [i32; 2], hit: Option<&Hit>) -> bool {
+        self.hover = hit.map(|hit| hit.id);
         let event = Event::MouseMove { position: device };
-        self.dispatch(&event, hit.as_ref())
+        self.dispatch(&event, hit)
     }
 
     /// Run the listeners on an event and recompile if any changed the scene.
@@ -1916,6 +1930,25 @@ mod tests {
         }
     }
 
+    /// Records the pick id delivered with a button event.
+    #[derive(Default)]
+    struct ButtonHitProbe(Rc<std::cell::Cell<Option<u32>>>);
+
+    impl EventListener for ButtonHitProbe {
+        fn on_event(
+            &mut self,
+            event: &Event,
+            hit: Option<&Hit>,
+            _scene: &mut Scene,
+            _directives: &Directives,
+        ) -> bool {
+            if matches!(event, Event::MouseButton { .. }) {
+                self.0.set(hit.map(|hit| hit.id.0));
+            }
+            false
+        }
+    }
+
     #[test]
     fn pointer_events_drive_picking_and_the_listener() {
         let camera = Camera {
@@ -1996,11 +2029,13 @@ mod tests {
         assert_eq!(viewport.view().resize_calls, 1, "an unchanged size is a no-op");
     }
 
-    /// A presenter with a fixed status, recording how often `draw` ran.
+    /// A presenter with a fixed status, recording how often `draw` ran and returning
+    /// `pick` (when set) as its G-buffer hit.
     struct TestPresenter {
         status: PresenterStatus,
         draws: Rc<std::cell::Cell<u32>>,
         size: [u32; 2],
+        pick: Option<u32>,
     }
 
     impl Presenter for TestPresenter {
@@ -2016,6 +2051,25 @@ mod tests {
             true
         }
         fn present(&mut self, _gpu: &mut gpui::GpuCanvasContext) {}
+        fn pick_at(
+            &mut self,
+            _queue: &RenderQueue,
+            _camera: &Camera,
+            device: [i32; 2],
+        ) -> Option<Hit> {
+            self.pick.map(|id| Hit {
+                id: PickId(id),
+                point: [device[0] as f32, device[1] as f32, 0.0],
+                normal: [0.0, 0.0, 1.0],
+                part: 0,
+                element: Some(0),
+                topology: Topology::Triangles,
+                distance: 1.0,
+            })
+        }
+        fn supports_pick(&self) -> bool {
+            self.pick.is_some()
+        }
     }
 
     #[test]
@@ -2029,6 +2083,7 @@ mod tests {
             status: PresenterStatus::Ready,
             draws: draws.clone(),
             size: [0, 0],
+            pick: None,
         };
         let mut viewport =
             InventorViewport::new(fake(ImageData::default()), camera, triangle_scene())
@@ -2056,6 +2111,7 @@ mod tests {
             status: PresenterStatus::Pending,
             draws: draws.clone(),
             size: [0, 0],
+            pick: None,
         };
         let mut viewport =
             InventorViewport::new(fake(ImageData::default()), camera, triangle_scene())
@@ -2635,7 +2691,8 @@ mod tests {
                 id: PickId(42),
                 point: [device[0] as f32, device[1] as f32, 0.0],
                 normal: [0.0, 0.0, 1.0],
-                element: 0,
+                part: 0,
+                element: Some(0),
                 topology: Topology::Triangles,
                 distance: 1.0,
             })
@@ -2655,6 +2712,37 @@ mod tests {
         // pick reports 42, so seeing 42 proves it was preferred.
         assert!(viewport.handle_pointer([50.0, 50.0]));
         assert_eq!(viewport.hovered(), Some(PickId(42)));
+    }
+
+    #[test]
+    fn a_ready_presenters_g_buffer_pick_is_preferred() {
+        let camera = Camera {
+            viewport: ferrocad_graphics::Viewport::new([100, 100], 1.0),
+            ..Camera::identity()
+        };
+        let presenter = TestPresenter {
+            status: PresenterStatus::Ready,
+            draws: Rc::new(std::cell::Cell::new(0)),
+            size: [0, 0],
+            pick: Some(99),
+        };
+        // `HardwarePickView` would report 42; the presenter's window-device G-buffer
+        // reports 99 and must win, for hover and for button events alike.
+        let button_hit = Rc::new(std::cell::Cell::new(None));
+        let mut viewport = InventorViewport::new(HardwarePickView, camera, triangle_scene())
+            .with_presenter(Box::new(presenter))
+            .with_listener(Box::new(HoverProbe::default()))
+            .with_listener(Box::new(ButtonHitProbe(button_hit.clone())));
+
+        assert!(viewport.handle_pointer([50.0, 50.0]));
+        assert_eq!(viewport.hovered(), Some(PickId(99)));
+
+        viewport.handle_button([50.0, 50.0], 1, true);
+        assert_eq!(
+            button_hit.get(),
+            Some(99),
+            "the button event used the presenter's G-buffer pick"
+        );
     }
 
     #[test]

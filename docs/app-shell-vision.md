@@ -135,17 +135,18 @@ Ordered by value; each slice is independently demoable. Sizes are rough.
   (`resize_edge_detects_corners_edges_and_content`, `cursors_match_each_resize_direction`).
   *Still S1/S2:* menus/shortcuts and file commands. (Real console text input landed
   as the S5 preview, below.)
-- **S1.5 · Viewport host wiring ✅ (F1).** `ferrocad_gpui::dress_up` fills the
-  viewport's **stage** from the live document (`ferrocad_shell.stage_meshes` tessellates
-  each object's `Shape` with part names) and maps a picked entity back to the object. A
-  click on an edge selects the object and arms the `DressUpScrubber` over that edge; a
-  committed scrub calls `ferrocad_shell.dress_up`, which creates/updates a
-  `Part::Fillet` and recomputes, after which the shell re-syncs the stage. The document
-  sits behind a `DressUpDocument` trait, so the interaction is tested with a fake; the
-  Python half is covered by `part_boot`'s
-  `the_shell_helpers_tessellate_and_dress_up_a_document_shape`. Without the Part
-  workbench (the base app) `stage_meshes` is empty and the `pivy.coin` sample scene
-  stays.
+- **S1.5 · Viewport host wiring ✅ (F1).** The viewport's stage is filled from the
+  document through **module hooks** (see [`architecture.md`](architecture.md) §9): a
+  workbench registers `FreeCAD.display_mesh` / `FreeCAD.dress_up` providers, so
+  `ferrocad_shell` names no workbench. `ferrocad_gpui::dress_up::HostDressUp` maps
+  entity ids to object names and applies a commit through the `DressUpDocument` trait
+  (tested with a fake). A click on an edge becomes a `Stage::scrubber_for` scrubber
+  (presentation logic, not host logic); a scrub commit writes the feature, recomputes
+  and re-syncs the stage. The Part edition's app script
+  (`python/ferrocad_parametric`, selected with `run_edition`) registers the hooks and
+  seeds the demo solid; the base app registers none, so `stage_meshes` is empty and the
+  `pivy.coin` sample scene stays. The Python half is covered by `part_boot`'s
+  `the_shell_helpers_tessellate_and_dress_up_a_document_shape`.
 - **S2 · Document lifecycle + commands.** File (New/Open/Close/Save/Save As/
   Quit) and Edit (Undo/Redo, with `getAvailableUndos`-driven enablement) menus,
   keyboard shortcuts, a command registry, and dirty-state tracking.

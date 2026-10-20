@@ -93,6 +93,59 @@ def getResourceDir():
 
     return os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
+
+# ---------------------------------------------------------------------------
+# Module hooks: display and edit providers
+# ---------------------------------------------------------------------------
+# A workbench registers how **its** objects are drawn and edited, so the shell
+# never names a module (the shell must serve any edition). Upstream puts this on
+# `FreeCADGui` (one `ViewProvider` per object, plus commands); until the M5 GUI
+# module exists these two hooks are the minimal equivalent. A provider returns
+# `None` for an object it does not own, and the next provider is asked.
+
+_DISPLAY_PROVIDERS = []
+_DRESS_UP_PROVIDERS = []
+
+
+def register_display_provider(provider):
+    """Let ``provider(obj)`` supply the display mesh of a document object.
+
+    The provider returns the tessellation dict of `ferrocad.geom.Tessellation`
+    (``positions``, ``triangles``, ``edges``, ``parts``, …) or ``None``. Modules
+    register once, when they are imported; registration is idempotent.
+    """
+    if provider not in _DISPLAY_PROVIDERS:
+        _DISPLAY_PROVIDERS.append(provider)
+
+
+def display_mesh(obj):
+    """The display mesh for `obj`, from the first module that claims it."""
+    for provider in _DISPLAY_PROVIDERS:
+        mesh = provider(obj)
+        if mesh is not None:
+            return mesh
+    return None
+
+
+def register_dress_up_provider(provider):
+    """Let ``provider(obj, mode, edges, first, second)`` apply a dress-up edit.
+
+    The provider returns a dict ``{"ok": bool, ...}`` (or ``None`` when it does
+    not own the object). The edit itself — creating the feature, wrapping it in a
+    transaction, recomputing — belongs to the module.
+    """
+    if provider not in _DRESS_UP_PROVIDERS:
+        _DRESS_UP_PROVIDERS.append(provider)
+
+
+def dress_up(obj, mode, edges, first, second=0.0):
+    """Apply a dress-up edit through the first module that supports it."""
+    for provider in _DRESS_UP_PROVIDERS:
+        result = provider(obj, mode, edges, first, second)
+        if result is not None:
+            return result
+    return None
+
 __all__ = [
     "Version",
     "newDocument",
@@ -109,6 +162,10 @@ __all__ = [
     "ParameterGrp",
     "ScaleType",
     "writeRecoverySnapshotToTransientDir",
+    "register_display_provider",
+    "display_mesh",
+    "register_dress_up_provider",
+    "dress_up",
 ]
 
 

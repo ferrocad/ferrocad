@@ -256,8 +256,14 @@ impl Shell {
     /// A click: select the object in the inspector, and arm the edge scrubber when the
     /// pick is an edge of a displayed shape.
     fn on_selection(&mut self, selection: &SelectionEvent, cx: &mut Context<Self>) {
+        // The scrubber is a stage concern (the viewport owns the stage); the host only
+        // supplies the mode and maps the entity back to the document object.
+        let mode = self.host.mode();
         let scrubber = match selection {
-            SelectionEvent::Picked(reference) => self.host.scrubber_for(reference),
+            SelectionEvent::Picked(reference) => self
+                .viewport
+                .as_ref()
+                .and_then(|viewport| viewport.read(cx).stage().scrubber_for(reference, mode)),
             SelectionEvent::Cleared => None,
         };
         if let SelectionEvent::Picked(reference) = selection {

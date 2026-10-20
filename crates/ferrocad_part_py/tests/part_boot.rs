@@ -143,7 +143,13 @@ fn the_shell_helpers_tessellate_and_dress_up_a_document_shape() {
             .unwrap()
             .call_method1("insert", (0, facade.to_string_lossy().to_string()))
             .unwrap();
-        let shell = PyModule::import(py, "ferrocad_shell").expect("import ferrocad_shell");
+        let shell = PyModule::import(py, "ferrocad_parametric")
+            .expect("import the edition's app script");
+
+        // The edition registers Part's display/dress-up hooks on `FreeCAD`.
+        let freecad = PyModule::import(py, "FreeCAD").expect("import FreeCAD");
+        assert!(freecad.hasattr("display_mesh").unwrap());
+        assert!(freecad.hasattr("dress_up").unwrap());
 
         // `bootstrap` adds the Box because Part is linked in this image.
         let _: String = shell

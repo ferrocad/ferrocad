@@ -71,8 +71,10 @@ The shape, and where it stands:
 3. **Done.** `cargo run -p ferrocad` runs the general edition. `ferrocad_gpui` is
    library-only; `ferrocad` is the base application binary.
 4. **Started.** `ferrocad_parametric` is the first edition binary: it registers the
-   OCCT-backed Part module (`import Part`) and delegates to `ferrocad::run_as`. See
-   §4a for why a Part-enabled app must be an edition, not the base crate.
+   OCCT-backed Part module and delegates to `ferrocad::run_edition`, which selects the
+   edition's app script (`python/ferrocad_parametric`). That script imports `Part`,
+   registers the module's display/dress-up hooks and seeds the demo solid. See §4a for
+   why a Part-enabled app must be an edition, not the base crate.
 
 ### 4a. Editions carry the OCCT-backed workbenches
 
@@ -84,16 +86,30 @@ dependency away — but an edition is the right home for it: editions own the
 workbench set and the window branding, and the base app stays minimal. So a
 Part-enabled application is `ferrocad_parametric`, an edition.
 
-The edition is thin: all it does is register the extra built-in module(s) and set
-its window title.
+The edition is thin: it registers the extra built-in module(s), names its app script
+and sets its window title.
 
 ```rust
 // crates/ferrocad_parametric/src/main.rs
 fn main() {
     use ferrocad_part_py::Part as part_module;
     pyo3::append_to_inittab!(part_module); // same image => one core
-    ferrocad::run_as("FerroCAD: Parametric");
+    ferrocad::run_edition("FerroCAD: Parametric", "ferrocad_parametric");
 }
+```
+
+The app script is ordinary Python, re-exporting the base shell's entry points and
+telling the shell how the edition's objects are displayed and edited (the module
+hooks in [`architecture.md`](architecture.md) §9):
+
+```python
+# python/ferrocad_parametric/__init__.py
+import FreeCAD
+import Part
+from ferrocad_shell import *          # the shell's data functions
+
+FreeCAD.register_display_provider(_display_mesh)
+FreeCAD.register_dress_up_provider(_dress_up)
 ```
 
 Linking the module into the **same image** is required: both `import Part` and
@@ -107,9 +123,9 @@ the edition is run from a source checkout (`cargo run -p ferrocad_parametric`).
 The boundary between the two crates: `ferrocad_gpui` owns the **interpreter**
 (boot, `sys.path`, JSON) and ships no application script; the **app** owns the
 scripts. The app's `main` sets `HostConfig.entry_module` and
-`HostConfig.python_paths`; the base app names `ferrocad_shell`, and a
-redistribution names its own startup module and its `Mod/` directories. See
-[`architecture.md`](architecture.md) §8.
+`HostConfig.python_paths` (`run_edition` for an edition, `run_as` for the base app);
+the base app names `ferrocad_shell`, and a redistribution names its own startup module
+and its `Mod/` directories. See [`architecture.md`](architecture.md) §8–§9.
 
 Bundling a Python runtime and packaging AppImage/`.app`/`.exe` is a separate
 workstream in [`distribution.md`](distribution.md).

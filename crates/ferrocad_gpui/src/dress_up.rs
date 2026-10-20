@@ -2,30 +2,29 @@
 //!
 //! The viewport reports **what happened** — a [`SelectionRef`] on a click, a
 //! [`DressUpChange`] when a scrub ends — and knows nothing about documents. This module
-//! is the other half:
+//! is the document side of that loop, and nothing more:
 //!
 //! ```text
-//! selection (Edge3) ──▶ HostDressUp::scrubber_for ──▶ DressUpScrubber (viewport)
-//!                                                          │ drag
-//! DressUpChange ──▶ HostDressUp::apply ──▶ document ──▶ Part::Fillet ──▶ recompute
-//!        ▲                                                      │
-//!        └──────────────── sync() ◀── tessellated shapes ◀──────┘
+//! document shapes ──▶ HostDressUp::sync ──▶ Stage (viewport)
+//!                                             │ click selects an edge
+//!                                             ▼
+//!                          ferrocad_stage::Stage::scrubber_for (viewport-owned)
+//!                                             │ drag + release
+//!                                             ▼
+//! DressUpChange ──▶ HostDressUp::apply ──▶ document ──▶ recompute ──▶ sync
 //! ```
 //!
-//! The document sits behind [`DressUpDocument`], so the interaction logic is testable
-//! without an interpreter or a kernel. The application supplies [`PythonDocument`],
-//! which calls the shell's Python helpers (the host never links `ferrocad_part`).
-//!
-//! The stage builder owns the entity ids: the document reports one per shape, the host
-//! maps it to the object name, and a pick therefore resolves back to the document.
+//! The presentation half — which edge, where its arc sits — lives in `ferrocad_stage`,
+//! because that is where the selection and the stage already are. This module only maps
+//! entity ids to document objects and calls the document through
+//! [`DressUpDocument`], so the interaction is testable without an interpreter or a
+//! kernel. The application supplies [`PythonDocument`], which calls the app script's
+//! module hooks; the shell still links no kernel and names no workbench.
 
 use std::collections::HashMap;
 
-use ferrocad_geom::{SelectionRef, Tessellation};
-use ferrocad_stage::{
-    DrawMode, DressUpChange, DressUpMode, DressUpScrubber, DressUpValue, ShapeItem, Stage,
-};
-use ferrocad_types::Vector3;
+use ferrocad_geom::Tessellation;
+use ferrocad_stage::{DrawMode, DressUpChange, DressUpMode, DressUpValue, ShapeItem, Stage};
 use serde::Deserialize;
 
 use crate::python;
@@ -140,8 +139,6 @@ pub struct HostDressUp<D: DressUpDocument> {
     mode: DressUpMode,
     /// Entity id → document object name.
     objects: HashMap<u32, String>,
-    /// Entity id → the stage item (for `edge_polyline`).
-    items: HashMap<u32, ShapeItem>,
 }
 
 impl<D: DressUpDocument> HostDressUp<D> {
@@ -151,7 +148,6 @@ impl<D: DressUpDocument> HostDressUp<D> {
             document,
             mode: DressUpMode::Fillet,
             objects: HashMap::new(),
-            items: HashMap::new(),
         }
     }
 
@@ -173,7 +169,6 @@ impl<D: DressUpDocument> HostDressUp<D> {
         let meshes = self.document.stage_meshes()?;
         let mut stage = Stage::new();
         self.objects.clear();
-        self.items.clear();
         for mesh in meshes {
             if mesh.positions.is_empty() {
                 continue;
@@ -181,7 +176,6 @@ impl<D: DressUpDocument> HostDressUp<D> {
             let item = ShapeItem::from_tessellation(mesh.entity, &mesh.tessellation())
                 .with_draw_mode(DrawMode::ShadedWithEdges);
             self.objects.insert(mesh.entity, mesh.object);
-            self.items.insert(mesh.entity, item.clone());
             stage.add_item(item);
         }
         Ok(stage)
@@ -190,47 +184,6 @@ impl<D: DressUpDocument> HostDressUp<D> {
     /// The document object a picked entity belongs to.
     pub fn object_of(&self, entity: u32) -> Option<&str> {
         self.objects.get(&entity).map(String::as_str)
-    }
-
-    /// The number of shapes in the last sync.
-    pub fn len(&self) -> usize {
-        self.items.len()
-    }
-
-    /// Whether the last sync found no shapes.
-    pub fn is_empty(&self) -> bool {
-        self.items.is_empty()
-    }
-
-    /// The scrubber for a selection, when it names an **edge** of a displayed shape.
-    ///
-    /// A face or vertex selection, an unknown entity or a shape whose mesh carries no
-    /// wire run returns `None`: there is nothing to drag a radius against.
-    pub fn scrubber_for(&self, selection: &SelectionRef) -> Option<DressUpScrubber> {
-        let edge = selection.elements.first()?;
-        if !edge.starts_with("Edge") {
-            return None;
-        }
-        let points = self.items.get(&selection.object)?.edge_polyline(edge)?;
-        if points.len() < 2 {
-            return None;
-        }
-        let points = points
-            .into_iter()
-            .map(|point| {
-                Vector3::new(
-                    f64::from(point[0]),
-                    f64::from(point[1]),
-                    f64::from(point[2]),
-                )
-            })
-            .collect();
-        Some(DressUpScrubber::new(
-            selection.object,
-            self.mode,
-            edge.clone(),
-            points,
-        ))
     }
 
     /// Apply a committed scrub to the document.
@@ -326,8 +279,6 @@ mod tests {
         assert_eq!(stage.items()[0].entity_id(), 7);
         assert_eq!(host.object_of(7), Some("Box"));
         assert_eq!(host.object_of(8), None);
-        assert_eq!(host.len(), 1);
-        assert!(!host.is_empty());
     }
 
     #[test]
@@ -335,42 +286,15 @@ mod tests {
         let mut host = HostDressUp::new(FakeDocument::new(Vec::new()));
         let stage = host.sync().unwrap();
         assert!(stage.is_empty());
-        assert!(host.is_empty());
+        assert_eq!(host.object_of(7), None);
     }
 
     #[test]
-    fn an_edge_selection_makes_a_scrubber_over_the_edge() {
+    fn the_mode_round_trips() {
         let mut host = host();
-        host.sync().unwrap();
-        let selection = SelectionRef::element(7, "Edge1");
-        let scrubber = host.scrubber_for(&selection).expect("a scrubber");
-        assert_eq!(scrubber.target_id(), 7);
-        assert_eq!(scrubber.edge_name(), "Edge1");
-        assert_eq!(scrubber.mode(), DressUpMode::Fillet);
-
-        // The edge runs from (0,0,0) to (10,0,0); the anchor is its midpoint.
-        let anchor = scrubber.anchor().expect("an anchor");
-        assert!((anchor.x - 5.0).abs() < 1e-9);
-        assert!(anchor.y.abs() < 1e-9);
-    }
-
-    #[test]
-    fn a_face_or_unknown_selection_makes_no_scrubber() {
-        let mut host = host();
-        host.sync().unwrap();
-        assert!(
-            host.scrubber_for(&SelectionRef::element(7, "Face1"))
-                .is_none()
-        );
-        assert!(host.scrubber_for(&SelectionRef::whole(7)).is_none());
-        assert!(
-            host.scrubber_for(&SelectionRef::element(9, "Edge1"))
-                .is_none()
-        );
-        assert!(
-            host.scrubber_for(&SelectionRef::element(7, "Edge9"))
-                .is_none()
-        );
+        assert_eq!(host.mode(), DressUpMode::Fillet);
+        host.set_mode(DressUpMode::Chamfer);
+        assert_eq!(host.mode(), DressUpMode::Chamfer);
     }
 
     #[test]
@@ -380,10 +304,6 @@ mod tests {
         let mut host = HostDressUp::new(document);
         host.sync().unwrap();
         host.set_mode(DressUpMode::Chamfer);
-
-        let selection = SelectionRef::element(7, "Edge1");
-        let scrubber = host.scrubber_for(&selection).expect("a scrubber");
-        assert_eq!(scrubber.mode(), DressUpMode::Chamfer);
 
         host.apply(&DressUpChange {
             target_id: 7,

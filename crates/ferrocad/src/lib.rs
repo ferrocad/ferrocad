@@ -38,13 +38,22 @@ pub fn run() {
     run_as("FerroCAD");
 }
 
-/// Like [`run`], but with an edition's `app_name` (the window title).
+/// Like [`run`], but with an edition's `app_name` (the window title) and its Python
+/// entry module.
 ///
 /// An edition calls this after registering its own built-in modules, so they share
-/// the process-wide core the shell boots (see `docs/occt-integration.md` §4).
+/// the process-wide core the shell boots (see `docs/occt-integration.md` §4). The
+/// entry module is the edition's **app script**: it re-exports the base shell's data
+/// functions and registers its workbenches' module hooks (see
+/// `docs/architecture.md` §9).
 pub fn run_as(app_name: &str) {
+    run_edition(app_name, "ferrocad_shell");
+}
+
+/// [`run_as`] with an explicit entry module (the edition's app script).
+pub fn run_edition(app_name: &str, entry_module: &str) {
     register_core_module();
-    ferrocad_gpui::run_with(base_config(app_name));
+    ferrocad_gpui::run_with(app_config(app_name, entry_module));
 }
 
 /// Boot the interpreter and the payload, then exit without opening a window.
@@ -61,10 +70,14 @@ pub fn check_init() -> Result<(), String> {
 
 /// The [`HostConfig`] an edition boots with, after resolving its payload.
 fn base_config(app_name: &str) -> HostConfig {
+    app_config(app_name, "ferrocad_shell")
+}
+
+fn app_config(app_name: &str, entry_module: &str) -> HostConfig {
     let payload = payload::resolve();
     HostConfig {
         app_name: app_name.to_string(),
-        entry_module: "ferrocad_shell".to_string(),
+        entry_module: entry_module.to_string(),
         python_paths: payload.python_paths,
         mods_paths: payload.mods_paths,
     }

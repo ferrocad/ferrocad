@@ -321,11 +321,14 @@ flowchart LR
   already the persisted contract (`LinkSub`).
 - A **command** stores `(object, [names])` and a feature `execute` resolves the names
   through the injected backend.
-- The selected edge can become a `DressUpScrubber` (`ferrocad_stage::dress_up`):
-  `ferrocad_gpui::dress_up::HostDressUp` resolves the edge polyline from the stage item
-  (`ShapeItem::edge_polyline`), the scrub commits a radius, and the host writes it to a
-  `Part::Fillet`/`Part::Chamfer` feature (through `ferrocad_shell.dress_up`) and
-  recomputes. See [`gizmo-manipulators.md`](gizmo-manipulators.md) §14.
+- The selected edge can become a `DressUpScrubber`: `Stage::scrubber_for(selection,
+  mode)` (the viewport owns the stage) maps `Edge3` to the item's polyline
+  (`ShapeItem::edge_polyline`). `ferrocad_gpui::dress_up::HostDressUp` maps the entity
+  to the object name and calls the document through the `DressUpDocument` trait, which
+  the app implements over the **module hooks** (`FreeCAD.display_mesh` /
+  `FreeCAD.dress_up`, registered by the edition's script). The shell names no
+  workbench. See [`gizmo-manipulators.md`](gizmo-manipulators.md) §14 and
+  [`architecture.md`](architecture.md) §9.
 
 **F0.5 as built.** `InventorViewport` emits a selection on a left press+release that did
 not orbit the camera or the navigation cube, did not move a gizmo handle, and was not

@@ -82,8 +82,10 @@ pub struct HostConfig {
     /// The app's Python entry module, imported at boot. It must expose the shell
     /// data functions (`bootstrap`, `model_tree`, `properties`, `set_property`,
     /// `evaluate`) and, for the 3D viewport, `stage_meshes` and `dress_up` (see
-    /// `dress_up` in the shell helpers). The library ships no copy of this script: it
-    /// lives with the app (see `docs/repackaging.md`).
+    /// `dress_up` in the shell helpers). Workbenches contribute display meshes and
+    /// edits through the `FreeCAD` module hooks, never through this module. The
+    /// library ships no copy of this script: it lives with the app (see
+    /// `docs/repackaging.md`).
     pub entry_module: String,
 }
 

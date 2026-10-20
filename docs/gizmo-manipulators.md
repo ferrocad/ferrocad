@@ -410,17 +410,23 @@ binding remain green.
   stroke is drawn as a depth-off overlay, hover recolours it cyan, and the pill is always
   shown for the selected edge. `Esc` cancels a scrub before a gizmo drag.
 - The host writes the commit to a feature: `Radius` (or `Distance`/`Distance2`) then a
-  recompute — the F0.6 features rebuild `Shape` from there.
+  recompute — the F0.6 features rebuild `Shape` from there. The mapping from a
+  selection to a scrubber is `ferrocad_stage::Stage::scrubber_for` (the viewport owns
+  the stage); the host only maps entity → object and calls the document through the
+  `DressUpDocument` trait, implemented over the app's module hooks (architecture §9).
+  Part registers `display_mesh`/`dress_up` in `python/ferrocad_parametric`, so the
+  shell names no workbench.
 
-Verification: `ferrocad_stage` 72 tests (11 new dress-up cases: readout strings, anchor,
+Verification: `ferrocad_stage` 75 tests (11 new dress-up cases: readout strings, anchor,
 arc sizing, stroke-only hit test, outward scrub, step snap, cancel, rebuild-on-change,
-hover tokens, degenerate and view-aligned edges; plus 2 `ShapeItem::edge_polyline`
-cases); `ferrocad_viewport` 98 tests (5 new: commit, pass-through, hover/draw, cancel,
-priority over the gizmo); `ferrocad_gpui` 7 host tests
-(`ferrocad_gpui::dress_up`: sync/entity map, edge vs face selection, chamfer mode, commit
-forwarding, unknown entity); `ferrocad_part_py`'s
+hover tokens, degenerate and view-aligned edges; 3 `Stage::scrubber_for` cases; plus 2
+`ShapeItem::edge_polyline` cases); `ferrocad_viewport` 98 tests (5 new: commit,
+pass-through, hover/draw, cancel, priority over the gizmo); `ferrocad_gpui` 5 host tests
+(`ferrocad_gpui::dress_up`: sync/entity map, mode, chamfer commit, commit forwarding,
+unknown entity); `ferrocad_part_py`'s
 `the_shell_helpers_tessellate_and_dress_up_a_document_shape` covers the Python half
-(tessellate with names → `dress_up` → base hidden, feature displayed, reused).
+through the edition script (hooks registered → tessellate with names → `dress_up` → base
+hidden, feature displayed, reused).
 
 ## 15. Deferred and why
 

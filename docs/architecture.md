@@ -28,8 +28,8 @@ obvious:
 | `ferrocad_inventor_py` | `cdylib` | The `pivy.coin` facade (scaffolding) over `ferrocad_inventor`. |
 | `ferrocad_stage_py` | `cdylib` | The `ferrocad.stage` facade over `ferrocad_stage` (the modern stack's Python surface). |
 | `ferrocad_viewport` | `rlib` | The `bite-gpui` viewport over an invented scene: `InventorViewport` (image path, pointer→pick→listener, and clicks → `SelectionEvent`/`SelectionRef`) plus a hosted `ferrocad_stage` (declarative items and interactive tools), the navigation cube (`NaviCube`), and the sample scene. Depends on `ferrocad_graphics`/`ferrocad_geom`/`ferrocad_inventor`/`ferrocad_stage` only. |
-| `ferrocad_gpui` | `rlib` | The `bite-gpui` application-shell library: boots CPython and provides `Shell`, `run`/`run_with`, `HostConfig`, mounts the `ferrocad_viewport`, and wires the document to it (`dress_up::HostDressUp`: stage sync, selection → scrubber, commit → feature). Ships no application scripts. |
-| `ferrocad` | `bin` | The base app (the general edition). Owns the app's Python entry module and, when packaged, its mods and interpreter; calls `ferrocad_gpui::run_with`. |
+| `ferrocad_gpui` | `rlib` | The `bite-gpui` application-shell library: boots CPython and provides `Shell`, `run`/`run_with`, `HostConfig`, mounts the `ferrocad_viewport`, and adapts the document to it (`dress_up::HostDressUp`: stage sync, entity→object map, commit→document). Ships no application scripts and names no workbench. |
+| `ferrocad` | `bin` | The base app (the general edition). Owns the app's Python entry module and, when packaged, its mods and interpreter; exposes `run`/`run_as`/`run_edition`, which call `ferrocad_gpui::run_with`. |
 | `python/FreeCAD` | package | The public, pure-Python `import FreeCAD` facade. |
 | `ferrocad_gen` | `cdylib` | Generated PyO3 skeletons (M3c). A build-time experiment, not wired into the facade. |
 | `ferrocad_ctypes` | `cdylib` | The legacy M0 C-ABI backend, **removed** (kept in §4 as the rationale). |
@@ -185,6 +185,7 @@ ferrocad_gpui      -> ferrocad_widgets, ferrocad_viewport,
                       must NOT -> ferrocad_py        [the *app* links it, not the shell]
                       must NOT -> ferrocad_part/occt [the document side is Python]
 ferrocad           -> ferrocad_gpui, ferrocad_py     [base app: links the module in, embeds payload]
+                                                     [run_edition: an edition's app script]
 python/FreeCAD     -> ferrocad (built-in module when linked, else a .so on sys.path)
 ```
 
@@ -200,7 +201,9 @@ The rule that keeps the design honest: **the shell talks to the model through th
 `FreeCAD` API, exactly like a workbench does.** A direct `shell -> ferrocad_core`
 edge is a permitted future optimisation for the render loop, but it must be
 added deliberately, not by accident, and it must never bypass the same
-`ferrocad_core` that Python uses.
+`ferrocad_core` that Python uses. A second rule follows from the editions: **the
+shell names no workbench** — a module reaches the window by registering the hooks
+in §9.
 
 ## 7. Editions and repackaging
 
@@ -222,6 +225,12 @@ the `FreeCAD` facade (development); in a packaged build they are the app's start
 scripts and its `Mod/` workbenches, shipped inside the distribution beside the
 bundled interpreter.
 
+An edition is the same shape: it registers its built-in module (e.g. `Part`) and
+calls [`ferrocad::run_edition`](../crates/ferrocad/src/lib.rs) with its own entry
+module (`python/ferrocad_parametric`). That script re-exports the base shell's data
+functions and registers the module's hooks (§9); `ferrocad_shell` itself never names
+a workbench, so the base app and every edition share it unchanged.
+
 This is FreeCAD's own split: the interpreter belongs to the application, while the
 workbench (`Mod/`) scripts ship with the distribution.
 
@@ -232,3 +241,36 @@ than duplicating them into a crate; see [`distribution.md`](distribution.md) §8
 Workbench scripts (`mods/*/Init.py`, `InitGui.py`) are loaded at boot
 **best-effort**: a script that raises is reported with its traceback and the app
 continues. Nothing about a broken workbench is fatal.
+
+## 9. Module hooks: how a workbench reaches the shell
+
+The shell must serve any edition, so it names **no workbench**. A module contributes
+to the window through two **hooks** on the `FreeCAD` facade, registered when the
+module is imported:
+
+| Hook | Provider | Used by |
+| --- | --- | --- |
+| `FreeCAD.register_display_provider(f)` → `FreeCAD.display_mesh(obj)` | `f(obj) -> tessellation dict or None` | the viewport stage (`ferrocad_shell.stage_meshes`) |
+| `FreeCAD.register_dress_up_provider(f)` → `FreeCAD.dress_up(obj, mode, edges, d1, d2)` | `f(obj, …) -> {"ok": …} or None` | a scrubbed edge (`ferrocad_shell.dress_up`) |
+
+A provider returns `None` for an object it does not own; the shell asks each in turn.
+
+```
+ferrocad_shell (base app script)            ferrocad_parametric (edition script)
+  stage_meshes() ── FreeCAD.display_mesh ──▶ hooks ──▶ Part display provider
+  dress_up()     ── FreeCAD.dress_up     ──▶ hooks ──▶ Part dress-up provider
+       ▲                                                        │
+       └──────────── HostConfig.entry_module ◀── run_edition ───┘
+```
+
+Why not `import Part` in the shell? The base app does not link Part and another
+edition may not either; a shell that names one workbench cannot serve the family.
+Why not a full `ViewProvider`? Upstream puts view providers on `FreeCADGui`; that
+module is still a console-mode stub, so these two functions are the minimal seam
+until M5. When `FreeCADGui` grows a real `ViewProvider`, both move there and the
+providers become objects; the shell's call sites do not change.
+
+The host (`ferrocad_gpui`) keeps only the document adaptation — entity id → object
+name, and the Python calls — under the [`DressUpDocument`](../crates/ferrocad_gpui/src/dress_up.rs)
+trait. The manipulator mapping (`Stage::scrubber_for`) lives with the selection and
+the stage in `ferrocad_stage`, and the sweep of a scrub in `ferrocad_viewport`.

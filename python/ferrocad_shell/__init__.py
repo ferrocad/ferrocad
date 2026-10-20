@@ -19,7 +19,8 @@ _NAMESPACE: dict = {}
 
 # Beyond the model, the shell asks for the two pieces the viewport needs: the
 # tessellated shapes to draw (:func:`stage_meshes`) and the parametric feature a
-# dress-up scrub writes (:func:`dress_up`).
+# dress-up scrub writes (:func:`dress_up`). Both go through the module hooks on
+# ``FreeCAD``, so this script names no workbench.
 
 # Property type id -> editor kind. A type absent here is read-only in the pane.
 _EDITABLE_KINDS = {
@@ -108,16 +109,9 @@ def bootstrap(doc_name: str = "Shell") -> str:
     derived.addProperty("App::PropertyLength", "Result", "Base", "Computed result")
     derived.setExpression("Result", "Params.Length * 2")
 
-    # A solid for the viewport, when the Part workbench is linked (the edition).
-    # Without Part the shell keeps its `pivy.coin` sample scene.
-    try:
-        import Part  # noqa: F401
-
-        box = doc.addObject("Part::Feature", "Box")
-        box.Shape = Part.makeBox(20.0, 20.0, 20.0)
-    except Exception:
-        pass
-
+    # The sample document is deliberately geometry-free: a shape needs a workbench's
+    # display hook (see `FreeCAD.register_display_provider`), which the edition's app
+    # script registers. The base app keeps its `pivy.coin` sample scene.
     group = doc.addObject("App::DocumentObjectGroup", "Group")
     group.addObject(params)
 
@@ -283,21 +277,18 @@ def _base_link(obj):
     return name, list(link[1]) if len(link) > 1 else []
 
 
-def stage_meshes(deflection: float = 0.5) -> str:
+def stage_meshes() -> str:
     """The tessellated shapes the viewport draws, as JSON.
 
-    Only objects with a non-null ``Shape`` are included, and an object consumed by a
-    dress-up feature (its ``Base``) is skipped: the feature's shape replaces it, the
-    way a feature's output replaces its input in the tree. ``entity`` is the object's
-    1-based position in the document, so the host can map a pick back to a name.
+    Only objects a registered module can display are included (the mesh comes from
+    ``FreeCAD.display_mesh``, so this module names no workbench), and an object
+    consumed by a feature (its ``Base``) is skipped: the feature's shape replaces it.
+    ``entity`` is the object's 1-based position in the document, so the host can map a
+    pick back to a name.
 
-    Returns ``[]`` when the Part workbench is not linked (the base app), leaving the
-    shell's `pivy.coin` sample scene in place.
+    Returns ``[]`` when no module is loaded, leaving the shell's `pivy.coin` sample
+    scene in place.
     """
-    try:
-        import Part  # noqa: F401
-    except Exception:
-        return "[]"
     try:
         doc = _active_doc()
     except Exception:
@@ -314,14 +305,8 @@ def stage_meshes(deflection: float = 0.5) -> str:
     for index, obj in enumerate(objects, start=1):
         if obj.Name in consumed:
             continue
-        shape = getattr(obj, "Shape", None)
-        if shape is None:
-            continue
-        try:
-            if shape.isNull():
-                continue
-            mesh = shape.mesh(deflection)
-        except Exception:
+        mesh = FreeCAD.display_mesh(obj)
+        if mesh is None:
             continue
         meshes.append({"object": obj.Name, "label": obj.Label, "entity": index, **mesh})
     return _json(meshes)
@@ -330,16 +315,12 @@ def stage_meshes(deflection: float = 0.5) -> str:
 def dress_up(
     object_name: str, mode: str, edges_json: str, first: float, second: float = 0.0
 ) -> str:
-    """Create or update a ``Part::Fillet``/``Part::Chamfer`` over ``object_name``.
+    """Apply a dress-up edit through the module that supports it.
 
-    The feature is named ``<object>_<mode>`` and reused on later scrubs. The edit is
-    one named transaction, so it is a single undo step, and the document is recomputed
-    before this returns: the caller can re-read :func:`stage_meshes` straight away.
+    The feature type, its properties and the transaction belong to the workbench
+    (``FreeCAD.register_dress_up_provider``); this function only resolves the object
+    and marshals the request. Returns ``{"ok": ...}``.
     """
-    try:
-        import Part  # noqa: F401
-    except Exception:
-        return _json({"ok": False, "error": "the Part workbench is not available"})
     try:
         doc = _active_doc()
     except Exception as exc:
@@ -352,21 +333,7 @@ def dress_up(
     except Exception as exc:
         return _json({"ok": False, "error": f"bad edge list: {exc}"})
 
-    feature_name = f"{object_name}_{mode}"
-    doc.openTransaction(f"{mode} {object_name}")
-    try:
-        feature = doc.getObject(feature_name)
-        if feature is None:
-            feature = doc.addObject(f"Part::{mode}", feature_name)
-        feature.Base = (base, edges)
-        if mode == "Fillet":
-            feature.Radius = float(first)
-        else:
-            feature.Distance = float(first)
-            feature.Distance2 = float(second)
-        doc.recompute()
-        doc.commitTransaction()
-    except Exception as exc:
-        doc.abortTransaction()
-        return _json({"ok": False, "error": str(exc)})
-    return _json({"ok": True, "feature": feature_name})
+    result = FreeCAD.dress_up(base, mode, edges, float(first), float(second))
+    if result is None:
+        return _json({"ok": False, "error": f"no module can apply a {mode}"})
+    return _json(result)

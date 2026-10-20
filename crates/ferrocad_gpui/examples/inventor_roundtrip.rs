@@ -75,9 +75,13 @@ fn main() {
         cx.open_window(window_options(), move |_window, cx| {
             let navicube = ferrocad_viewport::NaviCube::new(camera.viewport);
             cx.new(|_cx| {
-                InventorViewport::new(renderer, camera, scene)
+                let viewport = InventorViewport::new(renderer, camera, scene)
                     .with_listener(Box::new(HoverHighlight::default()))
-                    .with_navicube(navicube)
+                    .with_navicube(navicube);
+                match ferrocad_gpui::zero_copy_presenter() {
+                    Some(presenter) => viewport.with_presenter(presenter),
+                    None => viewport,
+                }
             })
         })
         .unwrap();

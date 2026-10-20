@@ -3,14 +3,12 @@
 //! [`NavicubeVisual`] — same ids, topology, roles, geometry and transforms — and rebuild
 //! stably.
 
-use ferrocad_graphics::{Camera, PickId, RenderQueue, Viewport};
+use ferrocad_graphics::{Camera, PickId, RenderQueue, Topology, Viewport};
 use ferrocad_types::{Matrix4, Rotation};
 
-use super::model::HOME_PICK_ID;
-use super::theme::{BASE_COLOR, HILITE_COLOR, HOME_COLOR, INACTIVE_COLOR};
+use super::model::PieceKind;
 use super::{
-    InventorProducer, NaviCube, NaviTarget, NavicubeTheme, NavicubeView, NavicubeVisual, Piece,
-    StageProducer,
+    InventorProducer, NaviCube, NavicubeTheme, NavicubeView, NavicubeVisual, Piece, StageProducer,
 };
 
 fn viewport() -> Viewport {
@@ -21,11 +19,13 @@ fn theme() -> NavicubeTheme {
     NavicubeTheme::default()
 }
 
-fn visual(hilite: Option<NaviTarget>, away: Vec<Piece>) -> NavicubeVisual {
+fn visual(hilite: Option<Piece>, away: Vec<Piece>) -> NavicubeVisual {
     NavicubeVisual {
         orientation: Rotation::identity(),
         hilite,
         away,
+        proximity: false,
+        ring: false,
     }
 }
 
@@ -34,14 +34,22 @@ fn rebuild(producer: &mut dyn NavicubeView, visual: &NavicubeVisual) {
     producer.rebuild(&viewport(), visual, &theme());
 }
 
-/// The colour the spec's role rule assigns a piece.
-fn expected_color(piece: Piece, hilite: Option<NaviTarget>, away: &[Piece]) -> [f32; 4] {
-    if hilite == Some(NaviTarget::Piece(piece)) {
-        HILITE_COLOR
-    } else if away.contains(&piece) {
-        INACTIVE_COLOR
-    } else {
-        BASE_COLOR
+/// The colour the spec's role rule assigns a piece's first (pickable) packet.
+///
+/// Faces and corners lead with their surface fill and bevels with their machined quad;
+/// back pieces are dimmed by the producer's depth cue, and a hovered piece still wins over
+/// that cue.
+fn expected_color(piece: Piece, visual: &NavicubeVisual) -> [f32; 4] {
+    let theme = theme();
+    let role = piece.role(visual.hilite, &visual.away);
+    let back = piece.is_hidden(&visual.orientation.to_matrix());
+    match piece.kind() {
+        PieceKind::Face => theme.face_fill(
+            role,
+            &visual.orientation.to_matrix().transform(&piece.direction()),
+        ),
+        PieceKind::Corner => theme.color(role),
+        PieceKind::Edge => theme.bevel_color(role, back, visual.proximity),
     }
 }
 
@@ -78,12 +86,39 @@ fn keys(queue: &RenderQueue) -> Vec<(u64, u64, u32)> {
         .collect()
 }
 
-/// Assert two producers' queues draw the same cube, packet for packet.
+/// Assert two producers' queues draw the same cube.
+///
+/// The inventor producer adds a separate label packet per visible face (and the stage
+/// producer has no texture path), so packet counts differ. Compare the **first packet
+/// per pick id** — the glass fill/surface or the edge line — which is the pickable
+/// geometry both producers share.
 fn compare(a: &RenderQueue, b: &RenderQueue) {
-    assert_eq!(a.len(), 27, "26 pieces plus the Home button");
-    assert_eq!(a.len(), b.len(), "packet count");
-    for (pa, pb) in a.packets.iter().zip(&b.packets) {
-        assert_eq!(pa.state.id, pb.state.id, "draw order / pick id");
+    let ids = |queue: &RenderQueue| {
+        let mut ids: Vec<u32> = queue
+            .packets
+            .iter()
+            .map(|packet| packet.state.id.0)
+            .filter(|id| (1..=26).contains(id))
+            .collect();
+        ids.sort_unstable();
+        ids.dedup();
+        ids
+    };
+    // Both producers cull the same hidden pieces, so their visible id sets must agree.
+    let (ids_a, ids_b) = (ids(a), ids(b));
+    assert_eq!(ids_a, ids_b, "visible piece ids");
+    for id in ids_a {
+        let pa = a
+            .packets
+            .iter()
+            .find(|packet| packet.state.id.0 == id)
+            .unwrap_or_else(|| panic!("producer A has no packet for id {id}"));
+        let pb = b
+            .packets
+            .iter()
+            .find(|packet| packet.state.id.0 == id)
+            .unwrap_or_else(|| panic!("producer B has no packet for id {id}"));
+        assert_eq!(pa.state.id, pb.state.id, "pick id");
         assert_eq!(pa.topology, pb.topology, "topology for {:?}", pa.state.id);
         assert!(
             close4(pa.state.color, pb.state.color),
@@ -109,7 +144,11 @@ fn compare(a: &RenderQueue, b: &RenderQueue) {
             pa.state.id
         );
         for (va, vb) in ga.vertices.iter().zip(&gb.vertices) {
-            assert!(close3(va.position, vb.position), "position for {:?}", pa.state.id);
+            assert!(
+                close3(va.position, vb.position),
+                "position for {:?}",
+                pa.state.id
+            );
             assert!(close3(va.normal, vb.normal), "normal for {:?}", pa.state.id);
         }
     }
@@ -117,7 +156,7 @@ fn compare(a: &RenderQueue, b: &RenderQueue) {
 
 #[test]
 fn both_producers_emit_the_same_cube() {
-    let visual = visual(Some(NaviTarget::Piece(Piece::TOP)), vec![Piece::BACK]);
+    let visual = visual(Some(Piece::TOP), vec![Piece::BACK]);
     let mut inventor = InventorProducer::new();
     let mut stage = StageProducer::new();
     rebuild(&mut inventor, &visual);
@@ -128,7 +167,7 @@ fn both_producers_emit_the_same_cube() {
 #[test]
 fn both_producers_assign_the_documented_roles() {
     let away = vec![Piece::BACK];
-    let hilite = Some(NaviTarget::Piece(Piece::TOP));
+    let hilite = Some(Piece::TOP);
     let visual = visual(hilite, away.clone());
 
     let mut inventor = InventorProducer::new();
@@ -139,15 +178,29 @@ fn both_producers_assign_the_documented_roles() {
     ] {
         rebuild(producer, &visual);
         let queue = producer.queue();
-        for piece in Piece::ALL {
-            let color = color_of(queue, piece.pick_id()).expect("a packet per piece");
+        let rotation = visual.orientation.to_matrix();
+        for piece in Piece::ALL
+            .iter()
+            .copied()
+            .filter(|piece| !piece.is_hidden(&rotation))
+        {
+            let color = color_of(queue, piece.pick_id()).expect("a packet per visible piece");
             assert!(
-                close4(color, expected_color(piece, hilite, &away)),
+                close4(color, expected_color(piece, &visual)),
                 "{piece:?} has the wrong role colour"
             );
         }
-        let home = color_of(queue, HOME_PICK_ID).expect("the Home packet");
-        assert!(close4(home, HOME_COLOR), "the Home button is not highlighted");
+        // Back-facing pieces are culled, not merely dimmed.
+        for piece in Piece::ALL
+            .iter()
+            .copied()
+            .filter(|piece| piece.is_hidden(&rotation))
+        {
+            assert!(
+                color_of(queue, piece.pick_id()).is_none(),
+                "{piece:?} is hidden but emitted"
+            );
+        }
     }
 }
 
@@ -156,48 +209,54 @@ fn a_custom_theme_recolours_both_producers() {
     let theme = NavicubeTheme {
         base: [0.1, 0.2, 0.3, 1.0],
         highlighted: [0.9, 0.8, 0.7, 1.0],
+        neighbour: [0.9, 0.7, 0.5, 0.4],
         away: [0.4, 0.4, 0.4, 0.5],
-        home: [0.2, 0.4, 0.6, 1.0],
+        bevel: [0.8, 0.9, 1.0, 0.5],
+        bevel_proximity: [0.85, 0.92, 1.0, 0.7],
+        bevel_away: [0.3, 0.3, 0.3, 0.2],
+        edge: [0.5, 0.5, 0.5, 0.4],
+        edge_proximity: [0.7, 0.7, 0.7, 0.8],
+        edge_highlighted: [0.1, 0.8, 1.0, 1.0],
+        edge_neighbour: [0.2, 0.7, 0.9, 0.8],
+        edge_away: [0.3, 0.3, 0.3, 0.2],
+        label: [0.6, 0.6, 0.6, 0.5],
+        label_proximity: [0.8, 0.8, 0.8, 0.9],
+        label_highlighted: [1.0, 1.0, 1.0, 1.0],
+        glow: [0.1, 0.8, 1.0, 0.3],
+        ring: [0.5, 0.5, 0.5, 0.4],
+        ring_proximity: [0.7, 0.7, 0.7, 0.8],
+        ring_highlighted: [0.1, 0.8, 1.0, 1.0],
+        turntable: [0.1, 0.1, 0.1, 0.6],
+        ring_fill: [0.6, 0.7, 0.8, 0.4],
+        ring_fill_proximity: [0.7, 0.8, 0.9, 0.5],
+        ring_fill_highlighted: [0.1, 0.8, 1.0, 0.6],
         edge_width: 2.0,
     };
-    let visual = visual(Some(NaviTarget::Piece(Piece::TOP)), vec![Piece::BACK]);
+    let visual = visual(Some(Piece::TOP), vec![Piece::BACK]);
     let mut inventor = InventorProducer::new();
     let mut stage = StageProducer::new();
     inventor.rebuild(&viewport(), &visual, &theme);
     stage.rebuild(&viewport(), &visual, &theme);
-    for producer in [
-        &inventor as &dyn NavicubeView,
-        &stage as &dyn NavicubeView,
-    ] {
+    for producer in [&inventor as &dyn NavicubeView, &stage as &dyn NavicubeView] {
         let queue = producer.queue();
         assert!(close4(
             color_of(queue, Piece::TOP.pick_id()).unwrap(),
-            theme.highlighted
+            expected_color(Piece::TOP, &visual)
         ));
-        assert!(close4(color_of(queue, Piece::BACK.pick_id()).unwrap(), theme.away));
-        assert!(close4(color_of(queue, Piece::FRONT.pick_id()).unwrap(), theme.base));
-        assert!(close4(color_of(queue, HOME_PICK_ID).unwrap(), theme.home));
-    }
-}
-
-#[test]
-fn both_producers_highlight_the_home_button() {
-    let visual = visual(Some(NaviTarget::Home), vec![]);
-    let mut inventor = InventorProducer::new();
-    let mut stage = StageProducer::new();
-    for producer in [
-        &mut inventor as &mut dyn NavicubeView,
-        &mut stage as &mut dyn NavicubeView,
-    ] {
-        rebuild(producer, &visual);
-        let home = color_of(producer.queue(), HOME_PICK_ID).expect("the Home packet");
-        assert!(close4(home, HILITE_COLOR), "the Home button should be highlighted");
+        assert!(
+            color_of(queue, Piece::BACK.pick_id()).is_none(),
+            "back-facing faces are culled"
+        );
+        assert!(close4(
+            color_of(queue, Piece::FRONT.pick_id()).unwrap(),
+            expected_color(Piece::FRONT, &visual)
+        ));
     }
 }
 
 #[test]
 fn rebuild_is_stable_within_each_producer() {
-    let visual = visual(Some(NaviTarget::Piece(Piece::TOP)), vec![Piece::BACK]);
+    let visual = visual(Some(Piece::TOP), vec![Piece::BACK]);
     let mut inventor = InventorProducer::new();
     let mut stage = StageProducer::new();
     for producer in [
@@ -221,7 +280,53 @@ fn the_stage_cube_hosts_and_picks() {
         rect.x + rect.width as i32 / 2,
         rect.y + rect.height as i32 / 2,
     ];
-    assert_eq!(cube.hit(centre), Some(NaviTarget::Piece(Piece::FRONT)));
+    assert_eq!(cube.hit(centre), Some(Piece::FRONT));
+}
+
+#[test]
+fn both_producers_draw_the_filled_glyphs() {
+    let theme = theme();
+    let mut visual = visual(Some(Piece::TOP), vec![Piece::BACK]);
+    visual.proximity = true;
+
+    let mut inventor = InventorProducer::new();
+    let mut stage = StageProducer::new();
+    rebuild(&mut inventor, &visual);
+    rebuild(&mut stage, &visual);
+
+    for producer in [&inventor as &dyn NavicubeView, &stage as &dyn NavicubeView] {
+        let queue = producer.queue();
+
+        // The front and right faces carry filled glyph packets; the away back face does not.
+        for piece in [Piece::FRONT, Piece::RIGHT] {
+            let role = piece.role(visual.hilite, &visual.away);
+            assert!(
+                queue.packets.iter().any(|packet| {
+                    packet.state.id == piece.pick_id()
+                        && packet.topology == Topology::Triangles
+                        && close4(
+                            packet.state.color,
+                            theme.label_color(role, visual.proximity),
+                        )
+                }),
+                "{piece:?} should carry a filled glyph"
+            );
+        }
+        assert!(
+            !queue.packets.iter().any(|packet| {
+                packet.state.id == Piece::BACK.pick_id()
+                    && packet.topology == Topology::Triangles
+                    && close4(
+                        packet.state.color,
+                        theme.label_color(
+                            Piece::BACK.role(visual.hilite, &visual.away),
+                            visual.proximity,
+                        ),
+                    )
+            }),
+            "an away face must not draw its glyph"
+        );
+    }
 }
 
 #[test]
@@ -229,11 +334,13 @@ fn a_config_repositions_the_cube() {
     use super::{Corner, NaviCubeConfig};
     let cube = NaviCube::new(viewport()).with_config(NaviCubeConfig {
         corner: Corner::BottomLeft,
-        size: 48.0,
+        cube_size: 48.0,
         margin: 4.0,
     });
     let rect = cube.rect();
-    assert_eq!(rect.width, 48);
-    assert_eq!(rect.x, 4);
+    // The overlay box is derived from the cube size: round(48 · 2·1.28/√3) = 71.
+    assert_eq!(rect.width, 71);
+    // The box is centred in the `CHROME_WIDTH` column: 4 + (248 − 71)/2.
+    assert_eq!(rect.x, 4 + (248 - 71) / 2);
     assert_eq!(rect.y, 4);
 }

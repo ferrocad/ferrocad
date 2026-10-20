@@ -1,9 +1,8 @@
 # The navigation cube (NaviCube) — implementation plan
 
-Status: **N1–N3, the N4 core (edges/corners, drag) and N4b (animated snap,
-translucent faces, baked labels and the Home button) built (2026-10-12); the context
-menu and arrow buttons remain deferred.** §8 records the upstream Python surface and the
-snapshot test that exercises it.
+Status: **N1–N3, the N4 core and the GPUI design slices D1–D4 built (2026-10-20); the
+context menu and arrow buttons remain deferred.** §8 records the upstream Python surface
+and the snapshot test that exercises it.
 Companion to [`inventor-renderer.md`](inventor-renderer.md) (the render stack this
 builds on), [`inventor-plan.md`](inventor-plan.md) (the emulation phase roadmap), and
 the [`coin-bridge-reuse-assessment.md`](coin-bridge-reuse-assessment.md) evidence.
@@ -130,37 +129,173 @@ built vertical slice (state accumulator, packets, CPU pick, events, DPR, viewpor
 | --- | --- |
 | Sub-rect + rect-relative pick | `ferrocad_inventor::pixels::Rect`; `Camera::ray_through_rect`; `pick_at_rect`/`pick_at_rect_hit` |
 | Selection id (per-face pick ids) | `ferrocad_inventor::node::NodeKind::PickId(u32)` |
-| Cube model (`Piece`, `NaviTarget`, `camera(rect)`) + the producers | `ferrocad_viewport::navicube::{model, inventor, stage}` |
+| Cube model (`Piece`, `camera(rect)`) + the producers | `ferrocad_viewport::navicube::{model, inventor, stage}` |
 | Multi-view hook | `ferrocad_inventor::view::ViewSpec` + `InventorView::draw_frame` |
 | Multi-view pass (overlay pipeline, `set_viewport`/`set_scissor_rect`) | `ferrocad_wgpu::WgpuRenderer::render_views` |
 | Controller (placement × DPR, camera sync, hit-test, hover, snap, orbit) | `ferrocad_viewport::navicube::NaviCube` |
 | Viewport integration (`with_navicube`, event routing) | `ferrocad_viewport::InventorViewport` |
 | Texture path (`State.texture`, `Texture2`, wgpu bind group 1) | `ferrocad_inventor::{state,geometry,node}`, `ferrocad_wgpu::textures` |
-| Baked face labels + fixed Home button | `ferrocad_viewport::navicube::model` |
-| Animated snap (`SnapAnimation`, `navicube::slerp`) + away-face translucency | `ferrocad_viewport::navicube` |
+| Filled face glyphs (`face_strokes`/`face_glyph`) | `ferrocad_viewport::navicube::model` |
+| Animated snap (`SnapAnimation`, `navicube::slerp`), away-face translucency, inertial orbit | `ferrocad_viewport::navicube` + `InventorViewport` |
+| gpui chrome: PERSP/ORTHO, Home, `AZ/EL` readout, `◀`/`▶` yaw | `InventorViewport::render` (`navicube_chrome`) |
+| Compass ring, yaw scrub, detents | `navicube::{model, inventor}`, `InventorViewport` |
 
 **Behaviour:** the cube mirrors the main camera's **view rotation** (its `Transform`
 node); a hover recompiles the cube with the hovered **piece** (face, edge or corner)
-in `HILITE_COLOR`; a click **animates** the main camera onto that piece
+highlighted; a click **animates** the main camera onto that piece
 (`SnapAnimation` + `navicube::slerp`), a drag **orbits** it (`navicube::drag_view`),
 keeping the camera distance. Away-facing faces are drawn first, translucent, so the
-cube reads as a solid-but-see-through box. Every face carries a baked **label** (a
-letter texture, `SoTexture2`-style), oriented from the face's *snap* rotation
-([`Piece::orientation`]) so it reads upright when that face turns to the viewer; a
-fixed **Home** button sits below the cube (outside the rotating subtree, so it does
-not turn) and snaps the view to the default axonometric orientation. The overlay is
-drawn in one pass.
+cube reads as a solid-but-see-through box. The pieces are sorted **back-to-front** by
+their view-space depth (pick id breaks ties), because the overlay has depth off: back
+edges and corner cubes then sit behind the front faces instead of painting over them.
+Every face carries a **filled 3D glyph** (WA7) whose triangle quads lie in the face plane,
+inset a hair along the normal, oriented from the face's *snap* rotation
+([`Piece::orientation`]) so it reads upright when that face turns to the viewer and
+foreshortens with the facet. The overlay is drawn in one pass. The orbit composes
+`pitch · yaw` so a diagonal drag does not roll the horizon.
 
 **Pieces:** `Piece` is the signed axis direction (1/2/3 non-zero components);
-`Piece::ALL` orders 6 faces (ids 1–6), 12 edges (7–18) and 8 corners (19–26). Faces
-are inset quads, edges are line segments (line pipeline), corners are small cubes. The
-Home button is id 27 (`HOME_PICK_ID`); `NaviTarget` unifies "a piece" and "Home" for
-hit-testing and click handling.
+`Piece::ALL` orders 6 faces (ids 1–6), 12 edges (7–18) and 8 corners (19–26). The body
+is the **watertight 24-vertex chamfered cube** (WA9): six square faces (`FACE_HALF 0.38`
+in the ±0.5 planes), twelve bevel quads with twin lines, and eight equilateral corner
+triangles. There is no Home packet any more (D4); the turntable uses id 27 (not a piece).
+Yaw has no 3D packets at all; it is a chrome control (WA9). `Piece::from_pick_id` maps a
+piece id back.
+
+**D1 — GPUI-native rest state (2026-10-20).** The presentation was reset to match the
+viewport's thin, vector-sharp language (design: [`navicube-gpui-design.md`](navicube-gpui-design.md)):
+faces are low-alpha glass facets, the twelve edge segments are the only wireframe (a
+resting face draws no inset rectangle), corners are small octahedral beads, and labels
+are light-on-transparent glyph textures at 0.55 alpha. Pointer **proximity** anywhere in
+the gizmo rect brightens edges and labels to 0.85/0.9; a hovered piece still takes the
+cyan highlight and an inner facet outline. The negative space between pieces passes
+through to the gizmo/tool/scene (tests: `navicube_negative_space_reaches_the_scene`).
+D1 also uncovered two renderer cache bugs: the compiler now sets a geometry-content
+`generation` (mesh ids are positional), and the upload cache is keyed per view so
+independent queues cannot overwrite each other's mesh 0.
+
+**D2 — hover targets (2026-10-20).** Hover is now legible on the small targets without a
+wide-line pipeline: a hovered face keeps its cyan fill and gains an inner outline plus a
+white label; a hovered edge goes cyan and gains a translucent screen-space ribbon; a
+hovered corner bead goes cyan and grows a translucent halo. Every corner also carries an
+invisible, larger octahedral pick target (radius 0.115 vs the 0.075 bead), so corners are
+comfortable to acquire while the drawn bead stays light. Rest and proximity are
+unchanged; the stage producer keeps the recolouring but not the ribbon/halo/pick target
+(an inventor-producer appearance, like labels).
+
+**D4 — gpui chrome, projection and inertia (2026-10-20).** Home left the 3D overlay: a
+gpui bar pinned beside the gizmo rect now holds `[PERSP | ORTHO]`, Home and a live
+`AZ/EL` readout (`InventorViewport::render` → `navicube_chrome`, anchored to the cube's
+**painted logical rect** via `chrome_bar_rect` / `NaviCube::logical_rect`, so it follows
+HiDPI device-pixel rounding instead of `NaviCubeConfig`). The toggle is
+**framing-preserving**: `Camera::toggle_projection` sets the ortho `extent` to
+`eye_distance·tan(fov/2)` (and back), and orthographic zoom scales the extent instead of
+the eye distance. The readout derives the eye's bearing from the view matrix.
+The bar's rect is reserved from the viewport's input (pointer/scroll/drag), so it cannot
+orbit or pick the scene behind it. Releasing an orbit while the pointer is still moving
+starts an **inertial glide** (smoothed velocity, `e^(−t/0.18s)` damping, stop at 12 px/s);
+a new press or a zoom stops it. `NaviTarget`, `HOME_PICK_ID`, the Home geometry and
+`NavicubeTheme::{Home, home}` were removed; the cube is 26 pieces and `home_orientation()`
+remains for the chrome's Home.
+
+**D3 — compass ring (2026-10-20).** The widget grew to 132×132 (ortho half-extent 1.3) and
+a **screen-fixed compass ring** now surrounds the cube: a 64-segment circle, 30° ticks,
+`N/E/S/W` labels and a diamond heading marker at the camera's azimuth. `compass_angle`
+derives the marker from the view rotation with the Y-up convention (E = 0/+X, N = 90/+Z,
+W = 180, S = 270); the controller keeps no extra state. `NaviCube::{ring_hit,
+ring_angle}` test the annulus in device pixels (pieces win where their pick targets
+overlap). A press starts a scrub; `drag_move` applies `navicube::yaw_view` by the pointer
+angle delta, a view-space yaw that leaves the horizon level. Releasing within 10° of a
+90° heading animates onto the detent (180 ms), otherwise the heading stays. The ring uses
+id 27 (deliberately not a piece) and is an inventor-producer capability.
+
+**D5 — hover preview; roll (2026-10-20).** *(The roll chevrons described here were removed
+in WA6; the chrome pill's turn controls are now yaw (WA9). The preview cone was removed
+in WA7.)* Two filled **roll chevrons** sat in
+the ring's diagonal gaps (135° counter-clockwise, 45° clockwise, radius 1.12) and used the
+ring tokens. `NaviCube::roll_hit` hit-tested them in cube space (chevrons won over the
+ring's scrub band; pieces won over both) and a press animated a **quarter turn about the
+screen normal** with `navicube::roll_view` (`RollDirection::angle()` = ±π/2, 220 ms).
+Hovering a piece also added a wireframe **preview cone** pointing from the piece toward
+the cube centre; it was removed in WA7 because it collided with the glyphs.
+
+**WA1–WA5 — visual pass (2026-10-20).** Five rendering/geometry corrections. (WA1) The
+compass ring is now a **ground-plane turntable** at `y = −0.5`, inside the rotating
+subtree, so it projects as a flat line at EL 0 and an ellipse as the camera tilts; ring
+hits project the pointer onto that plane, and `NaviCube::ring_point` exposes projected
+anchors. The cube itself is sized explicitly in logical pixels: `NaviCubeConfig.cube_size`
+is its largest projected extent (body diagonal, default **100** px), and the ≈148px
+turntable box around it is derived from `ORTHO_EXTENT`; DPR scales the device rect. Ring
+layout changes move the box, never the cube. (WA2) All labels became **gpui text**: face letters at projected face centres
+(front-facing only, faded by `n·view`) and `N/E/S/W` at projected ring anchors; the baked
+glyph atlas and `has_labels` are gone. *(WA6 later moved the face letters back into 3D,
+first as stroke line geometry and then as filled triangle glyphs in WA7.)* (WA3) The body
+is a **truncated cube** (chamfer
+0.10): octagon faces, truncated edge segments and flush corner triangles; the octahedral
+beads, pick beads and halos are removed and edges/corners own the resting wireframe.
+(WA4) Depth is carried by opacity: front edges @ 0.62, back edges @ 0.10, front glass
+@ 0.16 vs away @ 0.06. (WA5) The chrome is one compact row (11px,
+`#0F1218` @ 0.6, 1px `#FFFFFF14`) instead of a heavy two-line card. Also fixed:
+`yaw_view` now composes the yaw on the right (world Y), so a ring scrub no longer changes
+elevation when the camera is tilted.
+
+**WA6 — depth, scale and typography pass (2026-10-20).** (1) The ring's far arc
+(`view z < 0`) is a separate packet emitted first at 20% alpha, so the back half passes
+behind the cube; far-side `N/E/S/W` letters fade to 0.2 and are culled when their projected
+radius is `< 0.9`. (2) The turntable widened: ortho half-extent 1.55, ring radius 1.22,
+label radius 1.38, so the ellipse clears the cube's 0.707 corner radius. (3) Face letters
+are **3D stroke glyphs** (`F/T/L/D/B/R` as line segments in the face plane, scale 0.22,
+inset 0.002), emitted by both producers under the face pick id and drawn only on
+front-facing faces. (4) Resting faces are **directionally lit** with
+`alpha = 0.08 + 0.14·max(0, n̂·L̂)` for `L = normalize(0.3, 0.8, 0.5)`. (5) The cube is
+**centred** in a `CHROME_WIDTH = 248` logical column at every corner, so the pill sits
+symmetric beneath it; the pill gained `◀`/`▶` buttons (now yaw controls, WA9) and the
+floating chevrons, `ROLL_*` constants and `roll_hover` state were removed.
+
+**WA7 — machined-glass pass (2026-10-20).** (1) The cube became a chamfered body with
+bevel quads and cut corners; *(the octagon/hexagonal form was corrected to the watertight
+24-vertex square/triangle construction in WA9)*. Face letters are **filled triangle
+glyphs** (scale 0.38, stroke 0.06, `#EBF2FC` @ 0.8) instead of 1px strokes. (2) The
+turntable has a dark `#141820` **floor disc**, a thick `1.15..1.22` **rim band** and two
+crisp loop lines; the `N/E/S/W` anchors moved **inside** the track to `0.96`, and
+`ORTHO_EXTENT` tightened to `1.28` so the cube fills the frame. (3) Face shading uses an
+upper-left light and a smoothstepped dark→silver ramp, giving a truly dark shade face
+against the mid-grey viewport. (4) The hover preview cone is deleted. A hovered face keeps
+its directional fill and adds only a cyan outline; a hovered corner lights its three
+incident bevels (`EdgeNeighbour`), and bevels/corners fill vibrant cyan.
 
 **Interaction:** a drag is tracked with gpui's `on_drag`/`on_drag_move` (this fork's
 documented path for non-D&D drags "like resizing"); `on_drag_move` gives the pointer
 position, the controller accumulates the delta into `drag_view`. A press/release
 without movement snaps to the piece under the pointer.
+
+**WA8 — input idempotency (2026-10-20).** A ring scrub now measures every pointer with
+the **press-time** projection (`NaviCube::ring_angle_for`) instead of the live synced
+rotation. The turntable rotates with the view, so the live measurement fed the applied
+yaw back into the next angle; the resulting gain depended on render timing, so left/right
+drags did not cancel and the angle readout seemed frozen. `handle_pointer` is also inert
+while a drag is active, leaving the gesture to `drag_move`, and the `◀`/`▶` target
+composes from a pending snap's target so rapid opposite clicks cancel. Tests:
+`a_multi_step_ring_scrub_returns_to_its_start`,
+`rapid_opposite_yaws_compose_to_the_start`.
+
+**WA9 — watertight chamfer, culling and roll-free view (2026-10-20).** (1) The body is the
+**24-vertex chamfered cube**: six **square** faces (`FACE_HALF = 0.38` in the ±0.5 planes),
+twelve **bevel quads** connecting the shared square corners, and eight **equilateral
+corner triangles** of the face vertices `(±0.5, ±0.38, ±0.38)`. The construction is
+watertight — no corner gaps or hexagonal facets — and restores the twin bevel lines.
+(2) **Back-facing pieces are culled** (faces with `n_view.z < 0`; bevels/corners only when
+all adjacent faces are away), so the visible convex facets never overlap and the X-ray
+back-face bleed is gone. (3) The turntable is split into a **back** node (floor disc, far
+band/loops, far marker) and a **front** node (near band/loops), drawn as
+back → visible cube → front, with the far half at 20% alpha. (4) `NaviCube::sync` rebuilds
+a **roll-free** rotation from the camera's AZ/EL (`view_rotation`), so `T` stays upright and
+the turntable stays horizontal even if the scene is rolled. Near a pole (within ~2.5° of
+vertical) it keeps the camera's own in-plane up instead, because a world-Y yaw there is a
+pure roll: without that exception the cube and compass would freeze after a Top/Bottom
+snap. `camera_angles` reports the screen-right bearing at a pole for the same reason. (5) The chrome `◀`/`▶` arrows
+are now **yaw** controls (`InventorViewport::yaw`, `YawDirection`) about world +Y, so the
+AZ/EL readout changes and the ring never tilts; the roll-view helper is gone.
 
 **Crate:** these viewport pieces (the element, the controller and the cube) live in
 **`ferrocad_viewport`**, extracted from `ferrocad_gpui`; it depends only on
@@ -186,11 +321,12 @@ navicube overlay share one traversal and one `EventListener` argument — the ol
 Python script can build the node) is V4.3, still pending (§8).
 
 **Verification:** `ferrocad_viewport::navicube` tests — the model/producer units (ids,
-kinds, orientation, compilation, labels, Home) and the controller (corner rect,
-centre→Front, corner hit, Home hit, mirroring, hilite, snap, orbit) — plus the
-cross-producer conformance suite; `ferrocad_wgpu` `overlay_draws_into_its_rect`; the
-`inventor_roundtrip` example shows the labeled cube with the Home button
-(`--headless out.png`).
+kinds, orientation, compilation, labels, ring geometry/compass angle) and the controller
+(corner rect, centre→Front, corner hit and pick reach, mirroring, hilite, snap, orbit,
+ring bands) — plus the cross-producer conformance suite; viewport tests for the chrome
+(placement, projection round-trip, input reservation, angles), the compass scrub and
+detents, and the inertial glide; `ferrocad_wgpu` `overlay_draws_into_its_rect`; the
+`inventor_roundtrip` example shows the cube and ring (`--headless out.png`).
 
 ## 8. The Python surface and conformance (upstream)
 

@@ -27,8 +27,14 @@ is the `FreeCAD` Python API, documented by convention and by upstream.
   rules.
 - [inventor-renderer.md](inventor-renderer.md) — the Inventor scene core, the wgpu
   backend, and the gpui viewport (the render milestone).
+- [gpu-interop-assessment.md](gpu-interop-assessment.md) — zero-copy GPU presentation
+  through `gpui_interop`: the dma-buf hand-off, the same-device fallback, the platform
+  matrix, and the implemented first slice.
 - [navicube.md](navicube.md) — the navigation cube: what it is upstream, the slice
   plan, and the as-built map (implemented, N1–N4b).
+- [navicube-gpui-design.md](navicube-gpui-design.md) — the GPUI-native redesign: the
+  wireframe gyro-cube, hover/proximity states, compass ring, projection toggle, and
+  the D1–D5 slice plan.
 - [navicube-spec.md](navicube-spec.md) — the navigation cube **specification**: the
   coordinate conventions, piece taxonomy and ids, geometry, appearance **roles** (styling
   is a theme), overlay camera, placement, interaction, and the producer build contract.

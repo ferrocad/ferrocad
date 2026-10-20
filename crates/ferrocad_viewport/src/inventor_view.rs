@@ -12,10 +12,12 @@
 //! compiled scene, and delivered to an [`EventListener`] (the `SoEventCallback`
 //! analogue) which may edit the scene — for example, to highlight a hovered object.
 
+use std::cell::RefCell;
+use std::rc::Rc;
 use std::sync::Arc;
 use std::time::Duration;
 
-use ferrocad_graphics::{Camera, Hit, PickId, RenderQueue, Viewport, pick_at_hit};
+use ferrocad_graphics::{Camera, Hit, PickId, Projection, RenderQueue, Viewport, pick_at_hit};
 use ferrocad_inventor::{
     Directives, Event, EventListener, ImageData, InventorView, NaviCubeDirective, Scene, ViewSpec,
     compile_with,
@@ -25,15 +27,16 @@ use ferrocad_stage::{
     GizmoCommitEvent, GizmoHandle, MouseButton as StageButton, PointerEvent, PointerKind, Tool,
     TransformGizmo, snap_to_geometry,
 };
-use ferrocad_types::Matrix4;
+use ferrocad_types::{Matrix4, Placement, Rotation, Vector3};
 use gpui::{
     AnyElement, AppContext, Bounds, Context, DragMoveEvent, IntoElement, MouseButton, MouseDownEvent,
     MouseExitEvent, MouseMoveEvent, MouseUpEvent, ObjectFit, Pixels, Point, Render, RenderImage,
-    Window, div, img, prelude::*,
+    ScrollDelta, ScrollWheelEvent, Window, div, gpu_canvas, img, prelude::*, px, rgb, rgba,
 };
 use image::{Frame, ImageBuffer, Rgba};
 
-use crate::navicube::{NaviCube, NaviTarget, SnapAnimation};
+use crate::navicube::{CHROME_WIDTH, Corner, NaviCube, NavicubeLabel, YawDirection, SnapAnimation};
+use crate::presenter::{Presenter, PresenterStatus};
 
 /// A gpui view that presents an [`InventorView`] (image path) and routes pointer
 /// events into the scene.
@@ -74,11 +77,27 @@ pub struct InventorViewport<V: InventorView> {
     directive_cubes: Vec<(NaviCubeDirective, NaviCube)>,
     /// An in-progress navigation-cube orbit drag (from the first `on_drag_move`).
     navicube_drag: Option<NavicubeDrag>,
+    /// An in-progress main-camera orbit drag, started by a press on the scene.
+    orbit_drag: Option<OrbitDrag>,
+    /// An in-progress compass-ring scrub.
+    ring_drag: Option<RingDrag>,
+    /// The smoothed orbit velocity while dragging (logical px/s).
+    orbit_velocity: [f32; 2],
+    /// When the orbit velocity was last sampled.
+    last_drag_time: Option<std::time::Instant>,
+    /// The inertial orbit running after the pointer was released.
+    inertia: Option<Inertia>,
     /// An in-progress animated snap of the camera onto a cube piece.
     snap: Option<SnapAnimation>,
     /// The object currently under the pointer.
     hover: Option<PickId>,
     frame: Option<Arc<RenderImage>>,
+    /// A host-supplied zero-copy presenter. When ready, its GPU target replaces the
+    /// readback `frame`; `None` (the default) is the image path.
+    presenter: Option<Rc<RefCell<Box<dyn Presenter>>>>,
+    /// Frames spent waiting for the presenter's first paint. Bounds the startup loop
+    /// when the canvas is never painted (a hidden or zero-sized element).
+    presenter_frames: u8,
     /// The element's window-space bounds, captured at prepaint. gpui reports pointer
     /// positions relative to the **window**, so this is subtracted to make them
     /// viewport-local (see [`to_local`](Self::to_local)).
@@ -87,21 +106,56 @@ pub struct InventorViewport<V: InventorView> {
 
 /// A navigation-cube orbit drag in progress.
 struct NavicubeDrag {
-    /// Whether the drag began over the cube (otherwise it is ignored).
-    on_cube: bool,
     /// The last logical pointer position, for the next delta.
     last: [f32; 2],
     /// Accumulated movement, so a click (no drag) can snap instead of orbiting.
     moved: f32,
 }
 
-/// The marker type gpui's drag system tracks for the navigation cube.
-struct NavicubeDragMarker;
+/// A main-camera orbit drag in progress.
+struct OrbitDrag {
+    /// The last logical pointer position, for the next delta.
+    last: [f32; 2],
+    /// Accumulated movement, so a click is not treated as a drag.
+    moved: f32,
+}
 
-/// The (invisible) preview gpui renders while a navigation-cube drag is active.
-struct NavicubeDragPreview;
+/// An inertial orbit after the pointer was released: the last (smoothed) velocity in
+/// **logical pixels per second**, and when it was last integrated.
+struct Inertia {
+    velocity: [f32; 2],
+    last: std::time::Instant,
+}
 
-impl Render for NavicubeDragPreview {
+/// A compass-ring scrub in progress.
+struct RingDrag {
+    /// The pointer's angle around the ring center, in radians (CCW from screen +X).
+    last_angle: f64,
+    /// The projection captured when the press began. The turntable is inside the rotating
+    /// subtree, so measuring against the live rotation would feed the yaw we apply back
+    /// into the next pointer angle; freezing it makes the scrub integrate exactly.
+    reference: Rotation,
+}
+
+/// Yaw detents, in degrees: the ring snaps to these magnetic headings on release.
+const RING_DETENT_DEGREES: f64 = 90.0;
+/// How close (in degrees) a release must be to a detent to be captured.
+const RING_DETENT_CAPTURE: f64 = 10.0;
+
+/// How quickly a released orbit slows down (the velocity's time constant).
+const ORBIT_INERTIA_TAU: f32 = 0.18;
+/// The minimum release speed (logical px/s) that starts a glide.
+const ORBIT_INERTIA_START: f32 = 120.0;
+/// The glide stops below this speed (logical px/s).
+const ORBIT_INERTIA_STOP: f32 = 12.0;
+
+/// The marker type gpui's drag system tracks for viewport orbit gestures.
+struct ViewportDragMarker;
+
+/// The (invisible) preview gpui renders while a viewport drag is active.
+struct ViewportDragPreview;
+
+impl Render for ViewportDragPreview {
     fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
         div()
     }
@@ -130,9 +184,16 @@ impl<V: InventorView> InventorViewport<V> {
             navicube: None,
             directive_cubes: Vec::new(),
             navicube_drag: None,
+            orbit_drag: None,
+            ring_drag: None,
+            orbit_velocity: [0.0, 0.0],
+            last_drag_time: None,
+            inertia: None,
             snap: None,
             hover: None,
             frame: None,
+            presenter: None,
+            presenter_frames: 0,
             last_bounds: None,
         };
         viewport.sync_directive_cubes();
@@ -144,6 +205,21 @@ impl<V: InventorView> InventorViewport<V> {
     pub fn with_listener(mut self, listener: Box<dyn EventListener>) -> Self {
         self.listeners.push(listener);
         self
+    }
+
+    /// Present frames through a host-supplied zero-copy presenter instead of the
+    /// readback image path. The presenter falls back to the image path when the
+    /// window has no compatible GPU device.
+    pub fn with_presenter(mut self, presenter: Box<dyn Presenter>) -> Self {
+        self.presenter = Some(Rc::new(RefCell::new(presenter)));
+        self
+    }
+
+    /// The presenter's lifecycle state, or `None` when the image path is in use.
+    pub fn presenter_status(&self) -> Option<PresenterStatus> {
+        self.presenter
+            .as_ref()
+            .map(|presenter| presenter.borrow().status())
     }
 
     /// Show a navigation cube in the viewport corner.
@@ -292,6 +368,9 @@ impl<V: InventorView> InventorViewport<V> {
         }
         self.camera.viewport = viewport;
         self.view.resize(device);
+        if let Some(presenter) = &self.presenter {
+            presenter.borrow_mut().set_size(device);
+        }
         if let Some(cube) = self.navicube.as_mut() {
             cube.set_viewport(viewport);
         }
@@ -308,18 +387,54 @@ impl<V: InventorView> InventorViewport<V> {
     /// hovers a handle; over the scene it picks the main scene. Returns whether the
     /// scene changed (and so needs repainting).
     pub fn handle_pointer(&mut self, logical: [f32; 2]) -> bool {
+        // An active drag is owned by `drag_move`: hovering here would rebuild the cube per
+        // event and can clear the ring's active state mid-scrub.
+        if self.ring_drag.is_some() || self.navicube_drag.is_some() || self.orbit_drag.is_some() {
+            return false;
+        }
+        // The chrome bar is gpui, not the 3D scene: keep the pointer out of picking and
+        // out of the cube's proximity state.
+        if self.chrome_contains(logical) {
+            let mut changed = false;
+            if let Some(cube) = self.navicube.as_mut() {
+                changed |= cube.set_hilite(None);
+                changed |= cube.set_proximity(false);
+            }
+            return changed;
+        }
         let device = self.camera.viewport.to_device(logical);
         let mut changed = false;
+        let mut in_cube = false;
+        let mut cube_hit = None;
+        let mut ring = false;
         if let Some(cube) = self.navicube.as_mut() {
-            if cube.rect().contains(device) {
-                // Hover highlights pieces only (not the Home button), as before.
-                let target = cube
-                    .hit(device)
-                    .filter(|target| matches!(target, NaviTarget::Piece(_)));
-                self.hover = None;
-                return cube.set_hilite(target);
+            in_cube = cube.rect().contains(device);
+            changed |= cube.set_proximity(in_cube);
+            if in_cube {
+                // Pieces win over the ring: their pick targets reach into the ring band
+                // near a corner, and a corner click must not start a scrub.
+                let hit = cube.hit(device);
+                if let Some(piece) = hit {
+                    self.hover = None;
+                    changed |= cube.set_hilite(Some(piece));
+                    changed |= cube.set_ring_active(false);
+                    cube_hit = Some(piece);
+                } else {
+                    // A scrub keeps the ring lit even when the pointer strays off it.
+                    ring = self.ring_drag.is_some() || cube.ring_hit(device);
+                    changed |= cube.set_ring_active(ring);
+                    changed |= cube.set_hilite(None);
+                    self.hover = None;
+                }
+            } else {
+                changed |= cube.set_hilite(None);
+                changed |= cube.set_ring_active(false);
             }
-            changed = cube.set_hilite(None);
+        }
+        // A piece or the ring consumes the hover; the negative space around them falls
+        // through to the gizmo/tool/scene beneath.
+        if in_cube && (ring || cube_hit.is_some()) {
+            return changed;
         }
 
         // The gizmo takes priority: an active drag consumes the move; otherwise hover.
@@ -350,41 +465,106 @@ impl<V: InventorView> InventorViewport<V> {
 
     /// Deliver a mouse-button change, in **viewport-local logical** pixels.
     ///
-    /// A press on the cube begins a possible orbit drag; a release that did not orbit
-    /// snaps the main camera onto the piece under the pointer. Otherwise the event
-    /// goes to the main scene.
+    /// A press over the navigation cube starts a cube orbit; a release that did not
+    /// orbit snaps the main camera onto the piece under the pointer. A press on the
+    /// scene starts a possible main-camera orbit, which becomes real once the drag
+    /// passes the threshold. Gizmo handles and active tools keep priority.
     pub fn handle_button(&mut self, logical: [f32; 2], button: u8, down: bool) -> bool {
         // Whether the gesture was an orbit (past the min-drag threshold) rather than a
         // click: an orbit must not also snap on release.
         let threshold = navicube_drag_threshold(self.camera.viewport.device_pixel_ratio());
-        let orbited = self
+        let cube_orbited = self
             .navicube_drag
             .as_ref()
-            .is_some_and(|drag| drag.on_cube && drag.moved >= threshold);
-        // Any button event ends a (possibly stale) orbit drag or snap.
+            .is_some_and(|drag| drag.moved >= threshold);
+        // Any button event ends the gesture state it observed.
+        let was_orbiting = self.navicube_drag.is_some() || self.orbit_drag.is_some();
+        let ring_was_active = self.ring_drag.is_some();
         self.navicube_drag = None;
+        self.orbit_drag = None;
         self.snap = None;
+        if down {
+            // Grabbing the view stops a glide; velocity starts fresh.
+            self.inertia = None;
+            self.orbit_velocity = [0.0, 0.0];
+            self.last_drag_time = None;
+            self.ring_drag = None;
+        } else if was_orbiting {
+            self.start_inertia();
+        }
+        if !down && ring_was_active {
+            self.ring_drag = None;
+            return self.finish_ring_drag();
+        }
+        if self.chrome_contains(logical) {
+            return false;
+        }
         let device = self.camera.viewport.to_device(logical);
-        if self
+        let in_cube = self
             .navicube
             .as_ref()
-            .is_some_and(|cube| cube.rect().contains(device))
-        {
-            if down || orbited {
-                return false; // the orbit starts on the first drag-move; an orbit does not snap
-            }
-            if let Some(target) = self.navicube.as_ref().and_then(|cube| cube.hit(device)) {
-                // Animate the snap rather than jumping: a piece snaps onto its face,
-                // edge or corner; the Home button restores the default orientation.
-                let end = match target {
-                    NaviTarget::Piece(piece) => piece.orientation(),
-                    NaviTarget::Home => crate::navicube::home_orientation(),
-                };
-                self.snap = Some(SnapAnimation::to(end, &self.camera, Duration::from_millis(220)));
-                return true;
+            .is_some_and(|cube| cube.rect().contains(device));
+        let cube_hit = if in_cube {
+            self.navicube.as_ref().and_then(|cube| cube.hit(device))
+        } else {
+            None
+        };
+        // The ring only owns points the pieces did not already claim.
+        let ring_hit = in_cube
+            && cube_hit.is_none()
+            && self
+                .navicube
+                .as_ref()
+                .is_some_and(|cube| cube.ring_hit(device));
+        if ring_hit {
+            if down {
+                // A ring scrub owns the gesture; a click without movement does nothing.
+                // Freeze the projection at press time (see `RingDrag::reference`).
+                let reference = Rotation::from_matrix(&self.camera.view);
+                self.ring_drag = self
+                    .navicube
+                    .as_ref()
+                    .and_then(|cube| cube.ring_angle_for(device, reference))
+                    .map(|last_angle| RingDrag {
+                        last_angle,
+                        reference,
+                    });
+                if let Some(cube) = self.navicube.as_mut() {
+                    cube.set_ring_active(true);
+                }
             }
             return false;
         }
+        let cube_hit = if in_cube {
+            self.navicube.as_ref().and_then(|cube| cube.hit(device))
+        } else {
+            None
+        };
+        if in_cube && cube_orbited {
+            return false; // an orbit does not snap
+        }
+        if in_cube && cube_hit.is_some() {
+            if down {
+                // A click (no drag) snaps on release; a drag orbits the cube.
+                self.navicube_drag = Some(NavicubeDrag {
+                    last: logical,
+                    moved: 0.0,
+                });
+                return false;
+            }
+            if let Some(piece) = cube_hit {
+                // Animate the snap rather than jumping: the camera turns onto the
+                // piece's face, edge or corner.
+                self.snap = Some(SnapAnimation::to(
+                    piece.orientation(),
+                    &self.camera,
+                    Duration::from_millis(220),
+                ));
+                return true;
+            }
+        }
+        // Negative space inside the gizmo rect (or a click outside it) continues to the
+        // gizmo, tool and scene below.
         // The gizmo takes priority over the tool and the scene.
         if self.gizmo.is_some() {
             if down {
@@ -414,6 +594,15 @@ impl<V: InventorView> InventorViewport<V> {
             }
         }
 
+        // A scene drag orbits the camera. The left button leaves the gesture to an
+        // active tool; the middle button always navigates.
+        if down && (button == 2 || (button == 1 && self.tool.is_none())) {
+            self.orbit_drag = Some(OrbitDrag {
+                last: logical,
+                moved: 0.0,
+            });
+        }
+
         let kind = if down {
             PointerKind::Down
         } else {
@@ -428,6 +617,134 @@ impl<V: InventorView> InventorViewport<V> {
         };
         changed |= self.dispatch(&event, hit.as_ref());
         changed
+    }
+
+    /// Zoom the main camera by `lines` wheel notches (positive = towards the scene).
+    ///
+    /// The orbit point is the current camera pivot (the origin of its view space), so
+    /// zoom keeps the view direction: a perspective camera moves its eye, an
+    /// orthographic one scales its extent.
+    pub fn handle_scroll(&mut self, lines: f32) -> bool {
+        if !lines.is_finite() || lines == 0.0 {
+            return false;
+        }
+        const ZOOM_PER_LINE: f64 = 1.15;
+        self.snap = None;
+        self.inertia = None;
+        let factor = ZOOM_PER_LINE.powf(-f64::from(lines));
+        let next = crate::navicube::zoom_view(&self.camera, factor);
+        if next == self.camera.view {
+            return false;
+        }
+        self.camera.view = next;
+        // Perspective zoom is the eye distance; an orthographic view zooms by its extent.
+        self.camera.zoom_projection(factor);
+        self.recompile();
+        true
+    }
+
+    /// The camera the viewport draws with.
+    pub fn camera(&self) -> &Camera {
+        &self.camera
+    }
+
+    /// Whether the camera is currently orthographic.
+    pub fn is_orthographic(&self) -> bool {
+        self.camera.is_orthographic()
+    }
+
+    /// Replace the projection. Framing is preserved only when the caller chooses
+    /// projection parameters consistent with the current eye distance; the chrome uses
+    /// [`set_orthographic`](Self::set_orthographic), which does. Returns whether it
+    /// changed.
+    pub fn set_projection(&mut self, projection: Projection) -> bool {
+        if !self.camera.set_projection(projection) {
+            return false;
+        }
+        self.recompile();
+        true
+    }
+
+    /// Switch perspective/orthographic, preserving the apparent size at the pivot.
+    /// Returns whether it changed.
+    pub fn set_orthographic(&mut self, orthographic: bool) -> bool {
+        if orthographic == self.camera.is_orthographic() {
+            return false;
+        }
+        if !self.camera.toggle_projection() {
+            return false;
+        }
+        self.recompile();
+        true
+    }
+
+    /// Toggle perspective/orthographic (see [`set_orthographic`](Self::set_orthographic)).
+    pub fn toggle_projection(&mut self) -> bool {
+        if !self.camera.toggle_projection() {
+            return false;
+        }
+        self.recompile();
+        true
+    }
+
+    /// Animate the camera back to the home orientation (the chrome's Home control).
+    pub fn go_home(&mut self) -> bool {
+        self.inertia = None;
+        self.snap = Some(SnapAnimation::to(
+            crate::navicube::home_orientation(),
+            &self.camera,
+            Duration::from_millis(220),
+        ));
+        true
+    }
+
+    /// Yaw the view ±90° about the vertical (+Y) axis, animated (the chrome's arrows).
+    /// Yaw keeps the horizon level and the turntable horizontal, so the angle readout
+    /// changes by ±90° and the navicube's `T` stays upright.
+    ///
+    /// The target composes from a pending animation's target, not from the partially
+    /// animated camera: otherwise two quick opposite clicks would both start from a
+    /// half-turned pose and the view would not return to where it started.
+    pub fn yaw(&mut self, direction: YawDirection) -> bool {
+        self.inertia = None;
+        let base = if let Some(snap) = self.snap.as_ref() {
+            Camera {
+                view: Placement::new(
+                    Vector3::new(
+                        self.camera.view.m[3],
+                        self.camera.view.m[7],
+                        self.camera.view.m[11],
+                    ),
+                    snap.target(),
+                )
+                .to_matrix(),
+                ..self.camera.clone()
+            }
+        } else {
+            self.camera.clone()
+        };
+        let target = Rotation::from_matrix(&crate::navicube::yaw_view(&base, direction.angle()));
+        self.snap = Some(SnapAnimation::to(
+            target,
+            &self.camera,
+            Duration::from_millis(220),
+        ));
+        true
+    }
+
+    /// The chrome bar's logical rect `[left, top, right, bottom]`, if the navigation cube
+    /// is placed.
+    fn chrome_rect(&self) -> Option<[f32; 4]> {
+        self.navicube.as_ref().map(chrome_bar_rect)
+    }
+
+    /// Whether `logical` is over the gpui chrome bar. The bar sits inside the viewport
+    /// element, so pointer events bubble to the viewport's handlers; the handlers ignore
+    /// them here and let the bar's own buttons own the click.
+    fn chrome_contains(&self, logical: [f32; 2]) -> bool {
+        self.chrome_rect().is_some_and(|[left, top, right, bottom]| {
+            logical[0] >= left && logical[0] <= right && logical[1] >= top && logical[1] <= bottom
+        })
     }
 
     /// Deliver a pointer event to the active tool (if any) and rebuild its transient
@@ -502,40 +819,180 @@ impl<V: InventorView> InventorViewport<V> {
         }
     }
 
-    /// Handle a gpui drag-move: orbit the main camera when the drag began over the
-    /// navigation cube. Reports whether the view changed.
-    fn navicube_drag_move(&mut self, logical: [f32; 2]) -> bool {
+    /// Handle a gpui drag-move: orbit the navigation cube or the main camera,
+    /// depending on where the press began. Reports whether the view changed.
+    fn drag_move(&mut self, logical: [f32; 2]) -> bool {
+        if self.chrome_contains(logical) {
+            return false;
+        }
         self.snap = None; // a drag cancels any in-progress snap
-        let device = self.camera.viewport.to_device(logical);
-        let on_cube = self
-            .navicube
-            .as_ref()
-            .is_some_and(|cube| cube.rect().contains(device));
-        let state = self.navicube_drag.get_or_insert(NavicubeDrag {
-            on_cube,
-            last: logical,
-            moved: 0.0,
-        });
-        if !state.on_cube {
-            return false;
+        self.inertia = None;
+        if self.ring_drag.is_some() {
+            let device = self.camera.viewport.to_device(logical);
+            let (last, reference) = {
+                let drag = self.ring_drag.as_ref().expect("ring drag");
+                (drag.last_angle, drag.reference)
+            };
+            let angle = self
+                .navicube
+                .as_ref()
+                .and_then(|cube| cube.ring_angle_for(device, reference));
+            let Some(angle) = angle else {
+                return false;
+            };
+            let delta = shortest_angle(angle - last);
+            if delta.abs() < 1e-6 {
+                return false;
+            }
+            if let Some(drag) = self.ring_drag.as_mut() {
+                drag.last_angle = angle;
+            }
+            self.camera.view = crate::navicube::yaw_view(&self.camera, delta);
+            self.recompile();
+            return true;
         }
-        let delta = [logical[0] - state.last[0], logical[1] - state.last[1]];
-        state.last = logical;
-        state.moved += (delta[0] * delta[0] + delta[1] * delta[1]).sqrt();
-        // Below the threshold the gesture is still a click (a snap on release), not an orbit.
         let threshold = navicube_drag_threshold(self.camera.viewport.device_pixel_ratio());
-        if state.moved < threshold {
+        let delta = if let Some(state) = self.navicube_drag.as_mut() {
+            let delta = [logical[0] - state.last[0], logical[1] - state.last[1]];
+            state.last = logical;
+            state.moved += (delta[0] * delta[0] + delta[1] * delta[1]).sqrt();
+            (state.moved >= threshold).then_some(delta)
+        } else if let Some(state) = self.orbit_drag.as_mut() {
+            let delta = [logical[0] - state.last[0], logical[1] - state.last[1]];
+            state.last = logical;
+            state.moved += (delta[0] * delta[0] + delta[1] * delta[1]).sqrt();
+            (state.moved >= threshold).then_some(delta)
+        } else {
+            None
+        };
+        let Some(delta) = delta else {
             return false;
-        }
+        };
+        self.track_orbit_velocity(delta);
         self.camera.view = crate::navicube::drag_view(&self.camera, delta);
         self.recompile();
         true
     }
 
+    /// Settle a finished ring scrub on the nearest 90° heading when the release is close
+    /// enough to a detent. Returns whether a snap animation started.
+    fn finish_ring_drag(&mut self) -> bool {
+        if let Some(cube) = self.navicube.as_mut() {
+            cube.set_ring_active(false);
+        }
+        let (azimuth, _) = camera_angles(&self.camera);
+        let target = (azimuth / RING_DETENT_DEGREES).round() * RING_DETENT_DEGREES;
+        let delta = (target - azimuth).rem_euclid(360.0);
+        let delta = if delta > 180.0 { delta - 360.0 } else { delta };
+        if delta.abs() > RING_DETENT_CAPTURE {
+            return false;
+        }
+        if delta.abs() < 1e-6 {
+            return false; // already on the detent
+        }
+        let target_view = crate::navicube::yaw_view(&self.camera, delta.to_radians());
+        self.snap = Some(SnapAnimation::to(
+            Rotation::from_matrix(&target_view),
+            &self.camera,
+            Duration::from_millis(180),
+        ));
+        true
+    }
+
+    /// Feed one orbit delta into the smoothed release velocity (logical px/s). A pause
+    /// longer than the sample window drops the velocity, so releasing after a stop does
+    /// not fling the view.
+    fn track_orbit_velocity(&mut self, delta: [f32; 2]) {
+        let now = std::time::Instant::now();
+        if let Some(last) = self.last_drag_time {
+            let dt = now.saturating_duration_since(last).as_secs_f32();
+            if (1e-3..=0.2).contains(&dt) {
+                let sample = [delta[0] / dt, delta[1] / dt];
+                const SMOOTHING: f32 = 0.35;
+                self.orbit_velocity[0] += (sample[0] - self.orbit_velocity[0]) * SMOOTHING;
+                self.orbit_velocity[1] += (sample[1] - self.orbit_velocity[1]) * SMOOTHING;
+            } else if dt > 0.2 {
+                self.orbit_velocity = [0.0, 0.0];
+            }
+        }
+        self.last_drag_time = Some(now);
+    }
+
+    /// Begin an inertial glide from the release velocity, if the pointer was still moving
+    /// when it let go.
+    fn start_inertia(&mut self) {
+        self.inertia = None;
+        if self
+            .last_drag_time
+            .is_none_or(|last| last.elapsed() > Duration::from_millis(150))
+        {
+            self.orbit_velocity = [0.0, 0.0];
+        }
+        let [vx, vy] = self.orbit_velocity;
+        if (vx * vx + vy * vy).sqrt() >= ORBIT_INERTIA_START {
+            self.inertia = Some(Inertia {
+                velocity: self.orbit_velocity,
+                last: std::time::Instant::now(),
+            });
+        }
+        self.orbit_velocity = [0.0, 0.0];
+    }
+
+    /// Advance the inertial orbit by the time since its last step, returning whether it is
+    /// still running (the render loop requests frames until it is done).
+    fn step_inertia(&mut self) -> bool {
+        let Some(inertia) = self.inertia.as_ref() else {
+            return false;
+        };
+        let now = std::time::Instant::now();
+        let dt = now.saturating_duration_since(inertia.last);
+        if let Some(inertia) = self.inertia.as_mut() {
+            inertia.last = now;
+        }
+        self.step_inertia_by(dt)
+    }
+
+    /// The deterministic core of [`step_inertia`](Self::step_inertia).
+    fn step_inertia_by(&mut self, dt: Duration) -> bool {
+        let Some(inertia) = self.inertia.as_ref() else {
+            return false;
+        };
+        let seconds = dt.as_secs_f32().min(0.1);
+        if seconds <= 0.0 {
+            return true;
+        }
+        let velocity = inertia.velocity;
+        let delta = [velocity[0] * seconds, velocity[1] * seconds];
+        if delta == [0.0, 0.0] {
+            self.inertia = None;
+            return false;
+        }
+        let decay = (-seconds / ORBIT_INERTIA_TAU).exp();
+        let next = [velocity[0] * decay, velocity[1] * decay];
+        let speed = (next[0] * next[0] + next[1] * next[1]).sqrt();
+        self.camera.view = crate::navicube::drag_view(&self.camera, delta);
+        self.recompile();
+        if speed < ORBIT_INERTIA_STOP {
+            self.inertia = None;
+            false
+        } else {
+            if let Some(inertia) = self.inertia.as_mut() {
+                inertia.velocity = next;
+            }
+            true
+        }
+    }
+
     /// Deliver a pointer leave.
     pub fn handle_pointer_leave(&mut self) -> bool {
         self.hover = None;
-        self.dispatch(&Event::MouseLeave, None)
+        let mut changed = false;
+        if let Some(cube) = self.navicube.as_mut() {
+            changed |= cube.set_hilite(None);
+            changed |= cube.set_proximity(false);
+            changed |= cube.set_ring_active(false);
+        }
+        changed | self.dispatch(&Event::MouseLeave, None)
     }
 
     /// Pick the main scene at a device position and run the listeners.
@@ -681,7 +1138,17 @@ impl<V: InventorView> InventorViewport<V> {
             views.push(cube.view());
         }
 
-        if self.view.draw_frame(&views).is_ok() {
+        // A ready presenter draws into its own GPU target. Until it is ready (and
+        // whenever it is unavailable) keep the image path: those frames double as the
+        // fallback while the host negotiates with the window's device.
+        let presented = match &self.presenter {
+            Some(presenter) => {
+                let mut presenter = presenter.borrow_mut();
+                presenter.status() == PresenterStatus::Ready && presenter.draw(&views)
+            }
+            None => false,
+        };
+        if !presented && self.view.draw_frame(&views).is_ok() {
             if let Ok(image) = self.view.image() {
                 self.frame = Some(Arc::new(render_image(image)));
             }
@@ -696,37 +1163,114 @@ impl<V: InventorView + 'static> Render for InventorViewport<V> {
         if self.sync_size(window) {
             window.request_animation_frame();
         }
-        // MVP: render and read back during paint, on the UI thread. A snap animation
-        // keeps requesting frames until it settles.
+        // MVP: render and read back during paint, on the UI thread. An inertial orbit or
+        // a snap animation keeps requesting frames until it settles.
+        if self.step_inertia() {
+            window.request_animation_frame();
+        }
         if self.step_snap() {
             window.request_animation_frame();
         }
+        // The presenter negotiates with the window's device on its first paint; ask for
+        // the frame that can then draw and present into it. Bound the requests so a
+        // canvas that never paints cannot spin the window forever.
+        const PRESENTER_STARTUP_FRAMES: u8 = 8;
+        let presenter_status = self.presenter_status();
+        if presenter_status == Some(PresenterStatus::Pending) {
+            if self.presenter_frames < PRESENTER_STARTUP_FRAMES {
+                self.presenter_frames += 1;
+                window.request_animation_frame();
+            }
+        }
         self.refresh();
 
-        let content: AnyElement = match &self.frame {
-            Some(image) => img(image.clone())
+        // Face and compass labels are gpui text over the overlay image (crisp, in the
+        // app's font). They follow the same view rotation and rect as the 3D overlay.
+        let labels = self
+            .navicube
+            .as_ref()
+            .map(NaviCube::labels)
+            .unwrap_or_default();
+
+        let content: AnyElement = match (&self.presenter, presenter_status) {
+            // Pending presents an empty canvas while `prepare` runs; Unsupported (and a
+            // presenter that never got a paint) falls through to the image path.
+            (Some(presenter), Some(status))
+                if status != PresenterStatus::Unsupported
+                    && !(status == PresenterStatus::Pending
+                        && self.presenter_frames >= PRESENTER_STARTUP_FRAMES) =>
+            {
+                let presenter = presenter.clone();
+                gpu_canvas(move |gpu| {
+                    let mut presenter = presenter.borrow_mut();
+                    presenter.prepare(gpu);
+                    if presenter.status() == PresenterStatus::Ready {
+                        presenter.present(gpu);
+                    }
+                })
                 .w_full()
                 .h_full()
-                .object_fit(ObjectFit::Fill)
-                .into_any_element(),
-            None => div().w_full().h_full().into_any_element(),
+                .into_any_element()
+            }
+            _ => match &self.frame {
+                Some(image) => img(image.clone())
+                    .w_full()
+                    .h_full()
+                    .object_fit(ObjectFit::Fill)
+                    .into_any_element(),
+                None => div().w_full().h_full().into_any_element(),
+            },
         };
 
         let entity = cx.entity();
-        div()
+        let root = div()
+            .relative()
             .w_full()
             .h_full()
             // Record the element's window-space bounds each frame, so the window-relative
             // positions gpui reports can be made viewport-local (see `to_local`).
             .on_children_prepainted(move |bounds: Vec<Bounds<Pixels>>, _window, cx| {
-                if let Some(bounds) = bounds.first().copied() {
+                // The canvas fills the element; the chrome bar is a smaller absolutely
+                // positioned sibling, so take the largest child as the element's bounds.
+                let largest = bounds
+                    .iter()
+                    .max_by(|a, b| {
+                        let area = |bounds: &Bounds<Pixels>| {
+                            bounds.size.width.0 * bounds.size.height.0
+                        };
+                        area(a).total_cmp(&area(b))
+                    })
+                    .copied();
+                if let Some(bounds) = largest {
                     entity.update(cx, |this, _cx| this.last_bounds = Some(bounds));
                 }
             })
             .id("ferrocad-inventor-viewport")
+            .on_scroll_wheel(cx.listener(|this, event: &ScrollWheelEvent, _window, cx| {
+                // Scrolling over the chrome bar must not zoom the scene.
+                if this.chrome_contains(this.to_local(event.position)) {
+                    return;
+                }
+                // A wheel notch is a line; a trackpad reports pixels.
+                let lines = match event.delta {
+                    ScrollDelta::Lines(lines) => lines.y,
+                    ScrollDelta::Pixels(pixels) => pixels.y.as_f32() / 40.0,
+                };
+                if this.handle_scroll(lines) {
+                    cx.notify();
+                }
+            }))
             .on_mouse_move(cx.listener(|this, event: &MouseMoveEvent, _window, cx| {
                 let local = this.to_local(event.position);
-                if this.handle_pointer(local) {
+                let mut changed = false;
+                // gpui's drag system carries a left-button drag (and its moves outside
+                // the element) through `on_drag_move`; a middle-button orbit has no
+                // such gesture, so it is read from the pressed state here.
+                if event.pressed_button == Some(MouseButton::Middle) {
+                    changed |= this.drag_move(local);
+                }
+                changed |= this.handle_pointer(local);
+                if changed {
                     cx.notify();
                 }
             }))
@@ -742,13 +1286,13 @@ impl<V: InventorView + 'static> Render for InventorViewport<V> {
                     cx.notify();
                 }
             }))
-            .on_drag(NavicubeDragMarker, |_, _, _, cx| {
-                cx.new(|_| NavicubeDragPreview)
+            .on_drag(ViewportDragMarker, |_, _, _, cx| {
+                cx.new(|_| ViewportDragPreview)
             })
-            .on_drag_move::<NavicubeDragMarker>(cx.listener(
-                |this, event: &DragMoveEvent<NavicubeDragMarker>, _window, cx| {
+            .on_drag_move::<ViewportDragMarker>(cx.listener(
+                |this, event: &DragMoveEvent<ViewportDragMarker>, _window, cx| {
                     let position = this.to_local(event.event.position);
-                    if this.navicube_drag_move(position) {
+                    if this.drag_move(position) {
                         cx.notify();
                     }
                 },
@@ -758,7 +1302,29 @@ impl<V: InventorView + 'static> Render for InventorViewport<V> {
                     cx.notify();
                 }
             }))
-            .child(content)
+            .child(content);
+
+        // Labels sit between the image and the chrome: above the 3D overlay, below the
+        // controls. A plain text layer has no hitboxes, so pointer events still reach the
+        // viewport handlers.
+        let root = if labels.is_empty() {
+            root
+        } else {
+            root.child(navicube_labels(&labels))
+        };
+
+        // The chrome bar is gpui, beside the 3D overlay. It is positioned from the
+        // cube's freshly synced rect, so it tracks the same device-pixel rounding as the
+        // overlay. Build it last so its listeners' use of `cx` does not overlap the
+        // handlers above.
+        if let Some(cube) = self.navicube.as_ref() {
+            let rect = chrome_bar_rect(cube);
+            let orthographic = self.camera.is_orthographic();
+            let angles = camera_angles(&self.camera);
+            root.child(navicube_chrome(rect, orthographic, angles, cx))
+        } else {
+            root
+        }
     }
 }
 
@@ -771,11 +1337,254 @@ fn merge_queue(scene: &Scene, stage: &Stage, viewport: &Viewport) -> (RenderQueu
     (queue, directives)
 }
 
+/// The gpui chrome bar under the navigation cube: a projection toggle, Home and the
+/// angle readout. Logical pixels; the palette matches the shell's panels.
+const CHROME_HEIGHT: f32 = 26.0;
+const CHROME_GAP: f32 = 6.0;
+const CHROME_BORDER: u32 = 0xffffff14;
+const CHROME_BG: u32 = 0x0f121899;
+const CHROME_MUTED: u32 = 0x8b919a;
+const CHROME_TEXT: u32 = 0xd8dbe0;
+const CHROME_ACTIVE: u32 = 0x67d7ff;
+const CHROME_ACTIVE_BG: u32 = 0x1b2b3855;
+const CHROME_FONT: f32 = 11.0;
+
+/// The chrome bar's logical rect `[left, top, right, bottom]` under `cube`.
+///
+/// The bar is **centred on the cube's painted rect** (WA6): the 248px pill shares the
+/// cube's horizontal centre and sits `CHROME_GAP` beyond it, toward the viewport centre,
+/// so the cube and its controls read as one column rather than a left-heavy card.
+fn chrome_bar_rect(cube: &NaviCube) -> [f32; 4] {
+    let [left, top, right, bottom] = cube.logical_rect();
+    let x = (left + right) / 2.0 - CHROME_WIDTH / 2.0;
+    let y = match cube.config().corner {
+        Corner::TopLeft | Corner::TopRight => bottom + CHROME_GAP,
+        Corner::BottomLeft | Corner::BottomRight => top - CHROME_GAP - CHROME_HEIGHT,
+    };
+    [x, y, x + CHROME_WIDTH, y + CHROME_HEIGHT]
+}
+
+/// The camera's **azimuth/elevation** in degrees, from the eye's bearing as seen from
+/// the pivot (the world origin). The engine is **Y-up**, so azimuth is measured in the
+/// horizontal XZ plane from +X, and elevation above that plane from +Y. This is the
+/// viewpoint angle, not the look direction. A degenerate (identity) view reports
+/// `(0, 0)`.
+pub fn camera_angles(camera: &Camera) -> (f64, f64) {
+    let Some(inverse) = camera.view.inverse() else {
+        return (0.0, 0.0);
+    };
+    let eye = inverse.transform(&Vector3::zero());
+    let distance = eye.length();
+    if distance <= 1e-9 {
+        return (0.0, 0.0);
+    }
+    let axis = eye.scale(1.0 / distance);
+    let elevation = axis.y.clamp(-1.0, 1.0).asin().to_degrees();
+    // Azimuth is the eye's horizontal bearing. At a pole the eye has no bearing, so use
+    // the screen-right direction instead: a top view then keeps a stable heading that
+    // the yaw controls still turn, rather than freezing at 000°.
+    let horizontal = (axis.x * axis.x + axis.z * axis.z).sqrt();
+    let bearing = if horizontal > 1e-9 {
+        axis
+    } else {
+        inverse.transform(&Vector3::new(1.0, 0.0, 0.0))
+    };
+    let azimuth = bearing.z.atan2(bearing.x).to_degrees().rem_euclid(360.0);
+    // A hair below a full turn rounds to 360°; report it as 0°.
+    let azimuth = if azimuth >= 360.0 - 1e-9 { 0.0 } else { azimuth };
+    (azimuth, elevation)
+}
+
+/// A projection segment in the chrome bar. `orthographic` is the projection it selects;
+/// the active segment is accented.
+fn projection_button<V: InventorView + 'static>(
+    id: &'static str,
+    label: &'static str,
+    active: bool,
+    orthographic: bool,
+    cx: &mut Context<InventorViewport<V>>,
+) -> impl IntoElement {
+    div()
+        .id(id)
+        .h(px(18.))
+        .flex()
+        .items_center()
+        .px(px(5.))
+        .rounded_sm()
+        .text_size(px(CHROME_FONT))
+        .text_color(rgb(if active { CHROME_ACTIVE } else { CHROME_MUTED }))
+        .when(active, |el| el.bg(rgba(CHROME_ACTIVE_BG)))
+        .cursor_pointer()
+        .hover(|style| style.text_color(rgb(CHROME_TEXT)))
+        .child(label)
+        .on_click(cx.listener(move |this, _ev, _win, cx| {
+            if this.set_orthographic(orthographic) {
+                cx.notify();
+            }
+        }))
+}
+
+/// The face and compass labels as gpui text over the overlay image: one centred, fixed
+/// box per label. The layer has no hitboxes, so it never steals pointer events.
+fn navicube_labels(labels: &[NavicubeLabel]) -> impl IntoElement {
+    let mut layer = div().absolute().left(px(0.)).top(px(0.)).w_full().h_full();
+    for label in labels {
+        let size = label.size;
+        let box_size = size * 2.0;
+        let alpha = (label.alpha.clamp(0.0, 1.0) * 255.0).round() as u32;
+        layer = layer.child(
+            div()
+                .absolute()
+                .left(px(label.position[0] - box_size / 2.0))
+                .top(px(label.position[1] - box_size / 2.0))
+                .w(px(box_size))
+                .h(px(box_size))
+                .flex()
+                .items_center()
+                .justify_center()
+                .text_size(px(size))
+                .line_height(px(size * 1.15))
+                .font_weight(gpui::FontWeight::SEMIBOLD)
+                .text_color(rgba(0xd8dbe000 | alpha))
+                .child(label.text.to_string()),
+        );
+    }
+    layer
+}
+
+/// A compact chrome control that yaws the view a quarter turn.
+fn yaw_button<V: InventorView + 'static>(
+    id: &'static str,
+    label: &'static str,
+    direction: YawDirection,
+    cx: &mut Context<InventorViewport<V>>,
+) -> impl IntoElement {
+    div()
+        .id(id)
+        .h(px(18.))
+        .flex()
+        .items_center()
+        .px(px(4.))
+        .rounded_sm()
+        .text_size(px(CHROME_FONT))
+        .text_color(rgb(CHROME_MUTED))
+        .cursor_pointer()
+        .hover(|style| style.text_color(rgb(CHROME_TEXT)))
+        .child(label)
+        .on_click(cx.listener(move |this, _ev, _win, cx| {
+            if this.yaw(direction) {
+                cx.notify();
+            }
+        }))
+}
+
+/// The gpui chrome bar: `[PERSP | ORTHO] · Home · 063° · 24°` in one compact row.
+/// `rect` is its element-local logical rect as computed by [`chrome_bar_rect`], so
+/// painting and pointer reservation cannot disagree.
+fn navicube_chrome<V: InventorView + 'static>(
+    rect: [f32; 4],
+    orthographic: bool,
+    angles: (f64, f64),
+    cx: &mut Context<InventorViewport<V>>,
+) -> impl IntoElement {
+    let yaws = div()
+        .flex()
+        .flex_row()
+        .items_center()
+        .child(yaw_button(
+            "ferrocad-yaw-ccw",
+            "◀",
+            YawDirection::CounterClockwise,
+            cx,
+        ))
+        .child(yaw_button(
+            "ferrocad-yaw-cw",
+            "▶",
+            YawDirection::Clockwise,
+            cx,
+        ));
+
+    let projections = div()
+        .flex()
+        .flex_row()
+        .items_center()
+        .child(projection_button(
+            "ferrocad-projection-persp",
+            "PERSP",
+            !orthographic,
+            false,
+            cx,
+        ))
+        .child(projection_button(
+            "ferrocad-projection-ortho",
+            "ORTHO",
+            orthographic,
+            true,
+            cx,
+        ));
+
+    let divider = div().w(px(1.)).h(px(12.)).bg(rgba(CHROME_BORDER));
+
+    let home = div()
+        .id("ferrocad-navicube-home")
+        .h(px(18.))
+        .flex()
+        .items_center()
+        .px(px(5.))
+        .rounded_sm()
+        .text_size(px(CHROME_FONT))
+        .text_color(rgb(CHROME_MUTED))
+        .cursor_pointer()
+        .hover(|style| style.text_color(rgb(CHROME_TEXT)))
+        .child("Home")
+        .on_click(cx.listener(|this, _ev, _win, cx| {
+            if this.go_home() {
+                cx.notify();
+            }
+        }));
+
+    let readout = div()
+        .flex_1()
+        .flex()
+        .justify_end()
+        .items_center()
+        .text_size(px(CHROME_FONT))
+        .text_color(rgb(CHROME_MUTED))
+        .child(format!("{:03.0}° · {:02.0}°", angles.0, angles.1));
+
+    div()
+        .absolute()
+        .left(px(rect[0]))
+        .top(px(rect[1]))
+        .w(px(CHROME_WIDTH))
+        .h(px(CHROME_HEIGHT))
+        .flex()
+        .flex_row()
+        .items_center()
+        .gap_1()
+        .px(px(5.))
+        .rounded_sm()
+        .bg(rgba(CHROME_BG))
+        .border_1()
+        .border_color(rgba(CHROME_BORDER))
+        .occlude()
+        .child(yaws)
+        .child(projections)
+        .child(divider)
+        .child(home)
+        .child(readout)
+}
+
 /// The navigation cube's minimum drag distance, in **logical** pixels — upstream's
 /// `max(3, round(3·dpr))` device pixels converted back to logical; a shorter movement
 /// is a click (a snap on release), not an orbit.
 fn navicube_drag_threshold(dpr: f32) -> f32 {
     (3.0 * dpr).round().max(3.0) / dpr
+}
+
+/// Wrap an angle difference into `[−π, π)`.
+fn shortest_angle(angle: f64) -> f64 {
+    (angle + std::f64::consts::PI).rem_euclid(std::f64::consts::TAU) - std::f64::consts::PI
 }
 
 /// Map a gpui mouse button to Coin's 1-based button number.
@@ -819,6 +1628,7 @@ mod tests {
     use super::*;
     use ferrocad_graphics::{Projection, Topology};
     use ferrocad_inventor::{Node, NodeKind, compile_with};
+    use ferrocad_types::{Placement, Rotation, Vector3};
     use gpui::{Bounds, point, px, size};
 
     /// A view that returns fixed pixels, so the gpui side needs no GPU.
@@ -826,6 +1636,7 @@ mod tests {
         pixels: ImageData,
         resize_calls: u32,
         last_resize: Option<[u32; 2]>,
+        image_calls: u32,
     }
 
     impl InventorView for FakeView {
@@ -846,6 +1657,7 @@ mod tests {
             None
         }
         fn image(&mut self) -> Result<ImageData, Self::Error> {
+            self.image_calls += 1;
             Ok(self.pixels.clone())
         }
     }
@@ -855,6 +1667,7 @@ mod tests {
             pixels,
             resize_calls: 0,
             last_resize: None,
+            image_calls: 0,
         }
     }
 
@@ -984,10 +1797,93 @@ mod tests {
             cube_before,
             "the navigation cube follows the resize"
         );
+        // The overlay works in device pixels: a 100-logical cube gives a 147.79-logical
+        // box, i.e. 296 device px at 2x, centred in a 248-logical (496-device) chrome
+        // column inset by the 8-logical (16-device) margin, mapping back to 148 logical.
+        let cube = viewport.navicube.as_ref().unwrap();
+        assert_eq!(cube.rect().width, 296, "physical size is logical × dpr");
+        assert_eq!(cube.rect().x, 1600 - 16 - 496 + (496 - 296) / 2);
+        let [left, _, right, _] = cube.logical_rect();
+        assert!(
+            (right - left - 148.0).abs() < 1e-6,
+            "the logical extent is unchanged"
+        );
 
         // A redundant report does not touch the backend again.
         assert!(!viewport.apply_element_size([800.0, 600.0], 2.0));
         assert_eq!(viewport.view().resize_calls, 1, "an unchanged size is a no-op");
+    }
+
+    /// A presenter with a fixed status, recording how often `draw` ran.
+    struct TestPresenter {
+        status: PresenterStatus,
+        draws: Rc<std::cell::Cell<u32>>,
+        size: [u32; 2],
+    }
+
+    impl Presenter for TestPresenter {
+        fn status(&self) -> PresenterStatus {
+            self.status
+        }
+        fn set_size(&mut self, size: [u32; 2]) {
+            self.size = size;
+        }
+        fn prepare(&mut self, _gpu: &mut gpui::GpuCanvasContext) {}
+        fn draw(&mut self, _views: &[ViewSpec<'_>]) -> bool {
+            self.draws.set(self.draws.get() + 1);
+            true
+        }
+        fn present(&mut self, _gpu: &mut gpui::GpuCanvasContext) {}
+    }
+
+    #[test]
+    fn a_ready_presenter_replaces_the_readback_path() {
+        let camera = Camera {
+            viewport: Viewport::new([100, 100], 1.0),
+            ..Camera::identity()
+        };
+        let draws = Rc::new(std::cell::Cell::new(0));
+        let presenter = TestPresenter {
+            status: PresenterStatus::Ready,
+            draws: draws.clone(),
+            size: [0, 0],
+        };
+        let mut viewport =
+            InventorViewport::new(fake(ImageData::default()), camera, triangle_scene())
+                .with_presenter(Box::new(presenter));
+
+        assert_eq!(viewport.presenter_status(), Some(PresenterStatus::Ready));
+        viewport.apply_element_size([100.0, 100.0], 1.0);
+        viewport.refresh();
+
+        assert_eq!(draws.get(), 1, "the presenter draws the frame");
+        assert_eq!(
+            viewport.view().image_calls, 0,
+            "a ready presenter must not trigger a readback"
+        );
+    }
+
+    #[test]
+    fn a_pending_presenter_keeps_the_image_fallback() {
+        let camera = Camera {
+            viewport: Viewport::new([100, 100], 1.0),
+            ..Camera::identity()
+        };
+        let draws = Rc::new(std::cell::Cell::new(0));
+        let presenter = TestPresenter {
+            status: PresenterStatus::Pending,
+            draws: draws.clone(),
+            size: [0, 0],
+        };
+        let mut viewport =
+            InventorViewport::new(fake(ImageData::default()), camera, triangle_scene())
+                .with_presenter(Box::new(presenter));
+
+        viewport.apply_element_size([100.0, 100.0], 1.0);
+        viewport.refresh();
+
+        assert_eq!(draws.get(), 0, "an uninitialized presenter is not drawn");
+        assert_eq!(viewport.view().image_calls, 1, "the image path is still used");
     }
 
     #[test]
@@ -1008,14 +1904,519 @@ mod tests {
         let start = viewport_size.to_logical(centre);
         let before = view.camera.view.m;
 
+        // The press begins the gesture; a click would snap on release. The cube owns
+        // the gesture, not the scene.
+        assert!(!view.handle_button(start, 1, true));
+        assert!(view.navicube_drag.is_some());
+        assert!(view.orbit_drag.is_none());
+
         // Movement under the min-drag threshold is still a click: no orbit.
-        assert!(!view.navicube_drag_move(start));
-        assert!(!view.navicube_drag_move([start[0] + 1.0, start[1]]));
+        assert!(!view.drag_move(start));
+        assert!(!view.drag_move([start[0] + 1.0, start[1]]));
         assert_eq!(view.camera.view.m, before, "a short drag must not orbit");
 
         // Past the threshold the drag orbits the camera.
-        assert!(view.navicube_drag_move([start[0] + 20.0, start[1]]));
+        assert!(view.drag_move([start[0] + 20.0, start[1]]));
         assert_ne!(view.camera.view.m, before, "a long drag orbits");
+    }
+
+    #[test]
+    fn navicube_negative_space_reaches_the_scene() {
+        let camera = Camera {
+            viewport: Viewport::new([640, 480], 1.0),
+            ..Camera::identity()
+        };
+        let viewport_size = camera.viewport;
+        let mut view = InventorViewport::new(fake(ImageData::default()), camera, triangle_scene())
+            .with_navicube(NaviCube::new(viewport_size));
+
+        let rect = view.navicube.as_ref().unwrap().rect();
+        // Inside the gizmo rect but clear of every piece and of the Home button: the
+        // top-left of the rect, above the cube. Device coordinates are bottom-left.
+        let device = [rect.x + 2, rect.y + rect.height as i32 - 2];
+        assert_eq!(
+            view.navicube.as_ref().unwrap().hit(device),
+            None,
+            "the probe point must be negative space"
+        );
+        let empty = viewport_size.to_logical(device);
+
+        // The press belongs to the scene: the camera orbit starts, the cube does not
+        // capture a drag.
+        assert!(!view.handle_button(empty, 1, true));
+        assert!(view.navicube_drag.is_none());
+        assert!(view.orbit_drag.is_some());
+        let before = view.camera.view.m;
+        assert!(view.drag_move([empty[0] + 30.0, empty[1]]));
+        assert_ne!(view.camera.view.m, before, "the scene drag orbits the view");
+    }
+
+    #[test]
+    fn camera_angles_report_the_viewpoint() {
+        let direction = Vector3::new(1.0, 0.9, 1.0).normalize();
+        let camera = Camera {
+            view: Placement::new(
+                Vector3::new(0.0, 0.0, -4.0),
+                Rotation::from_vectors(direction, Vector3::new(0.0, 0.0, 1.0)),
+            )
+            .to_matrix(),
+            ..Camera::identity()
+        };
+        let (azimuth, elevation) = camera_angles(&camera);
+        // (1, 0.9, 1) is 45° in XZ and asin(0.9/√2.81) ≈ 32.4° above it.
+        assert!((azimuth - 45.0).abs() < 0.2, "azimuth {azimuth}");
+        assert!((elevation - 32.4).abs() < 0.2, "elevation {elevation}");
+    }
+
+    #[test]
+    fn camera_angles_keep_a_heading_at_the_pole() {
+        use crate::navicube::{Piece, snap_view, yaw_view};
+
+        // A Top snap puts the eye exactly on +Y. The eye has no bearing there, so the
+        // screen-right direction supplies one: the canonical top view has +X right and
+        // reads 0°, and a yaw turns it instead of freezing at 000°.
+        let top = Camera {
+            view: snap_view(Piece::TOP, &Camera::identity()),
+            ..Camera::identity()
+        };
+        let (azimuth, elevation) = camera_angles(&top);
+        assert!((elevation - 90.0).abs() < 1e-6, "elevation {elevation}");
+        assert!(azimuth.abs() < 1e-6, "azimuth {azimuth}");
+
+        let yawed = Camera {
+            view: yaw_view(&top, std::f64::consts::FRAC_PI_2),
+            ..top
+        };
+        let (turned, elevation) = camera_angles(&yawed);
+        assert!((elevation - 90.0).abs() < 1e-6, "elevation {elevation}");
+        let delta = (turned - azimuth + 180.0).rem_euclid(360.0) - 180.0;
+        assert!(
+            (delta.abs() - 90.0).abs() < 1e-6,
+            "azimuth {azimuth} -> {turned}"
+        );
+    }
+
+    #[test]
+    fn the_chrome_sits_beside_the_cube_in_every_corner() {
+        use crate::navicube::{Corner, NaviCubeConfig};
+
+        let viewport = Viewport::new([640, 480], 1.0);
+        let config = |corner| NaviCubeConfig {
+            corner,
+            cube_size: 132.0,
+            margin: 8.0,
+        };
+        let rect = |corner| chrome_bar_rect(&NaviCube::new(viewport).with_config(config(corner)));
+        // A 132px cube needs a 195px overlay box for the turntable; the bar is centred on
+        // that box, so its outer edge keeps the margin.
+        assert_eq!(rect(Corner::TopRight), [383.5, 209.0, 631.5, 235.0]);
+        assert_eq!(rect(Corner::TopLeft), [7.5, 209.0, 255.5, 235.0]);
+        assert_eq!(rect(Corner::BottomLeft), [7.5, 245.0, 255.5, 271.0]);
+        assert_eq!(rect(Corner::BottomRight), [383.5, 245.0, 631.5, 271.0]);
+    }
+
+    #[test]
+    fn the_chrome_tracks_the_cubes_device_rounded_rect() {
+        // 704×528 device at 1.1× = 640×480 logical. The cube's 100px logical size gives a
+        // 147.79px box, which rounds to 163 device pixels; the margin rounds to 9 and the
+        // chrome column to 273. The chrome bar must follow the painted rect, exactly as it
+        // does at whole ratios.
+        let cube = NaviCube::new(Viewport::new([704, 528], 1.1));
+        let [left, top, right, bottom] = cube.logical_rect();
+        assert!((right - left - 163.0 / 1.1).abs() < 1e-4);
+        assert!((left - 477.0 / 1.1).abs() < 1e-4);
+        assert!((top - 9.0 / 1.1).abs() < 1e-4);
+
+        let bar = chrome_bar_rect(&cube);
+        let centre = (left + right) / 2.0;
+        assert!(
+            (bar[0] - (centre - CHROME_WIDTH / 2.0)).abs() < 1e-4,
+            "the bar is centred on the painted cube"
+        );
+        assert!((bar[2] - (centre + CHROME_WIDTH / 2.0)).abs() < 1e-4);
+        assert_eq!(
+            bar[1],
+            bottom + CHROME_GAP,
+            "the bar sits one gap below the cube"
+        );
+        assert_eq!(bar[3], bar[1] + CHROME_HEIGHT);
+    }
+
+    #[test]
+    fn a_press_on_the_chrome_is_reserved_at_two_x() {
+        let camera = Camera {
+            viewport: Viewport::new([1280, 960], 2.0),
+            ..Camera::identity()
+        };
+        let viewport_size = camera.viewport;
+        let mut view = InventorViewport::new(fake(ImageData::default()), camera, triangle_scene())
+            .with_navicube(NaviCube::new(viewport_size));
+
+        // 640×480 logical at 2×: the 296px overlay box (a 100px cube plus its turntable) is
+        // centred in a 248-logical column inset 8 logical pixels from the corner, and the
+        // bar fills that column below it.
+        let [left, top, right, bottom] = view.chrome_rect().expect("the cube is placed");
+        assert_eq!([left, top, right, bottom], [384.0, 162.0, 632.0, 188.0]);
+
+        let in_bar = [left + 2.0, top + 2.0];
+        assert!(view.chrome_contains(in_bar));
+        assert!(!view.handle_button(in_bar, 1, true));
+        assert!(view.orbit_drag.is_none(), "the chrome owns the press");
+
+        let in_scene = [left + 2.0, bottom + 2.0];
+        assert!(!view.chrome_contains(in_scene));
+        assert!(!view.handle_button(in_scene, 1, true));
+        assert!(view.orbit_drag.is_some(), "below the bar the scene orbits");
+    }
+
+    #[test]
+    fn the_chrome_does_not_start_a_scene_orbit() {
+        let camera = Camera {
+            viewport: Viewport::new([640, 480], 1.0),
+            ..Camera::identity()
+        };
+        let viewport_size = camera.viewport;
+        let mut view = InventorViewport::new(fake(ImageData::default()), camera, triangle_scene())
+            .with_navicube(NaviCube::new(viewport_size));
+
+        let [x, y, _, _] = view.chrome_rect().expect("the cube is placed");
+        let in_bar = [x + 4.0, y + 4.0];
+        assert!(view.chrome_contains(in_bar));
+        assert!(!view.handle_button(in_bar, 1, true));
+        assert!(view.orbit_drag.is_none(), "the chrome owns the press");
+        assert!(!view.handle_pointer(in_bar));
+
+        // Outside the bar the scene takes the press as usual.
+        let scene = [x + 4.0, y + CHROME_HEIGHT + 4.0];
+        assert!(!view.chrome_contains(scene));
+        assert!(!view.handle_button(scene, 1, true));
+        assert!(view.orbit_drag.is_some());
+    }
+
+    #[test]
+    fn the_chrome_toggles_projection_without_jumping_the_framing() {
+        let camera = Camera {
+            view: Placement::new(
+                Vector3::new(0.0, 0.0, -4.0),
+                Rotation::identity(),
+            )
+            .to_matrix(),
+            projection: Projection::Perspective {
+                fov_y: 45.0_f64.to_radians(),
+                near: 0.1,
+                far: 100.0,
+            },
+            viewport: Viewport::new([640, 480], 1.0),
+        };
+        let before = camera.projection;
+        let mut view = InventorViewport::new(fake(ImageData::default()), camera, triangle_scene());
+
+        assert!(!view.is_orthographic());
+        assert!(view.set_orthographic(true));
+        assert!(view.is_orthographic());
+        assert!(!view.set_orthographic(true), "no-op when already orthographic");
+        assert!(view.set_orthographic(false));
+        assert_eq!(
+            view.camera().projection,
+            before,
+            "toggling back restores the same field of view"
+        );
+    }
+
+    #[test]
+    fn the_chrome_home_starts_a_snap() {
+        let camera = Camera {
+            viewport: Viewport::new([640, 480], 1.0),
+            ..Camera::identity()
+        };
+        let viewport_size = camera.viewport;
+        let mut view = InventorViewport::new(fake(ImageData::default()), camera, triangle_scene())
+            .with_navicube(NaviCube::new(viewport_size));
+        assert!(view.go_home());
+        assert!(view.snap.is_some(), "Home animates rather than jumping");
+    }
+
+    /// A camera tilted so the ground-plane ring is a proper ellipse (not edge-on).
+    fn tilted_camera() -> Camera {
+        Camera {
+            view: Placement::new(
+                Vector3::new(0.0, 0.0, -4.0),
+                Rotation::from_vectors(
+                    Vector3::new(0.0, 0.9, 1.0).normalize(),
+                    Vector3::new(0.0, 0.0, 1.0),
+                ),
+            )
+            .to_matrix(),
+            viewport: Viewport::new([640, 480], 1.0),
+            ..Camera::identity()
+        }
+    }
+
+    #[test]
+    fn the_ring_scrubs_yaw_without_rolling() {
+        let camera = tilted_camera();
+        let viewport_size = camera.viewport;
+        let (initial_azimuth, initial_elevation) = camera_angles(&camera);
+        let mut view = InventorViewport::new(fake(ImageData::default()), camera, triangle_scene())
+            .with_navicube(NaviCube::new(viewport_size));
+        let camera = view.camera().clone();
+        view.navicube.as_mut().unwrap().sync(&camera);
+        let start = view
+            .navicube
+            .as_ref()
+            .unwrap()
+            .ring_point(std::f64::consts::FRAC_PI_2);
+        let end = view.navicube.as_ref().unwrap().ring_point(0.0);
+
+        // The press belongs to the projected ring, not the scene.
+        assert!(!view.handle_button(start, 1, true));
+        assert!(view.ring_drag.is_some());
+        assert!(view.orbit_drag.is_none());
+
+        // A quarter turn clockwise around the plane (N -> E) moves the azimuth by −90°.
+        assert!(view.drag_move(end));
+        let (azimuth, elevation) = camera_angles(view.camera());
+        assert!(
+            (azimuth - (initial_azimuth - 90.0)).abs() < 2.5,
+            "azimuth {azimuth}"
+        );
+        assert!(
+            (elevation - initial_elevation).abs() < 1e-9,
+            "elevation {elevation}"
+        );
+
+        // Releasing settles on the nearest detent (the pixel-rounded scrub lands ~1° off
+        // the exact heading); either way the gesture is over and no scene orbit starts.
+        view.handle_button(end, 1, false);
+        assert!(view.ring_drag.is_none());
+        assert!(view.orbit_drag.is_none());
+    }
+
+    #[test]
+    fn a_multi_step_ring_scrub_returns_to_its_start() {
+        let camera = tilted_camera();
+        let viewport_size = camera.viewport;
+        let (initial_azimuth, _) = camera_angles(&camera);
+        let mut view = InventorViewport::new(fake(ImageData::default()), camera, triangle_scene())
+            .with_navicube(NaviCube::new(viewport_size));
+        let camera = view.camera().clone();
+        view.navicube.as_mut().unwrap().sync(&camera);
+
+        // The pointer follows the ring **as drawn at press time**: the scrub projects the
+        // pointer with the frozen press orientation, so a fixed screen path must return to
+        // the same azimuth when the pointer walks back.
+        let quarter = std::f64::consts::FRAC_PI_2;
+        let path: Vec<[f32; 2]> = (0..=20)
+            .map(|i| {
+                let angle = quarter * (1.0 - i as f64 / 20.0);
+                view.navicube.as_ref().unwrap().ring_point(angle)
+            })
+            .collect();
+
+        assert!(!view.handle_button(path[0], 1, true));
+        for point in &path[1..] {
+            assert!(view.drag_move(*point));
+            // The render loop re-syncs the cube after every frame; the scrub must not
+            // measure its next angle against that rotated ring.
+            let camera = view.camera().clone();
+            view.navicube.as_mut().unwrap().sync(&camera);
+        }
+        let (mid, _) = camera_angles(view.camera());
+        assert!(
+            (mid - (initial_azimuth - 90.0)).abs() < 3.0,
+            "quarter turn went to {mid}"
+        );
+
+        for point in path.iter().rev().skip(1) {
+            assert!(view.drag_move(*point));
+            let camera = view.camera().clone();
+            view.navicube.as_mut().unwrap().sync(&camera);
+        }
+        let (end, _) = camera_angles(view.camera());
+        assert!(
+            (end - initial_azimuth).abs() < 3.0,
+            "the scrub did not return to its start ({end} vs {initial_azimuth})"
+        );
+    }
+
+    #[test]
+    fn rapid_opposite_yaws_compose_to_the_start() {
+        let camera = Camera {
+            view: Placement::new(Vector3::new(0.0, 0.0, -4.0), Rotation::identity()).to_matrix(),
+            viewport: Viewport::new([640, 480], 1.0),
+            ..Camera::identity()
+        };
+        let viewport_size = camera.viewport;
+        let mut view = InventorViewport::new(fake(ImageData::default()), camera, triangle_scene())
+            .with_navicube(NaviCube::new(viewport_size));
+        let before = Rotation::from_matrix(&view.camera.view).to_matrix();
+
+        assert!(view.yaw(YawDirection::CounterClockwise));
+        let turned = view.snap.as_ref().unwrap().target().to_matrix();
+        assert_ne!(turned.m, before.m, "the first yaw changes the pose");
+
+        // The second click happens before the animation finishes; it must compose from
+        // the pending target, not from the half-turned camera.
+        assert!(view.yaw(YawDirection::Clockwise));
+        let target = view.snap.as_ref().unwrap().target().to_matrix();
+        for (a, b) in target.m.iter().zip(before.m.iter()) {
+            assert!((a - b).abs() < 1e-9, "rapid opposite yaws did not cancel");
+        }
+    }
+
+    #[test]
+    fn a_ring_release_near_a_detent_snaps() {
+        let camera = tilted_camera();
+        let viewport_size = camera.viewport;
+        let mut view = InventorViewport::new(fake(ImageData::default()), camera, triangle_scene())
+            .with_navicube(NaviCube::new(viewport_size));
+        let camera = view.camera().clone();
+        view.navicube.as_mut().unwrap().sync(&camera);
+        let start = view
+            .navicube
+            .as_ref()
+            .unwrap()
+            .ring_point(std::f64::consts::FRAC_PI_2);
+        // Five degrees past the 90° detent, in the ring plane.
+        let near = view
+            .navicube
+            .as_ref()
+            .unwrap()
+            .ring_point(85.0_f64.to_radians());
+
+        assert!(!view.handle_button(start, 1, true));
+        assert!(view.drag_move(near));
+        let (azimuth, _) = camera_angles(view.camera());
+        assert!((azimuth - 85.0).abs() < 3.0, "azimuth {azimuth}");
+        assert!(view.handle_button(near, 1, false), "the detent captures");
+        assert!(view.snap.is_some());
+    }
+
+    #[test]
+    fn a_chrome_yaw_starts_a_quarter_turn() {
+        let camera = Camera {
+            view: Placement::new(Vector3::new(0.0, 0.0, -4.0), Rotation::identity()).to_matrix(),
+            viewport: Viewport::new([640, 480], 1.0),
+            ..Camera::identity()
+        };
+        let viewport_size = camera.viewport;
+        let mut view = InventorViewport::new(fake(ImageData::default()), camera, triangle_scene())
+            .with_navicube(NaviCube::new(viewport_size));
+        let before = view.camera.view;
+        let (azimuth_before, elevation_before) = camera_angles(view.camera());
+
+        assert!(view.yaw(YawDirection::Clockwise));
+        assert_eq!(view.camera.view, before, "the yaw is animated, not instant");
+        assert!(view.ring_drag.is_none());
+        assert!(view.navicube_drag.is_none());
+        assert!(view.orbit_drag.is_none());
+
+        let snap = view.snap.as_ref().expect("a yaw animation");
+        let mut end = view.camera().clone();
+        end.view = snap.view_at(Duration::from_millis(220));
+        let (azimuth, elevation) = camera_angles(&end);
+        // Clockwise turns the eye clockwise: the azimuth drops by 90°, elevation is kept.
+        let delta = (azimuth - (azimuth_before - 90.0) + 180.0).rem_euclid(360.0) - 180.0;
+        assert!(delta.abs() < 1e-6, "azimuth {azimuth_before} -> {azimuth}");
+        assert!((elevation - elevation_before).abs() < 1e-9);
+    }
+
+    #[test]
+    fn a_released_orbit_glides_and_damps() {
+        let camera = Camera {
+            viewport: Viewport::new([100, 100], 1.0),
+            ..Camera::identity()
+        };
+        let mut view = InventorViewport::new(fake(ImageData::default()), camera, triangle_scene());
+        view.orbit_velocity = [600.0, 0.0];
+        view.last_drag_time = Some(std::time::Instant::now());
+        view.start_inertia();
+        assert!(view.inertia.is_some(), "a fast release glides");
+
+        let before = view.camera.view.m;
+        assert!(view.step_inertia_by(Duration::from_millis(16)));
+        assert_ne!(view.camera.view.m, before, "the glide orbits the camera");
+
+        let mut steps = 1;
+        while view.step_inertia_by(Duration::from_millis(16)) {
+            steps += 1;
+            assert!(steps < 1000, "the glide must decay to a stop");
+        }
+        assert!(view.inertia.is_none());
+    }
+
+    #[test]
+    fn releasing_after_a_pause_does_not_glide() {
+        let camera = Camera {
+            viewport: Viewport::new([100, 100], 1.0),
+            ..Camera::identity()
+        };
+        let mut view = InventorViewport::new(fake(ImageData::default()), camera, triangle_scene());
+        view.orbit_velocity = [600.0, 0.0];
+        view.last_drag_time = Some(std::time::Instant::now() - Duration::from_millis(400));
+        view.start_inertia();
+        assert!(view.inertia.is_none(), "a paused pointer releases without a fling");
+    }
+
+    #[test]
+    fn a_press_stops_an_inertial_glide() {
+        let camera = Camera {
+            viewport: Viewport::new([100, 100], 1.0),
+            ..Camera::identity()
+        };
+        let mut view = InventorViewport::new(fake(ImageData::default()), camera, triangle_scene());
+        view.inertia = Some(Inertia {
+            velocity: [600.0, 0.0],
+            last: std::time::Instant::now(),
+        });
+        assert!(!view.handle_button([20.0, 20.0], 1, true));
+        assert!(view.inertia.is_none(), "grabbing the view stops the glide");
+        assert!(view.orbit_drag.is_some());
+    }
+
+    #[test]
+    fn a_scene_drag_orbits_the_camera() {
+        let camera = Camera {
+            viewport: Viewport::new([100, 100], 1.0),
+            ..Camera::identity()
+        };
+        let mut view = InventorViewport::new(fake(ImageData::default()), camera, triangle_scene());
+        let before = view.camera.view.m;
+
+        // A press on the scene starts a possible orbit; the threshold keeps a click a
+        // click, and the next move past it rotates the camera.
+        assert!(!view.handle_button([5.0, 5.0], 1, true));
+        assert!(!view.drag_move([5.0, 5.0]));
+        assert!(view.drag_move([35.0, 5.0]));
+        assert_ne!(view.camera.view.m, before, "a scene drag rotates the view");
+        view.handle_button([35.0, 5.0], 1, false);
+    }
+
+    #[test]
+    fn scrolling_zooms_the_camera() {
+        let camera = Camera {
+            view: Placement::new(
+                Vector3::new(0.0, 0.0, -4.0),
+                Rotation::identity(),
+            )
+            .to_matrix(),
+            projection: Projection::Perspective {
+                fov_y: 0.8,
+                near: 0.1,
+                far: 100.0,
+            },
+            viewport: Viewport::new([100, 100], 1.0),
+        };
+        let mut view = InventorViewport::new(fake(ImageData::default()), camera, triangle_scene());
+        let distance = |m: &[f64; 16]| (m[3] * m[3] + m[7] * m[7] + m[11] * m[11]).sqrt();
+        let before = distance(&view.camera.view.m);
+
+        // A wheel-up notch moves the eye towards the scene; wheel-down restores it.
+        assert!(view.handle_scroll(1.0));
+        let zoomed = distance(&view.camera.view.m);
+        assert!(zoomed < before, "scroll up zooms in: {zoomed} < {before}");
+        assert!(view.handle_scroll(-1.0));
+        assert!((distance(&view.camera.view.m) - before).abs() < 1e-9);
     }
 
     /// A view with a hardware pick path: it reports id `42` wherever there is a queue to

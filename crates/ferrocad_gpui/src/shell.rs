@@ -167,12 +167,17 @@ impl Shell {
         let camera = scene::sample_camera(Viewport::new(SIZE, 1.0));
         let scene = python::inventor_scene().unwrap_or_else(|_| scene::sample_scene());
         let navicube = ferrocad_viewport::NaviCube::new(camera.viewport);
-        self.viewport = Some(cx.new(move |_cx| {
-            InventorViewport::new(renderer, camera, scene)
-                .with_listener(Box::new(scene::HoverHighlight::default()))
-                .with_listener(Box::new(python::PythonEventCallbacks))
-                .with_navicube(navicube)
-        }));
+        let viewport = InventorViewport::new(renderer, camera, scene)
+            .with_listener(Box::new(scene::HoverHighlight::default()))
+            .with_listener(Box::new(python::PythonEventCallbacks))
+            .with_navicube(navicube);
+        // The presenter is always safe to install: it falls back to the image path
+        // when the window's device cannot be shared.
+        let viewport = match crate::zero_copy_presenter() {
+            Some(presenter) => viewport.with_presenter(presenter),
+            None => viewport,
+        };
+        self.viewport = Some(cx.new(move |_cx| viewport));
     }
 
     /// Select an object; the property editor is filled from the live model. The

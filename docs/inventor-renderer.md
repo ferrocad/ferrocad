@@ -42,7 +42,10 @@ flowchart LR
 the concrete packet the compiler emits. A packet carries:
 
 - `mesh_id` + `generation` — the renderer keys its upload cache on the pair, so a
-  stable scene uploads once and reuses;
+  stable scene uploads once and reuses. The compiler's `generation` is a **content
+  fingerprint** of the geometry, because `mesh_id` is positional: a producer that
+  reorders or omits packets (the depth-sorted navigation-cube overlay) would otherwise
+  hand a new mesh an old upload;
 - `topology` (`Triangles`/`Lines`/`Points`);
 - `geometry: Option<Geometry>` — **present only on a cache miss**;
 - a `StateSnapshot` — `world_transform` (a `Matrix4`), `color`, `depth_bias`,
@@ -141,11 +144,19 @@ The contract, matching FreeCAD (see the assessment and `InputDevice`/
 - wgpu renderer: triangle pipeline with depth, dynamic-offset uniforms, 4× MSAA,
   offscreen target, RGBA readback, mesh upload cache. The **surface pipeline carries a
   slope/constant depth bias** (so a coplanar shaded-with-edges wireframe wins the depth
-  test), and the mesh cache is keyed by `mesh_id`, **evicting the previous generation**
-  (T4.2–T4.3) instead of accumulating.
+  test), and the mesh cache is keyed by `(view, mesh_id)`, **evicting the previous
+  generation** (T4.2–T4.3) instead of accumulating. The view slot keeps independent
+  queues apart: the scene, the gizmo, the tool overlay and each navigation cube all
+  number their meshes from zero, and one frame draws several of them.
 - CPU ray picking; event/listener dispatch; `Viewport`/DPI primitives; the render
   target tracking the element's physical size (`InventorView::resize`) and an
   aspect-aware camera [`Projection`].
+- **Viewport navigation**: a left-button drag on the scene (or a middle-button drag)
+  orbits the camera around its pivot once past the click threshold, and the wheel
+  zooms by scaling the eye distance. The navigation cube's own drag/snap keeps
+  priority. Pointer positions are made surface-local the same way
+  `gpui_interop::surface_input` does it, and gpui's drag keeps delivering a gesture's
+  moves after the pointer leaves the viewport.
 - **Hardware G-buffer picking** (`ferrocad_wgpu::pick`): `WgpuRenderer::pick_at` renders
   the `[entity_id, part_idx]` / `[normal, topology]` / depth targets and reads one texel
   back, unprojecting the world point via the inverse view-projection. Exposed through

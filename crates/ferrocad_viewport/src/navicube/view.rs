@@ -8,17 +8,23 @@
 use ferrocad_graphics::{RenderQueue, Viewport};
 use ferrocad_types::Rotation;
 
-use super::model::{NaviTarget, Piece};
+use super::model::Piece;
 use super::theme::NavicubeTheme;
 
 /// What to draw this frame — the cube's interaction state, independent of styling.
 pub struct NavicubeVisual {
     /// The main camera's view rotation, mirrored onto the cube.
     pub orientation: Rotation,
-    /// The hovered piece / Home button, if any (clamped to a `Highlighted` role).
-    pub hilite: Option<NaviTarget>,
+    /// The hovered piece, if any (clamped to a `Highlighted` role).
+    pub hilite: Option<Piece>,
     /// The away-facing faces (recoloured, drawn first).
     pub away: Vec<Piece>,
+    /// Whether the pointer is anywhere in the gizmo's rect (including the negative
+    /// space between pieces). Proximity brightens the wireframe and labels without
+    /// hovering a specific target.
+    pub proximity: bool,
+    /// Whether the compass ring is hovered or being scrubbed (it brightens to cyan).
+    pub ring: bool,
 }
 
 /// A producer's rendering of the navigation cube (a legacy `Scene`, or modern items).
@@ -30,10 +36,4 @@ pub trait NavicubeView {
 
     /// The current overlay draw packets.
     fn queue(&self) -> &RenderQueue;
-
-    /// Whether this producer can draw face/Home **labels**. A producer without a
-    /// texture path returns `false` and draws untextured pieces.
-    fn has_labels(&self) -> bool {
-        false
-    }
 }

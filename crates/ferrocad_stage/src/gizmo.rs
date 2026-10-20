@@ -11,7 +11,7 @@
 
 use std::f64::consts::TAU;
 
-use ferrocad_graphics::{Camera, Ray};
+use ferrocad_graphics::{Camera, Projection, Ray};
 use ferrocad_types::{Matrix4, Placement, Rotation, Vector3};
 
 use crate::shape::{DrawMode, ShapeItem};
@@ -533,10 +533,14 @@ fn color_for(handle: GizmoHandle, hovered: bool) -> [f32; 4] {
 /// `radius ∝ distance / (m5 * viewport_height)`, where `m5` is the projection's
 /// vertical scale (`1 / tan(fov/2)`), so the apparent size is constant.
 pub fn scale_for(camera: &Camera, origin: Vector3, pixels: f64) -> f64 {
+    let height = f64::from(camera.viewport.device_size()[1].max(1));
+    // Orthographic projection has no depth scaling: a pixel is a fixed world size.
+    if let Projection::Orthographic { extent, .. } = camera.projection {
+        return 2.0 * pixels * extent / height;
+    }
     let eye = camera_position(&camera.view);
     let distance = eye.sub(&origin).length().max(1e-6);
     let m5 = camera.projection_matrix().m[5].abs().max(1e-6);
-    let height = f64::from(camera.viewport.device_size()[1].max(1));
     2.0 * pixels * distance / (m5 * height)
 }
 
@@ -692,6 +696,30 @@ mod tests {
         let far = scale_for(&camera(8.0), origin, DEFAULT_PIXELS);
         // Twice the distance → twice the world radius (a constant screen footprint).
         assert!((far / near - 2.0).abs() < 1e-6, "{far} vs {near}");
+    }
+
+    #[test]
+    fn an_orthographic_gizmo_has_a_constant_world_size() {
+        let ortho = Camera {
+            view: Placement::new(
+                Vector3::new(0.0, 0.0, -4.0),
+                Rotation::identity(),
+            )
+            .to_matrix(),
+            projection: Projection::Orthographic {
+                extent: 2.0,
+                near: 0.1,
+                far: 100.0,
+            },
+            viewport: Viewport::new([100, 100], 1.0),
+        };
+        let at_origin = scale_for(&ortho, Vector3::zero(), DEFAULT_PIXELS);
+        // Depth along the view axis does not change the world size.
+        let deeper = scale_for(&ortho, Vector3::new(0.0, 0.0, 1.0), DEFAULT_PIXELS);
+        assert!((at_origin - deeper).abs() < 1e-9);
+        // The footprint is `2·extent/height` world units per pixel.
+        let expected = 2.0 * 2.0 / 100.0 * DEFAULT_PIXELS;
+        assert!((at_origin - expected).abs() < 1e-9, "{at_origin} vs {expected}");
     }
 
     #[test]

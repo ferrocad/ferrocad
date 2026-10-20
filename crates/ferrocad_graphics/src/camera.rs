@@ -8,7 +8,7 @@
 //!
 //! Clip depth is in `[0, 1]` (the wgpu/WebGPU convention), matching the renderer.
 
-use ferrocad_types::Matrix4;
+use ferrocad_types::{Matrix4, Vector3};
 
 use crate::pixels::Viewport;
 
@@ -91,6 +91,74 @@ impl Camera {
     pub fn view_projection(&self) -> Matrix4 {
         self.projection_matrix().mul(&self.view)
     }
+
+    /// The distance from the eye to the pivot (the world origin).
+    ///
+    /// The camera orbits the origin, so the world point the view maps to the view-space
+    /// origin is the eye; its length is the orbit radius. A singular view (no inverse)
+    /// reports zero.
+    pub fn eye_distance(&self) -> f64 {
+        self.view
+            .inverse()
+            .map(|inverse| inverse.transform(&Vector3::zero()).length())
+            .unwrap_or(0.0)
+    }
+
+    /// Whether the camera is currently orthographic.
+    pub fn is_orthographic(&self) -> bool {
+        matches!(self.projection, Projection::Orthographic { .. })
+    }
+
+    /// Replace the projection, reporting whether it changed.
+    pub fn set_projection(&mut self, projection: Projection) -> bool {
+        if self.projection == projection {
+            return false;
+        }
+        self.projection = projection;
+        true
+    }
+
+    /// Toggle perspective ⇄ orthographic, **preserving the apparent size at the pivot**.
+    ///
+    /// The camera orbits the world origin at [`eye_distance`](Self::eye_distance), where
+    /// a perspective camera shows a half-height of `distance · tan(fov_y / 2)`. The
+    /// orthographic `extent` is set to that, and the inverse restores the same field of
+    /// view, so toggling does not jump the framing. A host-supplied
+    /// [`Projection::Matrix`] is left alone; the return value says whether it changed.
+    pub fn toggle_projection(&mut self) -> bool {
+        let distance = self.eye_distance();
+        if distance <= 1e-9 {
+            return false;
+        }
+        self.projection = match self.projection {
+            Projection::Perspective { fov_y, near, far } => Projection::Orthographic {
+                extent: distance * (fov_y / 2.0).tan(),
+                near,
+                far,
+            },
+            Projection::Orthographic { extent, near, far } => Projection::Perspective {
+                fov_y: 2.0 * (extent / distance).atan(),
+                near,
+                far,
+            },
+            Projection::Matrix(_) => return false,
+        };
+        true
+    }
+
+    /// Scale an orthographic view by `factor` — the zoom equivalent of moving the eye in
+    /// perspective. Perspective and explicit matrices are left alone (their zoom is the
+    /// eye distance). Returns whether the projection changed.
+    pub fn zoom_projection(&mut self, factor: f64) -> bool {
+        if !factor.is_finite() || factor <= 0.0 {
+            return false;
+        }
+        if let Projection::Orthographic { extent, .. } = &mut self.projection {
+            *extent = (*extent * factor).clamp(1e-6, 1e9);
+            return true;
+        }
+        false
+    }
 }
 
 /// A symmetric perspective projection with clip depth in `[0, 1]`.
@@ -126,6 +194,75 @@ mod tests {
             projection,
             viewport: Viewport::new(size, 1.0),
         }
+    }
+
+    #[test]
+    fn toggling_projection_preserves_the_framing_at_the_pivot() {
+        use ferrocad_types::Placement;
+
+        let fov_y = 45.0_f64.to_radians();
+        let mut camera = Camera {
+            // The eye sits four units from the pivot (the world origin).
+            view: Placement::new(Vector3::new(0.0, 0.0, -4.0), ferrocad_types::Rotation::identity())
+                .to_matrix(),
+            projection: Projection::Perspective {
+                fov_y,
+                near: 0.1,
+                far: 100.0,
+            },
+            viewport: Viewport::new([100, 100], 1.0),
+        };
+        assert!((camera.eye_distance() - 4.0).abs() < 1e-9);
+
+        assert!(camera.toggle_projection());
+        assert!(camera.is_orthographic());
+        match camera.projection {
+            Projection::Orthographic { extent, .. } => {
+                let expected = 4.0 * (fov_y / 2.0).tan();
+                assert!((extent - expected).abs() < 1e-9, "extent matches the pivot plane");
+            }
+            _ => panic!("expected orthographic"),
+        }
+
+        // ...and back again, to the same field of view.
+        assert!(camera.toggle_projection());
+        match camera.projection {
+            Projection::Perspective { fov_y: restored, .. } => {
+                assert!((restored - fov_y).abs() < 1e-9, "round-trips the fov");
+            }
+            _ => panic!("expected perspective"),
+        }
+    }
+
+    #[test]
+    fn a_matrix_projection_is_not_toggled() {
+        let mut camera = Camera::identity();
+        let before = camera.projection;
+        assert!(!camera.toggle_projection());
+        assert_eq!(camera.projection, before);
+        assert!(!camera.set_projection(before));
+    }
+
+    #[test]
+    fn orthographic_zoom_scales_the_extent_only() {
+        let mut camera = camera(
+            Projection::Orthographic {
+                extent: 2.0,
+                near: 0.1,
+                far: 100.0,
+            },
+            [100, 100],
+        );
+        assert!(camera.zoom_projection(0.5));
+        assert_eq!(
+            camera.projection,
+            Projection::Orthographic {
+                extent: 1.0,
+                near: 0.1,
+                far: 100.0,
+            }
+        );
+        assert!(!camera.zoom_projection(0.0));
     }
 
     #[test]

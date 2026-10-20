@@ -73,10 +73,10 @@ the viewport rather than staying behind a new crate.
    viewport stays non-generic (`InventorViewport` keeps `Option<NaviCube>`) rather than
    threading a type parameter through the host. *Alternative given both producers are
    local: an `enum Producer { Inventor(…), Stage(…), Custom(Box<dyn …>) }`; the trait
-   object is preferred for a clean capability seam (`has_labels`) and test doubles.*
-3. **Labels are producer-gated.** `has_labels()` returns `false` for the stage producer
-   in V1/V2 (no per-item texture path in `ShapeItem`); conformance compares geometry, ids
-   and **roles**, not labels or resolved colours ([`navicube-spec.md`](navicube-spec.md) §11).
+   object is preferred for a clean capability seam and test doubles.*
+3. **Labels are controller-painted.** Labels are gpui text over the overlay image (WA2);
+   no producer has a texture path, and conformance compares geometry, ids and **roles**,
+   not labels or resolved colours ([`navicube-spec.md`](navicube-spec.md) §11).
 4. **Both producers are viewport-local.** `NavicubeView` is the internal seam between the
    controller and the two producers; it is not a public extension point.
 5. **Appearance is themed at the viewport level.** The primitives already carry colour
@@ -128,12 +128,12 @@ controller only hovers pieces today, as `inventor_view` filters to `Piece`).
 Deliverable: a NaviCube the modern stack can build, driven by the same controller.
 
 - `navicube::stage`: `StageProducer` implements `NavicubeView` by building the 26 pieces
-  + Home as `ShapeItem`s **once** (`ShapeItem::new(piece.pick_id().0)`, `DrawMode::Shaded`
-  for faces/corners, `DrawMode::Wireframe` for edges), then on each rebuild recolouring
-  them per its [`navicube-spec.md`](navicube-spec.md) §5 role and baking the orientation
-  into each piece's transform (no `Transform` node in the stage; Home stays fixed). The
+  as `ShapeItem`s **once** (`ShapeItem::new(piece.pick_id().0)`, `DrawMode::ShadedWithEdges`
+  for square faces, bevel quads and corner triangles, `DrawMode::Shaded` for the filled
+  glyphs), then recolouring them on each rebuild per its
+  [`navicube-spec.md`](navicube-spec.md) §5 role and baking
+  the orientation into each piece's transform (no `Transform` node in the stage). The
   items are built once so their mesh ids are stable — a rebuild never re-uploads.
-  `has_labels() == false`.
 - The controller picks its producer: `NaviCube::with_producer(Box<dyn NavicubeView>)`, with
   `NaviCube::new` (inventor) and `NaviCube::stage` (stage) as the two conveniences.
 - A **conformance test** (`navicube::conformance`) drives both producers with the same
@@ -158,7 +158,9 @@ Deliverable: the reserved config becomes real, and the specified threshold is en
   `NavicubeView::rebuild` takes `&NavicubeTheme`, and both producers resolve roles through
   it (inventor `Material`, stage `ShapeItem` colours) — styling leaves the producers; the
   Rust core owns it ([`directives.md`](directives.md) §5).
-- `NaviCubeConfig { corner, size, margin }` + `NaviCube::with_config` / `with_theme`.
+- `NaviCubeConfig { corner, cube_size, margin }` + `NaviCube::with_config` / `with_theme`.
+  `cube_size` is the cube's largest projected extent in logical px; the overlay box is
+  derived from it (`model::overlay_size`) so ring changes never resize the cube.
 - The **min-drag threshold** (`max(3, round(3·dpr))` logical px) gates the click-vs-drag
   decision: a shorter movement is a snap on release, and an orbit no longer also snaps
   ([`navicube-spec.md`](navicube-spec.md) §8, §14).

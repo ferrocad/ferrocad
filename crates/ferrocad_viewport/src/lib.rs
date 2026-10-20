@@ -26,7 +26,9 @@
 
 pub mod inventor_view;
 pub mod navicube;
+pub mod presenter;
 pub mod scene;
 
 pub use inventor_view::InventorViewport;
 pub use navicube::NaviCube;
+pub use presenter::{Presenter, PresenterStatus};

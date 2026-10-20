@@ -127,8 +127,10 @@ pub struct WgpuRenderer {
     pipelines: ScenePipelines,
     /// Uploaded meshes, keyed on `mesh_id`. A newer generation **replaces** (and drops)
     /// the older GPU buffers, so transient rewrites (tool cursor moves, gizmo drags) do
-    /// not leak entries across frames.
-    mesh_cache: HashMap<MeshId, GpuMesh>,
+    /// not leak entries across frames. Keyed on `(view, mesh_id)`: every queue numbers
+    /// its meshes from zero, and one frame draws several independent queues (the scene,
+    /// the gizmo, the navigation cube), so the view slot keeps their ids apart.
+    mesh_cache: HashMap<(u32, MeshId), GpuMesh>,
     /// The single-sampled pick pipelines (the offscreen G-buffer pass).
     pick_pipelines: PickPipelines,
     /// The pick targets, allocated lazily on the first [`pick_at`](Self::pick_at) and
@@ -250,7 +252,7 @@ impl WgpuRenderer {
         // `(mesh_id, generation)`, so this uploads once and reuses thereafter.
         for batch in batches {
             if let Some(geometry) = batch.geometry() {
-                self.upload_geometry(batch.mesh_id(), batch.generation(), geometry);
+                self.upload_geometry(0, batch.mesh_id(), batch.generation(), geometry);
             }
         }
         self.ensure_textures(batches);
@@ -311,7 +313,7 @@ impl WgpuRenderer {
             });
 
             for (index, batch) in batches.iter().enumerate() {
-                let Some(mesh) = self.mesh_cache.get(&batch.mesh_id()) else {
+                let Some(mesh) = self.mesh_cache.get(&(0, batch.mesh_id())) else {
                     continue;
                 };
                 if mesh.generation != batch.generation() {
@@ -345,6 +347,22 @@ impl WgpuRenderer {
         target: &wgpu::TextureView,
         views: &[ViewSpec<'_>],
     ) -> Result<(), RenderError> {
+        let commands = self.encode_views(target, views)?;
+        self.context.queue.submit(Some(commands));
+        Ok(())
+    }
+
+    /// Encode the same multi-view pass as [`render_views`](Self::render_views) without
+    /// submitting it.
+    ///
+    /// A host that must submit the commands itself uses this — the dma-buf path hands
+    /// them to `WgpuSharedBuffer::submit`, which registers the exportable fence on that
+    /// submission before forwarding it to the queue.
+    pub fn encode_views(
+        &mut self,
+        target: &wgpu::TextureView,
+        views: &[ViewSpec<'_>],
+    ) -> Result<wgpu::CommandBuffer, RenderError> {
         let total: u32 = views
             .iter()
             .map(|view| view.queue.packets.len() as u32)
@@ -353,8 +371,8 @@ impl WgpuRenderer {
 
         // Upload every view's fresh geometry, then write one uniform slot per packet
         // (in view order) with that view's view-projection.
-        for view in views {
-            self.upload_packets(&view.queue.packets);
+        for (view_index, view) in views.iter().enumerate() {
+            self.upload_packets(view_index as u32, &view.queue.packets);
             self.ensure_textures(&view.queue.packets);
         }
         let mut slot = 0u32;
@@ -420,7 +438,8 @@ impl WgpuRenderer {
             });
 
             let mut slot = 0u32;
-            for view in views {
+            for (view_index, view) in views.iter().enumerate() {
+                let view_index = view_index as u32;
                 // Overlays are confined to their rectangle; the main view fills the
                 // target. The rect is bottom-left origin, wgpu's viewport/scissor are
                 // top-left origin.
@@ -431,7 +450,7 @@ impl WgpuRenderer {
                 pass.set_viewport(x, y, w, h, 0.0, 1.0);
                 pass.set_scissor_rect(x as u32, y as u32, w as u32, h as u32);
                 for batch in &view.queue.packets {
-                    let Some(mesh) = self.mesh_cache.get(&batch.mesh_id) else {
+                    let Some(mesh) = self.mesh_cache.get(&(view_index, batch.mesh_id)) else {
                         slot += 1;
                         continue;
                     };
@@ -451,8 +470,7 @@ impl WgpuRenderer {
                 }
             }
         }
-        self.context.queue.submit(Some(encoder.finish()));
-        Ok(())
+        Ok(encoder.finish())
     }
 
     /// Pick the object under a **device** pixel (bottom-left origin) with an offscreen
@@ -482,7 +500,7 @@ impl WgpuRenderer {
         // Re-draw the queue into the pick targets: fresh geometry (a no-op cache hit for
         // the frame that just drew it) and one uniform slot per packet.
         self.ensure_uniform_capacity(queue.packets.len() as u32);
-        self.upload_packets(&queue.packets);
+        self.upload_packets(0, &queue.packets);
         let view_proj = mat4_to_wgsl(&camera.view_projection());
         for (index, packet) in queue.packets.iter().enumerate() {
             self.uniforms.write(
@@ -555,7 +573,7 @@ impl WgpuRenderer {
                 multiview_mask: None,
             });
             for (index, packet) in queue.packets.iter().enumerate() {
-                let Some(mesh) = self.mesh_cache.get(&packet.mesh_id) else {
+                let Some(mesh) = self.mesh_cache.get(&(0, packet.mesh_id)) else {
                     continue;
                 };
                 if mesh.generation != packet.generation {
@@ -667,12 +685,12 @@ impl WgpuRenderer {
         }
     }
 
-    /// Upload the fresh geometry of each packet, evicting a stale generation for the
-    /// same `mesh_id`.
-    fn upload_packets(&mut self, packets: &[DrawPacket]) {
+    /// Upload the fresh geometry of each packet in `view`, evicting a stale generation
+    /// for the same `(view, mesh_id)`.
+    fn upload_packets(&mut self, view: u32, packets: &[DrawPacket]) {
         for packet in packets {
             if let Some(geometry) = packet.geometry.as_ref() {
-                self.upload_geometry(packet.mesh_id, packet.generation, geometry);
+                self.upload_geometry(view, packet.mesh_id, packet.generation, geometry);
             }
         }
     }
@@ -681,12 +699,19 @@ impl WgpuRenderer {
     ///
     /// A changed generation **replaces** the cache entry, so the previous GPU buffers are
     /// dropped immediately (generational eviction) rather than accumulating per edit.
-    fn upload_geometry(&mut self, mesh_id: MeshId, generation: Generation, geometry: &Geometry) {
-        if self.mesh_cache.get(&mesh_id).map(|mesh| mesh.generation) == Some(generation) {
+    fn upload_geometry(
+        &mut self,
+        view: u32,
+        mesh_id: MeshId,
+        generation: Generation,
+        geometry: &Geometry,
+    ) {
+        let key = (view, mesh_id);
+        if self.mesh_cache.get(&key).map(|mesh| mesh.generation) == Some(generation) {
             return;
         }
         let uploaded = GpuMesh::upload(&self.context.device, geometry, generation);
-        self.mesh_cache.insert(mesh_id, uploaded);
+        self.mesh_cache.insert(key, uploaded);
     }
 
     /// Upload any texture a batch names that is not already cached (keyed on its id).
@@ -1149,6 +1174,119 @@ mod tests {
             texel(103, 24),
             texel(5, 5),
             "the navigation cube should paint its corner over the main view"
+        );
+    }
+
+    /// Every queue numbers its meshes from zero, and one frame draws several queues. The
+    /// upload cache must keep them apart: a shared entry let the navigation cube's mesh 0
+    /// replace the main scene's, and the model vanished from the frame.
+    #[test]
+    fn views_have_independent_mesh_namespaces() {
+        let _gpu = gpu_guard();
+        // A red triangle over the left half (clip space, identity camera).
+        let main = Scene {
+            root: Node {
+                kind: NodeKind::Separator,
+                children: vec![
+                    Node {
+                        kind: NodeKind::Material(vec![[1.0, 0.0, 0.0, 1.0]]),
+                        children: vec![],
+                    },
+                    Node {
+                        kind: NodeKind::Coordinate3(vec![
+                            [-0.9, -0.5, 0.5],
+                            [-0.1, -0.5, 0.5],
+                            [-0.5, 0.5, 0.5],
+                        ]),
+                        children: vec![],
+                    },
+                    Node {
+                        kind: NodeKind::Mesh {
+                            indices: vec![0, 1, 2],
+                            normal_indices: vec![],
+                            topology: Topology::Triangles,
+                        },
+                        children: vec![],
+                    },
+                ],
+            },
+        };
+        // A green quad filling the overlay camera's view.
+        let overlay = Scene {
+            root: Node {
+                kind: NodeKind::Separator,
+                children: vec![
+                    Node {
+                        kind: NodeKind::Material(vec![[0.0, 1.0, 0.0, 1.0]]),
+                        children: vec![],
+                    },
+                    Node {
+                        kind: NodeKind::Coordinate3(vec![
+                            [-1.0, -1.0, 0.0],
+                            [1.0, -1.0, 0.0],
+                            [1.0, 1.0, 0.0],
+                            [-1.0, 1.0, 0.0],
+                        ]),
+                        children: vec![],
+                    },
+                    Node {
+                        kind: NodeKind::Mesh {
+                            indices: vec![0, 1, 2, 0, 2, 3],
+                            normal_indices: vec![],
+                            topology: Topology::Triangles,
+                        },
+                        children: vec![],
+                    },
+                ],
+            },
+        };
+        let (main_queue, _) = compile(&main);
+        let (overlay_queue, _) = compile(&overlay);
+        assert_eq!(
+            main_queue.packets[0].mesh_id.0, overlay_queue.packets[0].mesh_id.0,
+            "the test needs colliding ids to be meaningful"
+        );
+
+        let Ok(mut renderer) = WgpuRenderer::new_default([128, 128]) else {
+            eprintln!("no GPU adapter available; skipping mesh-namespace test");
+            return;
+        };
+        let rect = Rect::new(78, 78, 50, 50);
+        let main_camera = Camera::identity();
+        let cube_camera = overlay_camera(rect);
+        renderer
+            .draw_frame(&[
+                ViewSpec {
+                    queue: &main_queue,
+                    camera: &main_camera,
+                    rect: None,
+                    overlay: false,
+                },
+                ViewSpec {
+                    queue: &overlay_queue,
+                    camera: &cube_camera,
+                    rect: Some(rect),
+                    overlay: true,
+                },
+            ])
+            .expect("draw_frame");
+
+        let image = renderer.image().expect("readback");
+        let texel = |x: u32, y: u32| {
+            let i = ((y * 128 + x) * 4) as usize;
+            [image.rgba[i], image.rgba[i + 1], image.rgba[i + 2]]
+        };
+        // Inside the main triangle (device x = -0.5 -> image x = 32).
+        let scene = texel(32, 64);
+        assert!(
+            scene[0] > 150 && scene[1] < 60,
+            "the scene must draw its own red geometry, not the overlay's: {scene:?}"
+        );
+        // The overlay rect's centre (image top-right).
+        let cube = texel(103, 24);
+        assert!(
+            cube[1] > cube[0] + 60,
+            "the overlay must draw its own green geometry, not the scene's: {cube:?}"
         );
     }
 

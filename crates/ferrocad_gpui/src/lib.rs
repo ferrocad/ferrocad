@@ -12,6 +12,14 @@
 pub mod python;
 pub mod shell;
 
+/// Zero-copy viewport presentation through gpui's wgpu window renderer.
+#[cfg(all(
+    feature = "gpu-interop",
+    not(target_os = "macos"),
+    not(target_family = "wasm")
+))]
+pub mod interop;
+
 #[cfg(test)]
 mod spike;
 
@@ -21,6 +29,32 @@ use gpui::{
 };
 
 pub use shell::{Shell, ShellModel};
+
+/// A zero-copy viewport presenter for this build and platform, if one is available.
+///
+/// Returns `None` when the `gpu-interop` feature is off, or on a platform whose
+/// window renderer cannot share its device (macOS, wasm). The viewport then keeps
+/// the readback `RenderImage` path. Even when a presenter is returned it may report
+/// itself unsupported at paint time (a headless window or a non-wgpu renderer), in
+/// which case the viewport falls back as well.
+pub fn zero_copy_presenter() -> Option<Box<dyn ferrocad_viewport::Presenter>> {
+    #[cfg(all(
+        feature = "gpu-interop",
+        not(target_os = "macos"),
+        not(target_family = "wasm")
+    ))]
+    {
+        Some(interop::presenter())
+    }
+    #[cfg(not(all(
+        feature = "gpu-interop",
+        not(target_os = "macos"),
+        not(target_family = "wasm")
+    )))]
+    {
+        None
+    }
+}
 
 /// Serializes tests that drive the shared embedded CPython instance.
 #[cfg(test)]

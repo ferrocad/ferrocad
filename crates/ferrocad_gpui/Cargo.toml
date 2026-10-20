@@ -24,7 +24,14 @@ ferrocad_inventor_py.workspace = true
 ferrocad_stage_py.workspace = true
 ferrocad_wgpu.workspace = true
 ferrocad_types.workspace = true
-bite-gpui = { version = "1.21.1" }
+bite-gpui = { version = "1.23.305" }
+# Zero-copy presentation: hand the viewport's wgpu target to gpui's window renderer,
+# as a dma-buf when the device can export one and as a same-device view otherwise.
+# Pinned exactly while the crate is experimental (0.1.x).
+gpui_interop = { version = "=0.1.0", features = ["wgpu"], optional = true }
+# The window renderer's device and the `ImportedTextureExt` handle used by the
+# same-device path. Must match the `bite-gpui` release above.
+gpui_wgpu = { package = "bite-gp-wgpu", version = "1.23.305", optional = true }
 # Embedding CPython in the host (not the extension-module mode).
 pyo3 = { version = "0.25", features = ["auto-initialize"] }
 serde.workspace = true
@@ -33,6 +40,13 @@ serde_json.workspace = true
 # `image::Frame`s; gpui does not re-export the `image` crate.
 image = "0.25"
 
+[features]
+default = ["gpu-interop"]
+# Present the viewport zero-copy through gpui's wgpu device. Runtime fallback: the
+# image path stays in use where the window has no compatible device (headless,
+# macOS, a Direct3D window, or a driver without dma-buf export).
+gpu-interop = ["dep:gpui_interop", "dep:gpui_wgpu"]
+
 [dev-dependencies]
 # `test-support` enables TestAppContext / VisualTestContext / #[gpui::test].
-bite-gpui = { version = "1.21.1", features = ["test-support"] }
+bite-gpui = { version = "1.23.305", features = ["test-support"] }

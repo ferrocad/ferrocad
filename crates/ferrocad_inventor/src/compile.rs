@@ -28,8 +28,11 @@ pub fn compile(scene: &Scene) -> (RenderQueue, Directives) {
 ///
 /// Each [`NodeKind::Mesh`] becomes one packet. Geometry is attached **on every
 /// compile** (a fresh upload from the compiler's point of view); a renderer keys its
-/// upload cache on `(mesh_id, generation)` and, because a stable scene compiles to
-/// the same ids and generations each time, only uploads once.
+/// upload cache on `(mesh_id, generation)`. `mesh_id` is allocated in traversal order,
+/// which can change when a producer reorders or omits packets (the navigation cube
+/// sorts back-to-front, and hides some labels), so the generation is a **fingerprint
+/// of the geometry bytes**: a reused id whose geometry changed no longer matches the
+/// cached upload, while identical geometry still hits.
 ///
 /// Semantic nodes (a [`NodeKind::NaviCube`]) emit **no** packet: they are lifted into
 /// the [`Directives`] the viewport consumes (see `docs/directives.md`).
@@ -143,9 +146,10 @@ fn walk_children(
                 if let Some(geometry) = build_geometry(coordinates, tex_coords, indices, *topology) {
                     let mesh_id = MeshId(ctx.next_mesh);
                     ctx.next_mesh += 1;
+                    let generation = Generation(fingerprint(&geometry));
                     ctx.packets.push(DrawPacket {
                         mesh_id,
-                        generation: Generation(0),
+                        generation,
                         topology: *topology,
                         geometry: Some(geometry),
                         state: state.snapshot(),
@@ -166,6 +170,31 @@ fn walk_children(
             }
         }
     }
+}
+
+/// A content fingerprint of `geometry`, used as its [`Generation`].
+///
+/// The renderer's upload cache is keyed on `(mesh_id, generation)` and treats an equal
+/// pair as "the buffers are still valid". Mesh ids are positional, so a producer that
+/// changes packet order or count (a depth-sorted overlay, a hidden label) would
+/// otherwise hand a new mesh an old upload. Hashing the bytes makes the pair honest
+/// without comparing the buffers on the render thread.
+fn fingerprint(geometry: &Geometry) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    for vertex in &geometry.vertices {
+        for value in vertex
+            .position
+            .iter()
+            .chain(&vertex.normal)
+            .chain(&vertex.uv)
+        {
+            value.to_bits().hash(&mut hasher);
+        }
+        vertex.part_idx.hash(&mut hasher);
+    }
+    geometry.indices.hash(&mut hasher);
+    hasher.finish()
 }
 
 /// Flatten coordinates + indices into flat-shaded vertices (one normal per face).
@@ -282,6 +311,36 @@ mod tests {
         assert_eq!(geometry.vertices.len(), 3);
         assert_eq!(geometry.indices, vec![0, 1, 2]);
         assert_eq!(geometry.vertices[0].normal, [0.0, 0.0, 1.0]);
+    }
+
+    #[test]
+    fn the_generation_fingerprints_the_geometry() {
+        let scene = |points: Vec<[f32; 3]>| Scene {
+            root: separator(vec![
+                Node {
+                    kind: NodeKind::Coordinate3(points),
+                    children: vec![],
+                },
+                mesh(),
+            ]),
+        };
+        let (first, _) = compile(&scene(POINTS.to_vec()));
+        let (again, _) = compile(&scene(POINTS.to_vec()));
+        assert_eq!(
+            first.packets[0].generation, again.packets[0].generation,
+            "identical geometry reuses the upload"
+        );
+
+        // Mesh ids are positional, so a producer that reorders or hides packets can
+        // reuse an id for different geometry; the generation must change with the bytes.
+        let mut moved = POINTS;
+        moved[0][1] = 0.25;
+        let (changed, _) = compile(&scene(moved.to_vec()));
+        assert_eq!(first.packets[0].mesh_id, changed.packets[0].mesh_id);
+        assert_ne!(
+            first.packets[0].generation, changed.packets[0].generation,
+            "different geometry must miss the upload cache"
+        );
     }
 
     #[test]

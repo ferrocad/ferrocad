@@ -24,11 +24,15 @@
 use ferrocad_viewport::InventorViewport;
 use ferrocad_viewport::scene::{HoverHighlight, sample_camera, sample_scene};
 use ferrocad_inventor::{
-    Camera, Event, EventListener, InventorView, Scene, ViewSpec, Viewport, compile_with, pick_at_hit,
+    Camera, Event, EventListener, InventorView, Node, NodeKind, Scene, ViewSpec, Viewport,
+    compile_with, pick_at_hit,
 };
 use ferrocad_types::{Placement, Rotation, Vector3};
 use ferrocad_wgpu::WgpuRenderer;
 use gpui::{App, AppContext, WindowBounds, WindowOptions, application, bounds, point, px, size};
+use pyo3::prelude::*;
+use pyo3::types::PyDict;
+use std::ffi::CString;
 
 /// The offscreen render target size (device pixels; 1x here for the PoC).
 const SIZE: [u32; 2] = [640, 480];
@@ -60,10 +64,20 @@ fn main() {
     let scene = build_scene();
 
     let mut args = std::env::args().skip(1);
-    if args.next().as_deref() == Some("--headless") {
-        let path = args.next().unwrap_or_else(|| "frame.png".to_string());
-        render_headless(scene, camera, &path);
-        return;
+    match args.next().as_deref() {
+        Some("--headless") => {
+            let path = args.next().unwrap_or_else(|| "frame.png".to_string());
+            render_headless(scene, camera, &path);
+            return;
+        }
+        Some("--coin-overlay") => {
+            let path = args
+                .next()
+                .unwrap_or_else(|| "coin_overlay.png".to_string());
+            render_headless(with_coin_overlay(scene), camera, &path);
+            return;
+        }
+        _ => {}
     }
 
     let renderer = WgpuRenderer::new_default(SIZE).unwrap_or_else(|e| {
@@ -86,6 +100,56 @@ fn main() {
         })
         .unwrap();
     });
+}
+
+/// Register the Coin/WGSL grid mod and merge its overlay into the scene.
+///
+/// This exercises the G5 path end to end without a window: the mod builds its
+/// `SoShaderProgram` tree, `FreeCADGui.addOverlay` extracts it, and the resulting
+/// scene is compiled and drawn by the same renderer the shell uses.
+fn with_coin_overlay(base: Scene) -> Scene {
+    const SCRIPT: &str = r#"
+import importlib.util, os
+import FreeCAD
+# Create the document before the mod attaches its observer and activates, so the
+# module's own manager builds exactly one grid for it.
+doc = FreeCAD.newDocument("Overlay")
+path = os.path.abspath("mods/GridOverlayCoin/InitGui.py")
+spec = importlib.util.spec_from_file_location("GridOverlayCoin", path)
+mod = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(mod)
+mod.manager.refresh()
+"#;
+
+    let overlays = Python::with_gil(|py| -> Result<Vec<Scene>, String> {
+        ferrocad_inventor_py::install(py).map_err(|e| e.to_string())?;
+        let globals = PyDict::new(py);
+        let code = CString::new(SCRIPT).map_err(|e| e.to_string())?;
+        py.run(&code, Some(&globals), None).map_err(|e| e.to_string())?;
+        Ok(ferrocad_inventor_py::overlay_scenes())
+    });
+
+    match overlays {
+        Ok(overlays) if !overlays.is_empty() => {
+            let count = overlays.len();
+            let mut root = Node {
+                kind: NodeKind::Separator,
+                children: vec![base.root],
+            };
+            root.children
+                .extend(overlays.into_iter().map(|scene| scene.root));
+            println!("ferrocad: {count} coin overlay(s) registered");
+            Scene { root }
+        }
+        Ok(_) => {
+            eprintln!("ferrocad: the coin mod registered no overlay");
+            base
+        }
+        Err(error) => {
+            eprintln!("ferrocad: coin overlay failed: {error}");
+            base
+        }
+    }
 }
 
 /// Headless: simulate a hover over the cube's centre, render, and write a PNG.

@@ -24,7 +24,7 @@ use ferrocad_graphics::{
 };
 use ferrocad_inventor::{
     Directives, Event, EventListener, ImageData, InventorView, NaviCubeDirective, Node, NodeKind,
-    Scene, ViewSpec, compile_with,
+    Scene, ViewSpec, compile_diagnostic,
 };
 use ferrocad_stage::Stage;
 use ferrocad_stage::shape::WIRE_DEPTH_BIAS;
@@ -201,6 +201,9 @@ pub struct InventorViewport<V: InventorView> {
     /// out of [`queue`](Self::queue) so they draw **after** opaque geometry, in the same
     /// depth-tested pass, and can never enter a pick.
     program_queue: RenderQueue,
+    /// The last shader-program assembly error, if any. The frame still renders (the
+    /// malformed program is dropped, not the scene); the shell reports and clears it.
+    shader_error: Option<String>,
     /// Pull-registered overlay scenes (G5). Merged under a synthetic separator beside
     /// the base scene on every recompile; the base scene itself is never modified.
     overlays: Vec<Scene>,
@@ -693,7 +696,7 @@ impl<V: InventorView> InventorViewport<V> {
     /// Wrap `view`, drawing `scene` with `camera`.
     pub fn new(view: V, camera: Camera, scene: Scene) -> Self {
         let stage = Stage::new();
-        let (queue, directives) = merge_queue(&scene, &stage, &camera.viewport);
+        let (queue, directives, shader_error) = merge_queue(&scene, &stage, &camera.viewport);
         let (queue, program_queue) = split_programs(queue);
         let mut viewport = Self {
             view,
@@ -742,6 +745,7 @@ impl<V: InventorView> InventorViewport<V> {
             grid_queue: RenderQueue::default(),
             grid_overlay: false,
             program_queue,
+            shader_error,
             overlays: Vec::new(),
             pointer: None,
             snap_feedback: None,
@@ -1027,6 +1031,12 @@ impl<V: InventorView> InventorViewport<V> {
     /// The overlay scenes currently merged into the draw.
     pub fn overlays(&self) -> &[Scene] {
         &self.overlays
+    }
+
+    /// Take the last shader-program error, if any. The frame still rendered (the
+    /// malformed program was dropped); the shell reports it once and clears it.
+    pub fn take_shader_error(&mut self) -> Option<String> {
+        self.shader_error.take()
     }
 
     /// Frame the stage: move the eye along the current view direction so the document's
@@ -2120,7 +2130,7 @@ impl<V: InventorView> InventorViewport<V> {
     fn recompile(&mut self) {
         // Keep the no-overlay path allocation-free: it is the common case and the
         // base scene can be large.
-        let (queue, directives) = if self.overlays.is_empty() {
+        let (queue, directives, shader_error) = if self.overlays.is_empty() {
             merge_queue(&self.scene, &self.stage, &self.camera.viewport)
         } else {
             let merged = self.merged_scene();
@@ -2130,6 +2140,7 @@ impl<V: InventorView> InventorViewport<V> {
         self.queue = queue;
         self.program_queue = program_queue;
         self.directives = directives;
+        self.shader_error = shader_error;
         self.stage_dirty = false;
         self.sync_grid();
         self.sync_directive_cubes();
@@ -3228,10 +3239,14 @@ impl<V: InventorView + 'static> Render for InventorViewport<V> {
 /// Compile the inventor scene — its draw packets and its semantic directives — and
 /// append the stage's batches, so the two producers share one queue (and thus one
 /// render pass and one depth buffer).
-fn merge_queue(scene: &Scene, stage: &Stage, viewport: &Viewport) -> (RenderQueue, Directives) {
-    let (mut queue, directives) = compile_with(scene, viewport);
+fn merge_queue(
+    scene: &Scene,
+    stage: &Stage,
+    viewport: &Viewport,
+) -> (RenderQueue, Directives, Option<String>) {
+    let (mut queue, directives, error) = compile_diagnostic(scene, viewport, None);
     stage.emit_batches(&mut queue);
-    (queue, directives)
+    (queue, directives, error.map(|error| error.to_string()))
 }
 
 /// Split the program packets out of the scene queue.

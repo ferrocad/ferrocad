@@ -717,10 +717,19 @@ Landed in two waves; every suite below was run, not inferred.
 
 **Deviations recorded.** `SoMFFloat` arrived with G3 rather than G0 (its consumer is
 `SoShaderParameterArray1f`). `spacing` sets `major = spacing × 10` so the dot/line
-decade survives; `snapshot()` reports the two deferred shadow knobs. `compile()` panics
-on a malformed program and `compile_with_base()` is the fallible entry point — a
-follow-up should thread the error to the shell instead of panicking. Shadows are
-compiled and validated but `shadow_count` is 0 until a document-bounds producer exists.
+decade survives; `snapshot()` reports the two deferred shadow knobs. `compile_with`
+remains the panicking convenience for tests and the navicube, but the viewport compiles
+through `compile_diagnostic`: a malformed program is dropped, the rest of the frame
+renders, and `take_shader_error` lets the shell write the reason to the console. Shadows
+are compiled and validated but `shadow_count` is 0 until a document-bounds producer
+exists.
+
+**Rendered check.** `cargo run -p ferrocad_gpui --example inventor_roundtrip --
+--coin-overlay frame.png` builds the A1 mod's tree through `pivy.coin`, registers it with
+`FreeCADGui.addOverlay`, merges the extracted overlay and renders with the same wgpu
+renderer the shell uses. The frame shows the procedural grid and the two axis lines; the
+cube's near faces occlude it and the far face behind the plane shows it through, which
+is the expected result for a plane through the model.
 
 **Test note.** The six affected crates pass serially (351 tests) and in parallel; a
 `ferrocad_gpui` SIGSEGV reported once during G4 did not reproduce on a clean parallel

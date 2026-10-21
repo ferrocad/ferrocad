@@ -59,7 +59,7 @@ pub use ferrocad_graphics::{
     Vertex, Viewport,
 };
 
-pub use compile::{ShaderError, compile, compile_with, compile_with_base};
+pub use compile::{ShaderError, compile, compile_diagnostic, compile_with, compile_with_base};
 pub use event::{Event, EventListener};
 pub use node::{
     Node, NodeKind, SO_SWITCH_ALL, SO_SWITCH_INHERIT, SO_SWITCH_NONE, Scene, ShaderParameter,

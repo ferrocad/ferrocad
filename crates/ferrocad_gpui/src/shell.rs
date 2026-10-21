@@ -286,6 +286,9 @@ impl Shell {
                 viewport.set_tool(Some(tool));
             }
         }
+        if let Some(error) = viewport.take_shader_error() {
+            self.console_line(format!("shader: {error}"), cx);
+        }
         // The presenter is always safe to install: it falls back to the image path
         // when the window's device cannot be shared.
         let viewport = match crate::zero_copy_presenter() {
@@ -340,10 +343,14 @@ impl Shell {
             return;
         };
         let overlays = ferrocad_inventor_py::overlay_scenes();
-        viewport.update(cx, |viewport, cx| {
+        let error = viewport.update(cx, |viewport, cx| {
             viewport.set_overlays(overlays);
             cx.notify();
+            viewport.take_shader_error()
         });
+        if let Some(error) = error {
+            self.console_line(format!("shader: {error}"), cx);
+        }
     }
 
     /// Ask the app script for the display meshes and build a stage from them.

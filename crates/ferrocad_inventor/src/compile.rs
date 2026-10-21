@@ -83,6 +83,24 @@ pub fn compile_with_base(
     viewport: &Viewport,
     base: Option<&Path>,
 ) -> Result<(RenderQueue, Directives), ShaderError> {
+    let (queue, directives, error) = compile_diagnostic(scene, viewport, base);
+    match error {
+        Some(error) => Err(error),
+        None => Ok((queue, directives)),
+    }
+}
+
+/// Compile and report a malformed shader program **without discarding the queue**.
+///
+/// Traversal continues after the first program-assembly error, so the rest of the scene
+/// still renders; a caller that wants a frame and a diagnostic (the viewport) uses this,
+/// while [`compile_with_base`] turns the error into an `Err` for tests and callers that
+/// must not draw a partial frame.
+pub fn compile_diagnostic(
+    scene: &Scene,
+    viewport: &Viewport,
+    base: Option<&Path>,
+) -> (RenderQueue, Directives, Option<ShaderError>) {
     let mut state = State::default();
     state.device_pixel_ratio = viewport.device_pixel_ratio();
 
@@ -103,15 +121,13 @@ pub fn compile_with_base(
         &mut ctx,
         SO_SWITCH_ALL,
     );
-    if let Some(error) = ctx.error {
-        return Err(error);
-    }
-    Ok((
+    (
         RenderQueue {
             packets: ctx.packets,
         },
         ctx.directives,
-    ))
+        ctx.error,
+    )
 }
 
 struct Compiler {
@@ -842,6 +858,37 @@ mod tests {
         assert_eq!(crate::node::SO_SWITCH_NONE, -1);
         assert_eq!(crate::node::SO_SWITCH_INHERIT, -2);
         assert_eq!(crate::node::SO_SWITCH_ALL, -3);
+    }
+
+    #[test]
+    fn a_malformed_program_reports_but_keeps_the_rest_of_the_scene() {
+        // A program with no stages is the smallest malformed tree the addon's
+        // `SoShaderProgram` can produce. The traversal records the error, drops the
+        // program, and still emits the mesh that follows it, so a viewport can draw a
+        // frame and report the problem instead of panicking.
+        let root = Node {
+            kind: NodeKind::Separator,
+            children: vec![
+                Node {
+                    kind: NodeKind::Coordinate3(POINTS.to_vec()),
+                    children: vec![],
+                },
+                Node {
+                    kind: NodeKind::ShaderProgram,
+                    children: vec![],
+                },
+                mesh(),
+            ],
+        };
+        let (queue, _, error) = compile_diagnostic(
+            &Scene { root },
+            &Viewport::default(),
+            None,
+        );
+        let error = error.expect("the malformed program is reported");
+        assert!(!error.to_string().is_empty());
+        assert_eq!(queue.len(), 1, "the mesh after the program still draws");
+        assert!(queue.packets[0].state.program.is_none());
     }
 
     #[test]

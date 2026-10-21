@@ -192,10 +192,10 @@ pub struct InventorViewport<V: InventorView> {
     /// The grid's packets. Kept apart from [`queue`](Self::queue) so the grid draws in
     /// the same depth pass but never enters a pick: it is scaffolding, not geometry.
     grid_queue: RenderQueue,
-    /// Whether the authored (shader) grid overlay replaces the native ground
+    /// Whether the authored (shader) grid replaces the native ground
     /// (`ViewState.grid_overlay`, G4). When true the native ground (dots and lines) is
-    /// hidden and the scene's program packets are drawn; the triad and the workplane
-    /// are untouched.
+    /// hidden; the triad and the workplane are untouched. This flag never gates the
+    /// drawn program packets: a registered overlay is drawn whenever it has one.
     grid_overlay: bool,
     /// The scene's program packets — those whose state carries a `ShaderProgram` — split
     /// out of [`queue`](Self::queue) so they draw **after** opaque geometry, in the same
@@ -2305,19 +2305,19 @@ impl<V: InventorView> InventorViewport<V> {
         self.grid_alpha
     }
 
-    /// Whether the authored (shader) grid overlay is authoritative (`ViewState.grid_overlay`).
+    /// Whether the authored (shader) grid replaces the native ground
+    /// (`ViewState.grid_overlay`).
     pub fn grid_overlay(&self) -> bool {
         self.grid_overlay
     }
 
-    /// Select the authored grid overlay: when `enabled`, the native world ground (dots
-    /// and lines) is hidden and the scene's program packets are drawn after opaque
-    /// geometry; the triad, the workplane and the origin node are unaffected. Returns
-    /// whether the flag changed.
+    /// Select the authored grid: when `enabled`, the native world ground (dots and
+    /// lines) is hidden; the triad, the workplane and the origin node are unaffected.
+    /// Returns whether the flag changed.
     ///
-    /// A scene with no program packet draws nothing under the flag: the flag says "the
-    /// shader grid is authoritative", not "build one". The scene's programs are held in
-    /// [`program_queue`](Self::program_queue) in either case and are never picked.
+    /// The flag does **not** gate the program packets. They are held in
+    /// [`program_queue`](Self::program_queue) and drawn whenever non-empty — a
+    /// registered overlay is visible without a second opt-in — and are never picked.
     pub fn set_grid_overlay(&mut self, enabled: bool) -> bool {
         if self.grid_overlay == enabled {
             return false;
@@ -2882,10 +2882,11 @@ impl<V: InventorView> InventorViewport<V> {
                 overlay: false,
             });
         }
-        if self.grid_overlay && !self.program_queue.is_empty() {
-            // The authored grid overlay: drawn after opaque geometry and the native grid,
-            // in the same depth-tested pass. Its pipeline writes no depth by default, so
-            // an opaque box in front of the plane still occludes it.
+        if !self.program_queue.is_empty() {
+            // Registered program overlays (G5): drawn after opaque geometry and the native
+            // grid, in the same depth-tested pass. Their pipeline writes no depth by
+            // default, so an opaque box in front of the plane still occludes them.
+            // `grid_overlay` only hides the native ground; it never hides an overlay.
             views.push(ViewSpec {
                 queue: &self.program_queue,
                 camera: &self.camera,
@@ -3674,6 +3675,40 @@ mod tests {
             resize_calls: 0,
             last_resize: None,
             image_calls: 0,
+        }
+    }
+
+    /// A view that records the queue lengths of every `draw_frame`, so a test can
+    /// see exactly which queues the viewport chose to draw.
+    struct RecordingView {
+        frames: Rc<RefCell<Vec<Vec<usize>>>>,
+    }
+
+    impl InventorView for RecordingView {
+        type Surface = ();
+        type Error = std::io::Error;
+
+        fn size(&self) -> [u32; 2] {
+            [100, 100]
+        }
+        fn draw(
+            &mut self,
+            _queue: &RenderQueue,
+            _camera: &Camera,
+        ) -> Result<(), Self::Error> {
+            Ok(())
+        }
+        fn borrow_surface(&self) -> Option<&()> {
+            None
+        }
+        fn image(&mut self) -> Result<ImageData, Self::Error> {
+            Ok(ImageData::default())
+        }
+        fn draw_frame(&mut self, views: &[ViewSpec<'_>]) -> Result<(), Self::Error> {
+            self.frames
+                .borrow_mut()
+                .push(views.iter().map(|view| view.queue.len()).collect());
+            Ok(())
         }
     }
 
@@ -5470,6 +5505,55 @@ mod tests {
         }
     }
 
+    /// G5's visibility policy: registering an overlay is enough to draw it. The
+    /// `grid_overlay` flag only hides the native ground, so a program packet is drawn
+    /// even when the flag is off (the state a freshly booted overlay starts in).
+    #[test]
+    fn a_registered_program_overlay_draws_without_the_grid_overlay_flag() {
+        let frames = Rc::new(RefCell::new(Vec::new()));
+        let camera = Camera {
+            viewport: Viewport::new([100, 100], 1.0),
+            ..Camera::identity()
+        };
+        let mut viewport = InventorViewport::new(
+            RecordingView {
+                frames: frames.clone(),
+            },
+            camera,
+            empty_scene(),
+        );
+        viewport.set_overlays(vec![program_scene()]);
+        assert!(!viewport.grid_overlay(), "the flag is off by default");
+
+        viewport.refresh();
+        let first = frames.borrow().last().cloned().expect("a frame");
+        assert_eq!(
+            first,
+            vec![0, 2, 1],
+            "the overlay draws beside the empty scene and the axis cross, flag off"
+        );
+
+        // The flag stays meaningful: the native ground is independent of the overlay.
+        viewport.set_grid(true);
+        viewport.refresh();
+        let second = frames.borrow().last().cloned().expect("a frame");
+        assert_eq!(
+            second,
+            vec![0, 4, 1],
+            "the native ground draws with the flag off; the overlay is still there"
+        );
+
+        // ...and it hides the ground (triad and origin remain), never the overlay.
+        assert!(viewport.set_grid_overlay(true));
+        viewport.refresh();
+        let third = frames.borrow().last().cloned().expect("a frame");
+        assert_eq!(
+            third,
+            vec![0, 2, 1],
+            "the world ground is hidden; the registered overlay still draws"
+        );
+    }
+
     #[test]
     fn a_program_packet_is_kept_out_of_the_scene_queue_and_the_pick() {
         let camera = Camera {
@@ -5487,7 +5571,7 @@ mod tests {
         assert!(!viewport.program_queue.packets[0].state.pickable);
         assert!(viewport.pick([50, 50]).is_none());
 
-        // The overlay flag controls whether that queue is drawn, never the split.
+        // The flag does not partition the queues: it only hides the native ground.
         assert!(viewport.set_grid_overlay(true));
         assert_eq!(viewport.program_queue.len(), 1);
         assert!(viewport.queue.is_empty());

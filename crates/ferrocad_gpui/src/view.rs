@@ -38,7 +38,8 @@ pub struct ViewRequest {
     /// A multiplier over the grid tokens' alphas, in `0.0..=1.0`.
     #[serde(default)]
     pub grid_alpha: Option<f32>,
-    /// Draw the authored (shader) grid overlay and hide the native ground layer.
+    /// Hide the native ground layer in favour of an authored (shader) grid. Registered
+    /// overlays draw regardless; this flag is about the native ground.
     #[serde(default)]
     pub grid_overlay: Option<bool>,
     /// A workplane action: `"activate"`, `"clear"` or `"view"`.
@@ -119,9 +120,10 @@ pub struct ViewState {
     pub grid_color: [f32; 4],
     /// A multiplier over the grid tokens' alphas.
     pub grid_alpha: f32,
-    /// Whether the authored (shader) grid overlay is authoritative (`false`: the native
-    /// grid is). When on, the viewport hides the native ground and draws the scene's
-    /// program packets; `grid_radius` is ignored (an infinite shader grid has no extent).
+    /// Whether the authored (shader) grid replaces the native ground (`false`: the native
+    /// grid is). When on, the viewport hides the native ground; registered program
+    /// overlays draw either way. `grid_radius` is ignored (an infinite shader grid has no
+    /// extent).
     pub grid_overlay: bool,
 }
 

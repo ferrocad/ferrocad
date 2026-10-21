@@ -332,7 +332,9 @@ impl Shell {
     /// Pull the registered overlay scenes into the viewport when the set changed (G5).
     ///
     /// The registry is the authority; this is deliberately a pull so the shell never
-    /// re-extracts or recompiles a scene whose overlay set is unchanged. With no
+    /// re-extracts or recompiles a scene whose overlay set is unchanged. Registration
+    /// is enough to draw: the viewport does not gate the program queue on
+    /// `grid_overlay`, which only hides the native ground. With no
     /// viewport (headless, or before [`enable_viewport`](Self::enable_viewport)) the
     /// dirty flag is left set, so the next viewport applies it.
     fn sync_overlays(&mut self, cx: &mut Context<Self>) {

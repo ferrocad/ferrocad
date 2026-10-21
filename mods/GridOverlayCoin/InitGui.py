@@ -439,8 +439,9 @@ class GridManager:
 def apply_dialog(values):
     """Persist the dialog's values, re-bind, and ask the shell to redraw.
 
-    The returned ``{"view": {...}}`` is what triggers the shell: it applies the
-    overlay flag (which hides the native ground and draws the program queue).
+    The returned ``{"view": {...}}`` is what triggers the shell to pull the
+    re-registered overlay. The flag only hides the native ground: a registered
+    overlay is drawn whether or not it is set.
     """
     # Validate before persisting, so a bad colour leaves the store alone.
     if "color" in values:

@@ -16,6 +16,10 @@ What is here today:
   ``activate`` callbacks; a later request can run the active backend's
   ``refresh`` callback without switching (see
   ``docs/workbenches/mod-providers.md``);
+* the **provider settings schema** — a provider may advertise its knobs in
+  ``registerProvider(..., settings=[...])``; ``settings`` returns the active
+  backend's rows in the property-pane row shape and ``setSetting`` validates,
+  stores and refreshes (see ``docs/tasks/settings-model.md`` S0);
 * the **dialog protocol** — a command's ``on_accept`` callback stays here under a
   single-use token, and ``_accept`` / ``_cancel`` are the later half of the
   non-blocking modal;
@@ -32,6 +36,7 @@ What is deliberately absent: ``activeDocument()`` and view objects
 
 from __future__ import annotations
 
+import re
 import sys
 
 import FreeCAD
@@ -71,6 +76,38 @@ _PROVIDER_REPORTED: set = set()
 
 #: The parameter group a mod's provider choice is persisted in.
 PROVIDER_PREFERENCES = "User parameter:BaseApp/Preferences/Mods"
+
+#: Setting kinds the editor knows how to edit. A schema may declare another
+#: kind: the row is then read-only and the problem is reported once.
+_SETTING_KINDS = ("text", "bool", "int", "float", "quantity", "enum", "color")
+
+#: Setting kind -> the property type id a row reports (``properties`` uses the
+#: same ids to pick an editor), so one renderer serves both surfaces.
+_SETTING_TYPES = {
+    "text": "App::PropertyString",
+    "bool": "App::PropertyBool",
+    "int": "App::PropertyInteger",
+    "float": "App::PropertyFloat",
+    "quantity": "App::PropertyQuantity",
+    "enum": "App::PropertyEnumeration",
+    "color": "App::PropertyString",
+}
+
+#: A sensible default when a schema entry supplies none. ``enum`` and the
+#: unknown kinds are handled separately (first choice / empty text).
+_SETTING_DEFAULTS = {
+    "text": "",
+    "bool": False,
+    "int": 0,
+    "float": 0.0,
+    "quantity": 0.0,
+    "color": "#000000",
+}
+
+#: ``(feature, backend, setting)`` settings problems already reported.
+_SETTING_REPORTED: set = set()
+
+_COLOR_RE = re.compile(r"#[0-9a-fA-F]{6}\Z")
 
 
 def _error_text(exc: BaseException) -> str:
@@ -160,6 +197,19 @@ def _report_provider(feature, backend, hook: str, exc: BaseException) -> None:
     )
 
 
+def _report_setting(feature, backend, name: str, exc: BaseException) -> None:
+    """Report a broken schema default/hook once per setting."""
+    key = (feature, backend, name)
+    if key in _SETTING_REPORTED:
+        return
+    _SETTING_REPORTED.add(key)
+    print(
+        f"FreeCADGui: setting {name!r} of provider {backend!r} for {feature!r} "
+        f"raised: {_error_text(exc)}",
+        file=sys.stderr,
+    )
+
+
 def registerProvider(
     feature: str,
     backend: str,
@@ -169,6 +219,7 @@ def registerProvider(
     activate=None,
     deactivate=None,
     refresh=None,
+    settings=None,
 ):
     """Declare that ``backend`` provides ``feature`` (called from ``InitGui.py``).
 
@@ -184,6 +235,15 @@ def registerProvider(
     choice), the outgoing backend's ``deactivate`` runs so a mod that drew
     during its own import cannot keep drawing. The incoming backend is still
     activated by the first switch.
+
+    ``settings`` is the optional schema the provider advertises: a list of
+    dicts, each with a non-empty ``name`` and a ``kind`` (``text``, ``bool``,
+    ``int``, ``float``, ``quantity``, ``enum``, ``color``), plus ``label``,
+    ``default``, ``min``/``max``, ``unit``, ``choices`` and optional ``get``/
+    ``set`` callables. It is validated here and stored; **no default is written**
+    at registration, so importing a mod stays free of side effects. An unknown
+    kind is allowed and reported once; its row is read-only. See
+    ``docs/tasks/settings-model.md`` S0.
 
     Registering the same ``(feature, backend)`` again replaces the record (a mod
     reload) without moving it in the registration order. Returns the manifest.
@@ -202,6 +262,7 @@ def registerProvider(
         raise TypeError(f"provider {feature!r}/{backend!r} deactivate is not callable")
     if refresh is not None and not callable(refresh):
         raise TypeError(f"provider {feature!r}/{backend!r} refresh is not callable")
+    schema = _validate_settings(feature, backend, settings)
 
     text = str(label if label is not None else backend).strip()
     records = _PROVIDERS.get(feature)
@@ -222,10 +283,24 @@ def registerProvider(
         "activate": activate,
         "deactivate": deactivate,
         "refresh": refresh,
+        "settings": schema,
     }
     _PROVIDER_REPORTED.difference_update(
         {key for key in _PROVIDER_REPORTED if key[0] == feature and key[1] == backend}
     )
+    _SETTING_REPORTED.difference_update(
+        {key for key in _SETTING_REPORTED if key[0] == feature and key[1] == backend}
+    )
+    for spec in schema:
+        if spec["kind"] not in _SETTING_KINDS:
+            _report_setting(
+                feature,
+                backend,
+                spec["name"],
+                ValueError(
+                    f"unknown kind {spec['kind']!r}; the row is read-only"
+                ),
+            )
 
     # A takeover is a selection change caused by registration. Stop the outgoing
     # backend, but leave the incoming one for the first explicit switch (which
@@ -307,6 +382,9 @@ def unregisterProvider(feature: str, backend: str) -> bool:
         _PROVIDER_APPLIED.pop(feature, None)
     _PROVIDER_REPORTED.difference_update(
         {key for key in _PROVIDER_REPORTED if key[0] == feature and key[1] == backend}
+    )
+    _SETTING_REPORTED.difference_update(
+        {key for key in _SETTING_REPORTED if key[0] == feature and key[1] == backend}
     )
     return True
 
@@ -454,6 +532,421 @@ def _invoke_provider(record, feature, hook, result, statuses) -> None:
     status = value.get("status")
     if status:
         statuses.append(str(status))
+
+
+# ---------------------------------------------------------------------------
+# Provider settings (S0, docs/tasks/settings-model.md)
+#
+# A provider declares its knobs once, at registration, and FerroCAD owns the
+# store: one parameter group per ``(feature, backend)``, one typed key per
+# setting. The rows are the property pane's row contract, so the tree and the
+# pane render a provider's settings without a second renderer. Nothing is
+# written at registration: a default is materialised on read, which keeps
+# importing a mod side-effect free.
+# ---------------------------------------------------------------------------
+
+
+def _settings_group(feature, backend):
+    """The parameter group holding one backend's setting values."""
+    return FreeCAD.ParamGet(f"{PROVIDER_PREFERENCES}/{feature}/{backend}")
+
+
+def _validate_settings(feature, backend, settings) -> list:
+    """Validate a provider's schema and return its normalised form.
+
+    A malformed schema is a programmer error at registration time, so it raises
+    ``TypeError``/``ValueError`` with the offending entry named. An unknown kind
+    is deliberately **not** an error: it is allowed, reported once by the
+    caller, and rendered read-only.
+    """
+    if settings is None:
+        return []
+    if not isinstance(settings, (list, tuple)):
+        raise TypeError(
+            f"provider {feature!r}/{backend!r} settings must be a list of dicts"
+        )
+    schema = []
+    names = set()
+    for index, entry in enumerate(settings):
+        if not isinstance(entry, dict):
+            raise TypeError(
+                f"provider {feature!r}/{backend!r} setting #{index} is not a dict"
+            )
+        name = entry.get("name")
+        if not isinstance(name, str) or not name.strip():
+            raise ValueError(
+                f"provider {feature!r}/{backend!r} setting #{index} needs a "
+                "non-empty 'name'"
+            )
+        name = name.strip()
+        if name in names:
+            raise ValueError(
+                f"provider {feature!r}/{backend!r} declares setting {name!r} twice"
+            )
+        names.add(name)
+        kind = entry.get("kind")
+        if not isinstance(kind, str) or not kind.strip():
+            raise ValueError(
+                f"provider {feature!r}/{backend!r} setting {name!r} needs a 'kind'"
+            )
+        spec = {
+            "name": name,
+            "kind": kind.strip(),
+            "label": str(entry.get("label") or name),
+        }
+        unit = entry.get("unit")
+        if unit is not None:
+            if not isinstance(unit, str) or not unit.strip():
+                raise ValueError(
+                    f"provider {feature!r}/{backend!r} setting {name!r} has a "
+                    "non-string 'unit'"
+                )
+            spec["unit"] = unit.strip()
+        choices = entry.get("choices")
+        if choices is not None:
+            if not isinstance(choices, (list, tuple)) or not all(
+                isinstance(choice, str) and choice for choice in choices
+            ):
+                raise ValueError(
+                    f"provider {feature!r}/{backend!r} setting {name!r} needs "
+                    "'choices' to be a list of non-empty strings"
+                )
+            spec["choices"] = list(choices)
+        if spec["kind"] == "enum" and not spec.get("choices"):
+            raise ValueError(
+                f"provider {feature!r}/{backend!r} setting {name!r} has kind "
+                "'enum' but no 'choices'"
+            )
+        for bound in ("min", "max"):
+            value = entry.get(bound)
+            if value is None:
+                continue
+            if isinstance(value, bool) or not isinstance(value, (int, float)):
+                raise TypeError(
+                    f"provider {feature!r}/{backend!r} setting {name!r} "
+                    f"'{bound}' must be a number"
+                )
+            spec[bound] = float(value)
+        if "min" in spec and "max" in spec and spec["min"] > spec["max"]:
+            raise ValueError(
+                f"provider {feature!r}/{backend!r} setting {name!r} has "
+                f"min > max ({spec['min']:g} > {spec['max']:g})"
+            )
+        for hook in ("get", "set"):
+            callback = entry.get(hook)
+            if callback is None:
+                continue
+            if not callable(callback):
+                raise TypeError(
+                    f"provider {feature!r}/{backend!r} setting {name!r} "
+                    f"'{hook}' is not callable"
+                )
+            spec[hook] = callback
+        if "default" in entry:
+            default = entry["default"]
+            if spec["kind"] in _SETTING_KINDS:
+                default = _coerce_setting(spec, default)
+            spec["default"] = default
+        elif spec["kind"] == "enum":
+            spec["default"] = spec["choices"][0]
+        else:
+            spec["default"] = _SETTING_DEFAULTS.get(spec["kind"], "")
+        schema.append(spec)
+    return schema
+
+
+def _coerce_setting(spec, value):
+    """Coerce one value to the setting's kind, enforcing range and choices.
+
+    Raises ``ValueError`` (with the setting named) when the value does not fit;
+    callers turn that into an error result and leave the store untouched.
+    """
+    kind = spec["kind"]
+    name = spec["name"]
+    if kind == "text":
+        result = value if isinstance(value, str) else str(value)
+    elif kind == "bool":
+        if isinstance(value, bool):
+            result = value
+        elif isinstance(value, (int, float)):
+            result = bool(value)
+        elif isinstance(value, str):
+            text = value.strip().lower()
+            if text in ("1", "true", "yes", "on"):
+                result = True
+            elif text in ("0", "false", "no", "off", ""):
+                result = False
+            else:
+                raise ValueError(f"setting {name!r} expects true or false")
+        else:
+            raise ValueError(f"setting {name!r} expects true or false")
+    elif kind == "int":
+        if isinstance(value, bool):
+            raise ValueError(f"setting {name!r} expects an integer")
+        try:
+            number = float(value) if isinstance(value, str) else value
+        except (TypeError, ValueError):
+            raise ValueError(f"setting {name!r} expects an integer") from None
+        if isinstance(number, float) and not number.is_integer():
+            raise ValueError(f"setting {name!r} expects an integer")
+        try:
+            result = int(number)
+        except (TypeError, ValueError):
+            raise ValueError(f"setting {name!r} expects an integer") from None
+    elif kind == "float":
+        if isinstance(value, bool):
+            raise ValueError(f"setting {name!r} expects a number")
+        try:
+            result = float(value)
+        except (TypeError, ValueError):
+            raise ValueError(f"setting {name!r} expects a number") from None
+    elif kind == "quantity":
+        result = _quantity_value(spec, value)
+    elif kind == "enum":
+        text = value if isinstance(value, str) else str(value)
+        if text not in spec["choices"]:
+            choices = ", ".join(repr(choice) for choice in spec["choices"])
+            raise ValueError(
+                f"setting {name!r} must be one of {choices}; got {text!r}"
+            )
+        result = text
+    elif kind == "color":
+        text = str(value).strip()
+        if not _COLOR_RE.match(text):
+            raise ValueError(
+                f"setting {name!r} expects a colour as #rrggbb; got {text!r}"
+            )
+        result = text.lower()
+    else:
+        raise ValueError(f"setting {name!r} has unsupported kind {kind!r}")
+
+    if kind in ("int", "float", "quantity"):
+        minimum = spec.get("min")
+        maximum = spec.get("max")
+        if minimum is not None and result < minimum:
+            raise ValueError(
+                f"setting {name!r} must be at least {minimum:g}; got {result:g}"
+            )
+        if maximum is not None and result > maximum:
+            raise ValueError(
+                f"setting {name!r} must be at most {maximum:g}; got {result:g}"
+            )
+    return result
+
+
+def _quantity_value(spec, value) -> float:
+    """A quantity as a number in the setting's ``unit`` (or its own value)."""
+    name = spec["name"]
+    unit = spec.get("unit")
+    if isinstance(value, FreeCAD.Units.Quantity):
+        quantity = value
+    elif isinstance(value, bool):
+        raise ValueError(f"setting {name!r} expects a quantity")
+    elif isinstance(value, (int, float)):
+        # A bare number means "that many of the declared unit".
+        quantity = (
+            FreeCAD.Units.Quantity(float(value), unit)
+            if unit
+            else FreeCAD.Units.Quantity(float(value))
+        )
+    else:
+        text = str(value).strip()
+        try:
+            number = float(text)
+        except ValueError:
+            number = None
+        if number is not None:
+            # A bare numeric string is "that many of the declared unit", like
+            # a bare Python number.
+            quantity = (
+                FreeCAD.Units.Quantity(number, unit)
+                if unit
+                else FreeCAD.Units.Quantity(number)
+            )
+        else:
+            try:
+                quantity = FreeCAD.Units.Quantity(text)
+            except Exception as exc:
+                raise ValueError(
+                    f"setting {name!r} expects a quantity: {exc}"
+                ) from None
+    if not unit:
+        return quantity.Value
+    try:
+        return quantity.getValueAs(unit).Value
+    except Exception as exc:
+        raise ValueError(
+            f"setting {name!r} expects a quantity in {unit!r}: {exc}"
+        ) from None
+
+
+def _display_setting(spec, value) -> str:
+    """The row's display string (``"10 mm"`` for a quantity)."""
+    if spec["kind"] != "quantity":
+        return str(value)
+    if isinstance(value, FreeCAD.Units.Quantity):
+        return str(value)
+    unit = spec.get("unit")
+    if not unit:
+        return str(value)
+    try:
+        return str(FreeCAD.Units.Quantity(float(value), unit))
+    except Exception:
+        return str(value)
+
+
+def _read_setting(spec, group):
+    """``(value, status)`` for one schema entry, without writing anything.
+
+    ``status`` names the source of the value: ``computed`` for a ``get`` hook,
+    ``provider`` for the parameter group (a stored value or the materialised
+    default), ``unsupported kind`` for a kind the editor cannot edit.
+    """
+    getter = spec.get("get")
+    if getter is not None:
+        return getter(), "computed"
+    kind = spec["kind"]
+    name = spec["name"]
+    default = spec["default"]
+    if kind not in _SETTING_KINDS:
+        return default, "unsupported kind"
+    if kind == "bool":
+        return group.GetBool(name, bool(default)), "provider"
+    if kind == "int":
+        return group.GetInt(name, int(default)), "provider"
+    if kind in ("float", "quantity"):
+        return group.GetFloat(name, float(default)), "provider"
+    return group.GetString(name, str(default)), "provider"
+
+
+def _write_setting(spec, group, value) -> None:
+    """Store a coerced value in the provider's parameter group (by kind)."""
+    kind = spec["kind"]
+    name = spec["name"]
+    if kind == "bool":
+        group.SetBool(name, bool(value))
+    elif kind == "int":
+        group.SetInt(name, int(value))
+    elif kind in ("float", "quantity"):
+        group.SetFloat(name, float(value))
+    else:
+        group.SetString(name, str(value))
+
+
+def settings(feature: str, backend=None) -> list:
+    """The settings rows of ``feature``'s active provider (or ``backend``).
+
+    The rows use the property pane's contract — ``name``, ``label``, ``type``,
+    ``value``, ``status``, ``editable``, ``kind``, plus ``unit``/``choices``
+    where the schema declares them — so the pane needs no new renderer. ``value``
+    is the display string (``"10 mm"`` for a quantity).
+
+    Nothing is written here: an unset value shows its declared default. ``[]``
+    means "nothing to show": an unknown feature or backend, no provider at all,
+    or a provider that advertises no schema.
+    """
+    records = _PROVIDERS.get(feature)
+    if not records:
+        return []
+    if backend is None:
+        backend = _selected(feature)
+    record = records.get(backend)
+    if record is None:
+        return []
+    schema = record.get("settings") or []
+    if not schema:
+        return []
+    group = _settings_group(feature, backend)
+    rows = []
+    for spec in schema:
+        try:
+            raw, status = _read_setting(spec, group)
+        except Exception as exc:  # noqa: BLE001 - one broken knob is not fatal
+            _report_setting(feature, backend, spec["name"], exc)
+            raw, status = spec["default"], "error"
+        kind = spec["kind"]
+        has_get = spec.get("get") is not None
+        has_set = spec.get("set") is not None
+        row = {
+            "name": spec["name"],
+            "label": spec["label"],
+            "type": _SETTING_TYPES.get(kind, ""),
+            "value": _display_setting(spec, raw),
+            "status": status,
+            "editable": kind in _SETTING_KINDS and (has_set or not has_get),
+            "kind": kind,
+        }
+        if "unit" in spec:
+            row["unit"] = spec["unit"]
+        if "choices" in spec:
+            row["choices"] = list(spec["choices"])
+        rows.append(row)
+    return rows
+
+
+def setSetting(feature: str, name: str, value) -> dict:
+    """Coerce, validate and store one setting, then refresh the provider.
+
+    The value may be a string from the property editor (``"5 mm"``,
+    ``"true"``, ``"#94a3b8"``) or a Python value of the right type. On success
+    the parameter is written (or the schema's ``set`` hook is called), the
+    active backend's ``refresh`` runs through :func:`refreshProviders`, and the
+    result carries its ``view`` claim so the caller can apply it. On a
+    validation failure nothing changes and the result has ``ok: False`` and an
+    ``error``.
+    """
+    records = _PROVIDERS.get(feature)
+    if not records:
+        return {
+            "ok": False,
+            "error": f"no provider is registered for feature {feature!r}",
+        }
+    backend = _selected(feature)
+    schema = records[backend].get("settings") or []
+    spec = next((entry for entry in schema if entry["name"] == name), None)
+    if spec is None:
+        return {
+            "ok": False,
+            "error": f"no setting {name!r} for feature {feature!r}",
+        }
+    kind = spec["kind"]
+    if kind not in _SETTING_KINDS:
+        return {
+            "ok": False,
+            "error": f"setting {name!r} has unsupported kind {kind!r}",
+        }
+    setter = spec.get("set")
+    if spec.get("get") is not None and setter is None:
+        return {"ok": False, "error": f"setting {name!r} is read-only"}
+    try:
+        coerced = _coerce_setting(spec, value)
+    except Exception as exc:  # noqa: BLE001 - validation is an expected failure
+        return {"ok": False, "error": str(exc)}
+
+    if setter is not None:
+        try:
+            setter(coerced)
+        except Exception as exc:  # noqa: BLE001 - a broken hook is not fatal
+            _report_setting(feature, backend, name, exc)
+            return {"ok": False, "error": _error_text(exc)}
+    else:
+        try:
+            _write_setting(spec, _settings_group(feature, backend), coerced)
+        except Exception as exc:  # noqa: BLE001
+            return {"ok": False, "error": _error_text(exc)}
+
+    refresh = refreshProviders(feature)
+    display = _display_setting(spec, coerced)
+    return {
+        "ok": True,
+        "feature": feature,
+        "backend": backend,
+        "name": name,
+        "value": display,
+        "status": f"{feature}: {name} = {display}",
+        "view": refresh.get("view", {}),
+        "errors": list(refresh.get("errors", [])),
+    }
 
 
 # ---------------------------------------------------------------------------

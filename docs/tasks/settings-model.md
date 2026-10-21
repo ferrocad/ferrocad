@@ -104,8 +104,8 @@ Settings                    (synthetic root)
 
 | # | Slice | Verifiable headlessly |
 | --- | --- | --- |
-| **S0** | Schema + parameter-group storage + `settings()` / `setSetting()`, with validation and the no-schema fallback | Python tests: defaults, round-trip, out-of-range, unknown kind, provider without schema |
-| **S1** | `Settings` root and `Settings/<Feature>` nodes in `model_tree()`; `properties()` / `set_property()` routing | Python tests: addressing, no collision with document names, provider switch changes rows |
+| **S0** | Schema + parameter-group storage + `settings()` / `setSetting()`, with validation and the no-schema fallback — ✅ Python tests: defaults, round-trip, out-of-range, unknown kind, provider without schema |
+| **S1** | `Settings` root and `Settings/<Feature>` nodes in `model_tree()`; `properties()` / `set_property()` routing — ✅ Python tests: addressing, no collision with document names, provider switch changes rows |
 | **S2** | Property pane selects the node and renders its rows (reuse the existing editor) | gpui model test: selecting `Settings/Grid` shows the rows; editing calls `set_property` |
 | **S3** | File-backed `ParamGet`; persist the active provider; load at boot | Python tests: restart simulation, corrupt file, unknown backend |
 | **S4** | Migrate `FreeCAD.Grid` onto the native provider's schema; keep the old attribute API as a facade; turn the two mod dialogs into aliases of the Settings node | Python tests: the old attributes and the new rows agree |
@@ -133,6 +133,38 @@ Settings                    (synthetic root)
 - No regression in `properties()` for document objects.
 - `cargo test -p ferrocad_gpui`, `cargo test -p ferrocad_toy` and the Python suite stay
   green.
+
+## As built (2026-10-22)
+
+S0 and S1 only; S2 (pane wiring) and S3 (file-backed `ParamGet`) are untouched.
+
+- `FreeCADGui.registerProvider(..., settings=...)` validates and normalises the
+  schema, then stores it on the provider record. Nothing is written to the
+  parameter group at registration: defaults are materialised by `settings()`.
+  A malformed schema raises at the call site; an unknown `kind` is accepted,
+  reported once, and rendered read-only.
+- Values live in
+  `User parameter:BaseApp/Preferences/Mods/<feature>/<backend>` with one typed
+  key per setting (`bool`, `int`, `float`, and `string` for text/enum/color; a
+  `quantity` is a float in its declared `unit`). A setting's optional `get` and
+  `set` hooks replace the group; a `get` without a `set` is read-only, because
+  writing the group would not be read back.
+- A row is `{name, label, type, value, status, editable, kind}` plus `unit` for
+  a quantity and `choices` for an enum. `type` is the property type id the
+  editor already understands (`App::PropertyBool`, `App::PropertyQuantity`, …),
+  and `value` is the display string (`"10 mm"`). `status` is `provider` for a
+  group-backed value, `computed` for a `get` hook, `unsupported kind`, or
+  `error` when a hook fails. There is no document/user precedence yet (S5).
+- `ferrocad_shell.model_tree()` prepends `Settings` (not a document) once at
+  least one provider feature is registered; with none there is nothing to
+  configure, so the tree stays exactly the document list. The node segment is
+  the feature id title-cased (`Settings/Grid`), and resolution accepts either
+  the exact feature id or that title form. No `/` is legal in a document object
+  name, so the namespaces cannot collide.
+- `setSetting` writes, then calls `refreshProviders(feature)` and returns its
+  `view`; a validation failure changes nothing and returns `error`. The
+  provider selector in `properties("Settings/<Feature>")` switches by label or
+  backend id through `setActiveProvider`.
 
 ## Risks
 

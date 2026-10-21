@@ -76,6 +76,9 @@ The reference mods in this tree are:
 
 Settings and parameters are not a sixth contribution: they are the persistence
 layer a mod uses ([`settings-and-parameters.md`](settings-and-parameters.md)).
+A **feature provider** can advertise its knobs with `settings=[...]`, which is what
+the shell renders under `Settings/<Feature>`; a provider without a schema keeps its
+`command` as the settings entry ([`providers.md`](providers.md)).
 A feature provider may also implement `refresh`, which
 `FreeCADGui.refreshProviders(feature)` runs when the feature's shared state
 changes without a switch ([`providers.md`](providers.md)).

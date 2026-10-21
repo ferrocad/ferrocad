@@ -57,6 +57,53 @@ or a saved choice that names the new backend — the registry runs the outgoing
 backend's `deactivate` immediately. The incoming backend is still not activated
 until the first `setActiveProvider`, so `activate` stays out of import time.
 
+## Settings the provider advertises
+
+A provider can declare its knobs, so the shell has **one** settings surface whichever
+backend is active:
+
+```python
+FreeCADGui.registerProvider(
+    "grid", "coin", "Coin (WGSL)",
+    command="GridOverlayCoin_Settings",      # fallback: a backend with no schema
+    settings=[
+        {"name": "enabled", "label": "Enabled", "kind": "bool", "default": True},
+        {"name": "color", "label": "Colour", "kind": "color", "default": "#94a3b8"},
+        {"name": "spacing", "label": "Spacing", "kind": "quantity",
+         "unit": "mm", "default": 10.0, "min": 0.1, "max": 1000.0},
+    ],
+)
+```
+
+| Key | Meaning |
+| --- | --- |
+| `name` | stable key; what `setSetting` addresses |
+| `label` | the row's text |
+| `kind` | `text`, `bool`, `int`, `float`, `quantity`, `enum`, `color` |
+| `default` | shown until a value is set; **not** written at registration |
+| `min` / `max` | numeric range, enforced by the setter |
+| `unit` | suffix for `quantity` (`"mm"`); a unit string is accepted and converted |
+| `choices` | the closed set for `enum` |
+| `get` / `set` | optional callables for computed knobs; `get` without `set` is read-only |
+
+Values live in `User parameter:BaseApp/Preferences/Mods/<feature>/<backend>`, one key
+per setting, unless a `get`/`set` pair is supplied. A malformed schema is rejected at
+registration; an unknown `kind` renders read-only instead of breaking the pane.
+
+```python
+FreeCADGui.settings("grid")                  # rows for the active backend
+FreeCADGui.setSetting("grid", "spacing", 5)  # validate, store, refresh the backend
+```
+
+The rows use the property pane's contract (`name`, `label`, `kind`, `value`,
+`editable`, …), so the tree's `Settings/Grid` node renders them without a second
+editor. `setSetting` enforces the range, the choices and the kind's type; a rejected
+value changes nothing. On success it runs the backend's `refresh`, so a provider that
+draws from these values sees them immediately.
+
+A provider with no `settings` keeps its `command` as its settings entry: that is the
+upstream-compatible fallback, and the reason a ported mod still works unchanged.
+
 ## Which backend is active
 
 In order:

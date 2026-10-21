@@ -37,6 +37,11 @@ _EDITABLE_KINDS = {
     "App::PropertyEnumeration": "enum",
 }
 
+# The synthetic settings root. It is not a document: ``/`` is illegal in a
+# FreeCAD object name, so ``Settings/<Feature>`` cannot collide with one.
+_SETTINGS_ROOT = "Settings"
+_SETTINGS_TYPE = "FerroCAD::Settings"
+
 
 def _json(payload) -> str:
     return json.dumps(payload)
@@ -142,8 +147,18 @@ def _active_doc():
 
 
 def model_tree() -> str:
-    """Documents and their objects, for the inspector pane."""
+    """Documents and their objects, for the inspector pane.
+
+    A synthetic ``Settings`` root comes first when at least one provider feature
+    is registered. It is **not** a document: it holds one
+    ``Settings/<Feature>`` node per feature, whose rows are the active
+    provider's schema (see :func:`properties`). With nothing registered there is
+    nothing to configure, so the list is exactly the documents.
+    """
     docs = []
+    settings = _settings_root()
+    if settings["objects"]:
+        docs.append(settings)
     for name in FreeCAD.listDocuments():
         doc = FreeCAD.getDocument(name)
         if doc is None:
@@ -154,6 +169,77 @@ def model_tree() -> str:
         ]
         docs.append({"name": doc.Name, "label": doc.Label, "objects": objects})
     return _json(docs)
+
+
+def _settings_root() -> dict:
+    """The synthetic settings root: one node per registered feature."""
+    features = []
+    seen = set()
+    for manifest in FreeCADGui.providers():
+        feature = manifest["feature"]
+        if feature in seen:
+            continue
+        seen.add(feature)
+        features.append(feature)
+    objects = [
+        {
+            "name": f"{_SETTINGS_ROOT}/{feature}",
+            "label": str(feature).title(),
+            "type": _SETTINGS_TYPE,
+        }
+        for feature in features
+    ]
+    return {"name": _SETTINGS_ROOT, "label": _SETTINGS_ROOT, "objects": objects}
+
+
+def _settings_feature(object_name):
+    """The registered feature id for a synthetic ``Settings/<Feature>`` path.
+
+    Returns ``None`` when the path is not in the synthetic namespace. A segment
+    that does not name a registered feature is returned as-is, so the caller can
+    report the unknown path in the usual style (``[]`` / ``ok: false``).
+    """
+    prefix = _SETTINGS_ROOT + "/"
+    if not isinstance(object_name, str) or not object_name.startswith(prefix):
+        return None
+    node = object_name[len(prefix):]
+    features = []
+    for manifest in FreeCADGui.providers():
+        feature = manifest["feature"]
+        if feature not in features:
+            features.append(feature)
+    if node in features:
+        return node
+    for feature in features:
+        if str(feature).title() == node:
+            return feature
+    return node
+
+
+def _settings_properties(feature: str) -> list:
+    """The rows under ``Settings/<Feature>``: the provider selector, then settings."""
+    manifests = FreeCADGui.providers(feature)
+    if not manifests:
+        return []
+    active = FreeCADGui.activeProvider(feature)
+    label = next(
+        (item["label"] for item in manifests if item["backend"] == active),
+        str(active or ""),
+    )
+    rows = [
+        {
+            "name": "provider",
+            "label": "Provider",
+            "type": "App::PropertyEnumeration",
+            "value": label,
+            "status": "provider",
+            "editable": True,
+            "kind": "enum",
+            "choices": [item["label"] for item in manifests],
+        }
+    ]
+    rows.extend(FreeCADGui.settings(feature))
+    return rows
 
 
 def _expression_properties(obj) -> set:
@@ -170,7 +256,15 @@ def properties(object_name: str) -> str:
     ``editable`` marks a property the editor can change, and ``kind`` selects the
     control (and the coercion in :func:`set_property`). A property set by an
     expression is read-only, because a recompute would overwrite the edit.
+
+    ``Settings/<Feature>`` is resolved first and needs no active document: its
+    rows are the feature's provider selector followed by the active provider's
+    settings schema. An unknown ``Settings/...`` path is ``[]``. Document names
+    never contain ``/``, so the two namespaces cannot collide.
     """
+    feature = _settings_feature(object_name)
+    if feature is not None:
+        return _json(_settings_properties(feature))
     doc = _active_doc()
     obj = doc.getObject(object_name)
     if obj is None:
@@ -222,7 +316,14 @@ def set_property(object_name: str, prop: str, text: str) -> str:
     Returns ``{"ok": bool, "error": str}``. The transaction makes the edit a
     single undo step; recompute then propagates it (for example to an
     expression-driven property elsewhere in the document).
+
+    ``Settings/<Feature>`` routes here too: ``provider`` switches the active
+    backend (label or backend id), anything else goes to
+    :func:`FreeCADGui.setSetting`. Neither needs an active document.
     """
+    feature = _settings_feature(object_name)
+    if feature is not None:
+        return _json(_set_setting(feature, object_name, prop, text))
     doc = _active_doc()
     obj = doc.getObject(object_name)
     if obj is None:
@@ -248,6 +349,32 @@ def set_property(object_name: str, prop: str, text: str) -> str:
     doc.commitTransaction()
     doc.recompute()
     return _json({"ok": True, "error": ""})
+
+
+def _set_setting(feature: str, object_name: str, prop: str, text: str) -> dict:
+    """Route one ``Settings/<Feature>`` edit; never raises into the shell."""
+    manifests = FreeCADGui.providers(feature)
+    if not manifests:
+        return {"ok": False, "error": f"no object {object_name!r}"}
+    if prop == "provider":
+        backend = next(
+            (
+                item["backend"]
+                for item in manifests
+                if text in (item["label"], item["backend"])
+            ),
+            None,
+        )
+        if backend is None:
+            return {
+                "ok": False,
+                "error": f"no provider {text!r} for feature {feature!r}",
+            }
+        try:
+            return FreeCADGui.setActiveProvider(feature, backend)
+        except Exception as exc:  # noqa: BLE001 - a bad id is not fatal here
+            return {"ok": False, "error": str(exc)}
+    return FreeCADGui.setSetting(feature, prop, text)
 
 
 def add_namespace(name: str, value) -> None:

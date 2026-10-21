@@ -132,6 +132,28 @@ Output:
 2.0
 ```
 
+## Advertised settings (providers)
+
+If the mod owns a **feature provider** (see [`providers.md`](providers.md)), do not
+write another dialog: declare the knobs in `registerProvider(settings=[...])`.
+
+```python
+FreeCADGui.registerProvider(
+    "grid", "mymod", "My grid",
+    settings=[
+        {"name": "spacing", "label": "Spacing", "kind": "quantity",
+         "unit": "mm", "default": 10.0, "min": 0.1},
+    ],
+)
+```
+
+FerroCAD stores each value under
+`User parameter:BaseApp/Preferences/Mods/<feature>/<backend>` and renders the rows
+under `Settings/<Feature>`; `setSetting` validates and then runs the backend's
+`refresh`. That is what gives the user one surface across backends instead of a
+different dialog per mod. A provider with no `settings` keeps its `command` as its
+settings entry.
+
 ## The mod pattern
 
 Use one group per mod, for example

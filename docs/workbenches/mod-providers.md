@@ -166,11 +166,11 @@ callback easy to drive from a script or a test.
 
 ## Notes and limits
 
-- **Planned: advertised settings.** The task in
-  [`../tasks/settings-model.md`](../tasks/settings-model.md) adds a `settings` schema to
-  `registerProvider` so a provider's knobs render in the property pane instead of a
-  per-mod dialog. It is not implemented yet; today `Mods_Settings` uses the dialog
-  protocol (`docs/workbenches/actions-and-tools.md` §6).
+- **Advertised settings (S0 landed).** A provider can declare a `settings` schema;
+  [`../tasks/settings-model.md`](../tasks/settings-model.md) S0/S1 implement the schema,
+  storage, `settings()`/`setSetting()` and the `Settings/<Feature>` tree node. The
+  native `FreeCAD.Grid` migration (S4) is still pending, so the grid popover's settings
+  half (chrome T4/T5) waits on it.
 - There is no native Rust settings panel yet; `Mods_Settings` uses the dialog
   protocol (`docs/workbenches/actions-and-tools.md` §6).
 - Labels should be unique within a feature; the dialog maps a value back to a

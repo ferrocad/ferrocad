@@ -19,11 +19,13 @@ _`Selection` and `ViewState` are read-only snapshots pushed by the shell._
 | `listCommands() -> list` | The registered command ids, in registration order. |
 | `providers(feature=None) -> list` | The provider manifests, in registration order. |
 | `refreshProviders(feature: str) -> dict` | Ask the active backend of ``feature`` to re-read the shared state. |
-| `registerProvider(feature: str, backend: str, label: str, command=None, priority: int = 0, activate=None, deactivate=None, refresh=None)` | Declare that ``backend`` provides ``feature`` (called from ``InitGui.py``). |
+| `registerProvider(feature: str, backend: str, label: str, command=None, priority: int = 0, activate=None, deactivate=None, refresh=None, settings=None)` | Declare that ``backend`` provides ``feature`` (called from ``InitGui.py``). |
 | `removeCommand(name: str) -> None` | Drop ``name`` from the registry (a no-op when absent). |
 | `removeOverlay(node) -> bool` | Drop a previously registered overlay, keyed by Python object identity. |
 | `runCommand(name: str, *args)` | Invoke ``name`` and return whatever ``Activated`` returned. |
 | `setActiveProvider(feature: str, backend: str) -> dict` | Make ``backend`` the active provider for ``feature`` and apply it. |
+| `setSetting(feature: str, name: str, value) -> dict` | Coerce, validate and store one setting, then refresh the provider. |
+| `settings(feature: str, backend=None) -> list` | The settings rows of ``feature``'s active provider (or ``backend``). |
 | `unregisterProvider(feature: str, backend: str) -> bool` | Drop a provider record; returns whether it existed. |
 
 ## Object `Selection`

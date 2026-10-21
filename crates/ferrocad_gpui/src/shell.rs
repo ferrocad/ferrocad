@@ -12,7 +12,7 @@ use std::sync::{Arc, Mutex};
 
 use gpui::{
     AnyElement, App, Context, Entity, FocusHandle, Focusable, IntoElement, KeyDownEvent, Render,
-    SharedString, Subscription, Window, div, prelude::*, px, rgb, rgba,
+    SharedString, Subscription, Window, WindowHandle, div, prelude::*, px, rgb, rgba,
 };
 
 use ferrocad_geom::SelectionRef;
@@ -30,14 +30,15 @@ use crate::display::{DisplaySync, StageMesh};
 use crate::python::{self, Bootstrap, DocumentNode, PropRow};
 use crate::selection::{self, SelectionItem};
 use crate::shortcuts::Accelerator;
+use crate::dev_tools::DevTools;
 use crate::view::{ProjectionName, ViewRequest, ViewState, WorkplaneAction};
 
-const BG: u32 = 0x101216;
-const PANEL: u32 = 0x16181d;
-const PANEL_ALT: u32 = 0x1d2026;
-const FG: u32 = 0xd8dbe0;
-const MUTED: u32 = 0x8b919a;
-const ACCENT: u32 = 0x2f4a6d;
+pub(crate) const BG: u32 = 0x101216;
+pub(crate) const PANEL: u32 = 0x16181d;
+pub(crate) const PANEL_ALT: u32 = 0x1d2026;
+pub(crate) const FG: u32 = 0xd8dbe0;
+pub(crate) const MUTED: u32 = 0x8b919a;
+pub(crate) const ACCENT: u32 = 0x2f4a6d;
 
 /// The console transcript: the log lines plus a fresh prompt.
 fn transcript_of(model: &Arc<Mutex<ShellModel>>) -> String {
@@ -69,6 +70,13 @@ pub struct ShellModel {
     pub status: String,
 }
 
+impl ShellModel {
+    /// The commands grouped by the surface that owns their control (P0.6, T0).
+    pub fn surfaces(&self) -> commands::SurfaceGroups<'_> {
+        commands::group_by_surface(&self.commands)
+    }
+}
+
 pub struct Shell {
     model: Arc<Mutex<ShellModel>>,
     /// The console transcript plus the live input line (S5's text area).
@@ -92,6 +100,16 @@ pub struct Shell {
     dialog_focus: FocusHandle,
     /// Focus the modal on the next render (it is opened outside a window context).
     focus_dialog: bool,
+    /// The window root's focus handle: `Esc` and the command shortcuts need a focused
+    /// element in the main window now that the console lives in Dev Tools.
+    root_focus: FocusHandle,
+    /// The one open header popover, keyed by its control (`"grid"`, `"wp"`, `"mods"`).
+    /// At most one is open at a time.
+    open_popover: Option<String>,
+    /// The Dev Tools second window, if one has been opened. The window owns no model:
+    /// its view reads this `Shell` entity. A closed window leaves the handle stale
+    /// until the next toggle notices and reopens.
+    dev_tools: Option<WindowHandle<DevTools>>,
     /// The viewport's event subscription (selection and interaction commits).
     _viewport_events: Option<Subscription>,
     _submit: Subscription,
@@ -205,6 +223,9 @@ impl Shell {
             dialog: None,
             dialog_focus: cx.focus_handle(),
             focus_dialog: false,
+            root_focus: cx.focus_handle(),
+            open_popover: None,
+            dev_tools: None,
             _viewport_events: None,
             _submit: submit,
         }
@@ -221,6 +242,143 @@ impl Shell {
     /// The console's focus handle, so the window can put the caret there at boot.
     pub fn console_focus_handle(&self, cx: &App) -> FocusHandle {
         self.console.read(cx).focus_handle(cx)
+    }
+
+    /// Whether the Dev Tools window is currently open.
+    pub fn dev_tools_open(&self, cx: &App) -> bool {
+        self.dev_tools
+            .and_then(|handle| cx.window_handle(handle.window_id()))
+            .is_some()
+    }
+
+    /// Open, focus or close the Dev Tools window (`Dev_ToggleTools`, `Ctrl+Shift+D`).
+    ///
+    /// The window is a second view over this same `Shell` entity — it never owns the
+    /// model and never boots a second interpreter. Opening is deferred by one effect
+    /// cycle: building the window draws its first frame, and that frame reads this
+    /// entity, so it must not happen while the caller already holds it mutably (the
+    /// command path does).
+    ///
+    /// Returns the status line for the toggle; the deferred open replaces it with
+    /// `dev tools: open` once the window exists.
+    pub fn toggle_dev_tools(&mut self, cx: &mut Context<Self>) -> String {
+        if self.dev_tools_open(cx) {
+            let Some(handle) = self.dev_tools.take() else {
+                return "dev tools: closed".to_string();
+            };
+            return match handle.update(cx, |_view, window, _cx| window.remove_window()) {
+                Ok(()) => "dev tools: closed".to_string(),
+                Err(_) => "dev tools: window already closed".to_string(),
+            };
+        }
+        // The handle may name a window the user closed with the title bar.
+        self.dev_tools = None;
+        self.open_dev_tools(cx)
+    }
+
+    /// Create the Dev Tools window around this shell entity.
+    fn open_dev_tools(&mut self, cx: &mut Context<Self>) -> String {
+        let shell = cx.entity();
+        cx.defer(move |cx| {
+            let handle = cx.open_window(crate::dev_tools::window_options(), {
+                let shell = shell.clone();
+                move |_window, cx| cx.new(|cx| DevTools::new(shell, cx))
+            });
+            match handle {
+                Ok(handle) => {
+                    let _ = handle.update(cx, |view, window, cx| {
+                        window.activate_window();
+                        window.focus(&view.focus_handle(cx), cx);
+                    });
+                    shell.update(cx, |shell, cx| {
+                        shell.dev_tools = Some(handle);
+                        shell.model.lock().unwrap().status = "dev tools: open".to_string();
+                        cx.notify();
+                    });
+                }
+                Err(error) => {
+                    shell.update(cx, |shell, cx| {
+                        let status = format!("dev tools: cannot open a window ({error})");
+                        shell.model.lock().unwrap().status = status.clone();
+                        shell.console_line(status, cx);
+                        cx.notify();
+                    });
+                }
+            }
+        });
+        "dev tools: opening".to_string()
+    }
+
+    /// The main window root's focus handle, so boot can focus the shell (the console
+    /// now lives in Dev Tools and is not in this window's element tree).
+    pub fn root_focus_handle(&self) -> FocusHandle {
+        self.root_focus.clone()
+    }
+
+    /// Whether the popover keyed `key` is the open one.
+    pub(crate) fn popover_open(&self, key: &str) -> bool {
+        self.open_popover.as_deref() == Some(key)
+    }
+
+    /// Open a header popover. Opening never runs the control's primary command, and
+    /// replaces any other open popover (one at a time).
+    pub(crate) fn open_popover(&mut self, key: &str, cx: &mut Context<Self>) {
+        if !self.popover_open(key) {
+            self.open_popover = Some(key.to_string());
+        }
+        cx.notify();
+    }
+
+    /// Close whichever popover is open; returns whether one was open.
+    pub(crate) fn close_popover(&mut self, cx: &mut Context<Self>) -> bool {
+        if self.open_popover.take().is_some() {
+            cx.notify();
+            true
+        } else {
+            false
+        }
+    }
+
+    /// The dock's `Search (Ctrl+K)` slot: a stub until the command palette exists.
+    /// It reports where the commands actually are rather than pretending to search.
+    pub(crate) fn search_stub(&mut self, cx: &mut Context<Self>) {
+        let status =
+            "search: no command palette yet — Dev Tools (Ctrl+Shift+D) lists every command"
+                .to_string();
+        self.model.lock().unwrap().status = status.clone();
+        self.console_line(status, cx);
+        cx.notify();
+    }
+
+    /// The shell's global key path, shared by both windows.
+    ///
+    /// `cancel_dialog` is enabled when the event comes from the Dev Tools window: the
+    /// modal lives in the main window, and `Esc` there must still reach it. The main
+    /// window keeps the modal's own focused `Esc` handling.
+    pub(crate) fn handle_key(
+        &mut self,
+        event: &KeyDownEvent,
+        cancel_dialog: bool,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        if event.keystroke.key == "escape" && self.close_popover(cx) {
+            return true;
+        }
+        if event.keystroke.key == "escape" {
+            if cancel_dialog && self.dialog.is_some() {
+                self.cancel_dialog(cx);
+                return true;
+            }
+            if self.dialog.is_none() && self.active_tool.is_some() {
+                self.cancel_tool(cx);
+                return true;
+            }
+        }
+        if let Some(id) = self.shortcut_for(event) {
+            self.run_command(&id, cx);
+            return true;
+        }
+        false
     }
 
     /// Create the 3D viewport, best-effort: it needs a GPU.
@@ -537,7 +695,20 @@ impl Shell {
     /// modal and the shell accepts or cancels it later through its token. One
     /// dialog at a time — a second request while one is open is rejected and its
     /// token dropped, so the facade never keeps an unreachable callback.
-    fn run_command(&mut self, id: &str, cx: &mut Context<Self>) {
+    pub(crate) fn run_command(&mut self, id: &str, cx: &mut Context<Self>) {
+        // Running any command dismisses the open popover: its menu has served its
+        // purpose, and a new dialog should not sit under a still-open menu.
+        self.open_popover = None;
+        // The Dev Tools toggle is shell chrome, not a workbench action: the window can
+        // only exist when there is a GPUI app. The Python command stays registered so
+        // every registry path (shortcut list, Dev Tools list, upstream script) sees it.
+        if id == crate::dev_tools::TOGGLE_COMMAND {
+            let status = self.toggle_dev_tools(cx);
+            self.model.lock().unwrap().status = status.clone();
+            self.console_line(status, cx);
+            cx.notify();
+            return;
+        }
         let outcome = match commands::run(id) {
             Ok(outcome) => outcome,
             Err(error) => {
@@ -1204,7 +1375,7 @@ fn tool_strip(status: &ToolStatus, cx: &mut Context<Shell>) -> impl IntoElement 
 }
 
 /// A slim panel header bar.
-fn panel_header(text: &str) -> impl IntoElement {
+pub(crate) fn panel_header(text: &str) -> impl IntoElement {
     div()
         .flex()
         .flex_row()
@@ -1215,81 +1386,6 @@ fn panel_header(text: &str) -> impl IntoElement {
         .text_xs()
         .text_color(rgb(MUTED))
         .child(text.to_string())
-}
-
-/// The workbench actions bar: one button per registered command (A1).
-///
-/// A disabled command stays visible — the user should see that the action exists —
-/// and a checkable one carries the accent. The bar appears whenever the app or a
-/// workbench registered something; the built-ins (`App_Delete`, `App_Move`) mean
-/// even the base app has a bar, with its actions greyed until a selection.
-fn actions_bar(model: &ShellModel, cx: &mut Context<Shell>) -> impl IntoElement {
-    let mut bar = div()
-        .flex()
-        .flex_row()
-        .items_center()
-        .gap_1()
-        .px_2()
-        .py_1()
-        .bg(rgb(PANEL))
-        .border_1()
-        .border_color(rgba(0xffffff14));
-    for command in &model.commands {
-        let id = command.id.clone();
-        let enabled = command.enabled;
-        let checked = command.checked;
-        let mut button = div()
-            .id(SharedString::from(format!("command-{id}")))
-            .px_2()
-            .py_1()
-            .rounded_sm()
-            .text_xs()
-            .text_color(rgb(if enabled { FG } else { MUTED }))
-            .when(checked, |el| el.bg(rgb(ACCENT)))
-            .when(enabled, |el| {
-                el.cursor_pointer().hover(|style| style.bg(rgb(PANEL_ALT)))
-            })
-            .child(command.label().to_string());
-        if !command.tooltip.is_empty() {
-            let mut tip = command.tooltip.clone();
-            if !command.accel.is_empty() {
-                tip.push_str("  ·  ");
-                tip.push_str(&command.accel);
-            }
-            button = button.tooltip(move |_window, cx| {
-                cx.new(|_| CommandTooltip {
-                    text: tip.clone().into(),
-                })
-                .into()
-            });
-        }
-        if enabled {
-            button = button
-                .on_click(cx.listener(move |this, _event, _window, cx| this.run_command(&id, cx)));
-        }
-        bar = bar.child(button);
-    }
-    bar
-}
-
-/// The actions bar's hover text: the command's `ToolTip` and its accelerator.
-struct CommandTooltip {
-    text: SharedString,
-}
-
-impl Render for CommandTooltip {
-    fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
-        div()
-            .px_2()
-            .py_1()
-            .rounded_sm()
-            .bg(rgb(PANEL_ALT))
-            .border_1()
-            .border_color(rgba(0xffffff14))
-            .text_xs()
-            .text_color(rgb(FG))
-            .child(self.text.clone())
-    }
 }
 
 /// The modal for an open command dialog (A3): a glass panel over a dimmed shell.
@@ -1482,7 +1578,7 @@ fn dialog_arrow(
 }
 
 /// The model inspector: documents and their objects.
-fn tree_panel(model: &ShellModel, cx: &mut Context<Shell>) -> impl IntoElement {
+pub(crate) fn tree_panel(model: &ShellModel, cx: &mut Context<Shell>) -> impl IntoElement {
     let mut rows = div()
         .id("tree-scroll")
         .flex()
@@ -1540,16 +1636,18 @@ fn tree_panel(model: &ShellModel, cx: &mut Context<Shell>) -> impl IntoElement {
     div()
         .flex()
         .flex_col()
-        .w(px(260.))
-        .h_full()
+        .w_full()
+        .flex_1()
+        .min_h_0()
         .bg(rgb(PANEL))
+        .debug_selector(|| "tree-panel".to_string())
         .child(panel_header("Model"))
         .child(rows)
 }
 
 /// The property editor: read-only rows plus an uncontrolled field for each
 /// editable property.
-fn properties_panel(
+pub(crate) fn properties_panel(
     shell: &mut Shell,
     model: &ShellModel,
     window: &Window,
@@ -1648,9 +1746,11 @@ fn properties_panel(
     div()
         .flex()
         .flex_col()
-        .w(px(320.))
-        .h_full()
+        .w_full()
+        .flex_1()
+        .min_h_0()
         .bg(rgb(PANEL))
+        .debug_selector(|| "properties-panel".to_string())
         .child(panel_header("Properties"))
         .child(rows)
 }
@@ -1709,7 +1809,10 @@ fn console_button(
 
 /// The Python console: one text area (scrollback plus prompt) and runnable
 /// snippets.
-fn console_panel(console: &Entity<TextAreaState>, cx: &mut Context<Shell>) -> impl IntoElement {
+pub(crate) fn console_panel(
+    console: &Entity<TextAreaState>,
+    cx: &mut Context<Shell>,
+) -> impl IntoElement {
     let actions = div()
         .flex()
         .flex_row()
@@ -1725,9 +1828,47 @@ fn console_panel(console: &Entity<TextAreaState>, cx: &mut Context<Shell>) -> im
         .flex_col()
         .h(px(160.))
         .bg(rgb(PANEL))
+        .debug_selector(|| "console-panel".to_string())
         .child(panel_header("Python console"))
         .child(console.clone())
         .child(actions)
+}
+
+/// The Dev Tools window's body: the whole command surface, the inspector, the property
+/// editor and the console in one column (P0.5).
+///
+/// It is built from the shell's `Context`, so every row runs against the same `Shell`
+/// entity the main window renders. The viewport is deliberately **not** here: gpui can
+/// render an entity in two windows, but the 3D viewport must only be drawn once.
+pub(crate) fn dev_tools_body(
+    shell: &mut Shell,
+    focus: &FocusHandle,
+    window: &Window,
+    cx: &mut Context<Shell>,
+) -> AnyElement {
+    let model = shell.snapshot();
+    div()
+        .id("dev-tools-root")
+        .flex()
+        .flex_col()
+        .size_full()
+        .bg(rgb(BG))
+        .text_color(rgb(FG))
+        .debug_selector(|| "dev-tools".to_string())
+        .track_focus(focus)
+        .focusable()
+        // Commands and shortcuts run from either window. `Esc` also reaches the modal
+        // and tool paths, which stay on the shell root.
+        .on_key_down(cx.listener(|this, event: &KeyDownEvent, _window, cx| {
+            if this.handle_key(event, true, cx) {
+                cx.stop_propagation();
+            }
+        }))
+        .child(crate::chrome::command_list_panel(&model, cx))
+        .child(tree_panel(&model, cx))
+        .child(properties_panel(shell, &model, window, cx))
+        .child(console_panel(&shell.console, cx))
+        .into_any_element()
 }
 
 impl Render for Shell {
@@ -1747,25 +1888,40 @@ impl Render for Shell {
             .min_w_0()
             .h_full()
             .bg(rgb(BG))
-            .child(panel_header("3D viewport"));
+            .debug_selector(|| "main-viewport".to_string())
+            .child(crate::chrome::viewport_header(
+                &model,
+                self.open_popover.as_deref(),
+                cx,
+            ));
         // The tool strip sits directly under the pane header while a session runs; it
         // disappears the moment the tool finishes or is cancelled.
         let viewport = match model.tool.as_ref().filter(|tool| tool.is_active()) {
             Some(tool) => viewport.child(tool_strip(tool, cx)),
             None => viewport,
         };
-        let viewport = viewport.child(match &self.viewport {
-            Some(viewport) => viewport.clone().into_any_element(),
-            None => div()
-                .flex()
-                .flex_1()
-                .items_center()
-                .justify_center()
-                .text_sm()
-                .text_color(rgb(MUTED))
-                .child("viewport (no GPU)")
-                .into_any_element(),
-        });
+        // The canvas hosts the viewport and the action dock, which floats over its
+        // bottom edge. The dock's wrapper has no hitbox, so the canvas still receives
+        // pointer events around the panel.
+        let canvas = div()
+            .relative()
+            .flex()
+            .flex_1()
+            .min_h_0()
+            .child(match &self.viewport {
+                Some(viewport) => viewport.clone().into_any_element(),
+                None => div()
+                    .flex()
+                    .flex_1()
+                    .items_center()
+                    .justify_center()
+                    .text_sm()
+                    .text_color(rgb(MUTED))
+                    .child("viewport (no GPU)")
+                    .into_any_element(),
+            })
+            .child(crate::chrome::action_dock(&model, cx));
+        let viewport = viewport.child(canvas);
 
         let hover = self.hover_line(cx);
         let status = div()
@@ -1791,54 +1947,30 @@ impl Render for Shell {
             )
             .child(format!("FreeCAD {} · {}", model.version, model.backend));
 
+        // The reset: the main window is the frame, the viewport and the status line.
+        // The actions, inspector, property editor and console live in Dev Tools, and a
+        // modal still opens here, over the canvas the user is looking at.
         let content = div()
             .flex()
             .flex_col()
             .size_full()
             .bg(rgb(BG))
-            .text_color(rgb(FG));
-        let content = if model.commands.is_empty() {
-            content
-        } else {
-            content.child(actions_bar(&model, cx))
-        };
-        let content = content
-            .child(
-                div()
-                    .flex()
-                    .flex_row()
-                    .flex_1()
-                    .min_h_0()
-                    .child(tree_panel(&model, cx))
-                    .child(viewport)
-                    .child(properties_panel(self, &model, window, cx)),
-            )
-            .child(console_panel(&self.console, cx))
+            .text_color(rgb(FG))
+            .child(viewport)
             .child(status);
 
-        // The modal sits above the whole shell, with a backdrop that blocks the
-        // panes underneath.
         let body = div()
             .id("shell-root")
             .relative()
             .size_full()
+            .debug_selector(|| "main-shell".to_string())
             .on_key_down(cx.listener(|this, event: &KeyDownEvent, _window, cx| {
-                // The focused viewport handles Esc itself; when the key bubbles here
-                // (the user started a tool from the bar and has not clicked the
-                // viewport yet) cancel the session the same way.
-                if event.keystroke.key == "escape"
-                    && this.dialog.is_none()
-                    && this.active_tool.is_some()
-                {
+                if this.handle_key(event, false, cx) {
                     cx.stop_propagation();
-                    this.cancel_tool(cx);
-                    return;
-                }
-                if let Some(id) = this.shortcut_for(event) {
-                    cx.stop_propagation();
-                    this.run_command(&id, cx);
                 }
             }))
+            .track_focus(&self.root_focus)
+            .focusable()
             .child(content);
         let body = if self.dialog.is_some() {
             body.child(dialog_overlay(self, cx))
@@ -1897,13 +2029,16 @@ mod tests {
         let mut cx = VisualTestContext::from_window(window.into(), cx);
         let shell: Entity<Shell> = window.root(&mut cx).unwrap();
 
+        // The console lives in Dev Tools now: open it, then drive the same focus path.
+        let mut dev_cx = open_dev_tools(&mut cx, &shell);
+
         // Typing in the console input and pressing Enter runs the line through the
         // interpreter (S5 previewed): the log gains the echoed line and the result,
         // and the field is cleared.
         let console = shell.read_with(&cx, |shell, cx| shell.console_focus_handle(cx));
-        cx.update(|window, cx| window.focus(&console, cx));
-        cx.simulate_input("len(doc.Objects)");
-        cx.simulate_keystrokes("enter");
+        dev_cx.update(|window, cx| window.focus(&console, cx));
+        dev_cx.simulate_input("len(doc.Objects)");
+        dev_cx.simulate_keystrokes("enter");
         {
             let m = model.lock().unwrap();
             assert!(
@@ -1932,12 +2067,18 @@ mod tests {
         let mut cx = VisualTestContext::from_window(window.into(), cx);
         let shell: Entity<Shell> = window.root(&mut cx).unwrap();
 
-        // Select Params so the editor builds one field per editable property.
+        // Select Params so the editor builds one field per editable property. The
+        // property editor is in Dev Tools now, so the window must be open and drawn
+        // before the field exists.
+        let mut dev_cx = open_dev_tools(&mut cx, &shell);
         cx.update(|_window, cx| {
             shell.update(cx, |shell, cx| {
                 shell.select("Params", cx);
                 cx.notify();
             });
+        });
+        dev_cx.update(|window, cx| {
+            let _ = window.draw(cx);
         });
 
         let field = shell.read_with(&cx, |shell, _| {
@@ -1948,10 +2089,11 @@ mod tests {
                 .state
                 .clone()
         });
-        cx.update(|window, cx| window.focus(&field.read(cx).focus_handle(cx), cx));
-        cx.simulate_keystrokes("cmd-a");
-        cx.simulate_input("25 mm");
-        cx.simulate_keystrokes("enter");
+        // The field is rendered in the Dev Tools window; type there.
+        dev_cx.update(|window, cx| window.focus(&field.read(cx).focus_handle(cx), cx));
+        dev_cx.simulate_keystrokes("cmd-a");
+        dev_cx.simulate_input("25 mm");
+        dev_cx.simulate_keystrokes("enter");
 
         // The selected object's row reflects the committed value...
         let length = shell.read_with(&cx, |shell, _| {
@@ -2116,6 +2258,7 @@ if "Test_Dialog" not in FreeCADGui.listCommands():
     #[gpui::test]
     fn a_dialog_view_request_changes_the_view_state(cx: &mut TestAppContext) {
         let _guard = crate::PYTHON_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        reset_grid_state();
         let model = Shell::boot().expect("boot shell");
         let shell = cx.update(|cx| cx.new(|cx| Shell::from_model(model.clone(), cx)));
 
@@ -2236,10 +2379,12 @@ if "Test_Shortcut" not in FreeCADGui.listCommands():
         cx.update(|_window, cx| shell.update(cx, |shell, cx| shell.refresh_commands(cx)));
 
         // The console owns focus; Ctrl+Shift+K is not a text-editing chord, so it
-        // bubbles to the shell root and runs the command.
+        // bubbles to the Dev Tools root and runs the command — the same shell path as
+        // a click, from either window.
+        let mut dev_cx = open_dev_tools(&mut cx, &shell);
         let console = shell.read_with(&cx, |shell, cx| shell.console_focus_handle(cx));
-        cx.update(|window, cx| window.focus(&console, cx));
-        cx.simulate_keystrokes("ctrl-shift-k");
+        dev_cx.update(|window, cx| window.focus(&console, cx));
+        dev_cx.simulate_keystrokes("ctrl-shift-k");
 
         assert_eq!(model.lock().unwrap().status, "shortcut ran");
     }
@@ -2263,6 +2408,7 @@ if "Test_Shortcut" not in FreeCADGui.listCommands():
     #[gpui::test]
     fn a_view_request_toggles_the_grid_and_its_check_mark(cx: &mut TestAppContext) {
         let _guard = crate::PYTHON_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        reset_grid_state();
         let model = Shell::boot().expect("boot shell");
         let shell = cx.update(|cx| cx.new(|cx| Shell::from_model(model.clone(), cx)));
 
@@ -2334,7 +2480,7 @@ if "Test_Tool" not in FreeCADGui.listCommands():
     FreeCADGui.addCommand("Test_Tool", _TestTool())
     FreeCADGui.addCommand("Test_MissingTool", _TestMissingTool())
 "#;
-        let registered = cx.update(|cx| crate::python::evaluate(script));
+        let registered = cx.update(|_cx| crate::python::evaluate(script));
         assert!(registered.unwrap().ok);
         cx.update(|cx| shell.update(cx, |shell, cx| shell.refresh_commands(cx)));
 
@@ -2431,6 +2577,494 @@ if "Test_Tool" not in FreeCADGui.listCommands():
         });
     }
 
+    /// Open the Dev Tools window from `shell` and return a visual context for it.
+    ///
+    /// Opening is deferred by one effect cycle (the first frame reads the shell), so
+    /// the window exists by the time `update` returns.
+    fn open_dev_tools(cx: &mut VisualTestContext, shell: &Entity<Shell>) -> VisualTestContext {
+        let status = cx.update(|_window, cx| {
+            shell.update(cx, |shell, cx| shell.toggle_dev_tools(cx))
+        });
+        assert_eq!(status, "dev tools: opening");
+        let handle = cx
+            .windows()
+            .into_iter()
+            .find(|handle| handle.downcast::<DevTools>().is_some())
+            .expect("the Dev Tools window opened");
+        let mut dev_cx = VisualTestContext::from_window(handle, cx);
+        dev_cx.update(|window, cx| {
+            let _ = window.draw(cx);
+        });
+        dev_cx
+    }
+
+    /// P0.5/D3: the main window keeps the frame, the viewport and the status line.
+    /// The panels are in the second window, not merely hidden.
+    #[gpui::test]
+    fn the_main_window_carries_only_the_viewport_and_status(cx: &mut TestAppContext) {
+        let _guard = crate::PYTHON_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let model = Shell::boot().expect("boot shell");
+        let window = cx.update(|cx| {
+            let model = model.clone();
+            cx.open_window(Default::default(), move |_window, cx| {
+                cx.new(|cx| Shell::from_model(model.clone(), cx))
+            })
+            .unwrap()
+        });
+        let mut cx = VisualTestContext::from_window(window.into(), cx);
+        cx.update(|window, cx| {
+            let _ = window.draw(cx);
+        });
+
+        assert!(cx.debug_bounds("main-shell").is_some());
+        assert!(cx.debug_bounds("main-viewport").is_some());
+        assert!(
+            cx.debug_bounds("dev-command-list").is_none(),
+            "the command bar left the main window"
+        );
+        assert!(cx.debug_bounds("tree-panel").is_none());
+        assert!(cx.debug_bounds("properties-panel").is_none());
+        assert!(cx.debug_bounds("console-panel").is_none());
+    }
+
+    /// P0.5/D2/D5: the Dev Tools window renders the four panels over the same shell and
+    /// lists every command with its live enablement (disabled rows stay visible).
+    #[gpui::test]
+    fn the_dev_tools_window_lists_commands_with_enablement(cx: &mut TestAppContext) {
+        let _guard = crate::PYTHON_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let model = Shell::boot().expect("boot shell");
+        let window = cx.update(|cx| {
+            let model = model.clone();
+            cx.open_window(Default::default(), move |_window, cx| {
+                cx.new(|cx| Shell::from_model(model.clone(), cx))
+            })
+            .unwrap()
+        });
+        let mut cx = VisualTestContext::from_window(window.into(), cx);
+        let shell: Entity<Shell> = window.root(&mut cx).unwrap();
+
+        // The built-ins are present and disabled until a selection.
+        let commands = model.lock().unwrap().commands.clone();
+        assert!(!commands.is_empty());
+        let delete = commands
+            .iter()
+            .find(|command| command.id == "App_Delete")
+            .expect("App_Delete is registered");
+        assert!(!delete.enabled, "nothing is selected yet");
+        assert!(commands.iter().all(|command| !command.id.is_empty()));
+
+        let mut dev_cx = open_dev_tools(&mut cx, &shell);
+        assert!(dev_cx.debug_bounds("dev-command-list").is_some());
+        assert!(dev_cx.debug_bounds("tree-panel").is_some());
+        assert!(dev_cx.debug_bounds("properties-panel").is_some());
+        assert!(dev_cx.debug_bounds("console-panel").is_some());
+        assert!(
+            dev_cx.debug_bounds("dev-command-App_Delete").is_some(),
+            "a disabled command is still listed"
+        );
+
+        // Selecting in the inspector feeds the property editor from the same entity.
+        cx.update(|_window, cx| shell.update(cx, |shell, cx| shell.select("Params", cx)));
+        dev_cx.update(|window, cx| {
+            let _ = window.draw(cx);
+        });
+        let has_field = cx.update(|_window, cx| {
+            shell.read(cx).prop_inputs.contains_key("Params.Length")
+        });
+        assert!(has_field, "the Dev Tools property editor built the field");
+        let delete_enabled = model
+            .lock()
+            .unwrap()
+            .commands
+            .iter()
+            .find(|command| command.id == "App_Delete")
+            .map(|command| command.enabled)
+            .unwrap_or(false);
+        assert!(delete_enabled, "the list follows IsActive");
+
+        // A modal opens in the main window (the shell owns it); Esc from the Dev
+        // Tools window must still reach it instead of being swallowed.
+        cx.update(|_window, cx| {
+            shell.update(cx, |shell, cx| shell.run_command("App_Move", cx))
+        });
+        assert!(
+            cx.update(|_window, cx| shell.read(cx).dialog.is_some()),
+            "the move dialog opened"
+        );
+        dev_cx.simulate_keystrokes("escape");
+        assert!(
+            cx.update(|_window, cx| shell.read(cx).dialog.is_none()),
+            "Esc in Dev Tools cancelled the modal"
+        );
+
+        // A command run from the shell updates the same model the window reads.
+        cx.update(|_window, cx| {
+            shell.update(cx, |shell, cx| shell.run_command("App_ViewWorkplane", cx))
+        });
+        assert_eq!(model.lock().unwrap().status, "view: no viewport");
+    }
+
+    /// Reset the interpreter's process-global grid store and preferences.
+    ///
+    /// Tests share one CPython instance. `FreeCAD.Grid` lives in the parameter
+    /// store, not in the fresh document, so a test that toggles it or writes a
+    /// preference leaks into the next one. Call this (with the lock held) when a
+    /// test's assertions depend on the default grid.
+    fn reset_grid_state() {
+        let script = r#"
+import FreeCAD
+prefs = FreeCAD.ParamGet("User parameter:BaseApp/Preferences/View")
+prefs.SetBool("GridEnabled", False)
+prefs.SetFloat("GridMinorStep", 10.0)
+prefs.SetFloat("GridMajorStep", 100.0)
+prefs.SetFloat("GridRadius", 0.0)
+"#;
+        let reset = crate::python::evaluate(script).expect("reset the grid state");
+        assert!(reset.ok, "{}", reset.output);
+    }
+
+    /// P0.5/D4/D5: closing and reopening preserves the model, the selection and the
+    /// console; the second window never owns a copy.
+    #[gpui::test]
+    fn toggling_dev_tools_preserves_the_model(cx: &mut TestAppContext) {
+        let _guard = crate::PYTHON_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let model = Shell::boot().expect("boot shell");
+        let window = cx.update(|cx| {
+            let model = model.clone();
+            cx.open_window(Default::default(), move |_window, cx| {
+                cx.new(|cx| Shell::from_model(model.clone(), cx))
+            })
+            .unwrap()
+        });
+        let mut cx = VisualTestContext::from_window(window.into(), cx);
+        let shell: Entity<Shell> = window.root(&mut cx).unwrap();
+
+        cx.update(|_window, cx| shell.update(cx, |shell, cx| shell.select("Params", cx)));
+        let (console_len, selection) = {
+            let m = model.lock().unwrap();
+            (m.console.len(), m.selection.clone())
+        };
+
+        let _dev_cx = open_dev_tools(&mut cx, &shell);
+        assert!(cx.update(|_window, cx| shell.read(cx).dev_tools_open(cx)));
+
+        let status = cx.update(|_window, cx| {
+            shell.update(cx, |shell, cx| shell.toggle_dev_tools(cx))
+        });
+        assert_eq!(status, "dev tools: closed");
+        assert!(!cx.update(|_window, cx| shell.read(cx).dev_tools_open(cx)));
+        assert!(
+            cx.windows().len() == 1,
+            "only the main window remains: {:?}",
+            cx.windows()
+        );
+
+        // Nothing in the document, the selection or the transcript changed.
+        {
+            let m = model.lock().unwrap();
+            assert_eq!(m.console.len(), console_len);
+            assert_eq!(m.selection, selection);
+            assert_eq!(m.tree.len(), 1, "the sample document is intact");
+        }
+
+        // Reopening builds a new view around the same shell entity and model.
+        let _dev_cx = open_dev_tools(&mut cx, &shell);
+        assert!(cx.update(|_window, cx| shell.read(cx).dev_tools_open(cx)));
+        let shared = cx.update(|_window, cx| {
+            shell.read(cx).model.lock().unwrap().selection.clone()
+        });
+        assert_eq!(shared, selection);
+    }
+
+    /// P0.5/D4: `Dev_ToggleTools` is registered and its headless path reports a status
+    /// instead of pretending a window exists.
+    #[gpui::test]
+    fn the_dev_tools_command_has_a_headless_status(_cx: &mut TestAppContext) {
+        let _guard = crate::PYTHON_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let model = Shell::boot().expect("boot shell");
+        drop(model);
+
+        let outcome = crate::commands::run(crate::dev_tools::TOGGLE_COMMAND).expect("the bridge");
+        assert!(outcome.ok, "{}", outcome.error);
+        assert!(
+            outcome.status.contains("dev tools"),
+            "status: {}",
+            outcome.status
+        );
+        let commands = crate::python::commands().expect("the command list");
+        assert!(
+            commands
+                .iter()
+                .any(|command| command.id == crate::dev_tools::TOGGLE_COMMAND),
+            "the toggle is in the registry"
+        );
+    }
+
+    /// Paint the window once so a following `simulate_*` has hitboxes to dispatch to.
+    fn draw(cx: &mut VisualTestContext) {
+        cx.update(|window, cx| {
+            let _ = window.draw(cx);
+        });
+    }
+
+    /// Click the centre of the element with `selector` (it must have been drawn).
+    fn click_at(cx: &mut VisualTestContext, selector: &'static str) {
+        let bounds = cx
+            .debug_bounds(selector)
+            .unwrap_or_else(|| panic!("{selector} has no bounds"));
+        cx.simulate_click(bounds.center(), gpui::Modifiers::default());
+    }
+
+    /// T0/T6: every command the registry currently reports is on exactly one surface,
+    /// and the shipped metadata matches the documented mapping.
+    #[gpui::test]
+    fn every_registered_command_lands_on_exactly_one_surface(_cx: &mut TestAppContext) {
+        let _guard = crate::PYTHON_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let _model = Shell::boot().expect("boot shell");
+
+        // A mod that predates the metadata must still appear, on the dock.
+        let script = r#"
+import FreeCADGui
+class _Unannotated:
+    def Activated(self):
+        return {"status": "unannotated ran"}
+if "Test_Unannotated" not in FreeCADGui.listCommands():
+    FreeCADGui.addCommand("Test_Unannotated", _Unannotated())
+"#;
+        let registered = crate::python::evaluate(script).expect("evaluate");
+        assert!(registered.ok, "{}", registered.output);
+
+        let commands = crate::python::commands().expect("the command list");
+        let groups = crate::commands::group_by_surface(&commands);
+        assert_eq!(
+            groups.all().len(),
+            commands.len(),
+            "every command lands on one surface"
+        );
+        let mut ids: Vec<&str> = groups.all().iter().map(|command| command.id.as_str()).collect();
+        ids.sort_unstable();
+        ids.dedup();
+        assert_eq!(ids.len(), commands.len(), "no command is on two surfaces");
+
+        let find = |id: &str| {
+            commands
+                .iter()
+                .find(|command| command.id == id)
+                .unwrap_or_else(|| panic!("{id} is registered"))
+        };
+        use crate::commands::Surface;
+        assert_eq!(find("App_ToggleGrid").surface(), Surface::Grid);
+        assert_eq!(find("App_ToggleAxisCross").surface(), Surface::Axis);
+        assert_eq!(find("App_ViewWorkplane").surface(), Surface::Workplane);
+        assert_eq!(find("Mods_Settings").surface(), Surface::Mods);
+        assert_eq!(find("App_Delete").surface(), Surface::Dock);
+        assert_eq!(
+            find("Dev_ToggleTools").surface(),
+            Surface::Hidden,
+            "the Dev Tools toggle is chrome, not a workbench action"
+        );
+        assert_eq!(
+            find("View_GridSettings").parent(),
+            Some("App_ToggleGrid")
+        );
+        assert_eq!(
+            find("App_ReloadGridSettings").parent(),
+            Some("App_ToggleGrid")
+        );
+        assert_eq!(
+            find("App_ActivateWorkplane").parent(),
+            Some("App_ViewWorkplane")
+        );
+        assert_eq!(find("Test_Unannotated").surface(), Surface::Dock);
+    }
+
+    /// T1/T2: the header split button's label runs the primary command; the caret
+    /// opens the popover without running it; `Esc` and an outside click dismiss it.
+    #[gpui::test]
+    fn the_grid_split_button_runs_the_label_and_the_caret_opens(cx: &mut TestAppContext) {
+        let _guard = crate::PYTHON_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        reset_grid_state();
+        let model = Shell::boot().expect("boot shell");
+        let window = cx.update(|cx| {
+            let model = model.clone();
+            cx.open_window(Default::default(), move |_window, cx| {
+                cx.new(|cx| Shell::from_model(model.clone(), cx))
+            })
+            .unwrap()
+        });
+        let mut cx = VisualTestContext::from_window(window.into(), cx);
+        let shell: Entity<Shell> = window.root(&mut cx).unwrap();
+        draw(&mut cx);
+
+        // The controls exist in the viewport header row, right-aligned and ordered.
+        let width = cx.update(|window, _| window.viewport_size().width);
+        let grid = cx.debug_bounds("grid-label").expect("the Grid label");
+        let axis = cx.debug_bounds("axis-toggle").expect("the Axes toggle");
+        let wp = cx.debug_bounds("wp-label").expect("the WP label");
+        let mods = cx.debug_bounds("mods-label").expect("the Mods label");
+        assert!(grid.origin.x < axis.origin.x);
+        assert!(axis.origin.x < wp.origin.x);
+        assert!(wp.origin.x < mods.origin.x);
+        assert!(
+            grid.origin.x > width * 0.5,
+            "the controls are right-aligned (grid at {:?}, width {width:?})",
+            grid.origin.x
+        );
+
+        // The caret opens the grid popover and does not toggle the grid.
+        assert!(!model.lock().unwrap().view.grid);
+        click_at(&mut cx, "grid-caret");
+        assert!(
+            cx.update(|_window, cx| shell.read(cx).popover_open("grid")),
+            "the caret opened the popover"
+        );
+        assert!(!model.lock().unwrap().view.grid, "opening ran no command");
+        draw(&mut cx);
+        assert!(cx.debug_bounds("grid-popover").is_some());
+        assert!(
+            cx.debug_bounds("grid-row-View_GridSettings").is_some(),
+            "the popover lists the grid surface's children"
+        );
+        assert!(cx.debug_bounds("grid-row-App_ReloadGridSettings").is_some());
+
+        // Esc dismisses it and leaves the grid alone.
+        let root = cx.update(|_window, cx| shell.read(cx).root_focus_handle());
+        cx.update(|window, cx| window.focus(&root, cx));
+        cx.simulate_keystrokes("escape");
+        assert!(!cx.update(|_window, cx| shell.read(cx).popover_open("grid")));
+        assert!(!model.lock().unwrap().view.grid);
+
+        // A right-click on the label opens the popover and never runs the command.
+        let label = cx.debug_bounds("grid-label").expect("the Grid label");
+        cx.simulate_mouse_down(
+            label.center(),
+            gpui::MouseButton::Right,
+            gpui::Modifiers::default(),
+        );
+        cx.simulate_mouse_up(
+            label.center(),
+            gpui::MouseButton::Right,
+            gpui::Modifiers::default(),
+        );
+        assert!(
+            cx.update(|_window, cx| shell.read(cx).popover_open("grid")),
+            "a right-click opened the popover"
+        );
+        assert!(!model.lock().unwrap().view.grid, "and ran nothing");
+        cx.simulate_keystrokes("escape");
+
+        // An outside click dismisses it too (the viewport keeps the event: the
+        // popover has no backdrop).
+        draw(&mut cx);
+        click_at(&mut cx, "grid-caret");
+        assert!(cx.update(|_window, cx| shell.read(cx).popover_open("grid")));
+        draw(&mut cx);
+        cx.simulate_click(gpui::point(px(200.), px(300.)), gpui::Modifiers::default());
+        assert!(
+            !cx.update(|_window, cx| shell.read(cx).popover_open("grid")),
+            "an outside click dismissed the popover"
+        );
+
+        // One popover at a time: opening the workplane menu replaces the grid one.
+        draw(&mut cx);
+        click_at(&mut cx, "grid-caret");
+        draw(&mut cx);
+        click_at(&mut cx, "wp-caret");
+        assert!(cx.update(|_window, cx| shell.read(cx).popover_open("wp")));
+        assert!(!cx.update(|_window, cx| shell.read(cx).popover_open("grid")));
+        draw(&mut cx);
+        assert!(cx.debug_bounds("wp-popover").is_some());
+        assert!(cx.debug_bounds("grid-popover").is_none());
+        assert!(cx.debug_bounds("wp-row-App_ActivateWorkplane").is_some());
+        assert!(cx.debug_bounds("wp-row-App_ClearWorkplane").is_some());
+
+        // The Mods surface has no declared children, so its popover falls back to the
+        // surface's own commands rather than rendering an empty menu.
+        click_at(&mut cx, "mods-caret");
+        assert!(cx.update(|_window, cx| shell.read(cx).popover_open("mods")));
+        draw(&mut cx);
+        assert!(cx.debug_bounds("mods-row-Mods_Settings").is_some());
+        cx.simulate_keystrokes("escape");
+
+        // The label runs the primary command in one click and closes the menu.
+        click_at(&mut cx, "grid-label");
+        assert!(model.lock().unwrap().view.grid, "the label toggled the grid");
+        assert!(!cx.update(|_window, cx| shell.read(cx).popover_open("grid")));
+        click_at(&mut cx, "grid-label");
+        assert!(!model.lock().unwrap().view.grid, "and back off");
+
+        // The Axes control is a plain toggle for its own command.
+        assert!(model.lock().unwrap().view.axis_cross);
+        click_at(&mut cx, "axis-toggle");
+        assert!(!model.lock().unwrap().view.axis_cross);
+    }
+
+    /// T3: the action dock sits over the bottom-centre of the canvas, lists the dock
+    /// surface, and its rows follow `IsActive` while staying visible when disabled.
+    #[gpui::test]
+    fn the_action_dock_follows_the_selection(cx: &mut TestAppContext) {
+        let _guard = crate::PYTHON_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let model = Shell::boot().expect("boot shell");
+        let window = cx.update(|cx| {
+            let model = model.clone();
+            cx.open_window(Default::default(), move |_window, cx| {
+                cx.new(|cx| Shell::from_model(model.clone(), cx))
+            })
+            .unwrap()
+        });
+        let mut cx = VisualTestContext::from_window(window.into(), cx);
+        let shell: Entity<Shell> = window.root(&mut cx).unwrap();
+        draw(&mut cx);
+
+        let size = cx.update(|window, _| window.viewport_size());
+        let dock = cx.debug_bounds("action-dock").expect("the dock");
+        assert!(
+            dock.origin.y > size.height * 0.6,
+            "the dock is at the bottom of the canvas"
+        );
+        let centre = dock.center().x;
+        assert!(
+            centre > size.width * 0.4 && centre < size.width * 0.6,
+            "the dock is centred (at {centre:?}, width {:?})",
+            size.width
+        );
+        assert!(
+            cx.debug_bounds("dock-App_Delete").is_some(),
+            "a disabled dock command is still visible"
+        );
+        assert!(cx.debug_bounds("dock-search").is_some());
+        assert!(
+            !dock_enabled(&model, "App_Delete"),
+            "nothing is selected yet"
+        );
+
+        // A selection turns the built-ins on: the rows follow IsActive.
+        cx.update(|_window, cx| shell.update(cx, |shell, cx| shell.select("Params", cx)));
+        draw(&mut cx);
+        assert!(dock_enabled(&model, "App_Delete"));
+        assert!(dock_enabled(&model, "App_Move"));
+
+        // The Search slot is a stub that reports where the commands are.
+        click_at(&mut cx, "dock-search");
+        assert!(
+            model.lock().unwrap().status.contains("no command palette"),
+            "status: {}",
+            model.lock().unwrap().status
+        );
+    }
+
+    /// The dock's enablement comes from the same `IsActive` list the shell keeps.
+    fn dock_enabled(model: &Arc<Mutex<ShellModel>>, id: &str) -> bool {
+        model
+            .lock()
+            .unwrap()
+            .commands
+            .iter()
+            .find(|command| command.id == id)
+            .map(|command| command.enabled)
+            .unwrap_or(false)
+    }
+
     fn command_enabled(id: &str) -> bool {
         crate::python::commands()
             .expect("the command list")
@@ -2485,6 +3119,7 @@ if "Test_Tool" not in FreeCADGui.listCommands():
     #[gpui::test]
     fn a_grid_request_reaches_the_viewport(cx: &mut TestAppContext) {
         let _guard = crate::PYTHON_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        reset_grid_state();
         let model = Shell::boot().expect("boot shell");
         let window = cx.update(|cx| {
             let model = model.clone();
@@ -2538,6 +3173,7 @@ if "Test_Tool" not in FreeCADGui.listCommands():
     #[gpui::test]
     fn a_grid_settings_request_reaches_the_viewport(cx: &mut TestAppContext) {
         let _guard = crate::PYTHON_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        reset_grid_state();
         let model = Shell::boot().expect("boot shell");
         let window = cx.update(|cx| {
             let model = model.clone();

@@ -92,34 +92,57 @@ its modal over the viewport, where the user is looking.
 
 ## Subtasks
 
-- [ ] **D1 — extract panels.** `actions_bar`, `tree_panel`, `properties_panel`,
+- [x] **D1 — extract panels.** `actions_bar`, `tree_panel`, `properties_panel`,
       `console_panel` become reusable from a second view without duplicating state.
       Keep the existing `#[gpui::test]`s compiling.
-- [ ] **D2 — `DevTools` view.** A second-window view over `Entity<Shell>`; renders the
+- [x] **D2 — `DevTools` view.** A second-window view over `Entity<Shell>`; renders the
       four panels in a single column, observers refresh it with the shell.
-- [ ] **D3 — slim the main window.** Remove the four panels from `Shell::render`;
+- [x] **D3 — slim the main window.** Remove the four panels from `Shell::render`;
       keep the viewport, the status line and the dialog overlay.
-- [ ] **D4 — toggle and lifecycle.** `Dev_ToggleTools` + `Ctrl+Shift+D`, the
+- [x] **D4 — toggle and lifecycle.** `Dev_ToggleTools` + `Ctrl+Shift+D`, the
       `WindowHandle`, focus/close/reopen, and the headless status path.
-- [ ] **D5 — tests.** Headless: the main shell renders without the four panels; the
+- [x] **D5 — tests.** Headless: the main shell renders without the four panels; the
       Dev Tools view lists the commands with enablement; selecting in the inspector
       updates the property editor; running a command updates the shell; closing and
       reopening preserves the model; one interpreter only.
-- [ ] **D6 — docs.** Update `app-shell-vision.md` S1/S6 and `actions-and-tools.md`
-      (where the bar lives); note the reset in the TODO.
+- [x] **D6 — docs.** `app-shell-vision.md` §5 and `actions-and-tools.md` are updated,
+      and the TODO carries the reset.
+      *Partially done:* `actions-and-tools.md` is updated; `app-shell-vision.md` and
+      the TODO are the coordinator's to regenerate.
 
 ## Acceptance
 
 - The main window shows only the window frame, the viewport and the status line (plus
-  the transient tool strip while a tool runs, and a modal when one is open).
-- The Dev Tools window shows the actions bar, inspector, property editor and console;
-  they behave exactly as they did in the combined window.
-- A command run from Dev Tools opens its dialog in the main window and applies there.
+  the transient tool strip while a tool runs, and a modal when one is open). ✅
+- The Dev Tools window shows the commands, inspector, property editor and console;
+  they behave exactly as they did in the combined window. ✅ (The flat bar is replaced
+  by the vertical command list in P0.6/T6.)
+- A command run from Dev Tools opens its dialog in the main window and applies there. ✅
 - Closing the Dev Tools window does not change the document, stop the viewport, or
-  drop the selection; reopening restores the same view.
+  drop the selection; reopening restores the same view. ✅
 - `cargo test -p ferrocad_gpui` and `cargo test -p ferrocad_toy` pass; the toy starts
-  and can toggle the window.
-- No Python API change, no second interpreter.
+  and can toggle the window. ✅
+- No Python API change, no second interpreter. ✅
+
+## As built (2026-10-22)
+
+- The panels stay free functions (`pub(crate)` in `shell.rs`) rather than separate
+  `Render` views: the Dev Tools view builds them from the shell's `Context`, so their
+  listeners still run against the one `Shell` entity. `dev_tools::DevTools` only owns
+  the `Entity<Shell>`, a focus handle and a change subscription.
+- Opening the window is **deferred by one effect cycle** (`cx.defer`): `open_window`
+  draws the first frame synchronously, and that frame reads the shell, so creating it
+  inside the command's own `shell.update` would be re-entrant. The deferred open sets
+  the final `dev tools: open` status once the handle exists.
+- The main window's root has a focus handle now (`Shell::root_focus_handle`); boot
+  focuses it instead of the console, which no longer lives in that window's tree. That
+  keeps `Esc` and the shortcuts working from the main window.
+- `Dev_ToggleTools` is registered by `ferrocad_shell` (`Surface: "hidden"`,
+  `Ctrl+Shift+D`); its `Activated` returns `{"status": "dev tools: no GUI window to
+  toggle"}` for headless/upstream callers, while `Shell::run_command` intercepts the id
+  to own the actual window.
+- Shortcuts run from both windows through `Shell::handle_key`; the Dev Tools root also
+  forwards `Esc` to an open modal in the main window.
 
 ## Risks
 

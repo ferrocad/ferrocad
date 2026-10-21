@@ -9,8 +9,10 @@
 //! public `FreeCAD` Python API, exactly like a workbench (see
 //! `docs/architecture.md` and `docs/architecture/repackaging.md`).
 
+pub mod chrome;
 pub mod commands;
 pub mod contributions;
+pub mod dev_tools;
 pub mod dialog;
 pub mod display;
 pub mod python;
@@ -35,8 +37,9 @@ use gpui::{
     application, bounds, point, prelude::*, px, size,
 };
 
-pub use commands::{CommandInfo, CommandOutcome};
+pub use commands::{CommandInfo, CommandOutcome, Surface};
 pub use contributions::{Contributions, GizmoFactory, ManipulatorFactory};
+pub use dev_tools::DevTools;
 pub use dialog::{DialogField, DialogSpec};
 pub use display::{DisplaySync, StageMesh};
 pub use selection::SelectionItem;
@@ -153,8 +156,10 @@ pub fn run_with(config: HostConfig) {
             // Best-effort: needs a GPU. Headless tests skip this and keep the
             // placeholder (see `Shell::enable_viewport`).
             shell.update(cx, |shell, cx| shell.enable_viewport(cx));
-            let console = shell.read(cx).console_focus_handle(cx);
-            window.focus(&console, cx);
+            // The console now lives in Dev Tools, so the main window focuses its root:
+            // `Esc` and the command shortcuts bubble from there.
+            let root = shell.read(cx).root_focus_handle();
+            window.focus(&root, cx);
             shell
         })
         .unwrap();

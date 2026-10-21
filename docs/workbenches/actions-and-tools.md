@@ -156,8 +156,16 @@ The shell still goes through the app script, never `import Toy`:
 # python/ferrocad_shell/__init__.py
 def commands() -> str:
     """The registered commands, with their resources and live state, as JSON."""
-    return _json(FreeCADGui._command_list())      # [{id, menu, tooltip, accel, group,
-                                                  #   enabled, checked, cmd_type}, ...]
+    entries = FreeCADGui._command_list()
+    # The bridge adds the FerroCAD Surface/Parent keys from GetResources so the
+    # shell can place each control. _command_list() itself stays upstream-shaped.
+    for entry in entries:
+        resources = FreeCADGui._resources(FreeCADGui._COMMANDS[entry["id"]])
+        entry["surface"] = str(resources.get("Surface") or "")
+        entry["parent"] = str(resources.get("Parent") or "")
+    return _json(entries)                             # [{id, menu, tooltip, accel, group,
+                                                      #   enabled, checked, cmd_type,
+                                                      #   surface, parent}, ...]
 
 def run_command(name: str) -> str:
     """Invoke a command; returns {ok, status?, dialog?, token?, view?, tool?}."""
@@ -174,21 +182,25 @@ pub fn list() -> Result<Vec<CommandInfo>, String>;   // via call_json("commands"
 pub fn run(id: &str) -> Result<CommandOutcome, String>;
 ```
 
-The shell renders an **actions bar** from `CommandInfo`:
+The shell renders the **chrome** from `CommandInfo` (P0.6):
 
 | Field | Use |
 | --- | --- |
 | `menu` | button label |
 | `tooltip` | hover text |
 | `accel` | a shortcut (§10) |
-| `group` | ordering; absent falls back to registration order |
-| `enabled` | greyed when false |
+| `group` | metadata; no longer decides placement |
+| `enabled` | greyed when false (the dock keeps the row) |
 | `checked` | a toggled tint (grid, snap) |
 | `cmd_type` | metadata; `ForEdit` implies an undoable edit, `ForView` does not |
+| `surface` | `grid` / `axis` / `workplane` / `mods` / `dock` / `hidden` — the control that owns it; absent means `dock` |
+| `parent` | the surface's primary command id, for a row in that control's popover |
 
 The list is rebuilt on the events in §3.2. A command whose `enabled` is false stays
 visible — the user should see that the action exists and why it is unavailable (the
-tooltip can carry `GetResources()["ToolTip"]`).
+tooltip can carry `GetResources()["ToolTip"]`). Placement is `Surface`-driven, never
+derived from `Group`; a command with no `Surface` lands on the dock so it cannot
+disappear.
 
 ---
 
@@ -298,10 +310,11 @@ empty (a numeric field then fails validation until filled).
 
 ## 7. View and tool requests
 
-> **Superseded surface (2026-10-22).** The flat actions bar this section and §16
-describe is being replaced by header controls, anchored popovers and a selection-driven
-dock; see [`../tasks/toolbar-chrome.md`](../tasks/toolbar-chrome.md). The **request
-shapes** below are unchanged — only where the buttons live.
+> **As built (2026-10-22).** The flat actions bar this section and §16 described is
+gone. Commands now live on header controls (grid/axes/workplane/mods), their anchored
+popovers, and the selection-driven action dock; every command is also listed in the
+Dev Tools window. See [`../tasks/toolbar-chrome.md`](../tasks/toolbar-chrome.md) §10.
+The **request shapes** below are unchanged — only where the buttons live.
 
 A command that changes presentation rather than the document returns a request in the
 same dict. This is what lets a **Python** workbench toggle the grid (G5) or start an
@@ -534,15 +547,18 @@ Two shape decisions fell out of the build:
 | `ferrocad_gpui/src/shortcuts.rs` | `Accelerator::parse` (the documented `Accel` subset), `is_global` (chords/named keys only) and `matches` (exact modifiers); the shell binds the globals to a window-root key handler |
 | `ferrocad_gpui/src/contributions.rs` | the manipulator/gizmo factories plus `ToolFactory` and `with_tool(id, factory)` / `tool_for(id)` — the edition-level tool registry |
 | `ferrocad_gpui/src/python.rs` | `GUI: OnceLock<bool>`; `gui()`; `configure(..., gui)`; `FreeCAD.GuiUp = 1` set **before** the app script is imported so import-time workbench code sees it; `commands()` / `run_command(name)` / `set_selection(items)` / `dialog_accept(token, values)` / `dialog_cancel(token)` |
-| `ferrocad_gpui/src/shell.rs` | `ShellModel.commands`, `.selection` and `.view`; `refresh_commands` (rebuilds the shortcut list too); `run_command` (dialog / view / tool / run → refresh → stage → status → console); `replace_selection` / `toggle_select` / `clear_selection`; the dialog state machine (`open_dialog_state`, `accept_dialog`, `finish_dialog`, `cancel_dialog`, `toggle_flag`, `cycle_choice`); `apply_view` (state + mirror + projection + re-list); `start_tool` (registry → viewport, pending until a viewport exists); `actions_bar` (with tooltips); `dialog_overlay`; `shortcut_for` + root key handler; `hover_line` in the status bar |
+| `ferrocad_gpui/src/shell.rs` | `ShellModel.commands`, `.selection` and `.view`; `refresh_commands` (rebuilds the shortcut list too); `run_command` (dialog / view / tool / run → refresh → stage → status → console); `replace_selection` / `toggle_select` / `clear_selection`; the dialog state machine (`open_dialog_state`, `accept_dialog`, `finish_dialog`, `cancel_dialog`, `toggle_flag`, `cycle_choice`); `apply_view` (state + mirror + projection + re-list); `start_tool` (registry → viewport, pending until a viewport exists); `handle_key` (both windows); `toggle_dev_tools`; `dialog_overlay`; `dev_tools_body`; `hover_line` in the status bar |
+| `ferrocad_gpui/src/chrome.rs` | the P0.6 primitives: `viewport_header` (grid/axes/workplane/mods), `split_button` + anchored `popover`, `action_dock`, and the Dev Tools `command_list_panel` |
+| `ferrocad_gpui/src/dev_tools.rs` | the `DevTools` second-window view over `Entity<Shell>` and its window options |
 | `ferrocad_viewport/src/inventor_view.rs` | `HoverReport { target, through }` — updated on every pointer move from the same pick and overlay tests the click uses; `hover_report()` |
 
-The bar appears whenever the registry is non-empty. Because `App_Delete`/`App_Move`
-are registered by the base app script, **every** edition now has a bar; they are
-greyed until something is selected. A disabled command stays visible (its label in
-the muted token) — the user should see that the action exists. A checked command
-carries the accent. There is no tooltip: `bite-gpui` 1.21 has no `.tooltip()` API,
-so `CommandInfo.tooltip` is stored for A4 and unused today.
+The commands are dispatched from the chrome (header controls, popovers, dock) or the
+Dev Tools list — there is no flat strip. Because `App_Delete`/`App_Move` are registered
+by the base app script, **every** edition has dock rows; they are greyed until
+something is selected. A disabled command stays visible (its label in the muted token)
+— the user should see that the action exists. A checked command carries the accent.
+`Surface`/`Parent` (FerroCAD extensions to `GetResources`) decide placement; a command
+without them is on the dock, never hidden.
 
 The selection is an ordered list. A plain click replaces it, Ctrl/Cmd- or
 Shift-click toggles one object, and a viewport pick replaces it with the object plus

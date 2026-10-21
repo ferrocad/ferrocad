@@ -104,7 +104,7 @@ string**; all of them run with `FreeCAD.GuiUp == 0`.
 | `evaluate(code)` | `{ok, output}` from one console line |
 | `stage_meshes()` | the display meshes to draw |
 | `interaction(object_name, manipulator, action, element, values_json)` | `{ok, ...}` from the interaction provider |
-| `commands()` | command ids, resources, `enabled`, `checked` |
+| `commands()` | command ids, resources, `surface`, `parent`, `enabled`, `checked` |
 | `run_command(name)` | `{ok, status?, value?, view?, tool?, dialog?, token?}` |
 | `dialog_accept(payload_json)` | the callback's result; payload is `{"token": ..., "values": {...}}` |
 | `dialog_cancel(token)` | `{ok: true}` |

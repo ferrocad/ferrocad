@@ -363,8 +363,21 @@ def commands() -> str:
     A command is `FreeCADGui`-registered by the workbench (see
     ``docs/workbenches/actions-and-tools.md``); this script only marshals the list, so the
     shell names no workbench either.
+
+    FerroCAD extends ``GetResources()`` with two optional keys the upstream facade does
+    not know about: ``Surface`` (which chrome surface owns the command) and ``Parent``
+    (the surface's primary command id, for a row in that control's popover). They are
+    added here, in the shell bridge, so ``FreeCADGui`` itself stays upstream-shaped.
     """
-    return _json(FreeCADGui._command_list())
+    entries = FreeCADGui._command_list()
+    registry = getattr(FreeCADGui, "_COMMANDS", {})
+    read_resources = getattr(FreeCADGui, "_resources", None)
+    for entry in entries:
+        command = registry.get(entry["id"])
+        resources = read_resources(command) if command is not None and read_resources else {}
+        entry["surface"] = str(resources.get("Surface") or "")
+        entry["parent"] = str(resources.get("Parent") or "")
+    return _json(entries)
 
 
 def run_command(name: str) -> str:
@@ -445,6 +458,7 @@ class _DeleteCommand:
             "Accel": "Del",
             "Group": "Edit",
             "CmdType": "ForEdit",
+            "Surface": "dock",
         }
 
     def IsActive(self):
@@ -482,6 +496,7 @@ class _MoveCommand:
             "Accel": "Ctrl+Shift+M",
             "Group": "Edit",
             "CmdType": "ForEdit",
+            "Surface": "dock",
         }
 
     def IsActive(self):
@@ -572,6 +587,7 @@ class _GridCommand:
             "ToolTip": "Show the reference grid",
             "Group": "View",
             "CmdType": "ForView",
+            "Surface": "grid",
         }
 
     def IsChecked(self):
@@ -599,6 +615,7 @@ class _AxisCrossCommand:
             "ToolTip": "Show the world axis cross",
             "Group": "View",
             "CmdType": "ForView",
+            "Surface": "axis",
         }
 
     def IsChecked(self):
@@ -628,6 +645,8 @@ class _GridSettingsCommand:
             "ToolTip": "Change the reference grid's appearance",
             "Group": "View",
             "CmdType": "ForView",
+            "Surface": "grid",
+            "Parent": "App_ToggleGrid",
         }
 
     def Activated(self):
@@ -714,6 +733,7 @@ class _ModsSettingsCommand:
             "ToolTip": "Choose which mod provides each feature",
             "Group": "Edit",
             "CmdType": "ForEdit",
+            "Surface": "mods",
         }
 
     def Activated(self):
@@ -807,6 +827,8 @@ class _ReloadGridSettingsCommand:
             "ToolTip": "Apply the grid preferences",
             "Group": "View",
             "CmdType": "ForView",
+            "Surface": "grid",
+            "Parent": "App_ToggleGrid",
         }
 
     def Activated(self):
@@ -825,6 +847,8 @@ class _ActivateWorkplaneCommand:
             "ToolTip": "Sketch on the face under the pointer",
             "Group": "View",
             "CmdType": "ForView",
+            "Surface": "workplane",
+            "Parent": "App_ViewWorkplane",
         }
 
     def Activated(self):
@@ -840,6 +864,8 @@ class _ClearWorkplaneCommand:
             "ToolTip": "Return to the world frame",
             "Group": "View",
             "CmdType": "ForView",
+            "Surface": "workplane",
+            "Parent": "App_ViewWorkplane",
         }
 
     def Activated(self):
@@ -855,6 +881,7 @@ class _ViewWorkplaneCommand:
             "ToolTip": "Look down the active workplane's normal",
             "Group": "View",
             "CmdType": "ForView",
+            "Surface": "workplane",
         }
 
     def Activated(self):
@@ -864,3 +891,31 @@ class _ViewWorkplaneCommand:
 FreeCADGui.addCommand("App_ActivateWorkplane", _ActivateWorkplaneCommand())
 FreeCADGui.addCommand("App_ClearWorkplane", _ClearWorkplaneCommand())
 FreeCADGui.addCommand("App_ViewWorkplane", _ViewWorkplaneCommand())
+
+
+class _DevToggleToolsCommand:
+    """``Dev_ToggleTools`` — open, focus or close the Dev Tools window.
+
+    The GPUI shell handles the window itself (it is the only layer that can own one);
+    this command is the registry entry every other path sees, and its ``Activated`` is
+    the headless answer: with no GUI window there is nothing to toggle.
+    """
+
+    def GetResources(self):
+        return {
+            "MenuText": "Dev Tools",
+            "ToolTip": "Open or close the developer tools window",
+            "Accel": "Ctrl+Shift+D",
+            "Group": "View",
+            "CmdType": "ForView",
+            "Surface": "hidden",
+        }
+
+    def IsActive(self):
+        return True
+
+    def Activated(self):
+        return {"status": "dev tools: no GUI window to toggle"}
+
+
+FreeCADGui.addCommand("Dev_ToggleTools", _DevToggleToolsCommand())

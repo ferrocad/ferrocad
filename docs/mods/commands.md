@@ -52,7 +52,7 @@ The conventional id is `"<Workbench>_<Action>"`.
 
 ## `GetResources`
 
-The shell reads these keys when it builds the actions bar:
+The shell reads these keys when it builds the viewport header and the action dock:
 
 | Key | Used as | Default |
 | --- | --- | --- |
@@ -61,7 +61,15 @@ The shell reads these keys when it builds the actions bar:
 | `Accel` | shortcut string, for example `"Ctrl+Shift+S"` | `""` |
 | `Group` | ordering label | `""` (registration order) |
 | `CmdType` | metadata: `"ForEdit"` or `"ForView"` | `""` |
-| `Pixmap` | accepted and ignored; the bar is text today | — |
+| `Surface` | where the action lives: `grid`, `workplane`, `axis`, `mods`, `dock`, `hidden` | `dock` |
+| `Parent` | the surface's primary command, for a row inside its popover | `""` |
+| `Pixmap` | accepted and ignored; the controls are text today | — |
+
+`Surface` and `Parent` are **FerroCAD extensions**. Leave them out and the command
+lands on the dock, which is always safe; upstream FreeCAD ignores unknown resource
+keys. A command with `Surface: "grid"` and no `Parent` is the primary of that header
+control (its label runs it); a command with `Parent: "App_ToggleGrid"` appears in the
+popover under it.
 
 `CmdType` is metadata only. The shell does not wrap `Activated` in a transaction
 because a command may return a dialog and act later; the command owns its

@@ -161,6 +161,8 @@ class GridOverlayCommand:
             "Pixmap": os.path.join(ADDON_DIR, "Resources", "grid.svg"),
             "Group": "View",
             "CmdType": "ForView",
+            "Surface": "grid",
+            "Parent": "App_ToggleGrid",
         }
 
     def IsActive(self):

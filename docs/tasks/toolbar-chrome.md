@@ -7,9 +7,9 @@ Companion to [`../interaction/visual-language.md`](../interaction/visual-languag
 [`../interaction/axis-origin-grid.md`](../interaction/axis-origin-grid.md) (what the grid
 toggles) and [`../direction/app-shell-vision.md`](../direction/app-shell-vision.md) S2.
 
-**Scope note.** The chrome (header controls, popovers, the action dock) is ready to
-implement. The **grid settings** half is not: it depends on decisions listed in §6.
-Implement T0–T3 and T6 first; T4–T5 wait for those decisions.
+**Scope note.** The chrome (header controls, popovers, the action dock) is implemented.
+The **grid settings** half is not: it depends on decisions listed in §6. T0–T3 and T6
+landed on 2026-10-22; T4–T5 wait for those decisions.
 
 ## 1. Why
 
@@ -92,16 +92,16 @@ The design brief (2026-10-22) specifies:
 
 | # | Slice | Verifiable headlessly |
 | --- | --- | --- |
-| **T0** | Surface metadata: parse `Surface`/`Parent` from `GetResources` (default derived from `Group`), a `Surface` enum, and a `shell_model.surfaces()` grouping | unit tests in `ferrocad_gpui::commands` |
-| **T1** | `split_button` + `popover` primitives (open state, anchor, dismissal, right-click) | state-machine tests; rendering by inspection |
-| **T2** | Header controls: `Grid`, `Axes`, `WP`, `Mods` wired to the existing command ids, right-aligned in the viewport header | model tests: clicking the label runs the command; `▾` opens the group without running it |
-| **T3** | Action dock replaces the strip; selection filter; drag/proximity opacity | model test: the dock's visible ids follow the selection signature |
+| **T0** | Surface metadata: parse `Surface`/`Parent` from `GetResources` (default derived from `Group`), a `Surface` enum, and a `shell_model.surfaces()` grouping | unit tests in `ferrocad_gpui::commands` ✅ |
+| **T1** | `split_button` + `popover` primitives (open state, anchor, dismissal, right-click) | state-machine tests; rendering by inspection ✅ |
+| **T2** | Header controls: `Grid`, `Axes`, `WP`, `Mods` wired to the existing command ids, right-aligned in the viewport header | model tests: clicking the label runs the command; `▾` opens the group without running it ✅ |
+| **T3** | Action dock replaces the strip; selection filter; drag/proximity opacity | model test: the dock's visible ids follow the selection signature ✅ (drag opacity deferred) |
 | **T4** | Grid quick popover content (overlay toggle, mode, spacing readout, provider) | **blocked** (§6) |
 | **T5** | `Grid Settings…` loads grid rows into the Properties pane | **blocked** (§6) |
-| **T6** | Remove `actions_bar` and its layout slot; update the docs; keep every command reachable | test that every registered command appears on exactly one surface |
+| **T6** | Remove `actions_bar` and its layout slot; update the docs; keep every command reachable | test that every registered command appears on exactly one surface ✅ |
 
-`T0` is deliberately first: it is pure data, it makes `T6`'s "every command reachable"
-assertion possible, and it lets T2/T3 land without touching the Python side.
+`T0` was deliberately first: it is pure data, it made `T6`'s "every command reachable"
+assertion possible, and it let T2/T3 land without touching the Python side.
 
 ## 6. Decisions the grid half needs
 
@@ -140,15 +140,40 @@ These are why T4/T5 are not ready:
 ## 8. Acceptance
 
 - One button per legacy action, reachable from exactly one surface; no command silently
-  disappears when the strip is removed (T6 test).
-- `Grid` toggles in one click without opening the popover; `▾` opens it without toggling.
+  disappears when the strip is removed (T6 test). ✅
+- `Grid` toggles in one click without opening the popover; `▾` opens it without toggling. ✅
 - With a popover open, viewport orbit/zoom still receives pointer events; `Esc` and an
-  outside click both dismiss.
-- Popovers never overlap the navicube at any window width ≥ 800 px.
+  outside click both dismiss. ✅ (structurally: no backdrop, no `occlude`; headless
+  state tests only — a visual pass still needs Xvfb or a human)
+- Popovers never overlap the navicube at any window width ≥ 800 px. ⏳ (visual only)
 - The dock's visible actions follow the selection signature, and it fades during a drag.
+  ✅ for enablement; the drag fade is deferred with T3's visual half.
 - `cargo test -p ferrocad_gpui` and `cargo test -p ferrocad_toy` stay green; the Xvfb
   real-window smoke test still boots.
-- The docs (`actions-and-tools.md` §7/§16) describe the new surfaces, not the strip.
+- The docs (`actions-and-tools.md` §7/§16) describe the new surfaces, not the strip. ✅
+
+## 10. As built (2026-10-22)
+
+- `commands.rs` owns `Surface` (`grid`, `axis`, `workplane`, `mods`, `dock`, `hidden`),
+  `CommandInfo::surface()/parent()`, `group_by_surface()` and `popover_commands()`.
+  An unannotated **or unknown** surface is the dock.
+- The `Surface`/`Parent` keys are written in each command's `GetResources()`; the shell
+  bridge (`ferrocad_shell.commands()`) copies them into the JSON list. `FreeCADGui`'s
+  own `_command_list()` is untouched, so the facade keeps its upstream shape and a mod
+  that does not know the keys is unaffected.
+- `chrome.rs` holds the primitives: `split_button`, `popover`, `action_dock` and the Dev
+  Tools `command_list_panel`. The popover is a `deferred(anchored(..))` child of the
+  control, with `on_mouse_down_out` for outside-click dismissal. The **caret opens**
+  rather than toggles: the outside-click handler fires before the caret's click, so a
+  toggle would immediately reopen the menu. `Esc` closes it from the shell key path.
+- Because T4 is blocked, a popover is a plain list of the commands on that surface
+  whose `Parent` names the control's primary. When a surface has no such children
+  (`Mods`), it falls back to the surface's own commands so the caret is never dead.
+- The dock is `model.surfaces().dock`, so the existing `IsActive` results drive it.
+  Disabled rows stay visible. `Search (Ctrl+K)` is a status-reporting stub; there is no
+  palette.
+- T6 removed `actions_bar`; the Dev Tools window lists **every** command vertically,
+  with its surface tag, as the reachability safety net.
 
 ## 9. Risks
 

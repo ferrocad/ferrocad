@@ -201,6 +201,19 @@ Ordered by value; each slice is independently demoable. Sizes are rough.
 - **S6 · Polish.** Dockable/resizable panes, error dialogs, `UndoMode` and other
   preferences, recent files, About.
 
+**Reset (2026-10-22) — before S6.** The combined window was deliberately split so the
+next navigation/tool design starts from a clean viewport:
+
+- the inspector, property editor, console and the full command list moved to a
+  separate **Dev Tools** window (`Ctrl+Shift+D`, GIMP-toolbox style); the main window
+  is now the window frame, the viewport and the status line;
+- the flat actions bar was replaced by viewport-header controls (`Grid ▾`, `Axes`,
+  `WP ▾`, `Mods ▾`, each with an anchored popover) plus a bottom-centre action dock.
+
+S6's "dockable/resizable panes" now means the two windows, not three panes. The grid
+*settings* surface is still open; see
+[`../tasks/toolbar-chrome.md`](../tasks/toolbar-chrome.md) §6.
+
 Dependencies: S1 gates S2–S5; S3 and S4 are coupled (selection → editor); S5
 shares the interpreter with S1. S2 (undo/redo + open/save) builds directly on
 engine work already done.

@@ -551,6 +551,8 @@ class GridOverlayCoinCommand:
             "Pixmap": os.path.join(RESOURCES, "grid.svg"),
             "Group": "View",
             "CmdType": "ForView",
+            "Surface": "grid",
+            "Parent": "App_ToggleGrid",
         }
 
     def IsActive(self):

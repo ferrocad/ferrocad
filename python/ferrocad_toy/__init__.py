@@ -186,6 +186,7 @@ class _MakeSlabCommand:
             "Accel": "Ctrl+Shift+S",
             "Group": "Toy",
             "CmdType": "ForEdit",
+            "Surface": "dock",
         }
 
     def IsActive(self):
@@ -252,6 +253,7 @@ class _PolylineCommand:
             "ToolTip": "Draw a polyline in the viewport",
             "Group": "Toy",
             "CmdType": "ForView",
+            "Surface": "dock",
         }
 
     def IsActive(self):

@@ -9,6 +9,9 @@
 - Filed 2026-10-21. The repository has issues enabled and no issue templates, so
   the report uses the generic shape: environment, symptom, evidence, the
   consumer-side workaround, four questions, and a minimal reproducer sketch.
+- The filed body is **self-contained**: it names no external URLs (no link to
+  FerroCAD, the assessment or the diagnostics note). The links in *this* note are
+  for the FerroCAD repository only.
 
 The report asks `gpui_interop` to:
 

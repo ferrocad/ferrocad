@@ -20,10 +20,10 @@ on the first line, so the folder only has to answer "where do I look?".
 | `record/` | closed history: milestones, the closed TODO, incidents | you need to know how we got here |
 | `tasks/` | actionable specs with a checklist | you are picking up work |
 
-The two entry points stay at the root: this index, and
-[`TODO-22-10-2026.md`](TODO-22-10-2026.md) (the active backlog). The
-[crate map](architecture.md) also stays here because it is the cross-cutting
-reference every section links back to.
+Four files stay at the root: this index, the [crate map](architecture.md) (the
+cross-cutting reference every section links back to), the
+[documentation decision](documentation.md), and the active backlog
+([`TODO-22-10-2026.md`](TODO-22-10-2026.md)).
 
 ## Start here
 

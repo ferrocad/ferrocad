@@ -20,8 +20,10 @@ is the `FreeCAD` Python API, documented by convention and by upstream.
   script, and the slice plan (tracks A/B/C/D).
 - [app-shell-vision.md](app-shell-vision.md) — the interactive window: the five
   pillars, architecture, and slices S1–S6.
-- [TODO-21-10-2026.md](TODO-21-10-2026.md) — working note: the state at the Draft
-  assessment, the measured import ladder, the five D0 fixes, and the open decisions.
+- [TODO-21-10-2026.md](TODO-21-10-2026.md) — closed record: the Draft assessment,
+  the measured import ladder, the five D0 fixes, and what landed on 2026-10-21.
+- [TODO-22-10-2026.md](TODO-22-10-2026.md) — active backlog: residual black frames,
+  external-mod ingestion, D0 + `--draft`, the `Part` kernel, and the open decisions.
 - [incident-2026-10-21-session-crash.md](incident-2026-10-21-session-crash.md) — post-mortem
   of the lost GNOME session: `systemd-oomd` killed `gnome-shell`, not the GPU or Wayland;
   the evidence, the timeline, and the prevention notes.

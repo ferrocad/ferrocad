@@ -13,6 +13,7 @@ Usage::
     python3 tools/conformance.py --root ../freecad-upstream            # default files
     python3 tools/conformance.py --root ../freecad-upstream --files Document StringHasher
     python3 tools/conformance.py --root ../freecad-upstream --part      # Part workbench tests
+    python3 tools/conformance.py --root ../freecad-upstream --draft     # headless Draft tests
     python3 tools/conformance.py --root ../freecad-upstream --list      # list candidates
 
 The one-time setup (the sparse `freecad-upstream` checkout, the extension build) and
@@ -30,6 +31,7 @@ from __future__ import annotations
 import argparse
 import importlib.util
 import re
+import subprocess
 import sys
 import unittest
 from pathlib import Path
@@ -65,6 +67,23 @@ PART_FILES = [
     "ColorPerFaceTest",
     "ColorTransparencyTest",
     "TestPartApp",
+]
+
+# The headless half of the Draft workbench. `src/Mod/Draft` is the package root
+# (`drafttests`, `draftutils`, …); `src/Ext` provides `freecad.deprecation`. The
+# GUI-adjacent files (`test_*_gui`, `test_import_tools`) are deliberately absent:
+# they import `draftguitools`/`FreeCADGui`.
+DRAFT_DIRS = [
+    "src/Mod/Draft/drafttests",
+    "src/Mod/Draft",
+    "src/Ext",
+]
+DRAFT_FILES = [
+    "test_base",
+    "test_grid_settings",
+    "test_pivy",
+    "test_airfoildat",
+    "test_import",
 ]
 
 
@@ -157,6 +176,20 @@ def _totals(records) -> dict[str, int]:
     return out
 
 
+def upstream_revision(root: Path) -> str:
+    """The checkout's ``HEAD``, so every report is tied to a revision."""
+    try:
+        out = subprocess.run(
+            ["git", "--no-pager", "-C", str(root), "rev-parse", "HEAD"],
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+    except (OSError, subprocess.CalledProcessError):
+        return "unknown"
+    return out.stdout.strip() or "unknown"
+
+
 def list_candidates(root: Path) -> list[str]:
     test_dir = root / "src" / "Mod" / "Test"
     skip = {"__init__", "Init", "InitGui", "unittestgui", "Metadata"}
@@ -166,9 +199,11 @@ def list_candidates(root: Path) -> list[str]:
     )
 
 
-def render(outcomes: list[dict]) -> str:
+def render(outcomes: list[dict], root: Path | None = None) -> str:
     lines: list[str] = []
     lines.append("FreeCAD conformance report (M3d)")
+    if root is not None:
+        lines.append(f"upstream: {root} @ {upstream_revision(root)}")
     lines.append("=" * 60)
 
     grand = {"pass": 0, "fail": 0, "error": 0, "skip": 0, "load_error": 0}
@@ -212,6 +247,11 @@ def main(argv: list[str]) -> int:
         action="store_true",
         help="run the Part workbench tests (needs an image that links `Part`)",
     )
+    parser.add_argument(
+        "--draft",
+        action="store_true",
+        help="run the headless Draft workbench tests",
+    )
     args = parser.parse_args(argv)
 
     root = Path(args.root).resolve()
@@ -221,15 +261,22 @@ def main(argv: list[str]) -> int:
         print("\n".join(list_candidates(root)))
         return 0
 
+    if args.part and args.draft:
+        parser.error("--part and --draft are separate groups; run one at a time")
+
     if args.part:
         dirs = [root / d for d in PART_DIRS]
         stems = args.files if args.files else PART_FILES
+    elif args.draft:
+        dirs = [root / d for d in DRAFT_DIRS]
+        stems = args.files if args.files else DRAFT_FILES
     else:
         dirs = [test_dir]
         stems = args.files if args.files else DEFAULT_FILES
 
-    # `src/Mod/Part` must be importable as a package root: the Part tests do
-    # `from parttests.X import Y`.
+    # The workbench package roots must be importable: the Part tests do
+    # `from parttests.X import Y`, and Draft does `from drafttests import
+    # auxiliary` and `from freecad.deprecation import deprecated`.
     for d in dirs:
         if str(d) not in sys.path:
             sys.path.insert(0, str(d))
@@ -244,7 +291,7 @@ def main(argv: list[str]) -> int:
             continue
         outcomes.append(run_file(path))
 
-    print(render(outcomes))
+    print(render(outcomes, root))
     return 0
 
 

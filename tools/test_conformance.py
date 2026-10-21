@@ -9,8 +9,12 @@ Run::
 """
 
 import os
+import shutil
+import subprocess
 import sys
+import tempfile
 import unittest
+from pathlib import Path
 
 sys.path.insert(0, os.path.dirname(__file__))
 
@@ -48,6 +52,46 @@ class TestTotals(unittest.TestCase):
             conformance._totals(records),
             {"pass": 1, "fail": 1, "error": 1, "skip": 1},
         )
+
+
+class TestDraftGroup(unittest.TestCase):
+    def test_file_list(self):
+        self.assertEqual(
+            conformance.DRAFT_FILES,
+            ["test_base", "test_grid_settings", "test_pivy", "test_airfoildat", "test_import"],
+        )
+
+    def test_paths_cover_the_package_root_and_ext(self):
+        self.assertIn("src/Mod/Draft", conformance.DRAFT_DIRS)
+        self.assertIn("src/Mod/Draft/drafttests", conformance.DRAFT_DIRS)
+        self.assertIn("src/Ext", conformance.DRAFT_DIRS)
+
+    def test_unknown_revision_is_reported_not_raised(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            self.assertEqual(conformance.upstream_revision(Path(tmp)), "unknown")
+
+    @unittest.skipUnless(shutil.which("git"), "git is not installed")
+    def test_revision_of_a_git_checkout(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            subprocess.run(["git", "-C", tmp, "init", "-q"], check=True)
+            subprocess.run(
+                [
+                    "git", "-C", tmp,
+                    "-c", "user.name=D0", "-c", "user.email=d0@example.invalid",
+                    "commit", "--allow-empty", "-q", "-m", "init",
+                ],
+                check=True,
+            )
+            revision = conformance.upstream_revision(Path(tmp))
+        self.assertRegex(revision, r"^[0-9a-f]{40}$")
+
+    def test_render_reports_the_revision(self):
+        text = conformance.render([], root=Path("/nonexistent-upstream"))
+        self.assertIn("upstream: /nonexistent-upstream @ unknown", text)
+        self.assertIn("summary: 0 passed", text)
+
+    def test_render_without_a_root_keeps_the_old_header(self):
+        self.assertNotIn("upstream:", conformance.render([]))
 
 
 if __name__ == "__main__":

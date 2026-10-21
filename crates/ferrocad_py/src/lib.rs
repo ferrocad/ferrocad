@@ -482,9 +482,20 @@ impl PyQuantity {
             }
             2 => {
                 let value: f64 = args.get_item(0)?.extract()?;
-                let unit: String = args.get_item(1)?.extract()?;
-                let u = Unit::parse(&unit)
-                    .ok_or_else(|| PyValueError::new_err(format!("unknown unit '{unit}'")))?;
+                let second = args.get_item(1)?;
+                // `Quantity(100, App.Units.Length)` passes a `Unit`; the string form
+                // `Quantity(100, "mm")` must keep working.
+                let u = if let Ok(unit) = second.extract::<PyRef<'_, PyUnit>>() {
+                    unit.inner
+                } else if let Ok(symbol) = second.extract::<String>() {
+                    Unit::parse(&symbol).ok_or_else(|| {
+                        PyValueError::new_err(format!("unknown unit '{symbol}'"))
+                    })?
+                } else {
+                    return Err(PyTypeError::new_err(
+                        "Quantity() second argument must be a unit string or a Unit",
+                    ));
+                };
                 Quantity::new(value, u)
             }
             _ => {
@@ -4186,4 +4197,67 @@ pub fn ferrocad(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(addDocumentObserver, m)?)?;
     m.add_function(wrap_pyfunction!(removeDocumentObserver, m)?)?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use pyo3::types::PyTuple;
+    use std::sync::Once;
+
+    /// The extension is built without `pyo3/auto-initialize` (it is a library
+    /// module), so tests must start the interpreter themselves.
+    fn init_python() {
+        static INIT: Once = Once::new();
+        INIT.call_once(pyo3::prepare_freethreaded_python);
+    }
+
+    fn quantity_args(py: Python<'_>, second: Py<PyAny>) -> PyResult<Bound<'_, PyTuple>> {
+        let value: Py<PyAny> = 100.0f64.into_py_any(py)?;
+        PyTuple::new(py, [value, second])
+    }
+
+    #[test]
+    fn quantity_accepts_a_unit_in_second_position() {
+        init_python();
+        Python::with_gil(|py| {
+            let unit: Py<PyAny> = PyUnit { inner: Unit::parse("mm").unwrap() }
+                .into_py_any(py)
+                .unwrap();
+            let args = quantity_args(py, unit).unwrap();
+            let q = PyQuantity::new(&args).unwrap();
+            assert_eq!(q.inner, Quantity::new(100.0, Unit::parse("mm").unwrap()));
+        });
+    }
+
+    #[test]
+    fn quantity_still_accepts_a_unit_string_in_second_position() {
+        init_python();
+        Python::with_gil(|py| {
+            let symbol: Py<PyAny> = "mm".into_py_any(py).unwrap();
+            let args = quantity_args(py, symbol).unwrap();
+            let q = PyQuantity::new(&args).unwrap();
+            assert_eq!(q.inner, Quantity::new(100.0, Unit::parse("mm").unwrap()));
+        });
+    }
+
+    #[test]
+    fn quantity_rejects_a_quantity_as_the_unit() {
+        init_python();
+        Python::with_gil(|py| {
+            let other: Py<PyAny> = PyQuantity {
+                inner: Quantity::new(1.0, Unit::parse("mm").unwrap()),
+            }
+            .into_py_any(py)
+            .unwrap();
+            let args = quantity_args(py, other).unwrap();
+            match PyQuantity::new(&args) {
+                Ok(_) => panic!("a Quantity must not be accepted as the unit"),
+                Err(err) => assert!(
+                    err.is_instance_of::<PyTypeError>(py),
+                    "expected TypeError, got {err:?}"
+                ),
+            }
+        });
+    }
 }

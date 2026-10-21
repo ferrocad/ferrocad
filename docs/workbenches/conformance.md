@@ -16,11 +16,19 @@ failure — so a red line names the missing API rather than hiding it.
 | --- | --- | --- |
 | **App** (default) | `src/Mod/Test/{Document,StringHasher,UnitTests,UnicodeTests,TestApp,BaseTests,TestIntPairList,FreeCADInitTests}.py` | our extension module on `sys.path` |
 | **Part** (`--part`) | `src/Mod/Part/parttests/*.py` | an image that links **both** `Part` and `FreeCAD` (one core) |
+| **Draft** (`--draft`) | `src/Mod/Draft/drafttests/{test_base,test_grid_settings,test_pivy,test_airfoildat,test_import}.py` | the Qt-free half of Draft: `python/lazy_loader`, the `PySide` alias, `Draft_rc`, and `src/Ext` on the path (the harness adds them); `Part` is still required by two of them |
 
 Each file reports `pass / fail / error / skip`, and files that cannot import are
 reported as **load errors** with the missing name (e.g. `missing 'FreeCAD.Base'`). The
 report is a *measurement*: `crates/ferrocad_part_py/tests/part_conformance.rs` asserts
 only that the harness ran, not a pass count.
+
+The `--draft` group is in the same spirit and reports the upstream revision with the
+summary. Baseline at upstream `33adf61` (2026-10-22): **4 passed, 1 failed, 6 errored,
+0 skipped, 1 load error**. The failures name the next API gaps rather than a Draft
+bug: `Part` (loads `Draft` at module scope), `ParameterGrp.GetStrings/GetInts`, and
+`FreeCADGui.getDocument`. See
+[`../tasks/d0-draft-import.md`](../tasks/d0-draft-import.md).
 
 ---
 

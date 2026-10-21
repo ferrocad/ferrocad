@@ -411,6 +411,11 @@ fn ensure_runtime(root: &Path) -> Result<PathBuf, String> {
 /// Uses a blobless sparse checkout, so only the selected `src/Mod/<WB>` trees are
 /// downloaded. The result is loose files, as FreeCAD ships them; `bundle` copies
 /// them into the payload. See `docs/architecture/distribution.md`.
+///
+/// `src/Ext/freecad` is fetched too and copied to `mods/freecad`. The packaging
+/// step puts `mods/` on `PYTHONPATH`, so `from freecad.deprecation import
+/// deprecated` (used by `DraftVecUtils`) resolves at boot without the app having
+/// to know about upstream's Ext directory.
 fn fetch_mods(opts: &Options) -> Result<(), String> {
     let root = workspace_root();
     let tag = opts
@@ -452,6 +457,9 @@ fn fetch_mods(opts: &Options) -> Result<(), String> {
     for wb in &workbenches {
         sparse.arg(format!("src/Mod/{wb}"));
     }
+    // The `freecad` support package lives outside `src/Mod` and is imported by
+    // Draft at module scope (`freecad.deprecation`).
+    sparse.arg("src/Ext");
     run_command(&mut sparse, "git sparse-checkout")?;
 
     let mods = root.join("mods");
@@ -469,10 +477,49 @@ fn fetch_mods(opts: &Options) -> Result<(), String> {
             fs::remove_dir_all(&dst).map_err(|e| e.to_string())?;
         }
         copy_dir_all(&src, &dst)?;
+        write_resource_stub(&dst, wb)?;
         eprintln!("copied {wb} -> {}", dst.display());
     }
+
+    // `src/Ext/freecad` is a namespace package (upstream generates its
+    // `__init__.py` from a CMake template). Copied beside the workbenches, it is
+    // importable because `mods/` is on `PYTHONPATH` in the packaged app.
+    let ext_pkg = repo.join("src").join("Ext").join("freecad");
+    if ext_pkg.is_dir() {
+        let dst = mods.join("freecad");
+        if dst.exists() {
+            fs::remove_dir_all(&dst).map_err(|e| e.to_string())?;
+        }
+        copy_dir_all(&ext_pkg, &dst)?;
+        eprintln!("copied src/Ext/freecad -> {}", dst.display());
+    } else {
+        eprintln!(
+            "warning: src/Ext/freecad not found at FreeCAD {tag}; \
+             `from freecad.deprecation import ...` will fail"
+        );
+    }
+
     eprintln!("mods ready under {}", mods.display());
     Ok(())
+}
+
+/// Write the no-op resource module upstream generates with `pyside-rcc`.
+///
+/// Upstream code does `import Draft_rc` and uses a truthy `__name__` as its
+/// "resources are loaded" marker; the headless path never touches the bundle.
+/// The FerroCAD facade also ships `python/Draft_rc.py`, so this copy only helps
+/// when the workbench directory itself is on `sys.path` (as it is in FreeCAD).
+fn write_resource_stub(dir: &Path, workbench: &str) -> Result<(), String> {
+    let path = dir.join(format!("{workbench}_rc.py"));
+    if path.exists() {
+        return Ok(());
+    }
+    let body = format!(
+        "\"\"\"No-op resource module for {workbench} (FerroCAD).\"\"\"\n\n\n\
+         def qInitResources():\n    pass\n\n\n\
+         def qCleanupResources():\n    pass\n"
+    );
+    fs::write(&path, body).map_err(|e| e.to_string())
 }
 
 fn run_command(cmd: &mut Command, what: &str) -> Result<(), String> {
@@ -636,4 +683,33 @@ fn copy_dir_all(src: &Path, dst: &Path) -> Result<(), String> {
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::write_resource_stub;
+
+    #[test]
+    fn resource_stub_is_a_noop_module_and_is_not_overwritten() {
+        let dir = std::env::temp_dir().join(format!("ferrocad-xtask-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("Draft_rc.py");
+        let _ = std::fs::remove_file(&path);
+
+        write_resource_stub(&dir, "Draft").unwrap();
+        let body = std::fs::read_to_string(&path).unwrap();
+        let expected = concat!(
+            "\"\"\"No-op resource module for Draft (FerroCAD).\"\"\"\n\n\n",
+            "def qInitResources():\n    pass\n\n\n",
+            "def qCleanupResources():\n    pass\n",
+        );
+        assert_eq!(body, expected);
+
+        // A fetched tree that already ships the generated module keeps it.
+        std::fs::write(&path, "sentinel").unwrap();
+        write_resource_stub(&dir, "Draft").unwrap();
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "sentinel");
+
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
 }

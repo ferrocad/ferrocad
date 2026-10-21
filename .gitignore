@@ -19,9 +19,12 @@ __pycache__/
 # Downloaded packaging tools (e.g. appimagetool-<arch>.AppImage)
 /tools/*.AppImage
 
-# Upstream workbenches fetched by `cargo xtask mods` (only the README is tracked)
+# Upstream workbenches fetched by `cargo xtask mods` (only the README and authored
+# workbenches are tracked)
 /mods/*
 !/mods/README.md
+!/mods/GridOverlay/
+!/mods/GridOverlayCoin/
 
 # Publish staging: transient copies of the workspace payload beside the app crate
 # so `cargo publish` (with the crate's `include` allowlist) carries them. Removed

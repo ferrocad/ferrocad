@@ -11,5 +11,8 @@ loose files rather than embedded in the binary (see `docs/distribution.md` §8).
 
 Populate it with `cargo xtask mods`, which fetches selected upstream FreeCAD
 workbenches (default `Draft`, at the pinned revision `FERROCAD_FREECAD_TAG`) and
-copies them in as loose files. The fetched trees are gitignored; only this README
-is tracked. The release workflow runs `cargo xtask mods` before packaging.
+copies them in as loose files. Authored workbenches are part of the tree and are
+tracked normally; fetched upstream trees are gitignored (the `.gitignore`
+negates `mods/GridOverlay/` and `mods/GridOverlayCoin/`, the two forks in
+`docs/grid-overlay-plan.md` §5 G5–G6). The release workflow runs
+`cargo xtask mods` before packaging.

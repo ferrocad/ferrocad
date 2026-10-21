@@ -208,3 +208,6 @@ rather than restating it.
 - [tasks/grid-visibility.md](tasks/grid-visibility.md) — the grid toggle only moves
   the native flag, so the Coin/WGSL overlay keeps drawing; one switch, a provider
   `refresh` hook, and the `semantic` → `ferrocad` rename.
+- [tasks/toolbar-chrome.md](tasks/toolbar-chrome.md) — replacing the flat actions bar
+  with viewport-header split buttons, anchored popovers and a selection-reactive dock;
+  the grid-settings half waits on the decisions in §6.

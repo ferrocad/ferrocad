@@ -298,6 +298,11 @@ empty (a numeric field then fails validation until filled).
 
 ## 7. View and tool requests
 
+> **Superseded surface (2026-10-22).** The flat actions bar this section and §16
+describe is being replaced by header controls, anchored popovers and a selection-driven
+dock; see [`../tasks/toolbar-chrome.md`](../tasks/toolbar-chrome.md). The **request
+shapes** below are unchanged — only where the buttons live.
+
 A command that changes presentation rather than the document returns a request in the
 same dict. This is what lets a **Python** workbench toggle the grid (G5) or start an
 interactive tool without a second hook:

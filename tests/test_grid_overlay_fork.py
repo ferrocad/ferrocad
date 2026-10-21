@@ -67,9 +67,18 @@ class GridOverlayForkTests(unittest.TestCase):
     def setUp(self):
         self.grid = FreeCAD.Grid
         self.grid.reset()
+        for entry in FreeCADGui.providers():
+            FreeCADGui.unregisterProvider(entry["feature"], entry["backend"])
         self.mod, self.imported = load_mod()
+        # This suite exercises the semantic backend as the active provider, even
+        # when the Coin suite ran first or another suite cleared the registry
+        # (``load_mod`` caches the module, so re-register explicitly).
+        if "semantic" not in [p["backend"] for p in FreeCADGui.providers("grid")]:
+            self.mod.register_provider()
+        FreeCADGui.setActiveProvider("grid", "semantic")
 
     def tearDown(self):
+        FreeCADGui.unregisterProvider("grid", "semantic")
         FreeCADGui._cancel_all()
         self.grid.reset()
 

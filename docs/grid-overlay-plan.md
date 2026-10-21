@@ -714,6 +714,20 @@ Landed in two waves; every suite below was run, not inferred.
 | **G4** | ✅ | Program pipeline cache (`program.hash`, topology, depth compare/write, blend, samples, format); group 2 (`Frame` 160 B dynamic + `Program` 1328 B); `StateSnapshot.depth`/`pickable` with `SoDepthBuffer`/`SoPickStyle` applied (`SoLightModel` inert); program packets never picked; `grid_overlay` on `ViewRequest`/`ViewState` hides the world ground and draws the program queue. GPU readback ran on this machine (occlusion + no-pick). Suites: graphics 31, inventor 23, wgpu 24, stage 89, viewport 122, gpui 62. |
 | **G5** | ▢ | The A1 fork running under the shell (`addOverlay`/`removeOverlay`). Not required by G6, which is the shipping form; it proves the legacy Coin path. |
 | **G6** | ✅ | `mods/GridOverlay/` is a semantic-only fork: command `GridOverlay_Settings`, six-field dialog, `FreeCAD.Grid` on accept, `getattr` gate with a clean upstream message; no Qt, no Coin. 12 tests. |
+| **Mod providers** | ✅ | `FreeCADGui.registerProvider/providers/activeProvider/setActiveProvider` with the choice at `User parameter:BaseApp/Preferences/Mods` → `Providers/<feature>`; `Mods_Settings` in `ferrocad_shell`; both grid mods declare `feature="grid"` (semantic priority 10, Coin 0), gate their commands and the Coin draw path on `activeProvider`, and switch through `deactivate`/`activate`. `docs/mod-providers.md`; suite `test_mod_providers` (13). |
+
+**Provider registry (2026-10-21).** Both grid mods now declare what they provide
+(`feature="grid"`) instead of silently competing. The semantic backend is the
+declared default (priority 10), the Coin backend remains selectable (priority 0),
+and `Mods_Settings` switches them. Registration records the manifest (a
+priority takeover at registration stops the outgoing backend) and the first
+switch (or the mod's own command) runs the outgoing `deactivate` and the
+incoming `activate`, so only one backend draws. Switching to the Coin backend
+removes the native ground (`deactivate` returns the `{"view": …}` request),
+and switching back removes the Coin overlay (`manager.remove_grid()`) and
+re-enables the native grid. The inactive command returns a status naming the
+active backend instead of opening its dialog. Neither implementation was
+removed.
 
 **Deviations recorded.** `SoMFFloat` arrived with G3 rather than G0 (its consumer is
 `SoShaderParameterArray1f`). `spacing` sets `major = spacing × 10` so the dot/line

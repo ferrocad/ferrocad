@@ -9,6 +9,11 @@ What is here today:
 * the **command registry** — ``addCommand`` / ``removeCommand`` /
   ``listCommands`` / ``runCommand``, with FreeCAD's ``Command`` shape
   (``Activated``, ``IsActive``, ``IsChecked``, ``GetResources``);
+* the **mod provider registry** — ``registerProvider`` / ``providers`` /
+  ``activeProvider`` / ``setActiveProvider``: a mod declares which *feature* a
+  backend provides, exactly one backend per feature is active, and switching
+  runs the outgoing ``deactivate`` and incoming ``activate`` callbacks (see
+  ``docs/mod-providers.md``);
 * the **dialog protocol** — a command's ``on_accept`` callback stays here under a
   single-use token, and ``_accept`` / ``_cancel`` are the later half of the
   non-blocking modal;
@@ -45,6 +50,25 @@ _DIALOGS: dict = {}
 
 #: Monotonic token counter (tokens are never reused, even after a cancel).
 _DIALOG_SERIAL: int = 0
+
+#: Provider manifests: ``feature -> backend -> record``. Both levels keep
+#: registration order, which is the deterministic tie-break for equal priorities.
+_PROVIDERS: dict = {}
+
+#: ``feature -> backend`` whose ``activate``/``deactivate`` callbacks last ran.
+#: A persisted choice alone does not mean the effects were applied: the first
+#: explicit switch is what runs them.
+_PROVIDER_APPLIED: dict = {}
+
+#: Monotonic registration serial (never reused), for the priority tie-break.
+_PROVIDER_SERIAL: int = 0
+
+#: ``(feature, backend, hook)`` provider callbacks already reported, so a broken
+#: backend does not spam the console on every switch.
+_PROVIDER_REPORTED: set = set()
+
+#: The parameter group a mod's provider choice is persisted in.
+PROVIDER_PREFERENCES = "User parameter:BaseApp/Preferences/Mods"
 
 
 def _error_text(exc: BaseException) -> str:
@@ -101,6 +125,288 @@ def runCommand(name: str, *args):
     if command is None:
         raise KeyError(name)
     return command.Activated(*args)
+
+
+# ---------------------------------------------------------------------------
+# Mod providers
+#
+# A mod that replaces a feature's implementation (the semantic and Coin grids
+# are the first pair) declares itself from ``InitGui.py`` with
+# :func:`registerProvider`. The registry keeps exactly one active backend per
+# feature and switches the viewport state by calling the outgoing provider's
+# ``deactivate`` and the incoming provider's ``activate``. See
+# ``docs/mod-providers.md``.
+# ---------------------------------------------------------------------------
+
+
+def _provider_prefs():
+    """The parameter group holding one backend id per feature."""
+    return FreeCAD.ParamGet(PROVIDER_PREFERENCES).GetGroup("Providers")
+
+
+def _report_provider(feature, backend, hook: str, exc: BaseException) -> None:
+    """Report a failing ``activate``/``deactivate`` once per provider hook."""
+    key = (feature, backend, hook)
+    if key in _PROVIDER_REPORTED:
+        return
+    _PROVIDER_REPORTED.add(key)
+    print(
+        f"FreeCADGui: provider {backend!r} for {feature!r} {hook} raised: "
+        f"{_error_text(exc)}",
+        file=sys.stderr,
+    )
+
+
+def registerProvider(
+    feature: str,
+    backend: str,
+    label: str,
+    command=None,
+    priority: int = 0,
+    activate=None,
+    deactivate=None,
+):
+    """Declare that ``backend`` provides ``feature`` (called from ``InitGui.py``).
+
+    ``label`` is the user-facing name the ``Mods_Settings`` dialog shows;
+    ``command`` is the command id the backend owns (``None`` when it has none);
+    ``priority`` decides the default backend (higher wins, earliest registration
+    breaks a tie); ``activate``/``deactivate`` are optional zero-argument
+    callbacks that make the backend the drawn one and undo that. ``activate``
+    runs only on a **switch**, never at registration, and callback errors are
+    isolated. One exception: if this registration takes the selection over (a
+    higher priority, or a saved choice), the outgoing backend's ``deactivate``
+    runs so a mod that drew during its own import cannot keep drawing. The
+    incoming backend is still activated by the first switch.
+
+    Registering the same ``(feature, backend)`` again replaces the record (a mod
+    reload) without moving it in the registration order. Returns the manifest.
+    """
+    global _PROVIDER_SERIAL
+
+    if not isinstance(feature, str) or not feature:
+        raise ValueError("a provider feature must be a non-empty string")
+    if not isinstance(backend, str) or not backend:
+        raise ValueError("a provider backend must be a non-empty string")
+    if command is not None and not isinstance(command, str):
+        raise TypeError("a provider command must be a command id string or None")
+    if activate is not None and not callable(activate):
+        raise TypeError(f"provider {feature!r}/{backend!r} activate is not callable")
+    if deactivate is not None and not callable(deactivate):
+        raise TypeError(f"provider {feature!r}/{backend!r} deactivate is not callable")
+
+    text = str(label if label is not None else backend).strip()
+    records = _PROVIDERS.get(feature)
+    if records is None:
+        records = _PROVIDERS.setdefault(feature, {})
+    before = _selected(feature)
+    existing = records.get(backend)
+    order = existing["order"] if existing is not None else _PROVIDER_SERIAL
+    if existing is None:
+        _PROVIDER_SERIAL += 1
+    records[backend] = {
+        "feature": feature,
+        "backend": backend,
+        "label": text or backend,
+        "command": command,
+        "priority": int(priority),
+        "order": order,
+        "activate": activate,
+        "deactivate": deactivate,
+    }
+    _PROVIDER_REPORTED.difference_update(
+        {key for key in _PROVIDER_REPORTED if key[0] == feature and key[1] == backend}
+    )
+
+    # A takeover is a selection change caused by registration. Stop the outgoing
+    # backend, but leave the incoming one for the first explicit switch (which
+    # keeps ``activate`` out of import time).
+    selected = _selected(feature)
+    if selected == backend and before is not None and before != backend:
+        outgoing = records.get(before)
+        if outgoing is not None:
+            _deactivate_on_takeover(outgoing, feature)
+            if _PROVIDER_APPLIED.get(feature) == before:
+                _PROVIDER_APPLIED.pop(feature, None)
+    return _manifest(records[backend], feature)
+
+
+def _deactivate_on_takeover(record, feature) -> None:
+    """Stop a backend whose feature changed hands while a mod was registering."""
+    callback = record.get("deactivate")
+    if callback is None:
+        return
+    try:
+        callback()
+    except Exception as exc:  # noqa: BLE001 - a broken backend is not fatal
+        _report_provider(feature, record["backend"], "deactivate", exc)
+
+
+def unregisterProvider(feature: str, backend: str) -> bool:
+    """Drop a provider record; returns whether it existed.
+
+    This is a reload/teardown helper and does **not** run ``deactivate``; the
+    caller owns the effects (the Coin mod, for example, shuts its manager down
+    before re-registering). A persisted choice is deliberately left alone, so a
+    re-registered backend keeps its selection.
+    """
+    records = _PROVIDERS.get(feature)
+    if not records or backend not in records:
+        return False
+    del records[backend]
+    if not records:
+        _PROVIDERS.pop(feature, None)
+    if _PROVIDER_APPLIED.get(feature) == backend:
+        _PROVIDER_APPLIED.pop(feature, None)
+    _PROVIDER_REPORTED.difference_update(
+        {key for key in _PROVIDER_REPORTED if key[0] == feature and key[1] == backend}
+    )
+    return True
+
+
+def _manifest(record, feature, active=None):
+    """One provider as JSON-safe data (the callbacks never leave this module)."""
+    if active is None:
+        active = _selected(feature)
+    return {
+        "feature": feature,
+        "backend": record["backend"],
+        "label": record["label"],
+        "command": record["command"],
+        "priority": record["priority"],
+        "active": record["backend"] == active,
+    }
+
+
+def _selected(feature):
+    """The backend that *is* the provider: the persisted choice, else priority.
+
+    A persisted value that no longer names a registered backend is ignored (a
+    mod was removed or renamed); the highest priority wins. An equal priority is
+    broken by registration order, earliest first, so the answer is deterministic.
+    """
+    records = _PROVIDERS.get(feature)
+    if not records:
+        return None
+    saved = _provider_prefs().GetString(feature, "")
+    if saved in records:
+        return saved
+    return max(
+        records.values(),
+        key=lambda record: (record["priority"], -record["order"]),
+    )["backend"]
+
+
+def providers(feature=None) -> list:
+    """The provider manifests, in registration order.
+
+    With a ``feature``, only that feature's backends (``[]`` when none are
+    registered); without one, every feature in first-registration order. Each
+    entry carries ``feature``, ``backend``, ``label``, ``command``, ``priority``
+    and ``active``. The callbacks stay private so the list stays JSON-safe.
+    """
+    if feature is not None:
+        records = _PROVIDERS.get(feature)
+        if not records:
+            return []
+        active = _selected(feature)
+        return [_manifest(record, feature, active) for record in records.values()]
+    entries = []
+    for name in _PROVIDERS:
+        active = _selected(name)
+        entries.extend(
+            _manifest(record, name, active) for record in _PROVIDERS[name].values()
+        )
+    return entries
+
+
+def activeProvider(feature):
+    """The active backend for ``feature``, or ``None`` when none is registered.
+
+    This is the declaration (the persisted choice, else the highest priority).
+    A mod checks it in ``IsActive``/``Activated`` to refuse to run when another
+    backend owns the feature.
+    """
+    return _selected(feature)
+
+
+def setActiveProvider(feature: str, backend: str) -> dict:
+    """Make ``backend`` the active provider for ``feature`` and apply it.
+
+    The choice is persisted first, then the outgoing backend is deactivated and
+    the incoming one activated, each at most once per change. The outgoing
+    backend is the applied one when there is one, else the declared active one,
+    so a first switch still restores the default it left. Selecting the
+    already-declared backend runs its ``activate`` once (the bootstrap case).
+
+    Callback errors are caught and reported (never fatal), as command callbacks
+    are; they are listed under ``errors``. Returns a dict with ``ok``,
+    ``feature``, ``backend``, ``previous``, the merged ``view`` request and a
+    one-line ``status``. An unknown feature or backend raises ``ValueError``.
+    """
+    records = _PROVIDERS.get(feature)
+    if not records:
+        raise ValueError(f"no provider is registered for feature {feature!r}")
+    if backend not in records:
+        raise ValueError(f"{backend!r} does not provide feature {feature!r}")
+
+    # The declared active backend before the choice changes. It is the outgoing
+    # one even when its effects were never applied: its ``deactivate`` is an
+    # idempotent "restore the default", so the first switch still leaves the
+    # viewport consistent. Selecting the already-declared default is the one case
+    # that still runs ``activate`` once, which is how a backend is bootstrapped.
+    declared = _selected(feature)
+    applied = _PROVIDER_APPLIED.get(feature)
+    outgoing_backend = applied if applied is not None else declared
+    _provider_prefs().SetString(feature, backend)
+
+    result = {
+        "ok": True,
+        "feature": feature,
+        "backend": backend,
+        "previous": declared,
+        "view": {},
+        "status": "",
+        "errors": [],
+    }
+    statuses = []
+    if outgoing_backend != backend:
+        outgoing = records.get(outgoing_backend) if outgoing_backend is not None else None
+        if outgoing is not None:
+            _invoke_provider(outgoing, feature, "deactivate", result, statuses)
+        _invoke_provider(records[backend], feature, "activate", result, statuses)
+    elif applied is None:
+        _invoke_provider(records[backend], feature, "activate", result, statuses)
+    _PROVIDER_APPLIED[feature] = backend
+
+    message = f"{feature}: {backend} is the active provider"
+    if statuses:
+        message = "; ".join(statuses) + "; " + message
+    if result["errors"]:
+        message += " (reported: " + "; ".join(result["errors"]) + ")"
+    result["status"] = message
+    return result
+
+
+def _invoke_provider(record, feature, hook, result, statuses) -> None:
+    """Run one provider callback, isolating and collecting its result."""
+    callback = record.get(hook)
+    if callback is None:
+        return
+    try:
+        value = callback()
+    except Exception as exc:  # noqa: BLE001 - one broken backend is not fatal
+        _report_provider(feature, record["backend"], hook, exc)
+        result["errors"].append(f"{hook}: {_error_text(exc)}")
+        return
+    if not isinstance(value, dict):
+        return
+    view = value.get("view")
+    if isinstance(view, dict):
+        result["view"].update(view)
+    status = value.get("status")
+    if status:
+        statuses.append(str(status))
 
 
 # ---------------------------------------------------------------------------

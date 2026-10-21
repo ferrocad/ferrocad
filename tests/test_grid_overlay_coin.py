@@ -181,9 +181,12 @@ COIN = _build_fake_coin()
 
 
 def install_fake_coin():
-    """Make ``from pivy import coin`` resolve to the stub, once per process."""
-    if "pivy.coin" in sys.modules:
-        return sys.modules["pivy.coin"]
+    """Install the stub as ``pivy.coin`` for this suite.
+
+    A previous suite (or a build that links the extension) may already have imported
+    the real module; replace it so the suite observes its own stub. The stub stays
+    installed, which is what the later provider suite expects.
+    """
     pivy = types.ModuleType("pivy")
     pivy.coin = COIN
     sys.modules["pivy"] = pivy
@@ -217,7 +220,15 @@ def close_documents():
 class GridOverlayCoinTests(unittest.TestCase):
     def setUp(self):
         close_documents()
+        for entry in FreeCADGui.providers():
+            FreeCADGui.unregisterProvider(entry["feature"], entry["backend"])
         self.mod = load_mod()
+        # The semantic mod may have registered the same feature in another suite;
+        # this suite exercises the Coin backend as the active provider. Re-register
+        # after another suite cleared the registry (``load_mod`` caches the module).
+        if "coin" not in [p["backend"] for p in FreeCADGui.providers("grid")]:
+            self.mod.register_provider()
+        FreeCADGui.setActiveProvider("grid", "coin")
         self.mod.SETTINGS.Clear()
         self.mod.manager.remove_grid()
         self.mod.manager.items.clear()
@@ -228,6 +239,7 @@ class GridOverlayCoinTests(unittest.TestCase):
         self.mod.manager.items.clear()
         self.mod.SETTINGS.Clear()
         COIN._registered.clear()
+        FreeCADGui.unregisterProvider("grid", "coin")
         FreeCADGui._cancel_all()
         close_documents()
 

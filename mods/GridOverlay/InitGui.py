@@ -10,6 +10,11 @@ scene graph and no per-document overlay tree.
 On upstream FreeCAD, where ``FreeCAD.Grid`` does not exist, the command reports
 that this build needs FerroCAD's semantic grid API rather than falling back to
 the legacy Coin path; the upstream addon remains the addon for upstream.
+
+The mod declares itself as the ``"semantic"`` backend of the ``"grid"`` feature
+(priority 10, so the native grid is the default). ``mods/GridOverlayCoin``
+declares the same feature as ``"coin"``; only one is active at a time, and
+``Mods_Settings`` switches them (``docs/mod-providers.md``).
 """
 
 from __future__ import annotations
@@ -21,10 +26,21 @@ import FreeCADGui
 
 ADDON_DIR = os.path.dirname(os.path.abspath(__file__))
 
+#: The provider feature this mod provides, and its backend id. The Coin mod
+#: declares the same feature with the id ``"coin"``; see ``docs/mod-providers.md``.
+FEATURE = "grid"
+BACKEND = "semantic"
+
 #: Reported when ``FreeCAD.Grid`` is absent (that is, on upstream FreeCAD).
 UPSTREAM_STATUS = (
     "Grid Overlay needs FerroCAD's semantic grid API (FreeCAD.Grid); this build "
     "does not provide it. Use the upstream addon on upstream FreeCAD."
+)
+
+#: Reported by ``Activated`` when the Coin backend owns the grid.
+INACTIVE_STATUS = (
+    "Grid Overlay (semantic) is not the active grid provider (%s is active). "
+    "Use Mods_Settings to switch backends."
 )
 
 
@@ -36,6 +52,51 @@ def grid_api(app=None):
     the plan names, and so a test can pass a module that lacks the attribute.
     """
     return getattr(FreeCAD if app is None else app, "Grid", None)
+
+
+def is_active():
+    """Whether the semantic backend owns the grid feature.
+
+    ``True`` when the facade has no provider registry (upstream FreeCAD) or the
+    feature has no registered provider: this mod is then the only grid path.
+    """
+    active_provider = getattr(FreeCADGui, "activeProvider", None)
+    if active_provider is None:
+        return True
+    return active_provider(FEATURE) in (None, BACKEND)
+
+
+def inactive_status():
+    """The one-line reason ``Activated``/``on_accept`` refuse to run."""
+    active_provider = getattr(FreeCADGui, "activeProvider", None)
+    active = active_provider(FEATURE) if active_provider is not None else None
+    return INACTIVE_STATUS % (active or "another backend")
+
+
+def activate():
+    """Become the drawn grid: enable the native grid.
+
+    Returns the ``{"view": …}`` request so a switch repaints at once. The
+    registry catches errors; the preference write is idempotent.
+    """
+    grid = grid_api()
+    if grid is None:
+        return {"status": UPSTREAM_STATUS}
+    grid.enabled = True
+    return grid.apply()
+
+
+def deactivate():
+    """Leave the drawn grid: restore the native grid's default (hidden).
+
+    Only visibility is restored; the user's colour and spacing preferences are
+    left alone, so switching back is lossless.
+    """
+    grid = grid_api()
+    if grid is None:
+        return {"status": UPSTREAM_STATUS}
+    grid.enabled = False
+    return grid.apply()
 
 
 def _state(grid):
@@ -70,6 +131,8 @@ def apply_settings(values):
     applies and mirrors. A validation error raised by the API stays in the
     modal.
     """
+    if not is_active():
+        return {"status": inactive_status()}
     grid = grid_api()
     if grid is None:
         return {"status": UPSTREAM_STATUS}
@@ -104,6 +167,8 @@ class GridOverlayCommand:
         return True
 
     def Activated(self):
+        if not is_active():
+            return {"status": inactive_status()}
         grid = grid_api()
         if grid is None:
             return {"status": UPSTREAM_STATUS}
@@ -144,3 +209,25 @@ class GridOverlayCommand:
 
 
 FreeCADGui.addCommand("GridOverlay_Settings", GridOverlayCommand())
+
+# Declare the provider from the mod's entry point. On upstream FreeCAD (no
+# provider registry, no ``FreeCAD.Grid``) the mod still loads and reports; it
+# simply has nothing to register with. Re-callable, so a test or a reset can
+# restore the declaration.
+def register_provider():
+    register = getattr(FreeCADGui, "registerProvider", None)
+    if register is None:
+        return False
+    register(
+        FEATURE,
+        BACKEND,
+        "Semantic (native)",
+        command="GridOverlay_Settings",
+        priority=10,
+        activate=activate,
+        deactivate=deactivate,
+    )
+    return True
+
+
+register_provider()

@@ -666,6 +666,101 @@ def _apply_grid_settings(values):
 FreeCADGui.addCommand("View_GridSettings", _GridSettingsCommand())
 
 
+class _ModsSettingsCommand:
+    """``Mods_Settings`` — choose which mod backend provides a feature.
+
+    Each registered feature becomes one ``enum`` field whose options are the
+    providers' labels. Accepting calls :func:`FreeCADGui.setActiveProvider` for
+    every feature that changed and returns the merged ``{"view": …}`` request,
+    so the shell applies the old backend's ``deactivate`` and the new one's
+    ``activate`` in the same repaint. With no registered providers it reports
+    that instead of opening an empty dialog.
+    """
+
+    def GetResources(self):
+        return {
+            "MenuText": "Mods",
+            "ToolTip": "Choose which mod provides each feature",
+            "Group": "Edit",
+            "CmdType": "ForEdit",
+        }
+
+    def Activated(self):
+        features = {}
+        for provider in FreeCADGui.providers():
+            features.setdefault(provider["feature"], []).append(provider)
+        if not features:
+            return {"status": "no mod providers are registered"}
+
+        fields = []
+        for feature, items in features.items():
+            active = FreeCADGui.activeProvider(feature)
+            current = next(
+                (item for item in items if item["backend"] == active), items[0]
+            )
+            fields.append(
+                {
+                    "name": feature,
+                    "label": feature.replace("_", " ").title(),
+                    "kind": "enum",
+                    "values": [item["label"] for item in items],
+                    "value": current["label"],
+                }
+            )
+        return {
+            "title": "Mod providers",
+            "accept": "Apply",
+            "fields": fields,
+            "on_accept": _apply_mod_settings,
+        }
+
+
+def _apply_mod_settings(values):
+    """Switch every changed feature and return the shell's view request.
+
+    A value may be a provider's label (what the dialog sends) or its backend id
+    (what a script is likely to send); an unknown feature or value is reported,
+    not fatal. Features that did not change run no callbacks.
+    """
+    view = {}
+    changed = []
+    problems = []
+    for feature, choice in values.items():
+        items = FreeCADGui.providers(feature)
+        if not items:
+            problems.append(str(feature))
+            continue
+        backend = None
+        for item in items:
+            if str(choice) in (item["label"], item["backend"]):
+                backend = item["backend"]
+                break
+        if backend is None:
+            problems.append("%s=%s" % (feature, choice))
+            continue
+        if backend == FreeCADGui.activeProvider(feature):
+            continue
+        result = FreeCADGui.setActiveProvider(feature, backend)
+        view.update(result.get("view") or {})
+        problems.extend(result.get("errors") or [])
+        changed.append("%s: %s" % (feature, backend))
+
+    if changed:
+        status = "active provider: " + ", ".join(changed)
+    elif problems:
+        status = "unknown provider: " + ", ".join(problems)
+    else:
+        status = "no provider changed"
+    if problems and changed:
+        status += "; " + "; ".join(problems)
+    if view:
+        return {"view": view, "status": status}
+    return {"status": status}
+
+
+FreeCADGui.addCommand("Mods_Settings", _ModsSettingsCommand())
+
+
 class _ReloadGridSettingsCommand:
     """``App_ReloadGridSettings`` — apply the grid preferences without a restart.
 

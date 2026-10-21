@@ -18,6 +18,11 @@ There is no Qt, no ``QSettings``, no ``getMainWindow`` and no live scene graph.
 Settings live in ``FreeCAD.ParamGet`` (in-memory today). Ground shadows keep the
 upstream parameters and the 80-slot ABI block but draw nothing: ``shadow_count``
 is always 0 (plan §3.5).
+
+The mod declares itself as the ``"coin"`` backend of the ``"grid"`` feature
+(priority 0). ``mods/GridOverlay`` declares the same feature as ``"semantic"``;
+``Mods_Settings`` switches them, and the inactive backend neither draws nor runs
+its command (``docs/mod-providers.md``).
 """
 
 from __future__ import annotations
@@ -53,6 +58,12 @@ DEFAULTS = {
 SETTINGS = App.ParamGet("User parameter:BaseApp/Preferences/Mod/GridOverlayCoin")
 
 COMMAND = "GridOverlayCoin_Settings"
+
+#: The provider feature this mod provides, and its backend id. The semantic mod
+#: declares the same feature with the id ``"semantic"``; see
+#: ``docs/mod-providers.md``.
+FEATURE = "grid"
+BACKEND = "coin"
 
 UPSTREAM_STATUS = (
     "Grid Overlay (Coin) needs FerroCAD's pull overlay bridge "
@@ -96,6 +107,28 @@ def overlay_api():
     if getattr(Gui, "removeOverlay", None) is None:
         return None
     return Gui
+
+
+def is_active():
+    """Whether the Coin backend owns the grid feature.
+
+    ``True`` when the facade has no provider registry (upstream FreeCAD) or the
+    feature has no registered provider: this mod is then the only grid path.
+    """
+    active_provider = getattr(Gui, "activeProvider", None)
+    if active_provider is None:
+        return True
+    return active_provider(FEATURE) in (None, BACKEND)
+
+
+def inactive_status():
+    """The one-line reason ``Activated``/``on_accept`` refuse to run."""
+    active_provider = getattr(Gui, "activeProvider", None)
+    active = active_provider(FEATURE) if active_provider is not None else None
+    return (
+        "Grid Overlay (Coin) is not the active grid provider (%s is active). "
+        "Use Mods_Settings to switch backends." % (active or "another backend")
+    )
 
 
 def _field(name, label, kind, value, **extra):
@@ -385,7 +418,13 @@ class GridManager:
             pass
 
     def ensure_grid(self):
-        """Create the active document's grid when enabled, then bind it."""
+        """Create the active document's grid when enabled, then bind it.
+
+        When another backend owns the feature (or the registry is not loaded),
+        this is a no-op: only one grid backend draws at a time.
+        """
+        if not is_active():
+            return
         doc = getattr(App, "ActiveDocument", None)
         if doc is None:
             return
@@ -441,8 +480,11 @@ def apply_dialog(values):
 
     The returned ``{"view": {...}}`` is what triggers the shell to pull the
     re-registered overlay. The flag only hides the native ground: a registered
-    overlay is drawn whether or not it is set.
+    overlay is drawn whether or not it is set. A stale dialog from a backend
+    that was switched away leaves the store alone and reports why.
     """
+    if not is_active():
+        return {"status": inactive_status()}
     # Validate before persisting, so a bad colour leaves the store alone.
     if "color" in values:
         color_to_linear(values["color"])
@@ -467,6 +509,8 @@ class GridOverlayCoinCommand:
         return True
 
     def Activated(self):
+        if not is_active():
+            return {"status": inactive_status()}
         if coin is None:
             return {
                 "status": "Grid Overlay (Coin) needs the Coin facade (pivy.coin): %s"
@@ -525,6 +569,17 @@ if _previous is not None:
 manager = GridManager()
 Gui._GridOverlayCoinManager = manager
 
+
+def activate():
+    """Register the Coin overlay for the active document."""
+    manager.ensure_grid()
+
+
+def deactivate():
+    """Detach every overlay this mod registered."""
+    manager.remove_grid()
+
+
 # Registration is idempotent across an add-on reload (the facade rejects a
 # duplicate id rather than overwriting it).
 try:
@@ -536,3 +591,24 @@ Gui.addCommand(COMMAND, GridOverlayCoinCommand())
 # Attach on startup when a document is already open; otherwise wait for one.
 if coin is not None and setting("enabled") and getattr(App, "ActiveDocument", None):
     manager.ensure_grid()
+
+# Declare the provider from the mod's entry point. On upstream FreeCAD (no
+# provider registry) the mod still loads and reports; it simply has nothing to
+# register with. Re-callable, so a test or a reset can restore the declaration.
+def register_provider():
+    register = getattr(Gui, "registerProvider", None)
+    if register is None:
+        return False
+    register(
+        FEATURE,
+        BACKEND,
+        "Coin (WGSL)",
+        command=COMMAND,
+        priority=0,
+        activate=activate,
+        deactivate=deactivate,
+    )
+    return True
+
+
+register_provider()

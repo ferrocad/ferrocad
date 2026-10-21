@@ -20,6 +20,11 @@ is the `FreeCAD` Python API, documented by convention and by upstream.
   script, and the slice plan (tracks A/B/C/D).
 - [app-shell-vision.md](app-shell-vision.md) — the interactive window: the five
   pillars, architecture, and slices S1–S6.
+- [TODO-21-10-2026.md](TODO-21-10-2026.md) — working note: the state at the Draft
+  assessment, the measured import ladder, the five D0 fixes, and the open decisions.
+- [incident-2026-10-21-session-crash.md](incident-2026-10-21-session-crash.md) — post-mortem
+  of the lost GNOME session: `systemd-oomd` killed `gnome-shell`, not the GPU or Wayland;
+  the evidence, the timeline, and the prevention notes.
 
 ## Reference
 
@@ -73,6 +78,18 @@ is the `FreeCAD` Python API, documented by convention and by upstream.
   artifacts).
 - [conformance.md](conformance.md) — running the upstream FreeCAD test suite against
   the facade: the sparse checkout, the extension build, the commands and the baseline.
+- [qt-strategy.md](qt-strategy.md) — running upstream workbench GUIs without Qt: the
+  measured Qt surface, the `.ui` loader and micro-shim (option D), and the Q0–Q5 plan.
+- [part-draft-layering.md](part-draft-layering.md) — the Part/Draft/BIM layers: why the
+  cycle is a test fixture, the analytic/B-Rep split, `ferrocad_curves`, and M0–M5.
+- [simplecad-bringup.md](simplecad-bringup.md) — SimpleCAD as the canvas-first proving
+  ground: the measured tree, the Part gap table, and the S0–S5 plan.
+- [grid-overlay-bringup.md](grid-overlay-bringup.md) — a third-party Coin/GLSL addon as
+  a **shader/extraction fixture**: why it is not a workbench, why its GLSL 1.20 cannot
+  run on wgpu, and the D→C plan (headless fixture, then WGSL authoring).
+- [grid-overlay-plan.md](grid-overlay-plan.md) — the decisions that followed (fork/WGSL,
+  `FreeCAD.Grid` semantic API, Coin completeness), the `FreeCAD.Grid` surface and
+  semantics, and the G0–G6 staging.
 - [repackaging.md](repackaging.md) — editions and the repackaging vision.
 - [axis-origin-grid.md](axis-origin-grid.md) — the spatial reference model: the world
   triad, the ground and workplane grids, face frames, snapping, and how the navicube

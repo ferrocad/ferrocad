@@ -17,7 +17,7 @@ use gpui::{
 
 use ferrocad_geom::SelectionRef;
 use ferrocad_inventor::{Scene, Viewport};
-use ferrocad_stage::{InteractionCommit, Manipulator, TransformGizmo};
+use ferrocad_stage::{InteractionCommit, Manipulator, ToolStatus, TransformGizmo};
 use ferrocad_viewport::scene;
 use ferrocad_viewport::{HoverReport, InventorViewport, SelectionEvent, ViewportEvent};
 use ferrocad_wgpu::WgpuRenderer;
@@ -62,6 +62,9 @@ pub struct ShellModel {
     pub commands: Vec<CommandInfo>,
     /// The presentation state: grid and projection (A5).
     pub view: ViewState,
+    /// The active tool's status while its session runs (the tool strip). `None` — or
+    /// an inactive status — hides the strip.
+    pub tool: Option<ToolStatus>,
     pub console: Vec<String>,
     pub status: String,
 }
@@ -169,6 +172,7 @@ impl Shell {
             properties: Vec::new(),
             commands,
             view: ViewState::default(),
+            tool: None,
             console,
             status,
         })))
@@ -371,7 +375,20 @@ impl Shell {
             ViewportEvent::Selection(selection) => self.on_selection(selection, cx),
             ViewportEvent::Interaction(commit) => self.on_interaction(commit, cx),
             ViewportEvent::Transform(event) => self.on_interaction(&event.to_interaction(), cx),
+            ViewportEvent::ToolState(status) => self.on_tool_state(status, cx),
         }
+    }
+
+    /// A tool started, gained a point, finished or was cancelled: mirror its status
+    /// into the model so the tool strip shows the label, point count and hint, and
+    /// hides as soon as the session is over. The document is never touched here.
+    fn on_tool_state(&mut self, status: &ToolStatus, cx: &mut Context<Self>) {
+        let active = status.is_active();
+        if !active {
+            self.active_tool = None;
+        }
+        self.model.lock().unwrap().tool = active.then(|| status.clone());
+        cx.notify();
     }
 
     /// A click: select the object in the inspector, and arm the manipulator and gizmo
@@ -867,22 +884,56 @@ impl Shell {
     }
 
     /// Start an interactive tool through the edition's registry (A5). The tool owns
-    /// pointer events until it ends; no document transaction is opened.
+    /// pointer events until it ends; no document transaction is opened. Its status is
+    /// mirrored into the model immediately, so the tool strip appears even when no
+    /// viewport is available (a headless window or a machine without a GPU).
     fn start_tool(&mut self, id: &str, cx: &mut Context<Self>) -> String {
         let Some(tool) = self.contributions.tool_for(id) else {
             return format!("no such tool {id}");
         };
+        let status = tool.status();
         self.active_tool = Some(id.to_string());
+        self.model.lock().unwrap().tool = status.is_active().then_some(status);
+        let mut pending = None;
         if let Some(viewport) = self.viewport.clone() {
-            viewport.update(cx, |viewport, cx| {
+            pending = viewport.update(cx, |viewport, cx| {
                 // A tool session owns the pointer: the selection handles step aside.
                 viewport.set_manipulators(Vec::new());
                 viewport.set_gizmo(None);
                 viewport.set_tool(Some(tool));
                 cx.notify();
+                viewport.take_tool_state()
             });
         }
+        if let Some(status) = pending {
+            self.on_viewport_event(&ViewportEvent::ToolState(status), cx);
+        }
+        cx.notify();
         format!("tool: {id}")
+    }
+
+    /// Cancel the active tool session (the tool strip's **Cancel** button). The tool
+    /// clears its transient geometry and ends; the strip disappears. This is the same
+    /// path as `Esc` and never writes the document. Returns whether a session existed.
+    pub fn cancel_tool(&mut self, cx: &mut Context<Self>) -> bool {
+        let had_tool = self.active_tool.is_some() || self.model.lock().unwrap().tool.is_some();
+        let mut pending = None;
+        if let Some(viewport) = self.viewport.clone() {
+            pending = viewport.update(cx, |viewport, cx| {
+                let cancelled = viewport.cancel_tool();
+                if cancelled {
+                    cx.notify();
+                }
+                viewport.take_tool_state()
+            });
+        }
+        if let Some(status) = pending {
+            self.on_viewport_event(&ViewportEvent::ToolState(status), cx);
+        }
+        self.active_tool = None;
+        self.model.lock().unwrap().tool = None;
+        cx.notify();
+        had_tool
     }
 
     /// Replace the selection with one whole object (a plain click).
@@ -1103,6 +1154,53 @@ impl Shell {
     fn snapshot(&self) -> ShellModel {
         self.model.lock().unwrap().clone()
     }
+}
+
+/// The tool status strip: the active tool's label, point count, hint and a **Cancel**
+/// button. It is drawn above the viewport only while a tool session is active (see
+/// `ShellModel::tool`).
+fn tool_strip(status: &ToolStatus, cx: &mut Context<Shell>) -> impl IntoElement {
+    div()
+        .id("tool-strip")
+        .flex()
+        .flex_row()
+        .items_center()
+        .gap_3()
+        .px_2()
+        .py_1()
+        .bg(rgb(PANEL_ALT))
+        .border_1()
+        .border_color(rgba(0xffffff14))
+        .text_xs()
+        .child(div().text_color(rgb(FG)).child(status.label.clone()))
+        .child(div().text_color(rgb(MUTED)).child(format!(
+            "{} point{}",
+            status.points,
+            if status.points == 1 { "" } else { "s" }
+        )))
+        .child(
+            div()
+                .flex_1()
+                .min_w_0()
+                .truncate()
+                .text_color(rgb(MUTED))
+                .child(status.hint.clone()),
+        )
+        .child(
+            div()
+                .id("tool-cancel")
+                .px_2()
+                .py_1()
+                .rounded_sm()
+                .bg(rgb(ACCENT))
+                .text_color(rgb(FG))
+                .cursor_pointer()
+                .hover(|style| style.bg(rgb(PANEL)))
+                .child("Cancel")
+                .on_click(cx.listener(|this, _event, _window, cx| {
+                    this.cancel_tool(cx);
+                })),
+        )
 }
 
 /// A slim panel header bar.
@@ -1649,19 +1747,25 @@ impl Render for Shell {
             .min_w_0()
             .h_full()
             .bg(rgb(BG))
-            .child(panel_header("3D viewport"))
-            .child(match &self.viewport {
-                Some(viewport) => viewport.clone().into_any_element(),
-                None => div()
-                    .flex()
-                    .flex_1()
-                    .items_center()
-                    .justify_center()
-                    .text_sm()
-                    .text_color(rgb(MUTED))
-                    .child("viewport (no GPU)")
-                    .into_any_element(),
-            });
+            .child(panel_header("3D viewport"));
+        // The tool strip sits directly under the pane header while a session runs; it
+        // disappears the moment the tool finishes or is cancelled.
+        let viewport = match model.tool.as_ref().filter(|tool| tool.is_active()) {
+            Some(tool) => viewport.child(tool_strip(tool, cx)),
+            None => viewport,
+        };
+        let viewport = viewport.child(match &self.viewport {
+            Some(viewport) => viewport.clone().into_any_element(),
+            None => div()
+                .flex()
+                .flex_1()
+                .items_center()
+                .justify_center()
+                .text_sm()
+                .text_color(rgb(MUTED))
+                .child("viewport (no GPU)")
+                .into_any_element(),
+        });
 
         let hover = self.hover_line(cx);
         let status = div()
@@ -1719,6 +1823,17 @@ impl Render for Shell {
             .relative()
             .size_full()
             .on_key_down(cx.listener(|this, event: &KeyDownEvent, _window, cx| {
+                // The focused viewport handles Esc itself; when the key bubbles here
+                // (the user started a tool from the bar and has not clicked the
+                // viewport yet) cancel the session the same way.
+                if event.keystroke.key == "escape"
+                    && this.dialog.is_none()
+                    && this.active_tool.is_some()
+                {
+                    cx.stop_propagation();
+                    this.cancel_tool(cx);
+                    return;
+                }
                 if let Some(id) = this.shortcut_for(event) {
                     cx.stop_propagation();
                     this.run_command(&id, cx);
@@ -2230,6 +2345,90 @@ if "Test_Tool" not in FreeCADGui.listCommands():
 
         cx.update(|cx| shell.update(cx, |shell, cx| shell.run_command("Test_MissingTool", cx)));
         assert_eq!(model.lock().unwrap().status, "no such tool no_such_tool");
+    }
+
+    /// A live tool session publishes a status the strip can draw, and the Cancel
+    /// handler ends it without a document edit. Headless: no viewport (and so no GPU)
+    /// is created.
+    #[gpui::test]
+    fn cancelling_a_tool_clears_the_strip_and_commits_nothing(cx: &mut TestAppContext) {
+        let _guard = crate::PYTHON_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let model = Shell::boot().expect("boot shell");
+        let shell = cx.update(|cx| cx.new(|cx| Shell::from_model(model.clone(), cx)));
+        cx.update(|cx| {
+            shell.update(cx, |shell, _| {
+                shell.set_contributions(Contributions::new().with_tool("test_polyline", || {
+                    Box::new(ferrocad_stage::PolylineTool::new()) as Box<dyn ferrocad_stage::Tool>
+                }));
+            })
+        });
+
+        let status = cx.update(|cx| {
+            shell.update(cx, |shell, cx| shell.start_tool("test_polyline", cx))
+        });
+        assert_eq!(status, "tool: test_polyline");
+        let status_line = model.lock().unwrap().status.clone();
+        {
+            let m = model.lock().unwrap();
+            let tool = m.tool.as_ref().expect("the strip's status");
+            assert!(tool.is_active());
+            assert_eq!(tool.label, "Polyline");
+            assert_eq!(tool.points, 0);
+            assert!(tool.hint.contains("Esc to cancel"), "{}", tool.hint);
+        }
+
+        // The Cancel button's handler: the session ends and the strip's status is gone.
+        assert!(cx.update(|cx| shell.update(cx, |shell, cx| shell.cancel_tool(cx))));
+        assert!(model.lock().unwrap().tool.is_none(), "the strip is hidden");
+        assert!(cx.update(|cx| shell.read(cx).active_tool.is_none()));
+        assert!(
+            !cx.update(|cx| shell.update(cx, |shell, cx| shell.cancel_tool(cx))),
+            "a second cancel is a no-op"
+        );
+        // No InteractionCommit was produced: the shell's status line/console are intact.
+        assert_eq!(model.lock().unwrap().status, status_line);
+    }
+
+    /// The strip builds and paints headlessly, and disappears after Cancel.
+    #[gpui::test]
+    fn the_tool_strip_renders_without_a_display(cx: &mut TestAppContext) {
+        let _guard = crate::PYTHON_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let model = Shell::boot().expect("boot shell");
+        let window = cx.update(|cx| {
+            let model = model.clone();
+            cx.open_window(Default::default(), move |_window, cx| {
+                cx.new(|cx| Shell::from_model(model.clone(), cx))
+            })
+            .unwrap()
+        });
+        let mut cx = VisualTestContext::from_window(window.into(), cx);
+        let shell: Entity<Shell> = window.root(&mut cx).unwrap();
+
+        cx.update(|_window, cx| {
+            shell.update(cx, |shell, _| {
+                shell.set_contributions(Contributions::new().with_tool("test_polyline", || {
+                    Box::new(ferrocad_stage::PolylineTool::new()) as Box<dyn ferrocad_stage::Tool>
+                }));
+            })
+        });
+        cx.update(|_window, cx| {
+            shell.update(cx, |shell, cx| {
+                shell.start_tool("test_polyline", cx);
+            })
+        });
+        assert!(model.lock().unwrap().tool.is_some());
+
+        // Paint the strip (the fake window has no display or GPU).
+        cx.update(|window, cx| {
+            let _ = window.draw(cx);
+        });
+
+        // Cancel through the same path as the button, then paint again without it.
+        assert!(cx.update(|_window, cx| shell.update(cx, |shell, cx| shell.cancel_tool(cx))));
+        assert!(model.lock().unwrap().tool.is_none());
+        cx.update(|window, cx| {
+            let _ = window.draw(cx);
+        });
     }
 
     fn command_enabled(id: &str) -> bool {

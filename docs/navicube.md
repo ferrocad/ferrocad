@@ -27,6 +27,24 @@ Quarter and **not** pivy: it is a FreeCAD `Gui` controller over a Coin node.
   `decorationroot` holds the cube node (a depth-disabled overlay); the viewer
   forwards each event to `NaviCube::processSoEvent`.
 
+### Up-axis convention (settled 2026-10-21)
+
+The world is **Z-up**; [`axis-origin-grid.md`](axis-origin-grid.md) §2 is authoritative for
+the frame. The cube and its camera follow it:
+
+- **World:** `XY` ground, `+Z` up.
+- **View space:** `+X` right, `+Y` screen-up, `+Z` toward the viewer. A roll-free view
+  keeps the world vertical in the screen's vertical plane, so the identity view is the
+  canonical **top** view (eye `+Z`, screen-up `+Y`).
+- **Cube:** local axes = world axes. `TOP = +Z`, `BOTTOM = −Z`, `FRONT = −Y`,
+  `BACK = +Y`, `RIGHT = +X`, `LEFT = −X`.
+- **Compass:** the turntable lies in the ground `XY` plane at `z = −0.5` (cube space);
+  `N = +Y`, `E = +X`, `S = −Y`, `W = −X` (angles CCW from `+X`). In the canonical top view
+  N is at the top of the turntable.
+
+Before this date the module used a Y-up *view* frame (`TOP = +Y`, compass in `XZ`); that
+convention is removed, not an alternative.
+
 ## 2. Anatomy (as built upstream)
 
 **Structure.** `coinRoot` (`SoSeparator`) → `SoCallback` (which calls
@@ -201,14 +219,15 @@ remains for the chrome's Home.
 **D3 — compass ring (2026-10-20).** The widget grew to 132×132 (ortho half-extent 1.3) and
 a **screen-fixed compass ring** now surrounds the cube: a 64-segment circle, 30° ticks,
 `N/E/S/W` labels and a diamond heading marker at the camera's azimuth. `compass_angle`
-derives the marker from the view rotation with the Y-up convention (E = 0/+X, S = 90/+Z,
-W = 180, N = 270/−Z — north is `−Z` so the canonical top view reads N at the top); the
+derives the marker from the view rotation in the Z-up ground plane (E = 0/+X, N = 90/+Y,
+W = 180/−X, S = 270/−Y — north is `+Y` so the canonical top view reads N at the top); the
 controller keeps no extra state. `NaviCube::{ring_hit,
 ring_angle}` test the annulus in device pixels (pieces win where their pick targets
 overlap). A press starts a scrub; `drag_move` applies `navicube::yaw_view` by the pointer
-angle delta, a view-space yaw that leaves the horizon level. Releasing within 10° of a
-90° heading animates onto the detent (180 ms), otherwise the heading stays. The ring uses
-id 27 (deliberately not a piece) and is an inventor-producer capability.
+angle delta, a world-Z yaw that moves the eye in the ground plane and leaves the horizon
+level. Releasing within 10° of a 90° heading animates onto the detent (180 ms), otherwise
+the heading stays. The ring uses id 27 (deliberately not a piece) and is an
+inventor-producer capability.
 
 **D5 — hover preview; roll (2026-10-20).** *(The roll chevrons described here were removed
 in WA6; the chrome pill's turn controls are now yaw (WA9). The preview cone was removed
@@ -221,7 +240,7 @@ Hovering a piece also added a wireframe **preview cone** pointing from the piece
 the cube centre; it was removed in WA7 because it collided with the glyphs.
 
 **WA1–WA5 — visual pass (2026-10-20).** Five rendering/geometry corrections. (WA1) The
-compass ring is now a **ground-plane turntable** at `y = −0.5`, inside the rotating
+compass ring is now a **ground-plane turntable** at `z = −0.5`, inside the rotating
 subtree, so it projects as a flat line at EL 0 and an ellipse as the camera tilts; ring
 hits project the pointer onto that plane, and `NaviCube::ring_point` exposes projected
 anchors. The cube itself is sized explicitly in logical pixels: `NaviCubeConfig.cube_size`
@@ -237,7 +256,7 @@ beads, pick beads and halos are removed and edges/corners own the resting wirefr
 (WA4) Depth is carried by opacity: front edges @ 0.62, back edges @ 0.10, front glass
 @ 0.16 vs away @ 0.06. (WA5) The chrome is one compact row (11px,
 `#0F1218` @ 0.6, 1px `#FFFFFF14`) instead of a heavy two-line card. Also fixed:
-`yaw_view` now composes the yaw on the right (world Y), so a ring scrub no longer changes
+`yaw_view` now composes the yaw on the right (world Z), so a ring scrub no longer changes
 elevation when the camera is tilted.
 
 **WA6 — depth, scale and typography pass (2026-10-20).** (1) The ring's far arc
@@ -292,10 +311,10 @@ band/loops, far marker) and a **front** node (near band/loops), drawn as
 back → visible cube → front, with the far half at 20% alpha. (4) `NaviCube::sync` rebuilds
 a **roll-free** rotation from the camera's AZ/EL (`view_rotation`), so `T` stays upright and
 the turntable stays horizontal even if the scene is rolled. Near a pole (within ~2.5° of
-vertical) it keeps the camera's own in-plane up instead, because a world-Y yaw there is a
+vertical) it keeps the camera's own in-plane up instead, because a world-Z yaw there is a
 pure roll: without that exception the cube and compass would freeze after a Top/Bottom
 snap. `camera_angles` reports the screen-right bearing at a pole for the same reason. (5) The chrome `◀`/`▶` arrows
-are now **yaw** controls (`InventorViewport::yaw`, `YawDirection`) about world +Y, so the
+are now **yaw** controls (`InventorViewport::yaw`, `YawDirection`) about world +Z, so the
 AZ/EL readout changes and the ring never tilts; the roll-view helper is gone.
 
 **Crate:** these viewport pieces (the element, the controller and the cube) live in

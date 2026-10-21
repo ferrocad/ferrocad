@@ -33,8 +33,9 @@ policy applied through the producer's API (§5). The concrete palettes upstream 
 current build use are recorded as *reference theme values* (§13), not spec constants.
 
 **Normative vs upstream.** The behaviour, taxonomy and interaction model follow upstream.
-The **axis naming** and the compact **pick-id numbering** are FerroCAD's own (upstream is
-Z-up with 10 ordered `PickId`s per group; see §13). The arrow buttons, the context menu,
+The **axis naming** follows FreeCAD's Z-up frame (`TOP = +Z`, `FRONT = −Y`); the compact
+**pick-id numbering** is FerroCAD's own (upstream uses 10 ordered `PickId`s per group; see
+§13). The arrow buttons, the context menu,
 `Backside`/`ViewMenu`, the coordinate-system axes, `stepByTurn` and `rotateToNearest`
 rounding are **deferred** here (§12) — their upstream reference values are recorded (§13)
 so they can be added later.
@@ -48,10 +49,16 @@ into the existing `StateSnapshot` fields.
 
 ## 2. Conventions
 
-**Axes.** FerroCAD's engine default view: **+Z toward the viewer**, **+Y up**,
-**+X right**. A `Piece` is a *signed axis direction* in this frame (each component
-−1, 0 or +1). Upstream is Z-up, so piece **names** differ; the geometry and behaviour do
-not.
+**Axes.** The world is **Z-up** (`docs/axis-origin-grid.md` §2 is authoritative): the
+ground is the `XY` plane and `+Z` is up. A `Piece` is a *signed world direction* in this
+frame (each component −1, 0 or +1): `TOP = +Z`, `BOTTOM = −Z`, `FRONT = −Y` (FreeCAD's
+front), `BACK = +Y`, `RIGHT = +X`, `LEFT = −X`.
+
+**View space.** A camera stores a world→view rotation. View space is `+X` right,
+`+Y` screen-up, `+Z` toward the viewer. The overlay camera is fixed in view space and the
+cube is rotated by the main camera's view rotation, so the cube's local axes are world
+axes. A **roll-free** view keeps world `+Z` in the screen's vertical plane; the identity
+view is therefore the canonical **top** view (eye `+Z`, screen-up `+Y`).
 
 **Pixels.** Every position below is a **device (physical) pixel** unless it is called a
 *logical* pixel. The renderer, the pick buffer, the overlay `Rect`, and the facade all
@@ -69,8 +76,8 @@ holds here (and the rect is square by construction, §7).
 
 **Relationship to grids and workplanes.** The cube is the **world** compass and is never
 re-labelled by a local workplane; how a local frame shows through (the compass heading)
-is specified in [`axis-origin-grid.md`](axis-origin-grid.md) §6. That note also settles
-the world up-axis question (§10.0 there) before either is implemented.
+is specified in [`axis-origin-grid.md`](axis-origin-grid.md) §6. The world up-axis
+question is **settled: Z-up** (`axis-origin-grid.md` §2, convention table).
 
 ## 3. Anatomy and pick taxonomy
 
@@ -89,7 +96,7 @@ The **pick id** is the 1-based index in `Piece::ALL`.
 
 | Range | Kind | Count | Direction components |
 | --- | --- | --- | --- |
-| 1–6 | Face | 6 | one non-zero: `FRONT (0,0,1)`, `BACK (0,0,−1)`, `TOP (0,1,0)`, `BOTTOM (0,−1,0)`, `RIGHT (1,0,0)`, `LEFT (−1,0,0)` |
+| 1–6 | Face | 6 | one non-zero: `FRONT (0,−1,0)`, `BACK (0,1,0)`, `TOP (0,0,1)`, `BOTTOM (0,0,−1)`, `RIGHT (1,0,0)`, `LEFT (−1,0,0)` |
 | 7–18 | Edge | 12 | two non-zero, in `Piece::ALL` order: the four XY-plane (`z=0`) pairs, then the four YZ (`x=0`), then the four XZ (`y=0`) |
 | 19–26 | Corner | 8 | three non-zero sign triples |
 
@@ -118,7 +125,7 @@ primitives, §4.1 — what the producers implement today) and the **upstream ref
 | `ORTHO_EXTENT` | `1.28` | orthographic camera **half**-extent |
 | `RING_INNER` | `1.15` | turntable rim band's inner radius |
 | `RING_RADIUS` | `1.22` | turntable outer radius (disc edge and outer rim) |
-| `RING_Y` | `−0.5` | the ground plane: coplanar with the cube's base |
+| `RING_Z` | `−0.5` | the ground `XY` plane: coplanar with the cube's base |
 | `RING_LABEL_RADIUS` | `0.96` | radius of the `N/E/S/W` anchors **inside** the rim band |
 | `RING_BAND_IN` / `_OUT` | `0.12` / `0.12` | in-plane scrub band about `RING_RADIUS` |
 | `RING_PICK_ID` | `27` | the ring packets' id (not a piece) |
@@ -141,10 +148,11 @@ remains the orientation Home snaps to.
 equilateral corner triangles, 24 vertices in total. Every quad/triangle shares its edges
 exactly with its neighbours, so there are no holes and no hexagonal corners.
 
-**Face square.** `orientation = Rotation::from_vectors(direction, +Z)` (maps the piece
-direction onto +Z — the same rotation the camera takes when it snaps onto the face, §8).
-With `inverse = orientation⁻¹`, `u = inverse·(1,0,0)`, `v = inverse·(0,1,0)`,
-`center = direction · CUBE_HALF`, the four vertices are
+**Face square.** `orientation = Piece::orientation()` is the **roll-free snap** rotation
+that maps the piece direction onto view `+Z` and keeps world `+Z` as screen up (the same
+rotation the camera takes when it snaps onto the face, §8). With `inverse = orientation⁻¹`,
+`u = inverse·(1,0,0)`, `v = inverse·(0,1,0)`, `center = direction · CUBE_HALF`, the four
+vertices are
 `center + su·a·u + sv·a·v` for `(su, sv)` in `(a,a), (−a,a), (−a,−a), (a,−a)`, wound so the
 normal points outward (`+direction`). Fill indices are `[0,1,2, 0,2,3]`; the hover outline
 is `[0,1, 1,2, 2,3, 3,0]`.
@@ -192,18 +200,19 @@ mapped through the same in-plane axes as [`Piece::polygon`] and offset `CUBE_HAL
 along the normal. The glyphs are `Triangles` packets under the **face's** pick id, emitted
 only for front-facing faces. The compass `N/E/S/W` letters remain gpui text.
 
-**Turntable (WA1, WA6, WA7).** A **ground-plane** assembly at `y = RING_Y`, inside the
-rotating subtree:
-- a dark, translucent **floor disc** (64-triangle fan at `RING_RADIUS`, `y = RING_Y − 0.005`)
+**Turntable (WA1, WA6, WA7).** A **ground-plane** assembly at `z = RING_Z` in the world
+`XY` plane, inside the rotating subtree:
+- a dark, translucent **floor disc** (64-triangle fan at `RING_RADIUS`, `z = RING_Z − 0.005`)
   that grounds the cube against the viewport;
 - a **thick rim band** (quads between `RING_INNER` and `RING_RADIUS`, cyan-grey);
 - inner and outer **rim loops** plus a radial tick every 30° as a line list;
 - a filled in-plane diamond heading marker (half 0.06) at the camera's compass angle.
 
-The view rotation projects it into a flat line at elevation 0 and an ellipse as the camera
-tilts. **E** = azimuth 0 (+X), **S** = 90 (+Z), **W** = 180, **N** = 270 (−Z); the marker
-angle is `compass_angle(rotation)`. North is `−Z` so that the canonical top view (down
-`+Y`, `−Z` screen-up) reads N at the top. All packets share `RING_PICK_ID` = 27.
+The view rotation projects it edge-on into the cube's base line when the eye is level, and
+into an ellipse as the camera tilts. **E** = 0 (`+X`), **N** = 90 (`+Y`), **W** = 180
+(`−X`), **S** = 270 (`−Y`); the marker angle is `compass_angle(rotation)`. North is `+Y` so
+that the canonical top view (down `+Z`, `+Y` screen-up) reads N at the top. All packets
+share `RING_PICK_ID` = 27.
 
 The rim band and loops are split at build time by view-space depth into a **far** half
 (drawn before the cube) and a **near** half (drawn after it). The far half fades to
@@ -312,7 +321,8 @@ Camera {
 
 The camera looks down −Z from `(0,0,−3)` at the origin. Mirroring the main camera is done
 by rotating the **cube**, not the camera: the controller writes the main view rotation
-into the rotating subtree's transform (§9). Upstream instead sets
+into the rotating subtree's transform (§9). The cube's local axes are world axes, so this
+is a direct copy of the scene's world→view rotation. Upstream instead sets
 `rootTransform.rotation = cameraOrientation⁻¹` and `translation = (0,0,OVERLAY_CUBE_Z)`.
 
 **Upstream overlay reference:** near `0.1`, far `10.1`; ortho `height = 2·2.1 = 4.2`
@@ -382,8 +392,8 @@ projection. All thresholds are **logical** pixels unless noted.
 | **Hover** | pointer inside `rect`, over a piece or the ring | set `hilite` (piece) or `ring_active` (projected ring); clear otherwise |
 | **Click** | press+release inside `rect`, movement ≤ `drag_threshold` | snap the **main camera** onto the piece |
 | **Drag** | movement > `drag_threshold` while over a piece | orbit the main camera |
-| **Yaw** | press the chrome pill's `◀`/`▶` | animate a ±90° yaw about **world +Y** |
-| **Ring scrub** | press on the projected ground ring, then move | yaw the main camera about **world +Y** by the in-plane pointer angle delta |
+| **Yaw** | press the chrome pill's `◀`/`▶` | animate a ±90° yaw of the eye about **world +Z** |
+| **Ring scrub** | press on the projected ground ring, then move | yaw the main camera about **world +Z** by the in-plane pointer angle delta |
 | **Release** | after a drag, still moving | inertial glide with exponential damping (`τ = 0.18 s`) |
 
 **Drag threshold** = `max(3, round(3 logical px × dpr))` ("device-independent 3 logical
@@ -391,9 +401,9 @@ px, at least 3 device px"). A movement under it is a click (snap), not an orbit.
 
 **Click snap.** The target is the piece's snap rotation (§ below). The camera is animated
 to it (see below), preserving the camera distance (the view matrix's translation).
-The gpui chrome's **Home** control snaps to `home_orientation()` (the `(1,1,1)` corner
-orientation, front-top-right toward the viewer) with the same animation;
-`home_orientation()` is exported by the model.
+The gpui chrome's **Home** control snaps to `home_orientation()` (the `(1,−1,1)` corner
+orientation — front-top-right toward the viewer — with world `+Z` up) with the same
+animation; `home_orientation()` is exported by the model.
 Upstream's `Home` calls `viewer->viewHome()` and a **double click** (same pick within the
 double-click interval) recenters the camera on the scene bounding box.
 
@@ -409,22 +419,24 @@ closest of the discrete in-plane orientations instead of the exact roll — **4*
 the smallest rotation angle about the snapped axis.
 
 **Drag orbit.** Current build (`drag_view`): from a logical delta `(dx, dy)`,
-`RADIANS_PER_PIXEL = 0.012`; yaw about world +Y by `dx·RADIANS_PER_PIXEL`, pitch about
-world +X by `dy·RADIANS_PER_PIXEL`; compose `pitch · yaw · currentViewRotation`,
-preserving the distance. The pitch-first order keeps the world-up/horizon level on a
-diagonal drag; `yaw · pitch` rolled the view (and made the navicube tumble). Upstream
-delegates to the viewer's navigation **orbit drag** (`centerMode =
-SceneBoundingSphere`, `sensitivity = 0.45`, `minDistanceFactor = 1.05`,
-`clippingRadiusFactor = 1.0`); when `draggable` it instead **moves the cube** within the
-viewport area.
+`RADIANS_PER_PIXEL = 0.012`; yaw the eye about world +Z by `dx·RADIANS_PER_PIXEL`, pitch
+about the current screen-right (view row 0) by `dy·RADIANS_PER_PIXEL`; compose
+`pitch · yaw · currentViewRotation`, preserving the distance. Both factors are world
+rotations composed on the right; the order is equivalent to yawing first and pitching
+about the post-yaw screen-right, which keeps the world vertical in the screen's vertical
+plane (no roll) on a diagonal drag. `yaw · pitch` with a fixed world pitch axis rolled the
+view (and made the navicube tumble). Upstream delegates to the viewer's navigation
+**orbit drag** (`centerMode = SceneBoundingSphere`, `sensitivity = 0.45`,
+`minDistanceFactor = 1.05`, `clippingRadiusFactor = 1.0`); when `draggable` it instead
+**moves the cube** within the viewport area.
 
 **Animation.** Current build: a **quaternion slerp** from the current to the target
 rotation, **smoothstep**-eased, over **220 ms**, preserving the camera distance. Upstream:
 a `FixedTimeAnimation` over **500 ms** (`View/AnimationDuration`) with an
 **InOutCubic** ease (`View/NavigationAnimationEasingCurve`).
 
-**Ring scrub (WA1, WA8).** The pointer is projected onto the **ground plane** `y = RING_Y`
-in cube space; the in-plane radius must fall in `RING_RADIUS − RING_BAND_IN` …
+**Ring scrub (WA1, WA8).** The pointer is projected onto the **ground `XY` plane**
+`z = RING_Z` in cube space; the in-plane radius must fall in `RING_RADIUS − RING_BAND_IN` …
 `RING_RADIUS + RING_BAND_OUT`, and the in-plane angle is the scrub angle. Pieces under
 the pointer always win. The projection rotation is **frozen at press time**
 (`ring_angle_for`): the turntable is inside the rotating subtree, so re-measuring with the
@@ -432,8 +444,9 @@ live rotation after each applied yaw feeds the camera's own motion back into the
 angle, which made the same drag amplitude produce different yaws depending on frame timing
 and made left/right drags fail to cancel. With the frozen projection the angle is a pure
 function of the pointer position, so the scrub integrates exactly. A press starts a scrub;
-each move applies `yaw_view(current, Δθ)`, which composes the yaw on the **right** (a
-world-Y rotation) so the elevation and roll are unchanged at any tilt. On release, a
+each move applies `yaw_view(current, Δθ)`, which composes a **world-Z** rotation on the
+right and moves the eye by `Δθ` in the ground plane, so the elevation and roll are
+unchanged at any tilt. On release, a
 heading within 10° of a multiple of 90° animates onto that detent over 180 ms; otherwise
 the view stays. The scrub and the ring's diamond marker use the same in-plane angle. When
 the ring is edge-on the ray misses the plane (no unique intersection), so scrubbing
@@ -441,25 +454,26 @@ requires a tilted view.
 
 **Navicube view (WA9).** `NaviCube::sync` does **not** copy the camera's rotation. It
 extracts the eye's azimuth/elevation and rebuilds a roll-free rotation
-(`view_rotation(azimuth, elevation)`): screen up is world `+Y` projected onto the view
-plane, with `+Z` placed at the bottom when looking straight down/up. The cube therefore
-always shows `T` upright and the turntable horizontal, even if the scene camera has a
-roll; the chrome readout (which also shows AZ/EL, not roll) stays consistent with it.
+(`view_rotation(azimuth, elevation)`): azimuth is measured in the ground `XY` plane from
+`+X`, elevation above it; screen up is world `+Z` projected onto the view plane, with
+`+Y` at the top pole and `−Y` at the bottom pole. The cube therefore always shows `T`
+upright and the turntable horizontal, even if the scene camera has a roll; the chrome
+readout (which also shows AZ/EL, not roll) stays consistent with it.
 
 At a pole the horizon has no direction: within ~2.5° of vertical, `sync` keeps the
-camera's own in-plane up instead (`view_rotation_with_up`). A world-Y yaw at the pole is
+camera's own in-plane up instead (`view_rotation_with_up`). A world-Z yaw at the pole is
 a pure camera roll; without this exception the roll-free rebuild would produce an
 identical rotation and the cube/compass would look frozen after a Top/Bottom snap. The
 AZ readout likewise falls back to the screen-right bearing at a pole, so the yaw arrows
 still change the heading there.
 
 **Roll (WA6–WA9).** There is no roll control. The pill's `◀`/`▶` buttons call
-`InventorViewport::yaw(direction)`, which applies `yaw_view(current, ±π/2)` — a world-Y
-yaw preserving the eye distance and elevation — through the same 220 ms smoothstep
-animation as a snap. The target composes from any **pending animation's target**, not the
-partially animated camera, so two quick opposite clicks cancel exactly. A press inside the
-pill's logical rect is reserved and never picks, orbits or scrubs. Input order is
-**pieces → ring → cube orbit → scene**.
+`InventorViewport::yaw(direction)`, which applies `yaw_view(current, ±90°)` — a world-Z
+yaw moving the eye by the requested azimuth, preserving the eye distance and elevation —
+through the same 220 ms smoothstep animation as a snap. The target composes from any
+**pending animation's target**, not the partially animated camera, so two quick opposite
+clicks cancel exactly. A press inside the pill's logical rect is reserved and never picks,
+orbit, or scrubs. Input order is **pieces → ring → cube orbit → scene**.
 
 **Inertial orbit (D4).** A drag samples the pointer velocity (smoothed, logical px/s).
 On release, if the pointer was still moving above `120 px/s` and was sampled within
@@ -547,7 +561,7 @@ matches the reference producer in:
    base). Conformance compares **roles**, not resolved colours: appearance is the theme's,
    and a producer is compared under the same theme (or on the roles alone).
 4. **Placement/camera** — the rect from §7 and the camera from §6, such that a
-   rect-relative pick at the cube centre resolves `FRONT`.
+   rect-relative pick at the cube centre resolves `TOP` for the identity view.
 5. **Stability** — a second `rebuild` with an unchanged `visual` reuses each
    `(mesh_id, generation)` (no cache growth).
 
@@ -581,7 +595,7 @@ The reference is the inventor producer; the conformance test lives with the widg
 
 | Upstream (`SoNaviCube::PickId`) | FerroCAD |
 | --- | --- |
-| `Front/Top/Right/Rear/Bottom/Left` | `FRONT/BACK/TOP/BOTTOM/RIGHT/LEFT` (engine axes, §2) |
+| `Front/Top/Right/Rear/Bottom/Left` | `FRONT/BACK/TOP/BOTTOM/RIGHT/LEFT` (world axes, §2) |
 | 12 edges (named by two faces) | 12 edges (two signed axes, ids 7–18) |
 | 8 corners | 8 corners (three signed axes, ids 19–26) |
 | `Home` | gpui chrome bar (D4): projection toggle, Home, `AZ/EL` |

@@ -538,10 +538,7 @@ mod tests {
 
     #[test]
     fn pieces_are_emitted_back_to_front() {
-        let orientation = Rotation::from_vectors(
-            Vector3::new(1.0, 1.0, 1.0).normalize(),
-            Vector3::new(0.0, 0.0, 1.0),
-        );
+        let orientation = Piece { axes: [1, -1, 1] }.orientation();
         let scene = scene_with(
             &visual(None, &[], orientation, false, false),
             &NavicubeTheme::default(),
@@ -601,7 +598,7 @@ mod tests {
     #[test]
     fn hidden_faces_are_culled() {
         let scene = scene_with(
-            &visual(None, &[Piece::BACK], Rotation::identity(), false, false),
+            &visual(None, &[Piece::BOTTOM], Rotation::identity(), false, false),
             &NavicubeTheme::default(),
         );
         let (queue, _) = compile(&scene);
@@ -613,7 +610,7 @@ mod tests {
                 .collect::<Vec<_>>()
         };
         assert!(
-            packets(Piece::BACK).is_empty(),
+            packets(Piece::BOTTOM).is_empty(),
             "a back-facing face is culled, not drawn dimmed"
         );
         let top = packets(Piece::TOP);
@@ -716,16 +713,22 @@ mod tests {
 
     #[test]
     fn the_compass_ring_is_a_ground_plane_line_and_marker() {
-        // The band must split into two non-empty halves before compilation.
+        // A tilted view so the XY turntable is not edge-on; both depth halves exist.
+        let orientation = crate::navicube::view_rotation(0.6, 0.4);
+        let matrix = orientation.to_matrix();
         let (band, _) = super::super::model::ring_band();
-        let (_, far_i, _, near_i) = split_quads(&band, &Rotation::identity().to_matrix());
+        let (_, far_i, _, near_i) = split_quads(&band, &matrix);
         assert!(
             !far_i.is_empty() && !near_i.is_empty(),
             "band quads: far {} / near {}",
             far_i.len(),
             near_i.len()
         );
-        let (queue, _) = compile(&scene(None));
+        let scene = scene_with(
+            &visual(None, &[], orientation, false, false),
+            &NavicubeTheme::default(),
+        );
+        let (queue, _) = compile(&scene);
         let packets: Vec<_> = queue
             .packets
             .iter()
@@ -754,7 +757,7 @@ mod tests {
                 .iter()
                 .flat_map(|packet| packet.geometry.as_ref().unwrap().vertices.iter())
                 .all(
-                    |vertex| (f64::from(vertex.position[1]) - super::super::model::RING_Y).abs()
+                    |vertex| (f64::from(vertex.position[2]) - super::super::model::RING_Z).abs()
                         < 1e-6
                 )
         );
@@ -766,7 +769,7 @@ mod tests {
 
         let ring_line_color = |proximity, ring| {
             let scene = scene_with(
-                &visual(None, &[], Rotation::identity(), proximity, ring),
+                &visual(None, &[], orientation, proximity, ring),
                 &NavicubeTheme::default(),
             );
             let (queue, _) = compile(&scene);

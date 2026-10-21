@@ -47,7 +47,7 @@ both favour A.
 | Hover bloom | theme role → colour | cyan square/triangle fill + outline, edge ribbon (no post-process bloom) |
 | 26 targets | `PickId` per piece | keep; square faces, bevel quads, triangular corners |
 | Pass-through negative space | viewport-wide `handle_pointer`/`handle_button` | only cube pieces and the ring consume; otherwise fall through to the scene |
-| Compass ring | none | **3D turntable** on the ground plane (`y = −0.5`), projected as an ellipse by the view rotation |
+| Compass ring | none | **3D turntable** on the ground `XY` plane (`z = −0.5`), projected as an ellipse by the view rotation |
 | PERSP/ORTHO | `Camera::projection` | add a projection toggle that preserves framing; compact gpui pill below the gizmo |
 | Angle readout | none | derive azimuth/elevation from `Camera.view`; gpui text |
 | Roll chevrons | none | **removed from the 3D overlay (WA6)**; the chrome pill's `◀`/`▶` arrows now **yaw** ±90° (WA9) |
@@ -118,10 +118,10 @@ viewport without relying on the wireframe alone.
   would stretch the cube). Built layout:
   - cube `100 × 100` logical px (its largest projected extent), with an overlay box of
     ≈`148 × 148` derived from the turntable layout; ortho half-extent `1.28`;
-  - the turntable is a dark floor disc plus a rim band at `y = −0.5`
-    (`1.15..1.22`), with the `N/E/S/W` anchors **inside** the track at `0.96`, so at
-    elevation 0 it flattens into the cube's base line and opens into a foreshortened
-    ellipse as the camera tilts;
+  - the turntable is a dark floor disc plus a rim band at `z = −0.5`
+    (`1.15..1.22`), with the `N/E/S/W` anchors **inside** the track at `0.96`, so an
+    edge-on (elevation 0) view flattens it into the cube's base line and a tilted view
+    opens it into a foreshortened ellipse;
   - the cube is **centred** in a `CHROME_WIDTH = 248` logical column whose outer edge
     carries the margin; the chrome bar is a **gpui overlay** below that column
     (`248 × 26`), not part of the 3D scene.
@@ -150,7 +150,7 @@ stateDiagram-v2
 - **Drag on the body** orbits (existing `drag_view`, horizon-preserving). Add velocity +
   damping for the "inertial" feel after release.
 - **Compass ring**: hit-test the ground-plane circle by projecting the pointer onto
-  `y = −0.5` in cube space; map the pointer's in-plane angle to a **world-Y** yaw
+  `z = −0.5` in cube space; map the pointer's in-plane (`XY`) angle to a **world-Z** yaw
   (preserves elevation), with magnetic detents at 0/90/180/270°. An edge-on ring has no
   unique intersection, so scrubbing needs a tilted view.
 - **Pass-through**: in `InventorViewport::handle_button`, if the point is inside the
@@ -253,9 +253,9 @@ D3/D4 make it an instrument rather than a widget. D5 is polish.
   zoom_projection,eye_distance,is_orthographic}`. Perspective → orthographic sets
   `extent = eye_distance · tan(fov/2)`; the inverse restores the fov. Orthographic zoom
   scales the extent; perspective zoom keeps using the eye distance.
-- **Angles.** `camera_angles` reports the eye's bearing from the pivot with the engine's
-  **Y-up** convention (azimuth in XZ from +X, elevation from +Y), so the sample view reads
-  `AZ 045° EL 032°`.
+- **Angles.** `camera_angles` reports the eye's bearing from the pivot in the **Z-up**
+  frame (azimuth in the `XY` plane from +X, elevation above it), so the sample isometric
+  view `(+X, −Y, +Z)` reads `AZ 315° EL 035°`.
 - **Inertial orbit.** Drag deltas feed a smoothed velocity (logical px/s). If the pointer
   is still moving at release (>120 px/s, sampled within 150 ms) the camera glides with
   `e^(−dt/0.18 s)` damping until 12 px/s; a press, a zoom or a snap stops it. The render
@@ -272,11 +272,11 @@ D3/D4 make it an instrument rather than a widget. D5 is polish.
   cardinals), fixed `N/E/S/W` glyph labels at radius `1.18`, and a filled diamond
   **heading marker** at the camera's azimuth. Emitted by the inventor producer after the
   cube as one line packet (pick id 27), four label packets and one triangle packet.
-- **Compass semantics.** E = azimuth 0 (+X), S = 90 (+Z), W = 180, N = 270 (−Z),
-  consistent with the Y-up `AZ` readout. North is `−Z` because the canonical top view
-  looks down `+Y` with `−Z` screen-up, so N reads at the top of the turntable.
-  `compass_angle` derives the marker from the view rotation, so the controller carries no
-  extra state.
+- **Compass semantics.** E = 0 (+X), N = 90 (+Y), W = 180 (−X), S = 270 (−Y), measured
+  CCW in the ground `XY` plane, consistent with the Z-up `AZ` readout. North is `+Y`
+  because the canonical top view looks down `+Z` with `+Y` screen-up, so N reads at the
+  top of the turntable. `compass_angle` derives the marker from the view rotation, so the
+  controller carries no extra state.
 - **Scrub.** `NaviCube::{ring_hit, ring_angle}` test an annulus in device pixels (pieces
   win inside their pick targets, so a corner click is never stolen). A press starts a
   ring drag; `drag_move` applies `navicube::yaw_view` by the pointer angle delta, a
@@ -329,7 +329,7 @@ D3/D4 make it an instrument rather than a widget. D5 is polish.
   **pieces → chevrons → ring → cube orbit → scene**, and the chevron owns the press.
 - **Animated roll.** *(WA9: the pill's turn controls are now yaw. A press starts
   `SnapAnimation::to(yaw_view(...), 220 ms)`, a quarter turn about the world vertical
-  `+Y`; `YawDirection::angle()` = ±π/2. `yaw_view` preserves the elevation and the eye
+  `+Z`; `YawDirection::angle()` = ±π/2. `yaw_view` preserves the elevation and the eye
   distance, so the turntable stays horizontal.)* A chevron press used to start
   `SnapAnimation::to(roll_view(...), 220 ms)`, a quarter turn about the screen normal.
 - **Hover preview.** A hovered face/edge/corner grows a translucent wireframe **cone** from
@@ -357,9 +357,9 @@ D3/D4 make it an instrument rather than a widget. D5 is polish.
 ### 7.7 WA1–WA5 visual pass (2026-10-20)
 
 - **WA1 — 3D compass turntable.** The ring moved from a screen-fixed circle in the
-  overlay plane to a **ground-plane** circle at `y = RING_Y = −0.5`, radius `1.02`, inside
+  overlay plane to a **ground-plane** circle at `z = RING_Z = −0.5`, radius `1.02`, inside
   the rotating subtree (first node, behind the glass). It is projected by the same view
-  rotation as the cube: flat at EL 0, an ellipse at higher elevation. The heading marker
+  rotation as the cube: edge-on at EL 0, an ellipse at higher elevation. The heading marker
   lies in the plane. `NaviCube::{ring_hit, ring_angle}` now project the pointer onto the
   plane and test in-plane radius/angle; at edge-on incidence there is no unique
   intersection, so scrubbing requires a tilted view. `NaviCube::ring_point(angle)` exposes
@@ -393,7 +393,7 @@ D3/D4 make it an instrument rather than a widget. D5 is polish.
   `the_compass_ring_is_a_ground_plane_line_and_marker`,
   `edges_stop_at_the_chamfer_and_meet_the_corner_triangle`,
   `corner_triangles_are_flush_and_wound_outward`, plus the updated chrome and scrub
-  tests. `yaw_view` was also corrected to a world-Y composition; the old order changed
+  tests. `yaw_view` was also corrected to a world-Z composition; the old order changed
   elevation whenever the camera was tilted.
 
 ### 7.8 WA6 visual pass (2026-10-20)
@@ -554,8 +554,8 @@ D3/D4 make it an instrument rather than a widget. D5 is polish.
 - [x] PERSP/ORTHO switch without jump: the projected half-height at the pivot is
   identical, and toggling back restores the original fov (unit test).
 - [x] Orthographic zoom changes the extent, not just the eye distance.
-- [x] The `AZ/EL` readout matches the eye's bearing under the Y-up convention (the
-  sample view reads 45°/32.4°).
+- [x] The `AZ/EL` readout matches the eye's bearing under the Z-up convention (the
+  isometric sample view reads 315°/35.3°).
 - [x] Home animates the camera to `home_orientation()` from the chrome bar.
 - [x] The chrome bar's press, scroll and drag are reserved: they neither orbit nor pick
   the scene (`the_chrome_does_not_start_a_scene_orbit`).
@@ -607,7 +607,7 @@ D3/D4 make it an instrument rather than a widget. D5 is polish.
 - [x] The chrome bar is a single compact row with an 11px font, a 60%-opaque `#0F1218`
   fill and a 1px `#FFFFFF14` border; its rect, painting and input reservation still come
   from `chrome_bar_rect`.
-- [x] A ring scrub yaws about **world Y** and preserves elevation at any tilt; at edge-on
+- [x] A ring scrub yaws about **world Z** and preserves elevation at any tilt; at edge-on
   incidence the ring has no unambiguous scrub angle.
 
 ## 15. Acceptance for WA6
@@ -680,16 +680,16 @@ D3/D4 make it an instrument rather than a widget. D5 is polish.
   order is transform → back ring → visible pieces → front ring, with the far half at 20%
   alpha. The near band/rim can now pass in front of the body without over-painting it.
 - **Roll-free view.** `NaviCube::sync` derives azimuth/elevation from the camera and
-  rebuilds the rotation with `view_rotation` (world `+Y` projected as screen up; `+Z` at
-  the bottom for top/bottom views). The cube ignores scene roll, so `T` stays upright and
-  the turntable stays horizontal; the AZ/EL readout always matches the cube. **Pole
+  rebuilds the rotation with `view_rotation` (world `+Z` projected as screen up; `+Y` at
+  the top pole, `−Y` at the bottom pole). The cube ignores scene roll, so `T` stays upright
+  and the turntable stays horizontal; the AZ/EL readout always matches the cube. **Pole
   exception:** within ~2.5° of vertical, the horizon has no direction, so `sync` keeps the
-  camera's in-plane up (`view_rotation_with_up`). A world-Y yaw at the pole is a pure
+  camera's in-plane up (`view_rotation_with_up`). A world-Z yaw at the pole is a pure
   camera roll; without this, `sync` would rebuild an identical rotation and the cube and
   compass would freeze after a Top/Bottom snap. `camera_angles` mirrors this by reporting
   the screen-right bearing at a pole.
 - **Yaw arrows.** The chrome `◀`/`▶` controls are now **yaw** controls
-  (`InventorViewport::yaw`, `YawDirection`): ±90° about world +Y, composed from a pending
+  (`InventorViewport::yaw`, `YawDirection`): ±90° about world +Z, composed from a pending
   animation's target. `roll_view` and the roll interaction are gone.
 - **Tests.** `face_squares_are_flat_and_centred_on_the_face`,
   `bevel_quads_bridge_adjacent_face_squares`,

@@ -31,8 +31,8 @@ use ferrocad_stage::shape::WIRE_DEPTH_BIAS;
 use ferrocad_stage::{
     FaceFrame, GizmoCommitEvent, GizmoHandle, GizmoModifiers, GizmoValue, GridSpec, GridStyle,
     InteractionCommit, Manipulator, MouseButton as StageButton, PointerEvent, PointerKind,
-    SnapCandidate, SnapContext, SnapKind, Tool, TransformGizmo, Workplane, feedback, grid,
-    snap_to_geometry_with,
+    SnapCandidate, SnapContext, SnapKind, Tool, ToolStatus, TransformGizmo, Workplane, feedback,
+    grid, snap_to_geometry_with,
 };
 use ferrocad_stage::screen::{project_device, scale_for};
 use ferrocad_types::{Matrix4, Placement, Rotation, Vector3};
@@ -89,6 +89,10 @@ pub enum ViewportEvent {
     /// A gizmo drag ended. The host converts it with
     /// [`GizmoCommitEvent::to_interaction`] and routes it like any other commit.
     Transform(GizmoCommitEvent),
+    /// The active tool's status changed: it started, gained a point, finished, or was
+    /// cancelled. `status.active` is false once the session ended, so the host hides
+    /// its tool strip.
+    ToolState(ToolStatus),
 }
 
 /// A gpui view that presents an [`InventorView`] (image path) and routes pointer
@@ -104,6 +108,10 @@ pub struct InventorViewport<V: InventorView> {
     stage_dirty: bool,
     /// The active interactive tool (the `SoEventCallback` replacement), if any.
     tool: Option<Box<dyn Tool>>,
+    /// A tool status waiting to be emitted as [`ViewportEvent::ToolState`] by the next
+    /// gpui handler. The pointer/key entry points are headless (no `cx`), so they queue
+    /// here and the window handlers drain it.
+    tool_state: Option<ToolStatus>,
     /// The tool's transient visuals, rebuilt on every dispatched event. Drawn as an
     /// overlay (on top, depth off) and never picked, so a rubber band cannot shadow the
     /// geometry under the cursor.
@@ -705,6 +713,7 @@ impl<V: InventorView> InventorViewport<V> {
             stage,
             stage_dirty: false,
             tool: None,
+            tool_state: None,
             transient: RenderQueue::default(),
             snap_grid: None,
             gizmo: None,
@@ -791,15 +800,17 @@ impl<V: InventorView> InventorViewport<V> {
     /// Activate an interactive tool: pointer events are dispatched to it and its
     /// transient visuals are drawn over the scene (see [`Tool`]).
     pub fn with_tool(mut self, tool: Box<dyn Tool>) -> Self {
-        self.tool = Some(tool);
+        self.set_tool(Some(tool));
         self
     }
 
-    /// Replace (or clear) the active tool.
+    /// Replace (or clear) the active tool. Starting one queues its
+    /// [`ToolStatus`] for the host's strip.
     pub fn set_tool(&mut self, tool: Option<Box<dyn Tool>>) {
         if tool.is_none() {
             self.set_snap_feedback(None, None);
         }
+        self.tool_state = tool.as_ref().map(|tool| tool.status());
         self.tool = tool;
         self.rebuild_transient();
     }
@@ -807,6 +818,49 @@ impl<V: InventorView> InventorViewport<V> {
     /// The active tool, if any.
     pub fn tool(&self) -> Option<&dyn Tool> {
         self.tool.as_deref()
+    }
+
+    /// The active tool's live status, if a tool session is installed.
+    pub fn tool_status(&self) -> Option<ToolStatus> {
+        self.tool.as_ref().map(|tool| tool.status())
+    }
+
+    /// Take the tool status queued for the host (the next gpui handler emits it as
+    /// [`ViewportEvent::ToolState`]).
+    pub fn take_tool_state(&mut self) -> Option<ToolStatus> {
+        self.tool_state.take()
+    }
+
+    /// Cancel the active tool (the `Esc` path and the host's Cancel button): clear its
+    /// transient geometry, end the session, and queue an inactive status for the host.
+    /// No [`InteractionCommit`] is produced. Returns whether a session was active.
+    pub fn cancel_tool(&mut self) -> bool {
+        let Some(tool) = self.tool.as_mut() else {
+            return false;
+        };
+        let status = tool.status().ended();
+        tool.cancel();
+        self.tool = None;
+        self.set_snap_feedback(None, None);
+        self.rebuild_transient();
+        self.tool_state = Some(status);
+        true
+    }
+
+    /// Finish the active tool (the `Enter` path): end the session and clear its
+    /// transient visuals. Committing the drawn geometry to a document is a host
+    /// concern and is not part of the session, so nothing is written and no
+    /// [`InteractionCommit`] is produced. Returns whether a session was active.
+    pub fn finish_tool(&mut self) -> bool {
+        let Some(tool) = self.tool.as_ref() else {
+            return false;
+        };
+        let status = tool.status().ended();
+        self.tool = None;
+        self.set_snap_feedback(None, None);
+        self.rebuild_transient();
+        self.tool_state = Some(status);
+        true
     }
 
     /// Set the grid snapping spacing (device-independent world units); `None` disables
@@ -862,19 +916,26 @@ impl<V: InventorView> InventorViewport<V> {
         cancelled
     }
 
-    /// Handle a key press. `Esc` cancels an active manipulator drag, then a gizmo drag,
-    /// then clears an active workplane.
+    /// Handle a key press. `Esc` cancels the active tool first, then a manipulator
+    /// drag, a gizmo drag, and finally an active workplane. `Enter` finishes an active
+    /// tool (without committing anything).
     pub fn handle_key(&mut self, event: &KeyDownEvent) -> bool {
-        if event.keystroke.key == "escape" {
-            if self.cancel_manipulator_drag() {
-                return true;
+        match event.keystroke.key.as_str() {
+            "escape" => {
+                if self.cancel_tool() {
+                    return true;
+                }
+                if self.cancel_manipulator_drag() {
+                    return true;
+                }
+                if self.cancel_gizmo_drag() {
+                    return true;
+                }
+                self.clear_workplane()
             }
-            if self.cancel_gizmo_drag() {
-                return true;
-            }
-            return self.clear_workplane();
+            "enter" => self.finish_tool(),
+            _ => false,
         }
-        false
     }
 
     /// The active gizmo, mutably (e.g. to move its origin).
@@ -1710,7 +1771,7 @@ impl<V: InventorView> InventorViewport<V> {
         true
     }
 
-    /// Yaw the view ±90° about the vertical (+Y) axis, animated (the chrome's arrows).
+    /// Yaw the view ±90° about the vertical (+Z) axis, animated (the chrome's arrows).
     /// Yaw keeps the horizon level and the turntable horizontal, so the angle readout
     /// changes by ±90° and the navicube's `T` stays upright.
     ///
@@ -1778,6 +1839,7 @@ impl<V: InventorView> InventorViewport<V> {
             button,
             hit: hit.copied(),
         };
+        let before_status = self.tool.as_ref().map(|tool| tool.status());
         let context = self.snap_context();
         let candidates = self.snap_candidates(hit);
         let snap = snap_to_geometry_with(&event, &self.camera, context.as_ref(), &candidates);
@@ -1786,6 +1848,14 @@ impl<V: InventorView> InventorViewport<V> {
             tool.on_event(&event, snap);
         }
         self.rebuild_transient();
+        // Report a status change (a placed point, a changed hint); a plain cursor move
+        // leaves the status equal and emits nothing.
+        if let Some(tool) = self.tool.as_ref() {
+            let status = tool.status();
+            if before_status.as_ref() != Some(&status) {
+                self.tool_state = Some(status);
+            }
+        }
         true
     }
 
@@ -2526,11 +2596,11 @@ impl<V: InventorView> InventorViewport<V> {
         };
         let plane = &frame.plane;
         let n = plane.n;
-        // Roll-free: the screen up is the world vertical (the view model's +Y, the axis
-        // the navicube canonicalises on) projected into the plane. Looking down a face
-        // whose normal is nearly the world vertical has no such up, so fall back to the
-        // plane's own `V`. A rolled camera could not be represented by the navicube.
-        let world_up = Vector3::new(0.0, 1.0, 0.0);
+        // Roll-free: the screen up is the world vertical (`+Z`, the axis the navicube
+        // canonicalises on) projected into the plane. Looking down a face whose normal is
+        // nearly the world vertical has no such up, so fall back to the plane's own `V`.
+        // A rolled camera could not be represented by the navicube.
+        let world_up = Vector3::new(0.0, 0.0, 1.0);
         let mut up = world_up.sub(&n.scale(world_up.dot(&n)));
         if up.length() < 1e-6 {
             up = plane.v.sub(&n.scale(plane.v.dot(&n)));
@@ -2990,6 +3060,12 @@ impl<V: InventorView + 'static> Render for InventorViewport<V> {
         }
         self.refresh();
 
+        // A tool installed directly (outside a pointer or key handler) reports its
+        // start here; the pointer/key handlers drain the same queue themselves.
+        if let Some(status) = self.take_tool_state() {
+            cx.emit(ViewportEvent::ToolState(status));
+        }
+
         // Face and compass labels are gpui text over the overlay image (crisp, in the
         // app's font). They follow the same view rotation and rect as the 3D overlay.
         let labels = self
@@ -3056,7 +3132,11 @@ impl<V: InventorView + 'static> Render for InventorViewport<V> {
             .track_focus(&focus)
             .focusable()
             .on_key_down(cx.listener(|this, event: &KeyDownEvent, _window, cx| {
-                if this.handle_key(event) {
+                let changed = this.handle_key(event);
+                if let Some(status) = this.take_tool_state() {
+                    cx.emit(ViewportEvent::ToolState(status));
+                }
+                if changed {
                     cx.notify();
                 }
             }))
@@ -3085,6 +3165,9 @@ impl<V: InventorView + 'static> Render for InventorViewport<V> {
                     changed |= this.drag_move_with_modifiers(local, modifiers);
                 }
                 changed |= this.handle_pointer_with_modifiers(local, modifiers);
+                if let Some(status) = this.take_tool_state() {
+                    cx.emit(ViewportEvent::ToolState(status));
+                }
                 if changed {
                     cx.notify();
                 }
@@ -3095,12 +3178,16 @@ impl<V: InventorView + 'static> Render for InventorViewport<V> {
                 }
                 let local = this.to_local(event.position);
                 let modifiers = gizmo_modifiers(event.modifiers);
-                if this.handle_button_with_modifiers(
+                let changed = this.handle_button_with_modifiers(
                     local,
                     mouse_button(event.button),
                     true,
                     modifiers,
-                ) {
+                );
+                if let Some(status) = this.take_tool_state() {
+                    cx.emit(ViewportEvent::ToolState(status));
+                }
+                if changed {
                     cx.notify();
                 }
             }))
@@ -3118,8 +3205,12 @@ impl<V: InventorView + 'static> Render for InventorViewport<V> {
                 let selection = this.take_selection();
                 let commit = this.take_interaction_commit();
                 let transform = this.take_gizmo_commit();
+                let tool_state = this.take_tool_state();
                 if changed {
                     cx.notify();
+                }
+                if let Some(status) = tool_state {
+                    cx.emit(ViewportEvent::ToolState(status));
                 }
                 if let Some(selection) = selection {
                     cx.emit(ViewportEvent::Selection(selection));
@@ -3296,10 +3387,10 @@ fn chrome_bar_rect(cube: &NaviCube) -> [f32; 4] {
 }
 
 /// The camera's **azimuth/elevation** in degrees, from the eye's bearing as seen from
-/// the pivot (the world origin). The engine is **Y-up**, so azimuth is measured in the
-/// horizontal XZ plane from +X, and elevation above that plane from +Y. This is the
+/// the pivot (the world origin). The world is **Z-up**, so azimuth is measured in the
+/// ground `XY` plane from `+X` (toward `+Y`) and elevation is above that plane. This is the
 /// viewpoint angle, not the look direction. A degenerate (identity) view reports
-/// `(0, 0)`.
+/// `(0, 0)`. At a pole the eye has no bearing, so the screen-right direction supplies one.
 pub fn camera_angles(camera: &Camera) -> (f64, f64) {
     let Some(inverse) = camera.view.inverse() else {
         return (0.0, 0.0);
@@ -3310,17 +3401,17 @@ pub fn camera_angles(camera: &Camera) -> (f64, f64) {
         return (0.0, 0.0);
     }
     let axis = eye.scale(1.0 / distance);
-    let elevation = axis.y.clamp(-1.0, 1.0).asin().to_degrees();
+    let elevation = axis.z.clamp(-1.0, 1.0).asin().to_degrees();
     // Azimuth is the eye's horizontal bearing. At a pole the eye has no bearing, so use
     // the screen-right direction instead: a top view then keeps a stable heading that
     // the yaw controls still turn, rather than freezing at 000°.
-    let horizontal = (axis.x * axis.x + axis.z * axis.z).sqrt();
+    let horizontal = (axis.x * axis.x + axis.y * axis.y).sqrt();
     let bearing = if horizontal > 1e-9 {
         axis
     } else {
         inverse.transform(&Vector3::new(1.0, 0.0, 0.0))
     };
-    let azimuth = bearing.z.atan2(bearing.x).to_degrees().rem_euclid(360.0);
+    let azimuth = bearing.y.atan2(bearing.x).to_degrees().rem_euclid(360.0);
     // A hair below a full turn rounds to 360°; report it as 0°.
     let azimuth = if azimuth >= 360.0 - 1e-9 { 0.0 } else { azimuth };
     (azimuth, elevation)
@@ -4197,16 +4288,17 @@ mod tests {
             ..Camera::identity()
         };
         let (azimuth, elevation) = camera_angles(&camera);
-        // (1, 0.9, 1) is 45° in XZ and asin(0.9/√2.81) ≈ 32.4° above it.
-        assert!((azimuth - 45.0).abs() < 0.2, "azimuth {azimuth}");
-        assert!((elevation - 32.4).abs() < 0.2, "elevation {elevation}");
+        // Z-up: (1, 0.9, 1) is atan2(0.9, 1) ≈ 42° in the XY plane and
+        // asin(1/√2.81) ≈ 36.6° above it.
+        assert!((azimuth - 42.0).abs() < 0.2, "azimuth {azimuth}");
+        assert!((elevation - 36.6).abs() < 0.2, "elevation {elevation}");
     }
 
     #[test]
     fn camera_angles_keep_a_heading_at_the_pole() {
         use crate::navicube::{Piece, snap_view, yaw_view};
 
-        // A Top snap puts the eye exactly on +Y. The eye has no bearing there, so the
+        // A Top snap puts the eye exactly on +Z. The eye has no bearing there, so the
         // screen-right direction supplies one: the canonical top view has +X right and
         // reads 0°, and a yaw turns it instead of freezing at 000°.
         let top = Camera {
@@ -4375,10 +4467,7 @@ mod tests {
         Camera {
             view: Placement::new(
                 Vector3::new(0.0, 0.0, -4.0),
-                Rotation::from_vectors(
-                    Vector3::new(0.0, 0.9, 1.0).normalize(),
-                    Vector3::new(0.0, 0.0, 1.0),
-                ),
+                crate::navicube::view_rotation(std::f64::consts::FRAC_PI_2, 0.5),
             )
             .to_matrix(),
             viewport: Viewport::new([640, 480], 1.0),
@@ -6065,6 +6154,99 @@ mod tests {
         assert_eq!(view.snap_kind(), None);
     }
 
+    fn key(key: &str) -> KeyDownEvent {
+        KeyDownEvent {
+            keystroke: gpui::Keystroke {
+                key: key.to_string(),
+                ..Default::default()
+            },
+            is_held: false,
+            prefer_character_input: false,
+        }
+    }
+
+    /// The tool status the host would receive: start, each placed point, and the end.
+    #[test]
+    fn the_tool_status_is_queued_on_start_add_finish_and_cancel() {
+        let mut view = tool_view();
+        let started = view.take_tool_state().expect("a start status");
+        assert!(started.active);
+        assert_eq!(started.id, ferrocad_stage::tool::POLYLINE_TOOL_ID);
+        assert_eq!(started.label, "Polyline");
+        assert_eq!(started.points, 0);
+        assert!(started.hint.contains("Esc to cancel"), "{}", started.hint);
+
+        // A press places a point, so the next status counts it and advertises Enter.
+        view.handle_button(identity_logical([-0.25, -0.25]), 1, true);
+        let added = view.take_tool_state().expect("an add status");
+        assert_eq!(added.points, 1);
+        assert!(added.hint.contains("Enter to finish"), "{}", added.hint);
+
+        // A drag-style press adds another; a move does not change the status.
+        view.handle_button(identity_logical([0.25, 0.25]), 1, true);
+        assert_eq!(view.take_tool_state().expect("an add status").points, 2);
+        view.handle_pointer(identity_logical([0.1, 0.1]));
+        assert!(view.take_tool_state().is_none(), "a cursor move is not a state change");
+
+        // Enter finishes: the session is gone and the status is inactive.
+        assert!(view.handle_key(&key("enter")));
+        assert!(view.tool().is_none());
+        let finished = view.take_tool_state().expect("a finish status");
+        assert!(!finished.active);
+        assert_eq!(finished.points, 0);
+        assert!(view.take_interaction_commit().is_none(), "finishing never commits");
+
+        // Cancelling a fresh session reports an inactive status too.
+        view.set_tool(Some(Box::new(ferrocad_stage::PolylineTool::new())));
+        let _ = view.take_tool_state();
+        assert!(view.cancel_tool());
+        assert!(!view.take_tool_state().expect("a cancel status").active);
+        assert!(!view.cancel_tool(), "no session is left to cancel");
+    }
+
+    #[test]
+    fn escape_cancels_the_tool_leaving_no_points_and_no_commit() {
+        let mut view = tool_view();
+        let _ = view.take_tool_state();
+        view.handle_button(identity_logical([-0.25, -0.25]), 1, true);
+        view.handle_pointer(identity_logical([0.25, 0.25]));
+        view.handle_button(identity_logical([0.25, 0.25]), 1, true);
+
+        let status = view.tool_status().expect("an active tool");
+        assert!(status.active);
+        assert_eq!(status.points, 2);
+        assert!(!view.transient.is_empty(), "two points draw a band and a marker");
+
+        assert!(view.handle_key(&escape_key()));
+        assert!(view.tool().is_none(), "the session ended");
+        assert!(view.transient.is_empty(), "no transient geometry survives");
+        assert!(
+            view.take_interaction_commit().is_none(),
+            "cancelling never writes the document"
+        );
+        assert!(!view.take_tool_state().expect("the cancel status").active);
+
+        // With no tool, Escape falls through to the old behaviour.
+        assert!(!view.handle_key(&escape_key()));
+    }
+
+    #[test]
+    fn escape_cancels_the_tool_before_clearing_the_workplane() {
+        let mut view = slab_view();
+        view.handle_pointer([30.0, 50.0]);
+        assert!(view.activate_hovered_workplane());
+        view.set_tool(Some(Box::new(ferrocad_stage::PolylineTool::new())));
+
+        // The first Escape ends the tool and leaves the workplane.
+        assert!(view.handle_key(&escape_key()));
+        assert!(view.tool().is_none());
+        assert!(view.active_workplane().is_some(), "the tool was cancelled first");
+
+        // The second Escape reaches the fallback and clears the workplane.
+        assert!(view.handle_key(&escape_key()));
+        assert!(view.active_workplane().is_none());
+    }
+
     #[test]
     fn the_grid_steps_are_a_preference() {
         let mut view = grid_view();
@@ -6201,8 +6383,9 @@ mod tests {
             (in_view.z - 1.0).abs() < 1e-6 && in_view.x.abs() < 1e-6 && in_view.y.abs() < 1e-6,
             "the normal points at the eye: {in_view:?}"
         );
-        // And the view is roll-free, so the navicube can represent it.
-        let up = target.transform(&Vector3::new(0.0, 1.0, 0.0));
+        // And the view is roll-free, so the navicube can represent it: world +Z has no
+        // screen-x component in view space.
+        let up = target.transform(&Vector3::new(0.0, 0.0, 1.0));
         assert!(up.x.abs() < 1e-9, "the horizon is level: {up:?}");
     }
 

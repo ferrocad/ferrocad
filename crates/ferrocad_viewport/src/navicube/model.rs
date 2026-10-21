@@ -5,11 +5,17 @@
 //! ([`super::inventor`], and later `super::stage`) turns a [`Piece`] into draw packets;
 //! the controller ([`super`]) places the cube, mirrors the camera and picks it.
 //!
-//! Our axes follow the engine's default view: **+Z toward the viewer**, **+Y up**,
-//! **+X right**. (FreeCAD is Z-up; the piece *names* differ, the behaviour does not.)
+//! The cube's local axes are the **world** axes: the product convention is **Z-up**, so
+//! `TOP` is the `+Z` face and the compass turntable lies in the `XY` plane at `z = -0.5`.
+//! A piece is a signed world direction; the producer rotates the body by the camera's
+//! view rotation, exactly like the main scene. The overlay camera's view space is still
+//! `+X right`, `+Y screen-up`, `+Z toward the viewer`.
+//!
+//! `FRONT` is `-Y`, FreeCAD's front: the default front view looks from `-Y` toward `+Y`
+//! with `+Z` up. (See `docs/axis-origin-grid.md` §2 and `docs/navicube-spec.md` §2.)
 
 use ferrocad_graphics::{Camera, PickId, Projection, Rect, Viewport, screen_ribbon};
-use ferrocad_types::{Placement, Rotation, Vector3};
+use ferrocad_types::{Matrix4, Placement, Rotation, Vector3};
 
 /// Half the extent of the cube (each face sits at ±`CUBE_HALF`).
 const CUBE_HALF: f64 = 0.5;
@@ -49,10 +55,9 @@ const CAMERA_DISTANCE: f64 = 3.0;
 pub(crate) const RING_INNER: f64 = 1.15;
 /// The turntable's outer radius (the outer rim and the filled disc).
 pub(crate) const RING_RADIUS: f64 = 1.22;
-/// The ground plane the ring lies on: coplanar with the cube's base, so at elevation 0
-/// the ring flattens into the base line and at higher elevations it opens into an
-/// ellipse turntable under the cube.
-pub(crate) const RING_Y: f64 = -CUBE_HALF;
+/// The ground plane the ring lies on: the `XY` plane coplanar with the cube's base, so a
+/// front view sees it edge-on and a top view sees a full circle turntable under the cube.
+pub(crate) const RING_Z: f64 = -CUBE_HALF;
 /// The radius the `N/E/S/W` glyphs are anchored at: **inside** the rim band, between the
 /// cube's corner radius (0.707) and the inner rim (1.15).
 const RING_LABEL_RADIUS: f64 = 0.96;
@@ -187,14 +192,14 @@ pub struct Piece {
 }
 
 impl Piece {
-    /// Toward the viewer (+Z).
-    pub const FRONT: Piece = Piece { axes: [0, 0, 1] };
-    /// Away from the viewer (−Z).
-    pub const BACK: Piece = Piece { axes: [0, 0, -1] };
-    /// Up (+Y).
-    pub const TOP: Piece = Piece { axes: [0, 1, 0] };
-    /// Down (−Y).
-    pub const BOTTOM: Piece = Piece { axes: [0, -1, 0] };
+    /// Toward the default front viewer (−Y, FreeCAD's front).
+    pub const FRONT: Piece = Piece { axes: [0, -1, 0] };
+    /// Rear (+Y).
+    pub const BACK: Piece = Piece { axes: [0, 1, 0] };
+    /// Up (+Z), the world vertical.
+    pub const TOP: Piece = Piece { axes: [0, 0, 1] };
+    /// Down (−Z).
+    pub const BOTTOM: Piece = Piece { axes: [0, 0, -1] };
     /// Right (+X).
     pub const RIGHT: Piece = Piece { axes: [1, 0, 0] };
     /// Left (−X).
@@ -266,10 +271,12 @@ impl Piece {
         Piece::ALL.get(index).copied()
     }
 
-    /// The camera **view rotation** that turns this piece toward the viewer (maps its
-    /// [`direction`](Self::direction) onto +Z).
+    /// The camera **view rotation** that turns this piece toward the viewer: it maps the
+    /// piece [`direction`](Self::direction) onto view `+Z` and keeps the world vertical
+    /// (`+Z`) as screen up wherever that is defined. This is the roll-free snap: a face
+    /// whose normal is horizontal is seen with a level horizon, and its glyph is upright.
     pub fn orientation(self) -> Rotation {
-        Rotation::from_vectors(self.direction(), Vector3::new(0.0, 0.0, 1.0))
+        view_rotation_for(self.direction(), None)
     }
 
     /// The piece's centre in cube space. Used to order the pieces back-to-front for
@@ -471,6 +478,44 @@ impl Piece {
     }
 }
 
+/// The **roll-free view rotation** for an eye direction: maps `direction` onto view `+Z`
+/// (toward the viewer) and places world `+Z` as screen up. At the poles (`direction` on
+/// `±Z`) that projection vanishes, so `+Y` (top) or `−Y` (bottom) is the screen up, which
+/// keeps `+X` to the right.
+///
+/// `up_reference` overrides the screen-up hint in **world** space; `sync` passes the
+/// camera's own in-plane up at a pole so a yaw still turns the view instead of leaving a
+/// frozen canonical rotation.
+pub(crate) fn view_rotation_for(direction: Vector3, up_reference: Option<Vector3>) -> Rotation {
+    let direction = direction.normalize();
+    let fallback = if direction.z.abs() > 0.999 {
+        Vector3::new(0.0, if direction.z > 0.0 { 1.0 } else { -1.0 }, 0.0)
+    } else {
+        Vector3::new(0.0, 0.0, 1.0)
+    };
+    let up_ref = up_reference.unwrap_or(fallback);
+    let projected = up_ref.sub(&direction.scale(up_ref.dot(&direction)));
+    let up = if projected.length() < 1e-12 {
+        fallback
+    } else {
+        projected.normalize()
+    };
+    let right = up.cross(&direction).normalize();
+    // The world→view rotation's **rows** are the screen basis expressed in world space:
+    // row0 = right, row1 = up, row2 = direction (toward the viewer).
+    let mut matrix = Matrix4::identity();
+    matrix.m[0] = right.x;
+    matrix.m[1] = right.y;
+    matrix.m[2] = right.z;
+    matrix.m[4] = up.x;
+    matrix.m[5] = up.y;
+    matrix.m[6] = up.z;
+    matrix.m[8] = direction.x;
+    matrix.m[9] = direction.y;
+    matrix.m[10] = direction.z;
+    Rotation::from_matrix(&matrix)
+}
+
 /// The pieces in back-to-front order for the overlay camera looking from +Z.
 ///
 /// The overlay pass has depth testing off, so compositing order *is* visibility: the
@@ -507,22 +552,30 @@ pub enum Corner {
 }
 
 /// The default "home" orientation the chrome's Home control snaps to: an axonometric view
-/// with the front-top-right corner toward the viewer. Upstream's Home restores the
-/// configurable `NewDocumentCameraOrientation` (default `Top`); a fixed default keeps this
-/// build self-contained.
+/// with the **front-top-right** corner toward the viewer — eye `(+X, −Y, +Z)`, the
+/// FreeCAD isometric view, with `+Z` up. Upstream's Home restores the configurable
+/// `NewDocumentCameraOrientation` (default `Top`); a fixed default keeps this build
+/// self-contained.
 pub fn home_orientation() -> Rotation {
-    Piece { axes: [1, 1, 1] }.orientation()
+    Piece { axes: [1, -1, 1] }.orientation()
 }
 
-/// The camera's compass bearing: the eye direction's angle in the horizontal **XZ** plane,
-/// measured CCW from +X, in radians. The ring's fixed labels map `+X` to east (0),
-/// `+Z` to south (π/2), `−X` to west (π) and `−Z` to north (3π/2).
+/// The camera's compass bearing: the eye direction's angle in the horizontal **XY** ground
+/// plane, measured CCW from `+X`, in radians. The ring's fixed labels map `+X` to east (0),
+/// `+Y` to north (π/2), `−X` to west (π) and `−Y` to south (3π/2). At a pole the eye has no
+/// bearing, so the screen-right direction supplies one (as `inventor_view::camera_angles`
+/// does).
 pub(crate) fn compass_angle(orientation: &Rotation) -> f64 {
-    let eye = orientation
-        .inverse()
-        .to_matrix()
-        .transform(&Vector3::new(0.0, 0.0, 1.0));
-    let angle = eye.z.atan2(eye.x).rem_euclid(std::f64::consts::TAU);
+    let inverse = orientation.inverse().to_matrix();
+    let eye = inverse.transform(&Vector3::new(0.0, 0.0, 1.0));
+    // A top/bottom view has no horizontal eye: use the screen-right bearing, so the
+    // heading marker still turns when the view is yawed at the pole.
+    let bearing = if eye.x.hypot(eye.y) > 1e-9 {
+        eye
+    } else {
+        inverse.transform(&Vector3::new(1.0, 0.0, 0.0))
+    };
+    let angle = bearing.y.atan2(bearing.x).rem_euclid(std::f64::consts::TAU);
     // `atan2(-0.0, +x)` wraps to a full turn; report east as 0.
     if angle >= std::f64::consts::TAU - 1e-12 {
         0.0
@@ -531,27 +584,25 @@ pub(crate) fn compass_angle(orientation: &Rotation) -> f64 {
     }
 }
 
-/// The fixed compass labels, `(letter, screen angle)` — north at the top, east right,
-/// south bottom, west left.
-///
-/// North is `−Z`: the top view looks down `+Y` with `−Z` screen-up, so this puts `N` at
-/// the top of the turntable in the canonical top view (and the heading marker, which
-/// follows the eye, on the camera's side — south in a front view).
+/// The fixed compass labels, `(letter, plane angle)` — **N**orth is `+Y` at π/2, **E**ast
+/// `+X` at 0, **S**outh `−Y` at −π/2 and **W**est `−X` at π, measured CCW in the ground
+/// `XY` plane. In the canonical top view (eye `+Z`, screen up `+Y`) `N` is at the top of
+/// the turntable, `E` right, `S` bottom and `W` left.
 pub(crate) const COMPASS_LABELS: [(char, f64); 4] = [
-    ('N', -std::f64::consts::FRAC_PI_2),
+    ('N', std::f64::consts::FRAC_PI_2),
     ('E', 0.0),
-    ('S', std::f64::consts::FRAC_PI_2),
+    ('S', -std::f64::consts::FRAC_PI_2),
     ('W', std::f64::consts::PI),
 ];
 
 /// The number of segments in the turntable's disc, band and rim loops.
 const RING_SEGMENTS: usize = 64;
 
-fn ring_vertex(angle: f64, radius: f64, y: f64) -> [f32; 3] {
+fn ring_vertex(angle: f64, radius: f64, z: f64) -> [f32; 3] {
     [
         (radius * angle.cos()) as f32,
-        y as f32,
         (radius * angle.sin()) as f32,
+        z as f32,
     ]
 }
 
@@ -559,19 +610,19 @@ fn ring_vertex(angle: f64, radius: f64, y: f64) -> [f32; 3] {
 /// base plane. It grounds the cube against the viewport instead of leaving it floating
 /// inside an empty wire hoop.
 pub(crate) fn ring_disc() -> (Vec<[f32; 3]>, Vec<u32>) {
-    let y = RING_Y - 0.005;
+    let z = RING_Z - 0.005;
     let mut positions = Vec::with_capacity(RING_SEGMENTS + 1);
-    positions.push([0.0, y as f32, 0.0]);
+    positions.push([0.0, 0.0, z as f32]);
     for i in 0..RING_SEGMENTS {
         let angle = std::f64::consts::TAU * i as f64 / RING_SEGMENTS as f64;
-        positions.push(ring_vertex(angle, RING_RADIUS, y));
+        positions.push(ring_vertex(angle, RING_RADIUS, z));
     }
     let mut indices = Vec::with_capacity(RING_SEGMENTS * 3);
-    // Wind the fan upward (+Y) so the floor is visible from above.
+    // Wind the fan upward (+Z) so the floor is visible from above.
     for i in 0..RING_SEGMENTS {
         indices.push(0);
-        indices.push((((i + 1) % RING_SEGMENTS) + 1) as u32);
         indices.push((i + 1) as u32);
+        indices.push((((i + 1) % RING_SEGMENTS) + 1) as u32);
     }
     (positions, indices)
 }
@@ -585,11 +636,12 @@ pub(crate) fn ring_band() -> (Vec<[f32; 3]>, Vec<u32>) {
         let a = std::f64::consts::TAU * i as f64 / RING_SEGMENTS as f64;
         let b = std::f64::consts::TAU * (i + 1) as f64 / RING_SEGMENTS as f64;
         let base = positions.len() as u32;
-        positions.push(ring_vertex(a, RING_INNER, RING_Y));
-        positions.push(ring_vertex(b, RING_INNER, RING_Y));
-        positions.push(ring_vertex(b, RING_RADIUS, RING_Y));
-        positions.push(ring_vertex(a, RING_RADIUS, RING_Y));
-        indices.extend_from_slice(&[base, base + 1, base + 2, base, base + 2, base + 3]);
+        positions.push(ring_vertex(a, RING_INNER, RING_Z));
+        positions.push(ring_vertex(b, RING_INNER, RING_Z));
+        positions.push(ring_vertex(b, RING_RADIUS, RING_Z));
+        positions.push(ring_vertex(a, RING_RADIUS, RING_Z));
+        // Reversed from the old Y-up frame: in the XY plane this winding faces +Z.
+        indices.extend_from_slice(&[base, base + 2, base + 1, base, base + 3, base + 2]);
     }
     (positions, indices)
 }
@@ -604,7 +656,7 @@ pub(crate) fn ring_rim_lines() -> (Vec<[f32; 3]>, Vec<u32>) {
         let base = points.len() as u32;
         for i in 0..RING_SEGMENTS {
             let angle = std::f64::consts::TAU * i as f64 / RING_SEGMENTS as f64;
-            points.push(ring_vertex(angle, radius, RING_Y));
+            points.push(ring_vertex(angle, radius, RING_Z));
         }
         for i in 0..RING_SEGMENTS {
             indices.push(base + i as u32);
@@ -614,8 +666,8 @@ pub(crate) fn ring_rim_lines() -> (Vec<[f32; 3]>, Vec<u32>) {
     for k in 0..12 {
         let angle = std::f64::consts::TAU * k as f64 / 12.0;
         let base = points.len() as u32;
-        points.push(ring_vertex(angle, RING_INNER, RING_Y));
-        points.push(ring_vertex(angle, RING_RADIUS, RING_Y));
+        points.push(ring_vertex(angle, RING_INNER, RING_Z));
+        points.push(ring_vertex(angle, RING_RADIUS, RING_Z));
         indices.push(base);
         indices.push(base + 1);
     }
@@ -626,28 +678,29 @@ pub(crate) fn ring_rim_lines() -> (Vec<[f32; 3]>, Vec<u32>) {
 /// view rotation and draws the letter as gpui text there. The anchor sits **inside** the
 /// rim band, between the cube's corner radius and the inner rim.
 pub(crate) fn ring_label_position(angle: f64) -> [f32; 3] {
-    ring_vertex(angle, RING_LABEL_RADIUS, RING_Y)
+    ring_vertex(angle, RING_LABEL_RADIUS, RING_Z)
 }
 
 /// The heading marker: a small diamond lying in the ring plane at `angle`.
 pub(crate) fn ring_marker(angle: f64) -> (Vec<[f32; 3]>, Vec<u32>) {
     let (cos, sin) = (angle.cos(), angle.sin());
-    let (cx, cz) = (RING_RADIUS * cos, RING_RADIUS * sin);
+    let (cx, cy) = (RING_RADIUS * cos, RING_RADIUS * sin);
     let h = 0.06;
     // Tangential and radial half-axes in the plane.
-    let (tx, tz) = (-sin * h, cos * h);
-    let (rx, rz) = (cos * h, sin * h);
-    let point = |dx: f64, dz: f64| [(cx + dx) as f32, RING_Y as f32, (cz + dz) as f32];
+    let (tx, ty) = (-sin * h, cos * h);
+    let (rx, ry) = (cos * h, sin * h);
+    let point = |dx: f64, dy: f64| [(cx + dx) as f32, (cy + dy) as f32, RING_Z as f32];
     let positions = vec![
-        point(-tx, -tz),
-        point(-rx, -rz),
-        point(tx, tz),
-        point(rx, rz),
+        point(-tx, -ty),
+        point(-rx, -ry),
+        point(tx, ty),
+        point(rx, ry),
     ];
-    (positions, vec![0, 1, 2, 0, 2, 3])
+    // Face +Z like the disc and the band.
+    (positions, vec![0, 2, 1, 0, 3, 2])
 }
 
-/// The direction a chrome yaw control turns the eye about the vertical (+Y) axis.
+/// The direction a chrome yaw control turns the eye about the vertical (+Z) axis.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum YawDirection {
     /// Move the eye counter-clockwise around the scene (azimuth increases).
@@ -657,7 +710,7 @@ pub enum YawDirection {
 }
 
 impl YawDirection {
-    /// The signed world-Y yaw in radians (CCW positive).
+    /// The signed eye yaw in radians (CCW positive, measured in the ground `XY` plane).
     pub fn angle(self) -> f64 {
         match self {
             Self::CounterClockwise => std::f64::consts::FRAC_PI_2,
@@ -666,8 +719,9 @@ impl YawDirection {
     }
 }
 
-/// The fixed orthographic overlay camera for `rect`, looking down −Z at the cube at
-/// the origin.
+/// The fixed orthographic overlay camera for `rect`, looking down −Z at the cube at the
+/// origin. The cube's local axes are the **world** axes (Z-up), so the producer's
+/// orientation transform is exactly the main camera's view rotation.
 pub fn camera(rect: Rect) -> Camera {
     Camera {
         view: Placement::new(Vector3::new(0.0, 0.0, -CAMERA_DISTANCE), Rotation::identity())
@@ -840,21 +894,25 @@ mod tests {
     }
 
     #[test]
-    fn the_compass_angle_follows_the_eye_in_xz() {
-        // Identity: the eye is +Z, which the ring calls south (π/2).
-        assert!((compass_angle(&Rotation::identity()) - std::f64::consts::FRAC_PI_2).abs() < 1e-9);
-        // A view yawed by −90° puts the eye on +X (east, angle 0).
-        let east = Rotation::from_axis_angle(
-            &Vector3::new(0.0, 1.0, 0.0),
-            -std::f64::consts::FRAC_PI_2,
+    fn the_compass_angle_follows_the_eye_in_xy() {
+        use std::f64::consts::FRAC_PI_2;
+
+        // Compass bearings in the Z-up ground plane: E = +X (0), N = +Y (π/2),
+        // W = −X (π), S = −Y (3π/2). A face snap puts the eye on that face's axis.
+        assert!(compass_angle(&Piece::RIGHT.orientation()).abs() < 1e-9);
+        assert!((compass_angle(&Piece::BACK.orientation()) - FRAC_PI_2).abs() < 1e-9);
+        assert!((compass_angle(&Piece::LEFT.orientation()) - std::f64::consts::PI).abs() < 1e-9);
+        assert!(
+            (compass_angle(&Piece::FRONT.orientation()) - 3.0 * FRAC_PI_2).abs() < 1e-9,
+            "the eye on -Y reads south"
         );
-        assert!(compass_angle(&east).abs() < 1e-9);
-        // ...and +90° puts it on −X (west, π).
-        let west = Rotation::from_axis_angle(
-            &Vector3::new(0.0, 1.0, 0.0),
-            std::f64::consts::FRAC_PI_2,
-        );
-        assert!((compass_angle(&west) - std::f64::consts::PI).abs() < 1e-9);
+        // A top view is at the pole: the screen-right bearing (+X, east) is stable, and a
+        // yaw turns the marker instead of leaving it at 0.
+        assert!(compass_angle(&Rotation::identity()).abs() < 1e-9);
+        // A view rotation of R_z(−90°) (what `yaw_view(+90°)` composes) turns the screen
+        // right to +Y, so the pole's fallback bearing is north.
+        let turned = Rotation::from_axis_angle(&Vector3::new(0.0, 0.0, 1.0), -FRAC_PI_2);
+        assert!((compass_angle(&turned) - FRAC_PI_2).abs() < 1e-9);
     }
 
     #[test]
@@ -862,7 +920,7 @@ mod tests {
         let (disc, disc_indices) = ring_disc();
         assert_eq!(disc.len(), 64 + 1, "a centre and a 64-point rim");
         assert_eq!(disc_indices.len(), 64 * 3);
-        assert!((f64::from(disc[0][1]) - (RING_Y - 0.005)).abs() < 1e-6);
+        assert!((f64::from(disc[0][2]) - (RING_Z - 0.005)).abs() < 1e-6);
 
         let (band, band_indices) = ring_band();
         assert_eq!(band.len(), 64 * 4);
@@ -870,12 +928,13 @@ mod tests {
         for quad in band.chunks_exact(4) {
             let radii: Vec<f64> = quad
                 .iter()
-                .map(|point| (f64::from(point[0]).powi(2) + f64::from(point[2]).powi(2)).sqrt())
+                .map(|point| (f64::from(point[0]).powi(2) + f64::from(point[1]).powi(2)).sqrt())
                 .collect();
             assert!((radii[0] - RING_INNER).abs() < 1e-5);
             assert!((radii[1] - RING_INNER).abs() < 1e-5);
             assert!((radii[2] - RING_RADIUS).abs() < 1e-5);
             assert!((radii[3] - RING_RADIUS).abs() < 1e-5);
+            assert!(quad.iter().all(|point| (f64::from(point[2]) - RING_Z).abs() < 1e-6));
         }
 
         let (points, indices) = ring_rim_lines();
@@ -884,8 +943,8 @@ mod tests {
         assert!(indices.iter().all(|&i| (i as usize) < points.len()));
         // The first 64 points are the inner loop, the next 64 the outer one.
         for (index, point) in points[..128].iter().enumerate() {
-            assert!((f64::from(point[1]) - RING_Y).abs() < 1e-6);
-            let radius = (f64::from(point[0]).powi(2) + f64::from(point[2]).powi(2)).sqrt();
+            assert!((f64::from(point[2]) - RING_Z).abs() < 1e-6);
+            let radius = (f64::from(point[0]).powi(2) + f64::from(point[1]).powi(2)).sqrt();
             let expected = if index < 64 { RING_INNER } else { RING_RADIUS };
             assert!((radius - expected).abs() < 1e-5);
         }
@@ -895,12 +954,25 @@ mod tests {
     fn the_compass_labels_sit_inside_the_turntable_track() {
         for (_, angle) in COMPASS_LABELS {
             let point = ring_label_position(angle);
-            assert!((f64::from(point[1]) - RING_Y).abs() < 1e-6);
-            let radius = (f64::from(point[0]).powi(2) + f64::from(point[2]).powi(2)).sqrt();
+            assert!((f64::from(point[2]) - RING_Z).abs() < 1e-6);
+            let radius = (f64::from(point[0]).powi(2) + f64::from(point[1]).powi(2)).sqrt();
             // Inside the rim band, outside the cube's corner radius (√2/2).
             assert!(radius > 0.7071);
             assert!(radius < RING_INNER);
         }
+        // The fixed letters name world bearings: N = +Y, E = +X, S = −Y, W = −X.
+        let at = |letter: char| {
+            let angle = COMPASS_LABELS
+                .iter()
+                .find(|(text, _)| *text == letter)
+                .expect("a letter")
+                .1;
+            ring_label_position(angle)
+        };
+        assert!(at('E')[0] > 0.9 && at('E')[1].abs() < 1e-6);
+        assert!(at('N')[1] > 0.9 && at('N')[0].abs() < 1e-6);
+        assert!(at('S')[1] < -0.9);
+        assert!(at('W')[0] < -0.9);
     }
 
     #[test]
@@ -914,20 +986,39 @@ mod tests {
     #[test]
     fn only_geometry_the_cube_hides_is_hidden() {
         let identity = Rotation::identity().to_matrix();
-        // Faces point away by their own normal.
-        assert!(Piece::BACK.is_hidden(&identity));
-        assert!(!Piece::FRONT.is_hidden(&identity));
+        // The identity view is the canonical top view: the +Z face looks at the viewer.
+        assert!(Piece::BOTTOM.is_hidden(&identity));
+        assert!(!Piece::TOP.is_hidden(&identity));
 
-        // From an axonometric view the -X/-Y/-Z faces all point away, so the edge and
-        // corner behind them are hidden; a silhouette edge/corner stays bright.
-        let axonometric = Rotation::from_vectors(
-            Vector3::new(1.0, 0.9, 1.0).normalize(),
-            Vector3::new(0.0, 0.0, 1.0),
-        )
-        .to_matrix();
-        assert!(Piece { axes: [-1, -1, 0] }.is_hidden(&axonometric));
+        // From the front-top-right isometric view (+X, −Y, +Z) the −X/+Y/−Z faces all
+        // point away, so the edge and corner behind them are hidden; a silhouette
+        // edge/corner stays bright.
+        let axonometric = Piece { axes: [1, -1, 1] }.orientation().to_matrix();
+        assert!(Piece { axes: [-1, 1, 0] }.is_hidden(&axonometric));
         assert!(!Piece { axes: [1, -1, 0] }.is_hidden(&axonometric));
-        assert!(Piece { axes: [-1, -1, -1] }.is_hidden(&axonometric));
-        assert!(!Piece { axes: [1, -1, -1] }.is_hidden(&axonometric));
+        assert!(Piece { axes: [-1, 1, -1] }.is_hidden(&axonometric));
+        assert!(!Piece { axes: [1, -1, 1] }.is_hidden(&axonometric));
+    }
+
+    #[test]
+    fn a_face_snap_keeps_the_horizon_level() {
+        // A roll-free snap maps the face normal onto view +Z and keeps world +Z in the
+        // screen's vertical plane (its screen-x component is zero).
+        for face in Piece::ALL.iter().filter(|p| p.kind() == PieceKind::Face) {
+            let view = face.orientation().to_matrix();
+            let normal = view.transform(&face.direction());
+            assert!((normal.z - 1.0).abs() < 1e-9, "{face:?} faces the viewer");
+            let up = view.transform(&Vector3::new(0.0, 0.0, 1.0));
+            assert!(
+                up.x.abs() < 1e-9,
+                "{face:?} snap rolls the horizon: {up:?}"
+            );
+        }
+        // The top view has +Y up; the front view has +Z up and +X right.
+        let top = Piece::TOP.orientation().to_matrix();
+        assert!(top.transform(&Vector3::new(0.0, 1.0, 0.0)).sub(&Vector3::new(0.0, 1.0, 0.0)).length() < 1e-9);
+        let front = Piece::FRONT.orientation().to_matrix();
+        assert!(front.transform(&Vector3::new(0.0, 0.0, 1.0)).sub(&Vector3::new(0.0, 1.0, 0.0)).length() < 1e-9);
+        assert!(front.transform(&Vector3::new(1.0, 0.0, 0.0)).sub(&Vector3::new(1.0, 0.0, 0.0)).length() < 1e-9);
     }
 }

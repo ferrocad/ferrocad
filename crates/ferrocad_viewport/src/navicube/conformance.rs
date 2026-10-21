@@ -156,7 +156,7 @@ fn compare(a: &RenderQueue, b: &RenderQueue) {
 
 #[test]
 fn both_producers_emit_the_same_cube() {
-    let visual = visual(Some(Piece::TOP), vec![Piece::BACK]);
+    let visual = visual(Some(Piece::TOP), vec![Piece::BOTTOM]);
     let mut inventor = InventorProducer::new();
     let mut stage = StageProducer::new();
     rebuild(&mut inventor, &visual);
@@ -166,7 +166,7 @@ fn both_producers_emit_the_same_cube() {
 
 #[test]
 fn both_producers_assign_the_documented_roles() {
-    let away = vec![Piece::BACK];
+    let away = vec![Piece::BOTTOM];
     let hilite = Some(Piece::TOP);
     let visual = visual(hilite, away.clone());
 
@@ -232,7 +232,7 @@ fn a_custom_theme_recolours_both_producers() {
         ring_fill_highlighted: [0.1, 0.8, 1.0, 0.6],
         edge_width: 2.0,
     };
-    let visual = visual(Some(Piece::TOP), vec![Piece::BACK]);
+    let visual = visual(Some(Piece::TOP), vec![Piece::BOTTOM]);
     let mut inventor = InventorProducer::new();
     let mut stage = StageProducer::new();
     inventor.rebuild(&viewport(), &visual, &theme);
@@ -244,7 +244,7 @@ fn a_custom_theme_recolours_both_producers() {
             expected_color(Piece::TOP, &visual)
         ));
         assert!(
-            color_of(queue, Piece::BACK.pick_id()).is_none(),
+            color_of(queue, Piece::BOTTOM.pick_id()).is_none(),
             "back-facing faces are culled"
         );
         assert!(close4(
@@ -256,7 +256,7 @@ fn a_custom_theme_recolours_both_producers() {
 
 #[test]
 fn rebuild_is_stable_within_each_producer() {
-    let visual = visual(Some(Piece::TOP), vec![Piece::BACK]);
+    let visual = visual(Some(Piece::TOP), vec![Piece::BOTTOM]);
     let mut inventor = InventorProducer::new();
     let mut stage = StageProducer::new();
     for producer in [
@@ -280,13 +280,13 @@ fn the_stage_cube_hosts_and_picks() {
         rect.x + rect.width as i32 / 2,
         rect.y + rect.height as i32 / 2,
     ];
-    assert_eq!(cube.hit(centre), Some(Piece::FRONT));
+    assert_eq!(cube.hit(centre), Some(Piece::TOP));
 }
 
 #[test]
 fn both_producers_draw_the_filled_glyphs() {
     let theme = theme();
-    let mut visual = visual(Some(Piece::TOP), vec![Piece::BACK]);
+    let mut visual = visual(Some(Piece::TOP), vec![Piece::BOTTOM]);
     visual.proximity = true;
 
     let mut inventor = InventorProducer::new();
@@ -314,12 +314,12 @@ fn both_producers_draw_the_filled_glyphs() {
         }
         assert!(
             !queue.packets.iter().any(|packet| {
-                packet.state.id == Piece::BACK.pick_id()
+                packet.state.id == Piece::BOTTOM.pick_id()
                     && packet.topology == Topology::Triangles
                     && close4(
                         packet.state.color,
                         theme.label_color(
-                            Piece::BACK.role(visual.hilite, &visual.away),
+                            Piece::BOTTOM.role(visual.hilite, &visual.away),
                             visual.proximity,
                         ),
                     )

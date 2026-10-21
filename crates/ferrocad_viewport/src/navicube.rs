@@ -216,7 +216,7 @@ impl NaviCube {
             if far && radius < 0.9 {
                 continue;
             }
-            let openness = matrix.transform(&Vector3::new(0.0, 1.0, 0.0)).z.abs() as f32;
+            let openness = matrix.transform(&Vector3::new(0.0, 0.0, 1.0)).z.abs() as f32;
             labels.push(NavicubeLabel {
                 text,
                 position: self.project_view([view.x, view.y]),
@@ -285,14 +285,16 @@ impl NaviCube {
         let rotation = Rotation::from_matrix(&main.view);
         let inverse = rotation.inverse().to_matrix();
         let eye = inverse.transform(&Vector3::new(0.0, 0.0, 1.0));
-        let azimuth = eye.z.atan2(eye.x);
-        let elevation = eye.y.clamp(-1.0, 1.0).asin();
+        // Z-up: the ground plane is XY, so the bearing is measured from +X toward +Y and
+        // the elevation is above that plane (world +Z).
+        let azimuth = eye.y.atan2(eye.x);
+        let elevation = eye.z.clamp(-1.0, 1.0).asin();
         // At a pole the eye cannot move, so a world-yaw only spins the camera about its
         // own view direction. The horizon is meaningless there: keep the camera's
         // in-plane up rather than rebuilding a frozen canonical one, so the compass
         // still turns in a top/bottom view.
         let up_reference =
-            (eye.y.abs() > 1.0 - POLE_COS).then(|| inverse.transform(&Vector3::new(0.0, 1.0, 0.0)));
+            (eye.z.abs() > 1.0 - POLE_COS).then(|| inverse.transform(&Vector3::new(0.0, 1.0, 0.0)));
         let canonical = view_rotation_with_up(azimuth, elevation, up_reference);
         if self.synced.as_ref() == Some(&canonical) {
             return;
@@ -364,16 +366,16 @@ impl NaviCube {
         let rotation = self.synced.unwrap_or_else(Rotation::identity);
         let local = Vector3::new(
             model::RING_RADIUS * angle.cos(),
-            model::RING_Y,
             model::RING_RADIUS * angle.sin(),
+            model::RING_Z,
         );
         let view = rotation.to_matrix().transform(&local);
         self.project_view([view.x, view.y])
     }
 
-    /// Whether a device position is on the compass ring's scrub band. The ring is a
-    /// **ground-plane** circle now, so the pointer is projected onto `y = RING_Y` in cube
-    /// space and tested by radius there — the hit region is the projected ellipse.
+    /// Whether a device position is on the compass ring's scrub band. The ring lies in the
+    /// **ground `XY` plane**, so the pointer is projected onto `z = RING_Z` in cube space
+    /// and tested by radius there — the hit region is the projected ellipse.
     pub fn ring_hit(&self, device: [i32; 2]) -> bool {
         self.ring_plane_point(device).is_some_and(|(radius, _)| {
             ((model::RING_RADIUS - model::RING_BAND_IN)
@@ -382,8 +384,8 @@ impl NaviCube {
         })
     }
 
-    /// The pointer's angle around the ring **in the ground plane** (radians, CCW from
-    /// +X). Used to scrub the view's yaw; `None` when the ring is edge-on (the ray misses
+    /// The pointer's angle around the ring **in the ground `XY` plane** (radians, CCW from
+    /// `+X`). Used to scrub the view's yaw; `None` when the ring is edge-on (the ray misses
     /// the plane), where scrubbing has no unambiguous angle.
     pub fn ring_angle(&self, device: [i32; 2]) -> Option<f64> {
         self.ring_plane_point(device).map(|(_, angle)| angle)
@@ -413,19 +415,19 @@ impl NaviCube {
     fn ring_plane_point_for(&self, device: [i32; 2], rotation: Rotation) -> Option<(f64, f64)> {
         let [x, y] = self.cube_point(device)?;
         let matrix = rotation.to_matrix();
-        let normal = matrix.transform(&Vector3::new(0.0, 1.0, 0.0));
+        let normal = matrix.transform(&Vector3::new(0.0, 0.0, 1.0));
         // Edge-on: the ray is parallel to the plane and the hit has no unique point.
         if normal.z.abs() < 0.05 {
             return None;
         }
-        let plane_point = matrix.transform(&Vector3::new(0.0, model::RING_Y, 0.0));
+        let plane_point = matrix.transform(&Vector3::new(0.0, 0.0, model::RING_Z));
         let t = (normal.dot(&plane_point) - normal.x * x - normal.y * y) / normal.z;
         let local = rotation
             .inverse()
             .to_matrix()
             .transform(&Vector3::new(x, y, t));
-        let radius = (local.x * local.x + local.z * local.z).sqrt();
-        Some((radius, local.z.atan2(local.x)))
+        let radius = (local.x * local.x + local.y * local.y).sqrt();
+        Some((radius, local.y.atan2(local.x)))
     }
 
     /// Rebuild the cube: the camera orientation plus the away-facing faces drawn
@@ -463,50 +465,25 @@ impl NaviCube {
 const POLE_COS: f64 = 1e-3;
 
 /// A **roll-free** view rotation for a viewpoint at `azimuth` and `elevation` (radians;
-/// azimuth CCW from +X, elevation above the XZ plane). The returned rotation maps the eye
-/// direction `(cos e·cos a, sin e, cos e·sin a)` onto +Z with world `+Y` projected as the
-/// screen up, so the navicube's top stays upright and its turntable stays level.
+/// azimuth CCW from `+X` in the ground `XY` plane, elevation above that plane). The
+/// returned rotation maps the eye direction `(cos e·cos a, cos e·sin a, sin e)` onto view
+/// `+Z` with world `+Z` projected as the screen up, so the navicube's top stays upright and
+/// its turntable stays level.
 ///
-/// Looking (almost) straight down or up has no unique up; the front (+Z) is placed at the
-/// bottom of the screen (`−Z` is screen-up for a top view).
+/// Looking (almost) straight down or up has no unique up; the canonical top view places
+/// `+Y` at the top (`−Y` for a bottom view), which keeps `+X` to the right.
 pub fn view_rotation(azimuth: f64, elevation: f64) -> Rotation {
     view_rotation_with_up(azimuth, elevation, None)
 }
 
 /// [`view_rotation`] with an explicit `up_reference` in **world** space. `None` uses the
-/// canonical world-`+Y` reference (or `∓Z` near the poles). `sync` passes the camera's own
+/// canonical world-`+Z` reference (or `±Y` near the poles). `sync` passes the camera's own
 /// screen-up at a pole, where the canonical choice would otherwise discard the in-plane
 /// rotation and make the compass look frozen.
 fn view_rotation_with_up(azimuth: f64, elevation: f64, up_reference: Option<Vector3>) -> Rotation {
     let ce = elevation.cos();
-    let direction = Vector3::new(ce * azimuth.cos(), elevation.sin(), ce * azimuth.sin());
-    let fallback = if direction.y.abs() > 0.999 {
-        Vector3::new(0.0, 0.0, if direction.y > 0.0 { -1.0 } else { 1.0 })
-    } else {
-        Vector3::new(0.0, 1.0, 0.0)
-    };
-    let up_ref = up_reference.unwrap_or(fallback);
-    let projected = up_ref.sub(&direction.scale(up_ref.dot(&direction)));
-    let up = if projected.length() < 1e-12 {
-        fallback
-    } else {
-        projected.normalize()
-    };
-    let right = up.cross(&direction).normalize();
-    // The world→view rotation's **rows** are the screen basis expressed in world space:
-    // row0 = right, row1 = up, row2 = direction (toward the viewer). The translation
-    // column stays zero.
-    let mut matrix = Matrix4::identity();
-    matrix.m[0] = right.x;
-    matrix.m[1] = right.y;
-    matrix.m[2] = right.z;
-    matrix.m[4] = up.x;
-    matrix.m[5] = up.y;
-    matrix.m[6] = up.z;
-    matrix.m[8] = direction.x;
-    matrix.m[9] = direction.y;
-    matrix.m[10] = direction.z;
-    Rotation::from_matrix(&matrix)
+    let direction = Vector3::new(ce * azimuth.cos(), ce * azimuth.sin(), elevation.sin());
+    model::view_rotation_for(direction, up_reference)
 }
 
 /// The main-camera **view matrix** that snaps the view onto `piece`, keeping the
@@ -536,12 +513,15 @@ pub fn zoom_view(main: &Camera, factor: f64) -> Matrix4 {
     .to_matrix()
 }
 
-/// The camera **view matrix** yawed by `angle` radians about the vertical (+Y) axis,
-/// keeping the eye distance and the elevation. The yaw is a **world** rotation composed
-/// on the right (`view · R_y`), so it turns the eye around the vertical axis rather than
-/// about the tilted view-up; the horizon stays level at any elevation.
+/// The camera **view matrix** yawed so the eye moves `angle` radians about the vertical
+/// (`+Z`) axis, keeping the eye distance and the elevation. `angle` is the eye's
+/// counter-clockwise azimuth change, so a positive value moves the eye from `+X` toward
+/// `+Y`; the same sign convention as [`YawDirection`](model::YawDirection) and the compass
+/// ring. The world yaw is composed on the right (`view · R_z(−angle)`), so it turns the eye
+/// around the vertical axis rather than about the tilted view-up; the horizon stays level
+/// at any elevation.
 pub fn yaw_view(main: &Camera, angle: f64) -> Matrix4 {
-    let yaw = Rotation::from_axis_angle(&Vector3::new(0.0, 1.0, 0.0), angle);
+    let yaw = Rotation::from_axis_angle(&Vector3::new(0.0, 0.0, 1.0), -angle);
     let base = Vector3::new(main.view.m[3], main.view.m[7], main.view.m[11]);
     Placement::new(base, Rotation::from_matrix(&main.view).multiply(&yaw)).to_matrix()
 }
@@ -550,16 +530,17 @@ pub fn yaw_view(main: &Camera, angle: f64) -> Matrix4 {
 ///
 /// Both rotations are **world** rotations composed on the right, so the camera orbits
 /// its pivot without ever rolling: the pitch is about the current screen-right axis and
-/// the yaw about the world vertical. A yaw composed on the wrong side (or a pitch about
-/// a fixed world axis) tilts the horizon, which the navicube cannot represent — it
-/// rebuilds a roll-free rotation — and the two drift apart.
+/// the yaw about the world vertical (`+Z`). The `pitch · yaw` order yaws first and pitches
+/// about the post-yaw screen-right (`R·P·Y = R·Y·(Yᵀ·P·Y)`), which keeps the camera
+/// canonical: the navicube rebuilds a roll-free rotation, so any roll would make the two
+/// drift apart.
 pub fn drag_view(main: &Camera, delta: [f32; 2]) -> Matrix4 {
     const RADIANS_PER_PIXEL: f64 = 0.012;
     // The screen-right axis in world space: the view matrix's first row.
     let right = Vector3::new(main.view.m[0], main.view.m[1], main.view.m[2]);
     let pitch = Rotation::from_axis_angle(&right, f64::from(delta[1]) * RADIANS_PER_PIXEL);
     let yaw = Rotation::from_axis_angle(
-        &Vector3::new(0.0, 1.0, 0.0),
+        &Vector3::new(0.0, 0.0, 1.0),
         f64::from(delta[0]) * RADIANS_PER_PIXEL,
     );
     let base = Vector3::new(main.view.m[3], main.view.m[7], main.view.m[11]);
@@ -815,46 +796,52 @@ mod tests {
     #[test]
     fn compass_labels_fade_on_the_far_side_and_are_culled_when_occluded() {
         let mut cube = NaviCube::new(viewport());
+        // The identity view is the canonical top view: the whole ground ring is `far`
+        // (it sits at z = −0.5), but the letters are outside the cube's silhouette, so
+        // all four survive at the faint far-side alpha.
         cube.sync(&Camera::identity());
-        // Looking down −Z the ground ring is edge-on: N projects at the ring's y offset,
-        // behind the cube, so it is culled. The face letters are 3D stroke geometry now,
-        // so E/S/W are the only screen text.
-        let mut text: Vec<char> = cube.labels().iter().map(|label| label.text).collect();
-        text.sort_unstable();
-        assert_eq!(text, vec!['E', 'S', 'W'], "the far N is culled");
-
-        // From the top the whole ring is far, so every letter fades — but all four stay
-        // outside the cube's silhouette (1.38 > 0.707), so none is culled.
-        let top = Camera {
-            view: Placement::new(
-                Vector3::new(0.0, 0.0, -4.0),
-                Rotation::from_vectors(Vector3::new(0.0, 1.0, 0.0), Vector3::new(0.0, 0.0, 1.0)),
-            )
-            .to_matrix(),
-            ..Camera::identity()
-        };
-        cube.sync(&top);
         let labels = cube.labels();
-        assert_eq!(labels.len(), 4, "every letter survives, faintly");
+        let mut text: Vec<char> = labels.iter().map(|label| label.text).collect();
+        text.sort_unstable();
+        assert_eq!(text, vec!['E', 'N', 'S', 'W'], "every letter survives, faintly");
         assert!(
             labels.iter().all(|label| label.alpha < 0.2),
             "far-side letters fade so they cannot stamp over a face"
         );
 
-        // A 45° elevated view projects the far N letter inside the cube's silhouette; it
-        // is culled rather than drawn over the front faces. The survivors sit outside the
-        // cube's projected corner radius (0.707 in cube space).
+        // A front view sees the ring edge-on: north (−Y, behind the cube) is the far
+        // half, east/west/south stay near.
+        let front = Camera {
+            view: Placement::new(
+                Vector3::new(0.0, 0.0, -4.0),
+                Piece::FRONT.orientation(),
+            )
+            .to_matrix(),
+            ..Camera::identity()
+        };
+        cube.sync(&front);
+        let labels = cube.labels();
+        // Edge-on, the far north letter projects at the ring's vertical offset and is
+        // culled behind the cube; east/south/west stay on screen.
+        let mut text: Vec<char> = labels.iter().map(|label| label.text).collect();
+        text.sort_unstable();
+        assert_eq!(text, vec!['E', 'S', 'W'], "the far N is culled");
+        let alpha = |text: char| {
+            labels
+                .iter()
+                .find(|label| label.text == text)
+                .unwrap_or_else(|| panic!("{text} is on screen"))
+                .alpha
+        };
+        assert!(alpha('S') > 0.4, "S is on the near half");
+
+        // A 40° tilt puts the far west letter inside the cube's silhouette; it is culled
+        // rather than drawn over the front faces. The survivors sit outside the cube's
+        // projected corner radius (0.707 in cube space) or in front of it.
         let camera = Camera {
             view: Placement::new(
                 Vector3::new(0.0, 0.0, -4.0),
-                Rotation::from_vectors(
-                    Vector3::new(
-                        0.0,
-                        std::f64::consts::FRAC_1_SQRT_2,
-                        std::f64::consts::FRAC_1_SQRT_2,
-                    ),
-                    Vector3::new(0.0, 0.0, 1.0),
-                ),
+                view_rotation(0.0, 0.7),
             )
             .to_matrix(),
             ..Camera::identity()
@@ -863,7 +850,7 @@ mod tests {
         let labels = cube.labels();
         let mut text: Vec<char> = labels.iter().map(|label| label.text).collect();
         text.sort_unstable();
-        assert_eq!(text, vec!['E', 'S', 'W'], "N is hidden behind the cube");
+        assert_eq!(text, vec!['E', 'N', 'S'], "W is hidden behind the cube");
         let [left, top, right, bottom] = cube.logical_rect();
         let [cx, cy] = [(left + right) / 2.0, (top + bottom) / 2.0];
         let scale = (right - left) / (2.0 * model::ORTHO_EXTENT as f32);
@@ -880,18 +867,10 @@ mod tests {
 
     #[test]
     fn north_is_at_the_top_of_the_compass() {
-        // The top view looks down +Y with −Z screen-up, so the compass must read N at the
-        // top, S at the bottom, E right and W left.
-        let top = Camera {
-            view: Placement::new(
-                Vector3::new(0.0, 0.0, -4.0),
-                Rotation::from_vectors(Vector3::new(0.0, 1.0, 0.0), Vector3::new(0.0, 0.0, 1.0)),
-            )
-            .to_matrix(),
-            ..Camera::identity()
-        };
+        // The top view (identity: eye +Z, screen up +Y) must read N at the top, S at the
+        // bottom, E right and W left. North is world +Y.
         let mut cube = NaviCube::new(viewport());
-        cube.sync(&top);
+        cube.sync(&Camera::identity());
         let labels = cube.labels();
         let letter = |text: char| {
             labels
@@ -909,16 +888,52 @@ mod tests {
             east[0] > west[0],
             "east sits right of west: {east:?} vs {west:?}"
         );
+        // And it is the world +Y bearing, not a screen-fixed label.
+        let point = model::ring_label_position(
+            model::COMPASS_LABELS
+                .iter()
+                .find(|(text, _)| *text == 'N')
+                .expect("north")
+                .1,
+        );
+        assert!((f64::from(point[1]) - 0.96).abs() < 1e-6, "north is +Y");
     }
 
     #[test]
-    fn the_centre_maps_to_the_front_face() {
+    fn the_centre_maps_to_the_top_face_from_above() {
         let mut cube = NaviCube::new(viewport());
-        // With the default (identity) camera orientation, Front faces the viewer.
+        // The identity view looks down −Z from +Z, so the +Z face is toward the viewer.
         cube.sync(&Camera::identity());
-        assert_eq!(cube.hit(centre(&cube)), Some(Piece::FRONT));
+        assert_eq!(Piece::TOP.direction(), Vector3::new(0.0, 0.0, 1.0));
+        assert_eq!(Piece::TOP.pick_id(), ferrocad_graphics::PickId(3));
+        assert_eq!(cube.hit(centre(&cube)), Some(Piece::TOP));
         // Outside the rectangle there is no hit.
         assert_eq!(cube.hit([5, 5]), None);
+
+        // A front snap (eye −Y) puts FRONT toward the viewer.
+        cube.sync(&Camera {
+            view: snap_view(Piece::FRONT, &Camera::identity()),
+            ..Camera::identity()
+        });
+        assert_eq!(cube.hit(centre(&cube)), Some(Piece::FRONT));
+    }
+
+    #[test]
+    fn a_top_snap_looks_down_the_world_normal() {
+        let camera = Camera::identity();
+        let view = snap_view(Piece::TOP, &camera);
+        let rotation = Rotation::from_matrix(&view);
+        let eye = rotation.inverse().to_matrix().transform(&Vector3::new(0.0, 0.0, 1.0));
+        // The eye sits on +Z and the look direction is −Z; screen up is +Y.
+        assert!(eye.sub(&Vector3::new(0.0, 0.0, 1.0)).length() < 1e-9);
+        let look = rotation.inverse().to_matrix().transform(&Vector3::new(0.0, 0.0, -1.0));
+        assert!(look.sub(&Vector3::new(0.0, 0.0, -1.0)).length() < 1e-9);
+        assert!(rotation
+            .to_matrix()
+            .transform(&Vector3::new(0.0, 1.0, 0.0))
+            .sub(&Vector3::new(0.0, 1.0, 0.0))
+            .length()
+            < 1e-9);
     }
 
     #[test]
@@ -973,14 +988,11 @@ mod tests {
 
     #[test]
     fn the_ring_is_a_ground_plane_ellipse_and_reports_plane_angles() {
-        // Tilt the view so the ring plane is not edge-on.
+        // Tilt the view so the XY ring plane is not edge-on.
         let camera = Camera {
             view: Placement::new(
                 Vector3::new(0.0, 0.0, -4.0),
-                Rotation::from_vectors(
-                    Vector3::new(0.0, 0.9, 1.0).normalize(),
-                    Vector3::new(0.0, 0.0, 1.0),
-                ),
+                view_rotation(0.6, 0.5),
             )
             .to_matrix(),
             ..Camera::identity()
@@ -1010,14 +1022,11 @@ mod tests {
 
     #[test]
     fn yaw_view_preserves_elevation_and_the_eye_distance() {
-        // A tilted camera: a view-space yaw would tilt it further, a world-Y yaw must not.
+        // A tilted camera: a view-space yaw would tilt it further, a world-Z yaw must not.
         let camera = Camera {
             view: Placement::new(
                 Vector3::new(0.0, 0.0, -4.0),
-                Rotation::from_vectors(
-                    Vector3::new(0.0, 0.9, 1.0).normalize(),
-                    Vector3::new(0.0, 0.0, 1.0),
-                ),
+                view_rotation(0.6, 0.5),
             )
             .to_matrix(),
             ..Camera::identity()
@@ -1045,7 +1054,7 @@ mod tests {
         assert_eq!(
             colour_of(&cube, Piece::TOP),
             cube.theme
-                .face_fill(NavicubeRole::FaceHighlighted, &Vector3::new(0.0, 1.0, 0.0))
+                .face_fill(NavicubeRole::FaceHighlighted, &Piece::TOP.direction())
         );
         assert!(cube.producer.queue().packets.iter().any(|packet| {
             packet.state.id == Piece::TOP.pick_id()
@@ -1054,8 +1063,7 @@ mod tests {
         }));
         assert_eq!(
             colour_of(&cube, Piece::FRONT),
-            cube.theme
-                .face_fill(NavicubeRole::Face, &Vector3::new(0.0, 0.0, 1.0))
+            cube.theme.face_fill(NavicubeRole::Face, &Piece::FRONT.direction())
         );
     }
 
@@ -1063,12 +1071,11 @@ mod tests {
     fn faces_are_directionally_lit_and_back_faces_are_culled() {
         let mut cube = NaviCube::new(viewport());
         cube.sync(&Camera::identity());
-        // With the identity camera, +Z (Front) faces the viewer and Back points away.
+        // The identity view is the top view: +Z (Top) faces the viewer and Bottom away.
         let front = colour_of(&cube, Piece::FRONT);
         assert_eq!(
             front,
-            cube.theme
-                .face_fill(NavicubeRole::Face, &Vector3::new(0.0, 0.0, 1.0))
+            cube.theme.face_fill(NavicubeRole::Face, &Piece::FRONT.direction())
         );
         assert!(
             !cube
@@ -1076,8 +1083,8 @@ mod tests {
                 .queue()
                 .packets
                 .iter()
-                .any(|packet| packet.state.id == Piece::BACK.pick_id()),
-            "the back face is culled, not drawn translucently"
+                .any(|packet| packet.state.id == Piece::BOTTOM.pick_id()),
+            "the bottom face is culled, not drawn translucently"
         );
         // The studio light sits above, so the top facet reads brighter than the front.
         assert!(colour_of(&cube, Piece::TOP)[3] > front[3]);
@@ -1094,9 +1101,20 @@ mod tests {
         for delta in [[0.0f32, -40.0], [60.0, 0.0], [35.0, -25.0], [-80.0, 40.0]] {
             let view = drag_view(&camera, delta);
             let rotation = Rotation::from_matrix(&view).to_matrix();
-            let up = rotation.transform(&Vector3::new(0.0, 1.0, 0.0));
+            // No roll: world +Z has no screen-x component in view space.
+            let up = rotation.transform(&Vector3::new(0.0, 0.0, 1.0));
             assert!(up.x.abs() < 1e-9, "the horizon rolled on {delta:?}: {up:?}");
+            // And the camera is exactly the canonical rotation for its eye: the cube
+            // cannot lag it.
             camera.view = view;
+            let (azimuth, elevation) = crate::inventor_view::camera_angles(&camera);
+            let canonical = view_rotation(azimuth.to_radians(), elevation.to_radians());
+            let lag = Rotation::from_matrix(&camera.view)
+                .inverse()
+                .multiply(&canonical)
+                .angle()
+                .abs();
+            assert!(lag < 1e-6, "the camera is not canonical after {delta:?}: {lag}");
         }
 
         // The cube sees exactly the camera's canonical rotation: no lag, no desync.
@@ -1131,14 +1149,13 @@ mod tests {
 
     #[test]
     fn the_synced_cube_stays_upright_at_any_azimuth() {
-        // WA9 bug: at AZ 090° / EL 36° the cube rolled onto its side (`T` at the bottom,
-        // the turntable tilted across the sky). `sync` rebuilds a roll-free rotation, so
-        // world up stays screen up and the turntable stays horizontal at every bearing.
+        // The turntable must stay horizontal at every bearing. A roll-free rotation keeps
+        // world +Z in the screen's vertical plane (no screen-x component).
         for azimuth in [0.0_f64, 90.0, 180.0, 270.0] {
             for elevation in [0.0_f64, 24.0, 36.0, 60.0] {
                 let (a, e) = (azimuth.to_radians(), elevation.to_radians());
                 let rotation = view_rotation(a, e).to_matrix();
-                let up = rotation.transform(&Vector3::new(0.0, 1.0, 0.0));
+                let up = rotation.transform(&Vector3::new(0.0, 0.0, 1.0));
                 assert!(
                     up.x.abs() < 1e-9,
                     "the turntable must not roll at {azimuth}°/{elevation}°"
@@ -1169,7 +1186,9 @@ mod tests {
         let mut rolled = NaviCube::new(viewport());
         plain.sync(&camera(canonical));
         rolled.sync(&camera(roll.multiply(&canonical)));
-        assert_eq!(rolled.synced, plain.synced);
+        let (plain, rolled) = (plain.synced.expect("plain"), rolled.synced.expect("rolled"));
+        let lag = plain.inverse().multiply(&rolled).angle().abs();
+        assert!(lag < 1e-9, "a scene roll leaked into the cube: {lag}");
     }
 
     #[test]
@@ -1267,7 +1286,7 @@ mod tests {
         let view = drag_view(&Camera::identity(), [40.0, 30.0]);
         let up = Rotation::from_matrix(&view)
             .to_matrix()
-            .transform(&Vector3::new(0.0, 1.0, 0.0));
+            .transform(&Vector3::new(0.0, 0.0, 1.0));
         assert!(
             up.x.abs() < 1e-9,
             "a diagonal orbit must not roll the world-up axis (x = {})",

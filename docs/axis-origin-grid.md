@@ -63,9 +63,36 @@ pub enum WorkplaneKind {
 
 The world is **Z-up**: the ground is the `XY` plane and height is `+Z`. That is what
 `snap_to_geometry`'s `z = 0`, the toy's `Height`, and OCCT all use, and the grid model
-follows it. The navicube's own naming convention is separate and unchanged (§6).
+follows it. This note is the **authoritative** statement of the frame; the navicube
+specification defers to it for axes and piece names (§6 below).
 
-- **World.** `origin = 0`, `u = +X`, `v = +Y`, `n = +Z`. The navicube always reflects
+### The up-axis convention (settled 2026-10-21)
+
+- **World.** Right-handed, **Z-up**. Ground = `XY`, up = `+Z`. Geometry, workplanes,
+  the ground grid and the triad all use it; it is not a camera setting.
+- **Camera.** A camera stores a world→view rotation. View space is `+X` right,
+  `+Y` screen-up, `+Z` toward the viewer. A **roll-free** view keeps world `+Z` in the
+  screen's vertical plane (its screen-x component is zero). Consequently the identity
+  view is the **top** view (eye `+Z`, screen-up `+Y`), not a front view; the sample first
+  view is the FreeCAD isometric `(+X, −Y, +Z)` with `+Z` up.
+- **Navicube.** The cube's local axes are the world axes. `TOP` is `+Z`, `FRONT` is `−Y`
+  (FreeCAD's front), `RIGHT` is `+X`. A piece snap maps its direction onto view `+Z` and
+  keeps world `+Z` as screen up; at the poles the screen up falls back to `+Y` (top) or
+  `−Y` (bottom).
+- **Compass.** The turntable lies in the ground `XY` plane at `z = −0.5` (cube space),
+  with `+Z` as its normal. Its letters are fixed world bearings measured CCW from `+X`:
+
+  | Compass | plane angle | world direction |
+  | --- | --- | --- |
+  | E | `0` | `+X` |
+  | N | `π/2` | `+Y` |
+  | W | `π` | `−X` |
+  | S | `3π/2` | `−Y` |
+
+  In the canonical top view `N` reads at the top of the turntable, `E` right, `S` bottom,
+  `W` left. A local workplane never re-labels the cube or the ring.
+
+- **World frame.** `origin = 0`, `u = +X`, `v = +Y`, `n = +Z`. The navicube always reflects
   this frame; it is the immutable camera compass.
 - **Workplane (UCS).** Any datum or face frame. It adds local coordinates
   `(a, b, h)` with `p = origin + u·a + v·b + n·h`. Sketch tools work in `(a, b)`.
@@ -269,16 +296,17 @@ the triangle pipeline stays opaque.
 
 ## 6. Navicube and orientation
 
-The navicube remains the **world camera compass**: its faces always mean world
-`Front/Top/Right/…`, and a click snaps the camera to a world direction, exactly as
-specified in [`navicube-spec.md`](navicube-spec.md). A local workplane never re-labels
-the cube **or the compass ring**: the ring's cardinal letters are world bearings at all
-times. That matches upstream, whose navicube has no compass at all; a local frame is
+The navicube is the **world camera compass**: its local axes are the world axes, so
+`TOP` is the `+Z` face, `FRONT` is `−Y`, `RIGHT` is `+X`, and a click snaps the camera to
+that world direction (see the convention table in §2), exactly as specified in
+[`navicube-spec.md`](navicube-spec.md). The compass turntable lies in the world `XY`
+plane; its `N/E/S/W` letters are world bearings (`N = +Y`), never screen-fixed labels. A
+local workplane never re-labels the cube **or the compass ring**: a local frame is
 signalled in the scene (the local triad, its `U`/`V`/`N` tags and the bounded grid),
 never by rotating the compass.
 
 When the user clicks `TOP` while a workplane is active, the camera snaps to the
-**world** top; a separate command (`App_ViewWorkplane`) is the way to look down the
+**world** top (`+Z`); a separate command (`App_ViewWorkplane`) is the way to look down the
 active `n`. Keeping the cube world-only is deliberate: mixing the two would make
 "which way is up" ambiguous.
 
@@ -457,12 +485,13 @@ preference; the cache key is the exact spec, so a zoom rebuilds and an orbit doe
 7 (the world grid drops to 25 % under a local plane; its triad to 30 %). The rest remain
 open.
 
-0. **World up-axis.** The grid model assumes **Z-up** (`XY` ground), consistent with
-   `snap_to_geometry`'s `z = 0`, the toy's `Height`, and OCCT. `navicube-spec.md` §2
-   describes the default *view* as “+Z toward the viewer, +Y up”; that must be read as
-   the initial camera orientation, not the world frame. If the cube's piece naming truly
-   assumes a Y-up world, the two notes must be reconciled before G1 — the grid must not
-   silently introduce a second convention.
+0. **World up-axis — settled (2026-10-21): Z-up.** The grid model assumes **Z-up**
+   (`XY` ground), consistent with `snap_to_geometry`'s `z = 0`, the toy's `Height`, and
+   OCCT. This note, §2's convention table, is authoritative. The navicube was migrated to
+   match: `TOP` is `+Z`, `FRONT` is `−Y`, the compass lies in `XY`, and the camera's yaw,
+   pitch and snap presets are Z-up. `navicube-spec.md` §2 formerly described
+   “+Z toward the viewer, +Y up” as an *engine* frame; that was the Y-up *view* frame and
+   has been corrected to a view-space statement.
 1. **Per-vertex colour vs ring batches.** Recommend per-vertex (G0): exact fade, one
    attribute, useful elsewhere. Cost: a vertex-layout change in `ferrocad_wgpu` and the
    pick shader.
@@ -497,6 +526,10 @@ pattern (G0–G2 are built; the entries for them are live tests):
   resolution from a named slab, the dwell, the bloom's plane and depth bias, the world
   dimming, activation changing the snap context, and `Esc`. G4 adds the aurora's flash and
   settle, a vertex snap, a grid snap's rays and local coordinates, and the origin bloom.
+  The Z-up convention is pinned by the navicube tests: `TOP` is the `+Z` face and
+  `pick_id` 3, a `TOP` snap looks down `−Z` with `+Y` up, the compass reads `N = +Y`,
+  `view_workplane` stays roll-free, and an orbit never rolls the horizon or desyncs the
+  cube.
 - **`ferrocad_wgpu`** — the per-vertex colour multiply (a readback of a two-colour
   triangle), and the grid's line/point primitives in a real pass.
 - **`ferrocad_gpui`** — `ViewState::apply` validation and summaries, `App_ToggleGrid` /

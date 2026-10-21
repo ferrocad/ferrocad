@@ -70,10 +70,16 @@ pub fn sample_scene() -> Scene {
     }
 }
 
-/// A perspective camera looking at the origin from `(0, 0, 4)`.
+/// A perspective camera in the default **Z-up axonometric** view: the eye on the
+/// `(+X, −Y, +Z)` diagonal, four units from the origin, with world `+Z` up on screen.
+/// It matches FreeCAD's isometric first view and the navicube's Home orientation.
 pub fn sample_camera(viewport: Viewport) -> Camera {
+    // (1, −1, 1)/√3: azimuth −45° (from +X toward −Y), elevation 35.26° above the XY
+    // plane.
+    let elevation = (1.0 / 3.0_f64).sqrt().asin();
+    let rotation = crate::navicube::view_rotation(-std::f64::consts::FRAC_PI_4, elevation);
     Camera {
-        view: Placement::new(Vector3::new(0.0, 0.0, -4.0), Rotation::identity()).to_matrix(),
+        view: Placement::new(Vector3::new(0.0, 0.0, -4.0), rotation).to_matrix(),
         projection: Projection::Perspective {
             fov_y: 45.0_f64.to_radians(),
             near: 0.1,

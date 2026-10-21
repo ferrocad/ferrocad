@@ -2534,6 +2534,7 @@ dependencies = [
  "ferrocad_inventor",
  "ferrocad_stage",
  "ferrocad_types",
+ "naga",
  "wgpu",
 ]
 

@@ -16,9 +16,16 @@
 //! - [`context`] — the [`GpuContext`]: the device/queue the renderer owns.
 //! - [`batch`] — uploading fresh geometry into GPU meshes.
 //! - [`pipeline`] — the WGSL render pipelines (opaque, transparent, lines, points).
+//! - [`program`] — drawing an authored shader program: group 2 (`Frame`/`Program`), the
+//!   pipeline cache keyed by program content and depth state, and the placeholder quad.
 //! - [`uniforms`] — the dynamic-uniform buffer (per-frame globals + per-packet
 //!   state in one allocation).
 //! - [`pick`] — the g-buffer picking pass that maps a pixel back to a pick id.
+//!
+//! [`GRID_OVERLAY_WGSL`] is the WGSL port of the grid overlay's GLSL (see
+//! `docs/grid-overlay-plan.md` §3.4). It is drawn as a program packet's module (G4): a
+//! packet carrying a [`ShaderProgram`](ferrocad_graphics::ShaderProgram) replaces the
+//! scene pipeline with a pipeline built from that source.
 //!
 //! [`DrawBatch`]: ferrocad_graphics::DrawBatch
 //! [`InventorView`]: ferrocad_inventor::InventorView
@@ -31,9 +38,216 @@ pub mod batch;
 pub mod context;
 pub mod pick;
 pub mod pipeline;
+pub mod program;
 pub mod renderer;
 pub mod textures;
 pub mod uniforms;
 
 pub use context::GpuContext;
 pub use renderer::{RenderError, WgpuRenderer};
+
+/// The grid overlay's WGSL module (group 2: `Frame` at binding 0, `Program` at
+/// binding 1; entry points `vs_main` / `fs_main`).
+pub const GRID_OVERLAY_WGSL: &str = include_str!("../shaders/grid_overlay.wgsl");
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Parse and validate the grid overlay module without a GPU.
+    fn validated_grid_overlay() -> naga::Module {
+        let module = naga::front::wgsl::parse_str(GRID_OVERLAY_WGSL)
+            .expect("grid_overlay.wgsl should parse as WGSL");
+        naga::valid::Validator::new(
+            naga::valid::ValidationFlags::all(),
+            naga::valid::Capabilities::all(),
+        )
+        .validate(&module)
+        .expect("grid_overlay.wgsl should validate");
+        module
+    }
+
+    fn struct_by_name<'a>(module: &'a naga::Module, name: &str) -> naga::Handle<naga::Type> {
+        module
+            .types
+            .iter()
+            .find_map(|(handle, ty)| {
+                (ty.name.as_deref() == Some(name)
+                    && matches!(ty.inner, naga::TypeInner::Struct { .. }))
+                .then_some(handle)
+            })
+            .unwrap_or_else(|| panic!("no struct {name} in the module"))
+    }
+
+    #[test]
+    fn grid_overlay_has_the_expected_entry_points() {
+        let module = validated_grid_overlay();
+        let vertex = module
+            .entry_points
+            .iter()
+            .find(|entry| entry.name == "vs_main")
+            .expect("vs_main");
+        let fragment = module
+            .entry_points
+            .iter()
+            .find(|entry| entry.name == "fs_main")
+            .expect("fs_main");
+        assert_eq!(vertex.stage, naga::ShaderStage::Vertex);
+        assert_eq!(fragment.stage, naga::ShaderStage::Fragment);
+
+        let result = fragment
+            .function
+            .result
+            .as_ref()
+            .expect("fs_main returns a fragment output struct");
+        let naga::TypeInner::Struct { members, .. } = &module.types[result.ty].inner else {
+            panic!("fs_main's result should be a struct");
+        };
+        assert!(
+            members.iter().any(|member| {
+                member.binding == Some(naga::Binding::BuiltIn(naga::BuiltIn::FragDepth))
+            }),
+            "fs_main must write @builtin(frag_depth)"
+        );
+    }
+
+    #[test]
+    fn grid_overlay_binds_only_the_program_group() {
+        let module = validated_grid_overlay();
+        let mut bindings: Vec<(u32, u32)> = module
+            .global_variables
+            .iter()
+            .filter_map(|(_, variable)| {
+                variable
+                    .binding
+                    .as_ref()
+                    .map(|binding| (binding.group, binding.binding))
+            })
+            .collect();
+        bindings.sort_unstable();
+        // Groups 0 (Globals) and 1 (texture) are layout-only: the shared pipeline
+        // layout keeps them, and the program shader does not touch them.
+        assert_eq!(bindings, vec![(2, 0), (2, 1)]);
+
+        let frame = module
+            .global_variables
+            .iter()
+            .find(|(_, variable)| {
+                variable
+                    .binding
+                    .as_ref()
+                    .is_some_and(|binding| binding.group == 2 && binding.binding == 0)
+            })
+            .map(|(_, variable)| variable)
+            .expect("group 2 binding 0");
+        let program = module
+            .global_variables
+            .iter()
+            .find(|(_, variable)| {
+                variable
+                    .binding
+                    .as_ref()
+                    .is_some_and(|binding| binding.group == 2 && binding.binding == 1)
+            })
+            .map(|(_, variable)| variable)
+            .expect("group 2 binding 1");
+        assert_eq!(frame.space, naga::AddressSpace::Uniform);
+        assert_eq!(program.space, naga::AddressSpace::Uniform);
+        assert!(matches!(
+            module.types[frame.ty].inner,
+            naga::TypeInner::Struct { .. }
+        ));
+    }
+
+    #[test]
+    fn grid_overlay_uniform_blocks_match_the_fixed_abi() {
+        let module = validated_grid_overlay();
+        let mut layouter = naga::proc::Layouter::default();
+        layouter
+            .update(module.to_ctx())
+            .expect("WGSL uniform layouts");
+
+        // Frame: view_proj + inv_view_proj (2 x 64) + eye + flags (2 x 16).
+        let frame = struct_by_name(&module, "Frame");
+        assert_eq!(layouter[frame].size, 160);
+        // Program: 3 x vec4 plus 80 shadow vec4s (64 slots x 5 floats, re-packed).
+        let program = struct_by_name(&module, "Program");
+        assert_eq!(layouter[program].size, 1_328);
+        assert_eq!(layouter[program].alignment.round_up(1_328), 1_328);
+    }
+
+    /// The scene-extraction contract: an active `SoShaderProgram` binds to the sibling
+    /// shapes that follow it, draws nothing itself, and its WGSL round-trips into the
+    /// packet.
+    #[test]
+    fn shader_scene_carries_the_program_on_the_following_shape() {
+        use ferrocad_graphics::DrawBatch;
+        use ferrocad_inventor::{
+            Node, NodeKind, Scene, ShaderParameter, ShaderStage, ShaderStageKind, compile,
+        };
+
+        let leaf = |kind: NodeKind| Node {
+            kind,
+            children: Vec::new(),
+        };
+        let vertex = leaf(NodeKind::ShaderStage(ShaderStage {
+            kind: ShaderStageKind::Vertex,
+            // A single-module WGSL file: the vertex stage holds it, the fragment
+            // stage stays empty (WGSL has no per-stage modules).
+            source: Some(GRID_OVERLAY_WGSL.to_owned()),
+            source_program: None,
+        }));
+        let fragment = Node {
+            kind: NodeKind::ShaderStage(ShaderStage::fragment()),
+            children: vec![
+                leaf(NodeKind::ShaderParameter(ShaderParameter::Vec3 {
+                    name: "grid_color".to_owned(),
+                    value: [1.0, 0.5, 0.25],
+                })),
+                leaf(NodeKind::ShaderParameter(ShaderParameter::Float {
+                    name: "base_spacing".to_owned(),
+                    value: 10.0,
+                })),
+            ],
+        };
+        let program = Node {
+            kind: NodeKind::ShaderProgram,
+            // Order-independent: the stages are resolved by kind.
+            children: vec![fragment, vertex],
+        };
+        let quad = leaf(NodeKind::Mesh {
+            indices: vec![0, 1, 2, 0, 2, 3],
+            normal_indices: Vec::new(),
+            topology: ferrocad_graphics::Topology::Triangles,
+        });
+        let scene = Scene {
+            root: Node {
+                kind: NodeKind::Separator,
+                children: vec![
+                    leaf(NodeKind::Coordinate3(vec![
+                        [-1.0, -1.0, 0.0],
+                        [1.0, -1.0, 0.0],
+                        [1.0, 1.0, 0.0],
+                        [-1.0, 1.0, 0.0],
+                    ])),
+                    program,
+                    quad,
+                ],
+            },
+        };
+
+        let (queue, _) = compile(&scene);
+        assert_eq!(queue.len(), 1, "the program node must not emit a packet");
+        let snapshot = queue.packets[0].state();
+        let program = snapshot
+            .program
+            .as_ref()
+            .expect("the packet carries a program");
+        assert_eq!(program.source(), GRID_OVERLAY_WGSL, "the WGSL round-trips");
+        assert_eq!(program.parameters().color, [1.0, 0.5, 0.25]);
+        assert_eq!(program.parameters().base_spacing, 10.0);
+        // What the packet carries is itself valid WGSL.
+        naga::front::wgsl::parse_str(program.source())
+            .expect("the extracted source parses as WGSL");
+    }
+}

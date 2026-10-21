@@ -23,8 +23,8 @@ use ferrocad_graphics::{
     StateSnapshot, Topology, Vertex, Viewport, pick_at_hit,
 };
 use ferrocad_inventor::{
-    Directives, Event, EventListener, ImageData, InventorView, NaviCubeDirective, Scene, ViewSpec,
-    compile_with,
+    Directives, Event, EventListener, ImageData, InventorView, NaviCubeDirective, Node, NodeKind,
+    Scene, ViewSpec, compile_with,
 };
 use ferrocad_stage::Stage;
 use ferrocad_stage::shape::WIRE_DEPTH_BIAS;
@@ -180,6 +180,10 @@ pub struct InventorViewport<V: InventorView> {
     grid_major: f64,
     /// A fixed world-grid extent (mm); `None` derives it from the camera.
     grid_radius: Option<f64>,
+    /// The world grid's linear ink (`FreeCAD.Grid.color`).
+    grid_color: [f32; 4],
+    /// A multiplier over the token alphas (`FreeCAD.Grid.opacity`).
+    grid_alpha: f32,
     /// The active local workplane (G3): sticky until `Esc` or another activation.
     active_workplane: Option<FaceFrame>,
     /// The face under the pointer, resolved from the stage's display tessellation. Its
@@ -188,6 +192,18 @@ pub struct InventorViewport<V: InventorView> {
     /// The grid's packets. Kept apart from [`queue`](Self::queue) so the grid draws in
     /// the same depth pass but never enters a pick: it is scaffolding, not geometry.
     grid_queue: RenderQueue,
+    /// Whether the authored (shader) grid overlay replaces the native ground
+    /// (`ViewState.grid_overlay`, G4). When true the native ground (dots and lines) is
+    /// hidden and the scene's program packets are drawn; the triad and the workplane
+    /// are untouched.
+    grid_overlay: bool,
+    /// The scene's program packets — those whose state carries a `ShaderProgram` — split
+    /// out of [`queue`](Self::queue) so they draw **after** opaque geometry, in the same
+    /// depth-tested pass, and can never enter a pick.
+    program_queue: RenderQueue,
+    /// Pull-registered overlay scenes (G5). Merged under a synthetic separator beside
+    /// the base scene on every recompile; the base scene itself is never modified.
+    overlays: Vec<Scene>,
     /// The last pointer position in **device** pixels (bottom-left origin), for the
     /// workplane origin's proximity bloom.
     pointer: Option<[i32; 2]>,
@@ -382,6 +398,9 @@ impl MarkerLayer {
                 depth_bias: self.depth_bias,
                 texture: None,
                 id: PickId(0),
+                depth: Default::default(),
+                pickable: false,
+                program: None,
             },
         });
     }
@@ -521,6 +540,9 @@ impl GridLayer {
                 depth_bias: self.depth_bias,
                 texture: None,
                 id: PickId(0),
+                depth: Default::default(),
+                pickable: false,
+                program: None,
             },
         }
     }
@@ -544,6 +566,15 @@ fn local_grid(camera: &Camera, frame: &FaceFrame) -> (GridSpec, GridStyle) {
         },
         GridStyle::workplane(),
     )
+}
+
+/// Apply the user's ink and alpha multiplier to an existing style. The multiplier scales
+/// the token alphas, so a workplane keeps its `1:2` minor:major ratio.
+fn with_grid_ink(mut style: GridStyle, color: [f32; 4], alpha: f32) -> GridStyle {
+    style.color = color;
+    style.minor_alpha *= alpha;
+    style.major_alpha *= alpha;
+    style
 }
 
 /// The face under the pointer, resolved to a workplane the pointer may activate.
@@ -632,6 +663,9 @@ fn feedback_packet(
             depth_bias: 0.0,
             texture: None,
             id: PickId(0),
+            depth: Default::default(),
+            pickable: false,
+            program: None,
         },
     }
 }
@@ -660,6 +694,7 @@ impl<V: InventorView> InventorViewport<V> {
     pub fn new(view: V, camera: Camera, scene: Scene) -> Self {
         let stage = Stage::new();
         let (queue, directives) = merge_queue(&scene, &stage, &camera.viewport);
+        let (queue, program_queue) = split_programs(queue);
         let mut viewport = Self {
             view,
             camera,
@@ -700,9 +735,14 @@ impl<V: InventorView> InventorViewport<V> {
             grid_minor: grid::MINOR_STEP,
             grid_major: grid::MAJOR_STEP,
             grid_radius: None,
+            grid_color: grid::GRID_COLOR,
+            grid_alpha: 1.0,
             active_workplane: None,
             hover_face: None,
             grid_queue: RenderQueue::default(),
+            grid_overlay: false,
+            program_queue,
+            overlays: Vec::new(),
             pointer: None,
             snap_feedback: None,
             feedback_queue: RenderQueue::default(),
@@ -970,6 +1010,23 @@ impl<V: InventorView> InventorViewport<V> {
     pub fn set_stage(&mut self, stage: Stage) {
         self.stage = stage;
         self.stage_dirty = true;
+    }
+
+    /// Replace the pull-registered overlay scenes (G5).
+    ///
+    /// Each overlay's root is merged under a synthetic separator beside the base
+    /// scene, then compiled through the ordinary [`merge_queue`]/[`split_programs`]
+    /// path: an overlay's program packets land in [`program_queue`](Self::program_queue)
+    /// exactly like a scene program. The base scene, the stage and the native grid
+    /// are untouched.
+    pub fn set_overlays(&mut self, overlays: Vec<Scene>) {
+        self.overlays = overlays;
+        self.recompile();
+    }
+
+    /// The overlay scenes currently merged into the draw.
+    pub fn overlays(&self) -> &[Scene] {
+        &self.overlays
     }
 
     /// Frame the stage: move the eye along the current view direction so the document's
@@ -2061,12 +2118,38 @@ impl<V: InventorView> InventorViewport<V> {
     }
 
     fn recompile(&mut self) {
-        let (queue, directives) = merge_queue(&self.scene, &self.stage, &self.camera.viewport);
+        // Keep the no-overlay path allocation-free: it is the common case and the
+        // base scene can be large.
+        let (queue, directives) = if self.overlays.is_empty() {
+            merge_queue(&self.scene, &self.stage, &self.camera.viewport)
+        } else {
+            let merged = self.merged_scene();
+            merge_queue(&merged, &self.stage, &self.camera.viewport)
+        };
+        let (queue, program_queue) = split_programs(queue);
         self.queue = queue;
+        self.program_queue = program_queue;
         self.directives = directives;
         self.stage_dirty = false;
         self.sync_grid();
         self.sync_directive_cubes();
+    }
+
+    /// The base scene with every overlay root under one `Separator`.
+    ///
+    /// Only called when at least one overlay is registered; the extra level is
+    /// introduced then, so the no-overlay path keeps exactly the packets it had
+    /// before G5.
+    fn merged_scene(&self) -> Scene {
+        let mut children = Vec::with_capacity(self.overlays.len() + 1);
+        children.push(self.scene.root.clone());
+        children.extend(self.overlays.iter().map(|overlay| overlay.root.clone()));
+        Scene {
+            root: Node {
+                kind: NodeKind::Separator,
+                children,
+            },
+        }
     }
 
     /// Rebuild the `Directive::NaviCube` overlays when the set of requests changed.
@@ -2168,14 +2251,82 @@ impl<V: InventorView> InventorViewport<V> {
         self.grid_radius
     }
 
+    /// Set the world grid's ink (linear RGBA). A non-finite or out-of-range component
+    /// is ignored. Returns whether the grid changed.
+    pub fn set_grid_color(&mut self, color: [f32; 4]) -> bool {
+        if !color
+            .iter()
+            .all(|value| value.is_finite() && (0.0..=1.0).contains(value))
+        {
+            return false;
+        }
+        if self.grid_color == color {
+            return false;
+        }
+        self.grid_color = color;
+        self.recompile();
+        true
+    }
+
+    /// The world grid's linear ink.
+    pub fn grid_color(&self) -> [f32; 4] {
+        self.grid_color
+    }
+
+    /// Set a multiplier over the grid tokens' alphas. Both the world level and a
+    /// workplane's own grid scale by it, so the workplane keeps its `1:2`
+    /// minor:major ratio. A non-finite or out-of-range value is ignored. Returns
+    /// whether the grid changed.
+    pub fn set_grid_alpha(&mut self, alpha: f32) -> bool {
+        if !(alpha.is_finite() && (0.0..=1.0).contains(&alpha)) {
+            return false;
+        }
+        if (self.grid_alpha - alpha).abs() < f32::EPSILON {
+            return false;
+        }
+        self.grid_alpha = alpha;
+        self.recompile();
+        true
+    }
+
+    /// The multiplier over the grid tokens' alphas.
+    pub fn grid_alpha(&self) -> f32 {
+        self.grid_alpha
+    }
+
+    /// Whether the authored (shader) grid overlay is authoritative (`ViewState.grid_overlay`).
+    pub fn grid_overlay(&self) -> bool {
+        self.grid_overlay
+    }
+
+    /// Select the authored grid overlay: when `enabled`, the native world ground (dots
+    /// and lines) is hidden and the scene's program packets are drawn after opaque
+    /// geometry; the triad, the workplane and the origin node are unaffected. Returns
+    /// whether the flag changed.
+    ///
+    /// A scene with no program packet draws nothing under the flag: the flag says "the
+    /// shader grid is authoritative", not "build one". The scene's programs are held in
+    /// [`program_queue`](Self::program_queue) in either case and are never picked.
+    pub fn set_grid_overlay(&mut self, enabled: bool) -> bool {
+        if self.grid_overlay == enabled {
+            return false;
+        }
+        self.grid_overlay = enabled;
+        self.recompile();
+        true
+    }
+
     /// Rebuild the reference geometry for the current camera: the effective steps
     /// (screen-space culling), the radius, and the screen-facing triads.
     ///
     /// Three layers can contribute: the world layer, the active workplane and a hovered
     /// face (each when present). `App_ToggleGrid` owns the ground fields, the axis-cross
     /// flag owns the triads and the origin node, so they can be shown independently. A
-    /// local layer dims the world level so the local frame reads first. The packets go to
-    /// their own queue ([`grid_queue`](Self::grid_queue)) so nothing here is ever picked.
+    /// local layer dims the world level so the local frame reads first. When the shader
+    /// grid overlay is on, the **world ground** is hidden (two coplanar line grids
+    /// z-fight); the triad, the workplane's own grid and the origin node stay. The
+    /// packets go to their own queue ([`grid_queue`](Self::grid_queue)) so nothing here
+    /// is ever picked.
     fn sync_grid(&mut self) {
         self.grid_queue = RenderQueue::default();
         self.refresh_hover_face();
@@ -2213,6 +2364,9 @@ impl<V: InventorView> InventorViewport<V> {
         // axis cross is on with an active workplane.
         let local_present = (grid_on && hover.is_some()) || active.is_some();
         let mut world_style = GridStyle::default();
+        world_style.color = self.grid_color;
+        world_style.minor_alpha *= self.grid_alpha;
+        world_style.major_alpha *= self.grid_alpha;
         if local_present {
             world_style.dim = grid::WORLD_DIM;
             world_style.triad_dim = grid::WORLD_TRIAD_DIM;
@@ -2220,10 +2374,17 @@ impl<V: InventorView> InventorViewport<V> {
         let active_layer = active.as_ref().and_then(|frame| {
             (grid_on || cross).then(|| {
                 let (spec, style) = local_grid(&self.camera, frame);
-                (spec, style, grid_on)
+                (
+                    spec,
+                    with_grid_ink(style, self.grid_color, self.grid_alpha),
+                    grid_on,
+                )
             })
         });
-        let hover_layer = hover.as_ref().map(|frame| local_grid(&self.camera, frame));
+        let hover_layer = hover
+            .as_ref()
+            .map(|frame| local_grid(&self.camera, frame))
+            .map(|(spec, style)| (spec, with_grid_ink(style, self.grid_color, self.grid_alpha)));
         // The origin node sits on the active workplane, or under the world triad.
         let origin_plane = active
             .as_ref()
@@ -2239,7 +2400,7 @@ impl<V: InventorView> InventorViewport<V> {
         let world = LayerSpec {
             spec: &world_spec,
             style: &world_style,
-            ground: grid_on,
+            ground: grid_on && !self.grid_overlay,
             triad: cross,
         };
         let active = active_layer
@@ -2693,7 +2854,7 @@ impl<V: InventorView> InventorViewport<V> {
 
         // One pass: the scene (legacy + stage) first, then the overlays (the tool's
         // transient visuals, the gizmo and the navigation cubes, depth off and on top).
-        let mut views = Vec::with_capacity(6);
+        let mut views = Vec::with_capacity(7);
         views.push(ViewSpec {
             queue: &self.queue,
             camera: &self.camera,
@@ -2705,6 +2866,17 @@ impl<V: InventorView> InventorViewport<V> {
             // occluded by the scene, but it is never part of a pick.
             views.push(ViewSpec {
                 queue: &self.grid_queue,
+                camera: &self.camera,
+                rect: None,
+                overlay: false,
+            });
+        }
+        if self.grid_overlay && !self.program_queue.is_empty() {
+            // The authored grid overlay: drawn after opaque geometry and the native grid,
+            // in the same depth-tested pass. Its pipeline writes no depth by default, so
+            // an opaque box in front of the plane still occludes it.
+            views.push(ViewSpec {
+                queue: &self.program_queue,
                 camera: &self.camera,
                 rect: None,
                 overlay: false,
@@ -3060,6 +3232,24 @@ fn merge_queue(scene: &Scene, stage: &Stage, viewport: &Viewport) -> (RenderQueu
     let (mut queue, directives) = compile_with(scene, viewport);
     stage.emit_batches(&mut queue);
     (queue, directives)
+}
+
+/// Split the program packets out of the scene queue.
+///
+/// A packet whose state carries a shader program draws a full-screen placeholder instead
+/// of its own geometry, so it belongs after the opaque scene (it writes no depth) and
+/// outside every pick.
+fn split_programs(queue: RenderQueue) -> (RenderQueue, RenderQueue) {
+    let mut scene = RenderQueue::default();
+    let mut programs = RenderQueue::default();
+    for packet in queue.packets {
+        if packet.state.program.is_some() {
+            programs.packets.push(packet);
+        } else {
+            scene.packets.push(packet);
+        }
+    }
+    (scene, programs)
 }
 
 /// The gpui chrome bar under the navigation cube: a projection toggle, Home and the
@@ -5201,6 +5391,129 @@ mod tests {
     }
 
     #[test]
+    fn set_grid_overlay_hides_the_native_ground_but_keeps_the_axis_cross() {
+        let mut viewport = grid_view();
+        assert!(!viewport.grid_overlay(), "the native grid is authoritative");
+        assert_eq!(viewport.grid_queue.len(), 4);
+
+        assert!(viewport.set_grid_overlay(true));
+        assert!(viewport.grid_overlay());
+        assert_eq!(
+            viewport.grid_queue.len(),
+            2,
+            "the world ground is hidden; the triad and the origin node remain"
+        );
+        assert!(!viewport.set_grid_overlay(true), "enabling twice is a no-op");
+
+        assert!(viewport.set_grid_overlay(false));
+        assert_eq!(viewport.grid_queue.len(), 4);
+    }
+
+    /// A scene whose only draw is a program packet (the program binds to the quad that
+    /// follows it, but the renderer draws the placeholder instead).
+    fn program_scene() -> Scene {
+        use ferrocad_inventor::{ShaderStage, ShaderStageKind};
+        let leaf = |kind| Node {
+            kind,
+            children: Vec::new(),
+        };
+        Scene {
+            root: Node {
+                kind: NodeKind::Separator,
+                children: vec![
+                    leaf(NodeKind::Coordinate3(vec![
+                        [-1.0, -1.0, 0.0],
+                        [1.0, -1.0, 0.0],
+                        [1.0, 1.0, 0.0],
+                        [-1.0, 1.0, 0.0],
+                    ])),
+                    Node {
+                        kind: NodeKind::ShaderProgram,
+                        children: vec![
+                            leaf(NodeKind::ShaderStage(ShaderStage {
+                                kind: ShaderStageKind::Vertex,
+                                source: Some(
+                                    "@vertex fn vs_main() -> @builtin(position) vec4<f32> { return vec4<f32>(0.0); }"
+                                        .to_owned(),
+                                ),
+                                source_program: None,
+                            })),
+                            leaf(NodeKind::ShaderStage(ShaderStage {
+                                kind: ShaderStageKind::Fragment,
+                                source: Some(String::new()),
+                                source_program: None,
+                            })),
+                        ],
+                    },
+                    leaf(NodeKind::Mesh {
+                        indices: vec![0, 1, 2, 0, 2, 3],
+                        normal_indices: Vec::new(),
+                        topology: Topology::Triangles,
+                    }),
+                ],
+            },
+        }
+    }
+
+    #[test]
+    fn a_program_packet_is_kept_out_of_the_scene_queue_and_the_pick() {
+        let camera = Camera {
+            viewport: ferrocad_graphics::Viewport::new([100, 100], 1.0),
+            ..Camera::identity()
+        };
+        let mut viewport =
+            InventorViewport::new(fake(ImageData::default()), camera, program_scene());
+
+        // The program draws a placeholder, not its authored geometry: it must not sit in
+        // the scene queue (which the pick path reads) or be pickable.
+        assert!(viewport.queue.is_empty());
+        assert_eq!(viewport.program_queue.len(), 1);
+        assert!(viewport.program_queue.packets[0].state.program.is_some());
+        assert!(!viewport.program_queue.packets[0].state.pickable);
+        assert!(viewport.pick([50, 50]).is_none());
+
+        // The overlay flag controls whether that queue is drawn, never the split.
+        assert!(viewport.set_grid_overlay(true));
+        assert_eq!(viewport.program_queue.len(), 1);
+        assert!(viewport.queue.is_empty());
+    }
+
+    /// G5: an overlay scene registered through the bridge is merged beside the base
+    /// scene. Its program packet lands in `program_queue`; the base scene keeps its
+    /// own packet (and is not mutated by the merge).
+    #[test]
+    fn overlays_merge_beside_the_base_scene_without_replacing_it() {
+        let camera = Camera {
+            viewport: ferrocad_graphics::Viewport::new([100, 100], 1.0),
+            ..Camera::identity()
+        };
+        let mut viewport =
+            InventorViewport::new(fake(ImageData::default()), camera, triangle_scene());
+        assert_eq!(viewport.queue.len(), 1, "the base triangle draws");
+        assert!(viewport.program_queue.is_empty());
+
+        viewport.set_overlays(vec![program_scene()]);
+        assert_eq!(viewport.queue.len(), 1, "the base scene survives the merge");
+        assert_eq!(
+            viewport.program_queue.len(),
+            1,
+            "the overlay's program packet is held aside for the overlay pass"
+        );
+        assert!(viewport.program_queue.packets[0].state.program.is_some());
+        assert_eq!(
+            viewport.scene().root.children.len(),
+            3,
+            "the base scene is untouched"
+        );
+        assert_eq!(viewport.overlays().len(), 1);
+
+        viewport.set_overlays(Vec::new());
+        assert_eq!(viewport.queue.len(), 1);
+        assert!(viewport.program_queue.is_empty(), "removing drops the overlay");
+        assert!(viewport.overlays().is_empty());
+    }
+
+    #[test]
     fn set_grid_toggles_the_grid_queue() {
         let mut viewport = grid_view();
         assert!(viewport.grid_enabled());
@@ -5718,6 +6031,56 @@ mod tests {
             !view.set_grid_radius(Some(-1.0)),
             "a negative radius is ignored"
         );
+    }
+
+    #[test]
+    fn a_grid_ink_and_alpha_reach_the_ground_vertices() {
+        let mut view = grid_view();
+        assert_eq!(view.grid_color(), ferrocad_stage::grid::GRID_COLOR);
+        assert_eq!(view.grid_alpha(), 1.0);
+        assert!(!view.set_grid_color(ferrocad_stage::grid::GRID_COLOR));
+        assert!(!view.set_grid_alpha(1.0));
+
+        // The radial fade means the brightest dot sits below the token alpha, so the
+        // baseline comes from the geometry rather than from the constant.
+        let peak_at_full = {
+            let dots = &view.grid_queue.packets[0]
+                .geometry
+                .as_ref()
+                .expect("fresh geometry")
+                .vertices;
+            assert!(!dots.is_empty());
+            let peak = dots.iter().map(|dot| dot.color[3]).fold(0.0, f32::max);
+            assert!(peak > 0.0 && peak <= ferrocad_stage::grid::GRID_ALPHA);
+            peak
+        };
+
+        assert!(view.set_grid_alpha(0.5));
+        assert!(view.set_grid_color([1.0, 0.0, 0.0, 1.0]));
+        let dots = &view.grid_queue.packets[0]
+            .geometry
+            .as_ref()
+            .expect("fresh geometry")
+            .vertices;
+        assert!(!dots.is_empty());
+        let peak = dots.iter().map(|dot| dot.color[3]).fold(0.0, f32::max);
+        assert!(
+            (peak - peak_at_full * 0.5).abs() < 1e-6,
+            "the alpha is a multiplier over the token: {peak} vs {peak_at_full} * 0.5"
+        );
+        assert!(
+            dots.iter()
+                .all(|dot| dot.color[0] == 1.0 && dot.color[1] == 0.0),
+            "the ink reaches every dot"
+        );
+
+        // Out-of-range values are ignored, like the neighbouring setters.
+        assert!(!view.set_grid_alpha(1.5));
+        assert!(!view.set_grid_alpha(f32::NAN));
+        assert!(!view.set_grid_color([f32::NAN, 0.0, 0.0, 1.0]));
+        assert!(!view.set_grid_color([1.0, 2.0, 0.0, 1.0]));
+        assert_eq!(view.grid_alpha(), 0.5);
+        assert_eq!(view.grid_color(), [1.0, 0.0, 0.0, 1.0]);
     }
 
     #[test]

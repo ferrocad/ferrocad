@@ -45,6 +45,45 @@ pub const AXIS_COLORS: [[f32; 4]; 3] = [
 /// feedback render unlit — their per-vertex colour is exactly what reaches the screen.
 pub(crate) const LIGHT: [f32; 3] = [0.3714, 0.7428, 0.5571];
 
+/// Parse a `#rrggbb` or `#rgb` sRGB hex colour into **linear** RGBA with alpha `1`.
+///
+/// The producer bakes linear ink into its vertices, so a caller-supplied colour has to
+/// cross the same sRGB transfer function the tokens were authored through: `#94a3b8`
+/// parses to [`GRID_COLOR`]. Surrounding whitespace is ignored; the hex digits are
+/// case-insensitive. A malformed colour is an error, never a silent fallback.
+pub fn parse_srgb_hex(text: &str) -> Result<[f32; 4], String> {
+    let text = text.trim();
+    let digits = text
+        .strip_prefix('#')
+        .ok_or_else(|| format!("a grid colour must start with '#', got {text:?}"))?;
+    let nibbles: Vec<u8> = digits
+        .chars()
+        .map(|c| {
+            c.to_digit(16)
+                .map(|digit| digit as u8)
+                .ok_or_else(|| format!("a grid colour has a non-hex digit {c:?} in {text:?}"))
+        })
+        .collect::<Result<_, _>>()?;
+    let [r, g, b] = match nibbles.as_slice() {
+        [r, g, b] => [r * 17, g * 17, b * 17],
+        [r1, r2, g1, g2, b1, b2] => [r1 * 16 + r2, g1 * 16 + g2, b1 * 16 + b2],
+        _ => {
+            return Err(format!(
+                "a grid colour must be #rgb or #rrggbb, got {text:?}"
+            ));
+        }
+    };
+    let linear = |byte: u8| {
+        let value = f32::from(byte) / 255.0;
+        if value <= 0.040_45 {
+            value / 12.92
+        } else {
+            ((value + 0.055) / 1.055).powf(2.4)
+        }
+    };
+    Ok([linear(r), linear(g), linear(b), 1.0])
+}
+
 /// The plane, steps and extent of one grid.
 #[derive(Clone, Debug, PartialEq)]
 pub struct GridSpec {
@@ -431,6 +470,45 @@ mod tests {
             )
             .to_matrix(),
             ..camera()
+        }
+    }
+
+    #[test]
+    fn a_hex_colour_parses_to_the_structural_ink() {
+        // The token is linear, so the parsed value has to be linear too.
+        let ink = parse_srgb_hex("#94a3b8").expect("the token's hex");
+        for (parsed, token) in ink.iter().zip(GRID_COLOR) {
+            assert!((parsed - token).abs() < 1e-3, "{parsed} is not {token}");
+        }
+        assert_eq!(ink[3], 1.0, "a grid colour is opaque");
+
+        // Case-insensitive, and the six-digit and three-digit forms agree.
+        assert_eq!(parse_srgb_hex("#94A3B8").unwrap(), ink);
+        assert_eq!(
+            parse_srgb_hex("#f00").unwrap(),
+            parse_srgb_hex("#FF0000").unwrap()
+        );
+        assert_eq!(parse_srgb_hex("#fff").unwrap(), [1.0, 1.0, 1.0, 1.0]);
+        assert_eq!(parse_srgb_hex("#000").unwrap(), [0.0, 0.0, 0.0, 1.0]);
+        // Leading and trailing whitespace is harmless.
+        assert_eq!(parse_srgb_hex(" #00ff00 ").unwrap(), [0.0, 1.0, 0.0, 1.0]);
+    }
+
+    #[test]
+    fn a_malformed_colour_is_rejected() {
+        for bad in [
+            "",
+            "#",
+            "#12",
+            "#1234",
+            "#1234567",
+            "123456",
+            "#ggg",
+            "#12345g",
+            "#12 34 56",
+            "#+12345",
+        ] {
+            assert!(parse_srgb_hex(bad).is_err(), "{bad:?} parsed");
         }
     }
 

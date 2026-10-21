@@ -161,6 +161,11 @@ pub fn pick_hit(queue: &RenderQueue, ray: &Ray) -> Option<Hit> {
 fn pick_hit_impl(queue: &RenderQueue, ray: &Ray, camera: Option<&Camera>) -> Option<Hit> {
     let mut best: Option<Hit> = None;
     for packet in &queue.packets {
+        // A shader program draws a placeholder quad, not its authored geometry, and an
+        // `SoPickStyle.UNPICKABLE` packet opts out outright: neither can be a hit.
+        if packet.state.program.is_some() || !packet.state.pickable {
+            continue;
+        }
         if packet.topology == Topology::Points {
             continue;
         }
@@ -413,8 +418,9 @@ mod tests {
     use super::*;
     use crate::batch::{DrawPacket, Generation, MeshId, PickId, RenderQueue};
     use crate::geometry::{Geometry, Vertex};
-    use crate::state::StateSnapshot;
+    use crate::state::{ShaderProgram, StateSnapshot};
     use ferrocad_types::{Matrix4, Placement, Rotation, Vector3};
+    use std::sync::Arc;
 
     fn packet_with_part(
         topology: Topology,
@@ -443,6 +449,9 @@ mod tests {
                 depth_bias: 0.0,
                 texture: None,
                 id: PickId(0),
+                depth: Default::default(),
+                pickable: true,
+                program: None,
             },
         }
     }
@@ -577,5 +586,37 @@ mod tests {
             pick_hit(&queue, &ray).is_none(),
             "the fixed world radius (0.04) misses a one-unit offset"
         );
+    }
+
+    #[test]
+    fn a_program_packet_is_never_a_hit() {
+        let ray = Ray {
+            origin: [0.0, 0.0, -5.0],
+            direction: [0.0, 0.0, 1.0],
+        };
+        let mut queue = triangle_queue();
+        // The triangle would be hit, so only the program skip can make this miss.
+        assert!(pick_hit(&queue, &ray).is_some());
+        queue.packets[0].state.program = Some(Arc::new(ShaderProgram::from_source(
+            "@fragment fn fs_main() -> @location(0) vec4<f32> { return vec4<f32>(1.0); }",
+        )));
+        assert!(
+            pick_hit(&queue, &ray).is_none(),
+            "a program draws a placeholder, never the authored geometry"
+        );
+        assert!(pick_at(&queue, &Camera::identity(), [50, 50]).is_none());
+    }
+
+    #[test]
+    fn an_unpickable_packet_is_skipped_but_a_pickable_one_is_not() {
+        let ray = Ray {
+            origin: [0.0, 0.0, -5.0],
+            direction: [0.0, 0.0, 1.0],
+        };
+        let mut queue = triangle_queue();
+        queue.packets[0].state.pickable = false;
+        assert!(pick_hit(&queue, &ray).is_none(), "SoPickStyle.UNPICKABLE");
+        queue.packets[0].state.pickable = true;
+        assert!(pick_hit(&queue, &ray).is_some());
     }
 }

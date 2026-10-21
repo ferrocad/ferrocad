@@ -30,3 +30,6 @@ bytemuck = { version = "1", features = ["derive"] }
 # a legacy inventor producer in one pass with a shared upload cache. Dev-only: the
 # renderer itself has no knowledge of either producer's crate.
 ferrocad_stage.workspace = true
+# CPU validation of the authored WGSL (`grid_overlay.wgsl`): parse + validate + binding
+# layout, without a GPU. Dev-only: naga is already in the tree through wgpu.
+naga = { version = "29", features = ["wgsl-in"] }

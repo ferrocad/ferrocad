@@ -560,6 +560,9 @@ impl ShapeItem {
                 depth_bias,
                 texture: None,
                 id: self.pick_id(),
+                depth: Default::default(),
+                pickable: true,
+                program: None,
             },
         }
     }

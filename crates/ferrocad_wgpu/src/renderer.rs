@@ -16,8 +16,8 @@ use std::collections::HashMap;
 use std::fmt;
 
 use ferrocad_graphics::{
-    Camera, DrawBatch, DrawPacket, Generation, Geometry, Hit, MeshId, PickId, Rect, RenderQueue,
-    Topology,
+    Camera, DepthState, DrawBatch, DrawPacket, Generation, Geometry, Hit, MeshId, PickId, Rect,
+    RenderQueue, ShaderProgram, StateSnapshot, Topology,
 };
 use ferrocad_inventor::{ImageData, InventorView, ViewSpec};
 use ferrocad_types::{Matrix4, Vector3};
@@ -26,6 +26,7 @@ use crate::batch::GpuMesh;
 use crate::context::GpuContext;
 use crate::pick::{self, PickPipelines, PickTargets};
 use crate::pipeline::{self, ScenePipelines};
+use crate::program::{mat4_to_wgsl, ProgramPipeline};
 use crate::textures;
 use crate::uniforms::{self, DynamicUniforms, UniformData};
 
@@ -125,6 +126,9 @@ pub struct WgpuRenderer {
     /// Uploaded textures, keyed on the `Texture2` id.
     texture_cache: HashMap<u64, (wgpu::Texture, wgpu::BindGroup)>,
     pipelines: ScenePipelines,
+    /// Group 2 (the program ABI) and the pipeline cache keyed by program, depth state,
+    /// blend, topology, sample count and colour format.
+    programs: ProgramPipeline,
     /// Uploaded meshes, keyed on `mesh_id`. A newer generation **replaces** (and drops)
     /// the older GPU buffers, so transient rewrites (tool cursor moves, gizmo drags) do
     /// not leak entries across frames. Keyed on `(view, mesh_id)`: every queue numbers
@@ -160,11 +164,20 @@ impl WgpuRenderer {
             context.device.limits().min_uniform_buffer_offset_alignment,
             1,
         );
+        let programs = ProgramPipeline::new(
+            &context.device,
+            &uniform_layout,
+            &textures_layout,
+            TARGET_FORMAT,
+            targets.sample_count,
+        );
+        programs.upload_placeholder(&context.queue);
         let pipelines = ScenePipelines::new(
             &context.device,
             TARGET_FORMAT,
             &uniform_layout,
             &textures_layout,
+            programs.bind_group_layout(),
             targets.sample_count,
         );
         let pick_pipelines = PickPipelines::new(&context.device, &uniform_layout);
@@ -178,6 +191,7 @@ impl WgpuRenderer {
             default_texture,
             texture_cache: HashMap::new(),
             pipelines,
+            programs,
             mesh_cache: HashMap::new(),
             pick_pipelines,
             pick_targets: None,
@@ -249,8 +263,13 @@ impl WgpuRenderer {
         self.ensure_uniform_capacity(count);
 
         // Upload anything not already cached. A stable scene keeps the same
-        // `(mesh_id, generation)`, so this uploads once and reuses thereafter.
+        // `(mesh_id, generation)`, so this uploads once and reuses thereafter. A
+        // program packet draws the placeholder instead, so its own geometry is never
+        // uploaded.
         for batch in batches {
+            if batch.state().program.is_some() {
+                continue;
+            }
             if let Some(geometry) = batch.geometry() {
                 self.upload_geometry(0, batch.mesh_id(), batch.generation(), geometry);
             }
@@ -272,10 +291,26 @@ impl WgpuRenderer {
             self.uniforms.write(&self.context.queue, index as u32, &data);
         }
 
+        // Group 2: one Frame slot for the single view, and a pipeline/group for every
+        // program packet. Preparing before the pass keeps the mutable caches out of it.
+        self.programs
+            .ensure_frame_capacity(&self.context.device, 1);
+        self.programs
+            .write_frame(&self.context.queue, 0, camera, self.size);
+        for batch in batches {
+            let snapshot = batch.state();
+            if let Some(program) = snapshot.program.as_ref() {
+                self.prepare_program(program, &snapshot.depth);
+            }
+        }
+
         // With MSAA on, draw into the multisampled target and resolve into `target`.
+        // The views are cloned so the pass does not borrow `self`, which lets the draw
+        // loop create program pipelines and bind groups on a cache miss.
+        let depth_view = self.targets.depth_view.clone();
         let (attachment_view, resolve_target) = match &self.targets.msaa_view {
-            Some(msaa) => (msaa, Some(target)),
-            None => (target, None),
+            Some(msaa) => (msaa.clone(), Some(target.clone())),
+            None => (target.clone(), None),
         };
 
         let mut encoder = self.context.device.create_command_encoder(
@@ -287,9 +322,9 @@ impl WgpuRenderer {
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("ferrocad scene pass"),
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                    view: attachment_view,
+                    view: &attachment_view,
                     depth_slice: None,
-                    resolve_target,
+                    resolve_target: resolve_target.as_ref(),
                     ops: wgpu::Operations {
                         load: wgpu::LoadOp::Clear(wgpu::Color {
                             r: 0.1,
@@ -301,7 +336,7 @@ impl WgpuRenderer {
                     },
                 })],
                 depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
-                    view: &self.targets.depth_view,
+                    view: &depth_view,
                     depth_ops: Some(wgpu::Operations {
                         load: wgpu::LoadOp::Clear(1.0),
                         store: wgpu::StoreOp::Store,
@@ -313,27 +348,104 @@ impl WgpuRenderer {
                 multiview_mask: None,
             });
 
-            for (index, batch) in batches.iter().enumerate() {
-                let Some(mesh) = self.mesh_cache.get(&(0, batch.mesh_id())) else {
-                    continue;
-                };
-                if mesh.generation != batch.generation() {
-                    continue;
+            // Two passes over the packets: scene geometry first, then the program
+            // packets. A program covers its shape with a full-screen placeholder and
+            // writes no depth, so it must blend over an already-populated depth buffer
+            // and colour target.
+            for program_pass in [false, true] {
+                for (index, batch) in batches.iter().enumerate() {
+                    let snapshot = batch.state();
+                    let is_program = snapshot.program.is_some();
+                    if is_program != program_pass {
+                        continue;
+                    }
+                    if let Some(program) = snapshot.program.as_ref() {
+                        self.draw_program(&mut pass, program, snapshot, 0, index as u32);
+                        continue;
+                    }
+                    let Some(mesh) = self.mesh_cache.get(&(0, batch.mesh_id())) else {
+                        continue;
+                    };
+                    if mesh.generation != batch.generation() {
+                        continue;
+                    }
+                    pass.set_pipeline(self.pipelines.for_state(
+                        &self.context.device,
+                        false,
+                        batch.topology(),
+                        &snapshot.depth,
+                    ));
+                    pass.set_bind_group(
+                        0,
+                        &self.uniforms.bind_group,
+                        &[self.uniforms.offset(index as u32)],
+                    );
+                    pass.set_bind_group(1, self.texture_bind_group(snapshot), &[]);
+                    pass.set_bind_group(
+                        2,
+                        self.programs.default_group(),
+                        &[self.programs.default_offset()],
+                    );
+                    pass.set_vertex_buffer(0, mesh.vertex_buffer.slice(..));
+                    pass.set_index_buffer(mesh.index_buffer.slice(..), wgpu::IndexFormat::Uint32);
+                    pass.draw_indexed(0..mesh.index_count, 0, 0..1);
                 }
-                pass.set_pipeline(self.pipelines.for_draw(false, batch.topology()));
-                pass.set_bind_group(
-                    0,
-                    &self.uniforms.bind_group,
-                    &[self.uniforms.offset(index as u32)],
-                );
-                pass.set_bind_group(1, self.texture_bind_group(batch), &[]);
-                pass.set_vertex_buffer(0, mesh.vertex_buffer.slice(..));
-                pass.set_index_buffer(mesh.index_buffer.slice(..), wgpu::IndexFormat::Uint32);
-                pass.draw_indexed(0..mesh.index_count, 0, 0..1);
             }
         }
         self.context.queue.submit(Some(encoder.finish()));
         Ok(())
+    }
+
+    /// Create (on a cache miss) the pipeline and group 2 bind group for `program`.
+    ///
+    /// A program always draws the placeholder `TriangleList`, whatever topology the
+    /// packet's own geometry declared.
+    fn prepare_program(&mut self, program: &ShaderProgram, depth: &DepthState) {
+        self.programs.pipeline(
+            &self.context.device,
+            program,
+            depth,
+            Topology::Triangles,
+        );
+        self.programs
+            .program_group(&self.context.device, &self.context.queue, program);
+    }
+
+    /// Bind a program packet's pipeline and group 2, then draw the placeholder quad.
+    fn draw_program(
+        &mut self,
+        pass: &mut wgpu::RenderPass<'_>,
+        program: &ShaderProgram,
+        snapshot: &StateSnapshot,
+        frame_slot: u32,
+        uniform_slot: u32,
+    ) {
+        let pipeline = self.programs.pipeline(
+            &self.context.device,
+            program,
+            &snapshot.depth,
+            Topology::Triangles,
+        );
+        pass.set_pipeline(pipeline);
+        // wgpu requires every group in the pipeline layout to be bound, even the groups
+        // the program shader does not declare; the scene layout is groups 0, 1 and 2.
+        pass.set_bind_group(
+            0,
+            &self.uniforms.bind_group,
+            &[self.uniforms.offset(uniform_slot)],
+        );
+        pass.set_bind_group(1, self.texture_bind_group(snapshot), &[]);
+        let offset = self.programs.frame_offset(frame_slot);
+        let group =
+            self.programs
+                .program_group(&self.context.device, &self.context.queue, program);
+        pass.set_bind_group(2, group, &[offset]);
+        pass.set_vertex_buffer(0, self.programs.vertex_buffer().slice(..));
+        pass.set_index_buffer(
+            self.programs.index_buffer().slice(..),
+            wgpu::IndexFormat::Uint32,
+        );
+        pass.draw_indexed(0..self.programs.index_count(), 0, 0..1);
     }
 
     /// Draw a frame of one or more [`ViewSpec`]s in one pass: the main view first
@@ -398,9 +510,27 @@ impl WgpuRenderer {
             }
         }
 
+        // Group 2: one Frame slot per view, and a pipeline/group for every program
+        // packet. Preparing before the pass keeps the mutable caches out of it.
+        self.programs
+            .ensure_frame_capacity(&self.context.device, views.len() as u32);
+        for (view_index, view) in views.iter().enumerate() {
+            self.programs
+                .write_frame(&self.context.queue, view_index as u32, view.camera, self.size);
+            for batch in &view.queue.packets {
+                let snapshot = batch.state();
+                if let Some(program) = snapshot.program.as_ref() {
+                    self.prepare_program(program, &snapshot.depth);
+                }
+            }
+        }
+
+        // The views are cloned so the pass does not borrow `self`, which lets the draw
+        // loop create program pipelines and bind groups on a cache miss.
+        let depth_view = self.targets.depth_view.clone();
         let (attachment_view, resolve_target) = match &self.targets.msaa_view {
-            Some(msaa) => (msaa, Some(target)),
-            None => (target, None),
+            Some(msaa) => (msaa.clone(), Some(target.clone())),
+            None => (target.clone(), None),
         };
         let [width, height] = self.size;
 
@@ -413,9 +543,9 @@ impl WgpuRenderer {
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("ferrocad frame pass"),
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                    view: attachment_view,
+                    view: &attachment_view,
                     depth_slice: None,
-                    resolve_target,
+                    resolve_target: resolve_target.as_ref(),
                     ops: wgpu::Operations {
                         load: wgpu::LoadOp::Clear(wgpu::Color {
                             r: 0.1,
@@ -427,7 +557,7 @@ impl WgpuRenderer {
                     },
                 })],
                 depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
-                    view: &self.targets.depth_view,
+                    view: &depth_view,
                     depth_ops: Some(wgpu::Operations {
                         load: wgpu::LoadOp::Clear(1.0),
                         store: wgpu::StoreOp::Store,
@@ -451,25 +581,56 @@ impl WgpuRenderer {
                 };
                 pass.set_viewport(x, y, w, h, 0.0, 1.0);
                 pass.set_scissor_rect(x as u32, y as u32, w as u32, h as u32);
-                for batch in &view.queue.packets {
-                    let Some(mesh) = self.mesh_cache.get(&(view_index, batch.mesh_id)) else {
-                        slot += 1;
-                        continue;
-                    };
-                    if mesh.generation == batch.generation {
-                        pass.set_pipeline(self.pipelines.for_draw(view.overlay, batch.topology));
+                let base = slot;
+                // Scene geometry first, then the program packets, so a program blends
+                // over a populated depth buffer (it writes none).
+                for program_pass in [false, true] {
+                    for (index, batch) in view.queue.packets.iter().enumerate() {
+                        let snapshot = batch.state();
+                        let is_program = snapshot.program.is_some();
+                        if is_program != program_pass {
+                            continue;
+                        }
+                        let uniform_slot = base + index as u32;
+                        if let Some(program) = snapshot.program.as_ref() {
+                            self.draw_program(
+                                &mut pass,
+                                program,
+                                snapshot,
+                                view_index,
+                                uniform_slot,
+                            );
+                            continue;
+                        }
+                        let Some(mesh) = self.mesh_cache.get(&(view_index, batch.mesh_id)) else {
+                            continue;
+                        };
+                        if mesh.generation != batch.generation {
+                            continue;
+                        }
+                        pass.set_pipeline(self.pipelines.for_state(
+                            &self.context.device,
+                            view.overlay,
+                            batch.topology,
+                            &snapshot.depth,
+                        ));
                         pass.set_bind_group(
                             0,
                             &self.uniforms.bind_group,
-                            &[self.uniforms.offset(slot)],
+                            &[self.uniforms.offset(uniform_slot)],
                         );
-                        pass.set_bind_group(1, self.texture_bind_group(batch), &[]);
+                        pass.set_bind_group(1, self.texture_bind_group(snapshot), &[]);
+                        pass.set_bind_group(
+                            2,
+                            self.programs.default_group(),
+                            &[self.programs.default_offset()],
+                        );
                         pass.set_vertex_buffer(0, mesh.vertex_buffer.slice(..));
                         pass.set_index_buffer(mesh.index_buffer.slice(..), wgpu::IndexFormat::Uint32);
                         pass.draw_indexed(0..mesh.index_count, 0, 0..1);
                     }
-                    slot += 1;
                 }
+                slot += view.queue.packets.len() as u32;
             }
         }
         Ok(encoder.finish())
@@ -576,6 +737,11 @@ impl WgpuRenderer {
                 multiview_mask: None,
             });
             for (index, packet) in queue.packets.iter().enumerate() {
+                // A program draws a placeholder and is never pickable; an
+                // `SoPickStyle.UNPICKABLE` packet opts out too.
+                if packet.state.program.is_some() || !packet.state.pickable {
+                    continue;
+                }
                 let Some(mesh) = self.mesh_cache.get(&(0, packet.mesh_id)) else {
                     continue;
                 };
@@ -694,6 +860,10 @@ impl WgpuRenderer {
     /// for the same `(view, mesh_id)`.
     fn upload_packets(&mut self, view: u32, packets: &[DrawPacket]) {
         for packet in packets {
+            // A program packet draws the placeholder, not its authored geometry.
+            if packet.state.program.is_some() {
+                continue;
+            }
             if let Some(geometry) = packet.geometry.as_ref() {
                 self.upload_geometry(view, packet.mesh_id, packet.generation, geometry);
             }
@@ -736,10 +906,10 @@ impl WgpuRenderer {
         }
     }
 
-    /// The texture bind group (group 1) for a batch: its texture, or the white default.
-    fn texture_bind_group<B: DrawBatch>(&self, batch: &B) -> &wgpu::BindGroup {
-        batch
-            .state()
+    /// The texture bind group (group 1) for a snapshot: its texture, or the white
+    /// default.
+    fn texture_bind_group(&self, snapshot: &StateSnapshot) -> &wgpu::BindGroup {
+        snapshot
             .texture
             .as_ref()
             .and_then(|texture| self.texture_cache.get(&texture.id))
@@ -865,17 +1035,6 @@ fn supports_samples(adapter: &wgpu::Adapter, count: u32) -> bool {
             .get_texture_format_features(pipeline::DEPTH_FORMAT)
             .flags
             .sample_count_supported(count)
-}
-
-/// Convert a row-major [`Matrix4`] to the column-major layout WGSL uniforms use.
-fn mat4_to_wgsl(m: &Matrix4) -> [[f32; 4]; 4] {
-    let mut out = [[0.0f32; 4]; 4];
-    for row in 0..4 {
-        for col in 0..4 {
-            out[col][row] = m.m[row * 4 + col] as f32;
-        }
-    }
-    out
 }
 
 /// The topology ordinal the pick shader writes to the normal target's `w` channel.
@@ -1575,6 +1734,9 @@ mod tests {
                 depth_bias: 0.0,
                 texture: None,
                 id: PickId(id),
+                depth: Default::default(),
+                pickable: true,
+                program: None,
             },
         }
     }
@@ -1804,6 +1966,239 @@ mod tests {
         assert!(
             green > 100 && green > red,
             "the biased overlay must win: r={red} g={green}"
+        );
+    }
+
+    // ------------------------------------------------------------------
+    // The program path (G4)
+    // ------------------------------------------------------------------
+
+    /// A top-down orthographic camera whose `z = 0` plane maps 16 px per world unit on
+    /// a 64 px target: world `x = 0` is column 32 and world `y = 0` is row 32 (the image
+    /// is top-down, so `y = +2` is row 0).
+    fn program_camera() -> Camera {
+        Camera {
+            view: ferrocad_types::Placement::new(
+                ferrocad_types::Vector3::new(0.0, 0.0, -100.0),
+                ferrocad_types::Rotation::identity(),
+            )
+            .to_matrix(),
+            projection: ferrocad_graphics::Projection::Orthographic {
+                extent: 2.0,
+                near: 0.1,
+                far: 1_000.0,
+            },
+            viewport: Viewport::new([64, 64], 1.0),
+        }
+    }
+
+    fn texel(image: &ImageData, x: u32, y: u32) -> [u8; 3] {
+        let i = ((y * 64 + x) * 4) as usize;
+        [image.rgba[i], image.rgba[i + 1], image.rgba[i + 2]]
+    }
+
+    /// A scene whose second shape is a grid-overlay program packet, optionally behind an
+    /// opaque red box at `z = 1` (between the eye at `z = 100` and the plane at `z = 0`).
+    fn program_scene(with_box: bool) -> Scene {
+        use ferrocad_inventor::{ShaderStage, ShaderStageKind};
+
+        let leaf = |kind| Node {
+            kind,
+            children: Vec::new(),
+        };
+        let mesh = || {
+            leaf(NodeKind::Mesh {
+                indices: vec![0, 1, 2, 0, 2, 3],
+                normal_indices: Vec::new(),
+                topology: Topology::Triangles,
+            })
+        };
+        let mut children = Vec::new();
+        if with_box {
+            children.push(leaf(NodeKind::Coordinate3(vec![
+                [-1.5, -1.5, 1.0],
+                [1.5, -1.5, 1.0],
+                [1.5, 1.5, 1.0],
+                [-1.5, 1.5, 1.0],
+            ])));
+            children.push(leaf(NodeKind::Material(vec![[1.0, 0.0, 0.0, 1.0]])));
+            children.push(mesh());
+        }
+        // The program binds to the shape that follows it; the renderer draws the
+        // placeholder, not that shape's coordinates.
+        children.push(leaf(NodeKind::Coordinate3(vec![
+            [-1.0, -1.0, 0.0],
+            [1.0, -1.0, 0.0],
+            [1.0, 1.0, 0.0],
+            [-1.0, 1.0, 0.0],
+        ])));
+        children.push(Node {
+            kind: NodeKind::ShaderProgram,
+            children: vec![
+                leaf(NodeKind::ShaderStage(ShaderStage {
+                    kind: ShaderStageKind::Vertex,
+                    source: Some(crate::GRID_OVERLAY_WGSL.to_owned()),
+                    source_program: None,
+                })),
+                leaf(NodeKind::ShaderStage(ShaderStage {
+                    kind: ShaderStageKind::Fragment,
+                    source: Some(String::new()),
+                    source_program: None,
+                })),
+            ],
+        });
+        children.push(mesh());
+        Scene {
+            root: Node {
+                kind: NodeKind::Separator,
+                children,
+            },
+        }
+    }
+
+    /// The end-to-end program path: the grid draws at the expected pixels, an opaque box
+    /// in front of the plane occludes it, and neither the grid nor the placeholder is
+    /// ever picked. Skips (rather than fails) without a GPU adapter.
+    #[test]
+    fn a_program_draws_the_grid_behind_opaque_geometry_and_is_never_picked() {
+        let _gpu = gpu_guard();
+        let camera = program_camera();
+        let Ok(mut renderer) = WgpuRenderer::new_default([64, 64]) else {
+            eprintln!("no GPU adapter available; skipping program draw test");
+            return;
+        };
+
+        // Only the program packet: the world Y axis (x = 0, column 32) is a green line;
+        // column 52 sits between two minor lines and stays background.
+        let (queue, _) = compile(&program_scene(false));
+        assert_eq!(queue.len(), 1, "the program packet is the only draw");
+        assert!(queue.packets[0].state.program.is_some());
+        renderer.draw(&queue, &camera).expect("draw the grid");
+        let image = renderer.image().expect("readback");
+        let axis = texel(&image, 32, 24);
+        let empty = texel(&image, 52, 24);
+        assert!(
+            axis[1] > empty[1] + 15,
+            "the grid line is brighter than the gap: {axis:?} vs {empty:?}"
+        );
+        assert!(
+            axis[1] > axis[0] + 15,
+            "the Y axis draws in its green hue: {axis:?}"
+        );
+
+        // A program packet draws a placeholder, never the authored geometry, so neither
+        // pick path may hit it.
+        assert!(
+            renderer.pick_at(&queue, &camera, [32, 24]).is_none(),
+            "a program packet is never a pick hit"
+        );
+
+        // The opaque box at z = 1 is in front of the grid plane at z = 0: it must win
+        // every pixel it covers, and it remains pickable.
+        let (queue, _) = compile(&program_scene(true));
+        assert_eq!(queue.len(), 2, "the box and the program packet");
+        renderer.draw(&queue, &camera).expect("draw the box and grid");
+        let image = renderer.image().expect("readback");
+        let [red, green, blue] = texel(&image, 32, 24);
+        assert!(
+            red > 120 && green < 80 && blue < 80,
+            "the opaque box occludes the grid: {red},{green},{blue}"
+        );
+        assert!(
+            renderer.pick_at(&queue, &camera, [32, 24]).is_some(),
+            "the opaque box is still a pick hit"
+        );
+    }
+
+    /// The program path's depth state is real, not just a cache key: a coplanar draw whose
+    /// `SoDepthBuffer.test` is false compares `Always` and wins. Skips without a GPU.
+    #[test]
+    fn a_depth_state_variant_draws_over_a_coplanar_surface() {
+        let _gpu = gpu_guard();
+        let Ok(mut renderer) = WgpuRenderer::new_default([32, 32]) else {
+            eprintln!("no GPU adapter available; skipping depth-variant test");
+            return;
+        };
+        let camera = Camera::identity();
+        let positions = vec![
+            [-1.0, -1.0, 0.5],
+            [1.0, -1.0, 0.5],
+            [1.0, 1.0, 0.5],
+            [-1.0, 1.0, 0.5],
+        ];
+        let mut red = pick_packet(1, 1, 0, Topology::Triangles, positions.clone(), vec![0, 1, 2, 0, 2, 3]);
+        red.state.color = [1.0, 0.0, 0.0, 1.0];
+        let mut green = pick_packet(2, 2, 0, Topology::Triangles, positions, vec![0, 1, 2, 0, 2, 3]);
+        green.state.color = [0.0, 1.0, 0.0, 1.0];
+        green.state.depth = DepthState {
+            test: false,
+            ..DepthState::default()
+        };
+
+        let mut queue = RenderQueue::default();
+        queue.packets.push(red);
+        queue.packets.push(green);
+        renderer
+            .draw_frame(&[ViewSpec {
+                queue: &queue,
+                camera: &camera,
+                rect: None,
+                overlay: false,
+            }])
+            .expect("draw");
+
+        assert_eq!(renderer.pipelines.variant_count(), 1, "one depth variant");
+        let image = renderer.image().expect("readback");
+        let i = ((16 * 32 + 16) * 4) as usize;
+        let (red, green) = (image.rgba[i], image.rgba[i + 1]);
+        assert!(
+            green > 100 && green > red,
+            "test FALSE compares Always and wins the coplanar tie: r={red} g={green}"
+        );
+    }
+
+    /// Program packets draw **after** the opaque scene even when they sit first in the
+    /// queue. The grid writes no depth, so drawing it before an opaque surface *behind*
+    /// it would let that surface overpaint the lines. Skips without a GPU.
+    #[test]
+    fn a_program_is_drawn_after_opaque_geometry_even_when_it_is_first() {
+        let _gpu = gpu_guard();
+        let camera = program_camera();
+        let Ok(mut renderer) = WgpuRenderer::new_default([64, 64]) else {
+            eprintln!("no GPU adapter available; skipping program ordering test");
+            return;
+        };
+
+        let (mut program, _) = compile(&program_scene(false));
+        let program_packet = program.packets.remove(0);
+        // An opaque blue quad *behind* the grid plane (z = -1, farther from the eye).
+        let mut behind = pick_packet(
+            99,
+            9,
+            0,
+            Topology::Triangles,
+            vec![
+                [-1.5, -1.5, -1.0],
+                [1.5, -1.5, -1.0],
+                [1.5, 1.5, -1.0],
+                [-1.5, 1.5, -1.0],
+            ],
+            vec![0, 1, 2, 0, 2, 3],
+        );
+        behind.state.color = [0.0, 0.0, 1.0, 1.0];
+
+        let mut queue = RenderQueue::default();
+        queue.packets.push(program_packet);
+        queue.packets.push(behind);
+        renderer.draw(&queue, &camera).expect("draw");
+
+        let image = renderer.image().expect("readback");
+        // The green axis line blends over the blue quad. Were the program drawn first,
+        // the quad would overpaint the line and this pixel would be pure blue.
+        let [red, green, blue] = texel(&image, 32, 24);
+        assert!(
+            red > 40 && green > 80,
+            "the grid line draws over the earlier, farther quad: {red},{green},{blue}"
         );
     }
 }

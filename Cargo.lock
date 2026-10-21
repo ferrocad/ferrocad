@@ -2500,6 +2500,8 @@ dependencies = [
  "ferrocad_geom",
  "ferrocad_gpui",
  "ferrocad_graphics",
+ "ferrocad_inventor",
+ "ferrocad_inventor_py",
  "ferrocad_stage",
  "ferrocad_types",
  "serde_json",

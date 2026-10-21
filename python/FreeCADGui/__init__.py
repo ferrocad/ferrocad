@@ -104,6 +104,43 @@ def runCommand(name: str, *args):
 
 
 # ---------------------------------------------------------------------------
+# Pull-based overlays (G5)
+# ---------------------------------------------------------------------------
+
+
+def _coin_module():
+    """The ``pivy.coin`` module, imported only when an overlay is used.
+
+    Headless builds and the GUI facade itself do not need Coin, so this import is
+    deliberately lazy: ``import FreeCADGui`` keeps working without the extension.
+    """
+    try:
+        from pivy import coin
+    except ImportError as exc:  # noqa: BLE001 - re-raised with the contract
+        raise RuntimeError(
+            "overlays need the Coin facade (pivy.coin) in this build"
+        ) from exc
+    return coin
+
+
+def addOverlay(node) -> None:
+    """Register a Coin node as a viewport overlay (FerroCAD extension).
+
+    The node is **extracted now**: the shell keeps a copy of its subtree and draws
+    it beside the document scene on the next refresh. This is the pull bridge that
+    replaces Coin's ``getSceneGraph()``; see ``docs/grid-overlay-plan.md`` §3.2.
+    A later in-place edit does not reach the copy, so an author re-registers the
+    node (``removeOverlay`` then ``addOverlay``) after changing it.
+    """
+    return _coin_module().addOverlay(node)
+
+
+def removeOverlay(node) -> bool:
+    """Drop a previously registered overlay, keyed by Python object identity."""
+    return _coin_module().removeOverlay(node)
+
+
+# ---------------------------------------------------------------------------
 # Enablement, checked state, and the shell bridge
 # ---------------------------------------------------------------------------
 

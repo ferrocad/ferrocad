@@ -123,6 +123,7 @@ pub fn run() {
 
 /// Run the application with an edition's configuration.
 pub fn run_with(config: HostConfig) {
+    configure_trace();
     // Hand the app's scripts to the interpreter bridge before it boots. The
     // interpreter belongs to the shell; the scripts belong to the app.
     python::configure(
@@ -169,6 +170,7 @@ pub fn run_with(config: HostConfig) {
 /// packaged layout that is missing a DLL or an entry point fails here instead of
 /// on a user's machine.
 pub fn check_init(config: HostConfig) -> Result<(), String> {
+    configure_trace();
     python::configure(
         &config.entry_module,
         &config.python_paths,
@@ -176,6 +178,21 @@ pub fn check_init(config: HostConfig) -> Result<(), String> {
         false,
     );
     Shell::boot().map(|_| ())
+}
+
+/// Switch on the renderer's opt-in diagnostics.
+///
+/// `--trace` enables them; `FERROCAD_TRACE=1` does the same without a flag. The
+/// knobs and the lines they produce are documented in `docs/render-diagnostics.md`.
+fn configure_trace() {
+    if ferrocad_wgpu::trace::args_enable(std::env::args().skip(1)) {
+        ferrocad_wgpu::trace::enable();
+    }
+    // Resolve the environment decision on the main thread, before any frame, so a
+    // black screen cannot start before the log does.
+    if ferrocad_wgpu::trace::enabled() {
+        eprintln!("ferrocad: render diagnostics on (--trace / FERROCAD_TRACE)");
+    }
 }
 
 fn window_options(config: &HostConfig) -> WindowOptions {

@@ -391,6 +391,7 @@ impl ProgramPipeline {
     ) -> &wgpu::BindGroup {
         let hash = program.hash();
         if !self.program_buffers.contains_key(&hash) {
+            crate::trace::program_buffer(hash);
             let buffer = device.create_buffer(&wgpu::BufferDescriptor {
                 label: Some("ferrocad program"),
                 size: PROGRAM_SIZE,
@@ -480,6 +481,14 @@ fn create_pipeline(
     program: &ShaderProgram,
     key: &ProgramKey,
 ) -> wgpu::RenderPipeline {
+    crate::trace::pipeline_created(
+        key.program,
+        key.topology,
+        key.depth_compare,
+        key.depth_write,
+        key.sample_count,
+        key.color_format,
+    );
     let module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
         label: Some(program.name()),
         source: wgpu::ShaderSource::Wgsl(program.source().into()),
@@ -644,6 +653,31 @@ mod tests {
         let program_default = key(&DepthState::PROGRAM);
         assert!(!program_default.depth_write);
         assert_eq!(program_default.depth_compare, wgpu::CompareFunction::Less);
+
+        // The target's sample count and colour format are part of the key: a resize
+        // that changes either must not reuse a pipeline built for the old attachment.
+        assert_ne!(
+            ProgramKey::new(
+                &program,
+                &DepthState::default(),
+                wgpu::PrimitiveTopology::TriangleList,
+                1,
+                format,
+            ),
+            default,
+            "a different sample count is a different pipeline"
+        );
+        assert_ne!(
+            ProgramKey::new(
+                &program,
+                &DepthState::default(),
+                wgpu::PrimitiveTopology::TriangleList,
+                4,
+                wgpu::TextureFormat::Bgra8UnormSrgb,
+            ),
+            default,
+            "a different colour format is a different pipeline"
+        );
 
         // A retuned program is a different pipeline.
         let retuned = program.clone().with_parameters(ProgramParameters {

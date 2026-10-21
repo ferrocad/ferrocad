@@ -28,6 +28,7 @@ use crate::pick::{self, PickPipelines, PickTargets};
 use crate::pipeline::{self, ScenePipelines};
 use crate::program::{mat4_to_wgsl, ProgramPipeline};
 use crate::textures;
+use crate::trace;
 use crate::uniforms::{self, DynamicUniforms, UniformData};
 
 /// What can go wrong while creating a device, encoding, or reading back a frame.
@@ -154,6 +155,9 @@ impl WgpuRenderer {
     pub fn with_sample_count(context: GpuContext, size: [u32; 2], sample_count: u32) -> Self {
         let size = clamp_size(size);
         let targets = Targets::new(&context.device, size, sample_count);
+        // Diagnostics first: the trace names the device every later line belongs to.
+        trace::startup(&context.device, TARGET_FORMAT, targets.sample_count);
+        trace::install(&context.device);
         let uniform_layout = uniforms::layout(&context.device);
         let textures_layout = textures::layout(&context.device);
         let (_, default_texture) =
@@ -233,6 +237,7 @@ impl WgpuRenderer {
         if size == self.size {
             return;
         }
+        trace::resized(self.size, size, self.targets.sample_count);
         self.targets = Targets::new(&self.context.device, size, self.targets.sample_count);
         self.pick_targets = None; // re-allocated at the new size on the next pick
         self.size = size;
@@ -260,6 +265,12 @@ impl WgpuRenderer {
         batches: &[B],
     ) -> Result<(), RenderError> {
         let count = batches.len() as u32;
+        let programs = batches
+            .iter()
+            .filter(|batch| batch.state().program.is_some())
+            .count();
+        let frame = trace::frame_begin("render", 1, batches.len(), programs);
+        trace::camera(frame, 0, camera);
         self.ensure_uniform_capacity(count);
 
         // Upload anything not already cached. A stable scene keeps the same
@@ -360,7 +371,7 @@ impl WgpuRenderer {
                         continue;
                     }
                     if let Some(program) = snapshot.program.as_ref() {
-                        self.draw_program(&mut pass, program, snapshot, 0, index as u32);
+                        self.draw_program(&mut pass, program, snapshot, frame, 0, index as u32);
                         continue;
                     }
                     let Some(mesh) = self.mesh_cache.get(&(0, batch.mesh_id())) else {
@@ -381,18 +392,17 @@ impl WgpuRenderer {
                         &[self.uniforms.offset(index as u32)],
                     );
                     pass.set_bind_group(1, self.texture_bind_group(snapshot), &[]);
-                    pass.set_bind_group(
-                        2,
-                        self.programs.default_group(),
-                        &[self.programs.default_offset()],
-                    );
+                    let default_offset = self.programs.default_offset();
+                    trace::group2(frame, None, 0, index as u32, default_offset);
+                    pass.set_bind_group(2, self.programs.default_group(), &[default_offset]);
                     pass.set_vertex_buffer(0, mesh.vertex_buffer.slice(..));
                     pass.set_index_buffer(mesh.index_buffer.slice(..), wgpu::IndexFormat::Uint32);
                     pass.draw_indexed(0..mesh.index_count, 0, 0..1);
                 }
             }
         }
-        self.context.queue.submit(Some(encoder.finish()));
+        let index = self.context.queue.submit(Some(encoder.finish()));
+        trace::submitted(frame, "render", index);
         Ok(())
     }
 
@@ -417,6 +427,7 @@ impl WgpuRenderer {
         pass: &mut wgpu::RenderPass<'_>,
         program: &ShaderProgram,
         snapshot: &StateSnapshot,
+        frame: u64,
         frame_slot: u32,
         uniform_slot: u32,
     ) {
@@ -439,6 +450,7 @@ impl WgpuRenderer {
         let group =
             self.programs
                 .program_group(&self.context.device, &self.context.queue, program);
+        trace::group2(frame, Some(program.hash()), frame_slot, uniform_slot, offset);
         pass.set_bind_group(2, group, &[offset]);
         pass.set_vertex_buffer(0, self.programs.vertex_buffer().slice(..));
         pass.set_index_buffer(
@@ -461,7 +473,8 @@ impl WgpuRenderer {
         views: &[ViewSpec<'_>],
     ) -> Result<(), RenderError> {
         let commands = self.encode_views(target, views)?;
-        self.context.queue.submit(Some(commands));
+        let index = self.context.queue.submit(Some(commands));
+        trace::submitted(trace::current_frame(), "views", index);
         Ok(())
     }
 
@@ -480,6 +493,15 @@ impl WgpuRenderer {
             .iter()
             .map(|view| view.queue.packets.len() as u32)
             .sum();
+        let programs: usize = views
+            .iter()
+            .flat_map(|view| view.queue.packets.iter())
+            .filter(|packet| packet.state().program.is_some())
+            .count();
+        let frame = trace::frame_begin("encode", views.len(), total as usize, programs);
+        for (index, view) in views.iter().enumerate() {
+            trace::camera(frame, index, view.camera);
+        }
         self.ensure_uniform_capacity(total);
 
         // Upload every view's fresh geometry, then write one uniform slot per packet
@@ -597,6 +619,7 @@ impl WgpuRenderer {
                                 &mut pass,
                                 program,
                                 snapshot,
+                                frame,
                                 view_index,
                                 uniform_slot,
                             );
@@ -620,11 +643,9 @@ impl WgpuRenderer {
                             &[self.uniforms.offset(uniform_slot)],
                         );
                         pass.set_bind_group(1, self.texture_bind_group(snapshot), &[]);
-                        pass.set_bind_group(
-                            2,
-                            self.programs.default_group(),
-                            &[self.programs.default_offset()],
-                        );
+                        let default_offset = self.programs.default_offset();
+                        trace::group2(frame, None, view_index, uniform_slot, default_offset);
+                        pass.set_bind_group(2, self.programs.default_group(), &[default_offset]);
                         pass.set_vertex_buffer(0, mesh.vertex_buffer.slice(..));
                         pass.set_index_buffer(mesh.index_buffer.slice(..), wgpu::IndexFormat::Uint32);
                         pass.draw_indexed(0..mesh.index_count, 0, 0..1);
@@ -633,6 +654,7 @@ impl WgpuRenderer {
                 slot += view.queue.packets.len() as u32;
             }
         }
+        trace::encoded(frame, views.len());
         Ok(encoder.finish())
     }
 
@@ -974,6 +996,10 @@ impl WgpuRenderer {
         }
         drop(view);
         buffer.unmap();
+
+        // Black-frame probe: only runs where a readback already exists, so it costs an
+        // atomic load when tracing is off.
+        trace::inspect_readback(width, height, &rgba);
 
         Ok(ImageData {
             width,
@@ -2199,6 +2225,84 @@ mod tests {
         assert!(
             red > 40 && green > 80,
             "the grid line draws over the earlier, farther quad: {red},{green},{blue}"
+        );
+    }
+
+    /// The viewport's real shape: the scene and the program queue are **separate
+    /// views**, the program pipeline is cached across frames, and the element is
+    /// resized between them. Every frame must draw the grid, not a cleared or black
+    /// target, after the depth/MSAA targets are recreated. This is the regression
+    /// guard for the intermittent black screen. Skips without a GPU.
+    #[test]
+    fn a_program_view_survives_resize_between_frames() {
+        use crate::trace::{classify_rgba, Tone};
+
+        let _gpu = gpu_guard();
+        let camera = program_camera();
+        let Ok(mut renderer) = WgpuRenderer::new_default([64, 64]) else {
+            eprintln!("no GPU adapter available; skipping resize/program test");
+            return;
+        };
+        let (scene, _) = compile(&clip_space_triangle());
+        // The program packet lives in its own view, exactly as the viewport's
+        // `program_queue` does.
+        let (program, _) = compile(&program_scene(false));
+        // ...and an overlay view above the program view, as the navigation cube does.
+        let (cube, _) = compile(&overlay_quad());
+        let rect = Rect::new(40, 40, 24, 24);
+        let cube_camera = overlay_camera(rect);
+
+        let draw = |renderer: &mut WgpuRenderer, size: [u32; 2]| {
+            renderer.resize(size);
+            let views = [
+                ViewSpec {
+                    queue: &scene,
+                    camera: &camera,
+                    rect: None,
+                    overlay: false,
+                },
+                ViewSpec {
+                    queue: &program,
+                    camera: &camera,
+                    rect: None,
+                    overlay: false,
+                },
+                ViewSpec {
+                    queue: &cube,
+                    camera: &cube_camera,
+                    rect: Some(rect),
+                    overlay: true,
+                },
+            ];
+            renderer.draw_frame(&views).expect("draw_frame");
+            renderer.image().expect("readback")
+        };
+
+        // The first frame builds the program pipeline and group 2.
+        let image = draw(&mut renderer, [64, 64]);
+        assert_eq!(
+            classify_rgba(64, 64, &image.rgba),
+            Some(Tone::Lit),
+            "the first program frame is not black"
+        );
+        let [_, green, _] = texel(&image, 32, 24);
+        let [_, gap, _] = texel(&image, 52, 24);
+        assert!(green > gap + 15, "the grid draws on the first frame");
+
+        // Resize away and back: the cached pipeline and bind group must still target
+        // the new attachments.
+        draw(&mut renderer, [96, 48]);
+        let image = draw(&mut renderer, [64, 64]);
+        let [_, green, _] = texel(&image, 32, 24);
+        let [_, gap, _] = texel(&image, 52, 24);
+        assert!(green > gap + 15, "the grid draws again after a resize");
+
+        // One more frame without a resize (the common steady state).
+        let image = draw(&mut renderer, [64, 64]);
+        assert_eq!(
+            classify_rgba(64, 64, &image.rgba),
+            Some(Tone::Lit),
+            "a steady-state program frame is not black"
         );
     }
 }

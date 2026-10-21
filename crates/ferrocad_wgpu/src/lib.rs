@@ -41,10 +41,12 @@ pub mod pipeline;
 pub mod program;
 pub mod renderer;
 pub mod textures;
+pub mod trace;
 pub mod uniforms;
 
 pub use context::GpuContext;
 pub use renderer::{RenderError, WgpuRenderer};
+pub use trace::Tone;
 
 /// The grid overlay's WGSL module (group 2: `Frame` at binding 0, `Program` at
 /// binding 1; entry points `vs_main` / `fs_main`).

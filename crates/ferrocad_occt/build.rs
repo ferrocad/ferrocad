@@ -5,7 +5,7 @@
 //! element-map calls without patching or forking `opencascade-sys`.
 //!
 //! Needs `OCCT_INCLUDE_DIR` (the OCCT `include/opencascade` directory) on the
-//! include path. Set it to a fetched OCCT prefix; see docs/occt-bundling.md.
+//! include path. Set it to a fetched OCCT prefix; see docs/architecture/occt-bundling.md.
 
 fn main() {
     println!("cargo:rerun-if-env-changed=OCCT_INCLUDE_DIR");

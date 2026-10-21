@@ -2,8 +2,8 @@
 
 Status: **plan** (2026-10-12), revised. Companions: [`navicube-spec.md`](navicube-spec.md)
 (the normative spec this delivers), [`navicube.md`](navicube.md) (the as-built record,
-N1–N4b), [`stage.md`](stage.md) (the modern stack the second producer targets), and
-[`inventor-renderer.md`](inventor-renderer.md) (the render stack).
+N1–N4b), [`stage.md`](../viewport/stage.md) (the modern stack the second producer targets), and
+[`inventor-renderer.md`](../viewport/inventor-renderer.md) (the render stack).
 
 The cube exists and works (`ferrocad_viewport::navicube` + `ferrocad_inventor::navicube`),
 but it is welded to the legacy producer: the controller owns a `Scene`, compiles it, and
@@ -157,7 +157,7 @@ Deliverable: the reserved config becomes real, and the specified threshold is en
   (the role→appearance mapping; default = the built palette; `edge_width` recorded).
   `NavicubeView::rebuild` takes `&NavicubeTheme`, and both producers resolve roles through
   it (inventor `Material`, stage `ShapeItem` colours) — styling leaves the producers; the
-  Rust core owns it ([`directives.md`](directives.md) §5).
+  Rust core owns it ([`directives.md`](../viewport/directives.md) §5).
 - `NaviCubeConfig { corner, cube_size, margin }` + `NaviCube::with_config` / `with_theme`.
   `cube_size` is the cube's largest projected extent in logical px; the overlay box is
   derived from it (`model::overlay_size`) so ring changes never resize the cube.
@@ -175,7 +175,7 @@ tests (was 32): a custom theme recolours both producers, and a config reposition
 ### V4 — the directives channel: `SoNaviCube` → neutral model → producers
 
 Deliverable: a `SoNaviCube` scene node drives the neutral navicube on **either** producer,
-through the neutral directives channel ([`directives.md`](directives.md)). Split into three
+through the neutral directives channel ([`directives.md`](../viewport/directives.md)). Split into three
 sub-slices because it spans four crates. V4.1–V4.2 are built; V4.3 (the `pivy.coin`
 `SoNaviCube` surface) remains.
 
@@ -209,7 +209,7 @@ compiler and consumed by the viewport. `ferrocad_graphics` is **14** tests (was 
 
 **V4.3 — the `pivy.coin` surface.** `ferrocad_inventor_py::extract_scene` recognises a
 Python `SoNaviCube` and captures its `SoSF*` fields; the node's colours are ignored
-([`directives.md`](directives.md) §5).
+([`directives.md`](../viewport/directives.md) §5).
 
 **Gate:** a `SoNaviCube` in the scene drives the stage producer (structural); the
 `TestCoinNodeSnapshots` NaviCube fixtures *render*, with pixel-conformance gated on the
@@ -235,7 +235,7 @@ Deferred: `Gizmo`/`Hud` variants, a per-directive appearance override, and `show
   preserve that for both producers (a hover must not recompile the main scene).
 - **The move touches `ferrocad_inventor`.** `ferrocad_inventor/src/navicube.rs` is deleted
   and its tests move to `ferrocad_viewport`; update the doc counts in
-  [`inventor-renderer.md`](inventor-renderer.md) §6 and [`navicube.md`](navicube.md) §7.
+  [`inventor-renderer.md`](../viewport/inventor-renderer.md) §6 and [`navicube.md`](navicube.md) §7.
 - **Edge width is not honoured yet.** A theme can assign a line/edge *width*, but the
   renderer draws fixed 1-px lines: `ShapeItem::edge_width` is stored-but-unconsumed and
   `SoDrawStyle` line width is dropped by `ferrocad_wgpu`'s line pipeline. Theming colour
@@ -262,4 +262,4 @@ Runs: `cargo test -p ferrocad_viewport -p ferrocad_inventor -p ferrocad_stage`
 | **V1** | Move the model + inventor producer into `ferrocad_viewport::navicube`; add the `NavicubeView` seam and `NavicubeVisual`; the controller drives `Box<dyn NavicubeView>`. No behaviour change. | `ferrocad_viewport`, `ferrocad_inventor` | ✅ |
 | **V2** | `navicube::stage::StageProducer` + the producer-conformance test. | `ferrocad_viewport` | ✅ |
 | **V3** | `NaviCubeConfig`, the viewport `NavicubeTheme`, the min-drag threshold, `draggable`/`rotate_to_nearest`, docs. | `ferrocad_viewport`, docs | ✅ |
-| **V4** | The neutral `Directives` channel in `ferrocad_graphics`; `SoNaviCube → NaviCubeDirective → producers` (see [`directives.md`](directives.md)). | `ferrocad_graphics`, `ferrocad_inventor`, `ferrocad_viewport` | ◐ (V4.1–V4.2) |
+| **V4** | The neutral `Directives` channel in `ferrocad_graphics`; `SoNaviCube → NaviCubeDirective → producers` (see [`directives.md`](../viewport/directives.md)). | `ferrocad_graphics`, `ferrocad_inventor`, `ferrocad_viewport` | ◐ (V4.1–V4.2) |

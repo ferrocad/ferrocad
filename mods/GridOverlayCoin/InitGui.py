@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """Grid Overlay (Coin) for FerroCAD: the A1 fork of the upstream add-on.
 
-This is the **Coin/shader** form of the grid overlay (``docs/grid-overlay-plan.md``
+This is the **Coin/shader** form of the grid overlay (``docs/workbenches/grid-overlay-plan.md``
 §3.2, G5): it builds the same ``SoSeparator``/``SoShaderProgram``/``SoFaceSet``
 tree the upstream add-on builds and draws the ported WGSL shader on a four-vertex
 placeholder quad.
@@ -22,7 +22,7 @@ is always 0 (plan §3.5).
 The mod declares itself as the ``"coin"`` backend of the ``"grid"`` feature
 (priority 0). ``mods/GridOverlay`` declares the same feature as ``"semantic"``;
 ``Mods_Settings`` switches them, and the inactive backend neither draws nor runs
-its command (``docs/mod-providers.md``).
+its command (``docs/workbenches/mod-providers.md``).
 """
 
 from __future__ import annotations
@@ -61,7 +61,7 @@ COMMAND = "GridOverlayCoin_Settings"
 
 #: The provider feature this mod provides, and its backend id. The semantic mod
 #: declares the same feature with the id ``"semantic"``; see
-#: ``docs/mod-providers.md``.
+#: ``docs/workbenches/mod-providers.md``.
 FEATURE = "grid"
 BACKEND = "coin"
 
@@ -132,7 +132,7 @@ def inactive_status():
 
 
 def _field(name, label, kind, value, **extra):
-    """One dialog field in the shell's spec (``docs/actions-and-tools.md`` §6)."""
+    """One dialog field in the shell's spec (``docs/workbenches/actions-and-tools.md`` §6)."""
     field = {"name": name, "label": label, "kind": kind, "value": value}
     field.update(extra)
     return field

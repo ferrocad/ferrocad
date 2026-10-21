@@ -1,8 +1,8 @@
 # Axis, origin and grids: the spatial reference model
 
 Status: design + G0–G5 built (2026-10-20). Companion to [`gizmo-manipulators.md`](gizmo-manipulators.md),
-[`navicube-spec.md`](navicube-spec.md), [`stage.md`](stage.md) and
-[`architecture.md`](architecture.md) §10.
+[`navicube-spec.md`](navicube-spec.md), [`stage.md`](../viewport/stage.md) and
+[`architecture.md`](../architecture.md) §10.
 
 This note defines **one** model for the things that tell a user where they are: the
 world triad, the ground grid, local workplanes, face grids, and the snap feedback that

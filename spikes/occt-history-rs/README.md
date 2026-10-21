@@ -61,7 +61,7 @@ fn fc_brep_fuse_modified(op: Pin<&mut BRepAlgoAPI_Fuse>, shape: &TopoDS_Shape,
 It adds `Modified`/`Generated`/`IsDeleted` for fuse/cut/common, plus the
 `TopTools_IndexedMapOfShape::FindIndex` the crate also omits, so the spike can turn
 per-face history into **result face indices**. It needs only `OCCT_INCLUDE_DIR` at build
-time. This is the recommended production shape; see `../../docs/occt-history-spike.md`
+time. This is the recommended production shape; see `../../docs/architecture/occt-history-spike.md`
 §10 for the full integration discussion.
 
 ## Getting OCCT (two ways)

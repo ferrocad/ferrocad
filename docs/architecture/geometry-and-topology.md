@@ -1,9 +1,9 @@
 # Geometry, topology, and the naming problem
 
 Status: research/planning (2026-10-06). Companion to
-[`rewrite-strategy.md`](rewrite-strategy.md) (direction),
-[`mvp-path.md`](mvp-path.md) (the geometry-free headless MVP),
-[`architecture.md`](architecture.md) (crates and call paths), and
+[`rewrite-strategy.md`](../direction/rewrite-strategy.md) (direction),
+[`mvp-path.md`](../direction/mvp-path.md) (the geometry-free headless MVP),
+[`architecture.md`](../architecture.md) (crates and call paths), and
 [`distribution.md`](distribution.md) (payload and packaging).
 
 This note exists because a design conversation mixed up three separate things that
@@ -31,7 +31,7 @@ The short version:
 | --- | --- | --- | --- |
 | Topological **sort** | The document object graph | In what order do features execute? | **Built.** `Document::recompute_order` (dependency-first), `topological_sorted_objects` (dependents-first). |
 | Topological **naming** | Shape sub-element identity | Which *face/edge/vertex* does this stored reference mean, after a rebuild? | **Not started.** Needs the geometry kernel. |
-| **Geometry engine** | Shape construction | Given parameters and inputs, produce an output shape. | **Not started.** Out of MVP scope ([`mvp-path.md`](mvp-path.md) §1). |
+| **Geometry engine** | Shape construction | Given parameters and inputs, produce an output shape. | **Not started.** Out of MVP scope ([`mvp-path.md`](../direction/mvp-path.md) §1). |
 
 The confusion is understandable because both "topological" terms are about graphs
 and both use the word "dependency". But the nodes are different:
@@ -251,7 +251,7 @@ Crate placement is a real decision, not a formality:
 | Trait in the feature crate (`Part::*`) | the trait | Defers the question, but scatters the seam. |
 
 The middle option matches the existing dependency rules in
-[`architecture.md`](architecture.md) §6: `ferrocad_core` is a leaf, and OCCT must
+[`architecture.md`](../architecture.md) §6: `ferrocad_core` is a leaf, and OCCT must
 never be a transitive dependency of the pure engine. A geometry feature type lives
 above the seam; `ferrocad_core` only needs to let a `Property` hold an opaque shape
 handle and to persist it.
@@ -292,7 +292,7 @@ order they bite:
    [`distribution.md`](distribution.md) concern, not a footnote. It also affects CI
    build times. Measured and planned in [`occt-bundling.md`](occt-bundling.md).
 4. **License.** OCCT is LGPL-2.1-or-later **with an exception**, which is compatible
-   with FerroCAD's LGPL-3.0-or-later (see [`rewrite-strategy.md`](rewrite-strategy.md)).
+   with FerroCAD's LGPL-3.0-or-later (see [`rewrite-strategy.md`](../direction/rewrite-strategy.md)).
    Confirm the exact exception text at adoption time.
 5. **Safety and ownership.** `TopoDS_Shape` is an OCCT handle with copy-on-write and
    its own reference counting. Wrap it in a single newtype and let one owner (Rust)
@@ -442,7 +442,7 @@ Do **not** do yet:
 - Adopt FreeCAD's element-map encoding, or design a cleaner one. Compatibility with
   upstream `.FCStd` files pushes toward adopting it; a clean design pushes away. This
   is the same "JSON vs zip `.FCStd`" fork noted in
-  [`mvp-path.md`](mvp-path.md) §8.
+  [`mvp-path.md`](../direction/mvp-path.md) §8.
 - Fine-grained recompute (per-property depletion of the dirty set, OCCT/FreeCAD's
   `isFineGrainedRecomputeEnabled`) versus the current coarse whole-object flags. This
   interacts with geometry because a fillet touches a specific edge, not the whole

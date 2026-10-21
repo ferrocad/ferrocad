@@ -6,7 +6,7 @@
 //!
 //! They live in their own crate, below `ferrocad_core`, so a geometry backend can
 //! depend on the values it needs (`Placement`, `Quantity`, …) without pulling in the
-//! document model. See `docs/occt-integration.md` in the repository.
+//! document model. See `docs/architecture/occt-integration.md` in the repository.
 //!
 //! - [`quantity`] — [`Quantity`]: a value with a unit, and FreeCAD's unit parser.
 //! - [`unit`] — [`Unit`]: an 8-dimensional signature plus a scale.

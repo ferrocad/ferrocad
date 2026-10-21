@@ -53,7 +53,7 @@ jobs:
   # manifest is embedded in the linked executable -- including the per-target
   # harness binaries `cargo test` links. A harness without it aborts at startup
   # with 0xc0000139 before any test runs, so this is the only job that exercises
-  # that path. See docs/distribution.md section 6.
+  # that path. See docs/architecture/distribution.md section 6.
   windows:
     runs-on: windows-latest
     steps:

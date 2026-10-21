@@ -1,8 +1,8 @@
 # Releasing FerroCAD (working note)
 
 Status: reference (2026-10-05). Companion to
-[`python-bindings.md`](python-bindings.md), [`milestones.md`](milestones.md),
-[`architecture.md`](architecture.md) and [`repackaging.md`](repackaging.md). It records
+[`python-bindings.md`](python-bindings.md), [`milestones.md`](../record/milestones.md),
+[`architecture.md`](../architecture.md) and [`repackaging.md`](repackaging.md). It records
 how the workspace reaches its consumers: the Rust crates on crates.io and the
 `FreeCAD`-namespace Python distribution on PyPI.
 

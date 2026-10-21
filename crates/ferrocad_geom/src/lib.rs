@@ -19,7 +19,7 @@
 //! This crate depends on [`ferrocad_types`] for values such as [`Placement`], and on
 //! nothing else. It is the boundary OCCT must sit *behind*: no crate below the
 //! application depends on the kernel, and `ferrocad_core` stays a leaf (see
-//! `docs/occt-integration.md`).
+//! `docs/architecture/occt-integration.md`).
 //!
 //! # Example
 //!
@@ -218,7 +218,7 @@ impl ElementMap {
     /// reference recorded before the operation still resolves after the rebuild. When
     /// one input maps to several outputs, the **first** output wins: a single name
     /// cannot denote a set, and composing names (`Face6a`, `Face6b`) is the mapper's
-    /// job (see `docs/geometry-and-topology.md` §9). An input the operation deleted is
+    /// job (see `docs/architecture/geometry-and-topology.md` §9). An input the operation deleted is
     /// removed, so a stale reference fails to resolve instead of pointing at geometry
     /// that is no longer there.
     ///

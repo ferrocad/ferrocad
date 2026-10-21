@@ -1,7 +1,7 @@
 # FerroCAD — documentation approach
 
-Status: decision (2026-10-02). Companion to [`mvp-path.md`](mvp-path.md) and
-[`milestones.md`](milestones.md).
+Status: decision (2026-10-02). Companion to [`mvp-path.md`](direction/mvp-path.md) and
+[`milestones.md`](record/milestones.md).
 
 ## Decision
 
@@ -41,18 +41,52 @@ treat the Python surface as documented by convention + upstream.
 | --- | --- |
 | **Tutorial** (learning) | `ferrocad_core` crate page (`crates/ferrocad_core/src/lib.rs`, `# Tutorial`, a runnable doc test); `README.md` quickstart |
 | **How-to** (tasks) | `ferrocad_core` crate page `# How-to guides`; README build/run/test/packaging sections |
-| **Explanation** (understanding) | `ferrocad_core` crate page `# Explanation`; `docs/rewrite-strategy.md`, `docs/mvp-path.md`, `docs/python-ui-research.md` |
+| **Explanation** (understanding) | `ferrocad_core` crate page `# Explanation`; `docs/direction/rewrite-strategy.md`, `docs/direction/mvp-path.md`, `docs/interaction/python-ui-research.md` |
 | **Reference** (information) | rustdoc item/module pages; the Python surface = upstream FreeCAD's reference |
 
 ## Slice documentation
 
-The per-slice record lives in [`milestones.md`](milestones.md) (M0–M4 slices 1–16, the
+The per-slice record lives in [`milestones.md`](record/milestones.md) (M0–M4 slices 1–16, the
 FerroCAD restructure, and MVP slices A1/A2/B1). The `ferrocad_core` crate page carries
 a short **Implemented capabilities** summary so the same history is visible on docs.rs.
+
+## Repository layout
+
+The `docs/` tree is indexed by [`README.md`](README.md) and organized by **subject**,
+not by document kind: each note already declares its kind (`decision`, `reference`,
+`plan`, `record`) on its own status line, so a second kind-based axis would only
+duplicate it. The folders, and the rule for filing a new note:
+
+| Folder | Subject |
+| --- | --- |
+| `direction/` | why we are doing this, and what the product is |
+| `architecture/` | crate graph, seams, data model, packaging |
+| `viewport/` | the scene/render/present stack |
+| `interaction/` | spatial reference, selection, gizmos, navigation, visual language |
+| `workbenches/` | the Python module contract and upstream bring-up |
+| `record/` | closed history: milestones, closed TODOs, incidents |
+| `tasks/` | actionable specs with a checklist |
+
+Three kinds of file stay at the root: [`README.md`](README.md) (the index),
+[`architecture.md`](architecture.md) (the cross-cutting crate map that every section
+links back to), and the active `TODO-<date>.md` backlog.
+
+Conventions this imposes on a new note:
+
+- **One file, one subject.** If a note covers two, split it rather than filing it in
+  two folders.
+- **Relative links only.** Cross-folder links are `../<folder>/<name>.md`; there is no
+  link macro and no site generator to resolve absolutes.
+- **Status line first.** `Status: <kind> (<date>)` plus its companion notes, so a
+  reader knows whether the note is a decision, a plan, or history before reading it.
+- **Closed work moves to `record/`.** A TODO becomes historical when a successor
+  carries only the open items; it is never deleted, because it holds the measurements.
 
 ## Verification hooks
 
 - `cargo doc --no-deps -p ferrocad_core -p ferrocad_py` — builds without warnings.
 - `cargo test --doc -p ferrocad_core` — the tutorial is a real, compiled doc test.
+- A relative-link sweep over `docs/**/*.md` — cheap to run, and it is what catches a
+  note that moved without its inbound links.
 
 Both are cheap enough to add to CI when it is next touched.

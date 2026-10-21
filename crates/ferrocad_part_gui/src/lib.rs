@@ -22,7 +22,7 @@
 //! vocabulary, the tessellation/selection types and the camera. Applying a commit to
 //! the document happens in the app's Python script — never here.
 //!
-//! See `docs/architecture.md` §10 and `docs/gizmo-manipulators.md`.
+//! See `docs/architecture.md` §10 and `docs/interaction/gizmo-manipulators.md`.
 
 pub mod dress_up;
 

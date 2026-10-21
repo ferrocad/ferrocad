@@ -167,7 +167,7 @@ callback easy to drive from a script or a test.
 ## Notes and limits
 
 - There is no native Rust settings panel yet; `Mods_Settings` uses the dialog
-  protocol (`docs/actions-and-tools.md` §6).
+  protocol (`docs/workbenches/actions-and-tools.md` §6).
 - Labels should be unique within a feature; the dialog maps a value back to a
   backend by label first, then by id.
 - The persisted store is the in-memory `ParamGet` shim today, like the grid

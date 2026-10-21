@@ -183,7 +183,7 @@ def __getattr__(name):
     if name == "Grid":
         # Lazily bound so importing FreeCAD stays headless and GUI-free; the
         # settings object lives in the private `_grid` module (see
-        # docs/grid-overlay-plan.md §2).
+        # docs/workbenches/grid-overlay-plan.md §2).
         from . import _grid
 
         return _grid.grid()

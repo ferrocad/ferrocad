@@ -507,7 +507,7 @@ pub fn inventor_scene() -> Result<Scene, String> {
 /// Dispatch an input event (with its pick) to the active Python `SoEventCallback`s.
 ///
 /// Returns whether any callback ran. The active callback ids travel in the neutral
-/// [`Directives`] beside the draw queue (see `docs/directives.md`); the callables live
+/// [`Directives`] beside the draw queue (see `docs/viewport/directives.md`); the callables live
 /// on the facade side, so the tree does not need to be re-extracted to reach them.
 pub fn dispatch(directives: &Directives, event: &Event, hit: Option<&Hit>) -> bool {
     Python::with_gil(|py| {

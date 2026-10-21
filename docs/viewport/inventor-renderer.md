@@ -1,9 +1,9 @@
 # The Inventor renderer: scene core, wgpu backend, and the gpui viewport
 
 Status: milestone record (2026-10-12). Companion to
-[`rewrite-strategy.md`](rewrite-strategy.md) (pillars 3–4), the
+[`rewrite-strategy.md`](../direction/rewrite-strategy.md) (pillars 3–4), the
 [`coin-bridge-reuse-assessment.md`](coin-bridge-reuse-assessment.md) evidence, and
-[`architecture.md`](architecture.md) (dependency rules).
+[`architecture.md`](../architecture.md) (dependency rules).
 
 This note records the first working slice of the **Coin/Inventor replacement**:
 a renderer-agnostic scene core, a wgpu backend that draws it, offscreen readback,
@@ -67,7 +67,7 @@ semantic channel the renderer ignores and the viewport consumes (see
     through the camera (`Camera::ray_through`, using a local 4×4 inverse) and intersect
     Möller–Trumbore against the world-space triangles. This is the `SoRayPickAction`
     analogue and needs no GPU. `pick_hit`/`pick_at_hit` return a
-    [`Hit`](../crates/ferrocad_graphics/src/pick.rs) (object id, world point, surface
+    [`Hit`](../../crates/ferrocad_graphics/src/pick.rs) (object id, world point, surface
     normal, sub-element `part`, and the primitive `element`) — what
     `SoPickedPoint`/`SoFaceDetail` expose to Python. Line picking is screen-space when
     a camera is available.
@@ -180,14 +180,14 @@ The contract, matching FreeCAD (see the assessment and `InputDevice`/
   shows a scene built from a `pivy.coin` script (`python::inventor_scene`, with the
   Rust `scene::sample_scene` as fallback); the `inventor_roundtrip` example renders
   both windowed and headless (`--headless out.png`).
-- **Overlays / multi-view** (the navigation cube, `docs/navicube.md`):
+- **Overlays / multi-view** (the navigation cube, `docs/interaction/navicube.md`):
   `ferrocad_inventor::ViewSpec` + `InventorView::draw_frame`,
   `WgpuRenderer::render_views` (per-view `set_viewport`/`set_scissor_rect`, an overlay
   pipeline with depth off and alpha blending), `ferrocad_viewport::navicube` (the
   cube model, the inventor/stage producers and their overlay camera), and `NaviCube` +
   `InventorViewport::with_navicube` (placement, camera mirroring, hover, click-snap,
   drag-orbit, the animated snap). The cube carries baked face labels and a fixed
-  `Home` button (N4b; see [`navicube.md`](navicube.md)).
+  `Home` button (N4b; see [`navicube.md`](../interaction/navicube.md)).
 - **Line and point pipelines**, routed by `Topology` (scene and overlay variants), so
   `Topology::Lines`/`Points` packets draw correctly; **line (segment) picking**
   (`Hit` carries its `Topology`, its sub-element `part`, and the primitive `element`
@@ -239,11 +239,11 @@ traversal/compile, picking/events — adapted to the code as it stands) is in
    `window.scale_factor()` to size the target and place the camera, making hover
    coordinates exact in a docked pane (and removing the fixed-size stretch).
 2. **Navigation-cube polish** (N4b, remaining): a context menu and the arrow buttons
-   (see [`navicube.md`](navicube.md)). The pieces, the overlay pass, drag-orbit, the
+   (see [`navicube.md`](../interaction/navicube.md)). The pieces, the overlay pass, drag-orbit, the
    animated snap, translucent away-facing faces, baked face labels and the `Home`
    button are built. Separating the cube's model from its producer — so the modern
    `ferrocad_stage` stack can build it too — is specified in
-   [`navicube-spec.md`](navicube-spec.md) and planned in [`navicube-plan.md`](navicube-plan.md).
+   [`navicube-spec.md`](../interaction/navicube-spec.md) and planned in [`navicube-plan.md`](../interaction/navicube-plan.md).
 3. **Line/point pipeline polish** and **feature snapping** from the G-buffer
    `part_idx` (the pick pass now supplies the sub-element index).
 4. **Grow the `pivy.coin` facade** and the `TypeRegistry` toward the ~63

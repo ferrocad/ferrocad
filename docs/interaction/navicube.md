@@ -3,9 +3,9 @@
 Status: **N1–N3, the N4 core and the GPUI design slices D1–D4 built (2026-10-20); the
 context menu and arrow buttons remain deferred.** §8 records the upstream Python surface
 and the snapshot test that exercises it.
-Companion to [`inventor-renderer.md`](inventor-renderer.md) (the render stack this
-builds on), [`inventor-plan.md`](inventor-plan.md) (the emulation phase roadmap), and
-the [`coin-bridge-reuse-assessment.md`](coin-bridge-reuse-assessment.md) evidence.
+Companion to [`inventor-renderer.md`](../viewport/inventor-renderer.md) (the render stack this
+builds on), [`inventor-plan.md`](../viewport/inventor-plan.md) (the emulation phase roadmap), and
+the [`coin-bridge-reuse-assessment.md`](../viewport/coin-bridge-reuse-assessment.md) evidence.
 The producer-neutral **specification** is [`navicube-spec.md`](navicube-spec.md), and the
 plan to make the cube implementable by both the legacy and modern stacks is
 [`navicube-plan.md`](navicube-plan.md); this note remains the as-built record.
@@ -88,7 +88,7 @@ mode.
 | Face labels | `ferrocad_wgpu` + `ferrocad_inventor` | Built (N4b): a texture path (`SoTexture2` analogue) + glyph baking into a `Texture2`. |
 | Context menu / `Home` / arrows / opacity | — | Later polish. |
 
-**Already reusable** from [`inventor-renderer.md`](inventor-renderer.md): DPR +
+**Already reusable** from [`inventor-renderer.md`](../viewport/inventor-renderer.md): DPR +
 `Viewport` conversions, the `Event`/`EventListener` → recompile → highlight loop,
 the CPU `pick`, MSAA, and the shell wiring.
 
@@ -111,7 +111,7 @@ A bare corner cube after N1a–N3 is already a genuine NaviCube; N4 adds fidelit
 (multi-view/scissor in the renderer); N2/N3 reuse the built pick/event/highlight path.
 
 **Independent of the pivy roadmap.** The NaviCube needs none of
-[`inventor-plan.md`](inventor-plan.md)'s Phase 1–2 (arena, fields, PyO3); it uses the
+[`inventor-plan.md`](../viewport/inventor-plan.md)'s Phase 1–2 (arena, fields, PyO3); it uses the
 built vertical slice (state accumulator, packets, CPU pick, events, DPR, viewport).
 
 ## 5. Decisions (settled)
@@ -332,7 +332,7 @@ appearance **theme** (`NavicubeRole`/`NavicubeTheme` — the Rust core owns styl
 [`navicube-plan.md`](navicube-plan.md).
 
 **Directives channel (V4.1–V4.2).** A `SoNaviCube` scene node drives the neutral cube
-through the neutral `Directives` channel ([`directives.md`](directives.md)) rather than a
+through the neutral `Directives` channel ([`directives.md`](../viewport/directives.md)) rather than a
 bespoke overlay API: the compiler lifts it into a `Directive::NaviCube`, and the viewport
 hosts one overlay per directive (a `NaviCube::from_directive` in explicit-placement mode).
 The same channel carries `Directive::EventCallback`, so `SoEventCallback` routing and the

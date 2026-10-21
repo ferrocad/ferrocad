@@ -7,7 +7,7 @@
 //! redistribution, such as *FerroCAD: Architecture*, is a thin binary that calls
 //! [`run_with`] with its own [`HostConfig`]. The engine is reached through the
 //! public `FreeCAD` Python API, exactly like a workbench (see
-//! `docs/architecture.md` and `docs/repackaging.md`).
+//! `docs/architecture.md` and `docs/architecture/repackaging.md`).
 
 pub mod commands;
 pub mod contributions;
@@ -97,7 +97,7 @@ pub struct HostConfig {
     /// `display` and `shell` in the shell helpers). Workbenches contribute display
     /// meshes and edits through the `FreeCAD` module hooks, never through this module.
     /// The library ships no copy of this script: it lives with the app (see
-    /// `docs/repackaging.md`).
+    /// `docs/architecture/repackaging.md`).
     pub entry_module: String,
     /// The manipulators the edition's workbenches contribute (the Part edge arc, a BIM
     /// grip, …). The base app registers none, and the shell names no workbench.
@@ -183,7 +183,7 @@ pub fn check_init(config: HostConfig) -> Result<(), String> {
 /// Switch on the renderer's opt-in diagnostics.
 ///
 /// `--trace` enables them; `FERROCAD_TRACE=1` does the same without a flag. The
-/// knobs and the lines they produce are documented in `docs/render-diagnostics.md`.
+/// knobs and the lines they produce are documented in `docs/viewport/render-diagnostics.md`.
 fn configure_trace() {
     if ferrocad_wgpu::trace::args_enable(std::env::args().skip(1)) {
         ferrocad_wgpu::trace::enable();

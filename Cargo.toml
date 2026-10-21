@@ -74,7 +74,7 @@ unicode-segmentation = "1"
 # `ferrocad_graphics`, `ferrocad_core`, `ferrocad_geom`, `ferrocad_occt`,
 # `ferrocad_part`, `ferrocad_py`, `ferrocad_part_py`, `ferrocad_stage`,
 # `ferrocad_part_gui`, `ferrocad_stage_py`, `ferrocad_viewport`, `ferrocad_widgets`,
-# `ferrocad_gpui` and finally the `ferrocad` app. See ../docs/releasing.md.
+# `ferrocad_gpui` and finally the `ferrocad` app. See ../docs/architecture/releasing.md.
 #
 # Versions are per crate, not workspace-wide: a release may bump only the crates
 # whose sources changed, so the publish workflow skips the rest (their version is

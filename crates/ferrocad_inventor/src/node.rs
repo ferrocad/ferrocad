@@ -289,7 +289,7 @@ pub enum NodeKind {
     ///
     /// It draws nothing into the scene: the compiler lifts it into a
     /// [`Directive::NaviCube`](crate::Directive) that the viewport hosts as an overlay
-    /// (see `docs/directives.md`).
+    /// (see `docs/viewport/directives.md`).
     NaviCube(NaviCubeDirective),
     /// A shader program (`SoShaderProgram`) — draws nothing itself.
     ///

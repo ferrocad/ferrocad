@@ -13,7 +13,7 @@ What is here today:
   ``activeProvider`` / ``setActiveProvider``: a mod declares which *feature* a
   backend provides, exactly one backend per feature is active, and switching
   runs the outgoing ``deactivate`` and incoming ``activate`` callbacks (see
-  ``docs/mod-providers.md``);
+  ``docs/workbenches/mod-providers.md``);
 * the **dialog protocol** — a command's ``on_accept`` callback stays here under a
   single-use token, and ``_accept`` / ``_cancel`` are the later half of the
   non-blocking modal;
@@ -25,7 +25,7 @@ What is here today:
   ``_run``, ``_accept``, ``_cancel``).
 
 What is deliberately absent: ``activeDocument()`` and view objects
-(``ViewProvider``); those are M5 work. See ``docs/actions-and-tools.md``.
+(``ViewProvider``); those are M5 work. See ``docs/workbenches/actions-and-tools.md``.
 """
 
 from __future__ import annotations
@@ -135,7 +135,7 @@ def runCommand(name: str, *args):
 # :func:`registerProvider`. The registry keeps exactly one active backend per
 # feature and switches the viewport state by calling the outgoing provider's
 # ``deactivate`` and the incoming provider's ``activate``. See
-# ``docs/mod-providers.md``.
+# ``docs/workbenches/mod-providers.md``.
 # ---------------------------------------------------------------------------
 
 
@@ -434,7 +434,7 @@ def addOverlay(node) -> None:
 
     The node is **extracted now**: the shell keeps a copy of its subtree and draws
     it beside the document scene on the next refresh. This is the pull bridge that
-    replaces Coin's ``getSceneGraph()``; see ``docs/grid-overlay-plan.md`` §3.2.
+    replaces Coin's ``getSceneGraph()``; see ``docs/workbenches/grid-overlay-plan.md`` §3.2.
     A later in-place edit does not reach the copy, so an author re-registers the
     node (``removeOverlay`` then ``addOverlay``) after changing it.
     """
@@ -517,7 +517,7 @@ def _run(name: str) -> dict:
 
     The returned dict always has ``ok``; a command may add ``status``,
     ``value``, or a ``dialog`` spec with a single-use ``token`` (see
-    ``docs/actions-and-tools.md``).
+    ``docs/workbenches/actions-and-tools.md``).
     """
     command = _COMMANDS.get(name)
     if command is None:

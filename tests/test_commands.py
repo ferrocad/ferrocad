@@ -1,6 +1,6 @@
 """Tests for the ``FreeCADGui`` command registry (A0).
 
-See ``docs/actions-and-tools.md``. These run against the real facade and need the
+See ``docs/workbenches/actions-and-tools.md``. These run against the real facade and need the
 ``ferrocad`` extension on ``PYTHONPATH`` (the headless CI job builds it first).
 """
 

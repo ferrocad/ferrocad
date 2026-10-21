@@ -3,7 +3,7 @@
 # This is the composition root for Part: it links the OCCT kernel, calls
 # `ferrocad_part::register`, and exposes `Part.makeBox` / `Part.Shape` on top of
 # the `ferrocad` (core) bindings. It builds an `rlib` so an application can link
-# it in and register `Part` as a built-in module (see `docs/occt-integration.md`
+# it in and register `Part` as a built-in module (see `docs/architecture/occt-integration.md`
 # §4), and a `cdylib` so it can also be shipped as a standalone extension.
 #
 # It needs OCCT 7.8+, so it is a workspace member but NOT in `default-members`. It is

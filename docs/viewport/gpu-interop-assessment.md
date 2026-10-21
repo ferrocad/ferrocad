@@ -7,7 +7,7 @@ readback → `RenderImage` path with a zero-copy GPU hand-off through
 
 Companions: [`inventor-renderer.md`](inventor-renderer.md) (the current renderer and
 host seam), [`inventor-plan.md`](inventor-plan.md) (the backend boundary),
-[`navicube.md`](navicube.md) (the overlay pass that must survive the change).
+[`navicube.md`](../interaction/navicube.md) (the overlay pass that must survive the change).
 
 ## 0. TL;DR — recommendation
 
@@ -292,14 +292,14 @@ second device is created when interop succeeds.
   `encode_views`, which returns the `wgpu::CommandBuffer`. The dma-buf producer
   submits that buffer through `WgpuSharedBuffer::submit`, which registers the
   exportable `sync_file` fence on the submission.
-- **`ferrocad_viewport`**: new [`presenter`](../crates/ferrocad_viewport/src/presenter.rs)
+- **`ferrocad_viewport`**: new [`presenter`](../../crates/ferrocad_viewport/src/presenter.rs)
   module with a wgpu-free `Presenter` trait and `PresenterStatus`
   (`Pending`/`Ready`/`Unsupported`). `InventorViewport::with_presenter` installs it;
   `refresh` delegates drawing while it is ready, and otherwise keeps the existing
   `draw_frame` + `image()` fallback. The `render` element is a `gpu_canvas` while the
   presenter is pending/ready and `img(...)` when it is unavailable. Startup requests
   are bounded so an unpainted canvas cannot spin the window.
-- **`ferrocad_gpui`**: new [`interop`](../crates/ferrocad_gpui/src/interop.rs) module
+- **`ferrocad_gpui`**: new [`interop`](../../crates/ferrocad_gpui/src/interop.rs) module
   with `GpuiInteropPresenter`. On the first paint it attaches to the window renderer
   (`gpu.try_device::<gpui_wgpu::WgpuRenderer>()`), gets the renderer's own
   `(Device, Queue)`, and builds a `ferrocad_wgpu::WgpuRenderer` at 4× MSAA.

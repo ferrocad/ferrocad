@@ -21,7 +21,7 @@
 //! The toy is also the cheapest full-loop test: no OCCT, no shape kernel, just the
 //! interpreter, a mesh generator and a property.
 //!
-//! See `docs/toy-workbench.md` and `docs/architecture.md` §10.
+//! See `docs/workbenches/toy-workbench.md` and `docs/architecture.md` §10.
 
 use ferrocad_geom::SelectionRef;
 use ferrocad_graphics::Camera;

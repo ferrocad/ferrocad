@@ -1,10 +1,10 @@
 # Actions and tools: the workbench command model
 
 Status: design; A0–A5 as built (2026-10-20). Companion to
-[`visual-language.md`](visual-language.md) §6
-(the status channel), [`axis-origin-grid.md`](axis-origin-grid.md) (the view requests a
-command can make), [`gizmo-manipulators.md`](gizmo-manipulators.md) (the interactive
-vocabulary) and [`app-shell-vision.md`](app-shell-vision.md) S2 (when this lands).
+[`visual-language.md`](../interaction/visual-language.md) §6
+(the status channel), [`axis-origin-grid.md`](../interaction/axis-origin-grid.md) (the view requests a
+command can make), [`gizmo-manipulators.md`](../interaction/gizmo-manipulators.md) (the interactive
+vocabulary) and [`app-shell-vision.md`](../direction/app-shell-vision.md) S2 (when this lands).
 
 This note defines how a workbench registers **an action the user can invoke** — create
 an object, delete it, transform it, or open a dialog — and how those actions reach a
@@ -576,7 +576,7 @@ pushes the pruned set, so `IsActive` cannot latch onto a dead object.
   pointer).
 - **The grid flag is not rendered yet.** `App_ToggleGrid` owns the state and its check
   mark; drawing the grid (the dotted ground field, fade, labels) is G5 in
-  [`axis-origin-grid.md`](axis-origin-grid.md).
+  [`axis-origin-grid.md`](../interaction/axis-origin-grid.md).
 - **Tools have no end/commit channel.** `Tool` reacts to pointer events and draws
   transients; a polyline cannot yet be committed to the document or cancelled from
   the bar. That protocol is the next tool slice.

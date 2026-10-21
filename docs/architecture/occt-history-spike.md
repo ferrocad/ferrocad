@@ -2,14 +2,14 @@
 
 Status: spike report (2026-10-06). Companion to
 [`geometry-and-topology.md`](geometry-and-topology.md) (the lineage/naming plan) and
-[`mvp-path.md`](mvp-path.md) (the geometry-free MVP). This records the first,
+[`mvp-path.md`](../direction/mvp-path.md) (the geometry-free MVP). This records the first,
 deliberately small, experiment toward the geometry kernel.
 
 **Goal.** Answer one question before any trait or crate is designed: does OCCT
 expose enough *shape history* for a stable element map? The experiment is
-[`../spikes/occt-history/`](../spikes/occt-history/): build two boxes, fuse, fillet,
+[`../spikes/occt-history/`](../../spikes/occt-history): build two boxes, fuse, fillet,
 and dump `Modified`/`Generated`/`Deleted` per input sub-shape. A Rust rewrite,
-[`../spikes/occt-history-rs/`](../spikes/occt-history-rs/), tests the same thing
+[`../spikes/occt-history-rs/`](../../spikes/occt-history-rs), tests the same thing
 across a Rust binding (§7).
 
 ---
@@ -145,7 +145,7 @@ list) even while the shape output stays behind the geometry seam. Do not model a
 ## 7. The Rust binding spike
 
 The C++ probe answers whether OCCT *has* history. The Rust spike
-([`../spikes/occt-history-rs/`](../spikes/occt-history-rs/)) asks whether that history
+([`../spikes/occt-history-rs/`](../../spikes/occt-history-rs)) asks whether that history
 reaches Rust through an **existing binding** (we are not writing our own). It uses
 `opencascade-sys` 0.3 (bschwind/opencascade-rs) and mirrors `probe.cpp`.
 
@@ -274,7 +274,7 @@ Running the spike surfaced the integration problem as much as the history questi
 ### The binding: a sibling bridge, not a fork
 
 `opencascade-sys` covers geometry but not history. Our history calls live in
-[`../spikes/occt-history-rs/bridge/`](../spikes/occt-history-rs/bridge/) as a **second
+[`../spikes/occt-history-rs/bridge/`](../../spikes/occt-history-rs/bridge) as a **second
 `#[cxx::bridge]`** that:
 
 - reuses the crate's opaque types (`type TopoDS_Shape = opencascade_sys::topo_ds::TopoDS_Shape;`),

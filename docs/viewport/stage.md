@@ -6,7 +6,7 @@ generational eviction, and the offscreen G-buffer pick pass with vertex `part_id
 T5 exposes the whole modern stack to Python as `ferrocad.stage` (`ferrocad_stage_py`).
 Companion to [`inventor-renderer.md`](inventor-renderer.md) (the legacy `pivy.coin`
 stack this runs beside), [`inventor-plan.md`](inventor-plan.md) (the emulation roadmap),
-and [`architecture.md`](architecture.md) (crate layering).
+and [`architecture.md`](../architecture.md) (crate layering).
 
 ## 1. Why
 
@@ -24,7 +24,7 @@ no intermediate scene graph, no traversal, and no node arena.
 ## 2. Two producers, one batch contract
 
 Both stacks emit the **same** batch vocabulary
-([`DrawPacket`](../crates/ferrocad_graphics/src/batch.rs)), which is the whole point: a
+([`DrawPacket`](../../crates/ferrocad_graphics/src/batch.rs)), which is the whole point: a
 renderer draws them in one pass against one depth buffer, so there are no layering
 artifacts and one pick path serves both.
 
@@ -35,7 +35,7 @@ modern:  Stage ──emit_batches─────▶ ─────────�
 ```
 
 The stage does **not** depend on Open Inventor at all: it compiles to
-[`ferrocad_graphics`](../crates/ferrocad_graphics), the neutral draw contract (the batch
+[`ferrocad_graphics`](../../crates/ferrocad_graphics), the neutral draw contract (the batch
 vocabulary, camera and picking) shared with the legacy stack (T4, sub-slice 1).
 
 ## 3. Slice path
@@ -49,7 +49,7 @@ vocabulary, camera and picking) shared with the legacy stack (T4, sub-slice 1).
 | **T3 — `TransformGizmo`** | Draggers with drag/commit delta events; transient transform override. | ✅ |
 | **T4 — G-buffer pick pass** | *(1/4)* `ferrocad_graphics` extracted, `ferrocad_stage` decoupled from inventor. *(2/4)* surface slope/constant depth bias (coplanar shaded-with-edges). *(3/4)* mesh-cache generational eviction. *(4/4)* vertex `part_idx` + the offscreen `Rg32Uint` pass + 1×1 readback + world-point unprojection, wired into the viewport. | ✅ |
 | **T5 — `ferrocad.stage` bindings** | `ferrocad_stage_py`: the PyO3 surface of the modern stack (`ShapeItem`/`Stage`/`Tool`/`TransformGizmo`, hits/events, the enums), surfaced as `ferrocad.stage`. | ✅ |
-| **T6 — navigation-cube producer** | A second `NavicubeView` producer (in `ferrocad_viewport::navicube`) that builds the NaviCube from `ShapeItem`s, so the modern stack draws it beside the legacy one (see [`navicube-plan.md`](navicube-plan.md), V2). | ✅ |
+| **T6 — navigation-cube producer** | A second `NavicubeView` producer (in `ferrocad_viewport::navicube`) that builds the NaviCube from `ShapeItem`s, so the modern stack draws it beside the legacy one (see [`navicube-plan.md`](../interaction/navicube-plan.md), V2). | ✅ |
 
 ## 4. As built (T0–T5)
 
@@ -161,7 +161,7 @@ left-click placement, band/marker emission, and right-click ignoring;
   `closest_axis_parameter` (1D skew-line closest point), `ray_plane` (2D), and
   `ring_angle` (arc, via `atan2`), emitting a `GizmoDragEvent` (`delta_transform` +
   `total_transform`) per tick and a `GizmoCommitEvent` on release.
-- **Solver backbone (T1, `docs/gizmo-manipulators.md`)** — `ManipulatorFrame` gives the
+- **Solver backbone (T1, `docs/interaction/gizmo-manipulators.md`)** — `ManipulatorFrame` gives the
   triad an orthonormal origin/basis (world by default, object-local via
   `from_rotation`); a near view-aligned axis switches to a screen-space projection
   (`ScreenAxis`) and is disabled below 1 px; edge-on planes/rings fall back to a
@@ -356,7 +356,7 @@ App-side facades own the **`FreeCAD`** namespace, this one fabricates nothing: `
 is a real extension module, and creating a synthetic one would shadow it.
 
 **Verification:** the acceptance suite lives in
-[`tests/test_stage_py.py`](../tests/test_stage_py.py) (9 cases: buffer + sequence
+[`tests/test_stage_py.py`](../../tests/test_stage_py.py) (9 cases: buffer + sequence
 ingestion, the misaligned-buffer error, attribute round-trip, `Stage` emission, a
 scripted `Tool` receiving events, and two gizmo drags asserting the emitted events). It is
 the single source of truth: `crates/ferrocad_stage_py/tests/stage_py.rs` runs it against an

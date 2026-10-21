@@ -1,4 +1,4 @@
-"""The MVP acceptance demo as a test (``docs/mvp-path.md``, slice D1).
+"""The MVP acceptance demo as a test (``docs/direction/mvp-path.md``, slice D1).
 
 Runs ``examples/mvp_workflow.py`` end to end so the MVP definition cannot regress
 silently: typed/dynamic/enumeration properties, an expression dependency,

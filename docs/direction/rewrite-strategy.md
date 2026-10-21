@@ -1,10 +1,10 @@
 # FreeCAD-on-Rust — Rewrite Strategy
 
 Status: **authoritative direction** (2026-10-02). Supersedes the recommendation in
-[`coin-bridge-reuse-assessment.md`](coin-bridge-reuse-assessment.md), whose *evidence*
+[`coin-bridge-reuse-assessment.md`](../viewport/coin-bridge-reuse-assessment.md), whose *evidence*
 (§1–§4, §10) remains valid as the risk register below.
 
-*Current state (see [`milestones.md`](milestones.md)):* **FerroCAD** — M0–M3 and sixteen M4 slices
+*Current state (see [`milestones.md`](../record/milestones.md)):* **FerroCAD** — M0–M3 and sixteen M4 slices
 are done, and the POC has been restructured into a Cargo **workspace** (edition 2024) in this
 repository. A pure-Rust `ferrocad_core` + PyO3 `ferrocad` extension serve the FreeCAD Python
 surface behind the `python/FreeCAD` facade, with a conformance harness tracking **160 upstream tests
@@ -76,11 +76,11 @@ The five pillars:
 3. **Wrap Qt behind a FreeCAD-specific UI abstraction**, then add a **`bite-gpui` backend**
    for it, so workbench UI code stops binding to Qt directly. Direction: a
    **Python-declarative, Rust-rendered** UI (Blender-style) — see
-   [`python-ui-research.md`](python-ui-research.md).
+   [`python-ui-research.md`](../interaction/python-ui-research.md).
 4. **Replace Coin3D** with a Rust scene graph rendered through GPUI/`wgpu`, plus a
    `coin` module (pivy-compatible) so workbench scene-graph code keeps working.
 5. **Expose the whole thing to Python**, bootstrapped by a hello-world script (milestone M0,
-   already working; see the [repository](..)).
+   already working; see the [repository](../..)).
 
 ---
 
@@ -90,7 +90,7 @@ The mechanism for Rust ↔ Python is **PyO3** (both extension-module and embeddi
 longer provisional: it is implemented and validated across M1→M4. A temporary **C ABI +
 `ctypes` fallback** existed from M0 but was **removed** (2026-10-05): it duplicated the model
 rather than bridging the core, and PyO3 covers every capability it had. See
-[`architecture.md`](architecture.md).
+[`architecture.md`](../architecture.md).
 
 - **Extension module** — workbench code does `import FreeCAD`; implemented as the `ferrocad` PyO3
   extension (`crates/ferrocad_py`) over the `ferrocad_core` Rust library. A thin `python/FreeCAD`
@@ -104,7 +104,7 @@ rather than bridging the core, and PyO3 covers every capability it had. See
   `PYO3_USE_ABI3_FORWARD_COMPATIBILITY=1`; PyO3 **0.25** (latest 0.29). The long-term supported
   CPython range (3.12/3.13/3.14) is still an open packaging decision.
 - **CPython headers are a hard build dependency.** The M0 `ctypes`/C-ABI fallback
-  (`_ctypes_backend`, `crates/ferrocad_ctypes`) was removed; see [`architecture.md`](architecture.md).
+  (`_ctypes_backend`, `crates/ferrocad_ctypes`) was removed; see [`architecture.md`](../architecture.md).
 
 **Verified versions (2026-10-02):** `bite-gpui` **1.21.0** · `pyo3` **0.25** · `serde` **1** ·
 `serde_json` **1** · `petgraph` **0.6** · `rustc` 1.99 · CPython **3.14**.
@@ -181,7 +181,7 @@ document-object core (M2–M4) is the active track, and the **MVP app shell**
    commit early to `bite-gpui`-only widgets? How much of the 519-file `PySide` surface do we
    shim versus port? And **retained (diffed tree) vs immediate (per-frame)** rendering —
    recommendation: retained with a diff, hot paths (3D view, text, trees) kept native. See
-   [`python-ui-research.md`](python-ui-research.md) §B–C.
+   [`python-ui-research.md`](../interaction/python-ui-research.md) §B–C.
 4. **Coin strategy** — reimplement the scene graph in Rust, or temporarily keep Coin behind
    the abstraction until the renderer is ready?
 5. **Repository layout** — **settled:** a cargo workspace under `crates/` (`ferrocad_core`,
@@ -199,21 +199,21 @@ document-object core (M2–M4) is the active track, and the **MVP app shell**
 
 ## 8. Relation to existing material
 
-- [`coin-bridge-reuse-assessment.md`](coin-bridge-reuse-assessment.md) — the reuse analysis
+- [`coin-bridge-reuse-assessment.md`](../viewport/coin-bridge-reuse-assessment.md) — the reuse analysis
   and measurements; **recommendation superseded**, evidence retained (§5 above).
-- [`python-ui-research.md`](python-ui-research.md) — how FreeCAD hosts Python in-window, and the
+- [`python-ui-research.md`](../interaction/python-ui-research.md) — how FreeCAD hosts Python in-window, and the
   Blender-style Python-declarative UI direction over `bite-gpui`.
-- [`milestones.md`](milestones.md) — the milestone record (M0 → M4 slices), the decisions
+- [`milestones.md`](../record/milestones.md) — the milestone record (M0 → M4 slices), the decisions
   unlocked by the spike, and the M3 (IDL codegen) plan + conformance numbers.
 - [`mvp-path.md`](mvp-path.md) — **the MVP definition**: a headless, geometry-free parametric
   document engine as the drop-in `FreeCAD` package; the minimum model/workflow/persistence and the
   slices that get there (acceptance = upstream `Document.py` parity minus the C++ fixture).
-- [`geometry-and-topology.md`](geometry-and-topology.md) — the geometry-kernel seam: topological
+- [`geometry-and-topology.md`](../architecture/geometry-and-topology.md) — the geometry-kernel seam: topological
   sorting vs topological naming, the `GeometryEngine` trait, OCCT FFI, and how persistence and
   sub-shape lineage interact.
-- [`documentation.md`](documentation.md) — the documentation approach (Diátaxis rustdoc for the Rust
+- [`documentation.md`](../documentation.md) — the documentation approach (Diátaxis rustdoc for the Rust
   crates; the Python surface documented by convention + upstream; Sphinx later).
-- The [repository](..) — the artifact: `crates/ferrocad_core` (Rust core), `crates/ferrocad_py`
+- The [repository](../..) — the artifact: `crates/ferrocad_core` (Rust core), `crates/ferrocad_py`
   (PyO3 `ferrocad` module), `crates/ferrocad_gen` (generated skeletons), `crates/ferrocad_widgets`
   (shared widgets), `crates/ferrocad_gpui` (app shell), `python/FreeCAD` (facade), `tools/`
   (inventory/codegen/conformance), `pyproject.toml` (maturin `ferrocad` distribution).

@@ -2,7 +2,7 @@
 
 Status: **roadmap (2026-10-12)**, adapted from an earlier draft to the code as it
 stands today. Companion to [`inventor-renderer.md`](inventor-renderer.md) (what is
-built) and [`navicube.md`](navicube.md) (the overlay feature that builds on it).
+built) and [`navicube.md`](../interaction/navicube.md) (the overlay feature that builds on it).
 
 Legend: **✅ built** · **◐ partial** · **▢ planned**.
 

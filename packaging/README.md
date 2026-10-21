@@ -71,7 +71,7 @@ embedded interpreter finds `python/` and `mods/`.
   (`STATUS_ENTRYPOINT_NOT_FOUND`). The app `.exe` gets the manifest, but a `cargo
   test` harness is a separate binary, so the embedding crate should use
   `embed_resource::compile_for_everything` to reach tests as well. See
-  `docs/distribution.md` §6.
+  `docs/architecture/distribution.md` §6.
 - **`--check-init` verifies a packaged layout without a display.** The app boots
   its embedded interpreter, native dependencies, built-in modules, facade and
   workbenches, then exits (no window, no GPU). The release workflow runs it on the

@@ -1,7 +1,7 @@
 # Conformance: running the upstream suite
 
 Status: reference (2026-10-20). The harness is milestone **M3d**
-([`milestones.md`](milestones.md)); this note is the setup and runbook for it.
+([`milestones.md`](../record/milestones.md)); this note is the setup and runbook for it.
 
 The conformance harness answers one question: **how much of FreeCAD's own headless
 Python test suite does our `FreeCAD` pass today?** It loads the upstream test files
@@ -39,7 +39,7 @@ git sparse-checkout set src/Mod/Test src/Mod/Part
 ```
 
 This is the documented sparse/blobless method (see
-[`coin-bridge-reuse-assessment.md`](coin-bridge-reuse-assessment.md), appendix). The
+[`coin-bridge-reuse-assessment.md`](../viewport/coin-bridge-reuse-assessment.md), appendix). The
 two test trees are ~34 MB. Widen the checkout when you need more:
 
 ```sh
@@ -83,7 +83,7 @@ export CMAKE_PREFIX_PATH=$HOME/.cache/ferrocad-occt/prefix
 export LD_LIBRARY_PATH=$HOME/.cache/ferrocad-occt/prefix/lib
 ```
 
-See [`occt-bundling.md`](occt-bundling.md) for obtaining the prefix.
+See [`occt-bundling.md`](../architecture/occt-bundling.md) for obtaining the prefix.
 
 ---
 
@@ -118,7 +118,7 @@ hermetic.
 | App | **169 passed**, 41 failed, 5 errored, **0 files failed to load** |
 | Part | **2 passed**, 1 failed, 95 errored, **3 files failed to load** (`TestPartApp` → missing `Draft`; the rest are missing `Part.Wire`/`BSplineCurve`, and `ViewObject`-style attributes) |
 
-The App number matches the figure recorded in [`milestones.md`](milestones.md) (169
+The App number matches the figure recorded in [`milestones.md`](../record/milestones.md) (169
 passing across eight `Mod/Test` files). The Part group is the newer, much larger gap;
 its load errors are the useful signal.
 

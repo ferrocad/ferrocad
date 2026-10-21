@@ -6,7 +6,7 @@ trait or a Lineage Engine:
 > Does OCCT expose enough **shape history** for us to build a stable element map?
 
 If the answer is yes, the lineage plan in
-[`../../docs/geometry-and-topology.md`](../../docs/geometry-and-topology.md) §4–§6
+[`../../docs/architecture/geometry-and-topology.md`](../../docs/architecture/geometry-and-topology.md) §4–§6
 stands. If the `Modified`/`Generated`/`Deleted` lists come back empty for real
 operations, the plan changes: stable naming would have to be built some other way.
 
@@ -56,4 +56,4 @@ placement, a scale, a transform flag, and can target sub-elements by name, and
 containers aggregate placements recursively. So a "links/containers" slice that has
 no notion of shape references is a partial `Link`. The history probe tells us how
 much of that reference machinery must exist before B3/B5 are honest. Details in the
-report: [`../../docs/occt-history-spike.md`](../../docs/occt-history-spike.md).
+report: [`../../docs/architecture/occt-history-spike.md`](../../docs/architecture/occt-history-spike.md).

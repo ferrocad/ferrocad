@@ -11,7 +11,7 @@
 //! would link its own module and contribute no dress-up at all.
 //!
 //! Run it with `cargo run -p ferrocad_parametric` (needs a display and OCCT).
-//! See `docs/repackaging.md` and `docs/occt-integration.md` §4.
+//! See `docs/architecture/repackaging.md` and `docs/architecture/occt-integration.md` §4.
 
 fn main() {
     // Register the Part module as a built-in, before the interpreter initialises.

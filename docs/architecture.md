@@ -1,8 +1,8 @@
 # Architecture: layers, call paths, and the C-ABI question
 
 Status: reference (2026-10-05). Companion to
-[`python-bindings.md`](python-bindings.md), [`milestones.md`](milestones.md) and
-[`releasing.md`](releasing.md).
+[`python-bindings.md`](architecture/python-bindings.md), [`milestones.md`](record/milestones.md) and
+[`releasing.md`](architecture/releasing.md).
 
 This note answers three questions that the crate list alone does not make
 obvious:
@@ -31,7 +31,7 @@ obvious:
 | `ferrocad_viewport` | `rlib` | The `bite-gpui` viewport over an invented scene: `InventorViewport` (image path, pointer→pick→listener, clicks → `SelectionEvent`/`SelectionRef`, and the workbench `Manipulator` registry) plus a hosted `ferrocad_stage` (declarative items and interactive tools), the navigation cube (`NaviCube`), and the sample scene. Depends on `ferrocad_graphics`/`ferrocad_geom`/`ferrocad_inventor`/`ferrocad_stage` only. |
 | `ferrocad_gpui` | `rlib` | The `bite-gpui` application-shell library: boots CPython, provides `Shell`, `run`/`run_with`/`run_edition_with`, `HostConfig`, mounts the `ferrocad_viewport`, syncs document meshes into the stage (`display::DisplaySync`), hosts the edition's workbench manipulators (`contributions::Contributions`), and bridges the **workbench commands, selection, dialogs, accelerators, view/tool requests** (`commands`, `selection`, `dialog`, `shortcuts`, `view` — typed JSON over `FreeCADGui`). Ships no application scripts and names no workbench. |
 | `ferrocad` | `bin` | The base app (the general edition). Owns the app's Python entry module and, when packaged, its mods and interpreter; exposes `run`/`run_as`/`run_edition`/`run_edition_with`, which call `ferrocad_gpui::run_with`. |
-| `ferrocad_toy` | `bin` + `rlib` | A **kernel-free edition** and testbed: it creates a typed object (`Height`/`Width`/`Depth`/`Placement`/`DisplayMode`/`Color`), represents it through the display hook, and manipulates it with a `HeightGrip` **and** the generic `TransformGizmo`. It links no geometry module; it exists to prove the whole workbench surface is generic and to run that loop in the fast CI job. See [`toy-workbench.md`](toy-workbench.md). |
+| `ferrocad_toy` | `bin` + `rlib` | A **kernel-free edition** and testbed: it creates a typed object (`Height`/`Width`/`Depth`/`Placement`/`DisplayMode`/`Color`), represents it through the display hook, and manipulates it with a `HeightGrip` **and** the generic `TransformGizmo`. It links no geometry module; it exists to prove the whole workbench surface is generic and to run that loop in the fast CI job. See [`toy-workbench.md`](workbenches/toy-workbench.md). |
 | `python/FreeCAD` | package | The public, pure-Python `import FreeCAD` facade. |
 | `ferrocad_gen` | `cdylib` | Generated PyO3 skeletons (M3c). A build-time experiment, not wired into the facade. |
 | `ferrocad_ctypes` | `cdylib` | The legacy M0 C-ABI backend, **removed** (kept in §4 as the rationale). |
@@ -205,7 +205,7 @@ and `ferrocad_part` consumes the seam (it owns `Part::Feature`, the `Part::Fille
 `Part::Chamfer` features and the shape/extension property). Core's document-object SPI is
 the `object_registry` behaviour seam plus the extensible `Property::Extension` value, so a
 module's types construct and execute without core knowing the kernel. `ferrocad_occt` is
-not linked by any default build. See [`occt-integration.md`](occt-integration.md).
+not linked by any default build. See [`occt-integration.md`](architecture/occt-integration.md).
 
 The rule that keeps the design honest: **the shell talks to the model through the
 `FreeCAD` API, exactly like a workbench does.** A direct `shell -> ferrocad_core`
@@ -221,7 +221,7 @@ in §9, and a workbench's Rust-side manipulator reaches it through the
 The shell library is the base of a family of product editions (FerroCAD: Architecture,
 Furniture, and so on). The plan is a shell **library** plus thin per-edition
 binaries, not forks; that is why the crate is `ferrocad_gpui` and not named for a
-platform. See [`repackaging.md`](repackaging.md).
+platform. See [`repackaging.md`](architecture/repackaging.md).
 
 ## 8. Where the Python lives
 
@@ -248,7 +248,7 @@ workbench (`Mod/`) scripts ship with the distribution.
 
 The sources stay in one canonical tree (`python/` at the repository root).
 Packaging copies them (maturin for the wheel, `xtask` for the app bundle) rather
-than duplicating them into a crate; see [`distribution.md`](distribution.md) §8.
+than duplicating them into a crate; see [`distribution.md`](architecture/distribution.md) §8.
 
 Workbench scripts (`mods/*/Init.py`, `InitGui.py`) are loaded at boot
 **best-effort**: a script that raises is reported with its traceback and the app

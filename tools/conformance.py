@@ -16,7 +16,7 @@ Usage::
     python3 tools/conformance.py --root ../freecad-upstream --list      # list candidates
 
 The one-time setup (the sparse `freecad-upstream` checkout, the extension build) and
-the current baseline are in ``docs/conformance.md``.
+the current baseline are in ``docs/workbenches/conformance.md``.
 
 The `--part` group needs an image that links the `Part` module (it imports `Part`
 and `FreeCAD` and they must share one core), which the standalone `ferrocad.abi3.so`

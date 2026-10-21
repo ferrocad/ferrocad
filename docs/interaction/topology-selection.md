@@ -3,9 +3,9 @@
 Status: **F0 is complete (2026-10-20): F0.0 (binding reconnaissance and the
 tessellation/topology spike), F0.1 (the kernel-neutral vocabulary), F0.2 (the OCCT
 implementation), F0.3 (pick coherence), F0.4 (the stage view), F0.5 (the selection
-bridge) and F0.6 (parametric dress-up features) are built.** Companion to [`geometry-and-topology.md`](geometry-and-topology.md)
-(the naming problem and the lineage engine), [`occt-integration.md`](occt-integration.md)
-(the crate layout), [`occt-history-spike.md`](occt-history-spike.md) (the verified
+bridge) and F0.6 (parametric dress-up features) are built.** Companion to [`geometry-and-topology.md`](../architecture/geometry-and-topology.md)
+(the naming problem and the lineage engine), [`occt-integration.md`](../architecture/occt-integration.md)
+(the crate layout), [`occt-history-spike.md`](../architecture/occt-history-spike.md) (the verified
 history bridge), and [`gizmo-manipulators.md`](gizmo-manipulators.md) (the manipulators
 that need this seam).
 
@@ -64,7 +64,7 @@ workbench would inherit Part's document types.
 
 ## 3. Dependency rules
 
-The existing rules in [`architecture.md`](architecture.md) §6 stand; F0 adds one edge
+The existing rules in [`architecture.md`](../architecture.md) §6 stand; F0 adds one edge
 and no kernel edge:
 
 ```
@@ -231,7 +231,7 @@ Three C++-side additions cover the gaps, in the proven sibling-bridge pattern
   continuity across one edge, not continuity between two adjacent edges.
 
 No `opencascade-sys` fork or patch is needed, which keeps the bundling story
-([`occt-bundling.md`](occt-bundling.md)) unchanged.
+([`occt-bundling.md`](../architecture/occt-bundling.md)) unchanged.
 
 ### What the spike measured (box 10×10×10, deflection 0.5)
 
@@ -329,7 +329,7 @@ flowchart LR
   edition implements over the **module hooks** (`FreeCAD.display_mesh` /
   `FreeCAD.interaction`). The shell and the viewport name no workbench, and neither
   links a kernel. See [`gizmo-manipulators.md`](gizmo-manipulators.md) §14 and
-  [`architecture.md`](architecture.md) §9–§10.
+  [`architecture.md`](../architecture.md) §9–§10.
 
 **F0.5 as built.** `InventorViewport` emits a selection on a left press+release that did
 not orbit the camera or the navigation cube, did not move a gizmo handle, and was not
@@ -425,7 +425,7 @@ and `a_fillet_leaves_a_tangent_chain_at_its_boundary`; `ferrocad_core`'s
 API, `Base = (box, ["Edge1"])`, recompute, a non-null `Shape`).
 
 The geometry job sets `OCCT_INCLUDE_DIR` / `OpenCASCADE_DIR` / `LD_LIBRARY_PATH` from a
-fetched OCCT prefix, as [`occt-integration.md`](occt-integration.md) §8 describes.
+fetched OCCT prefix, as [`occt-integration.md`](../architecture/occt-integration.md) §8 describes.
 Headless checks use `WgpuRenderer::new_default` + `ViewSpec` + `renderer.image()` (the
 pattern in `crates/ferrocad_gpui/examples/inventor_roundtrip.rs`), with a per-part
 colour probe to confirm the part ids reached the vertex buffer.

@@ -3,7 +3,7 @@
 //!
 //! Appearance is **not** part of the draw contract: a producer never picks a colour. It
 //! tags each piece with a [`NavicubeRole`], and a [`NavicubeTheme`] supplies the colour
-//! (see `docs/navicube-spec.md` §5 and `docs/directives.md` §5). The default theme
+//! (see `docs/interaction/navicube-spec.md` §5 and `docs/viewport/directives.md` §5). The default theme
 //! reproduces the built palette.
 
 use ferrocad_types::Vector3;

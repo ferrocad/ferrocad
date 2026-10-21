@@ -2,7 +2,7 @@
 #
 # Building this crate needs OCCT 7.8+; it is therefore a workspace member but NOT
 # in `default-members`, so `cargo build`/`cargo test` do not require a kernel.
-# See docs/occt-integration.md and docs/occt-bundling.md.
+# See docs/architecture/occt-integration.md and docs/architecture/occt-bundling.md.
 [package]
 name = "ferrocad_occt"
 version = "0.1.2"

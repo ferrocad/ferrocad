@@ -1,7 +1,7 @@
 # Repackaging strategy: one shell library, many FerroCAD editions
 
-Status: reference (2026-10-05). Companion to [`architecture.md`](architecture.md),
-[`app-shell-vision.md`](app-shell-vision.md) and [`releasing.md`](releasing.md).
+Status: reference (2026-10-05). Companion to [`architecture.md`](../architecture.md),
+[`app-shell-vision.md`](../direction/app-shell-vision.md) and [`releasing.md`](releasing.md).
 
 ## 1. The goal
 
@@ -106,7 +106,7 @@ fn main() {
 
 The app script is ordinary Python, re-exporting the base shell's entry points and
 telling the shell how the edition's objects are displayed and how a manipulator's
-commit is applied (the module hooks in [`architecture.md`](architecture.md) §9):
+commit is applied (the module hooks in [`architecture.md`](../architecture.md) §9):
 
 ```python
 # python/ferrocad_parametric/__init__.py
@@ -130,14 +130,14 @@ the edition is run from a source checkout (`cargo run -p ferrocad_parametric`).
 links no kernel, its app script creates a typed object and generates its mesh from the
 object's properties, and it contributes a manipulator **and** a gizmo through the same
 `Contributions` registry. Run it with `cargo run -p ferrocad_toy`; see
-[`toy-workbench.md`](toy-workbench.md).
+[`toy-workbench.md`](../workbenches/toy-workbench.md).
 
 The boundary between the two crates: `ferrocad_gpui` owns the **interpreter**
 (boot, `sys.path`, JSON) and ships no application script; the **app** owns the
 scripts. The app's `main` sets `HostConfig.entry_module` and
 `HostConfig.python_paths` (`run_edition` for an edition, `run_as` for the base app);
 the base app names `ferrocad_shell`, and a redistribution names its own startup module
-and its `Mod/` directories. See [`architecture.md`](architecture.md) §8–§9.
+and its `Mod/` directories. See [`architecture.md`](../architecture.md) §8–§9.
 
 Bundling a Python runtime and packaging AppImage/`.app`/`.exe` is a separate
 workstream in [`distribution.md`](distribution.md).

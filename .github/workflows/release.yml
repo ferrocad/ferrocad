@@ -81,7 +81,7 @@ jobs:
         # would need `vcruntime140.dll` from the VC++ redistributable on the
         # user's machine. `crt-static` (permitted alongside the bundled `libpython`
         # DLL) removes that dependency, keeping the zip self-contained like the
-        # AppImage and the `.dmg`. See docs/distribution.md section 6.
+        # AppImage and the `.dmg`. See docs/architecture/distribution.md section 6.
         if: runner.os == 'Windows'
         shell: pwsh
         run: echo "RUSTFLAGS=-C target-feature=+crt-static" >> $env:GITHUB_ENV

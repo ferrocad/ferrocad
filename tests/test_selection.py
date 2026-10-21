@@ -2,7 +2,7 @@
 
 The shell owns the selection and pushes it to the facade; these tests drive the
 snapshot directly (the shell's own push is covered by
-``crates/ferrocad_toy/tests/selection.rs``). See ``docs/actions-and-tools.md`` §5
+``crates/ferrocad_toy/tests/selection.rs``). See ``docs/workbenches/actions-and-tools.md`` §5
 and §9.
 """
 

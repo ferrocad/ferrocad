@@ -7,7 +7,7 @@ of the crate's reference copy and must stay byte-identical.
 
 Headless (``FreeCAD.GuiUp == 0``): the test installs a small ``pivy.coin`` stub so
 the mod can build its tree without the Rust extension, then spies on the facade's
-overlay functions. Nothing here needs a GPU. See ``docs/grid-overlay-plan.md``
+overlay functions. Nothing here needs a GPU. See ``docs/workbenches/grid-overlay-plan.md``
 §3.2, §5 G5.
 """
 

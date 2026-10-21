@@ -19,7 +19,7 @@ use super::view::{NavicubeView, NavicubeVisual};
 
 /// Build the cube scene, drawing every piece **back-to-front** (away faces and rear
 /// pieces first) so the cube reads through, and the piece in `visual.hilite` in the
-/// theme's highlight colour. Colours come from `theme` (§5 of `docs/navicube-spec.md`).
+/// theme's highlight colour. Colours come from `theme` (§5 of `docs/interaction/navicube-spec.md`).
 ///
 /// The root holds the **rotating subtree** whose first node is the
 /// [`NodeKind::Transform`] the controller writes the camera orientation into (see

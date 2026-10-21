@@ -1,7 +1,7 @@
 # Distribution: running and packaging FerroCAD
 
 Status: reference (2026-10-05). Companion to [`repackaging.md`](repackaging.md),
-[`releasing.md`](releasing.md) and [`architecture.md`](architecture.md). It answers:
+[`releasing.md`](releasing.md) and [`architecture.md`](../architecture.md). It answers:
 how does the base app run, how is it packaged for end users, and can we ship a
 Python interpreter and packaging scripts.
 

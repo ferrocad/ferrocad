@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """Grid Overlay for FerroCAD: a dialog for the native reference grid.
 
-This is the A2 shipping form (``docs/grid-overlay-plan.md`` §3.2), not a port of
+This is the A2 shipping form (``docs/workbenches/grid-overlay-plan.md`` §3.2), not a port of
 the upstream Coin/GLSL overlay. The command id and menu text are unchanged and
 the six knobs survive, but the values go to the semantic ``FreeCAD.Grid`` API
 and the shell draws them with the native grid. There is no Qt, no ``pivy``, no
@@ -14,7 +14,7 @@ the legacy Coin path; the upstream addon remains the addon for upstream.
 The mod declares itself as the ``"semantic"`` backend of the ``"grid"`` feature
 (priority 10, so the native grid is the default). ``mods/GridOverlayCoin``
 declares the same feature as ``"coin"``; only one is active at a time, and
-``Mods_Settings`` switches them (``docs/mod-providers.md``).
+``Mods_Settings`` switches them (``docs/workbenches/mod-providers.md``).
 """
 
 from __future__ import annotations
@@ -27,7 +27,7 @@ import FreeCADGui
 ADDON_DIR = os.path.dirname(os.path.abspath(__file__))
 
 #: The provider feature this mod provides, and its backend id. The Coin mod
-#: declares the same feature with the id ``"coin"``; see ``docs/mod-providers.md``.
+#: declares the same feature with the id ``"coin"``; see ``docs/workbenches/mod-providers.md``.
 FEATURE = "grid"
 BACKEND = "semantic"
 
@@ -47,7 +47,7 @@ INACTIVE_STATUS = (
 def grid_api(app=None):
     """``FreeCAD.Grid`` when this build has it, else ``None``.
 
-    The discriminator from ``docs/grid-overlay-plan.md`` §3.3. It is a function
+    The discriminator from ``docs/workbenches/grid-overlay-plan.md`` §3.3. It is a function
     so a build without ``Grid`` is detected through the same ``getattr`` path
     the plan names, and so a test can pass a module that lacks the attribute.
     """
@@ -117,7 +117,7 @@ def _state(grid):
 
 
 def _field(name, label, kind, value, **extra):
-    """One dialog field in the shell's spec (``docs/actions-and-tools.md`` §6)."""
+    """One dialog field in the shell's spec (``docs/workbenches/actions-and-tools.md`` §6)."""
     field = {"name": name, "label": label, "kind": kind, "value": value}
     field.update(extra)
     return field

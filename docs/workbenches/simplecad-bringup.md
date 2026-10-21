@@ -8,17 +8,17 @@ and interaction onto what FerroCAD has already built, and give an ordered bring-
 plan **S0–S5**. This is a measurement and a plan; no source file was changed and no
 test was executed for it.
 
-Companion to [`TODO-21-10-2026.md`](TODO-21-10-2026.md) (the measurement stash and
+Companion to [`TODO-21-10-2026.md`](../record/TODO-21-10-2026.md) (the measurement stash and
 the three open decisions), [`conformance.md`](conformance.md) (the upstream harness
-this plan extends), [`topology-selection.md`](topology-selection.md) (F0: the
-topology, selection and tessellation seam), [`stage.md`](stage.md) (the declarative
-presentation stack), [`axis-origin-grid.md`](axis-origin-grid.md) (workplanes,
-snapping and grid feedback), [`gizmo-manipulators.md`](gizmo-manipulators.md) (the
-manipulator model), [`occt-integration.md`](occt-integration.md) (the kernel seam),
-[`python-bindings.md`](python-bindings.md) (the Python facade) and
+this plan extends), [`topology-selection.md`](../interaction/topology-selection.md) (F0: the
+topology, selection and tessellation seam), [`stage.md`](../viewport/stage.md) (the declarative
+presentation stack), [`axis-origin-grid.md`](../interaction/axis-origin-grid.md) (workplanes,
+snapping and grid feedback), [`gizmo-manipulators.md`](../interaction/gizmo-manipulators.md) (the
+manipulator model), [`occt-integration.md`](../architecture/occt-integration.md) (the kernel seam),
+[`python-bindings.md`](../architecture/python-bindings.md) (the Python facade) and
 [`actions-and-tools.md`](actions-and-tools.md) (the command and dialog protocol), and
 the two decisions written alongside the TODO: [`qt-strategy.md`](qt-strategy.md)
-(the split plane) and [`part-draft-layering.md`](part-draft-layering.md) (the
+(the split plane) and [`part-draft-layering.md`](../architecture/part-draft-layering.md) (the
 `ferrocad_curves` split). This note applies those decisions to SimpleCAD rather than
 reopening them.
 
@@ -468,7 +468,7 @@ FerroCAD's `SnapKind` covers `Point`, `Grid`, `Vertex`, `EdgeMid`, `Centre`, `Or
 inference (`Snapper.line_axis`, `axis_point`), the radius magnet (`_refine`), the
 screen-space point grid, and exact projection onto the kernel surface. The last one is
 already a documented F0 non-goal (“no exact intersector … `IntCurvesFace_ShapeIntersector`
-later”, `docs/topology-selection.md` §11), so the port inherits a known precision gap;
+later”, `docs/interaction/topology-selection.md` §11), so the port inherits a known precision gap;
 `on_face()` in SimpleCAD exists precisely because the view reports single-precision
 picks.
 
@@ -515,7 +515,7 @@ exists in `tests/gui/gui_smoke.py`: a 40 × 30 rectangle becomes area 1200, then
 | `ferrocad_stage/src/gizmo.rs` | axis/plane/ring drag, projection, screen scale | Move/Rotate/Scale sessions; `axis_point`/`pull_drag` math | **partial** — transform gizmo exists; no push/pull mode |
 | `ferrocad_viewport::InventorViewport` | pick, hover, selection, tool dispatch | `Gui.activeDocument().activeView()` plus `getObjectsInfo`/`addEventCallbackPivy` | **missing adapter** |
 | `ferrocad_wgpu::pick` | G-buffer `[entity, part]` pick | `view.getObjectsInfo` (ordered list) / `getObjectInfo` | **partial** — top hit only |
-| `docs/topology-selection.md` F0 | `SelectionRef { object, elements }`, part names | `Gui.Selection` plus `Component` (`Face6`) | **partial** — selection is a read-only snapshot |
+| `docs/interaction/topology-selection.md` F0 | `SelectionRef { object, elements }`, part names | `Gui.Selection` plus `Component` (`Face6`) | **partial** — selection is a read-only snapshot |
 
 ### 5.5 Selection and previews
 
@@ -577,7 +577,7 @@ declaratively, and shim the widget subset. SimpleCAD has **no `.ui` files**, so 
 `.ui` loader is not on its path; the native spatial reference is the
 `ferrocad_stage` grid/snap/workplane already mapped in §5. What remains is the
 **micro-shim** for code-built widgets. A `PySide` alias over the host’s PySide6 (the
-D0 fix in [`TODO-21-10-2026.md`](TODO-21-10-2026.md) §3) is enough to make every import
+D0 fix in [`TODO-21-10-2026.md`](../record/TODO-21-10-2026.md) §3) is enough to make every import
 in the first column resolve, including the two hard `from PySide` imports. It is **not**
 enough to run the GUI suites, and it is not enough for any code path that constructs
 a widget: the product uses 36 `QtWidgets` classes, 15 `QtCore` and 7 `QtGui` names,
@@ -592,7 +592,7 @@ The sensible split is:
   `gui.qt` (directly or through `mcp.api`/`face_browser`/`tools`) load, so the Part
   baseline is not blocked on Qt. Several import it only inside one test.
 - **Shim the stock dialogs; port the ones a shim cannot carry** for S5. The shell
-  already hosts typed modal dialogs (`docs/actions-and-tools.md` §6), so a `QDialog`
+  already hosts typed modal dialogs (`docs/workbenches/actions-and-tools.md` §6), so a `QDialog`
   that only reads fields and returns them can become a `DialogSpec`. The exception is
   live-preview dialogs (`PreviewDialog` in `gui/tools/surface.py:117`, which re-renders
   on `valueChanged` via a timer): the shell’s protocol is one modal at a time and has
@@ -625,7 +625,7 @@ built; S5 is the known-expensive port and is gated on implementing the
 Deliverables:
 
 - Add a `simplecad` group to `tools/conformance.py`, alongside the `App` default
-  group and `--part` (`docs/conformance.md` §1, `tools/conformance.py:40,224`).
+  group and `--part` (`docs/workbenches/conformance.md` §1, `tools/conformance.py:40,224`).
   The group’s source is `<SIMPLECAD_DIR>/tests/unit/test_*.py`, not a subtree of
   `freecad-upstream`; the harness needs a group descriptor that carries **two path
   roots** instead of assuming `--root`.
@@ -636,7 +636,7 @@ Deliverables:
   not a gate on upstream content.
 - CI: the `geometry` job may run it **only** when the checkout exists; normal PR CI
   stays hermetic, exactly as `part_conformance` self-skips without
-  `FERROCAD_UPSTREAM` (`docs/conformance.md` §5). A scheduled/dispatch job can clone
+  `FERROCAD_UPSTREAM` (`docs/workbenches/conformance.md` §5). A scheduled/dispatch job can clone
   the pinned revision.
 
 Acceptance:
@@ -691,7 +691,7 @@ S2.1 (B-Rep construction and queries):
   `Part.Edge`, `Part.Vertex`, `Part.makeCompound`, `Part.makeShell`,
   `Part.makeSolid`, and the `Part.Compound/Shell/Solid/Edge/Wire` classes. The
   analytic classes (`Part.Line`, `Circle`, `LineSegment`, `Arc`, …) belong to the
-  `ferrocad_curves` leaf recommended by [`part-draft-layering.md`](part-draft-layering.md);
+  `ferrocad_curves` leaf recommended by [`part-draft-layering.md`](../architecture/part-draft-layering.md);
   they arrive in S3.1, not here.
 - `Shape.Faces/Edges/Vertexes/Wires/Shells/Solids`, `ShapeType`, `isValid`,
   `Volume`, `Area`, `Length`, `BoundBox`, `CenterOfMass`, `copy`, `Placement`,
@@ -873,7 +873,7 @@ Concretely:
    need the same names: `Face`, `Wire`, `Edge`, `Vertex`, `LineSegment`, `Circle`,
    `Arc`, `makePolygon`, `makeCompound`, `makeLine`, `OCCError`, plus shape queries.
    The analytic half belongs in the `ferrocad_curves` leaf recommended by
-   [`part-draft-layering.md`](part-draft-layering.md); the B-Rep half extends
+   [`part-draft-layering.md`](../architecture/part-draft-layering.md); the B-Rep half extends
    `ferrocad_geom`/`ferrocad_occt`. This is the critical path for both; doing it
    twice would be the expensive mistake.
 3. **SimpleCAD S4/S5 before Draft's GUI.** S4 builds the view facade over

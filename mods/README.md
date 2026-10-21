@@ -7,12 +7,12 @@ the UI.
 The packaging step (`cargo xtask bundle`) copies this directory into the
 distribution beside `python/`, and `AppRun` puts it on `PYTHONPATH`. A user can
 drop a new workbench into `mods/` after install, which is why the scripts ship as
-loose files rather than embedded in the binary (see `docs/distribution.md` §8).
+loose files rather than embedded in the binary (see `docs/architecture/distribution.md` §8).
 
 Populate it with `cargo xtask mods`, which fetches selected upstream FreeCAD
 workbenches (default `Draft`, at the pinned revision `FERROCAD_FREECAD_TAG`) and
 copies them in as loose files. Authored workbenches are part of the tree and are
 tracked normally; fetched upstream trees are gitignored (the `.gitignore`
 negates `mods/GridOverlay/` and `mods/GridOverlayCoin/`, the two forks in
-`docs/grid-overlay-plan.md` §5 G5–G6). The release workflow runs
+`docs/workbenches/grid-overlay-plan.md` §5 G5–G6). The release workflow runs
 `cargo xtask mods` before packaging.

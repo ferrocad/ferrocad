@@ -4,7 +4,7 @@ The mod is a thin client of the semantic grid API: ``Activated`` returns the
 shell's dialog spec, ``on_accept`` writes ``FreeCAD.Grid`` and returns its
 ``{"view": …}`` request, and a build without ``FreeCAD.Grid`` reports cleanly
 instead of falling back to the upstream Coin/GLSL path. See
-``docs/grid-overlay-plan.md`` §3.2–§3.3, §5 G6.
+``docs/workbenches/grid-overlay-plan.md`` §3.2–§3.3, §5 G6.
 
 ``InitGui.py`` is loaded **by path** with ``importlib`` so the test does not
 depend on ``sys.path`` order (or on the shell's workbench loader).
@@ -28,7 +28,7 @@ MOD_PATH = (
 )
 COMMAND = "GridOverlay_Settings"
 
-#: The keys the shell's ``ViewRequest`` understands (``docs/actions-and-tools.md`` §7).
+#: The keys the shell's ``ViewRequest`` understands (``docs/workbenches/actions-and-tools.md`` §7).
 VIEW_KEYS = {
     "grid",
     "axis_cross",

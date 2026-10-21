@@ -2,7 +2,7 @@
 
 Status: spike report (2026-10-06), companion to [`distribution.md`](distribution.md)
 (the CPython/bundling model) and [`occt-history-spike.md`](occt-history-spike.md)
-(why OCCT, and the binding). Prototype: [`../spikes/occt-bundling/`](../spikes/occt-bundling/).
+(why OCCT, and the binding). Prototype: [`../spikes/occt-bundling/`](../../spikes/occt-bundling).
 
 We bundle OCCT the way we bundle CPython: **fetch/produce a per-platform runtime once,
 stage only what the binary loads, and have the launcher point at it.** No user installs
@@ -25,7 +25,7 @@ The staged payload grows by the toolkit set only — not by all of OCCT.
 
 The correct seed is the **built binary's `DT_NEEDED`**, not the toolkit list in
 `opencascade-sys`'s `build.rs`: the linker keeps only the toolkits the app references.
-[`spikes/occt-bundling/stage_occt.py`](../spikes/occt-bundling/stage_occt.py) walks
+[`spikes/occt-bundling/stage_occt.py`](../../spikes/occt-bundling/stage_occt.py) walks
 `DT_NEEDED` transitively and copies each dependency that lives in the prefix, under its
 exact soname.
 
@@ -107,7 +107,7 @@ the same fetched prefix, so there is one source of truth.
 
 OCCT is **LGPL-2.1-or-later with an exception** permitting static/dynamic linking
 without the LGPL's usual relinking obligation. It combines cleanly with FerroCAD's
-LGPL-3.0-or-later (see [`rewrite-strategy.md`](rewrite-strategy.md)). Ship the OCCT
+LGPL-3.0-or-later (see [`rewrite-strategy.md`](../direction/rewrite-strategy.md)). Ship the OCCT
 license text (and the exception) under `LICENSES/`, exactly as we ship the PSF text for
 CPython. Confirm the exact exception wording at adoption time.
 

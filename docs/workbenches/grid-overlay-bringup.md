@@ -12,11 +12,11 @@ on wgpu, and what it can prove is narrower and more useful than "feature parity"
 that an external Mod's Coin tree extracts and that FerroCAD can run a caller-supplied
 WGSL program. The document decides that with costs, and says what it cannot prove.
 
-Companion to [`axis-origin-grid.md`](axis-origin-grid.md) (the spatial reference
-model, G0–G5 as built), [`inventor-plan.md`](inventor-plan.md) (the emulation roadmap
-and §8's extraction caveat), [`stage.md`](stage.md) (the declarative producer),
+Companion to [`axis-origin-grid.md`](../interaction/axis-origin-grid.md) (the spatial reference
+model, G0–G5 as built), [`inventor-plan.md`](../viewport/inventor-plan.md) (the emulation roadmap
+and §8's extraction caveat), [`stage.md`](../viewport/stage.md) (the declarative producer),
 [`qt-strategy.md`](qt-strategy.md) (the split plane this addon tests badly), and
-[`visual-language.md`](visual-language.md) (the tokens its defaults contradict).
+[`visual-language.md`](../interaction/visual-language.md) (the tokens its defaults contradict).
 
 **Method.** Static reading only. No test, cargo command, addon run, GPU, or display
 was used. Measured numbers come from `wc`, `grep`, `find`, `du`, `git` and
@@ -687,7 +687,7 @@ becomes optional for this group. A `run_probe()` returns the same outcome dict
 Because the pure-Python harness interpreter has no `pivy`, the line-accurate run is
 supplied in-process by a Rust test that mirrors `part_conformance.rs`: set
 `FERROCAD_ADDON`, `boot()` the extension, call `ferrocad_inventor_py::install`, then
-run the harness. This is the same "harness + image" split `docs/conformance.md` §3
+run the harness. This is the same "harness + image" split `docs/workbenches/conformance.md` §3
 already uses for `--part`. The probe must run **once per interpreter**: `addCommand`
 rejects a duplicate id (`python/FreeCADGui/__init__.py:78-79`), so a second exec in
 the same process would fail at `InitGui.py:687` for the wrong reason.

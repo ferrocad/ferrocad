@@ -2,9 +2,9 @@
 
 Status: **decision** (2026-10-12). Companion to
 [`inventor-renderer.md`](inventor-renderer.md) (the render stack),
-[`navicube-spec.md`](navicube-spec.md) / [`navicube-plan.md`](navicube-plan.md) (the
+[`navicube-spec.md`](../interaction/navicube-spec.md) / [`navicube-plan.md`](../interaction/navicube-plan.md) (the
 `SoNaviCube` bridge this enables), [`stage.md`](stage.md), and
-[`architecture.md`](architecture.md) (crate layering).
+[`architecture.md`](../architecture.md) (crate layering).
 
 ## 1. Why
 
@@ -81,7 +81,7 @@ compile_with(scene) ─▶ (RenderQueue, Directives)
 
 Directives carry **what and where**, never **how it looks**. Styling — colours, opacity,
 line width — is owned by the Rust core: the viewport **theme** over the draw primitives
-(see [`navicube-spec.md`](navicube-spec.md) §5). Consequence for the legacy `SoNaviCube`:
+(see [`navicube-spec.md`](../interaction/navicube-spec.md) §5). Consequence for the legacy `SoNaviCube`:
 its `baseColor` / `emphaseColor` / `hiliteColor` (+ alphas) and `borderWidth` are
 **accepted but ignored** for now — the theme wins. `showCoordinateSystem` (a feature flag,
 not styling) and the axis colours are deferred with the axes themselves.

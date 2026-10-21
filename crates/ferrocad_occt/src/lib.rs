@@ -9,13 +9,13 @@
 //!
 //! The seam means nothing below the application depends on this crate: the document
 //! core talks to a `dyn GeometryBackend`, and the application installs
-//! [`OcctBackend`] at startup. See `docs/occt-integration.md`.
+//! [`OcctBackend`] at startup. See `docs/architecture/occt-integration.md`.
 //!
 //! # Building
 //!
 //! This crate needs OCCT 7.8+ and is **not** in the workspace's `default-members`,
 //! so an ordinary `cargo build`/`cargo test` does not require a kernel. To build it,
-//! point two environment variables at an OCCT prefix (see `docs/occt-bundling.md`):
+//! point two environment variables at an OCCT prefix (see `docs/architecture/occt-bundling.md`):
 //!
 //! ```sh
 //! export OCCT_INCLUDE_DIR=<prefix>/include/opencascade   # for build.rs

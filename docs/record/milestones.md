@@ -1,8 +1,8 @@
 # Milestones, decisions & the M3 plan
 
-Status: living record (2026-10-02). Complements [`rewrite-strategy.md`](rewrite-strategy.md)
-(direction) and [`python-ui-research.md`](python-ui-research.md) (evidence). The code lives in the
-[repository](..).
+Status: living record (2026-10-02). Complements [`rewrite-strategy.md`](../direction/rewrite-strategy.md)
+(direction) and [`python-ui-research.md`](../interaction/python-ui-research.md) (evidence). The code lives in the
+[repository](../..).
 
 **Current state:** M0–M3 complete; **M4 in progress** (sixteen slices done) and the MVP slices
 (A1, A2, B1, B2, C1, D1, D2, B4) landing. The pure-Rust `ferrocad_core` + PyO3 `ferrocad` extension
@@ -162,7 +162,7 @@ literals, `0`, `false`, …), generates attribute getters/setters (`Final` → r
 
 **Goal:** run upstream headless tests against our `FreeCAD` and make the parity gap measurable.
 
-Setup and the current runbook: [`conformance.md`](conformance.md).
+Setup and the current runbook: [`conformance.md`](../workbenches/conformance.md).
 
 **Built** (`tools/conformance.py`, `tools/test_conformance.py`): a runner that loads a curated set
 of `src/Mod/Test` files (as modules) against our `FreeCAD`, runs their `unittest` cases, and
@@ -578,7 +578,7 @@ will land.
 
 ### MVP slice A1 — object state, property status & touch ✅
 
-**Goal:** the model foundations the MVP needs (see [`mvp-path.md`](mvp-path.md) §6):
+**Goal:** the model foundations the MVP needs (see [`mvp-path.md`](../direction/mvp-path.md) §6):
 `DocumentObject.State`, per-property status flags, and touch-on-assign.
 
 **Built:**
@@ -687,7 +687,7 @@ green: `UndoRedoCases.testUndo`, `UndoRedoCases.testUndoClear`, `UndoRedoCases.t
 
 ### App shell S1 — skeleton window ✅
 
-**Goal:** first step of the MVP app shell ([`app-shell-vision.md`](app-shell-vision.md) §5 S1): a
+**Goal:** first step of the MVP app shell ([`app-shell-vision.md`](../direction/app-shell-vision.md) §5 S1): a
 window with a title bar over the live document, with the interpreter wired up.
 
 **Built:**
@@ -776,7 +776,7 @@ Chapter 1.
 
 ### App shell S1+++ — the console as a text area; the `Edit` component ✅
 
-**Built** (slices B–D of [`input-components.md`](input-components.md)):
+**Built** (slices B–D of [`input-components.md`](../interaction/input-components.md)):
 - **`crates/ferrocad_gpui/src/textarea.rs`** — `TextAreaState`, a scrollable text area with a
   read-only prefix and an editable tail over one `TextBuffer`. Every line but the last renders as a
   muted read-only run; the last line is a muted prefix run plus a normal editable run, with the
@@ -795,7 +795,7 @@ now types into the text area and submits). `cargo build --workspace --all-target
 
 ### App shell S1++++ — editable properties in one transaction ✅
 
-**Built** (slice E of [`input-components.md`](input-components.md)):
+**Built** (slice E of [`input-components.md`](../interaction/input-components.md)):
 - **`python/ferrocad_shell.set_property`** — sets one property from its editor string inside
   `openTransaction` / `commitTransaction`, then `recompute()`; returns `{ok, error}`. It refuses
   properties that are not editable and those driven by an expression, and coerces the text by the
@@ -844,7 +844,7 @@ fills the gap that made packaging abrupt: it covers the extension-vs-embedding s
 raw C-API vs a C ABI loaded with `ctypes` (a trade-off table), the primary/fallback backend design,
 `extension-module` linking, `abi3`, and errors/panics/GIL. It has no program, because the code it
 describes is `ferrocad_py`/`ferrocad_ctypes`; the longer version is the new
-[`python-bindings.md`](python-bindings.md). Chapters 15–16 renumber accordingly: Chapter 15
+[`python-bindings.md`](../architecture/python-bindings.md). Chapters 15–16 renumber accordingly: Chapter 15
 ("Testing Without a Display") is `ch15_testing.rs`, whose 7 tests exercise the harness. Chapter 16
 ("Packaging and Distribution") has no program, by design: its artifacts are configuration (a
 release profile, a `.desktop` entry, and FerroCAD's real `pyproject.toml`/maturin setup and CI,
@@ -863,7 +863,7 @@ different bridge. PyO3 covers every capability it had (and more), `abi3` already
 per-CPython-version coupling, and "no Python headers" is a build-environment constraint, not a
 deployment requirement: FreeCAD is a Python application, so a CPython and its headers are always
 present (CI installs `python3-dev`). The call-path diagrams and the full argument are in the new
-[`architecture.md`](architecture.md).
+[`architecture.md`](../architecture.md).
 
 **Touched.** `Cargo.toml` (workspace members), `build.sh`, `.github/workflows/ci.yml`,
 `README.md`, `python-bindings.md`, `mvp-path.md` (criterion 4 dropped), `rewrite-strategy.md`,
@@ -966,7 +966,7 @@ paths, RootObjects/topological sort) and 107 Python (+3).
 **Goal:** a workbench-facing Coin3D/Inventor replacement — a Rust scene core, a `wgpu`
 backend, a `gpui` viewport, and a `pivy.coin`-compatible Python facade, so workbench code
 that builds scene graphs (`from pivy import coin`) keeps working. Plan and status:
-[`inventor-plan.md`](inventor-plan.md).
+[`inventor-plan.md`](../viewport/inventor-plan.md).
 
 **Built:**
 - **Renderer (prerequisite, commit `63bc59b`):** `ferrocad_inventor` (node AST, state
@@ -1009,7 +1009,7 @@ extracted `Scene` is a copy).
 ### Navigation cube (NaviCube) — slices N1–N4 ✅
 
 **Goal:** the viewer-corner orientation gizmo (FreeCAD's `Gui::NaviCube`), as the
-first real overlay on the render stack. Plan and status: [`navicube.md`](navicube.md).
+first real overlay on the render stack. Plan and status: [`navicube.md`](../interaction/navicube.md).
 
 **Built:**
 - **Renderer (N1):** a device-pixel `Rect` and a **rect-relative pick**
@@ -1055,7 +1055,7 @@ These are no longer open questions — the spike produced evidence:
 
 1. **Python ↔ Rust mechanism = PyO3** (extension + embedding), with a hard dependency on the
    CPython headers. The temporary C ABI + `ctypes` fallback was removed (see the latest milestone
-   and [`architecture.md`](architecture.md)). *Evidence:* M1 and the spike run both directions.
+   and [`architecture.md`](../architecture.md)). *Evidence:* M1 and the spike run both directions.
 2. **UI toolkit = `bite-gpui` 1.21.0.** Modular tiers (`bite-gp-types/-engine/-platform/-authoring/
    -runtime`) and a headless test harness are both confirmed.
 3. **UI architecture = Python-declarative, Rust-rendered (Blender-style), retained tree + diffed
@@ -1176,13 +1176,13 @@ flowchart TD
 
 ## 4. Next action
 
-The MVP is now defined: see **[`mvp-path.md`](mvp-path.md)** — *a headless, geometry-free parametric
+The MVP is now defined: see **[`mvp-path.md`](../direction/mvp-path.md)** — *a headless, geometry-free parametric
 document engine exposed as the drop-in `FreeCAD` package*, measured by taking upstream
 `Mod/Test/Document.py` to parity **excluding** the C++ `App::FeatureTest` fixture (~32 tests).
 Conformance is **169 passed** (was 146) · 40 failed · 6 errored; `Document.py` 96/137, of whose 39
 failures most are the C++ `App::FeatureTest*` fixture (§7).
 
-MVP slices, in order (details and test yields in [`mvp-path.md`](mvp-path.md) §6):
+MVP slices, in order (details and test yields in [`mvp-path.md`](../direction/mvp-path.md) §6):
 
 1. **A1 · object state & property status** — ✅ **done** (slice A1): `State`, property status flags,
    `getPropertyStatus`/`setPropertyStatus`/`getTypeOfProperty`, touch-on-assign, `Prop_NoPersist`.
@@ -1207,7 +1207,7 @@ MVP slices, in order (details and test yields in [`mvp-path.md`](mvp-path.md) §
    **C2/C3** and **D3**.
 
 **After the headless MVP — the app shell.** The next major chunk turns the engine into an
-interactive window: see **[`app-shell-vision.md`](app-shell-vision.md)**. A single `bite-gpui`
+interactive window: see **[`app-shell-vision.md`](../direction/app-shell-vision.md)**. A single `bite-gpui`
 window that embeds CPython and drives the engine through the `FreeCAD` API, with five pillars —
 **open/close/load/save**, **undo/redo**, a **DOM-like inspector**, a **property editor**, and a
 **Python console** — sliced S1 (shell skeleton) → S2 (document lifecycle + commands, built on the
@@ -1220,7 +1220,7 @@ and the `FreeCADInitTests` package-init shim (stretch).
 **Geometry track (prep, outside the MVP slices).** The value types were extracted into
 `ferrocad_types` and the kernel-independent seam now exists in `ferrocad_geom` (`Shape`,
 `History`/`ElementRef`/`ElementMap`, `GeometryBackend`, `NullBackend`). See
-[`occt-integration.md`](occt-integration.md) §8: steps 1–3 done — `ferrocad_occt` now
+[`occt-integration.md`](../architecture/occt-integration.md) §8: steps 1–3 done — `ferrocad_occt` now
 implements `GeometryBackend` (box/fuse/cut/fillet/place) via `opencascade-sys` + the
 sibling history bridge, verified against OCCT 7.8.1 and tested by a `geometry` CI job.
 The kernel lives in the workbench, **not core**: `ferrocad_core` stays geometry-agnostic.
@@ -1275,7 +1275,7 @@ wheel (also bundling OCCT).
 
 **`ferrocad_parametric` (the first edition).** Wired `Part` into an application. The base
 `ferrocad` crate is published, and Cargo rewrites path deps to registry versions on publish,
-so it cannot reference the unpublished OCCT-backed crates; per [`repackaging.md`](repackaging.md)
+so it cannot reference the unpublished OCCT-backed crates; per [`repackaging.md`](../architecture/repackaging.md)
 a Part-enabled app is therefore an **edition**. `ferrocad_parametric` is a thin binary
 (`append_to_inittab!(Part)` then `ferrocad::run_as`), and the base app's entry point moved
 into `ferrocad::run_as(app_name)` so editions stay thin. `cargo run -p ferrocad_parametric`
@@ -1321,7 +1321,7 @@ an unpacked artifact. `release.yml` links the Windows CRT statically and runs th
 the unpacked zip; `ci.yml` adds a `windows` job that runs the `ferrocad_widgets`/`ferrocad_gpui`
 tests, the only path that exercises the `comctl32` v6 manifest. See `distribution.md` §6.
 
-**Publishing the first edition (planned).** [`edition-publishing.md`](edition-publishing.md)
+**Publishing the first edition (planned).** [`edition-publishing.md`](../architecture/edition-publishing.md)
 settles how `ferrocad_parametric` ships: editions are artifacts, not crates; the edition is a
 different Rust composition (a linked `Part`/OCCT binary), so it needs its own payload with an
 OCCT `lib/` closure. The plan covers `xtask occt`, `bundle --edition`, the launcher library
@@ -1339,7 +1339,7 @@ sample cube highlights it — and `Shell::enable_viewport` shows it in the 3D pa
 (best-effort; no GPU falls back to a placeholder). The whole roundtrip is proven by
 `cargo run -p ferrocad_gpui --example inventor_roundtrip` (windowed and
 `--headless out.png`). Design decisions recorded in
-[`inventor-renderer.md`](inventor-renderer.md): the `DrawBatch` boundary, the
+[`inventor-renderer.md`](../viewport/inventor-renderer.md): the `DrawBatch` boundary, the
 physical-pixel/DPI contract (conversion only at the host, matching FreeCAD), and
 the CPU pick. Verified: inventor/wgpu/gpui tests green (incl. a headless shell
 paint that attaches the viewport when a GPU is present). Next: layout-driven

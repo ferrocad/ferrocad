@@ -1,6 +1,6 @@
 # Grid Overlay (Coin) — the A1 fork
 
-The **A1** form of the grid-overlay fork (`docs/grid-overlay-plan.md` §3.2, G5): a
+The **A1** form of the grid-overlay fork (`docs/workbenches/grid-overlay-plan.md` §3.2, G5): a
 faithful Coin/shader port of the upstream add-on, running under FerroCAD's
 pull-based overlay bridge. It is a proving slice, not the shipping form — the
 shipping form is `mods/GridOverlay/` (A2, a client of `FreeCAD.Grid`).

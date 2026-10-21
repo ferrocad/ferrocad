@@ -7,7 +7,7 @@
 //!
 //! The newtype implements `Clone`/`Debug`/`PartialEq`/serde **by hand** so that
 //! `Property`'s own derives stay intact (serde only needs the field type to implement
-//! the traits). See `docs/property-value-extension.md`.
+//! the traits). See `docs/architecture/property-value-extension.md`.
 
 use std::any::Any;
 use std::fmt;

@@ -19,7 +19,7 @@ use ferrocad_types::Matrix4;
 use crate::batch::PickId;
 use crate::geometry::Texture2;
 
-/// The parameter surface of the fixed program ABI (`docs/grid-overlay-plan.md` §3.4).
+/// The parameter surface of the fixed program ABI (`docs/workbenches/grid-overlay-plan.md` §3.4).
 ///
 /// A WGSL uniform block has a static layout, so an authored program cannot invent
 /// names: the compiler maps the Coin `SoShaderParameter*` nodes onto these fields by

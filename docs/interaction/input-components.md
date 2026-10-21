@@ -1,8 +1,8 @@
 # Input components: architecture (working note)
 
 Status: design + first slice (2026-10-04). Companion to
-[`app-shell-vision.md`](app-shell-vision.md) (S4 property editor, S5 console) and
-[`milestones.md`](milestones.md). This note covers the editable components: the
+[`app-shell-vision.md`](../direction/app-shell-vision.md) (S4 property editor, S5 console) and
+[`milestones.md`](../record/milestones.md). This note covers the editable components: the
 single-line field, the console text area with a read-only transcript, and how the
 property editor commits edits.
 

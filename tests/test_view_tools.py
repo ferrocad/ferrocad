@@ -3,7 +3,7 @@
 A `{"view": ...}` request is presentation-only; the shell applies it and mirrors the
 result to `FreeCADGui.ViewState`, which a checkable command reads in `IsChecked`.
 A `{"tool": id}` request names a Rust tool the edition registered. See
-`docs/actions-and-tools.md` §7.
+`docs/workbenches/actions-and-tools.md` §7.
 """
 
 import json

@@ -2,7 +2,7 @@
 
 Status: research/planning (2026-10-02). Companion to
 [`rewrite-strategy.md`](rewrite-strategy.md) (direction) and
-[`milestones.md`](milestones.md) (record). This note defines the minimum viable
+[`milestones.md`](../record/milestones.md) (record). This note defines the minimum viable
 product, the smallest model/workflow/persistence it needs, and the slices that get
 there.
 
@@ -139,7 +139,7 @@ This exercises every axis below and is the acceptance demo for the MVP
    (`tests/test_mvp_workflow.py`).
 4. ~~**The `ctypes` fallback runs the same MVP script** (backend-agnostic parity).~~
    Dropped: the fallback is a second, narrower model, not a transport for the
-   same core, and is slated for removal (see [`architecture.md`](architecture.md) §4-5).
+   same core, and is slated for removal (see [`architecture.md`](../architecture.md) §4-5).
 5. *(Stretch)* `TestIntPairList` fully green (`Touched` state) and the `FreeCADInitTests`
    package-init contract passes.
 
@@ -309,9 +309,9 @@ take `Document.py` to 137/137.
 ## 9. Relation to other docs
 
 - [`rewrite-strategy.md`](rewrite-strategy.md) — overall direction and risk register.
-- [`milestones.md`](milestones.md) — the M0→M4 record and per-slice detail.
+- [`milestones.md`](../record/milestones.md) — the M0→M4 record and per-slice detail.
 - [`app-shell-vision.md`](app-shell-vision.md) — the next chunk after this headless MVP: the
   interactive dev-tool window (inspector, property editor, Python console, undo/redo, open/save)
   built on this engine.
-- [`python-ui-research.md`](python-ui-research.md) — the M5 UI/Python-host direction
+- [`python-ui-research.md`](../interaction/python-ui-research.md) — the M5 UI/Python-host direction
   (separate from this MVP).

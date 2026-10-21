@@ -1,8 +1,8 @@
 # The toy workbench: a complete workbench, without a kernel
 
 Status: reference (2026-10-20). Companion to
-[`architecture.md`](architecture.md) §10, [`gizmo-manipulators.md`](gizmo-manipulators.md)
-and [`repackaging.md`](repackaging.md).
+[`architecture.md`](../architecture.md) §10, [`gizmo-manipulators.md`](../interaction/gizmo-manipulators.md)
+and [`repackaging.md`](../architecture/repackaging.md).
 
 ## Why it exists
 

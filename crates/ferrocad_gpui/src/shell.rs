@@ -5,7 +5,7 @@
 //! the tree, editor and console are already driven by the live document through
 //! `python/ferrocad_shell`; the viewport renders the sample scene until the geometry
 //! kernel/`ViewProvider`s produce real geometry; richer widgets, commands and menus
-//! come in later slices (see `docs/app-shell-vision.md`).
+//! come in later slices (see `docs/direction/app-shell-vision.md`).
 
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};

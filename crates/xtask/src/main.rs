@@ -10,7 +10,7 @@
 //! Python facade and scripts, the `mods/` workbenches, the license and, when
 //! available, a bundled Python runtime. Per-platform packaging (AppImage, `.app`,
 //! portable Windows) lives in `packaging/` and wraps this payload; see
-//! `docs/distribution.md`. The app binary links the PyO3 bindings and registers
+//! `docs/architecture/distribution.md`. The app binary links the PyO3 bindings and registers
 //! them as a built-in `ferrocad` module, so no separate extension file ships.
 //!
 //! `python` fetches a `python-build-standalone` runtime and caches it under
@@ -410,7 +410,7 @@ fn ensure_runtime(root: &Path) -> Result<PathBuf, String> {
 ///
 /// Uses a blobless sparse checkout, so only the selected `src/Mod/<WB>` trees are
 /// downloaded. The result is loose files, as FreeCAD ships them; `bundle` copies
-/// them into the payload. See `docs/distribution.md`.
+/// them into the payload. See `docs/architecture/distribution.md`.
 fn fetch_mods(opts: &Options) -> Result<(), String> {
     let root = workspace_root();
     let tag = opts

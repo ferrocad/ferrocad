@@ -5,7 +5,7 @@ sparse-checked out into `freecad-upstream/` (reference only — see *Appendix: t
 
 > **Superseded (2026-10-01).** The recommendation in this document (Option A: keep Coin3D
 > and replace only the Qt host) has been **rejected** in favour of a clean-room Rust rewrite.
-> See [`rewrite-strategy.md`](rewrite-strategy.md) for the authoritative direction. The
+> See [`rewrite-strategy.md`](../direction/rewrite-strategy.md) for the authoritative direction. The
 > measurements and risk analysis below are retained and carried into that plan as its risk
 > register; only the *recommendation* (§0, §5 Option A) is obsolete.
 

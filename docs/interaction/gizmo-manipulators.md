@@ -6,8 +6,8 @@ Status: **T1 (Spatial Transactor math), T2 (analytic screen-space hit-testing), 
 dress-up arc) is built: selection, tangent chains, the parametric
 `Part::Fillet`/`Part::Chamfer` features, and the arc scrubber that drives them.**
 
-Companions: [`stage.md`](stage.md) (the stage gizmo), [`geometry-and-topology.md`](geometry-and-topology.md)
-(the `ElementRef`/`ElementMap` seam), [`occt-integration.md`](occt-integration.md) (the
+Companions: [`stage.md`](../viewport/stage.md) (the stage gizmo), [`geometry-and-topology.md`](../architecture/geometry-and-topology.md)
+(the `ElementRef`/`ElementMap` seam), [`occt-integration.md`](../architecture/occt-integration.md) (the
 kernel), and [`navicube-gpui-design.md`](navicube-gpui-design.md) (the overlay visual
 language this suite shares).
 

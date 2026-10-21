@@ -15,7 +15,7 @@ documentation = "https://docs.rs/ferrocad"
 # would drop `python/`/`mods/`, which are gitignored at the workspace root. The
 # publish staging step copies them in beside this manifest; listing them here
 # forces them into the `.crate` tarball even though git ignores them. See
-# ../docs/distribution.md.
+# ../docs/architecture/distribution.md.
 include = [
     "/src/**",
     "/build.rs",

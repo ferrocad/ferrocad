@@ -7,7 +7,7 @@
 //! This crate is the **composition root** for Part: it is the one place that links a
 //! concrete kernel and calls [`ferrocad_part::register`], so Part itself stays
 //! kernel-agnostic and `ferrocad_core` stays geometry-free (see
-//! `docs/occt-integration.md` §4).
+//! `docs/architecture/occt-integration.md` §4).
 //!
 //! It exposes two things to Python:
 //!

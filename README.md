@@ -20,9 +20,9 @@ riskiest assumption of the rewrite plan: *that a Python script written against
 FreeCAD's public `App` API can be served by a Rust implementation instead of the
 C++ one, without changing the script.*
 
-**Roadmap.** The headless engine MVP is defined in [docs/mvp-path.md](docs/mvp-path.md), the
-interactive window in [docs/app-shell-vision.md](docs/app-shell-vision.md), and the full milestone
-record in [docs/milestones.md](docs/milestones.md). Next: lock the MVP demo, then build the
+**Roadmap.** The headless engine MVP is defined in [docs/direction/mvp-path.md](docs/direction/mvp-path.md), the
+interactive window in [docs/direction/app-shell-vision.md](docs/direction/app-shell-vision.md), and the full milestone
+record in [docs/record/milestones.md](docs/record/milestones.md). Next: lock the MVP demo, then build the
 `FreeCADGui` workbench host (`Workbench`, commands, workbench lifecycle) so an unmodified upstream
 workbench can load.
 
@@ -160,7 +160,7 @@ python3 tools/test_inventory.py                                    # .pyi parser
 python3 tools/test_codegen.py                                      # codegen logic (M3c)
 python3 tools/test_conformance.py                                  # harness helpers (M3d)
 PYTHONPATH=python python3 examples/file_roundtrip.py               # save/open a document (file load)
-PYTHONPATH=python python3 examples/mvp_workflow.py                # the MVP acceptance demo (docs/mvp-path.md)
+PYTHONPATH=python python3 examples/mvp_workflow.py                # the MVP acceptance demo (docs/direction/mvp-path.md)
 . ../.toolchain/env.sh && cargo test -p ferrocad_gpui              # shell library tests (4)
 ```
 
@@ -210,7 +210,7 @@ app (`ferrocad`) publish to **crates.io**, and the wheel publishes to **PyPI**. 
 [`.github/workflows/crates.yml`](.github/workflows/crates.yml) (publish order, payload staging) and
 [`.github/workflows/release.yml`](.github/workflows/release.yml) (the platform artifacts). The
 `abi3`/`extension-module` notes, the publish order, and the staging commands are in
-[`docs/releasing.md`](docs/releasing.md) and [`docs/distribution.md`](docs/distribution.md).
+[`docs/architecture/releasing.md`](docs/architecture/releasing.md) and [`docs/architecture/distribution.md`](docs/architecture/distribution.md).
 
 `cargo install ferrocad` produces a **self-contained** binary: `crates/ferrocad` embeds the workspace
 `python/` (and, when published with workbenches, `mods/`) and unpacks it on first run, because Cargo has
@@ -266,8 +266,8 @@ same core but a second, narrower model, and every capability it had is available
 PyO3. See [`docs/architecture.md`](docs/architecture.md) for the call-path diagrams
 and the decision.
 
-See [`docs/rewrite-strategy.md`](docs/rewrite-strategy.md) for the direction and
-[`docs/coin-bridge-reuse-assessment.md`](docs/coin-bridge-reuse-assessment.md)
+See [`docs/direction/rewrite-strategy.md`](docs/direction/rewrite-strategy.md) for the direction and
+[`docs/viewport/coin-bridge-reuse-assessment.md`](docs/viewport/coin-bridge-reuse-assessment.md)
 for the underlying analysis.
 
 ## What is implemented vs. not
@@ -314,10 +314,10 @@ Python-declared-UI ↔ `bite-gpui` round-trip headlessly.
 
 The plan, architecture and slices (S1 shell skeleton → S2 lifecycle + commands → S3 inspector
 → S4 property editor → S5 console → S6 polish) are in
-[`docs/app-shell-vision.md`](docs/app-shell-vision.md). The 3D viewport now docks into
+[`docs/direction/app-shell-vision.md`](docs/direction/app-shell-vision.md). The 3D viewport now docks into
 the shell's pane as an image-path presenter (readback → `RenderImage`) drawing a sample
 Inventor scene; the full `scenix`/`wgpu` viewport and the overlay/NaviCube work are in
-[`docs/inventor-renderer.md`](docs/inventor-renderer.md).
+[`docs/viewport/inventor-renderer.md`](docs/viewport/inventor-renderer.md).
 
 **S1 is implemented** (`crates/ferrocad_gpui`): a titled `bite-gpui` window that boots an
 embedded CPython interpreter, creates a sample document, and shows a model inspector, a

@@ -14,7 +14,7 @@
 //! Part depends **only on the seam** ([`ferrocad_geom`]), never on a concrete kernel:
 //! the application composes it with one — `ferrocad_part::register(Arc::new(OcctBackend::new()))`.
 //! That is what lets the kernel be replaced (or swapped per edition) without touching
-//! Part, and keeps `ferrocad_core` geometry-agnostic. See `docs/occt-integration.md`.
+//! Part, and keeps `ferrocad_core` geometry-agnostic. See `docs/architecture/occt-integration.md`.
 //!
 //! # Building
 //!

@@ -3,7 +3,7 @@
 Status: **specification** (2026-10-12), producer-neutral, refined against FreeCAD
 upstream. Companions: [`navicube.md`](navicube.md) (the as-built record, N1–N4b),
 [`navicube-plan.md`](navicube-plan.md) (the slice plan that makes this spec
-producer-independent), and [`inventor-renderer.md`](inventor-renderer.md) (the render
+producer-independent), and [`inventor-renderer.md`](../viewport/inventor-renderer.md) (the render
 stack it rides).
 
 This note states the NaviCube **normatively**: the coordinate conventions, the piece
@@ -49,7 +49,7 @@ into the existing `StateSnapshot` fields.
 
 ## 2. Conventions
 
-**Axes.** The world is **Z-up** (`docs/axis-origin-grid.md` §2 is authoritative): the
+**Axes.** The world is **Z-up** (`docs/interaction/axis-origin-grid.md` §2 is authoritative): the
 ground is the `XY` plane and `+Z` is up. A `Piece` is a *signed world direction* in this
 frame (each component −1, 0 or +1): `TOP = +Z`, `BOTTOM = −Z`, `FRONT = −Y` (FreeCAD's
 front), `BACK = +Y`, `RIGHT = +X`, `LEFT = −X`.
@@ -62,7 +62,7 @@ view is therefore the canonical **top** view (eye `+Z`, screen-up `+Y`).
 
 **Pixels.** Every position below is a **device (physical) pixel** unless it is called a
 *logical* pixel. The renderer, the pick buffer, the overlay `Rect`, and the facade all
-speak device pixels (see [`inventor-renderer.md`](inventor-renderer.md) §4). The host
+speak device pixels (see [`inventor-renderer.md`](../viewport/inventor-renderer.md) §4). The host
 converts window → element → device at the gpui boundary; the controller converts a
 viewport-local logical point to device through `Camera.viewport`. Device positions and
 `Rect`s use the **bottom-left origin** (Coin); logical positions use the **top-left
@@ -588,7 +588,7 @@ The reference is the inventor producer; the conformance test lives with the widg
 - A **text/glyph-run** node in the 3D overlay (compass labels are gpui text over the
   image; face letters are filled 3D triangle geometry).
 - The **`SoNaviCube` Python node** — a scene node driving the cube through the neutral
-  **directives** channel, on either producer (see [`directives.md`](directives.md) and
+  **directives** channel, on either producer (see [`directives.md`](../viewport/directives.md) and
   [`navicube-plan.md`](navicube-plan.md) V4).
 
 ## 13. Upstream mapping and reference values
@@ -634,7 +634,7 @@ Front, Top, Right, Rear, Bottom, Left.
 
 ## 14. Current build and deviations from upstream
 
-The current build (`docs/navicube.md` §7) realises §2–§9 and §11 for the
+The current build (`docs/interaction/navicube.md` §7) realises §2–§9 and §11 for the
 `ferrocad_inventor` producer; [`navicube-plan.md`](navicube-plan.md) makes it
 producer-neutral. Structural deviations to reconcile (a fidelity backlog, not blockers) —
 **appearance differences are theme choices, recorded in §13, not deviations**:

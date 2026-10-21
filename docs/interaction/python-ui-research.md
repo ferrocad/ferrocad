@@ -7,7 +7,7 @@ Status: research note (2026-10-01). Answers two questions:
 2. **What would a Blender-style, fully Python-built UI cost us**, and how does it map onto the
    Rust core + `bite-gpui` direction?
 
-Supporting context: [`rewrite-strategy.md`](rewrite-strategy.md).
+Supporting context: [`rewrite-strategy.md`](../direction/rewrite-strategy.md).
 
 ---
 

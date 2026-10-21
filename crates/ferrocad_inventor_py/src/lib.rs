@@ -14,7 +14,7 @@
 //! [`ferrocad_inventor::Scene`], and [`dispatch_event`] delivers picked input to the
 //! `SoEventCallback` nodes. Each class wraps the existing, owned
 //! [`ferrocad_inventor`] `Node`; the generational arena is deferred (see
-//! `docs/inventor-plan.md`).
+//! `docs/viewport/inventor-plan.md`).
 
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Mutex, OnceLock};
@@ -532,7 +532,7 @@ pub fn coin(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<SoType>()?;
     fields::register(m)?;
     events::register(m)?;
-    // The pull-based overlay bridge (`docs/grid-overlay-plan.md` §3.2, G5). The
+    // The pull-based overlay bridge (`docs/workbenches/grid-overlay-plan.md` §3.2, G5). The
     // shell reads the Rust side; these functions are the Python author surface.
     m.add_function(wrap_pyfunction!(add_overlay, m)?)?;
     m.add_function(wrap_pyfunction!(remove_overlay, m)?)?;

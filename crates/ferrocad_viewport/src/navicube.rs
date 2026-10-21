@@ -10,8 +10,8 @@
 //! legacy `pivy.coin` stack or the modern `ferrocad_stage` stack. The glass rest state
 //! (proximity wake-up, labels, the Home button, away-facing faces) and the animated
 //! snap are built; the compass ring and context menu are deferred (see
-//! `docs/navicube-gpui-design.md`, `docs/navicube.md` §4–§5 and
-//! `docs/navicube-spec.md`).
+//! `docs/interaction/navicube-gpui-design.md`, `docs/interaction/navicube.md` §4–§5 and
+//! `docs/interaction/navicube-spec.md`).
 
 mod inventor;
 mod model;
@@ -136,7 +136,7 @@ impl NaviCube {
     /// A cube placed by a [`NaviCubeDirective`]: an explicit device-pixel rectangle and
     /// orientation (or the main camera when the directive's orientation is `None`), with
     /// the directive's highlight. The viewport hosts one per `Directive::NaviCube`
-    /// ([`docs/directives.md`](../../../docs/directives.md)).
+    /// ([`docs/viewport/directives.md`](../../../docs/viewport/directives.md)).
     pub fn from_directive(viewport: Viewport, directive: NaviCubeDirective) -> Self {
         let rect = directive.rect;
         let mut cube = Self {

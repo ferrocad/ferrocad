@@ -4,14 +4,14 @@ Status: design (2026-10-21).
 
 Choose how upstream PySide workbench GUIs — Draft first — reach FerroCAD's gpui shell.
 
-Companion to [`rewrite-strategy.md`](rewrite-strategy.md) (the founding rules),
-[`python-ui-research.md`](python-ui-research.md) (Python-declarative, Rust-rendered UI),
-[`input-components.md`](input-components.md) (the widget model),
+Companion to [`rewrite-strategy.md`](../direction/rewrite-strategy.md) (the founding rules),
+[`python-ui-research.md`](../interaction/python-ui-research.md) (Python-declarative, Rust-rendered UI),
+[`input-components.md`](../interaction/input-components.md) (the widget model),
 [`actions-and-tools.md`](actions-and-tools.md) (commands and the non-blocking modal),
-[`visual-language.md`](visual-language.md) (what the UI must look like),
+[`visual-language.md`](../interaction/visual-language.md) (what the UI must look like),
 [`toy-workbench.md`](toy-workbench.md) (the generic workbench seam),
-[`app-shell-vision.md`](app-shell-vision.md) (the host), and
-[`architecture.md`](architecture.md) (the crate map).
+[`app-shell-vision.md`](../direction/app-shell-vision.md) (the host), and
+[`architecture.md`](../architecture.md) (the crate map).
 
 ---
 

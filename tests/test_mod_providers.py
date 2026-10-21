@@ -1,4 +1,4 @@
-"""Tests for the mod provider registry (``docs/mod-providers.md``).
+"""Tests for the mod provider registry (``docs/workbenches/mod-providers.md``).
 
 Two mods now implement the same feature: ``mods/GridOverlay`` draws the native
 grid (``"semantic"``) and ``mods/GridOverlayCoin`` registers a Coin overlay

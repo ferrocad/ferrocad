@@ -31,7 +31,7 @@
 //! zeroed `Frame`/`Program` pair — so the bind-group index never shifts between a
 //! program pipeline and the scene pipeline.
 //!
-//! Shadows are deferred (`docs/grid-overlay-plan.md` §3.5): the `Program` block carries
+//! Shadows are deferred (`docs/workbenches/grid-overlay-plan.md` §3.5): the `Program` block carries
 //! the zeroed 80-`vec4` shadow array and `counts.x` is 0, so `grid_overlay.wgsl`'s
 //! loop is compiled but never entered.
 

@@ -2,8 +2,8 @@
 
 Status: task (2026-10-22). Backlog entry **P1** in
 [`TODO-22-10-2026.md`](../TODO-22-10-2026.md). Companion to
-[`qt-strategy.md`](../qt-strategy.md) §2.6 and the measurements in
-[`TODO-21-10-2026.md`](../TODO-21-10-2026.md) §3.
+[`qt-strategy.md`](../workbenches/qt-strategy.md) §2.6 and the measurements in
+[`TODO-21-10-2026.md`](../record/TODO-21-10-2026.md) §3.
 
 ## Goal
 

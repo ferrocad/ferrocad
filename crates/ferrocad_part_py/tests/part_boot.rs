@@ -2,7 +2,7 @@
 //!
 //! This is the composition the application performs: link both modules and register
 //! them as built-ins, so `import Part` and `import FreeCAD` see the same document
-//! registry and the same kernel. It needs OCCT (see `docs/occt-bundling.md`).
+//! registry and the same kernel. It needs OCCT (see `docs/architecture/occt-bundling.md`).
 
 use pyo3::prelude::*;
 use pyo3::types::PyModule;

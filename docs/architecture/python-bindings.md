@@ -1,8 +1,8 @@
 # Python bindings: PyO3 vs the C-API (working note)
 
 Status: reference (2026-10-04). Companion to
-[`rewrite-strategy.md`](rewrite-strategy.md), [`milestones.md`](milestones.md)
-(M0, M1, M3b, M3c) and [`app-shell-vision.md`](app-shell-vision.md). It explains
+[`rewrite-strategy.md`](../direction/rewrite-strategy.md), [`milestones.md`](../record/milestones.md)
+(M0, M1, M3b, M3c) and [`app-shell-vision.md`](../direction/app-shell-vision.md). It explains
 how Rust and Python are bridged in FerroCAD, the trade-offs between the available
 mechanisms, and how that choice reaches the packager.
 
@@ -86,7 +86,7 @@ bridge over `ferrocad_core`: it re-implemented its own smaller document model, s
 it was a second implementation, not a second transport. The three original
 justifications (no headers needed, an `abi3` escape hatch, "proves the core is
 not PyO3-shaped") did not survive review, and it **has been removed** (2026-10-05).
-See [`architecture.md`](architecture.md) §4-5 for the call-path diagrams and the
+See [`architecture.md`](../architecture.md) §4-5 for the call-path diagrams and the
 verdict.
 
 The facade (`python/FreeCAD/__init__.py`) now imports the extension

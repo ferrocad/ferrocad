@@ -2,7 +2,7 @@
 //! and renders it with `bite-gpui`, wiring real `on_click` handlers back to
 //! Python.
 //!
-//! Covers the four criteria from `docs/python-ui-research.md` Part D:
+//! Covers the four criteria from `docs/interaction/python-ui-research.md` Part D:
 //!   1. the Rust host embeds CPython,
 //!   2. the Python-declared tree compiles into `bite-gpui` elements headlessly,
 //!   3. a real click round-trips through a Python callback that mutates state,
@@ -321,7 +321,7 @@ mod tests {
     ///
     /// A single test drives the embedded interpreter because tests that share
     /// one CPython instance (module-global state) must be serialized — see
-    /// `docs/python-ui-research.md` §F.
+    /// `docs/interaction/python-ui-research.md` §F.
     #[gpui::test]
     fn python_declares_ui_and_click_round_trips(cx: &mut TestAppContext) {
         // Tests share one CPython instance (module-global state); serialize them.

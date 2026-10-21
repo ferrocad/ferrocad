@@ -2,8 +2,8 @@
 
 Status: task (2026-10-22). Backlog entry **P0.5** in
 [`TODO-22-10-2026.md`](../TODO-22-10-2026.md). Companion to
-[`app-shell-vision.md`](../app-shell-vision.md) and
-[`actions-and-tools.md`](../actions-and-tools.md).
+[`app-shell-vision.md`](../direction/app-shell-vision.md) and
+[`actions-and-tools.md`](../workbenches/actions-and-tools.md).
 
 ## Goal
 

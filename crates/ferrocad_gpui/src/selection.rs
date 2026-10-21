@@ -3,7 +3,7 @@
 //! The shell owns the selection; `FreeCADGui.Selection` is a **read-only snapshot**
 //! of it, pushed after every change so a command's `IsActive`/`Activated` can see
 //! the same thing the UI shows. The facade keeps no document state of its own
-//! (see `docs/actions-and-tools.md` §5).
+//! (see `docs/workbenches/actions-and-tools.md` §5).
 //!
 //! Unlike the viewport's [`ferrocad_geom::SelectionRef`], which addresses objects by
 //! picking identity, an item is already resolved to a document object name: the

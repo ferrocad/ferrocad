@@ -13,7 +13,7 @@
 //!     `BRepTools_History` through `patch/0001-history-bridge.patch` applied inside the
 //!     crate (the version to send upstream).
 //!
-//! See `../../docs/occt-history-spike.md` §7 and `README.md`.
+//! See `../../docs/architecture/occt-history-spike.md` §7 and `README.md`.
 
 use opencascade_sys as ffi;
 

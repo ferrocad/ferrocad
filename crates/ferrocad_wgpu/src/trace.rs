@@ -17,7 +17,7 @@
 //! The black-frame probe only runs where a readback exists (the image fallback
 //! path and the tests). The zero-copy presenter hands its target straight to gpui
 //! and never reads it back, so it cannot be probed without an extra GPU readback;
-//! see `docs/render-diagnostics.md`.
+//! see `docs/viewport/render-diagnostics.md`.
 //!
 //! **Trace mode takes over wgpu's device callbacks.** A wgpu device has exactly
 //! one `on_uncaptured_error` handler and one device-lost callback, and gpui's

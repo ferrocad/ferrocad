@@ -12,4 +12,4 @@ and the `Draft` workbench, so no system Python is required.
 - **Windows**: the zip is unsigned, so SmartScreen may warn on first run.
 
 `cargo install ferrocad` is the alternative: that binary embeds the same payload
-and unpacks it on first run. See `docs/distribution.md`.
+and unpacks it on first run. See `docs/architecture/distribution.md`.

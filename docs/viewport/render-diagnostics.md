@@ -72,7 +72,7 @@ submit failed`, `ferrocad: imported viewport texture failed`) plus the absence
 of `wgpu` errors here. The presenter's own lines (`presenter: ring`, `presenter
 slot=…`, `presenter: repainted`, `presenter: skipped`, `presenter: disabled`)
 show whether a frame was overwritten early, skipped, or replaced by the
-fallback; `docs/gpu-interop-assessment.md` §10 explains the rule.
+fallback; `docs/viewport/gpu-interop-assessment.md` §10 explains the rule.
 
 ### Surfaces and `SurfaceError`
 

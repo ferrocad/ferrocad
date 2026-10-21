@@ -3,7 +3,7 @@
 // FerroCAD: the topology calls `opencascade-sys` 0.3 does not bridge.
 //
 // Companion to `fc_history.hxx`. Verified in `spikes/occt-tessellation/`; see
-// `docs/topology-selection.md` §5.
+// `docs/interaction/topology-selection.md` §5.
 //
 // All functions are `inline`, so they are emitted into the cxx-generated shim and no
 // separate translation unit is needed.

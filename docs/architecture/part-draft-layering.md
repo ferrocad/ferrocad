@@ -22,13 +22,13 @@ sparse checkout of `src/Mod/{Test,Part,Draft,BIM}` plus `src/Ext`). Method and
 caveats are in [§10](#10-what-i-could-not-verify-and-how-the-numbers-were-taken).
 
 Companion to [`geometry-and-topology.md`](geometry-and-topology.md) (the seam and the
-naming problem), [`topology-selection.md`](topology-selection.md) (the implemented
+naming problem), [`topology-selection.md`](../interaction/topology-selection.md) (the implemented
 `Shape`/`ElementRef` vocabulary), [`occt-integration.md`](occt-integration.md) (the
-kernel behind the seam), [`architecture.md`](architecture.md) §6 (the dependency
+kernel behind the seam), [`architecture.md`](../architecture.md) §6 (the dependency
 rules), [`repackaging.md`](repackaging.md) and
 [`edition-publishing.md`](edition-publishing.md) (which editions link Part),
-[`toy-workbench.md`](toy-workbench.md) (a workbench with no geometry at all), and
-[`gizmo-manipulators.md`](gizmo-manipulators.md) (the presentation seam a Draft
+[`toy-workbench.md`](../workbenches/toy-workbench.md) (a workbench with no geometry at all), and
+[`gizmo-manipulators.md`](../interaction/gizmo-manipulators.md) (the presentation seam a Draft
 grip would use).
 
 ---
@@ -599,7 +599,7 @@ A note on Python class identity: upstream has `Arc(TrimmedCurve)` and
 
 | Module | Source | Mechanism |
 | --- | --- | --- |
-| `Part` | `ferrocad_part_py` | built-in module in the same image as `FreeCAD`; `pyo3::append_to_inittab!`; one process-wide core (`docs/occt-integration.md` §6) |
+| `Part` | `ferrocad_part_py` | built-in module in the same image as `FreeCAD`; `pyo3::append_to_inittab!`; one process-wide core (`docs/architecture/occt-integration.md` §6) |
 | `Draft` | upstream `src/Mod/Draft`, unchanged | `cargo xtask mods` fetches it into `mods/Draft` (`crates/xtask/src/main.rs:40`); `Init.py` adds import types; no Rust facade |
 | `PySide.QtCore/QtGui/QtWidgets` | shim | `QT_TRANSLATE_NOOP`, `QCoreApplication.translate`, module objects; `QtWidgets.QApplication.UnicodeUTF8` optional |
 | `lazy_loader` | shim or vendored 30-line `LazyLoader` | `Part = lz.LazyLoader("Part", globals(), "Part")` in 25 files |
@@ -732,7 +732,7 @@ What M0 does **not** need:
 - A Rust `ferrocad_draft` crate. The first three slices are Python on the existing
   `Part` facade plus `ferrocad_curves`.
 - A parent crate. M5 composes through the edition (`ferrocad_parametric`), as
-  `docs/edition-publishing.md` already describes.
+  `docs/architecture/edition-publishing.md` already describes.
 
 ---
 

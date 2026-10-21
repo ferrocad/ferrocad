@@ -11,11 +11,11 @@ completeness track against the code as it stands.
 
 Companion to [`grid-overlay-bringup.md`](grid-overlay-bringup.md) (the measurements,
 option analysis, gap table and GLSL findings this note cites rather than repeats),
-[`axis-origin-grid.md`](axis-origin-grid.md) (G0–G5, the grid model and §9's
-non-goals), [`stage.md`](stage.md) (the declarative producer), [`qt-strategy.md`](qt-strategy.md)
-(the split plane the addon tests badly) and [`visual-language.md`](visual-language.md)
+[`axis-origin-grid.md`](../interaction/axis-origin-grid.md) (G0–G5, the grid model and §9's
+non-goals), [`stage.md`](../viewport/stage.md) (the declarative producer), [`qt-strategy.md`](qt-strategy.md)
+(the split plane the addon tests badly) and [`visual-language.md`](../interaction/visual-language.md)
 (the tokens the addon's defaults contradict). Dependency rules come from
-[`architecture.md`](architecture.md) §6; the command, dialog and `{"view": …}` contracts
+[`architecture.md`](../architecture.md) §6; the command, dialog and `{"view": …}` contracts
 from [`actions-and-tools.md`](actions-and-tools.md) §§3, 6, 7.
 
 **Method.** Static reading only, like the bring-up. No test, cargo command, addon run,
@@ -40,7 +40,7 @@ addon was chosen to test; A2 (the fork as a thin client of Track C) is the addon
 shipping form and proves that its *intent* — one command, one settings dialog, a
 configurable reference grid — survives without its architecture. What no track proves is
 workbench parity: the addon has no `Workbench`, and the measured target for that remains
-the Draft work ([`TODO-21-10-2026.md`](TODO-21-10-2026.md) §2).
+the Draft work ([`TODO-21-10-2026.md`](../record/TODO-21-10-2026.md) §2).
 
 ---
 
@@ -142,7 +142,7 @@ What is **not** in the surface:
 
 - `workplane` — it is a transient *action*, not a preference. `App_ActivateWorkplane`,
   `App_ClearWorkplane` and `App_ViewWorkplane` already expose it
-  ([`axis-origin-grid.md`](axis-origin-grid.md) §8, G5), and `ViewState` deliberately
+  ([`axis-origin-grid.md`](../interaction/axis-origin-grid.md) §8, G5), and `ViewState` deliberately
   holds no workplane. Adding a read/write property would mean mirroring viewport state
   up into the facade for no consumer.
 - `grid_overlay` — the debug shader overlay is a shell field (§2.5), never a
@@ -154,7 +154,7 @@ What is **not** in the surface:
 (`grid.rs:33-41`, `:114-124`), and `GridStyle.dim` already occupies the "multiplier"
 role (`grid.rs:85-91`). It multiplies both styles, so the workplane's 1:2 ratio
 survives. A second absolute-alpha convention would let the API contradict
-[`visual-language.md`](visual-language.md) and would have to be reconciled with `dim`.
+[`visual-language.md`](../interaction/visual-language.md) and would have to be reconciled with `dim`.
 The addon's stored `opacity` (default `0.65`, `InitGui.py:134-141`) is therefore read as
 a `0.65×` multiplier — a 35 % reduction of the token alpha, not "alpha 0.65" — an
 explicit, documented deviation (§3.2, §3.4).
@@ -195,7 +195,7 @@ surface A2 keeps — cannot work.
 
 No new crate. A `ferrocad_grid` crate would duplicate the producer
 (`ferrocad_stage::grid`) or the state (`ferrocad_gpui::view`) and add an edge that
-[`architecture.md`](architecture.md) §6 does not allow.
+[`architecture.md`](../architecture.md) §6 does not allow.
 
 | Layer | Type / function | Change | Why here |
 | --- | --- | --- | --- |
@@ -508,7 +508,7 @@ changing it, because it silently changes what an empty switch draws.
 | `SoFaceSet` | `numVertices` (`SoMFInt32`), `startIndex` (`SoSFInt32`, default 0); consume `numVertices[i]` consecutive coordinates per face | `ferrocad_inventor::node` + `compile` + `_py` | 4 coords / count 4 → 6 indices; a pentagon → 9; a count < 3 is skipped; `startIndex` offsets |
 | `SoPickStyle` | `style`: `SHAPE`, `BOUNDING_BOX`, `UNPICKABLE`. Only `UNPICKABLE` acts | `ferrocad_graphics::StateSnapshot` (`pickable: bool`), `ferrocad_inventor` state, `_py`, both pick paths | `UNPICKABLE` compiles to `pickable == false`; the CPU ray cast misses it (`pick.rs:163`); the GPU skip is a readback test, skipped without an adapter |
 | `SoLightModel` | `model`: `BASE_COLOR`, `PHONG` | `ferrocad_inventor` state + `_py`; **no renderer effect** | Class/field round-trip and state capture |
-| `SoDepthBuffer` | `test` (`SoSFBool`, true), `write` (`SoSFBool`, true), `function` (8 compare modes). Generalise [`visual-language.md`](visual-language.md) §3's `DepthMode` into `DepthState { compare, write }` | `ferrocad_graphics::StateSnapshot`, `ferrocad_inventor` state, `_py`, `ferrocad_wgpu` pipeline selection | `test FALSE` → `Always`; `write FALSE` → no depth write; a pure `PipelineKey::from(&DepthState)` unit test |
+| `SoDepthBuffer` | `test` (`SoSFBool`, true), `write` (`SoSFBool`, true), `function` (8 compare modes). Generalise [`visual-language.md`](../interaction/visual-language.md) §3's `DepthMode` into `DepthState { compare, write }` | `ferrocad_graphics::StateSnapshot`, `ferrocad_inventor` state, `_py`, `ferrocad_wgpu` pipeline selection | `test FALSE` → `Always`; `write FALSE` → no depth write; a pure `PipelineKey::from(&DepthState)` unit test |
 
 Notes on exact semantics:
 
@@ -652,7 +652,7 @@ comparison mode, never that it requires it.
    tooltip; do not let a user discover it from a second document.
 2. **Two grids, two stores, two looks.** If the fork keeps `QSettings`, users get two
    preference surfaces; if the port keeps `#808080` at 0.65, it contradicts
-   [`visual-language.md`](visual-language.md). Both are cheap to decide now (one store =
+   [`visual-language.md`](../interaction/visual-language.md). Both are cheap to decide now (one store =
    `ParamGet`; A2 uses tokens) and expensive to unwind (bring-up §13.6). A1 may keep the
    addon's look *because it is a fixture*, but it must be labelled that way.
 3. **The semantic API's "apply" is command-scoped.** A property write from the console
@@ -714,7 +714,7 @@ Landed in two waves; every suite below was run, not inferred.
 | **G4** | ✅ | Program pipeline cache (`program.hash`, topology, depth compare/write, blend, samples, format); group 2 (`Frame` 160 B dynamic + `Program` 1328 B); `StateSnapshot.depth`/`pickable` with `SoDepthBuffer`/`SoPickStyle` applied (`SoLightModel` inert); program packets never picked; `grid_overlay` on `ViewRequest`/`ViewState` hides the world ground and draws the program queue. GPU readback ran on this machine (occlusion + no-pick). Suites: graphics 31, inventor 23, wgpu 24, stage 89, viewport 122, gpui 62. |
 | **G5** | ▢ | The A1 fork running under the shell (`addOverlay`/`removeOverlay`). Not required by G6, which is the shipping form; it proves the legacy Coin path. |
 | **G6** | ✅ | `mods/GridOverlay/` is a semantic-only fork: command `GridOverlay_Settings`, six-field dialog, `FreeCAD.Grid` on accept, `getattr` gate with a clean upstream message; no Qt, no Coin. 12 tests. |
-| **Mod providers** | ✅ | `FreeCADGui.registerProvider/providers/activeProvider/setActiveProvider` with the choice at `User parameter:BaseApp/Preferences/Mods` → `Providers/<feature>`; `Mods_Settings` in `ferrocad_shell`; both grid mods declare `feature="grid"` (semantic priority 10, Coin 0), gate their commands and the Coin draw path on `activeProvider`, and switch through `deactivate`/`activate`. `docs/mod-providers.md`; suite `test_mod_providers` (13). |
+| **Mod providers** | ✅ | `FreeCADGui.registerProvider/providers/activeProvider/setActiveProvider` with the choice at `User parameter:BaseApp/Preferences/Mods` → `Providers/<feature>`; `Mods_Settings` in `ferrocad_shell`; both grid mods declare `feature="grid"` (semantic priority 10, Coin 0), gate their commands and the Coin draw path on `activeProvider`, and switch through `deactivate`/`activate`. `docs/workbenches/mod-providers.md`; suite `test_mod_providers` (13). |
 
 **Provider registry (2026-10-21).** Both grid mods now declare what they provide
 (`feature="grid"`) instead of silently competing. The semantic backend is the

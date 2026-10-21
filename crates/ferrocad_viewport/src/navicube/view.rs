@@ -3,7 +3,7 @@
 //! Highlight and away-face appearance are not draw-contract features — the contract
 //! carries only `color` and `world_transform` per packet — so a producer realises them
 //! by recolouring pieces (and drawing away faces first), as the model's colour rule
-//! describes. See `docs/navicube-spec.md`.
+//! describes. See `docs/interaction/navicube-spec.md`.
 
 use ferrocad_graphics::{RenderQueue, Viewport};
 use ferrocad_types::Rotation;

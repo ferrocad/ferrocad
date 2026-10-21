@@ -5,7 +5,7 @@ Status: decision note (2026-10-06), companion to
 [`occt-history-spike.md`](occt-history-spike.md) (the verified binding) and
 [`occt-bundling.md`](occt-bundling.md) (shipping the kernel).
 
-The rule from [`architecture.md`](architecture.md) §6 stands: **`ferrocad_core` is a
+The rule from [`architecture.md`](../architecture.md) §6 stands: **`ferrocad_core` is a
 leaf and OCCT must never be a transitive dependency of it.** This note turns that rule
 into a crate layout, and settles where a Part workbench and its Python bindings sit.
 
@@ -243,20 +243,20 @@ The extraction is a refactor with its own tests, so it lands in stages:
    `capabilities`, `tessellate`, `elements`, `ancestors`, `continuity` and `chamfer`, and
    fillet/chamfer now report lineage. The sibling bridge gained `fc_topology.hxx`
    (list access, `IsSame` lookups, the two-distance chamfer, fillet/chamfer history and
-   edge tangents). See [`topology-selection.md`](topology-selection.md) (F0.2).
+   edge tangents). See [`topology-selection.md`](../interaction/topology-selection.md) (F0.2).
 10. **[x] The selection bridge** (2026-10-20) — a click in `InventorViewport` reports a
     kernel-neutral `SelectionRef` (`SelectionEvent::Picked`), resolving the hit's part id
     through the stage item's name table (`Face6`, `Edge3`); empty space reports
     `Cleared`. The viewport depends on `ferrocad_geom` (a leaf) and never on
     `ferrocad_part` or OCCT, so presentation stays kernel-free. See
-    [`topology-selection.md`](topology-selection.md) (F0.5).
+    [`topology-selection.md`](../interaction/topology-selection.md) (F0.5).
 11. **[x] Parametric dress-up features** (2026-10-20) — `Part::Fillet` and
     `Part::Chamfer`: `Base` (LinkSub) + `Edges` + `Radius`/`Distance`/`Distance2` +
     `Propagate`, rebuilt in `execute` through the injected backend. `Base` is also the
     recompute dependency, so changing the source or its shape re-executes the feature;
     `ferrocad_geom::tangent_chain` expands a selection to its smooth chain; a failed
     rebuild clears the output and leaves the object invalid. Part remains a consumer of
-    `ferrocad_geom`, never of OCCT. See [`topology-selection.md`](topology-selection.md)
+    `ferrocad_geom`, never of OCCT. See [`topology-selection.md`](../interaction/topology-selection.md)
     (F0.6); the F1 arc scrubber now only has to write `Radius`. The Python path is
     checked by `ferrocad_part_py`'s `a_fillet_feature_rebuilds_through_python`.
 12. **[x] The host wiring** (2026-10-20) — the viewport's stage is filled from the

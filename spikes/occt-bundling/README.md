@@ -5,7 +5,7 @@ per-platform runtime once, stage only what the binary loads into the payload, an
 the launcher point at it (`PYTHONHOME` for CPython, `LD_LIBRARY_PATH` for OCCT).
 
 `stage_occt.py` is the prototype of that "stage only what's needed" step, and the
-numbers it produced are the finding. See [`../../docs/occt-bundling.md`](../../docs/occt-bundling.md).
+numbers it produced are the finding. See [`../../docs/architecture/occt-bundling.md`](../../docs/architecture/occt-bundling.md).
 
 ## The tool
 

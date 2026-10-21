@@ -28,6 +28,16 @@ is the `FreeCAD` Python API, documented by convention and by upstream.
   of the lost GNOME session: `systemd-oomd` killed `gnome-shell`, not the GPU or Wayland;
   the evidence, the timeline, and the prevention notes.
 
+## Tasks
+
+- [tasks/dev-tools-window.md](tasks/dev-tools-window.md) — move the actions bar,
+  inspector, property editor and console into a separate Dev Tools window; the main
+  window becomes a clean viewport.
+- [tasks/d0-draft-import.md](tasks/d0-draft-import.md) — the five headless fixes and the
+  `--draft` conformance group.
+- [tasks/p2-architecture.md](tasks/p2-architecture.md) — `ferrocad_curves`, the
+  Part/Draft seam, the Qt split plane, and the SimpleCAD order.
+
 ## Reference
 
 - [architecture.md](architecture.md) — crates, the call paths, and the dependency

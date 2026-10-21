@@ -90,6 +90,12 @@ is the `FreeCAD` Python API, documented by convention and by upstream.
 - [grid-overlay-plan.md](grid-overlay-plan.md) — the decisions that followed (fork/WGSL,
   `FreeCAD.Grid` semantic API, Coin completeness), the `FreeCAD.Grid` surface and
   semantics, and the G0–G6 staging.
+- [mod-providers.md](mod-providers.md) — how a mod declares what it provides, how one
+  provider per feature is chosen and persisted, and how `Mods_Settings` switches them.
+- [render-diagnostics.md](render-diagnostics.md) — the `FERROCAD_TRACE` / `--trace`
+  knobs, the frame/pipeline/presenter trace lines, and the black-frame investigation.
+- [upstream-dmabuf-issue.md](upstream-dmabuf-issue.md) — the single-dma-buf race filed
+  as `bite-gpui/gpui_interop#1`, the residual black-frame symptom, and the usage rules.
 - [repackaging.md](repackaging.md) — editions and the repackaging vision.
 - [axis-origin-grid.md](axis-origin-grid.md) — the spatial reference model: the world
   triad, the ground and workplane grids, face frames, snapping, and how the navicube

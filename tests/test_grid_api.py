@@ -1,4 +1,4 @@
-"""Tests for the semantic grid API, ``FreeCAD.Grid`` (G2, Track C).
+"""Tests for the semantic grid API, ``FerroCAD.Grid`` (G2, Track C).
 
 The API is pure Python over ``FreeCAD.ParamGet`` and is exercised headless
 (``FreeCAD.GuiUp == 0``): every setter validates and stores, ``apply()`` returns
@@ -10,6 +10,7 @@ import math
 import unittest
 
 import FreeCAD
+import FerroCAD
 
 PREFERENCES = "User parameter:BaseApp/Preferences/View"
 
@@ -26,7 +27,7 @@ VIEW_KEYS = {
 
 class GridApiTests(unittest.TestCase):
     def setUp(self):
-        self.grid = FreeCAD.Grid
+        self.grid = FerroCAD.Grid
         self.grid.reset()
         self.prefs = FreeCAD.ParamGet(PREFERENCES)
 
@@ -34,9 +35,9 @@ class GridApiTests(unittest.TestCase):
         self.grid.reset()
 
     def test_the_singleton_is_lazy_and_stable(self):
-        self.assertIs(FreeCAD.Grid, self.grid)
-        self.assertIs(FreeCAD.Grid, getattr(FreeCAD, "Grid"))
-        self.assertIn("Grid", FreeCAD.__all__)
+        self.assertIs(FerroCAD.Grid, self.grid)
+        self.assertIs(FerroCAD.Grid, getattr(FerroCAD, "Grid"))
+        self.assertIn("Grid", FerroCAD.__all__)
 
     def test_the_defaults_are_the_plan_s_defaults(self):
         self.assertFalse(self.grid.enabled)
@@ -248,10 +249,10 @@ class GridApiTests(unittest.TestCase):
 
 
 class GridSettingsCommandTests(unittest.TestCase):
-    """``View_GridSettings`` is a thin client of ``FreeCAD.Grid``."""
+    """``View_GridSettings`` is a thin client of ``FerroCAD.Grid``."""
 
     def setUp(self):
-        self.grid = FreeCAD.Grid
+        self.grid = FerroCAD.Grid
         self.grid.reset()
         import FreeCADGui
 

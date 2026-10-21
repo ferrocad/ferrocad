@@ -97,7 +97,7 @@ fn main() {
 /// Register the Coin/WGSL grid mod and merge its overlay into the scene.
 ///
 /// This exercises the G5 path end to end without a window: the mod builds its
-/// `SoShaderProgram` tree, `FreeCADGui.addOverlay` extracts it, and the resulting
+/// `SoShaderProgram` tree, `FerroCADGui.addOverlay` extracts it, and the resulting
 /// scene is compiled and drawn by the same renderer the shell uses.
 fn with_coin_overlay(base: Scene) -> Scene {
     const SCRIPT: &str = r#"

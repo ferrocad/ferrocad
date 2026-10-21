@@ -3,11 +3,11 @@
 
 This is the A2 shipping form (``docs/workbenches/grid-overlay-plan.md`` §3.2), not a port of
 the upstream Coin/GLSL overlay. The command id and menu text are unchanged and
-the six knobs survive, but the values go to the semantic ``FreeCAD.Grid`` API
+the six knobs survive, but the values go to the semantic ``FerroCAD.Grid`` API
 and the shell draws them with the native grid. There is no Qt, no ``pivy``, no
 scene graph and no per-document overlay tree.
 
-On upstream FreeCAD, where ``FreeCAD.Grid`` does not exist, the command reports
+On upstream FreeCAD, where ``FerroCAD.Grid`` does not exist, the command reports
 that this build needs FerroCAD's semantic grid API rather than falling back to
 the legacy Coin path; the upstream addon remains the addon for upstream.
 
@@ -21,8 +21,14 @@ from __future__ import annotations
 
 import os
 
-import FreeCAD
 import FreeCADGui
+
+try:
+    import FerroCAD
+    import FerroCADGui
+except ImportError:  # upstream FreeCAD has no FerroCAD namespace
+    FerroCAD = None
+    FerroCADGui = None
 
 ADDON_DIR = os.path.dirname(os.path.abspath(__file__))
 
@@ -31,9 +37,9 @@ ADDON_DIR = os.path.dirname(os.path.abspath(__file__))
 FEATURE = "grid"
 BACKEND = "ferrocad"
 
-#: Reported when ``FreeCAD.Grid`` is absent (that is, on upstream FreeCAD).
+#: Reported when ``FerroCAD.Grid`` is absent (that is, on upstream FreeCAD).
 UPSTREAM_STATUS = (
-    "Grid Overlay needs FerroCAD's semantic grid API (FreeCAD.Grid); this build "
+    "Grid Overlay needs FerroCAD's semantic grid API (FerroCAD.Grid); this build "
     "does not provide it. Use the upstream addon on upstream FreeCAD."
 )
 
@@ -45,13 +51,13 @@ INACTIVE_STATUS = (
 
 
 def grid_api(app=None):
-    """``FreeCAD.Grid`` when this build has it, else ``None``.
+    """``FerroCAD.Grid`` when this build has it, else ``None``.
 
     The discriminator from ``docs/workbenches/grid-overlay-plan.md`` §3.3. It is a function
     so a build without ``Grid`` is detected through the same ``getattr`` path
     the plan names, and so a test can pass a module that lacks the attribute.
     """
-    return getattr(FreeCAD if app is None else app, "Grid", None)
+    return getattr(FerroCAD if app is None else app, "Grid", None)
 
 
 def is_active():
@@ -60,7 +66,7 @@ def is_active():
     ``True`` when the facade has no provider registry (upstream FreeCAD) or the
     feature has no registered provider: this mod is then the only grid path.
     """
-    active_provider = getattr(FreeCADGui, "activeProvider", None)
+    active_provider = getattr(FerroCADGui, "activeProvider", None)
     if active_provider is None:
         return True
     return active_provider(FEATURE) in (None, BACKEND)
@@ -68,7 +74,7 @@ def is_active():
 
 def inactive_status():
     """The one-line reason ``Activated``/``on_accept`` refuse to run."""
-    active_provider = getattr(FreeCADGui, "activeProvider", None)
+    active_provider = getattr(FerroCADGui, "activeProvider", None)
     active = active_provider(FEATURE) if active_provider is not None else None
     return INACTIVE_STATUS % (active or "another backend")
 
@@ -100,7 +106,7 @@ def deactivate():
 
 
 def _state(grid):
-    """The six dialog seeds, read back through :meth:`FreeCAD.Grid.snapshot`.
+    """The six dialog seeds, read back through :meth:`FerroCAD.Grid.snapshot`.
 
     ``snapshot()`` carries the four applied knobs; the shadow preferences are
     persisted but have no view field yet, so they are read directly.
@@ -124,10 +130,10 @@ def _field(name, label, kind, value, **extra):
 
 
 def apply_settings(values):
-    """Write a dialog's values to ``FreeCAD.Grid`` and return its view request.
+    """Write a dialog's values to ``FerroCAD.Grid`` and return its view request.
 
     The callback owns the write, as the shell's dialog path expects: it returns
-    the ``{"view": …}`` dict :meth:`FreeCAD.Grid.apply` builds, which the shell
+    the ``{"view": …}`` dict :meth:`FerroCAD.Grid.apply` builds, which the shell
     applies and mirrors. A validation error raised by the API stays in the
     modal.
     """
@@ -161,8 +167,8 @@ class GridOverlayCommand:
             "Pixmap": os.path.join(ADDON_DIR, "Resources", "grid.svg"),
             "Group": "View",
             "CmdType": "ForView",
-            "Surface": "grid",
-            "Parent": "App_ToggleGrid",
+            "FerroCAD_Surface": "grid",
+            "FerroCAD_Parent": "App_ToggleGrid",
         }
 
     def IsActive(self):
@@ -213,11 +219,11 @@ class GridOverlayCommand:
 FreeCADGui.addCommand("GridOverlay_Settings", GridOverlayCommand())
 
 # Declare the provider from the mod's entry point. On upstream FreeCAD (no
-# provider registry, no ``FreeCAD.Grid``) the mod still loads and reports; it
-# simply has nothing to register with. Re-callable, so a test or a reset can
-# restore the declaration.
+# FerroCAD provider registry, no ``FerroCAD.Grid``) the mod still loads and
+# reports; it simply has nothing to register with. Re-callable, so a test or a
+# reset can restore the declaration.
 def register_provider():
-    register = getattr(FreeCADGui, "registerProvider", None)
+    register = getattr(FerroCADGui, "registerProvider", None)
     if register is None:
         return False
     register(

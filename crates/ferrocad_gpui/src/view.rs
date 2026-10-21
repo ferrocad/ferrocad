@@ -3,7 +3,7 @@
 //! A command that changes only presentation returns `{"view": {...}}` instead of
 //! editing the document. The shell owns the state, applies what the viewport supports
 //! (the projection, the grid and its steps), and mirrors the state to
-//! `FreeCADGui.ViewState` so a checkable command's `IsChecked` can read it.
+//! `FerroCADGui.ViewState` so a checkable command's `IsChecked` can read it.
 //!
 //! A `workplane` request is an **action**, not state: it activates, clears or looks down
 //! the active workplane. The shell performs it on the viewport and reports the outcome.
@@ -103,7 +103,7 @@ impl ProjectionName {
     }
 }
 
-/// The shell's presentation state, mirrored to `FreeCADGui.ViewState`.
+/// The shell's presentation state, mirrored to `FerroCADGui.ViewState`.
 #[derive(Debug, Clone, PartialEq)]
 pub struct ViewState {
     pub grid: bool,

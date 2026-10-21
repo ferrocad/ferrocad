@@ -4,9 +4,9 @@ The base app's script (`ferrocad_shell`) is deliberately geometry-free: it knows
 document model and nothing about kernels. This edition links the Part workbench, so
 it registers the two **module hooks** Part needs and seeds the demo solid:
 
-* `FreeCAD.register_display_provider` — how a `Part` object is tessellated for the
+* `FerroCAD.register_display_provider` — how a `Part` object is tessellated for the
   viewport;
-* `FreeCAD.register_interaction_provider` — what a manipulator commit means (the edge
+* `FerroCAD.register_interaction_provider` — what a manipulator commit means (the edge
   dress-up arc's `dress_up` / `fillet` / `chamfer`).
 
 The Rust half of the same contribution (the scrubber itself) is
@@ -21,6 +21,7 @@ it must re-export every entry point the shell calls.
 from __future__ import annotations
 
 import FreeCAD
+import FerroCAD
 import Part  # noqa: F401  (links the kernel; registers Part::Feature/Fillet/Chamfer)
 
 # The shell's data functions (`bootstrap`, `model_tree`, `properties`,
@@ -81,8 +82,8 @@ def _interaction(obj, manipulator, action, element, values):
     return {"ok": True, "feature": feature_name}
 
 
-FreeCAD.register_display_provider(_display_mesh)
-FreeCAD.register_interaction_provider(_interaction)
+FerroCAD.register_display_provider(_display_mesh)
+FerroCAD.register_interaction_provider(_interaction)
 
 
 def bootstrap(doc_name: str = "Shell") -> str:

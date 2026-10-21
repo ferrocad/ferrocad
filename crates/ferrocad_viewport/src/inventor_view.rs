@@ -188,9 +188,9 @@ pub struct InventorViewport<V: InventorView> {
     grid_major: f64,
     /// A fixed world-grid extent (mm); `None` derives it from the camera.
     grid_radius: Option<f64>,
-    /// The world grid's linear ink (`FreeCAD.Grid.color`).
+    /// The world grid's linear ink (`FerroCAD.Grid.color`).
     grid_color: [f32; 4],
-    /// A multiplier over the token alphas (`FreeCAD.Grid.opacity`).
+    /// A multiplier over the token alphas (`FerroCAD.Grid.opacity`).
     grid_alpha: f32,
     /// The active local workplane (G3): sticky until `Esc` or another activation.
     active_workplane: Option<FaceFrame>,

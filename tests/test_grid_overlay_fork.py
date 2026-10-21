@@ -1,8 +1,8 @@
 """Tests for the GridOverlay mod (G6, the A2 shipping form).
 
 The mod is a thin client of the semantic grid API: ``Activated`` returns the
-shell's dialog spec, ``on_accept`` writes ``FreeCAD.Grid`` and returns its
-``{"view": …}`` request, and a build without ``FreeCAD.Grid`` reports cleanly
+shell's dialog spec, ``on_accept`` writes ``FerroCAD.Grid`` and returns its
+``{"view": …}`` request, and a build without ``FerroCAD.Grid`` reports cleanly
 instead of falling back to the upstream Coin/GLSL path. See
 ``docs/workbenches/grid-overlay-plan.md`` §3.2–§3.3, §5 G6.
 
@@ -17,8 +17,9 @@ import types
 import unittest
 from unittest import mock
 
-import FreeCAD
 import FreeCADGui
+import FerroCAD
+import FerroCADGui
 
 MOD_PATH = (
     pathlib.Path(__file__).resolve().parents[1]
@@ -65,20 +66,20 @@ def load_mod():
 
 class GridOverlayForkTests(unittest.TestCase):
     def setUp(self):
-        self.grid = FreeCAD.Grid
+        self.grid = FerroCAD.Grid
         self.grid.reset()
-        for entry in FreeCADGui.providers():
-            FreeCADGui.unregisterProvider(entry["feature"], entry["backend"])
+        for entry in FerroCADGui.providers():
+            FerroCADGui.unregisterProvider(entry["feature"], entry["backend"])
         self.mod, self.imported = load_mod()
         # This suite exercises the FerroCAD-native backend as the active provider, even
         # when the Coin suite ran first or another suite cleared the registry
         # (``load_mod`` caches the module, so re-register explicitly).
-        if "ferrocad" not in [p["backend"] for p in FreeCADGui.providers("grid")]:
+        if "ferrocad" not in [p["backend"] for p in FerroCADGui.providers("grid")]:
             self.mod.register_provider()
-        FreeCADGui.setActiveProvider("grid", "ferrocad")
+        FerroCADGui.setActiveProvider("grid", "ferrocad")
 
     def tearDown(self):
-        FreeCADGui.unregisterProvider("grid", "ferrocad")
+        FerroCADGui.unregisterProvider("grid", "ferrocad")
         FreeCADGui._cancel_all()
         self.grid.reset()
 
@@ -120,7 +121,7 @@ class GridOverlayForkTests(unittest.TestCase):
                 "shadow_opacity": "float",
             },
         )
-        # The seeds are the current FreeCAD.Grid state (defaults here).
+        # The seeds are the current FerroCAD.Grid state (defaults here).
         snapshot = self.grid.snapshot()
         self.assertEqual(fields["enabled"]["value"], snapshot["grid"])
         self.assertEqual(fields["color"]["value"], snapshot["grid_color"])
@@ -274,24 +275,25 @@ class GridOverlayForkTests(unittest.TestCase):
         self.assertNotIn("fields", result)
         self.assertIn("status", result)
         self.assertIn("FerroCAD", result["status"])
-        self.assertIn("FreeCAD.Grid", result["status"])
+        self.assertIn("FerroCAD.Grid", result["status"])
         self.assertNotIn("view", result)
         self.assertIn("status", accepted)
         self.assertNotIn("view", accepted)
 
     def test_the_real_facade_without_grid_is_detected(self):
-        # Upstream FreeCAD has no `Grid` attribute, so `getattr` raises and the
-        # helper must return None rather than propagating AttributeError.
-        original = FreeCAD.__getattr__
+        # A build without the FerroCAD namespace has no `Grid` attribute, so
+        # `getattr` raises and the helper must return None rather than
+        # propagating AttributeError.
+        original = FerroCAD.__getattr__
 
         def upstream_freecad(name):
             if name == "Grid":
                 raise AttributeError(
-                    "module 'FreeCAD' has no attribute 'Grid'"
+                    "module 'FerroCAD' has no attribute 'Grid'"
                 )
             return original(name)
 
-        with mock.patch.object(FreeCAD, "__getattr__", upstream_freecad):
+        with mock.patch.object(FerroCAD, "__getattr__", upstream_freecad):
             self.assertIsNone(self.mod.grid_api())
             self.assertIn("status", self.mod.GridOverlayCommand().Activated())
 

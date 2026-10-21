@@ -1,7 +1,7 @@
 """Tests for the GridOverlayCoin mod (G5, the A1 Coin/shader fork).
 
 The mod is the upstream add-on's Coin tree carried by FerroCAD's **pull** overlay
-bridge: enabling calls ``FreeCADGui.addOverlay(root)``, disabling removes it, and
+bridge: enabling calls ``FerroCADGui.addOverlay(root)``, disabling removes it, and
 a parameter change re-binds (``_rebind``). The WGSL file in the mod is a duplicate
 of the crate's reference copy and must stay byte-identical.
 
@@ -20,6 +20,8 @@ from unittest import mock
 
 import FreeCAD
 import FreeCADGui
+import FerroCAD
+import FerroCADGui
 
 MOD_DIR = (
     pathlib.Path(__file__).resolve().parents[1] / "mods" / "GridOverlayCoin"
@@ -220,15 +222,15 @@ def close_documents():
 class GridOverlayCoinTests(unittest.TestCase):
     def setUp(self):
         close_documents()
-        for entry in FreeCADGui.providers():
-            FreeCADGui.unregisterProvider(entry["feature"], entry["backend"])
+        for entry in FerroCADGui.providers():
+            FerroCADGui.unregisterProvider(entry["feature"], entry["backend"])
         self.mod = load_mod()
         # The semantic mod may have registered the same feature in another suite;
         # this suite exercises the Coin backend as the active provider. Re-register
         # after another suite cleared the registry (``load_mod`` caches the module).
-        if "coin" not in [p["backend"] for p in FreeCADGui.providers("grid")]:
+        if "coin" not in [p["backend"] for p in FerroCADGui.providers("grid")]:
             self.mod.register_provider()
-        FreeCADGui.setActiveProvider("grid", "coin")
+        FerroCADGui.setActiveProvider("grid", "coin")
         self.mod.SETTINGS.Clear()
         self.mod.manager.remove_grid()
         self.mod.manager.items.clear()
@@ -239,7 +241,7 @@ class GridOverlayCoinTests(unittest.TestCase):
         self.mod.manager.items.clear()
         self.mod.SETTINGS.Clear()
         COIN._registered.clear()
-        FreeCADGui.unregisterProvider("grid", "coin")
+        FerroCADGui.unregisterProvider("grid", "coin")
         FreeCADGui._cancel_all()
         close_documents()
 
@@ -276,7 +278,7 @@ class GridOverlayCoinTests(unittest.TestCase):
         self.assertAlmostEqual(fields["shadow_opacity"]["value"], 0.30)
 
     def test_the_dialog_seeds_from_the_live_settings(self):
-        FreeCAD.Grid.enabled = False
+        FerroCAD.Grid.enabled = False
         self.mod.SETTINGS.SetString("color", "#123456")
         self.mod.SETTINGS.SetFloat("opacity", 0.5)
         self.mod.SETTINGS.SetFloat("base_spacing", 2.0)
@@ -333,8 +335,8 @@ class GridOverlayCoinTests(unittest.TestCase):
     # -- the pull bridge ------------------------------------------------
     def test_enabling_registers_a_coin_switch_and_disabling_removes_it(self):
         grid = self.mod.ShaderGrid("Doc")
-        with mock.patch.object(FreeCADGui, "addOverlay") as add, \
-                mock.patch.object(FreeCADGui, "removeOverlay") as remove:
+        with mock.patch.object(FerroCADGui, "addOverlay") as add, \
+                mock.patch.object(FerroCADGui, "removeOverlay") as remove:
             grid.set_visible(True)
             add.assert_called_once()
             root = add.call_args.args[0]
@@ -348,8 +350,8 @@ class GridOverlayCoinTests(unittest.TestCase):
 
     def test_rebind_removes_and_re_adds_the_same_root(self):
         grid = self.mod.ShaderGrid("Doc")
-        with mock.patch.object(FreeCADGui, "addOverlay") as add, \
-                mock.patch.object(FreeCADGui, "removeOverlay") as remove:
+        with mock.patch.object(FerroCADGui, "addOverlay") as add, \
+                mock.patch.object(FerroCADGui, "removeOverlay") as remove:
             grid.set_visible(True)
             add.reset_mock()
             remove.reset_mock()
@@ -387,8 +389,8 @@ class GridOverlayCoinTests(unittest.TestCase):
 
     # -- per document ---------------------------------------------------
     def test_only_the_active_document_keeps_an_overlay(self):
-        with mock.patch.object(FreeCADGui, "addOverlay") as add, \
-                mock.patch.object(FreeCADGui, "removeOverlay") as remove:
+        with mock.patch.object(FerroCADGui, "addOverlay") as add, \
+                mock.patch.object(FerroCADGui, "removeOverlay") as remove:
             FreeCAD.newDocument("G5DocA")
             FreeCAD.setActiveDocument("G5DocA")
             self.mod.manager.ensure_grid()

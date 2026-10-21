@@ -1,7 +1,7 @@
 """Tests for provider-advertised settings and the ``Settings`` tree.
 
 Covers S0 and S1 of ``docs/tasks/settings-model.md``: a provider declares a
-schema at registration, ``FreeCADGui.settings``/``setSetting`` read and write it
+schema at registration, ``FerroCADGui.settings``/``setSetting`` read and write it
 (the parameter group is the store), and ``ferrocad_shell`` exposes a synthetic
 ``Settings/<Feature>`` node whose rows are the property pane's row contract.
 
@@ -14,6 +14,7 @@ import unittest
 
 import FreeCAD
 import FreeCADGui
+import FerroCADGui
 import ferrocad_shell  # noqa: F401  (registers the shell commands)
 
 FEATURE = "grid"
@@ -89,23 +90,23 @@ class SettingsModelTests(unittest.TestCase):
         self.refreshed = []
         close_documents()
         provider_prefs().Clear()
-        FreeCADGui._PROVIDER_APPLIED.clear()
+        FerroCADGui._PROVIDER_APPLIED.clear()
 
     def tearDown(self):
         for feature in self.features:
-            for provider in FreeCADGui.providers(feature):
-                FreeCADGui.unregisterProvider(feature, provider["backend"])
+            for provider in FerroCADGui.providers(feature):
+                FerroCADGui.unregisterProvider(feature, provider["backend"])
             FreeCAD.ParamGet(PREFERENCES).GetGroup(feature).Clear()
         provider_prefs().Clear()
-        FreeCADGui._PROVIDER_APPLIED.clear()
-        FreeCADGui._SETTING_REPORTED.clear()
-        FreeCADGui._PROVIDER_REPORTED.clear()
+        FerroCADGui._PROVIDER_APPLIED.clear()
+        FerroCADGui._SETTING_REPORTED.clear()
+        FerroCADGui._PROVIDER_REPORTED.clear()
         close_documents()
 
     # -- helpers -------------------------------------------------------------
     def register(self, backend, label, priority=0, settings=None, feature=FEATURE):
         self.features.add(feature)
-        return FreeCADGui.registerProvider(
+        return FerroCADGui.registerProvider(
             feature,
             backend,
             label,
@@ -123,7 +124,7 @@ class SettingsModelTests(unittest.TestCase):
         self.register("coin", "Coin (WGSL)", priority=0, settings=COIN_SCHEMA)
 
     def rows(self, feature=FEATURE, backend=None):
-        return {row["name"]: row for row in FreeCADGui.settings(feature, backend)}
+        return {row["name"]: row for row in FerroCADGui.settings(feature, backend)}
 
     def settings_rows(self, object_name="Settings/Grid"):
         rows = json.loads(ferrocad_shell.properties(object_name))
@@ -133,7 +134,7 @@ class SettingsModelTests(unittest.TestCase):
     def test_defaults_are_materialised_on_read_and_never_written(self):
         self.register("ferrocad", "Native", settings=NATIVE_SCHEMA)
 
-        rows = FreeCADGui.settings(FEATURE)
+        rows = FerroCADGui.settings(FEATURE)
         self.assertEqual(
             [row["name"] for row in rows],
             ["enabled", "color", "spacing", "opacity", "count", "mode", "note"],
@@ -170,11 +171,11 @@ class SettingsModelTests(unittest.TestCase):
     def test_settings_returns_the_active_provider_and_a_switch_changes_it(self):
         self.register_both()
 
-        self.assertEqual(FreeCADGui.activeProvider(FEATURE), "ferrocad")
+        self.assertEqual(FerroCADGui.activeProvider(FEATURE), "ferrocad")
         self.assertEqual(self.rows()["spacing"]["value"], "10 mm")
         self.assertIn("enabled", self.rows())
 
-        FreeCADGui.setActiveProvider(FEATURE, "coin")
+        FerroCADGui.setActiveProvider(FEATURE, "coin")
         coin = self.rows()
         self.assertEqual(coin["spacing"]["value"], "5 mm")
         self.assertIn("glow", coin)
@@ -197,7 +198,7 @@ class SettingsModelTests(unittest.TestCase):
             ("note", "hi", "hi"),
         ]
         for name, text, expected in cases:
-            result = FreeCADGui.setSetting(FEATURE, name, text)
+            result = FerroCADGui.setSetting(FEATURE, name, text)
             self.assertTrue(result["ok"], (name, result))
             self.assertEqual(result["value"], expected, name)
             self.assertEqual(result["view"], {"grid": True})
@@ -221,30 +222,30 @@ class SettingsModelTests(unittest.TestCase):
 
         # A bare number is in the declared unit; a unit string is converted.
         self.assertEqual(
-            FreeCADGui.setSetting(FEATURE, "spacing", 7.5)["value"], "7.5 mm"
+            FerroCADGui.setSetting(FEATURE, "spacing", 7.5)["value"], "7.5 mm"
         )
         self.assertEqual(
-            FreeCADGui.setSetting(FEATURE, "spacing", "8")["value"], "8 mm"
+            FerroCADGui.setSetting(FEATURE, "spacing", "8")["value"], "8 mm"
         )
         self.assertEqual(
-            FreeCADGui.setSetting(FEATURE, "spacing", "0.5 cm")["value"], "5 mm"
+            FerroCADGui.setSetting(FEATURE, "spacing", "0.5 cm")["value"], "5 mm"
         )
 
     def test_out_of_range_and_enum_miss_change_nothing(self):
         self.register("ferrocad", "Native", settings=NATIVE_SCHEMA)
-        self.assertTrue(FreeCADGui.setSetting(FEATURE, "opacity", "0.25")["ok"])
-        self.assertTrue(FreeCADGui.setSetting(FEATURE, "spacing", "5 mm")["ok"])
+        self.assertTrue(FerroCADGui.setSetting(FEATURE, "opacity", "0.25")["ok"])
+        self.assertTrue(FerroCADGui.setSetting(FEATURE, "spacing", "5 mm")["ok"])
         written = len(self.refreshed)
 
-        too_large = FreeCADGui.setSetting(FEATURE, "opacity", "2.0")
+        too_large = FerroCADGui.setSetting(FEATURE, "opacity", "2.0")
         self.assertFalse(too_large["ok"])
         self.assertIn("at most 1", too_large["error"])
 
-        too_small = FreeCADGui.setSetting(FEATURE, "spacing", "0 mm")
+        too_small = FerroCADGui.setSetting(FEATURE, "spacing", "0 mm")
         self.assertFalse(too_small["ok"])
         self.assertIn("at least 0.1", too_small["error"])
 
-        miss = FreeCADGui.setSetting(FEATURE, "mode", "Bogus")
+        miss = FerroCADGui.setSetting(FEATURE, "mode", "Bogus")
         self.assertFalse(miss["ok"])
         self.assertIn("must be one of", miss["error"])
 
@@ -259,14 +260,14 @@ class SettingsModelTests(unittest.TestCase):
     def test_a_provider_without_a_schema_has_no_rows(self):
         self.register("plain", "Plain")
 
-        self.assertEqual(FreeCADGui.settings(FEATURE), [])
-        self.assertEqual(FreeCADGui.settings(FEATURE, "plain"), [])
-        result = FreeCADGui.setSetting(FEATURE, "anything", "x")
+        self.assertEqual(FerroCADGui.settings(FEATURE), [])
+        self.assertEqual(FerroCADGui.settings(FEATURE, "plain"), [])
+        result = FerroCADGui.setSetting(FEATURE, "anything", "x")
         self.assertFalse(result["ok"])
         self.assertIn("no setting", result["error"])
 
-        self.assertEqual(FreeCADGui.settings("nothing-here"), [])
-        self.assertFalse(FreeCADGui.setSetting("nothing-here", "x", "1")["ok"])
+        self.assertEqual(FerroCADGui.settings("nothing-here"), [])
+        self.assertFalse(FerroCADGui.setSetting("nothing-here", "x", "1")["ok"])
 
     def test_get_and_set_callables_override_the_group(self):
         state = {"level": 3.0}
@@ -299,7 +300,7 @@ class SettingsModelTests(unittest.TestCase):
         self.assertEqual(row["status"], "computed")
         self.assertTrue(row["editable"])
 
-        result = FreeCADGui.setSetting(FEATURE, "level", "6")
+        result = FerroCADGui.setSetting(FEATURE, "level", "6")
         self.assertTrue(result["ok"], result)
         self.assertEqual(state["level"], 6.0)
         self.assertEqual(self.rows()["level"]["value"], "6.0")
@@ -309,7 +310,7 @@ class SettingsModelTests(unittest.TestCase):
             "a get/set setting must not also write the parameter group",
         )
 
-        rejected = FreeCADGui.setSetting(FEATURE, "level", "11")
+        rejected = FerroCADGui.setSetting(FEATURE, "level", "11")
         self.assertFalse(rejected["ok"])
         self.assertEqual(state["level"], 6.0)
 
@@ -329,7 +330,7 @@ class SettingsModelTests(unittest.TestCase):
         )
         row = self.rows()["level"]
         self.assertFalse(row["editable"])
-        result = FreeCADGui.setSetting(FEATURE, "level", "3")
+        result = FerroCADGui.setSetting(FEATURE, "level", "3")
         self.assertFalse(result["ok"])
         self.assertIn("read-only", result["error"])
 
@@ -344,7 +345,7 @@ class SettingsModelTests(unittest.TestCase):
         self.assertEqual(row["value"], "x")
         self.assertFalse(row["editable"])
 
-        result = FreeCADGui.setSetting(FEATURE, "weird", "y")
+        result = FerroCADGui.setSetting(FEATURE, "weird", "y")
         self.assertFalse(result["ok"])
         self.assertIn("unsupported kind", result["error"])
 
@@ -373,12 +374,12 @@ class SettingsModelTests(unittest.TestCase):
                 "bad", "Bad", settings=[{"name": "x", "kind": "text", "get": 3}]
             )
         self.assertEqual(
-            FreeCADGui.providers(FEATURE), [], "a rejected schema registers nothing"
+            FerroCADGui.providers(FEATURE), [], "a rejected schema registers nothing"
         )
 
     def test_registering_without_settings_is_unchanged(self):
         self.register("plain", "Plain")
-        manifest = FreeCADGui.providers(FEATURE)[0]
+        manifest = FerroCADGui.providers(FEATURE)[0]
         self.assertEqual(
             set(manifest),
             {"feature", "backend", "label", "command", "priority", "active"},
@@ -434,7 +435,7 @@ class SettingsModelTests(unittest.TestCase):
             ferrocad_shell.set_property("Settings/Grid", "provider", "Coin (WGSL)")
         )
         self.assertTrue(switched["ok"], switched)
-        self.assertEqual(FreeCADGui.activeProvider(FEATURE), "coin")
+        self.assertEqual(FerroCADGui.activeProvider(FEATURE), "coin")
 
         selector, settings = self.settings_rows()
         self.assertEqual(selector["value"], "Coin (WGSL)")
@@ -447,7 +448,7 @@ class SettingsModelTests(unittest.TestCase):
             ferrocad_shell.set_property("Settings/Grid", "provider", "ferrocad")
         )
         self.assertTrue(switched["ok"], switched)
-        self.assertEqual(FreeCADGui.activeProvider(FEATURE), "ferrocad")
+        self.assertEqual(FerroCADGui.activeProvider(FEATURE), "ferrocad")
 
     def test_settings_set_property_routes_to_the_active_provider(self):
         self.register("ferrocad", "Native", settings=NATIVE_SCHEMA)

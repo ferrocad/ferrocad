@@ -8,7 +8,7 @@ placeholder quad.
 
 The one deliberate approach change is the **pull bridge**. There is no
 ``getSceneGraph()``: the tree is handed to the shell through
-``FreeCADGui.addOverlay(root)``, which extracts it immediately, and the shell
+``FerroCADGui.addOverlay(root)``, which extracts it immediately, and the shell
 re-extracts it on refresh. Because ``addChild`` copies (value semantics), changing
 a uniform is followed by ``_rebind()``: the parameters are written back into the
 stage/program value nodes, the separator is rebuilt, and the same root switch is
@@ -31,6 +31,13 @@ import os
 
 import FreeCAD as App
 import FreeCADGui as Gui
+
+try:
+    import FerroCAD as _ferrocad
+    import FerroCADGui as _ferrocad_gui
+except ImportError:  # upstream FreeCAD has no FerroCAD namespace
+    _ferrocad = None
+    _ferrocad_gui = None
 
 try:
     from pivy import coin
@@ -67,28 +74,28 @@ BACKEND = "coin"
 
 UPSTREAM_STATUS = (
     "Grid Overlay (Coin) needs FerroCAD's pull overlay bridge "
-    "(FreeCADGui.addOverlay); this build does not provide it. Use the upstream "
+    "(FerroCADGui.addOverlay); this build does not provide it. Use the upstream "
     "add-on on upstream FreeCAD."
 )
 
 
 def grid_api():
-    """``FreeCAD.Grid`` when this build has the semantic grid API, else ``None``.
+    """``FerroCAD.Grid`` when this build has the semantic grid API, else ``None``.
 
-    ``FreeCAD.Grid.enabled`` is the one grid switch on FerroCAD, so this mod
+    ``FerroCAD.Grid.enabled`` is the one grid switch on FerroCAD, so this mod
     reads it for its master switch exactly as the native backend does. Upstream
     FreeCAD has no such API; there the private ``enabled`` knob stays the master
     switch. This is the same ``getattr`` discriminator as ``mods/GridOverlay``
     (``docs/workbenches/grid-overlay-plan.md`` §3.3).
     """
-    return getattr(App, "Grid", None)
+    return getattr(_ferrocad, "Grid", None)
 
 
 def setting(key):
     """Read one knob, clamped exactly as the upstream ``setting()`` does.
 
     ``enabled`` is the shared switch when the semantic API exists, not a knob of
-    this mod: the shell's grid toggle owns ``FreeCAD.Grid.enabled`` and the
+    this mod: the shell's grid toggle owns ``FerroCAD.Grid.enabled`` and the
     overlay has to follow it. On upstream FreeCAD the private knob is the
     fallback.
     """
@@ -149,11 +156,11 @@ def _grid_view(enabled):
 
 def overlay_api():
     """The pull bridge, or ``None`` on a build without it (plan §3.3)."""
-    if getattr(Gui, "addOverlay", None) is None:
+    if getattr(_ferrocad_gui, "addOverlay", None) is None:
         return None
-    if getattr(Gui, "removeOverlay", None) is None:
+    if getattr(_ferrocad_gui, "removeOverlay", None) is None:
         return None
-    return Gui
+    return _ferrocad_gui
 
 
 def is_active():
@@ -162,7 +169,7 @@ def is_active():
     ``True`` when the facade has no provider registry (upstream FreeCAD) or the
     feature has no registered provider: this mod is then the only grid path.
     """
-    active_provider = getattr(Gui, "activeProvider", None)
+    active_provider = getattr(_ferrocad_gui, "activeProvider", None)
     if active_provider is None:
         return True
     return active_provider(FEATURE) in (None, BACKEND)
@@ -170,7 +177,7 @@ def is_active():
 
 def inactive_status():
     """The one-line reason ``Activated``/``on_accept`` refuse to run."""
-    active_provider = getattr(Gui, "activeProvider", None)
+    active_provider = getattr(_ferrocad_gui, "activeProvider", None)
     active = active_provider(FEATURE) if active_provider is not None else None
     return (
         "Grid Overlay (Coin) is not the active grid provider (%s is active). "
@@ -397,12 +404,12 @@ class ShaderGrid:
         self.root.addChild(sep)
 
     def _bind(self):
-        Gui.addOverlay(self.root)
+        _ferrocad_gui.addOverlay(self.root)
         self._registered = True
 
     def _unbind(self):
         if self._registered:
-            Gui.removeOverlay(self.root)
+            _ferrocad_gui.removeOverlay(self.root)
             self._registered = False
 
     def _rebind(self):
@@ -551,8 +558,8 @@ class GridOverlayCoinCommand:
             "Pixmap": os.path.join(RESOURCES, "grid.svg"),
             "Group": "View",
             "CmdType": "ForView",
-            "Surface": "grid",
-            "Parent": "App_ToggleGrid",
+            "FerroCAD_Surface": "grid",
+            "FerroCAD_Parent": "App_ToggleGrid",
         }
 
     def IsActive(self):
@@ -623,7 +630,7 @@ Gui._GridOverlayCoinManager = manager
 def activate():
     """Become the drawn grid: turn the shared switch on and bind the overlay.
 
-    The switch is the one ``FreeCAD.Grid`` store, so taking the grid over turns
+    The switch is the one ``FerroCAD.Grid`` store, so taking the grid over turns
     it on; the returned request rebinds the overlay and hides the native ground
     in the same repaint. The private knob is only the upstream fallback.
     """
@@ -653,7 +660,7 @@ def deactivate():
 def refresh():
     """Re-read the shared switch and (un)bind the overlay (the provider hook).
 
-    The shell's grid toggle flips ``FreeCAD.Grid.enabled`` and then asks the
+    The shell's grid toggle flips ``FerroCAD.Grid.enabled`` and then asks the
     registry for a refresh, so the overlay follows the one switch without a
     second store. The ``grid_overlay`` claim in the result is what the toggle
     folds into its view request.
@@ -675,10 +682,11 @@ if coin is not None and setting("enabled") and getattr(App, "ActiveDocument", No
     manager.ensure_grid()
 
 # Declare the provider from the mod's entry point. On upstream FreeCAD (no
-# provider registry) the mod still loads and reports; it simply has nothing to
-# register with. Re-callable, so a test or a reset can restore the declaration.
+# FerroCAD provider registry) the mod still loads and reports; it simply has
+# nothing to register with. Re-callable, so a test or a reset can restore the
+# declaration.
 def register_provider():
-    register = getattr(Gui, "registerProvider", None)
+    register = getattr(_ferrocad_gui, "registerProvider", None)
     if register is None:
         return False
     register(

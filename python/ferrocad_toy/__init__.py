@@ -31,6 +31,7 @@ from __future__ import annotations
 
 import FreeCAD
 import FreeCADGui
+import FerroCAD
 
 # The shell's data functions (`bootstrap`, `model_tree`, `properties`,
 # `set_property`, `evaluate`, `add_namespace`, `stage_meshes`, `interaction`, ...).
@@ -172,8 +173,8 @@ def _interaction(obj, manipulator, action, element, values):
     return None
 
 
-FreeCAD.register_display_provider(_display_mesh)
-FreeCAD.register_interaction_provider(_interaction)
+FerroCAD.register_display_provider(_display_mesh)
+FerroCAD.register_interaction_provider(_interaction)
 
 
 class _MakeSlabCommand:
@@ -186,7 +187,7 @@ class _MakeSlabCommand:
             "Accel": "Ctrl+Shift+S",
             "Group": "Toy",
             "CmdType": "ForEdit",
-            "Surface": "dock",
+            "FerroCAD_Surface": "dock",
         }
 
     def IsActive(self):
@@ -253,7 +254,7 @@ class _PolylineCommand:
             "ToolTip": "Draw a polyline in the viewport",
             "Group": "Toy",
             "CmdType": "ForView",
-            "Surface": "dock",
+            "FerroCAD_Surface": "dock",
         }
 
     def IsActive(self):

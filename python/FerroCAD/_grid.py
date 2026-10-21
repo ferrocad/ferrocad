@@ -1,7 +1,7 @@
-"""The semantic grid API, exposed as ``FreeCAD.Grid``.
+"""The semantic grid API, exposed as ``FerroCAD.Grid``.
 
-This module is private: the public form is ``FreeCAD.Grid`` (resolved lazily by
-``FreeCAD.__getattr__``), not ``import FreeCAD.Grid``. The settings live in
+This module is private: the public form is ``FerroCAD.Grid`` (the singleton the
+package binds on import), not ``import FerroCAD._grid``. The settings live in
 ``FreeCAD.ParamGet("User parameter:BaseApp/Preferences/View")`` under the same
 keys ``App_ReloadGridSettings`` reads; the facade keeps no state of its own.
 
@@ -98,7 +98,7 @@ def _alpha(value, name: str) -> float:
 
 
 class _GridSettings:
-    """The ``FreeCAD.Grid`` singleton (see the module docstring)."""
+    """The ``FerroCAD.Grid`` singleton (see the module docstring)."""
 
     # -- visibility ---------------------------------------------------------
     @property
@@ -241,7 +241,7 @@ class _GridSettings:
     def snapshot(self) -> dict:
         """The applied state when the shell mirrors it, else the stored policy.
 
-        With ``FreeCAD.GuiUp`` and a ``FreeCADGui.ViewState``, this is the
+        With ``FreeCAD.GuiUp`` and a ``FerroCADGui.ViewState``, this is the
         shell's mirror of what is actually drawn; otherwise (headless, or
         before a shell exists) it is read back from the parameter store. A
         mirror that does not carry the colour and alpha fields falls back to
@@ -276,14 +276,14 @@ class _GridSettings:
 
     @staticmethod
     def _mirror():
-        """``FreeCADGui.ViewState`` when a GUI is up and exposes it, else ``None``."""
+        """``FerroCADGui.ViewState`` when a GUI is up and exposes it, else ``None``."""
         if not FreeCAD.GuiUp:
             return None
         try:
-            import FreeCADGui
+            import FerroCADGui
         except Exception:  # noqa: BLE001 - no GUI module means no mirror
             return None
-        return getattr(FreeCADGui, "ViewState", None)
+        return getattr(FerroCADGui, "ViewState", None)
 
     def reset(self) -> None:
         """Clear every grid preference in the view group (back to the defaults)."""
@@ -294,7 +294,7 @@ _INSTANCE = None
 
 
 def grid() -> _GridSettings:
-    """The ``FreeCAD.Grid`` singleton, created on first use."""
+    """The ``FerroCAD.Grid`` singleton, created on first use."""
     global _INSTANCE
     if _INSTANCE is None:
         _INSTANCE = _GridSettings()

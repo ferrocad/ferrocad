@@ -105,7 +105,7 @@ fn the_coin_and_semantic_grid_mods_load_and_register_an_overlay() {
 
     // 4. The semantic backend wins by priority at registration; switch to the Coin
     //    backend so the overlay bridge this test guards is the active one.
-    evaluate("import FreeCADGui; FreeCADGui.setActiveProvider('grid', 'coin')");
+    evaluate("import FerroCADGui; FerroCADGui.setActiveProvider('grid', 'coin')");
 
     // 5. The Coin mod built its grid and registered it through the pull bridge.
     let scenes = ferrocad_inventor_py::overlay_scenes();

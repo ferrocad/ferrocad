@@ -1,7 +1,7 @@
 //! Document shapes → the viewport's stage: the host's display half.
 //!
 //! The shell names no workbench: it asks the app script for the tessellated shapes
-//! (`stage_meshes`, which asks each module through `FreeCAD.display_mesh`) and this
+//! (`stage_meshes`, which asks each module through `FerroCAD.display_mesh`) and this
 //! module turns them into stage items and keeps the **entity → object** map a pick
 //! needs. A workbench contributes meshes through the `FreeCAD` display hook; nothing
 //! here knows what a `Part::Feature` is.

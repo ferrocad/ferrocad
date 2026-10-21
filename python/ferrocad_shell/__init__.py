@@ -14,6 +14,8 @@ import traceback
 
 import FreeCAD
 import FreeCADGui
+import FerroCAD
+import FerroCADGui
 
 # The namespace the console evaluates in; populated by :func:`bootstrap`.
 _NAMESPACE: dict = {}
@@ -22,7 +24,8 @@ _NAMESPACE: dict = {}
 # shapes to draw (:func:`stage_meshes`), the document edit a manipulator commit
 # produces (:func:`interaction`), the workbench actions (:func:`commands`,
 # :func:`run_command`), and the selection snapshot (:func:`set_selection`). All go
-# through the module hooks or ``FreeCADGui``, so this script names no workbench.
+# through the FerroCAD module hooks or ``FreeCADGui``/``FerroCADGui``, so this
+# script names no workbench.
 
 # Property type id -> editor kind. A type absent here is read-only in the pane.
 _EDITABLE_KINDS = {
@@ -120,7 +123,7 @@ def bootstrap(doc_name: str = "Shell") -> str:
     derived.setExpression("Result", "Params.Length * 2")
 
     # The sample document is deliberately geometry-free: a shape needs a workbench's
-    # display hook (see `FreeCAD.register_display_provider`), which the edition's app
+    # display hook (see `FerroCAD.register_display_provider`), which the edition's app
     # script registers. The base app keeps its `pivy.coin` sample scene.
     group = doc.addObject("App::DocumentObjectGroup", "Group")
     group.addObject(params)
@@ -175,7 +178,7 @@ def _settings_root() -> dict:
     """The synthetic settings root: one node per registered feature."""
     features = []
     seen = set()
-    for manifest in FreeCADGui.providers():
+    for manifest in FerroCADGui.providers():
         feature = manifest["feature"]
         if feature in seen:
             continue
@@ -204,7 +207,7 @@ def _settings_feature(object_name):
         return None
     node = object_name[len(prefix):]
     features = []
-    for manifest in FreeCADGui.providers():
+    for manifest in FerroCADGui.providers():
         feature = manifest["feature"]
         if feature not in features:
             features.append(feature)
@@ -218,10 +221,10 @@ def _settings_feature(object_name):
 
 def _settings_properties(feature: str) -> list:
     """The rows under ``Settings/<Feature>``: the provider selector, then settings."""
-    manifests = FreeCADGui.providers(feature)
+    manifests = FerroCADGui.providers(feature)
     if not manifests:
         return []
-    active = FreeCADGui.activeProvider(feature)
+    active = FerroCADGui.activeProvider(feature)
     label = next(
         (item["label"] for item in manifests if item["backend"] == active),
         str(active or ""),
@@ -238,7 +241,7 @@ def _settings_properties(feature: str) -> list:
             "choices": [item["label"] for item in manifests],
         }
     ]
-    rows.extend(FreeCADGui.settings(feature))
+    rows.extend(FerroCADGui.settings(feature))
     return rows
 
 
@@ -319,7 +322,7 @@ def set_property(object_name: str, prop: str, text: str) -> str:
 
     ``Settings/<Feature>`` routes here too: ``provider`` switches the active
     backend (label or backend id), anything else goes to
-    :func:`FreeCADGui.setSetting`. Neither needs an active document.
+    :func:`FerroCADGui.setSetting`. Neither needs an active document.
     """
     feature = _settings_feature(object_name)
     if feature is not None:
@@ -353,7 +356,7 @@ def set_property(object_name: str, prop: str, text: str) -> str:
 
 def _set_setting(feature: str, object_name: str, prop: str, text: str) -> dict:
     """Route one ``Settings/<Feature>`` edit; never raises into the shell."""
-    manifests = FreeCADGui.providers(feature)
+    manifests = FerroCADGui.providers(feature)
     if not manifests:
         return {"ok": False, "error": f"no object {object_name!r}"}
     if prop == "provider":
@@ -371,10 +374,10 @@ def _set_setting(feature: str, object_name: str, prop: str, text: str) -> dict:
                 "error": f"no provider {text!r} for feature {feature!r}",
             }
         try:
-            return FreeCADGui.setActiveProvider(feature, backend)
+            return FerroCADGui.setActiveProvider(feature, backend)
         except Exception as exc:  # noqa: BLE001 - a bad id is not fatal here
             return {"ok": False, "error": str(exc)}
-    return FreeCADGui.setSetting(feature, prop, text)
+    return FerroCADGui.setSetting(feature, prop, text)
 
 
 def add_namespace(name: str, value) -> None:
@@ -423,7 +426,7 @@ def stage_meshes() -> str:
     """The tessellated shapes the viewport draws, as JSON.
 
     Only objects a registered module can display are included (the mesh comes from
-    ``FreeCAD.display_mesh``, so this module names no workbench), and an object
+    ``FerroCAD.display_mesh``, so this module names no workbench), and an object
     consumed by a feature (its ``Base``) is skipped: the feature's shape replaces it.
     ``entity`` is the object's 1-based position in the document, so the host can map a
     pick back to a name.
@@ -447,7 +450,7 @@ def stage_meshes() -> str:
     for index, obj in enumerate(objects, start=1):
         if obj.Name in consumed:
             continue
-        mesh = FreeCAD.display_mesh(obj)
+        mesh = FerroCAD.display_mesh(obj)
         if mesh is None:
             continue
         meshes.append({"object": obj.Name, "label": obj.Label, "entity": index, **mesh})
@@ -460,7 +463,7 @@ def interaction(
     """Apply a manipulator commit through the module that supports it.
 
     The manipulator is presentation-side (`ferrocad_stage::Manipulator`); the edit it
-    implies belongs to the workbench (``FreeCAD.register_interaction_provider``). This
+    implies belongs to the workbench (``FerroCAD.register_interaction_provider``). This
     function only resolves the object and marshals the request; the shell names no
     workbench and links no kernel. Returns ``{"ok": ...}``.
     """
@@ -476,7 +479,7 @@ def interaction(
     except Exception as exc:
         return _json({"ok": False, "error": f"bad values: {exc}"})
 
-    result = FreeCAD.interaction(base, manipulator, action, element, values)
+    result = FerroCAD.interaction(base, manipulator, action, element, values)
     if result is None:
         return _json(
             {"ok": False, "error": f"no module handles {manipulator} {action}"}
@@ -492,9 +495,10 @@ def commands() -> str:
     shell names no workbench either.
 
     FerroCAD extends ``GetResources()`` with two optional keys the upstream facade does
-    not know about: ``Surface`` (which chrome surface owns the command) and ``Parent``
-    (the surface's primary command id, for a row in that control's popover). They are
-    added here, in the shell bridge, so ``FreeCADGui`` itself stays upstream-shaped.
+    not know about: ``FerroCAD_Surface`` (which chrome surface owns the command) and
+    ``FerroCAD_Parent`` (the surface's primary command id, for a row in that control's
+    popover). They are added here, in the shell bridge, so ``FreeCADGui`` itself stays
+    upstream-shaped; the JSON keeps the neutral field names ``surface``/``parent``.
     """
     entries = FreeCADGui._command_list()
     registry = getattr(FreeCADGui, "_COMMANDS", {})
@@ -502,8 +506,8 @@ def commands() -> str:
     for entry in entries:
         command = registry.get(entry["id"])
         resources = read_resources(command) if command is not None and read_resources else {}
-        entry["surface"] = str(resources.get("Surface") or "")
-        entry["parent"] = str(resources.get("Parent") or "")
+        entry["surface"] = str(resources.get("FerroCAD_Surface") or "")
+        entry["parent"] = str(resources.get("FerroCAD_Parent") or "")
     return _json(entries)
 
 
@@ -545,19 +549,19 @@ def set_selection(pairs_json: str) -> str:
 
 
 def set_view_state(state_json: str) -> str:
-    """Mirror the shell's presentation state to ``FreeCADGui.ViewState``.
+    """Mirror the shell's presentation state to ``FerroCADGui.ViewState``.
 
     A checkable command reads it in ``IsChecked``; the shell pushes it before it
     re-lists the commands, so a ``{"view": …}`` request closes the loop.
     """
     state = json.loads(state_json)
-    FreeCADGui.ViewState.grid = bool(state.get("grid", False))
-    FreeCADGui.ViewState.axis_cross = bool(state.get("axis_cross", True))
-    FreeCADGui.ViewState.projection = str(state.get("projection", "persp"))
-    FreeCADGui.ViewState.grid_minor = float(state.get("grid_minor", 10.0))
-    FreeCADGui.ViewState.grid_major = float(state.get("grid_major", 100.0))
+    FerroCADGui.ViewState.grid = bool(state.get("grid", False))
+    FerroCADGui.ViewState.axis_cross = bool(state.get("axis_cross", True))
+    FerroCADGui.ViewState.projection = str(state.get("projection", "persp"))
+    FerroCADGui.ViewState.grid_minor = float(state.get("grid_minor", 10.0))
+    FerroCADGui.ViewState.grid_major = float(state.get("grid_major", 100.0))
     radius = state.get("grid_radius")
-    FreeCADGui.ViewState.grid_radius = None if radius is None else float(radius)
+    FerroCADGui.ViewState.grid_radius = None if radius is None else float(radius)
     return _json({"ok": True})
 
 
@@ -585,7 +589,7 @@ class _DeleteCommand:
             "Accel": "Del",
             "Group": "Edit",
             "CmdType": "ForEdit",
-            "Surface": "dock",
+            "FerroCAD_Surface": "dock",
         }
 
     def IsActive(self):
@@ -623,7 +627,7 @@ class _MoveCommand:
             "Accel": "Ctrl+Shift+M",
             "Group": "Edit",
             "CmdType": "ForEdit",
-            "Surface": "dock",
+            "FerroCAD_Surface": "dock",
         }
 
     def IsActive(self):
@@ -680,15 +684,15 @@ _GRID_FEATURE = "grid"
 def _grid_view_request():
     """The ``{"view": …}`` request for the current grid settings.
 
-    ``FreeCAD.Grid.apply()`` describes the native ground. A provider that draws
+    ``FerroCAD.Grid.apply()`` describes the native ground. A provider that draws
     the grid itself answers the refresh with the ``grid_overlay`` flag it owns
     (the Coin overlay hides the native ground while it is bound); that flag
     follows the master switch, so turning the grid off restores the native
     layer instead of leaving the two grids stacked. A provider that uses the
     native ground returns no claim, and the request keeps its default.
     """
-    request = FreeCAD.Grid.apply()
-    refreshed = FreeCADGui.refreshProviders(_GRID_FEATURE)
+    request = FerroCAD.Grid.apply()
+    refreshed = FerroCADGui.refreshProviders(_GRID_FEATURE)
     owned = (refreshed.get("view") or {}).get("grid_overlay")
     if owned is not None:
         request["view"]["grid_overlay"] = bool(request["view"].get("grid")) and bool(
@@ -700,10 +704,10 @@ def _grid_view_request():
 class _GridCommand:
     """``App_ToggleGrid`` — show or hide the reference grid.
 
-    ``FreeCAD.Grid.enabled`` is the one grid switch; this command owns it and
+    ``FerroCAD.Grid.enabled`` is the one grid switch; this command owns it and
     returns the view request derived from it. The native ground follows ``grid``
     and a provider that draws the grid itself (a shader overlay) is asked to
-    re-read the switch through :func:`FreeCADGui.refreshProviders`, so the check
+    re-read the switch through :func:`FerroCADGui.refreshProviders`, so the check
     mark, the store and the drawn grid cannot disagree. ``IsChecked`` reads the
     snapshot the shell mirrors back from the returned request.
     """
@@ -714,14 +718,14 @@ class _GridCommand:
             "ToolTip": "Show the reference grid",
             "Group": "View",
             "CmdType": "ForView",
-            "Surface": "grid",
+            "FerroCAD_Surface": "grid",
         }
 
     def IsChecked(self):
-        return bool(FreeCADGui.ViewState.grid)
+        return bool(FerroCADGui.ViewState.grid)
 
     def Activated(self):
-        grid = FreeCAD.Grid
+        grid = FerroCAD.Grid
         grid.enabled = not grid.enabled
         return _grid_view_request()
 
@@ -742,14 +746,14 @@ class _AxisCrossCommand:
             "ToolTip": "Show the world axis cross",
             "Group": "View",
             "CmdType": "ForView",
-            "Surface": "axis",
+            "FerroCAD_Surface": "axis",
         }
 
     def IsChecked(self):
-        return bool(FreeCADGui.ViewState.axis_cross)
+        return bool(FerroCADGui.ViewState.axis_cross)
 
     def Activated(self):
-        return {"view": {"axis_cross": not FreeCADGui.ViewState.axis_cross}}
+        return {"view": {"axis_cross": not FerroCADGui.ViewState.axis_cross}}
 
 
 FreeCADGui.addCommand("App_ToggleAxisCross", _AxisCrossCommand())
@@ -758,9 +762,9 @@ FreeCADGui.addCommand("App_ToggleAxisCross", _AxisCrossCommand())
 class _GridSettingsCommand:
     """``View_GridSettings`` — edit the reference grid's appearance in a dialog.
 
-    The dialog is a thin client of :data:`FreeCAD.Grid`: it seeds its fields from
+    The dialog is a thin client of :data:`FerroCAD.Grid`: it seeds its fields from
     the settings object, writes each value back on accept, and returns the
-    ``{"view": …}`` request ``FreeCAD.Grid.apply()`` builds, so the shell applies
+    ``{"view": …}`` request ``FerroCAD.Grid.apply()`` builds, so the shell applies
     the same state the native grid draws. A validation error stays in the modal
     (the callback raises ``ValueError`` and the facade reports it as the
     dialog's error).
@@ -772,12 +776,12 @@ class _GridSettingsCommand:
             "ToolTip": "Change the reference grid's appearance",
             "Group": "View",
             "CmdType": "ForView",
-            "Surface": "grid",
-            "Parent": "App_ToggleGrid",
+            "FerroCAD_Surface": "grid",
+            "FerroCAD_Parent": "App_ToggleGrid",
         }
 
     def Activated(self):
-        grid = FreeCAD.Grid
+        grid = FerroCAD.Grid
         return {
             "title": "Grid settings",
             "accept": "Apply",
@@ -829,8 +833,8 @@ class _GridSettingsCommand:
 
 
 def _apply_grid_settings(values):
-    """Write a dialog's grid fields to ``FreeCAD.Grid`` and return its request."""
-    grid = FreeCAD.Grid
+    """Write a dialog's grid fields to ``FerroCAD.Grid`` and return its request."""
+    grid = FerroCAD.Grid
     grid.enabled = bool(values.get("enabled", grid.enabled))
     grid.color = str(values.get("color", grid.color))
     grid.opacity = float(values.get("opacity", grid.opacity))
@@ -847,7 +851,7 @@ class _ModsSettingsCommand:
     """``Mods_Settings`` — choose which mod backend provides a feature.
 
     Each registered feature becomes one ``enum`` field whose options are the
-    providers' labels. Accepting calls :func:`FreeCADGui.setActiveProvider` for
+    providers' labels. Accepting calls :func:`FerroCADGui.setActiveProvider` for
     every feature that changed and returns the merged ``{"view": …}`` request,
     so the shell applies the old backend's ``deactivate`` and the new one's
     ``activate`` in the same repaint. With no registered providers it reports
@@ -860,19 +864,19 @@ class _ModsSettingsCommand:
             "ToolTip": "Choose which mod provides each feature",
             "Group": "Edit",
             "CmdType": "ForEdit",
-            "Surface": "mods",
+            "FerroCAD_Surface": "mods",
         }
 
     def Activated(self):
         features = {}
-        for provider in FreeCADGui.providers():
+        for provider in FerroCADGui.providers():
             features.setdefault(provider["feature"], []).append(provider)
         if not features:
             return {"status": "no mod providers are registered"}
 
         fields = []
         for feature, items in features.items():
-            active = FreeCADGui.activeProvider(feature)
+            active = FerroCADGui.activeProvider(feature)
             current = next(
                 (item for item in items if item["backend"] == active), items[0]
             )
@@ -904,7 +908,7 @@ def _apply_mod_settings(values):
     changed = []
     problems = []
     for feature, choice in values.items():
-        items = FreeCADGui.providers(feature)
+        items = FerroCADGui.providers(feature)
         if not items:
             problems.append(str(feature))
             continue
@@ -916,9 +920,9 @@ def _apply_mod_settings(values):
         if backend is None:
             problems.append("%s=%s" % (feature, choice))
             continue
-        if backend == FreeCADGui.activeProvider(feature):
+        if backend == FerroCADGui.activeProvider(feature):
             continue
-        result = FreeCADGui.setActiveProvider(feature, backend)
+        result = FerroCADGui.setActiveProvider(feature, backend)
         view.update(result.get("view") or {})
         problems.extend(result.get("errors") or [])
         changed.append("%s: %s" % (feature, backend))
@@ -943,7 +947,7 @@ class _ReloadGridSettingsCommand:
     """``App_ReloadGridSettings`` — apply the grid preferences without a restart.
 
     The preferences (``User parameter:BaseApp/Preferences/View``) are read and
-    validated by :data:`FreeCAD.Grid`, so this is the same request
+    validated by :data:`FerroCAD.Grid`, so this is the same request
     ``View_GridSettings`` builds. A radius of 0 restores the camera-derived
     extent.
     """
@@ -954,8 +958,8 @@ class _ReloadGridSettingsCommand:
             "ToolTip": "Apply the grid preferences",
             "Group": "View",
             "CmdType": "ForView",
-            "Surface": "grid",
-            "Parent": "App_ToggleGrid",
+            "FerroCAD_Surface": "grid",
+            "FerroCAD_Parent": "App_ToggleGrid",
         }
 
     def Activated(self):
@@ -974,8 +978,8 @@ class _ActivateWorkplaneCommand:
             "ToolTip": "Sketch on the face under the pointer",
             "Group": "View",
             "CmdType": "ForView",
-            "Surface": "workplane",
-            "Parent": "App_ViewWorkplane",
+            "FerroCAD_Surface": "workplane",
+            "FerroCAD_Parent": "App_ViewWorkplane",
         }
 
     def Activated(self):
@@ -991,8 +995,8 @@ class _ClearWorkplaneCommand:
             "ToolTip": "Return to the world frame",
             "Group": "View",
             "CmdType": "ForView",
-            "Surface": "workplane",
-            "Parent": "App_ViewWorkplane",
+            "FerroCAD_Surface": "workplane",
+            "FerroCAD_Parent": "App_ViewWorkplane",
         }
 
     def Activated(self):
@@ -1008,7 +1012,7 @@ class _ViewWorkplaneCommand:
             "ToolTip": "Look down the active workplane's normal",
             "Group": "View",
             "CmdType": "ForView",
-            "Surface": "workplane",
+            "FerroCAD_Surface": "workplane",
         }
 
     def Activated(self):
@@ -1035,7 +1039,7 @@ class _DevToggleToolsCommand:
             "Accel": "Ctrl+Shift+D",
             "Group": "View",
             "CmdType": "ForView",
-            "Surface": "hidden",
+            "FerroCAD_Surface": "hidden",
         }
 
     def IsActive(self):

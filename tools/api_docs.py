@@ -32,14 +32,28 @@ PYTHON_DIR = REPO / "python"
 
 # (module, one-line role, extra note or None)
 MODULES = [
-    ("FreeCAD", "Application module: documents, objects, the base value types.", None),
+    (
+        "FreeCAD",
+        "Upstream-compatible surface: documents, objects, the base value types.",
+        None,
+    ),
     ("FreeCAD.Base", "The `Base` value types FreeCAD exposes as a submodule.", None),
     ("FreeCAD.Units", "Quantity parsing, units and number formatting.", None),
     ("FreeCAD.Console", "The console sink a workbench prints through.", None),
     (
         "FreeCADGui",
-        "The GUI facade: commands, selection, view state, providers and overlays.",
-        "`Selection` and `ViewState` are read-only snapshots pushed by the shell.",
+        "Upstream-compatible GUI surface: commands, selection and dialogs.",
+        "`Selection` is a read-only snapshot pushed by the shell.",
+    ),
+    (
+        "FerroCAD",
+        "FerroCAD-only surface: the semantic grid and the module hooks.",
+        "A mod that imports this depends on FerroCAD; it is not upstream API.",
+    ),
+    (
+        "FerroCADGui",
+        "FerroCAD-only GUI surface: providers, settings, overlays and view state.",
+        "`ViewState` is a read-only snapshot pushed by the shell.",
     ),
     (
         "ferrocad_shell",
@@ -58,9 +72,11 @@ Generated from the live modules by `tools/api_docs.py`. Each page is a signature
 and summary reference for what FerroCAD ships, not a tutorial: the workflows in
 [`../user/`](../user/) show the same surface being used.
 
-The product surface is the `FreeCAD` namespace, which deliberately mirrors
+The product surface is the `FreeCAD`/`FreeCADGui` pair, which deliberately mirrors
 upstream, so the authoritative description of *behaviour* remains FreeCAD's own
-documentation. What this section adds is the exact shape of the surface here.
+documentation. `FerroCAD`/`FerroCADGui` hold the FerroCAD-only extensions and are
+documented here alone. What this section adds is the exact shape of the surface
+here.
 """
 
 INDEX_FOOTER = """## Scope and honesty

@@ -2,7 +2,7 @@
 
 Two mods now implement the same feature: ``mods/GridOverlay`` draws the native
 grid (``"ferrocad"``) and ``mods/GridOverlayCoin`` registers a Coin overlay
-(``"coin"``). ``FreeCADGui.registerProvider`` records both against the ``"grid"``
+(``"coin"``). ``FerroCADGui.registerProvider`` records both against the ``"grid"``
 feature; exactly one is active, the choice is persisted under
 ``User parameter:BaseApp/Preferences/Mods``, and switching runs the outgoing
 ``deactivate`` and incoming ``activate``.
@@ -24,6 +24,8 @@ from unittest import mock
 
 import FreeCAD
 import FreeCADGui
+import FerroCAD
+import FerroCADGui
 import ferrocad_shell  # noqa: F401  (registers Mods_Settings)
 
 
@@ -59,7 +61,7 @@ def provider_prefs():
 
 def reset_provider_state():
     """Forget applied backends and saved choices, keeping the registrations."""
-    FreeCADGui._PROVIDER_APPLIED.clear()
+    FerroCADGui._PROVIDER_APPLIED.clear()
     provider_prefs().Clear()
 
 
@@ -86,10 +88,10 @@ class ModProviderTests(unittest.TestCase):
         cls.coin.manager.remove_grid()
         cls.coin.manager.items.clear()
         coin_suite.COIN._registered.clear()
-        for provider in FreeCADGui.providers(GRID):
-            FreeCADGui.unregisterProvider(GRID, provider["backend"])
+        for provider in FerroCADGui.providers(GRID):
+            FerroCADGui.unregisterProvider(GRID, provider["backend"])
         reset_provider_state()
-        FreeCAD.Grid.reset()
+        FerroCAD.Grid.reset()
         FreeCADGui._cancel_all()
         close_documents()
 
@@ -100,7 +102,7 @@ class ModProviderTests(unittest.TestCase):
         self.coin.register_provider()
         self.native.register_provider()
         close_documents()
-        self.grid = FreeCAD.Grid
+        self.grid = FerroCAD.Grid
         self.grid.reset()
         self.coin.SETTINGS.Clear()
         self.coin.manager.remove_grid()
@@ -110,8 +112,8 @@ class ModProviderTests(unittest.TestCase):
 
     def tearDown(self):
         for feature in self._features:
-            for provider in FreeCADGui.providers(feature):
-                FreeCADGui.unregisterProvider(feature, provider["backend"])
+            for provider in FerroCADGui.providers(feature):
+                FerroCADGui.unregisterProvider(feature, provider["backend"])
         self.coin.manager.remove_grid()
         self.coin.manager.items.clear()
         coin_suite.COIN._registered.clear()
@@ -125,7 +127,7 @@ class ModProviderTests(unittest.TestCase):
         """Open a document and make Coin the drawn grid; return its overlay."""
         FreeCAD.newDocument(name)
         FreeCAD.setActiveDocument(name)
-        FreeCADGui.setActiveProvider(GRID, "coin")
+        FerroCADGui.setActiveProvider(GRID, "coin")
         self.assertTrue(self.grid.enabled, "coin activate turns the one switch on")
         overlay = self.coin.manager.items[name]
         self.assertTrue(overlay.visible)
@@ -220,34 +222,34 @@ class ModProviderTests(unittest.TestCase):
         feature = "demo"
         self._features.add(feature)
         calls = []
-        FreeCADGui.registerProvider(
+        FerroCADGui.registerProvider(
             feature, "low", "Low", priority=1,
             activate=lambda: calls.append("low+"),
         )
-        FreeCADGui.registerProvider(
+        FerroCADGui.registerProvider(
             feature, "high", "High", priority=5,
             activate=lambda: calls.append("high+"),
         )
 
         self.assertEqual(calls, [], "registration does not run callbacks")
-        self.assertEqual(FreeCADGui.activeProvider(feature), "high")
-        active = [item["backend"] for item in FreeCADGui.providers(feature) if item["active"]]
+        self.assertEqual(FerroCADGui.activeProvider(feature), "high")
+        active = [item["backend"] for item in FerroCADGui.providers(feature) if item["active"]]
         self.assertEqual(active, ["high"], "exactly one provider is active")
 
-        FreeCADGui.setActiveProvider(feature, "low")
-        self.assertEqual(FreeCADGui.activeProvider(feature), "low")
+        FerroCADGui.setActiveProvider(feature, "low")
+        self.assertEqual(FerroCADGui.activeProvider(feature), "low")
         self.assertEqual(provider_prefs().GetString(feature, ""), "low")
         self.assertEqual(calls, ["low+"])
 
         # Re-registering in the opposite order does not overturn the saved
         # choice: persistence beats priority.
-        FreeCADGui.unregisterProvider(feature, "low")
-        FreeCADGui.unregisterProvider(feature, "high")
-        FreeCADGui.registerProvider(feature, "high", "High", priority=9)
-        FreeCADGui.registerProvider(feature, "low", "Low", priority=1)
-        self.assertEqual(FreeCADGui.activeProvider(feature), "low")
+        FerroCADGui.unregisterProvider(feature, "low")
+        FerroCADGui.unregisterProvider(feature, "high")
+        FerroCADGui.registerProvider(feature, "high", "High", priority=9)
+        FerroCADGui.registerProvider(feature, "low", "Low", priority=1)
+        self.assertEqual(FerroCADGui.activeProvider(feature), "low")
         self.assertTrue(
-            next(item for item in FreeCADGui.providers(feature) if item["backend"] == "low")[
+            next(item for item in FerroCADGui.providers(feature) if item["backend"] == "low")[
                 "active"
             ]
         )
@@ -256,12 +258,12 @@ class ModProviderTests(unittest.TestCase):
         feature = "takeover"
         self._features.add(feature)
         calls = []
-        FreeCADGui.registerProvider(
+        FerroCADGui.registerProvider(
             feature, "low", "Low", priority=0,
             activate=lambda: calls.append("low+"),
             deactivate=lambda: calls.append("low-"),
         )
-        FreeCADGui.registerProvider(
+        FerroCADGui.registerProvider(
             feature, "high", "High", priority=10,
             activate=lambda: calls.append("high+"),
         )
@@ -271,26 +273,26 @@ class ModProviderTests(unittest.TestCase):
             ["low-"],
             "a takeover deactivates the outgoing backend but does not activate the incoming one",
         )
-        self.assertEqual(FreeCADGui.activeProvider(feature), "high")
+        self.assertEqual(FerroCADGui.activeProvider(feature), "high")
 
     def test_equal_priority_breaks_the_tie_by_registration_order(self):
         feature = "tie"
         self._features.add(feature)
-        FreeCADGui.registerProvider(feature, "first", "First", priority=2)
-        FreeCADGui.registerProvider(feature, "second", "Second", priority=2)
-        self.assertEqual(FreeCADGui.activeProvider(feature), "first")
+        FerroCADGui.registerProvider(feature, "first", "First", priority=2)
+        FerroCADGui.registerProvider(feature, "second", "Second", priority=2)
+        self.assertEqual(FerroCADGui.activeProvider(feature), "first")
 
     def test_an_unknown_feature_has_no_active_provider(self):
-        self.assertIsNone(FreeCADGui.activeProvider("nothing-here"))
-        self.assertEqual(FreeCADGui.providers("nothing-here"), [])
+        self.assertIsNone(FerroCADGui.activeProvider("nothing-here"))
+        self.assertEqual(FerroCADGui.providers("nothing-here"), [])
 
     def test_switching_an_unknown_backend_is_a_programmer_error(self):
         self._features.add("guarded")
-        FreeCADGui.registerProvider("guarded", "only", "Only")
+        FerroCADGui.registerProvider("guarded", "only", "Only")
         with self.assertRaises(ValueError):
-            FreeCADGui.setActiveProvider("guarded", "missing")
+            FerroCADGui.setActiveProvider("guarded", "missing")
         with self.assertRaises(ValueError):
-            FreeCADGui.setActiveProvider("not-registered", "only")
+            FerroCADGui.setActiveProvider("not-registered", "only")
 
     # -- the switch contract ---------------------------------------------
     def test_switching_calls_each_callback_exactly_once(self):
@@ -300,29 +302,29 @@ class ModProviderTests(unittest.TestCase):
         a_deactivate = mock.Mock(return_value=None)
         b_activate = mock.Mock(return_value=None)
         b_deactivate = mock.Mock(return_value=None)
-        FreeCADGui.registerProvider(
+        FerroCADGui.registerProvider(
             feature, "a", "A", priority=5,
             activate=a_activate, deactivate=a_deactivate,
         )
-        FreeCADGui.registerProvider(
+        FerroCADGui.registerProvider(
             feature, "b", "B", priority=1,
             activate=b_activate, deactivate=b_deactivate,
         )
 
-        FreeCADGui.setActiveProvider(feature, "a")
+        FerroCADGui.setActiveProvider(feature, "a")
         a_activate.assert_called_once_with()
         a_deactivate.assert_not_called()
         b_activate.assert_not_called()
         b_deactivate.assert_not_called()
 
-        FreeCADGui.setActiveProvider(feature, "b")
+        FerroCADGui.setActiveProvider(feature, "b")
         a_deactivate.assert_called_once_with()
         b_activate.assert_called_once_with()
         self.assertEqual(a_activate.call_count, 1)
         b_deactivate.assert_not_called()
 
         # Selecting the already-active backend is inert.
-        FreeCADGui.setActiveProvider(feature, "b")
+        FerroCADGui.setActiveProvider(feature, "b")
         self.assertEqual(a_deactivate.call_count, 1)
         self.assertEqual(b_activate.call_count, 1)
 
@@ -331,15 +333,15 @@ class ModProviderTests(unittest.TestCase):
         self._features.add(feature)
         a_deactivate = mock.Mock(return_value=None)
         b_activate = mock.Mock(return_value=None)
-        FreeCADGui.registerProvider(
+        FerroCADGui.registerProvider(
             feature, "a", "A", priority=10, deactivate=a_deactivate
         )
-        FreeCADGui.registerProvider(
+        FerroCADGui.registerProvider(
             feature, "b", "B", priority=0, activate=b_activate
         )
-        self.assertEqual(FreeCADGui.activeProvider(feature), "a")
+        self.assertEqual(FerroCADGui.activeProvider(feature), "a")
 
-        FreeCADGui.setActiveProvider(feature, "b")
+        FerroCADGui.setActiveProvider(feature, "b")
 
         a_deactivate.assert_called_once_with()
         b_activate.assert_called_once_with()
@@ -348,7 +350,7 @@ class ModProviderTests(unittest.TestCase):
         FreeCAD.newDocument("Providers")
         FreeCAD.setActiveDocument("Providers")
         self.assertEqual(
-            FreeCADGui.activeProvider(GRID), "ferrocad", "the declared default"
+            FerroCADGui.activeProvider(GRID), "ferrocad", "the declared default"
         )
         self.assertEqual(
             self.coin.manager.items,
@@ -356,18 +358,18 @@ class ModProviderTests(unittest.TestCase):
             "the inactive Coin observer must not build a grid",
         )
 
-        FreeCADGui.setActiveProvider(GRID, "coin")
+        FerroCADGui.setActiveProvider(GRID, "coin")
         self.assertIn("Providers", self.coin.manager.items)
         self.assertTrue(coin_suite.COIN._registered, "the overlay is registered")
 
-        result = FreeCADGui.setActiveProvider(GRID, "ferrocad")
+        result = FerroCADGui.setActiveProvider(GRID, "ferrocad")
         self.assertEqual(result["previous"], "coin")
         self.assertEqual(self.coin.manager.items, {})
         self.assertEqual(coin_suite.COIN._registered, [], "the Coin overlay is gone")
         self.assertTrue(self.grid.enabled, "native activate enables the native grid")
         self.assertTrue(result["view"]["grid"])
 
-        result = FreeCADGui.setActiveProvider(GRID, "coin")
+        result = FerroCADGui.setActiveProvider(GRID, "coin")
         self.assertIn("Providers", self.coin.manager.items)
         self.assertTrue(coin_suite.COIN._registered, "the Coin overlay is re-added")
         self.assertTrue(
@@ -380,7 +382,7 @@ class ModProviderTests(unittest.TestCase):
     def test_the_inactive_coin_command_reports_and_changes_nothing(self):
         FreeCAD.newDocument("Inactive")
         FreeCAD.setActiveDocument("Inactive")
-        FreeCADGui.setActiveProvider(GRID, "ferrocad")
+        FerroCADGui.setActiveProvider(GRID, "ferrocad")
         before = self.grid.snapshot()
         items = dict(self.coin.manager.items)
 
@@ -397,7 +399,7 @@ class ModProviderTests(unittest.TestCase):
     def test_the_inactive_native_command_reports_and_changes_nothing(self):
         FreeCAD.newDocument("Inactive")
         FreeCAD.setActiveDocument("Inactive")
-        FreeCADGui.setActiveProvider(GRID, "coin")
+        FerroCADGui.setActiveProvider(GRID, "coin")
         before = self.grid.snapshot()
 
         result = FreeCADGui.runCommand(SEMANTIC_COMMAND)
@@ -412,7 +414,7 @@ class ModProviderTests(unittest.TestCase):
     def test_mods_settings_lists_both_grid_providers_and_switches(self):
         FreeCAD.newDocument("Mods")
         FreeCAD.setActiveDocument("Mods")
-        FreeCADGui.setActiveProvider(GRID, "ferrocad")
+        FerroCADGui.setActiveProvider(GRID, "ferrocad")
 
         run = FreeCADGui._run(MODS_COMMAND)
         self.assertTrue(run["ok"], run)
@@ -426,7 +428,7 @@ class ModProviderTests(unittest.TestCase):
 
         accepted = FreeCADGui._accept(run["token"], {GRID: "Coin (WGSL)"})
         self.assertTrue(accepted["ok"], accepted)
-        self.assertEqual(FreeCADGui.activeProvider(GRID), "coin")
+        self.assertEqual(FerroCADGui.activeProvider(GRID), "coin")
         self.assertIn("view", accepted, "the switch repaints in one request")
         self.assertTrue(accepted["view"]["grid"])
         self.assertTrue(accepted["view"]["grid_overlay"])
@@ -437,13 +439,13 @@ class ModProviderTests(unittest.TestCase):
         run = FreeCADGui._run(MODS_COMMAND)
         accepted = FreeCADGui._accept(run["token"], {GRID: "ferrocad"})
         self.assertTrue(accepted["ok"], accepted)
-        self.assertEqual(FreeCADGui.activeProvider(GRID), "ferrocad")
+        self.assertEqual(FerroCADGui.activeProvider(GRID), "ferrocad")
         self.assertTrue(accepted["view"]["grid"])
         self.assertEqual(self.coin.manager.items, {})
 
     def test_mods_settings_reports_when_nothing_is_registered(self):
-        for provider in FreeCADGui.providers(GRID):
-            FreeCADGui.unregisterProvider(GRID, provider["backend"])
+        for provider in FerroCADGui.providers(GRID):
+            FerroCADGui.unregisterProvider(GRID, provider["backend"])
         try:
             result = FreeCADGui.runCommand(MODS_COMMAND)
             self.assertIn("status", result)
@@ -451,12 +453,12 @@ class ModProviderTests(unittest.TestCase):
             self.assertNotIn("fields", result)
         finally:
             # Restore the two real grid registrations for the remaining tests.
-            FreeCADGui.registerProvider(
+            FerroCADGui.registerProvider(
                 GRID, "coin", "Coin (WGSL)", command=COIN_COMMAND, priority=0,
                 activate=self.coin.activate, deactivate=self.coin.deactivate,
                 refresh=self.coin.refresh,
             )
-            FreeCADGui.registerProvider(
+            FerroCADGui.registerProvider(
                 GRID, "ferrocad", "FerroCAD (native)",
                 command=SEMANTIC_COMMAND, priority=10,
                 activate=self.native.activate, deactivate=self.native.deactivate,
@@ -473,13 +475,13 @@ class ModProviderTests(unittest.TestCase):
             calls.append("a")
             return {"view": {"flag": True}, "status": "re-read"}
 
-        FreeCADGui.registerProvider(feature, "a", "A", priority=1, refresh=refresh)
+        FerroCADGui.registerProvider(feature, "a", "A", priority=1, refresh=refresh)
         self.assertEqual(calls, [], "registration does not run refresh")
 
-        FreeCADGui.setActiveProvider(feature, "a")
+        FerroCADGui.setActiveProvider(feature, "a")
         self.assertEqual(calls, [], "a switch runs activate, not refresh")
 
-        result = FreeCADGui.refreshProviders(feature)
+        result = FerroCADGui.refreshProviders(feature)
         self.assertEqual(calls, ["a"])
         self.assertTrue(result["ok"], result)
         self.assertEqual(result["backend"], "a")
@@ -488,7 +490,7 @@ class ModProviderTests(unittest.TestCase):
 
         # A feature with no provider (or a backend with no callback) is a no-op,
         # which is what the shell's grid toggle needs on a bare facade.
-        empty = FreeCADGui.refreshProviders("nothing-here")
+        empty = FerroCADGui.refreshProviders("nothing-here")
         self.assertTrue(empty["ok"], empty)
         self.assertIsNone(empty["backend"])
         self.assertEqual(empty["view"], {})
@@ -501,10 +503,10 @@ class ModProviderTests(unittest.TestCase):
         def explode():
             raise RuntimeError("refresh boom")
 
-        FreeCADGui.registerProvider(feature, "a", "A", refresh=explode)
+        FerroCADGui.registerProvider(feature, "a", "A", refresh=explode)
         stderr = io.StringIO()
         with contextlib.redirect_stderr(stderr):
-            result = FreeCADGui.refreshProviders(feature)
+            result = FerroCADGui.refreshProviders(feature)
 
         self.assertTrue(result["ok"], result)
         self.assertEqual(result["view"], {})
@@ -521,8 +523,8 @@ class ModProviderTests(unittest.TestCase):
         feature = "bad-refresh-registration"
         self._features.add(feature)
         with self.assertRaises(TypeError):
-            FreeCADGui.registerProvider(feature, "a", "A", refresh=42)
-        self.assertEqual(FreeCADGui.providers(feature), [])
+            FerroCADGui.registerProvider(feature, "a", "A", refresh=42)
+        self.assertEqual(FerroCADGui.providers(feature), [])
 
     def test_callback_errors_are_reported_and_do_not_break_the_registry(self):
         feature = "broken"
@@ -532,26 +534,26 @@ class ModProviderTests(unittest.TestCase):
         def explode():
             raise RuntimeError("boom")
 
-        FreeCADGui.registerProvider(
+        FerroCADGui.registerProvider(
             feature, "a", "A", priority=1, activate=explode, deactivate=explode
         )
-        FreeCADGui.registerProvider(
+        FerroCADGui.registerProvider(
             feature, "b", "B", priority=0,
             activate=lambda: activated.append("b"), deactivate=explode,
         )
 
         stderr = io.StringIO()
         with contextlib.redirect_stderr(stderr):
-            first = FreeCADGui.setActiveProvider(feature, "a")
+            first = FerroCADGui.setActiveProvider(feature, "a")
             self.assertTrue(first["ok"], first)
             self.assertTrue(first["errors"])
             self.assertIn("activate", first["errors"][0])
-            self.assertEqual(FreeCADGui.activeProvider(feature), "a")
+            self.assertEqual(FerroCADGui.activeProvider(feature), "a")
 
-            second = FreeCADGui.setActiveProvider(feature, "b")
+            second = FerroCADGui.setActiveProvider(feature, "b")
             self.assertTrue(second["ok"], second)
             self.assertIn("deactivate", second["errors"][0])
-            self.assertEqual(FreeCADGui.activeProvider(feature), "b")
+            self.assertEqual(FerroCADGui.activeProvider(feature), "b")
             self.assertEqual(
                 activated, ["b"], "a failing deactivate does not skip the incoming activate"
             )
@@ -561,7 +563,7 @@ class ModProviderTests(unittest.TestCase):
         self.assertIn("activate raised", report)
         self.assertIn("RuntimeError: boom", report)
         self.assertEqual(
-            {item["backend"] for item in FreeCADGui.providers(feature)}, {"a", "b"}
+            {item["backend"] for item in FerroCADGui.providers(feature)}, {"a", "b"}
         )
 
 

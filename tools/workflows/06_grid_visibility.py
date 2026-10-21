@@ -1,7 +1,7 @@
 """User workflow: turn the reference grid on and off, and read the switch back."""
 
-import FreeCAD
-import FreeCADGui
+import FerroCAD
+import FerroCADGui
 
 from _capture import main
 
@@ -13,13 +13,13 @@ SUMMARY = (
     "window, shows the view request it returns, and reads the one switch every grid "
     "backend agrees on."
 )
-REQUIRES = ["the `FreeCAD` facade and `ferrocad_shell`; no GPU and no window"]
+REQUIRES = ["the `FerroCAD` facade and `ferrocad_shell`; no GPU and no window"]
 
 
 def run(cap):
     with cap.step("Start from the default"):
         cap.prose(
-            "`FreeCAD.Grid` is the semantic settings object for the reference grid. "
+            "`FerroCAD.Grid` is the semantic settings object for the reference grid. "
             "`enabled` is the switch a provider reads; it defaults to off."
         )
         cap.exec(
@@ -27,16 +27,16 @@ def run(cap):
             import json
             import ferrocad_shell
 
-            FreeCAD.Grid.reset()
+            FerroCAD.Grid.reset()
             """
         )
-        cap.result("FreeCAD.Grid.enabled", FreeCAD.Grid.enabled)
+        cap.result("FerroCAD.Grid.enabled", FerroCAD.Grid.enabled)
 
     with cap.step("Run the command"):
         cap.prose(
             "`App_ToggleGrid` is registered by the shell and is checkable. It flips "
-            "`FreeCAD.Grid.enabled` and returns a `view` request; the shell applies "
-            "that request and mirrors the result into `FreeCADGui.ViewState`."
+            "`FerroCAD.Grid.enabled` and returns a `view` request; the shell applies "
+            "that request and mirrors the result into `FerroCADGui.ViewState`."
         )
         cap.exec(
             """
@@ -44,7 +44,7 @@ def run(cap):
             """
         )
         cap.result("Response", first)
-        cap.result("FreeCAD.Grid.enabled", FreeCAD.Grid.enabled)
+        cap.result("FerroCAD.Grid.enabled", FerroCAD.Grid.enabled)
 
     with cap.step("Push the state the window would push"):
         cap.prose(
@@ -63,7 +63,7 @@ def run(cap):
             """
         )
         cap.result("App_ToggleGrid checked", checked)
-        cap.result("FreeCADGui.ViewState.grid", FreeCADGui.ViewState.grid)
+        cap.result("FerroCADGui.ViewState.grid", FerroCADGui.ViewState.grid)
 
     with cap.step("Turn it off again"):
         cap.exec(
@@ -73,7 +73,7 @@ def run(cap):
             """
         )
         cap.result("Response", second)
-        cap.result("FreeCAD.Grid.enabled", FreeCAD.Grid.enabled)
+        cap.result("FerroCAD.Grid.enabled", FerroCAD.Grid.enabled)
         cap.note(
             "Every grid backend reads this one switch. A provider that kept its own "
             "copy would keep drawing after the toggle, which is exactly the defect "

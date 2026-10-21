@@ -425,7 +425,7 @@ impl Shell {
             // so the viewport does not open from inside the model.
             viewport.frame_stage();
         }
-        // G5: overlays registered through `FreeCADGui.addOverlay` before the viewport
+        // G5: overlays registered through `FerroCADGui.addOverlay` before the viewport
         // existed are pulled in now, once the scene they merge beside is built.
         if ferrocad_inventor_py::overlays_dirty() {
             let overlays = ferrocad_inventor_py::overlay_scenes();
@@ -520,7 +520,7 @@ impl Shell {
     /// Ask the app script for the display meshes and build a stage from them.
     ///
     /// The shell names no workbench: the script routes `stage_meshes` through
-    /// `FreeCAD.display_mesh`, so whatever module owns the objects supplies the mesh.
+    /// `FerroCAD.display_mesh`, so whatever module owns the objects supplies the mesh.
     fn build_stage(&mut self) -> Result<ferrocad_stage::Stage, String> {
         let meshes: Vec<StageMesh> = python::stage_meshes()?;
         Ok(self.display.build(meshes))
@@ -970,7 +970,7 @@ impl Shell {
     }
 
     /// Apply a command's presentation request (A5, G5): perform a workplane action, or
-    /// update the shell's view state, mirror it to `FreeCADGui.ViewState`, and apply it
+    /// update the shell's view state, mirror it to `FerroCADGui.ViewState`, and apply it
     /// to the viewport when one exists. Returns a one-line summary for the status bar.
     fn apply_view(
         &mut self,
@@ -2709,7 +2709,7 @@ if "Test_Tool" not in FreeCADGui.listCommands():
 
     /// Reset the interpreter's process-global grid store and preferences.
     ///
-    /// Tests share one CPython instance. `FreeCAD.Grid` lives in the parameter
+    /// Tests share one CPython instance. `FerroCAD.Grid` lives in the parameter
     /// store, not in the fresh document, so a test that toggles it or writes a
     /// preference leaks into the next one. Call this (with the lock held) when a
     /// test's assertions depend on the default grid.
@@ -2767,7 +2767,19 @@ prefs.SetFloat("GridRadius", 0.0)
             let m = model.lock().unwrap();
             assert_eq!(m.console.len(), console_len);
             assert_eq!(m.selection, selection);
-            assert_eq!(m.tree.len(), 1, "the sample document is intact");
+            // The tree also carries the synthetic `Settings` root (S1); this
+            // assertion is about documents, so exclude it by name.
+            let documents: Vec<&str> = m
+                .tree
+                .iter()
+                .map(|doc| doc.name.as_str())
+                .filter(|name| *name != "Settings")
+                .collect();
+            assert_eq!(
+                documents.len(),
+                1,
+                "the sample document is intact; open documents: {documents:?}"
+            );
         }
 
         // Reopening builds a new view around the same shell entity and model.

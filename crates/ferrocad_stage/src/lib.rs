@@ -82,5 +82,5 @@ pub use snap::{
     snap_to_geometry_with,
 };
 pub use stage::Stage;
-pub use tool::{PolylineTool, Tool};
+pub use tool::{PolylineTool, Tool, ToolStatus};
 pub use workplane::{FaceFrame, Workplane, WorkplaneKind};

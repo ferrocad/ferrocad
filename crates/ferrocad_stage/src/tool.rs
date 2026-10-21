@@ -9,18 +9,101 @@ use crate::input::{MouseButton, PointerEvent, PointerKind};
 use crate::shape::{DrawMode, ShapeItem};
 use crate::snap::Snap;
 
+/// A tool's live status, for the host's tool strip.
+///
+/// A tool reports this while a session is active: the label and id name it, `points`
+/// counts the placed vertices, and `hint` says what the next actions are. When
+/// `active` is `false` the host hides the strip; a tool with no session state (the
+/// default implementation) reports exactly that.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct ToolStatus {
+    /// The tool's own id (the registry id lives in the host, e.g. `toy_polyline`).
+    pub id: String,
+    /// The human label (`Polyline`).
+    pub label: String,
+    /// Whether a tool session is active and the strip should be shown.
+    pub active: bool,
+    /// How many vertices/points the session has placed so far.
+    pub points: usize,
+    /// One-line hint for the next actions.
+    pub hint: String,
+}
+
+impl ToolStatus {
+    /// A status with no session: the host draws no strip.
+    pub fn inactive() -> Self {
+        Self::default()
+    }
+
+    /// An active status.
+    pub fn new(
+        id: impl Into<String>,
+        label: impl Into<String>,
+        points: usize,
+        hint: impl Into<String>,
+    ) -> Self {
+        Self {
+            id: id.into(),
+            label: label.into(),
+            active: true,
+            points,
+            hint: hint.into(),
+        }
+    }
+
+    /// Whether a session is active.
+    pub fn is_active(&self) -> bool {
+        self.active
+    }
+
+    /// The same tool marked inactive: the session finished or was cancelled. The id
+    /// and label survive so the host can name it in a message.
+    pub fn ended(mut self) -> Self {
+        self.active = false;
+        self.points = 0;
+        self.hint.clear();
+        self
+    }
+}
+
 /// An interactive tool.
 ///
 /// `on_event` is called for every pointer event; [`items`](Self::items) returns the
 /// transient visuals to draw this frame. The items reuse stable mesh identities across
 /// events (only their geometry changes), so a renderer's upload cache is not flooded.
+///
+/// A tool also owns its **lifecycle**: [`status`](Self::status) is the surface the
+/// host draws (label, point count, hint) and [`cancel`](Self::cancel) drops every
+/// transient visual without touching the document. The defaults describe a tool with
+/// no session state: it is inactive and cancels nothing.
 pub trait Tool {
     /// React to a pointer event. `snap` is the resolved snap (geometry or grid), if any.
     fn on_event(&mut self, event: &PointerEvent, snap: Option<Snap>);
 
     /// The current transient visuals, in draw order.
     fn items(&self) -> &[ShapeItem];
+
+    /// The tool's live status for the host's tool strip. A tool with no state reports
+    /// [`ToolStatus::inactive`].
+    fn status(&self) -> ToolStatus {
+        ToolStatus::inactive()
+    }
+
+    /// Cancel the session: clear every transient visual (points, rubber band, marker,
+    /// …) and leave the document untouched. Returns whether anything was cancelled.
+    fn cancel(&mut self) -> bool {
+        false
+    }
 }
+
+/// The polyline tool's id in its status (the host's registry id is separate).
+pub const POLYLINE_TOOL_ID: &str = "polyline";
+/// The label the tool strip shows.
+pub const POLYLINE_TOOL_LABEL: &str = "Polyline";
+/// The status hint before the first vertex is placed.
+pub const POLYLINE_HINT_START: &str = "click to add a point · Esc to cancel";
+/// The status hint once the polyline has a vertex.
+pub const POLYLINE_HINT: &str = "click to add · Enter to finish · Esc to cancel";
 
 /// The default colour of the committed polyline.
 const COMMITTED_COLOR: [f32; 4] = [1.0, 1.0, 1.0, 1.0];
@@ -108,6 +191,17 @@ impl PolylineTool {
     }
 }
 
+impl PolylineTool {
+    /// The hint for the current point count.
+    fn hint(&self) -> &'static str {
+        if self.points.is_empty() {
+            POLYLINE_HINT_START
+        } else {
+            POLYLINE_HINT
+        }
+    }
+}
+
 impl Tool for PolylineTool {
     fn on_event(&mut self, event: &PointerEvent, snap: Option<Snap>) {
         // Prefer the snap, then the raw hit point.
@@ -127,6 +221,21 @@ impl Tool for PolylineTool {
 
     fn items(&self) -> &[ShapeItem] {
         &self.items
+    }
+
+    fn status(&self) -> ToolStatus {
+        ToolStatus::new(
+            POLYLINE_TOOL_ID,
+            POLYLINE_TOOL_LABEL,
+            self.points.len(),
+            self.hint(),
+        )
+    }
+
+    fn cancel(&mut self) -> bool {
+        let cancelled = !self.points.is_empty() || self.cursor.is_some();
+        self.clear();
+        cancelled
     }
 }
 
@@ -265,5 +374,60 @@ mod tests {
         let mut tool = PolylineTool::new();
         tool.on_event(&event(PointerKind::Down, Some(MouseButton::Right), Some([0.0, 0.0, 0.0])), None);
         assert!(tool.points().is_empty());
+    }
+
+    #[test]
+    fn the_status_names_the_tool_counts_the_points_and_hints_the_actions() {
+        let mut tool = PolylineTool::new();
+        let status = tool.status();
+        assert!(status.active);
+        assert_eq!(status.id, POLYLINE_TOOL_ID);
+        assert_eq!(status.label, POLYLINE_TOOL_LABEL);
+        assert_eq!(status.points, 0);
+        assert!(status.hint.contains("Esc to cancel"), "{}", status.hint);
+
+        tool.on_event(
+            &event(PointerKind::Down, Some(MouseButton::Left), Some([1.0, 2.0, 0.0])),
+            snap([1.0, 2.0, 0.0]),
+        );
+        let status = tool.status();
+        assert_eq!(status.points, 1);
+        assert!(status.hint.contains("Enter to finish"), "{}", status.hint);
+        assert!(status.hint.contains("Esc to cancel"));
+    }
+
+    #[test]
+    fn a_stateless_tool_is_inactive_and_cancels_nothing() {
+        struct Nothing;
+        impl Tool for Nothing {
+            fn on_event(&mut self, _event: &PointerEvent, _snap: Option<Snap>) {}
+            fn items(&self) -> &[ShapeItem] {
+                &[]
+            }
+        }
+        let mut tool = Nothing;
+        let status = tool.status();
+        assert!(!status.active);
+        assert_eq!(status.points, 0);
+        assert!(!tool.cancel());
+    }
+
+    #[test]
+    fn cancelling_clears_every_transient_visual_and_reports_it() {
+        let mut tool = PolylineTool::new();
+        tool.on_event(
+            &event(PointerKind::Down, Some(MouseButton::Left), Some([0.0, 0.0, 0.0])),
+            snap([0.0, 0.0, 0.0]),
+        );
+        tool.on_event(
+            &event(PointerKind::Move, None, Some([1.0, 0.0, 0.0])),
+            snap([1.0, 0.0, 0.0]),
+        );
+        assert!(!tool.items()[1].positions().is_empty(), "a rubber band");
+
+        assert!(tool.cancel(), "the session had geometry to drop");
+        assert!(tool.points().is_empty());
+        assert!(emit(&tool).is_empty(), "no transient visual survives");
+        assert!(!tool.cancel(), "a second cancel has nothing to do");
     }
 }

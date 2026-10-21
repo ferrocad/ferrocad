@@ -18,7 +18,8 @@ _`Selection` and `ViewState` are read-only snapshots pushed by the shell._
 | `addOverlay(node) -> None` | Register a Coin node as a viewport overlay (FerroCAD extension). |
 | `listCommands() -> list` | The registered command ids, in registration order. |
 | `providers(feature=None) -> list` | The provider manifests, in registration order. |
-| `registerProvider(feature: str, backend: str, label: str, command=None, priority: int = 0, activate=None, deactivate=None)` | Declare that ``backend`` provides ``feature`` (called from ``InitGui.py``). |
+| `refreshProviders(feature: str) -> dict` | Ask the active backend of ``feature`` to re-read the shared state. |
+| `registerProvider(feature: str, backend: str, label: str, command=None, priority: int = 0, activate=None, deactivate=None, refresh=None)` | Declare that ``backend`` provides ``feature`` (called from ``InitGui.py``). |
 | `removeCommand(name: str) -> None` | Drop ``name`` from the registry (a no-op when absent). |
 | `removeOverlay(node) -> bool` | Drop a previously registered overlay, keyed by Python object identity. |
 | `runCommand(name: str, *args)` | Invoke ``name`` and return whatever ``Activated`` returned. |

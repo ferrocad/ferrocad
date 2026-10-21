@@ -14,7 +14,7 @@ documentation. What this section adds is the exact shape of the surface here.
 | [`FreeCAD.Base`](FreeCAD.Base.md) | 12 | The `Base` value types FreeCAD exposes as a submodule. |
 | [`FreeCAD.Units`](FreeCAD.Units.md) | 9 | Quantity parsing, units and number formatting. |
 | [`FreeCAD.Console`](FreeCAD.Console.md) | 5 | The console sink a workbench prints through. |
-| [`FreeCADGui`](FreeCADGui.md) | 14 | The GUI facade: commands, selection, view state, providers and overlays. |
+| [`FreeCADGui`](FreeCADGui.md) | 15 | The GUI facade: commands, selection, view state, providers and overlays. |
 | [`ferrocad_shell`](ferrocad_shell.md) | 16 | The host bridge the shell calls. Not upstream API: it is how FerroCAD's window (and `tools/userdocs.py`) drive the facade. |
 
 ## Scope and honesty

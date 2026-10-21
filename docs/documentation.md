@@ -8,11 +8,26 @@ Status: decision (2026-10-02). Companion to [`mvp-path.md`](direction/mvp-path.m
 Use **rustdoc** (Diátaxis-structured) as the primary, verifiable documentation, and
 treat the Python surface as documented by convention + upstream.
 
-| Audience | Where their docs live | Tooling |
-| --- | --- | --- |
-| Rust users/contributors (`ferrocad_core`, `ferrocad_py`) | crate + module pages | **rustdoc** (`cargo doc`, docs.rs) |
-| Python workbench authors (`import FreeCAD`) | facade docstrings + this repo's `docs/` | Markdown now; **Sphinx/mkdocstrings** later |
-| Upstream-compat reference | FreeCAD's own docs | link, don't duplicate |
+### Audiences
+
+Four audiences, four entry points. A reader should never have to guess which folder
+is theirs; a writer should never have to duplicate a fact across them.
+
+| # | Audience | What they need | Entry point | Tooling |
+| --- | --- | --- | --- | --- |
+| 1 | **Users of FerroCAD** | do a task in the app or a script | [`user/`](user/README.md), in Diátaxis quadrants | generated from executable workflows + mdBook |
+| 2 | **Users of the API** — mod writers, script writers, AI agents, MCP servers | the contract, the exact surface, and the JSON boundary | [`mods/`](mods/README.md) and [`python-api/`](python-api/README.md) | authored contract guide + generated reference |
+| 3 | **Developers of FerroCAD** | why it is shaped this way, and what to build next | `direction/`, `architecture/`, `viewport/`, `interaction/`, `workbenches/`, `record/`, `tasks/`; rustdoc | authored notes + rustdoc |
+| 4 | **Developers of upstream FreeCAD and of mods used by FerroCAD** | compatibility, divergence, and how to run upstream code here | [`workbenches/`](workbenches/conformance.md) (conformance, Qt strategy, Part/Draft layering) and `architecture/` | authored notes + the executable conformance harness |
+
+Audience chooses the entry point; the folder chooses the subject. The same fact may
+appear for two audiences only if it is *generated* for both — for example the API
+surface is generated from the modules, so `mods/` links to it rather than restating
+it.
+
+The published artifact is `tools/build_book.py`, which assembles audiences 1 and 2
+into one mdBook (tutorials, how-to, reference, explanation, mod writers). The
+internal notes for audiences 3 and 4 stay in the repository.
 
 ## Why rustdoc first
 
@@ -68,6 +83,7 @@ duplicate it. The folders, and the rule for filing a new note:
 | `viewport/` | the scene/render/present stack |
 | `interaction/` | spatial reference, selection, gizmos, navigation, visual language |
 | `workbenches/` | the Python module contract and upstream bring-up |
+| `mods/` | the external contract for mod writers and API clients |
 | `user/` | generated workflow guides, in Diátaxis sections (`tools/userdocs.py`) |
 | `python-api/` | generated signature reference (`tools/api_docs.py`) |
 | `record/` | closed history: milestones, closed TODOs, incidents |

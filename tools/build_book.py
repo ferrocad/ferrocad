@@ -37,6 +37,7 @@ REPO = Path(__file__).resolve().parents[1]
 DOCS = REPO / "docs"
 USER = DOCS / "user"
 API = DOCS / "python-api"
+MODS = DOCS / "mods"
 DEFAULT_OUT = REPO / "target" / "user-book"
 GITHUB = "https://github.com/ferrocad/ferrocad/blob/main"
 BOOK_TITLE = "FerroCAD User Guide"
@@ -47,6 +48,7 @@ PARTS = [
     ("user/how-to", "How-to guides"),
     ("python-api", "Reference"),
     ("user/explanation", "Explanation"),
+    ("mods", "Mod writers"),
 ]
 
 BOOK_TOML = f"""[book]
@@ -78,13 +80,17 @@ def book_sources() -> list[tuple[Path, Path]]:
             pairs.append((path, path.relative_to(DOCS)))
     for path in sorted(API.glob("*.md")):
         pairs.append((path, path.relative_to(DOCS)))
+    for path in sorted(MODS.glob("*.md")):
+        pairs.append((path, path.relative_to(DOCS)))
     return pairs
 
 
 def _inside_book(path: Path) -> bool:
     resolved = path.resolve()
-    return resolved.is_relative_to(USER.resolve()) or resolved.is_relative_to(
-        API.resolve()
+    return (
+        resolved.is_relative_to(USER.resolve())
+        or resolved.is_relative_to(API.resolve())
+        or resolved.is_relative_to(MODS.resolve())
     )
 
 
@@ -162,13 +168,14 @@ def _summary(src: Path) -> str:
         if not pages:
             continue
         lines += [f"# {part}", ""]
-        if folder == "python-api":
-            lines.append("- [Python API reference](python-api/README.md)")
-            for rel in sorted(pages, key=lambda r: r.as_posix()):
-                lines.append(f"  - [{_title(src / rel)}]({rel.as_posix()})")
+        readme = src / folder / "README.md"
+        if readme.is_file():
+            lines.append(f"- [{_title(readme)}]({folder}/README.md)")
+            indent = "  "
         else:
-            for rel in sorted(pages, key=lambda r: _order(src / r)):
-                lines.append(f"- [{_title(src / rel)}]({rel.as_posix()})")
+            indent = ""
+        for rel in sorted(pages, key=lambda r: _order(src / r)):
+            lines.append(f"{indent}- [{_title(src / rel)}]({rel.as_posix()})")
         lines.append("")
 
     return "\n".join(lines).rstrip() + "\n"

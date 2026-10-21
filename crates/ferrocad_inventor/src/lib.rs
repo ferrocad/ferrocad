@@ -59,9 +59,12 @@ pub use ferrocad_graphics::{
     Vertex, Viewport,
 };
 
-pub use compile::{compile, compile_with};
+pub use compile::{ShaderError, compile, compile_with, compile_with_base};
 pub use event::{Event, EventListener};
-pub use node::{Node, NodeKind, Scene, SO_SWITCH_ALL, SO_SWITCH_NONE};
+pub use node::{
+    Node, NodeKind, SO_SWITCH_ALL, SO_SWITCH_INHERIT, SO_SWITCH_NONE, Scene, ShaderParameter,
+    ShaderStage, ShaderStageKind, depth_function, light_model, pick_style,
+};
 pub use registry::TypeRegistry;
 pub use state::State;
 pub use view::{ImageData, InventorView, ViewSpec};

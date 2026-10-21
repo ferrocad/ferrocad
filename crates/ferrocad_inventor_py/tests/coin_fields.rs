@@ -5,6 +5,8 @@
 //! and confirm the edits land on the wrapped `ferrocad_inventor` node (a live field,
 //! not a copy).
 
+use ferrocad_inventor::compile;
+use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 use pyo3::types::{PyAny, PyModule};
 
@@ -153,15 +155,304 @@ fn switch_which_child() {
         switch.setattr("whichChild", -1).unwrap();
         assert_eq!(switch.getattr("whichChild").unwrap().extract::<i32>().unwrap(), -1);
 
-        // The sentinels are exposed as module constants, like Coin.
+        // The sentinels are exposed as module constants, with Coin's values.
         assert_eq!(
-            coin.getattr("SO_SWITCH_NONE").unwrap().extract::<i32>().unwrap(),
+            coin.getattr("SO_SWITCH_NONE")
+                .unwrap()
+                .extract::<i32>()
+                .unwrap(),
             -1
         );
         assert_eq!(
-            coin.getattr("SO_SWITCH_ALL").unwrap().extract::<i32>().unwrap(),
+            coin.getattr("SO_SWITCH_INHERIT")
+                .unwrap()
+                .extract::<i32>()
+                .unwrap(),
             -2
         );
+        assert_eq!(
+            coin.getattr("SO_SWITCH_ALL")
+                .unwrap()
+                .extract::<i32>()
+                .unwrap(),
+            -3
+        );
+    });
+}
+
+#[test]
+fn set_values_three_arg_overload_and_set_num() {
+    Python::with_gil(|py| {
+        let coin = pivy_coin(py);
+        let coords = new_node(&coin, "SoCoordinate3");
+        let point = coords.getattr("point").unwrap();
+
+        // Coin's 3-arg setValues(start, num, values): exactly `num` elements are
+        // copied and surplus values are ignored.
+        point
+            .call_method1(
+                "setValues",
+                (
+                    0usize,
+                    2usize,
+                    vec![
+                        (1.0f32, 2.0f32, 3.0f32),
+                        (4.0f32, 5.0f32, 6.0f32),
+                        (7.0f32, 8.0f32, 9.0f32),
+                    ],
+                ),
+            )
+            .unwrap();
+        assert_eq!(point.len().unwrap(), 2);
+        assert_eq!(
+            point
+                .get_item(1)
+                .unwrap()
+                .extract::<(f32, f32, f32)>()
+                .unwrap(),
+            (4.0, 5.0, 6.0)
+        );
+
+        // It grows to reach `start + num`, filling the gap with element defaults.
+        point
+            .call_method1(
+                "setValues",
+                (4usize, 1usize, vec![(9.0f32, 9.0f32, 9.0f32)]),
+            )
+            .unwrap();
+        assert_eq!(point.len().unwrap(), 5);
+        assert_eq!(
+            point
+                .get_item(2)
+                .unwrap()
+                .extract::<(f32, f32, f32)>()
+                .unwrap(),
+            (0.0, 0.0, 0.0)
+        );
+        assert_eq!(
+            point
+                .get_item(4)
+                .unwrap()
+                .extract::<(f32, f32, f32)>()
+                .unwrap(),
+            (9.0, 9.0, 9.0)
+        );
+
+        // A negative `num` is a ValueError, not a type mismatch.
+        let err = point
+            .call_method1(
+                "setValues",
+                (0isize, -1isize, vec![(0.0f32, 0.0f32, 0.0f32)]),
+            )
+            .unwrap_err();
+        assert!(err.is_instance_of::<PyValueError>(py));
+
+        // setNum grows with the element default and truncates, preserving values.
+        point.call_method1("setNum", (7usize,)).unwrap();
+        assert_eq!(point.len().unwrap(), 7);
+        assert_eq!(
+            point
+                .get_item(6)
+                .unwrap()
+                .extract::<(f32, f32, f32)>()
+                .unwrap(),
+            (0.0, 0.0, 0.0)
+        );
+        point.call_method1("setNum", (1usize,)).unwrap();
+        assert_eq!(point.len().unwrap(), 1);
+        assert_eq!(
+            point
+                .get_item(0)
+                .unwrap()
+                .extract::<(f32, f32, f32)>()
+                .unwrap(),
+            (1.0, 2.0, 3.0)
+        );
+        let err = point.call_method1("setNum", (-1isize,)).unwrap_err();
+        assert!(err.is_instance_of::<PyValueError>(py));
+
+        // The original two-argument form still replaces from an offset.
+        point
+            .call_method1("setValues", (0usize, vec![(5.0f32, 5.0f32, 5.0f32)]))
+            .unwrap();
+        assert_eq!(point.len().unwrap(), 1);
+        assert_eq!(
+            point
+                .get_item(0)
+                .unwrap()
+                .extract::<(f32, f32, f32)>()
+                .unwrap(),
+            (5.0, 5.0, 5.0)
+        );
+    });
+}
+
+#[test]
+fn face_set_num_vertices_is_int_field() {
+    Python::with_gil(|py| {
+        let coin = pivy_coin(py);
+        let face = new_node(&coin, "SoFaceSet");
+        let num_vertices = face.getattr("numVertices").unwrap();
+        num_vertices.call_method1("setValue", (4u32,)).unwrap();
+        assert_eq!(num_vertices.len().unwrap(), 1);
+        assert_eq!(
+            num_vertices.get_item(0).unwrap().extract::<u32>().unwrap(),
+            4
+        );
+    });
+}
+
+#[test]
+fn remove_child_removes_the_first_structurally_equal_node() {
+    Python::with_gil(|py| {
+        let coin = pivy_coin(py);
+        let group = new_node(&coin, "SoSeparator");
+        let make = |x: f64| {
+            let transform = new_node(&coin, "SoTransform");
+            transform
+                .setattr("translation", (x, 0.0f64, 0.0f64))
+                .unwrap();
+            transform
+        };
+        let first = make(1.0);
+        let middle = make(2.0);
+        let last = make(3.0);
+        for child in [first.clone(), middle.clone(), last.clone()] {
+            group.call_method1("addChild", (child,)).unwrap();
+        }
+        assert_eq!(group.len().unwrap(), 3);
+
+        group
+            .call_method1("removeChild", (middle.clone(),))
+            .unwrap();
+        assert_eq!(group.len().unwrap(), 2);
+
+        // Removing an absent node is a no-op.
+        group.call_method1("removeChild", (middle,)).unwrap();
+        assert_eq!(group.len().unwrap(), 2);
+
+        // `addChild` copies, so a distinct node with the same contents removes the
+        // first structural match.
+        let copy_of_first = make(1.0);
+        group.call_method1("removeChild", (copy_of_first,)).unwrap();
+        assert_eq!(group.len().unwrap(), 1);
+    });
+}
+
+#[test]
+fn separator_render_culling_is_accepted_and_does_not_hide_the_subtree() {
+    Python::with_gil(|py| {
+        let coin = pivy_coin(py);
+        let separator = new_node(&coin, "SoSeparator");
+        let separator_type = coin.getattr("SoSeparator").unwrap();
+        let off = separator_type
+            .getattr("OFF")
+            .unwrap()
+            .extract::<i32>()
+            .unwrap();
+        assert!(separator_type.hasattr("ON").unwrap());
+        assert!(separator_type.hasattr("AUTO").unwrap());
+
+        // `sep.renderCulling = coin.SoSeparator.OFF` — the addon's exact assignment.
+        separator.setattr("renderCulling", off).unwrap();
+        assert_eq!(
+            separator
+                .getattr("renderCulling")
+                .unwrap()
+                .extract::<i32>()
+                .unwrap(),
+            off
+        );
+
+        // Accepted and ignored: the subtree still compiles.
+        let coords = new_node(&coin, "SoCoordinate3");
+        coords
+            .getattr("point")
+            .unwrap()
+            .call_method1(
+                "setValues",
+                (
+                    0usize,
+                    vec![
+                        (0.0f32, 0.0f32, 0.0f32),
+                        (1.0f32, 0.0f32, 0.0f32),
+                        (0.0f32, 1.0f32, 0.0f32),
+                    ],
+                ),
+            )
+            .unwrap();
+        let faces = new_node(&coin, "SoIndexedFaceSet");
+        faces
+            .getattr("coordIndex")
+            .unwrap()
+            .call_method1("setValues", (0usize, vec![0u32, 1, 2]))
+            .unwrap();
+        separator.call_method1("addChild", (coords,)).unwrap();
+        separator.call_method1("addChild", (faces,)).unwrap();
+
+        let scene = ferrocad_inventor_py::extract_scene(&separator).unwrap();
+        assert_eq!(compile(&scene).0.len(), 1);
+    });
+}
+
+#[test]
+fn node_set_parses_coin_field_strings() {
+    Python::with_gil(|py| {
+        let coin = pivy_coin(py);
+
+        let depth = new_node(&coin, "SoDepthBuffer");
+        depth.call_method1("set", ("write FALSE",)).unwrap();
+        assert!(!depth.getattr("write").unwrap().extract::<bool>().unwrap());
+        assert!(depth.getattr("test").unwrap().extract::<bool>().unwrap());
+        depth.call_method1("set", ("function ALWAYS",)).unwrap();
+        let always = coin
+            .getattr("SoDepthBuffer")
+            .unwrap()
+            .getattr("ALWAYS")
+            .unwrap()
+            .extract::<i32>()
+            .unwrap();
+        assert_eq!(
+            depth.getattr("function").unwrap().extract::<i32>().unwrap(),
+            always
+        );
+
+        // `name=value` is accepted too.
+        let light = new_node(&coin, "SoLightModel");
+        light.call_method1("set", ("model=BASE_COLOR",)).unwrap();
+        let base_color = coin
+            .getattr("SoLightModel")
+            .unwrap()
+            .getattr("BASE_COLOR")
+            .unwrap()
+            .extract::<i32>()
+            .unwrap();
+        assert_eq!(
+            light.getattr("model").unwrap().extract::<i32>().unwrap(),
+            base_color
+        );
+
+        let pick = new_node(&coin, "SoPickStyle");
+        pick.call_method1("set", ("style UNPICKABLE",)).unwrap();
+        let unpickable = coin
+            .getattr("SoPickStyle")
+            .unwrap()
+            .getattr("UNPICKABLE")
+            .unwrap()
+            .extract::<i32>()
+            .unwrap();
+        assert_eq!(
+            pick.getattr("style").unwrap().extract::<i32>().unwrap(),
+            unpickable
+        );
+
+        // Unknown field and unknown value are ValueErrors naming the field.
+        let err = depth.call_method1("set", ("nope TRUE",)).unwrap_err();
+        assert!(err.is_instance_of::<PyValueError>(py));
+        assert!(err.to_string().contains("nope"));
+        let err = depth.call_method1("set", ("write MAYBE",)).unwrap_err();
+        assert!(err.is_instance_of::<PyValueError>(py));
+        assert!(err.to_string().contains("write"));
     });
 }
 
@@ -203,7 +494,16 @@ fn geometry_nodes_are_registered_and_are_nodes() {
         let node_type = coin.getattr("SoNode").unwrap();
         let node_type_id = so_type.call_method1("fromName", ("SoNode",)).unwrap();
 
-        for name in ["SoCoordinate3", "SoNormal", "SoMaterial", "SoTransform"] {
+        for name in [
+            "SoCoordinate3",
+            "SoNormal",
+            "SoMaterial",
+            "SoTransform",
+            "SoFaceSet",
+            "SoPickStyle",
+            "SoLightModel",
+            "SoDepthBuffer",
+        ] {
             let type_id = so_type.call_method1("fromName", (name,)).unwrap();
             let instance = type_id.call_method0("createInstance").unwrap();
             assert!(

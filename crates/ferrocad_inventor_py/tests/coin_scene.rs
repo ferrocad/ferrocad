@@ -71,6 +71,60 @@ fn python_built_scene_extracts_and_compiles() {
     });
 }
 
+/// The grid-overlay shape: state nodes the addon emits (`SoPickStyle`,
+/// `SoLightModel`, `SoDepthBuffer`), an `SoFaceSet` quad, and a separator whose
+/// `renderCulling` is assigned. None of the recorded nodes may drop the shape.
+const GRID_PLACEHOLDER_SCRIPT: &str = r#"
+from pivy import coin
+
+root = coin.SoSeparator()
+pick = coin.SoPickStyle()
+pick.style = coin.SoPickStyle.UNPICKABLE
+root.addChild(pick)
+light = coin.SoLightModel()
+light.model = coin.SoLightModel.BASE_COLOR
+root.addChild(light)
+depth = coin.SoDepthBuffer()
+depth.set("write FALSE")
+root.addChild(depth)
+
+coords = coin.SoCoordinate3()
+coords.point.setValues(0, 4, [
+    (-1.0, -1.0, 0.0), (1.0, -1.0, 0.0), (1.0, 1.0, 0.0), (-1.0, 1.0, 0.0),
+])
+root.addChild(coords)
+face = coin.SoFaceSet()
+face.numVertices.setValue(4)
+root.addChild(face)
+
+sep = coin.SoSeparator()
+sep.renderCulling = coin.SoSeparator.OFF
+root.addChild(sep)
+"#;
+
+#[test]
+fn face_set_quad_compiles_to_two_triangles_despite_recorded_state() {
+    Python::with_gil(|py| {
+        ferrocad_inventor_py::install(py).expect("install coin");
+        let globals = PyDict::new(py);
+        let code = std::ffi::CString::new(GRID_PLACEHOLDER_SCRIPT).expect("no NUL");
+        py.run(&code, Some(&globals), None)
+            .expect("run grid placeholder script");
+        let root = globals.get_item("root").expect("get_item").expect("root");
+
+        let scene = ferrocad_inventor_py::extract_scene(&root).expect("extract");
+        let (queue, _) = compile(&scene);
+        assert_eq!(queue.len(), 1, "the quad, not the recorded state nodes");
+        let packet = &queue.packets[0];
+        assert_eq!(packet.topology, Topology::Triangles);
+        assert_eq!(
+            packet.geometry.as_ref().expect("geometry").indices.len(),
+            6,
+            "a quad fans to two triangles"
+        );
+    });
+}
+
 #[test]
 fn extraction_rejects_a_non_node() {
     Python::with_gil(|py| {

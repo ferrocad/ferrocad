@@ -8,6 +8,7 @@
 
 use std::sync::Arc;
 
+use ferrocad_graphics::{DepthState, ShaderProgram};
 use ferrocad_types::Matrix4;
 
 use crate::batch::PickId;
@@ -37,6 +38,16 @@ pub struct State {
     pub device_pixel_ratio: f32,
     /// Whether shapes here are rendered and pickable (`SoSwitch`, draw style).
     pub visible: bool,
+    /// Whether the following shapes may be picked (`SoPickStyle`).
+    ///
+    /// `SoPickStyle.UNPICKABLE` clears it; `SHAPE` and `BOUNDING_BOX` set it, because
+    /// only `UNPICKABLE` has semantics here (bounding-box picking is not modelled).
+    pub pickable: bool,
+    /// The depth test/write state for the following shapes (`SoDepthBuffer`).
+    pub depth: DepthState,
+    /// The shader program in effect (`SoShaderProgram`), bound to the shapes that
+    /// follow it in the same sibling list.
+    pub program: Option<Arc<ShaderProgram>>,
 }
 
 impl Default for State {
@@ -49,6 +60,9 @@ impl Default for State {
             id: PickId::default(),
             device_pixel_ratio: 1.0,
             visible: true,
+            pickable: true,
+            depth: DepthState::default(),
+            program: None,
         }
     }
 }
@@ -64,6 +78,9 @@ impl State {
             depth_bias: self.depth_bias,
             texture: self.texture.clone(),
             id: self.id,
+            depth: self.depth,
+            pickable: self.pickable,
+            program: self.program.clone(),
         }
     }
 }

@@ -29,8 +29,9 @@ pub enum Surface {
     /// The selection-driven action dock over the canvas — the default.
     #[default]
     Dock,
-    /// Registered but not offered on a chrome surface (the Dev Tools toggle); the
-    /// Dev Tools command list still shows it.
+    /// Registered but not offered on a viewport surface. The Dev Tools command list
+    /// always shows it, and the app menu may offer it explicitly (Dev Tools is the
+    /// one such command today).
     Hidden,
 }
 

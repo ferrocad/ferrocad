@@ -23,6 +23,8 @@ pub const GRID: &str = "App_ToggleGrid";
 pub const AXIS: &str = "App_ToggleAxisCross";
 pub const WORKPLANE: &str = "App_ViewWorkplane";
 pub const MODS: &str = "Mods_Settings";
+/// The application menu's first entry (hidden from every other surface).
+pub const DEV_TOOLS: &str = "Dev_ToggleTools";
 
 /// One row in an anchored popover.
 struct PopoverRow {
@@ -30,6 +32,7 @@ struct PopoverRow {
     label: String,
     enabled: bool,
     checked: bool,
+    accel: String,
 }
 
 impl PopoverRow {
@@ -39,15 +42,17 @@ impl PopoverRow {
             label: command.label().to_string(),
             enabled: command.enabled,
             checked: command.checked,
+            accel: command.accel.clone(),
         }
     }
 }
 
-/// The viewport pane header: its title, then the grid/axes/workplane/mods controls
-/// right-aligned in the same row.
+/// The viewport pane header: the application menu and title on the left, then the
+/// grid/axes/workplane/mods controls right-aligned in the same row.
 pub(crate) fn viewport_header(
     model: &ShellModel,
     open: Option<&str>,
+    dev_tools_open: bool,
     cx: &mut Context<Shell>,
 ) -> impl IntoElement {
     let grid_open = open == Some("grid");
@@ -104,8 +109,76 @@ pub(crate) fn viewport_header(
         .text_xs()
         .text_color(rgb(MUTED))
         .debug_selector(|| "viewport-header".to_string())
+        .child(app_menu(
+            open == Some("app"),
+            app_rows(model, dev_tools_open),
+            cx,
+        ))
         .child(div().flex_1().min_w_0().truncate().child("3D viewport"))
         .child(controls)
+}
+
+/// The application menu's rows.
+///
+/// These are app-level commands, not viewport environment controls, so they are not
+/// on a surface. Today that is the Dev Tools toggle — it is deliberately hidden from
+/// the header/dock, and the window starts closed, so without this menu the only way
+/// in is the shortcut. The list is the place for About and Preferences as they land.
+fn app_rows(model: &ShellModel, dev_tools_open: bool) -> Vec<PopoverRow> {
+    let mut rows = Vec::new();
+    if let Some(command) = commands::find(&model.commands, DEV_TOOLS) {
+        rows.push(PopoverRow {
+            id: command.id.clone(),
+            label: command.label().to_string(),
+            enabled: command.enabled,
+            // The registry cannot know whether a window exists; the shell can.
+            checked: dev_tools_open,
+            accel: command.accel.clone(),
+        });
+    }
+    rows
+}
+
+/// The application menu (`☰`) at the left of the header.
+///
+/// Clicking opens it; opening is not a toggle for the same reason as the split
+/// buttons — the outside-press dismissal runs before the click, so a toggle would
+/// immediately reopen. `Esc` or a press elsewhere closes it. The control is absent
+/// when there is nothing to offer (a build whose registry has no app commands).
+fn app_menu(open: bool, rows: Vec<PopoverRow>, cx: &mut Context<Shell>) -> impl IntoElement {
+    if rows.is_empty() && !open {
+        return div();
+    }
+
+    let mut control = div().flex().flex_row().items_center().rounded_sm().child(
+        div()
+            .id("app-menu")
+            .debug_selector(|| "app-menu".to_string())
+            .px_2()
+            .py_1()
+            .rounded_sm()
+            .text_xs()
+            .text_color(rgb(FG))
+            .cursor_pointer()
+            .hover(|style| style.bg(rgb(PANEL)))
+            .when(open, |el| el.bg(rgb(PANEL)))
+            .child("☰")
+            .on_click(cx.listener(|this, _event, _window, cx| this.open_popover("app", cx))),
+    );
+
+    if open {
+        control = control.child(
+            deferred(
+                anchored()
+                    .anchor(Anchor::TopLeft)
+                    .offset(point(px(0.), px(24.)))
+                    .snap_to_window_with_margin(px(8.))
+                    .child(popover("app", rows, cx)),
+            )
+            .with_priority(1),
+        );
+    }
+    control
 }
 
 /// A split button: the label runs `primary`, the caret opens the surface's popover.
@@ -254,6 +327,7 @@ fn popover(key: &'static str, rows: Vec<PopoverRow>, cx: &mut Context<Shell>) ->
             label,
             enabled,
             checked,
+            accel,
         } = row;
         let mut el = div()
             .id(SharedString::from(format!("{key}-row-{id}")))
@@ -274,7 +348,11 @@ fn popover(key: &'static str, rows: Vec<PopoverRow>, cx: &mut Context<Shell>) ->
             .when(enabled, |el| {
                 el.cursor_pointer().hover(|style| style.bg(rgb(PANEL)))
             })
-            .child(label);
+            .child(label)
+            .child(div().flex_1());
+        if !accel.is_empty() {
+            el = el.child(div().text_color(rgb(MUTED)).child(accel));
+        }
         if checked {
             el = el.child(div().text_color(rgb(MUTED)).child("✓"));
         }

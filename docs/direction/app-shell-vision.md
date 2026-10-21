@@ -208,7 +208,8 @@ next navigation/tool design starts from a clean viewport:
   separate **Dev Tools** window (`Ctrl+Shift+D`, GIMP-toolbox style); the main window
   is now the window frame, the viewport and the status line;
 - the flat actions bar was replaced by viewport-header controls (`Grid ▾`, `Axes`,
-  `WP ▾`, `Mods ▾`, each with an anchored popover) plus a bottom-centre action dock.
+  `WP ▾`, `Mods ▾`, each with an anchored popover), a bottom-centre action dock, and an
+  app menu (`☰`, left of the header) for app-level commands such as Dev Tools.
 
 S6's "dockable/resizable panes" now means the two windows, not three panes. The grid
 *settings* surface is still open; see

@@ -7,9 +7,9 @@ Companion to [`../interaction/visual-language.md`](../interaction/visual-languag
 [`../interaction/axis-origin-grid.md`](../interaction/axis-origin-grid.md) (what the grid
 toggles) and [`../direction/app-shell-vision.md`](../direction/app-shell-vision.md) S2.
 
-**Scope note.** The chrome (header controls, popovers, the action dock) is implemented.
-The **grid settings** half is not: it depends on decisions listed in §6. T0–T3 and T6
-landed on 2026-10-22; T4–T5 wait for those decisions.
+**Scope note.** The chrome (header controls, popovers, the action dock, the app menu)
+is implemented. The **grid settings** half is not: it depends on decisions listed in
+§6. T0–T3, T6 and T7 landed on 2026-10-22; T4–T5 wait for those decisions.
 
 ## 1. Why
 
@@ -71,6 +71,11 @@ The design brief (2026-10-22) specifies:
 3. **Grid settings are modeless**: `Grid Settings…` loads the grid parameters into the
    existing Properties pane (no selection = viewport/grid properties), rather than a new
    modal. There is no separate settings screen.
+4. **App menu**, left-aligned in the same header: `☰` opens app-level commands that are
+   not viewport environment controls. Dev Tools is the first entry (checked while the
+   window is open, showing `Ctrl+Shift+D`); About and Preferences follow. It exists
+   because Dev Tools starts closed and is hidden from every other surface, so the
+   shortcut was the only way in.
 
 ## 4. What is missing (the actual work)
 
@@ -98,7 +103,8 @@ The design brief (2026-10-22) specifies:
 | **T3** | Action dock replaces the strip; selection filter; drag/proximity opacity | model test: the dock's visible ids follow the selection signature ✅ (drag opacity deferred) |
 | **T4** | Grid quick popover content (overlay toggle, mode, spacing readout, provider) | **blocked** (§6) |
 | **T5** | `Grid Settings…` loads grid rows into the Properties pane | **blocked** (§6) |
-| **T6** | Remove `actions_bar` and its layout slot; update the docs; keep every command reachable | test that every registered command appears on exactly one surface ✅ |
+| **T6** | Remove `actions_bar` and its layout slot; update the docs; keep every command reachable | test that every registered command appears on exactly one surface |
+| **T7** | App menu (`☰`) at the header's left: app-level commands, Dev Tools first, checked while open | model test: the menu opens, lists the hidden command, and running it opens the window |
 
 `T0` was deliberately first: it is pure data, it made `T6`'s "every command reachable"
 assertion possible, and it let T2/T3 land without touching the Python side.
@@ -140,7 +146,8 @@ These are why T4/T5 are not ready:
 ## 8. Acceptance
 
 - One button per legacy action, reachable from exactly one surface; no command silently
-  disappears when the strip is removed (T6 test). ✅
+  disappears when the strip is removed (T6 test). Dev Tools stays reachable through the
+  app menu even though it is hidden from the header and the dock (T7 test). ✅
 - `Grid` toggles in one click without opening the popover; `▾` opens it without toggling. ✅
 - With a popover open, viewport orbit/zoom still receives pointer events; `Esc` and an
   outside click both dismiss. ✅ (structurally: no backdrop, no `occlude`; headless

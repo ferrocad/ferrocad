@@ -69,7 +69,8 @@ The shell reads these keys when it builds the viewport header and the action doc
 lands on the dock, which is always safe; upstream FreeCAD ignores unknown resource
 keys. A command with `Surface: "grid"` and no `Parent` is the primary of that header
 control (its label runs it); a command with `Parent: "App_ToggleGrid"` appears in the
-popover under it.
+popover under it. `hidden` keeps a command out of the header and the dock; the Dev
+Tools command list and the app menu can still offer it.
 
 `CmdType` is metadata only. The shell does not wrap `Activated` in a transaction
 because a command may return a dialog and act later; the command owns its

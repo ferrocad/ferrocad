@@ -1874,6 +1874,8 @@ pub(crate) fn dev_tools_body(
 impl Render for Shell {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let model = self.snapshot();
+        // The app menu shows the window's real state; the registry cannot know it.
+        let dev_tools_open = self.dev_tools_open(cx);
 
         // A modal was opened outside a window context; focus it once rendered so
         // Esc cancels and the panel receives bubbled keys.
@@ -1892,6 +1894,7 @@ impl Render for Shell {
             .child(crate::chrome::viewport_header(
                 &model,
                 self.open_popover.as_deref(),
+                dev_tools_open,
                 cx,
             ));
         // The tool strip sits directly under the pane header while a session runs; it
@@ -2997,6 +3000,62 @@ if "Test_Unannotated" not in FreeCADGui.listCommands():
         assert!(model.lock().unwrap().view.axis_cross);
         click_at(&mut cx, "axis-toggle");
         assert!(!model.lock().unwrap().view.axis_cross);
+    }
+
+    /// T7: the app menu sits at the header's left edge and is the discoverable way back
+    /// into Dev Tools — the window starts closed and the command is hidden from every
+    /// other surface.
+    #[gpui::test]
+    fn the_app_menu_opens_dev_tools(cx: &mut TestAppContext) {
+        let _guard = crate::PYTHON_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let model = Shell::boot().expect("boot shell");
+        let window = cx.update(|cx| {
+            let model = model.clone();
+            cx.open_window(Default::default(), move |_window, cx| {
+                cx.new(|cx| Shell::from_model(model.clone(), cx))
+            })
+            .unwrap()
+        });
+        let mut cx = VisualTestContext::from_window(window.into(), cx);
+        let shell: Entity<Shell> = window.root(&mut cx).unwrap();
+        draw(&mut cx);
+
+        let width = cx.update(|window, _| window.viewport_size().width);
+        let menu = cx.debug_bounds("app-menu").expect("the app menu");
+        assert!(
+            menu.origin.x < width * 0.5,
+            "the app menu is on the left (at {:?})",
+            menu.origin.x
+        );
+        assert!(!cx.update(|_window, cx| shell.read(cx).dev_tools_open(cx)));
+
+        // It lists Dev Tools, which no other surface offers.
+        click_at(&mut cx, "app-menu");
+        assert!(cx.update(|_window, cx| shell.read(cx).popover_open("app")));
+        draw(&mut cx);
+        assert!(cx.debug_bounds("app-popover").is_some());
+        assert!(cx.debug_bounds("app-row-Dev_ToggleTools").is_some());
+
+        // Esc closes it and opens nothing.
+        let root = cx.update(|_window, cx| shell.read(cx).root_focus_handle());
+        cx.update(|window, cx| window.focus(&root, cx));
+        cx.simulate_keystrokes("escape");
+        assert!(!cx.update(|_window, cx| shell.read(cx).popover_open("app")));
+        assert!(!cx.update(|_window, cx| shell.read(cx).dev_tools_open(cx)));
+
+        // Running the row opens the second window and dismisses the menu.
+        draw(&mut cx);
+        click_at(&mut cx, "app-menu");
+        draw(&mut cx);
+        click_at(&mut cx, "app-row-Dev_ToggleTools");
+        assert!(!cx.update(|_window, cx| shell.read(cx).popover_open("app")));
+        assert!(cx.update(|_window, cx| shell.read(cx).dev_tools_open(cx)));
+        assert!(
+            cx.windows()
+                .iter()
+                .any(|handle| handle.downcast::<DevTools>().is_some()),
+            "the Dev Tools window exists"
+        );
     }
 
     /// T3: the action dock sits over the bottom-centre of the canvas, lists the dock

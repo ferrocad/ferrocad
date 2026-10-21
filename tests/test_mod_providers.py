@@ -1,7 +1,7 @@
 """Tests for the mod provider registry (``docs/workbenches/mod-providers.md``).
 
 Two mods now implement the same feature: ``mods/GridOverlay`` draws the native
-grid (``"semantic"``) and ``mods/GridOverlayCoin`` registers a Coin overlay
+grid (``"ferrocad"``) and ``mods/GridOverlayCoin`` registers a Coin overlay
 (``"coin"``). ``FreeCADGui.registerProvider`` records both against the ``"grid"``
 feature; exactly one is active, the choice is persisted under
 ``User parameter:BaseApp/Preferences/Mods``, and switching runs the outgoing
@@ -71,7 +71,7 @@ class ModProviderTests(unittest.TestCase):
     def setUpClass(cls):
         reset_provider_state()
         cls.coin = coin_suite.load_mod()
-        cls.semantic, _ = fork_suite.load_mod()
+        cls.native, _ = fork_suite.load_mod()
         # setActiveProvider is the only thing that applies callbacks; start each
         # suite from the declared default (highest priority, no saved choice).
         reset_provider_state()
@@ -96,7 +96,7 @@ class ModProviderTests(unittest.TestCase):
         # ``reset_provider_state`` clears the registry; the mods are already loaded
         # (and cached), so restore their declarations explicitly.
         self.coin.register_provider()
-        self.semantic.register_provider()
+        self.native.register_provider()
         close_documents()
         self.grid = FreeCAD.Grid
         self.grid.reset()
@@ -251,7 +251,7 @@ class ModProviderTests(unittest.TestCase):
         FreeCAD.newDocument("Providers")
         FreeCAD.setActiveDocument("Providers")
         self.assertEqual(
-            FreeCADGui.activeProvider(GRID), "semantic", "the declared default"
+            FreeCADGui.activeProvider(GRID), "ferrocad", "the declared default"
         )
         self.assertEqual(
             self.coin.manager.items,
@@ -263,18 +263,18 @@ class ModProviderTests(unittest.TestCase):
         self.assertIn("Providers", self.coin.manager.items)
         self.assertTrue(coin_suite.COIN._registered, "the overlay is registered")
 
-        result = FreeCADGui.setActiveProvider(GRID, "semantic")
+        result = FreeCADGui.setActiveProvider(GRID, "ferrocad")
         self.assertEqual(result["previous"], "coin")
         self.assertEqual(self.coin.manager.items, {})
         self.assertEqual(coin_suite.COIN._registered, [], "the Coin overlay is gone")
-        self.assertTrue(self.grid.enabled, "semantic activate enables the native grid")
+        self.assertTrue(self.grid.enabled, "native activate enables the native grid")
         self.assertTrue(result["view"]["grid"])
 
         result = FreeCADGui.setActiveProvider(GRID, "coin")
         self.assertIn("Providers", self.coin.manager.items)
         self.assertTrue(coin_suite.COIN._registered, "the Coin overlay is re-added")
         self.assertFalse(
-            self.grid.enabled, "semantic deactivate restores the default (hidden)"
+            self.grid.enabled, "native deactivate restores the default (hidden)"
         )
         self.assertFalse(result["view"]["grid"])
 
@@ -282,7 +282,7 @@ class ModProviderTests(unittest.TestCase):
     def test_the_inactive_coin_command_reports_and_changes_nothing(self):
         FreeCAD.newDocument("Inactive")
         FreeCAD.setActiveDocument("Inactive")
-        FreeCADGui.setActiveProvider(GRID, "semantic")
+        FreeCADGui.setActiveProvider(GRID, "ferrocad")
         before = self.grid.snapshot()
         items = dict(self.coin.manager.items)
 
@@ -291,12 +291,12 @@ class ModProviderTests(unittest.TestCase):
         self.assertIn("status", result)
         self.assertNotIn("fields", result, "no dialog for an inactive backend")
         self.assertIn("not the active", result["status"])
-        self.assertIn("semantic", result["status"])
+        self.assertIn("ferrocad", result["status"])
         self.assertEqual(self.grid.snapshot(), before)
         self.assertEqual(self.coin.manager.items, items)
         self.assertEqual(coin_suite.COIN._registered, [])
 
-    def test_the_inactive_semantic_command_reports_and_changes_nothing(self):
+    def test_the_inactive_native_command_reports_and_changes_nothing(self):
         FreeCAD.newDocument("Inactive")
         FreeCAD.setActiveDocument("Inactive")
         FreeCADGui.setActiveProvider(GRID, "coin")
@@ -314,7 +314,7 @@ class ModProviderTests(unittest.TestCase):
     def test_mods_settings_lists_both_grid_providers_and_switches(self):
         FreeCAD.newDocument("Mods")
         FreeCAD.setActiveDocument("Mods")
-        FreeCADGui.setActiveProvider(GRID, "semantic")
+        FreeCADGui.setActiveProvider(GRID, "ferrocad")
 
         run = FreeCADGui._run(MODS_COMMAND)
         self.assertTrue(run["ok"], run)
@@ -323,8 +323,8 @@ class ModProviderTests(unittest.TestCase):
         self.assertIn(GRID, fields)
         field = fields[GRID]
         self.assertEqual(field["kind"], "enum")
-        self.assertEqual(set(field["values"]), {"Semantic (native)", "Coin (WGSL)"})
-        self.assertEqual(field["value"], "Semantic (native)")
+        self.assertEqual(set(field["values"]), {"FerroCAD (native)", "Coin (WGSL)"})
+        self.assertEqual(field["value"], "FerroCAD (native)")
 
         accepted = FreeCADGui._accept(run["token"], {GRID: "Coin (WGSL)"})
         self.assertTrue(accepted["ok"], accepted)
@@ -336,9 +336,9 @@ class ModProviderTests(unittest.TestCase):
         # A fresh dialog (the token was spent) applies the reverse; the value may
         # be the backend id as well as the label.
         run = FreeCADGui._run(MODS_COMMAND)
-        accepted = FreeCADGui._accept(run["token"], {GRID: "semantic"})
+        accepted = FreeCADGui._accept(run["token"], {GRID: "ferrocad"})
         self.assertTrue(accepted["ok"], accepted)
-        self.assertEqual(FreeCADGui.activeProvider(GRID), "semantic")
+        self.assertEqual(FreeCADGui.activeProvider(GRID), "ferrocad")
         self.assertTrue(accepted["view"]["grid"])
         self.assertEqual(self.coin.manager.items, {})
 
@@ -357,9 +357,9 @@ class ModProviderTests(unittest.TestCase):
                 activate=self.coin.activate, deactivate=self.coin.deactivate,
             )
             FreeCADGui.registerProvider(
-                GRID, "semantic", "Semantic (native)",
+                GRID, "ferrocad", "FerroCAD (native)",
                 command=SEMANTIC_COMMAND, priority=10,
-                activate=self.semantic.activate, deactivate=self.semantic.deactivate,
+                activate=self.native.activate, deactivate=self.native.deactivate,
             )
             reset_provider_state()
 

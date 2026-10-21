@@ -11,7 +11,7 @@ On upstream FreeCAD, where ``FreeCAD.Grid`` does not exist, the command reports
 that this build needs FerroCAD's semantic grid API rather than falling back to
 the legacy Coin path; the upstream addon remains the addon for upstream.
 
-The mod declares itself as the ``"semantic"`` backend of the ``"grid"`` feature
+The mod declares itself as the ``"ferrocad"`` backend of the ``"grid"`` feature
 (priority 10, so the native grid is the default). ``mods/GridOverlayCoin``
 declares the same feature as ``"coin"``; only one is active at a time, and
 ``Mods_Settings`` switches them (``docs/workbenches/mod-providers.md``).
@@ -29,7 +29,7 @@ ADDON_DIR = os.path.dirname(os.path.abspath(__file__))
 #: The provider feature this mod provides, and its backend id. The Coin mod
 #: declares the same feature with the id ``"coin"``; see ``docs/workbenches/mod-providers.md``.
 FEATURE = "grid"
-BACKEND = "semantic"
+BACKEND = "ferrocad"
 
 #: Reported when ``FreeCAD.Grid`` is absent (that is, on upstream FreeCAD).
 UPSTREAM_STATUS = (
@@ -39,7 +39,7 @@ UPSTREAM_STATUS = (
 
 #: Reported by ``Activated`` when the Coin backend owns the grid.
 INACTIVE_STATUS = (
-    "Grid Overlay (semantic) is not the active grid provider (%s is active). "
+    "Grid Overlay (FerroCAD) is not the active grid provider (%s is active). "
     "Use Mods_Settings to switch backends."
 )
 
@@ -55,7 +55,7 @@ def grid_api(app=None):
 
 
 def is_active():
-    """Whether the semantic backend owns the grid feature.
+    """Whether the FerroCAD-native backend owns the grid feature.
 
     ``True`` when the facade has no provider registry (upstream FreeCAD) or the
     feature has no registered provider: this mod is then the only grid path.
@@ -221,7 +221,7 @@ def register_provider():
     register(
         FEATURE,
         BACKEND,
-        "Semantic (native)",
+        "FerroCAD (native)",
         command="GridOverlay_Settings",
         priority=10,
         activate=activate,

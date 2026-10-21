@@ -70,8 +70,8 @@ JSON-safe manifests in registration order:
 ```python
 {
     "feature": "grid",
-    "backend": "semantic",
-    "label": "Semantic (native)",
+    "backend": "ferrocad",
+    "label": "FerroCAD (native)",
     "command": "GridOverlay_Settings",
     "priority": 10,
     "active": True,
@@ -104,7 +104,7 @@ repaints once), and a `{"status": …}` is folded into the returned `status`.
     "ok": True,
     "feature": "grid",
     "backend": "coin",
-    "previous": "semantic",    # declared before the call
+    "previous": "ferrocad",    # declared before the call
     "view": {"grid": False, ...},
     "status": "...",
     "errors": [],          # callback failures, reported but not fatal
@@ -128,9 +128,9 @@ and nothing more:
 
 - detach/remove what `activate` added (the Coin mod removes its overlay with
   `manager.remove_grid()`);
-- restore the shared default the incoming backend expects (the semantic mod
+- restore the shared default the incoming backend expects (the FerroCAD-native mod
   sets `FreeCAD.Grid.enabled = False`, the native grid's documented default);
-- **do not** clear the user's own settings. The semantic mod leaves colour,
+- **do not** clear the user's own settings. The FerroCAD-native mod leaves colour,
   spacing and shadows alone, so switching away and back is lossless;
 - be idempotent and safe when there is no document (`activate` on Coin with no
   active document is a no-op).
@@ -145,12 +145,12 @@ so an inactive backend cannot draw behind the active one.
 
 | Mod | feature | backend | priority | activate | deactivate |
 | --- | --- | --- | --- | --- | --- |
-| `mods/GridOverlay` | `grid` | `semantic` | 10 | `FreeCAD.Grid.enabled = True`, `apply()` | `enabled = False`, `apply()` |
+| `mods/GridOverlay` | `grid` | `ferrocad` | 10 | `FreeCAD.Grid.enabled = True`, `apply()` | `enabled = False`, `apply()` |
 | `mods/GridOverlayCoin` | `grid` | `coin` | 0 | `manager.ensure_grid()` | `manager.remove_grid()` |
 
 Both keep their own command (`GridOverlay_Settings`,
 `GridOverlayCoin_Settings`) and their own settings; neither implementation was
-removed. The semantic backend is the default because it needs no Coin facade.
+removed. The FerroCAD-native backend is the default because it needs no Coin facade.
 
 ## Switching from the shell
 

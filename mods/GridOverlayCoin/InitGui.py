@@ -20,7 +20,7 @@ upstream parameters and the 80-slot ABI block but draw nothing: ``shadow_count``
 is always 0 (plan §3.5).
 
 The mod declares itself as the ``"coin"`` backend of the ``"grid"`` feature
-(priority 0). ``mods/GridOverlay`` declares the same feature as ``"semantic"``;
+(priority 0). ``mods/GridOverlay`` declares the same feature as ``"ferrocad"``;
 ``Mods_Settings`` switches them, and the inactive backend neither draws nor runs
 its command (``docs/workbenches/mod-providers.md``).
 """
@@ -59,8 +59,8 @@ SETTINGS = App.ParamGet("User parameter:BaseApp/Preferences/Mod/GridOverlayCoin"
 
 COMMAND = "GridOverlayCoin_Settings"
 
-#: The provider feature this mod provides, and its backend id. The semantic mod
-#: declares the same feature with the id ``"semantic"``; see
+#: The provider feature this mod provides, and its backend id. The FerroCAD-native mod
+#: declares the same feature with the id ``"ferrocad"``; see
 #: ``docs/workbenches/mod-providers.md``.
 FEATURE = "grid"
 BACKEND = "coin"

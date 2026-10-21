@@ -344,7 +344,7 @@ for (its §7.3) — with no arena.
 Two shapes are defensible:
 
 1. **Feature-detect and fall back.** One file; `if getattr(App, "Grid", None) is not
-   None:` selects the semantic backend, else the original Coin/GLSL backend (with the
+   None:` selects the FerroCAD-native backend, else the original Coin/GLSL backend (with the
    original `QSettings`/`QDialog`/`getSceneGraph` code). This keeps one artefact that
    runs on both. Cost: two backends, and the Coin backend cannot be exercised in
    FerroCAD CI at all (no Qt, no live graph, no GLSL 1.20) — it will rot between
@@ -717,7 +717,7 @@ Landed in two waves; every suite below was run, not inferred.
 | **Mod providers** | ✅ | `FreeCADGui.registerProvider/providers/activeProvider/setActiveProvider` with the choice at `User parameter:BaseApp/Preferences/Mods` → `Providers/<feature>`; `Mods_Settings` in `ferrocad_shell`; both grid mods declare `feature="grid"` (semantic priority 10, Coin 0), gate their commands and the Coin draw path on `activeProvider`, and switch through `deactivate`/`activate`. `docs/workbenches/mod-providers.md`; suite `test_mod_providers` (13). |
 
 **Provider registry (2026-10-21).** Both grid mods now declare what they provide
-(`feature="grid"`) instead of silently competing. The semantic backend is the
+(`feature="grid"`) instead of silently competing. The FerroCAD-native backend is the
 declared default (priority 10), the Coin backend remains selectable (priority 0),
 and `Mods_Settings` switches them. Registration records the manifest (a
 priority takeover at registration stops the outgoing backend) and the first

@@ -366,3 +366,119 @@ fence behaviour; replace the eager `new_default` fallback renderer with a lazy v
 so no second device exists when the presenter is ready; then decide whether the
 same-device path should become the default on Linux (it is cheaper per frame) and
 whether Windows should opt the window into `WgpuRenderer`.
+
+## 10. The presenting ring (2026-10-21)
+
+### The defect
+
+The first slice allocated exactly one output and rewrote it on every paint. gpui
+samples the target *after* the canvas callback returns, so a continuously
+rendering producer could overwrite a buffer gpui had not sampled yet — the race
+`gpui_interop` names in `wgpu_dmabuf.rs` ("the buffer must not be written again
+until the renderer has sampled the frame (keep a ring of buffers for a producer
+that renders continuously)"). The traced runs in
+[`render-diagnostics.md`](render-diagnostics.md) re-encoded at a steady ~13 fps
+with no wgpu error, which fits a presentation race rather than a renderer fault.
+
+### What the crate exposes
+
+`gpui_interop` / `gpui_wgpu` expose **no per-frame callback**, `needs_redraw`, or
+release callback on `Output` itself. The one completion signal is on the
+dma-buf handle:
+
+- `DmaBufHandle::release: Option<Arc<OwnedFd>>` — "a descriptor the renderer
+  signals once it has finished sampling the buffer", written from
+  `on_submitted_work_done` of the submission that sampled the scene (and also from
+  `release_unpresented` when the window drops a frame). It is not a `sync_file`;
+  the renderer only writes eight bytes to it.
+- `WgpuSharedBuffer::submit` exports the **acquire** fence for the producer's
+  submission; it is not a completion signal for the consumer.
+- The same-device `WgpuSurface` path has no release descriptor at all.
+
+The presenter uses a non-blocking `UnixStream` pair per submission for that
+descriptor, so no new crate dependency is needed. One descriptor is created per
+*submission*, not per slot: a signal from old content must not be mistaken for a
+release of new content. Replaced descriptors are retired briefly (readers kept
+open) so a late renderer write does not hit a closed peer.
+
+### Ring depth and reuse rule
+
+`RING_DEPTH = 3` in `crates/ferrocad_gpui/src/interop.rs`. Two would be the
+minimum for a producer that never waits; three covers a frame still queued behind
+gpui's own scene submission, which is exactly the window the Coin grid's
+full-screen shader widens.
+
+All slots are allocated together and reallocated together on a size change, so a
+resize never leaves a mixed-size ring. Slot choice is deterministic and testable:
+
+1. **Explicit release first.** Scan round-robin from the next slot; an untouched
+   slot or one whose consumer released its current submission is taken. The
+   observation is latched until the slot is written again, so a release is not
+   forgotten if another slot is chosen first.
+2. **Conservative distance.** If no release is available (same-device path, a
+   driver that never signals, or a slow consumer), a slot is reused only when
+   `RING_DEPTH` submissions have happened since it was last written. With
+   round-robin order this is the wrap point, so the buffer the consumer is most
+   likely to be sampling is never the one being written.
+3. **No free slot** skips the draw and repaints the last complete frame (below)
+   rather than overwriting or blanking.
+
+### The blank-frame guard
+
+`present` no longer paints nothing when `draw` did not produce a command buffer:
+
+- the most recent successfully presented handle per slot is retained;
+- a paint without a new frame (a repeated paint, or the paint after `rebuild`)
+  repaints the newest retained handle;
+- a slot is invalidated when it is overwritten without a successful present, or
+  when a submit/import fails, so a stale or half-written target is never shown;
+- a draw failure now retires the presenter **after** presenting the last good
+  frame. Previously `draw` set `Unsupported` immediately, and the same paint's
+  `gpu_canvas` skipped `present` because it re-checked the status — one blank
+  canvas frame. The status transition moved to `present`, so the current paint
+  still repaints and the *next* frame uses the image path.
+
+The image fallback in `ferrocad_viewport` is untouched.
+
+### Diagnosis
+
+`FERROCAD_TRACE=1` adds, alongside the existing frame lines:
+
+```text
+presenter: ring depth=3 target=dma-buf + sync_file size=1176x938 release_capable=true
+frame 7: presenter slot=2 depth=3 reuse_distance=2 via_release=true submission=5
+presenter: repainted last frame slot=1 age=2 (no frame drawn since the last present)
+presenter: skipped a frame (every ring slot may still be in flight); depth=3
+presenter: nothing to present (reason)
+presenter: disabled after present (reason); the image path takes over
+```
+
+`reuse_distance` counts submissions since that slot was last written;
+`via_release` says whether the consumer's own completion signal chose it.
+
+### Validation
+
+- `cargo test -p ferrocad_gpui --offline interop:: -- --test-threads=1`: 10 ring
+  tests pass (round-robin fill, distance >= depth under a consumer that never
+  releases, early reuse only with an explicit release, all-in-flight refusal,
+  resize-time reset and all-or-nothing allocation, newest-frame fallback, and a
+  presenter with no device keeping the image path). The release-descriptor test
+  writes and consumes the same bytes the renderer writes.
+- One bounded traced windowed run (`FERROCAD_TRACE=1 timeout 30
+  ./target/debug/ferrocad_toy`): `dma-buf + sync_file (3 buffers)`, ring rebuilt
+  for two startup resizes, 36 encoded frames over 23 s while the window was
+  active (the idle app then stops requesting paint), 35 slot selections: four
+  first uses, 30 by `via_release` at reuse distance 2, and one conservative reuse
+  at distance 5 when no release was observed. No reuse below the ring depth, no
+  wgpu validation/device-loss line, no presenter failure, no leftover process.
+
+### Residual ambiguity
+
+The ring plus the release signal removes the *unconditional* reuse that caused
+the race, but it is not a proof: the same-device path still relies on the
+conservative distance because the renderer does not signal a same-device
+sampling completion, and the dma-buf signal fires when the scene submission
+completes rather than at an exact per-sample point. The black screen is therefore
+made substantially less likely (and its cause is now explicit in the trace);
+reproducing it interactively with the Coin grid would be needed to call it
+eliminated.

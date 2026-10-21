@@ -99,7 +99,7 @@ The design brief (2026-10-22) specifies:
 
 | # | Slice | Verifiable headlessly |
 | --- | --- | --- |
-| **T0** | Surface metadata: parse `Surface`/`Parent` from `GetResources` (default derived from `Group`), a `Surface` enum, and a `shell_model.surfaces()` grouping | unit tests in `ferrocad_gpui::commands` ✅ |
+| **T0** | Surface metadata: parse `FerroCAD_Surface`/`FerroCAD_Parent` from `GetResources` (default derived from `Group`), a `Surface` enum, and a `shell_model.surfaces()` grouping | unit tests in `ferrocad_gpui::commands` ✅ |
 | **T1** | `split_button` + `popover` primitives (open state, anchor, dismissal, right-click) | state-machine tests; rendering by inspection ✅ |
 | **T2** | Header controls: `Grid`, `Axes`, `WP`, `Mods` wired to the existing command ids, right-aligned in the viewport header | model tests: clicking the label runs the command; `▾` opens the group without running it ✅ |
 | **T3** | Action dock replaces the strip; selection filter; drag/proximity opacity | model test: the dock's visible ids follow the selection signature ✅ (drag opacity deferred) |
@@ -178,7 +178,7 @@ Nothing in the chrome needs to change for 3–5; T4/T5 become wiring once S0–S
 - `commands.rs` owns `Surface` (`grid`, `axis`, `workplane`, `mods`, `dock`, `hidden`),
   `CommandInfo::surface()/parent()`, `group_by_surface()` and `popover_commands()`.
   An unannotated **or unknown** surface is the dock.
-- The `Surface`/`Parent` keys are written in each command's `GetResources()`; the shell
+- The `FerroCAD_Surface`/`FerroCAD_Parent` keys are written in each command's `GetResources()`; the shell
   bridge (`ferrocad_shell.commands()`) copies them into the JSON list. `FreeCADGui`'s
   own `_command_list()` is untouched, so the facade keeps its upstream shape and a mod
   that does not know the keys is unaffected.
@@ -188,7 +188,7 @@ Nothing in the chrome needs to change for 3–5; T4/T5 become wiring once S0–S
   rather than toggles: the outside-click handler fires before the caret's click, so a
   toggle would immediately reopen the menu. `Esc` closes it from the shell key path.
 - Because T4 is blocked, a popover is a plain list of the commands on that surface
-  whose `Parent` names the control's primary. When a surface has no such children
+  whose `FerroCAD_Parent` names the control's primary. When a surface has no such children
   (`Mods`), it falls back to the surface's own commands so the caret is never dead.
 - The dock is `model.surfaces().dock`, so the existing `IsActive` results drive it.
   Disabled rows stay visible. `Search (Ctrl+K)` is a status-reporting stub; there is no
@@ -204,5 +204,5 @@ Nothing in the chrome needs to change for 3–5; T4/T5 become wiring once S0–S
 - **No display in the dev sandbox.** State transitions can be unit-tested, but the
   visual checks in §8 need the Xvfb job or a human. Do not claim a visual pass from a
   headless run.
-- **Command surface drift.** A mod that registers a command with no `Surface` must still
+- **Command surface drift.** A mod that registers a command with no `FerroCAD_Surface` must still
   appear. The default must be the dock (or `hidden` with a warning), never "nowhere".

@@ -93,6 +93,8 @@ rather than restating it.
   `clone`/`eq`/`save`/`restore`.
 - [architecture/python-bindings.md](architecture/python-bindings.md) — the PyO3 binding
   design.
+- [architecture/api-namespaces.md](architecture/api-namespaces.md) — the FreeCAD-vs-FerroCAD
+  namespace rule: which names stay upstream-compatible and which are FerroCAD-only.
 - [architecture/distribution.md](architecture/distribution.md) — how the app runs and is
   packaged (payload, bundled runtime, artifacts).
 - [architecture/repackaging.md](architecture/repackaging.md) — editions and the
@@ -182,8 +184,8 @@ rather than restating it.
   workbench, why its GLSL 1.20 cannot run on wgpu, and the D→C plan (headless fixture,
   then WGSL authoring).
 - [workbenches/grid-overlay-plan.md](workbenches/grid-overlay-plan.md) — the decisions
-  that followed (fork/WGSL, `FreeCAD.Grid` semantic API, Coin completeness), the
-  `FreeCAD.Grid` surface and semantics, and the G0–G6 staging.
+  that followed (fork/WGSL, `FerroCAD.Grid` semantic API, Coin completeness), the
+  `FerroCAD.Grid` surface and semantics, and the G0–G6 staging.
 
 ## The record
 

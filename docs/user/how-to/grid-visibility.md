@@ -9,26 +9,26 @@ The Grid command is checkable and presentation-only. This page runs it with no w
 > Edit the workflow, not this page; `python3 tools/userdocs.py --check`
 > fails when the two disagree.
 
-**Requires:** the `FreeCAD` facade and `ferrocad_shell`; no GPU and no window.
+**Requires:** the `FerroCAD` facade and `ferrocad_shell`; no GPU and no window.
 
 ## 1. Start from the default
 
-`FreeCAD.Grid` is the semantic settings object for the reference grid. `enabled` is the switch a provider reads; it defaults to off.
+`FerroCAD.Grid` is the semantic settings object for the reference grid. `enabled` is the switch a provider reads; it defaults to off.
 
 ```python
 import json
 import ferrocad_shell
 
-FreeCAD.Grid.reset()
+FerroCAD.Grid.reset()
 ```
 
 | Read back | Value |
 | --- | --- |
-| FreeCAD.Grid.enabled | false |
+| FerroCAD.Grid.enabled | false |
 
 ## 2. Run the command
 
-`App_ToggleGrid` is registered by the shell and is checkable. It flips `FreeCAD.Grid.enabled` and returns a `view` request; the shell applies that request and mirrors the result into `FreeCADGui.ViewState`.
+`App_ToggleGrid` is registered by the shell and is checkable. It flips `FerroCAD.Grid.enabled` and returns a `view` request; the shell applies that request and mirrors the result into `FerroCADGui.ViewState`.
 
 ```python
 first = json.loads(ferrocad_shell.run_command("App_ToggleGrid"))
@@ -37,7 +37,7 @@ first = json.loads(ferrocad_shell.run_command("App_ToggleGrid"))
 | Read back | Value |
 | --- | --- |
 | Response | {"ok": true, "view": {"axis_cross": true, "grid": true, "grid_alpha": 1.0, "grid_color": "#94a3b8", "grid_major": 100.0, "grid_minor": 10.0, "grid_radius": 0.0}} |
-| FreeCAD.Grid.enabled | true |
+| FerroCAD.Grid.enabled | true |
 
 ## 3. Push the state the window would push
 
@@ -55,7 +55,7 @@ checked = {
 | Read back | Value |
 | --- | --- |
 | App_ToggleGrid checked | {"App_ToggleGrid": true} |
-| FreeCADGui.ViewState.grid | true |
+| FerroCADGui.ViewState.grid | true |
 
 ## 4. Turn it off again
 
@@ -67,6 +67,6 @@ ferrocad_shell.set_view_state(json.dumps(second["view"]))
 | Read back | Value |
 | --- | --- |
 | Response | {"ok": true, "view": {"axis_cross": true, "grid": false, "grid_alpha": 1.0, "grid_color": "#94a3b8", "grid_major": 100.0, "grid_minor": 10.0, "grid_radius": 0.0}} |
-| FreeCAD.Grid.enabled | false |
+| FerroCAD.Grid.enabled | false |
 
 > Every grid backend reads this one switch. A provider that kept its own copy would keep drawing after the toggle, which is exactly the defect `docs/tasks/grid-visibility.md` fixed.

@@ -111,11 +111,12 @@ commit is applied (the module hooks in [`architecture.md`](../architecture.md) Â
 ```python
 # python/ferrocad_parametric/__init__.py
 import FreeCAD
+import FerroCAD
 import Part
 from ferrocad_shell import *          # the shell's data functions
 
-FreeCAD.register_display_provider(_display_mesh)
-FreeCAD.register_interaction_provider(_interaction)
+FerroCAD.register_display_provider(_display_mesh)
+FerroCAD.register_interaction_provider(_interaction)
 ```
 
 Linking the module into the **same image** is required: both `import Part` and

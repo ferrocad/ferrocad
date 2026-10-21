@@ -17,7 +17,7 @@ different dialog per mod.
 
 | Today | Consequence |
 | --- | --- |
-| `FreeCAD.Grid` is a bespoke Python object with hand-written properties | every new grid provider re-implements the same knobs |
+| `FerroCAD.Grid` is a bespoke Python object with hand-written properties | every new grid provider re-implements the same knobs |
 | `mods/GridOverlay` and `mods/GridOverlayCoin` each ship a settings command and a dialog (`GridOverlay_Settings`, `GridOverlayCoin_Settings`) | switching backends changes the dialog, and two stores can disagree |
 | `properties()` only resolves `doc.getObject(name)` | grid settings cannot use the existing typed-row editor |
 | `ParamGet` is an in-memory dict (`python/FreeCAD/__init__.py`) | the provider choice and every value are lost on restart |
@@ -35,7 +35,9 @@ the provider's own parameter group, so a mod does not implement get/set for simp
 knobs.
 
 ```python
-FreeCADGui.registerProvider(
+import FerroCADGui
+
+FerroCADGui.registerProvider(
     "grid", "coin", "Coin (WGSL)",
     command="GridOverlayCoin_Settings",
     priority=0, activate=..., deactivate=..., refresh=...,
@@ -63,8 +65,10 @@ FreeCADGui.registerProvider(
 Read/write API (headless, JSON-free for Python callers):
 
 ```python
-FreeCADGui.settings("grid")                  # rows for the ACTIVE provider
-FreeCADGui.setSetting("grid", "spacing", 5.0)
+import FerroCADGui
+
+FerroCADGui.settings("grid")                  # rows for the ACTIVE provider
+FerroCADGui.setSetting("grid", "spacing", 5.0)
 ```
 
 `settings()` returns the same row shape as `properties()`, so the pane needs no new
@@ -97,7 +101,7 @@ Settings                    (synthetic root)
   (`BaseApp/Preferences/Mods/<feature>/ActiveProvider`).
 - A missing or unknown backend at boot falls back to the declared default (highest
   `priority`, earliest registration) and reports once.
-- `FreeCAD.Grid.*` becomes a facade over the native provider's settings (S4), so
+- `FerroCAD.Grid.*` becomes a facade over the native provider's settings (S4), so
   existing scripts keep working; the two must not become separate stores again.
 
 ## Slices
@@ -108,7 +112,7 @@ Settings                    (synthetic root)
 | **S1** | `Settings` root and `Settings/<Feature>` nodes in `model_tree()`; `properties()` / `set_property()` routing — ✅ Python tests: addressing, no collision with document names, provider switch changes rows |
 | **S2** | Property pane selects the node and renders its rows (reuse the existing editor) | gpui model test: selecting `Settings/Grid` shows the rows; editing calls `set_property` |
 | **S3** | File-backed `ParamGet`; persist the active provider; load at boot | Python tests: restart simulation, corrupt file, unknown backend |
-| **S4** | Migrate `FreeCAD.Grid` onto the native provider's schema; keep the old attribute API as a facade; turn the two mod dialogs into aliases of the Settings node | Python tests: the old attributes and the new rows agree |
+| **S4** | Migrate `FerroCAD.Grid` onto the native provider's schema; keep the old attribute API as a facade; turn the two mod dialogs into aliases of the Settings node | Python tests: the old attributes and the new rows agree |
 | **S5** | Document-scoped overrides and the precedence display (optional) | Python tests: document value wins, deleting it falls back |
 
 `S0`–`S2` unblock `toolbar-chrome.md` T4/T5. `S3` unblocks the persistence promise.
@@ -138,7 +142,7 @@ Settings                    (synthetic root)
 
 S0 and S1 only; S2 (pane wiring) and S3 (file-backed `ParamGet`) are untouched.
 
-- `FreeCADGui.registerProvider(..., settings=...)` validates and normalises the
+- `FerroCADGui.registerProvider(..., settings=...)` validates and normalises the
   schema, then stores it on the provider record. Nothing is written to the
   parameter group at registration: defaults are materialised by `settings()`.
   A malformed schema raises at the call site; an unknown `kind` is accepted,
@@ -169,7 +173,7 @@ S0 and S1 only; S2 (pane wiring) and S3 (file-backed `ParamGet`) are untouched.
 ## Risks
 
 - **Schema drift.** S4 must make the native side authoritative; until then
-  `FreeCAD.Grid` and a provider schema could disagree. Do not ship T4 before S4, or
+  `FerroCAD.Grid` and a provider schema could disagree. Do not ship T4 before S4, or
   the popover will show values the renderer does not use.
 - **File format.** Version the file from the first write; a corrupt file must fall
   back to defaults rather than fail the boot.

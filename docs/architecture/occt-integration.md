@@ -261,7 +261,7 @@ The extraction is a refactor with its own tests, so it lands in stages:
     checked by `ferrocad_part_py`'s `a_fillet_feature_rebuilds_through_python`.
 12. **[x] The host wiring** (2026-10-20) — the viewport's stage is filled from the
     document through **module hooks**: a workbench registers
-    `FreeCAD.display_mesh`/`FreeCAD.interaction` providers (`architecture.md` §9), so
+    `FerroCAD.display_mesh`/`FerroCAD.interaction` providers (`architecture.md` §9), so
     `ferrocad_shell` names no workbench. The Part edition's app script
     (`python/ferrocad_parametric`, selected with `run_edition_with`) imports `Part`,
     registers the hooks (the tessellation via `Part.Shape.mesh` and the feature edit as

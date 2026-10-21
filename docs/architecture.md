@@ -257,22 +257,22 @@ continues. Nothing about a broken workbench is fatal.
 ## 9. Module hooks: how a workbench reaches the shell
 
 The shell must serve any edition, so it names **no workbench**. A module contributes
-to the window through two **hooks** on the `FreeCAD` facade, registered when the
+to the window through two **hooks** on the `FerroCAD` module, registered when the
 module is imported:
 
 | Hook | Provider | Used by |
 | --- | --- | --- |
-| `FreeCAD.register_display_provider(f)` → `FreeCAD.display_mesh(obj)` | `f(obj) -> tessellation dict or None` | the viewport stage (`ferrocad_shell.stage_meshes`) |
-| `FreeCAD.register_interaction_provider(f)` → `FreeCAD.interaction(obj, manipulator, action, element, values)` | `f(obj, manipulator, action, element, values) -> {"ok": …} or None` | a manipulator commit (`ferrocad_shell.interaction`) |
+| `FerroCAD.register_display_provider(f)` → `FerroCAD.display_mesh(obj)` | `f(obj) -> tessellation dict or None` | the viewport stage (`ferrocad_shell.stage_meshes`) |
+| `FerroCAD.register_interaction_provider(f)` → `FerroCAD.interaction(obj, manipulator, action, element, values)` | `f(obj, manipulator, action, element, values) -> {"ok": …} or None` | a manipulator commit (`ferrocad_shell.interaction`) |
 
 A provider returns `None` for a request it does not own; the shell asks each in turn.
 The interaction hook is **generic by design**: the manipulator id and action travel as
-data, so a new workbench adds a provider without a new `FreeCAD` function.
+data, so a new workbench adds a provider without a new `FerroCAD` function.
 
 ```
 ferrocad_shell (base app script)            ferrocad_parametric (edition script)
-  stage_meshes()  ── FreeCAD.display_mesh  ──▶ hooks ──▶ Part display provider
-  interaction()   ── FreeCAD.interaction   ──▶ hooks ──▶ Part interaction provider
+  stage_meshes()  ── FerroCAD.display_mesh  ──▶ hooks ──▶ Part display provider
+  interaction()   ── FerroCAD.interaction   ──▶ hooks ──▶ Part interaction provider
        ▲                                                        │
        └──────────── HostConfig.entry_module ◀── run_edition_with ─┘
 ```

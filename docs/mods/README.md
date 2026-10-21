@@ -37,6 +37,14 @@ mods/
     package.xml    # conventional FreeCAD metadata; not read by FerroCAD
 ```
 
+### Which FreeCAD?
+
+A mod that imports only `FreeCAD`/`FreeCADGui` and uses only upstream names is
+**FreeCAD-compatible**: a port of an upstream workbench should need nothing else.
+Importing `FerroCAD`/`FerroCADGui` marks the mod **FerroCAD-only** — a deliberate
+dependency, and worth stating in the mod's README. The boundary is
+[`../architecture/api-namespaces.md`](../architecture/api-namespaces.md).
+
 The loader does not use an upstream `Workbench` class, there is no build step,
 and there is no package manager. `FreeCADGui.addWorkbench` does not exist. The
 loader runs `Init.py` then `InitGui.py` for every subdirectory (see
@@ -60,10 +68,10 @@ The reference mods in this tree are:
 | Contribution | API | Registration lifetime |
 | --- | --- | --- |
 | **Commands** | `FreeCADGui.addCommand(name, command)` | until `removeCommand(name)`; a duplicate id raises |
-| **A display provider** | `FreeCAD.register_display_provider(provider)` | process lifetime; there is no unregister |
-| **An interaction provider** | `FreeCAD.register_interaction_provider(provider)` | process lifetime; there is no unregister |
-| **Feature providers** | `FreeCADGui.registerProvider(...)` | until `unregisterProvider(feature, backend)`; re-registering replaces the record |
-| **Overlays** | `FreeCADGui.addOverlay(node)` / `removeOverlay(node)` | until removed; needs a `pivy.coin` facade that provides the bridge |
+| **A display provider** | `FerroCAD.register_display_provider(provider)` | process lifetime; there is no unregister |
+| **An interaction provider** | `FerroCAD.register_interaction_provider(provider)` | process lifetime; there is no unregister |
+| **Feature providers** | `FerroCADGui.registerProvider(...)` | until `unregisterProvider(feature, backend)`; re-registering replaces the record |
+| **Overlays** | `FerroCADGui.addOverlay(node)` / `removeOverlay(node)` | until removed; needs a `pivy.coin` facade that provides the bridge |
 
 - A **display provider** is asked per document object: "give me a mesh, or
   `None`".
@@ -80,7 +88,7 @@ A **feature provider** can advertise its knobs with `settings=[...]`, which is w
 the shell renders under `Settings/<Feature>`; a provider without a schema keeps its
 `command` as the settings entry ([`providers.md`](providers.md)).
 A feature provider may also implement `refresh`, which
-`FreeCADGui.refreshProviders(feature)` runs when the feature's shared state
+`FerroCADGui.refreshProviders(feature)` runs when the feature's shared state
 changes without a switch ([`providers.md`](providers.md)).
 
 ## Reading order
@@ -90,7 +98,7 @@ changes without a switch ([`providers.md`](providers.md)).
 3. [`commands.md`](commands.md) — commands, resources, dialogs, view/tool requests.
 4. [`display-and-interaction.md`](display-and-interaction.md) — meshes and edits.
 5. [`providers.md`](providers.md) — one backend per feature, and who owns the switch.
-6. [`settings-and-parameters.md`](settings-and-parameters.md) — `ParamGet` and `FreeCAD.Grid`.
+6. [`settings-and-parameters.md`](settings-and-parameters.md) — `ParamGet` and `FerroCAD.Grid`.
 7. [`testing-a-mod.md`](testing-a-mod.md) — headless tests, no GPU.
 
 ## The JSON boundary (for automated clients)

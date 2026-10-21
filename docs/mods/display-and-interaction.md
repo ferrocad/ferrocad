@@ -7,15 +7,17 @@ the mod:
 
 | Hook | Registered with | Asked when |
 | --- | --- | --- |
-| display | `FreeCAD.register_display_provider(provider)` | the shell syncs the document's meshes |
-| interaction | `FreeCAD.register_interaction_provider(provider)` | the user commits a manipulator edit |
+| display | `FerroCAD.register_display_provider(provider)` | the shell syncs the document's meshes |
+| interaction | `FerroCAD.register_interaction_provider(provider)` | the user commits a manipulator edit |
 
 Both are registered once, at import time. Both use the same protocol: **return
 `None` for a request you do not own**, and the next provider is asked.
 
 ```python
-FreeCAD.register_display_provider(my_display)
-FreeCAD.register_interaction_provider(my_interaction)
+import FerroCAD
+
+FerroCAD.register_display_provider(my_display)
+FerroCAD.register_interaction_provider(my_interaction)
 ```
 
 Registration is idempotent only for the same function object. There is no
@@ -44,7 +46,7 @@ def my_display(obj):
     }
 ```
 
-`FreeCAD.display_mesh(obj)` returns the first non-`None` result. It does **not**
+`FerroCAD.display_mesh(obj)` returns the first non-`None` result. It does **not**
 catch exceptions; a provider that raises breaks the mesh sync. Convert your own
 geometry in a `try/except` and return `None` on failure (the toy does this).
 
@@ -83,7 +85,7 @@ Notes:
 
 1. reads `FreeCAD.ActiveDocument`;
 2. skips an object that a feature consumes through its `Base` link;
-3. calls `FreeCAD.display_mesh(obj)`;
+3. calls `FerroCAD.display_mesh(obj)`;
 4. adds `object` (the internal name), `label`, and `entity` (the object's
    1-based position in `doc.Objects`);
 5. returns a JSON list.
@@ -140,7 +142,7 @@ def my_interaction(obj, manipulator, action, element, values):
 | `element` | the sub-element name (`"Face6"`, `"Edge3"`) or `""` |
 | `values` | the numbers in the manipulator's documented order, as floats |
 
-`FreeCAD.interaction(obj, manipulator, action, element="", values=None)` asks
+`FerroCAD.interaction(obj, manipulator, action, element="", values=None)` asks
 each registered provider in order and returns the first non-`None` result. The
 edit belongs to the provider: it opens the transaction, creates or edits the
 feature, and recomputes. The shell only marshals.
@@ -152,7 +154,7 @@ values_json)`:
 
 1. resolves `object_name` in the active document;
 2. parses `values_json` as a list of numbers;
-3. calls `FreeCAD.interaction(...)`;
+3. calls `FerroCAD.interaction(...)`;
 4. returns the provider's dict as JSON, or
    `{"ok": false, "error": "no module handles <manipulator> <action>"}` when no
    provider claims it.
@@ -180,15 +182,17 @@ A provider that raises is **not** isolated here. Return `{"ok": False, "error":
 
 ## Overlays are not display providers
 
-An overlay is a Coin node registered with `FreeCADGui.addOverlay(node)` and
+An overlay is a Coin node registered with `FerroCADGui.addOverlay(node)` and
 drawn beside the document scene, not a per-object mesh. `addOverlay` extracts
 the subtree immediately (the "pull" bridge), so a later in-place edit does not
 reach the copy: remove and re-add the node after changing it. `removeOverlay`
 keys on Python object identity.
 
 ```python
-FreeCADGui.addOverlay(root)
-FreeCADGui.removeOverlay(root)
+import FerroCADGui
+
+FerroCADGui.addOverlay(root)
+FerroCADGui.removeOverlay(root)
 ```
 
 This path requires a `pivy.coin` facade that provides `addOverlay` and

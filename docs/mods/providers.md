@@ -19,9 +19,9 @@ Both register from `InitGui.py`. Only one draws; `Mods_Settings` switches.
 ## Declaring a provider
 
 ```python
-import FreeCADGui
+import FerroCADGui
 
-FreeCADGui.registerProvider(
+FerroCADGui.registerProvider(
     "grid",                     # feature
     "coin",                     # backend id
     "Coin (WGSL)",              # label shown by Mods_Settings
@@ -63,7 +63,7 @@ A provider can declare its knobs, so the shell has **one** settings surface whic
 backend is active:
 
 ```python
-FreeCADGui.registerProvider(
+FerroCADGui.registerProvider(
     "grid", "coin", "Coin (WGSL)",
     command="GridOverlayCoin_Settings",      # fallback: a backend with no schema
     settings=[
@@ -91,8 +91,8 @@ per setting, unless a `get`/`set` pair is supplied. A malformed schema is reject
 registration; an unknown `kind` renders read-only instead of breaking the pane.
 
 ```python
-FreeCADGui.settings("grid")                  # rows for the active backend
-FreeCADGui.setSetting("grid", "spacing", 5)  # validate, store, refresh the backend
+FerroCADGui.settings("grid")                  # rows for the active backend
+FerroCADGui.setSetting("grid", "spacing", 5)  # validate, store, refresh the backend
 ```
 
 The rows use the property pane's contract (`name`, `label`, `kind`, `value`,
@@ -117,11 +117,11 @@ In order:
 A saved value that names a removed or renamed backend is ignored, not an error.
 
 ```python
-import FreeCADGui
+import FerroCADGui
 
-FreeCADGui.activeProvider("grid")     # "ferrocad" (the declared default)
-FreeCADGui.providers("grid")          # manifests for both backends
-FreeCADGui.providers()                # every feature
+FerroCADGui.activeProvider("grid")     # "ferrocad" (the declared default)
+FerroCADGui.providers("grid")          # manifests for both backends
+FerroCADGui.providers()                # every feature
 ```
 
 A manifest is JSON-safe:
@@ -143,7 +143,7 @@ boundary.
 ## Switching
 
 ```python
-result = FreeCADGui.setActiveProvider("grid", "coin")
+result = FerroCADGui.setActiveProvider("grid", "coin")
 ```
 
 `setActiveProvider(feature, backend)`:
@@ -189,7 +189,7 @@ A feature's state can change without a backend switch. `refreshProviders(feature
 asks the **active** backend only to re-read it:
 
 ```python
-FreeCADGui.refreshProviders("grid")
+FerroCADGui.refreshProviders("grid")
 ```
 
 It returns:
@@ -228,16 +228,16 @@ The grid is the worked example:
 
 ```text
 App_ToggleGrid
-  -> flips FreeCAD.Grid.enabled            (the one switch)
-  -> builds the request from FreeCAD.Grid.apply()
-  -> calls FreeCADGui.refreshProviders("grid")
-       -> the active backend's refresh() re-reads FreeCAD.Grid.enabled
+  -> flips FerroCAD.Grid.enabled            (the one switch)
+  -> builds the request from FerroCAD.Grid.apply()
+  -> calls FerroCADGui.refreshProviders("grid")
+       -> the active backend's refresh() re-reads FerroCAD.Grid.enabled
        -> the Coin backend re-binds its overlay and returns
           {"view": {"grid_overlay": <enabled>}}
   -> merges that grid_overlay claim into the request and returns it
 ```
 
-`mods/GridOverlayCoin` now reads `FreeCAD.Grid.enabled` for `enabled` when the
+`mods/GridOverlayCoin` now reads `FerroCAD.Grid.enabled` for `enabled` when the
 semantic API exists (upstream FreeCAD falls back to its private `SETTINGS` knob).
 Its colour, opacity, spacing and shadow knobs stay in its own parameter group.
 The native backend reads the same switch directly in `apply()`.
@@ -250,7 +250,7 @@ hook and the feature-owned switch rule.
 
 - [ ] Register from `InitGui.py` with a unique `(feature, backend)`.
 - [ ] Give `Mods_Settings` a unique `label` within the feature.
-- [ ] Check `FreeCADGui.activeProvider(feature)` before drawing and in
+- [ ] Check `FerroCADGui.activeProvider(feature)` before drawing and in
       `Activated`; return a `{"status": ...}` naming the active backend when it
       is not you.
 - [ ] Make `activate` idempotent and safe with no document.
@@ -263,7 +263,7 @@ hook and the feature-owned switch rule.
 ## Runnable registry example
 
 ```python
-import FreeCADGui
+import FerroCADGui
 
 calls = []
 
@@ -275,19 +275,19 @@ def refresh_a():
     calls.append("refresh")
     return {"view": {"grid": True}}
 
-FreeCADGui.registerProvider(
+FerroCADGui.registerProvider(
     "demo", "a", "Backend A", priority=10,
     activate=activate_a, refresh=refresh_a,
 )
-FreeCADGui.registerProvider("demo", "b", "Backend B", priority=0)
+FerroCADGui.registerProvider("demo", "b", "Backend B", priority=0)
 
-print(FreeCADGui.providers("demo"))
-print(FreeCADGui.activeProvider("demo"))
-print(FreeCADGui.refreshProviders("demo"))
+print(FerroCADGui.providers("demo"))
+print(FerroCADGui.activeProvider("demo"))
+print(FerroCADGui.refreshProviders("demo"))
 print(calls)
 
-for entry in FreeCADGui.providers("demo"):
-    FreeCADGui.unregisterProvider("demo", entry["backend"])
+for entry in FerroCADGui.providers("demo"):
+    FerroCADGui.unregisterProvider("demo", entry["backend"])
 ```
 
 ## Limits

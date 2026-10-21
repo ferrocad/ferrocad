@@ -48,15 +48,15 @@ afterwards. `RemGroup` does not do what its name says.
 `Import` reads that shape back. These are ordinary file operations, not a
 FreeCAD `.FCStd` parameter file.
 
-## The worked example: `FreeCAD.Grid`
+## The worked example: `FerroCAD.Grid`
 
-`FreeCAD.Grid` is the semantic grid settings object. It is resolved lazily as an
-**attribute** of the `FreeCAD` module; `import FreeCAD.Grid` is not the API.
+`FerroCAD.Grid` is the semantic grid settings object. It is resolved lazily as an
+**attribute** of the `FerroCAD` module; `import FerroCAD.Grid` is not the API.
 
 ```python
-import FreeCAD
+import FerroCAD
 
-grid = FreeCAD.Grid
+grid = FerroCAD.Grid
 grid.enabled = True
 ```
 
@@ -99,7 +99,7 @@ It raises if the major step is below the minor one. The shadow preferences are
 not included because nothing consumes them.
 
 `snapshot()` is for seeding a dialog. With `FreeCAD.GuiUp` and a
-`FreeCADGui.ViewState`, it reads the shell's mirror of what is actually drawn;
+`FerroCADGui.ViewState`, it reads the shell's mirror of what is actually drawn;
 otherwise it reads the store. It also returns `shadows` and `shadow_opacity`,
 and reports `grid_radius` as `None` when the stored value is `0`.
 
@@ -110,8 +110,9 @@ grid keys.
 
 ```python
 import FreeCAD
+import FerroCAD
 
-grid = FreeCAD.Grid
+grid = FerroCAD.Grid
 grid.reset()
 grid.enabled = True
 grid.color = "#123456"
@@ -138,7 +139,9 @@ If the mod owns a **feature provider** (see [`providers.md`](providers.md)), do 
 write another dialog: declare the knobs in `registerProvider(settings=[...])`.
 
 ```python
-FreeCADGui.registerProvider(
+import FerroCADGui
+
+FerroCADGui.registerProvider(
     "grid", "mymod", "My grid",
     settings=[
         {"name": "spacing", "label": "Spacing", "kind": "quantity",
@@ -186,9 +189,9 @@ Rules that keep settings and drawing consistent:
 4. **Validate before writing**, so a rejected value leaves the store unchanged.
 5. **Do not assume persistence across runs.**
 
-`mods/GridOverlay` is the reference: its `on_accept` writes `FreeCAD.Grid` and
-returns `FreeCAD.Grid.apply()`. `mods/GridOverlayCoin` keeps its appearance
-knobs in its own group and reads `FreeCAD.Grid.enabled` for the shared switch
+`mods/GridOverlay` is the reference: its `on_accept` writes `FerroCAD.Grid` and
+returns `FerroCAD.Grid.apply()`. `mods/GridOverlayCoin` keeps its appearance
+knobs in its own group and reads `FerroCAD.Grid.enabled` for the shared switch
 when that API exists.
 
 ## Next

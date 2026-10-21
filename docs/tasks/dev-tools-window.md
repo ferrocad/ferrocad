@@ -137,7 +137,7 @@ its modal over the viewport, where the user is looking.
 - The main window's root has a focus handle now (`Shell::root_focus_handle`); boot
   focuses it instead of the console, which no longer lives in that window's tree. That
   keeps `Esc` and the shortcuts working from the main window.
-- `Dev_ToggleTools` is registered by `ferrocad_shell` (`Surface: "hidden"`,
+- `Dev_ToggleTools` is registered by `ferrocad_shell` (`FerroCAD_Surface: "hidden"`,
   `Ctrl+Shift+D`); its `Activated` returns `{"status": "dev tools: no GUI window to
   toggle"}` for headless/upstream callers, while `Shell::run_command` intercepts the id
   to own the actual window.

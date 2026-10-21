@@ -62,7 +62,7 @@ Toy.makeSlab(...) ──▶ document (one transaction) ──▶ stage_meshes �
                                                     ▼
                               display.object_of(target) ─▶ interaction hook
                                                     │
-                                FreeCAD.interaction(obj, id, action, "", values)
+                                FerroCAD.interaction(obj, id, action, "", values)
                                                     ▼
                        Height = …   /   Placement = delta * Placement
                                                     │

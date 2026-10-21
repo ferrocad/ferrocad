@@ -23,7 +23,7 @@ PYTHONPATH=python python3 -m unittest discover -s tests -v
 | provider selection and switching | `registerProvider`, `activeProvider`, `setActiveProvider`, `refreshProviders` |
 | selection-dependent `IsActive` | `ferrocad_shell.set_selection(...)` |
 | view-dependent `IsChecked` | `ferrocad_shell.set_view_state(...)` |
-| display meshes | `FreeCAD.display_mesh(obj)` or `ferrocad_shell.stage_meshes()` |
+| display meshes | `FerroCAD.display_mesh(obj)` or `ferrocad_shell.stage_meshes()` |
 | interaction commits | `ferrocad_shell.interaction(...)` |
 | overlay registration | needs a `pivy.coin` facade; the Coin tests install a stub |
 | shader compilation, drawing, the window | **needs a GPU and a viewport** |
@@ -129,6 +129,7 @@ The shell owns selection and presentation state. In a test, push them yourself.
 ```python
 import json
 import FreeCADGui
+import FerroCADGui
 import ferrocad_shell
 import ferrocad_toy
 
@@ -142,8 +143,8 @@ assert FreeCADGui.Selection.getSelectionEx()[0][1] == ["Face1"]
 ferrocad_shell.set_view_state(
     json.dumps({"grid": True, "projection": "ortho"})
 )
-assert FreeCADGui.ViewState.grid is True
-assert FreeCADGui.ViewState.projection == "ortho"
+assert FerroCADGui.ViewState.grid is True
+assert FerroCADGui.ViewState.projection == "ortho"
 ```
 
 - `set_selection` payload: `[{"object": name, "elements": [...]}, ...]`. Objects
@@ -219,18 +220,18 @@ FreeCAD.ParamGet(
 which backend was applied while keeping the registrations.
 
 ```python
-import FreeCADGui
+import FerroCADGui
 
-FreeCADGui.registerProvider("demo", "a", "A", priority=10)
-FreeCADGui.registerProvider("demo", "b", "B", priority=0)
-assert FreeCADGui.activeProvider("demo") == "a"
+FerroCADGui.registerProvider("demo", "a", "A", priority=10)
+FerroCADGui.registerProvider("demo", "b", "B", priority=0)
+assert FerroCADGui.activeProvider("demo") == "a"
 
-result = FreeCADGui.setActiveProvider("demo", "b")
+result = FerroCADGui.setActiveProvider("demo", "b")
 assert result["previous"] == "a"
 assert result["ok"]
 
-for entry in FreeCADGui.providers("demo"):
-    FreeCADGui.unregisterProvider("demo", entry["backend"])
+for entry in FerroCADGui.providers("demo"):
+    FerroCADGui.unregisterProvider("demo", entry["backend"])
 ```
 
 `tests/test_mod_providers.py` also asserts that callback errors are reported
@@ -241,13 +242,14 @@ under `errors` and do not break the registry.
 ```python
 import json
 import FreeCAD
+import FerroCAD
 import ferrocad_shell
 import ferrocad_toy
 
 ferrocad_toy.bootstrap("Display")
 ferrocad_toy.makeSlab(name="Box")
 
-mesh = FreeCAD.display_mesh(FreeCAD.ActiveDocument.getObject("Box"))
+mesh = FerroCAD.display_mesh(FreeCAD.ActiveDocument.getObject("Box"))
 assert len(mesh["triangles"]) // 3 == 12
 
 response = json.loads(
@@ -270,14 +272,14 @@ A test that leaves global state behind makes the next test lie. At the end of a
 case (or class):
 
 - `FreeCADGui.removeCommand(id)` for every command the test registered.
-- `FreeCADGui.unregisterProvider(feature, backend)` for every provider.
+- `FerroCADGui.unregisterProvider(feature, backend)` for every provider.
 - `FreeCADGui._cancel_all()` to drop open dialog tokens.
 - `FreeCADGui._PROVIDER_APPLIED.clear()` and clear the `Providers` preference
   group if the test changed the provider selection.
 - `FreeCAD.closeDocument(name)` for every document.
-- `FreeCAD.Grid.reset()` if the test changed grid settings.
+- `FerroCAD.Grid.reset()` if the test changed grid settings.
 - `ferrocad_shell.set_selection("[]")` if the test pushed a selection.
-- `FreeCADGui.removeOverlay(node)` if the test registered an overlay.
+- `FerroCADGui.removeOverlay(node)` if the test registered an overlay.
 
 You cannot unregister a display or interaction provider. Keep those modules
 loaded once, or accept that each re-execution adds another provider.
@@ -290,6 +292,6 @@ loaded once, or accept that each re-execution adds another provider.
   manual.
 - Shader compilation, the viewport, and anything that measures pixels need a
   GPU and `cargo run -p ferrocad_gpui`.
-- The headless facade has `FreeCAD.GuiUp == 0`; `FreeCADGui.ViewState` is still
-  writable by `set_view_state`, and `FreeCAD.Grid.snapshot()` reads it only when
+- The headless facade has `FreeCAD.GuiUp == 0`; `FerroCADGui.ViewState` is still
+  writable by `set_view_state`, and `FerroCAD.Grid.snapshot()` reads it only when
   `GuiUp` is truthy.

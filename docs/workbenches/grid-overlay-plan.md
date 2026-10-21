@@ -89,32 +89,32 @@ one, and is listed with the other approach changes.
 
 ### 2.1 Name and home
 
-**`FreeCAD.Grid`, a singleton object implemented in a private pure-Python module
-(`python/FreeCAD/_grid.py`), bound lazily from `FreeCAD.__getattr__`.**
+**`FerroCAD.Grid`, a singleton object implemented in a private pure-Python module
+(`python/FreeCAD/_grid.py`), bound lazily from `FerroCAD.__getattr__`.**
 
-Why not `FreeCADGui.Grid`:
+Why not `FerroCADGui.Grid`:
 
 - `import FreeCAD` must keep working headless. `python/FreeCAD/__init__.py` already
   resolves lazily for exactly this reason (`ActiveDocument` at `:178-182`); a
-  `FreeCAD.Grid` reached the same way needs no GUI import at module load and no
+  `FerroCAD.Grid` reached the same way needs no GUI import at module load and no
   circular import (`FreeCADGui/__init__.py` imports `FreeCAD` at `:30`).
 - `FreeCAD.Units` is the precedent for a *semantic* submodule of the core facade: pure
   Python over Rust values, with no UI import (`python/FreeCAD/Units.py:1-23`).
 - `FreeCADGui.Selection` is the precedent for a *singleton object* rather than a module
   (`python/FreeCADGui/__init__.py:258-300`). A settings object with validated
   properties fits that shape better than a bag of functions.
-- `FreeCADGui.ViewState` is a **read-only mirror** pushed by the shell
+- `FerroCADGui.ViewState` is a **read-only mirror** pushed by the shell
   (`crates/ferrocad_gpui/src/python.rs:376-383`,
   `python/ferrocad_shell/__init__.py:407-422`). Putting the writable policy beside a
   read-only mirror would create two truths in one namespace. The writable store lives
-  in `FreeCAD`; the mirror stays where it is.
+  in `FerroCAD`; the mirror stays where it is.
 
 Why not a new top-level module (`import ferrocad_grid`): that is the "new parallel
 world" the decision forbids, and it would invent a second import path for something
 that is already a FreeCAD concept.
 
 One consequence to document in the API docstring: the public form is
-`FreeCAD.Grid`, not `import FreeCAD.Grid`. `_grid` is private so no second public module
+`FerroCAD.Grid`, not `import FerroCAD.Grid`. `_grid` is private so no second public module
 name exists.
 
 ### 2.2 Surface
@@ -135,7 +135,7 @@ exists.
 | `shadows` | `bool` | `False` | `GridShadow` (new) | — | **nothing today** (see below) |
 | `shadow_opacity` | `float` 0..1 | `0.30` | `GridShadowOpacity` (new) | — | **nothing today** |
 | `apply()` | `→ dict` | — | — | builds `{"view": …}` | the shell, via a command |
-| `snapshot()` | `→ dict` | — | — | reads `FreeCADGui.ViewState` when `GuiUp`, else the store | tests, dialogs |
+| `snapshot()` | `→ dict` | — | — | reads `FerroCADGui.ViewState` when `GuiUp`, else the store | tests, dialogs |
 | `reset()` | `None` | — | clears the group | — | tests, a "defaults" button |
 
 What is **not** in the surface:
@@ -146,7 +146,7 @@ What is **not** in the surface:
   holds no workplane. Adding a read/write property would mean mirroring viewport state
   up into the facade for no consumer.
 - `grid_overlay` — the debug shader overlay is a shell field (§2.5), never a
-  user-facing preference. Keeping it out of `FreeCAD.Grid` is what makes "the native
+  user-facing preference. Keeping it out of `FerroCAD.Grid` is what makes "the native
   grid is the product" true.
 
 `opacity` is a **multiplier**, not an absolute alpha. The token law is
@@ -180,7 +180,7 @@ the native grid's 10:100 default. The last write wins, and `apply()` validates
 | Persisted? | In `ParamGet("User parameter:BaseApp/Preferences/View")`, the same group `App_ReloadGridSettings` already reads (`python/ferrocad_shell/__init__.py:599-607`). The store is **in-memory today** (`python/FreeCAD/__init__.py:190-196`, `:332-334`); cross-session persistence is a Base/parameter-backend gap, not something this API can invent. `QSettings` is not emulated and must not be. |
 | Headless behaviour | **Works and no-ops.** Every setter validates and writes the store. `apply()` returns the dict and does not throw when `FreeCAD.GuiUp == 0`; there is simply no viewport to apply it to. This is testable in `python3` with no display, which is the point. |
 | Document close | Nothing. The grid is not document state; closing a document must not reset the user's ink or steps. |
-| Applying | **Through a command.** The shell applies a `{"view": …}` only from a command result (`shell.rs:534-543`) and mirrors the state back (`:745-774`). A bare property write in the console changes the *desired* policy but does not repaint — the same contract as writing a FreeCAD parameter and running `App_ReloadGridSettings`. `FreeCAD.Grid.apply()` is the single builder; `View_GridSettings` (new) and `App_ReloadGridSettings` (existing) both call it. |
+| Applying | **Through a command.** The shell applies a `{"view": …}` only from a command result (`shell.rs:534-543`) and mirrors the state back (`:745-774`). A bare property write in the console changes the *desired* policy but does not repaint — the same contract as writing a FreeCAD parameter and running `App_ReloadGridSettings`. `FerroCAD.Grid.apply()` is the single builder; `View_GridSettings` (new) and `App_ReloadGridSettings` (existing) both call it. |
 | Validation | Raise `ValueError` for a bad colour, a negative step, `major < minor`, or opacity outside 0..1. Silent clamping is the addon's local-dialog behaviour (`setting()`, `:146-160`); a public API should be loud, and the shell's `ViewState::apply` already validates-then-mutates (`view.rs:130-210`). |
 
 **One shell gap must be closed for the dialog path.** `finish_dialog`
@@ -202,7 +202,7 @@ No new crate. A `ferrocad_grid` crate would duplicate the producer
 | `ferrocad_stage` | `color::parse_srgb_hex(&str) -> Result<[f32; 3], String>` | **new**, pure | The tokens already live in this crate (`grid.rs:33-41`, `gizmo.rs:32-35`); one parser serves the request path and the tests. No new dependency. |
 | `ferrocad_stage` | `GridStyle`, `GridSpec` | unchanged | The producer already accepts ink and alphas; nothing to add. |
 | `ferrocad_gpui` | `ViewRequest.{grid_color, grid_alpha, grid_overlay}` (`Option<String>`, `Option<f64>`, `Option<bool>`) | new fields | This is the existing presentation-request contract (`view.rs:15-38`); `grid_overlay` is the debug flag the bring-up requires (its §8.2). |
-| `ferrocad_gpui` | `ViewState.{grid_color, grid_alpha, grid_overlay}` | new fields | The shell already owns the applied presentation state (`view.rs:96-122`). `grid_color` stays a canonical `"#rrggbb"` string: it is the parameter spelling, it echoes in summaries, and it avoids a lossy linear→sRGB round-trip into `FreeCADGui.ViewState`. `grid_overlay` defaults to `false`. |
+| `ferrocad_gpui` | `ViewState.{grid_color, grid_alpha, grid_overlay}` | new fields | The shell already owns the applied presentation state (`view.rs:96-122`). `grid_color` stays a canonical `"#rrggbb"` string: it is the parameter spelling, it echoes in summaries, and it avoids a lossy linear→sRGB round-trip into `FerroCADGui.ViewState`. `grid_overlay` defaults to `false`. |
 | `ferrocad_gpui` | `apply_view` | parse + apply + mirror | `shell.rs:739-774`; the only place state and viewport are updated together. |
 | `ferrocad_gpui` | `set_view_state` | mirror the two fields | `python.rs:376-383`. |
 | `ferrocad_viewport` | `InventorViewport::{set_grid_style, grid_style}`; `sync_grid` | new setters, style overrides | `sync_grid` already builds `GridStyle` locally (`inventor_view.rs:2213-2225`); the cache key includes the style (`:450-454`), so a change re-emits. |
@@ -216,7 +216,7 @@ No new crate. A `ferrocad_grid` crate would duplicate the producer
 The dependency direction stays `python/FreeCAD → ferrocad_py → ferrocad_core`, and
 `ferrocad_gpui`/`ferrocad_viewport` talk to the model through the facade, never the
 reverse (architecture §6's "the shell talks to the model through the FreeCAD API").
-`FreeCAD.Grid` is therefore *policy above the shell*, and the shell is not asked to call
+`FerroCAD.Grid` is therefore *policy above the shell*, and the shell is not asked to call
 into Python to learn a colour: the colour arrives in the same `ViewRequest` as every
 other presentation change.
 
@@ -244,7 +244,7 @@ So the addon becomes two things, neither of them "the grid":
    native producer. It is never the snap authority and never the default
    (bring-up §8.1).
 
-The shipping user-facing control is `FreeCAD.Grid` + the native grid. A user who wants
+The shipping user-facing control is `FerroCAD.Grid` + the native grid. A user who wants
 a different look changes `color`, `opacity` and `spacing`; they do not install a shader.
 When `grid_overlay` is on, the native **ground** is hidden rather than dimmed: two
 coplanar line grids z-fight even with a bias (bring-up §8.1). The triad stays under
@@ -287,7 +287,7 @@ a workbench.
 
 | | **A1 — keep Coin, port the shader** | **A2 — thin client of Track C** |
 | --- | --- | --- |
-| What runs | The addon's tree: `SoSeparator` → `SoShaderProgram` → `SoFaceSet`, extracted and drawn | No tree, no shader; a dialog writes `FreeCAD.Grid` |
+| What runs | The addon's tree: `SoSeparator` → `SoShaderProgram` → `SoFaceSet`, extracted and drawn | No tree, no shader; a dialog writes `FerroCAD.Grid` |
 | Knobs | All six, same defaults, same dialog meaning | Six (`enabled`, `color`, `opacity`, `spacing`, `shadows`, `shadow_opacity`); the two shadow knobs persist and validate but nothing draws them yet. `spacing` is the minor step and sets the major to its next decade. Defaults come from the native tokens, not the addon's `DEFAULTS` (`:134-141`) |
 | Per-document | Kept (overlay registered per active document) | Replaced by the global native grid — **documented intent change** |
 | Visual result | The addon's look (line-only, decade LOD at `MIN_PX = 8.0`, `frag:19`) | The native look (dots + major lines, LOD at `MINOR_PIXELS = 4.0`, `grid.rs:136`); `MIN_PX` must not be reused, or the visible LOD stops matching the snap grid |
@@ -307,8 +307,8 @@ ship. If only one is funded, fund A2 and keep the WGSL port as a conformance fix
 `view.getSceneGraph()`; it gets a narrow FerroCAD extension:
 
 ```text
-FreeCADGui.addOverlay(root)      # extract root now; keep the Python wrapper
-FreeCADGui.removeOverlay(root)   # drop it
+FerroCADGui.addOverlay(root)      # extract root now; keep the Python wrapper
+FerroCADGui.removeOverlay(root)   # drop it
 ```
 
 The facade holds the wrapper, and the host re-extracts it on refresh through the
@@ -334,8 +334,8 @@ for (its §7.3) — with no arena.
 
 | Fork behaviour | FerroCAD | Upstream FreeCAD | Detection |
 | --- | --- | --- | --- |
-| `FreeCAD.Grid` | yes | no | `getattr(FreeCAD, "Grid", None)` |
-| `FreeCADGui.addOverlay` | yes | no | same discriminator (gate the whole branch on `Grid`) |
+| `FerroCAD.Grid` | yes | no | `getattr(FerroCAD, "Grid", None)` |
+| `FerroCADGui.addOverlay` | yes | no | same discriminator (gate the whole branch on `Grid`) |
 | WGSL `source` | yes | no | not used by the legacy path |
 | GLSL `sourceProgram` file | yes (read at extraction) | yes | used by the legacy path |
 | Shell dialog spec | yes | no | the semantic branch returns a dict; the legacy branch builds a `QDialog` |
@@ -355,7 +355,7 @@ Two shapes are defensible:
    addon that runs on both.
 
 **Recommendation: shape 2 for the shipping addon, shape 1 only if a single artefact is a
-requirement.** In both cases the discriminator is `FreeCAD.Grid`, not the presence of
+requirement.** In both cases the discriminator is `FerroCAD.Grid`, not the presence of
 `SoShaderProgram` (which upstream *also* has, so it cannot distinguish the dialect) and
 not `FreeCAD.GuiUp` (which is 1 in both). Never probe private helpers such as
 `FreeCADGui._run`.
@@ -563,11 +563,11 @@ a leaf, the value type must live there too — the same precedent as `Texture2`
 flowchart TD
     G0["G0 Coin compatibility: sentinels, fields, SoMFFloat"]
     G1["G1 Node/state surface: FaceSet, PickStyle, LightModel, DepthBuffer, removeChild, set"]
-    G2["G2 FreeCAD.Grid semantic API (Track C)"]
+    G2["G2 FerroCAD.Grid semantic API (Track C)"]
     G3["G3 Shader nodes, program packet, WGSL port, naga validation"]
     G4["G4 wgpu program path (GPU optional)"]
     G5["G5 A1 fork: overlay registration, manual run"]
-    G6["G6 A2 shipping addon: dialog as a FreeCAD.Grid client"]
+    G6["G6 A2 shipping addon: dialog as a FerroCAD.Grid client"]
     G0 --> G1
     G1 --> G3 --> G4 --> G5
     G2 --> G6
@@ -576,7 +576,7 @@ flowchart TD
 
 ```mermaid
 flowchart TD
-    P["python/FreeCAD (FreeCAD.Grid)"]
+    P["python/FreeCAD (FerroCAD.Grid)"]
     S["ferrocad_gpui: ViewState / ViewRequest"]
     V["ferrocad_viewport: grid style, overlay flag"]
     T["ferrocad_stage: GridSpec / GridStyle / grid producer"]
@@ -592,11 +592,11 @@ flowchart TD
 | --- | --- | --- | --- | --- | --- | --- |
 | **G0** | Fix the Coin contract | Sentinels `-1/-2/-3` + `INHERIT` traversal; 3-arg `setValues`; `setNum`; `SoMFFloat`. Unit tests in `ferrocad_inventor` and the Python facade | — | `cargo test -p ferrocad_inventor` and the Python facade tests: constants, nested switch, field resize | A hardcoded third-party switch no longer draws nothing; the field API matches Coin's arities | 0.5–1 |
 | **G1** | Make a real Coin tree expressible | `removeChild`, `set()` parser, `renderCulling`, `SoFaceSet`, `SoPickStyle`, `SoLightModel`, `SoDepthBuffer` + `DepthState` | G0 | Extraction assertions: 4 positions → 6 indices; `UNPICKABLE` → `pickable == false` and a CPU pick miss; depth state on the packet; `set("write FALSE")` | The compiler and state model can express the addon's tree, and "unpickable/depth-no-write" are real, not comments | 1.5–2 |
-| **G2** | Ship the semantic grid API | `parse_srgb_hex`, `ViewRequest`/`ViewState` colour+alpha, viewport style setters, `FreeCAD.Grid`, `View_GridSettings`, apply `view` from a dialog callback | — (parallel with G1) | `python3`: set each property, assert `apply()` dict, defaults, validation errors, `snapshot()`; Rust: `ViewState::apply` summary and `#94a3b8 → [0.296, 0.366, 0.480]` | Appearance is a supported FreeCAD API, and it is the same state the native grid draws | 1–1.5 |
+| **G2** | Ship the semantic grid API | `parse_srgb_hex`, `ViewRequest`/`ViewState` colour+alpha, viewport style setters, `FerroCAD.Grid`, `View_GridSettings`, apply `view` from a dialog callback | — (parallel with G1) | `python3`: set each property, assert `apply()` dict, defaults, validation errors, `snapshot()`; Rust: `ViewState::apply` summary and `#94a3b8 → [0.296, 0.366, 0.480]` | Appearance is a supported FreeCAD API, and it is the same state the native grid draws | 1–1.5 |
 | **G3** | Carry an authored program and validate its shader | `SoMFNode` + shader nodes; `graphics::ShaderProgram`; `StateSnapshot.program`; the WGSL port; `naga` dev-dependency | G1 | Parse+validate both stages, `frag_depth` present, bindings/layout assertions, packet carries the program, source hash stable | A third-party shader tree extracts and its WGSL is structurally valid — no GPU | 1.5–2 |
 | **G4** | Draw a program | Pipeline cache keyed by program + depth state + blend + sample count; group 2 `Frame`/`Program`; `pickable: false` in both pick paths; `grid_overlay` flag (hides the native ground); overlay queue draw order | G3 | Readback: grid lines at expected pixels, box occludes, pick misses; skip without an adapter | The "author shaders" claim end-to-end, with depth and picking intact | 1.5–2 |
 | **G5** | Run the fork (A1) | `addOverlay`/`removeOverlay` pull registration; `_rebind()`; `App.addDocumentObserver`; shell dialog; discard `getMainWindow`/`getSceneGraph` | G4 | A scripted session: command opens the dialog, colour/spacing change redraws, delete/remove detaches, a second document gets its own overlay | The Coin path + WGSL port run under the shell without an arena | 1–1.5 |
-| **G6** | Ship the addon (A2) | Semantic-only fork: same command name, six fields, `FreeCAD.Grid` in `on_accept`; one `getattr` gate if the dual-backend shape is chosen | G2 | Headless: `Activated` returns a dialog spec, `on_accept` returns the view dict; manual: the dialog changes the native grid | The addon's intent survives; it is the supported form | 0.5–1 |
+| **G6** | Ship the addon (A2) | Semantic-only fork: same command name, six fields, `FerroCAD.Grid` in `on_accept`; one `getattr` gate if the dual-backend shape is chosen | G2 | Headless: `Activated` returns a dialog spec, `on_accept` returns the view dict; manual: the dialog changes the native grid | The addon's intent survives; it is the supported form | 0.5–1 |
 
 Total *est.* **7.5–11 engineer-days**, excluding shadows and review. The bring-up priced
 the equivalent C path at 11–14 and D at 5–7.5; the difference is that G2 (the semantic
@@ -630,7 +630,7 @@ comparison mode, never that it requires it.
 - **General Qt emulation.** No `QToolBar`, `QMdiArea`, `QSettings`, `QSlider`,
   `QColorDialog`, `QDialog` subclass or `exec`. The addon's dialog is the shell's
   non-blocking modal (`actions-and-tools.md` §6); its preferences are `ParamGet`.
-- **Preference pages.** `FreeCAD.Grid` is the API; the dialog is the UI. No
+- **Preference pages.** `FerroCAD.Grid` is the API; the dialog is the UI. No
   `addPreferencePage`.
 - **Other workbenches.** No Draft GUI, no `Workbench`/`addWorkbench`, no activation
   parity. The addon is still a command, and this plan does not turn it into a workbench.
@@ -658,7 +658,7 @@ comparison mode, never that it requires it.
 3. **The semantic API's "apply" is command-scoped.** A property write from the console
    is policy, not a repaint; only a command result reaches `apply_view`
    (`shell.rs:534-543`). Document it, and fix `finish_dialog` in G2 so the dialog path
-   works. A user who writes `FreeCAD.Grid.color = …` and sees nothing change has hit a
+   works. A user who writes `FerroCAD.Grid.color = …` and sees nothing change has hit a
    documented contract, not a bug — but it will look like one, so the docstring must say
    "run `View_GridSettings`" explicitly.
 4. **WGSL drift from the GLSL reference.** There is no pixel comparison and no GPU here.
@@ -679,7 +679,7 @@ comparison mode, never that it requires it.
    node if two children are identical, and fails if the caller's object was mutated
    after `addChild` (the stored copy is stale). The index form is exact. The fork uses
    remove-and-re-add, which is exact; other scripts may not.
-8. **`ParamGet` is in-memory.** `FreeCAD.Grid` "persists" only within the process today
+8. **`ParamGet` is in-memory.** `FerroCAD.Grid` "persists" only within the process today
    (`python/FreeCAD/__init__.py:190-196`). The addon's `QSettings` persistence claim is
    therefore not matched until the parameter backend gains a file. Do not promise
    cross-session persistence in the API docstring.
@@ -709,12 +709,12 @@ Landed in two waves; every suite below was run, not inferred.
 | --- | --- | --- |
 | **G0** | ✅ | Coin sentinels `-1/-2/-3` + `SO_SWITCH_INHERIT` traversal; 3-arg `setValues`; `setNum`; `removeChild`; `set("field VALUE")`; `renderCulling`; `SoFaceSet` with fan triangulation. Suites: inventor 21, inventor_py 24. |
 | **G1** | ◐ | `SoPickStyle`/`SoLightModel`/`SoDepthBuffer` are expressible (AST, fields, Coin constants) but **recorded, not applied**: `StateSnapshot` has no depth/pickable field yet. Their semantics are G4. |
-| **G2** | ✅ | `FreeCAD.Grid` (lazy singleton, nine properties, `apply`/`snapshot`/`reset`, loud validation, `ParamGet` store); `ViewRequest/ViewState` colour+alpha; viewport `set_grid_color`/`set_grid_alpha`; `finish_dialog` applies `outcome.view`; `View_GridSettings`. Suites: stage 89, gpui 58, viewport 120, Python 172. |
+| **G2** | ✅ | `FerroCAD.Grid` (lazy singleton, nine properties, `apply`/`snapshot`/`reset`, loud validation, `ParamGet` store); `ViewRequest/ViewState` colour+alpha; viewport `set_grid_color`/`set_grid_alpha`; `finish_dialog` applies `outcome.view`; `View_GridSettings`. Suites: stage 89, gpui 58, viewport 120, Python 172. |
 | **G3** | ✅ | `graphics::ShaderProgram` + `StateSnapshot.program`; `SoShaderProgram`/`SoVertexShader`/`SoFragmentShader`/`SoShaderParameter1f/3f/Array1f`; `SoMFFloat`, `SoMFNode`; WGSL port `crates/ferrocad_wgpu/shaders/grid_overlay.wgsl` (group 2 `Frame` 160 B + `Program` 1328 B, `vs_main`/`fs_main`, `frag_depth`, WebGPU `[0,1]` NDC z); naga CPU parse+validate. wgpu 14. |
 | **G4** | ✅ | Program pipeline cache (`program.hash`, topology, depth compare/write, blend, samples, format); group 2 (`Frame` 160 B dynamic + `Program` 1328 B); `StateSnapshot.depth`/`pickable` with `SoDepthBuffer`/`SoPickStyle` applied (`SoLightModel` inert); program packets never picked; `grid_overlay` on `ViewRequest`/`ViewState` hides the world ground and draws the program queue. GPU readback ran on this machine (occlusion + no-pick). Suites: graphics 31, inventor 23, wgpu 24, stage 89, viewport 122, gpui 62. |
 | **G5** | ▢ | The A1 fork running under the shell (`addOverlay`/`removeOverlay`). Not required by G6, which is the shipping form; it proves the legacy Coin path. |
-| **G6** | ✅ | `mods/GridOverlay/` is a semantic-only fork: command `GridOverlay_Settings`, six-field dialog, `FreeCAD.Grid` on accept, `getattr` gate with a clean upstream message; no Qt, no Coin. 12 tests. |
-| **Mod providers** | ✅ | `FreeCADGui.registerProvider/providers/activeProvider/setActiveProvider` with the choice at `User parameter:BaseApp/Preferences/Mods` → `Providers/<feature>`; `Mods_Settings` in `ferrocad_shell`; both grid mods declare `feature="grid"` (semantic priority 10, Coin 0), gate their commands and the Coin draw path on `activeProvider`, and switch through `deactivate`/`activate`. `docs/workbenches/mod-providers.md`; suite `test_mod_providers` (13). |
+| **G6** | ✅ | `mods/GridOverlay/` is a semantic-only fork: command `GridOverlay_Settings`, six-field dialog, `FerroCAD.Grid` on accept, `getattr` gate with a clean upstream message; no Qt, no Coin. 12 tests. |
+| **Mod providers** | ✅ | `FerroCADGui.registerProvider/providers/activeProvider/setActiveProvider` with the choice at `User parameter:BaseApp/Preferences/Mods` → `Providers/<feature>`; `Mods_Settings` in `ferrocad_shell`; both grid mods declare `feature="grid"` (semantic priority 10, Coin 0), gate their commands and the Coin draw path on `activeProvider`, and switch through `deactivate`/`activate`. `docs/workbenches/mod-providers.md`; suite `test_mod_providers` (13). |
 
 **Provider registry (2026-10-21).** Both grid mods now declare what they provide
 (`feature="grid"`) instead of silently competing. The FerroCAD-native backend is the
@@ -740,7 +740,7 @@ exists.
 
 **Rendered check.** `cargo run -p ferrocad_gpui --example inventor_roundtrip --
 --coin-overlay frame.png` builds the A1 mod's tree through `pivy.coin`, registers it with
-`FreeCADGui.addOverlay`, merges the extracted overlay and renders with the same wgpu
+`FerroCADGui.addOverlay`, merges the extracted overlay and renders with the same wgpu
 renderer the shell uses. The frame shows the procedural grid and the two axis lines; the
 cube's near faces occlude it and the far face behind the plane shows it through, which
 is the expected result for a plane through the model.

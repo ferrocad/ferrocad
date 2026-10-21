@@ -24,7 +24,7 @@ mapping, and the slice path. **G0–G5 are built** (§1, §8).
 | Numeric pill | ✅ `readout_pill` in the viewport: 11 px monospace, `rgba(15,18,24,0.8)`, 1 px `#FFFFFF14` border |
 | Depth-bias overlays | ✅ `StateSnapshot.depth_bias`; `WIRE_DEPTH_BIAS` for a coplanar wire over a face |
 | Navigation cube | ✅ world-oriented; six faces + corners/edges, a compass ring, labels |
-| Grid state | ✅ an in-memory flag (`ViewState.grid`, A5), toggled by `App_ToggleGrid`, mirrored to `FreeCADGui.ViewState`, and applied to the viewport (`set_grid`); **G5** adds step/extent preferences |
+| Grid state | ✅ an in-memory flag (`ViewState.grid`, A5), toggled by `App_ToggleGrid`, mirrored to `FerroCADGui.ViewState`, and applied to the viewport (`set_grid`); **G5** adds step/extent preferences |
 | Axis cross | ✅ **G5** — its own flag (`ViewState.axis_cross`, `App_ToggleAxisCross`), on by default like upstream's: the world triad, the origin node and the axis tags, independent of the grid |
 | Grid rendering | ✅ **G2** — `ferrocad_stage::grid` emits dots, major lines and the triad; the viewport draws them in the scene's depth pass |
 | Workplane / UCS | ✅ **G1/G3** — the vocabulary, and a face resolved from the display tessellation (`FaceFrame`) with hover preview, activation and `Esc` |

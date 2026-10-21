@@ -6,16 +6,16 @@ registry both registered their commands and both could draw, and the user had no
 way to say which one they wanted.
 
 A **provider** is a named backend for a named feature. A mod declares its
-provider from `InitGui.py`; `FreeCADGui` keeps exactly one backend active per
+provider from `InitGui.py`; `FerroCADGui` keeps exactly one backend active per
 feature, persists the choice, and switches the viewport state when it changes.
 
 ## Declaring a provider
 
 ```python
 # <mod>/InitGui.py
-import FreeCADGui
+import FerroCADGui
 
-FreeCADGui.registerProvider(
+FerroCADGui.registerProvider(
     "grid",                     # feature: what is implemented
     "coin",                     # backend: this mod's implementation id
     "Coin (WGSL)",              # label: what Mods_Settings shows
@@ -45,7 +45,7 @@ during its own import cannot keep drawing. The incoming backend is still not
 activated until the first switch.
 
 On a facade without the registry (upstream FreeCAD) the call is guarded with
-`getattr(FreeCADGui, "registerProvider", None)`, so the mod still loads and
+`getattr(FerroCADGui, "registerProvider", None)`, so the mod still loads and
 reports its usual upstream message.
 
 ## Selection and persistence
@@ -129,7 +129,7 @@ and nothing more:
 - detach/remove what `activate` added (the Coin mod removes its overlay with
   `manager.remove_grid()`);
 - restore the shared default the incoming backend expects (the FerroCAD-native mod
-  sets `FreeCAD.Grid.enabled = False`, the native grid's documented default);
+  sets `FerroCAD.Grid.enabled = False`, the native grid's documented default);
 - **do not** clear the user's own settings. The FerroCAD-native mod leaves colour,
   spacing and shadows alone, so switching away and back is lossless;
 - be idempotent and safe when there is no document (`activate` on Coin with no
@@ -145,7 +145,7 @@ so an inactive backend cannot draw behind the active one.
 
 | Mod | feature | backend | priority | activate | deactivate |
 | --- | --- | --- | --- | --- | --- |
-| `mods/GridOverlay` | `grid` | `ferrocad` | 10 | `FreeCAD.Grid.enabled = True`, `apply()` | `enabled = False`, `apply()` |
+| `mods/GridOverlay` | `grid` | `ferrocad` | 10 | `FerroCAD.Grid.enabled = True`, `apply()` | `enabled = False`, `apply()` |
 | `mods/GridOverlayCoin` | `grid` | `coin` | 0 | `manager.ensure_grid()` | `manager.remove_grid()` |
 
 Both keep their own command (`GridOverlay_Settings`,
@@ -169,7 +169,7 @@ callback easy to drive from a script or a test.
 - **Advertised settings (S0 landed).** A provider can declare a `settings` schema;
   [`../tasks/settings-model.md`](../tasks/settings-model.md) S0/S1 implement the schema,
   storage, `settings()`/`setSetting()` and the `Settings/<Feature>` tree node. The
-  native `FreeCAD.Grid` migration (S4) is still pending, so the grid popover's settings
+  native `FerroCAD.Grid` migration (S4) is still pending, so the grid popover's settings
   half (chrome T4/T5) waits on it.
 - There is no native Rust settings panel yet; `Mods_Settings` uses the dialog
   protocol (`docs/workbenches/actions-and-tools.md` §6).

@@ -202,7 +202,7 @@ flowchart TB
         Part["Part (OCCT)"]
     end
     subgraph FC["FerroCAD today"]
-        Hooks["FreeCAD.display_mesh · FreeCAD.interaction"]
+        Hooks["FerroCAD.display_mesh · FerroCAD.interaction"]
         View["ferrocad_viewport · InventorViewport"]
         Stage["ferrocad_stage · Stage, ShapeItem, Snap, Tool, Gizmo"]
         Pick["ferrocad_wgpu::pick · G-buffer"]
@@ -231,7 +231,7 @@ flowchart TB
 | **Document objects** | Plain `Part::Feature` (and `Mesh::Feature`); no proxy, no `ViewProvider`; `SC_Support` is an `App::PropertyLink`; `SC_*` properties are dynamic | `ferrocad_part::Part::Feature` with `Shape` + `Placement`; `PropertyLink` and `addProperty` exist; no Mesh | **Close match.** The document layer can run almost unchanged; Mesh/Surface object types are the only document-level gaps. |
 | **Undo** | `document/operations.transaction()`: capture materials/locks, `openTransaction`, `settle`, validate, commit; every caller uses it | `ferrocad_core` transactions; `doc.UndoMode` exists; F0.6 proves undo/redo of computed shapes | **Works.** `UndoMode` is a no-op stub, which is enough for SimpleCAD's `if not doc.UndoMode` guard. |
 | **Geometry** | Direct `Part` calls from every algorithm package; no kernel seam; `core/geometry.py` is 2,259 lines of shape-level work | `ferrocad_geom` seam + `ferrocad_occt`; 6 core operations plus tessellation/topology | **The gap.** The `Part` surface is 42 names wide; our backend exposes box/fuse/cut/fillet/chamfer/place/resolve/save/load. See §4. |
-| **Display** | FreeCAD's built-in Part view provider for the shape; imperative Coin overlays for previews and style; no `ViewProvider` subclass | `FreeCAD.display_mesh(obj)` hook returns a tessellation dict; `ferrocad_stage` compiles `ShapeItem`s; `pivy.coin` is a partial facade | **Structurally close.** The overlays are the mismatch: SimpleCAD mutates a Coin subtree, FerroCAD rebuilds declarative items. |
+| **Display** | FreeCAD's built-in Part view provider for the shape; imperative Coin overlays for previews and style; no `ViewProvider` subclass | `FerroCAD.display_mesh(obj)` hook returns a tessellation dict; `ferrocad_stage` compiles `ShapeItem`s; `pivy.coin` is a partial facade | **Structurally close.** The overlays are the mismatch: SimpleCAD mutates a Coin subtree, FerroCAD rebuilds declarative items. |
 | **Interaction** | One `Controller` owns the tool, captured document/view, mouse callback, preview and timers; `Snapper` resolves every pointer move; tool sessions in `gui/tools` | `InventorViewport` owns pointer dispatch, `Tool`/`Manipulator`/`TransformGizmo`, `SnapContext`/`SnapCandidate`, `SelectionEvent`/`SelectionRef` | **Same shape, missing adapter.** A `FreeCADGui` view facade over `InventorViewport` is the bring-up trick (§5). |
 | **Commands** | `Gui.addCommand` + `SimpleCADWorkbench.Initialize` appends toolbars/menus; 52 commands; enablement in `command_state.py` | `FreeCADGui.addCommand` + an actions bar; no workbench class, no toolbars/menus/context menus | **S5.** The command bodies are portable; the chrome is not. |
 | **Tests** | `unittest` headless + `run()` GUI suites inside a real FreeCAD window | conformance harness for unittest files; Xvfb for the window | **S0/S1** reuses the harness model; **S5** needs the window. |
@@ -277,7 +277,7 @@ per-object `ViewObject` properties (`ShapeColor`, `ShapeAppearance`, `LineColor`
 in the document layer, but a few GUI helpers still dereference `ViewObject`
 unconditionally (`gui/pull_snapping.py:27`, `gui/box_selection.py:131`).
 
-The FerroCAD equivalent is `FreeCAD.display_mesh` → `stage_meshes` → `Stage` →
+The FerroCAD equivalent is `FerroCAD.display_mesh` → `stage_meshes` → `Stage` →
 `ShapeItem` (`python/ferrocad_shell/__init__.py:295`,
 `python/ferrocad_parametric/__init__.py:32`). It already maps `Tessellation.parts`
 to `ShapeItem::part_names`, which is what a pick needs. A `ViewProvider` is not

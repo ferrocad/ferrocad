@@ -137,7 +137,7 @@ Ordered by value; each slice is independently demoable. Sizes are rough.
   as the S5 preview, below.)
 - **S1.5 · Viewport host wiring ✅ (F1).** The viewport's stage is filled from the
   document through **module hooks** (see [`architecture.md`](../architecture.md) §9): a
-  workbench registers `FreeCAD.display_mesh` / `FreeCAD.interaction` providers, so
+  workbench registers `FerroCAD.display_mesh` / `FerroCAD.interaction` providers, so
   `ferrocad_shell` names no workbench. `ferrocad_gpui::display::DisplaySync` maps
   entity ids to object names and builds the stage. A workbench manipulator is
   **contributed by the edition**

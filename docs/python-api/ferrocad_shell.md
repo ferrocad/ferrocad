@@ -27,5 +27,5 @@ _Every entry point returns a JSON string._
 | `run_command(name: str) -> str` | Invoke a workbench command by id; returns ``{ok, status?, dialog?, token?}``. |
 | `set_property(object_name: str, prop: str, text: str) -> str` | Set one property from its editor string, in a named transaction. |
 | `set_selection(pairs_json: str) -> str` | Replace ``FreeCADGui.Selection`` with the shell's selection. |
-| `set_view_state(state_json: str) -> str` | Mirror the shell's presentation state to ``FreeCADGui.ViewState``. |
+| `set_view_state(state_json: str) -> str` | Mirror the shell's presentation state to ``FerroCADGui.ViewState``. |
 | `stage_meshes() -> str` | The tessellated shapes the viewport draws, as JSON. |

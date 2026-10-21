@@ -27,6 +27,7 @@ mods/
 
 import FreeCAD
 import FreeCADGui
+import FerroCAD
 
 COMMAND = "Minimal_AddBox"
 SIZE = 10.0
@@ -119,7 +120,7 @@ class AddBoxCommand:
 
 FreeCADGui.removeCommand(COMMAND)  # make a reload safe
 FreeCADGui.addCommand(COMMAND, AddBoxCommand())
-FreeCAD.register_display_provider(_box_mesh)
+FerroCAD.register_display_provider(_box_mesh)
 ```
 
 ## What each piece does
@@ -201,7 +202,7 @@ no registration step and no build step.
 - **Let the user drag it.** Register an interaction provider for a manipulator
   id and write the new `Length`/`Placement` in one transaction.
 - **Add a backend.** If the mod implements a shared capability, declare it with
-  `FreeCADGui.registerProvider` instead of keeping a private on/off flag
+  `FerroCADGui.registerProvider` instead of keeping a private on/off flag
   ([`providers.md`](providers.md)).
 
 ## Next

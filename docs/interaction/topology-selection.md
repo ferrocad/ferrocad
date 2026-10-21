@@ -326,8 +326,8 @@ flowchart LR
   the item's polyline (`ShapeItem::edge_polyline`) and builds the arc. The edition
   contributes it (`Contributions::with_manipulator(...)`); the shell maps the commit's
   entity to the object name and calls the app script's `interaction` hook, which the
-  edition implements over the **module hooks** (`FreeCAD.display_mesh` /
-  `FreeCAD.interaction`). The shell and the viewport name no workbench, and neither
+  edition implements over the **module hooks** (`FerroCAD.display_mesh` /
+  `FerroCAD.interaction`). The shell and the viewport name no workbench, and neither
   links a kernel. See [`gizmo-manipulators.md`](gizmo-manipulators.md) §14 and
   [`architecture.md`](../architecture.md) §9–§10.
 

@@ -13,6 +13,7 @@ Only `Activated` is required. The other three methods are optional.
 ```python
 import FreeCAD
 import FreeCADGui
+import FerroCADGui
 
 class MakeThing:
     def GetResources(self):
@@ -28,7 +29,7 @@ class MakeThing:
         return FreeCAD.ActiveDocument is not None
 
     def IsChecked(self):          # only for a checkable command
-        return FreeCAD.GuiUp and FreeCADGui.ViewState.grid
+        return FreeCAD.GuiUp and FerroCADGui.ViewState.grid
 
     def Activated(self):
         return {"status": "not implemented yet"}
@@ -61,16 +62,17 @@ The shell reads these keys when it builds the viewport header and the action doc
 | `Accel` | shortcut string, for example `"Ctrl+Shift+S"` | `""` |
 | `Group` | ordering label | `""` (registration order) |
 | `CmdType` | metadata: `"ForEdit"` or `"ForView"` | `""` |
-| `Surface` | where the action lives: `grid`, `workplane`, `axis`, `mods`, `dock`, `hidden` | `dock` |
-| `Parent` | the surface's primary command, for a row inside its popover | `""` |
+| `FerroCAD_Surface` | where the action lives: `grid`, `workplane`, `axis`, `mods`, `dock`, `hidden` | `dock` |
+| `FerroCAD_Parent` | the surface's primary command, for a row inside its popover | `""` |
 | `Pixmap` | accepted and ignored; the controls are text today | — |
 
-`Surface` and `Parent` are **FerroCAD extensions**. Leave them out and the command
-lands on the dock, which is always safe; upstream FreeCAD ignores unknown resource
-keys. A command with `Surface: "grid"` and no `Parent` is the primary of that header
-control (its label runs it); a command with `Parent: "App_ToggleGrid"` appears in the
-popover under it. `hidden` keeps a command out of the header and the dock; the Dev
-Tools command list and the app menu can still offer it.
+`FerroCAD_Surface` and `FerroCAD_Parent` are **FerroCAD extensions**. Leave them out
+and the command lands on the dock, which is always safe; upstream FreeCAD ignores
+unknown resource keys. A command with `FerroCAD_Surface: "grid"` and no
+`FerroCAD_Parent` is the primary of that header control (its label runs it); a
+command with `FerroCAD_Parent: "App_ToggleGrid"` appears in the popover under it.
+`hidden` keeps a command out of the header and the dock; the Dev Tools command list
+and the app menu can still offer it.
 
 `CmdType` is metadata only. The shell does not wrap `Activated` in a transaction
 because a command may return a dialog and act later; the command owns its
@@ -93,7 +95,7 @@ They read:
 
 - `FreeCAD.ActiveDocument` — may be `None`;
 - `FreeCADGui.Selection` — the shell's read-only snapshot;
-- `FreeCADGui.ViewState` — the shell's presentation mirror (`grid`,
+- `FerroCADGui.ViewState` — the shell's presentation mirror (`grid`,
   `axis_cross`, `projection`, `grid_minor`, `grid_major`, `grid_radius`).
 
 A disabled command remains visible in the bar, so the user can see that it
@@ -258,7 +260,7 @@ return {"tool": "toy_polyline"}
 | `workplane` | an **action**: `"activate"`, `"clear"` or `"view"` |
 
 The shell applies a request, then mirrors the resulting state to
-`FreeCADGui.ViewState`, which is what makes a checkable command's `IsChecked`
+`FerroCADGui.ViewState`, which is what makes a checkable command's `IsChecked`
 close the loop. An invalid projection, a non-positive step, or a major below the
 minor is rejected and nothing is applied.
 

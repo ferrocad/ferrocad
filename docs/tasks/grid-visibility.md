@@ -18,15 +18,15 @@ this survived the provider work.
 ## Reproduction (headless, no GPU)
 
 ```python
-import FreeCAD, FreeCADGui
+import FreeCAD, FreeCADGui, FerroCADGui
 import ferrocad_shell, ferrocad_toy   # registers the built-in commands
 import mods.GridOverlayCoin.InitGui as coin   # or load it the way tests do
 
-FreeCADGui.setActiveProvider("grid", "coin")
+FerroCADGui.setActiveProvider("grid", "coin")
 coin.manager.refresh()                        # the overlay is now bound
 print(FreeCADGui.runCommand("App_ToggleGrid"))  # {"view": {"grid": true}}
 print(coin.setting("enabled"))                  # still True — the overlay stays
-print(FreeCADGui.ViewState.grid)                # True
+print(FerroCADGui.ViewState.grid)                # True
 ```
 
 The last two are the bug: the check mark and the overlay disagree.
@@ -35,8 +35,8 @@ The last two are the bug: the check mark and the overlay disagree.
 
 | State | Written by | Read by |
 | --- | --- | --- |
-| `FreeCADGui.ViewState.grid` (and `ViewRequest.grid`) | the shell, mirroring a `{"view": …}` result | `App_ToggleGrid.IsChecked`, the native renderer |
-| `FreeCAD.Grid.enabled` (`User parameter:BaseApp/Preferences/View`, `GridEnabled`) | the grid settings dialog, a provider's `activate`/`deactivate` | the native grid's policy, the FerroCAD-native mod |
+| `FerroCADGui.ViewState.grid` (and `ViewRequest.grid`) | the shell, mirroring a `{"view": …}` result | `App_ToggleGrid.IsChecked`, the native renderer |
+| `FerroCAD.Grid.enabled` (`User parameter:BaseApp/Preferences/View`, `GridEnabled`) | the grid settings dialog, a provider's `activate`/`deactivate` | the native grid's policy, the FerroCAD-native mod |
 | `setting("enabled")` (`…/Preferences/Mod/GridOverlayCoin`) | the Coin mod's own dialog | `GridManager.ensure_grid` / `_bind_active` |
 
 `App_ToggleGrid` ([`python/ferrocad_shell/__init__.py`](../../python/ferrocad_shell/__init__.py),
@@ -44,7 +44,7 @@ The last two are the bug: the check mark and the overlay disagree.
 
 ```python
 def Activated(self):
-    return {"view": {"grid": not FreeCADGui.ViewState.grid}}
+    return {"view": {"grid": not FerroCADGui.ViewState.grid}}
 ```
 
 The Coin provider decides visibility from the **third** one
@@ -57,26 +57,26 @@ is also only ever set by the mod's `apply_dialog`, so the shell's viewport keeps
 "native ground hidden, overlay draws" even after the toggle.
 
 So this is not a Coin bug: it is two owners for one switch. The native provider
-happens to agree with itself because its `activate` writes `FreeCAD.Grid.enabled`
+happens to agree with itself because its `activate` writes `FerroCAD.Grid.enabled`
 and the native renderer follows `ViewState.grid`.
 
 ## Decision
 
-**`FreeCAD.Grid.enabled` is the one switch.** The toggle command owns it; the
+**`FerroCAD.Grid.enabled` is the one switch.** The toggle command owns it; the
 renderer flag is a projection of it, never an independent input.
 
-1. `_GridCommand.Activated` flips `FreeCAD.Grid.enabled` and returns the view
-   request derived from it (`FreeCAD.Grid.apply()` extended with
+1. `_GridCommand.Activated` flips `FerroCAD.Grid.enabled` and returns the view
+   request derived from it (`FerroCAD.Grid.apply()` extended with
    `grid_overlay = enabled and a provider owns the overlay`). `IsChecked` keeps
    reading `ViewState.grid`, which the shell already mirrors.
 2. Extend the provider registry with one optional `refresh` callback (the
    counterpart of `activate`/`deactivate`, same error isolation and the same
    "never runs at registration" rule). The shell calls
-   `FreeCADGui.refreshProviders("grid")` after applying a grid view request; a
-   mod that draws from its own store re-reads `FreeCAD.Grid.enabled`.
-3. The Coin provider reads `FreeCAD.Grid.enabled` for the master switch instead
+   `FerroCADGui.refreshProviders("grid")` after applying a grid view request; a
+   mod that draws from its own store re-reads `FerroCAD.Grid.enabled`.
+3. The Coin provider reads `FerroCAD.Grid.enabled` for the master switch instead
    of its private `enabled` knob, keeping its own knobs for appearance. On
-   upstream FreeCAD, where `FreeCAD.Grid` is absent, it keeps the private knob —
+   upstream FreeCAD, where `FerroCAD.Grid` is absent, it keeps the private knob —
    that is the existing `grid_api()` discriminator.
 
 Rejected alternatives:
@@ -101,7 +101,7 @@ The provider id and label were generic and misleading:
 | label `"Semantic (native)"` | label `"FerroCAD (native)"` |
 | status `Grid Overlay (semantic) …` | `Grid Overlay (FerroCAD) …` |
 
-`"semantic"` remains the name of the *API* (`FreeCAD.Grid` is the semantic grid
+`"semantic"` remains the name of the *API* (`FerroCAD.Grid` is the semantic grid
 API); only the provider id changed. The active provider is in-memory today
 (`ParamGet`), so there is nothing to migrate; if it is ever persisted, accept
 `semantic` as an alias for one release.

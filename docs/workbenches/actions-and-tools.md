@@ -157,12 +157,12 @@ The shell still goes through the app script, never `import Toy`:
 def commands() -> str:
     """The registered commands, with their resources and live state, as JSON."""
     entries = FreeCADGui._command_list()
-    # The bridge adds the FerroCAD Surface/Parent keys from GetResources so the
-    # shell can place each control. _command_list() itself stays upstream-shaped.
+    # The bridge adds the FerroCAD_Surface/FerroCAD_Parent keys from GetResources
+    # so the shell can place each control. _command_list() itself stays upstream-shaped.
     for entry in entries:
         resources = FreeCADGui._resources(FreeCADGui._COMMANDS[entry["id"]])
-        entry["surface"] = str(resources.get("Surface") or "")
-        entry["parent"] = str(resources.get("Parent") or "")
+        entry["surface"] = str(resources.get("FerroCAD_Surface") or "")
+        entry["parent"] = str(resources.get("FerroCAD_Parent") or "")
     return _json(entries)                             # [{id, menu, tooltip, accel, group,
                                                       #   enabled, checked, cmd_type,
                                                       #   surface, parent}, ...]
@@ -198,8 +198,8 @@ The shell renders the **chrome** from `CommandInfo` (P0.6):
 
 The list is rebuilt on the events in §3.2. A command whose `enabled` is false stays
 visible — the user should see that the action exists and why it is unavailable (the
-tooltip can carry `GetResources()["ToolTip"]`). Placement is `Surface`-driven, never
-derived from `Group`; a command with no `Surface` lands on the dock so it cannot
+tooltip can carry `GetResources()["ToolTip"]`). Placement is `FerroCAD_Surface`-driven, never
+derived from `Group`; a command with no `FerroCAD_Surface` lands on the dock so it cannot
 disappear.
 
 ---
@@ -328,7 +328,7 @@ return {"view": {"workplane": "activate"}}              # G5: the hovered face b
 return {"tool": "toy_measure"}                         # starts a registered tool session
 ```
 
-- A `view` request is applied by the shell and mirrored to `FreeCADGui.ViewState`:
+- A `view` request is applied by the shell and mirrored to `FerroCADGui.ViewState`:
   `{"grid": true}` flips the reference-grid flag, `{"axis_cross": false}` hides the world
   triad (they are independent — the grid is placement, the cross is orientation), and
   `{"projection": "ortho"}` switches the viewport's projection (framing preserved);
@@ -557,7 +557,7 @@ Dev Tools list — there is no flat strip. Because `App_Delete`/`App_Move` are r
 by the base app script, **every** edition has dock rows; they are greyed until
 something is selected. A disabled command stays visible (its label in the muted token)
 — the user should see that the action exists. A checked command carries the accent.
-`Surface`/`Parent` (FerroCAD extensions to `GetResources`) decide placement; a command
+`FerroCAD_Surface`/`FerroCAD_Parent` (FerroCAD extensions to `GetResources`) decide placement; a command
 without them is on the dock, never hidden.
 
 The selection is an ordered list. A plain click replaces it, Ctrl/Cmd- or

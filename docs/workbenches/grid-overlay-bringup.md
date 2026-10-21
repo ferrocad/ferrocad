@@ -567,7 +567,7 @@ settings dialog is to be *one* preference surface. `grid_radius` keeps its meani
 the stage grid; an infinite shader grid has no radius, so the field is ignored when
 `grid_overlay` is on (document it in the summary string).
 
-Mirroring: `FreeCADGui.ViewState` gains `grid_overlay` beside `grid`, `axis_cross`,
+Mirroring: `FerroCADGui.ViewState` gains `grid_overlay` beside `grid`, `axis_cross`,
 `grid_minor`, `grid_major`, `grid_radius` (`python/FreeCADGui/__init__.py:303-321`).
 
 ### 8.3 The settings dialog on G5

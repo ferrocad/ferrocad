@@ -85,10 +85,12 @@ A mod registers as a side effect of running its script. There is no
 # InitGui.py
 import FreeCAD
 import FreeCADGui
+import FerroCAD
+import FerroCADGui
 
 FreeCADGui.addCommand("MyMod_DoThing", DoThingCommand())
-FreeCAD.register_display_provider(display_my_object)
-FreeCADGui.registerProvider("my_feature", "my_backend", "My Backend")
+FerroCAD.register_display_provider(display_my_object)
+FerroCADGui.registerProvider("my_feature", "my_backend", "My Backend")
 ```
 
 Rules that follow from the registries:
@@ -153,8 +155,8 @@ different strengths:
 | `IsChecked()` raises | treated as `False`; reported once |
 | `Activated()` raises through the shell bridge | `{"ok": false, "error": "..."}`; the app keeps running |
 | A provider `activate`/`deactivate`/`refresh` raises | caught, reported once per `(feature, backend, hook)`, listed under `errors`; the switch or refresh continues |
-| A display provider raises | **not caught** by `FreeCAD.display_mesh` or `stage_meshes` |
-| An interaction provider raises | **not caught** by `FreeCAD.interaction` or `ferrocad_shell.interaction` |
+| A display provider raises | **not caught** by `FerroCAD.display_mesh` or `stage_meshes` |
+| An interaction provider raises | **not caught** by `FerroCAD.interaction` or `ferrocad_shell.interaction` |
 | `addOverlay` fails | **not caught**; it raises if the Coin facade is missing |
 
 So the rule is: the loader and the registries isolate **their** calls, but your

@@ -276,7 +276,7 @@ class GridOverlayCoinTests(unittest.TestCase):
         self.assertAlmostEqual(fields["shadow_opacity"]["value"], 0.30)
 
     def test_the_dialog_seeds_from_the_live_settings(self):
-        self.mod.SETTINGS.SetBool("enabled", False)
+        FreeCAD.Grid.enabled = False
         self.mod.SETTINGS.SetString("color", "#123456")
         self.mod.SETTINGS.SetFloat("opacity", 0.5)
         self.mod.SETTINGS.SetFloat("base_spacing", 2.0)
@@ -308,7 +308,9 @@ class GridOverlayCoinTests(unittest.TestCase):
             }
         )
 
-        self.assertEqual(result, {"view": {"grid_overlay": True}})
+        view = result["view"]
+        self.assertTrue(view["grid"], "the one switch is on")
+        self.assertTrue(view["grid_overlay"], "the overlay hides the native ground")
         self.assertTrue(self.mod.setting("enabled"))
         self.assertEqual(self.mod.setting("color"), "#f87171")
         self.assertAlmostEqual(self.mod.setting("opacity"), 0.5)

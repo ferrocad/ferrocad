@@ -10,9 +10,11 @@ What is here today:
   ``listCommands`` / ``runCommand``, with FreeCAD's ``Command`` shape
   (``Activated``, ``IsActive``, ``IsChecked``, ``GetResources``);
 * the **mod provider registry** — ``registerProvider`` / ``providers`` /
-  ``activeProvider`` / ``setActiveProvider``: a mod declares which *feature* a
-  backend provides, exactly one backend per feature is active, and switching
-  runs the outgoing ``deactivate`` and incoming ``activate`` callbacks (see
+  ``activeProvider`` / ``setActiveProvider`` / ``refreshProviders``: a mod
+  declares which *feature* a backend provides, exactly one backend per feature
+  is active, and switching runs the outgoing ``deactivate`` and incoming
+  ``activate`` callbacks; a later request can run the active backend's
+  ``refresh`` callback without switching (see
   ``docs/workbenches/mod-providers.md``);
 * the **dialog protocol** — a command's ``on_accept`` callback stays here under a
   single-use token, and ``_accept`` / ``_cancel`` are the later half of the
@@ -134,8 +136,9 @@ def runCommand(name: str, *args):
 # are the first pair) declares itself from ``InitGui.py`` with
 # :func:`registerProvider`. The registry keeps exactly one active backend per
 # feature and switches the viewport state by calling the outgoing provider's
-# ``deactivate`` and the incoming provider's ``activate``. See
-# ``docs/workbenches/mod-providers.md``.
+# ``deactivate`` and the incoming provider's ``activate``. A command that changed
+# shared state without switching can ask the active backend to re-read it with
+# :func:`refreshProviders`. See ``docs/workbenches/mod-providers.md``.
 # ---------------------------------------------------------------------------
 
 
@@ -145,7 +148,7 @@ def _provider_prefs():
 
 
 def _report_provider(feature, backend, hook: str, exc: BaseException) -> None:
-    """Report a failing ``activate``/``deactivate`` once per provider hook."""
+    """Report a failing ``activate``/``deactivate``/``refresh`` once per hook."""
     key = (feature, backend, hook)
     if key in _PROVIDER_REPORTED:
         return
@@ -165,6 +168,7 @@ def registerProvider(
     priority: int = 0,
     activate=None,
     deactivate=None,
+    refresh=None,
 ):
     """Declare that ``backend`` provides ``feature`` (called from ``InitGui.py``).
 
@@ -172,12 +176,14 @@ def registerProvider(
     ``command`` is the command id the backend owns (``None`` when it has none);
     ``priority`` decides the default backend (higher wins, earliest registration
     breaks a tie); ``activate``/``deactivate`` are optional zero-argument
-    callbacks that make the backend the drawn one and undo that. ``activate``
-    runs only on a **switch**, never at registration, and callback errors are
-    isolated. One exception: if this registration takes the selection over (a
-    higher priority, or a saved choice), the outgoing backend's ``deactivate``
-    runs so a mod that drew during its own import cannot keep drawing. The
-    incoming backend is still activated by the first switch.
+    callbacks that make the backend the drawn one and undo that; ``refresh`` is
+    the optional zero-argument callback for "shared state changed, re-read it"
+    (see :func:`refreshProviders`). All three callbacks run only when asked —
+    never at registration — and their errors are isolated. One exception: if
+    this registration takes the selection over (a higher priority, or a saved
+    choice), the outgoing backend's ``deactivate`` runs so a mod that drew
+    during its own import cannot keep drawing. The incoming backend is still
+    activated by the first switch.
 
     Registering the same ``(feature, backend)`` again replaces the record (a mod
     reload) without moving it in the registration order. Returns the manifest.
@@ -194,6 +200,8 @@ def registerProvider(
         raise TypeError(f"provider {feature!r}/{backend!r} activate is not callable")
     if deactivate is not None and not callable(deactivate):
         raise TypeError(f"provider {feature!r}/{backend!r} deactivate is not callable")
+    if refresh is not None and not callable(refresh):
+        raise TypeError(f"provider {feature!r}/{backend!r} refresh is not callable")
 
     text = str(label if label is not None else backend).strip()
     records = _PROVIDERS.get(feature)
@@ -213,6 +221,7 @@ def registerProvider(
         "order": order,
         "activate": activate,
         "deactivate": deactivate,
+        "refresh": refresh,
     }
     _PROVIDER_REPORTED.difference_update(
         {key for key in _PROVIDER_REPORTED if key[0] == feature and key[1] == backend}
@@ -229,6 +238,44 @@ def registerProvider(
             if _PROVIDER_APPLIED.get(feature) == before:
                 _PROVIDER_APPLIED.pop(feature, None)
     return _manifest(records[backend], feature)
+
+
+def refreshProviders(feature: str) -> dict:
+    """Ask the active backend of ``feature`` to re-read the shared state.
+
+    This is the counterpart of ``activate``/``deactivate`` for a change that is
+    not a switch: a command (or a dialog) already applied a request, and a
+    backend that draws from its own store has to look at the shared store again
+    — the grid toggle writes ``FreeCAD.Grid.enabled`` and the Coin overlay then
+    re-binds from it. Like the other provider callbacks it runs **only when
+    asked**, never at registration or on a switch, and a failure is reported and
+    collected instead of raised.
+
+    Only the active backend runs; an absent ``refresh`` callback (or no provider
+    for the feature) is a no-op. A callback may return the same dict a command
+    may return, so ``view`` carries a request the caller can merge (the grid
+    toggle reads the ``grid_overlay`` claim from it). Returns ``ok``,
+    ``feature``, ``backend``, ``view``, ``status`` and ``errors``; it never
+    raises for a backend problem.
+    """
+    result = {
+        "ok": True,
+        "feature": feature,
+        "backend": None,
+        "view": {},
+        "status": "",
+        "errors": [],
+    }
+    records = _PROVIDERS.get(feature)
+    if not records:
+        return result
+    backend = _selected(feature)
+    result["backend"] = backend
+    statuses = []
+    _invoke_provider(records[backend], feature, "refresh", result, statuses)
+    if statuses:
+        result["status"] = "; ".join(statuses)
+    return result
 
 
 def _deactivate_on_takeover(record, feature) -> None:

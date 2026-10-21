@@ -17,6 +17,7 @@ facade, exactly as they did before this slice.
 import contextlib
 import importlib
 import io
+import json
 import sys
 import unittest
 from unittest import mock
@@ -45,6 +46,7 @@ fork_suite = _sibling("test_grid_overlay_fork")
 
 PREFERENCES = "User parameter:BaseApp/Preferences/Mods"
 GRID = "grid"
+TOGGLE = "App_ToggleGrid"
 SEMANTIC_COMMAND = "GridOverlay_Settings"
 COIN_COMMAND = "GridOverlayCoin_Settings"
 MODS_COMMAND = "Mods_Settings"
@@ -117,6 +119,101 @@ class ModProviderTests(unittest.TestCase):
         close_documents()
         self.grid.reset()
         reset_provider_state()
+
+    # -- the grid toggle over the Coin provider --------------------------
+    def switch_to_coin(self, name="Toggle"):
+        """Open a document and make Coin the drawn grid; return its overlay."""
+        FreeCAD.newDocument(name)
+        FreeCAD.setActiveDocument(name)
+        FreeCADGui.setActiveProvider(GRID, "coin")
+        self.assertTrue(self.grid.enabled, "coin activate turns the one switch on")
+        overlay = self.coin.manager.items[name]
+        self.assertTrue(overlay.visible)
+        self.assertIn(overlay.root, coin_suite.COIN._registered)
+        return overlay
+
+    def checked(self, name):
+        return next(c for c in FreeCADGui._command_list() if c["id"] == name)[
+            "checked"
+        ]
+
+    def test_toggling_with_the_coin_provider_unbinds_the_overlay(self):
+        overlay = self.switch_to_coin()
+        self.assertTrue(self.coin.setting("enabled"))
+
+        # The overlay records the master-switch change the toggle caused.
+        original = self.coin.ShaderGrid.set_visible
+        calls = []
+
+        def spy(grid, visible):
+            calls.append(bool(visible))
+            return original(grid, visible)
+
+        with mock.patch.object(self.coin.ShaderGrid, "set_visible", spy):
+            result = FreeCADGui._run(TOGGLE)
+
+        self.assertTrue(result["ok"], result)
+        self.assertFalse(result["view"]["grid"], "the native ground is hidden")
+        self.assertFalse(result["view"]["grid_overlay"], "the overlay stops drawing")
+        self.assertTrue(calls, "the recorded overlay was told to hide")
+        self.assertTrue(
+            all(call is False for call in calls), "set_visible(False) on the overlay"
+        )
+        self.assertFalse(
+            self.coin.setting("enabled"), "coin.setting follows the one switch"
+        )
+        self.assertFalse(overlay.visible)
+        self.assertNotIn(overlay.root, coin_suite.COIN._registered)
+
+        # The shell applies the request and mirrors it; the check mark follows.
+        ferrocad_shell.set_view_state(json.dumps({"grid": False}))
+        self.assertFalse(self.checked(TOGGLE))
+
+    def test_two_toggles_return_to_the_start_state_and_keep_the_knobs(self):
+        overlay = self.switch_to_coin()
+        self.coin.save_settings(
+            {"color": "#123456", "opacity": 0.4, "base_spacing": 2.5}
+        )
+
+        first = FreeCADGui._run(TOGGLE)
+        self.assertFalse(first["view"]["grid"])
+        self.assertFalse(first["view"]["grid_overlay"])
+        self.assertFalse(overlay.visible)
+        self.assertFalse(self.grid.enabled)
+
+        second = FreeCADGui._run(TOGGLE)
+        self.assertTrue(second["view"]["grid"])
+        self.assertTrue(second["view"]["grid_overlay"])
+        self.assertTrue(overlay.visible, "the same overlay is re-bound")
+        self.assertIn(overlay.root, coin_suite.COIN._registered)
+        self.assertTrue(self.grid.enabled)
+        self.assertTrue(self.coin.setting("enabled"))
+
+        # Only the master switch moved: the appearance knobs are untouched and
+        # were pushed into the rebuilt tree.
+        self.assertEqual(self.coin.setting("color"), "#123456")
+        self.assertAlmostEqual(self.coin.setting("opacity"), 0.4)
+        self.assertAlmostEqual(self.coin.setting("base_spacing"), 2.5)
+        self.assertAlmostEqual(overlay.base_spacing.value, 2.5)
+
+    def test_a_broken_coin_refresh_is_reported_and_does_not_raise(self):
+        self.switch_to_coin()
+
+        def explode():
+            raise RuntimeError("refresh boom")
+
+        stderr = io.StringIO()
+        with mock.patch.object(self.coin, "refresh", explode):
+            self.coin.register_provider()
+            with contextlib.redirect_stderr(stderr):
+                result = FreeCADGui._run(TOGGLE)
+
+        self.assertTrue(result["ok"], result)
+        self.assertFalse(result["view"]["grid"])
+        report = stderr.getvalue()
+        self.assertIn("provider 'coin'", report)
+        self.assertIn("refresh raised", report)
+        self.assertIn("RuntimeError: refresh boom", report)
 
     # -- selection and persistence ---------------------------------------
     def test_the_highest_priority_wins_and_a_saved_choice_wins(self):
@@ -273,10 +370,11 @@ class ModProviderTests(unittest.TestCase):
         result = FreeCADGui.setActiveProvider(GRID, "coin")
         self.assertIn("Providers", self.coin.manager.items)
         self.assertTrue(coin_suite.COIN._registered, "the Coin overlay is re-added")
-        self.assertFalse(
-            self.grid.enabled, "native deactivate restores the default (hidden)"
+        self.assertTrue(
+            self.grid.enabled, "coin activate turns the one grid switch on"
         )
-        self.assertFalse(result["view"]["grid"])
+        self.assertTrue(result["view"]["grid"])
+        self.assertTrue(result["view"]["grid_overlay"], "the native ground is hidden")
 
     # -- the inactive command --------------------------------------------
     def test_the_inactive_coin_command_reports_and_changes_nothing(self):
@@ -330,7 +428,8 @@ class ModProviderTests(unittest.TestCase):
         self.assertTrue(accepted["ok"], accepted)
         self.assertEqual(FreeCADGui.activeProvider(GRID), "coin")
         self.assertIn("view", accepted, "the switch repaints in one request")
-        self.assertFalse(accepted["view"]["grid"])
+        self.assertTrue(accepted["view"]["grid"])
+        self.assertTrue(accepted["view"]["grid_overlay"])
         self.assertIn("Mods", self.coin.manager.items)
 
         # A fresh dialog (the token was spent) applies the reverse; the value may
@@ -355,6 +454,7 @@ class ModProviderTests(unittest.TestCase):
             FreeCADGui.registerProvider(
                 GRID, "coin", "Coin (WGSL)", command=COIN_COMMAND, priority=0,
                 activate=self.coin.activate, deactivate=self.coin.deactivate,
+                refresh=self.coin.refresh,
             )
             FreeCADGui.registerProvider(
                 GRID, "ferrocad", "FerroCAD (native)",
@@ -364,6 +464,66 @@ class ModProviderTests(unittest.TestCase):
             reset_provider_state()
 
     # -- failure isolation -------------------------------------------------
+    def test_refresh_runs_only_when_asked_never_at_registration_or_switch(self):
+        feature = "refreshable"
+        self._features.add(feature)
+        calls = []
+
+        def refresh():
+            calls.append("a")
+            return {"view": {"flag": True}, "status": "re-read"}
+
+        FreeCADGui.registerProvider(feature, "a", "A", priority=1, refresh=refresh)
+        self.assertEqual(calls, [], "registration does not run refresh")
+
+        FreeCADGui.setActiveProvider(feature, "a")
+        self.assertEqual(calls, [], "a switch runs activate, not refresh")
+
+        result = FreeCADGui.refreshProviders(feature)
+        self.assertEqual(calls, ["a"])
+        self.assertTrue(result["ok"], result)
+        self.assertEqual(result["backend"], "a")
+        self.assertEqual(result["view"], {"flag": True})
+        self.assertEqual(result["status"], "re-read")
+
+        # A feature with no provider (or a backend with no callback) is a no-op,
+        # which is what the shell's grid toggle needs on a bare facade.
+        empty = FreeCADGui.refreshProviders("nothing-here")
+        self.assertTrue(empty["ok"], empty)
+        self.assertIsNone(empty["backend"])
+        self.assertEqual(empty["view"], {})
+        self.assertEqual(empty["errors"], [])
+
+    def test_a_broken_refresh_callback_is_reported_not_raised(self):
+        feature = "broken-refresh"
+        self._features.add(feature)
+
+        def explode():
+            raise RuntimeError("refresh boom")
+
+        FreeCADGui.registerProvider(feature, "a", "A", refresh=explode)
+        stderr = io.StringIO()
+        with contextlib.redirect_stderr(stderr):
+            result = FreeCADGui.refreshProviders(feature)
+
+        self.assertTrue(result["ok"], result)
+        self.assertEqual(result["view"], {})
+        self.assertEqual(len(result["errors"]), 1)
+        self.assertIn("refresh", result["errors"][0])
+        self.assertIn("refresh boom", result["errors"][0])
+
+        report = stderr.getvalue()
+        self.assertIn("provider 'a'", report)
+        self.assertIn("refresh raised", report)
+        self.assertIn("RuntimeError: refresh boom", report)
+
+    def test_a_non_callable_refresh_is_a_programmer_error(self):
+        feature = "bad-refresh-registration"
+        self._features.add(feature)
+        with self.assertRaises(TypeError):
+            FreeCADGui.registerProvider(feature, "a", "A", refresh=42)
+        self.assertEqual(FreeCADGui.providers(feature), [])
+
     def test_callback_errors_are_reported_and_do_not_break_the_registry(self):
         feature = "broken"
         self._features.add(feature)

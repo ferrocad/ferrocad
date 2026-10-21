@@ -108,12 +108,12 @@ API); only the provider id changed. The active provider is in-memory today
 
 ## Acceptance
 
-- [ ] With Coin active, `App_ToggleGrid` hides the overlay and the native ground
+- [x] With Coin active, `App_ToggleGrid` hides the overlay and the native ground
       together, and `IsChecked` follows. Two toggles return to the start state.
-- [ ] With the FerroCAD-native provider active, behaviour is unchanged.
-- [ ] Toggling does not lose the provider's appearance knobs (colour, opacity,
+- [x] With the FerroCAD-native provider active, behaviour is unchanged.
+- [x] Toggling does not lose the provider's appearance knobs (colour, opacity,
       spacing) — only the master switch changes.
-- [ ] Headless tests, no GPU:
+- [x] Headless tests, no GPU:
       - `tests/test_mod_providers.py`: toggle → `coin.setting("enabled")` is False
         and `manager.items[...]` is unbound (`set_visible(False)` asserted on the
         recorded overlay);
@@ -121,8 +121,8 @@ API); only the provider id changed. The active provider is in-memory today
         and `IsChecked` for the native case;
       - a registry test that `refresh` is only called after an applied request and
         that a broken callback is reported, not raised.
-- [ ] `docs/user/` gains a workflow for the working toggle (it is a user-visible
-      capability, and the index is the progress list).
+- [x] `docs/user/` gains a workflow for the working toggle (it is a user-visible
+      capability, and the index is the progress list). `how-to/grid-visibility.md`.
 
 ## Out of scope
 

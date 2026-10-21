@@ -72,8 +72,30 @@ UPSTREAM_STATUS = (
 )
 
 
+def grid_api():
+    """``FreeCAD.Grid`` when this build has the semantic grid API, else ``None``.
+
+    ``FreeCAD.Grid.enabled`` is the one grid switch on FerroCAD, so this mod
+    reads it for its master switch exactly as the native backend does. Upstream
+    FreeCAD has no such API; there the private ``enabled`` knob stays the master
+    switch. This is the same ``getattr`` discriminator as ``mods/GridOverlay``
+    (``docs/workbenches/grid-overlay-plan.md`` §3.3).
+    """
+    return getattr(App, "Grid", None)
+
+
 def setting(key):
-    """Read one knob, clamped exactly as the upstream ``setting()`` does."""
+    """Read one knob, clamped exactly as the upstream ``setting()`` does.
+
+    ``enabled`` is the shared switch when the semantic API exists, not a knob of
+    this mod: the shell's grid toggle owns ``FreeCAD.Grid.enabled`` and the
+    overlay has to follow it. On upstream FreeCAD the private knob is the
+    fallback.
+    """
+    if key == "enabled":
+        grid = grid_api()
+        if grid is not None:
+            return bool(grid.enabled)
     if key in ("enabled", "shadow_enabled"):
         return bool(SETTINGS.GetBool(key, DEFAULTS[key]))
     if key == "color":
@@ -85,9 +107,18 @@ def setting(key):
 
 
 def save_settings(values):
-    """Persist the six dialog values; unknown keys are ignored."""
+    """Persist the six dialog values; unknown keys are ignored.
+
+    ``enabled`` is written to the shared switch when this build has it, so the
+    settings dialog, the toolbar toggle and the drawn grid move together; on
+    upstream FreeCAD it stays this mod's own knob.
+    """
     if "enabled" in values:
-        SETTINGS.SetBool("enabled", bool(values["enabled"]))
+        grid = grid_api()
+        if grid is not None:
+            grid.enabled = bool(values["enabled"])
+        else:
+            SETTINGS.SetBool("enabled", bool(values["enabled"]))
     if "color" in values:
         SETTINGS.SetString("color", str(values["color"]))
     if "opacity" in values:
@@ -98,6 +129,22 @@ def save_settings(values):
         SETTINGS.SetBool("shadow_enabled", bool(values["shadow_enabled"]))
     if "shadow_opacity" in values:
         SETTINGS.SetFloat("shadow_opacity", float(values["shadow_opacity"]))
+
+
+def _grid_view(enabled):
+    """The view request for one overlay state, carrying the native ``grid`` flag.
+
+    The overlay replaces the native ground while it is bound, so the request
+    says both: ``grid`` keeps a checkable command's mark in step with the one
+    switch, and ``grid_overlay`` hides the native layer. Without the semantic
+    API (upstream) there is nothing to extend but the overlay flag.
+    """
+    grid = grid_api()
+    if grid is None:
+        return {"view": {"grid_overlay": bool(enabled)}}
+    request = grid.apply()
+    request["view"]["grid_overlay"] = bool(enabled)
+    return request
 
 
 def overlay_api():
@@ -479,9 +526,10 @@ def apply_dialog(values):
     """Persist the dialog's values, re-bind, and ask the shell to redraw.
 
     The returned ``{"view": {...}}`` is what triggers the shell to pull the
-    re-registered overlay. The flag only hides the native ground: a registered
-    overlay is drawn whether or not it is set. A stale dialog from a backend
-    that was switched away leaves the store alone and reports why.
+    re-registered overlay. ``grid`` carries the shared switch and
+    ``grid_overlay`` hides the native ground while the overlay is bound. A stale
+    dialog from a backend that was switched away leaves the store alone and
+    reports why.
     """
     if not is_active():
         return {"status": inactive_status()}
@@ -490,7 +538,7 @@ def apply_dialog(values):
         color_to_linear(values["color"])
     save_settings(values)
     manager.refresh()
-    return {"view": {"grid_overlay": bool(setting("enabled"))}}
+    return _grid_view(setting("enabled"))
 
 
 class GridOverlayCoinCommand:
@@ -571,13 +619,45 @@ Gui._GridOverlayCoinManager = manager
 
 
 def activate():
-    """Register the Coin overlay for the active document."""
+    """Become the drawn grid: turn the shared switch on and bind the overlay.
+
+    The switch is the one ``FreeCAD.Grid`` store, so taking the grid over turns
+    it on; the returned request rebinds the overlay and hides the native ground
+    in the same repaint. The private knob is only the upstream fallback.
+    """
+    grid = grid_api()
+    if grid is None:
+        manager.ensure_grid()
+        return None
+    grid.enabled = True
     manager.ensure_grid()
+    return _grid_view(True)
 
 
 def deactivate():
-    """Detach every overlay this mod registered."""
+    """Detach every overlay this mod registered and restore the hidden default.
+
+    Only visibility moves: the appearance knobs stay, so switching back is
+    lossless (the ``deactivate`` contract in ``docs/workbenches/mod-providers.md``).
+    """
     manager.remove_grid()
+    grid = grid_api()
+    if grid is None:
+        return None
+    grid.enabled = False
+    return _grid_view(False)
+
+
+def refresh():
+    """Re-read the shared switch and (un)bind the overlay (the provider hook).
+
+    The shell's grid toggle flips ``FreeCAD.Grid.enabled`` and then asks the
+    registry for a refresh, so the overlay follows the one switch without a
+    second store. The ``grid_overlay`` claim in the result is what the toggle
+    folds into its view request.
+    """
+    manager.refresh()
+    return {"view": {"grid_overlay": bool(setting("enabled"))}}
 
 
 # Registration is idempotent across an add-on reload (the facade rejects a
@@ -607,6 +687,7 @@ def register_provider():
         priority=0,
         activate=activate,
         deactivate=deactivate,
+        refresh=refresh,
     )
     return True
 

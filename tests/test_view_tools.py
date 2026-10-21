@@ -13,6 +13,7 @@ import unittest
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "python"))
 
+import FreeCAD
 import FreeCADGui
 
 import ferrocad_shell  # noqa: F401  (registers App_ToggleGrid)
@@ -20,6 +21,7 @@ import ferrocad_shell  # noqa: F401  (registers App_ToggleGrid)
 
 class ViewAndToolTests(unittest.TestCase):
     def setUp(self):
+        FreeCAD.Grid.reset()
         FreeCADGui.ViewState.grid = False
         FreeCADGui.ViewState.projection = "persp"
         self.names = []
@@ -29,6 +31,7 @@ class ViewAndToolTests(unittest.TestCase):
             FreeCADGui.removeCommand(name)
         FreeCADGui.ViewState.grid = False
         FreeCADGui.ViewState.projection = "persp"
+        FreeCAD.Grid.reset()
 
     def add(self, name, command):
         FreeCADGui.addCommand(name, command)
@@ -49,12 +52,36 @@ class ViewAndToolTests(unittest.TestCase):
 
         result = FreeCADGui._run("App_ToggleGrid")
         self.assertTrue(result["ok"])
-        self.assertEqual(result["view"], {"grid": True})
+        self.assertTrue(result["view"]["grid"])
+        self.assertTrue(FreeCAD.Grid.enabled, "the one switch is on")
+        # ``FreeCAD.Grid.apply()`` is the base of the request, so the appearance
+        # fields travel with the toggle.
+        self.assertIn("grid_minor", result["view"])
 
         # The shell applies the request and mirrors the state back; the check mark
         # then reflects it.
         ferrocad_shell.set_view_state(json.dumps({"grid": True, "projection": "persp"}))
         self.assertTrue(self.entry("App_ToggleGrid")["checked"])
+
+        # A second toggle returns to the start state (switch, request and mark).
+        result = FreeCADGui._run("App_ToggleGrid")
+        self.assertFalse(result["view"]["grid"])
+        self.assertFalse(FreeCAD.Grid.enabled)
+        ferrocad_shell.set_view_state(
+            json.dumps({"grid": False, "projection": "persp"})
+        )
+        self.assertFalse(self.entry("App_ToggleGrid")["checked"])
+
+    def test_the_toggle_owns_the_semantic_switch_not_the_mirror(self):
+        # A stale mirror must not decide the next state: ``FreeCAD.Grid.enabled``
+        # is the one switch.
+        FreeCAD.Grid.enabled = True
+        FreeCADGui.ViewState.grid = False  # a mirror that has not caught up
+
+        result = FreeCADGui._run("App_ToggleGrid")
+
+        self.assertFalse(result["view"]["grid"])
+        self.assertFalse(FreeCAD.Grid.enabled)
 
     def test_a_tool_request_survives_the_payload(self):
         class _Tool:

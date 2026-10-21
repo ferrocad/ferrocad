@@ -529,12 +529,41 @@ FreeCADGui.addCommand("App_Delete", _DeleteCommand())
 FreeCADGui.addCommand("App_Move", _MoveCommand())
 
 
-class _GridCommand:
-    """``App_ToggleGrid`` — show or hide the reference grid (presentation only).
+#: The provider feature whose backend may own the drawn grid. The shell names
+#: the feature it controls, never a backend: which provider draws (and how) is
+#: the registry's answer.
+_GRID_FEATURE = "grid"
 
-    The command flips the shell's state through a ``view`` request; it is checkable,
-    and ``IsChecked`` reads the snapshot the shell mirrors back. Rendering the grid
-    itself is G5.
+
+def _grid_view_request():
+    """The ``{"view": …}`` request for the current grid settings.
+
+    ``FreeCAD.Grid.apply()`` describes the native ground. A provider that draws
+    the grid itself answers the refresh with the ``grid_overlay`` flag it owns
+    (the Coin overlay hides the native ground while it is bound); that flag
+    follows the master switch, so turning the grid off restores the native
+    layer instead of leaving the two grids stacked. A provider that uses the
+    native ground returns no claim, and the request keeps its default.
+    """
+    request = FreeCAD.Grid.apply()
+    refreshed = FreeCADGui.refreshProviders(_GRID_FEATURE)
+    owned = (refreshed.get("view") or {}).get("grid_overlay")
+    if owned is not None:
+        request["view"]["grid_overlay"] = bool(request["view"].get("grid")) and bool(
+            owned
+        )
+    return request
+
+
+class _GridCommand:
+    """``App_ToggleGrid`` — show or hide the reference grid.
+
+    ``FreeCAD.Grid.enabled`` is the one grid switch; this command owns it and
+    returns the view request derived from it. The native ground follows ``grid``
+    and a provider that draws the grid itself (a shader overlay) is asked to
+    re-read the switch through :func:`FreeCADGui.refreshProviders`, so the check
+    mark, the store and the drawn grid cannot disagree. ``IsChecked`` reads the
+    snapshot the shell mirrors back from the returned request.
     """
 
     def GetResources(self):
@@ -549,7 +578,9 @@ class _GridCommand:
         return bool(FreeCADGui.ViewState.grid)
 
     def Activated(self):
-        return {"view": {"grid": not FreeCADGui.ViewState.grid}}
+        grid = FreeCAD.Grid
+        grid.enabled = not grid.enabled
+        return _grid_view_request()
 
 
 FreeCADGui.addCommand("App_ToggleGrid", _GridCommand())
@@ -660,7 +691,7 @@ def _apply_grid_settings(values):
     grid.spacing = float(values.get("spacing", grid.spacing))
     grid.shadows = bool(values.get("shadows", grid.shadows))
     grid.shadow_opacity = float(values.get("shadow_opacity", grid.shadow_opacity))
-    return grid.apply()
+    return _grid_view_request()
 
 
 FreeCADGui.addCommand("View_GridSettings", _GridSettingsCommand())
@@ -779,7 +810,7 @@ class _ReloadGridSettingsCommand:
         }
 
     def Activated(self):
-        return FreeCAD.Grid.apply()
+        return _grid_view_request()
 
 
 FreeCADGui.addCommand("App_ReloadGridSettings", _ReloadGridSettingsCommand())

@@ -1,0 +1,176 @@
+# `FreeCAD.Base`
+
+The `Base` value types FreeCAD exposes as a submodule.
+
+> **Generated page.** `tools/api_docs.py` reads this surface from the
+> module itself. Do not edit it by hand.
+
+``FreeCAD.Base`` — the core data types.
+
+## Class `BoundBox`
+
+| Member | Summary |
+| --- | --- |
+| `Center` (attribute) | — |
+| `XLength` (attribute) | — |
+| `YLength` (attribute) | — |
+| `ZLength` (attribute) | — |
+| add(x, y, z) | — |
+| getIntersectionPoint(point, direction) | The first box-surface point hit by a ray from `point` along `direction`. |
+| intersect(other) | — |
+| intersected(other) | — |
+| isInside(point) | — |
+| isValid() | — |
+| setVoid() | — |
+
+## Class `Material`
+
+| Member | Summary |
+| --- | --- |
+| `DiffuseColor` (attribute) | — |
+
+## Class `Matrix`
+
+| Member | Summary |
+| --- | --- |
+| `A` (attribute) | — |
+| col(col) | — |
+| decompose() | `(shear, scale, rotation, move)` such that `self == move * rotation * scale * shear`. |
+| determinant() | — |
+| diagonal() | — |
+| hasScale(tol=0.0) | Classify scaling; returns a `FreeCAD.ScaleType` member like upstream. |
+| inverse() | — |
+| isNull() | — |
+| isUnity(tol=0.0) | — |
+| move(*args) | — |
+| multVec(v) | Transform a vector by this matrix (FreeCAD `Matrix.multVec`). |
+| multiply(o) | — |
+| nullify() | — |
+| rotateX(angle) | — |
+| rotateY(angle) | — |
+| rotateZ(angle) | — |
+| row(row) | — |
+| scale(*args) | — |
+| setCol(col, v) | — |
+| setRow(row, v) | — |
+| transpose() | — |
+| unity() | — |
+
+## Class `Placement`
+
+| Member | Summary |
+| --- | --- |
+| `Base` (attribute) | — |
+| `Rotation` (attribute) | — |
+| inverse() | — |
+| isSame(o, tol=0.0) | — |
+| multVec(v) | Transform a vector by this placement (FreeCAD `Placement.multVec`). |
+| toMatrix() | — |
+
+## Class `Precision`
+
+``Base::Precision`` — the global tolerance defaults OCCT uses.
+
+| Member | Summary |
+| --- | --- |
+| angular() -> float | — |
+| approximation() -> float | — |
+| confusion() -> float | — |
+| firstParameter() -> float | — |
+| intersection() -> float | — |
+| lastParameter() -> float | — |
+| squareConfusion() -> float | — |
+
+## Class `Quantity`
+
+| Member | Summary |
+| --- | --- |
+| `Format` (attribute) | — |
+| `Unit` (attribute) | — |
+| `UserString` (attribute) | — |
+| `Value` (attribute) | — |
+| getValueAs(unit) | — |
+| toStr() | — |
+| value_in(unit) | — |
+| value_mm() | — |
+
+## Class `Rotation`
+
+| Member | Summary |
+| --- | --- |
+| `Angle` (attribute) | — |
+| `Axes` (attribute) | — |
+| `Axis` (attribute) | — |
+| `Matrix` (attribute) | — |
+| `Pitch` (attribute) | — |
+| `Q` (attribute) | — |
+| `RawAxis` (attribute) | — |
+| `Roll` (attribute) | — |
+| `Yaw` (attribute) | — |
+| getYawPitchRoll() | — |
+| inverse() | — |
+| invert() | — |
+| isSame(o, tol=0.0) | — |
+| multiply(o) | — |
+| setYawPitchRoll(yaw, pitch, roll) | — |
+| toMatrix() | — |
+
+## Class `ScaleType`
+
+Scaling mode returned by ``Matrix.hasScale()`` (``Base::ScaleType``).
+
+| Member | Summary |
+| --- | --- |
+| `NoScaling` (attribute) | — |
+| `NonUniformLeft` (attribute) | — |
+| `NonUniformRight` (attribute) | — |
+| `Other` (attribute) | — |
+| `Uniform` (attribute) | — |
+| as_integer_ratio() | Return a pair of integers, whose ratio is equal to the original int. |
+| bit_count() | Number of ones in the binary representation of the absolute value of self. |
+| bit_length() | Number of bits necessary to represent self in binary. |
+| conjugate() | Returns self, the complex conjugate of any int. |
+| `denominator` (attribute) | — |
+| from_bytes(bytes, byteorder='big', *, signed=False) | Return the integer represented by the given array of bytes. |
+| `imag` (attribute) | — |
+| is_integer() | Returns True. Exists for duck type compatibility with float.is_integer. |
+| `numerator` (attribute) | — |
+| `real` (attribute) | — |
+| to_bytes(length=1, byteorder='big', *, signed=False) | Return an array of bytes representing an integer. |
+
+## Class `TypeId`
+
+| Member | Summary |
+| --- | --- |
+| `Name` (attribute) | — |
+| createInstance() | — |
+| fromName(name) | — |
+| getAllDerivedFrom(_parent) | — |
+
+## Class `Unit`
+
+## Class `Vector`
+
+| Member | Summary |
+| --- | --- |
+| `Length` (attribute) | — |
+| add(o) | — |
+| cross(o) | — |
+| distanceToPoint(o) | — |
+| dot(o) | — |
+| getAngle(o) | — |
+| isEqual(o, tol) | — |
+| negative() | — |
+| normalize() | — |
+| sub(o) | — |
+| `x` (attribute) | — |
+| `y` (attribute) | — |
+| `z` (attribute) | — |
+
+## Class `Vector2d`
+
+| Member | Summary |
+| --- | --- |
+| rotate(angle) | — |
+| `x` (attribute) | — |
+| `y` (attribute) | — |

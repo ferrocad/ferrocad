@@ -36,6 +36,15 @@ jobs:
           PYTHONPATH=python python3 -m unittest discover -s tests
           PYTHONPATH=python python3 examples/mvp_workflow.py
 
+      - name: Generated documentation is current
+        # The user guides are rendered by running real workflows, and the API
+        # reference is read from the live modules, so this is a behaviour check
+        # as well as a documentation one. See docs/documentation.md.
+        run: |
+          python3 tools/userdocs.py --check
+          python3 tools/api_docs.py --check
+          PYTHONPATH=python python3 tools/test_docs_tooling.py
+
       - name: ferrocad_gpui headless tests (bite-gpui + embedded CPython)
         working-directory: crates/ferrocad_gpui
         run: cargo test

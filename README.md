@@ -193,10 +193,13 @@ explanation with `How-to`/`Reference` sections; it is rendered on docs.rs when p
 per-module pages are the reference.
 
 The **product surface is Python** (`import FreeCAD`) and deliberately mirrors upstream FreeCAD, so
-its API reference *is* FreeCAD's own. FerroCAD-specific Python guidance therefore lives in the
-`python/FreeCAD` facade docstrings and the repository `docs/` ([index](docs/README.md); milestones,
-MVP path, architecture, app-shell vision, repackaging, rewrite strategy). A Sphinx/mkdocstrings site is the natural next step once a Python doc
-build can run in CI; until then rustdoc is the verifiable source of truth.
+the *behaviour* reference is FreeCAD's own. What FerroCAD adds is generated and verified:
+[`docs/user/`](docs/user/README.md) renders one page per implemented workflow by **running** it
+against the facade, and [`docs/python-api/`](docs/python-api/README.md) is a signature reference read
+from the live modules. CI runs `tools/userdocs.py --check` and `tools/api_docs.py --check`, so neither
+can drift from the code. Narrative notes live in the repository `docs/` ([index](docs/README.md)).
+A Sphinx/mkdocstrings site is the natural next step once a Python doc build can run in CI; until
+then rustdoc is the verifiable source of truth for the Rust side.
 
 ## Packaging
 

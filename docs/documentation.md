@@ -40,9 +40,9 @@ treat the Python surface as documented by convention + upstream.
 | Quadrant | Location |
 | --- | --- |
 | **Tutorial** (learning) | `ferrocad_core` crate page (`crates/ferrocad_core/src/lib.rs`, `# Tutorial`, a runnable doc test); `README.md` quickstart |
-| **How-to** (tasks) | `ferrocad_core` crate page `# How-to guides`; README build/run/test/packaging sections |
-| **Explanation** (understanding) | `ferrocad_core` crate page `# Explanation`; `docs/direction/rewrite-strategy.md`, `docs/direction/mvp-path.md`, `docs/interaction/python-ui-research.md` |
-| **Reference** (information) | rustdoc item/module pages; the Python surface = upstream FreeCAD's reference |
+| **How-to** (tasks) | [`user/`](user/README.md) — generated from executable workflows in `tools/workflows/`; `ferrocad_core` crate page `# How-to guides`; README build/run/test/packaging sections |
+| **Explanation** (understanding) | `ferrocad_core` crate page `# Explanation`; [`direction/rewrite-strategy.md`](direction/rewrite-strategy.md), [`direction/mvp-path.md`](direction/mvp-path.md), [`interaction/python-ui-research.md`](interaction/python-ui-research.md) |
+| **Reference** (information) | [`python-api/`](python-api/README.md) — generated from the live modules; rustdoc item/module pages; the behaviour of the `FreeCAD` surface = upstream FreeCAD's reference |
 
 ## Slice documentation
 
@@ -64,6 +64,8 @@ duplicate it. The folders, and the rule for filing a new note:
 | `viewport/` | the scene/render/present stack |
 | `interaction/` | spatial reference, selection, gizmos, navigation, visual language |
 | `workbenches/` | the Python module contract and upstream bring-up |
+| `user/` | generated workflow guides (`tools/userdocs.py`) |
+| `python-api/` | generated signature reference (`tools/api_docs.py`) |
 | `record/` | closed history: milestones, closed TODOs, incidents |
 | `tasks/` | actionable specs with a checklist |
 
@@ -75,6 +77,10 @@ Conventions this imposes on a new note:
 
 - **One file, one subject.** If a note covers two, split it rather than filing it in
   two folders.
+- **Generated, not written.** A `user/` page is rendered from a workflow script that
+  runs against the real facade; a `python-api/` page is read from the live module.
+  Both generators have a `--check` mode, and CI runs it, so a page cannot describe
+  behaviour the code no longer has. Never hand-edit either folder.
 - **Relative links only.** Cross-folder links are `../<folder>/<name>.md`; there is no
   link macro and no site generator to resolve absolutes.
 - **Status line first.** `Status: <kind> (<date>)` plus its companion notes, so a
@@ -86,6 +92,9 @@ Conventions this imposes on a new note:
 
 - `cargo doc --no-deps -p ferrocad_core -p ferrocad_py` — builds without warnings.
 - `cargo test --doc -p ferrocad_core` — the tutorial is a real, compiled doc test.
+- `python3 tools/userdocs.py --check` — every user page matches a fresh run of its
+  workflow.
+- `python3 tools/api_docs.py --check` — every API page matches the live modules.
 - A relative-link sweep over `docs/**/*.md` — cheap to run, and it is what catches a
   note that moved without its inbound links.
 

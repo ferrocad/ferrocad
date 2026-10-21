@@ -580,31 +580,111 @@ class _AxisCrossCommand:
 FreeCADGui.addCommand("App_ToggleAxisCross", _AxisCrossCommand())
 
 
-class _ReloadGridSettingsCommand:
-    """``App_ReloadGridSettings`` — apply the grid preferences without a restart.
+class _GridSettingsCommand:
+    """``View_GridSettings`` — edit the reference grid's appearance in a dialog.
 
-    Reads ``User parameter:BaseApp/Preferences/View`` (``GridMinorStep``,
-    ``GridMajorStep`` and ``GridRadius``) and returns them as a ``view`` request. A
-    radius of 0 restores the camera-derived extent.
+    The dialog is a thin client of :data:`FreeCAD.Grid`: it seeds its fields from
+    the settings object, writes each value back on accept, and returns the
+    ``{"view": …}`` request ``FreeCAD.Grid.apply()`` builds, so the shell applies
+    the same state the native grid draws. A validation error stays in the modal
+    (the callback raises ``ValueError`` and the facade reports it as the
+    dialog's error).
     """
 
     def GetResources(self):
         return {
-            "MenuText": "Reload grid settings",
-            "ToolTip": "Apply the grid step and extent preferences",
+            "MenuText": "Grid settings",
+            "ToolTip": "Change the reference grid's appearance",
             "Group": "View",
             "CmdType": "ForView",
         }
 
     def Activated(self):
-        prefs = FreeCAD.ParamGet("User parameter:BaseApp/Preferences/View")
+        grid = FreeCAD.Grid
         return {
-            "view": {
-                "grid_minor": float(prefs.GetFloat("GridMinorStep", 10.0)),
-                "grid_major": float(prefs.GetFloat("GridMajorStep", 100.0)),
-                "grid_radius": float(prefs.GetFloat("GridRadius", 0.0)),
-            }
+            "title": "Grid settings",
+            "accept": "Apply",
+            "fields": [
+                {
+                    "name": "enabled",
+                    "label": "Show grid",
+                    "kind": "bool",
+                    "value": grid.enabled,
+                },
+                {
+                    "name": "color",
+                    "label": "Colour",
+                    "kind": "text",
+                    "value": grid.color,
+                },
+                {
+                    "name": "opacity",
+                    "label": "Opacity",
+                    "kind": "float",
+                    "value": grid.opacity,
+                    "min": 0.0,
+                    "max": 1.0,
+                },
+                {
+                    "name": "spacing",
+                    "label": "Spacing (mm)",
+                    "kind": "quantity",
+                    "value": grid.spacing,
+                    "min": 0.001,
+                },
+                {
+                    "name": "shadows",
+                    "label": "Shadows",
+                    "kind": "bool",
+                    "value": grid.shadows,
+                },
+                {
+                    "name": "shadow_opacity",
+                    "label": "Shadow opacity",
+                    "kind": "float",
+                    "value": grid.shadow_opacity,
+                    "min": 0.0,
+                    "max": 1.0,
+                },
+            ],
+            "on_accept": _apply_grid_settings,
         }
+
+
+def _apply_grid_settings(values):
+    """Write a dialog's grid fields to ``FreeCAD.Grid`` and return its request."""
+    grid = FreeCAD.Grid
+    grid.enabled = bool(values.get("enabled", grid.enabled))
+    grid.color = str(values.get("color", grid.color))
+    grid.opacity = float(values.get("opacity", grid.opacity))
+    grid.spacing = float(values.get("spacing", grid.spacing))
+    grid.shadows = bool(values.get("shadows", grid.shadows))
+    grid.shadow_opacity = float(values.get("shadow_opacity", grid.shadow_opacity))
+    return grid.apply()
+
+
+FreeCADGui.addCommand("View_GridSettings", _GridSettingsCommand())
+
+
+class _ReloadGridSettingsCommand:
+    """``App_ReloadGridSettings`` — apply the grid preferences without a restart.
+
+    The preferences (``User parameter:BaseApp/Preferences/View``) are read and
+    validated by :data:`FreeCAD.Grid`, so this is the same request
+    ``View_GridSettings`` builds. A radius of 0 restores the camera-derived
+    extent.
+    """
+
+    def GetResources(self):
+        return {
+            "MenuText": "Reload grid settings",
+            "ToolTip": "Apply the grid preferences",
+            "Group": "View",
+            "CmdType": "ForView",
+        }
+
+    def Activated(self):
+        return FreeCAD.Grid.apply()
 
 
 FreeCADGui.addCommand("App_ReloadGridSettings", _ReloadGridSettingsCommand())

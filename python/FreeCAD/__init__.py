@@ -164,6 +164,7 @@ __all__ = [
     "DocumentObject",
     "ActiveDocument",
     "backend",
+    "Grid",
     "ParamGet",
     "ParameterGrp",
     "ScaleType",
@@ -179,6 +180,13 @@ def __getattr__(name):
     # PEP 562: resolved lazily because the active document changes over time.
     if name == "ActiveDocument":
         return activeDocument()
+    if name == "Grid":
+        # Lazily bound so importing FreeCAD stays headless and GUI-free; the
+        # settings object lives in the private `_grid` module (see
+        # docs/grid-overlay-plan.md §2).
+        from . import _grid
+
+        return _grid.grid()
     raise AttributeError("module 'FreeCAD' has no attribute '%s'" % name)
 
 

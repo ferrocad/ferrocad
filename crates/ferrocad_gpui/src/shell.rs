@@ -263,6 +263,12 @@ impl Shell {
             // so the viewport does not open from inside the model.
             viewport.frame_stage();
         }
+        // G5: overlays registered through `FreeCADGui.addOverlay` before the viewport
+        // existed are pulled in now, once the scene they merge beside is built.
+        if ferrocad_inventor_py::overlays_dirty() {
+            let overlays = ferrocad_inventor_py::overlay_scenes();
+            viewport.set_overlays(overlays);
+        }
         // The view state is the source of truth: a grid toggled before the viewport
         // existed is applied now, with its steps.
         {
@@ -271,6 +277,7 @@ impl Shell {
             viewport.set_axis_cross(state.axis_cross);
             viewport.set_grid_steps(state.grid_minor, state.grid_major);
             viewport.set_grid_radius(state.grid_radius);
+            viewport.set_grid_overlay(state.grid_overlay);
         }
         // A tool started before the viewport existed (a script, a command while no
         // GPU was available) is applied now that there is one.
@@ -317,6 +324,26 @@ impl Shell {
             }),
             Err(error) => self.console_line(format!("stage: {error}"), cx),
         }
+    }
+
+    /// Pull the registered overlay scenes into the viewport when the set changed (G5).
+    ///
+    /// The registry is the authority; this is deliberately a pull so the shell never
+    /// re-extracts or recompiles a scene whose overlay set is unchanged. With no
+    /// viewport (headless, or before [`enable_viewport`](Self::enable_viewport)) the
+    /// dirty flag is left set, so the next viewport applies it.
+    fn sync_overlays(&mut self, cx: &mut Context<Self>) {
+        if !ferrocad_inventor_py::overlays_dirty() {
+            return;
+        }
+        let Some(viewport) = self.viewport.clone() else {
+            return;
+        };
+        let overlays = ferrocad_inventor_py::overlay_scenes();
+        viewport.update(cx, |viewport, cx| {
+            viewport.set_overlays(overlays);
+            cx.notify();
+        });
     }
 
     /// Ask the app script for the display meshes and build a stage from them.
@@ -664,7 +691,14 @@ impl Shell {
                 } else {
                     self.dialog = None;
                 }
-                let status = if outcome.status.is_empty() {
+                // A dialog callback may return a presentation request (G2, the grid
+                // settings dialog); apply it exactly as a plain command's does.
+                let status = if let Some(request) = &outcome.view {
+                    match self.apply_view(request, cx) {
+                        Ok(summary) => summary,
+                        Err(error) => format!("view: {error}"),
+                    }
+                } else if outcome.status.is_empty() {
                     "ok".to_string()
                 } else {
                     outcome.status
@@ -673,6 +707,9 @@ impl Shell {
                 self.console_line(status, cx);
                 self.refresh(cx);
                 self.sync_stage(cx);
+                // A dialog callback is how the A1 fork triggers the refresh: it has
+                // already registered or removed the overlay through the bridge.
+                self.sync_overlays(cx);
             }
             Ok(outcome) => {
                 let error = if outcome.error.is_empty() {
@@ -757,12 +794,17 @@ impl Shell {
             let grid = state.grid;
             let axis_cross = state.axis_cross;
             let (minor, major, radius) = (state.grid_minor, state.grid_major, state.grid_radius);
+            let (color, alpha) = (state.grid_color, state.grid_alpha);
+            let grid_overlay = state.grid_overlay;
             viewport.update(cx, |viewport, cx| {
                 let mut changed = viewport.set_orthographic(orthographic);
                 changed |= viewport.set_grid(grid);
                 changed |= viewport.set_axis_cross(axis_cross);
                 changed |= viewport.set_grid_steps(minor, major);
                 changed |= viewport.set_grid_radius(radius);
+                changed |= viewport.set_grid_color(color);
+                changed |= viewport.set_grid_alpha(alpha);
+                changed |= viewport.set_grid_overlay(grid_overlay);
                 if changed {
                     cx.notify();
                 }
@@ -770,6 +812,9 @@ impl Shell {
         }
         // The mirror above makes `IsChecked` see the new state.
         self.refresh_commands(cx);
+        // A `{"view": …}` outcome is also how the fork says "the overlay tree changed"
+        // (`grid_overlay`); pull it in without waiting for the next document refresh.
+        self.sync_overlays(cx);
         Ok(summary)
     }
 
@@ -945,6 +990,7 @@ impl Shell {
             self.console_line(format!("selection: {error}"), cx);
         }
         self.refresh_commands(cx);
+        self.sync_overlays(cx);
         cx.notify();
     }
 
@@ -1939,6 +1985,51 @@ if "Test_Dialog" not in FreeCADGui.listCommands():
         assert!(cx.update(|cx| shell.read(cx).dialog.is_none()));
         let spent = crate::commands::accept(&token, &serde_json::json!({})).expect("accept");
         assert!(!spent.ok, "the cancelled token is gone");
+    }
+
+    /// G2: a dialog callback may return a `{"view": …}` request. `finish_dialog`
+    /// applies it exactly as a plain command's request is applied.
+    #[gpui::test]
+    fn a_dialog_view_request_changes_the_view_state(cx: &mut TestAppContext) {
+        let _guard = crate::PYTHON_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let model = Shell::boot().expect("boot shell");
+        let shell = cx.update(|cx| cx.new(|cx| Shell::from_model(model.clone(), cx)));
+
+        let script = r#"
+import FreeCADGui
+class _DialogView:
+    def GetResources(self):
+        return {"MenuText": "Dialog view"}
+    def Activated(self):
+        return {
+            "title": "Dialog view",
+            "fields": [{"name": "Show", "kind": "bool", "value": True}],
+            "on_accept": lambda values: {"view": {"grid": bool(values["Show"])}},
+        }
+if "Test_DialogView" not in FreeCADGui.listCommands():
+    FreeCADGui.addCommand("Test_DialogView", _DialogView())
+"#;
+        let registered = crate::python::evaluate(script).expect("evaluate");
+        assert!(registered.ok, "{}", registered.output);
+
+        assert!(!model.lock().unwrap().view.grid, "the grid starts off");
+        cx.update(|cx| shell.update(cx, |shell, cx| shell.run_command("Test_DialogView", cx)));
+        assert!(
+            cx.update(|cx| shell.read(cx).dialog.is_some()),
+            "the dialog opened"
+        );
+
+        cx.update(|cx| shell.update(cx, |shell, cx| shell.accept_dialog(cx)));
+        assert!(
+            cx.update(|cx| shell.read(cx).dialog.is_none()),
+            "the dialog closed"
+        );
+        let (grid, status) = {
+            let m = model.lock().unwrap();
+            (m.view.grid, m.status.clone())
+        };
+        assert!(grid, "the callback's request reached the view state");
+        assert_eq!(status, "grid on");
     }
 
     /// A3: the modal renders headlessly over the shell, and `Esc` cancels it.

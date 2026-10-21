@@ -32,6 +32,15 @@ pub struct ViewRequest {
     /// A fixed world-grid extent (mm). Omitted keeps it camera-derived.
     #[serde(default)]
     pub grid_radius: Option<f64>,
+    /// The world grid's ink as a `"#rrggbb"` (or `"#rgb"`) string.
+    #[serde(default)]
+    pub grid_color: Option<String>,
+    /// A multiplier over the grid tokens' alphas, in `0.0..=1.0`.
+    #[serde(default)]
+    pub grid_alpha: Option<f32>,
+    /// Draw the authored (shader) grid overlay and hide the native ground layer.
+    #[serde(default)]
+    pub grid_overlay: Option<bool>,
     /// A workplane action: `"activate"`, `"clear"` or `"view"`.
     #[serde(default)]
     pub workplane: Option<String>,
@@ -106,6 +115,14 @@ pub struct ViewState {
     pub grid_major: f64,
     /// A fixed world-grid extent (mm); `None` keeps it camera-derived.
     pub grid_radius: Option<f64>,
+    /// The world grid's linear ink (alpha is carried by the per-vertex fade).
+    pub grid_color: [f32; 4],
+    /// A multiplier over the grid tokens' alphas.
+    pub grid_alpha: f32,
+    /// Whether the authored (shader) grid overlay is authoritative (`false`: the native
+    /// grid is). When on, the viewport hides the native ground and draws the scene's
+    /// program packets; `grid_radius` is ignored (an infinite shader grid has no extent).
+    pub grid_overlay: bool,
 }
 
 impl Default for ViewState {
@@ -117,6 +134,9 @@ impl Default for ViewState {
             grid_minor: grid::MINOR_STEP,
             grid_major: grid::MAJOR_STEP,
             grid_radius: None,
+            grid_color: grid::GRID_COLOR,
+            grid_alpha: 1.0,
+            grid_overlay: false,
         }
     }
 }
@@ -149,6 +169,15 @@ impl ViewState {
                 return Err(format!(
                     "grid radius must be zero (auto) or positive, got {radius}"
                 ));
+            }
+        }
+        let grid_color = match request.grid_color.as_deref() {
+            Some(text) => Some(grid::parse_srgb_hex(text)?),
+            None => None,
+        };
+        if let Some(alpha) = request.grid_alpha {
+            if !(alpha.is_finite() && (0.0..=1.0).contains(&alpha)) {
+                return Err(format!("grid alpha must be between 0 and 1, got {alpha}"));
             }
         }
         let minor = request.grid_minor.unwrap_or(self.grid_minor);
@@ -204,6 +233,40 @@ impl ViewState {
                 });
             }
         }
+        if let Some(color) = grid_color {
+            // Compare in the user's (8-bit sRGB) space: the ink constants are authored at
+            // three decimals, so linear equality would report `#94a3b8` as a change.
+            let hex = ink_hex(color);
+            if ink_hex(self.grid_color) != hex {
+                self.grid_color = color;
+                changes.push(format!("grid colour {hex}"));
+            }
+        }
+        if let Some(alpha) = request.grid_alpha {
+            if (self.grid_alpha - alpha).abs() > f32::EPSILON {
+                self.grid_alpha = alpha;
+                changes.push(format!("grid alpha {}", trim(f64::from(alpha))));
+            }
+        }
+        if let Some(grid_overlay) = request.grid_overlay {
+            if self.grid_overlay != grid_overlay {
+                self.grid_overlay = grid_overlay;
+                changes.push(format!(
+                    "grid overlay {} ({})",
+                    if grid_overlay { "on" } else { "off" },
+                    if grid_overlay {
+                        "native ground hidden"
+                    } else {
+                        "native grid"
+                    }
+                ));
+            }
+        }
+        // The shader grid is infinite, so a radius is meaningless while it is on. Say so
+        // rather than silently accepting a value the viewport will not use.
+        if self.grid_overlay && request.grid_radius.is_some() {
+            changes.push("grid radius ignored (shader grid)".to_string());
+        }
         Ok(if changes.is_empty() {
             "view unchanged".to_string()
         } else {
@@ -216,6 +279,28 @@ impl ViewState {
 fn trim(value: f64) -> String {
     let text = format!("{value:.3}");
     text.trim_end_matches('0').trim_end_matches('.').to_string()
+}
+
+/// The ink tokens are authored at three decimals, so spelling a token in hex can land
+/// in the last digit away from its constant (`#94a3b8` parses to `0.4794…`, the token
+/// is `0.480`). Comparisons therefore happen in the canonical `#rrggbb` space, where
+/// the token round-trips exactly and every 8-bit step stays distinct.
+fn ink_hex(color: [f32; 4]) -> String {
+    let channel = |value: f32| {
+        let value = value.clamp(0.0, 1.0);
+        let srgb = if value <= 0.003_130_8 {
+            value * 12.92
+        } else {
+            1.055 * value.powf(1.0 / 2.4) - 0.055
+        };
+        (srgb * 255.0).round() as u8
+    };
+    format!(
+        "#{:02x}{:02x}{:02x}",
+        channel(color[0]),
+        channel(color[1]),
+        channel(color[2])
+    )
 }
 
 #[cfg(test)]
@@ -232,6 +317,9 @@ mod tests {
         assert_eq!(state.grid_minor, grid::MINOR_STEP);
         assert_eq!(state.grid_major, grid::MAJOR_STEP);
         assert_eq!(state.grid_radius, None);
+        assert_eq!(state.grid_color, grid::GRID_COLOR);
+        assert_eq!(state.grid_alpha, 1.0);
+        assert!(!state.grid_overlay, "the native grid is authoritative");
     }
 
     #[test]
@@ -344,6 +432,79 @@ mod tests {
     }
 
     #[test]
+    fn the_grid_ink_applies_and_summarises() {
+        let mut state = ViewState::default();
+        let request = ViewRequest {
+            grid_color: Some("#F87171".to_string()),
+            grid_alpha: Some(0.5),
+            ..Default::default()
+        };
+        assert_eq!(
+            state.apply(&request).unwrap(),
+            "grid colour #f87171, grid alpha 0.5"
+        );
+        assert_eq!(
+            state.grid_color,
+            grid::parse_srgb_hex("#f87171").unwrap(),
+            "the state holds linear ink"
+        );
+        assert_eq!(state.grid_alpha, 0.5);
+
+        // The same colour in another spelling is a no-op.
+        let again = ViewRequest {
+            grid_color: Some("#f87171".to_string()),
+            ..Default::default()
+        };
+        assert_eq!(state.apply(&again).unwrap(), "view unchanged");
+    }
+
+    #[test]
+    fn a_bad_ink_or_alpha_leaves_the_state_untouched() {
+        let mut state = ViewState::default();
+        let bad_colour = ViewRequest {
+            grid: Some(true),
+            grid_color: Some("not a colour".to_string()),
+            ..Default::default()
+        };
+        assert!(state.apply(&bad_colour).is_err());
+        assert!(!state.grid, "nothing was applied");
+        assert_eq!(state.grid_color, grid::GRID_COLOR);
+
+        for alpha in [1.5, -0.1, f32::NAN, f32::INFINITY] {
+            let request = ViewRequest {
+                grid: Some(true),
+                grid_alpha: Some(alpha),
+                ..Default::default()
+            };
+            assert!(state.apply(&request).is_err(), "alpha {alpha}");
+            assert!(!state.grid, "nothing was applied");
+            assert_eq!(state.grid_alpha, 1.0);
+        }
+    }
+
+    #[test]
+    fn the_default_ink_spelling_is_not_a_change() {
+        // `GRID_COLOR` is the token rounded to three decimals, so the hex spelling must
+        // not report a change on a fresh state.
+        let mut state = ViewState::default();
+        let request = ViewRequest {
+            grid_color: Some("#94a3b8".to_string()),
+            ..Default::default()
+        };
+        assert_eq!(state.apply(&request).unwrap(), "view unchanged");
+        assert_eq!(state.grid_color, grid::GRID_COLOR);
+
+        // The comparison is exact at every 8-bit step, not a coarse tolerance.
+        for hex in ["#010101", "#020202"] {
+            let dark = ViewRequest {
+                grid_color: Some(hex.to_string()),
+                ..Default::default()
+            };
+            assert_eq!(state.apply(&dark).unwrap(), format!("grid colour {hex}"));
+        }
+    }
+
+    #[test]
     fn a_workplane_request_is_validated_but_not_state() {
         let mut state = ViewState::default();
         let request = ViewRequest {
@@ -364,5 +525,64 @@ mod tests {
         assert!(state.apply(&bad).is_err());
         assert!(!state.grid, "nothing was applied");
         assert!(bad.workplane_action().is_err());
+    }
+
+    #[test]
+    fn the_grid_overlay_flag_applies_and_summarises() {
+        let mut state = ViewState::default();
+        let on = ViewRequest {
+            grid_overlay: Some(true),
+            ..Default::default()
+        };
+        assert_eq!(
+            state.apply(&on).unwrap(),
+            "grid overlay on (native ground hidden)"
+        );
+        assert!(state.grid_overlay);
+
+        // Re-applying is a no-op; turning it off restores the native grid.
+        assert_eq!(state.apply(&on).unwrap(), "view unchanged");
+        let off = ViewRequest {
+            grid_overlay: Some(false),
+            ..Default::default()
+        };
+        assert_eq!(state.apply(&off).unwrap(), "grid overlay off (native grid)");
+        assert!(!state.grid_overlay);
+    }
+
+    #[test]
+    fn a_radius_is_ignored_while_the_shader_grid_is_on() {
+        let mut state = ViewState::default();
+        let request = ViewRequest {
+            grid_overlay: Some(true),
+            grid_radius: Some(250.0),
+            ..Default::default()
+        };
+        let summary = state.apply(&request).unwrap();
+        assert!(summary.contains("grid overlay on"), "{summary}");
+        assert!(
+            summary.contains("grid radius ignored (shader grid)"),
+            "{summary}"
+        );
+    }
+
+    #[test]
+    fn a_bad_request_does_not_switch_the_grid_authority() {
+        let mut state = ViewState::default();
+        let bad = ViewRequest {
+            grid_overlay: Some(true),
+            projection: Some("isometric".to_string()),
+            ..Default::default()
+        };
+        assert!(state.apply(&bad).is_err());
+        assert!(!state.grid_overlay, "validate before mutate");
+    }
+
+    #[test]
+    fn the_grid_overlay_flag_deserializes() {
+        let request: ViewRequest = serde_json::from_str(r#"{"grid_overlay": true}"#).unwrap();
+        assert_eq!(request.grid_overlay, Some(true));
+        let empty: ViewRequest = serde_json::from_str("{}").unwrap();
+        assert_eq!(empty.grid_overlay, None);
     }
 }

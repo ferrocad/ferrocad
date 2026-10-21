@@ -209,5 +209,8 @@ rather than restating it.
   the native flag, so the Coin/WGSL overlay keeps drawing; one switch, a provider
   `refresh` hook, and the `semantic` → `ferrocad` rename.
 - [tasks/toolbar-chrome.md](tasks/toolbar-chrome.md) — replacing the flat actions bar
-  with viewport-header split buttons, anchored popovers and a selection-reactive dock;
-  the grid-settings half waits on the decisions in §6.
+  with viewport-header split buttons, anchored popovers, a selection-reactive dock and
+  an app menu; the grid-settings half now depends on `settings-model.md`.
+- [tasks/settings-model.md](tasks/settings-model.md) — provider-advertised settings, a
+  `Settings` node in the tree, and a file-backed parameter store so a provider choice
+  survives a restart.

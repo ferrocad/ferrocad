@@ -8,8 +8,9 @@ Companion to [`../interaction/visual-language.md`](../interaction/visual-languag
 toggles) and [`../direction/app-shell-vision.md`](../direction/app-shell-vision.md) S2.
 
 **Scope note.** The chrome (header controls, popovers, the action dock, the app menu)
-is implemented. The **grid settings** half is not: it depends on decisions listed in
-§6. T0–T3, T6 and T7 landed on 2026-10-22; T4–T5 wait for those decisions.
+is implemented. The **grid settings** half is not: the decisions in §6 are made, and
+T4/T5 now depend on [`settings-model.md`](settings-model.md) S0–S2. T0–T3, T6 and T7
+landed on 2026-10-22.
 
 ## 1. Why
 
@@ -56,9 +57,10 @@ The design brief (2026-10-22) specifies:
 1. **Viewport header, right-aligned** (in `panel_header("3D viewport")`, never over the
    navicube):
    - `Grid` split button: the label toggles visibility in one click; `▾` (or right-click)
-     opens a popover with **Grid Overlay** (toggle), **Overlay Mode**
-     (`Compact` | `Full`), **Spacing** (`10.0 mm`, tabular), **Provider / Mod**, then
-     `Grid Settings…` and `↻ Reload Grid Settings`.
+     opens a popover with **Grid provider** (the active `(grid, backend)`), **Spacing**
+     (`10.0 mm`, tabular), then `Grid Settings…` (selects `Settings/Grid`) and
+     `↻ Reload Grid Settings`. No separate overlay toggle (the label is the one
+     switch) and no mode row (a local grid follows the workplane).
    - `Axes` toggle button (`App_ToggleAxisCross`).
    - `WP` split button: the label runs `App_ViewWorkplane`; `▾` offers
      `Activate workplane` and `Clear workplane`.
@@ -68,9 +70,9 @@ The design brief (2026-10-22) specifies:
    `Workplane` · `Search (Ctrl+K)` when idle; filtered by selection signature when
    something is selected (`Delete`, `Move`, then workbench-specific entries). It recedes
    to 35 % during orbit/gizmo drags and returns on proximity.
-3. **Grid settings are modeless**: `Grid Settings…` loads the grid parameters into the
-   existing Properties pane (no selection = viewport/grid properties), rather than a new
-   modal. There is no separate settings screen.
+3. **Grid settings are modeless**: `Grid Settings…` selects the `Settings/Grid` node in
+   the model tree and the existing Properties pane renders its rows
+   ([`settings-model.md`](settings-model.md)). There is no separate settings screen.
 4. **App menu**, left-aligned in the same header: `☰` opens app-level commands that are
    not viewport environment controls. Dev Tools is the first entry (checked while the
    window is open, showing `Ctrl+Shift+D`); About and Preferences follow. It exists
@@ -101,40 +103,52 @@ The design brief (2026-10-22) specifies:
 | **T1** | `split_button` + `popover` primitives (open state, anchor, dismissal, right-click) | state-machine tests; rendering by inspection ✅ |
 | **T2** | Header controls: `Grid`, `Axes`, `WP`, `Mods` wired to the existing command ids, right-aligned in the viewport header | model tests: clicking the label runs the command; `▾` opens the group without running it ✅ |
 | **T3** | Action dock replaces the strip; selection filter; drag/proximity opacity | model test: the dock's visible ids follow the selection signature ✅ (drag opacity deferred) |
-| **T4** | Grid quick popover content (overlay toggle, mode, spacing readout, provider) | **blocked** (§6) |
-| **T5** | `Grid Settings…` loads grid rows into the Properties pane | **blocked** (§6) |
+| **T4** | Grid quick popover: **provider** selector, spacing readout, settings/reload rows (no mode) | model test: the rows follow the active provider |
+| **T5** | `Grid Settings…` selects the `Settings/Grid` node; the Properties pane renders it | depends on [`settings-model.md`](settings-model.md) S0–S2 |
 | **T6** | Remove `actions_bar` and its layout slot; update the docs; keep every command reachable | test that every registered command appears on exactly one surface |
 | **T7** | App menu (`☰`) at the header's left: app-level commands, Dev Tools first, checked while open | model test: the menu opens, lists the hidden command, and running it opens the window |
 
 `T0` was deliberately first: it is pure data, it made `T6`'s "every command reachable"
 assertion possible, and it let T2/T3 land without touching the Python side.
 
-## 6. Decisions the grid half needs
+## 6. Decisions (2026-10-22)
 
-These are why T4/T5 are not ready:
+The five questions below were settled in review. Three of them moved work out of
+this task and into [`settings-model.md`](settings-model.md), which is why T4/T5
+depend on that file rather than on more debate here.
 
-1. **What "Overlay Mode: Compact / Full" means.** Today there are **two mods**
-   (`mods/GridOverlay` = native/ferrocad backend, `mods/GridOverlayCoin` = Coin/WGSL)
-   and two settings commands. The brief's "Grid Overlay" toggle plus a
-   `Compact | Full` segmented control implies one feature with two *modes*, not two
-   providers — or that "Compact" is the native grid and "Full" the shader grid. Pick
-   one; the external-mod ingestion item in the backlog (P0) already asks the same
-   question and should be decided with it.
-2. **What `Provider / Mod` selects.** A provider backend, a loaded mod, or both? The
-   registry offers `setActiveProvider(feature, backend)`; the brief calls the row
-   "Provider / Mod". Name it after the registry, not after the file layout.
-3. **Which parameters `Grid Settings…` edits.** `FreeCAD.Grid` exposes enabled, colour,
-   opacity, minor/major, radius, shadows, shadow opacity. The brief mentions 15
-   parameters, subdivisions, snap radius — some of which do not exist yet
-   ([`../interaction/axis-origin-grid.md`](../interaction/axis-origin-grid.md)). Decide
-   the set, and whether the Properties pane renders them as typed rows (it already
-   renders property rows for a selection) or the popover grows fields.
-4. **Reusing the Properties pane.** `properties_panel` takes a document selection. Grid
-   settings are not a document object. Either give it a second source (a synthetic
-   "Viewport" record) or keep the card from the brief. The brief prefers the pane; that
-   needs the pane's model to accept non-document rows.
-5. **Persisted provider choice.** Still in-memory (`ParamGet`), so a restart loses the
-   selection; the popover must not imply otherwise.
+1. **There is no `Compact | Full` mode; a compact grid is a *local* grid.**
+   `ferrocad_stage` already renders a bounded workplane grid
+   (`GridSpec::workplane()`, 1 mm dots / 10 mm lines, `WorkplaneKind::{World, Datum,
+   Face}`) and dims the world grid while it is active. Upstream FreeCAD likewise
+   changes the *workplane*; it does not add a second grid. So: drop the segmented
+   control from the popover. The world grid is what a provider implements (native or
+   the Coin/WGSL overlay); the local grid follows the active workplane and is not a
+   provider mode. Reusing the overlay for a local grid is not planned: it is an
+   infinite full-screen ground shader, while a face grid is bounded and
+   depth-tested against the face.
+2. **The selectable thing is a feature provider, not a mod.** A mod is a package; a
+   provider is one `(feature, backend)` implementation of a capability. The row is
+   therefore **`Grid provider`** (capability-scoped), with the backend ids the
+   registry already uses (`ferrocad`, `coin`, and the external mod's own id). A mod
+   that provides two features appears twice, once per feature.
+3. **Settings are advertised, not hard-coded.** A provider declares its knobs as a
+   schema (name, label, kind, default, range/choices) and the shell renders one
+   surface for whichever provider is active. That is the answer to "two different
+   dialogs": switching the provider changes the rows, not the window. The schema and
+   its storage are [`settings-model.md`](settings-model.md) S0.
+4. **Settings belong in the tree, not in a synthetic pane source.** A `Settings` root
+   (not a document) holds one node per capability, for example `Settings/Grid`; its
+   rows are the active provider's schema. Document/project settings, when they exist,
+   are real document objects under the document instead. `/` is not legal in a
+   FreeCAD object name, so the two namespaces cannot collide. This also avoids
+   teaching `properties_panel` a second source: it renders whatever node is selected.
+5. **The provider choice is a user setting and must persist.** `ParamGet` is in-memory
+   today, so persistence is a prerequisite rather than a polish item. The choice is
+   written as a user setting; a document value, when added, overrides it
+   (document > user > provider default). [`settings-model.md`](settings-model.md) S3.
+
+Nothing in the chrome needs to change for 3–5; T4/T5 become wiring once S0–S3 land.
 
 ## 7. Non-goals
 

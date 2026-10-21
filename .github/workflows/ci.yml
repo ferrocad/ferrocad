@@ -43,6 +43,7 @@ jobs:
         run: |
           python3 tools/userdocs.py --check
           python3 tools/api_docs.py --check
+          python3 tools/build_book.py --check
           PYTHONPATH=python python3 tools/test_docs_tooling.py
 
       - name: ferrocad_gpui headless tests (bite-gpui + embedded CPython)

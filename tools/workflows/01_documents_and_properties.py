@@ -8,6 +8,7 @@ from _capture import main
 
 import FreeCAD
 
+QUADRANT = "how-to"
 SLUG = "documents-and-properties"
 TITLE = "Create a document and edit properties"
 SUMMARY = (
@@ -84,6 +85,7 @@ if __name__ == "__main__":
     main(
         run,
         slug=SLUG,
+        quadrant=QUADRANT,
         title=TITLE,
         summary=SUMMARY,
         requires=REQUIRES,

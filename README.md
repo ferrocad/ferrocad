@@ -198,6 +198,9 @@ the *behaviour* reference is FreeCAD's own. What FerroCAD adds is generated and 
 against the facade, and [`docs/python-api/`](docs/python-api/README.md) is a signature reference read
 from the live modules. CI runs `tools/userdocs.py --check` and `tools/api_docs.py --check`, so neither
 can drift from the code. Narrative notes live in the repository `docs/` ([index](docs/README.md)).
+An mdBook edition of both — tutorials, how-to guides, reference, explanation — is
+assembled by `tools/build_book.py` (`--build` renders it with
+[mdBook](https://rust-lang.github.io/mdBook/)).
 A Sphinx/mkdocstrings site is the natural next step once a Python doc build can run in CI; until
 then rustdoc is the verifiable source of truth for the Rust side.
 

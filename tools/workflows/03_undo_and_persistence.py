@@ -4,6 +4,7 @@ from _capture import main
 
 import FreeCAD
 
+QUADRANT = "how-to"
 SLUG = "undo-and-persistence"
 TITLE = "Undo an edit and reload the document"
 SUMMARY = (
@@ -94,6 +95,7 @@ if __name__ == "__main__":
     main(
         run,
         slug=SLUG,
+        quadrant=QUADRANT,
         title=TITLE,
         summary=SUMMARY,
         requires=REQUIRES,

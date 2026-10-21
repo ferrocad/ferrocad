@@ -5,6 +5,7 @@ from _capture import main
 import FreeCAD
 import FreeCADGui
 
+QUADRANT = "how-to"
 SLUG = "selection-and-commands"
 TITLE = "Drive a command from the selection"
 SUMMARY = (
@@ -125,6 +126,7 @@ if __name__ == "__main__":
     main(
         run,
         slug=SLUG,
+        quadrant=QUADRANT,
         title=TITLE,
         summary=SUMMARY,
         requires=REQUIRES,

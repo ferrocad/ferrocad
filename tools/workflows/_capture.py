@@ -13,6 +13,7 @@ stale.
 Workflow contract::
 
     SLUG = "documents-and-properties"     # page name
+    QUADRANT = "how-to"                   # tutorials | how-to | explanation
     TITLE = "..."                         # page title
     SUMMARY = "..."                       # one paragraph
     REQUIRES = ["..."]                    # what a reader needs to reproduce it
@@ -24,7 +25,10 @@ Workflow contract::
             cap.result("Active document", FreeCAD.ActiveDocument.Name)
 
     if __name__ == "__main__":
-        main(run, slug=SLUG, title=TITLE, summary=SUMMARY, requires=REQUIRES)
+        main(run, slug=SLUG, quadrant=QUADRANT, title=TITLE, summary=SUMMARY, requires=REQUIRES)
+
+The quadrant is the Diátaxis section the page belongs to; the runner writes the
+page under ``docs/user/<quadrant>/`` and groups the index the same way.
 
 Run a single workflow directly to see its capture as JSON; the runner is
 ``tools/userdocs.py``.
@@ -40,12 +44,28 @@ import textwrap
 import FreeCAD
 import FreeCADGui
 
+#: Diátaxis sections a workflow may declare, and their aliases. The runner routes
+#: both the page path and the index section from this, so the set is closed.
+QUADRANTS = {
+    "tutorials": "tutorials",
+    "tutorial": "tutorials",
+    "how-to": "how-to",
+    "howto": "how-to",
+    "explanation": "explanation",
+}
+
 
 class Capture:
     """Records the ordered operations that make up one workflow page."""
 
-    def __init__(self, *, slug, title, summary, requires=(), caveats=()):
+    def __init__(self, *, slug, quadrant="how-to", title, summary, requires=(), caveats=()):
         self.slug = slug
+        if quadrant not in QUADRANTS:
+            raise ValueError(
+                f"unknown quadrant {quadrant!r}; expected one of "
+                f"{', '.join(sorted(set(QUADRANTS.values())))}"
+            )
+        self.quadrant = QUADRANTS[quadrant]
         self.title = title
         self.summary = summary
         self.requires = list(requires)
@@ -126,6 +146,7 @@ class Capture:
     def to_dict(self) -> dict:
         return {
             "slug": self.slug,
+            "quadrant": self.quadrant,
             "title": self.title,
             "summary": self.summary,
             "requires": self.requires,

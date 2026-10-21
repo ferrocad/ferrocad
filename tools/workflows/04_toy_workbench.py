@@ -9,6 +9,7 @@ from _capture import main
 
 import FreeCAD
 
+QUADRANT = "how-to"
 SLUG = "toy-workbench"
 TITLE = "Create, display and manipulate an object"
 SUMMARY = (
@@ -175,6 +176,7 @@ if __name__ == "__main__":
     main(
         run,
         slug=SLUG,
+        quadrant=QUADRANT,
         title=TITLE,
         summary=SUMMARY,
         requires=REQUIRES,

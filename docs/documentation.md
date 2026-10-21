@@ -39,10 +39,14 @@ treat the Python surface as documented by convention + upstream.
 
 | Quadrant | Location |
 | --- | --- |
-| **Tutorial** (learning) | `ferrocad_core` crate page (`crates/ferrocad_core/src/lib.rs`, `# Tutorial`, a runnable doc test); `README.md` quickstart |
-| **How-to** (tasks) | [`user/`](user/README.md) — generated from executable workflows in `tools/workflows/`; `ferrocad_core` crate page `# How-to guides`; README build/run/test/packaging sections |
-| **Explanation** (understanding) | `ferrocad_core` crate page `# Explanation`; [`direction/rewrite-strategy.md`](direction/rewrite-strategy.md), [`direction/mvp-path.md`](direction/mvp-path.md), [`interaction/python-ui-research.md`](interaction/python-ui-research.md) |
+| **Tutorial** (learning) | [`user/tutorials/`](user/tutorials/first-model.md) — generated from an executable workflow; `ferrocad_core` crate page (`crates/ferrocad_core/src/lib.rs`, `# Tutorial`, a runnable doc test); `README.md` quickstart |
+| **How-to** (tasks) | [`user/how-to/`](user/how-to/documents-and-properties.md) — generated from executable workflows in `tools/workflows/`; `ferrocad_core` crate page `# How-to guides`; README build/run/test/packaging sections |
 | **Reference** (information) | [`python-api/`](python-api/README.md) — generated from the live modules; rustdoc item/module pages; the behaviour of the `FreeCAD` surface = upstream FreeCAD's reference |
+| **Explanation** (understanding) | [`user/explanation/`](user/explanation/how-the-shell-talks-to-the-document.md) — hand-written, links into the design notes; `ferrocad_core` crate page `# Explanation`; [`direction/rewrite-strategy.md`](direction/rewrite-strategy.md), [`direction/mvp-path.md`](direction/mvp-path.md), [`interaction/python-ui-research.md`](interaction/python-ui-research.md) |
+
+`docs/user/` is the Diátaxis slice of the docs: three of the four quadrants live
+there (reference is the sibling `docs/python-api/`). The four together are what
+`tools/build_book.py` assembles into the mdBook edition, in Diátaxis order.
 
 ## Slice documentation
 
@@ -64,7 +68,7 @@ duplicate it. The folders, and the rule for filing a new note:
 | `viewport/` | the scene/render/present stack |
 | `interaction/` | spatial reference, selection, gizmos, navigation, visual language |
 | `workbenches/` | the Python module contract and upstream bring-up |
-| `user/` | generated workflow guides (`tools/userdocs.py`) |
+| `user/` | generated workflow guides, in Diátaxis sections (`tools/userdocs.py`) |
 | `python-api/` | generated signature reference (`tools/api_docs.py`) |
 | `record/` | closed history: milestones, closed TODOs, incidents |
 | `tasks/` | actionable specs with a checklist |
@@ -80,7 +84,11 @@ Conventions this imposes on a new note:
 - **Generated, not written.** A `user/` page is rendered from a workflow script that
   runs against the real facade; a `python-api/` page is read from the live module.
   Both generators have a `--check` mode, and CI runs it, so a page cannot describe
-  behaviour the code no longer has. Never hand-edit either folder.
+  behaviour the code no longer has. Never hand-edit either folder. The one
+exception is `user/explanation/`, which is authored: it has no runnable subject.
+- **Quadrants are declared, not inferred.** A workflow sets `QUADRANT`, and the
+  runner writes the page to `user/<quadrant>/` and groups the index from it. A page
+  that moves between quadrants is moved in one place.
 - **Relative links only.** Cross-folder links are `../<folder>/<name>.md`; there is no
   link macro and no site generator to resolve absolutes.
 - **Status line first.** `Status: <kind> (<date>)` plus its companion notes, so a
@@ -95,7 +103,9 @@ Conventions this imposes on a new note:
 - `python3 tools/userdocs.py --check` — every user page matches a fresh run of its
   workflow.
 - `python3 tools/api_docs.py --check` — every API page matches the live modules.
+- `python3 tools/build_book.py --check` — the mdBook tree assembles, every page is
+  in `SUMMARY.md`, and every link resolves (external ones are rewritten to GitHub).
 - A relative-link sweep over `docs/**/*.md` — cheap to run, and it is what catches a
   note that moved without its inbound links.
 
-Both are cheap enough to add to CI when it is next touched.
+All of these run in CI; the docs checks are in the `headless` job.

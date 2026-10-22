@@ -5,6 +5,14 @@ faithful Coin/shader port of the upstream add-on, running under FerroCAD's
 pull-based overlay bridge. It is a proving slice, not the shipping form — the
 shipping form is `mods/GridOverlay/` (A2, a client of `FerroCAD.Grid`).
 
+## Compatibility
+
+This mod imports `FreeCAD`/`FreeCADGui` and `FerroCAD`/`FerroCADGui`, so it is
+**FerroCAD-only**: it is not usable as-is on upstream FreeCAD. The FerroCAD
+imports are guarded, and the command reports a clear status instead of crashing
+when that API is absent. See
+[`docs/architecture/api-namespaces.md`](../../docs/architecture/api-namespaces.md).
+
 ## What is preserved from upstream
 
 - The **tree**: `SoSwitch` → (`SoPickStyle` `UNPICKABLE`, `SoLightModel`

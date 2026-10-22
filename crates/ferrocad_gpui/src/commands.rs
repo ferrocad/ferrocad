@@ -12,10 +12,10 @@ use serde::Deserialize;
 
 /// Which surface owns a command's control (P0.6, T0).
 ///
-/// A command declares this in `GetResources()["Surface"]`; the registry does not
-/// derive it from `Group`, because `Group` says how to sort, not where to put a
-/// button. An unannotated command lands on the **dock**, never nowhere: a mod that
-/// predates this extension must still be reachable.
+/// A command declares this in `GetResources()["FerroCAD_Surface"]`; the registry
+/// does not derive it from `Group`, because `Group` says how to sort, not where to
+/// put a button. An unannotated command lands on the **dock**, never nowhere: a mod
+/// that predates this extension must still be reachable.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash)]
 pub enum Surface {
     /// The grid split button in the viewport header.
@@ -36,8 +36,8 @@ pub enum Surface {
 }
 
 impl Surface {
-    /// Parse a `Surface` resource value. Both the short form (`"grid"`) and the
-    /// namespaced form (`"header:grid"`) are accepted.
+    /// Parse a `FerroCAD_Surface` resource value. Both the short form (`"grid"`) and
+    /// the namespaced form (`"header:grid"`) are accepted.
     pub fn parse(value: &str) -> Option<Self> {
         match value.trim().to_ascii_lowercase().as_str() {
             "grid" | "header:grid" => Some(Self::Grid),
@@ -83,11 +83,11 @@ pub struct CommandInfo {
     /// `CmdType` (`"ForEdit"`, `"ForView"`, …); metadata only.
     #[serde(default)]
     pub cmd_type: String,
-    /// `GetResources()["Surface"]` — the owning surface (P0.6 extension).
+    /// `GetResources()["FerroCAD_Surface"]` — the owning surface (P0.6 extension).
     #[serde(default)]
     pub surface: String,
-    /// `GetResources()["Parent"]` — the surface's primary command id, for a command
-    /// offered in that control's popover (P0.6 extension).
+    /// `GetResources()["FerroCAD_Parent"]` — the surface's primary command id, for a
+    /// command offered in that control's popover (P0.6 extension).
     #[serde(default)]
     pub parent: String,
     /// `IsActive()`.
@@ -180,10 +180,10 @@ pub fn group_by_surface(commands: &[CommandInfo]) -> SurfaceGroups<'_> {
 
 /// The rows a header control's popover shows.
 ///
-/// These are the commands on `surface` whose `Parent` names the control's primary
-/// command. When none declare that parent — a surface with a single command, or a
-/// mod that predates the metadata — every command on the surface is shown instead,
-/// including the primary, so the caret is never a dead end.
+/// These are the commands on `surface` whose `FerroCAD_Parent` names the control's
+/// primary command. When none declare that parent — a surface with a single command,
+/// or a mod that predates the metadata — every command on the surface is shown
+/// instead, including the primary, so the caret is never a dead end.
 pub fn popover_commands<'a>(
     commands: &'a [CommandInfo],
     surface: Surface,
@@ -338,8 +338,8 @@ mod tests {
         }
     }
 
-    /// T0: `Surface` is a FerroCAD extension of `GetResources`; both spellings parse
-    /// and an unknown value falls back to the dock.
+    /// T0: `FerroCAD_Surface` is a FerroCAD extension of `GetResources`; both
+    /// spellings parse and an unknown value falls back to the dock.
     #[test]
     fn surface_metadata_parses_and_defaults_to_the_dock() {
         assert_eq!(Surface::parse("grid"), Some(Surface::Grid));

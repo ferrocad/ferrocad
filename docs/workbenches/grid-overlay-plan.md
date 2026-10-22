@@ -90,7 +90,7 @@ one, and is listed with the other approach changes.
 ### 2.1 Name and home
 
 **`FerroCAD.Grid`, a singleton object implemented in a private pure-Python module
-(`python/FreeCAD/_grid.py`), bound lazily from `FerroCAD.__getattr__`.**
+(`python/FerroCAD/_grid.py`), bound lazily from `FerroCAD.__getattr__`.**
 
 Why not `FerroCADGui.Grid`:
 
@@ -207,8 +207,8 @@ No new crate. A `ferrocad_grid` crate would duplicate the producer
 | `ferrocad_gpui` | `set_view_state` | mirror the two fields | `python.rs:376-383`. |
 | `ferrocad_viewport` | `InventorViewport::{set_grid_style, grid_style}`; `sync_grid` | new setters, style overrides | `sync_grid` already builds `GridStyle` locally (`inventor_view.rs:2213-2225`); the cache key includes the style (`:450-454`), so a change re-emits. |
 | `ferrocad_viewport` | `set_grid_overlay(bool)` | new, debug only | §2.5. |
-| `python/FreeCAD/_grid.py` | `_GridSettings` singleton | **new**, pure Python | Policy + ParamGet; the only place that knows the parameter keys. |
-| `python/FreeCAD/__init__.py` | `__getattr__` → `Grid`; `__all__` | one branch | `:178-182`, `:155-167`. |
+| `python/FerroCAD/_grid.py` | `_GridSettings` singleton | **new**, pure Python | Policy + ParamGet; the only place that knows the parameter keys. |
+| `python/FerroCAD/__init__.py` | `__getattr__` → `Grid`; `__all__` | one branch | `:32-39`, `:101-109`. |
 | `python/ferrocad_shell` | `View_GridSettings`; `_ReloadGridSettingsCommand` delegates | new/small | `:583-607` already reads the same group. |
 | `ferrocad_stage_py` | — | **nothing** | Deliberate: stage Python is for building declarative items (`stage.md` §4, T5). Exposing `GridStyle` there would create a second authoring surface, which the bring-up already rejects for shader sources (its §6, "The source question"). |
 | `ferrocad_inventor_py` | — | **nothing** | A grid is not a Coin node. |
@@ -576,7 +576,7 @@ flowchart TD
 
 ```mermaid
 flowchart TD
-    P["python/FreeCAD (FerroCAD.Grid)"]
+    P["python/FerroCAD (FerroCAD.Grid)"]
     S["ferrocad_gpui: ViewState / ViewRequest"]
     V["ferrocad_viewport: grid style, overlay flag"]
     T["ferrocad_stage: GridSpec / GridStyle / grid producer"]

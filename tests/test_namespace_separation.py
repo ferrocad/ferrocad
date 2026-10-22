@@ -10,10 +10,11 @@ The same split covers resource keys: a FerroCAD extension to `GetResources`
 carries the `FerroCAD_` prefix (`FerroCAD_Surface`, `FerroCAD_Parent`), and a
 bare `Surface`/`Parent` would be a name in the upstream namespace.
 
-This module asserts the boundary in both directions, audits the resource keys
-of every registered command and of every `mods/*/InitGui.py`, and then proves a
-command still round-trips through the shell so the move did not break the host
-bridge.
+This module asserts the boundary in both directions, walks each FerroCAD
+``__all__`` so a future extension cannot silently leak upstream, audits the
+resource keys of every registered command and of every `mods/*/InitGui.py`, and
+then proves a command still round-trips through the shell so the move did not
+break the host bridge.
 """
 
 import json
@@ -39,17 +40,20 @@ BARE_RESOURCE_KEYS = ("Surface", "Parent")
 #: A string literal used as a dict key, in either quote style.
 DICT_KEY = re.compile(r"""["'](Surface|Parent)["']\s*:""")
 
-#: Names that moved ``FreeCAD`` -> ``FerroCAD``.
-MOVED_FROM_FREECAD = (
+#: Names that live only on ``FerroCAD`` (moved from ``FreeCAD`` on 2026-10-22,
+#: or added there since).
+FERROCAD_ONLY_FREECAD = (
     "Grid",
     "display_mesh",
     "register_display_provider",
     "register_interaction_provider",
     "interaction",
+    "set_parameter_file",
+    "parameter_file",
 )
 
-#: Names that moved ``FreeCADGui`` -> ``FerroCADGui``.
-MOVED_FROM_FREECADGUI = (
+#: Names that live only on ``FerroCADGui`` (moved from ``FreeCADGui``).
+FERROCAD_ONLY_FREECADGUI = (
     "registerProvider",
     "unregisterProvider",
     "providers",
@@ -100,8 +104,8 @@ UPSTREAM_FREECADGUI = (
 class NamespaceSeparationTests(unittest.TestCase):
     def test_the_upstream_namespaces_do_not_expose_the_extensions(self):
         for namespace, names in (
-            (FreeCAD, MOVED_FROM_FREECAD),
-            (FreeCADGui, MOVED_FROM_FREECADGUI),
+            (FreeCAD, FERROCAD_ONLY_FREECAD),
+            (FreeCADGui, FERROCAD_ONLY_FREECADGUI),
         ):
             with self.subTest(namespace=namespace.__name__):
                 present = sorted(name for name in names if name in dir(namespace))
@@ -118,10 +122,10 @@ class NamespaceSeparationTests(unittest.TestCase):
                         % (namespace.__name__, name),
                     )
 
-    def test_every_moved_name_resolves_on_the_ferrocad_namespaces(self):
+    def test_every_ferrocad_only_name_resolves_on_the_ferrocad_namespaces(self):
         for namespace, names in (
-            (FerroCAD, MOVED_FROM_FREECAD),
-            (FerroCADGui, MOVED_FROM_FREECADGUI),
+            (FerroCAD, FERROCAD_ONLY_FREECAD),
+            (FerroCADGui, FERROCAD_ONLY_FREECADGUI),
         ):
             for name in names:
                 with self.subTest(namespace=namespace.__name__, name=name):
@@ -129,6 +133,52 @@ class NamespaceSeparationTests(unittest.TestCase):
 
         # ``FerroCAD.Grid`` is the one settings singleton.
         self.assertIs(FerroCAD.Grid, FerroCAD.Grid)
+
+    def test_the_ferrocad_exports_do_not_leak_upstream_and_resolve(self):
+        """``__all__`` is the forward-looking guard for the whole boundary.
+
+        The explicit tuples above catch the names we know about today. This test
+        instead walks each FerroCAD ``__all__``, so an extension added there
+        tomorrow is covered without editing the tuples: it may not appear in
+        ``dir(FreeCAD)``/``dir(FreeCADGui)`` (or resolve through a lazy
+        ``__getattr__``), and every exported name must resolve.
+        """
+        for upstream, namespace in (
+            (FreeCAD, FerroCAD),
+            (FreeCADGui, FerroCADGui),
+        ):
+            with self.subTest(namespace=namespace.__name__):
+                exported = list(namespace.__all__)
+                self.assertTrue(
+                    exported,
+                    "%s.__all__ must name its surface" % namespace.__name__,
+                )
+                self.assertEqual(
+                    len(set(exported)),
+                    len(exported),
+                    "%s.__all__ repeats a name" % namespace.__name__,
+                )
+                for name in exported:
+                    with self.subTest(namespace=namespace.__name__, name=name):
+                        self.assertNotIn(
+                            name,
+                            dir(upstream),
+                            "%s.__all__ exports %r, but %s also names it"
+                            % (namespace.__name__, name, upstream.__name__),
+                        )
+                        # ``dir`` alone would miss a lazy ``__getattr__``.
+                        self.assertFalse(
+                            hasattr(upstream, name),
+                            "%s hasattr(%r) must be False as well"
+                            % (upstream.__name__, name),
+                        )
+                        try:
+                            getattr(namespace, name)
+                        except AttributeError:
+                            self.fail(
+                                "%s.__all__ names %r, but it does not resolve"
+                                % (namespace.__name__, name)
+                            )
 
     def test_the_upstream_shaped_names_still_resolve(self):
         for namespace, names in (

@@ -9,6 +9,13 @@ The dialog is the shell's declarative spec, and its `on_accept` writes
 `FerroCAD.Grid` and returns `FerroCAD.Grid.apply()` (a `{"view": …}` request the
 shell applies to the same state the native grid draws).
 
+## Compatibility
+
+This mod imports `FerroCAD`/`FerroCADGui`, so it is **FerroCAD-only**: it is not
+usable as-is on upstream FreeCAD. The imports are guarded, and the command
+reports a clear status instead of crashing when that API is absent. See
+[`docs/architecture/api-namespaces.md`](../../docs/architecture/api-namespaces.md).
+
 ## Functional intent that survives
 
 The command id and menu text ("Grid Overlay") are unchanged, `IsActive()`

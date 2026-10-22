@@ -38,6 +38,7 @@ where they are; the rule is about the API a mod calls to extend the host.
 | `register_interaction_provider` | a module's manipulator-edit hook |
 | `display_mesh` | ask the registered provider for an object's mesh |
 | `interaction` | ask the registered provider to apply an edit |
+| `set_parameter_file`, `parameter_file` | which file backs `FreeCAD.ParamGet` |
 
 ### `FreeCADGui` → `FerroCADGui`
 
@@ -86,7 +87,11 @@ unconditional. If a compatibility alias is ever needed, it must be opt-in (a
 `tests/test_namespace_separation.py` asserts the boundary in both directions:
 
 - no FerroCAD extension name appears in `dir(FreeCAD)` or `dir(FreeCADGui)`;
-- every moved name resolves on `FerroCAD` or `FerroCADGui`;
+- every FerroCAD-only name resolves on `FerroCAD` or `FerroCADGui`;
+- every name in `FerroCAD.__all__`/`FerroCADGui.__all__` is absent from
+  `dir(FreeCAD)`/`dir(FreeCADGui)` (and from a lazy `hasattr`) and resolves
+  (this walks the declared surface, so a name added to a FerroCAD `__all__` is
+  covered without editing the test);
 - the upstream-shaped names still resolve, so the move did not take anything with it;
 - no registered command's `GetResources()` declares a bare `Surface`/`Parent`
   key (checked at runtime over `FreeCADGui._COMMANDS`, with a raising

@@ -18,8 +18,14 @@
 // or the ellipse major radius; `minor` the ellipse minor radius (unused for a
 // circle). On kind 0 every other value is 0.
 
+#include <BOPAlgo_Builder.hxx>
 #include <BRepAlgoAPI_BuilderAlgo.hxx>
+#include <BRepBuilderAPI_MakeFace.hxx>
 #include <BRepFill_Filling.hxx>
+#include <BRep_Builder.hxx>
+#include <ShapeAnalysis_FreeBounds.hxx>
+#include <TopTools_HSequenceOfShape.hxx>
+#include <TopoDS_Compound.hxx>
 #include <BRep_Tool.hxx>
 #include <Geom_BSplineCurve.hxx>
 #include <TColStd_Array1OfInteger.hxx>
@@ -206,6 +212,15 @@ inline bool fc_is_vertex(const TopoDS_Shape& shape)
   return !shape.IsNull() && shape.ShapeType() == TopAbs_VERTEX;
 }
 
+// A copy of `shape` with reversed orientation (a hole wire is opposite to its
+// outer boundary).
+inline std::unique_ptr<TopoDS_Shape> fc_reversed(const TopoDS_Shape& shape)
+{
+  std::unique_ptr<TopoDS_Shape> reversed(new TopoDS_Shape(shape));
+  reversed->Reverse();
+  return reversed;
+}
+
 // Install a row-major 4x4 matrix into an OCCT transform. The fourth row is
 // ignored (OCCT transforms are affine).
 inline bool fc_trsf_from_matrix(rust::Slice<const double> m, gp_Trsf& out)
@@ -274,6 +289,64 @@ inline std::unique_ptr<TopoDS_Shape> fc_general_fuse(const TopTools_ListOfShape&
       return nullptr;
     }
     return std::unique_ptr<TopoDS_Shape>(new TopoDS_Shape(builder.Shape()));
+  }
+  catch (...) {
+    return nullptr;
+  }
+}
+
+// Split one (possibly self-intersecting) wire at its self-intersections and
+// build a planar face for every closed loop. Returns a compound of faces, or a
+// null shape when no loop yields a planar face.
+inline std::unique_ptr<TopoDS_Shape> fc_split_wire_into_faces(const TopoDS_Shape& wire)
+{
+  if (wire.IsNull() || wire.ShapeType() != TopAbs_WIRE) {
+    return nullptr;
+  }
+  try {
+    BRepAlgoAPI_BuilderAlgo builder;
+    TopTools_ListOfShape arguments;
+    arguments.Append(wire);
+    builder.SetArguments(arguments);
+    builder.SetNonDestructive(Standard_True);
+    builder.Build();
+    if (!builder.IsDone()) {
+      return nullptr;
+    }
+
+    Handle(TopTools_HSequenceOfShape) edges = new TopTools_HSequenceOfShape();
+    for (TopExp_Explorer edge(builder.Shape(), TopAbs_EDGE); edge.More(); edge.Next()) {
+      edges->Append(edge.Current());
+    }
+    if (edges->IsEmpty()) {
+      return nullptr;
+    }
+
+    Handle(TopTools_HSequenceOfShape) loops = new TopTools_HSequenceOfShape();
+    ShapeAnalysis_FreeBounds::ConnectEdgesToWires(edges, 1e-7, Standard_False, loops);
+    if (loops.IsNull() || loops->IsEmpty()) {
+      return nullptr;
+    }
+
+    TopoDS_Compound faces;
+    BRep_Builder compound_builder;
+    compound_builder.MakeCompound(faces);
+    Standard_Integer count = 0;
+    for (Standard_Integer i = 1; i <= loops->Length(); ++i) {
+      const TopoDS_Shape& loop = loops->Value(i);
+      if (loop.ShapeType() != TopAbs_WIRE) {
+        continue;
+      }
+      BRepBuilderAPI_MakeFace make(TopoDS::Wire(loop), Standard_True);
+      if (make.IsDone() && !make.Face().IsNull()) {
+        compound_builder.Add(faces, make.Face());
+        ++count;
+      }
+    }
+    if (count == 0) {
+      return nullptr;
+    }
+    return std::unique_ptr<TopoDS_Shape>(new TopoDS_Shape(faces));
   }
   catch (...) {
     return nullptr;

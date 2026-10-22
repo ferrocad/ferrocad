@@ -316,7 +316,13 @@ impl GeometryBackend for OcctBackend {
                 }
                 .into());
             }
-            make.pin_mut().add_wire(bridge::fc_shape_as_wire(inner));
+            // A hole must run opposite to the outer boundary; reverse it so the
+            // builder subtracts its area instead of adding another outer boundary.
+            let reversed = bridge::fc_reversed(inner);
+            let reversed = reversed.as_ref().ok_or(OcctError::InvalidInput {
+                what: "null wire",
+            })?;
+            make.pin_mut().add_wire(bridge::fc_shape_as_wire(reversed));
             if !make.IsDone() {
                 return Err(OcctError::NotDone {
                     operation: "make_face",
@@ -349,8 +355,19 @@ impl GeometryBackend for OcctBackend {
                 .into());
             }
 
-            // Planar boundaries use the ordinary face builder; anything else is
-            // filled through `BRepFill_Filling`.
+            // A self-intersecting boundary splits into several loops (one face
+            // per loop); a simple boundary stays on the ordinary path below.
+            let split = bridge::fc_split_wire_into_faces(inner);
+            if let Some(split) = split.as_ref() {
+                let map = sub_shape_map(split, TopAbs_ShapeEnum::TopAbs_FACE);
+                if map.Extent() > 1 {
+                    for index in 1..=map.Extent() {
+                        faces.push(erase(map.FindKey(index)));
+                    }
+                    continue;
+                }
+            }
+
             let make = ffi::b_rep_builder_api::BRepBuilderAPI_MakeFace_wire(
                 bridge::fc_shape_as_wire(inner),
                 true,
@@ -374,8 +391,83 @@ impl GeometryBackend for OcctBackend {
         }
 
         // Coplanar faces that overlap or cross must be split into their regions;
-        // General Fuse returns all parts, unlike a boolean union.
+        // General Fuse returns all parts, unlike a boolean union. Nested boundaries
+        // are different: upstream keeps them as one face with holes.
         if all_planar && faces.len() > 1 {
+            let area = |shape: &Shape| {
+                self.mass_properties(shape)
+                    .map(|mass| mass.area)
+                    .unwrap_or(0.0)
+            };
+            let contains = |outer: &Shape, inner: &Shape| {
+                let inner_area = area(inner);
+                if inner_area <= 0.0 {
+                    return false;
+                }
+                match self.common(outer, inner) {
+                    Ok(result) => {
+                        let overlap = area(&result.shape);
+                        (overlap - inner_area).abs() <= 1e-6 * inner_area.max(1.0)
+                    }
+                    Err(_) => false,
+                }
+            };
+            // Nesting follows the even-odd rule: the outermost boundary is a face,
+            // its direct children are holes, their children are islands, and so on.
+            let count = faces.len();
+            let mut parent: Vec<Option<usize>> = vec![None; count];
+            for inner in 0..count {
+                for outer in 0..count {
+                    if inner == outer || !contains(&faces[outer], &faces[inner]) {
+                        continue;
+                    }
+                    let smaller = parent[inner]
+                        .map(|current| area(&faces[outer]) < area(&faces[current]))
+                        .unwrap_or(true);
+                    if smaller {
+                        parent[inner] = Some(outer);
+                    }
+                }
+            }
+            if parent.iter().any(Option::is_some) {
+                let depth = |mut index: usize| {
+                    let mut depth = 0;
+                    while let Some(up) = parent[index] {
+                        depth += 1;
+                        index = up;
+                        if depth > count {
+                            break;
+                        }
+                    }
+                    depth
+                };
+                let mut built = Vec::new();
+                for node in 0..count {
+                    if depth(node) % 2 != 0 {
+                        continue;
+                    }
+                    let mut boundaries = vec![wires[node].clone()];
+                    let mut holes: Vec<(f64, Shape)> = (0..count)
+                        .filter(|&child| parent[child] == Some(node))
+                        .map(|child| (area(&faces[child]), wires[child].clone()))
+                        .collect();
+                    holes.sort_by(|a, b| {
+                        b.0.partial_cmp(&a.0).unwrap_or(std::cmp::Ordering::Equal)
+                    });
+                    boundaries.extend(holes.into_iter().map(|(_, wire)| wire));
+                    if let Ok(face) = self.make_face(&boundaries) {
+                        built.push(face);
+                    }
+                }
+                if !built.is_empty() {
+                    return if built.len() == 1 {
+                        Ok(built.remove(0))
+                    } else {
+                        self.make_compound(&built)
+                    };
+                }
+            }
+
             let mut list = ffi::top_tools::new_list_of_shape();
             for face in &faces {
                 let occt = downcast(face)?;

@@ -8,10 +8,13 @@ use pyo3::types::{PyList, PyModule};
 
 /// Register both built-in modules before the interpreter initialises.
 fn boot() {
-    use ferrocad_part_py::Part as part_module;
-    use ferrocad_py::ferrocad as ferrocad_module;
-    pyo3::append_to_inittab!(ferrocad_module);
-    pyo3::append_to_inittab!(part_module);
+    static BOOT: std::sync::Once = std::sync::Once::new();
+    BOOT.call_once(|| {
+        use ferrocad_part_py::Part as part_module;
+        use ferrocad_py::ferrocad as ferrocad_module;
+        pyo3::append_to_inittab!(ferrocad_module);
+        pyo3::append_to_inittab!(part_module);
+    });
 }
 
 #[test]

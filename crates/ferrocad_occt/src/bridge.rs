@@ -61,6 +61,12 @@ mod ffi {
         /// All split parts of the arguments (General Fuse), or null on failure.
         fn fc_general_fuse(shapes: &TopTools_ListOfShape) -> UniquePtr<TopoDS_Shape>;
 
+        /// Faces from a (possibly self-intersecting) wire, or null on failure.
+        fn fc_split_wire_into_faces(wire: &TopoDS_Shape) -> UniquePtr<TopoDS_Shape>;
+
+        /// A copy of the shape with reversed orientation.
+        fn fc_reversed(shape: &TopoDS_Shape) -> UniquePtr<TopoDS_Shape>;
+
         /// Install a row-major 4x4 matrix into an OCCT transform.
         fn fc_trsf_from_matrix(m: &[f64], out: Pin<&mut gp_Trsf>) -> bool;
 

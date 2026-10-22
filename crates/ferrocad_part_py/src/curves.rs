@@ -1,0 +1,511 @@
+//! The analytic half of `Part` in Python: curves, edges and wires.
+//!
+//! This is the first slice of the `Part` module the backlog calls the shared kernel
+//! work: upstream's `Part::Geom*` classes ([`Part.LineSegment`], [`Part.Circle`],
+//! [`Part.ArcOfCircle`]) plus the edge/wire containers Draft imports. The geometry is
+//! [`ferrocad_curves`]; the conversion to a kernel shape is the `ferrocad_geom` seam
+//! (`make_edge`/`make_wire`), implemented by OCCT.
+//!
+//! Deliberate limits for this slice, all reported as `Part.OCCError` rather than a
+//! silent `None`: an infinite `Line` has no edge, an `Ellipse` edge needs a
+//! `gp_Elips` binding the kernel crate does not expose, and face/solid constructors
+//! (`makeFace`, `makeSolid`, …) are still to come.
+
+use std::sync::Mutex;
+
+use ferrocad_curves::{
+    Arc, Circle, CurveError, EdgeCurve, Line, LineSegment, Vector3, polygon,
+};
+use ferrocad_geom::Shape;
+use ferrocad_part::backend;
+use pyo3::create_exception;
+use pyo3::exceptions::{PyException, PyTypeError};
+use pyo3::prelude::*;
+use pyo3::types::{PyAny, PyModule};
+
+use crate::PartShape;
+
+create_exception!(
+    Part,
+    OCCError,
+    PyException,
+    "A Part geometry operation failed (upstream's `Part.OCCError`)."
+);
+
+/// Map a curve-construction failure to the Python exception.
+fn curve_error(error: CurveError) -> PyErr {
+    OCCError::new_err(error.to_string())
+}
+
+/// Map a kernel failure to the Python exception.
+fn kernel_error(error: ferrocad_geom::GeomError) -> PyErr {
+    OCCError::new_err(error.to_string())
+}
+
+/// Read a point from a `(x, y, z)` sequence or an object with `x`/`y`/`z`
+/// (`FreeCAD.Vector`, `ferrocad.Vector`).
+fn vector(value: &Bound<'_, PyAny>) -> PyResult<Vector3> {
+    if let Ok((x, y, z)) = value.extract::<(f64, f64, f64)>() {
+        return Ok(Vector3::new(x, y, z));
+    }
+    let x: f64 = value.getattr("x")?.extract()?;
+    let y: f64 = value.getattr("y")?.extract()?;
+    let z: f64 = value.getattr("z")?.extract()?;
+    Ok(Vector3::new(x, y, z))
+}
+
+/// A `ferrocad.Vector` from a [`Vector3`] (upstream returns `Base.Vector`).
+fn py_vector(py: Python<'_>, value: Vector3) -> PyResult<PyObject> {
+    let module = py.import("ferrocad")?;
+    Ok(module
+        .getattr("Vector")?
+        .call1((value.x, value.y, value.z))?
+        .unbind())
+}
+
+fn shape_from_curve(curve: &EdgeCurve) -> PyResult<Shape> {
+    backend().make_edge(curve).map_err(kernel_error)
+}
+
+fn curve_to_py(py: Python<'_>, curve: EdgeCurve) -> PyResult<PyObject> {
+    match curve {
+        EdgeCurve::Line(line) => Ok(Py::new(py, PyLine { curve: line })?.into_any()),
+        EdgeCurve::LineSegment(segment) => {
+            Ok(Py::new(py, PyLineSegment { curve: segment })?.into_any())
+        }
+        EdgeCurve::Circle(circle) => Ok(Py::new(py, PyCircle { curve: circle })?.into_any()),
+        EdgeCurve::Arc(arc) => Ok(Py::new(py, PyArcOfCircle { curve: arc })?.into_any()),
+        EdgeCurve::Ellipse(_) => Err(OCCError::new_err(
+            "Part.Ellipse is not implemented yet (the OCCT bindings expose no gp_Elips)",
+        )),
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Curves
+// ---------------------------------------------------------------------------
+
+/// `Part.LineSegment(start, end)` — a bounded straight segment.
+#[pyclass(name = "LineSegment", module = "Part")]
+#[derive(Clone)]
+pub struct PyLineSegment {
+    curve: LineSegment,
+}
+
+#[pymethods]
+impl PyLineSegment {
+    #[new]
+    fn new(start: &Bound<'_, PyAny>, end: &Bound<'_, PyAny>) -> PyResult<Self> {
+        let curve = LineSegment::new(vector(start)?, vector(end)?).map_err(curve_error)?;
+        Ok(Self { curve })
+    }
+
+    #[getter]
+    fn StartPoint(&self, py: Python<'_>) -> PyResult<PyObject> {
+        py_vector(py, self.curve.start())
+    }
+
+    #[getter]
+    fn EndPoint(&self, py: Python<'_>) -> PyResult<PyObject> {
+        py_vector(py, self.curve.end())
+    }
+
+    /// The segment as an edge (upstream's `toShape`, which returns a `Part.Edge`).
+    fn toShape(&self) -> PyResult<PyEdge> {
+        PyEdge::from_curve(EdgeCurve::LineSegment(self.curve))
+    }
+
+    fn __repr__(&self) -> String {
+        format!("Part.LineSegment({:?}, {:?})", self.curve.start(), self.curve.end())
+    }
+}
+
+/// `Part.Line(origin, direction)` — an infinite line.
+#[pyclass(name = "Line", module = "Part")]
+#[derive(Clone)]
+pub struct PyLine {
+    curve: Line,
+}
+
+#[pymethods]
+impl PyLine {
+    #[new]
+    fn new(origin: &Bound<'_, PyAny>, direction: &Bound<'_, PyAny>) -> PyResult<Self> {
+        let curve = Line::new(vector(origin)?, vector(direction)?).map_err(curve_error)?;
+        Ok(Self { curve })
+    }
+
+    #[getter]
+    fn Location(&self, py: Python<'_>) -> PyResult<PyObject> {
+        py_vector(py, self.curve.origin())
+    }
+
+    #[getter]
+    fn Direction(&self, py: Python<'_>) -> PyResult<PyObject> {
+        py_vector(py, self.curve.direction())
+    }
+
+    /// An infinite line has no bounded edge, as upstream's `GeomLine::toShape` is
+    /// documented around a parameter range.
+    fn toShape(&self) -> PyResult<PyEdge> {
+        Err(OCCError::new_err(
+            "an infinite Part.Line has no edge; use Part.LineSegment",
+        ))
+    }
+}
+
+/// `Part.Circle(center, normal, radius)` — a full circle.
+#[pyclass(name = "Circle", module = "Part")]
+#[derive(Clone)]
+pub struct PyCircle {
+    curve: Circle,
+}
+
+#[pymethods]
+impl PyCircle {
+    #[new]
+    #[pyo3(signature = (center = None, normal = None, radius = 1.0))]
+    fn new(
+        center: Option<&Bound<'_, PyAny>>,
+        normal: Option<&Bound<'_, PyAny>>,
+        radius: f64,
+    ) -> PyResult<Self> {
+        let center = center.map(vector).transpose()?.unwrap_or_else(Vector3::zero);
+        let normal = normal
+            .map(vector)
+            .transpose()?
+            .unwrap_or_else(|| Vector3::new(0.0, 0.0, 1.0));
+        let curve = Circle::new(center, normal, radius).map_err(curve_error)?;
+        Ok(Self { curve })
+    }
+
+    #[getter]
+    fn Center(&self, py: Python<'_>) -> PyResult<PyObject> {
+        py_vector(py, self.curve.center())
+    }
+
+    #[getter]
+    fn Axis(&self, py: Python<'_>) -> PyResult<PyObject> {
+        py_vector(py, self.curve.normal())
+    }
+
+    #[getter]
+    fn Radius(&self) -> f64 {
+        self.curve.radius()
+    }
+
+    fn toShape(&self) -> PyResult<PyEdge> {
+        PyEdge::from_curve(EdgeCurve::Circle(self.curve))
+    }
+}
+
+/// `Part.ArcOfCircle(circle, first, last)` — a circular arc (the `Part.Arc` alias).
+#[pyclass(name = "ArcOfCircle", module = "Part")]
+#[derive(Clone)]
+pub struct PyArcOfCircle {
+    curve: Arc,
+}
+
+#[pymethods]
+impl PyArcOfCircle {
+    #[new]
+    fn new(circle: &Bound<'_, PyAny>, first: f64, last: f64) -> PyResult<Self> {
+        let circle = circle.extract::<PyRef<PyCircle>>()?;
+        let curve = Arc::new(circle.curve, first, last).map_err(curve_error)?;
+        Ok(Self { curve })
+    }
+
+    #[getter]
+    fn Center(&self, py: Python<'_>) -> PyResult<PyObject> {
+        py_vector(py, self.curve.circle().center())
+    }
+
+    #[getter]
+    fn Radius(&self) -> f64 {
+        self.curve.circle().radius()
+    }
+
+    #[getter]
+    fn StartPoint(&self, py: Python<'_>) -> PyResult<PyObject> {
+        py_vector(py, self.curve.start())
+    }
+
+    #[getter]
+    fn EndPoint(&self, py: Python<'_>) -> PyResult<PyObject> {
+        py_vector(py, self.curve.end())
+    }
+
+    #[getter]
+    fn FirstParameter(&self) -> f64 {
+        self.curve.first()
+    }
+
+    #[getter]
+    fn LastParameter(&self) -> f64 {
+        self.curve.last()
+    }
+
+    fn toShape(&self) -> PyResult<PyEdge> {
+        PyEdge::from_curve(EdgeCurve::Arc(self.curve))
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Edges and wires
+// ---------------------------------------------------------------------------
+
+/// One edge: a kernel shape plus, when it was built from an analytic curve, that
+/// curve (so `Curve` can report the exact parameterisation).
+#[derive(Clone)]
+pub(crate) struct EdgeEntry {
+    pub(crate) shape: Shape,
+    pub(crate) curve: Option<EdgeCurve>,
+}
+
+/// `Part.Edge(shape_or_curve)` — an edge (upstream's `Part.Edge`).
+#[pyclass(name = "Edge", module = "Part")]
+pub struct PyEdge {
+    entry: Mutex<EdgeEntry>,
+}
+
+impl PyEdge {
+    pub(crate) fn from_entry(entry: EdgeEntry) -> Self {
+        Self {
+            entry: Mutex::new(entry),
+        }
+    }
+
+    /// A copy of the entry (the shape handle is cheap to clone).
+    pub(crate) fn entry(&self) -> EdgeEntry {
+        self.entry
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone()
+    }
+
+    /// The geometry behind a Python edge/curve object.
+    pub(crate) fn entry_from(value: &Bound<'_, PyAny>) -> PyResult<EdgeEntry> {
+        if let Ok(edge) = value.downcast::<PyEdge>() {
+            return Ok(edge.borrow().entry());
+        }
+        if let Ok(line) = value.downcast::<PyLineSegment>() {
+            let curve = EdgeCurve::LineSegment(line.borrow().curve);
+            return Ok(EdgeEntry {
+                shape: shape_from_curve(&curve)?,
+                curve: Some(curve),
+            });
+        }
+        if let Ok(circle) = value.downcast::<PyCircle>() {
+            let curve = EdgeCurve::Circle(circle.borrow().curve);
+            return Ok(EdgeEntry {
+                shape: shape_from_curve(&curve)?,
+                curve: Some(curve),
+            });
+        }
+        if let Ok(arc) = value.downcast::<PyArcOfCircle>() {
+            let curve = EdgeCurve::Arc(arc.borrow().curve);
+            return Ok(EdgeEntry {
+                shape: shape_from_curve(&curve)?,
+                curve: Some(curve),
+            });
+        }
+        if let Ok(shape) = value.downcast::<PartShape>() {
+            let inner = shape
+                .borrow()
+                .shape()
+                .ok_or_else(|| OCCError::new_err("a null shape cannot be an edge"))?;
+            return Ok(EdgeEntry {
+                shape: inner,
+                curve: None,
+            });
+        }
+        Err(PyTypeError::new_err(
+            "Part.Edge expects a Part.Edge, a curve, or a Part.Shape",
+        ))
+    }
+
+    /// An edge built from an analytic curve.
+    pub(crate) fn from_curve(curve: EdgeCurve) -> PyResult<Self> {
+        Ok(Self::from_entry(EdgeEntry {
+            shape: shape_from_curve(&curve)?,
+            curve: Some(curve),
+        }))
+    }
+}
+
+#[pymethods]
+impl PyEdge {
+    #[new]
+    fn new(value: &Bound<'_, PyAny>) -> PyResult<Self> {
+        Ok(Self::from_entry(Self::entry_from(value)?))
+    }
+
+    /// The analytic curve (`edge.Curve` upstream). `None` when the kernel cannot
+    /// classify it.
+    ///
+    /// The kernel's **basis** curve wins: a segment's edge reports a `Line`, as
+    /// upstream does. The stored analytic curve is the fallback for a shape the
+    /// kernel cannot classify.
+    #[getter]
+    fn Curve(&self, py: Python<'_>) -> PyResult<Option<PyObject>> {
+        let entry = self.entry();
+        match backend().curve_of(&entry.shape) {
+            Ok(curve) => Ok(Some(curve_to_py(py, curve)?)),
+            Err(_) => match entry.curve {
+                Some(curve) => Ok(Some(curve_to_py(py, curve)?)),
+                None => Ok(None),
+            },
+        }
+    }
+
+    /// The edge as a kernel shape.
+    fn toShape(&self) -> PartShape {
+        PartShape::from_shape(self.entry().shape)
+    }
+
+    fn isNull(&self) -> bool {
+        false
+    }
+
+    fn __repr__(&self) -> String {
+        "Part.Edge(...)".to_string()
+    }
+}
+
+/// `Part.Wire(edges)` — an ordered edge chain.
+#[pyclass(name = "Wire", module = "Part")]
+pub struct PyWire {
+    entries: Mutex<Vec<EdgeEntry>>,
+}
+
+impl PyWire {
+    fn entries(&self) -> std::sync::MutexGuard<'_, Vec<EdgeEntry>> {
+        self.entries.lock().unwrap_or_else(|e| e.into_inner())
+    }
+}
+
+#[pymethods]
+impl PyWire {
+    #[new]
+    fn new(edges: &Bound<'_, PyAny>) -> PyResult<Self> {
+        let mut entries = Vec::new();
+        for edge in edges.try_iter()? {
+            entries.push(PyEdge::entry_from(&edge?)?);
+        }
+        Ok(Self {
+            entries: Mutex::new(entries),
+        })
+    }
+
+    /// Append one edge/curve.
+    fn add(&self, edge: &Bound<'_, PyAny>) -> PyResult<()> {
+        self.entries().push(PyEdge::entry_from(edge)?);
+        Ok(())
+    }
+
+    #[getter]
+    fn Edges(&self, py: Python<'_>) -> PyResult<Vec<Py<PyEdge>>> {
+        self.entries()
+            .iter()
+            .map(|entry| Py::new(py, PyEdge::from_entry(entry.clone())))
+            .collect()
+    }
+
+    /// Whether the chain closes, judged from the analytic endpoints this slice
+    /// carries. A wire built only from shapes cannot answer (reported `False`).
+    fn isClosed(&self) -> bool {
+        let entries = self.entries();
+        let (Some(first), Some(last)) = (entries.first(), entries.last()) else {
+            return false;
+        };
+        let points = |curve: EdgeCurve| curve.endpoints();
+        match (first.curve.and_then(points), last.curve.and_then(points)) {
+            (Some((start, _)), Some((_, end))) => {
+                start.distance(&end) <= ferrocad_curves::TOLERANCE
+            }
+            _ => false,
+        }
+    }
+
+    /// The wire as a kernel shape (`BRepBuilderAPI_MakeWire`).
+    fn toShape(&self) -> PyResult<PartShape> {
+        let shapes: Vec<Shape> = self.entries().iter().map(|e| e.shape.clone()).collect();
+        if shapes.is_empty() {
+            return Err(OCCError::new_err("a wire needs at least one edge"));
+        }
+        let shape = backend().make_wire(&shapes).map_err(kernel_error)?;
+        Ok(PartShape::from_shape(shape))
+    }
+
+    fn __repr__(&self) -> String {
+        format!("Part.Wire({} edges)", self.entries().len())
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Module-level constructors
+// ---------------------------------------------------------------------------
+
+/// `Part.makeLine(p1, p2)` → an edge (Draft's `Part.makeLine`).
+#[pyfunction]
+fn makeLine(py: Python<'_>, p1: &Bound<'_, PyAny>, p2: &Bound<'_, PyAny>) -> PyResult<PyObject> {
+    let segment = LineSegment::new(vector(p1)?, vector(p2)?).map_err(curve_error)?;
+    Ok(Py::new(py, PyEdge::from_curve(EdgeCurve::LineSegment(segment))?)?.into_any())
+}
+
+/// `Part.makeCircle(radius, center=None, normal=None)` → an edge.
+#[pyfunction]
+#[pyo3(signature = (radius, center = None, normal = None))]
+fn makeCircle(
+    py: Python<'_>,
+    radius: f64,
+    center: Option<&Bound<'_, PyAny>>,
+    normal: Option<&Bound<'_, PyAny>>,
+) -> PyResult<PyObject> {
+    let center = center.map(vector).transpose()?.unwrap_or_else(Vector3::zero);
+    let normal = normal
+        .map(vector)
+        .transpose()?
+        .unwrap_or_else(|| Vector3::new(0.0, 0.0, 1.0));
+    let circle = Circle::new(center, normal, radius).map_err(curve_error)?;
+    Ok(Py::new(py, PyEdge::from_curve(EdgeCurve::Circle(circle))?)?.into_any())
+}
+
+/// `Part.makePolygon(points, closed=False)` → a `Part.Wire`.
+#[pyfunction]
+#[pyo3(signature = (points, closed = false))]
+fn makePolygon(points: &Bound<'_, PyAny>, closed: bool) -> PyResult<PyWire> {
+    let mut parsed = Vec::new();
+    for point in points.try_iter()? {
+        parsed.push(vector(&point?)?);
+    }
+    let edges = polygon(&parsed, closed).map_err(curve_error)?;
+    let mut entries = Vec::with_capacity(edges.len());
+    for curve in edges {
+        entries.push(EdgeEntry {
+            shape: shape_from_curve(&curve)?,
+            curve: Some(curve),
+        });
+    }
+    Ok(PyWire {
+        entries: Mutex::new(entries),
+    })
+}
+
+/// Register the analytic half on the `Part` module.
+pub(crate) fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
+    m.add_class::<PyLineSegment>()?;
+    m.add_class::<PyLine>()?;
+    m.add_class::<PyCircle>()?;
+    m.add_class::<PyArcOfCircle>()?;
+    m.add_class::<PyEdge>()?;
+    m.add_class::<PyWire>()?;
+    m.add_function(wrap_pyfunction!(makeLine, m)?)?;
+    m.add_function(wrap_pyfunction!(makeCircle, m)?)?;
+    m.add_function(wrap_pyfunction!(makePolygon, m)?)?;
+    m.add("OCCError", m.py().get_type::<OCCError>())?;
+    // Upstream offers both names for the same class.
+    let arc = m.getattr("ArcOfCircle")?;
+    m.add("Arc", arc)?;
+    Ok(())
+}

@@ -34,10 +34,12 @@
 
 #![allow(non_snake_case)]
 
+mod curves;
+
 use std::sync::{Arc, Mutex};
 
 use ferrocad_core::{ExtensionData, ExtensionValue};
-use ferrocad_geom::{Shape, TessellationOptions};
+use ferrocad_geom::{ElementKind, Shape, TessellationOptions};
 use ferrocad_occt::OcctBackend;
 use ferrocad_part::{ShapeProperty, TYPE_NAME};
 use pyo3::exceptions::{PyIOError, PyRuntimeError, PyValueError};
@@ -64,6 +66,25 @@ impl PartShape {
     /// A copy of the wrapped shape (shape handles are cheap to clone).
     fn shape(&self) -> Option<Shape> {
         self.shape.lock().unwrap().clone()
+    }
+
+    /// Wrap an existing kernel shape.
+    pub(crate) fn from_shape(shape: Shape) -> Self {
+        PartShape {
+            shape: Mutex::new(Some(shape)),
+        }
+    }
+
+    /// The sub-shapes of one kind, in the kernel's order.
+    fn sub_shapes(&self, kind: ElementKind) -> PyResult<Vec<Shape>> {
+        let shape = self
+            .shape()
+            .ok_or_else(|| PyValueError::new_err("a null shape has no sub-shapes"))?;
+        Ok(ferrocad_part::backend()
+            .elements(&shape, kind)
+            .into_iter()
+            .map(|element| element.shape)
+            .collect())
     }
 }
 
@@ -155,6 +176,41 @@ impl PartShape {
             None => "Part.Shape()".to_string(),
         }
     }
+
+    /// The edges (`Shape.Edges`) as `Part.Edge` wrappers.
+    #[getter]
+    fn Edges(&self, py: Python<'_>) -> PyResult<Vec<Py<curves::PyEdge>>> {
+        self.sub_shapes(ElementKind::Edge)?
+            .into_iter()
+            .map(|shape| {
+                Py::new(
+                    py,
+                    curves::PyEdge::from_entry(curves::EdgeEntry {
+                        shape,
+                        curve: None,
+                    }),
+                )
+            })
+            .collect()
+    }
+
+    /// The wires (`Shape.Wires`) as `Part.Shape` handles.
+    #[getter]
+    fn Wires(&self, py: Python<'_>) -> PyResult<Vec<Py<PartShape>>> {
+        self.sub_shapes(ElementKind::Wire)?
+            .into_iter()
+            .map(|shape| Py::new(py, PartShape::from_shape(shape)))
+            .collect()
+    }
+
+    /// The faces (`Shape.Faces`) as `Part.Shape` handles.
+    #[getter]
+    fn Faces(&self, py: Python<'_>) -> PyResult<Vec<Py<PartShape>>> {
+        self.sub_shapes(ElementKind::Face)?
+            .into_iter()
+            .map(|shape| Py::new(py, PartShape::from_shape(shape)))
+            .collect()
+    }
 }
 
 /// `Part.makeBox(length, width, height)` → a `Part.Shape`.
@@ -192,5 +248,6 @@ pub fn Part(m: &Bound<'_, PyModule>) -> PyResult<()> {
     ferrocad_py::register_extension_converter(TYPE_NAME, shape_to_py, shape_to_extension);
     m.add_class::<PartShape>()?;
     m.add_function(wrap_pyfunction!(makeBox, m)?)?;
+    curves::register(m)?;
     Ok(())
 }

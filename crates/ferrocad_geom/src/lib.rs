@@ -570,6 +570,14 @@ pub trait GeometryBackend: Send + Sync {
         Err(unsupported("make_edge"))
     }
 
+    /// Join edges into one wire (`Part.Wire`).
+    ///
+    /// The edges must be bounded and connect in order; a backend that cannot join
+    /// them reports the failure. The default reports the operation as unsupported.
+    fn make_wire(&self, _edges: &[Shape]) -> Result<Shape, GeomError> {
+        Err(unsupported("make_wire"))
+    }
+
     /// The analytic curve behind an edge (`edge.Curve` upstream).
     ///
     /// A bounded edge reports its **basis** curve: an edge built from a segment

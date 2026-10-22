@@ -156,3 +156,9 @@ inline rust::Vec<double> fc_edge_curve(const TopoDS_Shape& shape)
 
   return out;
 }
+
+// The edge view of a shape, for `BRepBuilderAPI_MakeWire::Add`.
+inline const TopoDS_Edge& fc_shape_as_edge(const TopoDS_Shape& shape)
+{
+  return TopoDS::Edge(shape);
+}

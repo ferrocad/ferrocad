@@ -2400,6 +2400,7 @@ name = "ferrocad_part_py"
 version = "0.1.2"
 dependencies = [
  "ferrocad_core",
+ "ferrocad_curves",
  "ferrocad_geom",
  "ferrocad_occt",
  "ferrocad_part",

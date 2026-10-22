@@ -37,6 +37,9 @@ mod ffi {
         /// major, minor]`).
         fn fc_edge_curve(shape: &TopoDS_Shape) -> Vec<f64>;
 
+        /// The edge view of a shape (`TopoDS::Edge`).
+        fn fc_shape_as_edge(shape: &TopoDS_Shape) -> &TopoDS_Edge;
+
         /// `TopTools_IndexedMapOfShape::FindIndex`, which the crate does not bridge.
         fn fc_indexed_map_find_index(
             map: &TopTools_IndexedMapOfShape,

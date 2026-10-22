@@ -102,6 +102,25 @@ impl GeometryBackend for OcctBackend {
         }
     }
 
+    fn make_wire(&self, edges: &[Shape]) -> Result<Shape, GeomError> {
+        let mut make = ffi::b_rep_builder_api::BRepBuilderAPI_MakeWire_new();
+        for edge in edges {
+            let occt = downcast(edge)?;
+            let guard = occt.borrow();
+            let inner = guard
+                .as_ref()
+                .ok_or(OcctError::InvalidInput { what: "null edge" })?;
+            make.pin_mut().add_edge(bridge::fc_shape_as_edge(inner));
+        }
+        if !make.IsDone() {
+            return Err(OcctError::NotDone {
+                operation: "make_wire",
+            }
+            .into());
+        }
+        Ok(erase(ffi::topo_ds::cast_wire_to_shape(make.pin_mut().Wire())))
+    }
+
     fn curve_of(&self, shape: &Shape) -> Result<EdgeCurve, GeomError> {
         let occt = downcast(shape)?;
         let guard = occt.borrow();

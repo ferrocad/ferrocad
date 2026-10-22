@@ -18,16 +18,30 @@
 // or the ellipse major radius; `minor` the ellipse minor radius (unused for a
 // circle). On kind 0 every other value is 0.
 
+#include <BOPAlgo_BuilderFace.hxx>
 #include <BRepAlgoAPI_BuilderAlgo.hxx>
+#include <BRepBuilderAPI_Copy.hxx>
+#include <BRepBuilderAPI_MakeEdge.hxx>
 #include <BRepBuilderAPI_MakeFace.hxx>
 #include <BRepFill_Filling.hxx>
+#include <BRepLib.hxx>
+#include <BRepLib_FindSurface.hxx>
+#include <Bnd_Box.hxx>
+#include <BRepBndLib.hxx>
+#include <BRepGProp.hxx>
 #include <BRep_Builder.hxx>
-#include <ShapeAnalysis_FreeBounds.hxx>
-#include <TopTools_HSequenceOfShape.hxx>
 #include <TopoDS_CompSolid.hxx>
 #include <TopoDS_Compound.hxx>
 #include <BRep_Tool.hxx>
+#include <Geom2dAPI_InterCurveCurve.hxx>
+#include <Geom2dAPI_ProjectPointOnCurve.hxx>
+#include <Geom2d_Curve.hxx>
+#include <GeomAPI.hxx>
+#include <GeomAdaptor_Surface.hxx>
 #include <Geom_BSplineCurve.hxx>
+#include <Geom_Conic.hxx>
+#include <GProp_GProps.hxx>
+#include <Precision.hxx>
 #include <TColStd_Array1OfInteger.hxx>
 #include <TColStd_Array1OfReal.hxx>
 #include <TColgp_Array1OfPnt.hxx>
@@ -38,6 +52,7 @@
 #include <Geom_Line.hxx>
 #include <Geom_TrimmedCurve.hxx>
 #include <Standard_Type.hxx>
+#include <gp_Pln.hxx>
 #include <TopoDS.hxx>
 #include <TopoDS_Edge.hxx>
 #include <TopoDS_Face.hxx>
@@ -56,7 +71,10 @@
 #include <gp_Pnt.hxx>
 #include <gp_Trsf.hxx>
 
+#include <algorithm>
+#include <cmath>
 #include <memory>
+#include <vector>
 
 #include "rust/cxx.h"
 
@@ -325,61 +343,271 @@ inline std::unique_ptr<TopoDS_Shape> fc_general_fuse(const TopTools_ListOfShape&
   }
 }
 
+// The plane containing every edge, or false when they do not lie on one.
+// `BRepLib_FindSurface` is fed copies because an edge's cached surface can
+// mislead it (the same trick as `FaceMakerBuildFace::findPlane` upstream).
+inline bool fc_curve_find_plane(const TopTools_ListOfShape& edges, gp_Pln& plane)
+{
+  if (edges.IsEmpty()) {
+    return false;
+  }
+  try {
+    BRep_Builder builder;
+    TopoDS_Compound compound;
+    builder.MakeCompound(compound);
+    for (TopTools_ListIteratorOfListOfShape it(edges); it.More(); it.Next()) {
+      builder.Add(compound, BRepBuilderAPI_Copy(it.Value()).Shape());
+    }
+    BRepLib_FindSurface finder(compound, -1, Standard_True);
+    if (!finder.Found() || finder.Surface().IsNull()) {
+      return false;
+    }
+    plane = GeomAdaptor_Surface(finder.Surface()).Plane();
+    return true;
+  }
+  catch (...) {
+    return false;
+  }
+}
+
+// Split each edge at the points where it crosses itself. The graph splitter
+// below only sees intersections between different edges, so a figure-eight
+// B-spline (one closed edge crossing itself) needs this projection pass first.
+// Fragments are appended in order; an edge that cannot be handled is kept whole.
+inline void fc_curve_split_self_intersecting(const TopTools_ListOfShape& edges,
+                                             const gp_Pln& plane,
+                                             TopTools_ListOfShape& out)
+{
+  const Standard_Real tol = Precision::Confusion();
+  for (TopTools_ListIteratorOfListOfShape it(edges); it.More(); it.Next()) {
+    const TopoDS_Edge& edge = TopoDS::Edge(it.Value());
+    try {
+      Standard_Real first = 0.0;
+      Standard_Real last = 0.0;
+      Handle(Geom_Curve) curve = BRep_Tool::Curve(edge, first, last);
+      // Lines and conics never cross themselves, so skip the costly projection.
+      if (curve.IsNull() || curve->IsKind(STANDARD_TYPE(Geom_Line))
+          || curve->IsKind(STANDARD_TYPE(Geom_Conic))) {
+        out.Append(edge);
+        continue;
+      }
+      if (curve->IsKind(STANDARD_TYPE(Geom_TrimmedCurve))) {
+        Handle(Geom_TrimmedCurve) trimmed = Handle(Geom_TrimmedCurve)::DownCast(curve);
+        if (!trimmed.IsNull()) {
+          first = trimmed->FirstParameter();
+          last = trimmed->LastParameter();
+          curve = trimmed->BasisCurve();
+        }
+      }
+      Handle(Geom2d_Curve) curve2d = GeomAPI::To2d(curve, plane);
+      if (curve2d.IsNull()) {
+        out.Append(edge);
+        continue;
+      }
+      Geom2dAPI_InterCurveCurve self_intersection(curve2d, tol);
+      if (self_intersection.NbPoints() == 0) {
+        out.Append(edge);
+        continue;
+      }
+      std::vector<Standard_Real> params;
+      for (Standard_Integer i = 1; i <= self_intersection.NbPoints(); ++i) {
+        Geom2dAPI_ProjectPointOnCurve projection(self_intersection.Point(i), curve2d, first, last);
+        for (Standard_Integer j = 1; j <= projection.NbPoints(); ++j) {
+          const Standard_Real param = projection.Parameter(j);
+          if (param - first > tol && last - param > tol) {
+            params.push_back(param);
+          }
+        }
+      }
+      if (params.empty()) {
+        out.Append(edge);
+        continue;
+      }
+      std::sort(params.begin(), params.end());
+      params.erase(std::unique(params.begin(), params.end(),
+                               [tol](double a, double b) { return b - a < tol; }),
+                   params.end());
+
+      TopTools_ListOfShape fragments;
+      Standard_Real previous = first;
+      for (const Standard_Real param : params) {
+        if (param - previous > tol) {
+          BRepBuilderAPI_MakeEdge make(curve, previous, param);
+          if (make.IsDone()) {
+            fragments.Append(make.Edge());
+          }
+          previous = param;
+        }
+      }
+      if (last - previous > tol) {
+        BRepBuilderAPI_MakeEdge make(curve, previous, last);
+        if (make.IsDone()) {
+          fragments.Append(make.Edge());
+        }
+      }
+      if (fragments.IsEmpty()) {
+        out.Append(edge);
+        continue;
+      }
+      for (TopTools_ListIteratorOfListOfShape fragment(fragments); fragment.More();
+           fragment.Next()) {
+        out.Append(fragment.Value());
+      }
+    }
+    catch (...) {
+      out.Append(edge);
+    }
+  }
+}
+
+// Split the edges against each other at their intersections. Passing the
+// exploded edges (rather than the wire) is what lets General Fuse see where two
+// edges cross; on failure the input is returned unchanged.
+inline void fc_curve_split_at_intersections(const TopTools_ListOfShape& edges,
+                                            TopTools_ListOfShape& out)
+{
+  if (edges.Extent() <= 1) {
+    out = edges;
+    return;
+  }
+  try {
+    BRepAlgoAPI_BuilderAlgo splitter;
+    splitter.SetArguments(edges);
+    splitter.SetNonDestructive(Standard_True);
+    splitter.Build();
+    if (!splitter.IsDone() || splitter.Shape().IsNull()) {
+      out = edges;
+      return;
+    }
+    for (TopExp_Explorer edge(splitter.Shape(), TopAbs_EDGE); edge.More(); edge.Next()) {
+      out.Append(edge.Current());
+    }
+    if (out.IsEmpty()) {
+      out = edges;
+    }
+  }
+  catch (...) {
+    out = edges;
+  }
+}
+
+// Build the bounded regions the edges enclose inside `plane`.
+// `BOPAlgo_BuilderFace` finds every region regardless of how the loops meet,
+// which is what a self-intersecting boundary needs. Returns false when no
+// region is bounded (open or non-planar boundaries).
+inline bool fc_curve_collect_bounded_faces(const TopTools_ListOfShape& edges,
+                                           const gp_Pln& plane,
+                                           std::vector<TopoDS_Face>& faces)
+{
+  if (edges.IsEmpty()) {
+    return false;
+  }
+  try {
+    Bnd_Box box;
+    for (TopTools_ListIteratorOfListOfShape it(edges); it.More(); it.Next()) {
+      BRepBndLib::Add(it.Value(), box);
+    }
+    // The base face must enclose the geometry so the unbounded exterior is one
+    // huge region that can be discarded by its extent below.
+    const Standard_Real extent =
+        std::max(1.0e8, 10.0 * std::sqrt(std::max(0.0, box.SquareExtent())));
+    BRepBuilderAPI_MakeFace make(plane, -extent, extent, -extent, extent);
+    if (!make.IsDone() || make.Face().IsNull()) {
+      return false;
+    }
+    TopoDS_Face base = make.Face();
+    base.Orientation(TopAbs_FORWARD);
+
+    TopTools_ListOfShape face_edges;
+    for (TopTools_ListIteratorOfListOfShape it(edges); it.More(); it.Next()) {
+      const TopoDS_Edge& edge = TopoDS::Edge(it.Value());
+      face_edges.Append(edge.Oriented(TopAbs_FORWARD));
+      face_edges.Append(edge.Oriented(TopAbs_REVERSED));
+    }
+    BRepLib::BuildPCurveForEdgesOnPlane(face_edges, base);
+
+    BOPAlgo_BuilderFace builder;
+    builder.SetFace(base);
+    builder.SetShapes(face_edges);
+    // Dangling edges would otherwise become internal wires that produce
+    // degenerate regions when the face is extruded.
+    builder.SetAvoidInternalShapes(Standard_True);
+    builder.Perform();
+    if (builder.HasErrors()) {
+      return false;
+    }
+
+    const Standard_Real outer_threshold = extent * extent;
+    for (TopTools_ListIteratorOfListOfShape it(builder.Areas()); it.More(); it.Next()) {
+      Bnd_Box face_box;
+      BRepBndLib::Add(it.Value(), face_box);
+      if (face_box.SquareExtent() > outer_threshold) {
+        continue;
+      }
+      GProp_GProps props;
+      BRepGProp::SurfaceProperties(it.Value(), props);
+      if (props.Mass() < Precision::Confusion()) {
+        continue;
+      }
+      faces.push_back(TopoDS::Face(it.Value()));
+    }
+    return !faces.empty();
+  }
+  catch (...) {
+    return false;
+  }
+}
+
 // Split one (possibly self-intersecting) wire at its self-intersections and
-// build a planar face for every closed loop. Returns a compound of faces, or a
-// null shape when no loop yields a planar face.
+// build a planar face for every bounded region. Returns a compound of faces, or
+// a null shape when the wire bounds no planar region.
 inline std::unique_ptr<TopoDS_Shape> fc_split_wire_into_faces(const TopoDS_Shape& wire)
 {
   if (wire.IsNull() || wire.ShapeType() != TopAbs_WIRE) {
     return nullptr;
   }
   try {
-    // Splitting the wire against itself breaks a self-intersecting boundary
-    // (figure-eights, crossing edges, self-intersecting B-splines) into simple
-    // edges.
-    BRepAlgoAPI_BuilderAlgo builder;
-    TopTools_ListOfShape arguments;
-    arguments.Append(wire);
-    builder.SetArguments(arguments);
-    builder.SetNonDestructive(Standard_True);
-    builder.Build();
-    if (!builder.IsDone()) {
+    // Work on a private copy: building pcurves below attaches them to edges'
+    // shared TShapes, and this helper falls back to the caller's wire when it
+    // finds no region. Copying the whole wire keeps the edges connected to each
+    // other while isolating them from the caller.
+    TopoDS_Shape source = BRepBuilderAPI_Copy(wire).Shape();
+    if (source.IsNull()) {
+      source = wire;
+    }
+    TopTools_ListOfShape edges;
+    for (TopExp_Explorer edge(source, TopAbs_EDGE); edge.More(); edge.Next()) {
+      edges.Append(edge.Current());
+    }
+    if (edges.IsEmpty()) {
       return nullptr;
     }
 
-    Handle(TopTools_HSequenceOfShape) edges = new TopTools_HSequenceOfShape();
-    for (TopExp_Explorer edge(builder.Shape(), TopAbs_EDGE); edge.More(); edge.Next()) {
-      edges->Append(edge.Current());
-    }
-    if (edges->IsEmpty()) {
+    gp_Pln plane;
+    if (!fc_curve_find_plane(edges, plane)) {
       return nullptr;
     }
 
-    Handle(TopTools_HSequenceOfShape) loops = new TopTools_HSequenceOfShape();
-    ShapeAnalysis_FreeBounds::ConnectEdgesToWires(edges, 1e-7, Standard_False, loops);
-    if (loops.IsNull() || loops->IsEmpty()) {
+    // A single edge may cross itself (figure-eight B-spline); split that first,
+    // then split the fragments against each other (crossing edges, figure-eight
+    // polygons).
+    TopTools_ListOfShape self_split;
+    fc_curve_split_self_intersecting(edges, plane, self_split);
+    TopTools_ListOfShape split;
+    fc_curve_split_at_intersections(self_split, split);
+
+    std::vector<TopoDS_Face> faces;
+    if (!fc_curve_collect_bounded_faces(split, plane, faces)) {
       return nullptr;
     }
 
-    TopoDS_Compound faces;
-    BRep_Builder compound_builder;
-    compound_builder.MakeCompound(faces);
-    Standard_Integer count = 0;
-    for (Standard_Integer i = 1; i <= loops->Length(); ++i) {
-      const TopoDS_Shape& loop = loops->Value(i);
-      if (loop.ShapeType() != TopAbs_WIRE) {
-        continue;
-      }
-      BRepBuilderAPI_MakeFace make(TopoDS::Wire(loop), Standard_True);
-      if (make.IsDone() && !make.Face().IsNull()) {
-        compound_builder.Add(faces, make.Face());
-        ++count;
-      }
+    TopoDS_Compound compound;
+    BRep_Builder builder;
+    builder.MakeCompound(compound);
+    for (const TopoDS_Face& face : faces) {
+      builder.Add(compound, face);
     }
-    if (count == 0) {
-      return nullptr;
-    }
-    return std::unique_ptr<TopoDS_Shape>(new TopoDS_Shape(faces));
+    return std::unique_ptr<TopoDS_Shape>(new TopoDS_Shape(compound));
   }
   catch (...) {
     return nullptr;

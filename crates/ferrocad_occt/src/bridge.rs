@@ -50,10 +50,14 @@ mod ffi {
         /// The wire view of a shape (`TopoDS::Wire`).
         fn fc_shape_as_wire(shape: &TopoDS_Shape) -> &TopoDS_Wire;
 
+        /// The face view of a shape (`TopoDS::Face`).
+        fn fc_shape_as_face(shape: &TopoDS_Shape) -> &TopoDS_Face;
+
         /// Shape-type guards (the cast would otherwise throw).
         fn fc_is_edge(shape: &TopoDS_Shape) -> bool;
         fn fc_is_wire(shape: &TopoDS_Shape) -> bool;
         fn fc_is_vertex(shape: &TopoDS_Shape) -> bool;
+        fn fc_is_face(shape: &TopoDS_Shape) -> bool;
 
         /// A filled face through the boundary wires, or null on failure.
         fn fc_fill_wires(wires: &TopTools_ListOfShape) -> UniquePtr<TopoDS_Shape>;

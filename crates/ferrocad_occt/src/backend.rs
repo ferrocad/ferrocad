@@ -377,6 +377,17 @@ impl GeometryBackend for OcctBackend {
                 faces.push(erase(ffi::topo_ds::cast_face_to_shape(make.Face())));
                 continue;
             }
+            // A boundary lying on an existing surface (for example a cylinder's
+            // lateral wire) can still build a face when the builder is allowed
+            // to find that surface.
+            let make_any = ffi::b_rep_builder_api::BRepBuilderAPI_MakeFace_wire(
+                bridge::fc_shape_as_wire(inner),
+                false,
+            );
+            if make_any.IsDone() {
+                faces.push(erase(ffi::topo_ds::cast_face_to_shape(make_any.Face())));
+                continue;
+            }
 
             let mut list = ffi::top_tools::new_list_of_shape();
             let _ = list.pin_mut().Append(inner);
@@ -587,6 +598,40 @@ impl GeometryBackend for OcctBackend {
             1 => Ok(faces.remove(0)),
             _ => self.make_compound(&faces),
         }
+    }
+
+    fn surface_type(&self, shape: &Shape) -> Option<String> {
+        let occt = downcast(shape).ok()?;
+        let guard = occt.borrow();
+        let inner = guard.as_ref()?;
+        if !bridge::fc_is_face(inner) {
+            return None;
+        }
+        let surface = ffi::b_rep::BRep_Tool_Surface(bridge::fc_shape_as_face(inner));
+        let name = ffi::standard::type_name(ffi::geom::DynamicType(surface.as_ref()?));
+        Some(
+            match name.as_str() {
+                "Geom_Plane" => "Part::GeomPlane",
+                "Geom_CylindricalSurface" => "Part::GeomCylinder",
+                "Geom_ConicalSurface" => "Part::GeomCone",
+                "Geom_SphericalSurface" => "Part::GeomSphere",
+                "Geom_ToroidalSurface" => "Part::GeomToroid",
+                "Geom_BSplineSurface" => "Part::GeomBSplineSurface",
+                _ => "Part::GeomSurface",
+            }
+            .to_string(),
+        )
+    }
+
+    fn outer_wire(&self, shape: &Shape) -> Option<Shape> {
+        let occt = downcast(shape).ok()?;
+        let guard = occt.borrow();
+        let inner = guard.as_ref()?;
+        if !bridge::fc_is_face(inner) {
+            return None;
+        }
+        let wire = ffi::b_rep_tools::outer_wire(bridge::fc_shape_as_face(inner));
+        Some(erase(ffi::topo_ds::cast_wire_to_shape(wire.as_ref()?)))
     }
 
     fn curve_of(&self, shape: &Shape) -> Result<EdgeCurve, GeomError> {

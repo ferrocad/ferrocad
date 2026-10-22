@@ -96,7 +96,7 @@ impl PartShape {
     }
 
     /// The sub-shapes of one kind, in the kernel's order.
-    fn sub_shapes(&self, kind: ElementKind) -> PyResult<Vec<Shape>> {
+    pub(crate) fn sub_shapes(&self, kind: ElementKind) -> PyResult<Vec<Shape>> {
         let shape = self
             .shape()
             .ok_or_else(|| PyValueError::new_err("a null shape has no sub-shapes"))?;
@@ -383,6 +383,27 @@ impl PartShape {
             .into_iter()
             .map(|shape| Py::new(py, curves::PyVertex::from_shape(shape)?))
             .collect()
+    }
+
+    /// The backing surface (`Face.Surface`), when the shape is a face.
+    #[getter]
+    fn Surface(&self) -> Option<curves::PySurface> {
+        let shape = self.shape()?;
+        ferrocad_part::backend()
+            .surface_type(&shape)
+            .map(curves::PySurface::new)
+    }
+
+    /// The outer boundary of a face (`Face.OuterWire`).
+    #[getter]
+    fn OuterWire(&self, py: Python<'_>) -> PyResult<Option<Py<curves::PyWire>>> {
+        let Some(shape) = self.shape() else {
+            return Ok(None);
+        };
+        match ferrocad_part::backend().outer_wire(&shape) {
+            Some(wire) => Ok(Some(Py::new(py, curves::PyWire::from_shape(wire))?)),
+            None => Ok(None),
+        }
     }
 
     /// The axis-aligned bounds as a `ferrocad.BoundBox` (`Shape.BoundBox`).

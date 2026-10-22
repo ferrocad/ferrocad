@@ -658,6 +658,16 @@ pub trait GeometryBackend: Send + Sync {
         Err(unsupported("make_faces"))
     }
 
+    /// The backing surface's FreeCAD type id (`Face.Surface.TypeId`).
+    fn surface_type(&self, _shape: &Shape) -> Option<String> {
+        None
+    }
+
+    /// The outer boundary wire of a face (`Face.OuterWire`).
+    fn outer_wire(&self, _shape: &Shape) -> Option<Shape> {
+        None
+    }
+
     /// The analytic curve behind an edge (`edge.Curve` upstream).
     ///
     /// A bounded edge reports its **basis** curve: an edge built from a segment

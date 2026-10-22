@@ -16,7 +16,7 @@ use std::sync::Mutex;
 use ferrocad_curves::{
     Arc, Circle, CurveError, EdgeCurve, Line, LineSegment, Vector3, polygon,
 };
-use ferrocad_geom::Shape;
+use ferrocad_geom::{ElementKind, Shape};
 use ferrocad_part::backend;
 use pyo3::create_exception;
 use pyo3::exceptions::{PyException, PyTypeError};
@@ -247,6 +247,31 @@ impl PyArcOfCircle {
 
     fn toShape(&self, py: Python<'_>) -> PyResult<Py<PyEdge>> {
         Py::new(py, PyEdge::from_curve(EdgeCurve::Arc(self.curve))?)
+    }
+}
+
+/// The backing surface of a face (`Face.Surface`). Only `TypeId` is carried in
+/// this slice; geometry-specific properties come later.
+#[pyclass(name = "GeomSurface", module = "Part")]
+pub struct PySurface {
+    type_id: String,
+}
+
+impl PySurface {
+    pub(crate) fn new(type_id: String) -> Self {
+        Self { type_id }
+    }
+}
+
+#[pymethods]
+impl PySurface {
+    #[getter]
+    fn TypeId(&self) -> String {
+        self.type_id.clone()
+    }
+
+    fn __repr__(&self) -> String {
+        format!("Part.{}()", self.type_id.trim_start_matches("Part::"))
     }
 }
 
@@ -495,6 +520,13 @@ impl PyWire {
         self.entries.lock().unwrap_or_else(|e| e.into_inner())
     }
 
+    /// Wrap an existing wire shape (`Face.OuterWire`), with no analytic entries.
+    pub(crate) fn from_shape(shape: Shape) -> PyClassInitializer<Self> {
+        PyClassInitializer::from(PartShape::from_shape(shape)).add_subclass(Self {
+            entries: Mutex::new(Vec::new()),
+        })
+    }
+
     /// A wire whose base shape is built eagerly, so `Part.Wire` really is a
     /// `Part.Shape` (upstream builds the B-Rep wire on construction too).
     fn initializer(entries: Vec<EdgeEntry>) -> PyResult<PyClassInitializer<Self>> {
@@ -550,10 +582,28 @@ impl PyWire {
     }
 
     #[getter]
-    fn Edges(&self, py: Python<'_>) -> PyResult<Vec<Py<PyEdge>>> {
-        self.entries()
-            .iter()
-            .map(|entry| Py::new(py, PyEdge::from_entry(entry.clone())))
+    fn Edges(slf: PyRef<'_, Self>, py: Python<'_>) -> PyResult<Vec<Py<PyEdge>>> {
+        let entries = slf.entries();
+        if !entries.is_empty() {
+            return entries
+                .iter()
+                .map(|entry| Py::new(py, PyEdge::from_entry(entry.clone())))
+                .collect();
+        }
+        // A wire wrapped from a kernel shape (for example `Face.OuterWire`) has
+        // no analytic entries; read its edges from the B-Rep instead.
+        slf.as_super()
+            .sub_shapes(ElementKind::Edge)?
+            .into_iter()
+            .map(|shape| {
+                Py::new(
+                    py,
+                    PyEdge::from_entry(EdgeEntry {
+                        shape,
+                        curve: None,
+                    }),
+                )
+            })
             .collect()
     }
 

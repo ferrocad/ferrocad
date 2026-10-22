@@ -149,6 +149,32 @@ fn unified_faces_split_overlapping_circles() {
 }
 
 #[test]
+fn faces_expose_their_surface_and_outer_wire() {
+    boot();
+    Python::with_gil(|py| {
+        let part = PyModule::import(py, "Part").expect("import Part");
+        let cylinder = part.call_method1("makeCylinder", (10.0, 20.0)).expect("cylinder");
+        let faces = cylinder.getattr("Faces").expect("Faces");
+        let count = faces.len().unwrap();
+        let mut lateral = None;
+        for index in 0..count {
+            let face = faces.get_item(index).unwrap();
+            let surface = face.getattr("Surface").expect("Face.Surface");
+            if surface.getattr("TypeId").unwrap().extract::<String>().unwrap()
+                == "Part::GeomCylinder"
+            {
+                lateral = Some(face);
+                break;
+            }
+        }
+        let lateral = lateral.expect("a cylindrical face");
+        let outer = lateral.getattr("OuterWire").expect("Face.OuterWire");
+        assert!(outer.getattr("Edges").unwrap().len().unwrap() > 0);
+        assert!(outer.is_instance(&part.getattr("Wire").unwrap()).unwrap());
+    });
+}
+
+#[test]
 fn comp_solids_and_shape_placement() {
     boot();
     Python::with_gil(|py| {

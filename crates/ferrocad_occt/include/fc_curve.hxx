@@ -40,6 +40,7 @@
 #include <Standard_Type.hxx>
 #include <TopoDS.hxx>
 #include <TopoDS_Edge.hxx>
+#include <TopoDS_Face.hxx>
 #include <TopoDS_Shape.hxx>
 #include <TopoDS_Vertex.hxx>
 #include <TopExp_Explorer.hxx>
@@ -184,6 +185,12 @@ inline const TopoDS_Edge& fc_shape_as_edge(const TopoDS_Shape& shape)
   return TopoDS::Edge(shape);
 }
 
+// The face view of a shape, for `BRep_Tool::Surface` and `BRepTools::OuterWire`.
+inline const TopoDS_Face& fc_shape_as_face(const TopoDS_Shape& shape)
+{
+  return TopoDS::Face(shape);
+}
+
 // The vertex/wire views, for `BRep_Tool::Pnt` and `BRepBuilderAPI_MakeFace`.
 inline const TopoDS_Vertex& fc_shape_as_vertex(const TopoDS_Shape& shape)
 {
@@ -210,6 +217,11 @@ inline bool fc_is_wire(const TopoDS_Shape& shape)
 inline bool fc_is_vertex(const TopoDS_Shape& shape)
 {
   return !shape.IsNull() && shape.ShapeType() == TopAbs_VERTEX;
+}
+
+inline bool fc_is_face(const TopoDS_Shape& shape)
+{
+  return !shape.IsNull() && shape.ShapeType() == TopAbs_FACE;
 }
 
 // A copy of `shape` with reversed orientation (a hole wire is opposite to its

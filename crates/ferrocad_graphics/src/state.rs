@@ -283,6 +283,12 @@ pub struct StateSnapshot {
     pub world_transform: Matrix4,
     /// Linear RGBA colour.
     pub color: [f32; 4],
+    /// The side/down-facing linear RGBA colour for a two-tone surface.
+    ///
+    /// Alpha `0` means "single colour": the shader uses [`color`](Self::color) for
+    /// every facet. A non-zero alpha makes an up-facing facet use `color` (the
+    /// glass-top token) and every other facet use this (the glass-shade token).
+    pub shade: [f32; 4],
     /// Depth bias applied before rasterisation.
     pub depth_bias: f32,
     /// The texture to sample, if any (multiplied into the colour).
@@ -310,6 +316,7 @@ impl Default for StateSnapshot {
         Self {
             world_transform: Matrix4::identity(),
             color: [1.0, 1.0, 1.0, 1.0],
+            shade: [0.0; 4],
             depth_bias: 0.0,
             texture: None,
             id: PickId::default(),

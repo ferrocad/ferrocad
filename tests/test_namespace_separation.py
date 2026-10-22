@@ -6,12 +6,20 @@
 * ``FerroCAD``/``FerroCADGui`` carry everything FerroCAD adds;
 * there are no aliases, so a name lives in exactly one of the two.
 
-This module asserts that in both directions, and then proves a command still
-round-trips through the shell so the move did not break the host bridge.
+The same split covers resource keys: a FerroCAD extension to `GetResources`
+carries the `FerroCAD_` prefix (`FerroCAD_Surface`, `FerroCAD_Parent`), and a
+bare `Surface`/`Parent` would be a name in the upstream namespace.
+
+This module asserts the boundary in both directions, audits the resource keys
+of every registered command and of every `mods/*/InitGui.py`, and then proves a
+command still round-trips through the shell so the move did not break the host
+bridge.
 """
 
 import json
+import re
 import unittest
+from pathlib import Path
 
 import FreeCAD
 import FreeCADGui
@@ -19,6 +27,17 @@ import FerroCAD
 import FerroCADGui
 import ferrocad_shell  # noqa: F401  (registers the built-in commands)
 import ferrocad_toy  # noqa: F401  (registers the toy commands and hooks)
+
+#: The repository root and the mods the shell loads at boot.
+ROOT = Path(__file__).resolve().parents[1]
+MODS_DIR = ROOT / "mods"
+
+#: Resource keys that are FerroCAD extensions, and their bare (pre-move) spelling.
+EXTENSION_RESOURCE_KEYS = ("FerroCAD_Surface", "FerroCAD_Parent")
+BARE_RESOURCE_KEYS = ("Surface", "Parent")
+
+#: A string literal used as a dict key, in either quote style.
+DICT_KEY = re.compile(r"""["'](Surface|Parent)["']\s*:""")
 
 #: Names that moved ``FreeCAD`` -> ``FerroCAD``.
 MOVED_FROM_FREECAD = (
@@ -125,6 +144,80 @@ class NamespaceSeparationTests(unittest.TestCase):
                             "%s lost the upstream-shaped name %r"
                             % (namespace.__name__, name)
                         )
+
+    def test_registered_commands_namespace_their_extension_resources(self):
+        """Every `GetResources()` uses the prefixed keys, never the bare ones.
+
+        The commands come from `ferrocad_shell` and `ferrocad_toy`, so this
+        covers the host's own command surface as well as a mod that ships in
+        this tree. A raising `GetResources` is treated as `{}`, exactly as the
+        facade does, because the shell never sees those keys either.
+        """
+        self.assertTrue(
+            FreeCADGui._COMMANDS,
+            "ferrocad_shell/ferrocad_toy registered no commands to audit",
+        )
+        audited = 0
+        annotated = 0
+        for name, command in sorted(FreeCADGui._COMMANDS.items()):
+            get = getattr(command, "GetResources", None)
+            if get is None:
+                continue
+            try:
+                resources = get()
+            except Exception:  # noqa: BLE001 - the facade reports and returns {}
+                continue
+            if not isinstance(resources, dict):
+                continue
+            audited += 1
+            if "FerroCAD_Surface" in resources:
+                annotated += 1
+            with self.subTest(command=name):
+                for bare in BARE_RESOURCE_KEYS:
+                    self.assertNotIn(
+                        bare,
+                        resources,
+                        "%s declares the bare resource key %r; use %r"
+                        % (name, bare, "FerroCAD_" + bare),
+                    )
+                for prefixed in EXTENSION_RESOURCE_KEYS:
+                    if prefixed in resources:
+                        self.assertTrue(
+                            isinstance(resources[prefixed], str),
+                            "%s: %s must be a string" % (name, prefixed),
+                        )
+        self.assertGreater(audited, 0, "no command exposed a GetResources() to audit")
+        self.assertGreater(
+            annotated,
+            0,
+            "no command declares FerroCAD_Surface; the prefixed surface key is "
+            "the extension's only spelling",
+        )
+
+    def test_mod_entry_points_never_use_bare_resource_keys(self):
+        """The mods are not imported by this suite, so scan their sources.
+
+        `mods/*/InitGui.py` is the only place a mod declares `GetResources`
+        metadata, and the loader may not run in every test environment. A bare
+        `"Surface"`/`"Parent"` key here would land in the upstream namespace,
+        which is exactly the drift this boundary forbids.
+        """
+        entry_points = sorted(MODS_DIR.glob("*/InitGui.py"))
+        self.assertTrue(
+            entry_points,
+            "no mod entry points found under %s" % MODS_DIR,
+        )
+        for path in entry_points:
+            with self.subTest(mod=path.parent.name):
+                source = path.read_text(encoding="utf-8")
+                bare = sorted(set(DICT_KEY.findall(source)))
+                self.assertEqual(
+                    bare,
+                    [],
+                    "%s declares bare resource key(s) %s; use FerroCAD_Surface/"
+                    "FerroCAD_Parent"
+                    % (path.relative_to(ROOT), ", ".join(bare)),
+                )
 
     def test_a_document_command_round_trips(self):
         documents = set(FreeCAD.listDocuments())

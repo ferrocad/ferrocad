@@ -12,7 +12,8 @@ import unittest
 import FreeCAD
 import FerroCAD
 
-PREFERENCES = "User parameter:BaseApp/Preferences/View"
+PREFERENCES = "User parameter:BaseApp/Preferences/Mods/grid/ferrocad"
+LEGACY_PREFERENCES = "User parameter:BaseApp/Preferences/View"
 
 VIEW_KEYS = {
     "grid",
@@ -30,6 +31,7 @@ class GridApiTests(unittest.TestCase):
         self.grid = FerroCAD.Grid
         self.grid.reset()
         self.prefs = FreeCAD.ParamGet(PREFERENCES)
+        self.legacy = FreeCAD.ParamGet(LEGACY_PREFERENCES)
 
     def tearDown(self):
         self.grid.reset()
@@ -61,21 +63,21 @@ class GridApiTests(unittest.TestCase):
         self.grid.shadows = True
         self.grid.shadow_opacity = 0.4
 
-        self.assertTrue(self.prefs.GetBool("GridEnabled", False))
+        self.assertTrue(self.prefs.GetBool("enabled", False))
         self.assertEqual(
-            self.prefs.GetString("GridColor", ""), "#94a3b8", "canonical spelling"
+            self.prefs.GetString("color", ""), "#94a3b8", "canonical spelling"
         )
-        self.assertAlmostEqual(self.prefs.GetFloat("GridOpacity", 0.0), 0.65)
-        self.assertAlmostEqual(self.prefs.GetFloat("GridMinorStep", 0.0), 2.5)
+        self.assertAlmostEqual(self.prefs.GetFloat("opacity", 0.0), 0.65)
+        self.assertAlmostEqual(self.prefs.GetFloat("minor", 0.0), 2.5)
         self.assertAlmostEqual(
-            self.prefs.GetFloat("GridMajorStep", 0.0),
+            self.prefs.GetFloat("major", 0.0),
             25.0,
             msg="the major step is the next decade",
         )
-        self.assertAlmostEqual(self.prefs.GetFloat("GridRadius", 0.0), 750.0)
-        self.assertFalse(self.prefs.GetBool("GridAxisCross", True))
-        self.assertTrue(self.prefs.GetBool("GridShadow", False))
-        self.assertAlmostEqual(self.prefs.GetFloat("GridShadowOpacity", 0.0), 0.4)
+        self.assertAlmostEqual(self.prefs.GetFloat("radius", 0.0), 750.0)
+        self.assertFalse(self.prefs.GetBool("axis_cross", True))
+        self.assertTrue(self.prefs.GetBool("shadows", False))
+        self.assertAlmostEqual(self.prefs.GetFloat("shadow_opacity", 0.0), 0.4)
 
     def test_each_property_round_trips(self):
         self.grid.enabled = True
@@ -225,21 +227,61 @@ class GridApiTests(unittest.TestCase):
         self.assertEqual(snapshot["grid_alpha"], 0.25)
         self.assertTrue(set(self.grid.apply()["view"]) <= set(snapshot))
 
-    def test_reset_clears_the_group(self):
+    def test_reset_clears_the_store_and_the_legacy_keys(self):
         self.grid.enabled = True
         self.grid.color = "#000000"
         self.grid.minor = 3.0
         self.grid.major = 30.0
         self.grid.shadow_opacity = 0.1
+        self.legacy.SetBool("GridEnabled", True)
+        self.legacy.SetString("GridColor", "#123456")
 
         self.grid.reset()
 
-        self.assertEqual(self.prefs.GetString("GridColor", ""), "")
-        self.assertEqual(self.prefs.GetFloat("GridMinorStep", -1.0), -1.0)
+        self.assertEqual(self.prefs.GetString("color", ""), "")
+        self.assertEqual(self.prefs.GetFloat("minor", -1.0), -1.0)
+        self.assertEqual(self.prefs.GetBools(), [])
+        self.assertEqual(self.prefs.GetStrings(), [])
+        self.assertEqual(self.prefs.GetFloats(), [])
+        self.assertEqual(
+            (
+                self.legacy.GetString("GridColor", ""),
+                self.legacy.GetFloat("GridMinorStep", -1.0),
+                self.legacy.GetBools(),
+            ),
+            ("", -1.0, []),
+            "reset removes the grid's legacy keys, not the whole View group",
+        )
         self.assertFalse(self.grid.enabled)
         self.assertEqual(self.grid.color, "#94a3b8")
         self.assertEqual((self.grid.minor, self.grid.major), (10.0, 100.0))
         self.assertAlmostEqual(self.grid.shadow_opacity, 0.30)
+
+    def test_a_legacy_value_migrates_once(self):
+        self.legacy.SetBool("GridEnabled", True)
+        self.legacy.SetString("GridColor", "#AABBCC")
+        self.legacy.SetFloat("GridMinorStep", 2.0)
+        self.legacy.SetFloat("GridMajorStep", 20.0)
+
+        self.assertTrue(self.grid.enabled)
+        self.assertEqual(self.grid.color, "#aabbcc")
+        self.assertEqual((self.grid.minor, self.grid.major), (2.0, 20.0))
+        self.assertEqual(
+            self.prefs.GetBools(),
+            ["enabled"],
+            "the first read copies the legacy value into the provider group",
+        )
+
+        # The provider group is authoritative once migrated: a later change to
+        # the legacy key is not read again.
+        self.legacy.SetFloat("GridMinorStep", 99.0)
+        self.assertEqual(self.grid.minor, 2.0)
+
+        # An unrelated View preference is never touched by the migration.
+        self.legacy.SetBool("SomeOtherPreference", True)
+        self.assertEqual(self.grid.radius, 0.0)
+        self.assertTrue(self.legacy.GetBool("SomeOtherPreference", False))
+        self.legacy.RemBool("SomeOtherPreference")
 
     def test_a_non_finite_step_is_not_clamped(self):
         self.grid.minor = 4.0

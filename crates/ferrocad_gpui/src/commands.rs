@@ -213,7 +213,8 @@ pub fn find<'a>(commands: &'a [CommandInfo], id: &str) -> Option<&'a CommandInfo
 /// What running a command produced.
 ///
 /// `ok` is false for an unknown id or a raising `Activated`; the command may add
-/// a human `status`, and A3 adds the dialog spec and its single-use token.
+/// a human `status`, a dialog spec with its single-use token (A3), a presentation
+/// request, or a `select` directive naming a model-tree node to show.
 #[derive(Debug, Clone, Default, Deserialize, PartialEq)]
 pub struct CommandOutcome {
     pub ok: bool,
@@ -236,6 +237,14 @@ pub struct CommandOutcome {
     /// An interactive tool id to start (A5); resolved by the edition's registry.
     #[serde(default)]
     pub tool: Option<String>,
+    /// A model-tree node the command wants the shell to select (S2/T5).
+    ///
+    /// Provider-advertised settings live at synthetic nodes such as
+    /// `Settings/Grid`; returning their path here makes the shell select the node
+    /// so the existing Properties pane renders its rows. It is a directive, not a
+    /// failure, and needs no transaction.
+    #[serde(default)]
+    pub select: Option<String>,
 }
 
 /// The registered commands, with their live state.
@@ -306,6 +315,18 @@ mod tests {
                 .unwrap();
         assert_eq!(outcome.view.unwrap().grid, Some(true));
         assert_eq!(outcome.tool.as_deref(), Some("toy_polyline"));
+    }
+
+    #[test]
+    fn a_select_directive_deserializes() {
+        let outcome: CommandOutcome =
+            serde_json::from_str(r#"{"ok": true, "select": "Settings/Grid"}"#).unwrap();
+        assert!(outcome.ok);
+        assert_eq!(outcome.select.as_deref(), Some("Settings/Grid"));
+        assert!(outcome.dialog.is_none(), "a select is not a dialog");
+
+        let bare: CommandOutcome = serde_json::from_str(r#"{"ok": true}"#).unwrap();
+        assert!(bare.select.is_none(), "select is optional");
     }
 
     fn command(id: &str, surface: &str, parent: &str) -> CommandInfo {

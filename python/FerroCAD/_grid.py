@@ -1,9 +1,17 @@
 """The semantic grid API, exposed as ``FerroCAD.Grid``.
 
 This module is private: the public form is ``FerroCAD.Grid`` (the singleton the
-package binds on import), not ``import FerroCAD._grid``. The settings live in
-``FreeCAD.ParamGet("User parameter:BaseApp/Preferences/View")`` under the same
-keys ``App_ReloadGridSettings`` reads; the facade keeps no state of its own.
+package binds on import), not ``import FerroCAD._grid``. The settings live in the
+native grid provider's parameter group,
+``FreeCAD.ParamGet("User parameter:BaseApp/Preferences/Mods/grid/ferrocad")``,
+under one typed key per :data:`SETTINGS_SCHEMA` entry, so the attribute API and
+``Settings/Grid`` are two views of the same store. The facade keeps no state of
+its own.
+
+The legacy layout (``User parameter:BaseApp/Preferences/View`` with ``Grid*``
+keys) is read once: the first read of an unset key copies the legacy value into
+the provider group, so a user's existing settings survive the move. ``reset()``
+clears both, which keeps tests and a deliberate "back to defaults" clean.
 
 ``apply()`` builds the ``{"view": …}`` request a command returns. The shell owns
 the viewport and the view state, so a property write changes the *desired*
@@ -16,8 +24,8 @@ as writing a parameter and running ``App_ReloadGridSettings``. Headless
 absolute alpha: the world grid's minor and major levels stay at 0.15, and a
 workplane grid keeps its 1:2 minor:major ratio.
 
-The store is in memory today (``FreeCAD.ParamGet`` is a shim); cross-session
-persistence is a Base/parameter-backend gap, not something this API invents.
+The store is in memory until the parameter backend is file-backed; cross-session
+persistence is a Base/parameter-backend concern, not something this API invents.
 """
 
 from __future__ import annotations
@@ -26,8 +34,15 @@ import math
 
 import FreeCAD
 
-#: The parameter group the view preferences live in.
-PREFERENCES = "User parameter:BaseApp/Preferences/View"
+#: The provider feature and backend whose parameter group is the grid store.
+FEATURE = "grid"
+BACKEND = "ferrocad"
+
+#: The parameter group the grid values live in (the native provider's group).
+PREFERENCES = "User parameter:BaseApp/Preferences/Mods/%s/%s" % (FEATURE, BACKEND)
+
+#: The pre-S4 parameter group, read once to migrate a user's old values.
+LEGACY_PREFERENCES = "User parameter:BaseApp/Preferences/View"
 
 DEFAULT_ENABLED = False
 DEFAULT_COLOR = "#94a3b8"
@@ -39,12 +54,175 @@ DEFAULT_AXIS_CROSS = True
 DEFAULT_SHADOWS = False
 DEFAULT_SHADOW_OPACITY = 0.30
 
+#: The canonical grid schema. It is the one description of the grid's knobs:
+#: ``FerroCADGui.registerProvider(..., settings=SETTINGS_SCHEMA)`` advertises
+#: these rows, and :class:`_GridSettings` stores each attribute under the entry's
+#: ``name`` in :data:`PREFERENCES`. The kinds are the ones the property editor
+#: understands; a ``quantity`` is stored as a float in its declared unit.
+#:
+#: ``spacing`` is deliberately absent: it is a convenience alias over ``minor``
+#: (setting it writes the next decade as ``major``), not a separate knob.
+SETTINGS_SCHEMA = (
+    {
+        "name": "enabled",
+        "label": "Show grid",
+        "kind": "bool",
+        "default": DEFAULT_ENABLED,
+    },
+    {
+        "name": "color",
+        "label": "Grid colour",
+        "kind": "color",
+        "default": DEFAULT_COLOR,
+    },
+    {
+        "name": "opacity",
+        "label": "Opacity",
+        "kind": "float",
+        "default": DEFAULT_OPACITY,
+        "min": 0.0,
+        "max": 1.0,
+    },
+    {
+        "name": "minor",
+        "label": "Minor spacing",
+        "kind": "quantity",
+        "unit": "mm",
+        "default": DEFAULT_MINOR,
+        "min": 0.001,
+    },
+    {
+        "name": "major",
+        "label": "Major spacing",
+        "kind": "quantity",
+        "unit": "mm",
+        "default": DEFAULT_MAJOR,
+        "min": 0.001,
+    },
+    {
+        "name": "radius",
+        "label": "Grid extent",
+        "kind": "quantity",
+        "unit": "mm",
+        "default": DEFAULT_RADIUS,
+        "min": 0.0,
+    },
+    {
+        "name": "axis_cross",
+        "label": "Axis cross",
+        "kind": "bool",
+        "default": DEFAULT_AXIS_CROSS,
+    },
+    {
+        "name": "shadows",
+        "label": "Show ground shadow",
+        "kind": "bool",
+        "default": DEFAULT_SHADOWS,
+    },
+    {
+        "name": "shadow_opacity",
+        "label": "Shadow opacity",
+        "kind": "float",
+        "default": DEFAULT_SHADOW_OPACITY,
+        "min": 0.0,
+        "max": 1.0,
+    },
+)
+
+#: Schema name -> the key the same value had before S4.
+_LEGACY_KEYS = {
+    "enabled": "GridEnabled",
+    "color": "GridColor",
+    "opacity": "GridOpacity",
+    "minor": "GridMinorStep",
+    "major": "GridMajorStep",
+    "radius": "GridRadius",
+    "axis_cross": "GridAxisCross",
+    "shadows": "GridShadow",
+    "shadow_opacity": "GridShadowOpacity",
+}
+
+_SPECS = {entry["name"]: entry for entry in SETTINGS_SCHEMA}
+
 _HEX_DIGITS = "0123456789abcdefABCDEF"
 
 
 def _prefs():
-    """A fresh handle on the view preference group."""
+    """A fresh handle on the grid provider's parameter group."""
     return FreeCAD.ParamGet(PREFERENCES)
+
+
+def _legacy_prefs():
+    """A fresh handle on the pre-S4 view preference group."""
+    return FreeCAD.ParamGet(LEGACY_PREFERENCES)
+
+
+def _present(group, name: str, kind: str) -> bool:
+    """Whether ``group`` holds a value of ``kind`` called ``name``.
+
+    A typed parameter group cannot distinguish "false" from "unset" through
+    ``GetBool``, so migration and reset ask the name lists instead.
+    """
+    if kind == "bool":
+        return name in group.GetBools()
+    if kind in ("float", "quantity"):
+        return name in group.GetFloats()
+    return name in group.GetStrings()
+
+
+def _read_group(group, name: str, kind: str):
+    """Read one typed value with a neutral fallback (the caller applies defaults)."""
+    if kind == "bool":
+        return group.GetBool(name, False)
+    if kind in ("float", "quantity"):
+        return group.GetFloat(name, 0.0)
+    return group.GetString(name, "")
+
+
+def _store(group, spec: dict, value) -> None:
+    """Write one value under the schema entry's name and kind."""
+    name = spec["name"]
+    kind = spec["kind"]
+    if kind == "bool":
+        group.SetBool(name, bool(value))
+    elif kind in ("float", "quantity"):
+        group.SetFloat(name, float(value))
+    else:
+        group.SetString(name, str(value))
+
+
+def _migrate(spec: dict, group) -> None:
+    """Copy a legacy value into the provider group, once per key.
+
+    The new key's presence is the marker: once migrated, the provider group is
+    authoritative and the legacy key is ignored (it is removed by ``reset()``).
+    """
+    legacy_key = _LEGACY_KEYS.get(spec["name"])
+    if legacy_key is None or _present(group, spec["name"], spec["kind"]):
+        return
+    legacy = _legacy_prefs()
+    if not _present(legacy, legacy_key, spec["kind"]):
+        return
+    _store(group, spec, _read_group(legacy, legacy_key, spec["kind"]))
+
+
+def _read(spec: dict):
+    """One schema value, migrating a legacy value first when necessary."""
+    group = _prefs()
+    _migrate(spec, group)
+    name = spec["name"]
+    kind = spec["kind"]
+    default = spec["default"]
+    if kind == "bool":
+        return group.GetBool(name, bool(default))
+    if kind in ("float", "quantity"):
+        return group.GetFloat(name, float(default))
+    return group.GetString(name, str(default))
+
+
+def _write(spec: dict, value) -> None:
+    """Store one schema value in the provider group."""
+    _store(_prefs(), spec, value)
 
 
 def _colour(value) -> str:
@@ -100,36 +278,38 @@ def _alpha(value, name: str) -> float:
 class _GridSettings:
     """The ``FerroCAD.Grid`` singleton (see the module docstring)."""
 
+    def schema(self) -> list:
+        """A copy of :data:`SETTINGS_SCHEMA` (the rows the provider advertises)."""
+        return [dict(entry) for entry in SETTINGS_SCHEMA]
+
     # -- visibility ---------------------------------------------------------
     @property
     def enabled(self) -> bool:
         """Whether the world grid's ground layer is shown."""
-        return _prefs().GetBool("GridEnabled", DEFAULT_ENABLED)
+        return bool(_read(_SPECS["enabled"]))
 
     @enabled.setter
     def enabled(self, value) -> None:
-        _prefs().SetBool("GridEnabled", bool(value))
+        _write(_SPECS["enabled"], bool(value))
 
     # -- ink ----------------------------------------------------------------
     @property
     def color(self) -> str:
         """The grid ink as a canonical lowercase ``#rrggbb``."""
-        return _colour(_prefs().GetString("GridColor", DEFAULT_COLOR))
+        return _colour(_read(_SPECS["color"]))
 
     @color.setter
     def color(self, value) -> None:
-        _prefs().SetString("GridColor", _colour(value))
+        _write(_SPECS["color"], _colour(value))
 
     @property
     def opacity(self) -> float:
         """A multiplier (``0..1``) over the token alphas."""
-        return _alpha(
-            _prefs().GetFloat("GridOpacity", DEFAULT_OPACITY), "the grid opacity"
-        )
+        return _alpha(_read(_SPECS["opacity"]), "the grid opacity")
 
     @opacity.setter
     def opacity(self, value) -> None:
-        _prefs().SetFloat("GridOpacity", _alpha(value, "the grid opacity"))
+        _write(_SPECS["opacity"], _alpha(value, "the grid opacity"))
 
     # -- steps and extent ---------------------------------------------------
     @property
@@ -140,75 +320,66 @@ class _GridSettings:
     @spacing.setter
     def spacing(self, value) -> None:
         step = _step(value, "the grid spacing")
-        prefs = _prefs()
-        prefs.SetFloat("GridMinorStep", step)
-        prefs.SetFloat("GridMajorStep", step * 10.0)
+        _write(_SPECS["minor"], step)
+        _write(_SPECS["major"], step * 10.0)
 
     @property
     def minor(self) -> float:
         """The world grid's minor (dot) step, in millimetres."""
-        return _step(
-            _prefs().GetFloat("GridMinorStep", DEFAULT_MINOR),
-            "the grid minor step",
-        )
+        return _step(_read(_SPECS["minor"]), "the grid minor step")
 
     @minor.setter
     def minor(self, value) -> None:
-        _prefs().SetFloat("GridMinorStep", _step(value, "the grid minor step"))
+        _write(_SPECS["minor"], _step(value, "the grid minor step"))
 
     @property
     def major(self) -> float:
         """The world grid's major (line) step, in millimetres."""
-        return _step(
-            _prefs().GetFloat("GridMajorStep", DEFAULT_MAJOR),
-            "the grid major step",
-        )
+        return _step(_read(_SPECS["major"]), "the grid major step")
 
     @major.setter
     def major(self, value) -> None:
-        _prefs().SetFloat("GridMajorStep", _step(value, "the grid major step"))
+        _write(_SPECS["major"], _step(value, "the grid major step"))
 
     @property
     def radius(self) -> float:
         """The fixed world-grid extent (mm); ``0`` is camera-derived."""
-        return _radius(_prefs().GetFloat("GridRadius", DEFAULT_RADIUS))
+        return _radius(_read(_SPECS["radius"]))
 
     @radius.setter
     def radius(self, value) -> None:
-        _prefs().SetFloat("GridRadius", _radius(value))
+        _write(_SPECS["radius"], _radius(value))
 
     # -- orientation --------------------------------------------------------
     @property
     def axis_cross(self) -> bool:
         """Whether the world axis cross (the triad) is shown."""
-        return _prefs().GetBool("GridAxisCross", DEFAULT_AXIS_CROSS)
+        return bool(_read(_SPECS["axis_cross"]))
 
     @axis_cross.setter
     def axis_cross(self, value) -> None:
-        _prefs().SetBool("GridAxisCross", bool(value))
+        _write(_SPECS["axis_cross"], bool(value))
 
     # -- shadows (persisted; no producer yet) -------------------------------
     @property
     def shadows(self) -> bool:
         """Whether grid shadows are requested (nothing draws them yet)."""
-        return _prefs().GetBool("GridShadow", DEFAULT_SHADOWS)
+        return bool(_read(_SPECS["shadows"]))
 
     @shadows.setter
     def shadows(self, value) -> None:
-        _prefs().SetBool("GridShadow", bool(value))
+        _write(_SPECS["shadows"], bool(value))
 
     @property
     def shadow_opacity(self) -> float:
         """The requested shadow strength, ``0..1`` (nothing draws it yet)."""
-        return _alpha(
-            _prefs().GetFloat("GridShadowOpacity", DEFAULT_SHADOW_OPACITY),
-            "the grid shadow opacity",
-        )
+        return _alpha(_read(_SPECS["shadow_opacity"]), "the grid shadow opacity")
 
     @shadow_opacity.setter
     def shadow_opacity(self, value) -> None:
-        _prefs().SetFloat(
-            "GridShadowOpacity", _alpha(value, "the grid shadow opacity")
+        _write(
+            _SPECS["shadow_opacity"],
+            _alpha(value, "the grid shadow opacity"),
         )
 
     # -- applying -----------------------------------------------------------
@@ -286,8 +457,21 @@ class _GridSettings:
         return getattr(FerroCADGui, "ViewState", None)
 
     def reset(self) -> None:
-        """Clear every grid preference in the view group (back to the defaults)."""
+        """Clear the grid store, including the pre-S4 legacy keys.
+
+        Only the grid's own values are removed: the legacy group also holds
+        unrelated view preferences, so it is never cleared wholesale.
+        """
         _prefs().Clear()
+        legacy = _legacy_prefs()
+        for name, key in _LEGACY_KEYS.items():
+            kind = _SPECS[name]["kind"]
+            if kind == "bool":
+                legacy.RemBool(key)
+            elif kind in ("float", "quantity"):
+                legacy.RemFloat(key)
+            else:
+                legacy.RemString(key)
 
 
 _INSTANCE = None

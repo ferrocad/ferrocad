@@ -6,10 +6,12 @@ struct Globals {
     view_proj: mat4x4<f32>,
     model: mat4x4<f32>,
     color: vec4<f32>,
+    // Declared to match the scene shader's uniform layout; picking ignores both.
+    shade: vec4<f32>,
     pick: u32,
     topology: u32,
     depth_bias: f32,
-    _padding: u32,
+    two_tone: u32,
 };
 
 @group(0) @binding(0) var<uniform> globals: Globals;

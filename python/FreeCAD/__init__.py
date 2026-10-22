@@ -19,8 +19,14 @@ and keeps no state of its own.
 
 from __future__ import annotations
 
-import ferrocad as _fc
+import builtins as _builtins  # the facade defines `open` (document); keep the builtin.
+import json
+import os
+import sys
+import tempfile
 import weakref
+
+import ferrocad as _fc
 
 backend = "ferrocad"
 
@@ -122,19 +128,230 @@ def __getattr__(name):
 
 
 # ---------------------------------------------------------------------------
-# Parameters (App-level config store) — in-memory shim with typed values and
-# nested groups.
+# Parameters (App-level config store) — typed values and nested groups, backed
+# by memory alone until a file is configured.
+#
+# The file backend is opt-in: an explicit path through
+# ``FerroCAD.set_parameter_file``, else ``FERROCAD_PARAM_FILE``, else the
+# platform config file in a GUI session only. Headless tests therefore stay in
+# memory and never touch a user's config.
 # ---------------------------------------------------------------------------
 
 # root path -> {"values": {(group, name, kind): value}, "groups": {group, ...},
 #                "handles": {group: [weakref to each live ParameterGrp]}}
 _parameter_stores = {}
 
+#: The version written to (and accepted from) the JSON parameter file.
+_PARAM_FILE_VERSION = 1
 
-def _param_store(root):
+#: Top-level keys the file format defines. Anything else is ignored with a
+#: single report, so a newer FerroCAD file still loads what we understand.
+_PARAM_FILE_KEYS = frozenset({"version", "values", "groups"})
+
+#: The path set by ``FerroCAD.set_parameter_file``; ``None`` means "resolve
+#: through the environment/default" in :func:`_parameter_file_path`.
+_PARAM_FILE_EXPLICIT = None
+
+#: Lazy-load and report-once bookkeeping. ``path``/``loaded`` make the first
+#: ``ParamGet`` load the configured file exactly once per configured path.
+_PARAM_FILE_STATE = {"path": None, "loaded": False, "reported": set()}
+
+
+def _parameter_file_path():
+    """The parameter file in use, or ``None`` while the store is memory-only.
+
+    An explicit path wins, then ``FERROCAD_PARAM_FILE``, then the platform
+    config file. The default is enabled only when ``FreeCAD.GuiUp`` is truthy,
+    so a headless process never writes to the user's real configuration.
+    """
+    if _PARAM_FILE_EXPLICIT is not None:
+        return _PARAM_FILE_EXPLICIT
+
+    environment = os.environ.get("FERROCAD_PARAM_FILE")
+    if environment:
+        return os.path.abspath(os.path.expanduser(environment))
+
+    if not GuiUp:
+        return None
+
+    base = os.environ.get("XDG_CONFIG_HOME")
+    if not base:
+        base = os.path.join(os.path.expanduser("~"), ".config")
+    return os.path.join(base, "ferrocad", "parameters.json")
+
+
+def _configure_parameter_file(path):
+    """Set the file backend (``None``/``""`` clears the explicit path).
+
+    This is the private half of ``FerroCAD.set_parameter_file``. Loading stays
+    lazy: the next ``ParamGet`` reads the file. Calling it again with the same
+    path re-arms the load, which is how a restart is simulated in tests.
+    """
+    if path is None or path == "":
+        explicit = None
+    else:
+        explicit = os.path.abspath(os.path.expanduser(os.fspath(path)))
+    global _PARAM_FILE_EXPLICIT
+    _PARAM_FILE_EXPLICIT = explicit
+    _PARAM_FILE_STATE["path"] = None
+    _PARAM_FILE_STATE["loaded"] = False
+
+
+def _report_parameter_file(path, kind, detail):
+    """Report one parameter-file problem per path and kind."""
+    key = (path, kind)
+    if key in _PARAM_FILE_STATE["reported"]:
+        return
+    _PARAM_FILE_STATE["reported"].add(key)
+    print("FreeCAD: parameter file %s: %s" % (path, detail), file=sys.stderr)
+
+
+def _raw_param_store(root):
+    """The in-memory store for ``root``, without triggering a file load."""
     store = _parameter_stores.setdefault(root, {"values": {}, "groups": set()})
     store.setdefault("handles", {})
     return store
+
+
+def _param_store(root):
+    _load_parameter_file()
+    return _raw_param_store(root)
+
+
+def _load_parameter_file():
+    """Merge the configured file into memory, once per configured path.
+
+    A missing file is a normal first run. An unreadable or corrupt file starts
+    empty, is reported once, and is overwritten only by the next mutation.
+    Unknown top-level keys are ignored with a single report.
+    """
+    path = _parameter_file_path()
+    if path is None:
+        return
+    state = _PARAM_FILE_STATE
+    if state["loaded"] and state["path"] == path:
+        return
+    state["path"] = path
+    state["loaded"] = True
+
+    try:
+        with _builtins.open(path, "r", encoding="utf-8") as handle:
+            data = json.load(handle)
+    except FileNotFoundError:
+        return
+    except (OSError, ValueError) as exc:
+        _report_parameter_file(path, "read", "cannot read it (%s); starting empty" % exc)
+        return
+
+    if not isinstance(data, dict):
+        _report_parameter_file(path, "format", "the root is not a JSON object; starting empty")
+        return
+
+    extra = sorted(set(data) - _PARAM_FILE_KEYS)
+    if extra:
+        _report_parameter_file(
+            path, "keys", "ignoring unknown key(s): %s" % ", ".join(extra)
+        )
+
+    if data.get("version") != _PARAM_FILE_VERSION:
+        _report_parameter_file(
+            path,
+            "version",
+            "unsupported version %r; starting empty" % (data.get("version"),),
+        )
+        return
+
+    raw_groups = data.get("groups", [])
+    raw_values = data.get("values", [])
+    if not isinstance(raw_groups, list) or not isinstance(raw_values, list):
+        _report_parameter_file(
+            path, "format", "'groups' and 'values' must be lists; starting empty"
+        )
+        return
+
+    for entry in raw_groups:
+        if not isinstance(entry, dict):
+            _report_parameter_file(path, "groups", "ignoring malformed group entries")
+            continue
+        root, group = entry.get("root"), entry.get("path")
+        if not isinstance(root, str) or not isinstance(group, str):
+            _report_parameter_file(path, "groups", "ignoring malformed group entries")
+            continue
+        _raw_param_store(root)["groups"].add(_collapse(group))
+
+    for entry in raw_values:
+        if not isinstance(entry, dict):
+            _report_parameter_file(path, "values", "ignoring malformed value entries")
+            continue
+        root = entry.get("root")
+        group = entry.get("group")
+        name = entry.get("name")
+        kind = entry.get("kind")
+        value = entry.get("value")
+        if (
+            not isinstance(root, str)
+            or not isinstance(group, str)
+            or not isinstance(name, str)
+            or not isinstance(kind, str)
+            or not isinstance(value, (bool, int, float, str))
+        ):
+            _report_parameter_file(path, "values", "ignoring malformed value entries")
+            continue
+        group = _collapse(group)
+        store = _raw_param_store(root)
+        store["values"][(group, name, kind)] = value
+        store["groups"].add(group)
+
+
+def _save_parameter_file():
+    """Atomically write the whole store to the configured file.
+
+    A no-op when no file is configured. A write failure is reported once and
+    leaves the previous file untouched (the temp file is removed).
+    """
+    path = _parameter_file_path()
+    if path is None:
+        return
+
+    groups = []
+    values = []
+    for root, store in _parameter_stores.items():
+        for group in sorted(store["groups"]):
+            groups.append({"root": root, "path": group})
+        for (group, name, kind), value in store["values"].items():
+            values.append(
+                {
+                    "root": root,
+                    "group": group,
+                    "name": name,
+                    "kind": kind,
+                    "value": value,
+                }
+            )
+    data = {"version": _PARAM_FILE_VERSION, "groups": groups, "values": values}
+
+    directory = os.path.dirname(path) or "."
+    temporary = None
+    try:
+        os.makedirs(directory, exist_ok=True)
+        descriptor, temporary = tempfile.mkstemp(
+            prefix=".parameters-", suffix=".json", dir=directory
+        )
+        with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
+            json.dump(data, handle, ensure_ascii=False, indent=2)
+            handle.write("\n")
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temporary, path)
+        temporary = None
+    except (OSError, TypeError, ValueError) as exc:
+        _report_parameter_file(path, "write", "cannot save it (%s)" % exc)
+    finally:
+        if temporary is not None:
+            try:
+                os.unlink(temporary)
+            except OSError:
+                pass
 
 
 def _collapse(path):
@@ -171,9 +388,13 @@ class ParameterGrp:
         # A write re-creates a group removed with `RemGroup`, matching FreeCAD.
         self._store["groups"].add(self._group)
         self._store["values"][(self._group, name, kind)] = value
+        _save_parameter_file()
 
     def _rem(self, name, kind):
-        self._store["values"].pop((self._group, name, kind), None)
+        key = (self._group, name, kind)
+        if key in self._store["values"]:
+            del self._store["values"][key]
+            _save_parameter_file()
 
     def _names(self, kind):
         """The names in this group with a value of `kind`, in insertion order."""
@@ -231,20 +452,29 @@ class ParameterGrp:
             return
 
         values = self._store["values"]
+        changed = False
         for key in list(values):
             group = key[0]
             if group == target or group.startswith(target + "/"):
                 del values[key]
+                changed = True
         groups = self._store["groups"]
         for group in list(groups):
             if group == target or group.startswith(target + "/"):
                 groups.discard(group)
+                changed = True
+        if changed:
+            _save_parameter_file()
 
     def Clear(self):
         group = self._group
+        changed = False
         for key in list(self._store["values"]):
             if group == "" or key[0] == group or key[0].startswith(group + "/"):
                 del self._store["values"][key]
+                changed = True
+        if changed:
+            _save_parameter_file()
 
     # -- typed accessors ----------------------------------------------------
     def GetInt(self, name, default=0):
@@ -333,13 +563,20 @@ class ParameterGrp:
             target = (group + "/" + rel) if rel else group
             self._store["values"][(target, name, kind)] = value
             self._store["groups"].add(target)
+        if data:
+            _save_parameter_file()
 
     def __repr__(self):
         return "<ParameterGrp '%s:%s'>" % (self._root, self._group)
 
 
 def ParamGet(path="", create=True):
-    """Return the parameter group rooted at ``path`` (in-memory)."""
+    """Return the parameter group rooted at ``path``.
+
+    Values live in memory until a file is configured (see
+    ``FerroCAD.parameter_file`` / ``FerroCAD.set_parameter_file``); the first
+    call after configuration loads that file.
+    """
     return ParameterGrp(path)
 
 
@@ -347,8 +584,6 @@ def ParamGet(path="", create=True):
 # Recovery snapshots (App-level; writes metadata + document to the transient
 # directory of a document).
 # ---------------------------------------------------------------------------
-
-import builtins as _builtins  # the facade defines `open` (document); keep the builtin.
 
 
 def _xml_escape(text):

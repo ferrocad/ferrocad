@@ -12,9 +12,13 @@ that this build needs FerroCAD's semantic grid API rather than falling back to
 the legacy Coin path; the upstream addon remains the addon for upstream.
 
 The mod declares itself as the ``"ferrocad"`` backend of the ``"grid"`` feature
-(priority 10, so the native grid is the default). ``mods/GridOverlayCoin``
-declares the same feature as ``"coin"``; only one is active at a time, and
-``Mods_Settings`` switches them (``docs/workbenches/mod-providers.md``).
+(priority 10, so the native grid is the default), advertising the canonical
+``_grid.SETTINGS_SCHEMA`` so ``Settings/Grid`` edits the same store
+``FerroCAD.Grid`` reads. ``mods/GridOverlayCoin`` declares the same feature as
+``"coin"``; only one is active at a time, and ``Mods_Settings`` switches them
+(``docs/workbenches/mod-providers.md``). The ``GridOverlay_Settings`` command is
+an alias of the ``Settings/Grid`` node whenever a grid provider is registered;
+the modal dialog stays as the headless/upstream fallback.
 """
 
 from __future__ import annotations
@@ -26,9 +30,11 @@ import FreeCADGui
 try:
     import FerroCAD
     import FerroCADGui
+    from FerroCAD import _grid
 except ImportError:  # upstream FreeCAD has no FerroCAD namespace
     FerroCAD = None
     FerroCADGui = None
+    _grid = None
 
 ADDON_DIR = os.path.dirname(os.path.abspath(__file__))
 
@@ -58,6 +64,18 @@ def grid_api(app=None):
     the plan names, and so a test can pass a module that lacks the attribute.
     """
     return getattr(FerroCAD if app is None else app, "Grid", None)
+
+
+def settings_node():
+    """``"Settings/Grid"`` when a grid provider is registered, else ``None``.
+
+    The Settings node is the single grid-settings surface (S4); the mod's own
+    dialog is only the fallback for a build with no provider registry.
+    """
+    get_providers = getattr(FerroCADGui, "providers", None)
+    if get_providers is None:
+        return None
+    return "Settings/Grid" if get_providers(FEATURE) else None
 
 
 def is_active():
@@ -174,9 +192,16 @@ class GridOverlayCommand:
     def IsActive(self):
         return True
 
+    def IsChecked(self):
+        """The active grid backend reads as the selected mode in the Grid menu."""
+        return is_active()
+
     def Activated(self):
         if not is_active():
             return {"status": inactive_status()}
+        node = settings_node()
+        if node is not None:
+            return {"select": node}
         grid = grid_api()
         if grid is None:
             return {"status": UPSTREAM_STATUS}
@@ -216,7 +241,10 @@ class GridOverlayCommand:
         }
 
 
-FreeCADGui.addCommand("GridOverlay_Settings", GridOverlayCommand())
+# The workbench loader may execute this file more than once (a restart, a test
+# boot); ``addCommand`` rejects a duplicate id, so re-registration must be safe.
+if "GridOverlay_Settings" not in FreeCADGui.listCommands():
+    FreeCADGui.addCommand("GridOverlay_Settings", GridOverlayCommand())
 
 # Declare the provider from the mod's entry point. On upstream FreeCAD (no
 # FerroCAD provider registry, no ``FerroCAD.Grid``) the mod still loads and
@@ -234,6 +262,7 @@ def register_provider():
         priority=10,
         activate=activate,
         deactivate=deactivate,
+        settings=_grid.SETTINGS_SCHEMA if _grid is not None else None,
     )
     return True
 

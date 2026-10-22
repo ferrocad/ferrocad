@@ -7,10 +7,12 @@ struct Globals {
     view_proj: mat4x4<f32>,
     model: mat4x4<f32>,
     color: vec4<f32>,
+    // The side/down-facing ink; alpha 0 means single-colour.
+    shade: vec4<f32>,
     pick: u32,
     topology: u32,
     depth_bias: f32,
-    _padding: u32,
+    two_tone: u32,
 };
 
 @group(0) @binding(0) var<uniform> globals: Globals;
@@ -57,6 +59,10 @@ fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
     // The texture (the default is opaque white) and the per-vertex colour both
     // multiply into the packet colour.
     let albedo = globals.color * input.color * textureSample(shape_texture, shape_sampler, input.uv);
-    let lit = albedo.rgb * (ambient + (1.0 - ambient) * diffuse);
+    // V2b: an up-facing facet uses the glass-top ink (`color`); every other facet
+    // uses the glass-shade ink (`shade`). `shade.a == 0` keeps a single colour.
+    let up = dot(normal, vec3<f32>(0.0, 1.0, 0.0)) > 0.5;
+    let base = select(globals.shade.rgb, albedo.rgb, up || globals.two_tone == 0u);
+    let lit = base * (ambient + (1.0 - ambient) * diffuse);
     return vec4<f32>(lit, albedo.a);
 }

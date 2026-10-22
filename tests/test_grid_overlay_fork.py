@@ -86,6 +86,24 @@ class GridOverlayForkTests(unittest.TestCase):
     def spec(self):
         return FreeCADGui.runCommand(COMMAND)
 
+    def fallback_spec(self):
+        """The pre-S4 dialog: run the command with no registered grid provider."""
+        for provider in FerroCADGui.providers("grid"):
+            FerroCADGui.unregisterProvider("grid", provider["backend"])
+        try:
+            return FreeCADGui.runCommand(COMMAND)
+        finally:
+            self.mod.register_provider()
+
+    def fallback_run(self):
+        """``_run``'s dialog payload, with no registered grid provider."""
+        for provider in FerroCADGui.providers("grid"):
+            FerroCADGui.unregisterProvider("grid", provider["backend"])
+        try:
+            return FreeCADGui._run(COMMAND)
+        finally:
+            self.mod.register_provider()
+
     def test_the_command_is_registered_with_the_upstream_resources(self):
         self.assertIn(COMMAND, FreeCADGui.listCommands())
         entry = next(
@@ -100,8 +118,11 @@ class GridOverlayForkTests(unittest.TestCase):
         resources = self.mod.GridOverlayCommand().GetResources()
         self.assertTrue(resources["Pixmap"].endswith("grid.svg"))
 
+    def test_the_command_selects_the_settings_node(self):
+        self.assertEqual(self.spec(), {"select": "Settings/Grid"})
+
     def test_activated_returns_a_dialog_spec_with_the_six_knobs(self):
-        spec = self.spec()
+        spec = self.fallback_spec()
         self.assertIn("fields", spec)
         self.assertTrue(callable(spec["on_accept"]))
         self.assertEqual(spec["title"], "Grid Overlay Settings")
@@ -141,7 +162,10 @@ class GridOverlayForkTests(unittest.TestCase):
         self.grid.shadows = True
         self.grid.shadow_opacity = 0.25
 
-        fields = {field["name"]: field["value"] for field in self.spec()["fields"]}
+        fields = {
+            field["name"]: field["value"]
+            for field in self.fallback_spec()["fields"]
+        }
         self.assertEqual(
             fields,
             {
@@ -155,7 +179,7 @@ class GridOverlayForkTests(unittest.TestCase):
         )
 
     def test_on_accept_writes_the_grid_and_returns_the_view_request(self):
-        result = self.spec()["on_accept"](
+        result = self.fallback_spec()["on_accept"](
             {
                 "enabled": True,
                 "color": "#f87171",
@@ -192,7 +216,7 @@ class GridOverlayForkTests(unittest.TestCase):
         )
 
     def test_the_shell_dialog_path_applies_the_view_request(self):
-        run = FreeCADGui._run(COMMAND)
+        run = self.fallback_run()
         self.assertTrue(run["ok"], run)
         self.assertIn("token", run)
         self.assertTrue(run["dialog"]["title"])
@@ -210,17 +234,17 @@ class GridOverlayForkTests(unittest.TestCase):
 
     def test_a_partial_accept_keeps_the_other_values(self):
         self.grid.color = "#00ff00"
-        result = self.spec()["on_accept"]({"opacity": 0.4})
+        result = self.fallback_spec()["on_accept"]({"opacity": 0.4})
         self.assertEqual(result["view"]["grid_color"], "#00ff00")
         self.assertEqual(result["view"]["grid_alpha"], 0.4)
 
     def test_a_bad_value_raises_and_leaves_the_store_alone(self):
         with self.assertRaises(ValueError):
-            self.spec()["on_accept"]({"color": "not a colour"})
+            self.fallback_spec()["on_accept"]({"color": "not a colour"})
         self.assertEqual(self.grid.color, "#94a3b8")
 
     def test_reset_restores_the_defaults(self):
-        self.spec()["on_accept"](
+        self.fallback_spec()["on_accept"](
             {
                 "enabled": True,
                 "color": "#000000",
@@ -249,7 +273,10 @@ class GridOverlayForkTests(unittest.TestCase):
         )
         self.assertFalse(self.grid.shadows)
         self.assertAlmostEqual(self.grid.shadow_opacity, 0.30)
-        fields = {field["name"]: field["value"] for field in self.spec()["fields"]}
+        fields = {
+            field["name"]: field["value"]
+            for field in self.fallback_spec()["fields"]
+        }
         self.assertEqual(fields["color"], "#94a3b8")
         self.assertEqual(fields["spacing"], 10.0)
 
@@ -269,7 +296,7 @@ class GridOverlayForkTests(unittest.TestCase):
 
     def test_a_build_without_grid_reports_instead_of_falling_back(self):
         with mock.patch.object(self.mod, "grid_api", return_value=None):
-            result = self.mod.GridOverlayCommand().Activated()
+            result = self.fallback_spec()
             accepted = self.mod.apply_settings({"enabled": True})
 
         self.assertNotIn("fields", result)
@@ -295,7 +322,7 @@ class GridOverlayForkTests(unittest.TestCase):
 
         with mock.patch.object(FerroCAD, "__getattr__", upstream_freecad):
             self.assertIsNone(self.mod.grid_api())
-            self.assertIn("status", self.mod.GridOverlayCommand().Activated())
+            self.assertIn("status", self.fallback_spec())
 
 
 if __name__ == "__main__":

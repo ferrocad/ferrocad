@@ -17,7 +17,7 @@ use std::fmt;
 
 use ferrocad_graphics::{
     Camera, DepthState, DrawBatch, DrawPacket, Generation, Geometry, Hit, MeshId, PickId, Rect,
-    RenderQueue, ShaderProgram, StateSnapshot, Topology,
+    RenderQueue, ShaderProgram, StateSnapshot, Topology, theme,
 };
 use ferrocad_inventor::{ImageData, InventorView, ViewSpec};
 use ferrocad_types::{Matrix4, Vector3};
@@ -30,6 +30,17 @@ use crate::program::{mat4_to_wgsl, ProgramPipeline};
 use crate::textures;
 use crate::trace;
 use crate::uniforms::{self, DynamicUniforms, UniformData};
+
+/// The scene clear colour: the canvas-void token (`#0F1218`) in linear RGBA.
+fn canvas_clear() -> wgpu::Color {
+    let [r, g, b, a] = theme::CANVAS_VOID;
+    wgpu::Color {
+        r: r as f64,
+        g: g as f64,
+        b: b as f64,
+        a: a as f64,
+    }
+}
 
 /// What can go wrong while creating a device, encoding, or reading back a frame.
 #[derive(Debug)]
@@ -294,10 +305,11 @@ impl WgpuRenderer {
                 view_proj,
                 model: mat4_to_wgsl(&snapshot.world_transform),
                 color: snapshot.color,
+                shade: snapshot.shade,
                 pick: snapshot.id.0,
                 topology: topology_ordinal(batch.topology()),
                 depth_bias: snapshot.depth_bias,
-                _padding: 0,
+                two_tone: u32::from(snapshot.shade[3] > 0.0),
             };
             self.uniforms.write(&self.context.queue, index as u32, &data);
         }
@@ -337,12 +349,7 @@ impl WgpuRenderer {
                     depth_slice: None,
                     resolve_target: resolve_target.as_ref(),
                     ops: wgpu::Operations {
-                        load: wgpu::LoadOp::Clear(wgpu::Color {
-                            r: 0.1,
-                            g: 0.1,
-                            b: 0.12,
-                            a: 1.0,
-                        }),
+                        load: wgpu::LoadOp::Clear(canvas_clear()),
                         store: wgpu::StoreOp::Store,
                     },
                 })],
@@ -358,6 +365,20 @@ impl WgpuRenderer {
                 occlusion_query_set: None,
                 multiview_mask: None,
             });
+
+            // The canvas void gradient is the first thing in the pass; the clear is
+            // only a fallback for a pipeline that fails to draw.
+            pass.set_pipeline(self.pipelines.background());
+            pass.set_viewport(
+                0.0,
+                0.0,
+                self.size[0] as f32,
+                self.size[1] as f32,
+                0.0,
+                1.0,
+            );
+            pass.set_scissor_rect(0, 0, self.size[0], self.size[1]);
+            pass.draw(0..3, 0..1);
 
             // Two passes over the packets: scene geometry first, then the program
             // packets. A program covers its shape with a full-screen placeholder and
@@ -522,10 +543,11 @@ impl WgpuRenderer {
                         view_proj,
                         model: mat4_to_wgsl(&snapshot.world_transform),
                         color: snapshot.color,
+                        shade: snapshot.shade,
                         pick: snapshot.id.0,
                         topology: topology_ordinal(batch.topology),
                         depth_bias: snapshot.depth_bias,
-                        _padding: 0,
+                        two_tone: u32::from(snapshot.shade[3] > 0.0),
                     },
                 );
                 slot += 1;
@@ -569,12 +591,7 @@ impl WgpuRenderer {
                     depth_slice: None,
                     resolve_target: resolve_target.as_ref(),
                     ops: wgpu::Operations {
-                        load: wgpu::LoadOp::Clear(wgpu::Color {
-                            r: 0.1,
-                            g: 0.1,
-                            b: 0.12,
-                            a: 1.0,
-                        }),
+                        load: wgpu::LoadOp::Clear(canvas_clear()),
                         store: wgpu::StoreOp::Store,
                     },
                 })],
@@ -590,6 +607,13 @@ impl WgpuRenderer {
                 occlusion_query_set: None,
                 multiview_mask: None,
             });
+
+            // The canvas gradient fills the whole target before the views; each view
+            // then sets its own viewport/scissor (overlays are rectangles).
+            pass.set_pipeline(self.pipelines.background());
+            pass.set_viewport(0.0, 0.0, width as f32, height as f32, 0.0, 1.0);
+            pass.set_scissor_rect(0, 0, width, height);
+            pass.draw(0..3, 0..1);
 
             let mut slot = 0u32;
             for (view_index, view) in views.iter().enumerate() {
@@ -695,10 +719,11 @@ impl WgpuRenderer {
                     view_proj,
                     model: mat4_to_wgsl(&packet.state.world_transform),
                     color: packet.state.color,
+                    shade: packet.state.shade,
                     pick: packet.state.id.0,
                     topology: topology_ordinal(packet.topology),
                     depth_bias: packet.state.depth_bias,
-                    _padding: 0,
+                    two_tone: u32::from(packet.state.shade[3] > 0.0),
                 },
             );
         }
@@ -1273,6 +1298,101 @@ mod tests {
         );
     }
 
+    /// V2: the canvas is the `#0F1218 → #161B22` vertical gradient, not the legacy
+    /// grey.
+    #[test]
+    fn the_background_is_the_canvas_gradient() {
+        let _gpu = gpu_guard();
+        let Ok(mut renderer) = WgpuRenderer::new_default([8, 8]) else {
+            eprintln!("no GPU adapter available; skipping background test");
+            return;
+        };
+        renderer
+            .draw(&RenderQueue::default(), &Camera::identity())
+            .expect("draw an empty scene");
+        let image = renderer.image().expect("readback");
+        let texel = |x: u32, y: u32| {
+            let i = ((y * 8 + x) * 4) as usize;
+            [image.rgba[i], image.rgba[i + 1], image.rgba[i + 2]]
+        };
+        // The target is `Rgba8UnormSrgb`, so the linear gradient is encoded on write.
+        let near = |actual: [u8; 3], expected: [u8; 3]| {
+            actual
+                .into_iter()
+                .zip(expected)
+                .all(|(actual, expected)| (i16::from(actual) - i16::from(expected)).abs() <= 2)
+        };
+        let top = texel(0, 0);
+        let bottom = texel(0, 7);
+        assert!(near(top, [15, 18, 24]), "top is canvas void: {top:?}");
+        assert!(
+            near(bottom, [22, 27, 34]),
+            "bottom is canvas void far: {bottom:?}"
+        );
+    }
+
+    /// V2b: an up-facing facet reads as glass-top, a side facet as glass-shade.
+    #[test]
+    fn a_two_tone_surface_reads_back_as_glass_top_and_shade() {
+        let _gpu = gpu_guard();
+        let Ok(mut renderer) = WgpuRenderer::new_default([64, 64]) else {
+            eprintln!("no GPU adapter available; skipping two-tone test");
+            return;
+        };
+        let make = |id: u32, positions: Vec<[f32; 3]>, normal: [f32; 3]| {
+            let mut packet = pick_packet(
+                40 + u64::from(id),
+                id,
+                0,
+                Topology::Triangles,
+                positions,
+                vec![0, 1, 2],
+            );
+            for vertex in &mut packet.geometry.as_mut().expect("fresh geometry").vertices {
+                vertex.normal = normal;
+            }
+            packet.state.color = theme::GLASS_TOP;
+            packet.state.shade = theme::GLASS_SHADE;
+            packet
+        };
+        let mut queue = RenderQueue::default();
+        queue.packets.push(make(
+            1,
+            vec![[-1.0, -1.0, 0.5], [0.0, -1.0, 0.5], [0.0, 1.0, 0.5]],
+            [0.0, 1.0, 0.0],
+        ));
+        queue.packets.push(make(
+            2,
+            vec![[0.0, -1.0, 0.5], [1.0, -1.0, 0.5], [1.0, 1.0, 0.5]],
+            [1.0, 0.0, 0.0],
+        ));
+
+        renderer
+            .draw(&queue, &Camera::identity())
+            .expect("draw the two faces");
+        let image = renderer.image().expect("readback");
+        let texel = |x: u32, y: u32| {
+            let i = ((y * 64 + x) * 4) as usize;
+            [image.rgba[i], image.rgba[i + 1], image.rgba[i + 2]]
+        };
+        let near = |actual: [u8; 3], expected: [u8; 3]| {
+            actual
+                .into_iter()
+                .zip(expected)
+                .all(|(actual, expected)| (i16::from(actual) - i16::from(expected)).abs() <= 3)
+        };
+        let top = texel(16, 32);
+        let side = texel(48, 32);
+        assert!(
+            near(top, [77, 83, 93]),
+            "the up-facing facet is glass-top: {top:?}"
+        );
+        assert!(
+            near(side, [13, 17, 24]),
+            "the side facet is glass-shade: {side:?}"
+        );
+    }
+
     /// A quad covering the overlay's ortho view, for [`overlay_draws_into_its_rect`].
     fn overlay_quad() -> Scene {
         Scene {
@@ -1757,6 +1877,7 @@ mod tests {
             state: StateSnapshot {
                 world_transform: Matrix4::identity(),
                 color: [1.0, 1.0, 1.0, 1.0],
+                shade: [0.0; 4],
                 depth_bias: 0.0,
                 texture: None,
                 id: PickId(id),

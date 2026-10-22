@@ -23,6 +23,13 @@ The mod declares itself as the ``"coin"`` backend of the ``"grid"`` feature
 (priority 0). ``mods/GridOverlay`` declares the same feature as ``"ferrocad"``;
 ``Mods_Settings`` switches them, and the inactive backend neither draws nor runs
 its command (``docs/workbenches/mod-providers.md``).
+
+Since S4 the backend advertises the canonical grid entries it owns through
+``registerProvider(..., settings=...)``. The rows read and write through
+``setting``/``save_settings``, so ``Settings/Grid`` and the drawn overlay share
+one store; ``enabled`` remains ``FerroCAD.Grid.enabled``. The
+``GridOverlayCoin_Settings`` command is an alias of that node whenever a grid
+provider is registered, and its modal dialog stays as the fallback.
 """
 
 from __future__ import annotations
@@ -35,9 +42,11 @@ import FreeCADGui as Gui
 try:
     import FerroCAD as _ferrocad
     import FerroCADGui as _ferrocad_gui
+    from FerroCAD import _grid
 except ImportError:  # upstream FreeCAD has no FerroCAD namespace
     _ferrocad = None
     _ferrocad_gui = None
+    _grid = None
 
 try:
     from pivy import coin
@@ -71,6 +80,18 @@ COMMAND = "GridOverlayCoin_Settings"
 #: ``docs/workbenches/mod-providers.md``.
 FEATURE = "grid"
 BACKEND = "coin"
+
+#: The canonical schema entries this backend owns, mapped to the key each one
+#: uses in this mod's store (``enabled`` is the shared ``FerroCAD.Grid`` switch).
+#: ``base_spacing`` is the Coin shader's own scale knobs, not a grid knob, so it
+#: is not advertised: no invented entry appears in ``Settings/Grid``.
+COIN_SCHEMA_KEYS = {
+    "enabled": "enabled",
+    "color": "color",
+    "opacity": "opacity",
+    "shadows": "shadow_enabled",
+    "shadow_opacity": "shadow_opacity",
+}
 
 UPSTREAM_STATUS = (
     "Grid Overlay (Coin) needs FerroCAD's pull overlay bridge "
@@ -161,6 +182,37 @@ def overlay_api():
     if getattr(_ferrocad_gui, "removeOverlay", None) is None:
         return None
     return _ferrocad_gui
+
+
+def settings_schema():
+    """The canonical entries this backend owns, with store-backed hooks.
+
+    The rows come from ``_grid.SETTINGS_SCHEMA`` (labels, kinds and bounds), so
+    the two grid backends advertise the same vocabulary. ``get``/``set`` route
+    through this mod's ``setting``/``save_settings``, which is what makes the
+    Settings node and the drawn overlay the same store; ``enabled`` is the
+    shared ``FerroCAD.Grid`` switch.
+    """
+    if _grid is None:
+        return None
+    schema = []
+    for entry in _grid.SETTINGS_SCHEMA:
+        key = COIN_SCHEMA_KEYS.get(entry["name"])
+        if key is None:
+            continue
+        spec = dict(entry)
+        spec["get"] = lambda key=key: setting(key)
+        spec["set"] = lambda value, key=key: save_settings({key: value})
+        schema.append(spec)
+    return schema
+
+
+def settings_node():
+    """``"Settings/Grid"`` when a grid provider is registered, else ``None``."""
+    get_providers = getattr(_ferrocad_gui, "providers", None)
+    if get_providers is None:
+        return None
+    return "Settings/Grid" if get_providers(FEATURE) else None
 
 
 def is_active():
@@ -565,9 +617,16 @@ class GridOverlayCoinCommand:
     def IsActive(self):
         return True
 
+    def IsChecked(self):
+        """The active grid backend reads as the selected mode in the Grid menu."""
+        return is_active()
+
     def Activated(self):
         if not is_active():
             return {"status": inactive_status()}
+        node = settings_node()
+        if node is not None:
+            return {"select": node}
         if coin is None:
             return {
                 "status": "Grid Overlay (Coin) needs the Coin facade (pivy.coin): %s"
@@ -698,6 +757,7 @@ def register_provider():
         activate=activate,
         deactivate=deactivate,
         refresh=refresh,
+        settings=settings_schema(),
     )
     return True
 

@@ -506,8 +506,9 @@ mod tests {
     }
 
     #[test]
-    fn the_clear_colour_is_not_black() {
-        // The renderer clears to linear (0.1, 0.1, 0.12), which is ~89 in sRGB.
+    fn a_lit_frame_is_not_black() {
+        // A representative lit frame; the canvas gradient is darker (`#0F1218`)
+        // but still above the black-frame threshold.
         let rgba = frame([89, 89, 95, 255], 64, 48);
         assert_eq!(classify_rgba(64, 48, &rgba), Some(Tone::Lit));
     }

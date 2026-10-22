@@ -75,6 +75,7 @@ impl State {
         StateSnapshot {
             world_transform: self.transform,
             color: self.color,
+            shade: [0.0; 4],
             depth_bias: self.depth_bias,
             texture: self.texture.clone(),
             id: self.id,

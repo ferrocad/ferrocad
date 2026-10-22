@@ -3,7 +3,7 @@
 The **A1** form of the grid-overlay fork (`docs/workbenches/grid-overlay-plan.md` §3.2, G5): a
 faithful Coin/shader port of the upstream add-on, running under FerroCAD's
 pull-based overlay bridge. It is a proving slice, not the shipping form — the
-shipping form is `mods/GridOverlay/` (A2, a client of `FreeCAD.Grid`).
+shipping form is `mods/GridOverlay/` (A2, a client of `FerroCAD.Grid`).
 
 ## What is preserved from upstream
 
@@ -43,7 +43,7 @@ shipping form is `mods/GridOverlay/` (A2, a client of `FreeCAD.Grid`).
    enforce the fixed ABI (plan §3.4) — Coin's dynamic parameter names are not
    reproduced.
 3. **The pull bridge replaces `getSceneGraph()`.** The tree is registered with
-   `FreeCADGui.addOverlay(root)`, which extracts it immediately; the shell
+   `FerroCADGui.addOverlay(root)`, which extracts it immediately; the shell
    re-extracts it on refresh. There is no live graph and no arena.
 4. **`_rebind()` replaces aliasing.** `addChild` copies, so a uniform change is
    followed by re-running `fragment.parameter.setValues` /

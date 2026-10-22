@@ -680,6 +680,64 @@ FreeCADGui.addCommand("App_Move", _MoveCommand())
 #: the registry's answer.
 _GRID_FEATURE = "grid"
 
+#: The one grid-settings surface the grid commands select (S4).
+_GRID_SETTINGS_NODE = "Settings/Grid"
+
+
+def grid_summary() -> str:
+    """The grid's provider and spacing for the shell's popover.
+
+    ``backend``/``label`` name the active provider and ``spacing`` is its
+    ``minor`` row's display value (``"10 mm"``); ``providers`` lists every
+    registered grid backend with its ``active`` flag. The shape is closed: when
+    no grid provider is registered, the same keys are present with ``None`` and
+    an empty list, so the popover never has to special-case the empty state.
+    """
+    manifests = FerroCADGui.providers(_GRID_FEATURE)
+    providers = [
+        {
+            "backend": manifest["backend"],
+            "label": manifest["label"],
+            "active": bool(manifest["active"]),
+        }
+        for manifest in manifests
+    ]
+    if not manifests:
+        return _json(
+            {
+                "feature": _GRID_FEATURE,
+                "backend": None,
+                "label": None,
+                "spacing": None,
+                "providers": [],
+            }
+        )
+
+    active = next(
+        (manifest for manifest in manifests if manifest["active"]), manifests[0]
+    )
+    rows = {row["name"]: row for row in FerroCADGui.settings(_GRID_FEATURE)}
+    spacing = None
+    for name in ("spacing", "minor"):
+        row = rows.get(name)
+        if row is not None:
+            spacing = row["value"]
+            break
+    if spacing is None:
+        # A backend that advertises no spacing row still draws the one world
+        # grid, whose step FerroCAD.Grid owns.
+        spacing = "%g mm" % FerroCAD.Grid.spacing
+
+    return _json(
+        {
+            "feature": _GRID_FEATURE,
+            "backend": active["backend"],
+            "label": active["label"],
+            "spacing": spacing,
+            "providers": providers,
+        }
+    )
+
 
 def _grid_view_request():
     """The ``{"view": …}`` request for the current grid settings.
@@ -760,14 +818,14 @@ FreeCADGui.addCommand("App_ToggleAxisCross", _AxisCrossCommand())
 
 
 class _GridSettingsCommand:
-    """``View_GridSettings`` — edit the reference grid's appearance in a dialog.
+    """``View_GridSettings`` — select the ``Settings/Grid`` node.
 
-    The dialog is a thin client of :data:`FerroCAD.Grid`: it seeds its fields from
-    the settings object, writes each value back on accept, and returns the
-    ``{"view": …}`` request ``FerroCAD.Grid.apply()`` builds, so the shell applies
-    the same state the native grid draws. A validation error stays in the modal
-    (the callback raises ``ValueError`` and the facade reports it as the
-    dialog's error).
+    Since S4 the provider-advertised settings are the one grid-settings surface:
+    with a grid provider registered this command returns the ``select``
+    directive so the shell shows that node. The modal dialog (a thin client of
+    :data:`FerroCAD.Grid`) stays as the headless/upstream fallback when nothing
+    is registered. A validation error stays in the modal (the callback raises
+    ``ValueError`` and the facade reports it as the dialog's error).
     """
 
     def GetResources(self):
@@ -781,6 +839,8 @@ class _GridSettingsCommand:
         }
 
     def Activated(self):
+        if FerroCADGui.providers(_GRID_FEATURE):
+            return {"select": _GRID_SETTINGS_NODE}
         grid = FerroCAD.Grid
         return {
             "title": "Grid settings",
@@ -946,10 +1006,10 @@ FreeCADGui.addCommand("Mods_Settings", _ModsSettingsCommand())
 class _ReloadGridSettingsCommand:
     """``App_ReloadGridSettings`` — apply the grid preferences without a restart.
 
-    The preferences (``User parameter:BaseApp/Preferences/View``) are read and
-    validated by :data:`FerroCAD.Grid`, so this is the same request
-    ``View_GridSettings`` builds. A radius of 0 restores the camera-derived
-    extent.
+    The values are read and validated by :data:`FerroCAD.Grid` from the native
+    provider's group (``User parameter:BaseApp/Preferences/Mods/grid/ferrocad``),
+    so this is the same request ``View_GridSettings`` and ``Settings/Grid``
+    describe. A radius of 0 restores the camera-derived extent.
     """
 
     def GetResources(self):

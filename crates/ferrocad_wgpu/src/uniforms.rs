@@ -20,8 +20,10 @@ pub struct UniformData {
     pub view_proj: [[f32; 4]; 4],
     /// The draw's world transform.
     pub model: [[f32; 4]; 4],
-    /// The draw's linear RGBA colour.
+    /// The draw's linear RGBA colour (the up-facing ink for a two-tone surface).
     pub color: [f32; 4],
+    /// The side/down-facing linear RGBA colour; alpha `0` means single-colour.
+    pub shade: [f32; 4],
     /// The pick id written to the G-buffer's red channel (`0` = not pickable).
     pub pick: u32,
     /// The topology ordinal written to the G-buffer's normal target's `w` channel.
@@ -29,8 +31,11 @@ pub struct UniformData {
     /// A clip-space depth offset (positive = towards the camera) for coplanar overlays
     /// such as a selection highlight.
     pub depth_bias: f32,
-    /// Keeps the block a multiple of 16 bytes.
-    pub _padding: u32,
+    /// Whether the fragment shader selects `shade` for non-up-facing facets.
+    ///
+    /// This occupies the old padding word, so the uniform block stays a multiple of
+    /// 16 bytes and the pick shader's layout matches.
+    pub two_tone: u32,
 }
 
 /// The size of one [`UniformData`] in bytes.

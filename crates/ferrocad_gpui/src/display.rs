@@ -13,7 +13,7 @@
 use std::collections::HashMap;
 
 use ferrocad_geom::Tessellation;
-use ferrocad_stage::{DrawMode, ShapeItem, Stage};
+use ferrocad_stage::{DrawMode, ShapeItem, Stage, theme};
 use serde::Deserialize;
 
 /// One tessellated document shape, with the entity id a pick reports.
@@ -101,10 +101,18 @@ impl DisplaySync {
                 continue;
             }
             let mut item = ShapeItem::from_tessellation(mesh.entity, &mesh.tessellation())
-                .with_draw_mode(display_mode(mesh.display.as_deref()));
+                .with_draw_mode(display_mode(mesh.display.as_deref()))
+                // Document solids get the V1 occluded-edge ghost; overlays do not.
+                .with_ghost_edges();
+            if mesh.color.is_none() {
+                // V2b: up-facing facets use the glass-top ink, the rest the shade.
+                item = item
+                    .with_surface_color(theme::GLASS_TOP)
+                    .with_shade_color(theme::GLASS_SHADE);
+            }
             if let Some(color) = mesh.color {
                 // The edge colour follows the surface, so a wireframe shows the same
-                // colour as the shaded item.
+                // colour as the shaded item. A workbench colour stays single-tone.
                 item = item.with_surface_color(color).with_edge_color(color);
             }
             self.objects.insert(mesh.entity, mesh.object);
@@ -174,6 +182,21 @@ mod tests {
         assert_eq!(display.object_of(7), Some("Box"));
         assert_eq!(display.object_of(8), None);
         assert_eq!(display.len(), 1);
+    }
+
+    #[test]
+    fn a_default_surface_is_the_two_tone_glass() {
+        let mut display = DisplaySync::new();
+        let stage = display.build(vec![slab(7, "Box")]);
+        let item = stage.item(7).expect("the item");
+        assert_eq!(item.surface_color(), theme::GLASS_TOP);
+        assert!(item.ghost_edges(), "document solids opt into the ghost pass");
+        let queue = stage.to_queue();
+        assert_eq!(
+            queue.packets[0].state.shade,
+            theme::GLASS_SHADE,
+            "the side facets carry the glass shade"
+        );
     }
 
     #[test]

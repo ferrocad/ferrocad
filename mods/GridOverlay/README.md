@@ -6,7 +6,7 @@ It is the A2 shipping form of the fork described in `docs/workbenches/grid-overl
 §3.2, not a port of the upstream overlay: there is no Qt, no `pivy`, no Coin
 tree, no `getSceneGraph()`/`getMainWindow()` and no per-document attach code.
 The dialog is the shell's declarative spec, and its `on_accept` writes
-`FreeCAD.Grid` and returns `FreeCAD.Grid.apply()` (a `{"view": …}` request the
+`FerroCAD.Grid` and returns `FerroCAD.Grid.apply()` (a `{"view": …}` request the
 shell applies to the same state the native grid draws).
 
 ## Functional intent that survives
@@ -34,7 +34,7 @@ Intent changes, stated rather than hidden:
 
 ## Feature detection
 
-`grid_api()` is the single discriminator: `getattr(FreeCAD, "Grid", None)` (§3.3
+`grid_api()` is the single discriminator: `getattr(FerroCAD, "Grid", None)` (§3.3
 of the plan). When it is `None` — that is, on upstream FreeCAD — `Activated()`
 returns a clear status saying this build needs FerroCAD's semantic grid API. The
 fork is split cleanly: it carries **no** legacy Coin/GLSL backend, and the

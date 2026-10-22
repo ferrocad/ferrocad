@@ -204,8 +204,8 @@ def _payload(result) -> dict:
 
     A dict with ``on_accept`` is a dialog spec: the callback stays here under a
     token, and the spec goes out under ``dialog`` (the callable must never reach
-    JSON). ``status`` and ``value`` stay top-level; everything else is ignored
-    until a later slice gives it meaning.
+    JSON). ``status``, ``value``, ``view``, ``tool`` and ``select`` stay
+    top-level; everything else is ignored until a later slice gives it meaning.
     """
     payload = {"ok": True}
     if not isinstance(result, dict):
@@ -228,6 +228,8 @@ def _payload(result) -> dict:
         payload["view"] = result["view"]
     if "tool" in result:
         payload["tool"] = result["tool"]
+    if "select" in result:
+        payload["select"] = result["select"]
     return payload
 
 

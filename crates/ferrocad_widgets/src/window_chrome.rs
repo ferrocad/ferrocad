@@ -39,18 +39,64 @@ pub fn window_frame(
     title: impl Into<SharedString>,
     content: impl IntoElement,
 ) -> AnyElement {
+    window_frame_with_leading(window, title, None, content)
+}
+
+/// Like [`window_frame`], with an optional element at the **leading** edge of the
+/// title bar (before the title).
+///
+/// The main window puts its app menu there; the Dev Tools window passes no leading
+/// element, so its title bar carries only the title and the window controls.
+///
+/// When the platform draws the decorations (macOS, some Wayland compositors) there is
+/// no client title bar to put the element in. Rather than dropping it — which would
+/// make an app menu unreachable — the frame draws a slim leading bar directly below
+/// the platform title bar. A leading control stays at the same visual level either
+/// way; only the frame ownership differs.
+pub fn window_frame_with_leading(
+    window: &mut Window,
+    title: impl Into<SharedString>,
+    leading: Option<AnyElement>,
+    content: impl IntoElement,
+) -> AnyElement {
     let content = content.into_any_element();
     let Decorations::Client { tiling } = window.window_decorations() else {
-        return content;
+        let Some(leading) = leading else {
+            return content;
+        };
+        return div()
+            .flex()
+            .flex_col()
+            .size_full()
+            .child(
+                div()
+                    .id("leading-bar")
+                    .debug_selector(|| "leading-bar".to_string())
+                    .flex()
+                    .flex_row()
+                    .items_center()
+                    .h(TITLE_BAR_HEIGHT)
+                    .px_3()
+                    .bg(rgb(TITLE_BG))
+                    .child(leading),
+            )
+            .child(div().flex_1().min_h_0().child(content))
+            .into_any_element();
     };
 
-    window.set_client_inset(INSET);
+    // A maximized/fullscreen window has no draggable edge. Keeping the 6 px inset
+    // would shift the content (and therefore the viewport's pointer mapping), and
+    // the full-window resize canvas would keep setting a resize cursor over it.
+    let maximized = window.is_maximized()
+        || matches!(window.window_bounds(), gpui::WindowBounds::Fullscreen(_));
+    let inset = frame_inset(maximized);
+    window.set_client_inset(inset);
 
     let body = div()
         .flex()
         .flex_col()
         .size_full()
-        .child(title_bar(title.into()))
+        .child(title_bar(title.into(), leading))
         // The content fills the space left below the title bar.
         .child(div().flex_1().min_h_0().child(content));
 
@@ -60,13 +106,16 @@ pub fn window_frame(
         // The grip band has a background so it reads as window chrome; at the
         // top it continues the title bar to the window edge.
         .bg(rgb(TITLE_BG))
-        .when(!tiling.top, |frame| frame.pt(INSET))
-        .when(!tiling.bottom, |frame| frame.pb(INSET))
-        .when(!tiling.left, |frame| frame.pl(INSET))
-        .when(!tiling.right, |frame| frame.pr(INSET))
-        .child(resize_canvas(INSET))
+        .when(!maximized && !tiling.top, |frame| frame.pt(inset))
+        .when(!maximized && !tiling.bottom, |frame| frame.pb(inset))
+        .when(!maximized && !tiling.left, |frame| frame.pl(inset))
+        .when(!maximized && !tiling.right, |frame| frame.pr(inset))
+        .when(!maximized, |frame| frame.child(resize_canvas(INSET)))
         .on_mouse_move(|_event, window, _cx| window.refresh())
-        .on_mouse_down(MouseButton::Left, |event, window, _cx| {
+        .on_mouse_down(MouseButton::Left, move |event, window, _cx| {
+            if maximized {
+                return;
+            }
             let size = window.window_bounds().get_bounds().size;
             if let Some(edge) = resize_edge(event.position, INSET, size) {
                 window.start_window_resize(edge);
@@ -76,9 +125,33 @@ pub fn window_frame(
         .into_any_element()
 }
 
-/// The title bar: drag to move, right-click for the window menu, and platform
-/// controls on the right.
-fn title_bar(title: SharedString) -> impl IntoElement {
+/// The client inset and resize grips collapse on a maximized/fullscreen window.
+fn frame_inset(maximized: bool) -> Pixels {
+    if maximized {
+        px(0.)
+    } else {
+        INSET
+    }
+}
+
+/// The title bar: an optional leading element, the title, then the platform
+/// controls.
+///
+/// It drags the window on left press and opens the window menu on right click.
+/// A leading control that handles its own clicks must stop mouse-down propagation,
+/// or the drag handler would also start a window move (the shell's app menu does).
+pub fn title_bar(title: impl Into<SharedString>, leading: Option<AnyElement>) -> impl IntoElement {
+    let mut label = div().flex().flex_row().items_center().gap_2();
+    if let Some(leading) = leading {
+        label = label.child(leading);
+    }
+    label = label.child(
+        div()
+            .text_sm()
+            .text_color(rgb(TITLE_FG))
+            .child(title.into()),
+    );
+
     let controls = div()
         .flex()
         .flex_row()
@@ -98,6 +171,7 @@ fn title_bar(title: SharedString) -> impl IntoElement {
 
     div()
         .id("titlebar")
+        .debug_selector(|| "titlebar".to_string())
         .flex()
         .flex_row()
         .items_center()
@@ -114,7 +188,7 @@ fn title_bar(title: SharedString) -> impl IntoElement {
                 window.show_window_menu(event.position());
             }
         })
-        .child(div().text_sm().text_color(rgb(TITLE_FG)).child(title))
+        .child(label)
         .child(controls)
 }
 
@@ -199,6 +273,13 @@ fn resize_canvas(inset: Pixels) -> impl IntoElement {
 mod tests {
     use super::*;
     use gpui::size;
+
+    /// A maximized window must not reserve the border band or show grips.
+    #[test]
+    fn the_frame_inset_collapses_when_maximized() {
+        assert_eq!(frame_inset(false), INSET);
+        assert_eq!(frame_inset(true), px(0.));
+    }
 
     /// Pure geometry: the resize-grip hit regions hug the border and leave the
     /// content area alone.

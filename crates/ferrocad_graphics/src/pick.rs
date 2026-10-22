@@ -446,6 +446,7 @@ mod tests {
             state: StateSnapshot {
                 world_transform: Matrix4::identity(),
                 color: [1.0, 1.0, 1.0, 1.0],
+                shade: [0.0; 4],
                 depth_bias: 0.0,
                 texture: None,
                 id: PickId(0),

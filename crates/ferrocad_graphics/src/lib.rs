@@ -25,6 +25,7 @@ pub mod pick;
 pub mod pixels;
 pub mod ribbon;
 pub mod state;
+pub mod theme;
 
 pub use batch::{DrawBatch, DrawPacket, Generation, MeshId, PickId, RenderQueue};
 pub use camera::{Camera, Projection};

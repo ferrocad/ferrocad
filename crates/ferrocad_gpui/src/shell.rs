@@ -7,12 +7,13 @@
 //! kernel/`ViewProvider`s produce real geometry; richer widgets, commands and menus
 //! come in later slices (see `docs/direction/app-shell-vision.md`).
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, Mutex};
 
 use gpui::{
-    AnyElement, App, Context, Entity, FocusHandle, Focusable, IntoElement, KeyDownEvent, Render,
-    SharedString, Subscription, Window, WindowHandle, div, prelude::*, px, rgb, rgba,
+    Anchor, AnyElement, App, Context, Entity, FocusHandle, Focusable, IntoElement, KeyDownEvent,
+    MouseButton, MouseDownEvent, MouseMoveEvent, Pixels, Point, Render, SharedString,
+    Subscription, Window, WindowHandle, anchored, deferred, div, point, prelude::*, px, rgb, rgba,
 };
 
 use ferrocad_geom::SelectionRef;
@@ -21,24 +22,54 @@ use ferrocad_stage::{InteractionCommit, Manipulator, ToolStatus, TransformGizmo}
 use ferrocad_viewport::scene;
 use ferrocad_viewport::{HoverReport, InventorViewport, SelectionEvent, ViewportEvent};
 use ferrocad_wgpu::WgpuRenderer;
-use ferrocad_widgets::{SubmitEvent, TextAreaState, TextInput, window_frame};
+use ferrocad_widgets::window_chrome::window_frame_with_leading;
+use ferrocad_widgets::{SubmitEvent, TextAreaState, TextInput};
 
 use crate::commands::{self, CommandInfo};
 use crate::contributions::Contributions;
 use crate::dialog::{self, DialogSpec, Kind, ValueState};
 use crate::display::{DisplaySync, StageMesh};
-use crate::python::{self, Bootstrap, DocumentNode, PropRow};
+use crate::python::{self, Bootstrap, DocumentNode, GridSummary, PropRow};
 use crate::selection::{self, SelectionItem};
 use crate::shortcuts::Accelerator;
 use crate::dev_tools::DevTools;
 use crate::view::{ProjectionName, ViewRequest, ViewState, WorkplaneAction};
 
-pub(crate) const BG: u32 = 0x101216;
+pub(crate) const BG: u32 = 0x0f1218;
 pub(crate) const PANEL: u32 = 0x16181d;
 pub(crate) const PANEL_ALT: u32 = 0x1d2026;
 pub(crate) const FG: u32 = 0xd8dbe0;
 pub(crate) const MUTED: u32 = 0x8b919a;
 pub(crate) const ACCENT: u32 = 0x2f4a6d;
+
+/// Whether two names address the same tree node.
+///
+/// Document objects match exactly. The synthetic `Settings` namespace accepts a
+/// title-cased feature segment (`Settings/Grid`) as well as the registered id
+/// (`Settings/grid`), because the Python resolver accepts both spellings.
+fn same_node(left: &str, right: &str) -> bool {
+    if left == right {
+        return true;
+    }
+    let alias = |candidate: &str, other: &str| {
+        let Some((root, segment)) = candidate.split_once('/') else {
+            return false;
+        };
+        root == "Settings"
+            && other
+                .strip_prefix("Settings/")
+                .is_some_and(|live_segment| live_segment.eq_ignore_ascii_case(segment))
+    };
+    alias(left, right) || alias(right, left)
+}
+
+/// Whether `name` names a live tree node.
+///
+/// Document objects match exactly; a `Settings` node may use either spelling, so
+/// a `select` directive is not pruned just because it uses the display form.
+fn live_node(name: &str, live: &HashSet<String>) -> bool {
+    live.contains(name) || live.iter().any(|candidate| same_node(name, candidate))
+}
 
 /// The console transcript: the log lines plus a fresh prompt.
 fn transcript_of(model: &Arc<Mutex<ShellModel>>) -> String {
@@ -106,6 +137,15 @@ pub struct Shell {
     /// The one open header popover, keyed by its control (`"grid"`, `"wp"`, `"mods"`).
     /// At most one is open at a time.
     open_popover: Option<String>,
+    /// The window-space pointer position of the press that opened the popover.
+    /// The flex header gives an `Anchored` child a negative layout origin, so the
+    /// shell anchors from the actual event instead.
+    popover_anchor: Option<Point<Pixels>>,
+    /// The grid's provider and spacing, read once when its popover opens (T4).
+    /// `None` until the first open, or after a settings edit invalidates it.
+    grid_summary: Option<GridSummary>,
+    /// The modeless settings card, opened for a `Settings/<Feature>` node.
+    settings_card: Option<SettingsCard>,
     /// The Dev Tools second window, if one has been opened. The window owns no model:
     /// its view reads this `Shell` entity. A closed window leaves the handle stale
     /// until the next toggle notices and reopens.
@@ -120,6 +160,16 @@ struct PropInput {
     state: Entity<TextInput>,
     seeded: String,
     _submit: Subscription,
+}
+
+/// The modeless settings card (A3/T5): a draggable 380 px panel over the canvas
+/// with no backdrop, so the viewport stays interactive. It shows the selected
+/// `Settings/<Feature>` node through the same property rows the Dev Tools pane uses.
+struct SettingsCard {
+    /// Window coordinates of the card's top-left corner.
+    position: Point<Pixels>,
+    /// Pointer and card origin when a drag starts.
+    drag: Option<(Point<Pixels>, Point<Pixels>)>,
 }
 
 /// The open modal: the spec, the collected values, and its single-use token.
@@ -225,6 +275,9 @@ impl Shell {
             focus_dialog: false,
             root_focus: cx.focus_handle(),
             open_popover: None,
+            popover_anchor: None,
+            grid_summary: None,
+            settings_card: None,
             dev_tools: None,
             _viewport_events: None,
             _submit: submit,
@@ -326,16 +379,98 @@ impl Shell {
         if !self.popover_open(key) {
             self.open_popover = Some(key.to_string());
         }
+        // The Grid menu is the one provider-aware popover (T4): read its summary
+        // once when it opens, not on every frame. A failure leaves the rows out
+        // (and reports why) rather than showing values from a previous open.
+        if key == "grid" {
+            match python::grid_summary() {
+                Ok(summary) => self.grid_summary = Some(summary),
+                Err(error) => {
+                    self.grid_summary = None;
+                    self.console_line(format!("grid: {error}"), cx);
+                }
+            }
+        }
         cx.notify();
     }
 
     /// Close whichever popover is open; returns whether one was open.
     pub(crate) fn close_popover(&mut self, cx: &mut Context<Self>) -> bool {
+        self.popover_anchor = None;
         if self.open_popover.take().is_some() {
             cx.notify();
             true
         } else {
             false
+        }
+    }
+
+    /// Record where the pointer pressed the control that owns the popover.
+    pub(crate) fn set_popover_anchor(&mut self, position: Point<Pixels>) {
+        self.popover_anchor = Some(position);
+    }
+
+    /// Open the modeless settings card for a `Settings/<Feature>` selection.
+    ///
+    /// The card keeps its last position and size when reopened; it is the visible
+    /// surface T5 previously reached only through the Dev Tools property pane.
+    fn open_settings_card(&mut self, cx: &mut Context<Self>) {
+        if self.settings_card.is_none() {
+            self.settings_card = Some(SettingsCard {
+                position: point(px(220.), px(96.)),
+                drag: None,
+            });
+            cx.notify();
+        }
+    }
+
+    /// Close the settings card; returns whether it was open.
+    fn close_settings_card(&mut self, cx: &mut Context<Self>) -> bool {
+        if self.settings_card.take().is_some() {
+            cx.notify();
+            true
+        } else {
+            false
+        }
+    }
+
+    /// Start dragging the card from its header.
+    fn begin_settings_drag(&mut self, pointer: Point<Pixels>, cx: &mut Context<Self>) {
+        if let Some(card) = &mut self.settings_card {
+            card.drag = Some((pointer, card.position));
+            cx.notify();
+        }
+    }
+
+    /// Follow a left-button drag; moves outside the header still count because the
+    /// shell root forwards its pointer moves here.
+    fn drag_settings_card(
+        &mut self,
+        pointer: Point<Pixels>,
+        pressed: Option<MouseButton>,
+        cx: &mut Context<Self>,
+    ) {
+        if pressed != Some(MouseButton::Left) {
+            return;
+        }
+        let Some(card) = &mut self.settings_card else {
+            return;
+        };
+        let Some((start_pointer, start_position)) = card.drag else {
+            return;
+        };
+        card.position = point(
+            start_position.x + pointer.x - start_pointer.x,
+            start_position.y + pointer.y - start_pointer.y,
+        );
+        cx.notify();
+    }
+
+    fn end_settings_drag(&mut self, cx: &mut Context<Self>) {
+        if let Some(card) = &mut self.settings_card {
+            if card.drag.take().is_some() {
+                cx.notify();
+            }
         }
     }
 
@@ -371,6 +506,10 @@ impl Shell {
             }
             if self.dialog.is_none() && self.active_tool.is_some() {
                 self.cancel_tool(cx);
+                return true;
+            }
+            // The settings card is modeless, so Esc is its normal dismissal.
+            if self.dialog.is_none() && self.close_settings_card(cx) {
                 return true;
             }
         }
@@ -776,12 +915,32 @@ impl Shell {
             return;
         }
 
+        // A **select** directive (T5, S2) is not a failure: the command asks the
+        // shell to show a model-tree node — the synthetic `Settings/<Feature>`
+        // root — so the Properties pane renders its rows. It goes through the
+        // same selection path a tree click uses, so the pane, the facade
+        // snapshot and every command's `IsActive` agree.
+        let selected = outcome
+            .select
+            .clone()
+            .filter(|name| !name.trim().is_empty());
+        if let Some(name) = &selected {
+            self.select(name, cx);
+            if name.starts_with("Settings/") {
+                self.open_settings_card(cx);
+            }
+        }
+
         self.refresh(cx);
         self.sync_stage(cx);
-        let status = if outcome.status.is_empty() {
-            format!("ran {id}")
-        } else {
+        // A select directive brings its own status (`replace_selection` sets
+        // it); a command's human status still wins when it supplies one.
+        let status = if !outcome.status.is_empty() {
             outcome.status
+        } else if selected.is_some() {
+            self.model.lock().unwrap().status.clone()
+        } else {
+            format!("ran {id}")
         };
         self.model.lock().unwrap().status = status.clone();
         self.console_line(status, cx);
@@ -1148,12 +1307,20 @@ impl Shell {
             (1, Some(name)) => format!("selected {name}"),
             (count, Some(name)) => format!("selected {count} · {name}"),
         };
+        let settings_node = primary
+            .as_deref()
+            .is_some_and(|name| name.starts_with("Settings/"));
         {
             let mut m = self.model.lock().unwrap();
             m.selection = items;
             m.selected = primary;
             m.properties = properties;
             m.status = status;
+        }
+        if settings_node {
+            self.open_settings_card(cx);
+        } else {
+            self.settings_card = None;
         }
         if let Err(error) = self.push_selection() {
             self.console_line(format!("selection: {error}"), cx);
@@ -1192,24 +1359,31 @@ impl Shell {
     /// command's `IsActive` cannot see a deleted object.
     fn refresh(&mut self, cx: &mut Context<Self>) {
         let tree = python::model_tree().unwrap_or_default();
-        let live: std::collections::HashSet<String> = tree
+        let live: HashSet<String> = tree
             .iter()
             .flat_map(|doc| doc.objects.iter().map(|obj| obj.name.clone()))
             .collect();
         let (next, primary) = {
             let m = self.model.lock().unwrap();
             let mut next = m.selection.clone();
-            next.retain(|item| live.contains(&item.object));
+            next.retain(|item| live_node(&item.object, &live));
             let primary = next
                 .last()
                 .map(|item| item.object.clone())
-                .or_else(|| m.selected.clone().filter(|name| live.contains(name)));
+                .or_else(|| m.selected.clone().filter(|name| live_node(name, &live)));
             (next, primary)
         };
         let properties = primary
             .as_deref()
             .map(|name| python::properties(name).unwrap_or_default())
             .unwrap_or_default();
+        // A document selection has no settings card; a `Settings/...` node keeps it.
+        if !primary
+            .as_deref()
+            .is_some_and(|name| name.starts_with("Settings/"))
+        {
+            self.settings_card = None;
+        }
         {
             let mut m = self.model.lock().unwrap();
             m.tree = tree;
@@ -1280,6 +1454,12 @@ impl Shell {
                 if let Some(input) = self.prop_inputs.get_mut(key) {
                     input.seeded = text.to_string();
                 }
+                // A settings edit can switch the provider or change the spacing
+                // the Grid popover advertises; re-read the summary so an open
+                // popover follows the row the user just changed.
+                if key.starts_with("Settings/") {
+                    self.grid_summary = python::grid_summary().ok();
+                }
                 self.refresh(cx);
                 self.sync_stage(cx);
                 format!("set {key}")
@@ -1333,6 +1513,7 @@ impl Shell {
 fn tool_strip(status: &ToolStatus, cx: &mut Context<Shell>) -> impl IntoElement {
     div()
         .id("tool-strip")
+        .occlude()
         .flex()
         .flex_row()
         .items_center()
@@ -1615,7 +1796,11 @@ pub(crate) fn tree_panel(model: &ShellModel, cx: &mut Context<Shell>) -> impl In
                         .text_color(rgb(MUTED))
                         .child(obj.type_id.clone()),
                 );
-            if model.selection.iter().any(|item| item.is(&name)) {
+            if model
+                .selection
+                .iter()
+                .any(|item| same_node(&item.object, &name))
+            {
                 row = row.bg(rgb(ACCENT));
             }
             rows = rows.child(row.on_click(cx.listener(
@@ -1651,8 +1836,9 @@ pub(crate) fn properties_panel(
     shell: &mut Shell,
     model: &ShellModel,
     window: &Window,
+    title: Option<&str>,
     cx: &mut Context<Shell>,
-) -> impl IntoElement {
+) -> impl IntoElement + use<> {
     let mut rows = div()
         .id("properties-scroll")
         .flex()
@@ -1685,7 +1871,9 @@ pub(crate) fn properties_panel(
                 let value: AnyElement = if row.editable {
                     let key = format!("{name}.{}", row.name);
                     let state = shell.ensure_prop_input(&key, &row.value, window, cx);
+                    let selector = format!("prop-{key}");
                     div()
+                        .debug_selector(move || selector.clone())
                         .w(px(150.))
                         .flex_shrink_0()
                         .child(state)
@@ -1743,16 +1931,122 @@ pub(crate) fn properties_panel(
         }
     }
 
-    div()
+    let panel = div()
         .flex()
         .flex_col()
         .w_full()
         .flex_1()
         .min_h_0()
         .bg(rgb(PANEL))
-        .debug_selector(|| "properties-panel".to_string())
-        .child(panel_header("Properties"))
-        .child(rows)
+        .debug_selector(|| "properties-panel".to_string());
+    let panel = match title {
+        Some(title) => panel.child(panel_header(title)),
+        None => panel,
+    };
+    panel.child(rows)
+}
+
+/// The title the settings card uses for a synthetic node (`Settings/Grid` ->
+/// `Grid settings`).
+fn settings_title(name: &str) -> String {
+    let feature = name.strip_prefix("Settings/").unwrap_or(name);
+    let mut chars = feature.chars();
+    let title = match chars.next() {
+        Some(first) => first.to_uppercase().collect::<String>() + chars.as_str(),
+        None => String::new(),
+    };
+    format!("{title} settings")
+}
+
+/// The modeless settings card (A3/T5): a draggable `380 px` panel over the canvas.
+///
+/// It has no backdrop, renders the same rows as the Dev Tools property pane, and is
+/// dismissed with its `✕` or `Esc`. The position is window coordinates so it survives
+/// a drag across the canvas.
+fn settings_card_view(
+    shell: &mut Shell,
+    model: &ShellModel,
+    window: &Window,
+    cx: &mut Context<Shell>,
+) -> impl IntoElement {
+    let position = shell
+        .settings_card
+        .as_ref()
+        .map(|card| card.position)
+        .unwrap_or_else(|| point(px(220.), px(96.)));
+    let title = model
+        .selected
+        .as_deref()
+        .map(settings_title)
+        .unwrap_or_else(|| "Settings".to_string());
+
+    let header = div()
+        .id("settings-card-header")
+        .debug_selector(|| "settings-card-header".to_string())
+        .flex()
+        .flex_row()
+        .items_center()
+        .justify_between()
+        .px_2()
+        .py_1()
+        .bg(rgb(PANEL_ALT))
+        .text_xs()
+        .text_color(rgb(FG))
+        .cursor_pointer()
+        .on_mouse_down(MouseButton::Left, cx.listener(|this, event: &MouseDownEvent, _window, cx| {
+            this.begin_settings_drag(event.position, cx);
+        }))
+        .child(title)
+        .child(
+            div()
+                .id("settings-card-close")
+                .debug_selector(|| "settings-card-close".to_string())
+                .px_1()
+                .rounded_sm()
+                .text_color(rgb(MUTED))
+                .hover(|style| style.bg(rgb(PANEL)))
+                .child("✕")
+                .on_mouse_down(MouseButton::Left, |_event, _window, cx| cx.stop_propagation())
+                .on_click(cx.listener(|this, _event, _window, cx| {
+                    this.close_settings_card(cx);
+                })),
+        );
+
+    let panel = properties_panel(shell, model, window, None, cx);
+    let card = div()
+        .id("settings-card")
+        .debug_selector(|| "settings-card".to_string())
+        // The card floats over the canvas: own the hitbox so a press/drag inside it
+        // cannot orbit or pick the viewport underneath.
+        .occlude()
+        .flex()
+        .flex_col()
+        .w(px(380.))
+        .h(px(420.))
+        .rounded_md()
+        .bg(rgba(0x16181df2))
+        .border_1()
+        .border_color(rgba(0xffffff26))
+        .overflow_hidden()
+        // `occlude` blocks the shell root's pointer moves while the drag is over the
+        // card, so the card follows the drag itself.
+        .on_mouse_move(cx.listener(|this, event: &MouseMoveEvent, _window, cx| {
+            this.drag_settings_card(event.position, event.pressed_button, cx);
+        }))
+        .on_mouse_up(MouseButton::Left, cx.listener(|this, _event, _window, cx| {
+            this.end_settings_drag(cx);
+        }))
+        .child(header)
+        .child(div().flex_1().min_h_0().overflow_hidden().child(panel));
+
+    deferred(
+        anchored()
+            .anchor(Anchor::TopLeft)
+            .position(position)
+            .snap_to_window_with_margin(px(8.))
+            .child(card),
+    )
+    .with_priority(2)
 }
 
 /// The globally bindable accelerators for `commands`.
@@ -1866,7 +2160,7 @@ pub(crate) fn dev_tools_body(
         }))
         .child(crate::chrome::command_list_panel(&model, cx))
         .child(tree_panel(&model, cx))
-        .child(properties_panel(shell, &model, window, cx))
+        .child(properties_panel(shell, &model, window, Some("Properties"), cx))
         .child(console_panel(&shell.console, cx))
         .into_any_element()
 }
@@ -1893,8 +2187,9 @@ impl Render for Shell {
             .debug_selector(|| "main-viewport".to_string())
             .child(crate::chrome::viewport_header(
                 &model,
+                self.grid_summary.as_ref(),
                 self.open_popover.as_deref(),
-                dev_tools_open,
+                self.popover_anchor,
                 cx,
             ));
         // The tool strip sits directly under the pane header while a session runs; it
@@ -1972,15 +2267,35 @@ impl Render for Shell {
                     cx.stop_propagation();
                 }
             }))
+            // The settings card is dragged from its header, but the shell root sees
+            // the moves so a fast drag does not stop at the card edge.
+            .on_mouse_move(cx.listener(|this, event: &MouseMoveEvent, _window, cx| {
+                this.drag_settings_card(event.position, event.pressed_button, cx);
+            }))
+            .on_mouse_up(MouseButton::Left, cx.listener(|this, _event, _window, cx| {
+                this.end_settings_drag(cx);
+            }))
             .track_focus(&self.root_focus)
             .focusable()
             .child(content);
         let body = if self.dialog.is_some() {
             body.child(dialog_overlay(self, cx))
+        } else if self.settings_card.is_some() {
+            body.child(settings_card_view(self, &model, window, cx))
         } else {
             body
         };
-        window_frame(window, model.title.clone(), body)
+        // The app menu lives in the window title bar, not the viewport header: it is
+        // app-level chrome, and the title bar is the one place a native-looking app
+        // menu belongs. The Dev Tools window passes no leading element.
+        let leading = crate::chrome::app_menu(
+            self.popover_open("app"),
+            &model,
+            dev_tools_open,
+            cx,
+        )
+        .into_any_element();
+        window_frame_with_leading(window, model.title.clone(), Some(leading), body)
     }
 }
 
@@ -2261,8 +2576,9 @@ if "Test_Dialog" not in FreeCADGui.listCommands():
     #[gpui::test]
     fn a_dialog_view_request_changes_the_view_state(cx: &mut TestAppContext) {
         let _guard = crate::PYTHON_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        reset_grid_state();
         let model = Shell::boot().expect("boot shell");
+        // Boot first: it puts the facade on `sys.path`, which the reset needs.
+        reset_grid_state();
         let shell = cx.update(|cx| cx.new(|cx| Shell::from_model(model.clone(), cx)));
 
         let script = r#"
@@ -2411,8 +2727,9 @@ if "Test_Shortcut" not in FreeCADGui.listCommands():
     #[gpui::test]
     fn a_view_request_toggles_the_grid_and_its_check_mark(cx: &mut TestAppContext) {
         let _guard = crate::PYTHON_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        reset_grid_state();
         let model = Shell::boot().expect("boot shell");
+        // Boot first: it puts the facade on `sys.path`, which the reset needs.
+        reset_grid_state();
         let shell = cx.update(|cx| cx.new(|cx| Shell::from_model(model.clone(), cx)));
 
         assert!(!model.lock().unwrap().view.grid);
@@ -2714,17 +3031,16 @@ if "Test_Tool" not in FreeCADGui.listCommands():
     /// preference leaks into the next one. Call this (with the lock held) when a
     /// test's assertions depend on the default grid.
     fn reset_grid_state() {
+        // S4 moved the grid store to the native provider's group; use the public
+        // facade so this reset follows the one store instead of a legacy key.
         let script = r#"
-import FreeCAD
-prefs = FreeCAD.ParamGet("User parameter:BaseApp/Preferences/View")
-prefs.SetBool("GridEnabled", False)
-prefs.SetFloat("GridMinorStep", 10.0)
-prefs.SetFloat("GridMajorStep", 100.0)
-prefs.SetFloat("GridRadius", 0.0)
+import FerroCAD
+FerroCAD.Grid.reset()
 "#;
         let reset = crate::python::evaluate(script).expect("reset the grid state");
         assert!(reset.ok, "{}", reset.output);
     }
+
 
     /// P0.5/D4/D5: closing and reopening preserves the model, the selection and the
     /// console; the second window never owns a copy.
@@ -2898,8 +3214,9 @@ if "Test_Unannotated" not in FreeCADGui.listCommands():
     #[gpui::test]
     fn the_grid_split_button_runs_the_label_and_the_caret_opens(cx: &mut TestAppContext) {
         let _guard = crate::PYTHON_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        reset_grid_state();
         let model = Shell::boot().expect("boot shell");
+        // Boot first: it puts the facade on `sys.path`, which the reset needs.
+        reset_grid_state();
         let window = cx.update(|cx| {
             let model = model.clone();
             cx.open_window(Default::default(), move |_window, cx| {
@@ -2925,6 +3242,10 @@ if "Test_Unannotated" not in FreeCADGui.listCommands():
             "the controls are right-aligned (grid at {:?}, width {width:?})",
             grid.origin.x
         );
+        assert!(
+            cx.debug_bounds("grid-state-dot").is_some(),
+            "the Grid control carries a persistent on/off dot"
+        );
 
         // The caret opens the grid popover and does not toggle the grid.
         assert!(!model.lock().unwrap().view.grid);
@@ -2935,12 +3256,28 @@ if "Test_Unannotated" not in FreeCADGui.listCommands():
         );
         assert!(!model.lock().unwrap().view.grid, "opening ran no command");
         draw(&mut cx);
-        assert!(cx.debug_bounds("grid-popover").is_some());
+        let popover = cx.debug_bounds("grid-popover").expect("the grid popover");
+        let caret = cx.debug_bounds("grid-caret").expect("the caret");
+        assert!(
+            popover.origin.y >= caret.origin.y + caret.size.height,
+            "the popover drops below the control (popover {:?}, caret {:?})",
+            popover.origin,
+            caret.origin
+        );
+        assert!(
+            popover.origin.x + popover.size.width <= width + px(8.),
+            "the popover stays inside the window (right edge {:?})",
+            popover.origin.x + popover.size.width
+        );
         assert!(
             cx.debug_bounds("grid-row-View_GridSettings").is_some(),
             "the popover lists the grid surface's children"
         );
         assert!(cx.debug_bounds("grid-row-App_ReloadGridSettings").is_some());
+        assert!(
+            cx.debug_bounds("hairline-2").is_some(),
+            "the mode and config groups have a hairline"
+        );
 
         // Esc dismisses it and leaves the grid alone.
         let root = cx.update(|_window, cx| shell.read(cx).root_focus_handle());
@@ -3014,9 +3351,357 @@ if "Test_Unannotated" not in FreeCADGui.listCommands():
         assert!(!model.lock().unwrap().view.axis_cross);
     }
 
-    /// T7: the app menu sits at the header's left edge and is the discoverable way back
+    /// T4: the Grid popover reports the active provider and spacing above its
+    /// command rows, and follows a provider switch.
+    #[gpui::test]
+    fn the_grid_popover_reports_the_active_provider_and_spacing(cx: &mut TestAppContext) {
+        let _guard = crate::PYTHON_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let model = Shell::boot().expect("boot shell");
+        // Boot first: it puts the facade on `sys.path`, which the reset needs.
+        reset_grid_state();
+        let window = cx.update(|cx| {
+            let model = model.clone();
+            cx.open_window(Default::default(), move |_window, cx| {
+                cx.new(|cx| Shell::from_model(model.clone(), cx))
+            })
+            .unwrap()
+        });
+        let mut cx = VisualTestContext::from_window(window.into(), cx);
+        let shell: Entity<Shell> = window.root(&mut cx).unwrap();
+        draw(&mut cx);
+
+        click_at(&mut cx, "grid-caret");
+        draw(&mut cx);
+        assert!(
+            cx.debug_bounds("grid-row-provider").is_some(),
+            "the popover reports the provider above its commands"
+        );
+        assert!(
+            cx.debug_bounds("grid-row-spacing").is_some(),
+            "and the active provider's spacing"
+        );
+        assert!(
+            cx.debug_bounds("grid-row-no-provider").is_none(),
+            "there is a provider"
+        );
+        {
+            let summary = cx
+                .update(|_window, cx| shell.read(cx).grid_summary.clone())
+                .expect("opening the popover fetched the summary");
+            assert_eq!(summary.feature, "grid");
+            assert_eq!(summary.backend.as_deref(), Some("ferrocad"));
+            assert_eq!(summary.label.as_deref(), Some("FerroCAD (native)"));
+            assert_eq!(summary.spacing.as_deref(), Some("10 mm"));
+            assert!(
+                summary
+                    .providers
+                    .iter()
+                    .any(|provider| provider.backend == "coin" && !provider.active),
+                "the other backend is listed but not active"
+            );
+        }
+        // The active backend's mode row is checked; the inactive one is not.
+        {
+            let model = model.lock().unwrap();
+            let checked = |id: &str| {
+                model
+                    .commands
+                    .iter()
+                    .find(|command| command.id == id)
+                    .map(|command| command.checked)
+                    .unwrap_or(false)
+            };
+            assert!(
+                checked("GridOverlay_Settings"),
+                "the active native backend reads as checked"
+            );
+            assert!(
+                !checked("GridOverlayCoin_Settings"),
+                "the inactive Coin backend is unchecked"
+            );
+        }
+
+        // Switching the provider through the Settings node's selector refreshes
+        // the cached summary, and an open popover follows it.
+        cx.update(|_window, cx| {
+            shell.update(cx, |shell, cx| {
+                shell.commit_property("Settings/Grid.provider", "Coin (WGSL)", cx);
+            });
+        });
+        draw(&mut cx);
+        {
+            let summary = cx
+                .update(|_window, cx| shell.read(cx).grid_summary.clone())
+                .expect("the settings edit refreshed the summary");
+            assert_eq!(summary.backend.as_deref(), Some("coin"));
+            assert_eq!(summary.label.as_deref(), Some("Coin (WGSL)"));
+        }
+        assert!(
+            cx.debug_bounds("grid-row-provider").is_some(),
+            "the provider row is still there after the switch"
+        );
+
+        // Leave the shared interpreter on the default provider for later tests.
+        cx.update(|_window, cx| {
+            shell.update(cx, |shell, cx| {
+                shell.commit_property("Settings/Grid.provider", "FerroCAD (native)", cx);
+            });
+        });
+        reset_grid_state();
+    }
+
+    /// T5/S2: `View_GridSettings` asks the shell to select the synthetic
+    /// `Settings/Grid` node, and the existing Properties pane renders its rows.
+    #[gpui::test]
+    fn view_grid_settings_selects_the_settings_node(cx: &mut TestAppContext) {
+        let _guard = crate::PYTHON_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let model = Shell::boot().expect("boot shell");
+        // Boot first: it puts the facade on `sys.path`, which the reset needs.
+        reset_grid_state();
+        // The command returns the directive; `FreeCADGui._payload` must forward it.
+        let forwarded = crate::commands::run("View_GridSettings").expect("run the command");
+        assert_eq!(
+            forwarded.select.as_deref(),
+            Some("Settings/Grid"),
+            "the bridge forwards the command's select directive"
+        );
+
+        let window = cx.update(|cx| {
+            let model = model.clone();
+            cx.open_window(Default::default(), move |_window, cx| {
+                cx.new(|cx| Shell::from_model(model.clone(), cx))
+            })
+            .unwrap()
+        });
+        let mut cx = VisualTestContext::from_window(window.into(), cx);
+        let shell: Entity<Shell> = window.root(&mut cx).unwrap();
+
+        cx.update(|_window, cx| {
+            shell.update(cx, |shell, cx| shell.run_command("View_GridSettings", cx))
+        });
+
+        {
+            let m = model.lock().unwrap();
+            assert_eq!(
+                m.selected.as_deref(),
+                Some("Settings/Grid"),
+                "the directive selected the node"
+            );
+            assert!(
+                m.selection.iter().any(|item| item.is("Settings/Grid")),
+                "through the normal selection path"
+            );
+            let names: Vec<&str> = m.properties.iter().map(|row| row.name.as_str()).collect();
+            assert!(names.contains(&"provider"), "rows: {names:?}");
+            assert!(names.contains(&"minor"), "rows: {names:?}");
+            assert!(
+                m.status.contains("Settings/Grid"),
+                "the selection status is kept: {}",
+                m.status
+            );
+        }
+        assert!(
+            cx.update(|_window, cx| shell.read(cx).dialog.is_none()),
+            "the select directive is not the modal fallback"
+        );
+
+        // The modeless card is the visible settings surface (A3/T5): it renders one
+        // field per editable row, without opening the Dev Tools window.
+        draw(&mut cx);
+        let card = cx.debug_bounds("settings-card").expect("the settings card");
+        assert_eq!(card.size.width, px(380.), "the card is 380 px wide");
+        assert!(cx.debug_bounds("settings-card-header").is_some());
+        assert!(cx.debug_bounds("settings-card-close").is_some());
+        let keys = cx.update(|_window, cx| {
+            let mut keys: Vec<String> = shell.read(cx).prop_inputs.keys().cloned().collect();
+            keys.sort();
+            keys
+        });
+        assert!(
+            keys.iter().any(|key| key == "Settings/Grid.provider"),
+            "fields: {keys:?}"
+        );
+        assert!(
+            keys.iter().any(|key| key == "Settings/Grid.minor"),
+            "fields: {keys:?}"
+        );
+
+        // The header drags the card; the shell root follows the pointer.
+        let header = cx
+            .debug_bounds("settings-card-header")
+            .expect("the card header");
+        let start = header.center();
+        cx.simulate_mouse_down(start, MouseButton::Left, gpui::Modifiers::default());
+        cx.simulate_mouse_move(
+            start + point(px(40.), px(30.)),
+            MouseButton::Left,
+            gpui::Modifiers::default(),
+        );
+        cx.simulate_mouse_up(
+            start + point(px(40.), px(30.)),
+            MouseButton::Left,
+            gpui::Modifiers::default(),
+        );
+        let moved = cx.update(|_window, cx| {
+            shell
+                .read(cx)
+                .settings_card
+                .as_ref()
+                .expect("the card is still open")
+                .position
+        });
+        assert_eq!(
+            moved,
+            point(px(260.), px(126.)),
+            "the header drag moved the card"
+        );
+
+        // The close button and Esc both dismiss it without losing the selection.
+        click_at(&mut cx, "settings-card-close");
+        assert!(cx.update(|_window, cx| shell.read(cx).settings_card.is_none()));
+        cx.update(|_window, cx| {
+            shell.update(cx, |shell, cx| shell.run_command("View_GridSettings", cx))
+        });
+        draw(&mut cx);
+        assert!(cx.debug_bounds("settings-card").is_some());
+        let root = cx.update(|_window, cx| shell.read(cx).root_focus_handle());
+        cx.update(|window, cx| window.focus(&root, cx));
+        cx.simulate_keystrokes("escape");
+        assert!(
+            cx.update(|_window, cx| shell.read(cx).settings_card.is_none()),
+            "Esc dismisses the modeless card"
+        );
+        reset_grid_state();
+    }
+
+    /// P0.8: a click/focus inside the card must not fall through to the canvas and
+    /// clear the selection (which would drop the card).
+    #[gpui::test]
+    fn clicking_a_settings_field_keeps_the_card_open(cx: &mut TestAppContext) {
+        let _guard = crate::PYTHON_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let model = Shell::boot().expect("boot shell");
+        reset_grid_state();
+        let window = cx.update(|cx| {
+            let model = model.clone();
+            cx.open_window(Default::default(), move |_window, cx| {
+                cx.new(|cx| Shell::from_model(model.clone(), cx))
+            })
+            .unwrap()
+        });
+        let mut cx = VisualTestContext::from_window(window.into(), cx);
+        let shell: Entity<Shell> = window.root(&mut cx).unwrap();
+        cx.update(|_window, cx| {
+            shell.update(cx, |shell, cx| shell.run_command("View_GridSettings", cx))
+        });
+        draw(&mut cx);
+
+        let field = cx
+            .debug_bounds("prop-Settings/Grid.minor")
+            .expect("the minor field");
+        cx.simulate_mouse_down(
+            field.center(),
+            MouseButton::Left,
+            gpui::Modifiers::default(),
+        );
+        cx.simulate_mouse_up(
+            field.center(),
+            MouseButton::Left,
+            gpui::Modifiers::default(),
+        );
+        draw(&mut cx);
+
+        {
+            let m = model.lock().unwrap();
+            assert_eq!(
+                m.selected.as_deref(),
+                Some("Settings/Grid"),
+                "the field click did not clear the selection"
+            );
+            assert!(
+                m.properties.iter().any(|row| row.name == "minor"),
+                "the settings rows are still loaded"
+            );
+        }
+        assert!(
+            cx.update(|_window, cx| shell.read(cx).settings_card.is_some()),
+            "the card stays open while a field is edited"
+        );
+        reset_grid_state();
+    }
+
+    /// S2: editing a `Settings/Grid` row through the property editor commits to
+    /// the provider store, and the pane re-reads the row.
+    #[gpui::test]
+    fn editing_a_settings_row_updates_the_properties(cx: &mut TestAppContext) {
+        let _guard = crate::PYTHON_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let model = Shell::boot().expect("boot shell");
+        // Boot first: it puts the facade on `sys.path`, which the reset needs.
+        reset_grid_state();
+        let window = cx.update(|cx| {
+            let model = model.clone();
+            cx.open_window(Default::default(), move |_window, cx| {
+                cx.new(|cx| Shell::from_model(model.clone(), cx))
+            })
+            .unwrap()
+        });
+        let mut cx = VisualTestContext::from_window(window.into(), cx);
+        let shell: Entity<Shell> = window.root(&mut cx).unwrap();
+
+        // The modeless card renders the same property editor; selecting the node
+        // opens it and builds one field per editable row.
+        cx.update(|_window, cx| {
+            shell.update(cx, |shell, cx| {
+                shell.select("Settings/Grid", cx);
+                cx.notify();
+            });
+        });
+        draw(&mut cx);
+
+        let field = shell.read_with(&cx, |shell, _| {
+            shell
+                .prop_inputs
+                .get("Settings/Grid.minor")
+                .expect("the Minor spacing field")
+                .state
+                .clone()
+        });
+        cx.update(|window, cx| window.focus(&field.read(cx).focus_handle(cx), cx));
+        cx.simulate_keystrokes("cmd-a");
+        cx.simulate_input("25 mm");
+        cx.simulate_keystrokes("enter");
+
+        let minor = shell.read_with(&cx, |shell, _| {
+            shell
+                .model
+                .lock()
+                .unwrap()
+                .properties
+                .iter()
+                .find(|row| row.name == "minor")
+                .map(|row| row.value.clone())
+        });
+        assert_eq!(minor.as_deref(), Some("25 mm"));
+        assert_eq!(model.lock().unwrap().status, "set Settings/Grid.minor");
+        // The store, not just the mirrored row, changed.
+        let stored = crate::python::properties("Settings/Grid")
+            .expect("settings rows")
+            .into_iter()
+            .find(|row| row.name == "minor")
+            .map(|row| row.value);
+        assert_eq!(stored.as_deref(), Some("25 mm"));
+        reset_grid_state();
+    }
+
+    /// T7: the app menu sits in the **title bar** and is the discoverable way back
     /// into Dev Tools — the window starts closed and the command is hidden from every
-    /// other surface.
+    /// other surface. The viewport header keeps only the environment controls.
+    ///
+    /// The headless test platform always reports server-side decorations, so
+    /// `window_frame_with_leading` returns the content unchanged and paints no title
+    /// bar. This renders the same `title_bar` element the frame composes, with the
+    /// shell's real menu, so the popover and its rows can be clicked. The frame's own
+    /// client-decoration branch stays visual-only (see
+    /// `docs/tasks/toolbar-chrome.md` §10).
     #[gpui::test]
     fn the_app_menu_opens_dev_tools(cx: &mut TestAppContext) {
         let _guard = crate::PYTHON_LOCK.lock().unwrap_or_else(|e| e.into_inner());
@@ -3032,21 +3717,56 @@ if "Test_Unannotated" not in FreeCADGui.listCommands():
         let shell: Entity<Shell> = window.root(&mut cx).unwrap();
         draw(&mut cx);
 
-        let width = cx.update(|window, _| window.viewport_size().width);
-        let menu = cx.debug_bounds("app-menu").expect("the app menu");
+        // The menu left the viewport header; Grid/Axes/WP/Mods did not. The test
+        // platform draws server-side decorations, so the frame's fallback leading bar
+        // (below the platform title bar) is where the menu lives here.
+        let header = cx.debug_bounds("viewport-header").expect("the viewport header");
+        assert!(cx.debug_bounds("grid-label").is_some());
+        let menu = cx
+            .debug_bounds("app-menu")
+            .expect("the app menu in the leading bar");
         assert!(
-            menu.origin.x < width * 0.5,
-            "the app menu is on the left (at {:?})",
+            !header.contains(&menu.center()),
+            "the app menu is no longer in the viewport header"
+        );
+        assert!(
+            cx.debug_bounds("leading-bar").is_some(),
+            "server decorations get the leading-bar fallback"
+        );
+
+        // A second window whose content is only the title bar (see `TitleBarHarness`).
+        let size = cx.update(|window, _| window.viewport_size());
+        let shell_for_bar = shell.clone();
+        let bar = cx.cx.open_window(size, move |_window, _cx| TitleBarHarness {
+            shell: shell_for_bar.clone(),
+        });
+        let mut bar_cx = VisualTestContext::from_window(bar.into(), &cx);
+        draw(&mut bar_cx);
+
+        let title_bar = bar_cx.debug_bounds("titlebar").expect("the title bar");
+        let menu = bar_cx.debug_bounds("app-menu").expect("the app menu");
+        assert!(
+            title_bar.contains(&menu.center()),
+            "the app menu is inside the title bar (menu {menu:?}, bar {title_bar:?})"
+        );
+        assert!(
+            menu.origin.x < title_bar.size.width * 0.5,
+            "the app menu leads the title bar (at {:?})",
             menu.origin.x
         );
         assert!(!cx.update(|_window, cx| shell.read(cx).dev_tools_open(cx)));
 
         // It lists Dev Tools, which no other surface offers.
-        click_at(&mut cx, "app-menu");
+        click_at(&mut bar_cx, "app-menu");
         assert!(cx.update(|_window, cx| shell.read(cx).popover_open("app")));
-        draw(&mut cx);
-        assert!(cx.debug_bounds("app-popover").is_some());
-        assert!(cx.debug_bounds("app-row-Dev_ToggleTools").is_some());
+        draw(&mut bar_cx);
+        let popover = bar_cx.debug_bounds("app-popover").expect("the app popover");
+        assert!(
+            popover.origin.y > title_bar.center().y,
+            "the popover drops below the title bar (at {:?})",
+            popover.origin.y
+        );
+        assert!(bar_cx.debug_bounds("app-row-Dev_ToggleTools").is_some());
 
         // Esc closes it and opens nothing.
         let root = cx.update(|_window, cx| shell.read(cx).root_focus_handle());
@@ -3056,10 +3776,10 @@ if "Test_Unannotated" not in FreeCADGui.listCommands():
         assert!(!cx.update(|_window, cx| shell.read(cx).dev_tools_open(cx)));
 
         // Running the row opens the second window and dismisses the menu.
-        draw(&mut cx);
-        click_at(&mut cx, "app-menu");
-        draw(&mut cx);
-        click_at(&mut cx, "app-row-Dev_ToggleTools");
+        draw(&mut bar_cx);
+        click_at(&mut bar_cx, "app-menu");
+        draw(&mut bar_cx);
+        click_at(&mut bar_cx, "app-row-Dev_ToggleTools");
         assert!(!cx.update(|_window, cx| shell.read(cx).popover_open("app")));
         assert!(cx.update(|_window, cx| shell.read(cx).dev_tools_open(cx)));
         assert!(
@@ -3068,6 +3788,29 @@ if "Test_Unannotated" not in FreeCADGui.listCommands():
                 .any(|handle| handle.downcast::<DevTools>().is_some()),
             "the Dev Tools window exists"
         );
+    }
+
+    /// A window whose whole content is the production title bar, so the shell's app
+    /// menu can be clicked in a headless test (test windows report server-side
+    /// decorations, so no window frame draws chrome).
+    struct TitleBarHarness {
+        shell: Entity<Shell>,
+    }
+
+    impl Render for TitleBarHarness {
+        fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+            let leading = self.shell.update(cx, |shell, cx| {
+                let model = shell.snapshot();
+                crate::chrome::app_menu(
+                    shell.popover_open("app"),
+                    &model,
+                    shell.dev_tools_open(cx),
+                    cx,
+                )
+                .into_any_element()
+            });
+            ferrocad_widgets::window_chrome::title_bar("FerroCAD", Some(leading))
+        }
     }
 
     /// T3: the action dock sits over the bottom-centre of the canvas, lists the dock
@@ -3104,6 +3847,13 @@ if "Test_Unannotated" not in FreeCADGui.listCommands():
             "a disabled dock command is still visible"
         );
         assert!(cx.debug_bounds("dock-search").is_some());
+        // The base shell only has the two modification commands, so there is no
+        // modification/creation boundary yet; a workbench that contributes a
+        // creation command inserts `dock-divider-1` there.
+        assert!(
+            cx.debug_bounds("dock-divider-2").is_some(),
+            "the Search slot has a hairline"
+        );
         assert!(
             !dock_enabled(&model, "App_Delete"),
             "nothing is selected yet"
@@ -3190,8 +3940,9 @@ if "Test_Unannotated" not in FreeCADGui.listCommands():
     #[gpui::test]
     fn a_grid_request_reaches_the_viewport(cx: &mut TestAppContext) {
         let _guard = crate::PYTHON_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        reset_grid_state();
         let model = Shell::boot().expect("boot shell");
+        // Boot first: it puts the facade on `sys.path`, which the reset needs.
+        reset_grid_state();
         let window = cx.update(|cx| {
             let model = model.clone();
             cx.open_window(Default::default(), move |_window, cx| {
@@ -3244,8 +3995,9 @@ if "Test_Unannotated" not in FreeCADGui.listCommands():
     #[gpui::test]
     fn a_grid_settings_request_reaches_the_viewport(cx: &mut TestAppContext) {
         let _guard = crate::PYTHON_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        reset_grid_state();
         let model = Shell::boot().expect("boot shell");
+        // Boot first: it puts the facade on `sys.path`, which the reset needs.
+        reset_grid_state();
         let window = cx.update(|cx| {
             let model = model.clone();
             cx.open_window(Default::default(), move |_window, cx| {
@@ -3263,13 +4015,13 @@ if "Test_Unannotated" not in FreeCADGui.listCommands():
             })
         });
 
-        // A preference change is just a parameter write; the command applies it.
+        // A preference change goes through the one grid store; the command applies it.
         let script = r#"
-import FreeCAD
-prefs = FreeCAD.ParamGet("User parameter:BaseApp/Preferences/View")
-prefs.SetFloat("GridMinorStep", 2.0)
-prefs.SetFloat("GridMajorStep", 20.0)
-prefs.SetFloat("GridRadius", 750.0)
+import FerroCAD
+grid = FerroCAD.Grid
+grid.minor = 2.0
+grid.major = 20.0
+grid.radius = 750.0
 "#;
         let evaluated = cx.update(|_window, _cx| crate::python::evaluate(script));
         assert!(evaluated.unwrap().ok);

@@ -19,15 +19,15 @@ use std::time::{Duration, Instant};
 
 use ferrocad_geom::SelectionRef;
 use ferrocad_graphics::{
-    Camera, DrawPacket, Generation, Geometry, Hit, MeshId, PickId, Projection, RenderQueue,
-    StateSnapshot, Topology, Vertex, Viewport, pick_at_hit,
+    Camera, DepthState, DrawPacket, Generation, Geometry, Hit, MeshId, PickId, Projection,
+    RenderQueue, StateSnapshot, Topology, Vertex, Viewport, pick_at_hit, theme,
 };
 use ferrocad_inventor::{
     Directives, Event, EventListener, ImageData, InventorView, NaviCubeDirective, Node, NodeKind,
     Scene, ViewSpec, compile_diagnostic,
 };
 use ferrocad_stage::Stage;
-use ferrocad_stage::shape::WIRE_DEPTH_BIAS;
+use ferrocad_stage::shape::{GHOST_DEPTH, WIRE_DEPTH_BIAS};
 use ferrocad_stage::{
     FaceFrame, GizmoCommitEvent, GizmoHandle, GizmoModifiers, GizmoValue, GridSpec, GridStyle,
     InteractionCommit, Manipulator, MouseButton as StageButton, PointerEvent, PointerKind,
@@ -406,6 +406,7 @@ impl MarkerLayer {
             state: StateSnapshot {
                 world_transform: Matrix4::identity(),
                 color: [1.0, 1.0, 1.0, 1.0],
+                shade: [0.0; 4],
                 depth_bias: self.depth_bias,
                 texture: None,
                 id: PickId(0),
@@ -437,13 +438,17 @@ struct GridLayer {
     dots_mesh: MeshId,
     lines_mesh: MeshId,
     triad_mesh: MeshId,
+    /// The occluded stem pass (depth `Greater`, no write, 10 % alpha).
+    triad_ghost_mesh: MeshId,
     ground_generation: Generation,
     triad_generation: Generation,
+    triad_ghost_generation: Generation,
     ground_key: Option<u64>,
     triad_key: Option<u64>,
     dots: Vec<Vertex>,
     lines: Vec<Vertex>,
     triad: Vec<Vertex>,
+    triad_ghost: Vec<Vertex>,
     triad_indices: Vec<u32>,
     /// The coplanar lift for a face grid; `0` for the world ground.
     depth_bias: f32,
@@ -465,13 +470,16 @@ impl GridLayer {
             dots_mesh: next(),
             lines_mesh: next(),
             triad_mesh: next(),
+            triad_ghost_mesh: next(),
             ground_generation: Generation(0),
             triad_generation: Generation(0),
+            triad_ghost_generation: Generation(0),
             ground_key: None,
             triad_key: None,
             dots: Vec::new(),
             lines: Vec::new(),
             triad: Vec::new(),
+            triad_ghost: Vec::new(),
             triad_indices: Vec::new(),
             depth_bias,
             show_ground: false,
@@ -492,8 +500,18 @@ impl GridLayer {
         if self.triad_key != Some(key) {
             let (vertices, indices) = grid::triad(&spec.workplane, camera, style.triad_dim);
             self.triad = vertices;
+            self.triad_ghost = self
+                .triad
+                .iter()
+                .map(|vertex| {
+                    let mut vertex = *vertex;
+                    vertex.color[3] *= theme::GHOST_ALPHA;
+                    vertex
+                })
+                .collect();
             self.triad_indices = indices;
             self.triad_generation = Generation(self.triad_generation.0 + 1);
+            self.triad_ghost_generation = Generation(self.triad_ghost_generation.0 + 1);
             self.triad_key = Some(key);
         }
     }
@@ -507,6 +525,7 @@ impl GridLayer {
                 Topology::Points,
                 self.dots.clone(),
                 indices,
+                DepthState::default(),
             ));
         }
         if self.show_ground && !self.lines.is_empty() {
@@ -517,6 +536,7 @@ impl GridLayer {
                 Topology::Lines,
                 self.lines.clone(),
                 indices,
+                DepthState::default(),
             ));
         }
         if self.show_triad && !self.triad.is_empty() {
@@ -526,12 +546,26 @@ impl GridLayer {
                 Topology::Triangles,
                 self.triad.clone(),
                 self.triad_indices.clone(),
+                DepthState::default(),
             ));
+            if !self.triad_ghost.is_empty() {
+                // The stems behind a solid read at the occluded-axis ink instead of
+                // disappearing or floating over the front face.
+                queue.packets.push(self.packet(
+                    self.triad_ghost_mesh,
+                    self.triad_ghost_generation,
+                    Topology::Triangles,
+                    self.triad_ghost.clone(),
+                    self.triad_indices.clone(),
+                    GHOST_DEPTH,
+                ));
+            }
         }
     }
 
     /// The grid is deliberately **not pickable**: it is emitted into its own queue that
     /// no pick path sees, and it carries the untagged id besides.
+    #[allow(clippy::too_many_arguments)]
     fn packet(
         &self,
         mesh_id: MeshId,
@@ -539,6 +573,7 @@ impl GridLayer {
         topology: Topology,
         vertices: Vec<Vertex>,
         indices: Vec<u32>,
+        depth: DepthState,
     ) -> DrawPacket {
         DrawPacket {
             mesh_id,
@@ -548,10 +583,11 @@ impl GridLayer {
             state: StateSnapshot {
                 world_transform: Matrix4::identity(),
                 color: [1.0, 1.0, 1.0, 1.0],
+                shade: [0.0; 4],
                 depth_bias: self.depth_bias,
                 texture: None,
                 id: PickId(0),
-                depth: Default::default(),
+                depth,
                 pickable: false,
                 program: None,
             },
@@ -671,6 +707,7 @@ fn feedback_packet(
         state: StateSnapshot {
             world_transform: Matrix4::identity(),
             color: [1.0, 1.0, 1.0, 1.0],
+            shade: [0.0; 4],
             depth_bias: 0.0,
             texture: None,
             id: PickId(0),
@@ -5496,8 +5533,8 @@ mod tests {
     fn the_grid_draws_but_is_never_picked() {
         let mut viewport = grid_view();
 
-        // Four packets: the dots, the major lines, the triad ribbons, and the origin
-        // node.
+        // Five packets: the dots, the major lines, the triad ribbons, the occluded
+        // triad ghost, and the origin node.
         let topologies: Vec<Topology> = viewport
             .grid_queue
             .packets
@@ -5509,6 +5546,7 @@ mod tests {
             vec![
                 Topology::Points,
                 Topology::Lines,
+                Topology::Triangles,
                 Topology::Triangles,
                 Topology::Lines
             ]
@@ -5533,19 +5571,19 @@ mod tests {
     fn set_grid_overlay_hides_the_native_ground_but_keeps_the_axis_cross() {
         let mut viewport = grid_view();
         assert!(!viewport.grid_overlay(), "the native grid is authoritative");
-        assert_eq!(viewport.grid_queue.len(), 4);
+        assert_eq!(viewport.grid_queue.len(), 5);
 
         assert!(viewport.set_grid_overlay(true));
         assert!(viewport.grid_overlay());
         assert_eq!(
             viewport.grid_queue.len(),
-            2,
-            "the world ground is hidden; the triad and the origin node remain"
+            3,
+            "the world ground is hidden; the triad, its ghost and the origin node remain"
         );
         assert!(!viewport.set_grid_overlay(true), "enabling twice is a no-op");
 
         assert!(viewport.set_grid_overlay(false));
-        assert_eq!(viewport.grid_queue.len(), 4);
+        assert_eq!(viewport.grid_queue.len(), 5);
     }
 
     /// A scene whose only draw is a program packet (the program binds to the quad that
@@ -5618,8 +5656,8 @@ mod tests {
         let first = frames.borrow().last().cloned().expect("a frame");
         assert_eq!(
             first,
-            vec![0, 2, 1],
-            "the overlay draws beside the empty scene and the axis cross, flag off"
+            vec![0, 3, 1],
+            "the overlay draws beside the empty scene and the axis cross (front + ghost), flag off"
         );
 
         // The flag stays meaningful: the native ground is independent of the overlay.
@@ -5628,7 +5666,7 @@ mod tests {
         let second = frames.borrow().last().cloned().expect("a frame");
         assert_eq!(
             second,
-            vec![0, 4, 1],
+            vec![0, 5, 1],
             "the native ground draws with the flag off; the overlay is still there"
         );
 
@@ -5638,8 +5676,8 @@ mod tests {
         let third = frames.borrow().last().cloned().expect("a frame");
         assert_eq!(
             third,
-            vec![0, 2, 1],
-            "the world ground is hidden; the registered overlay still draws"
+            vec![0, 3, 1],
+            "the world ground is hidden (triad + ghost remain); the registered overlay still draws"
         );
     }
 
@@ -5707,8 +5745,8 @@ mod tests {
         assert!(viewport.grid_enabled());
         assert_eq!(
             viewport.grid_queue.len(),
-            4,
-            "the ground (dots, lines), the triad and the origin node"
+            5,
+            "the ground (dots, lines), the triad (front + ghost) and the origin node"
         );
 
         assert!(!viewport.set_grid(true), "enabling twice is a no-op");
@@ -5716,7 +5754,7 @@ mod tests {
         // The axis cross is separate: hiding the grid leaves the triad and its node.
         assert!(viewport.set_grid(false));
         assert!(!viewport.grid_enabled());
-        assert_eq!(viewport.grid_queue.len(), 2);
+        assert_eq!(viewport.grid_queue.len(), 3);
         assert!(viewport.set_axis_cross(false));
         assert!(viewport.grid_queue.is_empty());
     }
@@ -5803,7 +5841,7 @@ mod tests {
         let mut viewport = grid_view();
         assert!(viewport.axis_cross(), "on by default, as upstream's is");
 
-        // Cross alone: the triad, then the origin node (drawn last).
+        // Cross alone: the triad, its ghost, then the origin node (drawn last).
         assert!(viewport.set_grid(false));
         let topologies: Vec<Topology> = viewport
             .grid_queue
@@ -5811,7 +5849,14 @@ mod tests {
             .iter()
             .map(|packet| packet.topology)
             .collect();
-        assert_eq!(topologies, vec![Topology::Triangles, Topology::Lines]);
+        assert_eq!(
+            topologies,
+            vec![
+                Topology::Triangles,
+                Topology::Triangles,
+                Topology::Lines
+            ]
+        );
         assert_eq!(
             viewport.axis_labels().len(),
             3,
@@ -5911,7 +5956,7 @@ mod tests {
         assert!((face.frame.plane.origin.z - 0.5).abs() < 1e-6);
 
         // Before the dwell only the world layer is drawn, at full strength.
-        assert_eq!(view.grid_queue.len(), 4);
+        assert_eq!(view.grid_queue.len(), 5);
         let world_alpha = max_alpha(&view.grid_queue.packets[0]);
 
         // Past the dwell the local layer blooms: coplanar with the face, depth-biased,
@@ -5920,8 +5965,8 @@ mod tests {
         view.sync_grid();
         assert_eq!(
             view.grid_queue.len(),
-            6,
-            "the local layer adds its major lines and triad"
+            8,
+            "the local layer adds its major lines and triad (front + ghost)"
         );
         for packet in view
             .grid_queue
@@ -5949,13 +5994,13 @@ mod tests {
         view.handle_pointer([30.0, 50.0]);
         view.hover_face.as_mut().unwrap().since -= FACE_DWELL;
         view.sync_grid();
-        assert_eq!(view.grid_queue.len(), 6, "Face1 bloomed");
+        assert_eq!(view.grid_queue.len(), 8, "Face1 bloomed");
 
         // Face2 is a different part, so its grid must wait out its own dwell.
         assert!(view.handle_pointer([70.0, 50.0]));
         view.sync_grid();
         assert_eq!(view.hover_face.as_ref().unwrap().part, 1);
-        assert_eq!(view.grid_queue.len(), 4, "the new face has not rested yet");
+        assert_eq!(view.grid_queue.len(), 5, "the new face has not rested yet");
     }
 
     #[test]
@@ -5979,7 +6024,7 @@ mod tests {
         // layers are allocated once, so a hover that comes and goes leaks nothing.
         assert!(view.handle_pointer([98.0, 2.0]));
         view.sync_grid();
-        assert_eq!(view.grid_queue.len(), 4);
+        assert_eq!(view.grid_queue.len(), 5);
         view.handle_pointer([30.0, 50.0]);
         view.hover_face.as_mut().unwrap().since -= FACE_DWELL;
         view.sync_grid();
@@ -6011,10 +6056,10 @@ mod tests {
 
         // The active plane is drawn without a dwell, and hovering it adds no second
         // layer.
-        assert_eq!(view.grid_queue.len(), 6);
+        assert_eq!(view.grid_queue.len(), 8);
         view.handle_pointer([30.0, 50.0]);
         view.sync_grid();
-        assert_eq!(view.grid_queue.len(), 6, "the active face is not previewed");
+        assert_eq!(view.grid_queue.len(), 8, "the active face is not previewed");
 
         // Esc clears it: snapping returns to the world and the world layer brightens.
         let dimmed = max_alpha(&view.grid_queue.packets[0]);
@@ -6024,7 +6069,7 @@ mod tests {
             view.snap_context().is_none(),
             "no world grid snapping by default"
         );
-        assert_eq!(view.grid_queue.len(), 4);
+        assert_eq!(view.grid_queue.len(), 5);
         assert!(max_alpha(&view.grid_queue.packets[0]) > dimmed);
     }
 

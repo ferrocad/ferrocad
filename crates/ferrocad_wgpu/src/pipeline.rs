@@ -43,6 +43,8 @@ pub struct ScenePipelines {
     pub points: wgpu::RenderPipeline,
     /// Overlay points.
     pub overlay_points: wgpu::RenderPipeline,
+    /// The full-screen vertical canvas gradient (drawn before the scene views).
+    pub background: wgpu::RenderPipeline,
     /// The shader module and layout shared by the base pipelines and every variant.
     shader: wgpu::ShaderModule,
     layout: wgpu::PipelineLayout,
@@ -172,6 +174,58 @@ impl ScenePipelines {
 
         let scene = wgpu::BlendState::REPLACE;
         let none = wgpu::DepthBiasState::default();
+
+        // The canvas gradient is a full-screen triangle with no vertex buffer or bind
+        // groups; it writes colour only (depth test `Always`, no write).
+        let background_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("ferrocad background"),
+            source: wgpu::ShaderSource::Wgsl(include_str!("background.wgsl").into()),
+        });
+        let background_layout =
+            device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+                label: Some("ferrocad background"),
+                bind_group_layouts: &[],
+                immediate_size: 0,
+            });
+        let background = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("ferrocad background"),
+            layout: Some(&background_layout),
+            vertex: wgpu::VertexState {
+                module: &background_shader,
+                entry_point: Some("vs_main"),
+                compilation_options: Default::default(),
+                buffers: &[],
+            },
+            primitive: wgpu::PrimitiveState {
+                topology: wgpu::PrimitiveTopology::TriangleList,
+                ..Default::default()
+            },
+            depth_stencil: Some(wgpu::DepthStencilState {
+                format: DEPTH_FORMAT,
+                depth_write_enabled: Some(false),
+                depth_compare: Some(wgpu::CompareFunction::Always),
+                stencil: wgpu::StencilState::default(),
+                bias: wgpu::DepthBiasState::default(),
+            }),
+            multisample: wgpu::MultisampleState {
+                count: sample_count,
+                mask: !0,
+                alpha_to_coverage_enabled: false,
+            },
+            fragment: Some(wgpu::FragmentState {
+                module: &background_shader,
+                entry_point: Some("fs_main"),
+                compilation_options: Default::default(),
+                targets: &[Some(wgpu::ColorTargetState {
+                    format: color_format,
+                    blend: Some(wgpu::BlendState::REPLACE),
+                    write_mask: wgpu::ColorWrites::ALL,
+                })],
+            }),
+            multiview_mask: None,
+            cache: None,
+        });
+
         Self {
             opaque: make(
                 "ferrocad opaque",
@@ -218,12 +272,18 @@ impl ScenePipelines {
                 wgpu::BlendState::ALPHA_BLENDING,
                 none,
             ),
+            background,
             shader,
             layout,
             color_format,
             sample_count,
             variants: HashMap::new(),
         }
+    }
+
+    /// The full-screen canvas-gradient pipeline.
+    pub fn background(&self) -> &wgpu::RenderPipeline {
+        &self.background
     }
 
     /// The pipeline for drawing `topology` in a scene or overlay view with the default

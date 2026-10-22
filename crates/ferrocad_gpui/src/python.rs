@@ -146,6 +146,36 @@ pub struct ApplyResult {
     pub error: String,
 }
 
+/// The grid's active provider and spacing, for the header popover (T4).
+///
+/// The shape is closed: with no provider registered, `backend`/`label`/`spacing`
+/// are `None` and `providers` is empty, so the popover never special-cases it.
+#[derive(Debug, Clone, Default, Deserialize, PartialEq)]
+pub struct GridSummary {
+    #[serde(default)]
+    pub feature: String,
+    #[serde(default)]
+    pub backend: Option<String>,
+    #[serde(default)]
+    pub label: Option<String>,
+    /// The active provider's spacing as its display string (`"10 mm"`).
+    #[serde(default)]
+    pub spacing: Option<String>,
+    #[serde(default)]
+    pub providers: Vec<GridProvider>,
+}
+
+/// One registered grid backend, as the popover lists it.
+#[derive(Debug, Clone, Default, Deserialize, PartialEq)]
+pub struct GridProvider {
+    #[serde(default)]
+    pub backend: String,
+    #[serde(default)]
+    pub label: String,
+    #[serde(default)]
+    pub active: bool,
+}
+
 /// Locate the `python/` facade directory (the one containing `FreeCAD/`).
 ///
 /// Order: `FERROCAD_PYTHON_PATH`; a directory the host configured explicitly
@@ -389,6 +419,14 @@ pub fn set_view_state(state: &crate::view::ViewState) -> Result<(), String> {
 /// The registered workbench commands, with their live state.
 pub fn commands() -> Result<Vec<crate::commands::CommandInfo>, String> {
     call_json("commands", None)
+}
+
+/// The grid's active provider and spacing (T4).
+///
+/// Read once when the grid popover opens, not per frame: it crosses into the
+/// interpreter and the provider only changes on a settings edit.
+pub fn grid_summary() -> Result<GridSummary, String> {
+    call_json("grid_summary", None)
 }
 
 /// Run a workbench command by id.

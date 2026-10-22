@@ -12,13 +12,17 @@ This module holds the app-side extension points:
 * :func:`register_display_provider` / :func:`display_mesh` — how a module draws
   its objects;
 * :func:`register_interaction_provider` / :func:`interaction` — how a module
-  applies a manipulator's commit.
+  applies a manipulator's commit;
+* :func:`set_parameter_file` / :func:`parameter_file` — which file backs
+  ``FreeCAD.ParamGet`` (see ``docs/tasks/settings-model.md`` S3).
 
 The document registry, the base value types and the parameters stay on
 ``FreeCAD``: those are upstream-shaped.
 """
 
 from __future__ import annotations
+
+from ._params import parameter_file, set_parameter_file
 
 # ---------------------------------------------------------------------------
 # The semantic grid (see FerroCAD._grid)
@@ -100,4 +104,6 @@ __all__ = [
     "display_mesh",
     "register_interaction_provider",
     "interaction",
+    "set_parameter_file",
+    "parameter_file",
 ]

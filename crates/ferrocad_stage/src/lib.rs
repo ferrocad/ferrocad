@@ -77,6 +77,8 @@ pub use input::{MouseButton, PointerEvent, PointerKind};
 pub use interaction::{InteractionCommit, Manipulator};
 pub use screen::{HIT_PADDING_PIXELS, HIT_SLOP, HIT_TOLERANCE_PIXELS, STROKE_PIXELS, scale_for};
 pub use shape::{DrawMode, ShapeItem};
+/// The GPU-side visual tokens (also available as `ferrocad_graphics::theme`).
+pub use ferrocad_graphics::theme;
 pub use snap::{
     Snap, SnapCandidate, SnapContext, SnapKind, nearest_feature, snap_to_geometry,
     snap_to_geometry_with,

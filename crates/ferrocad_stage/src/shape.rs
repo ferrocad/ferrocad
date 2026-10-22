@@ -4,7 +4,8 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 use ferrocad_geom::Tessellation;
 use ferrocad_graphics::{
-    DrawPacket, Generation, Geometry, MeshId, PickId, RenderQueue, StateSnapshot, Topology, Vertex,
+    DepthCompare, DepthState, DrawPacket, Generation, Geometry, MeshId, PickId, RenderQueue,
+    StateSnapshot, Topology, Vertex, theme,
 };
 use ferrocad_types::{Matrix4, Placement};
 
@@ -42,6 +43,16 @@ pub const HIGHLIGHT_COLOR: [f32; 4] = [0.040, 0.509, 0.939, 1.0];
 /// depth test against the coplanar surface it marks.
 pub const HIGHLIGHT_DEPTH_BIAS: f32 = 1e-5;
 
+/// The ghost-edge depth state: pass only where opaque geometry occludes the edge.
+///
+/// A ghost pass writes no depth and alpha-blends, so the hidden portions of an edge
+/// read at the occluded-edge token instead of disappearing entirely.
+pub const GHOST_DEPTH: DepthState = DepthState {
+    test: true,
+    write: false,
+    compare: DepthCompare::Greater,
+};
+
 /// How far towards the camera an edge is pushed in clip space.
 ///
 /// A wireframe lies exactly on the surface it bounds, so without a bias it z-fights with
@@ -70,7 +81,13 @@ pub struct ShapeItem {
     temporary_transform: Option<Matrix4>,
     draw_mode: DrawMode,
     surface_color: [f32; 4],
+    /// The side/down-facing colour for a two-tone surface (alpha `0` = off).
+    shade_color: Option<[f32; 4]>,
     edge_color: [f32; 4],
+    /// Emit a second, depth-`Greater` wire pass for the occluded edges. Off by
+    /// default so gizmos, the navicube and transient tools keep their overlay look;
+    /// a document entity opts in (see `ferrocad_gpui::display`).
+    ghost_edges: bool,
     edge_width: f32,
     selectable: bool,
     positions: Vec<[f32; 3]>,
@@ -107,8 +124,10 @@ impl ShapeItem {
             placement: Placement::identity(),
             temporary_transform: None,
             draw_mode: DrawMode::default(),
-            surface_color: [0.8, 0.8, 0.8, 1.0],
-            edge_color: [0.1, 0.1, 0.1, 1.0],
+            surface_color: theme::GLASS_SHADE,
+            shade_color: None,
+            edge_color: theme::EDGE_FRONT,
+            ghost_edges: false,
             edge_width: 1.0,
             selectable: true,
             positions: Vec::new(),
@@ -301,6 +320,26 @@ impl ShapeItem {
         self
     }
 
+    /// Set the side/down-facing colour for a two-tone surface.
+    ///
+    /// The surface colour is the up-facing (glass-top) ink; this is the shade. A
+    /// document entity opts in through `ferrocad_gpui::display`.
+    pub fn with_shade_color(mut self, color: [f32; 4]) -> Self {
+        self.shade_color = Some(color);
+        self
+    }
+
+    /// Emit the occluded-edge ghost pass. Document entities opt in; overlays do not.
+    pub fn with_ghost_edges(mut self) -> Self {
+        self.ghost_edges = true;
+        self
+    }
+
+    /// Whether the occluded-edge ghost pass is emitted.
+    pub fn ghost_edges(&self) -> bool {
+        self.ghost_edges
+    }
+
     /// Set the edge width. Stored for fidelity; the core wgpu line pipelines draw
     /// one-pixel lines, so this is not consumed yet.
     pub fn with_edge_width(mut self, width: f32) -> Self {
@@ -477,12 +516,27 @@ impl ShapeItem {
                 queue.packets.push(self.packet(
                     self.wire_mesh,
                     Topology::Lines,
-                    geometry,
+                    geometry.clone(),
                     world,
                     self.edge_color,
                     WIRE_DEPTH_BIAS,
                     self.generation,
                 ));
+                if self.ghost_edges {
+                    // Pass only where the solid already wrote a nearer depth: the
+                    // hidden portions of the wire show at the ghost token.
+                    queue.packets.push(self.packet_with_depth(
+                        self.wire_mesh,
+                        Topology::Lines,
+                        geometry,
+                        world,
+                        theme::EDGE_OCCLUDED,
+                        WIRE_DEPTH_BIAS,
+                        self.generation,
+                        GHOST_DEPTH,
+                        false,
+                    ));
+                }
             }
         }
         if self.show_vertices {
@@ -549,6 +603,32 @@ impl ShapeItem {
         depth_bias: f32,
         generation: Generation,
     ) -> DrawPacket {
+        self.packet_with_depth(
+            mesh_id,
+            topology,
+            geometry,
+            world_transform,
+            color,
+            depth_bias,
+            generation,
+            DepthState::default(),
+            true,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn packet_with_depth(
+        &self,
+        mesh_id: MeshId,
+        topology: Topology,
+        geometry: Geometry,
+        world_transform: ferrocad_types::Matrix4,
+        color: [f32; 4],
+        depth_bias: f32,
+        generation: Generation,
+        depth: DepthState,
+        pickable: bool,
+    ) -> DrawPacket {
         DrawPacket {
             mesh_id,
             generation,
@@ -557,11 +637,12 @@ impl ShapeItem {
             state: StateSnapshot {
                 world_transform,
                 color,
+                shade: self.shade_color.unwrap_or([0.0; 4]),
                 depth_bias,
                 texture: None,
                 id: self.pick_id(),
-                depth: Default::default(),
-                pickable: true,
+                depth,
+                pickable,
                 program: None,
             },
         }
@@ -823,6 +904,42 @@ mod tests {
         assert_eq!(queue.packets[0].state.color, item.surface_color());
         assert_eq!(queue.packets[1].topology, Topology::Lines);
         assert_eq!(queue.packets[1].state.color, item.edge_color());
+    }
+
+    #[test]
+    fn the_default_entity_colors_are_the_tokens() {
+        let item = ShapeItem::new(1);
+        assert_eq!(item.surface_color(), theme::GLASS_SHADE);
+        assert_eq!(item.edge_color(), theme::EDGE_FRONT);
+        assert!(!item.ghost_edges(), "overlays and gizmos must opt in");
+    }
+
+    #[test]
+    fn a_two_tone_surface_carries_its_shade() {
+        let item = triangle_item().with_shade_color(theme::GLASS_SHADE);
+        let queue = emit(&item);
+        assert_eq!(queue.packets[0].state.shade, theme::GLASS_SHADE);
+        let plain = emit(&triangle_item());
+        assert_eq!(plain.packets[0].state.shade, [0.0; 4]);
+    }
+
+    #[test]
+    fn ghost_edges_emit_a_depth_greater_pass() {
+        let item = triangle_item()
+            .with_draw_mode(DrawMode::ShadedWithEdges)
+            .with_ghost_edges();
+        let queue = emit(&item);
+        assert_eq!(queue.len(), 3, "surface, front wire, ghost wire");
+        let ghost = &queue.packets[2];
+        assert_eq!(ghost.topology, Topology::Lines);
+        assert_eq!(ghost.state.depth, GHOST_DEPTH);
+        assert_eq!(ghost.state.color, theme::EDGE_OCCLUDED);
+        assert!(!ghost.state.pickable, "the ghost pass never picks");
+        assert_eq!(
+            queue.packets[1].state.depth,
+            DepthState::default(),
+            "the front wire keeps the normal test"
+        );
     }
 
     #[test]

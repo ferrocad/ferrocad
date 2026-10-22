@@ -248,6 +248,15 @@ class GridOverlayCoinTests(unittest.TestCase):
     def spec(self):
         return FreeCADGui.runCommand(COMMAND)
 
+    def fallback_spec(self):
+        """The pre-S4 dialog: run the command with no registered grid provider."""
+        for provider in FerroCADGui.providers("grid"):
+            FerroCADGui.unregisterProvider("grid", provider["backend"])
+        try:
+            return FreeCADGui.runCommand(COMMAND)
+        finally:
+            self.mod.register_provider()
+
     # -- the command and its dialog -------------------------------------
     def test_the_command_registers_with_the_coin_menu_text(self):
         self.assertEqual(FreeCAD.GuiUp, 0, "this suite is headless")
@@ -262,8 +271,11 @@ class GridOverlayCoinTests(unittest.TestCase):
         self.assertEqual(resources["MenuText"], "Grid Overlay (Coin)")
         self.assertTrue(resources["Pixmap"].endswith("grid.svg"))
 
+    def test_the_command_selects_the_settings_node(self):
+        self.assertEqual(self.spec(), {"select": "Settings/Grid"})
+
     def test_activated_returns_the_six_field_dialog(self):
-        spec = self.spec()
+        spec = self.fallback_spec()
         self.assertEqual(spec["title"], "Grid Overlay (Coin) Settings")
         self.assertEqual(spec["accept"], "Apply")
         self.assertTrue(callable(spec["on_accept"]))
@@ -285,7 +297,10 @@ class GridOverlayCoinTests(unittest.TestCase):
         self.mod.SETTINGS.SetBool("shadow_enabled", False)
         self.mod.SETTINGS.SetFloat("shadow_opacity", 0.25)
 
-        fields = {field["name"]: field["value"] for field in self.spec()["fields"]}
+        fields = {
+            field["name"]: field["value"]
+            for field in self.fallback_spec()["fields"]
+        }
         self.assertEqual(
             fields,
             {
@@ -299,7 +314,7 @@ class GridOverlayCoinTests(unittest.TestCase):
         )
 
     def test_on_accept_persists_and_returns_the_overlay_view(self):
-        result = self.spec()["on_accept"](
+        result = self.fallback_spec()["on_accept"](
             {
                 "enabled": True,
                 "color": "#f87171",
@@ -322,12 +337,12 @@ class GridOverlayCoinTests(unittest.TestCase):
 
     def test_a_bad_color_raises_and_leaves_the_store_alone(self):
         with self.assertRaises(ValueError):
-            self.spec()["on_accept"]({"color": "not a colour"})
+            self.fallback_spec()["on_accept"]({"color": "not a colour"})
         self.assertEqual(self.mod.setting("color"), "#808080")
 
     def test_a_build_without_the_bridge_reports_instead_of_crashing(self):
         with mock.patch.object(self.mod, "overlay_api", return_value=None):
-            result = self.mod.GridOverlayCoinCommand().Activated()
+            result = self.fallback_spec()
         self.assertIn("status", result)
         self.assertIn("addOverlay", result["status"])
         self.assertNotIn("fields", result)

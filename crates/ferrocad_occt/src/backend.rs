@@ -335,6 +335,7 @@ impl GeometryBackend for OcctBackend {
 
     fn make_faces(&self, wires: &[Shape]) -> Result<Shape, GeomError> {
         let mut faces = Vec::with_capacity(wires.len());
+        let mut all_planar = true;
         for wire in wires {
             let occt = downcast(wire)?;
             let guard = occt.borrow();
@@ -368,7 +369,32 @@ impl GeometryBackend for OcctBackend {
                 }
                 .into());
             };
+            all_planar = false;
             faces.push(erase(filled));
+        }
+
+        // Coplanar faces that overlap or cross must be split into their regions;
+        // General Fuse returns all parts, unlike a boolean union.
+        if all_planar && faces.len() > 1 {
+            let mut list = ffi::top_tools::new_list_of_shape();
+            for face in &faces {
+                let occt = downcast(face)?;
+                let guard = occt.borrow();
+                if let Some(inner) = guard.as_ref() {
+                    let _ = list.pin_mut().Append(inner);
+                }
+            }
+            let fused = bridge::fc_general_fuse(&list);
+            if let Some(fused) = fused.as_ref() {
+                let map = sub_shape_map(fused, TopAbs_ShapeEnum::TopAbs_FACE);
+                let mut regions = Vec::with_capacity(map.Extent() as usize);
+                for index in 1..=map.Extent() {
+                    regions.push(erase(map.FindKey(index)));
+                }
+                if regions.len() > 1 {
+                    return self.make_compound(&regions);
+                }
+            }
         }
         match faces.len() {
             0 => Err(OcctError::InvalidInput {

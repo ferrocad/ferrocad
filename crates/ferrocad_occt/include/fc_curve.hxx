@@ -18,6 +18,7 @@
 // or the ellipse major radius; `minor` the ellipse minor radius (unused for a
 // circle). On kind 0 every other value is 0.
 
+#include <BRepAlgoAPI_BuilderAlgo.hxx>
 #include <BRepFill_Filling.hxx>
 #include <BRep_Tool.hxx>
 #include <Geom_BSplineCurve.hxx>
@@ -250,6 +251,29 @@ inline std::unique_ptr<Handle_Geom_Curve> fc_bspline_from_poles(rust::Slice<cons
     Handle(Geom_BSplineCurve) curve =
         new Geom_BSplineCurve(poles, knots, multiplicities, degree, Standard_False);
     return std::unique_ptr<Handle_Geom_Curve>(new Handle(Geom_Curve)(curve));
+  }
+  catch (...) {
+    return nullptr;
+  }
+}
+
+// All split parts of the arguments (`BRepAlgoAPI_BuilderAlgo`, General Fuse).
+// Used to split overlapping planar faces into the regions the unified face maker
+// returns. Returns null on failure.
+inline std::unique_ptr<TopoDS_Shape> fc_general_fuse(const TopTools_ListOfShape& shapes)
+{
+  if (shapes.IsEmpty()) {
+    return nullptr;
+  }
+  try {
+    BRepAlgoAPI_BuilderAlgo builder;
+    builder.SetArguments(shapes);
+    builder.SetNonDestructive(Standard_True);
+    builder.Build();
+    if (!builder.IsDone() || builder.Shape().IsNull()) {
+      return nullptr;
+    }
+    return std::unique_ptr<TopoDS_Shape>(new TopoDS_Shape(builder.Shape()));
   }
   catch (...) {
     return nullptr;

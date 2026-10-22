@@ -58,6 +58,9 @@ mod ffi {
         /// A filled face through the boundary wires, or null on failure.
         fn fc_fill_wires(wires: &TopTools_ListOfShape) -> UniquePtr<TopoDS_Shape>;
 
+        /// All split parts of the arguments (General Fuse), or null on failure.
+        fn fc_general_fuse(shapes: &TopTools_ListOfShape) -> UniquePtr<TopoDS_Shape>;
+
         /// Install a row-major 4x4 matrix into an OCCT transform.
         fn fc_trsf_from_matrix(m: &[f64], out: Pin<&mut gp_Trsf>) -> bool;
 

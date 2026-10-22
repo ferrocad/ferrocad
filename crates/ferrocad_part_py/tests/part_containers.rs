@@ -115,6 +115,37 @@ fn booleans_and_compounds_round_trip() {
 }
 
 #[test]
+fn unified_faces_split_overlapping_circles() {
+    boot();
+    Python::with_gil(|py| {
+        let part = PyModule::import(py, "Part").expect("import Part");
+        let ferrocad = PyModule::import(py, "ferrocad").expect("import ferrocad");
+        let vector = ferrocad.getattr("Vector").expect("ferrocad.Vector");
+        let circle = |x: f64, y: f64| {
+            let center = vector.call1((x, y, 0.0)).expect("center");
+            let edge = part
+                .call_method1("makeCircle", (10.0, center))
+                .expect("makeCircle");
+            part.getattr("Wire")
+                .unwrap()
+                .call1((&edge,))
+                .expect("Part.Wire(circle)")
+        };
+        let c1 = circle(0.0, 0.0);
+        let c2 = circle(8.0, 0.0);
+        let compound = part
+            .getattr("Compound")
+            .unwrap()
+            .call1((PyList::new(py, [&c1, &c2]).unwrap(),))
+            .expect("Part.Compound([c1, c2])");
+        let face = part
+            .call_method1("makeFace", (&compound, "Part::FaceMakerUnified"))
+            .expect("makeFace(overlapping circles, unified)");
+        assert_eq!(face.getattr("Faces").unwrap().len().unwrap(), 3);
+    });
+}
+
+#[test]
 fn matrix_transforms_move_shapes() {
     boot();
     Python::with_gil(|py| {

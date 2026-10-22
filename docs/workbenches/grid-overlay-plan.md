@@ -377,7 +377,7 @@ and couple a per-frame value to a per-draw slot. Program draws get a third group
 | 0 | 0 | `Globals` (existing) | `view_proj`, `model`, `color`, `pick`, `topology`, `depth_bias` | per draw |
 | 1 | 0, 1 | texture + sampler (existing) | unused by the grid shader | per draw |
 | 2 | 0 | `Frame` (new) | `view_proj: mat4x4<f32>`, `inv_view_proj: mat4x4<f32>`, `eye: vec4<f32>`, `flags: vec4<f32>` (160 B) | per frame |
-| 2 | 1 | `Program` (new) | `grid_color: vec4<f32>`, `values: vec4<f32>` (`base_spacing`, `minor_alpha`, `major_alpha`, `shadow_opacity`), `counts: vec4<f32>` (`shadow_count`, …), `shadows: array<vec4<f32>, 80>` (1328 B) | per program |
+| 2 | 1 | `Program` (new) | `grid_color: vec4<f32>`, `values: vec4<f32>` (`base_spacing`, `minor_alpha`, `major_alpha`, `shadow_opacity`), `counts: vec4<f32>` (`shadow_count`, …), `shadows: array<vec4<f32>, 80>`, then the axis extension `axis_y: vec4<f32>`, `axis_z: vec4<f32>`, `axis_values: vec4<f32>` (`length`, `width`, `opacity`, `ghost_alpha`), `axis_flags: vec4<f32>` (`origin`, `labels`, 0, 0) — 1,392 B total; the grid shader reads the first 1,328 B | per program |
 
 Group 2 is added to the **shared** pipeline layout with a default zeroed bind group, so
 non-program draws keep working and every draw can bind group 2 harmlessly. Group 0 is
@@ -392,6 +392,15 @@ array elements must be 16-byte aligned, so a float array cannot have a 4-byte st
 accessor is `shadows[o / 4][o % 4]` with `o = i * 5`; the packing stays a renderer
 concern so the addon's 320-element `SoMFFloat` is unchanged. (A storage buffer would
 also work; a 1,280-byte uniform is simpler and needs no extra binding permission.)
+
+**Axis extension (backward-compatible).** `axis_overlay.wgsl` reuses the `Frame`
+and `Program` bindings and appends four `vec4`s after `shadows`. The grid shader
+declares only the 1,328-byte prefix, which stays a valid prefix of the 1,392-byte
+block; `ProgramBlock` writes the whole block and `apply_parameter` maps the new
+names. The axis tail is `axis_y`/`axis_z` (linear RGB stem ink, X reuses
+`grid_color`), `axis_values = [length, width, opacity, ghost_alpha]` and
+`axis_flags = [origin, labels, 0, 0]`. Style changes take part in the program
+fingerprint, so changing the axis look recreates the program buffer and pipeline.
 
 **Fixed parameter ABI — the limitation to state loudly.** Coin binds parameters *by
 name* into whatever the shader declared. WGSL uniform layouts are static, so an authored

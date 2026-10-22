@@ -25,7 +25,9 @@
 //! [`GRID_OVERLAY_WGSL`] is the WGSL port of the grid overlay's GLSL (see
 //! `docs/workbenches/grid-overlay-plan.md` §3.4). It is drawn as a program packet's module (G4): a
 //! packet carrying a [`ShaderProgram`](ferrocad_graphics::ShaderProgram) replaces the
-//! scene pipeline with a pipeline built from that source.
+//! scene pipeline with a pipeline built from that source. [`AXIS_OVERLAY_WGSL`] is
+//! the axis-cross sibling: the same fixed `Frame`/`Program` binding, with the
+//! backward-compatible axis tail appended to the `Program` block.
 //!
 //! [`DrawBatch`]: ferrocad_graphics::DrawBatch
 //! [`InventorView`]: ferrocad_inventor::InventorView
@@ -51,6 +53,10 @@ pub use trace::Tone;
 /// The grid overlay's WGSL module (group 2: `Frame` at binding 0, `Program` at
 /// binding 1; entry points `vs_main` / `fs_main`).
 pub const GRID_OVERLAY_WGSL: &str = include_str!("../shaders/grid_overlay.wgsl");
+
+/// The axis-cross overlay's WGSL module. It declares the extended `Program`
+/// block (the grid prefix plus four axis `vec4`s) and the same entry points.
+pub const AXIS_OVERLAY_WGSL: &str = include_str!("../shaders/axis_overlay.wgsl");
 
 #[cfg(test)]
 mod tests {
@@ -176,6 +182,79 @@ mod tests {
         let program = struct_by_name(&module, "Program");
         assert_eq!(layouter[program].size, 1_328);
         assert_eq!(layouter[program].alignment.round_up(1_328), 1_328);
+    }
+
+    /// Parse and validate the axis overlay module without a GPU.
+    fn validated_axis_overlay() -> naga::Module {
+        let module = naga::front::wgsl::parse_str(AXIS_OVERLAY_WGSL)
+            .expect("axis_overlay.wgsl should parse as WGSL");
+        naga::valid::Validator::new(
+            naga::valid::ValidationFlags::all(),
+            naga::valid::Capabilities::all(),
+        )
+        .validate(&module)
+        .expect("axis_overlay.wgsl should validate");
+        module
+    }
+
+    #[test]
+    fn axis_overlay_has_the_expected_entry_points() {
+        let module = validated_axis_overlay();
+        assert!(module.entry_points.iter().any(|entry| {
+            entry.name == "vs_main" && entry.stage == naga::ShaderStage::Vertex
+        }));
+        let fragment = module
+            .entry_points
+            .iter()
+            .find(|entry| entry.name == "fs_main" && entry.stage == naga::ShaderStage::Fragment)
+            .expect("fs_main as a fragment entry point");
+        let result = fragment
+            .function
+            .result
+            .as_ref()
+            .expect("fs_main returns a fragment output struct");
+        let naga::TypeInner::Struct { members, .. } = &module.types[result.ty].inner else {
+            panic!("fs_main's result should be a struct");
+        };
+        assert!(
+            members.iter().any(|member| {
+                member.binding == Some(naga::Binding::BuiltIn(naga::BuiltIn::FragDepth))
+            }),
+            "fs_main must write @builtin(frag_depth)"
+        );
+    }
+
+    #[test]
+    fn axis_overlay_binds_only_the_program_group() {
+        let module = validated_axis_overlay();
+        let mut bindings: Vec<(u32, u32)> = module
+            .global_variables
+            .iter()
+            .filter_map(|(_, variable)| {
+                variable
+                    .binding
+                    .as_ref()
+                    .map(|binding| (binding.group, binding.binding))
+            })
+            .collect();
+        bindings.sort_unstable();
+        assert_eq!(bindings, vec![(2, 0), (2, 1)]);
+    }
+
+    #[test]
+    fn axis_overlay_uniform_blocks_match_the_extended_abi() {
+        let module = validated_axis_overlay();
+        let mut layouter = naga::proc::Layouter::default();
+        layouter
+            .update(module.to_ctx())
+            .expect("WGSL uniform layouts");
+
+        let frame = struct_by_name(&module, "Frame");
+        assert_eq!(layouter[frame].size, 160);
+        // Program: the 1,328-byte grid prefix plus four axis vec4s.
+        let program = struct_by_name(&module, "Program");
+        assert_eq!(layouter[program].size, 1_392);
+        assert_eq!(layouter[program].alignment.round_up(1_392), 1_392);
     }
 
     /// The scene-extraction contract: an active `SoShaderProgram` binds to the sibling

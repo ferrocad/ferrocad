@@ -23,7 +23,7 @@
 //! | binding | block | size | contents |
 //! | --- | --- | ---: | --- |
 //! | 0 | `Frame` | 160 B | `view_proj`, `inv_view_proj`, world-space `eye`, `flags = [perspective, width, height, 0]` |
-//! | 1 | `Program` | 1328 B | `grid_color.rgb` (+ spare), `values = [base_spacing, minor_alpha, major_alpha, shadow_opacity]`, `counts = [shadow_count, 0, 0, 0]`, 80 zero `vec4`s |
+//! | 1 | `Program` | 1392 B | `grid_color.rgb` (+ spare), `values = [base_spacing, minor_alpha, major_alpha, shadow_opacity]`, `counts = [shadow_count, 0, 0, 0]`, 80 zero `vec4`s, then the axis extension: `axis_y`, `axis_z`, `axis_values = [length, width, opacity, ghost_alpha]`, `axis_flags = [origin, labels, 0, 0]` |
 //!
 //! Binding 0 is a dynamic-offset uniform (one slot per view, so several cameras share
 //! one buffer); binding 1 is a per-program buffer keyed on the fingerprint. Every scene
@@ -33,7 +33,9 @@
 //!
 //! Shadows are deferred (`docs/workbenches/grid-overlay-plan.md` §3.5): the `Program` block carries
 //! the zeroed 80-`vec4` shadow array and `counts.x` is 0, so `grid_overlay.wgsl`'s
-//! loop is compiled but never entered.
+//! loop is compiled but never entered. The four trailing axis `vec4`s are a
+//! backward-compatible extension: the grid shader reads only the prefix, while
+//! `axis_overlay.wgsl` declares the whole block.
 
 use std::collections::HashMap;
 use std::mem::size_of;
@@ -48,8 +50,8 @@ use crate::pipeline::DEPTH_FORMAT;
 
 /// The `Frame` block's size (the WGSL layout: two matrices, then two `vec4`s).
 pub const FRAME_SIZE: u64 = 160;
-/// The `Program` block's size (three `vec4`s plus 80 shadow `vec4`s).
-pub const PROGRAM_SIZE: u64 = 1_328;
+/// The `Program` block's size (three `vec4`s, 80 shadow `vec4`s, and four axis `vec4`s).
+pub const PROGRAM_SIZE: u64 = 1_392;
 
 /// The per-view `Frame` uniform (group 2, binding 0).
 #[repr(C)]
@@ -107,12 +109,22 @@ pub struct ProgramBlock {
     pub counts: [f32; 4],
     /// 80 `vec4`s: 64 shadow slots of 5 floats re-packed on 16-byte boundaries.
     pub shadows: [[f32; 4]; 80],
+    /// The Y axis stem's linear RGB ink (`w` spare).
+    pub axis_y: [f32; 4],
+    /// The Z axis stem's linear RGB ink (`w` spare).
+    pub axis_z: [f32; 4],
+    /// `[axis_length, axis_width, axis_opacity, axis_ghost_alpha]`.
+    pub axis_values: [f32; 4],
+    /// `[axis_origin, axis_labels, 0, 0]`.
+    pub axis_flags: [f32; 4],
 }
 
 impl ProgramBlock {
     /// Pack the fixed-ABI parameters, with the deferred shadow block zeroed.
     pub fn new(parameters: &ProgramParameters) -> Self {
         let [r, g, b] = parameters.color;
+        let [yr, yg, yb] = parameters.axis_y;
+        let [zr, zg, zb] = parameters.axis_z;
         Self {
             grid_color: [r, g, b, 0.0],
             values: [
@@ -123,6 +135,20 @@ impl ProgramBlock {
             ],
             counts: [parameters.shadow_count, 0.0, 0.0, 0.0],
             shadows: [[0.0; 4]; 80],
+            axis_y: [yr, yg, yb, 0.0],
+            axis_z: [zr, zg, zb, 0.0],
+            axis_values: [
+                parameters.axis_length,
+                parameters.axis_width,
+                parameters.axis_opacity,
+                parameters.axis_ghost_alpha,
+            ],
+            axis_flags: [
+                parameters.axis_origin,
+                parameters.axis_labels,
+                0.0,
+                0.0,
+            ],
         }
     }
 }
@@ -609,12 +635,40 @@ mod tests {
             major_alpha: 0.6,
             shadow_opacity: 0.0,
             shadow_count: 0.0,
+            ..Default::default()
         };
         let block = ProgramBlock::new(&parameters);
         assert_eq!(block.grid_color, [0.1, 0.2, 0.3, 0.0]);
         assert_eq!(block.values, [2.5, 0.4, 0.6, 0.0]);
         assert_eq!(block.counts, [0.0, 0.0, 0.0, 0.0]);
         assert!(block.shadows.iter().flatten().all(|value| *value == 0.0));
+    }
+
+    /// The extended tail is packed after the grid prefix, so the grid shader's
+    /// 1,328-byte view of the block is still a valid prefix.
+    #[test]
+    fn the_program_block_packs_the_axis_extension() {
+        let parameters = ProgramParameters {
+            axis_y: [0.1, 0.2, 0.3],
+            axis_z: [0.4, 0.5, 0.6],
+            axis_length: 120.0,
+            axis_width: 2.5,
+            axis_opacity: 0.5,
+            axis_ghost_alpha: 0.2,
+            axis_origin: 0.0,
+            axis_labels: 1.0,
+            ..Default::default()
+        };
+        let block = ProgramBlock::new(&parameters);
+        assert_eq!(block.axis_y, [0.1, 0.2, 0.3, 0.0]);
+        assert_eq!(block.axis_z, [0.4, 0.5, 0.6, 0.0]);
+        assert_eq!(block.axis_values, [120.0, 2.5, 0.5, 0.2]);
+        assert_eq!(block.axis_flags, [0.0, 1.0, 0.0, 0.0]);
+
+        // The axis tail starts after the grid prefix (three vec4s + 80 shadow vec4s).
+        let bytes = bytemuck::bytes_of(&block);
+        assert_eq!(&bytes[1_328..1_344], bytemuck::bytes_of(&block.axis_y));
+        assert_eq!(&bytes[1_376..], bytemuck::bytes_of(&block.axis_flags));
     }
 
     /// The pipeline key is a pure function of the program and the depth state.

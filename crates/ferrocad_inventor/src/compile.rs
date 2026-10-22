@@ -428,10 +428,18 @@ fn apply_parameter(
             "major_alpha" => parameters.major_alpha = *value,
             "shadow_opacity" => parameters.shadow_opacity = *value,
             "shadow_count" => parameters.shadow_count = *value,
+            "axis_length" => parameters.axis_length = *value,
+            "axis_width" => parameters.axis_width = *value,
+            "axis_opacity" => parameters.axis_opacity = *value,
+            "axis_ghost_alpha" => parameters.axis_ghost_alpha = *value,
+            "axis_origin" => parameters.axis_origin = *value,
+            "axis_labels" => parameters.axis_labels = *value,
             _ => return Err(ShaderError::UnknownParameter(name.clone())),
         },
         ShaderParameter::Vec3 { name, value } => match name.as_str() {
             "grid_color" => parameters.color = *value,
+            "axis_color_y" => parameters.axis_y = *value,
+            "axis_color_z" => parameters.axis_z = *value,
             _ => return Err(ShaderError::UnknownParameter(name.clone())),
         },
         ShaderParameter::Floats { name, values } => match name.as_str() {
@@ -1267,6 +1275,16 @@ mod tests {
         }
     }
 
+    fn vec3_parameter(name: &str, value: [f32; 3]) -> Node {
+        Node {
+            kind: NodeKind::ShaderParameter(ShaderParameter::Vec3 {
+                name: name.to_owned(),
+                value,
+            }),
+            children: vec![],
+        }
+    }
+
     fn program_node(children: Vec<Node>) -> Node {
         Node {
             kind: NodeKind::ShaderProgram,
@@ -1441,6 +1459,50 @@ mod tests {
             compile_with_base(&scene, &Viewport::default(), None).unwrap_err(),
             ShaderError::DuplicateParameter("minor_alpha".to_owned())
         );
+    }
+
+    #[test]
+    fn axis_parameters_map_onto_the_extended_abi() {
+        let scene = Scene {
+            root: separator(vec![
+                coords(),
+                program_node(vec![
+                    stage_node(ShaderStageKind::Vertex, Some(WGSL), vec![]),
+                    stage_node(
+                        ShaderStageKind::Fragment,
+                        Some(""),
+                        vec![
+                            vec3_parameter("axis_color_y", [0.1, 0.2, 0.3]),
+                            vec3_parameter("axis_color_z", [0.4, 0.5, 0.6]),
+                            float_parameter("axis_length", 120.0),
+                            float_parameter("axis_width", 2.5),
+                            float_parameter("axis_opacity", 0.5),
+                            float_parameter("axis_ghost_alpha", 0.2),
+                            float_parameter("axis_origin", 0.0),
+                            float_parameter("axis_labels", 1.0),
+                        ],
+                    ),
+                ]),
+                mesh(),
+            ]),
+        };
+        let (queue, _) = compile(&scene);
+        let parameters = queue.packets[0]
+            .state
+            .program
+            .as_ref()
+            .expect("the mesh carries the program")
+            .parameters();
+        assert_eq!(parameters.axis_y, [0.1, 0.2, 0.3]);
+        assert_eq!(parameters.axis_z, [0.4, 0.5, 0.6]);
+        assert_eq!(parameters.axis_length, 120.0);
+        assert_eq!(parameters.axis_width, 2.5);
+        assert_eq!(parameters.axis_opacity, 0.5);
+        assert_eq!(parameters.axis_ghost_alpha, 0.2);
+        assert_eq!(parameters.axis_origin, 0.0);
+        assert_eq!(parameters.axis_labels, 1.0);
+        // The grid prefix keeps its defaults; an axis program is additive.
+        assert_eq!(parameters.base_spacing, 1.0);
     }
 
     #[test]

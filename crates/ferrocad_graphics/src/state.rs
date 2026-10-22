@@ -28,10 +28,15 @@ use crate::geometry::Texture2;
 /// The defaults are the grid overlay's FerroCAD look: the neutral grid ink at low
 /// alpha, a 1-unit base spacing, and shadows off (the shadow block is deferred; see
 /// `shaders/grid_overlay.wgsl`).
+///
+/// The axis fields are a backward-compatible tail: the grid shader reads only the
+/// prefix, while `shaders/axis_overlay.wgsl` reads the whole block. X reuses
+/// [`color`](Self::color); `axis_y`/`axis_z` are the other two stem inks in linear
+/// light. The defaults match the native `AxisStyle` (`#4ADE80`, `#38BDF8`, 80 px,
+/// 1.5 px, 0.65 opacity, 0.10 ghost alpha, origin and labels on).
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct ProgramParameters {
-    /// Linear RGB line ink (`Program.grid_color`). The two axis hues are constants in
-    /// the shader, as in the GLSL reference.
+    /// Linear RGB line ink (`Program.grid_color`), also the X axis stem's ink.
     pub color: [f32; 3],
     /// World units of the finest decade (`SoShaderParameter1f "base_spacing"`).
     pub base_spacing: f32,
@@ -43,6 +48,24 @@ pub struct ProgramParameters {
     pub shadow_opacity: f32,
     /// Number of populated shadow slots (`"shadow_count"`); `0` in this slice.
     pub shadow_count: f32,
+    /// The Y axis stem's linear RGB ink (`"axis_color_y"`).
+    pub axis_y: [f32; 3],
+    /// The Z axis stem's linear RGB ink (`"axis_color_z"`).
+    pub axis_z: [f32; 3],
+    /// The stem length in device pixels (`"axis_length"`).
+    pub axis_length: f32,
+    /// The stem width in device pixels (`"axis_width"`).
+    pub axis_width: f32,
+    /// The lit stems' opacity (`"axis_opacity"`).
+    pub axis_opacity: f32,
+    /// The occluded stems' alpha multiplier (`"axis_ghost_alpha"`). Accepted by the
+    /// ABI even though the Coin backend's depth-tested visibility pass cannot use it.
+    pub axis_ghost_alpha: f32,
+    /// Whether the origin node is drawn (`"axis_origin"`); `1` is on.
+    pub axis_origin: f32,
+    /// Whether the axis labels are drawn (`"axis_labels"`); `1` is on. Accepted by
+    /// the ABI; the Coin shader cannot draw text, so the native labels own this.
+    pub axis_labels: f32,
 }
 
 impl Default for ProgramParameters {
@@ -55,6 +78,15 @@ impl Default for ProgramParameters {
             major_alpha: 0.35,
             shadow_opacity: 0.0,
             shadow_count: 0.0,
+            // #4ADE80 and #38BDF8 in linear light, the native axis tokens.
+            axis_y: [0.069, 0.730, 0.216],
+            axis_z: [0.040, 0.509, 0.939],
+            axis_length: 80.0,
+            axis_width: 1.5,
+            axis_opacity: 0.65,
+            axis_ghost_alpha: 0.10,
+            axis_origin: 1.0,
+            axis_labels: 1.0,
         }
     }
 }
@@ -179,6 +211,18 @@ fn fingerprint(source: &str, parameters: &ProgramParameters) -> u64 {
         parameters.major_alpha,
         parameters.shadow_opacity,
         parameters.shadow_count,
+        parameters.axis_y[0],
+        parameters.axis_y[1],
+        parameters.axis_y[2],
+        parameters.axis_z[0],
+        parameters.axis_z[1],
+        parameters.axis_z[2],
+        parameters.axis_length,
+        parameters.axis_width,
+        parameters.axis_opacity,
+        parameters.axis_ghost_alpha,
+        parameters.axis_origin,
+        parameters.axis_labels,
     ] {
         write(&value.to_bits().to_le_bytes());
     }

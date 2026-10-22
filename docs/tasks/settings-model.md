@@ -236,6 +236,11 @@ S0–S4 landed; S5 (document-scoped overrides) remains optional.
   `enabled` migrates the legacy `GridAxisCross` value once (grid provider group,
   else `Preferences/View`); `FerroCAD.Grid.axis_cross` remains as a deprecated
   proxy.
+- `mods/AxisOverlayCoin` adds the `axis`/`coin` (Coin/WGSL) backend. It
+  advertises the same `AXIS_SETTINGS_SCHEMA` with `get`/`set` hooks into
+  `FerroCAD.Axis`, so the two backends share one store; `enabled` is still the
+  one switch. The Coin backend draws a depth-tested visibility pass only and
+  leaves the ghost pass and the labels to the native backend.
 
 ## Risks
 

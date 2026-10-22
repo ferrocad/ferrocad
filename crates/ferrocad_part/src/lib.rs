@@ -69,6 +69,8 @@ pub fn register(backend: Arc<dyn GeometryBackend>) {
     object_registry::register("Part::Feature", Arc::new(Feature));
     object_registry::register(BOX_TYPE, Arc::new(BoxPrimitive));
     object_registry::register(CYLINDER_TYPE, Arc::new(CylinderPrimitive));
+    object_registry::register(SPHERE_TYPE, Arc::new(SpherePrimitive));
+    object_registry::register(CONE_TYPE, Arc::new(ConePrimitive));
     object_registry::register(
         FUSE_TYPE,
         Arc::new(containers::Boolean {
@@ -272,6 +274,180 @@ impl ObjectType for CylinderPrimitive {
     }
 }
 
+/// `Part::Sphere`: a sphere of `Radius` centred on the placement's base.
+pub const SPHERE_TYPE: &str = "Part::Sphere";
+
+struct SpherePrimitive;
+
+impl ObjectType for SpherePrimitive {
+    fn default_properties(&self) -> Vec<(String, Property, u32)> {
+        vec![
+            ("Radius".to_string(), Property::Float(5.0), prop_status::NONE),
+            (
+                "Angle1".to_string(),
+                Property::Float(-90.0),
+                prop_status::NONE,
+            ),
+            (
+                "Angle2".to_string(),
+                Property::Float(90.0),
+                prop_status::NONE,
+            ),
+            (
+                "Angle3".to_string(),
+                Property::Float(360.0),
+                prop_status::NONE,
+            ),
+            (
+                "Placement".to_string(),
+                Property::Placement(Placement::identity()),
+                prop_status::NONE,
+            ),
+            (
+                "Shape".to_string(),
+                make_shape_property(ShapeProperty::empty()),
+                prop_status::NONE,
+            ),
+        ]
+    }
+
+    fn property_meta(&self, name: &str) -> Option<(String, String)> {
+        Some(("Sphere".to_string(), format!("Part sphere {name}")))
+    }
+
+    fn execute(&self, doc: &mut Document, id: ObjectId) {
+        let (radius, angle1, angle2, angle3, placement) = {
+            let Some(object) = doc.object(id) else {
+                return;
+            };
+            let placement = match object.properties.get("Placement") {
+                Some(Property::Placement(placement)) => Some(*placement),
+                _ => None,
+            };
+            (
+                float_property(doc, id, "Radius", 5.0),
+                float_property(doc, id, "Angle1", -90.0),
+                float_property(doc, id, "Angle2", 90.0),
+                float_property(doc, id, "Angle3", 360.0),
+                placement,
+            )
+        };
+
+        // The bound OCCT constructor only makes a full sphere.
+        if !(radius > 0.0)
+            || (angle1 + 90.0).abs() > 1e-9
+            || (angle2 - 90.0).abs() > 1e-9
+            || (angle3 - 360.0).abs() > 1e-9
+        {
+            doc.mark_invalid(id);
+            return;
+        }
+
+        let shape = match backend().make_sphere(radius, Vector3::zero()) {
+            Ok(shape) => shape,
+            Err(_) => {
+                doc.mark_invalid(id);
+                return;
+            }
+        };
+        let shape = match placement {
+            Some(placement) => backend().place(&shape, &placement).unwrap_or(shape),
+            None => shape,
+        };
+        doc.set_property_raw(id, "Shape", make_shape_property(ShapeProperty::new(shape)));
+    }
+}
+
+/// `Part::Cone`: `Radius1` at the base, `Radius2` at `Height`, along the placement's Z axis.
+pub const CONE_TYPE: &str = "Part::Cone";
+
+struct ConePrimitive;
+
+impl ObjectType for ConePrimitive {
+    fn default_properties(&self) -> Vec<(String, Property, u32)> {
+        vec![
+            (
+                "Radius1".to_string(),
+                Property::Float(2.0),
+                prop_status::NONE,
+            ),
+            (
+                "Radius2".to_string(),
+                Property::Float(4.0),
+                prop_status::NONE,
+            ),
+            (
+                "Height".to_string(),
+                Property::Float(10.0),
+                prop_status::NONE,
+            ),
+            (
+                "Angle".to_string(),
+                Property::Float(360.0),
+                prop_status::NONE,
+            ),
+            (
+                "Placement".to_string(),
+                Property::Placement(Placement::identity()),
+                prop_status::NONE,
+            ),
+            (
+                "Shape".to_string(),
+                make_shape_property(ShapeProperty::empty()),
+                prop_status::NONE,
+            ),
+        ]
+    }
+
+    fn property_meta(&self, name: &str) -> Option<(String, String)> {
+        Some(("Cone".to_string(), format!("Part cone {name}")))
+    }
+
+    fn execute(&self, doc: &mut Document, id: ObjectId) {
+        let (radius1, radius2, height, angle, placement) = {
+            let Some(object) = doc.object(id) else {
+                return;
+            };
+            let placement = match object.properties.get("Placement") {
+                Some(Property::Placement(placement)) => Some(*placement),
+                _ => None,
+            };
+            (
+                float_property(doc, id, "Radius1", 2.0),
+                float_property(doc, id, "Radius2", 4.0),
+                float_property(doc, id, "Height", 10.0),
+                float_property(doc, id, "Angle", 360.0),
+                placement,
+            )
+        };
+
+        // The bound OCCT constructor only makes a full cone.
+        if !(height > 0.0) || (angle - 360.0).abs() > 1e-9 {
+            doc.mark_invalid(id);
+            return;
+        }
+
+        let shape = match backend().make_cone(
+            radius1,
+            radius2,
+            height,
+            Vector3::zero(),
+            Vector3::new(0.0, 0.0, 1.0),
+        ) {
+            Ok(shape) => shape,
+            Err(_) => {
+                doc.mark_invalid(id);
+                return;
+            }
+        };
+        let shape = match placement {
+            Some(placement) => backend().place(&shape, &placement).unwrap_or(shape),
+            None => shape,
+        };
+        doc.set_property_raw(id, "Shape", make_shape_property(ShapeProperty::new(shape)));
+    }
+}
+
 /// `Part::Feature`: a shape plus a placement.
 struct Feature;
 
@@ -401,6 +577,42 @@ mod tests {
             .mass_properties(&shape)
             .expect("a cylinder has mass properties");
         assert!((mass.volume - std::f64::consts::PI * 4.0 * 10.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn a_part_sphere_executes_into_a_sphere() {
+        setup();
+        let mut doc = Document::new();
+        let id = doc.add_object("Sphere", SPHERE_TYPE);
+        doc.set_property(id, "Radius", Property::Float(5.0)).unwrap();
+        doc.recompute().unwrap();
+        let object = doc.object(id).unwrap();
+        assert!(!object.invalid);
+        let shape = stored_shape(&doc, id);
+        let mass = backend()
+            .mass_properties(&shape)
+            .expect("a sphere has mass properties");
+        let expected = 4.0 / 3.0 * std::f64::consts::PI * 125.0;
+        assert!((mass.volume - expected).abs() < 1e-6);
+    }
+
+    #[test]
+    fn a_part_cone_executes_into_a_cone() {
+        setup();
+        let mut doc = Document::new();
+        let id = doc.add_object("Cone", CONE_TYPE);
+        doc.set_property(id, "Radius1", Property::Float(2.0)).unwrap();
+        doc.set_property(id, "Radius2", Property::Float(1.0)).unwrap();
+        doc.set_property(id, "Height", Property::Float(3.0)).unwrap();
+        doc.recompute().unwrap();
+        let object = doc.object(id).unwrap();
+        assert!(!object.invalid);
+        let shape = stored_shape(&doc, id);
+        let mass = backend()
+            .mass_properties(&shape)
+            .expect("a cone has mass properties");
+        let expected = std::f64::consts::PI * 3.0 / 3.0 * (4.0 + 2.0 + 1.0);
+        assert!((mass.volume - expected).abs() < 1e-6);
     }
 
     #[test]

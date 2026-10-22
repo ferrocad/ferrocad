@@ -33,6 +33,9 @@ const MAX_DOTS: usize = 40_000;
 pub const GRID_COLOR: [f32; 4] = [0.296, 0.366, 0.480, 1.0];
 /// The world grid's alpha at the origin.
 pub const GRID_ALPHA: f32 = 0.15;
+/// The fraction of the grid radius where the radial fade begins. Inside it the grid
+/// stays at full alpha; beyond it a smoothstep falloff reaches zero at the radius.
+pub const FADE_START: f64 = 0.55;
 /// The triad stems' linear colours (`#F87171`, `#4ADE80`, `#38BDF8`) at 65 %.
 pub const AXIS_COLORS: [[f32; 4]; 3] = [
     [0.939, 0.165, 0.165, 0.65],
@@ -252,8 +255,8 @@ pub fn ground(spec: &GridSpec, style: &GridStyle) -> (Vec<Vertex>, Vec<Vertex>) 
         }
     }
 
-    // Major lines, in both directions, subdivided so the fade peaks in the middle
-    // rather than interpolating from two zero-alpha ends.
+    // Major lines, in both directions, subdivided so the smoothstep fade band is
+    // sampled rather than interpolated across one long segment.
     let major = spec.major.max(minor);
     let step = if radius / minor > 2_000.0 {
         major
@@ -406,9 +409,19 @@ fn add_line(
     }
 }
 
-/// `α(d) = max(0, α0 · (1 − d / R))`.
+/// The radial fade: full `alpha` inside `FADE_START · radius`, falling smoothly to zero
+/// at `radius` (the `smoothstep(R_max, R_inner, r)` law).
 fn fade(alpha: f32, distance: f64, radius: f64) -> f32 {
-    (f64::from(alpha) * (1.0 - distance / radius)).max(0.0) as f32
+    let inner = FADE_START * radius;
+    if distance <= inner {
+        return alpha;
+    }
+    if distance >= radius {
+        return 0.0;
+    }
+    let t = ((distance - inner) / (radius - inner)).clamp(0.0, 1.0);
+    let smooth = t * t * (3.0 - 2.0 * t);
+    (f64::from(alpha) * (1.0 - smooth)) as f32
 }
 
 fn ink(style: &GridStyle, alpha: f32) -> [f32; 4] {
@@ -513,11 +526,25 @@ mod tests {
     }
 
     #[test]
-    fn the_fade_follows_the_radial_law() {
-        assert!((fade(0.15, 0.0, 100.0) - 0.15).abs() < 1e-9);
-        assert!((fade(0.15, 50.0, 100.0) - 0.075).abs() < 1e-6);
-        assert_eq!(fade(0.15, 100.0, 100.0), 0.0);
-        assert_eq!(fade(0.15, 120.0, 100.0), 0.0);
+    fn the_fade_follows_the_smoothstep_law() {
+        let radius = 100.0;
+        let inner = FADE_START * radius;
+        // Full alpha in the centre and out to the start of the band.
+        assert_eq!(fade(0.15, 0.0, radius), 0.15);
+        assert_eq!(fade(0.15, inner, radius), 0.15);
+        // Zero at the rim and beyond.
+        assert_eq!(fade(0.15, radius, radius), 0.0);
+        assert_eq!(fade(0.15, radius + 20.0, radius), 0.0);
+        // smoothstep(0.5) = 0.5, so the band's midpoint is half the alpha.
+        let midpoint = (inner + radius) * 0.5;
+        assert!((fade(0.15, midpoint, radius) - 0.075).abs() < 1e-6);
+        // Monotonic non-increasing across the whole radius.
+        let mut previous = f64::MAX;
+        for step in 0..=120 {
+            let alpha = f64::from(fade(0.15, f64::from(step), radius));
+            assert!(alpha <= previous + 1e-9, "rose at d = {step}");
+            previous = alpha;
+        }
     }
 
     #[test]

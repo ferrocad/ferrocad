@@ -311,9 +311,9 @@ empty (a numeric field then fails validation until filled).
 ## 7. View and tool requests
 
 > **As built (2026-10-22).** The flat actions bar that this section and §16 described is
-gone. Commands now live on header controls (grid/axes/workplane/mods), their anchored
-popovers, and the selection-driven action dock; every command is also listed in the
-Dev Tools window, and app-level commands (Dev Tools first) are in the title-bar `☰`
+gone. Commands now live on the floating viewport pill (grid/axes/workplane/mods), their
+anchored popovers, and the selection-driven action dock; every command is also listed in
+the Dev Tools window, and app-level commands (Dev Tools first) are in the title-bar `☰`
 menu. See [`../tasks/toolbar-chrome.md`](../tasks/toolbar-chrome.md) §10.
 The **request shapes** below are unchanged — only where the buttons live.
 
@@ -517,10 +517,10 @@ from the same dock — with two undo steps and no terminal.
 ## 16. As built (A0–A5, 2026-10-20)
 
 The vertical slice is in: a workbench can **offer** an action, the shell can **run**
-it from the chrome (a header control, a popover row, the dock, the Dev Tools list or
-the title-bar app menu) or a shortcut, a selection reaches both the UI and the command
-predicates, a command can **ask** the user something, change presentation, or start
-a tool, and the status line explains both the result and what a click would pass
+it from the chrome (the floating viewport pill, a popover row, the dock, the Dev Tools
+list or the title-bar app menu) or a shortcut, a selection reaches both the UI and the
+command predicates, a command can **ask** the user something, change presentation, or
+start a tool, and the status line explains both the result and what a click would pass
 through — without the shell naming the workbench.
 
 ### Python
@@ -557,8 +557,8 @@ Two shape decisions fell out of the build:
 | `ferrocad_gpui/src/dev_tools.rs` | the `DevTools` second-window view over `Entity<Shell>` and its window options |
 | `ferrocad_viewport/src/inventor_view.rs` | `HoverReport { target, through }` — updated on every pointer move from the same pick and overlay tests the click uses; `hover_report()` |
 
-The commands are dispatched from the chrome (header controls, popovers, dock) or the
-Dev Tools list — there is no flat strip. Because `App_Delete`/`App_Move` are registered
+The commands are dispatched from the chrome (the floating viewport pill, popovers, dock)
+or the Dev Tools list — there is no flat strip. Because `App_Delete`/`App_Move` are registered
 by the base app script, **every** edition has dock rows; they are greyed until
 something is selected. A disabled command stays visible (its label in the muted token)
 — the user should see that the action exists. A checked command carries the accent.

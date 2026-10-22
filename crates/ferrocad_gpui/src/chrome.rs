@@ -1,5 +1,5 @@
-//! Viewport chrome primitives (P0.6): split buttons, anchored popovers, the header
-//! controls, the action dock and the Dev Tools command list.
+//! Viewport chrome primitives (P0.6): split buttons, anchored popovers, the floating
+//! control pill, the action dock and the Dev Tools command list.
 //!
 //! The chrome is presentation over the command registry: every control runs an id
 //! through [`Shell::run_command`](crate::shell::Shell), and every popover row is a
@@ -12,7 +12,8 @@
 //!
 //! Popovers are **not** modal. They have no backdrop and no `occlude`: a click on the
 //! canvas still reaches the viewport, and `on_mouse_down_out` dismisses the popover
-//! without swallowing the event. `Esc` closes it from the shell's key path.
+//! without swallowing the event. `Esc` closes it from the shell's key path. (The pill
+//! they hang from does occlude, so a press on the glass does not start an orbit.)
 
 use gpui::{
     Anchor, ClickEvent, Context, IntoElement, MouseButton, MouseDownEvent, Point, Pixels, Render,
@@ -104,8 +105,17 @@ fn grid_info(summary: Option<&GridSummary>) -> Vec<PopoverInfo> {
     info
 }
 
-/// The viewport pane header: the viewport title on the left, then the
-/// grid/axes/workplane/mods controls right-aligned in the same row.
+/// The viewport environment controls as a compact floating pill: the
+/// grid/axes/workplane/mods controls in one row.
+///
+/// It is not a pane header. The shell overlays it on the canvas' top-left corner, so the
+/// scene reaches the title bar instead of losing a full-width row (and the redundant
+/// `3D viewport` sub-header) to chrome. The pill is translucent glass: a dark
+/// `#151A24CC` tint with a `#FFFFFF14` hairline, the same visual language as the dock.
+///
+/// It occludes, so a press on the glass does not start an orbit/drag on the canvas
+/// beneath it. Its popovers are `deferred(anchored(..))` overlays with their own
+/// hitboxes, so they still receive pointer events.
 pub(crate) fn viewport_header(
     model: &ShellModel,
     grid: Option<&GridSummary>,
@@ -170,13 +180,16 @@ pub(crate) fn viewport_header(
         .flex()
         .flex_row()
         .items_center()
-        .px_2()
-        .py_1()
-        .bg(rgb(PANEL_ALT))
+        .gap_1()
+        .p_1()
+        .rounded_md()
+        .bg(rgba(0x151a24cc))
+        .border_1()
+        .border_color(rgba(0xffffff14))
         .text_xs()
         .text_color(rgb(MUTED))
+        .occlude()
         .debug_selector(|| "viewport-header".to_string())
-        .child(div().flex_1().min_w_0().truncate().child("3D viewport"))
         .child(controls)
 }
 

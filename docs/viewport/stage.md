@@ -255,9 +255,10 @@ CPU ray cast resolves one (the G-buffer resolves a pixel, so it reports `None`).
 **Topology view (F0.4).** `ShapeItem::from_tessellation` accepts a
 `ferrocad_geom::Tessellation`, derives per-position part ids from the per-triangle and
 per-segment ids, and keeps the part names (`Face6`, `Edge3`) for `Hit::part`.
-`set_highlight` emits a separate flat-shaded surface (and wire) for the selected parts,
-in `HIGHLIGHT_COLOR` with `HIGHLIGHT_DEPTH_BIAS`; `with_vertices(true)` adds a
-`Topology::Points` packet. The highlight has its own generation, so changing the
+`set_highlight` emits a separate flat-shaded surface and wire for the selected parts:
+a `12%` `HIGHLIGHT_TINT` surface with test-on/write-off depth (blended, but it cannot
+hide the wire) and an opaque `HIGHLIGHT_COLOR` wire, both with
+`HIGHLIGHT_DEPTH_BIAS`; `with_vertices(true)` adds a `Topology::Points` packet. The highlight has its own generation, so changing the
 selection does not re-upload the base mesh. `StateSnapshot.depth_bias` is now applied
 in the scene and pick shaders (`clip.z -= bias * clip.w`).
 

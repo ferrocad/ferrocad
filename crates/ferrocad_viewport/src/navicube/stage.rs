@@ -4,9 +4,9 @@
 //! the shared draw contract with no scene graph. The items are built **once** (so their
 //! mesh ids are stable and a rebuild never re-uploads) and recoloured / re-oriented per
 //! rebuild; the cube's rotation is baked into each piece's transform (there is no
-//! `Transform` node in the stage). Face letters are 3D stroke geometry emitted as wireframe
-//! items; only the compass `N/E/S/W` letters remain gpui text drawn by the viewport
-//! (`NaviCube::labels`).
+//! `Transform` node in the stage). Face letters are filled 3D quads (`model::face_glyph`)
+//! emitted as shaded items; only the compass `N/E/S/W` letters remain gpui text drawn by
+//! the viewport (`NaviCube::labels`).
 
 use ferrocad_graphics::{RenderQueue, Viewport};
 use ferrocad_stage::{DrawMode, ShapeItem};

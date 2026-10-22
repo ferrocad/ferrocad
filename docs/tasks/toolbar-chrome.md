@@ -25,7 +25,7 @@ different kinds of thing:
 
 | Kind | Examples | Frequency | Belongs in |
 | --- | --- | --- | --- |
-| environment toggle | `Grid`, `Axes`, `WP` | constant | the viewport header |
+| environment toggle | `Grid`, `Axes`, `WP` | constant | the floating viewport pill |
 | environment sub-state | overlay on/off, overlay mode, reload | occasional | a popover on that control |
 | provider / workbench | `Mods`, provider switch | occasional | a popover on that control |
 | creation / modification | `Create Slab`, `Polyline`, `Move`, `Delete` | per action | a floating dock over the canvas |
@@ -58,8 +58,11 @@ belongs to.
 
 The design brief (2026-10-22) specifies:
 
-1. **Viewport header, right-aligned** (in `panel_header("3D viewport")`, never over the
+1. **Viewport controls, floating pill** (top-left over the canvas, never over the
    navicube):
+   - There is no `3D viewport` pane header row. The four controls float as a compact
+     translucent pill over the canvas, so the scene reaches the title bar instead of
+     losing a full-width strip to chrome.
    - `Grid` split button: the label toggles visibility in one click; `▾` (or right-click)
      opens a popover with **Grid provider** (the active `(grid, backend)`), **Spacing**
      (`10.0 mm`, tabular), then `Grid Settings…` (selects `Settings/Grid`) and
@@ -84,6 +87,7 @@ The design brief (2026-10-22) specifies:
    controls. Dev Tools is the first entry (checked while the window is open, showing
    `Ctrl+Shift+D`); About and Preferences follow. It exists because Dev Tools starts
    closed and is hidden from every other surface, so the shortcut was the only way in.
+   The app menu remains title-bar chrome; it is not part of the floating control pill.
 
 ## 4. What is missing (the actual work)
 
@@ -169,7 +173,7 @@ Nothing in the chrome needs to change for 3–5; T4/T5 become wiring once S0–S
   disappears when the strip is removed (T6 test). Dev Tools stays reachable through the
   app menu even though it is hidden from the header and the dock (T7 test). ✅
 - The app menu is **title-bar** chrome (`window_frame_with_leading`), not a viewport
-  header control; the header keeps `Grid`, `Axes`, `WP` and `Mods`. ✅ (T7 test asserts
+  pill control; the pill keeps `Grid`, `Axes`, `WP` and `Mods`. ✅ (T7 test asserts
   the menu is outside the header, inside the title bar, and that the `leading-bar`
   fallback exists; the client-decoration frame path is visual-only.)
 - `Grid` toggles in one click without opening the popover; `▾` opens it without toggling. ✅
@@ -187,7 +191,7 @@ Nothing in the chrome needs to change for 3–5; T4/T5 become wiring once S0–S
   `the_action_dock_follows_the_selection`; the drag/proximity fade is **not built**
   (deferred with T3's visual half) and is unverified.
 - `cargo test -p ferrocad_gpui` and `cargo test -p ferrocad_toy` stay green. ✅
-  (2026-10-22 verification: gpui lib **95 passed**, toy **12 passed**.) The Xvfb
+  (2026-10-22 verification: gpui lib **96 passed**, toy **14 passed**.) The Xvfb
   real-window smoke test was **not run** in this pass — it remains unverified.
 - The docs (`actions-and-tools.md` §7/§16) describe the new surfaces, not the strip. ✅
 
@@ -218,8 +222,8 @@ Nothing in the chrome needs to change for 3–5; T4/T5 become wiring once S0–S
   `#67D7FF` (`CHROME_ACTIVE`). The dock has the same hairline between the
   modification and creation groups, and before `Search`.
 - **Anchoring.** A split-button popover is placed from the caret's actual pointer
-  event (`popover_anchor`) in window coordinates, 18 px below the press. The flex
-  header gives an `Anchored` child a negative layout origin, which previously put
+  event (`popover_anchor`) in window coordinates, 18 px below the press. An `Anchored`
+  child of the old flex header reported a negative layout origin, which previously put
   the panel over the title bar; the pointer is the reliable origin. The app menu
   keeps its title-bar `Anchored` placement.
 - T5 is a `select` directive: `View_GridSettings` returns `{"select":
@@ -239,8 +243,13 @@ Nothing in the chrome needs to change for 3–5; T4/T5 become wiring once S0–S
 - T7's app menu is **title-bar chrome**, not header chrome: `Shell::render` builds it
   with `chrome::app_menu` and passes it to
   `ferrocad_widgets::window_chrome::window_frame_with_leading`, which puts it at the
-  leading edge of the title bar. The viewport header keeps only `Grid`, `Axes`, `WP`
-  and `Mods`. The menu button (and its popover) stop mouse-down propagation so a
+  leading edge of the title bar. The viewport controls float as a compact translucent
+  pill (`rgba(0x151a24cc)` over a `#FFFFFF14` hairline) at the canvas' top-left, with
+  `Grid`, `Axes`, `WP` and `Mods`; the pill occludes so a press on it does not start a
+  scene orbit, while its anchored popovers keep their own hitboxes. There is no
+  `3D viewport` sub-header: the canvas starts at the pane top and only the transient
+  tool strip still consumes a row while a session runs. The menu button (and its
+  popover) stop mouse-down propagation so a
   click does not also start a window move; the Dev Tools window calls plain
   `window_frame`, so its title bar has no menu. When the platform draws the
   decorations (macOS, some Wayland compositors), the frame draws a slim

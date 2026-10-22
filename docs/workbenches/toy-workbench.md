@@ -106,8 +106,9 @@ The inspector refreshes and the viewport re-syncs through the ordinary observers
 Two generic mechanisms, one document path:
 
 - **The `HeightGrip` manipulator** (`ferrocad_toy::height_grip`). It claims a
-  whole-object selection, draws a dimension line from the base to the top, and drags
-  the height. Its commit is `toy_height` / `set` with `[height]`.
+  whole-object selection, anchors at the top-face centroid, draws a screen-invariant
+  stem projecting up into empty space (44 px), and drags the height. Its commit is
+  `toy_height` / `set` with `[height]`.
 - **The `TransformGizmo`** (`ferrocad_toy::move_gizmo`). It sits at the item's centre
   and offers translation. Its commit is converted by
   `GizmoCommitEvent::to_interaction`: `transform` / `apply` with the 16 row-major

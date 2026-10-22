@@ -408,7 +408,10 @@ fn create_variant(
 ) -> wgpu::RenderPipeline {
     let (blend, bias) = match (key.overlay, key.topology) {
         (false, wgpu::PrimitiveTopology::TriangleList) => (
-            wgpu::BlendState::REPLACE,
+            // A non-default scene state is how the selection tint blends: the 12%
+            // highlight surface asks for test-on/write-off, which is not the base
+            // opaque pipeline. Opaque scene draws keep `REPLACE` through `opaque`.
+            wgpu::BlendState::ALPHA_BLENDING,
             // The surface bias belongs to the shaded-surface pipeline; keep it so a
             // depth-state change does not revive z-fighting with a coplanar wireframe.
             wgpu::DepthBiasState {
@@ -519,5 +522,22 @@ mod tests {
         assert!(!key.is_base());
         assert!(!key.depth_write);
         assert_eq!(key.depth_compare, wgpu::CompareFunction::Less);
+    }
+
+    /// The selection tint asks for test-on/write-off; that non-base state is what
+    /// selects the blended triangle variant instead of the opaque scene pipeline.
+    #[test]
+    fn a_no_write_scene_triangle_gets_a_non_base_variant() {
+        let key = PipelineKey::new(
+            false,
+            Topology::Triangles,
+            &DepthState {
+                write: false,
+                ..DepthState::default()
+            },
+        );
+        assert!(!key.is_base());
+        assert!(key.depth_compare == wgpu::CompareFunction::Less);
+        assert!(!key.depth_write);
     }
 }

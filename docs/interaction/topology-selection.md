@@ -190,9 +190,10 @@ picked separately, and the button/tool paths always used the CPU ray).
 **F0.4 as built (2026-10-20).** `ferrocad_stage` now depends on `ferrocad_geom`.
 `ShapeItem::from_tessellation`/`set_tessellation`/`with_tessellation` flatten a
 `Tessellation` (per-primitive part ids → per-position ids, names kept), and the item
-exposes `part_name(id)`/`part_names()`. `set_highlight(&[part])` emits a separate
-flat-shaded surface and wire sub-mesh for the selected parts, in `HIGHLIGHT_COLOR`,
-with `HIGHLIGHT_DEPTH_BIAS`; `with_vertices(true)` emits the topological vertices as a
+exposes `part_name(id)`/`part_names()`. `set_highlight(&[part])` emits a separate flat-shaded surface and wire sub-mesh for
+the selected parts: a `12%` cyan `HIGHLIGHT_TINT` surface with test-on/write-off depth
+(so it blends without hiding the wire) and an opaque `HIGHLIGHT_COLOR` wire, both with
+`HIGHLIGHT_DEPTH_BIAS`; `with_vertices(true)` emits the topological vertices as a
 `Topology::Points` packet. The base and highlight generations are separate, so moving
 the selection does not re-upload the body. `StateSnapshot.depth_bias` is now honoured
 by the wgpu shaders (`clip.z -= bias * clip.w`), which is what lets the coplanar

@@ -48,7 +48,8 @@ triangle then paints the vertical `#0F1218 → #161B22` gradient; the
 
 | Token | sRGB | alpha | Linear (as in code) | Symbol today |
 | --- | --- | --- | --- | --- |
-| Active accent | `#38BDF8` | 1.0 | `[0.040, 0.509, 0.939]` | `gizmo::ACTIVE_COLOR`, `ShapeItem::HIGHLIGHT_COLOR` |
+| Active accent | `#38BDF8` | 1.0 | `[0.040, 0.509, 0.939]` | `gizmo::ACTIVE_COLOR`, `ShapeItem::HIGHLIGHT_COLOR` (selection wire) |
+| Selection tint | `#38BDF8` | 0.12 | accent × 0.12 | `ShapeItem::HIGHLIGHT_TINT` |
 | Hover rim | `#48E5FF` | 1.0 | `[0.065, 0.784, 1.0]` | proposed (state bloom) |
 | Snap aurora | `#38BDF8` | 0.85 | accent × 0.85 | `axis-origin-grid.md` |
 | Inactive structural | `#94A3B8` | 1.0 | `[0.296, 0.366, 0.479]` | `gizmo::INACTIVE_COLOR` |
@@ -81,6 +82,13 @@ nothing on a surface: an entity renders opaque. The staged plan is:
 
 The spec's alpha is therefore a **design intent** and the composite is the build target
 until V2c.
+
+**Exception: the selection tint.** The highlight face pass is a `12%` cyan
+`HIGHLIGHT_TINT` over the natural surface, with an opaque `HIGHLIGHT_COLOR` wire on
+top. It asks for test-on/write-off depth, which is not the base opaque pipeline, so
+the wgpu renderer gives it a **blended** scene-triangle variant; no depth write means
+the tint cannot hide the wire drawn after it. This is a targeted blend for one pass,
+not V2c ordered translucency: the body is still an opaque composite.
 
 ### 1.4 Edges
 

@@ -75,8 +75,8 @@ pub(crate) const FACE_OUTLINE: [u32; 8] = [0, 1, 1, 2, 2, 3, 3, 0];
 /// The face square as two triangles.
 pub(crate) const FACE_FAN: [u32; 6] = [0, 1, 2, 0, 2, 3];
 
-/// A letter for a face: Front/Back/Top/Down/Left/Right. [`face_strokes`] draws it as 3D
-/// line geometry in the face plane.
+/// A letter for a face: Front/Back/Top/Down/Left/Right. [`face_strokes`] supplies its
+/// stroke centrelines; [`face_glyph`] expands them into filled 3D quads in the face plane.
 pub(crate) fn face_letter(piece: Piece) -> char {
     match piece {
         Piece::FRONT => 'F',
@@ -89,9 +89,10 @@ pub(crate) fn face_letter(piece: Piece) -> char {
     }
 }
 
-/// Straight-line strokes for a face letter in a `[-0.5, 0.5]²` box (u right, v up).
-/// The face labels are **3D wireframe glyphs** (WA6), so they foreshorten with the facet
-/// instead of sitting upright as a screen billboard.
+/// Straight-line stroke centrelines for a face letter in a `[-0.5, 0.5]²` box (u right,
+/// v up). [`face_glyph`] expands each into a `GLYPH_STROKE`-wide filled quad ribbon, so
+/// the labels are **filled 3D glyphs** (WA6) that foreshorten with the facet instead of
+/// sitting upright as a screen billboard.
 fn face_strokes(letter: char) -> &'static [(f64, f64, f64, f64)] {
     match letter {
         'F' => &[

@@ -36,12 +36,33 @@ impl DrawMode {
     }
 }
 
-/// The selection highlight colour (linear `#38BDF8`, the manipulators' active cyan).
+/// The selection highlight wire colour (linear `#38BDF8`, the manipulators' active
+/// cyan). It stays opaque so the selected topology reads crisply over the tint.
 pub const HIGHLIGHT_COLOR: [f32; 4] = [0.040, 0.509, 0.939, 1.0];
+
+/// The selection highlight face tint: the same linear `#38BDF8` at 12% alpha, so the
+/// natural surface and its base edges stay visible through it.
+///
+/// The scene triangle pipeline is normally `BlendState::REPLACE`. The highlight surface
+/// therefore uses a non-default depth state ([`HIGHLIGHT_DEPTH`]), which gives it a
+/// blended pipeline variant in the wgpu renderer: alpha blends, but the depth test and
+/// the bias still keep it on top of the coplanar surface it marks.
+pub const HIGHLIGHT_TINT: [f32; 4] = [0.040, 0.509, 0.939, 0.12];
 
 /// How far towards the camera the highlight is pushed in clip space, so it wins the
 /// depth test against the coplanar surface it marks.
 pub const HIGHLIGHT_DEPTH_BIAS: f32 = 1e-5;
+
+/// The highlight surface's depth state: test against the scene, but write no depth.
+///
+/// The non-default state is deliberate. It selects the renderer's blended triangle
+/// variant (so the 12% tint actually blends), and no write means the tint cannot hide
+/// the base wire or the highlight wire drawn after it.
+pub const HIGHLIGHT_DEPTH: DepthState = DepthState {
+    test: true,
+    write: false,
+    compare: DepthCompare::Less,
+};
 
 /// The ghost-edge depth state: pass only where opaque geometry occludes the edge.
 ///
@@ -489,9 +510,9 @@ impl ShapeItem {
 
     /// Emit the item's draw packets into `queue`.
     ///
-    /// Order: surface, wire, points, then the selection highlight (surface and wire)
-    /// with [`HIGHLIGHT_DEPTH_BIAS`], so it wins the depth test against the coplanar
-    /// base geometry it marks.
+    /// Order: surface, wire, points, then the selection highlight: a subtle tint, then
+    /// the opaque highlight wire. Both highlight passes carry [`HIGHLIGHT_DEPTH_BIAS`],
+    /// so they win the depth test against the coplanar base geometry they mark.
     pub fn emit(&self, queue: &mut RenderQueue) {
         // The world transform: the placement, with the temporary preview composed after it.
         let mut world = self.placement.to_matrix();
@@ -558,15 +579,22 @@ impl ShapeItem {
         }
         if self.draw_mode.has_surface() {
             if let Some(geometry) = self.highlight_surface_geometry() {
-                queue.packets.push(self.packet(
+                let mut packet = self.packet_with_depth(
                     self.highlight_surface_mesh,
                     Topology::Triangles,
                     geometry,
                     world,
-                    HIGHLIGHT_COLOR,
+                    HIGHLIGHT_TINT,
                     HIGHLIGHT_DEPTH_BIAS,
                     self.highlight_generation,
-                ));
+                    HIGHLIGHT_DEPTH,
+                    true,
+                );
+                // Single-colour tint: the item's `shade` would select the untinted
+                // glass-shade token for side/down facets. The base surface below still
+                // carries the real two-tone material.
+                packet.state.shade = [0.0; 4];
+                queue.packets.push(packet);
             }
         }
         if self.draw_mode.has_edges() {
@@ -1083,20 +1111,58 @@ mod tests {
         let mesh = two_part_tessellation();
         let item = ShapeItem::from_tessellation(7, &mesh)
             .with_draw_mode(DrawMode::ShadedWithEdges)
-            .with_highlight([1]);
+            .with_highlight([1, 2]);
 
         let queue = emit(&item);
-        let highlight = queue
+        assert_eq!(
+            queue.len(),
+            4,
+            "base surface, base wire, highlight tint, highlight wire"
+        );
+        // The base passes stay, and stay ahead of the highlight so the natural surface
+        // and its own edges remain visible through the tint.
+        assert_eq!(queue.packets[0].topology, Topology::Triangles);
+        assert_eq!(queue.packets[0].state.color, item.surface_color());
+        assert_eq!(queue.packets[1].topology, Topology::Lines);
+        assert_eq!(queue.packets[1].state.color, item.edge_color());
+
+        let tint = queue
             .packets
             .iter()
-            .find(|packet| packet.state.color == HIGHLIGHT_COLOR)
-            .expect("a highlight packet");
-        assert_eq!(highlight.topology, Topology::Triangles);
-        assert_eq!(highlight.state.depth_bias, HIGHLIGHT_DEPTH_BIAS);
-        let geometry = highlight.geometry.as_ref().expect("fresh geometry");
+            .find(|packet| {
+                packet.topology == Topology::Triangles && packet.state.color == HIGHLIGHT_TINT
+            })
+            .expect("a highlight surface packet");
+        assert_eq!(tint.state.depth_bias, HIGHLIGHT_DEPTH_BIAS);
+        assert_eq!(tint.state.depth, HIGHLIGHT_DEPTH);
+        assert_eq!(
+            tint.state.shade, [0.0; 4],
+            "the tint is single-colour so every facet gets the cyan"
+        );
+        assert!(
+            !tint.state.depth.write,
+            "the tint must not occlude the wire drawn after it"
+        );
+        let geometry = tint.geometry.as_ref().expect("fresh geometry");
         assert_eq!(geometry.vertices.len(), 3, "only the part-1 triangle");
         assert!(geometry.vertices.iter().all(|vertex| vertex.part_idx == 1));
-        assert_eq!(queue.len(), 3, "base surface, base wire, highlight surface");
+
+        let wire = queue
+            .packets
+            .iter()
+            .find(|packet| {
+                packet.topology == Topology::Lines && packet.state.color == HIGHLIGHT_COLOR
+            })
+            .expect("a highlight wire packet");
+        assert_eq!(wire.state.depth_bias, HIGHLIGHT_DEPTH_BIAS);
+        let geometry = wire.geometry.as_ref().expect("fresh geometry");
+        assert_eq!(geometry.indices, vec![6, 7], "only the selected edge");
+        assert!(
+            geometry
+                .indices
+                .iter()
+                .all(|&index| geometry.vertices[index as usize].part_idx == 2)
+        );
     }
 
     #[test]

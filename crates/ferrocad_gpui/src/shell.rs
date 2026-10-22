@@ -2177,6 +2177,9 @@ impl Render for Shell {
             window.focus(&self.dialog_focus, cx);
         }
 
+        // The pane is the canvas now: the environment controls float over it as a
+        // compact pill (see `chrome::viewport_header`) instead of taking a header row,
+        // so the scene reaches the title bar.
         let viewport = div()
             .flex()
             .flex_col()
@@ -2184,28 +2187,22 @@ impl Render for Shell {
             .min_w_0()
             .h_full()
             .bg(rgb(BG))
-            .debug_selector(|| "main-viewport".to_string())
-            .child(crate::chrome::viewport_header(
-                &model,
-                self.grid_summary.as_ref(),
-                self.open_popover.as_deref(),
-                self.popover_anchor,
-                cx,
-            ));
-        // The tool strip sits directly under the pane header while a session runs; it
-        // disappears the moment the tool finishes or is cancelled.
+            .debug_selector(|| "main-viewport".to_string());
+        // The tool strip is transient session feedback, not chrome; it stays a normal
+        // row above the canvas and vanishes when the tool finishes or is cancelled.
         let viewport = match model.tool.as_ref().filter(|tool| tool.is_active()) {
             Some(tool) => viewport.child(tool_strip(tool, cx)),
             None => viewport,
         };
-        // The canvas hosts the viewport and the action dock, which floats over its
-        // bottom edge. The dock's wrapper has no hitbox, so the canvas still receives
-        // pointer events around the panel.
+        // The canvas hosts the viewport, the floating control pill (top-left) and the
+        // action dock (bottom-centre), which both have their own hitboxes so the scene
+        // still receives pointer events around them.
         let canvas = div()
             .relative()
             .flex()
             .flex_1()
             .min_h_0()
+            .debug_selector(|| "main-canvas".to_string())
             .child(match &self.viewport {
                 Some(viewport) => viewport.clone().into_any_element(),
                 None => div()
@@ -2218,6 +2215,19 @@ impl Render for Shell {
                     .child("viewport (no GPU)")
                     .into_any_element(),
             })
+            .child(
+                div()
+                    .absolute()
+                    .top_2()
+                    .left_2()
+                    .child(crate::chrome::viewport_header(
+                        &model,
+                        self.grid_summary.as_ref(),
+                        self.open_popover.as_deref(),
+                        self.popover_anchor,
+                        cx,
+                    )),
+            )
             .child(crate::chrome::action_dock(&model, cx));
         let viewport = viewport.child(canvas);
 
@@ -3228,8 +3238,12 @@ if "Test_Unannotated" not in FreeCADGui.listCommands():
         let shell: Entity<Shell> = window.root(&mut cx).unwrap();
         draw(&mut cx);
 
-        // The controls exist in the viewport header row, right-aligned and ordered.
+        // The controls exist in the floating pill at the canvas' top-left, ordered
+        // left to right. This is a compact cluster, not a full-width header row.
         let width = cx.update(|window, _| window.viewport_size().width);
+        let pane = cx.debug_bounds("main-viewport").expect("the viewport pane");
+        let canvas = cx.debug_bounds("main-canvas").expect("the canvas");
+        let header = cx.debug_bounds("viewport-header").expect("the control pill");
         let grid = cx.debug_bounds("grid-label").expect("the Grid label");
         let axis = cx.debug_bounds("axis-toggle").expect("the Axes toggle");
         let wp = cx.debug_bounds("wp-label").expect("the WP label");
@@ -3238,10 +3252,32 @@ if "Test_Unannotated" not in FreeCADGui.listCommands():
         assert!(axis.origin.x < wp.origin.x);
         assert!(wp.origin.x < mods.origin.x);
         assert!(
-            grid.origin.x > width * 0.5,
-            "the controls are right-aligned (grid at {:?}, width {width:?})",
-            grid.origin.x
+            header.origin.x < width * 0.5,
+            "the pill sits at the leading edge (at {:?}, width {width:?})",
+            header.origin.x
         );
+        assert!(
+            header.size.width < canvas.size.width,
+            "the pill is compact, not a full-width header row (pill {:?}, canvas {:?})",
+            header.size.width,
+            canvas.size.width
+        );
+        assert!(
+            header.origin.x >= canvas.origin.x
+                && header.origin.x < canvas.origin.x + px(16.)
+                && header.origin.y >= canvas.origin.y
+                && header.origin.y < canvas.origin.y + px(16.),
+            "the pill floats over the canvas' top-left (pill {:?}, canvas {:?}, pane {:?})",
+            header.origin,
+            canvas.origin,
+            pane.origin
+        );
+        for control in [&grid, &axis, &wp, &mods] {
+            assert!(
+                header.contains(&control.center()),
+                "the pill owns every control"
+            );
+        }
         assert!(
             cx.debug_bounds("grid-state-dot").is_some(),
             "the Grid control carries a persistent on/off dot"
@@ -3349,6 +3385,57 @@ if "Test_Unannotated" not in FreeCADGui.listCommands():
         assert!(model.lock().unwrap().view.axis_cross);
         click_at(&mut cx, "axis-toggle");
         assert!(!model.lock().unwrap().view.axis_cross);
+    }
+
+    /// The canvas owns the full pane: there is no full-width header row above it, and
+    /// the environment controls float as a compact pill over its top-left corner.
+    #[gpui::test]
+    fn the_canvas_starts_at_the_pane_top_and_the_controls_float_over_it(
+        cx: &mut TestAppContext,
+    ) {
+        let _guard = crate::PYTHON_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let model = Shell::boot().expect("boot shell");
+        let window = cx.update(|cx| {
+            let model = model.clone();
+            cx.open_window(Default::default(), move |_window, cx| {
+                cx.new(|cx| Shell::from_model(model.clone(), cx))
+            })
+            .unwrap()
+        });
+        let mut cx = VisualTestContext::from_window(window.into(), cx);
+        draw(&mut cx);
+
+        let pane = cx.debug_bounds("main-viewport").expect("the viewport pane");
+        let canvas = cx.debug_bounds("main-canvas").expect("the canvas");
+        let pill = cx.debug_bounds("viewport-header").expect("the control pill");
+
+        // The canvas is the pane's first row: no header pushes the scene down.
+        assert_eq!(
+            canvas.origin.y, pane.origin.y,
+            "the canvas starts at the pane top (canvas {canvas:?}, pane {pane:?})"
+        );
+        assert_eq!(
+            canvas.size.height, pane.size.height,
+            "the canvas fills the pane (canvas {canvas:?}, pane {pane:?})"
+        );
+
+        // The pill overlays the canvas' top-left corner, inside it and compact.
+        assert!(
+            pill.origin.x >= canvas.origin.x
+                && pill.origin.x < canvas.origin.x + px(16.)
+                && pill.origin.y >= canvas.origin.y
+                && pill.origin.y < canvas.origin.y + px(16.),
+            "the pill floats at the canvas' top-left (pill {pill:?}, canvas {canvas:?})"
+        );
+        assert!(
+            pill.origin.x + pill.size.width <= canvas.origin.x + canvas.size.width
+                && pill.origin.y + pill.size.height <= canvas.origin.y + canvas.size.height,
+            "the pill stays inside the canvas (pill {pill:?}, canvas {canvas:?})"
+        );
+        assert!(
+            pill.size.width < canvas.size.width,
+            "the pill is not a full-width header row (pill {pill:?}, canvas {canvas:?})"
+        );
     }
 
     /// T4: the Grid popover reports the active provider and spacing above its

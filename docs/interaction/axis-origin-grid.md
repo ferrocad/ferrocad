@@ -156,10 +156,13 @@ The center node's 5 px is a **proximity highlight**, distinct from the 12 px gra
 **Radial falloff.** Every grid vertex carries
 
 ```
-α(d) = max(0, α0 · (1 − d / R_max))
+α(d) = α0 · (1 − smoothstep(FADE_START · R_max, R_max, d))
 ```
 
-so lines fade to nothing rather than ending on a hard rectangle. `R_max` is
+with `FADE_START = 0.55`: full alpha out to `0.55 · R_max`, then a cubic smoothstep
+falloff to zero at `R_max`. The flat inner disc keeps the near field readable, and
+the smooth band removes the visible ring where a linear fade met the rim; beyond
+`R_max` there is nothing to draw, so the horizon does not end on a hard line. `R_max` is
 `2.5 × max(|eye − pivot|, scene radius)`, clamped to 0.5–5 m; the grid is regenerated
 only when the pivot moves by more than 10 % of `R_max` (not every frame).
 

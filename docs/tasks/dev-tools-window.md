@@ -130,7 +130,7 @@ its modal over the viewport, where the user is looking.
 - Closing the Dev Tools window does not change the document, stop the viewport, or
   drop the selection; reopening restores the same view. ✅
 - `cargo test -p ferrocad_gpui` and `cargo test -p ferrocad_toy` pass; the toy starts
-  and can toggle the window. ✅ (2026-10-22: gpui lib **95 passed**, toy **12 passed**;
+  and can toggle the window. ✅ (2026-10-22: gpui lib **96 passed**, toy **14 passed**;
   the toy's live window/toggle was not exercised in this pass.)
 - No Python API change, no second interpreter. ✅ (`ferrocad_shell.commands()` gained
   the two optional surface fields; the `FreeCADGui` facade is unchanged. The Dev Tools
@@ -155,7 +155,8 @@ its modal over the viewport, where the user is looking.
   to own the actual window.
 - The app menu (`☰`) that reveals the toggle lives at the leading edge of the **main
   window's title bar** (`window_frame_with_leading`), checked while the window is
-  open; the viewport header keeps only the `Grid`/`Axes`/`WP`/`Mods` controls. The Dev
+  open; the viewport's `Grid`/`Axes`/`WP`/`Mods` controls float as a compact pill over
+  the canvas' top-left, so the main window has no `3D viewport` sub-header row. The Dev
   Tools window's own title bar carries no menu (it calls plain `window_frame`).
 - The menu is **title-bar chrome, not header chrome**. When the platform draws the
   decorations, `window_frame_with_leading` cannot put it in a client title bar, so it

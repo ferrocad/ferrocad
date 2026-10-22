@@ -3399,7 +3399,9 @@ fn split_programs(queue: RenderQueue) -> (RenderQueue, RenderQueue) {
 /// The gpui chrome bar under the navigation cube: a projection toggle, Home and the
 /// angle readout. Logical pixels; the palette matches the shell's panels.
 const CHROME_HEIGHT: f32 = 26.0;
-const CHROME_GAP: f32 = 6.0;
+/// The gap between the cube's overlay rect and the pill, toward the viewport centre.
+/// Tucked to zero so the pill and the cube read as one column.
+const CHROME_GAP: f32 = 0.0;
 const CHROME_BORDER: u32 = 0xffffff14;
 const CHROME_BG: u32 = 0x0f121899;
 const CHROME_MUTED: u32 = 0x8b919a;
@@ -4372,10 +4374,74 @@ mod tests {
         let rect = |corner| chrome_bar_rect(&NaviCube::new(viewport).with_config(config(corner)));
         // A 132px cube needs a 195px overlay box for the turntable; the bar is centred on
         // that box, so its outer edge keeps the margin.
-        assert_eq!(rect(Corner::TopRight), [383.5, 209.0, 631.5, 235.0]);
-        assert_eq!(rect(Corner::TopLeft), [7.5, 209.0, 255.5, 235.0]);
-        assert_eq!(rect(Corner::BottomLeft), [7.5, 245.0, 255.5, 271.0]);
-        assert_eq!(rect(Corner::BottomRight), [383.5, 245.0, 631.5, 271.0]);
+        assert_eq!(rect(Corner::TopRight), [383.5, 203.0, 631.5, 229.0]);
+        assert_eq!(rect(Corner::TopLeft), [7.5, 203.0, 255.5, 229.0]);
+        assert_eq!(rect(Corner::BottomLeft), [7.5, 251.0, 255.5, 277.0]);
+        assert_eq!(rect(Corner::BottomRight), [383.5, 251.0, 631.5, 277.0]);
+    }
+
+    #[test]
+    fn the_chrome_pill_is_centred_on_the_cube_in_every_corner() {
+        use crate::navicube::{Corner, NaviCubeConfig};
+
+        let viewport = Viewport::new([640, 480], 1.0);
+        for corner in [
+            Corner::TopLeft,
+            Corner::TopRight,
+            Corner::BottomLeft,
+            Corner::BottomRight,
+        ] {
+            let cube = NaviCube::new(viewport).with_config(NaviCubeConfig {
+                corner,
+                cube_size: 132.0,
+                margin: 8.0,
+            });
+            // `logical_rect` is the overlay box; the cube body is drawn centred in it, so
+            // its horizontal centre is the painted centre.
+            let [left, _, right, _] = cube.logical_rect();
+            let bar = chrome_bar_rect(&cube);
+            let cube_centre = (left + right) / 2.0;
+            let bar_centre = (bar[0] + bar[2]) / 2.0;
+            assert!(
+                (bar_centre - cube_centre).abs() < 1e-4,
+                "{corner:?}: pill centre {bar_centre} != cube centre {cube_centre}"
+            );
+        }
+    }
+
+    #[test]
+    fn the_chrome_pill_sits_one_gap_beyond_the_cube() {
+        use crate::navicube::{Corner, NaviCubeConfig};
+
+        let viewport = Viewport::new([640, 480], 1.0);
+        let cube = |corner| {
+            NaviCube::new(viewport).with_config(NaviCubeConfig {
+                corner,
+                cube_size: 132.0,
+                margin: 8.0,
+            })
+        };
+        // A top corner hangs the pill below the cube's logical rect.
+        for corner in [Corner::TopLeft, Corner::TopRight] {
+            let cube = cube(corner);
+            let [_, _, _, bottom] = cube.logical_rect();
+            let bar = chrome_bar_rect(&cube);
+            assert_eq!(bar[1], bottom + CHROME_GAP, "{corner:?}: pill top");
+            assert_eq!(bar[3], bar[1] + CHROME_HEIGHT, "{corner:?}: pill bottom");
+        }
+        // A bottom corner puts the pill above it.
+        for corner in [Corner::BottomLeft, Corner::BottomRight] {
+            let cube = cube(corner);
+            let [_, top, _, _] = cube.logical_rect();
+            let bar = chrome_bar_rect(&cube);
+            assert_eq!(bar[3], top - CHROME_GAP, "{corner:?}: pill bottom");
+            assert_eq!(
+                bar[1],
+                top - CHROME_GAP - CHROME_HEIGHT,
+                "{corner:?}: pill top"
+            );
+        }
+        assert_eq!(CHROME_GAP, 0.0, "the cube is tucked against the pill");
     }
 
     #[test]
@@ -4419,7 +4485,7 @@ mod tests {
         // centred in a 248-logical column inset 8 logical pixels from the corner, and the
         // bar fills that column below it.
         let [left, top, right, bottom] = view.chrome_rect().expect("the cube is placed");
-        assert_eq!([left, top, right, bottom], [384.0, 162.0, 632.0, 188.0]);
+        assert_eq!([left, top, right, bottom], [384.0, 156.0, 632.0, 182.0]);
 
         let in_bar = [left + 2.0, top + 2.0];
         assert!(view.chrome_contains(in_bar));

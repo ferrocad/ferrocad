@@ -24,9 +24,12 @@
 //! See `docs/workbenches/toy-workbench.md` and `docs/architecture.md` §10.
 
 use ferrocad_geom::SelectionRef;
-use ferrocad_graphics::Camera;
+use ferrocad_graphics::{Camera, screen_ribbon};
 use ferrocad_stage::gizmo::{ACTIVE_COLOR, INACTIVE_COLOR};
-use ferrocad_stage::screen::{HIT_SLOP, project_device, scale_for, to3};
+use ferrocad_stage::screen::{
+    HIT_SLOP, STROKE_PIXELS, camera_forward, point_segment_distance, project_device, push_ribbon,
+    scale_for,
+};
 use ferrocad_stage::{DrawMode, InteractionCommit, Manipulator, ShapeItem, Stage};
 use ferrocad_stage::{GizmoMode, TransformGizmo};
 use ferrocad_types::{Matrix4, Vector3};
@@ -41,11 +44,21 @@ pub const TOY_GRIP_PICK_ID: u32 = 3_000_000;
 /// The smallest height the grip will produce.
 pub const MIN_HEIGHT: f64 = 0.1;
 
+/// The grip stem's screen-invariant length, in device pixels.
+const STEM_PIXELS: f64 = 44.0;
+/// The dark casing around the grip stroke, in device pixels (the stroke itself is
+/// [`STROKE_PIXELS`] wide).
+const CASING_PIXELS: f64 = 3.0;
+/// The dark casing ink: the canvas void, so the grip reads against a bright selected
+/// slab as well as against the dark canvas.
+const CASING_COLOR: [f32; 4] = [0.004777, 0.006049, 0.009134, 1.0];
+
 /// A vertical grip that drags the slab's `Height` property.
 ///
-/// The anchor is the top centre of the displayed item; the handle is a vertical
-/// dimension line down to the item's base plus a cross at the top. Dragging up grows
-/// the height by the pointer's **vertical travel**, in screen-invariant world units.
+/// The anchor is the top centre of the displayed item; the handle is a screen-invariant
+/// stem projecting **up** from that anchor into empty space plus a cross at its tip.
+/// Dragging up grows the height by the pointer's **vertical travel**, in screen-invariant
+/// world units.
 #[derive(Clone, Debug)]
 pub struct HeightGrip {
     target: u32,
@@ -58,7 +71,8 @@ pub struct HeightGrip {
     /// The camera view and height the cached stroke was built for.
     view: Option<Matrix4>,
     built: Option<f64>,
-    item: ShapeItem,
+    /// The draw order: the dark casing first, the coloured stroke on top.
+    items: [ShapeItem; 2],
 }
 
 impl HeightGrip {
@@ -72,9 +86,16 @@ impl HeightGrip {
             hovered: false,
             view: None,
             built: None,
-            item: ShapeItem::new(TOY_GRIP_PICK_ID)
-                .with_draw_mode(DrawMode::Wireframe)
-                .with_selectable(false),
+            items: [
+                ShapeItem::new(TOY_GRIP_PICK_ID)
+                    .with_draw_mode(DrawMode::Shaded)
+                    .with_selectable(false)
+                    .with_surface_color(CASING_COLOR)
+                    .with_edge_color(CASING_COLOR),
+                ShapeItem::new(TOY_GRIP_PICK_ID + 1)
+                    .with_draw_mode(DrawMode::Shaded)
+                    .with_selectable(false),
+            ],
         }
     }
 
@@ -103,9 +124,9 @@ impl HeightGrip {
         self.hovered
     }
 
-    /// The overlay item.
+    /// The overlay items, casing first so the stroke sits on top of it.
     pub fn items(&self) -> &[ShapeItem] {
-        std::slice::from_ref(&self.item)
+        &self.items
     }
 
     /// The readout text (`H 20.00 mm`).
@@ -132,15 +153,22 @@ impl HeightGrip {
     }
 
     fn apply_color(&mut self) {
-        self.item.set_edge_color(self.stroke_color());
+        let color = self.stroke_color();
+        self.items[1].set_surface_color(color);
+        self.items[1].set_edge_color(color);
     }
 
-    /// Whether `device` is on the grip (within the shared grab slop).
+    /// Whether `device` is on the grip (the top anchor or the stem, within the shared
+    /// grab slop).
     pub fn hit(&self, camera: &Camera, device: [i32; 2]) -> bool {
         let Some(anchor) = project_device(camera, self.top) else {
             return false;
         };
-        (f64::from(device[0]) - anchor[0]).hypot(f64::from(device[1]) - anchor[1]) <= HIT_SLOP
+        let Some(tip) = project_device(camera, self.stem_end(camera)) else {
+            return false;
+        };
+        let point = [f64::from(device[0]), f64::from(device[1])];
+        point_segment_distance(point, anchor, tip).0 <= HIT_SLOP
     }
 
     /// Begin a drag at `device`.
@@ -197,26 +225,82 @@ impl HeightGrip {
         true
     }
 
-    /// Rebuild the geometry: a dimension line from the base to the top, plus a cross
-    /// at the top. The cross is screen-invariant, so the target stays grabbable at any
-    /// zoom.
+    /// The stem's endpoint: `STEM_PIXELS` of screen-invariant travel straight up from
+    /// the top face, into empty space.
+    fn stem_end(&self, camera: &Camera) -> Vector3 {
+        let length = scale_for(camera, self.top, STEM_PIXELS);
+        Vector3::new(self.top.x, self.top.y, self.top.z + length)
+    }
+
+    /// Rebuild the geometry: a 1.5 px ribbon from the top centre up into empty space,
+    /// plus a crossbar at its tip, each over a wider dark casing. The stem, crossbar and
+    /// casing are screen-invariant, so the target stays grabbable at any zoom.
     fn build(&mut self, camera: &Camera) {
-        let bottom = Vector3::new(self.top.x, self.top.y, self.top.z - self.height);
-        let half = scale_for(camera, self.top, 5.0);
-        let positions = vec![
-            to3(bottom),
-            to3(self.top),
-            to3(Vector3::new(self.top.x - half, self.top.y, self.top.z)),
-            to3(Vector3::new(self.top.x + half, self.top.y, self.top.z)),
-        ];
-        self.item
-            .set_shape(positions, Vec::new(), Vec::new(), vec![0, 1, 2, 3]);
+        let stem_end = self.stem_end(camera);
+        let crossbar_half = scale_for(camera, self.top, 5.0);
+        let stroke_half = scale_for(camera, self.top, STROKE_PIXELS / 2.0);
+        let casing_half = scale_for(camera, self.top, (STROKE_PIXELS + CASING_PIXELS) / 2.0);
+        let forward = camera_forward(camera);
+        let left = Vector3::new(
+            stem_end.x - crossbar_half,
+            stem_end.y,
+            stem_end.z,
+        );
+        let right = Vector3::new(
+            stem_end.x + crossbar_half,
+            stem_end.y,
+            stem_end.z,
+        );
+
+        let ribbons = |half: f64| {
+            let mut positions = Vec::new();
+            let mut triangles = Vec::new();
+            push_ribbon(
+                &mut positions,
+                &mut triangles,
+                screen_ribbon(self.top, stem_end, half, forward),
+            );
+            push_ribbon(
+                &mut positions,
+                &mut triangles,
+                screen_ribbon(left, right, half, forward),
+            );
+            (positions, triangles)
+        };
+
+        let (stroke_positions, stroke_triangles) = ribbons(stroke_half);
+        let (casing_positions, casing_triangles) = ribbons(casing_half);
+        // The stroke is coplanar with the casing; nudge it half a pixel toward the eye so
+        // the depth test lets the coloured ribbon win deterministically.
+        let toward_eye = camera_forward(camera).scale(-scale_for(camera, self.top, 0.5));
+        let stroke_positions: Vec<[f32; 3]> = stroke_positions
+            .into_iter()
+            .map(|point| {
+                [
+                    point[0] + toward_eye.x as f32,
+                    point[1] + toward_eye.y as f32,
+                    point[2] + toward_eye.z as f32,
+                ]
+            })
+            .collect();
+        self.items[0].set_shape(
+            casing_positions,
+            Vec::new(),
+            casing_triangles,
+            Vec::new(),
+        );
+        self.items[1].set_shape(
+            stroke_positions,
+            Vec::new(),
+            stroke_triangles,
+            Vec::new(),
+        );
         self.apply_color();
     }
 
-    /// Where the readout sits, in device pixels.
+    /// Where the readout sits, in device pixels: above the stem's tip.
     pub fn readout_anchor(&self, camera: &Camera) -> Option<[f64; 2]> {
-        project_device(camera, self.top)
+        project_device(camera, self.stem_end(camera))
     }
 }
 
@@ -348,6 +432,19 @@ mod tests {
         }
     }
 
+    /// A 30° pitched view, so the vertical stem projects into a visible screen segment
+    /// instead of collapsing onto the view axis, and world +Z reads as screen-up.
+    fn tilted_camera(eye_z: f64) -> Camera {
+        let rotation = Rotation::from_axis_angle(
+            &Vector3::new(1.0, 0.0, 0.0),
+            (-30.0_f64).to_radians(),
+        );
+        Camera {
+            view: Placement::new(Vector3::new(0.0, 0.0, -eye_z), rotation).to_matrix(),
+            ..camera(eye_z)
+        }
+    }
+
     /// A 40 × 40 × 20 slab from z = 0, centred on the origin in x/y.
     fn slab(entity: u32) -> Stage {
         use ferrocad_geom::Tessellation;
@@ -385,12 +482,82 @@ mod tests {
         let stage = slab(7);
         let grip = height_grip(&SelectionRef::whole(7), &stage).expect("a grip");
         assert_eq!(grip.id(), TOY_HEIGHT_ID);
-        let camera = camera(200.0);
+        let camera = tilted_camera(200.0);
+        let top = Vector3::new(0.0, 0.0, 20.0);
+        let stem_end = Vector3::new(0.0, 0.0, top.z + scale_for(&camera, top, STEM_PIXELS));
         assert_eq!(
             grip.readout_anchor(&camera),
-            project_device(&camera, Vector3::new(0.0, 0.0, 20.0))
+            project_device(&camera, stem_end)
         );
+        let anchor = grip.readout_anchor(&camera).expect("an anchor");
+        let face = project_device(&camera, top).expect("the top face");
+        assert!(anchor[1] > face[1], "the readout floats above the stem");
         assert!(grip.readout().expect("a readout").starts_with("H "));
+    }
+
+    #[test]
+    fn the_stem_projects_up_from_the_top_into_empty_space() {
+        let mut grip = grip();
+        let camera = tilted_camera(200.0);
+        assert!(grip.update(&camera));
+
+        // Casing first, then the 1.5 px stroke; each is a stem ribbon and a crossbar
+        // ribbon, so two quads (8 vertices, 12 indices) per item.
+        assert_eq!(grip.items().len(), 2, "casing + stroke");
+        let casing = &grip.items()[0];
+        let stroke = &grip.items()[1];
+        for item in [casing, stroke] {
+            assert_eq!(item.positions().len(), 8, "two ribbon quads");
+            assert_eq!(item.triangles().len(), 12, "six indices per quad");
+        }
+        assert_eq!(casing.surface_color(), CASING_COLOR);
+        assert_eq!(stroke.surface_color(), INACTIVE_COLOR);
+
+        // The geometry spans the top-face centroid up to the stem tip; neither ribbon
+        // reaches down to the slab's base.
+        let top = grip.top();
+        let expected = scale_for(&camera, top, STEM_PIXELS);
+        let min_z = stroke
+            .positions()
+            .iter()
+            .map(|point| f64::from(point[2]))
+            .fold(f64::INFINITY, f64::min);
+        let max_z = stroke
+            .positions()
+            .iter()
+            .map(|point| f64::from(point[2]))
+            .fold(f64::NEG_INFINITY, f64::max);
+        assert!(
+            min_z <= top.z + 1.0,
+            "the stem starts at the top face ({min_z} > {})",
+            top.z
+        );
+        assert!(
+            max_z >= top.z + expected - 1.0,
+            "the stem reaches the screen-invariant tip ({max_z})"
+        );
+        assert!(
+            min_z > top.z - 1.0,
+            "the ribbon never reaches the slab base ({min_z})"
+        );
+    }
+
+    #[test]
+    fn a_click_along_the_stem_begins_a_drag() {
+        let mut grip = grip();
+        let camera = tilted_camera(200.0);
+        let top = project_device(&camera, grip.top()).expect("the top");
+        let tip = project_device(&camera, grip.stem_end(&camera)).expect("the stem tip");
+        assert!(tip[1] > top[1], "the stem rises on screen");
+
+        // Halfway up the stem, away from both the top-face anchor and the crossbar.
+        let click = [
+            ((top[0] + tip[0]) * 0.5).round() as i32,
+            ((top[1] + tip[1]) * 0.5).round() as i32,
+        ];
+        assert!(grip.hit(&camera, click));
+        assert!(grip.begin_drag(&camera, click));
+        assert!(grip.is_dragging());
     }
 
     #[test]

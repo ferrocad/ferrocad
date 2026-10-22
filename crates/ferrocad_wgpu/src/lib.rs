@@ -29,8 +29,8 @@
 //! program packet's module (G4). A packet carrying a
 //! [`ShaderProgram`](ferrocad_graphics::ShaderProgram) replaces the scene pipeline
 //! with a pipeline built from that source. This crate exports no copy: its naga tests
-//! read and validate the mod's file, so the workspace's `mods/` tree is required to
-//! run them.
+//! read and validate the mod's file, and skip those checks when the workspace's `mods/`
+//! tree is absent (so an unpacked crate still builds and tests).
 //!
 //! [`AXIS_OVERLAY_WGSL`] is the axis-cross sibling and is still crate-owned: the same
 //! fixed `Frame`/`Program` binding, with the backward-compatible axis tail appended to
@@ -66,26 +66,54 @@ pub use trace::Tone;
 /// block (the grid prefix plus four axis `vec4`s) and the same entry points.
 pub const AXIS_OVERLAY_WGSL: &str = include_str!("../shaders/axis_overlay.wgsl");
 
-/// The mod-owned grid overlay source, for the tests that parse and draw it.
+/// The mod-owned grid overlay source, when the workspace `mods/` tree is present.
 ///
 /// `mods/GridOverlayCoin/Resources/grid_overlay.wgsl` is the single home for this
-/// shader (a mod ships loose files, and a worked example belongs with the mod). This
-/// crate carries no copy, so the naga and scene tests read the workspace tree.
+/// shader. The crate carries no copy, so its tests read the workspace tree and skip
+/// the shader-specific checks when it is absent (for example when the crate is
+/// unpacked from a `.crate` archive outside the workspace).
 #[cfg(test)]
-pub(crate) fn grid_overlay_source() -> String {
-    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../../mods/GridOverlayCoin/Resources/grid_overlay.wgsl");
-    std::fs::read_to_string(&path)
-        .unwrap_or_else(|error| panic!("the grid mod must ship {}: {error}", path.display()))
+pub(crate) fn grid_overlay_source() -> Option<String> {
+    mod_source("mods/GridOverlayCoin/Resources/grid_overlay.wgsl")
 }
+
+/// Read a workspace file (`CARGO_MANIFEST_DIR/../..`), if it is present.
+#[cfg(test)]
+fn mod_source(relative: &str) -> Option<String> {
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../..")
+        .join(relative);
+    std::fs::read_to_string(&path)
+        .inspect_err(|error| eprintln!("workspace file {} is unavailable: {error}", path.display()))
+        .ok()
+}
+
+/// A minimal, valid geometry program for tests that only need *a* pipeline.
+///
+/// It deliberately does not model the grid look: the tests that assert pixels read
+/// the mod's real source and skip when the workspace `mods/` tree is absent.
+#[cfg(test)]
+pub(crate) const FIXTURE_PROGRAM_WGSL: &str = r#"@vertex
+fn vs_main(@location(0) position: vec3<f32>) -> @builtin(position) vec4<f32> {
+    return vec4<f32>(position, 1.0);
+}
+
+@fragment
+fn fs_main() -> @location(0) vec4<f32> {
+    return vec4<f32>(1.0, 0.0, 1.0, 1.0);
+}
+"#;
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
     /// Parse and validate the grid overlay module without a GPU.
-    fn validated_grid_overlay() -> naga::Module {
-        let source = grid_overlay_source();
+    fn validated_grid_overlay() -> Option<naga::Module> {
+        let Some(source) = grid_overlay_source() else {
+            eprintln!("the workspace mods/ tree is absent; skipping the grid-shader checks");
+            return None;
+        };
         let module = naga::front::wgsl::parse_str(&source)
             .expect("the mod's grid_overlay.wgsl should parse as WGSL");
         naga::valid::Validator::new(
@@ -94,7 +122,7 @@ mod tests {
         )
         .validate(&module)
         .expect("the mod's grid_overlay.wgsl should validate");
-        module
+        Some(module)
     }
 
     fn struct_by_name<'a>(module: &'a naga::Module, name: &str) -> naga::Handle<naga::Type> {
@@ -111,7 +139,9 @@ mod tests {
 
     #[test]
     fn grid_overlay_has_the_expected_entry_points() {
-        let module = validated_grid_overlay();
+        let Some(module) = validated_grid_overlay() else {
+            return;
+        };
         let vertex = module
             .entry_points
             .iter()
@@ -143,7 +173,9 @@ mod tests {
 
     #[test]
     fn grid_overlay_binds_only_the_program_group() {
-        let module = validated_grid_overlay();
+        let Some(module) = validated_grid_overlay() else {
+            return;
+        };
         let mut bindings: Vec<(u32, u32)> = module
             .global_variables
             .iter()
@@ -191,7 +223,9 @@ mod tests {
 
     #[test]
     fn grid_overlay_uniform_blocks_match_the_fixed_abi() {
-        let module = validated_grid_overlay();
+        let Some(module) = validated_grid_overlay() else {
+            return;
+        };
         let mut layouter = naga::proc::Layouter::default();
         layouter
             .update(module.to_ctx())
@@ -285,17 +319,16 @@ mod tests {
     /// `GizmoOverlayShader` and reaches the shell through the provider registry. These
     /// tests validate the mod's copy, so the workspace's `mods/` tree is required to run
     /// them.
-    fn gizmo_skin_source() -> String {
-        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../../mods/GizmoOverlayShader/Resources/gizmo_skin.wgsl");
-        std::fs::read_to_string(&path).unwrap_or_else(|error| {
-            panic!("the shader mod must ship {}: {error}", path.display())
-        })
+    fn gizmo_skin_source() -> Option<String> {
+        mod_source("mods/GizmoOverlayShader/Resources/gizmo_skin.wgsl")
     }
 
     /// Parse and validate the gizmo skin module without a GPU.
-    fn validated_gizmo_skin() -> naga::Module {
-        let source = gizmo_skin_source();
+    fn validated_gizmo_skin() -> Option<naga::Module> {
+        let Some(source) = gizmo_skin_source() else {
+            eprintln!("the workspace mods/ tree is absent; skipping the gizmo-skin checks");
+            return None;
+        };
         let module = naga::front::wgsl::parse_str(&source)
             .expect("the mod's gizmo_skin.wgsl should parse as WGSL");
         naga::valid::Validator::new(
@@ -304,19 +337,24 @@ mod tests {
         )
         .validate(&module)
         .expect("the mod's gizmo_skin.wgsl should validate");
-        module
+        Some(module)
     }
 
     /// The skin must parse before it can be handed to `create_shader_module`.
     #[test]
     fn gizmo_skin_parses() {
-        naga::front::wgsl::parse_str(&gizmo_skin_source())
+        let Some(source) = gizmo_skin_source() else {
+            return;
+        };
+        naga::front::wgsl::parse_str(&source)
             .expect("the mod's gizmo_skin.wgsl should parse as WGSL");
     }
 
     #[test]
     fn gizmo_skin_is_a_valid_geometry_program() {
-        let module = validated_gizmo_skin();
+        let Some(module) = validated_gizmo_skin() else {
+            return;
+        };
         assert!(module.entry_points.iter().any(|entry| {
             entry.name == "vs_main" && entry.stage == naga::ShaderStage::Vertex
         }));
@@ -384,7 +422,7 @@ mod tests {
             kind: ShaderStageKind::Vertex,
             // A single-module WGSL file: the vertex stage holds it, the fragment
             // stage stays empty (WGSL has no per-stage modules).
-            source: Some(grid_overlay_source()),
+            source: Some(FIXTURE_PROGRAM_WGSL.to_owned()),
             source_program: None,
         }));
         let fragment = Node {
@@ -435,7 +473,7 @@ mod tests {
             .expect("the packet carries a program");
         assert_eq!(
             program.source(),
-            grid_overlay_source(),
+            FIXTURE_PROGRAM_WGSL,
             "the WGSL round-trips"
         );
         assert_eq!(program.parameters().color, [1.0, 0.5, 0.25]);

@@ -2211,9 +2211,10 @@ mod tests {
         [image.rgba[i], image.rgba[i + 1], image.rgba[i + 2]]
     }
 
-    /// A scene whose second shape is a grid-overlay program packet, optionally behind an
-    /// opaque red box at `z = 1` (between the eye at `z = 100` and the plane at `z = 0`).
-    fn program_scene(with_box: bool) -> Scene {
+    /// A scene whose second shape is a geometry program packet built from `source`,
+    /// optionally behind an opaque red box at `z = 1` (between the eye at `z = 100` and
+    /// the plane at `z = 0`).
+    fn program_scene(with_box: bool, source: &str) -> Scene {
         use ferrocad_inventor::{ShaderStage, ShaderStageKind};
 
         let leaf = |kind| Node {
@@ -2251,7 +2252,7 @@ mod tests {
             children: vec![
                 leaf(NodeKind::ShaderStage(ShaderStage {
                     kind: ShaderStageKind::Vertex,
-                    source: Some(crate::grid_overlay_source()),
+                    source: Some(source.to_owned()),
                     source_program: None,
                 })),
                 leaf(NodeKind::ShaderStage(ShaderStage {
@@ -2282,9 +2283,14 @@ mod tests {
             return;
         };
 
+        let Some(source) = crate::grid_overlay_source() else {
+            eprintln!("the workspace mods/ tree is absent; skipping the grid program test");
+            return;
+        };
+
         // Only the program packet: the world Y axis (x = 0, column 32) is a green line;
         // column 52 sits between two minor lines and stays background.
-        let (queue, _) = compile(&program_scene(false));
+        let (queue, _) = compile(&program_scene(false, &source));
         assert_eq!(queue.len(), 1, "the program packet is the only draw");
         assert!(queue.packets[0].state.program.is_some());
         renderer.draw(&queue, &camera).expect("draw the grid");
@@ -2309,7 +2315,7 @@ mod tests {
 
         // The opaque box at z = 1 is in front of the grid plane at z = 0: it must win
         // every pixel it covers, and it remains pickable.
-        let (queue, _) = compile(&program_scene(true));
+        let (queue, _) = compile(&program_scene(true, &source));
         assert_eq!(queue.len(), 2, "the box and the program packet");
         renderer.draw(&queue, &camera).expect("draw the box and grid");
         let image = renderer.image().expect("readback");
@@ -2383,7 +2389,7 @@ mod tests {
             return;
         };
 
-        let (mut program, _) = compile(&program_scene(false));
+        let (mut program, _) = compile(&program_scene(false, crate::FIXTURE_PROGRAM_WGSL));
         let program_packet = program.packets.remove(0);
         // An opaque blue quad *behind* the grid plane (z = -1, farther from the eye).
         let mut behind = pick_packet(
@@ -2407,12 +2413,12 @@ mod tests {
         renderer.draw(&queue, &camera).expect("draw");
 
         let image = renderer.image().expect("readback");
-        // The green axis line blends over the blue quad. Were the program drawn first,
-        // the quad would overpaint the line and this pixel would be pure blue.
+        // The opaque program placeholder (magenta) wins over the earlier, farther blue
+        // quad. Were the program drawn first, the quad would overpaint the placeholder.
         let [red, green, blue] = texel(&image, 32, 24);
         assert!(
-            red > 40 && green > 80,
-            "the grid line draws over the earlier, farther quad: {red},{green},{blue}"
+            red > 200 && blue > 200 && green < 80,
+            "the program draws over the earlier, farther quad: {red},{green},{blue}"
         );
     }
 
@@ -2433,8 +2439,13 @@ mod tests {
         };
         let (scene, _) = compile(&clip_space_triangle());
         // The program packet lives in its own view, exactly as the viewport's
-        // `program_queue` does.
-        let (program, _) = compile(&program_scene(false));
+        // `program_queue` does. This one asserts the grid's pixels, so it needs the
+        // mod's real source and skips when the workspace `mods/` tree is absent.
+        let Some(source) = crate::grid_overlay_source() else {
+            eprintln!("the workspace mods/ tree is absent; skipping the resize/program test");
+            return;
+        };
+        let (program, _) = compile(&program_scene(false, &source));
         // ...and an overlay view above the program view, as the navigation cube does.
         let (cube, _) = compile(&overlay_quad());
         let rect = Rect::new(40, 40, 24, 24);

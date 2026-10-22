@@ -25,9 +25,10 @@ offline builds and the test suites read this copy.
 
 The WGSL has **one canonical copy**:
 `mods/GridOverlayCoin/Resources/grid_overlay.wgsl` (this directory). `ferrocad_wgpu`
-carries no duplicate — its naga and scene tests read this file from the workspace
-tree, so `mods/` is required to run them. The standalone repo mirrors the same file
-and it must stay byte-identical; check it with:
+carries no duplicate — its naga and pixel tests read this file from the workspace
+tree and skip those checks when it is absent, so an unpacked crate still tests. The
+standalone repo mirrors the same file and it must stay byte-identical; check it
+with:
 
 ```sh
 # from the workspace root; point the variable at your standalone checkout

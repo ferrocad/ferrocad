@@ -20,7 +20,7 @@ use std::time::{Duration, Instant};
 use ferrocad_geom::SelectionRef;
 use ferrocad_graphics::{
     Camera, DepthState, DrawPacket, Generation, Geometry, Hit, MeshId, PickId, Projection,
-    RenderQueue, StateSnapshot, Topology, Vertex, Viewport, pick_at_hit,
+    RenderQueue, ShaderProgram, StateSnapshot, Topology, Vertex, Viewport, pick_at_hit,
 };
 use ferrocad_inventor::{
     Directives, Event, EventListener, ImageData, InventorView, NaviCubeDirective, Node, NodeKind,
@@ -29,8 +29,8 @@ use ferrocad_inventor::{
 use ferrocad_stage::Stage;
 use ferrocad_stage::shape::{GHOST_DEPTH, WIRE_DEPTH_BIAS};
 use ferrocad_stage::{
-    AxisStyle, FaceFrame, GizmoCommitEvent, GizmoHandle, GizmoModifiers, GizmoValue, GridSpec,
-    GridStyle, InteractionCommit, Manipulator, MouseButton as StageButton, PointerEvent,
+    AxisStyle, FaceFrame, GizmoCommitEvent, GizmoHandle, GizmoModifiers, GizmoStyle, GizmoValue,
+    GridSpec, GridStyle, InteractionCommit, Manipulator, MouseButton as StageButton, PointerEvent,
     PointerKind, SnapCandidate, SnapContext, SnapKind, Tool, ToolStatus, TransformGizmo, Workplane,
     axis, feedback, grid, snap_to_geometry_with,
 };
@@ -123,6 +123,11 @@ pub struct InventorViewport<V: InventorView> {
     gizmo: Option<TransformGizmo>,
     /// The gizmo's handle batches (rebuilt when its scale, origin, mode or hover change).
     gizmo_queue: RenderQueue,
+    /// The authored program that skins the gizmo's handles. The WGSL is supplied by
+    /// the active provider through the shell (the shader ships with a mod), so this
+    /// crate stays GPU- and source-agnostic: the viewport only knows that a skin
+    /// program was injected.
+    gizmo_skin: Option<Arc<ShaderProgram>>,
     /// The last gizmo commit, for the host to apply to the document.
     gizmo_commit: Option<GizmoCommitEvent>,
     /// The workbench manipulators (the edge fillet arc, a thickness grip, …), in
@@ -183,6 +188,10 @@ pub struct InventorViewport<V: InventorView> {
     /// default, as upstream's axis cross is. The style also carries the colours, the
     /// screen-invariant geometry and the origin/label toggles.
     axis: AxisStyle,
+    /// The workspace gizmo appearance and behaviour, shared by the transform gizmo and
+    /// every hosted manipulator. It is also the host policy for `enabled` (draw/pick at
+    /// all) and `show_readout` (the numeric pills).
+    gizmo_style: GizmoStyle,
     /// The world grid's minor and major steps (mm, G5 preferences; the local face grid
     /// keeps its own 1/10 mm levels).
     grid_minor: f64,
@@ -759,6 +768,7 @@ impl<V: InventorView> InventorViewport<V> {
             snap_grid: None,
             gizmo: None,
             gizmo_queue: RenderQueue::default(),
+            gizmo_skin: None,
             gizmo_commit: None,
             manipulators: Vec::new(),
             manipulator_queue: RenderQueue::default(),
@@ -785,6 +795,7 @@ impl<V: InventorView> InventorViewport<V> {
             grid: GridMesh::new(),
             grid_enabled: false,
             axis: AxisStyle::default(),
+            gizmo_style: GizmoStyle::default(),
             grid_minor: grid::MINOR_STEP,
             grid_major: grid::MAJOR_STEP,
             grid_radius: None,
@@ -917,6 +928,7 @@ impl<V: InventorView> InventorViewport<V> {
     /// Show a transform gizmo (drawn on top, picked before the tool and the scene).
     pub fn with_gizmo(mut self, mut gizmo: TransformGizmo) -> Self {
         gizmo.set_linear_snap(self.snap_grid);
+        gizmo.set_style(&self.gizmo_style);
         self.gizmo = Some(gizmo);
         self
     }
@@ -925,6 +937,7 @@ impl<V: InventorView> InventorViewport<V> {
     pub fn set_gizmo(&mut self, mut gizmo: Option<TransformGizmo>) {
         if let Some(gizmo) = gizmo.as_mut() {
             gizmo.set_linear_snap(self.snap_grid);
+            gizmo.set_style(&self.gizmo_style);
         }
         self.gizmo = gizmo;
         self.gizmo_commit = None;
@@ -936,6 +949,68 @@ impl<V: InventorView> InventorViewport<V> {
     /// The active gizmo, if any.
     pub fn gizmo(&self) -> Option<&TransformGizmo> {
         self.gizmo.as_ref()
+    }
+
+    /// The workspace gizmo style every hosted gizmo and manipulator is given.
+    pub fn gizmo_style(&self) -> &GizmoStyle {
+        &self.gizmo_style
+    }
+
+    /// The injected gizmo skin program, if any.
+    pub fn gizmo_skin(&self) -> Option<&Arc<ShaderProgram>> {
+        self.gizmo_skin.as_ref()
+    }
+
+    /// Inject (or clear) the authored program that skins the gizmo's handles.
+    ///
+    /// The source is compiled to a *geometry* program
+    /// ([`ShaderProgram::with_geometry`]), so the renderer draws the gizmo's own handle
+    /// meshes with the authored shader rather than a full-screen placeholder. The source
+    /// is provider-supplied through the shell (the shader ships with a mod), so this
+    /// crate stays GPU- and source-agnostic: the viewport only knows that a skin program
+    /// exists, and draws it whenever the style is enabled.
+    ///
+    /// The skin changes **materials only**: `gizmo_handle_at`, `drag_begin`/`drag_to`/
+    /// `drag_end`, the readout and the commit routing all still use the native
+    /// [`TransformGizmo`]. Returns whether the stored program changed; a change rebuilds
+    /// the gizmo queue.
+    pub fn set_gizmo_skin(&mut self, source: Option<Arc<str>>) -> bool {
+        let program = source
+            .map(|source| Arc::new(ShaderProgram::from_source(source).with_geometry()));
+        let changed = match (&self.gizmo_skin, &program) {
+            (None, None) => false,
+            (Some(stored), Some(incoming)) => stored != incoming,
+            _ => true,
+        };
+        if changed {
+            self.gizmo_skin = program;
+            self.rebuild_manipulator_queue();
+            self.rebuild_gizmo_queue();
+        }
+        changed
+    }
+
+    /// Replace the workspace gizmo style and forward it to every hosted gizmo and
+    /// manipulator. A style change (including toggling `enabled`) rebuilds both
+    /// overlays, so a disabled style draws and picks nothing while keeping the objects
+    /// hosted. Returns whether the stored style or any hosted object changed.
+    pub fn set_gizmo_style(&mut self, style: GizmoStyle) -> bool {
+        let stored_changed = self.gizmo_style != style;
+        if stored_changed {
+            self.gizmo_style = style;
+        }
+        let mut changed = stored_changed;
+        for manipulator in &mut self.manipulators {
+            changed |= manipulator.set_style(&self.gizmo_style);
+        }
+        if let Some(gizmo) = self.gizmo.as_mut() {
+            changed |= gizmo.set_style(&self.gizmo_style);
+        }
+        if changed {
+            self.rebuild_manipulator_queue();
+            self.rebuild_gizmo_queue();
+        }
+        changed
     }
 
     /// The latest gizmo drag readout, if a drag is in progress.
@@ -1006,7 +1081,8 @@ impl<V: InventorView> InventorViewport<V> {
     }
 
     /// Add a manipulator, replacing any with the same [`Manipulator::id`].
-    pub fn add_manipulator(&mut self, manipulator: Box<dyn Manipulator>) {
+    pub fn add_manipulator(&mut self, mut manipulator: Box<dyn Manipulator>) {
+        manipulator.set_style(&self.gizmo_style);
         self.remove_manipulator(manipulator.id());
         self.manipulators.push(manipulator);
         self.interaction_commit = None;
@@ -1014,7 +1090,10 @@ impl<V: InventorView> InventorViewport<V> {
     }
 
     /// Replace every manipulator: the shape of a selection (one target, one manipulator).
-    pub fn set_manipulators(&mut self, manipulators: Vec<Box<dyn Manipulator>>) {
+    pub fn set_manipulators(&mut self, mut manipulators: Vec<Box<dyn Manipulator>>) {
+        for manipulator in &mut manipulators {
+            manipulator.set_style(&self.gizmo_style);
+        }
         self.manipulators = manipulators;
         self.interaction_commit = None;
         self.rebuild_manipulator_queue();
@@ -1421,10 +1500,12 @@ impl<V: InventorView> InventorViewport<V> {
         // Workbench manipulators are the most specific overlays: an active drag
         // consumes the move; otherwise each claims only its grab targets, and its
         // interior falls through. The most recently added manipulator owns the hover.
-        if self
-            .manipulators
-            .iter()
-            .any(|manipulator| manipulator.is_dragging())
+        // A disabled style neither draws nor picks them, so the move falls through.
+        if self.gizmo_style.enabled
+            && self
+                .manipulators
+                .iter()
+                .any(|manipulator| manipulator.is_dragging())
         {
             self.hover_report = HoverReport::default();
             let changed = self
@@ -1437,7 +1518,7 @@ impl<V: InventorView> InventorViewport<V> {
             }
             return changed;
         }
-        let manipulator_hover = {
+        let manipulator_hover = if self.gizmo_style.enabled {
             let hits: Vec<bool> = self
                 .manipulators
                 .iter()
@@ -1452,6 +1533,8 @@ impl<V: InventorView> InventorViewport<V> {
                 self.rebuild_manipulator_queue();
             }
             (top.is_some(), changed)
+        } else {
+            (false, false)
         };
         if manipulator_hover.1 {
             self.hover_report = HoverReport::default();
@@ -1460,8 +1543,12 @@ impl<V: InventorView> InventorViewport<V> {
         let manipulator_hover = manipulator_hover.0;
 
         // The gizmo takes priority: an active drag consumes the move; otherwise hover.
-        let mut gizmo_hover = self.gizmo.as_ref().is_some_and(|gizmo| gizmo.is_dragging());
-        if self.gizmo.as_ref().is_some_and(|gizmo| gizmo.is_dragging()) {
+        // Like the manipulators, it only participates while the style enables it.
+        let mut gizmo_hover = self.gizmo_style.enabled
+            && self.gizmo.as_ref().is_some_and(|gizmo| gizmo.is_dragging());
+        if self.gizmo_style.enabled
+            && self.gizmo.as_ref().is_some_and(|gizmo| gizmo.is_dragging())
+        {
             let event = match self.gizmo.as_mut() {
                 Some(gizmo) => gizmo.drag_to_with_modifiers(&self.camera, device, modifiers),
                 None => None,
@@ -1473,7 +1560,7 @@ impl<V: InventorView> InventorViewport<V> {
                 self.hover_report = HoverReport::default();
                 return true;
             }
-        } else if self.gizmo.is_some() {
+        } else if self.gizmo_style.enabled && self.gizmo.is_some() {
             let handle = self.gizmo_handle_at(device);
             gizmo_hover = handle.is_some();
             let recoloured = match self.gizmo.as_mut() {
@@ -1632,33 +1719,37 @@ impl<V: InventorView> InventorViewport<V> {
         // Negative space inside the gizmo rect (or a click outside it) continues to the
         // gizmo, tool and scene below.
         // A workbench manipulator takes priority over the gizmo and the scene: it is
-        // the interaction the current selection asked for.
-        if down {
-            let started = self
-                .manipulators
-                .iter_mut()
-                .rev()
-                .any(|manipulator| manipulator.drag_begin(&self.camera, device));
-            if started {
-                self.rebuild_manipulator_queue();
-                return true;
-            }
-        } else {
-            let commit = self
-                .manipulators
-                .iter_mut()
-                .rev()
-                .find(|manipulator| manipulator.is_dragging())
-                .and_then(|manipulator| manipulator.drag_end());
-            if let Some(commit) = commit {
-                self.interaction_commit = Some(commit);
-                self.rebuild_manipulator_queue();
-                return true;
+        // the interaction the current selection asked for. A disabled style neither
+        // draws nor picks them, so the button falls through (a drag interrupted by a
+        // disable keeps its state but is not serviced or committed).
+        if self.gizmo_style.enabled {
+            if down {
+                let started = self
+                    .manipulators
+                    .iter_mut()
+                    .rev()
+                    .any(|manipulator| manipulator.drag_begin(&self.camera, device));
+                if started {
+                    self.rebuild_manipulator_queue();
+                    return true;
+                }
+            } else {
+                let commit = self
+                    .manipulators
+                    .iter_mut()
+                    .rev()
+                    .find(|manipulator| manipulator.is_dragging())
+                    .and_then(|manipulator| manipulator.drag_end());
+                if let Some(commit) = commit {
+                    self.interaction_commit = Some(commit);
+                    self.rebuild_manipulator_queue();
+                    return true;
+                }
             }
         }
 
         // The gizmo takes priority over the tool and the scene.
-        if self.gizmo.is_some() {
+        if self.gizmo_style.enabled && self.gizmo.is_some() {
             if down {
                 if let Some(handle) = self.gizmo_handle_at(device) {
                     let started = match self.gizmo.as_mut() {
@@ -1913,36 +2004,135 @@ impl<V: InventorView> InventorViewport<V> {
 
     /// The gizmo handle under a device position, if any. The gizmo owns an **analytic**
     /// screen-space hit test (2 px stroke + 10 px grab padding), so the triad's empty
-    /// interior never claims a click meant for the scene.
+    /// interior never claims a click meant for the scene. A disabled style picks
+    /// nothing, so the click falls through to the scene beneath.
     fn gizmo_handle_at(&self, device: [i32; 2]) -> Option<GizmoHandle> {
+        if !self.gizmo_style.enabled {
+            return None;
+        }
         self.gizmo
             .as_ref()
             .and_then(|gizmo| gizmo.hit(&self.camera, device))
     }
 
-    /// Rebuild the gizmo's handle batches from the active gizmo.
+    /// Whether the gizmo queue draws the authored skin rather than the native look.
+    ///
+    /// The style must be enabled and a skin program must have been injected with
+    /// [`set_gizmo_skin`](Self::set_gizmo_skin). The backend id is the shell's business
+    /// (it clears the skin when the active provider supplies none), so it does not gate
+    /// skinning here. Otherwise the native packets are drawn exactly as before.
+    fn skin_active(&self) -> bool {
+        self.gizmo_style.enabled && self.gizmo_skin.is_some()
+    }
+
+    /// Rebuild the gizmo's handle batches from the active gizmo. A disabled style draws
+    /// nothing (the gizmo stays hosted).
+    ///
+    /// When [`skin_active`](Self::skin_active) the handles are re-materialised with the
+    /// injected skin program; otherwise they draw the native look. The skin changes
+    /// materials only: [`gizmo_handle_at`](Self::gizmo_handle_at), the drag entry points,
+    /// the readout and the commit routing all still use the native [`TransformGizmo`].
     fn rebuild_gizmo_queue(&mut self) {
         let mut queue = RenderQueue::default();
-        if let Some(gizmo) = self.gizmo.as_ref() {
-            for item in gizmo.items() {
-                item.emit(&mut queue);
+        if self.gizmo_style.enabled {
+            if let Some(gizmo) = self.gizmo.as_ref() {
+                match self.gizmo_skin.as_ref().filter(|_| self.skin_active()) {
+                    Some(program) => {
+                        for item in gizmo.skinned_items(program) {
+                            item.emit(&mut queue);
+                        }
+                    }
+                    None => {
+                        for item in gizmo.items() {
+                            item.emit(&mut queue);
+                        }
+                    }
+                }
             }
         }
         self.gizmo_queue = queue;
     }
 
-    /// Rebuild the manipulators' overlay from their current items.
+    /// Rebuild the manipulators' overlay from their current items. A disabled style
+    /// draws nothing (the manipulators stay hosted).
+    ///
+    /// Like the gizmo, an active skin re-materialises every item with the injected
+    /// program, so a workspace-wide skin cannot leave one overlay looking native. The
+    /// manipulator still supplies the geometry and the readout.
     fn rebuild_manipulator_queue(&mut self) {
-        for manipulator in &mut self.manipulators {
-            manipulator.refresh(&self.camera);
-        }
         let mut queue = RenderQueue::default();
-        for manipulator in &self.manipulators {
-            for item in manipulator.items() {
-                item.emit(&mut queue);
+        if self.gizmo_style.enabled {
+            for manipulator in &mut self.manipulators {
+                manipulator.refresh(&self.camera);
+            }
+            let skin = self.gizmo_skin.as_ref().filter(|_| self.skin_active());
+            for manipulator in &self.manipulators {
+                for item in manipulator.items() {
+                    match skin {
+                        Some(program) => {
+                            let mut skinned = item.clone();
+                            skinned.set_program(Some(Arc::clone(program)));
+                            skinned.emit(&mut queue);
+                        }
+                        None => item.emit(&mut queue),
+                    }
+                }
             }
         }
         self.manipulator_queue = queue;
+    }
+
+    /// The gizmo's numeric pill: the active drag's readout text and its logical anchor.
+    /// `None` while the gizmo is disabled, readouts are hidden, or no drag is active.
+    fn gizmo_readout(&self) -> Option<(String, [f32; 2])> {
+        if !self.gizmo_style.enabled || !self.gizmo_style.show_readout {
+            return None;
+        }
+        let value = self.gizmo_value?;
+        let gizmo = self.gizmo.as_ref()?;
+        if !gizmo.is_dragging() {
+            return None;
+        }
+        let anchor = gizmo
+            .readout_anchor(&self.camera)
+            .map(|device| {
+                self.camera
+                    .viewport
+                    .to_logical([device[0].round() as i32, device[1].round() as i32])
+            })
+            .or(self.gizmo_pointer)
+            .unwrap_or([0.0, 0.0]);
+        Some((value.readout(), anchor))
+    }
+
+    /// The topmost manipulator's numeric pill: its readout text and logical anchor.
+    /// `None` while the overlays are disabled or readouts are hidden.
+    fn manipulator_readout(&self) -> Option<(String, [f32; 2])> {
+        if !self.gizmo_style.enabled || !self.gizmo_style.show_readout {
+            return None;
+        }
+        let (text, anchor) = self.manipulators.iter().rev().find_map(|manipulator| {
+            Some((
+                manipulator.readout()?,
+                manipulator.readout_anchor(&self.camera)?,
+            ))
+        })?;
+        let logical = self
+            .camera
+            .viewport
+            .to_logical([anchor[0].round() as i32, anchor[1].round() as i32]);
+        Some((text, logical))
+    }
+
+    /// The numeric readout the viewport would show, if the style allows one.
+    ///
+    /// The render path asks the two helpers separately (it positions two pills); this is
+    /// the unioned form the tests use to assert the `show_readout` gate.
+    #[cfg(test)]
+    fn readout_text(&self) -> Option<String> {
+        self.gizmo_readout()
+            .map(|(text, _)| text)
+            .or_else(|| self.manipulator_readout().map(|(text, _)| text))
     }
 
     /// Preview `transform` on the gizmo's target stage item (or clear the preview).
@@ -1978,11 +2168,13 @@ impl<V: InventorView> InventorViewport<V> {
             return false;
         }
         // An active manipulator drag owns the gesture, even when the pointer leaves the
-        // element (gpui keeps delivering the drag).
-        if self
-            .manipulators
-            .iter()
-            .any(|manipulator| manipulator.is_dragging())
+        // element (gpui keeps delivering the drag). A disabled style stops servicing
+        // the drag without dropping its state.
+        if self.gizmo_style.enabled
+            && self
+                .manipulators
+                .iter()
+                .any(|manipulator| manipulator.is_dragging())
         {
             let device = self.camera.viewport.to_device(logical);
             let changed = self
@@ -1995,7 +2187,9 @@ impl<V: InventorView> InventorViewport<V> {
             }
             return changed;
         }
-        if self.gizmo.as_ref().is_some_and(|gizmo| gizmo.is_dragging()) {
+        if self.gizmo_style.enabled
+            && self.gizmo.as_ref().is_some_and(|gizmo| gizmo.is_dragging())
+        {
             let device = self.camera.viewport.to_device(logical);
             let event = self
                 .gizmo
@@ -3339,25 +3533,10 @@ impl<V: InventorView + 'static> Render for InventorViewport<V> {
 
         // The gizmo's numeric tag follows the active drag: anchored at the stem tip or
         // plane, or at the pointer for a ring. It is a text layer with no hitboxes.
-        let root = if let Some(value) = self.gizmo_value {
-            if self.gizmo.as_ref().is_some_and(|gizmo| gizmo.is_dragging()) {
-                let anchor = self
-                    .gizmo
-                    .as_ref()
-                    .and_then(|gizmo| gizmo.readout_anchor(&self.camera))
-                    .map(|device| {
-                        self.camera
-                            .viewport
-                            .to_logical([device[0].round() as i32, device[1].round() as i32])
-                    })
-                    .or(self.gizmo_pointer)
-                    .unwrap_or([0.0, 0.0]);
-                root.child(readout_pill(value.readout(), anchor))
-            } else {
-                root
-            }
-        } else {
-            root
+        // `gizmo_readout` honours the style's `enabled`/`show_readout` policy.
+        let root = match self.gizmo_readout() {
+            Some((text, anchor)) => root.child(readout_pill(text, anchor)),
+            None => root,
         };
 
         // The snap's dimension pill: `ΔU`/`ΔV` in the active workplane's coordinates
@@ -3374,20 +3553,9 @@ impl<V: InventorView + 'static> Render for InventorViewport<V> {
 
         // A manipulator's dimension pill (the edge arc's `R 3.50 mm`): the manipulator
         // supplies both the text and where it sits, so the viewport names none of them.
-        let readout = self.manipulators.iter().rev().find_map(|manipulator| {
-            Some((
-                manipulator.readout()?,
-                manipulator.readout_anchor(&self.camera)?,
-            ))
-        });
-        let root = match readout {
-            Some((text, anchor)) => {
-                let logical = self
-                    .camera
-                    .viewport
-                    .to_logical([anchor[0].round() as i32, anchor[1].round() as i32]);
-                root.child(readout_pill(text, logical))
-            }
+        // `manipulator_readout` honours the style's readout policy.
+        let root = match self.manipulator_readout() {
+            Some((text, anchor)) => root.child(readout_pill(text, anchor)),
             None => root,
         };
 
@@ -3421,9 +3589,11 @@ fn merge_queue(
 
 /// Split the program packets out of the scene queue.
 ///
-/// A packet whose state carries a shader program draws a full-screen placeholder instead
-/// of its own geometry, so it belongs after the opaque scene (it writes no depth) and
-/// outside every pick.
+/// A packet whose state carries a shader program is kept out of every pick and drawn
+/// after the opaque scene. A **geometry** program (`ShaderProgram::with_geometry`) draws
+/// the packet's own mesh with the authored shader; a plain program draws a full-screen
+/// placeholder instead of its own geometry. Either way the packet belongs in the
+/// program queue, never in the scene queue.
 fn split_programs(queue: RenderQueue) -> (RenderQueue, RenderQueue) {
     let mut scene = RenderQueue::default();
     let mut programs = RenderQueue::default();
@@ -5286,24 +5456,37 @@ mod tests {
         hovered: bool,
         view: Option<Matrix4>,
         item: ShapeItem,
+        /// The last workspace style the viewport handed it, shared with the test so it
+        /// can observe the recorded value without downcasting.
+        style: Rc<RefCell<Option<GizmoStyle>>>,
     }
 
     impl FakeManipulator {
         fn new() -> Self {
-            Self {
-                value: 1.0,
-                press: None,
-                hovered: false,
-                view: None,
-                item: ShapeItem::new(777)
-                    .with_draw_mode(DrawMode::Wireframe)
-                    .with_selectable(false),
-            }
+            Self::recording().0
+        }
+
+        /// The manipulator and a handle to the style it records.
+        fn recording() -> (Self, Rc<RefCell<Option<GizmoStyle>>>) {
+            let style = Rc::new(RefCell::new(None));
+            (
+                Self {
+                    value: 1.0,
+                    press: None,
+                    hovered: false,
+                    view: None,
+                    item: ShapeItem::new(777)
+                        .with_draw_mode(DrawMode::Wireframe)
+                        .with_selectable(false),
+                    style: style.clone(),
+                },
+                style,
+            )
         }
     }
 
     impl Manipulator for FakeManipulator {
-        fn id(&self) -> &'static str {
+        fn id(&self) -> &str {
             "fake"
         }
 
@@ -5389,6 +5572,13 @@ mod tests {
 
         fn readout_anchor(&self, camera: &Camera) -> Option<[f64; 2]> {
             ferrocad_stage::screen::project_device(camera, Vector3::zero())
+        }
+
+        fn set_style(&mut self, style: &GizmoStyle) -> bool {
+            let mut recorded = self.style.borrow_mut();
+            let changed = recorded.as_ref() != Some(style);
+            *recorded = Some(style.clone());
+            changed
         }
     }
 
@@ -5499,6 +5689,378 @@ mod tests {
             "the manipulator owns the press"
         );
         assert!(!view.gizmo().expect("gizmo").is_dragging());
+    }
+
+    #[test]
+    fn the_skin_also_re_materialises_hosted_manipulators() {
+        use ferrocad_stage::{GizmoMode, TransformGizmo};
+
+        let (mut view, _viewport) = gizmo_view(TransformGizmo::new(
+            42,
+            Vector3::zero(),
+            GizmoMode::Translate,
+        ));
+        view.add_manipulator(Box::new(FakeManipulator::recording().0));
+        assert!(
+            view.manipulator_queue
+                .packets
+                .iter()
+                .all(|packet| packet.state.program.is_none()),
+            "the native manipulator carries no program"
+        );
+
+        // Supplying the skin re-materialises the manipulators immediately; no backend
+        // switch is needed.
+        assert!(view.set_gizmo_skin(Some(TEST_SKIN_WGSL.into())));
+        let program = Arc::clone(view.gizmo_skin().expect("a skin program"));
+        assert!(!view.manipulator_queue.packets.is_empty());
+        assert!(
+            view.manipulator_queue
+                .packets
+                .iter()
+                .all(|packet| packet.state.program.as_ref() == Some(&program)),
+            "a workspace skin covers the manipulators too"
+        );
+
+        // Clearing the skin restores their native material.
+        assert!(view.set_gizmo_skin(None));
+        assert!(
+            view.manipulator_queue
+                .packets
+                .iter()
+                .all(|packet| packet.state.program.is_none())
+        );
+    }
+
+    #[test]
+    fn set_gizmo_style_reaches_a_hosted_manipulator_and_gizmo() {
+        use ferrocad_stage::{GizmoMode, TransformGizmo};
+
+        let (mut view, _viewport) = gizmo_view(TransformGizmo::new(
+            42,
+            Vector3::zero(),
+            GizmoMode::Translate,
+        ));
+        let (fake, recorded) = FakeManipulator::recording();
+        view.add_manipulator(Box::new(fake));
+
+        let mut style = GizmoStyle::default();
+        style.active = [0.1, 0.2, 0.3, 1.0];
+        style.size = 88.0;
+        assert_ne!(style, *view.gizmo_style());
+        assert!(view.set_gizmo_style(style.clone()));
+
+        assert_eq!(view.gizmo_style(), &style);
+        assert_eq!(
+            recorded.borrow().as_ref(),
+            Some(&style),
+            "the hosted manipulator received the style"
+        );
+        assert_eq!(
+            view.gizmo().expect("gizmo").style(),
+            &style,
+            "the hosted transform gizmo received the style"
+        );
+    }
+
+    #[test]
+    fn setting_the_same_gizmo_style_is_a_no_op() {
+        use ferrocad_stage::{GizmoMode, TransformGizmo};
+
+        let (mut view, _viewport) = gizmo_view(TransformGizmo::new(
+            42,
+            Vector3::zero(),
+            GizmoMode::Translate,
+        ));
+        view.add_manipulator(Box::new(FakeManipulator::new()));
+
+        let mut style = view.gizmo_style().clone();
+        style.opacity = 0.5;
+        assert!(view.set_gizmo_style(style.clone()), "a real change reports true");
+        assert!(
+            !view.set_gizmo_style(style),
+            "setting the stored style again changes nothing"
+        );
+    }
+
+    #[test]
+    fn a_gizmo_or_manipulator_created_after_a_style_change_adopts_it() {
+        use ferrocad_stage::{GizmoMode, TransformGizmo};
+
+        let (mut view, _viewport) = gizmo_view(TransformGizmo::new(
+            42,
+            Vector3::zero(),
+            GizmoMode::Translate,
+        ));
+        let mut style = GizmoStyle::default();
+        style.inactive = [0.2, 0.4, 0.6, 1.0];
+        style.size = 64.0;
+        assert!(view.set_gizmo_style(style.clone()));
+
+        let (fake, recorded) = FakeManipulator::recording();
+        view.add_manipulator(Box::new(fake));
+        assert_eq!(
+            recorded.borrow().as_ref(),
+            Some(&style),
+            "a manipulator created later adopts the stored style"
+        );
+
+        view.set_gizmo(Some(TransformGizmo::new(
+            43,
+            Vector3::zero(),
+            GizmoMode::Translate,
+        )));
+        assert_eq!(
+            view.gizmo().expect("gizmo").style(),
+            &style,
+            "a gizmo created later adopts the stored style"
+        );
+    }
+
+    /// A tiny WGSL source for the skin tests. The viewport never compiles it (it only
+    /// packages the source into a program); the renderer is the sole compiler.
+    const TEST_SKIN_WGSL: &str =
+        "@vertex fn vs_main() -> @builtin(position) vec4<f32> { return vec4<f32>(0.0); }";
+
+    fn translate_gizmo_view() -> (InventorViewport<FakeView>, ferrocad_graphics::Viewport) {
+        use ferrocad_stage::{GizmoMode, TransformGizmo};
+        gizmo_view(TransformGizmo::new(42, Vector3::zero(), GizmoMode::Translate))
+    }
+
+    fn set_gizmo_backend(view: &mut InventorViewport<FakeView>, backend: &str) {
+        let mut style = view.gizmo_style().clone();
+        style.backend = backend.to_string();
+        assert!(view.set_gizmo_style(style), "a backend change is a real change");
+    }
+
+    /// The first device position whose analytic hit test lands on the X axis.
+    fn axis_x_grab(view: &InventorViewport<FakeView>) -> [i32; 2] {
+        use ferrocad_stage::GizmoHandle;
+        let gizmo = view.gizmo().expect("a gizmo");
+        for x in 0..100 {
+            for y in 0..100 {
+                if gizmo.hit(&view.camera, [x, y]) == Some(GizmoHandle::AxisX) {
+                    return [x, y];
+                }
+            }
+        }
+        panic!("the X axis handle should be pickable");
+    }
+
+    #[test]
+    fn a_supplied_skin_re_materialises_the_gizmo_packets() {
+        use ferrocad_stage::SKIN_BACKEND;
+
+        let (mut view, _viewport) = translate_gizmo_view();
+        // The shell names the provider the skin came from, but the viewport keys
+        // skinning on the supplied program alone.
+        set_gizmo_backend(&mut view, SKIN_BACKEND);
+        let handles = view.gizmo().expect("a gizmo").items().len();
+        let native_packets = view.gizmo_queue.len();
+        assert!(
+            native_packets >= handles,
+            "the native queue covers the handle set ({native_packets} packets, {handles} handles)"
+        );
+        assert!(
+            view.gizmo_queue
+                .packets
+                .iter()
+                .all(|packet| packet.state.program.is_none()),
+            "a viewport with no skin draws the native packets"
+        );
+
+        // Supplying a skin re-materialises every handle packet immediately, without
+        // losing one and without a backend switch.
+        assert!(view.set_gizmo_skin(Some(TEST_SKIN_WGSL.into())));
+        let program = Arc::clone(view.gizmo_skin().expect("a skin program"));
+        assert_eq!(
+            view.gizmo_queue.len(),
+            native_packets,
+            "the skin keeps the native packet count"
+        );
+        assert!(
+            view.gizmo_queue
+                .packets
+                .iter()
+                .all(|packet| packet.state.program.as_ref() == Some(&program)),
+            "every handle packet carries the skin"
+        );
+
+        // Clearing the skin restores the native packets.
+        assert!(view.set_gizmo_skin(None));
+        assert_eq!(view.gizmo_queue.len(), native_packets);
+        assert!(
+            view.gizmo_queue
+                .packets
+                .iter()
+                .all(|packet| packet.state.program.is_none()),
+            "the native look is restored"
+        );
+    }
+
+    #[test]
+    fn setting_the_same_gizmo_skin_is_a_no_op() {
+        let (mut view, _viewport) = translate_gizmo_view();
+        assert!(view.gizmo_skin().is_none());
+
+        assert!(view.set_gizmo_skin(Some(TEST_SKIN_WGSL.into())));
+        assert!(
+            !view.set_gizmo_skin(Some(TEST_SKIN_WGSL.into())),
+            "the same source is the same program"
+        );
+        assert!(
+            view.set_gizmo_skin(Some("@vertex fn vs_main() {}".into())),
+            "a different source is a new program"
+        );
+        assert!(view.set_gizmo_skin(None), "clearing a stored program is a change");
+        assert!(!view.set_gizmo_skin(None), "clearing again changes nothing");
+        assert!(view.gizmo_skin().is_none());
+    }
+
+    #[test]
+    fn the_skin_falls_back_when_it_is_missing_or_disabled() {
+        let (mut view, _viewport) = translate_gizmo_view();
+        assert!(!view.gizmo_queue.is_empty(), "the handles still draw");
+        assert!(
+            view.gizmo_queue
+                .packets
+                .iter()
+                .all(|packet| packet.state.program.is_none()),
+            "no supplied program means the native packets"
+        );
+
+        assert!(view.set_gizmo_skin(Some(TEST_SKIN_WGSL.into())));
+        assert!(
+            view.gizmo_queue
+                .packets
+                .iter()
+                .all(|packet| packet.state.program.is_some()),
+            "the skin is drawn once it exists"
+        );
+
+        let mut style = view.gizmo_style().clone();
+        style.enabled = false;
+        assert!(view.set_gizmo_style(style));
+        assert!(view.gizmo_queue.is_empty(), "a disabled style draws nothing");
+
+        let mut style = view.gizmo_style().clone();
+        style.enabled = true;
+        assert!(view.set_gizmo_style(style));
+        assert!(
+            view.gizmo_queue
+                .packets
+                .iter()
+                .all(|packet| packet.state.program.is_some()),
+            "the stored skin resumes with the style"
+        );
+    }
+
+    #[test]
+    fn a_skinned_gizmo_still_hits_and_commits_through_the_native_gizmo() {
+        use ferrocad_stage::GizmoHandle;
+
+        let (mut view, viewport) = translate_gizmo_view();
+        assert!(view.set_gizmo_skin(Some(TEST_SKIN_WGSL.into())));
+        assert!(
+            view.gizmo_queue
+                .packets
+                .iter()
+                .all(|packet| packet.state.program.is_some()),
+            "the drag runs against a skinned queue"
+        );
+
+        // The analytic hit test is unchanged by the skin.
+        let grab = axis_x_grab(&view);
+        assert_eq!(
+            view.gizmo_handle_at(grab),
+            Some(GizmoHandle::AxisX),
+            "the native gizmo still owns picking"
+        );
+
+        assert!(view.handle_button(viewport.to_logical(grab), 1, true));
+        assert!(view.gizmo().expect("gizmo").is_dragging());
+        assert!(view.handle_pointer(viewport.to_logical([grab[0] + 12, grab[1]])));
+        assert!(preview(&view).is_some(), "the drag previews the target");
+        assert!(view.gizmo_value().is_some(), "the readout still tracks the drag");
+        assert!(view.last_gizmo_commit().is_none());
+
+        assert!(view.handle_button(viewport.to_logical([grab[0] + 12, grab[1]]), 1, false));
+        assert!(
+            view.last_gizmo_commit().is_some(),
+            "the native gizmo still commits"
+        );
+        assert!(preview(&view).is_none(), "the preview is cleared on commit");
+    }
+
+    #[test]
+    fn a_disabled_style_hides_and_unpicks_the_overlays() {
+        use ferrocad_stage::{GizmoMode, TransformGizmo};
+
+        // An empty scene, so any hover report can only come from an overlay.
+        let (mut view, viewport) = manipulator_view();
+        view.set_gizmo(Some(TransformGizmo::new(
+            7,
+            Vector3::zero(),
+            GizmoMode::Translate,
+        )));
+        view.refresh();
+        assert!(!view.manipulator_queue.is_empty());
+        assert!(!view.gizmo_queue.is_empty());
+
+        let mut style = view.gizmo_style().clone();
+        style.enabled = false;
+        assert!(view.set_gizmo_style(style.clone()));
+
+        assert!(view.manipulator_queue.is_empty(), "no overlay is drawn");
+        assert!(view.gizmo_queue.is_empty(), "no gizmo is drawn");
+        assert_eq!(view.manipulators().len(), 1, "the manipulator stays hosted");
+        assert!(view.gizmo().is_some(), "the gizmo stays hosted");
+
+        // A hover over the hosted grab disc falls through to the (empty) scene.
+        view.handle_pointer(viewport.to_logical([50, 50]));
+        assert_eq!(view.hover_report(), &HoverReport::default());
+        assert!(view.hovered().is_none());
+
+        // A press over it likewise falls through: neither overlay starts a drag.
+        assert!(!view.handle_button(viewport.to_logical([50, 50]), 1, true));
+        assert!(
+            !view
+                .manipulator("fake")
+                .expect("a manipulator")
+                .is_dragging()
+        );
+        assert!(!view.gizmo().expect("gizmo").is_dragging());
+        assert!(view.orbit_drag.is_some(), "the press reached the scene");
+
+        // Re-enabling restores the overlays without re-arming the selection.
+        style.enabled = true;
+        assert!(view.set_gizmo_style(style));
+        assert!(!view.manipulator_queue.is_empty());
+        assert!(!view.gizmo_queue.is_empty());
+        assert_eq!(view.manipulators().len(), 1);
+    }
+
+    #[test]
+    fn hiding_the_readout_suppresses_the_pill_text() {
+        let (mut view, _viewport) = manipulator_view();
+        assert_eq!(view.readout_text().as_deref(), Some("1.00"));
+
+        let mut style = view.gizmo_style().clone();
+        style.show_readout = false;
+        assert!(view.set_gizmo_style(style));
+        assert_eq!(
+            view.readout_text(),
+            None,
+            "the readout helper yields no pill text"
+        );
+        assert_eq!(
+            view.manipulator("fake")
+                .expect("a manipulator")
+                .readout()
+                .as_deref(),
+            Some("1.00"),
+            "the hosted manipulator still reports its value"
+        );
     }
 
     #[test]

@@ -256,6 +256,52 @@ S0–S4 landed; S5 (document-scoped overrides) remains optional.
   provider row switches through `ferrocad_shell.set_provider()`
   (`{"feature", "backend"}` → `{ok, error, status, view}`).
 
+### S4c — gizmo is a capability
+
+- The manipulator gizmo is now a capability like the grid and the axis cross:
+  `FerroCAD._gizmo` defines `FEATURE = "gizmo"`, `GIZMO_SETTINGS_SCHEMA` (nine
+  rows: `enabled`, `active_color`, `inactive_color`, `size`, `width`, `opacity`,
+  `ghost_alpha`, `ring_snap_deg`, `show_readout`) and the provider group
+  `User parameter:BaseApp/Preferences/Mods/gizmo/ferrocad`. There is no legacy
+  key to migrate; `reset()` clears only this group.
+- `FerroCAD.Gizmo.apply()` returns `{"view": {"gizmo": {…}}}` and adds
+  `backend` from `FerroCADGui.activeProvider("gizmo")` (else `"ferrocad"`).
+  `backend` is not a schema row: `snapshot()` is the nine stored values, and
+  `mods/GizmoOverlay` (the `gizmo`/`ferrocad` provider, priority 10) forces
+  `"ferrocad"` in its activate/deactivate/refresh requests.
+- `mods/GizmoOverlay/InitGui.py` advertises the schema, so `Settings/Gizmo` and
+  `FerroCAD.Gizmo` are one store; `GizmoOverlay_Settings` returns
+  `{"select": "Settings/Gizmo"}` when a gizmo provider is registered and a
+  schema-derived fallback dialog otherwise. The command carries
+  `FerroCAD_Surface: "gizmo"`, an empty `FerroCAD_Parent` (there is no header
+  primary) and `FerroCAD_DevOnly: "true"`.
+- This section is the settings/store half (G0). The Rust half (G1) landed as
+  `view.gizmo`: `ViewRequest.gizmo` → `ViewState.gizmo: ferrocad_stage::GizmoStyle`,
+  validated atomically (bad colour / non-positive size or width / empty backend
+  rejects the whole request; `opacity` and `ghost_alpha` clamp to `0..=1`, the ring
+  detent to `0..=180`). The hex colours are RGB-only, so the role's token alpha is
+  kept. `Viewport::set_gizmo_style` forwards the style to every hosted manipulator
+  and to the `TransformGizmo`, including objects hosted later, and owns the
+  `enabled` (draw/pick) and `show_readout` gates; the shell arms the native handles
+  even while disabled, so re-enabling needs no re-selection. `ghost_alpha` now
+  reaches `ShapeItem`'s occluded pass (`with_ghost_alpha`/`set_ghost_alpha`) instead
+  of being a stored-only value.
+- `backend` is stored as a **provider claim**, not an implementation. Hosting is
+  data-driven: `ferrocad` is hosted by the build, and any other id is hosted by the
+  **skin its provider supplies** through
+  `registerProvider(..., skin=<WGSL source>)` → `FerroCADGui.providerSkin(feature)` →
+  `ferrocad_shell.provider_skin` → `Viewport::set_gizmo_skin`. The shipped
+  `mods/GizmoOverlayShader` owns `Resources/gizmo_skin.wgsl`; a backend with no skin is
+  reported as `gizmo backend <id> supplied no skin (native handles stay active)`. The
+  skin changes materials only — the native manipulator keeps hover, picking, drags and
+  commits. See
+  [`../interaction/gizmo-manipulators.md`](../interaction/gizmo-manipulators.md) §17–19.
+- G3a adds the geometry half: a mod declares a handle through
+  `FerroCAD.register_manipulator_provider` (mesh, optional geometry program, frame,
+  axis, bounds, readout) and commits through the same `register_interaction_provider`
+  hook. Declared handles follow the compiled manipulator for a selection; a bad spec is
+  logged and skipped.
+
 ## Risks
 
 - **Precedence confusion.** Show the winning source in the row's `status`; a value

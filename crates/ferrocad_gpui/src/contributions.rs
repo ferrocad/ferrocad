@@ -171,7 +171,7 @@ mod tests {
     struct Stub;
 
     impl Manipulator for Stub {
-        fn id(&self) -> &'static str {
+        fn id(&self) -> &str {
             "stub"
         }
 

@@ -34,7 +34,10 @@ where they are; the rule is about the API a mod calls to extend the host.
 | Name | What it is |
 | --- | --- |
 | `Grid` | the semantic grid-settings singleton |
+| `Gizmo` | the semantic manipulator-gizmo settings singleton |
 | `register_display_provider` | a module's display-mesh hook |
+| `register_manipulator_provider` | a module's declarative-handle hook (called when a selection is armed) |
+| `manipulator_specs` | ask the registered hooks for a selection's handle specs |
 | `register_interaction_provider` | a module's manipulator-edit hook |
 | `display_mesh` | ask the registered provider for an object's mesh |
 | `interaction` | ask the registered provider to apply an edit |

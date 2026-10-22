@@ -142,6 +142,7 @@ def registerProvider(
     deactivate=None,
     refresh=None,
     settings=None,
+    skin=None,
 ):
     """Declare that ``backend`` provides ``feature`` (called from ``InitGui.py``).
 
@@ -167,6 +168,14 @@ def registerProvider(
     kind is allowed and reported once; its row is read-only. See
     ``docs/tasks/settings-model.md`` S0.
 
+    ``skin`` is the optional WGSL source text of the material program this
+    backend supplies for a capability that hosts one (the manipulator gizmo
+    does). It is **not** a setting: it never appears in the settings manifest or
+    in the mods dialog, and the host asks for it through :func:`providerSkin`.
+    Supplying no skin means the host draws its native material. A reload
+    replaces the source like every other field; omitting it clears a previously
+    supplied one. It is stored trimmed.
+
     Registering the same ``(feature, backend)`` again replaces the record (a mod
     reload) without moving it in the registration order. Returns the manifest.
     """
@@ -185,6 +194,11 @@ def registerProvider(
     if refresh is not None and not callable(refresh):
         raise TypeError(f"provider {feature!r}/{backend!r} refresh is not callable")
     schema = _validate_settings(feature, backend, settings)
+    if skin is not None and not isinstance(skin, str):
+        raise TypeError(f"provider {feature!r}/{backend!r} skin must be WGSL source text")
+    source = None if skin is None else skin.strip()
+    if source == "":
+        raise ValueError(f"provider {feature!r}/{backend!r} skin is empty")
 
     text = str(label if label is not None else backend).strip()
     records = _PROVIDERS.get(feature)
@@ -206,6 +220,7 @@ def registerProvider(
         "deactivate": deactivate,
         "refresh": refresh,
         "settings": schema,
+        "skin": source,
     }
     _PROVIDER_REPORTED.difference_update(
         {key for key in _PROVIDER_REPORTED if key[0] == feature and key[1] == backend}
@@ -375,6 +390,32 @@ def activeProvider(feature):
     backend owns the feature.
     """
     return _selected(feature)
+
+
+def providerSkin(feature, backend=None):
+    """The WGSL material program of ``feature``'s backend, or ``None``.
+
+    This is the host's channel for a provider-supplied shader skin: the shell
+    asks a capability that hosts one (the manipulator gizmo) for its material
+    program and draws with the source :func:`registerProvider` recorded under
+    ``skin``. ``backend`` names a specific backend; ``None`` — the form the
+    shell uses — means the **active** backend. That is the point: a switch makes
+    the host ask again, so a stale skin cannot survive a provider change.
+
+    ``None`` also means "draw the native material": an unknown feature or
+    backend, and a backend that supplied no skin, all answer ``None``. Like
+    :func:`activeProvider` this never raises for an unknown name, because the
+    shell polls it across the interpreter boundary.
+    """
+    records = _PROVIDERS.get(feature)
+    if not records:
+        return None
+    if backend is None:
+        backend = _selected(feature)
+    record = records.get(backend)
+    if record is None:
+        return None
+    return record.get("skin")
 
 
 def setActiveProvider(feature: str, backend: str) -> dict:
@@ -938,6 +979,7 @@ __all__ = [
     "registerProvider",
     "unregisterProvider",
     "providers",
+    "providerSkin",
     "activeProvider",
     "setActiveProvider",
     "refreshProviders",

@@ -93,16 +93,25 @@ impl Default for ProgramParameters {
 
 /// A resolved shader program: inline WGSL plus the fixed-ABI parameters.
 ///
-/// A program is compared and hashed by its **content fingerprint** (source bytes and
-/// parameters), never by the full source or by pointer identity. The fingerprint is a
-/// 64-bit FNV-1a digest, which is what a pipeline cache keys on; two scene nodes that
-/// build the same program therefore share a cache entry, while a one-byte edit misses.
-/// The name is descriptive only and does not participate in equality.
+/// A program is compared and hashed by its **content fingerprint** (source bytes,
+/// parameters and geometry mode), never by the full source or by pointer identity. The
+/// fingerprint is a 64-bit FNV-1a digest, which is what a pipeline cache keys on; two
+/// scene nodes that build the same program therefore share a cache entry, while a
+/// one-byte edit misses. The name is descriptive only and does not participate in
+/// equality.
+///
+/// A **plain** program ignores the packet's geometry and draws the fixed ABI's
+/// placeholder quad; a **geometry** program (see [`with_geometry`](Self::with_geometry))
+/// draws the packet's own mesh with its position/normal/uv/colour vertex attributes.
+/// The mode is part of the fingerprint because the two need different vertex state and
+/// therefore different pipelines.
 #[derive(Clone, Debug)]
 pub struct ShaderProgram {
     name: Arc<str>,
     source: Arc<str>,
     parameters: ProgramParameters,
+    /// Whether the program draws the packet's mesh instead of the ABI placeholder.
+    geometry: bool,
     hash: u64,
     /// Whether `name` is derived from the fingerprint (and must follow it when the
     /// parameters change) rather than supplied by the caller.
@@ -111,13 +120,17 @@ pub struct ShaderProgram {
 
 impl ShaderProgram {
     /// A program with an explicit, descriptive `name`.
+    ///
+    /// It starts as a plain program (the ABI placeholder); chain
+    /// [`with_geometry`](Self::with_geometry) to draw the packet's own mesh instead.
     pub fn new(name: impl Into<Arc<str>>, source: impl Into<Arc<str>>) -> Self {
         let source = source.into();
         Self {
-            hash: fingerprint(&source, &ProgramParameters::default()),
+            hash: fingerprint(&source, &ProgramParameters::default(), false),
             name: name.into(),
             source,
             parameters: ProgramParameters::default(),
+            geometry: false,
             auto_named: false,
         }
     }
@@ -129,11 +142,12 @@ impl ShaderProgram {
     /// changes it.
     pub fn from_source(source: impl Into<Arc<str>>) -> Self {
         let source = source.into();
-        let hash = fingerprint(&source, &ProgramParameters::default());
+        let hash = fingerprint(&source, &ProgramParameters::default(), false);
         Self {
             name: format!("shader-{hash:016x}").into(),
             source,
             parameters: ProgramParameters::default(),
+            geometry: false,
             hash,
             auto_named: true,
         }
@@ -141,8 +155,23 @@ impl ShaderProgram {
 
     /// Replace the fixed-ABI parameters, recomputing the fingerprint.
     pub fn with_parameters(mut self, parameters: ProgramParameters) -> Self {
-        self.hash = fingerprint(&self.source, &parameters);
+        self.hash = fingerprint(&self.source, &parameters, self.geometry);
         self.parameters = parameters;
+        if self.auto_named {
+            self.name = format!("shader-{:016x}", self.hash).into();
+        }
+        self
+    }
+
+    /// Draw the packet's own mesh instead of the fixed ABI's placeholder quad.
+    ///
+    /// A geometry program is declared with the scene attribute layout
+    /// (position/normal/uv/colour), so it receives the packet's vertices, normals and
+    /// per-vertex colours. The mode participates in the fingerprint: the same source
+    /// used both ways is two programs, because the two need different pipelines.
+    pub fn with_geometry(mut self) -> Self {
+        self.geometry = true;
+        self.hash = fingerprint(&self.source, &self.parameters, true);
         if self.auto_named {
             self.name = format!("shader-{:016x}", self.hash).into();
         }
@@ -162,6 +191,12 @@ impl ShaderProgram {
     /// The fixed-ABI parameters bound to group 2, binding 1.
     pub fn parameters(&self) -> &ProgramParameters {
         &self.parameters
+    }
+
+    /// Whether the program draws the packet's own mesh (`true`) or the ABI's
+    /// placeholder quad (`false`).
+    pub fn geometry(&self) -> bool {
+        self.geometry
     }
 
     /// The stable content fingerprint a pipeline cache keys on.
@@ -185,12 +220,16 @@ impl Hash for ShaderProgram {
     }
 }
 
-/// FNV-1a over the source and the parameter words.
+/// FNV-1a over the source, the parameter words and the geometry mode.
 ///
 /// Deliberately hand-written rather than [`std::collections::hash_map::DefaultHasher`]:
 /// the fingerprint is persisted in nothing today, but a cache key must not change with
 /// the Rust toolchain.
-fn fingerprint(source: &str, parameters: &ProgramParameters) -> u64 {
+///
+/// The geometry bit is appended only when set, so a plain program's fingerprint is
+/// byte-identical to what it was before the mode existed (no cache churn), while a
+/// geometry program differs from the same source drawn plainly.
+fn fingerprint(source: &str, parameters: &ProgramParameters, geometry: bool) -> u64 {
     const OFFSET: u64 = 0xcbf2_9ce4_8422_2325;
     const PRIME: u64 = 0x0000_0100_0000_01b3;
 
@@ -225,6 +264,9 @@ fn fingerprint(source: &str, parameters: &ProgramParameters) -> u64 {
         parameters.axis_labels,
     ] {
         write(&value.to_bits().to_le_bytes());
+    }
+    if geometry {
+        write(&[1]);
     }
     hash
 }
@@ -393,6 +435,53 @@ mod tests {
             ShaderProgram::new("grid", "@fragment fn fs_main() {}").with_parameters(params);
         assert_ne!(a, retuned, "the parameter surface is part of identity");
         assert_eq!(retuned.parameters().base_spacing, 10.0);
+    }
+
+    #[test]
+    fn the_geometry_mode_is_part_of_identity() {
+        let plain = ShaderProgram::new("gizmo", "@fragment fn fs_main() {}");
+        let geometry = plain.clone().with_geometry();
+        assert!(!plain.geometry(), "a new program is plain by default");
+        assert!(geometry.geometry());
+        assert_ne!(
+            plain, geometry,
+            "the same source drawn two ways is two programs"
+        );
+        assert_ne!(
+            plain.hash(),
+            geometry.hash(),
+            "the fingerprint includes the geometry mode"
+        );
+
+        // Hash collapses to the same decision as equality.
+        use std::collections::hash_map::DefaultHasher;
+        let hash_of = |program: &ShaderProgram| {
+            let mut hasher = DefaultHasher::new();
+            Hash::hash(program, &mut hasher);
+            hasher.finish()
+        };
+        assert_ne!(hash_of(&plain), hash_of(&geometry));
+
+        // Replacing the parameters keeps the mode and folds it into the new digest.
+        let retuned = geometry
+            .clone()
+            .with_parameters(ProgramParameters {
+                minor_alpha: 0.5,
+                ..Default::default()
+            });
+        assert!(retuned.geometry());
+        assert_ne!(retuned, geometry);
+    }
+
+    #[test]
+    fn from_source_defaults_to_no_geometry() {
+        let program = ShaderProgram::from_source("");
+        assert!(!program.geometry());
+        assert_eq!(program.hash(), ShaderProgram::new("x", "").hash());
+
+        let geometry = ShaderProgram::from_source("").with_geometry();
+        assert!(geometry.geometry());
+        assert_eq!(geometry.name(), format!("shader-{:016x}", geometry.hash()));
     }
 
     #[test]

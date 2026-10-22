@@ -6,14 +6,17 @@
 //! and the pipeline is cached on a [`ProgramKey`]:
 //!
 //! ```text
-//! (program fingerprint, topology, depth compare, depth write, blend,
+//! (program fingerprint, geometry mode, topology, depth compare, depth write, blend,
 //!  sample count, colour format)
 //! ```
 //!
-//! The program does not draw the packet's authored geometry: it draws a **4-vertex
-//! placeholder** (a `TriangleList`, six indices) whose only meaning is the sign of each
-//! corner, which is what the fixed ABI's module derives screen corners from. Culling is
-//! off, because a caller's winding is not part of the ABI.
+//! A **plain** program does not draw the packet's authored geometry: it draws a
+//! **4-vertex placeholder** (a `TriangleList`, six indices) whose only meaning is the
+//! sign of each corner, which is what the fixed ABI's module derives screen corners
+//! from. A **geometry** program draws its packet's own vertices and must therefore
+//! declare the scene attribute layout (position/normal/uv/color); its topology is the
+//! packet's. Culling is off either way, because a caller's winding is not part of the
+//! ABI.
 //!
 //! ## Group 2 — the fixed ABI
 //!
@@ -182,11 +185,20 @@ pub fn group_layout(device: &wgpu::Device) -> wgpu::BindGroupLayout {
 /// Two draws share a pipeline exactly when this key matches. The depth fields come from
 /// the packet's [`DepthState`] (`SoDepthBuffer`), so one program can be drawn with
 /// different depth behaviour without invalidating a cache entry.
+///
+/// `geometry` is part of the key because the two modes need different vertex state: a
+/// plain program consumes only the placeholder's `position`, while a geometry program
+/// consumes the scene layout. The same source used both ways therefore produces two
+/// pipelines.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct ProgramKey {
-    /// The program's content fingerprint ([`ShaderProgram::hash`]).
+    /// The program's content fingerprint ([`ShaderProgram::hash`]), which already
+    /// includes the geometry mode.
     pub program: u64,
-    /// The primitive topology (always `TriangleList` today).
+    /// Whether the program draws the packet's mesh (`true`) or the ABI placeholder.
+    pub geometry: bool,
+    /// The primitive topology: the packet's for a geometry program, `TriangleList` for
+    /// the placeholder.
     pub topology: wgpu::PrimitiveTopology,
     /// The depth comparison (after `test == false` collapses to `Always`).
     pub depth_compare: wgpu::CompareFunction,
@@ -216,6 +228,7 @@ impl ProgramKey {
     ) -> Self {
         Self {
             program: program.hash(),
+            geometry: program.geometry(),
             topology,
             depth_compare: compare_function(depth.effective_compare()),
             depth_write: depth.effective_write(),
@@ -444,7 +457,9 @@ impl ProgramPipeline {
         &self.groups[&hash]
     }
 
-    /// The pipeline drawing `program` with `depth`, creating it on first use.
+    /// The pipeline drawing `program` with `depth` and `topology`, creating it on first
+    /// use. A plain program always draws the placeholder `TriangleList`, so callers pass
+    /// `Topology::Triangles` for it; a geometry program passes the packet's topology.
     pub fn pipeline(
         &mut self,
         device: &wgpu::Device,
@@ -520,13 +535,20 @@ fn create_pipeline(
         source: wgpu::ShaderSource::Wgsl(program.source().into()),
     });
     // The fixed ABI guarantees only `@location(0) position: vec3<f32>`; the placeholder
-    // buffer carries nothing else.
-    let attributes = wgpu::vertex_attr_array![0 => Float32x3];
-    let vertex_buffers = [wgpu::VertexBufferLayout {
+    // buffer carries nothing else. A geometry program instead reads the packet's mesh,
+    // whose vertices are laid out like the scene's.
+    let placeholder_attributes = wgpu::vertex_attr_array![0 => Float32x3];
+    let placeholder_buffers = [wgpu::VertexBufferLayout {
         array_stride: size_of::<[f32; 3]>() as u64,
         step_mode: wgpu::VertexStepMode::Vertex,
-        attributes: &attributes,
+        attributes: &placeholder_attributes,
     }];
+    let scene_buffers = crate::pipeline::scene_vertex_layout();
+    let vertex_buffers: &[wgpu::VertexBufferLayout<'_>] = if key.geometry {
+        &scene_buffers
+    } else {
+        &placeholder_buffers
+    };
     device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
         label: Some(program.name()),
         layout: Some(layout),
@@ -534,7 +556,7 @@ fn create_pipeline(
             module: &module,
             entry_point: Some("vs_main"),
             compilation_options: Default::default(),
-            buffers: &vertex_buffers,
+            buffers: vertex_buffers,
         },
         primitive: wgpu::PrimitiveState {
             topology: key.topology,
@@ -688,6 +710,7 @@ mod tests {
 
         let default = key(&DepthState::default());
         assert_eq!(default.program, program.hash());
+        assert!(!default.geometry, "a plain program keeps the placeholder");
         assert_eq!(default.topology, wgpu::PrimitiveTopology::TriangleList);
         assert_eq!(default.depth_compare, wgpu::CompareFunction::Less);
         assert!(default.depth_write);
@@ -741,6 +764,52 @@ mod tests {
         let retuned_key =
             ProgramKey::new(&retuned, &DepthState::default(), wgpu::PrimitiveTopology::TriangleList, 4, format);
         assert_ne!(retuned_key.program, default.program);
+    }
+
+    /// The same source used as a plain and as a geometry program must not share a
+    /// pipeline: the two modes need different vertex state.
+    #[test]
+    fn the_pipeline_key_includes_the_geometry_mode() {
+        let plain = ShaderProgram::new("gizmo", "@vertex fn vs_main() {}");
+        let geometry = plain.clone().with_geometry();
+        let format = wgpu::TextureFormat::Rgba8UnormSrgb;
+        let key = |program: &ShaderProgram| {
+            ProgramKey::new(
+                program,
+                &DepthState::PROGRAM,
+                wgpu::PrimitiveTopology::TriangleList,
+                1,
+                format,
+            )
+        };
+
+        let plain_key = key(&plain);
+        let geometry_key = key(&geometry);
+        assert!(!plain_key.geometry);
+        assert!(geometry_key.geometry);
+        assert_ne!(plain_key, geometry_key);
+        assert_ne!(
+            plain_key.program, geometry_key.program,
+            "the fingerprints already differ; the key carries the mode additionally"
+        );
+
+        // The pipeline cache is a `HashMap<ProgramKey, _>`: one source used both ways is
+        // two resident pipelines.
+        let mut cache = HashMap::new();
+        cache.insert(plain_key, "placeholder");
+        cache.insert(geometry_key, "scene layout");
+        assert_eq!(cache.len(), 2, "one source, two vertex layouts");
+
+        // A geometry program's topology is the packet's, so a line-list variant is a
+        // third pipeline.
+        let lines = ProgramKey::new(
+            &geometry,
+            &DepthState::PROGRAM,
+            wgpu::PrimitiveTopology::LineList,
+            1,
+            format,
+        );
+        assert_ne!(lines, geometry_key);
     }
 
     #[test]

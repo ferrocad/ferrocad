@@ -10,8 +10,9 @@
 //! viewport) picks the handles, feeds the drags, and applies the preview.
 
 use std::f64::consts::TAU;
+use std::sync::Arc;
 
-use ferrocad_graphics::{Camera, Ray, screen_ribbon};
+use ferrocad_graphics::{Camera, Ray, ShaderProgram, screen_ribbon};
 use ferrocad_types::{Matrix4, Placement, Rotation, Vector3};
 
 use crate::interaction::InteractionCommit;
@@ -29,6 +30,13 @@ pub const GIZMO_BASE_ID: u32 = 1_000_000;
 /// The default target radius, in device pixels.
 pub const DEFAULT_PIXELS: f64 = 80.0;
 
+/// The provider id of the native FerroCAD gizmo visuals.
+pub const NATIVE_BACKEND: &str = "ferrocad";
+
+/// The id the shipped shader mod claims. Whether this build can host it depends on
+/// the active provider supplying a skin, not on the id itself.
+pub const SKIN_BACKEND: &str = "ferrocad-shader";
+
 /// Active manipulator stroke (`#38BDF8` in sRGB, linear here).
 pub const ACTIVE_COLOR: [f32; 4] = [0.040, 0.509, 0.939, 1.0];
 /// Inactive manipulator stroke (`#94A3B8` in sRGB, linear here).
@@ -41,6 +49,62 @@ pub const GLASS_HIGHLIGHT: [f32; 4] = [0.040, 0.509, 0.939, 0.28];
 pub const PUSH_PULL_COLOR: [f32; 4] = [0.913, 0.342, 0.003, 1.0];
 /// Subtractive preview (`#EF4444`); reserved for the push-pull manipulator.
 pub const SUBTRACT_COLOR: [f32; 4] = [0.863, 0.058, 0.058, 1.0];
+
+/// The default rotation detent of the rings, in degrees.
+pub const DEFAULT_RING_SNAP_DEG: f64 = 15.0;
+
+/// The workspace gizmo/manipulator appearance and behaviour.
+///
+/// This is the shared style contract: the native gizmo, the workbench manipulators
+/// (`ferrocad_toy`, `ferrocad_part_gui`) and the Python provider all speak it. Every
+/// colour is **linear** RGBA; [`opacity`](Self::opacity) multiplies each handle's alpha
+/// when the colours are built. The default `active`/`inactive` tokens carry the legacy
+/// `1.0`/`0.9` alphas, so [`Default`] reproduces the pre-style look exactly; a provider
+/// may supply alpha-`1.0` tokens and dim through the opacity instead.
+///
+/// [`backend`](Self::backend) is a provider id, not geometry, and
+/// [`show_readout`](Self::show_readout) is a host policy: the gizmo exposes both so the
+/// shell can gate its own drawing without the stage knowing a backend.
+#[derive(Clone, Debug, PartialEq)]
+pub struct GizmoStyle {
+    /// Whether the gizmo is shown at all (a host/provider decision, not geometry).
+    pub enabled: bool,
+    /// The provider id that owns the visuals (the native default is `"ferrocad"`).
+    pub backend: String,
+    /// The linear RGBA of a hovered/grabbed handle.
+    pub active: [f32; 4],
+    /// The linear RGBA of an idle handle.
+    pub inactive: [f32; 4],
+    /// The target radius of the triad, in device pixels (screen-invariant).
+    pub size: f64,
+    /// The stroke width of the axes and rings, in device pixels.
+    pub width: f64,
+    /// A multiplier over every handle's alpha, in `0.0..=1.0`.
+    pub opacity: f32,
+    /// The alpha multiplier of the occluded ghost pass, in `0.0..=1.0`.
+    pub ghost_alpha: f32,
+    /// The rotation-ring detent, in degrees; `0` means continuous rotation.
+    pub ring_snap_deg: f64,
+    /// Whether the host shows the numeric readout beside the handle.
+    pub show_readout: bool,
+}
+
+impl Default for GizmoStyle {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            backend: NATIVE_BACKEND.to_string(),
+            active: ACTIVE_COLOR,
+            inactive: INACTIVE_COLOR,
+            size: DEFAULT_PIXELS,
+            width: STROKE_PIXELS,
+            opacity: 1.0,
+            ghost_alpha: crate::shape::GHOST_SURFACE_ALPHA,
+            ring_snap_deg: DEFAULT_RING_SNAP_DEG,
+            show_readout: true,
+        }
+    }
+}
 
 /// Which handles a gizmo shows.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -155,8 +219,6 @@ impl GizmoHandle {
     }
 }
 
-/// The default rotation detent for the rotation rings: 15°.
-const RING_DETENT: f64 = std::f64::consts::PI / 12.0;
 /// Above this `|ray.direction · axis|` the axis is too close to the view direction for
 /// the parametric solver, so the screen-space fallback takes over.
 const VIEW_ALIGNED_COS: f64 = 0.97;
@@ -251,7 +313,7 @@ impl ManipulatorFrame {
 pub struct GizmoModifiers {
     /// Resolve an axis drag into a plane (Slice T3). Currently unused by the solver.
     pub shift: bool,
-    /// Free rotation: bypass the 15° ring detents.
+    /// Free rotation: bypass the ring detents.
     pub ctrl: bool,
 }
 
@@ -446,8 +508,8 @@ pub struct TransformGizmo {
     target_id: u32,
     frame: ManipulatorFrame,
     mode: GizmoMode,
-    /// The target screen-space radius, in device pixels.
-    pixels: f64,
+    /// The workspace appearance and behaviour.
+    style: GizmoStyle,
     /// The current world radius (recomputed from the camera by [`update`](Self::update)).
     scale: f64,
     /// The last camera view used to build the screen-facing ribbons.
@@ -469,7 +531,7 @@ impl TransformGizmo {
             target_id,
             frame: ManipulatorFrame::world(origin),
             mode,
-            pixels: DEFAULT_PIXELS,
+            style: GizmoStyle::default(),
             scale: 0.0,
             view: None,
             linear_snap: None,
@@ -528,6 +590,26 @@ impl TransformGizmo {
         self.scale
     }
 
+    /// Apply the workspace gizmo style. Returns whether the stored style changed.
+    ///
+    /// A change recolours the handles immediately and rebuilds their geometry on the
+    /// next [`update`](Self::update) (the size and the stroke width are baked into the
+    /// ribbons). The default style reproduces the legacy tokens and footprint.
+    pub fn set_style(&mut self, style: &GizmoStyle) -> bool {
+        if self.style == *style {
+            return false;
+        }
+        self.style = style.clone();
+        self.dirty = true;
+        self.apply_colors();
+        true
+    }
+
+    /// The workspace gizmo style.
+    pub fn style(&self) -> &GizmoStyle {
+        &self.style
+    }
+
     /// The linear grid step used by axis/plane drags (`None` disables snapping).
     pub fn linear_snap(&self) -> Option<f64> {
         self.linear_snap
@@ -542,7 +624,7 @@ impl TransformGizmo {
     /// the cached draw scale) so an event that arrives before the next frame still hits
     /// the geometry at the camera's current distance.
     fn screen_scale(&self, camera: &Camera) -> f64 {
-        scale_for(camera, self.frame.origin, self.pixels)
+        scale_for(camera, self.frame.origin, self.style.size)
     }
 
     /// The handle under the pointer (set by the host from a pick).
@@ -558,6 +640,22 @@ impl TransformGizmo {
     /// The handle slots, for drawing and picking.
     pub fn items(&self) -> &[ShapeItem] {
         &self.handles
+    }
+
+    /// The handle items re-materialised with an authored skin program.
+    ///
+    /// The clone keeps the same mesh identity and generation (so the renderer's upload
+    /// cache still hits) and only the material changes; the native [`TransformGizmo`]
+    /// remains the hit-test and drag owner.
+    pub fn skinned_items(&self, program: &Arc<ShaderProgram>) -> Vec<ShapeItem> {
+        self.handles
+            .iter()
+            .cloned()
+            .map(|mut item| {
+                item.set_program(Some(Arc::clone(program)));
+                item
+            })
+            .collect()
     }
 
     /// The handle under `device` within the analytic grab padding, or `None` when the
@@ -747,7 +845,7 @@ impl TransformGizmo {
     /// Recompute the screen-invariant scale for `camera` and rebuild the handles if it
     /// changed (or if the origin/mode did). Returns whether the geometry was rebuilt.
     pub fn update(&mut self, camera: &Camera) -> bool {
-        let scale = scale_for(camera, self.frame.origin, self.pixels);
+        let scale = scale_for(camera, self.frame.origin, self.style.size);
         let view_changed = self.view != Some(camera.view);
         let changed = (scale - self.scale).abs() > self.scale * 1e-3 + 1e-9 || view_changed;
         if !changed && !self.dirty {
@@ -892,8 +990,9 @@ impl TransformGizmo {
     }
 
     /// Advance the active drag to the pointer's `device` position, returning the tick's
-    /// deltas. Rotation rings use 15° detents; [`drag_to_with_modifiers`](Self::drag_to_with_modifiers)
-    /// lets the host bypass them with `Ctrl`.
+    /// deltas. Rotation rings use the style's detent (15° by default);
+    /// [`drag_to_with_modifiers`](Self::drag_to_with_modifiers) lets the host bypass it
+    /// with `Ctrl`.
     pub fn drag_to(&mut self, camera: &Camera, device: [i32; 2]) -> Option<GizmoDragEvent> {
         self.drag_to_with_modifiers(camera, device, GizmoModifiers::default())
     }
@@ -911,6 +1010,7 @@ impl TransformGizmo {
         let target_id = self.target_id;
         let forward = camera_forward(camera);
         let grid = self.linear_snap;
+        let ring_snap = self.style.ring_snap_deg.to_radians();
         let active = self.active.as_mut()?;
         let handle = active.handle;
         let constraint = active.constraint;
@@ -967,7 +1067,7 @@ impl TransformGizmo {
                 let axis_label = axis_of(handle).expect("ring label");
                 let angle = ring_angle_with_fallback(&ray, origin, axis, forward)?;
                 let raw = wrap_pi(angle - *start);
-                let (_, applied) = ring_detent(raw, modifiers.ctrl);
+                let (_, applied) = ring_detent(raw, modifiers.ctrl, ring_snap);
                 let delta = applied - *last;
                 *last = applied;
                 (
@@ -1033,7 +1133,8 @@ impl TransformGizmo {
         let frame = self.frame;
         let origin = frame.origin;
         let scale = self.scale;
-        let world_per_pixel = scale / self.pixels.max(1.0);
+        let width = self.style.width;
+        let world_per_pixel = scale / self.style.size.max(1e-9);
         let forward = camera_forward(camera);
         for (index, handle) in GizmoHandle::ALL.iter().enumerate() {
             let slot = &mut self.handles[index];
@@ -1048,6 +1149,7 @@ impl TransformGizmo {
                     frame.axis(*handle).expect("axis"),
                     scale,
                     world_per_pixel,
+                    width,
                     forward,
                 ),
                 HandleKind::Plane => {
@@ -1060,6 +1162,7 @@ impl TransformGizmo {
                     frame.axis(*handle).expect("ring"),
                     scale,
                     world_per_pixel,
+                    width,
                     forward,
                 ),
             }
@@ -1072,9 +1175,10 @@ impl TransformGizmo {
     /// planes.
     fn apply_colors(&mut self) {
         for (index, handle) in GizmoHandle::ALL.iter().enumerate() {
-            let (surface, edge) = paint_for(*handle, self.hovered == Some(*handle));
+            let (surface, edge) = paint_for(*handle, self.hovered == Some(*handle), &self.style);
             self.handles[index].set_surface_color(surface);
             self.handles[index].set_edge_color(edge);
+            self.handles[index].set_ghost_alpha(self.style.ghost_alpha);
         }
     }
 }
@@ -1108,17 +1212,18 @@ fn new_handle(index: usize) -> ShapeItem {
         .with_ghost_surface()
 }
 
-/// A translation axis: a 1.5 px shaft ribbon plus a micro-chevron at the tip.
+/// A translation axis: a style-width shaft ribbon plus a micro-chevron at the tip.
 fn axis_handle(
     item: &mut ShapeItem,
     origin: Vector3,
     axis: Vector3,
     scale: f64,
     world_per_pixel: f64,
+    width: f64,
     forward: Vector3,
 ) {
     let tip = origin.add(&axis.scale(scale));
-    let half = STROKE_PIXELS * 0.5 * world_per_pixel;
+    let half = width * 0.5 * world_per_pixel;
     let mut positions = Vec::new();
     let mut triangles = Vec::new();
 
@@ -1174,17 +1279,18 @@ fn plane_handle(item: &mut ShapeItem, origin: Vector3, u: Vector3, v: Vector3, s
     );
 }
 
-/// A rotation ring: a 1.5 px ribbon around the circle.
+/// A rotation ring: a style-width ribbon around the circle.
 fn ring_handle(
     item: &mut ShapeItem,
     origin: Vector3,
     axis: Vector3,
     scale: f64,
     world_per_pixel: f64,
+    width: f64,
     forward: Vector3,
 ) {
     let (u, v) = orthonormal_basis(axis);
-    let half = STROKE_PIXELS * 0.5 * world_per_pixel;
+    let half = width * 0.5 * world_per_pixel;
     let segments = 48usize;
     let mut positions = Vec::new();
     let mut triangles = Vec::new();
@@ -1208,21 +1314,33 @@ fn ring_handle(
 
 /// The surface and edge colours for a handle. Axes and rings are strokes; planes are a
 /// translucent glass fill with a stroke rim.
-fn paint_for(handle: GizmoHandle, hovered: bool) -> ([f32; 4], [f32; 4]) {
-    let stroke = if hovered {
-        ACTIVE_COLOR
+///
+/// The visible alpha is the token alpha times [`GizmoStyle::opacity`]. The glass fill
+/// always uses the style's active RGB, at the legacy `0.10`/`0.28` ink scaled by the
+/// opacity, so the inactive stroke does not tint the plane.
+fn paint_for(
+    handle: GizmoHandle,
+    hovered: bool,
+    style: &GizmoStyle,
+) -> ([f32; 4], [f32; 4]) {
+    let token = if hovered {
+        style.active
     } else {
-        INACTIVE_COLOR
+        style.inactive
     };
+    let stroke = [token[0], token[1], token[2], token[3] * style.opacity];
     match handle.kind() {
-        HandleKind::Plane => (
-            if hovered {
-                GLASS_HIGHLIGHT
+        HandleKind::Plane => {
+            let glass = if hovered {
+                GLASS_HIGHLIGHT[3]
             } else {
-                GLASS_COLOR
-            },
-            stroke,
-        ),
+                GLASS_COLOR[3]
+            } * style.opacity;
+            (
+                [style.active[0], style.active[1], style.active[2], glass],
+                stroke,
+            )
+        }
         HandleKind::Axis | HandleKind::Ring => (stroke, stroke),
     }
 }
@@ -1412,15 +1530,15 @@ fn angle_at(hit: Vector3, centre: Vector3, axis: Vector3) -> Option<f64> {
     Some(v.dot(&up).atan2(v.dot(&reference)))
 }
 
-/// Snap a ring's raw accumulated angle to relative 15° detents, or leave it free.
+/// Snap a ring's raw accumulated angle to relative `detent` radians, or leave it free.
 /// Returns `(raw, applied)`; the detents are relative to the drag's start, so grabbing a
-/// rotated body does not jump on the first pixel.
-fn ring_detent(raw: f64, free: bool) -> (f64, f64) {
+/// rotated body does not jump on the first pixel. A non-positive `detent` is continuous.
+fn ring_detent(raw: f64, free: bool, detent: f64) -> (f64, f64) {
     let raw = wrap_pi(raw);
-    if free {
+    if free || !(detent > 1e-9) {
         (raw, raw)
     } else {
-        (raw, (raw / RING_DETENT).round() * RING_DETENT)
+        (raw, (raw / detent).round() * detent)
     }
 }
 
@@ -1725,24 +1843,28 @@ mod tests {
     #[test]
     fn ring_detents_are_relative_and_ctrl_frees_them() {
         let step = 15.0_f64.to_radians();
-        let (raw, snapped) = ring_detent(7.0_f64.to_radians(), false);
+        let (raw, snapped) = ring_detent(7.0_f64.to_radians(), false, step);
         assert!((raw - 7.0_f64.to_radians()).abs() < 1e-12);
         assert!(snapped.abs() < 1e-12, "7° snaps back to the start");
 
-        let (_, snapped) = ring_detent(8.0_f64.to_radians(), false);
+        let (_, snapped) = ring_detent(8.0_f64.to_radians(), false, step);
         assert!(
             (snapped - step).abs() < 1e-12,
             "8° snaps to the first detent"
         );
-        let (_, snapped) = ring_detent(-8.0_f64.to_radians(), false);
+        let (_, snapped) = ring_detent(-8.0_f64.to_radians(), false, step);
         assert!((snapped + step).abs() < 1e-12);
 
-        let (raw, snapped) = ring_detent(7.0_f64.to_radians(), true);
+        let (raw, snapped) = ring_detent(7.0_f64.to_radians(), true, step);
         assert!((snapped - raw).abs() < 1e-12, "Ctrl is free rotation");
 
         // The raw delta is unwrapped across ±π.
-        let (raw, _) = ring_detent(3.0 * std::f64::consts::FRAC_PI_2, false);
+        let (raw, _) = ring_detent(3.0 * std::f64::consts::FRAC_PI_2, false, step);
         assert!((raw + std::f64::consts::FRAC_PI_2).abs() < 1e-12, "{raw}");
+
+        // A non-positive detent is continuous.
+        let (raw, snapped) = ring_detent(7.0_f64.to_radians(), false, 0.0);
+        assert!((snapped - raw).abs() < 1e-12, "a zero snap has no detent");
     }
 
     #[test]
@@ -2081,6 +2203,201 @@ mod tests {
         assert!(
             (width - expected).abs() < 1e-6,
             "the stroke should be {expected} world units, got {width}"
+        );
+    }
+
+    #[test]
+    fn the_default_style_reproduces_the_legacy_tokens_and_geometry() {
+        let style = GizmoStyle::default();
+        assert!(style.enabled);
+        assert_eq!(style.backend, "ferrocad");
+        assert_eq!(style.active, ACTIVE_COLOR);
+        assert_eq!(style.inactive, INACTIVE_COLOR, "the legacy 0.9 alpha");
+        assert_eq!(style.size, DEFAULT_PIXELS);
+        assert_eq!(style.width, STROKE_PIXELS);
+        assert_eq!(style.opacity, 1.0);
+        assert_eq!(style.ghost_alpha, 0.35);
+        assert_eq!(style.ring_snap_deg, 15.0);
+        assert!(style.show_readout);
+
+        let gizmo = TransformGizmo::new(1, Vector3::zero(), GizmoMode::Translate);
+        assert_eq!(gizmo.style(), &style);
+        // The footprint is the legacy 80 px radius.
+        let camera = camera(5.0);
+        let legacy = scale_for(&camera, Vector3::zero(), DEFAULT_PIXELS);
+        assert!((gizmo.screen_scale(&camera) - legacy).abs() < 1e-12);
+    }
+
+    #[test]
+    fn a_custom_style_changes_the_colours_the_size_the_width_and_the_snap() {
+        let camera = camera(5.0);
+        let mut gizmo = TransformGizmo::new(1, Vector3::zero(), GizmoMode::Universal);
+        let mut style = GizmoStyle::default();
+        style.active = [1.0, 0.0, 0.0, 1.0];
+        style.inactive = [0.0, 1.0, 0.0, 0.8];
+        style.opacity = 0.5;
+        style.size = 40.0;
+        style.width = 4.0;
+        style.ring_snap_deg = 45.0;
+        style.show_readout = false;
+        assert!(gizmo.set_style(&style));
+        gizmo.update(&camera);
+
+        // The footprint and the stroke scale from the style, not the legacy tokens.
+        let scale = scale_for(&camera, Vector3::zero(), 40.0);
+        assert!((gizmo.scale() - scale).abs() < 1e-9);
+        let positions = gizmo.items()[GizmoHandle::AxisX.index()].positions();
+        let point = |index: usize| {
+            Vector3::new(
+                f64::from(positions[index][0]),
+                f64::from(positions[index][1]),
+                f64::from(positions[index][2]),
+            )
+        };
+        let width = point(0).sub(&point(3)).length();
+        let expected = 4.0 * scale / 40.0;
+        assert!(
+            (width - expected).abs() < 1e-6,
+            "a 4 px stroke at a 40 px size: {width} vs {expected}"
+        );
+
+        // Idle ink is the custom inactive colour at `alpha * opacity`; the glass fill is
+        // the active RGB at 0.10 * opacity.
+        let surface = |gizmo: &TransformGizmo, handle: GizmoHandle| {
+            gizmo.items()[handle.index()].surface_color()
+        };
+        let edge = |gizmo: &TransformGizmo, handle: GizmoHandle| {
+            gizmo.items()[handle.index()].edge_color()
+        };
+        assert_eq!(surface(&gizmo, GizmoHandle::AxisX), [0.0, 1.0, 0.0, 0.4]);
+        assert_eq!(surface(&gizmo, GizmoHandle::PlaneXY), [1.0, 0.0, 0.0, 0.05]);
+        assert_eq!(edge(&gizmo, GizmoHandle::PlaneXY), [0.0, 1.0, 0.0, 0.4]);
+
+        // A hovered handle uses the active colour at `alpha * opacity`; the plane's
+        // highlighted glass keeps its 0.28 ink, scaled by the opacity.
+        assert!(gizmo.set_hovered(Some(GizmoHandle::PlaneXY)));
+        assert_eq!(surface(&gizmo, GizmoHandle::PlaneXY), [1.0, 0.0, 0.0, 0.14]);
+        assert_eq!(edge(&gizmo, GizmoHandle::PlaneXY), [1.0, 0.0, 0.0, 0.5]);
+        assert_eq!(surface(&gizmo, GizmoHandle::AxisX), [0.0, 1.0, 0.0, 0.4]);
+
+        // The custom detent is what the ring drag applies.
+        let detent = style.ring_snap_deg.to_radians();
+        let (_, snapped) = ring_detent(20.0_f64.to_radians(), false, detent);
+        assert!(snapped.abs() < 1e-12, "20° is below the 45° half-step");
+        assert!(!gizmo.style().show_readout);
+    }
+
+    #[test]
+    fn a_zero_ring_snap_is_continuous() {
+        let camera = camera(5.0);
+        let mut gizmo = TransformGizmo::new(1, Vector3::zero(), GizmoMode::Rotate);
+        let mut style = GizmoStyle::default();
+        style.ring_snap_deg = 0.0;
+        assert!(gizmo.set_style(&style));
+        assert!(gizmo.begin_drag(GizmoHandle::RotateZ, &camera, UP));
+        let event = gizmo.drag_to(&camera, [60, 75]).expect("drag");
+        match event.value {
+            GizmoValue::Angular {
+                raw_deg,
+                applied_deg,
+                ..
+            } => assert!(
+                (raw_deg - applied_deg).abs() < 1e-9,
+                "a zero snap must not detent: {raw_deg} vs {applied_deg}"
+            ),
+            other => panic!("expected an angular value, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn set_style_reports_whether_anything_changed() {
+        let mut gizmo = TransformGizmo::new(1, Vector3::zero(), GizmoMode::Translate);
+        assert!(
+            !gizmo.set_style(&GizmoStyle::default()),
+            "the default is a no-op"
+        );
+
+        let mut style = GizmoStyle::default();
+        style.opacity = 0.6;
+        assert!(gizmo.set_style(&style));
+        assert_eq!(gizmo.style(), &style);
+        assert!(!gizmo.set_style(&style), "the same style is a no-op");
+    }
+
+    #[test]
+    fn a_style_ghost_alpha_reaches_every_handle() {
+        let mut gizmo = TransformGizmo::new(1, Vector3::zero(), GizmoMode::Universal);
+        for item in gizmo.items() {
+            assert_eq!(item.ghost_alpha(), crate::shape::GHOST_SURFACE_ALPHA);
+        }
+
+        let mut style = GizmoStyle::default();
+        style.ghost_alpha = 0.5;
+        assert!(gizmo.set_style(&style));
+        for (index, item) in gizmo.items().iter().enumerate() {
+            assert_eq!(
+                item.ghost_alpha(),
+                0.5,
+                "handle {index} must take the style's ghost alpha"
+            );
+        }
+    }
+
+    #[test]
+    fn a_colour_only_style_leaves_the_hit_and_the_drag_unchanged() {
+        let camera = camera(5.0);
+        let mut plain = TransformGizmo::new(1, Vector3::zero(), GizmoMode::Translate);
+        let mut styled = TransformGizmo::new(1, Vector3::zero(), GizmoMode::Translate);
+        let mut style = GizmoStyle::default();
+        style.active = [0.1, 0.2, 0.3, 0.4];
+        style.inactive = [0.5, 0.6, 0.7, 0.8];
+        style.opacity = 0.5;
+        assert!(styled.set_style(&style));
+        styled.update(&camera);
+
+        assert_eq!(styled.hit(&camera, [80, 50]), plain.hit(&camera, [80, 50]));
+        assert_eq!(styled.hit(&camera, [92, 92]), plain.hit(&camera, [92, 92]));
+
+        assert!(plain.begin_drag(GizmoHandle::AxisX, &camera, CENTRE));
+        let plain_event = plain.drag_to(&camera, RIGHT).expect("plain drag");
+        let plain_commit = plain.end_drag().expect("plain commit");
+
+        assert!(styled.begin_drag(GizmoHandle::AxisX, &camera, CENTRE));
+        let styled_event = styled.drag_to(&camera, RIGHT).expect("styled drag");
+        let styled_commit = styled.end_drag().expect("styled commit");
+
+        assert_eq!(styled_event.value, plain_event.value);
+        assert_eq!(styled_event.constraint, plain_event.constraint);
+        assert_eq!(styled_commit.constraint, plain_commit.constraint);
+        assert_eq!(styled_commit.total_transform, plain_commit.total_transform);
+    }
+
+    fn skin_program() -> Arc<ShaderProgram> {
+        Arc::new(ShaderProgram::from_source(
+            "@fragment fn fs_main() -> @location(0) vec4<f32> { return vec4<f32>(1.0); }",
+        ))
+    }
+
+    #[test]
+    fn skinned_items_clone_every_handle_with_the_program() {
+        let mut gizmo = TransformGizmo::new(1, Vector3::zero(), GizmoMode::Universal);
+        gizmo.update(&camera(5.0));
+        let program = skin_program();
+        let skinned = gizmo.skinned_items(&program);
+
+        assert_eq!(skinned.len(), gizmo.items().len(), "one item per handle");
+        for (index, item) in skinned.iter().enumerate() {
+            let original = &gizmo.items()[index];
+            assert_eq!(item.entity_id(), original.entity_id(), "handle {index}");
+            assert_eq!(item.generation(), original.generation());
+            let carried = item
+                .program()
+                .expect("every skinned handle carries the program");
+            assert_eq!(carried.hash(), program.hash());
+        }
+        assert!(
+            gizmo.items().iter().all(|item| item.program().is_none()),
+            "the native handles stay unskinned"
         );
     }
 }

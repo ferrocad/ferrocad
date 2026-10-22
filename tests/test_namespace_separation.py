@@ -44,6 +44,7 @@ DICT_KEY = re.compile(r"""["'](Surface|Parent)["']\s*:""")
 #: or added there since).
 FERROCAD_ONLY_FREECAD = (
     "Grid",
+    "Gizmo",
     "display_mesh",
     "register_display_provider",
     "register_interaction_provider",

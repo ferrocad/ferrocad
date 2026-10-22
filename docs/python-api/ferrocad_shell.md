@@ -24,9 +24,11 @@ _Every entry point returns a JSON string._
 | `hello() -> str` | A first console line, proving the interpreter is live. |
 | `interaction(object_name: str, manipulator: str, action: str, element: str, values_json: str) -> str` | Apply a manipulator commit through the module that supports it. |
 | `load_workbenches(dirs_json: str = '[]') -> str` | Best-effort workbench loading. |
+| `manipulator_specs(payload_json: str) -> str` | The handles the mods declare for the shell's current selection, as JSON. |
 | `model_tree() -> str` | Documents and their objects, for the inspector pane. |
 | `properties(object_name: str) -> str` | Property rows for one object, for the property editor pane. |
 | `provider_features() -> str` | Every registered provider feature, with its backends and active flag. |
+| `provider_skin(payload_json: str) -> str` | One feature's provider-supplied WGSL source, for the shell to build. |
 | `run_command(name: str) -> str` | Invoke a workbench command by id; returns ``{ok, status?, dialog?, token?}``. |
 | `set_property(object_name: str, prop: str, text: str) -> str` | Set one property from its editor string, in a named transaction. |
 | `set_provider(payload_json: str) -> str` | Switch one feature's active provider from the shell's popover. |

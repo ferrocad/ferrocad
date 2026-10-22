@@ -28,6 +28,24 @@ use crate::batch::GpuVertex;
 /// The depth format the scene pass uses.
 pub const DEPTH_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Depth32Float;
 
+/// The scene vertex attributes: position, normal, uv, sub-element index, colour.
+///
+/// Shared with a *geometry* program ([`crate::program`]), which draws the packet's own
+/// mesh and therefore must declare exactly this layout. The sub-element index is not
+/// declared by a program shader; supplying it is harmless.
+pub(crate) const SCENE_ATTRIBUTES: [wgpu::VertexAttribute; 5] = wgpu::vertex_attr_array![
+    0 => Float32x3, 1 => Float32x3, 2 => Float32x2, 3 => Uint32, 4 => Float32x4
+];
+
+/// The scene vertex buffer layout (one interleaved [`GpuVertex`] buffer).
+pub(crate) fn scene_vertex_layout() -> [wgpu::VertexBufferLayout<'static>; 1] {
+    [wgpu::VertexBufferLayout {
+        array_stride: size_of::<GpuVertex>() as u64,
+        step_mode: wgpu::VertexStepMode::Vertex,
+        attributes: &SCENE_ATTRIBUTES,
+    }]
+}
+
 /// The render pipelines the scene renderer draws with: a scene and an overlay variant
 /// for each topology.
 pub struct ScenePipelines {
@@ -349,14 +367,7 @@ fn create_pipeline(
     sample_count: u32,
     color_format: wgpu::TextureFormat,
 ) -> wgpu::RenderPipeline {
-    let attributes = wgpu::vertex_attr_array![
-        0 => Float32x3, 1 => Float32x3, 2 => Float32x2, 3 => Uint32, 4 => Float32x4
-    ];
-    let vertex_buffers = [wgpu::VertexBufferLayout {
-        array_stride: size_of::<GpuVertex>() as u64,
-        step_mode: wgpu::VertexStepMode::Vertex,
-        attributes: &attributes,
-    }];
+    let vertex_buffers = scene_vertex_layout();
     device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
         label: Some(label),
         layout: Some(layout),

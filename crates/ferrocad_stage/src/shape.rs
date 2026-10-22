@@ -1,11 +1,12 @@
 //! Declarative CAD visual items and their compilation to draw batches.
 
+use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use ferrocad_geom::Tessellation;
 use ferrocad_graphics::{
     DepthCompare, DepthState, DrawPacket, Generation, Geometry, MeshId, PickId, RenderQueue,
-    StateSnapshot, Topology, Vertex, theme,
+    ShaderProgram, StateSnapshot, Topology, Vertex, theme,
 };
 use ferrocad_types::{Matrix4, Placement};
 
@@ -122,6 +123,8 @@ pub struct ShapeItem {
     /// Emit a second, depth-`Greater` surface/wire pass at [`GHOST_SURFACE_ALPHA`], so
     /// an occluded gizmo handle stays readable behind a solid.
     ghost_surface: bool,
+    /// The alpha multiplier of the occluded surface/wire ghost pass, in `0.0..=1.0`.
+    ghost_alpha: f32,
     /// The surface pass's depth state. The opaque default writes depth; a translucent
     /// gizmo plane or ribbon uses [`BLENDED_DEPTH`].
     surface_depth: DepthState,
@@ -151,6 +154,9 @@ pub struct ShapeItem {
     /// Bumped when the highlight changes, so its sub-meshes re-upload without
     /// invalidating the base mesh.
     highlight_generation: Generation,
+    /// An authored shader program that draws this item's packets together with their own
+    /// mesh. `None` means the scene material.
+    program: Option<Arc<ShaderProgram>>,
 }
 
 impl ShapeItem {
@@ -166,6 +172,7 @@ impl ShapeItem {
             edge_color: theme::EDGE_FRONT,
             ghost_edges: false,
             ghost_surface: false,
+            ghost_alpha: GHOST_SURFACE_ALPHA,
             surface_depth: DepthState::default(),
             edge_width: 1.0,
             selectable: true,
@@ -185,6 +192,7 @@ impl ShapeItem {
             highlight_wire_mesh: next_mesh_id(),
             generation: Generation(0),
             highlight_generation: Generation(0),
+            program: None,
         }
     }
 
@@ -384,6 +392,29 @@ impl ShapeItem {
         self
     }
 
+    /// Set the alpha of the occluded surface/wire ghost pass (clamped to `0.0..=1.0`).
+    ///
+    /// The ghost wire pass keeps its existing factor relative to the surface: its alpha
+    /// is scaled by the same `alpha` the surface uses.
+    pub fn with_ghost_alpha(mut self, alpha: f32) -> Self {
+        self.set_ghost_alpha(alpha);
+        self
+    }
+
+    /// Set the alpha of the occluded surface/wire ghost pass (clamped to `0.0..=1.0`).
+    pub fn set_ghost_alpha(&mut self, alpha: f32) {
+        self.ghost_alpha = if alpha.is_finite() {
+            alpha.clamp(0.0, 1.0)
+        } else {
+            0.0
+        };
+    }
+
+    /// The alpha multiplier of the occluded surface/wire ghost pass.
+    pub fn ghost_alpha(&self) -> f32 {
+        self.ghost_alpha
+    }
+
     /// Whether the occluded surface/wire ghost pass is emitted.
     pub fn ghost_surface(&self) -> bool {
         self.ghost_surface
@@ -446,6 +477,25 @@ impl ShapeItem {
     /// Set the edge colour (a state change; no re-upload).
     pub fn set_edge_color(&mut self, color: [f32; 4]) {
         self.edge_color = color;
+    }
+
+    /// Attach an authored shader program that shades this item's packets.
+    ///
+    /// A program packet is never picked: the item's geometry, picking identity and
+    /// generation are unchanged, only the material is replaced.
+    pub fn with_program(mut self, program: Arc<ShaderProgram>) -> Self {
+        self.program = Some(program);
+        self
+    }
+
+    /// Set or clear the authored shader program (a state change; no re-upload).
+    pub fn set_program(&mut self, program: Option<Arc<ShaderProgram>>) {
+        self.program = program;
+    }
+
+    /// The authored shader program, if any.
+    pub fn program(&self) -> Option<&Arc<ShaderProgram>> {
+        self.program.as_ref()
     }
 
     /// The picking identity.
@@ -585,7 +635,7 @@ impl ShapeItem {
                         Topology::Triangles,
                         geometry,
                         world,
-                        ghosted(self.surface_color),
+                        ghosted(self.surface_color, self.ghost_alpha),
                         0.0,
                         self.generation,
                         GHOST_DEPTH,
@@ -626,7 +676,7 @@ impl ShapeItem {
                         Topology::Lines,
                         geometry,
                         world,
-                        ghosted(self.edge_color),
+                        ghosted(self.edge_color, self.ghost_alpha),
                         WIRE_DEPTH_BIAS,
                         self.generation,
                         GHOST_DEPTH,
@@ -746,7 +796,7 @@ impl ShapeItem {
                 id: self.pick_id(),
                 depth,
                 pickable,
-                program: None,
+                program: self.program.clone(),
             },
         }
     }
@@ -907,10 +957,10 @@ fn parts_from_tessellation(mesh: &Tessellation) -> Vec<u32> {
 
 /// Flat-shade `triangles`: one unrolled vertex per index, each carrying its triangle's
 /// face normal. Malformed triangles (an out-of-range index) are skipped.
-/// An overlay's occluded ink: the same hue with alpha scaled to
-/// [`GHOST_SURFACE_ALPHA`].
-fn ghosted(color: [f32; 4]) -> [f32; 4] {
-    [color[0], color[1], color[2], color[3] * GHOST_SURFACE_ALPHA]
+/// An overlay's occluded ink: the same hue with alpha scaled by `alpha` (the item's
+/// [`ghost_alpha`](ShapeItem::ghost_alpha), defaulting to [`GHOST_SURFACE_ALPHA`]).
+fn ghosted(color: [f32; 4], alpha: f32) -> [f32; 4] {
+    [color[0], color[1], color[2], color[3] * alpha]
 }
 
 fn flat_surface(positions: &[[f32; 3]], triangles: &[u32], parts: &[u32]) -> Geometry {
@@ -1072,16 +1122,53 @@ mod tests {
         let ghost = &queue.packets[1];
         assert_eq!(ghost.topology, Topology::Triangles);
         assert_eq!(ghost.state.depth, GHOST_DEPTH);
-        assert_eq!(ghost.state.color, ghosted(item.surface_color()));
+        assert_eq!(ghost.state.color, ghosted(item.surface_color(), item.ghost_alpha()));
         assert_eq!(ghost.state.color[3], GHOST_SURFACE_ALPHA);
         assert!(!ghost.state.pickable);
 
         let ghost_wire = &queue.packets[3];
         assert_eq!(ghost_wire.topology, Topology::Lines);
         assert_eq!(ghost_wire.state.depth, GHOST_DEPTH);
-        assert_eq!(ghost_wire.state.color, ghosted(item.edge_color()));
+        assert_eq!(
+            ghost_wire.state.color,
+            ghosted(item.edge_color(), item.ghost_alpha())
+        );
         assert_eq!(ghost_wire.state.color[3], 0.5 * GHOST_SURFACE_ALPHA);
         assert!(!ghost_wire.state.pickable);
+    }
+
+    #[test]
+    fn a_default_item_ghosts_at_the_surface_token() {
+        let item = ShapeItem::new(1);
+        assert_eq!(item.ghost_alpha(), GHOST_SURFACE_ALPHA);
+    }
+
+    #[test]
+    fn a_custom_ghost_alpha_scales_both_ghost_packets() {
+        let item = triangle_item()
+            .with_draw_mode(DrawMode::ShadedWithEdges)
+            .with_surface_color([0.2, 0.4, 0.8, 1.0])
+            .with_edge_color([0.6, 0.7, 0.8, 0.5])
+            .with_blended_surface()
+            .with_ghost_surface()
+            .with_ghost_alpha(0.5);
+        let queue = emit(&item);
+        assert_eq!(item.ghost_alpha(), 0.5);
+        assert_eq!(queue.packets[1].state.color[3], 0.5, "1.0 × 0.5");
+        assert_eq!(
+            queue.packets[3].state.color[3],
+            0.25,
+            "0.5 × 0.5"
+        );
+    }
+
+    #[test]
+    fn set_ghost_alpha_clamps_to_the_unit_interval() {
+        let mut item = ShapeItem::new(1);
+        item.set_ghost_alpha(2.0);
+        assert_eq!(item.ghost_alpha(), 1.0);
+        item.set_ghost_alpha(-1.0);
+        assert_eq!(item.ghost_alpha(), 0.0);
     }
 
     #[test]
@@ -1347,5 +1434,65 @@ mod tests {
         let placement = Placement::new(Vector3::new(1.0, 2.0, 3.0), Rotation::identity());
         let item = triangle_item().with_placement(placement);
         assert_eq!(emit(&item).packets[0].state.world_transform, placement.to_matrix());
+    }
+
+    fn skin_program() -> Arc<ShaderProgram> {
+        Arc::new(ShaderProgram::from_source(
+            "@fragment fn fs_main() -> @location(0) vec4<f32> { return vec4<f32>(1.0); }",
+        ))
+    }
+
+    #[test]
+    fn an_authored_program_rides_every_packet() {
+        let program = skin_program();
+        let item = triangle_item()
+            .with_draw_mode(DrawMode::ShadedWithEdges)
+            .with_program(Arc::clone(&program));
+        let queue = emit(&item);
+        assert_eq!(queue.len(), 2);
+        for packet in &queue.packets {
+            let carried = packet
+                .state
+                .program
+                .as_ref()
+                .expect("the authored program is attached");
+            assert_eq!(carried.hash(), program.hash());
+        }
+        assert_eq!(item.program().map(|p| p.hash()), Some(program.hash()));
+    }
+
+    #[test]
+    fn an_item_without_a_program_emits_none() {
+        let item = triangle_item();
+        assert!(item.program().is_none());
+        for packet in emit(&item).packets {
+            assert!(packet.state.program.is_none());
+        }
+    }
+
+    #[test]
+    fn the_ghost_pass_carries_the_same_program() {
+        let program = skin_program();
+        let mut item = triangle_item()
+            .with_draw_mode(DrawMode::Shaded)
+            .with_ghost_surface()
+            .with_program(Arc::clone(&program));
+        let queue = emit(&item);
+        assert_eq!(queue.len(), 2, "surface and its ghost");
+        for packet in &queue.packets {
+            let carried = packet
+                .state
+                .program
+                .as_ref()
+                .expect("both passes keep the program");
+            assert_eq!(carried.hash(), program.hash());
+        }
+
+        // Clearing the program is a state change: the next emit carries none.
+        item.set_program(None);
+        assert!(item.program().is_none());
+        for packet in emit(&item).packets {
+            assert!(packet.state.program.is_none());
+        }
     }
 }

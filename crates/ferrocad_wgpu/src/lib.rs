@@ -29,6 +29,12 @@
 //! the axis-cross sibling: the same fixed `Frame`/`Program` binding, with the
 //! backward-compatible axis tail appended to the `Program` block.
 //!
+//! Unlike those reference copies, the gizmo skin is **mod-owned**: it ships in
+//! `mods/GizmoOverlayShader/Resources/gizmo_skin.wgsl` and reaches the shell through
+//! the provider registry. This crate therefore exports no skin constant; its tests
+//! read and validate the mod's copy from the workspace tree, so `mods/` is required
+//! to run them.
+//!
 //! [`DrawBatch`]: ferrocad_graphics::DrawBatch
 //! [`InventorView`]: ferrocad_inventor::InventorView
 //! [`ImageData`]: ferrocad_inventor::ImageData
@@ -255,6 +261,94 @@ mod tests {
         let program = struct_by_name(&module, "Program");
         assert_eq!(layouter[program].size, 1_392);
         assert_eq!(layouter[program].alignment.round_up(1_392), 1_392);
+    }
+
+    /// The mod-owned gizmo skin source.
+    ///
+    /// The gizmo skin is **mod-owned** (unlike [`GRID_OVERLAY_WGSL`] and
+    /// [`AXIS_OVERLAY_WGSL`], whose reference copies exist because those mods ship
+    /// loose files): the shader ships with `GizmoOverlayShader` and reaches the shell
+    /// through the provider registry. These tests validate the mod's copy, so the
+    /// workspace's `mods/` tree is required to run them.
+    fn gizmo_skin_source() -> String {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../mods/GizmoOverlayShader/Resources/gizmo_skin.wgsl");
+        std::fs::read_to_string(&path).unwrap_or_else(|error| {
+            panic!("the shader mod must ship {}: {error}", path.display())
+        })
+    }
+
+    /// Parse and validate the gizmo skin module without a GPU.
+    fn validated_gizmo_skin() -> naga::Module {
+        let source = gizmo_skin_source();
+        let module = naga::front::wgsl::parse_str(&source)
+            .expect("the mod's gizmo_skin.wgsl should parse as WGSL");
+        naga::valid::Validator::new(
+            naga::valid::ValidationFlags::all(),
+            naga::valid::Capabilities::all(),
+        )
+        .validate(&module)
+        .expect("the mod's gizmo_skin.wgsl should validate");
+        module
+    }
+
+    /// The skin must parse before it can be handed to `create_shader_module`.
+    #[test]
+    fn gizmo_skin_parses() {
+        naga::front::wgsl::parse_str(&gizmo_skin_source())
+            .expect("the mod's gizmo_skin.wgsl should parse as WGSL");
+    }
+
+    #[test]
+    fn gizmo_skin_is_a_valid_geometry_program() {
+        let module = validated_gizmo_skin();
+        assert!(module.entry_points.iter().any(|entry| {
+            entry.name == "vs_main" && entry.stage == naga::ShaderStage::Vertex
+        }));
+        let fragment = module
+            .entry_points
+            .iter()
+            .find(|entry| entry.name == "fs_main" && entry.stage == naga::ShaderStage::Fragment)
+            .expect("fs_main as a fragment entry point");
+        let result = fragment
+            .function
+            .result
+            .as_ref()
+            .expect("fs_main returns its target colour");
+        assert!(
+            matches!(
+                module.types[result.ty].inner,
+                naga::TypeInner::Vector {
+                    size: naga::VectorSize::Quad,
+                    ..
+                }
+            ),
+            "fs_main returns a vec4 colour"
+        );
+
+        // Group 0 is the scene Globals; group 2 binding 0 is the fixed ABI's Frame
+        // (binding 1 is not needed by a geometry program). Group 1 stays layout-only.
+        let mut bindings: Vec<(u32, u32)> = module
+            .global_variables
+            .iter()
+            .filter_map(|(_, variable)| {
+                variable
+                    .binding
+                    .as_ref()
+                    .map(|binding| (binding.group, binding.binding))
+            })
+            .collect();
+        bindings.sort_unstable();
+        assert_eq!(bindings, vec![(0, 0), (2, 0)]);
+
+        let mut layouter = naga::proc::Layouter::default();
+        layouter
+            .update(module.to_ctx())
+            .expect("WGSL uniform layouts");
+        let frame = struct_by_name(&module, "Frame");
+        assert_eq!(layouter[frame].size, 160);
+        let globals = struct_by_name(&module, "Globals");
+        assert_eq!(layouter[globals].size, 176);
     }
 
     /// The scene-extraction contract: an active `SoShaderProgram` binds to the sibling

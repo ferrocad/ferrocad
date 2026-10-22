@@ -15,6 +15,7 @@ pub mod contributions;
 pub mod dev_tools;
 pub mod dialog;
 pub mod display;
+pub mod manipulators;
 pub mod python;
 pub mod selection;
 pub mod shell;

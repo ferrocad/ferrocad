@@ -39,7 +39,10 @@ use crate::shape::ShapeItem;
 #[derive(Clone, Debug, PartialEq)]
 pub struct InteractionCommit {
     /// The manipulator's registry id (`"dress_up"`).
-    pub manipulator: &'static str,
+    ///
+    /// Owned, not a literal: a Rust workbench names a constant, while a declarative
+    /// (mod-supplied) manipulator carries an id built at run time.
+    pub manipulator: String,
     /// The entity the manipulation applies to.
     pub target: u32,
     /// The named sub-element it applies to, when it acts on one (`Edge3`).
@@ -54,9 +57,12 @@ pub struct InteractionCommit {
 
 impl InteractionCommit {
     /// A commit for `action` on `target`.
-    pub fn new(manipulator: &'static str, target: u32, action: impl Into<String>) -> Self {
+    ///
+    /// `manipulator` accepts a `&'static str` as before; the commit stores an owned
+    /// [`String`] so a declarative handle can supply its id at run time.
+    pub fn new(manipulator: impl Into<String>, target: u32, action: impl Into<String>) -> Self {
         Self {
-            manipulator,
+            manipulator: manipulator.into(),
             target,
             element: None,
             action: action.into(),
@@ -97,7 +103,10 @@ impl InteractionCommit {
 pub trait Manipulator {
     /// The registry id, used to replace or remove the manipulator and to route its
     /// commit back to the workbench that registered it.
-    fn id(&self) -> &'static str;
+    ///
+    /// A Rust workbench returns a literal; a declarative (mod-supplied) manipulator
+    /// returns its owned id.
+    fn id(&self) -> &str;
 
     /// The overlay items, in draw order. They are drawn on top with depth off.
     fn items(&self) -> &[ShapeItem];
@@ -129,6 +138,11 @@ pub trait Manipulator {
     /// Rebuild screen-space geometry after a camera change. Returns whether the
     /// visuals changed.
     fn refresh(&mut self, camera: &Camera) -> bool;
+
+    /// Apply the workspace gizmo style. Returns whether the visuals changed.
+    fn set_style(&mut self, _style: &crate::gizmo::GizmoStyle) -> bool {
+        false
+    }
 
     /// The readout to display beside the overlay (`R 3.50 mm`), if any.
     fn readout(&self) -> Option<String> {

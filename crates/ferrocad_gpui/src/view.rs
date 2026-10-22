@@ -9,7 +9,7 @@
 //! the active workplane. The shell performs it on the viewport and reports the outcome.
 
 use ferrocad_stage::grid;
-use ferrocad_stage::AxisStyle;
+use ferrocad_stage::{AxisStyle, GizmoStyle};
 use serde::Deserialize;
 
 /// A presentation change a command returns. Never undoable, never a document edit.
@@ -26,6 +26,9 @@ pub struct ViewRequest {
     /// The axis cross's style and visibility (`view.axis`).
     #[serde(default)]
     pub axis: Option<AxisRequest>,
+    /// The transform gizmo's style and visibility (`view.gizmo`).
+    #[serde(default)]
+    pub gizmo: Option<GizmoRequest>,
     /// `"persp"`/`"perspective"` or `"ortho"`/`"orthographic"`.
     #[serde(default)]
     pub projection: Option<String>,
@@ -94,6 +97,45 @@ pub struct AxisRequest {
     pub ghost_alpha: Option<f32>,
 }
 
+/// A parameterized gizmo change (`view.gizmo`). Every field is optional; an omitted
+/// field keeps the current value.
+#[derive(Debug, Clone, Default, Deserialize, PartialEq)]
+pub struct GizmoRequest {
+    /// Show or hide the transform gizmo.
+    #[serde(default)]
+    pub enabled: Option<bool>,
+    /// A provider claim: the id of the backend that owns the gizmo's visuals (the native
+    /// default is `"ferrocad"`), not a user setting, and not geometry.
+    #[serde(default)]
+    pub backend: Option<String>,
+    /// The hovered/grabbed handle's `"#rrggbb"` (or `"#rgb"`) ink. The hex is RGB-only;
+    /// the current alpha is kept.
+    #[serde(default)]
+    pub active_color: Option<String>,
+    /// The idle handle's ink. The hex is RGB-only; the current alpha is kept.
+    #[serde(default)]
+    pub inactive_color: Option<String>,
+    /// The triad's target radius, in device pixels (finite and positive).
+    #[serde(default)]
+    pub size: Option<f64>,
+    /// The handle stroke width, in device pixels (finite and positive).
+    #[serde(default)]
+    pub width: Option<f64>,
+    /// A multiplier over every handle's alpha, clamped to `0.0..=1.0`.
+    #[serde(default)]
+    pub opacity: Option<f32>,
+    /// The occluded ghost pass's alpha multiplier, clamped to `0.0..=1.0`.
+    #[serde(default)]
+    pub ghost_alpha: Option<f32>,
+    /// The rotation-ring detent, in degrees, clamped to `0.0..=180.0`; `0` means
+    /// continuous rotation.
+    #[serde(default)]
+    pub ring_snap_deg: Option<f64>,
+    /// Show the numeric readout beside the handle.
+    #[serde(default)]
+    pub show_readout: Option<bool>,
+}
+
 /// A workplane action carried by a [`ViewRequest`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum WorkplaneAction {
@@ -159,6 +201,8 @@ pub struct ViewState {
     pub axis_cross: bool,
     /// The axis cross's parameterized style.
     pub axis: AxisStyle,
+    /// The transform gizmo's parameterized style.
+    pub gizmo: GizmoStyle,
     pub projection: ProjectionName,
     /// The world grid's minor step (mm).
     pub grid_minor: f64,
@@ -183,6 +227,7 @@ impl Default for ViewState {
             grid: false,
             axis_cross: true,
             axis: AxisStyle::default(),
+            gizmo: GizmoStyle::default(),
             projection: ProjectionName::Perspective,
             grid_minor: grid::MINOR_STEP,
             grid_major: grid::MAJOR_STEP,
@@ -270,6 +315,60 @@ impl ViewState {
                             "axis {name} must be positive and finite, got {value}"
                         ));
                     }
+                }
+            }
+        }
+        // The gizmo style is validated up front too, so a bad colour (or a degenerate
+        // handle) rejects the whole request before any field is mutated.
+        let gizmo_colors = match request.gizmo.as_ref() {
+            Some(gizmo) => [
+                gizmo
+                    .active_color
+                    .as_deref()
+                    .map(grid::parse_srgb_hex)
+                    .transpose()?,
+                gizmo
+                    .inactive_color
+                    .as_deref()
+                    .map(grid::parse_srgb_hex)
+                    .transpose()?,
+            ],
+            None => [None, None],
+        };
+        let gizmo_backend = match request.gizmo.as_ref().and_then(|gizmo| gizmo.backend.as_deref())
+        {
+            Some(text) => {
+                let backend = text.trim();
+                if backend.is_empty() {
+                    return Err("gizmo backend cannot be empty".to_string());
+                }
+                Some(backend.to_string())
+            }
+            None => None,
+        };
+        if let Some(gizmo) = request.gizmo.as_ref() {
+            for (name, value) in [
+                ("opacity", gizmo.opacity),
+                ("ghost alpha", gizmo.ghost_alpha),
+            ] {
+                if let Some(value) = value {
+                    if !value.is_finite() {
+                        return Err(format!("gizmo {name} must be finite, got {value}"));
+                    }
+                }
+            }
+            for (name, value) in [("size", gizmo.size), ("width", gizmo.width)] {
+                if let Some(value) = value {
+                    if !(value.is_finite() && value > 0.0) {
+                        return Err(format!(
+                            "gizmo {name} must be positive and finite, got {value}"
+                        ));
+                    }
+                }
+            }
+            if let Some(snap) = gizmo.ring_snap_deg {
+                if !snap.is_finite() {
+                    return Err(format!("gizmo ring snap must be finite, got {snap}"));
                 }
             }
         }
@@ -381,6 +480,85 @@ impl ViewState {
                     "axis cross {}",
                     if axis_cross { "on" } else { "off" }
                 ));
+            }
+        }
+        if let Some(gizmo) = request.gizmo.as_ref() {
+            let mut summary: Option<&'static str> = None;
+            let mut styled = false;
+            if let Some(enabled) = gizmo.enabled {
+                if self.gizmo.enabled != enabled {
+                    self.gizmo.enabled = enabled;
+                    summary = Some(if enabled { "gizmo on" } else { "gizmo off" });
+                }
+            }
+            let [active, inactive] = gizmo_colors;
+            if let Some(color) = active {
+                // Compare in the 8-bit sRGB space, as the axis colours do: the default
+                // tokens are authored at three decimals. The hex carries no alpha, so the
+                // token's existing alpha is kept.
+                if ink_hex(self.gizmo.active) != ink_hex(color) {
+                    self.gizmo.active = [color[0], color[1], color[2], self.gizmo.active[3]];
+                    styled = true;
+                }
+            }
+            if let Some(color) = inactive {
+                if ink_hex(self.gizmo.inactive) != ink_hex(color) {
+                    self.gizmo.inactive =
+                        [color[0], color[1], color[2], self.gizmo.inactive[3]];
+                    styled = true;
+                }
+            }
+            if let Some(opacity) = gizmo.opacity {
+                let opacity = opacity.clamp(0.0, 1.0);
+                if (self.gizmo.opacity - opacity).abs() > f32::EPSILON {
+                    self.gizmo.opacity = opacity;
+                    styled = true;
+                }
+            }
+            if let Some(size) = gizmo.size {
+                if (self.gizmo.size - size).abs() > 1e-12 {
+                    self.gizmo.size = size;
+                    styled = true;
+                }
+            }
+            if let Some(width) = gizmo.width {
+                if (self.gizmo.width - width).abs() > 1e-12 {
+                    self.gizmo.width = width;
+                    styled = true;
+                }
+            }
+            if let Some(ghost_alpha) = gizmo.ghost_alpha {
+                let ghost_alpha = ghost_alpha.clamp(0.0, 1.0);
+                if (self.gizmo.ghost_alpha - ghost_alpha).abs() > f32::EPSILON {
+                    self.gizmo.ghost_alpha = ghost_alpha;
+                    styled = true;
+                }
+            }
+            if let Some(snap) = gizmo.ring_snap_deg {
+                // Zero is continuous rotation, hence the clamp rather than a rejection.
+                let snap = snap.clamp(0.0, 180.0);
+                if (self.gizmo.ring_snap_deg - snap).abs() > 1e-12 {
+                    self.gizmo.ring_snap_deg = snap;
+                    styled = true;
+                }
+            }
+            if let Some(show_readout) = gizmo.show_readout {
+                if self.gizmo.show_readout != show_readout {
+                    self.gizmo.show_readout = show_readout;
+                    styled = true;
+                }
+            }
+            if summary.is_none() && styled {
+                summary = Some("gizmo style");
+            }
+            if let Some(summary) = summary {
+                changes.push(summary.to_string());
+            }
+            if let Some(backend) = gizmo_backend {
+                if self.gizmo.backend != backend {
+                    changes.push(format!("gizmo backend {backend}"));
+                    self.gizmo.backend = backend;
+                }
             }
         }
         if let Some(projection) = projection {
@@ -745,6 +923,152 @@ mod tests {
             ghost_alpha: Some(0.10),
         }));
         assert_eq!(request.axis_cross, None);
+    }
+
+    #[test]
+    fn the_gizmo_defaults_reproduce_the_legacy_look() {
+        let state = ViewState::default();
+        assert_eq!(state.gizmo, GizmoStyle::default());
+        assert!(state.gizmo.enabled);
+        assert_eq!(state.gizmo.backend, "ferrocad");
+        assert_eq!(state.gizmo.size, 80.0);
+        assert_eq!(state.gizmo.width, 1.5);
+        assert_eq!(state.gizmo.opacity, 1.0);
+        assert_eq!(state.gizmo.ghost_alpha, 0.35);
+        assert_eq!(state.gizmo.ring_snap_deg, 15.0);
+        assert!(state.gizmo.show_readout);
+        assert_eq!(state.gizmo.inactive[3], 0.9, "the legacy inactive alpha");
+    }
+
+    #[test]
+    fn the_gizmo_contract_example_is_a_no_op() {
+        let mut state = ViewState::default();
+        let request: ViewRequest = serde_json::from_str(
+            r##"{"gizmo": {
+                "enabled": true, "backend": "ferrocad",
+                "active_color": "#38bdf8", "inactive_color": "#94a3b8",
+                "size": 80.0, "width": 1.5, "opacity": 1.0,
+                "ghost_alpha": 0.35, "ring_snap_deg": 15.0, "show_readout": true
+            }}"##,
+        )
+        .expect("the contract's request shape");
+        assert_eq!(state.apply(&request).unwrap(), "view unchanged");
+        assert_eq!(state.gizmo, GizmoStyle::default());
+        assert_eq!(state.apply(&request).unwrap(), "view unchanged");
+    }
+
+    #[test]
+    fn every_gizmo_visual_field_applies() {
+        let mut state = ViewState::default();
+        let request: ViewRequest = serde_json::from_str(
+            r##"{"gizmo": {
+                "active_color": "#010203", "inactive_color": "#0f0",
+                "size": 40.0, "width": 3.0, "opacity": 0.25,
+                "ghost_alpha": 0.3, "ring_snap_deg": 45.0, "show_readout": false
+            }}"##,
+        )
+        .expect("the contract's request shape");
+        assert_eq!(state.apply(&request).unwrap(), "gizmo style");
+
+        let gizmo = &state.gizmo;
+        let mut active = grid::parse_srgb_hex("#010203").unwrap();
+        active[3] = 1.0;
+        assert_eq!(gizmo.active, active);
+        let mut inactive = grid::parse_srgb_hex("#00ff00").unwrap();
+        inactive[3] = 0.9;
+        assert_eq!(gizmo.inactive, inactive, "the token's alpha is kept");
+        assert_eq!(gizmo.size, 40.0);
+        assert_eq!(gizmo.width, 3.0);
+        assert_eq!(gizmo.opacity, 0.25);
+        assert_eq!(gizmo.ghost_alpha, 0.3);
+        assert_eq!(gizmo.ring_snap_deg, 45.0);
+        assert!(!gizmo.show_readout);
+
+        // The same request again is a no-op.
+        assert_eq!(state.apply(&request).unwrap(), "view unchanged");
+    }
+
+    #[test]
+    fn the_gizmo_switch_and_backend_summarise() {
+        let mut state = ViewState::default();
+        let off: ViewRequest = serde_json::from_str(r#"{"gizmo": {"enabled": false}}"#).unwrap();
+        assert_eq!(state.apply(&off).unwrap(), "gizmo off");
+        assert!(!state.gizmo.enabled);
+
+        let on: ViewRequest = serde_json::from_str(r#"{"gizmo": {"enabled": true}}"#).unwrap();
+        assert_eq!(state.apply(&on).unwrap(), "gizmo on");
+        assert!(state.gizmo.enabled);
+
+        let backend: ViewRequest =
+            serde_json::from_str(r#"{"gizmo": {"backend": "  shader  "}}"#).unwrap();
+        assert_eq!(state.apply(&backend).unwrap(), "gizmo backend shader");
+        assert_eq!(state.gizmo.backend, "shader", "the backend is trimmed");
+        assert_eq!(state.apply(&backend).unwrap(), "view unchanged");
+    }
+
+    #[test]
+    fn a_bad_gizmo_field_is_rejected_atomically() {
+        let mut state = ViewState::default();
+        let bad_colour: ViewRequest = serde_json::from_str(
+            r##"{"grid": true, "gizmo": {"enabled": false, "active_color": "not a colour"}}"##,
+        )
+        .unwrap();
+        assert!(state.apply(&bad_colour).is_err());
+        assert!(!state.grid, "nothing was applied");
+        assert!(state.gizmo.enabled, "the flag was not applied");
+        assert_eq!(state.gizmo, GizmoStyle::default());
+
+        for request in [
+            r#"{"grid": true, "gizmo": {"size": 0.0}}"#,
+            r#"{"grid": true, "gizmo": {"size": -1.0}}"#,
+            r#"{"grid": true, "gizmo": {"width": 0.0}}"#,
+            r#"{"grid": true, "gizmo": {"backend": "   "}}"#,
+        ] {
+            let request: ViewRequest = serde_json::from_str(request).unwrap();
+            assert!(state.apply(&request).is_err(), "{request:?}");
+            assert!(!state.grid, "nothing was applied");
+            assert_eq!(state.gizmo, GizmoStyle::default());
+        }
+
+        // JSON has no NaN, so the degenerate width is built directly.
+        let nan = ViewRequest {
+            grid: Some(true),
+            gizmo: Some(GizmoRequest {
+                width: Some(f64::NAN),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        assert!(state.apply(&nan).is_err());
+        assert!(!state.grid, "nothing was applied");
+        assert_eq!(state.gizmo, GizmoStyle::default());
+    }
+
+    #[test]
+    fn gizmo_alphas_and_the_ring_snap_clamp() {
+        let mut state = ViewState::default();
+        let request: ViewRequest = serde_json::from_str(
+            r#"{"gizmo": {"opacity": 2.0, "ghost_alpha": -1.0, "ring_snap_deg": 400.0}}"#,
+        )
+        .unwrap();
+        assert_eq!(state.apply(&request).unwrap(), "gizmo style");
+        assert_eq!(state.gizmo.opacity, 1.0);
+        assert_eq!(state.gizmo.ghost_alpha, 0.0);
+        assert_eq!(state.gizmo.ring_snap_deg, 180.0);
+        assert_eq!(state.apply(&request).unwrap(), "view unchanged");
+    }
+
+    #[test]
+    fn a_request_can_change_the_gizmo_and_the_grid() {
+        let mut state = ViewState::default();
+        let request: ViewRequest = serde_json::from_str(
+            r#"{"grid": true, "gizmo": {"enabled": false, "opacity": 0.5}}"#,
+        )
+        .unwrap();
+        assert_eq!(state.apply(&request).unwrap(), "grid on, gizmo off");
+        assert!(state.grid);
+        assert!(!state.gizmo.enabled);
+        assert_eq!(state.gizmo.opacity, 0.5);
     }
 
     #[test]

@@ -15,9 +15,11 @@ _A mod that imports this depends on FerroCAD; it is not upstream API._
 | --- | --- |
 | `display_mesh(obj)` | The display mesh for `obj`, from the first module that claims it. |
 | `interaction(obj, manipulator, action, element='', values=None)` | Apply a manipulator commit through the first module that supports it. |
+| `manipulator_specs(obj, element='')` | The declarative handles every module declares for ``obj``, in order. |
 | `parameter_file()` | The parameter file in use, or ``None`` while the store is memory-only. |
 | `register_display_provider(provider)` | Let ``provider(obj)`` supply the display mesh of a document object. |
 | `register_interaction_provider(provider)` | Let ``provider(obj, manipulator, action, element, values)`` apply an edit. |
+| `register_manipulator_provider(provider)` | Let ``provider(obj, element)`` declare handles for a selection. |
 | `set_parameter_file(path)` | Point ``FreeCAD.ParamGet`` at ``path`` (always enabled). |
 
 ## Object `Axis`
@@ -40,6 +42,26 @@ The ``FerroCAD.Axis`` singleton (see the module docstring).
 | schema() -> list | A copy of :data:`SETTINGS_SCHEMA` (the rows the provider advertises). |
 | snapshot() -> dict | The stored axis policy, in the same shape as the ``axis`` view. |
 | `width` (property) | The stem width in pixels. |
+
+## Object `Gizmo`
+
+The ``FerroCAD.Gizmo`` singleton (see the module docstring).
+
+| Member | Summary |
+| --- | --- |
+| `active_color` (property) | The hovered/active handle's ink as a canonical lowercase ``#rrggbb``. |
+| apply() -> dict | The ``{"view": …}`` request for the current settings. |
+| `enabled` (property) | Whether the manipulator gizmos are shown. |
+| `ghost_alpha` (property) | The alpha of the occluded (ghosted) handles in ``0..1``. |
+| `inactive_color` (property) | The idle handle's ink as a canonical lowercase ``#rrggbb``. |
+| `opacity` (property) | The handles' opacity in ``0..1``. |
+| reset() -> None | Clear the gizmo store (only the gizmo provider's own group). |
+| `ring_snap_deg` (property) | The rotation ring's snap increment in degrees. |
+| schema() -> list | A copy of :data:`SETTINGS_SCHEMA` (the rows the provider advertises). |
+| `show_readout` (property) | Whether the drag readout is drawn next to the gizmo. |
+| `size` (property) | The handle size in pixels. |
+| snapshot() -> dict | The stored gizmo policy, in the same shape as the ``gizmo`` view. |
+| `width` (property) | The handle stroke width in pixels. |
 
 ## Object `Grid`
 

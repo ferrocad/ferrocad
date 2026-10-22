@@ -18,7 +18,9 @@ use gpui::{
 
 use ferrocad_geom::SelectionRef;
 use ferrocad_inventor::{Scene, Viewport};
-use ferrocad_stage::{InteractionCommit, Manipulator, ToolStatus, TransformGizmo};
+use ferrocad_stage::{
+    DeclarativeManipulator, InteractionCommit, Manipulator, ToolStatus, TransformGizmo,
+};
 use ferrocad_viewport::scene;
 use ferrocad_viewport::{HoverReport, InventorViewport, SelectionEvent, ViewportEvent};
 use ferrocad_wgpu::WgpuRenderer;
@@ -29,6 +31,7 @@ use crate::commands::{self, CommandInfo};
 use crate::contributions::Contributions;
 use crate::dialog::{self, DialogSpec, Kind, ValueState};
 use crate::display::{DisplaySync, StageMesh};
+use crate::manipulators;
 use crate::python::{self, AxisSummary, Bootstrap, DocumentNode, GridSummary, PropRow};
 use crate::selection::{self, SelectionItem};
 use crate::shortcuts::Accelerator;
@@ -41,6 +44,9 @@ pub(crate) const PANEL_ALT: u32 = 0x1d2026;
 pub(crate) const FG: u32 = 0xd8dbe0;
 pub(crate) const MUTED: u32 = 0x8b919a;
 pub(crate) const ACCENT: u32 = 0x2f4a6d;
+
+/// The registry feature whose provider supplies the gizmo skin.
+const GIZMO_FEATURE: &str = "gizmo";
 
 /// Whether two names address the same tree node.
 ///
@@ -75,6 +81,26 @@ fn live_node(name: &str, live: &HashSet<String>) -> bool {
 fn transcript_of(model: &Arc<Mutex<ShellModel>>) -> String {
     let m = model.lock().unwrap();
     format!("{}\n>>> ", m.console.join("\n"))
+}
+
+/// The note to append when the view state accepts a `gizmo.backend` the build cannot
+/// host.
+///
+/// [`ferrocad_stage::NATIVE_BACKEND`] is hosted by the build itself. Any other id is
+/// hosted only by the skin its provider supplies through the registry; when that
+/// provider supplies none, the shell says so rather than implying the handles changed
+/// hands. Either way the native manipulator remains the event owner (hover, picking,
+/// drag servicing and commits): the skin changes materials, never behaviour.
+///
+/// `None` when the backend did not change, when it names the native backend, or when
+/// a skin was supplied.
+fn gizmo_backend_note(previous: &str, current: &str, skin_supplied: bool) -> Option<String> {
+    if previous == current || current == ferrocad_stage::NATIVE_BACKEND || skin_supplied {
+        return None;
+    }
+    Some(format!(
+        "gizmo backend {current} supplied no skin (native handles stay active)"
+    ))
 }
 
 /// Everything the window renders, kept in an `Arc<Mutex<_>>` so click handlers
@@ -597,6 +623,11 @@ impl Shell {
         }
         // The view state is the source of truth: a grid toggled before the viewport
         // existed is applied now, with its steps.
+        //
+        // G2: the skin is supplied by the active provider through the registry, not
+        // shipped by the app. Fetch it before boxing the viewport; the viewport itself
+        // stays GPU- and source-agnostic.
+        let gizmo_skin = self.active_gizmo_skin(cx);
         {
             let state = self.model.lock().unwrap().view.clone();
             viewport.set_grid(state.grid);
@@ -606,6 +637,11 @@ impl Shell {
             viewport.set_grid_steps(state.grid_minor, state.grid_major);
             viewport.set_grid_radius(state.grid_radius);
             viewport.set_grid_overlay(state.grid_overlay);
+            // The gizmo style is host policy too: a gizmo disabled or restyled before
+            // the viewport existed is applied now, and stays applied to selections
+            // armed later.
+            viewport.set_gizmo_style(state.gizmo.clone());
+            viewport.set_gizmo_skin(gizmo_skin);
         }
         // A tool started before the viewport existed (a script, a command while no
         // GPU was available) is applied now that there is one.
@@ -683,6 +719,39 @@ impl Shell {
         }
     }
 
+    /// The WGSL skin the active `gizmo` provider supplies, if any.
+    ///
+    /// The registry is the only channel: the shader ships with a mod, and asking the
+    /// active backend means a provider switch cannot leave a stale skin behind. A
+    /// bridge failure is logged and treated as "no skin" (the native material).
+    fn active_gizmo_skin(&mut self, cx: &mut Context<Self>) -> Option<Arc<str>> {
+        match python::provider_skin(GIZMO_FEATURE) {
+            Ok(source) => source.map(Arc::from),
+            Err(error) => {
+                self.console_line(format!("gizmo skin: {error}"), cx);
+                None
+            }
+        }
+    }
+
+    /// Pull the active provider's gizmo skin into the viewport.
+    ///
+    /// Returns whether a source was supplied. A missing viewport still reports that
+    /// state: it is simply not applied until [`enable_viewport`](Self::enable_viewport)
+    /// runs. The viewport is notified only when the stored program changed.
+    fn sync_gizmo_skin(&mut self, cx: &mut Context<Self>) -> bool {
+        let skin = self.active_gizmo_skin(cx);
+        let supplied = skin.is_some();
+        if let Some(viewport) = self.viewport.clone() {
+            viewport.update(cx, |viewport, cx| {
+                if viewport.set_gizmo_skin(skin) {
+                    cx.notify();
+                }
+            });
+        }
+        supplied
+    }
+
     /// Ask the app script for the display meshes and build a stage from them.
     ///
     /// The shell names no workbench: the script routes `stage_meshes` through
@@ -715,10 +784,10 @@ impl Shell {
         cx.notify();
     }
 
-    /// A click: select the object in the inspector, and arm the manipulator and gizmo
-    /// the edition's workbenches contribute for that selection.
+    /// A click: select the object in the inspector, and arm the manipulators and gizmo
+    /// the edition's workbenches and mods contribute for that selection.
     fn on_selection(&mut self, selection: &SelectionEvent, cx: &mut Context<Self>) {
-        let (manipulator, gizmo) = match selection {
+        let (manipulators, gizmo) = match selection {
             SelectionEvent::Picked(reference) => {
                 if let Some(name) = self.display.object_of(reference.object).map(str::to_string) {
                     // The viewport reports sub-elements too (`Face6`), which the facade
@@ -735,12 +804,12 @@ impl Shell {
             }
             SelectionEvent::Cleared => {
                 self.clear_selection(cx);
-                (None, None)
+                (Vec::new(), None)
             }
         };
         if let Some(viewport) = self.viewport.clone() {
             viewport.update(cx, |viewport, cx| {
-                viewport.set_manipulators(manipulator.into_iter().collect());
+                viewport.set_manipulators(manipulators);
                 viewport.set_gizmo(gizmo);
                 cx.notify();
             });
@@ -748,27 +817,75 @@ impl Shell {
         cx.notify();
     }
 
-    /// The manipulator and gizmo to host for a selection, if the edition contributes
-    /// them.
+    /// The manipulators and gizmo to host for a selection.
+    ///
+    /// The compiled workbench manipulator (if any) comes first; the handles a mod
+    /// declares for this selection follow it, in provider order. The viewport picks
+    /// the most recently added manipulator first, so a declared handle takes the
+    /// pointer before the native one. One selection arms exactly the compiled
+    /// manipulator plus every declared handle; no handle survives a selection
+    /// change.
+    ///
+    /// A bad declaration is logged and dropped, never allowed to cost the native
+    /// manipulator: conversion errors are appended to the console after the valid
+    /// handles were collected.
+    ///
+    /// The shell always hosts (arms) the native manipulator/gizmo for a selection, even
+    /// when [`GizmoStyle::enabled`](ferrocad_stage::GizmoStyle::enabled) is false: the viewport
+    /// owns that gate, and a disabled style keeps the objects hosted while drawing,
+    /// hover, picking and drag servicing are suppressed. Keeping one authority for the
+    /// switch means re-enabling the gizmo from settings restores the handles without a
+    /// re-selection.
     ///
     /// The stage is cloned out of the viewport before anything is updated: a re-entrant
     /// `update` on the same entity panics.
     fn arm(
-        &self,
+        &mut self,
         reference: &SelectionRef,
         cx: &mut Context<Self>,
-    ) -> (Option<Box<dyn Manipulator>>, Option<TransformGizmo>) {
-        if self.contributions.is_empty() {
-            return (None, None);
+    ) -> (Vec<Box<dyn Manipulator>>, Option<TransformGizmo>) {
+        let mut manipulators: Vec<Box<dyn Manipulator>> = Vec::new();
+        let mut gizmo = None;
+        if let Some(viewport) = self.viewport.as_ref() {
+            let stage = viewport.read(cx).stage().clone();
+            if !self.contributions.is_empty() {
+                if let Some(manipulator) = self.contributions.manipulator_for(reference, &stage) {
+                    manipulators.push(manipulator);
+                }
+                gizmo = self.contributions.gizmo_for(reference, &stage);
+            }
         }
-        let Some(viewport) = self.viewport.as_ref() else {
-            return (None, None);
-        };
-        let stage = viewport.read(cx).stage().clone();
-        (
-            self.contributions.manipulator_for(reference, &stage),
-            self.contributions.gizmo_for(reference, &stage),
-        )
+
+        // Mod-declared handles come after the compiled one. The selection's object
+        // name and first sub-element are what a provider needs to decide.
+        let object = self
+            .display
+            .object_of(reference.object)
+            .unwrap_or_default()
+            .to_string();
+        let element = reference.elements.first().map(String::as_str);
+        match python::manipulator_specs(&object, element) {
+            Ok(specs) => {
+                let mut errors = Vec::new();
+                for spec in specs {
+                    match manipulators::handle_from_value(&spec, reference.object) {
+                        Ok((target, handle)) => {
+                            manipulators
+                                .push(Box::new(DeclarativeManipulator::new(target, handle)));
+                        }
+                        Err(error) => errors.push(error),
+                    }
+                }
+                for error in errors {
+                    self.console_line(error, cx);
+                }
+            }
+            Err(error) => {
+                self.console_line(format!("manipulator specs unavailable: {error}"), cx);
+            }
+        }
+
+        (manipulators, gizmo)
     }
 
     /// A manipulator drag ended: apply the commit through the app script's
@@ -871,6 +988,7 @@ impl Shell {
         // The row is in a popover (or the Dev Tools panel); choosing it dismisses
         // the menu.
         self.open_popover = None;
+        let previous_backend = self.model.lock().unwrap().view.gizmo.backend.clone();
         let outcome = match crate::python::set_provider(feature, backend) {
             Ok(outcome) => outcome,
             Err(error) => {
@@ -910,13 +1028,33 @@ impl Shell {
         self.provider_features = python::provider_features().ok();
         self.refresh(cx);
 
-        let status = if !outcome.status.is_empty() {
+        // A switch can change *which* provider supplies the skin even when the backend
+        // id is unchanged, so re-read it after the registry has switched. The
+        // `apply_view` above already covered a backend change; this is the idempotent
+        // second half, and it is what makes the report below honest for a same-id
+        // provider change. A grid or axis switch cannot change the gizmo skin, so the
+        // note is not evaluated for one at all.
+        let skin_supplied = (feature == GIZMO_FEATURE).then(|| self.sync_gizmo_skin(cx));
+
+        let mut status = if !outcome.status.is_empty() {
             outcome.status
         } else if let Some(summary) = view_summary.filter(|summary| !summary.is_empty()) {
             summary
         } else {
             format!("{feature}: {backend} is the active provider")
         };
+        // Only a switched-to non-native backend with no supplied skin needs the note;
+        // avoid repeating one `apply_view` already appended.
+        if let Some(supplied) = skin_supplied {
+            let current_backend = self.model.lock().unwrap().view.gizmo.backend.clone();
+            if let Some(note) =
+                gizmo_backend_note(&previous_backend, &current_backend, supplied)
+            {
+                if !status.contains(&note) {
+                    status = format!("{status}; {note}");
+                }
+            }
+        }
         self.model.lock().unwrap().status = status.clone();
         self.console_line(status, cx);
         cx.notify();
@@ -1242,10 +1380,25 @@ impl Shell {
             return self.apply_workplane(action, cx);
         }
         let mut state = self.model.lock().unwrap().view.clone();
-        let summary = state.apply(request)?;
+        let previous_backend = state.gizmo.backend.clone();
+        let mut summary = state.apply(request)?;
+        let backend_changed = previous_backend != state.gizmo.backend;
         self.model.lock().unwrap().view = state.clone();
         if let Err(error) = python::set_view_state(&state) {
             self.console_line(format!("view state: {error}"), cx);
+        }
+        // A provider claim is stored, but only a skin its provider supplies can host
+        // it (the native id is hosted by the build); say so rather than implying the
+        // handles changed hands. The skin is re-read only when the backend changed,
+        // because that is the only case this request can affect.
+        let skin_supplied = if backend_changed {
+            self.sync_gizmo_skin(cx)
+        } else {
+            false
+        };
+        if let Some(note) = gizmo_backend_note(&previous_backend, &state.gizmo.backend, skin_supplied)
+        {
+            summary = format!("{summary}; {note}");
         }
         if let Some(viewport) = self.viewport.clone() {
             let orthographic = state.projection == ProjectionName::Orthographic;
@@ -1259,6 +1412,7 @@ impl Shell {
             let (minor, major, radius) = (state.grid_minor, state.grid_major, state.grid_radius);
             let (color, alpha) = (state.grid_color, state.grid_alpha);
             let grid_overlay = state.grid_overlay;
+            let gizmo = state.gizmo.clone();
             viewport.update(cx, |viewport, cx| {
                 let mut changed = viewport.set_orthographic(orthographic);
                 changed |= viewport.set_grid(grid);
@@ -1272,6 +1426,7 @@ impl Shell {
                 changed |= viewport.set_grid_color(color);
                 changed |= viewport.set_grid_alpha(alpha);
                 changed |= viewport.set_grid_overlay(grid_overlay);
+                changed |= viewport.set_gizmo_style(gizmo);
                 if changed {
                     cx.notify();
                 }
@@ -2939,6 +3094,116 @@ if "Test_Shortcut" not in FreeCADGui.listCommands():
         let state = model.lock().unwrap().view.clone();
         assert!(state.axis.enabled);
         assert!(state.axis_cross);
+    }
+
+    /// A non-native provider claim is reported when it changes *and* its provider
+    /// supplies no skin; the native backend is always hosted by the build.
+    #[test]
+    fn a_gizmo_backend_claim_is_reported_only_when_it_changes() {
+        assert_eq!(
+            gizmo_backend_note(ferrocad_stage::NATIVE_BACKEND, "ferrocad", false),
+            None,
+            "the unchanged native backend says nothing"
+        );
+        assert_eq!(gizmo_backend_note("shader", "shader", false), None);
+        assert_eq!(
+            gizmo_backend_note(
+                ferrocad_stage::NATIVE_BACKEND,
+                ferrocad_stage::SKIN_BACKEND,
+                true
+            ),
+            None,
+            "a supplied skin hosts the switch, so it is not a warning"
+        );
+        assert_eq!(
+            gizmo_backend_note(
+                ferrocad_stage::SKIN_BACKEND,
+                ferrocad_stage::NATIVE_BACKEND,
+                false
+            ),
+            None,
+            "coming back to the native backend needs no warning"
+        );
+
+        let note = gizmo_backend_note(ferrocad_stage::NATIVE_BACKEND, "shader", false)
+            .expect("a foreign backend with no skin is reported");
+        assert!(note.contains("shader"), "{note}");
+        assert!(note.contains("supplied no skin"), "{note}");
+    }
+
+    /// The skin channel's default: a plain boot (no mods) has no provider supplying a
+    /// gizmo skin, so the shell draws the native material.
+    #[test]
+    fn a_plain_boot_supplies_no_gizmo_skin() {
+        let _guard = crate::PYTHON_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let _model = Shell::boot().expect("boot shell");
+        assert_eq!(
+            crate::python::provider_skin("gizmo").expect("the provider skin bridge"),
+            None
+        );
+    }
+
+    /// G1: a `view.gizmo` request restyles the workspace gizmo and reaches the
+    /// mirrored view state; a non-native backend with no supplied skin is stored but
+    /// reported as unhosted, because the native handles stay the event owner.
+    #[gpui::test]
+    fn a_view_gizmo_request_reaches_the_state_and_reports_the_backend(
+        cx: &mut TestAppContext,
+    ) {
+        let _guard = crate::PYTHON_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let model = Shell::boot().expect("boot shell");
+        let window = cx.update(|cx| {
+            let model = model.clone();
+            cx.open_window(Default::default(), move |_window, cx| {
+                cx.new(|cx| Shell::from_model(model.clone(), cx))
+            })
+            .unwrap()
+        });
+        let mut cx = VisualTestContext::from_window(window.into(), cx);
+        let shell: Entity<Shell> = window.root(&mut cx).unwrap();
+
+        let request: ViewRequest = serde_json::from_str(
+            r##"{"gizmo": {"enabled": true, "backend": "ferrocad", "active_color": "#38bdf8", "inactive_color": "#94a3b8", "size": 96.0, "width": 2.0, "opacity": 0.8, "ghost_alpha": 0.5, "ring_snap_deg": 5.0, "show_readout": false}}"##,
+        )
+        .expect("a view.gizmo request");
+        let summary = cx
+            .update(|_window, cx| {
+                shell.update(cx, |shell, cx| shell.apply_view(&request, cx))
+            })
+            .expect("the request applies");
+        assert!(summary.contains("gizmo style"), "{summary}");
+
+        {
+            let state = model.lock().unwrap().view.clone();
+            let gizmo = &state.gizmo;
+            assert!(gizmo.enabled);
+            assert_eq!(gizmo.backend, ferrocad_stage::NATIVE_BACKEND);
+            // The requested hexes are the documented defaults, so the 8-bit comparison
+            // keeps the authored tokens rather than re-parsing them.
+            let defaults = ferrocad_stage::GizmoStyle::default();
+            assert_eq!(gizmo.active, defaults.active);
+            assert_eq!(gizmo.inactive, defaults.inactive);
+            assert_eq!(gizmo.inactive[3], 0.9, "the token's alpha is kept");
+            assert_eq!(gizmo.size, 96.0);
+            assert_eq!(gizmo.width, 2.0);
+            assert_eq!(gizmo.opacity, 0.8);
+            assert_eq!(gizmo.ghost_alpha, 0.5);
+            assert_eq!(gizmo.ring_snap_deg, 5.0);
+            assert!(!gizmo.show_readout);
+        }
+
+        // The claim is stored, but no provider declares `shader`, so it supplies no
+        // skin: the shell says so, and the native manipulators remain the event owner.
+        let claim: ViewRequest =
+            serde_json::from_str(r#"{"gizmo": {"backend": "shader"}}"#).unwrap();
+        let summary = cx
+            .update(|_window, cx| {
+                shell.update(cx, |shell, cx| shell.apply_view(&claim, cx))
+            })
+            .expect("the claim applies");
+        assert!(summary.contains("gizmo backend shader"), "{summary}");
+        assert!(summary.contains("supplied no skin"), "{summary}");
+        assert_eq!(model.lock().unwrap().view.gizmo.backend, "shader");
     }
 
     /// A5: a tool id resolves through the edition's registry; an unknown id reports

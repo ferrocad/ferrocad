@@ -25,10 +25,9 @@
 
 use ferrocad_geom::SelectionRef;
 use ferrocad_graphics::{Camera, screen_ribbon};
-use ferrocad_stage::gizmo::{ACTIVE_COLOR, INACTIVE_COLOR};
+use ferrocad_stage::gizmo::GizmoStyle;
 use ferrocad_stage::screen::{
-    HIT_SLOP, STROKE_PIXELS, camera_forward, point_segment_distance, project_device, push_ribbon,
-    scale_for,
+    HIT_SLOP, camera_forward, point_segment_distance, project_device, push_ribbon, scale_for,
 };
 use ferrocad_stage::{DrawMode, InteractionCommit, Manipulator, ShapeItem, Stage};
 use ferrocad_stage::{GizmoMode, TransformGizmo};
@@ -47,7 +46,7 @@ pub const MIN_HEIGHT: f64 = 0.1;
 /// The grip stem's screen-invariant length, in device pixels.
 const STEM_PIXELS: f64 = 44.0;
 /// The dark casing around the grip stroke, in device pixels (the stroke itself is
-/// [`STROKE_PIXELS`] wide).
+/// [`GizmoStyle::width`] wide).
 const CASING_PIXELS: f64 = 3.0;
 /// The dark casing ink: the canvas void, so the grip reads against a bright selected
 /// slab as well as against the dark canvas.
@@ -68,6 +67,8 @@ pub struct HeightGrip {
     /// `(press device y, height at press)` while a drag is active.
     press: Option<(f64, f64)>,
     hovered: bool,
+    /// The workspace appearance.
+    style: GizmoStyle,
     /// The camera view and height the cached stroke was built for.
     view: Option<Matrix4>,
     built: Option<f64>,
@@ -78,12 +79,15 @@ pub struct HeightGrip {
 impl HeightGrip {
     /// A grip for the item whose top centre is `top`, starting at `height`.
     pub fn new(target: u32, top: Vector3, height: f64) -> Self {
+        let style = GizmoStyle::default();
+        let ghost_alpha = style.ghost_alpha;
         Self {
             target,
             top,
             height: height.max(MIN_HEIGHT),
             press: None,
             hovered: false,
+            style,
             view: None,
             built: None,
             items: [
@@ -96,7 +100,8 @@ impl HeightGrip {
                     .with_draw_mode(DrawMode::Shaded)
                     .with_selectable(false)
                     .with_blended_surface()
-                    .with_ghost_surface(),
+                    .with_ghost_surface()
+                    .with_ghost_alpha(ghost_alpha),
             ],
         }
     }
@@ -147,17 +152,44 @@ impl HeightGrip {
     }
 
     fn stroke_color(&self) -> [f32; 4] {
-        if self.hovered || self.is_dragging() {
-            ACTIVE_COLOR
+        let token = if self.hovered || self.is_dragging() {
+            self.style.active
         } else {
-            INACTIVE_COLOR
+            self.style.inactive
+        };
+        [
+            token[0],
+            token[1],
+            token[2],
+            token[3] * self.style.opacity,
+        ]
+    }
+
+    /// Apply the workspace gizmo style. Returns whether the style changed.
+    ///
+    /// The stroke width is baked into the cached ribbons, so a style change forces the
+    /// next [`update`](Self::update) to rebuild them. The default style reproduces the
+    /// legacy 1.5 px inactive/active stroke exactly.
+    pub fn set_style(&mut self, style: &GizmoStyle) -> bool {
+        if self.style == *style {
+            return false;
         }
+        self.style = style.clone();
+        self.built = None;
+        self.apply_color();
+        true
+    }
+
+    /// The workspace gizmo style.
+    pub fn style(&self) -> &GizmoStyle {
+        &self.style
     }
 
     fn apply_color(&mut self) {
         let color = self.stroke_color();
         self.items[1].set_surface_color(color);
         self.items[1].set_edge_color(color);
+        self.items[1].set_ghost_alpha(self.style.ghost_alpha);
     }
 
     /// Whether `device` is on the grip (the top anchor or the stem, within the shared
@@ -240,8 +272,12 @@ impl HeightGrip {
     fn build(&mut self, camera: &Camera) {
         let stem_end = self.stem_end(camera);
         let crossbar_half = scale_for(camera, self.top, 5.0);
-        let stroke_half = scale_for(camera, self.top, STROKE_PIXELS / 2.0);
-        let casing_half = scale_for(camera, self.top, (STROKE_PIXELS + CASING_PIXELS) / 2.0);
+        let stroke_half = scale_for(camera, self.top, self.style.width / 2.0);
+        let casing_half = scale_for(
+            camera,
+            self.top,
+            (self.style.width + CASING_PIXELS) / 2.0,
+        );
         let forward = camera_forward(camera);
         let left = Vector3::new(
             stem_end.x - crossbar_half,
@@ -307,7 +343,7 @@ impl HeightGrip {
 }
 
 impl Manipulator for HeightGrip {
-    fn id(&self) -> &'static str {
+    fn id(&self) -> &str {
         TOY_HEIGHT_ID
     }
 
@@ -341,6 +377,10 @@ impl Manipulator for HeightGrip {
 
     fn set_hovered(&mut self, hovered: bool) -> bool {
         HeightGrip::set_hovered(self, hovered)
+    }
+
+    fn set_style(&mut self, style: &GizmoStyle) -> bool {
+        HeightGrip::set_style(self, style)
     }
 
     fn refresh(&mut self, camera: &Camera) -> bool {
@@ -513,7 +553,7 @@ mod tests {
             assert_eq!(item.triangles().len(), 12, "six indices per quad");
         }
         assert_eq!(casing.surface_color(), CASING_COLOR);
-        assert_eq!(stroke.surface_color(), INACTIVE_COLOR);
+        assert_eq!(stroke.surface_color(), GizmoStyle::default().inactive);
 
         // The geometry spans the top-face centroid up to the stem tip; neither ribbon
         // reaches down to the slab's base.
@@ -542,6 +582,60 @@ mod tests {
             min_z > top.z - 1.0,
             "the ribbon never reaches the slab base ({min_z})"
         );
+    }
+
+    #[test]
+    fn a_custom_style_tints_the_stroke_and_widens_the_casing() {
+        let mut grip = grip();
+        let camera = tilted_camera(200.0);
+        assert!(grip.update(&camera));
+
+        let mut style = GizmoStyle::default();
+        style.inactive = [0.0, 1.0, 0.0, 0.8];
+        style.active = [1.0, 0.0, 0.0, 1.0];
+        style.opacity = 0.5;
+        style.width = 5.0;
+        style.ghost_alpha = 0.6;
+        assert!(grip.set_style(&style));
+        assert_eq!(
+            grip.items()[1].ghost_alpha(),
+            0.6,
+            "the ghost alpha reaches the stroke immediately"
+        );
+        assert!(grip.update(&camera), "the style forces a rebuild");
+        assert!(!grip.set_style(&style), "the same style is a no-op");
+
+        let point = |item: &ShapeItem, index: usize| {
+            let positions = item.positions();
+            Vector3::new(
+                f64::from(positions[index][0]),
+                f64::from(positions[index][1]),
+                f64::from(positions[index][2]),
+            )
+        };
+        let per_pixel = scale_for(&camera, grip.top(), 1.0);
+        let stroke = &grip.items()[1];
+        assert_eq!(stroke.surface_color(), [0.0, 1.0, 0.0, 0.4]);
+        let width = point(stroke, 0).sub(&point(stroke, 3)).length();
+        let expected = style.width * per_pixel;
+        assert!(
+            (width - expected).abs() < 1e-6,
+            "a 5 px stroke: {width} vs {expected}"
+        );
+
+        // The casing keeps its extra 3 px on either side of the styled stroke.
+        let casing = &grip.items()[0];
+        let casing_width = point(casing, 0).sub(&point(casing, 3)).length();
+        let expected = (style.width + CASING_PIXELS) * per_pixel;
+        assert!(
+            (casing_width - expected).abs() < 1e-6,
+            "the casing is stroke + 3 px: {casing_width} vs {expected}"
+        );
+
+        // The active token is used while hovered, still scaled by the opacity.
+        assert!(grip.set_hovered(true));
+        assert_eq!(grip.items()[1].surface_color(), [1.0, 0.0, 0.0, 0.5]);
+        assert_eq!(grip.style(), &style);
     }
 
     #[test]

@@ -56,6 +56,7 @@
 //! ```
 
 pub mod axis;
+pub mod declarative;
 pub mod feedback;
 pub mod gizmo;
 pub mod grid;
@@ -70,17 +71,18 @@ pub mod workplane;
 
 pub use gizmo::{
     GIZMO_BASE_ID, GizmoAxis, GizmoCommitEvent, GizmoConstraint, GizmoDragEvent, GizmoHandle,
-    GizmoMode, GizmoModifiers, GizmoValue, HandleKind, ManipulatorFrame, TRANSFORM_ID,
-    TransformGizmo,
+    GizmoMode, GizmoModifiers, GizmoStyle, GizmoValue, HandleKind, ManipulatorFrame,
+    NATIVE_BACKEND, SKIN_BACKEND, TRANSFORM_ID, TransformGizmo,
 };
 pub use axis::AxisStyle;
+pub use declarative::{DeclarativeHandle, DeclarativeManipulator, DeclarativeShape};
 pub use grid::{GridGeometry, GridSpec, GridStyle};
 pub use input::{MouseButton, PointerEvent, PointerKind};
 pub use interaction::{InteractionCommit, Manipulator};
 pub use screen::{HIT_PADDING_PIXELS, HIT_SLOP, HIT_TOLERANCE_PIXELS, STROKE_PIXELS, scale_for};
 pub use shape::{DrawMode, ShapeItem};
 /// The GPU-side visual tokens (also available as `ferrocad_graphics::theme`).
-pub use ferrocad_graphics::theme;
+pub use ferrocad_graphics::{ShaderProgram, theme};
 pub use snap::{
     Snap, SnapCandidate, SnapContext, SnapKind, nearest_feature, snap_to_geometry,
     snap_to_geometry_with,

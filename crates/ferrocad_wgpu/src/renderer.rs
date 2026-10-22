@@ -286,10 +286,15 @@ impl WgpuRenderer {
 
         // Upload anything not already cached. A stable scene keeps the same
         // `(mesh_id, generation)`, so this uploads once and reuses thereafter. A
-        // program packet draws the placeholder instead, so its own geometry is never
-        // uploaded.
+        // plain program packet draws the placeholder instead, so its own geometry is
+        // never uploaded; a geometry program draws its own mesh, so it is.
         for batch in batches {
-            if batch.state().program.is_some() {
+            if batch
+                .state()
+                .program
+                .as_ref()
+                .is_some_and(|program| !program.geometry())
+            {
                 continue;
             }
             if let Some(geometry) = batch.geometry() {
@@ -323,7 +328,7 @@ impl WgpuRenderer {
         for batch in batches {
             let snapshot = batch.state();
             if let Some(program) = snapshot.program.as_ref() {
-                self.prepare_program(program, &snapshot.depth);
+                self.prepare_program(program, &snapshot.depth, batch.topology());
             }
         }
 
@@ -381,8 +386,9 @@ impl WgpuRenderer {
             pass.draw(0..3, 0..1);
 
             // Two passes over the packets: scene geometry first, then the program
-            // packets. A program covers its shape with a full-screen placeholder and
-            // writes no depth, so it must blend over an already-populated depth buffer
+            // packets. A plain program covers its shape with a full-screen placeholder
+            // and writes no depth; a geometry program draws its own mesh under the
+            // packet's depth state. Both blend after an already-populated depth buffer
             // and colour target.
             for program_pass in [false, true] {
                 for (index, batch) in batches.iter().enumerate() {
@@ -392,7 +398,7 @@ impl WgpuRenderer {
                         continue;
                     }
                     if let Some(program) = snapshot.program.as_ref() {
-                        self.draw_program(&mut pass, program, snapshot, frame, 0, index as u32);
+                        self.draw_program(&mut pass, batch, program, 0, frame, 0, index as u32);
                         continue;
                     }
                     let Some(mesh) = self.mesh_cache.get(&(0, batch.mesh_id())) else {
@@ -429,34 +435,47 @@ impl WgpuRenderer {
 
     /// Create (on a cache miss) the pipeline and group 2 bind group for `program`.
     ///
-    /// A program always draws the placeholder `TriangleList`, whatever topology the
-    /// packet's own geometry declared.
-    fn prepare_program(&mut self, program: &ShaderProgram, depth: &DepthState) {
+    /// A plain program always draws the placeholder `TriangleList`, whatever topology
+    /// the packet's own geometry declared; a geometry program keeps the packet's
+    /// topology and draws the packet's mesh.
+    fn prepare_program(&mut self, program: &ShaderProgram, depth: &DepthState, topology: Topology) {
         self.programs.pipeline(
             &self.context.device,
             program,
             depth,
-            Topology::Triangles,
+            if program.geometry() {
+                topology
+            } else {
+                Topology::Triangles
+            },
         );
         self.programs
             .program_group(&self.context.device, &self.context.queue, program);
     }
 
-    /// Bind a program packet's pipeline and group 2, then draw the placeholder quad.
-    fn draw_program(
+    /// Bind a program packet's pipeline and group 2, then draw either the placeholder
+    /// quad (a plain program) or the packet's own cached mesh (a geometry program).
+    #[allow(clippy::too_many_arguments)]
+    fn draw_program<B: DrawBatch>(
         &mut self,
         pass: &mut wgpu::RenderPass<'_>,
+        batch: &B,
         program: &ShaderProgram,
-        snapshot: &StateSnapshot,
+        view: u32,
         frame: u64,
         frame_slot: u32,
         uniform_slot: u32,
     ) {
+        let snapshot = batch.state();
         let pipeline = self.programs.pipeline(
             &self.context.device,
             program,
             &snapshot.depth,
-            Topology::Triangles,
+            if program.geometry() {
+                batch.topology()
+            } else {
+                Topology::Triangles
+            },
         );
         pass.set_pipeline(pipeline);
         // wgpu requires every group in the pipeline layout to be bound, even the groups
@@ -473,12 +492,26 @@ impl WgpuRenderer {
                 .program_group(&self.context.device, &self.context.queue, program);
         trace::group2(frame, Some(program.hash()), frame_slot, uniform_slot, offset);
         pass.set_bind_group(2, group, &[offset]);
-        pass.set_vertex_buffer(0, self.programs.vertex_buffer().slice(..));
-        pass.set_index_buffer(
-            self.programs.index_buffer().slice(..),
-            wgpu::IndexFormat::Uint32,
-        );
-        pass.draw_indexed(0..self.programs.index_count(), 0, 0..1);
+        if program.geometry() {
+            // The packet's own mesh, uploaded by the pre-pass and keyed like a scene
+            // draw. A missing or stale generation draws nothing, as for a scene packet.
+            let Some(mesh) = self.mesh_cache.get(&(view, batch.mesh_id())) else {
+                return;
+            };
+            if mesh.generation != batch.generation() {
+                return;
+            }
+            pass.set_vertex_buffer(0, mesh.vertex_buffer.slice(..));
+            pass.set_index_buffer(mesh.index_buffer.slice(..), wgpu::IndexFormat::Uint32);
+            pass.draw_indexed(0..mesh.index_count, 0, 0..1);
+        } else {
+            pass.set_vertex_buffer(0, self.programs.vertex_buffer().slice(..));
+            pass.set_index_buffer(
+                self.programs.index_buffer().slice(..),
+                wgpu::IndexFormat::Uint32,
+            );
+            pass.draw_indexed(0..self.programs.index_count(), 0, 0..1);
+        }
     }
 
     /// Draw a frame of one or more [`ViewSpec`]s in one pass: the main view first
@@ -564,7 +597,7 @@ impl WgpuRenderer {
             for batch in &view.queue.packets {
                 let snapshot = batch.state();
                 if let Some(program) = snapshot.program.as_ref() {
-                    self.prepare_program(program, &snapshot.depth);
+                    self.prepare_program(program, &snapshot.depth, batch.topology());
                 }
             }
         }
@@ -629,7 +662,8 @@ impl WgpuRenderer {
                 pass.set_scissor_rect(x as u32, y as u32, w as u32, h as u32);
                 let base = slot;
                 // Scene geometry first, then the program packets, so a program blends
-                // over a populated depth buffer (it writes none).
+                // over a populated depth buffer. A plain program covers its shape with
+                // a full-screen placeholder; a geometry program draws its own mesh.
                 for program_pass in [false, true] {
                     for (index, batch) in view.queue.packets.iter().enumerate() {
                         let snapshot = batch.state();
@@ -641,8 +675,9 @@ impl WgpuRenderer {
                         if let Some(program) = snapshot.program.as_ref() {
                             self.draw_program(
                                 &mut pass,
+                                batch,
                                 program,
-                                snapshot,
+                                view_index,
                                 frame,
                                 view_index,
                                 uniform_slot,
@@ -907,8 +942,14 @@ impl WgpuRenderer {
     /// for the same `(view, mesh_id)`.
     fn upload_packets(&mut self, view: u32, packets: &[DrawPacket]) {
         for packet in packets {
-            // A program packet draws the placeholder, not its authored geometry.
-            if packet.state.program.is_some() {
+            // A plain program packet draws the placeholder, not its authored geometry;
+            // a geometry program draws its own mesh and must be uploaded.
+            if packet
+                .state
+                .program
+                .as_ref()
+                .is_some_and(|program| !program.geometry())
+            {
                 continue;
             }
             if let Some(geometry) = packet.geometry.as_ref() {

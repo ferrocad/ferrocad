@@ -52,10 +52,9 @@ use std::f64::consts::PI;
 
 use ferrocad_geom::SelectionRef;
 use ferrocad_graphics::Camera;
-use ferrocad_stage::gizmo::{ACTIVE_COLOR, INACTIVE_COLOR};
+use ferrocad_stage::gizmo::GizmoStyle;
 use ferrocad_stage::screen::{
-    HIT_SLOP, STROKE_PIXELS, camera_forward, point_segment_distance, project_device, push_ribbon,
-    scale_for,
+    HIT_SLOP, camera_forward, point_segment_distance, project_device, push_ribbon, scale_for,
 };
 use ferrocad_stage::{DrawMode, InteractionCommit, Manipulator, ShapeItem, Stage};
 use ferrocad_types::{Matrix4, Vector3};
@@ -161,6 +160,8 @@ pub struct DressUpScrubber {
     max: Option<f64>,
     hovered: bool,
     active: Option<DragState>,
+    /// The workspace appearance.
+    style: GizmoStyle,
     /// The camera view and value the cached stroke was built for.
     view: Option<Matrix4>,
     built: Option<f64>,
@@ -180,6 +181,8 @@ impl DressUpScrubber {
         edge: impl Into<String>,
         points: Vec<Vector3>,
     ) -> Self {
+        let style = GizmoStyle::default();
+        let ghost_alpha = style.ghost_alpha;
         Self {
             target_id,
             edge: edge.into(),
@@ -192,12 +195,15 @@ impl DressUpScrubber {
             max: None,
             hovered: false,
             active: None,
+            style,
             view: None,
             built: None,
             dirty: true,
             item: ShapeItem::new(DRESS_UP_PICK_ID)
                 .with_draw_mode(DrawMode::Shaded)
-                .with_selectable(false),
+                .with_selectable(false)
+                .with_ghost_surface()
+                .with_ghost_alpha(ghost_alpha),
         }
     }
 
@@ -323,11 +329,37 @@ impl DressUpScrubber {
 
     /// The current stroke colour: active while hovered or dragging, slate otherwise.
     fn stroke_color(&self) -> [f32; 4] {
-        if self.hovered || self.is_dragging() {
-            ACTIVE_COLOR
+        let token = if self.hovered || self.is_dragging() {
+            self.style.active
         } else {
-            INACTIVE_COLOR
+            self.style.inactive
+        };
+        [
+            token[0],
+            token[1],
+            token[2],
+            token[3] * self.style.opacity,
+        ]
+    }
+
+    /// Apply the workspace gizmo style. Returns whether the style changed.
+    ///
+    /// The ribbon width is baked into the cached geometry, so a change marks the arc
+    /// dirty and the next [`update`](Self::update) rebuilds it. The default style
+    /// reproduces the legacy 1.5 px arc exactly.
+    pub fn set_style(&mut self, style: &GizmoStyle) -> bool {
+        if self.style == *style {
+            return false;
         }
+        self.style = style.clone();
+        self.dirty = true;
+        self.apply_color();
+        true
+    }
+
+    /// The workspace gizmo style.
+    pub fn style(&self) -> &GizmoStyle {
+        &self.style
     }
 
     /// Recolour the cached item without rebuilding its geometry.
@@ -335,6 +367,7 @@ impl DressUpScrubber {
         let stroke = self.stroke_color();
         self.item.set_surface_color(stroke);
         self.item.set_edge_color(stroke);
+        self.item.set_ghost_alpha(self.style.ghost_alpha);
     }
 
     /// The world point the arc is centred on: the midpoint of the edge's middle segment.
@@ -424,7 +457,7 @@ impl DressUpScrubber {
             return;
         };
         let forward = camera_forward(camera);
-        let half = STROKE_PIXELS * 0.5 * scale_for(camera, anchor, 1.0);
+        let half = self.style.width * 0.5 * scale_for(camera, anchor, 1.0);
         let mut positions = Vec::new();
         let mut triangles = Vec::new();
 
@@ -626,7 +659,7 @@ impl DressUpChange {
 }
 
 impl Manipulator for DressUpScrubber {
-    fn id(&self) -> &'static str {
+    fn id(&self) -> &str {
         DRESS_UP_ID
     }
 
@@ -660,6 +693,10 @@ impl Manipulator for DressUpScrubber {
 
     fn set_hovered(&mut self, hovered: bool) -> bool {
         DressUpScrubber::set_hovered(self, hovered)
+    }
+
+    fn set_style(&mut self, style: &GizmoStyle) -> bool {
+        DressUpScrubber::set_style(self, style)
     }
 
     fn refresh(&mut self, camera: &Camera) -> bool {
@@ -951,9 +988,54 @@ mod tests {
         assert!(scrubber.set_hovered(true));
         assert!(scrubber.hovered());
         assert!(!scrubber.set_hovered(true), "unchanged is a no-op");
-        assert_eq!(scrubber.items()[0].surface_color(), ACTIVE_COLOR);
+        let idle = GizmoStyle::default().inactive;
+        let active = GizmoStyle::default().active;
+        assert_eq!(scrubber.items()[0].surface_color(), active);
         assert!(scrubber.set_hovered(false));
-        assert_eq!(scrubber.items()[0].surface_color(), INACTIVE_COLOR);
+        assert_eq!(scrubber.items()[0].surface_color(), idle);
+    }
+
+    #[test]
+    fn a_custom_style_tints_and_widens_the_arc() {
+        let camera = camera(5.0);
+        let mut scrubber = scrubber(DressUpMode::Fillet);
+        assert!(scrubber.update(&camera));
+
+        let mut style = GizmoStyle::default();
+        style.inactive = [0.0, 1.0, 0.0, 0.8];
+        style.active = [1.0, 0.0, 0.0, 1.0];
+        style.opacity = 0.5;
+        style.width = 4.0;
+        style.ghost_alpha = 0.6;
+        assert!(scrubber.set_style(&style));
+        assert_eq!(
+            scrubber.items()[0].ghost_alpha(),
+            0.6,
+            "the ghost alpha reaches the arc immediately"
+        );
+        assert!(scrubber.update(&camera), "the style forces a rebuild");
+        assert!(!scrubber.set_style(&style), "the same style is a no-op");
+
+        assert_eq!(scrubber.items()[0].surface_color(), [0.0, 1.0, 0.0, 0.4]);
+        let positions = scrubber.items()[0].positions();
+        let point = |index: usize| {
+            Vector3::new(
+                f64::from(positions[index][0]),
+                f64::from(positions[index][1]),
+                f64::from(positions[index][2]),
+            )
+        };
+        let width = point(0).sub(&point(3)).length();
+        let anchor = scrubber.anchor().expect("an anchor");
+        let expected = style.width * scale_for(&camera, anchor, 1.0);
+        assert!(
+            (width - expected).abs() < 1e-6,
+            "a 4 px arc: {width} vs {expected}"
+        );
+
+        assert!(scrubber.set_hovered(true));
+        assert_eq!(scrubber.items()[0].surface_color(), [1.0, 0.0, 0.0, 0.5]);
+        assert_eq!(scrubber.style(), &style);
     }
 
     #[test]

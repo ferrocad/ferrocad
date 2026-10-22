@@ -567,5 +567,117 @@ class ModProviderTests(unittest.TestCase):
         )
 
 
+class ProviderSkinTests(unittest.TestCase):
+    """``registerProvider(skin=...)`` and ``providerSkin``: the shader channel.
+
+    A skin is a material program, not a setting: it reaches the shell through
+    :func:`providerSkin` and never appears in the mods dialog's manifest.
+    """
+
+    FEATURE = "skinned"
+    WGSL = "@fragment fn fs() -> @location(0) vec4<f32> { return vec4<f32>(1.0); }"
+
+    def setUp(self):
+        self._features = set()
+
+    def tearDown(self):
+        for feature in self._features:
+            for provider in FerroCADGui.providers(feature):
+                FerroCADGui.unregisterProvider(feature, provider["backend"])
+        reset_provider_state()
+
+    def register(self, backend, skin=None, priority=0):
+        self._features.add(self.FEATURE)
+        return FerroCADGui.registerProvider(
+            self.FEATURE, backend, backend.title(), priority=priority, skin=skin
+        )
+
+    def test_a_supplied_skin_is_stored_per_backend_and_asked_for_by_the_active_one(self):
+        self.register("a", self.WGSL)
+        self.assertEqual(FerroCADGui.providerSkin(self.FEATURE, "a"), self.WGSL)
+        self.assertEqual(FerroCADGui.providerSkin(self.FEATURE), self.WGSL)
+        self.assertIn("providerSkin", FerroCADGui.__all__)
+
+        # The stored source is trimmed, so a heredoc-style literal is fine.
+        self.register("b", "\n  " + self.WGSL + "  \n", priority=5)
+        self.assertEqual(FerroCADGui.providerSkin(self.FEATURE, "b"), self.WGSL)
+        self.assertEqual(FerroCADGui.providerSkin(self.FEATURE), self.WGSL)
+
+    def test_no_skin_and_unknown_names_answer_none_without_raising(self):
+        self.register("a")
+        self.assertIsNone(FerroCADGui.providerSkin(self.FEATURE, "a"))
+        self.assertIsNone(FerroCADGui.providerSkin(self.FEATURE))
+        self.assertIsNone(FerroCADGui.providerSkin(self.FEATURE, "missing"))
+        self.assertIsNone(FerroCADGui.providerSkin("nothing-here"))
+        self.assertIsNone(FerroCADGui.providerSkin("nothing-here", "a"))
+
+    def test_a_bad_skin_is_a_programmer_error_and_leaves_the_record_intact(self):
+        self.register("a", self.WGSL)
+
+        for bad in (42, b"", ["wgsl"]):
+            with self.subTest(skin=bad):
+                with self.assertRaises(TypeError):
+                    self.register("a", bad)
+                self.assertEqual(FerroCADGui.providerSkin(self.FEATURE, "a"), self.WGSL)
+
+        for bad in ("", "   \n\t"):
+            with self.subTest(skin=bad):
+                with self.assertRaises(ValueError):
+                    self.register("a", bad)
+                self.assertEqual(
+                    FerroCADGui.providerSkin(self.FEATURE, "a"),
+                    self.WGSL,
+                    "a rejected re-registration keeps the old source",
+                )
+
+    def test_the_manifest_does_not_carry_the_skin(self):
+        manifest = self.register("a", self.WGSL)
+        self.assertEqual(
+            set(manifest),
+            {"feature", "backend", "label", "command", "priority", "active"},
+        )
+        self.assertNotIn("skin", manifest)
+        self.assertNotIn("skin", FerroCADGui.providers(self.FEATURE)[0])
+
+    def test_reregistering_replaces_the_source_and_omitting_it_clears_it(self):
+        self.register("a", self.WGSL)
+        self.register("a", "// reloaded")
+        self.assertEqual(FerroCADGui.providerSkin(self.FEATURE, "a"), "// reloaded")
+
+        self.register("a")
+        self.assertIsNone(
+            FerroCADGui.providerSkin(self.FEATURE, "a"),
+            "a reload without a skin must not keep a stale source",
+        )
+
+    def test_switching_the_active_backend_switches_the_source(self):
+        self.register("skinned", self.WGSL, priority=0)
+        self.register("plain", priority=10)
+        self.assertEqual(FerroCADGui.activeProvider(self.FEATURE), "plain")
+        self.assertIsNone(FerroCADGui.providerSkin(self.FEATURE))
+        self.assertEqual(FerroCADGui.providerSkin(self.FEATURE, "skinned"), self.WGSL)
+
+        FerroCADGui.setActiveProvider(self.FEATURE, "skinned")
+        self.assertEqual(FerroCADGui.providerSkin(self.FEATURE), self.WGSL)
+        self.assertIsNone(FerroCADGui.providerSkin(self.FEATURE, "plain"))
+
+        FerroCADGui.setActiveProvider(self.FEATURE, "plain")
+        self.assertIsNone(FerroCADGui.providerSkin(self.FEATURE))
+        self.assertEqual(FerroCADGui.providerSkin(self.FEATURE, "skinned"), self.WGSL)
+
+    def test_the_shell_bridge_round_trips_and_defaults_to_null(self):
+        self.register("a", self.WGSL)
+        payload = json.dumps({"feature": self.FEATURE})
+        self.assertEqual(
+            json.loads(ferrocad_shell.provider_skin(payload)), {"source": self.WGSL}
+        )
+        self.assertEqual(
+            json.loads(ferrocad_shell.provider_skin(json.dumps({"feature": "missing"}))),
+            {"source": None},
+        )
+        self.assertEqual(json.loads(ferrocad_shell.provider_skin("")), {"source": None})
+        self.assertEqual(json.loads(ferrocad_shell.provider_skin("{}")), {"source": None})
+
+
 if __name__ == "__main__":
     unittest.main()

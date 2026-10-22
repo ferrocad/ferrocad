@@ -10,6 +10,7 @@ from __future__ import annotations
 import contextlib
 import io
 import json
+import sys
 import traceback
 
 import FreeCAD
@@ -487,6 +488,53 @@ def interaction(
     return _json(result)
 
 
+def manipulator_specs(payload_json: str) -> str:
+    """The handles the mods declare for the shell's current selection, as JSON.
+
+    ``payload_json`` is ``{"object": "Slab", "element": "Face3"}``. A missing key
+    means ``""`` for the object and ``None`` for the element. The answer is
+    ``{"specs": [...]}`` with the declarations in provider order.
+
+    The selection path must not break because of a mod: a provider that raises is
+    reported and skipped by ``FerroCAD.manipulator_specs``, and a spec that does
+    not serialise is reported here and dropped while its siblings survive.
+    """
+    try:
+        payload = json.loads(payload_json)
+    except Exception:
+        payload = {}
+    if not isinstance(payload, dict):
+        payload = {}
+
+    object_name = payload.get("object")
+    if object_name is None:
+        object_name = ""
+    element = payload.get("element")
+
+    try:
+        specs = FerroCAD.manipulator_specs(object_name, element)
+    except Exception as exc:  # noqa: BLE001 - selection must never fail here
+        print(
+            "ferrocad_shell: manipulator specs failed: %s" % exc,
+            file=sys.stderr,
+        )
+        specs = []
+
+    serialisable = []
+    for spec in specs:
+        try:
+            json.dumps(spec)
+        except (TypeError, ValueError) as exc:
+            print(
+                "ferrocad_shell: dropping a non-serialisable manipulator spec: %s"
+                % exc,
+                file=sys.stderr,
+            )
+            continue
+        serialisable.append(spec)
+    return _json({"specs": serialisable})
+
+
 def commands() -> str:
     """The registered workbench commands, with resources and live state, as JSON.
 
@@ -848,6 +896,29 @@ def provider_features() -> str:
             for feature, providers in features.items()
         ]
     )
+
+
+def provider_skin(payload_json: str) -> str:
+    """One feature's provider-supplied WGSL source, for the shell to build.
+
+    The payload is ``{"feature": "gizmo"}``. This is how a provider's material
+    program reaches the shell: :func:`FerroCADGui.providerSkin` answers with the
+    **active** backend's source, so a provider switch makes the shell ask again
+    instead of drawing the outgoing skin. The result is ``{"source": "…"}``, or
+    ``{"source": null}`` when no skin was supplied and the host should draw its
+    native material.
+
+    An empty or malformed payload means "no feature" and answers
+    ``{"source": null}``: the shell calls this across the interpreter boundary
+    and has no exception path for it.
+    """
+    try:
+        payload = json.loads(payload_json)
+        feature = str(payload.get("feature") or "")
+    except Exception:  # noqa: BLE001 - a bad payload means "no feature"
+        feature = ""
+    source = FerroCADGui.providerSkin(feature) if feature else None
+    return _json({"source": source})
 
 
 def _axis_view_request():

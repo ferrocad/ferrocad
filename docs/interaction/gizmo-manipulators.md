@@ -485,3 +485,266 @@ and `ferrocad_toy`'s `the_toy_workbench_creates_represents_manipulates_and_recor
 - No depth buffer for the triad: it draws as an overlay, and pass-through is handled by
   the analytic hit test rather than by occluding geometry.
 - No wide-line pipeline in T1–T4; use the ribbon path until a renderer slice adds one.
+
+## 17. G1 as built (2026-10-22) — the workspace gizmo style
+
+The gizmo is now a **capability** with a declarative settings schema, like the grid and
+the axis cross. G1 is the Rust half: it makes the stored style drive the native handles.
+
+### The contract
+
+A command or mod returns `{"view": {"gizmo": {…}}}`; every field is optional and an
+omitted field keeps its current value:
+
+| Key | Type | Applies |
+| --- | --- | --- |
+| `enabled` | bool | whether the handles draw and pick at all |
+| `backend` | string | a **provider claim**: which backend owns the visuals |
+| `active_color` / `inactive_color` | `#rgb`/`#rrggbb` | the hovered and idle handle ink |
+| `size` | f64 px | the triad's screen-invariant radius |
+| `width` | f64 px | the stem/ribbon stroke width |
+| `opacity` | f32 | a multiplier over every handle's alpha, clamped `0..=1` |
+| `ghost_alpha` | f32 | the occluded (`DepthMode::Greater`) pass, clamped `0..=1` |
+| `ring_snap_deg` | f64 | the rotation detent, clamped `0..=180`; `0` is continuous |
+| `show_readout` | bool | the numeric pills |
+
+The hex spellings are **RGB-only**: the role's token alpha is preserved (the idle
+inactive token keeps its `0.9`). That is why re-sending the Python defaults
+(`#38bdf8` / `#94a3b8`) for a fresh state is a no-op rather than a brightening.
+
+`GizmoStyle` (`ferrocad_stage::gizmo`) is the single value; `ViewState.gizmo` holds it,
+and `Viewport::set_gizmo_style` forwards it to every hosted manipulator and to the
+`TransformGizmo` — including objects hosted *after* the style was set, so a selection
+armed later adopts the current workspace look without a re-send.
+
+### Style vs claim
+
+`enabled`, the colours, the size, the widths, the alphas, the detent and the readout
+are **style**: the host owns them and the viewport enforces them. `backend` is a
+**claim**, like `view.axis.overlay`: it names the backend that says it draws the gizmo.
+
+G1 has exactly one implementation — the native manipulators and `TransformGizmo` in
+`ferrocad_viewport`, which also own hit-testing and commit routing. So the shell stores
+a foreign `backend` (a later slice can honour it) but reports
+`gizmo backend <id> has no implementation yet (native handles stay active)`. A
+visual-only provider must never become the hit-test or commit authority; the
+shader-skin slice (G2) replaces the visuals while the native manipulator stays the
+event owner.
+
+### Host gating
+
+The viewport, not the shell, owns `enabled`. A disabled style:
+
+- emits no manipulator or gizmo packets (the objects stay hosted);
+- skips manipulator/gizmo hover, `gizmo_handle_at`, button handling and drag servicing,
+  so a click or hover falls through to the scene beneath;
+- stops servicing an in-flight drag without dropping its state, so re-enabling restores
+  the handles and a mid-drag disable can never commit.
+
+Because the objects stay hosted, the shell arms the native manipulator for a selection
+even while the style is disabled; re-enabling from the settings card then needs no
+re-selection.
+
+### What drives it
+
+`mods/GizmoOverlay` registers the `gizmo`/`ferrocad` provider and `FerroCAD.Gizmo`
+writes the nine stored values, returning `FerroCAD.Gizmo.apply()` as the view request.
+See [`../tasks/settings-model.md`](../tasks/settings-model.md) §S4c.
+
+Covered by `ferrocad_stage`'s `a_style_ghost_alpha_reaches_every_handle` and
+`a_custom_ghost_alpha_scales_both_ghost_packets`, `ferrocad_viewport`'s
+`set_gizmo_style_reaches_a_hosted_manipulator_and_gizmo`,
+`a_disabled_style_hides_and_unpicks_the_overlays` and
+`hiding_the_readout_suppresses_the_pill_text`, `ferrocad_gpui`'s
+`every_gizmo_visual_field_applies` / `a_bad_gizmo_field_is_rejected_atomically` /
+`a_gizmo_backend_claim_is_reported_only_when_it_changes`, and
+`tests/test_gizmo_settings.py`.
+
+### G1 follow-ups
+
+- `size`/`width`/`ring_snap_deg` are baked into cached geometry, so a change rebuilds on
+  the next `update`; the ghost alpha and the colours apply immediately.
+
+## 18. G2 as built (2026-10-22) — the shader skin
+
+The `ferrocad-shader` backend draws the **same geometry** with an authored shader —
+the transform gizmo's handles and the workbench manipulators (the fillet arc, a height
+grip) alike. It is a skin in the material sense: geometry, hit-testing, drags, commits
+and the readout stay native; only the fragment stage changes.
+
+### A geometry program (the renderer contract)
+
+Until this slice the program ABI was placeholder-only: a packet carrying a program drew a
+4-vertex full-screen quad and the shader derived everything from the sign of each corner.
+That is right for the grid and axis overlays, which are screen-space effects, but it
+cannot skin a mesh.
+
+`ShaderProgram::with_geometry()` marks a program that draws **its own packet's mesh**:
+
+- the pipeline is built with the scene vertex layout
+  (`position`/`normal`/`uv`/`sub-element`/`colour`) instead of the placeholder layout,
+  and with the packet's topology (so `LineList` rims work);
+- the renderer uploads the packet's geometry instead of skipping it, and
+  `draw_program` binds the cached mesh and draws its indexed range;
+- `ProgramKey` gains the mode, because the two need different vertex state; the mode is
+  part of the program fingerprint only when set, so every existing program keeps its
+  cache keys byte-for-byte.
+
+A plain program (the default, used by `mods/GridOverlayCoin` and
+`mods/AxisOverlayCoin`) behaves exactly as before. Program packets still never picked
+and still drawn after the scene, so they blend over a populated depth buffer.
+
+### The skin
+
+`mods/GizmoOverlayShader/Resources/gizmo_skin.wgsl` is a **mod resource**: the mod reads
+it at import and hands the source to the registry
+(`registerProvider(..., skin=<source>)`). Nothing of it is compiled into the app. The
+shader reads the scene `Globals` block (group 0) and the `Frame` block (group 2) and
+nothing else — no new uniform, no per-frame buffer:
+
+- **Ink is per packet.** The native gizmo already bakes the hovered handle's colour into
+  its item (`paint_for`), so the skin inherits active/inactive, the glass planes'
+  10 %/28 % and the occluded ghost pass's 35 % by reading `globals.color.a` and leaving
+  the alpha untouched.
+- **Shading** is a half-Lambert headlight plus a grazing-angle rim; a line packet
+  (degenerate normal) takes a flat fallback instead of producing NaN.
+- **No text.** The readout and the labels stay native gpui overlays.
+
+The viewport never sees a path or a mod: the shell asks the registry for the **active**
+`gizmo` provider's skin (`ferrocad_shell.provider_skin` →
+`FerroCADGui.providerSkin("gizmo")`) and passes the source to
+`InventorViewport::set_gizmo_skin`, which builds a geometry `ShaderProgram`. Both
+`rebuild_gizmo_queue` and `rebuild_manipulator_queue` then re-materialise their items
+whenever a skin program is present; otherwise they emit the native items unchanged, so a
+workspace-wide skin cannot leave one overlay looking native. `enabled` still wins over
+both. Because the source is asked for per switch, switching back to the native provider
+(the one that supplies no skin) clears it — a stale skin cannot survive a provider
+change.
+
+### Provider and claim
+
+`mods/GizmoOverlayShader` registers `gizmo` / `ferrocad-shader`
+(`"FerroCAD (shader)"`, priority 0) with the same schema and store, so the provider rows
+in the header popovers and Dev Tools → Providers can switch skins without touching a
+setting. Hosting is **data-driven**, not id-driven: the native id is hosted by the build,
+and any other id is hosted by the skin its provider supplies. So the shell reports
+`gizmo backend <id> supplied no skin (native handles stay active)` when a backend claims
+visuals it did not bring. Switching the skin can never change behaviour: the analytic hit
+test, drag servicing and the commit route all belong to `TransformGizmo`.
+
+### Verification
+
+`crates/ferrocad_gpui/examples/gizmo_skin_probe.rs` renders two offscreen frames and
+reads the centre pixel back. It reads the mod's `Resources/gizmo_skin.wgsl` at runtime,
+so the probe exercises the same source the mod supplies. On the software Vulkan adapter
+(lavapipe) the geometry program drew its own triangle (`[205, 55, 55, 255]` from a `0.8`
+red ink) and the plain program still covered the frame with the placeholder
+(`[0, 255, 0, 255]`). `ferrocad_wgpu`'s naga tests validate that same mod file (the
+workspace `mods/` tree is required to run them). The unit suites cover the key split, the
+queue switch, the fallbacks and the native interaction guarantees; the *look* of the skin
+is the probe plus a live run.
+
+### Limits
+
+- **G3** is what remains: a declarative manipulator ABI for Python-defined handles
+  (`Manipulator::id()` is `&'static str` today).
+- A supplied skin is **material data**, not behaviour. The app owns the geometry, the
+  hit test and the commits, and the fixed ABI owns the built-in blocks, so a skin cannot
+  add handles or change what a drag does. Adding geometry is G3's job (see §19).
+- A skin is read at registration, so editing the WGSL needs a mod reload (the mod caches
+  the source; re-registering re-reads it). An unreadable file registers without a skin
+  and the host keeps the native material.
+- The skin is a single material for every handle kind. Per-handle shader behaviour would
+  need per-packet parameters, which the fixed ABI has no room for by design.
+
+## 19. G3a as built (2026-10-22) — mod-declared handles
+
+A mod can now add a handle without writing Rust: it declares the mesh, the optional
+shader, the drag axis and the commit, and the stage hosts it as an ordinary
+`Manipulator`. This is the geometry half that G2 deliberately left out.
+
+### The route
+
+```text
+selection armed
+  └─ FerroCAD.register_manipulator_provider(provider)   (called with object, element)
+       └─ spec dicts            (the wire form below)
+            └─ ferrocad_shell.manipulator_specs → ferrocad_gpui::manipulators
+                 └─ HandleSpec → DeclarativeHandle → DeclarativeManipulator
+                      └─ viewport (after the compiled manipulator)
+                           └─ drag → InteractionCommit(id, action, element, [value])
+                                └─ FerroCAD.register_interaction_provider
+```
+
+The **commit half is unchanged**: a declared handle commits through the same
+`interaction` hook a Rust workbench uses, so a mod needs no second document path. The
+only trait change is ownership: `Manipulator::id()` is `&str` and
+`InteractionCommit.manipulator` is a `String`, because a declared id comes from data.
+
+### The wire form
+
+```json
+{
+  "id": "toy.bolt",
+  "action": "bolt",
+  "element": "Face3",
+  "frame": {"origin": [0, 0, 10], "x": [1, 0, 0], "y": [0, 1, 0], "z": [0, 0, 1]},
+  "axis": "z",
+  "value": 20.0, "min": 0.0, "max": 60.0, "step": 1.0,
+  "size": 36.0, "decimals": 2,
+  "shape": {
+    "positions": [[0, 0, 0], [0.5, 0, 0], [-0.5, 0, 0], [0, 0, 1]],
+    "triangles": [0, 1, 3, 0, 3, 2],
+    "edges": [0, 1, 1, 3, 3, 2, 2, 0]
+  },
+  "program": "<optional geometry WGSL>",
+  "color": "#38bdf8",
+  "readout": "H {value} mm"
+}
+```
+
+Defaults: `action` = `id`; `element` absent; `target` = the selected entity (a spec may
+name another); frame = identity at the origin; `axis` = `"z"` (`"x"`/`"y"`/`"z"`,
+case-insensitive); `value` = 0; unbounded travel; continuous drag; `size` = 40 px;
+`decimals` = 2; no program; the workspace style's ink; the bare number as the readout.
+
+Validation is atomic and names the field (`handle "toy.bolt": size must be > 0, got 0`):
+non-empty id, non-empty positions, normals matching positions when present, in-range
+indices, finite numbers, `size > 0`, `decimals <= 6`, `step >= 0`, `min <= max`, a
+parseable colour, and basis vectors normalised (a zero-length one is an error). An empty
+`program` means no skin. Unknown keys are ignored so a spec can carry its own metadata.
+
+### Hosting rules
+
+- **Geometry** is authored in unit space and scaled to `size` device pixels at the
+  frame, so it stays constant on screen: `world = origin + axis·value + px·size·(x·X +
+  y·Y + z·Z)`, with `px = scale_for(camera, origin, 1.0)`. The `{value}` offset is what
+  moves the handle; there is no implicit stem, so the mesh is the grab target.
+- **Hit** is the projected bounding box of the built mesh, padded by `HIT_SLOP`. It is
+  deliberately coarse; an analytic test per handle kind is G3b.
+- **Drag** projects the frame origin and one world unit along the axis, so the value
+  follows the pointer one-for-one on screen (`value = press + dot(δ, û) / pixels_per_world`),
+  then snaps to `step` and clamps to `min`/`max`. An axis pointing at the camera has no
+  screen direction and does not move.
+- **Ink** is `color` when given, else the workspace style's `active`/`inactive` tokens;
+  the style's `opacity` and `ghost_alpha` always apply, and `enabled`/`show_readout` are
+  the viewport's gates, as for native handles. The handle's own `size` wins over
+  `GizmoStyle::size`, which belongs to the native triad.
+- **Ordering**: the compiled manipulator is armed first, the declared handles after, and
+  the viewport picks the most recently added one first. Nothing survives a selection
+  change. A bad spec is logged and skipped; it never removes the compiled handle.
+
+### What is still open (G3b)
+
+- Handle **kinds**: axis only. Rings (angular travel) and plane drags reuse the same
+  solver vocabulary but need their own hit and value mapping.
+- **Analytic hit** per kind instead of the projected bounding box.
+- Reusing `ferrocad.stage.ShapeItem` (or a Part shape) as the source instead of the JSON
+  mesh: the mesh payload is the same one `FerroCAD.display_mesh` already carries, so the
+  natural next step is a mod-side helper that turns a shape into the spec's arrays.
+- No new ABI is needed for **compute shaders**: a declared handle is geometry plus a
+  material, and a compute pass would only pay off for GPU-side deformation or picking.
+
+Covered by `ferrocad_stage`'s declarative tests (defaults, world bake, hit, drag, snap,
+clamp, degenerate axis, commit, readout, style), `ferrocad_gpui`'s spec-validation tests,
+and `tests/test_manipulator_specs.py` (registry, bridge, ordering, failure isolation).

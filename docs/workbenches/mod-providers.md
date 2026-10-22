@@ -27,11 +27,22 @@ FerroCADGui.registerProvider(
 ```
 
 `registerProvider(feature, backend, label, command=None, priority=0,
-activate=None, deactivate=None)` records the manifest. `command` is the command
+activate=None, deactivate=None, refresh=None, settings=None, skin=None)` records the
+manifest. `command` is the command
 id the backend owns (`None` when it has none); `activate` and `deactivate` are
 optional zero-argument callbacks. Registering the same `(feature, backend)` again
 replaces the record — a mod reload is safe and does not move the provider in the
 registration order.
+
+`settings` is the optional row schema the backend advertises (see
+[`../tasks/settings-model.md`](../tasks/settings-model.md)); `skin` is the optional
+**material program** a backend supplies for a capability that hosts one. Today that is
+the manipulator gizmo: the backend hands over the **WGSL source text** (a mod usually
+reads it from its own `Resources/`), and the host compiles and draws it while that
+backend is active. A supplied skin is data, not behaviour — it cannot add handles or
+change what a drag does— so hosting it is safe; the host asks for the *active*
+backend's source, so switching back to a backend that supplies none restores the native
+look. Neither `settings` nor `skin` appears in the manifest `providers()` returns.
 
 Registration **records**; it does not run `activate`. That happens on the first
 switch, or when the mod's own command applies its state. Until then the declared

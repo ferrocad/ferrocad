@@ -27,6 +27,8 @@ __pycache__/
 !/mods/GridOverlayCoin/
 !/mods/AxisOverlay/
 !/mods/AxisOverlayCoin/
+!/mods/GizmoOverlay/
+!/mods/GizmoOverlayShader/
 
 # Publish staging: transient copies of the workspace payload beside the app crate
 # so `cargo publish` (with the crate's `include` allowlist) carries them. Removed

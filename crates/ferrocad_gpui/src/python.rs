@@ -389,6 +389,27 @@ pub fn stage_meshes() -> Result<Vec<crate::display::StageMesh>, String> {
     call_json("stage_meshes", None)
 }
 
+/// The declarative handles the mods declare for a selection.
+///
+/// The values are kept raw so one malformed spec cannot make its siblings vanish;
+/// the caller converts each with [`crate::manipulators::handle_from_value`] and
+/// reports the ones that fail. The payload carries the selected object's name and
+/// its first sub-element (the shell's selection vocabulary).
+pub fn manipulator_specs(
+    object: &str,
+    element: Option<&str>,
+) -> Result<Vec<serde_json::Value>, String> {
+    #[derive(Deserialize)]
+    struct Envelope {
+        #[serde(default)]
+        specs: Vec<serde_json::Value>,
+    }
+
+    let payload = serde_json::json!({ "object": object, "element": element }).to_string();
+    let envelope: Envelope = call_json("manipulator_specs", Some(&payload))?;
+    Ok(envelope.specs)
+}
+
 /// Apply a manipulator commit to the document through the app script's `interaction`
 /// hook.
 ///
@@ -409,7 +430,7 @@ pub fn apply_interaction(
             .map_err(|e| e.to_string())?
             .call1((
                 object,
-                commit.manipulator,
+                commit.manipulator.as_str(),
                 commit.action.as_str(),
                 element,
                 values,
@@ -491,6 +512,24 @@ pub fn set_provider(
 ) -> Result<crate::commands::CommandOutcome, String> {
     let payload = serde_json::json!({"feature": feature, "backend": backend}).to_string();
     call_json("set_provider", Some(&payload))
+}
+
+/// The WGSL skin the active provider of `feature` supplies, if any.
+///
+/// The shader lives in the mod, not in the app: the registry is the only channel.
+/// It answers for the **active** backend, so a provider switch can never leave a
+/// stale skin behind in the shell.
+#[derive(Debug, Clone, Deserialize)]
+pub struct ProviderSkin {
+    /// The source text, or `None` when the active backend supplies no skin.
+    pub source: Option<String>,
+}
+
+/// The WGSL source the active provider of `feature` supplies, or `None`.
+pub fn provider_skin(feature: &str) -> Result<Option<String>, String> {
+    let payload = serde_json::json!({ "feature": feature }).to_string();
+    let skin: ProviderSkin = call_json("provider_skin", Some(&payload))?;
+    Ok(skin.source)
 }
 
 /// Accept an open dialog: one JSON payload (the token and the typed values).

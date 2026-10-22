@@ -12,6 +12,13 @@ Only the modules needed for *imports* are aliased. Qt5-only names (for example
 
 Missing Qt modules are skipped rather than fatal: ``QtSvg`` is not installed on
 every system, and its absence must not break ``import PySide.QtCore``.
+
+**Resources.** A Qt resource path (``:/ui/preferences-draft.ui``) normally needs
+a compiled ``.rcc``. FerroCAD ships mods as loose files, so ``QtCore.QFile`` is
+replaced (in place, preserving module identity) with a subclass that serves
+``:/`` paths from a mod's ``Resources/`` directory and delegates every other
+path to Qt. That is what lets upstream workbenches parse their ``.ui``
+defaults without pyside-rcc; it is a compatibility shim, not a Qt reimplementation.
 """
 
 from __future__ import annotations
@@ -42,7 +49,104 @@ def _install_aliases():
         _INSTALLED.append(name)
 
 
+# -- resource paths -------------------------------------------------------
+#: Absolute path -> bytes, or None when no mod ships the resource. Mod trees are
+#: small and `_get_param_dictionary` reads ~16 files at import, so a cache is
+#: enough; a miss is cached too.
+_RESOURCE_CACHE = {}
+
+
+def _resource_bytes(relative):
+    """Bytes for a ``:/<relative>`` resource, from a mod's ``Resources/`` dir."""
+    import os
+
+    if relative in _RESOURCE_CACHE:
+        return _RESOURCE_CACHE[relative]
+
+    found = None
+    roots = [entry for entry in sys.path if entry and os.path.isdir(entry)]
+    # `<root>/Resources/<rel>` is a mod directory on the path (the conformance
+    # harness adds `src/Mod/Draft`); `<root>/<Mod>/Resources/<rel>` is a mods
+    # directory (the app adds `mods/`).
+    for root in roots:
+        candidate = os.path.join(root, "Resources", relative)
+        if os.path.isfile(candidate):
+            found = candidate
+            break
+    if found is None:
+        for root in roots:
+            try:
+                children = sorted(os.listdir(root))
+            except OSError:
+                continue
+            for child in children:
+                candidate = os.path.join(root, child, "Resources", relative)
+                if os.path.isfile(candidate):
+                    found = candidate
+                    break
+            if found is not None:
+                break
+
+    data = None
+    if found is not None:
+        with open(found, "rb") as handle:
+            data = handle.read()
+    _RESOURCE_CACHE[relative] = data
+    return data
+
+
+class _ReadAll:
+    """The tiny slice of ``QByteArray`` that ``readAll().data().decode()`` uses."""
+
+    def __init__(self, data):
+        self._data = data
+
+    def data(self):
+        return self._data
+
+    def __len__(self):
+        return len(self._data)
+
+
+def _install_resource_qfile(qtcore):
+    """Let ``QFile(':/…')`` read a mod's loose ``Resources/`` files."""
+    base = qtcore.QFile
+
+    class ResourceQFile(base):
+        """``QFile`` that serves ``:/`` paths from the mod tree."""
+
+        def __init__(self, path=""):
+            super().__init__(path)
+            self._resource = None
+            text = str(path)
+            if text.startswith(":/"):
+                self._resource = _resource_bytes(text[2:])
+
+        def open(self, mode):
+            if self._resource is not None:
+                return True
+            return super().open(mode)
+
+        def readAll(self):
+            if self._resource is not None:
+                return _ReadAll(self._resource)
+            return super().readAll()
+
+        def close(self):
+            if self._resource is not None:
+                return
+            super().close()
+
+    # In place, so `PySide.QtCore is PySide6.QtCore` stays true. Only `:/`
+    # paths change behaviour; every other path reaches Qt untouched.
+    qtcore.QFile = ResourceQFile
+
+
 _install_aliases()
+
+_qtcore_module = sys.modules.get(f"{__name__}.QtCore")
+if _qtcore_module is not None:
+    _install_resource_qfile(_qtcore_module)
 
 
 def _translate_noop(context, text):

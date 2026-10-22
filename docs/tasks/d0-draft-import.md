@@ -116,12 +116,11 @@ DRAFT_FILES = ["test_base", "test_grid_settings", "test_pivy",
 
 ## Acceptance
 
-- [x] With `GuiUp == 0`, `from draftutils import params` succeeds.
-  `params.get_param("textheight")` returns **`None`** — the preference `.ui` files are
-  only reachable through the compiled `:/ui/...` resource bundle, which the D0.3
-  alias does not provide. Exact output:
-  `draftutils.params.get_param: Unable to find 'textheight' in 'Mod/Draft'`.
-  No `--draft` file depends on it. See the D0.3 decision in the landing record.
+- [x] With `GuiUp == 0`, `from draftutils import params` succeeds and
+  `params.get_param("textheight")` returns **3.5**.
+  The preference `.ui` files are read through `QtCore.QFile`; the `PySide` shim now
+  serves `:/ui/…` from the mod's loose `Resources/` directory (2026-10-22), so
+  `PARAM_DICT` has 160 entries under `Mod/Draft` instead of none.
 - [x] `import draftobjects.rectangle` succeeds (with `src/Mod/Draft` and `src/Ext` on
   the path).
 - [x] The 14 modules in the probe table import (TODO-21 §3): `draftutils.{utils,
@@ -195,11 +194,14 @@ Remaining gaps (all outside D0's five fixes):
   `run.sh` only adds `python/`; a developer running Draft from `../freecad-upstream`
   must add `src/Ext` (the harness now does).
 
-D0.3 decision on the `.ui` resource reader: **deferred**. Serving `:/ui/...`
-requires replacing `PySide6.QtCore.QFile` process-wide (the alias is the same module
-object), which is too broad for D0.3's "alias only" scope. Consequences:
-`params.get_param("textheight")` is `None`, and `DraftGui` would stop at that point.
-The `--draft` group does not depend on the key.
+D0.3's `.ui` resource reader: **implemented 2026-10-22**, after the namespace split.
+`PySide.QtCore.QFile` is replaced in place (module identity preserved) with a
+subclass whose `open`/`readAll`/`close` serve `:/<path>` from `<mod>/Resources/
+<path>`, found on `sys.path`; every other path goes to Qt untouched. The 9
+`preferences-*.ui` files therefore parse into `PARAM_DICT` (160 entries under
+`Mod/Draft`), `params.get_param("textheight")` is `3.5`, and `constructioncolor`
+resolves. This is the cheapest fix the risk note predicted; it is a compatibility
+shim, not a Qt resource system (no `.rcc`, no icons).
 
 D0.4 placement: the always-available stub lives in `python/Draft_rc.py`, because
 `python/` is on `PYTHONPATH` in every layout. `cargo xtask mods` also writes
@@ -211,10 +213,8 @@ self-sufficient too. The two copies are no-ops and identical in behaviour.
 
 - **`textheight`/`constructioncolor`** are declared only in
   `Resources/ui/preferences-*.ui` and reach `PARAM_DICT` by parsing them through
-  `QtCore.QFile`. If D0 does not add a Qt resource reader, `DraftGui` fails later; the
-  D0 group must not depend on those keys. A pure-Python `.ui` parser in the `PySide`
-  shim (or a `QFile` that serves the mod's `Resources/ui`) is the cheapest fix; decide
-  in D0.3.
+  `QtCore.QFile`. This is now served from the mod's loose files by the `PySide`
+  shim's `QFile` subclass; no `.rcc` is needed for the headless path.
 - **Upstream is a moving target.** Pin `33adf61` for the baseline; record the revision
   with every number.
 - **PySide6 vs PySide5-isms.** `QAction` is in `QtGui` in Qt6; `QtCore.SIGNAL` does not

@@ -36,13 +36,15 @@ persistence is a parameter-backend gap, not something a mod should work around.
 | `GetString(name, default="")` / `SetString` / `RemString` | strings |
 | `GetGroup(name)` | a child group; creates it |
 | `GetGroupName()` | the last path component |
+| `GetGroups()` | the immediate child group names, sorted |
 | `HasGroup(name)` | whether the group was created |
+| `GetInts()` / `GetBools()` / `GetFloats()` / `GetStrings()` | the **names** in this group with a value of that type (upstream FreeCAD's shape) |
 | `Clear()` | removes the values in this group and its descendants |
-| `RemGroup(name)` | accepted; **a no-op today** |
+| `RemGroup(name)` | removes a child group, its values and descendants — **unless a live handle still references it** (upstream `BaseTests.testGroup`) |
 | `Export(path)` / `Import(path)` | JSON file, not the upstream FreeCAD parameter format |
 
 `Clear()` removes values, not group names; `HasGroup` can still be true
-afterwards. `RemGroup` does not do what its name says.
+afterwards. Use `RemGroup` when the group itself must go.
 
 `Export` writes a JSON object whose keys are `"<relative group>\t<name>\t<kind>"`;
 `Import` reads that shape back. These are ordinary file operations, not a

@@ -131,17 +131,22 @@ An in-memory stand-in for ``Base.ParameterGrp`` (typed, nested groups).
 | Clear() | — |
 | Export(path) | — |
 | GetBool(name, default=False) | — |
+| GetBools() | Names with a bool value in this group (FreeCAD returns names). |
 | GetFloat(name, default=0.0) | — |
+| GetFloats() | Names with a float value in this group (FreeCAD returns names). |
 | GetGroup(name, _store=None, _group=None) | — |
 | GetGroupName() | — |
+| GetGroups() | The immediate sub-group names (FreeCAD `GetGroups`). |
 | GetInt(name, default=0) | — |
+| GetInts() | Names with an int value in this group (FreeCAD returns names). |
 | GetString(name, default='') | — |
+| GetStrings() | Names with a string value in this group (FreeCAD returns names). |
 | GetUnsigned(name, default=0) | — |
 | HasGroup(name) | — |
 | Import(path) | — |
 | RemBool(name) | — |
 | RemFloat(name) | — |
-| RemGroup(name) | — |
+| RemGroup(name) | Remove a child group, unless a live handle still references it. |
 | RemInt(name) | — |
 | RemString(name) | — |
 | RemUnsigned(name) | — |

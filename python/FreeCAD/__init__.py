@@ -20,6 +20,7 @@ and keeps no state of its own.
 from __future__ import annotations
 
 import ferrocad as _fc
+import weakref
 
 backend = "ferrocad"
 
@@ -125,12 +126,15 @@ def __getattr__(name):
 # nested groups.
 # ---------------------------------------------------------------------------
 
-# root path -> {"values": {(group, name, kind): value}, "groups": {group, ...}}
+# root path -> {"values": {(group, name, kind): value}, "groups": {group, ...},
+#                "handles": {group: [weakref to each live ParameterGrp]}}
 _parameter_stores = {}
 
 
 def _param_store(root):
-    return _parameter_stores.setdefault(root, {"values": {}, "groups": set()})
+    store = _parameter_stores.setdefault(root, {"values": {}, "groups": set()})
+    store.setdefault("handles", {})
+    return store
 
 
 def _collapse(path):
@@ -153,6 +157,9 @@ class ParameterGrp:
         self._group = group
         self._store = store
         store["groups"].add(group)
+        # Upstream FreeCAD keeps a group alive while a Python handle references it
+        # (`BaseTests.testGroup`), so remember every live handle.
+        store.setdefault("handles", {}).setdefault(group, []).append(weakref.ref(self))
 
     def _full(self, sub):
         return (self._group + "/" + sub) if self._group else sub
@@ -161,10 +168,20 @@ class ParameterGrp:
         return self._store["values"].get((self._group, name, kind), default)
 
     def _set(self, name, kind, value):
+        # A write re-creates a group removed with `RemGroup`, matching FreeCAD.
+        self._store["groups"].add(self._group)
         self._store["values"][(self._group, name, kind)] = value
 
     def _rem(self, name, kind):
         self._store["values"].pop((self._group, name, kind), None)
+
+    def _names(self, kind):
+        """The names in this group with a value of `kind`, in insertion order."""
+        return [
+            name
+            for (group, name, entry_kind) in self._store["values"]
+            if group == self._group and entry_kind == kind
+        ]
 
     # -- groups -------------------------------------------------------------
     def GetGroup(self, name, _store=None, _group=None):
@@ -178,12 +195,50 @@ class ParameterGrp:
     def GetGroupName(self):
         return self._group.split("/")[-1] if self._group else ""
 
+    def GetGroups(self):
+        """The immediate sub-group names (FreeCAD `GetGroups`)."""
+        prefix = self._group + "/" if self._group else ""
+        names = set()
+        for group in self._store["groups"]:
+            if group == self._group or not group.startswith(prefix):
+                continue
+            rest = group[len(prefix) :]
+            if rest and "/" not in rest:
+                names.add(rest)
+        return sorted(names)
+
     def HasGroup(self, name):
         return self._full(_collapse(name)) in self._store["groups"]
 
     def RemGroup(self, name):
-        # POC: a live reference keeps the group alive, so this is a no-op.
-        pass
+        """Remove a child group, unless a live handle still references it.
+
+        Upstream FreeCAD defers the deletion of a **referenced** group; the
+        conformance suite asserts it (`BaseTests.ParameterTestCase.testGroup`).
+        A live `ParameterGrp` handle for the group or any descendant therefore
+        keeps it alive. With no live handle, its values and descendants go.
+        """
+        target = self._full(_collapse(name))
+        handles = self._store.setdefault("handles", {})
+        referenced = False
+        for group, refs in list(handles.items()):
+            if group != target and not group.startswith(target + "/"):
+                continue
+            alive = [ref for ref in refs if ref() is not None]
+            handles[group] = alive
+            referenced = referenced or bool(alive)
+        if referenced:
+            return
+
+        values = self._store["values"]
+        for key in list(values):
+            group = key[0]
+            if group == target or group.startswith(target + "/"):
+                del values[key]
+        groups = self._store["groups"]
+        for group in list(groups):
+            if group == target or group.startswith(target + "/"):
+                groups.discard(group)
 
     def Clear(self):
         group = self._group
@@ -200,6 +255,10 @@ class ParameterGrp:
 
     def RemInt(self, name):
         self._rem(name, "int")
+
+    def GetInts(self):
+        """Names with an int value in this group (FreeCAD returns names)."""
+        return self._names("int")
 
     def GetUnsigned(self, name, default=0):
         value = self._get(name, "int", None)
@@ -220,6 +279,10 @@ class ParameterGrp:
     def RemBool(self, name):
         self._rem(name, "bool")
 
+    def GetBools(self):
+        """Names with a bool value in this group (FreeCAD returns names)."""
+        return self._names("bool")
+
     def GetFloat(self, name, default=0.0):
         return float(self._get(name, "float", default))
 
@@ -229,6 +292,10 @@ class ParameterGrp:
     def RemFloat(self, name):
         self._rem(name, "float")
 
+    def GetFloats(self):
+        """Names with a float value in this group (FreeCAD returns names)."""
+        return self._names("float")
+
     def GetString(self, name, default=""):
         return str(self._get(name, "string", default))
 
@@ -237,6 +304,10 @@ class ParameterGrp:
 
     def RemString(self, name):
         self._rem(name, "string")
+
+    def GetStrings(self):
+        """Names with a string value in this group (FreeCAD returns names)."""
+        return self._names("string")
 
     # -- import / export ----------------------------------------------------
     def Export(self, path):

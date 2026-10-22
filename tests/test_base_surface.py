@@ -87,6 +87,69 @@ class TestParamGet(unittest.TestCase):
         self.assertEqual(grp.GetBool("Flag", True), True)
         self.assertEqual(grp.GetString("Name", "x"), "x")
 
+    def test_lists_names_by_type(self):
+        grp = FreeCAD.ParamGet("User parameter:BaseApp/Preferences/TestListing")
+        grp.Clear()
+        grp.SetInt("Count", 3)
+        grp.SetBool("Enabled", True)
+        grp.SetFloat("Scale", 1.5)
+        grp.SetString("Label", "x")
+
+        # FreeCAD returns the entry names, not the values.
+        self.assertEqual(grp.GetInts(), ["Count"])
+        self.assertEqual(grp.GetBools(), ["Enabled"])
+        self.assertEqual(grp.GetFloats(), ["Scale"])
+        self.assertEqual(grp.GetStrings(), ["Label"])
+        # An unrelated group's entries do not leak in.
+        other = grp.GetGroup("Other")
+        other.SetInt("Hidden", 1)
+        self.assertEqual(grp.GetInts(), ["Count"])
+        grp.RemInt("Count")
+        self.assertEqual(grp.GetInts(), [])
+        grp.Clear()
+
+    def test_get_groups_lists_children(self):
+        root = FreeCAD.ParamGet("User parameter:BaseApp/Preferences/TestGroups")
+        root.GetGroup("Alpha")
+        root.GetGroup("Beta")
+        root.GetGroup("Alpha/Deep")
+        self.assertEqual(root.GetGroups(), ["Alpha", "Beta"])
+
+    def test_rem_group_keeps_a_referenced_group(self):
+        # Upstream FreeCAD keeps a referenced group alive (BaseTests.testGroup).
+        root = FreeCAD.ParamGet("User parameter:BaseApp/Preferences/TestRemGroup")
+        child = root.GetGroup("Child")
+        grandchild = child.GetGroup("Deep")
+        child.SetInt("Gone", 2)
+        grandchild.SetInt("AlsoGone", 3)
+
+        root.RemGroup("Child")
+
+        self.assertTrue(root.HasGroup("Child"))
+        self.assertEqual(child.GetInt("Gone"), 2)
+        self.assertEqual(grandchild.GetInt("AlsoGone"), 3)
+        del child, grandchild
+        root.Clear()
+
+    def test_rem_group_removes_an_unreferenced_group(self):
+        root = FreeCAD.ParamGet("User parameter:BaseApp/Preferences/TestRemGroup2")
+        child = root.GetGroup("Child")
+        grandchild = child.GetGroup("Deep")
+        root.SetInt("Keep", 1)
+        child.SetInt("Gone", 2)
+        grandchild.SetInt("AlsoGone", 3)
+        del child, grandchild
+
+        root.RemGroup("Child")
+
+        self.assertFalse(root.HasGroup("Child"))
+        self.assertEqual(root.GetInt("Keep"), 1)
+        # The values are gone with the group.
+        reopened = root.GetGroup("Child")
+        self.assertEqual(reopened.GetInt("Gone", 0), 0)
+        self.assertEqual(reopened.GetGroup("Deep").GetInt("AlsoGone", 0), 0)
+        root.Clear()
+
 
 class TestGeometry(unittest.TestCase):
     def test_vector(self):

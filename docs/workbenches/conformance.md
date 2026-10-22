@@ -24,10 +24,12 @@ report is a *measurement*: `crates/ferrocad_part_py/tests/part_conformance.rs` a
 only that the harness ran, not a pass count.
 
 The `--draft` group is in the same spirit and reports the upstream revision with the
-summary. Baseline at upstream `33adf61` (2026-10-22): **4 passed, 1 failed, 6 errored,
-0 skipped, 1 load error**. The failures name the next API gaps rather than a Draft
-bug: `Part` (loads `Draft` at module scope), `ParameterGrp.GetStrings/GetInts`, and
-`FreeCADGui.getDocument`. See
+summary. Baseline at upstream `33adf61` (2026-10-22, after the parameter and `.ui`
+work): **9 passed, 1 failed, 1 errored, 0 skipped, 1 load error**.
+`test_grid_settings` is **5/5**. The failures name the next API gaps rather than a
+Draft bug: `Part` (`test_airfoildat` is a load error, and one `test_import` case),
+and `FreeCADGui.getDocument` (`test_pivy_draw`, which needs a GUI document and view
+scene graph, not a name). See
 [`../tasks/d0-draft-import.md`](../tasks/d0-draft-import.md).
 
 ---

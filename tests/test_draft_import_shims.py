@@ -147,6 +147,37 @@ class PySideAliasTests(unittest.TestCase):
         self.assertIn("PySide.QtGui", holding)
         self.assertIn("PySide6.QtGui", holding)
 
+    def test_resource_paths_read_a_mods_loose_files(self):
+        from PySide import QtCore
+
+        with tempfile.TemporaryDirectory() as tmp:
+            folder = Path(tmp) / "DemoMod" / "Resources" / "ui"
+            folder.mkdir(parents=True)
+            (folder / "preferences-demo.ui").write_text("<ui>demo</ui>")
+            sys.path.insert(0, tmp)
+            try:
+                handle = QtCore.QFile(":/ui/preferences-demo.ui")
+                self.assertTrue(
+                    handle.open(QtCore.QIODevice.ReadOnly | QtCore.QFile.Text)
+                )
+                self.assertEqual(handle.readAll().data().decode(), "<ui>demo</ui>")
+                handle.close()
+            finally:
+                sys.path.remove(tmp)
+
+    def test_plain_paths_still_go_to_qt(self):
+        from PySide import QtCore
+
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "plain.txt"
+            path.write_text("hello")
+            handle = QtCore.QFile(str(path))
+            self.assertTrue(
+                handle.open(QtCore.QIODevice.ReadOnly | QtCore.QFile.Text)
+            )
+            self.assertEqual(handle.readAll().data().decode(), "hello")
+            handle.close()
+
     def test_absent_qtsvg_is_tolerated(self):
         try:
             importlib.import_module("PySide6.QtSvg")

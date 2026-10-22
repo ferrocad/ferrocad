@@ -75,7 +75,7 @@ pub use gizmo::{
     NATIVE_BACKEND, SKIN_BACKEND, TRANSFORM_ID, TransformGizmo,
 };
 pub use axis::AxisStyle;
-pub use declarative::{DeclarativeHandle, DeclarativeManipulator, DeclarativeShape};
+pub use declarative::{DeclarativeHandle, DeclarativeKind, DeclarativeManipulator, DeclarativeShape};
 pub use grid::{GridGeometry, GridSpec, GridStyle};
 pub use input::{MouseButton, PointerEvent, PointerKind};
 pub use interaction::{InteractionCommit, Manipulator};

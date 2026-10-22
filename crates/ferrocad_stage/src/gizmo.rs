@@ -1507,7 +1507,7 @@ fn shift_plane_normal(camera: &Camera, axis: Vector3) -> Vector3 {
 /// The angle of `ray`'s intersection with the ring plane about `axis`, measured from a
 /// stable in-plane reference. Falls back to a view-facing plane when the ring is
 /// edge-on, so a ring seen almost edge-on still scrubs in screen space.
-fn ring_angle_with_fallback(
+pub(crate) fn ring_angle_with_fallback(
     ray: &Ray,
     centre: Vector3,
     axis: Vector3,
@@ -1543,7 +1543,7 @@ fn ring_detent(raw: f64, free: bool, detent: f64) -> (f64, f64) {
 }
 
 /// Two unit vectors spanning the plane perpendicular to `axis`.
-fn orthonormal_basis(axis: Vector3) -> (Vector3, Vector3) {
+pub(crate) fn orthonormal_basis(axis: Vector3) -> (Vector3, Vector3) {
     let u = any_perpendicular(axis);
     let v = axis.cross(&u).normalize();
     (u, v)

@@ -13,6 +13,8 @@
 //!   "target": 7,
 //!   "frame": { "origin": [0, 0, 0], "x": [1, 0, 0], "y": [0, 1, 0], "z": [0, 0, 1] },
 //!   "axis": "z",
+//!   "kind": "axis",
+//!   "radius": 66.0,
 //!   "value": 20.0,
 //!   "min": -100.0,
 //!   "max": 100.0,
@@ -41,11 +43,15 @@ use std::sync::Arc;
 use serde::Deserialize;
 
 use ferrocad_stage::grid::parse_srgb_hex;
-use ferrocad_stage::{DeclarativeHandle, DeclarativeShape, ManipulatorFrame, ShaderProgram};
+use ferrocad_stage::{
+    DeclarativeHandle, DeclarativeKind, DeclarativeShape, ManipulatorFrame, ShaderProgram,
+};
 use ferrocad_types::Vector3;
 
 /// The default handle size, in device pixels.
 const DEFAULT_SIZE: f64 = 40.0;
+/// The default ring radius, in device pixels.
+const DEFAULT_RADIUS: f64 = 66.0;
 /// The default number of readout decimals.
 const DEFAULT_DECIMALS: usize = 2;
 /// The largest accepted readout precision.
@@ -64,11 +70,13 @@ struct HandleSpec {
     target: Option<u32>,
     frame: FrameSpec,
     axis: Option<String>,
+    kind: Option<String>,
     value: f64,
     min: Option<f64>,
     max: Option<f64>,
     step: Option<f64>,
     size: Option<f64>,
+    radius: Option<f64>,
     decimals: Option<usize>,
     shape: ShapeSpec,
     program: Option<String>,
@@ -141,6 +149,7 @@ fn convert(spec: HandleSpec, target: u32) -> Result<(u32, DeclarativeHandle), St
 
     let frame = convert_frame(&spec.frame, &label)?;
     let axis = convert_axis(spec.axis.as_deref(), &label)?;
+    let kind = convert_kind(spec.kind.as_deref(), &label)?;
     let value = finite(spec.value, "value", &label)?;
     let min = optional_finite(spec.min, "min", &label)?;
     let max = optional_finite(spec.max, "max", &label)?;
@@ -174,6 +183,16 @@ fn convert(spec: HandleSpec, target: u32) -> Result<(u32, DeclarativeHandle), St
             "{label}decimals must be <= {MAX_DECIMALS}, got {decimals}"
         ));
     }
+    let radius = match spec.radius {
+        Some(radius) => {
+            let radius = finite(radius, "radius", &label)?;
+            if radius <= 0.0 {
+                return Err(format!("{label}radius must be > 0, got {radius}"));
+            }
+            radius
+        }
+        None => DEFAULT_RADIUS,
+    };
     let shape = convert_shape(&spec.shape, &label)?;
 
     let program = match spec.program {
@@ -199,11 +218,13 @@ fn convert(spec: HandleSpec, target: u32) -> Result<(u32, DeclarativeHandle), St
 
     let mut handle = DeclarativeHandle::new(id, action, frame, axis, shape);
     handle.element = element;
+    handle.kind = kind;
     handle.value = value;
     handle.min = min;
     handle.max = max;
     handle.step = step;
     handle.size = size;
+    handle.radius = radius;
     handle.decimals = decimals;
     handle.program = program;
     handle.color = color;
@@ -231,6 +252,19 @@ fn convert_axis(axis: Option<&str>, label: &str) -> Result<usize, String> {
             "z" => Ok(2),
             _ => Err(format!(
                 "{label}axis must be \"x\", \"y\" or \"z\", got {text:?}"
+            )),
+        },
+    }
+}
+
+fn convert_kind(kind: Option<&str>, label: &str) -> Result<DeclarativeKind, String> {
+    match kind {
+        None => Ok(DeclarativeKind::Axis),
+        Some(text) => match text.trim().to_ascii_lowercase().as_str() {
+            "axis" => Ok(DeclarativeKind::Axis),
+            "ring" => Ok(DeclarativeKind::Ring),
+            _ => Err(format!(
+                "{label}kind must be \"axis\" or \"ring\", got {text:?}"
             )),
         },
     }
@@ -449,6 +483,73 @@ mod tests {
         let error = handle_from_value(&bad, 1).expect_err("an unknown axis");
         assert!(error.contains("axis"), "{error}");
         assert!(error.contains('w'), "{error}");
+    }
+
+    #[test]
+    fn the_kind_is_case_insensitive_and_rejects_unknown_values() {
+        for (text, expected) in [
+            ("axis", DeclarativeKind::Axis),
+            ("AXIS", DeclarativeKind::Axis),
+            ("ring", DeclarativeKind::Ring),
+            ("Ring", DeclarativeKind::Ring),
+        ] {
+            let mut value = minimal();
+            value["kind"] = serde_json::json!(text);
+            let (_, handle) = handle_from_value(&value, 1).expect("a valid kind");
+            assert_eq!(handle.kind, expected, "kind {text:?}");
+        }
+
+        let (_, handle) = handle_from_value(&minimal(), 1).expect("the default kind");
+        assert_eq!(handle.kind, DeclarativeKind::Axis, "the default is axis");
+        assert_eq!(handle.radius, DEFAULT_RADIUS);
+
+        let mut bad = minimal();
+        bad["kind"] = serde_json::json!("arc");
+        let error = handle_from_value(&bad, 1).expect_err("an unknown kind");
+        assert!(error.contains("kind"), "{error}");
+        assert!(error.contains("arc"), "{error}");
+    }
+
+    #[test]
+    fn the_radius_must_be_positive_and_finite() {
+        for bad in [0.0, -5.0] {
+            let mut value = minimal();
+            value["radius"] = serde_json::json!(bad);
+            let error = handle_from_value(&value, 1).expect_err("a non-positive radius");
+            assert!(error.contains("radius"), "{error}");
+        }
+
+        let spec = HandleSpec {
+            id: "toy.bolt".to_string(),
+            radius: Some(f64::INFINITY),
+            shape: ShapeSpec {
+                positions: vec![[0.0, 0.0, 0.0]],
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let error = convert(spec, 1).expect_err("a non-finite radius");
+        assert!(error.contains("radius"), "{error}");
+    }
+
+    #[test]
+    fn a_ring_spec_round_trips_kind_radius_value_step_and_readout() {
+        let value = serde_json::json!({
+            "id": "toy.ring",
+            "axis": "z",
+            "kind": "Ring",
+            "radius": 80.0,
+            "value": 45.0,
+            "step": 15.0,
+            "readout": "{value} deg",
+            "shape": { "positions": [[0.0, 0.0, 0.0]] }
+        });
+        let (_, handle) = handle_from_value(&value, 1).expect("a valid ring");
+        assert_eq!(handle.kind, DeclarativeKind::Ring);
+        assert_eq!(handle.radius, 80.0);
+        assert_eq!(handle.value, 45.0);
+        assert_eq!(handle.step, Some(15.0));
+        assert_eq!(handle.readout, "{value} deg");
     }
 
     #[test]

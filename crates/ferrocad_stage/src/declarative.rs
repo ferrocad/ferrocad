@@ -18,20 +18,33 @@
 //!
 //! [`TransformGizmo`]: crate::TransformGizmo
 
+use std::f64::consts::TAU;
 use std::sync::Arc;
 
 use ferrocad_graphics::{Camera, ShaderProgram};
 use ferrocad_types::{Matrix4, Vector3};
 
-use crate::gizmo::{GizmoStyle, ManipulatorFrame};
+use crate::gizmo::{GizmoStyle, ManipulatorFrame, orthonormal_basis, ring_angle_with_fallback};
 use crate::interaction::{InteractionCommit, Manipulator};
-use crate::screen::{HIT_SLOP, project_device, scale_for, to3};
+use crate::screen::{
+    HIT_SLOP, camera_forward, point_segment_distance, project_device, scale_for, to3,
+};
 use crate::shape::{DrawMode, ShapeItem};
 
 /// The default handle size, in device pixels.
 const DEFAULT_SIZE: f64 = 40.0;
+/// The default ring radius, in device pixels.
+const DEFAULT_RADIUS: f64 = 66.0;
 /// The default number of readout decimals.
 const DEFAULT_DECIMALS: usize = 2;
+/// The number of segments in a ring's analytic hit polyline.
+const RING_SAMPLES: usize = 32;
+/// The fraction of the projected ring radius that stays transparent in the middle.
+///
+/// An edge-on ring projects to a line through the centre, so a plain segment test would
+/// make the interior (and everything behind it) unreachable. Excluding the central
+/// fraction matches the native gizmo's ring pick.
+const RING_INTERIOR_FRACTION: f64 = 0.18;
 
 /// The pick id of a declarative handle's overlay item.
 ///
@@ -57,6 +70,16 @@ pub struct DeclarativeShape {
     pub edges: Vec<u32>,
 }
 
+/// How a declared handle converts a drag into its value.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum DeclarativeKind {
+    /// Drag along `axis`: the value is world units.
+    #[default]
+    Axis,
+    /// Rotate about `axis`: the value is degrees.
+    Ring,
+}
+
 /// Everything a mod declares about one handle.
 ///
 /// `size` is the handle's own screen target and is authoritative; [`GizmoStyle::size`]
@@ -75,7 +98,9 @@ pub struct DeclarativeHandle {
     pub frame: ManipulatorFrame,
     /// The drag axis: `0..=2`, an index into [`frame.basis`](ManipulatorFrame::basis).
     pub axis: usize,
-    /// The rest value, in world units along the drag axis.
+    /// How a drag converts into [`value`](Self::value).
+    pub kind: DeclarativeKind,
+    /// The drag axis value in world units (axis) or degrees about `axis` (ring).
     pub value: f64,
     /// The lower bound of the dragged value, if any.
     pub min: Option<f64>,
@@ -85,6 +110,9 @@ pub struct DeclarativeHandle {
     pub step: Option<f64>,
     /// The handle's target size, in device pixels.
     pub size: f64,
+    /// The ring radius, in device pixels. Ignored by an [`Axis`](DeclarativeKind::Axis)
+    /// handle.
+    pub radius: f64,
     /// The number of decimals in the readout.
     pub decimals: usize,
     /// The handle mesh, in unit space.
@@ -99,7 +127,7 @@ pub struct DeclarativeHandle {
 }
 
 impl DeclarativeHandle {
-    /// A handle at the default size and decimals, with no bounds or snap step.
+    /// An axis handle at the default size and decimals, with no bounds or snap step.
     pub fn new(
         id: impl Into<String>,
         action: impl Into<String>,
@@ -113,11 +141,13 @@ impl DeclarativeHandle {
             element: None,
             frame,
             axis,
+            kind: DeclarativeKind::Axis,
             value: 0.0,
             min: None,
             max: None,
             step: None,
             size: DEFAULT_SIZE,
+            radius: DEFAULT_RADIUS,
             decimals: DEFAULT_DECIMALS,
             shape,
             program: None,
@@ -125,13 +155,27 @@ impl DeclarativeHandle {
             readout: String::new(),
         }
     }
+
+    /// Declare how a drag converts into the value.
+    pub fn with_kind(mut self, kind: DeclarativeKind) -> Self {
+        self.kind = kind;
+        self
+    }
+
+    /// Set the ring radius, in device pixels.
+    pub fn with_radius(mut self, radius: f64) -> Self {
+        self.radius = radius;
+        self
+    }
 }
 
-/// The drag's captured press point and value.
+/// The drag's captured press point, value and (for a ring) press angle.
 #[derive(Clone, Copy, Debug)]
 struct DragState {
     press: [f64; 2],
     value: f64,
+    /// The in-plane press angle, in radians. `None` for an axis handle.
+    angle: Option<f64>,
 }
 
 /// A mod-supplied handle hosted by the native manipulator model.
@@ -287,12 +331,33 @@ impl DeclarativeManipulator {
         self.handle.frame.basis[self.handle.axis.min(2)]
     }
 
-    /// The world position the handle rides on: the frame origin plus the axis value.
-    fn origin(&self) -> Vector3 {
-        self.handle
-            .frame
-            .origin
-            .add(&self.axis_world().scale(self.value))
+    /// The world position the handle's mesh rides on.
+    ///
+    /// An axis handle sits at the frame origin plus the axis value. A ring handle sits
+    /// on the ring at the value's angle, so grabbing it follows the arc it turns.
+    fn origin(&self, camera: &Camera) -> Vector3 {
+        match self.handle.kind {
+            DeclarativeKind::Axis => self
+                .handle
+                .frame
+                .origin
+                .add(&self.axis_world().scale(self.value)),
+            DeclarativeKind::Ring => self.ring_point(camera, self.value),
+        }
+    }
+
+    /// The point on the ring at `degrees` about the drag axis.
+    ///
+    /// The basis is [`orthonormal_basis`], the same reference the ring drag measures
+    /// its angle against, so a rendered point at angle `θ` and a dragged angle `θ` agree.
+    fn ring_point(&self, camera: &Camera, degrees: f64) -> Vector3 {
+        let origin = self.handle.frame.origin;
+        let radius = scale_for(camera, origin, self.handle.radius);
+        let (u, v) = orthonormal_basis(self.axis_world());
+        let angle = degrees.to_radians();
+        origin
+            .add(&u.scale(radius * angle.cos()))
+            .add(&v.scale(radius * angle.sin()))
     }
 
     /// Rebuild the geometry for `camera` when the view or the value changed. Returns
@@ -309,13 +374,14 @@ impl DeclarativeManipulator {
 
     /// Bake the unit mesh into world space at the handle's current position.
     ///
-    /// `world = origin + axis * value + world_per_px * size * (x·X + y·Y + z·Z)`, so a
-    /// one-unit mesh spans `size` device pixels and the handle keeps its screen size at
-    /// any zoom.
+    /// `world = position + world_per_px * size * (x·X + y·Y + z·Z)`, so a one-unit mesh
+    /// spans `size` device pixels and the handle keeps its screen size at any zoom. An
+    /// axis handle's position is `origin + axis * value`; a ring handle's position is the
+    /// ring point at the value's angle.
     fn build(&mut self, camera: &Camera) {
         let frame = self.handle.frame;
         let scale = scale_for(camera, frame.origin, 1.0) * self.handle.size;
-        let base = self.origin();
+        let base = self.origin(camera);
         let positions: Vec<[f32; 3]> = self
             .handle
             .shape
@@ -341,12 +407,85 @@ impl DeclarativeManipulator {
 
     /// Whether `device` is on the handle.
     ///
-    /// This is the **projected bounding box** of the built mesh, padded by
-    /// [`HIT_SLOP`]. It is deliberately coarse: a mod supplies an arbitrary mesh, so an
-    /// analytic hit against the declaration is a later slice. The built geometry is
-    /// cached, so the host calls [`refresh`](Self::refresh) before hit-testing (the
-    /// viewport already does).
+    /// The test is analytic against the declaration, then padded by [`HIT_SLOP`]:
+    ///
+    /// * **Axis** accepts a pointer within [`HIT_SLOP`] of the projected stem from the
+    ///   frame origin to the tip (`origin + axis * value`), **and** anywhere in the built
+    ///   mesh's projected bounding box. The two regions are distinct on purpose: the stem
+    ///   is the natural grab line, while the bbox keeps a wide or oddly shaped mesh
+    ///   grabbable even where the thin stem does not pass.
+    /// * **Ring** accepts a pointer within [`HIT_SLOP`] of the projected ring polyline
+    ///   (`RING_SAMPLES` segments). A ring seen edge-on projects to a line, and the same
+    ///   segment distance covers it. The central fraction of the projected ring is
+    ///   excluded so the interior stays free to the scene behind it.
+    ///
+    /// The built geometry is cached, so the host calls [`refresh`](Self::refresh) before
+    /// hit-testing (the viewport already does); a ring's analytic region does not need it.
     pub fn hit(&self, camera: &Camera, device: [i32; 2]) -> bool {
+        match self.handle.kind {
+            DeclarativeKind::Axis => self.axis_hit(camera, device),
+            DeclarativeKind::Ring => self.ring_hit(camera, device),
+        }
+    }
+
+    /// The axis hull: the projected stem plus the built mesh's projected bbox.
+    fn axis_hit(&self, camera: &Camera, device: [i32; 2]) -> bool {
+        let pointer = [f64::from(device[0]), f64::from(device[1])];
+        let origin = self.handle.frame.origin;
+        let tip = origin.add(&self.axis_world().scale(self.value));
+        let (Some(a), Some(b)) = (project_device(camera, origin), project_device(camera, tip)) else {
+            return self.mesh_hit(camera, device);
+        };
+        if point_segment_distance(pointer, a, b).0 <= HIT_SLOP {
+            return true;
+        }
+        self.mesh_hit(camera, device)
+    }
+
+    /// The ring hull: a [`HIT_SLOP`]-padded band around the projected ring polyline,
+    /// with its interior excluded.
+    fn ring_hit(&self, camera: &Camera, device: [i32; 2]) -> bool {
+        let pointer = [f64::from(device[0]), f64::from(device[1])];
+        let origin = self.handle.frame.origin;
+        let radius = scale_for(camera, origin, self.handle.radius);
+        if !radius.is_finite() || radius <= 0.0 {
+            return false;
+        }
+        let (u, v) = orthonormal_basis(self.axis_world());
+        let mut projected = Vec::with_capacity(RING_SAMPLES);
+        for i in 0..RING_SAMPLES {
+            let angle = TAU * i as f64 / RING_SAMPLES as f64;
+            let point = origin
+                .add(&u.scale(radius * angle.cos()))
+                .add(&v.scale(radius * angle.sin()));
+            projected.push(project_device(camera, point));
+        }
+        let Some(centre) = project_device(camera, origin) else {
+            return false;
+        };
+        let mut nearest = f64::INFINITY;
+        let mut projected_radius = 0.0_f64;
+        for (index, point) in projected.iter().enumerate() {
+            let Some(point) = point else { continue };
+            projected_radius =
+                projected_radius.max((point[0] - centre[0]).hypot(point[1] - centre[1]));
+            let next = projected[(index + 1) % RING_SAMPLES];
+            if let Some(next) = next {
+                nearest = nearest.min(point_segment_distance(pointer, *point, next).0);
+            }
+        }
+        if !projected_radius.is_finite() || projected_radius <= 0.0 {
+            return false;
+        }
+        let pointer_radius = (pointer[0] - centre[0]).hypot(pointer[1] - centre[1]);
+        if pointer_radius < RING_INTERIOR_FRACTION * projected_radius {
+            return false;
+        }
+        nearest <= HIT_SLOP
+    }
+
+    /// The built mesh's projected bounding box, padded by [`HIT_SLOP`].
+    fn mesh_hit(&self, camera: &Camera, device: [i32; 2]) -> bool {
         let Some((min, max)) = bounds(self.item.positions()) else {
             return false;
         };
@@ -373,45 +512,96 @@ impl DeclarativeManipulator {
             && point[1] <= high[1] + HIT_SLOP
     }
 
-    /// Begin a drag at `device`, if it hits. Records the press point and value so the
-    /// value only moves by the pointer's travel along the axis.
+    /// Begin a drag at `device`, if it hits. Records the press point, value and (for a
+    /// ring) the press angle so the value only moves by the pointer's travel from there.
     pub fn begin_drag(&mut self, camera: &Camera, device: [i32; 2]) -> bool {
         if !self.hit(camera, device) {
             return false;
         }
+        let angle = match self.handle.kind {
+            DeclarativeKind::Axis => None,
+            DeclarativeKind::Ring => {
+                let Some(ray) = camera.ray_through(device) else {
+                    return false;
+                };
+                let Some(angle) = ring_angle_with_fallback(
+                    &ray,
+                    self.handle.frame.origin,
+                    self.axis_world(),
+                    camera_forward(camera),
+                ) else {
+                    return false;
+                };
+                Some(angle)
+            }
+        };
         self.drag = Some(DragState {
             press: [f64::from(device[0]), f64::from(device[1])],
             value: self.value,
+            angle,
         });
         self.apply_color();
         true
     }
 
-    /// Advance the drag along the projected axis. Returns whether the value moved.
+    /// Advance the drag. Returns whether the value moved.
     ///
-    /// One world unit projects to `pixels_per_world` device pixels; the pointer's
-    /// travel along that screen direction divided by it is the value delta. A
+    /// **Axis:** one world unit projects to `pixels_per_world` device pixels; the
+    /// pointer's travel along that screen direction divided by it is the value delta. A
     /// degenerate projection (the axis points at the camera) changes nothing.
+    ///
+    /// **Ring:** the pointer ray is intersected with the ring plane (falling back to a
+    /// view-facing plane when the ring is edge-on) and the angle about the axis is
+    /// measured against the same basis the ring is drawn with. The value in degrees is
+    /// the press value plus the angle delta, then snapped and clamped.
+    ///
+    /// `ring_detent` is not reused: it applies a *relative*
+    /// detent driven by a Ctrl modifier the [`Manipulator`] trait does not carry, while a
+    /// declaration's `step` snaps the absolute value. `wrap_pi` is not applied either:
+    /// it would fold a continuous scalar past ±180°, and a mod's degree value is not a
+    /// rotation matrix that is equivalent modulo a full turn.
     pub fn drag_to(&mut self, camera: &Camera, device: [i32; 2]) -> bool {
         let Some(drag) = self.drag else {
             return false;
         };
-        let origin = self.handle.frame.origin;
-        let (Some(from), Some(to)) = (
-            project_device(camera, origin),
-            project_device(camera, origin.add(&self.axis_world())),
-        ) else {
-            return false;
+        let value = match self.handle.kind {
+            DeclarativeKind::Axis => {
+                let origin = self.handle.frame.origin;
+                let (Some(from), Some(to)) = (
+                    project_device(camera, origin),
+                    project_device(camera, origin.add(&self.axis_world())),
+                ) else {
+                    return false;
+                };
+                let (dx, dy) = (to[0] - from[0], to[1] - from[1]);
+                let pixels_per_world = dx.hypot(dy);
+                if pixels_per_world <= 1e-9 {
+                    return false;
+                }
+                let direction = [dx / pixels_per_world, dy / pixels_per_world];
+                let travel = (f64::from(device[0]) - drag.press[0]) * direction[0]
+                    + (f64::from(device[1]) - drag.press[1]) * direction[1];
+                self.clamp(self.snap(drag.value + travel / pixels_per_world))
+            }
+            DeclarativeKind::Ring => {
+                let Some(press_angle) = drag.angle else {
+                    return false;
+                };
+                let Some(ray) = camera.ray_through(device) else {
+                    return false;
+                };
+                let Some(angle) = ring_angle_with_fallback(
+                    &ray,
+                    self.handle.frame.origin,
+                    self.axis_world(),
+                    camera_forward(camera),
+                ) else {
+                    return false;
+                };
+                let delta = (angle - press_angle).to_degrees();
+                self.clamp(self.snap(drag.value + delta))
+            }
         };
-        let (dx, dy) = (to[0] - from[0], to[1] - from[1]);
-        let pixels_per_world = dx.hypot(dy);
-        if pixels_per_world <= 1e-9 {
-            return false;
-        }
-        let direction = [dx / pixels_per_world, dy / pixels_per_world];
-        let travel = (f64::from(device[0]) - drag.press[0]) * direction[0]
-            + (f64::from(device[1]) - drag.press[1]) * direction[1];
-        let value = self.clamp(self.snap(drag.value + travel / pixels_per_world));
         if (value - self.value).abs() <= 1e-12 {
             return false;
         }
@@ -436,7 +626,8 @@ impl DeclarativeManipulator {
         true
     }
 
-    /// The neutral commit for the current value.
+    /// The neutral commit for the current value. A ring commits `[degrees]`; an axis
+    /// commits `[world units]`.
     fn commit(&self) -> InteractionCommit {
         let mut commit = InteractionCommit::new(
             self.handle.id.clone(),
@@ -451,7 +642,8 @@ impl DeclarativeManipulator {
         commit
     }
 
-    /// The formatted value at the declaration's decimals.
+    /// The formatted value at the declaration's decimals. A ring's value is already in
+    /// degrees, so the same formatting applies.
     fn format_value(&self) -> String {
         format!("{:.*}", self.handle.decimals, self.value)
     }
@@ -467,9 +659,10 @@ impl DeclarativeManipulator {
         }
     }
 
-    /// Where the readout sits, in device pixels: the handle's current world position.
+    /// Where the readout sits, in device pixels: the handle's current world position
+    /// (the ring point, for a ring).
     pub fn readout_anchor(&self, camera: &Camera) -> Option<[f64; 2]> {
-        project_device(camera, self.origin())
+        project_device(camera, self.origin(camera))
     }
 
     fn snap(&self, value: f64) -> f64 {
@@ -693,6 +886,38 @@ mod tests {
             token[2],
             (token[3] * opacity).clamp(0.0, 1.0),
         ]
+    }
+
+    /// A ring handle about `axis` with a 25 px radius, small enough for the test viewport.
+    fn ring_handle(id: &str, axis: usize) -> DeclarativeHandle {
+        let mut handle = handle(id, axis);
+        handle.kind = DeclarativeKind::Ring;
+        handle.radius = 25.0;
+        handle.shape = marker();
+        handle
+    }
+
+    /// A device point at screen angle `degrees` on a circle around the projected origin.
+    ///
+    /// For the face-on test camera, screen angle and world ring angle differ by a fixed
+    /// quarter turn, so a screen sweep of Δ degrees is a value change of Δ degrees.
+    fn on_screen_ring(camera: &Camera, radius_px: f64, degrees: f64) -> [i32; 2] {
+        let centre = project_device(camera, Vector3::zero()).expect("the origin projects");
+        let angle = degrees.to_radians();
+        [
+            (centre[0] + radius_px * angle.cos()).round() as i32,
+            (centre[1] + radius_px * angle.sin()).round() as i32,
+        ]
+    }
+
+    /// A world point on the ring about `axis` at `degrees`, using the drawn basis.
+    fn world_ring_point(camera: &Camera, axis: usize, radius_px: f64, degrees: f64) -> Vector3 {
+        let frame = ManipulatorFrame::world(Vector3::zero());
+        let radius = scale_for(camera, frame.origin, radius_px);
+        let (u, v) = orthonormal_basis(frame.basis[axis]);
+        let angle = degrees.to_radians();
+        u.scale(radius * angle.cos())
+            .add(&v.scale(radius * angle.sin()))
     }
 
     #[test]
@@ -935,5 +1160,181 @@ mod tests {
         let manipulator = DeclarativeManipulator::new(1, handle);
         assert_eq!(manipulator.id(), id.as_str());
         assert_eq!(Manipulator::id(&manipulator), id.as_str());
+    }
+
+    #[test]
+    fn a_new_handle_is_an_axis_at_the_default_radius() {
+        let handle = handle("plain", 0);
+        assert_eq!(handle.kind, DeclarativeKind::Axis);
+        assert_eq!(handle.radius, DEFAULT_RADIUS);
+        assert_eq!(DEFAULT_RADIUS, 66.0);
+
+        let ring = handle
+            .with_kind(DeclarativeKind::Ring)
+            .with_radius(80.0);
+        assert_eq!(ring.kind, DeclarativeKind::Ring);
+        assert_eq!(ring.radius, 80.0);
+    }
+
+    #[test]
+    fn a_point_on_the_projected_ring_hits_but_its_interior_does_not() {
+        let camera = camera(100.0);
+        let mut manipulator = DeclarativeManipulator::new(7, ring_handle("ring", 2));
+        assert!(manipulator.update(&camera));
+
+        // About +Z, face-on: the screen top is a point on the ring.
+        assert!(
+            manipulator.hit(&camera, on_screen_ring(&camera, 25.0, 90.0)),
+            "the arc is grabbable"
+        );
+
+        let centre = centre(&camera);
+        assert!(!manipulator.hit(&camera, centre), "the interior passes through");
+        assert!(!manipulator.hit(&camera, [centre[0] + 500, centre[1] + 500]));
+    }
+
+    #[test]
+    fn an_edge_on_ring_still_hits_near_its_projected_line() {
+        let camera = camera(100.0);
+        let mut manipulator = DeclarativeManipulator::new(7, ring_handle("edge", 0));
+        assert!(manipulator.update(&camera));
+
+        // About +X, seen down −Z: the ring projects to a vertical line through the
+        // centre, and world angle 90° lies on −Y (the bottom of that line).
+        assert!(
+            manipulator.hit(&camera, on_screen_ring(&camera, 25.0, -90.0)),
+            "the projected end is grabbable"
+        );
+
+        let centre = centre(&camera);
+        let near = [centre[0] + HIT_SLOP as i32 - 2, centre[1]];
+        let far = [centre[0] + HIT_SLOP as i32 + 8, centre[1]];
+        assert!(manipulator.hit(&camera, near), "the projected line is grabbable");
+        assert!(!manipulator.hit(&camera, far), "past the slop misses");
+        // The projected centre sits on that line but stays transparent.
+        assert!(!manipulator.hit(&camera, centre));
+    }
+
+    #[test]
+    fn an_axis_hits_on_its_stem_and_misses_past_the_slop() {
+        let camera = camera(100.0);
+        let mut handle = handle("stem", 0);
+        handle.shape = marker();
+        handle.size = 1.0; // a tiny tip mesh leaves the stem exposed
+        handle.value = 50.0;
+        let mut manipulator = DeclarativeManipulator::new(7, handle);
+        assert!(manipulator.update(&camera));
+
+        let middle =
+            project_device(&camera, Vector3::new(25.0, 0.0, 0.0)).expect("the stem projects");
+        let press = [middle[0].round() as i32, middle[1].round() as i32];
+        assert!(manipulator.hit(&camera, press), "the stem is grabbable");
+
+        let off = [press[0], press[1] + HIT_SLOP as i32 + 8];
+        assert!(!manipulator.hit(&camera, off), "past the slop misses");
+    }
+
+    #[test]
+    fn a_wide_mesh_hits_via_its_projected_bbox() {
+        let camera = camera(100.0);
+        let mut handle = handle("wide", 0);
+        handle.shape = marker();
+        handle.size = 40.0;
+        handle.value = 0.0;
+        let mut manipulator = DeclarativeManipulator::new(7, handle);
+        assert!(manipulator.update(&camera));
+
+        let scale = scale_for(&camera, Vector3::zero(), 40.0);
+        let corner = project_device(&camera, Vector3::new(scale, scale, 0.0))
+            .expect("the mesh corner projects");
+        let press = [corner[0].round() as i32, corner[1].round() as i32];
+
+        let origin = project_device(&camera, Vector3::zero()).expect("the origin projects");
+        let pointer = [f64::from(press[0]), f64::from(press[1])];
+        let (distance, _) = point_segment_distance(pointer, origin, origin);
+        assert!(distance > HIT_SLOP, "the stem does not reach the corner");
+        assert!(manipulator.hit(&camera, press), "the bbox is grabbable");
+    }
+
+    #[test]
+    fn a_ring_drag_turns_screen_arc_into_degrees() {
+        let camera = camera(100.0);
+        let mut manipulator = DeclarativeManipulator::new(7, ring_handle("turned", 2));
+        assert!(manipulator.update(&camera));
+
+        assert!(manipulator.begin_drag(&camera, on_screen_ring(&camera, 25.0, 0.0)));
+        assert!(manipulator.drag_to(&camera, on_screen_ring(&camera, 25.0, 30.0)));
+
+        assert!(
+            (manipulator.value() - 30.0).abs() < 2.0,
+            "got {} degrees",
+            manipulator.value()
+        );
+    }
+
+    #[test]
+    fn a_ring_step_snaps_and_the_bounds_clamp() {
+        let camera = camera(100.0);
+
+        let mut stepped = ring_handle("stepped", 2);
+        stepped.step = Some(15.0);
+        let mut manipulator = DeclarativeManipulator::new(7, stepped);
+        assert!(manipulator.update(&camera));
+        assert!(manipulator.begin_drag(&camera, on_screen_ring(&camera, 25.0, 0.0)));
+        assert!(manipulator.drag_to(&camera, on_screen_ring(&camera, 25.0, 28.0)));
+        assert_eq!(manipulator.value(), 30.0, "28 degrees snaps to 30");
+
+        let mut bounded = ring_handle("bounded", 2);
+        bounded.min = Some(10.0);
+        bounded.max = Some(20.0);
+        let mut manipulator = DeclarativeManipulator::new(7, bounded);
+        assert!(manipulator.update(&camera));
+        assert!(manipulator.begin_drag(&camera, on_screen_ring(&camera, 25.0, 0.0)));
+        assert!(manipulator.drag_to(&camera, on_screen_ring(&camera, 25.0, 30.0)));
+        assert_eq!(manipulator.value(), 20.0, "the upper bound wins");
+        assert!(manipulator.drag_to(&camera, on_screen_ring(&camera, 25.0, -30.0)));
+        assert_eq!(manipulator.value(), 10.0, "the lower bound wins");
+    }
+
+    #[test]
+    fn ring_geometry_sits_on_the_ring_at_the_value() {
+        let camera = camera(100.0);
+        let mut handle = ring_handle("geometry", 2);
+        handle.value = 90.0;
+        let mut manipulator = DeclarativeManipulator::new(7, handle);
+        assert!(manipulator.update(&camera));
+
+        let radius = scale_for(&camera, Vector3::zero(), 25.0);
+        let expected = world_ring_point(&camera, 2, 25.0, 90.0);
+        let point = manipulator.items()[0].positions()[0];
+        let placed = Vector3::new(
+            f64::from(point[0]),
+            f64::from(point[1]),
+            f64::from(point[2]),
+        );
+        assert!((placed.x - expected.x).abs() < 1e-3);
+        assert!((placed.y - expected.y).abs() < 1e-3);
+        assert!((placed.z - expected.z).abs() < 1e-3);
+        assert!((placed.length() - radius).abs() < 1e-3);
+
+        let (u, v) = orthonormal_basis(Vector3::new(0.0, 0.0, 1.0));
+        let measured = placed.dot(&v).atan2(placed.dot(&u));
+        assert!((measured.to_degrees() - 90.0).abs() < 1e-3);
+    }
+
+    #[test]
+    fn a_ring_commit_carries_degrees() {
+        let camera = camera(100.0);
+        let mut handle = ring_handle("committed", 2);
+        handle.value = 45.0;
+        let mut manipulator = DeclarativeManipulator::new(11, handle);
+        assert!(manipulator.update(&camera));
+
+        assert!(manipulator.begin_drag(&camera, on_screen_ring(&camera, 25.0, 0.0)));
+        let commit = manipulator.end_drag().expect("a commit");
+
+        assert_eq!(commit.target, 11);
+        assert_eq!(commit.values, vec![45.0]);
+        assert_eq!(commit.readout, "45.00");
     }
 }

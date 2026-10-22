@@ -40,6 +40,11 @@ fn curves_edges_and_wires_round_trip() {
         let start = segment.getattr("StartPoint").expect("StartPoint");
         assert!(start.getattr("x").unwrap().extract::<f64>().unwrap().abs() < 1e-9);
         let edge = segment.call_method0("toShape").expect("toShape");
+        let shape_class = part.getattr("Shape").expect("Part.Shape");
+        assert!(
+            edge.is_instance(&shape_class).unwrap(),
+            "Part.Edge is a Part.Shape subclass, as upstream"
+        );
         let curve = edge.getattr("Curve").expect("Curve");
         assert_eq!(
             curve.get_type().name().unwrap(),
@@ -82,6 +87,19 @@ fn curves_edges_and_wires_round_trip() {
             "the wire closes"
         );
         assert_eq!(wire.getattr("Edges").unwrap().len().unwrap(), 4);
+        assert!(
+            wire.is_instance(&shape_class).unwrap(),
+            "Part.Wire is a Part.Shape subclass too"
+        );
+        assert_eq!(wire.len().unwrap(), 4);
+        let listed = py
+            .import("builtins")
+            .unwrap()
+            .getattr("list")
+            .unwrap()
+            .call1((&wire,))
+            .expect("list(wire) iterates the edges");
+        assert_eq!(listed.len().unwrap(), 4, "the sequence protocol iterates");
         let wire_shape = wire.call_method0("toShape").expect("wire.toShape");
         assert!(
             !wire_shape

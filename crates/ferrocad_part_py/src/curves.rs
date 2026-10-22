@@ -111,8 +111,8 @@ impl PyLineSegment {
     }
 
     /// The segment as an edge (upstream's `toShape`, which returns a `Part.Edge`).
-    fn toShape(&self) -> PyResult<PyEdge> {
-        PyEdge::from_curve(EdgeCurve::LineSegment(self.curve))
+    fn toShape(&self, py: Python<'_>) -> PyResult<Py<PyEdge>> {
+        Py::new(py, PyEdge::from_curve(EdgeCurve::LineSegment(self.curve))?)
     }
 
     fn __repr__(&self) -> String {
@@ -147,7 +147,7 @@ impl PyLine {
 
     /// An infinite line has no bounded edge, as upstream's `GeomLine::toShape` is
     /// documented around a parameter range.
-    fn toShape(&self) -> PyResult<PyEdge> {
+    fn toShape(&self, _py: Python<'_>) -> PyResult<Py<PyEdge>> {
         Err(OCCError::new_err(
             "an infinite Part.Line has no edge; use Part.LineSegment",
         ))
@@ -194,8 +194,8 @@ impl PyCircle {
         self.curve.radius()
     }
 
-    fn toShape(&self) -> PyResult<PyEdge> {
-        PyEdge::from_curve(EdgeCurve::Circle(self.curve))
+    fn toShape(&self, py: Python<'_>) -> PyResult<Py<PyEdge>> {
+        Py::new(py, PyEdge::from_curve(EdgeCurve::Circle(self.curve))?)
     }
 }
 
@@ -245,8 +245,8 @@ impl PyArcOfCircle {
         self.curve.last()
     }
 
-    fn toShape(&self) -> PyResult<PyEdge> {
-        PyEdge::from_curve(EdgeCurve::Arc(self.curve))
+    fn toShape(&self, py: Python<'_>) -> PyResult<Py<PyEdge>> {
+        Py::new(py, PyEdge::from_curve(EdgeCurve::Arc(self.curve))?)
     }
 }
 
@@ -262,17 +262,22 @@ pub(crate) struct EdgeEntry {
     pub(crate) curve: Option<EdgeCurve>,
 }
 
-/// `Part.Edge(shape_or_curve)` — an edge (upstream's `Part.Edge`).
-#[pyclass(name = "Edge", module = "Part")]
+/// `Part.Edge(shape_or_curve)` — an edge, a `Part.Shape` subclass as upstream.
+#[pyclass(name = "Edge", module = "Part", extends = PartShape)]
 pub struct PyEdge {
     entry: Mutex<EdgeEntry>,
 }
 
 impl PyEdge {
-    pub(crate) fn from_entry(entry: EdgeEntry) -> Self {
-        Self {
-            entry: Mutex::new(entry),
-        }
+    fn initializer(entry: EdgeEntry) -> PyClassInitializer<Self> {
+        PyClassInitializer::from(PartShape::from_shape(entry.shape.clone()))
+            .add_subclass(Self {
+                entry: Mutex::new(entry),
+            })
+    }
+
+    pub(crate) fn from_entry(entry: EdgeEntry) -> PyClassInitializer<Self> {
+        Self::initializer(entry)
     }
 
     /// A copy of the entry (the shape handle is cheap to clone).
@@ -325,8 +330,8 @@ impl PyEdge {
     }
 
     /// An edge built from an analytic curve.
-    pub(crate) fn from_curve(curve: EdgeCurve) -> PyResult<Self> {
-        Ok(Self::from_entry(EdgeEntry {
+    pub(crate) fn from_curve(curve: EdgeCurve) -> PyResult<PyClassInitializer<Self>> {
+        Ok(Self::initializer(EdgeEntry {
             shape: shape_from_curve(&curve)?,
             curve: Some(curve),
         }))
@@ -336,8 +341,8 @@ impl PyEdge {
 #[pymethods]
 impl PyEdge {
     #[new]
-    fn new(value: &Bound<'_, PyAny>) -> PyResult<Self> {
-        Ok(Self::from_entry(Self::entry_from(value)?))
+    fn new(value: &Bound<'_, PyAny>) -> PyResult<PyClassInitializer<Self>> {
+        Ok(Self::initializer(Self::entry_from(value)?))
     }
 
     /// The analytic curve (`edge.Curve` upstream). `None` when the kernel cannot
@@ -372,8 +377,8 @@ impl PyEdge {
     }
 }
 
-/// `Part.Wire(edges)` — an ordered edge chain.
-#[pyclass(name = "Wire", module = "Part")]
+/// `Part.Wire(edges)` — an ordered edge chain, a `Part.Shape` subclass as upstream.
+#[pyclass(name = "Wire", module = "Part", extends = PartShape)]
 pub struct PyWire {
     entries: Mutex<Vec<EdgeEntry>>,
 }
@@ -382,24 +387,58 @@ impl PyWire {
     fn entries(&self) -> std::sync::MutexGuard<'_, Vec<EdgeEntry>> {
         self.entries.lock().unwrap_or_else(|e| e.into_inner())
     }
+
+    /// A wire whose base shape is built eagerly, so `Part.Wire` really is a
+    /// `Part.Shape` (upstream builds the B-Rep wire on construction too).
+    fn initializer(entries: Vec<EdgeEntry>) -> PyResult<PyClassInitializer<Self>> {
+        let base = if entries.is_empty() {
+            PartShape::new()
+        } else {
+            let shapes: Vec<Shape> = entries.iter().map(|entry| entry.shape.clone()).collect();
+            PartShape::from_shape(backend().make_wire(&shapes).map_err(kernel_error)?)
+        };
+        Ok(PyClassInitializer::from(base).add_subclass(Self {
+            entries: Mutex::new(entries),
+        }))
+    }
 }
 
 #[pymethods]
 impl PyWire {
     #[new]
-    fn new(edges: &Bound<'_, PyAny>) -> PyResult<Self> {
+    fn new(edges: &Bound<'_, PyAny>) -> PyResult<PyClassInitializer<Self>> {
+        // Upstream accepts a single edge/curve (`Part.Wire(Part.makeCircle(...))`),
+        // another wire, or an iterable of edges.
+        if let Ok(wire) = edges.downcast::<PyWire>() {
+            return Self::initializer(wire.borrow().entries().clone());
+        }
+        if let Ok(entry) = PyEdge::entry_from(edges) {
+            return Self::initializer(vec![entry]);
+        }
         let mut entries = Vec::new();
         for edge in edges.try_iter()? {
             entries.push(PyEdge::entry_from(&edge?)?);
         }
-        Ok(Self {
-            entries: Mutex::new(entries),
-        })
+        Self::initializer(entries)
     }
 
-    /// Append one edge/curve.
-    fn add(&self, edge: &Bound<'_, PyAny>) -> PyResult<()> {
-        self.entries().push(PyEdge::entry_from(edge)?);
+    /// Append one edge/curve; the base shape is rebuilt so the object stays a shape.
+    fn add(mut slf: PyRefMut<'_, Self>, edge: &Bound<'_, PyAny>) -> PyResult<()> {
+        let entry = PyEdge::entry_from(edge)?;
+        let shapes = {
+            let mut entries = slf.entries.lock().unwrap_or_else(|e| e.into_inner());
+            entries.push(entry);
+            entries
+                .iter()
+                .map(|entry| entry.shape.clone())
+                .collect::<Vec<_>>()
+        };
+        let shape = backend().make_wire(&shapes).map_err(kernel_error)?;
+        *slf
+            .as_super()
+            .shape
+            .lock()
+            .unwrap_or_else(|e| e.into_inner()) = Some(shape);
         Ok(())
     }
 
@@ -427,14 +466,27 @@ impl PyWire {
         }
     }
 
-    /// The wire as a kernel shape (`BRepBuilderAPI_MakeWire`).
-    fn toShape(&self) -> PyResult<PartShape> {
-        let shapes: Vec<Shape> = self.entries().iter().map(|e| e.shape.clone()).collect();
-        if shapes.is_empty() {
-            return Err(OCCError::new_err("a wire needs at least one edge"));
+    /// The wire as a kernel shape (already built by the constructor/`add`).
+    fn toShape(slf: PyRef<'_, Self>) -> PartShape {
+        slf.as_super().copy()
+    }
+
+    /// Upstream wires iterate over their edges; the sequence protocol gives both
+    /// `list(wire)` and `for edge in wire:`.
+    fn __len__(&self) -> usize {
+        self.entries().len()
+    }
+
+    fn __getitem__(&self, py: Python<'_>, index: isize) -> PyResult<Py<PyEdge>> {
+        let entries = self.entries();
+        let len = entries.len() as isize;
+        let index = if index < 0 { index + len } else { index };
+        if index < 0 || index >= len {
+            return Err(pyo3::exceptions::PyIndexError::new_err(
+                "wire index out of range",
+            ));
         }
-        let shape = backend().make_wire(&shapes).map_err(kernel_error)?;
-        Ok(PartShape::from_shape(shape))
+        Py::new(py, PyEdge::from_entry(entries[index as usize].clone()))
     }
 
     fn __repr__(&self) -> String {
@@ -474,7 +526,7 @@ fn makeCircle(
 /// `Part.makePolygon(points, closed=False)` → a `Part.Wire`.
 #[pyfunction]
 #[pyo3(signature = (points, closed = false))]
-fn makePolygon(points: &Bound<'_, PyAny>, closed: bool) -> PyResult<PyWire> {
+fn makePolygon(py: Python<'_>, points: &Bound<'_, PyAny>, closed: bool) -> PyResult<Py<PyWire>> {
     let mut parsed = Vec::new();
     for point in points.try_iter()? {
         parsed.push(vector(&point?)?);
@@ -487,9 +539,7 @@ fn makePolygon(points: &Bound<'_, PyAny>, closed: bool) -> PyResult<PyWire> {
             curve: Some(curve),
         });
     }
-    Ok(PyWire {
-        entries: Mutex::new(entries),
-    })
+    Py::new(py, PyWire::initializer(entries)?)
 }
 
 /// Register the analytic half on the `Part` module.

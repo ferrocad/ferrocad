@@ -57,8 +57,8 @@ fn register_kernel() {
 /// The `Mutex` is here at the Python boundary only: `Shape` is `Send` but not `Sync`
 /// (see `ferrocad_geom`), and a `#[pyclass]` must be `Send + Sync`. It is not a lock
 /// in the seam.
-#[pyclass(name = "Shape", module = "Part")]
-struct PartShape {
+#[pyclass(name = "Shape", module = "Part", subclass)]
+pub struct PartShape {
     shape: Mutex<Option<Shape>>,
 }
 
@@ -72,6 +72,13 @@ impl PartShape {
     pub(crate) fn from_shape(shape: Shape) -> Self {
         PartShape {
             shape: Mutex::new(Some(shape)),
+        }
+    }
+
+    /// A second handle to the same shape (for a subclass's `toShape`).
+    pub(crate) fn copy(&self) -> Self {
+        PartShape {
+            shape: Mutex::new(self.shape()),
         }
     }
 

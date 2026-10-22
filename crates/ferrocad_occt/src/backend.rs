@@ -13,7 +13,7 @@
 use cxx::UniquePtr;
 use ferrocad_geom::{
     Capabilities, Continuity, ElementKind, ElementRef, GeomError, GeometryBackend, History,
-    OpResult, Shape, Tessellation, TessellationOptions, unsupported,
+    MassProperties, OpResult, Shape, Tessellation, TessellationOptions, unsupported,
 };
 use ferrocad_curves::{Arc, Circle, EdgeCurve, Ellipse, Line, Vector3};
 use ferrocad_types::Placement;
@@ -365,6 +365,36 @@ impl GeometryBackend for OcctBackend {
             Vector3::new(xmin, ymin, zmin),
             Vector3::new(xmax, ymax, zmax),
         ))
+    }
+
+    fn mass_properties(&self, shape: &Shape) -> Option<MassProperties> {
+        let occt = downcast(shape).ok()?;
+        let guard = occt.borrow();
+        let inner = guard.as_ref()?;
+
+        let mut linear = ffi::g_prop::GProps_new();
+        ffi::b_rep_g_prop::BRepGProp::LinearProperties(inner, linear.pin_mut(), false, false);
+        let length = linear.Mass();
+
+        let mut surface = ffi::g_prop::GProps_new();
+        ffi::b_rep_g_prop::BRepGProp::SurfaceProperties(inner, surface.pin_mut(), false, false);
+        let area = surface.Mass();
+
+        let mut volume = ffi::g_prop::GProps_new();
+        ffi::b_rep_g_prop::BRepGProp::VolumeProperties(
+            inner,
+            volume.pin_mut(),
+            false,
+            false,
+            false,
+        );
+        let centre = ffi::g_prop::GProp_GProps_CentreOfMass(&volume);
+        Some(MassProperties {
+            length,
+            area,
+            volume: volume.Mass(),
+            center_of_mass: Vector3::new(centre.X(), centre.Y(), centre.Z()),
+        })
     }
 
     fn place(&self, shape: &Shape, placement: &Placement) -> Result<Shape, GeomError> {

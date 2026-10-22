@@ -555,6 +555,15 @@ pub fn unsupported(operation: &'static str) -> GeomError {
 /// The trait is `Send + Sync` and object-safe, because a backend is a shared service:
 /// an application installs one and hands it out as an `Arc<dyn GeometryBackend>`, so a
 /// workbench (Part) can be composed with a kernel without depending on it.
+/// The integral properties of a shape, in the kernel's length units.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct MassProperties {
+    pub length: f64,
+    pub area: f64,
+    pub volume: f64,
+    pub center_of_mass: Vector3,
+}
+
 pub trait GeometryBackend: Send + Sync {
     /// A rectangular box with its corner at the origin.
     fn make_box(&self, length: f64, width: f64, height: f64) -> Result<Shape, GeomError>;
@@ -625,6 +634,12 @@ pub trait GeometryBackend: Send + Sync {
     ///
     /// A backend that cannot bound the shape (or a null shape) reports `None`.
     fn bounds(&self, _shape: &Shape) -> Option<(Vector3, Vector3)> {
+        None
+    }
+
+    /// Length, area, volume and centre of mass (`Shape.Length`/`Area`/`Volume`/
+    /// `CenterOfMass`). A backend that cannot measure the shape reports `None`.
+    fn mass_properties(&self, _shape: &Shape) -> Option<MassProperties> {
         None
     }
 

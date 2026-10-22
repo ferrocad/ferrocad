@@ -55,7 +55,7 @@ fn vector(value: &Bound<'_, PyAny>) -> PyResult<Vector3> {
 }
 
 /// A `ferrocad.Vector` from a [`Vector3`] (upstream returns `Base.Vector`).
-fn py_vector(py: Python<'_>, value: Vector3) -> PyResult<PyObject> {
+pub(crate) fn py_vector(py: Python<'_>, value: Vector3) -> PyResult<PyObject> {
     let module = py.import("ferrocad")?;
     Ok(module
         .getattr("Vector")?

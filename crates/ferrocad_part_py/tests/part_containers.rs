@@ -59,6 +59,10 @@ fn booleans_and_compounds_round_trip() {
                 .unwrap(),
             0
         );
+        assert!((box_a.getattr("Volume").unwrap().extract::<f64>().unwrap() - 8.0).abs() < 1e-9);
+        assert!((box_a.getattr("Area").unwrap().extract::<f64>().unwrap() - 24.0).abs() < 1e-9);
+        let center = box_a.getattr("CenterOfMass").expect("CenterOfMass");
+        assert!((center.getattr("x").unwrap().extract::<f64>().unwrap() - 1.0).abs() < 1e-9);
         let bounds = box_a.getattr("BoundBox").expect("Shape.BoundBox");
         assert!((bounds.getattr("XMax").unwrap().extract::<f64>().unwrap() - 2.0).abs() < 1e-9);
         let copied = ferrocad

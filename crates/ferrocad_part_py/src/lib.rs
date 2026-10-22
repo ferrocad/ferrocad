@@ -250,6 +250,40 @@ impl PartShape {
         }
     }
 
+    /// The shape's length (`Shape.Length`): edge/wire length, 0 otherwise.
+    #[getter]
+    fn Length(&self) -> f64 {
+        self.mass_properties().map(|mass| mass.length).unwrap_or(0.0)
+    }
+
+    /// The surface area (`Shape.Area`).
+    #[getter]
+    fn Area(&self) -> f64 {
+        self.mass_properties().map(|mass| mass.area).unwrap_or(0.0)
+    }
+
+    /// The enclosed volume (`Shape.Volume`).
+    #[getter]
+    fn Volume(&self) -> f64 {
+        self.mass_properties().map(|mass| mass.volume).unwrap_or(0.0)
+    }
+
+    /// The centre of mass (`Shape.CenterOfMass`).
+    #[getter]
+    fn CenterOfMass(&self, py: Python<'_>) -> PyResult<PyObject> {
+        let point = self
+            .mass_properties()
+            .map(|mass| mass.center_of_mass)
+            .unwrap_or_else(ferrocad_curves::Vector3::zero);
+        curves::py_vector(py, point)
+    }
+
+    /// Upstream's alias for `CenterOfMass`.
+    #[getter]
+    fn CenterOfGravity(&self, py: Python<'_>) -> PyResult<PyObject> {
+        self.CenterOfMass(py)
+    }
+
     /// Upstream's element-map version. This kernel emits no element maps, so it
     /// is empty and `ElementMapSize` is zero (upstream's own tests treat that as
     /// "skip the map assertions").
@@ -411,6 +445,11 @@ enum BooleanOp {
 }
 
 impl PartShape {
+    fn mass_properties(&self) -> Option<ferrocad_geom::MassProperties> {
+        let shape = self.shape()?;
+        ferrocad_part::backend().mass_properties(&shape)
+    }
+
     fn named_shape(&self) -> PyResult<Shape> {
         self.shape()
             .ok_or_else(|| curves::OCCError::new_err("a null shape cannot be combined"))

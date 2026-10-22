@@ -611,6 +611,16 @@ pub trait GeometryBackend: Send + Sync {
     /// Boolean difference, `a` minus `b`.
     fn cut(&self, a: &Shape, b: &Shape) -> Result<OpResult, GeomError>;
 
+    /// Boolean intersection.
+    fn common(&self, _a: &Shape, _b: &Shape) -> Result<OpResult, GeomError> {
+        Err(unsupported("common"))
+    }
+
+    /// A compound of `shapes` (`Part::Compound`).
+    fn make_compound(&self, _shapes: &[Shape]) -> Result<Shape, GeomError> {
+        Err(unsupported("make_compound"))
+    }
+
     /// Round the given edges of `shape`.
     fn fillet(&self, shape: &Shape, edges: &[ElementRef], radius: f64)
     -> Result<OpResult, GeomError>;

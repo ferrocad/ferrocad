@@ -281,6 +281,56 @@ impl GeometryBackend for OcctBackend {
         topology::fillet(shape, edges, radius)
     }
 
+    fn common(&self, a: &Shape, b: &Shape) -> Result<OpResult, GeomError> {
+        let a_occt = downcast(a)?;
+        let b_occt = downcast(b)?;
+        let a_guard = a_occt.borrow();
+        let b_guard = b_occt.borrow();
+        let sa = a_guard
+            .as_ref()
+            .ok_or(OcctError::InvalidInput { what: "null shape" })?;
+        let sb = b_guard
+            .as_ref()
+            .ok_or(OcctError::InvalidInput { what: "null shape" })?;
+        let mut op = ffi::b_rep_algo_api::BRepAlgoAPI_Common_new(sa, sb);
+        if !op.IsDone() {
+            return Err(OcctError::NotDone { operation: "common" }.into());
+        }
+        let out_faces = sub_shape_map(op.pin_mut().Shape(), TopAbs_ShapeEnum::TopAbs_FACE);
+        let history = build_history(sa, &out_faces, |face, mods, gens| {
+            bridge::fc_brep_common_modified(op.pin_mut(), face, mods.pin_mut());
+            bridge::fc_brep_common_generated(op.pin_mut(), face, gens.pin_mut());
+            bridge::fc_brep_common_is_deleted(op.pin_mut(), face)
+        });
+        Ok(OpResult::new(erase(op.pin_mut().Shape()), history))
+    }
+
+    fn make_compound(&self, shapes: &[Shape]) -> Result<Shape, GeomError> {
+        if shapes.is_empty() {
+            return Err(OcctError::InvalidInput {
+                what: "a compound needs at least one shape",
+            }
+            .into());
+        }
+        let mut compound = ffi::topo_ds::TopoDS_Compound_new();
+        let builder = ffi::b_rep::BRep_Builder_new();
+        let builder = ffi::b_rep::BRep_Builder_upcast_to_topods_builder(&builder);
+        builder.MakeCompound(compound.pin_mut());
+
+        // `TopoDS_Builder::Add(S, C)` takes the container first and the child
+        // second; the cxx binding keeps that order (`shape` is the compound).
+        let mut compound = ffi::topo_ds::TopoDS_Compound_as_shape(compound);
+        for shape in shapes {
+            let occt = downcast(shape)?;
+            let guard = occt.borrow();
+            let inner = guard
+                .as_ref()
+                .ok_or(OcctError::InvalidInput { what: "null shape" })?;
+            builder.Add(compound.pin_mut(), inner);
+        }
+        Ok(erase(&compound))
+    }
+
     fn place(&self, shape: &Shape, placement: &Placement) -> Result<Shape, GeomError> {
         let shape_occt = downcast(shape)?;
         let shape_guard = shape_occt.borrow();

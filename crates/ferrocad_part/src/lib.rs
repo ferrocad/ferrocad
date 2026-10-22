@@ -21,6 +21,7 @@
 //! The library needs no kernel. Its tests use OCCT through a dev-dependency, so they
 //! still need OCCT 7.8+; the crate is **not** a default member.
 
+mod containers;
 mod dress_up;
 mod shape_property;
 
@@ -32,6 +33,9 @@ use ferrocad_geom::{GeometryBackend, Shape};
 use ferrocad_types::Placement;
 
 pub use dress_up::{CHAMFER_TYPE, FILLET_TYPE};
+pub use containers::{
+    COMMON_TYPE, COMPOUND_TYPE, CUT_TYPE, FUSE_TYPE, MULTICOMMON_TYPE, MULTIFUSE_TYPE,
+};
 pub use shape_property::{make_shape_property, shape_of, ShapeProperty, TYPE_NAME};
 
 /// The analytic half of Part (lines, segments, circles, arcs, ellipses, wires).
@@ -64,6 +68,37 @@ pub fn register(backend: Arc<dyn GeometryBackend>) {
     shape_property::register();
     object_registry::register("Part::Feature", Arc::new(Feature));
     object_registry::register(BOX_TYPE, Arc::new(BoxPrimitive));
+    object_registry::register(
+        FUSE_TYPE,
+        Arc::new(containers::Boolean {
+            kind: containers::BooleanKind::Fuse,
+        }),
+    );
+    object_registry::register(
+        CUT_TYPE,
+        Arc::new(containers::Boolean {
+            kind: containers::BooleanKind::Cut,
+        }),
+    );
+    object_registry::register(
+        COMMON_TYPE,
+        Arc::new(containers::Boolean {
+            kind: containers::BooleanKind::Common,
+        }),
+    );
+    object_registry::register(
+        MULTIFUSE_TYPE,
+        Arc::new(containers::Multi {
+            kind: containers::BooleanKind::Fuse,
+        }),
+    );
+    object_registry::register(
+        MULTICOMMON_TYPE,
+        Arc::new(containers::Multi {
+            kind: containers::BooleanKind::Common,
+        }),
+    );
+    object_registry::register(COMPOUND_TYPE, Arc::new(containers::Compound));
     object_registry::register(FILLET_TYPE, Arc::new(dress_up::Fillet));
     object_registry::register(CHAMFER_TYPE, Arc::new(dress_up::Chamfer));
 }
@@ -246,6 +281,115 @@ mod tests {
         let mut doc = Document::new();
         let id = doc.add_object("BadBox", BOX_TYPE);
         doc.set_property(id, "Height", Property::Float(0.0)).unwrap();
+        let _ = doc.recompute();
+        assert!(doc.object(id).unwrap().invalid);
+    }
+
+    /// Two overlapping 10 mm boxes, recomputed and ready to link.
+    fn two_boxes(doc: &mut Document) {
+        for name in ["BoxA", "BoxB"] {
+            let id = doc.add_object(name, BOX_TYPE);
+            doc.set_property(id, "Length", Property::Float(10.0)).unwrap();
+            doc.set_property(id, "Width", Property::Float(10.0)).unwrap();
+            doc.set_property(id, "Height", Property::Float(10.0)).unwrap();
+            let placement = if name == "BoxB" {
+                Placement {
+                    base: ferrocad_types::Vector3::new(5.0, 0.0, 0.0),
+                    rotation: ferrocad_types::Rotation::identity(),
+                }
+            } else {
+                Placement::identity()
+            };
+            doc.set_property(id, "Placement", Property::Placement(placement))
+                .unwrap();
+        }
+        doc.recompute().unwrap();
+    }
+
+    fn stored_shape(doc: &Document, id: ObjectId) -> Shape {
+        shape_of(doc.object(id).unwrap().properties.get("Shape").unwrap())
+            .unwrap()
+            .shape()
+            .expect("the feature produced a shape")
+    }
+
+    #[test]
+    fn booleans_execute_from_linked_boxes() {
+        setup();
+        let mut doc = Document::new();
+        two_boxes(&mut doc);
+
+        for (type_id, name) in [(FUSE_TYPE, "Fuse"), (CUT_TYPE, "Cut"), (COMMON_TYPE, "Common")] {
+            let id = doc.add_object(name, type_id);
+            doc.set_property(id, "Base", Property::Link("BoxA".into()))
+                .unwrap();
+            doc.set_property(id, "Tools", Property::LinkList(vec!["BoxB".into()]))
+                .unwrap();
+            doc.recompute().unwrap();
+            let shape = stored_shape(&doc, id);
+            assert!(
+                backend().resolve(&shape, "Face1").is_some(),
+                "{name} produced a shape"
+            );
+            assert!(!doc.object(id).unwrap().invalid, "{name} is valid");
+        }
+    }
+
+    #[test]
+    fn multi_booleans_fold_their_linked_boxes() {
+        setup();
+        let mut doc = Document::new();
+        two_boxes(&mut doc);
+
+        for (type_id, name) in [(MULTIFUSE_TYPE, "MultiFuse"), (MULTICOMMON_TYPE, "MultiCommon")] {
+            let id = doc.add_object(name, type_id);
+            doc.set_property(
+                id,
+                "Shapes",
+                Property::LinkList(vec!["BoxA".into(), "BoxB".into()]),
+            )
+            .unwrap();
+            doc.recompute().unwrap();
+            let shape = stored_shape(&doc, id);
+            assert!(
+                backend().resolve(&shape, "Face1").is_some(),
+                "{name} produced a shape"
+            );
+            assert!(!doc.object(id).unwrap().invalid, "{name} is valid");
+        }
+    }
+
+    #[test]
+    fn a_compound_contains_its_linked_shapes() {
+        setup();
+        let mut doc = Document::new();
+        two_boxes(&mut doc);
+
+        let id = doc.add_object("Compound", COMPOUND_TYPE);
+        doc.set_property(
+            id,
+            "Links",
+            Property::LinkList(vec!["BoxA".into(), "BoxB".into()]),
+        )
+        .unwrap();
+        doc.recompute().unwrap();
+        let shape = stored_shape(&doc, id);
+        assert_eq!(
+            backend()
+                .elements(&shape, ferrocad_geom::ElementKind::Solid)
+                .len(),
+            2
+        );
+    }
+
+    #[test]
+    fn a_boolean_without_tools_is_invalid() {
+        setup();
+        let mut doc = Document::new();
+        two_boxes(&mut doc);
+        let id = doc.add_object("Lonely", FUSE_TYPE);
+        doc.set_property(id, "Base", Property::Link("BoxA".into()))
+            .unwrap();
         let _ = doc.recompute();
         assert!(doc.object(id).unwrap().invalid);
     }

@@ -27,7 +27,7 @@ mod shape_property;
 use std::sync::{Arc, OnceLock};
 
 use ferrocad_core::object_registry::{self, ObjectType};
-use ferrocad_core::{prop_status, Property};
+use ferrocad_core::{Document, ObjectId, Property, prop_status};
 use ferrocad_geom::{GeometryBackend, Shape};
 use ferrocad_types::Placement;
 
@@ -63,6 +63,7 @@ pub fn register(backend: Arc<dyn GeometryBackend>) {
     let _ = BACKEND.set(backend);
     shape_property::register();
     object_registry::register("Part::Feature", Arc::new(Feature));
+    object_registry::register(BOX_TYPE, Arc::new(BoxPrimitive));
     object_registry::register(FILLET_TYPE, Arc::new(dress_up::Fillet));
     object_registry::register(CHAMFER_TYPE, Arc::new(dress_up::Chamfer));
 }
@@ -70,6 +71,98 @@ pub fn register(backend: Arc<dyn GeometryBackend>) {
 /// A convenience box from the injected backend (what a script's `Part.makeBox` calls).
 pub fn make_box(length: f64, width: f64, height: f64) -> Option<Shape> {
     backend().make_box(length, width, height).ok()
+}
+
+/// `Part::Box`: a parametric box (`Length` × `Width` × `Height`).
+///
+/// The shape is rebuilt by `execute` (a document recompute), so the object behaves
+/// like upstream's `Part::Box`: set the dimensions, recompute, read `Shape`.
+pub const BOX_TYPE: &str = "Part::Box";
+
+struct BoxPrimitive;
+
+/// Read a float property, or the default when it is absent/another kind.
+fn float_property(doc: &Document, id: ObjectId, name: &str, default: f64) -> f64 {
+    doc.object(id)
+        .and_then(|object| object.properties.get(name))
+        .and_then(|value| match value {
+            Property::Float(value) => Some(*value),
+            Property::Integer(value) => Some(*value as f64),
+            _ => None,
+        })
+        .unwrap_or(default)
+}
+
+impl ObjectType for BoxPrimitive {
+    fn default_properties(&self) -> Vec<(String, Property, u32)> {
+        vec![
+            (
+                "Length".to_string(),
+                Property::Float(10.0),
+                prop_status::NONE,
+            ),
+            (
+                "Width".to_string(),
+                Property::Float(10.0),
+                prop_status::NONE,
+            ),
+            (
+                "Height".to_string(),
+                Property::Float(10.0),
+                prop_status::NONE,
+            ),
+            (
+                "Placement".to_string(),
+                Property::Placement(Placement::identity()),
+                prop_status::NONE,
+            ),
+            (
+                "Shape".to_string(),
+                make_shape_property(ShapeProperty::empty()),
+                prop_status::NONE,
+            ),
+        ]
+    }
+
+    fn property_meta(&self, name: &str) -> Option<(String, String)> {
+        Some(("Box".to_string(), format!("Part box {name}")))
+    }
+
+    fn execute(&self, doc: &mut Document, id: ObjectId) {
+        let (length, width, height, placement) = {
+            let Some(object) = doc.object(id) else {
+                return;
+            };
+            let placement = match object.properties.get("Placement") {
+                Some(Property::Placement(placement)) => Some(*placement),
+                _ => None,
+            };
+            (
+                float_property(doc, id, "Length", 10.0),
+                float_property(doc, id, "Width", 10.0),
+                float_property(doc, id, "Height", 10.0),
+                placement,
+            )
+        };
+
+        if !(length > 0.0 && width > 0.0 && height > 0.0) {
+            doc.mark_invalid(id);
+            return;
+        }
+
+        let shape = match backend().make_box(length, width, height) {
+            Ok(shape) => shape,
+            Err(_) => {
+                doc.mark_invalid(id);
+                return;
+            }
+        };
+        let shape = match placement {
+            Some(placement) => backend().place(&shape, &placement).unwrap_or(shape),
+            None => shape,
+        };
+        doc.set_property_raw(id, "Shape", make_shape_property(ShapeProperty::new(shape)));
+    }
 }
 
 /// `Part::Feature`: a shape plus a placement.
@@ -112,6 +205,49 @@ mod tests {
         setup();
         assert!(property_types::contains("Part::PropertyPartShape"));
         assert!(object_registry::is_registered("Part::Feature"));
+        assert!(object_registry::is_registered(BOX_TYPE));
+    }
+
+    #[test]
+    fn a_part_box_executes_into_a_box_shape() {
+        setup();
+        let mut doc = Document::new();
+        let id = doc.add_object("Box", BOX_TYPE);
+
+        // The primitive exposes the properties upstream's Part::Box has.
+        let object = doc.object(id).unwrap();
+        assert_eq!(
+            object.properties.get("Length"),
+            Some(&Property::Float(10.0))
+        );
+        assert!(object.properties.get("Width").is_some());
+        assert!(object.properties.get("Height").is_some());
+        assert!(
+            shape_of(object.properties.get("Shape").unwrap())
+                .unwrap()
+                .shape()
+                .is_none(),
+            "the shape is empty until the first recompute"
+        );
+
+        doc.set_property(id, "Length", Property::Float(3.0)).unwrap();
+        doc.recompute().unwrap();
+        let object = doc.object(id).unwrap();
+        let shape = shape_of(object.properties.get("Shape").unwrap())
+            .unwrap()
+            .shape()
+            .expect("a recompute builds the box");
+        assert!(backend().resolve(&shape, "Face6").is_some(), "a box has six faces");
+    }
+
+    #[test]
+    fn a_non_positive_box_is_marked_invalid() {
+        setup();
+        let mut doc = Document::new();
+        let id = doc.add_object("BadBox", BOX_TYPE);
+        doc.set_property(id, "Height", Property::Float(0.0)).unwrap();
+        let _ = doc.recompute();
+        assert!(doc.object(id).unwrap().invalid);
     }
 
     #[test]

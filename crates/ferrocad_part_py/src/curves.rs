@@ -255,6 +255,75 @@ impl PyArcOfCircle {
     }
 }
 
+/// `Part.Plane(origin=None, normal=None)` — an infinite plane, the XY plane
+/// (`Part.Plane()`) by default.
+#[pyclass(name = "Plane", module = "Part")]
+#[derive(Clone)]
+pub struct PyPlane {
+    location: Vector3,
+    /// The unit normal, as upstream's `Geom_Plane` keeps a `gp_Dir`.
+    normal: Vector3,
+}
+
+#[pymethods]
+impl PyPlane {
+    #[new]
+    #[pyo3(signature = (origin = None, normal = None))]
+    fn new(origin: Option<&Bound<'_, PyAny>>, normal: Option<&Bound<'_, PyAny>>) -> PyResult<Self> {
+        let location = origin.map(vector).transpose()?.unwrap_or_else(Vector3::zero);
+        let normal = normal
+            .map(vector)
+            .transpose()?
+            .unwrap_or_else(|| Vector3::new(0.0, 0.0, 1.0));
+        if normal.is_null() {
+            return Err(OCCError::new_err("Part.Plane needs a non-zero normal"));
+        }
+        Ok(Self {
+            location,
+            normal: normal.normalize(),
+        })
+    }
+
+    /// The plane's origin (upstream's `Plane.Position`).
+    #[getter]
+    fn Location(&self, py: Python<'_>) -> PyResult<PyObject> {
+        py_vector(py, self.location)
+    }
+
+    /// The plane's unit normal (upstream's `Plane.Axis`).
+    #[getter]
+    fn Axis(&self, py: Python<'_>) -> PyResult<PyObject> {
+        py_vector(py, self.normal)
+    }
+
+    /// The intersection with `other` as a list of lines: empty when the planes are
+    /// parallel or coincident, otherwise the single line they share (upstream's
+    /// `GeomAPI_IntSS` behaviour).
+    fn intersect(&self, py: Python<'_>, other: PyRef<'_, PyPlane>) -> PyResult<Vec<Py<PyLine>>> {
+        let cross = self.normal.cross(&other.normal);
+        if cross.is_null() {
+            return Ok(Vec::new());
+        }
+        // With unit normals the planes are `n1·x = d1` and `n2·x = d2`, and a
+        // point on the shared line is `(d1 (n2 × c) + d2 (c × n1)) / |c|²` for
+        // `c = n1 × n2`; `Line::new` normalises the direction for us.
+        let d1 = self.normal.dot(&self.location);
+        let d2 = other.normal.dot(&other.location);
+        let point = other
+            .normal
+            .cross(&cross)
+            .scale(d1)
+            .add(&cross.cross(&self.normal).scale(d2))
+            .scale(1.0 / cross.sqr());
+        let line = Line::new(point, cross).map_err(curve_error)?;
+        Ok(vec![Py::new(py, PyLine { curve: line })?])
+    }
+
+    fn __repr__(&self) -> String {
+        format!("Part.Plane({:?}, {:?})", self.location, self.normal)
+    }
+}
+
 /// The backing surface of a face (`Face.Surface`). Only `TypeId` is carried in
 /// this slice; geometry-specific properties come later.
 #[pyclass(name = "GeomSurface", module = "Part")]
@@ -981,6 +1050,7 @@ pub(crate) fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyLine>()?;
     m.add_class::<PyCircle>()?;
     m.add_class::<PyArcOfCircle>()?;
+    m.add_class::<PyPlane>()?;
     m.add_class::<PyEdge>()?;
     m.add_class::<PyWire>()?;
     m.add_class::<PyVertex>()?;

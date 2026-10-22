@@ -22,6 +22,7 @@ name = "ferrocad_occt"
 
 [dependencies]
 ferrocad_geom.workspace = true
+ferrocad_curves.workspace = true
 ferrocad_types.workspace = true
 opencascade-sys = "0.3"
 cxx = "1"

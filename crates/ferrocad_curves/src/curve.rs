@@ -435,6 +435,41 @@ impl Ellipse {
         })
     }
 
+    /// An ellipse whose major axis points along `x_axis` (projected into the plane).
+    ///
+    /// When the radii arrive the other way round, they are swapped and the axis
+    /// rotates to `normal × x_axis`, so "major" always names the longer axis.
+    pub fn with_axis(
+        center: Vector3,
+        normal: Vector3,
+        x_axis: Vector3,
+        major_radius: f64,
+        minor_radius: f64,
+    ) -> Result<Self, CurveError> {
+        if !major_radius.is_finite()
+            || !minor_radius.is_finite()
+            || major_radius <= TOLERANCE
+            || minor_radius <= TOLERANCE
+        {
+            return Err(CurveError::Degenerate);
+        }
+        let normal = unit(normal).ok_or(CurveError::Degenerate)?;
+        let projected = x_axis.sub(&normal.scale(normal.dot(&x_axis)));
+        let projected = unit(projected).ok_or(CurveError::Degenerate)?;
+        let (major_radius, minor_radius, x_axis) = if major_radius >= minor_radius {
+            (major_radius, minor_radius, projected)
+        } else {
+            (minor_radius, major_radius, normal.cross(&projected))
+        };
+        Ok(Self {
+            center,
+            normal,
+            x_axis,
+            major_radius,
+            minor_radius,
+        })
+    }
+
     /// The centre point.
     pub fn center(&self) -> Vector3 {
         self.center

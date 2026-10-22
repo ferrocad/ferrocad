@@ -13,8 +13,9 @@
 use cxx::UniquePtr;
 use ferrocad_geom::{
     Capabilities, Continuity, ElementKind, ElementRef, GeomError, GeometryBackend, History,
-    OpResult, Shape, Tessellation, TessellationOptions,
+    OpResult, Shape, Tessellation, TessellationOptions, unsupported,
 };
+use ferrocad_curves::{Arc, Circle, EdgeCurve, Ellipse, Line, Vector3};
 use ferrocad_types::Placement;
 use opencascade_sys as ffi;
 
@@ -49,6 +50,92 @@ impl GeometryBackend for OcctBackend {
             return Err(OcctError::NotDone { operation: "make_box" }.into());
         }
         Ok(shape)
+    }
+
+    fn make_edge(&self, curve: &EdgeCurve) -> Result<Shape, GeomError> {
+        match curve {
+            EdgeCurve::LineSegment(segment) => {
+                let start = point(segment.start());
+                let end = point(segment.end());
+                let mut make =
+                    ffi::b_rep_builder_api::BRepBuilderAPI_MakeEdge_gp_Pnt_gp_Pnt(&start, &end);
+                if !make.IsDone() {
+                    return Err(OcctError::NotDone { operation: "make_edge" }.into());
+                }
+                Ok(erase(ffi::topo_ds::cast_edge_to_shape(make.pin_mut().Edge())))
+            }
+            EdgeCurve::Circle(circle) => edge_from_circle(circle),
+            EdgeCurve::Arc(arc) => {
+                if arc.is_closed() {
+                    // A full turn is a circle; `GC_MakeArcOfCircle` needs three
+                    // distinct points, and the mid point would coincide.
+                    return edge_from_circle(&arc.circle());
+                }
+                let start = point(arc.start());
+                let middle = point(arc.point_at(arc.first() + arc.sweep() / 2.0));
+                let end = point(arc.end());
+                let arc_maker = ffi::gc::GC_MakeArcOfCircle_point_point_point(
+                    &start, &middle, &end,
+                );
+                let trimmed = ffi::gc::GC_MakeArcOfCircle_Value(&*arc_maker);
+                if trimmed.is_null() {
+                    return Err(OcctError::NotDone {
+                        operation: "make_edge (arc)",
+                    }
+                    .into());
+                }
+                let curve = ffi::geom::new_HandleGeomCurve_from_HandleGeom_TrimmedCurve(&*trimmed);
+                let mut make =
+                    ffi::b_rep_builder_api::BRepBuilderAPI_MakeEdge_HandleGeomCurve(&*curve);
+                if !make.IsDone() {
+                    return Err(OcctError::NotDone {
+                        operation: "make_edge (arc)",
+                    }
+                    .into());
+                }
+                Ok(erase(ffi::topo_ds::cast_edge_to_shape(make.pin_mut().Edge())))
+            }
+            EdgeCurve::Line(_) => Err(unsupported("make_edge for an infinite line")),
+            EdgeCurve::Ellipse(_) => Err(unsupported(
+                "make_edge for an ellipse (the OCCT bindings expose no gp_Elips)",
+            )),
+        }
+    }
+
+    fn curve_of(&self, shape: &Shape) -> Result<EdgeCurve, GeomError> {
+        let occt = downcast(shape)?;
+        let guard = occt.borrow();
+        let inner = guard
+            .as_ref()
+            .ok_or(OcctError::InvalidInput { what: "null shape" })?;
+        let data = bridge::fc_edge_curve(inner);
+        if data.len() < 14 {
+            return Err(unsupported("curve_of: the bridge returned no curve data"));
+        }
+        let origin = Vector3::new(data[1], data[2], data[3]);
+        let direction = Vector3::new(data[4], data[5], data[6]);
+        let x_axis = Vector3::new(data[7], data[8], data[9]);
+        let (first, last) = (data[10], data[11]);
+        let (major, minor) = (data[12], data[13]);
+        match data[0] as i32 {
+            1 => Ok(EdgeCurve::Line(Line::new(origin, direction)?)),
+            2 => {
+                let circle = Circle::with_axis(origin, direction, x_axis, major)?;
+                if (last - first).abs() >= std::f64::consts::TAU - 1e-9 {
+                    Ok(EdgeCurve::Circle(circle))
+                } else {
+                    Ok(EdgeCurve::Arc(Arc::new(circle, first, last)?))
+                }
+            }
+            3 => Ok(EdgeCurve::Ellipse(Ellipse::with_axis(
+                origin,
+                direction,
+                x_axis,
+                major,
+                minor,
+            )?)),
+            _ => Err(unsupported("curve_of: unsupported curve type")),
+        }
     }
 
     fn fuse(&self, a: &Shape, b: &Shape) -> Result<OpResult, GeomError> {
@@ -276,4 +363,30 @@ fn parse_sub_name(name: &str) -> Option<(TopAbs_ShapeEnum, i32)> {
         }
     }
     None
+}
+
+/// A `gp_Pnt` from a [`Vector3`].
+fn point(vector: Vector3) -> UniquePtr<ffi::gp::gp_Pnt> {
+    ffi::gp::new_point(vector.x, vector.y, vector.z)
+}
+
+/// A circular edge from the analytic circle.
+///
+/// The edge's parameterisation origin is OCCT's choice: `gp_Ax2` is built from a
+/// point and a normal only, so the curve comes back with its own `x_axis` after
+/// [`curve_of`](GeometryBackend::curve_of). The geometry (centre, normal, radius)
+/// is what round-trips; an arc's angles are carried by its three points instead.
+fn edge_from_circle(circle: &Circle) -> Result<Shape, GeomError> {
+    let center = point(circle.center());
+    let normal = ffi::gp::gp_Dir_new(circle.normal().x, circle.normal().y, circle.normal().z);
+    let axis = ffi::gp::gp_Ax2_new(&center, &normal);
+    let circ = ffi::gp::gp_Circ_new(&axis, circle.radius());
+    let mut make = ffi::b_rep_builder_api::BRepBuilderAPI_MakeEdge_circle(&circ);
+    if !make.IsDone() {
+        return Err(OcctError::NotDone {
+            operation: "make_edge (circle)",
+        }
+        .into());
+    }
+    Ok(erase(ffi::topo_ds::cast_edge_to_shape(make.pin_mut().Edge())))
 }

@@ -15,6 +15,7 @@ mod ffi {
     unsafe extern "C++" {
         include!("ferrocad_occt/include/fc_history.hxx");
         include!("ferrocad_occt/include/fc_topology.hxx");
+        include!("ferrocad_occt/include/fc_curve.hxx");
 
         // Reuse the crate's opaque types. cxx shares these across bridges by path.
         type BRepAlgoAPI_Fuse = opencascade_sys::b_rep_algo_api::BRepAlgoAPI_Fuse;
@@ -30,6 +31,11 @@ mod ffi {
         type TopTools_IndexedDataMapOfShapeListOfShape =
             opencascade_sys::top_tools::TopTools_IndexedDataMapOfShapeListOfShape;
         type TopTools_ListOfShape = opencascade_sys::top_tools::TopTools_ListOfShape;
+
+        /// The analytic curve behind an edge, flattened (see `fc_curve.hxx` for
+        /// the layout: `[kind, origin xyz, direction xyz, x-axis xyz, first, last,
+        /// major, minor]`).
+        fn fc_edge_curve(shape: &TopoDS_Shape) -> Vec<f64>;
 
         /// `TopTools_IndexedMapOfShape::FindIndex`, which the crate does not bridge.
         fn fc_indexed_map_find_index(

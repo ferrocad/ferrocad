@@ -17,3 +17,4 @@ name = "ferrocad_geom"
 
 [dependencies]
 ferrocad_types.workspace = true
+ferrocad_curves.workspace = true

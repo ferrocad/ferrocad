@@ -359,4 +359,77 @@ mod tests {
         let foreign = NullBackend.make_box(1.0, 1.0, 1.0).unwrap();
         assert_eq!(occt.resolve(&foreign, "Face1"), None);
     }
+
+    #[test]
+    fn a_line_segment_makes_an_edge_and_reports_its_basis_line() {
+        use ferrocad_curves::{EdgeCurve, LineSegment, Vector3};
+        let backend = OcctBackend::new();
+        let segment = EdgeCurve::LineSegment(
+            LineSegment::new(Vector3::new(1.0, 2.0, 3.0), Vector3::new(4.0, 2.0, 3.0)).unwrap(),
+        );
+        let edge = backend.make_edge(&segment).unwrap();
+        let curve = backend.curve_of(&edge).unwrap();
+        let EdgeCurve::Line(line) = curve else {
+            panic!("a segment's basis curve is a line, got {curve:?}");
+        };
+        assert!(line.distance_to(Vector3::new(1.0, 2.0, 3.0)) < 1e-9);
+        assert!(line.distance_to(Vector3::new(4.0, 2.0, 3.0)) < 1e-9);
+        assert!((line.direction().sub(&Vector3::new(1.0, 0.0, 0.0))).length() < 1e-9);
+    }
+
+    #[test]
+    fn a_circle_round_trips_through_an_edge() {
+        use ferrocad_curves::{Circle, EdgeCurve, Vector3};
+        let backend = OcctBackend::new();
+        let circle = Circle::new(
+            Vector3::new(1.0, 2.0, 3.0),
+            Vector3::new(0.0, 0.0, 1.0),
+            5.0,
+        )
+        .unwrap();
+        let edge = backend.make_edge(&EdgeCurve::Circle(circle)).unwrap();
+        let EdgeCurve::Circle(back) = backend.curve_of(&edge).unwrap() else {
+            panic!("a full circle edge is a circle");
+        };
+        assert!((back.center().sub(&circle.center())).length() < 1e-9);
+        assert!((back.radius() - 5.0).abs() < 1e-9);
+        assert!((back.normal().sub(&Vector3::new(0.0, 0.0, 1.0))).length() < 1e-9);
+    }
+
+    #[test]
+    fn an_arc_round_trips_with_its_sweep_and_endpoints() {
+        use ferrocad_curves::{Arc, Circle, EdgeCurve, Vector3};
+        use std::f64::consts::FRAC_PI_2;
+        let backend = OcctBackend::new();
+        let circle = Circle::new(Vector3::zero(), Vector3::new(0.0, 0.0, 1.0), 2.0).unwrap();
+        let arc = Arc::new(circle, 0.0, FRAC_PI_2).unwrap();
+        let edge = backend.make_edge(&EdgeCurve::Arc(arc)).unwrap();
+        let EdgeCurve::Arc(back) = backend.curve_of(&edge).unwrap() else {
+            panic!("a trimmed arc edge is an arc");
+        };
+        assert!((back.circle().radius() - 2.0).abs() < 1e-9);
+        assert!((back.sweep().abs() - FRAC_PI_2).abs() < 1e-9);
+        assert!(back.start().distance(&arc.start()) < 1e-9);
+        assert!(back.end().distance(&arc.end()) < 1e-9);
+    }
+
+    #[test]
+    fn make_edge_reports_the_kinds_the_bindings_cannot_build() {
+        use ferrocad_curves::{EdgeCurve, Ellipse, Line, Vector3};
+        let backend = OcctBackend::new();
+        let line =
+            EdgeCurve::Line(Line::new(Vector3::zero(), Vector3::new(1.0, 0.0, 0.0)).unwrap());
+        assert!(backend.make_edge(&line).is_err());
+        let ellipse = EdgeCurve::Ellipse(
+            Ellipse::new(Vector3::zero(), Vector3::new(0.0, 0.0, 1.0), 3.0, 1.0).unwrap(),
+        );
+        assert!(backend.make_edge(&ellipse).is_err());
+    }
+
+    #[test]
+    fn curve_of_a_non_edge_is_unsupported() {
+        let backend = OcctBackend::new();
+        let cube = backend.make_box(1.0, 1.0, 1.0).unwrap();
+        assert!(backend.curve_of(&cube).is_err());
+    }
 }

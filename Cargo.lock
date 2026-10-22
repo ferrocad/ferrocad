@@ -2296,6 +2296,7 @@ dependencies = [
 name = "ferrocad_geom"
 version = "0.1.2"
 dependencies = [
+ "ferrocad_curves",
  "ferrocad_types",
 ]
 
@@ -2351,6 +2352,7 @@ version = "0.1.2"
 dependencies = [
  "cxx",
  "cxx-build",
+ "ferrocad_curves",
  "ferrocad_geom",
  "ferrocad_types",
  "opencascade-sys",
@@ -2376,6 +2378,7 @@ name = "ferrocad_part"
 version = "0.1.2"
 dependencies = [
  "ferrocad_core",
+ "ferrocad_curves",
  "ferrocad_geom",
  "ferrocad_occt",
  "ferrocad_types",

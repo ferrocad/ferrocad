@@ -25,6 +25,7 @@ name = "ferrocad_part"
 [dependencies]
 ferrocad_core.workspace = true
 ferrocad_geom.workspace = true
+ferrocad_curves.workspace = true
 ferrocad_types.workspace = true
 
 [dev-dependencies]

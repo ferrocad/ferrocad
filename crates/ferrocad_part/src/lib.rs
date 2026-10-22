@@ -34,6 +34,14 @@ use ferrocad_types::Placement;
 pub use dress_up::{CHAMFER_TYPE, FILLET_TYPE};
 pub use shape_property::{make_shape_property, shape_of, ShapeProperty, TYPE_NAME};
 
+/// The analytic half of Part (lines, segments, circles, arcs, ellipses, wires).
+///
+/// A consumer of `ferrocad_part` gets **both** halves from one crate — these
+/// curves and [`ferrocad_geom::Shape`] — exactly as `import Part` does upstream.
+/// The leaf itself is [`ferrocad_curves`]; this is a deliberate re-export, not a
+/// second dependency edge from Part to the kernel.
+pub use ferrocad_curves;
+
 /// The kernel the Part workbench was composed with.
 static BACKEND: OnceLock<Arc<dyn GeometryBackend>> = OnceLock::new();
 

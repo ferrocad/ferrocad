@@ -72,19 +72,36 @@ Decide the crate edges and the single seam:
 
 Subtasks:
 
-- [ ] Add the `ferrocad_curves` edge and the `make_edge` method to
+- [x] Add the `ferrocad_curves` edge and the `make_edge` method to
       `GeometryBackend`/`ferrocad_geom`; implement it in `ferrocad_occt`.
-- [ ] Implement `curve_of` (`Edge.Curve`) — the Draft geometry code reads
-      `edge.Curve` 251 times; without it the Draft tests cannot run.
-- [ ] Re-export the halves from `ferrocad_part`; update the dependency table in
-      `docs/architecture.md` §6.
-- [ ] Update `docs/architecture/part-draft-layering.md` "after" table to match the code.
-- [ ] A test that a `Part.LineSegment` round-trips to an `Edge` and back
-      (`Part.LineSegment(...).toShape().Curve`), headless.
+      Landed 2026-10-22: `make_edge` handles a `LineSegment`
+      (`BRepBuilderAPI_MakeEdge` from two points), a `Circle` (`gp_Circ`) and an
+      `Arc` (`GC_MakeArcOfCircle` through three points, so the sweep survives).
+      An infinite `Line` is reported unsupported (an edge is bounded) and an
+      `Ellipse` too (`opencascade-sys` 0.3 bridges no `gp_Elips`); both errors
+      name the reason.
+- [x] Implement `curve_of` (`Edge.Curve`) — the Draft geometry code reads
+      `edge.Curve` 251 times; without it the Draft tests cannot run. Landed with a
+      new sibling bridge, `include/fc_curve.hxx`: it classifies the edge's curve
+      (line / circle-or-arc / ellipse), unwraps a `Geom_TrimmedCurve` for the
+      parameter range, and returns one flat `Vec<f64>` the backend maps to
+      `EdgeCurve`. A segment's basis curve is a `Line`, as upstream.
+- [x] Re-export the halves from `ferrocad_part`; update the dependency table in
+      `docs/architecture.md` §6. `pub use ferrocad_curves;` plus the `geom`/`occt`
+      edges.
+- [x] Update `docs/architecture/part-draft-layering.md` "after" table to match the
+      code. It already did; the landed edges are identical.
+- [x] A test that a `Part.LineSegment` round-trips to an `Edge` and back
+      (`Part.LineSegment(...).toShape().Curve`), headless. **At the seam**:
+      `a_line_segment_makes_an_edge_and_reports_its_basis_line` (plus the circle
+      and arc round-trips) proves `EdgeCurve -> Shape -> EdgeCurve` against OCCT.
+      The Python spelling (`Part.LineSegment`) waits for the kernel slice that
+      exposes the curve classes in `ferrocad_part_py`.
 
 **Acceptance:** the dependency graph matches the documented table; `cargo test` is green
-for `geom`, `occt`, `part`, `part_py`; no new edge into `ferrocad_occt` from a
-workbench crate.
+   for `geom`, `occt`, `part`, `part_py`; no new edge into `ferrocad_occt` from a
+   workbench crate. **Met 2026-10-22:** occt 20 tests (5 new), part 17, geom and
+   part_py on the same tree; no workbench edge added.
 
 **Cost of being wrong:** a wrong home is a mechanical move (a module and its imports);
 a wrong edge is architectural. Prefer a new leaf over widening `ferrocad_types`.

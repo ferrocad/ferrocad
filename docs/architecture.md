@@ -164,9 +164,11 @@ ferrocad_types     -> (crates.io only)               [leaf: Quantity, Placement,
 ferrocad_curves    -> ferrocad_types                 [analytic half of Part: curves, wires;
                                                      no Shape, no OCCT, no document]
 ferrocad_graphics  -> ferrocad_types                 [neutral draw contract + camera + pick; leaf]
-ferrocad_geom      -> ferrocad_types                 [seam: Shape, History, GeometryBackend]
-ferrocad_occt      -> ferrocad_geom, ferrocad_types,
-                      opencascade-sys                [kernel backend; never -> core]
+ferrocad_geom      -> ferrocad_types, ferrocad_curves
+                                                     [seam: Shape, History, GeometryBackend;
+                                                     `make_edge`/`curve_of` cross into curves]
+ferrocad_occt      -> ferrocad_geom, ferrocad_curves,
+                      ferrocad_types, opencascade-sys [kernel backend; never -> core]
 ferrocad_core      -> ferrocad_types                 [re-exports; no OCCT]
 ferrocad_py        -> ferrocad_core                  [rlib + cdylib]
 ferrocad_widgets   -> (bite-gpui only)               [must not depend on core or py]
@@ -202,10 +204,11 @@ ferrocad_toy       -> ferrocad, ferrocad_gpui, ferrocad_stage,
 python/FreeCAD     -> ferrocad (built-in module when linked, else a .so on sys.path)
 ```
 
-`ferrocad_geom` gains `ferrocad_curves` in P2.2 (`make_edge`), when the seam
-converts the analytic leaf into a kernel shape; until then the leaf has no
-consumers. The forbidden edges (no `curves -> geom`, no `core -> curves`, no
-workbench `-> occt`) are listed in
+`ferrocad_geom` owns the one curve/kernel crossing: `make_edge(&EdgeCurve)` and
+`curve_of(&Shape)` (implemented in `ferrocad_occt` with `BRepBuilderAPI_MakeEdge`
+and `BRep_Tool::Curve`), and `ferrocad_part` re-exports `ferrocad_curves` so a
+Part consumer gets both halves from one crate. The forbidden edges (no
+`curves -> geom`, no `core -> curves`, no workbench `-> occt`) are listed in
 [`architecture/part-draft-layering.md`](architecture/part-draft-layering.md) §5.3.
 
 `ferrocad_core` stays geometry-agnostic and does **not** depend on `ferrocad_geom`: the

@@ -40,6 +40,8 @@ use std::sync::Arc;
 
 use ferrocad_types::Placement;
 
+use ferrocad_curves::EdgeCurve;
+
 // ---------------------------------------------------------------------------
 // Shape
 // ---------------------------------------------------------------------------
@@ -557,6 +559,27 @@ pub trait GeometryBackend: Send + Sync {
     /// A rectangular box with its corner at the origin.
     fn make_box(&self, length: f64, width: f64, height: f64) -> Result<Shape, GeomError>;
 
+    /// Build an edge from an analytic curve (the analytic half's kernel entry).
+    ///
+    /// This is the one method that crosses from [`ferrocad_curves`] into the
+    /// kernel; the curve types themselves never name a [`Shape`]. An infinite
+    /// [`Line`](ferrocad_curves::Line) has no bounded edge, and a backend may not
+    /// implement every curve kind (OCCT 7.8's bindings here build lines, segments,
+    /// circles and arcs, not ellipses).
+    fn make_edge(&self, _curve: &EdgeCurve) -> Result<Shape, GeomError> {
+        Err(unsupported("make_edge"))
+    }
+
+    /// The analytic curve behind an edge (`edge.Curve` upstream).
+    ///
+    /// A bounded edge reports its **basis** curve: an edge built from a segment
+    /// comes back as a [`Line`](ferrocad_curves::Line), as upstream
+    /// `Part.LineSegment(...).toShape().Curve` does. The default reports the
+    /// operation as unsupported.
+    fn curve_of(&self, _shape: &Shape) -> Result<EdgeCurve, GeomError> {
+        Err(unsupported("curve_of"))
+    }
+
     /// Boolean union.
     fn fuse(&self, a: &Shape, b: &Shape) -> Result<OpResult, GeomError>;
 
@@ -744,6 +767,13 @@ impl GeometryBackend for NullBackend {
     fn make_box(&self, _length: f64, _width: f64, _height: f64) -> Result<Shape, GeomError> {
         Ok(Shape::new(NullShape {
             kind: "box".to_string(),
+        }))
+    }
+
+    fn make_edge(&self, curve: &EdgeCurve) -> Result<Shape, GeomError> {
+        // The null backend invents no geometry, but it keeps the seam exercised.
+        Ok(Shape::new(NullShape {
+            kind: format!("edge:{}", curve.kind()),
         }))
     }
 

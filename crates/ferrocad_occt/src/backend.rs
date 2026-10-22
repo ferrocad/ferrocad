@@ -38,6 +38,90 @@ impl OcctBackend {
     pub fn new() -> Self {
         OcctBackend
     }
+
+    /// Drop the dangling internal wires a fused region may carry. A wire other
+    /// than the outer boundary that encloses no area is the trace of a cutter
+    /// that terminated inside the face, not a hole; removing it leaves the
+    /// region with a single clean boundary.
+    fn without_dangling_wires(&self, shape: &Shape) -> Shape {
+        let Ok(occt) = downcast(shape) else {
+            return shape.clone();
+        };
+        let guard = occt.borrow();
+        let Some(inner) = guard.as_ref() else {
+            return shape.clone();
+        };
+        if !bridge::fc_is_face(inner) {
+            return shape.clone();
+        }
+        let wires = sub_shape_map(inner, TopAbs_ShapeEnum::TopAbs_WIRE);
+        if wires.Extent() <= 1 {
+            return shape.clone();
+        }
+        let Some(outer) = self.outer_wire(shape) else {
+            return shape.clone();
+        };
+        let Ok(outer_occt) = downcast(&outer) else {
+            return shape.clone();
+        };
+        let outer_guard = outer_occt.borrow();
+        let Some(outer_inner) = outer_guard.as_ref() else {
+            return shape.clone();
+        };
+        let outer_index = bridge::fc_indexed_map_find_index_same(&wires, outer_inner);
+
+        // A wire bounds an area only when it encloses a region on its own; probe
+        // each one and count the ones that do not.
+        let area = |shape: &Shape| {
+            self.mass_properties(shape)
+                .map(|mass| mass.area)
+                .unwrap_or(0.0)
+        };
+        let mut dangling = 0;
+        for index in 1..=wires.Extent() {
+            if index == outer_index {
+                continue;
+            }
+            let wire = erase(wires.FindKey(index));
+            let enclosed = {
+                let Ok(wire_occt) = downcast(&wire) else {
+                    return shape.clone();
+                };
+                let wire_guard = wire_occt.borrow();
+                let Some(wire_inner) = wire_guard.as_ref() else {
+                    return shape.clone();
+                };
+                match bridge::fc_split_wire_into_faces(wire_inner).as_ref() {
+                    Some(enclosed) => {
+                        let faces = sub_shape_map(enclosed, TopAbs_ShapeEnum::TopAbs_FACE);
+                        (1..=faces.Extent())
+                            .map(|face| area(&erase(faces.FindKey(face))))
+                            .sum::<f64>()
+                    }
+                    None => 0.0,
+                }
+            };
+            if enclosed <= 1e-9 {
+                dangling += 1;
+            }
+        }
+        // Real holes must be kept; only a face whose extra wires are all
+        // dangling can be rebuilt from its outer boundary alone.
+        if dangling == 0 || dangling != wires.Extent() - 1 {
+            return shape.clone();
+        }
+        let Ok(cleaned) = self.make_face(&[outer]) else {
+            return shape.clone();
+        };
+        let cleaned_area = area(&cleaned);
+        let original_area = area(shape);
+        if cleaned_area > 0.0 && (cleaned_area - original_area).abs() <= 1e-9 * original_area.max(1.0)
+        {
+            cleaned
+        } else {
+            shape.clone()
+        }
+    }
 }
 
 impl GeometryBackend for OcctBackend {
@@ -398,8 +482,19 @@ impl GeometryBackend for OcctBackend {
                 splitters.push(wire.clone());
                 continue;
             };
+            let filled = erase(filled);
+            // `BRepFill_Filling` can also "succeed" on an open boundary, but only
+            // with a degenerate face. Such a wire is a cutter, not a boundary.
+            let filled_area = self
+                .mass_properties(&filled)
+                .map(|mass| mass.area)
+                .unwrap_or(0.0);
+            if filled_area <= 1e-9 {
+                splitters.push(wire.clone());
+                continue;
+            }
             all_planar = false;
-            faces.push(erase(filled));
+            faces.push(filled);
         }
 
         if !splitters.is_empty() {
@@ -422,7 +517,17 @@ impl GeometryBackend for OcctBackend {
                 let map = sub_shape_map(fused, TopAbs_ShapeEnum::TopAbs_FACE);
                 let mut regions = Vec::with_capacity(map.Extent() as usize);
                 for index in 1..=map.Extent() {
-                    regions.push(erase(map.FindKey(index)));
+                    let region = erase(map.FindKey(index));
+                    // General Fuse keeps the degenerate slivers and the dangling
+                    // cutters as regions of their own; neither bounds an area.
+                    let area = self
+                        .mass_properties(&region)
+                        .map(|mass| mass.area)
+                        .unwrap_or(0.0);
+                    if area <= 1e-9 {
+                        continue;
+                    }
+                    regions.push(self.without_dangling_wires(&region));
                 }
                 if !regions.is_empty() {
                     return if regions.len() == 1 {

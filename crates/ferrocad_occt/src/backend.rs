@@ -52,6 +52,70 @@ impl GeometryBackend for OcctBackend {
         Ok(shape)
     }
 
+    fn make_cylinder(
+        &self,
+        radius: f64,
+        height: f64,
+        base: Vector3,
+        direction: Vector3,
+    ) -> Result<Shape, GeomError> {
+        let axis = axis_from(base, direction)?;
+        let mut make = ffi::b_rep_prim_api::BRepPrimAPI_MakeCylinder_new(&axis, radius, height);
+        let shape = erase(make.pin_mut().Shape());
+        if !make.IsDone() {
+            return Err(OcctError::NotDone {
+                operation: "make_cylinder",
+            }
+            .into());
+        }
+        Ok(shape)
+    }
+
+    fn make_sphere(&self, radius: f64, center: Vector3) -> Result<Shape, GeomError> {
+        let origin = point(center);
+        let direction = ffi::gp::gp_Dir_new(0.0, 0.0, 1.0);
+        let axis = ffi::gp::gp_Ax2_new(&origin, &direction);
+        let mut make = ffi::b_rep_prim_api::BRepPrimAPI_MakeSphere_new(
+            &axis,
+            radius,
+            std::f64::consts::TAU,
+        );
+        let shape = erase(make.pin_mut().Shape());
+        if !make.IsDone() {
+            return Err(OcctError::NotDone {
+                operation: "make_sphere",
+            }
+            .into());
+        }
+        Ok(shape)
+    }
+
+    fn make_cone(
+        &self,
+        radius1: f64,
+        radius2: f64,
+        height: f64,
+        base: Vector3,
+        direction: Vector3,
+    ) -> Result<Shape, GeomError> {
+        let axis = axis_from(base, direction)?;
+        let mut make = ffi::b_rep_prim_api::BRepPrimAPI_MakeCone_new(
+            &axis,
+            radius1,
+            radius2,
+            height,
+            std::f64::consts::TAU,
+        );
+        let shape = erase(make.pin_mut().Shape());
+        if !make.IsDone() {
+            return Err(OcctError::NotDone {
+                operation: "make_cone",
+            }
+            .into());
+        }
+        Ok(shape)
+    }
+
     fn make_edge(&self, curve: &EdgeCurve) -> Result<Shape, GeomError> {
         match curve {
             EdgeCurve::LineSegment(segment) => {
@@ -397,6 +461,15 @@ impl GeometryBackend for OcctBackend {
         })
     }
 
+    fn clean(&self, shape: &Shape) -> Option<Shape> {
+        let occt = downcast(shape).ok()?;
+        let guard = occt.borrow();
+        let inner = guard.as_ref()?;
+        let mut op = ffi::shape_upgrade::UnifySameDomain_new(inner, true, true, false);
+        op.pin_mut().build();
+        Some(erase(op.shape()))
+    }
+
     fn place(&self, shape: &Shape, placement: &Placement) -> Result<Shape, GeomError> {
         let shape_occt = downcast(shape)?;
         let shape_guard = shape_occt.borrow();
@@ -568,6 +641,18 @@ fn parse_sub_name(name: &str) -> Option<(TopAbs_ShapeEnum, i32)> {
 }
 
 /// A `gp_Pnt` from a [`Vector3`].
+fn axis_from(base: Vector3, direction: Vector3) -> Result<UniquePtr<ffi::gp::gp_Ax2>, GeomError> {
+    if direction.x == 0.0 && direction.y == 0.0 && direction.z == 0.0 {
+        return Err(OcctError::InvalidInput {
+            what: "a primitive needs a non-zero direction",
+        }
+        .into());
+    }
+    let origin = point(base);
+    let direction = ffi::gp::gp_Dir_new(direction.x, direction.y, direction.z);
+    Ok(ffi::gp::gp_Ax2_new(&origin, &direction))
+}
+
 fn point(vector: Vector3) -> UniquePtr<ffi::gp::gp_Pnt> {
     ffi::gp::new_point(vector.x, vector.y, vector.z)
 }

@@ -31,7 +31,7 @@ impl PyCompound {
 
     fn initializer(children: Vec<Shape>) -> PyResult<PyClassInitializer<Self>> {
         let base = if children.is_empty() {
-            PartShape::new()
+            PartShape::empty()
         } else {
             let shape = ferrocad_part::backend()
                 .make_compound(&children)

@@ -568,6 +568,34 @@ pub trait GeometryBackend: Send + Sync {
     /// A rectangular box with its corner at the origin.
     fn make_box(&self, length: f64, width: f64, height: f64) -> Result<Shape, GeomError>;
 
+    /// A cylinder of `radius` and `height`, growing from `base` along `direction`.
+    fn make_cylinder(
+        &self,
+        _radius: f64,
+        _height: f64,
+        _base: Vector3,
+        _direction: Vector3,
+    ) -> Result<Shape, GeomError> {
+        Err(unsupported("make_cylinder"))
+    }
+
+    /// A sphere of `radius` centred at `center`.
+    fn make_sphere(&self, _radius: f64, _center: Vector3) -> Result<Shape, GeomError> {
+        Err(unsupported("make_sphere"))
+    }
+
+    /// A (truncated) cone: `radius1` at `base`, `radius2` at `base + height * direction`.
+    fn make_cone(
+        &self,
+        _radius1: f64,
+        _radius2: f64,
+        _height: f64,
+        _base: Vector3,
+        _direction: Vector3,
+    ) -> Result<Shape, GeomError> {
+        Err(unsupported("make_cone"))
+    }
+
     /// Build an edge from an analytic curve (the analytic half's kernel entry).
     ///
     /// This is the one method that crosses from [`ferrocad_curves`] into the
@@ -640,6 +668,14 @@ pub trait GeometryBackend: Send + Sync {
     /// Length, area, volume and centre of mass (`Shape.Length`/`Area`/`Volume`/
     /// `CenterOfMass`). A backend that cannot measure the shape reports `None`.
     fn mass_properties(&self, _shape: &Shape) -> Option<MassProperties> {
+        None
+    }
+
+    /// A copy of `shape` with redundant edges/faces unified (`Shape.cleaned`).
+    ///
+    /// A backend without a cleaning pass reports `None`; the caller keeps the
+    /// original shape.
+    fn clean(&self, _shape: &Shape) -> Option<Shape> {
         None
     }
 

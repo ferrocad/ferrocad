@@ -64,6 +64,20 @@ pub struct PartShape {
 }
 
 impl PartShape {
+    /// The null shape.
+    pub(crate) fn empty() -> Self {
+        PartShape {
+            shape: Mutex::new(None),
+        }
+    }
+
+    /// A second handle to the same shape (for `Shape.copy` and subclasses).
+    pub(crate) fn copy_handle(&self) -> Self {
+        PartShape {
+            shape: Mutex::new(self.shape()),
+        }
+    }
+
     /// A copy of the wrapped shape (shape handles are cheap to clone).
     pub(crate) fn shape(&self) -> Option<Shape> {
         self.shape.lock().unwrap().clone()
@@ -81,13 +95,6 @@ impl PartShape {
         *self.shape.lock().unwrap_or_else(|e| e.into_inner()) = shape;
     }
 
-    /// A second handle to the same shape (for a subclass's `toShape`).
-    pub(crate) fn copy(&self) -> Self {
-        PartShape {
-            shape: Mutex::new(self.shape()),
-        }
-    }
-
     /// The sub-shapes of one kind, in the kernel's order.
     fn sub_shapes(&self, kind: ElementKind) -> PyResult<Vec<Shape>> {
         let shape = self
@@ -103,9 +110,34 @@ impl PartShape {
 
 #[pymethods]
 impl PartShape {
+    /// `Part.Shape()` is the null shape; `Part.Shape(other)` wraps a copy of
+    /// `other` (upstream's copy constructor).
     #[new]
-    fn new() -> Self {
-        PartShape { shape: Mutex::new(None) }
+    #[pyo3(signature = (value = None))]
+    fn new(value: Option<&Bound<'_, PyAny>>) -> PyResult<Self> {
+        match value {
+            None => Ok(Self::empty()),
+            Some(value) => Ok(Self::from_shape(shape_argument(value)?)),
+        }
+    }
+
+    /// A copy of the shape (`Shape.copy`); the kernel handle is reference-counted
+    /// so no geometry is duplicated.
+    #[pyo3(signature = (noElementMap = false))]
+    fn copy(&self, noElementMap: bool) -> Self {
+        let _ = noElementMap;
+        self.copy_handle()
+    }
+
+    /// A copy with redundant edges/faces unified (`Shape.cleaned`).
+    fn cleaned(&self) -> Self {
+        let Some(shape) = self.shape() else {
+            return Self::empty();
+        };
+        match ferrocad_part::backend().clean(&shape) {
+            Some(cleaned) => Self::from_shape(cleaned),
+            None => self.copy_handle(),
+        }
     }
 
     /// Whether this is the empty/null shape (FreeCAD's `Shape.isNull()`).
@@ -468,6 +500,94 @@ impl PartShape {
     }
 }
 
+/// `Part.makeCylinder(radius, height, pnt=None, dir=None, angle=360)`.
+#[pyfunction]
+#[pyo3(signature = (radius, height, pnt = None, dir = None, angle = 360.0))]
+fn makeCylinder(
+    radius: f64,
+    height: f64,
+    pnt: Option<&Bound<'_, PyAny>>,
+    dir: Option<&Bound<'_, PyAny>>,
+    angle: f64,
+) -> PyResult<PartShape> {
+    require_full_revolution("makeCylinder", angle)?;
+    let base = pnt
+        .map(curves::vector)
+        .transpose()?
+        .unwrap_or_else(ferrocad_curves::Vector3::zero);
+    let direction = dir
+        .map(curves::vector)
+        .transpose()?
+        .unwrap_or_else(|| ferrocad_curves::Vector3::new(0.0, 0.0, 1.0));
+    let shape = ferrocad_part::backend()
+        .make_cylinder(radius, height, base, direction)
+        .map_err(kernel_error)?;
+    Ok(PartShape::from_shape(shape))
+}
+
+/// `Part.makeSphere(radius, center=None, dir=None, angle1=-90, angle2=90, angle3=360)`.
+#[pyfunction]
+#[pyo3(signature = (radius, center = None, dir = None, angle1 = -90.0, angle2 = 90.0, angle3 = 360.0))]
+fn makeSphere(
+    radius: f64,
+    center: Option<&Bound<'_, PyAny>>,
+    dir: Option<&Bound<'_, PyAny>>,
+    angle1: f64,
+    angle2: f64,
+    angle3: f64,
+) -> PyResult<PartShape> {
+    let _ = dir;
+    if (angle1 + 90.0).abs() > 1e-9 || (angle2 - 90.0).abs() > 1e-9 {
+        return Err(curves::OCCError::new_err(
+            "partial spheres are not implemented yet",
+        ));
+    }
+    require_full_revolution("makeSphere", angle3)?;
+    let center = center
+        .map(curves::vector)
+        .transpose()?
+        .unwrap_or_else(ferrocad_curves::Vector3::zero);
+    let shape = ferrocad_part::backend()
+        .make_sphere(radius, center)
+        .map_err(kernel_error)?;
+    Ok(PartShape::from_shape(shape))
+}
+
+/// `Part.makeCone(radius1, radius2, height, pnt=None, dir=None, angle=360)`.
+#[pyfunction]
+#[pyo3(signature = (radius1, radius2, height, pnt = None, dir = None, angle = 360.0))]
+fn makeCone(
+    radius1: f64,
+    radius2: f64,
+    height: f64,
+    pnt: Option<&Bound<'_, PyAny>>,
+    dir: Option<&Bound<'_, PyAny>>,
+    angle: f64,
+) -> PyResult<PartShape> {
+    require_full_revolution("makeCone", angle)?;
+    let base = pnt
+        .map(curves::vector)
+        .transpose()?
+        .unwrap_or_else(ferrocad_curves::Vector3::zero);
+    let direction = dir
+        .map(curves::vector)
+        .transpose()?
+        .unwrap_or_else(|| ferrocad_curves::Vector3::new(0.0, 0.0, 1.0));
+    let shape = ferrocad_part::backend()
+        .make_cone(radius1, radius2, height, base, direction)
+        .map_err(kernel_error)?;
+    Ok(PartShape::from_shape(shape))
+}
+
+fn require_full_revolution(operation: &str, angle: f64) -> PyResult<()> {
+    if (angle - 360.0).abs() > 1e-9 {
+        return Err(curves::OCCError::new_err(format!(
+            "{operation}: partial revolutions are not implemented yet"
+        )));
+    }
+    Ok(())
+}
+
 /// `Part.makeBox(length, width, height)` → a `Part.Shape`.
 #[pyfunction]
 fn makeBox(length: f64, width: f64, height: f64) -> PyResult<PartShape> {
@@ -503,6 +623,9 @@ pub fn Part(m: &Bound<'_, PyModule>) -> PyResult<()> {
     ferrocad_py::register_extension_converter(TYPE_NAME, shape_to_py, shape_to_extension);
     m.add_class::<PartShape>()?;
     m.add_function(wrap_pyfunction!(makeBox, m)?)?;
+    m.add_function(wrap_pyfunction!(makeCylinder, m)?)?;
+    m.add_function(wrap_pyfunction!(makeSphere, m)?)?;
+    m.add_function(wrap_pyfunction!(makeCone, m)?)?;
     curves::register(m)?;
     containers::register(m)?;
     Ok(())

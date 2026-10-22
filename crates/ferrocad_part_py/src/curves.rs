@@ -44,7 +44,7 @@ fn kernel_error(error: ferrocad_geom::GeomError) -> PyErr {
 
 /// Read a point from a `(x, y, z)` sequence or an object with `x`/`y`/`z`
 /// (`FreeCAD.Vector`, `ferrocad.Vector`).
-fn vector(value: &Bound<'_, PyAny>) -> PyResult<Vector3> {
+pub(crate) fn vector(value: &Bound<'_, PyAny>) -> PyResult<Vector3> {
     if let Ok((x, y, z)) = value.extract::<(f64, f64, f64)>() {
         return Ok(Vector3::new(x, y, z));
     }
@@ -392,7 +392,7 @@ impl PyWire {
     /// `Part.Shape` (upstream builds the B-Rep wire on construction too).
     fn initializer(entries: Vec<EdgeEntry>) -> PyResult<PyClassInitializer<Self>> {
         let base = if entries.is_empty() {
-            PartShape::new()
+            PartShape::empty()
         } else {
             let shapes: Vec<Shape> = entries.iter().map(|entry| entry.shape.clone()).collect();
             PartShape::from_shape(backend().make_wire(&shapes).map_err(kernel_error)?)
@@ -468,7 +468,7 @@ impl PyWire {
 
     /// The wire as a kernel shape (already built by the constructor/`add`).
     fn toShape(slf: PyRef<'_, Self>) -> PartShape {
-        slf.as_super().copy()
+        slf.as_super().copy_handle()
     }
 
     /// Upstream wires iterate over their edges; the sequence protocol gives both

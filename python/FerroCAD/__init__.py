@@ -9,6 +9,7 @@ names here are **not** available on ``FreeCAD``. See
 This module holds the app-side extension points:
 
 * :data:`Grid` — the semantic grid-settings singleton;
+* :data:`Axis` — the semantic axis-cross settings singleton;
 * :func:`register_display_provider` / :func:`display_mesh` — how a module draws
   its objects;
 * :func:`register_interaction_provider` / :func:`interaction` — how a module
@@ -25,17 +26,22 @@ from __future__ import annotations
 from ._params import parameter_file, set_parameter_file
 
 # ---------------------------------------------------------------------------
-# The semantic grid (see FerroCAD._grid)
+# The semantic grid and axis cross (see FerroCAD._grid and FerroCAD._axis)
 # ---------------------------------------------------------------------------
 
 
 def __getattr__(name):
     # PEP 562: bound lazily so importing FerroCAD stays headless and GUI-free, and
-    # so a build without the grid is detected through ``getattr(..., "Grid", None)``.
+    # so a build without a capability is detected through
+    # ``getattr(..., "Grid", None)`` / ``getattr(..., "Axis", None)``.
     if name == "Grid":
         from . import _grid
 
         return _grid.grid()
+    if name == "Axis":
+        from . import _axis
+
+        return _axis.axis()
     raise AttributeError("module 'FerroCAD' has no attribute '%s'" % name)
 
 
@@ -100,6 +106,7 @@ def interaction(obj, manipulator, action, element="", values=None):
 
 __all__ = [
     "Grid",
+    "Axis",
     "register_display_provider",
     "display_mesh",
     "register_interaction_provider",

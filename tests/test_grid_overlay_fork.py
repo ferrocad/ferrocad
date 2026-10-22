@@ -32,7 +32,6 @@ COMMAND = "GridOverlay_Settings"
 #: The keys the shell's ``ViewRequest`` understands (``docs/workbenches/actions-and-tools.md`` §7).
 VIEW_KEYS = {
     "grid",
-    "axis_cross",
     "grid_minor",
     "grid_major",
     "grid_radius",
@@ -206,7 +205,6 @@ class GridOverlayForkTests(unittest.TestCase):
             result["view"],
             {
                 "grid": True,
-                "axis_cross": True,
                 "grid_minor": 2.0,
                 "grid_major": 20.0,
                 "grid_radius": 0.0,
@@ -261,7 +259,6 @@ class GridOverlayForkTests(unittest.TestCase):
             snapshot,
             {
                 "grid": False,
-                "axis_cross": True,
                 "grid_minor": 10.0,
                 "grid_major": 100.0,
                 "grid_radius": None,

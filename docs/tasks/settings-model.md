@@ -221,6 +221,22 @@ S0–S4 landed; S5 (document-scoped overrides) remains optional.
   provider (`backend`, `label`, `spacing`, and the provider list). The chrome T4
   popover consumes it; the two stores can no longer disagree.
 
+### S4b — the axis cross is a second capability
+
+- The axis cross is no longer a grid row: `FerroCAD._axis` mirrors the grid
+  facade with `FEATURE = "axis"`, its own `AXIS_SETTINGS_SCHEMA` (ten rows:
+  `enabled`, `color_x`, `color_y`, `color_z`, `opacity`, `length`, `width`,
+  `origin`, `labels`, `ghost_alpha`) and its own provider group
+  (`User parameter:BaseApp/Preferences/Mods/axis/ferrocad`).
+- `FerroCAD.Axis.apply()` returns `{"view": {"axis": {…}}}`; `App_ToggleAxisCross`
+  toggles `FerroCAD.Axis.enabled` and returns that request, falling back to the
+  old `{"view": {"axis_cross": …}}` when the build has no `Axis`.
+- `mods/AxisOverlay` is the native `axis`/`ferrocad` provider and advertises the
+  schema, so `Settings/Axis` and `FerroCAD.Axis` are one store. The first read of
+  `enabled` migrates the legacy `GridAxisCross` value once (grid provider group,
+  else `Preferences/View`); `FerroCAD.Grid.axis_cross` remains as a deprecated
+  proxy.
+
 ## Risks
 
 - **Precedence confusion.** Show the winning source in the row's `status`; a value

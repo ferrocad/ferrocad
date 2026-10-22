@@ -9,6 +9,7 @@
 //! the active workplane. The shell performs it on the viewport and reports the outcome.
 
 use ferrocad_stage::grid;
+use ferrocad_stage::AxisStyle;
 use serde::Deserialize;
 
 /// A presentation change a command returns. Never undoable, never a document edit.
@@ -18,8 +19,13 @@ pub struct ViewRequest {
     #[serde(default)]
     pub grid: Option<bool>,
     /// Show or hide the axis cross (the world triad, its origin node and axis tags).
+    /// **Deprecated alias** for `axis.enabled`: it applies only when the nested request
+    /// omits `enabled`.
     #[serde(default)]
     pub axis_cross: Option<bool>,
+    /// The axis cross's style and visibility (`view.axis`).
+    #[serde(default)]
+    pub axis: Option<AxisRequest>,
     /// `"persp"`/`"perspective"` or `"ortho"`/`"orthographic"`.
     #[serde(default)]
     pub projection: Option<String>,
@@ -45,6 +51,42 @@ pub struct ViewRequest {
     /// A workplane action: `"activate"`, `"clear"` or `"view"`.
     #[serde(default)]
     pub workplane: Option<String>,
+}
+
+/// A parameterized axis-cross change (`view.axis`). Every field is optional; an
+/// omitted field keeps the current value.
+#[derive(Debug, Clone, Default, Deserialize, PartialEq)]
+pub struct AxisRequest {
+    /// Show or hide the axis cross.
+    #[serde(default)]
+    pub enabled: Option<bool>,
+    /// The X stem's `"#rrggbb"` (or `"#rgb"`) ink.
+    #[serde(default)]
+    pub color_x: Option<String>,
+    /// The Y stem's ink.
+    #[serde(default)]
+    pub color_y: Option<String>,
+    /// The Z stem's ink.
+    #[serde(default)]
+    pub color_z: Option<String>,
+    /// A multiplier over every stem's alpha, clamped to `0.0..=1.0`.
+    #[serde(default)]
+    pub opacity: Option<f32>,
+    /// The stem length, in device pixels (finite and positive).
+    #[serde(default)]
+    pub length: Option<f64>,
+    /// The stem width, in device pixels (finite and positive).
+    #[serde(default)]
+    pub width: Option<f64>,
+    /// Draw the origin node.
+    #[serde(default)]
+    pub origin: Option<bool>,
+    /// Draw the `X`/`Y`/`Z` (or `U`/`V`/`N`) tags.
+    #[serde(default)]
+    pub labels: Option<bool>,
+    /// The occluded stem pass's alpha multiplier, clamped to `0.0..=1.0`.
+    #[serde(default)]
+    pub ghost_alpha: Option<f32>,
 }
 
 /// A workplane action carried by a [`ViewRequest`].
@@ -107,8 +149,11 @@ impl ProjectionName {
 #[derive(Debug, Clone, PartialEq)]
 pub struct ViewState {
     pub grid: bool,
-    /// Whether the axis cross is shown (on by default, as upstream's is).
+    /// Whether the axis cross is shown (on by default, as upstream's is). This mirrors
+    /// [`axis.enabled`](AxisStyle::enabled); the Python facade reads it.
     pub axis_cross: bool,
+    /// The axis cross's parameterized style.
+    pub axis: AxisStyle,
     pub projection: ProjectionName,
     /// The world grid's minor step (mm).
     pub grid_minor: f64,
@@ -132,6 +177,7 @@ impl Default for ViewState {
         Self {
             grid: false,
             axis_cross: true,
+            axis: AxisStyle::default(),
             projection: ProjectionName::Perspective,
             grid_minor: grid::MINOR_STEP,
             grid_major: grid::MAJOR_STEP,
@@ -182,6 +228,46 @@ impl ViewState {
                 return Err(format!("grid alpha must be between 0 and 1, got {alpha}"));
             }
         }
+        // The axis style is validated up front too, so a bad colour (or a degenerate
+        // stem) rejects the whole request before any field is mutated.
+        let axis_colors = match request.axis.as_ref() {
+            Some(axis) => [
+                axis.color_x
+                    .as_deref()
+                    .map(grid::parse_srgb_hex)
+                    .transpose()?,
+                axis.color_y
+                    .as_deref()
+                    .map(grid::parse_srgb_hex)
+                    .transpose()?,
+                axis.color_z
+                    .as_deref()
+                    .map(grid::parse_srgb_hex)
+                    .transpose()?,
+            ],
+            None => [None, None, None],
+        };
+        if let Some(axis) = request.axis.as_ref() {
+            for (name, value) in [
+                ("opacity", axis.opacity),
+                ("ghost alpha", axis.ghost_alpha),
+            ] {
+                if let Some(value) = value {
+                    if !value.is_finite() {
+                        return Err(format!("axis {name} must be finite, got {value}"));
+                    }
+                }
+            }
+            for (name, value) in [("length", axis.length), ("width", axis.width)] {
+                if let Some(value) = value {
+                    if !(value.is_finite() && value > 0.0) {
+                        return Err(format!(
+                            "axis {name} must be positive and finite, got {value}"
+                        ));
+                    }
+                }
+            }
+        }
         let minor = request.grid_minor.unwrap_or(self.grid_minor);
         let major = request.grid_major.unwrap_or(self.grid_major);
         if major < minor - 1e-9 {
@@ -197,9 +283,81 @@ impl ViewState {
                 changes.push(format!("grid {}", if grid { "on" } else { "off" }));
             }
         }
-        if let Some(axis_cross) = request.axis_cross {
+        if let Some(axis) = request.axis.as_ref() {
+            let mut summary: Option<&'static str> = None;
+            let mut styled = false;
+            if let Some(enabled) = axis.enabled {
+                if self.axis.enabled != enabled {
+                    self.axis.enabled = enabled;
+                    summary = Some(if enabled { "axis on" } else { "axis off" });
+                }
+            } else if let Some(alias) = request.axis_cross {
+                // The deprecated alias applies only when `axis.enabled` is absent.
+                if self.axis.enabled != alias {
+                    self.axis.enabled = alias;
+                    summary = Some(if alias { "axis cross on" } else { "axis cross off" });
+                }
+            }
+            for (index, color) in axis_colors.into_iter().enumerate() {
+                if let Some(color) = color {
+                    // Compare in the 8-bit sRGB space, as the grid ink does: the default
+                    // tokens are authored at three decimals.
+                    if ink_hex(self.axis.colors[index]) != ink_hex(color) {
+                        self.axis.colors[index] = color;
+                        styled = true;
+                    }
+                }
+            }
+            if let Some(opacity) = axis.opacity {
+                let opacity = opacity.clamp(0.0, 1.0);
+                if (self.axis.opacity - opacity).abs() > f32::EPSILON {
+                    self.axis.opacity = opacity;
+                    styled = true;
+                }
+            }
+            if let Some(length) = axis.length {
+                if (self.axis.length - length).abs() > 1e-12 {
+                    self.axis.length = length;
+                    styled = true;
+                }
+            }
+            if let Some(width) = axis.width {
+                if (self.axis.width - width).abs() > 1e-12 {
+                    self.axis.width = width;
+                    styled = true;
+                }
+            }
+            if let Some(origin) = axis.origin {
+                if self.axis.origin != origin {
+                    self.axis.origin = origin;
+                    styled = true;
+                }
+            }
+            if let Some(labels) = axis.labels {
+                if self.axis.labels != labels {
+                    self.axis.labels = labels;
+                    styled = true;
+                }
+            }
+            if let Some(ghost_alpha) = axis.ghost_alpha {
+                let ghost_alpha = ghost_alpha.clamp(0.0, 1.0);
+                if (self.axis.ghost_alpha - ghost_alpha).abs() > f32::EPSILON {
+                    self.axis.ghost_alpha = ghost_alpha;
+                    styled = true;
+                }
+            }
+            if summary.is_none() && styled {
+                summary = Some("axis style");
+            }
+            if let Some(summary) = summary {
+                changes.push(summary.to_string());
+            }
+            // `axis_cross` stays a bool at the top level, mirroring the style.
+            self.axis_cross = self.axis.enabled;
+        } else if let Some(axis_cross) = request.axis_cross {
             if self.axis_cross != axis_cross {
                 self.axis_cross = axis_cross;
+                self.axis.enabled = axis_cross;
                 changes.push(format!(
                     "axis cross {}",
                     if axis_cross { "on" } else { "off" }
@@ -322,6 +480,17 @@ mod tests {
         assert_eq!(state.grid_color, grid::GRID_COLOR);
         assert_eq!(state.grid_alpha, 1.0);
         assert!(!state.grid_overlay, "the native grid is authoritative");
+
+        // The axis cross defaults reproduce today's look.
+        assert!(state.axis.enabled);
+        assert_eq!(state.axis_cross, state.axis.enabled);
+        assert_eq!(state.axis.colors, AxisStyle::default().colors);
+        assert_eq!(state.axis.opacity, 0.65);
+        assert_eq!(state.axis.length, 80.0);
+        assert_eq!(state.axis.width, 1.5);
+        assert!(state.axis.origin);
+        assert!(state.axis.labels);
+        assert_eq!(state.axis.ghost_alpha, 0.10);
     }
 
     #[test]
@@ -372,6 +541,150 @@ mod tests {
         };
         assert_eq!(state.apply(&grid).unwrap(), "grid on");
         assert!(!state.axis_cross);
+    }
+
+    #[test]
+    fn every_axis_field_applies() {
+        let mut state = ViewState::default();
+        let request: ViewRequest = serde_json::from_str(
+            r##"{"axis": {
+                "color_x": "#010203", "color_y": "#0f0", "color_z": "#fff",
+                "opacity": 0.25, "length": 40.0, "width": 3.0,
+                "origin": false, "labels": false, "ghost_alpha": 0.3
+            }}"##,
+        )
+        .expect("the contract's request shape");
+        assert_eq!(state.apply(&request).unwrap(), "axis style");
+
+        let axis = &state.axis;
+        assert_eq!(axis.colors[0], grid::parse_srgb_hex("#010203").unwrap());
+        assert_eq!(axis.colors[1], grid::parse_srgb_hex("#00ff00").unwrap());
+        assert_eq!(axis.colors[2], grid::parse_srgb_hex("#ffffff").unwrap());
+        assert_eq!(axis.opacity, 0.25);
+        assert_eq!(axis.length, 40.0);
+        assert_eq!(axis.width, 3.0);
+        assert!(!axis.origin);
+        assert!(!axis.labels);
+        assert_eq!(axis.ghost_alpha, 0.3);
+        assert_eq!(state.axis_cross, axis.enabled, "the bool mirrors the style");
+
+        // The same request again is a no-op.
+        assert_eq!(state.apply(&request).unwrap(), "view unchanged");
+
+        // Opacity and ghost alpha clamp rather than error.
+        let clamped: ViewRequest = serde_json::from_str(
+            r#"{"axis": {"opacity": 2.0, "ghost_alpha": -1.0}}"#,
+        )
+        .unwrap();
+        assert_eq!(state.apply(&clamped).unwrap(), "axis style");
+        assert_eq!(state.axis.opacity, 1.0);
+        assert_eq!(state.axis.ghost_alpha, 0.0);
+    }
+
+    #[test]
+    fn a_bad_axis_field_is_rejected_atomically() {
+        let bad_colour = ViewRequest {
+            grid: Some(true),
+            axis: Some(AxisRequest {
+                enabled: Some(false),
+                color_y: Some("not a colour".to_string()),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        let mut state = ViewState::default();
+        assert!(state.apply(&bad_colour).is_err());
+        assert!(!state.grid, "nothing was applied");
+        assert!(state.axis.enabled, "the flag was not applied");
+        assert!(state.axis_cross, "the mirror is untouched");
+        assert_eq!(state.axis.colors, AxisStyle::default().colors);
+
+        for (length, width) in [(0.0, 1.5), (-1.0, 1.5), (f64::NAN, 1.5), (80.0, 0.0)] {
+            let request = ViewRequest {
+                grid: Some(true),
+                axis: Some(AxisRequest {
+                    length: Some(length),
+                    width: Some(width),
+                    ..Default::default()
+                }),
+                ..Default::default()
+            };
+            assert!(state.apply(&request).is_err(), "{length} × {width}");
+            assert!(!state.grid, "nothing was applied");
+            assert_eq!(state.axis.length, 80.0);
+        }
+    }
+
+    #[test]
+    fn the_axis_cross_alias_still_works() {
+        let mut state = ViewState::default();
+        let alias = ViewRequest {
+            axis_cross: Some(false),
+            ..Default::default()
+        };
+        assert_eq!(state.apply(&alias).unwrap(), "axis cross off");
+        assert!(!state.axis_cross);
+        assert!(!state.axis.enabled, "the alias drives the style");
+
+        // The alias is ignored when the nested request states `enabled`.
+        let mut state = ViewState::default();
+        let both = ViewRequest {
+            axis_cross: Some(true),
+            axis: Some(AxisRequest {
+                enabled: Some(false),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        assert_eq!(state.apply(&both).unwrap(), "axis off");
+        assert!(!state.axis_cross);
+        assert!(!state.axis.enabled, "`axis.enabled` wins");
+    }
+
+    #[test]
+    fn the_axis_cross_mirrors_the_nested_enabled_flag() {
+        let mut state = ViewState::default();
+        for enabled in [false, true, false] {
+            let request = ViewRequest {
+                axis: Some(AxisRequest {
+                    enabled: Some(enabled),
+                    ..Default::default()
+                }),
+                ..Default::default()
+            };
+            let summary = state.apply(&request).unwrap();
+            assert_eq!(summary, if enabled { "axis on" } else { "axis off" });
+            assert_eq!(state.axis_cross, enabled);
+            assert_eq!(state.axis_cross, state.axis.enabled);
+        }
+    }
+
+    #[test]
+    fn the_axis_contract_example_deserializes() {
+        let request: ViewRequest = serde_json::from_str(
+            r##"{"axis": {
+                "enabled": true,
+                "color_x": "#f87171", "color_y": "#4ade80", "color_z": "#38bdf8",
+                "opacity": 0.65,
+                "length": 80.0, "width": 1.5,
+                "origin": true, "labels": true,
+                "ghost_alpha": 0.10
+            }}"##,
+        )
+        .unwrap();
+        assert_eq!(request.axis, Some(AxisRequest {
+            enabled: Some(true),
+            color_x: Some("#f87171".to_string()),
+            color_y: Some("#4ade80".to_string()),
+            color_z: Some("#38bdf8".to_string()),
+            opacity: Some(0.65),
+            length: Some(80.0),
+            width: Some(1.5),
+            origin: Some(true),
+            labels: Some(true),
+            ghost_alpha: Some(0.10),
+        }));
+        assert_eq!(request.axis_cross, None);
     }
 
     #[test]

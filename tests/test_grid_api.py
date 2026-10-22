@@ -17,7 +17,6 @@ LEGACY_PREFERENCES = "User parameter:BaseApp/Preferences/View"
 
 VIEW_KEYS = {
     "grid",
-    "axis_cross",
     "grid_minor",
     "grid_major",
     "grid_radius",
@@ -49,7 +48,6 @@ class GridApiTests(unittest.TestCase):
         self.assertEqual(self.grid.minor, 10.0)
         self.assertEqual(self.grid.major, 100.0)
         self.assertEqual(self.grid.radius, 0.0)
-        self.assertTrue(self.grid.axis_cross)
         self.assertFalse(self.grid.shadows)
         self.assertAlmostEqual(self.grid.shadow_opacity, 0.30)
 
@@ -59,7 +57,6 @@ class GridApiTests(unittest.TestCase):
         self.grid.opacity = 0.65
         self.grid.spacing = 2.5
         self.grid.radius = 750.0
-        self.grid.axis_cross = False
         self.grid.shadows = True
         self.grid.shadow_opacity = 0.4
 
@@ -75,7 +72,6 @@ class GridApiTests(unittest.TestCase):
             msg="the major step is the next decade",
         )
         self.assertAlmostEqual(self.prefs.GetFloat("radius", 0.0), 750.0)
-        self.assertFalse(self.prefs.GetBool("axis_cross", True))
         self.assertTrue(self.prefs.GetBool("shadows", False))
         self.assertAlmostEqual(self.prefs.GetFloat("shadow_opacity", 0.0), 0.4)
 
@@ -107,8 +103,6 @@ class GridApiTests(unittest.TestCase):
         self.grid.radius = 420.0
         self.assertEqual(self.grid.radius, 420.0)
 
-        self.grid.axis_cross = False
-        self.assertFalse(self.grid.axis_cross)
         self.grid.shadows = True
         self.assertTrue(self.grid.shadows)
         self.grid.shadow_opacity = 0.0
@@ -147,7 +141,6 @@ class GridApiTests(unittest.TestCase):
         self.grid.minor = 2.0
         self.grid.major = 20.0
         self.grid.radius = 750.0
-        self.grid.axis_cross = False
         self.grid.shadows = True
 
         self.assertEqual(
@@ -155,7 +148,6 @@ class GridApiTests(unittest.TestCase):
             {
                 "view": {
                     "grid": True,
-                    "axis_cross": False,
                     "grid_minor": 2.0,
                     "grid_major": 20.0,
                     "grid_radius": 750.0,
@@ -173,7 +165,6 @@ class GridApiTests(unittest.TestCase):
             {
                 "view": {
                     "grid": False,
-                    "axis_cross": True,
                     "grid_minor": 10.0,
                     "grid_major": 100.0,
                     "grid_radius": 0.0,
@@ -205,7 +196,6 @@ class GridApiTests(unittest.TestCase):
             "the snapshot reports the deferred knobs too",
         )
         self.assertFalse(snapshot["grid"])
-        self.assertTrue(snapshot["axis_cross"])
         self.assertEqual(snapshot["grid_minor"], 10.0)
         self.assertEqual(snapshot["grid_major"], 100.0)
         self.assertIsNone(snapshot["grid_radius"], "0 is the camera-derived extent")

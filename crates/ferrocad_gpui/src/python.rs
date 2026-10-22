@@ -405,7 +405,7 @@ pub fn set_selection(items: &[crate::selection::SelectionItem]) -> Result<(), St
 pub fn set_view_state(state: &crate::view::ViewState) -> Result<(), String> {
     let payload = serde_json::json!({
         "grid": state.grid,
-        "axis_cross": state.axis_cross,
+        "axis_cross": state.axis.enabled,
         "projection": state.projection.as_str(),
         "grid_minor": state.grid_minor,
         "grid_major": state.grid_major,

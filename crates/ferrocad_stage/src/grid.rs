@@ -8,10 +8,11 @@
 //! The producer is pure arithmetic: no kernel, no gpui, no Python. The viewport owns
 //! the mesh identities, the projection culling and the depth ordering.
 
-use ferrocad_graphics::{Camera, Projection, Vertex, screen_ribbon};
+use ferrocad_graphics::{Camera, Vertex};
 use ferrocad_types::Vector3;
 
-use crate::screen::{STROKE_PIXELS, camera_forward, project_device, scale_for};
+use crate::axis::{self, AxisStyle};
+use crate::screen::project_device;
 use crate::workplane::Workplane;
 
 /// The default minor spacing (10 mm).
@@ -22,8 +23,6 @@ pub const MAJOR_STEP: f64 = 100.0;
 pub const LOCAL_MINOR_STEP: f64 = 1.0;
 /// A local workplane's major spacing (10 mm).
 pub const LOCAL_MAJOR_STEP: f64 = 10.0;
-/// The triad stem length, in device pixels.
-pub const TRIAD_PIXELS: f64 = 80.0;
 /// The radius clamp (`0.5 m .. 5 m`, in millimetres).
 pub const RADIUS_RANGE: (f64, f64) = (500.0, 5_000.0);
 /// A guard against a zoomed-out dot field; the viewport promotes the step first.
@@ -36,12 +35,6 @@ pub const GRID_ALPHA: f32 = 0.15;
 /// The fraction of the grid radius where the radial fade begins. Inside it the grid
 /// stays at full alpha; beyond it a smoothstep falloff reaches zero at the radius.
 pub const FADE_START: f64 = 0.55;
-/// The triad stems' linear colours (`#F87171`, `#4ADE80`, `#38BDF8`) at 65 %.
-pub const AXIS_COLORS: [[f32; 4]; 3] = [
-    [0.939, 0.165, 0.165, 0.65],
-    [0.069, 0.730, 0.216, 0.65],
-    [0.040, 0.509, 0.939, 0.65],
-];
 
 /// The direction the fragment shader's light comes from, normalized. Emitting it as the
 /// vertex normal makes the diffuse term `1`, so the grid, the triad and the snap
@@ -209,11 +202,13 @@ pub struct GridGeometry {
 
 /// Build the grid for `spec`, projected with `camera`.
 ///
-/// The dots and lines carry the radial fade in their alpha; the triad is screen-
-/// invariant (`TRIAD_PIXELS` long, `STROKE_PIXELS` wide) and uses the axis hues.
+/// The dots and lines carry the radial fade in their alpha; the triad uses the default
+/// [`AxisStyle`] scaled by the grid style's `triad_dim` (the world triad recedes under a
+/// local frame). A host that styles the axis draws it with [`axis::triad`] instead.
 pub fn build(spec: &GridSpec, style: &GridStyle, camera: &Camera) -> GridGeometry {
     let (dots, lines) = ground(spec, style);
-    let (triangles, triangle_indices) = triad(&spec.workplane, camera, style.triad_dim);
+    let axis = AxisStyle::default().scaled_opacity(style.triad_dim);
+    let (triangles, triangle_indices) = axis::triad(&spec.workplane, camera, &axis);
     GridGeometry {
         dots,
         lines,
@@ -277,36 +272,6 @@ pub fn ground(spec: &GridSpec, style: &GridStyle) -> (Vec<Vertex>, Vec<Vertex>) 
     (dots, lines)
 }
 
-/// The triad's screen-facing ribbons at the workplane origin: three stems.
-///
-/// `dim` scales every stem's alpha, so a lower level of the hierarchy can recede.
-pub fn triad(workplane: &Workplane, camera: &Camera, dim: f32) -> (Vec<Vertex>, Vec<u32>) {
-    let mut vertices = Vec::with_capacity(12);
-    let mut indices = Vec::with_capacity(18);
-    let forward = camera_forward(camera);
-    let origin = workplane.origin;
-    let length = scale_for(camera, origin, TRIAD_PIXELS);
-    let half_width = scale_for(camera, origin, STROKE_PIXELS / 2.0);
-    let axes = [
-        (workplane.u, AXIS_COLORS[0]),
-        (workplane.v, AXIS_COLORS[1]),
-        (workplane.n, AXIS_COLORS[2]),
-    ];
-    for (axis, mut color) in axes {
-        color[3] *= dim;
-        let tip = origin.add(&axis.scale(length));
-        let Some(quad) = screen_ribbon(origin, tip, half_width, forward) else {
-            continue;
-        };
-        let base = vertices.len() as u32;
-        for point in quad {
-            vertices.push(vertex(point, color));
-        }
-        indices.extend_from_slice(&[base, base + 1, base + 2, base, base + 2, base + 3]);
-    }
-    (vertices, indices)
-}
-
 /// A key for the ground cache: the spec's numbers, its plane, and the ink.
 ///
 /// The ink is part of the key because the vertices bake alpha per dot and per line
@@ -328,35 +293,6 @@ pub fn ground_key(spec: &GridSpec, style: &GridStyle) -> u64 {
     for v in [plane.origin, plane.u, plane.v, plane.n] {
         parts.extend_from_slice(&[v.x.to_bits(), v.y.to_bits(), v.z.to_bits()]);
     }
-    hash(&parts)
-}
-
-/// A key for the triad cache: the plane, the camera's view matrix, and the ink's alpha
-/// multiplier (a dimmed triad bakes different colours into its vertices).
-pub fn triad_key(workplane: &Workplane, camera: &Camera, dim: f32) -> u64 {
-    let mut parts = Vec::with_capacity(24 + 16);
-    parts.push(u64::from(dim.to_bits()));
-    for v in [workplane.origin, workplane.u, workplane.v, workplane.n] {
-        parts.extend_from_slice(&[v.x.to_bits(), v.y.to_bits(), v.z.to_bits()]);
-    }
-    for value in camera.view.m {
-        parts.push(value.to_bits());
-    }
-    match camera.projection {
-        Projection::Perspective { fov_y, .. } => {
-            parts.push(0);
-            parts.push(fov_y.to_bits());
-        }
-        Projection::Orthographic { extent, .. } => {
-            parts.push(1);
-            parts.push(extent.to_bits());
-        }
-        Projection::Matrix(matrix) => {
-            parts.push(2);
-            parts.extend(matrix.m.iter().map(|value| value.to_bits()));
-        }
-    }
-    parts.push(u64::from(camera.viewport.device_size()[1]));
     hash(&parts)
 }
 
@@ -550,16 +486,18 @@ mod tests {
     #[test]
     fn a_dimmed_style_scales_the_ground_and_the_triad() {
         let full = GridStyle::default();
-        let dimmed = full.clone().dimmed(WORLD_DIM);
+        let dimmed = full.clone().dimmed(WORLD_TRIAD_DIM);
         let (bright, _) = ground(&spec(100.0), &full);
         let (dim, _) = ground(&spec(100.0), &dimmed);
         let peak = |dots: &[Vertex]| dots.iter().map(|dot| dot.color[3]).fold(0.0, f32::max);
-        assert!((peak(&dim) - peak(&bright) * WORLD_DIM).abs() < 1e-6);
+        assert!((peak(&dim) - peak(&bright) * WORLD_TRIAD_DIM).abs() < 1e-6);
 
-        let (triad_full, _) = triad(&Workplane::world(), &tilted_camera(), 1.0);
-        let (triad_dim, _) = triad(&Workplane::world(), &tilted_camera(), WORLD_TRIAD_DIM);
-        assert!((triad_full[0].color[3] - AXIS_COLORS[0][3]).abs() < 1e-9);
-        assert!((triad_dim[0].color[3] - AXIS_COLORS[0][3] * WORLD_TRIAD_DIM).abs() < 1e-6);
+        // `build` uses the default axis style, with `triad_dim` scaling its opacity.
+        let full = build(&spec(100.0), &GridStyle::default(), &tilted_camera());
+        let dim = build(&spec(100.0), &GridStyle::default().dimmed(WORLD_TRIAD_DIM), &tilted_camera());
+        let alpha = |geometry: &GridGeometry| geometry.triangles[0].color[3];
+        assert!((alpha(&full) - axis::AXIS_COLORS[0][3] * axis::TRIAD_OPACITY).abs() < 1e-6);
+        assert!((alpha(&dim) - alpha(&full) * WORLD_TRIAD_DIM).abs() < 1e-6);
     }
 
     #[test]
@@ -610,7 +548,7 @@ mod tests {
     }
 
     #[test]
-    fn the_triad_is_three_axis_coloured_ribbons() {
+    fn the_build_triad_is_three_axis_coloured_ribbons() {
         let geometry = build(&spec(100.0), &GridStyle::default(), &tilted_camera());
         assert_eq!(
             geometry.triangles.len(),
@@ -619,7 +557,12 @@ mod tests {
         );
         assert_eq!(geometry.triangle_indices.len(), 18, "two triangles each");
         let colors: Vec<[f32; 4]> = geometry.triangles.chunks(4).map(|q| q[0].color).collect();
-        assert_eq!(colors, AXIS_COLORS.to_vec());
+        for (color, token) in colors.iter().zip(axis::AXIS_COLORS) {
+            assert!((color[0] - token[0]).abs() < 1e-9);
+            assert!((color[1] - token[1]).abs() < 1e-9);
+            assert!((color[2] - token[2]).abs() < 1e-9);
+            assert!((color[3] - token[3] * axis::TRIAD_OPACITY).abs() < 1e-9);
+        }
     }
 
     #[test]

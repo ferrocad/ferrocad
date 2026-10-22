@@ -55,6 +55,7 @@
 //! assert_eq!(queue.len(), 2);
 //! ```
 
+pub mod axis;
 pub mod feedback;
 pub mod gizmo;
 pub mod grid;
@@ -72,6 +73,7 @@ pub use gizmo::{
     GizmoMode, GizmoModifiers, GizmoValue, HandleKind, ManipulatorFrame, TRANSFORM_ID,
     TransformGizmo,
 };
+pub use axis::AxisStyle;
 pub use grid::{GridGeometry, GridSpec, GridStyle};
 pub use input::{MouseButton, PointerEvent, PointerKind};
 pub use interaction::{InteractionCommit, Manipulator};

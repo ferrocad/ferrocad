@@ -20,6 +20,27 @@ _A mod that imports this depends on FerroCAD; it is not upstream API._
 | `register_interaction_provider(provider)` | Let ``provider(obj, manipulator, action, element, values)`` apply an edit. |
 | `set_parameter_file(path)` | Point ``FreeCAD.ParamGet`` at ``path`` (always enabled). |
 
+## Object `Axis`
+
+The ``FerroCAD.Axis`` singleton (see the module docstring).
+
+| Member | Summary |
+| --- | --- |
+| apply() -> dict | The ``{"view": …}`` request for the current settings. |
+| `color_x` (property) | The X stem's ink as a canonical lowercase ``#rrggbb``. |
+| `color_y` (property) | The Y stem's ink as a canonical lowercase ``#rrggbb``. |
+| `color_z` (property) | The Z stem's ink as a canonical lowercase ``#rrggbb``. |
+| `enabled` (property) | Whether the world axis cross is shown. |
+| `ghost_alpha` (property) | The alpha of the occluded (ghosted) stems in ``0..1``. |
+| `labels` (property) | Whether the ``X``/``Y``/``Z`` labels are drawn. |
+| `length` (property) | The stem length in pixels. |
+| `opacity` (property) | The stems' opacity in ``0..1``. |
+| `origin` (property) | Whether the origin node is drawn at the cross's centre. |
+| reset() -> None | Clear the axis store (only the axis provider's own group). |
+| schema() -> list | A copy of :data:`SETTINGS_SCHEMA` (the rows the provider advertises). |
+| snapshot() -> dict | The stored axis policy, in the same shape as the ``axis`` view. |
+| `width` (property) | The stem width in pixels. |
+
 ## Object `Grid`
 
 The ``FerroCAD.Grid`` singleton (see the module docstring).
@@ -27,7 +48,7 @@ The ``FerroCAD.Grid`` singleton (see the module docstring).
 | Member | Summary |
 | --- | --- |
 | apply() -> dict | The ``{"view": …}`` request for the current settings. |
-| `axis_cross` (property) | Whether the world axis cross (the triad) is shown. |
+| `axis_cross` (property) | Deprecated: moved to :attr:`FerroCAD.Axis.enabled`. |
 | `color` (property) | The grid ink as a canonical lowercase ``#rrggbb``. |
 | `enabled` (property) | Whether the world grid's ground layer is shown. |
 | `major` (property) | The world grid's major (line) step, in millimetres. |

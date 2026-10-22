@@ -40,7 +40,6 @@ ATTRIBUTES = {
     "minor": 10.0,
     "major": 100.0,
     "radius": 0.0,
-    "axis_cross": True,
     "shadows": False,
     "shadow_opacity": 0.30,
 }
@@ -120,7 +119,6 @@ class GridProviderFacadeTests(unittest.TestCase):
         self.assertEqual(self.grid.minor, 10.0)
         self.assertEqual(self.grid.major, 100.0)
         self.assertEqual(self.grid.radius, 0.0)
-        self.assertTrue(self.grid.axis_cross)
         self.assertFalse(self.grid.shadows)
         self.assertAlmostEqual(self.grid.shadow_opacity, 0.30)
 
@@ -140,7 +138,6 @@ class GridProviderFacadeTests(unittest.TestCase):
         self.grid.minor = 2.5
         self.grid.major = 25.0
         self.grid.radius = 750.0
-        self.grid.axis_cross = False
         self.grid.shadows = True
         self.grid.shadow_opacity = 0.4
 
@@ -154,7 +151,6 @@ class GridProviderFacadeTests(unittest.TestCase):
                 "minor": "2.5 mm",
                 "major": "25 mm",
                 "radius": "750 mm",
-                "axis_cross": "False",
                 "shadows": "True",
                 "shadow_opacity": "0.4",
             },
@@ -205,7 +201,6 @@ class GridProviderFacadeTests(unittest.TestCase):
         native = self.rows()
         self.assertIn("minor", native)
         self.assertIn("radius", native)
-        self.assertIn("axis_cross", native)
 
         switched = json.loads(
             ferrocad_shell.set_property("Settings/Grid", "provider", "Coin (WGSL)")
@@ -218,7 +213,6 @@ class GridProviderFacadeTests(unittest.TestCase):
             list(coin), ["enabled", "color", "opacity", "shadows", "shadow_opacity"]
         )
         self.assertNotIn("minor", coin)
-        self.assertNotIn("axis_cross", coin)
 
         back = json.loads(
             ferrocad_shell.set_property("Settings/Grid", "provider", "ferrocad")

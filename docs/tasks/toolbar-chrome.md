@@ -191,7 +191,7 @@ Nothing in the chrome needs to change for 3–5; T4/T5 become wiring once S0–S
   `the_action_dock_follows_the_selection`; the drag/proximity fade is **not built**
   (deferred with T3's visual half) and is unverified.
 - `cargo test -p ferrocad_gpui` and `cargo test -p ferrocad_toy` stay green. ✅
-  (2026-10-22 verification: gpui lib **96 passed**, toy **14 passed**.) The Xvfb
+  (2026-10-22 verification: gpui lib **102 passed**, toy **14 passed**.) The Xvfb
   real-window smoke test was **not run** in this pass — it remains unverified.
 - The docs (`actions-and-tools.md` §7/§16) describe the new surfaces, not the strip. ✅
 

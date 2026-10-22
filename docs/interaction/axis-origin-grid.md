@@ -142,6 +142,37 @@ full token set, type scale, stroke rules and state model are in
 The center node's 5 px is a **proximity highlight**, distinct from the 12 px grab slop
 (`HIT_SLOP`): the node is never a pick target that steals a click from geometry.
 
+**As built (2026-10-22) — parameterized style.** The table above is still the default
+look, now expressed as a `ferrocad_stage::axis::AxisStyle` rather than hard-coded
+constants. The style carries `enabled`, the three linear stem `colors` (alpha `1.0`,
+with `opacity = 0.65` applied per vertex), `length` (80 device px), `width`
+(1.5 device px), `origin`, `labels` and `ghost_alpha` (the occluded pass, 0.10).
+`axis::triad(workplane, camera, style)` builds the ribbons and
+`axis::triad_key(...)` includes every field that changes the geometry or the baked
+colours, so a style edit rebuilds only the triad. The world triad still recedes to
+`WORLD_TRIAD_DIM` under a local frame by scaling the style's opacity; a local triad uses
+the same style.
+
+A command styles the cross with `{"view": {"axis": {…}}}` (all fields optional):
+
+```json
+{"view": {"axis": {
+  "enabled": true,
+  "color_x": "#f87171", "color_y": "#4ade80", "color_z": "#38bdf8",
+  "opacity": 0.65,
+  "length": 80.0, "width": 1.5,
+  "origin": true, "labels": true,
+  "ghost_alpha": 0.10
+}}}
+```
+
+Colours accept `#rgb`/`#rrggbb` and are rejected atomically (nothing in the request is
+applied); `opacity`/`ghost_alpha` clamp to `0..=1`; `length`/`width` must be finite and
+positive. `ViewState.axis_cross` remains a `bool` mirroring `axis.enabled` for the
+Python facade, and the older `{"view": {"axis_cross": bool}}` spelling survives as a
+deprecated alias that applies only when `axis.enabled` is absent. The settings are
+provider-advertised as `Settings/Axis` rather than a Rust-only preference.
+
 ### 3.2 Ground grid (the turntable field)
 
 | Property | World | Workplane |

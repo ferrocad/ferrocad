@@ -36,7 +36,7 @@ first = json.loads(ferrocad_shell.run_command("App_ToggleGrid"))
 
 | Read back | Value |
 | --- | --- |
-| Response | {"ok": true, "view": {"axis_cross": true, "grid": true, "grid_alpha": 1.0, "grid_color": "#94a3b8", "grid_major": 100.0, "grid_minor": 10.0, "grid_radius": 0.0}} |
+| Response | {"ok": true, "view": {"grid": true, "grid_alpha": 1.0, "grid_color": "#94a3b8", "grid_major": 100.0, "grid_minor": 10.0, "grid_radius": 0.0}} |
 | FerroCAD.Grid.enabled | true |
 
 ## 3. Push the state the window would push
@@ -66,7 +66,7 @@ ferrocad_shell.set_view_state(json.dumps(second["view"]))
 
 | Read back | Value |
 | --- | --- |
-| Response | {"ok": true, "view": {"axis_cross": true, "grid": false, "grid_alpha": 1.0, "grid_color": "#94a3b8", "grid_major": 100.0, "grid_minor": 10.0, "grid_radius": 0.0}} |
+| Response | {"ok": true, "view": {"grid": false, "grid_alpha": 1.0, "grid_color": "#94a3b8", "grid_major": 100.0, "grid_minor": 10.0, "grid_radius": 0.0}} |
 | FerroCAD.Grid.enabled | false |
 
 > Every grid backend reads this one switch. A provider that kept its own copy would keep drawing after the toggle, which is exactly the defect `docs/tasks/grid-visibility.md` fixed.

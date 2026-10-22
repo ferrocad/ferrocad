@@ -130,7 +130,7 @@ its modal over the viewport, where the user is looking.
 - Closing the Dev Tools window does not change the document, stop the viewport, or
   drop the selection; reopening restores the same view. ✅
 - `cargo test -p ferrocad_gpui` and `cargo test -p ferrocad_toy` pass; the toy starts
-  and can toggle the window. ✅ (2026-10-22: gpui lib **96 passed**, toy **14 passed**;
+  and can toggle the window. ✅ (2026-10-22: gpui lib **102 passed**, toy **14 passed**;
   the toy's live window/toggle was not exercised in this pass.)
 - No Python API change, no second interpreter. ✅ (`ferrocad_shell.commands()` gained
   the two optional surface fields; the `FreeCADGui` facade is unchanged. The Dev Tools

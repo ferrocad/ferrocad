@@ -20,7 +20,7 @@ use std::time::{Duration, Instant};
 use ferrocad_geom::SelectionRef;
 use ferrocad_graphics::{
     Camera, DepthState, DrawPacket, Generation, Geometry, Hit, MeshId, PickId, Projection,
-    RenderQueue, StateSnapshot, Topology, Vertex, Viewport, pick_at_hit, theme,
+    RenderQueue, StateSnapshot, Topology, Vertex, Viewport, pick_at_hit,
 };
 use ferrocad_inventor::{
     Directives, Event, EventListener, ImageData, InventorView, NaviCubeDirective, Node, NodeKind,
@@ -29,10 +29,10 @@ use ferrocad_inventor::{
 use ferrocad_stage::Stage;
 use ferrocad_stage::shape::{GHOST_DEPTH, WIRE_DEPTH_BIAS};
 use ferrocad_stage::{
-    FaceFrame, GizmoCommitEvent, GizmoHandle, GizmoModifiers, GizmoValue, GridSpec, GridStyle,
-    InteractionCommit, Manipulator, MouseButton as StageButton, PointerEvent, PointerKind,
-    SnapCandidate, SnapContext, SnapKind, Tool, ToolStatus, TransformGizmo, Workplane, feedback,
-    grid, snap_to_geometry_with,
+    AxisStyle, FaceFrame, GizmoCommitEvent, GizmoHandle, GizmoModifiers, GizmoValue, GridSpec,
+    GridStyle, InteractionCommit, Manipulator, MouseButton as StageButton, PointerEvent,
+    PointerKind, SnapCandidate, SnapContext, SnapKind, Tool, ToolStatus, TransformGizmo, Workplane,
+    axis, feedback, grid, snap_to_geometry_with,
 };
 use ferrocad_stage::screen::{project_device, scale_for};
 use ferrocad_types::{Matrix4, Placement, Rotation, Vector3};
@@ -175,13 +175,14 @@ pub struct InventorViewport<V: InventorView> {
     /// A neutral summary of what a click would do under the pointer (A4).
     hover_report: HoverReport,
     /// The reference grid's geometry (G2). Always allocated: `grid_enabled` decides
-    /// whether the ground field is drawn and `axis_cross` whether the triads are.
+    /// whether the ground field is drawn and `axis.enabled` whether the triads are.
     grid: GridMesh,
     /// The world grid's visibility (`App_ToggleGrid`).
     grid_enabled: bool,
     /// The world triad, its origin node and axis tags (`App_ToggleAxisCross`). On by
-    /// default, as upstream's axis cross is.
-    axis_cross: bool,
+    /// default, as upstream's axis cross is. The style also carries the colours, the
+    /// screen-invariant geometry and the origin/label toggles.
+    axis: AxisStyle,
     /// The world grid's minor and major steps (mm, G5 preferences; the local face grid
     /// keeps its own 1/10 mm levels).
     grid_minor: f64,
@@ -347,6 +348,8 @@ impl GridMesh {
 struct LayerSpec<'a> {
     spec: &'a GridSpec,
     style: &'a GridStyle,
+    /// The triad's ink and geometry (the axis-cross style).
+    axis: &'a AxisStyle,
     /// The dots and major lines (the grid toggle).
     ground: bool,
     /// The triad stems at the layer's origin (the axis-cross toggle).
@@ -424,7 +427,7 @@ fn sync_layer(layer: &mut GridLayer, camera: &Camera, spec: Option<LayerSpec<'_>
         Some(spec) => {
             layer.show_ground = spec.ground;
             layer.show_triad = spec.triad;
-            layer.sync(camera, spec.spec, spec.style);
+            layer.sync(camera, spec.spec, spec.style, spec.axis);
         }
         None => {
             layer.show_ground = false;
@@ -487,7 +490,7 @@ impl GridLayer {
         }
     }
 
-    fn sync(&mut self, camera: &Camera, spec: &GridSpec, style: &GridStyle) {
+    fn sync(&mut self, camera: &Camera, spec: &GridSpec, style: &GridStyle, axis: &AxisStyle) {
         let key = grid::ground_key(spec, style);
         if self.ground_key != Some(key) {
             let (dots, lines) = grid::ground(spec, style);
@@ -496,19 +499,11 @@ impl GridLayer {
             self.ground_generation = Generation(self.ground_generation.0 + 1);
             self.ground_key = Some(key);
         }
-        let key = grid::triad_key(&spec.workplane, camera, style.triad_dim);
+        let key = axis::triad_key(&spec.workplane, camera, axis);
         if self.triad_key != Some(key) {
-            let (vertices, indices) = grid::triad(&spec.workplane, camera, style.triad_dim);
+            let (vertices, indices) = axis::triad(&spec.workplane, camera, axis);
+            self.triad_ghost = axis::ghost(&vertices, axis.ghost_alpha);
             self.triad = vertices;
-            self.triad_ghost = self
-                .triad
-                .iter()
-                .map(|vertex| {
-                    let mut vertex = *vertex;
-                    vertex.color[3] *= theme::GHOST_ALPHA;
-                    vertex
-                })
-                .collect();
             self.triad_indices = indices;
             self.triad_generation = Generation(self.triad_generation.0 + 1);
             self.triad_ghost_generation = Generation(self.triad_ghost_generation.0 + 1);
@@ -673,13 +668,6 @@ impl FeedbackMeshes {
 /// it the mesh is too dense for a midpoint to mean anything.
 const MAX_EDGE_CANDIDATES: usize = 1024;
 
-/// The world triad's axis tags, in the visual language's hues (sRGB, `#F87171` /
-/// `#4ADE80` / `#38BDF8`).
-const AXIS_X_COLOR: u32 = 0xf87171;
-const AXIS_Y_COLOR: u32 = 0x4ade80;
-const AXIS_Z_COLOR: u32 = 0x38bdf8;
-const AXIS_LABEL_ALPHA: f32 = 0.65;
-
 /// A triad axis tag: `X`/`Y`/`Z` at a workplane's `U`/`V`/`N` stem tip.
 #[derive(Clone, Copy, Debug)]
 struct AxisLabel {
@@ -688,6 +676,22 @@ struct AxisLabel {
     position: [f32; 2],
     /// sRGB ink.
     color: u32,
+    /// The style's opacity, as an 8-bit sRGB alpha.
+    alpha: u8,
+}
+
+/// Pack a **linear** RGB colour as an sRGB `0xRRGGBB` (the gpui text layer's ink).
+fn packed_srgb(color: [f32; 4]) -> u32 {
+    let channel = |value: f32| {
+        let value = value.clamp(0.0, 1.0);
+        let srgb = if value <= 0.003_130_8 {
+            value * 12.92
+        } else {
+            1.055 * value.powf(1.0 / 2.4) - 0.055
+        };
+        (srgb * 255.0).round() as u32
+    };
+    channel(color[0]) << 16 | channel(color[1]) << 8 | channel(color[2])
 }
 
 /// A draw packet for the feedback overlay: untagged (never picked) and depth-free, so
@@ -780,7 +784,7 @@ impl<V: InventorView> InventorViewport<V> {
             hover_report: HoverReport::default(),
             grid: GridMesh::new(),
             grid_enabled: false,
-            axis_cross: true,
+            axis: AxisStyle::default(),
             grid_minor: grid::MINOR_STEP,
             grid_major: grid::MAJOR_STEP,
             grid_radius: None,
@@ -2312,20 +2316,36 @@ impl<V: InventorView> InventorViewport<V> {
     }
 
     /// Show or hide the axis cross: the world triad, its origin node and the axis tags
-    /// (`App_ToggleAxisCross`, on by default as upstream's axis cross is). Returns
-    /// whether it changed.
+    /// (`App_ToggleAxisCross`, on by default as upstream's axis cross is). This is the
+    /// legacy boolean alias for [`axis`](AxisStyle::enabled). Returns whether it changed.
     pub fn set_axis_cross(&mut self, enabled: bool) -> bool {
-        if enabled == self.axis_cross {
+        if enabled == self.axis.enabled {
             return false;
         }
-        self.axis_cross = enabled;
-        self.recompile();
+        self.axis.enabled = enabled;
+        self.sync_grid();
         true
     }
 
     /// Whether the axis cross is shown.
     pub fn axis_cross(&self) -> bool {
-        self.axis_cross
+        self.axis.enabled
+    }
+
+    /// Replace the axis cross's whole appearance (colours, opacity, geometry, toggles).
+    /// Returns whether anything changed.
+    pub fn set_axis_style(&mut self, style: AxisStyle) -> bool {
+        if style == self.axis {
+            return false;
+        }
+        self.axis = style;
+        self.sync_grid();
+        true
+    }
+
+    /// The axis cross's current style.
+    pub fn axis_style(&self) -> &AxisStyle {
+        &self.axis
     }
 
     /// Set the world grid's minor and major steps (mm). Invalid pairs (non-positive, or
@@ -2450,7 +2470,7 @@ impl<V: InventorView> InventorViewport<V> {
         self.refresh_hover_face();
 
         let grid_on = self.grid_enabled;
-        let cross = self.axis_cross;
+        let cross = self.axis.enabled;
         let active = self.active_workplane.clone();
         // Do not preview the face that is already active.
         let hover = self
@@ -2485,9 +2505,12 @@ impl<V: InventorView> InventorViewport<V> {
         world_style.color = self.grid_color;
         world_style.minor_alpha *= self.grid_alpha;
         world_style.major_alpha *= self.grid_alpha;
+        // The world triad uses the same style as a local one, receding when a local frame
+        // is present (the ground dims through `GridStyle::dim`).
+        let mut world_axis = self.axis.clone();
         if local_present {
             world_style.dim = grid::WORLD_DIM;
-            world_style.triad_dim = grid::WORLD_TRIAD_DIM;
+            world_axis = world_axis.scaled_opacity(grid::WORLD_TRIAD_DIM);
         }
         let active_layer = active.as_ref().and_then(|frame| {
             (grid_on || cross).then(|| {
@@ -2518,6 +2541,7 @@ impl<V: InventorView> InventorViewport<V> {
         let world = LayerSpec {
             spec: &world_spec,
             style: &world_style,
+            axis: &world_axis,
             ground: grid_on && !self.grid_overlay,
             triad: cross,
         };
@@ -2526,19 +2550,27 @@ impl<V: InventorView> InventorViewport<V> {
             .map(|(spec, style, ground)| LayerSpec {
                 spec,
                 style,
+                axis: &self.axis,
                 ground: *ground,
                 triad: cross,
             });
         let hover = hover_layer.as_ref().map(|(spec, style)| LayerSpec {
             spec,
             style,
+            axis: &self.axis,
             ground: true,
             triad: cross,
         });
 
         let mesh = &mut self.grid;
         mesh.sync(&self.camera, world, active, hover);
-        mesh.sync_origin(&origin_plane, &self.camera, bloomed, origin_bias, cross);
+        mesh.sync_origin(
+            &origin_plane,
+            &self.camera,
+            bloomed,
+            origin_bias,
+            cross && self.axis.origin,
+        );
         mesh.emit(&mut self.grid_queue);
     }
 
@@ -2664,19 +2696,20 @@ impl<V: InventorView> InventorViewport<V> {
     }
 
     /// The triad's axis tags (`X`/`Y`/`Z` for the world, `U`/`V`/`N` for a workplane),
-    /// projected at the stem tips. Empty while the axis cross is off.
+    /// projected at the stem tips. Empty while the axis cross (or its labels) is off.
     fn axis_labels(&self) -> Vec<AxisLabel> {
-        if !self.axis_cross {
+        if !self.axis.enabled || !self.axis.labels {
             return Vec::new();
         }
         let (plane, letters) = match &self.active_workplane {
             Some(frame) => (frame.plane.clone(), ['U', 'V', 'N']),
             None => (Workplane::world(), ['X', 'Y', 'Z']),
         };
-        let colors = [AXIS_X_COLOR, AXIS_Y_COLOR, AXIS_Z_COLOR];
+        let colors = self.axis.colors.map(packed_srgb);
+        let alpha = (self.axis.opacity.clamp(0.0, 1.0) * 255.0).round() as u8;
         let axes = [plane.u, plane.v, plane.n];
         // A hair beyond the ribbon tip, so the glyph does not sit on the stem.
-        let length = scale_for(&self.camera, plane.origin, grid::TRIAD_PIXELS * 1.08);
+        let length = scale_for(&self.camera, plane.origin, self.axis.length * 1.08);
         axes.iter()
             .zip(letters)
             .zip(colors)
@@ -2690,6 +2723,7 @@ impl<V: InventorView> InventorViewport<V> {
                         .viewport
                         .to_logical([device[0].round() as i32, device[1].round() as i32]),
                     color,
+                    alpha,
                 })
             })
             .collect()
@@ -3684,7 +3718,7 @@ fn gizmo_modifiers(modifiers: gpui::Modifiers) -> GizmoModifiers {
 fn axis_labels(labels: &[AxisLabel]) -> impl IntoElement {
     let mut layer = div().absolute().left(px(0.)).top(px(0.)).w_full().h_full();
     for label in labels {
-        let alpha = (AXIS_LABEL_ALPHA * 255.0).round() as u32;
+        let alpha = u32::from(label.alpha);
         layer = layer.child(
             div()
                 .absolute()
@@ -5938,6 +5972,53 @@ mod tests {
         assert!(viewport.set_grid(true));
         assert_eq!(viewport.grid_queue.len(), 2, "dots and major lines");
         assert!(viewport.axis_labels().is_empty());
+    }
+
+    #[test]
+    fn a_custom_axis_style_reaches_the_triad_the_ghost_and_the_labels() {
+        let mut viewport = grid_view();
+        // Cross alone: the triad, its ghost, then the origin node.
+        assert!(viewport.set_grid(false));
+        let mut style = viewport.axis_style().clone();
+        style.colors[0] = [0.1, 0.2, 0.3, 1.0];
+        style.opacity = 0.4;
+        style.length = 40.0;
+        style.width = 3.0;
+        style.ghost_alpha = 0.25;
+        assert!(viewport.set_axis_style(style.clone()));
+        assert_eq!(
+            viewport.grid_queue.packets[0].topology,
+            Topology::Triangles,
+            "the lit triad"
+        );
+        let lit = viewport.grid_queue.packets[0]
+            .geometry
+            .as_ref()
+            .expect("fresh geometry");
+        assert!((lit.vertices[0].color[0] - 0.1).abs() < 1e-6);
+        assert!((lit.vertices[0].color[1] - 0.2).abs() < 1e-6);
+        assert!((lit.vertices[0].color[2] - 0.3).abs() < 1e-6);
+        assert!((max_alpha(&viewport.grid_queue.packets[0]) - 0.4).abs() < 1e-6);
+        // The occluded pass uses the style's ghost alpha, not the old token.
+        assert!((max_alpha(&viewport.grid_queue.packets[1]) - 0.1).abs() < 1e-6);
+
+        let labels = viewport.axis_labels();
+        assert_eq!(labels[0].color, packed_srgb(style.colors[0]));
+        assert_eq!(labels[0].alpha, 102, "0.4 as an 8-bit alpha");
+
+        // The style's visibility flags own the origin node and the tags.
+        style.origin = false;
+        style.labels = false;
+        assert!(viewport.set_axis_style(style));
+        assert!(viewport.axis_labels().is_empty());
+        assert!(
+            viewport
+                .grid_queue
+                .packets
+                .iter()
+                .all(|packet| packet.topology != Topology::Lines),
+            "no origin node"
+        );
     }
 
     #[test]

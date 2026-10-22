@@ -13,6 +13,8 @@ Populate it with `cargo xtask mods`, which fetches selected upstream FreeCAD
 workbenches (default `Draft`, at the pinned revision `FERROCAD_FREECAD_TAG`) and
 copies them in as loose files. Authored workbenches are part of the tree and are
 tracked normally; fetched upstream trees are gitignored (the `.gitignore`
-negates `mods/GridOverlay/` and `mods/GridOverlayCoin/`, the two forks in
-`docs/workbenches/grid-overlay-plan.md` §5 G5–G6). The release workflow runs
-`cargo xtask mods` before packaging.
+negates `mods/GridOverlay/`, `mods/GridOverlayCoin/` and `mods/AxisOverlay/`,
+the authored workbenches). The authored workbenches are
+the grid backends (`GridOverlay`, `GridOverlayCoin`) and `AxisOverlay`, the
+native axis-cross settings surface added when the axis cross moved out of the
+grid capability. The release workflow runs `cargo xtask mods` before packaging.

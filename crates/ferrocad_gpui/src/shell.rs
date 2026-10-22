@@ -575,7 +575,9 @@ impl Shell {
         {
             let state = self.model.lock().unwrap().view.clone();
             viewport.set_grid(state.grid);
-            viewport.set_axis_cross(state.axis_cross);
+            // The whole style is the source of truth (the boolean alias is folded into
+            // `axis.enabled` before it reaches the state).
+            viewport.set_axis_style(state.axis.clone());
             viewport.set_grid_steps(state.grid_minor, state.grid_major);
             viewport.set_grid_radius(state.grid_radius);
             viewport.set_grid_overlay(state.grid_overlay);
@@ -1148,6 +1150,11 @@ impl Shell {
         if let Some(viewport) = self.viewport.clone() {
             let orthographic = state.projection == ProjectionName::Orthographic;
             let grid = state.grid;
+            // A `view.axis` request carries the style; the deprecated `axis_cross` alias
+            // still goes through `set_axis_cross`. Either way the style's `enabled` is the
+            // single source of truth in the state.
+            let axis = state.axis.clone();
+            let axis_style_requested = request.axis.is_some();
             let axis_cross = state.axis_cross;
             let (minor, major, radius) = (state.grid_minor, state.grid_major, state.grid_radius);
             let (color, alpha) = (state.grid_color, state.grid_alpha);
@@ -1155,7 +1162,11 @@ impl Shell {
             viewport.update(cx, |viewport, cx| {
                 let mut changed = viewport.set_orthographic(orthographic);
                 changed |= viewport.set_grid(grid);
-                changed |= viewport.set_axis_cross(axis_cross);
+                changed |= if axis_style_requested {
+                    viewport.set_axis_style(axis)
+                } else {
+                    viewport.set_axis_cross(axis_cross)
+                };
                 changed |= viewport.set_grid_steps(minor, major);
                 changed |= viewport.set_grid_radius(radius);
                 changed |= viewport.set_grid_color(color);
@@ -2769,6 +2780,8 @@ if "Test_Shortcut" not in FreeCADGui.listCommands():
     fn the_axis_cross_is_toggled_separately(cx: &mut TestAppContext) {
         let _guard = crate::PYTHON_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let model = Shell::boot().expect("boot shell");
+        // Boot first: it puts the facade on `sys.path`, which the reset needs.
+        reset_grid_state();
         let shell = cx.update(|cx| cx.new(|cx| Shell::from_model(model.clone(), cx)));
 
         assert!(model.lock().unwrap().view.axis_cross, "on by default");
@@ -2777,10 +2790,50 @@ if "Test_Shortcut" not in FreeCADGui.listCommands():
         cx.update(|cx| {
             shell.update(cx, |shell, cx| shell.run_command("App_ToggleAxisCross", cx))
         });
-        assert_eq!(model.lock().unwrap().status, "axis cross off");
+        assert_eq!(model.lock().unwrap().status, "axis off");
         assert!(!model.lock().unwrap().view.axis_cross);
+        assert!(!model.lock().unwrap().view.axis.enabled);
         assert!(!model.lock().unwrap().view.grid, "the grid is untouched");
         assert!(!command_checked("App_ToggleAxisCross"));
+    }
+
+    /// The parameterized `view.axis` request reaches the shell's view state; the bool
+    /// `axis_cross` stays the mirror of `axis.enabled`, and the deprecated alias still
+    /// drives the same flag.
+    #[gpui::test]
+    fn a_view_axis_request_reaches_the_state(cx: &mut TestAppContext) {
+        let _guard = crate::PYTHON_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let model = Shell::boot().expect("boot shell");
+        let shell = cx.update(|cx| cx.new(|cx| Shell::from_model(model.clone(), cx)));
+
+        let request: ViewRequest = serde_json::from_str(
+            r##"{"axis": {"enabled": false, "color_x": "#010203", "length": 40.0, "width": 3.0}}"##,
+        )
+        .expect("a view.axis request");
+        let summary = cx.update(|cx| {
+            shell.update(cx, |shell, cx| shell.apply_view(&request, cx))
+        });
+        assert_eq!(summary.unwrap(), "axis off");
+
+        let state = model.lock().unwrap().view.clone();
+        assert!(!state.axis.enabled);
+        assert!(!state.axis_cross, "the bool mirrors axis.enabled");
+        assert_eq!(
+            state.axis.colors[0],
+            ferrocad_stage::grid::parse_srgb_hex("#010203").unwrap()
+        );
+        assert_eq!(state.axis.length, 40.0);
+        assert_eq!(state.axis.width, 3.0);
+
+        // The legacy alias still toggles the same flag (and the same mirror).
+        let alias: ViewRequest = serde_json::from_str(r#"{"axis_cross": true}"#).unwrap();
+        let summary = cx.update(|cx| {
+            shell.update(cx, |shell, cx| shell.apply_view(&alias, cx))
+        });
+        assert_eq!(summary.unwrap(), "axis cross on");
+        let state = model.lock().unwrap().view.clone();
+        assert!(state.axis.enabled);
+        assert!(state.axis_cross);
     }
 
     /// A5: a tool id resolves through the edition's registry; an unknown id reports
@@ -3043,9 +3096,20 @@ if "Test_Tool" not in FreeCADGui.listCommands():
     fn reset_grid_state() {
         // S4 moved the grid store to the native provider's group; use the public
         // facade so this reset follows the one store instead of a legacy key.
+        // The axis cross's store is process-global too (and its `enabled` migrates
+        // from the legacy grid/view flags), so clear it and those flags alongside.
         let script = r#"
+import FreeCAD
 import FerroCAD
 FerroCAD.Grid.reset()
+FreeCAD.ParamGet("User parameter:BaseApp/Preferences/Mods/axis/ferrocad").Clear()
+legacy = (
+    FreeCAD.ParamGet("User parameter:BaseApp/Preferences/Mods/grid/ferrocad"),
+    FreeCAD.ParamGet("User parameter:BaseApp/Preferences/View"),
+)
+for group in legacy:
+    if "GridAxisCross" in group.GetBools():
+        group.RemBool("GridAxisCross")
 "#;
         let reset = crate::python::evaluate(script).expect("reset the grid state");
         assert!(reset.ok, "{}", reset.output);

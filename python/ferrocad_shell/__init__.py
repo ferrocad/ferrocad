@@ -811,7 +811,13 @@ class _AxisCrossCommand:
         return bool(FerroCADGui.ViewState.axis_cross)
 
     def Activated(self):
-        return {"view": {"axis_cross": not FerroCADGui.ViewState.axis_cross}}
+        axis = getattr(FerroCAD, "Axis", None)
+        if axis is None:
+            # Upstream/headless builds without the semantic axis capability keep
+            # the original presentation-only request.
+            return {"view": {"axis_cross": not FerroCADGui.ViewState.axis_cross}}
+        axis.enabled = not axis.enabled
+        return axis.apply()
 
 
 FreeCADGui.addCommand("App_ToggleAxisCross", _AxisCrossCommand())

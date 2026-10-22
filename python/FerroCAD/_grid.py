@@ -50,7 +50,6 @@ DEFAULT_OPACITY = 1.0
 DEFAULT_MINOR = 10.0
 DEFAULT_MAJOR = 100.0
 DEFAULT_RADIUS = 0.0
-DEFAULT_AXIS_CROSS = True
 DEFAULT_SHADOWS = False
 DEFAULT_SHADOW_OPACITY = 0.30
 
@@ -108,12 +107,6 @@ SETTINGS_SCHEMA = (
         "min": 0.0,
     },
     {
-        "name": "axis_cross",
-        "label": "Axis cross",
-        "kind": "bool",
-        "default": DEFAULT_AXIS_CROSS,
-    },
-    {
         "name": "shadows",
         "label": "Show ground shadow",
         "kind": "bool",
@@ -137,7 +130,6 @@ _LEGACY_KEYS = {
     "minor": "GridMinorStep",
     "major": "GridMajorStep",
     "radius": "GridRadius",
-    "axis_cross": "GridAxisCross",
     "shadows": "GridShadow",
     "shadow_opacity": "GridShadowOpacity",
 }
@@ -350,15 +342,23 @@ class _GridSettings:
     def radius(self, value) -> None:
         _write(_SPECS["radius"], _radius(value))
 
-    # -- orientation --------------------------------------------------------
+    # -- orientation (deprecated alias of FerroCAD.Axis) ---------------------
     @property
     def axis_cross(self) -> bool:
-        """Whether the world axis cross (the triad) is shown."""
-        return bool(_read(_SPECS["axis_cross"]))
+        """Deprecated: moved to :attr:`FerroCAD.Axis.enabled`.
+
+        The axis cross is its own capability now; this proxy keeps older mods
+        and scripts working. New code should use ``FerroCAD.Axis``.
+        """
+        from . import _axis
+
+        return _axis.axis().enabled
 
     @axis_cross.setter
     def axis_cross(self, value) -> None:
-        _write(_SPECS["axis_cross"], bool(value))
+        from . import _axis
+
+        _axis.axis().enabled = value
 
     # -- shadows (persisted; no producer yet) -------------------------------
     @property
@@ -400,7 +400,6 @@ class _GridSettings:
         return {
             "view": {
                 "grid": self.enabled,
-                "axis_cross": self.axis_cross,
                 "grid_minor": minor,
                 "grid_major": major,
                 "grid_radius": self.radius,
@@ -422,7 +421,6 @@ class _GridSettings:
         if mirror is not None:
             return {
                 "grid": bool(mirror.grid),
-                "axis_cross": bool(mirror.axis_cross),
                 "grid_minor": float(mirror.grid_minor),
                 "grid_major": float(mirror.grid_major),
                 "grid_radius": (
@@ -435,7 +433,6 @@ class _GridSettings:
             }
         return {
             "grid": self.enabled,
-            "axis_cross": self.axis_cross,
             "grid_minor": self.minor,
             "grid_major": self.major,
             "grid_radius": self.radius if self.radius > 0.0 else None,

@@ -19,9 +19,10 @@ use ferrocad_curves::{
 use ferrocad_geom::{ElementKind, Shape};
 use ferrocad_part::backend;
 use pyo3::create_exception;
-use pyo3::exceptions::{PyException, PyTypeError};
+use pyo3::exceptions::{PyException, PyIndexError, PyRuntimeError, PyTypeError};
 use pyo3::prelude::*;
 use pyo3::types::{PyAny, PyModule, PyTuple};
+use pyo3::IntoPyObjectExt;
 
 use crate::PartShape;
 
@@ -42,9 +43,13 @@ fn kernel_error(error: ferrocad_geom::GeomError) -> PyErr {
     OCCError::new_err(error.to_string())
 }
 
-/// Read a point from a `(x, y, z)` sequence or an object with `x`/`y`/`z`
-/// (`FreeCAD.Vector`, `ferrocad.Vector`).
+/// Read a point from a `Part.Vertex`, a `(x, y, z)` sequence or an object with
+/// `x`/`y`/`z` (`FreeCAD.Vector`, `ferrocad.Vector`).
 pub(crate) fn vector(value: &Bound<'_, PyAny>) -> PyResult<Vector3> {
+    // Check the vertex first: it also satisfies the 3-sequence protocol.
+    if let Ok(vertex) = value.extract::<PyRef<'_, PyVertex>>() {
+        return Ok(vertex.point);
+    }
     if let Ok((x, y, z)) = value.extract::<(f64, f64, f64)>() {
         return Ok(Vector3::new(x, y, z));
     }
@@ -655,18 +660,54 @@ impl PyWire {
 // Vertices and faces
 // ---------------------------------------------------------------------------
 
-/// `Part.Vertex(x, y, z)` / `Part.Vertex(point)` — a vertex, a `Part.Shape`.
+/// Whether two handles name the same kernel shape.
+///
+/// [`Shape::is_same`] is handle identity at the seam, which is all a copied handle
+/// needs; but the kernel re-wraps every `Shape.Vertexes` enumeration in fresh
+/// handles, so two wrappers of one vertex are not `is_same`. When both handles are
+/// OCCT shapes, ask OCCT's own identity instead (`IsEqual`: same `TShape`, location
+/// and orientation — upstream's `IsSame` for a vertex, which we never reverse).
+fn shapes_are_same(a: &Shape, b: &Shape) -> bool {
+    if a.is_same(b) {
+        return true;
+    }
+    match (
+        a.downcast_ref::<ferrocad_occt::OcctShape>(),
+        b.downcast_ref::<ferrocad_occt::OcctShape>(),
+    ) {
+        (Some(a), Some(b)) => match (a.borrow().as_ref(), b.borrow().as_ref()) {
+            (Some(a), Some(b)) => a.IsEqual(b),
+            _ => false,
+        },
+        _ => false,
+    }
+}
+
+/// `Part.Vertex(x, y, z)` / `Part.Vertex(point)` / `Part.Vertex(vertex)` — a
+/// vertex, a `Part.Shape`. `Part.Vertex()` is the null vertex.
 #[pyclass(name = "Vertex", module = "Part", extends = PartShape)]
 pub struct PyVertex {
     point: Vector3,
+    /// The kernel shape; `None` for the null vertex. Cloning a `Shape` shares its
+    /// identity, which is what `Part.Vertex(vertex)` relies on.
+    shape: Mutex<Option<Shape>>,
 }
 
 impl PyVertex {
+    fn from_parts(shape: Option<Shape>, point: Vector3) -> PyClassInitializer<Self> {
+        let base = match &shape {
+            Some(shape) => PartShape::from_shape(shape.clone()),
+            None => PartShape::empty(),
+        };
+        PyClassInitializer::from(base).add_subclass(Self {
+            point,
+            shape: Mutex::new(shape),
+        })
+    }
+
     fn initializer(point: Vector3) -> PyResult<PyClassInitializer<Self>> {
         let shape = backend().make_vertex(point).map_err(kernel_error)?;
-        Ok(PyClassInitializer::from(PartShape::from_shape(shape)).add_subclass(Self {
-            point,
-        }))
+        Ok(Self::from_parts(Some(shape), point))
     }
 
     /// Wrap an existing vertex shape, reading its point from the kernel.
@@ -674,9 +715,24 @@ impl PyVertex {
         let point = backend()
             .vertex_point(&shape)
             .unwrap_or_else(Vector3::zero);
-        Ok(PyClassInitializer::from(PartShape::from_shape(shape)).add_subclass(Self {
-            point,
-        }))
+        Ok(Self::from_parts(Some(shape), point))
+    }
+
+    fn shape(&self) -> Option<Shape> {
+        self.shape.lock().unwrap_or_else(|e| e.into_inner()).clone()
+    }
+
+    fn is_null(&self) -> bool {
+        self.shape().is_none()
+    }
+
+    /// Kernel-shape identity (upstream's `TopoDS_Shape::IsSame`).
+    fn is_same(&self, other: &Self) -> bool {
+        match (self.shape(), other.shape()) {
+            (Some(a), Some(b)) => shapes_are_same(&a, &b),
+            (None, None) => true,
+            _ => false,
+        }
     }
 }
 
@@ -689,17 +745,21 @@ impl PyVertex {
         y: Option<f64>,
         z: Option<f64>,
     ) -> PyResult<PyClassInitializer<Self>> {
-        let point = match (x, y, z) {
-            (Some(x), Some(y), Some(z)) => Vector3::new(x.extract()?, y, z),
-            (Some(x), None, None) => vector(x)?,
-            (None, None, None) => Vector3::zero(),
-            _ => {
-                return Err(PyTypeError::new_err(
-                    "Part.Vertex takes a point or x, y, z",
-                ));
+        match (x, y, z) {
+            (Some(x), Some(y), Some(z)) => Self::initializer(Vector3::new(x.extract()?, y, z)),
+            (Some(x), None, None) => {
+                // `Part.Vertex(vertex)` shares the source shape, so upstream's
+                // identity-based equality and hash hold for the copy.
+                if let Ok(vertex) = x.extract::<PyRef<'_, Self>>() {
+                    return Ok(Self::from_parts(vertex.shape(), vertex.point));
+                }
+                Self::initializer(vector(x)?)
             }
-        };
-        Self::initializer(point)
+            (None, None, None) => Ok(Self::from_parts(None, Vector3::zero())),
+            _ => Err(PyTypeError::new_err(
+                "Part.Vertex takes a point or x, y, z",
+            )),
+        }
     }
 
     #[getter]
@@ -723,12 +783,13 @@ impl PyVertex {
     }
 
     fn toShape(&self, py: Python<'_>) -> PyResult<Py<PyVertex>> {
-        Py::new(py, Self::initializer(self.point)?)
+        Py::new(py, Self::from_parts(self.shape(), self.point))
     }
 
-    /// Upstream's repr: `<Part.Vertex (1, 2, 3)>`, `<Part.Vertex()>` at the origin.
+    /// Upstream's repr: `<Part.Vertex (1, 2, 3)>`, `<Part.Vertex()>` for the null
+    /// vertex (an explicit `Part.Vertex(0, 0, 0)` is a real vertex).
     fn __repr__(&self) -> String {
-        if self.point.is_null() {
+        if self.is_null() {
             "<Part.Vertex()>".to_string()
         } else {
             format!(
@@ -736,6 +797,53 @@ impl PyVertex {
                 self.point.x, self.point.y, self.point.z
             )
         }
+    }
+
+    /// `len(vertex)` is always 3, as upstream (the null vertex included).
+    fn __len__(&self) -> usize {
+        3
+    }
+
+    /// Index a vertex like its point; the null vertex has no coordinates.
+    fn __getitem__(&self, index: isize) -> PyResult<f64> {
+        let index = if index < 0 { index + 3 } else { index };
+        let value = match index {
+            0 => self.point.x,
+            1 => self.point.y,
+            2 => self.point.z,
+            _ => return Err(PyIndexError::new_err("index out of range")),
+        };
+        if self.is_null() {
+            return Err(PyRuntimeError::new_err("a null vertex has no coordinates"));
+        }
+        Ok(value)
+    }
+
+    /// Equality is kernel-shape identity; non-vertices are not comparable.
+    fn __eq__(&self, py: Python<'_>, other: &Bound<'_, PyAny>) -> PyResult<PyObject> {
+        match other.extract::<PyRef<'_, Self>>() {
+            Ok(other) => self.is_same(&other).into_py_any(py),
+            Err(_) => Ok(py.NotImplemented()),
+        }
+    }
+
+    /// Inequality mirrors [`Self::__eq__`]; ordering is undefined, as upstream.
+    fn __ne__(&self, py: Python<'_>, other: &Bound<'_, PyAny>) -> PyResult<PyObject> {
+        match other.extract::<PyRef<'_, Self>>() {
+            Ok(other) => (!self.is_same(&other)).into_py_any(py),
+            Err(_) => Ok(py.NotImplemented()),
+        }
+    }
+
+    /// Two handles to the same vertex hash alike; a coordinate hash is enough
+    /// (a different vertex at the same point is merely a collision).
+    fn __hash__(&self) -> u64 {
+        use std::hash::{Hash, Hasher};
+        let mut hasher = std::collections::hash_map::DefaultHasher::new();
+        self.point.x.to_bits().hash(&mut hasher);
+        self.point.y.to_bits().hash(&mut hasher);
+        self.point.z.to_bits().hash(&mut hasher);
+        hasher.finish()
     }
 }
 

@@ -34,6 +34,7 @@
 
 #![allow(non_snake_case)]
 
+mod containers;
 mod curves;
 
 use std::sync::{Arc, Mutex};
@@ -64,7 +65,7 @@ pub struct PartShape {
 
 impl PartShape {
     /// A copy of the wrapped shape (shape handles are cheap to clone).
-    fn shape(&self) -> Option<Shape> {
+    pub(crate) fn shape(&self) -> Option<Shape> {
         self.shape.lock().unwrap().clone()
     }
 
@@ -73,6 +74,11 @@ impl PartShape {
         PartShape {
             shape: Mutex::new(Some(shape)),
         }
+    }
+
+    /// Replace the wrapped shape (a subclass rebuilds its base shape in place).
+    pub(crate) fn replace_shape(&self, shape: Option<Shape>) {
+        *self.shape.lock().unwrap_or_else(|e| e.into_inner()) = shape;
     }
 
     /// A second handle to the same shape (for a subclass's `toShape`).
@@ -227,6 +233,115 @@ impl PartShape {
             .map(|shape| Py::new(py, curves::PyVertex::from_shape(shape)?))
             .collect()
     }
+
+    /// `Shape.fuse(other)` — the union of the two shapes.
+    ///
+    /// `glue`, `tolerance` and `refine` are accepted for upstream signature
+    /// compatibility; this slice runs the plain boolean and produces no element
+    /// map, so `noElementMap` changes nothing.
+    #[pyo3(signature = (other, glue = false, tolerance = 0.0, refine = true, noElementMap = false))]
+    fn fuse(
+        &self,
+        other: &Bound<'_, PyAny>,
+        glue: bool,
+        tolerance: f64,
+        refine: bool,
+        noElementMap: bool,
+    ) -> PyResult<PartShape> {
+        let _ = (glue, tolerance, refine, noElementMap);
+        self.boolean(other, BooleanOp::Fuse)
+    }
+
+    /// `Shape.cut(other)` — `self` with `other` removed.
+    #[pyo3(signature = (other, glue = false, tolerance = 0.0, refine = true, noElementMap = false))]
+    fn cut(
+        &self,
+        other: &Bound<'_, PyAny>,
+        glue: bool,
+        tolerance: f64,
+        refine: bool,
+        noElementMap: bool,
+    ) -> PyResult<PartShape> {
+        let _ = (glue, tolerance, refine, noElementMap);
+        self.boolean(other, BooleanOp::Cut)
+    }
+
+    /// `Shape.common(other)` — the intersection of the two shapes.
+    #[pyo3(signature = (other, glue = false, tolerance = 0.0, refine = true, noElementMap = false))]
+    fn common(
+        &self,
+        other: &Bound<'_, PyAny>,
+        glue: bool,
+        tolerance: f64,
+        refine: bool,
+        noElementMap: bool,
+    ) -> PyResult<PartShape> {
+        let _ = (glue, tolerance, refine, noElementMap);
+        self.boolean(other, BooleanOp::Common)
+    }
+
+    /// `Shape.multiFuse(shapes)` — fuse this shape with each shape in `shapes`.
+    #[pyo3(signature = (shapes, glue = false, tolerance = 0.0, refine = true, noElementMap = false))]
+    fn multiFuse(
+        &self,
+        shapes: &Bound<'_, PyAny>,
+        glue: bool,
+        tolerance: f64,
+        refine: bool,
+        noElementMap: bool,
+    ) -> PyResult<PartShape> {
+        let _ = (glue, tolerance, refine, noElementMap);
+        let mut shape = self.named_shape()?;
+        for item in shapes.try_iter()? {
+            let other = shape_argument(&item?)?;
+            shape = ferrocad_part::backend()
+                .fuse(&shape, &other)
+                .map_err(kernel_error)?
+                .shape;
+        }
+        Ok(PartShape::from_shape(shape))
+    }
+}
+
+/// Map a kernel failure to `Part.OCCError`.
+fn kernel_error(error: ferrocad_geom::GeomError) -> PyErr {
+    curves::OCCError::new_err(error.to_string())
+}
+
+/// The shape wrapped by a Python `Part.Shape` (or one of its subclasses).
+fn shape_argument(value: &Bound<'_, PyAny>) -> PyResult<Shape> {
+    let shape = value.downcast::<PartShape>().map_err(|_| {
+        pyo3::exceptions::PyTypeError::new_err("expected a Part.Shape")
+    })?;
+    shape
+        .borrow()
+        .shape()
+        .ok_or_else(|| curves::OCCError::new_err("a null shape cannot be combined"))
+}
+
+enum BooleanOp {
+    Fuse,
+    Cut,
+    Common,
+}
+
+impl PartShape {
+    fn named_shape(&self) -> PyResult<Shape> {
+        self.shape()
+            .ok_or_else(|| curves::OCCError::new_err("a null shape cannot be combined"))
+    }
+
+    fn boolean(&self, other: &Bound<'_, PyAny>, operation: BooleanOp) -> PyResult<PartShape> {
+        let a = self.named_shape()?;
+        let b = shape_argument(other)?;
+        let backend = ferrocad_part::backend();
+        let result = match operation {
+            BooleanOp::Fuse => backend.fuse(&a, &b),
+            BooleanOp::Cut => backend.cut(&a, &b),
+            BooleanOp::Common => backend.common(&a, &b),
+        };
+        Ok(PartShape::from_shape(result.map_err(kernel_error)?.shape))
+    }
 }
 
 /// `Part.makeBox(length, width, height)` → a `Part.Shape`.
@@ -265,5 +380,6 @@ pub fn Part(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PartShape>()?;
     m.add_function(wrap_pyfunction!(makeBox, m)?)?;
     curves::register(m)?;
+    containers::register(m)?;
     Ok(())
 }

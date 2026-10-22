@@ -594,6 +594,9 @@ impl PyFace {
 
 /// The kernel shapes of a wire, a single shape, or a list of either.
 fn wire_shapes(value: &Bound<'_, PyAny>) -> PyResult<Vec<Shape>> {
+    if let Ok(compound) = value.downcast::<crate::containers::PyCompound>() {
+        return Ok(compound.borrow().children());
+    }
     if let Ok(wire) = value.downcast::<PyWire>() {
         let base = wire.borrow();
         let shape = base

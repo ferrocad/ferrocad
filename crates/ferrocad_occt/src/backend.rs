@@ -165,6 +165,14 @@ impl GeometryBackend for OcctBackend {
             bridge::fc_shape_as_wire(first_inner),
             true,
         );
+        // Adding a hole to an already-failed builder can crash OCCT, so stop as
+        // soon as the outer wire does not make a face.
+        if !make.IsDone() {
+            return Err(OcctError::NotDone {
+                operation: "make_face",
+            }
+            .into());
+        }
         for wire in rest {
             let occt = downcast(wire)?;
             let guard = occt.borrow();
@@ -178,6 +186,12 @@ impl GeometryBackend for OcctBackend {
                 .into());
             }
             make.pin_mut().add_wire(bridge::fc_shape_as_wire(inner));
+            if !make.IsDone() {
+                return Err(OcctError::NotDone {
+                    operation: "make_face",
+                }
+                .into());
+            }
         }
         if !make.IsDone() {
             return Err(OcctError::NotDone {

@@ -36,15 +36,19 @@ fn run_harness(py: Python<'_>, harness: &std::path::Path, root: &str) -> PyResul
     let io = py.import("io")?;
 
     // The harness locates the repo from `__file__` and runs from `__name__`.
-    let argv = PyList::new(
-        py,
-        [
-            harness.to_string_lossy().into_owned(),
-            "--root".to_string(),
-            root.to_string(),
-            "--part".to_string(),
-        ],
-    )?;
+    // `FERROCAD_PART_FILES` narrows the run to one or more file stems, which is how
+    // a crash inside a single upstream test can be isolated.
+    let mut args = vec![
+        harness.to_string_lossy().into_owned(),
+        "--root".to_string(),
+        root.to_string(),
+        "--part".to_string(),
+    ];
+    if let Ok(files) = std::env::var("FERROCAD_PART_FILES") {
+        args.push("--files".to_string());
+        args.extend(files.split_whitespace().map(str::to_owned));
+    }
+    let argv = PyList::new(py, args)?;
     sys.setattr("argv", argv)?;
 
     let globals = PyDict::new(py);

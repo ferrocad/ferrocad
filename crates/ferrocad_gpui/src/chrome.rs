@@ -714,68 +714,120 @@ pub(crate) fn providers_panel(
 /// dock builds its row by hand because the control, not the command list, owns it).
 const GIZMO_SETTINGS: &str = "GizmoOverlay_Settings";
 
-/// The contextual `Gizmo ▾` control in the action dock.
+/// The options a dock command owns (option 2: the caret lives on the tool itself).
 ///
-/// The transform gizmo is a **transient tool handle**, not a persistent scene helper:
-/// it exists only while a selection arms it. So its look and its settings do not live in
-/// the viewport header with `Grid`/`Axes`/`WP` (which can be toggled in an empty scene);
-/// the control appears beside the modification actions only when a gizmo is armed, and
-/// disappears with the selection. The caret opens upward into the canvas, away from the
-/// bottom edge it sits on.
-fn gizmo_control(
-    has_settings: bool,
+/// `Move` owns the gizmo's look and settings; a future `Polyline`/`Create Slab` would
+/// add its own key here instead of growing a second row or a sub-dock.
+fn dock_options(id: &str) -> Option<&'static str> {
+    match id {
+        "App_Move" => Some("gizmo"),
+        _ => None,
+    }
+}
+
+/// Whether `key`'s options are live, i.e. worth a caret.
+///
+/// The transform options belong to the handle, not to the command: they are live
+/// exactly while a selection has armed a gizmo. A tool that owns its options answers
+/// for its own state here, so the bar stays quiet when the tool is not in play.
+fn dock_options_live(key: &str, model: &ShellModel) -> bool {
+    match key {
+        "gizmo" => model.gizmo_armed,
+        _ => false,
+    }
+}
+
+/// The rows a dock options popover shows: the feature's backend rows, then its
+/// settings entry (the same store the label writes).
+fn dock_option_rows(
+    key: &str,
+    model: &ShellModel,
+    provider_features: &[crate::python::ProviderFeature],
+) -> Vec<PopoverRow> {
+    let mut rows = provider_features
+        .iter()
+        .find(|feature| feature.feature == key)
+        .map(|feature| provider_rows(key, &feature.providers))
+        .unwrap_or_default();
+    let settings = match key {
+        "gizmo" => GIZMO_SETTINGS,
+        _ => return rows,
+    };
+    if commands::find(&model.commands, settings).is_some() {
+        rows.push(PopoverRow {
+            id: settings.to_string(),
+            label: "Gizmo settings\u{2026}".to_string(),
+            enabled: true,
+            checked: false,
+            accel: String::new(),
+            divider_before: !rows.is_empty(),
+        });
+    }
+    rows
+}
+
+/// A live tool entry with its options caret: the label runs the command, the caret
+/// opens the options upward into the canvas.
+///
+/// The control is tinted active because the handle is live; the caret exists only
+/// while [`dock_options_live`] says so, which is what keeps `Move` plain text in an
+/// idle dock.
+fn dock_split(
+    command: &CommandInfo,
+    key: &'static str,
     rows: Vec<PopoverRow>,
     open: bool,
     anchor: Option<Point<Pixels>>,
     cx: &mut Context<Shell>,
 ) -> impl IntoElement {
+    let id = command.id.clone();
     let mut control = div()
         .relative()
         .flex()
         .flex_row()
         .items_center()
         .rounded_sm()
-        .bg(rgb(PANEL_ALT))
+        .bg(rgb(ACCENT))
         .when(open, |el| el.border_1().border_color(rgba(0xffffff33)));
 
+    let run = id.clone();
     control = control.child(
         div()
-            .id("dock-gizmo-label")
-            .debug_selector(|| "dock-gizmo-label".to_string())
+            .id(SharedString::from(format!("dock-{id}")))
+            .debug_selector({
+                let id = id.clone();
+                move || format!("dock-{id}")
+            })
             .px_2()
             .py_1()
             .text_xs()
             .text_color(rgb(FG))
             .cursor_pointer()
             .hover(|style| style.bg(rgb(PANEL)))
-            .child("Gizmo")
+            .child(command.label().to_string())
             .on_click(cx.listener(move |this, _event, _window, cx| {
-                // The label edits, the caret switches: the same split as the header
-                // controls. Without the provider there is nothing to edit, so fall
-                // back to the menu (it still explains the state).
-                if has_settings {
-                    this.run_command(GIZMO_SETTINGS, cx);
-                } else {
-                    this.open_popover("gizmo", cx);
-                }
+                this.run_command(&run, cx)
             })),
     );
 
     control = control.child(
         div()
-            .id("dock-gizmo-caret")
-            .debug_selector(|| "dock-gizmo-caret".to_string())
+            .id(SharedString::from(format!("dock-{id}-caret")))
+            .debug_selector({
+                let id = id.clone();
+                move || format!("dock-{id}-caret")
+            })
             .px_1()
             .py_1()
             .text_xs()
-            .text_color(rgb(MUTED))
+            .text_color(rgb(FG))
             .cursor_pointer()
             .hover(|style| style.bg(rgb(PANEL)))
             .child("\u{25b4}")
             .on_mouse_down(MouseButton::Left, cx.listener(move |this, event: &MouseDownEvent, _window, _cx| {
                 this.set_popover_anchor(event.position);
             }))
-            .on_click(cx.listener(move |this, _event, _window, cx| this.open_popover("gizmo", cx))),
+            .on_click(cx.listener(move |this, _event, _window, cx| this.open_popover(key, cx))),
     );
 
     if open {
@@ -791,7 +843,7 @@ fn gizmo_control(
                     .anchor(Anchor::BottomLeft)
                     .position(position)
                     .snap_to_window_with_margin(px(8.))
-                    .child(popover("gizmo", rows, cx)),
+                    .child(popover(key, rows, cx)),
             )
             .with_priority(1),
         );
@@ -831,36 +883,8 @@ pub(crate) fn action_dock(
         .border_1()
         .border_color(rgba(0xffffff1f));
 
-    // The gizmo is contextual: the control exists only while a selection has armed
-    // one, so it can never be clicked out of context. It leads the dock because it
-    // describes the handle, not a document action.
-    if model.gizmo_armed {
-        let mut rows = provider_features
-            .iter()
-            .find(|feature| feature.feature == "gizmo")
-            .map(|feature| provider_rows("gizmo", &feature.providers))
-            .unwrap_or_default();
-        let has_settings = commands::find(&model.commands, GIZMO_SETTINGS).is_some();
-        if has_settings {
-            rows.push(PopoverRow {
-                id: GIZMO_SETTINGS.to_string(),
-                label: "Gizmo settings\u{2026}".to_string(),
-                enabled: true,
-                checked: false,
-                accel: String::new(),
-                divider_before: !rows.is_empty(),
-            });
-        }
-        panel = panel.child(gizmo_control(
-            has_settings,
-            rows,
-            open_popover == Some("gizmo"),
-            anchor,
-            cx,
-        ));
-        panel = panel.child(dock_divider(9));
-    }
-
+    // Options live on the tool itself (option 2), so there is no separate row to
+    // appear or disappear: `Move` grows a caret only while a gizmo is armed.
     let mut last_group: Option<u8> = None;
     for command in dock {
         // Modification (Delete/Move) and creation (workbench actions) read as two
@@ -878,6 +902,22 @@ pub(crate) fn action_dock(
         let id = command.id.clone();
         let enabled = command.enabled;
         let checked = command.checked;
+        // A command whose options are live renders as a split control: the label still
+        // runs the command, the caret opens its options. Otherwise the plain row is
+        // unchanged, so an idle dock is as quiet as before.
+        let options = dock_options(&id).filter(|key| dock_options_live(key, model));
+        if let Some(key) = options {
+            let rows = dock_option_rows(key, model, provider_features);
+            panel = panel.child(dock_split(
+                command,
+                key,
+                rows,
+                open_popover == Some(key),
+                anchor,
+                cx,
+            ));
+            continue;
+        }
         let mut button = div()
             .id(SharedString::from(format!("dock-{id}")))
             .debug_selector({

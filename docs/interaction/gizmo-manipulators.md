@@ -738,22 +738,23 @@ parseable colour, and basis vectors normalised (a zero-length one is an error). 
 
 The gizmo is a **transient tool handle**, not a persistent scene helper, so it does not
 belong in the top-left header beside `Grid`/`Axes`/`WP`: those can be toggled in an empty
-scene, and a `Gizmo` toggle there would imply the same. Instead the dock owns a
-contextual `Gizmo` control:
+scene, and a `Gizmo` toggle there would imply the same. The options live **on the tool**
+instead:
 
-- it appears only while the current selection has armed a gizmo (`ShellModel::gizmo_armed`,
-  set by the selection path that arms it and cleared by a recompute or a tool session),
-  so it cannot be clicked out of context;
-- it leads the dock, next to the modification actions it belongs with, and the whole
-  control disappears with the selection — the dock's width never changes while a tool
-  is drawing;
-- the label opens `Settings/Gizmo` (the same store the provider writes), and the caret
-  opens the provider rows upward into the canvas, reusing the header's popover
-  component and its `ferrocad-provider:gizmo:<backend>` rows.
+- the dock's `Move` entry grows a caret only while the selection has armed a gizmo
+  (`ShellModel::gizmo_armed`), so an idle dock shows plain `Move`, and the entry is tinted
+  active while its handle is live;
+- the label still runs `Move` (the numeric dialog); the caret opens the provider rows and
+  `Gizmo settings…` upward into the canvas, reusing the header's popover and its
+  `ferrocad-provider:gizmo:<backend>` rows;
+- the caret disappears with the selection, so nothing can be clicked out of context and
+  the dock's layout is stable while a tool is drawing.
 
-The growth path is deliberate: a new tool's options become a caret on that tool's dock
-entry (`Polyline ▾`, `Create Slab ▾`) rather than a second row or a sub-dock, so the
-dock stays one strip and the header keeps a single meaning (*how the viewport is drawn*).
+The growth path is the same mechanism, not a new row: `dock_options` maps a dock command
+to the popover key it owns (`App_Move → "gizmo"`) and `dock_options_live` decides when its
+caret is worth showing. A future `Polyline ▾` or `Create Slab ▾` adds one match arm, so
+the dock stays one strip and the header keeps a single meaning (*how the viewport is
+drawn*).
 
 ### What is still open (G3b)
 

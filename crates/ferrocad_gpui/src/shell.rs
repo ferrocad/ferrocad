@@ -4727,10 +4727,9 @@ if "App_ReloadAxisSettings" not in FreeCADGui.listCommands():
         );
     }
 
-    /// G3 UI: the `Gizmo` control is contextual. It is not in the viewport header (the
-    /// gizmo is a transient tool handle, not a scene helper), and it exists in the dock
-    /// only while a selection has armed one. Its caret opens upward, away from the
-    /// bottom edge the dock sits on.
+    /// G3 UI (option 2): the gizmo's options live on the tool. `Move` grows a caret
+    /// only while a selection has armed a gizmo; an idle dock shows plain `Move`. The
+    /// caret opens upward, away from the bottom edge the dock sits on.
     #[gpui::test]
     fn the_dock_shows_the_gizmo_control_only_while_a_gizmo_is_armed(
         cx: &mut TestAppContext,
@@ -4749,31 +4748,29 @@ if "App_ReloadAxisSettings" not in FreeCADGui.listCommands():
         draw(&mut cx);
 
         assert!(
-            cx.debug_bounds("dock-gizmo-label").is_none(),
-            "nothing is armed, so there is no gizmo control to click out of context"
+            cx.debug_bounds("dock-App_Move-caret").is_none(),
+            "nothing is armed, so Move stays plain text"
         );
 
         // The base shell has no gizmo factory, so set the flag the selection path sets
         // when `arm` returns a gizmo.
         arm_and_redraw(&model, &shell, &mut cx, true);
-        let label = cx
-            .debug_bounds("dock-gizmo-label")
-            .expect("the contextual control");
+        let label = cx.debug_bounds("dock-App_Move").expect("the Move entry");
         let caret = cx
-            .debug_bounds("dock-gizmo-caret")
-            .expect("the provider caret");
+            .debug_bounds("dock-App_Move-caret")
+            .expect("the options caret");
         assert!(
             caret.origin.x >= label.origin.x,
-            "the caret follows the label"
+            "the caret follows the tool label"
+        );
+        assert!(
+            cx.debug_bounds("dock-gizmo-label").is_none(),
+            "the options live on the tool, not in a second row"
         );
         let dock = cx.debug_bounds("action-dock").expect("the dock");
-        assert!(
-            label.origin.x < dock.center().x,
-            "the control leads the dock (it describes the handle, not an action)"
-        );
 
         // The caret opens the menu upward into the canvas.
-        click_at(&mut cx, "dock-gizmo-caret");
+        click_at(&mut cx, "dock-App_Move-caret");
         let menu = cx
             .debug_bounds("gizmo-popover")
             .expect("the gizmo menu");
@@ -4787,11 +4784,15 @@ if "App_ReloadAxisSettings" not in FreeCADGui.listCommands():
             "the dock owns the gizmo popover"
         );
 
-        // Losing the gizmo removes the control with it.
+        // Losing the gizmo removes the caret with it, but the tool entry stays.
         arm_and_redraw(&model, &shell, &mut cx, false);
         assert!(
-            cx.debug_bounds("dock-gizmo-label").is_none(),
-            "the control goes with the selection"
+            cx.debug_bounds("dock-App_Move-caret").is_none(),
+            "the options go with the handle"
+        );
+        assert!(
+            cx.debug_bounds("dock-App_Move").is_some(),
+            "Move itself remains a plain dock entry"
         );
     }
 

@@ -30,6 +30,7 @@ mod ffi {
         type TopoDS_Wire = opencascade_sys::topo_ds::TopoDS_Wire;
         type TopoDS_Face = opencascade_sys::topo_ds::TopoDS_Face;
         type gp_Trsf = opencascade_sys::gp::gp_Trsf;
+        type Handle_Geom_Curve = opencascade_sys::geom::Handle_Geom_Curve;
         type TopTools_IndexedMapOfShape = opencascade_sys::top_tools::TopTools_IndexedMapOfShape;
         type TopTools_IndexedDataMapOfShapeListOfShape =
             opencascade_sys::top_tools::TopTools_IndexedDataMapOfShapeListOfShape;
@@ -59,6 +60,13 @@ mod ffi {
 
         /// Install a row-major 4x4 matrix into an OCCT transform.
         fn fc_trsf_from_matrix(m: &[f64], out: Pin<&mut gp_Trsf>) -> bool;
+
+        /// A B-spline from control points (flat xyz), or null on failure.
+        fn fc_bspline_from_poles(
+            coords: &[f64],
+            degree: i32,
+            periodic: bool,
+        ) -> UniquePtr<Handle_Geom_Curve>;
 
         /// `TopTools_IndexedMapOfShape::FindIndex`, which the crate does not bridge.
         fn fc_indexed_map_find_index(

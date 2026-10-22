@@ -634,6 +634,16 @@ pub trait GeometryBackend: Send + Sync {
         Err(unsupported("make_bspline_edge"))
     }
 
+    /// A B-spline edge whose control points are `poles` (`Part.BSplineCurve(poles, …)`).
+    fn make_bspline_poles(
+        &self,
+        _poles: &[Vector3],
+        _degree: i32,
+        _periodic: bool,
+    ) -> Result<Shape, GeomError> {
+        Err(unsupported("make_bspline_poles"))
+    }
+
     /// A face from one or more wires (`Part.makeFace`): the first is the outer
     /// boundary, the rest are holes. A backend that cannot build planar faces
     /// reports the operation as unsupported.

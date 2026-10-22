@@ -20,6 +20,10 @@
 
 #include <BRepFill_Filling.hxx>
 #include <BRep_Tool.hxx>
+#include <Geom_BSplineCurve.hxx>
+#include <TColStd_Array1OfInteger.hxx>
+#include <TColStd_Array1OfReal.hxx>
+#include <TColgp_Array1OfPnt.hxx>
 #include <GeomAbs_Shape.hxx>
 #include <Geom_Circle.hxx>
 #include <Geom_Curve.hxx>
@@ -216,6 +220,39 @@ inline bool fc_trsf_from_matrix(rust::Slice<const double> m, gp_Trsf& out)
   }
   catch (...) {
     return false;
+  }
+}
+
+// A B-spline from control points (`Part.BSplineCurve(poles, ...)`). `coords` is
+// a flat xyz list. Returns null on failure (including an OCCT exception).
+inline std::unique_ptr<Handle_Geom_Curve> fc_bspline_from_poles(rust::Slice<const double> coords,
+                                                               int degree,
+                                                               bool periodic)
+{
+  const int count = static_cast<int>(coords.size() / 3);
+  // A periodic B-spline needs a different knot structure; this slice only builds
+  // the clamped (non-periodic) form.
+  if (count < 2 || degree < 1 || periodic || count <= degree) {
+    return nullptr;
+  }
+  try {
+    TColgp_Array1OfPnt poles(1, count);
+    for (int i = 0; i < count; ++i) {
+      poles.SetValue(i + 1, gp_Pnt(coords[3 * i], coords[3 * i + 1], coords[3 * i + 2]));
+    }
+    const int distinct = count - degree + 1;
+    TColStd_Array1OfReal knots(1, distinct);
+    TColStd_Array1OfInteger multiplicities(1, distinct);
+    for (int i = 1; i <= distinct; ++i) {
+      knots.SetValue(i, static_cast<double>(i - 1));
+      multiplicities.SetValue(i, i == 1 || i == distinct ? degree + 1 : 1);
+    }
+    Handle(Geom_BSplineCurve) curve =
+        new Geom_BSplineCurve(poles, knots, multiplicities, degree, Standard_False);
+    return std::unique_ptr<Handle_Geom_Curve>(new Handle(Geom_Curve)(curve));
+  }
+  catch (...) {
+    return nullptr;
   }
 }
 

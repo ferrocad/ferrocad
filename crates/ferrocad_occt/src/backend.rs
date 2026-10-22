@@ -243,6 +243,40 @@ impl GeometryBackend for OcctBackend {
         Ok(shape)
     }
 
+    fn make_bspline_poles(
+        &self,
+        poles: &[Vector3],
+        degree: i32,
+        periodic: bool,
+    ) -> Result<Shape, GeomError> {
+        if poles.len() < 2 {
+            return Err(OcctError::InvalidInput {
+                what: "a B-spline needs at least two poles",
+            }
+            .into());
+        }
+        let mut coords = Vec::with_capacity(poles.len() * 3);
+        for pole in poles {
+            coords.extend_from_slice(&[pole.x, pole.y, pole.z]);
+        }
+        let curve = bridge::fc_bspline_from_poles(&coords, degree, periodic);
+        let Some(curve) = curve.as_ref() else {
+            return Err(OcctError::NotDone {
+                operation: "make_bspline_poles",
+            }
+            .into());
+        };
+        let mut make = ffi::b_rep_builder_api::BRepBuilderAPI_MakeEdge_HandleGeomCurve(curve);
+        let shape = erase(ffi::topo_ds::cast_edge_to_shape(make.pin_mut().Edge()));
+        if !make.IsDone() {
+            return Err(OcctError::NotDone {
+                operation: "make_bspline_poles",
+            }
+            .into());
+        }
+        Ok(shape)
+    }
+
     fn make_face(&self, wires: &[Shape]) -> Result<Shape, GeomError> {
         let (first, rest) = wires.split_first().ok_or(OcctError::InvalidInput {
             what: "a face needs a wire",

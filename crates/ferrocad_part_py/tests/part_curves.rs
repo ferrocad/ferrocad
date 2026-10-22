@@ -186,5 +186,24 @@ fn bspline_interpolation_builds_an_edge() {
         assert!(edge.getattr("Length").unwrap().extract::<f64>().unwrap() > 0.0);
         let wire = part.getattr("Wire").unwrap().call1((&edge,)).expect("Part.Wire(edge)");
         assert_eq!(wire.len().unwrap(), 1);
+
+        // The control-point constructor produces a B-spline too.
+        let poles = PyList::new(
+            py,
+            [
+                vector.call1((0.0, 0.0, 0.0)).unwrap(),
+                vector.call1((10.0, 0.0, 5.0)).unwrap(),
+                vector.call1((10.0, 10.0, -3.0)).unwrap(),
+                vector.call1((0.0, 10.0, 4.0)).unwrap(),
+            ],
+        )
+        .unwrap();
+        let by_poles = part
+            .getattr("BSplineCurve")
+            .unwrap()
+            .call1((poles,))
+            .expect("Part.BSplineCurve(poles)");
+        let pole_edge = by_poles.call_method0("toShape").expect("toShape from poles");
+        assert!(pole_edge.getattr("Length").unwrap().extract::<f64>().unwrap() > 0.0);
     });
 }

@@ -21,7 +21,7 @@ use ferrocad_part::backend;
 use pyo3::create_exception;
 use pyo3::exceptions::{PyException, PyTypeError};
 use pyo3::prelude::*;
-use pyo3::types::{PyAny, PyModule};
+use pyo3::types::{PyAny, PyModule, PyTuple};
 
 use crate::PartShape;
 
@@ -256,16 +256,50 @@ impl PyArcOfCircle {
 pub struct PyBSplineCurve {
     points: Mutex<Vec<Vector3>>,
     periodic: Mutex<bool>,
+    /// `Some(degree)` when the curve came from control points; `None` for the
+    /// interpolating form.
+    degree: Mutex<Option<i32>>,
+}
+
+fn parse_points(points: &Bound<'_, PyAny>) -> PyResult<Vec<Vector3>> {
+    let mut parsed = Vec::new();
+    for point in points.try_iter()? {
+        parsed.push(vector(&point?)?);
+    }
+    Ok(parsed)
 }
 
 #[pymethods]
 impl PyBSplineCurve {
+    /// `Part.BSplineCurve()` (empty) or `Part.BSplineCurve(poles, knots, weights,
+    /// periodic, degree, knotSequence, checkRational)` (from control points).
+    /// Only the poles, periodic flag and degree are used in this slice.
     #[new]
-    fn new() -> Self {
-        Self {
-            points: Mutex::new(Vec::new()),
-            periodic: Mutex::new(false),
+    #[pyo3(signature = (*args))]
+    fn new(args: &Bound<'_, PyTuple>) -> PyResult<Self> {
+        if args.len() == 0 {
+            return Ok(Self {
+                points: Mutex::new(Vec::new()),
+                periodic: Mutex::new(false),
+                degree: Mutex::new(None),
+            });
         }
+        let points = parse_points(&args.get_item(0)?)?;
+        let periodic = args
+            .get_item(3)
+            .ok()
+            .and_then(|value| value.extract::<bool>().ok())
+            .unwrap_or(false);
+        let degree = args
+            .get_item(4)
+            .ok()
+            .and_then(|value| value.extract::<i32>().ok())
+            .unwrap_or(3);
+        Ok(Self {
+            points: Mutex::new(points),
+            periodic: Mutex::new(periodic),
+            degree: Mutex::new(Some(degree)),
+        })
     }
 
     /// Interpolate a B-spline through `points`.
@@ -277,10 +311,7 @@ impl PyBSplineCurve {
         Tolerance: f64,
     ) -> PyResult<()> {
         let _ = Tolerance;
-        let mut parsed = Vec::new();
-        for point in points.try_iter()? {
-            parsed.push(vector(&point?)?);
-        }
+        let parsed = parse_points(points)?;
         if parsed.len() < 2 {
             return Err(OCCError::new_err(
                 "a B-spline needs at least two interpolation points",
@@ -288,10 +319,11 @@ impl PyBSplineCurve {
         }
         *self.points.lock().unwrap_or_else(|e| e.into_inner()) = parsed;
         *self.periodic.lock().unwrap_or_else(|e| e.into_inner()) = PeriodicFlag;
+        *self.degree.lock().unwrap_or_else(|e| e.into_inner()) = None;
         Ok(())
     }
 
-    /// The interpolated curve as an edge.
+    /// The curve as an edge.
     fn toShape(&self, py: Python<'_>) -> PyResult<Py<PyEdge>> {
         let points = self
             .points
@@ -299,9 +331,15 @@ impl PyBSplineCurve {
             .unwrap_or_else(|e| e.into_inner())
             .clone();
         let periodic = *self.periodic.lock().unwrap_or_else(|e| e.into_inner());
-        let shape = backend()
-            .make_bspline_edge(&points, periodic)
-            .map_err(kernel_error)?;
+        let degree = *self.degree.lock().unwrap_or_else(|e| e.into_inner());
+        let shape = match degree {
+            Some(degree) => backend()
+                .make_bspline_poles(&points, degree, periodic)
+                .map_err(kernel_error)?,
+            None => backend()
+                .make_bspline_edge(&points, periodic)
+                .map_err(kernel_error)?,
+        };
         Py::new(
             py,
             PyEdge::from_entry(EdgeEntry {

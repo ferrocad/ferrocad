@@ -763,7 +763,7 @@ impl Document {
     /// `App::FeatureTest*` mirrors the C++ fixture: it bumps `ExecCount` and
     /// sets `ExecResult`. The writes are raw so execution does not re-touch the
     /// object (which would schedule an endless recompute).
-    fn execute_object(&mut self, id: ObjectId) -> bool {
+    pub fn execute_object(&mut self, id: ObjectId) -> bool {
         // A rebuild starts from a clean slate; an execute that fails marks it again.
         if let Some(object) = self.objects.get_mut(&id) {
             object.invalid = false;

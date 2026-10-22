@@ -2163,12 +2163,23 @@ impl PyDocumentObject {
         }
     }
 
+    /// Recompute this object (FreeCAD `DocumentObject.recompute`).
+    ///
+    /// Runs its type behaviour now and clears its touched/execute flags; unlike
+    /// `Document.recompute` this does not walk the whole dependency graph.
     fn recompute(slf: &Bound<'_, Self>) -> bool {
         let (inner, id) = {
             let this = slf.borrow();
             (Arc::clone(&this.inner), this.id)
         };
-        if inner.lock().unwrap().take_must_execute_one(id) {
+        let executed = {
+            let mut doc = inner.lock().unwrap();
+            doc.take_must_execute_one(id);
+            let executed = doc.execute_object(id);
+            doc.purge_touched(id);
+            executed
+        };
+        if executed {
             fire_obj("slotRecomputedObject", slf, None);
         }
         true

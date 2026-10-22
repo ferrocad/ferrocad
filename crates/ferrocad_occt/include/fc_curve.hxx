@@ -28,6 +28,8 @@
 #include <TopoDS.hxx>
 #include <TopoDS_Edge.hxx>
 #include <TopoDS_Shape.hxx>
+#include <TopoDS_Vertex.hxx>
+#include <TopoDS_Wire.hxx>
 #include <gp_Ax1.hxx>
 #include <gp_Ax2.hxx>
 #include <gp_Circ.hxx>
@@ -161,4 +163,32 @@ inline rust::Vec<double> fc_edge_curve(const TopoDS_Shape& shape)
 inline const TopoDS_Edge& fc_shape_as_edge(const TopoDS_Shape& shape)
 {
   return TopoDS::Edge(shape);
+}
+
+// The vertex/wire views, for `BRep_Tool::Pnt` and `BRepBuilderAPI_MakeFace`.
+inline const TopoDS_Vertex& fc_shape_as_vertex(const TopoDS_Shape& shape)
+{
+  return TopoDS::Vertex(shape);
+}
+
+inline const TopoDS_Wire& fc_shape_as_wire(const TopoDS_Shape& shape)
+{
+  return TopoDS::Wire(shape);
+}
+
+// Shape-type guards, so a wrong-kind shape is reported instead of throwing
+// `Standard_TypeMismatch` across the bridge.
+inline bool fc_is_edge(const TopoDS_Shape& shape)
+{
+  return !shape.IsNull() && shape.ShapeType() == TopAbs_EDGE;
+}
+
+inline bool fc_is_wire(const TopoDS_Shape& shape)
+{
+  return !shape.IsNull() && shape.ShapeType() == TopAbs_WIRE;
+}
+
+inline bool fc_is_vertex(const TopoDS_Shape& shape)
+{
+  return !shape.IsNull() && shape.ShapeType() == TopAbs_VERTEX;
 }

@@ -218,6 +218,15 @@ impl PartShape {
             .map(|shape| Py::new(py, PartShape::from_shape(shape)))
             .collect()
     }
+
+    /// The vertices (`Shape.Vertexes`) as `Part.Vertex` wrappers with `Point`.
+    #[getter]
+    fn Vertexes(&self, py: Python<'_>) -> PyResult<Vec<Py<curves::PyVertex>>> {
+        self.sub_shapes(ElementKind::Vertex)?
+            .into_iter()
+            .map(|shape| Py::new(py, curves::PyVertex::from_shape(shape)?))
+            .collect()
+    }
 }
 
 /// `Part.makeBox(length, width, height)` → a `Part.Shape`.

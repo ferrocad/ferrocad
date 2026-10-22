@@ -495,6 +495,143 @@ impl PyWire {
 }
 
 // ---------------------------------------------------------------------------
+// Vertices and faces
+// ---------------------------------------------------------------------------
+
+/// `Part.Vertex(x, y, z)` / `Part.Vertex(point)` — a vertex, a `Part.Shape`.
+#[pyclass(name = "Vertex", module = "Part", extends = PartShape)]
+pub struct PyVertex {
+    point: Vector3,
+}
+
+impl PyVertex {
+    fn initializer(point: Vector3) -> PyResult<PyClassInitializer<Self>> {
+        let shape = backend().make_vertex(point).map_err(kernel_error)?;
+        Ok(PyClassInitializer::from(PartShape::from_shape(shape)).add_subclass(Self {
+            point,
+        }))
+    }
+
+    /// Wrap an existing vertex shape, reading its point from the kernel.
+    pub(crate) fn from_shape(shape: Shape) -> PyResult<PyClassInitializer<Self>> {
+        let point = backend()
+            .vertex_point(&shape)
+            .unwrap_or_else(Vector3::zero);
+        Ok(PyClassInitializer::from(PartShape::from_shape(shape)).add_subclass(Self {
+            point,
+        }))
+    }
+}
+
+#[pymethods]
+impl PyVertex {
+    #[new]
+    #[pyo3(signature = (x = None, y = None, z = None))]
+    fn new(
+        x: Option<&Bound<'_, PyAny>>,
+        y: Option<f64>,
+        z: Option<f64>,
+    ) -> PyResult<PyClassInitializer<Self>> {
+        let point = match (x, y, z) {
+            (Some(x), Some(y), Some(z)) => Vector3::new(x.extract()?, y, z),
+            (Some(x), None, None) => vector(x)?,
+            (None, None, None) => Vector3::zero(),
+            _ => {
+                return Err(PyTypeError::new_err(
+                    "Part.Vertex takes a point or x, y, z",
+                ));
+            }
+        };
+        Self::initializer(point)
+    }
+
+    #[getter]
+    fn Point(&self, py: Python<'_>) -> PyResult<PyObject> {
+        py_vector(py, self.point)
+    }
+
+    #[getter]
+    fn X(&self) -> f64 {
+        self.point.x
+    }
+
+    #[getter]
+    fn Y(&self) -> f64 {
+        self.point.y
+    }
+
+    #[getter]
+    fn Z(&self) -> f64 {
+        self.point.z
+    }
+
+    fn toShape(&self, py: Python<'_>) -> PyResult<Py<PyVertex>> {
+        Py::new(py, Self::initializer(self.point)?)
+    }
+
+    /// Upstream's repr: `<Part.Vertex (1, 2, 3)>`, `<Part.Vertex()>` at the origin.
+    fn __repr__(&self) -> String {
+        if self.point.is_null() {
+            "<Part.Vertex()>".to_string()
+        } else {
+            format!(
+                "<Part.Vertex ({}, {}, {})>",
+                self.point.x, self.point.y, self.point.z
+            )
+        }
+    }
+}
+
+/// `Part.Face(wire)` — a planar face from a wire, a `Part.Shape`.
+#[pyclass(name = "Face", module = "Part", extends = PartShape)]
+pub struct PyFace;
+
+impl PyFace {
+    fn initializer(shape: Shape) -> PyClassInitializer<Self> {
+        PyClassInitializer::from(PartShape::from_shape(shape)).add_subclass(Self)
+    }
+}
+
+/// The kernel shapes of a wire, a single shape, or a list of either.
+fn wire_shapes(value: &Bound<'_, PyAny>) -> PyResult<Vec<Shape>> {
+    if let Ok(wire) = value.downcast::<PyWire>() {
+        let base = wire.borrow();
+        let shape = base
+            .as_super()
+            .shape()
+            .ok_or_else(|| OCCError::new_err("an empty wire has no shape"))?;
+        return Ok(vec![shape]);
+    }
+    if let Ok(edge) = value.downcast::<PyEdge>() {
+        let shape = edge.borrow().entry().shape;
+        let wire = backend().make_wire(&[shape]).map_err(kernel_error)?;
+        return Ok(vec![wire]);
+    }
+    if let Ok(shape) = value.downcast::<PartShape>() {
+        let inner = shape
+            .borrow()
+            .shape()
+            .ok_or_else(|| OCCError::new_err("a null shape cannot bound a face"))?;
+        return Ok(vec![inner]);
+    }
+    let mut shapes = Vec::new();
+    for item in value.try_iter()? {
+        shapes.extend(wire_shapes(&item?)?);
+    }
+    Ok(shapes)
+}
+
+#[pymethods]
+impl PyFace {
+    #[new]
+    fn new(value: &Bound<'_, PyAny>) -> PyResult<PyClassInitializer<Self>> {
+        let shapes = wire_shapes(value)?;
+        let shape = backend().make_face(&shapes).map_err(kernel_error)?;
+        Ok(Self::initializer(shape))
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Module-level constructors
 // ---------------------------------------------------------------------------
 
@@ -542,6 +679,25 @@ fn makePolygon(py: Python<'_>, points: &Bound<'_, PyAny>, closed: bool) -> PyRes
     Py::new(py, PyWire::initializer(entries)?)
 }
 
+/// `Part.makeFace(wires, face_maker="Part::FaceMakerBullseye", noElementMap=False)`.
+///
+/// The first wire is the outer boundary, the rest are holes. The `face_maker`
+/// flavour and `noElementMap` are accepted for signature compatibility; only the
+/// planar builder exists in this slice.
+#[pyfunction]
+#[pyo3(signature = (wires, face_maker = "Part::FaceMakerBullseye", noElementMap = false))]
+fn makeFace(
+    py: Python<'_>,
+    wires: &Bound<'_, PyAny>,
+    face_maker: &str,
+    noElementMap: bool,
+) -> PyResult<Py<PyFace>> {
+    let _ = (face_maker, noElementMap);
+    let shapes = wire_shapes(wires)?;
+    let shape = backend().make_face(&shapes).map_err(kernel_error)?;
+    Py::new(py, PyFace::initializer(shape))
+}
+
 /// Register the analytic half on the `Part` module.
 pub(crate) fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyLineSegment>()?;
@@ -550,9 +706,12 @@ pub(crate) fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyArcOfCircle>()?;
     m.add_class::<PyEdge>()?;
     m.add_class::<PyWire>()?;
+    m.add_class::<PyVertex>()?;
+    m.add_class::<PyFace>()?;
     m.add_function(wrap_pyfunction!(makeLine, m)?)?;
     m.add_function(wrap_pyfunction!(makeCircle, m)?)?;
     m.add_function(wrap_pyfunction!(makePolygon, m)?)?;
+    m.add_function(wrap_pyfunction!(makeFace, m)?)?;
     m.add("OCCError", m.py().get_type::<OCCError>())?;
     // Upstream offers both names for the same class.
     let arc = m.getattr("ArcOfCircle")?;

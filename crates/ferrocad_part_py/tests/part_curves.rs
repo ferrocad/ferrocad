@@ -110,10 +110,36 @@ fn curves_edges_and_wires_round_trip() {
             "make_wire produced a shape"
         );
 
+        // Part.Vertex and Shape.Vertexes
+        let vertex = part
+            .call_method1("Vertex", (1.0, 2.0, 3.0))
+            .expect("Part.Vertex(1, 2, 3)");
+        let vertex_point = vertex.getattr("Point").expect("Vertex.Point");
+        assert!(
+            (vertex_point.getattr("x").unwrap().extract::<f64>().unwrap() - 1.0).abs() < 1e-9
+        );
+        assert_eq!(vertex.getattr("X").unwrap().extract::<f64>().unwrap(), 1.0);
+
+        // Part.makeFace(square wire) → a planar face with four edges.
+        let face = part
+            .call_method1("makeFace", (&wire,))
+            .expect("Part.makeFace(wire)");
+        assert_eq!(face.getattr("Faces").unwrap().len().unwrap(), 1);
+        assert_eq!(face.getattr("Edges").unwrap().len().unwrap(), 4);
+        assert!(
+            face.is_instance(&shape_class).unwrap(),
+            "Part.Face is a Part.Shape subclass"
+        );
+        let face_from_class = part.call_method1("Face", (&wire,)).expect("Part.Face(wire)");
+        assert_eq!(face_from_class.getattr("Edges").unwrap().len().unwrap(), 4);
+
         // A solid's Edges come from the kernel's own enumeration.
         let cube = part.call_method1("makeBox", (1.0, 1.0, 1.0)).unwrap();
         assert_eq!(cube.getattr("Edges").unwrap().len().unwrap(), 12);
         assert_eq!(cube.getattr("Faces").unwrap().len().unwrap(), 6);
+        assert_eq!(cube.getattr("Vertexes").unwrap().len().unwrap(), 8);
+        let corner = cube.getattr("Vertexes").unwrap().get_item(0).unwrap();
+        assert!(corner.getattr("Point").is_ok(), "Vertexes carry Point");
 
         // An infinite line has no edge; the failure is a Part.OCCError.
         let occ = part.getattr("OCCError").expect("Part.OCCError");

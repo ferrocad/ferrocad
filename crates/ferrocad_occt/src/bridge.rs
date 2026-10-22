@@ -26,6 +26,8 @@ mod ffi {
             opencascade_sys::b_rep_fillet_api::BRepFilletAPI_MakeChamfer;
         type TopoDS_Shape = opencascade_sys::topo_ds::TopoDS_Shape;
         type TopoDS_Edge = opencascade_sys::topo_ds::TopoDS_Edge;
+        type TopoDS_Vertex = opencascade_sys::topo_ds::TopoDS_Vertex;
+        type TopoDS_Wire = opencascade_sys::topo_ds::TopoDS_Wire;
         type TopoDS_Face = opencascade_sys::topo_ds::TopoDS_Face;
         type TopTools_IndexedMapOfShape = opencascade_sys::top_tools::TopTools_IndexedMapOfShape;
         type TopTools_IndexedDataMapOfShapeListOfShape =
@@ -39,6 +41,17 @@ mod ffi {
 
         /// The edge view of a shape (`TopoDS::Edge`).
         fn fc_shape_as_edge(shape: &TopoDS_Shape) -> &TopoDS_Edge;
+
+        /// The vertex view of a shape (`TopoDS::Vertex`).
+        fn fc_shape_as_vertex(shape: &TopoDS_Shape) -> &TopoDS_Vertex;
+
+        /// The wire view of a shape (`TopoDS::Wire`).
+        fn fc_shape_as_wire(shape: &TopoDS_Shape) -> &TopoDS_Wire;
+
+        /// Shape-type guards (the cast would otherwise throw).
+        fn fc_is_edge(shape: &TopoDS_Shape) -> bool;
+        fn fc_is_wire(shape: &TopoDS_Shape) -> bool;
+        fn fc_is_vertex(shape: &TopoDS_Shape) -> bool;
 
         /// `TopTools_IndexedMapOfShape::FindIndex`, which the crate does not bridge.
         fn fc_indexed_map_find_index(

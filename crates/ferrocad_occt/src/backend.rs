@@ -110,6 +110,12 @@ impl GeometryBackend for OcctBackend {
             let inner = guard
                 .as_ref()
                 .ok_or(OcctError::InvalidInput { what: "null edge" })?;
+            if !bridge::fc_is_edge(inner) {
+                return Err(OcctError::InvalidInput {
+                    what: "make_wire expects edges",
+                }
+                .into());
+            }
             make.pin_mut().add_edge(bridge::fc_shape_as_edge(inner));
         }
         if !make.IsDone() {
@@ -119,6 +125,67 @@ impl GeometryBackend for OcctBackend {
             .into());
         }
         Ok(erase(ffi::topo_ds::cast_wire_to_shape(make.pin_mut().Wire())))
+    }
+
+    fn make_vertex(&self, at: Vector3) -> Result<Shape, GeomError> {
+        let pnt = point(at);
+        let mut make = ffi::b_rep_builder_api::BRepBuilderAPI_MakeVertex_gp_Pnt(&pnt);
+        Ok(erase(ffi::topo_ds::cast_vertex_to_shape(
+            make.pin_mut().Vertex(),
+        )))
+    }
+
+    fn vertex_point(&self, shape: &Shape) -> Option<Vector3> {
+        let occt = downcast(shape).ok()?;
+        let guard = occt.borrow();
+        let inner = guard.as_ref()?;
+        if !bridge::fc_is_vertex(inner) {
+            return None;
+        }
+        let pnt = ffi::b_rep::BRep_Tool_Pnt(bridge::fc_shape_as_vertex(inner));
+        Some(Vector3::new(pnt.X(), pnt.Y(), pnt.Z()))
+    }
+
+    fn make_face(&self, wires: &[Shape]) -> Result<Shape, GeomError> {
+        let (first, rest) = wires.split_first().ok_or(OcctError::InvalidInput {
+            what: "a face needs a wire",
+        })?;
+        let first_occt = downcast(first)?;
+        let first_guard = first_occt.borrow();
+        let first_inner = first_guard
+            .as_ref()
+            .ok_or(OcctError::InvalidInput { what: "null wire" })?;
+        if !bridge::fc_is_wire(first_inner) {
+            return Err(OcctError::InvalidInput {
+                what: "make_face expects wires",
+            }
+            .into());
+        }
+        let mut make = ffi::b_rep_builder_api::BRepBuilderAPI_MakeFace_wire(
+            bridge::fc_shape_as_wire(first_inner),
+            true,
+        );
+        for wire in rest {
+            let occt = downcast(wire)?;
+            let guard = occt.borrow();
+            let inner = guard
+                .as_ref()
+                .ok_or(OcctError::InvalidInput { what: "null wire" })?;
+            if !bridge::fc_is_wire(inner) {
+                return Err(OcctError::InvalidInput {
+                    what: "make_face expects wires",
+                }
+                .into());
+            }
+            make.pin_mut().add_wire(bridge::fc_shape_as_wire(inner));
+        }
+        if !make.IsDone() {
+            return Err(OcctError::NotDone {
+                operation: "make_face",
+            }
+            .into());
+        }
+        Ok(erase(ffi::topo_ds::cast_face_to_shape(make.Face())))
     }
 
     fn curve_of(&self, shape: &Shape) -> Result<EdgeCurve, GeomError> {

@@ -38,7 +38,7 @@ use std::collections::BTreeMap;
 use std::fmt;
 use std::sync::Arc;
 
-use ferrocad_types::Placement;
+use ferrocad_types::{Placement, Vector3};
 
 use ferrocad_curves::EdgeCurve;
 
@@ -576,6 +576,23 @@ pub trait GeometryBackend: Send + Sync {
     /// them reports the failure. The default reports the operation as unsupported.
     fn make_wire(&self, _edges: &[Shape]) -> Result<Shape, GeomError> {
         Err(unsupported("make_wire"))
+    }
+
+    /// A vertex at `point` (`Part.Vertex`).
+    fn make_vertex(&self, _point: Vector3) -> Result<Shape, GeomError> {
+        Err(unsupported("make_vertex"))
+    }
+
+    /// The point of a vertex shape (`Vertex.Point`), when it is one.
+    fn vertex_point(&self, _shape: &Shape) -> Option<Vector3> {
+        None
+    }
+
+    /// A face from one or more wires (`Part.makeFace`): the first is the outer
+    /// boundary, the rest are holes. A backend that cannot build planar faces
+    /// reports the operation as unsupported.
+    fn make_face(&self, _wires: &[Shape]) -> Result<Shape, GeomError> {
+        Err(unsupported("make_face"))
     }
 
     /// The analytic curve behind an edge (`edge.Curve` upstream).

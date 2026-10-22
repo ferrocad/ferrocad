@@ -30,7 +30,7 @@ use std::sync::{Arc, OnceLock};
 use ferrocad_core::object_registry::{self, ObjectType};
 use ferrocad_core::{Document, ObjectId, Property, prop_status};
 use ferrocad_geom::{GeometryBackend, Shape};
-use ferrocad_types::Placement;
+use ferrocad_types::{Placement, Vector3};
 
 pub use dress_up::{CHAMFER_TYPE, FILLET_TYPE};
 pub use containers::{
@@ -68,6 +68,7 @@ pub fn register(backend: Arc<dyn GeometryBackend>) {
     shape_property::register();
     object_registry::register("Part::Feature", Arc::new(Feature));
     object_registry::register(BOX_TYPE, Arc::new(BoxPrimitive));
+    object_registry::register(CYLINDER_TYPE, Arc::new(CylinderPrimitive));
     object_registry::register(
         FUSE_TYPE,
         Arc::new(containers::Boolean {
@@ -200,6 +201,77 @@ impl ObjectType for BoxPrimitive {
     }
 }
 
+/// `Part::Cylinder`: `Radius` × `Height`, growing along the placement's Z axis.
+pub const CYLINDER_TYPE: &str = "Part::Cylinder";
+
+struct CylinderPrimitive;
+
+impl ObjectType for CylinderPrimitive {
+    fn default_properties(&self) -> Vec<(String, Property, u32)> {
+        vec![
+            ("Radius".to_string(), Property::Float(2.0), prop_status::NONE),
+            ("Height".to_string(), Property::Float(10.0), prop_status::NONE),
+            ("Angle".to_string(), Property::Float(360.0), prop_status::NONE),
+            (
+                "Placement".to_string(),
+                Property::Placement(Placement::identity()),
+                prop_status::NONE,
+            ),
+            (
+                "Shape".to_string(),
+                make_shape_property(ShapeProperty::empty()),
+                prop_status::NONE,
+            ),
+        ]
+    }
+
+    fn property_meta(&self, name: &str) -> Option<(String, String)> {
+        Some(("Cylinder".to_string(), format!("Part cylinder {name}")))
+    }
+
+    fn execute(&self, doc: &mut Document, id: ObjectId) {
+        let (radius, height, angle, placement) = {
+            let Some(object) = doc.object(id) else {
+                return;
+            };
+            let placement = match object.properties.get("Placement") {
+                Some(Property::Placement(placement)) => Some(*placement),
+                _ => None,
+            };
+            (
+                float_property(doc, id, "Radius", 2.0),
+                float_property(doc, id, "Height", 10.0),
+                float_property(doc, id, "Angle", 360.0),
+                placement,
+            )
+        };
+
+        // The bound OCCT constructor only makes a full cylinder.
+        if !(radius > 0.0 && height > 0.0) || (angle - 360.0).abs() > 1e-9 {
+            doc.mark_invalid(id);
+            return;
+        }
+
+        let shape = match backend().make_cylinder(
+            radius,
+            height,
+            Vector3::zero(),
+            Vector3::new(0.0, 0.0, 1.0),
+        ) {
+            Ok(shape) => shape,
+            Err(_) => {
+                doc.mark_invalid(id);
+                return;
+            }
+        };
+        let shape = match placement {
+            Some(placement) => backend().place(&shape, &placement).unwrap_or(shape),
+            None => shape,
+        };
+        doc.set_property_raw(id, "Shape", make_shape_property(ShapeProperty::new(shape)));
+    }
+}
+
 /// `Part::Feature`: a shape plus a placement.
 struct Feature;
 
@@ -311,6 +383,24 @@ mod tests {
             .unwrap()
             .shape()
             .expect("the feature produced a shape")
+    }
+
+    #[test]
+    fn a_part_cylinder_executes_into_a_cylinder() {
+        setup();
+        let direct = backend()
+            .make_cylinder(2.0, 10.0, Vector3::zero(), Vector3::new(0.0, 0.0, 1.0))
+            .expect("the seam builds a cylinder");
+        assert!(backend().mass_properties(&direct).unwrap().volume > 0.0);
+        let mut doc = Document::new();
+        let id = doc.add_object("Cylinder", CYLINDER_TYPE);
+        doc.set_property(id, "Radius", Property::Float(2.0)).unwrap();
+        doc.recompute().unwrap();
+        let shape = stored_shape(&doc, id);
+        let mass = backend()
+            .mass_properties(&shape)
+            .expect("a cylinder has mass properties");
+        assert!((mass.volume - std::f64::consts::PI * 4.0 * 10.0).abs() < 1e-6);
     }
 
     #[test]

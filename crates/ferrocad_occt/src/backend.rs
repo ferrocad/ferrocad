@@ -341,6 +341,7 @@ impl GeometryBackend for OcctBackend {
 
     fn make_faces(&self, wires: &[Shape]) -> Result<Shape, GeomError> {
         let mut faces = Vec::with_capacity(wires.len());
+        let mut splitters = Vec::new();
         let mut all_planar = true;
         for wire in wires {
             let occt = downcast(wire)?;
@@ -381,13 +382,49 @@ impl GeometryBackend for OcctBackend {
             let _ = list.pin_mut().Append(inner);
             let filled = bridge::fc_fill_wires(&list);
             let Some(filled) = filled.as_ref() else {
-                return Err(OcctError::NotDone {
-                    operation: "make_faces",
-                }
-                .into());
+                // An open boundary cannot bound a face; it still subdivides the
+                // faces around it (dangling ends are pruned by the boolean).
+                splitters.push(wire.clone());
+                continue;
             };
             all_planar = false;
             faces.push(erase(filled));
+        }
+
+        if !splitters.is_empty() {
+            if faces.is_empty() {
+                return Err(OcctError::InvalidInput {
+                    what: "an open wire cannot form a face",
+                }
+                .into());
+            }
+            let mut list = ffi::top_tools::new_list_of_shape();
+            for shape in faces.iter().chain(splitters.iter()) {
+                let occt = downcast(shape)?;
+                let guard = occt.borrow();
+                if let Some(inner) = guard.as_ref() {
+                    let _ = list.pin_mut().Append(inner);
+                }
+            }
+            let fused = bridge::fc_general_fuse(&list);
+            if let Some(fused) = fused.as_ref() {
+                let map = sub_shape_map(fused, TopAbs_ShapeEnum::TopAbs_FACE);
+                let mut regions = Vec::with_capacity(map.Extent() as usize);
+                for index in 1..=map.Extent() {
+                    regions.push(erase(map.FindKey(index)));
+                }
+                if !regions.is_empty() {
+                    return if regions.len() == 1 {
+                        Ok(regions.remove(0))
+                    } else {
+                        self.make_compound(&regions)
+                    };
+                }
+            }
+            return Err(OcctError::NotDone {
+                operation: "make_faces",
+            }
+            .into());
         }
 
         // Coplanar faces that overlap or cross must be split into their regions;
@@ -441,6 +478,60 @@ impl GeometryBackend for OcctBackend {
                     }
                     depth
                 };
+                let even: Vec<usize> = (0..count).filter(|index| depth(*index) % 2 == 0).collect();
+                let odd: Vec<usize> = (0..count).filter(|index| depth(*index) % 2 == 1).collect();
+                let intersection_area = |a: &Shape, b: &Shape| match self.common(a, b) {
+                    Ok(result) => area(&result.shape),
+                    Err(_) => 0.0,
+                };
+
+                // Positive faces that partially overlap must be unioned first; the
+                // hole regions are then removed from the split result.
+                let mut partial_overlap = false;
+                'pairs: for (position, &a) in even.iter().enumerate() {
+                    for &b in &even[position + 1..] {
+                        let overlap = intersection_area(&faces[a], &faces[b]);
+                        let smaller = area(&faces[a]).min(area(&faces[b]));
+                        if overlap > 1e-9 && smaller - overlap > 1e-9 {
+                            partial_overlap = true;
+                            break 'pairs;
+                        }
+                    }
+                }
+                if !odd.is_empty() && partial_overlap {
+                    // Include the hole boundaries too: General Fuse must split on
+                    // them so there is a region inside each hole to discard.
+                    let mut list = ffi::top_tools::new_list_of_shape();
+                    for face in &faces {
+                        let occt = downcast(face)?;
+                        let guard = occt.borrow();
+                        if let Some(inner) = guard.as_ref() {
+                            let _ = list.pin_mut().Append(inner);
+                        }
+                    }
+                    let fused = bridge::fc_general_fuse(&list);
+                    if let Some(fused) = fused.as_ref() {
+                        let map = sub_shape_map(fused, TopAbs_ShapeEnum::TopAbs_FACE);
+                        let mut kept = Vec::new();
+                        for index in 1..=map.Extent() {
+                            let region = erase(map.FindKey(index));
+                            let inside_hole = odd
+                                .iter()
+                                .any(|&hole| contains(&faces[hole], &region));
+                            if !inside_hole {
+                                kept.push(region);
+                            }
+                        }
+                        if !kept.is_empty() {
+                            return if kept.len() == 1 {
+                                Ok(kept.remove(0))
+                            } else {
+                                self.make_compound(&kept)
+                            };
+                        }
+                    }
+                }
+
                 let mut built = Vec::new();
                 for node in 0..count {
                     if depth(node) % 2 != 0 {

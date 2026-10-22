@@ -14,6 +14,7 @@ _Every entry point returns a JSON string._
 | Function | Summary |
 | --- | --- |
 | `add_namespace(name: str, value) -> None` | Expose ``value`` to the console under ``name``. |
+| `axis_summary() -> str` | The axis's provider and stem size for the shell's popover. |
 | `bootstrap(doc_name: str = 'Shell') -> str` | Create (or recreate) the sample document and report host status. |
 | `commands() -> str` | The registered workbench commands, with resources and live state, as JSON. |
 | `dialog_accept(payload_json: str) -> str` | Accept an open dialog: ``{"token": ..., "values": {...}}``. |
@@ -25,8 +26,10 @@ _Every entry point returns a JSON string._
 | `load_workbenches(dirs_json: str = '[]') -> str` | Best-effort workbench loading. |
 | `model_tree() -> str` | Documents and their objects, for the inspector pane. |
 | `properties(object_name: str) -> str` | Property rows for one object, for the property editor pane. |
+| `provider_features() -> str` | Every registered provider feature, with its backends and active flag. |
 | `run_command(name: str) -> str` | Invoke a workbench command by id; returns ``{ok, status?, dialog?, token?}``. |
 | `set_property(object_name: str, prop: str, text: str) -> str` | Set one property from its editor string, in a named transaction. |
+| `set_provider(payload_json: str) -> str` | Switch one feature's active provider from the shell's popover. |
 | `set_selection(pairs_json: str) -> str` | Replace ``FreeCADGui.Selection`` with the shell's selection. |
 | `set_view_state(state_json: str) -> str` | Mirror the shell's presentation state to ``FerroCADGui.ViewState``. |
 | `stage_meshes() -> str` | The tessellated shapes the viewport draws, as JSON. |

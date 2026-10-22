@@ -191,36 +191,58 @@ Nothing in the chrome needs to change for 3–5; T4/T5 become wiring once S0–S
   `the_action_dock_follows_the_selection`; the drag/proximity fade is **not built**
   (deferred with T3's visual half) and is unverified.
 - `cargo test -p ferrocad_gpui` and `cargo test -p ferrocad_toy` stay green. ✅
-  (2026-10-22 verification: gpui lib **102 passed**, toy **14 passed**.) The Xvfb
+  (2026-10-22 verification: gpui lib **115 passed**, toy **14 passed**.) The Xvfb
   real-window smoke test was **not run** in this pass — it remains unverified.
 - The docs (`actions-and-tools.md` §7/§16) describe the new surfaces, not the strip. ✅
 
 ## 10. As built (2026-10-22)
 
 - `commands.rs` owns `Surface` (`grid`, `axis`, `workplane`, `mods`, `dock`, `hidden`),
-  `CommandInfo::surface()/parent()`, `group_by_surface()` and `popover_commands()`.
-  An unannotated **or unknown** surface is the dock.
-- The `FerroCAD_Surface`/`FerroCAD_Parent` keys are written in each command's `GetResources()`; the shell
-  bridge (`ferrocad_shell.commands()`) copies them into the JSON list. `FreeCADGui`'s
-  own `_command_list()` is untouched, so the facade keeps its upstream shape and a mod
-  that does not know the keys is unaffected.
+  `CommandInfo::surface()/parent()/dev_only`, `group_by_surface()` and
+  `popover_commands()`. An unannotated **or unknown** surface is the dock.
+- The `FerroCAD_Surface`/`FerroCAD_Parent`/`FerroCAD_DevOnly` keys are written in each command's `GetResources()`; the shell
+  bridge (`ferrocad_shell.commands()`) copies them into the JSON list. `FreeCADGui._command_list()`
+  also forwards `dev_only`, while its public upstream surface stays unchanged, so the facade
+  keeps its upstream shape and a mod that does not know the key is unaffected.
 - `chrome.rs` holds the primitives: `split_button`, `popover`, `action_dock` and the Dev
   Tools `command_list_panel`. The popover is a `deferred(anchored(..))` child of the
   control, with `on_mouse_down_out` for outside-click dismissal. The **caret opens**
   rather than toggles: the outside-click handler fires before the caret's click, so a
   toggle would immediately reopen the menu. `Esc` closes it from the shell key path.
 - A popover lists the commands on that surface whose `FerroCAD_Parent` names the
-  control's primary. When a surface has no such children (`Mods`), it falls back to
-  the surface's own commands so the caret is never dead.
+  control's primary. When a surface has no such children, it falls back to the
+  surface's own commands so the caret is never dead. Commands carrying
+  `FerroCAD_DevOnly` are filtered from `popover_commands`: they stay in the
+  registry and the Dev Tools list, but never appear in a header popover.
 - T4 adds two read-only rows at the top of the **Grid** popover: `Provider: <label>`
   and `Spacing: <n mm>` (`grid-row-provider`, `grid-row-spacing`). They come from
   `ferrocad_shell.grid_summary()`, fetched when the popover opens (not per frame),
   and refreshed after a `Settings/…` edit. With no provider the panel says
   `No grid provider`; there is no compact/full mode row.
-- The Grid popover groups the two backend-settings rows above the config actions
-  with a `1 px` `#FFFFFF14` hairline, and the active backend's row is checked in
-  `#67D7FF` (`CHROME_ACTIVE`). The dock has the same hairline between the
-  modification and creation groups, and before `Search`.
+- Both the **Grid** and **Axes** popovers start with one provider row per registered
+  backend (id `ferrocad-provider:<feature>:<backend>`, label from the manifest, the
+  active backend checked in `#67D7FF`). Choosing a row calls
+  `ferrocad_shell.set_provider` through `Shell::activate_provider`, applies the
+  returned `view`, and re-reads both summaries. It is not a registry command: the
+  shell intercepts the synthetic id in `run_command`. The generic settings/reload
+  rows follow under a `1 px` `#FFFFFF14` hairline.
+- The backend-specific settings commands (`GridOverlay_Settings`,
+  `GridOverlayCoin_Settings`, `AxisOverlay_Settings`, `AxisOverlayCoin_Settings`) and
+  `Mods_Settings` are **dev-only**: they remain registered and appear in the Dev
+  Tools command list, but no header popover offers them. The Grid menu therefore
+  no longer has a mode/config partition of backend rows; the provider group replaces
+  it. The Dev Tools body also has an inline **Providers** panel (one button per
+  backend, the active one accented) that replaces the Mods dialog as the user-facing
+  switch.
+- The **Axes** control mirrors the Grid one as a split button (`Axes ▾`): the label
+  runs `App_ToggleAxisCross`, the caret opens the `axis` popover, and the state dot
+  reports the cross's on/off state (`axis-state-dot`). Three read-only rows report
+  `Provider: <label>`, `Length: <n px>` and `Width: <n px>` (the panel says
+  `No axis provider` with none) from `ferrocad_shell.axis_summary()`, fetched when
+  the popover opens and refreshed after a `Settings/…` edit. The provider rows for
+  the `axis` feature lead the popover, followed by the generic
+  `View_AxisSettings` and `App_ReloadAxisSettings` rows; the two
+  `AxisOverlay*_Settings` commands are dev-only and do not appear.
 - **Anchoring.** A split-button popover is placed from the caret's actual pointer
   event (`popover_anchor`) in window coordinates, 18 px below the press. An `Anchored`
   child of the old flex header reported a negative layout origin, which previously put
@@ -245,8 +267,10 @@ Nothing in the chrome needs to change for 3–5; T4/T5 become wiring once S0–S
   `ferrocad_widgets::window_chrome::window_frame_with_leading`, which puts it at the
   leading edge of the title bar. The viewport controls float as a compact translucent
   pill (`rgba(0x151a24cc)` over a `#FFFFFF14` hairline) at the canvas' top-left, with
-  `Grid`, `Axes`, `WP` and `Mods`; the pill occludes so a press on it does not start a
-  scene orbit, while its anchored popovers keep their own hitboxes. There is no
+  `Grid`, `Axes` and `WP`; the `Mods` control left the header (its `Mods_Settings`
+  command remains registered as dev-only, so it is reachable from Dev Tools). The
+  pill occludes so a press on it does not start a scene orbit, while its anchored
+  popovers keep their own hitboxes. There is no
   `3D viewport` sub-header: the canvas starts at the pane top and only the transient
   tool strip still consumes a row while a session runs. The menu button (and its
   popover) stop mouse-down propagation so a

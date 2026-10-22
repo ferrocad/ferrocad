@@ -341,8 +341,12 @@ class AxisCrossCommandTests(unittest.TestCase):
         self.axis.reset()
         clear_preferences()
         FerroCADGui.ViewState.axis_cross = True
+        for provider in FerroCADGui.providers("axis"):
+            FerroCADGui.unregisterProvider("axis", provider["backend"])
 
     def tearDown(self):
+        for provider in FerroCADGui.providers("axis"):
+            FerroCADGui.unregisterProvider("axis", provider["backend"])
         self.axis.reset()
         clear_preferences()
 
@@ -364,6 +368,234 @@ class AxisCrossCommandTests(unittest.TestCase):
         with mock.patch.object(FerroCAD, "Axis", None):
             request = FreeCADGui.runCommand("App_ToggleAxisCross")
         self.assertEqual(request, {"view": {"axis_cross": False}})
+
+    def test_without_a_provider_the_toggle_makes_no_overlay_claim(self):
+        self.axis.enabled = False
+
+        request = FreeCADGui.runCommand("App_ToggleAxisCross")
+
+        self.assertTrue(request["view"]["axis"]["enabled"])
+        self.assertNotIn("overlay", request["view"]["axis"])
+
+    def test_the_toggle_merges_the_native_backends_no_overlay_claim(self):
+        FerroCADGui.registerProvider(
+            "axis",
+            "ferrocad",
+            "FerroCAD (native)",
+            priority=10,
+            refresh=lambda: {"view": {"axis": {"overlay": False}}},
+        )
+        self.axis.enabled = False
+
+        request = FreeCADGui.runCommand("App_ToggleAxisCross")
+
+        self.assertTrue(self.axis.enabled)
+        self.assertIs(request["view"]["axis"]["overlay"], False)
+
+    def test_the_toggle_merges_the_coin_backends_overlay_claim(self):
+        FerroCADGui.registerProvider(
+            "axis",
+            "coin",
+            "Coin (WGSL)",
+            priority=0,
+            refresh=lambda: {"view": {"axis": {"overlay": True}}},
+        )
+        self.axis.enabled = False
+
+        request = FreeCADGui.runCommand("App_ToggleAxisCross")
+
+        self.assertTrue(self.axis.enabled)
+        self.assertIs(request["view"]["axis"]["overlay"], True)
+
+        # The claim follows the master switch: turning the axis off restores
+        # the native layer instead of hiding it for a disabled overlay.
+        request = FreeCADGui.runCommand("App_ToggleAxisCross")
+        self.assertFalse(self.axis.enabled)
+        self.assertIs(request["view"]["axis"]["overlay"], False)
+
+
+class AxisSummaryTests(unittest.TestCase):
+    """``axis_summary()`` is the shell's read-only provider view."""
+
+    def setUp(self):
+        self.axis = FerroCAD.Axis
+        self.axis.reset()
+        clear_preferences()
+        for provider in FerroCADGui.providers("axis"):
+            FerroCADGui.unregisterProvider("axis", provider["backend"])
+
+    def tearDown(self):
+        for provider in FerroCADGui.providers("axis"):
+            FerroCADGui.unregisterProvider("axis", provider["backend"])
+        self.axis.reset()
+        clear_preferences()
+
+    def register_native(self):
+        FerroCADGui.registerProvider(
+            "axis",
+            "ferrocad",
+            "FerroCAD (native)",
+            priority=10,
+            settings=_axis.AXIS_SETTINGS_SCHEMA,
+        )
+
+    def register_coin(self):
+        FerroCADGui.registerProvider("axis", "coin", "Coin (WGSL)", priority=0)
+
+    def test_without_a_provider_the_summary_keeps_the_closed_shape(self):
+        self.assertEqual(
+            json.loads(ferrocad_shell.axis_summary()),
+            {
+                "feature": "axis",
+                "backend": None,
+                "label": None,
+                "length": None,
+                "width": None,
+                "providers": [],
+            },
+        )
+
+    def test_the_summary_names_the_active_provider_and_stem_size(self):
+        self.register_native()
+        self.axis.length = 80.0
+        self.axis.width = 1.5
+        summary = json.loads(ferrocad_shell.axis_summary())
+        self.assertEqual(summary["feature"], "axis")
+        self.assertEqual(summary["backend"], "ferrocad")
+        self.assertEqual(summary["label"], "FerroCAD (native)")
+        self.assertEqual(summary["length"], "80.0 px")
+        self.assertEqual(summary["width"], "1.5 px")
+        self.assertEqual(
+            summary["providers"],
+            [
+                {
+                    "backend": "ferrocad",
+                    "label": "FerroCAD (native)",
+                    "active": True,
+                }
+            ],
+        )
+
+        self.register_coin()
+        FerroCADGui.setActiveProvider("axis", "coin")
+        summary = json.loads(ferrocad_shell.axis_summary())
+        self.assertEqual(summary["backend"], "coin")
+        self.assertEqual(summary["label"], "Coin (WGSL)")
+        self.assertEqual(
+            summary["length"],
+            "80 px",
+            "a backend without a stem row reports the one axis's size",
+        )
+        self.assertEqual(summary["width"], "1.5 px")
+        self.assertEqual(
+            [provider["backend"] for provider in summary["providers"]],
+            ["ferrocad", "coin"],
+        )
+        self.assertEqual(
+            [provider["active"] for provider in summary["providers"]],
+            [False, True],
+        )
+
+
+class AxisSettingsCommandTests(unittest.TestCase):
+    """``View_AxisSettings`` is the axis popover's one settings row."""
+
+    COMMAND = "View_AxisSettings"
+
+    def setUp(self):
+        for provider in FerroCADGui.providers("axis"):
+            FerroCADGui.unregisterProvider("axis", provider["backend"])
+
+    def tearDown(self):
+        for provider in FerroCADGui.providers("axis"):
+            FerroCADGui.unregisterProvider("axis", provider["backend"])
+
+    def test_the_command_registers_on_the_axis_surface(self):
+        command = next(
+            item
+            for item in json.loads(ferrocad_shell.commands())
+            if item["id"] == self.COMMAND
+        )
+        self.assertEqual(command["menu"], "Axis settings")
+        self.assertEqual(command["tooltip"], "Edit the axis cross")
+        self.assertEqual(command["group"], "View")
+        self.assertEqual(command["cmd_type"], "ForView")
+        self.assertEqual(command["surface"], "axis")
+        self.assertEqual(command["parent"], "App_ToggleAxisCross")
+        self.assertFalse(command["dev_only"])
+
+    def test_activated_selects_the_axis_settings_node_with_a_provider(self):
+        FerroCADGui.registerProvider("axis", "ferrocad", "FerroCAD (native)")
+        self.assertEqual(
+            FreeCADGui.runCommand(self.COMMAND), {"select": "Settings/Axis"}
+        )
+
+    def test_activated_reports_without_a_provider(self):
+        self.assertEqual(
+            FreeCADGui.runCommand(self.COMMAND),
+            {"status": "no axis provider is registered"},
+        )
+
+
+class SetProviderTests(unittest.TestCase):
+    """``ferrocad_shell.set_provider`` is the popover's switch bridge."""
+
+    def setUp(self):
+        for provider in FerroCADGui.providers("axis"):
+            FerroCADGui.unregisterProvider("axis", provider["backend"])
+
+    def tearDown(self):
+        for provider in FerroCADGui.providers("axis"):
+            FerroCADGui.unregisterProvider("axis", provider["backend"])
+
+    def register_native(self):
+        FerroCADGui.registerProvider(
+            "axis",
+            "ferrocad",
+            "FerroCAD (native)",
+            priority=10,
+            activate=lambda: {"view": {"axis": {"overlay": False}}},
+            deactivate=lambda: {},
+        )
+
+    def register_coin(self):
+        FerroCADGui.registerProvider(
+            "axis",
+            "coin",
+            "Coin (WGSL)",
+            priority=0,
+            activate=lambda: {"view": {"axis": {"overlay": True}}},
+        )
+
+    def test_a_valid_switch_returns_the_status_and_the_merged_view(self):
+        self.register_native()
+        self.register_coin()
+        outcome = json.loads(
+            ferrocad_shell.set_provider(
+                json.dumps({"feature": "axis", "backend": "coin"})
+            )
+        )
+        self.assertTrue(outcome["ok"], outcome)
+        self.assertEqual(outcome["error"], "")
+        self.assertIn("axis", outcome["status"])
+        self.assertIn("coin", outcome["status"])
+        self.assertTrue(outcome["view"]["axis"]["overlay"])
+        self.assertEqual(FerroCADGui.activeProvider("axis"), "coin")
+
+    def test_an_unknown_feature_or_backend_is_reported_and_never_raised(self):
+        self.register_native()
+        for payload in (
+            '{"feature": "nope", "backend": "ferrocad"}',
+            '{"feature": "axis", "backend": "nope"}',
+            "not json",
+            "null",
+        ):
+            with self.subTest(payload=payload):
+                outcome = json.loads(ferrocad_shell.set_provider(payload))
+                self.assertFalse(outcome["ok"], outcome)
+                self.assertTrue(outcome["error"], outcome)
+                self.assertIn("status", outcome)
+                self.assertIn("view", outcome)
 
 
 _LOADED = None
@@ -413,8 +645,10 @@ class AxisOverlayModTests(unittest.TestCase):
         resources = self.mod.AxisOverlayCommand().GetResources()
         self.assertEqual(resources["FerroCAD_Surface"], "axis")
         self.assertEqual(resources["FerroCAD_Parent"], "App_ToggleAxisCross")
+        self.assertEqual(resources["FerroCAD_DevOnly"], "true")
         self.assertEqual(resources["Group"], "View")
         self.assertEqual(resources["CmdType"], "ForView")
+        self.assertTrue(entry["dev_only"], "the settings dialog lives in Dev Tools")
 
     def test_the_provider_advertises_the_canonical_schema(self):
         self.assertEqual(FerroCADGui.activeProvider("axis"), "ferrocad")
@@ -448,11 +682,41 @@ class AxisOverlayModTests(unittest.TestCase):
         self.axis.enabled = False
         result = self.mod.activate()
         self.assertTrue(self.axis.enabled)
-        self.assertEqual(result, self.axis.apply())
+        expected = self.axis.apply()
+        expected["view"]["axis"]["overlay"] = False
+        self.assertEqual(result, expected)
 
         result = self.mod.deactivate()
         self.assertFalse(self.axis.enabled)
-        self.assertEqual(result, self.axis.apply())
+        expected = self.axis.apply()
+        expected["view"]["axis"]["overlay"] = False
+        self.assertEqual(result, expected)
+
+    def test_the_native_backend_never_claims_the_overlay(self):
+        self.axis.enabled = True
+        self.assertIs(self.mod.refresh()["view"]["axis"]["overlay"], False)
+        self.assertIs(self.mod.activate()["view"]["axis"]["overlay"], False)
+        self.assertIs(self.mod.deactivate()["view"]["axis"]["overlay"], False)
+
+    def test_the_reload_command_returns_the_axis_view_and_its_claim(self):
+        entry = next(
+            item
+            for item in FreeCADGui._command_list()
+            if item["id"] == "App_ReloadAxisSettings"
+        )
+        self.assertEqual(entry["menu"], "Reload axis settings")
+        resources = ferrocad_shell._ReloadAxisSettingsCommand().GetResources()
+        self.assertEqual(resources["MenuText"], "Reload axis settings")
+        self.assertEqual(resources["Group"], "View")
+        self.assertEqual(resources["CmdType"], "ForView")
+        self.assertEqual(resources["FerroCAD_Surface"], "axis")
+        self.assertEqual(resources["FerroCAD_Parent"], "App_ToggleAxisCross")
+
+        self.axis.length = 120.0
+        request = FreeCADGui.runCommand("App_ReloadAxisSettings")
+        self.assertTrue(request["view"]["axis"]["enabled"])
+        self.assertEqual(request["view"]["axis"]["length"], 120.0)
+        self.assertIs(request["view"]["axis"]["overlay"], False)
 
     def test_register_provider_is_re_callable(self):
         self.mod.register_provider()

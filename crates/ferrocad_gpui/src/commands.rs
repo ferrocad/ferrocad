@@ -96,6 +96,10 @@ pub struct CommandInfo {
     /// `IsChecked()` — for checkable commands.
     #[serde(default)]
     pub checked: bool,
+    /// `GetResources()["FerroCAD_DevOnly"]` — listed in Dev Tools, hidden from the
+    /// header/dock surfaces (P0.6 extension).
+    #[serde(default)]
+    pub dev_only: bool,
 }
 
 impl CommandInfo {
@@ -191,7 +195,7 @@ pub fn popover_commands<'a>(
 ) -> Vec<&'a CommandInfo> {
     let on_surface: Vec<&CommandInfo> = commands
         .iter()
-        .filter(|command| command.surface() == surface)
+        .filter(|command| command.surface() == surface && !command.dev_only)
         .collect();
     let children: Vec<&CommandInfo> = on_surface
         .iter()
@@ -414,5 +418,39 @@ mod tests {
         let mods = popover_commands(&commands, Surface::Mods, "Mods_Settings");
         let ids: Vec<&str> = mods.iter().map(|command| command.id.as_str()).collect();
         assert_eq!(ids, ["Mods_Settings"], "the fallback keeps the caret useful");
+    }
+
+    /// A dev-only command is still registered and grouped, but a header popover
+    /// never offers it.
+    #[test]
+    fn a_dev_only_child_is_filtered_from_the_popover() {
+        let mut dev_only = command("View_GridDevSettings", "grid", "App_ToggleGrid");
+        dev_only.dev_only = true;
+        let commands = vec![
+            command("App_ToggleGrid", "grid", ""),
+            command("View_GridSettings", "grid", "App_ToggleGrid"),
+            dev_only,
+        ];
+        let ids: Vec<&str> = popover_commands(&commands, Surface::Grid, "App_ToggleGrid")
+            .into_iter()
+            .map(|command| command.id.as_str())
+            .collect();
+        assert_eq!(ids, ["View_GridSettings"]);
+    }
+
+    /// The filter is only for popovers: the Dev Tools list and `find` still see
+    /// the command, so hiding it from a surface never makes it unreachable.
+    #[test]
+    fn a_dev_only_command_stays_in_the_full_list_and_find() {
+        let mut dev_only = command("Mods_Settings", "mods", "");
+        dev_only.dev_only = true;
+        let commands = vec![command("App_ToggleGrid", "grid", ""), dev_only];
+        assert!(find(&commands, "Mods_Settings").is_some());
+        let groups = group_by_surface(&commands);
+        assert!(
+            groups.mods.iter().any(|command| command.id == "Mods_Settings"),
+            "the command is still grouped on its surface"
+        );
+        assert_eq!(groups.all().len(), commands.len());
     }
 }

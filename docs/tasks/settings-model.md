@@ -241,6 +241,20 @@ S0–S4 landed; S5 (document-scoped overrides) remains optional.
   `FerroCAD.Axis`, so the two backends share one store; `enabled` is still the
   one switch. The Coin backend draws a depth-tested visibility pass only and
   leaves the ghost pass and the labels to the native backend.
+- Both backends claim `view.axis.overlay`: native answers `false` (it draws the
+  native triad), Coin answers `true` while active (it draws the axis itself).
+  `_axis_view_request()` merges that claim into the toggled/toggled-off request
+  (`enabled and owned`), so switching to the Coin backend hides the native triad
+  and switching back restores it; `axis_summary()` names the active provider and
+  its stem size for the chrome split button.
+- The backend settings commands (`GridOverlay_Settings`, `GridOverlayCoin_Settings`,
+  `AxisOverlay_Settings`, `AxisOverlayCoin_Settings`) and `Mods_Settings` are marked
+  `FerroCAD_DevOnly: "true"`. The facade copies that into each command-list entry as
+  `dev_only`, so they stay in the Dev Tools command list but are filtered out of the
+  header popovers. The Grid and Axis popovers offer the provider rows plus the generic
+  `View_GridSettings`/`View_AxisSettings` and `App_Reload*Settings` commands; a
+  provider row switches through `ferrocad_shell.set_provider()`
+  (`{"feature", "backend"}` → `{ok, error, status, view}`).
 
 ## Risks
 

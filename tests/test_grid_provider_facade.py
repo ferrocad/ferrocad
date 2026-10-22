@@ -279,6 +279,36 @@ class GridProviderFacadeTests(unittest.TestCase):
             FreeCADGui.runCommand("View_GridSettings"), {"select": "Settings/Grid"}
         )
 
+    def test_set_provider_switches_the_active_backend(self):
+        self.register_native()
+        self.register_coin()
+        outcome = json.loads(
+            ferrocad_shell.set_provider(
+                json.dumps({"feature": FEATURE, "backend": "coin"})
+            )
+        )
+        self.assertTrue(outcome["ok"], outcome)
+        self.assertEqual(outcome["error"], "")
+        self.assertIn(FEATURE, outcome["status"])
+        self.assertIn("coin", outcome["status"])
+        self.assertEqual(outcome["view"], {}, "neither stub backend claims a view")
+        self.assertEqual(FerroCADGui.activeProvider(FEATURE), "coin")
+
+    def test_set_provider_reports_bad_input_without_raising(self):
+        self.register_native()
+        for payload in (
+            '{"feature": "nope", "backend": "coin"}',
+            '{"feature": "grid", "backend": "nope"}',
+            "not json",
+            "null",
+        ):
+            with self.subTest(payload=payload):
+                outcome = json.loads(ferrocad_shell.set_provider(payload))
+                self.assertFalse(outcome["ok"], outcome)
+                self.assertTrue(outcome["error"], outcome)
+                self.assertIn("status", outcome)
+                self.assertIn("view", outcome)
+
     def test_the_native_mod_advertises_the_canonical_schema(self):
         # The command registration is another suite's concern; swallow it so this
         # test leaves the global command registry exactly as it found it.
@@ -296,6 +326,9 @@ class GridProviderFacadeTests(unittest.TestCase):
             list(ATTRIBUTES),
         )
         self.assertEqual(module.settings_node(), "Settings/Grid")
+        self.assertEqual(
+            module.GridOverlayCommand().GetResources()["FerroCAD_DevOnly"], "true"
+        )
 
 
 if __name__ == "__main__":

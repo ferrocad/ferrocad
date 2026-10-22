@@ -176,6 +176,39 @@ pub struct GridProvider {
     pub active: bool,
 }
 
+/// The axis cross's active provider and geometry, for the header popover.
+///
+/// The shape mirrors [`GridSummary`]: with no axis provider registered,
+/// `backend`/`label`/`length`/`width` are `None` and `providers` is empty, so the
+/// popover never special-cases the empty state. The providers reuse
+/// [`GridProvider`] (backend, label, active) — the list has the same meaning.
+#[derive(Debug, Clone, Default, Deserialize, PartialEq)]
+pub struct AxisSummary {
+    #[serde(default)]
+    pub feature: String,
+    #[serde(default)]
+    pub backend: Option<String>,
+    #[serde(default)]
+    pub label: Option<String>,
+    /// The stem length as its display string (`"80 px"`).
+    #[serde(default)]
+    pub length: Option<String>,
+    /// The stem width as its display string (`"1.5 px"`).
+    #[serde(default)]
+    pub width: Option<String>,
+    #[serde(default)]
+    pub providers: Vec<GridProvider>,
+}
+
+/// One provider feature and its backends, for the Dev Tools providers panel.
+#[derive(Debug, Clone, Default, Deserialize, PartialEq)]
+pub struct ProviderFeature {
+    #[serde(default)]
+    pub feature: String,
+    #[serde(default)]
+    pub providers: Vec<GridProvider>,
+}
+
 /// Locate the `python/` facade directory (the one containing `FreeCAD/`).
 ///
 /// Order: `FERROCAD_PYTHON_PATH`; a directory the host configured explicitly
@@ -429,9 +462,35 @@ pub fn grid_summary() -> Result<GridSummary, String> {
     call_json("grid_summary", None)
 }
 
+/// The axis cross's active provider and geometry.
+///
+/// Read once when the axis popover opens, not per frame: it crosses into the
+/// interpreter and the provider only changes on a settings edit.
+pub fn axis_summary() -> Result<AxisSummary, String> {
+    call_json("axis_summary", None)
+}
+
+/// Every registered provider feature for the Dev Tools providers panel.
+pub fn provider_features() -> Result<Vec<ProviderFeature>, String> {
+    call_json("provider_features", None)
+}
+
 /// Run a workbench command by id.
 pub fn run_command(name: &str) -> Result<crate::commands::CommandOutcome, String> {
     call_json("run_command", Some(name))
+}
+
+/// Switch the active provider for `feature` to `backend`.
+///
+/// The payload is `{"feature": ..., "backend": ...}`; the answer is the same
+/// `CommandOutcome` shape as `run_command`, carrying the merged `view` request and
+/// a status line.
+pub fn set_provider(
+    feature: &str,
+    backend: &str,
+) -> Result<crate::commands::CommandOutcome, String> {
+    let payload = serde_json::json!({"feature": feature, "backend": backend}).to_string();
+    call_json("set_provider", Some(&payload))
 }
 
 /// Accept an open dialog: one JSON payload (the token and the typed values).

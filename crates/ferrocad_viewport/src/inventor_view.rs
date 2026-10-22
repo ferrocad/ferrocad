@@ -2465,12 +2465,18 @@ impl<V: InventorView> InventorViewport<V> {
     /// z-fight); the triad, the workplane's own grid and the origin node stay. The
     /// packets go to their own queue ([`grid_queue`](Self::grid_queue)) so nothing here
     /// is ever picked.
+    ///
+    /// The native cross is `axis.enabled && !axis.overlay`: an authored (Coin)
+    /// backend claims the axis with `view.axis.overlay`, which hides the native triad,
+    /// origin node and labels without touching the grid or the user's switch.
     fn sync_grid(&mut self) {
         self.grid_queue = RenderQueue::default();
         self.refresh_hover_face();
 
         let grid_on = self.grid_enabled;
-        let cross = self.axis.enabled;
+        // The Coin backend claims the axis with `view.axis.overlay`; the native triad,
+        // origin node and labels step aside while the claim stands.
+        let cross = self.axis.enabled && !self.axis.overlay;
         let active = self.active_workplane.clone();
         // Do not preview the face that is already active.
         let hover = self
@@ -2696,9 +2702,10 @@ impl<V: InventorView> InventorViewport<V> {
     }
 
     /// The triad's axis tags (`X`/`Y`/`Z` for the world, `U`/`V`/`N` for a workplane),
-    /// projected at the stem tips. Empty while the axis cross (or its labels) is off.
+    /// projected at the stem tips. Empty while the axis cross (or its labels) is off, or
+    /// while an authored backend owns the axis (`overlay`).
     fn axis_labels(&self) -> Vec<AxisLabel> {
-        if !self.axis.enabled || !self.axis.labels {
+        if !self.axis.enabled || self.axis.overlay || !self.axis.labels {
             return Vec::new();
         }
         let (plane, letters) = match &self.active_workplane {
@@ -5972,6 +5979,46 @@ mod tests {
         assert!(viewport.set_grid(true));
         assert_eq!(viewport.grid_queue.len(), 2, "dots and major lines");
         assert!(viewport.axis_labels().is_empty());
+    }
+
+    #[test]
+    fn an_axis_overlay_hides_the_native_triad_origin_and_labels() {
+        let mut viewport = grid_view();
+        // Cross alone: the lit triad, its ghost, then the origin node (drawn last).
+        assert!(viewport.set_grid(false));
+        assert_eq!(viewport.grid_queue.len(), 3);
+        assert_eq!(viewport.axis_labels().len(), 3);
+
+        // A `view.axis.overlay` claim is a visibility flag, not geometry: the style is
+        // otherwise unchanged and the user's `enabled` switch stays on.
+        let mut style = viewport.axis_style().clone();
+        style.overlay = true;
+        assert!(viewport.set_axis_style(style.clone()));
+        assert!(viewport.axis_cross(), "the switch is untouched");
+        assert!(
+            viewport.grid_queue.is_empty(),
+            "no native triad, ghost or origin node"
+        );
+        assert!(viewport.axis_labels().is_empty(), "no native axis tags");
+
+        // Clearing the claim restores the native drawing.
+        style.overlay = false;
+        assert!(viewport.set_axis_style(style));
+        let topologies: Vec<Topology> = viewport
+            .grid_queue
+            .packets
+            .iter()
+            .map(|packet| packet.topology)
+            .collect();
+        assert_eq!(
+            topologies,
+            vec![
+                Topology::Triangles,
+                Topology::Triangles,
+                Topology::Lines
+            ]
+        );
+        assert_eq!(viewport.axis_labels().len(), 3);
     }
 
     #[test]

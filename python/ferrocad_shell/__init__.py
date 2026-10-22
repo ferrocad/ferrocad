@@ -680,8 +680,16 @@ FreeCADGui.addCommand("App_Move", _MoveCommand())
 #: the registry's answer.
 _GRID_FEATURE = "grid"
 
+#: The provider feature whose backend may own the drawn axis cross. Like the
+#: grid, the shell names the feature it controls and the registry names the
+#: backend that draws it.
+_AXIS_FEATURE = "axis"
+
 #: The one grid-settings surface the grid commands select (S4).
 _GRID_SETTINGS_NODE = "Settings/Grid"
+
+#: The one axis-settings surface the axis settings command selects.
+_AXIS_SETTINGS_NODE = "Settings/Axis"
 
 
 def grid_summary() -> str:
@@ -759,6 +767,146 @@ def _grid_view_request():
     return request
 
 
+def axis_summary() -> str:
+    """The axis's provider and stem size for the shell's popover.
+
+    ``backend``/``label`` name the active provider and ``length``/``width`` are
+    its rows' display values with the ``px`` unit the schema leaves implicit
+    (``"80.0 px"``); ``providers`` lists every registered axis backend with its
+    ``active`` flag. The shape is closed: when no axis provider is registered,
+    the same keys are present with ``None`` and an empty list.
+    """
+    manifests = FerroCADGui.providers(_AXIS_FEATURE)
+    providers = [
+        {
+            "backend": manifest["backend"],
+            "label": manifest["label"],
+            "active": bool(manifest["active"]),
+        }
+        for manifest in manifests
+    ]
+    if not manifests:
+        return _json(
+            {
+                "feature": _AXIS_FEATURE,
+                "backend": None,
+                "label": None,
+                "length": None,
+                "width": None,
+                "providers": [],
+            }
+        )
+
+    active = next(
+        (manifest for manifest in manifests if manifest["active"]), manifests[0]
+    )
+    rows = {row["name"]: row for row in FerroCADGui.settings(_AXIS_FEATURE)}
+    size = {}
+    for name in ("length", "width"):
+        row = rows.get(name)
+        if row is not None:
+            # The schema publishes the stems as bare floats; the label carries
+            # the ``px`` unit, so the summary spells it out.
+            size[name] = "%s px" % row["value"]
+        else:
+            # A backend that advertises no stem row still draws the one world
+            # axis, whose size FerroCAD.Axis owns.
+            size[name] = "%g px" % getattr(FerroCAD.Axis, name)
+
+    return _json(
+        {
+            "feature": _AXIS_FEATURE,
+            "backend": active["backend"],
+            "label": active["label"],
+            "length": size["length"],
+            "width": size["width"],
+            "providers": providers,
+        }
+    )
+
+
+def provider_features() -> str:
+    """Every registered provider feature, with its backends and active flag.
+
+    This is the Dev Tools providers panel: the registry already groups by
+    feature, so the shell can render one row per feature and switch through
+    :func:`set_provider` without opening the mods dialog. The order is the
+    registry's registration order.
+    """
+    features = {}
+    for manifest in FerroCADGui.providers():
+        features.setdefault(manifest["feature"], []).append(
+            {
+                "backend": manifest["backend"],
+                "label": manifest["label"],
+                "active": bool(manifest["active"]),
+            }
+        )
+    return _json(
+        [
+            {"feature": feature, "providers": providers}
+            for feature, providers in features.items()
+        ]
+    )
+
+
+def _axis_view_request():
+    """The ``{"view": …}`` request for the current axis settings.
+
+    ``FerroCAD.Axis.apply()`` describes the native triad. A provider that draws
+    the axis itself answers the refresh with the ``axis.overlay`` flag it owns
+    (the Coin overlay hides the native triad while it is active); that flag
+    follows the master switch, so turning the axis off restores the native layer
+    instead of leaving the two axes stacked. A provider that uses the native
+    triad returns ``overlay=False``, and the request keeps its default.
+    """
+    request = FerroCAD.Axis.apply()
+    refreshed = FerroCADGui.refreshProviders(_AXIS_FEATURE)
+    owned = ((refreshed.get("view") or {}).get("axis") or {}).get("overlay")
+    if owned is not None:
+        request["view"]["axis"]["overlay"] = bool(
+            request["view"]["axis"]["enabled"]
+        ) and bool(owned)
+    return request
+
+
+def set_provider(payload_json: str) -> str:
+    """Switch one feature's active provider from the shell's popover.
+
+    The payload is ``{"feature": "grid", "backend": "coin"}``. The registry
+    validates the pair, persists the choice and runs the outgoing ``deactivate``
+    and incoming ``activate`` callbacks, which answer with the ``{"view": …}``
+    request the shell repaints from. This bridge only marshals the request and
+    folds the registry result into the command-outcome shape: ``ok``, ``error``
+    (the callback errors, joined), ``status`` and ``view``.
+
+    A malformed payload or an unknown feature/backend is reported, never raised:
+    the shell calls this across the interpreter boundary and has no exception
+    path for it.
+    """
+    try:
+        payload = json.loads(payload_json)
+        feature = str(payload.get("feature") or "")
+        backend = str(payload.get("backend") or "")
+    except Exception as exc:  # noqa: BLE001 - a bad payload is a result, not a crash
+        return _json({"ok": False, "error": str(exc), "status": "", "view": {}})
+
+    try:
+        result = FerroCADGui.setActiveProvider(feature, backend)
+    except Exception as exc:  # noqa: BLE001 - an unknown pair is a result too
+        return _json({"ok": False, "error": str(exc), "status": "", "view": {}})
+
+    errors = result.get("errors") or []
+    return _json(
+        {
+            "ok": bool(result.get("ok", True)),
+            "error": "; ".join(str(error) for error in errors),
+            "status": str(result.get("status") or ""),
+            "view": dict(result.get("view") or {}),
+        }
+    )
+
+
 class _GridCommand:
     """``App_ToggleGrid`` — show or hide the reference grid.
 
@@ -817,10 +965,69 @@ class _AxisCrossCommand:
             # the original presentation-only request.
             return {"view": {"axis_cross": not FerroCADGui.ViewState.axis_cross}}
         axis.enabled = not axis.enabled
-        return axis.apply()
+        return _axis_view_request()
 
 
 FreeCADGui.addCommand("App_ToggleAxisCross", _AxisCrossCommand())
+
+
+class _ReloadAxisSettingsCommand:
+    """``App_ReloadAxisSettings`` — apply the axis preferences without a restart.
+
+    The values are read and validated by :data:`FerroCAD.Axis` from the native
+    provider's group (``User parameter:BaseApp/Preferences/Mods/axis/ferrocad``),
+    so this is the same request ``App_ToggleAxisCross`` and ``Settings/Axis``
+    describe, including the active provider's overlay claim.
+    """
+
+    def GetResources(self):
+        return {
+            "MenuText": "Reload axis settings",
+            "ToolTip": "Apply the axis preferences",
+            "Group": "View",
+            "CmdType": "ForView",
+            "FerroCAD_Surface": "axis",
+            "FerroCAD_Parent": "App_ToggleAxisCross",
+        }
+
+    def Activated(self):
+        if getattr(FerroCAD, "Axis", None) is None:
+            # Upstream/headless builds without the semantic axis capability keep
+            # the original presentation-only request.
+            return {"view": {"axis_cross": bool(FerroCADGui.ViewState.axis_cross)}}
+        return _axis_view_request()
+
+
+FreeCADGui.addCommand("App_ReloadAxisSettings", _ReloadAxisSettingsCommand())
+
+
+class _AxisSettingsCommand:
+    """``View_AxisSettings`` — select the ``Settings/Axis`` node.
+
+    The axis popover's one settings row, mirroring ``View_GridSettings``. With an
+    axis provider registered the provider-advertised rows are the settings
+    surface, so this returns the ``select`` directive; with none it reports
+    instead of opening an empty dialog, since the axis feature only exists as a
+    provider.
+    """
+
+    def GetResources(self):
+        return {
+            "MenuText": "Axis settings",
+            "ToolTip": "Edit the axis cross",
+            "Group": "View",
+            "CmdType": "ForView",
+            "FerroCAD_Surface": "axis",
+            "FerroCAD_Parent": "App_ToggleAxisCross",
+        }
+
+    def Activated(self):
+        if FerroCADGui.providers(_AXIS_FEATURE):
+            return {"select": _AXIS_SETTINGS_NODE}
+        return {"status": "no axis provider is registered"}
+
+
+FreeCADGui.addCommand("View_AxisSettings", _AxisSettingsCommand())
 
 
 class _GridSettingsCommand:
@@ -931,6 +1138,7 @@ class _ModsSettingsCommand:
             "Group": "Edit",
             "CmdType": "ForEdit",
             "FerroCAD_Surface": "mods",
+            "FerroCAD_DevOnly": "true",
         }
 
     def Activated(self):

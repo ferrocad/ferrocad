@@ -40,6 +40,13 @@ pub const AXIS_COLORS: [[f32; 4]; 3] = [
 pub struct AxisStyle {
     /// Whether the axis cross is shown at all (the triad, origin node and labels).
     pub enabled: bool,
+    /// Whether an authored (shader) backend owns the axis cross (`view.axis.overlay`).
+    ///
+    /// This is a **visibility claim**, not geometry: when set, the native triad, the
+    /// origin node and the labels step aside for the Coin/WGSL backend, exactly as
+    /// `ViewState.grid_overlay` hides the native ground. It is not a user setting and
+    /// does not enter [`triad_key`].
+    pub overlay: bool,
     /// Linear RGBA per stem.
     pub colors: [[f32; 4]; 3],
     /// A multiplier over every stem's alpha, in `0.0..=1.0`.
@@ -60,6 +67,7 @@ impl Default for AxisStyle {
     fn default() -> Self {
         Self {
             enabled: true,
+            overlay: false,
             colors: AXIS_COLORS,
             opacity: TRIAD_OPACITY,
             length: TRIAD_PIXELS,
@@ -135,8 +143,9 @@ pub fn ghost(vertices: &[Vertex], alpha: f32) -> Vec<Vertex> {
 /// A key for the triad cache: the plane, the camera's view matrix, and every style
 /// field that changes the geometry or the baked colours.
 ///
-/// `enabled`/`origin`/`labels` are visibility flags, not geometry, so they are not part
-/// of the key. `ghost_alpha` is, because the ghost pass is cached beside the lit one.
+/// `enabled`/`overlay`/`origin`/`labels` are visibility flags, not geometry, so they
+/// are not part of the key. `ghost_alpha` is, because the ghost pass is cached beside
+/// the lit one.
 pub fn triad_key(workplane: &Workplane, camera: &Camera, style: &AxisStyle) -> u64 {
     let mut parts = Vec::with_capacity(24 + 16 + 16);
     for color in style.colors {
@@ -214,6 +223,7 @@ mod tests {
     fn the_defaults_reproduce_the_legacy_triad() {
         let style = AxisStyle::default();
         assert!(style.enabled);
+        assert!(!style.overlay, "the native backend owns the axis by default");
         assert!(style.origin);
         assert!(style.labels);
         assert_eq!(style.opacity, 0.65);
@@ -300,6 +310,7 @@ mod tests {
         // Visibility flags are not geometry.
         let mut flags = style.clone();
         flags.enabled = false;
+        flags.overlay = true;
         flags.origin = false;
         flags.labels = false;
         assert_eq!(triad_key(&plane, &camera, &flags), key);

@@ -130,11 +130,13 @@ its modal over the viewport, where the user is looking.
 - Closing the Dev Tools window does not change the document, stop the viewport, or
   drop the selection; reopening restores the same view. ✅
 - `cargo test -p ferrocad_gpui` and `cargo test -p ferrocad_toy` pass; the toy starts
-  and can toggle the window. ✅ (2026-10-22: gpui lib **102 passed**, toy **14 passed**;
+  and can toggle the window. ✅ (2026-10-22: gpui lib **115 passed**, toy **14 passed**;
   the toy's live window/toggle was not exercised in this pass.)
 - No Python API change, no second interpreter. ✅ (`ferrocad_shell.commands()` gained
-  the two optional surface fields; the `FreeCADGui` facade is unchanged. The Dev Tools
-  view owns only `Entity<Shell>`.)
+  the two optional surface fields plus `dev_only`, and `set_provider` was added for
+  the header provider rows; `FreeCADGui._command_list()` forwards the dev-only flag,
+  but its public upstream surface is unchanged. The Dev Tools view owns only
+  `Entity<Shell>`.)
 
 ## As built (2026-10-22)
 
@@ -155,9 +157,18 @@ its modal over the viewport, where the user is looking.
   to own the actual window.
 - The app menu (`☰`) that reveals the toggle lives at the leading edge of the **main
   window's title bar** (`window_frame_with_leading`), checked while the window is
-  open; the viewport's `Grid`/`Axes`/`WP`/`Mods` controls float as a compact pill over
+  open; the viewport's `Grid`/`Axes`/`WP` controls float as a compact pill over
   the canvas' top-left, so the main window has no `3D viewport` sub-header row. The Dev
   Tools window's own title bar carries no menu (it calls plain `window_frame`).
+- The **command list is where the dev-only commands live**. `Mods_Settings` and the
+  backend settings commands (`GridOverlay_Settings`, `GridOverlayCoin_Settings`,
+  `AxisOverlay_Settings`, `AxisOverlayCoin_Settings`) carry `FerroCAD_DevOnly`, so
+  they remain in the Dev Tools list (and the registry) while no header/dock surface
+  offers them. The main header has only `Grid`, `Axes` and `WP`.
+- The Dev Tools body starts with an inline **Providers** panel: one row per
+  registered feature, one button per backend, the active one accented. It switches
+  through the same `Shell::activate_provider` path as the header popover rows, so
+  the `Mods` dialog is no longer the user-facing parameters path.
 - The menu is **title-bar chrome, not header chrome**. When the platform draws the
   decorations, `window_frame_with_leading` cannot put it in a client title bar, so it
   renders a slim `leading-bar` below the platform title bar instead of dropping the

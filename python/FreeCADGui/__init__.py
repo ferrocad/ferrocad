@@ -168,6 +168,7 @@ def _command_list() -> list:
                 "cmd_type": str(resources.get("CmdType") or ""),
                 "enabled": _enabled(name, command),
                 "checked": _checked(name, command),
+                "dev_only": bool(resources.get("FerroCAD_DevOnly")),
             }
         )
     return commands

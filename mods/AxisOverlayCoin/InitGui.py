@@ -463,6 +463,7 @@ class AxisOverlayCoinCommand:
             "CmdType": "ForView",
             "FerroCAD_Surface": "axis",
             "FerroCAD_Parent": "App_ToggleAxisCross",
+            "FerroCAD_DevOnly": "true",
         }
 
     def IsActive(self):
@@ -500,8 +501,19 @@ class AxisOverlayCoinCommand:
         }
 
 
+def _view(overlay):
+    """``FerroCAD.Axis.apply()`` with this backend's native-triad claim.
+
+    ``overlay=True`` tells the shell that this backend draws the axis itself and
+    must hide the native triad; the shell still gates the claim on ``enabled``.
+    """
+    request = axis_api().apply()
+    request["view"]["axis"]["overlay"] = bool(overlay)
+    return request
+
+
 def activate():
-    """Become the drawn axis cross: rebuild, bind and return ``Axis.apply()``."""
+    """Become the drawn axis cross: rebuild, bind and claim the native hide."""
     axis = axis_api()
     if axis is None:
         return {"status": UPSTREAM_STATUS}
@@ -512,7 +524,7 @@ def activate():
     if root is None:
         return {"status": UPSTREAM_STATUS}
     root.apply_state(axis.snapshot())
-    return axis.apply()
+    return _view(True)
 
 
 def deactivate():
@@ -521,7 +533,7 @@ def deactivate():
     if root is not None:
         root.set_visible(False)
     axis = axis_api()
-    return axis.apply() if axis is not None else None
+    return _view(False) if axis is not None else None
 
 
 def refresh():
@@ -529,6 +541,8 @@ def refresh():
 
     The shell's axis toggle writes ``FerroCAD.Axis.enabled`` and asks the registry
     for a refresh, so the overlay follows the one switch without a second store.
+    While this backend is active it owns the native-hide claim; the caller still
+    gates it on ``enabled``.
     """
     axis = axis_api()
     if axis is None:
@@ -537,7 +551,7 @@ def refresh():
     if root is None:
         return {"status": UPSTREAM_STATUS}
     root.apply_state(axis.snapshot())
-    return axis.apply()
+    return _view(True)
 
 
 # Registration is idempotent across an add-on reload.

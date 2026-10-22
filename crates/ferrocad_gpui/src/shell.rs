@@ -29,7 +29,7 @@ use crate::commands::{self, CommandInfo};
 use crate::contributions::Contributions;
 use crate::dialog::{self, DialogSpec, Kind, ValueState};
 use crate::display::{DisplaySync, StageMesh};
-use crate::python::{self, Bootstrap, DocumentNode, GridSummary, PropRow};
+use crate::python::{self, AxisSummary, Bootstrap, DocumentNode, GridSummary, PropRow};
 use crate::selection::{self, SelectionItem};
 use crate::shortcuts::Accelerator;
 use crate::dev_tools::DevTools;
@@ -144,6 +144,12 @@ pub struct Shell {
     /// The grid's provider and spacing, read once when its popover opens (T4).
     /// `None` until the first open, or after a settings edit invalidates it.
     grid_summary: Option<GridSummary>,
+    /// The axis cross's provider and geometry, read once when its popover opens.
+    /// `None` until the first open, or after a settings edit invalidates it.
+    axis_summary: Option<AxisSummary>,
+    /// Every provider feature for the Dev Tools providers panel, refreshed when the
+    /// window opens and after a switch. `None` until the first open.
+    provider_features: Option<Vec<crate::python::ProviderFeature>>,
     /// The modeless settings card, opened for a `Settings/<Feature>` node.
     settings_card: Option<SettingsCard>,
     /// The Dev Tools second window, if one has been opened. The window owns no model:
@@ -277,6 +283,8 @@ impl Shell {
             open_popover: None,
             popover_anchor: None,
             grid_summary: None,
+            axis_summary: None,
+            provider_features: None,
             settings_card: None,
             dev_tools: None,
             _viewport_events: None,
@@ -331,6 +339,8 @@ impl Shell {
 
     /// Create the Dev Tools window around this shell entity.
     fn open_dev_tools(&mut self, cx: &mut Context<Self>) -> String {
+        // The providers panel reads the registry once per open, not per frame.
+        self.provider_features = python::provider_features().ok();
         let shell = cx.entity();
         cx.defer(move |cx| {
             let handle = cx.open_window(crate::dev_tools::window_options(), {
@@ -368,6 +378,12 @@ impl Shell {
         self.root_focus.clone()
     }
 
+    /// Every provider feature and its backends for the Dev Tools providers panel.
+    /// Empty until the Dev Tools window is opened (or a switch refreshes it).
+    pub(crate) fn provider_features(&self) -> &[crate::python::ProviderFeature] {
+        self.provider_features.as_deref().unwrap_or(&[])
+    }
+
     /// Whether the popover keyed `key` is the open one.
     pub(crate) fn popover_open(&self, key: &str) -> bool {
         self.open_popover.as_deref() == Some(key)
@@ -379,15 +395,24 @@ impl Shell {
         if !self.popover_open(key) {
             self.open_popover = Some(key.to_string());
         }
-        // The Grid menu is the one provider-aware popover (T4): read its summary
-        // once when it opens, not on every frame. A failure leaves the rows out
-        // (and reports why) rather than showing values from a previous open.
+        // The Grid and Axis menus are the provider-aware popovers (T4): read their
+        // summary once when they open, not on every frame. A failure leaves the rows
+        // out (and reports why) rather than showing values from a previous open.
         if key == "grid" {
             match python::grid_summary() {
                 Ok(summary) => self.grid_summary = Some(summary),
                 Err(error) => {
                     self.grid_summary = None;
                     self.console_line(format!("grid: {error}"), cx);
+                }
+            }
+        }
+        if key == "axis" {
+            match python::axis_summary() {
+                Ok(summary) => self.axis_summary = Some(summary),
+                Err(error) => {
+                    self.axis_summary = None;
+                    self.console_line(format!("axis: {error}"), cx);
                 }
             }
         }
@@ -830,6 +855,73 @@ impl Shell {
         enabled.then(|| id.clone())
     }
 
+    /// Switch a feature's active provider from a header popover row or the Dev Tools
+    /// providers panel.
+    ///
+    /// The row id is synthetic (`ferrocad-provider:<feature>:<backend>`), so it is
+    /// intercepted before the registry dispatch. The bridge switches the backend,
+    /// returns the merged presentation request, and the shell applies it through the
+    /// same `apply_view` path a command uses.
+    pub(crate) fn activate_provider(
+        &mut self,
+        feature: &str,
+        backend: &str,
+        cx: &mut Context<Self>,
+    ) {
+        // The row is in a popover (or the Dev Tools panel); choosing it dismisses
+        // the menu.
+        self.open_popover = None;
+        let outcome = match crate::python::set_provider(feature, backend) {
+            Ok(outcome) => outcome,
+            Err(error) => {
+                let status = format!("{feature}: {error}");
+                self.model.lock().unwrap().status = status.clone();
+                self.console_line(status, cx);
+                cx.notify();
+                return;
+            }
+        };
+
+        if !outcome.ok {
+            let status = if outcome.error.is_empty() {
+                format!("{feature}: {backend} failed")
+            } else {
+                format!("{feature}: {}", outcome.error)
+            };
+            self.model.lock().unwrap().status = status.clone();
+            self.console_line(status, cx);
+            cx.notify();
+            return;
+        }
+
+        let view_summary = outcome.view.as_ref().map(|request| {
+            match self.apply_view(request, cx) {
+                Ok(summary) => summary,
+                Err(error) => format!("view: {error}"),
+            }
+        });
+
+        // The cached summaries feed the open popover; a switch changes both the
+        // active backend and its rows, so re-read them instead of waiting for the
+        // next open. `refresh` also re-lists the commands, whose `IsChecked` now
+        // follows the new provider.
+        self.grid_summary = python::grid_summary().ok();
+        self.axis_summary = python::axis_summary().ok();
+        self.provider_features = python::provider_features().ok();
+        self.refresh(cx);
+
+        let status = if !outcome.status.is_empty() {
+            outcome.status
+        } else if let Some(summary) = view_summary.filter(|summary| !summary.is_empty()) {
+            summary
+        } else {
+            format!("{feature}: {backend} is the active provider")
+        };
+        self.model.lock().unwrap().status = status.clone();
+        self.console_line(status, cx);
+        cx.notify();
+    }
+
     /// Run a workbench command by id, then refresh the model and the stage.
     ///
     /// A command may instead return a **dialog** (A3): the spec is rendered as a
@@ -840,6 +932,14 @@ impl Shell {
         // Running any command dismisses the open popover: its menu has served its
         // purpose, and a new dialog should not sit under a still-open menu.
         self.open_popover = None;
+        // A provider row is generated chrome, not a registry command: its id names
+        // the feature and backend to switch to.
+        if let Some(rest) = id.strip_prefix("ferrocad-provider:") {
+            if let Some((feature, backend)) = rest.split_once(':') {
+                self.activate_provider(feature, backend, cx);
+                return;
+            }
+        }
         // The Dev Tools toggle is shell chrome, not a workbench action: the window can
         // only exist when there is a GPUI app. The Python command stays registered so
         // every registry path (shortcut list, Dev Tools list, upstream script) sees it.
@@ -1467,9 +1567,12 @@ impl Shell {
                 }
                 // A settings edit can switch the provider or change the spacing
                 // the Grid popover advertises; re-read the summary so an open
-                // popover follows the row the user just changed.
+                // popover follows the row the user just changed. The axis cross's
+                // provider and geometry follow the same rule.
                 if key.starts_with("Settings/") {
                     self.grid_summary = python::grid_summary().ok();
+                    self.axis_summary = python::axis_summary().ok();
+                    self.provider_features = python::provider_features().ok();
                 }
                 self.refresh(cx);
                 self.sync_stage(cx);
@@ -2169,6 +2272,7 @@ pub(crate) fn dev_tools_body(
                 cx.stop_propagation();
             }
         }))
+        .child(crate::chrome::providers_panel(shell.provider_features(), cx))
         .child(crate::chrome::command_list_panel(&model, cx))
         .child(tree_panel(&model, cx))
         .child(properties_panel(shell, &model, window, Some("Properties"), cx))
@@ -2234,6 +2338,7 @@ impl Render for Shell {
                     .child(crate::chrome::viewport_header(
                         &model,
                         self.grid_summary.as_ref(),
+                        self.axis_summary.as_ref(),
                         self.open_popover.as_deref(),
                         self.popover_anchor,
                         cx,
@@ -3181,6 +3286,55 @@ for group in legacy:
         assert_eq!(shared, selection);
     }
 
+    /// The Dev Tools providers panel switches a backend without opening the Mods
+    /// dialog; the header popover and this panel share `activate_provider`.
+    #[gpui::test]
+    fn the_dev_tools_providers_panel_switches_a_backend(cx: &mut TestAppContext) {
+        let _guard = crate::PYTHON_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let model = Shell::boot().expect("boot shell");
+        reset_grid_state();
+        let window = cx.update(|cx| {
+            let model = model.clone();
+            cx.open_window(Default::default(), move |_window, cx| {
+                cx.new(|cx| Shell::from_model(model.clone(), cx))
+            })
+            .unwrap()
+        });
+        let mut cx = VisualTestContext::from_window(window.into(), cx);
+        let shell: Entity<Shell> = window.root(&mut cx).unwrap();
+        let mut dev_cx = open_dev_tools(&mut cx, &shell);
+
+        assert!(
+            dev_cx.debug_bounds("dev-providers").is_some(),
+            "the providers panel is in the Dev Tools window"
+        );
+        assert!(
+            dev_cx.debug_bounds("dev-provider-grid-coin").is_some(),
+            "the grid backends are offered"
+        );
+        assert!(dev_cx.debug_bounds("dev-provider-axis-coin").is_some());
+
+        click_at(&mut dev_cx, "dev-provider-grid-coin");
+        let summary = cx
+            .update(|_window, cx| shell.read(cx).grid_summary.clone())
+            .expect("the switch refreshed the summary");
+        assert_eq!(summary.backend.as_deref(), Some("coin"));
+        assert!(
+            summary
+                .providers
+                .iter()
+                .any(|provider| provider.backend == "coin" && provider.active),
+            "the Dev Tools switch follows the registry"
+        );
+
+        // Leave the shared interpreter on the default for the other tests.
+        cx.update(|_window, cx| {
+            shell.update(cx, |shell, cx| {
+                shell.run_command("ferrocad-provider:grid:ferrocad", cx)
+            })
+        });
+    }
+
     /// P0.5/D4: `Dev_ToggleTools` is registered and its headless path reports a status
     /// instead of pretending a window exists.
     #[gpui::test]
@@ -3309,12 +3463,18 @@ if "Test_Unannotated" not in FreeCADGui.listCommands():
         let canvas = cx.debug_bounds("main-canvas").expect("the canvas");
         let header = cx.debug_bounds("viewport-header").expect("the control pill");
         let grid = cx.debug_bounds("grid-label").expect("the Grid label");
-        let axis = cx.debug_bounds("axis-toggle").expect("the Axes toggle");
+        let axis = cx.debug_bounds("axis-label").expect("the Axes label");
         let wp = cx.debug_bounds("wp-label").expect("the WP label");
-        let mods = cx.debug_bounds("mods-label").expect("the Mods label");
         assert!(grid.origin.x < axis.origin.x);
         assert!(axis.origin.x < wp.origin.x);
-        assert!(wp.origin.x < mods.origin.x);
+        assert!(
+            cx.debug_bounds("mods-label").is_none(),
+            "the Mods control left the header"
+        );
+        assert!(
+            cx.debug_bounds("mods-caret").is_none(),
+            "the Mods caret left the header"
+        );
         assert!(
             header.origin.x < width * 0.5,
             "the pill sits at the leading edge (at {:?}, width {width:?})",
@@ -3336,7 +3496,7 @@ if "Test_Unannotated" not in FreeCADGui.listCommands():
             canvas.origin,
             pane.origin
         );
-        for control in [&grid, &axis, &wp, &mods] {
+        for control in [&grid, &axis, &wp] {
             assert!(
                 header.contains(&control.center()),
                 "the pill owns every control"
@@ -3370,13 +3530,32 @@ if "Test_Unannotated" not in FreeCADGui.listCommands():
             popover.origin.x + popover.size.width
         );
         assert!(
+            cx.debug_bounds("grid-row-ferrocad-provider:grid:ferrocad").is_some(),
+            "the provider switch rows lead the popover"
+        );
+        assert!(cx.debug_bounds("grid-row-ferrocad-provider:grid:coin").is_some());
+        assert!(
             cx.debug_bounds("grid-row-View_GridSettings").is_some(),
             "the popover lists the grid surface's children"
         );
         assert!(cx.debug_bounds("grid-row-App_ReloadGridSettings").is_some());
         assert!(
+            cx.debug_bounds("grid-row-GridOverlay_Settings").is_none(),
+            "a dev-only backend settings command is filtered from the popover"
+        );
+        let providers_row = cx
+            .debug_bounds("grid-row-ferrocad-provider:grid:ferrocad")
+            .expect("the provider row");
+        let settings_row = cx
+            .debug_bounds("grid-row-View_GridSettings")
+            .expect("the settings row");
+        assert!(
+            providers_row.origin.y < settings_row.origin.y,
+            "provider rows come before the generic settings rows"
+        );
+        assert!(
             cx.debug_bounds("hairline-2").is_some(),
-            "the mode and config groups have a hairline"
+            "the provider group and the config group have a hairline"
         );
 
         // Esc dismisses it and leaves the grid alone.
@@ -3430,14 +3609,6 @@ if "Test_Unannotated" not in FreeCADGui.listCommands():
         assert!(cx.debug_bounds("wp-row-App_ActivateWorkplane").is_some());
         assert!(cx.debug_bounds("wp-row-App_ClearWorkplane").is_some());
 
-        // The Mods surface has no declared children, so its popover falls back to the
-        // surface's own commands rather than rendering an empty menu.
-        click_at(&mut cx, "mods-caret");
-        assert!(cx.update(|_window, cx| shell.read(cx).popover_open("mods")));
-        draw(&mut cx);
-        assert!(cx.debug_bounds("mods-row-Mods_Settings").is_some());
-        cx.simulate_keystrokes("escape");
-
         // The label runs the primary command in one click and closes the menu.
         click_at(&mut cx, "grid-label");
         assert!(model.lock().unwrap().view.grid, "the label toggled the grid");
@@ -3445,10 +3616,151 @@ if "Test_Unannotated" not in FreeCADGui.listCommands():
         click_at(&mut cx, "grid-label");
         assert!(!model.lock().unwrap().view.grid, "and back off");
 
-        // The Axes control is a plain toggle for its own command.
+        // The Axes control is a split button; its label runs the checkable command.
         assert!(model.lock().unwrap().view.axis_cross);
-        click_at(&mut cx, "axis-toggle");
+        click_at(&mut cx, "axis-label");
         assert!(!model.lock().unwrap().view.axis_cross);
+    }
+
+    /// T1/T4: the `Axes` label runs `App_ToggleAxisCross`; the caret opens the axis
+    /// popover without toggling. The popover lists both backend settings rows and the
+    /// reload command, and the control keeps a persistent state dot.
+    #[gpui::test]
+    fn the_axis_split_button_runs_the_label_and_the_caret_opens(cx: &mut TestAppContext) {
+        let _guard = crate::PYTHON_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let model = Shell::boot().expect("boot shell");
+        // Boot first: it puts the facade on `sys.path`, which the reset needs.
+        reset_grid_state();
+        let window = cx.update(|cx| {
+            let model = model.clone();
+            cx.open_window(Default::default(), move |_window, cx| {
+                cx.new(|cx| Shell::from_model(model.clone(), cx))
+            })
+            .unwrap()
+        });
+        let mut cx = VisualTestContext::from_window(window.into(), cx);
+        let shell: Entity<Shell> = window.root(&mut cx).unwrap();
+
+        // The Python facade owns `App_ReloadAxisSettings` (axis surface, parent
+        // `App_ToggleAxisCross`). Until that registration lands, install the same
+        // metadata so this test still exercises the popover wiring; when the real
+        // command is present this branch is skipped and the real one is asserted.
+        let reload_registered = crate::python::commands()
+            .expect("the command list")
+            .iter()
+            .any(|command| command.id == "App_ReloadAxisSettings");
+        if !reload_registered {
+            let script = r#"
+import FreeCADGui
+class _TestReloadAxisSettings:
+    def GetResources(self):
+        return {
+            "MenuText": "Reload axis settings",
+            "FerroCAD_Surface": "axis",
+            "FerroCAD_Parent": "App_ToggleAxisCross",
+        }
+    def IsActive(self):
+        return True
+    def Activated(self):
+        return {"status": "axis settings reloaded"}
+if "App_ReloadAxisSettings" not in FreeCADGui.listCommands():
+    FreeCADGui.addCommand("App_ReloadAxisSettings", _TestReloadAxisSettings())
+"#;
+            let registered = crate::python::evaluate(script).expect("register the stand-in");
+            assert!(registered.ok, "{}", registered.output);
+            cx.update(|_window, cx| {
+                shell.update(cx, |shell, cx| shell.refresh_commands(cx));
+            });
+        }
+        draw(&mut cx);
+
+        // The split button carries its own persistent on/off dot.
+        assert!(
+            cx.debug_bounds("axis-state-dot").is_some(),
+            "the Axes control carries a state dot"
+        );
+        assert!(cx.debug_bounds("axis-label").is_some());
+        assert!(cx.debug_bounds("axis-caret").is_some());
+        assert!(!cx.update(|_window, cx| shell.read(cx).popover_open("axis")));
+
+        // The caret opens the popover and does not toggle the cross.
+        assert!(model.lock().unwrap().view.axis_cross, "on by default");
+        click_at(&mut cx, "axis-caret");
+        assert!(
+            cx.update(|_window, cx| shell.read(cx).popover_open("axis")),
+            "the caret opened the axis popover"
+        );
+        assert!(
+            model.lock().unwrap().view.axis_cross,
+            "opening ran no command"
+        );
+        draw(&mut cx);
+        assert!(cx.debug_bounds("axis-popover").is_some());
+        assert!(
+            cx.debug_bounds("axis-row-ferrocad-provider:axis:ferrocad").is_some(),
+            "the native provider switch row leads the popover"
+        );
+        assert!(
+            cx.debug_bounds("axis-row-ferrocad-provider:axis:coin").is_some(),
+            "the Coin provider switch row is offered"
+        );
+        assert!(
+            cx.debug_bounds("axis-row-AxisOverlay_Settings").is_none(),
+            "the native backend's settings command is dev-only"
+        );
+        assert!(
+            cx.debug_bounds("axis-row-AxisOverlayCoin_Settings").is_none(),
+            "the Coin backend's settings command is dev-only"
+        );
+        assert!(
+            cx.debug_bounds("axis-row-App_ReloadAxisSettings").is_some(),
+            "the axis surface's reload command"
+        );
+        assert!(
+            cx.debug_bounds("axis-row-View_AxisSettings").is_some(),
+            "the axis surface's settings command"
+        );
+        let providers_row = cx
+            .debug_bounds("axis-row-ferrocad-provider:axis:ferrocad")
+            .expect("the provider row");
+        let reload_row = cx
+            .debug_bounds("axis-row-App_ReloadAxisSettings")
+            .expect("the reload row");
+        let settings_row = cx
+            .debug_bounds("axis-row-View_AxisSettings")
+            .expect("the settings row");
+        assert!(
+            providers_row.origin.y < settings_row.origin.y
+                && providers_row.origin.y < reload_row.origin.y,
+            "provider rows come before the generic settings rows"
+        );
+
+        // Esc dismisses it and leaves the cross alone.
+        let root = cx.update(|_window, cx| shell.read(cx).root_focus_handle());
+        cx.update(|window, cx| window.focus(&root, cx));
+        cx.simulate_keystrokes("escape");
+        assert!(!cx.update(|_window, cx| shell.read(cx).popover_open("axis")));
+        assert!(model.lock().unwrap().view.axis_cross);
+
+        // The label runs the primary command and closes the menu.
+        click_at(&mut cx, "axis-label");
+        assert!(
+            !model.lock().unwrap().view.axis_cross,
+            "the label toggled the cross"
+        );
+        assert!(!cx.update(|_window, cx| shell.read(cx).popover_open("axis")));
+        click_at(&mut cx, "axis-label");
+        assert!(model.lock().unwrap().view.axis_cross, "and back on");
+
+        // Leave the shared interpreter on the default cross for later tests.
+        if !reload_registered {
+            let cleanup = crate::python::evaluate(
+                "import FreeCADGui\nFreeCADGui.removeCommand('App_ReloadAxisSettings')",
+            )
+            .expect("remove the stand-in");
+            assert!(cleanup.ok, "{}", cleanup.output);
+        }
+        reset_grid_state();
     }
 
     /// The canvas owns the full pane: there is no full-width header row above it, and
@@ -3598,6 +3910,113 @@ if "Test_Unannotated" not in FreeCADGui.listCommands():
                 shell.commit_property("Settings/Grid.provider", "FerroCAD (native)", cx);
             });
         });
+        reset_grid_state();
+    }
+
+    /// T4: a provider row in the Grid/Axes popover switches the active backend
+    /// through the synthetic id and applies the returned view; no registry command
+    /// is involved.
+    #[gpui::test]
+    fn provider_rows_switch_the_active_backend(cx: &mut TestAppContext) {
+        let _guard = crate::PYTHON_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let model = Shell::boot().expect("boot shell");
+        // Boot first: it puts the facade on `sys.path`, which the reset needs.
+        reset_grid_state();
+        let window = cx.update(|cx| {
+            let model = model.clone();
+            cx.open_window(Default::default(), move |_window, cx| {
+                cx.new(|cx| Shell::from_model(model.clone(), cx))
+            })
+            .unwrap()
+        });
+        let mut cx = VisualTestContext::from_window(window.into(), cx);
+        let shell: Entity<Shell> = window.root(&mut cx).unwrap();
+        draw(&mut cx);
+
+        // Grid: the Coin row switches the backend and closes the menu.
+        click_at(&mut cx, "grid-caret");
+        draw(&mut cx);
+        assert!(
+            cx.debug_bounds("grid-row-ferrocad-provider:grid:coin")
+                .is_some(),
+            "the coin backend is offered"
+        );
+        click_at(&mut cx, "grid-row-ferrocad-provider:grid:coin");
+        assert!(
+            !cx.update(|_window, cx| shell.read(cx).popover_open("grid")),
+            "choosing a provider closes the popover"
+        );
+        {
+            let summary = cx
+                .update(|_window, cx| shell.read(cx).grid_summary.clone())
+                .expect("the switch refreshed the summary");
+            assert_eq!(summary.backend.as_deref(), Some("coin"));
+            assert!(
+                summary
+                    .providers
+                    .iter()
+                    .any(|provider| provider.backend == "coin" && provider.active),
+                "the summary follows the switch"
+            );
+        }
+        {
+            let m = model.lock().unwrap();
+            assert!(
+                m.status.contains("coin is the active provider"),
+                "the provider status is reported: {}",
+                m.status
+            );
+            assert!(
+                m.view.grid_overlay,
+                "the returned view request was applied"
+            );
+        }
+
+        // Switch back through the same intercept.
+        cx.update(|_window, cx| {
+            shell.update(cx, |shell, cx| {
+                shell.run_command("ferrocad-provider:grid:ferrocad", cx)
+            })
+        });
+        {
+            let summary = cx
+                .update(|_window, cx| shell.read(cx).grid_summary.clone())
+                .expect("the switch back refreshed the summary");
+            assert_eq!(summary.backend.as_deref(), Some("ferrocad"));
+            assert!(!model.lock().unwrap().view.grid_overlay);
+        }
+
+        // Axes: the Coin row does the same on the axis feature.
+        click_at(&mut cx, "axis-caret");
+        draw(&mut cx);
+        assert!(
+            cx.debug_bounds("axis-row-ferrocad-provider:axis:coin")
+                .is_some(),
+            "the coin axis backend is offered"
+        );
+        click_at(&mut cx, "axis-row-ferrocad-provider:axis:coin");
+        assert!(
+            !cx.update(|_window, cx| shell.read(cx).popover_open("axis")),
+            "choosing a provider closes the axis popover"
+        );
+        {
+            let summary = cx
+                .update(|_window, cx| shell.read(cx).axis_summary.clone())
+                .expect("the switch refreshed the axis summary");
+            assert_eq!(summary.backend.as_deref(), Some("coin"));
+        }
+        assert!(
+            model.lock().unwrap().view.axis.overlay,
+            "the axis provider's claim was applied"
+        );
+
+        // Leave the shared interpreter on the default providers for later tests.
+        cx.update(|_window, cx| {
+            shell.update(cx, |shell, cx| {
+                shell.run_command("ferrocad-provider:axis:ferrocad", cx)
+            })
+        });
+        assert!(!model.lock().unwrap().view.axis.overlay);
         reset_grid_state();
     }
 
@@ -3868,7 +4287,7 @@ if "Test_Unannotated" not in FreeCADGui.listCommands():
         let shell: Entity<Shell> = window.root(&mut cx).unwrap();
         draw(&mut cx);
 
-        // The menu left the viewport header; Grid/Axes/WP/Mods did not. The test
+        // The menu left the viewport header; Grid/Axes/WP did not. The test
         // platform draws server-side decorations, so the frame's fallback leading bar
         // (below the platform title bar) is where the menu lives here.
         let header = cx.debug_bounds("viewport-header").expect("the viewport header");

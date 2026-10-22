@@ -173,6 +173,14 @@ Python facade, and the older `{"view": {"axis_cross": bool}}` spelling survives 
 deprecated alias that applies only when `axis.enabled` is absent. The settings are
 provider-advertised as `Settings/Axis` rather than a Rust-only preference.
 
+**Provider claim (`overlay`).** `AxisStyle.overlay` (default `false`) is a visibility
+flag, not geometry: `{"view": {"axis": {"overlay": true}}}` declares that an
+authored backend owns the cross, so the viewport draws **no** native triad, origin
+node or labels — the Coin (`axis`/`coin`) WGSL overlay draws them instead. The user's
+switch is untouched (`enabled` and the `axis_cross` mirror still read on), `overlay`
+is excluded from `axis::triad_key`, and the Coin overlay's own packets are independent
+of the flag. Clearing the claim (`false`, the default) restores the native drawing.
+
 ### 3.2 Ground grid (the turntable field)
 
 | Property | World | Workplane |

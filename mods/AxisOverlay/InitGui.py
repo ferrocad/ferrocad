@@ -88,6 +88,17 @@ def inactive_status():
     return INACTIVE_STATUS % (active or "another backend")
 
 
+def _view(overlay):
+    """``FerroCAD.Axis.apply()`` with this backend's native-triad claim.
+
+    The native backend draws the triad itself, so it claims no overlay and the
+    shell keeps the native origin and labels.
+    """
+    request = axis_api().apply()
+    request["view"]["axis"]["overlay"] = bool(overlay)
+    return request
+
+
 def activate():
     """Become the drawn axis cross: enable it.
 
@@ -98,7 +109,7 @@ def activate():
     if axis is None:
         return {"status": UPSTREAM_STATUS}
     axis.enabled = True
-    return axis.apply()
+    return _view(False)
 
 
 def deactivate():
@@ -107,7 +118,18 @@ def deactivate():
     if axis is None:
         return {"status": UPSTREAM_STATUS}
     axis.enabled = False
-    return axis.apply()
+    return _view(False)
+
+
+def refresh():
+    """Re-read the shared store after the shell's axis toggle changed it.
+
+    The native backend never hides its own triad, so the refresh repeats the
+    ``overlay=False`` claim.
+    """
+    if axis_api() is None:
+        return {"status": UPSTREAM_STATUS}
+    return _view(False)
 
 
 def _state(axis):
@@ -166,6 +188,7 @@ class AxisOverlayCommand:
             "CmdType": "ForView",
             "FerroCAD_Surface": "axis",
             "FerroCAD_Parent": "App_ToggleAxisCross",
+            "FerroCAD_DevOnly": "true",
         }
 
     def IsActive(self):
@@ -218,6 +241,7 @@ def register_provider():
         priority=10,
         activate=activate,
         deactivate=deactivate,
+        refresh=refresh,
         settings=_axis.AXIS_SETTINGS_SCHEMA if _axis is not None else None,
     )
     return True

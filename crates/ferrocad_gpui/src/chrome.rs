@@ -4,7 +4,8 @@
 //! The chrome is presentation over the command registry: every control runs an id
 //! through [`Shell::run_command`](crate::shell::Shell), and every popover row is a
 //! command the registry assigned to that surface. Nothing here names a workbench;
-//! the only ids it knows are the four primary controls (grid, axes, workplane, mods).
+//! the only ids it knows are the three primary controls (grid, axes, workplane) and
+//! the synthetic provider rows a Grid/Axis popover starts with.
 //!
 //! The app menu (`☰`) is app-level chrome, not a viewport control: the shell passes it
 //! to `window_frame_with_leading`, so it lives in the main window's title bar. It is
@@ -21,14 +22,13 @@ use gpui::{
 };
 
 use crate::commands::{self, CommandInfo, Surface};
-use crate::python::GridSummary;
+use crate::python::{AxisSummary, GridSummary, ProviderFeature};
 use crate::shell::{ACCENT, FG, MUTED, PANEL, PANEL_ALT, Shell, ShellModel, panel_header};
 
-/// The four header controls' primary command ids.
+/// The three header controls' primary command ids.
 pub const GRID: &str = "App_ToggleGrid";
 pub const AXIS: &str = "App_ToggleAxisCross";
 pub const WORKPLANE: &str = "App_ViewWorkplane";
-pub const MODS: &str = "Mods_Settings";
 /// The application menu's first entry (hidden from every other surface).
 pub const DEV_TOOLS: &str = "Dev_ToggleTools";
 
@@ -59,6 +59,30 @@ impl PopoverRow {
             divider_before: false,
         }
     }
+}
+
+/// The provider-switch rows a Grid/Axis popover starts with (T4).
+///
+/// One row per registered backend. The id is synthetic
+/// (`ferrocad-provider:<feature>:<backend>`), so a click reaches
+/// `Shell::run_command` and is intercepted as a switch rather than a registry
+/// command. The active backend's row is checked.
+fn provider_rows(feature: &str, providers: &[crate::python::GridProvider]) -> Vec<PopoverRow> {
+    providers
+        .iter()
+        .map(|provider| PopoverRow {
+            id: format!("ferrocad-provider:{feature}:{}", provider.backend),
+            label: if provider.label.is_empty() {
+                provider.backend.clone()
+            } else {
+                provider.label.clone()
+            },
+            enabled: true,
+            checked: provider.active,
+            accel: String::new(),
+            divider_before: false,
+        })
+        .collect()
 }
 
 /// A read-only row above a popover's command rows (T4).
@@ -105,8 +129,48 @@ fn grid_info(summary: Option<&GridSummary>) -> Vec<PopoverInfo> {
     info
 }
 
+/// The Axis popover's provider and geometry rows, from the summary the shell cached
+/// when the popover opened.
+///
+/// With no axis provider registered one muted row says so; a missing summary (bridge
+/// failure) omits the rows rather than inventing them. A provider with no display
+/// value for its length/width omits that one row.
+fn axis_info(summary: Option<&AxisSummary>) -> Vec<PopoverInfo> {
+    let Some(summary) = summary else {
+        return Vec::new();
+    };
+    let provider = summary
+        .label
+        .as_deref()
+        .or(summary.backend.as_deref())
+        .filter(|value| !value.is_empty());
+    let Some(provider) = provider else {
+        return vec![PopoverInfo {
+            id: "no-provider".to_string(),
+            label: "No axis provider".to_string(),
+        }];
+    };
+    let mut info = vec![PopoverInfo {
+        id: "provider".to_string(),
+        label: format!("Provider: {provider}"),
+    }];
+    if let Some(length) = summary.length.as_deref().filter(|value| !value.is_empty()) {
+        info.push(PopoverInfo {
+            id: "length".to_string(),
+            label: format!("Length: {length}"),
+        });
+    }
+    if let Some(width) = summary.width.as_deref().filter(|value| !value.is_empty()) {
+        info.push(PopoverInfo {
+            id: "width".to_string(),
+            label: format!("Width: {width}"),
+        });
+    }
+    info
+}
+
 /// The viewport environment controls as a compact floating pill: the
-/// grid/axes/workplane/mods controls in one row.
+/// grid/axes/workplane controls in one row.
 ///
 /// It is not a pane header. The shell overlays it on the canvas' top-left corner, so the
 /// scene reaches the title bar instead of losing a full-width row (and the redundant
@@ -119,13 +183,20 @@ fn grid_info(summary: Option<&GridSummary>) -> Vec<PopoverInfo> {
 pub(crate) fn viewport_header(
     model: &ShellModel,
     grid: Option<&GridSummary>,
+    axis: Option<&AxisSummary>,
     open: Option<&str>,
     anchor: Option<Point<Pixels>>,
     cx: &mut Context<Shell>,
 ) -> impl IntoElement {
     let grid_open = open == Some("grid");
+    let axis_open = open == Some("axis");
     let wp_open = open == Some("wp");
-    let mods_open = open == Some("mods");
+    let grid_providers = grid
+        .map(|summary| provider_rows("grid", &summary.providers))
+        .unwrap_or_default();
+    let axis_providers = axis
+        .map(|summary| provider_rows("axis", &summary.providers))
+        .unwrap_or_default();
     let mut controls = div().flex().flex_row().items_center().gap_1();
     if let Some(command) = commands::find(&model.commands, GRID) {
         controls = controls.child(split_button(
@@ -135,6 +206,7 @@ pub(crate) fn viewport_header(
             Surface::Grid,
             grid_open,
             grid_info(grid),
+            grid_providers,
             anchor,
             true,
             command,
@@ -143,7 +215,20 @@ pub(crate) fn viewport_header(
         ));
     }
     if let Some(command) = commands::find(&model.commands, AXIS) {
-        controls = controls.child(toggle_button("axis", "Axes", AXIS, command, cx));
+        controls = controls.child(split_button(
+            "axis",
+            "Axes",
+            AXIS,
+            Surface::Axis,
+            axis_open,
+            axis_info(axis),
+            axis_providers,
+            anchor,
+            true,
+            command,
+            model,
+            cx,
+        ));
     }
     if let Some(command) = commands::find(&model.commands, WORKPLANE) {
         controls = controls.child(split_button(
@@ -153,20 +238,6 @@ pub(crate) fn viewport_header(
             Surface::Workplane,
             wp_open,
             Vec::new(),
-            anchor,
-            false,
-            command,
-            model,
-            cx,
-        ));
-    }
-    if let Some(command) = commands::find(&model.commands, MODS) {
-        controls = controls.child(split_button(
-            "mods",
-            "Mods",
-            MODS,
-            Surface::Mods,
-            mods_open,
             Vec::new(),
             anchor,
             false,
@@ -283,6 +354,7 @@ fn split_button(
     surface: Surface,
     open: bool,
     info: Vec<PopoverInfo>,
+    providers: Vec<PopoverRow>,
     anchor: Option<Point<Pixels>>,
     state_dot: bool,
     command: &CommandInfo,
@@ -293,20 +365,16 @@ fn split_button(
         .into_iter()
         .map(PopoverRow::of)
         .collect();
-    // The Grid menu groups the backend settings rows above the config actions, so
-    // "Grid Overlay" / "Grid Overlay (Coin)" read as the mode group and
-    // "Grid settings" / "Reload" as the config group (T4).
-    if matches!(surface, Surface::Grid) {
-        let (mut modes, mut config): (Vec<_>, Vec<_>) = rows
-            .into_iter()
-            .partition(|row| row.id.starts_with("GridOverlay"));
-        if !modes.is_empty() {
-            if let Some(first) = config.first_mut() {
-                first.divider_before = true;
-            }
+    // Provider switches lead the menu; a hairline separates them from the command
+    // rows so the mode group reads apart from the config actions (T4). The
+    // backend-specific settings commands are dev-only and never reach this list.
+    if !providers.is_empty() {
+        let mut combined = providers;
+        if let Some(first) = rows.first_mut() {
+            first.divider_before = true;
         }
-        modes.extend(config);
-        rows = modes;
+        combined.append(&mut rows);
+        rows = combined;
     }
 
     let mut control = div()
@@ -410,33 +478,6 @@ fn split_button(
         );
     }
     control
-}
-
-/// A plain toggle button (`Axes`): the whole control runs the checkable command.
-fn toggle_button(
-    key: &'static str,
-    label: &'static str,
-    primary: &'static str,
-    command: &CommandInfo,
-    cx: &mut Context<Shell>,
-) -> impl IntoElement {
-    div()
-        .id(SharedString::from(format!("{key}-toggle")))
-        .debug_selector(move || format!("{key}-toggle"))
-        .px_2()
-        .py_1()
-        .rounded_sm()
-        .text_xs()
-        .text_color(rgb(if command.enabled { FG } else { MUTED }))
-        .when(command.checked, |el| el.bg(rgb(ACCENT)))
-        .when(command.enabled, |el| {
-            el.cursor_pointer()
-                .hover(|style| style.bg(rgb(PANEL)))
-                .on_click(cx.listener(move |this, _event, _window, cx| {
-                    this.run_command(primary, cx);
-                }))
-        })
-        .child(label)
 }
 
 /// An anchored popover: a plain column of command rows, dismissed by an outside
@@ -577,6 +618,96 @@ fn dock_divider(id: usize) -> impl IntoElement {
         .h(px(16.))
         .mx_1()
         .bg(rgba(CHROME_LINE))
+}
+
+/// The Dev Tools providers panel: one row per provider feature, with a button per
+/// backend.
+///
+/// This replaces the user-facing Mods dialog: `Mods_Settings` remains registered (and
+/// dev-only) in the command list, but the direct switch is here, next to the other
+/// developer surfaces. The active backend is accented; a click goes through the same
+/// `Shell::activate_provider` path as a header popover row.
+pub(crate) fn providers_panel(
+    features: &[ProviderFeature],
+    cx: &mut Context<Shell>,
+) -> impl IntoElement {
+    let mut panel = div()
+        .id("dev-providers")
+        .debug_selector(|| "dev-providers".to_string())
+        .flex()
+        .flex_col()
+        .flex_shrink_0()
+        .max_h(px(180.))
+        .overflow_y_scroll()
+        .bg(rgb(PANEL))
+        .border_b_1()
+        .border_color(rgba(0xffffff14))
+        .child(panel_header("Providers"));
+
+    if features.is_empty() {
+        return panel.child(
+            div()
+                .px_2()
+                .py_1()
+                .text_xs()
+                .text_color(rgb(MUTED))
+                .child("No providers registered"),
+        );
+    }
+
+    for feature in features {
+        let name = feature.feature.replace('_', " ");
+        let mut row = div()
+            .flex()
+            .flex_row()
+            .flex_wrap()
+            .items_center()
+            .gap_1()
+            .px_2()
+            .py_1()
+            .child(
+                div()
+                    .w(px(64.))
+                    .text_xs()
+                    .text_color(rgb(MUTED))
+                    .child(name),
+            );
+        for provider in &feature.providers {
+            let feature_id = feature.feature.clone();
+            let backend = provider.backend.clone();
+            let label = if provider.label.is_empty() {
+                backend.clone()
+            } else {
+                provider.label.clone()
+            };
+            let active = provider.active;
+            row = row.child(
+                div()
+                    .id(SharedString::from(format!(
+                        "dev-provider-{feature_id}-{backend}"
+                    )))
+                    .debug_selector({
+                        let feature_id = feature_id.clone();
+                        let backend = backend.clone();
+                        move || format!("dev-provider-{feature_id}-{backend}")
+                    })
+                    .px_2()
+                    .py_1()
+                    .rounded_sm()
+                    .text_xs()
+                    .text_color(rgb(if active { FG } else { MUTED }))
+                    .when(active, |el| el.bg(rgb(ACCENT)))
+                    .cursor_pointer()
+                    .hover(|style| style.bg(rgb(PANEL_ALT)))
+                    .on_click(cx.listener(move |this, _event, _window, cx| {
+                        this.activate_provider(&feature_id, &backend, cx);
+                    }))
+                    .child(label),
+            );
+        }
+        panel = panel.child(row);
+    }
+    panel
 }
 
 /// The action dock: the `dock` surface as one centred strip over the bottom of the
@@ -827,5 +958,146 @@ mod tests {
         assert_eq!(info.len(), 1, "no spacing row without a value");
         assert_eq!(info[0].id, "provider");
         assert_eq!(info[0].label, "Provider: coin");
+    }
+
+    #[test]
+    fn no_axis_summary_omits_the_axis_info_rows() {
+        assert!(axis_info(None).is_empty());
+    }
+
+    #[test]
+    fn an_axis_summary_without_a_provider_says_so() {
+        let summary = AxisSummary {
+            feature: "axis".to_string(),
+            ..Default::default()
+        };
+        let info = axis_info(Some(&summary));
+        assert_eq!(info.len(), 1);
+        assert_eq!(info[0].id, "no-provider");
+        assert_eq!(info[0].label, "No axis provider");
+    }
+
+    #[test]
+    fn the_axis_info_rows_name_the_provider_the_length_and_the_width() {
+        let summary = AxisSummary {
+            feature: "axis".to_string(),
+            backend: Some("ferrocad".to_string()),
+            label: Some("FerroCAD (native)".to_string()),
+            length: Some("80 px".to_string()),
+            width: Some("1.5 px".to_string()),
+            providers: vec![
+                crate::python::GridProvider {
+                    backend: "ferrocad".to_string(),
+                    label: "FerroCAD (native)".to_string(),
+                    active: true,
+                },
+                crate::python::GridProvider {
+                    backend: "coin".to_string(),
+                    label: "Coin (WGSL)".to_string(),
+                    active: false,
+                },
+            ],
+        };
+        let info = axis_info(Some(&summary));
+        let ids: Vec<&str> = info.iter().map(|row| row.id.as_str()).collect();
+        assert_eq!(ids, ["provider", "length", "width"]);
+        assert_eq!(info[0].label, "Provider: FerroCAD (native)");
+        assert_eq!(info[1].label, "Length: 80 px");
+        assert_eq!(info[2].label, "Width: 1.5 px");
+    }
+
+    #[test]
+    fn a_missing_axis_label_falls_back_to_the_backend_and_the_values_are_optional() {
+        let summary = AxisSummary {
+            backend: Some("coin".to_string()),
+            ..Default::default()
+        };
+        let info = axis_info(Some(&summary));
+        assert_eq!(info.len(), 1, "no length/width rows without values");
+        assert_eq!(info[0].id, "provider");
+        assert_eq!(info[0].label, "Provider: coin");
+    }
+
+    #[test]
+    fn provider_rows_name_the_switch_id_and_the_active_backend() {
+        let providers = vec![
+            crate::python::GridProvider {
+                backend: "ferrocad".to_string(),
+                label: "FerroCAD (native)".to_string(),
+                active: true,
+            },
+            crate::python::GridProvider {
+                backend: "coin".to_string(),
+                label: String::new(),
+                active: false,
+            },
+        ];
+        let rows = provider_rows("grid", &providers);
+        assert_eq!(rows.len(), 2, "one row per registered backend");
+        assert_eq!(rows[0].id, "ferrocad-provider:grid:ferrocad");
+        assert_eq!(rows[0].label, "FerroCAD (native)");
+        assert!(rows[0].enabled);
+        assert!(rows[0].checked, "the active backend is checked");
+        assert!(rows[0].accel.is_empty());
+        assert_eq!(rows[1].id, "ferrocad-provider:grid:coin");
+        assert_eq!(
+            rows[1].label, "coin",
+            "an empty label falls back to the backend id"
+        );
+        assert!(!rows[1].checked);
+    }
+
+    /// With no provider registered there are no switch rows to prepend.
+    #[test]
+    fn no_providers_means_no_provider_rows() {
+        assert!(provider_rows("axis", &[]).is_empty());
+    }
+
+    /// The `Axes` caret lists the two backend settings rows and the reload command;
+    /// they are the axis surface's children, so no extra grouping code is needed.
+    #[test]
+    fn the_axis_popover_lists_both_backends_and_the_reload_command() {
+        let list = vec![
+            CommandInfo {
+                id: AXIS.to_string(),
+                surface: "axis".to_string(),
+                ..Default::default()
+            },
+            CommandInfo {
+                id: "AxisOverlay_Settings".to_string(),
+                surface: "axis".to_string(),
+                parent: AXIS.to_string(),
+                ..Default::default()
+            },
+            CommandInfo {
+                id: "AxisOverlayCoin_Settings".to_string(),
+                surface: "axis".to_string(),
+                parent: AXIS.to_string(),
+                ..Default::default()
+            },
+            CommandInfo {
+                id: "App_ReloadAxisSettings".to_string(),
+                surface: "axis".to_string(),
+                parent: AXIS.to_string(),
+                ..Default::default()
+            },
+            CommandInfo {
+                id: "App_ToggleGrid".to_string(),
+                surface: "grid".to_string(),
+                ..Default::default()
+            },
+        ];
+        let ids: Vec<&str> = commands::popover_commands(&list, Surface::Axis, AXIS)
+            .into_iter()
+            .map(|command| command.id.as_str())
+            .collect();
+        assert_eq!(
+            ids,
+            [
+                "AxisOverlay_Settings",
+                "AxisOverlayCoin_Settings",
+                "App_ReloadAxisSettings"
+            ]
+        );
     }
 }

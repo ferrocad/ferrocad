@@ -187,6 +187,7 @@ class GridOverlayCommand:
             "CmdType": "ForView",
             "FerroCAD_Surface": "grid",
             "FerroCAD_Parent": "App_ToggleGrid",
+            "FerroCAD_DevOnly": "true",
         }
 
     def IsActive(self):

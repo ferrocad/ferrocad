@@ -207,6 +207,32 @@ def load_mod():
     return module
 
 
+NATIVE_PATH = (
+    pathlib.Path(__file__).resolve().parents[1]
+    / "mods"
+    / "AxisOverlay"
+    / "InitGui.py"
+)
+
+_NATIVE = None
+
+
+def load_native_mod():
+    """Load the native ``AxisOverlay`` mod for its overlay claims.
+
+    Importing it declares the ``ferrocad`` provider; the caller unregisters it.
+    """
+    global _NATIVE
+    if _NATIVE is None:
+        spec = importlib.util.spec_from_file_location(
+            "AxisOverlay_InitGui_for_coin_suite", NATIVE_PATH
+        )
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        _NATIVE = module
+    return _NATIVE
+
+
 def close_documents():
     for name in list(FreeCAD.listDocuments()):
         FreeCAD.closeDocument(name)
@@ -321,16 +347,18 @@ class AxisOverlayCoinTests(unittest.TestCase):
     def test_activate_registers_the_overlay_and_deactivate_removes_it(self):
         with mock.patch.object(FerroCADGui, "addOverlay") as add, \
                 mock.patch.object(FerroCADGui, "removeOverlay") as remove:
-            self.mod.activate()
+            result = self.mod.activate()
             add.assert_called_once()
             root = add.call_args.args[0]
             self.assertIsInstance(root, COIN.SoSwitch)
             self.assertEqual(root.whichChild, COIN.SO_SWITCH_ALL)
             self.assertTrue(self.axis.enabled)
+            self.assertIs(result["view"]["axis"]["overlay"], True)
 
-            self.mod.deactivate()
+            result = self.mod.deactivate()
             remove.assert_called_once_with(root)
             self.assertEqual(root.whichChild, COIN.SO_SWITCH_NONE)
+            self.assertIs(result["view"]["axis"]["overlay"], False)
 
     def test_refresh_rebuilds_and_re_registers_the_same_root(self):
         with mock.patch.object(FerroCADGui, "addOverlay") as add, \
@@ -343,7 +371,7 @@ class AxisOverlayCoinTests(unittest.TestCase):
 
             self.axis.length = 120.0
             self.axis.color_y = "#00ff00"
-            self.mod.refresh()
+            result = self.mod.refresh()
 
             remove.assert_called_once_with(root)
             add.assert_called_once_with(root)
@@ -352,6 +380,18 @@ class AxisOverlayCoinTests(unittest.TestCase):
             self.assertEqual(overlay.axis_color_y.value, (0.0, 1.0, 0.0))
             params = {p.name: p for p in overlay.fragment.parameter.values}
             self.assertAlmostEqual(params["axis_length"].value, 120.0)
+            self.assertIs(result["view"]["axis"]["overlay"], True)
+
+    def test_the_native_backends_functions_claim_no_overlay(self):
+        native = load_native_mod()
+        try:
+            self.axis.enabled = True
+            self.assertIs(native.refresh()["view"]["axis"]["overlay"], False)
+            self.assertIs(native.activate()["view"]["axis"]["overlay"], False)
+            self.assertIs(native.deactivate()["view"]["axis"]["overlay"], False)
+        finally:
+            FerroCADGui.unregisterProvider("axis", "ferrocad")
+            self.axis.enabled = True
 
     def test_the_tree_carries_the_expected_parameters_and_nodes(self):
         overlay = self.mod.ShaderAxis()
@@ -394,6 +434,23 @@ class AxisOverlayCoinTests(unittest.TestCase):
             self.assertEqual(overlay.depth.function, COIN.SoDepthBuffer.LESS)
         finally:
             overlay.remove()
+
+    def test_the_tree_carries_no_native_triad(self):
+        root = self.mod.overlay()
+        try:
+            pick, light, separator = root.root.children
+            self.assertIsInstance(pick, COIN.SoPickStyle)
+            self.assertIsInstance(light, COIN.SoLightModel)
+            self.assertIs(separator, root.sep)
+            # The whole axis is drawn by the shader quad: the Coin mod's tree
+            # carries no native-triad subtree, so the shell hides the native
+            # triad through the overlay claim instead.
+            self.assertEqual(
+                separator.children,
+                [root.depth, root.program, root.coords, root.face],
+            )
+        finally:
+            root.remove()
 
     def test_the_wgsl_copy_is_byte_identical_to_the_crate_reference(self):
         self.assertEqual(

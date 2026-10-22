@@ -60,6 +60,11 @@ pub struct AxisRequest {
     /// Show or hide the axis cross.
     #[serde(default)]
     pub enabled: Option<bool>,
+    /// A provider claim: hide the native triad, origin node and labels because a
+    /// registered backend (the Coin overlay) draws the cross. Not a user setting, and
+    /// not geometry.
+    #[serde(default)]
+    pub overlay: Option<bool>,
     /// The X stem's `"#rrggbb"` (or `"#rgb"`) ink.
     #[serde(default)]
     pub color_x: Option<String>,
@@ -352,6 +357,20 @@ impl ViewState {
             if let Some(summary) = summary {
                 changes.push(summary.to_string());
             }
+            if let Some(overlay) = axis.overlay {
+                if self.axis.overlay != overlay {
+                    self.axis.overlay = overlay;
+                    changes.push(format!(
+                        "axis overlay {} ({})",
+                        if overlay { "on" } else { "off" },
+                        if overlay {
+                            "native triad hidden"
+                        } else {
+                            "native triad"
+                        }
+                    ));
+                }
+            }
             // `axis_cross` stays a bool at the top level, mirroring the style.
             self.axis_cross = self.axis.enabled;
         } else if let Some(axis_cross) = request.axis_cross {
@@ -483,6 +502,7 @@ mod tests {
 
         // The axis cross defaults reproduce today's look.
         assert!(state.axis.enabled);
+        assert!(!state.axis.overlay, "the native backend is authoritative");
         assert_eq!(state.axis_cross, state.axis.enabled);
         assert_eq!(state.axis.colors, AxisStyle::default().colors);
         assert_eq!(state.axis.opacity, 0.65);
@@ -616,6 +636,45 @@ mod tests {
     }
 
     #[test]
+    fn the_axis_overlay_is_a_provider_claim_not_geometry() {
+        let mut state = ViewState::default();
+        let request: ViewRequest =
+            serde_json::from_str(r#"{"axis": {"overlay": true}}"#).expect("the provider claim");
+        assert_eq!(
+            state.apply(&request).unwrap(),
+            "axis overlay on (native triad hidden)"
+        );
+        assert!(state.axis.overlay);
+        assert!(state.axis.enabled, "the user's switch is untouched");
+        assert!(state.axis_cross, "and so is its mirror");
+
+        // Geometry and the baked colours are untouched: the flag only hides the
+        // native drawing.
+        let geometry = AxisStyle::default();
+        assert_eq!(state.axis.colors, geometry.colors);
+        assert_eq!(state.axis.opacity, geometry.opacity);
+        assert_eq!(state.axis.length, geometry.length);
+        assert_eq!(state.axis.width, geometry.width);
+        assert_eq!(state.axis.origin, geometry.origin);
+        assert_eq!(state.axis.labels, geometry.labels);
+        assert_eq!(state.axis.ghost_alpha, geometry.ghost_alpha);
+
+        // Clearing the claim restores the native drawing.
+        let cleared: ViewRequest =
+            serde_json::from_str(r#"{"axis": {"overlay": false}}"#).unwrap();
+        assert_eq!(state.apply(&cleared).unwrap(), "axis overlay off (native triad)");
+        assert!(!state.axis.overlay);
+
+        // A bad field still rejects the whole request atomically, overlay included.
+        let bad: ViewRequest = serde_json::from_str(
+            r##"{"axis": {"overlay": true, "color_x": "not a colour"}}"##,
+        )
+        .unwrap();
+        assert!(state.apply(&bad).is_err());
+        assert!(!state.axis.overlay, "nothing was applied");
+    }
+
+    #[test]
     fn the_axis_cross_alias_still_works() {
         let mut state = ViewState::default();
         let alias = ViewRequest {
@@ -674,6 +733,7 @@ mod tests {
         .unwrap();
         assert_eq!(request.axis, Some(AxisRequest {
             enabled: Some(true),
+            overlay: None,
             color_x: Some("#f87171".to_string()),
             color_y: Some("#4ade80".to_string()),
             color_z: Some("#38bdf8".to_string()),

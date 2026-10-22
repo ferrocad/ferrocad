@@ -401,6 +401,36 @@ impl PyBSplineCurve {
         })
     }
 
+    /// Build the curve from control points:
+    /// `buildFromPoles(poles, periodic=False, degree=1, tolerance=1e-7,
+    /// checkRational=True)`.
+    ///
+    /// The tolerance and rational check are accepted for signature compatibility;
+    /// the kernel builder here only takes the poles, the degree and the periodic
+    /// flag. As upstream does, the degree is capped at `len(poles) - 1`.
+    #[pyo3(signature = (poles, periodic = false, degree = 1, tolerance = 1e-7, checkRational = true))]
+    fn buildFromPoles(
+        &self,
+        poles: &Bound<'_, PyAny>,
+        periodic: bool,
+        degree: i32,
+        tolerance: f64,
+        checkRational: bool,
+    ) -> PyResult<()> {
+        let _ = (tolerance, checkRational);
+        let parsed = parse_points(poles)?;
+        if parsed.len() < 2 {
+            return Err(OCCError::new_err(
+                "a B-spline needs at least two poles",
+            ));
+        }
+        let degree = degree.min(parsed.len() as i32 - 1);
+        *self.points.lock().unwrap_or_else(|e| e.into_inner()) = parsed;
+        *self.periodic.lock().unwrap_or_else(|e| e.into_inner()) = periodic;
+        *self.degree.lock().unwrap_or_else(|e| e.into_inner()) = Some(degree);
+        Ok(())
+    }
+
     /// Interpolate a B-spline through `points`.
     #[pyo3(signature = (points, PeriodicFlag = false, Tolerance = 1e-7))]
     fn interpolate(
@@ -949,6 +979,12 @@ fn wire_shapes(value: &Bound<'_, PyAny>) -> PyResult<Vec<Shape>> {
             .borrow()
             .shape()
             .ok_or_else(|| OCCError::new_err("a null shape cannot bound a face"))?;
+        // A face is not itself a boundary: `Part.makeFace(box.Faces[0])` means
+        // "reuse that face's boundary", so hand the kernel its outer wire.
+        // `outer_wire` only answers for faces, so wires keep their own shape.
+        if let Some(outer) = backend().outer_wire(&inner) {
+            return Ok(vec![outer]);
+        }
         return Ok(vec![inner]);
     }
     let mut shapes = Vec::new();

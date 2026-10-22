@@ -46,6 +46,13 @@ _EDITABLE_KINDS = {
 _SETTINGS_ROOT = "Settings"
 _SETTINGS_TYPE = "FerroCAD::Settings"
 
+# Presentation-wide preferences live under the view group, next to the other
+# settings the shell owns (a GPU adapter belongs to the shell, not a mod).
+_VIEW_PREFERENCES = "User parameter:BaseApp/Preferences/View"
+_GPU_ADAPTER_SETTING = "GpuAdapter"
+_GPU_ADAPTER_FORMS = '"auto", "backend:vulkan|gl|metal|dx12", or "adapter:<name substring>"'
+_GPU_BACKENDS = ("vulkan", "gl", "metal", "dx12")
+
 
 def _json(payload) -> str:
     return json.dumps(payload)
@@ -55,6 +62,73 @@ def hello() -> str:
     """A first console line, proving the interpreter is live."""
     version = ".".join(FreeCAD.Version()[:3])
     return f"hello from Python {version} — FreeCAD backend: {FreeCAD.backend}"
+
+
+def gpu_adapter() -> str:
+    """The persisted viewport GPU adapter setting (``auto`` by default).
+
+    The shell reads this when it creates the viewport, never per frame, and
+    parses it with ``ferrocad_wgpu::AdapterChoice``. It is a plain string rather
+    than JSON: the bridge extracts this one value directly. The value lives in
+    ``User parameter:BaseApp/Preferences/View`` so it survives a restart through
+    the same file-backed parameter store as the other view settings.
+    """
+    return FreeCAD.ParamGet(_VIEW_PREFERENCES).GetString(_GPU_ADAPTER_SETTING, "auto")
+
+
+def _gpu_adapter_ok(value: str) -> bool:
+    """Whether ``value`` has the shape the Rust parser accepts.
+
+    This is deliberately the same light grammar the parser enforces (a prefix
+    and a non-empty remainder), so the panel can report an obvious mistake
+    instead of persisting a value that would only fall back to ``auto`` on the
+    next boot. The Rust side remains the authority for the final choice.
+    """
+    lowered = value.lower()
+    if lowered == "auto":
+        return True
+    if lowered.startswith("backend:"):
+        return lowered[len("backend:"):].strip() in _GPU_BACKENDS
+    if lowered.startswith("adapter:"):
+        return bool(value[len("adapter:"):].strip())
+    return False
+
+
+def _gpu_adapter_error(value: str) -> str:
+    return f"invalid GPU adapter setting {value!r}; use {_GPU_ADAPTER_FORMS}"
+
+
+def set_gpu_adapter(payload_json: str) -> str:
+    """Persist the viewport's GPU adapter choice from the Dev Tools panel.
+
+    The payload is ``{"value": "adapter:Llvm"}``. The accepted grammar is
+    ``auto``, ``backend:vulkan|gl|metal|dx12``, or ``adapter:<name substring>``;
+    the value is trimmed and stored. A malformed payload, an empty value or an
+    unrecognised form is **reported, never raised**: the shell calls this across
+    the interpreter boundary and shows the error in the panel's status line.
+    Returns ``{"ok": bool, "value": str, "error": str}``.
+    """
+    try:
+        payload = json.loads(payload_json)
+        value = payload.get("value")
+    except Exception as exc:  # noqa: BLE001 - a bad payload is a result, not a crash
+        return _json({"ok": False, "value": "", "error": str(exc)})
+
+    if not isinstance(value, str):
+        return _json(
+            {
+                "ok": False,
+                "value": "",
+                "error": f"GPU adapter setting must be a string; use {_GPU_ADAPTER_FORMS}",
+            }
+        )
+
+    value = value.strip()
+    if not value or not _gpu_adapter_ok(value):
+        return _json({"ok": False, "value": "", "error": _gpu_adapter_error(value)})
+
+    FreeCAD.ParamGet(_VIEW_PREFERENCES).SetString(_GPU_ADAPTER_SETTING, value)
+    return _json({"ok": True, "value": value, "error": ""})
 
 
 def load_workbenches(dirs_json: str = "[]") -> str:
@@ -878,8 +952,10 @@ def provider_features() -> str:
 
     This is the Dev Tools providers panel: the registry already groups by
     feature, so the shell can render one row per feature and switch through
-    :func:`set_provider` without opening the mods dialog. The order is the
-    registry's registration order.
+    :func:`set_provider` without opening the mods dialog. Each backend also
+    carries the ``command`` it owns (``None`` when it has none), which is what
+    lets the shell disable the losing backend's command-list entry. The order is
+    the registry's registration order.
     """
     features = {}
     for manifest in FerroCADGui.providers():
@@ -888,6 +964,7 @@ def provider_features() -> str:
                 "backend": manifest["backend"],
                 "label": manifest["label"],
                 "active": bool(manifest["active"]),
+                "command": manifest["command"],
             }
         )
     return _json(

@@ -21,6 +21,10 @@ use gpui::{
     SharedString, Window, anchored, deferred, div, point, prelude::*, px, rgb, rgba,
 };
 
+use std::collections::HashMap;
+
+use ferrocad_wgpu::{AdapterChoice, AdapterSummary};
+
 use crate::commands::{self, CommandInfo, Surface};
 use crate::python::{AxisSummary, GridSummary, ProviderFeature};
 use crate::shell::{ACCENT, FG, MUTED, PANEL, PANEL_ALT, Shell, ShellModel, panel_header};
@@ -710,6 +714,157 @@ pub(crate) fn providers_panel(
     panel
 }
 
+/// The Dev Tools GPU panel (dev-only): the persisted adapter choice and the
+/// adapters this machine offers.
+///
+/// One `Auto` row plus one row per enumerated adapter; the persisted setting is
+/// accented and labelled `active`. A click runs a synthetic `ferrocad-gpu:<value>`
+/// id through [`Shell::run_command`](crate::shell::Shell), the same interception
+/// pattern as the provider rows. The list is enumerated by the shell when the
+/// window opens, never per frame.
+///
+/// The forced adapter belongs to the **image path**: zero-copy presentation builds
+/// its renderer on the window compositor's adapter, so the window adapter wins
+/// while zero-copy is active. The footer says so rather than implying otherwise.
+pub(crate) fn gpu_panel(
+    preference: &str,
+    adapters: &[AdapterSummary],
+    in_use: Option<&AdapterSummary>,
+    cx: &mut Context<Shell>,
+) -> impl IntoElement {
+    // An invalid stored value is what the viewport falls back from, so `Auto` is
+    // the honest active row in that case.
+    let parsed = AdapterChoice::parse(preference).ok();
+    let auto_active = parsed.is_none() || parsed.as_ref() == Some(&AdapterChoice::Auto);
+    let mut panel = div()
+        .id("dev-gpu")
+        .debug_selector(|| "gpu-panel".to_string())
+        .flex()
+        .flex_col()
+        .flex_shrink_0()
+        .max_h(px(200.))
+        .overflow_y_scroll()
+        .bg(rgb(PANEL))
+        .border_b_1()
+        .border_color(rgba(0xffffff14))
+        .child(panel_header("GPU adapter"))
+        .child(
+            div()
+                .px_2()
+                .py_1()
+                .text_xs()
+                .text_color(rgb(MUTED))
+                .child(format!("setting: {preference}")),
+        );
+
+    panel = panel.child(gpu_row(
+        "dev-gpu-auto",
+        "Auto",
+        "let wgpu pick",
+        auto_active,
+        "ferrocad-gpu:auto".to_string(),
+        cx,
+    ));
+
+    for (index, adapter) in adapters.iter().enumerate() {
+        let active = match parsed.as_ref() {
+            Some(AdapterChoice::Name(name)) => name.eq_ignore_ascii_case(&adapter.name),
+            _ => false,
+        };
+        let detail = format!(
+            "{} · {} · {}",
+            adapter.backend, adapter.device_type, adapter.driver
+        );
+        panel = panel.child(gpu_row(
+            &format!("dev-gpu-adapter-{index}"),
+            &adapter.name,
+            &detail,
+            active,
+            format!("ferrocad-gpu:adapter:{}", adapter.name),
+            cx,
+        ));
+    }
+
+    if adapters.is_empty() {
+        panel = panel.child(
+            div()
+                .px_2()
+                .py_1()
+                .text_xs()
+                .text_color(rgb(MUTED))
+                .child("No adapters enumerated"),
+        );
+    }
+
+    let in_use = match in_use {
+        Some(adapter) => format!("in use: {} ({})", adapter.name, adapter.backend),
+        None => "in use: no viewport".to_string(),
+    };
+    panel
+        .child(
+            div()
+                .px_2()
+                .py_1()
+                .text_xs()
+                .text_color(rgb(MUTED))
+                .debug_selector(|| "gpu-in-use".to_string())
+                .child(in_use),
+        )
+        .child(
+            div()
+                .px_2()
+                .py_1()
+                .text_xs()
+                .text_color(rgb(MUTED))
+                .child(
+                    "Click a row to select it. Zero-copy presentation keeps the window \
+                     adapter; the choice applies to the image path.",
+                ),
+        )
+}
+
+/// One GPU adapter row: label, backend/device/driver detail, and an `active` marker.
+fn gpu_row(
+    element_id: &str,
+    label: &str,
+    detail: &str,
+    active: bool,
+    action: String,
+    cx: &mut Context<Shell>,
+) -> impl IntoElement {
+    let element_id = element_id.to_string();
+    let selector = element_id.clone();
+    let active_selector = format!("{element_id}-active");
+    let mut row = div()
+        .id(SharedString::from(element_id))
+        .debug_selector(move || selector)
+        .flex()
+        .flex_col()
+        .px_2()
+        .py_1()
+        .text_xs()
+        .text_color(rgb(if active { FG } else { MUTED }))
+        .when(active, |el| el.bg(rgb(ACCENT)))
+        .cursor_pointer()
+        .hover(|style| style.bg(rgb(PANEL_ALT)))
+        .on_click(cx.listener(move |this, _event, _window, cx| {
+            this.run_command(&action, cx);
+        }))
+        .child(label.to_string());
+    if !detail.is_empty() {
+        row = row.child(div().text_color(rgb(MUTED)).child(detail.to_string()));
+    }
+    if active {
+        row = row.child(
+            div()
+                .debug_selector(move || active_selector)
+                .text_color(rgb(CHROME_ACTIVE))
+                .child("active"),
+        );
+    }
+    row
+}
+
 /// The settings command the gizmo provider ships (dev-only in the registry; the
 /// dock builds its row by hand because the control, not the command list, owns it).
 const GIZMO_SETTINGS: &str = "GizmoOverlay_Settings";
@@ -1009,10 +1164,39 @@ pub(crate) fn action_dock(
         .child(panel)
 }
 
+/// The command ids owned by a backend that is **not** the active one for its feature,
+/// mapped to the feature it serves.
+///
+/// This is the shell-side half of "one provider per feature": the registry already
+/// names the command each backend owns, so the losing backend's entry can be disabled
+/// in the Dev Tools command list instead of looking equally runnable. The registry is
+/// advisory — a mod that ignores `activeProvider` can still draw — so this is a UI
+/// filter, not an execution gate.
+pub(crate) fn inactive_provider_commands(features: &[ProviderFeature]) -> HashMap<String, String> {
+    let mut inactive = HashMap::new();
+    for feature in features {
+        for provider in &feature.providers {
+            if provider.active {
+                continue;
+            }
+            if let Some(command) = provider.command.as_deref() {
+                if !command.is_empty() {
+                    inactive.insert(command.to_string(), feature.feature.clone());
+                }
+            }
+        }
+    }
+    inactive
+}
+
 /// The Dev Tools command list: **every** registered command, vertically, with its
 /// live enablement and the surface that owns it (T6's safety net).
+///
+/// `inactive` comes from [`inactive_provider_commands`]: a command whose provider is
+/// not the active backend for its feature is shown but not runnable.
 pub(crate) fn command_list_panel(
     model: &ShellModel,
+    inactive: &HashMap<String, String>,
     cx: &mut Context<Shell>,
 ) -> impl IntoElement {
     let mut rows = div()
@@ -1025,7 +1209,10 @@ pub(crate) fn command_list_panel(
 
     for command in &model.commands {
         let id = command.id.clone();
-        let enabled = command.enabled;
+        let inactive_feature = inactive.get(&command.id).cloned();
+        // A command the losing provider owns stays listed (Dev Tools is the full
+        // registry) but loses its click and its normal ink.
+        let enabled = command.enabled && inactive_feature.is_none();
         let checked = command.checked;
         let mut row = div()
             .id(SharedString::from(format!("dev-command-{id}")))
@@ -1052,12 +1239,22 @@ pub(crate) fn command_list_panel(
                     .text_color(rgb(MUTED))
                     .child(command.surface().as_str()),
             );
-        if !command.tooltip.is_empty() {
-            let mut tip = command.tooltip.clone();
-            if !command.accel.is_empty() {
+        let mut tip = command.tooltip.clone();
+        if let Some(feature) = inactive_feature.as_deref() {
+            if !tip.is_empty() {
                 tip.push_str("  ·  ");
-                tip.push_str(&command.accel);
             }
+            tip.push_str(&format!(
+                "Inactive: another {feature} provider is selected (switch it in Providers)"
+            ));
+        }
+        if !command.accel.is_empty() {
+            if !tip.is_empty() {
+                tip.push_str("  ·  ");
+            }
+            tip.push_str(&command.accel);
+        }
+        if !tip.is_empty() {
             row = row.tooltip(move |_window, cx| {
                 cx.new(|_| CommandTooltip {
                     text: tip.clone().into(),
@@ -1137,11 +1334,13 @@ mod tests {
                     backend: "ferrocad".to_string(),
                     label: "FerroCAD (native)".to_string(),
                     active: true,
+                    command: None,
                 },
                 crate::python::GridProvider {
                     backend: "coin".to_string(),
                     label: "Coin (WGSL)".to_string(),
                     active: false,
+                    command: None,
                 },
             ],
         };
@@ -1194,11 +1393,13 @@ mod tests {
                     backend: "ferrocad".to_string(),
                     label: "FerroCAD (native)".to_string(),
                     active: true,
+                    command: None,
                 },
                 crate::python::GridProvider {
                     backend: "coin".to_string(),
                     label: "Coin (WGSL)".to_string(),
                     active: false,
+                    command: None,
                 },
             ],
         };
@@ -1229,11 +1430,13 @@ mod tests {
                 backend: "ferrocad".to_string(),
                 label: "FerroCAD (native)".to_string(),
                 active: true,
+                command: None,
             },
             crate::python::GridProvider {
                 backend: "coin".to_string(),
                 label: String::new(),
                 active: false,
+                command: None,
             },
         ];
         let rows = provider_rows("grid", &providers);
@@ -1255,6 +1458,55 @@ mod tests {
     #[test]
     fn no_providers_means_no_provider_rows() {
         assert!(provider_rows("axis", &[]).is_empty());
+    }
+
+    /// The losing backend's command is filtered out of the runnable set; the active
+    /// backend's command and a provider with no command contribute nothing.
+    #[test]
+    fn the_inactive_providers_command_is_filtered() {
+        let features = vec![
+            ProviderFeature {
+                feature: "grid".to_string(),
+                providers: vec![
+                    crate::python::GridProvider {
+                        backend: "ferrocad".to_string(),
+                        label: "FerroCAD (native)".to_string(),
+                        active: true,
+                        command: Some("GridOverlay_Settings".to_string()),
+                    },
+                    crate::python::GridProvider {
+                        backend: "coin".to_string(),
+                        label: "Coin (WGSL)".to_string(),
+                        active: false,
+                        command: Some("GridOverlayCoin_Settings".to_string()),
+                    },
+                ],
+            },
+            ProviderFeature {
+                feature: "gizmo".to_string(),
+                providers: vec![crate::python::GridProvider {
+                    backend: "ferrocad".to_string(),
+                    label: "FerroCAD (native)".to_string(),
+                    active: true,
+                    command: None,
+                }],
+            },
+        ];
+        let inactive = inactive_provider_commands(&features);
+        assert_eq!(
+            inactive.get("GridOverlayCoin_Settings").map(String::as_str),
+            Some("grid"),
+            "the losing backend's command names its feature"
+        );
+        assert!(
+            !inactive.contains_key("GridOverlay_Settings"),
+            "the active backend's command stays runnable"
+        );
+        assert_eq!(
+            inactive.len(),
+            1,
+            "a provider that owns no command contributes nothing"
+        );
     }
 
     /// The `Axes` caret lists the two backend settings rows and the reload command;

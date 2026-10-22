@@ -195,3 +195,8 @@ callback easy to drive from a script or a test.
 - The registry says which backend *should* be active. A third-party mod that
   ignores `activeProvider` can still do whatever it likes; the two grid mods
   are the reference implementations of the contract.
+- **The losing backend's command is disabled in Dev Tools.** `provider_features()`
+  carries each backend's `command` id; the shell dims that row and drops its click
+  while another backend owns the feature, so the command list does not offer two
+  equally-runnable "settings" entries. This is a UI filter only: the command stays
+  in the registry, and a mod's own `IsActive` is still what refuses to run.

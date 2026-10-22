@@ -13,6 +13,29 @@ imports are guarded, and the command reports a clear status instead of crashing
 when that API is absent. See
 [`docs/architecture/api-namespaces.md`](../../docs/architecture/api-namespaces.md).
 
+## Distribution and provenance
+
+`github.com/ferrocad/ferrocad-grid-overlay` distributes this mod as a standalone
+Mod folder; its last pushed revision is **`3b376cb`**. The in-tree copy here is the
+**maintained** one: it carries the S4 settings aliasing and registers the backend
+as `coin`, while the published revision still uses the older
+`ferrocad-grid-overlay` id. Treat the standalone repo as a mirror that lags this
+directory until a new revision is pushed; nothing is fetched at build time, so
+offline builds and the test suites read this copy.
+
+The WGSL has **one canonical copy**:
+`mods/GridOverlayCoin/Resources/grid_overlay.wgsl` (this directory). `ferrocad_wgpu`
+carries no duplicate — its naga and scene tests read this file from the workspace
+tree, so `mods/` is required to run them. The standalone repo mirrors the same file
+and it must stay byte-identical; check it with:
+
+```sh
+# from the workspace root; point the variable at your standalone checkout
+GRID_OVERLAY_REPO=/path/to/ferrocad-grid-overlay
+cmp mods/GridOverlayCoin/Resources/grid_overlay.wgsl \
+    "$GRID_OVERLAY_REPO/Resources/grid_overlay.wgsl"
+```
+
 ## What is preserved from upstream
 
 - The **tree**: `SoSwitch` → (`SoPickStyle` `UNPICKABLE`, `SoLightModel`
@@ -40,11 +63,10 @@ when that API is absent. See
 ## What changes, and why
 
 1. **WGSL instead of GLSL.** The upstream `grid.vert.glsl`/`grid.frag.glsl`
-   pair is replaced by the ported `Resources/grid_overlay.wgsl`. The file is
-   **byte-identical** to `crates/ferrocad_wgpu/shaders/grid_overlay.wgsl`,
-   which is the reference copy; this mod's copy is a duplicate because a mod
-   ships loose files and cannot reach into the crate at runtime. Keep the two
-   in sync (a test asserts byte equality).
+   pair is replaced by the ported `Resources/grid_overlay.wgsl`, which is the
+   **canonical** copy of the shader: `ferrocad_wgpu` carries no duplicate and its
+   naga tests read this file from the workspace tree. The standalone repo mirrors
+   it and must stay byte-identical.
 2. **A single-module shader on one stage.** WGSL has no per-stage modules, so
    the vertex stage carries the whole file and the fragment stage stays empty;
    the compiler concatenates the non-empty stage sources. `ProgramParameters`

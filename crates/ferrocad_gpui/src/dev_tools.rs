@@ -1,7 +1,8 @@
 //! The Dev Tools window (P0.5).
 //!
 //! A second, GIMP-toolbox-style window over the **same** [`Shell`] entity: the actions
-//! bar, the model inspector, the property editor and the console. It owns no model and
+//! bar, the provider and GPU switches, the model inspector, the property editor and
+//! the console. It owns no model and
 //! never boots an interpreter. The main window keeps the viewport, the status line, the
 //! transient tool strip and the modal dialogs, so a command run here opens its dialog
 //! over the canvas the user is looking at.

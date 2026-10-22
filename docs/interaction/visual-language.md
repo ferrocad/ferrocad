@@ -75,8 +75,10 @@ nothing on a surface: an entity renders opaque. The staged plan is:
    `ShapeItem` defaults to `GLASS_SHADE`.
 2. **V2b** — ✅ a two-tone material: `dot(normal, up) > 0.5` picks glass-top,
    otherwise glass-shade, while the existing directional light keeps intra-facet
-   gradation. Document entities set `GLASS_TOP` as the surface ink and
-   `GLASS_SHADE` as `StateSnapshot::shade`; the fragment shader selects between them.
+   gradation. **The world is Z-up**, so `up` is `(0, 0, 1)` — the same axis the
+   camera's `world_up` and the NaviCube use. Document entities set `GLASS_TOP` as the
+   surface ink and `GLASS_SHADE` as `StateSnapshot::shade`; the fragment shader selects
+   between them.
 3. **V2c** — true translucency needs an explicit ordered/wboit pass; deferred, and not
    a prerequisite for the look.
 
@@ -215,8 +217,9 @@ separate dash pattern to maintain.
 
 ## 4. Surfaces and lighting
 
-The scene shader is one directional light (`(0.4, 0.8, 0.6)`), ambient `0.25`, a
-two-sided `abs(dot(normal, light))`, and **no back-face culling**. That already gives
+The scene shader is one directional light (`(0.4, 0.6, 0.8)`, authored in the Z-up
+frame: mostly overhead, offset in +X/+Y so the four side facets separate), ambient
+`0.25`, a two-sided `abs(dot(normal, light))`, and **no back-face culling**. That gives
 top facets their brightest value and sides a darker one, which is the physical basis of
 the glass-top/glass-shade pair.
 

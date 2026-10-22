@@ -51,7 +51,9 @@ fn vs_main(input: VertexInput) -> VertexOutput {
 
 @fragment
 fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
-    let light_dir = normalize(vec3<f32>(0.4, 0.8, 0.6));
+    // The key light is authored in the Z-up world frame: mostly overhead, offset in
+    // +X/+Y so the four side facets still separate from each other.
+    let light_dir = normalize(vec3<f32>(0.4, 0.6, 0.8));
     let normal = normalize(input.normal);
     // Two-sided: culling is off for the POC, so accept either face orientation.
     let diffuse = abs(dot(normal, light_dir));
@@ -61,7 +63,9 @@ fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
     let albedo = globals.color * input.color * textureSample(shape_texture, shape_sampler, input.uv);
     // V2b: an up-facing facet uses the glass-top ink (`color`); every other facet
     // uses the glass-shade ink (`shade`). `shade.a == 0` keeps a single colour.
-    let up = dot(normal, vec3<f32>(0.0, 1.0, 0.0)) > 0.5;
+    // The world is Z-up (the camera's `world_up` and the NaviCube agree), so "up"
+    // is +Z, not +Y.
+    let up = dot(normal, vec3<f32>(0.0, 0.0, 1.0)) > 0.5;
     let base = select(globals.shade.rgb, albedo.rgb, up || globals.two_tone == 0u);
     let lit = base * (ambient + (1.0 - ambient) * diffuse);
     return vec4<f32>(lit, albedo.a);

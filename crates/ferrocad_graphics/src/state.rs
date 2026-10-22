@@ -26,8 +26,9 @@ use crate::geometry::Texture2;
 /// name. The renderer writes them into group 2, binding 1 (`Program`).
 ///
 /// The defaults are the grid overlay's FerroCAD look: the neutral grid ink at low
-/// alpha, a 1-unit base spacing, and shadows off (the shadow block is deferred; see
-/// `shaders/grid_overlay.wgsl`).
+/// alpha, a 1-unit base spacing, and shadows off (the shadow block is deferred). The
+/// grid shader itself is mod-owned:
+/// `mods/GridOverlayCoin/Resources/grid_overlay.wgsl`.
 ///
 /// The axis fields are a backward-compatible tail: the grid shader reads only the
 /// prefix, while `shaders/axis_overlay.wgsl` reads the whole block. X reuses

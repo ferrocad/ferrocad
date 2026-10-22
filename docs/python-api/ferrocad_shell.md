@@ -20,6 +20,7 @@ _Every entry point returns a JSON string._
 | `dialog_accept(payload_json: str) -> str` | Accept an open dialog: ``{"token": ..., "values": {...}}``. |
 | `dialog_cancel(token: str) -> str` | Cancel an open dialog and drop its token. |
 | `evaluate(code: str) -> str` | Evaluate one console line, capturing stdout/stderr and any traceback. |
+| `gpu_adapter() -> str` | The persisted viewport GPU adapter setting (``auto`` by default). |
 | `grid_summary() -> str` | The grid's provider and spacing for the shell's popover. |
 | `hello() -> str` | A first console line, proving the interpreter is live. |
 | `interaction(object_name: str, manipulator: str, action: str, element: str, values_json: str) -> str` | Apply a manipulator commit through the module that supports it. |
@@ -30,6 +31,7 @@ _Every entry point returns a JSON string._
 | `provider_features() -> str` | Every registered provider feature, with its backends and active flag. |
 | `provider_skin(payload_json: str) -> str` | One feature's provider-supplied WGSL source, for the shell to build. |
 | `run_command(name: str) -> str` | Invoke a workbench command by id; returns ``{ok, status?, dialog?, token?}``. |
+| `set_gpu_adapter(payload_json: str) -> str` | Persist the viewport's GPU adapter choice from the Dev Tools panel. |
 | `set_property(object_name: str, prop: str, text: str) -> str` | Set one property from its editor string, in a named transaction. |
 | `set_provider(payload_json: str) -> str` | Switch one feature's active provider from the shell's popover. |
 | `set_selection(pairs_json: str) -> str` | Replace ``FreeCADGui.Selection`` with the shell's selection. |

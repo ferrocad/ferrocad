@@ -169,6 +169,28 @@ its modal over the viewport, where the user is looking.
   registered feature, one button per backend, the active one accented. It switches
   through the same `Shell::activate_provider` path as the header popover rows, so
   the `Mods` dialog is no longer the user-facing parameters path.
+- A **GPU adapter** panel follows Providers (before the command list). It shows
+  `Auto` plus one row per adapter `ferrocad_wgpu::adapter::adapters()` enumerates,
+  with backend, device type and driver; the persisted row is accented and labelled
+  `active`, and the footer names the adapter the viewport renderer is on (or `no
+  viewport`). The list is enumerated once when the window opens, not per frame.
+  A click runs a synthetic `ferrocad-gpu:auto` / `ferrocad-gpu:adapter:<name>` id
+  through `Shell::run_command`, which persists the choice with
+  `ferrocad_shell.set_gpu_adapter` and recreates the viewport through the existing
+  `Shell::enable_viewport` path. That path replaces the viewport entity and its
+  event subscription, so running it a second time is safe.
+- **Adapter scope (honest limitation).** The setting selects the adapter of the
+  renderer the shell creates for the **image path**. Zero-copy presentation
+  (`crates/ferrocad_gpui/src/interop.rs`) builds its own renderer on the window
+  renderer's adapter at the first paint, and the window compositor keeps its own
+  device, so while zero-copy is active that adapter wins regardless of the
+  setting. The panel and the status line say so; this is a constraint, not a
+  claim that the window device follows the setting.
+- The stored value is
+  `User parameter:BaseApp/Preferences/View/GpuAdapter` (default `auto`). The
+  grammar is `auto`, `backend:vulkan|gl|metal|dx12`, or `adapter:<name
+  substring>`; an invalid persisted value falls back to `Auto` with a console
+  line rather than leaving the viewport without a renderer.
 - The menu is **title-bar chrome, not header chrome**. When the platform draws the
   decorations, `window_frame_with_leading` cannot put it in a client title bar, so it
   renders a slim `leading-bar` below the platform title bar instead of dropping the

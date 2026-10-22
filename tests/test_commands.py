@@ -228,7 +228,7 @@ class ProviderFeaturesTests(unittest.TestCase):
         self.assertIn(feature, features)
         self.assertEqual(
             features[feature]["providers"],
-            [{"backend": "a", "label": "A", "active": True}],
+            [{"backend": "a", "label": "A", "active": True, "command": None}],
         )
 
 

@@ -2,8 +2,9 @@
 
 The mod is the upstream add-on's Coin tree carried by FerroCAD's **pull** overlay
 bridge: enabling calls ``FerroCADGui.addOverlay(root)``, disabling removes it, and
-a parameter change re-binds (``_rebind``). The WGSL file in the mod is a duplicate
-of the crate's reference copy and must stay byte-identical.
+a parameter change re-binds (``_rebind``). The WGSL file in the mod is the
+**canonical** copy; ``ferrocad_wgpu`` carries no duplicate and its naga tests read
+this file.
 
 Headless (``FreeCAD.GuiUp == 0``): the test installs a small ``pivy.coin`` stub so
 the mod can build its tree without the Rust extension, then spies on the facade's
@@ -28,13 +29,6 @@ MOD_DIR = (
 )
 MOD_PATH = MOD_DIR / "InitGui.py"
 MOD_WGSL = MOD_DIR / "Resources" / "grid_overlay.wgsl"
-CRATE_WGSL = (
-    pathlib.Path(__file__).resolve().parents[1]
-    / "crates"
-    / "ferrocad_wgpu"
-    / "shaders"
-    / "grid_overlay.wgsl"
-)
 COMMAND = "GridOverlayCoin_Settings"
 KNOBS = {
     "enabled",
@@ -429,12 +423,26 @@ class GridOverlayCoinTests(unittest.TestCase):
             self.assertGreaterEqual(add.call_count, 2)
             self.assertGreaterEqual(remove.call_count, 1)
 
-    # -- the duplicated shader -----------------------------------------
-    def test_the_wgsl_copy_is_byte_identical_to_the_crate_reference(self):
-        self.assertEqual(
-            MOD_WGSL.read_bytes(),
-            CRATE_WGSL.read_bytes(),
-            "mods/GridOverlayCoin/Resources/grid_overlay.wgsl must mirror the crate",
+    # -- the shader -----------------------------------------------------
+    def test_the_wgsl_is_the_mods_own_copy(self):
+        """`mods/GridOverlayCoin` is the single home for the grid WGSL.
+
+        `ferrocad_wgpu` carries no duplicate (its naga tests read this file), so
+        there is nothing to compare against; this only guards the file the mod
+        must ship.
+        """
+        source = MOD_WGSL.read_text(encoding="utf-8")
+        self.assertIn("@vertex", source)
+        self.assertIn("@fragment", source)
+        self.assertFalse(
+            (
+                pathlib.Path(__file__).resolve().parents[1]
+                / "crates"
+                / "ferrocad_wgpu"
+                / "shaders"
+                / "grid_overlay.wgsl"
+            ).exists(),
+            "the crate must not re-vendor the mod-owned shader",
         )
 
 

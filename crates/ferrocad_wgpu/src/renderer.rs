@@ -22,6 +22,7 @@ use ferrocad_graphics::{
 use ferrocad_inventor::{ImageData, InventorView, ViewSpec};
 use ferrocad_types::{Matrix4, Vector3};
 
+use crate::adapter::{self, AdapterChoice, AdapterSummary};
 use crate::batch::GpuMesh;
 use crate::context::GpuContext;
 use crate::pick::{self, PickPipelines, PickTargets};
@@ -54,6 +55,8 @@ pub enum RenderError {
     },
     /// No GPU adapter could be found.
     Adapter,
+    /// A specifically requested adapter could not be resolved; the message names it.
+    AdapterUnavailable(String),
     /// The adapter could not provide a device.
     Device,
     /// A frame could not be read back to CPU memory.
@@ -71,6 +74,7 @@ impl fmt::Display for RenderError {
                 )
             }
             RenderError::Adapter => write!(f, "no suitable GPU adapter found"),
+            RenderError::AdapterUnavailable(reason) => write!(f, "{reason}"),
             RenderError::Device => write!(f, "could not create a GPU device"),
             RenderError::Readback(reason) => write!(f, "readback failed: {reason}"),
         }
@@ -213,14 +217,27 @@ impl WgpuRenderer {
         }
     }
 
-    /// Create a renderer on its own freshly-requested device.
+    /// Create a renderer on its own freshly-requested device (the default adapter).
     ///
     /// Handy for the image path, where the host (gpui) does not hand out its device.
     /// Picks 4× MSAA when the adapter supports it, else 1×.
     pub fn new_default(size: [u32; 2]) -> Result<Self, RenderError> {
-        let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());
-        let adapter = block_on(instance.request_adapter(&wgpu::RequestAdapterOptions::default()))
-            .map_err(|_| RenderError::Adapter)?;
+        Self::new_with_choice(size, &AdapterChoice::Auto)
+    }
+
+    /// Create a renderer on its own device from the chosen adapter.
+    ///
+    /// [`AdapterChoice::Auto`] is exactly [`new_default`](Self::new_default)'s old
+    /// behaviour. A forced backend or name that the machine cannot satisfy is
+    /// reported as [`RenderError::AdapterUnavailable`].
+    pub fn new_with_choice(
+        size: [u32; 2],
+        choice: &AdapterChoice,
+    ) -> Result<Self, RenderError> {
+        let adapter = adapter::request(choice).map_err(|reason| match choice {
+            AdapterChoice::Auto => RenderError::Adapter,
+            _ => RenderError::AdapterUnavailable(reason),
+        })?;
         let (device, queue) = block_on(adapter.request_device(&wgpu::DeviceDescriptor {
             label: Some("ferrocad"),
             required_features: wgpu::Features::empty(),
@@ -240,6 +257,15 @@ impl WgpuRenderer {
     /// The GPU context this renderer owns.
     pub fn context(&self) -> &GpuContext {
         &self.context
+    }
+
+    /// The adapter this renderer actually runs on.
+    ///
+    /// On the image path this is the adapter the choice selected. Zero-copy
+    /// presentation builds a separate renderer on the window's adapter, so this
+    /// reports the image-path renderer's adapter even while zero-copy presents.
+    pub fn adapter_info(&self) -> AdapterSummary {
+        AdapterSummary::from(self.context.device.adapter_info())
     }
 
     /// Resize the offscreen target. No-op when `size` is unchanged.
@@ -1257,7 +1283,7 @@ fn create_depth(
 }
 
 /// Drive a future to completion on the current thread (device init only).
-fn block_on<F: std::future::Future>(future: F) -> F::Output {
+pub(crate) fn block_on<F: std::future::Future>(future: F) -> F::Output {
     use std::task::{Context, Poll, Waker};
 
     let mut future = std::pin::pin!(future);
@@ -1400,7 +1426,7 @@ mod tests {
         queue.packets.push(make(
             1,
             vec![[-1.0, -1.0, 0.5], [0.0, -1.0, 0.5], [0.0, 1.0, 0.5]],
-            [0.0, 1.0, 0.0],
+            [0.0, 0.0, 1.0],
         ));
         queue.packets.push(make(
             2,
@@ -2225,7 +2251,7 @@ mod tests {
             children: vec![
                 leaf(NodeKind::ShaderStage(ShaderStage {
                     kind: ShaderStageKind::Vertex,
-                    source: Some(crate::GRID_OVERLAY_WGSL.to_owned()),
+                    source: Some(crate::grid_overlay_source()),
                     source_program: None,
                 })),
                 leaf(NodeKind::ShaderStage(ShaderStage {

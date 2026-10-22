@@ -174,6 +174,13 @@ pub struct GridProvider {
     pub label: String,
     #[serde(default)]
     pub active: bool,
+    /// The registry id this backend owns (`None` when it offers no command).
+    ///
+    /// The Dev Tools command list uses it to disable the losing backend's entry,
+    /// so two same-purpose commands do not look equally runnable. This is a UI
+    /// filter only: the registry is advisory and cannot stop a mod from drawing.
+    #[serde(default)]
+    pub command: Option<String>,
 }
 
 /// The axis cross's active provider and geometry, for the header popover.
@@ -207,6 +214,19 @@ pub struct ProviderFeature {
     pub feature: String,
     #[serde(default)]
     pub providers: Vec<GridProvider>,
+}
+
+/// The result of persisting a GPU adapter preference.
+#[derive(Debug, Clone, Default, Deserialize)]
+pub struct GpuPreferenceOutcome {
+    /// Whether the value was accepted and stored.
+    pub ok: bool,
+    /// The stored value (empty when rejected).
+    #[serde(default)]
+    pub value: String,
+    /// Why the value was rejected; empty on success.
+    #[serde(default)]
+    pub error: String,
 }
 
 /// Locate the `python/` facade directory (the one containing `FreeCAD/`).
@@ -494,6 +514,33 @@ pub fn axis_summary() -> Result<AxisSummary, String> {
 /// Every registered provider feature for the Dev Tools providers panel.
 pub fn provider_features() -> Result<Vec<ProviderFeature>, String> {
     call_json("provider_features", None)
+}
+
+/// The persisted viewport GPU adapter setting.
+///
+/// The Python helper returns the stored string itself (not JSON), so this
+/// extracts it directly instead of going through [`call_json`]. The shell reads
+/// it when it creates the viewport and when the Dev Tools panel opens.
+pub fn gpu_adapter() -> Result<String, String> {
+    Python::with_gil(|py| {
+        let module = py.import(entry_module()).map_err(|e| e.to_string())?;
+        module
+            .getattr("gpu_adapter")
+            .map_err(|e| e.to_string())?
+            .call0()
+            .map_err(|e| e.to_string())?
+            .extract::<String>()
+            .map_err(|e| e.to_string())
+    })
+}
+
+/// Persist the viewport GPU adapter setting and report the outcome.
+///
+/// The payload is `{"value": "..."}`; a rejected value comes back as an
+/// outcome with `ok: false`, never as a bridge error, so the shell can show it.
+pub fn set_gpu_adapter(value: &str) -> Result<GpuPreferenceOutcome, String> {
+    let payload = serde_json::json!({ "value": value }).to_string();
+    call_json("set_gpu_adapter", Some(&payload))
 }
 
 /// Run a workbench command by id.

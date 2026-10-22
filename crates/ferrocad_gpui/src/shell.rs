@@ -23,7 +23,7 @@ use ferrocad_stage::{
 };
 use ferrocad_viewport::scene;
 use ferrocad_viewport::{HoverReport, InventorViewport, SelectionEvent, ViewportEvent};
-use ferrocad_wgpu::WgpuRenderer;
+use ferrocad_wgpu::{AdapterChoice, AdapterSummary, WgpuRenderer};
 use ferrocad_widgets::window_chrome::window_frame_with_leading;
 use ferrocad_widgets::{SubmitEvent, TextAreaState, TextInput};
 
@@ -179,6 +179,12 @@ pub struct Shell {
     /// Every provider feature for the Dev Tools providers panel, refreshed when the
     /// window opens and after a switch. `None` until the first open.
     provider_features: Option<Vec<crate::python::ProviderFeature>>,
+    /// The persisted viewport GPU setting for the Dev Tools GPU panel. `None` until
+    /// the window is opened or a viewport is created.
+    gpu_preference: Option<String>,
+    /// Every adapter the machine offers, for the GPU panel. Enumerated when the Dev
+    /// Tools window opens, never per frame. `None` until the first open.
+    gpu_adapters: Option<Vec<AdapterSummary>>,
     /// The modeless settings card, opened for a `Settings/<Feature>` node.
     settings_card: Option<SettingsCard>,
     /// The Dev Tools second window, if one has been opened. The window owns no model:
@@ -315,6 +321,8 @@ impl Shell {
             grid_summary: None,
             axis_summary: None,
             provider_features: None,
+            gpu_preference: None,
+            gpu_adapters: None,
             settings_card: None,
             dev_tools: None,
             _viewport_events: None,
@@ -369,8 +377,10 @@ impl Shell {
 
     /// Create the Dev Tools window around this shell entity.
     fn open_dev_tools(&mut self, cx: &mut Context<Self>) -> String {
-        // The providers panel reads the registry once per open, not per frame.
+        // The providers and GPU panels read their state once per open, not per frame.
         self.provider_features = python::provider_features().ok();
+        self.gpu_preference = Some(python::gpu_adapter().unwrap_or_else(|_| "auto".to_string()));
+        self.gpu_adapters = Some(ferrocad_wgpu::adapter::adapters());
         let shell = cx.entity();
         cx.defer(move |cx| {
             let handle = cx.open_window(crate::dev_tools::window_options(), {
@@ -412,6 +422,28 @@ impl Shell {
     /// Empty until the Dev Tools window is opened (or a switch refreshes it).
     pub(crate) fn provider_features(&self) -> &[crate::python::ProviderFeature] {
         self.provider_features.as_deref().unwrap_or(&[])
+    }
+
+    /// The persisted GPU setting, for the Dev Tools GPU panel's selected row.
+    /// Empty until the window opens or a viewport is created.
+    pub(crate) fn gpu_setting(&self) -> &str {
+        self.gpu_preference.as_deref().unwrap_or("auto")
+    }
+
+    /// Every adapter the machine offers, for the Dev Tools GPU panel.
+    /// Empty until the Dev Tools window has been opened once.
+    pub(crate) fn gpu_adapters(&self) -> &[AdapterSummary] {
+        self.gpu_adapters.as_deref().unwrap_or(&[])
+    }
+
+    /// The adapter the viewport's own renderer runs on, if there is a viewport.
+    ///
+    /// Zero-copy presentation builds a separate renderer on the window's adapter;
+    /// this reports the image-path renderer's adapter (see the panel's note).
+    pub(crate) fn in_use_adapter(&self, cx: &App) -> Option<AdapterSummary> {
+        self.viewport
+            .as_ref()
+            .map(|viewport| viewport.read(cx).view().adapter_info())
     }
 
     /// Whether the popover keyed `key` is the open one.
@@ -588,11 +620,39 @@ impl Shell {
         false
     }
 
+    /// The persisted adapter choice, falling back to [`AdapterChoice::Auto`] with a
+    /// console line when the stored value is malformed.
+    ///
+    /// The setting is read across the Python bridge (file-backed preferences); a
+    /// parse failure is a result the user can see and fix, not a fatal error.
+    fn stored_gpu_choice(&mut self, cx: &mut Context<Self>) -> AdapterChoice {
+        let value = match python::gpu_adapter() {
+            Ok(value) => value,
+            Err(error) => {
+                self.console_line(format!("viewport GPU: {error}; using auto"), cx);
+                return AdapterChoice::Auto;
+            }
+        };
+        // Keep the panel's selected row in step with the persisted value.
+        self.gpu_preference = Some(value.clone());
+        match AdapterChoice::parse(&value) {
+            Ok(choice) => choice,
+            Err(error) => {
+                self.console_line(format!("viewport GPU: {error}; using auto"), cx);
+                AdapterChoice::Auto
+            }
+        }
+    }
+
     /// Create the 3D viewport, best-effort: it needs a GPU.
     ///
     /// Called by the app after `from_model` (not by `from_model` itself), so headless
     /// tests stay GPU-free and render the placeholder. If no adapter is available the
     /// pane keeps the placeholder too.
+    ///
+    /// The adapter comes from the persisted setting (`Adapters` panel); a malformed
+    /// value falls back to **Auto** with a console line. The window compositor keeps
+    /// its own adapter, so a forced choice only reaches the image path.
     ///
     /// The scene is built the workbench way — a `from pivy import coin` script
     /// extracted into a [`ferrocad_inventor::Scene`] ([`python::inventor_scene`]) —
@@ -601,8 +661,17 @@ impl Shell {
         // A bootstrap size only: `InventorViewport` resizes the render target and the
         // camera to its element's physical size on the first frame (see `sync_size`).
         const SIZE: [u32; 2] = [640, 480];
-        let Ok(renderer) = WgpuRenderer::new_default(SIZE) else {
-            return;
+        let choice = self.stored_gpu_choice(cx);
+        let renderer = match WgpuRenderer::new_with_choice(SIZE, &choice) {
+            Ok(renderer) => renderer,
+            Err(error) => {
+                // Auto keeps the old silent "no GPU" path; an explicit choice that
+                // cannot be satisfied is worth reporting.
+                if choice != AdapterChoice::Auto {
+                    self.console_line(format!("viewport GPU: {error}"), cx);
+                }
+                return;
+            }
         };
         let camera = scene::sample_camera(Viewport::new(SIZE, 1.0));
 
@@ -1041,6 +1110,54 @@ impl Shell {
         enabled.then(|| id.clone())
     }
 
+    /// Persist a GPU adapter row from the Dev Tools panel and rebuild the viewport.
+    ///
+    /// The row id is synthetic (`ferrocad-gpu:auto`, `ferrocad-gpu:adapter:<name>`),
+    /// so it is intercepted before the registry dispatch. The value is validated by
+    /// the Python helper and then applied by recreating the viewport through
+    /// [`enable_viewport`](Self::enable_viewport): that path replaces `self.viewport`
+    /// and its event subscription, so running it a second time is safe.
+    ///
+    /// The window compositor keeps its own adapter; the choice only reaches the
+    /// image path while zero-copy presentation is active.
+    fn select_gpu_setting(&mut self, value: &str, cx: &mut Context<Self>) {
+        let outcome = match crate::python::set_gpu_adapter(value) {
+            Ok(outcome) => outcome,
+            Err(error) => {
+                let status = format!("viewport GPU: {error}");
+                self.model.lock().unwrap().status = status.clone();
+                self.console_line(status, cx);
+                cx.notify();
+                return;
+            }
+        };
+
+        if !outcome.ok {
+            let status = if outcome.error.is_empty() {
+                format!("viewport GPU: {value} rejected")
+            } else {
+                format!("viewport GPU: {}", outcome.error)
+            };
+            self.model.lock().unwrap().status = status.clone();
+            self.console_line(status, cx);
+            cx.notify();
+            return;
+        }
+
+        self.gpu_preference = Some(outcome.value.clone());
+        // Recreate the viewport so the new renderer is the one drawn. This is the
+        // same path boot uses and replaces the entity and its subscription.
+        self.enable_viewport(cx);
+
+        let status = format!(
+            "viewport GPU: {} (zero-copy keeps the window adapter)",
+            outcome.value
+        );
+        self.model.lock().unwrap().status = status.clone();
+        self.console_line(status, cx);
+        cx.notify();
+    }
+
     /// Switch a feature's active provider from a header popover row or the Dev Tools
     /// providers panel.
     ///
@@ -1146,6 +1263,12 @@ impl Shell {
                 self.activate_provider(feature, backend, cx);
                 return;
             }
+        }
+        // A GPU adapter row is the same kind of generated chrome: the id names the
+        // persisted value (`auto` or `adapter:<name>`) the row represents.
+        if let Some(value) = id.strip_prefix("ferrocad-gpu:") {
+            self.select_gpu_setting(value, cx);
+            return;
         }
         // The Dev Tools toggle is shell chrome, not a workbench action: the window can
         // only exist when there is a GPUI app. The Python command stays registered so
@@ -2482,6 +2605,11 @@ pub(crate) fn dev_tools_body(
     cx: &mut Context<Shell>,
 ) -> AnyElement {
     let model = shell.snapshot();
+    // The adapter is read from the viewport entity once per frame; the list itself
+    // is cached when the window opens.
+    let in_use = shell.in_use_adapter(cx);
+    // The commands the losing provider owns: listed, but not runnable (P0 provider UX).
+    let inactive = crate::chrome::inactive_provider_commands(shell.provider_features());
     div()
         .id("dev-tools-root")
         .flex()
@@ -2500,7 +2628,13 @@ pub(crate) fn dev_tools_body(
             }
         }))
         .child(crate::chrome::providers_panel(shell.provider_features(), cx))
-        .child(crate::chrome::command_list_panel(&model, cx))
+        .child(crate::chrome::gpu_panel(
+            shell.gpu_setting(),
+            shell.gpu_adapters(),
+            in_use.as_ref(),
+            cx,
+        ))
+        .child(crate::chrome::command_list_panel(&model, &inactive, cx))
         .child(tree_panel(&model, cx))
         .child(properties_panel(shell, &model, window, Some("Properties"), cx))
         .child(console_panel(&shell.console, cx))
@@ -3669,6 +3803,16 @@ for group in legacy:
                 .any(|provider| provider.backend == "coin" && provider.active),
             "the Dev Tools switch follows the registry"
         );
+        // The losing backend's command stays listed but is not runnable; the switch is
+        // the only way to reach it, so the command list must follow the active backend.
+        let inactive = cx.update(|_window, cx| {
+            crate::chrome::inactive_provider_commands(shell.read(cx).provider_features())
+        });
+        assert!(
+            inactive.contains_key("GridOverlay_Settings"),
+            "the native grid command is inactive once coin owns the feature"
+        );
+        assert!(!inactive.contains_key("GridOverlayCoin_Settings"));
 
         // Leave the shared interpreter on the default for the other tests.
         cx.update(|_window, cx| {
@@ -3676,6 +3820,154 @@ for group in legacy:
                 shell.run_command("ferrocad-provider:grid:ferrocad", cx)
             })
         });
+        let inactive = cx.update(|_window, cx| {
+            crate::chrome::inactive_provider_commands(shell.read(cx).provider_features())
+        });
+        assert!(inactive.contains_key("GridOverlayCoin_Settings"));
+        assert!(!inactive.contains_key("GridOverlay_Settings"));
+    }
+
+    /// Write the GPU preference through the live facade, bypassing the bridge's
+    /// validation (so a test can store a deliberately malformed value).
+    fn write_gpu_preference(value: &str) {
+        let script = format!(
+            "import FreeCAD\nFreeCAD.ParamGet('User parameter:BaseApp/Preferences/View')\
+             .SetString('GpuAdapter', {value:?})"
+        );
+        let result = crate::python::evaluate(&script).expect("write the GPU preference");
+        assert!(result.ok, "{}", result.output);
+    }
+
+    /// The Dev Tools GPU panel lists `Auto` plus every adapter and marks the
+    /// persisted choice, using synthetic adapters so the test needs no GPU.
+    #[gpui::test]
+    fn the_dev_tools_gpu_panel_marks_the_active_row(cx: &mut TestAppContext) {
+        let _guard = crate::PYTHON_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let model = Shell::boot().expect("boot shell");
+        let window = cx.update(|cx| {
+            let model = model.clone();
+            cx.open_window(Default::default(), move |_window, cx| {
+                cx.new(|cx| Shell::from_model(model.clone(), cx))
+            })
+            .unwrap()
+        });
+        let mut cx = VisualTestContext::from_window(window.into(), cx);
+        let shell: Entity<Shell> = window.root(&mut cx).unwrap();
+        let mut dev_cx = open_dev_tools(&mut cx, &shell);
+
+        cx.update(|_window, cx| {
+            shell.update(cx, |shell, _| {
+                shell.gpu_preference = Some("adapter:Llvm".to_string());
+                shell.gpu_adapters = Some(vec![
+                    AdapterSummary {
+                        name: "Llvm".to_string(),
+                        backend: "vulkan".to_string(),
+                        device_type: "cpu".to_string(),
+                        driver: "llvmpipe".to_string(),
+                    },
+                    AdapterSummary {
+                        name: "Discrete".to_string(),
+                        backend: "vulkan".to_string(),
+                        device_type: "discrete".to_string(),
+                        driver: "mesa".to_string(),
+                    },
+                ]);
+            })
+        });
+        dev_cx.update(|window, cx| {
+            let _ = window.draw(cx);
+        });
+
+        assert!(
+            dev_cx.debug_bounds("gpu-panel").is_some(),
+            "the GPU panel is between Providers and Commands"
+        );
+        assert!(dev_cx.debug_bounds("dev-gpu-auto").is_some());
+        assert!(dev_cx.debug_bounds("dev-gpu-adapter-0").is_some());
+        assert!(dev_cx.debug_bounds("dev-gpu-adapter-1").is_some());
+        assert!(
+            dev_cx.debug_bounds("dev-gpu-adapter-0-active").is_some(),
+            "the persisted adapter is marked active"
+        );
+        assert!(dev_cx.debug_bounds("dev-gpu-adapter-1-active").is_none());
+        assert!(dev_cx.debug_bounds("dev-gpu-auto-active").is_none());
+        assert!(
+            dev_cx.debug_bounds("gpu-in-use").is_some(),
+            "the panel reports that there is no viewport"
+        );
+    }
+
+    /// A malformed persisted value falls back to `Auto` and says why in the console.
+    #[gpui::test]
+    fn an_unknown_gpu_setting_falls_back_to_auto(cx: &mut TestAppContext) {
+        let _guard = crate::PYTHON_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let model = Shell::boot().expect("boot shell");
+        write_gpu_preference("not-a-real-form");
+        let window = cx.update(|cx| {
+            let model = model.clone();
+            cx.open_window(Default::default(), move |_window, cx| {
+                cx.new(|cx| Shell::from_model(model.clone(), cx))
+            })
+            .unwrap()
+        });
+        let mut cx = VisualTestContext::from_window(window.into(), cx);
+        let shell: Entity<Shell> = window.root(&mut cx).unwrap();
+
+        let (choice, console) = cx.update(|_window, cx| {
+            shell.update(cx, |shell, cx| {
+                let choice = shell.stored_gpu_choice(cx);
+                let console = shell.model.lock().unwrap().console.clone();
+                (choice, console)
+            })
+        });
+        assert_eq!(choice, AdapterChoice::Auto);
+        assert!(
+            console
+                .iter()
+                .any(|line| line.contains("viewport GPU") && line.contains("using auto")),
+            "console: {console:?}"
+        );
+
+        write_gpu_preference("auto");
+    }
+
+    /// Selecting a row persists its value and recreates the viewport. Skipped where
+    /// the machine offers no adapter, because the recreate path needs one.
+    #[gpui::test]
+    fn a_gpu_panel_row_persists_the_choice(cx: &mut TestAppContext) {
+        let _guard = crate::PYTHON_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let model = Shell::boot().expect("boot shell");
+        let adapters = ferrocad_wgpu::adapter::adapters();
+        let Some(adapter) = adapters.first() else {
+            return;
+        };
+        let setting = format!("adapter:{}", adapter.name);
+
+        let window = cx.update(|cx| {
+            let model = model.clone();
+            cx.open_window(Default::default(), move |_window, cx| {
+                cx.new(|cx| Shell::from_model(model.clone(), cx))
+            })
+            .unwrap()
+        });
+        let mut cx = VisualTestContext::from_window(window.into(), cx);
+        let shell: Entity<Shell> = window.root(&mut cx).unwrap();
+
+        cx.update(|_window, cx| {
+            shell.update(cx, |shell, cx| {
+                shell.run_command(&format!("ferrocad-gpu:{setting}"), cx)
+            })
+        });
+        assert_eq!(
+            crate::python::gpu_adapter().expect("the stored setting"),
+            setting
+        );
+        assert_eq!(
+            model.lock().unwrap().status,
+            format!("viewport GPU: {setting} (zero-copy keeps the window adapter)")
+        );
+
+        write_gpu_preference("auto");
     }
 
     /// P0.5/D4: `Dev_ToggleTools` is registered and its headless path reports a status

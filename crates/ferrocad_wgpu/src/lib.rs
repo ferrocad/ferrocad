@@ -14,6 +14,7 @@
 //! - [`WgpuRenderer`] — encodes a frame: uploads [`mesh_id`]/[`generation`] cache
 //!   misses, binds each packet's [`StateSnapshot`] and draws it.
 //! - [`context`] — the [`GpuContext`]: the device/queue the renderer owns.
+//! - [`adapter`] — which adapter the renderer uses and what the machine offers.
 //! - [`batch`] — uploading fresh geometry into GPU meshes.
 //! - [`pipeline`] — the WGSL render pipelines (opaque, transparent, lines, points).
 //! - [`program`] — drawing an authored shader program: group 2 (`Frame`/`Program`), the
@@ -22,18 +23,21 @@
 //!   state in one allocation).
 //! - [`pick`] — the g-buffer picking pass that maps a pixel back to a pick id.
 //!
-//! [`GRID_OVERLAY_WGSL`] is the WGSL port of the grid overlay's GLSL (see
-//! `docs/workbenches/grid-overlay-plan.md` §3.4). It is drawn as a program packet's module (G4): a
-//! packet carrying a [`ShaderProgram`](ferrocad_graphics::ShaderProgram) replaces the
-//! scene pipeline with a pipeline built from that source. [`AXIS_OVERLAY_WGSL`] is
-//! the axis-cross sibling: the same fixed `Frame`/`Program` binding, with the
-//! backward-compatible axis tail appended to the `Program` block.
+//! The grid overlay's WGSL (the port of the add-on's GLSL; see
+//! `docs/workbenches/grid-overlay-plan.md` §3.4) is **mod-owned**: it ships in
+//! `mods/GridOverlayCoin/Resources/grid_overlay.wgsl` and reaches the renderer as a
+//! program packet's module (G4). A packet carrying a
+//! [`ShaderProgram`](ferrocad_graphics::ShaderProgram) replaces the scene pipeline
+//! with a pipeline built from that source. This crate exports no copy: its naga tests
+//! read and validate the mod's file, so the workspace's `mods/` tree is required to
+//! run them.
 //!
-//! Unlike those reference copies, the gizmo skin is **mod-owned**: it ships in
-//! `mods/GizmoOverlayShader/Resources/gizmo_skin.wgsl` and reaches the shell through
-//! the provider registry. This crate therefore exports no skin constant; its tests
-//! read and validate the mod's copy from the workspace tree, so `mods/` is required
-//! to run them.
+//! [`AXIS_OVERLAY_WGSL`] is the axis-cross sibling and is still crate-owned: the same
+//! fixed `Frame`/`Program` binding, with the backward-compatible axis tail appended to
+//! the `Program` block.
+//!
+//! The gizmo skin is mod-owned on the same terms (`mods/GizmoOverlayShader/`); this
+//! crate exports no skin constant either.
 //!
 //! [`DrawBatch`]: ferrocad_graphics::DrawBatch
 //! [`InventorView`]: ferrocad_inventor::InventorView
@@ -42,6 +46,7 @@
 //! [`generation`]: ferrocad_graphics::Generation
 //! [`StateSnapshot`]: ferrocad_graphics::StateSnapshot
 
+pub mod adapter;
 pub mod batch;
 pub mod context;
 pub mod pick;
@@ -52,17 +57,27 @@ pub mod textures;
 pub mod trace;
 pub mod uniforms;
 
+pub use adapter::{AdapterChoice, AdapterSummary};
 pub use context::GpuContext;
 pub use renderer::{RenderError, WgpuRenderer};
 pub use trace::Tone;
 
-/// The grid overlay's WGSL module (group 2: `Frame` at binding 0, `Program` at
-/// binding 1; entry points `vs_main` / `fs_main`).
-pub const GRID_OVERLAY_WGSL: &str = include_str!("../shaders/grid_overlay.wgsl");
-
 /// The axis-cross overlay's WGSL module. It declares the extended `Program`
 /// block (the grid prefix plus four axis `vec4`s) and the same entry points.
 pub const AXIS_OVERLAY_WGSL: &str = include_str!("../shaders/axis_overlay.wgsl");
+
+/// The mod-owned grid overlay source, for the tests that parse and draw it.
+///
+/// `mods/GridOverlayCoin/Resources/grid_overlay.wgsl` is the single home for this
+/// shader (a mod ships loose files, and a worked example belongs with the mod). This
+/// crate carries no copy, so the naga and scene tests read the workspace tree.
+#[cfg(test)]
+pub(crate) fn grid_overlay_source() -> String {
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../mods/GridOverlayCoin/Resources/grid_overlay.wgsl");
+    std::fs::read_to_string(&path)
+        .unwrap_or_else(|error| panic!("the grid mod must ship {}: {error}", path.display()))
+}
 
 #[cfg(test)]
 mod tests {
@@ -70,14 +85,15 @@ mod tests {
 
     /// Parse and validate the grid overlay module without a GPU.
     fn validated_grid_overlay() -> naga::Module {
-        let module = naga::front::wgsl::parse_str(GRID_OVERLAY_WGSL)
-            .expect("grid_overlay.wgsl should parse as WGSL");
+        let source = grid_overlay_source();
+        let module = naga::front::wgsl::parse_str(&source)
+            .expect("the mod's grid_overlay.wgsl should parse as WGSL");
         naga::valid::Validator::new(
             naga::valid::ValidationFlags::all(),
             naga::valid::Capabilities::all(),
         )
         .validate(&module)
-        .expect("grid_overlay.wgsl should validate");
+        .expect("the mod's grid_overlay.wgsl should validate");
         module
     }
 
@@ -265,11 +281,10 @@ mod tests {
 
     /// The mod-owned gizmo skin source.
     ///
-    /// The gizmo skin is **mod-owned** (unlike [`GRID_OVERLAY_WGSL`] and
-    /// [`AXIS_OVERLAY_WGSL`], whose reference copies exist because those mods ship
-    /// loose files): the shader ships with `GizmoOverlayShader` and reaches the shell
-    /// through the provider registry. These tests validate the mod's copy, so the
-    /// workspace's `mods/` tree is required to run them.
+    /// Like the grid overlay, the gizmo skin is **mod-owned**: the shader ships with
+    /// `GizmoOverlayShader` and reaches the shell through the provider registry. These
+    /// tests validate the mod's copy, so the workspace's `mods/` tree is required to run
+    /// them.
     fn gizmo_skin_source() -> String {
         let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("../../mods/GizmoOverlayShader/Resources/gizmo_skin.wgsl");
@@ -369,7 +384,7 @@ mod tests {
             kind: ShaderStageKind::Vertex,
             // A single-module WGSL file: the vertex stage holds it, the fragment
             // stage stays empty (WGSL has no per-stage modules).
-            source: Some(GRID_OVERLAY_WGSL.to_owned()),
+            source: Some(grid_overlay_source()),
             source_program: None,
         }));
         let fragment = Node {
@@ -418,7 +433,11 @@ mod tests {
             .program
             .as_ref()
             .expect("the packet carries a program");
-        assert_eq!(program.source(), GRID_OVERLAY_WGSL, "the WGSL round-trips");
+        assert_eq!(
+            program.source(),
+            grid_overlay_source(),
+            "the WGSL round-trips"
+        );
         assert_eq!(program.parameters().color, [1.0, 0.5, 0.25]);
         assert_eq!(program.parameters().base_spacing, 10.0);
         // What the packet carries is itself valid WGSL.

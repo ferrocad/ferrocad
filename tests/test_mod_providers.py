@@ -639,6 +639,27 @@ class ProviderSkinTests(unittest.TestCase):
         self.assertNotIn("skin", manifest)
         self.assertNotIn("skin", FerroCADGui.providers(self.FEATURE)[0])
 
+    def test_provider_features_carries_each_backends_command(self):
+        """The shell's inactive-command filter needs ``command`` per backend.
+
+        Dev Tools lists every command; the losing backend's entry must be
+        disableable without the shell guessing from labels.
+        """
+        self._features.add(self.FEATURE)
+        FerroCADGui.registerProvider(
+            self.FEATURE, "native", "Native", command="Native_Settings", priority=10
+        )
+        FerroCADGui.registerProvider(
+            self.FEATURE, "other", "Other", command="Other_Settings", priority=0
+        )
+        features = json.loads(ferrocad_shell.provider_features())
+        row = next(entry for entry in features if entry["feature"] == self.FEATURE)
+        by_backend = {provider["backend"]: provider for provider in row["providers"]}
+        self.assertEqual(by_backend["native"]["command"], "Native_Settings")
+        self.assertEqual(by_backend["other"]["command"], "Other_Settings")
+        self.assertTrue(by_backend["native"]["active"])
+        self.assertFalse(by_backend["other"]["active"])
+
     def test_reregistering_replaces_the_source_and_omitting_it_clears_it(self):
         self.register("a", self.WGSL)
         self.register("a", "// reloaded")

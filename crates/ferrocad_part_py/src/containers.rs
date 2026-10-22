@@ -91,6 +91,65 @@ impl PyCompound {
     }
 }
 
+/// `Part.CompSolid(solids=None)` — a comp-solid, a `Part.Shape` subclass.
+#[pyclass(name = "CompSolid", module = "Part", extends = PartShape)]
+pub struct PyCompSolid {
+    solids: Mutex<Vec<Shape>>,
+}
+
+impl PyCompSolid {
+    fn initializer(solids: Vec<Shape>) -> PyResult<PyClassInitializer<Self>> {
+        let base = if solids.is_empty() {
+            PartShape::empty()
+        } else {
+            let shape = ferrocad_part::backend()
+                .make_comp_solid(&solids)
+                .map_err(|error| OCCError::new_err(error.to_string()))?;
+            PartShape::from_shape(shape)
+        };
+        Ok(PyClassInitializer::from(base).add_subclass(Self {
+            solids: Mutex::new(solids),
+        }))
+    }
+}
+
+#[pymethods]
+impl PyCompSolid {
+    #[new]
+    #[pyo3(signature = (solids = None))]
+    fn new(solids: Option<&Bound<'_, PyAny>>) -> PyResult<PyClassInitializer<Self>> {
+        let solids = match solids {
+            Some(solids) => shapes_argument(solids)?,
+            None => Vec::new(),
+        };
+        Self::initializer(solids)
+    }
+
+    fn add(mut slf: PyRefMut<'_, Self>, solid: &Bound<'_, PyAny>) -> PyResult<()> {
+        let added = shapes_argument(solid)?;
+        let rebuilt = {
+            let mut solids = slf.solids.lock().unwrap_or_else(|e| e.into_inner());
+            solids.extend(added);
+            ferrocad_part::backend()
+                .make_comp_solid(&solids)
+                .map_err(|error| OCCError::new_err(error.to_string()))?
+        };
+        slf.as_super().replace_shape(Some(rebuilt));
+        Ok(())
+    }
+
+    fn __len__(&self) -> usize {
+        self.solids
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .len()
+    }
+
+    fn __repr__(&self) -> String {
+        format!("Part.CompSolid({} solids)", self.__len__())
+    }
+}
+
 /// `Part.makeCompound(shapes)` — the same object as `Part.Compound(shapes)`.
 #[pyfunction]
 fn makeCompound(py: Python<'_>, shapes: &Bound<'_, PyAny>) -> PyResult<Py<PyCompound>> {
@@ -122,6 +181,7 @@ fn shapes_argument(value: &Bound<'_, PyAny>) -> PyResult<Vec<Shape>> {
 
 pub(crate) fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyCompound>()?;
+    m.add_class::<PyCompSolid>()?;
     m.add_function(wrap_pyfunction!(makeCompound, m)?)?;
     Ok(())
 }

@@ -149,6 +149,30 @@ fn unified_faces_split_overlapping_circles() {
 }
 
 #[test]
+fn comp_solids_and_shape_placement() {
+    boot();
+    Python::with_gil(|py| {
+        let part = PyModule::import(py, "Part").expect("import Part");
+        let cube = part.call_method1("makeBox", (2.0, 2.0, 2.0)).expect("box");
+        let class = part.getattr("CompSolid").expect("Part.CompSolid");
+        let empty = class.call0().expect("CompSolid()");
+        assert!(empty.call_method0("isNull").unwrap().extract::<bool>().unwrap());
+        empty.call_method1("add", (&cube,)).expect("CompSolid.add");
+        assert!(!empty.call_method0("isNull").unwrap().extract::<bool>().unwrap());
+
+        let built = class
+            .call1((PyList::new(py, [&cube]).unwrap(),))
+            .expect("CompSolid([box])");
+        assert_eq!(built.len().unwrap(), 1);
+
+        let placement = cube.getattr("Placement").expect("Shape.Placement");
+        let base = placement.getattr("Base").expect("Placement.Base");
+        assert!(base.getattr("x").unwrap().extract::<f64>().unwrap().abs() < 1e-12);
+        assert_eq!(cube.call_method0("childShapes").unwrap().len().unwrap(), 1);
+    });
+}
+
+#[test]
 fn matrix_transforms_move_shapes() {
     boot();
     Python::with_gil(|py| {

@@ -25,6 +25,7 @@
 #include <BRep_Builder.hxx>
 #include <ShapeAnalysis_FreeBounds.hxx>
 #include <TopTools_HSequenceOfShape.hxx>
+#include <TopoDS_CompSolid.hxx>
 #include <TopoDS_Compound.hxx>
 #include <BRep_Tool.hxx>
 #include <Geom_BSplineCurve.hxx>
@@ -266,6 +267,24 @@ inline std::unique_ptr<Handle_Geom_Curve> fc_bspline_from_poles(rust::Slice<cons
     Handle(Geom_BSplineCurve) curve =
         new Geom_BSplineCurve(poles, knots, multiplicities, degree, Standard_False);
     return std::unique_ptr<Handle_Geom_Curve>(new Handle(Geom_Curve)(curve));
+  }
+  catch (...) {
+    return nullptr;
+  }
+}
+
+// A comp-solid made of the given solids (`Part.CompSolid`). Returns null on
+// failure.
+inline std::unique_ptr<TopoDS_Shape> fc_comp_solid(const TopTools_ListOfShape& solids)
+{
+  try {
+    TopoDS_CompSolid compsolid;
+    BRep_Builder builder;
+    builder.MakeCompSolid(compsolid);
+    for (TopTools_ListIteratorOfListOfShape it(solids); it.More(); it.Next()) {
+      builder.Add(compsolid, it.Value());
+    }
+    return std::unique_ptr<TopoDS_Shape>(new TopoDS_Shape(compsolid));
   }
   catch (...) {
     return nullptr;

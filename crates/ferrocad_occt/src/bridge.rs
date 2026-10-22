@@ -61,6 +61,9 @@ mod ffi {
         /// All split parts of the arguments (General Fuse), or null on failure.
         fn fc_general_fuse(shapes: &TopTools_ListOfShape) -> UniquePtr<TopoDS_Shape>;
 
+        /// A comp-solid of the given solids, or null on failure.
+        fn fc_comp_solid(solids: &TopTools_ListOfShape) -> UniquePtr<TopoDS_Shape>;
+
         /// Faces from a (possibly self-intersecting) wire, or null on failure.
         fn fc_split_wire_into_faces(wire: &TopoDS_Shape) -> UniquePtr<TopoDS_Shape>;
 

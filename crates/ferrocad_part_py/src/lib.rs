@@ -129,6 +129,41 @@ impl PartShape {
         self.copy_handle()
     }
 
+    /// The shape's placement. Kernel shapes are stored with baked geometry, so
+    /// this is always the identity (`Shape.transformed` bakes the matrix in).
+    #[getter]
+    fn Placement(&self, py: Python<'_>) -> PyResult<PyObject> {
+        let module = py.import("ferrocad")?;
+        Ok(module.getattr("Placement")?.call0()?.unbind())
+    }
+
+    /// The direct children (`Shape.childShapes`): the highest-level sub-shapes.
+    #[pyo3(signature = (shape_type = None))]
+    fn childShapes(
+        &self,
+        py: Python<'_>,
+        shape_type: Option<&str>,
+    ) -> PyResult<Vec<Py<PartShape>>> {
+        let _ = shape_type;
+        for kind in [
+            ElementKind::Solid,
+            ElementKind::Shell,
+            ElementKind::Face,
+            ElementKind::Wire,
+            ElementKind::Edge,
+            ElementKind::Vertex,
+        ] {
+            let shapes = self.sub_shapes(kind)?;
+            if !shapes.is_empty() {
+                return shapes
+                    .into_iter()
+                    .map(|shape| Py::new(py, PartShape::from_shape(shape)))
+                    .collect();
+            }
+        }
+        Ok(Vec::new())
+    }
+
     /// A transformed copy (`Shape.transformed(matrix, copy=True)`).
     #[pyo3(signature = (matrix, copy = true))]
     fn transformed(

@@ -732,6 +732,32 @@ impl GeometryBackend for OcctBackend {
         Ok(erase(&compound))
     }
 
+    fn make_comp_solid(&self, solids: &[Shape]) -> Result<Shape, GeomError> {
+        if solids.is_empty() {
+            return Err(OcctError::InvalidInput {
+                what: "a comp-solid needs at least one solid",
+            }
+            .into());
+        }
+        let mut list = ffi::top_tools::new_list_of_shape();
+        for solid in solids {
+            let occt = downcast(solid)?;
+            let guard = occt.borrow();
+            let inner = guard
+                .as_ref()
+                .ok_or(OcctError::InvalidInput { what: "null solid" })?;
+            let _ = list.pin_mut().Append(inner);
+        }
+        let composed = bridge::fc_comp_solid(&list);
+        let Some(composed) = composed.as_ref() else {
+            return Err(OcctError::NotDone {
+                operation: "make_comp_solid",
+            }
+            .into());
+        };
+        Ok(erase(composed))
+    }
+
     fn bounds(&self, shape: &Shape) -> Option<(Vector3, Vector3)> {
         let occt = downcast(shape).ok()?;
         let guard = occt.borrow();

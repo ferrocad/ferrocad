@@ -684,6 +684,11 @@ pub trait GeometryBackend: Send + Sync {
         Err(unsupported("make_compound"))
     }
 
+    /// A comp-solid of `solids` (`Part.CompSolid`).
+    fn make_comp_solid(&self, _solids: &[Shape]) -> Result<Shape, GeomError> {
+        Err(unsupported("make_comp_solid"))
+    }
+
     /// The axis-aligned bounds `(min, max)` of `shape` (`Shape.BoundBox`).
     ///
     /// A backend that cannot bound the shape (or a null shape) reports `None`.

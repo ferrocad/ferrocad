@@ -71,6 +71,7 @@ pub fn register(backend: Arc<dyn GeometryBackend>) {
     object_registry::register(CYLINDER_TYPE, Arc::new(CylinderPrimitive));
     object_registry::register(SPHERE_TYPE, Arc::new(SpherePrimitive));
     object_registry::register(CONE_TYPE, Arc::new(ConePrimitive));
+    object_registry::register(REGULAR_POLYGON_TYPE, Arc::new(RegularPolygonPrimitive));
     object_registry::register(
         FUSE_TYPE,
         Arc::new(containers::Boolean {
@@ -448,6 +449,120 @@ impl ObjectType for ConePrimitive {
     }
 }
 
+/// `Part::RegularPolygon`: a closed wire of `Polygon` edges at `Circumradius`.
+///
+/// As upstream, the first vertex lies on the placement's X axis and the wire
+/// stays on the placement's XY plane.
+pub const REGULAR_POLYGON_TYPE: &str = "Part::RegularPolygon";
+
+struct RegularPolygonPrimitive;
+
+/// Read an integer property, or the default when it is absent/another kind.
+fn integer_property(doc: &Document, id: ObjectId, name: &str, default: i64) -> i64 {
+    doc.object(id)
+        .and_then(|object| object.properties.get(name))
+        .and_then(|value| match value {
+            Property::Integer(value) => Some(*value),
+            Property::Float(value) => Some(*value as i64),
+            _ => None,
+        })
+        .unwrap_or(default)
+}
+
+impl ObjectType for RegularPolygonPrimitive {
+    fn default_properties(&self) -> Vec<(String, Property, u32)> {
+        vec![
+            (
+                "Polygon".to_string(),
+                Property::Integer(6),
+                prop_status::NONE,
+            ),
+            (
+                "Circumradius".to_string(),
+                Property::Float(2.0),
+                prop_status::NONE,
+            ),
+            (
+                "Placement".to_string(),
+                Property::Placement(Placement::identity()),
+                prop_status::NONE,
+            ),
+            (
+                "Shape".to_string(),
+                make_shape_property(ShapeProperty::empty()),
+                prop_status::NONE,
+            ),
+        ]
+    }
+
+    fn property_meta(&self, name: &str) -> Option<(String, String)> {
+        Some((
+            "RegularPolygon".to_string(),
+            format!("Part regular polygon {name}"),
+        ))
+    }
+
+    fn execute(&self, doc: &mut Document, id: ObjectId) {
+        let (sides, circumradius, placement) = {
+            let Some(object) = doc.object(id) else {
+                return;
+            };
+            let placement = match object.properties.get("Placement") {
+                Some(Property::Placement(placement)) => Some(*placement),
+                _ => None,
+            };
+            (
+                integer_property(doc, id, "Polygon", 6),
+                float_property(doc, id, "Circumradius", 2.0),
+                placement,
+            )
+        };
+
+        if sides < 3 || !(circumradius > 0.0) {
+            doc.mark_invalid(id);
+            return;
+        }
+
+        let step = std::f64::consts::TAU / sides as f64;
+        let points = (0..sides)
+            .map(|index| {
+                let angle = step * index as f64;
+                Vector3::new(circumradius * angle.cos(), circumradius * angle.sin(), 0.0)
+            })
+            .collect::<Vec<_>>();
+        let curves = match ferrocad_curves::polygon(&points, true) {
+            Ok(curves) => curves,
+            Err(_) => {
+                doc.mark_invalid(id);
+                return;
+            }
+        };
+
+        let mut edges = Vec::with_capacity(curves.len());
+        for curve in &curves {
+            match backend().make_edge(curve) {
+                Ok(edge) => edges.push(edge),
+                Err(_) => {
+                    doc.mark_invalid(id);
+                    return;
+                }
+            }
+        }
+        let shape = match backend().make_wire(&edges) {
+            Ok(shape) => shape,
+            Err(_) => {
+                doc.mark_invalid(id);
+                return;
+            }
+        };
+        let shape = match placement {
+            Some(placement) => backend().place(&shape, &placement).unwrap_or(shape),
+            None => shape,
+        };
+        doc.set_property_raw(id, "Shape", make_shape_property(ShapeProperty::new(shape)));
+    }
+}
+
 /// `Part::Feature`: a shape plus a placement.
 struct Feature;
 
@@ -613,6 +728,46 @@ mod tests {
             .expect("a cone has mass properties");
         let expected = std::f64::consts::PI * 3.0 / 3.0 * (4.0 + 2.0 + 1.0);
         assert!((mass.volume - expected).abs() < 1e-6);
+    }
+
+    #[test]
+    fn a_regular_polygon_executes_into_a_wire() {
+        setup();
+        let mut doc = Document::new();
+        let id = doc.add_object("Triangle", REGULAR_POLYGON_TYPE);
+        doc.set_property(id, "Polygon", Property::Integer(3))
+            .unwrap();
+        doc.set_property(id, "Circumradius", Property::Float(1.0))
+            .unwrap();
+        doc.recompute().unwrap();
+        assert!(!doc.object(id).unwrap().invalid);
+        let shape = stored_shape(&doc, id);
+        assert_eq!(
+            backend()
+                .elements(&shape, ferrocad_geom::ElementKind::Edge)
+                .len(),
+            3
+        );
+    }
+
+    #[test]
+    fn a_regular_polygon_rebuilds_when_the_side_count_changes() {
+        setup();
+        let mut doc = Document::new();
+        let id = doc.add_object("Polygon", REGULAR_POLYGON_TYPE);
+        doc.set_property(id, "Circumradius", Property::Float(1.0))
+            .unwrap();
+        doc.recompute().unwrap();
+        doc.set_property(id, "Polygon", Property::Integer(8))
+            .unwrap();
+        doc.recompute().unwrap();
+        let shape = stored_shape(&doc, id);
+        assert_eq!(
+            backend()
+                .elements(&shape, ferrocad_geom::ElementKind::Edge)
+                .len(),
+            8
+        );
     }
 
     #[test]

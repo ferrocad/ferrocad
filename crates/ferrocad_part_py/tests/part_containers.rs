@@ -20,13 +20,6 @@ fn booleans_and_compounds_round_trip() {
     Python::with_gil(|py| {
         let part = PyModule::import(py, "Part").expect("import Part");
         let ferrocad = PyModule::import(py, "ferrocad").expect("import ferrocad");
-        let vector = ferrocad.getattr("Vector").expect("ferrocad.Vector");
-        let point = |x: f64, y: f64, z: f64| {
-            vector
-                .call1((x, y, z))
-                .expect("a ferrocad.Vector")
-                .unbind()
-        };
 
         let box_a = part.call_method1("makeBox", (2.0, 2.0, 2.0)).expect("box A");
         let box_b = part.call_method1("makeBox", (2.0, 2.0, 2.0)).expect("box B");
@@ -45,13 +38,50 @@ fn booleans_and_compounds_round_trip() {
             .expect("multiFuse");
         assert!(!multi.call_method0("isNull").unwrap().extract::<bool>().unwrap());
 
+        // Sub-shape shortcuts and the (absent) element map.
+        let vertex = box_a.getattr("Vertex1").expect("Shape.Vertex1");
+        assert!(!vertex.call_method0("isNull").unwrap().extract::<bool>().unwrap());
+        assert!(box_a.getattr("Face1").is_ok());
+        assert!(box_a.getattr("Edge1").is_ok());
+        assert_eq!(
+            box_a
+                .getattr("ElementMapVersion")
+                .unwrap()
+                .extract::<String>()
+                .unwrap(),
+            ""
+        );
+        assert_eq!(
+            box_a
+                .getattr("ElementMapSize")
+                .unwrap()
+                .extract::<usize>()
+                .unwrap(),
+            0
+        );
+        let bounds = box_a.getattr("BoundBox").expect("Shape.BoundBox");
+        assert!((bounds.getattr("XMax").unwrap().extract::<f64>().unwrap() - 2.0).abs() < 1e-9);
+        let copied = ferrocad
+            .getattr("BoundBox")
+            .unwrap()
+            .call1((&bounds,))
+            .expect("BoundBox(other)");
+        copied.call_method1("enlarge", (1.0,)).expect("enlarge");
+        assert!(
+            copied
+                .call_method1("isInside", (&bounds,))
+                .unwrap()
+                .extract::<bool>()
+                .unwrap()
+        );
+
         // Part.Compound(): null until a shape is added, then a real compound.
         let compound = part.getattr("Compound").expect("Part.Compound");
         let empty = compound.call0().expect("Part.Compound()");
         assert!(empty.call_method0("isNull").unwrap().extract::<bool>().unwrap());
         empty
-            .call_method1("add", (&box_a,))
-            .expect("add a box to an empty compound");
+            .call_method1("add", (&vertex,))
+            .expect("add a vertex to an empty compound");
         assert!(!empty.call_method0("isNull").unwrap().extract::<bool>().unwrap());
 
         // Part.Compound([a, b]) and Part.makeCompound([a, b]) both keep two children.

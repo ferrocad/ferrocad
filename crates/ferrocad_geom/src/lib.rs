@@ -621,6 +621,13 @@ pub trait GeometryBackend: Send + Sync {
         Err(unsupported("make_compound"))
     }
 
+    /// The axis-aligned bounds `(min, max)` of `shape` (`Shape.BoundBox`).
+    ///
+    /// A backend that cannot bound the shape (or a null shape) reports `None`.
+    fn bounds(&self, _shape: &Shape) -> Option<(Vector3, Vector3)> {
+        None
+    }
+
     /// Round the given edges of `shape`.
     fn fillet(&self, shape: &Shape, edges: &[ElementRef], radius: f64)
     -> Result<OpResult, GeomError>;

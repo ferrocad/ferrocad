@@ -234,6 +234,69 @@ impl PartShape {
             .collect()
     }
 
+    /// The axis-aligned bounds as a `ferrocad.BoundBox` (`Shape.BoundBox`).
+    #[getter]
+    fn BoundBox(&self, py: Python<'_>) -> PyResult<PyObject> {
+        let module = py.import("ferrocad")?;
+        let bound_box = module.getattr("BoundBox")?;
+        let Some(shape) = self.shape() else {
+            return Ok(bound_box.call0()?.unbind());
+        };
+        match ferrocad_part::backend().bounds(&shape) {
+            Some((min, max)) => Ok(bound_box
+                .call1((min.x, min.y, min.z, max.x, max.y, max.z))?
+                .unbind()),
+            None => Ok(bound_box.call0()?.unbind()),
+        }
+    }
+
+    /// Upstream's element-map version. This kernel emits no element maps, so it
+    /// is empty and `ElementMapSize` is zero (upstream's own tests treat that as
+    /// "skip the map assertions").
+    #[getter]
+    fn ElementMapVersion(&self) -> &'static str {
+        ""
+    }
+
+    #[getter]
+    fn ElementMapSize(&self) -> usize {
+        0
+    }
+
+    #[getter]
+    fn ElementReverseMap(&self, py: Python<'_>) -> PyResult<Py<PyDict>> {
+        Ok(PyDict::new(py).unbind())
+    }
+
+    /// `Shape.Vertex1`, `Shape.Edge2`, `Shape.Face3`, … — the kernel's 1-based
+    /// sub-shape lists, as upstream's `TopoShape` shortcuts.
+    fn __getattr__(&self, py: Python<'_>, name: &str) -> PyResult<PyObject> {
+        let Some((kind, index)) = sub_shape_name(name) else {
+            return Err(pyo3::exceptions::PyAttributeError::new_err(format!(
+                "'Part.Shape' object has no attribute '{name}'"
+            )));
+        };
+        let shapes = self.sub_shapes(kind)?;
+        let shape = shapes.get(index).ok_or_else(|| {
+            pyo3::exceptions::PyAttributeError::new_err(format!(
+                "'Part.Shape' object has no attribute '{name}'"
+            ))
+        })?
+        .clone();
+        match kind {
+            ElementKind::Vertex => Ok(Py::new(py, curves::PyVertex::from_shape(shape)?)?.into_any()),
+            ElementKind::Edge => Ok(Py::new(
+                py,
+                curves::PyEdge::from_entry(curves::EdgeEntry {
+                    shape,
+                    curve: None,
+                }),
+            )?
+            .into_any()),
+            _ => Ok(Py::new(py, PartShape::from_shape(shape))?.into_any()),
+        }
+    }
+
     /// `Shape.fuse(other)` — the union of the two shapes.
     ///
     /// `glue`, `tolerance` and `refine` are accepted for upstream signature
@@ -301,6 +364,28 @@ impl PartShape {
         }
         Ok(PartShape::from_shape(shape))
     }
+}
+
+/// Split `Face3` into `(ElementKind::Face, 2)`.
+fn sub_shape_name(name: &str) -> Option<(ElementKind, usize)> {
+    let (prefix, digits) = ["CompSolid", "Solid", "Shell", "Face", "Wire", "Edge", "Vertex"]
+        .into_iter()
+        .find_map(|prefix| name.strip_prefix(prefix).map(|digits| (prefix, digits)))?;
+    let index: usize = digits.parse().ok()?;
+    if index == 0 {
+        return None;
+    }
+    let kind = match prefix {
+        "Solid" => ElementKind::Solid,
+        "Shell" => ElementKind::Shell,
+        "Face" => ElementKind::Face,
+        "Wire" => ElementKind::Wire,
+        "Edge" => ElementKind::Edge,
+        "Vertex" => ElementKind::Vertex,
+        // The seam has no comp-solid kind yet.
+        _ => return None,
+    };
+    Some((kind, index - 1))
 }
 
 /// Map a kernel failure to `Part.OCCError`.

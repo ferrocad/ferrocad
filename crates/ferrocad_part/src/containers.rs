@@ -69,6 +69,8 @@ fn output_property() -> (String, Property, u32) {
 }
 
 fn link_properties() -> Vec<(String, Property, u32)> {
+    // Upstream's `Part::Fuse`/`Cut`/`Common` take one `Base` and one `Tool`;
+    // `Part::MultiFuse`/`MultiCommon` are the list forms.
     vec![
         (
             "Base".to_string(),
@@ -76,10 +78,11 @@ fn link_properties() -> Vec<(String, Property, u32)> {
             prop_status::NONE,
         ),
         (
-            "Tools".to_string(),
-            Property::LinkList(Vec::new()),
+            "Tool".to_string(),
+            Property::Link(String::new()),
             prop_status::NONE,
         ),
+        ("Refine".to_string(), Property::Bool(false), prop_status::NONE),
         output_property(),
     ]
 }
@@ -100,20 +103,14 @@ impl ObjectType for Boolean {
         let result = (|| -> Result<Shape, String> {
             let base = link(doc, id, "Base")
                 .ok_or_else(|| "the boolean has no Base link".to_string())?;
-            let mut shape = linked_shape(doc, &base)?;
-            let tools = links(doc, id, "Tools");
-            if tools.is_empty() {
-                return Err("the boolean has no Tools".to_string());
-            }
-            for tool in tools {
-                let other = linked_shape(doc, &tool)?;
-                shape = self
-                    .kind
-                    .operation(&shape, &other)
-                    .map(|out| out.shape)
-                    .map_err(|error| error.to_string())?;
-            }
-            Ok(shape)
+            let shape = linked_shape(doc, &base)?;
+            let tool = link(doc, id, "Tool")
+                .ok_or_else(|| "the boolean has no Tool link".to_string())?;
+            let other = linked_shape(doc, &tool)?;
+            self.kind
+                .operation(&shape, &other)
+                .map(|out| out.shape)
+                .map_err(|error| error.to_string())
         })();
         store(doc, id, result);
     }

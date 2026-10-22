@@ -323,7 +323,7 @@ mod tests {
             let id = doc.add_object(name, type_id);
             doc.set_property(id, "Base", Property::Link("BoxA".into()))
                 .unwrap();
-            doc.set_property(id, "Tools", Property::LinkList(vec!["BoxB".into()]))
+            doc.set_property(id, "Tool", Property::Link("BoxB".into()))
                 .unwrap();
             doc.recompute().unwrap();
             let shape = stored_shape(&doc, id);

@@ -3919,14 +3919,26 @@ impl PyBoundBox {
     #[new]
     #[pyo3(signature = (xmin=None, ymin=None, zmin=None, xmax=None, ymax=None, zmax=None))]
     fn new(
-        xmin: Option<f64>,
+        xmin: Option<&Bound<'_, PyAny>>,
         ymin: Option<f64>,
         zmin: Option<f64>,
         xmax: Option<f64>,
         ymax: Option<f64>,
         zmax: Option<f64>,
-    ) -> Self {
-        match (xmin, ymin, zmin, xmax, ymax, zmax) {
+    ) -> PyResult<Self> {
+        // Upstream also accepts another BoundBox: `App.BoundBox(other)`.
+        if let Some(value) = xmin {
+            if let Ok(other) = value.downcast::<PyBoundBox>() {
+                let other = other.borrow();
+                return Ok(Self {
+                    min: other.min,
+                    max: other.max,
+                    valid: other.valid,
+                });
+            }
+        }
+        let xmin = xmin.map(|value| value.extract::<f64>()).transpose()?;
+        Ok(match (xmin, ymin, zmin, xmax, ymax, zmax) {
             (Some(a), Some(b), Some(c), Some(d), Some(e), Some(f)) => Self {
                 min: [a, b, c],
                 max: [d, e, f],
@@ -3937,7 +3949,42 @@ impl PyBoundBox {
                 max: [0.0; 3],
                 valid: false,
             },
+        })
+    }
+
+    /// Grow the box by `amount` in every direction (`BoundBox.enlarge`).
+    fn enlarge(&mut self, amount: f64) {
+        if self.valid {
+            for i in 0..3 {
+                self.min[i] -= amount;
+                self.max[i] += amount;
+            }
         }
+    }
+
+    #[getter]
+    fn XMin(&self) -> f64 {
+        self.min[0]
+    }
+    #[getter]
+    fn YMin(&self) -> f64 {
+        self.min[1]
+    }
+    #[getter]
+    fn ZMin(&self) -> f64 {
+        self.min[2]
+    }
+    #[getter]
+    fn XMax(&self) -> f64 {
+        self.max[0]
+    }
+    #[getter]
+    fn YMax(&self) -> f64 {
+        self.max[1]
+    }
+    #[getter]
+    fn ZMax(&self) -> f64 {
+        self.max[2]
     }
 
     fn setVoid(&mut self) {
@@ -3981,8 +4028,17 @@ impl PyBoundBox {
         ))
     }
 
-    fn isInside(&self, point: PyRef<'_, PyVector>) -> bool {
-        self.contains([point.inner.x, point.inner.y, point.inner.z])
+    fn isInside(&self, value: &Bound<'_, PyAny>) -> bool {
+        if let Ok(point) = value.extract::<PyRef<'_, PyVector>>() {
+            return self.contains([point.inner.x, point.inner.y, point.inner.z]);
+        }
+        if let Ok(other) = value.downcast::<PyBoundBox>() {
+            let other = other.borrow();
+            return self.valid
+                && other.valid
+                && (0..3).all(|i| other.min[i] >= self.min[i] && other.max[i] <= self.max[i]);
+        }
+        false
     }
 
     /// The first box-surface point hit by a ray from `point` along `direction`.

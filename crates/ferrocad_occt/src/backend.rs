@@ -345,6 +345,28 @@ impl GeometryBackend for OcctBackend {
         Ok(erase(&compound))
     }
 
+    fn bounds(&self, shape: &Shape) -> Option<(Vector3, Vector3)> {
+        let occt = downcast(shape).ok()?;
+        let guard = occt.borrow();
+        let inner = guard.as_ref()?;
+        let mut bnd = ffi::bnd::Bnd_Box_new();
+        ffi::b_rep_bnd_lib::BRepBndLib::Add(inner, bnd.pin_mut(), false);
+        if bnd.IsVoid() {
+            return None;
+        }
+        // Drop the protective gap so the box is the tight one upstream reports.
+        bnd.pin_mut().SetGap(0.0);
+        let (mut xmin, mut ymin, mut zmin) = (0.0, 0.0, 0.0);
+        let (mut xmax, mut ymax, mut zmax) = (0.0, 0.0, 0.0);
+        bnd.Get(
+            &mut xmin, &mut ymin, &mut zmin, &mut xmax, &mut ymax, &mut zmax,
+        );
+        Some((
+            Vector3::new(xmin, ymin, zmin),
+            Vector3::new(xmax, ymax, zmax),
+        ))
+    }
+
     fn place(&self, shape: &Shape, placement: &Placement) -> Result<Shape, GeomError> {
         let shape_occt = downcast(shape)?;
         let shape_guard = shape_occt.borrow();

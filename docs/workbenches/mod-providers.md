@@ -132,6 +132,51 @@ helper). It does not run `deactivate` — the caller owns the effects — and it
 leaves the persisted choice alone, so a re-registered backend keeps its
 selection.
 
+## The document lifecycle
+
+A provider's effects can be **per document**: the Coin backend keeps one overlay
+per open document in `GridManager.items`. Before this slot, that attachment was
+only dropped when the *next* document was activated, so a closed document's
+overlay could linger. The registry now follows the document lifecycle through
+`FerroCADGui`'s listener slot (`FreeCADGui.addDocumentObserver` forwards to it):
+
+```python
+FerroCADGui.addDocumentListener(observer)     # onDocumentCreated/Activated/
+FerroCADGui.removeDocumentListener(observer)  # Deactivated/Closed(name)
+```
+
+The registry registers its own observer, so the behaviour needs no code in a
+mod:
+
+| Event | What the registry runs |
+| --- | --- |
+| active document **activated** | every feature's declared backend `activate` (the bootstrap / re-attach case) |
+| active document **deactivated** or **closed** | the applied backends' `deactivate`, then forget them as applied |
+| any document **created** | nothing; activation attaches the providers |
+
+This is what makes "activate on open, deactivate on close" immediate and
+symmetric. It is also **idempotent**: the applied record is removed *before* the
+`deactivate` callback runs, so a document that is deactivated and then closed
+(or closed twice) calls `deactivate` at most once. Closing an inactive document
+only reports `closed` — the active document's attachment is untouched. A
+provider's `deactivate` runs while the closing document is still open (and
+still active), so it can address the document it is detaching from.
+
+The lifecycle is fired by the App facade itself — `FreeCAD.newDocument`,
+`open` / `openDocument`, `closeDocument` and `setActiveDocument` — so both an
+upstream-shaped script and the `FerroCAD.*` aliases get the notifications.
+`ferrocad_shell.bootstrap` goes through the same calls, so the app's startup and
+"recreate the sample document" path behaves identically. `FreeCADGui`'s
+upstream-shaped `addDocumentObserver` / `removeDocumentObserver` forward to this
+slot; the FerroCAD name stays distinct so the namespaces do not blur. See
+[`../architecture/api-namespaces.md`](../architecture/api-namespaces.md) for the
+split.
+
+A broken observer is reported once per `(observer, method)` to stderr and
+dropped for that event; it cannot prevent the document from closing or the other
+observers from running. Provider callbacks keep their own once-per
+`(feature, backend, hook)` reporting.
+
 ## The deactivate contract
 
 `activate` makes the backend the drawn one; `deactivate` must undo exactly that

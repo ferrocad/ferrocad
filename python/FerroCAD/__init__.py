@@ -18,7 +18,12 @@ This module holds the app-side extension points:
 * :func:`register_manipulator_provider` / :func:`manipulator_specs` — how a module
   declares the handles a selection arms;
 * :func:`set_parameter_file` / :func:`parameter_file` — which file backs
-  ``FreeCAD.ParamGet`` (see ``docs/tasks/settings-model.md`` S3).
+  ``FreeCAD.ParamGet`` (see ``docs/tasks/settings-model.md`` S3);
+* the **document lifecycle aliases** — ``newDocument``, ``openDocument`` /
+  ``open``, ``closeDocument`` and ``setActiveDocument`` delegate to ``FreeCAD``,
+  which fires the ``FerroCADGui`` document-observer slot (deactivation happens
+  before the document disappears). They are not exported in ``__all__``: their
+  names are upstream-shaped, and the slot they reach is the FerroCAD extension.
 
 The document registry, the base value types and the parameters stay on
 ``FreeCAD``: those are upstream-shaped.
@@ -27,6 +32,8 @@ The document registry, the base value types and the parameters stay on
 from __future__ import annotations
 
 import sys
+
+import FreeCAD as _FreeCAD
 
 from ._params import parameter_file, set_parameter_file
 
@@ -164,6 +171,48 @@ def manipulator_specs(obj, element=""):
             continue
         specs.extend(result)
     return list(specs)
+
+
+# ---------------------------------------------------------------------------
+# Document lifecycle
+#
+# ``FreeCAD.newDocument`` / ``openDocument`` / ``closeDocument`` /
+# ``setActiveDocument`` are the upstream-shaped calls and own the lifecycle: the
+# App facade fires the ``FerroCADGui`` document-observer slot (without importing
+# the GUI layer in a headless session). These names stay as the app-side aliases
+# scripts and the shell already use; only ``closeDocument`` differs, returning
+# whether the document was open where ``FreeCAD`` raises. They are not in
+# ``__all__`` because the names are upstream-shaped and ``FerroCADGui`` owns the
+# extension; see ``docs/architecture/api-namespaces.md``.
+# ---------------------------------------------------------------------------
+
+
+def newDocument(name=None, hidden=False, temp=False):
+    """Alias for :func:`FreeCAD.newDocument` (the lifecycle lives there)."""
+    return _FreeCAD.newDocument(name, hidden, temp)
+
+
+def openDocument(path, hidden=False, temporary=False):
+    """Alias for :func:`FreeCAD.openDocument`."""
+    return _FreeCAD.openDocument(path, hidden, temporary)
+
+
+def open(name, hidden=False, temporary=False):
+    """Upstream's ``FreeCAD.open`` alias, with the same lifecycle."""
+    return openDocument(name, hidden, temporary)
+
+
+def closeDocument(name):
+    """Close a document; ``False`` when it was not open (``FreeCAD`` raises)."""
+    if _FreeCAD.getDocument(name) is None:
+        return False
+    _FreeCAD.closeDocument(name)
+    return True
+
+
+def setActiveDocument(name):
+    """Alias for :func:`FreeCAD.setActiveDocument`."""
+    _FreeCAD.setActiveDocument(name)
 
 
 __all__ = [

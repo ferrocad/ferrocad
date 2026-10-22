@@ -372,7 +372,9 @@ class TestGuiStub(unittest.TestCase):
         import FreeCADGui
 
         self.assertIsNotNone(FreeCADGui)
-        self.assertFalse(hasattr(FreeCADGui, "getDocument"))
+        # The document API exists headless; it just has no open document yet.
+        self.assertTrue(callable(FreeCADGui.getDocument))
+        self.assertIsNone(FreeCADGui.getDocument("__not_open__"))
         doc = FreeCAD.newDocument("Gui")
         obj = doc.addObject("App::FeatureTest", "HeadlessViewObject")
         self.assertIsNone(obj.ViewObject)

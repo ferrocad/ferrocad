@@ -16,9 +16,9 @@ here.
 | [`FreeCAD.Base`](FreeCAD.Base.md) | 12 | The `Base` value types FreeCAD exposes as a submodule. |
 | [`FreeCAD.Units`](FreeCAD.Units.md) | 9 | Quantity parsing, units and number formatting. |
 | [`FreeCAD.Console`](FreeCAD.Console.md) | 5 | The console sink a workbench prints through. |
-| [`FreeCADGui`](FreeCADGui.md) | 5 | Upstream-compatible GUI surface: commands, selection and dialogs. |
+| [`FreeCADGui`](FreeCADGui.md) | 11 | Upstream-compatible GUI surface: commands, selection and dialogs. |
 | [`FerroCAD`](FerroCAD.md) | 11 | FerroCAD-only surface: the semantic grid and the module hooks. |
-| [`FerroCADGui`](FerroCADGui.md) | 13 | FerroCAD-only GUI surface: providers, settings, overlays and view state. |
+| [`FerroCADGui`](FerroCADGui.md) | 15 | FerroCAD-only GUI surface: providers, settings, overlays and view state. |
 | [`ferrocad_shell`](ferrocad_shell.md) | 24 | The host bridge the shell calls. Not upstream API: it is how FerroCAD's window (and `tools/userdocs.py`) drive the facade. |
 
 ## Scope and honesty

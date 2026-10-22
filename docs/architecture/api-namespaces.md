@@ -52,8 +52,45 @@ where they are; the rule is about the API a mod calls to extend the host.
 | `refreshProviders` | tell the active backend to re-read shared state |
 | `settings`, `setSetting` | a provider's advertised settings |
 | `addOverlay`, `removeOverlay` | the pull overlay bridge (Coin) |
+| `addDocumentListener`, `removeDocumentListener` | the document-listener slot (created / activated / deactivated / closed) |
 | `ViewState` | the shell's presentation snapshot (`grid`, `projection`, …) |
 | `PROVIDER_PREFERENCES` | the parameter path the registry reads |
+
+### Document lifecycle
+
+The app observer (`FreeCAD.addDocumentObserver`) reports creation, activation and
+deletion but **not deactivation**. A provider that attaches something per
+document (the Coin grid builds one overlay per document) could therefore only
+undo that on the *next* activation. FerroCAD closes that gap with a listener slot
+on `FerroCADGui`. It is named with a FerroCAD word (`Listener`, not `Observer`) so
+the namespace stays clean: `FreeCADGui.addDocumentObserver` is the upstream-shaped
+name and forwards to it.
+
+```python
+FerroCADGui.addDocumentListener(observer)     # one registration per object
+FerroCADGui.removeDocumentListener(observer)
+```
+
+For each event the matching method is called when the observer defines it:
+`onDocumentCreated(name)`, `onDocumentActivated(name)`,
+`onDocumentDeactivated(name)` and `onDocumentClosed(name)`. A raising callback
+is reported once per `(observer, method)` to stderr and never interrupts the
+document operation or the other observers.
+
+The App facade fires the slot — `FreeCAD.newDocument`, `open`/`openDocument`,
+`closeDocument` and `setActiveDocument` — so an upstream-shaped script is covered
+too; `FerroCAD.newDocument` and friends are aliases with the same behaviour (only
+`closeDocument` differs: it returns whether the document was open, where
+`FreeCAD` raises). `ferrocad_shell.bootstrap` goes through the same calls. The
+facade never imports the GUI layer: when `FerroCADGui` is not already in
+`sys.modules`, the notification is a no-op, so a headless App session keeps
+`FerroCADGui` out of the process; when the shell or a test has imported it, the
+events are delivered headlessly too.
+
+`FreeCADGui.addDocumentObserver` / `removeDocumentObserver` are the
+upstream-shaped forwarders to this slot. Adding an upstream name to the upstream
+namespace is a deliberate compatibility decision, not a leak: the FerroCAD name
+stays distinct, so conformance can tell the two APIs apart.
 
 ### Resource keys
 

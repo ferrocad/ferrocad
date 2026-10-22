@@ -58,26 +58,84 @@ removeDocumentObserver = _fc.removeDocumentObserver
 # unique naming) lives in the Rust core; `fc` exposes it, so the facade keeps no
 # state of its own.
 
+
+def _notify_document(event, name):
+    """Deliver one document event to the GUI slot, when it is loaded.
+
+    The App facade never imports the GUI layer: a headless script or an App-only
+    session keeps ``FerroCADGui``/``FreeCADGui`` out of ``sys.modules``. When a
+    host (the shell) or a test already imported ``FerroCADGui``, its document
+    observers hear the event. That slot is ``FerroCADGui.addDocumentListener``;
+    ``FreeCADGui.addDocumentObserver`` forwards to it.
+
+    Deactivation fires while the outgoing document is still open and active, so
+    a provider can detach a per-document attachment (the Coin grid) before the
+    document disappears.
+    """
+    gui = sys.modules.get("FerroCADGui")
+    dispatch = getattr(gui, "_document_event", None) if gui is not None else None
+    if dispatch is not None:
+        dispatch(event, name)
+
+
 def newDocument(name=None, hidden=False, temp=False):
-    return _fc.newDocument(name)
+    previous = activeDocument()
+    if previous is not None:
+        _notify_document("deactivated", previous.Name)
+    try:
+        document = _fc.newDocument(name)
+    except Exception:
+        current = activeDocument()
+        if previous is not None and current is not None and current.Name == previous.Name:
+            _notify_document("activated", previous.Name)
+        raise
+    _notify_document("created", document.Name)
+    _notify_document("activated", document.Name)
+    return document
 
 def open(name, hidden=False, temporary=False):
-    return _fc.openDocument(name)
+    return openDocument(name, hidden, temporary)
 
 # Upstream alias (`FreeCAD.openDocument(path)`).
 def openDocument(path, hidden=False, temporary=False):
-    return _fc.openDocument(path)
+    previous = activeDocument()
+    if previous is not None:
+        _notify_document("deactivated", previous.Name)
+    try:
+        document = _fc.openDocument(path)
+    except Exception:
+        current = activeDocument()
+        if previous is not None and current is not None and current.Name == previous.Name:
+            _notify_document("activated", previous.Name)
+        raise
+    _notify_document("created", document.Name)
+    _notify_document("activated", document.Name)
+    return document
 
 def closeDocument(name):
-    if _fc.getDocument(name) is None:
+    document = _fc.getDocument(name)
+    if document is None:
         raise ValueError("no document named '%s'" % name)
+    current = activeDocument()
+    if current is not None and current.Name == document.Name:
+        _notify_document("deactivated", document.Name)
     _fc.closeDocument(name)
+    _notify_document("closed", document.Name)
 
 def getDocument(name):
     return _fc.getDocument(name)
 
 def setActiveDocument(name):
+    document = _fc.getDocument(name)
+    current = activeDocument()
+    switching = document is not None and (
+        current is None or current.Name != document.Name
+    )
+    if switching and current is not None:
+        _notify_document("deactivated", current.Name)
     _fc.setActiveDocument(name)
+    if switching:
+        _notify_document("activated", document.Name)
 
 def listDocuments():
     return _fc.listDocuments()

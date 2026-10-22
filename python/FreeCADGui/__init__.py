@@ -1,8 +1,12 @@
-"""The ``Gui`` module: the command registry, and (later) the viewer.
+"""The ``Gui`` module: the command registry and the document views.
 
-In **headless** mode (``FreeCAD.GuiUp == 0``) this is a stand-in: there is no
-viewer, no document view, no ``getDocument``. In the app (``GuiUp == 1``) the
-``bite-gpui`` shell supplies the chrome and consumes the registry below.
+In **headless** mode (``FreeCAD.GuiUp == 0``) there is no window, but
+``getDocument`` / ``activeDocument`` still work: every open App document has a
+``GuiDocument`` whose ``ActiveView`` owns a real, mutable ``pivy.coin`` scene
+graph. The graph stays local when no GUI is up; when the GUI is up its root is
+also registered with ``FerroCADGui.addOverlay`` so the shell can draw it. In the
+app (``GuiUp == 1``) the ``bite-gpui`` shell supplies the chrome and consumes
+the registry below.
 
 This module is the **upstream-shaped** surface only. Everything FerroCAD adds —
 the mod provider registry, provider-advertised settings, the Coin overlay
@@ -18,13 +22,17 @@ What is here today:
 * the **dialog protocol** — a command's ``on_accept`` callback stays here under a
   single-use token, and ``_accept`` / ``_cancel`` are the later half of the
   non-blocking modal;
+* the **document views** — ``getDocument`` / ``activeDocument`` (and the lazy
+  ``ActiveDocument``) return a ``GuiDocument``; ``ActiveView.getSceneGraph``
+  returns a per-document ``pivy.coin.SoSeparator`` that scripts can mutate;
 * a **read-only selection snapshot** (``Selection.getSelection`` etc.), filled by
   the shell;
 * the private bridge helpers the app script calls (``_command_list``,
-  ``_run``, ``_accept``, ``_cancel``).
+  ``_run``, ``_accept``, ``_cancel``) and the document-view cache helpers.
 
-What is deliberately absent: ``activeDocument()`` and view objects
-(``ViewProvider``); those are M5 work. See ``docs/workbenches/actions-and-tools.md``.
+What is still absent: ``ViewProvider`` (per-object view objects) and live view
+sync (camera, fit, redraw); those are later work. See
+``docs/workbenches/actions-and-tools.md``.
 """
 
 from __future__ import annotations
@@ -63,6 +71,255 @@ def _report_once(name: str, method: str, exc: BaseException) -> None:
         return
     _REPORTED.add(key)
     print(f"FreeCADGui: command {name!r} {method} raised: {_error_text(exc)}", file=sys.stderr)
+
+
+# ---------------------------------------------------------------------------
+# Documents and views
+# ---------------------------------------------------------------------------
+
+#: One live ``GuiDocument`` per open App document, keyed by document name.
+_DOCUMENTS: dict = {}
+
+#: View diagnostics already printed, so a missing Coin/shell reports once.
+_REPORTED_VIEWS: set = set()
+
+
+def _report_view_once(topic: str, exc: BaseException) -> None:
+    if topic in _REPORTED_VIEWS:
+        return
+    _REPORTED_VIEWS.add(topic)
+    print(f"FreeCADGui: {topic} unavailable: {_error_text(exc)}", file=sys.stderr)
+
+
+def _coin_module():
+    """The ``pivy.coin`` module, imported only when a scene graph is built.
+
+    ``import FreeCADGui`` must keep working without the Coin extension, so the
+    import is lazy. A missing (or broken) extension is reported once and the
+    caller degrades to ``None`` instead of raising: a document view still exists
+    without a scene graph.
+    """
+    try:
+        from pivy import coin
+    except Exception as exc:  # noqa: BLE001 - degrade with a diagnostic
+        _report_view_once("pivy.coin", exc)
+        return None
+    return coin
+
+
+def _document_name(name):
+    """Normalize a document name or an App document to its name.
+
+    Upstream Draft calls ``Gui.getDocument(self.doc)`` with the document object
+    rather than its name, so both forms are accepted here.
+    """
+    if isinstance(name, str):
+        return name
+    candidate = getattr(name, "Name", None)
+    if isinstance(candidate, str):
+        return candidate
+    raise TypeError("a document name or an App document is required")
+
+
+def _detach_children(root) -> None:
+    """Remove every child without relying on ``removeChild`` identity semantics."""
+    remove_all = getattr(root, "removeAllChildren", None)
+    if callable(remove_all):
+        try:
+            remove_all()
+            return
+        except Exception:  # noqa: BLE001 - fall back to one-at-a-time
+            pass
+    while True:
+        try:
+            if not root.getNumChildren():
+                return
+            root.removeChild(root.getChild(0))
+        except Exception:  # noqa: BLE001 - nothing else to try
+            return
+
+
+class View3DInventor:
+    """A document's 3D view, shaped like upstream's ``View3DInventor``.
+
+    Only ``getSceneGraph`` is implemented today: enough for a script to attach a
+    Coin node. Camera, viewer and redraw methods arrive with view sync.
+    """
+
+    def __init__(self, document: "GuiDocument") -> None:
+        self._document = document
+
+    def getSceneGraph(self):
+        """The document's scene root (``None`` when Coin is unavailable)."""
+        return self._document._scene_graph()
+
+
+class GuiDocument:
+    """The GUI side of one open App document.
+
+    ``ActiveView.getSceneGraph()`` returns a mutable ``pivy.coin.SoSeparator``
+    owned by this document. The root is built lazily and cached, so every call
+    returns the same node; two documents never share one.
+
+    The root is registered with ``FerroCADGui.addOverlay`` only when
+    ``FreeCAD.GuiUp`` is set. Headless callers keep a local node and never touch
+    the shell bridge. ``close()`` is the ``removeObject`` / ``removeSceneGraph``
+    half of a document close: it unregisters the overlay and detaches the
+    children.
+    """
+
+    def __init__(self, name: str, document) -> None:
+        self.Name = name
+        self._document = document
+        self.ActiveView = View3DInventor(self)
+        self._root = None
+        self._overlay = False
+        self._closed = False
+
+    def _scene_graph(self):
+        if self._closed:
+            return None
+        if self._root is None:
+            coin = _coin_module()
+            if coin is None:
+                return None
+            try:
+                self._root = coin.SoSeparator()
+            except Exception as exc:  # noqa: BLE001 - report, do not crash
+                _report_view_once("pivy.coin.SoSeparator", exc)
+                return None
+            self._register_overlay()
+        return self._root
+
+    def _register_overlay(self) -> None:
+        if not getattr(FreeCAD, "GuiUp", 0):
+            return
+        try:
+            import FerroCADGui as bridge
+        except Exception as exc:  # noqa: BLE001 - headless builds have no bridge
+            _report_view_once("FerroCADGui overlay bridge", exc)
+            return
+        add = getattr(bridge, "addOverlay", None)
+        if add is None:
+            _report_view_once(
+                "FerroCADGui.addOverlay", AttributeError("not available")
+            )
+            return
+        try:
+            add(self._root)
+        except Exception as exc:  # noqa: BLE001
+            _report_view_once("FerroCADGui.addOverlay", exc)
+            return
+        self._overlay = True
+
+    def _unregister_overlay(self) -> None:
+        if not self._overlay:
+            return
+        self._overlay = False
+        if self._root is None:
+            return
+        try:
+            import FerroCADGui as bridge
+        except Exception as exc:  # noqa: BLE001
+            _report_view_once("FerroCADGui overlay bridge", exc)
+            return
+        remove = getattr(bridge, "removeOverlay", None)
+        if remove is None:
+            return
+        try:
+            remove(self._root)
+        except Exception as exc:  # noqa: BLE001
+            _report_view_once("FerroCADGui.removeOverlay", exc)
+
+    def close(self) -> None:
+        """Forget the view and its scene graph; safe to call more than once."""
+        if self._closed:
+            return
+        self._unregister_overlay()
+        root, self._root = self._root, None
+        self._closed = True
+        if root is not None:
+            _detach_children(root)
+
+
+def _forget_document(name) -> None:
+    """Drop a cached ``GuiDocument`` (an explicit close-shaped refresh).
+
+    Accepts a document name or an App document, so an observer can pass either.
+    """
+    if not isinstance(name, str):
+        name = getattr(name, "Name", name)
+    document = _DOCUMENTS.pop(name, None)
+    if document is not None:
+        document.close()
+
+
+def _clear_documents() -> None:
+    """Drop every cached view (used by tests and a future quit path)."""
+    for name in list(_DOCUMENTS):
+        _forget_document(name)
+
+
+def getDocument(name):
+    """The ``GuiDocument`` for an open App document, or ``None``.
+
+    ``name`` is a document name or an App document. The App registry is the
+    source of truth: a name that is not open yields ``None``, and a cached view
+    is dropped once its document is gone (or a new document reused the name).
+    """
+    name = _document_name(name)
+    document = FreeCAD.getDocument(name)
+    if document is None:
+        _forget_document(name)
+        return None
+    cached = _DOCUMENTS.get(name)
+    if (
+        cached is not None
+        and cached._document is document
+        and not cached._closed
+    ):
+        return cached
+    if cached is not None:
+        cached.close()
+    view = GuiDocument(name, document)
+    _DOCUMENTS[name] = view
+    return view
+
+
+def activeDocument():
+    """The ``GuiDocument`` for ``FreeCAD.ActiveDocument``, or ``None``."""
+    document = FreeCAD.ActiveDocument
+    if document is None:
+        return None
+    return getDocument(document)
+
+
+def addDocumentObserver(observer) -> None:
+    """Upstream-shaped alias for :func:`FerroCADGui.addDocumentListener`.
+
+    Upstream's GUI module has a document-observer slot, and FerroCAD implements
+    it on the extension namespace so the App facade can reach it without
+    importing the GUI layer. The callbacks are the upstream names:
+    ``onDocumentCreated`` / ``onDocumentActivated`` / ``onDocumentDeactivated`` /
+    ``onDocumentClosed``; a missing method is simply not called.
+    """
+    import FerroCADGui
+
+    FerroCADGui.addDocumentListener(observer)
+
+
+def removeDocumentObserver(observer) -> bool:
+    """Remove a GUI document observer; returns whether it was registered."""
+    import FerroCADGui
+
+    return FerroCADGui.removeDocumentListener(observer)
+
+
+def __getattr__(name):
+    # PEP 562: resolved lazily because the active document changes over time.
+    if name == "ActiveDocument":
+        return activeDocument()
+    raise AttributeError("module 'FreeCADGui' has no attribute '%s'" % name)
 
 
 # ---------------------------------------------------------------------------

@@ -181,9 +181,14 @@ def bootstrap(doc_name: str = "Shell") -> str:
     # A dialog token belongs to the document that requested it: opening a fresh
     # document drops any callback still waiting for the old one.
     FreeCADGui._cancel_all()
+    # ``FerroCAD.closeDocument``/``newDocument`` are the lifecycle entry points:
+    # they fire ``FerroCADGui``'s document-observer slot (deactivated before the
+    # closed document disappears, then closed; created/activated for the new
+    # one), so a provider detaches its per-document effects immediately. The
+    # upstream ``FreeCAD`` functions keep their exact semantics and do not.
     if FreeCAD.getDocument(doc_name) is not None:
-        FreeCAD.closeDocument(doc_name)
-    doc = FreeCAD.newDocument(doc_name)
+        FerroCAD.closeDocument(doc_name)
+    doc = FerroCAD.newDocument(doc_name)
 
     # A small parametric document: two feature objects wired by an expression,
     # plus a group so the inspector shows some structure.

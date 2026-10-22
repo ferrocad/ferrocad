@@ -127,15 +127,20 @@ DRAFT_FILES = ["test_base", "test_grid_settings", "test_pivy",
   params,gui_utils}`, `WorkingPlane`, `DraftVecUtils`, `DraftGeomUtils`,
   `draftgeoutils`, `draftfunctions`, `draftmake`, `draftmake.make_line`,
   `draftobjects.base`, `draftguitools`, `draftviewproviders`, `drafttaskpanels`.
-- [~] `python3 tools/conformance.py --root ../freecad-upstream --draft`: **no load
+- [x] `python3 tools/conformance.py --root ../freecad-upstream --draft`: **no load
   errors** for `test_base`, `test_grid_settings`, `test_pivy`, `test_import`.
   `test_airfoildat` is a **load error** (`missing module 'Part'`), because the file
   itself does `import Draft` at module scope and `Draft.py` →
   `draftfunctions.draftify` → `draftmake.make_circle` → `import Part`. This bullet
-  cannot be met before the `Part` kernel slice; the goal section already says `Draft`
-  is out of D0's reach. `test_import` loads and fails at runtime on `Part` as
-  anticipated. Exact summary: **4 passed, 1 failed, 6 errored, 0 skipped, 1 file
-  failed to load** (upstream `33adf61`).
+  cannot be met for that file before the `Part` kernel slice; the goal section
+  already says `Draft` is out of D0's reach. `test_import` loads and fails at runtime
+  on `Part` as anticipated.
+
+  At D0 landing the exact summary was **4 passed, 1 failed, 6 errored, 0 skipped, 1
+  file failed to load** (upstream `33adf61`); `test_pivy_draw` then errored on the
+  absent `FreeCADGui.getDocument`. That gap was closed by the P1 GUI document API
+  (below), taking the same run to **10 passed, 1 failed, 0 errored, 0 skipped, 1
+  file failed to load**.
 - [x] `cargo test -p ferrocad_py` (3 passed) and `PYTHONPATH=python python3 -m
   unittest discover -s tests` (217 tests, 200 passed, 17 skipped) are green.
 - [x] The fixes are covered by tests: `crates/ferrocad_py/src/lib.rs` (`tests::`),
@@ -186,9 +191,9 @@ Remaining gaps (all outside D0's five fixes):
   error with `AttributeError: 'ParameterGrp' object has no attribute 'GetStrings'`
   (`python/FreeCAD/__init__.py`, outside the D0 edit set). The parameter shim has
   typed getters but not the "list the entries" pair.
-- **`FreeCADGui.getDocument`.** `test_pivy.test_pivy_draw` errors with
-  `AttributeError: module 'FreeCADGui' has no attribute 'getDocument'` (outside the
-  D0 edit set).
+- **`FreeCADGui.getDocument`.** Resolved 2026-10-22 by the P1 GUI document API:
+  `test_pivy_draw` now passes (2/2 in `test_pivy.py`). See the landing record
+  below.
 - **Dev boot path.** The packaged app has `mods/` on `PYTHONPATH` (AppRun, portable
   Windows, macOS launcher), so the fetched `mods/freecad` resolves. The development
   `run.sh` only adds `python/`; a developer running Draft from `../freecad-upstream`
@@ -208,6 +213,30 @@ D0.4 placement: the always-available stub lives in `python/Draft_rc.py`, because
 `mods/<WB>/<WB>_rc.py` (only if the fetched tree does not already have one), so a
 workbench directory used directly on `sys.path` — as upstream FreeCAD does — is
 self-sufficient too. The two copies are no-ops and identical in behaviour.
+
+## P1 — GUI document API (2026-10-22)
+
+`FreeCADGui.getDocument(name)` is no longer absent and is not a name shim. For an
+open App document it returns a cached `GuiDocument` (or `None` for a name that is
+not open), and `GuiDocument.ActiveView.getSceneGraph()` returns a real, mutable
+`pivy.coin.SoSeparator` owned by that document. `activeDocument()` and the lazy
+`FreeCADGui.ActiveDocument` follow the active App document. Headless callers
+(`FreeCAD.GuiUp == 0`) get a local node and never import the shell bridge; with
+the GUI up the root is also registered through `FerroCADGui.addOverlay` so the
+shell can draw it. `ViewProvider` and live view sync (camera, fit, redraw) remain
+later work.
+
+Files: `python/FreeCADGui/__init__.py`, `tests/test_gui_document.py`.
+
+`--draft` at upstream `33adf61`:
+
+```
+test_pivy.py: 2 tests (pass 2, fail 0, error 0, skip 0)
+summary: 10 passed, 1 failed, 0 errored, 0 skipped, 1 files failed to load
+```
+
+`test_pivy_draw` passes. `Part` still blocks `test_airfoildat` (load error) and
+`test_import.DraftImport.test_import_draft`; neither is in this slice.
 
 ## Risks and notes
 

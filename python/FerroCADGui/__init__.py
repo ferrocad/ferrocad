@@ -19,6 +19,13 @@ What lives here:
   backend's rows in the property-pane row shape and ``setSetting`` validates,
   stores and refreshes (see ``docs/tasks/settings-model.md`` S0);
 * the **pull overlay bridge** — ``addOverlay`` / ``removeOverlay`` (Coin);
+* the **document-listener slot** — ``addDocumentListener`` /
+  ``removeDocumentListener``, with ``onDocumentCreated`` / ``onDocumentActivated``
+  / ``onDocumentDeactivated`` / ``onDocumentClosed`` callbacks.
+  ``FreeCADGui.addDocumentObserver`` forwards here (the upstream-shaped name),
+  and the App observer reports creation/activation/deletion but never
+  deactivation — which is why a per-document attachment used to linger until the
+  next activation;
 * a **read-only view state** (``ViewState.grid``, ``ViewState.projection``),
   filled by the shell for a checkable command's ``IsChecked``.
 
@@ -44,6 +51,11 @@ _PROVIDERS: dict = {}
 #: A persisted choice alone does not mean the effects were applied: the first
 #: explicit switch is what runs them.
 _PROVIDER_APPLIED: dict = {}
+
+#: The document the applied provider effects are attached to. Deactivation only
+#: runs for that document, so closing an inactive document leaves the active
+#: one's attachment alone.
+_PROVIDER_DOCUMENT = None
 
 #: Monotonic registration serial (never reused), for the priority tie-break.
 _PROVIDER_SERIAL: int = 0
@@ -85,7 +97,114 @@ _SETTING_DEFAULTS = {
 #: ``(feature, backend, setting)`` settings problems already reported.
 _SETTING_REPORTED: set = set()
 
+#: Observers registered through :func:`addDocumentListener`, in registration
+#: order. Identity is the key: one registration per object, no duplicates.
+_DOCUMENT_LISTENERS: list = []
+
+#: ``(id(observer), hook)`` document callbacks already reported, so a broken
+#: observer does not spam the console on every document operation.
+_OBSERVER_REPORTED: set = set()
+
+#: Lifecycle event -> observer method. The names are FerroCAD's; upstream
+#: FreeCADGui has no equivalent slot.
+_DOCUMENT_HOOKS = {
+    "created": "onDocumentCreated",
+    "activated": "onDocumentActivated",
+    "deactivated": "onDocumentDeactivated",
+    "closed": "onDocumentClosed",
+}
+
 _COLOR_RE = re.compile(r"#[0-9a-fA-F]{6}\Z")
+
+
+# ---------------------------------------------------------------------------
+# Document lifecycle observers
+#
+# App-side document creation and activation already exist, but the facade has
+# no GUI document observer and no *deactivation* event. A provider that attaches
+# something per document (the Coin grid) therefore kept it until the next
+# activation. These observers are fired by the FerroCAD lifecycle wrappers and
+# by the shell, which is the host's single path through document creation,
+# activation and closing.
+# ---------------------------------------------------------------------------
+
+
+def addDocumentListener(observer) -> None:
+    """Register ``observer`` for document lifecycle notifications.
+
+    ``observer`` is any object. For each event, the matching method is called
+    when it exists: ``onDocumentCreated(name)``, ``onDocumentActivated(name)``,
+    ``onDocumentDeactivated(name)`` and ``onDocumentClosed(name)``. A missing
+    method is simply not called, so an observer may implement only the events it
+    cares about.
+
+    Registration is by **identity**: adding the same object twice is a no-op.
+    An observer that raises is reported once per ``(observer, method)`` and is
+    skipped; it never prevents the document operation or the other observers.
+    This slot lives on ``FerroCADGui`` because it is a FerroCAD extension: the
+    App observer reports creation/activation/deletion without a deactivation
+    event, and ``FreeCADGui.addDocumentObserver`` forwards here for the
+    upstream-shaped name (see ``docs/architecture/api-namespaces.md``).
+    """
+    if any(existing is observer for existing in _DOCUMENT_LISTENERS):
+        return
+    _DOCUMENT_LISTENERS.append(observer)
+
+
+def removeDocumentListener(observer) -> bool:
+    """Unregister ``observer``; returns whether it was registered."""
+    for index, existing in enumerate(_DOCUMENT_LISTENERS):
+        if existing is observer:
+            del _DOCUMENT_LISTENERS[index]
+            _OBSERVER_REPORTED.difference_update(
+                {key for key in _OBSERVER_REPORTED if key[0] == id(observer)}
+            )
+            return True
+    return False
+
+
+def _report_observer(observer, hook: str, exc: BaseException) -> None:
+    """Report a failing observer callback once per ``(observer, hook)``."""
+    key = (id(observer), hook)
+    if key in _OBSERVER_REPORTED:
+        return
+    _OBSERVER_REPORTED.add(key)
+    label = getattr(observer, "__name__", None) or type(observer).__name__
+    print(
+        f"FerroCADGui: document observer {label!r} {hook} raised: "
+        f"{_error_text(exc)}",
+        file=sys.stderr,
+    )
+
+
+def _document_event(event: str, name: str) -> None:
+    """Deliver one lifecycle event to every registered observer (private).
+
+    Called by the App facade (``FreeCAD``) and by ``ferrocad_shell``. The
+    callbacks are isolated individually, so one broken observer cannot stop the
+    document operation or another observer.
+
+    ``closed`` also drops the ``FreeCADGui`` view cached for that document, when
+    the facade is loaded: the view owns a scene graph and may hold an overlay
+    registration, so leaving it behind would keep drawing a closed document.
+    """
+    hook = _DOCUMENT_HOOKS[event]
+    for observer in list(_DOCUMENT_LISTENERS):
+        callback = getattr(observer, hook, None)
+        if not callable(callback):
+            continue
+        try:
+            callback(name)
+        except Exception as exc:  # noqa: BLE001 - one observer is not fatal
+            _report_observer(observer, hook, exc)
+    if event == "closed":
+        gui = sys.modules.get("FreeCADGui")
+        forget = getattr(gui, "_forget_document", None) if gui is not None else None
+        if forget is not None:
+            try:
+                forget(name)
+            except Exception as exc:  # noqa: BLE001 - a stale view is not fatal
+                _report_observer(gui, "_forget_document", exc)
 
 
 # ---------------------------------------------------------------------------
@@ -432,6 +551,8 @@ def setActiveProvider(feature: str, backend: str) -> dict:
     ``feature``, ``backend``, ``previous``, the merged ``view`` request and a
     one-line ``status``. An unknown feature or backend raises ``ValueError``.
     """
+    global _PROVIDER_DOCUMENT
+
     records = _PROVIDERS.get(feature)
     if not records:
         raise ValueError(f"no provider is registered for feature {feature!r}")
@@ -466,6 +587,13 @@ def setActiveProvider(feature: str, backend: str) -> dict:
     elif applied is None:
         _invoke_provider(records[backend], feature, "activate", result, statuses)
     _PROVIDER_APPLIED[feature] = backend
+    document = FreeCAD.activeDocument()
+    if document is not None:
+        # Explicit switches are a document attachment too; recording it here
+        # keeps the close/deactivate path correct even when a caller drove only
+        # the registry (a script, or a document created through upstream
+        # ``FreeCAD`` rather than the FerroCAD lifecycle wrappers).
+        _PROVIDER_DOCUMENT = document.Name
 
     message = f"{feature}: {backend} is the active provider"
     if statuses:
@@ -495,6 +623,97 @@ def _invoke_provider(record, feature, hook, result, statuses) -> None:
     status = value.get("status")
     if status:
         statuses.append(str(status))
+
+
+# ---------------------------------------------------------------------------
+# Provider attachment follows the active document
+#
+# The registry applies a backend's effects once (activate) and undoes them on a
+# switch (deactivate). Those effects may be per-document — the Coin grid builds
+# one overlay per document — so the document lifecycle must drive the same
+# callbacks. A closed document's attachment used to survive until the next
+# activation; this observer makes deactivation immediate.
+# ---------------------------------------------------------------------------
+
+
+class _ProviderDocumentObserver:
+    """Attach the applied providers to the active document and detach them."""
+
+    def onDocumentActivated(self, name) -> None:
+        _activate_document_providers(name)
+
+    def onDocumentDeactivated(self, name) -> None:
+        _deactivate_document_providers(name)
+
+    def onDocumentClosed(self, name) -> None:
+        _deactivate_document_providers(name)
+
+
+def _activate_document_providers(name) -> None:
+    """Run every provider's ``activate`` for the document becoming active.
+
+    This is the bootstrap path as well as the re-attach after a switch: the
+    declared backend of every registered feature becomes drawn again. It is
+    idempotent per document, so a caller that reports both a creation and an
+    activation (or an activation twice) does not run ``activate`` twice.
+    """
+    global _PROVIDER_DOCUMENT
+    if not isinstance(name, str) or not name:
+        return
+    if _PROVIDER_DOCUMENT == name:
+        return
+    if _PROVIDER_DOCUMENT is not None:
+        # A caller skipped the deactivate event (upstream ``FreeCAD`` created or
+        # activated a document directly); stop the stale attachment first.
+        _deactivate_document_providers(_PROVIDER_DOCUMENT)
+    for feature, records in list(_PROVIDERS.items()):
+        backend = _selected(feature)
+        record = records.get(backend)
+        if record is None:
+            continue
+        result = {
+            "ok": True,
+            "feature": feature,
+            "backend": backend,
+            "view": {},
+            "status": "",
+            "errors": [],
+        }
+        _invoke_provider(record, feature, "activate", result, [])
+        _PROVIDER_APPLIED[feature] = backend
+    _PROVIDER_DOCUMENT = name
+
+
+def _deactivate_document_providers(name) -> None:
+    """Run the applied providers' ``deactivate`` for the document leaving.
+
+    The applied record is dropped **before** the callback runs, so a document
+    that is deactivated and then closed (or closed twice) cannot call
+    ``deactivate`` twice. Once a provider is no longer applied, the next
+    activation bootstraps it again through :func:`_activate_document_providers`.
+    """
+    global _PROVIDER_DOCUMENT
+    if _PROVIDER_DOCUMENT != name:
+        return
+    _PROVIDER_DOCUMENT = None
+    for feature, backend in list(_PROVIDER_APPLIED.items()):
+        _PROVIDER_APPLIED.pop(feature, None)
+        records = _PROVIDERS.get(feature)
+        record = records.get(backend) if records else None
+        if record is None:
+            continue
+        result = {
+            "ok": True,
+            "feature": feature,
+            "backend": backend,
+            "view": {},
+            "status": "",
+            "errors": [],
+        }
+        _invoke_provider(record, feature, "deactivate", result, [])
+
+
+addDocumentListener(_ProviderDocumentObserver())
 
 
 # ---------------------------------------------------------------------------
@@ -976,6 +1195,8 @@ ViewState = _ViewState()
 
 
 __all__ = [
+    "addDocumentListener",
+    "removeDocumentListener",
     "registerProvider",
     "unregisterProvider",
     "providers",

@@ -38,7 +38,7 @@ use std::collections::BTreeMap;
 use std::fmt;
 use std::sync::Arc;
 
-use ferrocad_types::{Placement, Vector3};
+use ferrocad_types::{Matrix4, Placement, Vector3};
 
 use ferrocad_curves::EdgeCurve;
 
@@ -641,6 +641,13 @@ pub trait GeometryBackend: Send + Sync {
         Err(unsupported("make_face"))
     }
 
+    /// One face per boundary wire (`Part::FaceMakerUnified` with independent
+    /// wires). Wires that bound the same face belong to [`make_face`]; this is the
+    /// multi-region form, which returns a compound when there is more than one.
+    fn make_faces(&self, _wires: &[Shape]) -> Result<Shape, GeomError> {
+        Err(unsupported("make_faces"))
+    }
+
     /// The analytic curve behind an edge (`edge.Curve` upstream).
     ///
     /// A bounded edge reports its **basis** curve: an edge built from a segment
@@ -694,6 +701,11 @@ pub trait GeometryBackend: Send + Sync {
 
     /// Apply a placement (transform) to `shape`.
     fn place(&self, shape: &Shape, placement: &Placement) -> Result<Shape, GeomError>;
+
+    /// Apply a 4x4 matrix to `shape` (`Shape.transformed`).
+    fn transform(&self, _shape: &Shape, _matrix: &Matrix4) -> Result<Shape, GeomError> {
+        Err(unsupported("transform"))
+    }
 
     /// Resolve a stable sub-element name against `shape`, if it still exists.
     fn resolve(&self, shape: &Shape, name: &str) -> Option<Shape>;

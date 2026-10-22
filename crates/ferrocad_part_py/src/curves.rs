@@ -696,9 +696,14 @@ fn wire_shapes(value: &Bound<'_, PyAny>) -> PyResult<Vec<Shape>> {
 #[pymethods]
 impl PyFace {
     #[new]
-    fn new(value: &Bound<'_, PyAny>) -> PyResult<PyClassInitializer<Self>> {
+    #[pyo3(signature = (value, face_maker = "Part::FaceMakerBullseye"))]
+    fn new(value: &Bound<'_, PyAny>, face_maker: &str) -> PyResult<PyClassInitializer<Self>> {
         let shapes = wire_shapes(value)?;
-        let shape = backend().make_face(&shapes).map_err(kernel_error)?;
+        let shape = if face_maker == "Part::FaceMakerUnified" {
+            backend().make_faces(&shapes).map_err(kernel_error)?
+        } else {
+            backend().make_face(&shapes).map_err(kernel_error)?
+        };
         Ok(Self::initializer(shape))
     }
 }
@@ -764,9 +769,13 @@ fn makeFace(
     face_maker: &str,
     noElementMap: bool,
 ) -> PyResult<Py<PyFace>> {
-    let _ = (face_maker, noElementMap);
+    let _ = noElementMap;
     let shapes = wire_shapes(wires)?;
-    let shape = backend().make_face(&shapes).map_err(kernel_error)?;
+    let shape = if face_maker == "Part::FaceMakerUnified" {
+        backend().make_faces(&shapes).map_err(kernel_error)?
+    } else {
+        backend().make_face(&shapes).map_err(kernel_error)?
+    };
     Py::new(py, PyFace::initializer(shape))
 }
 

@@ -18,7 +18,9 @@
 // or the ellipse major radius; `minor` the ellipse minor radius (unused for a
 // circle). On kind 0 every other value is 0.
 
+#include <BRepFill_Filling.hxx>
 #include <BRep_Tool.hxx>
+#include <GeomAbs_Shape.hxx>
 #include <Geom_Circle.hxx>
 #include <Geom_Curve.hxx>
 #include <Geom_Ellipse.hxx>
@@ -29,7 +31,10 @@
 #include <TopoDS_Edge.hxx>
 #include <TopoDS_Shape.hxx>
 #include <TopoDS_Vertex.hxx>
+#include <TopExp_Explorer.hxx>
 #include <TopoDS_Wire.hxx>
+#include <TopTools_ListIteratorOfListOfShape.hxx>
+#include <TopTools_ListOfShape.hxx>
 #include <gp_Ax1.hxx>
 #include <gp_Ax2.hxx>
 #include <gp_Circ.hxx>
@@ -37,6 +42,9 @@
 #include <gp_Elips.hxx>
 #include <gp_Lin.hxx>
 #include <gp_Pnt.hxx>
+#include <gp_Trsf.hxx>
+
+#include <memory>
 
 #include "rust/cxx.h"
 
@@ -191,4 +199,53 @@ inline bool fc_is_wire(const TopoDS_Shape& shape)
 inline bool fc_is_vertex(const TopoDS_Shape& shape)
 {
   return !shape.IsNull() && shape.ShapeType() == TopAbs_VERTEX;
+}
+
+// Install a row-major 4x4 matrix into an OCCT transform. The fourth row is
+// ignored (OCCT transforms are affine).
+inline bool fc_trsf_from_matrix(rust::Slice<const double> m, gp_Trsf& out)
+{
+  if (m.size() < 16) {
+    return false;
+  }
+  try {
+    out.SetValues(m[0], m[1], m[2], m[3],
+                  m[4], m[5], m[6], m[7],
+                  m[8], m[9], m[10], m[11]);
+    return true;
+  }
+  catch (...) {
+    return false;
+  }
+}
+
+// A filled face through the given boundary wires (`BRepFill_Filling`). Used for
+// non-planar boundaries, which `BRepBuilderAPI_MakeFace` cannot build. Returns a
+// null shape on any failure, including an OCCT exception — nothing may cross the
+// bridge.
+inline std::unique_ptr<TopoDS_Shape> fc_fill_wires(const TopTools_ListOfShape& wires)
+{
+  if (wires.IsEmpty()) {
+    return nullptr;
+  }
+  try {
+    BRepFill_Filling filler;
+    for (TopTools_ListIteratorOfListOfShape it(wires); it.More(); it.Next()) {
+      const TopoDS_Shape& wire = it.Value();
+      if (wire.IsNull() || wire.ShapeType() != TopAbs_WIRE) {
+        return nullptr;
+      }
+      for (TopExp_Explorer edge(wire, TopAbs_EDGE); edge.More(); edge.Next()) {
+        filler.Add(TopoDS::Edge(edge.Current()), GeomAbs_C0, Standard_True);
+      }
+    }
+    filler.Build();
+    if (!filler.IsDone() || filler.Face().IsNull()) {
+      return nullptr;
+    }
+    return std::unique_ptr<TopoDS_Shape>(new TopoDS_Shape(filler.Face()));
+  }
+  catch (...) {
+    return nullptr;
+  }
 }

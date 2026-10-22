@@ -129,6 +129,39 @@ impl PartShape {
         self.copy_handle()
     }
 
+    /// A transformed copy (`Shape.transformed(matrix, copy=True)`).
+    #[pyo3(signature = (matrix, copy = true))]
+    fn transformed(
+        &self,
+        matrix: &Bound<'_, PyAny>,
+        copy: bool,
+    ) -> PyResult<PartShape> {
+        let _ = copy;
+        let shape = self.named_shape()?;
+        let matrix = matrix_from_py(matrix)?;
+        let moved = ferrocad_part::backend()
+            .transform(&shape, &matrix)
+            .map_err(kernel_error)?;
+        Ok(PartShape::from_shape(moved))
+    }
+
+    /// Transform this shape in place and return it (`Shape.transformShape`).
+    #[pyo3(signature = (matrix, copy = true))]
+    fn transformShape<'py>(
+        slf: &Bound<'py, Self>,
+        matrix: &Bound<'_, PyAny>,
+        copy: bool,
+    ) -> PyResult<PyObject> {
+        let _ = copy;
+        let shape = slf.borrow().named_shape()?;
+        let matrix = matrix_from_py(matrix)?;
+        let moved = ferrocad_part::backend()
+            .transform(&shape, &matrix)
+            .map_err(kernel_error)?;
+        slf.borrow_mut().replace_shape(Some(moved));
+        Ok(slf.clone().into_any().unbind())
+    }
+
     /// A copy with redundant edges/faces unified (`Shape.cleaned`).
     fn cleaned(&self) -> Self {
         let Some(shape) = self.shape() else {
@@ -457,6 +490,18 @@ fn sub_shape_name(name: &str) -> Option<(ElementKind, usize)> {
 /// Map a kernel failure to `Part.OCCError`.
 fn kernel_error(error: ferrocad_geom::GeomError) -> PyErr {
     curves::OCCError::new_err(error.to_string())
+}
+
+/// Read a `ferrocad.Matrix` through its `A11`…`A44` elements.
+fn matrix_from_py(value: &Bound<'_, PyAny>) -> PyResult<ferrocad_types::Matrix4> {
+    let mut values = [0.0; 16];
+    for row in 1..=4 {
+        for column in 1..=4 {
+            let name = format!("A{row}{column}");
+            values[(row - 1) * 4 + (column - 1)] = value.getattr(name)?.extract()?;
+        }
+    }
+    Ok(ferrocad_types::Matrix4::from_values(values))
 }
 
 /// The shape wrapped by a Python `Part.Shape` (or one of its subclasses).

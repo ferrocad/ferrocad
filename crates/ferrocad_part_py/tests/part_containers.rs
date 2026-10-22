@@ -115,6 +115,89 @@ fn booleans_and_compounds_round_trip() {
 }
 
 #[test]
+fn matrix_transforms_move_shapes() {
+    boot();
+    Python::with_gil(|py| {
+        let part = PyModule::import(py, "Part").expect("import Part");
+        let ferrocad = PyModule::import(py, "ferrocad").expect("import ferrocad");
+        let vector = ferrocad.getattr("Vector").expect("ferrocad.Vector");
+        let location = vector.call1((10.0, 0.0, 0.0)).expect("Vector(10,0,0)");
+        let rotation = ferrocad.getattr("Rotation").unwrap().call0().expect("Rotation()");
+        let placement = ferrocad
+            .getattr("Placement")
+            .unwrap()
+            .call1((location, rotation))
+            .expect("Placement");
+        let matrix = placement.call_method0("toMatrix").expect("toMatrix");
+
+        let shape = part.call_method1("makeBox", (2.0, 2.0, 2.0)).expect("box");
+        let moved = shape
+            .call_method1("transformed", (&matrix,))
+            .expect("Shape.transformed");
+        let center = moved.getattr("CenterOfMass").expect("CenterOfMass");
+        assert!((center.getattr("x").unwrap().extract::<f64>().unwrap() - 11.0).abs() < 1e-9);
+
+        let returned = shape
+            .call_method1("transformShape", (&matrix,))
+            .expect("Shape.transformShape");
+        assert!(returned.is(&shape), "transformShape returns the same object");
+        let center = shape.getattr("CenterOfMass").expect("CenterOfMass");
+        assert!((center.getattr("x").unwrap().extract::<f64>().unwrap() - 11.0).abs() < 1e-9);
+    });
+}
+
+#[test]
+fn unified_faces_fill_non_planar_wires() {
+    boot();
+    Python::with_gil(|py| {
+        let part = PyModule::import(py, "Part").expect("import Part");
+        let ferrocad = PyModule::import(py, "ferrocad").expect("import ferrocad");
+        let vector = ferrocad.getattr("Vector").expect("ferrocad.Vector");
+        let point = |x: f64, y: f64, z: f64| {
+            vector.call1((x, y, z)).expect("vector").unbind()
+        };
+        let make_wire = |points: Vec<(f64, f64, f64)>| {
+            let list = PyList::new(py, points.into_iter().map(|(x, y, z)| point(x, y, z))).unwrap();
+            part.call_method1("makePolygon", (list, true)).expect("makePolygon")
+        };
+
+        // One twisted quad: a non-planar boundary needs BRepFill_Filling.
+        let twisted = make_wire(vec![
+            (0.0, 0.0, 0.0),
+            (10.0, 0.0, 0.0),
+            (10.0, 10.0, 5.0),
+            (0.0, 10.0, 0.0),
+        ]);
+        let compound = part
+            .getattr("Compound")
+            .unwrap()
+            .call1((PyList::new(py, [&twisted]).unwrap(),))
+            .expect("Part.Compound([twisted])");
+        let filled = part
+            .call_method1("makeFace", (&compound, "Part::FaceMakerUnified"))
+            .expect("makeFace(twisted, unified)");
+        assert!(filled.getattr("Area").unwrap().extract::<f64>().unwrap() > 100.0);
+
+        // Two independent freeform boundaries: one face each.
+        let second = make_wire(vec![
+            (20.0, 0.0, 0.0),
+            (30.0, 0.0, 3.0),
+            (30.0, 10.0, 0.0),
+            (20.0, 10.0, 4.0),
+        ]);
+        let compound = part
+            .getattr("Compound")
+            .unwrap()
+            .call1((PyList::new(py, [&twisted, &second]).unwrap(),))
+            .expect("Part.Compound([two freeform wires])");
+        let filled = part
+            .call_method1("makeFace", (&compound, "Part::FaceMakerUnified"))
+            .expect("makeFace(two freeform wires, unified)");
+        assert_eq!(filled.getattr("Faces").unwrap().len().unwrap(), 2);
+    });
+}
+
+#[test]
 fn primitive_volumes_match_the_analytic_formulas() {
     boot();
     Python::with_gil(|py| {

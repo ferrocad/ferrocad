@@ -3610,6 +3610,20 @@ impl PyRotation {
         PyRotation::fresh(self.inner.multiply(&o.inner), None)
     }
 
+    /// `Rotation * Rotation` composes; `Rotation * Vector` rotates the vector.
+    fn __mul__(&self, other: &Bound<'_, PyAny>) -> PyResult<PyObject> {
+        if let Ok(rotation) = other.extract::<PyRef<'_, PyRotation>>() {
+            return Ok(Py::new(other.py(), self.multiply(rotation))?.into_any());
+        }
+        if let Ok(vector) = other.extract::<PyRef<'_, PyVector>>() {
+            let rotated = self.inner.to_matrix().transform(&vector.inner);
+            return Ok(Py::new(other.py(), PyVector::fresh(rotated))?.into_any());
+        }
+        Err(PyTypeError::new_err(
+            "Rotation can only multiply a Rotation or a Vector",
+        ))
+    }
+
     fn invert(&mut self) {
         self.inner = self.inner.inverse();
         self.axis_cache = None;

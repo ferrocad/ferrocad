@@ -36,6 +36,7 @@ ferrocad_curves.workspace = true
 ferrocad_occt.workspace = true
 ferrocad_part.workspace = true
 ferrocad_py.workspace = true
+ferrocad_types.workspace = true
 # `extension-module` is deliberately *not* a hard feature (see ferrocad_py): it is
 # enabled only when packaging the standalone extension module.
 pyo3 = { version = "0.25", features = ["abi3-py311"] }

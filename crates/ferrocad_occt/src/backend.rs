@@ -16,7 +16,7 @@ use ferrocad_geom::{
     MassProperties, OpResult, Shape, Tessellation, TessellationOptions, unsupported,
 };
 use ferrocad_curves::{Arc, Circle, EdgeCurve, Ellipse, Line, Vector3};
-use ferrocad_types::Placement;
+use ferrocad_types::{Matrix4, Placement};
 use opencascade_sys as ffi;
 
 use ffi::top_abs::TopAbs_ShapeEnum;
@@ -299,6 +299,53 @@ impl GeometryBackend for OcctBackend {
         Ok(erase(ffi::topo_ds::cast_face_to_shape(make.Face())))
     }
 
+    fn make_faces(&self, wires: &[Shape]) -> Result<Shape, GeomError> {
+        let mut faces = Vec::with_capacity(wires.len());
+        for wire in wires {
+            let occt = downcast(wire)?;
+            let guard = occt.borrow();
+            let inner = guard
+                .as_ref()
+                .ok_or(OcctError::InvalidInput { what: "null wire" })?;
+            if !bridge::fc_is_wire(inner) {
+                return Err(OcctError::InvalidInput {
+                    what: "make_faces expects wires",
+                }
+                .into());
+            }
+
+            // Planar boundaries use the ordinary face builder; anything else is
+            // filled through `BRepFill_Filling`.
+            let make = ffi::b_rep_builder_api::BRepBuilderAPI_MakeFace_wire(
+                bridge::fc_shape_as_wire(inner),
+                true,
+            );
+            if make.IsDone() {
+                faces.push(erase(ffi::topo_ds::cast_face_to_shape(make.Face())));
+                continue;
+            }
+
+            let mut list = ffi::top_tools::new_list_of_shape();
+            let _ = list.pin_mut().Append(inner);
+            let filled = bridge::fc_fill_wires(&list);
+            let Some(filled) = filled.as_ref() else {
+                return Err(OcctError::NotDone {
+                    operation: "make_faces",
+                }
+                .into());
+            };
+            faces.push(erase(filled));
+        }
+        match faces.len() {
+            0 => Err(OcctError::InvalidInput {
+                what: "a face needs a wire",
+            }
+            .into()),
+            1 => Ok(faces.remove(0)),
+            _ => self.make_compound(&faces),
+        }
+    }
+
     fn curve_of(&self, shape: &Shape) -> Result<EdgeCurve, GeomError> {
         let occt = downcast(shape)?;
         let guard = occt.borrow();
@@ -514,6 +561,30 @@ impl GeometryBackend for OcctBackend {
         let out = erase(op.pin_mut().Shape());
         if !op.IsDone() {
             return Err(OcctError::NotDone { operation: "place" }.into());
+        }
+        Ok(out)
+    }
+
+    fn transform(&self, shape: &Shape, matrix: &Matrix4) -> Result<Shape, GeomError> {
+        let occt = downcast(shape)?;
+        let guard = occt.borrow();
+        let inner = guard
+            .as_ref()
+            .ok_or(OcctError::InvalidInput { what: "null shape" })?;
+        let mut trsf = ffi::gp::new_transform();
+        if !bridge::fc_trsf_from_matrix(&matrix.m, trsf.pin_mut()) {
+            return Err(OcctError::InvalidInput {
+                what: "matrix is not an affine transform",
+            }
+            .into());
+        }
+        let mut op = ffi::b_rep_builder_api::BRepBuilderAPI_Transform_new(inner, &trsf, true);
+        let out = erase(op.pin_mut().Shape());
+        if !op.IsDone() {
+            return Err(OcctError::NotDone {
+                operation: "transform",
+            }
+            .into());
         }
         Ok(out)
     }

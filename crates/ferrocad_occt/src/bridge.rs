@@ -29,6 +29,7 @@ mod ffi {
         type TopoDS_Vertex = opencascade_sys::topo_ds::TopoDS_Vertex;
         type TopoDS_Wire = opencascade_sys::topo_ds::TopoDS_Wire;
         type TopoDS_Face = opencascade_sys::topo_ds::TopoDS_Face;
+        type gp_Trsf = opencascade_sys::gp::gp_Trsf;
         type TopTools_IndexedMapOfShape = opencascade_sys::top_tools::TopTools_IndexedMapOfShape;
         type TopTools_IndexedDataMapOfShapeListOfShape =
             opencascade_sys::top_tools::TopTools_IndexedDataMapOfShapeListOfShape;
@@ -52,6 +53,12 @@ mod ffi {
         fn fc_is_edge(shape: &TopoDS_Shape) -> bool;
         fn fc_is_wire(shape: &TopoDS_Shape) -> bool;
         fn fc_is_vertex(shape: &TopoDS_Shape) -> bool;
+
+        /// A filled face through the boundary wires, or null on failure.
+        fn fc_fill_wires(wires: &TopTools_ListOfShape) -> UniquePtr<TopoDS_Shape>;
+
+        /// Install a row-major 4x4 matrix into an OCCT transform.
+        fn fc_trsf_from_matrix(m: &[f64], out: Pin<&mut gp_Trsf>) -> bool;
 
         /// `TopTools_IndexedMapOfShape::FindIndex`, which the crate does not bridge.
         fn fc_indexed_map_find_index(

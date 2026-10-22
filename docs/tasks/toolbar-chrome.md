@@ -10,7 +10,8 @@ toggles) and [`../direction/app-shell-vision.md`](../direction/app-shell-vision.
 **Scope note.** T0–T7 landed on 2026-10-22: the chrome (header controls, popovers,
 the action dock, the title-bar app menu) and the grid-settings half. T4/T5 are wired
 to [`settings-model.md`](settings-model.md) S2/S4. The remaining acceptance items are
-visual-only (popover/navicube overlap, drag fade).
+visual or manual (popover/navicube overlap, the dock's drag fade, and the viewport
+receiving pointer events through an open popover).
 
 ## 1. Why
 
@@ -33,7 +34,10 @@ The strip also cannot scale to a real workbench (`Draft` registers 86 commands),
 consumes vertical space from the canvas. The target is three surfaces that do not
 compete: **header controls**, **anchored popovers**, and a **selection-reactive dock**.
 
-## 2. Current state (verified)
+## 2. State before this task (verified 2026-10-22)
+
+The line numbers and the flat strip below describe the tree **before** T0; the strip
+no longer exists (§10).
 
 | Piece | Where | State |
 | --- | --- | --- |
@@ -59,17 +63,19 @@ The design brief (2026-10-22) specifies:
    - `Grid` split button: the label toggles visibility in one click; `▾` (or right-click)
      opens a popover with **Grid provider** (the active `(grid, backend)`), **Spacing**
      (`10.0 mm`, tabular), then `Grid Settings…` (selects `Settings/Grid`) and
-     `↻ Reload Grid Settings`. No separate overlay toggle (the label is the one
-     switch) and no mode row (a local grid follows the workplane).
+     `↻ Reload Grid Settings`. No separate overlay on/off toggle (the label is the one
+     switch) and no `Compact | Full` segmented control (a local grid follows the
+     workplane); the checked provider/backend entry in the popover is the mode row.
    - `Axes` toggle button (`App_ToggleAxisCross`).
    - `WP` split button: the label runs `App_ViewWorkplane`; `▾` offers
      `Activate workplane` and `Clear workplane`.
    - `Mods ▾`: the provider/mod checklist (`Mods_Settings`), also offered inline as
      **Provider / Mod** in the Grid popover.
 2. **Action dock**, bottom-centre over the canvas: `Create Slab` · `Polyline` ·
-   `Workplane` · `Search (Ctrl+K)` when idle; filtered by selection signature when
-   something is selected (`Delete`, `Move`, then workbench-specific entries). It recedes
-   to 35 % during orbit/gizmo drags and returns on proximity.
+   `Workplane` · `Search (Ctrl+K)` when idle; the selection signature enables or greys
+   the modification rows (`Delete`, `Move`, then workbench-specific entries) rather
+   than removing them. It recedes to 35 % during orbit/gizmo drags and returns on
+   proximity (the fade is not built; see T3).
 3. **Grid settings are modeless**: `Grid Settings…` selects the `Settings/Grid` node in
    the model tree and the existing Properties pane renders its rows
    ([`settings-model.md`](settings-model.md)). There is no separate settings screen.
@@ -99,14 +105,14 @@ The design brief (2026-10-22) specifies:
 
 | # | Slice | Verifiable headlessly |
 | --- | --- | --- |
-| **T0** | Surface metadata: parse `FerroCAD_Surface`/`FerroCAD_Parent` from `GetResources` (default derived from `Group`), a `Surface` enum, and a `shell_model.surfaces()` grouping | unit tests in `ferrocad_gpui::commands` ✅ |
+| **T0** | Surface metadata: parse `FerroCAD_Surface`/`FerroCAD_Parent` from `GetResources` (an absent or unknown value defaults to the **dock**, never derived from `Group`), a `Surface` enum, and a `shell_model.surfaces()` grouping | unit tests in `ferrocad_gpui::commands` ✅ |
 | **T1** | `split_button` + `popover` primitives (open state, anchor, dismissal, right-click) | state-machine tests; rendering by inspection ✅ |
 | **T2** | Header controls: `Grid`, `Axes`, `WP`, `Mods` wired to the existing command ids, right-aligned in the viewport header | model tests: clicking the label runs the command; `▾` opens the group without running it ✅ |
-| **T3** | Action dock replaces the strip; selection filter; drag/proximity opacity | model test: the dock's visible ids follow the selection signature ✅ (drag opacity deferred) |
-| **T4** | Grid quick popover: **provider** readout, spacing readout, settings/reload rows (no mode) | model test: the rows follow the active provider ✅ |
+| **T3** | Action dock replaces the strip; selection-driven enablement; drag/proximity opacity | model test: the dock's rows follow the selection through `IsActive` ✅ (rows are never hidden; drag opacity deferred) |
+| **T4** | Grid quick popover: **provider** readout, spacing readout, settings/reload rows (no compact/full mode) | gpui test: the rows follow the active provider ✅ |
 | **T5** | `Grid Settings…` selects the `Settings/Grid` node and opens the modeless 380 px card (draggable, no scrim) | gpui test: the directive selects the node, the card opens/drags/closes, and its rows edit ✅ |
-| **T6** | Remove `actions_bar` and its layout slot; update the docs; keep every command reachable | test that every registered command appears on exactly one surface |
-| **T7** | App menu (`☰`) in the window title bar: app-level commands, Dev Tools first, checked while open | model test: the menu opens, lists the hidden command, and running it opens the window |
+| **T6** | Remove `actions_bar` and its layout slot; update the docs; keep every command reachable | `every_registered_command_lands_on_exactly_one_surface`, plus the Dev Tools list holding every command ✅ |
+| **T7** | App menu (`☰`) in the window title bar: app-level commands, Dev Tools first, checked while open | `the_app_menu_opens_dev_tools`: title-bar/leading-bar placement, the popover, `Esc`, and the row opening the window ✅ |
 
 `T0` was deliberately first: it is pure data, it made `T6`'s "every command reachable"
 assertion possible, and it let T2/T3 land without touching the Python side.
@@ -162,17 +168,27 @@ Nothing in the chrome needs to change for 3–5; T4/T5 become wiring once S0–S
 - One button per legacy action, reachable from exactly one surface; no command silently
   disappears when the strip is removed (T6 test). Dev Tools stays reachable through the
   app menu even though it is hidden from the header and the dock (T7 test). ✅
+- The app menu is **title-bar** chrome (`window_frame_with_leading`), not a viewport
+  header control; the header keeps `Grid`, `Axes`, `WP` and `Mods`. ✅ (T7 test asserts
+  the menu is outside the header, inside the title bar, and that the `leading-bar`
+  fallback exists; the client-decoration frame path is visual-only.)
 - `Grid` toggles in one click without opening the popover; `▾` opens it without toggling. ✅
 - With a popover open, viewport orbit/zoom still receives pointer events; `Esc` and an
-  outside click both dismiss. ✅ (structurally: no backdrop, no `occlude`; headless
-  state tests only — a visual pass still needs Xvfb or a human)
+  outside click both dismiss. ✅ for dismissal (verified by
+  `the_grid_split_button_runs_the_label_and_the_caret_opens` and
+  `the_app_menu_opens_dev_tools`); the panel has no backdrop and no `occlude` **by
+  inspection**. That orbit/zoom still receives the events is **not verified** — it
+  needs a visual/manual pass.
 - Popovers never overlap the navicube at any window width ≥ 800 px. ⏳ (visual only)
 - A split-button popover opens below its control, inside the window, not over the
   title bar. ✅ (headless bounds assertion)
-- The dock's visible actions follow the selection signature, and it fades during a drag.
-  ✅ for enablement; the drag fade is deferred with T3's visual half.
-- `cargo test -p ferrocad_gpui` and `cargo test -p ferrocad_toy` stay green; the Xvfb
-  real-window smoke test still boots.
+- The dock's rows follow the selection signature through `IsActive` (disabled rows stay
+  visible; nothing is filtered out). ✅ Verified by
+  `the_action_dock_follows_the_selection`; the drag/proximity fade is **not built**
+  (deferred with T3's visual half) and is unverified.
+- `cargo test -p ferrocad_gpui` and `cargo test -p ferrocad_toy` stay green. ✅
+  (2026-10-22 verification: gpui lib **95 passed**, toy **12 passed**.) The Xvfb
+  real-window smoke test was **not run** in this pass — it remains unverified.
 - The docs (`actions-and-tools.md` §7/§16) describe the new surfaces, not the strip. ✅
 
 ## 10. As built (2026-10-22)
@@ -215,7 +231,8 @@ Nothing in the chrome needs to change for 3–5; T4/T5 become wiring once S0–S
   dismissal. It reuses `properties_panel` and `set_property`; the Dev Tools pane
   remains a second view of the same rows.
 - The dock is `model.surfaces().dock`, so the existing `IsActive` results drive it.
-  Disabled rows stay visible. `Search (Ctrl+K)` is a status-reporting stub; there is no
+  Disabled rows stay visible and no row is filtered by the selection; the drag/proximity
+  fade has no code yet. `Search (Ctrl+K)` is a status-reporting stub; there is no
   palette.
 - T6 removed `actions_bar`; the Dev Tools window lists **every** command vertically,
   with its surface tag, as the reachability safety net.

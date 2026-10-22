@@ -25,7 +25,10 @@ designed later against the clean viewport.
 - Removing the transient tool strip (it is session feedback, not chrome; see
   “Decisions” below).
 
-## Current surfaces (inventory)
+## Surfaces at the start (inventory)
+
+The line numbers and the `actions_bar` row are the pre-reset tree (2026-10-22); the
+strip was removed in P0.6/T6, and the four panels now render in the Dev Tools window.
 
 All in `crates/ferrocad_gpui/src/shell.rs` unless noted.
 
@@ -94,7 +97,8 @@ its modal over the viewport, where the user is looking.
 
 - [x] **D1 — extract panels.** `actions_bar`, `tree_panel`, `properties_panel`,
       `console_panel` become reusable from a second view without duplicating state.
-      Keep the existing `#[gpui::test]`s compiling.
+      Keep the existing `#[gpui::test]`s compiling. (P0.6/T6 later removed the flat
+      `actions_bar`; the Dev Tools replacement is `chrome::command_list_panel`.)
 - [x] **D2 — `DevTools` view.** A second-window view over `Entity<Shell>`; renders the
       four panels in a single column, observers refresh it with the shell.
 - [x] **D3 — slim the main window.** Remove the four panels from `Shell::render`;
@@ -104,11 +108,13 @@ its modal over the viewport, where the user is looking.
 - [x] **D5 — tests.** Headless: the main shell renders without the four panels; the
       Dev Tools view lists the commands with enablement; selecting in the inspector
       updates the property editor; running a command updates the shell; closing and
-      reopening preserves the model; one interpreter only.
-- [x] **D6 — docs.** `app-shell-vision.md` §5 and `actions-and-tools.md` are updated,
-      and the TODO carries the reset.
-      *Partially done:* `actions-and-tools.md` is updated; `app-shell-vision.md` and
-      the TODO are the coordinator's to regenerate.
+      reopening preserves the model; one interpreter only. (The one-interpreter claim
+      is structural — `dev_tools.rs` owns only an `Entity<Shell>`, and the interpreter
+      is configured once — rather than asserted by a test.)
+- [x] **D6 — docs.** `app-shell-vision.md` §5, `actions-and-tools.md` §7/§16 and the
+      TODO all carry the reset. (The earlier “Partially done” note described the
+      staging; `app-shell-vision.md` §5 and the backlog were updated in the same
+      pass.)
 
 ## Acceptance
 
@@ -118,11 +124,17 @@ its modal over the viewport, where the user is looking.
   they behave exactly as they did in the combined window. ✅ (The flat bar is replaced
   by the vertical command list in P0.6/T6.)
 - A command run from Dev Tools opens its dialog in the main window and applies there. ✅
+  (Headless: `run_command` with the Dev Tools window open opens the dialog on the
+  shared shell, and `Esc` from the Dev Tools window cancels it. A row click calls the
+  same `run_command`, but no test clicks a row specifically.)
 - Closing the Dev Tools window does not change the document, stop the viewport, or
   drop the selection; reopening restores the same view. ✅
 - `cargo test -p ferrocad_gpui` and `cargo test -p ferrocad_toy` pass; the toy starts
-  and can toggle the window. ✅
-- No Python API change, no second interpreter. ✅
+  and can toggle the window. ✅ (2026-10-22: gpui lib **95 passed**, toy **12 passed**;
+  the toy's live window/toggle was not exercised in this pass.)
+- No Python API change, no second interpreter. ✅ (`ferrocad_shell.commands()` gained
+  the two optional surface fields; the `FreeCADGui` facade is unchanged. The Dev Tools
+  view owns only `Entity<Shell>`.)
 
 ## As built (2026-10-22)
 
@@ -145,6 +157,12 @@ its modal over the viewport, where the user is looking.
   window's title bar** (`window_frame_with_leading`), checked while the window is
   open; the viewport header keeps only the `Grid`/`Axes`/`WP`/`Mods` controls. The Dev
   Tools window's own title bar carries no menu (it calls plain `window_frame`).
+- The menu is **title-bar chrome, not header chrome**. When the platform draws the
+  decorations, `window_frame_with_leading` cannot put it in a client title bar, so it
+  renders a slim `leading-bar` below the platform title bar instead of dropping the
+  menu. The headless test platform reports server-side decorations and exercises that
+  branch; a `TitleBarHarness` renders the production `title_bar` for the click/popover
+  assertions. The real client-decoration frame is visual-only.
 - Shortcuts run from both windows through `Shell::handle_key`; the Dev Tools root also
   forwards `Esc` to an open modal in the main window.
 

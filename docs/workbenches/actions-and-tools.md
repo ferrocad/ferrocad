@@ -19,10 +19,10 @@ workbench scripts port, and it keeps the shell naming no workbench.
 | --- | --- | --- |
 | `python/FreeCADGui/__init__.py` | a **console stub**: deliberately no `addCommand`, no `Selection`, no `activeDocument` | ✅ registry + `Selection` snapshot (§16) |
 | `FreeCAD.GuiUp` | `0`, hardcoded in the facade | ✅ `1` in the app, `0` headless (§8, §16) |
-| Command registry in the shell | ▢ none; the console has three hardcoded buttons (`version()`, `objects`, `recompute()`) | ✅ actions bar over the registry (A1) |
+| Command registry in the shell | ▢ none; the console has three hardcoded buttons (`version()`, `objects`, `recompute()`) | ✅ header controls, popovers and dock over the registry (A1, P0.6) |
 | Multi-selection | ▢ the inspector held one name; nothing pushed it to Python | ✅ click / Ctrl·Shift-click, pushed to the facade (A2) |
 | Built-in commands | ▢ none | ✅ `App_Delete`, `App_Move` (A2) |
-| Menu bar / toolbar / shortcuts | ▢ none (S2) | ◐ the actions bar; menus and `Accel` bindings are A4 |
+| Menu bar / toolbar / shortcuts | ▢ none (S2) | ◐ header controls, action dock and the title-bar app menu; `Accel` bindings are A4 |
 | Workbench entry points | module hooks (`register_display_provider`, `register_interaction_provider`) and `ferrocad_shell.add_namespace` | ✅ plus `FreeCADGui.addCommand` |
 | Interactive tools | `ferrocad_stage::Tool` (polyline), `Manipulator`, `TransformGizmo`; contributed in Rust | same |
 | Toy's creation | `Toy.makeSlab(...)`, reachable through the console namespace | ✅ `Toy_MakeSlab` command as well |
@@ -62,7 +62,7 @@ class MakeSlab:
             "MenuText": "Create Slab",
             "ToolTip": "Add a parametric slab to the document",
             "Accel": "Shift+S",
-            "Group": "Toy",          # optional; orders the actions bar
+            "Group": "Toy",          # optional; sort metadata only
             "CmdType": "ForEdit",    # metadata only (see §9)
         }
 
@@ -105,7 +105,7 @@ FreeCADGui.runCommand(name, *args)     # -> whatever Activated returned (a dict/
 - A workbench registers at import time, like the display hooks.
 - **Errors are isolated.** A raising `Activated` returns an error dict the shell shows
   in the status line; a raising `IsActive` disables that command and is reported once
-  (stderr + console). One broken command never breaks the bar, the same policy as a
+  (stderr + console). One broken command never breaks the chrome, the same policy as a
   broken workbench script.
 
 ### 3.2 Enablement and checked state
@@ -278,7 +278,7 @@ shell  run_command("Toy_MakeSlab")
 - **UI.** A centred glass panel over a dimmed, mouse-blocking backdrop, with
   per-kind controls (text inputs, an on/off toggle, `‹ ›` for an enum), an inline
   error line, and the accept/cancel buttons. `Enter` in a field or on the panel
-  accepts; `Esc` cancels. A disabled command stays visible in the bar; the modal
+  accepts; `Esc` cancels. A disabled command stays visible in the chrome; the modal
   only exists while a token is open.
 - **Lifecycle.** One dialog at a time; a second request is rejected and its token
   is cancelled immediately. Opening a document (`bootstrap`) calls `_cancel_all`,
@@ -310,10 +310,11 @@ empty (a numeric field then fails validation until filled).
 
 ## 7. View and tool requests
 
-> **As built (2026-10-22).** The flat actions bar this section and §16 described is
+> **As built (2026-10-22).** The flat actions bar that this section and §16 described is
 gone. Commands now live on header controls (grid/axes/workplane/mods), their anchored
 popovers, and the selection-driven action dock; every command is also listed in the
-Dev Tools window. See [`../tasks/toolbar-chrome.md`](../tasks/toolbar-chrome.md) §10.
+Dev Tools window, and app-level commands (Dev Tools first) are in the title-bar `☰`
+menu. See [`../tasks/toolbar-chrome.md`](../tasks/toolbar-chrome.md) §10.
 The **request shapes** below are unchanged — only where the buttons live.
 
 A command that changes presentation rather than the document returns a request in the
@@ -372,7 +373,7 @@ registry.
 | Id | Action | Notes |
 | --- | --- | --- |
 | `App_Delete` ✅ | remove the selected objects | one transaction; `IsActive` = selection non-empty |
-| `App_Move` ✅ | move the selection by `(dx, dy, dz)` | the dialog is the bar's path; `runCommand("App_Move", dx, dy, dz)` applies the same code without it |
+| `App_Move` ✅ | move the selection by `(dx, dy, dz)` | the dialog is the dock's path; `runCommand("App_Move", dx, dy, dz)` applies the same code without it |
 | `File_New` / `File_Open` / `File_Save` / `File_SaveAs` / `File_Close` | S2 | base app, not a workbench |
 | `App_Undo` / `App_Redo` | S2 | `IsActive` from `getAvailableUndos` |
 | `Toy_MakeSlab` | create a slab | the toy's `makeSlab`, wrapped as a command (asks for Width/Depth/Height) |
@@ -403,12 +404,13 @@ using it to auto-wrap transactions is deliberately not done (§3.3).
   fires the same `run_command` path as a click, so enablement isolation and
   transaction rules are identical; a disabled command does not fire.
 - **Tooltips** are the command's `GetResources()["ToolTip"]` plus its `Accel`, shown
-  through gpui's tooltip builder on the bar button (bite-gpui 1.23 has the API).
+  through gpui's tooltip builder on the control that runs it (header, popover row,
+  dock row or Dev Tools row; bite-gpui 1.23 has the API).
 - **Status.** A command's `{"status": …}` result replaces the status line, and the
   shell adds the neutral pass-through report beside it (`clicked through: navicube →
   Slab`) when the pointer is over an overlay's interior.
-- Icons: `GetResources()["Pixmap"]` is accepted and ignored; the bar is text until the
-  widgets/icons slice.
+- Icons: `GetResources()["Pixmap"]` is accepted and ignored; the controls are text
+  until the widgets/icons slice.
 
 ---
 
@@ -437,7 +439,7 @@ using it to auto-wrap transactions is deliberately not done (§3.3).
 | Slice | Deliverable | Acceptance |
 | --- | --- | --- |
 | **A0 — registry** ✅ | `FreeCADGui.addCommand/runCommand/listCommands`, resource defaults, duplicate/error isolation; `GuiUp` flag plumbing; Python conformance tests | a registered command runs and returns its value; a raising `Activated`/`IsActive` is isolated; duplicates raise |
-| **A1 — shell bridge + bar** ✅ | `ferrocad_shell.commands()/run_command()`, `ferrocad_gpui::commands`, an actions bar with enabled/checked, rebuild on selection/doc events; `Toy_MakeSlab` registered | headless toy test: the bar lists the toy command, a run creates the object, undo removes it |
+| **A1 — shell bridge + placement** ✅ | `ferrocad_shell.commands()/run_command()`, `ferrocad_gpui::commands`, a surface-placed command list with enabled/checked (the A1 flat bar was replaced by the P0.6 header/dock), rebuild on selection/doc events; `Toy_MakeSlab` registered | headless toy test: the command list surfaces the toy command, a run creates the object, undo removes it |
 | **A2 — selection + built-ins** ✅ | `FreeCADGui.Selection` snapshot pushed by the shell, multi-selection in the inspector (Ctrl/Cmd·Shift toggle), `App_Delete`, `App_Move` (delta via `runCommand`; the dialog is A3) | deleting two selected objects is one undo step; `IsActive` flips with the selection |
 | **A3 — dialogs** ✅ | the spec + token protocol, the glass modal, `text/int/float/quantity/bool/enum` fields, validation, cancel; `Toy_MakeSlab` and `App_Move` use it | create via the dialog; cancel creates nothing and leaves no transaction or token; a bad value is rejected in the shell |
 | **A4 — shortcuts + status** ✅ | `Accel` parsing and window-root bindings, tooltips (ToolTip + Accel), `{"status"}` results, the `HoverReport` pass-through line | a shortcut runs the same command as a click; the status bar shows the command's message and the overlay pass-through |
@@ -482,14 +484,15 @@ what makes it able to ask the user something.
 
 - **Python (A0)** — `tests/test_commands.py`: registration, duplicate ids, resource
   defaults, `runCommand` return, `IsActive`/`IsChecked`, error isolation. ✅
-- **Shell (A1–A4)** — headless gpui tests: the bar's entries and states, a run refreshes
+- **Shell (A1–A4)** — headless gpui tests: the chrome's entries and states (header
+  controls, popover rows, dock rows and the Dev Tools list), a run refreshes
   the model, a multi-selection is pushed and flips `IsActive`, a dialog validates,
   accepts once, renders, and cancels on `Esc`, and a registered `Accel` runs its
   command. ✅ `crates/ferrocad_gpui/src/shell.rs` has
   `a_multi_selection_is_pushed_and_enables_the_built_ins`,
   `a_command_dialog_validates_accepts_and_cancels`,
   `the_command_dialog_renders_and_escape_cancels`, `a_shortcut_runs_the_command` and
-  `the_pass_through_line_names_the_overlay_and_target`; the bar→model→undo path is
+  `the_pass_through_line_names_the_overlay_and_target`; the chrome→model→undo path is
   asserted in `crates/ferrocad_toy/tests/commands.rs`.
 - **Viewport (A4)** — `navicube_negative_space_reaches_the_scene` also asserts the
   `HoverReport` names the overlay a click passes through. ✅
@@ -506,15 +509,16 @@ what makes it able to ask the user something.
   workbench uses the identical contract.
 
 The demo gate for the whole note: a user opens the app, sees the toy's "Create Slab"
-button, clicks it, fills the form, gets an object, then deletes it from the same bar —
-with two undo steps and no terminal.
+row in the action dock, clicks it, fills the form, gets an object, then deletes it
+from the same dock — with two undo steps and no terminal.
 
 ---
 
 ## 16. As built (A0–A5, 2026-10-20)
 
 The vertical slice is in: a workbench can **offer** an action, the shell can **run**
-it from the bar or a shortcut, a selection reaches both the UI and the command
+it from the chrome (a header control, a popover row, the dock, the Dev Tools list or
+the title-bar app menu) or a shortcut, a selection reaches both the UI and the command
 predicates, a command can **ask** the user something, change presentation, or start
 a tool, and the status line explains both the result and what a click would pass
 through — without the shell naming the workbench.
@@ -532,22 +536,23 @@ Two shape decisions fell out of the build:
 - **`IsActive` defaults to true; `IsChecked` defaults to false.** That matches upstream's
   intent (a command without the method is always available and not checkable), and it
   keeps a minimal command minimal.
-- **The registry is populated in registration order, and the bar renders it in that
-  order.** `Group` is carried but not yet used to lay the bar out; ordering by group is
-  an A4/S2 concern.
+- **The registry is populated in registration order; the chrome does not reorder it.**
+  `Group` is carried for sorting metadata only. Placement is decided by
+  `FerroCAD_Surface`/`FerroCAD_Parent` (§4): an unannotated command lands on the dock,
+  and a header surface's primary runs from the control's label.
 
 ### Rust
 
 | File | What it does |
 | --- | --- |
-| `ferrocad_gpui/src/commands.rs` | `CommandInfo` (id/menu/tooltip/accel/group/cmd_type/enabled/checked + `label()`) and `CommandOutcome` (`ok`/`error`/`status`/`value`/`dialog`/`token`); `list()`, `run(id)`, `accept(token, values)`, `cancel(token)` |
+| `ferrocad_gpui/src/commands.rs` | `CommandInfo` (id/menu/tooltip/accel/group/cmd_type/surface/parent/enabled/checked + `label()`, `surface()`, `parent()`) and `CommandOutcome` (`ok`/`error`/`status`/`value`/`dialog`/`token`/`view`/`tool`/`select`); `Surface` + `group_by_surface`/`popover_commands`; `list()`, `run(id)`, `accept(token, values)`, `cancel(token)` |
 | `ferrocad_gpui/src/dialog.rs` | `DialogSpec`/`DialogField`/`Kind`/`ValueState` and the pure `collect()` validation (typed values, `min`/`max`, `required`, quantity parsing, unknown-kind rejection) |
 | `ferrocad_gpui/src/view.rs` | `ViewRequest` (`grid`, `projection`), `ViewState` (grid + `ProjectionName`) and `apply()` — validation-first, returning a one-line summary |
 | `ferrocad_gpui/src/selection.rs` | `SelectionItem` (`object` + `elements`, the last item is primary); `push()` — the one call that makes the UI selection visible to Python |
 | `ferrocad_gpui/src/shortcuts.rs` | `Accelerator::parse` (the documented `Accel` subset), `is_global` (chords/named keys only) and `matches` (exact modifiers); the shell binds the globals to a window-root key handler |
 | `ferrocad_gpui/src/contributions.rs` | the manipulator/gizmo factories plus `ToolFactory` and `with_tool(id, factory)` / `tool_for(id)` — the edition-level tool registry |
 | `ferrocad_gpui/src/python.rs` | `GUI: OnceLock<bool>`; `gui()`; `configure(..., gui)`; `FreeCAD.GuiUp = 1` set **before** the app script is imported so import-time workbench code sees it; `commands()` / `run_command(name)` / `set_selection(items)` / `dialog_accept(token, values)` / `dialog_cancel(token)` |
-| `ferrocad_gpui/src/shell.rs` | `ShellModel.commands`, `.selection` and `.view`; `refresh_commands` (rebuilds the shortcut list too); `run_command` (dialog / view / tool / run → refresh → stage → status → console); `replace_selection` / `toggle_select` / `clear_selection`; the dialog state machine (`open_dialog_state`, `accept_dialog`, `finish_dialog`, `cancel_dialog`, `toggle_flag`, `cycle_choice`); `apply_view` (state + mirror + projection + re-list); `start_tool` (registry → viewport, pending until a viewport exists); `handle_key` (both windows); `toggle_dev_tools`; `dialog_overlay`; `dev_tools_body`; `hover_line` in the status bar |
+| `ferrocad_gpui/src/shell.rs` | `ShellModel.commands`, `.selection` and `.view`; `refresh_commands` (rebuilds the shortcut list too); `run_command` (Dev Tools / dialog / view / tool / select / run → refresh → stage → status → console); `replace_selection` / `toggle_select` / `clear_selection`; the dialog state machine (`open_dialog_state`, `accept_dialog`, `finish_dialog`, `cancel_dialog`, `toggle_flag`, `cycle_choice`); `apply_view` (state + mirror + projection + re-list); `start_tool` (registry → viewport, pending until a viewport exists); `handle_key` (both windows); `toggle_dev_tools`/`open_dev_tools`; `dialog_overlay`; `settings_card_view`/`open_settings_card`/`commit_property`; `dev_tools_body`; `hover_line` in the status bar |
 | `ferrocad_gpui/src/chrome.rs` | the P0.6 primitives: `viewport_header` (grid/axes/workplane/mods), `split_button` + anchored `popover`, `action_dock`, and the Dev Tools `command_list_panel` |
 | `ferrocad_gpui/src/dev_tools.rs` | the `DevTools` second-window view over `Entity<Shell>` and its window options |
 | `ferrocad_viewport/src/inventor_view.rs` | `HoverReport { target, through }` — updated on every pointer move from the same pick and overlay tests the click uses; `hover_report()` |
@@ -578,6 +583,7 @@ pushes the pruned set, so `IsActive` cannot latch onto a dead object.
 | `crates/ferrocad_toy/tests/commands.rs` | `Toy_MakeSlab` is listed with its label/group/type and enabled; running it returns a dialog and creates nothing; accepting creates the slab; the token is spent; one undo removes it |
 | `crates/ferrocad_toy/tests/selection.rs` | the shell bridge's push flips `App_Delete`/`App_Move` enabled; two slabs delete in one undo step; the move dialog opens and can be cancelled; a delta path moves and undoes as one step |
 | `ferrocad_gpui` unit tests | the JSON shapes (`CommandInfo`, `SelectionItem`, `DialogSpec`); `dialog` validation (types, ranges, required text, unknown kinds); the `Accel` parser and matcher; `view` apply/validation; tool-registry routing; `a_multi_selection_is_pushed_and_enables_the_built_ins`; `a_command_dialog_validates_accepts_and_cancels`; `the_command_dialog_renders_and_escape_cancels`; `a_shortcut_runs_the_command`; `the_pass_through_line_names_the_overlay_and_target`; `a_view_request_toggles_the_grid_and_its_check_mark`; `a_tool_request_resolves_by_id` |
+| `ferrocad_gpui` P0.5/P0.6 tests | `the_main_window_carries_only_the_viewport_and_status`; `the_dev_tools_window_lists_commands_with_enablement`; `toggling_dev_tools_preserves_the_model`; `the_dev_tools_command_has_a_headless_status`; `every_registered_command_lands_on_exactly_one_surface`; `the_grid_split_button_runs_the_label_and_the_caret_opens`; `the_grid_popover_reports_the_active_provider_and_spacing`; `view_grid_settings_selects_the_settings_node`; `the_action_dock_follows_the_selection`; `the_app_menu_opens_dev_tools` |
 | `ferrocad_viewport` | `navicube_negative_space_reaches_the_scene` also asserts the hover report names the navicube as the overlay a click passes through |
 
 ### Known gaps
@@ -586,8 +592,9 @@ pushes the pruned set, so `IsActive` cannot latch onto a dead object.
   separator; a richer tooltip is a widget concern.
 - **Disabled commands cannot explain themselves.** Upstream's `IsActive` is a bool;
   the tooltip still shows the static `ToolTip`.
-- **The bar is rebuilt, not diffed.** That is fine at toy scale; a large Part registry
-  may want a keyed list (the same retained-vs-rebuild question as the inspector).
+- **The chrome is rebuilt, not diffed.** That is fine at toy scale; a large Part
+  registry may want a keyed list (the same retained-vs-rebuild question as the
+  inspector).
 - **Only safe global chords fire.** A bare letter or `Shift`-letter `Accel` is parsed
   but not bound, because it would shadow typing; upstream's `S, H` sequences are
   deferred. The dialog owns the keyboard entirely while open.
@@ -595,12 +602,13 @@ pushes the pruned set, so `IsActive` cannot latch onto a dead object.
   interiors also fall through, but they have no `contains` query yet; the report's
   `through` is `None` there (the target is suppressed when a handle claims the
   pointer).
-- **The grid flag is not rendered yet.** `App_ToggleGrid` owns the state and its check
-  mark; drawing the grid (the dotted ground field, fade, labels) is G5 in
-  [`axis-origin-grid.md`](../interaction/axis-origin-grid.md).
-- **Tools have no end/commit channel.** `Tool` reacts to pointer events and draws
-  transients; a polyline cannot yet be committed to the document or cancelled from
-  the bar. That protocol is the next tool slice.
+- **Grid appearance is still being tuned.** The grid is drawn (G2) and G5 owns the
+  step/extent preferences; `App_ToggleGrid` drives whichever provider draws it (P0).
+  What remains in [`axis-origin-grid.md`](../interaction/axis-origin-grid.md) is tuning
+  the visual tokens, not wiring the flag.
+- **Tools have no commit channel.** `Tool` reacts to pointer events and draws
+  transients; a polyline cannot yet be committed to the document. The tool strip's
+  Cancel (and `Esc`) ends the session and discards it without writing.
 - **Only `grid` and `projection` are view requests.** Workplanes/UCS are not modelled
   yet (G-track); an unknown key in a `view` dict is ignored rather than rejected, so a
   newer workbench can send it to an older shell safely.

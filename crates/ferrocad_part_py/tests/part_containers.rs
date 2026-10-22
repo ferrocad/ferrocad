@@ -201,6 +201,37 @@ fn matrix_transforms_move_shapes() {
         assert!(returned.is(&shape), "transformShape returns the same object");
         let center = shape.getattr("CenterOfMass").expect("CenterOfMass");
         assert!((center.getattr("x").unwrap().extract::<f64>().unwrap() - 11.0).abs() < 1e-9);
+
+        // translated / scaled / mirror and the Placement setter.
+        let cube = part.call_method1("makeBox", (2.0, 2.0, 2.0)).expect("cube");
+        let shifted = cube
+            .call_method1("translated", (vector.call1((1.0, 2.0, 3.0)).unwrap(),))
+            .expect("translated");
+        let center = shifted.getattr("CenterOfMass").unwrap();
+        assert!((center.getattr("y").unwrap().extract::<f64>().unwrap() - 3.0).abs() < 1e-9);
+        let scaled = cube.call_method1("scaled", (2.0,)).expect("scaled");
+        assert!((scaled.getattr("Volume").unwrap().extract::<f64>().unwrap() - 64.0).abs() < 1e-9);
+        let mirrored = cube
+            .call_method1("mirror", (vector.call1((0.0, 0.0, 0.0)).unwrap(), vector.call1((0.0, 1.0, 0.0)).unwrap()))
+            .expect("mirror");
+        let center = mirrored.getattr("CenterOfMass").unwrap();
+        assert!((center.getattr("y").unwrap().extract::<f64>().unwrap() + 1.0).abs() < 1e-9);
+
+        let placed = part
+            .call_method1("makeBox", (1.0, 1.0, 1.0, vector.call1((10.0, 0.0, 0.0)).unwrap()))
+            .expect("makeBox(..., pnt)");
+        let bounds = placed.getattr("BoundBox").unwrap();
+        assert!((bounds.getattr("XMin").unwrap().extract::<f64>().unwrap() - 10.0).abs() < 1e-9);
+
+        let other = part.call_method1("makeBox", (1.0, 1.0, 1.0)).unwrap();
+        let target = ferrocad
+            .getattr("Placement")
+            .unwrap()
+            .call1((vector.call1((5.0, 0.0, 0.0)).unwrap(), ferrocad.getattr("Rotation").unwrap().call0().unwrap()))
+            .unwrap();
+        other.setattr("Placement", target).expect("Shape.Placement =") ;
+        let bounds = other.getattr("BoundBox").unwrap();
+        assert!((bounds.getattr("XMin").unwrap().extract::<f64>().unwrap() - 5.0).abs() < 1e-9);
     });
 }
 

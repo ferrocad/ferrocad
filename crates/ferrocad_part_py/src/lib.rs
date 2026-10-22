@@ -137,6 +137,57 @@ impl PartShape {
         Ok(module.getattr("Placement")?.call0()?.unbind())
     }
 
+    /// Assigning a placement bakes it into the geometry (there is no separate
+    /// shape location in this kernel).
+    #[setter]
+    fn set_Placement(&self, value: &Bound<'_, PyAny>) -> PyResult<()> {
+        let matrix = matrix_from_py(&value.call_method0("toMatrix")?)?;
+        let shape = self.named_shape()?;
+        let moved = ferrocad_part::backend()
+            .transform(&shape, &matrix)
+            .map_err(kernel_error)?;
+        self.replace_shape(Some(moved));
+        Ok(())
+    }
+
+    /// A copy translated by `vector` (`Shape.translated`).
+    fn translated(&self, vector: &Bound<'_, PyAny>) -> PyResult<PartShape> {
+        let offset = curves::vector(vector)?;
+        self.transformed_by(&translation_matrix(offset))
+    }
+
+    /// A copy scaled uniformly by `factor` about `center` (`Shape.scaled`).
+    #[pyo3(signature = (factor, center = None))]
+    fn scaled(
+        &self,
+        factor: f64,
+        center: Option<&Bound<'_, PyAny>>,
+    ) -> PyResult<PartShape> {
+        let center = center
+            .map(curves::vector)
+            .transpose()?
+            .unwrap_or_else(ferrocad_curves::Vector3::zero);
+        self.transformed_by(&scale_matrix(factor, center))
+    }
+
+    /// Mirror this shape across the plane through `point` with `normal`, in place
+    /// (`Shape.mirror`).
+    fn mirror(
+        slf: &Bound<'_, Self>,
+        point: &Bound<'_, PyAny>,
+        normal: &Bound<'_, PyAny>,
+    ) -> PyResult<PyObject> {
+        let point = curves::vector(point)?;
+        let normal = curves::vector(normal)?;
+        let matrix = mirror_matrix(point, normal)?;
+        let shape = slf.borrow().named_shape()?;
+        let moved = ferrocad_part::backend()
+            .transform(&shape, &matrix)
+            .map_err(kernel_error)?;
+        slf.borrow_mut().replace_shape(Some(moved));
+        Ok(slf.clone().into_any().unbind())
+    }
+
     /// The direct children (`Shape.childShapes`): the highest-level sub-shapes.
     #[pyo3(signature = (shape_type = None))]
     fn childShapes(
@@ -527,6 +578,52 @@ fn kernel_error(error: ferrocad_geom::GeomError) -> PyErr {
     curves::OCCError::new_err(error.to_string())
 }
 
+fn translation_matrix(offset: ferrocad_curves::Vector3) -> ferrocad_types::Matrix4 {
+    let mut values = ferrocad_types::Matrix4::identity().m;
+    values[3] = offset.x;
+    values[7] = offset.y;
+    values[11] = offset.z;
+    ferrocad_types::Matrix4::from_values(values)
+}
+
+fn scale_matrix(factor: f64, center: ferrocad_curves::Vector3) -> ferrocad_types::Matrix4 {
+    let mut values = ferrocad_types::Matrix4::identity().m;
+    values[0] = factor;
+    values[5] = factor;
+    values[10] = factor;
+    values[3] = center.x * (1.0 - factor);
+    values[7] = center.y * (1.0 - factor);
+    values[11] = center.z * (1.0 - factor);
+    ferrocad_types::Matrix4::from_values(values)
+}
+
+fn mirror_matrix(
+    point: ferrocad_curves::Vector3,
+    normal: ferrocad_curves::Vector3,
+) -> PyResult<ferrocad_types::Matrix4> {
+    if normal.length() == 0.0 {
+        return Err(curves::OCCError::new_err(
+            "a mirror plane needs a non-zero normal",
+        ));
+    }
+    let n = normal.normalize();
+    let d = n.x * point.x + n.y * point.y + n.z * point.z;
+    let mut values = ferrocad_types::Matrix4::identity().m;
+    values[0] = 1.0 - 2.0 * n.x * n.x;
+    values[1] = -2.0 * n.x * n.y;
+    values[2] = -2.0 * n.x * n.z;
+    values[3] = 2.0 * d * n.x;
+    values[4] = values[1];
+    values[5] = 1.0 - 2.0 * n.y * n.y;
+    values[6] = -2.0 * n.y * n.z;
+    values[7] = 2.0 * d * n.y;
+    values[8] = values[2];
+    values[9] = values[6];
+    values[10] = 1.0 - 2.0 * n.z * n.z;
+    values[11] = 2.0 * d * n.z;
+    Ok(ferrocad_types::Matrix4::from_values(values))
+}
+
 /// Read a `ferrocad.Matrix` through its `A11`…`A44` elements.
 fn matrix_from_py(value: &Bound<'_, PyAny>) -> PyResult<ferrocad_types::Matrix4> {
     let mut values = [0.0; 16];
@@ -557,6 +654,14 @@ enum BooleanOp {
 }
 
 impl PartShape {
+    fn transformed_by(&self, matrix: &ferrocad_types::Matrix4) -> PyResult<PartShape> {
+        let shape = self.named_shape()?;
+        let moved = ferrocad_part::backend()
+            .transform(&shape, matrix)
+            .map_err(kernel_error)?;
+        Ok(PartShape::from_shape(moved))
+    }
+
     fn mass_properties(&self) -> Option<ferrocad_geom::MassProperties> {
         let shape = self.shape()?;
         ferrocad_part::backend().mass_properties(&shape)
@@ -668,13 +773,37 @@ fn require_full_revolution(operation: &str, angle: f64) -> PyResult<()> {
     Ok(())
 }
 
-/// `Part.makeBox(length, width, height)` → a `Part.Shape`.
+/// `Part.makeBox(length, width, height, pnt=None, dir=None)` → a `Part.Shape`.
 #[pyfunction]
-fn makeBox(length: f64, width: f64, height: f64) -> PyResult<PartShape> {
-    match ferrocad_part::make_box(length, width, height) {
-        Some(shape) => Ok(PartShape { shape: Mutex::new(Some(shape)) }),
-        None => Err(PyRuntimeError::new_err("Part.makeBox did not produce a shape")),
+#[pyo3(signature = (length, width, height, pnt = None, dir = None))]
+fn makeBox(
+    length: f64,
+    width: f64,
+    height: f64,
+    pnt: Option<&Bound<'_, PyAny>>,
+    dir: Option<&Bound<'_, PyAny>>,
+) -> PyResult<PartShape> {
+    let mut shape = ferrocad_part::make_box(length, width, height)
+        .ok_or_else(|| PyRuntimeError::new_err("Part.makeBox did not produce a shape"))?;
+    if pnt.is_some() || dir.is_some() {
+        let base = pnt
+            .map(curves::vector)
+            .transpose()?
+            .unwrap_or_else(ferrocad_curves::Vector3::zero);
+        let rotation = match dir.map(curves::vector).transpose()? {
+            Some(direction) if direction.length() > 0.0 => {
+                ferrocad_types::Rotation::from_vectors(
+                    ferrocad_curves::Vector3::new(0.0, 0.0, 1.0),
+                    direction,
+                )
+            }
+            _ => ferrocad_types::Rotation::identity(),
+        };
+        shape = ferrocad_part::backend()
+            .place(&shape, &ferrocad_types::Placement { base, rotation })
+            .map_err(kernel_error)?;
     }
+    Ok(PartShape::from_shape(shape))
 }
 
 /// `Part::PropertyPartShape` → `Part.Shape` (what `obj.Shape` returns).

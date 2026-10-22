@@ -18,7 +18,6 @@
 // or the ellipse major radius; `minor` the ellipse minor radius (unused for a
 // circle). On kind 0 every other value is 0.
 
-#include <BOPAlgo_Builder.hxx>
 #include <BRepAlgoAPI_BuilderAlgo.hxx>
 #include <BRepBuilderAPI_MakeFace.hxx>
 #include <BRepFill_Filling.hxx>
@@ -323,6 +322,9 @@ inline std::unique_ptr<TopoDS_Shape> fc_split_wire_into_faces(const TopoDS_Shape
     return nullptr;
   }
   try {
+    // Splitting the wire against itself breaks a self-intersecting boundary
+    // (figure-eights, crossing edges, self-intersecting B-splines) into simple
+    // edges.
     BRepAlgoAPI_BuilderAlgo builder;
     TopTools_ListOfShape arguments;
     arguments.Append(wire);

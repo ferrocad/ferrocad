@@ -95,6 +95,45 @@ impl PartShape {
         *self.shape.lock().unwrap_or_else(|e| e.into_inner()) = shape;
     }
 
+    /// The shape's topological kind (`Shape.ShapeType`), inferred from its
+    /// sub-shape lists.
+    ///
+    /// The seam has no "what kind of shape is this" query, so this walks the
+    /// element lists from the highest dimension down and reports the first kind
+    /// that is present:
+    ///
+    /// - exactly one element of that kind → that kind's name (`Solid`, `Shell`,
+    ///   `Face`, `Wire`, `Edge`, `Vertex`);
+    /// - more than one element of that kind → `Compound` (a compound of two
+    ///   solids, two faces, …);
+    /// - no elements of any kind → `Compound` (this also covers the null shape).
+    ///
+    /// A box therefore reports `Solid` (its one solid wins over its six faces),
+    /// while a single edge reports `Edge`. The inference cannot tell a compound
+    /// that happens to hold exactly one solid from that solid itself, so the
+    /// former is reported as `Solid` — upstream would say `Compound`.
+    fn shape_type(&self) -> &'static str {
+        let Some(shape) = self.shape() else {
+            return "Compound";
+        };
+        let backend = ferrocad_part::backend();
+        for (kind, name) in [
+            (ElementKind::Solid, "Solid"),
+            (ElementKind::Shell, "Shell"),
+            (ElementKind::Face, "Face"),
+            (ElementKind::Wire, "Wire"),
+            (ElementKind::Edge, "Edge"),
+            (ElementKind::Vertex, "Vertex"),
+        ] {
+            match backend.elements(&shape, kind).len() {
+                0 => continue,
+                1 => return name,
+                _ => return "Compound",
+            }
+        }
+        "Compound"
+    }
+
     /// The sub-shapes of one kind, in the kernel's order.
     pub(crate) fn sub_shapes(&self, kind: ElementKind) -> PyResult<Vec<Shape>> {
         let shape = self
@@ -385,6 +424,31 @@ impl PartShape {
             .collect()
     }
 
+    /// The solids (`Shape.Solids`) as `Part.Shape` handles.
+    #[getter]
+    fn Solids(&self, py: Python<'_>) -> PyResult<Vec<Py<PartShape>>> {
+        self.sub_shapes(ElementKind::Solid)?
+            .into_iter()
+            .map(|shape| Py::new(py, PartShape::from_shape(shape)))
+            .collect()
+    }
+
+    /// The shells (`Shape.Shells`) as `Part.Shape` handles.
+    #[getter]
+    fn Shells(&self, py: Python<'_>) -> PyResult<Vec<Py<PartShape>>> {
+        self.sub_shapes(ElementKind::Shell)?
+            .into_iter()
+            .map(|shape| Py::new(py, PartShape::from_shape(shape)))
+            .collect()
+    }
+
+    /// The shape's topological kind (`Shape.ShapeType`); see the `shape_type`
+    /// inference above.
+    #[getter]
+    fn ShapeType(&self) -> &'static str {
+        self.shape_type()
+    }
+
     /// The backing surface (`Face.Surface`), when the shape is a face.
     #[getter]
     fn Surface(&self) -> Option<curves::PySurface> {
@@ -422,10 +486,47 @@ impl PartShape {
         }
     }
 
-    /// The shape's length (`Shape.Length`): edge/wire length, 0 otherwise.
+    /// The shape's length (`Shape.Length`).
+    ///
+    /// Upstream sums the lengths of the edges of every face, so a solid counts
+    /// each edge once per adjacent face: a 2x1x2 box is 40, not 20. This kernel's
+    /// linear properties count each edge once, so for a solid or a shell we add up
+    /// the perimeter of each face instead. Edges, wires and faces keep the
+    /// kernel's linear-properties value (a wire still counts each edge once).
     #[getter]
     fn Length(&self) -> f64 {
-        self.mass_properties().map(|mass| mass.length).unwrap_or(0.0)
+        match self.shape_type() {
+            "Solid" | "Shell" => {
+                let backend = ferrocad_part::backend();
+                self.sub_shapes(ElementKind::Face)
+                    .unwrap_or_default()
+                    .into_iter()
+                    .filter_map(|face| backend.mass_properties(&face))
+                    .map(|mass| mass.length)
+                    .sum()
+            }
+            _ => self.mass_properties().map(|mass| mass.length).unwrap_or(0.0),
+        }
+    }
+
+    /// The shape's mass (`Shape.Mass`). This kernel has unit density, so the mass
+    /// is the volume.
+    #[getter]
+    fn Mass(&self) -> f64 {
+        self.Volume()
+    }
+
+    /// The first moments of volume (`Shape.StaticMoments`): `centre * volume`.
+    #[getter]
+    fn StaticMoments(&self) -> (f64, f64, f64) {
+        match self.mass_properties() {
+            Some(mass) => (
+                mass.center_of_mass.x * mass.volume,
+                mass.center_of_mass.y * mass.volume,
+                mass.center_of_mass.z * mass.volume,
+            ),
+            None => (0.0, 0.0, 0.0),
+        }
     }
 
     /// The surface area (`Shape.Area`).
@@ -472,6 +573,59 @@ impl PartShape {
     #[getter]
     fn ElementReverseMap(&self, py: Python<'_>) -> PyResult<Py<PyDict>> {
         Ok(PyDict::new(py).unbind())
+    }
+
+    /// The serialised element map (`Shape.Content`). This kernel emits no element
+    /// maps, so it is empty; upstream prints the same `<ElementMap/>` for a fresh
+    /// box.
+    #[getter]
+    fn Content(&self) -> &'static str {
+        "<ElementMap/>\n"
+    }
+
+    /// The element map (`Shape.ElementMap`), empty without TNP.
+    #[getter]
+    fn ElementMap(&self, py: Python<'_>) -> PyResult<Py<PyDict>> {
+        Ok(PyDict::new(py).unbind())
+    }
+
+    /// Upstream's history hasher (`Shape.Hasher`); this kernel keeps none.
+    #[getter]
+    fn Hasher(&self, py: Python<'_>) -> PyObject {
+        py.None()
+    }
+
+    /// The owning module (`Shape.Module`).
+    #[getter]
+    fn Module(&self) -> &'static str {
+        "Part"
+    }
+
+    /// The shape orientation (`Shape.Orientation`). This kernel never reverses
+    /// shapes, so a shape is always forward.
+    #[getter]
+    fn Orientation(&self) -> &'static str {
+        "Forward"
+    }
+
+    /// Upstream's type id for a `TopoShape`.
+    #[getter]
+    fn TypeId(&self) -> &'static str {
+        "Part::TopoShape"
+    }
+
+    /// The compound children (`Shape.Compounds`). The seam has no enumeration for
+    /// compounds inside a shape, so this is always empty.
+    #[getter]
+    fn Compounds(&self, py: Python<'_>) -> Py<PyList> {
+        PyList::empty(py).unbind()
+    }
+
+    /// The comp-solid children (`Shape.CompSolids`). The seam has no enumeration
+    /// for comp-solids inside a shape, so this is always empty.
+    #[getter]
+    fn CompSolids(&self, py: Python<'_>) -> Py<PyList> {
+        PyList::empty(py).unbind()
     }
 
     /// `Shape.Vertex1`, `Shape.Edge2`, `Shape.Face3`, … — the kernel's 1-based

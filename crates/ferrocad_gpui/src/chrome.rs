@@ -710,13 +710,108 @@ pub(crate) fn providers_panel(
     panel
 }
 
+/// The settings command the gizmo provider ships (dev-only in the registry; the
+/// dock builds its row by hand because the control, not the command list, owns it).
+const GIZMO_SETTINGS: &str = "GizmoOverlay_Settings";
+
+/// The contextual `Gizmo ▾` control in the action dock.
+///
+/// The transform gizmo is a **transient tool handle**, not a persistent scene helper:
+/// it exists only while a selection arms it. So its look and its settings do not live in
+/// the viewport header with `Grid`/`Axes`/`WP` (which can be toggled in an empty scene);
+/// the control appears beside the modification actions only when a gizmo is armed, and
+/// disappears with the selection. The caret opens upward into the canvas, away from the
+/// bottom edge it sits on.
+fn gizmo_control(
+    has_settings: bool,
+    rows: Vec<PopoverRow>,
+    open: bool,
+    anchor: Option<Point<Pixels>>,
+    cx: &mut Context<Shell>,
+) -> impl IntoElement {
+    let mut control = div()
+        .relative()
+        .flex()
+        .flex_row()
+        .items_center()
+        .rounded_sm()
+        .bg(rgb(PANEL_ALT))
+        .when(open, |el| el.border_1().border_color(rgba(0xffffff33)));
+
+    control = control.child(
+        div()
+            .id("dock-gizmo-label")
+            .debug_selector(|| "dock-gizmo-label".to_string())
+            .px_2()
+            .py_1()
+            .text_xs()
+            .text_color(rgb(FG))
+            .cursor_pointer()
+            .hover(|style| style.bg(rgb(PANEL)))
+            .child("Gizmo")
+            .on_click(cx.listener(move |this, _event, _window, cx| {
+                // The label edits, the caret switches: the same split as the header
+                // controls. Without the provider there is nothing to edit, so fall
+                // back to the menu (it still explains the state).
+                if has_settings {
+                    this.run_command(GIZMO_SETTINGS, cx);
+                } else {
+                    this.open_popover("gizmo", cx);
+                }
+            })),
+    );
+
+    control = control.child(
+        div()
+            .id("dock-gizmo-caret")
+            .debug_selector(|| "dock-gizmo-caret".to_string())
+            .px_1()
+            .py_1()
+            .text_xs()
+            .text_color(rgb(MUTED))
+            .cursor_pointer()
+            .hover(|style| style.bg(rgb(PANEL)))
+            .child("\u{25b4}")
+            .on_mouse_down(MouseButton::Left, cx.listener(move |this, event: &MouseDownEvent, _window, _cx| {
+                this.set_popover_anchor(event.position);
+            }))
+            .on_click(cx.listener(move |this, _event, _window, cx| this.open_popover("gizmo", cx))),
+    );
+
+    if open {
+        // The dock hugs the bottom edge, so the menu grows up from the caret. The
+        // pointer is the anchor (a flex child reports a negative layout origin here,
+        // as in the header).
+        let position = anchor
+            .map(|pointer| point(pointer.x, pointer.y - px(6.)))
+            .unwrap_or_else(|| point(px(0.), px(0.)));
+        control = control.child(
+            deferred(
+                anchored()
+                    .anchor(Anchor::BottomLeft)
+                    .position(position)
+                    .snap_to_window_with_margin(px(8.))
+                    .child(popover("gizmo", rows, cx)),
+            )
+            .with_priority(1),
+        );
+    }
+    control
+}
+
 /// The action dock: the `dock` surface as one centred strip over the bottom of the
 /// canvas.
 ///
 /// Rows come straight from the registry, so `IsActive` (driven by the selection) is
 /// what enables or greys them. Disabled commands stay visible: the dock shows what
 /// the workbench can do, not only what is possible right now.
-pub(crate) fn action_dock(model: &ShellModel, cx: &mut Context<Shell>) -> impl IntoElement {
+pub(crate) fn action_dock(
+    model: &ShellModel,
+    provider_features: &[crate::python::ProviderFeature],
+    open_popover: Option<&str>,
+    anchor: Option<Point<Pixels>>,
+    cx: &mut Context<Shell>,
+) -> impl IntoElement {
     let dock = model.surfaces().dock;
     let mut panel = div()
         .id("action-dock")
@@ -735,6 +830,36 @@ pub(crate) fn action_dock(model: &ShellModel, cx: &mut Context<Shell>) -> impl I
         .bg(rgba(0x16181de6))
         .border_1()
         .border_color(rgba(0xffffff1f));
+
+    // The gizmo is contextual: the control exists only while a selection has armed
+    // one, so it can never be clicked out of context. It leads the dock because it
+    // describes the handle, not a document action.
+    if model.gizmo_armed {
+        let mut rows = provider_features
+            .iter()
+            .find(|feature| feature.feature == "gizmo")
+            .map(|feature| provider_rows("gizmo", &feature.providers))
+            .unwrap_or_default();
+        let has_settings = commands::find(&model.commands, GIZMO_SETTINGS).is_some();
+        if has_settings {
+            rows.push(PopoverRow {
+                id: GIZMO_SETTINGS.to_string(),
+                label: "Gizmo settings\u{2026}".to_string(),
+                enabled: true,
+                checked: false,
+                accel: String::new(),
+                divider_before: !rows.is_empty(),
+            });
+        }
+        panel = panel.child(gizmo_control(
+            has_settings,
+            rows,
+            open_popover == Some("gizmo"),
+            anchor,
+            cx,
+        ));
+        panel = panel.child(dock_divider(9));
+    }
 
     let mut last_group: Option<u8> = None;
     for command in dock {

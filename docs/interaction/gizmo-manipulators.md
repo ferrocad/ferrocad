@@ -734,6 +734,27 @@ parseable colour, and basis vectors normalised (a zero-length one is an error). 
   the viewport picks the most recently added one first. Nothing survives a selection
   change. A bad spec is logged and skipped; it never removes the compiled handle.
 
+### Where the control lives
+
+The gizmo is a **transient tool handle**, not a persistent scene helper, so it does not
+belong in the top-left header beside `Grid`/`Axes`/`WP`: those can be toggled in an empty
+scene, and a `Gizmo` toggle there would imply the same. Instead the dock owns a
+contextual `Gizmo` control:
+
+- it appears only while the current selection has armed a gizmo (`ShellModel::gizmo_armed`,
+  set by the selection path that arms it and cleared by a recompute or a tool session),
+  so it cannot be clicked out of context;
+- it leads the dock, next to the modification actions it belongs with, and the whole
+  control disappears with the selection — the dock's width never changes while a tool
+  is drawing;
+- the label opens `Settings/Gizmo` (the same store the provider writes), and the caret
+  opens the provider rows upward into the canvas, reusing the header's popover
+  component and its `ferrocad-provider:gizmo:<backend>` rows.
+
+The growth path is deliberate: a new tool's options become a caret on that tool's dock
+entry (`Polyline ▾`, `Create Slab ▾`) rather than a second row or a sub-dock, so the
+dock stays one strip and the header keeps a single meaning (*how the viewport is drawn*).
+
 ### What is still open (G3b)
 
 - Handle **kinds**: axis only. Rings (angular travel) and plane drags reuse the same

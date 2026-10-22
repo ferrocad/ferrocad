@@ -123,6 +123,9 @@ pub struct ShellModel {
     /// The active tool's status while its session runs (the tool strip). `None` — or
     /// an inactive status — hides the strip.
     pub tool: Option<ToolStatus>,
+    /// Whether the current selection armed a transform gizmo. The gizmo is a transient
+    /// tool handle, so the dock's `Gizmo` control exists only while this is true.
+    pub gizmo_armed: bool,
     pub console: Vec<String>,
     pub status: String,
 }
@@ -273,6 +276,7 @@ impl Shell {
             commands,
             view: ViewState::default(),
             tool: None,
+            gizmo_armed: false,
             console,
             status,
         })))
@@ -807,6 +811,8 @@ impl Shell {
                 (Vec::new(), None)
             }
         };
+        let armed = gizmo.is_some();
+        self.model.lock().unwrap().gizmo_armed = armed;
         if let Some(viewport) = self.viewport.clone() {
             viewport.update(cx, |viewport, cx| {
                 viewport.set_manipulators(manipulators);
@@ -931,6 +937,9 @@ impl Shell {
                 }),
                 Err(error) => self.console_line(format!("stage: {error}"), cx),
             }
+            // A recompute drops the gizmo with the old selection; the dock's
+            // contextual control must go with it.
+            self.model.lock().unwrap().gizmo_armed = false;
         }
         self.refresh(cx);
     }
@@ -1500,6 +1509,9 @@ impl Shell {
                 cx.notify();
                 viewport.take_tool_state()
             });
+            // The gizmo is gone for the session, so the dock's contextual control
+            // goes with it.
+            self.model.lock().unwrap().gizmo_armed = false;
         }
         if let Some(status) = pending {
             self.on_viewport_event(&ViewportEvent::ToolState(status), cx);
@@ -2499,7 +2511,13 @@ impl Render for Shell {
                         cx,
                     )),
             )
-            .child(crate::chrome::action_dock(&model, cx));
+            .child(crate::chrome::action_dock(
+                &model,
+                self.provider_features.as_deref().unwrap_or(&[]),
+                self.open_popover.as_deref(),
+                self.popover_anchor,
+                cx,
+            ));
         let viewport = viewport.child(canvas);
 
         let hover = self.hover_line(cx);
@@ -4707,6 +4725,93 @@ if "App_ReloadAxisSettings" not in FreeCADGui.listCommands():
             "status: {}",
             model.lock().unwrap().status
         );
+    }
+
+    /// G3 UI: the `Gizmo` control is contextual. It is not in the viewport header (the
+    /// gizmo is a transient tool handle, not a scene helper), and it exists in the dock
+    /// only while a selection has armed one. Its caret opens upward, away from the
+    /// bottom edge the dock sits on.
+    #[gpui::test]
+    fn the_dock_shows_the_gizmo_control_only_while_a_gizmo_is_armed(
+        cx: &mut TestAppContext,
+    ) {
+        let _guard = crate::PYTHON_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let model = Shell::boot().expect("boot shell");
+        let window = cx.update(|cx| {
+            let model = model.clone();
+            cx.open_window(Default::default(), move |_window, cx| {
+                cx.new(|cx| Shell::from_model(model.clone(), cx))
+            })
+            .unwrap()
+        });
+        let mut cx = VisualTestContext::from_window(window.into(), cx);
+        let shell: Entity<Shell> = window.root(&mut cx).unwrap();
+        draw(&mut cx);
+
+        assert!(
+            cx.debug_bounds("dock-gizmo-label").is_none(),
+            "nothing is armed, so there is no gizmo control to click out of context"
+        );
+
+        // The base shell has no gizmo factory, so set the flag the selection path sets
+        // when `arm` returns a gizmo.
+        arm_and_redraw(&model, &shell, &mut cx, true);
+        let label = cx
+            .debug_bounds("dock-gizmo-label")
+            .expect("the contextual control");
+        let caret = cx
+            .debug_bounds("dock-gizmo-caret")
+            .expect("the provider caret");
+        assert!(
+            caret.origin.x >= label.origin.x,
+            "the caret follows the label"
+        );
+        let dock = cx.debug_bounds("action-dock").expect("the dock");
+        assert!(
+            label.origin.x < dock.center().x,
+            "the control leads the dock (it describes the handle, not an action)"
+        );
+
+        // The caret opens the menu upward into the canvas.
+        click_at(&mut cx, "dock-gizmo-caret");
+        let menu = cx
+            .debug_bounds("gizmo-popover")
+            .expect("the gizmo menu");
+        assert!(
+            menu.origin.y < dock.origin.y,
+            "the menu opens above the dock (menu {menu:?}, dock {dock:?})"
+        );
+        assert!(
+            shell.read_with(&cx, |shell, _| shell.open_popover.clone()).as_deref()
+                == Some("gizmo"),
+            "the dock owns the gizmo popover"
+        );
+
+        // Losing the gizmo removes the control with it.
+        arm_and_redraw(&model, &shell, &mut cx, false);
+        assert!(
+            cx.debug_bounds("dock-gizmo-label").is_none(),
+            "the control goes with the selection"
+        );
+    }
+
+    /// Set the armed flag the way a selection does, and force a frame.
+    fn arm_and_redraw(
+        model: &Arc<Mutex<ShellModel>>,
+        shell: &Entity<Shell>,
+        cx: &mut VisualTestContext,
+        armed: bool,
+    ) {
+        cx.update(|_window, cx| {
+            shell.update(cx, |shell, cx| {
+                model.lock().unwrap().gizmo_armed = armed;
+                if !armed {
+                    shell.open_popover = None;
+                }
+                cx.notify();
+            });
+        });
+        draw(cx);
     }
 
     /// The dock's enablement comes from the same `IsActive` list the shell keeps.

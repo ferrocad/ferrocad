@@ -23,6 +23,7 @@
 #include <BRepBuilderAPI_Copy.hxx>
 #include <BRepBuilderAPI_MakeEdge.hxx>
 #include <BRepBuilderAPI_MakeFace.hxx>
+#include <BRepFill.hxx>
 #include <BRepFill_Filling.hxx>
 #include <BRepLib.hxx>
 #include <BRepLib_FindSurface.hxx>
@@ -57,6 +58,7 @@
 #include <TopoDS_Edge.hxx>
 #include <TopoDS_Face.hxx>
 #include <TopoDS_Shape.hxx>
+#include <TopoDS_Shell.hxx>
 #include <TopoDS_Vertex.hxx>
 #include <TopExp_Explorer.hxx>
 #include <TopoDS_Wire.hxx>
@@ -220,6 +222,12 @@ inline const TopoDS_Wire& fc_shape_as_wire(const TopoDS_Shape& shape)
   return TopoDS::Wire(shape);
 }
 
+// The shell view of a shape, for `BRepBuilderAPI_MakeSolid`.
+inline const TopoDS_Shell& fc_shape_as_shell(const TopoDS_Shape& shape)
+{
+  return TopoDS::Shell(shape);
+}
+
 // Shape-type guards, so a wrong-kind shape is reported instead of throwing
 // `Standard_TypeMismatch` across the bridge.
 inline bool fc_is_edge(const TopoDS_Shape& shape)
@@ -240,6 +248,11 @@ inline bool fc_is_vertex(const TopoDS_Shape& shape)
 inline bool fc_is_face(const TopoDS_Shape& shape)
 {
   return !shape.IsNull() && shape.ShapeType() == TopAbs_FACE;
+}
+
+inline bool fc_is_shell(const TopoDS_Shape& shape)
+{
+  return !shape.IsNull() && shape.ShapeType() == TopAbs_SHELL;
 }
 
 // A copy of `shape` with reversed orientation (a hole wire is opposite to its
@@ -639,6 +652,27 @@ inline std::unique_ptr<TopoDS_Shape> fc_fill_wires(const TopTools_ListOfShape& w
       return nullptr;
     }
     return std::unique_ptr<TopoDS_Shape>(new TopoDS_Shape(filler.Face()));
+  }
+  catch (...) {
+    return nullptr;
+  }
+}
+
+// A ruled surface spanning two edges (`BRepFill::Face`). Both arguments must be
+// edges; returns null on any failure, including an OCCT exception.
+inline std::unique_ptr<TopoDS_Shape> fc_ruled_surface(const TopoDS_Shape& first,
+                                                      const TopoDS_Shape& second)
+{
+  if (first.IsNull() || second.IsNull() || first.ShapeType() != TopAbs_EDGE
+      || second.ShapeType() != TopAbs_EDGE) {
+    return nullptr;
+  }
+  try {
+    const TopoDS_Face face = BRepFill::Face(TopoDS::Edge(first), TopoDS::Edge(second));
+    if (face.IsNull()) {
+      return nullptr;
+    }
+    return std::unique_ptr<TopoDS_Shape>(new TopoDS_Shape(face));
   }
   catch (...) {
     return nullptr;

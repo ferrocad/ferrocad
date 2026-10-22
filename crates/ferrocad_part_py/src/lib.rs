@@ -36,6 +36,7 @@
 
 mod containers;
 mod curves;
+mod solids;
 
 use std::sync::{Arc, Mutex};
 
@@ -724,6 +725,36 @@ impl PartShape {
         }
         Ok(PartShape::from_shape(shape))
     }
+
+    /// `Shape.extrude(vector)` — sweep the shape along `vector`.
+    fn extrude(&self, vector: &Bound<'_, PyAny>) -> PyResult<PartShape> {
+        let shape = self.named_shape()?;
+        let direction = curves::vector(vector)?;
+        let extruded = ferrocad_part::backend()
+            .extrude(&shape, direction)
+            .map_err(kernel_error)?;
+        Ok(PartShape::from_shape(extruded))
+    }
+
+    /// `Shape.revolve(center, axis, angle=360)` — revolve the shape about the
+    /// axis through `center` along `axis`.
+    ///
+    /// `angle` is in **degrees**, as upstream's `Shape.revolve`.
+    #[pyo3(signature = (center, axis, angle = 360.0))]
+    fn revolve(
+        &self,
+        center: &Bound<'_, PyAny>,
+        axis: &Bound<'_, PyAny>,
+        angle: f64,
+    ) -> PyResult<PartShape> {
+        let shape = self.named_shape()?;
+        let center = curves::vector(center)?;
+        let axis = curves::vector(axis)?;
+        let revolved = ferrocad_part::backend()
+            .revolve(&shape, center, axis, angle.to_radians())
+            .map_err(kernel_error)?;
+        Ok(PartShape::from_shape(revolved))
+    }
 }
 
 /// Split `Face3` into `(ElementKind::Face, 2)`.
@@ -812,7 +843,7 @@ fn matrix_from_py(value: &Bound<'_, PyAny>) -> PyResult<ferrocad_types::Matrix4>
 }
 
 /// The shape wrapped by a Python `Part.Shape` (or one of its subclasses).
-fn shape_argument(value: &Bound<'_, PyAny>) -> PyResult<Shape> {
+pub(crate) fn shape_argument(value: &Bound<'_, PyAny>) -> PyResult<Shape> {
     let shape = value.downcast::<PartShape>().map_err(|_| {
         pyo3::exceptions::PyTypeError::new_err("expected a Part.Shape")
     })?;
@@ -981,6 +1012,92 @@ fn makeBox(
     Ok(PartShape::from_shape(shape))
 }
 
+/// `Part.getSortedClusters(edges)` — group edges into connected clusters.
+///
+/// The kernel reports no adjacency between loose edges, so the clusters are
+/// found from the edges' endpoint vertices: two edges join when they share a
+/// vertex within `ferrocad_curves::TOLERANCE` (the kernel's confusion
+/// tolerance). The clusters are returned in the order their first edge appears
+/// in the input, each listing its edges in that same order.
+#[pyfunction]
+fn getSortedClusters(py: Python<'_>, edges: &Bound<'_, PyAny>) -> PyResult<Py<PyList>> {
+    let backend = ferrocad_part::backend();
+    let mut shapes = Vec::new();
+    for edge in edges.try_iter()? {
+        shapes.push(shape_argument(&edge?)?);
+    }
+
+    // Each edge's endpoints, read from its vertex sub-shapes.
+    let endpoints: Vec<Vec<ferrocad_curves::Vector3>> = shapes
+        .iter()
+        .map(|shape| {
+            backend
+                .elements(shape, ElementKind::Vertex)
+                .into_iter()
+                .filter_map(|vertex| backend.vertex_point(&vertex.shape))
+                .collect()
+        })
+        .collect();
+
+    let mut parent: Vec<usize> = (0..shapes.len()).collect();
+    for i in 0..shapes.len() {
+        for j in (i + 1)..shapes.len() {
+            let connected = endpoints[i].iter().any(|a| {
+                endpoints[j]
+                    .iter()
+                    .any(|b| a.distance(b) <= ferrocad_curves::TOLERANCE)
+            });
+            if connected {
+                cluster_union(&mut parent, i, j);
+            }
+        }
+    }
+
+    let mut roots: Vec<usize> = Vec::new();
+    let mut clusters: Vec<Vec<Py<PartShape>>> = Vec::new();
+    for index in 0..shapes.len() {
+        let root = cluster_find(&mut parent, index);
+        let slot = match roots.iter().position(|known| *known == root) {
+            Some(slot) => slot,
+            None => {
+                roots.push(root);
+                clusters.push(Vec::new());
+                clusters.len() - 1
+            }
+        };
+        clusters[slot].push(Py::new(py, PartShape::from_shape(shapes[index].clone()))?);
+    }
+
+    let lists = clusters
+        .into_iter()
+        .map(|cluster| PyList::new(py, cluster))
+        .collect::<PyResult<Vec<_>>>()?;
+    Ok(PyList::new(py, lists)?.unbind())
+}
+
+/// The representative of `index`'s cluster, with path compression.
+fn cluster_find(parent: &mut [usize], index: usize) -> usize {
+    let mut root = index;
+    while parent[root] != root {
+        root = parent[root];
+    }
+    let mut current = index;
+    while parent[current] != root {
+        let next = parent[current];
+        parent[current] = root;
+        current = next;
+    }
+    root
+}
+
+fn cluster_union(parent: &mut [usize], a: usize, b: usize) {
+    let root_a = cluster_find(parent, a);
+    let root_b = cluster_find(parent, b);
+    if root_a != root_b {
+        parent[root_b] = root_a;
+    }
+}
+
 /// `Part::PropertyPartShape` → `Part.Shape` (what `obj.Shape` returns).
 fn shape_to_py(py: Python<'_>, data: &dyn ExtensionData) -> Option<PyObject> {
     let property = data.as_any().downcast_ref::<ShapeProperty>()?;
@@ -1010,7 +1127,9 @@ pub fn Part(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(makeCylinder, m)?)?;
     m.add_function(wrap_pyfunction!(makeSphere, m)?)?;
     m.add_function(wrap_pyfunction!(makeCone, m)?)?;
+    m.add_function(wrap_pyfunction!(getSortedClusters, m)?)?;
     curves::register(m)?;
     containers::register(m)?;
+    solids::register(m)?;
     Ok(())
 }

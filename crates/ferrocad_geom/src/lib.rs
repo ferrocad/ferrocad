@@ -699,6 +699,60 @@ pub trait GeometryBackend: Send + Sync {
         Err(unsupported("make_comp_solid"))
     }
 
+    /// A solid from one closed shell (`Part.makeSolid`).
+    fn make_solid(&self, _shell: &Shape) -> Result<Shape, GeomError> {
+        Err(unsupported("make_solid"))
+    }
+
+    /// A shell from a list of faces (`Part.makeShell`).
+    ///
+    /// The faces are grouped into a shell without sewing, so a backend that does
+    /// not support shells reports the operation as unsupported.
+    fn make_shell(&self, _faces: &[Shape]) -> Result<Shape, GeomError> {
+        Err(unsupported("make_shell"))
+    }
+
+    /// A shell from boundary wires, one planar face per wire
+    /// (`Part.makeShellFromWires`).
+    fn make_shell_from_wires(&self, _wires: &[Shape]) -> Result<Shape, GeomError> {
+        Err(unsupported("make_shell_from_wires"))
+    }
+
+    /// A loft through the section wires (`Part.makeLoft`).
+    ///
+    /// `solid` closes the first and last section into a solid; the default false
+    /// produces the open shell upstream's `Part.makeLoft` returns.
+    fn make_loft(&self, _wires: &[Shape], _solid: bool) -> Result<Shape, GeomError> {
+        Err(unsupported("make_loft"))
+    }
+
+    /// A ruled surface spanning two edges (`Part.makeRuledSurface`).
+    fn make_ruled_surface(&self, _first: &Shape, _second: &Shape) -> Result<Shape, GeomError> {
+        Err(unsupported("make_ruled_surface"))
+    }
+
+    /// A face filled through the boundary edges (`Part.makeFilledFace`).
+    fn make_filled_face(&self, _edges: &[Shape]) -> Result<Shape, GeomError> {
+        Err(unsupported("make_filled_face"))
+    }
+
+    /// Sweep `shape` along `vector` (`Shape.extrude`).
+    fn extrude(&self, _shape: &Shape, _vector: Vector3) -> Result<Shape, GeomError> {
+        Err(unsupported("extrude"))
+    }
+
+    /// Revolve `shape` about the axis through `center` along `axis` by `angle`
+    /// **radians** (`Shape.revolve`).
+    fn revolve(
+        &self,
+        _shape: &Shape,
+        _center: Vector3,
+        _axis: Vector3,
+        _angle: f64,
+    ) -> Result<Shape, GeomError> {
+        Err(unsupported("revolve"))
+    }
+
     /// The axis-aligned bounds `(min, max)` of `shape` (`Shape.BoundBox`).
     ///
     /// A backend that cannot bound the shape (or a null shape) reports `None`.

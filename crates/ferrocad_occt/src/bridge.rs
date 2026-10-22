@@ -29,6 +29,7 @@ mod ffi {
         type TopoDS_Vertex = opencascade_sys::topo_ds::TopoDS_Vertex;
         type TopoDS_Wire = opencascade_sys::topo_ds::TopoDS_Wire;
         type TopoDS_Face = opencascade_sys::topo_ds::TopoDS_Face;
+        type TopoDS_Shell = opencascade_sys::topo_ds::TopoDS_Shell;
         type gp_Trsf = opencascade_sys::gp::gp_Trsf;
         type Handle_Geom_Curve = opencascade_sys::geom::Handle_Geom_Curve;
         type TopTools_IndexedMapOfShape = opencascade_sys::top_tools::TopTools_IndexedMapOfShape;
@@ -53,11 +54,21 @@ mod ffi {
         /// The face view of a shape (`TopoDS::Face`).
         fn fc_shape_as_face(shape: &TopoDS_Shape) -> &TopoDS_Face;
 
+        /// The shell view of a shape (`TopoDS::Shell`).
+        fn fc_shape_as_shell(shape: &TopoDS_Shape) -> &TopoDS_Shell;
+
         /// Shape-type guards (the cast would otherwise throw).
         fn fc_is_edge(shape: &TopoDS_Shape) -> bool;
         fn fc_is_wire(shape: &TopoDS_Shape) -> bool;
         fn fc_is_vertex(shape: &TopoDS_Shape) -> bool;
         fn fc_is_face(shape: &TopoDS_Shape) -> bool;
+        fn fc_is_shell(shape: &TopoDS_Shape) -> bool;
+
+        /// A ruled surface between two edges (`BRepFill::Face`), or null.
+        fn fc_ruled_surface(
+            first: &TopoDS_Shape,
+            second: &TopoDS_Shape,
+        ) -> UniquePtr<TopoDS_Shape>;
 
         /// A filled face through the boundary wires, or null on failure.
         fn fc_fill_wires(wires: &TopTools_ListOfShape) -> UniquePtr<TopoDS_Shape>;

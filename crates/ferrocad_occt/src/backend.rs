@@ -908,6 +908,215 @@ impl GeometryBackend for OcctBackend {
         Ok(erase(composed))
     }
 
+    fn make_solid(&self, shell: &Shape) -> Result<Shape, GeomError> {
+        let occt = downcast(shell)?;
+        let guard = occt.borrow();
+        let inner = guard
+            .as_ref()
+            .ok_or(OcctError::InvalidInput { what: "null shell" })?;
+        if !bridge::fc_is_shell(inner) {
+            return Err(OcctError::InvalidInput {
+                what: "make_solid expects a shell",
+            }
+            .into());
+        }
+        let mut make = ffi::b_rep_builder_api::BRepBuilderAPI_MakeSolid_new(
+            bridge::fc_shape_as_shell(inner),
+        );
+        let shape = erase(make.pin_mut().Shape());
+        if !make.IsDone() {
+            return Err(OcctError::NotDone {
+                operation: "make_solid",
+            }
+            .into());
+        }
+        Ok(shape)
+    }
+
+    fn make_shell(&self, faces: &[Shape]) -> Result<Shape, GeomError> {
+        if faces.is_empty() {
+            return Err(OcctError::InvalidInput {
+                what: "a shell needs at least one face",
+            }
+            .into());
+        }
+        let mut shell = ffi::topo_ds::TopoDS_Shell_new();
+        let builder = ffi::b_rep::BRep_Builder_new();
+        let builder = ffi::b_rep::BRep_Builder_upcast_to_topods_builder(&builder);
+        builder.MakeShell(shell.pin_mut());
+        let mut shell = ffi::topo_ds::TopoDS_Shell_as_shape(shell);
+        for face in faces {
+            let occt = downcast(face)?;
+            let guard = occt.borrow();
+            let inner = guard
+                .as_ref()
+                .ok_or(OcctError::InvalidInput { what: "null face" })?;
+            if !bridge::fc_is_face(inner) {
+                return Err(OcctError::InvalidInput {
+                    what: "make_shell expects faces",
+                }
+                .into());
+            }
+            builder.Add(shell.pin_mut(), inner);
+        }
+        Ok(erase(&shell))
+    }
+
+    fn make_shell_from_wires(&self, wires: &[Shape]) -> Result<Shape, GeomError> {
+        if wires.is_empty() {
+            return Err(OcctError::InvalidInput {
+                what: "a shell needs at least one wire",
+            }
+            .into());
+        }
+        let mut faces = Vec::with_capacity(wires.len());
+        for wire in wires {
+            // Each wire bounds one planar face; upstream's wires are the
+            // boundaries of a box's faces.
+            faces.push(self.make_face(std::slice::from_ref(wire))?);
+        }
+        self.make_shell(&faces)
+    }
+
+    fn make_loft(&self, wires: &[Shape], solid: bool) -> Result<Shape, GeomError> {
+        if wires.len() < 2 {
+            return Err(OcctError::InvalidInput {
+                what: "a loft needs at least two sections",
+            }
+            .into());
+        }
+        let mut make = ffi::b_rep_offset_api::BRepOffsetAPI_ThruSections_new(solid);
+        for wire in wires {
+            let occt = downcast(wire)?;
+            let guard = occt.borrow();
+            let inner = guard
+                .as_ref()
+                .ok_or(OcctError::InvalidInput { what: "null wire" })?;
+            if !bridge::fc_is_wire(inner) {
+                return Err(OcctError::InvalidInput {
+                    what: "make_loft expects wires",
+                }
+                .into());
+            }
+            make.pin_mut().AddWire(bridge::fc_shape_as_wire(inner));
+        }
+        // Upstream keeps the wires in the order given rather than letting OCCT
+        // reorder them to match a common origin.
+        make.pin_mut().CheckCompatibility(false);
+        let progress = ffi::message::Message_ProgressRange_new();
+        make.pin_mut().Build(&progress);
+        if !make.IsDone() {
+            return Err(OcctError::NotDone {
+                operation: "make_loft",
+            }
+            .into());
+        }
+        Ok(erase(make.pin_mut().Shape()))
+    }
+
+    fn make_ruled_surface(&self, first: &Shape, second: &Shape) -> Result<Shape, GeomError> {
+        let first_occt = downcast(first)?;
+        let second_occt = downcast(second)?;
+        let first_guard = first_occt.borrow();
+        let second_guard = second_occt.borrow();
+        let a = first_guard
+            .as_ref()
+            .ok_or(OcctError::InvalidInput { what: "null edge" })?;
+        let b = second_guard
+            .as_ref()
+            .ok_or(OcctError::InvalidInput { what: "null edge" })?;
+        let face = bridge::fc_ruled_surface(a, b);
+        let Some(face) = face.as_ref() else {
+            return Err(OcctError::NotDone {
+                operation: "make_ruled_surface",
+            }
+            .into());
+        };
+        Ok(erase(face))
+    }
+
+    fn make_filled_face(&self, edges: &[Shape]) -> Result<Shape, GeomError> {
+        let wire = self.make_wire(edges)?;
+        let mut list = ffi::top_tools::new_list_of_shape();
+        {
+            let occt = downcast(&wire)?;
+            let guard = occt.borrow();
+            let inner = guard
+                .as_ref()
+                .ok_or(OcctError::InvalidInput { what: "null wire" })?;
+            list.pin_mut().Append(inner);
+        }
+        let face = bridge::fc_fill_wires(&list);
+        let Some(face) = face.as_ref() else {
+            return Err(OcctError::NotDone {
+                operation: "make_filled_face",
+            }
+            .into());
+        };
+        Ok(erase(face))
+    }
+
+    fn extrude(&self, shape: &Shape, vector: Vector3) -> Result<Shape, GeomError> {
+        if vector.length() <= 0.0 || !vector.length().is_finite() {
+            return Err(OcctError::InvalidInput {
+                what: "extrusion needs a non-zero vector",
+            }
+            .into());
+        }
+        let occt = downcast(shape)?;
+        let guard = occt.borrow();
+        let inner = guard
+            .as_ref()
+            .ok_or(OcctError::InvalidInput { what: "null shape" })?;
+        let direction = ffi::gp::new_vec(vector.x, vector.y, vector.z);
+        let mut make =
+            ffi::b_rep_prim_api::BRepPrimAPI_MakePrism_new(inner, &direction, true, true);
+        if !make.IsDone() {
+            return Err(OcctError::NotDone {
+                operation: "extrude",
+            }
+            .into());
+        }
+        Ok(erase(make.pin_mut().Shape()))
+    }
+
+    fn revolve(
+        &self,
+        shape: &Shape,
+        center: Vector3,
+        axis: Vector3,
+        angle: f64,
+    ) -> Result<Shape, GeomError> {
+        if axis.length() <= 0.0 || !axis.length().is_finite() {
+            return Err(OcctError::InvalidInput {
+                what: "revolving needs a non-zero axis",
+            }
+            .into());
+        }
+        if !angle.is_finite() {
+            return Err(OcctError::InvalidInput {
+                what: "revolving needs a finite angle",
+            }
+            .into());
+        }
+        let occt = downcast(shape)?;
+        let guard = occt.borrow();
+        let inner = guard
+            .as_ref()
+            .ok_or(OcctError::InvalidInput { what: "null shape" })?;
+        let origin = point(center);
+        let direction = ffi::gp::gp_Dir_new(axis.x, axis.y, axis.z);
+        let axis = ffi::gp::gp_Ax1_new(&origin, &direction);
+        let mut make = ffi::b_rep_prim_api::BRepPrimAPI_MakeRevol_new(inner, &axis, angle, true);
+        if !make.IsDone() {
+            return Err(OcctError::NotDone {
+                operation: "revolve",
+            }
+            .into());
+        }
+        Ok(erase(make.pin_mut().Shape()))
+    }
+
     fn bounds(&self, shape: &Shape) -> Option<(Vector3, Vector3)> {
         let occt = downcast(shape).ok()?;
         let guard = occt.borrow();

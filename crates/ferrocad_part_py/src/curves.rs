@@ -19,7 +19,7 @@ use ferrocad_curves::{
 use ferrocad_geom::{ElementKind, Shape};
 use ferrocad_part::backend;
 use pyo3::create_exception;
-use pyo3::exceptions::{PyException, PyIndexError, PyRuntimeError, PyTypeError};
+use pyo3::exceptions::{PyException, PyIndexError, PyRuntimeError, PyTypeError, PyValueError};
 use pyo3::prelude::*;
 use pyo3::types::{PyAny, PyModule, PyTuple};
 use pyo3::IntoPyObjectExt;
@@ -965,7 +965,7 @@ impl PyFace {
     fn new(value: &Bound<'_, PyAny>, face_maker: &str) -> PyResult<PyClassInitializer<Self>> {
         let shapes = wire_shapes(value)?;
         let shape = if face_maker == "Part::FaceMakerUnified" {
-            backend().make_faces(&shapes).map_err(kernel_error)?
+            backend().make_faces(&shapes).map_err(face_error)?
         } else {
             backend().make_face(&shapes).map_err(kernel_error)?
         };
@@ -1037,11 +1037,25 @@ fn makeFace(
     let _ = noElementMap;
     let shapes = wire_shapes(wires)?;
     let shape = if face_maker == "Part::FaceMakerUnified" {
-        backend().make_faces(&shapes).map_err(kernel_error)?
+        backend().make_faces(&shapes).map_err(face_error)?
     } else {
         backend().make_face(&shapes).map_err(kernel_error)?
     };
     Py::new(py, PyFace::initializer(shape))
+}
+
+/// Degenerate face inputs are `ValueError` upstream (an empty compound or an
+/// open wire); kernel failures stay `Part.OCCError`.
+fn face_error(error: ferrocad_geom::GeomError) -> PyErr {
+    let invalid = matches!(
+        error.downcast_ref::<ferrocad_occt::OcctError>(),
+        Some(ferrocad_occt::OcctError::InvalidInput { .. })
+    );
+    if invalid {
+        PyValueError::new_err(error.to_string())
+    } else {
+        kernel_error(error)
+    }
 }
 
 /// Register the analytic half on the `Part` module.

@@ -153,3 +153,38 @@ fn curves_edges_and_wires_round_trip() {
         assert!(error.is_instance(py, occ_type));
     });
 }
+
+#[test]
+fn bspline_interpolation_builds_an_edge() {
+    boot();
+    Python::with_gil(|py| {
+        let part = PyModule::import(py, "Part").expect("import Part");
+        let ferrocad = PyModule::import(py, "ferrocad").expect("import ferrocad");
+        let vector = ferrocad.getattr("Vector").expect("ferrocad.Vector");
+        let points = PyList::new(
+            py,
+            [
+                vector.call1((0.0, 0.0, 0.0)).unwrap(),
+                vector.call1((10.0, 0.0, 5.0)).unwrap(),
+                vector.call1((10.0, 10.0, -3.0)).unwrap(),
+                vector.call1((0.0, 10.0, 4.0)).unwrap(),
+            ],
+        )
+        .unwrap();
+        let curve = part.getattr("BSplineCurve").unwrap().call0().expect("Part.BSplineCurve");
+        curve
+            .call_method1("interpolate", (points, true))
+            .expect("BSplineCurve.interpolate(points, PeriodicFlag=True)");
+        let edge = curve.call_method0("toShape").expect("BSplineCurve.toShape");
+        assert!(
+            !edge
+                .call_method0("isNull")
+                .unwrap()
+                .extract::<bool>()
+                .unwrap()
+        );
+        assert!(edge.getattr("Length").unwrap().extract::<f64>().unwrap() > 0.0);
+        let wire = part.getattr("Wire").unwrap().call1((&edge,)).expect("Part.Wire(edge)");
+        assert_eq!(wire.len().unwrap(), 1);
+    });
+}

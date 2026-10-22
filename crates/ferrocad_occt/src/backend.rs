@@ -210,6 +210,39 @@ impl GeometryBackend for OcctBackend {
         Some(Vector3::new(pnt.X(), pnt.Y(), pnt.Z()))
     }
 
+    fn make_bspline_edge(
+        &self,
+        points: &[Vector3],
+        periodic: bool,
+    ) -> Result<Shape, GeomError> {
+        if points.len() < 2 {
+            return Err(OcctError::InvalidInput {
+                what: "a B-spline needs at least two points",
+            }
+            .into());
+        }
+        let mut array = ffi::t_col_gp::TColgp_HArray1OfPnt_new(1, points.len() as i32);
+        for (index, value) in points.iter().enumerate() {
+            let value = point(*value);
+            array.pin_mut().SetValue(index as i32 + 1, &value);
+        }
+        let array =
+            ffi::t_col_gp::new_HandleTColgpHArray1OfPnt_from_TColgpHArray1OfPnt(array);
+        let mut interpolate = ffi::geom_api::GeomAPI_Interpolate_new(&array, periodic, 1e-7);
+        interpolate.pin_mut().Perform();
+        let curve = ffi::geom_api::GeomAPI_Interpolate_Curve(&interpolate);
+        let curve = ffi::geom::new_HandleGeomCurve_from_HandleGeom_BSplineCurve(&curve);
+        let mut make = ffi::b_rep_builder_api::BRepBuilderAPI_MakeEdge_HandleGeomCurve(&curve);
+        let shape = erase(ffi::topo_ds::cast_edge_to_shape(make.pin_mut().Edge()));
+        if !make.IsDone() {
+            return Err(OcctError::NotDone {
+                operation: "make_bspline_edge",
+            }
+            .into());
+        }
+        Ok(shape)
+    }
+
     fn make_face(&self, wires: &[Shape]) -> Result<Shape, GeomError> {
         let (first, rest) = wires.split_first().ok_or(OcctError::InvalidInput {
             what: "a face needs a wire",

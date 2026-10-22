@@ -625,6 +625,15 @@ pub trait GeometryBackend: Send + Sync {
         None
     }
 
+    /// An interpolating B-spline edge through `points` (`Part.BSplineCurve`).
+    fn make_bspline_edge(
+        &self,
+        _points: &[Vector3],
+        _periodic: bool,
+    ) -> Result<Shape, GeomError> {
+        Err(unsupported("make_bspline_edge"))
+    }
+
     /// A face from one or more wires (`Part.makeFace`): the first is the outer
     /// boundary, the rest are holes. A backend that cannot build planar faces
     /// reports the operation as unsupported.

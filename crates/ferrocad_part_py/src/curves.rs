@@ -250,6 +250,75 @@ impl PyArcOfCircle {
     }
 }
 
+/// `Part.BSplineCurve()` — an interpolating B-spline, a curve object like
+/// `Part.LineSegment`; `toShape()` turns it into a `Part.Edge`.
+#[pyclass(name = "BSplineCurve", module = "Part")]
+pub struct PyBSplineCurve {
+    points: Mutex<Vec<Vector3>>,
+    periodic: Mutex<bool>,
+}
+
+#[pymethods]
+impl PyBSplineCurve {
+    #[new]
+    fn new() -> Self {
+        Self {
+            points: Mutex::new(Vec::new()),
+            periodic: Mutex::new(false),
+        }
+    }
+
+    /// Interpolate a B-spline through `points`.
+    #[pyo3(signature = (points, PeriodicFlag = false, Tolerance = 1e-7))]
+    fn interpolate(
+        &self,
+        points: &Bound<'_, PyAny>,
+        PeriodicFlag: bool,
+        Tolerance: f64,
+    ) -> PyResult<()> {
+        let _ = Tolerance;
+        let mut parsed = Vec::new();
+        for point in points.try_iter()? {
+            parsed.push(vector(&point?)?);
+        }
+        if parsed.len() < 2 {
+            return Err(OCCError::new_err(
+                "a B-spline needs at least two interpolation points",
+            ));
+        }
+        *self.points.lock().unwrap_or_else(|e| e.into_inner()) = parsed;
+        *self.periodic.lock().unwrap_or_else(|e| e.into_inner()) = PeriodicFlag;
+        Ok(())
+    }
+
+    /// The interpolated curve as an edge.
+    fn toShape(&self, py: Python<'_>) -> PyResult<Py<PyEdge>> {
+        let points = self
+            .points
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone();
+        let periodic = *self.periodic.lock().unwrap_or_else(|e| e.into_inner());
+        let shape = backend()
+            .make_bspline_edge(&points, periodic)
+            .map_err(kernel_error)?;
+        Py::new(
+            py,
+            PyEdge::from_entry(EdgeEntry {
+                shape,
+                curve: None,
+            }),
+        )
+    }
+
+    fn __repr__(&self) -> String {
+        format!(
+            "Part.BSplineCurve({} points)",
+            self.points.lock().unwrap_or_else(|e| e.into_inner()).len()
+        )
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Edges and wires
 // ---------------------------------------------------------------------------
@@ -711,6 +780,7 @@ pub(crate) fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyWire>()?;
     m.add_class::<PyVertex>()?;
     m.add_class::<PyFace>()?;
+    m.add_class::<PyBSplineCurve>()?;
     m.add_function(wrap_pyfunction!(makeLine, m)?)?;
     m.add_function(wrap_pyfunction!(makeCircle, m)?)?;
     m.add_function(wrap_pyfunction!(makePolygon, m)?)?;

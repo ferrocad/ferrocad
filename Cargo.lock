@@ -2279,6 +2279,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "ferrocad_curves"
+version = "0.1.2"
+dependencies = [
+ "ferrocad_types",
+]
+
+[[package]]
 name = "ferrocad_gen"
 version = "0.1.2"
 dependencies = [

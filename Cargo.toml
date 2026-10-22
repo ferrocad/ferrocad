@@ -9,6 +9,7 @@ resolver = "3"
 members = [
     "crates/ferrocad",
     "crates/ferrocad_types",
+    "crates/ferrocad_curves",
     "crates/ferrocad_core",
     "crates/ferrocad_geom",
     "crates/ferrocad_occt",
@@ -44,6 +45,7 @@ members = [
 # link conflict.
 default-members = [
     "crates/ferrocad_types",
+    "crates/ferrocad_curves",
     "crates/ferrocad_core",
     "crates/ferrocad_geom",
     "crates/ferrocad_graphics",
@@ -82,6 +84,7 @@ unicode-segmentation = "1"
 # `[workspace.package] version` is the release/product version, which the release
 # workflow checks the git tag against.
 ferrocad_types = { path = "crates/ferrocad_types", version = "0.1.2" }
+ferrocad_curves = { path = "crates/ferrocad_curves", version = "0.1.2" }
 ferrocad_core = { path = "crates/ferrocad_core", version = "0.1.2" }
 ferrocad_geom = { path = "crates/ferrocad_geom", version = "0.1.2" }
 ferrocad_occt = { path = "crates/ferrocad_occt", version = "0.1.2" }

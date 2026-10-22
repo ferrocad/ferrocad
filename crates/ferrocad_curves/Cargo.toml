@@ -1,0 +1,19 @@
+[package]
+name = "ferrocad_curves"
+version = "0.1.2"
+edition.workspace = true
+license.workspace = true
+readme.workspace = true
+repository.workspace = true
+homepage.workspace = true
+rust-version.workspace = true
+description = "FerroCAD analytic curves: lines, segments, circles, arcs, ellipses and wires (no kernel)"
+keywords = ["cad", "freecad", "geometry", "curves", "wire"]
+categories = ["science", "mathematics"]
+documentation = "https://docs.rs/ferrocad_curves"
+
+[lib]
+name = "ferrocad_curves"
+
+[dependencies]
+ferrocad_types.workspace = true

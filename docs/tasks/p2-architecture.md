@@ -31,14 +31,28 @@ honest — Draft's curves lie in a workplane, but they are 3D curves.
 
 Subtasks:
 
-- [ ] Crate skeleton over `ferrocad_types`, with a `#![deny(missing_docs)]`-style
-      header matching the workspace.
-- [ ] The curve types and `EdgeCurve`, with round-trip/parameterisation tests.
-- [ ] `Wire` ordering (`sort_edges`) with degenerate/duplicate-endpoint tests.
-- [ ] A doc comment that points at the upstream `Part::Geom*` classes it mirrors.
+- [x] Crate skeleton over `ferrocad_types`, with a `#![deny(missing_docs)]`-style
+      header matching the workspace. Landed 2026-10-22: `crates/ferrocad_curves`,
+      a workspace member and a default member (pure, fast).
+- [x] The curve types and `EdgeCurve`, with round-trip/parameterisation tests.
+      Landed: `Vector2`, `Line`, `LineSegment`, `Circle`, `Arc`, `Ellipse` and
+      `EdgeCurve` (`Line`, `LineSegment`, `Circle`, `Arc`/`ArcOfCircle`,
+      `Ellipse`). `BSpline`/`Bezier` are deferred with the first consumer that
+      needs them (the risk note below).
+- [x] `Wire` ordering (`sort_edges`) with degenerate/duplicate-endpoint tests.
+      Landed: `Wire`, `polygon`, `sort_edges`, `TOLERANCE`/`ANGULAR_TOLERANCE`;
+      the chain starts at the first edge as given and reverses an edge that
+      arrives backwards.
+- [x] A doc comment that points at the upstream `Part::Geom*` classes it mirrors.
+      `curve.rs` names `GeomLine`/`GeomLineSegment`/`GeomCircle`/
+      `GeomArcOfCircle`/`GeomEllipse` and `Geometry.h`.
 
-**Acceptance:** `cargo test -p ferrocad_curves` is green with no OCCT in the dependency
-tree (`cargo tree -p ferrocad_curves | grep -i occt` is empty).
+**Acceptance:** `cargo test -p ferrocad_curves` is green (18 unit tests + 1
+   doctest) with no OCCT in the dependency tree (`cargo tree -p ferrocad_curves |
+   grep -i occt` is empty). **Met 2026-10-22.**
+
+P2.2 (the `ferrocad_geom -> ferrocad_curves` seam, `make_edge`/`curve_of`, the
+`ferrocad_part` re-export) is the next step; nothing consumes the leaf yet.
 
 ## P2.2 — Part/Draft layering and the seam
 

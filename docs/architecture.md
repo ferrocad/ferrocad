@@ -155,11 +155,14 @@ served that purpose even if it had been kept.
 
 ## 6. Dependency rules
 
-These edges are the ones to keep. `ferrocad_core` is a leaf; nothing ferrocad
+These edges are the ones to keep. `ferrocad_core` stays geometry-free; the
+value, analytic-curve and presentation-contract crates are leaves. Nothing ferrocad
 depends on a `cdylib`.
 
 ```
 ferrocad_types     -> (crates.io only)               [leaf: Quantity, Placement, ...]
+ferrocad_curves    -> ferrocad_types                 [analytic half of Part: curves, wires;
+                                                     no Shape, no OCCT, no document]
 ferrocad_graphics  -> ferrocad_types                 [neutral draw contract + camera + pick; leaf]
 ferrocad_geom      -> ferrocad_types                 [seam: Shape, History, GeometryBackend]
 ferrocad_occt      -> ferrocad_geom, ferrocad_types,
@@ -198,6 +201,12 @@ ferrocad_toy       -> ferrocad, ferrocad_gpui, ferrocad_stage,
                       ferrocad_types                 [kernel-free edition + testbed]
 python/FreeCAD     -> ferrocad (built-in module when linked, else a .so on sys.path)
 ```
+
+`ferrocad_geom` gains `ferrocad_curves` in P2.2 (`make_edge`), when the seam
+converts the analytic leaf into a kernel shape; until then the leaf has no
+consumers. The forbidden edges (no `curves -> geom`, no `core -> curves`, no
+workbench `-> occt`) are listed in
+[`architecture/part-draft-layering.md`](architecture/part-draft-layering.md) §5.3.
 
 `ferrocad_core` stays geometry-agnostic and does **not** depend on `ferrocad_geom`: the
 `GeometryBackend` trait lives in `ferrocad_geom`, the kernel behind it in `ferrocad_occt`,

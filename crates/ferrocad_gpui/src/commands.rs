@@ -44,6 +44,10 @@ impl Surface {
             "axis" | "axes" | "header:axis" | "header:axes" => Some(Self::Axis),
             "workplane" | "wp" | "header:workplane" | "header:wp" => Some(Self::Workplane),
             "mods" | "header:mods" => Some(Self::Mods),
+            // A capability surface with no chrome of its own: the gizmo's settings are
+            // reached through the transform tool's options (the dock's `Move ▾`) and
+            // the Settings tree, never as a standalone toolbar entry.
+            "gizmo" | "header:gizmo" => Some(Self::Hidden),
             "dock" => Some(Self::Dock),
             "hidden" => Some(Self::Hidden),
             _ => None,
@@ -352,6 +356,11 @@ mod tests {
         assert_eq!(Surface::parse("header:workplane"), Some(Surface::Workplane));
         assert_eq!(Surface::parse("wp"), Some(Surface::Workplane));
         assert_eq!(Surface::parse("mods"), Some(Surface::Mods));
+        assert_eq!(
+            Surface::parse("gizmo"),
+            Some(Surface::Hidden),
+            "a capability surface with no chrome must not fall back to the dock"
+        );
         assert_eq!(Surface::parse("dock"), Some(Surface::Dock));
         assert_eq!(Surface::parse("hidden"), Some(Surface::Hidden));
         assert_eq!(Surface::parse("nowhere"), None);

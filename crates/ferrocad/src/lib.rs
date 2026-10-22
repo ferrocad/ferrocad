@@ -55,7 +55,18 @@ pub fn run_as(app_name: &str) {
 
 /// [`run_as`] with an explicit entry module (the edition's app script).
 pub fn run_edition(app_name: &str, entry_module: &str) {
-    run_edition_with(app_name, entry_module, Contributions::default());
+    run_edition_with(app_name, entry_module, base_contributions());
+}
+
+/// The general edition's contributions: the generic transform handle.
+///
+/// A whole-object selection arms a translate gizmo, so the shipped app has an
+/// interactive move tool out of the box (the dock's `Move` arms it for the current
+/// selection). Workbench manipulators — the Part edge dress-up arc, a height grip —
+/// stay with the edition that links them, which is why this is a default and not a
+/// global registration in the shell.
+fn base_contributions() -> Contributions {
+    Contributions::new().with_gizmo(ferrocad_gpui::translate_gizmo)
 }
 
 /// [`run_edition`] with the workbench contributions the edition registers.

@@ -12,7 +12,45 @@
 use std::sync::Arc;
 
 use ferrocad_geom::SelectionRef;
-use ferrocad_stage::{Manipulator, Stage, Tool, TransformGizmo};
+use ferrocad_stage::{GizmoMode, Manipulator, Stage, Tool, TransformGizmo};
+use ferrocad_types::Vector3;
+
+/// The generic transform handle: a whole-object selection gets a translate gizmo at
+/// the item's centre.
+///
+/// This is the default every edition wants, so an edition only has to register it
+/// (`Contributions::new().with_gizmo(translate_gizmo)`). A sub-element selection (a
+/// face, an edge) is left to the workbench's own manipulator: the generic triad has
+/// nothing to do with a face, and the built-in `TransformGizmo` targets whole items.
+///
+/// The gizmo's origin is the centre of the item's bounding box, so the handles frame
+/// the solid instead of sitting at its first vertex (which may be anywhere).
+pub fn translate_gizmo(selection: &SelectionRef, stage: &Stage) -> Option<TransformGizmo> {
+    if !selection.is_whole() {
+        return None;
+    }
+    let item = stage.item(selection.object)?;
+    let positions = item.positions();
+    let mut min = Vector3::new(f64::INFINITY, f64::INFINITY, f64::INFINITY);
+    let mut max = Vector3::new(f64::NEG_INFINITY, f64::NEG_INFINITY, f64::NEG_INFINITY);
+    for [x, y, z] in positions {
+        min.x = min.x.min(f64::from(*x));
+        min.y = min.y.min(f64::from(*y));
+        min.z = min.z.min(f64::from(*z));
+        max.x = max.x.max(f64::from(*x));
+        max.y = max.y.max(f64::from(*y));
+        max.z = max.z.max(f64::from(*z));
+    }
+    if positions.is_empty() || !min.x.is_finite() || !max.x.is_finite() {
+        return None;
+    }
+    let centre = min.add(&max).scale(0.5);
+    Some(TransformGizmo::new(
+        selection.object,
+        centre,
+        GizmoMode::Translate,
+    ))
+}
 
 /// The manipulator a selection asks for, if the workbench has one.
 ///
@@ -296,6 +334,29 @@ mod tests {
                 .manipulator_for(&SelectionRef::whole(1), &stage())
                 .is_some()
         );
+    }
+
+    #[test]
+    fn the_default_translate_gizmo_sits_at_a_whole_objects_centre() {
+        use ferrocad_stage::ShapeItem;
+
+        let mut stage = Stage::new();
+        stage.add_item(ShapeItem::new(3).with_shape(
+            vec![[0.0, 0.0, 0.0], [2.0, 2.0, 4.0]],
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+        ));
+        let gizmo = translate_gizmo(&SelectionRef::whole(3), &stage).expect("a gizmo");
+        assert_eq!(gizmo.target_id(), 3);
+        let origin = gizmo.origin();
+        assert!((origin.x - 1.0).abs() < 1e-9, "x = {}", origin.x);
+        assert!((origin.y - 1.0).abs() < 1e-9, "y = {}", origin.y);
+        assert!((origin.z - 2.0).abs() < 1e-9, "z = {}", origin.z);
+
+        // A sub-element and an entity that is not displayed get no generic triad.
+        assert!(translate_gizmo(&SelectionRef::element(3, "Face1"), &stage).is_none());
+        assert!(translate_gizmo(&SelectionRef::whole(9), &stage).is_none());
     }
 
     #[test]

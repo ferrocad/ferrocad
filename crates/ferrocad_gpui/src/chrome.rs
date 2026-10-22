@@ -763,18 +763,40 @@ fn dock_option_rows(
             divider_before: !rows.is_empty(),
         });
     }
+    // The numeric twin stays reachable from the tool's menu, so moving the label to
+    // the interactive handle costs no command (the shortcut still runs it directly).
+    if let Some(row) = dock_tool_row(key, model) {
+        rows.push(row);
+    }
     rows
 }
 
-/// A live tool entry with its options caret: the label runs the command, the caret
-/// opens the options upward into the canvas.
+/// The registry command a tool's menu keeps as the numeric alternative.
+fn dock_tool_row(key: &str, model: &ShellModel) -> Option<PopoverRow> {
+    let (id, label) = match key {
+        "gizmo" => ("App_Move", "Move by delta\u{2026}"),
+        _ => return None,
+    };
+    commands::find(&model.commands, id).map(|command| PopoverRow {
+        id: command.id.clone(),
+        label: label.to_string(),
+        enabled: command.enabled,
+        checked: false,
+        accel: command.accel.clone(),
+        divider_before: true,
+    })
+}
+
+/// A tool entry with its options caret: the label arms the tool, the caret opens its
+/// options upward into the canvas.
 ///
-/// The control is tinted active because the handle is live; the caret exists only
-/// while [`dock_options_live`] says so, which is what keeps `Move` plain text in an
-/// idle dock.
+/// The label exists for every tool that has options (it is what makes the tool
+/// interactive at all); `live` only controls the caret and the active tint, so an
+/// idle dock reads as plain text and a live one shows `[ Move ▾ ]`.
 fn dock_split(
     command: &CommandInfo,
     key: &'static str,
+    live: bool,
     rows: Vec<PopoverRow>,
     open: bool,
     anchor: Option<Point<Pixels>>,
@@ -787,10 +809,11 @@ fn dock_split(
         .flex_row()
         .items_center()
         .rounded_sm()
-        .bg(rgb(ACCENT))
-        .when(open, |el| el.border_1().border_color(rgba(0xffffff33)));
+        .when(live, |el| el.bg(rgb(ACCENT)))
+        .when(open && live, |el| {
+            el.border_1().border_color(rgba(0xffffff33))
+        });
 
-    let run = id.clone();
     control = control.child(
         div()
             .id(SharedString::from(format!("dock-{id}")))
@@ -801,36 +824,44 @@ fn dock_split(
             .px_2()
             .py_1()
             .text_xs()
-            .text_color(rgb(FG))
-            .cursor_pointer()
-            .hover(|style| style.bg(rgb(PANEL)))
-            .child(command.label().to_string())
-            .on_click(cx.listener(move |this, _event, _window, cx| {
-                this.run_command(&run, cx)
-            })),
-    );
-
-    control = control.child(
-        div()
-            .id(SharedString::from(format!("dock-{id}-caret")))
-            .debug_selector({
-                let id = id.clone();
-                move || format!("dock-{id}-caret")
+            .text_color(rgb(if command.enabled { FG } else { MUTED }))
+            .when(command.enabled, |el| {
+                el.cursor_pointer().hover(|style| style.bg(rgb(PANEL)))
             })
-            .px_1()
-            .py_1()
-            .text_xs()
-            .text_color(rgb(FG))
-            .cursor_pointer()
-            .hover(|style| style.bg(rgb(PANEL)))
-            .child("\u{25b4}")
-            .on_mouse_down(MouseButton::Left, cx.listener(move |this, event: &MouseDownEvent, _window, _cx| {
-                this.set_popover_anchor(event.position);
-            }))
-            .on_click(cx.listener(move |this, _event, _window, cx| this.open_popover(key, cx))),
+            .child(command.label().to_string())
+            .when(command.enabled, |el| {
+                el.on_click(cx.listener(move |this, _event, _window, cx| {
+                    // The label is the **tool**, not the numeric command: it arms the
+                    // handle for the selection. The caret keeps the command
+                    // (`Move by delta…`) and the look settings.
+                    this.arm_dock_tool(key, cx)
+                }))
+            }),
     );
 
-    if open {
+    if live {
+        control = control.child(
+            div()
+                .id(SharedString::from(format!("dock-{id}-caret")))
+                .debug_selector({
+                    let id = id.clone();
+                    move || format!("dock-{id}-caret")
+                })
+                .px_1()
+                .py_1()
+                .text_xs()
+                .text_color(rgb(FG))
+                .cursor_pointer()
+                .hover(|style| style.bg(rgb(PANEL)))
+                .child("\u{25b4}")
+                .on_mouse_down(MouseButton::Left, cx.listener(move |this, event: &MouseDownEvent, _window, _cx| {
+                    this.set_popover_anchor(event.position);
+                }))
+                .on_click(cx.listener(move |this, _event, _window, cx| this.open_popover(key, cx))),
+        );
+    }
+
+    if open && live {
         // The dock hugs the bottom edge, so the menu grows up from the caret. The
         // pointer is the anchor (a flex child reports a negative layout origin here,
         // as in the header).
@@ -887,6 +918,13 @@ pub(crate) fn action_dock(
     // appear or disappear: `Move` grows a caret only while a gizmo is armed.
     let mut last_group: Option<u8> = None;
     for command in dock {
+        // A dev-only command is a diagnostics entry: the Dev Tools list and the app
+        // menu show it, a runtime surface never does (the same rule
+        // `popover_commands` applies to a header menu). Without this, a command whose
+        // `FerroCAD_Surface` falls back to the dock would appear over the canvas.
+        if command.dev_only {
+            continue;
+        }
         // Modification (Delete/Move) and creation (workbench actions) read as two
         // groups; the hairline makes the dielectric split visible.
         let group = if matches!(command.id.as_str(), "App_Delete" | "App_Move") {
@@ -902,15 +940,16 @@ pub(crate) fn action_dock(
         let id = command.id.clone();
         let enabled = command.enabled;
         let checked = command.checked;
-        // A command whose options are live renders as a split control: the label still
-        // runs the command, the caret opens its options. Otherwise the plain row is
-        // unchanged, so an idle dock is as quiet as before.
-        let options = dock_options(&id).filter(|key| dock_options_live(key, model));
-        if let Some(key) = options {
+        // A command that owns options always renders as the tool entry: its label arms
+        // the tool, and the caret appears once the tool is live. Without this, `Move`
+        // would run the numeric dialog and there would be no way to reach the handle.
+        if let Some(key) = dock_options(&id) {
+            let live = dock_options_live(key, model);
             let rows = dock_option_rows(key, model, provider_features);
             panel = panel.child(dock_split(
                 command,
                 key,
+                live,
                 rows,
                 open_popover == Some(key),
                 anchor,

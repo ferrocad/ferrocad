@@ -446,6 +446,19 @@ impl Shell {
                 }
             }
         }
+        // The dock's gizmo menu is provider-aware like Grid and Axes: the rows are the
+        // registered `gizmo` backends, so read the registry once when it opens. Without
+        // this the menu showed only its config rows and the two providers (native and
+        // shader) were invisible.
+        if key == "gizmo" {
+            match python::provider_features() {
+                Ok(features) => self.provider_features = Some(features),
+                Err(error) => {
+                    self.provider_features = None;
+                    self.console_line(format!("providers: {error}"), cx);
+                }
+            }
+        }
         cx.notify();
     }
 
@@ -892,6 +905,53 @@ impl Shell {
         }
 
         (manipulators, gizmo)
+    }
+
+    /// Arm the transform gizmo for the current selection (the dock's `Move` label).
+    ///
+    /// The label is the interactive tool; the numeric command stays on the caret and
+    /// on its shortcut. A selection made in the tree carries a name rather than a pick
+    /// id, so it is resolved through the display map — that is what makes `Move` work
+    /// without first clicking the object in the viewport.
+    ///
+    /// Re-arming for the same selection is idempotent (a fresh `TransformGizmo` at the
+    /// item's centre), so clicking the tool twice never leaves two handles behind.
+    pub(crate) fn arm_dock_tool(&mut self, key: &str, cx: &mut Context<Self>) {
+        if key != "gizmo" {
+            return;
+        }
+        let status = self.arm_transform_gizmo(cx);
+        self.model.lock().unwrap().status = status.clone();
+        self.console_line(status, cx);
+        cx.notify();
+    }
+
+    /// The arm step behind [`arm_dock_tool`](Self::arm_dock_tool), returning the status.
+    fn arm_transform_gizmo(&mut self, cx: &mut Context<Self>) -> String {
+        let Some(object) = self.model.lock().unwrap().selected.clone() else {
+            return "select an object to transform".to_string();
+        };
+        let Some(viewport) = self.viewport.clone() else {
+            return "no viewport".to_string();
+        };
+        let Some(entity) = self.display.entity_of(&object) else {
+            return format!("{object} is not displayed");
+        };
+        let stage = viewport.read(cx).stage().clone();
+        let gizmo = self
+            .contributions
+            .gizmo_for(&SelectionRef::whole(entity), &stage);
+        let armed = gizmo.is_some();
+        viewport.update(cx, |viewport, cx| {
+            viewport.set_gizmo(gizmo);
+            cx.notify();
+        });
+        self.model.lock().unwrap().gizmo_armed = armed;
+        if armed {
+            format!("{object}: drag the gizmo")
+        } else {
+            format!("{object}: this selection has no transform handle")
+        }
     }
 
     /// A manipulator drag ended: apply the commit through the app script's
@@ -4700,6 +4760,14 @@ if "App_ReloadAxisSettings" not in FreeCADGui.listCommands():
             "a disabled dock command is still visible"
         );
         assert!(cx.debug_bounds("dock-search").is_some());
+        assert!(
+            cx.debug_bounds("dock-GizmoOverlay_Settings").is_none(),
+            "the native gizmo settings are dev-only and must not be on the dock"
+        );
+        assert!(
+            cx.debug_bounds("dock-GizmoOverlayShader_Settings").is_none(),
+            "the shader gizmo settings are dev-only and must not be on the dock"
+        );
         // The base shell only has the two modification commands, so there is no
         // modification/creation boundary yet; a workbench that contributes a
         // creation command inserts `dock-divider-1` there.
@@ -4794,6 +4862,53 @@ if "App_ReloadAxisSettings" not in FreeCADGui.listCommands():
             cx.debug_bounds("dock-App_Move").is_some(),
             "Move itself remains a plain dock entry"
         );
+    }
+
+    /// The dock's gizmo menu is provider-aware like Grid and Axes: opening it reads the
+    /// registry, so the backends (native and shader) are visible where the tool is.
+    #[gpui::test]
+    fn the_gizmo_menu_lists_every_registered_provider(cx: &mut TestAppContext) {
+        let _guard = crate::PYTHON_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let model = Shell::boot().expect("boot shell");
+        let window = cx.update(|cx| {
+            let model = model.clone();
+            cx.open_window(Default::default(), move |_window, cx| {
+                cx.new(|cx| Shell::from_model(model.clone(), cx))
+            })
+            .unwrap()
+        });
+        let mut cx = VisualTestContext::from_window(window.into(), cx);
+        let shell: Entity<Shell> = window.root(&mut cx).unwrap();
+        arm_and_redraw(&model, &shell, &mut cx, true);
+
+        // Opening the menu is what reads the registry (the same lazy read Grid and Axis
+        // use); before that the shell has no provider list to render.
+        cx.update(|_window, cx| {
+            shell.update(cx, |shell, cx| shell.open_popover("gizmo", cx));
+        });
+        draw(&mut cx);
+        let features = shell
+            .read_with(&cx, |shell, _| shell.provider_features.clone())
+            .expect("opening the gizmo menu reads the provider registry");
+        let gizmo = features
+            .iter()
+            .find(|feature| feature.feature == "gizmo")
+            .expect("the gizmo mods register their feature at boot");
+        assert!(!gizmo.providers.is_empty(), "the gizmo feature has a backend");
+        for (backend, selector) in [
+            ("ferrocad", "gizmo-row-ferrocad-provider:gizmo:ferrocad"),
+            (
+                "ferrocad-shader",
+                "gizmo-row-ferrocad-provider:gizmo:ferrocad-shader",
+            ),
+        ] {
+            if gizmo.providers.iter().any(|provider| provider.backend == backend) {
+                assert!(
+                    cx.debug_bounds(selector).is_some(),
+                    "{backend} is listed in the tool's menu"
+                );
+            }
+        }
     }
 
     /// Set the armed flag the way a selection does, and force a frame.

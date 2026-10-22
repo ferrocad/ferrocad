@@ -689,8 +689,10 @@ only trait change is ownership: `Manipulator::id()` is `&str` and
   "action": "bolt",
   "element": "Face3",
   "frame": {"origin": [0, 0, 10], "x": [1, 0, 0], "y": [0, 1, 0], "z": [0, 0, 1]},
+  "kind": "axis",
   "axis": "z",
   "value": 20.0, "min": 0.0, "max": 60.0, "step": 1.0,
+  "radius": 66.0,
   "size": 36.0, "decimals": 2,
   "shape": {
     "positions": [[0, 0, 0], [0.5, 0, 0], [-0.5, 0, 0], [0, 0, 1]],
@@ -703,29 +705,44 @@ only trait change is ownership: `Manipulator::id()` is `&str` and
 }
 ```
 
+`kind` is `"axis"` (default) or `"ring"`. An axis drags along `axis` and commits world
+units; a ring rotates about `axis` and commits **degrees** (so `value`/`min`/`max`/`step`
+are degrees for it). `radius` is the ring's radius in device pixels and is ignored by an
+axis handle; `size` is always the handle mesh's screen size.
+
 Defaults: `action` = `id`; `element` absent; `target` = the selected entity (a spec may
-name another); frame = identity at the origin; `axis` = `"z"` (`"x"`/`"y"`/`"z"`,
-case-insensitive); `value` = 0; unbounded travel; continuous drag; `size` = 40 px;
-`decimals` = 2; no program; the workspace style's ink; the bare number as the readout.
+name another); frame = identity at the origin; `kind` = `"axis"`; `axis` = `"z"`
+(`"x"`/`"y"`/`"z"`, case-insensitive); `value` = 0; unbounded travel; continuous drag;
+`radius` = 66 px; `size` = 40 px; `decimals` = 2; no program; the workspace style's ink;
+the bare number as the readout.
 
 Validation is atomic and names the field (`handle "toy.bolt": size must be > 0, got 0`):
 non-empty id, non-empty positions, normals matching positions when present, in-range
-indices, finite numbers, `size > 0`, `decimals <= 6`, `step >= 0`, `min <= max`, a
-parseable colour, and basis vectors normalised (a zero-length one is an error). An empty
-`program` means no skin. Unknown keys are ignored so a spec can carry its own metadata.
+indices, finite numbers, `size > 0`, `radius > 0`, `decimals <= 6`, `step >= 0`,
+`min <= max`, a known `kind`, a parseable colour, and basis vectors normalised (a
+zero-length one is an error). An empty `program` means no skin. Unknown keys are ignored
+so a spec can carry its own metadata.
 
 ### Hosting rules
 
-- **Geometry** is authored in unit space and scaled to `size` device pixels at the
-  frame, so it stays constant on screen: `world = origin + axis·value + px·size·(x·X +
-  y·Y + z·Z)`, with `px = scale_for(camera, origin, 1.0)`. The `{value}` offset is what
-  moves the handle; there is no implicit stem, so the mesh is the grab target.
-- **Hit** is the projected bounding box of the built mesh, padded by `HIT_SLOP`. It is
-  deliberately coarse; an analytic test per handle kind is G3b.
-- **Drag** projects the frame origin and one world unit along the axis, so the value
-  follows the pointer one-for-one on screen (`value = press + dot(δ, û) / pixels_per_world`),
-  then snaps to `step` and clamps to `min`/`max`. An axis pointing at the camera has no
-  screen direction and does not move.
+- **Geometry** is authored in unit space and scaled to `size` device pixels, so it stays
+  constant on screen. An axis handle sits at `origin + axis·value + px·size·(x·X + y·Y +
+  z·Z)`; a ring handle sits **on the ring** at `origin + radius_world·(cos θ·u + sin θ·v)`,
+  with `θ = value`, `(u, v) = orthonormal_basis(axis)` and `radius_world = scale_for(camera,
+  origin, radius)`. The value offset is what moves the handle; there is no implicit stem,
+  so the mesh is the grab target.
+- **Hit is analytic, per kind.** An axis accepts a `HIT_SLOP` band around its projected
+  stem (`origin → origin + axis·value`) **and** the projected bbox of its mesh, so a wide
+  handle stays grabbable where the thin stem does not pass. A ring accepts a `HIT_SLOP`
+  band around the projected 32-segment circle and rejects its interior (an edge-on ring
+  projects to a line; the segment distance handles that, and the interior rejection keeps
+  the centre free for whatever is behind it).
+- **Drag.** An axis projects the frame origin and one world unit along the axis, so the
+  value follows the pointer one-for-one on screen (`value = press + dot(δ, û) /
+  pixels_per_world`); an axis pointing at the camera has no screen direction and does not
+  move. A ring intersects the pointer ray with the ring plane (falling back to a
+  view-facing plane when it is edge-on) and accumulates the angle from the press; a
+  degenerate ray declines the drag. Both then snap to `step` and clamp to `min`/`max`.
 - **Ink** is `color` when given, else the workspace style's `active`/`inactive` tokens;
   the style's `opacity` and `ghost_alpha` always apply, and `enabled`/`show_readout` are
   the viewport's gates, as for native handles. The handle's own `size` wins over
@@ -741,12 +758,20 @@ belong in the top-left header beside `Grid`/`Axes`/`WP`: those can be toggled in
 scene, and a `Gizmo` toggle there would imply the same. The options live **on the tool**
 instead:
 
-- the dock's `Move` entry grows a caret only while the selection has armed a gizmo
-  (`ShellModel::gizmo_armed`), so an idle dock shows plain `Move`, and the entry is tinted
-  active while its handle is live;
-- the label still runs `Move` (the numeric dialog); the caret opens the provider rows and
-  `Gizmo settings…` upward into the canvas, reusing the header's popover and its
-  `ferrocad-provider:gizmo:<backend>` rows;
+- the dock's `Move` entry **is** the tool: its label arms a translate gizmo for the
+  current selection (resolving a tree selection's name through the display map, so it
+  works without a viewport pick first) and the entry is tinted active while its handle
+  is live; the base edition registers `ferrocad_gpui::translate_gizmo` as its default
+  contribution, so this exists in the shipped app, not only in a workbench;
+- the caret appears only while a gizmo is armed, and opens the provider rows,
+  `Gizmo settings…` and `Move by delta…` upward into the canvas. Opening it reads the
+  provider registry (the same lazy read `Grid`/`Axes` use), which is how the two
+  backends — `FerroCAD (native)` and `FerroCAD (shader)` — become visible and
+  switchable at the tool, rather than only in Dev Tools;
+- the settings commands are **dev-only** and declare `FerroCAD_Surface: "gizmo"`, which
+  parses to `Surface::Hidden`; the dock also skips any dev-only row. Neither `Gizmo` nor
+  `Gizmo (shader)` can therefore appear as a toolbar button — they live in Dev Tools and
+  the `Settings/Gizmo` tree;
 - the caret disappears with the selection, so nothing can be clicked out of context and
   the dock's layout is stable while a tool is drawing.
 
@@ -758,12 +783,12 @@ drawn*).
 
 ### What is still open (G3b)
 
-- Handle **kinds**: axis only. Rings (angular travel) and plane drags reuse the same
-  solver vocabulary but need their own hit and value mapping.
-- **Analytic hit** per kind instead of the projected bounding box.
-- Reusing `ferrocad.stage.ShapeItem` (or a Part shape) as the source instead of the JSON
-  mesh: the mesh payload is the same one `FerroCAD.display_mesh` already carries, so the
-  natural next step is a mod-side helper that turns a shape into the spec's arrays.
+- Handle **kinds**: `axis` and `ring` are in; a **plane** drag (two values in the frame
+  plane) reuses the same vocabulary but needs its own value mapping and a two-number
+  commit.
+- **Shape-API input**: a spec's mesh is JSON arrays today (the same payload
+  `FerroCAD.display_mesh` carries). Accepting a `ferrocad.stage.ShapeItem` (or a Part
+  shape) directly is a Python-side helper, not an ABI change.
 - No new ABI is needed for **compute shaders**: a declared handle is geometry plus a
   material, and a compute pass would only pay off for GPU-side deformation or picking.
 

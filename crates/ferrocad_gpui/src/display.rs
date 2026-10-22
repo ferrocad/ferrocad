@@ -126,6 +126,19 @@ impl DisplaySync {
         self.objects.get(&entity).map(String::as_str)
     }
 
+    /// The displayed entity for a document object (the inverse of
+    /// [`object_of`](Self::object_of)).
+    ///
+    /// A tree selection carries a name, not a pick id; arming a transform gizmo from
+    /// it needs the entity the stage knows. The map is small (one entry per displayed
+    /// shape), so a scan is cheaper than a second index to keep in step.
+    pub fn entity_of(&self, object: &str) -> Option<u32> {
+        self.objects
+            .iter()
+            .find(|(_, name)| name.as_str() == object)
+            .map(|(entity, _)| *entity)
+    }
+
     /// The number of displayed entities.
     pub fn len(&self) -> usize {
         self.objects.len()

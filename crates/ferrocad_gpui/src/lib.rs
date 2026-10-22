@@ -39,7 +39,7 @@ use gpui::{
 };
 
 pub use commands::{CommandInfo, CommandOutcome, Surface};
-pub use contributions::{Contributions, GizmoFactory, ManipulatorFactory};
+pub use contributions::{Contributions, GizmoFactory, ManipulatorFactory, translate_gizmo};
 pub use dev_tools::DevTools;
 pub use dialog::{DialogField, DialogSpec};
 pub use display::{DisplaySync, StageMesh};

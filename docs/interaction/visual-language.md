@@ -177,7 +177,7 @@ by **opacity and pairing**, per the spec.
 | Front-facing primary edges | 1 px `Lines`, front-edge token | ✅ `theme::EDGE_FRONT` |
 | Occluded / back edges | 1 px `Lines`, ghost token | ✅ depth-`Greater`, no write, `theme::EDGE_OCCLUDED` |
 | Machined bevels | twin parallel lines, `0.08` model units apart | ▢ geometry-level, deferred (V4) |
-| Gizmo / manipulator strokes | 1.5 px ribbons | ✓ |
+| Gizmo / manipulator strokes | 1.5 px ribbons + dark casing; visible 100 %, occluded 35 % | ✅ |
 | Dashed rays | runs of short segments | ✓ technique, used by the grid spec |
 
 **The occlusion gap is closed.** The contract was already `DepthState`
@@ -198,6 +198,18 @@ ghost wire (`Greater`, no write, `EDGE_OCCLUDED`, not pickable). The grid triad 
 the same with a 10 % alpha copy, so an axis cross behind a solid reads as a ghost
 instead of floating over the front face. No new `DepthMode` enum is needed; there is
 one draw contract, `StateSnapshot::depth`.
+
+Gizmo ribbons and glass planes use the surface version:
+
+- `with_blended_surface()` sets `BLENDED_DEPTH` (test on, write off). The non-default
+  state selects the renderer's blended triangle variant, so a glass plane actually
+  blends instead of hitting the opaque scene pipeline's `REPLACE`.
+- `with_ghost_surface()` then emits a `Greater` surface pass at `GHOST_SURFACE_ALPHA`
+  (35 %) plus a matching wire pass, both unpickable. The visible part is drawn by the
+  normal pass; the part behind a solid is drawn at 35 % instead of disappearing.
+
+This is dimming, not dashing: the ghost pass is the same ribbon geometry, so there is no
+separate dash pattern to maintain.
 
 ---
 

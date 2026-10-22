@@ -58,11 +58,21 @@ pub const HIGHLIGHT_DEPTH_BIAS: f32 = 1e-5;
 /// The non-default state is deliberate. It selects the renderer's blended triangle
 /// variant (so the 12% tint actually blends), and no write means the tint cannot hide
 /// the base wire or the highlight wire drawn after it.
-pub const HIGHLIGHT_DEPTH: DepthState = DepthState {
+pub const HIGHLIGHT_DEPTH: DepthState = BLENDED_DEPTH;
+
+/// A translucent overlay surface's depth state: test against the scene, write no depth.
+///
+/// A non-default state selects the renderer's blended triangle variant. It is used by
+/// the selection tint and by gizmo ribbons/glass planes, which need alpha instead of the
+/// opaque scene pipeline's `REPLACE`.
+pub const BLENDED_DEPTH: DepthState = DepthState {
     test: true,
     write: false,
     compare: DepthCompare::Less,
 };
+
+/// How much of an overlay's ink an occluded ghost pass keeps (35%).
+pub const GHOST_SURFACE_ALPHA: f32 = 0.35;
 
 /// The ghost-edge depth state: pass only where opaque geometry occludes the edge.
 ///
@@ -109,6 +119,12 @@ pub struct ShapeItem {
     /// default so gizmos, the navicube and transient tools keep their overlay look;
     /// a document entity opts in (see `ferrocad_gpui::display`).
     ghost_edges: bool,
+    /// Emit a second, depth-`Greater` surface/wire pass at [`GHOST_SURFACE_ALPHA`], so
+    /// an occluded gizmo handle stays readable behind a solid.
+    ghost_surface: bool,
+    /// The surface pass's depth state. The opaque default writes depth; a translucent
+    /// gizmo plane or ribbon uses [`BLENDED_DEPTH`].
+    surface_depth: DepthState,
     edge_width: f32,
     selectable: bool,
     positions: Vec<[f32; 3]>,
@@ -149,6 +165,8 @@ impl ShapeItem {
             shade_color: None,
             edge_color: theme::EDGE_FRONT,
             ghost_edges: false,
+            ghost_surface: false,
+            surface_depth: DepthState::default(),
             edge_width: 1.0,
             selectable: true,
             positions: Vec::new(),
@@ -356,6 +374,33 @@ impl ShapeItem {
         self
     }
 
+    /// Emit the occluded surface/wire ghost pass at [`GHOST_SURFACE_ALPHA`].
+    ///
+    /// A gizmo opts in: its ribbons and glass planes draw through a solid at reduced
+    /// luminance instead of disappearing. The normal pass still wins where the handle is
+    /// in front, because the ghost pass compares `Greater`.
+    pub fn with_ghost_surface(mut self) -> Self {
+        self.ghost_surface = true;
+        self
+    }
+
+    /// Whether the occluded surface/wire ghost pass is emitted.
+    pub fn ghost_surface(&self) -> bool {
+        self.ghost_surface
+    }
+
+    /// Make the surface pass translucent (test on, write off, [`BLENDED_DEPTH`]).
+    pub fn with_blended_surface(mut self) -> Self {
+        self.surface_depth = BLENDED_DEPTH;
+        self
+    }
+
+    /// Set the surface pass's depth state explicitly.
+    pub fn with_surface_depth(mut self, depth: DepthState) -> Self {
+        self.surface_depth = depth;
+        self
+    }
+
     /// Whether the occluded-edge ghost pass is emitted.
     pub fn ghost_edges(&self) -> bool {
         self.ghost_edges
@@ -521,15 +566,32 @@ impl ShapeItem {
         }
         if self.draw_mode.has_surface() {
             if let Some(geometry) = self.surface_geometry() {
-                queue.packets.push(self.packet(
+                queue.packets.push(self.packet_with_depth(
                     self.surface_mesh,
                     Topology::Triangles,
-                    geometry,
+                    geometry.clone(),
                     world,
                     self.surface_color,
                     0.0,
                     self.generation,
+                    self.surface_depth,
+                    true,
                 ));
+                if self.ghost_surface {
+                    // Pass only where opaque geometry already wrote a nearer depth: the
+                    // hidden portion of a handle shows at 35 % instead of vanishing.
+                    queue.packets.push(self.packet_with_depth(
+                        self.surface_mesh,
+                        Topology::Triangles,
+                        geometry,
+                        world,
+                        ghosted(self.surface_color),
+                        0.0,
+                        self.generation,
+                        GHOST_DEPTH,
+                        false,
+                    ));
+                }
             }
         }
         if self.draw_mode.has_edges() {
@@ -549,9 +611,22 @@ impl ShapeItem {
                     queue.packets.push(self.packet_with_depth(
                         self.wire_mesh,
                         Topology::Lines,
-                        geometry,
+                        geometry.clone(),
                         world,
                         theme::EDGE_OCCLUDED,
+                        WIRE_DEPTH_BIAS,
+                        self.generation,
+                        GHOST_DEPTH,
+                        false,
+                    ));
+                }
+                if self.ghost_surface {
+                    queue.packets.push(self.packet_with_depth(
+                        self.wire_mesh,
+                        Topology::Lines,
+                        geometry,
+                        world,
+                        ghosted(self.edge_color),
                         WIRE_DEPTH_BIAS,
                         self.generation,
                         GHOST_DEPTH,
@@ -832,6 +907,12 @@ fn parts_from_tessellation(mesh: &Tessellation) -> Vec<u32> {
 
 /// Flat-shade `triangles`: one unrolled vertex per index, each carrying its triangle's
 /// face normal. Malformed triangles (an out-of-range index) are skipped.
+/// An overlay's occluded ink: the same hue with alpha scaled to
+/// [`GHOST_SURFACE_ALPHA`].
+fn ghosted(color: [f32; 4]) -> [f32; 4] {
+    [color[0], color[1], color[2], color[3] * GHOST_SURFACE_ALPHA]
+}
+
 fn flat_surface(positions: &[[f32; 3]], triangles: &[u32], parts: &[u32]) -> Geometry {
     let mut vertices = Vec::with_capacity(triangles.len());
     let mut indices = Vec::with_capacity(triangles.len());
@@ -968,6 +1049,39 @@ mod tests {
             DepthState::default(),
             "the front wire keeps the normal test"
         );
+    }
+
+    #[test]
+    fn a_ghost_surface_emits_a_dimmed_greater_pass() {
+        let item = triangle_item()
+            .with_draw_mode(DrawMode::ShadedWithEdges)
+            .with_surface_color([0.2, 0.4, 0.8, 1.0])
+            .with_edge_color([0.6, 0.7, 0.8, 0.5])
+            .with_blended_surface()
+            .with_ghost_surface();
+        let queue = emit(&item);
+        assert_eq!(
+            queue.len(),
+            4,
+            "surface, ghost surface, wire, ghost wire"
+        );
+        assert_eq!(
+            queue.packets[0].state.depth, BLENDED_DEPTH,
+            "the visible pass blends"
+        );
+        let ghost = &queue.packets[1];
+        assert_eq!(ghost.topology, Topology::Triangles);
+        assert_eq!(ghost.state.depth, GHOST_DEPTH);
+        assert_eq!(ghost.state.color, ghosted(item.surface_color()));
+        assert_eq!(ghost.state.color[3], GHOST_SURFACE_ALPHA);
+        assert!(!ghost.state.pickable);
+
+        let ghost_wire = &queue.packets[3];
+        assert_eq!(ghost_wire.topology, Topology::Lines);
+        assert_eq!(ghost_wire.state.depth, GHOST_DEPTH);
+        assert_eq!(ghost_wire.state.color, ghosted(item.edge_color()));
+        assert_eq!(ghost_wire.state.color[3], 0.5 * GHOST_SURFACE_ALPHA);
+        assert!(!ghost_wire.state.pickable);
     }
 
     #[test]

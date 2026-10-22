@@ -94,7 +94,9 @@ impl HeightGrip {
                     .with_edge_color(CASING_COLOR),
                 ShapeItem::new(TOY_GRIP_PICK_ID + 1)
                     .with_draw_mode(DrawMode::Shaded)
-                    .with_selectable(false),
+                    .with_selectable(false)
+                    .with_blended_surface()
+                    .with_ghost_surface(),
             ],
         }
     }

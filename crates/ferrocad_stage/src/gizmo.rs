@@ -1099,7 +1099,13 @@ fn new_handle(index: usize) -> ShapeItem {
         HandleKind::Plane => DrawMode::ShadedWithEdges,
         HandleKind::Axis | HandleKind::Ring => DrawMode::Shaded,
     };
-    ShapeItem::new(GIZMO_BASE_ID + index as u32).with_draw_mode(mode)
+    ShapeItem::new(GIZMO_BASE_ID + index as u32)
+        .with_draw_mode(mode)
+        // Ribbons and glass planes are translucent and must stay readable when the
+        // solid occludes them: blend the visible part, then draw the hidden part at
+        // 35 % through the `Greater` ghost pass.
+        .with_blended_surface()
+        .with_ghost_surface()
 }
 
 /// A translation axis: a 1.5 px shaft ribbon plus a micro-chevron at the tip.

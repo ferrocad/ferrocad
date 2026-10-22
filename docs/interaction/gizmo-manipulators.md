@@ -366,6 +366,11 @@ classes.
 - Axes are a 1.5 px shaft ribbon plus a V-shaped micro-chevron; rings are a 1.5 px
   ribbon loop. Planes are a translucent glass quad with a 1 px rim. `new_handle` changed
   accordingly: axes/rings are `Shaded`, planes are `ShadedWithEdges`.
+- Every handle opts into `with_blended_surface()` + `with_ghost_surface()`: the visible
+  part is the normal blended ribbon (planes blend at 10 %), and the part behind a solid
+  is re-emitted at `GHOST_SURFACE_ALPHA` (35 %) with a `Greater` depth test. The toy's
+  `HeightGrip` uses the same pair for its stem and crossbar, with a wider dark casing
+  under the 1.5 px stroke.
 - The gizmo rebuilds when the camera view changes (the ribbons depend on the view
   direction), as well as when the scale/origin/mode change.
 - A hovered handle uses the active cyan; the rest stay slate. Hovering a plane raises the

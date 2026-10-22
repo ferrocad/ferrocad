@@ -19,6 +19,7 @@ _Every entry point returns a JSON string._
 | `dialog_accept(payload_json: str) -> str` | Accept an open dialog: ``{"token": ..., "values": {...}}``. |
 | `dialog_cancel(token: str) -> str` | Cancel an open dialog and drop its token. |
 | `evaluate(code: str) -> str` | Evaluate one console line, capturing stdout/stderr and any traceback. |
+| `grid_summary() -> str` | The grid's provider and spacing for the shell's popover. |
 | `hello() -> str` | A first console line, proving the interpreter is live. |
 | `interaction(object_name: str, manipulator: str, action: str, element: str, values_json: str) -> str` | Apply a manipulator commit through the module that supports it. |
 | `load_workbenches(dirs_json: str = '[]') -> str` | Best-effort workbench loading. |

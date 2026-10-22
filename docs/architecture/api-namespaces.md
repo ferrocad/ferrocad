@@ -87,7 +87,30 @@ unconditional. If a compatibility alias is ever needed, it must be opt-in (a
 
 - no FerroCAD extension name appears in `dir(FreeCAD)` or `dir(FreeCADGui)`;
 - every moved name resolves on `FerroCAD` or `FerroCADGui`;
-- the upstream-shaped names still resolve, so the move did not take anything with it.
+- the upstream-shaped names still resolve, so the move did not take anything with it;
+- no registered command's `GetResources()` declares a bare `Surface`/`Parent`
+  key (checked at runtime over `FreeCADGui._COMMANDS`, with a raising
+  `GetResources` treated as `{}` like the facade does);
+- no `mods/*/InitGui.py` declares a bare `Surface`/`Parent` key (a source scan,
+  because the suite does not import the mods).
+
+## Audit
+
+`test_namespace_separation.py` is the audit. Run it on its own with:
+
+```sh
+PYTHONPATH=python python3 -m pytest -q tests/test_namespace_separation.py
+```
+
+A mod importing only `FreeCAD`/`FreeCADGui` is **FreeCAD-compatible**. A mod
+importing `FerroCAD` or `FerroCADGui` is **FerroCAD-only**: it depends on
+something upstream FreeCAD does not have. The import line is the whole
+statement, so a port of an upstream workbench should touch only the first pair
+and a FerroCAD-only mod should say so in its README/`package.xml`.
+
+The resource-key check makes the same split visible in `GetResources`: the keys
+`FerroCAD_Surface`/`FerroCAD_Parent` are FerroCAD extensions, and the bare
+`Surface`/`Parent` spellings are not accepted.
 
 ## How a mod states its compatibility
 

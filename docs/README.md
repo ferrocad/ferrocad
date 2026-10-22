@@ -212,7 +212,14 @@ rather than restating it.
   `refresh` hook, and the `semantic` → `ferrocad` rename.
 - [tasks/toolbar-chrome.md](tasks/toolbar-chrome.md) — replacing the flat actions bar
   with viewport-header split buttons, anchored popovers, a selection-reactive dock and
-  an app menu; the grid-settings half now depends on `settings-model.md`.
+  a title-bar app menu; the grid popover and `Settings/Grid` settings are wired.
 - [tasks/settings-model.md](tasks/settings-model.md) — provider-advertised settings, a
   `Settings` node in the tree, and a file-backed parameter store so a provider choice
   survives a restart.
+- [tasks/viewport-event-routing.md](tasks/viewport-event-routing.md) — pointer events
+  from panes over the canvas (the Grid settings card, the action dock, tool panes)
+  must not reach the viewport; the same fix keeps an editable settings field from
+  closing the card.
+- [tasks/viewport-feedback-and-window-bounds.md](tasks/viewport-feedback-and-window-bounds.md)
+  — the Grid control must show its on/off state on hover; a maximized window must not
+  show resize grips over the viewport or mis-map pointer coordinates.

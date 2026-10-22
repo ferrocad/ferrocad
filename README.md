@@ -1,6 +1,6 @@
 # FerroCAD
 
-![The FerroCAD shell: model tree, 3D viewport, property editor and Python console](screenshot.png)
+![The FerroCAD shell: 3D viewport, the Dev Tools command/model/property/console panes, and the modeless Grid settings card](screenshot.png)
 
 **FerroCAD** is a Rust reimplementation of FreeCAD's
 C++ `App` core, designed to be a **drop-in replacement for the `FreeCAD` Python package**. The

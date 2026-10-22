@@ -7,10 +7,10 @@ Companion to [`../interaction/visual-language.md`](../interaction/visual-languag
 [`../interaction/axis-origin-grid.md`](../interaction/axis-origin-grid.md) (what the grid
 toggles) and [`../direction/app-shell-vision.md`](../direction/app-shell-vision.md) S2.
 
-**Scope note.** The chrome (header controls, popovers, the action dock, the app menu)
-is implemented. The **grid settings** half is not: the decisions in §6 are made, and
-T4/T5 now depend on [`settings-model.md`](settings-model.md) S0–S2. T0–T3, T6 and T7
-landed on 2026-10-22.
+**Scope note.** T0–T7 landed on 2026-10-22: the chrome (header controls, popovers,
+the action dock, the title-bar app menu) and the grid-settings half. T4/T5 are wired
+to [`settings-model.md`](settings-model.md) S2/S4. The remaining acceptance items are
+visual-only (popover/navicube overlap, drag fade).
 
 ## 1. Why
 
@@ -73,11 +73,11 @@ The design brief (2026-10-22) specifies:
 3. **Grid settings are modeless**: `Grid Settings…` selects the `Settings/Grid` node in
    the model tree and the existing Properties pane renders its rows
    ([`settings-model.md`](settings-model.md)). There is no separate settings screen.
-4. **App menu**, left-aligned in the same header: `☰` opens app-level commands that are
-   not viewport environment controls. Dev Tools is the first entry (checked while the
-   window is open, showing `Ctrl+Shift+D`); About and Preferences follow. It exists
-   because Dev Tools starts closed and is hidden from every other surface, so the
-   shortcut was the only way in.
+4. **App menu**, at the leading edge of the **window title bar** (moved there from the
+   viewport header): `☰` opens app-level commands that are not viewport environment
+   controls. Dev Tools is the first entry (checked while the window is open, showing
+   `Ctrl+Shift+D`); About and Preferences follow. It exists because Dev Tools starts
+   closed and is hidden from every other surface, so the shortcut was the only way in.
 
 ## 4. What is missing (the actual work)
 
@@ -103,10 +103,10 @@ The design brief (2026-10-22) specifies:
 | **T1** | `split_button` + `popover` primitives (open state, anchor, dismissal, right-click) | state-machine tests; rendering by inspection ✅ |
 | **T2** | Header controls: `Grid`, `Axes`, `WP`, `Mods` wired to the existing command ids, right-aligned in the viewport header | model tests: clicking the label runs the command; `▾` opens the group without running it ✅ |
 | **T3** | Action dock replaces the strip; selection filter; drag/proximity opacity | model test: the dock's visible ids follow the selection signature ✅ (drag opacity deferred) |
-| **T4** | Grid quick popover: **provider** selector, spacing readout, settings/reload rows (no mode) | model test: the rows follow the active provider |
-| **T5** | `Grid Settings…` selects the `Settings/Grid` node; the Properties pane renders it | depends on [`settings-model.md`](settings-model.md) S0–S2 |
+| **T4** | Grid quick popover: **provider** readout, spacing readout, settings/reload rows (no mode) | model test: the rows follow the active provider ✅ |
+| **T5** | `Grid Settings…` selects the `Settings/Grid` node and opens the modeless 380 px card (draggable, no scrim) | gpui test: the directive selects the node, the card opens/drags/closes, and its rows edit ✅ |
 | **T6** | Remove `actions_bar` and its layout slot; update the docs; keep every command reachable | test that every registered command appears on exactly one surface |
-| **T7** | App menu (`☰`) at the header's left: app-level commands, Dev Tools first, checked while open | model test: the menu opens, lists the hidden command, and running it opens the window |
+| **T7** | App menu (`☰`) in the window title bar: app-level commands, Dev Tools first, checked while open | model test: the menu opens, lists the hidden command, and running it opens the window |
 
 `T0` was deliberately first: it is pure data, it made `T6`'s "every command reachable"
 assertion possible, and it let T2/T3 land without touching the Python side.
@@ -167,6 +167,8 @@ Nothing in the chrome needs to change for 3–5; T4/T5 become wiring once S0–S
   outside click both dismiss. ✅ (structurally: no backdrop, no `occlude`; headless
   state tests only — a visual pass still needs Xvfb or a human)
 - Popovers never overlap the navicube at any window width ≥ 800 px. ⏳ (visual only)
+- A split-button popover opens below its control, inside the window, not over the
+  title bar. ✅ (headless bounds assertion)
 - The dock's visible actions follow the selection signature, and it fades during a drag.
   ✅ for enablement; the drag fade is deferred with T3's visual half.
 - `cargo test -p ferrocad_gpui` and `cargo test -p ferrocad_toy` stay green; the Xvfb
@@ -187,14 +189,49 @@ Nothing in the chrome needs to change for 3–5; T4/T5 become wiring once S0–S
   control, with `on_mouse_down_out` for outside-click dismissal. The **caret opens**
   rather than toggles: the outside-click handler fires before the caret's click, so a
   toggle would immediately reopen the menu. `Esc` closes it from the shell key path.
-- Because T4 is blocked, a popover is a plain list of the commands on that surface
-  whose `FerroCAD_Parent` names the control's primary. When a surface has no such children
-  (`Mods`), it falls back to the surface's own commands so the caret is never dead.
+- A popover lists the commands on that surface whose `FerroCAD_Parent` names the
+  control's primary. When a surface has no such children (`Mods`), it falls back to
+  the surface's own commands so the caret is never dead.
+- T4 adds two read-only rows at the top of the **Grid** popover: `Provider: <label>`
+  and `Spacing: <n mm>` (`grid-row-provider`, `grid-row-spacing`). They come from
+  `ferrocad_shell.grid_summary()`, fetched when the popover opens (not per frame),
+  and refreshed after a `Settings/…` edit. With no provider the panel says
+  `No grid provider`; there is no compact/full mode row.
+- The Grid popover groups the two backend-settings rows above the config actions
+  with a `1 px` `#FFFFFF14` hairline, and the active backend's row is checked in
+  `#67D7FF` (`CHROME_ACTIVE`). The dock has the same hairline between the
+  modification and creation groups, and before `Search`.
+- **Anchoring.** A split-button popover is placed from the caret's actual pointer
+  event (`popover_anchor`) in window coordinates, 18 px below the press. The flex
+  header gives an `Anchored` child a negative layout origin, which previously put
+  the panel over the title bar; the pointer is the reliable origin. The app menu
+  keeps its title-bar `Anchored` placement.
+- T5 is a `select` directive: `View_GridSettings` returns `{"select":
+  "Settings/Grid"}`, `CommandOutcome.select` carries it through the facade's
+  `_payload`, and `Shell::run_command` routes it through the normal selection path.
+  The tree spelling (`Settings/grid`) and the display form (`Settings/Grid`) are
+  the same node. Selecting a `Settings/…` node opens the **modeless settings card**:
+  a draggable 380 px panel with no backdrop, the property rows, a `✕`, and `Esc`
+  dismissal. It reuses `properties_panel` and `set_property`; the Dev Tools pane
+  remains a second view of the same rows.
 - The dock is `model.surfaces().dock`, so the existing `IsActive` results drive it.
   Disabled rows stay visible. `Search (Ctrl+K)` is a status-reporting stub; there is no
   palette.
 - T6 removed `actions_bar`; the Dev Tools window lists **every** command vertically,
   with its surface tag, as the reachability safety net.
+- T7's app menu is **title-bar chrome**, not header chrome: `Shell::render` builds it
+  with `chrome::app_menu` and passes it to
+  `ferrocad_widgets::window_chrome::window_frame_with_leading`, which puts it at the
+  leading edge of the title bar. The viewport header keeps only `Grid`, `Axes`, `WP`
+  and `Mods`. The menu button (and its popover) stop mouse-down propagation so a
+  click does not also start a window move; the Dev Tools window calls plain
+  `window_frame`, so its title bar has no menu. When the platform draws the
+  decorations (macOS, some Wayland compositors), the frame draws a slim
+  `leading-bar` fallback below the platform title bar instead of dropping the menu;
+  the headless test platform reports server-side decorations, so that branch is what
+  the T7 test exercises. The client-decoration `title_bar` is rendered in a harness
+  window for the same clicks, popover, `Esc` and row execution; the real
+  client-decoration path remains visual-only.
 
 ## 9. Risks
 

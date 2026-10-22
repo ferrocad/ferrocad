@@ -11,7 +11,7 @@ A drop-in, Rust-backed stand-in for FreeCAD's Python ``App`` module.
 
 | Function | Summary |
 | --- | --- |
-| `ParamGet(path='', create=True)` | Return the parameter group rooted at ``path`` (in-memory). |
+| `ParamGet(path='', create=True)` | Return the parameter group rooted at ``path``. |
 | `Version()` | — |
 | `activeDocument()` | — |
 | `closeDocument(name)` | — |

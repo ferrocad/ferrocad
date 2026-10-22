@@ -110,12 +110,13 @@ Settings                    (synthetic root)
 | --- | --- | --- |
 | **S0** | Schema + parameter-group storage + `settings()` / `setSetting()`, with validation and the no-schema fallback — ✅ Python tests: defaults, round-trip, out-of-range, unknown kind, provider without schema |
 | **S1** | `Settings` root and `Settings/<Feature>` nodes in `model_tree()`; `properties()` / `set_property()` routing — ✅ Python tests: addressing, no collision with document names, provider switch changes rows |
-| **S2** | Property pane selects the node and renders its rows (reuse the existing editor) | gpui model test: selecting `Settings/Grid` shows the rows; editing calls `set_property` |
-| **S3** | File-backed `ParamGet`; persist the active provider; load at boot | Python tests: restart simulation, corrupt file, unknown backend |
-| **S4** | Migrate `FerroCAD.Grid` onto the native provider's schema; keep the old attribute API as a facade; turn the two mod dialogs into aliases of the Settings node | Python tests: the old attributes and the new rows agree |
+| **S2** | Property pane selects the node and renders its rows (reuse the existing editor) — ✅ gpui tests: the tree row, `select`, the rows, and an edit |
+| **S3** | File-backed `ParamGet`; persist the active provider; load at boot — ✅ Python tests: restart, corrupt file, unknown backend |
+| **S4** | Migrate `FerroCAD.Grid` onto the native provider's schema; keep the old attribute API as a facade; turn the two mod dialogs into aliases of the Settings node — ✅ Python tests: the old attributes and the new rows agree |
 | **S5** | Document-scoped overrides and the precedence display (optional) | Python tests: document value wins, deleting it falls back |
 
-`S0`–`S2` unblock `toolbar-chrome.md` T4/T5. `S3` unblocks the persistence promise.
+`S0`–`S4` are what `toolbar-chrome.md` T4/T5 consume; `S3` is the persistence
+promise, and `S5` remains optional.
 
 ## Non-goals
 
@@ -140,7 +141,7 @@ Settings                    (synthetic root)
 
 ## As built (2026-10-22)
 
-S0 and S1 only; S2 (pane wiring) and S3 (file-backed `ParamGet`) are untouched.
+S0–S4 landed; S5 (document-scoped overrides) remains optional.
 
 - `FerroCADGui.registerProvider(..., settings=...)` validates and normalises the
   schema, then stores it on the provider record. Nothing is written to the
@@ -170,13 +171,58 @@ S0 and S1 only; S2 (pane wiring) and S3 (file-backed `ParamGet`) are untouched.
   provider selector in `properties("Settings/<Feature>")` switches by label or
   backend id through `setActiveProvider`.
 
+### S2 — the pane renders the node
+
+- `View_GridSettings` and the per-mod settings commands return
+  `{"select": "Settings/Grid"}` when a grid provider is registered; the modal is
+  the fallback only when none is. `CommandOutcome` gained a `select` directive (the
+  facade's `_payload` forwards it), and `Shell::run_command` feeds it through the
+  same selection path a tree click uses. The tree spelling (`Settings/grid`) and
+  the directive's display form (`Settings/Grid`) are treated as one node.
+- Selecting a `Settings/<Feature>` node (from the tree or a command's `select`
+  directive) opens the **modeless settings card**: a draggable 380 px panel over
+  the canvas, no backdrop scrim, a `✕`/`Esc` dismissal, and the same property rows.
+  It reuses `properties_panel` and `commit_property` -> `set_property`; the Dev
+  Tools pane remains a second view of the same `prop_inputs`. No second renderer
+  and no separate settings screen.
+- gpui tests cover the tree row, the `select` directive, the rows (`provider`, the
+  schema names), an edit, the card's open/drag/close/Esc lifecycle, and that the
+  pane creates a field per editable row.
+
+### S3 — the parameter store is file-backed
+
+- `python/FerroCAD/_params.py` exposes `FerroCAD.set_parameter_file(path)` and
+  `FerroCAD.parameter_file()`; the FreeCAD side keeps only private helpers, so the
+  upstream namespace is unchanged.
+- Path precedence is explicit → `FERROCAD_PARAM_FILE` →
+  `$XDG_CONFIG_HOME/ferrocad/parameters.json` (`~/.config` fallback). The default
+  file is enabled only when `FreeCAD.GuiUp` is truthy, so headless tests stay
+  in memory and never touch the user's config.
+- The file is versioned JSON, written atomically (`tempfile` + `os.replace`) on
+  mutation. A corrupt file starts empty, reports once, and is replaced only by the
+  next write. The active provider already lives under
+  `BaseApp/Preferences/Mods/Providers`, so it persists with everything else; an
+  unknown saved backend falls back to the declared default.
+
+### S4 — one grid store
+
+- `FerroCAD._grid.SETTINGS_SCHEMA` is the canonical nine-row vocabulary
+  (`enabled`, `color`, `opacity`, `minor`, `major`, `radius`, `axis_cross`,
+  `shadows`, `shadow_opacity`); `spacing` stays the `minor` alias that writes the
+  next decade to `major`. `mods/GridOverlay` advertises the whole schema;
+  `mods/GridOverlayCoin` advertises the subset it owns with `get`/`set` hooks into
+  its existing store.
+- `FerroCAD.Grid` now reads and writes
+  `User parameter:BaseApp/Preferences/Mods/grid/ferrocad`; the first read of each
+  key migrates the old `Preferences/View` value once, so existing settings are not
+  lost. `reset()` clears both, and the attribute API, validation, `snapshot()`,
+  `apply()` and the `{"view": …}` request are unchanged.
+- `ferrocad_shell.grid_summary()` is the shell's read-only view of the active
+  provider (`backend`, `label`, `spacing`, and the provider list). The chrome T4
+  popover consumes it; the two stores can no longer disagree.
+
 ## Risks
 
-- **Schema drift.** S4 must make the native side authoritative; until then
-  `FerroCAD.Grid` and a provider schema could disagree. Do not ship T4 before S4, or
-  the popover will show values the renderer does not use.
-- **File format.** Version the file from the first write; a corrupt file must fall
-  back to defaults rather than fail the boot.
 - **Precedence confusion.** Show the winning source in the row's `status`; a value
   that looks editable but is overridden by the document is a support burden.
 - **Name collisions.** Synthetic names contain `/`; keep the routing strict (a document

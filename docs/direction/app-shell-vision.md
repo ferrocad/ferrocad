@@ -209,11 +209,14 @@ next navigation/tool design starts from a clean viewport:
   is now the window frame, the viewport and the status line;
 - the flat actions bar was replaced by viewport-header controls (`Grid ▾`, `Axes`,
   `WP ▾`, `Mods ▾`, each with an anchored popover), a bottom-centre action dock, and an
-  app menu (`☰`, left of the header) for app-level commands such as Dev Tools.
+  app menu (`☰`, at the leading edge of the window title bar) for app-level commands
+  such as Dev Tools.
 
 S6's "dockable/resizable panes" now means the two windows, not three panes. The grid
-*settings* surface is still open; see
-[`../tasks/toolbar-chrome.md`](../tasks/toolbar-chrome.md) §6.
+settings surface landed as the modeless `Settings/Grid` node (the Grid popover's
+provider/spacing rows plus `Grid settings` selecting it); see
+[`../tasks/toolbar-chrome.md`](../tasks/toolbar-chrome.md) §6 and
+[`../tasks/settings-model.md`](../tasks/settings-model.md).
 
 Dependencies: S1 gates S2–S5; S3 and S4 are coupled (selection → editor); S5
 shares the interpreter with S1. S2 (undo/redo + open/save) builds directly on

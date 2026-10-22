@@ -15,8 +15,10 @@ _A mod that imports this depends on FerroCAD; it is not upstream API._
 | --- | --- |
 | `display_mesh(obj)` | The display mesh for `obj`, from the first module that claims it. |
 | `interaction(obj, manipulator, action, element='', values=None)` | Apply a manipulator commit through the first module that supports it. |
+| `parameter_file()` | The parameter file in use, or ``None`` while the store is memory-only. |
 | `register_display_provider(provider)` | Let ``provider(obj)`` supply the display mesh of a document object. |
 | `register_interaction_provider(provider)` | Let ``provider(obj, manipulator, action, element, values)`` apply an edit. |
+| `set_parameter_file(path)` | Point ``FreeCAD.ParamGet`` at ``path`` (always enabled). |
 
 ## Object `Grid`
 
@@ -32,7 +34,8 @@ The ``FerroCAD.Grid`` singleton (see the module docstring).
 | `minor` (property) | The world grid's minor (dot) step, in millimetres. |
 | `opacity` (property) | A multiplier (``0..1``) over the token alphas. |
 | `radius` (property) | The fixed world-grid extent (mm); ``0`` is camera-derived. |
-| reset() -> None | Clear every grid preference in the view group (back to the defaults). |
+| reset() -> None | Clear the grid store, including the pre-S4 legacy keys. |
+| schema() -> list | A copy of :data:`SETTINGS_SCHEMA` (the rows the provider advertises). |
 | `shadow_opacity` (property) | The requested shadow strength, ``0..1`` (nothing draws it yet). |
 | `shadows` (property) | Whether grid shadows are requested (nothing draws them yet). |
 | snapshot() -> dict | The applied state when the shell mirrors it, else the stored policy. |

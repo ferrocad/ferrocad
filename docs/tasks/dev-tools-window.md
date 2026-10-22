@@ -141,6 +141,10 @@ its modal over the viewport, where the user is looking.
   `Ctrl+Shift+D`); its `Activated` returns `{"status": "dev tools: no GUI window to
   toggle"}` for headless/upstream callers, while `Shell::run_command` intercepts the id
   to own the actual window.
+- The app menu (`☰`) that reveals the toggle lives at the leading edge of the **main
+  window's title bar** (`window_frame_with_leading`), checked while the window is
+  open; the viewport header keeps only the `Grid`/`Axes`/`WP`/`Mods` controls. The Dev
+  Tools window's own title bar carries no menu (it calls plain `window_frame`).
 - Shortcuts run from both windows through `Shell::handle_key`; the Dev Tools root also
   forwards `Esc` to an open modal in the main window.
 

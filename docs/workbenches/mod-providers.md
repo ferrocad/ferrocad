@@ -166,17 +166,21 @@ callback easy to drive from a script or a test.
 
 ## Notes and limits
 
-- **Advertised settings (S0 landed).** A provider can declare a `settings` schema;
-  [`../tasks/settings-model.md`](../tasks/settings-model.md) S0/S1 implement the schema,
-  storage, `settings()`/`setSetting()` and the `Settings/<Feature>` tree node. The
-  native `FerroCAD.Grid` migration (S4) is still pending, so the grid popover's settings
-  half (chrome T4/T5) waits on it.
-- There is no native Rust settings panel yet; `Mods_Settings` uses the dialog
-  protocol (`docs/workbenches/actions-and-tools.md` §6).
+- **Advertised settings (S0–S4 landed).** A provider can declare a `settings`
+  schema; [`../tasks/settings-model.md`](../tasks/settings-model.md) implements the
+  schema, storage, `settings()`/`setSetting()`, the `Settings/<Feature>` tree node,
+  and the pane wiring. `FerroCAD.Grid` is a facade over the native `ferrocad`
+  provider's store (with a one-time legacy migration), and both grid mods advertise
+  a schema. The Grid popover reads `ferrocad_shell.grid_summary()`; chrome T4/T5
+  are wired.
+- There is no native Rust settings panel; `Mods_Settings` still uses the dialog
+  protocol (`docs/workbenches/actions-and-tools.md` §6), while grid settings use the
+  modeless `Settings/Grid` node.
 - Labels should be unique within a feature; the dialog maps a value back to a
   backend by label first, then by id.
-- The persisted store is the in-memory `ParamGet` shim today, like the grid
-  preferences; cross-session persistence is a parameter-backend gap.
+- The store is file-backed when a GUI is up (`ParamGet` JSON, `FerroCAD.set_parameter_file`);
+  headless tests stay in memory. The active provider and every advertised value
+  survive a restart.
 - The registry says which backend *should* be active. A third-party mod that
   ignores `activeProvider` can still do whatever it likes; the two grid mods
   are the reference implementations of the contract.

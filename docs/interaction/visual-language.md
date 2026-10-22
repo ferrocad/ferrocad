@@ -35,14 +35,14 @@ the boundary — see §7.
 
 | Token | Value | Today |
 | --- | --- | --- |
-| Canvas void | `#0F1218` | shell `BG = 0x101216`; renderer clear `(0.1, 0.1, 0.12)` **linear** |
-| Canvas void (far) | `#161B22` | shell `PANEL = 0x16181d` (a panel, not the gradient end) |
+| Canvas void | `#0F1218` | renderer `theme::CANVAS_VOID` (linear); shell `BG = 0x0f1218` ✅ |
+| Canvas void (far) | `#161B22` | `theme::CANVAS_FAR`, the gradient's bottom end ✅ |
 | Panel | `#16181D` | `PANEL` |
 | Panel alt | `#1D2026` | `PANEL_ALT` |
 
-The renderer's clear is `0.1` linear ≈ `#595961` sRGB — noticeably lighter than the
-canvas token. Aligning it is V2; a vertical gradient (`#0F1218 → #161B22`) is a
-full-screen quad in the same slice.
+The renderer clears to the canvas token and the shell `BG` matches it. A full-screen
+triangle then paints the vertical `#0F1218 → #161B22` gradient; the
+`the_background_is_the_canvas_gradient` readback asserts both endpoints (V2).
 
 ### 1.2 Accents and actions
 
@@ -67,13 +67,15 @@ conversion note in §1.7).
 
 **Constraint.** The opaque scene pipeline is `BlendState::REPLACE` and writes
 depth; only overlay packets blend (`ALPHA_BLENDING`). So these alphas currently do
-nothing on a surface: an entity renders opaque. The plan is:
+nothing on a surface: an entity renders opaque. The staged plan is:
 
-1. **V2a** — ship the **opaque composites** (last column) as the surface tokens; the
-   look is identical over the void and needs no transparency pass.
-2. **V2b** — a two-tone material: `dot(normal, up) > 0.5` picks glass-top,
+1. **V2a** — ✅ ship the **opaque composites** (last column) as the surface tokens;
+   the look is identical over the void and needs no transparency pass. A bare
+   `ShapeItem` defaults to `GLASS_SHADE`.
+2. **V2b** — ✅ a two-tone material: `dot(normal, up) > 0.5` picks glass-top,
    otherwise glass-shade, while the existing directional light keeps intra-facet
-   gradation. Deferred until a material model exists.
+   gradation. Document entities set `GLASS_TOP` as the surface ink and
+   `GLASS_SHADE` as `StateSnapshot::shade`; the fragment shader selects between them.
 3. **V2c** — true translucency needs an explicit ordered/wboit pass; deferred, and not
    a prerequisite for the look.
 
@@ -86,12 +88,14 @@ until V2c.
 | --- | --- | --- |
 | Front edge | `#D6E0F0` @ 0.62 | navicube `EDGE_COLOR = [0.84, 0.88, 0.94, 0.62]` |
 | Occluded edge | `#D6E0F0` @ 0.10 | navicube `EDGE_AWAY = [0.55, 0.60, 0.68, 0.10]` |
-| Entity edge (default) | `#D6E0F0` @ 0.62 | **`ShapeItem` default `[0.1, 0.1, 0.1, 1.0]`** (dark) |
-| Entity surface (default) | glass-shade composite | **`ShapeItem` default `[0.8, 0.8, 0.8, 1.0]`** (light grey) |
+| Entity edge (default) | `#D6E0F0` @ 0.62 | `theme::EDGE_FRONT` ✅ (front wire) |
+| Entity occluded edge | `#D6E0F0` @ 0.10 | `theme::EDGE_OCCLUDED` ✅ (V1 ghost pass) |
+| Entity surface (default) | glass-shade composite | `theme::GLASS_SHADE` ✅ |
 
-The two entity defaults predate this language and read as "light grey solid with black
-edges", not the dark canvas. Changing them is V1; the display provider can still
-override per object (the toy does).
+The entity defaults are now the tokens. `ferrocad_gpui::display` opts document
+entities into `.with_ghost_edges()`; gizmos, the navicube and transient tools stay
+overlays without a ghost pass. The display provider can still override per object
+(the toy does).
 
 ### 1.5 Text and glass chrome
 
@@ -162,30 +166,30 @@ by **opacity and pairing**, per the spec.
 
 | Class | How | State |
 | --- | --- | --- |
-| Front-facing primary edges | 1 px `Lines`, front-edge token | ✓ mechanism; default token change is V1 |
-| Occluded / back edges | 1 px `Lines`, ghost token | ▢ needs a **depth-`Greater`** pass (V1) |
+| Front-facing primary edges | 1 px `Lines`, front-edge token | ✅ `theme::EDGE_FRONT` |
+| Occluded / back edges | 1 px `Lines`, ghost token | ✅ depth-`Greater`, no write, `theme::EDGE_OCCLUDED` |
 | Machined bevels | twin parallel lines, `0.08` model units apart | ▢ geometry-level, deferred (V4) |
 | Gizmo / manipulator strokes | 1.5 px ribbons | ✓ |
 | Dashed rays | runs of short segments | ✓ technique, used by the grid spec |
 
-**The occlusion gap.** Today every non-overlay pipeline uses `depth_compare: Less`
-with depth writes, and overlays use `Always` with no writes. A ghost line *behind*
-geometry needs `Greater` with no writes and alpha blending — a third pipeline variant.
-The clean contract is a per-packet intent:
+**The occlusion gap is closed.** The contract was already `DepthState`
+(`test`, `write`, `compare`), and the renderer has built per-state pipeline variants
+since G4. V1 adds the intent constants and the emitters:
 
 ```rust
-pub enum DepthMode {
-    /// Normal opaque geometry.
-    Less,
-    /// Drawn over everything (tool overlays, pills are not packets).
-    Always,
-    /// Visible only where something occludes it (ghost edges).
-    Greater,
-}
+// ferrocad_stage::shape
+pub const GHOST_DEPTH: DepthState = DepthState {
+    test: true,
+    write: false,
+    compare: DepthCompare::Greater,
+};
 ```
 
-`StateSnapshot` gains `depth_mode` (default `Less`); the renderer selects the pipeline.
-Packets that set `Greater` also set `depth_write_enabled = false` and alpha blend.
+`ShapeItem::with_ghost_edges()` emits the front wire (`Less`, writes) and then the
+ghost wire (`Greater`, no write, `EDGE_OCCLUDED`, not pickable). The grid triad does
+the same with a 10 % alpha copy, so an axis cross behind a solid reads as a ghost
+instead of floating over the front face. No new `DepthMode` enum is needed; there is
+one draw contract, `StateSnapshot::depth`.
 
 ---
 
@@ -196,10 +200,12 @@ two-sided `abs(dot(normal, light))`, and **no back-face culling**. That already 
 top facets their brightest value and sides a darker one, which is the physical basis of
 the glass-top/glass-shade pair.
 
-- **V2a** keeps the shader and feeds the composite tokens; the two-tone effect is then
-  automatic for axis-aligned faces and approximate elsewhere.
-- A true **material model** (albedo, roughness, top/shade thresholds) is V2b. It must
-  not become a second lighting path: one light, one shader, tokens in.
+- **V2b** is shipped as the two-tone threshold: the shader keeps the single light and
+  selects the glass-top or glass-shade token from the world normal. The
+  `a_two_tone_surface_reads_back_as_glass_top_and_shade` readback verifies both
+  facets.
+- A full **material model** (albedo, roughness, per-face thresholds) remains later. It
+  must not become a second lighting path: one light, one shader, tokens in.
 - The spec's translucency is deferred (§1.3); the design must look right opaque first.
 
 ---
@@ -282,9 +288,9 @@ object (the toy does) but does not redefine the chrome tokens.
 
 | Slice | Deliverable | Acceptance |
 | --- | --- | --- |
-| **V0 — tokens** | `ferrocad_theme`; migrate gizmo, navicube theme, shell/chrome, pill; normalise to linear/packed | every token round-trips (`hex → linear → packed`); existing suites green; the only visual change is the navicube's over-bright edges, which the tokens correct |
-| **V1 — occlusion** | `DepthMode` + `Greater` pipeline; entity edge/surface defaults from the tokens | a wgpu readback: a front edge and a ghost edge over a solid; the ghost disappears where the solid covers it; a stage test asserts the packet's mode |
-| **V2 — canvas & surfaces** | clear colour `#0F1218`; optional gradient; glass composites; two-tone threshold | the frame's corner readback is the void token; a top and a side facet composite to the two glass tokens |
+| **V0 — tokens** | `ferrocad_theme`; migrate gizmo, navicube theme, shell/chrome, pill; normalise to linear/packed | **partial:** `ferrocad_graphics::theme` now holds the GPU-side linear tokens (`CANVAS_VOID`, `GLASS_*`, `EDGE_*`) with hex-conversion tests; the standalone crate and the gizmo/navicube/shell migration are still open |
+| **V1 — occlusion** | `GHOST_DEPTH`; entity edge/surface defaults from the tokens; ghost wire + ghost triad | ✅ packet tests assert the front/ghost modes, the ghost is unpickable, and the grid counts include it. A full front-vs-ghost GPU readback is still worth adding alongside the existing depth-bias readback. |
+| **V2 — canvas & surfaces** | clear colour `#0F1218`; gradient; glass composites; two-tone threshold | ✅ `the_background_is_the_canvas_gradient` asserts `#0F1218`/`#161B22`; `a_two_tone_surface_reads_back_as_glass_top_and_shade` asserts both facets. V2c (true translucency) remains deferred. |
 | **V3 — states** | `HOVER_RADIUS`, in/out timings, rim bloom; `HoverReport` → status bar | a headless viewport test: at 21 px no bloom, at 19 px bloom; a gizmo-interior click reports `through: gizmo` and still selects the object behind |
 | **V4 — type & bevels** | bundle JetBrains Mono + fallback chain; pill 12 px semibold; tabular runs; twin-line bevels | the pill's digits do not change advance width across `0–9`; a chamfer renders two parallel lines in a readback |
 
@@ -326,10 +332,13 @@ V0 is the only cross-cutting slice; V1–V4 are independent afterwards.
 
 ## 11. Verification
 
-- **Tokens** — a unit test per token: `linear(hex) → packed(hex)` round-trips, and the
-  four existing linear constants equal the converted hex (guards §1.6).
-- **Renderer** — readback tests for the clear colour, the two glass composites and the
-  occluded-edge pass; the existing depth-bias test is the template.
+- **Tokens** — `ferrocad_graphics::theme` tests that each constant equals the linear
+  form of its hex, and that the edge tokens share RGB and differ only in alpha.
+- **Renderer** — `the_background_is_the_canvas_gradient` reads back both canvas
+  ends; `a_two_tone_surface_reads_back_as_glass_top_and_shade` reads back the two
+  facet colours; the existing depth-bias/state tests cover the `Greater` pipeline. A
+  readback of a front wire over a ghost wire is still the missing visual-regression
+  check.
 - **Viewport** — headless tests for the hover radius, the pass-through report, and the
   pill's size/weight tokens.
 - **Typography** — an advance-width test over `0123456789` in the pill's font.

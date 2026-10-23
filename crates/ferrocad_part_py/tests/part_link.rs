@@ -323,3 +323,217 @@ fn link_to_an_object_without_a_shape_stays_valid_and_empty() {
         close_document(&ferrocad, "RustLinkEmpty").expect("closeDocument");
     });
 }
+
+#[test]
+fn show_element_expands_into_real_children_and_collapses_back() {
+    let _guard = TEST_LOCK.lock().unwrap_or_else(|error| error.into_inner());
+    boot();
+    Python::with_gil(|py| {
+        let _part = PyModule::import(py, "Part").expect("import Part");
+        let ferrocad = PyModule::import(py, "ferrocad").expect("import ferrocad");
+
+        let doc = new_document(&ferrocad, "RustLinkElementsL3").expect("newDocument");
+        let source = doc
+            .call_method1("addObject", ("Part::Box", "Source"))
+            .expect("Source box");
+        let link = doc
+            .call_method1("addObject", ("App::Link", "Link"))
+            .expect("App::Link");
+        link.setattr("LinkedObject", &source).expect("LinkedObject");
+        // The upstream default grid expands one element per unit on X.
+        link.setattr("ElementCount", 4).expect("ElementCount");
+        doc.call_method0("recompute").expect("recompute");
+
+        let elements = link.getattr("ElementList").expect("ElementList");
+        assert_eq!(elements.len().unwrap(), 4);
+        for index in 0..4 {
+            let element = elements.get_item(index).unwrap();
+            assert_eq!(name_of(&element).unwrap(), format!("Link_Element{index}"));
+            assert_eq!(
+                element.getattr("TypeId").unwrap().extract::<String>().unwrap(),
+                "App::LinkElement"
+            );
+            assert!(element.call_method0("isLink").unwrap().extract::<bool>().unwrap());
+            let shape = element.getattr("Shape").expect("element Shape");
+            assert!(!shape.call_method0("isNull").unwrap().extract::<bool>().unwrap());
+            assert!((bound(&shape, "XMin").unwrap() - index as f64).abs() < 1e-6);
+            let base = element.getattr("Placement").unwrap().getattr("Base").unwrap();
+            let x: f64 = base.getattr("x").unwrap().extract().unwrap();
+            assert!((x - index as f64).abs() < 1e-9);
+            // Each child links back to the source, not to the owning link
+            // (which would make the dependency graph cyclic).
+            let linked = element.call_method0("getLinkedObject").unwrap();
+            assert_eq!(name_of(&linked).unwrap(), "Source");
+        }
+        // While expanded the children carry the geometry.
+        assert!(link
+            .getattr("Shape")
+            .unwrap()
+            .call_method0("isNull")
+            .unwrap()
+            .extract::<bool>()
+            .unwrap());
+
+        // `getSubObject` reaches the real child, absolutely and relatively.
+        for subname in ["Element3", "Link.Element3"] {
+            let resolved = link.call_method1("getSubObject", (subname, 1)).unwrap();
+            assert_eq!(name_of(&resolved).unwrap(), "Link_Element3", "{subname}");
+        }
+        let typed = link.call_method1("getSubObject", ("Element3", 3)).unwrap();
+        let x: f64 = typed
+            .getattr("Base")
+            .unwrap()
+            .getattr("x")
+            .unwrap()
+            .extract()
+            .unwrap();
+        assert!((x - 3.0).abs() < 1e-9);
+        // An element spelling that is out of range is missing, not the target.
+        assert!(link
+            .call_method1("getSubObject", ("Element9", 1))
+            .unwrap()
+            .is_none());
+        // A non-element sub-path still forwards to the linked target.
+        let face = link.call_method1("getSubObject", ("Face1", 1)).unwrap();
+        assert_eq!(name_of(&face).unwrap(), "Source");
+
+        // Collapsing removes the children and writes the transformed compound.
+        link.setattr("ShowElement", false).expect("ShowElement = false");
+        doc.call_method0("recompute").expect("recompute");
+        assert_eq!(link.getattr("ElementList").unwrap().len().unwrap(), 0);
+        for index in 0..4 {
+            assert!(doc
+                .call_method1("getObject", (format!("Link_Element{index}"),))
+                .unwrap()
+                .is_none());
+        }
+        let stored = link.getattr("PlacementList").expect("PlacementList");
+        assert_eq!(stored.len().unwrap(), 4);
+        let x: f64 = stored
+            .get_item(3)
+            .unwrap()
+            .getattr("Base")
+            .unwrap()
+            .getattr("x")
+            .unwrap()
+            .extract()
+            .unwrap();
+        assert!((x - 3.0).abs() < 1e-9);
+        let shape = link.getattr("Shape").expect("Link.Shape");
+        assert!(!shape.call_method0("isNull").unwrap().extract::<bool>().unwrap());
+        assert!((bound(&shape, "XMin").unwrap()).abs() < 1e-6);
+        assert!((bound(&shape, "XMax").unwrap() - 13.0).abs() < 1e-6);
+
+        // Expanding restores the same children at the placements it stored.
+        link.setattr("ShowElement", true).expect("ShowElement = true");
+        doc.call_method0("recompute").expect("recompute");
+        let elements = link.getattr("ElementList").expect("ElementList");
+        assert_eq!(elements.len().unwrap(), 4);
+        let third = elements.get_item(2).unwrap();
+        assert_eq!(name_of(&third).unwrap(), "Link_Element2");
+        let x: f64 = third
+            .getattr("Placement")
+            .unwrap()
+            .getattr("Base")
+            .unwrap()
+            .getattr("x")
+            .unwrap()
+            .extract()
+            .unwrap();
+        assert!((x - 2.0).abs() < 1e-9);
+        assert!(!third
+            .getattr("Shape")
+            .unwrap()
+            .call_method0("isNull")
+            .unwrap()
+            .extract::<bool>()
+            .unwrap());
+
+        // Shrinking the element count removes the surplus children entirely.
+        link.setattr("ElementCount", 2).expect("ElementCount = 2");
+        // ElementCount is NoRecompute; touch the link through a normal property.
+        link.setattr("ShowElement", true).expect("touch");
+        doc.call_method0("recompute").expect("recompute");
+        assert_eq!(link.getattr("ElementList").unwrap().len().unwrap(), 2);
+        assert!(doc
+            .call_method1("getObject", ("Link_Element3",))
+            .unwrap()
+            .is_none());
+
+        close_document(&ferrocad, "RustLinkElementsL3").expect("closeDocument");
+    });
+}
+
+#[test]
+fn array_element_paths_reach_generated_children() {
+    let _guard = TEST_LOCK.lock().unwrap_or_else(|error| error.into_inner());
+    boot();
+    Python::with_gil(|py| {
+        let _part = PyModule::import(py, "Part").expect("import Part");
+        let ferrocad = PyModule::import(py, "ferrocad").expect("import ferrocad");
+
+        let doc = new_document(&ferrocad, "RustArrayElementsL3").expect("newDocument");
+        let source = doc
+            .call_method1("addObject", ("Part::Box", "Source"))
+            .expect("Source box");
+        let array = doc
+            .call_method1("addObject", ("Part::LinkArrayLinear", "Array"))
+            .expect("Array");
+        array.setattr("LinkedObject", &source).expect("LinkedObject");
+        array.setattr("Occurrences", 4).expect("Occurrences");
+        doc.call_method0("recompute").expect("recompute");
+
+        let elements = array.getattr("ElementList").expect("ElementList");
+        assert_eq!(elements.len().unwrap(), 4);
+        let third = elements.get_item(3).unwrap();
+        assert_eq!(name_of(&third).unwrap(), "Array_Element3");
+        assert_eq!(
+            third.getattr("TypeId").unwrap().extract::<String>().unwrap(),
+            "App::LinkElement"
+        );
+        assert!(!third
+            .getattr("Shape")
+            .unwrap()
+            .call_method0("isNull")
+            .unwrap()
+            .extract::<bool>()
+            .unwrap());
+        assert_eq!(
+            name_of(&third.call_method0("getLinkedObject").unwrap()).unwrap(),
+            "Source"
+        );
+
+        for subname in ["Element3", "Array.Element3"] {
+            let resolved = array.call_method1("getSubObject", (subname, 1)).unwrap();
+            assert_eq!(name_of(&resolved).unwrap(), "Array_Element3", "{subname}");
+        }
+
+        // The pre-L3 type id stays registered, with the same element surface.
+        let legacy = doc
+            .call_method1("addObject", ("Part::LinkArrayElement", "LegacyElement"))
+            .expect("legacy element type");
+        for property in ["Shape", "Placement", "Suppressed", "LinkedObject"] {
+            assert!(legacy.getattr(property).is_ok(), "legacy {property}");
+        }
+
+        // Collapsing the array removes the generated objects and keeps the
+        // placements it needs to expand them again.
+        array.setattr("ShowElement", false).expect("ShowElement = false");
+        doc.call_method0("recompute").expect("recompute");
+        assert_eq!(array.getattr("ElementList").unwrap().len().unwrap(), 0);
+        assert!(doc
+            .call_method1("getObject", ("Array_Element3",))
+            .unwrap()
+            .is_none());
+        assert_eq!(array.getattr("PlacementList").unwrap().len().unwrap(), 4);
+        assert!(!array
+            .getattr("Shape")
+            .unwrap()
+            .call_method0("isNull")
+            .unwrap()
+            .extract::<bool>()
+            .unwrap());
+
+        close_document(&ferrocad, "RustArrayElementsL3").expect("closeDocument");
+    });
+}

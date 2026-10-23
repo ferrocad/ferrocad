@@ -218,6 +218,32 @@ pub fn default_properties(type_id: &str) -> Vec<(&'static str, Property, u32)> {
                 HIDDEN | OUTPUT | NORECOMPUTE | READONLY,
             ),
         ],
+        // The geometry-free half of the generated element type. The `Part`
+        // composition root registers an `ObjectType` for the same type id with the
+        // full set (including the shape-valued `Shape`). New elements are created
+        // as `App::LinkElement`; `Part::LinkArrayElement` remains registered as an
+        // alias by the Part module so pre-L3 documents still load.
+        "App::LinkElement" => vec![
+            (
+                "Placement",
+                Property::Placement(Placement::identity()),
+                NONE,
+            ),
+            ("LinkedObject", Property::Link(String::new()), NONE),
+            ("Scale", Property::Float(1.0), NONE),
+            (
+                "ScaleVector",
+                Property::Vector(Vector3::new(1.0, 1.0, 1.0)),
+                HIDDEN,
+            ),
+            ("LinkTransform", Property::Bool(false), NONE),
+            (
+                "LinkPlacement",
+                Property::Placement(Placement::identity()),
+                NONE,
+            ),
+            ("Suppressed", Property::Bool(false), NONE),
+        ],
         "App::Part" => vec![
             ("Group", Property::LinkList(vec![]), NONE),
             ("Placement", Property::Placement(Placement::identity()), NONE),

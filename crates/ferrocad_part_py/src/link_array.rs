@@ -33,9 +33,6 @@ pub const CIRCULAR_TYPE: &str = "Part::LinkArrayCircular";
 /// `Part::LinkArrayPolar` (`PolarPatternExtension`); a sibling needed by the
 /// upstream circular test's save/restore case.
 pub const POLAR_TYPE: &str = "Part::LinkArrayPolar";
-/// The generated child of an array when `ShowElement` is true (upstream's
-/// `App::Link` element).
-pub const ELEMENT_TYPE: &str = "Part::LinkArrayElement";
 /// A minimal `Part::Part2DObject` (sketch base) for the axis-reference tests.
 pub const PART2D_TYPE: &str = "Part::Part2DObject";
 
@@ -49,7 +46,6 @@ pub(crate) fn register() {
     object_registry::register(PATH_TYPE, Arc::new(PathArray));
     object_registry::register(CIRCULAR_TYPE, Arc::new(CircularArray));
     object_registry::register(POLAR_TYPE, Arc::new(PolarArray));
-    object_registry::register(ELEMENT_TYPE, Arc::new(Element));
     object_registry::register(PART2D_TYPE, Arc::new(Part2DObject));
 }
 
@@ -132,13 +128,6 @@ fn placement_property(doc: &Document, id: ObjectId, name: &str) -> Placement {
     }
 }
 
-fn placements(doc: &Document, id: ObjectId, name: &str) -> Vec<Placement> {
-    match property(doc, id, name) {
-        Some(Property::PlacementList(values)) => values.clone(),
-        _ => Vec::new(),
-    }
-}
-
 fn linked_shape(doc: &Document, name: &str) -> Option<Shape> {
     let id = doc.get_by_name(name)?;
     property(doc, id, "Shape").and_then(shape_of).and_then(|s| s.shape())
@@ -210,13 +199,7 @@ fn integer_constraint(value: i64) -> Property {
 
 /// The generated-element object names, resolved.
 fn element_ids(doc: &Document, id: ObjectId) -> Vec<ObjectId> {
-    match property(doc, id, "ElementList") {
-        Some(Property::LinkList(names)) => names
-            .iter()
-            .filter_map(|name| doc.get_by_name(name))
-            .collect(),
-        _ => Vec::new(),
-    }
+    crate::link::element_ids(doc, id)
 }
 
 fn element_suppressed(doc: &Document, id: ObjectId) -> bool {
@@ -226,96 +209,53 @@ fn element_suppressed(doc: &Document, id: ObjectId) -> bool {
     )
 }
 
-/// Grow/shrink the generated-element set to `count`, reusing the existing objects
-/// so their `Suppressed` flags survive a recompute.
-fn sync_element_objects(doc: &mut Document, id: ObjectId, count: usize) -> Vec<ObjectId> {
-    let mut ids = element_ids(doc, id);
-    if ids.len() > count {
-        ids.truncate(count);
-    }
-    if ids.len() < count {
-        let array_name = doc
-            .object(id)
-            .map(|object| object.name.clone())
-            .unwrap_or_else(|| "Array".to_string());
-        for index in ids.len()..count {
-            let name = format!("{array_name}_Element{index}");
-            // No `LinkedObject`: the array already lists the element through
-            // `ElementList`, and a link back would be a dependency cycle.
-            ids.push(doc.add_object_with(&name, ELEMENT_TYPE, true));
-        }
-    }
-    let names: Vec<String> = ids
-        .iter()
-        .filter_map(|element| doc.object(*element).map(|object| object.name.clone()))
-        .collect();
-    doc.set_property_raw(id, "ElementList", Property::LinkList(names));
-    ids
-}
-
 /// Write the computed result of an array.
 ///
 /// `element_flags` is `Some` for linear arrays, whose per-element suppression is
 /// derived from `SuppressedPositions`; `None` leaves the flags the user set.
+///
+/// With `ShowElement` set, the shared element sync creates one `App::LinkElement`
+/// per placement and the elements carry the geometry; when collapsed it removes
+/// them and the array writes the transformed compound. The array's own
+/// `Placement` is not part of the element placements (upstream keeps it as the
+/// parent transform), so the elements and the collapsed compound stay in the
+/// same frame.
 fn finish_array(
     doc: &mut Document,
     id: ObjectId,
     result: &[Placement],
     element_flags: Option<&[bool]>,
 ) {
-    doc.set_property_raw(id, "ElementCount", Property::Integer(result.len() as i64));
-
-    if bool_property(doc, id, "ShowElement", true) {
-        let ids = sync_element_objects(doc, id, result.len());
-        for (index, element) in ids.iter().enumerate() {
-            if let Some(placement) = result.get(index) {
-                doc.set_property_raw(*element, "Placement", Property::Placement(*placement));
-            }
-            if let Some(flags) = element_flags {
-                let suppressed = flags.get(index).copied().unwrap_or(false);
-                doc.set_property_raw(*element, "Suppressed", Property::Bool(suppressed));
-            }
+    let matrix = Matrix4::identity();
+    match crate::link::sync_elements(doc, id, result, element_flags, &matrix) {
+        Ok(true) => crate::link::write_shape(doc, id, None),
+        Ok(false) => {
+            let shape = collapsed_shape(doc, id, result, &matrix);
+            crate::link::write_shape(doc, id, shape);
         }
-        return;
+        Err(()) => doc.mark_invalid(id),
     }
+}
 
-    // Collapsed array: the placements are the output, and the elements go away.
-    let current = placements(doc, id, "PlacementList");
-    if current != result {
-        doc.set_property_raw(id, "PlacementList", Property::PlacementList(result.to_vec()));
+fn collapsed_shape(
+    doc: &Document,
+    id: ObjectId,
+    result: &[Placement],
+    matrix: &Matrix4,
+) -> Option<Shape> {
+    let source = link_name(doc, id, "LinkedObject").and_then(|name| linked_shape(doc, &name))?;
+    let backend = ferrocad_part::backend();
+    let mut shapes = Vec::with_capacity(result.len());
+    for placement in result {
+        let element_matrix = matrix.mul(&placement.to_matrix());
+        let shape = if element_matrix.is_unity(1e-12) {
+            source.clone()
+        } else {
+            backend.transform(&source, &element_matrix).ok()?
+        };
+        shapes.push(shape);
     }
-    doc.set_property_raw(id, "ElementList", Property::LinkList(Vec::new()));
-
-    let shape = if result.is_empty() {
-        ShapeProperty::empty()
-    } else {
-        match link_name(doc, id, "LinkedObject").and_then(|name| linked_shape(doc, &name)) {
-            Some(source) => {
-                let backend = ferrocad_part::backend();
-                let mut shapes = Vec::with_capacity(result.len());
-                let mut ok = true;
-                for placement in result {
-                    match backend.transform(&source, &placement.to_matrix()) {
-                        Ok(shape) => shapes.push(shape),
-                        Err(_) => {
-                            ok = false;
-                            break;
-                        }
-                    }
-                }
-                if ok {
-                    match backend.make_compound(&shapes) {
-                        Ok(compound) => ShapeProperty::new(compound),
-                        Err(_) => ShapeProperty::empty(),
-                    }
-                } else {
-                    ShapeProperty::empty()
-                }
-            }
-            None => ShapeProperty::empty(),
-        }
-    };
-    doc.set_property_raw(id, "Shape", make_shape_property(shape));
+    backend.make_compound(&shapes).ok()
 }
 
 // ---------------------------------------------------------------------------
@@ -1514,28 +1454,8 @@ fn polar_placements(doc: &Document, id: ObjectId) -> Result<Vec<Placement>, Stri
 }
 
 // ---------------------------------------------------------------------------
-// Generated element and sketch base
+// Sketch base
 // ---------------------------------------------------------------------------
-
-struct Element;
-
-impl ObjectType for Element {
-    fn default_properties(&self) -> Vec<(String, Property, u32)> {
-        vec![
-            (
-                "Placement".to_string(),
-                Property::Placement(Placement::identity()),
-                prop_status::NONE,
-            ),
-            ("Suppressed".to_string(), Property::Bool(false), prop_status::NONE),
-            (
-                "LinkedObject".to_string(),
-                Property::Link(String::new()),
-                prop_status::NONE,
-            ),
-        ]
-    }
-}
 
 /// A minimal sketch base: `Shape` plus `Placement`, which is all the axis tests
 /// need (`Part::Part2DObject` is abstract upstream).

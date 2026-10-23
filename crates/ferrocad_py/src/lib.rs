@@ -1985,7 +1985,8 @@ fn element_index(name: &str) -> i64 {
 ///
 /// `ElementList` holds ordinary document-object names in element order; an
 /// index spelling maps through that order, while a full name is matched
-/// directly. Elements are still ordinal (L3 gives them identity).
+/// directly. Elements generated in L3 are real objects with their own
+/// `Placement` and `Shape`, so no special handling is needed here.
 fn element_child(doc: &CoreDocument, id: ObjectId, segment: &str) -> Option<ObjectId> {
     let names = match doc.object(id)?.properties.get("ElementList") {
         Some(Property::LinkList(names)) => names,
@@ -1999,6 +2000,14 @@ fn element_child(doc: &CoreDocument, id: ObjectId, segment: &str) -> Option<Obje
         return None;
     }
     doc.get_by_name(names.get(index as usize)?)
+}
+
+/// Whether `id` owns a non-empty `ElementList`.
+fn has_elements(doc: &CoreDocument, id: ObjectId) -> bool {
+    matches!(
+        doc.object(id).and_then(|object| object.properties.get("ElementList")),
+        Some(Property::LinkList(names)) if !names.is_empty()
+    )
 }
 
 /// A child listed in `Group`, addressed by document-object name.
@@ -2071,6 +2080,12 @@ fn resolve_segments(
         if let Some(found) = resolve_segments(doc, child, rest, depth + 1) {
             return Some(found);
         }
+    }
+    // An element spelling against an object that owns elements is an element
+    // reference, not a sub-element of the linked target: an out-of-range
+    // `Element5` is missing, and must not silently resolve to the target.
+    if element_index(segment) >= 0 && has_elements(doc, current) {
+        return None;
     }
     // A link forwards an unresolved path to its target, so `Link.Face1` reaches
     // the linked feature. Sub-elements themselves are still resolved by the

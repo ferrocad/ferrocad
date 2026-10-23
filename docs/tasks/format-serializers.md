@@ -1,8 +1,9 @@
 # Task — split document persistence into two serializers
 
 Status: task (2026-10-23). Records the owner decision of 2026-10-23: native JSON and
-upstream `.FCStd` become **two explicit, independently testable serializers**. F1–F3
-landed 2026-10-23; the `.FCStd` writer (F4–F8) is open. Companion
+upstream `.FCStd` become **two explicit, independently testable serializers**. F1–F5
+landed 2026-10-23; the `.FCStd` writer is a direct-call API and is not yet wired to
+`saveAs` (F6–F8). Companion
 to [`../architecture/part-draft-layering.md`](../architecture/part-draft-layering.md), the
 [conformance runbook](../workbenches/conformance.md) and
 [`../direction/mvp-path.md`](../direction/mvp-path.md) (§8 decision 3, which this closes).
@@ -111,16 +112,22 @@ read-only (no setter) **(verified)**, so `doc.FileName = p; doc.save()` is unava
 
 ### 3.1 What the reader does today **(verified)**
 
-`fcstd.rs` is read-only: it parses the ZIP central directory itself (stored/deflate, no
-ZIP64, no encryption), reads only `Document.xml`, and returns a `SavedDocument` with
-`property_status`, `expressions`, `extensions`, `python_state` and `view` empty. It
-deliberately skips `.brp` members and every type outside the eight App types listed in
-`fcstd.rs:14-17`. Measured in the fixture, that drops `PropertyLength` (10),
-`PropertyAngle` (9), `PropertyLinkSub` (9), `PropertyEnumeration` (8), the expression
-engine (16) and all 13 `Part::PropertyPartShape` — enough for the tangent test, not for a
-faithful import.
+`fcstd.rs` parses the ZIP central directory itself (stored/deflate, no ZIP64, no
+encryption) and reads `Document.xml` into `SavedDocument`. Since 2026-10-23 (F4) it also
+reads `PropertyLength`/`PropertyAngle`, `PropertyEnumeration`, `PropertyLinkSub`,
+`PropertyLinkList`, `PropertyLinkSubList` (flattened to `LinkList`), `PropertyPythonObject`
+(into `python_state`) and the expression engine, and translates upstream's property
+`status` bitmask. It still deliberately skips `.brp` members and module-owned types such
+as shape lists; a reopened upstream document loses its shapes but keeps its scalars,
+links, placements, expressions and proxies.
 
 ### 3.2 Writer breakdown **(recommended)**
+
+**Landed 2026-10-23 (F5).** `ferrocad_core::document::fcstd_write` provides
+`write_fcstd(saved, path)` (and an in-memory `encode_fcstd`): a minimal ZIP writer with a
+local CRC-32, `Document.xml`, and `PartShapeN.brp` members. It is a direct-call API —
+`saveAs` still writes the JSON placeholder (F8). The mapping below is the target; what the
+writer emits today is the subset described in §3.2.1.
 
 ZIP: single-disk, unencrypted, deflated, never ZIP64; members are `Document.xml`,
 `GuiDocument.xml`, `PartShapeN.brp` and `DiffuseColor*` (no thumbnail in v1).
@@ -169,6 +176,17 @@ the ASCII BREP flavour; a writer constant records the schema that was emitted.
 object, property and type, with an explicit "export anyway" option returning the dropped
 list. Quietly losing `PropertyLinkSub` is worse than refusing the save.
 
+### 3.2.1 What the writer emits today **(verified)**
+
+`Document.xml` with scalars, quantities (Length/Angle by unit signature), vectors,
+placements, links, link lists/subs, string lists, enumerations (with a `CustomEnumList`
+when the values are known) and `Part::PropertyPartShape` → `<Part file="PartShapeN.brp"/>`.
+It **errors** on shape lists and any other extension type (naming the object, property and
+type), and on variants it cannot represent (Matrix, Rotation, ColorList, scalar/vector
+lists, constraints, `PropertyPythonObject`, FileIncluded). It does **not** yet emit
+`GuiDocument.xml`, expressions, `python_state`, `extensions`, `property_status`,
+`ObjectDeps` or thumbnails.
+
 ## 4. Migrating our workflows and docs
 
 Generated user pages are built by running `tools/workflows/`; edit the scripts, then
@@ -215,11 +233,13 @@ to `.ferrocad`. FCStd probes: `ColorPerFaceTest`, `TopoShapeListTest`, `TestLink
   load. **Landed 2026-10-23.**
 - [x] **3. Migrate our artefacts** (§4), including regenerating the two user pages.
   **Landed 2026-10-23.**
-- [ ] **4. Reader gaps needed by the writer:** `PropertyLength`, `PropertyAngle`,
-  `PropertyEnumeration`, `PropertyLinkSub`, the expression engine,
-  `App::PropertyPythonObject`. Verify with fixtures.
-- [ ] **5. FCStd ZIP writer behind a direct-call API:** `Document.xml` + `.brp` for
-  `Part::PropertyPartShape`; not yet wired to `saveAs`.
+- [x] **4. Reader gaps needed by the writer:** `PropertyLength`, `PropertyAngle`,
+  `PropertyEnumeration`, `PropertyLinkSub`, `PropertyLinkList`/`LinkSubList`, the
+  expression engine and `App::PropertyPythonObject`. Verified with hand-written XML
+  units and the upstream fixtures. **Landed 2026-10-23.**
+- [x] **5. FCStd ZIP writer behind a direct-call API:** `write_fcstd`/`encode_fcstd`
+  with `Document.xml` + `.brp` for `Part::PropertyPartShape`; not wired to `saveAs`.
+  **Landed 2026-10-23.**
 - [ ] **6. FCStd writer breadth:** shape lists, expressions, `python_state`/`Proxy`,
   `ObjectDeps`, no-silent-loss policy.
 - [ ] **7. `GuiDocument.xml`:** `Visibility`, `Transparency`, `ShapeColor`,
@@ -230,11 +250,12 @@ to `.ferrocad`. FCStd probes: `ColorPerFaceTest`, `TopoShapeListTest`, `TestLink
 
 ## What is not done (2026-10-23)
 
-- **No `.FCStd` writer.** No `write_fcstd`, ZIP writer or `GuiDocument.xml` emitter. The
-  only Document.xml generation is the recovery stub in
-  `python/FreeCAD/__init__.py:662-707` — bare `<Object>` tags, not a document.
-- **No module-payload read.** `.brp` members and shape properties are skipped by design;
-  a reopened upstream document loses its shapes.
+- **The `.FCStd` writer is a direct-call API, not the save format.** `write_fcstd`
+  exists, but `saveAs(.FCStd)` still emits the JSON placeholder; shape lists,
+  `GuiDocument.xml`, expressions, `python_state` and the no-silent-loss policy remain
+  F6–F8. (The recovery stub in `python/FreeCAD/__init__.py` is unrelated.)
+- **Module-payload read.** `.brp` members are still skipped by the reader; a document
+  written by `write_fcstd` reads back its scalars/links/placements but not its shapes.
 - **Document metadata is not persisted.** `SavedDocument` has no UID, comment, meta or
   dates; `PyDocument.meta`/`comment` are not saved **(verified)**.
 - **Type ids are lossy** for `String`-backed types; no `SavedObject` type map. No

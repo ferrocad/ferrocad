@@ -1,6 +1,7 @@
 # Links: `App::Link`, link arrays, and their interlocks
 
-Status: task (2026-10-23). Records the owner decision of 2026-10-23 that the remaining
+Status: task (2026-10-23). L0–L2 landed 2026-10-23; L3+ remain. Records the owner
+decision of 2026-10-23 that the remaining
 `Part` gaps are **TNP / Links / FCStd**, and that they are one problem seen from three
 sides. Companion to [`../architecture/lineage-and-naming.md`](../architecture/lineage-and-naming.md)
 (the lineage layer this doc depends on) and [`format-serializers.md`](format-serializers.md)
@@ -23,20 +24,20 @@ element set, and none of the transform.
 
 | Surface | Upstream contract | FerroCAD today (**verified**) |
 | --- | --- | --- |
-| `App::Link` | A document object that references one object, with `Placement`/`LinkPlacement`, `Scale`/`ScaleVector`, `LinkTransform`, `LinkMode`, `LinkCopyOnChange`, and an element list ([`occt-history-spike.md`](../architecture/occt-history-spike.md) §6) | **Partial.** Instantiable, but the registered defaults are only `LinkedObject` (`ferrocad_core/src/typeregistry.rs:157`). No `ObjectType` is registered, so there is no `execute`, no `Shape`, no `Placement` and no scale. |
+| `App::Link` | A document object that references one object, with `Placement`/`LinkPlacement`, `Scale`/`ScaleVector`, `LinkTransform`, `LinkMode`, `LinkCopyOnChange`, and an element list ([`occt-history-spike.md`](../architecture/occt-history-spike.md) §6) | **L0–L2.** Full property base plus a Part-side `ObjectType` whose `execute` transforms the target's `Shape`. Element expansion, `LinkMode` and copy-on-change are stored but inert. |
 | `LinkedObject` | `App::PropertyLink` (or a link-sub) to one object | **Implemented** as `Property::Link`; attribute get/set resolves the target (`lib.rs:2651-2663`, `2745`). |
-| `setLink(obj, subname=None)` | Sets the link and narrows it to sub-elements | **Partial.** Writes `LinkedObject` and, with `subname`, a `Property::LinkSub` (`lib.rs:2459-2512`). It rejects any type id not starting with `App::Link` (`lib.rs:2476`), so `Part::LinkArray*` objects **cannot** call `setLink` even though upstream they inherit it. |
-| `getLinkedObject(resolve=…)` | Returns the true target, following link chains | **Missing** (no method on `PyDocumentObject`). |
-| `isLink()` | True for `App::Link` and every subclass | **Missing**. "Is a link" is the string test `type_id.starts_with("App::Link")` inside `setLink` only. |
-| `getSubObject(subname, …)` | Walks `Obj.Sub.Sub` paths, links and element lists; `retType` selects object/matrix/placement | **Partial.** Accepts one or more strings, but each is looked up as a whole document object name (`lib.rs:2587-2604`); `.` paths, link traversal, element lists and sub-elements all return `None`. The `matrix`/`transform`/`depth` arguments are ignored (`:2571`). |
-| `getElementIndex` | Splits `Array.Element3` and reports the index | **Missing**. |
-| `Placement`, `LinkPlacement`, `Scale`, `ScaleVector`, `LinkTransform`, `LinkMode` | Transform semantics; a link's placement composes with the target's | **Missing** on `App::Link`. Arrays have a `Placement` but it is not applied to their output (§2). |
+| `setLink(obj, subname=None)` | Sets the link and narrows it to sub-elements | **Implemented.** Writes `LinkedObject` and, with `subname`, a `Property::LinkSub`. The shared link table accepts `App::Link*` and `Part::LinkArray*`. |
+| `getLinkedObject(resolve=…)` | Returns the true target, following link chains | **Implemented** (L0): `resolve=False` returns the immediate target, `resolve=True` follows chains with a cycle guard. |
+| `isLink()` | True for `App::Link` and every subclass | **Implemented** (L0), using the same table that also treats `Part::LinkArray*` as links. |
+| `getSubObject(subname, …)` | Walks `Obj.Sub.Sub` paths, links and element lists; `retType` selects object/matrix/placement | **Implemented** (L0): dotted paths, `ElementList` children, `Group` members and `LinkedObject` hops. `retType` 0/1 → object, 2 → `(obj, Matrix, None)`, 3 → Placement, 4 → Matrix. |
+| `getElementIndex` | Splits `Array.Element3` and reports the index | **Implemented** (L0): `Element3`, `Array.Element3`, `Array_Element3` and `3.` → 3; else -1. |
+| `Placement`, `LinkPlacement`, `Scale`, `ScaleVector`, `LinkTransform`, `LinkMode` | Transform semantics; a link's placement composes with the target's | **L2.** The link's `Placement` (or `LinkPlacement` when `LinkTransform` is true) and a uniform scale are applied. Non-uniform `ScaleVector` is deferred. |
 | `LinkCopyOnChange` | An enum selecting copy-on-change, with a shadow `LinkCopyOnChangeGroup` (values **unverified**) | **Missing**. No clone/copy machinery exists to make it meaningful. |
 | `App::LinkElement` | The generated child of an expanded link | **Missing**; arrays use a bespoke `Part::LinkArrayElement` (`link_array.rs:1546-1564`). |
 | `App::LinkGroup`, `App::LinkList` | Link containers (a link to many objects, with element expansion) | **Missing** as object types. The *property* types `PropertyLinkList` exist. |
 | `Part::LinkArray{Point,Linear,Path,Circular}` | `App::Link` subclasses whose `execute` fills `PlacementList`/`ElementList` (`LinkArray.h`: `public App::Link`) | **Implemented as peers, not subclasses** (`link_array.rs:1-12`). Placements, element suppression and save/restore mostly work; none of the inherited link surface exists. |
 | `Part::LinkArrayPolar`, `Part::Part2DObject` | Supporting types the circular tests construct | **Implemented minimally** as test fixtures (`link_array.rs:1425-1475`, `1568-1584`). |
-| `ShowElement`, `ElementCount`, `PlacementList`, `ElementList` | Link output properties | **Implemented** in the arrays only. `ShowElement=true` writes element placements and returns before writing `Shape`, so the array keeps the previous shape (empty, or stale from an earlier collapsed run) and the elements themselves have no `Shape` (`link_array.rs:286-345`). |
+| `ShowElement`, `ElementCount`, `PlacementList`, `ElementList` | Link output properties | **Stored** in `App::Link` and the arrays. Arrays write element placements and their own shape; `App::Link` does not expand elements yet. |
 | `ScaleList`, `_LinkTouched`, the immutable/output statuses | `LinkArray::enforceLinkArrayPropertyStatus` | **Missing.** `ElementList`/`PlacementList` carry `HIDDEN\|OUTPUT\|NORECOMPUTE\|READONLY` (`link_array.rs:42-43, 183-213`); there is no immutable flag and no `ScaleList`. |
 | `OutList` | Every object referenced by any link property | **Implemented, but wrong for links**: it returns `Group` members only (`lib.rs:2515-2519` → `group_members`). `InList` *is* link-aware (`lib.rs:2521-2558`). |
 
@@ -165,8 +166,10 @@ not fake sub-element resolution before the map exists.
 | **L5** | Sub-element resolution | Resolve `LinkSub`, link subnames and element sub-paths through `ferrocad_lineage` first, positional fallback only when no map exists; invalidate rather than retarget when the name is retired; record the map version on the reference | Behavioural for stale refs | **`ferrocad_lineage` S1–S5** |
 
 L0–L2 are the non-breaking envelope: new methods, properties and an execute path without
-changing stored references. L3 changes what an element is; L4 is the first slice that
-needs a copy model. Only L5 is blocked on the lineage crate; L2/L3 can land first with an
+changing stored references. **L0–L2 landed 2026-10-23:** the query API is on
+`PyDocumentObject`, the shared property base lives in `ferrocad_part_py/src/link.rs`, and
+`App::Link` builds a real `Shape`. L3 changes what an element is; L4 is the first slice
+that needs a copy model. Only L5 is blocked on the lineage crate; L3 can land first with an
 explicit "sub-elements still resolve positionally" comment, which the backend already says.
 
 **Where `App::Link` lives is a decision, not a detail.** The defaults are in
@@ -226,15 +229,13 @@ Part-enabled build. Splitting a geometry-free `App::Link` from a Part-side
 
 ## What is not done (2026-10-23)
 
-- **`App::Link` has no behaviour.** No execute, no `Shape`, no `Placement`, no scale.
-  It is a `LinkedObject` property and a view object.
-- **No link introspection.** `getLinkedObject`, `isLink`, `getElementIndex` are absent;
-  `getSubObject` resolves one whole-object name and ignores dots, links and sub-elements.
-- **No link base.** The arrays duplicate the link property list and cannot call
-  `setLink`; `Part::LinkArrayElement` is not `App::LinkElement`.
-- **No `LinkSubList` value.** It is flattened to `LinkList` at property creation and
-  dropped by the `.FCStd` reader, together with all link lists, subs and placement lists
-  (no writer exists, so this waits on the format task).
+- **Element expansion.** `ShowElement`/`ElementCount`/`ElementList` are stored but
+  `App::Link` does not generate `App::LinkElement` children, and arrays keep their own
+  peer element type.
+- **Copy semantics.** `LinkCopyOnChange`, `LinkMode` and `App::LinkGroup`/`LinkList` are
+  inert; non-uniform `ScaleVector` is deferred.
+- **No `LinkSubList` value.** It is flattened to `LinkList` at property creation; the
+  `.FCStd` reader now reads link lists/subs but flattens `LinkSubList` the same way.
 - **No lineage-backed resolution.** Every `FaceN`/`EdgeN` is still an ordinal.
 - **Not indexed.** `docs/README.md` has no entry for this file; this task may not edit it.
 

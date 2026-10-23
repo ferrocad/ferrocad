@@ -1,7 +1,7 @@
 # D0 — import the headless Draft core
 
 Status: task (2026-10-22). Backlog entry **P1** in
-[`TODO-22-10-2026.md`](../TODO-22-10-2026.md). Companion to
+[`TODO-23-10-2026.md`](../TODO-23-10-2026.md). Companion to
 [`qt-strategy.md`](../workbenches/qt-strategy.md) §2.6 and the measurements in
 [`TODO-21-10-2026.md`](../record/TODO-21-10-2026.md) §3.
 
@@ -19,7 +19,7 @@ applied in-process. D0 lands those fixes for real and adds the harness group. D0
 ## What D0 is not
 
 - Not the `Part` kernel (edges/wires/faces). That is the next slice and is tracked in
-  `TODO-22-10-2026.md` P1.
+  `TODO-23-10-2026.md` P1.
 - Not the Draft GUI (`InitGui`): it needs the Qt split plane and `FreeCADGui`
   interaction services.
 - Not every Draft module: `draftmake.make_circle`, `make_arc_3points` and

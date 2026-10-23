@@ -1,7 +1,7 @@
 # P2 — architecture: curves, Part/Draft layering, Qt, SimpleCAD order
 
 Status: task (2026-10-22). Backlog entry **P2** in
-[`TODO-22-10-2026.md`](../TODO-22-10-2026.md). Companion to
+[`TODO-23-10-2026.md`](../TODO-23-10-2026.md). Companion to
 [`part-draft-layering.md`](../architecture/part-draft-layering.md),
 [`qt-strategy.md`](../workbenches/qt-strategy.md),
 [`simplecad-bringup.md`](../workbenches/simplecad-bringup.md), and

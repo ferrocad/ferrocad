@@ -1,6 +1,6 @@
 # Task — viewport event routing: occlusion and the settings card
 
-Status: task (2026-10-22). P0.8 in [`../TODO-22-10-2026.md`](../TODO-22-10-2026.md).
+Status: task (2026-10-22). P0.8 in [`../record/TODO-22-10-2026.md`](../record/TODO-22-10-2026.md).
 Companions: [`toolbar-chrome.md`](toolbar-chrome.md) (popovers and the settings card),
 [`settings-model.md`](settings-model.md) (the `Settings/Grid` rows) and
 [`../interaction/visual-language.md`](../interaction/visual-language.md) (glass surfaces).

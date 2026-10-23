@@ -1,6 +1,6 @@
 # Task — viewport chrome: a toolbar system and one home for grid settings
 
-Status: task (2026-10-22). P0.6 in [`../TODO-22-10-2026.md`](../TODO-22-10-2026.md).
+Status: task (2026-10-22). P0.6 in [`../record/TODO-22-10-2026.md`](../record/TODO-22-10-2026.md).
 Companion to [`../interaction/visual-language.md`](../interaction/visual-language.md)
 (tokens and states), [`../workbenches/actions-and-tools.md`](../workbenches/actions-and-tools.md) §7
 (the view/tool requests a command returns),

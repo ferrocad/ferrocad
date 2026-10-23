@@ -26,15 +26,15 @@ on the first line, so the folder only has to answer "where do I look?".
 Four files stay at the root: this index, the [crate map](architecture.md) (the
 cross-cutting reference every section links back to), the
 [documentation decision](documentation.md), and the active backlog
-([`TODO-22-10-2026.md`](TODO-22-10-2026.md)).
+([`TODO-23-10-2026.md`](TODO-23-10-2026.md)).
 
 ## Start here
 
 - [architecture.md](architecture.md) — crates, the call paths, the dependency rules
   between them, and the C-ABI rationale.
-- [TODO-22-10-2026.md](TODO-22-10-2026.md) — the active backlog: residual black
-  frames, external-mod ingestion, D0 + `--draft`, the `Part` kernel, and the open
-  decisions.
+- [TODO-23-10-2026.md](TODO-23-10-2026.md) — the active backlog: the format
+  serializer split, the lineage layer (TNP), Links, the remaining Part conformance
+  gaps, Qt reduction, and the open decisions.
 - [documentation.md](documentation.md) — how the project is documented (Diátaxis,
   rustdoc-first, and this layout).
 
@@ -77,6 +77,9 @@ rather than restating it.
 - [architecture/part-draft-layering.md](architecture/part-draft-layering.md) — the
   Part/Draft/BIM layers: why the cycle is a test fixture, the analytic/B-Rep split,
   `ferrocad_curves`, and M0–M5.
+- [architecture/lineage-and-naming.md](architecture/lineage-and-naming.md) — topological
+  naming as a separate lineage layer: the kernel supplies provenance, `ferrocad_lineage`
+  owns identity, naming policy and persistence, and Part consumes it.
 - [architecture/occt-history-spike.md](architecture/occt-history-spike.md) — the first
   geometry spike: what OCCT history FreeCAD depends on, and what it implies for the
   trait and the B slices.
@@ -194,6 +197,9 @@ rather than restating it.
 - [record/TODO-21-10-2026.md](record/TODO-21-10-2026.md) — closed record: the Draft
   assessment, the measured import ladder, the five D0 fixes, and what landed on
   2026-10-21.
+- [record/TODO-22-10-2026.md](record/TODO-22-10-2026.md) — closed record: the Part
+  conformance push, the headless `ViewObject`, the `.FCStd` reader, the link arrays,
+  the Ctrl+K palette, and the measurements at close.
 - [record/incident-2026-10-21-session-crash.md](record/incident-2026-10-21-session-crash.md)
   — post-mortem of the lost GNOME session: `systemd-oomd` killed `gnome-shell`, not the
   GPU or Wayland; the evidence, the timeline, and the prevention notes.
@@ -207,6 +213,13 @@ rather than restating it.
   `--draft` conformance group.
 - [tasks/p2-architecture.md](tasks/p2-architecture.md) — `ferrocad_curves`, the
   Part/Draft seam, the Qt split plane, and the SimpleCAD order.
+- [tasks/format-serializers.md](tasks/format-serializers.md) — split persistence into a
+  native `.ferrocad` JSON serializer and an upstream `.FCStd` import/export backend, so
+  conformance tracking is independent of our own format.
+- [tasks/links.md](tasks/links.md) — the `App::Link`/link-array surface, and how link
+  sub-element references depend on the lineage layer and the file formats.
+- [tasks/qt-reduction.md](tasks/qt-reduction.md) — where Qt/PySide enters today, the
+  measurable done criteria, and Q0a–Q0d ahead of the Draft GUI plan.
 - [tasks/grid-visibility.md](tasks/grid-visibility.md) — the grid toggle only moves
   the native flag, so the Coin/WGSL overlay keeps drawing; one switch, a provider
   `refresh` hook, and the `semantic` → `ferrocad` rename.

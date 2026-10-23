@@ -6,19 +6,24 @@
 //! [`ferrocad_curves`]; the conversion to a kernel shape is the `ferrocad_geom` seam
 //! (`make_edge`/`make_wire`), implemented by OCCT.
 //!
-//! It also carries the small 2D slice upstream's `Geom2d_tests.py` exercises: the
-//! `Part.Geom2d` submodule (`Line2dSegment` and a `BSplineCurve2d` that refuses to
-//! fake knot insertion) and `Part.Cylinder`, an infinite cylindrical *surface*
-//! (upstream's `Part::GeomCylinder`), which is distinct from the document
-//! primitive returned by `Part.makeCylinder`.
+//! It also carries the small surface slice upstream's `Geom2d_tests.py` and
+//! `BRep_tests.py` exercise: the `Part.Geom2d` submodule (`Line2dSegment` and a
+//! `BSplineCurve2d` that refuses to fake knot insertion), the elementary surface
+//! descriptions `Part.Plane`, `Part.Cylinder` (upstream's `Part::GeomCylinder`) and
+//! `Part.Sphere` (upstream's `Part::GeomSphere`), and
+//! `Part.RectangularTrimmedSurface`. The cylinder and sphere are distinct from the
+//! document primitives returned by `Part.makeCylinder`/`Part.makeSphere`.
 //!
 //! Deliberate limits for this slice, all reported as `Part.OCCError` rather than a
 //! silent `None`: an infinite `Line` has no edge, an `Ellipse` edge needs a
 //! `gp_Elips` binding the kernel crate does not expose, and face/solid constructors
 //! (`makeFace`, `makeSolid`, …) are still to come. `Line2dSegment.toShape(surface)`
 //! attaches the 2D segment as the edge's pcurve but does **not** project it onto the
-//! surface: no `GeomProjLib` binding exists here, and `Part.Cylinder` is only a
-//! description (radius, center, axis), not real B-Rep geometry.
+//! surface: no `GeomProjLib` binding exists here, and `Part.Cylinder`/`Part.Sphere`
+//! are only descriptions (radius, center, axis), not real B-Rep geometry.
+//! `RectangularTrimmedSurface.toShape()` builds a real planar face for a `Part.Plane`
+//! basis only; a trimmed cylinder or sphere is described but raises `Part.OCCError`
+//! when asked for a face.
 
 use std::sync::Mutex;
 
@@ -424,6 +429,250 @@ impl PyCylinder {
     }
 }
 
+/// `Part.Sphere(radius=1.0, center=None, axis=None)` — a spherical **surface**
+/// (upstream's `Part::GeomSphere`), the sphere counterpart of [`PyCylinder`].
+///
+/// Like the cylinder this is an elementary description only (`Radius`, `Center`,
+/// `Axis`); upstream builds the default from an empty `gp_Sphere` (center at the
+/// origin, axis `+Z`, radius 1) and the `radius`/`center`/`axis` keywords are our
+/// extension. It is accepted by [`PyLine2dSegment::toShape`] as the `surface`
+/// argument, and answers no shape queries: no B-Rep geometry is faked here.
+#[pyclass(name = "Sphere", module = "Part")]
+#[derive(Clone)]
+pub struct PySphere {
+    radius: f64,
+    center: Vector3,
+    /// The unit axis direction (upstream's `Sphere.Axis` is a direction).
+    axis: Vector3,
+}
+
+#[pymethods]
+impl PySphere {
+    #[new]
+    #[pyo3(signature = (radius = 1.0, center = None, axis = None))]
+    fn new(
+        radius: f64,
+        center: Option<&Bound<'_, PyAny>>,
+        axis: Option<&Bound<'_, PyAny>>,
+    ) -> PyResult<Self> {
+        if !(radius > 0.0) {
+            return Err(OCCError::new_err("Part.Sphere needs a positive radius"));
+        }
+        let center = center.map(vector).transpose()?.unwrap_or_else(Vector3::zero);
+        let axis = axis
+            .map(vector)
+            .transpose()?
+            .unwrap_or_else(|| Vector3::new(0.0, 0.0, 1.0));
+        if axis.is_null() {
+            return Err(OCCError::new_err("Part.Sphere needs a non-zero axis"));
+        }
+        Ok(Self {
+            radius,
+            center,
+            axis: axis.normalize(),
+        })
+    }
+
+    #[getter]
+    fn Radius(&self) -> f64 {
+        self.radius
+    }
+
+    /// The sphere's center (upstream's `Sphere.Center`).
+    #[getter]
+    fn Center(&self, py: Python<'_>) -> PyResult<PyObject> {
+        py_vector(py, self.center)
+    }
+
+    /// The unit axis direction (upstream's `Sphere.Axis`).
+    #[getter]
+    fn Axis(&self, py: Python<'_>) -> PyResult<PyObject> {
+        py_vector(py, self.axis)
+    }
+
+    fn __repr__(&self) -> String {
+        format!(
+            "Part.Sphere({}, {:?}, {:?})",
+            self.radius, self.center, self.axis
+        )
+    }
+}
+
+/// The basis surface of a [`PyRectangularTrimmedSurface`].
+#[derive(Clone)]
+enum TrimmedBasis {
+    Plane(PyPlane),
+    Cylinder(PyCylinder),
+    Sphere(PySphere),
+}
+
+/// `Part.RectangularTrimmedSurface(surface, u1, u2, v1, v2)` — a patch of a surface
+/// bounded by two parameter values in each parametric direction (upstream's
+/// `Part::GeomTrimmedSurface`).
+///
+/// The constructor accepts a [`PyPlane`], [`PyCylinder`] or [`PySphere`] as the
+/// basis surface and requires `u1 < u2` and `v1 < v2` (the `usense`/`vsense`
+/// arguments upstream also takes are not modelled, so a reversed trim is rejected
+/// instead of silently flipping orientation).
+///
+/// `toShape()` builds a real planar face only for a **plane** basis: the four
+/// corners are `location + u·u_dir + v·v_dir` in the plane's local frame, joined by
+/// `LineSegment` edges through the kernel's `make_wire`/`make_face`. A trimmed
+/// cylinder or sphere can be described and queried (`BasisSurface`, `U1`…`V2`) but
+/// has no B-Rep builder in this slice, so its `toShape()` raises `Part.OCCError`.
+#[pyclass(name = "RectangularTrimmedSurface", module = "Part")]
+#[derive(Clone)]
+pub struct PyRectangularTrimmedSurface {
+    basis: TrimmedBasis,
+    u1: f64,
+    u2: f64,
+    v1: f64,
+    v2: f64,
+}
+
+#[pymethods]
+impl PyRectangularTrimmedSurface {
+    #[new]
+    fn new(
+        surface: &Bound<'_, PyAny>,
+        u1: f64,
+        u2: f64,
+        v1: f64,
+        v2: f64,
+    ) -> PyResult<Self> {
+        let basis = if let Ok(plane) = surface.downcast::<PyPlane>() {
+            TrimmedBasis::Plane(plane.borrow().clone())
+        } else if let Ok(cylinder) = surface.downcast::<PyCylinder>() {
+            TrimmedBasis::Cylinder(cylinder.borrow().clone())
+        } else if let Ok(sphere) = surface.downcast::<PySphere>() {
+            TrimmedBasis::Sphere(sphere.borrow().clone())
+        } else {
+            return Err(PyTypeError::new_err(
+                "Part.RectangularTrimmedSurface expects a Part surface \
+                 (Part.Plane, Part.Cylinder or Part.Sphere)",
+            ));
+        };
+        if !(u1 < u2) || !(v1 < v2) {
+            return Err(OCCError::new_err(
+                "Part.RectangularTrimmedSurface needs u1 < u2 and v1 < v2",
+            ));
+        }
+        Ok(Self {
+            basis,
+            u1,
+            u2,
+            v1,
+            v2,
+        })
+    }
+
+    /// The surface being trimmed (upstream's `BasisSurface`). A copy of the basis
+    /// is returned, matching upstream's "built from a copy" semantics.
+    #[getter]
+    fn BasisSurface(&self, py: Python<'_>) -> PyResult<PyObject> {
+        Ok(match &self.basis {
+            TrimmedBasis::Plane(plane) => Py::new(py, plane.clone())?.into_any(),
+            TrimmedBasis::Cylinder(cylinder) => Py::new(py, cylinder.clone())?.into_any(),
+            TrimmedBasis::Sphere(sphere) => Py::new(py, sphere.clone())?.into_any(),
+        })
+    }
+
+    #[getter]
+    fn U1(&self) -> f64 {
+        self.u1
+    }
+
+    #[getter]
+    fn U2(&self) -> f64 {
+        self.u2
+    }
+
+    #[getter]
+    fn V1(&self) -> f64 {
+        self.v1
+    }
+
+    #[getter]
+    fn V2(&self) -> f64 {
+        self.v2
+    }
+
+    /// The trimmed patch as a `Part.Face`.
+    ///
+    /// Only a plane basis produces geometry in this slice; the four rectangle
+    /// corners are joined into a wire and a planar face. A `Part.Cylinder` or
+    /// `Part.Sphere` basis raises `Part.OCCError`, as does an empty rectangle.
+    fn toShape(&self, py: Python<'_>) -> PyResult<Py<PyFace>> {
+        let TrimmedBasis::Plane(plane) = &self.basis else {
+            return Err(OCCError::new_err(
+                "Part.RectangularTrimmedSurface.toShape() only builds a face for a \
+                 Part.Plane basis in this slice (a trimmed cylinder or sphere has no \
+                 B-Rep builder yet)",
+            ));
+        };
+        let (u_dir, v_dir) = plane_frame(&plane.normal);
+        let corner = |u: f64, v: f64| {
+            plane
+                .location
+                .add(&u_dir.scale(u))
+                .add(&v_dir.scale(v))
+        };
+        let corners = [
+            corner(self.u1, self.v1),
+            corner(self.u2, self.v1),
+            corner(self.u2, self.v2),
+            corner(self.u1, self.v2),
+        ];
+        let mut edges = Vec::with_capacity(4);
+        for index in 0..4 {
+            let segment = LineSegment::new(corners[index], corners[(index + 1) % 4])
+                .map_err(curve_error)?;
+            edges.push(shape_from_curve(&EdgeCurve::LineSegment(segment))?);
+        }
+        let wire = backend().make_wire(&edges).map_err(kernel_error)?;
+        let face = backend().make_face(&[wire]).map_err(kernel_error)?;
+        Py::new(py, PyFace::initializer(face))
+    }
+
+    fn __repr__(&self) -> String {
+        format!(
+            "Part.RectangularTrimmedSurface({}, {}, {}, {}, {})",
+            self.basis_name(),
+            self.u1,
+            self.u2,
+            self.v1,
+            self.v2
+        )
+    }
+}
+
+impl PyRectangularTrimmedSurface {
+    fn basis_name(&self) -> &'static str {
+        match &self.basis {
+            TrimmedBasis::Plane(_) => "Part.Plane()",
+            TrimmedBasis::Cylinder(_) => "Part.Cylinder()",
+            TrimmedBasis::Sphere(_) => "Part.Sphere()",
+        }
+    }
+}
+
+/// In-plane `(u, v)` directions for a plane with unit `normal`.
+///
+/// `u` is the world X axis projected onto the plane (world Y when the normal is
+/// nearly along X), so the default XY plane keeps `u = +X` and `v = +Y`; `v` is
+/// then `normal × u`, which makes `(u, v, normal)` right-handed.
+fn plane_frame(normal: &Vector3) -> (Vector3, Vector3) {
+    let reference = if normal.x.abs() < 0.9 {
+        Vector3::new(1.0, 0.0, 0.0)
+    } else {
+        Vector3::new(0.0, 1.0, 0.0)
+    };
+    let u = reference
+        .sub(&normal.scale(normal.dot(&reference)))
+        .normalize();
+    (u, normal.cross(&u))
+}
+
 /// The backing surface of a face (`Face.Surface`). Only `TypeId` is carried in
 /// this slice; geometry-specific properties come later.
 #[pyclass(name = "GeomSurface", module = "Part")]
@@ -717,13 +966,16 @@ impl PyBSplineCurve2d {
 /// it keeps a bogus `toShape(42)` a `TypeError` instead of a silent success.
 fn require_surface(value: &Bound<'_, PyAny>) -> PyResult<()> {
     if value.downcast::<PyCylinder>().is_ok()
+        || value.downcast::<PySphere>().is_ok()
         || value.downcast::<PyPlane>().is_ok()
+        || value.downcast::<PyRectangularTrimmedSurface>().is_ok()
         || value.downcast::<PySurface>().is_ok()
     {
         return Ok(());
     }
     Err(PyTypeError::new_err(
-        "toShape(surface) expects a Part surface (Part.Cylinder or Part.Plane)",
+        "toShape(surface) expects a Part surface \
+         (Part.Plane, Part.Cylinder, Part.Sphere or Part.RectangularTrimmedSurface)",
     ))
 }
 
@@ -1385,6 +1637,8 @@ pub(crate) fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyArcOfCircle>()?;
     m.add_class::<PyPlane>()?;
     m.add_class::<PyCylinder>()?;
+    m.add_class::<PySphere>()?;
+    m.add_class::<PyRectangularTrimmedSurface>()?;
     m.add_class::<PyEdge>()?;
     m.add_class::<PyWire>()?;
     m.add_class::<PyVertex>()?;

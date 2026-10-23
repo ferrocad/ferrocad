@@ -13,7 +13,9 @@ to [`../architecture/part-draft-layering.md`](../architecture/part-draft-layerin
 ## Decision
 
 - The **native JSON format** (extension **`.ferrocad`**, recommended) is FerroCAD's save
-  format and may evolve freely.
+  format and may evolve freely. `.fe2o3` (the iron-oxide spelling the owner also
+  considered) and `.fe203` are accepted aliases for both read and write; `.ferrocad`
+  remains canonical.
 - **Upstream `.FCStd`** is an import/export format, conformance-tracked: upstream tests
   write and reopen it; **(verified)** `ColorPerFaceTest.py`, `Document.py`.
 - Both paths are selected **explicitly**, never by sniffing content. **No `.FCStd` writer
@@ -23,18 +25,19 @@ to [`../architecture/part-draft-layering.md`](../architecture/part-draft-layerin
 
 ### 1.1 Why `.ferrocad`
 
-`.fe203` was the alternative considered. `.ferrocad` names the product, matches the
-`ferrocad` crate namespace, and does not read as a version number; `.fe203` is memorable
-but unexplained and easy to mistake for a revision counter. Matching is case-insensitive;
-canonical spelling is lowercase `.ferrocad`.
+`.fe203` was the alternative considered (also spelled `.fe2o3`). `.ferrocad` names the
+product, matches the `ferrocad` crate namespace, and does not read as a version number;
+`.fe2o3` is the iron-oxide pun and is now accepted as an alias. Matching is
+case-insensitive; canonical spelling is lowercase `.ferrocad`.
 
 ### 1.2 Behaviour by suffix
 
 | Suffix | Read | Write | Notes |
 | --- | --- | --- | --- |
 | `.ferrocad` | native JSON only | native JSON | default save format |
+| `.fe2o3` / `.fe203` (any case) | native JSON only | native JSON | accepted aliases; `.ferrocad` is canonical |
 | `.FCStd` (any case) | ZIP + `Document.xml`; transitional JSON fallback (§1.3) | placeholder JSON now; real ZIP **after** the writer lands | conformance format |
-| none / unknown | `ValueError` naming `.ferrocad` and `.FCStd` | `ValueError` | no silent default; the GUI dialog supplies the suffix |
+| none / unknown | `ValueError` naming `.ferrocad`/`.fe2o3` and `.FCStd` | `ValueError` | no silent default; the GUI dialog supplies the suffix |
 
 ### 1.3 The transitional rule
 

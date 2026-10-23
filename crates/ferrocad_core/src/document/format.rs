@@ -6,6 +6,7 @@
 //! | Suffix | [`DocumentFormat`] | Backend |
 //! | --- | --- | --- |
 //! | `.ferrocad` (any case) | [`DocumentFormat::Native`] | [`native`] — JSON envelope |
+//! | `.fe2o3` / `.fe203` (any case) | [`DocumentFormat::Native`] | [`native`] — accepted aliases |
 //! | `.FCStd` (any case) | [`DocumentFormat::Fcstd`] | [`fcstd`] — ZIP + `Document.xml` |
 //!
 //! A path with no suffix, or with any other suffix, is an error naming both valid
@@ -58,6 +59,11 @@ impl DocumentFormat {
             .and_then(|s| s.to_str());
         match suffix {
             Some(s) if s.eq_ignore_ascii_case("ferrocad") => Ok(DocumentFormat::Native),
+            // The iron-oxide spelling is the alternative the owner considered; both
+            // are the same native serializer. `.ferrocad` stays canonical.
+            Some(s) if s.eq_ignore_ascii_case("fe2o3") || s.eq_ignore_ascii_case("fe203") => {
+                Ok(DocumentFormat::Native)
+            }
             Some(s) if s.eq_ignore_ascii_case("fcstd") => Ok(DocumentFormat::Fcstd),
             _ => Err(FormatError::UnknownExtension {
                 path: path.to_owned(),
@@ -176,7 +182,8 @@ impl fmt::Display for FormatError {
         match self {
             FormatError::UnknownExtension { path } => write!(
                 f,
-                "unknown document extension for '{path}': expected '.ferrocad' or '.FCStd'"
+                "unknown document extension for '{path}': expected '.ferrocad' \
+                 (or '.fe2o3') or '.FCStd'"
             ),
             FormatError::NotNative { path, format } => write!(
                 f,
@@ -241,6 +248,9 @@ mod tests {
             ("model.ferrocad", Ok(DocumentFormat::Native)),
             ("model.FERROCAD", Ok(DocumentFormat::Native)),
             ("model.Ferrocad", Ok(DocumentFormat::Native)),
+            ("model.fe2o3", Ok(DocumentFormat::Native)),
+            ("model.Fe2O3", Ok(DocumentFormat::Native)),
+            ("model.fe203", Ok(DocumentFormat::Native)),
             ("model.FCStd", Ok(DocumentFormat::Fcstd)),
             ("model.fcstd", Ok(DocumentFormat::Fcstd)),
             ("model.FCStd.bak", Err(())),
@@ -258,7 +268,9 @@ mod tests {
                 (Err(err), Err(())) => {
                     let message = err.to_string();
                     assert!(
-                        message.contains(".ferrocad") && message.contains(".FCStd"),
+                        message.contains(".ferrocad")
+                            && message.contains(".fe2o3")
+                            && message.contains(".FCStd"),
                         "{path}: {message}"
                     );
                 }
@@ -292,6 +304,18 @@ mod tests {
         assert_eq!(read_back.version, 1);
         assert_eq!(read_back.name, "Sample");
         assert_eq!(read_back.objects.len(), 1);
+        assert_eq!(read_back.objects[0].name, "Box");
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn fe2o3_round_trips_as_native_json() {
+        let path = temp_path("model.fe2o3");
+        let doc = sample_document();
+        write(&doc, &path, DocumentFormat::Native).unwrap();
+        let (read_back, format) = read(&path).unwrap();
+        assert_eq!(format, DocumentFormat::Native);
+        assert_eq!(read_back.name, "Sample");
         assert_eq!(read_back.objects[0].name, "Box");
         let _ = std::fs::remove_file(&path);
     }

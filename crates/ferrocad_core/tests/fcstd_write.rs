@@ -10,22 +10,53 @@ use std::fmt;
 use std::path::{Path, PathBuf};
 
 use ferrocad_core::fcstd::read_fcstd;
-use ferrocad_core::fcstd_write::{write_fcstd, FcstdWriteError};
+use ferrocad_core::fcstd_write::{
+    write_fcstd, write_fcstd_with_report, FcstdWriteError, WriteReport,
+};
 use ferrocad_core::{
-    Document, ExtensionData, ExtensionValue, Placement, Property, Quantity, Rotation, Unit,
-    Vector3,
+    prop_status, Document, ExtensionData, ExtensionValue, Placement, Property, Quantity, Rotation,
+    Unit, Vector3, ViewState,
 };
 
-/// A stand-in for the Part module's shape property: arbitrary bytes that the
-/// writer must place in a `.brp` member verbatim.
-struct FakeShape(&'static str, Vec<u8>);
+/// A stand-in for a Part module payload: the members the writer must place in
+/// `.brp` members verbatim.
+struct FakeShape {
+    type_name: &'static str,
+    members: Vec<(String, Vec<u8>)>,
+}
+
+impl FakeShape {
+    /// One payload, written as `PartShapeN.brp` + `<Part file>`.
+    fn single(type_name: &'static str, data: &[u8]) -> Self {
+        FakeShape {
+            type_name,
+            members: vec![(String::new(), data.to_vec())],
+        }
+    }
+
+    /// A shape list: one payload per entry, written as `PartShapeN.M.brp` +
+    /// `<TopoShape file>` inside `<ShapeList>`.
+    fn list(type_name: &'static str, entries: &[&[u8]]) -> Self {
+        FakeShape {
+            type_name,
+            members: entries
+                .iter()
+                .enumerate()
+                .map(|(index, data)| (index.to_string(), data.to_vec()))
+                .collect(),
+        }
+    }
+}
 
 impl ExtensionData for FakeShape {
     fn type_name(&self) -> &str {
-        self.0
+        self.type_name
     }
     fn clone_box(&self) -> Box<dyn ExtensionData> {
-        Box::new(FakeShape(self.0, self.1.clone()))
+        Box::new(FakeShape {
+            type_name: self.type_name,
+            members: self.members.clone(),
+        })
     }
     fn as_any(&self) -> &dyn Any {
         self
@@ -34,13 +65,43 @@ impl ExtensionData for FakeShape {
         other
             .as_any()
             .downcast_ref::<FakeShape>()
-            .is_some_and(|o| o.0 == self.0 && o.1 == self.1)
+            .is_some_and(|o| o.type_name == self.type_name && o.members == self.members)
     }
     fn save(&self) -> Vec<u8> {
-        self.1.clone()
+        self.members.iter().flat_map(|(_, data)| data.clone()).collect()
+    }
+    fn fcstd_members(&self) -> Option<Vec<(String, Vec<u8>)>> {
+        Some(self.members.clone())
     }
     fn debug(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "FakeShape({}, {} bytes)", self.0, self.1.len())
+        write!(f, "FakeShape({}, {} members)", self.type_name, self.members.len())
+    }
+}
+
+/// A module value with no `.FCStd` representation (the default hook is `None`).
+struct Unsupported(u8);
+
+impl ExtensionData for Unsupported {
+    fn type_name(&self) -> &str {
+        "Test::PropertyWidget"
+    }
+    fn clone_box(&self) -> Box<dyn ExtensionData> {
+        Box::new(Unsupported(self.0))
+    }
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+    fn eq(&self, other: &dyn ExtensionData) -> bool {
+        other
+            .as_any()
+            .downcast_ref::<Unsupported>()
+            .is_some_and(|o| o.0 == self.0)
+    }
+    fn save(&self) -> Vec<u8> {
+        vec![self.0]
+    }
+    fn debug(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "Unsupported({})", self.0)
     }
 }
 
@@ -113,9 +174,9 @@ fn sample() -> Document {
     doc.set_property(
         box_id,
         "Shape",
-        Property::Extension(ExtensionValue::new(Box::new(FakeShape(
+        Property::Extension(ExtensionValue::new(Box::new(FakeShape::single(
             "Part::PropertyPartShape",
-            b"DBRep_DrawableShape\nfake brep payload\n".to_vec(),
+            b"DBRep_DrawableShape\nfake brep payload\n",
         )))),
     )
     .unwrap();
@@ -124,9 +185,9 @@ fn sample() -> Document {
     doc.set_property(
         tool_id,
         "Shape",
-        Property::Extension(ExtensionValue::new(Box::new(FakeShape(
+        Property::Extension(ExtensionValue::new(Box::new(FakeShape::single(
             "Part::PropertyPartShape",
-            b"fake brep payload 1\n".to_vec(),
+            b"fake brep payload 1\n",
         )))),
     )
     .unwrap();
@@ -167,6 +228,40 @@ fn central_directory(data: &[u8]) -> Vec<(String, u16, u32, u32, u32)> {
     entries
 }
 
+/// Inflate one member from a written archive.
+fn read_member(data: &[u8], wanted: &str) -> Vec<u8> {
+    let (_, method, csize, _, offset) = central_directory(data)
+        .into_iter()
+        .find(|(name, ..)| name == wanted)
+        .unwrap_or_else(|| panic!("no member '{wanted}'"));
+    let lo = offset as usize;
+    assert_eq!(&data[lo..lo + 4], b"PK\x03\x04");
+    let name_len = u16::from_le_bytes([data[lo + 26], data[lo + 27]]) as usize;
+    let extra_len = u16::from_le_bytes([data[lo + 28], data[lo + 29]]) as usize;
+    let start = lo + 30 + name_len + extra_len;
+    let raw = &data[start..start + csize as usize];
+    match method {
+        8 => {
+            use std::io::Read;
+            let mut out = Vec::new();
+            flate2::read::DeflateDecoder::new(raw)
+                .read_to_end(&mut out)
+                .expect("inflate member");
+            out
+        }
+        0 => raw.to_vec(),
+        other => panic!("unexpected method {other}"),
+    }
+}
+
+fn member_names(data: &[u8]) -> Vec<String> {
+    central_directory(data).into_iter().map(|(name, ..)| name).collect()
+}
+
+fn read_document_xml(data: &[u8]) -> String {
+    String::from_utf8(read_member(data, "Document.xml")).expect("Document.xml is UTF-8")
+}
+
 #[test]
 fn writes_a_real_zip_that_the_reader_can_open() {
     let doc = sample();
@@ -177,11 +272,19 @@ fn writes_a_real_zip_that_the_reader_can_open() {
     let bytes = std::fs::read(&path).unwrap();
     assert_eq!(&bytes[..4], b"PK\x03\x04", "a real ZIP local header");
 
-    // Document.xml first, then one member per Part::PropertyPartShape, in
-    // object/property order (Box.Shape, Tool.Shape).
+    // Document.xml and GuiDocument.xml first, then one member per
+    // Part::PropertyPartShape, in object/property order (Box.Shape, Tool.Shape).
     let entries = central_directory(&bytes);
     let names: Vec<&str> = entries.iter().map(|(name, ..)| name.as_str()).collect();
-    assert_eq!(names, ["Document.xml", "PartShape.brp", "PartShape1.brp"]);
+    assert_eq!(
+        names,
+        [
+            "Document.xml",
+            "GuiDocument.xml",
+            "PartShape.brp",
+            "PartShape1.brp"
+        ]
+    );
     for (name, method, csize, usize_, _) in &entries {
         assert_eq!(*method, 8, "{name} is deflated");
         assert!(*usize_ > 0, "{name} has content");
@@ -273,28 +376,313 @@ fn writes_a_real_zip_that_the_reader_can_open() {
     let _ = std::fs::remove_file(&path);
 }
 
+/// A shape list becomes one `.brp` member per entry, each referenced by its own
+/// `<TopoShape file>`, while a preceding single shape keeps `PartShape.brp`.
 #[test]
-fn rejects_shape_lists_with_a_clear_error() {
+fn writes_one_member_per_shape_list_entry() {
     let mut doc = Document::new();
-    let id = doc.add_object("Body", "App::FeaturePython");
+    let box_id = doc.add_object("Box", "Part::Feature");
     doc.set_property(
-        id,
+        box_id,
         "Shape",
-        Property::Extension(ExtensionValue::new(Box::new(FakeShape(
-            "Part::PropertyTopoShapeList",
-            vec![1, 2, 3],
+        Property::Extension(ExtensionValue::new(Box::new(FakeShape::single(
+            "Part::PropertyPartShape",
+            b"single shape\n",
         )))),
     )
     .unwrap();
-    let saved = doc.to_saved("Shapes");
-    let path = temp_path("shapelist.FCStd");
 
-    let error = write_fcstd(&saved, path.to_str().unwrap()).expect_err("shape lists error");
-    let message = error.to_string();
-    assert!(matches!(error, FcstdWriteError::UnsupportedExtension { .. }));
-    assert!(message.contains("Body.Shape"), "{message}");
-    assert!(message.contains("Part::PropertyTopoShapeList"), "{message}");
-    assert!(!path.exists(), "no partial file is written");
+    let body_id = doc.add_object("Body", "App::FeaturePython");
+    doc.set_property(
+        body_id,
+        "Shapes",
+        Property::Extension(ExtensionValue::new(Box::new(FakeShape::list(
+            "Part::PropertyTopoShapeList",
+            &[b"first entry\n", b"second entry\n"],
+        )))),
+    )
+    .unwrap();
+
+    let saved = doc.to_saved("Shape list");
+    let path = temp_path("shapelist.FCStd");
+    write_fcstd(&saved, path.to_str().unwrap()).expect("write shape list");
+
+    let bytes = std::fs::read(&path).unwrap();
+    assert_eq!(
+        member_names(&bytes),
+        [
+            "Document.xml",
+            "GuiDocument.xml",
+            "PartShape.brp",
+            "PartShape1.0.brp",
+            "PartShape1.1.brp"
+        ]
+    );
+    assert_eq!(read_member(&bytes, "PartShape1.0.brp"), b"first entry\n");
+    assert_eq!(read_member(&bytes, "PartShape1.1.brp"), b"second entry\n");
+
+    let xml = read_document_xml(&bytes);
+    assert!(xml.contains("<Part file=\"PartShape.brp\"/>"), "{xml}");
+    assert!(
+        xml.contains("<ShapeList count=\"2\">"),
+        "shape list element: {xml}"
+    );
+    assert!(
+        xml.contains("<TopoShape file=\"PartShape1.0.brp\"/>"),
+        "first entry reference: {xml}"
+    );
+    assert!(
+        xml.contains("<TopoShape file=\"PartShape1.1.brp\"/>"),
+        "second entry reference: {xml}"
+    );
+    roxmltree::Document::parse(&xml).expect("well-formed Document.xml");
+
+    let _ = std::fs::remove_file(&path);
+}
+
+#[test]
+fn writes_expressions_and_object_dependencies() {
+    let mut doc = Document::new();
+    let tool_id = doc.add_object("Tool", "App::FeaturePython");
+    doc.set_property(tool_id, "Value", Property::Integer(2)).unwrap();
+
+    let box_id = doc.add_object("Box", "App::FeaturePython");
+    doc.set_property(box_id, "Target", Property::Link("Tool".into()))
+        .unwrap();
+    doc.set_expression(box_id, "Width", "Tool.Value * 2").unwrap();
+    doc.set_expression(box_id, "AttachmentOffset.Base.x", "30 * 2")
+        .unwrap();
+
+    let saved = doc.to_saved("Expressions");
+    let path = temp_path("expressions.FCStd");
+    write_fcstd(&saved, path.to_str().unwrap()).expect("write expressions");
+    let bytes = std::fs::read(&path).unwrap();
+    let xml = read_document_xml(&bytes);
+
+    // Expressions use the element form `read_expressions` consumes.
+    assert!(
+        xml.contains(
+            "<Property name=\"ExpressionEngine\" type=\"App::PropertyExpressionEngine\">"
+        ),
+        "{xml}"
+    );
+    assert!(xml.contains("<ExpressionEngine count=\"2\">"), "{xml}");
+    assert!(
+        xml.contains("<Expression path=\"Width\" expression=\"Tool.Value * 2\"/>"),
+        "{xml}"
+    );
+    // A nested self-relative path regains upstream's leading dot.
+    assert!(
+        xml.contains("<Expression path=\".AttachmentOffset.Base.x\" expression=\"30 * 2\"/>"),
+        "{xml}"
+    );
+
+    // Box depends on Tool twice: the Link and the expression reference.
+    assert!(
+        xml.contains("<ObjectDeps Name=\"Box\" Count=\"2\">"),
+        "{xml}"
+    );
+    assert!(xml.contains("<Dep Name=\"Tool\"/>"), "{xml}");
+    assert!(
+        xml.contains("<ObjectDeps Name=\"Tool\" Count=\"0\"/>"),
+        "{xml}"
+    );
+
+    // Expressions survive the round trip through the reader.
+    let read = read_fcstd(path.to_str().unwrap()).unwrap();
+    let box_read = read.objects.iter().find(|o| o.name == "Box").unwrap();
+    assert_eq!(
+        box_read.expressions.get("Width").map(String::as_str),
+        Some("Tool.Value * 2")
+    );
+    assert_eq!(
+        box_read
+            .expressions
+            .get("AttachmentOffset.Base.x")
+            .map(String::as_str),
+        Some("30 * 2")
+    );
+
+    let _ = std::fs::remove_file(&path);
+}
+
+/// Statuses are translated back to upstream's internal bits; a static transient
+/// property (status without a value) becomes a valueless `_Property`.
+#[test]
+fn writes_property_statuses_and_transient_placeholders() {
+    let mut doc = Document::new();
+    let id = doc.add_object("Box", "App::FeaturePython");
+    doc.set_property(id, "Value", Property::Integer(1)).unwrap();
+    let mut saved = doc.to_saved("Status");
+    saved.objects[0]
+        .property_status
+        .insert("Value".to_string(), prop_status::READONLY | prop_status::OUTPUT);
+    saved.objects[0]
+        .property_status
+        .insert("_GroupTouched".to_string(), prop_status::TRANSIENT);
+
+    let path = temp_path("status.FCStd");
+    write_fcstd(&saved, path.to_str().unwrap()).expect("write with statuses");
+    let bytes = std::fs::read(&path).unwrap();
+    let xml = read_document_xml(&bytes);
+
+    // ReadOnly = 1<<24, Output = 1<<27, Transient = 1<<25 (upstream bits).
+    assert!(xml.contains("status=\"150994944\""), "{xml}");
+    assert!(
+        xml.contains("<_Property name=\"_GroupTouched\" status=\"33554432\"/>"),
+        "{xml}"
+    );
+    assert!(
+        xml.contains("TransientCount=\"1\""),
+        "the placeholder is counted as transient: {xml}"
+    );
+    roxmltree::Document::parse(&xml).expect("well-formed Document.xml");
+
+    let read = read_fcstd(path.to_str().unwrap()).unwrap();
+    let round_tripped = &read.objects[0];
+    assert_eq!(
+        round_tripped.property_status.get("Value"),
+        Some(&(prop_status::READONLY | prop_status::OUTPUT))
+    );
+    assert_eq!(
+        round_tripped.property_status.get("_GroupTouched"),
+        Some(&prop_status::TRANSIENT)
+    );
+    assert_eq!(
+        round_tripped.properties.get("Value"),
+        Some(&Property::Integer(1))
+    );
+    assert!(
+        !round_tripped.properties.contains_key("_GroupTouched"),
+        "a static transient placeholder has no value"
+    );
+
+    let _ = std::fs::remove_file(&path);
+}
+
+#[test]
+fn writes_object_extensions() {
+    let mut doc = Document::new();
+    let id = doc.add_object("Group", "App::DocumentObjectGroup");
+    assert!(doc.add_extension(id, "App::GroupExtensionPython"));
+
+    let saved = doc.to_saved("Extensions");
+    let path = temp_path("extensions.FCStd");
+    write_fcstd(&saved, path.to_str().unwrap()).expect("write extensions");
+    let bytes = std::fs::read(&path).unwrap();
+    let xml = read_document_xml(&bytes);
+
+    assert!(
+        xml.contains("<Object name=\"Group\" Extensions=\"True\">"),
+        "{xml}"
+    );
+    assert!(xml.contains("<Extensions Count=\"1\">"), "{xml}");
+    assert!(
+        xml.contains(
+            "<Extension type=\"App::GroupExtensionPython\" name=\"GroupExtensionPython\">"
+        ),
+        "{xml}"
+    );
+    roxmltree::Document::parse(&xml).expect("well-formed Document.xml");
+
+    let _ = std::fs::remove_file(&path);
+}
+
+/// `GuiDocument.xml` maps the headless view state and writes the `DiffuseColor`
+/// member as a little-endian `u32` count plus packed `0xRRGGBB00` values.
+#[test]
+fn writes_gui_document_and_diffuse_colour_bytes() {
+    let mut doc = Document::new();
+    let box_id = doc.add_object("Box", "Part::Feature");
+    let mut view = ViewState::new(35, [0.8, 0.8, 0.8, 1.0]);
+    view.visibility = false;
+    view.diffuse_color = Some(vec![[1.0, 0.0, 0.0, 1.0], [0.0, 1.0, 0.0, 0.5]]);
+    doc.object_mut(box_id).unwrap().view = Some(view);
+    // An object without a view has no view provider.
+    let _tool_id = doc.add_object("Tool", "Part::Feature");
+
+    let saved = doc.to_saved("Gui");
+    let path = temp_path("gui.FCStd");
+    write_fcstd(&saved, path.to_str().unwrap()).expect("write GuiDocument");
+    let bytes = std::fs::read(&path).unwrap();
+    assert!(member_names(&bytes).contains(&"GuiDocument.xml".to_string()));
+    assert!(member_names(&bytes).contains(&"DiffuseColor".to_string()));
+
+    let gui = String::from_utf8(read_member(&bytes, "GuiDocument.xml")).unwrap();
+    roxmltree::Document::parse(&gui).expect("well-formed GuiDocument.xml");
+    assert!(gui.contains("<ViewProviderData Count=\"1\">"), "{gui}");
+    assert!(gui.contains("<ViewProvider name=\"Box\">"), "{gui}");
+    assert!(!gui.contains("ViewProvider name=\"Tool\""), "{gui}");
+    assert!(
+        gui.contains(
+            "<Property name=\"Visibility\" type=\"App::PropertyBool\"><Bool value=\"false\"/>"
+        ),
+        "{gui}"
+    );
+    assert!(
+        gui.contains(
+            "<Property name=\"Transparency\" type=\"App::PropertyInteger\">\
+             <Integer value=\"35\"/>"
+        ),
+        "{gui}"
+    );
+    // 0.8 rounds to 0xCC in every channel; the alpha byte is written as 00.
+    assert!(
+        gui.contains(
+            "<Property name=\"ShapeColor\" type=\"App::PropertyColor\">\
+             <PropertyColor value=\"0xCCCCCC00\"/>"
+        ),
+        "{gui}"
+    );
+    assert!(
+        gui.contains(
+            "<Property name=\"DiffuseColor\" type=\"App::PropertyColorList\">\
+             <ColorList file=\"DiffuseColor\"/>"
+        ),
+        "{gui}"
+    );
+    assert!(
+        gui.contains(
+            "<Property name=\"DisplayMode\" type=\"App::PropertyEnumeration\">\
+             <Integer value=\"0\"/>"
+        ),
+        "{gui}"
+    );
+
+    // count = 2 (LE u32), then 0xFF000000 and 0x00FF0000 (LE u32 each).
+    assert_eq!(
+        read_member(&bytes, "DiffuseColor"),
+        [2, 0, 0, 0, 0x00, 0x00, 0x00, 0xFF, 0x00, 0x00, 0xFF, 0x00]
+    );
+
+    let _ = std::fs::remove_file(&path);
+}
+
+/// `python_state` is FerroCAD's own envelope, not upstream's proxy pickle: it is
+/// skipped and reported, never written as `<Python value>`.
+#[test]
+fn reports_python_state_as_dropped() {
+    let mut doc = Document::new();
+    let id = doc.add_object("Box", "App::FeaturePython");
+    doc.set_property(id, "Value", Property::Integer(1)).unwrap();
+    let mut saved = doc.to_saved("Python state");
+    saved.objects[0].python_state = Some("gASVBAAAAAAAAAB9lCiMBWF0dHJzlH2Uc4wFcHJveHl9lS4=".into());
+
+    let path = temp_path("python.FCStd");
+    let report: WriteReport = write_fcstd_with_report(&saved, path.to_str().unwrap())
+        .expect("write with Python state");
+    let dropped = report.dropped();
+    assert_eq!(dropped.len(), 1, "{dropped:?}");
+    assert!(dropped[0].contains("Box.python_state"), "{dropped:?}");
+    assert!(dropped[0].contains("Python value"), "{dropped:?}");
+    assert!(!report.is_empty());
+
+    let bytes = std::fs::read(&path).unwrap();
+    let xml = read_document_xml(&bytes);
+    assert!(!xml.contains("App::PropertyPythonObject"), "{xml}");
+    assert!(!xml.contains("<Python"), "{xml}");
+
+    let _ = std::fs::remove_file(&path);
 }
 
 #[test]
@@ -312,6 +700,30 @@ fn rejects_unrepresentable_properties_and_names_them() {
     assert!(message.contains("Box.Samples"), "{message}");
     assert!(message.contains("App::PropertyFloatList"), "{message}");
     assert!(!path.exists());
+}
+
+/// A module value without a payload hook still fails by name (shape lists are
+/// supported now, arbitrary extensions are not).
+#[test]
+fn unsupported_extension_errors_by_name() {
+    let mut doc = Document::new();
+    let id = doc.add_object("Body", "App::FeaturePython");
+    doc.set_property(
+        id,
+        "Widget",
+        Property::Extension(ExtensionValue::new(Box::new(Unsupported(7)))),
+    )
+    .unwrap();
+    let saved = doc.to_saved("Widgets");
+    let path = temp_path("widget.FCStd");
+
+    let error = write_fcstd(&saved, path.to_str().unwrap()).expect_err("unsupported extension");
+    let message = error.to_string();
+    assert!(matches!(error, FcstdWriteError::UnsupportedExtension { .. }));
+    assert!(message.contains("Body.Widget"), "{message}");
+    assert!(message.contains("Test::PropertyWidget"), "{message}");
+    assert!(message.contains("fcstd_members"), "{message}");
+    assert!(!path.exists(), "no partial file is written");
 }
 
 /// The property map of a written document must not contain internal state that
@@ -354,25 +766,24 @@ fn written_document_keeps_the_native_name_and_label_separate() {
     let _ = std::fs::remove_file(&path);
 }
 
-/// A `SavedDocument` whose property status map is non-empty must still write:
-/// statuses are not emitted yet, but they are not a reason to fail either.
+/// A non-zero status map is written (not a reason to fail) and read back.
 #[test]
 fn property_status_does_not_block_writing() {
-    // Keep this test honest: `property_status` is a `SavedObject` field, so the
-    // writer must simply ignore it until item 6.
     let mut doc = Document::new();
     let id = doc.add_object("Box", "App::FeaturePython");
     doc.set_property(id, "Value", Property::Integer(1)).unwrap();
     let mut saved = doc.to_saved("Status");
-    // Nameable only through field access; the integration surface has no
-    // `SavedObject` re-export.
     let mut status = BTreeMap::new();
     status.insert("Value".to_string(), ferrocad_core::prop_status::OUTPUT);
     saved.objects[0].property_status = status;
 
-    let path = temp_path("status.FCStd");
+    let path = temp_path("status-output.FCStd");
     write_fcstd(&saved, path.to_str().unwrap()).expect("write with statuses");
     let read = read_fcstd(path.to_str().unwrap()).unwrap();
     assert_eq!(read.objects[0].properties.get("Value"), Some(&Property::Integer(1)));
+    assert_eq!(
+        read.objects[0].property_status.get("Value"),
+        Some(&ferrocad_core::prop_status::OUTPUT)
+    );
     let _ = std::fs::remove_file(&path);
 }

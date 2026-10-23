@@ -9,15 +9,21 @@
 //!
 //! A written archive contains, in order:
 //!
-//! 1. `Document.xml` — the document and its objects;
-//! 2. `PartShape.brp`, `PartShape1.brp`, … — one member per
-//!    `Part::PropertyPartShape` value, containing the bytes returned by
-//!    [`ExtensionData::save`] (ASCII BREP for the Part module) verbatim.
+//! 1. `Document.xml` — the document, its objects and their dependencies;
+//! 2. `GuiDocument.xml` — one view provider per object that has a
+//!    [`ViewState`](super::ViewState);
+//! 3. `PartShape.brp`, `PartShape1.brp`, … — one member per property whose
+//!    module value supplies `ExtensionData::fcstd_members`. A single value is
+//!    `PartShapeN.brp` (referenced by `<Part file>`); a list is
+//!    `PartShapeN.M.brp` (referenced by `<TopoShape file>` inside
+//!    `<ShapeList>`);
+//! 4. `DiffuseColor`, `DiffuseColor1`, … — one little-endian `u32` count plus
+//!    one packed `0xRRGGBB00` `u32` per per-face colour, referenced by
+//!    `<ColorList file>`.
 //!
-//! There is no `GuiDocument.xml`, no thumbnail and no colour array: `view` is
-//! not written yet (checklist item 7), so a reopened document has no view state.
-//! The ZIP is single-disk and unencrypted; every member is deflated, there are
-//! no data descriptors and no ZIP64 records.
+//! There is no thumbnail. The ZIP is single-disk and unencrypted; every member
+//! is deflated, there are no data descriptors and no ZIP64 records. Member
+//! numbering follows object order, so the archive is deterministic.
 //!
 //! # `Document.xml`
 //!
@@ -38,23 +44,62 @@
 //! | `LinkSub` | `<LinkSub value=… count><Sub value=…>…` |
 //! | `StringList` | `<StringList count><String value=…>…` |
 //! | `Enumeration` | `<Integer value=index>` (+ `<CustomEnumList>` when the allowed values are known) |
-//! | `Extension` (`Part::PropertyPartShape`) | `<Part file="PartShapeN.brp"/>` |
+//! | `Extension` | module payload: `<Part file>` or `<ShapeList><TopoShape file>…` |
 //!
-//! Deliberately **unsupported** for now (an error, never a wrong or silent
-//! member): every other [`Property`] variant (`Matrix`, `Rotation`, colour,
-//! constraint and list-of-geometry values, the non-shape extensions such as
-//! `Part::PropertyTopoShapeList`) and every other extension type. Expressions,
-//! `python_state`, `extensions`, `property_status` (the `status` attribute) and
-//! the valueless `_Property` placeholders for static transient properties are not
-//! written at all yet (item 6); they are documented here as dropped rather than
-//! silently invented.
+//! In addition:
 //!
-//! `SavedObject::label` is authoritative: a `Label` property is always emitted
-//! from it, so a hand-built `SavedDocument` whose `properties` map has no
-//! `Label` entry still round-trips. Property type ids are derived from the
-//! value: a `String` is written as `App::PropertyString` (a `PropertyFile`
-//! cannot be recovered) and a `Quantity` picks `PropertyLength`/`PropertyAngle`
-//! from its unit signature (areas and volumes fall back to `PropertyLength`).
+//! - `<Objects>` carries `ObjectDeps` derived from `Link`/`LinkList`/`LinkSub`
+//!   properties and from `Object.Property` references in expression sources.
+//! - The object's [`SavedObject::expressions`] are written as
+//!   `<App::PropertyExpressionEngine><ExpressionEngine><Expression path
+//!   expression>`, the same shape the reader's expression pass consumes.
+//!   Self-relative nested paths regain upstream's leading `.`.
+//! - [`SavedObject::property_status`] is translated back to upstream's internal
+//!   `Property::Status` bits and written as the `status` attribute.
+//! - A static transient property (present in `property_status`, absent from
+//!   `properties`) is a valueless `<_Property>` placeholder, as upstream writes
+//!   it. `SavedObject` has no type map, so the placeholder omits `type`; the
+//!   reader ignores the element either way and the property falls back to its
+//!   constructor default.
+//! - [`SavedObject::extensions`] becomes `<Extensions><Extension type name>`.
+//!
+//! # `GuiDocument.xml`
+//!
+//! One `<ViewProvider name>` per object with a view, in object order:
+//!
+//! | [`ViewState`](super::ViewState) | Element |
+//! | --- | --- |
+//! | `visibility` | `<Property name="Visibility" type="App::PropertyBool"><Bool value=…>` |
+//! | `transparency` | `<Property name="Transparency" type="App::PropertyInteger"><Integer value=…>` |
+//! | `effective_color()` | `<Property name="ShapeColor" type="App::PropertyColor"><PropertyColor value="0xRRGGBB00">` |
+//! | `diffuse_color` (when set) | `<Property name="DiffuseColor" type="App::PropertyColorList"><ColorList file="DiffuseColorN">` |
+//! | `display_mode` | `<Property name="DisplayMode" type="App::PropertyEnumeration"><Integer value="0">` |
+//!
+//! `DisplayMode` needs a name→index table per view-provider type; none exists in
+//! the model yet, so index 0 is written (the first entry of every upstream
+//! provider's mode list). `ShapeAppearance` and `ShapeMaterial` are not written.
+//! `DiffuseColor` is only written when the view state has explicit per-face
+//! colours; `None` means "derive from the shape" and must not be fabricated.
+//!
+//! # Deliberately unsupported
+//!
+//! - Every other [`Property`] variant (`Matrix`, `Rotation`, colour, constraint
+//!   and list-of-geometry values) errors with
+//!   [`FcstdWriteError::UnsupportedProperty`] naming the object and property.
+//! - A module value whose `ExtensionData::fcstd_members` is `None` errors with
+//!   [`FcstdWriteError::UnsupportedExtension`] naming its type.
+//! - `python_state` is **not** written. FerroCAD's state is a base64 pickle of
+//!   its own `{"attrs", "proxy"}` envelope (see `capture_object_state`), not the
+//!   proxy pickle upstream's `<Python value="…">` field expects; writing it
+//!   verbatim would make upstream restore the wrong thing. It is reported in
+//!   [`WriteReport::dropped`] instead of being lost silently.
+//!
+//! Property type ids are derived from the value: a `String` is written as
+//! `App::PropertyString` (a `PropertyFile` cannot be recovered) and a `Quantity`
+//! picks `PropertyLength`/`PropertyAngle` from its unit signature (areas and
+//! volumes fall back to `PropertyLength`). `SavedObject::label` is
+//! authoritative: a `Label` property is always emitted from it, so a hand-built
+//! `SavedDocument` whose `properties` map has no `Label` entry still round-trips.
 
 use std::fmt;
 use std::io::{self, Write};
@@ -63,6 +108,7 @@ use flate2::write::DeflateEncoder;
 use flate2::Compression;
 
 use super::{SavedDocument, SavedObject};
+use crate::expr;
 use crate::property::Property;
 use crate::quantity::Quantity;
 use crate::unit::Unit;
@@ -73,11 +119,33 @@ pub const DOCUMENT_SCHEMA_VERSION: u32 = 4;
 /// The `Document` file version this writer emits.
 pub const DOCUMENT_FILE_VERSION: u32 = 1;
 
+/// The `GuiDocument` schema version this writer emits (upstream writes 1).
+pub const GUI_DOCUMENT_SCHEMA_VERSION: u32 = 1;
+
 /// `ProgramVersion` written into `Document.xml`.
 pub const PROGRAM_VERSION: &str = concat!("FerroCAD ", env!("CARGO_PKG_VERSION"));
 
-/// The only module payload member that is written today.
-const PART_SHAPE_TYPE: &str = "Part::PropertyPartShape";
+/// What a successful save could not represent.
+///
+/// Nothing is dropped silently: a value without an upstream `.FCStd`
+/// representation is either an error (properties, extension payloads) or listed
+/// here (Python state, see [`WriteReport::dropped`]).
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
+pub struct WriteReport {
+    dropped: Vec<String>,
+}
+
+impl WriteReport {
+    /// One human-readable note per value that was skipped.
+    pub fn dropped(&self) -> &[String] {
+        &self.dropped
+    }
+
+    /// Whether anything was skipped.
+    pub fn is_empty(&self) -> bool {
+        self.dropped.is_empty()
+    }
+}
 
 /// Errors raised while writing a binary `.FCStd` file.
 #[derive(Debug)]
@@ -86,7 +154,7 @@ pub enum FcstdWriteError {
     Io(io::Error),
     /// The archive would need ZIP64 (over 4 GiB, or over 65535 members).
     TooLarge(String),
-    /// A module-owned property is not representable as an `.FCStd` member yet.
+    /// A module-owned property has no upstream `.FCStd` representation.
     UnsupportedExtension {
         object: String,
         property: String,
@@ -113,9 +181,9 @@ impl fmt::Display for FcstdWriteError {
                 type_name,
             } => write!(
                 f,
-                "cannot write '{object}.{property}' of type '{type_name}': only \
-                 '{PART_SHAPE_TYPE}' has a .FCStd member yet (shape lists and other \
-                 module payloads are checklist item 6)"
+                "cannot write '{object}.{property}' of type '{type_name}': this module \
+                 value has no .FCStd payload (its ExtensionData::fcstd_members returned \
+                 None), so the save would lose it"
             ),
             FcstdWriteError::UnsupportedProperty {
                 object,
@@ -152,24 +220,42 @@ impl From<io::Error> for FcstdWriteError {
 /// Write `doc` to `path` as a binary `.FCStd` archive.
 ///
 /// This is a direct API: [`super::format::write`] still emits the native JSON
-/// placeholder for `DocumentFormat::Fcstd`.
+/// placeholder for `DocumentFormat::Fcstd`. Use
+/// [`write_fcstd_with_report`] to learn what was skipped.
 pub fn write_fcstd(doc: &SavedDocument, path: &str) -> Result<(), FcstdWriteError> {
-    let bytes = encode_fcstd(doc)?;
-    std::fs::write(path, bytes).map_err(FcstdWriteError::Io)
+    write_fcstd_with_report(doc, path).map(|_| ())
+}
+
+/// Like [`write_fcstd`], but returns the report of skipped values.
+pub fn write_fcstd_with_report(
+    doc: &SavedDocument,
+    path: &str,
+) -> Result<WriteReport, FcstdWriteError> {
+    let (bytes, report) = encode_fcstd_with_report(doc)?;
+    std::fs::write(path, bytes)?;
+    Ok(report)
 }
 
 /// Build the `.FCStd` archive in memory (the file-writing half is [`write_fcstd`]).
 pub fn encode_fcstd(doc: &SavedDocument) -> Result<Vec<u8>, FcstdWriteError> {
-    let mut shape_members: Vec<Member> = Vec::new();
-    let mut shape_index = 0usize;
-    let xml = document_xml(doc, &mut shape_members, &mut shape_index)?;
+    encode_fcstd_with_report(doc).map(|(bytes, _)| bytes)
+}
+
+/// Build the archive and return what could not be represented.
+pub fn encode_fcstd_with_report(
+    doc: &SavedDocument,
+) -> Result<(Vec<u8>, WriteReport), FcstdWriteError> {
+    let mut ctx = Context::default();
+    let xml = document_xml(doc, &mut ctx)?;
+    let gui_xml = gui_document_xml(doc, &mut ctx);
 
     let mut zip = ZipWriter::new();
     zip.add("Document.xml", xml.as_bytes())?;
-    for member in &shape_members {
+    zip.add("GuiDocument.xml", gui_xml.as_bytes())?;
+    for member in ctx.payload_members.iter().chain(&ctx.colour_members) {
         zip.add(&member.name, &member.data)?;
     }
-    zip.finish()
+    Ok((zip.finish()?, ctx.report))
 }
 
 // ---------------------------------------------------------------------------
@@ -181,11 +267,18 @@ struct Member {
     data: Vec<u8>,
 }
 
-fn document_xml(
-    doc: &SavedDocument,
-    shapes: &mut Vec<Member>,
-    shape_index: &mut usize,
-) -> Result<String, FcstdWriteError> {
+/// State threaded through the two XML writers: member allocators (stable,
+/// deterministic numbering in object order) and the drop report.
+#[derive(Default)]
+struct Context {
+    payload_members: Vec<Member>,
+    colour_members: Vec<Member>,
+    payload_index: usize,
+    colour_index: usize,
+    report: WriteReport,
+}
+
+fn document_xml(doc: &SavedDocument, ctx: &mut Context) -> Result<String, FcstdWriteError> {
     let mut xml = String::new();
     xml.push_str("<?xml version='1.0' encoding='utf-8'?>\n");
     xml.push_str(&format!(
@@ -202,8 +295,34 @@ fn document_xml(
     ));
     xml.push_str("    </Properties>\n");
 
-    // `<Objects>` carries the type ids; `<ObjectData>` carries the values.
-    xml.push_str(&format!("    <Objects Count=\"{}\">\n", doc.objects.len()));
+    // `<Objects>` carries the type ids and the dependency graph;
+    // `<ObjectData>` carries the values.
+    xml.push_str(&format!(
+        "    <Objects Count=\"{}\" Dependencies=\"1\">\n",
+        doc.objects.len()
+    ));
+    for object in &doc.objects {
+        let deps = object_deps(doc, object);
+        if deps.is_empty() {
+            xml.push_str(&format!(
+                "        <ObjectDeps Name=\"{}\" Count=\"0\"/>\n",
+                escape_attr(&object.name)
+            ));
+        } else {
+            xml.push_str(&format!(
+                "        <ObjectDeps Name=\"{}\" Count=\"{}\">\n",
+                escape_attr(&object.name),
+                deps.len()
+            ));
+            for dep in deps {
+                xml.push_str(&format!(
+                    "            <Dep Name=\"{}\"/>\n",
+                    escape_attr(&dep)
+                ));
+            }
+            xml.push_str("        </ObjectDeps>\n");
+        }
+    }
     for object in &doc.objects {
         xml.push_str(&format!(
             "        <Object type=\"{}\" name=\"{}\"/>\n",
@@ -215,18 +334,86 @@ fn document_xml(
 
     xml.push_str(&format!("    <ObjectData Count=\"{}\">\n", doc.objects.len()));
     for object in &doc.objects {
-        write_object(&mut xml, object, shapes, shape_index)?;
+        write_object(&mut xml, object, ctx)?;
     }
     xml.push_str("    </ObjectData>\n");
     xml.push_str("</Document>\n");
     Ok(xml)
 }
 
+/// Direct dependencies of `object`, in property order then expression order.
+///
+/// Links to unknown names and to the object itself are skipped: upstream only
+/// ever writes existing objects, and a self-edge would make the graph cyclic.
+/// Duplicates are kept, as upstream keeps one `<Dep>` per link.
+fn object_deps(doc: &SavedDocument, object: &SavedObject) -> Vec<String> {
+    let mut deps = Vec::new();
+    for (name, value) in &object.properties {
+        if name == "Label" {
+            continue;
+        }
+        match value {
+            Property::Link(target) => {
+                if target != &object.name && doc.objects.iter().any(|o| &o.name == target) {
+                    deps.push(target.clone());
+                }
+            }
+            Property::LinkList(targets) => {
+                for target in targets {
+                    if target != &object.name && doc.objects.iter().any(|o| &o.name == target) {
+                        deps.push(target.clone());
+                    }
+                }
+            }
+            Property::LinkSub(target, _) => {
+                if target != &object.name && doc.objects.iter().any(|o| &o.name == target) {
+                    deps.push(target.clone());
+                }
+            }
+            _ => {}
+        }
+    }
+    for source in object.expressions.values() {
+        if let Ok(parsed) = expr::parse(source) {
+            let mut refs = Vec::new();
+            expression_object_refs(&parsed, &mut refs);
+            for target in refs {
+                if target != object.name && doc.objects.iter().any(|o| o.name == target) {
+                    deps.push(target);
+                }
+            }
+        }
+    }
+    deps
+}
+
+/// Object names referenced by `Object.Property` paths in an expression
+/// (self-relative `.<prop>` paths reference the object itself).
+fn expression_object_refs(expr: &expr::Expr, out: &mut Vec<String>) {
+    match expr {
+        expr::Expr::Number(_) => {}
+        expr::Expr::Var(name) => {
+            if name.starts_with('.') {
+                return;
+            }
+            if let Some((object, _)) = name.split_once('.') {
+                if !object.is_empty() && !out.iter().any(|n| n == object) {
+                    out.push(object.to_string());
+                }
+            }
+        }
+        expr::Expr::UnaryNeg(inner) => expression_object_refs(inner, out),
+        expr::Expr::Binary(left, _, right) => {
+            expression_object_refs(left, out);
+            expression_object_refs(right, out);
+        }
+    }
+}
+
 fn write_object(
     out: &mut String,
     object: &SavedObject,
-    shapes: &mut Vec<Member>,
-    shape_index: &mut usize,
+    ctx: &mut Context,
 ) -> Result<(), FcstdWriteError> {
     // `Label` is always regenerated from `object.label` (see the module docs).
     let properties: Vec<(&String, &Property)> = object
@@ -235,25 +422,142 @@ fn write_object(
         .filter(|(name, _)| name.as_str() != "Label")
         .collect();
 
+    // Static transient properties have a status but no value: upstream writes a
+    // valueless `_Property` so the property falls back to its constructor
+    // default on restore. `SavedObject` keeps no type id for them, so `type` is
+    // omitted (the reader ignores `_Property` either way).
+    let placeholders: Vec<(&String, u32)> = object
+        .property_status
+        .iter()
+        .filter(|(name, _)| name.as_str() != "Label" && !object.properties.contains_key(*name))
+        .map(|(name, &status)| (name, status))
+        .collect();
+
+    let has_expressions = !object.expressions.is_empty();
+    let count = properties.len() + placeholders.len() + 1 + usize::from(has_expressions);
+
+    let extensions = if object.extensions.is_empty() {
+        String::new()
+    } else {
+        " Extensions=\"True\"".to_string()
+    };
     out.push_str(&format!(
-        "        <Object name=\"{}\">\n",
+        "        <Object name=\"{}\"{extensions}>\n",
         escape_attr(&object.name)
     ));
+
+    if !object.extensions.is_empty() {
+        out.push_str(&format!(
+            "            <Extensions Count=\"{}\">\n",
+            object.extensions.len()
+        ));
+        for extension in &object.extensions {
+            // Our model stores only the registered type id; upstream's element
+            // also carries the class name, which is the part after `::`.
+            let short = extension.rsplit("::").next().unwrap_or(extension);
+            out.push_str(&format!(
+                "                <Extension type=\"{}\" name=\"{}\">\n                </Extension>\n",
+                escape_attr(extension),
+                escape_attr(short)
+            ));
+        }
+        out.push_str("            </Extensions>\n");
+    }
+
     out.push_str(&format!(
-        "            <Properties Count=\"{}\">\n",
-        properties.len() + 1
+        "            <Properties Count=\"{count}\" TransientCount=\"{}\">\n",
+        placeholders.len()
     ));
+    for (name, status) in &placeholders {
+        out.push_str(&format!(
+            "                <_Property name=\"{}\" status=\"{}\"/>\n",
+            escape_attr(name),
+            upstream_status(*status)
+        ));
+    }
     out.push_str(&format!(
         "                <Property name=\"Label\" type=\"App::PropertyString\">\
          <String value=\"{}\"/></Property>\n",
         escape_attr(&object.label)
     ));
     for (name, value) in properties {
-        write_property(out, object, name, value, shapes, shape_index)?;
+        let status = object.property_status.get(name).copied().unwrap_or(0);
+        write_property(out, object, name, value, status, ctx)?;
+    }
+    if has_expressions {
+        write_expressions(out, object);
     }
     out.push_str("            </Properties>\n");
     out.push_str("        </Object>\n");
+
+    if object.python_state.is_some() {
+        ctx.report.dropped.push(format!(
+            "{}.python_state: FerroCAD stores a base64 pickle of its own \
+             {{\"attrs\", \"proxy\"}} envelope, not the proxy pickle upstream's \
+             <Python value> field expects; skipped",
+            object.name
+        ));
+    }
     Ok(())
+}
+
+/// `<App::PropertyExpressionEngine>` matching
+/// [`super::fcstd::read_expressions`]: nested self-relative paths regain the
+/// leading `.` that our map strips.
+fn write_expressions(out: &mut String, object: &SavedObject) {
+    out.push_str(
+        "                <Property name=\"ExpressionEngine\" type=\"App::PropertyExpressionEngine\">\n",
+    );
+    out.push_str(&format!(
+        "                    <ExpressionEngine count=\"{}\">\n",
+        object.expressions.len()
+    ));
+    for (path, source) in &object.expressions {
+        let path = if path.contains('.') {
+            format!(".{path}")
+        } else {
+            path.clone()
+        };
+        out.push_str(&format!(
+            "                        <Expression path=\"{}\" expression=\"{}\"/>\n",
+            escape_attr(&path),
+            escape_attr(source)
+        ));
+    }
+    out.push_str("                    </ExpressionEngine>\n");
+    out.push_str("                </Property>\n");
+}
+
+/// Translate our public status mask back to upstream's internal
+/// `Property::Status` bit positions (the inverse of
+/// [`super::fcstd`]'s `translate_status`).
+fn upstream_status(mask: u32) -> u64 {
+    use crate::prop_status as ps;
+
+    let mut raw = 0u64;
+    let mut set = |flag: u32, bit: u32| {
+        if mask & flag != 0 {
+            raw |= 1u64 << bit;
+        }
+    };
+    set(ps::DYNAMIC, 21); // PropDynamic
+    set(ps::NOPERSIST, 22); // PropNoPersist
+    set(ps::NORECOMPUTE, 23); // PropNoRecompute
+    set(ps::READONLY, 24); // PropReadOnly
+    set(ps::TRANSIENT, 25); // PropTransient
+    set(ps::HIDDEN, 26); // PropHidden
+    set(ps::OUTPUT, 27); // PropOutput
+    set(ps::INPUT, 28); // PropInput
+    raw
+}
+
+fn status_attr(status: u32) -> String {
+    let raw = upstream_status(status);
+    if raw == 0 {
+        String::new()
+    } else {
+        format!(" status=\"{raw}\"")
+    }
 }
 
 fn write_property(
@@ -261,27 +565,28 @@ fn write_property(
     object: &SavedObject,
     name: &str,
     value: &Property,
-    shapes: &mut Vec<Member>,
-    shape_index: &mut usize,
+    status: u32,
+    ctx: &mut Context,
 ) -> Result<(), FcstdWriteError> {
     let escaped = escape_attr(name);
+    let status = status_attr(status);
     match value {
         Property::String(v) => out.push_str(&format!(
-            "                <Property name=\"{escaped}\" type=\"App::PropertyString\">\
+            "                <Property name=\"{escaped}\" type=\"App::PropertyString\"{status}>\
              <String value=\"{}\"/></Property>\n",
             escape_attr(v)
         )),
         Property::Integer(v) => out.push_str(&format!(
-            "                <Property name=\"{escaped}\" type=\"App::PropertyInteger\">\
+            "                <Property name=\"{escaped}\" type=\"App::PropertyInteger\"{status}>\
              <Integer value=\"{v}\"/></Property>\n"
         )),
         Property::Float(v) => out.push_str(&format!(
-            "                <Property name=\"{escaped}\" type=\"App::PropertyFloat\">\
+            "                <Property name=\"{escaped}\" type=\"App::PropertyFloat\"{status}>\
              <Float value=\"{}\"/></Property>\n",
             number(*v)
         )),
         Property::Bool(v) => out.push_str(&format!(
-            "                <Property name=\"{escaped}\" type=\"App::PropertyBool\">\
+            "                <Property name=\"{escaped}\" type=\"App::PropertyBool\"{status}>\
              <Bool value=\"{}\"/></Property>\n",
             if *v { "true" } else { "false" }
         )),
@@ -294,13 +599,13 @@ fn write_property(
                 "App::PropertyLength"
             };
             out.push_str(&format!(
-                "                <Property name=\"{escaped}\" type=\"{type_name}\">\
+                "                <Property name=\"{escaped}\" type=\"{type_name}\"{status}>\
                  <Float value=\"{}\"/></Property>\n",
                 number(q.value())
             ));
         }
         Property::Vector(v) => out.push_str(&format!(
-            "                <Property name=\"{escaped}\" type=\"App::PropertyVector\">\
+            "                <Property name=\"{escaped}\" type=\"App::PropertyVector\"{status}>\
              <PropertyVector valueX=\"{}\" valueY=\"{}\" valueZ=\"{}\"/></Property>\n",
             number(v.x),
             number(v.y),
@@ -311,7 +616,7 @@ fn write_property(
             let axis = rotation.axis();
             // Our quaternion is [w, x, y, z]; upstream stores Q0=x … Q3=w.
             out.push_str(&format!(
-                "                <Property name=\"{escaped}\" type=\"App::PropertyPlacement\">\
+                "                <Property name=\"{escaped}\" type=\"App::PropertyPlacement\"{status}>\
                  <PropertyPlacement Px=\"{}\" Py=\"{}\" Pz=\"{}\" Q0=\"{}\" Q1=\"{}\" \
                  Q2=\"{}\" Q3=\"{}\" A=\"{}\" Ox=\"{}\" Oy=\"{}\" Oz=\"{}\"/></Property>\n",
                 number(p.base.x),
@@ -328,13 +633,13 @@ fn write_property(
             ));
         }
         Property::Link(v) => out.push_str(&format!(
-            "                <Property name=\"{escaped}\" type=\"App::PropertyLink\">\
+            "                <Property name=\"{escaped}\" type=\"App::PropertyLink\"{status}>\
              <Link value=\"{}\"/></Property>\n",
             escape_attr(v)
         )),
         Property::LinkList(values) => {
             out.push_str(&format!(
-                "                <Property name=\"{escaped}\" type=\"App::PropertyLinkList\">\n"
+                "                <Property name=\"{escaped}\" type=\"App::PropertyLinkList\"{status}>\n"
             ));
             out.push_str(&format!("                    <LinkList count=\"{}\">\n", values.len()));
             for v in values {
@@ -348,7 +653,7 @@ fn write_property(
         }
         Property::LinkSub(target, subs) => {
             out.push_str(&format!(
-                "                <Property name=\"{escaped}\" type=\"App::PropertyLinkSub\">\n"
+                "                <Property name=\"{escaped}\" type=\"App::PropertyLinkSub\"{status}>\n"
             ));
             out.push_str(&format!(
                 "                    <LinkSub value=\"{}\" count=\"{}\">\n",
@@ -366,7 +671,7 @@ fn write_property(
         }
         Property::StringList(values) => {
             out.push_str(&format!(
-                "                <Property name=\"{escaped}\" type=\"App::PropertyStringList\">\n"
+                "                <Property name=\"{escaped}\" type=\"App::PropertyStringList\"{status}>\n"
             ));
             out.push_str(&format!(
                 "                    <StringList count=\"{}\">\n",
@@ -383,7 +688,7 @@ fn write_property(
         }
         Property::Enumeration(values, index) => {
             out.push_str(&format!(
-                "                <Property name=\"{escaped}\" type=\"App::PropertyEnumeration\">\n"
+                "                <Property name=\"{escaped}\" type=\"App::PropertyEnumeration\"{status}>\n"
             ));
             if values.is_empty() {
                 out.push_str(&format!(
@@ -410,29 +715,56 @@ fn write_property(
         }
         Property::Extension(value) => {
             let type_name = value.type_name();
-            if type_name != PART_SHAPE_TYPE {
+            // The module owns both the encoding and the element form; core only
+            // allocates the `PartShapeN` stem and places the bytes verbatim.
+            let Some(members) = value.data().fcstd_members() else {
                 return Err(FcstdWriteError::UnsupportedExtension {
                     object: object.name.clone(),
                     property: name.to_string(),
                     type_name: type_name.to_string(),
                 });
-            }
-            let member = if *shape_index == 0 {
-                "PartShape.brp".to_string()
-            } else {
-                format!("PartShape{}.brp", *shape_index)
             };
-            *shape_index += 1;
-            // The module owns the encoding; core places the bytes verbatim.
-            let data = value.data().save();
-            shapes.push(Member {
-                name: member.clone(),
-                data,
-            });
-            out.push_str(&format!(
-                "                <Property name=\"{escaped}\" type=\"{PART_SHAPE_TYPE}\">\
-                 <Part file=\"{member}\"/></Property>\n"
-            ));
+
+            let stem = if ctx.payload_index == 0 {
+                "PartShape".to_string()
+            } else {
+                format!("PartShape{}", ctx.payload_index)
+            };
+            ctx.payload_index += 1;
+
+            if members.len() == 1 && members[0].0.is_empty() {
+                let member = format!("{stem}.brp");
+                ctx.payload_members.push(Member {
+                    name: member.clone(),
+                    data: members.into_iter().next().unwrap().1,
+                });
+                out.push_str(&format!(
+                    "                <Property name=\"{escaped}\" type=\"{}\"{status}>\
+                     <Part file=\"{member}\"/></Property>\n",
+                    escape_attr(type_name)
+                ));
+            } else {
+                out.push_str(&format!(
+                    "                <Property name=\"{escaped}\" type=\"{}\"{status}>\n",
+                    escape_attr(type_name)
+                ));
+                out.push_str(&format!(
+                    "                    <ShapeList count=\"{}\">\n",
+                    members.len()
+                ));
+                for (suffix, data) in members {
+                    let member = format!("{stem}.{suffix}.brp");
+                    ctx.payload_members.push(Member {
+                        name: member.clone(),
+                        data,
+                    });
+                    out.push_str(&format!(
+                        "                        <TopoShape file=\"{member}\"/>\n"
+                    ));
+                }
+                out.push_str("                    </ShapeList>\n");
+                out.push_str("                </Property>\n");
+            }
         }
         other => {
             return Err(FcstdWriteError::UnsupportedProperty {
@@ -443,6 +775,105 @@ fn write_property(
         }
     }
     Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// GuiDocument.xml
+// ---------------------------------------------------------------------------
+
+fn gui_document_xml(doc: &SavedDocument, ctx: &mut Context) -> String {
+    let views: Vec<(&SavedObject, &super::ViewState)> = doc
+        .objects
+        .iter()
+        .filter_map(|object| object.view.as_ref().map(|view| (object, view)))
+        .collect();
+
+    let mut xml = String::new();
+    xml.push_str("<?xml version='1.0' encoding='utf-8'?>\n");
+    xml.push_str(&format!(
+        "<Document SchemaVersion=\"{GUI_DOCUMENT_SCHEMA_VERSION}\">\n"
+    ));
+    xml.push_str(&format!(
+        "    <ViewProviderData Count=\"{}\">\n",
+        views.len()
+    ));
+    for (object, view) in views {
+        let colour = hex_colour(view.effective_color());
+        let diffuse = view.diffuse_color.as_ref();
+        let count = 4 + usize::from(diffuse.is_some());
+
+        xml.push_str(&format!(
+            "        <ViewProvider name=\"{}\">\n",
+            escape_attr(&object.name)
+        ));
+        xml.push_str(&format!(
+            "            <Properties Count=\"{count}\" TransientCount=\"0\">\n"
+        ));
+        xml.push_str(&format!(
+            "                <Property name=\"Visibility\" type=\"App::PropertyBool\">\
+             <Bool value=\"{}\"/></Property>\n",
+            if view.visibility { "true" } else { "false" }
+        ));
+        xml.push_str(&format!(
+            "                <Property name=\"Transparency\" type=\"App::PropertyInteger\">\
+             <Integer value=\"{}\"/></Property>\n",
+            view.transparency
+        ));
+        xml.push_str(&format!(
+            "                <Property name=\"ShapeColor\" type=\"App::PropertyColor\">\
+             <PropertyColor value=\"{colour}\"/></Property>\n"
+        ));
+        if let Some(colors) = diffuse {
+            let member = if ctx.colour_index == 0 {
+                "DiffuseColor".to_string()
+            } else {
+                format!("DiffuseColor{}", ctx.colour_index)
+            };
+            ctx.colour_index += 1;
+
+            // Upstream `PropertyColorList::SaveDocFile`: a little-endian u32
+            // count, then one packed `0xRRGGBB00` u32 per colour. (Verified
+            // against TestTangentMode3-0.21.FCStd: count 1 then 00 80 79 72,
+            // i.e. 0x72798000.)
+            let mut data = Vec::with_capacity(4 * (colors.len() + 1));
+            put_u32(&mut data, colors.len() as u32);
+            for color in colors {
+                put_u32(&mut data, packed_rgb(*color));
+            }
+            ctx.colour_members.push(Member {
+                name: member.clone(),
+                data,
+            });
+
+            xml.push_str(&format!(
+                "                <Property name=\"DiffuseColor\" type=\"App::PropertyColorList\">\
+                 <ColorList file=\"{member}\"/></Property>\n"
+            ));
+        }
+        // DisplayMode is an index into the view provider's mode list. Our model
+        // stores the name, not the index, and no per-type table exists yet, so
+        // write 0 (the first mode of every upstream provider).
+        xml.push_str(
+            "                <Property name=\"DisplayMode\" type=\"App::PropertyEnumeration\">\
+             <Integer value=\"0\"/></Property>\n",
+        );
+        xml.push_str("            </Properties>\n");
+        xml.push_str("        </ViewProvider>\n");
+    }
+    xml.push_str("    </ViewProviderData>\n");
+    xml.push_str("</Document>\n");
+    xml
+}
+
+/// `0xRRGGBB00` as upstream writes `PropertyColor` values (alpha byte zero).
+fn hex_colour(color: super::Color) -> String {
+    format!("0x{:08X}", packed_rgb(color))
+}
+
+/// Pack an RGBA colour as `0xRRGGBB00`: the RGB bytes, with the alpha byte
+/// cleared (upstream's colour members ignore alpha here).
+fn packed_rgb(color: super::Color) -> u32 {
+    super::color_to_packed(color) & 0xFFFF_FF00
 }
 
 fn is_angle(q: &Quantity) -> bool {
@@ -654,6 +1085,9 @@ mod tests {
         fn save(&self) -> Vec<u8> {
             self.0.clone()
         }
+        fn fcstd_members(&self) -> Option<Vec<(String, Vec<u8>)>> {
+            Some(vec![(String::new(), self.0.clone())])
+        }
         fn debug(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
             write!(f, "FakeShape({} bytes)", self.0.len())
         }
@@ -797,7 +1231,7 @@ mod tests {
         let entries = members(&bytes);
         assert_eq!(
             entries.iter().map(|(name, ..)| name.as_str()).collect::<Vec<_>>(),
-            ["Document.xml", "PartShape.brp"]
+            ["Document.xml", "GuiDocument.xml", "PartShape.brp"]
         );
         for (name, method, ..) in &entries {
             assert_eq!(*method, 8, "{name} is deflated");
@@ -811,6 +1245,8 @@ mod tests {
         assert!(xml.contains("<String value=\"Doc &amp; &lt;x&gt;\"/>"));
         assert!(xml.contains("<Object type=\"App::FeaturePython\" name=\"Box\"/>"));
         assert!(xml.contains("<Object name=\"Box\">"));
+        assert!(xml.contains("<Objects Count=\"1\" Dependencies=\"1\">"));
+        assert!(xml.contains("<ObjectDeps Name=\"Box\" Count=\"0\"/>"));
 
         // Label comes from `SavedObject.label`, so it survives XML escaping.
         assert!(xml.contains("<String value=\"A &quot;box&quot; &amp; &lt;tag&gt;\"/>"));
@@ -836,14 +1272,19 @@ mod tests {
         assert!(xml.contains("<Property name=\"MapMode\" type=\"App::PropertyEnumeration\">"));
         assert!(xml.contains("<Integer value=\"5\"/>"));
         assert!(xml.contains("<Part file=\"PartShape.brp\"/>"));
-        assert!(!xml.contains("ExpressionEngine"), "expressions are item 6");
+        assert!(!xml.contains("ExpressionEngine"), "no expressions in this sample");
         assert!(
             !xml.contains("App::PropertyPythonObject"),
-            "python_state is item 6"
+            "python_state is reported, not written"
         );
 
         // The XML parses (a cheap well-formedness check).
         roxmltree::Document::parse(&xml).expect("well-formed Document.xml");
+
+        let gui = read_member(&bytes, "GuiDocument.xml");
+        let gui = String::from_utf8(gui).unwrap();
+        roxmltree::Document::parse(&gui).expect("well-formed GuiDocument.xml");
+        assert!(gui.contains("<ViewProviderData Count=\"0\">"));
 
         // The shape member holds the module bytes verbatim.
         assert_eq!(read_member(&bytes, "PartShape.brp"), b"fake brep payload\n");

@@ -133,6 +133,20 @@ impl ExtensionData for ShapeListProperty {
         out
     }
 
+    /// Upstream `Part::PropertyTopoShapeList` writes one member per entry
+    /// (`PartShapeN.0.brp`, `PartShapeN.1.brp`, …), so core does not have to
+    /// understand the length-framed `save()` blob.
+    fn fcstd_members(&self) -> Option<Vec<(String, Vec<u8>)>> {
+        let backend = crate::backend();
+        Some(
+            self.shapes
+                .iter()
+                .enumerate()
+                .map(|(index, shape)| (index.to_string(), backend.save_shape(shape)))
+                .collect(),
+        )
+    }
+
     fn debug(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "ShapeListProperty({} shapes)", self.shapes.len())
     }

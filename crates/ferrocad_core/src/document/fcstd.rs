@@ -19,7 +19,8 @@
 //! `App::PropertyStringList`, `App::PropertyEnumeration`,
 //! `App::PropertyLength`, `App::PropertyAngle` and `App::PropertyExpressionEngine`.
 //! `App::PropertyPythonObject` is read into [`SavedObject::python_state`] rather
-//! than into a property. Everything else is ignored.
+//! than into a property. `_Property` placeholders (static transient properties
+//! with no value) contribute their `status` only. Everything else is ignored.
 //!
 //! Lossiness, by design:
 //!
@@ -363,6 +364,19 @@ fn parse_document(xml: &str, name: String) -> Result<SavedDocument, FcstdError> 
             let mut python_state: Option<String> = None;
 
             if let Some(props) = child(object, "Properties") {
+                // Static transient properties are valueless `_Property`
+                // placeholders; only their status is persisted.
+                for prop in element_children(props, "_Property") {
+                    let (Some(prop_name), Some(status)) =
+                        (prop.attribute("name"), prop.attribute("status"))
+                    else {
+                        continue;
+                    };
+                    let mask = translate_status(status);
+                    if mask != crate::prop_status::NONE {
+                        property_status.insert(prop_name.to_string(), mask);
+                    }
+                }
                 // Only persistable `<Property>` children are read; `<_Property>`
                 // entries are transient placeholders with no value.
                 for prop in element_children(props, "Property") {

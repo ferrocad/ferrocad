@@ -81,6 +81,12 @@ impl ExtensionData for ShapeProperty {
         }
     }
 
+    /// Upstream `Part::PropertyPartShape` writes one `PartShapeN.brp` member and
+    /// references it from a `<Part file="…"/>` element.
+    fn fcstd_members(&self) -> Option<Vec<(String, Vec<u8>)>> {
+        Some(vec![(String::new(), self.save())])
+    }
+
     fn debug(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self.shape.as_ref() {
             Some(shape) => write!(f, "ShapeProperty({shape:?})"),

@@ -23,7 +23,8 @@ use crate::property_types;
 /// `Send` (OCCT's `TopoDS_Shape`) is stored as-is; exclusive access is provided by the
 /// document's own `Mutex`, not by a second lock inside the value.
 ///
-/// Only [`type_name`](ExtensionData::type_name), [`save`](ExtensionData::save) and
+/// Only [`type_name`](ExtensionData::type_name), [`save`](ExtensionData::save),
+/// [`fcstd_members`](ExtensionData::fcstd_members) and
 /// [`clone_box`](ExtensionData::clone_box) cross the core boundary; core never
 /// interprets the bytes.
 pub trait ExtensionData: Send {
@@ -37,6 +38,23 @@ pub trait ExtensionData: Send {
     fn eq(&self, other: &dyn ExtensionData) -> bool;
     /// Serialise the value; core stores the bytes verbatim.
     fn save(&self) -> Vec<u8>;
+    /// The value's `Document.xml` payload for a binary `.FCStd` save.
+    ///
+    /// A module value that upstream persists in separate ZIP members (shapes,
+    /// shape lists) returns them here; core only figures out the member stem and
+    /// writes the bytes verbatim. The tuple is `(suffix, bytes)`:
+    ///
+    /// - one entry with an **empty** suffix is a single payload, written as
+    ///   `PartShapeN.brp` with `<Part file="…"/>`;
+    /// - entries with a non-empty suffix (`"0"`, `"1"`, …) are a list, written
+    ///   as `PartShapeN.M.brp` with `<ShapeList count="…"><TopoShape file="…"/>`.
+    ///
+    /// `None` (the default) means the value has no upstream `.FCStd`
+    /// representation yet; the writer then refuses the save and names the type
+    /// instead of silently dropping the value. Core never interprets the bytes.
+    fn fcstd_members(&self) -> Option<Vec<(String, Vec<u8>)>> {
+        None
+    }
     /// Human-readable form for `Debug`.
     fn debug(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result;
 }

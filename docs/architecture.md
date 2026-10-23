@@ -17,11 +17,13 @@ obvious:
 | --- | --- | --- |
 | `ferrocad_types` | `rlib` | Base value types (FreeCAD's `Base`): `Quantity`/`Unit`, `Vector3`/`Matrix4`/`Rotation`/`Placement`. A **leaf**. |
 | `ferrocad_graphics` | `rlib` | The **neutral graphics primitives**: the draw contract (`DrawPacket`/`RenderQueue`/`DrawBatch`/`Geometry`/`Vertex`/`Topology`, `MeshId`/`Generation`/`PickId`, `StateSnapshot`), the camera/viewport (`Camera`/`Projection`/`Viewport`/`Rect`) and CPU picking (`Ray`/`Hit`). A **leaf** above `ferrocad_types`. |
-| `ferrocad_geom` | `rlib` | The geometry seam: opaque `Shape`, `History`/`ElementRef`/`ElementMap`, and the `GeometryBackend` trait (+ `NullBackend`). No kernel. A **leaf** above `ferrocad_types`. |
+| `ferrocad_geom` | `rlib` | The geometry seam: opaque `Shape`, `History`/`ElementRef`/`ElementMap` (re-exported from `ferrocad_lineage`), and the `GeometryBackend` trait (+ `NullBackend`). No kernel. A **leaf** above `ferrocad_types`/`ferrocad_curves`/`ferrocad_lineage`. |
+| `ferrocad_lineage` | `rlib` | The kernel-independent lineage vocabulary: `ElementRef`/`History`/`ElementMap`, `Lineage`/`ReverseMap`/`MapVersion`/`NamePolicy`, generic over the payload. No geometry, no document, no OCCT. |
 | `ferrocad_occt` | `rlib` | The OCCT implementation of `GeometryBackend` (box/fuse/cut/fillet/place), via `opencascade-sys` + the sibling history bridge. Needs OCCT to build; **not** a default member. |
 | `ferrocad_core` | `rlib` | The pure-Rust engine: documents, properties, DAG, transactions, observers, expressions. No Python, no UI, no OCCT. Depends on `ferrocad_types` (and re-exports it). A **leaf** wrt the kernel. |
 | `ferrocad_py` | `cdylib` | The PyO3 extension, importable as the module `ferrocad`. The only bridge into `ferrocad_core`. |
 | `ferrocad_widgets` | `rlib` | Reusable `bite-gpui` widgets. Depends on **neither** `ferrocad_core` nor `ferrocad_py`. |
+| `ferrocad_ui` | `rlib` | The Qt Designer `.ui` reader (Q1): a typed form tree with source positions, no Qt, no Python and no rendering. **Not** the widget kit (that is `ferrocad_widgets`). |
 | `ferrocad_inventor` | `rlib` | The Coin/Inventor scene core: node AST, state accumulator, mesh compiler, events. Renderer-agnostic; re-exports `ferrocad_graphics`. |
 | `ferrocad_stage` | `rlib` | The modern declarative CAD presentation: `ShapeItem`s on a `Stage`, interactive tools, the `TransformGizmo`, and the `Manipulator`/`InteractionCommit` seam a **workbench** implements to add its own draggable overlay. All compiled straight to `ferrocad_graphics` (no scene graph, no arena). Consumes `ferrocad_geom`'s tessellation vocabulary. Workbench-agnostic: it names no kernel, no document and no module. **Decoupled from `ferrocad_inventor`.** |
 | `ferrocad_part_gui` | `rlib` | The Part workbench's **presentation**: the edge dress-up manipulator (`DressUpScrubber`), its arc math and the `dress_up_scrubber_for`/`fillet_manipulator` factory. Implements `ferrocad_stage::Manipulator`. **No kernel, no document, no `pyo3`, no OCCT.** Linked only by an edition that has Part. |
@@ -164,9 +166,12 @@ ferrocad_types     -> (crates.io only)               [leaf: Quantity, Placement,
 ferrocad_curves    -> ferrocad_types                 [analytic half of Part: curves, wires;
                                                      no Shape, no OCCT, no document]
 ferrocad_graphics  -> ferrocad_types                 [neutral draw contract + camera + pick; leaf]
-ferrocad_geom      -> ferrocad_types, ferrocad_curves
+ferrocad_geom      -> ferrocad_types, ferrocad_curves,
+                      ferrocad_lineage
                                                      [seam: Shape, History, GeometryBackend;
                                                      `make_edge`/`curve_of` cross into curves]
+ferrocad_lineage   -> (no workspace deps)             [name, history, map, policy]
+ferrocad_ui        -> roxmltree                        [.ui reader; no Qt, no gpui]
 ferrocad_occt      -> ferrocad_geom, ferrocad_curves,
                       ferrocad_types, opencascade-sys [kernel backend; never -> core]
 ferrocad_core      -> ferrocad_types                 [re-exports; no OCCT]

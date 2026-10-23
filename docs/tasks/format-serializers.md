@@ -1,9 +1,9 @@
 # Task — split document persistence into two serializers
 
 Status: task (2026-10-23). Records the owner decision of 2026-10-23: native JSON and
-upstream `.FCStd` become **two explicit, independently testable serializers**. F1–F5
+upstream `.FCStd` become **two explicit, independently testable serializers**. F1–F7
 landed 2026-10-23; the `.FCStd` writer is a direct-call API and is not yet wired to
-`saveAs` (F6–F8). Companion
+`saveAs` (F8). Companion
 to [`../architecture/part-draft-layering.md`](../architecture/part-draft-layering.md), the
 [conformance runbook](../workbenches/conformance.md) and
 [`../direction/mvp-path.md`](../direction/mvp-path.md) (§8 decision 3, which this closes).
@@ -183,12 +183,18 @@ list. Quietly losing `PropertyLinkSub` is worse than refusing the save.
 
 `Document.xml` with scalars, quantities (Length/Angle by unit signature), vectors,
 placements, links, link lists/subs, string lists, enumerations (with a `CustomEnumList`
-when the values are known) and `Part::PropertyPartShape` → `<Part file="PartShapeN.brp"/>`.
-It **errors** on shape lists and any other extension type (naming the object, property and
-type), and on variants it cannot represent (Matrix, Rotation, ColorList, scalar/vector
-lists, constraints, `PropertyPythonObject`, FileIncluded). It does **not** yet emit
-`GuiDocument.xml`, expressions, `python_state`, `extensions`, `property_status`,
-`ObjectDeps` or thumbnails.
+when the values are known), expressions and `ObjectDeps`, property `status` bits (static
+transients as valueless `_Property` placeholders), object extensions, and both
+`Part::PropertyPartShape` and `Part::PropertyTopoShapeList` (one `PartShapeN.brp` per
+entry via `ExtensionData::fcstd_members`). `GuiDocument.xml` carries one view provider per
+object with `Visibility`, `Transparency`, `ShapeColor`, `DiffuseColor` (plus the packed
+`DiffuseColorN` members) and `DisplayMode`.
+
+It **errors** on any other extension type (naming the object, property and type), and on
+variants it cannot represent (Matrix, Rotation, ColorList, scalar/vector lists,
+constraints, `PropertyPythonObject`, FileIncluded). `python_state` is FerroCAD's own JSON
+envelope, not an upstream pickle: it is recorded as dropped in the `WriteReport` rather
+than written as `<Python value>`. Thumbnails and `ElementMap` remain follow-ups.
 
 ## 4. Migrating our workflows and docs
 
@@ -243,10 +249,12 @@ to `.ferrocad`. FCStd probes: `ColorPerFaceTest`, `TopoShapeListTest`, `TestLink
 - [x] **5. FCStd ZIP writer behind a direct-call API:** `write_fcstd`/`encode_fcstd`
   with `Document.xml` + `.brp` for `Part::PropertyPartShape`; not wired to `saveAs`.
   **Landed 2026-10-23.**
-- [ ] **6. FCStd writer breadth:** shape lists, expressions, `python_state`/`Proxy`,
-  `ObjectDeps`, no-silent-loss policy.
-- [ ] **7. `GuiDocument.xml`:** `Visibility`, `Transparency`, `ShapeColor`,
-  `DiffuseColor`, `DisplayMode`. Must be green before the switch.
+- [x] **6. FCStd writer breadth:** shape lists, expressions, `ObjectDeps`, statuses,
+  extensions, and a dropped-value report for `python_state`/`Proxy`. **Landed
+  2026-10-23.**
+- [x] **7. `GuiDocument.xml`:** `Visibility`, `Transparency`, `ShapeColor`,
+  `DiffuseColor`, `DisplayMode`, with the packed `DiffuseColorN` members. **Landed
+  2026-10-23.**
 - [ ] **8. Switch.** `saveAs(.FCStd)` emits ZIP; delete `JsonPlaceholder`; add the magic
   assertion; default, `--part` and `--draft` groups unchanged. *Highest risk.*
 - [ ] **9. Follow-ups.** Thumbnail, `ElementMap`, an upstream-FreeCAD open check.
@@ -254,9 +262,9 @@ to `.ferrocad`. FCStd probes: `ColorPerFaceTest`, `TopoShapeListTest`, `TestLink
 ## What is not done (2026-10-23)
 
 - **The `.FCStd` writer is a direct-call API, not the save format.** `write_fcstd`
-  exists, but `saveAs(.FCStd)` still emits the JSON placeholder; shape lists,
-  `GuiDocument.xml`, expressions, `python_state` and the no-silent-loss policy remain
-  F6–F8. (The recovery stub in `python/FreeCAD/__init__.py` is unrelated.)
+  writes a full ZIP including `GuiDocument.xml`, but `saveAs(.FCStd)` still emits the
+  JSON placeholder; F8 is the switch. `python_state` is reported as dropped rather than
+  written as an upstream pickle, and a handful of property variants still error by name.
 - **Module-payload read.** `.brp` members are still skipped by the reader; a document
   written by `write_fcstd` reads back its scalars/links/placements but not its shapes.
 - **Document metadata is not persisted.** `SavedDocument` has no UID, comment, meta or

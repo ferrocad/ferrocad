@@ -1,6 +1,6 @@
 # Qt reduction — taking Qt out of the paths that do not need it
 
-Status: task (2026-10-23). Q0a, Q0b and Q0d landed 2026-10-23; Q1–Q5 remain.
+Status: task (2026-10-23). Q0a, Q0b, Q0d and Q1 landed 2026-10-23; Q2–Q5 remain.
 Backlog entry **P2.3** in
 [`TODO-23-10-2026.md`](../TODO-23-10-2026.md). Companion to
 [`qt-strategy.md`](../workbenches/qt-strategy.md) (§2–§7 remain the design; this is
@@ -146,7 +146,7 @@ split so the smallest Qt removal lands first, before any loader work.
 | **Q0b** | Landed 2026-10-23 | `:/…` reads through plain-Python `QFile`/`QIODevice` over `<mod>/Resources/`; no `PySide6` inheritance. |
 | **Q0c** | Landed (D0 + parameter work) | `lazy_loader`, `Draft_rc`, `Quantity(value, Unit)`, `ParameterGrp.GetStrings`, `src/Ext` on the path |
 | **Q0d** | Landed 2026-10-23 | `tools/draft_contract.py` + `contracts/draft-forms.json`: 19 files, 32 classes, 495 widgets and 72 contract pairs pinned; `--check` reports a delta. |
-| **Q1** | Not started | `ferrocad_ui`: parse all 19 `.ui` files into a form tree (widgets, layouts, properties, spacers, custom-widget registry, combo items); typed errors with source position; no rendering |
+| **Q1** | Landed 2026-10-23 | `ferrocad_ui` parses all 19 `.ui` files into a typed form tree (widgets, layouts, properties, spacers, custom widgets, combo items, tab pages) with source-positioned errors; no rendering. Tests pin 495 widgets and 32 classes. |
 | **Q2** | Not started | `ferrocad_ui_py`: `FreeCADGui.PySideUic.loadUi`, `FormProxy`/`WidgetProxy`/`SignalProxy`, the six-operation layout model, error isolation; panels instantiate and `accept()` headlessly |
 | **Q3** | Not started | Render the six core forms on `ferrocad_widgets`/gpui; async modal behind `FreeCADGui.Control.showDialog/closeDialog` |
 | **Q4** | Not started | `FreeCADGui.Snapper`/`draftToolBar` over `ferrocad_stage`; `PlaneGui` rerouted; line/wire tools; snap bar as checkable commands |
@@ -155,10 +155,11 @@ split so the smallest Qt removal lands first, before any loader work.
 **Landed 2026-10-23.** Q0a/Q0b/Q0d and the D1–D3 guard are in:
 `python/PySide/_qt_stub.py`, the rewritten `python/PySide/__init__.py`,
 `tools/draft_contract.py`, `contracts/draft-forms.json` and
-`tests/test_qt_isolation.py`. A fresh process with `PySide6`/`shiboken*` blocked now
-imports `FreeCAD`, `FreeCADGui` and `from draftutils import params` (160 `Mod/Draft`
-entries), and the `--draft` group is unchanged at 10 passed / 1 failed / 1 load error.
-Q1–Q5 are the remaining slices.
+`tests/test_qt_isolation.py`. Q1 is in as well: `crates/ferrocad_ui` reads all 19 upstream
+forms (495 widgets, 32 classes) with source positions. A fresh process with
+`PySide6`/`shiboken*` blocked imports `FreeCAD`, `FreeCADGui` and
+`from draftutils import params` (160 `Mod/Draft` entries), and the `--draft` group is
+unchanged at 10 passed / 1 failed / 1 load error. Q2–Q5 are the remaining slices.
 
 **Recommendation — priority order.** Q0a + Q0b + the §5 guard first: they are small,
 remove the actual runtime dependency, and unlock D2/D3/D6 without a loader. Then Q0d

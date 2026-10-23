@@ -749,12 +749,13 @@ will be useful once the Draft/Part GUI arrives, but it is not part of D.
 2026-10-21/22: the vendored `lazy_loader`, the `Draft_rc` stub,
 `Quantity(value, Unit)`, `ParameterGrp.GetStrings`, the `--draft` conformance group,
 and loose-file `:/ui/…` reads that populate `PARAM_DICT` (160 `Mod/Draft` entries).
-Q0 is **not** complete, because the `PySide` shim is an alias to the installed
-PySide6: with Qt blocked, `import draftutils.params` fails, so the headless path
-still requires a Qt runtime. Q0a/Q0b (a pure-Python shim and resource reader) and
-Q0d (the pinned contract JSON) remain.
+Q0 **has landed for the headless path** (2026-10-23): Q0a replaced the alias with a
+pure-Python shim, Q0b ported the `:/ui/…` reader to plain Python, and Q0d pinned the
+contract in `contracts/draft-forms.json`. With Qt blocked, `import draftutils.params`
+now succeeds (160 `Mod/Draft` entries).
 
-**What remains.** Q1–Q5 are unstarted: there is no `ferrocad_ui`/`ferrocad_ui_py`,
-no `.ui` form model or `PySideUic.loadUi`, no form/widget/signal proxies, no rendered
-panel, no `Snapper` adapter, and no `TaskPanel_Scale.ui`. The `PySide` shim's `.ui`
-support is still only the `QFile` resource read that §2.6 needed.
+**What remains.** Q2–Q5 remain: there is no `PySideUic.loadUi`, no form/widget/signal
+proxies, no rendered panel, no `Snapper` adapter and no `TaskPanel_Scale.ui`. Q1 is in as
+`crates/ferrocad_ui`, which parses all 19 forms into a typed tree (495 widgets, 32
+classes); the shim's `.ui` support is still only the `QFile` resource read that §2.6
+needed.

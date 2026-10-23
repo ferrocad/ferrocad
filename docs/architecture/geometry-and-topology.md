@@ -3,8 +3,10 @@
 Status: research/planning (2026-10-06). Companion to
 [`rewrite-strategy.md`](../direction/rewrite-strategy.md) (direction),
 [`mvp-path.md`](../direction/mvp-path.md) (the geometry-free headless MVP),
-[`architecture.md`](../architecture.md) (crates and call paths), and
-[`distribution.md`](distribution.md) (payload and packaging).
+[`architecture.md`](../architecture.md) (crates and call paths),
+[`distribution.md`](distribution.md) (payload and packaging), and
+[`lineage-and-naming.md`](lineage-and-naming.md) (the separate lineage layer that
+refines the naming argument below).
 
 This note exists because a design conversation mixed up three separate things that
 share vocabulary: **topological sorting**, **topological naming**, and the
@@ -17,8 +19,10 @@ The short version:
 - Topological **sorting** is a pure graph problem. It needs no geometry, and we
   already have it.
 - Topological **naming** (stable sub-shape identity across rebuilds) is a shape
-  lineage problem. It needs a geometry kernel, OCCT shape history, and a persistent
-  element map.
+  lineage problem. The geometry kernel supplies provenance (OCCT's
+  `Modified`/`Generated`/`IsDeleted`); identity, naming policy, versioning and
+  persistence belong to a **separate lineage layer**, not to the kernel. See
+  [`lineage-and-naming.md`](lineage-and-naming.md).
 - They are not the same problem, and the sort is not a step toward solving naming.
 - The geometry kernel should arrive **behind a trait**, so `ferrocad_core` stays
   kernel-free and testable without OCCT.
@@ -30,7 +34,7 @@ The short version:
 | Term | Domain | Question it answers | Status here |
 | --- | --- | --- | --- |
 | Topological **sort** | The document object graph | In what order do features execute? | **Built.** `Document::recompute_order` (dependency-first), `topological_sorted_objects` (dependents-first). |
-| Topological **naming** | Shape sub-element identity | Which *face/edge/vertex* does this stored reference mean, after a rebuild? | **Not started.** Needs the geometry kernel. |
+| Topological **naming** | Shape sub-element identity | Which *face/edge/vertex* does a stored reference mean, after a rebuild? | **Design recorded** ([`lineage-and-naming.md`](lineage-and-naming.md)); not implemented. The kernel supplies provenance; a separate lineage layer owns the map. |
 | **Geometry engine** | Shape construction | Given parameters and inputs, produce an output shape. | **Not started.** Out of MVP scope ([`mvp-path.md`](../direction/mvp-path.md) §1). |
 
 The confusion is understandable because both "topological" terms are about graphs

@@ -13,6 +13,8 @@
 //!
 //! - [`ElementRef`] — one sub-element, by a stable name rather than a positional
 //!   index.
+//! - [`ElementId`], [`OperandId`] and [`Provenance`] — where an input element came
+//!   from: which operand, which kind, which ordinal.
 //! - [`History`] — what one operation did to its inputs.
 //! - [`ElementMap`] — the stable-name registry carried with a shape.
 //! - [`ReverseMap`] — the same relation read backwards: for an output name, the
@@ -41,6 +43,119 @@ pub struct ElementRef<T> {
     pub name: String,
 }
 
+/// Which input of an operation an element came from.
+///
+/// Operands are numbered by **position**, not identity: [`OperandId::A`] is the
+/// first input the caller passed (`a` of `fuse`/`cut`), [`OperandId::B`] the
+/// second. A positional label is enough because an operation always has the same
+/// operands in the same order; the name is the lineage layer's decision, not the
+/// backend's.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct OperandId(u16);
+
+impl OperandId {
+    /// The first operand of an operation.
+    pub const A: Self = Self(0);
+    /// The second operand of an operation.
+    pub const B: Self = Self(1);
+
+    /// An operand id from its 0-based position.
+    pub const fn new(position: u16) -> Self {
+        Self(position)
+    }
+
+    /// The 0-based position of the operand.
+    pub const fn position(self) -> u16 {
+        self.0
+    }
+}
+
+/// A kernel-independent identity for one sub-element of an operand.
+///
+/// The ordinal is 1-based and follows the operand's own enumeration for that kind,
+/// so `ElementId::new(OperandId::A, "Face", 3)` is the third face of the first
+/// operand. `kind` is the caller-supplied display label (`Face`, `Edge`, …); this
+/// crate never names a geometry type itself, exactly as [`NamePolicy::name`] takes
+/// the prefix from its caller.
+///
+/// Identity is *what produced* an element, never what it is called. Two coincident
+/// operands can each have a `Face1`, and only the operand id tells them apart;
+/// naming stays a policy decision.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct ElementId {
+    operand: OperandId,
+    kind: String,
+    ordinal: usize,
+}
+
+impl ElementId {
+    /// The element at `ordinal` (1-based) of `kind` in `operand`.
+    pub fn new(operand: OperandId, kind: impl Into<String>, ordinal: usize) -> Self {
+        Self {
+            operand,
+            kind: kind.into(),
+            ordinal,
+        }
+    }
+
+    /// The operand the element belongs to.
+    pub fn operand(&self) -> OperandId {
+        self.operand
+    }
+
+    /// The element-kind label (`Face`, `Edge`, …).
+    pub fn kind(&self) -> &str {
+        &self.kind
+    }
+
+    /// The 1-based ordinal within that operand's elements of this kind.
+    pub fn ordinal(&self) -> usize {
+        self.ordinal
+    }
+}
+
+/// The relation an input element took part in.
+///
+/// The order is the one a history reports: modified, then generated, then
+/// deleted, so a list of [`Provenance`] sorts canonically.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum Relation {
+    /// The input survives as the named output (possibly reshaped).
+    Modified,
+    /// The operation created the named output from this input.
+    Generated,
+    /// The input does not survive into the output.
+    Deleted,
+}
+
+/// The identity behind one relation in a [`History`].
+///
+/// A history's relation lists carry sub-shape handles and positional names; a
+/// `Provenance` says *which operand and which input element* produced a given
+/// output name. Entries are self-describing — the relation and output name are
+/// repeated — so they never depend on the order of the relation lists, and two
+/// operands that both call an element `Face1` stay distinguishable.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct Provenance {
+    /// The input element's identity.
+    pub input: ElementId,
+    /// What happened to it.
+    pub relation: Relation,
+    /// The positional name of the output, for modified/generated relations.
+    pub output: Option<String>,
+}
+
+impl Provenance {
+    /// A provenance entry for `input` under `relation`.
+    pub fn new(input: ElementId, relation: Relation, output: Option<String>) -> Self {
+        Self {
+            input,
+            relation,
+            output,
+        }
+    }
+}
+
 /// What one operation did to its inputs, in the kernel's own terms.
 ///
 /// This is the raw material for the element map: a mapper folds it into stable names.
@@ -53,6 +168,14 @@ pub struct History<T> {
     pub modified: Vec<(ElementRef<T>, ElementRef<T>)>,
     /// Inputs that do not survive into the output.
     pub deleted: Vec<ElementRef<T>>,
+    /// The identity behind every input relation above.
+    ///
+    /// One entry per `modified`/`generated` pair and per `deleted` input. Entries
+    /// are self-describing, so a backend may sort them for a canonical history;
+    /// [`History`] does not infer identity from the positional names. A history
+    /// built without provenance (a null backend, a test literal) leaves this empty.
+    /// This is *metadata*: it never adds an unchanged element to the history.
+    pub provenance: Vec<Provenance>,
 }
 
 impl<T> Default for History<T> {
@@ -61,6 +184,7 @@ impl<T> Default for History<T> {
             generated: Vec::new(),
             modified: Vec::new(),
             deleted: Vec::new(),
+            provenance: Vec::new(),
         }
     }
 }
@@ -68,7 +192,53 @@ impl<T> Default for History<T> {
 impl<T> History<T> {
     /// An operation that reports no lineage (e.g. the null backend).
     pub fn is_empty(&self) -> bool {
-        self.generated.is_empty() && self.modified.is_empty() && self.deleted.is_empty()
+        self.generated.is_empty()
+            && self.modified.is_empty()
+            && self.deleted.is_empty()
+            && self.provenance.is_empty()
+    }
+
+    /// Record a modified relation together with its input identity.
+    ///
+    /// Using the `push_*` helpers keeps the relation lists and the provenance
+    /// side table in step; a caller that records neither can keep pushing onto the
+    /// public fields.
+    pub fn push_modified(&mut self, input: ElementRef<T>, input_id: ElementId, output: ElementRef<T>) {
+        self.provenance.push(Provenance::new(
+            input_id,
+            Relation::Modified,
+            Some(output.name.clone()),
+        ));
+        self.modified.push((input, output));
+    }
+
+    /// Record a generated relation together with its input identity.
+    pub fn push_generated(
+        &mut self,
+        input: ElementRef<T>,
+        input_id: ElementId,
+        output: ElementRef<T>,
+    ) {
+        self.provenance.push(Provenance::new(
+            input_id,
+            Relation::Generated,
+            Some(output.name.clone()),
+        ));
+        self.generated.push((input, output));
+    }
+
+    /// Record a deleted input together with its identity.
+    pub fn push_deleted(&mut self, input: ElementRef<T>, input_id: ElementId) {
+        self.provenance
+            .push(Provenance::new(input_id, Relation::Deleted, None));
+        self.deleted.push(input);
+    }
+
+    /// The provenance entries for one relation kind, in reported order.
+    pub fn provenance_for(&self, relation: Relation) -> impl Iterator<Item = &Provenance> {
+        self.provenance
+            .iter()
+            .filter(move |entry| entry.relation == relation)
     }
 }
 
@@ -480,8 +650,8 @@ impl<T> Lineage<T> {
 #[cfg(test)]
 mod tests {
     use super::{
-        DefaultNamePolicy, ElementMap, ElementRef, History, Lineage, MapVersion, NamePolicy,
-        ReverseMap,
+        DefaultNamePolicy, ElementId, ElementMap, ElementRef, History, Lineage, MapVersion,
+        NamePolicy, OperandId, Provenance, Relation, ReverseMap,
     };
 
     fn element(shape: &str, name: &str) -> ElementRef<String> {
@@ -879,5 +1049,88 @@ mod tests {
         assert_eq!(pinned.encoding(), 7);
         assert_eq!(pinned.policy(), "lineage");
         assert_eq!(pinned.kernel(), Some("occt-7.2"));
+    }
+
+    // -- provenance identity -------------------------------------------------
+
+    #[test]
+    fn element_ids_distinguish_two_operands_with_the_same_positional_name() {
+        let a = ElementId::new(OperandId::A, "Face", 1);
+        let b = ElementId::new(OperandId::B, "Face", 1);
+
+        assert_ne!(a, b, "the same ordinal in different operands is not one element");
+        assert_eq!(a.operand(), OperandId::A);
+        assert_eq!(a.kind(), "Face");
+        assert_eq!(a.ordinal(), 1);
+        assert_eq!(b.operand().position(), 1);
+        assert_eq!(OperandId::new(0), OperandId::A);
+        assert_eq!(OperandId::new(1), OperandId::B);
+
+        // Identity is ordered by operand, then kind, then ordinal.
+        assert!(OperandId::A < OperandId::B);
+        assert!(ElementId::new(OperandId::A, "Edge", 12) < ElementId::new(OperandId::A, "Face", 1));
+        assert!(ElementId::new(OperandId::A, "Face", 1) < ElementId::new(OperandId::A, "Face", 2));
+    }
+
+    #[test]
+    fn push_helpers_keep_relations_and_provenance_in_step() {
+        let mut history = History::default();
+        let input_id = ElementId::new(OperandId::B, "Edge", 2);
+        let deleted_id = ElementId::new(OperandId::A, "Vertex", 7);
+
+        history.push_modified(element("in", "Edge2"), input_id.clone(), element("out", "Face3"));
+        history.push_generated(
+            element("in2", "Edge2"),
+            input_id.clone(),
+            element("out2", "Face4"),
+        );
+        history.push_deleted(element("gone", "Vertex7"), deleted_id);
+
+        assert_eq!(history.modified.len(), 1);
+        assert_eq!(history.generated.len(), 1);
+        assert_eq!(history.deleted.len(), 1);
+        assert_eq!(history.provenance.len(), 3);
+        assert_eq!(
+            history.provenance_for(Relation::Modified).collect::<Vec<_>>(),
+            vec![&Provenance::new(
+                input_id.clone(),
+                Relation::Modified,
+                Some("Face3".to_string())
+            )]
+        );
+        assert_eq!(history.provenance_for(Relation::Deleted).count(), 1);
+        assert_eq!(
+            history.provenance[1],
+            Provenance::new(input_id, Relation::Generated, Some("Face4".to_string())),
+            "the generated entry carries its own identity and output name"
+        );
+    }
+
+    #[test]
+    fn provenance_does_not_change_how_a_history_folds_into_a_map() {
+        let mut with_metadata = History::default();
+        let mut without_metadata = History::default();
+        for (history, annotated) in [
+            (&mut with_metadata, true),
+            (&mut without_metadata, false),
+        ] {
+            if annotated {
+                history.push_modified(
+                    element("in", "Face1"),
+                    ElementId::new(OperandId::A, "Face", 1),
+                    element("out", "Face2"),
+                );
+            } else {
+                history
+                    .modified
+                    .push((element("in", "Face1"), element("out", "Face2")));
+            }
+        }
+
+        let annotated = ElementMap::from_history(&with_metadata);
+        let plain = ElementMap::from_history(&without_metadata);
+        assert_eq!(map_entries(&annotated), map_entries(&plain));
+        assert_eq!(with_metadata.provenance.len(), 1);
+        assert!(without_metadata.provenance.is_empty());
     }
 }

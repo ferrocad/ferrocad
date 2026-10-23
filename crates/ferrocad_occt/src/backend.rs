@@ -1,9 +1,12 @@
 //! The OCCT implementation of [`ferrocad_geom::GeometryBackend`].
 //!
 //! First operations: [`make_box`](OcctBackend::make_box), fuse, cut, fillet and
-//! place. Fuse/cut also build a face-level [`History`] from the sibling bridge's
-//! `Modified`/`Generated`/`IsDeleted`, using the result face map to turn output
-//! sub-shapes into indices (the element-level lineage the spike verified).
+//! place. Fuse/cut/common build a [`History`] from the sibling bridge's
+//! `Modified`/`Generated`/`IsDeleted` for **both** operands and all three element
+//! kinds the kernel reports (faces, edges, vertices), using the result's map of
+//! the same kind to turn output sub-shapes into positional names. Each relation
+//! also carries an [`ElementId`] (operand, kind, 1-based ordinal), so two operands
+//! that both report a `Face1` remain distinguishable.
 //!
 //! Unchanged sub-shapes are deliberately **absent** from the history: an input that
 //! is neither modified, generated, nor deleted simply survives as itself, and the
@@ -12,9 +15,9 @@
 
 use cxx::UniquePtr;
 use ferrocad_geom::{
-    Capabilities, Continuity, ElementKind, ElementRef, GeomError, GeometryBackend, History,
-    MassProperties, OpResult, PrincipalProperties, Shape, Tessellation, TessellationOptions,
-    unsupported,
+    Capabilities, Continuity, ElementId, ElementKind, ElementRef, GeomError, GeometryBackend,
+    History, MassProperties, OpResult, OperandId, PrincipalProperties, Shape, Tessellation,
+    TessellationOptions, unsupported,
 };
 use ferrocad_curves::{Arc, Circle, EdgeCurve, Ellipse, Line, Vector3};
 use ferrocad_types::{Matrix4, Placement};
@@ -793,12 +796,16 @@ impl GeometryBackend for OcctBackend {
         if !op.IsDone() {
             return Err(OcctError::NotDone { operation: "fuse" }.into());
         }
-        let out_faces = sub_shape_map(op.pin_mut().Shape(), TopAbs_ShapeEnum::TopAbs_FACE);
-        let history = build_history(sa, &out_faces, |face, mods, gens| {
-            bridge::fc_brep_fuse_modified(op.pin_mut(), face, mods.pin_mut());
-            bridge::fc_brep_fuse_generated(op.pin_mut(), face, gens.pin_mut());
-            bridge::fc_brep_fuse_is_deleted(op.pin_mut(), face)
-        });
+        let out_maps = sub_shape_maps(op.pin_mut().Shape());
+        let history = build_history(
+            [(OperandId::A, sa), (OperandId::B, sb)],
+            &out_maps,
+            |sub, mods, gens| {
+                bridge::fc_brep_fuse_modified(op.pin_mut(), sub, mods.pin_mut());
+                bridge::fc_brep_fuse_generated(op.pin_mut(), sub, gens.pin_mut());
+                bridge::fc_brep_fuse_is_deleted(op.pin_mut(), sub)
+            },
+        );
         Ok(OpResult::new(erase(op.pin_mut().Shape()), history))
     }
 
@@ -817,12 +824,16 @@ impl GeometryBackend for OcctBackend {
         if !op.IsDone() {
             return Err(OcctError::NotDone { operation: "cut" }.into());
         }
-        let out_faces = sub_shape_map(op.pin_mut().Shape(), TopAbs_ShapeEnum::TopAbs_FACE);
-        let history = build_history(sa, &out_faces, |face, mods, gens| {
-            bridge::fc_brep_cut_modified(op.pin_mut(), face, mods.pin_mut());
-            bridge::fc_brep_cut_generated(op.pin_mut(), face, gens.pin_mut());
-            bridge::fc_brep_cut_is_deleted(op.pin_mut(), face)
-        });
+        let out_maps = sub_shape_maps(op.pin_mut().Shape());
+        let history = build_history(
+            [(OperandId::A, sa), (OperandId::B, sb)],
+            &out_maps,
+            |sub, mods, gens| {
+                bridge::fc_brep_cut_modified(op.pin_mut(), sub, mods.pin_mut());
+                bridge::fc_brep_cut_generated(op.pin_mut(), sub, gens.pin_mut());
+                bridge::fc_brep_cut_is_deleted(op.pin_mut(), sub)
+            },
+        );
         Ok(OpResult::new(erase(op.pin_mut().Shape()), history))
     }
 
@@ -850,12 +861,16 @@ impl GeometryBackend for OcctBackend {
         if !op.IsDone() {
             return Err(OcctError::NotDone { operation: "common" }.into());
         }
-        let out_faces = sub_shape_map(op.pin_mut().Shape(), TopAbs_ShapeEnum::TopAbs_FACE);
-        let history = build_history(sa, &out_faces, |face, mods, gens| {
-            bridge::fc_brep_common_modified(op.pin_mut(), face, mods.pin_mut());
-            bridge::fc_brep_common_generated(op.pin_mut(), face, gens.pin_mut());
-            bridge::fc_brep_common_is_deleted(op.pin_mut(), face)
-        });
+        let out_maps = sub_shape_maps(op.pin_mut().Shape());
+        let history = build_history(
+            [(OperandId::A, sa), (OperandId::B, sb)],
+            &out_maps,
+            |sub, mods, gens| {
+                bridge::fc_brep_common_modified(op.pin_mut(), sub, mods.pin_mut());
+                bridge::fc_brep_common_generated(op.pin_mut(), sub, gens.pin_mut());
+                bridge::fc_brep_common_is_deleted(op.pin_mut(), sub)
+            },
+        );
         Ok(OpResult::new(erase(op.pin_mut().Shape()), history))
     }
 
@@ -1718,59 +1733,105 @@ impl GeometryBackend for OcctBackend {
     }
 }
 
-/// Build a face-level [`History`] for a boolean op.
+/// The sub-shape kinds a boolean reports lineage for, coarsest first.
 ///
-/// `probe` fills `mods`/`gens` for one input face and reports whether OCCT considers
-/// it deleted; it captures the operation object (so the caller passes the op-specific
-/// bridge functions).
-fn build_history<F>(in_shape: &TopoDS_Shape, out_faces: &Map, mut probe: F) -> History
+/// The order is fixed so a history is deterministic; it is not the order of the
+/// relation lists (those stay grouped by input), only of enumeration.
+const HISTORY_KINDS: [(ElementKind, TopAbs_ShapeEnum); 3] = [
+    (ElementKind::Face, TopAbs_ShapeEnum::TopAbs_FACE),
+    (ElementKind::Edge, TopAbs_ShapeEnum::TopAbs_EDGE),
+    (ElementKind::Vertex, TopAbs_ShapeEnum::TopAbs_VERTEX),
+];
+
+/// The result's sub-shape maps, one per kind in [`HISTORY_KINDS`] order.
+///
+/// Built before the operation object is probed: the result shape borrows the
+/// operation immutably, and `Modified`/`Generated` need it mutably, so the two
+/// borrows cannot overlap.
+fn sub_shape_maps(shape: &TopoDS_Shape) -> [(ElementKind, UniquePtr<Map>); 3] {
+    HISTORY_KINDS.map(|(kind, occt)| (kind, sub_shape_map(shape, occt)))
+}
+
+/// Build the [`History`] of a boolean from **both** of its operands.
+///
+/// Every sub-shape of both operands is enumerated, for each of the three kinds the
+/// kernel reports (`Face`, `Edge`, `Vertex`); `probe` fills `mods`/`gens` for one of
+/// them and reports whether OCCT considers it deleted. An output is kept only if it
+/// appears in the result's map of the same kind, so an element that does not survive
+/// there is dropped, as before.
+///
+/// Each kept relation also records the input's [`ElementId`]: which operand it came
+/// from, its kind, and its 1-based ordinal in that operand's map. Names stay
+/// positional (`Face1`, `Edge3`, `Vertex8`), so one operand's `Face1` and another's
+/// are told apart by identity rather than by spelling. An input with no surviving
+/// output is reported deleted only when the kernel says so: unchanged elements
+/// remain absent from all three lists.
+fn build_history<F>(
+    operands: [(OperandId, &TopoDS_Shape); 2],
+    out_maps: &[(ElementKind, UniquePtr<Map>); 3],
+    mut probe: F,
+) -> History
 where
     F: FnMut(&TopoDS_Shape, &mut UniquePtr<Map>, &mut UniquePtr<Map>) -> bool,
 {
-    let in_faces = sub_shape_map(in_shape, TopAbs_ShapeEnum::TopAbs_FACE);
-    let count = in_faces.Extent();
     let mut history = History::default();
 
-    for i in 1..=count {
-        let face = in_faces.FindKey(i);
-        let mut mods = new_map();
-        let mut gens = new_map();
-        let deleted = probe(face, &mut mods, &mut gens);
+    for (operand, in_shape) in operands {
+        for (kind_index, (kind, occt_kind)) in HISTORY_KINDS.into_iter().enumerate() {
+            let in_map = sub_shape_map(in_shape, occt_kind);
+            let out_map = &out_maps[kind_index].1;
 
-        let mut mapped = false;
-        for k in 1..=mods.Extent() {
-            let out = mods.FindKey(k);
-            let index = bridge::fc_indexed_map_find_index(out_faces, out);
-            if index > 0 {
-                history
-                    .modified
-                    .push((face_ref(i, face), face_ref(index, out)));
-                mapped = true;
+            for ordinal in 1..=in_map.Extent() {
+                let element = in_map.FindKey(ordinal);
+                let mut mods = new_map();
+                let mut gens = new_map();
+                let deleted = probe(element, &mut mods, &mut gens);
+                let input_id = ElementId::new(operand, kind.prefix(), ordinal as usize);
+
+                let mut mapped = false;
+                for entry in 1..=mods.Extent() {
+                    let out = mods.FindKey(entry);
+                    let index = bridge::fc_indexed_map_find_index(out_map, out);
+                    if index > 0 {
+                        history.push_modified(
+                            element_ref(kind, ordinal, element),
+                            input_id.clone(),
+                            element_ref(kind, index, out),
+                        );
+                        mapped = true;
+                    }
+                }
+                for entry in 1..=gens.Extent() {
+                    let out = gens.FindKey(entry);
+                    let index = bridge::fc_indexed_map_find_index(out_map, out);
+                    if index > 0 {
+                        history.push_generated(
+                            element_ref(kind, ordinal, element),
+                            input_id.clone(),
+                            element_ref(kind, index, out),
+                        );
+                        mapped = true;
+                    }
+                }
+                if !mapped && deleted {
+                    history.push_deleted(element_ref(kind, ordinal, element), input_id);
+                }
             }
-        }
-        for k in 1..=gens.Extent() {
-            let out = gens.FindKey(k);
-            let index = bridge::fc_indexed_map_find_index(out_faces, out);
-            if index > 0 {
-                history
-                    .generated
-                    .push((face_ref(i, face), face_ref(index, out)));
-                mapped = true;
-            }
-        }
-        if !mapped && deleted {
-            history.deleted.push(face_ref(i, face));
         }
     }
 
+    // The identity side table is canonical: sorted by operand, kind, ordinal,
+    // relation and output, so the order OCCT reported relations in cannot change
+    // how a history compares. The relation lists above keep reporting order.
+    history.provenance.sort();
     history
 }
 
-/// A `FaceN` element reference, owning a copy of the sub-shape.
-fn face_ref(index: i32, shape: &TopoDS_Shape) -> ElementRef {
+/// A positional element reference into an operand (`FaceN`, `EdgeN`, `VertexN`).
+fn element_ref(kind: ElementKind, index: i32, shape: &TopoDS_Shape) -> ElementRef {
     ElementRef {
         shape: erase(shape),
-        name: format!("Face{index}"),
+        name: format!("{}{index}", kind.prefix()),
     }
 }
 
@@ -1877,4 +1938,272 @@ fn edge_from_circle(circle: &Circle) -> Result<Shape, GeomError> {
         .into());
     }
     Ok(erase(ffi::topo_ds::cast_edge_to_shape(make.pin_mut().Edge())))
+}
+
+#[cfg(test)]
+mod provenance_tests {
+    //! Golden histories for the two-input booleans: both operands, all three
+    //! element kinds, and the identity behind every reported relation.
+    //!
+    //! The counts are the OCCT 7.8 answer for two coincident-sized boxes, one offset
+    //! by `(5, 5, 5)`. They are exact on purpose: this is the baseline S4 hands to
+    //! the lineage layer, so a kernel or adapter change should be visible here first.
+
+    use std::collections::{BTreeMap, BTreeSet};
+
+    use ferrocad_geom::{ElementKind, GeometryBackend, History, OperandId, Relation};
+    use ferrocad_types::Rotation;
+
+    use super::*;
+
+    /// Overlapping 10³ boxes: `a` at the origin, `b` shifted by `(5, 5, 5)`.
+    fn overlapping_boxes(backend: &OcctBackend) -> (Shape, Shape) {
+        let a = backend.make_box(10.0, 10.0, 10.0).unwrap();
+        let b = backend
+            .place(
+                &backend.make_box(10.0, 10.0, 10.0).unwrap(),
+                &Placement {
+                    base: Vector3::new(5.0, 5.0, 5.0),
+                    rotation: Rotation::identity(),
+                },
+            )
+            .unwrap();
+        (a, b)
+    }
+
+    /// `(operand, kind, relation) -> count` over the provenance side table.
+    fn counts(history: &History) -> BTreeMap<(OperandId, String, Relation), usize> {
+        let mut counts = BTreeMap::new();
+        for entry in &history.provenance {
+            *counts
+                .entry((
+                    entry.input.operand(),
+                    entry.input.kind().to_string(),
+                    entry.relation,
+                ))
+                .or_insert(0) += 1;
+        }
+        counts
+    }
+
+    fn expected(entries: &[(OperandId, &str, Relation, usize)]) -> BTreeMap<(OperandId, String, Relation), usize> {
+        entries
+            .iter()
+            .map(|(operand, kind, relation, count)| ((*operand, kind.to_string(), *relation), *count))
+            .collect()
+    }
+
+    /// Split a positional name into its kind prefix and 1-based ordinal.
+    fn split_name(name: &str) -> (String, usize) {
+        for prefix in ["Face", "Edge", "Vertex"] {
+            if let Some(rest) = name.strip_prefix(prefix) {
+                let ordinal = rest.parse().expect("a positional ordinal");
+                return (prefix.to_string(), ordinal);
+            }
+        }
+        panic!("not a positional sub-element name: {name}");
+    }
+
+    /// The relation lists projected onto `(kind, ordinal, relation, output)`.
+    ///
+    /// The relation lists have no operand field, so this is compared with the
+    /// provenance projection to check that every reported relation has exactly one
+    /// identity entry; the per-operand counts above then check the operand split.
+    fn relation_projection(history: &History) -> Vec<(String, usize, Relation, Option<String>)> {
+        let mut entries = Vec::new();
+        for (input, output) in &history.modified {
+            let (kind, ordinal) = split_name(&input.name);
+            entries.push((kind, ordinal, Relation::Modified, Some(output.name.clone())));
+        }
+        for (input, output) in &history.generated {
+            let (kind, ordinal) = split_name(&input.name);
+            entries.push((kind, ordinal, Relation::Generated, Some(output.name.clone())));
+        }
+        for input in &history.deleted {
+            let (kind, ordinal) = split_name(&input.name);
+            entries.push((kind, ordinal, Relation::Deleted, None));
+        }
+        entries.sort();
+        entries
+    }
+
+    fn provenance_projection(history: &History) -> Vec<(String, usize, Relation, Option<String>)> {
+        let mut entries: Vec<_> = history
+            .provenance
+            .iter()
+            .map(|entry| {
+                (
+                    entry.input.kind().to_string(),
+                    entry.input.ordinal(),
+                    entry.relation,
+                    entry.output.clone(),
+                )
+            })
+            .collect();
+        entries.sort();
+        entries
+    }
+
+    /// The ordered names in each relation list, for run-to-run comparison.
+    fn relation_names(
+        history: &History,
+    ) -> (Vec<(String, String)>, Vec<(String, String)>, Vec<String>) {
+        (
+            history
+                .modified
+                .iter()
+                .map(|(input, output)| (input.name.clone(), output.name.clone()))
+                .collect(),
+            history
+                .generated
+                .iter()
+                .map(|(input, output)| (input.name.clone(), output.name.clone()))
+                .collect(),
+            history.deleted.iter().map(|input| input.name.clone()).collect(),
+        )
+    }
+
+    /// Every identity is in range for its operand and every output resolves in the
+    /// result, under the same kind. Names stay positional, so the two must agree.
+    fn assert_histories_are_coherent(
+        backend: &OcctBackend,
+        operands: [(&Shape, OperandId); 2],
+        result: &Shape,
+        history: &History,
+    ) {
+        let kinds = [ElementKind::Face, ElementKind::Edge, ElementKind::Vertex];
+        let total = |shape: &Shape, kind: ElementKind| backend.elements(shape, kind).len();
+
+        let mut outputs = BTreeMap::new();
+        for kind in kinds {
+            outputs.insert(kind.prefix(), total(result, kind));
+        }
+
+        for entry in &history.provenance {
+            let operand = operands
+                .iter()
+                .find(|(_, id)| *id == entry.input.operand())
+                .map(|(shape, _)| *shape)
+                .expect("a known operand");
+            let kind = kinds
+                .iter()
+                .find(|kind| kind.prefix() == entry.input.kind())
+                .copied()
+                .expect("Face, Edge or Vertex");
+
+            let input_total = total(operand, kind);
+            assert!(
+                (1..=input_total).contains(&entry.input.ordinal()),
+                "{} {}#{} is outside the operand's {input_total} elements",
+                entry.input.kind(),
+                entry.input.operand().position(),
+                entry.input.ordinal(),
+            );
+
+            if let Some(output) = &entry.output {
+                let (output_kind, ordinal) = split_name(output);
+                assert_eq!(
+                    output_kind,
+                    entry.input.kind(),
+                    "an input keeps its kind in the result"
+                );
+                let output_total = outputs[output_kind.as_str()];
+                assert!(
+                    ordinal >= 1 && ordinal <= output_total,
+                    "output {output} is outside the result's {output_total} {output_kind}s",
+                );
+            }
+        }
+
+        assert_eq!(
+            provenance_projection(history),
+            relation_projection(history),
+            "every relation has exactly one identity entry",
+        );
+
+        let operand_ids: BTreeSet<_> = history
+            .provenance
+            .iter()
+            .map(|entry| entry.input.operand())
+            .collect();
+        assert_eq!(
+            operand_ids,
+            BTreeSet::from([OperandId::A, OperandId::B]),
+            "both operands are reported",
+        );
+    }
+
+    #[test]
+    fn fuse_reports_both_operands_and_all_three_kinds() {
+        let backend = OcctBackend::new();
+        let (a, b) = overlapping_boxes(&backend);
+        let out = backend.fuse(&a, &b).unwrap();
+
+        assert_eq!(
+            counts(&out.history),
+            expected(&[
+                (OperandId::A, "Face", Relation::Modified, 3),
+                (OperandId::A, "Edge", Relation::Modified, 3),
+                (OperandId::A, "Vertex", Relation::Deleted, 1),
+                (OperandId::B, "Face", Relation::Modified, 3),
+                (OperandId::B, "Edge", Relation::Modified, 3),
+                (OperandId::B, "Vertex", Relation::Deleted, 1),
+            ]),
+        );
+        assert!(out.history.generated.is_empty(), "fuse generates no new elements");
+
+        assert_histories_are_coherent(&backend, [(&a, OperandId::A), (&b, OperandId::B)], &out.shape, &out.history);
+
+        // Identity is canonical: the side table is sorted even though the relation
+        // lists stay in reporting order.
+        let mut sorted = out.history.provenance.clone();
+        sorted.sort();
+        assert_eq!(sorted, out.history.provenance);
+    }
+
+    #[test]
+    fn cut_reports_both_operands_and_all_three_kinds() {
+        let backend = OcctBackend::new();
+        let (a, b) = overlapping_boxes(&backend);
+        let out = backend.cut(&a, &b).unwrap();
+
+        assert_eq!(
+            counts(&out.history),
+            expected(&[
+                (OperandId::A, "Face", Relation::Modified, 3),
+                (OperandId::A, "Edge", Relation::Modified, 3),
+                (OperandId::A, "Vertex", Relation::Deleted, 1),
+                // The tool contributes the new walls; the rest of it is consumed.
+                (OperandId::B, "Face", Relation::Modified, 3),
+                (OperandId::B, "Face", Relation::Deleted, 3),
+                (OperandId::B, "Edge", Relation::Modified, 3),
+                (OperandId::B, "Edge", Relation::Deleted, 9),
+                (OperandId::B, "Vertex", Relation::Deleted, 7),
+            ]),
+        );
+        assert!(out.history.generated.is_empty(), "cut generates no new elements");
+
+        assert_histories_are_coherent(&backend, [(&a, OperandId::A), (&b, OperandId::B)], &out.shape, &out.history);
+    }
+
+    #[test]
+    fn the_same_boolean_twice_yields_the_same_history() {
+        let backend = OcctBackend::new();
+        let (a, b) = overlapping_boxes(&backend);
+
+        for (first, second) in [
+            (backend.fuse(&a, &b).unwrap(), backend.fuse(&a, &b).unwrap()),
+            (backend.cut(&a, &b).unwrap(), backend.cut(&a, &b).unwrap()),
+        ] {
+            assert_eq!(
+                first.history.provenance, second.history.provenance,
+                "identity is deterministic",
+            );
+            assert_eq!(
+                relation_names(&first.history),
+                relation_names(&second.history),
+                "the relation lists are deterministic",
+            );
+        }
+    }
 }

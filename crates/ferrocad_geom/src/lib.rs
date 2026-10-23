@@ -16,6 +16,9 @@
 //!   layer: provenance accumulated over successive histories, its inverse view, and
 //!   the versioned rules that turn elements into names. [`Lineage`] is specialised
 //!   to [`Shape`]; the others carry no payload and are re-exported as themselves.
+//! - [`ElementId`], [`OperandId`] and [`Provenance`] — the identity an operation
+//!   reports for its inputs (operand, kind and 1-based ordinal), independent of the
+//!   positional name it also reports.
 //! - [`Tessellation`], [`ElementKind`] and [`SelectionRef`] — the display mesh with
 //!   per-primitive sub-element ids, and the neutral vocabulary a viewport or a
 //!   workbench needs to turn a pick into a topology reference.
@@ -166,7 +169,9 @@ pub type ElementRef = ferrocad_lineage::ElementRef<Shape>;
 /// This is the raw material for the element map: a mapper folds it into stable names.
 /// The kernel reports exactly what it knows; the mapper can be no better than this.
 ///
-/// This is [`ferrocad_lineage::History`] with [`Shape`] as its payload.
+/// This is [`ferrocad_lineage::History`] with [`Shape`] as its payload. Its
+/// `provenance` field carries the [`ElementId`] of each input relation; the
+/// relation lists themselves keep positional names.
 pub type History = ferrocad_lineage::History<Shape>;
 
 /// The stable-name registry carried with a shape: `name -> current sub-shape`.
@@ -186,8 +191,11 @@ pub type Lineage = ferrocad_lineage::Lineage<Shape>;
 
 // These lineage types are not generic over the payload, so they are re-exported
 // as themselves rather than aliased: [`ReverseMap`] is a `String`-keyed relation,
-// and [`MapVersion`]/[`NamePolicy`] describe rules, not shapes.
-pub use ferrocad_lineage::{MapVersion, NamePolicy, ReverseMap};
+// [`MapVersion`]/[`NamePolicy`] describe rules, not shapes, and
+// [`ElementId`]/[`OperandId`]/[`Provenance`]/[`Relation`] are identity metadata.
+pub use ferrocad_lineage::{
+    ElementId, MapVersion, NamePolicy, OperandId, Provenance, Relation, ReverseMap,
+};
 
 // ---------------------------------------------------------------------------
 // Topology and selection vocabulary

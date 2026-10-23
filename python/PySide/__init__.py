@@ -1,164 +1,163 @@
-"""A ``PySide`` compatibility package over the installed PySide6.
+"""A pure-Python ``PySide`` compatibility package for upstream FreeCAD scripts.
 
-Upstream FreeCAD's Qt5 workbenches (and Draft, at import time) write
-``import PySide.QtCore as QtCore`` and ``from PySide.QtCore import
-QT_TRANSLATE_NOOP``. The system ships PySide6, so this package aliases the Qt6
-modules into ``sys.modules`` under the Qt5 names. Importing them here means
-``PySide6.QtCore`` is imported exactly once: both names refer to the same module
-object.
+Upstream FreeCAD's Qt5 workbenches write ``import PySide.QtCore as QtCore``,
+``from PySide.QtCore import QT_TRANSLATE_NOOP`` and
+``import PySide.QtWidgets as QtWidgets``. FerroCAD ships those scripts as
+source, so the import statements cannot be removed. This package supplies the
+small name subset they evaluate **at import time**, without requiring any Qt
+runtime:
 
-Only the modules needed for *imports* are aliased. Qt5-only names (for example
-``QtCore.SIGNAL``) are not emulated; the GUI work will meet those individually.
+===============  =========================================================
+Module           Names
+===============  =========================================================
+``QtCore``       ``QT_TRANSLATE_NOOP``, ``QCoreApplication``, ``QLocale``,
+                 ``QObject``, ``QTimer``, ``SIGNAL``, ``QIODevice``,
+                 ``QFile``, ``QFileInfo``, ``QStandardPaths``
+``QtWidgets``    ``QApplication`` and the three names Draft uses as class
+                 bases (``QWidget``, ``QLineEdit``, ``QStyledItemDelegate``)
+``QtGui``        module object only; the headless Draft path evaluates no
+                 QtGui name at import time
+===============  =========================================================
 
-Missing Qt modules are skipped rather than fatal: ``QtSvg`` is not installed on
-every system, and its absence must not break ``import PySide.QtCore``.
+Every name outside those allowlists raises ``AttributeError`` naming the module
+and the attribute. Nothing returns ``None`` to hide a missing feature.
 
-**Resources.** A Qt resource path (``:/ui/preferences-draft.ui``) normally needs
-a compiled ``.rcc``. FerroCAD ships mods as loose files, so ``QtCore.QFile`` is
-replaced (in place, preserving module identity) with a subclass that serves
-``:/`` paths from a mod's ``Resources/`` directory and delegates every other
-path to Qt. That is what lets upstream workbenches parse their ``.ui``
-defaults without pyside-rcc; it is a compatibility shim, not a Qt reimplementation.
+**Resources.** ``QtCore.QFile(":/ui/x.ui")`` reads a mod's loose
+``Resources/`` tree (``<root>/Resources/x.ui`` or
+``<root>/<Mod>/Resources/x.ui``), with hit *and* miss caching. This is what
+lets ``draftutils/params.py`` build ``PARAM_DICT`` from the preference ``.ui``
+files without ``pyside-rcc``.
+
+**Real Qt is opt-in.** Set ``FERROCAD_PYSIDE_BACKEND=PySide6`` (or
+``PySide2``) in the environment to alias the installed distribution's
+``QtCore``/``QtGui``/``QtWidgets`` (and ``QtSvg`` when present) instead of
+using the pure-Python stub. This is intended for experiments that need real
+widgets; it is never the default, and headless CI must not set it. In that mode
+``:/`` resource paths are *not* remapped (Qt's own resource system applies).
+An unrecognised value fails the import rather than silently falling back.
+
+The stub lives in :mod:`PySide._qt_stub`; its exports are the allowlists
+``QTCORE_EXPORTS``, ``QTGUI_EXPORTS`` and ``QTWIDGETS_EXPORTS``.
 """
 
 from __future__ import annotations
 
 import importlib
+import importlib.machinery
+import os
 import sys
 
-_PYSIDE6 = "PySide6"
+from . import _qt_stub as _stub
 
-# Import order matters only for readability; QtCore comes first because the
-# package-level ``QT_TRANSLATE_NOOP`` comes from it.
-_ALIASED_MODULES = ("QtCore", "QtGui", "QtWidgets", "QtSvg")
+#: Set to ``PySide6`` or ``PySide2`` to alias a real Qt installation.
+BACKEND_ENV = "FERROCAD_PYSIDE_BACKEND"
 
-# The subset that was actually installed; `__all__` must not name an absent one.
-_INSTALLED = []
+_STUB_BACKEND = "stub"
+_SUBMODULES = ("QtCore", "QtGui", "QtWidgets")
 
 
-def _install_aliases():
-    for name in _ALIASED_MODULES:
+def _selected_backend() -> str:
+    value = os.environ.get(BACKEND_ENV, "").strip()
+    return _STUB_BACKEND if not value else value
+
+
+def _new_stub_module(name: str, exports: dict) -> _stub.QtStubModule:
+    module = _stub.QtStubModule(
+        f"{__name__}.{name}",
+        _STUB_DOCS.get(name, f"Pure-Python stand-in for PySide.{name}."),
+    )
+    module.__package__ = __name__
+    module.__spec__ = importlib.machinery.ModuleSpec(module.__name__, None)
+    module.__file__ = _stub.__file__
+    module.__all__ = tuple(sorted(exports))
+    setattr(module, _stub.STUB_MARKER, True)
+    for key, value in exports.items():
+        setattr(module, key, value)
+    sys.modules[module.__name__] = module
+    globals()[name] = module
+    return module
+
+
+_STUB_DOCS = {
+    "QtCore": (
+        "Pure-Python QtCore subset: translation, timers, objects and loose-file "
+        "access for upstream Draft. No Qt runtime is imported."
+    ),
+    "QtGui": (
+        "Pure-Python QtGui stand-in. The headless Draft import path evaluates no "
+        "QtGui name, so this module exports none; a missing name raises. GUI "
+        "modules (e.g. gui_hyperlink's QDesktopServices) still fail loudly."
+    ),
+    "QtWidgets": (
+        "Pure-Python QtWidgets stand-in: QApplication.translate and the class "
+        "bases Draft subclasses at import time. Widgets are not constructed."
+    ),
+}
+
+
+def _install_stub() -> list[str]:
+    exports_by_module = {
+        "QtCore": _stub.QTCORE_EXPORTS,
+        "QtGui": _stub.QTGUI_EXPORTS,
+        "QtWidgets": _stub.QTWIDGETS_EXPORTS,
+    }
+    installed = []
+    for name in _SUBMODULES:
+        _new_stub_module(name, dict(exports_by_module[name]))
+        installed.append(name)
+    return installed
+
+
+def _install_real(distribution: str) -> list[str]:
+    installed = []
+    for name in (*_SUBMODULES, "QtSvg"):
         try:
-            module = importlib.import_module(f"{_PYSIDE6}.{name}")
+            module = importlib.import_module(f"{distribution}.{name}")
         except ImportError:
-            # The module is genuinely absent (QtSvg on this system). A later
-            # ``import PySide.QtSvg`` will raise ModuleNotFoundError as usual.
-            continue
+            if name == "QtSvg":
+                # QtSvg is genuinely optional; its absence must not break the
+                # rest of the package (upstream Draft only needs it in the GUI).
+                continue
+            raise
         sys.modules[f"{__name__}.{name}"] = module
         globals()[name] = module
-        _INSTALLED.append(name)
+        installed.append(name)
+    return installed
 
 
-# -- resource paths -------------------------------------------------------
-#: Absolute path -> bytes, or None when no mod ships the resource. Mod trees are
-#: small and `_get_param_dictionary` reads ~16 files at import, so a cache is
-#: enough; a miss is cached too.
-_RESOURCE_CACHE = {}
+_backend = _selected_backend()
+if _backend == _STUB_BACKEND:
+    _INSTALLED = _install_stub()
+    _USING_STUB = True
+elif _backend in {"PySide6", "PySide2"}:
+    _INSTALLED = _install_real(_backend)
+    _USING_STUB = False
+else:
+    raise RuntimeError(
+        f"{BACKEND_ENV}={_backend!r} is not a known PySide backend; "
+        "leave it unset (pure-Python stub) or set it to PySide6/PySide2"
+    )
 
 
-def _resource_bytes(relative):
-    """Bytes for a ``:/<relative>`` resource, from a mod's ``Resources/`` dir."""
-    import os
+if _USING_STUB:
+    # ``QT_TRANSLATE_NOOP`` lives in QtCore. The package re-exports it because
+    # `from PySide import QT_TRANSLATE_NOOP` is a legal Qt5 spelling.
+    QT_TRANSLATE_NOOP = QtCore.QT_TRANSLATE_NOOP
+else:
+    QT_TRANSLATE_NOOP = getattr(QtCore, "QT_TRANSLATE_NOOP", _stub.QT_TRANSLATE_NOOP)
 
-    if relative in _RESOURCE_CACHE:
-        return _RESOURCE_CACHE[relative]
-
-    found = None
-    roots = [entry for entry in sys.path if entry and os.path.isdir(entry)]
-    # `<root>/Resources/<rel>` is a mod directory on the path (the conformance
-    # harness adds `src/Mod/Draft`); `<root>/<Mod>/Resources/<rel>` is a mods
-    # directory (the app adds `mods/`).
-    for root in roots:
-        candidate = os.path.join(root, "Resources", relative)
-        if os.path.isfile(candidate):
-            found = candidate
-            break
-    if found is None:
-        for root in roots:
-            try:
-                children = sorted(os.listdir(root))
-            except OSError:
-                continue
-            for child in children:
-                candidate = os.path.join(root, child, "Resources", relative)
-                if os.path.isfile(candidate):
-                    found = candidate
-                    break
-            if found is not None:
-                break
-
-    data = None
-    if found is not None:
-        with open(found, "rb") as handle:
-            data = handle.read()
-    _RESOURCE_CACHE[relative] = data
-    return data
-
-
-class _ReadAll:
-    """The tiny slice of ``QByteArray`` that ``readAll().data().decode()`` uses."""
-
-    def __init__(self, data):
-        self._data = data
-
-    def data(self):
-        return self._data
-
-    def __len__(self):
-        return len(self._data)
-
-
-def _install_resource_qfile(qtcore):
-    """Let ``QFile(':/…')`` read a mod's loose ``Resources/`` files."""
-    base = qtcore.QFile
-
-    class ResourceQFile(base):
-        """``QFile`` that serves ``:/`` paths from the mod tree."""
-
-        def __init__(self, path=""):
-            super().__init__(path)
-            self._resource = None
-            text = str(path)
-            if text.startswith(":/"):
-                self._resource = _resource_bytes(text[2:])
-
-        def open(self, mode):
-            if self._resource is not None:
-                return True
-            return super().open(mode)
-
-        def readAll(self):
-            if self._resource is not None:
-                return _ReadAll(self._resource)
-            return super().readAll()
-
-        def close(self):
-            if self._resource is not None:
-                return
-            super().close()
-
-    # In place, so `PySide.QtCore is PySide6.QtCore` stays true. Only `:/`
-    # paths change behaviour; every other path reaches Qt untouched.
-    qtcore.QFile = ResourceQFile
-
-
-_install_aliases()
-
-_qtcore_module = sys.modules.get(f"{__name__}.QtCore")
-if _qtcore_module is not None:
-    _install_resource_qfile(_qtcore_module)
-
-
-def _translate_noop(context, text):
-    """Qt5's ``QT_TRANSLATE_NOOP``: mark a string for translation, return it."""
-    return text
-
-
-# ``QT_TRANSLATE_NOOP`` lives in ``QtCore``. Some Qt6 builds drop the bare
-# module-level spelling, so fall back to our own no-op rather than failing the
-# whole package import.
-_qtcore = sys.modules.get(f"{__name__}.QtCore")
-QT_TRANSLATE_NOOP = getattr(_qtcore, "QT_TRANSLATE_NOOP", _translate_noop)
-del _qtcore
+#: True when the modules above are the pure-Python stub, False for a real Qt.
+USING_STUB = _USING_STUB
+globals()[_stub.STUB_MARKER] = _USING_STUB
 
 __all__ = ["QT_TRANSLATE_NOOP", *_INSTALLED]
+
+
+def __getattr__(name):
+    if name.startswith("__") and name.endswith("__"):
+        raise AttributeError(name)
+    raise AttributeError(
+        f"module {__name__!r} has no attribute {name!r}; "
+        f"it exports only {{{', '.join(__all__)}}}. "
+        "Set FERROCAD_PYSIDE_BACKEND=PySide6 to import a real Qt."
+    )

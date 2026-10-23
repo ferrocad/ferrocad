@@ -3,7 +3,8 @@
 Covers the D0 fixes (``docs/tasks/d0-draft-import.md``):
 
 * ``lazy_loader.LazyLoader`` imports on first attribute access and caches.
-* ``PySide`` aliases the installed PySide6 and tolerates absent modules.
+* ``PySide`` is a pure-Python name subset (no Qt runtime), with a loud
+  ``AttributeError`` outside its allowlist and a loose-file ``QFile``.
 * ``Draft_rc`` is an importable, resource-free stub.
 * ``freecad.deprecation`` resolves when upstream's ``src/Ext`` is on the path,
   and is not shadowed by the facade when it is not.
@@ -119,33 +120,130 @@ class LazyLoaderTests(unittest.TestCase):
         )
 
 
-class PySideAliasTests(unittest.TestCase):
-    def test_qtcore_and_qtwidgets_are_pyside6_modules(self):
-        from PySide import QtCore, QtWidgets
+class PySideStubTests(unittest.TestCase):
+    """Q0a/Q0b: the shim is a subset, not an alias, and reads mod resources."""
 
-        import PySide6.QtCore
-        import PySide6.QtWidgets
+    def setUp(self):
+        import PySide._qt_stub as stub
 
-        self.assertIs(QtCore, PySide6.QtCore)
-        self.assertIs(QtWidgets, PySide6.QtWidgets)
-        self.assertIs(sys.modules["PySide.QtCore"], sys.modules["PySide6.QtCore"])
+        stub.clear_resource_cache()
+        self.addCleanup(stub.clear_resource_cache)
+
+    def test_modules_are_pure_python_stub_modules(self):
+        import PySide
+        import PySide._qt_stub as stub
+        from PySide import QtCore, QtGui, QtWidgets
+
+        self.assertTrue(PySide.USING_STUB)
+        self.assertIs(getattr(PySide, stub.STUB_MARKER), True)
+        for name, module in (
+            ("QtCore", QtCore),
+            ("QtGui", QtGui),
+            ("QtWidgets", QtWidgets),
+        ):
+            self.assertIsInstance(module, stub.QtStubModule)
+            self.assertEqual(module.__name__, f"PySide.{name}")
+            self.assertIs(getattr(module, stub.STUB_MARKER), True)
+            self.assertIs(sys.modules[f"PySide.{name}"], module)
+
+        # The old alias shared the module object with PySide6; the stub must not.
+        for loaded_name, loaded in list(sys.modules.items()):
+            if loaded_name.startswith(("PySide6", "shiboken")):
+                self.assertIsNot(loaded, QtCore)
+                self.assertIsNot(loaded, QtGui)
+                self.assertIsNot(loaded, QtWidgets)
 
     def test_translate_noop_is_available_at_module_and_package_level(self):
         import PySide
+        from PySide import QtCore, QtWidgets
         from PySide.QtCore import QT_TRANSLATE_NOOP
 
         self.assertEqual(QT_TRANSLATE_NOOP("draft", "Rectangle"), "Rectangle")
         self.assertEqual(PySide.QT_TRANSLATE_NOOP("draft", "Rectangle"), "Rectangle")
+        self.assertEqual(QtCore.QCoreApplication.translate("draft", "Line", None), "Line")
+        self.assertEqual(QtWidgets.QApplication.translate("draft", "Line"), "Line")
 
-    def test_pyside6_is_not_imported_twice(self):
-        import PySide.QtGui
+    def test_qt6_has_no_unicode_utf8_and_the_shim_matches(self):
+        # ``draftutils/translate.py`` probes this in a try/except AttributeError.
+        from PySide import QtWidgets
 
-        module = importlib.import_module("PySide6.QtGui")
-        self.assertIs(PySide.QtGui, module)
-        # The alias is the same object, not a copy: one entry holds it.
-        holding = [k for k, v in sys.modules.items() if v is module]
-        self.assertIn("PySide.QtGui", holding)
-        self.assertIn("PySide6.QtGui", holding)
+        with self.assertRaises(AttributeError):
+            QtWidgets.QApplication.UnicodeUTF8
+
+    def test_unknown_names_raise_with_the_module_and_name(self):
+        import PySide
+        from PySide import QtCore, QtGui
+
+        with self.assertRaises(AttributeError) as raised:
+            QtCore.QDir
+        message = str(raised.exception)
+        self.assertIn("PySide.QtCore", message)
+        self.assertIn("QDir", message)
+
+        # QtGui intentionally exports no names: nothing is evaluated at import
+        # time by the headless Draft path, so everything fails loudly.
+        with self.assertRaises(AttributeError) as raised:
+            QtGui.QIcon
+        self.assertIn("PySide.QtGui", str(raised.exception))
+        self.assertIn("QIcon", str(raised.exception))
+
+        with self.assertRaises(AttributeError) as raised:
+            PySide.QtSvg
+        self.assertIn("PySide", str(raised.exception))
+        self.assertIn("QtSvg", str(raised.exception))
+
+    def test_qt_svg_is_not_provided(self):
+        # QtSvg is not a default requirement (qt-strategy.md §4).
+        self.assertNotIn("PySide.QtSvg", sys.modules)
+        with self.assertRaises(ModuleNotFoundError):
+            importlib.import_module("PySide.QtSvg")
+
+    def test_io_device_flags_match_qt(self):
+        from PySide import QtCore
+
+        self.assertEqual(QtCore.QIODevice.ReadOnly, 1)
+        self.assertEqual(QtCore.QIODevice.WriteOnly, 2)
+        self.assertEqual(QtCore.QFile.Text, 16)
+        self.assertEqual(QtCore.QIODevice.ReadOnly | QtCore.QFile.Text, 17)
+
+    def test_signal_and_legacy_connect(self):
+        from PySide import QtCore
+
+        class Emitter(QtCore.QObject):
+            def __init__(self):
+                super().__init__()
+                self.valueChanged = self.signal("valueChanged")
+
+        emitter = Emitter()
+        seen = []
+        QtCore.QObject.connect(
+            emitter, QtCore.SIGNAL("valueChanged(double)"), seen.append
+        )
+        emitter.valueChanged.emit(1.5)
+        self.assertEqual(seen, [1.5])
+
+        self.assertEqual(QtCore.SIGNAL("clicked()").name, "clicked")
+        with self.assertRaises(AttributeError) as raised:
+            QtCore.QObject.connect(emitter, QtCore.SIGNAL("missing()"), seen.append)
+        self.assertIn("missing", str(raised.exception))
+
+    def test_timer_single_shot_zero_runs_immediately(self):
+        from PySide import QtCore
+
+        seen = []
+        QtCore.QTimer.singleShot(0, lambda: seen.append("fired"))
+        self.assertEqual(seen, ["fired"])
+
+    def test_locale_decimal_point_and_font_paths(self):
+        from PySide import QtCore
+
+        self.assertEqual(QtCore.QLocale().decimalPoint(), ".")
+        paths = QtCore.QStandardPaths.standardLocations(
+            QtCore.QStandardPaths.FontsLocation
+        )
+        self.assertIsInstance(paths, list)
+        for path in paths:
+            self.assertTrue(os.path.isdir(path), path)
 
     def test_resource_paths_read_a_mods_loose_files(self):
         from PySide import QtCore
@@ -157,47 +255,61 @@ class PySideAliasTests(unittest.TestCase):
             sys.path.insert(0, tmp)
             try:
                 handle = QtCore.QFile(":/ui/preferences-demo.ui")
+                self.assertTrue(handle.exists())
                 self.assertTrue(
                     handle.open(QtCore.QIODevice.ReadOnly | QtCore.QFile.Text)
                 )
                 self.assertEqual(handle.readAll().data().decode(), "<ui>demo</ui>")
                 handle.close()
+                self.assertFalse(handle.isOpen())
             finally:
                 sys.path.remove(tmp)
 
-    def test_plain_paths_still_go_to_qt(self):
+    def test_read_is_incremental(self):
+        from PySide import QtCore
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "Resources" / "ui"
+            root.mkdir(parents=True)
+            (root / "tiny.ui").write_text("abcdef")
+            sys.path.insert(0, tmp)
+            try:
+                handle = QtCore.QFile(":/ui/tiny.ui")
+                self.assertTrue(handle.open(QtCore.QIODevice.ReadOnly))
+                self.assertEqual(bytes(handle.read(2)), b"ab")
+                self.assertEqual(handle.readAll().data(), b"cdef")
+                self.assertTrue(handle.atEnd())
+                handle.close()
+            finally:
+                sys.path.remove(tmp)
+
+    def test_a_missing_resource_returns_false_like_qt(self):
+        from PySide import QtCore
+
+        handle = QtCore.QFile(":/ui/does-not-exist.ui")
+        self.assertFalse(handle.exists())
+        self.assertFalse(handle.open(QtCore.QIODevice.ReadOnly))
+
+    def test_plain_paths_still_read_from_disk(self):
         from PySide import QtCore
 
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "plain.txt"
             path.write_text("hello")
             handle = QtCore.QFile(str(path))
-            self.assertTrue(
-                handle.open(QtCore.QIODevice.ReadOnly | QtCore.QFile.Text)
-            )
+            self.assertTrue(handle.open(QtCore.QIODevice.ReadOnly | QtCore.QFile.Text))
             self.assertEqual(handle.readAll().data().decode(), "hello")
             handle.close()
 
-    def test_absent_qtsvg_is_tolerated(self):
-        try:
-            importlib.import_module("PySide6.QtSvg")
-        except ImportError:
-            have_svg = False
-        else:
-            have_svg = True
-
-        if have_svg:
-            from PySide import QtSvg
-
-            self.assertIs(QtSvg, importlib.import_module("PySide6.QtSvg"))
-        else:
-            self.assertNotIn("PySide.QtSvg", sys.modules)
-            with self.assertRaises(ModuleNotFoundError):
-                importlib.import_module("PySide.QtSvg")
-        # Either way, the rest of the package still imports.
+    def test_writing_through_qfile_is_loud(self):
         from PySide import QtCore
 
-        self.assertTrue(hasattr(QtCore, "QCoreApplication"))
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "out.txt"
+            handle = QtCore.QFile(str(path))
+            with self.assertRaises(NotImplementedError) as raised:
+                handle.open(QtCore.QIODevice.WriteOnly)
+            self.assertIn("read-only", str(raised.exception))
 
 
 class DraftResourceStubTests(unittest.TestCase):

@@ -1,0 +1,1196 @@
+{
+  "contract": {
+    "forms": {
+      "DxfImportDialog.py": {
+        "accesses": 28,
+        "pair_count": 8,
+        "pairs": [
+          [
+            "QCheckBox",
+            "isChecked"
+          ],
+          [
+            "QLabel",
+            "hide"
+          ],
+          [
+            "QLabel",
+            "setText"
+          ],
+          [
+            "QLabel",
+            "show"
+          ],
+          [
+            "QRadioButton",
+            "isChecked"
+          ],
+          [
+            "QRadioButton",
+            "setChecked"
+          ],
+          [
+            "QRadioButton",
+            "setEnabled"
+          ],
+          [
+            "QRadioButton",
+            "toggled"
+          ]
+        ],
+        "root_signals": [],
+        "ui": "preferences-dxf-import.ui",
+        "widgets": 11
+      },
+      "draftguitools/gui_annotationstyleeditor.py": {
+        "accesses": 40,
+        "pair_count": 15,
+        "pairs": [
+          [
+            "QComboBox",
+            "addItem"
+          ],
+          [
+            "QComboBox",
+            "count"
+          ],
+          [
+            "QComboBox",
+            "currentIndex"
+          ],
+          [
+            "QComboBox",
+            "currentIndexChanged"
+          ],
+          [
+            "QComboBox",
+            "findText"
+          ],
+          [
+            "QComboBox",
+            "itemText"
+          ],
+          [
+            "QComboBox",
+            "removeItem"
+          ],
+          [
+            "QComboBox",
+            "setCurrentIndex"
+          ],
+          [
+            "QComboBox",
+            "setItemText"
+          ],
+          [
+            "QDialogButtonBox",
+            "accepted"
+          ],
+          [
+            "QPushButton",
+            "clicked"
+          ],
+          [
+            "QPushButton",
+            "resize"
+          ],
+          [
+            "QPushButton",
+            "setEnabled"
+          ],
+          [
+            "QPushButton",
+            "setIcon"
+          ],
+          [
+            "QPushButton",
+            "sizeHint"
+          ]
+        ],
+        "root_signals": [],
+        "ui": "dialog_AnnotationStyleEditor.ui",
+        "widgets": 53
+      },
+      "draftguitools/gui_hatch.py": {
+        "accesses": 27,
+        "pair_count": 13,
+        "pairs": [
+          [
+            "Gui::FileChooser",
+            "fileNameChanged"
+          ],
+          [
+            "Gui::FileChooser",
+            "property"
+          ],
+          [
+            "Gui::FileChooser",
+            "setFileName"
+          ],
+          [
+            "QCheckBox",
+            "isChecked"
+          ],
+          [
+            "QCheckBox",
+            "setChecked"
+          ],
+          [
+            "QComboBox",
+            "addItems"
+          ],
+          [
+            "QComboBox",
+            "clear"
+          ],
+          [
+            "QComboBox",
+            "count"
+          ],
+          [
+            "QComboBox",
+            "currentText"
+          ],
+          [
+            "QComboBox",
+            "itemText"
+          ],
+          [
+            "QComboBox",
+            "setCurrentText"
+          ],
+          [
+            "QDoubleSpinBox",
+            "setValue"
+          ],
+          [
+            "QDoubleSpinBox",
+            "value"
+          ]
+        ],
+        "root_signals": [],
+        "ui": "dialogHatch.ui",
+        "widgets": 11
+      },
+      "draftguitools/gui_layers.py": {
+        "accesses": 27,
+        "pair_count": 12,
+        "pairs": [
+          [
+            "QPushButton",
+            "clicked"
+          ],
+          [
+            "QPushButton",
+            "setIcon"
+          ],
+          [
+            "QTreeView",
+            "header"
+          ],
+          [
+            "QTreeView",
+            "selectAll"
+          ],
+          [
+            "QTreeView",
+            "selectedIndexes"
+          ],
+          [
+            "QTreeView",
+            "setColumnWidth"
+          ],
+          [
+            "QTreeView",
+            "setItemDelegate"
+          ],
+          [
+            "QTreeView",
+            "setItemsExpandable"
+          ],
+          [
+            "QTreeView",
+            "setModel"
+          ],
+          [
+            "QTreeView",
+            "setRootIsDecorated"
+          ],
+          [
+            "QTreeView",
+            "setSelectionMode"
+          ],
+          [
+            "QTreeView",
+            "setUniformRowHeights"
+          ]
+        ],
+        "root_signals": [
+          "rejected"
+        ],
+        "ui": "dialogLayers.ui",
+        "widgets": 9
+      },
+      "draftguitools/gui_setstyle.py": {
+        "accesses": 158,
+        "pair_count": 22,
+        "pairs": [
+          [
+            "Gui::ColorButton",
+            "property"
+          ],
+          [
+            "Gui::ColorButton",
+            "setProperty"
+          ],
+          [
+            "Gui::InputField",
+            "setText"
+          ],
+          [
+            "Gui::InputField",
+            "text"
+          ],
+          [
+            "QCheckBox",
+            "isChecked"
+          ],
+          [
+            "QCheckBox",
+            "setChecked"
+          ],
+          [
+            "QComboBox",
+            "addItems"
+          ],
+          [
+            "QComboBox",
+            "clear"
+          ],
+          [
+            "QComboBox",
+            "currentIndex"
+          ],
+          [
+            "QComboBox",
+            "currentIndexChanged"
+          ],
+          [
+            "QComboBox",
+            "itemText"
+          ],
+          [
+            "QComboBox",
+            "setCurrentIndex"
+          ],
+          [
+            "QDoubleSpinBox",
+            "setValue"
+          ],
+          [
+            "QDoubleSpinBox",
+            "value"
+          ],
+          [
+            "QFontComboBox",
+            "currentFont"
+          ],
+          [
+            "QFontComboBox",
+            "setCurrentFont"
+          ],
+          [
+            "QLineEdit",
+            "setText"
+          ],
+          [
+            "QLineEdit",
+            "text"
+          ],
+          [
+            "QPushButton",
+            "clicked"
+          ],
+          [
+            "QPushButton",
+            "setIcon"
+          ],
+          [
+            "QSpinBox",
+            "setValue"
+          ],
+          [
+            "QSpinBox",
+            "value"
+          ]
+        ],
+        "root_signals": [],
+        "ui": "TaskPanel_SetStyle.ui",
+        "widgets": 72
+      },
+      "drafttaskpanels/task_circulararray.py": {
+        "accesses": 49,
+        "pair_count": 14,
+        "pairs": [
+          [
+            "Gui::InputField",
+            "selectAll"
+          ],
+          [
+            "Gui::InputField",
+            "setEnabled"
+          ],
+          [
+            "Gui::InputField",
+            "setFocus"
+          ],
+          [
+            "Gui::InputField",
+            "setProperty"
+          ],
+          [
+            "Gui::InputField",
+            "text"
+          ],
+          [
+            "Gui::QuantitySpinBox",
+            "setProperty"
+          ],
+          [
+            "Gui::QuantitySpinBox",
+            "text"
+          ],
+          [
+            "QCheckBox",
+            "checkStateChanged"
+          ],
+          [
+            "QCheckBox",
+            "isChecked"
+          ],
+          [
+            "QCheckBox",
+            "setChecked"
+          ],
+          [
+            "QCheckBox",
+            "stateChanged"
+          ],
+          [
+            "QPushButton",
+            "clicked"
+          ],
+          [
+            "QSpinBox",
+            "setValue"
+          ],
+          [
+            "QSpinBox",
+            "value"
+          ]
+        ],
+        "root_signals": [],
+        "ui": "TaskPanel_CircularArray.ui",
+        "widgets": 19
+      },
+      "drafttaskpanels/task_orthoarray.py": {
+        "accesses": 72,
+        "pair_count": 19,
+        "pairs": [
+          [
+            "Gui::InputField",
+            "setProperty"
+          ],
+          [
+            "Gui::InputField",
+            "text"
+          ],
+          [
+            "QCheckBox",
+            "checkStateChanged"
+          ],
+          [
+            "QCheckBox",
+            "isChecked"
+          ],
+          [
+            "QCheckBox",
+            "setChecked"
+          ],
+          [
+            "QCheckBox",
+            "stateChanged"
+          ],
+          [
+            "QGroupBox",
+            "hide"
+          ],
+          [
+            "QGroupBox",
+            "layout"
+          ],
+          [
+            "QGroupBox",
+            "setTitle"
+          ],
+          [
+            "QGroupBox",
+            "show"
+          ],
+          [
+            "QPushButton",
+            "clicked"
+          ],
+          [
+            "QPushButton",
+            "isChecked"
+          ],
+          [
+            "QPushButton",
+            "setChecked"
+          ],
+          [
+            "QPushButton",
+            "setText"
+          ],
+          [
+            "QRadioButton",
+            "clicked"
+          ],
+          [
+            "QRadioButton",
+            "isChecked"
+          ],
+          [
+            "QRadioButton",
+            "setChecked"
+          ],
+          [
+            "QSpinBox",
+            "setValue"
+          ],
+          [
+            "QSpinBox",
+            "value"
+          ]
+        ],
+        "root_signals": [],
+        "ui": "TaskPanel_OrthoArray.ui",
+        "widgets": 39
+      },
+      "drafttaskpanels/task_polararray.py": {
+        "accesses": 45,
+        "pair_count": 14,
+        "pairs": [
+          [
+            "Gui::InputField",
+            "selectAll"
+          ],
+          [
+            "Gui::InputField",
+            "setEnabled"
+          ],
+          [
+            "Gui::InputField",
+            "setFocus"
+          ],
+          [
+            "Gui::InputField",
+            "setProperty"
+          ],
+          [
+            "Gui::InputField",
+            "text"
+          ],
+          [
+            "Gui::QuantitySpinBox",
+            "setProperty"
+          ],
+          [
+            "Gui::QuantitySpinBox",
+            "text"
+          ],
+          [
+            "QCheckBox",
+            "checkStateChanged"
+          ],
+          [
+            "QCheckBox",
+            "isChecked"
+          ],
+          [
+            "QCheckBox",
+            "setChecked"
+          ],
+          [
+            "QCheckBox",
+            "stateChanged"
+          ],
+          [
+            "QPushButton",
+            "clicked"
+          ],
+          [
+            "QSpinBox",
+            "setValue"
+          ],
+          [
+            "QSpinBox",
+            "value"
+          ]
+        ],
+        "root_signals": [],
+        "ui": "TaskPanel_PolarArray.ui",
+        "widgets": 15
+      },
+      "drafttaskpanels/task_selectplane.py": {
+        "accesses": 0,
+        "pair_count": 0,
+        "pairs": [],
+        "root_signals": [],
+        "ui": "TaskSelectPlane.ui",
+        "widgets": 26
+      },
+      "drafttaskpanels/task_shapestring.py": {
+        "accesses": 22,
+        "pair_count": 11,
+        "pairs": [
+          [
+            "Gui::FileChooser",
+            "fileNameSelected"
+          ],
+          [
+            "Gui::FileChooser",
+            "setFileName"
+          ],
+          [
+            "Gui::QuantitySpinBox",
+            "setProperty"
+          ],
+          [
+            "Gui::QuantitySpinBox",
+            "valueChanged"
+          ],
+          [
+            "QCheckBox",
+            "checkStateChanged"
+          ],
+          [
+            "QCheckBox",
+            "setChecked"
+          ],
+          [
+            "QCheckBox",
+            "stateChanged"
+          ],
+          [
+            "QLabel",
+            "setText"
+          ],
+          [
+            "QLineEdit",
+            "setText"
+          ],
+          [
+            "QLineEdit",
+            "textEdited"
+          ],
+          [
+            "QPushButton",
+            "clicked"
+          ]
+        ],
+        "root_signals": [],
+        "ui": "TaskShapeString.ui",
+        "widgets": 15
+      }
+    },
+    "pair_count": 72,
+    "pairs": [
+      [
+        "Gui::ColorButton",
+        "property"
+      ],
+      [
+        "Gui::ColorButton",
+        "setProperty"
+      ],
+      [
+        "Gui::FileChooser",
+        "fileNameChanged"
+      ],
+      [
+        "Gui::FileChooser",
+        "fileNameSelected"
+      ],
+      [
+        "Gui::FileChooser",
+        "property"
+      ],
+      [
+        "Gui::FileChooser",
+        "setFileName"
+      ],
+      [
+        "Gui::InputField",
+        "selectAll"
+      ],
+      [
+        "Gui::InputField",
+        "setEnabled"
+      ],
+      [
+        "Gui::InputField",
+        "setFocus"
+      ],
+      [
+        "Gui::InputField",
+        "setProperty"
+      ],
+      [
+        "Gui::InputField",
+        "setText"
+      ],
+      [
+        "Gui::InputField",
+        "text"
+      ],
+      [
+        "Gui::QuantitySpinBox",
+        "setProperty"
+      ],
+      [
+        "Gui::QuantitySpinBox",
+        "text"
+      ],
+      [
+        "Gui::QuantitySpinBox",
+        "valueChanged"
+      ],
+      [
+        "QCheckBox",
+        "checkStateChanged"
+      ],
+      [
+        "QCheckBox",
+        "isChecked"
+      ],
+      [
+        "QCheckBox",
+        "setChecked"
+      ],
+      [
+        "QCheckBox",
+        "stateChanged"
+      ],
+      [
+        "QComboBox",
+        "addItem"
+      ],
+      [
+        "QComboBox",
+        "addItems"
+      ],
+      [
+        "QComboBox",
+        "clear"
+      ],
+      [
+        "QComboBox",
+        "count"
+      ],
+      [
+        "QComboBox",
+        "currentIndex"
+      ],
+      [
+        "QComboBox",
+        "currentIndexChanged"
+      ],
+      [
+        "QComboBox",
+        "currentText"
+      ],
+      [
+        "QComboBox",
+        "findText"
+      ],
+      [
+        "QComboBox",
+        "itemText"
+      ],
+      [
+        "QComboBox",
+        "removeItem"
+      ],
+      [
+        "QComboBox",
+        "setCurrentIndex"
+      ],
+      [
+        "QComboBox",
+        "setCurrentText"
+      ],
+      [
+        "QComboBox",
+        "setItemText"
+      ],
+      [
+        "QDialogButtonBox",
+        "accepted"
+      ],
+      [
+        "QDoubleSpinBox",
+        "setValue"
+      ],
+      [
+        "QDoubleSpinBox",
+        "value"
+      ],
+      [
+        "QFontComboBox",
+        "currentFont"
+      ],
+      [
+        "QFontComboBox",
+        "setCurrentFont"
+      ],
+      [
+        "QGroupBox",
+        "hide"
+      ],
+      [
+        "QGroupBox",
+        "layout"
+      ],
+      [
+        "QGroupBox",
+        "setTitle"
+      ],
+      [
+        "QGroupBox",
+        "show"
+      ],
+      [
+        "QLabel",
+        "hide"
+      ],
+      [
+        "QLabel",
+        "setText"
+      ],
+      [
+        "QLabel",
+        "show"
+      ],
+      [
+        "QLineEdit",
+        "setText"
+      ],
+      [
+        "QLineEdit",
+        "text"
+      ],
+      [
+        "QLineEdit",
+        "textEdited"
+      ],
+      [
+        "QPushButton",
+        "clicked"
+      ],
+      [
+        "QPushButton",
+        "isChecked"
+      ],
+      [
+        "QPushButton",
+        "resize"
+      ],
+      [
+        "QPushButton",
+        "setChecked"
+      ],
+      [
+        "QPushButton",
+        "setEnabled"
+      ],
+      [
+        "QPushButton",
+        "setIcon"
+      ],
+      [
+        "QPushButton",
+        "setText"
+      ],
+      [
+        "QPushButton",
+        "sizeHint"
+      ],
+      [
+        "QRadioButton",
+        "clicked"
+      ],
+      [
+        "QRadioButton",
+        "isChecked"
+      ],
+      [
+        "QRadioButton",
+        "setChecked"
+      ],
+      [
+        "QRadioButton",
+        "setEnabled"
+      ],
+      [
+        "QRadioButton",
+        "toggled"
+      ],
+      [
+        "QSpinBox",
+        "setValue"
+      ],
+      [
+        "QSpinBox",
+        "value"
+      ],
+      [
+        "QTreeView",
+        "header"
+      ],
+      [
+        "QTreeView",
+        "selectAll"
+      ],
+      [
+        "QTreeView",
+        "selectedIndexes"
+      ],
+      [
+        "QTreeView",
+        "setColumnWidth"
+      ],
+      [
+        "QTreeView",
+        "setItemDelegate"
+      ],
+      [
+        "QTreeView",
+        "setItemsExpandable"
+      ],
+      [
+        "QTreeView",
+        "setModel"
+      ],
+      [
+        "QTreeView",
+        "setRootIsDecorated"
+      ],
+      [
+        "QTreeView",
+        "setSelectionMode"
+      ],
+      [
+        "QTreeView",
+        "setUniformRowHeights"
+      ]
+    ],
+    "unknown_widget_names": {}
+  },
+  "measured": "2026-10-23",
+  "notes": [
+    "Counts are derived with the standard library only: xml.etree for the forms, a text pass for the Python call sites. No Qt, no display.",
+    "The class inventory, per-file widget counts and the 72 distinct (class, member) pairs match qt-strategy.md \u00a72.3\u2013\u00a72.4.",
+    "'accesses' pins every textual access this tool finds; it is not \u00a72.4's 'Calls' column, which uses a different counting rule.",
+    "Method-vs-signal is inferred from a trailing .connect, a heuristic; the signal payloads and connection counts need the panels to run and are not pinned.",
+    "Not reproducible without Qt: widget construction, signal payloads, alias-based access (none was found in these modules), and \u00a72.4's '7 signals / 34 connections' aggregate for the six core panels.",
+    "The checkout's git revision is not verified; counts are the drift check. Declared revision: 33adf61."
+  ],
+  "schema": 1,
+  "ui": {
+    "class_count": 32,
+    "classes": {
+      "Gui::ColorButton": 11,
+      "Gui::FileChooser": 2,
+      "Gui::InputField": 24,
+      "Gui::PrefCheckBox": 42,
+      "Gui::PrefColorButton": 5,
+      "Gui::PrefComboBox": 10,
+      "Gui::PrefDoubleSpinBox": 7,
+      "Gui::PrefFileChooser": 2,
+      "Gui::PrefFontBox": 1,
+      "Gui::PrefLineEdit": 29,
+      "Gui::PrefQuantitySpinBox": 1,
+      "Gui::PrefRadioButton": 4,
+      "Gui::PrefSpinBox": 10,
+      "Gui::PrefUnitSpinBox": 7,
+      "Gui::QuantitySpinBox": 14,
+      "QCheckBox": 13,
+      "QComboBox": 9,
+      "QDialog": 3,
+      "QDialogButtonBox": 2,
+      "QDoubleSpinBox": 6,
+      "QFontComboBox": 2,
+      "QFrame": 1,
+      "QGroupBox": 42,
+      "QLabel": 170,
+      "QLineEdit": 3,
+      "QPushButton": 30,
+      "QRadioButton": 7,
+      "QScrollArea": 1,
+      "QSpinBox": 16,
+      "QTabWidget": 1,
+      "QTreeView": 1,
+      "QWidget": 19
+    },
+    "custom_class_count": 15,
+    "custom_instance_count": 169,
+    "file_count": 19,
+    "files": {
+      "TaskPanel_CircularArray.ui": {
+        "classes": {
+          "Gui::InputField": 3,
+          "Gui::QuantitySpinBox": 2,
+          "QCheckBox": 2,
+          "QGroupBox": 1,
+          "QLabel": 7,
+          "QPushButton": 1,
+          "QSpinBox": 2,
+          "QWidget": 1
+        },
+        "widgets": 19
+      },
+      "TaskPanel_OrthoArray.ui": {
+        "classes": {
+          "Gui::InputField": 9,
+          "QCheckBox": 2,
+          "QGroupBox": 5,
+          "QLabel": 12,
+          "QPushButton": 4,
+          "QRadioButton": 3,
+          "QSpinBox": 3,
+          "QWidget": 1
+        },
+        "widgets": 39
+      },
+      "TaskPanel_PolarArray.ui": {
+        "classes": {
+          "Gui::InputField": 3,
+          "Gui::QuantitySpinBox": 1,
+          "QCheckBox": 2,
+          "QGroupBox": 1,
+          "QLabel": 5,
+          "QPushButton": 1,
+          "QSpinBox": 1,
+          "QWidget": 1
+        },
+        "widgets": 15
+      },
+      "TaskPanel_SetStyle.ui": {
+        "classes": {
+          "Gui::ColorButton": 8,
+          "Gui::InputField": 7,
+          "QCheckBox": 1,
+          "QComboBox": 5,
+          "QDoubleSpinBox": 2,
+          "QFontComboBox": 1,
+          "QGroupBox": 6,
+          "QLabel": 29,
+          "QLineEdit": 1,
+          "QPushButton": 3,
+          "QSpinBox": 5,
+          "QTabWidget": 1,
+          "QWidget": 3
+        },
+        "widgets": 72
+      },
+      "TaskSelectPlane.ui": {
+        "classes": {
+          "Gui::ColorButton": 1,
+          "Gui::InputField": 2,
+          "QCheckBox": 1,
+          "QLabel": 9,
+          "QPushButton": 9,
+          "QSpinBox": 3,
+          "QWidget": 1
+        },
+        "widgets": 26
+      },
+      "TaskShapeString.ui": {
+        "classes": {
+          "Gui::FileChooser": 1,
+          "Gui::QuantitySpinBox": 4,
+          "QCheckBox": 1,
+          "QLabel": 6,
+          "QLineEdit": 1,
+          "QPushButton": 1,
+          "QWidget": 1
+        },
+        "widgets": 15
+      },
+      "dialogHatch.ui": {
+        "classes": {
+          "Gui::FileChooser": 1,
+          "QCheckBox": 1,
+          "QComboBox": 1,
+          "QDoubleSpinBox": 2,
+          "QLabel": 5,
+          "QWidget": 1
+        },
+        "widgets": 11
+      },
+      "dialogLayers.ui": {
+        "classes": {
+          "QDialog": 1,
+          "QPushButton": 7,
+          "QTreeView": 1
+        },
+        "widgets": 9
+      },
+      "dialog_AnnotationStyleEditor.ui": {
+        "classes": {
+          "Gui::ColorButton": 2,
+          "Gui::QuantitySpinBox": 7,
+          "QCheckBox": 2,
+          "QComboBox": 3,
+          "QDialog": 1,
+          "QDialogButtonBox": 1,
+          "QDoubleSpinBox": 2,
+          "QFontComboBox": 1,
+          "QGroupBox": 6,
+          "QLabel": 19,
+          "QLineEdit": 1,
+          "QPushButton": 4,
+          "QScrollArea": 1,
+          "QSpinBox": 2,
+          "QWidget": 1
+        },
+        "widgets": 53
+      },
+      "preferences-draft.ui": {
+        "classes": {
+          "Gui::PrefCheckBox": 8,
+          "Gui::PrefColorButton": 1,
+          "Gui::PrefComboBox": 1,
+          "Gui::PrefLineEdit": 2,
+          "Gui::PrefSpinBox": 4,
+          "QGroupBox": 2,
+          "QLabel": 8,
+          "QWidget": 1
+        },
+        "widgets": 27
+      },
+      "preferences-draftinterface.ui": {
+        "classes": {
+          "Gui::PrefCheckBox": 3,
+          "Gui::PrefLineEdit": 22,
+          "QGroupBox": 2,
+          "QLabel": 22,
+          "QWidget": 1
+        },
+        "widgets": 50
+      },
+      "preferences-draftsnap.ui": {
+        "classes": {
+          "Gui::PrefCheckBox": 6,
+          "Gui::PrefColorButton": 2,
+          "Gui::PrefComboBox": 4,
+          "Gui::PrefQuantitySpinBox": 1,
+          "Gui::PrefSpinBox": 3,
+          "QGroupBox": 2,
+          "QLabel": 10,
+          "QWidget": 1
+        },
+        "widgets": 29
+      },
+      "preferences-drafttexts.ui": {
+        "classes": {
+          "Gui::PrefCheckBox": 2,
+          "Gui::PrefColorButton": 2,
+          "Gui::PrefComboBox": 2,
+          "Gui::PrefDoubleSpinBox": 2,
+          "Gui::PrefFontBox": 1,
+          "Gui::PrefLineEdit": 2,
+          "Gui::PrefSpinBox": 2,
+          "Gui::PrefUnitSpinBox": 7,
+          "QGroupBox": 5,
+          "QLabel": 18,
+          "QWidget": 1
+        },
+        "widgets": 44
+      },
+      "preferences-draftvisual.ui": {
+        "classes": {
+          "Gui::PrefDoubleSpinBox": 1,
+          "Gui::PrefFileChooser": 1,
+          "Gui::PrefLineEdit": 3,
+          "QGroupBox": 2,
+          "QLabel": 5,
+          "QWidget": 1
+        },
+        "widgets": 13
+      },
+      "preferences-dwg.ui": {
+        "classes": {
+          "Gui::PrefComboBox": 1,
+          "Gui::PrefFileChooser": 1,
+          "QGroupBox": 1,
+          "QLabel": 3,
+          "QWidget": 1
+        },
+        "widgets": 7
+      },
+      "preferences-dxf-import.ui": {
+        "classes": {
+          "QCheckBox": 1,
+          "QDialog": 1,
+          "QDialogButtonBox": 1,
+          "QFrame": 1,
+          "QGroupBox": 1,
+          "QLabel": 2,
+          "QRadioButton": 4
+        },
+        "widgets": 11
+      },
+      "preferences-dxf.ui": {
+        "classes": {
+          "Gui::PrefCheckBox": 18,
+          "Gui::PrefDoubleSpinBox": 2,
+          "Gui::PrefRadioButton": 4,
+          "QGroupBox": 5,
+          "QLabel": 5,
+          "QWidget": 1
+        },
+        "widgets": 35
+      },
+      "preferences-oca.ui": {
+        "classes": {
+          "Gui::PrefCheckBox": 1,
+          "QGroupBox": 1,
+          "QWidget": 1
+        },
+        "widgets": 3
+      },
+      "preferences-svg.ui": {
+        "classes": {
+          "Gui::PrefCheckBox": 4,
+          "Gui::PrefComboBox": 2,
+          "Gui::PrefDoubleSpinBox": 2,
+          "Gui::PrefSpinBox": 1,
+          "QGroupBox": 2,
+          "QLabel": 5,
+          "QWidget": 1
+        },
+        "widgets": 17
+      }
+    },
+    "plain_class_count": 17,
+    "plain_instance_count": 326,
+    "widget_count": 495
+  },
+  "upstream": {
+    "path": "src/Mod/Draft",
+    "revision": "33adf61"
+  }
+}

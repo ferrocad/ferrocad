@@ -2467,6 +2467,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "ferrocad_ui"
+version = "0.1.2"
+dependencies = [
+ "roxmltree 0.21.1",
+]
+
+[[package]]
 name = "ferrocad_viewport"
 version = "0.1.2"
 dependencies = [

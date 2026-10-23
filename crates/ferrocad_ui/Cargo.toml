@@ -1,0 +1,28 @@
+# Q1: the Qt Designer `.ui` reader.
+#
+# `ferrocad_ui` turns upstream Qt Designer XML into a typed, ordered form tree.
+# It deliberately has no Qt, Python or gpui dependency: Q2 (`ferrocad_ui_py`)
+# builds the proxy layer on top, Q3 renders the core forms. The only dependency
+# is the XML parser, which is already in the workspace lock file.
+[package]
+name = "ferrocad_ui"
+version = "0.1.2"
+edition.workspace = true
+license.workspace = true
+readme.workspace = true
+repository.workspace = true
+homepage.workspace = true
+rust-version.workspace = true
+description = "Qt Designer .ui XML reader and typed form model (no Qt, no rendering)"
+keywords = ["cad", "freecad", "qt", "ui", "xml"]
+categories = ["parser-implementations"]
+documentation = "https://docs.rs/ferrocad_ui"
+
+[lib]
+name = "ferrocad_ui"
+
+[dependencies]
+# `positions` (a default feature) provides `Node::range()`, which is what maps an
+# offending element to a file/line/column. `ferrocad_core` already uses this
+# version, so it is present in `Cargo.lock` and the offline registry cache.
+roxmltree = "0.21"

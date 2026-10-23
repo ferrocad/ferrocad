@@ -109,6 +109,7 @@ fn get_or_create_object(
             doc: doc.clone_ref(py),
             inner: Arc::clone(inner),
             id,
+            view: Mutex::new(None),
         },
     )
     .unwrap();
@@ -1290,6 +1291,8 @@ struct PyDocumentObject {
     doc: Py<PyDocument>,
     inner: Arc<Mutex<CoreDocument>>,
     id: ObjectId,
+    /// The canonical `ViewObject`, created on first access (one per object).
+    view: Mutex<Option<Py<PyViewObject>>>,
 }
 
 impl PyDocumentObject {
@@ -1389,6 +1392,12 @@ impl PyDocument {
             let id = doc.add_object_with(&name, r#type, dup);
             if r#type == "App::Origin" {
                 create_origin_children(&mut doc, id);
+            }
+            // A freshly added object with a builder is dirty, as in FreeCAD: the
+            // next recompute builds its output (`Part::Box` → `Shape`) even before
+            // a property is edited.
+            if ferrocad_core::object_registry::get(r#type).is_some() {
+                doc.touch(id, false);
             }
             (id, tx)
         };
@@ -1935,10 +1944,16 @@ impl PyDocumentObject {
         }
     }
 
-    /// `ViewObject` is only present when a GUI is up; headless → `None`.
+    /// The headless view provider (`Transparency`, `ShapeAppearance`, …).
+    ///
+    /// Upstream only has a view object in a GUI session; FerroCAD keeps the model
+    /// that App-level code reads in every session (see `ferrocad_core::ViewState`).
     #[getter]
-    fn ViewObject(&self) -> Option<PyObject> {
-        None
+    fn ViewObject(slf: PyRef<'_, Self>) -> PyResult<Py<PyViewObject>> {
+        if !object_is_attached(&slf.inner, slf.id) {
+            return Err(deleted_object_error("ViewObject"));
+        }
+        view_object_for(slf.py(), &slf)
     }
 
     /// Whether the object must be recomputed (set by `enforceRecompute`/`touch`).
@@ -2427,6 +2442,66 @@ impl PyDocumentObject {
         parent_of(slf, true)
     }
 
+    /// `getParent()`: the geo-feature group (`App::Part`) this object belongs to.
+    fn getParent(slf: &Bound<'_, Self>) -> Option<Py<PyDocumentObject>> {
+        parent_of(slf, true)
+    }
+
+    /// `App::Link.setLink(obj)`: point `LinkedObject` at `obj` (or clear it with
+    /// `None`). `subname` narrows the link to one sub-element of the target.
+    #[pyo3(signature = (value, subname=None))]
+    fn setLink(
+        slf: &Bound<'_, Self>,
+        value: &Bound<'_, PyAny>,
+        subname: Option<&Bound<'_, PyAny>>,
+    ) -> PyResult<()> {
+        let (inner, id, type_id) = {
+            let this = slf.borrow();
+            (Arc::clone(&this.inner), this.id, {
+                let doc = this.inner.lock().unwrap();
+                doc.object(this.id)
+                    .map(|object| object.type_id.clone())
+                    .unwrap_or_default()
+            })
+        };
+        if !type_id.starts_with("App::Link") {
+            return Err(PyAttributeError::new_err(format!(
+                "'{type_id}' object has no attribute 'setLink'"
+            )));
+        }
+        let name = if value.is_none() {
+            String::new()
+        } else if let Ok(object) = value.extract::<PyRef<'_, PyDocumentObject>>() {
+            object.name_string()
+        } else if let Ok(name) = value.extract::<String>() {
+            name
+        } else {
+            return Err(PyTypeError::new_err(
+                "setLink expects a DocumentObject, a name, or None",
+            ));
+        };
+        let property = match subname {
+            Some(sub) if !sub.is_none() => {
+                let subs: Vec<String> = if let Ok(list) = sub.extract::<Vec<String>>() {
+                    list
+                } else if let Ok(one) = sub.extract::<String>() {
+                    vec![one]
+                } else {
+                    return Err(PyTypeError::new_err(
+                        "setLink's subname must be a string or a list of strings",
+                    ));
+                };
+                Property::LinkSub(name, subs)
+            }
+            _ => Property::Link(name),
+        };
+        inner
+            .lock()
+            .unwrap()
+            .set_property(id, "LinkedObject", property)
+            .map_err(PyValueError::new_err)
+    }
+
     /// `OutList`: the objects this object links to (group members).
     #[getter]
     fn OutList(slf: &Bound<'_, Self>) -> Vec<Py<PyDocumentObject>> {
@@ -2606,6 +2681,18 @@ impl PyDocumentObject {
             }
             Some(p) => Ok(property_to_py_at(py, &p, &inner, this_id, &name)),
             None => {
+                // View-provider properties (`obj.Visibility`, `obj.Transparency`, …)
+                // are forwarded in a GUI session upstream; here the view model is
+                // always present.
+                if VIEW_PROPERTIES.contains(&name.as_str()) {
+                    let view = {
+                        let this = slf.borrow();
+                        view_object_for(py, &this)
+                    };
+                    if let Ok(view) = view {
+                        return Ok(view.bind(py).getattr(name.as_str())?.unbind());
+                    }
+                }
                 let type_id = {
                     let this = slf.borrow();
                     let doc = this.inner.lock().unwrap();
@@ -2772,6 +2859,16 @@ impl PyDocumentObject {
                 }
             }
             Some(_) => py_to_property(value)?,
+            // View-provider properties are forwarded to `ViewObject` (upstream's
+            // GUI-only `DocumentObjectPy` behaves the same way).
+            None if VIEW_PROPERTIES.contains(&name.as_str()) => {
+                let view = {
+                    let this = slf.borrow();
+                    view_object_for(slf.py(), &this)
+                }?;
+                view.bind(slf.py()).setattr(name.as_str(), value)?;
+                return Ok(());
+            }
             // Not a known property: store it as a Python attribute (`Proxy`, …).
             None => return set_instance_attr(slf, &name, value),
         };
@@ -3922,16 +4019,49 @@ impl PyVector2d {
 }
 
 #[pyclass(name = "Material", module = "ferrocad")]
-#[derive(Clone, PartialEq)]
+#[derive(Clone)]
 struct PyMaterial {
     diffuse: [f64; 4],
+    /// When this handle came from a `ViewObject`, changes are written back to it
+    /// (`ShapeAppearance[i].DiffuseColor = ...`). A plain `App.Material` has none.
+    owner: Option<MaterialOwner>,
+}
+
+/// Which view-state slot a [`PyMaterial`] handle writes back to.
+#[derive(Clone, Copy, Debug)]
+enum MaterialSlot {
+    /// `ShapeAppearance[index]`.
+    Appearance(usize),
+    /// `ShapeMaterial`.
+    Material,
+}
+
+/// The document object a [`PyMaterial`] handle belongs to.
+#[derive(Clone)]
+struct MaterialOwner {
+    inner: Arc<Mutex<CoreDocument>>,
+    id: ObjectId,
+    slot: MaterialSlot,
+}
+
+impl PyMaterial {
+    /// A handle on `color` that writes back into `object`'s view state.
+    fn owned(color: [f64; 4], inner: Arc<Mutex<CoreDocument>>, id: ObjectId, slot: MaterialSlot) -> Self {
+        Self {
+            diffuse: color,
+            owner: Some(MaterialOwner { inner, id, slot }),
+        }
+    }
 }
 
 #[pymethods]
 impl PyMaterial {
     #[new]
     fn new() -> Self {
-        Self { diffuse: [0.8, 0.8, 0.8, 1.0] }
+        Self {
+            diffuse: [0.8, 0.8, 0.8, 1.0],
+            owner: None,
+        }
     }
 
     #[getter]
@@ -3941,12 +4071,15 @@ impl PyMaterial {
 
     #[setter]
     fn set_DiffuseColor(&mut self, value: &Bound<'_, PyAny>) -> PyResult<()> {
-        if let Ok((r, g, b, a)) = value.extract::<(f64, f64, f64, f64)>() {
-            self.diffuse = [r, g, b, a];
-        } else if let Ok((r, g, b)) = value.extract::<(f64, f64, f64)>() {
-            self.diffuse = [r, g, b, 1.0];
-        } else {
-            return Err(PyTypeError::new_err("DiffuseColor expects (r, g, b[, a])"));
+        let color = py_to_color(value)?;
+        self.diffuse = color;
+        // A colour change is not a transparency change (upstream PR 11866): only
+        // the colour slot moves.
+        if let Some(owner) = &self.owner {
+            update_view_state(&owner.inner, owner.id, |state| match owner.slot {
+                MaterialSlot::Appearance(index) => state.set_appearance_slot(index, color),
+                MaterialSlot::Material => state.material = Some(color),
+            });
         }
         Ok(())
     }
@@ -3960,6 +4093,499 @@ impl PyMaterial {
 
     fn __ne__(&self, other: &Bound<'_, PyAny>) -> bool {
         !self.__eq__(other)
+    }
+}
+
+// ---------------------------------------------------------------------------
+// ViewObject (the headless view provider)
+// ---------------------------------------------------------------------------
+
+/// Display modes a Part view provider offers (FreeCAD `ViewProviderPartExt`).
+const DISPLAY_MODES: &[&str] = &["Flat Lines", "Shaded", "Wireframe", "Points"];
+
+/// Properties a document object forwards to its view object when it has no
+/// property of that name (`box.Visibility = False`, as upstream allows in a GUI
+/// session).
+const VIEW_PROPERTIES: &[&str] = &[
+    "Visibility",
+    "Transparency",
+    "ShapeColor",
+    "ShapeAppearance",
+    "ShapeMaterial",
+    "DiffuseColor",
+    "DisplayMode",
+];
+
+/// The view object of one document object (`obj.ViewObject`).
+///
+/// Upstream creates a `Gui::ViewProvider` next to every object only in a GUI
+/// session. FerroCAD keeps the same small model in every session: the state lives
+/// in [`ViewState`](ferrocad_core::ViewState) on the object, and this class is the
+/// Python face of it. `RootNode` is a real Coin scene graph when `pivy` is
+/// importable (it mirrors the state); otherwise it is absent, exactly as a
+/// Coin-less build has no scene graph.
+#[pyclass(name = "ViewObject", module = "ferrocad")]
+struct PyViewObject {
+    doc: Py<PyDocument>,
+    inner: Arc<Mutex<CoreDocument>>,
+    id: ObjectId,
+}
+
+/// The canonical `ViewObject` for a document object, created once per object.
+fn view_object_for(py: Python<'_>, obj: &PyDocumentObject) -> PyResult<Py<PyViewObject>> {
+    if let Some(view) = obj.view.lock().unwrap().as_ref() {
+        return Ok(view.clone_ref(py));
+    }
+    let view = Py::new(
+        py,
+        PyViewObject {
+            doc: obj.doc.clone_ref(py),
+            inner: Arc::clone(&obj.inner),
+            id: obj.id,
+        },
+    )?;
+    *obj.view.lock().unwrap() = Some(view.clone_ref(py));
+    Ok(view)
+}
+
+/// Apply a change to an object's view state, if it has one.
+fn update_view_state(
+    inner: &Arc<Mutex<CoreDocument>>,
+    id: ObjectId,
+    apply: impl FnOnce(&mut ferrocad_core::ViewState),
+) -> bool {
+    let mut doc = inner.lock().unwrap();
+    match doc.object_mut(id).and_then(|object| object.view.as_mut()) {
+        Some(state) => {
+            apply(state);
+            true
+        }
+        None => false,
+    }
+}
+
+/// Datum objects (`App::Origin` and its axes/planes) are drawn opaque whatever the
+/// shape-transparency preference says; upstream's origin view provider overrides it.
+fn is_origin_family(type_id: &str) -> bool {
+    matches!(type_id, "App::Origin" | "App::Plane" | "App::Line" | "App::Point")
+}
+
+/// The `DefaultShapeTransparency` / `DefaultShapeColor` preferences.
+///
+/// FreeCAD reads them once, when a view provider is constructed, so the values are
+/// captured into the object's [`ViewState`](ferrocad_core::ViewState) and persisted
+/// with it. Without the `FreeCAD` facade (a bare extension-module session) the
+/// built-in defaults apply.
+fn view_preferences(py: Python<'_>) -> (i32, [f64; 4]) {
+    // FreeCAD's classic shape colour (`0xCCCCE6FF`), as Draft records it.
+    const DEFAULT_COLOR: u32 = 0xCCCC_E6FF;
+    let mut transparency = 0i32;
+    let mut color = ferrocad_core::color_from_packed(DEFAULT_COLOR, true);
+    if let Ok(freecad) = py.import("FreeCAD") {
+        if let Ok(group) =
+            freecad.call_method1("ParamGet", ("User parameter:BaseApp/Preferences/View",))
+        {
+            if let Ok(value) = group.call_method1("GetInt", ("DefaultShapeTransparency", 0)) {
+                transparency = value.extract::<i64>().unwrap_or(0).clamp(0, 100) as i32;
+            }
+            if let Ok(value) =
+                group.call_method1("GetUnsigned", ("DefaultShapeColor", DEFAULT_COLOR))
+            {
+                color = ferrocad_core::color_from_packed(
+                    value.extract::<u32>().unwrap_or(DEFAULT_COLOR),
+                    true,
+                );
+            }
+        }
+    }
+    (transparency, color)
+}
+
+/// Coerce an RGBA tuple (3 or 4 components) or a packed `0xRRGGBBAA` integer.
+fn py_to_color(value: &Bound<'_, PyAny>) -> PyResult<[f64; 4]> {
+    if let Ok((r, g, b, a)) = value.extract::<(f64, f64, f64, f64)>() {
+        return Ok([r, g, b, a]);
+    }
+    if let Ok((r, g, b)) = value.extract::<(f64, f64, f64)>() {
+        return Ok([r, g, b, 1.0]);
+    }
+    if let Ok(packed) = value.extract::<u32>() {
+        return Ok(ferrocad_core::color_from_packed(packed, false));
+    }
+    Err(PyTypeError::new_err(
+        "expected an (r, g, b[, a]) colour or a packed 0xRRGGBBAA integer",
+    ))
+}
+
+/// Coerce a `Material` or a colour.
+fn py_to_material_color(value: &Bound<'_, PyAny>) -> PyResult<[f64; 4]> {
+    if let Ok(material) = value.extract::<PyRef<'_, PyMaterial>>() {
+        return Ok(material.diffuse);
+    }
+    py_to_color(value)
+}
+
+/// Coerce a list of materials (or colours); a single material becomes a 1-list.
+fn py_to_view_colors(value: &Bound<'_, PyAny>) -> PyResult<Vec<[f64; 4]>> {
+    if let Ok(material) = value.extract::<PyRef<'_, PyMaterial>>() {
+        return Ok(vec![material.diffuse]);
+    }
+    let iterator = value
+        .try_iter()
+        .map_err(|_| PyTypeError::new_err("expected a list of materials or colours"))?;
+    let mut colors = Vec::new();
+    for item in iterator {
+        let item = item?;
+        if let Ok(material) = item.extract::<PyRef<'_, PyMaterial>>() {
+            colors.push(material.diffuse);
+        } else {
+            colors.push(py_to_color(&item)?);
+        }
+    }
+    Ok(colors)
+}
+
+/// The colour a view object paints its shape with.
+///
+/// An explicit `ShapeColor` wins. Otherwise, when every object this one links to
+/// (`Shapes` for a `Part::MultiFuse`, `Base`/`Tool` for a boolean, `LinkedObject`
+/// for an `App::Link`) carries the *same explicit* colour, that colour is used:
+/// this is the headless analogue of upstream propagating the operands' face colours
+/// through a boolean, and it is what keeps a fuse of two red objects red. Finally
+/// the preference-derived default applies.
+fn view_effective_color(doc: &CoreDocument, id: ObjectId) -> Option<[f64; 4]> {
+    let object = doc.object(id)?;
+    let state = object.view.as_ref()?;
+    if let Some(color) = state.shape_color {
+        return Some(color);
+    }
+    if let Some(color) = operand_color(doc, object) {
+        return Some(color);
+    }
+    Some(state.default_color)
+}
+
+/// The common explicit `ShapeColor` of the objects `object` links to, if any.
+fn operand_color(
+    doc: &CoreDocument,
+    object: &ferrocad_core::DocumentObject,
+) -> Option<[f64; 4]> {
+    let mut common: Option<[f64; 4]> = None;
+    let mut any = false;
+    for (name, property) in object.properties.iter() {
+        // Group membership is not an appearance input.
+        if name == "Group" {
+            continue;
+        }
+        let targets: Vec<&String> = match property {
+            Property::Link(target) => vec![target],
+            Property::LinkList(targets) => targets.iter().collect(),
+            Property::LinkSub(target, _) => vec![target],
+            _ => continue,
+        };
+        for target in targets {
+            if target.is_empty() {
+                continue;
+            }
+            let Some(other) = doc.get_by_name(target).and_then(|id| doc.object(id)) else {
+                continue;
+            };
+            // Only a real choice propagates; the preference default must not be
+            // mistaken for one (that is `DefaultShapeColor`'s job).
+            let Some(explicit) = other.view.as_ref().and_then(|state| state.shape_color) else {
+                return None;
+            };
+            if common.is_some_and(|color| color != explicit) {
+                return None;
+            }
+            common = Some(explicit);
+            any = true;
+        }
+    }
+    if any {
+        common
+    } else {
+        None
+    }
+}
+
+#[pymethods]
+impl PyViewObject {
+    /// The document object this view object belongs to.
+    #[getter]
+    fn Object(&self, py: Python<'_>) -> Py<PyDocumentObject> {
+        get_or_create_object(py, &self.doc, &self.inner, self.id)
+    }
+
+    #[getter]
+    fn Visibility(&self, py: Python<'_>) -> PyResult<bool> {
+        self.ensure_state(py)?;
+        self.with_state(|state| state.visibility)
+    }
+
+    #[setter]
+    fn set_Visibility(&self, py: Python<'_>, value: bool) -> PyResult<()> {
+        self.ensure_state(py)?;
+        self.update(|state| state.visibility = value);
+        Ok(())
+    }
+
+    #[getter]
+    fn Transparency(&self, py: Python<'_>) -> PyResult<i32> {
+        self.ensure_state(py)?;
+        self.with_state(|state| state.transparency)
+    }
+
+    #[setter]
+    fn set_Transparency(&self, py: Python<'_>, value: i64) -> PyResult<()> {
+        self.ensure_state(py)?;
+        self.update(|state| state.transparency = value.clamp(0, 100) as i32);
+        Ok(())
+    }
+
+    #[getter]
+    fn ShapeColor(&self, py: Python<'_>) -> PyResult<(f64, f64, f64, f64)> {
+        self.ensure_state(py)?;
+        let color = self.effective_color()?;
+        Ok((color[0], color[1], color[2], color[3]))
+    }
+
+    #[setter]
+    fn set_ShapeColor(&self, py: Python<'_>, value: &Bound<'_, PyAny>) -> PyResult<()> {
+        let color = py_to_material_color(value)?;
+        self.ensure_state(py)?;
+        self.update(|state| state.set_shape_color(color));
+        Ok(())
+    }
+
+    /// `ShapeAppearance`: the shape's material list. Each handle writes back, so
+    /// `ShapeAppearance[0].DiffuseColor = ...` changes the shape colour without
+    /// touching the transparency.
+    #[getter]
+    fn ShapeAppearance(&self, py: Python<'_>) -> PyResult<Vec<Py<PyMaterial>>> {
+        self.ensure_state(py)?;
+        let colors = self.with_state(|state| state.appearance())?;
+        colors
+            .into_iter()
+            .enumerate()
+            .map(|(index, color)| {
+                Py::new(
+                    py,
+                    PyMaterial::owned(
+                        color,
+                        Arc::clone(&self.inner),
+                        self.id,
+                        MaterialSlot::Appearance(index),
+                    ),
+                )
+            })
+            .collect()
+    }
+
+    #[setter]
+    fn set_ShapeAppearance(&self, py: Python<'_>, value: &Bound<'_, PyAny>) -> PyResult<()> {
+        let colors = py_to_view_colors(value)?;
+        self.ensure_state(py)?;
+        self.update(|state| state.set_appearance(colors));
+        Ok(())
+    }
+
+    #[getter]
+    fn ShapeMaterial(&self, py: Python<'_>) -> PyResult<Py<PyMaterial>> {
+        self.ensure_state(py)?;
+        let color = self.with_state(|state| state.material())?;
+        Py::new(
+            py,
+            PyMaterial::owned(
+                color,
+                Arc::clone(&self.inner),
+                self.id,
+                MaterialSlot::Material,
+            ),
+        )
+    }
+
+    #[setter]
+    fn set_ShapeMaterial(&self, py: Python<'_>, value: &Bound<'_, PyAny>) -> PyResult<()> {
+        let color = py_to_material_color(value)?;
+        self.ensure_state(py)?;
+        self.update(|state| state.material = Some(color));
+        Ok(())
+    }
+
+    /// `DiffuseColor`: one RGBA colour per face, or the shape's whole colour when no
+    /// per-face colour was set.
+    #[getter]
+    fn DiffuseColor(&self, py: Python<'_>) -> PyResult<Vec<(f64, f64, f64, f64)>> {
+        Ok(self
+            .diffuse_colors(py)?
+            .into_iter()
+            .map(|color| (color[0], color[1], color[2], color[3]))
+            .collect())
+    }
+
+    #[setter]
+    fn set_DiffuseColor(&self, py: Python<'_>, value: &Bound<'_, PyAny>) -> PyResult<()> {
+        let colors = py_to_view_colors(value)?;
+        self.ensure_state(py)?;
+        self.update(|state| state.diffuse_color = Some(colors));
+        Ok(())
+    }
+
+    #[getter]
+    fn DisplayMode(&self, py: Python<'_>) -> PyResult<String> {
+        self.ensure_state(py)?;
+        self.with_state(|state| state.display_mode.clone())
+    }
+
+    #[setter]
+    fn set_DisplayMode(&self, py: Python<'_>, value: String) -> PyResult<()> {
+        if !DISPLAY_MODES.contains(&value.as_str()) {
+            return Err(PyValueError::new_err(format!(
+                "'{value}' is not part of the enumeration"
+            )));
+        }
+        self.ensure_state(py)?;
+        self.update(|state| state.display_mode = value);
+        Ok(())
+    }
+
+    fn getEnumerationsOfProperty(&self, name: &str) -> PyResult<Vec<String>> {
+        if name == "DisplayMode" {
+            Ok(DISPLAY_MODES.iter().map(|mode| mode.to_string()).collect())
+        } else {
+            Err(PyAttributeError::new_err(format!("no property '{name}'")))
+        }
+    }
+
+    /// The Coin root of this view provider.
+    ///
+    /// This is a real `pivy.coin` scene graph when the bindings are importable, and
+    /// it mirrors the view state: one material (per-face colours, bound `PER_PART`)
+    /// for each of the two display representations. There is deliberately no
+    /// geometry — that belongs to the viewport, not to `App`. Without `pivy` there
+    /// is no attribute at all, as in an upstream App-only session.
+    #[getter]
+    fn RootNode(&self, py: Python<'_>) -> PyResult<PyObject> {
+        let colors = self.diffuse_colors(py)?;
+        let coin = py.import("pivy.coin").map_err(|_| {
+            PyAttributeError::new_err(
+                "RootNode needs the pivy Coin bindings; the view state is still \
+                 readable as ViewObject properties",
+            )
+        })?;
+        let root = coin.getattr("SoSeparator")?.call0()?;
+        // The two display representations a Part view provider has ("Flat Lines"
+        // and "Shaded"). Both carry the same material model.
+        for _ in DISPLAY_MODES.iter().take(2) {
+            let separator = coin.getattr("SoSeparator")?.call0()?;
+            let material = coin.getattr("SoMaterial")?.call0()?;
+            let diffuse = material.getattr("diffuseColor")?;
+            diffuse.call_method1("setNum", (colors.len(),))?;
+            for (index, color) in colors.iter().enumerate() {
+                diffuse.call_method1("set1Value", (index, (color[0], color[1], color[2])))?;
+            }
+            let binding = coin.getattr("SoMaterialBinding")?.call0()?;
+            let per_part = binding.getattr("PER_PART")?;
+            binding.setattr("value", per_part)?;
+            separator.call_method1("addChild", (&material,))?;
+            separator.call_method1("addChild", (&binding,))?;
+            root.call_method1("addChild", (&separator,))?;
+        }
+        Ok(root.unbind())
+    }
+
+    fn __repr__(&self) -> PyResult<String> {
+        let doc = self.inner.lock().unwrap();
+        let name = doc
+            .object(self.id)
+            .map(|object| object.name.as_str())
+            .unwrap_or("<deleted>");
+        Ok(format!("<ViewObject of {name}>"))
+    }
+}
+
+impl PyViewObject {
+    /// Create the view state on first access, from the user preferences.
+    fn ensure_state(&self, py: Python<'_>) -> PyResult<()> {
+        let type_id = {
+            let doc = self.inner.lock().unwrap();
+            match doc.object(self.id) {
+                Some(object) if object.view.is_some() => return Ok(()),
+                Some(object) => object.type_id.clone(),
+                None => return Err(deleted_object_error("ViewObject")),
+            }
+        };
+        let (mut transparency, color) = view_preferences(py);
+        if is_origin_family(&type_id) {
+            transparency = 0;
+        }
+        let mut doc = self.inner.lock().unwrap();
+        if let Some(object) = doc.object_mut(self.id) {
+            if object.view.is_none() {
+                object.view = Some(ferrocad_core::ViewState::new(transparency, color));
+            }
+        }
+        Ok(())
+    }
+
+    fn with_state<R>(
+        &self,
+        read: impl FnOnce(&ferrocad_core::ViewState) -> R,
+    ) -> PyResult<R> {
+        let doc = self.inner.lock().unwrap();
+        let state = doc
+            .object(self.id)
+            .and_then(|object| object.view.as_ref())
+            .ok_or_else(|| deleted_object_error("ViewObject"))?;
+        Ok(read(state))
+    }
+
+    fn update(&self, change: impl FnOnce(&mut ferrocad_core::ViewState)) {
+        update_view_state(&self.inner, self.id, change);
+    }
+
+    fn effective_color(&self) -> PyResult<[f64; 4]> {
+        let doc = self.inner.lock().unwrap();
+        view_effective_color(&doc, self.id).ok_or_else(|| deleted_object_error("ViewObject"))
+    }
+
+    /// The number of faces of the object's shape, asked of the `Part` layer itself
+    /// (the core does not know what a shape is). `None` when the object has none.
+    fn face_count(&self, py: Python<'_>) -> Option<usize> {
+        if !object_is_attached(&self.inner, self.id) {
+            return None;
+        }
+        let doc = self.doc.clone_ref(py);
+        let object = get_or_create_object(py, &doc, &self.inner, self.id);
+        let object = object.bind(py);
+        let shape = object.getattr("Shape").ok()?;
+        let faces = shape.getattr("Faces").ok()?;
+        faces.len().ok()
+    }
+
+    /// Per-face colours: an explicit `DiffuseColor`, else the effective colour
+    /// repeated once per face.
+    fn diffuse_colors(&self, py: Python<'_>) -> PyResult<Vec<[f64; 4]>> {
+        self.ensure_state(py)?;
+        let (explicit, color) = {
+            let doc = self.inner.lock().unwrap();
+            let state = doc
+                .object(self.id)
+                .and_then(|object| object.view.as_ref())
+                .ok_or_else(|| deleted_object_error("ViewObject"))?;
+            (
+                state.diffuse_color.clone(),
+                view_effective_color(&doc, self.id).unwrap_or(state.default_color),
+            )
+        };
+        if let Some(colors) = explicit {
+            return Ok(colors);
+        }
+        match self.face_count(py) {
+            Some(count) => Ok(vec![color; count]),
+            None => Ok(Vec::new()),
+        }
     }
 }
 
@@ -4316,6 +4942,7 @@ pub fn ferrocad(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyBoundBox>()?;
     m.add_class::<PyDocument>()?;
     m.add_class::<PyDocumentObject>()?;
+    m.add_class::<PyViewObject>()?;
     m.add_class::<PyDocumentSettings>()?;
     m.add_class::<PyStringHasher>()?;
     m.add_class::<PyStringID>()?;

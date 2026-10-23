@@ -18,6 +18,9 @@ use crate::observer::Observer;
 use crate::property::{prop_status, Property, PropertyContainer};
 
 mod transaction;
+mod view;
+
+pub use view::{color_from_packed, color_to_packed, Color, ViewState};
 
 use transaction::{Change, PropertyChange, TransactionManager};
 
@@ -51,6 +54,9 @@ pub struct DocumentObject {
     pub property_versions: BTreeMap<String, u64>,
     /// Opaque base64-pickled Python state (instance `__dict__` + `Proxy`).
     pub python_state: Option<String>,
+    /// Headless view state (`ViewObject`). `None` until a view object is first
+    /// created; see [`ViewState`].
+    pub view: Option<ViewState>,
 }
 
 #[derive(Default)]
@@ -140,6 +146,7 @@ impl Document {
                 invalid: false,
                 property_versions: BTreeMap::new(),
                 python_state: None,
+                view: None,
             },
         );
         self.active_object = Some(id);
@@ -892,6 +899,7 @@ impl Document {
                 o.expressions = obj.expressions.clone();
                 o.extensions = obj.extensions.iter().cloned().collect();
                 o.python_state = obj.python_state.clone();
+                o.view = obj.view.clone();
                 o.must_execute = false;
                 o.touched = false;
                 o.invalid = false;
@@ -951,6 +959,7 @@ impl Document {
         o.expressions = saved.expressions;
         o.extensions = saved.extensions.into_iter().collect();
         o.python_state = saved.python_state;
+        o.view = saved.view;
         Ok(())
     }
 
@@ -990,6 +999,9 @@ pub struct SavedObject {
     pub extensions: BTreeSet<String>,
     #[serde(default)]
     pub python_state: Option<String>,
+    /// Headless view state (`ViewObject`), when one was created.
+    #[serde(default)]
+    pub view: Option<ViewState>,
 }
 
 impl SavedObject {
@@ -1024,6 +1036,7 @@ impl SavedObject {
             expressions: o.expressions.clone(),
             extensions: o.extensions.iter().cloned().collect(),
             python_state: o.python_state.clone(),
+            view: o.view.clone(),
         }
     }
 }

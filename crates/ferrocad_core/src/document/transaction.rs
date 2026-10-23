@@ -499,6 +499,7 @@ impl Document {
                 invalid: false,
                 property_versions: BTreeMap::new(),
                 python_state: saved.python_state.clone(),
+                view: saved.view.clone(),
             },
         );
         if id >= self.next_id {

@@ -154,6 +154,7 @@ pub fn default_properties(type_id: &str) -> Vec<(&'static str, Property, u32)> {
             ("Attribute", Property::String(String::new()), NONE),
         ],
         "App::DocumentObjectGroup" => vec![("Group", Property::LinkList(vec![]), NONE)],
+        "App::Link" => vec![("LinkedObject", Property::Link(String::new()), NONE)],
         "App::Part" => vec![
             ("Group", Property::LinkList(vec![]), NONE),
             ("Placement", Property::Placement(Placement::identity()), NONE),

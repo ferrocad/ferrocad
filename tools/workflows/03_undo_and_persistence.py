@@ -63,7 +63,7 @@ def run(cap):
         cap.exec(
             """
             import os
-            path = os.path.join(tempfile.mkdtemp(prefix="ferrocad-userdocs-"), "undoable.FCStd")
+            path = os.path.join(tempfile.mkdtemp(prefix="ferrocad-userdocs-"), "undoable.ferrocad")
             doc.saveAs(path)
             doc_name = doc.Name
             """

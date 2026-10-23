@@ -96,7 +96,7 @@ def run(cap):
         cap.exec(
             """
             import os, tempfile
-            path = os.path.join(tempfile.mkdtemp(prefix="ferrocad-tutorial-"), "first.FCStd")
+            path = os.path.join(tempfile.mkdtemp(prefix="ferrocad-tutorial-"), "first.ferrocad")
             doc.saveAs(path)
             """
         )

@@ -369,7 +369,12 @@ fn parse_document(xml: &str, name: String) -> Result<SavedDocument, FcstdError> 
         }
     }
 
-    Ok(SavedDocument { name, objects: saved_objects })
+    Ok(SavedDocument {
+        format: super::native::default_format(),
+        version: super::native::default_version(),
+        name,
+        objects: saved_objects,
+    })
 }
 
 fn parse_property(prop_type: &str, node: roxmltree::Node<'_, '_>) -> Result<Option<Property>, FcstdError> {

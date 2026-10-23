@@ -1,10 +1,9 @@
 #!/usr/bin/env python3
 """A Python-only script that loads a document file through the public FreeCAD API.
 
-It exercises the only *file* path this milestone supports: FerroCAD's own
-document format (JSON under a `.FCStd` name) via ``Document.saveAs`` /
-``FreeCAD.open``. No C++ and no Rust-side scripting is involved — this is a
-plain workbench-style script.
+It exercises the native *file* path: FerroCAD's own `.ferrocad` document
+format (versioned JSON) via ``Document.saveAs`` / ``FreeCAD.open``. No C++ and
+no Rust-side scripting is involved — this is a plain workbench-style script.
 
 Run it against the Rust-backed facade::
 
@@ -29,7 +28,7 @@ def build_document():
 
 
 def main():
-    path = os.path.join(tempfile.gettempdir(), "ferrocad_roundtrip.FCStd")
+    path = os.path.join(tempfile.gettempdir(), "ferrocad_roundtrip.ferrocad")
 
     doc = build_document()
     doc.saveAs(path)

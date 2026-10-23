@@ -251,7 +251,7 @@ fn the_toy_workbench_creates_represents_manipulates_and_records() {
     assert!(x.abs() < 1e-9, "undo restores the placement: {x}");
 
     // --- 4. Persistence ----------------------------------------------------------
-    let path = std::env::temp_dir().join("ferrocad_toy_round_trip.FCStd");
+    let path = std::env::temp_dir().join("ferrocad_toy_round_trip.ferrocad");
     let _ = std::fs::remove_file(&path);
     let path = path.to_string_lossy().to_string();
     evaluate(&format!("doc.saveAs({path:?})"));

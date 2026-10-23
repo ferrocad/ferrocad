@@ -60,7 +60,7 @@ class ShapePropertyTests(unittest.TestCase):
         doc = FreeCAD.newDocument("PartPersistenceTests")
         reopened = None
         with tempfile.TemporaryDirectory() as tmp:
-            path = f"{tmp}/box.FCStd"
+            path = f"{tmp}/box.ferrocad"
             try:
                 obj = doc.addObject("Part::Feature", "Box")
                 obj.Shape = Part.makeBox(1, 2, 3)

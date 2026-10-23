@@ -106,7 +106,7 @@ fn diffuse(value: &Bound<'_, PyAny>) -> Vec<[f64; 4]> {
 
 fn temp_file(stem: &str) -> PathBuf {
     std::env::temp_dir().join(format!(
-        "ferrocad-{stem}-{}.fcstd.json",
+        "ferrocad-{stem}-{}.ferrocad",
         std::process::id()
     ))
 }

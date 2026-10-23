@@ -51,8 +51,7 @@ use std::collections::{BTreeMap, HashMap};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, OnceLock};
 
-use ferrocad_core::{application, canonical_name, parse_unit, prop_status, status_from_name, status_names, Document as CoreDocument, ExtensionData, ExtensionValue, Matrix4, ObjectId, Placement, Property, Quantity, Rotation, StringHasher, StringId, TypeId, Unit, Vector3};
-use ferrocad_core::fcstd::read_fcstd;
+use ferrocad_core::{application, canonical_name, format as doc_format, parse_unit, prop_status, status_from_name, status_names, Document as CoreDocument, DocumentFormat, ExtensionData, ExtensionValue, Matrix4, ObjectId, Placement, Property, Quantity, Rotation, StringHasher, StringId, TypeId, Unit, Vector3};
 use pyo3::exceptions::{
     PyAttributeError, PyIndexError, PyNotImplementedError, PyRuntimeError, PyTypeError, PyValueError,
 };
@@ -1288,6 +1287,9 @@ struct PyDocument {
     name: String,
     label: String,
     file_name: Option<String>,
+    /// The serializer that wrote `file_name` (or read it). Recorded so `save()`
+    /// reuses it even if the file is moved or renamed in between.
+    format: Option<DocumentFormat>,
     auto_created: bool,
     inner: Arc<Mutex<CoreDocument>>,
     /// Namespaced document meta-settings (`Doc.Meta` / `Doc.settings`).
@@ -1334,6 +1336,7 @@ impl PyDocument {
             name: name.to_string(),
             label: name.to_string(),
             file_name: None,
+            format: None,
             auto_created: false,
             inner: Arc::new(Mutex::new(CoreDocument::new())),
             meta: Arc::new(Mutex::new(BTreeMap::new())),
@@ -1539,53 +1542,68 @@ impl PyDocument {
     }
 
     // -- persistence ---------------------------------------------------------
+    /// Save under `path`, selecting the serializer from the suffix.
+    ///
+    /// `.ferrocad` writes native JSON; `.FCStd` currently writes the native bytes
+    /// as a placeholder (`FcstdWriter::JsonPlaceholder`) until the FCStd writer
+    /// lands. The suffix, not the content, decides — and an unknown suffix is an
+    /// error. Both the path and the format are recorded for later `save()` calls.
     fn saveAs(slf: &Bound<'_, Self>, path: &str) -> PyResult<()> {
+        let format = DocumentFormat::from_path(path).map_err(|e| PyValueError::new_err(e.to_string()))?;
         let py = slf.py();
         let name = slf.borrow().name.clone();
         let inner = Arc::clone(&slf.borrow().inner);
         let doc_py: Py<PyDocument> = slf.clone().unbind();
         fire_doc_str("slotStartSaveDocument", slf, path);
         capture_all_python_states(py, &doc_py, &inner);
-        inner
-            .lock()
-            .unwrap()
-            .save_to_file(&name, path)
-            .map_err(PyValueError::new_err)?;
-        slf.borrow_mut().file_name = Some(path.to_string());
+        let saved = inner.lock().unwrap().to_saved(&name);
+        doc_format::write(&saved, path, format).map_err(|e| PyValueError::new_err(e.to_string()))?;
+        {
+            let mut this = slf.borrow_mut();
+            this.file_name = Some(path.to_string());
+            this.format = Some(format);
+        }
         fire_doc_str("slotFinishSaveDocument", slf, path);
         Ok(())
     }
 
     fn save(slf: &Bound<'_, Self>) -> PyResult<()> {
         let py = slf.py();
-        let (name, path) = {
+        let (name, path, recorded) = {
             let this = slf.borrow();
-            (this.name.clone(), this.file_name.clone())
+            (this.name.clone(), this.file_name.clone(), this.format)
         };
         let path = path
             .ok_or_else(|| PyValueError::new_err("document has no file name; use saveAs first"))?;
+        // Reuse the format the file was written (or read) with: a later rename
+        // cannot flip the meaning of the same document.
+        let format = match recorded {
+            Some(format) => format,
+            None => DocumentFormat::from_path(&path)
+                .map_err(|e| PyValueError::new_err(e.to_string()))?,
+        };
         let inner = Arc::clone(&slf.borrow().inner);
         let doc_py: Py<PyDocument> = slf.clone().unbind();
         fire_doc_str("slotStartSaveDocument", slf, &path);
         capture_all_python_states(py, &doc_py, &inner);
-        inner
-            .lock()
-            .unwrap()
-            .save_to_file(&name, &path)
-            .map_err(PyValueError::new_err)?;
+        let saved = inner.lock().unwrap().to_saved(&name);
+        doc_format::write(&saved, &path, format).map_err(|e| PyValueError::new_err(e.to_string()))?;
+        slf.borrow_mut().format = Some(format);
         fire_doc_str("slotFinishSaveDocument", slf, &path);
         Ok(())
     }
 
     fn load(slf: &Bound<'_, Self>, path: &str) -> PyResult<()> {
         let py = slf.py();
-        let saved = CoreDocument::load_from_file(path).map_err(PyValueError::new_err)?;
+        let (saved, format) =
+            doc_format::read(path).map_err(|e| PyValueError::new_err(e.to_string()))?;
         let doc_py: Py<PyDocument> = slf.clone().unbind();
         forget_document(&doc_py);
         let mut this = slf.borrow_mut();
         this.name = saved.name.clone();
         this.label = saved.name.clone();
         this.file_name = Some(path.to_string());
+        this.format = Some(format);
         this.inner = Arc::new(Mutex::new(CoreDocument::from_saved(&saved)));
         this.meta = Arc::new(Mutex::new(BTreeMap::new()));
         drop(this);
@@ -4825,6 +4843,7 @@ fn newDocument(py: Python<'_>, name: Option<String>) -> PyResult<Py<PyDocument>>
             label: doc_name.clone(),
             name: doc_name.clone(),
             file_name: None,
+            format: None,
             auto_created: false,
             inner: handle,
             meta: Arc::new(Mutex::new(BTreeMap::new())),
@@ -4842,9 +4861,11 @@ fn newDocument(py: Python<'_>, name: Option<String>) -> PyResult<Py<PyDocument>>
 
 /// Open a document from disk.
 ///
-/// A file whose first bytes are a ZIP signature (`PK\x03\x04`) is an upstream
-/// FreeCAD binary `.FCStd` archive and is read with [`read_fcstd`]. Anything
-/// else is read as FerroCAD's own JSON format.
+/// The suffix selects the serializer, exactly as for [`PyDocument::saveAs`]:
+/// `.ferrocad` is native JSON, `.FCStd` is the ZIP container (with the
+/// transitional marker-gated JSON fallback while no FCStd writer exists). An
+/// unknown or missing suffix is a `ValueError`; the content is never sniffed to
+/// override the suffix.
 ///
 /// `hidden` and `readonly` are accepted for compatibility with upstream's
 /// `FreeCAD.openDocument(path, hidden=False, readonly=False)`. They are ignored:
@@ -4859,11 +4880,8 @@ fn openDocument(
     readonly: bool,
 ) -> PyResult<Py<PyDocument>> {
     let _ = (hidden, readonly);
-    let saved = if has_zip_magic(path).map_err(|e| PyValueError::new_err(e.to_string()))? {
-        read_fcstd(path).map_err(|e| PyValueError::new_err(e.to_string()))?
-    } else {
-        CoreDocument::load_from_file(path).map_err(PyValueError::new_err)?
-    };
+    let (saved, format) =
+        doc_format::read(path).map_err(|e| PyValueError::new_err(e.to_string()))?;
     let core_doc = CoreDocument::from_saved(&saved);
     let (doc_name, handle) = application()
         .lock()
@@ -4875,6 +4893,7 @@ fn openDocument(
             name: doc_name.clone(),
             label: doc_name.clone(),
             file_name: Some(path.to_string()),
+            format: Some(format),
             auto_created: false,
             inner: Arc::clone(&handle),
             meta: Arc::new(Mutex::new(BTreeMap::new())),
@@ -4884,21 +4903,6 @@ fn openDocument(
     documents().lock().unwrap().insert(doc_name, doc.clone_ref(py));
     apply_all_python_states(py, &doc, &handle);
     Ok(doc)
-}
-
-/// True when `path` starts with a ZIP local-file-header or end-of-central-directory
-/// signature. FerroCAD's own documents are JSON even when named `.FCStd`, so the
-/// content signature decides which reader to use.
-fn has_zip_magic(path: &str) -> std::io::Result<bool> {
-    use std::io::Read;
-
-    let mut magic = [0u8; 4];
-    let mut file = std::fs::File::open(path)?;
-    let read = file.read(&mut magic)?;
-    Ok(matches!(
-        &magic[..read],
-        [0x50, 0x4b, 0x03, 0x04] | [0x50, 0x4b, 0x05, 0x06] | [0x50, 0x4b, 0x07, 0x08]
-    ))
 }
 
 /// The registered Python wrapper for an open document, if any.

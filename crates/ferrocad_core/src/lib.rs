@@ -45,8 +45,10 @@
 //!   `Output`/`NoRecompute`.
 //! - **Undo a change**: wrap edits in [`Document::open_transaction`] …
 //!   [`Document::commit_transaction`], then [`Document::undo`] / [`Document::redo`].
-//! - **Persist a document**: [`Document::save_to_file`] / [`Document::load_from_file`]
-//!   (JSON). Properties flagged `NoPersist` are dropped from the saved form.
+//! - **Persist a document**: [`format::read`] / [`format::write`] select the
+//!   serializer by suffix (`.ferrocad` native JSON, `.FCStd` upstream);
+//!   [`Document::save_to_file`] / [`Document::load_from_file`] are the native
+//!   JSON shortcut. Properties flagged `NoPersist` are dropped from the saved form.
 //! - **React to changes**: register an [`Observer`] with [`Document::add_observer`].
 //! - **Report a failed rebuild**: an [`object_registry::ObjectType::execute`] marks the
 //!   object with [`Document::mark_invalid`]; recompute keeps the flag until a later
@@ -120,6 +122,9 @@ pub use document::{
     SavedDocument, ViewState,
 };
 pub use document::fcstd;
+pub use document::format;
+pub use document::format::DocumentFormat;
+pub use document::native;
 pub use extension::{ExtensionData, ExtensionValue};
 pub use geometry::{Matrix4, Placement, Rotation, ScaleType, TypeId, Vector3};
 pub use observer::Observer;

@@ -212,7 +212,7 @@ class TestPersistence(unittest.TestCase):
         obj.Label = "Persisted label"
         obj.addProperty("App::PropertyString", "Description", "Base", "")
         obj.Description = "hello"
-        path = os.path.join(tempfile.gettempdir(), "SaveTest.FCStd")
+        path = os.path.join(tempfile.gettempdir(), "SaveTest.ferrocad")
         doc.saveAs(path)
         FreeCAD.closeDocument("SaveTest")
 
@@ -222,6 +222,114 @@ class TestPersistence(unittest.TestCase):
         self.assertEqual(o.Label, "Persisted label")
         self.assertEqual(o.Description, "hello")
         FreeCAD.closeDocument("SaveTest")
+
+    def test_save_format_is_selected_by_suffix(self):
+        import json
+
+        doc = FreeCAD.newDocument("FormatSelect")
+        doc.addObject("App::FeatureTest", "X")
+        try:
+            with tempfile.TemporaryDirectory() as tmp:
+                native = os.path.join(tmp, "model.ferrocad")
+                doc.saveAs(native)
+                self.assertEqual(doc.FileName, native)
+                with open(native, encoding="utf-8") as handle:
+                    payload = json.load(handle)
+                self.assertEqual(payload["format"], "ferrocad")
+                self.assertEqual(payload["version"], 1)
+                self.assertEqual(payload["name"], "FormatSelect")
+
+                # The suffix is matched case-insensitively.
+                upper = os.path.join(tmp, "MODEL.FERROCAD")
+                doc.saveAs(upper)
+                self.assertEqual(doc.FileName, upper)
+                FreeCAD.closeDocument(doc.Name)
+                reopened = FreeCAD.openDocument(upper)
+                self.assertEqual(reopened.getObject("X").Name, "X")
+                FreeCAD.closeDocument(reopened.Name)
+        finally:
+            if FreeCAD.getDocument(doc.Name) is not None:
+                FreeCAD.closeDocument(doc.Name)
+
+    def test_fcstd_writes_a_json_placeholder(self):
+        # Transitional: the suffix picks the FCStd backend, which has no writer yet
+        # and emits the native bytes (`FcstdWriter::JsonPlaceholder`).
+        doc = FreeCAD.newDocument("Placeholder")
+        doc.addObject("App::FeatureTest", "P")
+        try:
+            with tempfile.TemporaryDirectory() as tmp:
+                path = os.path.join(tmp, "model.FCStd")
+                doc.saveAs(path)
+                with open(path, "rb") as handle:
+                    self.assertEqual(handle.read(1), b"{")
+                FreeCAD.closeDocument(doc.Name)
+                reopened = FreeCAD.openDocument(path)
+                self.assertEqual(reopened.getObject("P").Name, "P")
+                FreeCAD.closeDocument(reopened.Name)
+        finally:
+            if FreeCAD.getDocument(doc.Name) is not None:
+                FreeCAD.closeDocument(doc.Name)
+
+    def test_unknown_suffix_is_refused(self):
+        doc = FreeCAD.newDocument("BadSuffix")
+        try:
+            with tempfile.TemporaryDirectory() as tmp:
+                path = os.path.join(tmp, "model.json")
+                with self.assertRaises(ValueError) as caught:
+                    doc.saveAs(path)
+                self.assertIn(".ferrocad", str(caught.exception))
+                self.assertIn(".FCStd", str(caught.exception))
+                self.assertFalse(os.path.exists(path))
+                with self.assertRaises(ValueError):
+                    FreeCAD.openDocument(path)
+        finally:
+            FreeCAD.closeDocument(doc.Name)
+
+    def test_save_reuses_the_recorded_format(self):
+        doc = FreeCAD.newDocument("SaveAgain")
+        obj = doc.addObject("App::FeatureTest", "X")
+        try:
+            with tempfile.TemporaryDirectory() as tmp:
+                path = os.path.join(tmp, "model.ferrocad")
+                doc.saveAs(path)
+                obj.Label = "changed"
+                doc.save()
+                self.assertEqual(doc.FileName, path)
+
+                FreeCAD.closeDocument(doc.Name)
+                reopened = FreeCAD.openDocument(path)
+                self.assertEqual(reopened.getObject("X").Label, "changed")
+                # The format read from disk is recorded, so a save reuses it.
+                reopened.save()
+                FreeCAD.closeDocument(reopened.Name)
+                again = FreeCAD.openDocument(path)
+                self.assertEqual(again.getObject("X").Label, "changed")
+                FreeCAD.closeDocument(again.Name)
+        finally:
+            if FreeCAD.getDocument(doc.Name) is not None:
+                FreeCAD.closeDocument(doc.Name)
+
+    def test_load_selects_by_suffix(self):
+        first = FreeCAD.newDocument("LoadSource")
+        first.addObject("App::FeatureTest", "S")
+        second = None
+        try:
+            with tempfile.TemporaryDirectory() as tmp:
+                native = os.path.join(tmp, "source.ferrocad")
+                first.saveAs(native)
+                FreeCAD.closeDocument(first.Name)
+
+                second = FreeCAD.newDocument("LoadTarget")
+                with self.assertRaises(ValueError):
+                    second.load(os.path.join(tmp, "source.txt"))
+                second.load(native)
+                self.assertEqual(second.Name, "LoadSource")
+                self.assertEqual(second.FileName, native)
+                self.assertEqual(second.getObject("S").Name, "S")
+        finally:
+            for document in (second, first):
+                if document is not None and FreeCAD.getDocument(document.Name) is not None:
+                    FreeCAD.closeDocument(document.Name)
 
     def test_full_property_roundtrip(self):
         # Mirrors upstream `DocumentSaveRestoreCases.testSaveAndRestore`.
@@ -240,7 +348,7 @@ class TestPersistence(unittest.TestCase):
         l1.LinkSub = (l2, ["Sub1", "Sub2"])
         l2.LinkSub = (l3, ["Sub3", "Sub4"])
 
-        path = os.path.join(tempfile.gettempdir(), "RoundTrip.FCStd")
+        path = os.path.join(tempfile.gettempdir(), "RoundTrip.ferrocad")
         doc.saveAs(path)
         FreeCAD.closeDocument("RoundTrip")
         doc = FreeCAD.open(path)
@@ -267,7 +375,7 @@ class TestPersistence(unittest.TestCase):
             "App::PropertyString", "Scratch", "Base", "", FreeCAD.PropertyType.Prop_Transient
         )
         obj.Scratch = "kept"
-        path = os.path.join(tempfile.gettempdir(), "DynTransient.FCStd")
+        path = os.path.join(tempfile.gettempdir(), "DynTransient.ferrocad")
         doc.saveAs(path)
         FreeCAD.closeDocument("DynTransient")
 
@@ -377,7 +485,10 @@ class TestGuiStub(unittest.TestCase):
         self.assertIsNone(FreeCADGui.getDocument("__not_open__"))
         doc = FreeCAD.newDocument("Gui")
         obj = doc.addObject("App::FeatureTest", "HeadlessViewObject")
-        self.assertIsNone(obj.ViewObject)
+        # The headless view provider exists without a GUI (the appearance model);
+        # `FreeCADGui` itself is still a console stub.
+        self.assertIsNotNone(obj.ViewObject)
+        self.assertTrue(obj.ViewObject.Visibility)
         FreeCAD.closeDocument("Gui")
 
 
@@ -706,7 +817,7 @@ class TestDocumentObservers(unittest.TestCase):
         self.assertEqual(self.obs.signals, [])
 
         self.obs.clear()
-        path = os.path.join(tempfile.gettempdir(), "ObsTx.FCStd")
+        path = os.path.join(tempfile.gettempdir(), "ObsTx.ferrocad")
         doc.saveAs(path)
         self.assertEqual([s[0] for s in self.obs.signals], ["DocStartSave", "DocFinishSave"])
         self.assertEqual(self.obs.signals[0][1], doc.FileName)
@@ -780,7 +891,7 @@ class TestPersistenceDumpAndRecovery(unittest.TestCase):
 
         doc = FreeCAD.newDocument("RestoreMe")
         doc.addObject("App::FeatureTest", "X")
-        doc.saveAs(os.path.join(tempfile.gettempdir(), "RestoreMe.FCStd"))
+        doc.saveAs(os.path.join(tempfile.gettempdir(), "RestoreMe.ferrocad"))
         doc.addObject("App::FeatureTest", "Y")
         self.assertEqual(len(doc.Objects), 2)
         doc.restore()  # clears current content
@@ -849,7 +960,7 @@ class TestPythonObjectPersistence(unittest.TestCase):
         obj.Dictionary = {"Stored data": [3, 5, 7]}
         self.assertEqual(obj.Dictionary, {"Stored data": [3, 5, 7]})
 
-        path = os.path.join(tempfile.gettempdir(), "PyObj.FCStd")
+        path = os.path.join(tempfile.gettempdir(), "PyObj.ferrocad")
         doc.saveAs(path)
         FreeCAD.closeDocument("PyObj")
         doc = FreeCAD.open(path)
@@ -865,7 +976,7 @@ class TestPythonObjectPersistence(unittest.TestCase):
         proxy = _FeatureProxy(obj)
         proxy.Dictionary["Stored data"] = [3, 5, 7]
 
-        path = os.path.join(tempfile.gettempdir(), "ProxyPersist.FCStd")
+        path = os.path.join(tempfile.gettempdir(), "ProxyPersist.ferrocad")
         doc.saveAs(path)
         FreeCAD.closeDocument("ProxyPersist")
         doc = FreeCAD.open(path)
@@ -1152,7 +1263,7 @@ class TestPropertyStatus(unittest.TestCase):
         )
         obj.Kept = "a"
         obj.Gone = "b"
-        path = os.path.join(tempfile.gettempdir(), "ferrocad_nopersist.FCStd")
+        path = os.path.join(tempfile.gettempdir(), "ferrocad_nopersist.ferrocad")
         doc.saveAs(path)
         FreeCAD.closeDocument("NoPersist")
 
@@ -1199,7 +1310,7 @@ class TestPropertyMetadataAndConstraints(unittest.TestCase):
         obj = doc.addObject("App::FeatureTest", "F")
         obj.ConstraintInt = (50, 0, 100, 1)
         self.assertEqual(obj.ConstraintInt, 50)
-        path = os.path.join(tempfile.gettempdir(), "ferrocad_constraints.FCStd")
+        path = os.path.join(tempfile.gettempdir(), "ferrocad_constraints.ferrocad")
         doc.saveAs(path)
         FreeCAD.closeDocument("Constraints2")
 
@@ -1242,7 +1353,7 @@ class TestGeometryWriteThrough(unittest.TestCase):
         obj.addProperty("App::PropertyRotation", "Rot")
         obj.Plm.Rotation.Axis = (1, 2, 3)
         obj.Rot.Axis = (3, 2, 1)
-        path = os.path.join(tempfile.gettempdir(), "ferrocad_rawaxis.FCStd")
+        path = os.path.join(tempfile.gettempdir(), "ferrocad_rawaxis.ferrocad")
         doc.saveAs(path)
         FreeCAD.closeDocument("RawAxis")
 

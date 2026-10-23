@@ -18,6 +18,8 @@ use crate::observer::Observer;
 use crate::property::{prop_status, Property, PropertyContainer};
 
 pub mod fcstd;
+pub mod format;
+pub mod native;
 mod transaction;
 mod view;
 
@@ -871,7 +873,12 @@ impl Document {
             .into_iter()
             .filter_map(|id| self.object(id).map(SavedObject::from_object))
             .collect();
-        SavedDocument { name: name.to_string(), objects }
+        SavedDocument {
+            format: native::default_format(),
+            version: native::default_version(),
+            name: name.to_string(),
+            objects,
+        }
     }
 
     /// Build a fresh document from a `SavedDocument`.
@@ -910,13 +917,11 @@ impl Document {
     }
 
     pub fn save_to_file(&self, name: &str, path: &str) -> Result<(), String> {
-        let json = serde_json::to_string(&self.to_saved(name)).map_err(|e| e.to_string())?;
-        std::fs::write(path, json).map_err(|e| e.to_string())
+        native::write(&self.to_saved(name), path).map_err(|e| e.to_string())
     }
 
     pub fn load_from_file(path: &str) -> Result<SavedDocument, String> {
-        let text = std::fs::read_to_string(path).map_err(|e| e.to_string())?;
-        serde_json::from_str(&text).map_err(|e| e.to_string())
+        native::read(path).map_err(|e| e.to_string())
     }
 
     /// Serialize the whole document to bytes (`dumpContent`).
@@ -980,9 +985,19 @@ impl Document {
     }
 }
 
-/// A document as persisted to disk (JSON).
+/// A document as persisted to disk by the native (`.ferrocad`) serializer.
+///
+/// The `format`/`version` envelope is written by [`native::encode`]; the serde
+/// defaults keep bare `{name, objects}` files (written before the envelope
+/// existed) loading as version 1.
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct SavedDocument {
+    /// Always `"ferrocad"` for a native document; other values are rejected.
+    #[serde(default = "native::default_format")]
+    pub format: String,
+    /// Envelope version. A value above [`native::NATIVE_VERSION`] is rejected.
+    #[serde(default = "native::default_version")]
+    pub version: u32,
     pub name: String,
     pub objects: Vec<SavedObject>,
 }

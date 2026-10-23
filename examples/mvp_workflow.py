@@ -19,7 +19,7 @@ import FreeCAD as App
 
 
 def main():
-    path = os.path.join(tempfile.gettempdir(), "ferrocad_mvp.FCStd")
+    path = os.path.join(tempfile.gettempdir(), "ferrocad_mvp.ferrocad")
 
     doc = App.newDocument("MVP")
 

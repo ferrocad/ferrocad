@@ -154,7 +154,70 @@ pub fn default_properties(type_id: &str) -> Vec<(&'static str, Property, u32)> {
             ("Attribute", Property::String(String::new()), NONE),
         ],
         "App::DocumentObjectGroup" => vec![("Group", Property::LinkList(vec![]), NONE)],
-        "App::Link" => vec![("LinkedObject", Property::Link(String::new()), NONE)],
+        // The geometry-free half of `App::Link`'s property base. The `Part`
+        // composition root registers an `ObjectType` for the same type id with the
+        // full set (including the shape-valued `Shape`), which takes precedence;
+        // this table is what a document sees when `Part` was never imported.
+        // `LinkMode`/`LinkCopyOnChange` values follow upstream's enumerations but
+        // are not interpreted yet (L4).
+        "App::Link" => vec![
+            (
+                "Placement",
+                Property::Placement(Placement::identity()),
+                NONE,
+            ),
+            (
+                "LinkPlacement",
+                Property::Placement(Placement::identity()),
+                NONE,
+            ),
+            ("Scale", Property::Float(1.0), NONE),
+            (
+                "ScaleVector",
+                Property::Vector(Vector3::new(1.0, 1.0, 1.0)),
+                NONE,
+            ),
+            ("LinkTransform", Property::Bool(false), NONE),
+            (
+                "LinkMode",
+                Property::Enumeration(
+                    ["AutoDelete", "KeepLink", "Translate"]
+                        .iter()
+                        .map(|s| s.to_string())
+                        .collect(),
+                    0,
+                ),
+                NONE,
+            ),
+            (
+                "LinkCopyOnChange",
+                Property::Enumeration(
+                    ["Disabled", "Enabled", "Owned", "Tracking"]
+                        .iter()
+                        .map(|s| s.to_string())
+                        .collect(),
+                    0,
+                ),
+                NONE,
+            ),
+            ("LinkedObject", Property::Link(String::new()), NONE),
+            ("ShowElement", Property::Bool(true), NONE),
+            (
+                "ElementCount",
+                Property::Integer(0),
+                HIDDEN | OUTPUT | NORECOMPUTE | READONLY,
+            ),
+            (
+                "PlacementList",
+                Property::PlacementList(Vec::new()),
+                HIDDEN | OUTPUT | NORECOMPUTE | READONLY,
+            ),
+            (
+                "ElementList",
+                Property::LinkList(Vec::new()),
+                HIDDEN | OUTPUT | NORECOMPUTE | READONLY,
+            ),
+        ],
         "App::Part" => vec![
             ("Group", Property::LinkList(vec![]), NONE),
             ("Placement", Property::Placement(Placement::identity()), NONE),

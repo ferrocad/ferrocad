@@ -1927,6 +1927,168 @@ impl PyDocument {
     }
 }
 
+// ---------------------------------------------------------------------------
+// Link resolution helpers (used by `isLink`, `getLinkedObject`, `getSubObject`)
+// ---------------------------------------------------------------------------
+
+/// The link base-type table: `App::Link` and every `App::Link*` subclass
+/// (`LinkGroup`, `LinkList`, `LinkElement`, …), plus the `Part::LinkArray*` peers.
+///
+/// Upstream the arrays derive from `App::Link`; FerroCAD registers them as
+/// separate `ObjectType`s because there is no shared base object yet, so they are
+/// named explicitly here. This replaces the `starts_with("App::Link")` test that
+/// `setLink` used to carry.
+fn is_link_type(type_id: &str) -> bool {
+    type_id.starts_with("App::Link") || type_id.starts_with("Part::LinkArray")
+}
+
+/// The object named by `LinkedObject`, if it resolves.
+///
+/// `LinkedObject` is a `PropertyLink` or a `PropertyLinkSub`; both carry the
+/// target by name, so the query API does not need a kernel to follow them.
+fn linked_object_id(doc: &CoreDocument, id: ObjectId) -> Option<ObjectId> {
+    let name = match doc.object(id)?.properties.get("LinkedObject")? {
+        Property::Link(name) | Property::LinkSub(name, _) => name,
+        _ => return None,
+    };
+    if name.is_empty() {
+        return None;
+    }
+    doc.get_by_name(name)
+}
+
+/// The element index carried by an element reference, or `-1`.
+///
+/// Accepted spellings: `Element3`, `Array.Element3`, `Array_Element3`, and the
+/// bare index form upstream's element paths use (`"3."`). The last
+/// dot-separated segment decides, matching upstream `getElementIndex`.
+fn element_index(name: &str) -> i64 {
+    let trimmed = name.trim().trim_end_matches('.');
+    let segment = trimmed.rsplit('.').next().unwrap_or(trimmed);
+    let digits = segment
+        .strip_prefix("Element")
+        .or_else(|| {
+            segment
+                .rsplit("_Element")
+                .next()
+                .filter(|suffix| *suffix != segment)
+        })
+        .unwrap_or(segment);
+    if !digits.is_empty() && digits.bytes().all(|byte| byte.is_ascii_digit()) {
+        digits.parse().unwrap_or(-1)
+    } else {
+        -1
+    }
+}
+
+/// The generated element child of `id` addressed by `segment`.
+///
+/// `ElementList` holds ordinary document-object names in element order; an
+/// index spelling maps through that order, while a full name is matched
+/// directly. Elements are still ordinal (L3 gives them identity).
+fn element_child(doc: &CoreDocument, id: ObjectId, segment: &str) -> Option<ObjectId> {
+    let names = match doc.object(id)?.properties.get("ElementList") {
+        Some(Property::LinkList(names)) => names,
+        _ => return None,
+    };
+    if names.iter().any(|name| name == segment) {
+        return doc.get_by_name(segment);
+    }
+    let index = element_index(segment);
+    if index < 0 {
+        return None;
+    }
+    doc.get_by_name(names.get(index as usize)?)
+}
+
+/// A child listed in `Group`, addressed by document-object name.
+fn named_child(doc: &CoreDocument, id: ObjectId, segment: &str) -> Option<ObjectId> {
+    let members = match doc.object(id)?.properties.get("Group") {
+        Some(Property::LinkList(members)) => members,
+        _ => return None,
+    };
+    if !members.iter().any(|name| name == segment) {
+        return None;
+    }
+    doc.get_by_name(segment)
+}
+
+fn placement_of(doc: &CoreDocument, id: ObjectId) -> Placement {
+    doc.object(id)
+        .and_then(|object| object.properties.get("Placement"))
+        .and_then(|property| match property {
+            Property::Placement(placement) => Some(*placement),
+            _ => None,
+        })
+        .unwrap_or_else(Placement::identity)
+}
+
+/// Resolve one subname relative to `start`.
+///
+/// Accepts a whole document-object name first (the original behaviour, which is
+/// how `App::Origin`'s `X_Axis` and friends resolve), then a dotted path.
+fn resolve_sub_name(doc: &CoreDocument, start: ObjectId, subname: &str) -> Option<ObjectId> {
+    let normalised = subname.trim().trim_matches('.');
+    if normalised.is_empty() {
+        return Some(start);
+    }
+    if let Some(id) = doc.get_by_name(normalised) {
+        return Some(id);
+    }
+
+    let mut segments: Vec<&str> = normalised.split('.').filter(|s| !s.is_empty()).collect();
+    // A persisted reference may carry its owner as a prefix (`Array.Element3`).
+    if let Some(first) = segments.first().copied() {
+        let own = doc.object(start).map(|object| object.name.as_str()).unwrap_or("");
+        if first == own {
+            segments.remove(0);
+        }
+    }
+    resolve_segments(doc, start, &segments, 0)
+}
+
+fn resolve_segments(
+    doc: &CoreDocument,
+    current: ObjectId,
+    segments: &[&str],
+    depth: usize,
+) -> Option<ObjectId> {
+    if segments.is_empty() {
+        return Some(current);
+    }
+    if depth > 32 {
+        return None;
+    }
+    let segment = segments[0];
+    let rest = &segments[1..];
+
+    if let Some(child) = element_child(doc, current, segment) {
+        if let Some(found) = resolve_segments(doc, child, rest, depth + 1) {
+            return Some(found);
+        }
+    }
+    if let Some(child) = named_child(doc, current, segment) {
+        if let Some(found) = resolve_segments(doc, child, rest, depth + 1) {
+            return Some(found);
+        }
+    }
+    // A link forwards an unresolved path to its target, so `Link.Face1` reaches
+    // the linked feature. Sub-elements themselves are still resolved by the
+    // kernel positionally (L5 turns this into a lineage lookup).
+    if let Some(target) = linked_object_id(doc, current) {
+        if let Some(found) = resolve_segments(doc, target, segments, depth + 1) {
+            return Some(found);
+        }
+    }
+    // Nothing matched by name: if this object owns geometry, the remaining path
+    // names one of its sub-elements and the owner is the answer (upstream
+    // returns the owning feature for a sub-element reference).
+    if doc.object(current).and_then(|object| object.properties.get("Shape")).is_some() {
+        return Some(current);
+    }
+    None
+}
+
 #[pymethods]
 impl PyDocumentObject {
     /// Two objects are equal when they are the same object in the same document.
@@ -2491,7 +2653,7 @@ impl PyDocumentObject {
                     .unwrap_or_default()
             })
         };
-        if !type_id.starts_with("App::Link") {
+        if !is_link_type(&type_id) {
             return Err(PyAttributeError::new_err(format!(
                 "'{type_id}' object has no attribute 'setLink'"
             )));
@@ -2527,6 +2689,76 @@ impl PyDocumentObject {
             .unwrap()
             .set_property(id, "LinkedObject", property)
             .map_err(PyValueError::new_err)
+    }
+
+    /// `isLink()`: true for `App::Link` and its registered containers, and for
+    /// the `Part::LinkArray*` types.
+    ///
+    /// The arrays are FerroCAD **peers**, not `App::Link` subclasses yet (they
+    /// are separate `ObjectType`s); the local [`is_link_type`] table treats them
+    /// as links, so a saved `Part::LinkArray*` answers like its upstream base
+    /// class.
+    fn isLink(&self) -> bool {
+        self.inner
+            .lock()
+            .unwrap()
+            .object(self.id)
+            .map(|object| is_link_type(&object.type_id))
+            .unwrap_or(false)
+    }
+
+    /// `getLinkedObject(resolve=True)`: the object a link points at.
+    ///
+    /// - A non-link object returns itself.
+    /// - `resolve=False` returns the *immediate* target, which may be another
+    ///   link; an empty or dangling `LinkedObject` returns `None`.
+    /// - `resolve=True` (the default) follows `LinkedObject` chains to the final
+    ///   non-link object, returning `None` for an empty/dangling link or a cycle.
+    ///
+    /// Only the object is resolved: a `LinkSub`'s sub-element names do not enter
+    /// here (sub-element resolution is L5).
+    #[pyo3(signature = (resolve=true))]
+    fn getLinkedObject(slf: &Bound<'_, Self>, resolve: bool) -> Option<Py<PyDocumentObject>> {
+        let py = slf.py();
+        let inner = Arc::clone(&slf.borrow().inner);
+        let doc_py = slf.borrow().doc.clone_ref(py);
+        let start = slf.borrow().id;
+        let doc = inner.lock().unwrap();
+
+        let is_link = |id: ObjectId| {
+            doc.object(id)
+                .map(|object| is_link_type(&object.type_id))
+                .unwrap_or(false)
+        };
+
+        if !is_link(start) {
+            return Some(get_or_create_object(py, &doc_py, &inner, start));
+        }
+
+        let mut current = start;
+        // The bound is a guard against a malformed cycle; upstream resolution is
+        // bounded by the dependency graph, which rejects cycles separately.
+        for _ in 0..64 {
+            let next = linked_object_id(&doc, current)?;
+            if !resolve {
+                return Some(get_or_create_object(py, &doc_py, &inner, next));
+            }
+            if !is_link(next) {
+                return Some(get_or_create_object(py, &doc_py, &inner, next));
+            }
+            current = next;
+        }
+        None
+    }
+
+    /// `getElementIndex(name)`: the index in an element reference.
+    ///
+    /// `"Element3"`, `"Array.Element3"`, `"Array_Element3"` and the bare
+    /// upstream form `"3."` all report `3`; anything else reports `-1`
+    /// (upstream's failure value).
+    #[staticmethod]
+    fn getElementIndex(name: &str) -> i64 {
+        element_index(name)
     }
 
     /// `OutList`: the objects this object links to (group members).
@@ -2576,7 +2808,23 @@ impl PyDocumentObject {
     }
 
     /// Resolve sub-object(s) and return them per FreeCAD's `retType` convention:
-    /// 1 → DocumentObject, 2 → (obj, Matrix, proxy), 3 → Placement, 4 → Matrix.
+    /// 0 and 1 → DocumentObject, 2 → `(obj, Matrix, None)`, 3 → Placement, 4 → Matrix.
+    ///
+    /// `subname` may be:
+    ///
+    /// - empty → this object;
+    /// - a whole document-object name (the original behaviour, e.g. an
+    ///   `App::Origin` child `X_Axis`, with or without a trailing `.`);
+    /// - a dotted path relative to this object (`Element3`, `Element3.Face1`,
+    ///   `Array.Element3`, `Group.Child`), where each segment is an
+    ///   `ElementList` child (by index spelling or stored name), a `Group`
+    ///   member, or forwarded through `LinkedObject`;
+    /// - a path into a link's target (`Link.Face1`), which resolves to the object
+    ///   that owns the sub-element.
+    ///
+    /// The placement reported with `retType` 2/3/4 is the resolved object's own
+    /// `Placement` (identity if it has none); intermediate link placements are not
+    /// accumulated yet. `matrix`, `transform` and `depth` are accepted and ignored.
     #[pyo3(signature = (subname, retType=0, matrix=None, transform=true, depth=0))]
     fn getSubObject(
         slf: &Bound<'_, Self>,
@@ -2601,34 +2849,31 @@ impl PyDocumentObject {
 
         let inner = Arc::clone(&slf.borrow().inner);
         let doc_py = slf.borrow().doc.clone_ref(py);
+        let self_id = slf.borrow().id;
 
-        let resolved: Vec<(Option<Py<PyDocumentObject>>, Placement)> = {
+        let resolved: Vec<(Option<ObjectId>, Placement)> = {
             let doc = inner.lock().unwrap();
             subs.iter()
                 .map(|sub| {
-                    let stripped = sub.trim_end_matches('.');
-                    let child_id = doc.get_by_name(stripped);
-                    let placement = child_id
-                        .and_then(|id| doc.object(id))
-                        .and_then(|o| o.properties.get("Placement"))
-                        .and_then(|p| match p {
-                            Property::Placement(pl) => Some(*pl),
-                            _ => None,
-                        })
+                    let id = resolve_sub_name(&doc, self_id, sub);
+                    let placement = id
+                        .map(|id| placement_of(&doc, id))
                         .unwrap_or_else(Placement::identity);
-                    let obj = child_id.map(|id| get_or_create_object(py, &doc_py, &inner, id));
-                    (obj, placement)
+                    (id, placement)
                 })
                 .collect()
         };
 
-        let build = |obj: &Option<Py<PyDocumentObject>>, pl: &Placement| -> PyObject {
-            let obj_py = obj
-                .as_ref()
-                .map(|o| o.clone_ref(py).into_py_any(py).unwrap())
+        let build = |id: Option<ObjectId>, pl: &Placement| -> PyObject {
+            let obj_py = id
+                .map(|id| {
+                    get_or_create_object(py, &doc_py, &inner, id)
+                        .into_py_any(py)
+                        .unwrap()
+                })
                 .unwrap_or_else(|| py.None());
             match retType {
-                1 => obj_py,
+                0 | 1 => obj_py,
                 2 => {
                     let mat_py = PyMatrix { inner: pl.to_matrix() }.into_py_any(py).unwrap();
                     (obj_py, mat_py, py.None()).into_py_any(py).unwrap()
@@ -2640,10 +2885,10 @@ impl PyDocumentObject {
         };
 
         if resolved.len() == 1 {
-            let (obj, pl) = &resolved[0];
-            Ok(build(obj, pl))
+            let (id, pl) = &resolved[0];
+            Ok(build(*id, pl))
         } else {
-            let items: Vec<PyObject> = resolved.iter().map(|(o, pl)| build(o, pl)).collect();
+            let items: Vec<PyObject> = resolved.iter().map(|(id, pl)| build(*id, pl)).collect();
             Ok(items.into_py_any(py).unwrap())
         }
     }

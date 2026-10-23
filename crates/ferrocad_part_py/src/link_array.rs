@@ -39,8 +39,6 @@ pub const ELEMENT_TYPE: &str = "Part::LinkArrayElement";
 /// A minimal `Part::Part2DObject` (sketch base) for the axis-reference tests.
 pub const PART2D_TYPE: &str = "Part::Part2DObject";
 
-const HIDDEN_OUTPUT: u32 =
-    prop_status::HIDDEN | prop_status::OUTPUT | prop_status::NORECOMPUTE | prop_status::READONLY;
 const MAX_OCCURRENCES: usize = 10_000;
 const CONFUSION: f64 = 1e-7;
 
@@ -179,37 +177,13 @@ fn rotation_placement(axis: &Vector3, angle: f64) -> Placement {
 // Common LinkArray behaviour
 // ---------------------------------------------------------------------------
 
-/// Properties every array carries (`App::Link` + `Part::LinkArray`).
+/// Properties every array carries: the shared `App::Link` base
+/// ([`crate::link::link_properties`]) plus the array-specific ones each type
+/// pushes. Upstream the arrays derive from `App::Link`, so the base set is the
+/// same list rather than a copy; the arrays are still registered as peers, not
+/// subclasses (the base objects do not share an `ObjectType`).
 fn array_properties() -> Vec<(String, Property, u32)> {
-    vec![
-        (
-            "Placement".to_string(),
-            Property::Placement(Placement::identity()),
-            prop_status::NONE,
-        ),
-        (
-            "LinkedObject".to_string(),
-            Property::Link(String::new()),
-            prop_status::NONE,
-        ),
-        ("ShowElement".to_string(), Property::Bool(true), prop_status::NONE),
-        ("ElementCount".to_string(), Property::Integer(0), HIDDEN_OUTPUT),
-        (
-            "PlacementList".to_string(),
-            Property::PlacementList(Vec::new()),
-            HIDDEN_OUTPUT,
-        ),
-        (
-            "ElementList".to_string(),
-            Property::LinkList(Vec::new()),
-            HIDDEN_OUTPUT,
-        ),
-        (
-            "Shape".to_string(),
-            make_shape_property(ShapeProperty::empty()),
-            HIDDEN_OUTPUT,
-        ),
-    ]
+    crate::link::link_properties()
 }
 
 fn push_prop(

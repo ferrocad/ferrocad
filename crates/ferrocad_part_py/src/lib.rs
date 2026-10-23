@@ -36,6 +36,7 @@
 
 mod containers;
 mod curves;
+mod link;
 mod link_array;
 mod solids;
 
@@ -54,6 +55,7 @@ use pyo3::IntoPyObjectExt;
 /// point that can build a shape calls it first.
 fn register_kernel() {
     ferrocad_part::register(Arc::new(OcctBackend::new()));
+    link::register();
     link_array::register();
 }
 

@@ -127,6 +127,39 @@ mod ffi {
             to: &TopTools_ListOfShape,
         ) -> UniquePtr<TopoDS_Shape>;
 
+        /// `BRepCheck_Analyzer`, the bool behind `Shape.isValid`.
+        fn fc_is_valid(shape: &TopoDS_Shape) -> bool;
+
+        /// Split an edge at curve parameters into a wire of pieces, or null.
+        fn fc_split_edge(
+            shape: &TopoDS_Shape,
+            parameters: &[f64],
+        ) -> UniquePtr<TopoDS_Shape>;
+
+        /// Split `shape` with the parallel `tools`/`faces` lists
+        /// (`BRepFeat_SplitShape`), filling the two result groups.
+        fn fc_split_shape(
+            shape: &TopoDS_Shape,
+            tools: &TopTools_ListOfShape,
+            faces: &TopTools_ListOfShape,
+            check_interior: bool,
+            direct: Pin<&mut TopTools_ListOfShape>,
+            left: Pin<&mut TopTools_ListOfShape>,
+        ) -> bool;
+
+        /// Sweep `profile` along `spine` (`BRepOffsetAPI_MakePipe`), or null.
+        fn fc_pipe(
+            spine: &TopoDS_Shape,
+            profile: &TopoDS_Shape,
+            tolerance: f64,
+        ) -> UniquePtr<TopoDS_Shape>;
+
+        /// The 3x3 inertia matrix, row-major (nine values), or empty.
+        fn fc_inertia_matrix(shape: &TopoDS_Shape, out: &mut Vec<f64>);
+
+        /// `GProp_PrincipalProps`, flattened, or empty.
+        fn fc_principal_properties(shape: &TopoDS_Shape, out: &mut Vec<f64>);
+
         /// A filled face through the boundary wires, or null on failure.
         fn fc_fill_wires(wires: &TopTools_ListOfShape) -> UniquePtr<TopoDS_Shape>;
 

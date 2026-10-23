@@ -13,7 +13,8 @@
 use cxx::UniquePtr;
 use ferrocad_geom::{
     Capabilities, Continuity, ElementKind, ElementRef, GeomError, GeometryBackend, History,
-    MassProperties, OpResult, Shape, Tessellation, TessellationOptions, unsupported,
+    MassProperties, OpResult, PrincipalProperties, Shape, Tessellation, TessellationOptions,
+    unsupported,
 };
 use ferrocad_curves::{Arc, Circle, EdgeCurve, Ellipse, Line, Vector3};
 use ferrocad_types::{Matrix4, Placement};
@@ -22,6 +23,7 @@ use opencascade_sys as ffi;
 use ffi::top_abs::TopAbs_ShapeEnum;
 use ffi::top_abs::TopAbs_Orientation;
 use ffi::top_tools::TopTools_IndexedMapOfShape;
+use ffi::top_tools::TopTools_ListOfShape;
 use ffi::topo_ds::TopoDS_Shape;
 
 use crate::bridge;
@@ -1036,6 +1038,32 @@ impl GeometryBackend for OcctBackend {
         Ok(erase(face))
     }
 
+    fn make_pipe(
+        &self,
+        spine: &Shape,
+        profile: &Shape,
+        tolerance: f64,
+    ) -> Result<Shape, GeomError> {
+        let spine_occt = downcast(spine)?;
+        let spine_guard = spine_occt.borrow();
+        let spine_inner = spine_guard
+            .as_ref()
+            .ok_or(OcctError::InvalidInput { what: "null spine" })?;
+        let profile_occt = downcast(profile)?;
+        let profile_guard = profile_occt.borrow();
+        let profile_inner = profile_guard
+            .as_ref()
+            .ok_or(OcctError::InvalidInput { what: "null profile" })?;
+        let piped = bridge::fc_pipe(spine_inner, profile_inner, tolerance);
+        let Some(piped) = piped.as_ref() else {
+            return Err(OcctError::NotDone {
+                operation: "make_pipe",
+            }
+            .into());
+        };
+        Ok(erase(piped))
+    }
+
     fn make_filled_face(&self, edges: &[Shape]) -> Result<Shape, GeomError> {
         let wire = self.make_wire(edges)?;
         let mut list = ffi::top_tools::new_list_of_shape();
@@ -1170,6 +1198,56 @@ impl GeometryBackend for OcctBackend {
         })
     }
 
+    fn is_valid(&self, shape: &Shape) -> bool {
+        let Ok(occt) = downcast(shape) else {
+            return false;
+        };
+        let guard = occt.borrow();
+        match guard.as_ref() {
+            Some(inner) => bridge::fc_is_valid(inner),
+            None => false,
+        }
+    }
+
+    fn inertia_matrix(&self, shape: &Shape) -> Option<Matrix4> {
+        let occt = downcast(shape).ok()?;
+        let guard = occt.borrow();
+        let inner = guard.as_ref()?;
+        let mut values = Vec::with_capacity(9);
+        bridge::fc_inertia_matrix(inner, &mut values);
+        if values.len() < 9 {
+            return None;
+        }
+        let mut matrix = Matrix4::identity();
+        for row in 0..3 {
+            for column in 0..3 {
+                matrix.m[row * 4 + column] = values[row * 3 + column];
+            }
+        }
+        Some(matrix)
+    }
+
+    fn principal_properties(&self, shape: &Shape) -> Option<PrincipalProperties> {
+        let occt = downcast(shape).ok()?;
+        let guard = occt.borrow();
+        let inner = guard.as_ref()?;
+        let mut values = Vec::with_capacity(17);
+        bridge::fc_principal_properties(inner, &mut values);
+        if values.len() < 17 {
+            return None;
+        }
+        let axis = |offset: usize| {
+            Vector3::new(values[offset], values[offset + 1], values[offset + 2])
+        };
+        Some(PrincipalProperties {
+            symmetry_axis: values[0] != 0.0,
+            symmetry_point: values[1] != 0.0,
+            moments: (values[2], values[3], values[4]),
+            axes: (axis(5), axis(8), axis(11)),
+            radius_of_gyration: (values[14], values[15], values[16]),
+        })
+    }
+
     fn clean(&self, shape: &Shape) -> Option<Shape> {
         let occt = downcast(shape).ok()?;
         let guard = occt.borrow();
@@ -1177,6 +1255,24 @@ impl GeometryBackend for OcctBackend {
         let mut op = ffi::shape_upgrade::UnifySameDomain_new(inner, true, true, false);
         op.pin_mut().build();
         Some(erase(op.shape()))
+    }
+
+    fn project(&self, shape: &Shape, tools: &[Shape]) -> Result<Shape, GeomError> {
+        // This slice supports a planar target only, where a tool that already
+        // lies in the target's plane projects onto itself. Other surfaces need
+        // `BRepAlgo_NormalProjection`, which the seam does not expose yet.
+        if self.surface_type(shape).as_deref() != Some("Part::GeomPlane") {
+            return Err(unsupported(
+                "project: only a planar target is supported (projection is the identity on it)",
+            ));
+        }
+        if tools.is_empty() {
+            return Err(OcctError::InvalidInput {
+                what: "project needs at least one tool shape",
+            }
+            .into());
+        }
+        self.make_compound(tools)
     }
 
     fn make_offset(&self, shape: &Shape, distance: f64, join: i32) -> Result<Shape, GeomError> {
@@ -1310,6 +1406,53 @@ impl GeometryBackend for OcctBackend {
         Ok((erase(fused), split))
     }
 
+    fn split_shape(
+        &self,
+        shape: &Shape,
+        tools: &[(Shape, Shape)],
+        check_interior: bool,
+    ) -> Result<(Vec<Shape>, Vec<Shape>), GeomError> {
+        let occt = downcast(shape)?;
+        let guard = occt.borrow();
+        let inner = guard
+            .as_ref()
+            .ok_or(OcctError::InvalidInput { what: "null shape" })?;
+
+        let mut cutters = ffi::top_tools::new_list_of_shape();
+        let mut faces = ffi::top_tools::new_list_of_shape();
+        for (cutter, face) in tools {
+            let cutter_occt = downcast(cutter)?;
+            let cutter_guard = cutter_occt.borrow();
+            let cutter_inner = cutter_guard
+                .as_ref()
+                .ok_or(OcctError::InvalidInput { what: "null tool" })?;
+            let face_occt = downcast(face)?;
+            let face_guard = face_occt.borrow();
+            let face_inner = face_guard
+                .as_ref()
+                .ok_or(OcctError::InvalidInput { what: "null face" })?;
+            let _ = cutters.pin_mut().Append(cutter_inner);
+            let _ = faces.pin_mut().Append(face_inner);
+        }
+
+        let mut direct = ffi::top_tools::new_list_of_shape();
+        let mut left = ffi::top_tools::new_list_of_shape();
+        if !bridge::fc_split_shape(
+            inner,
+            &cutters,
+            &faces,
+            check_interior,
+            direct.pin_mut(),
+            left.pin_mut(),
+        ) {
+            return Err(OcctError::NotDone {
+                operation: "split_shape",
+            }
+            .into());
+        }
+        Ok((collect_list(&direct), collect_list(&left)))
+    }
+
     fn optimal_bounds(
         &self,
         shape: &Shape,
@@ -1398,6 +1541,28 @@ impl GeometryBackend for OcctBackend {
         Ok(erase(result))
     }
 
+    fn split_edge(&self, edge: &Shape, parameters: &[f64]) -> Result<Shape, GeomError> {
+        let occt = downcast(edge)?;
+        let guard = occt.borrow();
+        let inner = guard
+            .as_ref()
+            .ok_or(OcctError::InvalidInput { what: "null edge" })?;
+        if !bridge::fc_is_edge(inner) {
+            return Err(OcctError::InvalidInput {
+                what: "split_edge needs an edge",
+            }
+            .into());
+        }
+        let split = bridge::fc_split_edge(inner, parameters);
+        let Some(split) = split.as_ref() else {
+            return Err(OcctError::NotDone {
+                operation: "split_edge",
+            }
+            .into());
+        };
+        Ok(erase(split))
+    }
+
     fn replace_shapes(
         &self,
         shape: &Shape,
@@ -1432,6 +1597,23 @@ impl GeometryBackend for OcctBackend {
             .into());
         };
         Ok(erase(result))
+    }
+
+    fn static_moments(&self, shape: &Shape) -> Option<[f64; 3]> {
+        let occt = downcast(shape).ok()?;
+        let guard = occt.borrow();
+        let inner = guard.as_ref()?;
+        let mut props = ffi::g_prop::GProps_new();
+        ffi::b_rep_g_prop::BRepGProp::VolumeProperties(
+            inner,
+            props.pin_mut(),
+            false,
+            false,
+            false,
+        );
+        let (mut lx, mut ly, mut lz) = (0.0, 0.0, 0.0);
+        props.StaticMoments(&mut lx, &mut ly, &mut lz);
+        Some([lx, ly, lz])
     }
 
     fn place(&self, shape: &Shape, placement: &Placement) -> Result<Shape, GeomError> {
@@ -1610,6 +1792,17 @@ fn top_level_parts(shape: &TopoDS_Shape) -> Vec<Shape> {
         }
     }
     Vec::new()
+}
+
+/// The shapes in an OCCT shape list, in the list's order.
+fn collect_list(list: &UniquePtr<TopTools_ListOfShape>) -> Vec<Shape> {
+    let Some(list) = list.as_ref() else {
+        return Vec::new();
+    };
+    let count = bridge::fc_list_size(list);
+    (1..=count)
+        .map(|index| erase(bridge::fc_list_value(list, index)))
+        .collect()
 }
 
 /// A `gp_Trsf` equivalent to a FerroCAD [`Placement`] (rotation about the origin,

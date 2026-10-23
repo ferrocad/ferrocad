@@ -564,6 +564,22 @@ pub struct MassProperties {
     pub center_of_mass: Vector3,
 }
 
+/// The principal axes of a shape (`Shape.PrincipalProperties`).
+///
+/// The kernel diagonalises the inertia matrix; `moments` are the eigenvalues in
+/// the kernel's order, `axes` the matching unit eigenvectors, and
+/// `radius_of_gyration` the moments divided by the total mass/area/length. The
+/// two flags say whether the shape has a symmetry axis (two equal moments) or a
+/// symmetry point (all three equal).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct PrincipalProperties {
+    pub symmetry_axis: bool,
+    pub symmetry_point: bool,
+    pub moments: (f64, f64, f64),
+    pub axes: (Vector3, Vector3, Vector3),
+    pub radius_of_gyration: (f64, f64, f64),
+}
+
 pub trait GeometryBackend: Send + Sync {
     /// A rectangular box with its corner at the origin.
     fn make_box(&self, length: f64, width: f64, height: f64) -> Result<Shape, GeomError>;
@@ -731,6 +747,21 @@ pub trait GeometryBackend: Send + Sync {
         Err(unsupported("make_ruled_surface"))
     }
 
+    /// Sweep `profile` along `spine` (`Part.makeSweepSurface`).
+    ///
+    /// The profile is carried along the spine with the spine's own frame; the
+    /// result is the lateral surface, not a capped solid. `tolerance` is
+    /// upstream's approximation tolerance. A backend without pipe sweeping
+    /// reports the operation as unsupported.
+    fn make_pipe(
+        &self,
+        _spine: &Shape,
+        _profile: &Shape,
+        _tolerance: f64,
+    ) -> Result<Shape, GeomError> {
+        Err(unsupported("make_pipe"))
+    }
+
     /// A face filled through the boundary edges (`Part.makeFilledFace`).
     fn make_filled_face(&self, _edges: &[Shape]) -> Result<Shape, GeomError> {
         Err(unsupported("make_filled_face"))
@@ -763,6 +794,37 @@ pub trait GeometryBackend: Send + Sync {
     /// Length, area, volume and centre of mass (`Shape.Length`/`Area`/`Volume`/
     /// `CenterOfMass`). A backend that cannot measure the shape reports `None`.
     fn mass_properties(&self, _shape: &Shape) -> Option<MassProperties> {
+        None
+    }
+
+    /// The first moments of volume `(lx, ly, lz)` (`Shape.StaticMoments`),
+    /// straight from the kernel's integral so the values match its precision.
+    fn static_moments(&self, _shape: &Shape) -> Option<[f64; 3]> {
+        None
+    }
+
+    /// Whether every sub-shape of `shape` passes the kernel's validity checks
+    /// (`Shape.isValid`).
+    ///
+    /// A backend that cannot check validity reports `false`; so does a null
+    /// shape.
+    fn is_valid(&self, _shape: &Shape) -> bool {
+        false
+    }
+
+    /// The 3x3 rotational inertia matrix of `shape`, embedded in the top-left of
+    /// a 4x4 whose last row and column are the identity's (`Shape.MatrixOfInertia`).
+    ///
+    /// The kernel integrates over the shape's highest dimension, as upstream does:
+    /// volume for a solid, area for a face, length for an edge. A backend that
+    /// cannot measure the shape reports `None`.
+    fn inertia_matrix(&self, _shape: &Shape) -> Option<Matrix4> {
+        None
+    }
+
+    /// The principal moments, axes and radii of gyration
+    /// (`Shape.PrincipalProperties`). `None` when the kernel cannot measure it.
+    fn principal_properties(&self, _shape: &Shape) -> Option<PrincipalProperties> {
         None
     }
 
@@ -800,6 +862,15 @@ pub trait GeometryBackend: Send + Sync {
         Err(unsupported("section"))
     }
 
+    /// Project `tools` onto `shape` (`Shape.project`).
+    ///
+    /// The kernel projects each tool along the target's normal; a backend may
+    /// restrict this to planar targets. The default reports the operation as
+    /// unsupported.
+    fn project(&self, _shape: &Shape, _tools: &[Shape]) -> Result<Shape, GeomError> {
+        Err(unsupported("project"))
+    }
+
     /// The wires where `shape` meets the plane with normal `direction` that is
     /// `distance` from the origin along that normal (`Shape.slice`).
     fn slice(
@@ -815,6 +886,22 @@ pub trait GeometryBackend: Send + Sync {
     /// parts it was split into (`Shape.generalFuse`).
     fn general_fuse(&self, _shapes: &[Shape]) -> Result<(Shape, Vec<Vec<Shape>>), GeomError> {
         Err(unsupported("general_fuse"))
+    }
+
+    /// Split `shape` with `tools` (`Part.makeSplitShape`).
+    ///
+    /// Each pair is `(splitting shape, face being split)`: an edge or wire cuts
+    /// the face it lies on. Returns upstream's two groups: the pieces generated
+    /// directly by the split (`DirectLeft`) and the pieces left over (`Left`). A
+    /// backend without a shape-splitting feature reports the operation as
+    /// unsupported.
+    fn split_shape(
+        &self,
+        _shape: &Shape,
+        _tools: &[(Shape, Shape)],
+        _check_interior: bool,
+    ) -> Result<(Vec<Shape>, Vec<Shape>), GeomError> {
+        Err(unsupported("split_shape"))
     }
 
     /// The tight bounds from `BRepBndLib::AddOptimal`
@@ -842,6 +929,17 @@ pub trait GeometryBackend: Send + Sync {
     /// A copy of `shape` with the reversed orientation (`Shape.reversed`).
     fn reversed(&self, _shape: &Shape) -> Result<Shape, GeomError> {
         Err(unsupported("reversed"))
+    }
+
+    /// Split an edge at `parameters` (`Edge.split`), returning a chain of edges
+    /// in parameter order.
+    ///
+    /// The parameters are curve parameters on the edge's basis curve, as
+    /// upstream's `Edge.split` takes them; they must lie strictly inside the
+    /// edge's range. The original edge is not modified. The default reports the
+    /// operation as unsupported.
+    fn split_edge(&self, _edge: &Shape, _parameters: &[f64]) -> Result<Shape, GeomError> {
+        Err(unsupported("split_edge"))
     }
 
     /// A copy of `shape` with the given sub-shapes removed

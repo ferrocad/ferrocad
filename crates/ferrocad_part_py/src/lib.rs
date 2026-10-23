@@ -330,6 +330,16 @@ impl PartShape {
         self.shape.lock().unwrap().is_none()
     }
 
+    /// Whether the kernel finds every sub-shape valid (`Shape.isValid`).
+    ///
+    /// A null shape, or a kernel that cannot run the check, reports `false`.
+    fn isValid(&self) -> bool {
+        match self.shape() {
+            Some(shape) => ferrocad_part::backend().is_valid(&shape),
+            None => false,
+        }
+    }
+
     /// Whether two handles are the same kernel object.
     fn isSame(&self, other: &Bound<'_, PyAny>) -> bool {
         let Ok(other) = other.downcast::<PartShape>() else {
@@ -451,6 +461,14 @@ impl PartShape {
             .collect()
     }
 
+    /// The direct sub-shapes (`Shape.SubShapes`): the same list
+    /// [`childShapes`](Self::childShapes) returns, matching upstream's one
+    /// immediate solid for a box.
+    #[getter]
+    fn SubShapes(&self, py: Python<'_>) -> PyResult<Vec<Py<PartShape>>> {
+        self.childShapes(py, None)
+    }
+
     /// The solids (`Shape.Solids`) as `Part.Shape` handles.
     #[getter]
     fn Solids(&self, py: Python<'_>) -> PyResult<Vec<Py<PartShape>>> {
@@ -543,9 +561,15 @@ impl PartShape {
         self.Volume()
     }
 
-    /// The first moments of volume (`Shape.StaticMoments`): `centre * volume`.
+    /// The first moments of volume (`Shape.StaticMoments`), read from the kernel's
+    /// own GProp integral so the precision matches upstream.
     #[getter]
     fn StaticMoments(&self) -> (f64, f64, f64) {
+        if let Some(shape) = self.shape() {
+            if let Some([x, y, z]) = ferrocad_part::backend().static_moments(&shape) {
+                return (x, y, z);
+            }
+        }
         match self.mass_properties() {
             Some(mass) => (
                 mass.center_of_mass.x * mass.volume,
@@ -554,6 +578,58 @@ impl PartShape {
             ),
             None => (0.0, 0.0, 0.0),
         }
+    }
+
+    /// The rotational inertia matrix (`Shape.MatrixOfInertia`), as a
+    /// `ferrocad.Matrix` whose top-left 3x3 block is the inertia tensor.
+    ///
+    /// A null shape, or one the kernel cannot measure, reports the null matrix.
+    #[getter]
+    fn MatrixOfInertia(&self, py: Python<'_>) -> PyResult<PyObject> {
+        let matrix = self
+            .shape()
+            .and_then(|shape| ferrocad_part::backend().inertia_matrix(&shape));
+        let module = py.import("ferrocad")?;
+        let matrix_type = module.getattr("Matrix")?;
+        match matrix {
+            Some(matrix) => {
+                let values = PyTuple::new(py, matrix.m)?;
+                Ok(matrix_type.call1(values)?.unbind())
+            }
+            None => Ok(matrix_type.call0()?.unbind()),
+        }
+    }
+
+    /// The principal moments, axes and radii of gyration
+    /// (`Shape.PrincipalProperties`), as upstream's dict.
+    ///
+    /// A null shape, or one the kernel cannot measure, reports an empty dict.
+    #[getter]
+    fn PrincipalProperties(&self, py: Python<'_>) -> PyResult<PyObject> {
+        let dict = PyDict::new(py);
+        let Some(properties) = self
+            .shape()
+            .and_then(|shape| ferrocad_part::backend().principal_properties(&shape))
+        else {
+            return Ok(dict.into_any().unbind());
+        };
+        dict.set_item("SymmetryAxis", properties.symmetry_axis)?;
+        dict.set_item("SymmetryPoint", properties.symmetry_point)?;
+        dict.set_item("Moments", properties.moments)?;
+        dict.set_item(
+            "FirstAxisOfInertia",
+            curves::py_vector(py, properties.axes.0)?,
+        )?;
+        dict.set_item(
+            "SecondAxisOfInertia",
+            curves::py_vector(py, properties.axes.1)?,
+        )?;
+        dict.set_item(
+            "ThirdAxisOfInertia",
+            curves::py_vector(py, properties.axes.2)?,
+        )?;
+        dict.set_item("RadiusOfGyration", properties.radius_of_gyration)?;
+        Ok(dict.into_any().unbind())
     }
 
     /// The surface area (`Shape.Area`).
@@ -973,6 +1049,20 @@ impl PartShape {
         Ok(PartShape::from_shape(result))
     }
 
+    /// `Shape.project(shapes)` — project `shapes` onto this shape.
+    ///
+    /// This slice supports a **planar** target only: a tool that already lies in
+    /// the target's plane projects onto itself, so the result is a compound of the
+    /// tools. Projecting onto any other surface raises `Part.OCCError`.
+    fn project(&self, shapes: &Bound<'_, PyAny>) -> PyResult<PartShape> {
+        let shape = self.named_shape()?;
+        let tools = shape_sequence(shapes)?;
+        let projected = ferrocad_part::backend()
+            .project(&shape, &tools)
+            .map_err(kernel_error)?;
+        Ok(PartShape::from_shape(projected))
+    }
+
     /// `Shape.slice(direction, distance)` — the wires where the shape meets the
     /// plane `direction . x = distance` (upstream's parameterisation: the
     /// direction is not normalised).
@@ -1218,6 +1308,50 @@ impl PartShape {
             .replace_shapes(&shape, &pairs)
             .map_err(kernel_error)?;
         Ok(PartShape::from_shape(result))
+    }
+
+    /// `Edge.split(paramval)` — split this edge at one parameter or a list of
+    /// parameters and return the pieces as a wire, in parameter order.
+    ///
+    /// `paramval` is a curve parameter on the edge's basis curve, as upstream's
+    /// parameterisation; each value must lie strictly inside the edge's range.
+    /// The original edge is not modified. Defined on `Part.Shape` so `Part.Edge`
+    /// inherits it (upstream has it on `Edge` only).
+    fn split(&self, paramval: &Bound<'_, PyAny>) -> PyResult<PartShape> {
+        let shape = self.named_shape()?;
+        let mut parameters = Vec::new();
+        if let Ok(value) = paramval.extract::<f64>() {
+            parameters.push(value);
+        } else if let Ok(values) = paramval.try_iter() {
+            for value in values {
+                parameters.push(value?.extract::<f64>()?);
+            }
+        } else {
+            return Err(pyo3::exceptions::PyTypeError::new_err(
+                "Either float or list of floats expected",
+            ));
+        }
+        let split = ferrocad_part::backend()
+            .split_edge(&shape, &parameters)
+            .map_err(kernel_error)?;
+        Ok(PartShape::from_shape(split))
+    }
+
+    /// `Shape.mapSubElement(shape, op=None)` — upstream's hook for building an
+    /// element map from a sub-shape selection.
+    ///
+    /// **This kernel emits no element maps** (`ElementMapVersion` is `""`), so
+    /// there is nothing to build: the call is a documented no-op and returns
+    /// this shape unchanged. Upstream's own tests skip the map assertions when
+    /// the version is empty, so callers that guard on it behave identically.
+    #[pyo3(signature = (shape, op = None))]
+    fn mapSubElement<'py>(
+        slf: &Bound<'py, Self>,
+        shape: &Bound<'_, PyAny>,
+        op: Option<&str>,
+    ) -> PyResult<PyObject> {
+        let _ = (shape, op);
+        Ok(slf.clone().into_any().unbind())
     }
 
     /// `Shape.reverse()` — reverse this shape's orientation in place.
@@ -1571,6 +1705,84 @@ fn makeBox(
     Ok(PartShape::from_shape(shape))
 }
 
+/// `Part.makeSplitShape(shape, splits, checkInterior=True)` → upstream's
+/// `(direct, left)` tuple of two lists of shapes.
+///
+/// Each `splits` pair is `(splitting shape, face being split)`: an edge or wire
+/// cuts the face it lies on (`BRepFeat_SplitShape`). The first list holds the
+/// pieces the split generated directly (`DirectLeft`), the second the pieces left
+/// over (`Left`), matching upstream's grouping and order.
+#[pyfunction]
+#[pyo3(signature = (shape, splits, checkInterior = true))]
+fn makeSplitShape(
+    py: Python<'_>,
+    shape: &Bound<'_, PyAny>,
+    splits: &Bound<'_, PyAny>,
+    checkInterior: bool,
+) -> PyResult<PyObject> {
+    let target = shape_argument(shape)?;
+    let mut tools = Vec::new();
+    for item in splits.try_iter()? {
+        let item = item?;
+        let cutter = shape_argument(&item.get_item(0)?)?;
+        let face = shape_argument(&item.get_item(1)?)?;
+        tools.push((cutter, face));
+    }
+    let (direct, left) = ferrocad_part::backend()
+        .split_shape(&target, &tools, checkInterior)
+        .map_err(kernel_error)?;
+    let direct: Vec<PartShape> = direct.into_iter().map(PartShape::from_shape).collect();
+    let left: Vec<PartShape> = left.into_iter().map(PartShape::from_shape).collect();
+    let direct = PyList::new(py, direct)?;
+    let left = PyList::new(py, left)?;
+    Ok(PyTuple::new(py, [direct, left])?.into_any().unbind())
+}
+
+/// `Part.makeSweepSurface(path, profile, tolerance=0.001, fillMode=0)` — sweep
+/// `profile` along `path`.
+///
+/// `path` may be a wire or a single edge. `tolerance` and `fillMode` are
+/// accepted for upstream signature compatibility; the pipe is built with
+/// `BRepOffsetAPI_MakePipe`, which has no approximation tolerance, so the result
+/// is the exact swept surface.
+#[pyfunction]
+#[pyo3(signature = (path, profile, tolerance = 0.001, fillMode = 0))]
+fn makeSweepSurface(
+    path: &Bound<'_, PyAny>,
+    profile: &Bound<'_, PyAny>,
+    tolerance: f64,
+    fillMode: i32,
+) -> PyResult<PartShape> {
+    let _ = fillMode;
+    let spine = shape_argument(path)?;
+    let profile = shape_argument(profile)?;
+    let piped = ferrocad_part::backend()
+        .make_pipe(&spine, &profile, tolerance)
+        .map_err(kernel_error)?;
+    Ok(PartShape::from_shape(piped))
+}
+
+/// `Part.show(shape, name="Shape")` — add a `Part::Feature` for `shape` to the
+/// active document (creating a document when there is none) and return it.
+#[pyfunction]
+#[pyo3(signature = (shape, name = None))]
+fn show(py: Python<'_>, shape: &Bound<'_, PyAny>, name: Option<&str>) -> PyResult<PyObject> {
+    let shape = shape_argument(shape)?;
+    let app = py.import("ferrocad")?;
+    let active = app.call_method0("activeDocument")?;
+    let document = if active.is_none() {
+        app.call_method0("newDocument")?
+    } else {
+        active
+    };
+    let object = document.call_method1(
+        "addObject",
+        ("Part::Feature", name.unwrap_or("Shape")),
+    )?;
+    object.setattr("Shape", PartShape::from_shape(shape))?;
+    Ok(object.unbind())
+}
+
 /// `Part.getSortedClusters(edges)` — group edges into connected clusters.
 ///
 /// The kernel reports no adjacency between loose edges, so the clusters are
@@ -1719,6 +1931,9 @@ pub fn Part(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(makeCylinder, m)?)?;
     m.add_function(wrap_pyfunction!(makeSphere, m)?)?;
     m.add_function(wrap_pyfunction!(makeCone, m)?)?;
+    m.add_function(wrap_pyfunction!(makeSplitShape, m)?)?;
+    m.add_function(wrap_pyfunction!(makeSweepSurface, m)?)?;
+    m.add_function(wrap_pyfunction!(show, m)?)?;
     m.add_function(wrap_pyfunction!(getSortedClusters, m)?)?;
     curves::register(m)?;
     containers::register(m)?;

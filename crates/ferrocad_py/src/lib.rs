@@ -3093,6 +3093,27 @@ impl PyVector {
     }
 }
 
+/// FreeCAD's Matrix prints with `ostream`'s default 6 significant digits
+/// (1.66667, 0.0, 1.0). Rust has no `%g`, so pick the decimal count from the
+/// magnitude and trim trailing zeros.
+fn format_matrix_value(value: f64) -> String {
+    if value == 0.0 {
+        return "0.0".to_string();
+    }
+    let magnitude = value.abs().log10().floor() as i32;
+    let decimals = (5 - magnitude).clamp(0, 17) as usize;
+    let mut text = format!("{value:.decimals$}");
+    if text.contains('.') {
+        while text.ends_with('0') {
+            text.pop();
+        }
+        if text.ends_with('.') {
+            text.push('0');
+        }
+    }
+    text
+}
+
 #[pyclass(name = "Matrix", module = "ferrocad")]
 #[derive(Clone, Copy)]
 struct PyMatrix {
@@ -3463,7 +3484,13 @@ impl PyMatrix {
     }
 
     fn __repr__(&self) -> String {
-        format!("Matrix ({:?})", &self.inner.m)
+        let values: Vec<String> = self
+            .inner
+            .m
+            .iter()
+            .map(|value| format_matrix_value(*value))
+            .collect();
+        format!("Matrix ([{}])", values.join(", "))
     }
 }
 

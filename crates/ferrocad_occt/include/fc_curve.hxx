@@ -19,13 +19,17 @@
 // circle). On kind 0 every other value is 0.
 
 #include <BOPAlgo_BuilderFace.hxx>
+#include <BRepAdaptor_Curve.hxx>
 #include <BRepAlgoAPI_BuilderAlgo.hxx>
 #include <BRepAlgoAPI_Section.hxx>
 #include <BRepBuilderAPI_Copy.hxx>
 #include <BRepBuilderAPI_MakeEdge.hxx>
 #include <BRepBuilderAPI_MakeFace.hxx>
 #include <BRepBuilderAPI_MakeWire.hxx>
+#include <BRepCheck_Analyzer.hxx>
+#include <BRepFeat_SplitShape.hxx>
 #include <BRepOffsetAPI_MakeOffset.hxx>
+#include <BRepOffsetAPI_MakePipe.hxx>
 #include <BRepOffsetAPI_MakeThickSolid.hxx>
 #include <BRepTools_ReShape.hxx>
 #include <BRepFill.hxx>
@@ -47,6 +51,7 @@
 #include <Geom_BSplineCurve.hxx>
 #include <Geom_Conic.hxx>
 #include <GProp_GProps.hxx>
+#include <GProp_PrincipalProps.hxx>
 #include <Precision.hxx>
 #include <TColStd_Array1OfInteger.hxx>
 #include <TColStd_Array1OfReal.hxx>
@@ -1021,5 +1026,243 @@ inline std::unique_ptr<TopoDS_Shape> fc_reshape_replace(const TopoDS_Shape& shap
   }
   catch (...) {
     return nullptr;
+  }
+}
+
+// `Shape.isValid`: every sub-shape passes `BRepCheck_Analyzer`. False for a
+// null shape, or when OCCT throws.
+inline bool fc_is_valid(const TopoDS_Shape& shape)
+{
+  if (shape.IsNull()) {
+    return false;
+  }
+  try {
+    BRepCheck_Analyzer analyser(shape, Standard_True);
+    return analyser.IsValid() ? true : false;
+  }
+  catch (...) {
+    return false;
+  }
+}
+
+// `Edge.split`: cut `edge` at the given curve parameters and join the pieces
+// into a wire, in parameter order. Mirrors upstream's `TopoShapeEdgePy::split`:
+// the pieces are rebuilt on the edge's basis curve and the original edge is not
+// touched. Parameters must lie strictly inside the edge's range. Null on
+// failure (not an edge, out-of-range parameter, or OCCT throws).
+inline std::unique_ptr<TopoDS_Shape> fc_split_edge(const TopoDS_Shape& shape,
+                                                   rust::Slice<const double> parameters)
+{
+  if (shape.IsNull() || shape.ShapeType() != TopAbs_EDGE) {
+    return nullptr;
+  }
+  try {
+    const TopoDS_Edge& edge = TopoDS::Edge(shape);
+    BRepAdaptor_Curve adapt(edge);
+    const double first = adapt.FirstParameter();
+    const double last = adapt.LastParameter();
+
+    std::vector<double> par;
+    par.reserve(parameters.size() + 2);
+    par.push_back(first);
+    for (const double value : parameters) {
+      if (value <= first || value >= last) {
+        return nullptr;
+      }
+      par.push_back(value);
+    }
+    par.push_back(last);
+    std::sort(par.begin(), par.end());
+
+    Handle(Geom_Curve) curve = adapt.Curve().Curve();
+    if (curve.IsNull()) {
+      return nullptr;
+    }
+
+    BRepBuilderAPI_MakeWire wire;
+    BRep_Builder builder;
+    for (std::size_t i = 0; i + 1 < par.size(); ++i) {
+      BRepBuilderAPI_MakeEdge make(curve, par[i], par[i + 1]);
+      if (!make.IsDone()) {
+        return nullptr;
+      }
+      TopoDS_Edge piece = make.Edge();
+      // Carry the original edge's pcurves over, so the pieces stay usable in the
+      // face the edge belonged to (upstream does the same).
+      builder.Transfert(edge, piece);
+      builder.Range(piece, par[i], par[i + 1], Standard_False);
+      wire.Add(piece);
+    }
+    if (!wire.IsDone()) {
+      return nullptr;
+    }
+    return std::unique_ptr<TopoDS_Shape>(new TopoDS_Shape(wire.Shape()));
+  }
+  catch (...) {
+    return nullptr;
+  }
+}
+
+// `Part.makeSplitShape`: `BRepFeat_SplitShape` over `shape`. `tools` and
+// `faces` are parallel lists: each tool (edge/wire) splits the matching face.
+// Fills `direct` with `DirectLeft()` and `left` with `Left()`, upstream's two
+// result groups. False on failure.
+inline bool fc_split_shape(const TopoDS_Shape& shape,
+                           const TopTools_ListOfShape& tools,
+                           const TopTools_ListOfShape& faces,
+                           bool check_interior,
+                           TopTools_ListOfShape& direct,
+                           TopTools_ListOfShape& left)
+{
+  if (shape.IsNull() || tools.Extent() != faces.Extent()) {
+    return false;
+  }
+  try {
+    BRepFeat_SplitShape split(shape);
+    split.SetCheckInterior(check_interior ? Standard_True : Standard_False);
+
+    TopTools_ListIteratorOfListOfShape tool(tools);
+    TopTools_ListIteratorOfListOfShape face(faces);
+    for (; tool.More(); tool.Next(), face.Next()) {
+      const TopoDS_Shape& cutter = tool.Value();
+      const TopoDS_Shape& target = face.Value();
+      if (cutter.IsNull() || target.IsNull() || target.ShapeType() != TopAbs_FACE) {
+        return false;
+      }
+      if (cutter.ShapeType() == TopAbs_EDGE) {
+        split.Add(TopoDS::Edge(cutter), TopoDS::Face(target));
+      }
+      else if (cutter.ShapeType() == TopAbs_WIRE) {
+        split.Add(TopoDS::Wire(cutter), TopoDS::Face(target));
+      }
+      else {
+        return false;
+      }
+    }
+
+    split.Build();
+    direct.Clear();
+    left.Clear();
+    for (TopTools_ListIteratorOfListOfShape it(split.DirectLeft()); it.More(); it.Next()) {
+      direct.Append(it.Value());
+    }
+    for (TopTools_ListIteratorOfListOfShape it(split.Left()); it.More(); it.Next()) {
+      left.Append(it.Value());
+    }
+    return true;
+  }
+  catch (...) {
+    return false;
+  }
+}
+
+// `Part.makeSweepSurface`: sweep `profile` along `spine` with
+// `BRepOffsetAPI_MakePipe`. The spine may be a wire or a single edge. Returns
+// the lateral surface, or null on failure. `tolerance` is accepted for upstream
+// signature parity; `BRepOffsetAPI_MakePipe` has no approximation tolerance.
+inline std::unique_ptr<TopoDS_Shape> fc_pipe(const TopoDS_Shape& spine,
+                                             const TopoDS_Shape& profile,
+                                             double tolerance)
+{
+  if (spine.IsNull() || profile.IsNull()) {
+    return nullptr;
+  }
+  (void)tolerance;
+  try {
+    TopoDS_Wire wire;
+    if (spine.ShapeType() == TopAbs_WIRE) {
+      wire = TopoDS::Wire(spine);
+    }
+    else if (spine.ShapeType() == TopAbs_EDGE) {
+      BRepBuilderAPI_MakeWire make(TopoDS::Edge(spine));
+      if (!make.IsDone()) {
+        return nullptr;
+      }
+      wire = make.Wire();
+    }
+    else {
+      return nullptr;
+    }
+
+    BRepOffsetAPI_MakePipe pipe(wire, profile);
+    if (!pipe.IsDone()) {
+      return nullptr;
+    }
+    const TopoDS_Shape result = pipe.Shape();
+    if (result.IsNull()) {
+      return nullptr;
+    }
+    return std::unique_ptr<TopoDS_Shape>(new TopoDS_Shape(result));
+  }
+  catch (...) {
+    return nullptr;
+  }
+}
+
+// The 3x3 inertia matrix of `shape`, row-major, as nine values. Empty when the
+// shape cannot be measured or OCCT throws.
+inline void fc_inertia_matrix(const TopoDS_Shape& shape, rust::Vec<double>& out)
+{
+  if (shape.IsNull()) {
+    return;
+  }
+  try {
+    GProp_GProps props;
+    BRepGProp::VolumeProperties(shape, props);
+    const gp_Mat matrix = props.MatrixOfInertia();
+    for (int i = 1; i <= 3; ++i) {
+      for (int j = 1; j <= 3; ++j) {
+        out.push_back(matrix(i, j));
+      }
+    }
+  }
+  catch (...) {
+    out.clear();
+  }
+}
+
+// `Shape.PrincipalProperties`, flattened:
+//
+//   [symmetry axis, symmetry point,
+//    moment1, moment2, moment3,
+//    axis1 xyz, axis2 xyz, axis3 xyz,
+//    radius1, radius2, radius3]
+//
+// Empty when the shape cannot be measured or OCCT throws.
+inline void fc_principal_properties(const TopoDS_Shape& shape, rust::Vec<double>& out)
+{
+  if (shape.IsNull()) {
+    return;
+  }
+  try {
+    GProp_GProps props;
+    BRepGProp::VolumeProperties(shape, props);
+    const GProp_PrincipalProps principal = props.PrincipalProperties();
+
+    out.push_back(principal.HasSymmetryAxis() ? 1.0 : 0.0);
+    out.push_back(principal.HasSymmetryPoint() ? 1.0 : 0.0);
+
+    double lx = 0.0;
+    double ly = 0.0;
+    double lz = 0.0;
+    principal.Moments(lx, ly, lz);
+    out.push_back(lx);
+    out.push_back(ly);
+    out.push_back(lz);
+
+    fc_curve_push_dir(out, principal.FirstAxisOfInertia());
+    fc_curve_push_dir(out, principal.SecondAxisOfInertia());
+    fc_curve_push_dir(out, principal.ThirdAxisOfInertia());
+
+    double rxx = 0.0;
+    double ryy = 0.0;
+    double rzz = 0.0;
+    principal.RadiusOfGyration(rxx, ryy, rzz);
+    out.push_back(rxx);
+    out.push_back(ryy);
+    out.push_back(rzz);
+  }
+  catch (...) {
+    out.clear();
   }
 }

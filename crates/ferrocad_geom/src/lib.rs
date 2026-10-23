@@ -12,6 +12,10 @@
 //!   kernel's own terms, and the stable-name registry derived from it. These are
 //!   re-exports of the payload-generic vocabulary in [`ferrocad_lineage`],
 //!   specialised to [`Shape`].
+//! - [`Lineage`], [`ReverseMap`], [`MapVersion`] and [`NamePolicy`] — the naming
+//!   layer: provenance accumulated over successive histories, its inverse view, and
+//!   the versioned rules that turn elements into names. [`Lineage`] is specialised
+//!   to [`Shape`]; the others carry no payload and are re-exported as themselves.
 //! - [`Tessellation`], [`ElementKind`] and [`SelectionRef`] — the display mesh with
 //!   per-primitive sub-element ids, and the neutral vocabulary a viewport or a
 //!   workbench needs to turn a pick into a topology reference.
@@ -173,6 +177,17 @@ pub type History = ferrocad_lineage::History<Shape>;
 ///
 /// This is [`ferrocad_lineage::ElementMap`] with [`Shape`] as its payload.
 pub type ElementMap = ferrocad_lineage::ElementMap<Shape>;
+
+/// A shape's accumulated provenance: the forward [`ElementMap`], its reverse view,
+/// and the version of the naming rules that produced them.
+///
+/// This is [`ferrocad_lineage::Lineage`] with [`Shape`] as its payload.
+pub type Lineage = ferrocad_lineage::Lineage<Shape>;
+
+// These lineage types are not generic over the payload, so they are re-exported
+// as themselves rather than aliased: [`ReverseMap`] is a `String`-keyed relation,
+// and [`MapVersion`]/[`NamePolicy`] describe rules, not shapes.
+pub use ferrocad_lineage::{MapVersion, NamePolicy, ReverseMap};
 
 // ---------------------------------------------------------------------------
 // Topology and selection vocabulary

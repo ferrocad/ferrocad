@@ -13,13 +13,20 @@ The `Base` value types FreeCAD exposes as a submodule.
 | --- | --- |
 | `Center` (attribute) | — |
 | `XLength` (attribute) | — |
+| `XMax` (attribute) | — |
+| `XMin` (attribute) | — |
 | `YLength` (attribute) | — |
+| `YMax` (attribute) | — |
+| `YMin` (attribute) | — |
 | `ZLength` (attribute) | — |
+| `ZMax` (attribute) | — |
+| `ZMin` (attribute) | — |
 | add(x, y, z) | — |
+| enlarge(amount) | Grow the box by `amount` in every direction (`BoundBox.enlarge`). |
 | getIntersectionPoint(point, direction) | The first box-surface point hit by a ray from `point` along `direction`. |
 | intersect(other) | — |
 | intersected(other) | — |
-| isInside(point) | — |
+| isInside(value) | — |
 | isValid() | — |
 | setVoid() | — |
 
@@ -111,6 +118,7 @@ The `Base` value types FreeCAD exposes as a submodule.
 | inverse() | — |
 | invert() | — |
 | isSame(o, tol=0.0) | — |
+| multVec(v) | Rotate a vector (FreeCAD `Rotation.multVec`). |
 | multiply(o) | — |
 | setYawPitchRoll(yaw, pitch, roll) | — |
 | toMatrix() | — |

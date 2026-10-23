@@ -65,7 +65,7 @@ A drop-in, Rust-backed stand-in for FreeCAD's Python ``App`` module.
 | restore() | Re-load the document from its saved file (clearing current content). |
 | restoreContent(data) | Replace this document's content from a `dumpContent` payload. |
 | save() | — |
-| saveAs(path) | — |
+| saveAs(path) | Save under `path`, selecting the serializer from the suffix. |
 | setAutoCreated(v) | — |
 | settings(namespace) | Return a namespaced view over `Meta` (keys `"<namespace>.<key>"`). |
 | undo() | — |
@@ -97,6 +97,7 @@ A drop-in, Rust-backed stand-in for FreeCAD's Python ``App`` module.
 | getEnumerationsOfProperty(name) | `getEnumerationsOfProperty`: an enumeration's allowed values, else `None`. |
 | getGroupOfProperty(name) | `getGroupOfProperty`: the UI group the property belongs to. |
 | getObject(name) | — |
+| getParent() | `getParent()`: the geo-feature group (`App::Part`) this object belongs to. |
 | getParentGeoFeatureGroup() | The geo-feature group (`App::Part`) that lists this object. |
 | getParentGroup() | The plain group (or group-extension object) that lists this object. |
 | getPropertyByName(name) | — |
@@ -109,13 +110,14 @@ A drop-in, Rust-backed stand-in for FreeCAD's Python ``App`` module.
 | hasExtension(name) | — |
 | hasObject(other) | — |
 | purgeTouched() | Mark the object as unchanged (FreeCAD `purgeTouched`). |
-| recompute() | — |
+| recompute() | Recompute this object (FreeCAD `DocumentObject.recompute`). |
 | removeExtension(name) | — |
 | removeProperty(name) | — |
 | restoreContent(data) | Restore this object's content from bytes (`restoreContent`). |
 | restorePropertyContent(name, data) | Restore one property from bytes (`restorePropertyContent`). |
 | setEditorMode(prop, _modes) | Record a property editor mode (`ReadOnly`, …); POC: fires the event only. |
 | setExpression(prop, source=None) | — |
+| setLink(value, subname=None) | `App::Link.setLink(obj)`: point `LinkedObject` at `obj` (or clear it with `None`). `subname` narrows the link to one sub-element of the target. |
 | setPropertyByName(name, value) | — |
 | setPropertyStatus(name, val) | `setPropertyStatus(name, val)`: add (or, with a leading `-`, clear) flags. |
 | set_group(value) | Assign the `Group` link list from a sequence of objects (or names). |

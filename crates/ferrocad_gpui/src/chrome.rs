@@ -1151,7 +1151,7 @@ pub(crate) fn action_dock(
             .cursor_pointer()
             .hover(|style| style.bg(rgb(PANEL)))
             .child("Search (Ctrl+K)")
-            .on_click(cx.listener(|this, _event, _window, cx| this.search_stub(cx))),
+            .on_click(cx.listener(|this, _event, _window, cx| this.open_palette(cx))),
     );
 
     div()

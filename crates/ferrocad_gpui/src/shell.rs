@@ -25,7 +25,7 @@ use ferrocad_viewport::scene;
 use ferrocad_viewport::{HoverReport, InventorViewport, SelectionEvent, ViewportEvent};
 use ferrocad_wgpu::{AdapterChoice, AdapterSummary, WgpuRenderer};
 use ferrocad_widgets::window_chrome::window_frame_with_leading;
-use ferrocad_widgets::{SubmitEvent, TextAreaState, TextInput};
+use ferrocad_widgets::{ChangeEvent, SubmitEvent, TextAreaState, TextInput};
 
 use crate::commands::{self, CommandInfo};
 use crate::contributions::Contributions;
@@ -75,6 +75,31 @@ fn same_node(left: &str, right: &str) -> bool {
 /// a `select` directive is not pruned just because it uses the display form.
 fn live_node(name: &str, live: &HashSet<String>) -> bool {
     live.contains(name) || live.iter().any(|candidate| same_node(name, candidate))
+}
+
+/// The commands matching a palette query, case-insensitively over the id, the label,
+/// the tooltip and the accelerator. An empty query lists every command.
+fn palette_filtered<'a>(commands: &'a [CommandInfo], query: &str) -> Vec<&'a CommandInfo> {
+    let needle = query.trim().to_lowercase();
+    commands
+        .iter()
+        .filter(|command| {
+            needle.is_empty()
+                || command.id.to_lowercase().contains(&needle)
+                || command.label().to_lowercase().contains(&needle)
+                || command.tooltip.to_lowercase().contains(&needle)
+                || command.accel.to_lowercase().contains(&needle)
+        })
+        .collect()
+}
+
+/// Whether the event is the palette's `Ctrl+K` (`Cmd+K` on macOS).
+fn is_palette_shortcut(event: &KeyDownEvent) -> bool {
+    let modifiers = &event.keystroke.modifiers;
+    event.keystroke.key == "k"
+        && (modifiers.control || modifiers.platform)
+        && !modifiers.alt
+        && !modifiers.shift
 }
 
 /// The console transcript: the log lines plus a fresh prompt.
@@ -160,6 +185,14 @@ pub struct Shell {
     dialog_focus: FocusHandle,
     /// Focus the modal on the next render (it is opened outside a window context).
     focus_dialog: bool,
+    /// The Ctrl+K command palette, when it is open.
+    palette: Option<Palette>,
+    /// Focus the palette's field on the next render (it opens outside a window
+    /// context, and from either window).
+    focus_palette: bool,
+    /// The focus to hand back when the palette closes, captured when it took the
+    /// keyboard.
+    palette_restore_focus: Option<FocusHandle>,
     /// The window root's focus handle: `Esc` and the command shortcuts need a focused
     /// element in the main window now that the console lives in Dev Tools.
     root_focus: FocusHandle,
@@ -211,6 +244,22 @@ struct SettingsCard {
     position: Point<Pixels>,
     /// Pointer and card origin when a drag starts.
     drag: Option<(Point<Pixels>, Point<Pixels>)>,
+}
+
+/// The open command palette (Ctrl+K): a query, a cursor into the filtered rows,
+/// and the focus to hand back when it closes.
+struct Palette {
+    /// The focused search field.
+    input: Entity<TextInput>,
+    /// The live query, mirrored from the field's `ChangeEvent`.
+    query: String,
+    /// The cursor into the filtered rows (clamped at render and accept time).
+    selected: usize,
+    /// The focus that held the keyboard before the palette took it.
+    previous_focus: Option<FocusHandle>,
+    /// Drop the field's subscriptions with the palette.
+    _change: Subscription,
+    _submit: Subscription,
 }
 
 /// The open modal: the spec, the collected values, and its single-use token.
@@ -315,6 +364,9 @@ impl Shell {
             dialog: None,
             dialog_focus: cx.focus_handle(),
             focus_dialog: false,
+            palette: None,
+            focus_palette: false,
+            palette_restore_focus: None,
             root_focus: cx.focus_handle(),
             open_popover: None,
             popover_anchor: None,
@@ -574,15 +626,122 @@ impl Shell {
         }
     }
 
-    /// The dock's `Search (Ctrl+K)` slot: a stub until the command palette exists.
-    /// It reports where the commands actually are rather than pretending to search.
-    pub(crate) fn search_stub(&mut self, cx: &mut Context<Self>) {
-        let status =
-            "search: no command palette yet — Dev Tools (Ctrl+Shift+D) lists every command"
-                .to_string();
-        self.model.lock().unwrap().status = status.clone();
-        self.console_line(status, cx);
+    /// Open the command palette (Ctrl+K, or the dock's Search slot).
+    ///
+    /// The palette is modal over the canvas, so it dismisses a header popover. It is
+    /// deliberately not opened over a command dialog: that dialog owns the keyboard
+    /// and its own accept/cancel path.
+    pub(crate) fn open_palette(&mut self, cx: &mut Context<Self>) {
+        if self.palette.is_some() || self.dialog.is_some() {
+            return;
+        }
+        self.open_popover = None;
+        self.popover_anchor = None;
+        let input = cx.new(|cx| TextInput::new(cx, "Search commands"));
+        let change = cx.subscribe(
+            &input,
+            |this: &mut Shell, _input, event: &ChangeEvent, cx| {
+                this.palette_query_changed(event.text.clone(), cx);
+            },
+        );
+        // Enter in the field runs the selection; the field stops the key, so this
+        // `SubmitEvent` is the palette's accept path.
+        let submit = cx.subscribe(
+            &input,
+            |this: &mut Shell, _input, _event: &SubmitEvent, cx| {
+                this.palette_accept(cx);
+            },
+        );
+        self.palette = Some(Palette {
+            input,
+            query: String::new(),
+            selected: 0,
+            previous_focus: None,
+            _change: change,
+            _submit: submit,
+        });
+        self.focus_palette = true;
         cx.notify();
+    }
+
+    /// Close the palette; returns whether it was open. The focus that opened it is
+    /// restored on the next render.
+    fn close_palette(&mut self, cx: &mut Context<Self>) -> bool {
+        let Some(palette) = self.palette.take() else {
+            return false;
+        };
+        self.palette_restore_focus = palette.previous_focus;
+        cx.notify();
+        true
+    }
+
+    /// `Ctrl+K`: open the palette, or close it when it is already open.
+    fn toggle_palette(&mut self, cx: &mut Context<Self>) {
+        if self.palette.is_some() {
+            self.close_palette(cx);
+        } else {
+            self.open_palette(cx);
+        }
+    }
+
+    /// Mirror the field's text into the query and rewind the cursor: a shorter list
+    /// must never leave the cursor past its end.
+    fn palette_query_changed(&mut self, text: String, cx: &mut Context<Self>) {
+        if let Some(palette) = self.palette.as_mut() {
+            palette.query = text;
+            palette.selected = 0;
+        }
+        cx.notify();
+    }
+
+    /// Move the palette cursor over the filtered rows, wrapping at both ends.
+    fn move_palette_selection(&mut self, delta: isize, cx: &mut Context<Self>) {
+        let Some(palette) = self.palette.as_ref() else {
+            return;
+        };
+        let len = {
+            let model = self.model.lock().unwrap();
+            palette_filtered(&model.commands, &palette.query).len()
+        };
+        if len == 0 {
+            return;
+        }
+        if let Some(palette) = self.palette.as_mut() {
+            palette.selected =
+                (palette.selected as isize + delta).rem_euclid(len as isize) as usize;
+        }
+        cx.notify();
+    }
+
+    /// Enter in the palette: run the selected command, but only when it is enabled.
+    /// A disabled row stays visible (like the dock's greyed entries) and says why
+    /// nothing happened instead of silently doing nothing.
+    fn palette_accept(&mut self, cx: &mut Context<Self>) {
+        let Some(palette) = self.palette.as_ref() else {
+            return;
+        };
+        let query = palette.query.clone();
+        let selected = palette.selected;
+        let target = {
+            let model = self.model.lock().unwrap();
+            let rows = palette_filtered(&model.commands, &query);
+            let index = selected.min(rows.len().saturating_sub(1));
+            rows.get(index)
+                .map(|command| (command.id.clone(), command.enabled))
+        };
+        let Some((id, enabled)) = target else {
+            return;
+        };
+        if !enabled {
+            let status = format!("{id}: disabled");
+            self.model.lock().unwrap().status = status.clone();
+            self.console_line(status, cx);
+            cx.notify();
+            return;
+        }
+        // Run it exactly as a click would: the palette has served its purpose.
+        self.close_palette(cx);
+        self.run_command(&id, cx);
     }
 
     /// The shell's global key path, shared by both windows.
@@ -596,6 +755,14 @@ impl Shell {
         cancel_dialog: bool,
         cx: &mut Context<Self>,
     ) -> bool {
+        // The palette is modal: Esc closes it before the popover, tool and card paths.
+        if event.keystroke.key == "escape" && self.close_palette(cx) {
+            return true;
+        }
+        if is_palette_shortcut(event) {
+            self.toggle_palette(cx);
+            return true;
+        }
         if event.keystroke.key == "escape" && self.close_popover(cx) {
             return true;
         }
@@ -1093,7 +1260,9 @@ impl Shell {
     /// A modal owns the keyboard while it is open, and a disabled command does not
     /// fire (the same rule the bar shows).
     fn shortcut_for(&self, event: &KeyDownEvent) -> Option<String> {
-        if self.dialog.is_some() {
+        // A modal owns the keyboard while either is open: a registry accelerator must
+        // not fire over a dialog or while the user is typing a palette query.
+        if self.dialog.is_some() || self.palette.is_some() {
             return None;
         }
         let (_, id) = self
@@ -2204,6 +2373,149 @@ fn dialog_overlay(shell: &mut Shell, cx: &mut Context<Shell>) -> AnyElement {
         .into_any_element()
 }
 
+/// The command palette (Ctrl+K): a focused search field over the filtered registry.
+///
+/// The field holds keyboard focus, so typing filters and `Esc` bubbles to the shell
+/// root's [`Shell::handle_key`]. `Up`/`Down` are not editing keys, so they bubble to
+/// this panel's key handler; `Enter` reaches the shell through the field's
+/// `SubmitEvent` (see [`Shell::open_palette`]).
+fn palette_overlay(
+    shell: &Shell,
+    model: &ShellModel,
+    cx: &mut Context<Shell>,
+) -> AnyElement {
+    let Some(palette) = shell.palette.as_ref() else {
+        return div().into_any_element();
+    };
+    let input = palette.input.clone();
+    let query = palette.query.clone();
+    let commands = palette_filtered(&model.commands, &query);
+    // The cursor may trail the list while commands refresh; clamp it here and in the
+    // accept path so the highlighted row is always the row Enter runs.
+    let selected = palette.selected.min(commands.len().saturating_sub(1));
+
+    let mut rows = div()
+        .id("palette-rows")
+        .flex()
+        .flex_col()
+        .gap_1()
+        .min_h_0()
+        .max_h(px(320.))
+        .overflow_y_scroll();
+    if commands.is_empty() {
+        rows = rows.child(
+            div()
+                .debug_selector(|| "palette-empty".to_string())
+                .px_2()
+                .py_2()
+                .text_xs()
+                .text_color(rgb(MUTED))
+                .child("No matching commands"),
+        );
+    }
+    for (index, command) in commands.iter().enumerate() {
+        let id = command.id.clone();
+        let selector = id.clone();
+        let enabled = command.enabled;
+        let checked = command.checked;
+        let is_selected = index == selected;
+        let mut row = div()
+            .id(SharedString::from(format!("palette-row-{id}")))
+            .debug_selector(move || format!("palette-row-{selector}"))
+            .flex()
+            .flex_row()
+            .items_center()
+            .gap_2()
+            .px_2()
+            .py_1()
+            .rounded_sm()
+            .text_xs()
+            .text_color(rgb(if enabled { FG } else { MUTED }))
+            .when(is_selected, |el| el.bg(rgb(ACCENT)))
+            .when(enabled, |el| {
+                el.cursor_pointer().hover(|style| style.bg(rgb(PANEL_ALT)))
+            })
+            .child(command.label().to_string())
+            .child(div().flex_1())
+            .when(checked, |el| {
+                el.child(div().text_color(rgb(MUTED)).child("\u{2713}"))
+            })
+            .child(
+                div()
+                    .text_color(rgb(MUTED))
+                    .child(command.surface().as_str()),
+            );
+        if enabled {
+            row = row.on_click(cx.listener(move |this, _event, _window, cx| {
+                this.close_palette(cx);
+                this.run_command(&id, cx);
+            }));
+        }
+        rows = rows.child(row);
+    }
+
+    let panel = div()
+        .id("palette")
+        .debug_selector(|| "palette".to_string())
+        .w(px(520.))
+        .flex()
+        .flex_col()
+        .gap_2()
+        .p_2()
+        .rounded_md()
+        .bg(rgba(0x16181df2))
+        .border_1()
+        .border_color(rgba(0xffffff26))
+        .on_key_down(cx.listener(|this, event: &KeyDownEvent, _window, cx| {
+            match event.keystroke.key.as_str() {
+                "up" => {
+                    this.move_palette_selection(-1, cx);
+                    cx.stop_propagation();
+                }
+                "down" => {
+                    this.move_palette_selection(1, cx);
+                    cx.stop_propagation();
+                }
+                _ => {}
+            }
+        }))
+        .child(
+            div()
+                .debug_selector(|| "palette-input".to_string())
+                .rounded_sm()
+                .border_1()
+                .border_color(rgba(0xffffff26))
+                .child(input),
+        )
+        .child(rows)
+        .child(
+            div()
+                .flex()
+                .flex_row()
+                .justify_between()
+                .px_1()
+                .text_xs()
+                .text_color(rgb(MUTED))
+                .child(format!("{} command(s)", commands.len()))
+                .child("\u{2191}\u{2193} select \u{00b7} Enter run \u{00b7} Esc close"),
+        );
+
+    div()
+        .id("palette-backdrop")
+        .absolute()
+        .left(px(0.))
+        .top(px(0.))
+        .size_full()
+        .flex()
+        .flex_col()
+        .items_center()
+        .pt(px(72.))
+        .bg(rgba(0x0f1218b3))
+        .occlude()
+        .child(panel)
+        .into_any_element()
+}
+
 /// An enum field's `‹` / `›` button.
 fn dialog_arrow(
     label: &str,
@@ -2647,10 +2959,31 @@ impl Render for Shell {
         // The app menu shows the window's real state; the registry cannot know it.
         let dev_tools_open = self.dev_tools_open(cx);
 
+        // A palette that closed hands the keyboard back before a dialog it may have
+        // opened takes it (that run is deferred to the `focus_dialog` block below).
+        if let Some(focus) = self.palette_restore_focus.take() {
+            window.focus(&focus, cx);
+        }
         // A modal was opened outside a window context; focus it once rendered so
         // Esc cancels and the panel receives bubbled keys.
         if std::mem::take(&mut self.focus_dialog) {
             window.focus(&self.dialog_focus, cx);
+        }
+        // The palette was just opened (from either window): remember what held the
+        // keyboard so closing can give it back, then move focus to the query field.
+        // The palette lives in the main window, so a Ctrl+K pressed in Dev Tools
+        // brings that window forward; otherwise the field would take focus while the
+        // keystrokes kept going to the other window.
+        if std::mem::take(&mut self.focus_palette) {
+            let previous = window.focused(cx);
+            if let Some(palette) = self.palette.as_mut() {
+                palette.previous_focus = previous;
+            }
+            if let Some(palette) = self.palette.as_ref() {
+                window.activate_window();
+                let input = palette.input.read(cx).focus_handle(cx);
+                window.focus(&input, cx);
+            }
         }
 
         // The pane is the canvas now: the environment controls float over it as a
@@ -2773,6 +3106,8 @@ impl Render for Shell {
             .child(content);
         let body = if self.dialog.is_some() {
             body.child(dialog_overlay(self, cx))
+        } else if self.palette.is_some() {
+            body.child(palette_overlay(self, &model, cx))
         } else if self.settings_card.is_some() {
             body.child(settings_card_view(self, &model, window, cx))
         } else {
@@ -5078,13 +5413,200 @@ if "App_ReloadAxisSettings" not in FreeCADGui.listCommands():
         assert!(dock_enabled(&model, "App_Delete"));
         assert!(dock_enabled(&model, "App_Move"));
 
-        // The Search slot is a stub that reports where the commands are.
+        // The Search slot opens the command palette.
         click_at(&mut cx, "dock-search");
+        draw(&mut cx);
         assert!(
-            model.lock().unwrap().status.contains("no command palette"),
-            "status: {}",
-            model.lock().unwrap().status
+            shell.read_with(&cx, |shell, _| shell.palette.is_some()),
+            "the Search slot opens the palette"
         );
+        assert!(cx.debug_bounds("palette").is_some());
+        assert!(cx.debug_bounds("palette-input").is_some());
+    }
+
+    /// A headless shell window for the palette tests, already drawn once.
+    fn palette_window(
+        cx: &mut TestAppContext,
+    ) -> (VisualTestContext, Entity<Shell>, Arc<Mutex<ShellModel>>) {
+        let model = Shell::boot().expect("boot shell");
+        let window = cx.update(|cx| {
+            let model = model.clone();
+            cx.open_window(Default::default(), move |_window, cx| {
+                cx.new(|cx| Shell::from_model(model.clone(), cx))
+            })
+            .unwrap()
+        });
+        let mut visual = VisualTestContext::from_window(window.into(), cx);
+        let shell: Entity<Shell> = window.root(&mut visual).unwrap();
+        draw(&mut visual);
+        (visual, shell, model)
+    }
+
+    /// Put the keyboard on the shell root and press `Ctrl+K`, then assert the palette
+    /// opened. The key path is the same one a real window uses.
+    fn open_palette_with_keyboard(cx: &mut VisualTestContext, shell: &Entity<Shell>) {
+        let root = shell.read_with(&*cx, |shell, _| shell.root_focus.clone());
+        cx.update(|window, cx| window.focus(&root, cx));
+        cx.simulate_keystrokes("ctrl-k");
+        draw(cx);
+        assert!(
+            shell.read_with(&*cx, |shell, _| shell.palette.is_some()),
+            "Ctrl+K opens the command palette"
+        );
+    }
+
+    /// Ctrl+K opens the palette, and the query filters case-insensitively over the
+    /// ids (and the labels/tooltips, via the same helper).
+    #[gpui::test]
+    fn ctrl_k_opens_the_palette_and_filters_the_commands(cx: &mut TestAppContext) {
+        let _guard = crate::PYTHON_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let (mut cx, shell, _model) = palette_window(cx);
+
+        open_palette_with_keyboard(&mut cx, &shell);
+        assert!(cx.debug_bounds("palette").is_some());
+        assert!(cx.debug_bounds("palette-input").is_some());
+        // Nothing is filtered yet, so the whole registry is listed, including a
+        // disabled command (it is visible but greyed, like the dock).
+        assert!(cx.debug_bounds("palette-row-App_ToggleGrid").is_some());
+        assert!(cx.debug_bounds("palette-row-App_Delete").is_some());
+
+        // Case-insensitive label match: only the grid command survives.
+        cx.simulate_input("GRID");
+        draw(&mut cx);
+        assert!(cx.debug_bounds("palette-row-App_ToggleGrid").is_some());
+        assert!(cx.debug_bounds("palette-row-App_Delete").is_none());
+        assert!(cx.debug_bounds("palette-row-App_ToggleAxisCross").is_none());
+
+        // The id is searched too, case-insensitively.
+        cx.simulate_keystrokes("cmd-a");
+        cx.simulate_input("dev_toggletools");
+        draw(&mut cx);
+        assert!(cx.debug_bounds("palette-row-Dev_ToggleTools").is_some());
+        assert!(cx.debug_bounds("palette-row-App_ToggleGrid").is_none());
+
+        // A query with no matches shows the empty state instead of a blank panel.
+        cx.simulate_keystrokes("cmd-a");
+        cx.simulate_input("zzzz-no-such-command");
+        draw(&mut cx);
+        assert!(cx.debug_bounds("palette-empty").is_some());
+    }
+
+    /// The key path is shared by both windows: Ctrl+K typed while Dev Tools has
+    /// focus opens the same palette (drawn in the main window), and Esc there closes
+    /// it too.
+    #[gpui::test]
+    fn ctrl_k_opens_the_palette_from_dev_tools(cx: &mut TestAppContext) {
+        let _guard = crate::PYTHON_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let (mut cx, shell, _model) = palette_window(cx);
+        let mut dev_cx = open_dev_tools(&mut cx, &shell);
+
+        dev_cx.simulate_keystrokes("ctrl-k");
+        assert!(
+            shell.read_with(&cx, |shell, _| shell.palette.is_some()),
+            "Ctrl+K in Dev Tools opens the shared palette"
+        );
+        draw(&mut cx);
+        assert!(cx.debug_bounds("palette").is_some());
+
+        dev_cx.simulate_keystrokes("escape");
+        assert!(
+            shell.read_with(&cx, |shell, _| shell.palette.is_none()),
+            "Esc in Dev Tools closes the palette"
+        );
+    }
+
+    /// Down moves the cursor over the filtered rows and Enter runs the highlighted
+    /// enabled command (the same `run_command` path a click uses).
+    #[gpui::test]
+    fn the_palette_arrows_move_the_selection_and_enter_runs_it(cx: &mut TestAppContext) {
+        let _guard = crate::PYTHON_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let (mut cx, shell, model) = palette_window(cx);
+        reset_grid_state();
+
+        open_palette_with_keyboard(&mut cx, &shell);
+        // Registry order: App_ToggleGrid, App_ToggleAxisCross, Dev_ToggleTools.
+        cx.simulate_input("toggle");
+        draw(&mut cx);
+        assert!(cx.debug_bounds("palette-row-App_ToggleGrid").is_some());
+        assert!(cx.debug_bounds("palette-row-App_ToggleAxisCross").is_some());
+
+        let before = model.lock().unwrap().view.clone();
+        cx.simulate_keystrokes("down");
+        draw(&mut cx);
+        cx.simulate_keystrokes("enter");
+        draw(&mut cx);
+
+        let after = model.lock().unwrap().view.clone();
+        assert_eq!(before.grid, after.grid, "the first row (the grid) did not run");
+        assert_ne!(
+            before.axis_cross, after.axis_cross,
+            "the selected row (the axis cross) ran"
+        );
+        assert!(
+            shell.read_with(&cx, |shell, _| shell.palette.is_none()),
+            "running a command closes the palette"
+        );
+        assert!(cx.debug_bounds("palette").is_none());
+        reset_grid_state();
+    }
+
+    /// Esc closes the palette and hands focus back to whatever held it when Ctrl+K
+    /// opened it.
+    #[gpui::test]
+    fn escape_closes_the_palette_and_restores_focus(cx: &mut TestAppContext) {
+        let _guard = crate::PYTHON_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let (mut cx, shell, _model) = palette_window(cx);
+        let root = shell.read_with(&cx, |shell, _| shell.root_focus.clone());
+
+        open_palette_with_keyboard(&mut cx, &shell);
+        cx.simulate_keystrokes("escape");
+        draw(&mut cx);
+
+        assert!(
+            shell.read_with(&cx, |shell, _| shell.palette.is_none()),
+            "Esc closes the palette"
+        );
+        assert!(cx.debug_bounds("palette").is_none());
+        let focused = cx.update(|window, cx| window.focused(cx));
+        assert_eq!(focused, Some(root), "focus returns to the opener");
+    }
+
+    /// A disabled command stays listed, but Enter does not run it (and does not close
+    /// the palette): `App_Delete` is inactive with nothing selected.
+    #[gpui::test]
+    fn a_disabled_palette_command_does_not_run(cx: &mut TestAppContext) {
+        let _guard = crate::PYTHON_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let (mut cx, shell, model) = palette_window(cx);
+
+        open_palette_with_keyboard(&mut cx, &shell);
+        cx.simulate_input("Delete");
+        draw(&mut cx);
+        assert!(cx.debug_bounds("palette-row-App_Delete").is_some());
+
+        let objects_before: usize = model
+            .lock()
+            .unwrap()
+            .tree
+            .iter()
+            .map(|doc| doc.objects.len())
+            .sum();
+        cx.simulate_keystrokes("enter");
+        draw(&mut cx);
+
+        let status = model.lock().unwrap().status.clone();
+        assert!(status.contains("disabled"), "status: {status}");
+        assert!(
+            shell.read_with(&cx, |shell, _| shell.palette.is_some()),
+            "a disabled command leaves the palette open"
+        );
+        let objects_after: usize = model
+            .lock()
+            .unwrap()
+            .tree
+            .iter()
+            .map(|doc| doc.objects.len())
+            .sum();
+        assert_eq!(objects_before, objects_after, "the document is untouched");
     }
 
     /// G3 UI (option 2): the gizmo's options live on the tool. `Move` grows a caret

@@ -9,7 +9,9 @@
 //!   `execute` resolves their selected edge names through the backend, expands them to
 //!   tangent chains, and writes the rebuilt shape to their output `Shape`;
 //! - **`Part::PropertyPartShape`** — a property *value* type holding a
-//!   [`ferrocad_geom::Shape`], via [`ferrocad_core::extension`].
+//!   [`ferrocad_geom::Shape`], via [`ferrocad_core::extension`];
+//! - **`Part::PropertyTopoShapeList`** — the list counterpart, holding an ordered
+//!   `Vec<Shape>` (upstream `PropertyTopoShapeList`).
 //!
 //! Part depends **only on the seam** ([`ferrocad_geom`]), never on a concrete kernel:
 //! the application composes it with one — `ferrocad_part::register(Arc::new(OcctBackend::new()))`.
@@ -25,10 +27,13 @@ mod containers;
 mod dress_up;
 mod shape_property;
 
+use std::any::Any;
+use std::fmt;
 use std::sync::{Arc, OnceLock};
 
 use ferrocad_core::object_registry::{self, ObjectType};
-use ferrocad_core::{Document, ObjectId, Property, prop_status};
+use ferrocad_core::{Document, ExtensionData, ExtensionValue, ObjectId, Property, prop_status};
+use ferrocad_core::property_types;
 use ferrocad_geom::{GeometryBackend, Shape};
 use ferrocad_types::{Placement, Vector3};
 
@@ -37,6 +42,163 @@ pub use containers::{
     COMMON_TYPE, COMPOUND_TYPE, CUT_TYPE, FUSE_TYPE, MULTICOMMON_TYPE, MULTIFUSE_TYPE,
 };
 pub use shape_property::{make_shape_property, shape_of, ShapeProperty, TYPE_NAME};
+
+/// The registered type name of the shape-list property.
+pub const SHAPE_LIST_TYPE_NAME: &str = "Part::PropertyTopoShapeList";
+
+/// A list of kernel shapes, held as a [`Property::Extension`] (upstream
+/// `Part::PropertyTopoShapeList`).
+///
+/// The entries use the same per-shape encoding as [`ShapeProperty`] — the injected
+/// backend's in-memory bytes (BREP with OCCT) — framed with a little-endian `u64`
+/// count and a `u64` byte length per entry, so the list boundaries survive the trip
+/// through the document JSON.
+///
+/// Limitation: the seam's [`Shape`] cannot represent a null shape, so a null
+/// `Part.Shape()` cannot be stored as a list entry (upstream keeps it as a null
+/// `TopoShape`); the Python converter rejects such an assignment rather than
+/// silently dropping or shifting entries.
+pub struct ShapeListProperty {
+    shapes: Vec<Shape>,
+}
+
+impl ShapeListProperty {
+    /// An empty list — the default value.
+    pub fn empty() -> Self {
+        ShapeListProperty { shapes: Vec::new() }
+    }
+
+    /// A property holding `shapes`, in order.
+    pub fn new(shapes: Vec<Shape>) -> Self {
+        ShapeListProperty { shapes }
+    }
+
+    /// A copy of the held shapes (shape handles are cheap to clone).
+    pub fn shapes(&self) -> Vec<Shape> {
+        self.shapes.clone()
+    }
+
+    /// Replace the held shapes.
+    pub fn set_shapes(&mut self, shapes: Vec<Shape>) {
+        self.shapes = shapes;
+    }
+
+    /// The number of entries.
+    pub fn len(&self) -> usize {
+        self.shapes.len()
+    }
+
+    /// Whether the list holds no shapes.
+    pub fn is_empty(&self) -> bool {
+        self.shapes.is_empty()
+    }
+}
+
+impl ExtensionData for ShapeListProperty {
+    fn type_name(&self) -> &str {
+        SHAPE_LIST_TYPE_NAME
+    }
+
+    fn clone_box(&self) -> Box<dyn ExtensionData> {
+        Box::new(ShapeListProperty {
+            shapes: self.shapes.clone(),
+        })
+    }
+
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+
+    fn eq(&self, other: &dyn ExtensionData) -> bool {
+        let Some(other) = other.as_any().downcast_ref::<ShapeListProperty>() else {
+            return false;
+        };
+        self.shapes.len() == other.shapes.len()
+            && self
+                .shapes
+                .iter()
+                .zip(&other.shapes)
+                .all(|(a, b)| a.is_same(b))
+    }
+
+    fn save(&self) -> Vec<u8> {
+        let backend = crate::backend();
+        let mut out = Vec::new();
+        out.extend_from_slice(&(self.shapes.len() as u64).to_le_bytes());
+        for shape in &self.shapes {
+            let blob = backend.save_shape(shape);
+            out.extend_from_slice(&(blob.len() as u64).to_le_bytes());
+            out.extend_from_slice(&blob);
+        }
+        out
+    }
+
+    fn debug(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "ShapeListProperty({} shapes)", self.shapes.len())
+    }
+}
+
+/// Wrap a [`ShapeListProperty`] as a `Property::Extension` value.
+pub fn make_shape_list_property(property: ShapeListProperty) -> Property {
+    Property::Extension(ExtensionValue::new(Box::new(property)))
+}
+
+/// Borrow the [`ShapeListProperty`] inside `property`, if it is one.
+pub fn shape_list_of(property: &Property) -> Option<&ShapeListProperty> {
+    match property {
+        Property::Extension(value) => value.data().as_any().downcast_ref::<ShapeListProperty>(),
+        _ => None,
+    }
+}
+
+/// Register `Part::PropertyTopoShapeList`. Idempotent.
+fn register_shape_list() {
+    property_types::register_extension(
+        SHAPE_LIST_TYPE_NAME,
+        || make_shape_list_property(ShapeListProperty::empty()),
+        restore_shape_list,
+    );
+}
+
+/// One little-endian `u64` off the front of `rest`.
+fn take_u64(rest: &mut &[u8]) -> Option<u64> {
+    if rest.len() < 8 {
+        return None;
+    }
+    let (head, tail) = rest.split_at(8);
+    *rest = tail;
+    let mut word = [0u8; 8];
+    word.copy_from_slice(head);
+    Some(u64::from_le_bytes(word))
+}
+
+fn restore_shape_list(bytes: &[u8]) -> Option<Box<dyn ExtensionData>> {
+    if bytes.is_empty() {
+        return Some(Box::new(ShapeListProperty::empty()));
+    }
+    let backend = crate::backend();
+    let mut rest = bytes;
+    let count = usize::try_from(take_u64(&mut rest)?).ok()?;
+    // Each entry needs at least its length prefix; reject a corrupt count before
+    // reserving for it.
+    if count > rest.len() / 8 {
+        return None;
+    }
+    let mut shapes = Vec::with_capacity(count);
+    for _ in 0..count {
+        let len = usize::try_from(take_u64(&mut rest)?).ok()?;
+        if len > rest.len() {
+            return None;
+        }
+        let (blob, tail) = rest.split_at(len);
+        rest = tail;
+        shapes.push(backend.load_shape(blob)?);
+    }
+    if !rest.is_empty() {
+        return None;
+    }
+    Some(Box::new(ShapeListProperty::new(shapes)))
+}
 
 /// The analytic half of Part (lines, segments, circles, arcs, ellipses, wires).
 ///
@@ -66,6 +228,7 @@ pub fn backend() -> Arc<dyn GeometryBackend> {
 pub fn register(backend: Arc<dyn GeometryBackend>) {
     let _ = BACKEND.set(backend);
     shape_property::register();
+    register_shape_list();
     object_registry::register("Part::Feature", Arc::new(Feature));
     object_registry::register(BOX_TYPE, Arc::new(BoxPrimitive));
     object_registry::register(CYLINDER_TYPE, Arc::new(CylinderPrimitive));

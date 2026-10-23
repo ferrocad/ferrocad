@@ -43,7 +43,7 @@ use std::sync::{Arc, Mutex};
 use ferrocad_core::{ExtensionData, ExtensionValue};
 use ferrocad_geom::{ElementKind, ElementRef, Shape, TessellationOptions};
 use ferrocad_occt::OcctBackend;
-use ferrocad_part::{ShapeProperty, TYPE_NAME};
+use ferrocad_part::{ShapeListProperty, ShapeProperty, SHAPE_LIST_TYPE_NAME, TYPE_NAME};
 use pyo3::exceptions::{PyIOError, PyRuntimeError, PyValueError};
 use pyo3::prelude::*;
 use pyo3::types::{PyBytes, PyDict, PyList, PyModule, PyTuple};
@@ -1666,6 +1666,20 @@ fn shape_to_py(py: Python<'_>, data: &dyn ExtensionData) -> Option<PyObject> {
         .map(Py::into_any)
 }
 
+/// `Part::PropertyTopoShapeList` → a Python list of `Part.Shape` (what `obj.Shapes`
+/// returns).
+fn shape_list_to_py(py: Python<'_>, data: &dyn ExtensionData) -> Option<PyObject> {
+    let property = data.as_any().downcast_ref::<ShapeListProperty>()?;
+    let items = property
+        .shapes()
+        .into_iter()
+        .map(|shape| Py::new(py, PartShape { shape: Mutex::new(Some(shape)) }))
+        .collect::<PyResult<Vec<_>>>()
+        .ok()?;
+    let list = PyList::new(py, items).ok()?;
+    Some(list.into_any().unbind())
+}
+
 /// `Part.Shape` → `Part::PropertyPartShape` (what `obj.Shape = shape` stores).
 fn shape_to_extension(value: &Bound<'_, PyAny>) -> Option<ExtensionValue> {
     let shape = value.downcast::<PartShape>().ok()?;
@@ -1677,10 +1691,29 @@ fn shape_to_extension(value: &Bound<'_, PyAny>) -> Option<ExtensionValue> {
     Some(ExtensionValue::new(Box::new(property)))
 }
 
+/// A list of `Part.Shape` → `Part::PropertyTopoShapeList`.
+///
+/// `None` for anything that is not a sequence of shapes, and also for a sequence
+/// holding a null `Part.Shape()`: the seam has no null shape, so such an entry
+/// cannot be stored (assigning it fails rather than dropping or reordering it).
+fn shape_list_to_extension(value: &Bound<'_, PyAny>) -> Option<ExtensionValue> {
+    let items = value.extract::<Vec<PyRef<'_, PartShape>>>().ok()?;
+    let mut shapes = Vec::with_capacity(items.len());
+    for item in items {
+        shapes.push(item.shape()?);
+    }
+    Some(ExtensionValue::new(Box::new(ShapeListProperty::new(shapes))))
+}
+
 #[pymodule]
 pub fn Part(m: &Bound<'_, PyModule>) -> PyResult<()> {
     register_kernel();
     ferrocad_py::register_extension_converter(TYPE_NAME, shape_to_py, shape_to_extension);
+    ferrocad_py::register_extension_converter(
+        SHAPE_LIST_TYPE_NAME,
+        shape_list_to_py,
+        shape_list_to_extension,
+    );
     m.add_class::<PartShape>()?;
     m.add_function(wrap_pyfunction!(makeBox, m)?)?;
     m.add_function(wrap_pyfunction!(makeCylinder, m)?)?;

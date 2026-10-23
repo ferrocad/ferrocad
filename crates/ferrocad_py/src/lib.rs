@@ -244,6 +244,21 @@ fn extension_from_py(value: &Bound<'_, PyAny>) -> Option<ExtensionValue> {
     converters.iter().find_map(|to_extension| to_extension(value))
 }
 
+/// Python -> `ExtensionValue`, using only the converter registered for `type_name`.
+///
+/// An existing module-owned property keeps its type when reassigned, so trying its
+/// own recogniser first avoids a generic guess (an empty list, for example, would
+/// otherwise be taken for an `App::PropertyBoolList`).
+fn extension_from_py_for(type_name: &str, value: &Bound<'_, PyAny>) -> Option<ExtensionValue> {
+    let converter = extension_converters()
+        .lock()
+        .unwrap()
+        .iter()
+        .find(|(name, _, _)| name == type_name)
+        .map(|(_, _, to_extension)| *to_extension)?;
+    converter(value)
+}
+
 // ---------------------------------------------------------------------------
 // Pickling helpers (for `PropertyPythonObject` and Python instance state)
 // ---------------------------------------------------------------------------
@@ -2734,6 +2749,15 @@ impl PyDocumentObject {
                 Ok(b) => Property::Bool(b),
                 Err(_) => py_to_property(value)?,
             },
+            // A module-owned value keeps its type: try the converter registered for
+            // it before the generic guesses (`obj.Shapes = []` must stay a shape
+            // list, not become an `App::PropertyBoolList`).
+            Some(Property::Extension(ext)) => {
+                match extension_from_py_for(ext.type_name(), value) {
+                    Some(v) => Property::Extension(v),
+                    None => py_to_property(value)?,
+                }
+            }
             // A length/quantity property keeps its kind: "10 mm" parses, and a
             // bare number is read in the property's own unit.
             Some(Property::Quantity(existing)) => {

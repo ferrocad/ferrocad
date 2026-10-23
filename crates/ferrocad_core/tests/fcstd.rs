@@ -8,7 +8,7 @@
 use std::path::{Path, PathBuf};
 
 use ferrocad_core::fcstd::read_fcstd;
-use ferrocad_core::{Document, Placement, Property, Vector3};
+use ferrocad_core::{prop_status, Document, Placement, Property, Quantity, Unit, Vector3};
 
 fn fixture() -> Option<PathBuf> {
     let upstream = std::env::var_os("FERROCAD_UPSTREAM")
@@ -128,5 +128,127 @@ fn ignores_module_owned_payloads_and_reads_basic_properties() {
     assert_eq!(
         sketch.properties.get("MapReversed"),
         Some(&Property::Bool(false))
+    );
+}
+
+/// The F4 reader gaps, exercised against real upstream 0.21 XML.
+#[test]
+fn reads_lengths_angles_enumerations_links_and_expressions() {
+    let Some(path) = fixture() else {
+        eprintln!("TestTangentMode3-0.21.FCStd not found; skipping");
+        return;
+    };
+    let saved = read_fcstd(path.to_str().unwrap()).expect("read binary .FCStd");
+    let object = |name: &str| {
+        saved
+            .objects
+            .iter()
+            .find(|o| o.name == name)
+            .unwrap_or_else(|| panic!("object '{name}' was not read"))
+    };
+
+    // `MapMode` is a constructor-default enumeration: only the index is in the
+    // file, so the allowed-value list is empty.
+    let sketch = object("Sketch001");
+    assert_eq!(
+        sketch.properties.get("MapMode"),
+        Some(&Property::Enumeration(Vec::new(), 6))
+    );
+    // `Support` is a LinkSubList; it flattens to the linked object names.
+    assert_eq!(
+        sketch.properties.get("Support"),
+        Some(&Property::LinkList(vec![
+            "Sketch".to_string(),
+            "XY_Plane".to_string()
+        ]))
+    );
+    // The status attribute is upstream's internal mask: 8 = Hidden (1<<3),
+    // 134217728 = PropOutput (1<<27).
+    assert_eq!(
+        sketch.property_status.get("MapPathParameter"),
+        Some(&prop_status::HIDDEN)
+    );
+    assert_eq!(
+        sketch.property_status.get("Label"),
+        Some(&prop_status::OUTPUT)
+    );
+    assert!(!sketch.properties.contains_key("Shape"));
+
+    // Both link-sub forms are present: an empty `count="0"` one and one with a
+    // named sub-element.
+    let pad = object("Pad");
+    assert_eq!(
+        pad.properties.get("Profile"),
+        Some(&Property::LinkSub("Sketch001".to_string(), Vec::new()))
+    );
+    assert_eq!(
+        pad.properties.get("ReferenceAxis"),
+        Some(&Property::LinkSub(
+            "Sketch001".to_string(),
+            vec!["N_Axis".to_string()]
+        ))
+    );
+
+    // PropertyLength / PropertyAngle keep their unit signature.
+    let sphere = object("Sphere");
+    assert_eq!(
+        sphere.properties.get("Radius"),
+        Some(&Property::Quantity(Quantity::new(8.0, Unit::Millimeter)))
+    );
+    let Some(Property::Quantity(angle)) = sphere.properties.get("Angle1") else {
+        panic!("Sphere.Angle1 is not a quantity: {:?}", sphere.properties.get("Angle1"));
+    };
+    assert_eq!(angle.sig(), Unit::parse("deg").unwrap().sig);
+    assert_eq!(angle.value(), -90.0);
+    let Some(Property::Quantity(angle3)) = sphere.properties.get("Angle3") else {
+        panic!("Sphere.Angle3 is not a quantity");
+    };
+    assert_eq!(angle3.value(), 360.0);
+
+    // The expression engine is object state, not a property, and upstream's
+    // self-relative paths are stored without the leading dot.
+    let sketch2 = object("Sketch002");
+    assert_eq!(
+        sketch2
+            .expressions
+            .get("AttachmentOffset.Base.x")
+            .map(String::as_str),
+        Some("cos(30) * sin(30) * 10")
+    );
+    assert_eq!(
+        sketch2
+            .expressions
+            .get("AttachmentOffset.Base.z")
+            .map(String::as_str),
+        Some("cos(30) * cos(30) * 10")
+    );
+    assert!(!sketch2.properties.contains_key("ExpressionEngine"));
+}
+
+/// A `<LinkList>` of real names (not a flattened LinkSubList).
+#[test]
+fn reads_link_lists() {
+    let Some(path) = fixture() else {
+        eprintln!("TestTangentMode3-0.21.FCStd not found; skipping");
+        return;
+    };
+    let saved = read_fcstd(path.to_str().unwrap()).expect("read binary .FCStd");
+    let body = saved
+        .objects
+        .iter()
+        .find(|o| o.name == "Body")
+        .expect("Body");
+    assert_eq!(
+        body.properties.get("Group"),
+        Some(&Property::LinkList(vec![
+            "Sketch".to_string(),
+            "Sketch001".to_string(),
+            "Sketch002".to_string(),
+            "Sketch003".to_string(),
+            "Sphere".to_string(),
+            "Pad".to_string(),
+            "Pad001".to_string(),
+            "Pad002".to_string(),
+        ]))
     );
 }

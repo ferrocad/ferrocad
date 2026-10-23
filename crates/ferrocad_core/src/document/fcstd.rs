@@ -14,7 +14,30 @@
 //! Property types read from `Document.xml`:
 //! `App::PropertyString`, `App::PropertyInteger`, `App::PropertyFloat`,
 //! `App::PropertyBool`, `App::PropertyVector`, `App::PropertyPlacement`,
-//! `App::PropertyLink` and `App::PropertyStringList`. Everything else is ignored.
+//! `App::PropertyLink` (and `LinkHidden`), `App::PropertyLinkList` (and
+//! `LinkListHidden`), `App::PropertyLinkSub`, `App::PropertyLinkSubList`,
+//! `App::PropertyStringList`, `App::PropertyEnumeration`,
+//! `App::PropertyLength`, `App::PropertyAngle` and `App::PropertyExpressionEngine`.
+//! `App::PropertyPythonObject` is read into [`SavedObject::python_state`] rather
+//! than into a property. Everything else is ignored.
+//!
+//! Lossiness, by design:
+//!
+//! - `PropertyLength` and `PropertyAngle` both become [`Property::Quantity`]:
+//!   the unit signature distinguishes them (mm vs deg), so the value and the
+//!   physical dimension survive, but [`Property::type_name`] reports
+//!   `App::PropertyLength` for both.
+//! - `PropertyEnumeration` stores only the selected index. The allowed values
+//!   are the object's constructor defaults, so the [`Property::Enumeration`]
+//!   value list stays empty unless the file carries a `CustomEnumList`.
+//! - `PropertyLinkSubList` is flattened to [`Property::LinkList`]: the object
+//!   order survives, the per-link sub-element names do not.
+//! - Upstream's `status` attribute encodes its internal `Property::Status`
+//!   bits, not our public mask. The flags that have a public equivalent are
+//!   translated into [`crate::prop_status`] bits; ephemeral ones are dropped.
+//! - `PropertyPythonObject` stores upstream's base64 pickle verbatim; it is not
+//!   the `{"attrs", "proxy"}` envelope FerroCAD's own `capture_object_state`
+//!   produces.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
@@ -24,6 +47,8 @@ use std::path::Path;
 use super::{SavedDocument, SavedObject};
 use crate::geometry::{Placement, Rotation, Vector3};
 use crate::property::Property;
+use crate::quantity::Quantity;
+use crate::unit::Unit;
 
 /// Errors raised while reading a binary `.FCStd` file.
 #[derive(Debug)]
@@ -333,6 +358,9 @@ fn parse_document(xml: &str, name: String) -> Result<SavedDocument, FcstdError> 
             let type_id = types.get(object_name).cloned().unwrap_or_default();
             let mut label = object_name.to_string();
             let mut properties = BTreeMap::new();
+            let mut property_status = BTreeMap::new();
+            let mut expressions = BTreeMap::new();
+            let mut python_state: Option<String> = None;
 
             if let Some(props) = child(object, "Properties") {
                 // Only persistable `<Property>` children are read; `<_Property>`
@@ -343,10 +371,39 @@ fn parse_document(xml: &str, name: String) -> Result<SavedDocument, FcstdError> 
                     };
                     let prop_type = prop.attribute("type").unwrap_or("");
 
+                    if let Some(status) = prop.attribute("status") {
+                        let mask = translate_status(status);
+                        if mask != crate::prop_status::NONE {
+                            property_status.insert(prop_name.to_string(), mask);
+                        }
+                    }
+
                     if prop_name == "Label" && prop_type == "App::PropertyString" {
                         if let Some(value) = child_attr(prop, "String", "value") {
                             label = value.to_string();
                         }
+                    }
+
+                    match prop_type {
+                        // Expressions live in a property-shaped element but are
+                        // stored on the object in our model (`ExpressionEngine`).
+                        "App::PropertyExpressionEngine" => {
+                            read_expressions(prop, &mut expressions);
+                            continue;
+                        }
+                        // A Python object is the object's proxy state, not a
+                        // property. `Proxy` is upstream's conventional name; any
+                        // other PythonObject property is used only as a fallback
+                        // because `SavedObject` has a single slot.
+                        "App::PropertyPythonObject" => {
+                            if let Some(value) = child_attr(prop, "Python", "value") {
+                                if prop_name == "Proxy" || python_state.is_none() {
+                                    python_state = Some(value.to_string());
+                                }
+                            }
+                            continue;
+                        }
+                        _ => {}
                     }
 
                     if let Some(value) = parse_property(prop_type, prop)? {
@@ -360,10 +417,10 @@ fn parse_document(xml: &str, name: String) -> Result<SavedDocument, FcstdError> 
                 label,
                 type_id,
                 properties,
-                property_status: BTreeMap::new(),
-                expressions: BTreeMap::new(),
+                property_status,
+                expressions,
                 extensions: BTreeSet::new(),
-                python_state: None,
+                python_state,
                 view: None,
             });
         }
@@ -392,13 +449,150 @@ fn parse_property(prop_type: &str, node: roxmltree::Node<'_, '_>) -> Result<Opti
             .map(|v| Property::Bool(v == "true" || v == "1")),
         "App::PropertyVector" => parse_vector(node)?.map(Property::Vector),
         "App::PropertyPlacement" => parse_placement(node)?.map(Property::Placement),
-        "App::PropertyLink" => {
+        "App::PropertyLink" | "App::PropertyLinkHidden" => {
             child_attr(node, "Link", "value").map(|v| Property::Link(v.to_string()))
         }
+        "App::PropertyLinkList" | "App::PropertyLinkListHidden" => {
+            Some(Property::LinkList(parse_link_list(node)))
+        }
+        "App::PropertyLinkSub" | "App::PropertyLinkSubHidden" => {
+            parse_link_sub(node).map(|(name, subs)| Property::LinkSub(name, subs))
+        }
+        // Our model has no LinkSubList variant. The object names are kept in
+        // order; the per-link `<Link sub="…">` element names are dropped.
+        "App::PropertyLinkSubList" => Some(Property::LinkList(parse_link_sub_list(node))),
         "App::PropertyStringList" => Some(Property::StringList(parse_string_list(node))),
+        // Both length and angle are a bare `<Float>`; the property type carries
+        // the unit, which we preserve as the quantity's unit signature so the
+        // writer can emit the original type again.
+        "App::PropertyLength" | "App::PropertyAngle" => child_attr(node, "Float", "value")
+            .map(|v| parse_f64(v, "Float"))
+            .transpose()?
+            .map(|v| Property::Quantity(Quantity::new(v, quantity_unit(prop_type)))),
+        // Only the index is stored in the file; the allowed values come from the
+        // object's constructor default unless the file has a `CustomEnumList`.
+        "App::PropertyEnumeration" => child_attr(node, "Integer", "value")
+            .map(|v| parse_i64(v, "Integer"))
+            .transpose()?
+            .map(|i| Property::Enumeration(custom_enum_list(node), i.max(0) as usize)),
         _ => None,
     };
     Ok(value)
+}
+
+/// The unit implied by a quantity-valued property type.
+fn quantity_unit(prop_type: &str) -> Unit {
+    match prop_type {
+        "App::PropertyAngle" => Unit::parse("deg").expect("'deg' is a known unit"),
+        _ => Unit::Millimeter,
+    }
+}
+
+fn parse_link_sub(node: roxmltree::Node<'_, '_>) -> Option<(String, Vec<String>)> {
+    let link = child(node, "LinkSub")?;
+    let name = link.attribute("value").unwrap_or_default().to_string();
+    let subs = element_children(link, "Sub")
+        .filter_map(|n| n.attribute("value"))
+        .map(str::to_string)
+        .collect();
+    Some((name, subs))
+}
+
+fn parse_link_list(node: roxmltree::Node<'_, '_>) -> Vec<String> {
+    let Some(list) = child(node, "LinkList") else {
+        return Vec::new();
+    };
+    element_children(list, "Link")
+        .filter_map(|n| n.attribute("value"))
+        .map(str::to_string)
+        .collect()
+}
+
+/// `PropertyLinkSubList` entries are `<Link obj="…" sub="…"/>` (note `obj`,
+/// unlike the `value` attribute of `<Link>` in a plain `LinkList`).
+fn parse_link_sub_list(node: roxmltree::Node<'_, '_>) -> Vec<String> {
+    let Some(list) = child(node, "LinkSubList") else {
+        return Vec::new();
+    };
+    element_children(list, "Link")
+        .filter_map(|n| n.attribute("obj"))
+        .map(str::to_string)
+        .collect()
+}
+
+fn custom_enum_list(node: roxmltree::Node<'_, '_>) -> Vec<String> {
+    let Some(list) = child(node, "CustomEnumList") else {
+        return Vec::new();
+    };
+    element_children(list, "Enum")
+        .filter_map(|n| n.attribute("value"))
+        .map(str::to_string)
+        .collect()
+}
+
+/// Read `<ExpressionEngine><Expression path="…" expression="…"/>…` entries
+/// into the object's expression map.
+fn read_expressions(node: roxmltree::Node<'_, '_>, out: &mut BTreeMap<String, String>) {
+    let Some(engine) = child(node, "ExpressionEngine") else {
+        return;
+    };
+    for expr in element_children(engine, "Expression") {
+        let (Some(path), Some(source)) = (expr.attribute("path"), expr.attribute("expression"))
+        else {
+            continue;
+        };
+        // Upstream paths are self-relative (".AttachmentOffset.Base.x") or bare
+        // ("RefElevation"); our map is keyed without the leading dot.
+        let key = path.strip_prefix('.').unwrap_or(path);
+        if !key.is_empty() {
+            out.insert(key.to_string(), source.to_string());
+        }
+    }
+}
+
+/// Translate upstream's internal `Property::Status` bitmask into our public
+/// `PropertyType` mask.
+///
+/// Upstream persists one bit per internal flag (`Property.h`): 1 Immutable,
+/// 2 ReadOnly, 3 Hidden, 4 Transient, 7 Output, 11 NoRecompute, 12 Input,
+/// 21 PropDynamic, 22 PropNoPersist, 23 PropNoRecompute, 24 PropReadOnly,
+/// 25 PropTransient, 26 PropHidden, 27 PropOutput, 28 PropInput. Ephemeral bits
+/// (`Touched`, `NoModify`, `Busy`, `Ordered`, …) have no equivalent in the
+/// public mask and are dropped, as are user-defined bits.
+fn translate_status(text: &str) -> u32 {
+    use crate::prop_status as ps;
+
+    let Ok(raw) = text.parse::<u64>() else {
+        return ps::NONE;
+    };
+    let bit = |n: u32| raw & (1u64 << n) != 0;
+
+    let mut mask = ps::NONE;
+    if bit(1) || bit(2) || bit(24) {
+        mask |= ps::READONLY; // Immutable, ReadOnly, PropReadOnly
+    }
+    if bit(3) || bit(26) {
+        mask |= ps::HIDDEN; // Hidden, PropHidden
+    }
+    if bit(4) || bit(25) {
+        mask |= ps::TRANSIENT; // Transient, PropTransient
+    }
+    if bit(7) || bit(27) {
+        mask |= ps::OUTPUT; // Output, PropOutput
+    }
+    if bit(11) || bit(23) {
+        mask |= ps::NORECOMPUTE; // NoRecompute, PropNoRecompute
+    }
+    if bit(12) || bit(28) {
+        mask |= ps::INPUT; // Input, PropInput
+    }
+    if bit(21) {
+        mask |= ps::DYNAMIC; // PropDynamic
+    }
+    if bit(22) {
+        mask |= ps::NOPERSIST; // PropNoPersist
+    }
+    mask
 }
 
 fn parse_vector(node: roxmltree::Node<'_, '_>) -> Result<Option<Vector3>, FcstdError> {
@@ -485,4 +679,169 @@ fn element_children<'a, 'input>(
 ) -> impl Iterator<Item = roxmltree::Node<'a, 'input>> {
     node.children()
         .filter(move |n| n.is_element() && n.has_tag_name(tag))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::prop_status;
+
+    fn read(xml: &str) -> SavedDocument {
+        parse_document(xml, "Fixture".to_string()).expect("parse Document.xml")
+    }
+
+    /// Hand-written from the upstream 0.21 element forms (see
+    /// `TestTangentMode3-0.21.FCStd` and `FC_site_simple-102.FCStd`).
+    const NEW_TYPES: &str = r#"<?xml version='1.0' encoding='utf-8'?>
+<Document SchemaVersion="4" FileVersion="1" ProgramVersion="0.21">
+  <Objects Count="1">
+    <Object type="App::FeaturePython" name="Obj"/>
+  </Objects>
+  <ObjectData Count="1">
+    <Object name="Obj">
+      <Properties Count="13">
+        <Property name="Label" type="App::PropertyString"><String value="A label"/></Property>
+        <Property name="Length" type="App::PropertyLength"><Float value="12.5"/></Property>
+        <Property name="Angle" type="App::PropertyAngle"><Float value="-90"/></Property>
+        <Property name="MapMode" type="App::PropertyEnumeration"><Integer value="5"/></Property>
+        <Property name="UnitSystem" type="App::PropertyEnumeration" status="1">
+          <Integer value="1" CustomEnum="true"/>
+          <CustomEnumList count="2"><Enum value="mm"/><Enum value="m"/></CustomEnumList>
+        </Property>
+        <Property name="ReferenceAxis" type="App::PropertyLinkSub" status="33554433">
+          <LinkSub value="Sketch001" count="1"><Sub value="N_Axis"/></LinkSub>
+        </Property>
+        <Property name="Profile" type="App::PropertyLinkSub">
+          <LinkSub value="" count="0"></LinkSub>
+        </Property>
+        <Property name="Group" type="App::PropertyLinkList">
+          <LinkList count="2"><Link value="A"/><Link value="B"/></LinkList>
+        </Property>
+        <Property name="Support" type="App::PropertyLinkSubList">
+          <LinkSubList count="2"><Link obj="Sketch" sub="Vertex1"/><Link obj="XY_Plane" sub=""/></LinkSubList>
+        </Property>
+        <Property name="Tags" type="App::PropertyStringList">
+          <StringList count="2"><String value="x"/><String value="y"/></StringList>
+        </Property>
+        <Property name="ExpressionEngine" type="App::PropertyExpressionEngine" status="67108864">
+          <ExpressionEngine count="2">
+            <Expression path=".AttachmentOffset.Base.x" expression="cos(30) * 10"/>
+            <Expression path="RefElevation" expression=".Elevation.Value"/>
+          </ExpressionEngine>
+        </Property>
+        <Property name="Proxy" type="App::PropertyPythonObject">
+          <Python value="bnVsbA==" encoded="yes" module="ArchSite" class="_Site"/>
+        </Property>
+        <Property name="Shape" type="Part::PropertyPartShape">
+          <Part file="PartShape.brp"/>
+        </Property>
+      </Properties>
+    </Object>
+  </ObjectData>
+</Document>"#;
+
+    #[test]
+    fn reads_the_new_property_types() {
+        let saved = read(NEW_TYPES);
+        assert_eq!(saved.objects.len(), 1);
+        let o = &saved.objects[0];
+        assert_eq!(o.type_id, "App::FeaturePython");
+        assert_eq!(o.label, "A label");
+        assert_eq!(
+            o.properties.get("Label"),
+            Some(&Property::String("A label".to_string()))
+        );
+
+        assert_eq!(
+            o.properties.get("Length"),
+            Some(&Property::Quantity(Quantity::new(12.5, Unit::Millimeter)))
+        );
+        let Some(Property::Quantity(angle)) = o.properties.get("Angle") else {
+            panic!("Angle is not a quantity: {:?}", o.properties.get("Angle"));
+        };
+        assert_eq!(angle.unit().sig, Unit::parse("deg").unwrap().sig);
+        assert_eq!(angle.value(), -90.0);
+
+        // Without a `CustomEnumList` only the index survives.
+        assert_eq!(
+            o.properties.get("MapMode"),
+            Some(&Property::Enumeration(Vec::new(), 5))
+        );
+        assert_eq!(
+            o.properties.get("UnitSystem"),
+            Some(&Property::Enumeration(vec!["mm".to_string(), "m".to_string()], 1))
+        );
+
+        assert_eq!(
+            o.properties.get("ReferenceAxis"),
+            Some(&Property::LinkSub(
+                "Sketch001".to_string(),
+                vec!["N_Axis".to_string()]
+            ))
+        );
+        assert_eq!(
+            o.properties.get("Profile"),
+            Some(&Property::LinkSub(String::new(), Vec::new()))
+        );
+        assert_eq!(
+            o.properties.get("Group"),
+            Some(&Property::LinkList(vec!["A".to_string(), "B".to_string()]))
+        );
+        // LinkSubList is flattened to the object names, in order.
+        assert_eq!(
+            o.properties.get("Support"),
+            Some(&Property::LinkList(vec![
+                "Sketch".to_string(),
+                "XY_Plane".to_string()
+            ]))
+        );
+        assert_eq!(
+            o.properties.get("Tags"),
+            Some(&Property::StringList(vec!["x".to_string(), "y".to_string()]))
+        );
+
+        // Module payloads are still skipped.
+        assert!(!o.properties.contains_key("Shape"));
+
+        // Expressions are keyed without the self-relative leading dot.
+        assert_eq!(
+            o.expressions.get("AttachmentOffset.Base.x").map(String::as_str),
+            Some("cos(30) * 10")
+        );
+        assert_eq!(
+            o.expressions.get("RefElevation").map(String::as_str),
+            Some(".Elevation.Value")
+        );
+
+        // The proxy pickle becomes Python state, not a property.
+        assert!(!o.properties.contains_key("Proxy"));
+        assert_eq!(o.python_state.as_deref(), Some("bnVsbA=="));
+    }
+
+    #[test]
+    fn translates_upstream_property_status_bits() {
+        let saved = read(NEW_TYPES);
+        let status = &saved.objects[0].property_status;
+        // 33554433 = PropTransient (1<<25) + Touched (1<<0).
+        assert_eq!(status.get("ReferenceAxis"), Some(&prop_status::TRANSIENT));
+        // 67108864 = PropHidden (1<<26).
+        assert_eq!(status.get("ExpressionEngine"), Some(&prop_status::HIDDEN));
+        // 1 = Touched only; there is no public equivalent.
+        assert!(!status.contains_key("UnitSystem"));
+    }
+
+    #[test]
+    fn translate_status_maps_every_public_bit() {
+        // PropReadOnly | PropHidden | PropOutput = 1<<24 | 1<<26 | 1<<27.
+        assert_eq!(
+            translate_status("218103808"),
+            prop_status::READONLY | prop_status::HIDDEN | prop_status::OUTPUT
+        );
+        assert_eq!(translate_status("2097152"), prop_status::DYNAMIC);
+        assert_eq!(translate_status("4194304"), prop_status::NOPERSIST);
+        assert_eq!(translate_status("8388608"), prop_status::NORECOMPUTE);
+        assert_eq!(translate_status("16777216"), prop_status::READONLY);
+        assert_eq!(translate_status("268435456"), prop_status::INPUT);
+        assert_eq!(translate_status("not-a-number"), prop_status::NONE);
+    }
 }

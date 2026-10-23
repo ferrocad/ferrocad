@@ -49,6 +49,8 @@
 //!   serializer by suffix (`.ferrocad` native JSON, `.FCStd` upstream);
 //!   [`Document::save_to_file`] / [`Document::load_from_file`] are the native
 //!   JSON shortcut. Properties flagged `NoPersist` are dropped from the saved form.
+//!   The `.FCStd` writer is [`fcstd_write::write_fcstd`], a direct-call API that
+//!   is not yet wired into [`format::write`].
 //! - **React to changes**: register an [`Observer`] with [`Document::add_observer`].
 //! - **Report a failed rebuild**: an [`object_registry::ObjectType::execute`] marks the
 //!   object with [`Document::mark_invalid`]; recompute keeps the flag until a later
@@ -122,6 +124,7 @@ pub use document::{
     SavedDocument, ViewState,
 };
 pub use document::fcstd;
+pub use document::fcstd_write;
 pub use document::format;
 pub use document::format::DocumentFormat;
 pub use document::native;

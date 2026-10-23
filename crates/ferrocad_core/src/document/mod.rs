@@ -18,6 +18,7 @@ use crate::observer::Observer;
 use crate::property::{prop_status, Property, PropertyContainer};
 
 pub mod fcstd;
+pub mod fcstd_write;
 pub mod format;
 pub mod native;
 mod transaction;

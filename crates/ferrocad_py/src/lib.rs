@@ -1001,6 +1001,14 @@ fn py_to_link_sub(value: &Bound<'_, PyAny>) -> PyResult<(String, Vec<String>)> {
     if value.is_none() {
         return Ok((String::new(), vec![]));
     }
+    // A bare object (or name) sets the link with no sub-elements, as upstream's
+    // `PropertyLinkSub` accepts. `array.Path = sketch` is the common form.
+    if let Ok(object) = value.downcast::<PyDocumentObject>() {
+        return Ok((object.borrow().name_string(), vec![]));
+    }
+    if let Ok(name) = value.extract::<String>() {
+        return Ok((name, vec![]));
+    }
     let t = value
         .downcast::<PyTuple>()
         .map_err(|_| PyTypeError::new_err("LinkSub expects an (object, subnames) tuple"))?;

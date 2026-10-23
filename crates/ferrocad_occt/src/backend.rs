@@ -20,6 +20,7 @@ use ferrocad_types::{Matrix4, Placement};
 use opencascade_sys as ffi;
 
 use ffi::top_abs::TopAbs_ShapeEnum;
+use ffi::top_abs::TopAbs_Orientation;
 use ffi::top_tools::TopTools_IndexedMapOfShape;
 use ffi::topo_ds::TopoDS_Shape;
 
@@ -1178,6 +1179,261 @@ impl GeometryBackend for OcctBackend {
         Some(erase(op.shape()))
     }
 
+    fn make_offset(&self, shape: &Shape, distance: f64, join: i32) -> Result<Shape, GeomError> {
+        let occt = downcast(shape)?;
+        let guard = occt.borrow();
+        let inner = guard
+            .as_ref()
+            .ok_or(OcctError::InvalidInput { what: "null shape" })?;
+        let offset = bridge::fc_offset(inner, distance, join);
+        let Some(offset) = offset.as_ref() else {
+            return Err(OcctError::NotDone {
+                operation: "make_offset",
+            }
+            .into());
+        };
+        Ok(erase(offset))
+    }
+
+    fn make_thickness(
+        &self,
+        shape: &Shape,
+        closing_faces: &[Shape],
+        thickness: f64,
+        tolerance: f64,
+    ) -> Result<Shape, GeomError> {
+        if !thickness.is_finite() || thickness == 0.0 {
+            return Err(OcctError::InvalidInput {
+                what: "make_thickness needs a non-zero thickness",
+            }
+            .into());
+        }
+        let occt = downcast(shape)?;
+        let guard = occt.borrow();
+        let inner = guard
+            .as_ref()
+            .ok_or(OcctError::InvalidInput { what: "null shape" })?;
+        let mut list = ffi::top_tools::new_list_of_shape();
+        for face in closing_faces {
+            let face_occt = downcast(face)?;
+            let face_guard = face_occt.borrow();
+            let face_inner = face_guard
+                .as_ref()
+                .ok_or(OcctError::InvalidInput { what: "null face" })?;
+            let _ = list.pin_mut().Append(face_inner);
+        }
+        let thickened = bridge::fc_thick_solid(inner, &list, thickness, tolerance);
+        let Some(thickened) = thickened.as_ref() else {
+            return Err(OcctError::NotDone {
+                operation: "make_thickness",
+            }
+            .into());
+        };
+        Ok(erase(thickened))
+    }
+
+    fn section(&self, a: &Shape, b: &Shape) -> Result<Shape, GeomError> {
+        let a_occt = downcast(a)?;
+        let b_occt = downcast(b)?;
+        let a_guard = a_occt.borrow();
+        let b_guard = b_occt.borrow();
+        let sa = a_guard
+            .as_ref()
+            .ok_or(OcctError::InvalidInput { what: "null shape" })?;
+        let sb = b_guard
+            .as_ref()
+            .ok_or(OcctError::InvalidInput { what: "null shape" })?;
+        let section = bridge::fc_section(sa, sb);
+        let Some(section) = section.as_ref() else {
+            return Err(OcctError::NotDone {
+                operation: "section",
+            }
+            .into());
+        };
+        Ok(erase(section))
+    }
+
+    fn slice(
+        &self,
+        shape: &Shape,
+        direction: Vector3,
+        distance: f64,
+    ) -> Result<Vec<Shape>, GeomError> {
+        let occt = downcast(shape)?;
+        let guard = occt.borrow();
+        let inner = guard
+            .as_ref()
+            .ok_or(OcctError::InvalidInput { what: "null shape" })?;
+        let sliced = bridge::fc_slice(inner, direction.x, direction.y, direction.z, distance);
+        let Some(sliced) = sliced.as_ref() else {
+            return Err(OcctError::NotDone { operation: "slice" }.into());
+        };
+        let wires = sub_shape_map(sliced, TopAbs_ShapeEnum::TopAbs_WIRE);
+        Ok((1..=wires.Extent())
+            .map(|index| erase(wires.FindKey(index)))
+            .collect())
+    }
+
+    fn general_fuse(&self, shapes: &[Shape]) -> Result<(Shape, Vec<Vec<Shape>>), GeomError> {
+        if shapes.is_empty() {
+            return Err(OcctError::InvalidInput {
+                what: "general fuse needs at least one shape",
+            }
+            .into());
+        }
+        let mut list = ffi::top_tools::new_list_of_shape();
+        for shape in shapes {
+            let occt = downcast(shape)?;
+            let guard = occt.borrow();
+            let inner = guard
+                .as_ref()
+                .ok_or(OcctError::InvalidInput { what: "null shape" })?;
+            let _ = list.pin_mut().Append(inner);
+        }
+        let fused = bridge::fc_general_fuse(&list);
+        let Some(fused) = fused.as_ref() else {
+            return Err(OcctError::NotDone {
+                operation: "general_fuse",
+            }
+            .into());
+        };
+        let mut split = Vec::with_capacity(shapes.len());
+        for index in 1..=shapes.len() as i32 {
+            let modified = bridge::fc_general_fuse_modified(&list, index, 0.0);
+            split.push(
+                modified
+                    .as_ref()
+                    .map(|shape| top_level_parts(shape))
+                    .unwrap_or_default(),
+            );
+        }
+        Ok((erase(fused), split))
+    }
+
+    fn optimal_bounds(
+        &self,
+        shape: &Shape,
+        use_triangulation: bool,
+        use_tolerance: bool,
+    ) -> Option<(Vector3, Vector3)> {
+        let occt = downcast(shape).ok()?;
+        let guard = occt.borrow();
+        let inner = guard.as_ref()?;
+        let mut values = Vec::with_capacity(6);
+        if !bridge::fc_optimal_box(inner, use_triangulation, use_tolerance, &mut values) {
+            return None;
+        }
+        if values.len() < 6 {
+            return None;
+        }
+        Some((
+            Vector3::new(values[0], values[1], values[2]),
+            Vector3::new(values[3], values[4], values[5]),
+        ))
+    }
+
+    fn same_shape(&self, a: &Shape, b: &Shape) -> bool {
+        let (Ok(a_occt), Ok(b_occt)) = (downcast(a), downcast(b)) else {
+            return a.is_same(b);
+        };
+        let a_guard = a_occt.borrow();
+        let b_guard = b_occt.borrow();
+        match (a_guard.as_ref(), b_guard.as_ref()) {
+            (Some(a_inner), Some(b_inner)) => bridge::fc_is_same(a_inner, b_inner),
+            _ => a.is_same(b),
+        }
+    }
+
+    fn orientation(&self, shape: &Shape) -> Option<&'static str> {
+        let occt = downcast(shape).ok()?;
+        let guard = occt.borrow();
+        let inner = guard.as_ref()?;
+        Some(match inner.Orientation() {
+            TopAbs_Orientation::TopAbs_REVERSED => "Reversed",
+            TopAbs_Orientation::TopAbs_INTERNAL => "Internal",
+            TopAbs_Orientation::TopAbs_EXTERNAL => "External",
+            TopAbs_Orientation::TopAbs_FORWARD => "Forward",
+            _ => "Forward",
+        })
+    }
+
+    fn reversed(&self, shape: &Shape) -> Result<Shape, GeomError> {
+        let occt = downcast(shape)?;
+        let guard = occt.borrow();
+        let inner = guard
+            .as_ref()
+            .ok_or(OcctError::InvalidInput { what: "null shape" })?;
+        let reversed = bridge::fc_reversed(inner);
+        let Some(reversed) = reversed.as_ref() else {
+            return Err(OcctError::NotDone {
+                operation: "reversed",
+            }
+            .into());
+        };
+        Ok(erase(reversed))
+    }
+
+    fn remove_shapes(&self, shape: &Shape, shapes: &[Shape]) -> Result<Shape, GeomError> {
+        let occt = downcast(shape)?;
+        let guard = occt.borrow();
+        let inner = guard
+            .as_ref()
+            .ok_or(OcctError::InvalidInput { what: "null shape" })?;
+        let mut list = ffi::top_tools::new_list_of_shape();
+        for removal in shapes {
+            let removal_occt = downcast(removal)?;
+            let removal_guard = removal_occt.borrow();
+            let removal_inner = removal_guard
+                .as_ref()
+                .ok_or(OcctError::InvalidInput { what: "null shape" })?;
+            let _ = list.pin_mut().Append(removal_inner);
+        }
+        let result = bridge::fc_reshape_remove(inner, &list);
+        let Some(result) = result.as_ref() else {
+            return Err(OcctError::NotDone {
+                operation: "remove_shapes",
+            }
+            .into());
+        };
+        Ok(erase(result))
+    }
+
+    fn replace_shapes(
+        &self,
+        shape: &Shape,
+        replacements: &[(Shape, Shape)],
+    ) -> Result<Shape, GeomError> {
+        let occt = downcast(shape)?;
+        let guard = occt.borrow();
+        let inner = guard
+            .as_ref()
+            .ok_or(OcctError::InvalidInput { what: "null shape" })?;
+        let mut from = ffi::top_tools::new_list_of_shape();
+        let mut to = ffi::top_tools::new_list_of_shape();
+        for (old, new) in replacements {
+            let old_occt = downcast(old)?;
+            let old_guard = old_occt.borrow();
+            let old_inner = old_guard
+                .as_ref()
+                .ok_or(OcctError::InvalidInput { what: "null shape" })?;
+            let new_occt = downcast(new)?;
+            let new_guard = new_occt.borrow();
+            let new_inner = new_guard
+                .as_ref()
+                .ok_or(OcctError::InvalidInput { what: "null shape" })?;
+            let _ = from.pin_mut().Append(old_inner);
+            let _ = to.pin_mut().Append(new_inner);
+        }
+        let result = bridge::fc_reshape_replace(inner, &from, &to);
+        let Some(result) = result.as_ref() else {
+            return Err(OcctError::NotDone {
+                operation: "replace_shapes",
+            }
+            .into());
+        };
+        Ok(erase(result))
+    }
+
     fn place(&self, shape: &Shape, placement: &Placement) -> Result<Shape, GeomError> {
         let shape_occt = downcast(shape)?;
         let shape_guard = shape_occt.borrow();
@@ -1334,6 +1590,26 @@ fn face_ref(index: i32, shape: &TopoDS_Shape) -> ElementRef {
         shape: erase(shape),
         name: format!("Face{index}"),
     }
+}
+
+/// The top-level parts of a compound: its solids when it has any, else its
+/// faces, then edges, then wires (the split pieces General Fuse returns).
+fn top_level_parts(shape: &TopoDS_Shape) -> Vec<Shape> {
+    for kind in [
+        TopAbs_ShapeEnum::TopAbs_SOLID,
+        TopAbs_ShapeEnum::TopAbs_SHELL,
+        TopAbs_ShapeEnum::TopAbs_FACE,
+        TopAbs_ShapeEnum::TopAbs_EDGE,
+        TopAbs_ShapeEnum::TopAbs_WIRE,
+    ] {
+        let map = sub_shape_map(shape, kind);
+        if map.Extent() > 0 {
+            return (1..=map.Extent())
+                .map(|index| erase(map.FindKey(index)))
+                .collect();
+        }
+    }
+    Vec::new()
 }
 
 /// A `gp_Trsf` equivalent to a FerroCAD [`Placement`] (rotation about the origin,

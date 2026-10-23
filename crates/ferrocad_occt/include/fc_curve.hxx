@@ -20,9 +20,14 @@
 
 #include <BOPAlgo_BuilderFace.hxx>
 #include <BRepAlgoAPI_BuilderAlgo.hxx>
+#include <BRepAlgoAPI_Section.hxx>
 #include <BRepBuilderAPI_Copy.hxx>
 #include <BRepBuilderAPI_MakeEdge.hxx>
 #include <BRepBuilderAPI_MakeFace.hxx>
+#include <BRepBuilderAPI_MakeWire.hxx>
+#include <BRepOffsetAPI_MakeOffset.hxx>
+#include <BRepOffsetAPI_MakeThickSolid.hxx>
+#include <BRepTools_ReShape.hxx>
 #include <BRepFill.hxx>
 #include <BRepFill_Filling.hxx>
 #include <BRepLib.hxx>
@@ -46,8 +51,10 @@
 #include <TColStd_Array1OfInteger.hxx>
 #include <TColStd_Array1OfReal.hxx>
 #include <TColgp_Array1OfPnt.hxx>
+#include <GeomAbs_JoinType.hxx>
 #include <GeomAbs_Shape.hxx>
 #include <Geom_Circle.hxx>
+#include <Message_ProgressRange.hxx>
 #include <Geom_Curve.hxx>
 #include <Geom_Ellipse.hxx>
 #include <Geom_Line.hxx>
@@ -673,6 +680,344 @@ inline std::unique_ptr<TopoDS_Shape> fc_ruled_surface(const TopoDS_Shape& first,
       return nullptr;
     }
     return std::unique_ptr<TopoDS_Shape>(new TopoDS_Shape(face));
+  }
+  catch (...) {
+    return nullptr;
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Shape operations used by `Part.Shape` (offset, thickness, section, slice)
+// ---------------------------------------------------------------------------
+
+// Upstream's `JoinType` enum (0 = arc, 1 = tangent, 2 = intersection).
+inline GeomAbs_JoinType fc_join_type(int join)
+{
+  switch (join) {
+    case 1:
+      return GeomAbs_Tangent;
+    case 2:
+      return GeomAbs_Intersection;
+    default:
+      return GeomAbs_Arc;
+  }
+}
+
+// Planar offset of a face or a wire (`BRepOffsetAPI_MakeOffset`). A face is
+// offset through its boundary wires and rebuilt from the offset wires, so the
+// result keeps the face the caller offset; a wire returns the offset wire(s) as
+// a compound. Returns null on any failure, including an OCCT exception.
+inline std::unique_ptr<TopoDS_Shape> fc_offset(const TopoDS_Shape& shape, double distance, int join)
+{
+  if (shape.IsNull() || !std::isfinite(distance)) {
+    return nullptr;
+  }
+  try {
+    const TopAbs_ShapeEnum type = shape.ShapeType();
+    if (type != TopAbs_FACE && type != TopAbs_WIRE) {
+      return nullptr;
+    }
+    std::unique_ptr<BRepOffsetAPI_MakeOffset> op;
+    if (type == TopAbs_FACE) {
+      op.reset(new BRepOffsetAPI_MakeOffset(TopoDS::Face(shape), fc_join_type(join)));
+    }
+    else {
+      op.reset(new BRepOffsetAPI_MakeOffset(TopoDS::Wire(shape), fc_join_type(join)));
+    }
+    op->Perform(distance, 0.0);
+    if (!op->IsDone() || op->Shape().IsNull()) {
+      return nullptr;
+    }
+    if (type != TopAbs_FACE) {
+      return std::unique_ptr<TopoDS_Shape>(new TopoDS_Shape(op->Shape()));
+    }
+
+    // The face constructor returns the offset boundary; rebuild the face from
+    // those wires. The first one is taken as the outer boundary and the rest as
+    // holes, which is right for the single-boundary faces the Part tests use;
+    // a multi-wire face is not re-sorted by nesting.
+    std::vector<TopoDS_Wire> wires;
+    for (TopExp_Explorer it(op->Shape(), TopAbs_WIRE); it.More(); it.Next()) {
+      wires.push_back(TopoDS::Wire(it.Current()));
+    }
+    if (wires.empty()) {
+      return nullptr;
+    }
+    BRepBuilderAPI_MakeFace make(wires.front(), false);
+    if (!make.IsDone()) {
+      return nullptr;
+    }
+    for (std::size_t i = 1; i < wires.size(); ++i) {
+      make.Add(TopoDS::Wire(wires[i].Reversed()));
+    }
+    if (!make.IsDone() || make.Face().IsNull()) {
+      return nullptr;
+    }
+    return std::unique_ptr<TopoDS_Shape>(new TopoDS_Shape(make.Face()));
+  }
+  catch (...) {
+    return nullptr;
+  }
+}
+
+// Hollow a solid by `offset`, leaving `closing_faces` open
+// (`BRepOffsetAPI_MakeThickSolid::MakeThickSolidByJoin`). Returns null on any
+// failure, including an OCCT exception.
+inline std::unique_ptr<TopoDS_Shape> fc_thick_solid(const TopoDS_Shape& shape,
+                                                    const TopTools_ListOfShape& closing_faces,
+                                                    double offset,
+                                                    double tolerance)
+{
+  if (shape.IsNull() || !std::isfinite(offset)) {
+    return nullptr;
+  }
+  try {
+    BRepOffsetAPI_MakeThickSolid op;
+    op.MakeThickSolidByJoin(shape, closing_faces, offset, tolerance, BRepOffset_Skin,
+                            Standard_False, Standard_False, GeomAbs_Arc, Standard_False,
+                            Message_ProgressRange());
+    if (!op.IsDone() || op.Shape().IsNull()) {
+      return nullptr;
+    }
+    return std::unique_ptr<TopoDS_Shape>(new TopoDS_Shape(op.Shape()));
+  }
+  catch (...) {
+    return nullptr;
+  }
+}
+
+// The intersection of two shapes (`BRepAlgoAPI_Section`), or null on failure
+// (including an OCCT exception).
+inline std::unique_ptr<TopoDS_Shape> fc_section(const TopoDS_Shape& first,
+                                               const TopoDS_Shape& second)
+{
+  if (first.IsNull() || second.IsNull()) {
+    return nullptr;
+  }
+  try {
+    BRepAlgoAPI_Section op(first, second);
+    op.Build();
+    if (!op.IsDone() || op.Shape().IsNull()) {
+      return nullptr;
+    }
+    return std::unique_ptr<TopoDS_Shape>(new TopoDS_Shape(op.Shape()));
+  }
+  catch (...) {
+    return nullptr;
+  }
+}
+
+// The wires where `shape` meets the plane `dx*x + dy*y + dz*z = distance` —
+// upstream `Shape.slice(direction, distance)`. Section returns loose edges, so
+// they are chained into wires here; a compound of wires (or null) is returned.
+inline std::unique_ptr<TopoDS_Shape> fc_slice(const TopoDS_Shape& shape,
+                                             double dx,
+                                             double dy,
+                                             double dz,
+                                             double distance)
+{
+  if (shape.IsNull() || !std::isfinite(distance)) {
+    return nullptr;
+  }
+  const double magnitude = std::sqrt(dx * dx + dy * dy + dz * dz);
+  if (!(magnitude > Precision::Confusion()) || !std::isfinite(magnitude)) {
+    return nullptr;
+  }
+  try {
+    // Exactly upstream's plane: `gp_Pln(a, b, c, -d)`.
+    const gp_Pln plane(dx, dy, dz, -distance);
+    BRepAlgoAPI_Section op(shape, plane);
+    op.Build();
+    if (!op.IsDone() || op.Shape().IsNull()) {
+      return nullptr;
+    }
+
+    std::vector<TopoDS_Edge> edges;
+    for (TopExp_Explorer it(op.Shape(), TopAbs_EDGE); it.More(); it.Next()) {
+      edges.push_back(TopoDS::Edge(it.Current()));
+    }
+    std::vector<TopoDS_Wire> wires;
+    while (!edges.empty()) {
+      BRepBuilderAPI_MakeWire make;
+      make.Add(edges.front());
+      edges.erase(edges.begin());
+      bool found = false;
+      do {
+        found = false;
+        for (std::vector<TopoDS_Edge>::iterator it = edges.begin(); it != edges.end(); ++it) {
+          make.Add(*it);
+          if (make.Error() != BRepBuilderAPI_DisconnectedWire) {
+            edges.erase(it);
+            found = true;
+            break;
+          }
+        }
+      } while (found);
+      if (make.IsDone() && !make.Wire().IsNull()) {
+        wires.push_back(make.Wire());
+      }
+    }
+    if (wires.empty()) {
+      return nullptr;
+    }
+    TopoDS_Compound compound;
+    BRep_Builder builder;
+    builder.MakeCompound(compound);
+    for (const TopoDS_Wire& wire : wires) {
+      builder.Add(compound, wire);
+    }
+    return std::unique_ptr<TopoDS_Shape>(new TopoDS_Shape(compound));
+  }
+  catch (...) {
+    return nullptr;
+  }
+}
+
+// The split parts of input `index` (1-based) from a General Fuse, as a
+// compound, or null when that input was not modified or the fuse failed.
+inline std::unique_ptr<TopoDS_Shape> fc_general_fuse_modified(
+    const TopTools_ListOfShape& shapes,
+    int index,
+    double tolerance)
+{
+  if (shapes.IsEmpty() || index < 1) {
+    return nullptr;
+  }
+  try {
+    TopoDS_Shape input;
+    int position = 1;
+    for (TopTools_ListIteratorOfListOfShape it(shapes); it.More(); it.Next(), ++position) {
+      if (position == index) {
+        input = it.Value();
+        break;
+      }
+    }
+    if (input.IsNull()) {
+      return nullptr;
+    }
+
+    BRepAlgoAPI_BuilderAlgo builder;
+    builder.SetArguments(shapes);
+    builder.SetNonDestructive(Standard_True);
+    if (tolerance > 0.0) {
+      builder.SetFuzzyValue(tolerance);
+    }
+    builder.Build();
+    if (!builder.IsDone() || builder.Shape().IsNull()) {
+      return nullptr;
+    }
+
+    const TopTools_ListOfShape& modified = builder.Modified(input);
+    if (modified.IsEmpty()) {
+      return nullptr;
+    }
+    TopoDS_Compound compound;
+    BRep_Builder compound_builder;
+    compound_builder.MakeCompound(compound);
+    for (TopTools_ListIteratorOfListOfShape it(modified); it.More(); it.Next()) {
+      compound_builder.Add(compound, it.Value());
+    }
+    return std::unique_ptr<TopoDS_Shape>(new TopoDS_Shape(compound));
+  }
+  catch (...) {
+    return nullptr;
+  }
+}
+
+// `BRepBndLib::AddOptimal` with the protective gap dropped. Fills `out` with
+// `[xmin, ymin, zmin, xmax, ymax, zmax]`; false when the shape is null, empty
+// or OCCT throws.
+inline bool fc_optimal_box(const TopoDS_Shape& shape,
+                           bool use_triangulation,
+                           bool use_tolerance,
+                           rust::Vec<double>& out)
+{
+  if (shape.IsNull()) {
+    return false;
+  }
+  try {
+    Bnd_Box box;
+    BRepBndLib::AddOptimal(shape, box, use_triangulation, use_tolerance);
+    if (box.IsVoid()) {
+      return false;
+    }
+    box.SetGap(0.0);
+    double xmin = 0.0;
+    double ymin = 0.0;
+    double zmin = 0.0;
+    double xmax = 0.0;
+    double ymax = 0.0;
+    double zmax = 0.0;
+    box.Get(xmin, ymin, zmin, xmax, ymax, zmax);
+    out.push_back(xmin);
+    out.push_back(ymin);
+    out.push_back(zmin);
+    out.push_back(xmax);
+    out.push_back(ymax);
+    out.push_back(zmax);
+    return true;
+  }
+  catch (...) {
+    return false;
+  }
+}
+
+// `TopoDS_Shape::IsSame` (same TShape and location, ignoring orientation),
+// which `opencascade-sys` does not bridge.
+inline bool fc_is_same(const TopoDS_Shape& first, const TopoDS_Shape& second)
+{
+  try {
+    return first.IsSame(second);
+  }
+  catch (...) {
+    return false;
+  }
+}
+
+// Remove the given sub-shapes (`BRepTools_ReShape`), or null on failure.
+inline std::unique_ptr<TopoDS_Shape> fc_reshape_remove(const TopoDS_Shape& shape,
+                                                      const TopTools_ListOfShape& removals)
+{
+  if (shape.IsNull()) {
+    return nullptr;
+  }
+  try {
+    BRepTools_ReShape reshape;
+    for (TopTools_ListIteratorOfListOfShape it(removals); it.More(); it.Next()) {
+      reshape.Remove(it.Value());
+    }
+    const TopoDS_Shape result = reshape.Apply(shape, TopAbs_SHAPE);
+    if (result.IsNull()) {
+      return nullptr;
+    }
+    return std::unique_ptr<TopoDS_Shape>(new TopoDS_Shape(result));
+  }
+  catch (...) {
+    return nullptr;
+  }
+}
+
+// Replace the `from` sub-shapes with the matching `to` sub-shapes
+// (`BRepTools_ReShape`), or null on failure.
+inline std::unique_ptr<TopoDS_Shape> fc_reshape_replace(const TopoDS_Shape& shape,
+                                                       const TopTools_ListOfShape& from,
+                                                       const TopTools_ListOfShape& to)
+{
+  if (shape.IsNull() || from.Extent() != to.Extent()) {
+    return nullptr;
+  }
+  try {
+    BRepTools_ReShape reshape;
+    TopTools_ListIteratorOfListOfShape old_shape(from);
+    TopTools_ListIteratorOfListOfShape new_shape(to);
+    for (; old_shape.More(); old_shape.Next(), new_shape.Next()) {
+      reshape.Replace(old_shape.Value(), new_shape.Value());
+    }
+    const TopoDS_Shape result = reshape.Apply(shape, TopAbs_SHAPE);
+    if (result.IsNull()) {
+      return nullptr;
+    }
+    return std::unique_ptr<TopoDS_Shape>(new TopoDS_Shape(result));
   }
   catch (...) {
     return nullptr;

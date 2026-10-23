@@ -41,12 +41,13 @@ mod solids;
 use std::sync::{Arc, Mutex};
 
 use ferrocad_core::{ExtensionData, ExtensionValue};
-use ferrocad_geom::{ElementKind, Shape, TessellationOptions};
+use ferrocad_geom::{ElementKind, ElementRef, Shape, TessellationOptions};
 use ferrocad_occt::OcctBackend;
 use ferrocad_part::{ShapeProperty, TYPE_NAME};
 use pyo3::exceptions::{PyIOError, PyRuntimeError, PyValueError};
 use pyo3::prelude::*;
-use pyo3::types::{PyBytes, PyDict, PyList, PyModule};
+use pyo3::types::{PyBytes, PyDict, PyList, PyModule, PyTuple};
+use pyo3::IntoPyObjectExt;
 
 /// Register the Part kernel (OCCT) and its core types. Idempotent; every entry
 /// point that can build a shape calls it first.
@@ -145,6 +146,31 @@ impl PartShape {
             .into_iter()
             .map(|element| element.shape)
             .collect())
+    }
+
+    /// Where `target` sits among this shape's sub-elements: its kind name and
+    /// 1-based index, matching upstream's `findSubShape` tuple.
+    fn locate(&self, target: &Shape) -> Option<(&'static str, usize)> {
+        let shape = self.shape()?;
+        let backend = ferrocad_part::backend();
+        for (kind, name) in ELEMENT_KINDS {
+            for (index, element) in backend.elements(&shape, kind).iter().enumerate() {
+                if backend.same_shape(&element.shape, target) {
+                    return Some((name, index + 1));
+                }
+            }
+        }
+        None
+    }
+
+    /// The topological kind of `shape`, from its sub-shape lists (the same walk
+    /// as `shape_type`).
+    fn kind_of(shape: &Shape) -> Option<ElementKind> {
+        let backend = ferrocad_part::backend();
+        ELEMENT_KINDS
+            .iter()
+            .map(|(kind, _)| *kind)
+            .find(|kind| backend.elements(shape, *kind).len() == 1)
     }
 }
 
@@ -314,7 +340,7 @@ impl PartShape {
         let a = self.shape();
         let b = other.borrow().shape();
         match (a, b) {
-            (Some(x), Some(y)) => x.is_same(&y),
+            (Some(x), Some(y)) => ferrocad_part::backend().same_shape(&x, &y),
             _ => false,
         }
     }
@@ -602,11 +628,15 @@ impl PartShape {
         "Part"
     }
 
-    /// The shape orientation (`Shape.Orientation`). This kernel never reverses
-    /// shapes, so a shape is always forward.
+    /// The shape orientation (`Shape.Orientation`).
     #[getter]
     fn Orientation(&self) -> &'static str {
-        "Forward"
+        let Some(shape) = self.shape() else {
+            return "Forward";
+        };
+        ferrocad_part::backend()
+            .orientation(&shape)
+            .unwrap_or("Forward")
     }
 
     /// Upstream's type id for a `TopoShape`.
@@ -755,7 +785,470 @@ impl PartShape {
             .map_err(kernel_error)?;
         Ok(PartShape::from_shape(revolved))
     }
+
+    /// `Face.makeOffset(distance)` — the face grown (or shrunk) by `distance`
+    /// in its plane. Upstream's deprecated alias for `makeOffset2D`.
+    fn makeOffset(&self, distance: f64) -> PyResult<PartShape> {
+        let shape = self.named_shape()?;
+        let offset = ferrocad_part::backend()
+            .make_offset(&shape, distance, 0)
+            .map_err(kernel_error)?;
+        Ok(PartShape::from_shape(offset))
+    }
+
+    /// `Shape.makeOffset2D(offset, join=0, fill=False, openResult=False,
+    /// intersection=False)` — planar offset of a face or wire.
+    ///
+    /// Only the unfilled form and face/wire inputs are implemented: `fill=True`
+    /// (the ring between the source and the offset) is not, and neither are the
+    /// `openResult`/`intersection` switches or the edge/compound inputs.
+    #[pyo3(signature = (offset, *, join = 0, fill = false, openResult = false, intersection = false))]
+    fn makeOffset2D(
+        &self,
+        offset: f64,
+        join: i32,
+        fill: bool,
+        openResult: bool,
+        intersection: bool,
+    ) -> PyResult<PartShape> {
+        let _ = (openResult, intersection);
+        if fill {
+            return Err(curves::OCCError::new_err(
+                "makeOffset2D: filling the offset is not implemented yet",
+            ));
+        }
+        let shape = self.named_shape()?;
+        let offset = ferrocad_part::backend()
+            .make_offset(&shape, offset, join)
+            .map_err(kernel_error)?;
+        Ok(PartShape::from_shape(offset))
+    }
+
+    /// `Shape.makeThickness(faces, offset, tolerance, inter=False,
+    /// self_inter=False, offset_mode=0, join=0)` — hollow the solid by `offset`,
+    /// leaving `faces` open.
+    ///
+    /// The boolean switches and the offset mode are accepted for signature
+    /// compatibility; the kernel always runs the plain skin offset.
+    #[pyo3(signature = (faces, offset, tolerance, inter = false, self_inter = false, offset_mode = 0, join = 0))]
+    fn makeThickness(
+        &self,
+        faces: &Bound<'_, PyAny>,
+        offset: f64,
+        tolerance: f64,
+        inter: bool,
+        self_inter: bool,
+        offset_mode: i32,
+        join: i32,
+    ) -> PyResult<PartShape> {
+        let _ = (inter, self_inter, offset_mode, join);
+        let shape = self.named_shape()?;
+        let faces = shape_sequence(faces)?;
+        if faces.is_empty() {
+            return Err(curves::OCCError::new_err(
+                "makeThickness needs at least one face to leave open",
+            ));
+        }
+        let thickened = ferrocad_part::backend()
+            .make_thickness(&shape, &faces, offset, tolerance)
+            .map_err(kernel_error)?;
+        Ok(PartShape::from_shape(thickened))
+    }
+
+    /// `Shape.removeSplitter()` — unify the redundant edges/faces the booleans
+    /// leave behind (`ShapeUpgrade_UnifySameDomain`).
+    fn removeSplitter(&self) -> PyResult<PartShape> {
+        let shape = self.named_shape()?;
+        match ferrocad_part::backend().clean(&shape) {
+            Some(cleaned) => Ok(PartShape::from_shape(cleaned)),
+            None => Err(curves::OCCError::new_err(
+                "removeSplitter: the kernel could not unify the shape",
+            )),
+        }
+    }
+
+    /// `Shape.makeFillet(radius, edgeList)` — round the given edges.
+    ///
+    /// Upstream's two-radius (variable-radius) form is accepted in the
+    /// signature but not implemented.
+    #[pyo3(signature = (*args))]
+    fn makeFillet(&self, args: &Bound<'_, PyTuple>) -> PyResult<PartShape> {
+        let (radius, edges) = match args.len() {
+            2 => (args.get_item(0)?.extract::<f64>()?, args.get_item(1)?),
+            3 => {
+                return Err(curves::OCCError::new_err(
+                    "makeFillet: variable-radius fillets are not implemented yet",
+                ))
+            }
+            _ => {
+                return Err(PyValueError::new_err(
+                    "makeFillet takes (radius, edgeList) or (radius1, radius2, edgeList)",
+                ))
+            }
+        };
+        if !(radius > 0.0) {
+            return Err(curves::OCCError::new_err(
+                "makeFillet needs a positive radius",
+            ));
+        }
+        let shape = self.named_shape()?;
+        let edges = shape_sequence(&edges)?;
+        if edges.is_empty() {
+            return Err(curves::OCCError::new_err(
+                "makeFillet needs at least one edge",
+            ));
+        }
+        let references = edge_references(&shape, &edges);
+        let result = ferrocad_part::backend()
+            .fillet(&shape, &references, radius)
+            .map_err(kernel_error)?;
+        Ok(PartShape::from_shape(result.shape))
+    }
+
+    /// `Shape.makeChamfer(distance, edgeList)` — bevel the given edges.
+    ///
+    /// `makeChamfer(distance1, distance2, edgeList)` is the two-distance form.
+    #[pyo3(signature = (*args))]
+    fn makeChamfer(&self, args: &Bound<'_, PyTuple>) -> PyResult<PartShape> {
+        let (distance1, distance2, edges) = match args.len() {
+            2 => (args.get_item(0)?.extract::<f64>()?, None, args.get_item(1)?),
+            3 => (
+                args.get_item(0)?.extract::<f64>()?,
+                Some(args.get_item(1)?.extract::<f64>()?),
+                args.get_item(2)?,
+            ),
+            _ => {
+                return Err(PyValueError::new_err(
+                    "makeChamfer takes (distance, edgeList) or (distance1, distance2, edgeList)",
+                ))
+            }
+        };
+        if !(distance1 > 0.0) || distance2.map(|d| !(d > 0.0)).unwrap_or(false) {
+            return Err(curves::OCCError::new_err(
+                "makeChamfer needs positive distances",
+            ));
+        }
+        let shape = self.named_shape()?;
+        let edges = shape_sequence(&edges)?;
+        if edges.is_empty() {
+            return Err(curves::OCCError::new_err(
+                "makeChamfer needs at least one edge",
+            ));
+        }
+        let references = edge_references(&shape, &edges);
+        let result = ferrocad_part::backend()
+            .chamfer(&shape, &references, distance1, distance2)
+            .map_err(kernel_error)?;
+        Ok(PartShape::from_shape(result.shape))
+    }
+
+    /// `Shape.section(tool, tolerance=0, approximation=False)` — the
+    /// intersection curve(s) of this shape and `tool`.
+    ///
+    /// `tolerance` and `approximation` are accepted for signature compatibility
+    /// and ignored (the kernel runs the exact section).
+    #[pyo3(signature = (tool, tolerance = 0.0, approximation = false))]
+    fn section(
+        &self,
+        tool: &Bound<'_, PyAny>,
+        tolerance: f64,
+        approximation: bool,
+    ) -> PyResult<PartShape> {
+        let _ = (tolerance, approximation);
+        let shape = self.named_shape()?;
+        let tools = shape_sequence(tool)?;
+        if tools.is_empty() {
+            return Err(curves::OCCError::new_err("section needs a tool shape"));
+        }
+        let backend = ferrocad_part::backend();
+        let mut sections = Vec::with_capacity(tools.len());
+        for tool in &tools {
+            sections.push(backend.section(&shape, tool).map_err(kernel_error)?);
+        }
+        let result = if sections.len() == 1 {
+            sections.remove(0)
+        } else {
+            backend.make_compound(&sections).map_err(kernel_error)?
+        };
+        Ok(PartShape::from_shape(result))
+    }
+
+    /// `Shape.slice(direction, distance)` — the wires where the shape meets the
+    /// plane `direction . x = distance` (upstream's parameterisation: the
+    /// direction is not normalised).
+    fn slice(
+        &self,
+        py: Python<'_>,
+        direction: &Bound<'_, PyAny>,
+        distance: f64,
+    ) -> PyResult<Vec<Py<PartShape>>> {
+        let shape = self.named_shape()?;
+        let direction = curves::vector(direction)?;
+        let wires = ferrocad_part::backend()
+            .slice(&shape, direction, distance)
+            .map_err(kernel_error)?;
+        wires
+            .into_iter()
+            .map(|wire| Py::new(py, PartShape::from_shape(wire)))
+            .collect()
+    }
+
+    /// `Shape.slices(direction, distancesList)` — a compound of the wires at
+    /// every distance.
+    fn slices(
+        &self,
+        direction: &Bound<'_, PyAny>,
+        distances: &Bound<'_, PyAny>,
+    ) -> PyResult<PartShape> {
+        let shape = self.named_shape()?;
+        let direction = curves::vector(direction)?;
+        let backend = ferrocad_part::backend();
+        let mut wires = Vec::new();
+        for value in distances.try_iter()? {
+            let distance: f64 = value?.extract()?;
+            wires.extend(backend.slice(&shape, direction, distance).map_err(kernel_error)?);
+        }
+        if wires.is_empty() {
+            return Err(curves::OCCError::new_err("slices produced no wires"));
+        }
+        Ok(PartShape::from_shape(
+            backend.make_compound(&wires).map_err(kernel_error)?,
+        ))
+    }
+
+    /// `Shape.generalFuse(shapes, fuzzy_value=0)` — General Fuse of this shape
+    /// and `shapes`.
+    ///
+    /// Returns upstream's `(result, map)`: the combined shape and, for each
+    /// input (this shape first), the parts it was split into.
+    #[pyo3(signature = (shapes, fuzzy_value = 0.0))]
+    fn generalFuse(
+        &self,
+        py: Python<'_>,
+        shapes: &Bound<'_, PyAny>,
+        fuzzy_value: f64,
+    ) -> PyResult<(Py<PartShape>, Vec<Vec<Py<PartShape>>>)> {
+        let _ = fuzzy_value;
+        let first = self.named_shape()?;
+        let mut inputs = vec![first];
+        inputs.extend(shape_sequence(shapes)?);
+        let (result, split) = ferrocad_part::backend()
+            .general_fuse(&inputs)
+            .map_err(kernel_error)?;
+        let result = Py::new(py, PartShape::from_shape(result))?;
+        let split = split
+            .into_iter()
+            .map(|parts| {
+                parts
+                    .into_iter()
+                    .map(|shape| Py::new(py, PartShape::from_shape(shape)))
+                    .collect::<PyResult<Vec<_>>>()
+            })
+            .collect::<PyResult<Vec<_>>>()?;
+        Ok((result, split))
+    }
+
+    /// `Shape.optimalBoundingBox(useTriangulation=True,
+    /// useShapeTolerance=False)` — `BRepBndLib::AddOptimal` bounds.
+    #[pyo3(signature = (useTriangulation = true, useShapeTolerance = false))]
+    fn optimalBoundingBox(
+        &self,
+        py: Python<'_>,
+        useTriangulation: bool,
+        useShapeTolerance: bool,
+    ) -> PyResult<PyObject> {
+        let module = py.import("ferrocad")?;
+        let bound_box = module.getattr("BoundBox")?;
+        let Some(shape) = self.shape() else {
+            return Ok(bound_box.call0()?.unbind());
+        };
+        match ferrocad_part::backend().optimal_bounds(&shape, useTriangulation, useShapeTolerance) {
+            Some((min, max)) => Ok(bound_box
+                .call1((min.x, min.y, min.z, max.x, max.y, max.z))?
+                .unbind()),
+            None => Ok(bound_box.call0()?.unbind()),
+        }
+    }
+
+    /// `Shape.getChildShapes(name="")` — the direct children whose name
+    /// matches `name` (an exact sub-element name such as `"Solid1"`, or `""` /
+    /// `"*"` for all of them).
+    fn getChildShapes(&self, py: Python<'_>, name: &str) -> PyResult<Vec<Py<PartShape>>> {
+        let shape = self.named_shape()?;
+        if !name.is_empty() && name != "*" {
+            let Some((kind, _)) = sub_shape_name(name) else {
+                return Ok(Vec::new());
+            };
+            let elements = ferrocad_part::backend().elements(&shape, kind);
+            return elements
+                .into_iter()
+                .filter(|element| element.name == name)
+                .map(|element| Py::new(py, PartShape::from_shape(element.shape)))
+                .collect();
+        }
+        for (kind, _) in ELEMENT_KINDS {
+            let shapes = self.sub_shapes(kind)?;
+            if !shapes.is_empty() {
+                return shapes
+                    .into_iter()
+                    .map(|shape| Py::new(py, PartShape::from_shape(shape)))
+                    .collect();
+            }
+        }
+        Ok(Vec::new())
+    }
+
+    /// `Shape.findSubShapesWithSharedVertex(shape, needName=False, ...)` — the
+    /// sub-shapes of the same kind as `shape` whose vertex set matches it within
+    /// `tol` (upstream also compares the geometry; this kernel compares the
+    /// vertices).
+    #[pyo3(signature = (shape, needName = false, checkGeometry = true, tol = 1e-7, atol = 1e-12, singleResult = false))]
+    fn findSubShapesWithSharedVertex(
+        &self,
+        py: Python<'_>,
+        shape: &Bound<'_, PyAny>,
+        needName: bool,
+        checkGeometry: bool,
+        tol: f64,
+        atol: f64,
+        singleResult: bool,
+    ) -> PyResult<PyObject> {
+        let _ = (checkGeometry, atol);
+        let target = shape_argument(shape)?;
+        let mut found: Vec<(String, Shape)> = Vec::new();
+        if let Some(kind) = PartShape::kind_of(&target) {
+            let Some(own) = self.shape() else {
+                return Ok(PyList::empty(py).into_any().unbind());
+            };
+            let backend = ferrocad_part::backend();
+            let target_points = vertex_points(&target);
+            for element in backend.elements(&own, kind) {
+                let matches = if target_points.is_empty() {
+                    backend.same_shape(&element.shape, &target)
+                } else {
+                    same_vertex_set(&target_points, &vertex_points(&element.shape), tol)
+                };
+                if !matches {
+                    continue;
+                }
+                found.push((element.name, element.shape));
+                if singleResult {
+                    break;
+                }
+            }
+        }
+        if needName {
+            let mut items = Vec::with_capacity(found.len());
+            for (name, shape) in found {
+                items.push((name, Py::new(py, PartShape::from_shape(shape))?));
+            }
+            return Ok(PyList::new(py, items)?.into_any().unbind());
+        }
+        let items = found
+            .into_iter()
+            .map(|(_, shape)| Py::new(py, PartShape::from_shape(shape)))
+            .collect::<PyResult<Vec<_>>>()?;
+        Ok(PyList::new(py, items)?.into_any().unbind())
+    }
+
+    /// `Shape.getElement(name)` — resolve a sub-element name (`Face2`) to the
+    /// sub-shape. Without an element map this is the positional resolution.
+    fn getElement(&self, name: &str) -> PyResult<PartShape> {
+        let Some(shape) = self.shape() else {
+            return Ok(PartShape::empty());
+        };
+        match ferrocad_part::backend().resolve(&shape, name) {
+            Some(resolved) => Ok(PartShape::from_shape(resolved)),
+            None => Ok(PartShape::empty()),
+        }
+    }
+
+    /// `Shape.findSubShape(shape)` — the `(kind, index)` of `shape` inside this
+    /// one, or `(None, 0)` when it is not a sub-shape; a sequence of shapes gives
+    /// a list of those tuples.
+    fn findSubShape(&self, value: &Bound<'_, PyAny>) -> PyResult<PyObject> {
+        let py = value.py();
+        if value.downcast::<PartShape>().is_ok() {
+            let target = shape_argument(value)?;
+            return match self.locate(&target) {
+                Some((kind, index)) => (kind, index).into_py_any(py),
+                None => (Option::<&str>::None, 0usize).into_py_any(py),
+            };
+        }
+        let mut found = Vec::new();
+        for item in value.try_iter()? {
+            let target = shape_argument(&item?)?;
+            match self.locate(&target) {
+                Some((kind, index)) => found.push((Some(kind), index)),
+                None => found.push((None, 0)),
+            }
+        }
+        Ok(PyList::new(py, found)?.into_any().unbind())
+    }
+
+    /// `Shape.removeShape(shapes)` — a copy with the given sub-shapes removed
+    /// (`BRepTools_ReShape`).
+    fn removeShape(&self, shapes: &Bound<'_, PyAny>) -> PyResult<PartShape> {
+        let shape = self.named_shape()?;
+        let removals = shape_sequence(shapes)?;
+        if removals.is_empty() {
+            return Ok(self.copy_handle());
+        }
+        let result = ferrocad_part::backend()
+            .remove_shapes(&shape, &removals)
+            .map_err(kernel_error)?;
+        Ok(PartShape::from_shape(result))
+    }
+
+    /// `Shape.replaceShape([(old, new), ...])` — a copy with each `old`
+    /// sub-shape replaced by `new` (`BRepTools_ReShape`).
+    fn replaceShape(&self, replacements: &Bound<'_, PyAny>) -> PyResult<PartShape> {
+        let shape = self.named_shape()?;
+        let mut pairs = Vec::new();
+        for item in replacements.try_iter()? {
+            let item = item?;
+            let old = shape_argument(&item.get_item(0)?)?;
+            let new = shape_argument(&item.get_item(1)?)?;
+            pairs.push((old, new));
+        }
+        if pairs.is_empty() {
+            return Ok(self.copy_handle());
+        }
+        let result = ferrocad_part::backend()
+            .replace_shapes(&shape, &pairs)
+            .map_err(kernel_error)?;
+        Ok(PartShape::from_shape(result))
+    }
+
+    /// `Shape.reverse()` — reverse this shape's orientation in place.
+    fn reverse(slf: &Bound<'_, Self>) -> PyResult<()> {
+        let shape = slf.borrow().named_shape()?;
+        let reversed = ferrocad_part::backend()
+            .reversed(&shape)
+            .map_err(kernel_error)?;
+        slf.borrow_mut().replace_shape(Some(reversed));
+        Ok(())
+    }
+
+    /// `Shape.reversed()` — a copy with the reversed orientation.
+    fn reversed(&self) -> PyResult<PartShape> {
+        let shape = self.named_shape()?;
+        let reversed = ferrocad_part::backend()
+            .reversed(&shape)
+            .map_err(kernel_error)?;
+        Ok(PartShape::from_shape(reversed))
+    }
 }
+
+/// The sub-shape kinds, highest dimension first, with their FreeCAD names.
+const ELEMENT_KINDS: [(ElementKind, &str); 6] = [
+    (ElementKind::Solid, "Solid"),
+    (ElementKind::Shell, "Shell"),
+    (ElementKind::Face, "Face"),
+    (ElementKind::Wire, "Wire"),
+    (ElementKind::Edge, "Edge"),
+    (ElementKind::Vertex, "Vertex"),
+];
 
 /// Split `Face3` into `(ElementKind::Face, 2)`.
 fn sub_shape_name(name: &str) -> Option<(ElementKind, usize)> {
@@ -851,6 +1344,72 @@ pub(crate) fn shape_argument(value: &Bound<'_, PyAny>) -> PyResult<Shape> {
         .borrow()
         .shape()
         .ok_or_else(|| curves::OCCError::new_err("a null shape cannot be combined"))
+}
+
+/// The shapes in `value`: a single `Part.Shape` (or subclass) or an iterable of
+/// them, as upstream's `getPyShapes` accepts both.
+fn shape_sequence(value: &Bound<'_, PyAny>) -> PyResult<Vec<Shape>> {
+    if value.downcast::<PartShape>().is_ok() {
+        return Ok(vec![shape_argument(value)?]);
+    }
+    let mut shapes = Vec::new();
+    for item in value.try_iter()? {
+        shapes.push(shape_argument(&item?)?);
+    }
+    Ok(shapes)
+}
+
+/// Edge references for a shape-level fillet or chamfer: each given shape is
+/// resolved to the matching `EdgeN` of `target` when it is one of its edges, so
+/// the operation sees the target's own topology rather than a foreign copy.
+fn edge_references(target: &Shape, edges: &[Shape]) -> Vec<ElementRef> {
+    let backend = ferrocad_part::backend();
+    let available = backend.elements(target, ElementKind::Edge);
+    edges
+        .iter()
+        .enumerate()
+        .map(|(position, edge)| {
+            available
+                .iter()
+                .find(|element| backend.same_shape(&element.shape, edge))
+                .cloned()
+                .unwrap_or_else(|| ElementRef {
+                    shape: edge.clone(),
+                    name: format!("Edge{}", position + 1),
+                })
+        })
+        .collect()
+}
+
+/// The points of a shape's vertices, in the kernel's order.
+fn vertex_points(shape: &Shape) -> Vec<ferrocad_curves::Vector3> {
+    let backend = ferrocad_part::backend();
+    backend
+        .elements(shape, ElementKind::Vertex)
+        .into_iter()
+        .filter_map(|vertex| backend.vertex_point(&vertex.shape))
+        .collect()
+}
+
+/// Whether two vertex sets are equal within `tolerance` (a bijective match, both
+/// ways, so duplicate points are handled correctly).
+fn same_vertex_set(
+    first: &[ferrocad_curves::Vector3],
+    second: &[ferrocad_curves::Vector3],
+    tolerance: f64,
+) -> bool {
+    if first.len() != second.len() {
+        return false;
+    }
+    let mut unmatched = second.to_vec();
+    for point in first {
+        let Some(position) = unmatched.iter().position(|other| point.distance(other) <= tolerance)
+        else {
+            return false;
+        };
+        unmatched.remove(position);
+    }
+    unmatched.is_empty()
 }
 
 enum BooleanOp {

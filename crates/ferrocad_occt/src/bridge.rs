@@ -70,6 +70,63 @@ mod ffi {
             second: &TopoDS_Shape,
         ) -> UniquePtr<TopoDS_Shape>;
 
+        /// Planar offset of a face or wire (`BRepOffsetAPI_MakeOffset`), or null.
+        fn fc_offset(shape: &TopoDS_Shape, distance: f64, join: i32) -> UniquePtr<TopoDS_Shape>;
+
+        /// Hollow a solid by `offset`, leaving `closing_faces` open, or null.
+        fn fc_thick_solid(
+            shape: &TopoDS_Shape,
+            closing_faces: &TopTools_ListOfShape,
+            offset: f64,
+            tolerance: f64,
+        ) -> UniquePtr<TopoDS_Shape>;
+
+        /// The intersection of two shapes (`BRepAlgoAPI_Section`), or null.
+        fn fc_section(
+            first: &TopoDS_Shape,
+            second: &TopoDS_Shape,
+        ) -> UniquePtr<TopoDS_Shape>;
+
+        /// The wires where `shape` meets the plane `d·x = distance`, or null.
+        fn fc_slice(
+            shape: &TopoDS_Shape,
+            dx: f64,
+            dy: f64,
+            dz: f64,
+            distance: f64,
+        ) -> UniquePtr<TopoDS_Shape>;
+
+        /// The split parts of input `index` from a General Fuse, or null.
+        fn fc_general_fuse_modified(
+            shapes: &TopTools_ListOfShape,
+            index: i32,
+            tolerance: f64,
+        ) -> UniquePtr<TopoDS_Shape>;
+
+        /// `BRepBndLib::AddOptimal` bounds, six values, or false.
+        fn fc_optimal_box(
+            shape: &TopoDS_Shape,
+            use_triangulation: bool,
+            use_tolerance: bool,
+            out: &mut Vec<f64>,
+        ) -> bool;
+
+        /// `TopoDS_Shape::IsSame` (ignores orientation).
+        fn fc_is_same(first: &TopoDS_Shape, second: &TopoDS_Shape) -> bool;
+
+        /// Remove sub-shapes (`BRepTools_ReShape`), or null.
+        fn fc_reshape_remove(
+            shape: &TopoDS_Shape,
+            removals: &TopTools_ListOfShape,
+        ) -> UniquePtr<TopoDS_Shape>;
+
+        /// Replace sub-shapes (`BRepTools_ReShape`), or null.
+        fn fc_reshape_replace(
+            shape: &TopoDS_Shape,
+            from: &TopTools_ListOfShape,
+            to: &TopTools_ListOfShape,
+        ) -> UniquePtr<TopoDS_Shape>;
+
         /// A filled face through the boundary wires, or null on failure.
         fn fc_fill_wires(wires: &TopTools_ListOfShape) -> UniquePtr<TopoDS_Shape>;
 

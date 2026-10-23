@@ -774,6 +774,92 @@ pub trait GeometryBackend: Send + Sync {
         None
     }
 
+    /// Offset a face or a wire by `distance` in the plane it lies in
+    /// (`Shape.makeOffset` / `Shape.makeOffset2D`).
+    ///
+    /// `join` is upstream's `JoinType` (0 = arc, 1 = tangent, 2 = intersection).
+    /// The default reports the operation as unsupported.
+    fn make_offset(&self, _shape: &Shape, _distance: f64, _join: i32) -> Result<Shape, GeomError> {
+        Err(unsupported("make_offset"))
+    }
+
+    /// Hollow a solid by `thickness`, leaving `closing_faces` open
+    /// (`Shape.makeThickness`).
+    fn make_thickness(
+        &self,
+        _shape: &Shape,
+        _closing_faces: &[Shape],
+        _thickness: f64,
+        _tolerance: f64,
+    ) -> Result<Shape, GeomError> {
+        Err(unsupported("make_thickness"))
+    }
+
+    /// The intersection of `a` and `b` (`Shape.section`).
+    fn section(&self, _a: &Shape, _b: &Shape) -> Result<Shape, GeomError> {
+        Err(unsupported("section"))
+    }
+
+    /// The wires where `shape` meets the plane with normal `direction` that is
+    /// `distance` from the origin along that normal (`Shape.slice`).
+    fn slice(
+        &self,
+        _shape: &Shape,
+        _direction: Vector3,
+        _distance: f64,
+    ) -> Result<Vec<Shape>, GeomError> {
+        Err(unsupported("slice"))
+    }
+
+    /// General fuse of `shapes`: the combined shape and, for each input, the
+    /// parts it was split into (`Shape.generalFuse`).
+    fn general_fuse(&self, _shapes: &[Shape]) -> Result<(Shape, Vec<Vec<Shape>>), GeomError> {
+        Err(unsupported("general_fuse"))
+    }
+
+    /// The tight bounds from `BRepBndLib::AddOptimal`
+    /// (`Shape.optimalBoundingBox`).
+    fn optimal_bounds(
+        &self,
+        _shape: &Shape,
+        _use_triangulation: bool,
+        _use_tolerance: bool,
+    ) -> Option<(Vector3, Vector3)> {
+        None
+    }
+
+    /// Whether two shapes are the same sub-shape, ignoring orientation
+    /// (`TopoDS_Shape::IsSame`). The default compares handle identity.
+    fn same_shape(&self, a: &Shape, b: &Shape) -> bool {
+        a.is_same(b)
+    }
+
+    /// The shape's orientation (`Shape.Orientation`).
+    fn orientation(&self, _shape: &Shape) -> Option<&'static str> {
+        None
+    }
+
+    /// A copy of `shape` with the reversed orientation (`Shape.reversed`).
+    fn reversed(&self, _shape: &Shape) -> Result<Shape, GeomError> {
+        Err(unsupported("reversed"))
+    }
+
+    /// A copy of `shape` with the given sub-shapes removed
+    /// (`Shape.removeShape`).
+    fn remove_shapes(&self, _shape: &Shape, _shapes: &[Shape]) -> Result<Shape, GeomError> {
+        Err(unsupported("remove_shapes"))
+    }
+
+    /// A copy of `shape` with each `from` sub-shape replaced by its `to`
+    /// (`Shape.replaceShape`).
+    fn replace_shapes(
+        &self,
+        _shape: &Shape,
+        _replacements: &[(Shape, Shape)],
+    ) -> Result<Shape, GeomError> {
+        Err(unsupported("replace_shapes"))
+    }
+
     /// Round the given edges of `shape`.
     fn fillet(&self, shape: &Shape, edges: &[ElementRef], radius: f64)
     -> Result<OpResult, GeomError>;

@@ -67,6 +67,10 @@ PART_FILES = [
     "ColorPerFaceTest",
     "ColorTransparencyTest",
     "TestPartApp",
+    "TestLinkArrayPoint",
+    "TestLinkArrayLinear",
+    "TestLinkArrayPath",
+    "TestLinkArrayCircular",
 ]
 
 # The headless half of the Draft workbench. `src/Mod/Draft` is the package root
@@ -118,6 +122,20 @@ class Collector(unittest.TestResult):
 
     def addSkip(self, test, reason):
         self.records.append((test.id(), "skip", reason))
+
+    def addSubTest(self, test, subtest, err):
+        """Record a failing subtest.
+
+        ``unittest`` calls this for every ``with self.subTest(...)`` block. The base
+        implementation only appends to ``failures``/``errors``, which this collector
+        does not report, so without this override a subtest failure disappears and
+        the parent test is never recorded as a success either. Passing subtests are
+        not recorded: when all of them pass the parent is reported as a success.
+        """
+        if err is None:
+            return
+        kind = "fail" if issubclass(err[0], test.failureException) else "error"
+        self.records.append((subtest.id(), kind, _short(err)))
 
 
 def load_module(path: Path):

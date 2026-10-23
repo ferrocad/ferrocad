@@ -36,6 +36,7 @@
 
 mod containers;
 mod curves;
+mod link_array;
 mod solids;
 
 use std::sync::{Arc, Mutex};
@@ -53,6 +54,7 @@ use pyo3::IntoPyObjectExt;
 /// point that can build a shape calls it first.
 fn register_kernel() {
     ferrocad_part::register(Arc::new(OcctBackend::new()));
+    link_array::register();
 }
 
 /// `Part.Shape`: an opaque handle to a kernel shape.

@@ -6,10 +6,19 @@
 //! [`ferrocad_curves`]; the conversion to a kernel shape is the `ferrocad_geom` seam
 //! (`make_edge`/`make_wire`), implemented by OCCT.
 //!
+//! It also carries the small 2D slice upstream's `Geom2d_tests.py` exercises: the
+//! `Part.Geom2d` submodule (`Line2dSegment` and a `BSplineCurve2d` that refuses to
+//! fake knot insertion) and `Part.Cylinder`, an infinite cylindrical *surface*
+//! (upstream's `Part::GeomCylinder`), which is distinct from the document
+//! primitive returned by `Part.makeCylinder`.
+//!
 //! Deliberate limits for this slice, all reported as `Part.OCCError` rather than a
 //! silent `None`: an infinite `Line` has no edge, an `Ellipse` edge needs a
 //! `gp_Elips` binding the kernel crate does not expose, and face/solid constructors
-//! (`makeFace`, `makeSolid`, …) are still to come.
+//! (`makeFace`, `makeSolid`, …) are still to come. `Line2dSegment.toShape(surface)`
+//! attaches the 2D segment as the edge's pcurve but does **not** project it onto the
+//! surface: no `GeomProjLib` binding exists here, and `Part.Cylinder` is only a
+//! description (radius, center, axis), not real B-Rep geometry.
 
 use std::sync::Mutex;
 
@@ -66,6 +75,23 @@ pub(crate) fn py_vector(py: Python<'_>, value: Vector3) -> PyResult<PyObject> {
         .getattr("Vector")?
         .call1((value.x, value.y, value.z))?
         .unbind())
+}
+
+/// Read a 2D point from an `(x, y)` pair or an object with `x`/`y`
+/// (`FreeCAD.Base.Vector2d`, `ferrocad.Vector2d`).
+pub(crate) fn vector2d(value: &Bound<'_, PyAny>) -> PyResult<(f64, f64)> {
+    if let Ok((x, y)) = value.extract::<(f64, f64)>() {
+        return Ok((x, y));
+    }
+    let x: f64 = value.getattr("x")?.extract()?;
+    let y: f64 = value.getattr("y")?.extract()?;
+    Ok((x, y))
+}
+
+/// A `ferrocad.Vector2d` from an `(x, y)` pair (upstream returns `Base.Vector2d`).
+fn py_vector2d(py: Python<'_>, value: (f64, f64)) -> PyResult<PyObject> {
+    let module = py.import("ferrocad")?;
+    Ok(module.getattr("Vector2d")?.call1(value)?.unbind())
 }
 
 fn shape_from_curve(curve: &EdgeCurve) -> PyResult<Shape> {
@@ -324,6 +350,80 @@ impl PyPlane {
     }
 }
 
+/// `Part.Cylinder(radius=1.0, center=None, axis=None)` — an infinite cylindrical
+/// **surface** (upstream's `Part::GeomCylinder`), not the document primitive that
+/// `Part.makeCylinder` returns.
+///
+/// This slice carries only the elementary description upstream's Python surface
+/// exposes: `Radius`, `Center` and `Axis`. Upstream builds the default from an
+/// empty `gp_Cylinder` (center at the origin, axis `+Z`, radius 1); the `radius` /
+/// `center` / `axis` keywords are our extension — upstream only accepts another
+/// `Cylinder`, a `Circle`, or three points.
+///
+/// The object is accepted by [`PyLine2dSegment::toShape`] as the `surface`
+/// argument. It answers no shape queries (`Faces`, `Edges`, …): no B-Rep geometry
+/// is faked here.
+#[pyclass(name = "Cylinder", module = "Part")]
+#[derive(Clone)]
+pub struct PyCylinder {
+    radius: f64,
+    center: Vector3,
+    /// The unit axis direction (upstream's `Axis` on the surface is a direction).
+    axis: Vector3,
+}
+
+#[pymethods]
+impl PyCylinder {
+    #[new]
+    #[pyo3(signature = (radius = 1.0, center = None, axis = None))]
+    fn new(
+        radius: f64,
+        center: Option<&Bound<'_, PyAny>>,
+        axis: Option<&Bound<'_, PyAny>>,
+    ) -> PyResult<Self> {
+        if !(radius > 0.0) {
+            return Err(OCCError::new_err("Part.Cylinder needs a positive radius"));
+        }
+        let center = center.map(vector).transpose()?.unwrap_or_else(Vector3::zero);
+        let axis = axis
+            .map(vector)
+            .transpose()?
+            .unwrap_or_else(|| Vector3::new(0.0, 0.0, 1.0));
+        if axis.is_null() {
+            return Err(OCCError::new_err("Part.Cylinder needs a non-zero axis"));
+        }
+        Ok(Self {
+            radius,
+            center,
+            axis: axis.normalize(),
+        })
+    }
+
+    #[getter]
+    fn Radius(&self) -> f64 {
+        self.radius
+    }
+
+    /// The axis point (upstream's `Cylinder.Center`).
+    #[getter]
+    fn Center(&self, py: Python<'_>) -> PyResult<PyObject> {
+        py_vector(py, self.center)
+    }
+
+    /// The unit axis direction (upstream's `Cylinder.Axis`).
+    #[getter]
+    fn Axis(&self, py: Python<'_>) -> PyResult<PyObject> {
+        py_vector(py, self.axis)
+    }
+
+    fn __repr__(&self) -> String {
+        format!(
+            "Part.Cylinder({}, {:?}, {:?})",
+            self.radius, self.center, self.axis
+        )
+    }
+}
+
 /// The backing surface of a face (`Face.Surface`). Only `TypeId` is carried in
 /// this slice; geometry-specific properties come later.
 #[pyclass(name = "GeomSurface", module = "Part")]
@@ -487,6 +587,147 @@ impl PyBSplineCurve {
 }
 
 // ---------------------------------------------------------------------------
+// 2D geometry (Part.Geom2d)
+// ---------------------------------------------------------------------------
+
+/// `Part.Geom2d.Line2dSegment(p1, p2)` — a bounded line segment in 2D parameter
+/// space (upstream's `Part::Geom2dLineSegment`).
+///
+/// Points are `(u, v)` pairs or objects with `x`/`y` (`FreeCAD.Base.Vector2d`).
+#[pyclass(name = "Line2dSegment", module = "Part.Geom2d")]
+#[derive(Clone, Copy)]
+pub struct PyLine2dSegment {
+    start: (f64, f64),
+    end: (f64, f64),
+}
+
+#[pymethods]
+impl PyLine2dSegment {
+    #[new]
+    fn new(start: &Bound<'_, PyAny>, end: &Bound<'_, PyAny>) -> PyResult<Self> {
+        let start = vector2d(start)?;
+        let end = vector2d(end)?;
+        if start == end {
+            return Err(OCCError::new_err(
+                "Part.Geom2d.Line2dSegment needs two distinct points",
+            ));
+        }
+        Ok(Self { start, end })
+    }
+
+    #[getter]
+    fn StartPoint(&self, py: Python<'_>) -> PyResult<PyObject> {
+        py_vector2d(py, self.start)
+    }
+
+    #[getter]
+    fn EndPoint(&self, py: Python<'_>) -> PyResult<PyObject> {
+        py_vector2d(py, self.end)
+    }
+
+    /// The segment as a `Part.Edge`.
+    ///
+    /// Without `surface` this is a real 3D edge in the XY plane: the 2D segment is
+    /// lifted to `(u, v, 0)` and built through the kernel's `make_edge`, and the
+    /// 2D segment is attached as the edge's pcurve (upstream builds a 2D-only edge
+    /// here instead).
+    ///
+    /// With `surface` the same edge is returned, with the same pcurve attached.
+    /// **The curve is not projected onto the surface in this slice** — there is no
+    /// `GeomProjLib` binding, so on a `Part.Cylinder` the coordinates are not
+    /// wrapped around the axis; passing the surface only validates its type and
+    /// records the association the caller asked for. `curveOnSurface(0)` reports
+    /// the 2D segment in both forms.
+    #[pyo3(signature = (surface = None))]
+    fn toShape(
+        &self,
+        py: Python<'_>,
+        surface: Option<&Bound<'_, PyAny>>,
+    ) -> PyResult<Py<PyEdge>> {
+        if let Some(surface) = surface {
+            require_surface(surface)?;
+        }
+        let segment = LineSegment::new(
+            Vector3::new(self.start.0, self.start.1, 0.0),
+            Vector3::new(self.end.0, self.end.1, 0.0),
+        )
+        .map_err(curve_error)?;
+        let curve = EdgeCurve::LineSegment(segment);
+        let entry = EdgeEntry {
+            shape: shape_from_curve(&curve)?,
+            curve: Some(curve),
+        };
+        Ok(Py::new(
+            py,
+            PyEdge::from_entry_with_curve2d(entry, Curve2d::LineSegment(*self)),
+        )?)
+    }
+
+    fn __repr__(&self) -> String {
+        format!(
+            "Part.Geom2d.Line2dSegment({:?}, {:?})",
+            self.start, self.end
+        )
+    }
+}
+
+/// A 2D curve (pcurve) attached to an edge. Only the segment exists in this
+/// slice.
+#[derive(Clone, Copy)]
+pub(crate) enum Curve2d {
+    LineSegment(PyLine2dSegment),
+}
+
+/// `Part.Geom2d.BSplineCurve2d()` — upstream's 2D B-spline curve.
+///
+/// The class exists so callers can feature-detect it, but no 2D B-spline kernel is
+/// bound in this slice: `insertKnot` always fails. The four-argument call
+/// upstream's `Geom2d_tests` uses (`insertKnot(0.5, 1, 0.01, 2)`) is rejected by
+/// the signature itself as a `TypeError`, just as upstream's
+/// `PyArg_ParseTuple("d|id", …)` rejects the extra argument; a well-formed call
+/// raises `Part.OCCError` rather than silently doing nothing.
+#[pyclass(name = "BSplineCurve2d", module = "Part.Geom2d")]
+#[derive(Clone, Copy)]
+pub struct PyBSplineCurve2d;
+
+#[pymethods]
+impl PyBSplineCurve2d {
+    #[new]
+    fn new() -> Self {
+        Self
+    }
+
+    #[pyo3(signature = (u, mult = 1, tol = 0.0))]
+    fn insertKnot(&self, u: f64, mult: i32, tol: f64) -> PyResult<()> {
+        let _ = (u, mult, tol);
+        Err(OCCError::new_err(
+            "Part.Geom2d.BSplineCurve2d.insertKnot is not implemented \
+             (this slice binds no 2D B-spline kernel)",
+        ))
+    }
+
+    fn __repr__(&self) -> String {
+        "Part.Geom2d.BSplineCurve2d()".to_string()
+    }
+}
+
+/// Reject anything that is not a surface this slice models.
+///
+/// The surface is not used yet (no projection exists), so this is a type check:
+/// it keeps a bogus `toShape(42)` a `TypeError` instead of a silent success.
+fn require_surface(value: &Bound<'_, PyAny>) -> PyResult<()> {
+    if value.downcast::<PyCylinder>().is_ok()
+        || value.downcast::<PyPlane>().is_ok()
+        || value.downcast::<PySurface>().is_ok()
+    {
+        return Ok(());
+    }
+    Err(PyTypeError::new_err(
+        "toShape(surface) expects a Part surface (Part.Cylinder or Part.Plane)",
+    ))
+}
+
+// ---------------------------------------------------------------------------
 // Edges and wires
 // ---------------------------------------------------------------------------
 
@@ -502,18 +743,33 @@ pub(crate) struct EdgeEntry {
 #[pyclass(name = "Edge", module = "Part", extends = PartShape)]
 pub struct PyEdge {
     entry: Mutex<EdgeEntry>,
+    /// The 2D curve this edge was built with, reported by `curveOnSurface`.
+    /// Kept beside the entry because `EdgeEntry` is also built by the shape layer
+    /// (`Edges`/`getSubShape`), which never has a pcurve to supply.
+    curve2d: Mutex<Option<Curve2d>>,
 }
 
 impl PyEdge {
     fn initializer(entry: EdgeEntry) -> PyClassInitializer<Self> {
-        PyClassInitializer::from(PartShape::from_shape(entry.shape.clone()))
-            .add_subclass(Self {
-                entry: Mutex::new(entry),
-            })
+        PyClassInitializer::from(PartShape::from_shape(entry.shape.clone())).add_subclass(Self {
+            entry: Mutex::new(entry),
+            curve2d: Mutex::new(None),
+        })
     }
 
     pub(crate) fn from_entry(entry: EdgeEntry) -> PyClassInitializer<Self> {
         Self::initializer(entry)
+    }
+
+    /// An edge built from a 2D curve, with that curve attached as its pcurve.
+    pub(crate) fn from_entry_with_curve2d(
+        entry: EdgeEntry,
+        curve2d: Curve2d,
+    ) -> PyClassInitializer<Self> {
+        PyClassInitializer::from(PartShape::from_shape(entry.shape.clone())).add_subclass(Self {
+            entry: Mutex::new(entry),
+            curve2d: Mutex::new(Some(curve2d)),
+        })
     }
 
     /// A copy of the entry (the shape handle is cheap to clone).
@@ -602,6 +858,33 @@ impl PyEdge {
     /// The edge as a kernel shape.
     fn toShape(&self) -> PartShape {
         PartShape::from_shape(self.entry().shape)
+    }
+
+    /// The 2D curve (pcurve) attached to this edge, or `None`.
+    ///
+    /// This slice builds at most one pcurve (`index == 0`, and only for edges made
+    /// by `Part.Geom2d` curves); every other index, and every edge lifted from a
+    /// B-Rep shape, returns `None`. `orientation` is accepted for signature
+    /// compatibility and ignored.
+    ///
+    /// Upstream returns a `(curve, surface, placement, first, last)` tuple here;
+    /// only the 2D curve is carried, so this slice returns the curve itself.
+    #[pyo3(signature = (index, orientation = 0))]
+    fn curveOnSurface(
+        &self,
+        py: Python<'_>,
+        index: i32,
+        orientation: i32,
+    ) -> PyResult<Option<PyObject>> {
+        let _ = orientation;
+        if index != 0 {
+            return Ok(None);
+        }
+        let curve2d = *self.curve2d.lock().unwrap_or_else(|e| e.into_inner());
+        Ok(match curve2d {
+            Some(Curve2d::LineSegment(segment)) => Some(Py::new(py, segment)?.into_any()),
+            None => None,
+        })
     }
 
     fn isNull(&self) -> bool {
@@ -1101,6 +1384,7 @@ pub(crate) fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyCircle>()?;
     m.add_class::<PyArcOfCircle>()?;
     m.add_class::<PyPlane>()?;
+    m.add_class::<PyCylinder>()?;
     m.add_class::<PyEdge>()?;
     m.add_class::<PyWire>()?;
     m.add_class::<PyVertex>()?;
@@ -1111,6 +1395,12 @@ pub(crate) fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(makePolygon, m)?)?;
     m.add_function(wrap_pyfunction!(makeFace, m)?)?;
     m.add("OCCError", m.py().get_type::<OCCError>())?;
+    // `Part.Geom2d` is a submodule, as upstream (the classes live there rather
+    // than directly on `Part`).
+    let geom2d = PyModule::new(m.py(), "Part.Geom2d")?;
+    geom2d.add_class::<PyLine2dSegment>()?;
+    geom2d.add_class::<PyBSplineCurve2d>()?;
+    m.add("Geom2d", &geom2d)?;
     // Upstream offers both names for the same class.
     let arc = m.getattr("ArcOfCircle")?;
     m.add("Arc", arc)?;

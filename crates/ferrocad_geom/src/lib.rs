@@ -9,15 +9,19 @@
 //! - [`Shape`] — an opaque, cheap-to-clone handle to a kernel shape. The kernel owns
 //!   the data; Rust owns the handle.
 //! - [`History`], [`ElementRef`] and [`ElementMap`] — what an operation did, in the
-//!   kernel's own terms, and the stable-name registry derived from it.
+//!   kernel's own terms, and the stable-name registry derived from it. These are
+//!   re-exports of the payload-generic vocabulary in [`ferrocad_lineage`],
+//!   specialised to [`Shape`].
 //! - [`Tessellation`], [`ElementKind`] and [`SelectionRef`] — the display mesh with
 //!   per-primitive sub-element ids, and the neutral vocabulary a viewport or a
 //!   workbench needs to turn a pick into a topology reference.
 //! - [`tangent_chain`] — the smooth edge chain a fillet or chamfer applies to.
 //! - [`GeometryBackend`] — the trait a kernel implements (OCCT, or [`NullBackend`]).
 //!
-//! This crate depends on [`ferrocad_types`] for values such as [`Placement`], and on
-//! nothing else. It is the boundary OCCT must sit *behind*: no crate below the
+//! This crate depends on [`ferrocad_types`] for values such as [`Placement`], on
+//! [`ferrocad_curves`] for edge curves, and on [`ferrocad_lineage`] for the
+//! provenance vocabulary, and on nothing else. It is the boundary OCCT must sit
+//! *behind*: no crate below the
 //! application depends on the kernel, and `ferrocad_core` stays a leaf (see
 //! `docs/architecture/occt-integration.md`).
 //!
@@ -147,104 +151,28 @@ impl Eq for Shape {}
 
 /// A reference to one sub-element of a shape (a face, an edge, …), by a stable
 /// name rather than a positional index.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ElementRef {
-    /// The sub-shape itself.
-    pub shape: Shape,
-    /// Its stable name (e.g. `Face6`, or an encoded lineage token).
-    pub name: String,
-}
+///
+/// This is [`ferrocad_lineage::ElementRef`] with [`Shape`] as its payload; the
+/// vocabulary itself lives in `ferrocad_lineage`, which never names a geometry
+/// type. All fields and methods are those of the generic type.
+pub type ElementRef = ferrocad_lineage::ElementRef<Shape>;
 
 /// What one operation did to its inputs, in the kernel's own terms.
 ///
 /// This is the raw material for the element map: a mapper folds it into stable names.
 /// The kernel reports exactly what it knows; the mapper can be no better than this.
-#[derive(Debug, Clone, Default, PartialEq)]
-pub struct History {
-    /// `(input, output)` pairs the operation created.
-    pub generated: Vec<(ElementRef, ElementRef)>,
-    /// `(input, output)` pairs the operation changed.
-    pub modified: Vec<(ElementRef, ElementRef)>,
-    /// Inputs that do not survive into the output.
-    pub deleted: Vec<ElementRef>,
-}
-
-impl History {
-    /// An operation that reports no lineage (e.g. the null backend).
-    pub fn is_empty(&self) -> bool {
-        self.generated.is_empty() && self.modified.is_empty() && self.deleted.is_empty()
-    }
-}
+///
+/// This is [`ferrocad_lineage::History`] with [`Shape`] as its payload.
+pub type History = ferrocad_lineage::History<Shape>;
 
 /// The stable-name registry carried with a shape: `name -> current sub-shape`.
 ///
 /// It is a cache and a persistence format, not the identity itself; names should be
 /// re-derivable from [`History`] where possible, which is what lets old documents be
 /// migrated after a rebuild.
-#[derive(Debug, Clone, Default, PartialEq)]
-pub struct ElementMap {
-    entries: BTreeMap<String, Shape>,
-}
-
-impl ElementMap {
-    pub fn new() -> Self {
-        Self::default()
-    }
-
-    /// Record the current sub-shape for `name`.
-    pub fn insert(&mut self, name: impl Into<String>, shape: Shape) {
-        self.entries.insert(name.into(), shape);
-    }
-
-    /// The current sub-shape for `name`, if the name still resolves.
-    pub fn get(&self, name: &str) -> Option<&Shape> {
-        self.entries.get(name)
-    }
-
-    pub fn len(&self) -> usize {
-        self.entries.len()
-    }
-
-    pub fn is_empty(&self) -> bool {
-        self.entries.is_empty()
-    }
-
-    /// Iterate `(name, shape)` in name order.
-    pub fn iter(&self) -> impl Iterator<Item = (&str, &Shape)> {
-        self.entries.iter().map(|(k, v)| (k.as_str(), v))
-    }
-
-    /// Fold an operation's [`History`] into the map.
-    ///
-    /// Each `generated`/`modified` input name comes to mean its output sub-shape, so a
-    /// reference recorded before the operation still resolves after the rebuild. When
-    /// one input maps to several outputs, the **first** output wins: a single name
-    /// cannot denote a set, and composing names (`Face6a`, `Face6b`) is the mapper's
-    /// job (see `docs/architecture/geometry-and-topology.md` §9). An input the operation deleted is
-    /// removed, so a stale reference fails to resolve instead of pointing at geometry
-    /// that is no longer there.
-    ///
-    /// Input names are the names the history was built with. With positional names
-    /// that is the input shape's own ordinal; a lineage-derived naming scheme can feed
-    /// the same method with better names later.
-    pub fn apply(&mut self, history: &History) {
-        for (input, output) in history.modified.iter().chain(&history.generated) {
-            self.entries
-                .entry(input.name.clone())
-                .or_insert_with(|| output.shape.clone());
-        }
-        for deleted in &history.deleted {
-            self.entries.remove(&deleted.name);
-        }
-    }
-
-    /// A map seeded from one operation's history.
-    pub fn from_history(history: &History) -> Self {
-        let mut map = Self::new();
-        map.apply(history);
-        map
-    }
-}
+///
+/// This is [`ferrocad_lineage::ElementMap`] with [`Shape`] as its payload.
+pub type ElementMap = ferrocad_lineage::ElementMap<Shape>;
 
 // ---------------------------------------------------------------------------
 // Topology and selection vocabulary

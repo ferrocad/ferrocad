@@ -11,6 +11,7 @@ members = [
     "crates/ferrocad_types",
     "crates/ferrocad_curves",
     "crates/ferrocad_core",
+    "crates/ferrocad_lineage",
     "crates/ferrocad_geom",
     "crates/ferrocad_occt",
     "crates/ferrocad_part",

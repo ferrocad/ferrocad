@@ -94,8 +94,10 @@ A drop-in, Rust-backed stand-in for FreeCAD's Python ``App`` module.
 | enforceRecompute() | — |
 | evalExpression(source) | Evaluate an expression source in this object's context. |
 | getDocumentationOfProperty(name) | `getDocumentationOfProperty`: the property's documentation string. |
+| getElementIndex(name) | `getElementIndex(name)`: the index in an element reference. |
 | getEnumerationsOfProperty(name) | `getEnumerationsOfProperty`: an enumeration's allowed values, else `None`. |
 | getGroupOfProperty(name) | `getGroupOfProperty`: the UI group the property belongs to. |
+| getLinkedObject(resolve=True) | `getLinkedObject(resolve=True)`: the object a link points at. |
 | getObject(name) | — |
 | getParent() | `getParent()`: the geo-feature group (`App::Part`) this object belongs to. |
 | getParentGeoFeatureGroup() | The geo-feature group (`App::Part`) that lists this object. |
@@ -103,12 +105,13 @@ A drop-in, Rust-backed stand-in for FreeCAD's Python ``App`` module.
 | getPropertyByName(name) | — |
 | getPropertyStatus(name='') | `getPropertyStatus(name="")`: with no name, the supported status names. |
 | getStatusString() | A short status string: `Invalid`, `Touched` or `Valid`. |
-| getSubObject(subname, retType=0, matrix=None, transform=True, depth=0) | Resolve sub-object(s) and return them per FreeCAD's `retType` convention: 1 → DocumentObject, 2 → (obj, Matrix, proxy), 3 → Placement, 4 → Matrix. |
+| getSubObject(subname, retType=0, matrix=None, transform=True, depth=0) | Resolve sub-object(s) and return them per FreeCAD's `retType` convention: 0 and 1 → DocumentObject, 2 → `(obj, Matrix, None)`, 3 → Placement, 4 → Matrix. |
 | getTypeIdOfProperty(name) | — |
 | getTypeOfProperty(name) | `getTypeOfProperty`: the property's status flags as text names. |
 | group_members() | Resolve this object's `Group` link list into `DocumentObject`s. |
 | hasExtension(name) | — |
 | hasObject(other) | — |
+| isLink() | `isLink()`: true for `App::Link` and its registered containers, and for the `Part::LinkArray*` types. |
 | purgeTouched() | Mark the object as unchanged (FreeCAD `purgeTouched`). |
 | recompute() | Recompute this object (FreeCAD `DocumentObject.recompute`). |
 | removeExtension(name) | — |

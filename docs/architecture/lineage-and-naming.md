@@ -1,7 +1,8 @@
 # Lineage and naming: a layer, not a geometry kernel
 
 Status: design (2026-10-23). Refines [`geometry-and-topology.md`](geometry-and-topology.md) §1 and §4.
-Companion to [`occt-history-spike.md`](occt-history-spike.md), [`occt-integration.md`](occt-integration.md),
+The first migration step (S1) landed 2026-10-23: the vocabulary now lives in
+`ferrocad_lineage`. Companion to [`occt-history-spike.md`](occt-history-spike.md), [`occt-integration.md`](occt-integration.md),
 [`part-draft-layering.md`](part-draft-layering.md), [`architecture.md`](../architecture.md) §6,
 [`conformance.md`](../workbenches/conformance.md),
 [`spikes/occt-history-rs/README.md`](../../spikes/occt-history-rs/README.md), and
@@ -24,7 +25,7 @@ geometry. Nothing here was implemented; no code was changed and no tests were ru
 | Concern | Question | Nodes / edges | Owner | Status |
 | --- | --- | --- | --- | --- |
 | Object-graph sort | In what order do features execute? | Document objects / links, expressions | `ferrocad_core` | **Built** (`recompute_order`) |
-| Sub-shape lineage | Which face/edge does a stored name mean after a rebuild? | Elements / provenance relations | **proposal:** `ferrocad_lineage` | **Partial**: types exist, nothing consumes them |
+| Sub-shape lineage | Which face/edge does a stored name mean after a rebuild? | Elements / provenance relations | **proposal:** `ferrocad_lineage` | **Partial**: S1 moved the vocabulary into `ferrocad_lineage`; nothing consumes it yet |
 | Geometry construction | Inputs + parameters → shape | Solids, surfaces, algorithms | `ferrocad_occt` | **Built** for primitives, booleans, dress-ups |
 
 The earlier note said naming "needs a geometry kernel, OCCT shape history, and a persistent element
@@ -269,7 +270,11 @@ turns the upstream map assertions on; S4 then changes their values.
 | S5 | Resolve stored references through the map first, positional fallback only when no map exists; make `mapSubElement` real. | Behavioural for stale refs | Insert-an-early-face test: preserved or invalid, never moved |
 | S6 | Serialize maps in both formats; `.FCStd` element-map form once §8 is answered. | Format | Round-trip in both encoders; old blob still loads |
 
-S1 is deliberately boring: move types, add a trait. Until S3 the empty-map behaviour (`""`, `0`,
+**S1 landed 2026-10-23**: `crates/ferrocad_lineage` carries the three types with 7
+unit tests (`T = String`), `ferrocad_geom` re-exports them as aliases over `Shape`, and
+no call site or conformance number changed.
+
+S1 was deliberately boring: move types, add a trait. Until S3 the empty-map behaviour (`""`, `0`,
 `<ElementMap/>`) stays exactly as it is — honest about having no map rather than faking a `Face1`
 entry, because a provisional map would stop the guards skipping and start asserting numbers we cannot
 reproduce yet. `docs/architecture.md` §1 and `docs/tasks/p2-architecture.md` call `ferrocad_geom` the

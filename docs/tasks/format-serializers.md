@@ -1,7 +1,8 @@
 # Task — split document persistence into two serializers
 
 Status: task (2026-10-23). Records the owner decision of 2026-10-23: native JSON and
-upstream `.FCStd` become **two explicit, independently testable serializers**. Companion
+upstream `.FCStd` become **two explicit, independently testable serializers**. F1–F3
+landed 2026-10-23; the `.FCStd` writer (F4–F8) is open. Companion
 to [`../architecture/part-draft-layering.md`](../architecture/part-draft-layering.md), the
 [conformance runbook](../workbenches/conformance.md) and
 [`../direction/mvp-path.md`](../direction/mvp-path.md) (§8 decision 3, which this closes).
@@ -206,12 +207,14 @@ to `.ferrocad`. FCStd probes: `ColorPerFaceTest`, `TopoShapeListTest`, `TestLink
 
 ## 6. Checklist (risk order)
 
-- [ ] **1. Dispatch split.** `DocumentFormat`, suffix parsing, native/FCStd dispatch in
-  `openDocument`, `load`, `saveAs`; delete `has_zip_magic`; keep the JSON placeholder for
-  `.FCStd` writes. Tests for every suffix and for refusal. *Lowest risk.*
-- [ ] **2. Native envelope.** `format`/`version` with serde defaults; keep loading bare
-  files; update tests and `examples/file_roundtrip.py`.
-- [ ] **3. Migrate our artefacts** (§4), regenerate the two user pages.
+- [x] **1. Dispatch split.** `DocumentFormat`, suffix parsing, native/FCStd dispatch in
+  `openDocument`, `load`, `saveAs`; `has_zip_magic` is deleted; the named JSON
+  placeholder keeps `.FCStd` writes working. Tests cover every suffix and the
+  refusals. **Landed 2026-10-23.**
+- [x] **2. Native envelope.** `format`/`version` with serde defaults; bare files still
+  load. **Landed 2026-10-23.**
+- [x] **3. Migrate our artefacts** (§4), including regenerating the two user pages.
+  **Landed 2026-10-23.**
 - [ ] **4. Reader gaps needed by the writer:** `PropertyLength`, `PropertyAngle`,
   `PropertyEnumeration`, `PropertyLinkSub`, the expression engine,
   `App::PropertyPythonObject`. Verify with fixtures.

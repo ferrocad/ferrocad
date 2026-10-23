@@ -119,6 +119,7 @@ pub use document::{
     color_from_packed, color_to_packed, sanitize_name, Color, Document, DocumentObject, ObjectId,
     SavedDocument, ViewState,
 };
+pub use document::fcstd;
 pub use extension::{ExtensionData, ExtensionValue};
 pub use geometry::{Matrix4, Placement, Rotation, ScaleType, TypeId, Vector3};
 pub use observer::Observer;

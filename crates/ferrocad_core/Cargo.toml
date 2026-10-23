@@ -17,6 +17,8 @@ name = "ferrocad_core"
 
 [dependencies]
 ferrocad_types.workspace = true
+flate2 = "1"
 petgraph.workspace = true
+roxmltree = "0.21"
 serde.workspace = true
 serde_json.workspace = true

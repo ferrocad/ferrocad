@@ -2273,7 +2273,9 @@ name = "ferrocad_core"
 version = "0.1.2"
 dependencies = [
  "ferrocad_types",
+ "flate2",
  "petgraph",
+ "roxmltree 0.21.1",
  "serde",
  "serde_json",
 ]

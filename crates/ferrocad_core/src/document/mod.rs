@@ -17,6 +17,7 @@ use crate::geometry::{Rotation, Vector3};
 use crate::observer::Observer;
 use crate::property::{prop_status, Property, PropertyContainer};
 
+pub mod fcstd;
 mod transaction;
 mod view;
 

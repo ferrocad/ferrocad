@@ -52,6 +52,7 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, OnceLock};
 
 use ferrocad_core::{application, canonical_name, parse_unit, prop_status, status_from_name, status_names, Document as CoreDocument, ExtensionData, ExtensionValue, Matrix4, ObjectId, Placement, Property, Quantity, Rotation, StringHasher, StringId, TypeId, Unit, Vector3};
+use ferrocad_core::fcstd::read_fcstd;
 use pyo3::exceptions::{
     PyAttributeError, PyIndexError, PyNotImplementedError, PyRuntimeError, PyTypeError, PyValueError,
 };
@@ -3777,6 +3778,11 @@ impl PyRotation {
         PyRotation::fresh(self.inner.multiply(&o.inner), None)
     }
 
+    /// Rotate a vector (FreeCAD `Rotation.multVec`).
+    fn multVec(&self, v: PyRef<'_, PyVector>) -> PyVector {
+        PyVector::fresh(self.inner.to_matrix().transform(&v.inner))
+    }
+
     /// `Rotation * Rotation` composes; `Rotation * Vector` rotates the vector.
     fn __mul__(&self, other: &Bound<'_, PyAny>) -> PyResult<PyObject> {
         if let Ok(rotation) = other.extract::<PyRef<'_, PyRotation>>() {
@@ -4834,9 +4840,30 @@ fn newDocument(py: Python<'_>, name: Option<String>) -> PyResult<Py<PyDocument>>
     Ok(doc)
 }
 
+/// Open a document from disk.
+///
+/// A file whose first bytes are a ZIP signature (`PK\x03\x04`) is an upstream
+/// FreeCAD binary `.FCStd` archive and is read with [`read_fcstd`]. Anything
+/// else is read as FerroCAD's own JSON format.
+///
+/// `hidden` and `readonly` are accepted for compatibility with upstream's
+/// `FreeCAD.openDocument(path, hidden=False, readonly=False)`. They are ignored:
+/// this backend always loads the document fully into memory, and the opened
+/// document becomes active even when `hidden` is true (matching upstream).
 #[pyfunction]
-fn openDocument(py: Python<'_>, path: &str) -> PyResult<Py<PyDocument>> {
-    let saved = CoreDocument::load_from_file(path).map_err(PyValueError::new_err)?;
+#[pyo3(signature = (path, hidden=false, readonly=false))]
+fn openDocument(
+    py: Python<'_>,
+    path: &str,
+    hidden: bool,
+    readonly: bool,
+) -> PyResult<Py<PyDocument>> {
+    let _ = (hidden, readonly);
+    let saved = if has_zip_magic(path).map_err(|e| PyValueError::new_err(e.to_string()))? {
+        read_fcstd(path).map_err(|e| PyValueError::new_err(e.to_string()))?
+    } else {
+        CoreDocument::load_from_file(path).map_err(PyValueError::new_err)?
+    };
     let core_doc = CoreDocument::from_saved(&saved);
     let (doc_name, handle) = application()
         .lock()
@@ -4857,6 +4884,21 @@ fn openDocument(py: Python<'_>, path: &str) -> PyResult<Py<PyDocument>> {
     documents().lock().unwrap().insert(doc_name, doc.clone_ref(py));
     apply_all_python_states(py, &doc, &handle);
     Ok(doc)
+}
+
+/// True when `path` starts with a ZIP local-file-header or end-of-central-directory
+/// signature. FerroCAD's own documents are JSON even when named `.FCStd`, so the
+/// content signature decides which reader to use.
+fn has_zip_magic(path: &str) -> std::io::Result<bool> {
+    use std::io::Read;
+
+    let mut magic = [0u8; 4];
+    let mut file = std::fs::File::open(path)?;
+    let read = file.read(&mut magic)?;
+    Ok(matches!(
+        &magic[..read],
+        [0x50, 0x4b, 0x03, 0x04] | [0x50, 0x4b, 0x05, 0x06] | [0x50, 0x4b, 0x07, 0x08]
+    ))
 }
 
 /// The registered Python wrapper for an open document, if any.

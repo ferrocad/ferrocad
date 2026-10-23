@@ -142,6 +142,7 @@ An in-memory stand-in for ``Base.ParameterGrp`` (typed, nested groups).
 | GetString(name, default='') | — |
 | GetStrings() | Names with a string value in this group (FreeCAD returns names). |
 | GetUnsigned(name, default=0) | — |
+| GetUnsigneds() | Names with an unsigned value in this group (FreeCAD returns names). |
 | HasGroup(name) | — |
 | Import(path) | — |
 | RemBool(name) | — |

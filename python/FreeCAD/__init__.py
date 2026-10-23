@@ -552,6 +552,10 @@ class ParameterGrp:
         value = self._get(name, "int", None)
         return default if value is None else int(value) & 0xFFFFFFFF
 
+    def GetUnsigneds(self):
+        """Names with an unsigned value in this group (FreeCAD returns names)."""
+        return self._names("int")
+
     def SetUnsigned(self, name, value):
         self._set(name, "int", int(value) & 0xFFFFFFFF)
 

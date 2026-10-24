@@ -19,8 +19,14 @@
 //! module is initialised) the object is left **invalid** rather than silently
 //! succeeding: a proxy-driven feature that never ran has no output.
 //!
-//! Attachment (`AttachmentSupport`/`MapMode`) is a later slice; these types are
-//! registered with the same property set as `Part::Feature` for now.
+//! `Part::Part2DObjectPython` also carries the attachment property set
+//! (`AttachmentSupport`, `MapMode`, `MapPathParameter`, `AttachmentOffset`) and an
+//! `AttacherType`; `App::FeaturePython` receives the same set only after
+//! `addExtension("Part::AttachExtensionPython")`. The attach-engine subset lives in
+//! [`attach`].
+
+#[path = "attach.rs"]
+pub mod attach;
 
 use std::sync::Arc;
 
@@ -50,19 +56,53 @@ fn feature_properties() -> Vec<(String, Property, u32)> {
 }
 
 /// The shared behaviour of both types: they differ only in the base class a
-/// proxy can detect via `isDerivedFrom`.
-struct FeaturePython;
+/// proxy can detect via `isDerivedFrom` and in whether the attachment properties
+/// are static (`Part::Part2DObjectPython`) or added by `addExtension`.
+struct FeaturePython {
+    /// Whether the attachment property set is part of the type's defaults.
+    attached: bool,
+}
 
 impl ObjectType for FeaturePython {
     fn default_properties(&self) -> Vec<(String, Property, u32)> {
-        feature_properties()
+        let mut properties = feature_properties();
+        if self.attached {
+            properties.extend(attach::attachment_properties(attach::ATTACHER_PLANE));
+        }
+        properties
     }
 
     fn property_meta(&self, name: &str) -> Option<(String, String)> {
+        if matches!(
+            name,
+            "AttachmentSupport"
+                | "MapMode"
+                | "MapPathParameter"
+                | "AttachmentOffset"
+                | "AttacherType"
+        ) {
+            return Some(("Attachment".to_string(), format!("Attachment {name}")));
+        }
         Some(("Base".to_string(), format!("Part feature {name}")))
     }
 
     fn execute(&self, doc: &mut Document, id: ObjectId) {
+        // `Part::Part2DObject` carries `Part::AttachExtension` statically upstream.
+        // Recording the base extension here gives the object its
+        // `changeAttacherType`/`positionBySupport` methods (looked up through the
+        // extension set) and makes `hasExtension` answer for it.
+        if self.attached {
+            doc.add_extension(id, attach::BASE_EXTENSION);
+        }
+        // The attachment runs before the proxy, as upstream's extension execute
+        // does. A mode whose support is missing or unusable makes the object
+        // invalid instead of leaving it at a stale placement.
+        if attach::has_attachment(doc, id) {
+            if let Err(reason) = attach::position_by_support(doc, id) {
+                doc.mark_invalid_with(id, reason);
+                return;
+            }
+        }
         if !object_registry::python_executor_available() {
             doc.mark_invalid_with(
                 id,
@@ -84,6 +124,13 @@ impl ObjectType for FeaturePython {
 /// The caller (`Part` module initialisation) has already composed the kernel, so
 /// `Part::PropertyPartShape` exists and a default `Shape` value can be built.
 pub fn register() {
-    object_registry::register(FEATURE_PYTHON_TYPE, Arc::new(FeaturePython));
-    object_registry::register(PART2D_PYTHON_TYPE, Arc::new(FeaturePython));
+    object_registry::register(
+        FEATURE_PYTHON_TYPE,
+        Arc::new(FeaturePython { attached: false }),
+    );
+    object_registry::register(
+        PART2D_PYTHON_TYPE,
+        Arc::new(FeaturePython { attached: true }),
+    );
+    attach::register();
 }

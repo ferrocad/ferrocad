@@ -1,6 +1,6 @@
 # Links: `App::Link`, link arrays, and their interlocks
 
-Status: task (2026-10-23). L0–L3 landed 2026-10-23; L4+ remain. Records the owner
+Status: task (2026-10-23). L0–L4 landed 2026-10-23; L5 remains. Records the owner
 decision of 2026-10-23 that the remaining
 `Part` gaps are **TNP / Links / FCStd**, and that they are one problem seen from three
 sides. Companion to [`../architecture/lineage-and-naming.md`](../architecture/lineage-and-naming.md)
@@ -24,17 +24,17 @@ element set, and none of the transform.
 
 | Surface | Upstream contract | FerroCAD today (**verified**) |
 | --- | --- | --- |
-| `App::Link` | A document object that references one object, with `Placement`/`LinkPlacement`, `Scale`/`ScaleVector`, `LinkTransform`, `LinkMode`, `LinkCopyOnChange`, and an element list ([`occt-history-spike.md`](../architecture/occt-history-spike.md) §6) | **L0–L2.** Full property base plus a Part-side `ObjectType` whose `execute` transforms the target's `Shape`. Element expansion, `LinkMode` and copy-on-change are stored but inert. |
+| `App::Link` | A document object that references one object, with `Placement`/`LinkPlacement`, `Scale`/`ScaleVector`, `LinkTransform`, `LinkMode`, `LinkCopyOnChange`, and an element list ([`occt-history-spike.md`](../architecture/occt-history-spike.md) §6) | **L0–L4.** Full property base, a Part-side `execute`, real elements, containers and non-uniform scale. `LinkMode`/`LinkCopyOnChange` are stored but inert. |
 | `LinkedObject` | `App::PropertyLink` (or a link-sub) to one object | **Implemented** as `Property::Link`; attribute get/set resolves the target (`lib.rs:2651-2663`, `2745`). |
 | `setLink(obj, subname=None)` | Sets the link and narrows it to sub-elements | **Implemented.** Writes `LinkedObject` and, with `subname`, a `Property::LinkSub`. The shared link table accepts `App::Link*` and `Part::LinkArray*`. |
 | `getLinkedObject(resolve=…)` | Returns the true target, following link chains | **Implemented** (L0): `resolve=False` returns the immediate target, `resolve=True` follows chains with a cycle guard. |
 | `isLink()` | True for `App::Link` and every subclass | **Implemented** (L0), using the same table that also treats `Part::LinkArray*` as links. |
 | `getSubObject(subname, …)` | Walks `Obj.Sub.Sub` paths, links and element lists; `retType` selects object/matrix/placement | **Implemented** (L0): dotted paths, `ElementList` children, `Group` members and `LinkedObject` hops. `retType` 0/1 → object, 2 → `(obj, Matrix, None)`, 3 → Placement, 4 → Matrix. |
 | `getElementIndex` | Splits `Array.Element3` and reports the index | **Implemented** (L0): `Element3`, `Array.Element3`, `Array_Element3` and `3.` → 3; else -1. |
-| `Placement`, `LinkPlacement`, `Scale`, `ScaleVector`, `LinkTransform`, `LinkMode` | Transform semantics; a link's placement composes with the target's | **L2.** The link's `Placement` (or `LinkPlacement` when `LinkTransform` is true) and a uniform scale are applied. Non-uniform `ScaleVector` is deferred. |
-| `LinkCopyOnChange` | An enum selecting copy-on-change, with a shadow `LinkCopyOnChangeGroup` (values **unverified**) | **Missing**. No clone/copy machinery exists to make it meaningful. |
+| `Placement`, `LinkPlacement`, `Scale`, `ScaleVector`, `LinkTransform`, `LinkMode` | Transform semantics; a link's placement composes with the target's | **L2/L4.** The link's `Placement` (or `LinkPlacement` when `LinkTransform` is true) and a uniform scale apply; a non-uniform `ScaleVector` uses the general affine transform. |
+| `LinkCopyOnChange` | An enum selecting copy-on-change, with a shadow `LinkCopyOnChangeGroup` (values **unverified**) | **Stored, inert**: there is still no object clone/copy facility, so no copy semantics are invented. |
 | `App::LinkElement` | The generated child of an expanded link | **Implemented** (L3): `App::LinkElement` carries a placement and a composed `Shape`, participates in `ElementList`, and `Part::LinkArrayElement` stays registered as an alias for old files. |
-| `App::LinkGroup`, `App::LinkList` | Link containers (a link to many objects, with element expansion) | **Missing** as object types. The *property* types `PropertyLinkList` exist. |
+| `App::LinkGroup`, `App::LinkList` | Link containers (a link to many objects, with element expansion) | **Implemented** (L4): both are registered; `ElementList`/`ElementCount` follow their membership, element indices resolve to members, and `Shape` is the transformed compound. |
 | `Part::LinkArray{Point,Linear,Path,Circular}` | `App::Link` subclasses whose `execute` fills `PlacementList`/`ElementList` (`LinkArray.h`: `public App::Link`) | **Implemented as peers, not subclasses** (`link_array.rs:1-12`). Placements, element suppression and save/restore mostly work; the shared element sync now creates real `App::LinkElement` children. |
 | `Part::LinkArrayPolar`, `Part::Part2DObject` | Supporting types the circular tests construct | **Implemented minimally** as test fixtures (`link_array.rs:1425-1475`, `1568-1584`). |
 | `ShowElement`, `ElementCount`, `PlacementList`, `ElementList` | Link output properties | **L3.** `ShowElement=true` creates one `App::LinkElement` per placement (with a shape and placement) and lists it in `ElementList`; collapsing removes the children and writes `PlacementList` plus the whole shape. |
@@ -166,10 +166,10 @@ not fake sub-element resolution before the map exists.
 | **L5** | Sub-element resolution | Resolve `LinkSub`, link subnames and element sub-paths through `ferrocad_lineage` first, positional fallback only when no map exists; invalidate rather than retarget when the name is retired; record the map version on the reference | Behavioural for stale refs | **`ferrocad_lineage` S1–S5** |
 
 L0–L2 are the non-breaking envelope: new methods, properties and an execute path without
-changing stored references. **L0–L2 landed 2026-10-23**; **L3 landed the same day**: the
-link and the arrays now generate real `App::LinkElement` children and collapse them
-reversibly. L4 is the first slice that needs a copy model. Only L5 is blocked on the
-lineage crate; sub-elements still resolve positionally until S5.
+changing stored references. **L0–L4 landed 2026-10-23**: real `App::LinkElement` children,
+non-uniform scale through a general transform, and the `App::LinkGroup`/`App::LinkList`
+containers. L5 remains: resolve `LinkSub`/element sub-paths through the lineage map at the
+Python layer (the Part-level resolution is S5).
 
 **Where `App::Link` lives is a decision, not a detail.** The defaults are in
 `ferrocad_core`, which cannot construct a shape; the execute needs the kernel. Putting it
@@ -226,11 +226,11 @@ Part-enabled build. Splitting a geometry-free `App::Link` from a Part-side
 
 ## What is not done (2026-10-23)
 
-- **Copy semantics.** `LinkCopyOnChange`, `LinkMode` and `App::LinkGroup`/`LinkList` are
-  inert; non-uniform `ScaleVector` is deferred.
+- **Copy semantics.** `LinkCopyOnChange` and `LinkMode` are stored but inert without an
+  object clone/copy facility; the containers themselves now exist and expand.
 - **No `LinkSubList` value.** It is flattened to `LinkList` at property creation; the
-  `.FCStd` reader now reads link lists/subs but flattens `LinkSubList` the same way.
-- **No lineage-backed resolution.** Every `FaceN`/`EdgeN` is still an ordinal.
+  `.FCStd` reader reads link lists/subs but flattens `LinkSubList` the same way.
+- **No lineage-backed resolution.** Every `FaceN`/`EdgeN` is still an ordinal (L5).
 - **Not indexed.** `docs/README.md` has no entry for this file; this task may not edit it.
 
 Upstream revision: `33adf618dcebfb167795a219175e7dbb18f7a353`.

@@ -1,7 +1,7 @@
 # Qt reduction — taking Qt out of the paths that do not need it
 
-Status: task (2026-10-23). Q0a, Q0b, Q0d, Q1 and Q2a landed 2026-10-23; Q2b–Q5 remain.
-Backlog entry **P2.3** in
+Status: task (2026-10-23). Q0a, Q0b, Q0d, Q1, Q2a and Q2b landed 2026-10-23; Q3–Q5
+remain. Backlog entry **P2.3** in
 [`TODO-23-10-2026.md`](../TODO-23-10-2026.md). Companion to
 [`qt-strategy.md`](../workbenches/qt-strategy.md) (§2–§7 remain the design; this is
 the execution plan), [`python-ui-research.md`](../interaction/python-ui-research.md),
@@ -148,7 +148,7 @@ split so the smallest Qt removal lands first, before any loader work.
 | **Q0d** | Landed 2026-10-23 | `tools/draft_contract.py` + `contracts/draft-forms.json`: 19 files, 32 classes, 495 widgets and 72 contract pairs pinned; `--check` reports a delta. |
 | **Q1** | Landed 2026-10-23 | `ferrocad_ui` parses all 19 `.ui` files into a typed form tree (widgets, layouts, properties, spacers, custom widgets, combo items, tab pages) with source-positioned errors; no rendering. Tests pin 495 widgets and 32 classes. |
 | **Q2a** | Landed 2026-10-23 | `ferrocad_ui_py`: `FreeCADGui.PySideUic.loadUi`, `FormProxy`/`WidgetProxy`/`SignalProxy` over `ferrocad_ui`; the six core forms load headlessly without Qt. |
-| **Q2b** | Not started | Layout mutation (`layout`, `addWidget`, `takeAt`), dialog `exec_`/result semantics, combo mutation, form-level accepted/rejected, spin-box clamping. |
+| **Q2b** | Landed 2026-10-23 | Layout add/take, combo mutation, `exec_`/`accept`/`reject` results, dynamic properties, spin clamping and `Gui::FileChooser.fileName`. |
 | **Q3** | Not started | Render the six core forms on `ferrocad_widgets`/gpui; async modal behind `FreeCADGui.Control.showDialog/closeDialog` |
 | **Q4** | Not started | `FreeCADGui.Snapper`/`draftToolBar` over `ferrocad_stage`; `PlaneGui` rerouted; line/wire tools; snap bar as checkable commands |
 | **Q5** | Not started | SetStyle, Hatch, AnnotationStyleEditor, `TaskPanel_Scale.ui`, `Gui::FileChooser`; the Layers dialog and preference pages stay deferred |
@@ -159,10 +159,10 @@ split so the smallest Qt removal lands first, before any loader work.
 `tests/test_qt_isolation.py`. Q1 is in as well: `crates/ferrocad_ui` reads all 19 upstream
 forms (495 widgets, 32 classes) with source positions. Q2a adds `ferrocad_ui_py`, so
 `FreeCADGui.PySideUic.loadUi` returns a proxy tree and the six core forms load with no
-Qt runtime. A fresh process with `PySide6`/`shiboken*` blocked imports `FreeCAD`,
-`FreeCADGui` and `from draftutils import params` (160 `Mod/Draft` entries), and the
-`--draft` group is unchanged at 10 passed / 1 failed / 1 load error. Q2b–Q5 are the
-remaining slices.
+Qt runtime; Q2b adds layout surgery, combo mutation, dialog results and property access.
+A fresh process with `PySide6`/`shiboken*` blocked imports `FreeCAD`, `FreeCADGui` and
+`from draftutils import params` (160 `Mod/Draft` entries), and the `--draft` group is
+unchanged at 10 passed / 1 failed / 1 load error. Q3–Q5 are the remaining slices.
 
 **Recommendation — priority order.** Q0a + Q0b + the §5 guard first: they are small,
 remove the actual runtime dependency, and unlock D2/D3/D6 without a loader. Then Q0d

@@ -1,9 +1,9 @@
 # Task — split document persistence into two serializers
 
 Status: task (2026-10-23). Records the owner decision of 2026-10-23: native JSON and
-upstream `.FCStd` become **two explicit, independently testable serializers**. F1–F7 and
-the read half of F8 (payloads + `GuiDocument.xml`) landed 2026-10-23; the writer is a
-direct-call API and is not yet wired to `saveAs` (F8 switch). Companion
+upstream `.FCStd` become **two explicit, independently testable serializers**. F1–F8
+landed 2026-10-23: `.FCStd` is now the real ZIP container on both read and write.
+Companion
 to [`../architecture/part-draft-layering.md`](../architecture/part-draft-layering.md), the
 [conformance runbook](../workbenches/conformance.md) and
 [`../direction/mvp-path.md`](../direction/mvp-path.md) (§8 decision 3, which this closes).
@@ -39,23 +39,14 @@ case-insensitive; canonical spelling is lowercase `.ferrocad`.
 | `.FCStd` (any case) | ZIP + `Document.xml`; transitional JSON fallback (§1.3) | placeholder JSON now; real ZIP **after** the writer lands | conformance format |
 | none / unknown | `ValueError` naming `.ferrocad`/`.fe2o3` and `.FCStd` | `ValueError` | no silent default; the GUI dialog supplies the suffix |
 
-### 1.3 The transitional rule
+### 1.3 The transitional rule (retired at F8)
 
-Today `saveAs` writes JSON whatever the path says and `openDocument` compensates with a
-content check; **(verified)** `lib.rs:4853-4902`, `has_zip_magic`. Because it applies to
-**every** path, a ZIP named `.ferrocad` is read as FCStd — the silent change this decision
-forbids.
-
-Until `write_fcstd` lands: (1) the `.FCStd` write arm is a named
-`FcstdWriter::JsonPlaceholder` — the suffix chose the backend, which currently emits
-native bytes; (2) the `.FCStd` read arm is ZIP first, then native only for non-ZIP bytes
-carrying the native marker (§1.4), so a malformed ZIP is reported and never retried;
-(3) `.ferrocad` never falls back to FCStd, and an unknown suffix is never guessed.
-
-**The one dishonest case** is `saveAs("x.FCStd")` producing a non-FreeCAD file. It is
-removed by deleting the `JsonPlaceholder` arm at the writer switch (checklist item 8); CI
-then asserts the ZIP magic. The marker-gated read fallback stays read-only and can go
-after one release.
+During F1–F7 `saveAs` wrote JSON whatever the path said and `openDocument` compensated
+with a content check; that phase is over. Since F8 the `.FCStd` write arm emits the real
+ZIP container and `has_zip_magic` is gone. The `.FCStd` **read** arm still accepts a
+marker-gated native file for documents saved during the transition (read-only); it can be
+deleted after one release. `.ferrocad`/`.fe2o3` never fall back to FCStd, and an unknown
+suffix is never guessed.
 
 ### 1.4 Native envelope
 
@@ -191,11 +182,10 @@ entry via `ExtensionData::fcstd_members`). `GuiDocument.xml` carries one view pr
 object with `Visibility`, `Transparency`, `ShapeColor`, `DiffuseColor` (plus the packed
 `DiffuseColorN` members) and `DisplayMode`.
 
-It **errors** on any other extension type (naming the object, property and type), and on
-variants it cannot represent (Matrix, Rotation, ColorList, scalar/vector lists,
-constraints, `PropertyPythonObject`, FileIncluded). `python_state` is FerroCAD's own JSON
-envelope, not an upstream pickle: it is recorded as dropped in the `WriteReport` rather
-than written as `<Python value>`. Thumbnails and `ElementMap` remain follow-ups.
+It **errors** on `Property::FileIncluded` and `Property::PythonObject` (naming the
+object, property and type). `python_state` is FerroCAD's own JSON envelope, not an
+upstream pickle: it is recorded as dropped in the `WriteReport` rather than written as
+`<Python value>`. Thumbnails and `ElementMap` remain follow-ups.
 
 ## 4. Migrating our workflows and docs
 
@@ -256,19 +246,18 @@ to `.ferrocad`. FCStd probes: `ColorPerFaceTest`, `TopoShapeListTest`, `TestLink
 - [x] **7. `GuiDocument.xml`:** `Visibility`, `Transparency`, `ShapeColor`,
   `DiffuseColor`, `DisplayMode`, with the packed `DiffuseColorN` members. **Landed
   2026-10-23.**
-- [ ] **8. Switch.** `saveAs(.FCStd)` emits ZIP; delete `JsonPlaceholder`; add the magic
-  assertion; default, `--part` and `--draft` groups unchanged. *Highest risk.*
+- [x] **8. Switch.** `saveAs(.FCStd)` emits ZIP; the placeholder is gone; the magic and
+  the archive members are asserted. **Landed 2026-10-23.**
 - [ ] **9. Follow-ups.** Thumbnail, `ElementMap`, an upstream-FreeCAD open check.
 
 ## What is not done (2026-10-23)
 
-- **The `.FCStd` writer is a direct-call API, not the save format.** `write_fcstd`
-  writes a full ZIP including `GuiDocument.xml`, but `saveAs(.FCStd)` still emits the
-  JSON placeholder; F8 is the switch. `python_state` is reported as dropped rather than
-  written as an upstream pickle, and a handful of property variants still error by name.
-- **Module-payload read is partial.** `.brp` and shape-list members now restore, but
-  other module-owned types, shape appearance/material and `ElementMap` are skipped, and
-  the reader ignores module-specific payloads it does not recognise.
+- **Module-payload read is partial.** `.brp` and shape-list members restore, but other
+  module-owned types, shape appearance/material and `ElementMap` are skipped, and the
+  reader ignores module-specific payloads it does not recognise.
+- **A few writer values remain lossy.** `Property::FileIncluded` and
+  `Property::PythonObject` error by name; `python_state` is reported as dropped, not
+  written as an upstream pickle; `ElementMap` and thumbnails are follow-ups.
 - **Document metadata is not persisted.** `SavedDocument` has no UID, comment, meta or
   dates; `PyDocument.meta`/`comment` are not saved **(verified)**.
 - **Type ids are lossy** for `String`-backed types; no `SavedObject` type map. No

@@ -13,16 +13,22 @@
 //! the default filled face and ignores the fitting parameters upstream exposes.
 
 use std::f64::consts::PI;
+use std::ffi::CString;
 use std::sync::{Arc, Mutex};
 
 use ferrocad_core::object_registry::{self, ObjectType};
-use ferrocad_core::{Document, ObjectId, Property, prop_status};
+use ferrocad_core::{Document, Matrix4, ObjectId, Placement, Property, prop_status};
 use ferrocad_curves::{EdgeCurve, LineSegment, Vector3};
 use ferrocad_geom::{ElementKind, Lineage, Shape};
-use ferrocad_part::{make_shape_property, shape_of, ShapeProperty};
-use pyo3::exceptions::{PyDeprecationWarning, PyRuntimeError, PyTypeError, PyValueError};
+use ferrocad_part::{
+    make_shape_list_property, make_shape_property, shape_list_of, shape_of, ShapeListProperty,
+    ShapeProperty,
+};
+use pyo3::exceptions::{
+    PyAttributeError, PyDeprecationWarning, PyRuntimeError, PyTypeError, PyValueError,
+};
 use pyo3::prelude::*;
-use pyo3::types::{PyDict, PyModule};
+use pyo3::types::{PyDict, PyList, PyModule};
 
 use crate::containers::PyCompound;
 use crate::curves::{self, OCCError};
@@ -293,6 +299,34 @@ fn makeFilledFace(shapes: &Bound<'_, PyAny>, op: Option<&str>) -> PyResult<PartS
     Ok(PartShape::from_shape(face))
 }
 
+/// `Part.makeFace(wires, face_maker="Part::FaceMakerBullseye", noElementMap=False)`.
+///
+/// `Part::FaceMakerBuildFace` is not a single-face builder: upstream's
+/// `FaceMakerBuildFace::Build_Essence` collects every wire's edges, splits them
+/// at their intersections and returns *all* bounded regions. The kernel's
+/// `make_faces` is that algorithm, and the curve module already routes its
+/// subclass `Part::FaceMakerUnified` there, so BuildFace is sent down the same
+/// path. This is what turns the annulus cut by two connecting segments into the
+/// inner disc plus the two halves of the annulus. Every other maker keeps the
+/// curve module's constructor (`Part.Face`) and therefore its behaviour.
+#[pyfunction]
+#[pyo3(signature = (wires, face_maker = "Part::FaceMakerBullseye", noElementMap = false))]
+fn makeFace(
+    py: Python<'_>,
+    wires: &Bound<'_, PyAny>,
+    face_maker: &str,
+    noElementMap: bool,
+) -> PyResult<PyObject> {
+    let _ = noElementMap;
+    let maker = if face_maker == "Part::FaceMakerBuildFace" {
+        "Part::FaceMakerUnified"
+    } else {
+        face_maker
+    };
+    let part = py.import("Part")?;
+    Ok(part.getattr("Face")?.call1((wires, maker))?.unbind())
+}
+
 /// The precision below which a plane dimension or an extrusion length is zero
 /// (OCCT's `Precision::Confusion`).
 const CONFUSION: f64 = 1e-7;
@@ -302,6 +336,10 @@ const CONFUSION: f64 = 1e-7;
 pub(crate) fn register_objects() {
     object_registry::register(RULED_SURFACE_TYPE, Arc::new(RuledSurface));
     object_registry::register(EXTRUSION_TYPE, Arc::new(Extrusion));
+    object_registry::register(MIRRORING_TYPE, Arc::new(Mirroring));
+    object_registry::register(SKETCH_TYPE, Arc::new(SketchObject));
+    object_registry::register(BODY_TYPE, Arc::new(Body));
+    object_registry::register(ADDITIVE_BOX_TYPE, Arc::new(AdditiveBox));
 }
 
 // ---------------------------------------------------------------------------
@@ -1482,6 +1520,652 @@ impl PyPlaneSurface {
     }
 }
 
+// ---------------------------------------------------------------------------
+// Sketcher: `Sketcher::SketchObject` (geometry + Shape/InternalShape only)
+// ---------------------------------------------------------------------------
+//
+// The Part tests need three things from a sketch: `addGeometry` (so a sketch
+// participates in a document at all), `Shape` (a wire/compound of the geometry
+// edges, moved by `Placement`) and `InternalShape` (the bounded faces built from
+// those wires when `MakeInternals` is set). Upstream's sketch is a full solver
+// front end; none of that is here. There is no solver, no constraint API and no
+// DOF bookkeeping, so `addConstraint`/`solve`/`delConstraint` are deliberately
+// absent: a test that needs them gets an `AttributeError` naming the missing
+// method rather than a silently wrong result.
+//
+// The geometry list is stored as the edges each geometry object's `toShape()`
+// returns (`Part::PropertyTopoShapeList`), not as upstream's `Geom...` objects:
+// FerroCAD has no geometry-list property type yet. The kernel still builds every
+// edge and every wire/face, so nothing here is synthesized.
+
+/// `Sketcher::SketchObject`.
+pub const SKETCH_TYPE: &str = "Sketcher::SketchObject";
+/// `PartDesign::Body` (the Part composition root owns its shape half).
+pub const BODY_TYPE: &str = "PartDesign::Body";
+/// `PartDesign::AdditiveBox`: the minimal shape source a `PartDesign::Body`
+/// needs. Upstream it is `Part::Box` plus the PartDesign additive extension; the
+/// dimensions and the derived `Shape` are the same.
+pub const ADDITIVE_BOX_TYPE: &str = "PartDesign::AdditiveBox";
+/// `Part::Mirroring` (`FeatureMirroring.cpp`).
+pub const MIRRORING_TYPE: &str = "Part::Mirroring";
+
+const GEOMETRY: &str = "Geometry";
+const CONSTRUCTION_GEOMETRY: &str = "ConstructionGeometry";
+const INTERNAL_SHAPE: &str = "InternalShape";
+
+/// How close two edge endpoints must be to be joined into one wire (OCCT's
+/// `Precision::Confusion`, loosened slightly for coordinates reached through a
+/// curve evaluation).
+const SKETCH_TOLERANCE: f64 = 1e-6;
+
+/// Store an output property, marking the object invalid when the rebuild failed.
+fn store_named(doc: &mut Document, id: ObjectId, name: &str, result: Result<Shape, String>) {
+    match result {
+        Ok(shape) => {
+            doc.set_property_raw(
+                id,
+                name,
+                make_shape_property(ShapeProperty::with_lineage(shape, Lineage::default())),
+            );
+        }
+        Err(_) => {
+            doc.mark_invalid(id);
+            doc.set_property_raw(id, name, output_shape());
+        }
+    }
+}
+
+/// A vector-valued property. A Python tuple assigned to a `PropertyVector` is
+/// stored as a float list by the generic converter, and upstream accepts a
+/// 3-tuple there, so both spellings are read.
+fn vector_like_property(doc: &Document, id: ObjectId, name: &str) -> Option<Vector3> {
+    match doc.object(id).and_then(|object| object.properties.get(name)) {
+        Some(Property::Vector(value)) => Some(*value),
+        Some(Property::FloatList(values)) if values.len() == 3 => {
+            Some(Vector3::new(values[0], values[1], values[2]))
+        }
+        Some(Property::IntegerList(values)) if values.len() == 3 => Some(Vector3::new(
+            values[0] as f64,
+            values[1] as f64,
+            values[2] as f64,
+        )),
+        _ => None,
+    }
+}
+
+/// The shape held by an object's `Shape` property.
+fn object_shape(doc: &Document, id: ObjectId) -> Option<Shape> {
+    doc.object(id)
+        .and_then(|object| object.properties.get(SHAPE))
+        .and_then(shape_of)
+        .and_then(|property| property.shape())
+}
+
+/// The stored edges of a sketch's geometry list.
+fn sketch_geometry(doc: &Document, id: ObjectId, name: &str) -> Vec<Shape> {
+    doc.object(id)
+        .and_then(|object| object.properties.get(name))
+        .and_then(shape_list_of)
+        .map(ShapeListProperty::shapes)
+        .unwrap_or_default()
+}
+
+/// The two endpoints of an open edge. `None` for a closed edge (a full circle or
+/// ellipse has one seam vertex, not two).
+fn edge_endpoints(edge: &Shape) -> Option<(Vector3, Vector3)> {
+    let backend = ferrocad_part::backend();
+    let mut points = backend
+        .elements(edge, ElementKind::Vertex)
+        .into_iter()
+        .filter_map(|element| backend.vertex_point(&element.shape));
+    let start = points.next()?;
+    let end = points.next()?;
+    Some((start, end))
+}
+
+fn endpoints_meet(a: &Vector3, b: &Vector3) -> bool {
+    a.sub(b).length() <= SKETCH_TOLERANCE
+}
+
+/// Join edges that share endpoints into wires (upstream's `WireJoiner`), one
+/// wire per connected chain. A closed edge is a wire on its own.
+fn chain_edges(edges: &[Shape]) -> Result<Vec<Shape>, String> {
+    let backend = ferrocad_part::backend();
+    let mut used = vec![false; edges.len()];
+    let mut wires = Vec::new();
+    for index in 0..edges.len() {
+        if used[index] {
+            continue;
+        }
+        used[index] = true;
+        let mut chain = vec![edges[index].clone()];
+        if let Some((_, mut end)) = edge_endpoints(&edges[index]) {
+            loop {
+                let mut next = None;
+                for candidate in 0..edges.len() {
+                    if used[candidate] {
+                        continue;
+                    }
+                    let Some((first, second)) = edge_endpoints(&edges[candidate]) else {
+                        continue;
+                    };
+                    if endpoints_meet(&end, &first) {
+                        next = Some((candidate, second));
+                        break;
+                    }
+                    if endpoints_meet(&end, &second) {
+                        next = Some((candidate, first));
+                        break;
+                    }
+                }
+                let Some((candidate, far)) = next else {
+                    break;
+                };
+                used[candidate] = true;
+                chain.push(edges[candidate].clone());
+                end = far;
+            }
+        }
+        wires.push(backend.make_wire(&chain).map_err(|error| error.to_string())?);
+    }
+    Ok(wires)
+}
+
+/// The sketch wires moved by the sketch's `Placement`.
+fn placed_shape(wires: Vec<Shape>, placement: Option<Placement>) -> Result<Vec<Shape>, String> {
+    let Some(placement) = placement else {
+        return Ok(wires);
+    };
+    if placement.is_same(&Placement::identity(), 1e-12) {
+        return Ok(wires);
+    }
+    let backend = ferrocad_part::backend();
+    wires
+        .into_iter()
+        .map(|wire| {
+            backend
+                .place(&wire, &placement)
+                .map_err(|error| error.to_string())
+        })
+        .collect()
+}
+
+/// `Shape`: a compound of the geometry wires (or edges when a wire cannot be
+/// joined), as upstream's `SketchObject::buildShape`.
+fn sketch_shape(edges: &[Shape], placement: Option<Placement>) -> Result<Shape, String> {
+    let wires = placed_shape(chain_edges(edges)?, placement)?;
+    ferrocad_part::backend()
+        .make_compound(&wires)
+        .map_err(|error| error.to_string())
+}
+
+/// `InternalShape`: the bounded faces of the sketch wires (`buildInternals`).
+/// `make_faces` is the kernel's `FaceMakerBuildFace`: closed wires bound regions
+/// and open wire chains split them, which is how the two connecting segments of
+/// the upstream annulus case produce two faces.
+fn sketch_internal_shape(edges: &[Shape], placement: Option<Placement>) -> Result<Shape, String> {
+    let wires = placed_shape(chain_edges(edges)?, placement)?;
+    ferrocad_part::backend()
+        .make_faces(&wires)
+        .map_err(|error| error.to_string())
+}
+
+fn sketch_placement(doc: &Document, id: ObjectId) -> Option<Placement> {
+    match doc.object(id).and_then(|object| object.properties.get("Placement")) {
+        Some(Property::Placement(placement)) => Some(*placement),
+        _ => None,
+    }
+}
+
+struct SketchObject;
+
+impl ObjectType for SketchObject {
+    fn default_properties(&self) -> Vec<(String, Property, u32)> {
+        vec![
+            (
+                "Placement".to_string(),
+                Property::Placement(Placement::identity()),
+                prop_status::NONE,
+            ),
+            // Attachment is not implemented: `MapMode` is carried so scripts that
+            // set it (upstream's `MapMode = "Deactivated"`) work, and nothing
+            // reads it back.
+            (
+                "MapMode".to_string(),
+                Property::String("Deactivated".to_string()),
+                prop_status::NONE,
+            ),
+            (
+                "MakeInternals".to_string(),
+                Property::Bool(false),
+                prop_status::NONE,
+            ),
+            (
+                GEOMETRY.to_string(),
+                make_shape_list_property(ShapeListProperty::empty()),
+                prop_status::HIDDEN,
+            ),
+            (
+                CONSTRUCTION_GEOMETRY.to_string(),
+                make_shape_list_property(ShapeListProperty::empty()),
+                prop_status::HIDDEN,
+            ),
+            output_property(),
+            (
+                INTERNAL_SHAPE.to_string(),
+                output_shape(),
+                prop_status::OUTPUT,
+            ),
+        ]
+    }
+
+    fn property_meta(&self, name: &str) -> Option<(String, String)> {
+        Some(("Sketch".to_string(), format!("Sketch {name}")))
+    }
+
+    fn execute(&self, doc: &mut Document, id: ObjectId) {
+        let geometry = sketch_geometry(doc, id, GEOMETRY);
+        let placement = sketch_placement(doc, id);
+        if geometry.is_empty() {
+            doc.set_property_raw(id, SHAPE, output_shape());
+            doc.set_property_raw(id, INTERNAL_SHAPE, output_shape());
+            return;
+        }
+        store_named(doc, id, SHAPE, sketch_shape(&geometry, placement));
+        if bool_property(doc, id, "MakeInternals", false) {
+            store_named(
+                doc,
+                id,
+                INTERNAL_SHAPE,
+                sketch_internal_shape(&geometry, placement),
+            );
+        } else {
+            doc.set_property_raw(id, INTERNAL_SHAPE, output_shape());
+        }
+    }
+}
+
+/// `addGeometry(geometry, construction=False)` for a sketch object.
+///
+/// A geometry object is anything exposing `toShape()` (`Part.LineSegment`,
+/// `Part.Circle`, `Part.Ellipse`, `Part.Point`, …); a sequence of them is
+/// accepted too, as upstream's `SketchObjectPy::addGeometry` does. The edges are
+/// appended to the sketch's geometry list, which touches the object so the next
+/// recompute rebuilds `Shape`.
+#[pyfunction]
+#[pyo3(signature = (object, geometry, construction = false))]
+fn sketch_add_geometry(
+    object: &Bound<'_, PyAny>,
+    geometry: &Bound<'_, PyAny>,
+    construction: bool,
+) -> PyResult<usize> {
+    let type_id: String = object.getattr("TypeId")?.extract()?;
+    if type_id != SKETCH_TYPE {
+        return Err(PyAttributeError::new_err(format!(
+            "'{type_id}' object has no attribute 'addGeometry'"
+        )));
+    }
+    let added = sketch_geometry_edges(geometry)?;
+    let name = if construction {
+        CONSTRUCTION_GEOMETRY
+    } else {
+        GEOMETRY
+    };
+    let mut shapes = sketch_stored_geometry(object, name)?;
+    let first = shapes.len();
+    shapes.extend(added.iter().cloned());
+    sketch_store_geometry(object, name, &shapes)?;
+    Ok(if added.is_empty() {
+        first
+    } else {
+        first + added.len() - 1
+    })
+}
+
+/// The geometry edges named by one `addGeometry` argument: one geometry object,
+/// a `Part.Shape`, or a sequence of either.
+fn sketch_geometry_edges(value: &Bound<'_, PyAny>) -> PyResult<Vec<Shape>> {
+    if value.downcast::<PartShape>().is_ok() {
+        return Ok(vec![shape_argument(value)?]);
+    }
+    if value.downcast::<pyo3::types::PyString>().is_ok() {
+        return Err(PyTypeError::new_err(
+            "sketch geometry must be a geometry object or a sequence of them",
+        ));
+    }
+    if let Ok(items) = value.try_iter() {
+        let mut edges = Vec::new();
+        for item in items {
+            edges.push(sketch_geometry_edge(&item?)?);
+        }
+        return Ok(edges);
+    }
+    Ok(vec![sketch_geometry_edge(value)?])
+}
+
+fn sketch_geometry_edge(value: &Bound<'_, PyAny>) -> PyResult<Shape> {
+    let to_shape = value.getattr("toShape").map_err(|_| {
+        let name = value
+            .get_type()
+            .name()
+            .map(|name| name.to_string())
+            .unwrap_or_else(|_| "?".to_string());
+        PyTypeError::new_err(format!("unsupported sketch geometry {name}"))
+    })?;
+    shape_argument(&to_shape.call0()?)
+}
+
+fn sketch_stored_geometry(object: &Bound<'_, PyAny>, name: &str) -> PyResult<Vec<Shape>> {
+    let value = object.getattr(name)?;
+    let mut shapes = Vec::new();
+    for item in value.try_iter()? {
+        shapes.push(shape_argument(&item?)?);
+    }
+    Ok(shapes)
+}
+
+fn sketch_store_geometry(object: &Bound<'_, PyAny>, name: &str, shapes: &[Shape]) -> PyResult<()> {
+    let py = object.py();
+    let items = shapes
+        .iter()
+        .map(|shape| Py::new(py, PartShape::from_shape(shape.clone())))
+        .collect::<PyResult<Vec<_>>>()?;
+    object.setattr(name, PyList::new(py, items)?)
+}
+
+/// Install `addGeometry` on `ferrocad.DocumentObject` at `Part` import time.
+///
+/// A document object is the core's `PyDocumentObject`, whose methods live in
+/// `ferrocad_py`; a module cannot add `#[pymethods]` to it. The class is a heap
+/// type, so a descriptor can still be installed on it: it hands sketches the
+/// bound `addGeometry` and raises `AttributeError` for every other type, exactly
+/// as if the method did not exist. Skipped when `ferrocad` is not importable
+/// (a standalone `Part` build has no document object to extend).
+fn install_sketch_methods(m: &Bound<'_, PyModule>) -> PyResult<()> {
+    let py = m.py();
+    let Ok(ferrocad) = py.import("ferrocad") else {
+        return Ok(());
+    };
+    let Ok(document_object) = ferrocad.getattr("DocumentObject") else {
+        return Ok(());
+    };
+    let add_geometry = wrap_pyfunction!(sketch_add_geometry, m)?;
+    let globals = PyDict::new(py);
+    globals.set_item("_document_object", document_object)?;
+    globals.set_item("_add_geometry", add_geometry)?;
+    let source = CString::new(SKETCH_METHODS).expect("no NUL");
+    py.run(source.as_c_str(), Some(&globals), None)?;
+    Ok(())
+}
+
+const SKETCH_METHODS: &str = r#"
+class _SketchMethods:
+    __slots__ = ()
+
+    def __get__(self, obj, objtype=None):
+        if obj is None:
+            return self
+        if obj.TypeId != "Sketcher::SketchObject":
+            raise AttributeError(
+                "'%s' object has no attribute 'addGeometry'" % obj.TypeId
+            )
+
+        def addGeometry(geometry, construction=False):
+            return _add_geometry(obj, geometry, construction)
+
+        addGeometry.__name__ = "addGeometry"
+        return addGeometry
+
+
+_document_object.addGeometry = _SketchMethods()
+"#;
+
+// ---------------------------------------------------------------------------
+// `PartDesign::Body` and its minimal additive box
+// ---------------------------------------------------------------------------
+
+/// `PartDesign::Body`: upstream's `Shape` is its `Tip`'s shape (or, before a Tip
+/// is recorded, the last feature in `Group`). The body is otherwise the core
+/// group container; `Group`/`Tip`/`Origin` stay core properties.
+struct Body;
+
+impl ObjectType for Body {
+    fn default_properties(&self) -> Vec<(String, Property, u32)> {
+        vec![
+            ("Group".to_string(), Property::LinkList(Vec::new()), prop_status::NONE),
+            (
+                "Tip".to_string(),
+                Property::Link(String::new()),
+                prop_status::NONE,
+            ),
+            (
+                "BaseFeature".to_string(),
+                Property::Link(String::new()),
+                prop_status::NONE,
+            ),
+            (
+                "Origin".to_string(),
+                Property::Link(String::new()),
+                prop_status::HIDDEN,
+            ),
+            (
+                "Placement".to_string(),
+                Property::Placement(Placement::identity()),
+                prop_status::NONE,
+            ),
+            (
+                "AllowCompound".to_string(),
+                Property::Bool(true),
+                prop_status::NONE,
+            ),
+            output_property(),
+        ]
+    }
+
+    fn property_meta(&self, name: &str) -> Option<(String, String)> {
+        Some(("Body".to_string(), format!("Body {name}")))
+    }
+
+    fn execute(&self, doc: &mut Document, id: ObjectId) {
+        // `Tip` first, then the last `Group` member (`addObject` does not set the
+        // Tip the way upstream's `Body::addObject` does).
+        let tip = link_sub_property(doc, id, "Tip").map(|(name, _)| name);
+        let tip = tip.and_then(|name| doc.get_by_name(&name).map(|member| (name, member)));
+        let member = tip.or_else(|| {
+            let group = match doc.object(id).and_then(|object| object.properties.get("Group")) {
+                Some(Property::LinkList(names)) => names.clone(),
+                _ => Vec::new(),
+            };
+            group
+                .into_iter()
+                .rev()
+                .find_map(|name| doc.get_by_name(&name).map(|member| (name, member)))
+        });
+        let Some((name, member)) = member else {
+            doc.set_property_raw(id, SHAPE, output_shape());
+            return;
+        };
+
+        // `Group` membership does not order a recompute (core skips it), so the
+        // body can be visited before the feature that builds its shape. Build the
+        // member on demand; an acyclic document makes this safe.
+        if object_shape(doc, member).is_none() && member != id {
+            let member_type = doc
+                .object(member)
+                .map(|object| object.type_id.clone())
+                .unwrap_or_default();
+            if member_type != BODY_TYPE {
+                doc.execute_object(member);
+            }
+        }
+        if link_sub_property(doc, id, "Tip").is_none() {
+            doc.set_property_raw(id, "Tip", Property::Link(name));
+        }
+        let shape = object_shape(doc, member).and_then(|shape| {
+            // The body's own placement positions the whole group, on top of the
+            // member's own placement (which its shape already carries).
+            match doc.object(id).and_then(|object| object.properties.get("Placement")) {
+                Some(Property::Placement(placement))
+                    if !placement.is_same(&Placement::identity(), 1e-12) =>
+                {
+                    ferrocad_part::backend().place(&shape, placement).ok()
+                }
+                _ => Some(shape),
+            }
+        });
+        match shape {
+            Some(shape) => {
+                doc.set_property_raw(
+                    id,
+                    SHAPE,
+                    make_shape_property(ShapeProperty::with_lineage(shape, Lineage::default())),
+                );
+            }
+            None => {
+                doc.set_property_raw(id, SHAPE, output_shape());
+            }
+        }
+    }
+}
+
+/// `PartDesign::AdditiveBox`: a parametric box, the shape source the PartDesign
+/// tests put in a Body. It is upstream's `Part::Box` dimensions and `Shape`; no
+/// PartDesign feature tree (`BaseFeature`, `AddSubShape`) is modelled.
+struct AdditiveBox;
+
+impl ObjectType for AdditiveBox {
+    fn default_properties(&self) -> Vec<(String, Property, u32)> {
+        vec![
+            ("Length".to_string(), Property::Float(10.0), prop_status::NONE),
+            ("Width".to_string(), Property::Float(10.0), prop_status::NONE),
+            ("Height".to_string(), Property::Float(10.0), prop_status::NONE),
+            (
+                "Placement".to_string(),
+                Property::Placement(Placement::identity()),
+                prop_status::NONE,
+            ),
+            output_property(),
+        ]
+    }
+
+    fn property_meta(&self, name: &str) -> Option<(String, String)> {
+        Some(("Additive".to_string(), format!("Additive box {name}")))
+    }
+
+    fn execute(&self, doc: &mut Document, id: ObjectId) {
+        let length = float_property(doc, id, "Length", 10.0);
+        let width = float_property(doc, id, "Width", 10.0);
+        let height = float_property(doc, id, "Height", 10.0);
+        let placement = match doc.object(id).and_then(|object| object.properties.get("Placement")) {
+            Some(Property::Placement(placement)) => Some(*placement),
+            _ => None,
+        };
+        if !(length > 0.0 && width > 0.0 && height > 0.0) {
+            doc.mark_invalid(id);
+            doc.set_property_raw(id, SHAPE, output_shape());
+            return;
+        }
+        let result = ferrocad_part::backend()
+            .make_box(length, width, height)
+            .map_err(|error| error.to_string())
+            .and_then(|shape| match placement {
+                Some(placement) if !placement.is_same(&Placement::identity(), 1e-12) => {
+                    ferrocad_part::backend()
+                        .place(&shape, &placement)
+                        .map_err(|error| error.to_string())
+                }
+                _ => Ok(shape),
+            });
+        store_named(doc, id, SHAPE, result);
+    }
+}
+
+// ---------------------------------------------------------------------------
+// `Part::Mirroring`
+// ---------------------------------------------------------------------------
+
+/// The reflection about the plane through `base` with direction `normal`.
+fn reflection_matrix(base: Vector3, normal: Vector3) -> Matrix4 {
+    let n = normal.normalize();
+    let offset = 2.0 * n.dot(&base);
+    let mut m = [0.0; 16];
+    m[0] = 1.0 - 2.0 * n.x * n.x;
+    m[1] = -2.0 * n.x * n.y;
+    m[2] = -2.0 * n.x * n.z;
+    m[3] = offset * n.x;
+    m[4] = -2.0 * n.y * n.x;
+    m[5] = 1.0 - 2.0 * n.y * n.y;
+    m[6] = -2.0 * n.y * n.z;
+    m[7] = offset * n.y;
+    m[8] = -2.0 * n.z * n.x;
+    m[9] = -2.0 * n.z * n.y;
+    m[10] = 1.0 - 2.0 * n.z * n.z;
+    m[11] = offset * n.z;
+    m[15] = 1.0;
+    Matrix4::from_values(m)
+}
+
+/// `Part::Mirroring`: `Shape` is `Source`'s shape reflected about the plane
+/// through `Base` with direction `Normal`.
+///
+/// Unlike upstream, the source's `Placement` is not applied here: in FerroCAD a
+/// primitive's `Shape` already contains its placement (and an `App::Link`'s
+/// contains its link transform), so applying it again would move the mirror
+/// twice. The tests in `TestPartMirror.py` pin exactly this world-space
+/// behaviour and its stability across recomputes.
+struct Mirroring;
+
+impl ObjectType for Mirroring {
+    fn default_properties(&self) -> Vec<(String, Property, u32)> {
+        vec![
+            (
+                "Source".to_string(),
+                Property::Link(String::new()),
+                prop_status::NONE,
+            ),
+            (
+                "Base".to_string(),
+                Property::Vector(Vector3::zero()),
+                prop_status::NONE,
+            ),
+            (
+                "Normal".to_string(),
+                Property::Vector(Vector3::new(0.0, 0.0, 1.0)),
+                prop_status::NONE,
+            ),
+            output_property(),
+        ]
+    }
+
+    fn property_meta(&self, name: &str) -> Option<(String, String)> {
+        Some(("Mirroring".to_string(), format!("Part mirroring {name}")))
+    }
+
+    fn execute(&self, doc: &mut Document, id: ObjectId) {
+        let result = (|| -> Result<Shape, String> {
+            let source = link_sub_property(doc, id, "Source")
+                .ok_or_else(|| "No object linked".to_string())?;
+            let shape = linked_shape(doc, &source)?;
+            let base = vector_like_property(doc, id, "Base").unwrap_or_else(Vector3::zero);
+            let normal = vector_like_property(doc, id, "Normal")
+                .unwrap_or_else(|| Vector3::new(0.0, 0.0, 1.0));
+            if normal.is_null() {
+                return Err("Cannot mirror across a plane with a null normal".to_string());
+            }
+            let matrix = reflection_matrix(base, normal);
+            let backend = ferrocad_part::backend();
+            // A reflection has determinant -1, so it is not a placement; prefer
+            // the gp_Trsf path and fall back to the general affine transform when
+            // the kernel refuses it.
+            backend
+                .transform(&shape, &matrix)
+                .or_else(|_| backend.general_transform(&shape, &matrix))
+                .map_err(|error| error.to_string())
+        })();
+        store_named(doc, id, SHAPE, result);
+    }
+}
+
 pub(crate) fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyShell>()?;
     m.add_class::<PySolid>()?;
@@ -1512,5 +2196,10 @@ pub(crate) fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(makeLoft, m)?)?;
     m.add_function(wrap_pyfunction!(makeRuledSurface, m)?)?;
     m.add_function(wrap_pyfunction!(makeFilledFace, m)?)?;
+    // `curves::register` runs first and owns the ordinary makers; this override
+    // adds the segmentation dispatch `FaceMakerBuildFace` needs.  Keep it last so
+    // the module attribute is the one registered here.
+    m.add_function(wrap_pyfunction!(makeFace, m)?)?;
+    install_sketch_methods(m)?;
     Ok(())
 }

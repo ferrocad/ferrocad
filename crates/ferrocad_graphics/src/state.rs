@@ -19,6 +19,132 @@ use ferrocad_types::Matrix4;
 use crate::batch::PickId;
 use crate::geometry::Texture2;
 
+/// The number of ground-shadow slots in the fixed program ABI.
+///
+/// Must match `SHADOW_MAX` in `mods/GridOverlayCoin/Resources/grid_overlay.wgsl`.
+pub const SHADOW_MAX: usize = 64;
+
+/// The number of floats per shadow slot.
+///
+/// Must match `SHADOW_STRIDE` in `mods/GridOverlayCoin/Resources/grid_overlay.wgsl`.
+pub const SHADOW_STRIDE: usize = 5;
+
+/// The number of `vec4`s the shadow block occupies in the uniform.
+///
+/// A WGSL uniform array element is 16-byte aligned, so the shader's 320 flat floats
+/// are stored as 80 `vec4`s. Flat float `o` lives at `shadows[o / 4][o % 4]`.
+pub const SHADOW_VECS: usize = SHADOW_MAX * SHADOW_STRIDE / 4;
+
+// The shader's flat-float indexing assumes the slot count divides evenly into vec4s.
+const _: () = assert!(SHADOW_MAX * SHADOW_STRIDE == SHADOW_VECS * 4);
+
+/// The smallest half-extent the producer writes (world units).
+///
+/// The shader divides by the half-extent, so a degenerate (zero-area) footprint would
+/// produce infinities; a hair of extent keeps the `sdf` finite.
+const SHADOW_MIN_EXTENT: f32 = 1e-4;
+
+/// One ground-shadow footprint: an axis-aligned ellipse on the world `z = 0` plane.
+///
+/// The slot layout is the shader's, not a new one: `center.xy`, `half_extent.xy`, then
+/// `blur`, all in **world units**. The shader composites a soft ellipse under the grid
+/// lines; `blur` is its world-space falloff radius.
+///
+/// The ABI has **one global strength** (`ProgramParameters::shadow_opacity`), not a
+/// per-slot opacity, so a producer that knows per-object weights can only express them
+/// through the shared knob. Do not repurpose [`blur`](Self::blur) for opacity.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct ShadowFootprint {
+    /// The ellipse centre in world `(x, y)`.
+    pub center: [f32; 2],
+    /// The ellipse semi-axes in world units (`x`, `y`).
+    pub half_extent: [f32; 2],
+    /// The world-space softness of the edge.
+    pub blur: f32,
+}
+
+impl ShadowFootprint {
+    /// A footprint covering the world-space box `min`..=`max` on the ground plane.
+    ///
+    /// Only `x`/`y` are significant: the shadow is cast onto `z = 0`, so a scene's
+    /// vertical extent is flattened into its ground footprint.
+    pub fn from_bounds(min: [f32; 2], max: [f32; 2], blur: f32) -> Self {
+        Self {
+            center: [(min[0] + max[0]) * 0.5, (min[1] + max[1]) * 0.5],
+            half_extent: [
+                (max[0] - min[0]).abs() * 0.5,
+                (max[1] - min[1]).abs() * 0.5,
+            ],
+            blur,
+        }
+    }
+
+    /// Clamp a footprint into the range the shader can evaluate without infinities.
+    fn sanitized(self) -> Self {
+        let axis = |center: f32| if center.is_finite() { center } else { 0.0 };
+        let extent = |half: f32| {
+            if half.is_finite() {
+                half.abs().max(SHADOW_MIN_EXTENT)
+            } else {
+                SHADOW_MIN_EXTENT
+            }
+        };
+        Self {
+            center: [axis(self.center[0]), axis(self.center[1])],
+            half_extent: [extent(self.half_extent[0]), extent(self.half_extent[1])],
+            blur: if self.blur.is_finite() {
+                self.blur.max(0.0).max(1e-6)
+            } else {
+                1e-6
+            },
+        }
+    }
+}
+
+/// Fill the fixed ABI's shadow block from `footprints` and return the slot count.
+///
+/// This is the **only** supported way to populate [`ProgramParameters::shadow_data`].
+/// The producer is deterministic and bounded:
+///
+/// * Slots are filled in iteration order; the first [`SHADOW_MAX`] (64) footprints are
+///   used and any extra are ignored (the count clamps, it never overflows the block).
+/// * Every slot is cleared first, so a smaller scene cannot inherit stale footprints.
+/// * [`ProgramParameters::shadow_count`] is set to the number of slots written, which is
+///   what the shader's loop reads; it is `0` for an empty scene.
+/// * Footprints are clamped to finite values with a minimum half-extent, so the shader's
+///   per-pixel `sdf` cannot divide by zero.
+///
+/// The coordinate space is **world `(x, y)`** on the ground plane `z = 0`; the shader
+/// tests the fragment's world position against these slots.
+pub fn apply_shadows(
+    parameters: &mut ProgramParameters,
+    footprints: impl IntoIterator<Item = ShadowFootprint>,
+) -> usize {
+    parameters.shadow_data = [[0.0; 4]; SHADOW_VECS];
+    let mut count = 0;
+    for footprint in footprints {
+        if count == SHADOW_MAX {
+            break;
+        }
+        let footprint = footprint.sanitized();
+        let offset = count * SHADOW_STRIDE;
+        let floats = [
+            footprint.center[0],
+            footprint.center[1],
+            footprint.half_extent[0],
+            footprint.half_extent[1],
+            footprint.blur,
+        ];
+        for (index, value) in floats.into_iter().enumerate() {
+            let flat = offset + index;
+            parameters.shadow_data[flat / 4][flat % 4] = value;
+        }
+        count += 1;
+    }
+    parameters.shadow_count = count as f32;
+    count
+}
+
 /// The parameter surface of the fixed program ABI (`docs/workbenches/grid-overlay-plan.md` §3.4).
 ///
 /// A WGSL uniform block has a static layout, so an authored program cannot invent
@@ -26,9 +152,9 @@ use crate::geometry::Texture2;
 /// name. The renderer writes them into group 2, binding 1 (`Program`).
 ///
 /// The defaults are the grid overlay's FerroCAD look: the neutral grid ink at low
-/// alpha, a 1-unit base spacing, and shadows off (the shadow block is deferred). The
-/// grid shader itself is mod-owned:
-/// `mods/GridOverlayCoin/Resources/grid_overlay.wgsl`.
+/// alpha, a 1-unit base spacing, and no shadows (an empty block). A scene producer
+/// fills the shadow block through [`apply_shadows`]. The grid shader itself is
+/// mod-owned: `mods/GridOverlayCoin/Resources/grid_overlay.wgsl`.
 ///
 /// The axis fields are a backward-compatible tail: the grid shader reads only the
 /// prefix, while `shaders/axis_overlay.wgsl` reads the whole block. X reuses
@@ -47,8 +173,15 @@ pub struct ProgramParameters {
     pub major_alpha: f32,
     /// Shadow strength (`"shadow_opacity"`); `0` disables the shadow loop.
     pub shadow_opacity: f32,
-    /// Number of populated shadow slots (`"shadow_count"`); `0` in this slice.
+    /// Number of populated shadow slots (`"shadow_count"`); written by
+    /// [`apply_shadows`]. The shader reads it from `counts.x` and stops its loop there.
     pub shadow_count: f32,
+    /// The packed shadow slots (`"shadow_data"`), laid out exactly like the shader's
+    /// `Program.shadows`: 64 slots of `[center.x, center.y, half_extent.x,
+    /// half_extent.y, blur]` with flat float `o` at `shadow_data[o / 4][o % 4]`.
+    ///
+    /// Populate it with [`apply_shadows`]; the unused tail is always zeroed.
+    pub shadow_data: [[f32; 4]; SHADOW_VECS],
     /// The Y axis stem's linear RGB ink (`"axis_color_y"`).
     pub axis_y: [f32; 3],
     /// The Z axis stem's linear RGB ink (`"axis_color_z"`).
@@ -79,6 +212,7 @@ impl Default for ProgramParameters {
             major_alpha: 0.35,
             shadow_opacity: 0.0,
             shadow_count: 0.0,
+            shadow_data: [[0.0; 4]; SHADOW_VECS],
             // #4ADE80 and #38BDF8 in linear light, the native axis tokens.
             axis_y: [0.069, 0.730, 0.216],
             axis_z: [0.040, 0.509, 0.939],
@@ -242,6 +376,15 @@ fn fingerprint(source: &str, parameters: &ProgramParameters, geometry: bool) -> 
         }
     };
     write(source.as_bytes());
+    // Shadow data only affects the program while at least one slot is live. Hashing it
+    // conditionally keeps a default (shadowless) program's fingerprint byte-identical to
+    // what it was before the producer existed, so existing cache entries survive.
+    let shadow_slots = (parameters.shadow_count.max(0.0) as usize).min(SHADOW_MAX);
+    if shadow_slots > 0 {
+        for value in parameters.shadow_data.iter().flatten().take(shadow_slots * SHADOW_STRIDE) {
+            write(&value.to_bits().to_le_bytes());
+        }
+    }
     for value in [
         parameters.color[0],
         parameters.color[1],
@@ -549,5 +692,139 @@ mod tests {
                 compare: DepthCompare::Less,
             }
         );
+    }
+
+    /// Flat float `o` of the shader's `Program.shadows` (`shadow_at` in the WGSL).
+    fn shadow_float(parameters: &ProgramParameters, o: usize) -> f32 {
+        parameters.shadow_data[o / 4][o % 4]
+    }
+
+    #[test]
+    fn two_separated_boxes_fill_two_shadow_slots() {
+        let mut parameters = ProgramParameters::default();
+        let count = apply_shadows(
+            &mut parameters,
+            [
+                ShadowFootprint::from_bounds([-5.0, -5.0], [-1.0, -1.0], 0.5),
+                ShadowFootprint::from_bounds([2.0, 3.0], [4.0, 7.0], 0.75),
+            ],
+        );
+
+        assert_eq!(count, 2);
+        assert_eq!(parameters.shadow_count, 2.0, "the shader reads counts.x");
+
+        // Slot 0: centre, half-extent, blur in the shader's 5-float order.
+        assert_eq!(shadow_float(&parameters, 0), -3.0);
+        assert_eq!(shadow_float(&parameters, 1), -3.0);
+        assert_eq!(shadow_float(&parameters, 2), 2.0);
+        assert_eq!(shadow_float(&parameters, 3), 2.0);
+        assert_eq!(shadow_float(&parameters, 4), 0.5);
+
+        // Slot 1 starts at the next stride boundary, so it crosses a vec4.
+        assert_eq!(shadow_float(&parameters, 5), 3.0);
+        assert_eq!(shadow_float(&parameters, 6), 5.0);
+        assert_eq!(shadow_float(&parameters, 7), 1.0);
+        assert_eq!(shadow_float(&parameters, 8), 2.0);
+        assert_eq!(shadow_float(&parameters, 9), 0.75);
+
+        // The vec4 packing is exactly the shader's flat indexing.
+        assert_eq!(parameters.shadow_data[0], [-3.0, -3.0, 2.0, 2.0]);
+        assert_eq!(parameters.shadow_data[1][0], 0.5);
+
+        // The unused tail (from flat float 10, after two 5-float slots) stays zeroed.
+        assert!(
+            parameters
+                .shadow_data
+                .iter()
+                .flatten()
+                .skip(2 * SHADOW_STRIDE)
+                .all(|value| *value == 0.0)
+        );
+    }
+
+    #[test]
+    fn an_empty_scene_clears_the_shadow_block() {
+        let mut parameters = ProgramParameters::default();
+        apply_shadows(
+            &mut parameters,
+            [ShadowFootprint::from_bounds([0.0, 0.0], [2.0, 2.0], 0.5)],
+        );
+        assert_eq!(parameters.shadow_count, 1.0);
+
+        // An empty scene is a deliberate clear, not a no-op: stale slots must not leak.
+        let count = apply_shadows(&mut parameters, []);
+        assert_eq!(count, 0);
+        assert_eq!(parameters.shadow_count, 0.0);
+        assert!(
+            parameters.shadow_data.iter().flatten().all(|value| *value == 0.0),
+            "the block is zeroed"
+        );
+    }
+
+    #[test]
+    fn the_shadow_producer_clamps_to_the_abi_cap() {
+        let mut parameters = ProgramParameters::default();
+        let count = apply_shadows(
+            &mut parameters,
+            (0..SHADOW_MAX + 5).map(|index| {
+                let x = index as f32;
+                ShadowFootprint::from_bounds([x, x], [x + 1.0, x + 1.0], 0.5)
+            }),
+        );
+
+        assert_eq!(count, SHADOW_MAX, "never more than the fixed block");
+        assert_eq!(parameters.shadow_count, SHADOW_MAX as f32);
+
+        // The last slot is the 64th footprint, not the 69th: the extra five are dropped.
+        let last = (SHADOW_MAX - 1) * SHADOW_STRIDE;
+        assert_eq!(shadow_float(&parameters, last), 63.5);
+        assert_eq!(shadow_float(&parameters, last + 1), 63.5);
+        assert_eq!(shadow_float(&parameters, last + 2), 0.5);
+
+        // The block is exactly full: the last float written is the 320th.
+        assert_eq!(shadow_float(&parameters, SHADOW_MAX * SHADOW_STRIDE - 1), 0.5);
+        assert_eq!(parameters.shadow_data.len(), SHADOW_VECS);
+    }
+
+    #[test]
+    fn shadow_footprints_are_sanitised_for_the_shader() {
+        let mut parameters = ProgramParameters::default();
+        apply_shadows(
+            &mut parameters,
+            [ShadowFootprint {
+                center: [f32::NAN, 1.0],
+                half_extent: [-2.0, 0.0],
+                blur: -1.0,
+            }],
+        );
+
+        assert_eq!(parameters.shadow_count, 1.0);
+        assert_eq!(shadow_float(&parameters, 0), 0.0, "a NaN centre is zeroed");
+        assert_eq!(shadow_float(&parameters, 2), 2.0, "an extent is an absolute value");
+        assert_eq!(
+            shadow_float(&parameters, 3),
+            SHADOW_MIN_EXTENT,
+            "a degenerate extent keeps the sdf finite"
+        );
+        assert_eq!(shadow_float(&parameters, 4), 1e-6, "blur is positive");
+    }
+
+    #[test]
+    fn the_shadow_block_is_part_of_program_identity_only_when_live() {
+        let source = "@fragment fn fs_main() {}";
+        let plain = ShaderProgram::new("grid", source);
+
+        // A cleared block (count 0) must not change the fingerprint: existing programs
+        // keep their cache identity.
+        let cleared = plain.clone().with_parameters(ProgramParameters::default());
+        assert_eq!(plain.hash(), cleared.hash());
+
+        let mut parameters = ProgramParameters::default();
+        apply_shadows(
+            &mut parameters,
+            [ShadowFootprint::from_bounds([0.0, 0.0], [2.0, 2.0], 0.5)],
+        );
+        let shaded = plain.clone().with_parameters(parameters);
+        assert_ne!(plain.hash(), shaded.hash(), "live slots are part of identity");
     }
 }

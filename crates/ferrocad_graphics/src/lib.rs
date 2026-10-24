@@ -34,4 +34,7 @@ pub use geometry::{Geometry, Texture2, Topology, Vertex};
 pub use pick::{Hit, Ray, pick_at, pick_at_hit, pick_at_rect, pick_at_rect_hit, pick_hit};
 pub use pixels::{Rect, Viewport};
 pub use ribbon::screen_ribbon;
-pub use state::{DepthCompare, DepthState, ProgramParameters, ShaderProgram, StateSnapshot};
+pub use state::{
+    DepthCompare, DepthState, ProgramParameters, SHADOW_MAX, SHADOW_STRIDE, SHADOW_VECS,
+    ShadowFootprint, ShaderProgram, StateSnapshot, apply_shadows,
+};

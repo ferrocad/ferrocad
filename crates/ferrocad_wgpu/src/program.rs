@@ -34,11 +34,12 @@
 //! zeroed `Frame`/`Program` pair — so the bind-group index never shifts between a
 //! program pipeline and the scene pipeline.
 //!
-//! Shadows are deferred (`docs/workbenches/grid-overlay-plan.md` §3.5): the `Program` block carries
-//! the zeroed 80-`vec4` shadow array and `counts.x` is 0, so `grid_overlay.wgsl`'s
-//! loop is compiled but never entered. The four trailing axis `vec4`s are a
-//! backward-compatible extension: the grid shader reads only the prefix, while
-//! `axis_overlay.wgsl` declares the whole block.
+//! Shadows are populated by the scene producer (`ferrocad_graphics::apply_shadows`):
+//! the `Program` block carries up to 64 slots of `(centre, half-extent, blur)` and
+//! `counts.x` is the slot count, so `grid_overlay.wgsl`'s loop runs only when the scene
+//! supplied footprints. The four trailing axis `vec4`s are a backward-compatible
+//! extension: the grid shader reads only the prefix, while `axis_overlay.wgsl` declares
+//! the whole block.
 
 use std::collections::HashMap;
 use std::mem::size_of;
@@ -123,7 +124,7 @@ pub struct ProgramBlock {
 }
 
 impl ProgramBlock {
-    /// Pack the fixed-ABI parameters, with the deferred shadow block zeroed.
+    /// Pack the fixed-ABI parameters, including the producer's shadow block.
     pub fn new(parameters: &ProgramParameters) -> Self {
         let [r, g, b] = parameters.color;
         let [yr, yg, yb] = parameters.axis_y;
@@ -137,7 +138,7 @@ impl ProgramBlock {
                 parameters.shadow_opacity,
             ],
             counts: [parameters.shadow_count, 0.0, 0.0, 0.0],
-            shadows: [[0.0; 4]; 80],
+            shadows: parameters.shadow_data,
             axis_y: [yr, yg, yb, 0.0],
             axis_z: [zr, zg, zb, 0.0],
             axis_values: [
@@ -640,6 +641,7 @@ fn align_up(value: u32, alignment: u32) -> u32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use ferrocad_graphics::{ShadowFootprint, apply_shadows};
 
     #[test]
     fn the_uniform_blocks_match_the_wgsl_abi() {
@@ -664,6 +666,47 @@ mod tests {
         assert_eq!(block.values, [2.5, 0.4, 0.6, 0.0]);
         assert_eq!(block.counts, [0.0, 0.0, 0.0, 0.0]);
         assert!(block.shadows.iter().flatten().all(|value| *value == 0.0));
+    }
+
+    /// The producer's slots reach the uniform verbatim, so the shader's flat
+    /// `shadow_at(o)` indexing sees exactly what `ferrocad_graphics::apply_shadows`
+    /// wrote.
+    #[test]
+    fn the_program_block_packs_the_shadow_producer() {
+        let mut parameters = ProgramParameters {
+            shadow_opacity: 0.3,
+            ..Default::default()
+        };
+        assert_eq!(
+            apply_shadows(
+                &mut parameters,
+                [
+                    ShadowFootprint::from_bounds([-5.0, -5.0], [-1.0, -1.0], 0.5),
+                    ShadowFootprint::from_bounds([2.0, 3.0], [4.0, 7.0], 0.75),
+                ],
+            ),
+            2
+        );
+
+        let block = ProgramBlock::new(&parameters);
+        assert_eq!(block.counts, [2.0, 0.0, 0.0, 0.0], "counts.x is the slot count");
+        assert_eq!(block.values[3], 0.3, "the shared strength still rides values.w");
+
+        // Slot 0: [centre.x, centre.y, half.x, half.y] then blur in the next vec4.
+        assert_eq!(block.shadows[0], [-3.0, -3.0, 2.0, 2.0]);
+        assert_eq!(block.shadows[1][0], 0.5);
+        // Slot 1 crosses another vec4 boundary (flat float 5).
+        assert_eq!(block.shadows[1][1], 3.0);
+        assert_eq!(block.shadows[1][2], 5.0);
+        assert_eq!(block.shadows[1][3], 1.0);
+        assert_eq!(block.shadows[2][0], 2.0);
+        assert_eq!(block.shadows[2][1], 0.75);
+
+        // The shadow region starts after the three header vec4s (3 * 16 bytes), so the
+        // grid shader's prefix and the axis tail keep their offsets.
+        let bytes = bytemuck::bytes_of(&block);
+        assert_eq!(&bytes[48..64], bytemuck::bytes_of(&block.shadows[0]));
+        assert_eq!(&bytes[64..68], bytemuck::bytes_of(&block.shadows[1][0]));
     }
 
     /// The extended tail is packed after the grid prefix, so the grid shader's

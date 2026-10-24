@@ -20,7 +20,8 @@ use std::time::{Duration, Instant};
 use ferrocad_geom::SelectionRef;
 use ferrocad_graphics::{
     Camera, DepthState, DrawPacket, Generation, Geometry, Hit, MeshId, PickId, Projection,
-    RenderQueue, ShaderProgram, StateSnapshot, Topology, Vertex, Viewport, pick_at_hit,
+    RenderQueue, SHADOW_MAX, ShadowFootprint, ShaderProgram, StateSnapshot, Topology, Vertex,
+    Viewport, apply_shadows, pick_at_hit,
 };
 use ferrocad_inventor::{
     Directives, Event, EventListener, ImageData, InventorView, NaviCubeDirective, Node, NodeKind,
@@ -217,8 +218,14 @@ pub struct InventorViewport<V: InventorView> {
     grid_overlay: bool,
     /// The scene's program packets — those whose state carries a `ShaderProgram` — split
     /// out of [`queue`](Self::queue) so they draw **after** opaque geometry, in the same
-    /// depth-tested pass, and can never enter a pick.
+    /// depth-tested pass, and can never enter a pick. Their parameters carry the scene's
+    /// ground-shadow block (see [`shadow_footprints`](Self::shadow_footprints)).
     program_queue: RenderQueue,
+    /// Explicit ground-shadow footprints (world `x`/`y`), or `None` to derive them from
+    /// the [`stage`](Self::stage) on every recompile. A host whose document is not a
+    /// `Stage` (the legacy inventor path) sets these with
+    /// [`set_shadow_footprints`](Self::set_shadow_footprints).
+    shadow_footprints: Option<Vec<ShadowFootprint>>,
     /// The last shader-program assembly error, if any. The frame still renders (the
     /// malformed program is dropped, not the scene); the shell reports and clears it.
     shader_error: Option<String>,
@@ -755,7 +762,8 @@ impl<V: InventorView> InventorViewport<V> {
     pub fn new(view: V, camera: Camera, scene: Scene) -> Self {
         let stage = Stage::new();
         let (queue, directives, shader_error) = merge_queue(&scene, &stage, &camera.viewport);
-        let (queue, program_queue) = split_programs(queue);
+        let (queue, mut program_queue) = split_programs(queue);
+        apply_program_shadows(&mut program_queue, &stage.shadow_footprints());
         let mut viewport = Self {
             view,
             camera,
@@ -806,6 +814,7 @@ impl<V: InventorView> InventorViewport<V> {
             grid_queue: RenderQueue::default(),
             grid_overlay: false,
             program_queue,
+            shadow_footprints: None,
             shader_error,
             overlays: Vec::new(),
             pointer: None,
@@ -1218,6 +1227,57 @@ impl<V: InventorView> InventorViewport<V> {
     /// malformed program was dropped); the shell reports it once and clears it.
     pub fn take_shader_error(&mut self) -> Option<String> {
         self.shader_error.take()
+    }
+
+    /// The ground-shadow footprints (world `x`/`y`) the program packets will carry.
+    ///
+    /// By default they are derived from the [`stage`](Self::stage)'s items; a host on
+    /// the legacy inventor path can replace them with
+    /// [`set_shadow_footprints`](Self::set_shadow_footprints). Empty means the shadow
+    /// block is cleared and `shadow_count` is `0`.
+    pub fn shadow_footprints(&self) -> Vec<ShadowFootprint> {
+        self.effective_shadow_footprints()
+    }
+
+    /// Replace the derived stage footprints with explicit ones (world `x`/`y`).
+    ///
+    /// Use this when the document is not drawn as a [`Stage`] (the legacy inventor
+    /// path), or when the host has better bounds than the display tessellation. The
+    /// producer clamps the list to the ABI's 64 slots and writes `shadow_count`; an
+    /// empty list disables the shadow loop. Returns whether the set changed.
+    pub fn set_shadow_footprints(&mut self, footprints: Vec<ShadowFootprint>) -> bool {
+        // Keep the stored list bounded: the ABI has 64 slots, so an oversized host list
+        // is truncated here as well as at pack time.
+        let mut footprints = footprints;
+        footprints.truncate(SHADOW_MAX);
+        if self.shadow_footprints.as_deref() == Some(footprints.as_slice()) {
+            return false;
+        }
+        self.shadow_footprints = Some(footprints);
+        self.recompile();
+        true
+    }
+
+    /// Return to deriving the footprints from the [`stage`](Self::stage). Returns
+    /// whether the override was present.
+    pub fn clear_shadow_footprints(&mut self) -> bool {
+        if self.shadow_footprints.is_none() {
+            return false;
+        }
+        self.shadow_footprints = None;
+        self.recompile();
+        true
+    }
+
+    /// The explicit override when set, else the stage's per-item footprints. The list
+    /// is truncated to the ABI's [`SHADOW_MAX`] slots.
+    fn effective_shadow_footprints(&self) -> Vec<ShadowFootprint> {
+        let mut footprints = match &self.shadow_footprints {
+            Some(footprints) => footprints.clone(),
+            None => self.stage.shadow_footprints(),
+        };
+        footprints.truncate(SHADOW_MAX);
+        footprints
     }
 
     /// Frame the stage: move the eye along the current view direction so the document's
@@ -2441,7 +2501,8 @@ impl<V: InventorView> InventorViewport<V> {
             let merged = self.merged_scene();
             merge_queue(&merged, &self.stage, &self.camera.viewport)
         };
-        let (queue, program_queue) = split_programs(queue);
+        let (queue, mut program_queue) = split_programs(queue);
+        apply_program_shadows(&mut program_queue, &self.effective_shadow_footprints());
         self.queue = queue;
         self.program_queue = program_queue;
         self.directives = directives;
@@ -3607,6 +3668,26 @@ fn split_programs(queue: RenderQueue) -> (RenderQueue, RenderQueue) {
     (scene, programs)
 }
 
+/// Write the scene's shadow block into every program packet's parameters.
+///
+/// The fixed ABI reserves `counts.x` and the 80-`vec4` block for every program, so a
+/// producer can populate it without knowing which shader declared it; a program whose
+/// `shadow_opacity` is `0` (or which ignores the block) is unaffected. The program is
+/// rebuilt only when its packed parameters actually change, so a camera move does not
+/// churn the pipeline cache.
+fn apply_program_shadows(queue: &mut RenderQueue, footprints: &[ShadowFootprint]) {
+    for packet in &mut queue.packets {
+        let Some(program) = packet.state.program.as_mut() else {
+            continue;
+        };
+        let mut parameters = *program.parameters();
+        apply_shadows(&mut parameters, footprints.iter().copied());
+        if parameters != *program.parameters() {
+            *program = Arc::new(program.as_ref().clone().with_parameters(parameters));
+        }
+    }
+}
+
 /// The gpui chrome bar under the navigation cube: a projection toggle, Home and the
 /// angle readout. Logical pixels; the palette matches the shell's panels.
 const CHROME_HEIGHT: f32 = 26.0;
@@ -3973,7 +4054,7 @@ pub fn render_image(image: ImageData) -> RenderImage {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use ferrocad_graphics::{Projection, Topology};
+    use ferrocad_graphics::{Projection, ShadowFootprint, Topology};
     use ferrocad_inventor::{Node, NodeKind, compile_with};
     use ferrocad_stage::{DrawMode, ShapeItem};
     use ferrocad_types::{Placement, Rotation, Vector3};
@@ -6406,6 +6487,82 @@ mod tests {
         assert_eq!(viewport.queue.len(), 1);
         assert!(viewport.program_queue.is_empty(), "removing drops the overlay");
         assert!(viewport.overlays().is_empty());
+    }
+
+    /// The viewport is where a scene's `ProgramParameters` are assembled for the
+    /// program queue, so it is where the shadow producer runs: the stage's two separated
+    /// boxes fill two slots, and an explicit host override replaces them.
+    #[test]
+    fn the_stage_supplies_the_program_shadow_block() {
+        let camera = Camera {
+            viewport: ferrocad_graphics::Viewport::new([100, 100], 1.0),
+            ..Camera::identity()
+        };
+        let mut viewport = InventorViewport::new(fake(ImageData::default()), camera, empty_scene());
+        viewport.set_overlays(vec![program_scene()]);
+
+        let program_parameters = |viewport: &InventorViewport<FakeView>| {
+            *viewport.program_queue.packets[0]
+                .state
+                .program
+                .as_ref()
+                .expect("the overlay's program")
+                .parameters()
+        };
+
+        // No stage geometry: the block is clear, so the shader's loop does not run.
+        let parameters = program_parameters(&viewport);
+        assert_eq!(parameters.shadow_count, 0.0);
+        assert!(parameters.shadow_data.iter().flatten().all(|value| *value == 0.0));
+
+        let box_at = |entity: u32, x: f32| {
+            ShapeItem::new(entity).with_shape(
+                vec![
+                    [x, 0.0, 0.0],
+                    [x + 2.0, 0.0, 0.0],
+                    [x + 2.0, 2.0, 0.0],
+                    [x, 2.0, 0.0],
+                ],
+                vec![],
+                vec![],
+                vec![],
+            )
+        };
+        viewport.set_stage(Stage::new().with_item(box_at(1, -5.0)).with_item(box_at(2, 3.0)));
+        // `set_stage` marks the stage dirty; the next paint recompiles.
+        viewport.refresh();
+
+        // Two separated boxes -> two populated slots, in world XY, in stage order.
+        let parameters = program_parameters(&viewport);
+        assert_eq!(parameters.shadow_count, 2.0, "the shader reads counts.x");
+        assert_eq!(parameters.shadow_data[0], [-4.0, 1.0, 1.0, 1.0]);
+        assert_eq!(parameters.shadow_data[1][0], 0.25, "slot 0's blur");
+        assert_eq!(&parameters.shadow_data[1][1..3], &[4.0, 1.0], "slot 1 centre");
+        assert_eq!(parameters.shadow_data[1][3], 1.0, "slot 1 half x");
+        assert_eq!(parameters.shadow_data[2][0], 1.0, "slot 1 half y");
+        assert_eq!(parameters.shadow_data[2][1], 0.25, "slot 1 blur");
+
+        // A host that owns the document bounds can replace the derived list (the
+        // legacy inventor path has no `Stage`).
+        assert!(viewport.set_shadow_footprints(vec![ShadowFootprint::from_bounds(
+            [0.0, 0.0],
+            [4.0, 4.0],
+            1.0
+        )]));
+        let parameters = program_parameters(&viewport);
+        assert_eq!(parameters.shadow_count, 1.0);
+        assert_eq!(parameters.shadow_data[0], [2.0, 2.0, 2.0, 2.0]);
+        assert_eq!(parameters.shadow_data[1][0], 1.0);
+        assert!(!viewport.set_shadow_footprints(vec![ShadowFootprint::from_bounds(
+            [0.0, 0.0],
+            [4.0, 4.0],
+            1.0
+        )]), "an identical override is a no-op");
+
+        // Clearing returns to the live stage bounds.
+        assert!(viewport.clear_shadow_footprints());
+        assert_eq!(program_parameters(&viewport).shadow_count, 2.0);
+        assert!(!viewport.clear_shadow_footprints(), "already stage-derived");
     }
 
     #[test]

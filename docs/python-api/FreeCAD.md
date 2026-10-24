@@ -59,7 +59,7 @@ A drop-in, Rust-backed stand-in for FreeCAD's Python ``App`` module.
 | isAutoCreated() | — |
 | load(path) | — |
 | openTransaction(name='') | — |
-| recompute() | — |
+| recompute(objs=None, force=False, mode=False) | Recompute the document (FreeCAD `Document.recompute(objs, force, mode)`). |
 | redo() | — |
 | removeObject(name) | — |
 | restore() | Re-load the document from its saved file (clearing current content). |
@@ -89,6 +89,8 @@ A drop-in, Rust-backed stand-in for FreeCAD's Python ``App`` module.
 | addExtension(name) | — |
 | addObject(other) | — |
 | addProperty(type_id, name, group='', doc='', attr=0, read_only=False, hidden=False, locked=False, enum_vals=None) | — |
+| changeAttacherType(mode) | `changeAttacherType(name)`: provided by an attached extension (Part's `AttachExtensionPython`), not by this crate. |
+| configLinkProperty(*args, **kwargs) | `configLinkProperty(property, **links)`: provided by an attached extension (App's `LinkExtensionPython`), not by this crate. Keyword arguments reach the provider as a final `dict` element of the tuple. |
 | dumpContent() | Serialize this object's content to bytes (`dumpContent`). |
 | dumpPropertyContent(name, Compression=0) | Serialize one property to bytes (`dumpPropertyContent`). |
 | enforceRecompute() | — |
@@ -105,12 +107,13 @@ A drop-in, Rust-backed stand-in for FreeCAD's Python ``App`` module.
 | getPropertyByName(name) | — |
 | getPropertyStatus(name='') | `getPropertyStatus(name="")`: with no name, the supported status names. |
 | getStatusString() | A short status string: `Invalid[: message]`, `Touched` or `Valid`. |
-| getSubObject(subname, retType=0, matrix=None, transform=True, depth=0) | Resolve sub-object(s) and return them per FreeCAD's `retType` convention: 0 and 1 → DocumentObject, 2 → `(obj, Matrix, None)`, 3 → Placement, 4 → Matrix. |
+| getSubObject(subname, retType=0, matrix=None, transform=True, depth=0) | Resolve sub-object(s) and return them per FreeCAD's `retType` convention: 0 → the sub-shape (`Part.Edge`/`Part.Face`, …) when `subname` names an element, else the DocumentObject; 1 → DocumentObject; 2 → `(obj, Matrix, None)`; 3 → Placement; 4 → Matrix. |
 | getTypeIdOfProperty(name) | — |
 | getTypeOfProperty(name) | `getTypeOfProperty`: the property's status flags as text names. |
 | group_members() | Resolve this object's `Group` link list into `DocumentObject`s. |
 | hasExtension(name) | — |
 | hasObject(other) | — |
+| isDerivedFrom(type_id) | FreeCAD `DocumentObject.isDerivedFrom(typeId)`. |
 | isLink() | `isLink()`: true for `App::Link` and its registered containers, and for the `Part::LinkArray*` types. |
 | purgeTouched() | Mark the object as unchanged (FreeCAD `purgeTouched`). |
 | recompute() | Recompute this object (FreeCAD `DocumentObject.recompute`). |

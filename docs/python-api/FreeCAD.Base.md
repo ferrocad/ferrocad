@@ -78,6 +78,7 @@ Kernel failure (``Part.OCCError`` when the Part module is absent).
 | Member | Summary |
 | --- | --- |
 | `Base` (attribute) | — |
+| `Matrix` (attribute) | — |
 | `Rotation` (attribute) | — |
 | copy() | A detached copy (`Placement.copy`). |
 | inverse() | — |
@@ -85,6 +86,7 @@ Kernel failure (``Part.OCCError`` when the Part module is absent).
 | multVec(v) | Transform a vector by this placement (FreeCAD `Placement.multVec`). |
 | rotate(center, axis, angle, comp=False) | Rotate this placement in place (`Placement.rotate`). |
 | toMatrix() | — |
+| translate(*args) | Move this placement in place (`Placement.translate`). |
 
 ## Class `Precision`
 
@@ -129,6 +131,7 @@ Kernel failure (``Part.OCCError`` when the Part module is absent).
 | getYawPitchRoll() | — |
 | inverse() | — |
 | invert() | — |
+| inverted() | `inverted()`: a new rotation with the inverse value (the quaternion conjugate). Upstream's `Rotation::inverse()` also negates the retained axis, so an axis set for an angle-0 rotation survives the inversion. |
 | isSame(o, tol=0.0) | — |
 | multVec(v) | Rotate a vector (FreeCAD `Rotation.multVec`). |
 | multiply(o) | — |
@@ -176,12 +179,16 @@ Scaling mode returned by ``Matrix.hasScale()`` (``Base::ScaleType``).
 | `Length` (attribute) | — |
 | add(o) | — |
 | cross(o) | — |
+| distanceToLine(base, direction) | `distanceToLine(base, direction)`: distance from this point to the line. |
 | distanceToPoint(o) | — |
 | dot(o) | — |
 | getAngle(o) | — |
 | isEqual(o, tol) | — |
+| multiply(factor) | `multiply(factor)`: scale in place (upstream mutates and returns self). |
 | negative() | — |
-| normalize() | — |
+| normalize() | `normalize()`: normalise in place and return self (upstream's semantics). |
+| projectToPlane(base, normal) | `projectToPlane(base, normal)`: project in place onto the plane through `base` with the given normal. |
+| scale(x, y=None, z=None) | `scale(factor)` or `scale(x, y, z)`: scale in place (upstream mutates and returns self). Draft's fillets use the three-argument form. |
 | sub(o) | — |
 | `x` (attribute) | — |
 | `y` (attribute) | — |

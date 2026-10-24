@@ -146,6 +146,7 @@ its load errors are the useful signal.
 | --- | --- |
 | Part | **531 passed**, 0 failed, 0 errored, 12 skipped, **0 files failed to load** |
 | Draft | **10 passed**, 1 failed, 0 errored, 0 skipped, 1 load error |
+| Draft M2 (`test_creation`, `test_array`) | **27 passed**, 0 failed, 0 errored, **0 load failures** |
 
 The 2026-10-20 Part row is the pre-shim baseline: `TestPartApp.py` and
 `TestPartMirror.py` failed to load (missing `Draft`), so TestPartApp's ~300 tests never
@@ -161,6 +162,27 @@ cut/common, general-fuse and sweep maps match upstream exactly. Six guarded asse
 still skip honestly: four consumer shapes in `solids.rs` store an empty lineage, and two
 (`FaceMakerCheese` 10, `makeShellFromWires` 24) are composed-alias counts. See
 [`../TODO-24-10-2026.md`](../TODO-24-10-2026.md) §P0.
+
+### Draft M2 (Python feature proxies)
+
+The two modules that exercise Python-defined objects are measured separately from the
+fixed `--draft` list:
+
+| Module | Result |
+| --- | --- |
+| `drafttests/test_creation.py` | **26 passed**, 0 failed, 0 errored |
+| `drafttests/test_array.py` | **1 passed**, 0 failed, 0 errored |
+
+`cargo test -p ferrocad_part_py --test draft_proxies -- --nocapture` runs them. The last
+gaps were the attachment extension (`Part::AttachExtensionPython`), `PropertyLinkSubList`
+with `(object, subname)` entries, the link extension, `Placement.translate`/`.Matrix`, and
+`getSubObject` returning the named sub-shape (`Part::FeaturePy::getSubObject`) rather than
+its owner.
+
+`test_hatch` also imports `TechDraw` for `makeGeomHatch`. FerroCAD supplies that one
+function as a small pure-Python shim (`python/TechDraw`) that reads the standard PAT file
+from `<getResourceDir()>/Mod/TechDraw/PAT/`; `App.getResourceDir()` ends with the
+separator upstream callers assume (`... + "Mod/TechDraw/PAT/FCPAT.pat"`).
 
 ### Reading the report
 

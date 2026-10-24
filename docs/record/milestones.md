@@ -19,7 +19,8 @@ is archived in
 | 2026-10-21 | **Grid overlay, Draft probe** | The external-mod track (G0–G6), the Draft import-ladder assessment, and the upstream dma-buf issue. |
 | 2026-10-22 | **Part conformance push** | The headless `ViewObject`, the `.FCStd` reader, link arrays, the Ctrl+K palette, the Dev Tools window, and the first Part measurements. |
 | 2026-10-23 | **Serializers, lineage, Qt** | Native `.ferrocad` + real `.FCStd` ZIP, the lineage layer, Links L0–L5, the `.ui` reader, and the `PySideUic` proxies. |
-| 2026-10-24 | **Part completion** | The full Part surface, live `Shape.Placement`, exact 20/47 compound-cut maps, and **529 upstream tests passing with zero errors**. |
+| 2026-10-24 | **Part completion** | The full Part surface, live `Shape.Placement`, exact 20/47 compound-cut maps, and **531 upstream tests passing with zero errors**. |
+| 2026-10-24 | **Draft M2 green** | Attachment, `PropertyLinkSubList`, the link extension, sub-shape `getSubObject` and the hatch shim: the two Draft M2 modules pass **27/27** with zero load failures. |
 
 ## Current state (2026-10-24)
 
@@ -27,11 +28,12 @@ is archived in
 | --- | --- | --- |
 | Upstream Part suite | 2 passed, 1 failed, 89 errored, 4 files failed to load | **531 passed, 0 failed, 0 errored, 0 load failures** |
 | Upstream Draft suite | no group | 10 passed, 1 failed, 1 load error (upstream Draft, not a shim) |
+| Draft M2 (`test_creation`, `test_array`) | 15 passed, 1 failed, 11 errored | **27 passed, 0 failed, 0 errored, 0 load failures** |
 | Python facade | 377 passed | **444 passed, 17 skipped** (134 subtests) |
 | Part module | `makeBox` and a shape handle | primitives, booleans, dress-ups, links and arrays, conics, splines, NURBS conversion, `ShapeFix`, `ChFi2d`, `Sketcher`, feature objects |
 | Document format | one JSON blob | native `.ferrocad` + real `.FCStd` ZIP, with an additive lineage sidecar |
 | Naming | positional strings | lineage layer with stored maps; every reachable guarded size matches (52/58/26/24/9/6/60) plus the cuts' 20/47 |
-| Workbench platform | no Python-defined objects | `Part::FeaturePython`/`Part2DObjectPython` execute proxies; the Draft M2 modules load with zero load errors |
+| Workbench platform | no Python-defined objects | `Part::FeaturePython`/`Part2DObjectPython` execute proxies and attach; the Draft M2 modules run green (27/27) |
 
 ### Three lessons
 
@@ -45,18 +47,18 @@ is archived in
    threads are helical pipes, and tubes accept only analytic spines — each says so at
    the call site and in the record.
 
-### Two asymmetries that define the next round
+### The remaining Part asymmetry
 
-1. **Two guarded map counts remain documented non-results.** `FaceMakerCheese` (10) needs
-   upstream's face-combo alias and `makeShellFromWires` (24) needs a different
-   (ruled-shell) topology. Every other guarded size is reproduced.
-2. **Attachment is the last gate to real Draft objects.** The proxies execute and
-   persist, but `AttachmentSupport`/`MapMode` is still missing; most residual Draft M2
-   errors are behind it.
+**Two guarded map counts remain documented non-results.** `FaceMakerCheese` (10) needs
+upstream's face-combo alias and `makeShellFromWires` (24) needs a different (ruled-shell)
+topology. Every other guarded size is reproduced.
+
+The attachment gate is crossed: both Draft M2 modules run green, so the next round is
+the Draft tools (P3) rather than more Part surface.
 
 ### What is deliberately not claimed
 
-- **Drop-in FreeCAD compatibility.** 529 upstream Part tests are a measured subset, not
+- **Drop-in FreeCAD compatibility.** 531 upstream Part tests are a measured subset, not
   the whole workbench: PartDesign, Sketcher's solver, FEM, CAM and the GUI workbenches
   are out of scope here.
 - **A finished `.FCStd` writer.** It round-trips our documents; an upstream-FreeCAD open

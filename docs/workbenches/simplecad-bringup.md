@@ -389,7 +389,7 @@ but not the upstream shape), **missing** (neither). Slices are defined in §7.
 | 15 | BRep persistence | `Shape()`, `.read`, `.write`, `.exportBrep` | backend `save_shape`/`load_shape`; Python `exportBrep`, `exportBrepToString`; no `read`/`write` | **partial** | S2.1 |
 | 16 | Tessellation | `.tessellate`, `MeshPart.meshFromShape` | `Shape.mesh()` (FerroCAD extension) and `tessellate`; no `MeshPart` | **partial** | S3.4 |
 | 17 | Errors | `Part.OCCError` | absent; kernel errors surface as `RuntimeError` | **missing** | S2.1 |
-| 18 | Name resolution | `.getElement`, `.getSubShape` | backend `resolve` is positional-only; no Python accessor | **partial** | S2.1 |
+| 18 | Name resolution | `.getElement`, `.getSubShape` | both accessors exist; `getSubShape` resolves through the lineage (positional fallback), `getElement` is positional-only | **done** | — |
 
 Two rows deserve emphasis:
 

@@ -315,11 +315,13 @@ Two "resolution" paths meet at the seam:
 
 - **Expression/value resolution** (built): `resolve_path` turns `Obj.Prop.Sub` into a
   number by walking `Placement`/`Rotation`/`Vector`.
-- **Lineage resolution** (future): `getSubObject("Face6")` and a `LinkSub`'s stored
-  subnames must resolve to a *current* sub-shape via the element map. Today
-  `getSubObject` in the bindings does a trivial name lookup (and returns a
-  placement); with geometry it becomes map-aware and needs a defined fallback when a
-  name is gone.
+- **Lineage resolution** (built): `getSubObject("Face6")` and a `LinkSub`'s stored
+  subnames resolve through the shape value's lineage (`resolve_element_name`), with the
+  positional name as the fallback a lineage-free shape keeps. `getSubObject(subname,
+  retType=0)` now returns the *element* — the owning module turns the trailing segment
+  into its own Python class through `register_sub_element_resolver` (`Edge1` →
+  `Part.Edge`), while `retType=1` still returns the owning object. `Shape.getSubShape`
+  uses the same resolution and returns a null shape for a name the lineage retired.
 
 This is the sense in which the user's instinct is fully correct: once sub-shape
 references exist, the persistence layer and the lineage graph are entangled. A

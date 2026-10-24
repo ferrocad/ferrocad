@@ -6,24 +6,30 @@
 //! [`ferrocad_curves`]; the conversion to a kernel shape is the `ferrocad_geom` seam
 //! (`make_edge`/`make_wire`), implemented by OCCT.
 //!
-//! It also carries the small surface slice upstream's `Geom2d_tests.py` and
-//! `BRep_tests.py` exercise: the `Part.Geom2d` submodule (`Line2dSegment`, `Circle2d`
-//! and a `BSplineCurve2d` that records the points it is asked to fit but refuses to
-//! fake knot insertion), the elementary surface descriptions `Part.Plane`,
-//! `Part.Cylinder` (upstream's `Part::GeomCylinder`) and `Part.Sphere` (upstream's
+//! It also carries the `Part.Geom2d` submodule: the abstract `Geometry2d` /
+//! `Curve2d` / `Conic2d` / `ArcOfConic2d` bases and the concrete `Line2d`,
+//! `Line2dSegment`, `Circle2d`, `ArcOfCircle2d`, `Ellipse2d`, `ArcOfEllipse2d`,
+//! `Hyperbola2d`, `ArcOfHyperbola2d`, `Parabola2d`, `ArcOfParabola2d`,
+//! `BezierCurve2d`, `OffsetCurve2d` and `BSplineCurve2d` classes. Their
+//! geometry is the XY projection of the `ferrocad_curves` types above, so
+//! `value`, the parameter range and `toShape()` are evaluated for real; the
+//! `BSplineCurve2d` only records the points it is asked to fit (this slice binds
+//! no 2D B-spline kernel) and says so instead of inventing a curve. It also
+//! carries the elementary surface descriptions `Part.Plane`, `Part.Cylinder`
+//! (upstream's `Part::GeomCylinder`) and `Part.Sphere` (upstream's
 //! `Part::GeomSphere`), and `Part.RectangularTrimmedSurface`. The cylinder and
 //! sphere are distinct from the document primitives returned by
 //! `Part.makeCylinder`/`Part.makeSphere`.
 //!
-//! Deliberate limits for this slice, all reported as `Part.OCCError` rather than a
-//! silent `None`: an infinite `Line` has no edge, and face/solid constructors
-//! (`makeFace`, `makeSolid`, …) are still to come. `Line2dSegment.toShape(surface)`
-//! attaches the 2D segment as the edge's pcurve but does **not** project it onto the
-//! surface: no `GeomProjLib` binding exists here, and `Part.Cylinder`/`Part.Sphere`
-//! are only descriptions (radius, center, axis), not real B-Rep geometry.
-//! `RectangularTrimmedSurface.toShape()` builds a real planar face for a `Part.Plane`
-//! basis only; a trimmed cylinder or sphere is described but raises `Part.OCCError`
-//! when asked for a face.
+//! Deliberate limits for this slice, all reported as `Part.OCCError` or
+//! `NotImplementedError` rather than a silent `None`: an infinite `Line` has no
+//! edge, and face/solid constructors (`makeFace`, `makeSolid`, …) are still to
+//! come. `Part.Geom2d`'s `toShape(surface)` attaches the 2D curve as the edge's
+//! pcurve but does **not** project it onto the surface: no `GeomProjLib` binding
+//! exists here, and `Part.Cylinder`/`Part.Sphere` are only descriptions (radius,
+//! center, axis), not real B-Rep geometry. `RectangularTrimmedSurface.toShape()`
+//! builds a real planar face for a `Part.Plane` basis only; a trimmed cylinder or
+//! sphere is described but raises `Part.OCCError` when asked for a face.
 
 use std::sync::Mutex;
 
@@ -33,12 +39,15 @@ use ferrocad_curves::{
     polygon,
 };
 use ferrocad_geom::{ElementKind, Shape};
+use ferrocad_occt::surface_ops;
 use ferrocad_part::backend;
 use ferrocad_types::Matrix4;
 use pyo3::create_exception;
-use pyo3::exceptions::{PyException, PyIndexError, PyRuntimeError, PyTypeError, PyValueError};
+use pyo3::exceptions::{
+    PyException, PyIndexError, PyNotImplementedError, PyRuntimeError, PyTypeError, PyValueError,
+};
 use pyo3::prelude::*;
-use pyo3::types::{PyAny, PyModule, PySequence, PyTuple};
+use pyo3::types::{PyAny, PyDict, PyModule, PySequence, PyTuple};
 use pyo3::IntoPyObjectExt;
 
 use crate::PartShape;
@@ -2033,7 +2042,7 @@ impl PyPlane {
 /// `center` / `axis` keywords are our extension — upstream only accepts another
 /// `Cylinder`, a `Circle`, or three points.
 ///
-/// The object is accepted by [`PyLine2dSegment::toShape`] as the `surface`
+/// The object is accepted by [`PyCurve2d::toShape`] as the `surface`
 /// argument. It answers no shape queries (`Faces`, `Edges`, …): no B-Rep geometry
 /// is faked here.
 #[pyclass(name = "Cylinder", module = "Part")]
@@ -2103,7 +2112,7 @@ impl PyCylinder {
 /// Like the cylinder this is an elementary description only (`Radius`, `Center`,
 /// `Axis`); upstream builds the default from an empty `gp_Sphere` (center at the
 /// origin, axis `+Z`, radius 1) and the `radius`/`center`/`axis` keywords are our
-/// extension. It is accepted by [`PyLine2dSegment::toShape`] as the `surface`
+/// extension. It is accepted by [`PyCurve2d::toShape`] as the `surface`
 /// argument, and answers no shape queries: no B-Rep geometry is faked here.
 #[pyclass(name = "Sphere", module = "Part")]
 #[derive(Clone)]
@@ -3327,119 +3336,3164 @@ fn knot_at(state: &SplineState, index: i32) -> PyResult<f64> {
 // ---------------------------------------------------------------------------
 // 2D geometry (Part.Geom2d)
 // ---------------------------------------------------------------------------
+//
+// Upstream's `Part::Geom2d*` classes are the 2D counterpart of the `Part::Geom*`
+// curves above (`src/Mod/Part/App/Geometry2d.h`). This slice keeps one geometry
+// model: every `Part.Geom2d` curve is the XY projection of the matching
+// `ferrocad_curves` curve (the same types `Part.Circle`, `Part.Ellipse`, …
+// wrap), with `z = 0`; `Line2dSegment` and `OffsetCurve2d` have no exact 3D
+// counterpart and are stored explicitly.
+//
+// `value`, the parameter range, the tangents, the curvature and the length are
+// evaluated from that geometry (never from a recorded sample), and `toShape()`
+// builds the corresponding XY edge. `toShape(surface)` builds the same XY edge
+// and attaches the 2D curve as its pcurve, but does **not** project it onto the
+// surface: the seam binds no `GeomProjLib`, exactly as `Line2dSegment` already
+// documented before this slice.
 
-/// `Part.Geom2d.Line2dSegment(p1, p2)` — a bounded line segment in 2D parameter
-/// space (upstream's `Part::Geom2dLineSegment`).
-///
-/// Points are `(u, v)` pairs or objects with `x`/`y` (`FreeCAD.Base.Vector2d`).
-#[pyclass(name = "Line2dSegment", module = "Part.Geom2d")]
-#[derive(Clone, Copy)]
-pub struct PyLine2dSegment {
-    start: (f64, f64),
-    end: (f64, f64),
+/// Upstream's `Precision::Infinite()` (`1e100`), the parameter limit of an
+/// unbounded 2D curve.
+const GEOM2D_INFINITE: f64 = 1.0e100;
+
+fn xyz(x: f64, y: f64) -> Vector3 {
+    Vector3::new(x, y, 0.0)
 }
+
+fn xy(point: Vector3) -> (f64, f64) {
+    (point.x, point.y)
+}
+
+fn unit_normal() -> Vector3 {
+    Vector3::new(0.0, 0.0, 1.0)
+}
+
+fn unit_x() -> Vector3 {
+    Vector3::new(1.0, 0.0, 0.0)
+}
+
+/// A unit 2D vector, or `None` for a (near) zero or non-finite input.
+fn unit2(vector: (f64, f64)) -> Option<(f64, f64)> {
+    let length = (vector.0 * vector.0 + vector.1 * vector.1).sqrt();
+    if length.is_finite() && length > TOLERANCE {
+        Some((vector.0 / length, vector.1 / length))
+    } else {
+        None
+    }
+}
+
+/// The 2D cross product (the signed area of the parallelogram).
+fn cross2(a: (f64, f64), b: (f64, f64)) -> f64 {
+    a.0 * b.1 - a.1 * b.0
+}
+
+fn distance2(a: (f64, f64), b: (f64, f64)) -> f64 {
+    ((a.0 - b.0).powi(2) + (a.1 - b.1).powi(2)).sqrt()
+}
+
+/// A clear failure for a capability this slice's 2D seam does not have.
+fn geom2d_not_implemented(what: &str) -> PyErr {
+    PyNotImplementedError::new_err(format!(
+        "Part.Geom2d.{what} is not implemented in this slice: the 2D seam has no \
+         such capability"
+    ))
+}
+
+/// The geometry behind a `Part.Geom2d` object.
+#[derive(Clone)]
+pub(crate) enum Geom2dData {
+    /// An infinite line (`Geom2d_Line`), parameterised by the distance along
+    /// its direction.
+    Line(Line),
+    /// A trimmed line (`Geom2d_TrimmedCurve` on a `Geom2d_Line`):
+    /// `value(u) = origin + u * direction` over `[first, last]`.
+    Segment {
+        origin: (f64, f64),
+        direction: (f64, f64),
+        first: f64,
+        last: f64,
+    },
+    Circle(Circle),
+    Arc(Arc),
+    Ellipse(Ellipse),
+    ArcOfEllipse {
+        ellipse: Ellipse,
+        first: f64,
+        last: f64,
+    },
+    Hyperbola(Hyperbola),
+    ArcOfHyperbola(ArcOfHyperbola),
+    Parabola(Parabola),
+    ArcOfParabola(ArcOfParabola),
+    Bezier(BezierCurve),
+    /// The points a `BSplineCurve2d` was asked to fit. This slice binds no 2D
+    /// B-spline kernel, so no curve is built behind that record.
+    BSpline(Vec<(f64, f64)>),
+    Offset {
+        basis: Box<Geom2dData>,
+        offset: f64,
+    },
+}
+
+impl Geom2dData {
+    fn kind(&self) -> &'static str {
+        match self {
+            Self::Line(_) => "Line2d",
+            Self::Segment { .. } => "Line2dSegment",
+            Self::Circle(_) => "Circle2d",
+            Self::Arc(_) => "ArcOfCircle2d",
+            Self::Ellipse(_) => "Ellipse2d",
+            Self::ArcOfEllipse { .. } => "ArcOfEllipse2d",
+            Self::Hyperbola(_) => "Hyperbola2d",
+            Self::ArcOfHyperbola(_) => "ArcOfHyperbola2d",
+            Self::Parabola(_) => "Parabola2d",
+            Self::ArcOfParabola(_) => "ArcOfParabola2d",
+            Self::Bezier(_) => "BezierCurve2d",
+            Self::BSpline(_) => "BSplineCurve2d",
+            Self::Offset { .. } => "OffsetCurve2d",
+        }
+    }
+
+    /// The point at parameter `u`; `None` when no curve exists behind the data.
+    fn point(&self, u: f64) -> Option<(f64, f64)> {
+        Some(match self {
+            Self::Line(line) => xy(line.point_at(u)),
+            Self::Segment {
+                origin, direction, ..
+            } => (
+                origin.0 + u * direction.0,
+                origin.1 + u * direction.1,
+            ),
+            Self::Circle(circle) => xy(circle.point_at(u)),
+            Self::Arc(arc) => xy(arc.point_at(u)),
+            Self::Ellipse(ellipse) => xy(ellipse.point_at(u)),
+            Self::ArcOfEllipse { ellipse, .. } => xy(ellipse.point_at(u)),
+            Self::Hyperbola(hyperbola) => xy(hyperbola.point_at(u)),
+            Self::ArcOfHyperbola(arc) => xy(arc.point_at(u)),
+            Self::Parabola(parabola) => xy(parabola.point_at(u)),
+            Self::ArcOfParabola(arc) => xy(arc.point_at(u)),
+            Self::Bezier(curve) => xy(curve.point_at(u)),
+            Self::BSpline(_) => return None,
+            Self::Offset { basis, offset } => {
+                let point = basis.point(u)?;
+                let tangent = basis.tangent(u)?;
+                // The left normal of the basis curve.
+                (point.0 - offset * tangent.1, point.1 + offset * tangent.0)
+            }
+        })
+    }
+
+    /// The unit tangent at parameter `u`.
+    fn tangent(&self, u: f64) -> Option<(f64, f64)> {
+        Some(match self {
+            Self::Line(line) => xy(line.tangent_at(u)),
+            Self::Segment { direction, .. } => *direction,
+            Self::Circle(circle) => xy(circle.tangent_at(u)),
+            Self::Arc(arc) => xy(arc.tangent_at(u)),
+            Self::Ellipse(ellipse) => xy(ellipse.tangent_at(u)),
+            Self::ArcOfEllipse { ellipse, .. } => xy(ellipse.tangent_at(u)),
+            Self::Hyperbola(hyperbola) => xy(hyperbola.tangent_at(u)),
+            Self::ArcOfHyperbola(arc) => xy(arc.hyperbola().tangent_at(u)),
+            Self::Parabola(parabola) => xy(parabola.tangent_at(u)),
+            Self::ArcOfParabola(arc) => xy(arc.parabola().tangent_at(u)),
+            Self::Bezier(curve) => xy(curve.tangent_at(u)),
+            Self::BSpline(_) => return None,
+            Self::Offset { .. } => {
+                // The offset curve's derivative is not a named analytic
+                // quantity here, so it is taken from the offset points.
+                let step = 1e-6 * (1.0 + u.abs());
+                let before = self.point(u - step)?;
+                let after = self.point(u + step)?;
+                unit2((after.0 - before.0, after.1 - before.1))?
+            }
+        })
+    }
+
+    /// `|dP/du|` at `u`.
+    fn speed(&self, u: f64) -> Option<f64> {
+        Some(match self {
+            Self::Line(_) | Self::Segment { .. } => 1.0,
+            Self::Circle(circle) => circle.radius(),
+            Self::Arc(arc) => arc.circle().radius(),
+            Self::Ellipse(ellipse) => {
+                let (a, b) = (ellipse.major_radius(), ellipse.minor_radius());
+                (a * a * u.sin().powi(2) + b * b * u.cos().powi(2)).sqrt()
+            }
+            Self::ArcOfEllipse { ellipse, .. } => {
+                let (a, b) = (ellipse.major_radius(), ellipse.minor_radius());
+                (a * a * u.sin().powi(2) + b * b * u.cos().powi(2)).sqrt()
+            }
+            Self::Hyperbola(hyperbola) => {
+                let (a, b) = (hyperbola.major_radius(), hyperbola.minor_radius());
+                (a * a * u.sinh().powi(2) + b * b * u.cosh().powi(2)).sqrt()
+            }
+            Self::ArcOfHyperbola(arc) => {
+                let hyperbola = arc.hyperbola();
+                let (a, b) = (hyperbola.major_radius(), hyperbola.minor_radius());
+                (a * a * u.sinh().powi(2) + b * b * u.cosh().powi(2)).sqrt()
+            }
+            Self::Parabola(parabola) => {
+                let f = parabola.focal();
+                (u * u / (4.0 * f * f) + 1.0).sqrt()
+            }
+            Self::ArcOfParabola(arc) => {
+                let f = arc.parabola().focal();
+                (u * u / (4.0 * f * f) + 1.0).sqrt()
+            }
+            Self::Bezier(_) | Self::Offset { .. } => {
+                let step = 1e-6 * (1.0 + u.abs());
+                let before = self.point(u - step)?;
+                let after = self.point(u + step)?;
+                distance2(before, after) / (2.0 * step)
+            }
+            Self::BSpline(_) => return None,
+        })
+    }
+
+    fn first(&self) -> Option<f64> {
+        Some(match self {
+            Self::Line(_) | Self::Hyperbola(_) | Self::Parabola(_) => -GEOM2D_INFINITE,
+            Self::Segment { first, .. } => *first,
+            Self::Circle(_) | Self::Ellipse(_) => 0.0,
+            Self::Arc(arc) => arc.first(),
+            Self::ArcOfEllipse { first, .. } => *first,
+            Self::ArcOfHyperbola(arc) => arc.first(),
+            Self::ArcOfParabola(arc) => arc.first(),
+            Self::Bezier(curve) => curve.first(),
+            Self::BSpline(_) => return None,
+            Self::Offset { basis, .. } => basis.first()?,
+        })
+    }
+
+    fn last(&self) -> Option<f64> {
+        Some(match self {
+            Self::Line(_) | Self::Hyperbola(_) | Self::Parabola(_) => GEOM2D_INFINITE,
+            Self::Segment { last, .. } => *last,
+            Self::Circle(_) | Self::Ellipse(_) => std::f64::consts::TAU,
+            Self::Arc(arc) => arc.last(),
+            Self::ArcOfEllipse { last, .. } => *last,
+            Self::ArcOfHyperbola(arc) => arc.last(),
+            Self::ArcOfParabola(arc) => arc.last(),
+            Self::Bezier(curve) => curve.last(),
+            Self::BSpline(_) => return None,
+            Self::Offset { basis, .. } => basis.last()?,
+        })
+    }
+
+    fn is_closed(&self) -> bool {
+        match self {
+            Self::Circle(_) | Self::Ellipse(_) => true,
+            Self::Line(_) | Self::Hyperbola(_) | Self::Parabola(_) | Self::BSpline(_) => false,
+            Self::Bezier(curve) => curve.is_closed(),
+            Self::Offset { basis, .. } => basis.is_closed(),
+            _ => match (self.first(), self.last()) {
+                (Some(first), Some(last)) if first != last => {
+                    match (self.point(first), self.point(last)) {
+                        (Some(start), Some(end)) => distance2(start, end) <= TOLERANCE,
+                        _ => false,
+                    }
+                }
+                _ => false,
+            },
+        }
+    }
+
+    fn is_periodic(&self) -> bool {
+        matches!(self, Self::Circle(_) | Self::Ellipse(_))
+    }
+
+    fn continuity(&self) -> &'static str {
+        match self {
+            Self::Segment { .. }
+            | Self::Arc(_)
+            | Self::ArcOfEllipse { .. }
+            | Self::ArcOfHyperbola(_)
+            | Self::ArcOfParabola(_)
+            | Self::BSpline(_)
+            | Self::Offset { .. } => "C0",
+            _ => "CN",
+        }
+    }
+
+    /// The location of a conic (its centre, or the vertex of a parabola).
+    fn location(&self) -> Option<(f64, f64)> {
+        Some(match self {
+            Self::Line(line) => xy(line.origin()),
+            Self::Segment { origin, .. } => *origin,
+            Self::Circle(circle) => xy(circle.center()),
+            Self::Arc(arc) => xy(arc.circle().center()),
+            Self::Ellipse(ellipse) => xy(ellipse.center()),
+            Self::ArcOfEllipse { ellipse, .. } => xy(ellipse.center()),
+            Self::Hyperbola(hyperbola) => xy(hyperbola.center()),
+            Self::ArcOfHyperbola(arc) => xy(arc.hyperbola().center()),
+            Self::Parabola(parabola) => xy(parabola.vertex()),
+            Self::ArcOfParabola(arc) => xy(arc.parabola().vertex()),
+            _ => return None,
+        })
+    }
+
+    fn normal(&self) -> Option<Vector3> {
+        Some(match self {
+            Self::Line(_) | Self::Segment { .. } | Self::Bezier(_) => unit_normal(),
+            Self::Circle(circle) => circle.normal(),
+            Self::Arc(arc) => arc.circle().normal(),
+            Self::Ellipse(ellipse) => ellipse.normal(),
+            Self::ArcOfEllipse { ellipse, .. } => ellipse.normal(),
+            Self::Hyperbola(hyperbola) => hyperbola.normal(),
+            Self::ArcOfHyperbola(arc) => arc.hyperbola().normal(),
+            Self::Parabola(parabola) => parabola.normal(),
+            Self::ArcOfParabola(arc) => arc.parabola().normal(),
+            _ => return None,
+        })
+    }
+
+    fn x_axis(&self) -> Option<(f64, f64)> {
+        Some(match self {
+            Self::Line(line) => xy(line.direction()),
+            Self::Segment { direction, .. } => *direction,
+            Self::Circle(circle) => xy(circle.x_axis()),
+            Self::Arc(arc) => xy(arc.circle().x_axis()),
+            Self::Ellipse(ellipse) => xy(ellipse.x_axis()),
+            Self::ArcOfEllipse { ellipse, .. } => xy(ellipse.x_axis()),
+            Self::Hyperbola(hyperbola) => xy(hyperbola.x_axis()),
+            Self::ArcOfHyperbola(arc) => xy(arc.hyperbola().x_axis()),
+            Self::Parabola(parabola) => xy(parabola.x_axis()),
+            Self::ArcOfParabola(arc) => xy(arc.parabola().x_axis()),
+            _ => return None,
+        })
+    }
+
+    fn y_axis(&self) -> Option<(f64, f64)> {
+        Some(match self {
+            Self::Line(line) => xy(line.direction()),
+            Self::Segment { direction, .. } => *direction,
+            Self::Circle(circle) => xy(circle.y_axis()),
+            Self::Arc(arc) => xy(arc.circle().y_axis()),
+            Self::Ellipse(ellipse) => xy(ellipse.y_axis()),
+            Self::ArcOfEllipse { ellipse, .. } => xy(ellipse.y_axis()),
+            Self::Hyperbola(hyperbola) => xy(hyperbola.y_axis()),
+            Self::ArcOfHyperbola(arc) => xy(arc.hyperbola().y_axis()),
+            Self::Parabola(parabola) => xy(parabola.y_axis()),
+            Self::ArcOfParabola(arc) => xy(arc.parabola().y_axis()),
+            _ => return None,
+        })
+    }
+
+    fn eccentricity(&self) -> Option<f64> {
+        Some(match self {
+            Self::Circle(_) | Self::Arc(_) => 0.0,
+            Self::Ellipse(ellipse) => {
+                let (a, b) = (ellipse.major_radius(), ellipse.minor_radius());
+                (1.0 - (b * b) / (a * a)).max(0.0).sqrt()
+            }
+            Self::ArcOfEllipse { ellipse, .. } => {
+                let (a, b) = (ellipse.major_radius(), ellipse.minor_radius());
+                (1.0 - (b * b) / (a * a)).max(0.0).sqrt()
+            }
+            Self::Hyperbola(hyperbola) => hyperbola.eccentricity(),
+            Self::ArcOfHyperbola(arc) => arc.hyperbola().eccentricity(),
+            Self::Parabola(_) | Self::ArcOfParabola(_) => 1.0,
+            _ => return None,
+        })
+    }
+
+    /// A copy of a conic moved to `center`, keeping its axes and (for an arc)
+    /// its parameter range.
+    fn with_location(&self, center: (f64, f64)) -> Option<Self> {
+        let point = xyz(center.0, center.1);
+        Some(match self {
+            Self::Line(line) => Self::Line(Line::new(point, line.direction()).ok()?),
+            Self::Segment {
+                direction,
+                first,
+                last,
+                ..
+            } => Self::Segment {
+                origin: center,
+                direction: *direction,
+                first: *first,
+                last: *last,
+            },
+            Self::Circle(circle) => Self::Circle(
+                Circle::with_axis(point, circle.normal(), circle.x_axis(), circle.radius())
+                    .ok()?,
+            ),
+            Self::Arc(arc) => {
+                let circle = Circle::with_axis(
+                    point,
+                    arc.circle().normal(),
+                    arc.circle().x_axis(),
+                    arc.circle().radius(),
+                )
+                .ok()?;
+                Self::Arc(Arc::new(circle, arc.first(), arc.last()).ok()?)
+            }
+            Self::Ellipse(ellipse) => Self::Ellipse(
+                Ellipse::with_axis(
+                    point,
+                    ellipse.normal(),
+                    ellipse.x_axis(),
+                    ellipse.major_radius(),
+                    ellipse.minor_radius(),
+                )
+                .ok()?,
+            ),
+            Self::ArcOfEllipse {
+                ellipse,
+                first,
+                last,
+            } => Self::ArcOfEllipse {
+                ellipse: Ellipse::with_axis(
+                    point,
+                    ellipse.normal(),
+                    ellipse.x_axis(),
+                    ellipse.major_radius(),
+                    ellipse.minor_radius(),
+                )
+                .ok()?,
+                first: *first,
+                last: *last,
+            },
+            Self::Hyperbola(hyperbola) => Self::Hyperbola(
+                Hyperbola::with_axis(
+                    point,
+                    hyperbola.normal(),
+                    hyperbola.x_axis(),
+                    hyperbola.major_radius(),
+                    hyperbola.minor_radius(),
+                )
+                .ok()?,
+            ),
+            Self::ArcOfHyperbola(arc) => {
+                let hyperbola = Hyperbola::with_axis(
+                    point,
+                    arc.hyperbola().normal(),
+                    arc.hyperbola().x_axis(),
+                    arc.hyperbola().major_radius(),
+                    arc.hyperbola().minor_radius(),
+                )
+                .ok()?;
+                Self::ArcOfHyperbola(ArcOfHyperbola::new(hyperbola, arc.first(), arc.last()).ok()?)
+            }
+            Self::Parabola(parabola) => Self::Parabola(
+                Parabola::with_axis(point, parabola.normal(), parabola.x_axis(), parabola.focal())
+                    .ok()?,
+            ),
+            Self::ArcOfParabola(arc) => {
+                let parabola = Parabola::with_axis(
+                    point,
+                    arc.parabola().normal(),
+                    arc.parabola().x_axis(),
+                    arc.parabola().focal(),
+                )
+                .ok()?;
+                Self::ArcOfParabola(ArcOfParabola::new(parabola, arc.first(), arc.last()).ok()?)
+            }
+            _ => return None,
+        })
+    }
+
+    /// A copy of a conic with its `XAxis` direction replaced.
+    fn with_x_axis(&self, direction: (f64, f64)) -> Option<Self> {
+        let direction = unit2(direction)?;
+        let axis = xyz(direction.0, direction.1);
+        Some(match self {
+            Self::Line(line) => Self::Line(Line::new(line.origin(), axis).ok()?),
+            Self::Segment {
+                origin,
+                first,
+                last,
+                ..
+            } => Self::Segment {
+                origin: *origin,
+                direction,
+                first: *first,
+                last: *last,
+            },
+            Self::Circle(circle) => Self::Circle(
+                Circle::with_axis(circle.center(), circle.normal(), axis, circle.radius()).ok()?,
+            ),
+            Self::Arc(arc) => {
+                let circle = Circle::with_axis(
+                    arc.circle().center(),
+                    arc.circle().normal(),
+                    axis,
+                    arc.circle().radius(),
+                )
+                .ok()?;
+                Self::Arc(Arc::new(circle, arc.first(), arc.last()).ok()?)
+            }
+            Self::Ellipse(ellipse) => Self::Ellipse(
+                Ellipse::with_axis(
+                    ellipse.center(),
+                    ellipse.normal(),
+                    axis,
+                    ellipse.major_radius(),
+                    ellipse.minor_radius(),
+                )
+                .ok()?,
+            ),
+            Self::ArcOfEllipse {
+                ellipse,
+                first,
+                last,
+            } => Self::ArcOfEllipse {
+                ellipse: Ellipse::with_axis(
+                    ellipse.center(),
+                    ellipse.normal(),
+                    axis,
+                    ellipse.major_radius(),
+                    ellipse.minor_radius(),
+                )
+                .ok()?,
+                first: *first,
+                last: *last,
+            },
+            Self::Hyperbola(hyperbola) => Self::Hyperbola(
+                Hyperbola::with_axis(
+                    hyperbola.center(),
+                    hyperbola.normal(),
+                    axis,
+                    hyperbola.major_radius(),
+                    hyperbola.minor_radius(),
+                )
+                .ok()?,
+            ),
+            Self::ArcOfHyperbola(arc) => {
+                let hyperbola = Hyperbola::with_axis(
+                    arc.hyperbola().center(),
+                    arc.hyperbola().normal(),
+                    axis,
+                    arc.hyperbola().major_radius(),
+                    arc.hyperbola().minor_radius(),
+                )
+                .ok()?;
+                Self::ArcOfHyperbola(ArcOfHyperbola::new(hyperbola, arc.first(), arc.last()).ok()?)
+            }
+            Self::Parabola(parabola) => Self::Parabola(
+                Parabola::with_axis(parabola.vertex(), parabola.normal(), axis, parabola.focal())
+                    .ok()?,
+            ),
+            Self::ArcOfParabola(arc) => {
+                let parabola = Parabola::with_axis(
+                    arc.parabola().vertex(),
+                    arc.parabola().normal(),
+                    axis,
+                    arc.parabola().focal(),
+                )
+                .ok()?;
+                Self::ArcOfParabola(ArcOfParabola::new(parabola, arc.first(), arc.last()).ok()?)
+            }
+            _ => return None,
+        })
+    }
+
+    /// A copy of a conic with its `YAxis` direction replaced.
+    fn with_y_axis(&self, direction: (f64, f64)) -> Option<Self> {
+        let direction = unit2(direction)?;
+        let normal = self.normal()?;
+        // `y = normal × x`, so `x = y × normal`.
+        let y = xyz(direction.0, direction.1);
+        let x = y.cross(&normal);
+        self.with_x_axis((x.x, x.y))
+    }
+
+    /// The same geometry traversed in the opposite direction.
+    fn reversed(&self) -> Option<Self> {
+        Some(match self {
+            Self::Line(line) => {
+                Self::Line(Line::new(line.origin(), line.direction().scale(-1.0)).ok()?)
+            }
+            Self::Segment {
+                origin,
+                direction,
+                first,
+                last,
+            } => {
+                let start = (
+                    origin.0 + last * direction.0,
+                    origin.1 + last * direction.1,
+                );
+                Self::Segment {
+                    origin: start,
+                    direction: (-direction.0, -direction.1),
+                    first: 0.0,
+                    last: (last - first).abs(),
+                }
+            }
+            Self::Circle(circle) => Self::Circle(
+                Circle::with_axis(
+                    circle.center(),
+                    circle.normal().scale(-1.0),
+                    circle.x_axis(),
+                    circle.radius(),
+                )
+                .ok()?,
+            ),
+            Self::Arc(arc) => Self::Arc(Arc::new(arc.circle(), arc.last(), arc.first()).ok()?),
+            Self::Ellipse(ellipse) => Self::Ellipse(
+                Ellipse::with_axis(
+                    ellipse.center(),
+                    ellipse.normal().scale(-1.0),
+                    ellipse.x_axis(),
+                    ellipse.major_radius(),
+                    ellipse.minor_radius(),
+                )
+                .ok()?,
+            ),
+            Self::ArcOfEllipse {
+                ellipse,
+                first,
+                last,
+            } => Self::ArcOfEllipse {
+                ellipse: *ellipse,
+                first: *last,
+                last: *first,
+            },
+            Self::Hyperbola(hyperbola) => Self::Hyperbola(
+                Hyperbola::with_axis(
+                    hyperbola.center(),
+                    hyperbola.normal().scale(-1.0),
+                    hyperbola.x_axis(),
+                    hyperbola.major_radius(),
+                    hyperbola.minor_radius(),
+                )
+                .ok()?,
+            ),
+            Self::ArcOfHyperbola(arc) => {
+                let hyperbola = Hyperbola::with_axis(
+                    arc.hyperbola().center(),
+                    arc.hyperbola().normal().scale(-1.0),
+                    arc.hyperbola().x_axis(),
+                    arc.hyperbola().major_radius(),
+                    arc.hyperbola().minor_radius(),
+                )
+                .ok()?;
+                // Flipping the Y axis maps `u` to `-u`, so the forward range
+                // over the same point set is `[-last, -first]`.
+                Self::ArcOfHyperbola(
+                    ArcOfHyperbola::new(hyperbola, -arc.last(), -arc.first()).ok()?,
+                )
+            }
+            Self::Parabola(parabola) => Self::Parabola(
+                Parabola::with_axis(
+                    parabola.vertex(),
+                    parabola.normal().scale(-1.0),
+                    parabola.x_axis(),
+                    parabola.focal(),
+                )
+                .ok()?,
+            ),
+            Self::ArcOfParabola(arc) => {
+                let parabola = Parabola::with_axis(
+                    arc.parabola().vertex(),
+                    arc.parabola().normal().scale(-1.0),
+                    arc.parabola().x_axis(),
+                    arc.parabola().focal(),
+                )
+                .ok()?;
+                Self::ArcOfParabola(
+                    ArcOfParabola::new(parabola, -arc.last(), -arc.first()).ok()?,
+                )
+            }
+            Self::Bezier(curve) => {
+                let poles: Vec<Vector3> = curve.poles().iter().rev().copied().collect();
+                let weights: Vec<f64> = curve.weights().iter().rev().copied().collect();
+                Self::Bezier(
+                    BezierCurve::with_range(poles, weights, curve.first(), curve.last()).ok()?,
+                )
+            }
+            Self::BSpline(points) => Self::BSpline(points.iter().rev().copied().collect()),
+            Self::Offset { basis, offset } => Self::Offset {
+                basis: Box::new(basis.reversed()?),
+                offset: *offset,
+            },
+        })
+    }
+
+    /// The same geometry restricted to `[first, last]`, the form a pcurve and a
+    /// trimmed edge are built from.
+    fn restricted(&self, first: f64, last: f64) -> PyResult<Self> {
+        if !first.is_finite() || !last.is_finite() {
+            return Err(OCCError::new_err("a 2D curve range must be finite"));
+        }
+        if (last - first).abs() <= ANGULAR_TOLERANCE {
+            return Err(OCCError::new_err(
+                "a 2D curve range needs a non-zero sweep",
+            ));
+        }
+        Ok(match self {
+            Self::Line(line) => Self::Segment {
+                origin: xy(line.origin()),
+                direction: xy(line.direction()),
+                first,
+                last,
+            },
+            Self::Segment {
+                origin, direction, ..
+            } => Self::Segment {
+                origin: *origin,
+                direction: *direction,
+                first,
+                last,
+            },
+            Self::Circle(circle) => {
+                Self::Arc(Arc::new(*circle, first, last).map_err(curve_error)?)
+            }
+            Self::Arc(arc) => {
+                Self::Arc(Arc::new(arc.circle(), first, last).map_err(curve_error)?)
+            }
+            Self::Ellipse(ellipse) => Self::ArcOfEllipse {
+                ellipse: *ellipse,
+                first,
+                last,
+            },
+            Self::ArcOfEllipse { ellipse, .. } => Self::ArcOfEllipse {
+                ellipse: *ellipse,
+                first,
+                last,
+            },
+            Self::Hyperbola(hyperbola) => Self::ArcOfHyperbola(
+                ArcOfHyperbola::new(*hyperbola, first, last).map_err(curve_error)?,
+            ),
+            Self::ArcOfHyperbola(arc) => Self::ArcOfHyperbola(
+                ArcOfHyperbola::new(arc.hyperbola(), first, last).map_err(curve_error)?,
+            ),
+            Self::Parabola(parabola) => Self::ArcOfParabola(
+                ArcOfParabola::new(*parabola, first, last).map_err(curve_error)?,
+            ),
+            Self::ArcOfParabola(arc) => Self::ArcOfParabola(
+                ArcOfParabola::new(arc.parabola(), first, last).map_err(curve_error)?,
+            ),
+            Self::Bezier(curve) => Self::Bezier(curve.trim(first, last).map_err(curve_error)?),
+            Self::BSpline(_) => {
+                return Err(geom2d_not_implemented(
+                    "BSplineCurve2d.toShape (this slice binds no 2D B-spline kernel)",
+                ))
+            }
+            Self::Offset { .. } => self.clone(),
+        })
+    }
+
+    /// The numbered parameter of the point on the curve closest to `point`.
+    fn closest_parameter(&self, point: (f64, f64)) -> Option<f64> {
+        match self {
+            Self::Line(line) => {
+                let direction = xy(line.direction());
+                let origin = xy(line.origin());
+                Some((point.0 - origin.0) * direction.0 + (point.1 - origin.1) * direction.1)
+            }
+            Self::Segment {
+                origin,
+                direction,
+                first,
+                last,
+            } => {
+                let projected =
+                    (point.0 - origin.0) * direction.0 + (point.1 - origin.1) * direction.1;
+                Some(projected.clamp(*first, *last))
+            }
+            _ => {
+                let (first, last) = (self.first()?, self.last()?);
+                if !first.is_finite() || !last.is_finite() || last <= first || last - first > 1.0e6 {
+                    return None;
+                }
+                let samples = 200usize;
+                let step = (last - first) / samples as f64;
+                let mut best = first;
+                let mut best_distance = f64::INFINITY;
+                for index in 0..=samples {
+                    let u = first + index as f64 * step;
+                    let candidate = self.point(u)?;
+                    let distance = distance2(candidate, point);
+                    if distance < best_distance {
+                        best_distance = distance;
+                        best = u;
+                    }
+                }
+                // Golden-section refinement inside the bracketing interval.
+                let mut low = (best - step).max(first);
+                let mut high = (best + step).min(last);
+                for _ in 0..60 {
+                    let left = low + 0.382 * (high - low);
+                    let right = low + 0.618 * (high - low);
+                    let left_distance = distance2(self.point(left)?, point);
+                    let right_distance = distance2(self.point(right)?, point);
+                    if left_distance <= right_distance {
+                        high = right;
+                    } else {
+                        low = left;
+                    }
+                }
+                Some(0.5 * (low + high))
+            }
+        }
+    }
+}
+
+/// The curvature at `u`: exact for a line and a circle, a central difference of
+/// the analytic unit tangent for the other curves.
+fn curvature_of(data: &Geom2dData, u: f64) -> PyResult<f64> {
+    match data {
+        Geom2dData::Line(_) | Geom2dData::Segment { .. } => Ok(0.0),
+        Geom2dData::Circle(circle) => Ok(1.0 / circle.radius()),
+        Geom2dData::Arc(arc) => Ok(1.0 / arc.circle().radius()),
+        _ => {
+            let step = 1e-6 * (1.0 + u.abs());
+            let before = data
+                .tangent(u - step)
+                .ok_or_else(|| geom2d_not_implemented("BSplineCurve2d.curvature"))?;
+            let after = data
+                .tangent(u + step)
+                .ok_or_else(|| geom2d_not_implemented("BSplineCurve2d.curvature"))?;
+            let rate = distance2(before, after) / (2.0 * step);
+            let speed = data
+                .speed(u)
+                .ok_or_else(|| geom2d_not_implemented("BSplineCurve2d.curvature"))?;
+            Ok(rate / speed)
+        }
+    }
+}
+
+/// The geometry behind a Python `Part.Geom2d` object.
+fn geometry_data(value: &Bound<'_, PyAny>) -> PyResult<Geom2dData> {
+    let geometry = value
+        .downcast::<PyGeometry2d>()
+        .map_err(|_| PyTypeError::new_err("expected a Part.Geom2d geometry"))?;
+    Ok(geometry.borrow().snapshot())
+}
+
+/// Replace the geometry behind a Python `Part.Geom2d` object in place.
+fn replace_geometry_data(value: &Bound<'_, PyAny>, data: Geom2dData) -> PyResult<()> {
+    let geometry = value
+        .downcast::<PyGeometry2d>()
+        .map_err(|_| PyTypeError::new_err("expected a Part.Geom2d geometry"))?;
+    *geometry
+        .borrow()
+        .data
+        .lock()
+        .unwrap_or_else(|error| error.into_inner()) = data;
+    Ok(())
+}
+
+/// `Part.Geom2d.Geometry2d` — the abstract root of the 2D geometry classes.
+///
+/// The concrete geometry is held here, so every `Part.Geom2d` subclass shares
+/// one copy of it (the classes below add no fields of their own).
+#[pyclass(name = "Geometry2d", module = "Part.Geom2d", subclass)]
+pub struct PyGeometry2d {
+    data: Mutex<Geom2dData>,
+}
+
+impl PyGeometry2d {
+    fn with_data(data: Geom2dData) -> Self {
+        Self {
+            data: Mutex::new(data),
+        }
+    }
+
+    fn snapshot(&self) -> Geom2dData {
+        self.data
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .clone()
+    }
+}
+
+#[pymethods]
+impl PyGeometry2d {
+    #[new]
+    #[pyo3(signature = (*_args))]
+    fn new(_args: &Bound<'_, PyTuple>) -> PyResult<Self> {
+        Err(PyRuntimeError::new_err(
+            "You cannot create an instance of the abstract class 'Geometry'.",
+        ))
+    }
+
+    /// A new geometry object of the same concrete class.
+    fn copy(&self, py: Python<'_>) -> PyResult<PyObject> {
+        geometry2d_to_py(py, self.snapshot())
+    }
+
+    /// Upstream's `Geometry2d.transform` takes a 2×3 matrix. This slice has no
+    /// 2D similarity transform in its geometry model, so the operation is
+    /// reported rather than approximated.
+    fn transform(&self, _matrix: &Bound<'_, PyAny>) -> PyResult<()> {
+        Err(geom2d_not_implemented("Geometry2d.transform"))
+    }
+
+    #[pyo3(signature = (point, axis = None))]
+    fn mirror(&self, point: &Bound<'_, PyAny>, axis: Option<&Bound<'_, PyAny>>) -> PyResult<()> {
+        let _ = (point, axis);
+        Err(geom2d_not_implemented("Geometry2d.mirror"))
+    }
+
+    fn rotate(&self, _point: &Bound<'_, PyAny>, _angle: f64) -> PyResult<()> {
+        Err(geom2d_not_implemented("Geometry2d.rotate"))
+    }
+
+    fn scale(&self, _point: &Bound<'_, PyAny>, _factor: f64) -> PyResult<()> {
+        Err(geom2d_not_implemented("Geometry2d.scale"))
+    }
+
+    fn translate(&self, _offset: &Bound<'_, PyAny>) -> PyResult<()> {
+        Err(geom2d_not_implemented("Geometry2d.translate"))
+    }
+
+    fn __repr__(&self) -> String {
+        format!("<Geometry2d object ({})>", self.snapshot().kind())
+    }
+}
+
+/// `Part.Geom2d.Curve2d` — the abstract root of the 2D curves.
+#[pyclass(name = "Curve2d", module = "Part.Geom2d", extends = PyGeometry2d, subclass)]
+pub struct PyCurve2d;
+
+#[pymethods]
+impl PyCurve2d {
+    #[new]
+    #[pyo3(signature = (*_args))]
+    fn new(_args: &Bound<'_, PyTuple>) -> PyResult<PyClassInitializer<Self>> {
+        Err(PyRuntimeError::new_err(
+            "You cannot create an instance of the abstract class 'Curve2d'.",
+        ))
+    }
+
+    #[getter]
+    fn Continuity(slf: &Bound<'_, Self>) -> PyResult<String> {
+        Ok(geometry_data(slf.as_any())?.continuity().to_string())
+    }
+
+    #[getter]
+    fn Closed(slf: &Bound<'_, Self>) -> PyResult<bool> {
+        Ok(geometry_data(slf.as_any())?.is_closed())
+    }
+
+    #[getter]
+    fn Periodic(slf: &Bound<'_, Self>) -> PyResult<bool> {
+        Ok(geometry_data(slf.as_any())?.is_periodic())
+    }
+
+    #[getter]
+    fn FirstParameter(slf: &Bound<'_, Self>) -> PyResult<f64> {
+        geometry_data(slf.as_any())?
+            .first()
+            .ok_or_else(|| geom2d_not_implemented("BSplineCurve2d.FirstParameter"))
+    }
+
+    #[getter]
+    fn LastParameter(slf: &Bound<'_, Self>) -> PyResult<f64> {
+        geometry_data(slf.as_any())?
+            .last()
+            .ok_or_else(|| geom2d_not_implemented("BSplineCurve2d.LastParameter"))
+    }
+
+    /// The point at parameter `u` (`Geom2d_Curve::Value`).
+    fn value(slf: &Bound<'_, Self>, py: Python<'_>, u: f64) -> PyResult<PyObject> {
+        let data = geometry_data(slf.as_any())?;
+        let point = data
+            .point(u)
+            .ok_or_else(|| geom2d_not_implemented("BSplineCurve2d.value"))?;
+        py_vector2d(py, point)
+    }
+
+    /// The unit tangent at `u`.
+    fn tangent(slf: &Bound<'_, Self>, py: Python<'_>, u: f64) -> PyResult<PyObject> {
+        let data = geometry_data(slf.as_any())?;
+        let tangent = data
+            .tangent(u)
+            .ok_or_else(|| geom2d_not_implemented("BSplineCurve2d.tangent"))?;
+        py_vector2d(py, tangent)
+    }
+
+    /// The unit normal at `u` (the tangent turned onto the principal side).
+    fn normal(slf: &Bound<'_, Self>, py: Python<'_>, u: f64) -> PyResult<PyObject> {
+        let data = geometry_data(slf.as_any())?;
+        let tangent = data
+            .tangent(u)
+            .ok_or_else(|| geom2d_not_implemented("BSplineCurve2d.normal"))?;
+        py_vector2d(py, (-tangent.1, tangent.0))
+    }
+
+    /// The curvature at `u`. Exact for the lines and circles; the remaining
+    /// curves use a central difference of the analytic unit tangent.
+    fn curvature(slf: &Bound<'_, Self>, u: f64) -> PyResult<f64> {
+        curvature_of(&geometry_data(slf.as_any())?, u)
+    }
+
+    /// The centre of curvature at `u`.
+    fn centerOfCurvature(slf: &Bound<'_, Self>, py: Python<'_>, u: f64) -> PyResult<PyObject> {
+        let data = geometry_data(slf.as_any())?;
+        let point = data
+            .point(u)
+            .ok_or_else(|| geom2d_not_implemented("BSplineCurve2d.centerOfCurvature"))?;
+        let tangent = data
+            .tangent(u)
+            .ok_or_else(|| geom2d_not_implemented("BSplineCurve2d.centerOfCurvature"))?;
+        let curvature = curvature_of(&data, u)?;
+        if curvature.abs() <= TOLERANCE {
+            return Err(OCCError::new_err(
+                "the centre of curvature is undefined where the curvature is zero",
+            ));
+        }
+        let normal = (-tangent.1, tangent.0);
+        py_vector2d(
+            py,
+            (
+                point.0 + normal.0 / curvature,
+                point.1 + normal.1 / curvature,
+            ),
+        )
+    }
+
+    /// The parameter of the point on the curve closest to `point`
+    /// (`Geom2dAPI_ProjectPointOnCurve`). Unbounded conics are reported rather
+    /// than sampled over an infinite range.
+    fn parameter(slf: &Bound<'_, Self>, point: &Bound<'_, PyAny>) -> PyResult<f64> {
+        let data = geometry_data(slf.as_any())?;
+        data.closest_parameter(vector2d(point)?)
+            .ok_or_else(|| geom2d_not_implemented("Curve2d.parameter on an unbounded curve"))
+    }
+
+    /// The arc length over `[uMin, uMax]`, by composite Simpson integration of
+    /// the analytic speed.
+    #[pyo3(signature = (uMin = None, uMax = None, tolerance = None))]
+    fn length(
+        slf: &Bound<'_, Self>,
+        uMin: Option<f64>,
+        uMax: Option<f64>,
+        tolerance: Option<f64>,
+    ) -> PyResult<f64> {
+        let _ = tolerance;
+        let data = geometry_data(slf.as_any())?;
+        let (first, last) = match (uMin, uMax) {
+            (Some(first), Some(last)) => (first, last),
+            (None, None) => (
+                data.first()
+                    .ok_or_else(|| geom2d_not_implemented("BSplineCurve2d.length"))?,
+                data.last()
+                    .ok_or_else(|| geom2d_not_implemented("BSplineCurve2d.length"))?,
+            ),
+            _ => {
+                return Err(PyTypeError::new_err(
+                    "length takes either no range or both uMin and uMax",
+                ))
+            }
+        };
+        let span = last - first;
+        if !span.is_finite() || span.abs() > 1.0e6 {
+            return Err(OCCError::new_err(
+                "the length of an unbounded 2D curve needs a finite parameter range",
+            ));
+        }
+        let intervals = 512usize;
+        let step = span / intervals as f64;
+        let mut sum = data
+            .speed(first)
+            .ok_or_else(|| geom2d_not_implemented("BSplineCurve2d.length"))?
+            + data
+                .speed(last)
+                .ok_or_else(|| geom2d_not_implemented("BSplineCurve2d.length"))?;
+        for index in 1..intervals {
+            let weight = if index % 2 == 0 { 2.0 } else { 4.0 };
+            let speed = data
+                .speed(first + index as f64 * step)
+                .ok_or_else(|| geom2d_not_implemented("BSplineCurve2d.length"))?;
+            sum += weight * speed;
+        }
+        Ok(sum * step / 3.0)
+    }
+
+    /// Reverse the parameterization in place (`Geom2d_Curve::Reverse`).
+    fn reverse(slf: &Bound<'_, Self>) -> PyResult<()> {
+        let data = geometry_data(slf.as_any())?;
+        let reversed = data
+            .reversed()
+            .ok_or_else(|| geom2d_not_implemented("Curve2d.reverse on this curve"))?;
+        replace_geometry_data(slf.as_any(), reversed)
+    }
+
+    /// The curve as a `Part.Edge`.
+    ///
+    /// `toShape()` lifts the 2D curve to `z = 0` and builds a real XY edge.
+    /// `toShape(first, last)` trims it. `toShape(surface)` (or a `Part.Face`)
+    /// builds the same XY edge and attaches the 2D curve as its pcurve, but
+    /// **does not project it onto the surface** — the seam binds no
+    /// `GeomProjLib`, so the surface is validated and recorded only.
+    #[pyo3(signature = (*args))]
+    fn toShape(
+        slf: &Bound<'_, Self>,
+        py: Python<'_>,
+        args: &Bound<'_, PyTuple>,
+    ) -> PyResult<Py<PyEdge>> {
+        let data = geometry_data(slf.as_any())?;
+        let (_has_surface, first, last) = parse_geometry2d_to_shape_args(args)?;
+        curve2d_edge(py, &data, first, last)
+    }
+
+    /// This slice records the points but builds no 2D B-spline.
+    #[pyo3(signature = (*_args, **_kwargs))]
+    fn discretize(
+        &self,
+        _args: &Bound<'_, PyTuple>,
+        _kwargs: Option<&Bound<'_, PyDict>>,
+    ) -> PyResult<Vec<f64>> {
+        Err(geom2d_not_implemented("Curve2d.discretize"))
+    }
+
+    #[pyo3(signature = (*_args))]
+    fn toBSpline(&self, _args: &Bound<'_, PyTuple>) -> PyResult<PyObject> {
+        Err(geom2d_not_implemented(
+            "Curve2d.toBSpline (this slice binds no 2D B-spline kernel; use toShape())",
+        ))
+    }
+
+    #[pyo3(signature = (*_args))]
+    fn approximateBSpline(&self, _args: &Bound<'_, PyTuple>) -> PyResult<PyObject> {
+        Err(geom2d_not_implemented("Curve2d.approximateBSpline"))
+    }
+
+    #[pyo3(signature = (*_args))]
+    fn intersectCC(&self, _args: &Bound<'_, PyTuple>) -> PyResult<Vec<f64>> {
+        Err(geom2d_not_implemented("Curve2d.intersectCC"))
+    }
+
+    #[pyo3(signature = (*_args))]
+    fn parameterAtDistance(&self, _args: &Bound<'_, PyTuple>) -> PyResult<f64> {
+        Err(geom2d_not_implemented("Curve2d.parameterAtDistance"))
+    }
+
+    fn __repr__(slf: &Bound<'_, Self>) -> PyResult<String> {
+        let data = geometry_data(slf.as_any())?;
+        Ok(match data.location() {
+            Some(location) => format!(
+                "Part.Geom2d.{}({:?}, {})",
+                data.kind(),
+                location,
+                data.first().unwrap_or(0.0)
+            ),
+            None => format!("Part.Geom2d.{}(...)", data.kind()),
+        })
+    }
+}
+
+/// `Part.Geom2d.Conic2d` — the abstract root of the 2D conics.
+#[pyclass(name = "Conic2d", module = "Part.Geom2d", extends = PyCurve2d, subclass)]
+pub struct PyConic2d;
+
+#[pymethods]
+impl PyConic2d {
+    #[new]
+    #[pyo3(signature = (*_args))]
+    fn new(_args: &Bound<'_, PyTuple>) -> PyResult<PyClassInitializer<Self>> {
+        Err(PyRuntimeError::new_err(
+            "You cannot create an instance of the abstract class 'Conic2d'.",
+        ))
+    }
+
+    #[getter]
+    fn Location(slf: &Bound<'_, Self>, py: Python<'_>) -> PyResult<PyObject> {
+        let location = geometry_data(slf.as_any())?
+            .location()
+            .ok_or_else(|| geom2d_not_implemented("Conic2d.Location"))?;
+        py_vector2d(py, location)
+    }
+
+    #[setter]
+    fn set_Location(slf: &Bound<'_, Self>, value: &Bound<'_, PyAny>) -> PyResult<()> {
+        let location = vector2d(value)?;
+        let data = geometry_data(slf.as_any())?;
+        let updated = data
+            .with_location(location)
+            .ok_or_else(|| geom2d_not_implemented("Conic2d.Location"))?;
+        replace_geometry_data(slf.as_any(), updated)
+    }
+
+    #[getter]
+    fn XAxis(slf: &Bound<'_, Self>, py: Python<'_>) -> PyResult<PyObject> {
+        let axis = geometry_data(slf.as_any())?
+            .x_axis()
+            .ok_or_else(|| geom2d_not_implemented("Conic2d.XAxis"))?;
+        py_vector2d(py, axis)
+    }
+
+    #[setter]
+    fn set_XAxis(slf: &Bound<'_, Self>, value: &Bound<'_, PyAny>) -> PyResult<()> {
+        let axis = vector2d(value)?;
+        let data = geometry_data(slf.as_any())?;
+        let updated = data
+            .with_x_axis(axis)
+            .ok_or_else(|| geom2d_not_implemented("Conic2d.XAxis"))?;
+        replace_geometry_data(slf.as_any(), updated)
+    }
+
+    #[getter]
+    fn YAxis(slf: &Bound<'_, Self>, py: Python<'_>) -> PyResult<PyObject> {
+        let axis = geometry_data(slf.as_any())?
+            .y_axis()
+            .ok_or_else(|| geom2d_not_implemented("Conic2d.YAxis"))?;
+        py_vector2d(py, axis)
+    }
+
+    #[setter]
+    fn set_YAxis(slf: &Bound<'_, Self>, value: &Bound<'_, PyAny>) -> PyResult<()> {
+        let axis = vector2d(value)?;
+        let data = geometry_data(slf.as_any())?;
+        let updated = data
+            .with_y_axis(axis)
+            .ok_or_else(|| geom2d_not_implemented("Conic2d.YAxis"))?;
+        replace_geometry_data(slf.as_any(), updated)
+    }
+
+    #[getter]
+    fn Eccentricity(slf: &Bound<'_, Self>) -> PyResult<f64> {
+        geometry_data(slf.as_any())?
+            .eccentricity()
+            .ok_or_else(|| geom2d_not_implemented("Conic2d.Eccentricity"))
+    }
+}
+
+/// `Part.Geom2d.ArcOfConic2d` — the abstract root of the 2D conic arcs.
+#[pyclass(name = "ArcOfConic2d", module = "Part.Geom2d", extends = PyCurve2d, subclass)]
+pub struct PyArcOfConic2d;
+
+#[pymethods]
+impl PyArcOfConic2d {
+    #[new]
+    #[pyo3(signature = (*_args))]
+    fn new(_args: &Bound<'_, PyTuple>) -> PyResult<PyClassInitializer<Self>> {
+        Err(PyRuntimeError::new_err(
+            "You cannot create an instance of the abstract class 'ArcOfConic2d'.",
+        ))
+    }
+
+    #[getter]
+    fn Location(slf: &Bound<'_, Self>, py: Python<'_>) -> PyResult<PyObject> {
+        let location = geometry_data(slf.as_any())?
+            .location()
+            .ok_or_else(|| geom2d_not_implemented("ArcOfConic2d.Location"))?;
+        py_vector2d(py, location)
+    }
+
+    #[setter]
+    fn set_Location(slf: &Bound<'_, Self>, value: &Bound<'_, PyAny>) -> PyResult<()> {
+        let location = vector2d(value)?;
+        let data = geometry_data(slf.as_any())?;
+        let updated = data
+            .with_location(location)
+            .ok_or_else(|| geom2d_not_implemented("ArcOfConic2d.Location"))?;
+        replace_geometry_data(slf.as_any(), updated)
+    }
+
+    #[getter]
+    fn XAxis(slf: &Bound<'_, Self>, py: Python<'_>) -> PyResult<PyObject> {
+        let axis = geometry_data(slf.as_any())?
+            .x_axis()
+            .ok_or_else(|| geom2d_not_implemented("ArcOfConic2d.XAxis"))?;
+        py_vector2d(py, axis)
+    }
+
+    #[setter]
+    fn set_XAxis(slf: &Bound<'_, Self>, value: &Bound<'_, PyAny>) -> PyResult<()> {
+        let axis = vector2d(value)?;
+        let data = geometry_data(slf.as_any())?;
+        let updated = data
+            .with_x_axis(axis)
+            .ok_or_else(|| geom2d_not_implemented("ArcOfConic2d.XAxis"))?;
+        replace_geometry_data(slf.as_any(), updated)
+    }
+
+    #[getter]
+    fn YAxis(slf: &Bound<'_, Self>, py: Python<'_>) -> PyResult<PyObject> {
+        let axis = geometry_data(slf.as_any())?
+            .y_axis()
+            .ok_or_else(|| geom2d_not_implemented("ArcOfConic2d.YAxis"))?;
+        py_vector2d(py, axis)
+    }
+
+    #[setter]
+    fn set_YAxis(slf: &Bound<'_, Self>, value: &Bound<'_, PyAny>) -> PyResult<()> {
+        let axis = vector2d(value)?;
+        let data = geometry_data(slf.as_any())?;
+        let updated = data
+            .with_y_axis(axis)
+            .ok_or_else(|| geom2d_not_implemented("ArcOfConic2d.YAxis"))?;
+        replace_geometry_data(slf.as_any(), updated)
+    }
+
+    #[getter]
+    fn Eccentricity(slf: &Bound<'_, Self>) -> PyResult<f64> {
+        geometry_data(slf.as_any())?
+            .eccentricity()
+            .ok_or_else(|| geom2d_not_implemented("ArcOfConic2d.Eccentricity"))
+    }
+
+    #[getter]
+    fn StartPoint(slf: &Bound<'_, Self>, py: Python<'_>) -> PyResult<PyObject> {
+        let data = geometry_data(slf.as_any())?;
+        let first = data
+            .first()
+            .ok_or_else(|| geom2d_not_implemented("ArcOfConic2d.StartPoint"))?;
+        let point = data
+            .point(first)
+            .ok_or_else(|| geom2d_not_implemented("ArcOfConic2d.StartPoint"))?;
+        py_vector2d(py, point)
+    }
+
+    #[getter]
+    fn EndPoint(slf: &Bound<'_, Self>, py: Python<'_>) -> PyResult<PyObject> {
+        let data = geometry_data(slf.as_any())?;
+        let last = data
+            .last()
+            .ok_or_else(|| geom2d_not_implemented("ArcOfConic2d.EndPoint"))?;
+        let point = data
+            .point(last)
+            .ok_or_else(|| geom2d_not_implemented("ArcOfConic2d.EndPoint"))?;
+        py_vector2d(py, point)
+    }
+}
+
+// --- Concrete 2D curve initializers ----------------------------------------
+
+/// The initializer chain for a curve whose base is `PyCurve2d`.
+macro_rules! curve2d_initializer {
+    ($class:ident) => {
+        impl $class {
+            fn initializer(data: Geom2dData) -> PyClassInitializer<Self> {
+                PyClassInitializer::from(PyGeometry2d::with_data(data))
+                    .add_subclass(PyCurve2d)
+                    .add_subclass(Self)
+            }
+        }
+    };
+}
+
+/// The initializer chain for a curve whose base is `PyConic2d`.
+macro_rules! conic2d_initializer {
+    ($class:ident) => {
+        impl $class {
+            fn initializer(data: Geom2dData) -> PyClassInitializer<Self> {
+                PyClassInitializer::from(PyGeometry2d::with_data(data))
+                    .add_subclass(PyCurve2d)
+                    .add_subclass(PyConic2d)
+                    .add_subclass(Self)
+            }
+        }
+    };
+}
+
+/// The initializer chain for a curve whose base is `PyArcOfConic2d`.
+macro_rules! arc_of_conic2d_initializer {
+    ($class:ident) => {
+        impl $class {
+            fn initializer(data: Geom2dData) -> PyClassInitializer<Self> {
+                PyClassInitializer::from(PyGeometry2d::with_data(data))
+                    .add_subclass(PyCurve2d)
+                    .add_subclass(PyArcOfConic2d)
+                    .add_subclass(Self)
+            }
+        }
+    };
+}
+
+// --- Builders --------------------------------------------------------------
+
+fn line_data(origin: (f64, f64), direction: (f64, f64)) -> PyResult<Geom2dData> {
+    let direction = unit2(direction)
+        .ok_or_else(|| OCCError::new_err("the line direction must not be null"))?;
+    Ok(Geom2dData::Line(
+        Line::new(xyz(origin.0, origin.1), xyz(direction.0, direction.1))
+            .map_err(curve_error)?,
+    ))
+}
+
+fn segment_data(start: (f64, f64), end: (f64, f64)) -> PyResult<Geom2dData> {
+    let delta = (end.0 - start.0, end.1 - start.1);
+    let length = (delta.0 * delta.0 + delta.1 * delta.1).sqrt();
+    if !length.is_finite() || length <= TOLERANCE {
+        return Err(OCCError::new_err("Both points are equal"));
+    }
+    Ok(Geom2dData::Segment {
+        origin: start,
+        direction: (delta.0 / length, delta.1 / length),
+        first: 0.0,
+        last: length,
+    })
+}
+
+fn circle_data(center: (f64, f64), radius: f64) -> PyResult<Geom2dData> {
+    if !radius.is_finite() || radius <= TOLERANCE {
+        return Err(OCCError::new_err("the circle radius must be positive"));
+    }
+    Ok(Geom2dData::Circle(
+        Circle::with_axis(xyz(center.0, center.1), unit_normal(), unit_x(), radius)
+            .map_err(curve_error)?,
+    ))
+}
+
+fn ellipse_data(
+    center: (f64, f64),
+    x_axis: (f64, f64),
+    major: f64,
+    minor: f64,
+) -> PyResult<Geom2dData> {
+    if !major.is_finite() || !minor.is_finite() || major <= TOLERANCE || minor <= TOLERANCE {
+        return Err(OCCError::new_err("the ellipse radii must be positive"));
+    }
+    if major < minor {
+        return Err(OCCError::new_err(
+            "the ellipse major radius must not be smaller than the minor radius",
+        ));
+    }
+    Ok(Geom2dData::Ellipse(
+        Ellipse::with_axis(
+            xyz(center.0, center.1),
+            unit_normal(),
+            xyz(x_axis.0, x_axis.1),
+            major,
+            minor,
+        )
+        .map_err(curve_error)?,
+    ))
+}
+
+fn hyperbola_data(
+    center: (f64, f64),
+    x_axis: (f64, f64),
+    major: f64,
+    minor: f64,
+) -> PyResult<Geom2dData> {
+    if !major.is_finite() || !minor.is_finite() || major <= TOLERANCE || minor <= TOLERANCE {
+        return Err(OCCError::new_err("the hyperbola radii must be positive"));
+    }
+    Ok(Geom2dData::Hyperbola(
+        Hyperbola::with_axis(
+            xyz(center.0, center.1),
+            unit_normal(),
+            xyz(x_axis.0, x_axis.1),
+            major,
+            minor,
+        )
+        .map_err(curve_error)?,
+    ))
+}
+
+fn parabola_data(vertex: (f64, f64), x_axis: (f64, f64), focal: f64) -> PyResult<Geom2dData> {
+    if !focal.is_finite() || focal <= TOLERANCE {
+        return Err(OCCError::new_err(
+            "the parabola focal length must be positive",
+        ));
+    }
+    Ok(Geom2dData::Parabola(
+        Parabola::with_axis(
+            xyz(vertex.0, vertex.1),
+            unit_normal(),
+            xyz(x_axis.0, x_axis.1),
+            focal,
+        )
+        .map_err(curve_error)?,
+    ))
+}
+
+fn arc_of_circle_data(circle: Circle, first: f64, last: f64) -> PyResult<Geom2dData> {
+    if !first.is_finite() || !last.is_finite() || (last - first).abs() <= ANGULAR_TOLERANCE {
+        return Err(OCCError::new_err(
+            "an arc of a circle needs a non-zero, finite parameter range",
+        ));
+    }
+    Ok(Geom2dData::Arc(
+        Arc::new(circle, first, last).map_err(curve_error)?,
+    ))
+}
+
+/// The directed sweep an arc constructor asks for. For a periodic curve
+/// (`periodic`), `sense` selects the counter-clockwise (`True`) or clockwise
+/// (`False`) arc from `first`.
+fn arc_range(first: f64, last: f64, periodic: bool, sense: bool) -> PyResult<(f64, f64)> {
+    if !first.is_finite() || !last.is_finite() {
+        return Err(OCCError::new_err("an arc parameter range must be finite"));
+    }
+    if (last - first).abs() <= ANGULAR_TOLERANCE {
+        return Err(OCCError::new_err(
+            "an arc needs a non-zero parameter range",
+        ));
+    }
+    if !periodic {
+        return Ok((first, last));
+    }
+    let counter_clockwise = (last - first).rem_euclid(std::f64::consts::TAU);
+    Ok(if sense {
+        (first, first + counter_clockwise)
+    } else {
+        (first, first - (std::f64::consts::TAU - counter_clockwise))
+    })
+}
+
+fn arc_of_ellipse_data(ellipse: Ellipse, first: f64, last: f64) -> PyResult<Geom2dData> {
+    if !first.is_finite() || !last.is_finite() || (last - first).abs() <= ANGULAR_TOLERANCE {
+        return Err(OCCError::new_err(
+            "an arc of an ellipse needs a non-zero, finite parameter range",
+        ));
+    }
+    Ok(Geom2dData::ArcOfEllipse {
+        ellipse,
+        first,
+        last,
+    })
+}
+
+fn arc_of_hyperbola_data(
+    hyperbola: Hyperbola,
+    first: f64,
+    last: f64,
+    sense: bool,
+) -> PyResult<Geom2dData> {
+    let (first, last) = if sense {
+        if last <= first {
+            return Err(OCCError::new_err(
+                "a forward arc of a hyperbola needs last > first",
+            ));
+        }
+        (first, last)
+    } else {
+        (last.min(first), last.max(first))
+    };
+    Ok(Geom2dData::ArcOfHyperbola(
+        ArcOfHyperbola::new(hyperbola, first, last).map_err(curve_error)?,
+    ))
+}
+
+fn arc_of_parabola_data(
+    parabola: Parabola,
+    first: f64,
+    last: f64,
+    sense: bool,
+) -> PyResult<Geom2dData> {
+    let (first, last) = if sense {
+        if last <= first {
+            return Err(OCCError::new_err(
+                "a forward arc of a parabola needs last > first",
+            ));
+        }
+        (first, last)
+    } else {
+        (last.min(first), last.max(first))
+    };
+    Ok(Geom2dData::ArcOfParabola(
+        ArcOfParabola::new(parabola, first, last).map_err(curve_error)?,
+    ))
+}
+
+/// The circle through three points and the arc from the first through the
+/// second to the third (`GCE2d_MakeArcOfCircle`).
+fn arc_through_points(
+    p1: (f64, f64),
+    p2: (f64, f64),
+    p3: (f64, f64),
+) -> PyResult<Geom2dData> {
+    let center = circle_center(p1, p2, p3)?;
+    let radius = distance2(center, p1);
+    let x_axis = unit2((p1.0 - center.0, p1.1 - center.1))
+        .ok_or_else(|| OCCError::new_err("Two points are coincident"))?;
+    let circle = Circle::with_axis(
+        xyz(center.0, center.1),
+        unit_normal(),
+        xyz(x_axis.0, x_axis.1),
+        radius,
+    )
+    .map_err(curve_error)?;
+    let angle = |point: (f64, f64)| (point.1 - center.1).atan2(point.0 - center.0);
+    let first = angle(p1);
+    let through = (angle(p2) - first).rem_euclid(std::f64::consts::TAU);
+    let end = (angle(p3) - first).rem_euclid(std::f64::consts::TAU);
+    let last = if through < end {
+        first + end
+    } else {
+        first + end - std::f64::consts::TAU
+    };
+    arc_of_circle_data(circle, first, last)
+}
+
+/// The `(S1, S2, Center)` ellipse form: `S1` ends the major axis and `S2` fixes
+/// the minor radius (its distance to the major axis).
+fn ellipse_through_points(
+    s1: (f64, f64),
+    s2: (f64, f64),
+    center: (f64, f64),
+) -> PyResult<Geom2dData> {
+    let axis = (s1.0 - center.0, s1.1 - center.1);
+    let major = (axis.0 * axis.0 + axis.1 * axis.1).sqrt();
+    let direction = unit2(axis)
+        .ok_or_else(|| OCCError::new_err("The first point must not be the centre"))?;
+    let minor = cross2((s2.0 - center.0, s2.1 - center.1), direction).abs();
+    ellipse_data(center, direction, major, minor)
+}
+
+fn hyperbola_through_points(
+    s1: (f64, f64),
+    s2: (f64, f64),
+    center: (f64, f64),
+) -> PyResult<Geom2dData> {
+    let axis = (s1.0 - center.0, s1.1 - center.1);
+    let major = (axis.0 * axis.0 + axis.1 * axis.1).sqrt();
+    let direction = unit2(axis)
+        .ok_or_else(|| OCCError::new_err("The first point must not be the centre"))?;
+    let minor = cross2((s2.0 - center.0, s2.1 - center.1), direction).abs();
+    hyperbola_data(center, direction, major, minor)
+}
+
+/// Parse `toShape(*args)` into `(surface?, first?, last?)`.
+fn parse_geometry2d_to_shape_args(
+    args: &Bound<'_, PyTuple>,
+) -> PyResult<(bool, Option<f64>, Option<f64>)> {
+    match args.len() {
+        0 => Ok((false, None, None)),
+        1 => {
+            require_surface_or_face(&args.get_item(0)?)?;
+            Ok((true, None, None))
+        }
+        2 => {
+            let first: f64 = args
+                .get_item(0)?
+                .extract()
+                .map_err(|_| to_shape_error())?;
+            let last: f64 = args
+                .get_item(1)?
+                .extract()
+                .map_err(|_| to_shape_error())?;
+            Ok((false, Some(first), Some(last)))
+        }
+        3 => {
+            require_surface_or_face(&args.get_item(0)?)?;
+            let first: f64 = args
+                .get_item(1)?
+                .extract()
+                .map_err(|_| to_shape_error())?;
+            let last: f64 = args
+                .get_item(2)?
+                .extract()
+                .map_err(|_| to_shape_error())?;
+            Ok((true, Some(first), Some(last)))
+        }
+        _ => Err(to_shape_error()),
+    }
+}
+
+fn to_shape_error() -> PyErr {
+    PyTypeError::new_err(
+        "toShape accepts (), (first, last), (surface), (surface, first, last), \
+         (face) or (face, first, last)",
+    )
+}
+
+/// An edge carrying a 2D curve as its pcurve.
+fn curve2d_entry(shape: Shape, record: &Geom2dData) -> PyClassInitializer<PyEdge> {
+    PyEdge::from_entry_with_curve2d(
+        EdgeEntry {
+            shape,
+            curve: None,
+        },
+        record.clone(),
+    )
+}
+
+/// The XY edge of a 2D curve, with the 2D curve attached as its pcurve.
+fn curve2d_edge(
+    py: Python<'_>,
+    data: &Geom2dData,
+    first: Option<f64>,
+    last: Option<f64>,
+) -> PyResult<Py<PyEdge>> {
+    let record = match (first, last) {
+        (Some(first), Some(last)) => data.restricted(first, last)?,
+        _ => data.clone(),
+    };
+    match &record {
+        Geom2dData::Line(_) => Err(OCCError::new_err(
+            "an infinite 2D line has no edge; pass a parameter range to toShape",
+        )),
+        Geom2dData::Segment {
+            origin,
+            direction,
+            first,
+            last,
+        } => {
+            let start = xyz(
+                origin.0 + first * direction.0,
+                origin.1 + first * direction.1,
+            );
+            let end = xyz(
+                origin.0 + last * direction.0,
+                origin.1 + last * direction.1,
+            );
+            let segment = LineSegment::new(start, end).map_err(curve_error)?;
+            let shape = shape_from_curve(&EdgeCurve::LineSegment(segment))?;
+            Ok(Py::new(py, curve2d_entry(shape, &record))?)
+        }
+        Geom2dData::Circle(circle) => {
+            let shape = shape_from_curve(&EdgeCurve::Circle(*circle))?;
+            Ok(Py::new(py, curve2d_entry(shape, &record))?)
+        }
+        Geom2dData::Arc(arc) => {
+            let shape = shape_from_curve(&EdgeCurve::Arc(*arc))?;
+            Ok(Py::new(py, curve2d_entry(shape, &record))?)
+        }
+        Geom2dData::Ellipse(ellipse) => {
+            let shape = shape_from_curve(&EdgeCurve::Ellipse(*ellipse))?;
+            Ok(Py::new(py, curve2d_entry(shape, &record))?)
+        }
+        Geom2dData::ArcOfEllipse {
+            ellipse,
+            first,
+            last,
+        } => {
+            let state = conic_arc_state(ellipse, *first, *last)?;
+            let shape = spline_state_shape(&state)?;
+            Ok(Py::new(
+                py,
+                PyEdge::from_bspline_with_curve2d(shape, state, record),
+            )?)
+        }
+        Geom2dData::Hyperbola(_) => Err(OCCError::new_err(
+            "a hyperbola is unbounded; pass a finite parameter range to toShape",
+        )),
+        Geom2dData::Parabola(_) => Err(OCCError::new_err(
+            "a parabola is unbounded; pass a finite parameter range to toShape",
+        )),
+        Geom2dData::ArcOfHyperbola(arc) => {
+            spline_curve2d_edge(py, &arc.nurbs().map_err(curve_error)?, record)
+        }
+        Geom2dData::ArcOfParabola(arc) => {
+            spline_curve2d_edge(py, &arc.nurbs().map_err(curve_error)?, record)
+        }
+        Geom2dData::Bezier(curve) => spline_curve2d_edge(py, &curve.nurbs(), record),
+        Geom2dData::Offset { .. } => Err(geom2d_not_implemented(
+            "OffsetCurve2d.toShape (no exact offset edge is bound in this slice)",
+        )),
+        Geom2dData::BSpline(_) => Err(geom2d_not_implemented(
+            "BSplineCurve2d.toShape (this slice binds no 2D B-spline kernel)",
+        )),
+    }
+}
+
+/// The exact NURBS state of an elliptical arc over `[first, last]`.
+fn conic_arc_state(ellipse: &Ellipse, first: f64, last: f64) -> PyResult<SplineState> {
+    let blob = occt()
+        .conic_spline_state(
+            3,
+            ellipse.center(),
+            ellipse.normal(),
+            ellipse.x_axis(),
+            ellipse.major_radius(),
+            ellipse.minor_radius(),
+            first,
+            last,
+            true,
+        )
+        .ok_or_else(|| OCCError::new_err("conversion of the elliptical arc to a NURBS failed"))?;
+    SplineState::from_blob(&blob)
+        .ok_or_else(|| OCCError::new_err("conversion of the elliptical arc to a NURBS failed"))
+}
+
+fn spline_state_shape(state: &SplineState) -> PyResult<Shape> {
+    occt()
+        .make_bspline_poles_mults_knots(
+            &state.poles,
+            &state.weights,
+            &state.knots,
+            &state.mults,
+            state.degree,
+            state.periodic,
+            state.check_rational(),
+        )
+        .map_err(kernel_error)
+}
+
+fn spline_curve2d_edge(
+    py: Python<'_>,
+    curve: &NurbsCurve,
+    record: Geom2dData,
+) -> PyResult<Py<PyEdge>> {
+    let state = nurbs_state(curve)?;
+    let shape = spline_state_shape(&state)?;
+    Py::new(py, PyEdge::from_bspline_with_curve2d(shape, state, record))
+}
+
+// --- Line2d ----------------------------------------------------------------
+
+/// `Part.Geom2d.Line2d()` — an infinite line in 2D space (`Part::Geom2dLine`).
+#[pyclass(name = "Line2d", module = "Part.Geom2d", extends = PyCurve2d)]
+pub struct PyLine2d;
+curve2d_initializer!(PyLine2d);
+
+#[pymethods]
+impl PyLine2d {
+    #[new]
+    #[pyo3(signature = (*args))]
+    fn new(args: &Bound<'_, PyTuple>) -> PyResult<PyClassInitializer<Self>> {
+        let data = match args.len() {
+            0 => line_data((0.0, 0.0), (1.0, 0.0))?,
+            1 => {
+                let data = geometry_data(&args.get_item(0)?)?;
+                if !matches!(data, Geom2dData::Line(_)) {
+                    return Err(PyTypeError::new_err("Line2d copy expects a Line2d"));
+                }
+                data
+            }
+            2 => line_data(
+                vector2d(&args.get_item(0)?)?,
+                vector2d(&args.get_item(1)?)?,
+            )?,
+            _ => {
+                return Err(PyTypeError::new_err(
+                    "Line2d constructor accepts:\n\
+                     -- empty parameter list\n\
+                     -- Line2d\n\
+                     -- Point, Point",
+                ))
+            }
+        };
+        Ok(Self::initializer(data))
+    }
+
+    #[getter]
+    fn Location(slf: &Bound<'_, Self>, py: Python<'_>) -> PyResult<PyObject> {
+        let data = geometry_data(slf.as_any())?;
+        let location = data
+            .location()
+            .ok_or_else(|| OCCError::new_err("the object is not a Line2d"))?;
+        py_vector2d(py, location)
+    }
+
+    #[setter]
+    fn set_Location(slf: &Bound<'_, Self>, value: &Bound<'_, PyAny>) -> PyResult<()> {
+        let location = vector2d(value)?;
+        let data = geometry_data(slf.as_any())?;
+        let updated = data
+            .with_location(location)
+            .ok_or_else(|| OCCError::new_err("the object is not a Line2d"))?;
+        replace_geometry_data(slf.as_any(), updated)
+    }
+
+    #[getter]
+    fn Direction(slf: &Bound<'_, Self>, py: Python<'_>) -> PyResult<PyObject> {
+        let data = geometry_data(slf.as_any())?;
+        let axis = data
+            .x_axis()
+            .ok_or_else(|| OCCError::new_err("the object is not a Line2d"))?;
+        py_vector2d(py, axis)
+    }
+
+    #[setter]
+    fn set_Direction(slf: &Bound<'_, Self>, value: &Bound<'_, PyAny>) -> PyResult<()> {
+        let direction = vector2d(value)?;
+        let data = geometry_data(slf.as_any())?;
+        let updated = data
+            .with_x_axis(direction)
+            .ok_or_else(|| OCCError::new_err("the direction must not be null"))?;
+        replace_geometry_data(slf.as_any(), updated)
+    }
+}
+
+// --- Line2dSegment ---------------------------------------------------------
+
+/// `Part.Geom2d.Line2dSegment(p1, p2)` — a bounded line segment in 2D
+/// parameter space (upstream's `Part::Geom2dLineSegment`).
+///
+/// Points are `(u, v)` pairs or objects with `x`/`y` (`ferrocad.Vector2d`).
+#[pyclass(name = "Line2dSegment", module = "Part.Geom2d", extends = PyCurve2d)]
+pub struct PyLine2dSegment;
+curve2d_initializer!(PyLine2dSegment);
 
 #[pymethods]
 impl PyLine2dSegment {
     #[new]
-    fn new(start: &Bound<'_, PyAny>, end: &Bound<'_, PyAny>) -> PyResult<Self> {
-        let start = vector2d(start)?;
-        let end = vector2d(end)?;
-        if start == end {
+    #[pyo3(signature = (*args))]
+    fn new(args: &Bound<'_, PyTuple>) -> PyResult<PyClassInitializer<Self>> {
+        let data = match args.len() {
+            0 => Geom2dData::Segment {
+                origin: (0.0, 0.0),
+                direction: (0.0, 1.0),
+                first: 0.0,
+                last: 1.0,
+            },
+            1 => {
+                let data = geometry_data(&args.get_item(0)?)?;
+                if !matches!(data, Geom2dData::Segment { .. }) {
+                    return Err(PyTypeError::new_err(
+                        "Line2dSegment copy expects a Line2dSegment",
+                    ));
+                }
+                data
+            }
+            2 => segment_data(
+                vector2d(&args.get_item(0)?)?,
+                vector2d(&args.get_item(1)?)?,
+            )?,
+            _ => {
+                return Err(PyTypeError::new_err(
+                    "Line2dSegment constructor accepts:\n\
+                     -- empty parameter list\n\
+                     -- Line2dSegment\n\
+                     -- Point1, Point2",
+                ))
+            }
+        };
+        Ok(Self::initializer(data))
+    }
+
+    #[getter]
+    fn StartPoint(slf: &Bound<'_, Self>, py: Python<'_>) -> PyResult<PyObject> {
+        let data = geometry_data(slf.as_any())?;
+        let first = data
+            .first()
+            .ok_or_else(|| OCCError::new_err("the object is not a Line2dSegment"))?;
+        let point = data
+            .point(first)
+            .ok_or_else(|| OCCError::new_err("the object is not a Line2dSegment"))?;
+        py_vector2d(py, point)
+    }
+
+    #[setter]
+    fn set_StartPoint(slf: &Bound<'_, Self>, value: &Bound<'_, PyAny>) -> PyResult<()> {
+        let start = vector2d(value)?;
+        let data = geometry_data(slf.as_any())?;
+        let Geom2dData::Segment {
+            origin,
+            direction,
+            last,
+            ..
+        } = data
+        else {
+            return Err(OCCError::new_err("the object is not a Line2dSegment"));
+        };
+        let end = (
+            origin.0 + last * direction.0,
+            origin.1 + last * direction.1,
+        );
+        replace_geometry_data(slf.as_any(), segment_data(start, end)?)
+    }
+
+    #[getter]
+    fn EndPoint(slf: &Bound<'_, Self>, py: Python<'_>) -> PyResult<PyObject> {
+        let data = geometry_data(slf.as_any())?;
+        let last = data
+            .last()
+            .ok_or_else(|| OCCError::new_err("the object is not a Line2dSegment"))?;
+        let point = data
+            .point(last)
+            .ok_or_else(|| OCCError::new_err("the object is not a Line2dSegment"))?;
+        py_vector2d(py, point)
+    }
+
+    #[setter]
+    fn set_EndPoint(slf: &Bound<'_, Self>, value: &Bound<'_, PyAny>) -> PyResult<()> {
+        let end = vector2d(value)?;
+        let data = geometry_data(slf.as_any())?;
+        let start = data
+            .point(data.first().unwrap_or(0.0))
+            .ok_or_else(|| OCCError::new_err("the object is not a Line2dSegment"))?;
+        replace_geometry_data(slf.as_any(), segment_data(start, end)?)
+    }
+
+    /// `setParameterRange(first, last)` — retrim the underlying line, as
+    /// `Geom2d_TrimmedCurve::SetTrim`.
+    fn setParameterRange(slf: &Bound<'_, Self>, first: f64, last: f64) -> PyResult<()> {
+        if !first.is_finite() || !last.is_finite() {
             return Err(OCCError::new_err(
-                "Part.Geom2d.Line2dSegment needs two distinct points",
+                "a Line2dSegment parameter range must be finite",
             ));
         }
-        Ok(Self { start, end })
+        let data = geometry_data(slf.as_any())?;
+        let Geom2dData::Segment {
+            origin, direction, ..
+        } = data
+        else {
+            return Err(OCCError::new_err("the object is not a Line2dSegment"));
+        };
+        replace_geometry_data(
+            slf.as_any(),
+            Geom2dData::Segment {
+                origin,
+                direction,
+                first,
+                last,
+            },
+        )
     }
+}
 
-    #[getter]
-    fn StartPoint(&self, py: Python<'_>) -> PyResult<PyObject> {
-        py_vector2d(py, self.start)
-    }
+// --- Circle2d --------------------------------------------------------------
 
-    #[getter]
-    fn EndPoint(&self, py: Python<'_>) -> PyResult<PyObject> {
-        py_vector2d(py, self.end)
-    }
+/// `Part.Geom2d.Circle2d()` — a circle in 2D space (`Part::Geom2dCircle`).
+///
+/// The constructors follow upstream: empty (centre `(0, 0)`, radius `1`), a
+/// copy, `(Center, Radius)`, `(Circle, Distance)` for a parallel circle, and
+/// `(Point1, Point2, Point3)`.
+#[pyclass(name = "Circle2d", module = "Part.Geom2d", extends = PyConic2d)]
+pub struct PyCircle2d;
+conic2d_initializer!(PyCircle2d);
 
-    /// The segment as a `Part.Edge`.
-    ///
-    /// Without `surface` this is a real 3D edge in the XY plane: the 2D segment is
-    /// lifted to `(u, v, 0)` and built through the kernel's `make_edge`, and the
-    /// 2D segment is attached as the edge's pcurve (upstream builds a 2D-only edge
-    /// here instead).
-    ///
-    /// With `surface` the same edge is returned, with the same pcurve attached.
-    /// **The curve is not projected onto the surface in this slice** — there is no
-    /// `GeomProjLib` binding, so on a `Part.Cylinder` the coordinates are not
-    /// wrapped around the axis; passing the surface only validates its type and
-    /// records the association the caller asked for. `curveOnSurface(0)` reports
-    /// the 2D segment in both forms.
-    #[pyo3(signature = (surface = None))]
-    fn toShape(
-        &self,
-        py: Python<'_>,
-        surface: Option<&Bound<'_, PyAny>>,
-    ) -> PyResult<Py<PyEdge>> {
-        if let Some(surface) = surface {
-            require_surface(surface)?;
+#[pymethods]
+impl PyCircle2d {
+    #[new]
+    #[pyo3(signature = (*args, **kwargs))]
+    fn new(
+        args: &Bound<'_, PyTuple>,
+        kwargs: Option<&Bound<'_, PyDict>>,
+    ) -> PyResult<PyClassInitializer<Self>> {
+        if let Some(kwargs) = kwargs {
+            if !kwargs.is_empty() {
+                if !args.is_empty() {
+                    return Err(PyTypeError::new_err(
+                        "Circle2d takes either positional or keyword arguments, not both",
+                    ));
+                }
+                let center = dict_value(kwargs, &["Center", "center"])?;
+                let radius = dict_value(kwargs, &["Radius", "radius"])?;
+                let (Some(center), Some(radius)) = (center, radius) else {
+                    return Err(PyTypeError::new_err(
+                        "Circle2d keyword arguments are Center and Radius",
+                    ));
+                };
+                return Ok(Self::initializer(circle_data(
+                    vector2d(&center)?,
+                    radius.extract()?,
+                )?));
+            }
         }
-        let segment = LineSegment::new(
-            Vector3::new(self.start.0, self.start.1, 0.0),
-            Vector3::new(self.end.0, self.end.1, 0.0),
+        let data = match args.len() {
+            0 => circle_data((0.0, 0.0), 1.0)?,
+            1 => {
+                let data = geometry_data(&args.get_item(0)?)?;
+                if !matches!(data, Geom2dData::Circle(_)) {
+                    return Err(PyTypeError::new_err("Circle2d copy expects a Circle2d"));
+                }
+                data
+            }
+            2 => {
+                let first = args.get_item(0)?;
+                let second = args.get_item(1)?;
+                if let Ok(Geom2dData::Circle(circle)) = geometry_data(&first) {
+                    let distance: f64 = second.extract().map_err(|_| {
+                        PyTypeError::new_err("Circle2d(Circle, Distance) expects a float")
+                    })?;
+                    circle_data(xy(circle.center()), circle.radius() + distance)?
+                } else {
+                    circle_data(
+                        vector2d(&first)?,
+                        second.extract().map_err(|_| {
+                            PyTypeError::new_err("Circle2d(Center, Radius) expects a float")
+                        })?,
+                    )?
+                }
+            }
+            3 => {
+                let p1 = vector2d(&args.get_item(0)?)?;
+                let p2 = vector2d(&args.get_item(1)?)?;
+                let p3 = vector2d(&args.get_item(2)?)?;
+                let center = circle_center(p1, p2, p3)?;
+                let radius = distance2(center, p1);
+                let x_axis = unit2((p1.0 - center.0, p1.1 - center.1))
+                    .ok_or_else(|| OCCError::new_err("Two points are coincident"))?;
+                Geom2dData::Circle(
+                    Circle::with_axis(
+                        xyz(center.0, center.1),
+                        unit_normal(),
+                        xyz(x_axis.0, x_axis.1),
+                        radius,
+                    )
+                    .map_err(curve_error)?,
+                )
+            }
+            _ => {
+                return Err(PyTypeError::new_err(
+                    "Circle2d constructor accepts:\n\
+                     -- empty parameter list\n\
+                     -- Circle2d\n\
+                     -- Circle2d, Distance\n\
+                     -- Center, Radius\n\
+                     -- Point1, Point2, Point3",
+                ))
+            }
+        };
+        Ok(Self::initializer(data))
+    }
+
+    #[getter]
+    fn Radius(slf: &Bound<'_, Self>) -> PyResult<f64> {
+        match geometry_data(slf.as_any())? {
+            Geom2dData::Circle(circle) => Ok(circle.radius()),
+            _ => Err(OCCError::new_err("the object is not a Circle2d")),
+        }
+    }
+
+    #[setter]
+    fn set_Radius(slf: &Bound<'_, Self>, value: f64) -> PyResult<()> {
+        let data = geometry_data(slf.as_any())?;
+        let Geom2dData::Circle(circle) = data else {
+            return Err(OCCError::new_err("the object is not a Circle2d"));
+        };
+        replace_geometry_data(slf.as_any(), circle_data(xy(circle.center()), value)?)
+    }
+
+    /// The centre of the circle through three points, as upstream's
+    /// `Geom2dCircle::getCircleCenter`: coincident points and collinear points
+    /// are `ValueError`.
+    #[staticmethod]
+    fn getCircleCenter(
+        py: Python<'_>,
+        p1: &Bound<'_, PyAny>,
+        p2: &Bound<'_, PyAny>,
+        p3: &Bound<'_, PyAny>,
+    ) -> PyResult<PyObject> {
+        let center = circle_center(vector2d(p1)?, vector2d(p2)?, vector2d(p3)?)?;
+        py_vector2d(py, center)
+    }
+}
+
+fn dict_value<'a>(
+    kwargs: &'a Bound<'a, PyDict>,
+    names: &[&str],
+) -> PyResult<Option<Bound<'a, PyAny>>> {
+    for name in names {
+        if let Some(value) = kwargs.get_item(*name)? {
+            return Ok(Some(value));
+        }
+    }
+    Ok(None)
+}
+
+// --- ArcOfCircle2d ---------------------------------------------------------
+
+/// `Part.Geom2d.ArcOfCircle2d(circle, first, last, sense=True)` — a portion of
+/// a circle (`Part::Geom2dArcOfCircle`).
+///
+/// The three-point form `(Point1, Point2, Point3)` builds the arc from the
+/// first through the second to the third point.
+#[pyclass(name = "ArcOfCircle2d", module = "Part.Geom2d", extends = PyArcOfConic2d)]
+pub struct PyArcOfCircle2d;
+arc_of_conic2d_initializer!(PyArcOfCircle2d);
+
+#[pymethods]
+impl PyArcOfCircle2d {
+    #[new]
+    #[pyo3(signature = (*args))]
+    fn new(args: &Bound<'_, PyTuple>) -> PyResult<PyClassInitializer<Self>> {
+        let data = match args.len() {
+            3 | 4 => {
+                let first_arg = args.get_item(0)?;
+                if let Ok(Geom2dData::Circle(circle)) = geometry_data(&first_arg) {
+                    let first: f64 = args.get_item(1)?.extract()?;
+                    let last: f64 = args.get_item(2)?.extract()?;
+                    let sense = if args.len() == 4 {
+                        args.get_item(3)?.extract::<bool>()?
+                    } else {
+                        true
+                    };
+                    let (first, last) = arc_range(first, last, true, sense)?;
+                    arc_of_circle_data(circle, first, last)?
+                } else {
+                    if args.len() != 3 {
+                        return Err(PyTypeError::new_err(
+                            "ArcOfCircle2d constructor expects a circle curve and a \
+                             parameter range or three points",
+                        ));
+                    }
+                    arc_through_points(
+                        vector2d(&args.get_item(0)?)?,
+                        vector2d(&args.get_item(1)?)?,
+                        vector2d(&args.get_item(2)?)?,
+                    )?
+                }
+            }
+            _ => {
+                return Err(PyTypeError::new_err(
+                    "ArcOfCircle2d constructor expects a circle curve and a \
+                     parameter range or three points",
+                ))
+            }
+        };
+        Ok(Self::initializer(data))
+    }
+
+    #[getter]
+    fn Radius(slf: &Bound<'_, Self>) -> PyResult<f64> {
+        match geometry_data(slf.as_any())? {
+            Geom2dData::Arc(arc) => Ok(arc.circle().radius()),
+            _ => Err(OCCError::new_err("the object is not an ArcOfCircle2d")),
+        }
+    }
+
+    #[setter]
+    fn set_Radius(slf: &Bound<'_, Self>, value: f64) -> PyResult<()> {
+        let data = geometry_data(slf.as_any())?;
+        let Geom2dData::Arc(arc) = data else {
+            return Err(OCCError::new_err("the object is not an ArcOfCircle2d"));
+        };
+        let circle = Circle::with_axis(
+            arc.circle().center(),
+            arc.circle().normal(),
+            arc.circle().x_axis(),
+            value,
         )
         .map_err(curve_error)?;
-        let curve = EdgeCurve::LineSegment(segment);
-        let entry = EdgeEntry {
-            shape: shape_from_curve(&curve)?,
-            curve: Some(curve),
-        };
-        Ok(Py::new(
-            py,
-            PyEdge::from_entry_with_curve2d(entry, Curve2d::LineSegment(*self)),
-        )?)
+        replace_geometry_data(
+            slf.as_any(),
+            arc_of_circle_data(circle, arc.first(), arc.last())?,
+        )
     }
 
-    fn __repr__(&self) -> String {
-        format!(
-            "Part.Geom2d.Line2dSegment({:?}, {:?})",
-            self.start, self.end
+    /// The internal circle (`GeomArcOfCircle::getCircle`).
+    #[getter]
+    fn Circle(slf: &Bound<'_, Self>, py: Python<'_>) -> PyResult<Py<PyCircle2d>> {
+        match geometry_data(slf.as_any())? {
+            Geom2dData::Arc(arc) => {
+                Py::new(py, PyCircle2d::initializer(Geom2dData::Circle(arc.circle())))
+            }
+            _ => Err(OCCError::new_err("the object is not an ArcOfCircle2d")),
+        }
+    }
+}
+
+// --- Ellipse2d -------------------------------------------------------------
+
+/// `Part.Geom2d.Ellipse2d()` — an ellipse in 2D space (`Part::Geom2dEllipse`).
+#[pyclass(name = "Ellipse2d", module = "Part.Geom2d", extends = PyConic2d)]
+pub struct PyEllipse2d;
+conic2d_initializer!(PyEllipse2d);
+
+#[pymethods]
+impl PyEllipse2d {
+    #[new]
+    #[pyo3(signature = (*args))]
+    fn new(args: &Bound<'_, PyTuple>) -> PyResult<PyClassInitializer<Self>> {
+        let data = match args.len() {
+            0 => ellipse_data((0.0, 0.0), (1.0, 0.0), 2.0, 1.0)?,
+            1 => {
+                let data = geometry_data(&args.get_item(0)?)?;
+                if !matches!(data, Geom2dData::Ellipse(_)) {
+                    return Err(PyTypeError::new_err("Ellipse2d copy expects an Ellipse2d"));
+                }
+                data
+            }
+            3 => {
+                let major: Result<f64, _> = args.get_item(1)?.extract();
+                let minor: Result<f64, _> = args.get_item(2)?.extract();
+                match (major, minor) {
+                    (Ok(major), Ok(minor)) => {
+                        let center = vector2d(&args.get_item(0)?)?;
+                        // Upstream's `(Center, MajorRadius, MinorRadius)` puts
+                        // the major axis along +Y.
+                        ellipse_data(center, (0.0, 1.0), major, minor)?
+                    }
+                    _ => ellipse_through_points(
+                        vector2d(&args.get_item(0)?)?,
+                        vector2d(&args.get_item(1)?)?,
+                        vector2d(&args.get_item(2)?)?,
+                    )?,
+                }
+            }
+            _ => {
+                return Err(PyTypeError::new_err(
+                    "Ellipse2d constructor accepts:\n\
+                     -- empty parameter list\n\
+                     -- Ellipse2d\n\
+                     -- Center, MajorRadius, MinorRadius\n\
+                     -- Point, Point, Point",
+                ))
+            }
+        };
+        Ok(Self::initializer(data))
+    }
+
+    #[getter]
+    fn MajorRadius(slf: &Bound<'_, Self>) -> PyResult<f64> {
+        match geometry_data(slf.as_any())? {
+            Geom2dData::Ellipse(ellipse) => Ok(ellipse.major_radius()),
+            _ => Err(OCCError::new_err("the object is not an Ellipse2d")),
+        }
+    }
+
+    #[setter]
+    fn set_MajorRadius(slf: &Bound<'_, Self>, value: f64) -> PyResult<()> {
+        let data = geometry_data(slf.as_any())?;
+        let Geom2dData::Ellipse(ellipse) = data else {
+            return Err(OCCError::new_err("the object is not an Ellipse2d"));
+        };
+        replace_geometry_data(
+            slf.as_any(),
+            ellipse_data(
+                xy(ellipse.center()),
+                xy(ellipse.x_axis()),
+                value,
+                ellipse.minor_radius(),
+            )?,
+        )
+    }
+
+    #[getter]
+    fn MinorRadius(slf: &Bound<'_, Self>) -> PyResult<f64> {
+        match geometry_data(slf.as_any())? {
+            Geom2dData::Ellipse(ellipse) => Ok(ellipse.minor_radius()),
+            _ => Err(OCCError::new_err("the object is not an Ellipse2d")),
+        }
+    }
+
+    #[setter]
+    fn set_MinorRadius(slf: &Bound<'_, Self>, value: f64) -> PyResult<()> {
+        let data = geometry_data(slf.as_any())?;
+        let Geom2dData::Ellipse(ellipse) = data else {
+            return Err(OCCError::new_err("the object is not an Ellipse2d"));
+        };
+        replace_geometry_data(
+            slf.as_any(),
+            ellipse_data(
+                xy(ellipse.center()),
+                xy(ellipse.x_axis()),
+                ellipse.major_radius(),
+                value,
+            )?,
+        )
+    }
+
+    #[getter]
+    fn Focal(slf: &Bound<'_, Self>) -> PyResult<f64> {
+        match geometry_data(slf.as_any())? {
+            Geom2dData::Ellipse(ellipse) => {
+                let (a, b) = (ellipse.major_radius(), ellipse.minor_radius());
+                Ok((a * a - b * b).max(0.0).sqrt())
+            }
+            _ => Err(OCCError::new_err("the object is not an Ellipse2d")),
+        }
+    }
+
+    #[getter]
+    fn Focus1(slf: &Bound<'_, Self>, py: Python<'_>) -> PyResult<PyObject> {
+        match geometry_data(slf.as_any())? {
+            Geom2dData::Ellipse(ellipse) => {
+                let (a, b) = (ellipse.major_radius(), ellipse.minor_radius());
+                let focal = (a * a - b * b).max(0.0).sqrt();
+                let x = xy(ellipse.x_axis());
+                let center = xy(ellipse.center());
+                py_vector2d(py, (center.0 + focal * x.0, center.1 + focal * x.1))
+            }
+            _ => Err(OCCError::new_err("the object is not an Ellipse2d")),
+        }
+    }
+
+    #[getter]
+    fn Focus2(slf: &Bound<'_, Self>, py: Python<'_>) -> PyResult<PyObject> {
+        match geometry_data(slf.as_any())? {
+            Geom2dData::Ellipse(ellipse) => {
+                let (a, b) = (ellipse.major_radius(), ellipse.minor_radius());
+                let focal = (a * a - b * b).max(0.0).sqrt();
+                let x = xy(ellipse.x_axis());
+                let center = xy(ellipse.center());
+                py_vector2d(py, (center.0 - focal * x.0, center.1 - focal * x.1))
+            }
+            _ => Err(OCCError::new_err("the object is not an Ellipse2d")),
+        }
+    }
+}
+
+// --- ArcOfEllipse2d --------------------------------------------------------
+
+/// `Part.Geom2d.ArcOfEllipse2d(ellipse, first, last, sense=True)` — a portion
+/// of an ellipse (`Part::Geom2dArcOfEllipse`).
+#[pyclass(name = "ArcOfEllipse2d", module = "Part.Geom2d", extends = PyArcOfConic2d)]
+pub struct PyArcOfEllipse2d;
+arc_of_conic2d_initializer!(PyArcOfEllipse2d);
+
+#[pymethods]
+impl PyArcOfEllipse2d {
+    #[new]
+    #[pyo3(signature = (*args))]
+    fn new(args: &Bound<'_, PyTuple>) -> PyResult<PyClassInitializer<Self>> {
+        if args.len() < 3 || args.len() > 4 {
+            return Err(PyTypeError::new_err(
+                "ArcOfEllipse2d constructor expects an ellipse curve and a \
+                 parameter range",
+            ));
+        }
+        let Geom2dData::Ellipse(ellipse) = geometry_data(&args.get_item(0)?)? else {
+            return Err(PyTypeError::new_err(
+                "ArcOfEllipse2d expects an Ellipse2d",
+            ));
+        };
+        let first: f64 = args.get_item(1)?.extract()?;
+        let last: f64 = args.get_item(2)?.extract()?;
+        let sense = if args.len() == 4 {
+            args.get_item(3)?.extract::<bool>()?
+        } else {
+            true
+        };
+        let (first, last) = arc_range(first, last, true, sense)?;
+        Ok(Self::initializer(arc_of_ellipse_data(
+            ellipse, first, last,
+        )?))
+    }
+
+    #[getter]
+    fn MajorRadius(slf: &Bound<'_, Self>) -> PyResult<f64> {
+        match geometry_data(slf.as_any())? {
+            Geom2dData::ArcOfEllipse { ellipse, .. } => Ok(ellipse.major_radius()),
+            _ => Err(OCCError::new_err("the object is not an ArcOfEllipse2d")),
+        }
+    }
+
+    #[setter]
+    fn set_MajorRadius(slf: &Bound<'_, Self>, value: f64) -> PyResult<()> {
+        let data = geometry_data(slf.as_any())?;
+        let Geom2dData::ArcOfEllipse {
+            ellipse,
+            first,
+            last,
+        } = data
+        else {
+            return Err(OCCError::new_err("the object is not an ArcOfEllipse2d"));
+        };
+        replace_geometry_data(
+            slf.as_any(),
+            Geom2dData::ArcOfEllipse {
+                ellipse: Ellipse::with_axis(
+                    ellipse.center(),
+                    ellipse.normal(),
+                    ellipse.x_axis(),
+                    value,
+                    ellipse.minor_radius(),
+                )
+                .map_err(curve_error)?,
+                first,
+                last,
+            },
+        )
+    }
+
+    #[getter]
+    fn MinorRadius(slf: &Bound<'_, Self>) -> PyResult<f64> {
+        match geometry_data(slf.as_any())? {
+            Geom2dData::ArcOfEllipse { ellipse, .. } => Ok(ellipse.minor_radius()),
+            _ => Err(OCCError::new_err("the object is not an ArcOfEllipse2d")),
+        }
+    }
+
+    #[setter]
+    fn set_MinorRadius(slf: &Bound<'_, Self>, value: f64) -> PyResult<()> {
+        let data = geometry_data(slf.as_any())?;
+        let Geom2dData::ArcOfEllipse {
+            ellipse,
+            first,
+            last,
+        } = data
+        else {
+            return Err(OCCError::new_err("the object is not an ArcOfEllipse2d"));
+        };
+        replace_geometry_data(
+            slf.as_any(),
+            Geom2dData::ArcOfEllipse {
+                ellipse: Ellipse::with_axis(
+                    ellipse.center(),
+                    ellipse.normal(),
+                    ellipse.x_axis(),
+                    ellipse.major_radius(),
+                    value,
+                )
+                .map_err(curve_error)?,
+                first,
+                last,
+            },
+        )
+    }
+
+    /// The internal ellipse (`GeomArcOfEllipse::getEllipse`).
+    #[getter]
+    fn Ellipse(slf: &Bound<'_, Self>, py: Python<'_>) -> PyResult<Py<PyEllipse2d>> {
+        match geometry_data(slf.as_any())? {
+            Geom2dData::ArcOfEllipse { ellipse, .. } => {
+                Py::new(py, PyEllipse2d::initializer(Geom2dData::Ellipse(ellipse)))
+            }
+            _ => Err(OCCError::new_err("the object is not an ArcOfEllipse2d")),
+        }
+    }
+}
+
+// --- Hyperbola2d -----------------------------------------------------------
+
+/// `Part.Geom2d.Hyperbola2d()` — a hyperbola in 2D space
+/// (`Part::Geom2dHyperbola`).
+#[pyclass(name = "Hyperbola2d", module = "Part.Geom2d", extends = PyConic2d)]
+pub struct PyHyperbola2d;
+conic2d_initializer!(PyHyperbola2d);
+
+#[pymethods]
+impl PyHyperbola2d {
+    #[new]
+    #[pyo3(signature = (*args))]
+    fn new(args: &Bound<'_, PyTuple>) -> PyResult<PyClassInitializer<Self>> {
+        let data = match args.len() {
+            0 => hyperbola_data((0.0, 0.0), (1.0, 0.0), 2.0, 1.0)?,
+            1 => {
+                let data = geometry_data(&args.get_item(0)?)?;
+                if !matches!(data, Geom2dData::Hyperbola(_)) {
+                    return Err(PyTypeError::new_err(
+                        "Hyperbola2d copy expects a Hyperbola2d",
+                    ));
+                }
+                data
+            }
+            3 => {
+                let major: Result<f64, _> = args.get_item(1)?.extract();
+                let minor: Result<f64, _> = args.get_item(2)?.extract();
+                match (major, minor) {
+                    (Ok(major), Ok(minor)) => {
+                        let center = vector2d(&args.get_item(0)?)?;
+                        // Upstream's `(Center, MajorRadius, MinorRadius)` puts
+                        // the major axis along +Y.
+                        hyperbola_data(center, (0.0, 1.0), major, minor)?
+                    }
+                    _ => hyperbola_through_points(
+                        vector2d(&args.get_item(0)?)?,
+                        vector2d(&args.get_item(1)?)?,
+                        vector2d(&args.get_item(2)?)?,
+                    )?,
+                }
+            }
+            _ => {
+                return Err(PyTypeError::new_err(
+                    "Hyperbola2d constructor accepts:\n\
+                     -- empty parameter list\n\
+                     -- Hyperbola2d\n\
+                     -- Center, MajorRadius, MinorRadius\n\
+                     -- Point, Point, Point",
+                ))
+            }
+        };
+        Ok(Self::initializer(data))
+    }
+
+    #[getter]
+    fn MajorRadius(slf: &Bound<'_, Self>) -> PyResult<f64> {
+        match geometry_data(slf.as_any())? {
+            Geom2dData::Hyperbola(hyperbola) => Ok(hyperbola.major_radius()),
+            _ => Err(OCCError::new_err("the object is not a Hyperbola2d")),
+        }
+    }
+
+    #[setter]
+    fn set_MajorRadius(slf: &Bound<'_, Self>, value: f64) -> PyResult<()> {
+        let data = geometry_data(slf.as_any())?;
+        let Geom2dData::Hyperbola(hyperbola) = data else {
+            return Err(OCCError::new_err("the object is not a Hyperbola2d"));
+        };
+        replace_geometry_data(
+            slf.as_any(),
+            hyperbola_data(
+                xy(hyperbola.center()),
+                xy(hyperbola.x_axis()),
+                value,
+                hyperbola.minor_radius(),
+            )?,
+        )
+    }
+
+    #[getter]
+    fn MinorRadius(slf: &Bound<'_, Self>) -> PyResult<f64> {
+        match geometry_data(slf.as_any())? {
+            Geom2dData::Hyperbola(hyperbola) => Ok(hyperbola.minor_radius()),
+            _ => Err(OCCError::new_err("the object is not a Hyperbola2d")),
+        }
+    }
+
+    #[setter]
+    fn set_MinorRadius(slf: &Bound<'_, Self>, value: f64) -> PyResult<()> {
+        let data = geometry_data(slf.as_any())?;
+        let Geom2dData::Hyperbola(hyperbola) = data else {
+            return Err(OCCError::new_err("the object is not a Hyperbola2d"));
+        };
+        replace_geometry_data(
+            slf.as_any(),
+            hyperbola_data(
+                xy(hyperbola.center()),
+                xy(hyperbola.x_axis()),
+                hyperbola.major_radius(),
+                value,
+            )?,
+        )
+    }
+
+    #[getter]
+    fn Focal(slf: &Bound<'_, Self>) -> PyResult<f64> {
+        match geometry_data(slf.as_any())? {
+            Geom2dData::Hyperbola(hyperbola) => Ok(hyperbola.focal()),
+            _ => Err(OCCError::new_err("the object is not a Hyperbola2d")),
+        }
+    }
+
+    #[getter]
+    fn Focus1(slf: &Bound<'_, Self>, py: Python<'_>) -> PyResult<PyObject> {
+        match geometry_data(slf.as_any())? {
+            Geom2dData::Hyperbola(hyperbola) => py_vector2d(py, xy(hyperbola.focus1())),
+            _ => Err(OCCError::new_err("the object is not a Hyperbola2d")),
+        }
+    }
+
+    #[getter]
+    fn Focus2(slf: &Bound<'_, Self>, py: Python<'_>) -> PyResult<PyObject> {
+        match geometry_data(slf.as_any())? {
+            Geom2dData::Hyperbola(hyperbola) => py_vector2d(py, xy(hyperbola.focus2())),
+            _ => Err(OCCError::new_err("the object is not a Hyperbola2d")),
+        }
+    }
+}
+
+// --- ArcOfHyperbola2d ------------------------------------------------------
+
+/// `Part.Geom2d.ArcOfHyperbola2d(hyperbola, first, last, sense=True)` — a
+/// portion of a hyperbola (`Part::Geom2dArcOfHyperbola`).
+#[pyclass(name = "ArcOfHyperbola2d", module = "Part.Geom2d", extends = PyArcOfConic2d)]
+pub struct PyArcOfHyperbola2d;
+arc_of_conic2d_initializer!(PyArcOfHyperbola2d);
+
+#[pymethods]
+impl PyArcOfHyperbola2d {
+    #[new]
+    #[pyo3(signature = (*args))]
+    fn new(args: &Bound<'_, PyTuple>) -> PyResult<PyClassInitializer<Self>> {
+        if args.len() < 3 || args.len() > 4 {
+            return Err(PyTypeError::new_err(
+                "ArcOfHyperbola2d constructor expects a hyperbola curve and a \
+                 parameter range",
+            ));
+        }
+        let Geom2dData::Hyperbola(hyperbola) = geometry_data(&args.get_item(0)?)? else {
+            return Err(PyTypeError::new_err(
+                "ArcOfHyperbola2d expects a Hyperbola2d",
+            ));
+        };
+        let first: f64 = args.get_item(1)?.extract()?;
+        let last: f64 = args.get_item(2)?.extract()?;
+        let sense = if args.len() == 4 {
+            args.get_item(3)?.extract::<bool>()?
+        } else {
+            true
+        };
+        Ok(Self::initializer(arc_of_hyperbola_data(
+            hyperbola, first, last, sense,
+        )?))
+    }
+
+    #[getter]
+    fn MajorRadius(slf: &Bound<'_, Self>) -> PyResult<f64> {
+        match geometry_data(slf.as_any())? {
+            Geom2dData::ArcOfHyperbola(arc) => Ok(arc.hyperbola().major_radius()),
+            _ => Err(OCCError::new_err("the object is not an ArcOfHyperbola2d")),
+        }
+    }
+
+    #[setter]
+    fn set_MajorRadius(slf: &Bound<'_, Self>, value: f64) -> PyResult<()> {
+        let Geom2dData::ArcOfHyperbola(arc) = geometry_data(slf.as_any())? else {
+            return Err(OCCError::new_err("the object is not an ArcOfHyperbola2d"));
+        };
+        let hyperbola = Hyperbola::with_axis(
+            arc.hyperbola().center(),
+            arc.hyperbola().normal(),
+            arc.hyperbola().x_axis(),
+            value,
+            arc.hyperbola().minor_radius(),
+        )
+        .map_err(curve_error)?;
+        replace_geometry_data(
+            slf.as_any(),
+            Geom2dData::ArcOfHyperbola(
+                ArcOfHyperbola::new(hyperbola, arc.first(), arc.last()).map_err(curve_error)?,
+            ),
+        )
+    }
+
+    #[getter]
+    fn MinorRadius(slf: &Bound<'_, Self>) -> PyResult<f64> {
+        match geometry_data(slf.as_any())? {
+            Geom2dData::ArcOfHyperbola(arc) => Ok(arc.hyperbola().minor_radius()),
+            _ => Err(OCCError::new_err("the object is not an ArcOfHyperbola2d")),
+        }
+    }
+
+    #[setter]
+    fn set_MinorRadius(slf: &Bound<'_, Self>, value: f64) -> PyResult<()> {
+        let Geom2dData::ArcOfHyperbola(arc) = geometry_data(slf.as_any())? else {
+            return Err(OCCError::new_err("the object is not an ArcOfHyperbola2d"));
+        };
+        let hyperbola = Hyperbola::with_axis(
+            arc.hyperbola().center(),
+            arc.hyperbola().normal(),
+            arc.hyperbola().x_axis(),
+            arc.hyperbola().major_radius(),
+            value,
+        )
+        .map_err(curve_error)?;
+        replace_geometry_data(
+            slf.as_any(),
+            Geom2dData::ArcOfHyperbola(
+                ArcOfHyperbola::new(hyperbola, arc.first(), arc.last()).map_err(curve_error)?,
+            ),
+        )
+    }
+
+    /// The internal hyperbola (`GeomArcOfHyperbola::getHyperbola`).
+    #[getter]
+    fn Hyperbola(slf: &Bound<'_, Self>, py: Python<'_>) -> PyResult<Py<PyHyperbola2d>> {
+        match geometry_data(slf.as_any())? {
+            Geom2dData::ArcOfHyperbola(arc) => Py::new(
+                py,
+                PyHyperbola2d::initializer(Geom2dData::Hyperbola(arc.hyperbola())),
+            ),
+            _ => Err(OCCError::new_err("the object is not an ArcOfHyperbola2d")),
+        }
+    }
+}
+
+// --- Parabola2d ------------------------------------------------------------
+
+/// `Part.Geom2d.Parabola2d()` — a parabola in 2D space
+/// (`Part::Geom2dParabola`). The focal length is writable.
+#[pyclass(name = "Parabola2d", module = "Part.Geom2d", extends = PyConic2d)]
+pub struct PyParabola2d;
+conic2d_initializer!(PyParabola2d);
+
+#[pymethods]
+impl PyParabola2d {
+    #[new]
+    #[pyo3(signature = (*args))]
+    fn new(args: &Bound<'_, PyTuple>) -> PyResult<PyClassInitializer<Self>> {
+        let data = match args.len() {
+            0 => parabola_data((0.0, 0.0), (1.0, 0.0), 1.0)?,
+            1 => {
+                let data = geometry_data(&args.get_item(0)?)?;
+                if !matches!(data, Geom2dData::Parabola(_)) {
+                    return Err(PyTypeError::new_err(
+                        "Parabola2d copy expects a Parabola2d",
+                    ));
+                }
+                data
+            }
+            _ => {
+                return Err(PyTypeError::new_err(
+                    "Parabola2d constructor accepts:\n\
+                     -- empty parameter list\n\
+                     -- Parabola2d",
+                ))
+            }
+        };
+        Ok(Self::initializer(data))
+    }
+
+    #[getter]
+    fn Focal(slf: &Bound<'_, Self>) -> PyResult<f64> {
+        match geometry_data(slf.as_any())? {
+            Geom2dData::Parabola(parabola) => Ok(parabola.focal()),
+            _ => Err(OCCError::new_err("the object is not a Parabola2d")),
+        }
+    }
+
+    #[setter]
+    fn set_Focal(slf: &Bound<'_, Self>, value: f64) -> PyResult<()> {
+        let data = geometry_data(slf.as_any())?;
+        let Geom2dData::Parabola(parabola) = data else {
+            return Err(OCCError::new_err("the object is not a Parabola2d"));
+        };
+        replace_geometry_data(
+            slf.as_any(),
+            parabola_data(xy(parabola.vertex()), xy(parabola.x_axis()), value)?,
+        )
+    }
+
+    #[getter]
+    fn Focus(slf: &Bound<'_, Self>, py: Python<'_>) -> PyResult<PyObject> {
+        match geometry_data(slf.as_any())? {
+            Geom2dData::Parabola(parabola) => py_vector2d(py, xy(parabola.focus())),
+            _ => Err(OCCError::new_err("the object is not a Parabola2d")),
+        }
+    }
+
+    /// The parameter (`2 × focal`).
+    #[getter]
+    fn Parameter(slf: &Bound<'_, Self>) -> PyResult<f64> {
+        match geometry_data(slf.as_any())? {
+            Geom2dData::Parabola(parabola) => Ok(parabola.parameter()),
+            _ => Err(OCCError::new_err("the object is not a Parabola2d")),
+        }
+    }
+}
+
+// --- ArcOfParabola2d -------------------------------------------------------
+
+/// `Part.Geom2d.ArcOfParabola2d(parabola, first, last, sense=True)` — a portion
+/// of a parabola (`Part::Geom2dArcOfParabola`).
+#[pyclass(name = "ArcOfParabola2d", module = "Part.Geom2d", extends = PyArcOfConic2d)]
+pub struct PyArcOfParabola2d;
+arc_of_conic2d_initializer!(PyArcOfParabola2d);
+
+#[pymethods]
+impl PyArcOfParabola2d {
+    #[new]
+    #[pyo3(signature = (*args))]
+    fn new(args: &Bound<'_, PyTuple>) -> PyResult<PyClassInitializer<Self>> {
+        if args.len() < 3 || args.len() > 4 {
+            return Err(PyTypeError::new_err(
+                "ArcOfParabola2d constructor expects a parabola curve and a \
+                 parameter range",
+            ));
+        }
+        let Geom2dData::Parabola(parabola) = geometry_data(&args.get_item(0)?)? else {
+            return Err(PyTypeError::new_err(
+                "ArcOfParabola2d expects a Parabola2d",
+            ));
+        };
+        let first: f64 = args.get_item(1)?.extract()?;
+        let last: f64 = args.get_item(2)?.extract()?;
+        let sense = if args.len() == 4 {
+            args.get_item(3)?.extract::<bool>()?
+        } else {
+            true
+        };
+        Ok(Self::initializer(arc_of_parabola_data(
+            parabola, first, last, sense,
+        )?))
+    }
+
+    #[getter]
+    fn Focal(slf: &Bound<'_, Self>) -> PyResult<f64> {
+        match geometry_data(slf.as_any())? {
+            Geom2dData::ArcOfParabola(arc) => Ok(arc.parabola().focal()),
+            _ => Err(OCCError::new_err("the object is not an ArcOfParabola2d")),
+        }
+    }
+
+    #[setter]
+    fn set_Focal(slf: &Bound<'_, Self>, value: f64) -> PyResult<()> {
+        let Geom2dData::ArcOfParabola(arc) = geometry_data(slf.as_any())? else {
+            return Err(OCCError::new_err("the object is not an ArcOfParabola2d"));
+        };
+        let parabola = Parabola::with_axis(
+            arc.parabola().vertex(),
+            arc.parabola().normal(),
+            arc.parabola().x_axis(),
+            value,
+        )
+        .map_err(curve_error)?;
+        replace_geometry_data(
+            slf.as_any(),
+            Geom2dData::ArcOfParabola(
+                ArcOfParabola::new(parabola, arc.first(), arc.last()).map_err(curve_error)?,
+            ),
+        )
+    }
+
+    /// The internal parabola (`GeomArcOfParabola::getParabola`).
+    #[getter]
+    fn Parabola(slf: &Bound<'_, Self>, py: Python<'_>) -> PyResult<Py<PyParabola2d>> {
+        match geometry_data(slf.as_any())? {
+            Geom2dData::ArcOfParabola(arc) => Py::new(
+                py,
+                PyParabola2d::initializer(Geom2dData::Parabola(arc.parabola())),
+            ),
+            _ => Err(OCCError::new_err("the object is not an ArcOfParabola2d")),
+        }
+    }
+}
+
+// --- OffsetCurve2d ---------------------------------------------------------
+
+/// `Part.Geom2d.OffsetCurve2d(basis, offset)` — the offset of a 2D curve
+/// (`Part::Geom2dOffsetCurve`).
+///
+/// `value(u)` is the offset point `basis(u) + offset × normal(u)`.
+/// `toShape()` is reported as not implemented: this seam binds no exact 2D
+/// offset edge.
+#[pyclass(name = "OffsetCurve2d", module = "Part.Geom2d", extends = PyCurve2d)]
+pub struct PyOffsetCurve2d;
+curve2d_initializer!(PyOffsetCurve2d);
+
+#[pymethods]
+impl PyOffsetCurve2d {
+    #[new]
+    fn new(basis: &Bound<'_, PyAny>, offset: f64) -> PyResult<PyClassInitializer<Self>> {
+        if !offset.is_finite() {
+            return Err(OCCError::new_err("the offset value must be finite"));
+        }
+        let basis = geometry_data(basis)?;
+        Ok(Self::initializer(Geom2dData::Offset {
+            basis: Box::new(basis),
+            offset,
+        }))
+    }
+
+    #[getter]
+    fn OffsetValue(slf: &Bound<'_, Self>) -> PyResult<f64> {
+        match geometry_data(slf.as_any())? {
+            Geom2dData::Offset { offset, .. } => Ok(offset),
+            _ => Err(OCCError::new_err("the object is not an OffsetCurve2d")),
+        }
+    }
+
+    #[setter]
+    fn set_OffsetValue(slf: &Bound<'_, Self>, value: f64) -> PyResult<()> {
+        if !value.is_finite() {
+            return Err(OCCError::new_err("the offset value must be finite"));
+        }
+        let data = geometry_data(slf.as_any())?;
+        let Geom2dData::Offset { basis, .. } = data else {
+            return Err(OCCError::new_err("the object is not an OffsetCurve2d"));
+        };
+        replace_geometry_data(
+            slf.as_any(),
+            Geom2dData::Offset {
+                basis,
+                offset: value,
+            },
+        )
+    }
+
+    #[getter]
+    fn BasisCurve(slf: &Bound<'_, Self>, py: Python<'_>) -> PyResult<PyObject> {
+        match geometry_data(slf.as_any())? {
+            Geom2dData::Offset { basis, .. } => geometry2d_to_py(py, *basis),
+            _ => Err(OCCError::new_err("the object is not an OffsetCurve2d")),
+        }
+    }
+
+    #[setter]
+    fn set_BasisCurve(slf: &Bound<'_, Self>, value: &Bound<'_, PyAny>) -> PyResult<()> {
+        let basis = geometry_data(value)?;
+        let data = geometry_data(slf.as_any())?;
+        let Geom2dData::Offset { offset, .. } = data else {
+            return Err(OCCError::new_err("the object is not an OffsetCurve2d"));
+        };
+        replace_geometry_data(
+            slf.as_any(),
+            Geom2dData::Offset {
+                basis: Box::new(basis),
+                offset,
+            },
         )
     }
 }
 
-/// A 2D curve (pcurve) attached to an edge. Only the segment exists in this
-/// slice.
-#[derive(Clone, Copy)]
-pub(crate) enum Curve2d {
-    LineSegment(PyLine2dSegment),
+// --- BezierCurve2d ---------------------------------------------------------
+
+/// `Part.Geom2d.BezierCurve2d()` — a rational or non-rational Bezier curve in
+/// 2D space (`Part::Geom2dBezierCurve`).
+///
+/// The default curve is the two-pole segment `(0, 0) → (0, 1)` over `[0, 1]`,
+/// as upstream. `increase`, `insertPoleAfter`, `insertPoleBefore`, `removePole`
+/// and `getResolution` are reported as not implemented.
+#[pyclass(name = "BezierCurve2d", module = "Part.Geom2d", extends = PyCurve2d)]
+pub struct PyBezierCurve2d;
+curve2d_initializer!(PyBezierCurve2d);
+
+fn bezier2d(slf: &Bound<'_, PyAny>) -> PyResult<BezierCurve> {
+    match geometry_data(slf)? {
+        Geom2dData::Bezier(curve) => Ok(curve),
+        _ => Err(OCCError::new_err("the object is not a BezierCurve2d")),
+    }
 }
+
+#[pymethods]
+impl PyBezierCurve2d {
+    #[new]
+    #[pyo3(signature = (*args))]
+    fn new(args: &Bound<'_, PyTuple>) -> PyResult<PyClassInitializer<Self>> {
+        let data = match args.len() {
+            0 => Geom2dData::Bezier(
+                BezierCurve::with_range(
+                    vec![xyz(0.0, 0.0), xyz(0.0, 1.0)],
+                    vec![1.0, 1.0],
+                    0.0,
+                    1.0,
+                )
+                .map_err(curve_error)?,
+            ),
+            1 => {
+                let data = geometry_data(&args.get_item(0)?)?;
+                if !matches!(data, Geom2dData::Bezier(_)) {
+                    return Err(PyTypeError::new_err(
+                        "BezierCurve2d copy expects a BezierCurve2d",
+                    ));
+                }
+                data
+            }
+            _ => {
+                return Err(PyTypeError::new_err(
+                    "BezierCurve2d constructor accepts:\n\
+                     -- empty parameter list\n\
+                     -- BezierCurve2d",
+                ))
+            }
+        };
+        Ok(Self::initializer(data))
+    }
+
+    #[getter]
+    fn Degree(slf: &Bound<'_, Self>) -> PyResult<i32> {
+        Ok(bezier2d(slf.as_any())?.degree())
+    }
+
+    /// OCCT's maximum Bezier degree.
+    #[getter]
+    fn MaxDegree(&self) -> i32 {
+        25
+    }
+
+    #[getter]
+    fn NbPoles(slf: &Bound<'_, Self>) -> PyResult<usize> {
+        Ok(bezier2d(slf.as_any())?.poles().len())
+    }
+
+    #[getter]
+    fn StartPoint(slf: &Bound<'_, Self>, py: Python<'_>) -> PyResult<PyObject> {
+        let curve = bezier2d(slf.as_any())?;
+        py_vector2d(py, xy(curve.start()))
+    }
+
+    #[getter]
+    fn EndPoint(slf: &Bound<'_, Self>, py: Python<'_>) -> PyResult<PyObject> {
+        let curve = bezier2d(slf.as_any())?;
+        py_vector2d(py, xy(curve.end()))
+    }
+
+    fn isRational(slf: &Bound<'_, Self>) -> PyResult<bool> {
+        Ok(bezier2d(slf.as_any())?.is_rational())
+    }
+
+    fn isPeriodic(&self) -> bool {
+        false
+    }
+
+    fn isClosed(slf: &Bound<'_, Self>) -> PyResult<bool> {
+        Ok(bezier2d(slf.as_any())?.is_closed())
+    }
+
+    /// `getPole(index)` — the 1-based pole.
+    fn getPole(slf: &Bound<'_, Self>, py: Python<'_>, index: i32) -> PyResult<PyObject> {
+        let curve = bezier2d(slf.as_any())?;
+        let position = index_at(curve.poles().len(), index)? as usize - 1;
+        py_vector2d(py, xy(curve.poles()[position]))
+    }
+
+    fn getPoles(slf: &Bound<'_, Self>, py: Python<'_>) -> PyResult<Vec<PyObject>> {
+        bezier2d(slf.as_any())?
+            .poles()
+            .iter()
+            .map(|pole| py_vector2d(py, xy(*pole)))
+            .collect()
+    }
+
+    #[pyo3(signature = (index, pole, weight = None))]
+    fn setPole(
+        slf: &Bound<'_, Self>,
+        index: i32,
+        pole: &Bound<'_, PyAny>,
+        weight: Option<f64>,
+    ) -> PyResult<()> {
+        let point = vector2d(pole)?;
+        let mut curve = bezier2d(slf.as_any())?;
+        let position = index_at(curve.poles().len(), index)? as usize - 1;
+        curve
+            .set_pole(position, xyz(point.0, point.1), weight)
+            .map_err(curve_error)?;
+        replace_geometry_data(slf.as_any(), Geom2dData::Bezier(curve))
+    }
+
+    fn setPoles(slf: &Bound<'_, Self>, poles: &Bound<'_, PyAny>) -> PyResult<()> {
+        let mut parsed = Vec::new();
+        for point in poles.try_iter()? {
+            let point = vector2d(&point?)?;
+            parsed.push(xyz(point.0, point.1));
+        }
+        let mut curve = bezier2d(slf.as_any())?;
+        curve.set_poles(parsed).map_err(curve_error)?;
+        replace_geometry_data(slf.as_any(), Geom2dData::Bezier(curve))
+    }
+
+    fn getWeight(slf: &Bound<'_, Self>, index: i32) -> PyResult<f64> {
+        let curve = bezier2d(slf.as_any())?;
+        let position = index_at(curve.weights().len(), index)? as usize - 1;
+        Ok(curve.weights()[position])
+    }
+
+    fn getWeights(slf: &Bound<'_, Self>) -> PyResult<Vec<f64>> {
+        Ok(bezier2d(slf.as_any())?.weights().to_vec())
+    }
+
+    fn setWeight(slf: &Bound<'_, Self>, index: i32, weight: f64) -> PyResult<()> {
+        let mut curve = bezier2d(slf.as_any())?;
+        let position = index_at(curve.weights().len(), index)? as usize - 1;
+        curve.set_weight(position, weight).map_err(curve_error)?;
+        replace_geometry_data(slf.as_any(), Geom2dData::Bezier(curve))
+    }
+
+    /// `segment(u1, u2)` — trim the curve in place.
+    fn segment(slf: &Bound<'_, Self>, u1: f64, u2: f64) -> PyResult<()> {
+        let curve = bezier2d(slf.as_any())?;
+        let trimmed = curve.trim(u1, u2).map_err(curve_error)?;
+        replace_geometry_data(slf.as_any(), Geom2dData::Bezier(trimmed))
+    }
+
+    #[pyo3(signature = (*_args))]
+    fn increase(&self, _args: &Bound<'_, PyTuple>) -> PyResult<()> {
+        Err(geom2d_not_implemented("BezierCurve2d.increase"))
+    }
+
+    #[pyo3(signature = (*_args))]
+    fn insertPoleAfter(&self, _args: &Bound<'_, PyTuple>) -> PyResult<()> {
+        Err(geom2d_not_implemented("BezierCurve2d.insertPoleAfter"))
+    }
+
+    #[pyo3(signature = (*_args))]
+    fn insertPoleBefore(&self, _args: &Bound<'_, PyTuple>) -> PyResult<()> {
+        Err(geom2d_not_implemented("BezierCurve2d.insertPoleBefore"))
+    }
+
+    #[pyo3(signature = (*_args))]
+    fn removePole(&self, _args: &Bound<'_, PyTuple>) -> PyResult<()> {
+        Err(geom2d_not_implemented("BezierCurve2d.removePole"))
+    }
+
+    #[pyo3(signature = (*_args))]
+    fn getResolution(&self, _args: &Bound<'_, PyTuple>) -> PyResult<f64> {
+        Err(geom2d_not_implemented("BezierCurve2d.getResolution"))
+    }
+}
+
+// --- BSplineCurve2d --------------------------------------------------------
 
 /// `Part.Geom2d.BSplineCurve2d()` — upstream's 2D B-spline curve.
 ///
 /// No 2D B-spline kernel is bound in this slice, so `interpolate` and
 /// `approximate` only **record** the points they are given; no curve is computed
 /// behind that record. Every operation that would need the actual curve
-/// (`insertKnot`) raises `Part.OCCError` rather than answering from a curve that
-/// was never built.
+/// (`insertKnot`, `value`, `toShape`) reports `Part.OCCError` /
+/// `NotImplementedError` rather than answering from a curve that was never
+/// built.
 ///
 /// The four-argument call upstream's `Geom2d_tests` uses
 /// (`insertKnot(0.5, 1, 0.01, 2)`) is rejected by the signature as a `TypeError`,
 /// just as upstream's `PyArg_ParseTuple("d|id", …)` rejects the extra argument.
-#[pyclass(name = "BSplineCurve2d", module = "Part.Geom2d")]
-pub struct PyBSplineCurve2d {
-    /// The interpolation/approximation points last supplied.
-    points: Mutex<Vec<(f64, f64)>>,
-}
+#[pyclass(name = "BSplineCurve2d", module = "Part.Geom2d", extends = PyCurve2d)]
+pub struct PyBSplineCurve2d;
+curve2d_initializer!(PyBSplineCurve2d);
 
 impl PyBSplineCurve2d {
-    fn point_count(&self) -> usize {
-        self.points.lock().unwrap_or_else(|e| e.into_inner()).len()
+    fn point_count(value: &Bound<'_, PyAny>) -> PyResult<usize> {
+        match geometry_data(value)? {
+            Geom2dData::BSpline(points) => Ok(points.len()),
+            _ => Err(OCCError::new_err("the object is not a BSplineCurve2d")),
+        }
     }
 
     /// Parse and remember the `Points` argument of `interpolate`/`approximate`.
-    fn record(&self, points: &Bound<'_, PyAny>) -> PyResult<()> {
+    fn record(slf: &Bound<'_, Self>, points: &Bound<'_, PyAny>) -> PyResult<()> {
         let mut parsed = Vec::new();
         for point in points.try_iter()? {
             parsed.push(vector2d(&point?)?);
@@ -3449,31 +6503,28 @@ impl PyBSplineCurve2d {
                 "a 2D B-spline needs at least two points",
             ));
         }
-        *self.points.lock().unwrap_or_else(|e| e.into_inner()) = parsed;
-        Ok(())
+        replace_geometry_data(slf.as_any(), Geom2dData::BSpline(parsed))
     }
 }
 
 #[pymethods]
 impl PyBSplineCurve2d {
     #[new]
-    fn new() -> Self {
-        Self {
-            points: Mutex::new(Vec::new()),
-        }
+    fn new() -> PyResult<PyClassInitializer<Self>> {
+        Ok(Self::initializer(Geom2dData::BSpline(Vec::new())))
     }
 
     /// `interpolate(Points, PeriodicFlag=False, Tolerance=1e-7)` — record the
     /// points to interpolate (upstream's `Geom2dAPI_Interpolate`).
     #[pyo3(signature = (Points, PeriodicFlag = false, Tolerance = 1e-7))]
     fn interpolate(
-        &self,
+        slf: &Bound<'_, Self>,
         Points: &Bound<'_, PyAny>,
         PeriodicFlag: bool,
         Tolerance: f64,
     ) -> PyResult<()> {
         let _ = (PeriodicFlag, Tolerance);
-        self.record(Points)
+        Self::record(slf, Points)
     }
 
     /// `approximate(Points, DegMax=8, Continuity="C2", Tolerance=1e-3,
@@ -3481,7 +6532,7 @@ impl PyBSplineCurve2d {
     /// (upstream's `Geom2dAPI_PointsToBSpline`).
     #[pyo3(signature = (Points, DegMax = 8, Continuity = "C2", Tolerance = 1e-3, DegMin = 3, ParamType = "ChordLength"))]
     fn approximate(
-        &self,
+        slf: &Bound<'_, Self>,
         Points: &Bound<'_, PyAny>,
         DegMax: i32,
         Continuity: &str,
@@ -3490,7 +6541,7 @@ impl PyBSplineCurve2d {
         ParamType: &str,
     ) -> PyResult<()> {
         let _ = (DegMax, Continuity, Tolerance, DegMin, ParamType);
-        self.record(Points)
+        Self::record(slf, Points)
     }
 
     #[pyo3(signature = (u, mult = 1, tol = 0.0))]
@@ -3502,25 +6553,52 @@ impl PyBSplineCurve2d {
         ))
     }
 
-    fn __repr__(&self) -> String {
-        format!(
+    fn __repr__(slf: &Bound<'_, Self>) -> PyResult<String> {
+        Ok(format!(
             "Part.Geom2d.BSplineCurve2d({} points)",
-            self.point_count()
-        )
+            Self::point_count(slf.as_any())?
+        ))
     }
 }
 
-/// `Part.Geom2d.Circle2d(center=(0, 0), radius=1)` — a circle in 2D parameter
-/// space (upstream's `Part::Geom2dCircle`).
-///
-/// The three-point constructor and the offset constructors are not modelled;
-/// the static [`getCircleCenter`](Self::getCircleCenter) is, because upstream's
-/// tests use it (and its `ValueError` for collinear points).
-#[pyclass(name = "Circle2d", module = "Part.Geom2d")]
-#[derive(Clone, Copy)]
-pub struct PyCircle2d {
-    center: (f64, f64),
-    radius: f64,
+/// Build the Python object for a piece of 2D geometry, picking the concrete
+/// `Part.Geom2d` class from the data.
+fn geometry2d_to_py(py: Python<'_>, data: Geom2dData) -> PyResult<PyObject> {
+    Ok(match data {
+        data @ Geom2dData::Line(_) => Py::new(py, PyLine2d::initializer(data))?.into_any(),
+        data @ Geom2dData::Segment { .. } => {
+            Py::new(py, PyLine2dSegment::initializer(data))?.into_any()
+        }
+        data @ Geom2dData::Circle(_) => Py::new(py, PyCircle2d::initializer(data))?.into_any(),
+        data @ Geom2dData::Arc(_) => {
+            Py::new(py, PyArcOfCircle2d::initializer(data))?.into_any()
+        }
+        data @ Geom2dData::Ellipse(_) => Py::new(py, PyEllipse2d::initializer(data))?.into_any(),
+        data @ Geom2dData::ArcOfEllipse { .. } => {
+            Py::new(py, PyArcOfEllipse2d::initializer(data))?.into_any()
+        }
+        data @ Geom2dData::Hyperbola(_) => {
+            Py::new(py, PyHyperbola2d::initializer(data))?.into_any()
+        }
+        data @ Geom2dData::ArcOfHyperbola(_) => {
+            Py::new(py, PyArcOfHyperbola2d::initializer(data))?.into_any()
+        }
+        data @ Geom2dData::Parabola(_) => {
+            Py::new(py, PyParabola2d::initializer(data))?.into_any()
+        }
+        data @ Geom2dData::ArcOfParabola(_) => {
+            Py::new(py, PyArcOfParabola2d::initializer(data))?.into_any()
+        }
+        data @ Geom2dData::Bezier(_) => {
+            Py::new(py, PyBezierCurve2d::initializer(data))?.into_any()
+        }
+        data @ Geom2dData::BSpline(_) => {
+            Py::new(py, PyBSplineCurve2d::initializer(data))?.into_any()
+        }
+        data @ Geom2dData::Offset { .. } => {
+            Py::new(py, PyOffsetCurve2d::initializer(data))?.into_any()
+        }
+    })
 }
 
 /// The centre of the circle through three 2D points, using upstream's
@@ -3554,57 +6632,15 @@ fn circle_center(p1: (f64, f64), p2: (f64, f64), p3: (f64, f64)) -> PyResult<(f6
     ))
 }
 
-#[pymethods]
-impl PyCircle2d {
-    #[new]
-    #[pyo3(signature = (center = None, radius = 1.0))]
-    fn new(center: Option<&Bound<'_, PyAny>>, radius: f64) -> PyResult<Self> {
-        if !radius.is_finite() || radius <= 0.0 {
-            return Err(OCCError::new_err(
-                "Part.Geom2d.Circle2d needs a positive radius",
-            ));
-        }
-        let center = center.map(vector2d).transpose()?.unwrap_or((0.0, 0.0));
-        Ok(Self { center, radius })
-    }
-
-    #[getter]
-    fn Center(&self, py: Python<'_>) -> PyResult<PyObject> {
-        py_vector2d(py, self.center)
-    }
-
-    #[getter]
-    fn Radius(&self) -> f64 {
-        self.radius
-    }
-
-    /// The centre of the circle through three points, as upstream's
-    /// `Geom2dCircle::getCircleCenter`: coincident points and collinear points
-    /// are `ValueError`.
-    #[staticmethod]
-    fn getCircleCenter(
-        py: Python<'_>,
-        p1: &Bound<'_, PyAny>,
-        p2: &Bound<'_, PyAny>,
-        p3: &Bound<'_, PyAny>,
-    ) -> PyResult<PyObject> {
-        let center = circle_center(vector2d(p1)?, vector2d(p2)?, vector2d(p3)?)?;
-        py_vector2d(py, center)
-    }
-
-    fn __repr__(&self) -> String {
-        format!(
-            "Part.Geom2d.Circle2d({:?}, {})",
-            self.center, self.radius
-        )
-    }
-}
-
-/// Reject anything that is not a surface this slice models.
+/// Reject anything that is not a surface or a face this slice models.
 ///
-/// The surface is not used yet (no projection exists), so this is a type check:
-/// it keeps a bogus `toShape(42)` a `TypeError` instead of a silent success.
-fn require_surface(value: &Bound<'_, PyAny>) -> PyResult<()> {
+/// The surface is not used for a projection (no `GeomProjLib` is bound), so this
+/// is a type check: it keeps a bogus `toShape(42)` a `TypeError` instead of a
+/// silent success.
+fn require_surface_or_face(value: &Bound<'_, PyAny>) -> PyResult<()> {
+    if value.downcast::<PyFace>().is_ok() {
+        return Ok(());
+    }
     if value.downcast::<PyCylinder>().is_ok()
         || value.downcast::<PySphere>().is_ok()
         || value.downcast::<PyPlane>().is_ok()
@@ -3615,7 +6651,8 @@ fn require_surface(value: &Bound<'_, PyAny>) -> PyResult<()> {
     }
     Err(PyTypeError::new_err(
         "toShape(surface) expects a Part surface \
-         (Part.Plane, Part.Cylinder, Part.Sphere or Part.RectangularTrimmedSurface)",
+         (Part.Plane, Part.Cylinder, Part.Sphere or Part.RectangularTrimmedSurface) \
+         or a Part.Face",
     ))
 }
 
@@ -3661,7 +6698,7 @@ pub struct PyEdge {
     /// The 2D curve this edge was built with, reported by `curveOnSurface`.
     /// Kept beside the entry because `EdgeEntry` is also built by the shape layer
     /// (`Edges`/`getSubShape`), which never has a pcurve to supply.
-    curve2d: Mutex<Option<Curve2d>>,
+    curve2d: Mutex<Option<Geom2dData>>,
     /// The exact B-spline an edge built from a conic or a Bezier stores. There is
     /// no `EdgeCurve` variant for it, so it is carried beside the entry and
     /// reported by `Curve` when the kernel cannot classify the edge.
@@ -3693,7 +6730,7 @@ impl PyEdge {
     /// An edge built from a 2D curve, with that curve attached as its pcurve.
     pub(crate) fn from_entry_with_curve2d(
         entry: EdgeEntry,
-        curve2d: Curve2d,
+        curve2d: Geom2dData,
     ) -> PyClassInitializer<Self> {
         PyClassInitializer::from(PartShape::from_shape(entry.shape.clone())).add_subclass(Self {
             entry: Mutex::new(Some(entry)),
@@ -3710,6 +6747,23 @@ impl PyEdge {
                 curve: None,
             })),
             curve2d: Mutex::new(None),
+            bspline: Mutex::new(Some(state)),
+        })
+    }
+
+    /// An edge whose geometry is an exact B-spline, with a 2D curve attached as
+    /// its pcurve (a trimmed elliptical arc).
+    fn from_bspline_with_curve2d(
+        shape: Shape,
+        state: SplineState,
+        curve2d: Geom2dData,
+    ) -> PyClassInitializer<Self> {
+        PyClassInitializer::from(PartShape::from_shape(shape.clone())).add_subclass(Self {
+            entry: Mutex::new(Some(EdgeEntry {
+                shape,
+                curve: None,
+            })),
+            curve2d: Mutex::new(Some(curve2d)),
             bspline: Mutex::new(Some(state)),
         })
     }
@@ -3846,11 +6900,15 @@ impl PyEdge {
         if index != 0 {
             return Ok(None);
         }
-        let curve2d = *self.curve2d.lock().unwrap_or_else(|e| e.into_inner());
-        Ok(match curve2d {
-            Some(Curve2d::LineSegment(segment)) => Some(Py::new(py, segment)?.into_any()),
-            None => None,
-        })
+        let curve2d = self
+            .curve2d
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone();
+        match curve2d {
+            Some(data) => Ok(Some(geometry2d_to_py(py, data)?)),
+            None => Ok(None),
+        }
     }
 
     fn isNull(slf: PyRef<'_, Self>) -> bool {
@@ -4571,132 +7629,25 @@ fn makeFace(
 
 /// The kernel's confusion tolerance (upstream's `Precision::Confusion`).
 const HELIX_CONFUSION: f64 = 1e-7;
-/// Samples per turn when turning upstream's analytic helix into a B-spline.
-const HELIX_SAMPLES_PER_TURN: f64 = 36.0;
-/// A hard cap so a very long helix cannot exhaust memory or stall the kernel.
-const HELIX_MAX_SAMPLES: usize = 8001;
-
-/// A sampled helix plus the exact frame at its first point.
-///
-/// Upstream builds the helix as a 2D line on a cylindrical or conical surface;
-/// this slice has no such surface constructor, so the same curve is sampled and
-/// interpolated as a B-spline. The samples lie exactly on the analytic helix, and
-/// the start frame is computed analytically (not from the chord), so a profile
-/// swept along it is oriented correctly.
-pub(crate) struct HelixGeometry {
-    pub(crate) points: Vec<Vector3>,
-    pub(crate) start: Vector3,
-    pub(crate) tangent: Vector3,
-}
-
-/// Sample upstream's helix (`TopoShape::makeHelix`).
-///
-/// `angle` is in degrees; a non-positive angle selects the cylindrical surface,
-/// exactly as upstream's `angle < Precision::Confusion()` test. `vertical_height`
-/// is upstream's `newStyle`: it makes the conical helix rise to `height / cos`
-/// instead of `height` (mantis 0001247).
-pub(crate) fn helix_geometry(
-    pitch: f64,
-    height: f64,
-    radius: f64,
-    angle: f64,
-    left_handed: bool,
-    vertical_height: bool,
-) -> Result<HelixGeometry, String> {
-    if !pitch.is_finite() || pitch.abs() < HELIX_CONFUSION {
-        return Err("Pitch of helix too small".to_string());
-    }
-    if !height.is_finite() || height.abs() < HELIX_CONFUSION {
-        return Err("Height of helix too small".to_string());
-    }
-    if (height > 0.0 && pitch < 0.0) || (height < 0.0 && pitch > 0.0) {
-        return Err("Pitch and height of helix not compatible".to_string());
-    }
-
-    let conical = angle >= HELIX_CONFUSION;
-    let angle_radians = if conical {
-        let radians = angle.to_radians();
-        if !radians.is_finite() || radians >= std::f64::consts::FRAC_PI_2 {
-            return Err("Angle of helix too large".to_string());
-        }
-        radians
-    } else {
-        0.0
-    };
-    if !conical && radius < HELIX_CONFUSION {
-        return Err("Radius of helix too small".to_string());
-    }
-
-    let turns = height / pitch;
-    if !turns.is_finite() {
-        return Err("Number of turns of helix is not finite".to_string());
-    }
-    // Upstream's `newStyle` reads the height along the cone's axis as
-    // `height / cos(angle)`; the old style uses it as the axial height.
-    let height_end = if conical && vertical_height {
-        height / angle_radians.cos()
-    } else {
-        height
-    };
-
-    let samples = ((turns.abs() * HELIX_SAMPLES_PER_TURN).ceil() as usize)
-        .saturating_add(1)
-        .clamp(2, HELIX_MAX_SAMPLES);
-    let direction = if left_handed { -1.0 } else { 1.0 };
-    let d_theta = direction * std::f64::consts::TAU * turns;
-    let d_radius = if conical {
-        height_end * angle_radians.tan()
-    } else {
-        0.0
-    };
-
-    let mut points = Vec::with_capacity(samples);
-    for index in 0..samples {
-        let t = index as f64 / (samples - 1) as f64;
-        let theta = d_theta * t;
-        let z = height_end * t;
-        let r = if conical {
-            radius + z * angle_radians.tan()
-        } else {
-            radius
-        };
-        points.push(Vector3::new(r * theta.cos(), r * theta.sin(), z));
-    }
-
-    let start = Vector3::new(radius, 0.0, 0.0);
-    // dP/dt at theta = 0: (dR/dt)·X + R·(dθ/dt)·Y + (dz/dt)·Z.
-    let tangent = Vector3::new(d_radius, radius * d_theta, height_end).normalize();
-    Ok(HelixGeometry {
-        points,
-        start,
-        tangent,
-    })
-}
-
-/// The helix as a single B-spline edge.
-pub(crate) fn helix_shape(
-    pitch: f64,
-    height: f64,
-    radius: f64,
-    angle: f64,
-    left_handed: bool,
-    vertical_height: bool,
-) -> Result<Shape, String> {
-    let geometry = helix_geometry(pitch, height, radius, angle, left_handed, vertical_height)?;
-    backend()
-        .make_bspline_edge(&geometry.points, false)
-        .map_err(|error| error.to_string())
-}
 
 /// `Part.makeHelix(pitch, height, radius, angle=-1.0, pleft=False, pvertHeight=False)`
 /// → a `Part.Edge`.
 ///
-/// Upstream returns a wire built from a 2D line on a cylindrical/conical surface.
-/// This slice has no surface constructor in the seam, so the same helix is
-/// interpolated as a B-spline Edge through points on that surface; the geometry is
-/// within the interpolation tolerance of upstream's. `angle` is in degrees and a
-/// non-positive value means a cylindrical helix, as upstream. `pvertHeight` is
-/// upstream's new-style height for a conical helix.
+/// Upstream builds the helix as a straight segment in the `(u, v)` parameter
+/// space of an analytic cylinder or cone and returns that single edge
+/// (`TopoShape::makeHelix`). The kernel's [`surface_ops::make_helix_edge`]
+/// builds exactly the same object — an edge whose pcurve is the exact segment —
+/// so `makeHelix` now returns the exact edge rather than an interpolating
+/// B-spline.
+///
+/// `angle` is the cone's half angle in degrees; a value below
+/// `Precision::Confusion` selects the cylinder, exactly as upstream. For a cone,
+/// `pvertHeight` selects upstream's *new style*: the segment ends at
+/// `v = height / cos(angle)`, whose axial rise is exactly `height` (mantis
+/// 0001247). The default (old style) ends at `v = height`, i.e. an axial rise of
+/// `height * cos(angle)`. Both styles are exact segments in the cone's `(u, v)`
+/// space: the old style is the kernel's new-style segment with **both** `pitch`
+/// and `height` scaled by `cos(angle)`.
 #[pyfunction]
 #[pyo3(signature = (pitch, height, radius, angle = -1.0, pleft = false, pvertHeight = false))]
 fn makeHelix(
@@ -4708,11 +7659,46 @@ fn makeHelix(
     pleft: bool,
     pvertHeight: bool,
 ) -> PyResult<Py<PyEdge>> {
-    let geometry = helix_geometry(pitch, height, radius, angle, pleft, pvertHeight)
-        .map_err(OCCError::new_err)?;
-    let shape = backend()
-        .make_bspline_edge(&geometry.points, false)
-        .map_err(kernel_error)?;
+    // Upstream's checks and messages, in its order (`TopoShape::makeHelix`).
+    if !pitch.is_finite() || pitch.abs() < HELIX_CONFUSION {
+        return Err(OCCError::new_err("Pitch of helix too small"));
+    }
+    if !height.is_finite() || height.abs() < HELIX_CONFUSION {
+        return Err(OCCError::new_err("Height of helix too small"));
+    }
+    if (height > 0.0 && pitch < 0.0) || (height < 0.0 && pitch > 0.0) {
+        return Err(OCCError::new_err(
+            "Pitch and height of helix not compatible",
+        ));
+    }
+    let conical = angle >= HELIX_CONFUSION;
+    if !conical {
+        if radius < HELIX_CONFUSION {
+            return Err(OCCError::new_err("Radius of helix too small"));
+        }
+    } else if angle.to_radians() < HELIX_CONFUSION {
+        return Err(OCCError::new_err("Angle of helix too small"));
+    }
+
+    // Upstream's old-style conical segment: `line->Value` ends at `(u, v)` with
+    // `v = height`, while the analytic cone parameterisation the kernel builds
+    // ends at `v = height / cos(angle)`. Scaling the requested `pitch` and
+    // `height` by `cos(angle)` leaves `u` unchanged and puts `v` at `height`.
+    let (pitch_argument, height_argument) = if conical && !pvertHeight {
+        let cosine = angle.to_radians().cos();
+        (pitch * cosine, height * cosine)
+    } else {
+        (pitch, height)
+    };
+
+    let shape = surface_ops::make_helix_edge(
+        pitch_argument,
+        height_argument,
+        radius,
+        if conical { angle } else { 0.0 },
+        pleft,
+    )
+    .map_err(kernel_error)?;
     Py::new(
         py,
         PyEdge::from_entry(EdgeEntry {
@@ -4722,12 +7708,141 @@ fn makeHelix(
     )
 }
 
+/// The axial height one whole turn of the helix rises.
+///
+/// OCCT's cone parameter `v` is the distance along the generator
+/// (`z = v cos(angle)`), and upstream's `makeLongHelix` advances `v` by one
+/// pitch per turn, so a conical turn rises `pitch cos(angle)`.
+fn helix_turn_height(pitch: f64, conical: bool, angle: f64) -> f64 {
+    if conical {
+        pitch * angle.to_radians().cos()
+    } else {
+        pitch
+    }
+}
+
+/// The height (`z`) of the split point at `parameter` on an exact helix edge.
+///
+/// The seam exposes no point evaluation, but `split_edge` returns the pieces and
+/// their shared vertex is the point at the parameter. An exact helix is strictly
+/// monotone in `z`, so the interior vertex is the split point.
+fn helix_split_height(edge: &Shape, parameter: f64, z_end: f64) -> Result<f64, String> {
+    let wire = backend()
+        .split_edge(edge, &[parameter])
+        .map_err(|error| error.to_string())?;
+    let margin = 1e-6 * z_end.abs().max(1.0);
+    let mut heights = Vec::new();
+    for element in backend().elements(&wire, ElementKind::Edge) {
+        for vertex in backend().elements(&element.shape, ElementKind::Vertex) {
+            if let Some(point) = backend().vertex_point(&vertex.shape) {
+                if point.z > margin && point.z < z_end - margin {
+                    heights.push(point.z);
+                }
+            }
+        }
+    }
+    heights.sort_by(|a, b| a.total_cmp(b));
+    heights.dedup_by(|a, b| (*a - *b).abs() <= margin * 0.1);
+    heights
+        .first()
+        .copied()
+        .ok_or_else(|| "the helix turn boundary could not be measured".to_string())
+}
+
+/// The largest parameter `split_edge` accepts on `edge`, i.e. the last parameter
+/// of its 3D representative.
+///
+/// The representative's parameter is **not** the surface `u` (OCCT's
+/// `BRepLib::BuildCurves3d` rebuilds it as a B-spline with its own
+/// parameterisation), so this is found by bracketing rather than assumed.
+fn helix_split_limit(edge: &Shape) -> Result<f64, String> {
+    let mut inside = 0.0;
+    let mut outside = 1.0;
+    while backend().split_edge(edge, &[outside]).is_ok() {
+        inside = outside;
+        outside *= 2.0;
+        if outside > 1.0e30 {
+            return Err("the helix edge has no finite parameter limit".to_string());
+        }
+    }
+    for _ in 0..60 {
+        let middle = 0.5 * (inside + outside);
+        if backend().split_edge(edge, &[middle]).is_ok() {
+            inside = middle;
+        } else {
+            outside = middle;
+        }
+    }
+    Ok(inside)
+}
+
+/// The parameter at which the exact helix edge reaches axial height `target`.
+///
+/// `samples` holds `(parameter, height)` pairs sorted by height and is extended
+/// as the search proceeds, so the next turn starts from a tight bracket. The
+/// search is a safeguarded secant iteration on the monotone height.
+fn helix_parameter_at_height(
+    edge: &Shape,
+    target: f64,
+    z_end: f64,
+    samples: &mut Vec<(f64, f64)>,
+) -> Result<f64, String> {
+    let lower = samples
+        .iter()
+        .rev()
+        .find(|(_, height)| *height <= target)
+        .copied()
+        .ok_or_else(|| "no lower helix sample".to_string())?;
+    let upper = samples
+        .iter()
+        .find(|(_, height)| *height >= target)
+        .copied()
+        .ok_or_else(|| "no upper helix sample".to_string())?;
+    let mut low = lower;
+    let mut high = upper;
+    let tolerance = 1e-9 * z_end.abs().max(1.0);
+    let mut best = low.0;
+    for _ in 0..60 {
+        let span = high.1 - low.1;
+        if span.abs() <= tolerance {
+            break;
+        }
+        let mut parameter = low.0 + (target - low.1) * (high.0 - low.0) / span;
+        if high.0 - low.0 <= 1e-12 {
+            break;
+        }
+        parameter = parameter.clamp(low.0 + 1e-12, high.0 - 1e-12);
+        let height = helix_split_height(edge, parameter, z_end)?;
+        samples.push((parameter, height));
+        samples.sort_by(|a, b| a.1.total_cmp(&b.1));
+        if (height - target).abs() <= tolerance {
+            return Ok(parameter);
+        }
+        if height < target {
+            low = (parameter, height);
+        } else {
+            high = (parameter, height);
+        }
+        best = parameter;
+    }
+    Ok(best)
+}
+
 /// `Part.makeLongHelix(pitch, height, radius, angle=-1.0, pleft=False)` → a
 /// `Part.Wire`.
 ///
 /// Upstream splits the helix into one edge per whole turn (a workaround for an
-/// OCC limit on long helices); the same split is done here, each piece being a
-/// B-spline through the analytic samples.
+/// OCC limit on long helices) and returns the resulting wire. This builds the
+/// **exact** helix edge once and splits it with the seam's `split_edge`, so the
+/// pieces are exact sub-arcs of the analytic helix and their boundaries sit at
+/// the same whole turns as upstream's.
+///
+/// The exact edge's 3D representative does not carry the surface's `u`
+/// parameterisation (OCCT rebuilds it as a B-spline), so the turn boundaries are
+/// located by bracketing the monotone height of the split vertex rather than by
+/// assuming `u = 2πk`. If a boundary cannot be located, the wire falls back to
+/// the single exact edge (`len(wire.Edges) == 1` instead of one per turn): the
+/// geometry is still exact, only the split is missing.
 #[pyfunction]
 #[pyo3(signature = (pitch, height, radius, angle = -1.0, pleft = false))]
 fn makeLongHelix(
@@ -4745,29 +7860,92 @@ fn makeLongHelix(
     if !height.is_finite() || height < HELIX_CONFUSION {
         return Err(OCCError::new_err("Height of helix too small"));
     }
-    let geometry = helix_geometry(pitch, height, radius, angle, pleft, false)
-        .map_err(OCCError::new_err)?;
-    let total_turns = (height / pitch).abs();
-    let mut pieces = Vec::new();
-    let mut done = 0.0;
-    while done < total_turns - HELIX_CONFUSION {
-        // One whole turn per piece; the last piece takes whatever is left.
-        let span = (total_turns - done).min(1.0);
-        let start_fraction = done / total_turns;
-        let end_fraction = (done + span) / total_turns;
-        let last_index = geometry.points.len() - 1;
-        let first = ((start_fraction * last_index as f64).floor() as usize).min(last_index);
-        let last = ((end_fraction * last_index as f64).ceil() as usize)
-            .min(last_index)
-            .max(first + 1);
-        let piece = backend()
-            .make_bspline_edge(&geometry.points[first..=last], false)
-            .map_err(kernel_error)?;
-        pieces.push(piece);
-        done += span;
+    // Upstream selects with `fabs(angle)`, but a negative angle then asks for a
+    // cone with a negative semi-angle; the Part module has always treated a
+    // non-positive angle as the cylinder (that is `makeHelix`'s and the previous
+    // `makeLongHelix`'s convention, and what callers rely on), so it does here.
+    let conical = angle >= HELIX_CONFUSION;
+    if !conical && radius < HELIX_CONFUSION {
+        return Err(OCCError::new_err("Radius of helix too small"));
     }
-    let wire = backend().make_wire(&pieces).map_err(kernel_error)?;
+
+    let shape = surface_ops::make_helix_edge(
+        // Upstream's `makeLongHelix` advances the cone's generator parameter by
+        // one pitch per turn (`v = pitch`), i.e. the old-style segment. The
+        // kernel builds the new-style cone (`v = height / cos(angle)`), so both
+        // arguments are scaled by `cos(angle)` to recover `v = pitch` per turn
+        // and `v = height` at the end.
+        if conical {
+            pitch * angle.to_radians().cos()
+        } else {
+            pitch
+        },
+        if conical {
+            height * angle.to_radians().cos()
+        } else {
+            height
+        },
+        radius,
+        if conical { angle } else { 0.0 },
+        pleft,
+    )
+    .map_err(kernel_error)?;
+
+    let turns = height / pitch;
+    let whole_turns = turns.floor();
+    let part_turn = turns - whole_turns;
+    let z_end = if conical {
+        height * angle.to_radians().cos()
+    } else {
+        height
+    };
+    let turn_height = helix_turn_height(pitch, conical, angle);
+
+    // The interior whole-turn boundaries: turn 1 .. turn `whole_turns`, and the
+    // beginning of the part turn. A boundary at the curve's end is not a split.
+    let mut targets = Vec::new();
+    let mut boundary = 1.0;
+    while boundary < whole_turns - HELIX_CONFUSION {
+        targets.push(boundary * turn_height);
+        boundary += 1.0;
+    }
+    if part_turn > HELIX_CONFUSION && whole_turns >= 1.0 {
+        // The part turn starts where the last whole turn ended.
+        targets.push(whole_turns * turn_height);
+    }
+
+    let wire = if targets.is_empty() || whole_turns > 1.0e4 {
+        // Nothing to split, or more turns than `Part::Helix` allows (the split
+        // search would dominate the construction time): the wire then holds the
+        // single exact edge.
+        backend().make_wire(&[shape]).map_err(kernel_error)?
+    } else {
+        match split_helix_turns(&shape, &targets, z_end) {
+            Ok(parameters) => backend()
+                .split_edge(&shape, &parameters)
+                .map_err(kernel_error)?,
+            Err(_) => backend().make_wire(&[shape]).map_err(kernel_error)?,
+        }
+    };
     Py::new(py, PyWire::from_shape(wire))
+}
+
+/// The parameters at which the exact helix edge reaches each `target` height.
+fn split_helix_turns(
+    shape: &Shape,
+    targets: &[f64],
+    z_end: f64,
+) -> Result<Vec<f64>, String> {
+    let limit = helix_split_limit(shape)?;
+    if !(limit > 0.0) {
+        return Err("the helix edge has no split range".to_string());
+    }
+    let mut samples = vec![(0.0, 0.0), (limit, z_end)];
+    let mut parameters = Vec::with_capacity(targets.len());
+    for target in targets {
+        parameters.push(helix_parameter_at_height(shape, *target, z_end, &mut samples)?);
+    }
+    Ok(parameters)
 }
 
 // ---------------------------------------------------------------------------
@@ -4988,9 +8166,23 @@ pub(crate) fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     // `Part.Geom2d` is a submodule, as upstream (the classes live there rather
     // than directly on `Part`).
     let geom2d = PyModule::new(m.py(), "Part.Geom2d")?;
+    geom2d.add_class::<PyGeometry2d>()?;
+    geom2d.add_class::<PyCurve2d>()?;
+    geom2d.add_class::<PyConic2d>()?;
+    geom2d.add_class::<PyArcOfConic2d>()?;
+    geom2d.add_class::<PyLine2d>()?;
     geom2d.add_class::<PyLine2dSegment>()?;
     geom2d.add_class::<PyCircle2d>()?;
+    geom2d.add_class::<PyArcOfCircle2d>()?;
+    geom2d.add_class::<PyEllipse2d>()?;
+    geom2d.add_class::<PyArcOfEllipse2d>()?;
+    geom2d.add_class::<PyHyperbola2d>()?;
+    geom2d.add_class::<PyArcOfHyperbola2d>()?;
+    geom2d.add_class::<PyParabola2d>()?;
+    geom2d.add_class::<PyArcOfParabola2d>()?;
+    geom2d.add_class::<PyBezierCurve2d>()?;
     geom2d.add_class::<PyBSplineCurve2d>()?;
+    geom2d.add_class::<PyOffsetCurve2d>()?;
     m.add("Geom2d", &geom2d)?;
     // Upstream offers both names for the same class.
     let arc = m.getattr("ArcOfCircle")?;

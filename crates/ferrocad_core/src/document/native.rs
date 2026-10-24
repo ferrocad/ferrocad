@@ -6,8 +6,8 @@
 //! {"format": "ferrocad", "version": 1, "name": "…", "objects": [...]}
 //! ```
 //!
-//! The envelope identifies the format (a `.FCStd` placeholder written before the
-//! FCStd writer exists is detected by the `format` marker) and lets a future
+//! The envelope identifies the format (older `.FCStd` files written as native
+//! JSON are still detected by the `format` marker) and lets a future
 //! FerroCAD refuse a document it is too old to read. Both fields are optional on
 //! input: files written before the envelope existed are version 1, and unknown
 //! top-level keys are ignored rather than denied.

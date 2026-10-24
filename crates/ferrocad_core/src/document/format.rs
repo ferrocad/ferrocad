@@ -7,25 +7,24 @@
 //! | --- | --- | --- |
 //! | `.ferrocad` (any case) | [`DocumentFormat::Native`] | [`native`] — JSON envelope |
 //! | `.fe2o3` / `.fe203` (any case) | [`DocumentFormat::Native`] | [`native`] — accepted aliases |
-//! | `.FCStd` (any case) | [`DocumentFormat::Fcstd`] | [`fcstd`] — ZIP + `Document.xml` |
+//! | `.FCStd` (any case) | [`DocumentFormat::Fcstd`] | [`fcstd_write`] / [`fcstd`] — ZIP + `Document.xml` |
 //!
 //! A path with no suffix, or with any other suffix, is an error naming both valid
 //! suffixes: there is no silent default.
 //!
-//! # The transitional `.FCStd` rule
+//! The suffix and the bytes always agree: a `.FCStd` write is a real ZIP archive
+//! ([`fcstd_write::write_fcstd`]) and a `.ferrocad` write is the native JSON
+//! envelope ([`native::write`]). Neither backend is tried as a fallback for a
+//! write.
 //!
-//! No `.FCStd` **writer** exists yet (checklist items 5–8). Until it lands:
+//! # Reading an `.FCStd` path
 //!
-//! 1. [`write`] with [`DocumentFormat::Fcstd`] is `FcstdWriter::JsonPlaceholder`:
-//!    the suffix chose the backend, and the backend currently emits native bytes.
-//!    This is the one deliberate dishonesty in the format policy, removed at the
-//!    writer switch (item 8).
-//! 2. [`read`] with [`DocumentFormat::Fcstd`] checks the first four bytes. A ZIP
-//!    local-file header goes to [`fcstd::read_fcstd`]; anything else is accepted
-//!    only when it carries the native envelope marker (`"format": "ferrocad"`)
-//!    and is otherwise reported as "not a ZIP archive", never as a JSON parse
-//!    error. The fallback is read-only and can be deleted one release after the
-//!    writer lands.
+//! [`read`] with [`DocumentFormat::Fcstd`] checks the first four bytes. A ZIP
+//! local-file header goes to [`fcstd::read_fcstd`]; anything else is accepted
+//! only when it carries the native envelope marker (`"format": "ferrocad"`)
+//! and is otherwise reported as "not a ZIP archive", never as a JSON parse
+//! error. The native fallback exists only for files written before the switch
+//! (FerroCAD used to emit JSON under an `.FCStd` name); it is read-only.
 //!
 //! `.ferrocad` never falls back to the FCStd reader, and an unknown suffix is
 //! never guessed.
@@ -36,6 +35,7 @@ use std::io;
 use serde_json::Value;
 
 use super::fcstd::{self, FcstdError};
+use super::fcstd_write::{self, FcstdWriteError};
 use super::native::{self, NATIVE_FORMAT};
 use super::SavedDocument;
 
@@ -101,17 +101,35 @@ pub fn read(path: &str) -> Result<(SavedDocument, DocumentFormat), FormatError> 
 
 /// Write `doc` to `path` with the serializer `format` selects.
 ///
-/// The FCStd arm is the transitional JSON placeholder described in the module
-/// docs; it is the only case where the suffix and the bytes disagree.
+/// The `.FCStd` arm builds a real ZIP archive through
+/// [`fcstd_write::write_fcstd`]; a property whose type the writer cannot
+/// represent is an error naming the object and property rather than a silently
+/// lossy save. Use [`write_with_report`] to learn what was skipped (currently
+/// only an object's `python_state`).
 pub fn write(
     doc: &SavedDocument,
     path: &str,
     format: DocumentFormat,
 ) -> Result<(), FormatError> {
+    write_with_report(doc, path, format).map(|_| ())
+}
+
+/// Like [`write`], but returns what the chosen backend could not represent.
+///
+/// The native serializer is lossless, so its report is always empty.
+pub fn write_with_report(
+    doc: &SavedDocument,
+    path: &str,
+    format: DocumentFormat,
+) -> Result<fcstd_write::WriteReport, FormatError> {
     match format {
-        DocumentFormat::Native => native::write(doc, path),
-        // `FcstdWriter::JsonPlaceholder`: removed at the writer switch (item 8).
-        DocumentFormat::Fcstd => native::write(doc, path),
+        DocumentFormat::Native => native::write(doc, path).map(|()| Default::default()),
+        DocumentFormat::Fcstd => {
+            fcstd_write::write_fcstd_with_report(doc, path).map_err(|e| FormatError::FcstdWrite {
+                path: path.to_owned(),
+                source: e,
+            })
+        }
     }
 }
 
@@ -159,6 +177,8 @@ pub enum FormatError {
     Encode(serde_json::Error),
     /// The `.FCStd` backend failed.
     Fcstd { path: String, source: FcstdError },
+    /// The `.FCStd` writer refused to save a value it cannot represent.
+    FcstdWrite { path: String, source: FcstdWriteError },
 }
 
 impl FormatError {
@@ -208,6 +228,9 @@ impl fmt::Display for FormatError {
                 write!(f, "cannot encode the document as FerroCAD JSON: {source}")
             }
             FormatError::Fcstd { path, source } => write!(f, "cannot read '{path}': {source}"),
+            FormatError::FcstdWrite { path, source } => {
+                write!(f, "cannot write '{path}': {source}")
+            }
         }
     }
 }
@@ -218,6 +241,7 @@ impl std::error::Error for FormatError {
             FormatError::Io { source, .. } => Some(source),
             FormatError::Json { source, .. } | FormatError::Encode(source) => Some(source),
             FormatError::Fcstd { source, .. } => Some(source),
+            FormatError::FcstdWrite { source, .. } => Some(source),
             _ => None,
         }
     }
@@ -226,7 +250,7 @@ impl std::error::Error for FormatError {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::Document;
+    use crate::{Document, Property};
 
     fn temp_path(name: &str) -> String {
         std::env::temp_dir()
@@ -356,19 +380,83 @@ mod tests {
     }
 
     #[test]
-    fn fcstd_placeholder_round_trip() {
-        let path = temp_path("placeholder.FCStd");
+    fn fcstd_write_and_reopen_round_trips() {
+        let path = temp_path("round-trip.FCStd");
         let doc = sample_document();
         write(&doc, &path, DocumentFormat::Fcstd).unwrap();
 
-        // The placeholder is native JSON: the one documented dishonesty.
+        // The suffix now selects the real backend: a ZIP local-file header, not
+        // the native JSON envelope.
         let bytes = std::fs::read(&path).unwrap();
-        assert_eq!(bytes[0], b'{');
+        assert_eq!(&bytes[..4], b"PK\x03\x04");
+        assert!(!bytes.starts_with(b"{"));
 
         let (read_back, format) = read(&path).unwrap();
         assert_eq!(format, DocumentFormat::Fcstd);
-        assert_eq!(read_back.name, "Sample");
+        // Upstream `.FCStd` does not persist the document name: FreeCAD derives it
+        // from the file stem, and so does our reader.
+        let stem = std::path::Path::new(&path)
+            .file_stem()
+            .and_then(|s| s.to_str())
+            .unwrap();
+        assert_eq!(read_back.name, stem);
+        assert_eq!(read_back.objects.len(), 1);
         assert_eq!(read_back.objects[0].name, "Box");
+        assert_eq!(read_back.objects[0].label, "a box");
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn fcstd_archive_carries_document_and_gui_members() {
+        use crate::fcstd::read_fcstd;
+
+        let path = temp_path("members.FCStd");
+        let doc = sample_document();
+        let report = write_with_report(&doc, &path, DocumentFormat::Fcstd).unwrap();
+        assert!(report.is_empty(), "nothing should be dropped: {report:?}");
+
+        let bytes = std::fs::read(&path).unwrap();
+        // Every member name is stored in the central directory as plain ASCII.
+        for member in ["Document.xml", "GuiDocument.xml"] {
+            assert!(
+                bytes
+                    .windows(member.len())
+                    .any(|window| window == member.as_bytes()),
+                "{member} is missing from the archive"
+            );
+        }
+        let saved = read_fcstd(&path).expect("reader accepts the archive");
+        assert_eq!(saved.objects[0].name, "Box");
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn fcstd_arm_errors_on_an_unrepresentable_property() {
+        let path = temp_path("unsupported.FCStd");
+        let mut doc = sample_document();
+        doc.objects[0].properties.insert(
+            "Script".to_string(),
+            Property::FileIncluded("/tmp/script.py".to_string()),
+        );
+
+        let err = write(&doc, &path, DocumentFormat::Fcstd).unwrap_err();
+        let message = err.to_string();
+        assert!(message.contains("cannot write"), "{message}");
+        assert!(message.contains("Box.Script"), "{message}");
+        assert!(message.contains(&path), "{message}");
+        // A refused save must not leave the native JSON in place of an archive.
+        assert!(!std::path::Path::new(&path).exists());
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn native_arm_never_emits_a_zip() {
+        let path = temp_path("native-not-zip.ferrocad");
+        let doc = sample_document();
+        write(&doc, &path, DocumentFormat::Native).unwrap();
+        let bytes = std::fs::read(&path).unwrap();
+        assert_eq!(bytes[0], b'{');
+        assert!(!bytes.starts_with(b"PK\x03\x04"));
         let _ = std::fs::remove_file(&path);
     }
 

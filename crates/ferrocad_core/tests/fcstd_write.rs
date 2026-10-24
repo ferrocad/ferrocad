@@ -1,8 +1,8 @@
-//! Round-trip and ZIP-structure tests for the direct-call `.FCStd` writer
-//! ([`ferrocad_core::fcstd_write::write_fcstd`]).
+//! Round-trip and ZIP-structure tests for the `.FCStd` writer
+//! ([`ferrocad_core::fcstd_write::write_fcstd`]) — the backend `saveAs(.FCStd)`
+//! and `format::write` now dispatch to.
 //!
-//! The writer is not wired into `format::write`/`saveAs` until checklist item 8,
-//! so these tests call it directly and read the result back with `read_fcstd`.
+//! These tests call it directly and read the result back with `read_fcstd`.
 
 use std::any::Any;
 use std::collections::BTreeMap;
@@ -689,17 +689,138 @@ fn reports_python_state_as_dropped() {
 fn rejects_unrepresentable_properties_and_names_them() {
     let mut doc = Document::new();
     let id = doc.add_object("Box", "App::FeaturePython");
-    doc.set_property(id, "Samples", Property::FloatList(vec![1.0, 2.0]))
-        .unwrap();
-    let saved = doc.to_saved("Lists");
+    doc.set_property(
+        id,
+        "Script",
+        Property::FileIncluded("/tmp/script.py".to_string()),
+    )
+    .unwrap();
+    let saved = doc.to_saved("Files");
     let path = temp_path("unsupported.FCStd");
 
     let error = write_fcstd(&saved, path.to_str().unwrap()).expect_err("unsupported property");
     let message = error.to_string();
     assert!(matches!(error, FcstdWriteError::UnsupportedProperty { .. }));
-    assert!(message.contains("Box.Samples"), "{message}");
-    assert!(message.contains("App::PropertyFloatList"), "{message}");
+    assert!(message.contains("Box.Script"), "{message}");
+    assert!(message.contains("App::PropertyFileIncluded"), "{message}");
     assert!(!path.exists());
+}
+
+/// The list, geometry and constraint variants the Part conformance documents use
+/// (link arrays queue `PropertyPlacementList` and `PropertyIntegerConstraint`).
+#[test]
+fn writes_and_reads_lists_geometry_and_constraints() {
+    let mut doc = Document::new();
+    let id = doc.add_object("Values", "App::FeaturePython");
+    let placement = |x: f64| {
+        Placement::new(
+            Vector3::new(x, 2.0, 3.0),
+            Rotation::from_axis_angle(&Vector3::new(0.0, 0.0, 1.0), x),
+        )
+    };
+    let rotations = vec![
+        Rotation::from_axis_angle(&Vector3::new(1.0, 0.0, 0.0), 0.25),
+        Rotation::from_axis_angle(&Vector3::new(0.0, 1.0, 0.0), 0.5),
+    ];
+    let cases: Vec<(&str, Property)> = vec![
+        ("Floats", Property::FloatList(vec![0.5, -1.25, 1e-20])),
+        ("Integers", Property::IntegerList(vec![-3, 9])),
+        ("Bools", Property::BoolList(vec![true, false])),
+        ("Pairs", Property::IntPairList(vec![(1, 2), (-3, 4)])),
+        (
+            "Vectors",
+            Property::VectorList(vec![Vector3::new(1.0, 2.0, 3.0), Vector3::new(-1.0, 0.5, 0.0)]),
+        ),
+        (
+            "Placements",
+            Property::PlacementList(vec![placement(0.5), placement(1.5)]),
+        ),
+        (
+            "Transform",
+            Property::Matrix(ferrocad_core::Matrix4::from_values([
+                1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0, 11.0, 12.0, 13.0, 14.0,
+                15.0, 16.0,
+            ])),
+        ),
+        (
+            "Colours",
+            Property::ColorList(vec![[1.0, 0.0, 0.0, 1.0], [0.0, 1.0, 0.0, 0.0]]),
+        ),
+    ];
+    for (name, value) in &cases {
+        doc.set_property(id, *name, value.clone()).unwrap();
+    }
+    doc.set_property(id, "Tilt", Property::Rotation(rotations[0]))
+        .unwrap();
+    doc.set_property(id, "Tilts", Property::RotationList(rotations.clone()))
+        .unwrap();
+    doc.set_property(
+        id,
+        "Occurrences",
+        Property::IntegerConstraint {
+            value: 12,
+            min: 1,
+            max: 1000,
+            step: 1,
+        },
+    )
+    .unwrap();
+    doc.set_property(
+        id,
+        "Ratio",
+        Property::FloatConstraint {
+            value: 0.25,
+            min: 0.0,
+            max: 1.0,
+            step: 0.05,
+        },
+    )
+    .unwrap();
+
+    let path = temp_path("lists.FCStd");
+    write_fcstd(&doc.to_saved("Lists"), path.to_str().unwrap()).expect("lists are representable");
+    let saved = read_fcstd(path.to_str().unwrap()).expect("read back");
+    let values = &saved.objects[0].properties;
+
+    for (name, expected) in &cases {
+        assert_eq!(values.get(*name), Some(expected), "{name}");
+    }
+    // A rotation persists axis + angle, so compare applied directions.
+    let close = |a: &Rotation, b: &Rotation| {
+        let probe = Vector3::new(1.0, 2.0, 3.0);
+        b.to_matrix().transform(&probe).distance(&a.to_matrix().transform(&probe)) < 1e-12
+    };
+    let Some(Property::Rotation(tilt)) = values.get("Tilt") else {
+        panic!("Tilt did not survive: {:?}", values.get("Tilt"));
+    };
+    assert!(close(&rotations[0], tilt));
+    let Some(Property::RotationList(tilts)) = values.get("Tilts") else {
+        panic!("Tilts did not survive: {:?}", values.get("Tilts"));
+    };
+    assert_eq!(tilts.len(), rotations.len());
+    for (read, expected) in tilts.iter().zip(&rotations) {
+        assert!(close(expected, read));
+    }
+    // The range is persisted as upstream writes it.
+    assert_eq!(
+        values.get("Occurrences"),
+        Some(&Property::IntegerConstraint {
+            value: 12,
+            min: 1,
+            max: 1000,
+            step: 1,
+        })
+    );
+    assert_eq!(
+        values.get("Ratio"),
+        Some(&Property::FloatConstraint {
+            value: 0.25,
+            min: 0.0,
+            max: 1.0,
+            step: 0.05,
+        })
+    );
+    let _ = std::fs::remove_file(&path);
 }
 
 /// A module value without a payload hook still fails by name (shape lists are

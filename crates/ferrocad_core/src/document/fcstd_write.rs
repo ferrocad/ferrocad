@@ -1,9 +1,9 @@
 //! Writing FreeCAD's binary `.FCStd` container.
 //!
-//! This is the counterpart of [`super::fcstd::read_fcstd`], and like it a
-//! **direct-call API**: [`write_fcstd`] is deliberately *not* wired into
-//! [`super::format::write`] or `saveAs` (that is checklist item 8). The JSON
-//! placeholder in the dispatch is untouched.
+//! This is the counterpart of [`super::fcstd::read_fcstd`], and the backend
+//! behind every `.FCStd` save: [`super::format::write`] dispatches
+//! `DocumentFormat::Fcstd` to [`write_fcstd`], so `saveAs` and `save` produce a
+//! real archive rather than the native JSON envelope.
 //!
 //! # Members
 //!
@@ -17,7 +17,11 @@
 //!    `PartShapeN.brp` (referenced by `<Part file>`); a list is
 //!    `PartShapeN.M.brp` (referenced by `<TopoShape file>` inside
 //!    `<ShapeList>`);
-//! 4. `DiffuseColor`, `DiffuseColor1`, … — one little-endian `u32` count plus
+//! 4. one member per file-backed value, named after its property (uniquified on
+//!    collision): `FloatList`, `VectorList`, `PlacementList` and `ColorList`
+//!    members, each a LE `u32` count followed by fixed-width values — exactly
+//!    upstream's `SaveDocFile` framing;
+//! 5. `DiffuseColor`, `DiffuseColor1`, … — one little-endian `u32` count plus
 //!    one packed `0xRRGGBB00` `u32` per per-face colour, referenced by
 //!    `<ColorList file>`.
 //!
@@ -38,12 +42,24 @@
 //! | `Quantity` (length) | `App::PropertyLength` + `<Float value=…>` |
 //! | `Quantity` (angle) | `App::PropertyAngle` + `<Float value=…>` |
 //! | `Vector` | `<PropertyVector valueX="…" valueY="…" valueZ="…">` |
+//! | `VectorList` | `<VectorList file="…">` (member: `u32` count + `f64` xyz) |
 //! | `Placement` | `<PropertyPlacement Px/Py/Pz Q0..Q3 A Ox Oy Oz>` |
+//! | `PlacementList` | `<PlacementList file="…">` (member: `u32` count + `f64` xyz + `f64` q0..q3) |
+//! | `Rotation` | `<PropertyRotation A Ox Oy Oz>` |
+//! | `RotationList` | `<PropertyRotationList count><PropertyRotation A Ox Oy Oz>…` |
+//! | `Matrix` | `<PropertyMatrix a11 … a44>` (row-major) |
 //! | `Link` | `<Link value=…>` |
 //! | `LinkList` | `<LinkList count><Link value=…>…` |
 //! | `LinkSub` | `<LinkSub value=… count><Sub value=…>…` |
 //! | `StringList` | `<StringList count><String value=…>…` |
+//! | `FloatList` | `<FloatList file="…">` (member: `u32` count + `f64`s) |
+//! | `IntegerList` | `<IntegerList count><I v=…>…` |
+//! | `BoolList` | `<BoolList value="bitset">` (element 0 is the last char) |
+//! | `ColorList` | `<ColorList file="…">` (member: `u32` count + packed `0xRRGGBBAA`) |
+//! | `IntPairList` | `<IntPairList count><Pair first=… second=…>…` |
 //! | `Enumeration` | `<Integer value=index>` (+ `<CustomEnumList>` when the allowed values are known) |
+//! | `IntegerConstraint` | `<Integer value min max step>` |
+//! | `FloatConstraint` | `<Float value min max step>` |
 //! | `Extension` | module payload: `<Part file>` or `<ShapeList><TopoShape file>…` |
 //!
 //! In addition:
@@ -83,9 +99,10 @@
 //!
 //! # Deliberately unsupported
 //!
-//! - Every other [`Property`] variant (`Matrix`, `Rotation`, colour, constraint
-//!   and list-of-geometry values) errors with
-//!   [`FcstdWriteError::UnsupportedProperty`] naming the object and property.
+//! - [`Property::FileIncluded`] and [`Property::PythonObject`] error with
+//!   [`FcstdWriteError::UnsupportedProperty`] naming the object and property:
+//!   the first needs an archive member plus a transient directory, the second
+//!   upstream's proxy pickle.
 //! - A module value whose `ExtensionData::fcstd_members` is `None` errors with
 //!   [`FcstdWriteError::UnsupportedExtension`] naming its type.
 //! - `python_state` is **not** written. FerroCAD's state is a base64 pickle of
@@ -109,6 +126,7 @@ use flate2::Compression;
 
 use super::{SavedDocument, SavedObject};
 use crate::expr;
+use crate::geometry::Rotation;
 use crate::property::Property;
 use crate::quantity::Quantity;
 use crate::unit::Unit;
@@ -219,8 +237,7 @@ impl From<io::Error> for FcstdWriteError {
 
 /// Write `doc` to `path` as a binary `.FCStd` archive.
 ///
-/// This is a direct API: [`super::format::write`] still emits the native JSON
-/// placeholder for `DocumentFormat::Fcstd`. Use
+/// This is what [`super::format::write`] calls for `DocumentFormat::Fcstd`. Use
 /// [`write_fcstd_with_report`] to learn what was skipped.
 pub fn write_fcstd(doc: &SavedDocument, path: &str) -> Result<(), FcstdWriteError> {
     write_fcstd_with_report(doc, path).map(|_| ())
@@ -252,7 +269,12 @@ pub fn encode_fcstd_with_report(
     let mut zip = ZipWriter::new();
     zip.add("Document.xml", xml.as_bytes())?;
     zip.add("GuiDocument.xml", gui_xml.as_bytes())?;
-    for member in ctx.payload_members.iter().chain(&ctx.colour_members) {
+    for member in ctx
+        .payload_members
+        .iter()
+        .chain(&ctx.data_members)
+        .chain(&ctx.colour_members)
+    {
         zip.add(&member.name, &member.data)?;
     }
     Ok((zip.finish()?, ctx.report))
@@ -272,10 +294,40 @@ struct Member {
 #[derive(Default)]
 struct Context {
     payload_members: Vec<Member>,
+    data_members: Vec<Member>,
     colour_members: Vec<Member>,
     payload_index: usize,
     colour_index: usize,
     report: WriteReport,
+}
+
+impl Context {
+    /// Place a value in its own archive member, upstream's `Writer::addFile` shape:
+    /// the member is named after the property, uniquified when taken.
+    fn add_data_member(&mut self, base: &str, data: Vec<u8>) -> String {
+        let mut name = base.to_string();
+        let mut suffix = 1;
+        while self.member_name_taken(&name) {
+            name = format!("{base}{suffix}");
+            suffix += 1;
+        }
+        self.data_members.push(Member {
+            name: name.clone(),
+            data,
+        });
+        name
+    }
+
+    fn member_name_taken(&self, name: &str) -> bool {
+        name == "Document.xml"
+            || name == "GuiDocument.xml"
+            || self
+                .payload_members
+                .iter()
+                .chain(&self.data_members)
+                .chain(&self.colour_members)
+                .any(|member| member.name == name)
+    }
 }
 
 fn document_xml(doc: &SavedDocument, ctx: &mut Context) -> Result<String, FcstdWriteError> {
@@ -611,25 +663,103 @@ fn write_property(
             number(v.y),
             number(v.z)
         )),
+        // Upstream stores these lists in their own archive member: a LE `u32`
+        // count followed by fixed-width `f64`s. An empty list writes
+        // `file=""` and no member, as upstream's `addFile` call is skipped too.
+        Property::VectorList(values) => {
+            let numbers: Vec<f64> = values
+                .iter()
+                .flat_map(|v| [v.x, v.y, v.z])
+                .collect();
+            write_member_list(
+                out,
+                &escaped,
+                "App::PropertyVectorList",
+                &status,
+                "VectorList",
+                name,
+                values.len(),
+                &numbers,
+                ctx,
+            );
+        }
+        Property::Rotation(r) => out.push_str(&format!(
+            "                <Property name=\"{escaped}\" type=\"App::PropertyRotation\"{status}>\
+             <PropertyRotation {}/></Property>\n",
+            raw_rotation_attributes(r)
+        )),
+        Property::RotationList(values) => {
+            out.push_str(&format!(
+                "                <Property name=\"{escaped}\" type=\"App::PropertyRotationList\"{status}>\n"
+            ));
+            out.push_str(&format!(
+                "                    <PropertyRotationList count=\"{}\">\n",
+                values.len()
+            ));
+            for r in values {
+                out.push_str(&format!(
+                    "                        <PropertyRotation {}/>\n",
+                    raw_rotation_attributes(r)
+                ));
+            }
+            out.push_str("                    </PropertyRotationList>\n");
+            out.push_str("                </Property>\n");
+        }
+        Property::Matrix(m) => {
+            let mut attributes = String::new();
+            for row in 0..4 {
+                for column in 0..4 {
+                    attributes.push_str(&format!(
+                        " a{}{}=\"{}\"",
+                        row + 1,
+                        column + 1,
+                        number(m.m[row * 4 + column])
+                    ));
+                }
+            }
+            out.push_str(&format!(
+                "                <Property name=\"{escaped}\" type=\"App::PropertyMatrix\"{status}>\
+                 <PropertyMatrix{attributes}/></Property>\n"
+            ));
+        }
+        Property::PlacementList(values) => {
+            let numbers: Vec<f64> = values
+                .iter()
+                .flat_map(|p| {
+                    let rotation = &p.rotation;
+                    [
+                        p.base.x,
+                        p.base.y,
+                        p.base.z,
+                        // Upstream's quaternion is x, y, z, w; ours is [w, x, y, z].
+                        rotation.q[1],
+                        rotation.q[2],
+                        rotation.q[3],
+                        rotation.q[0],
+                    ]
+                })
+                .collect();
+            write_member_list(
+                out,
+                &escaped,
+                "App::PropertyPlacementList",
+                &status,
+                "PlacementList",
+                name,
+                values.len(),
+                &numbers,
+                ctx,
+            );
+        }
         Property::Placement(p) => {
-            let rotation = &p.rotation;
-            let axis = rotation.axis();
             // Our quaternion is [w, x, y, z]; upstream stores Q0=x … Q3=w.
             out.push_str(&format!(
                 "                <Property name=\"{escaped}\" type=\"App::PropertyPlacement\"{status}>\
-                 <PropertyPlacement Px=\"{}\" Py=\"{}\" Pz=\"{}\" Q0=\"{}\" Q1=\"{}\" \
-                 Q2=\"{}\" Q3=\"{}\" A=\"{}\" Ox=\"{}\" Oy=\"{}\" Oz=\"{}\"/></Property>\n",
+                 <PropertyPlacement Px=\"{}\" Py=\"{}\" Pz=\"{}\" {}/></Property>\n",
                 number(p.base.x),
                 number(p.base.y),
                 number(p.base.z),
-                number(rotation.q[1]),
-                number(rotation.q[2]),
-                number(rotation.q[3]),
-                number(rotation.q[0]),
-                number(rotation.angle()),
-                number(axis.x),
-                number(axis.y),
-                number(axis.z)
+                rotation_attributes(&p.rotation)
             ));
         }
         Property::Link(v) => out.push_str(&format!(
@@ -686,6 +816,106 @@ fn write_property(
             out.push_str("                    </StringList>\n");
             out.push_str("                </Property>\n");
         }
+        Property::FloatList(values) => {
+            write_member_list(
+                out,
+                &escaped,
+                "App::PropertyFloatList",
+                &status,
+                "FloatList",
+                name,
+                values.len(),
+                values,
+                ctx,
+            );
+        }
+        Property::IntegerList(values) => {
+            out.push_str(&format!(
+                "                <Property name=\"{escaped}\" type=\"App::PropertyIntegerList\"{status}>\n"
+            ));
+            out.push_str(&format!(
+                "                    <IntegerList count=\"{}\">\n",
+                values.len()
+            ));
+            for v in values {
+                out.push_str(&format!("                        <I v=\"{v}\"/>\n"));
+            }
+            out.push_str("                    </IntegerList>\n");
+            out.push_str("                </Property>\n");
+        }
+        Property::BoolList(values) => {
+            // Upstream writes `boost::dynamic_bitset` as a string: the *last* char
+            // is element 0.
+            let bitset: String = values
+                .iter()
+                .rev()
+                .map(|v| if *v { '1' } else { '0' })
+                .collect();
+            out.push_str(&format!(
+                "                <Property name=\"{escaped}\" type=\"App::PropertyBoolList\"{status}>\
+                 <BoolList value=\"{bitset}\"/></Property>\n"
+            ));
+        }
+        Property::ColorList(colors) => {
+            // `PropertyColorList::SaveDocFile`: a LE `u32` count, then one packed
+            // `0xRRGGBBAA` per colour.
+            if colors.is_empty() {
+                out.push_str(&format!(
+                    "                <Property name=\"{escaped}\" type=\"App::PropertyColorList\"{status}>\n                    <ColorList file=\"\"/>\n                </Property>\n"
+                ));
+            } else {
+                let mut data = Vec::with_capacity(4 + 4 * colors.len());
+                put_u32(&mut data, colors.len() as u32);
+                for color in colors {
+                    put_u32(&mut data, super::color_to_packed(*color));
+                }
+                let member = ctx.add_data_member(name, data);
+                out.push_str(&format!(
+                    "                <Property name=\"{escaped}\" type=\"App::PropertyColorList\"{status}>\n                    <ColorList file=\"{}\"/>\n                </Property>\n",
+                    escape_attr(&member)
+                ));
+            }
+        }
+        Property::IntPairList(pairs) => {
+            out.push_str(&format!(
+                "                <Property name=\"{escaped}\" type=\"App::PropertyIntPairList\"{status}>\n"
+            ));
+            out.push_str(&format!(
+                "                    <IntPairList count=\"{}\">\n",
+                pairs.len()
+            ));
+            for (first, second) in pairs {
+                out.push_str(&format!(
+                    "                        <Pair first=\"{first}\" second=\"{second}\"/>\n"
+                ));
+            }
+            out.push_str("                    </IntPairList>\n");
+            out.push_str("                </Property>\n");
+        }
+        // A constraint persists its value and its range (upstream writes `min`,
+        // `max` and `step` when the constraint is user-settable).
+        Property::IntegerConstraint {
+            value,
+            min,
+            max,
+            step,
+        } => out.push_str(&format!(
+            "                <Property name=\"{escaped}\" type=\"App::PropertyIntegerConstraint\"{status}>\
+             <Integer value=\"{value}\" min=\"{min}\" max=\"{max}\" step=\"{step}\"/></Property>\n"
+        )),
+        Property::FloatConstraint {
+            value,
+            min,
+            max,
+            step,
+        } => out.push_str(&format!(
+            "                <Property name=\"{escaped}\" type=\"App::PropertyFloatConstraint\"{status}>\
+             <Float value=\"{}\" min=\"{}\" max=\"{}\" step=\"{}\"/></Property>\n",
+            number(*value),
+            number(*min),
+            number(*max),
+            number(*step)
+        )),
         Property::Enumeration(values, index) => {
             out.push_str(&format!(
                 "                <Property name=\"{escaped}\" type=\"App::PropertyEnumeration\"{status}>\n"
@@ -879,6 +1109,72 @@ fn packed_rgb(color: super::Color) -> u32 {
 fn is_angle(q: &Quantity) -> bool {
     let deg = Unit::parse("deg").expect("'deg' is a known unit");
     q.sig() == deg.sig
+}
+
+/// The shared `Q0..Q3 A Ox Oy Oz` attribute set of `PropertyPlacement` and
+/// `PropertyRotation` (upstream stores Q0=x … Q3=w; ours is `[w, x, y, z]`).
+fn rotation_attributes(rotation: &Rotation) -> String {
+    let axis = rotation.axis();
+    format!(
+        "Q0=\"{}\" Q1=\"{}\" Q2=\"{}\" Q3=\"{}\" A=\"{}\" Ox=\"{}\" Oy=\"{}\" Oz=\"{}\"",
+        number(rotation.q[1]),
+        number(rotation.q[2]),
+        number(rotation.q[3]),
+        number(rotation.q[0]),
+        number(rotation.angle()),
+        number(axis.x),
+        number(axis.y),
+        number(axis.z)
+    )
+}
+
+/// `PropertyRotation` persists the raw axis and angle only (no quaternion).
+fn raw_rotation_attributes(rotation: &Rotation) -> String {
+    let axis = rotation.axis();
+    format!(
+        "A=\"{}\" Ox=\"{}\" Oy=\"{}\" Oz=\"{}\"",
+        number(rotation.angle()),
+        number(axis.x),
+        number(axis.y),
+        number(axis.z)
+    )
+}
+
+/// Write a file-backed numeric list, upstream's `SaveDocFile` shape: a LE `u32`
+/// `count`, then `values` as LE `f64`s in a member named after the property.
+///
+/// An empty list writes `file=""` and allocates no member, matching upstream's
+/// `getSize() ? addFile(…) : ""`.
+#[allow(clippy::too_many_arguments)]
+fn write_member_list(
+    out: &mut String,
+    escaped: &str,
+    type_name: &str,
+    status: &str,
+    tag: &str,
+    name: &str,
+    count: usize,
+    values: &[f64],
+    ctx: &mut Context,
+) {
+    out.push_str(&format!(
+        "                <Property name=\"{escaped}\" type=\"{type_name}\"{status}>\n"
+    ));
+    if values.is_empty() {
+        out.push_str(&format!("                    <{tag} file=\"\"/>\n"));
+    } else {
+        let mut data = Vec::with_capacity(4 + 8 * values.len());
+        put_u32(&mut data, count as u32);
+        for value in values {
+            data.extend_from_slice(&value.to_le_bytes());
+        }
+        let member = ctx.add_data_member(name, data);
+        out.push_str(&format!(
+            "                    <{tag} file=\"{}\"/>\n",
+            escape_attr(&member)
+        ));
+    }
+    out.push_str("                </Property>\n");
 }
 
 /// Shortest round-trip float text (`1e-20` stays exact, unlike a fixed format).

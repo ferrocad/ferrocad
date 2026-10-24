@@ -251,17 +251,17 @@ class TestPersistence(unittest.TestCase):
             if FreeCAD.getDocument(doc.Name) is not None:
                 FreeCAD.closeDocument(doc.Name)
 
-    def test_fcstd_writes_a_json_placeholder(self):
-        # Transitional: the suffix picks the FCStd backend, which has no writer yet
-        # and emits the native bytes (`FcstdWriter::JsonPlaceholder`).
-        doc = FreeCAD.newDocument("Placeholder")
+    def test_fcstd_writes_a_zip_container(self):
+        # `.FCStd` is the real upstream container: a ZIP with Document.xml (and
+        # GuiDocument.xml when there is view state).
+        doc = FreeCAD.newDocument("FcstdContainer")
         doc.addObject("App::FeatureTest", "P")
         try:
             with tempfile.TemporaryDirectory() as tmp:
                 path = os.path.join(tmp, "model.FCStd")
                 doc.saveAs(path)
                 with open(path, "rb") as handle:
-                    self.assertEqual(handle.read(1), b"{")
+                    self.assertEqual(handle.read(4), b"PK\x03\x04")
                 FreeCAD.closeDocument(doc.Name)
                 reopened = FreeCAD.openDocument(path)
                 self.assertEqual(reopened.getObject("P").Name, "P")

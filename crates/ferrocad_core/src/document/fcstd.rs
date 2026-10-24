@@ -2,9 +2,9 @@
 //!
 //! An `.FCStd` file is a ZIP archive whose `Document.xml` member holds the
 //! document's objects, `GuiDocument.xml` holds their view providers, and
-//! `PartShapeN.brp`/`DiffuseColorN` hold module-owned payloads. This module
-//! implements just enough of ZIP and of FreeCAD's XML schema to open upstream
-//! documents.
+//! `PartShapeN.brp`/`DiffuseColorN`/property-named members hold values that are
+//! not stored inline. This module implements just enough of ZIP and of
+//! FreeCAD's XML schema to open upstream documents.
 //!
 //! Supported ZIP subset: single-disk archives, entries stored (`method = 0`) or
 //! deflated (`method = 8`), unencrypted. ZIP64 archives return
@@ -48,11 +48,22 @@
 //! `App::PropertyBool`, `App::PropertyVector`, `App::PropertyPlacement`,
 //! `App::PropertyLink` (and `LinkHidden`), `App::PropertyLinkList` (and
 //! `LinkListHidden`), `App::PropertyLinkSub`, `App::PropertyLinkSubList`,
-//! `App::PropertyStringList`, `App::PropertyEnumeration`,
-//! `App::PropertyLength`, `App::PropertyAngle` and `App::PropertyExpressionEngine`.
-//! `App::PropertyPythonObject` is read into [`SavedObject::python_state`] rather
-//! than into a property. `_Property` placeholders (static transient properties
-//! with no value) contribute their `status` only. Everything else is ignored.
+//! `App::PropertyStringList`, `App::PropertyFloatList`, `App::PropertyIntegerList`,
+//! `App::PropertyBoolList`, `App::PropertyIntPairList`, `App::PropertyVectorList`,
+//! `App::PropertyPlacementList`, `App::PropertyRotation` (and `RotationList`),
+//! `App::PropertyMatrix`, `App::PropertyColor`/`ColorList`,
+//! `App::PropertyIntegerConstraint`, `App::PropertyFloatConstraint`,
+//! `App::PropertyEnumeration`, `App::PropertyLength`, `App::PropertyAngle` and
+//! `App::PropertyExpressionEngine`. `App::PropertyPythonObject` is read into
+//! [`SavedObject::python_state`] rather than into a property. `_Property`
+//! placeholders (static transient properties with no value) contribute their
+//! `status` only. Everything else is ignored.
+//!
+//! File-backed values are read from their members exactly as upstream writes
+//! them: `FloatList` (LE `u32` count + `f64`s), `VectorList` (`u32` + `f64` xyz),
+//! `PlacementList` (`u32` + `f64` xyz + `f64` q0..q3) and `ColorList` (`u32` +
+//! packed `0xRRGGBBAA`). An empty `file` attribute, or an in-memory parse with no
+//! archive, yields an empty value.
 //!
 //! Lossiness, by design:
 //!
@@ -65,6 +76,12 @@
 //!   value list stays empty unless the file carries a `CustomEnumList`.
 //! - `PropertyLinkSubList` is flattened to [`Property::LinkList`]: the object
 //!   order survives, the per-link sub-element names do not.
+//! - `PropertyColor` (one value) becomes a one-element [`Property::ColorList`],
+//!   so re-saving writes `App::PropertyColorList`.
+//! - `PropertyRotation` stores axis and angle, not the quaternion; the restored
+//!   rotation is the same rotation up to floating-point rounding.
+//! - `PropertyBoolList` is a `boost::dynamic_bitset` string whose last character
+//!   is element 0.
 //! - Upstream's `status` attribute encodes its internal `Property::Status`
 //!   bits, not our public mask. The flags that have a public equivalent are
 //!   translated into [`crate::prop_status`] bits; ephemeral ones are dropped.
@@ -79,7 +96,7 @@ use std::path::Path;
 
 use super::{SavedDocument, SavedObject, ViewState};
 use crate::extension::ExtensionValue;
-use crate::geometry::{Placement, Rotation, Vector3};
+use crate::geometry::{Matrix4, Placement, Rotation, Vector3};
 use crate::property::Property;
 use crate::property_types;
 use crate::quantity::Quantity;
@@ -531,6 +548,13 @@ fn parse_property(
             .map(|v| Property::Bool(v == "true" || v == "1")),
         "App::PropertyVector" => parse_vector(node)?.map(Property::Vector),
         "App::PropertyPlacement" => parse_placement(node)?.map(Property::Placement),
+        "App::PropertyVectorList" => Some(Property::VectorList(parse_vector_list(node, archive)?)),
+        "App::PropertyPlacementList" => {
+            Some(Property::PlacementList(parse_placement_list(node, archive)?))
+        }
+        "App::PropertyRotation" => parse_rotation(node)?.map(Property::Rotation),
+        "App::PropertyRotationList" => Some(Property::RotationList(parse_rotation_list(node)?)),
+        "App::PropertyMatrix" => parse_matrix(node)?.map(Property::Matrix),
         "App::PropertyLink" | "App::PropertyLinkHidden" => {
             child_attr(node, "Link", "value").map(|v| Property::Link(v.to_string()))
         }
@@ -544,6 +568,35 @@ fn parse_property(
         // order; the per-link `<Link sub="…">` element names are dropped.
         "App::PropertyLinkSubList" => Some(Property::LinkList(parse_link_sub_list(node))),
         "App::PropertyStringList" => Some(Property::StringList(parse_string_list(node))),
+        "App::PropertyFloatList" => Some(Property::FloatList(parse_float_list(node, archive)?)),
+        "App::PropertyIntegerList" => Some(Property::IntegerList(parse_integer_list(node)?)),
+        "App::PropertyBoolList" => Some(Property::BoolList(parse_bool_list(node))),
+        "App::PropertyIntPairList" => Some(Property::IntPairList(parse_int_pair_list(node)?)),
+        // `PropertyColor` is one value, `PropertyColorList` a file-backed list of
+        // them; both map onto our colour-list value.
+        "App::PropertyColor" | "App::PropertyColorList" | "App::PropertyColourList" => {
+            Some(Property::ColorList(parse_color_list(node, archive)?))
+        }
+        // The range is persisted, but older files (and FerroCAD before this arm)
+        // may omit it; fall back to the widest range then.
+        "App::PropertyIntegerConstraint" => child_attr(node, "Integer", "value")
+            .map(|v| parse_i64(v, "Integer"))
+            .transpose()?
+            .map(|value| Property::IntegerConstraint {
+                value,
+                min: constraint_attr(node, "Integer", "min", i64::MIN as f64) as i64,
+                max: constraint_attr(node, "Integer", "max", i64::MAX as f64) as i64,
+                step: constraint_attr(node, "Integer", "step", 1.0) as i64,
+            }),
+        "App::PropertyFloatConstraint" => child_attr(node, "Float", "value")
+            .map(|v| parse_f64(v, "Float"))
+            .transpose()?
+            .map(|value| Property::FloatConstraint {
+                value,
+                min: constraint_attr(node, "Float", "min", f64::NEG_INFINITY),
+                max: constraint_attr(node, "Float", "max", f64::INFINITY),
+                step: constraint_attr(node, "Float", "step", 1.0),
+            }),
         // Both length and angle are a bare `<Float>`; the property type carries
         // the unit, which we preserve as the quantity's unit signature so the
         // writer can emit the original type again.
@@ -902,22 +955,51 @@ fn parse_placement(node: roxmltree::Node<'_, '_>) -> Result<Option<Placement>, F
     let Some(placement) = child(node, "PropertyPlacement") else {
         return Ok(None);
     };
+    Ok(Some(placement_from_element(placement)?))
+}
+
+/// One `<PropertyPlacement …/>` element (also the entry shape of a
+/// `<PropertyPlacementList>`).
+fn placement_from_element(node: roxmltree::Node<'_, '_>) -> Result<Placement, FcstdError> {
     let base = Vector3::new(
-        parse_f64(required_attr(placement, "Px")?, "PropertyPlacement@Px")?,
-        parse_f64(required_attr(placement, "Py")?, "PropertyPlacement@Py")?,
-        parse_f64(required_attr(placement, "Pz")?, "PropertyPlacement@Pz")?,
+        parse_f64(required_attr(node, "Px")?, "PropertyPlacement@Px")?,
+        parse_f64(required_attr(node, "Py")?, "PropertyPlacement@Py")?,
+        parse_f64(required_attr(node, "Pz")?, "PropertyPlacement@Pz")?,
     );
-    // FreeCAD stores the quaternion as Q0=x, Q1=y, Q2=z, Q3=w; ours is [w,x,y,z].
-    let quaternion = [
-        parse_f64(required_attr(placement, "Q3")?, "PropertyPlacement@Q3")?,
-        parse_f64(required_attr(placement, "Q0")?, "PropertyPlacement@Q0")?,
-        parse_f64(required_attr(placement, "Q1")?, "PropertyPlacement@Q1")?,
-        parse_f64(required_attr(placement, "Q2")?, "PropertyPlacement@Q2")?,
-    ];
-    Ok(Some(Placement::new(
-        base,
-        Rotation { q: quaternion, raw_axis: None },
-    )))
+    Ok(Placement::new(base, rotation_from_element(node)?))
+}
+
+fn parse_rotation(node: roxmltree::Node<'_, '_>) -> Result<Option<Rotation>, FcstdError> {
+    let Some(rotation) = child(node, "PropertyRotation") else {
+        return Ok(None);
+    };
+    Ok(Some(rotation_from_element(rotation)?))
+}
+
+/// FreeCAD stores the quaternion as Q0=x, Q1=y, Q2=z, Q3=w; ours is [w,x,y,z].
+fn rotation_from_element(node: roxmltree::Node<'_, '_>) -> Result<Rotation, FcstdError> {
+    if node.attribute("Q0").is_some() {
+        let quaternion = [
+            parse_f64(required_attr(node, "Q3")?, "PropertyRotation@Q3")?,
+            parse_f64(required_attr(node, "Q0")?, "PropertyRotation@Q0")?,
+            parse_f64(required_attr(node, "Q1")?, "PropertyRotation@Q1")?,
+            parse_f64(required_attr(node, "Q2")?, "PropertyRotation@Q2")?,
+        ];
+        return Ok(Rotation {
+            q: quaternion,
+            raw_axis: None,
+        });
+    }
+    // `PropertyRotation` persists the raw axis and angle only (no quaternion).
+    let axis = Vector3::new(
+        parse_f64(required_attr(node, "Ox")?, "PropertyRotation@Ox")?,
+        parse_f64(required_attr(node, "Oy")?, "PropertyRotation@Oy")?,
+        parse_f64(required_attr(node, "Oz")?, "PropertyRotation@Oz")?,
+    );
+    let angle = parse_f64(required_attr(node, "A")?, "PropertyRotation@A")?;
+    let mut rotation = Rotation::from_axis_angle(&axis, angle);
+    rotation.raw_axis = Some(axis.normalize());
+    Ok(rotation)
 }
 
 fn parse_string_list(node: roxmltree::Node<'_, '_>) -> Vec<String> {
@@ -931,6 +1013,258 @@ fn parse_string_list(node: roxmltree::Node<'_, '_>) -> Vec<String> {
         .collect()
 }
 
+fn parse_float_list(
+    node: roxmltree::Node<'_, '_>,
+    archive: Option<&ZipArchive<'_>>,
+) -> Result<Vec<f64>, FcstdError> {
+    if let Some(member) = child_attr(node, "FloatList", "file") {
+        return read_f64_member(archive, member, 1);
+    }
+    // Force-XML fallback: `<F v>` (or the older `<Float value>`).
+    let Some(list) = child(node, "FloatList") else {
+        return Ok(Vec::new());
+    };
+    list.children()
+        .filter(|n| n.has_tag_name("F") || n.has_tag_name("Float"))
+        .map(|n| {
+            let value = n
+                .attribute("v")
+                .or_else(|| n.attribute("value"))
+                .unwrap_or_default();
+            parse_f64(value, "FloatList entry")
+        })
+        .collect()
+}
+
+fn parse_integer_list(node: roxmltree::Node<'_, '_>) -> Result<Vec<i64>, FcstdError> {
+    let Some(list) = child(node, "IntegerList") else {
+        return Ok(Vec::new());
+    };
+    list.children()
+        .filter(|n| n.has_tag_name("I") || n.has_tag_name("Integer"))
+        .map(|n| {
+            let value = n
+                .attribute("v")
+                .or_else(|| n.attribute("value"))
+                .unwrap_or_default();
+            parse_i64(value, "IntegerList entry")
+        })
+        .collect()
+}
+
+/// `PropertyBoolList` is a `boost::dynamic_bitset` string: the last character
+/// is element 0.
+fn parse_bool_list(node: roxmltree::Node<'_, '_>) -> Vec<bool> {
+    let Some(list) = child(node, "BoolList") else {
+        return Vec::new();
+    };
+    if let Some(bitset) = list.attribute("value") {
+        return bitset.chars().rev().map(|c| c == '1').collect();
+    }
+    // Older inline form.
+    list.children()
+        .filter(|n| n.has_tag_name("Bool"))
+        .filter_map(|n| n.attribute("value"))
+        .map(|v| v == "true" || v == "1")
+        .collect()
+}
+
+fn parse_int_pair_list(node: roxmltree::Node<'_, '_>) -> Result<Vec<(i64, i64)>, FcstdError> {
+    let Some(list) = child(node, "IntPairList") else {
+        return Ok(Vec::new());
+    };
+    list.children()
+        .filter(|n| n.has_tag_name("Pair"))
+        .map(|n| {
+            Ok((
+                parse_i64(required_attr(n, "first")?, "Pair@first")?,
+                parse_i64(required_attr(n, "second")?, "Pair@second")?,
+            ))
+        })
+        .collect()
+}
+
+fn parse_vector_list(
+    node: roxmltree::Node<'_, '_>,
+    archive: Option<&ZipArchive<'_>>,
+) -> Result<Vec<Vector3>, FcstdError> {
+    if let Some(member) = child_attr(node, "VectorList", "file") {
+        let values = read_f64_member(archive, member, 3)?;
+        return Ok(values
+            .chunks_exact(3)
+            .map(|v| Vector3::new(v[0], v[1], v[2]))
+            .collect());
+    }
+    // Force-XML fallback.
+    let Some(list) = child(node, "VectorList") else {
+        return Ok(Vec::new());
+    };
+    list.children()
+        .filter(|n| n.has_tag_name("PropertyVector"))
+        .map(|n| {
+            Ok(Vector3::new(
+                parse_f64(required_attr(n, "valueX")?, "VectorList@valueX")?,
+                parse_f64(required_attr(n, "valueY")?, "VectorList@valueY")?,
+                parse_f64(required_attr(n, "valueZ")?, "VectorList@valueZ")?,
+            ))
+        })
+        .collect()
+}
+
+fn parse_placement_list(
+    node: roxmltree::Node<'_, '_>,
+    archive: Option<&ZipArchive<'_>>,
+) -> Result<Vec<Placement>, FcstdError> {
+    if let Some(member) = child_attr(node, "PlacementList", "file") {
+        let values = read_f64_member(archive, member, 7)?;
+        return Ok(values
+            .chunks_exact(7)
+            .map(|v| {
+                Placement::new(
+                    Vector3::new(v[0], v[1], v[2]),
+                    // Upstream's quaternion is x, y, z, w; ours is [w, x, y, z].
+                    Rotation {
+                        q: [v[6], v[3], v[4], v[5]],
+                        raw_axis: None,
+                    },
+                )
+            })
+            .collect());
+    }
+    // Force-XML fallback.
+    let Some(list) = child(node, "PlacementList") else {
+        return Ok(Vec::new());
+    };
+    list.children()
+        .filter(|n| n.has_tag_name("PropertyPlacement"))
+        .map(placement_from_element)
+        .collect()
+}
+
+/// Read a file-backed numeric list: a LE `u32` count then `stride` `f64`s per
+/// entry (upstream `SaveDocFile`). A missing archive (in-memory parse) or an
+/// empty `file` attribute yields an empty value, as upstream's empty lists do.
+fn read_f64_member(
+    archive: Option<&ZipArchive<'_>>,
+    member: &str,
+    stride: usize,
+) -> Result<Vec<f64>, FcstdError> {
+    if member.is_empty() {
+        return Ok(Vec::new());
+    }
+    let Some(archive) = archive else {
+        return Ok(Vec::new());
+    };
+    let data = archive.read(member)?;
+    let count = u32_at(&data, 0)
+        .ok_or_else(|| {
+            FcstdError::BadZip(format!(
+                "value member '{member}' is shorter than its count field"
+            ))
+        })? as usize;
+    let needed = count
+        .checked_mul(stride)
+        .and_then(|values| values.checked_mul(8))
+        .and_then(|bytes| bytes.checked_add(4))
+        .ok_or_else(|| FcstdError::BadZip(format!("value member '{member}' overflows")))?;
+    if data.len() < needed {
+        return Err(FcstdError::BadZip(format!(
+            "value member '{member}' holds {count} entries but only {} bytes",
+            data.len()
+        )));
+    }
+    let mut out = Vec::with_capacity(count * stride);
+    for index in 0..count * stride {
+        let start = 4 + index * 8;
+        let bytes: [u8; 8] = data[start..start + 8]
+            .try_into()
+            .expect("length checked above");
+        out.push(f64::from_le_bytes(bytes));
+    }
+    Ok(out)
+}
+
+fn parse_rotation_list(node: roxmltree::Node<'_, '_>) -> Result<Vec<Rotation>, FcstdError> {
+    let Some(list) = child(node, "PropertyRotationList") else {
+        return Ok(Vec::new());
+    };
+    list.children()
+        .filter(|n| n.has_tag_name("PropertyRotation"))
+        .map(rotation_from_element)
+        .collect()
+}
+
+/// A `PropertyMatrix` persists its 16 values as `a11` … `a44`, row-major.
+fn parse_matrix(node: roxmltree::Node<'_, '_>) -> Result<Option<Matrix4>, FcstdError> {
+    let Some(matrix) = child(node, "PropertyMatrix") else {
+        return Ok(None);
+    };
+    let mut values = [0.0; 16];
+    for row in 0..4 {
+        for column in 0..4 {
+            let name = format!("a{}{}", row + 1, column + 1);
+            values[row * 4 + column] = parse_f64(
+                required_attr(matrix, &name)?,
+                &format!("PropertyMatrix@{name}"),
+            )?;
+        }
+    }
+    Ok(Some(Matrix4::from_values(values)))
+}
+
+fn parse_color_list(
+    node: roxmltree::Node<'_, '_>,
+    archive: Option<&ZipArchive<'_>>,
+) -> Result<Vec<super::Color>, FcstdError> {
+    // `App::PropertyColor` stores a single value, not a `<ColorList>` wrapper.
+    if let Some(value) = child_attr(node, "PropertyColor", "value") {
+        return Ok(vec![super::color_from_packed(parse_packed_color(value)?, false)]);
+    }
+    // `PropertyColorList::SaveDocFile`: LE `u32` count, then `0xRRGGBBAA` values.
+    if let Some(member) = child_attr(node, "ColorList", "file") {
+        if member.is_empty() {
+            return Ok(Vec::new());
+        }
+        let Some(archive) = archive else {
+            return Ok(Vec::new());
+        };
+        let data = archive.read(member)?;
+        let count = u32_at(&data, 0)
+            .ok_or_else(|| {
+                FcstdError::BadZip(format!(
+                    "colour member '{member}' is shorter than its count field"
+                ))
+            })? as usize;
+        let needed = count
+            .checked_mul(4)
+            .and_then(|bytes| bytes.checked_add(4))
+            .ok_or_else(|| FcstdError::BadZip(format!("colour member '{member}' overflows")))?;
+        if data.len() < needed {
+            return Err(FcstdError::BadZip(format!(
+                "colour member '{member}' holds {count} colours but only {} bytes",
+                data.len()
+            )));
+        }
+        let mut colors = Vec::with_capacity(count);
+        for index in 0..count {
+            let packed = u32_at(&data, 4 + index * 4).expect("length checked above");
+            colors.push(super::color_from_packed(packed, false));
+        }
+        return Ok(colors);
+    }
+    // Force-XML fallback: inline entries.
+    let Some(list) = child(node, "ColorList") else {
+        return Ok(Vec::new());
+    };
+    list.children()
+        .filter(|n| n.has_tag_name("PropertyColor") || n.has_tag_name("Color"))
+        .map(|n| {
+            let value = required_attr(n, "value")?;
+            Ok(super::color_from_packed(parse_packed_color(value)?, false))
+        })
+        .collect()
+}
+
 fn parse_f64(text: &str, what: &str) -> Result<f64, FcstdError> {
     text.parse::<f64>()
         .map_err(|e| FcstdError::Number(format!("{what} = {text:?}: {e}")))
@@ -939,6 +1273,13 @@ fn parse_f64(text: &str, what: &str) -> Result<f64, FcstdError> {
 fn parse_i64(text: &str, what: &str) -> Result<i64, FcstdError> {
     text.parse::<i64>()
         .map_err(|e| FcstdError::Number(format!("{what} = {text:?}: {e}")))
+}
+
+/// A constraint bound (`min`/`max`/`step`), defaulting when an older file omits it.
+fn constraint_attr(node: roxmltree::Node<'_, '_>, tag: &str, attr: &str, default: f64) -> f64 {
+    child_attr(node, tag, attr)
+        .and_then(|v| v.parse::<f64>().ok())
+        .unwrap_or(default)
 }
 
 fn required_attr<'a>(node: roxmltree::Node<'a, '_>, name: &str) -> Result<&'a str, FcstdError> {

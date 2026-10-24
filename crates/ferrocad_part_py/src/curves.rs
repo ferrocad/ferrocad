@@ -3387,6 +3387,381 @@ fn makeFace(
     Py::new(py, PyFace::initializer(shape))
 }
 
+// ---------------------------------------------------------------------------
+// Helices (`Part.makeHelix`, `Part.makeLongHelix`)
+// ---------------------------------------------------------------------------
+
+/// The kernel's confusion tolerance (upstream's `Precision::Confusion`).
+const HELIX_CONFUSION: f64 = 1e-7;
+/// Samples per turn when turning upstream's analytic helix into a B-spline.
+const HELIX_SAMPLES_PER_TURN: f64 = 36.0;
+/// A hard cap so a very long helix cannot exhaust memory or stall the kernel.
+const HELIX_MAX_SAMPLES: usize = 8001;
+
+/// A sampled helix plus the exact frame at its first point.
+///
+/// Upstream builds the helix as a 2D line on a cylindrical or conical surface;
+/// this slice has no such surface constructor, so the same curve is sampled and
+/// interpolated as a B-spline. The samples lie exactly on the analytic helix, and
+/// the start frame is computed analytically (not from the chord), so a profile
+/// swept along it is oriented correctly.
+pub(crate) struct HelixGeometry {
+    pub(crate) points: Vec<Vector3>,
+    pub(crate) start: Vector3,
+    pub(crate) tangent: Vector3,
+}
+
+/// Sample upstream's helix (`TopoShape::makeHelix`).
+///
+/// `angle` is in degrees; a non-positive angle selects the cylindrical surface,
+/// exactly as upstream's `angle < Precision::Confusion()` test. `vertical_height`
+/// is upstream's `newStyle`: it makes the conical helix rise to `height / cos`
+/// instead of `height` (mantis 0001247).
+pub(crate) fn helix_geometry(
+    pitch: f64,
+    height: f64,
+    radius: f64,
+    angle: f64,
+    left_handed: bool,
+    vertical_height: bool,
+) -> Result<HelixGeometry, String> {
+    if !pitch.is_finite() || pitch.abs() < HELIX_CONFUSION {
+        return Err("Pitch of helix too small".to_string());
+    }
+    if !height.is_finite() || height.abs() < HELIX_CONFUSION {
+        return Err("Height of helix too small".to_string());
+    }
+    if (height > 0.0 && pitch < 0.0) || (height < 0.0 && pitch > 0.0) {
+        return Err("Pitch and height of helix not compatible".to_string());
+    }
+
+    let conical = angle >= HELIX_CONFUSION;
+    let angle_radians = if conical {
+        let radians = angle.to_radians();
+        if !radians.is_finite() || radians >= std::f64::consts::FRAC_PI_2 {
+            return Err("Angle of helix too large".to_string());
+        }
+        radians
+    } else {
+        0.0
+    };
+    if !conical && radius < HELIX_CONFUSION {
+        return Err("Radius of helix too small".to_string());
+    }
+
+    let turns = height / pitch;
+    if !turns.is_finite() {
+        return Err("Number of turns of helix is not finite".to_string());
+    }
+    // Upstream's `newStyle` reads the height along the cone's axis as
+    // `height / cos(angle)`; the old style uses it as the axial height.
+    let height_end = if conical && vertical_height {
+        height / angle_radians.cos()
+    } else {
+        height
+    };
+
+    let samples = ((turns.abs() * HELIX_SAMPLES_PER_TURN).ceil() as usize)
+        .saturating_add(1)
+        .clamp(2, HELIX_MAX_SAMPLES);
+    let direction = if left_handed { -1.0 } else { 1.0 };
+    let d_theta = direction * std::f64::consts::TAU * turns;
+    let d_radius = if conical {
+        height_end * angle_radians.tan()
+    } else {
+        0.0
+    };
+
+    let mut points = Vec::with_capacity(samples);
+    for index in 0..samples {
+        let t = index as f64 / (samples - 1) as f64;
+        let theta = d_theta * t;
+        let z = height_end * t;
+        let r = if conical {
+            radius + z * angle_radians.tan()
+        } else {
+            radius
+        };
+        points.push(Vector3::new(r * theta.cos(), r * theta.sin(), z));
+    }
+
+    let start = Vector3::new(radius, 0.0, 0.0);
+    // dP/dt at theta = 0: (dR/dt)·X + R·(dθ/dt)·Y + (dz/dt)·Z.
+    let tangent = Vector3::new(d_radius, radius * d_theta, height_end).normalize();
+    Ok(HelixGeometry {
+        points,
+        start,
+        tangent,
+    })
+}
+
+/// The helix as a single B-spline edge.
+pub(crate) fn helix_shape(
+    pitch: f64,
+    height: f64,
+    radius: f64,
+    angle: f64,
+    left_handed: bool,
+    vertical_height: bool,
+) -> Result<Shape, String> {
+    let geometry = helix_geometry(pitch, height, radius, angle, left_handed, vertical_height)?;
+    backend()
+        .make_bspline_edge(&geometry.points, false)
+        .map_err(|error| error.to_string())
+}
+
+/// `Part.makeHelix(pitch, height, radius, angle=-1.0, pleft=False, pvertHeight=False)`
+/// → a `Part.Edge`.
+///
+/// Upstream returns a wire built from a 2D line on a cylindrical/conical surface.
+/// This slice has no surface constructor in the seam, so the same helix is
+/// interpolated as a B-spline Edge through points on that surface; the geometry is
+/// within the interpolation tolerance of upstream's. `angle` is in degrees and a
+/// non-positive value means a cylindrical helix, as upstream. `pvertHeight` is
+/// upstream's new-style height for a conical helix.
+#[pyfunction]
+#[pyo3(signature = (pitch, height, radius, angle = -1.0, pleft = false, pvertHeight = false))]
+fn makeHelix(
+    py: Python<'_>,
+    pitch: f64,
+    height: f64,
+    radius: f64,
+    angle: f64,
+    pleft: bool,
+    pvertHeight: bool,
+) -> PyResult<Py<PyEdge>> {
+    let geometry = helix_geometry(pitch, height, radius, angle, pleft, pvertHeight)
+        .map_err(OCCError::new_err)?;
+    let shape = backend()
+        .make_bspline_edge(&geometry.points, false)
+        .map_err(kernel_error)?;
+    Py::new(
+        py,
+        PyEdge::from_entry(EdgeEntry {
+            shape,
+            curve: None,
+        }),
+    )
+}
+
+/// `Part.makeLongHelix(pitch, height, radius, angle=-1.0, pleft=False)` → a
+/// `Part.Wire`.
+///
+/// Upstream splits the helix into one edge per whole turn (a workaround for an
+/// OCC limit on long helices); the same split is done here, each piece being a
+/// B-spline through the analytic samples.
+#[pyfunction]
+#[pyo3(signature = (pitch, height, radius, angle = -1.0, pleft = false))]
+fn makeLongHelix(
+    py: Python<'_>,
+    pitch: f64,
+    height: f64,
+    radius: f64,
+    angle: f64,
+    pleft: bool,
+) -> PyResult<Py<PyWire>> {
+    // Upstream's `makeLongHelix` requires a positive pitch and height.
+    if !pitch.is_finite() || pitch < HELIX_CONFUSION {
+        return Err(OCCError::new_err("Pitch of helix too small"));
+    }
+    if !height.is_finite() || height < HELIX_CONFUSION {
+        return Err(OCCError::new_err("Height of helix too small"));
+    }
+    let geometry = helix_geometry(pitch, height, radius, angle, pleft, false)
+        .map_err(OCCError::new_err)?;
+    let total_turns = (height / pitch).abs();
+    let mut pieces = Vec::new();
+    let mut done = 0.0;
+    while done < total_turns - HELIX_CONFUSION {
+        // One whole turn per piece; the last piece takes whatever is left.
+        let span = (total_turns - done).min(1.0);
+        let start_fraction = done / total_turns;
+        let end_fraction = (done + span) / total_turns;
+        let last_index = geometry.points.len() - 1;
+        let first = ((start_fraction * last_index as f64).floor() as usize).min(last_index);
+        let last = ((end_fraction * last_index as f64).ceil() as usize)
+            .min(last_index)
+            .max(first + 1);
+        let piece = backend()
+            .make_bspline_edge(&geometry.points[first..=last], false)
+            .map_err(kernel_error)?;
+        pieces.push(piece);
+        done += span;
+    }
+    let wire = backend().make_wire(&pieces).map_err(kernel_error)?;
+    Py::new(py, PyWire::from_shape(wire))
+}
+
+// ---------------------------------------------------------------------------
+// `Part.__sortEdges__` / `Part.sortEdges`
+// ---------------------------------------------------------------------------
+
+/// The two endpoints of an edge, in the edge's own direction.
+///
+/// A closed edge has a single vertex in the kernel's map; both ends report it,
+/// which is what upstream's `sort_Edges` would see for such an edge.
+fn edge_endpoints(shape: &Shape) -> Option<(Vector3, Vector3)> {
+    let mut points = Vec::new();
+    for element in backend().elements(shape, ElementKind::Vertex) {
+        if let Some(point) = backend().vertex_point(&element.shape) {
+            points.push(point);
+        }
+    }
+    match points.as_slice() {
+        [first, second, ..] => Some((*first, *second)),
+        [only] => Some((*only, *only)),
+        _ => None,
+    }
+}
+
+/// One edge with its endpoints, for the chain search.
+struct PointedEdge {
+    first: Vector3,
+    second: Vector3,
+    shape: Shape,
+}
+
+/// Upstream's `sort_Edges` (`AppPartPy.cpp`): chain the edges by shared endpoints.
+///
+/// The first edge seeds the chain; each step looks for an edge touching either end
+/// (reversing it when it arrives backwards) and stops when no edge is adjacent or
+/// the chain closes. Returns the chain and the edges that were not used, so the
+/// cluster form can start the next chain from them.
+fn sort_edge_chain(tolerance: f64, edges: Vec<Shape>) -> Result<(Vec<Shape>, Vec<Shape>), String> {
+    let squared_tolerance = (tolerance * tolerance).max(0.0);
+    let mut remaining: Vec<PointedEdge> = Vec::with_capacity(edges.len());
+    for shape in edges {
+        let (first, second) = edge_endpoints(&shape)
+            .ok_or_else(|| "an edge without vertices cannot be sorted".to_string())?;
+        remaining.push(PointedEdge {
+            first,
+            second,
+            shape,
+        });
+    }
+    if remaining.is_empty() {
+        return Ok((Vec::new(), Vec::new()));
+    }
+
+    let seed = remaining.remove(0);
+    let mut first = seed.first;
+    let mut last = seed.second;
+    let mut sorted = std::collections::VecDeque::new();
+    sorted.push_back(seed.shape);
+
+    while !remaining.is_empty() {
+        let mut found = None;
+        for (index, candidate) in remaining.iter().enumerate() {
+            let square_distance = |a: Vector3, b: Vector3| {
+                let delta = a.sub(&b);
+                delta.dot(&delta)
+            };
+            if square_distance(candidate.first, last) <= squared_tolerance {
+                last = candidate.second;
+                sorted.push_back(candidate.shape.clone());
+                found = Some(index);
+                break;
+            } else if square_distance(candidate.second, first) <= squared_tolerance {
+                first = candidate.first;
+                sorted.push_front(candidate.shape.clone());
+                found = Some(index);
+                break;
+            } else if square_distance(candidate.second, last) <= squared_tolerance {
+                last = candidate.first;
+                match backend().reversed(&candidate.shape) {
+                    Ok(reversed) => sorted.push_back(reversed),
+                    Err(_) => sorted.push_back(candidate.shape.clone()),
+                }
+                found = Some(index);
+                break;
+            } else if square_distance(candidate.first, first) <= squared_tolerance {
+                first = candidate.second;
+                match backend().reversed(&candidate.shape) {
+                    Ok(reversed) => sorted.push_front(reversed),
+                    Err(_) => sorted.push_front(candidate.shape.clone()),
+                }
+                found = Some(index);
+                break;
+            }
+        }
+        match found {
+            Some(index) => {
+                remaining.remove(index);
+            }
+            None => break,
+        }
+        if first.distance(&last) <= tolerance {
+            // The chain closed: upstream stops here even if edges remain.
+            break;
+        }
+    }
+
+    Ok((
+        sorted.into_iter().collect(),
+        remaining.into_iter().map(|pointed| pointed.shape).collect(),
+    ))
+}
+
+/// The shapes in an edge list, rejecting anything that is not an edge.
+fn edge_argument_list(value: &Bound<'_, PyAny>) -> PyResult<Vec<Shape>> {
+    let mut edges = Vec::new();
+    for item in value.try_iter()? {
+        let item = item?;
+        let shape = item
+            .downcast::<PartShape>()
+            .map_err(|_| PyTypeError::new_err("item is not a shape"))?;
+        let shape = shape.borrow();
+        if shape.shape_type() != "Edge" {
+            return Err(PyTypeError::new_err("shape is not an edge"));
+        }
+        edges.push(
+            shape
+                .shape()
+                .ok_or_else(|| OCCError::new_err("a null shape is not an edge"))?,
+        );
+    }
+    Ok(edges)
+}
+
+fn edges_to_python(py: Python<'_>, edges: Vec<Shape>) -> PyResult<Vec<Py<PyEdge>>> {
+    edges
+        .into_iter()
+        .map(|shape| {
+            Py::new(
+                py,
+                PyEdge::from_entry(EdgeEntry {
+                    shape,
+                    curve: None,
+                }),
+            )
+        })
+        .collect()
+}
+
+/// `Part.__sortEdges__(edges)` → one chain of edges (upstream's `Module::sortEdges`).
+#[pyfunction(name = "__sortEdges__")]
+fn sortEdgesSingle(py: Python<'_>, obj: &Bound<'_, PyAny>) -> PyResult<Vec<Py<PyEdge>>> {
+    let edges = edge_argument_list(obj)?;
+    let (sorted, _unused) = sort_edge_chain(1e-7, edges).map_err(OCCError::new_err)?;
+    edges_to_python(py, sorted)
+}
+
+/// `Part.sortEdges(edges, tol3d=None)` → the connected chains (upstream's
+/// `Module::sortEdges2`).
+#[pyfunction]
+#[pyo3(signature = (obj, tol3d = None))]
+fn sortEdges(py: Python<'_>, obj: &Bound<'_, PyAny>, tol3d: Option<f64>) -> PyResult<Vec<Vec<Py<PyEdge>>>> {
+    let tolerance = tol3d.unwrap_or(1e-7);
+    let mut remaining = edge_argument_list(obj)?;
+    let mut clusters = Vec::new();
+    while !remaining.is_empty() {
+        let (sorted, unused) = sort_edge_chain(tolerance, remaining).map_err(OCCError::new_err)?;
+        remaining = unused;
+        clusters.push(edges_to_python(py, sorted)?);
+    }
+    Ok(clusters)
+}
+
 /// Degenerate face inputs are `ValueError` upstream (an empty compound or an
 /// open wire); kernel failures stay `Part.OCCError`.
 fn face_error(error: ferrocad_geom::GeomError) -> PyErr {
@@ -3422,6 +3797,10 @@ pub(crate) fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(makeCircle, m)?)?;
     m.add_function(wrap_pyfunction!(makePolygon, m)?)?;
     m.add_function(wrap_pyfunction!(makeFace, m)?)?;
+    m.add_function(wrap_pyfunction!(makeHelix, m)?)?;
+    m.add_function(wrap_pyfunction!(makeLongHelix, m)?)?;
+    m.add_function(wrap_pyfunction!(sortEdgesSingle, m)?)?;
+    m.add_function(wrap_pyfunction!(sortEdges, m)?)?;
     m.add("OCCError", m.py().get_type::<OCCError>())?;
     // `Part.Geom2d` is a submodule, as upstream (the classes live there rather
     // than directly on `Part`).

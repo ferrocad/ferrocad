@@ -17,8 +17,8 @@ use std::ffi::CString;
 use std::sync::{Arc, Mutex};
 
 use ferrocad_core::object_registry::{self, ObjectType};
-use ferrocad_core::{Document, Matrix4, ObjectId, Placement, Property, prop_status};
-use ferrocad_curves::{EdgeCurve, LineSegment, Vector3};
+use ferrocad_core::{Document, Matrix4, ObjectId, Placement, Property, Rotation, prop_status};
+use ferrocad_curves::{Arc as CurveArc, Circle, EdgeCurve, LineSegment, Vector3};
 use ferrocad_geom::{ElementKind, Lineage, Shape};
 use ferrocad_part::{
     make_shape_list_property, make_shape_property, shape_list_of, shape_of, ShapeListProperty,
@@ -28,7 +28,7 @@ use pyo3::exceptions::{
     PyAttributeError, PyDeprecationWarning, PyRuntimeError, PyTypeError, PyValueError,
 };
 use pyo3::prelude::*;
-use pyo3::types::{PyDict, PyList, PyModule};
+use pyo3::types::{PyDict, PyList, PyModule, PyTuple};
 
 use crate::containers::PyCompound;
 use crate::curves::{self, OCCError};
@@ -340,6 +340,11 @@ pub(crate) fn register_objects() {
     object_registry::register(SKETCH_TYPE, Arc::new(SketchObject));
     object_registry::register(BODY_TYPE, Arc::new(Body));
     object_registry::register(ADDITIVE_BOX_TYPE, Arc::new(AdditiveBox));
+    object_registry::register(TORUS_TYPE, Arc::new(TorusPrimitive));
+    object_registry::register(WEDGE_TYPE, Arc::new(WedgePrimitive));
+    object_registry::register(REVOLUTION_TYPE, Arc::new(Revolution));
+    object_registry::register(HELIX_TYPE, Arc::new(HelixPrimitive));
+    object_registry::register(SWEEP_TYPE, Arc::new(Sweep));
 }
 
 // ---------------------------------------------------------------------------
@@ -2166,6 +2171,1096 @@ impl ObjectType for Mirroring {
     }
 }
 
+// ---------------------------------------------------------------------------
+// Extended geometry: torus, wedge, revolution, tube and thread
+// ---------------------------------------------------------------------------
+
+/// Apply upstream's `gp_Ax2(pnt, dir)` frame to a shape that was built at the
+/// origin with its axis along +Z.
+fn locate(shape: Shape, base: Vector3, direction: Vector3) -> Result<Shape, String> {
+    let rotation = if direction.length() > CONFUSION {
+        Rotation::from_vectors(Vector3::new(0.0, 0.0, 1.0), direction)
+    } else {
+        Rotation::identity()
+    };
+    ferrocad_part::backend()
+        .place(&shape, &Placement { base, rotation })
+        .map_err(|error| error.to_string())
+}
+
+/// The kernel's `BRepPrimAPI_MakeTorus`, built from the seam's face/revolve pair.
+///
+/// Upstream's `TopoShape::makeTorus` makes exactly this construction: a circular
+/// arc of `radius2` in the XZ plane centred at `(radius1, 0, 0)`, closed with two
+/// radial segments into a sector, turned about the Z axis. A full section is a
+/// plain circle, so no closing segments are added.
+fn torus_shape(
+    radius1: f64,
+    radius2: f64,
+    angle1: f64,
+    angle2: f64,
+    angle3: f64,
+) -> Result<Shape, String> {
+    if radius1 < CONFUSION || radius2 < CONFUSION {
+        return Err("Radius of torus too small".to_string());
+    }
+    if !(angle1.is_finite() && angle2.is_finite() && angle3.is_finite()) {
+        return Err("Angle of torus is not finite".to_string());
+    }
+    let first = angle1.to_radians();
+    let last = angle2.to_radians();
+    let sweep = last - first;
+    if sweep.abs() <= 1e-12 || sweep.abs() > std::f64::consts::TAU + 1e-9 {
+        return Err("Angle range of torus is invalid".to_string());
+    }
+    let revolution = angle3.to_radians();
+    if revolution.abs() <= 1e-12 || revolution.abs() > std::f64::consts::TAU + 1e-9 {
+        return Err("Revolution angle of torus is invalid".to_string());
+    }
+
+    let backend = ferrocad_part::backend();
+    let circle = Circle::with_axis(
+        Vector3::new(radius1, 0.0, 0.0),
+        Vector3::new(0.0, 1.0, 0.0),
+        Vector3::new(1.0, 0.0, 0.0),
+        radius2,
+    )
+    .map_err(|error| error.to_string())?;
+
+    let mut edges = Vec::new();
+    if (sweep.abs() - std::f64::consts::TAU).abs() <= 1e-9 {
+        edges.push(
+            backend
+                .make_edge(&EdgeCurve::Circle(circle))
+                .map_err(|error| error.to_string())?,
+        );
+    } else {
+        let arc = CurveArc::new(circle, first, last).map_err(|error| error.to_string())?;
+        let start = arc.start();
+        let end = arc.end();
+        let center = circle.center();
+        edges.push(
+            backend
+                .make_edge(&EdgeCurve::Arc(arc))
+                .map_err(|error| error.to_string())?,
+        );
+        edges.push(
+            backend
+                .make_edge(&EdgeCurve::LineSegment(
+                    LineSegment::new(end, center).map_err(|error| error.to_string())?,
+                ))
+                .map_err(|error| error.to_string())?,
+        );
+        edges.push(
+            backend
+                .make_edge(&EdgeCurve::LineSegment(
+                    LineSegment::new(center, start).map_err(|error| error.to_string())?,
+                ))
+                .map_err(|error| error.to_string())?,
+        );
+    }
+
+    let wire = backend.make_wire(&edges).map_err(|error| error.to_string())?;
+    let face = backend
+        .make_face(&[wire])
+        .map_err(|error| error.to_string())?;
+    let axis = if revolution < 0.0 {
+        Vector3::new(0.0, 0.0, -1.0)
+    } else {
+        Vector3::new(0.0, 0.0, 1.0)
+    };
+    backend
+        .revolve(&face, Vector3::zero(), axis, revolution.abs())
+        .map_err(|error| error.to_string())
+}
+
+/// The ten parameters of `BRepPrim_Wedge`.
+struct WedgeParameters {
+    xmin: f64,
+    ymin: f64,
+    zmin: f64,
+    z2min: f64,
+    x2min: f64,
+    xmax: f64,
+    ymax: f64,
+    zmax: f64,
+    z2max: f64,
+    x2max: f64,
+}
+
+/// A closed polygon wire through `points`.
+fn polygon_wire(points: &[Vector3]) -> Result<Shape, String> {
+    let curves = ferrocad_curves::polygon(points, true).map_err(|error| error.to_string())?;
+    let backend = ferrocad_part::backend();
+    let mut edges = Vec::with_capacity(curves.len());
+    for curve in &curves {
+        edges.push(
+            backend
+                .make_edge(curve)
+                .map_err(|error| error.to_string())?,
+        );
+    }
+    backend
+        .make_wire(&edges)
+        .map_err(|error| error.to_string())
+}
+
+/// The dimension checks `BRepPrim_Wedge`/upstream's `makeWedge` perform.
+fn validate_wedge(parameters: &WedgeParameters) -> Result<(), String> {
+    let dx = parameters.xmax - parameters.xmin;
+    let dy = parameters.ymax - parameters.ymin;
+    let dz = parameters.zmax - parameters.zmin;
+    let dz2 = parameters.z2max - parameters.z2min;
+    let dx2 = parameters.x2max - parameters.x2min;
+    if dx < CONFUSION {
+        return Err("delta x of wedge too small".to_string());
+    }
+    if dy < CONFUSION {
+        return Err("delta y of wedge too small".to_string());
+    }
+    if dz < CONFUSION {
+        return Err("delta z of wedge too small".to_string());
+    }
+    if dz2 < 0.0 {
+        return Err("delta z2 of wedge is negative".to_string());
+    }
+    if dx2 < 0.0 {
+        return Err("delta x2 of wedge is negative".to_string());
+    }
+    Ok(())
+}
+
+/// `BRepPrim_Wedge` rebuilt as a ruled loft between its two rectangular faces.
+///
+/// The primitive is exactly the linear interpolation between the rectangle at
+/// `Y = ymin` (`[xmin, xmax] × [zmin, zmax]`) and the rectangle at `Y = ymax`
+/// (`[x2min, x2max] × [z2min, z2max]`); both are planar, so a two-section ruled
+/// loft is the same solid with no approximation.
+fn wedge_shape(parameters: &WedgeParameters) -> Result<Shape, String> {
+    validate_wedge(parameters)?;
+    let left = [
+        Vector3::new(parameters.xmin, parameters.ymin, parameters.zmin),
+        Vector3::new(parameters.xmax, parameters.ymin, parameters.zmin),
+        Vector3::new(parameters.xmax, parameters.ymin, parameters.zmax),
+        Vector3::new(parameters.xmin, parameters.ymin, parameters.zmax),
+    ];
+    let right = [
+        Vector3::new(parameters.x2min, parameters.ymax, parameters.z2min),
+        Vector3::new(parameters.x2max, parameters.ymax, parameters.z2min),
+        Vector3::new(parameters.x2max, parameters.ymax, parameters.z2max),
+        Vector3::new(parameters.x2min, parameters.ymax, parameters.z2max),
+    ];
+    let left = polygon_wire(&left)?;
+    let right = polygon_wire(&right)?;
+    ferrocad_part::backend()
+        .make_loft(&[left, right], true)
+        .map_err(|error| error.to_string())
+}
+
+/// `Shape.revolve` about an arbitrary axis, with upstream's angular bounds.
+fn revolution_shape(
+    source: &Shape,
+    base: Vector3,
+    axis: Vector3,
+    angle_radians: f64,
+) -> Result<Shape, String> {
+    if !axis.length().is_finite() || axis.length() <= CONFUSION {
+        return Err("Direction of revolution axis is zero-length".to_string());
+    }
+    if !angle_radians.is_finite() || angle_radians.abs() <= 1e-12 {
+        return Err("Angle of revolution is zero".to_string());
+    }
+    if angle_radians.abs() > std::f64::consts::TAU + 1e-9 {
+        return Err("Angle of revolution exceeds 360 degrees".to_string());
+    }
+    let (axis, angle) = if angle_radians < 0.0 {
+        (axis.neg(), -angle_radians)
+    } else {
+        (axis, angle_radians)
+    };
+    ferrocad_part::backend()
+        .revolve(source, base, axis, angle)
+        .map_err(|error| error.to_string())
+}
+
+/// The point of the edge's first vertex (the seam exposes no parameter query).
+fn edge_start(shape: &Shape) -> Option<Vector3> {
+    let backend = ferrocad_part::backend();
+    backend
+        .elements(shape, ElementKind::Vertex)
+        .first()
+        .and_then(|element| backend.vertex_point(&element.shape))
+}
+
+/// The frame at the start of an edge: `(point, unit tangent)`.
+///
+/// The seam exposes no parameter query, so this reads the analytic curve the
+/// backend reports. `curve_of` reports an edge's **basis** curve, so a line
+/// segment arrives as an infinite `Line`: the tangent is exact and the point is
+/// the edge's first vertex. A B-spline spine has no such description and is
+/// rejected rather than being oriented from a chord.
+fn spine_frame(shape: &Shape) -> Result<(Vector3, Vector3), String> {
+    match ferrocad_part::backend().curve_of(shape) {
+        Ok(EdgeCurve::LineSegment(segment)) => Ok((
+            segment.start(),
+            segment.end().sub(&segment.start()).normalize(),
+        )),
+        Ok(EdgeCurve::Line(line)) => match edge_start(shape) {
+            Some(start) => Ok((start, line.direction())),
+            None => Err("a tube needs a bounded edge".to_string()),
+        },
+        Ok(EdgeCurve::Arc(arc)) => Ok((arc.start(), arc.tangent_at(arc.first()))),
+        Ok(EdgeCurve::Circle(circle)) => Ok((circle.point_at(0.0), circle.tangent_at(0.0))),
+        Ok(EdgeCurve::Ellipse(ellipse)) => Ok((ellipse.point_at(0.0), ellipse.tangent_at(0.0))),
+        Err(_) => Err(
+            "makeTube cannot orient a circular profile around a B-spline spine: the seam \
+             exposes no tangent query for it. Use Part.makeSweepSurface with an explicit \
+             profile instead."
+                .to_string(),
+        ),
+    }
+}
+
+/// A circular profile centred on `frame`'s point, normal to its tangent.
+fn circular_profile(
+    start: Vector3,
+    tangent: Vector3,
+    radius: f64,
+) -> Result<Shape, String> {
+    let x_axis = plane_x_direction(&tangent);
+    let circle = Circle::with_axis(start, tangent, x_axis, radius)
+        .map_err(|error| error.to_string())?;
+    ferrocad_part::backend()
+        .make_edge(&EdgeCurve::Circle(circle))
+        .map_err(|error| error.to_string())
+}
+
+/// `TopoShape::makeTube`: a circular profile swept along the spine edge.
+fn tube_shape(spine: &Shape, radius: f64, tolerance: f64) -> Result<Shape, String> {
+    if radius < CONFUSION {
+        return Err("Radius of tube too small".to_string());
+    }
+    if !tolerance.is_finite() || tolerance <= 0.0 {
+        return Err("Tolerance of tube must be positive".to_string());
+    }
+    let (start, tangent) = spine_frame(spine)?;
+    let profile = circular_profile(start, tangent, radius)?;
+    ferrocad_part::backend()
+        .make_pipe(spine, &profile, tolerance)
+        .map_err(|error| error.to_string())
+}
+
+/// `TopoShape::makeThread` in this seam: a helical circular pipe.
+///
+/// Upstream builds a solid from two thread-profile wires on coaxial cylinders;
+/// the seam has no through-sections between wires, so the thread is built the way
+/// the task asks: the helix edge is swept with a circular profile of radius
+/// `depth / 2`, giving a helical tube that spans `depth` radially.
+fn thread_shape(pitch: f64, depth: f64, height: f64, radius: f64) -> Result<Shape, String> {
+    if pitch < CONFUSION {
+        return Err("Pitch of thread too small".to_string());
+    }
+    if depth < CONFUSION {
+        return Err("Depth of thread too small".to_string());
+    }
+    if height < CONFUSION {
+        return Err("Height of thread too small".to_string());
+    }
+    if radius < CONFUSION {
+        return Err("Radius of thread too small".to_string());
+    }
+    let geometry = curves::helix_geometry(pitch, height, radius, 0.0, false, false)
+        .map_err(|error| error.to_string())?;
+    let spine = ferrocad_part::backend()
+        .make_bspline_edge(&geometry.points, false)
+        .map_err(|error| error.to_string())?;
+    let profile = circular_profile(geometry.start, geometry.tangent, depth * 0.5)?;
+    ferrocad_part::backend()
+        .make_pipe(&spine, &profile, 1e-3)
+        .map_err(|error| error.to_string())
+}
+
+/// `Part.makeTorus(radius1, radius2, pnt=None, dir=None, angle1=0, angle2=360, angle=360)`
+/// → a torus solid.
+///
+/// `angle1`/`angle2` span the tube's cross-section (degrees) and `angle` the
+/// revolution, exactly as `BRepPrimAPI_MakeTorus`.
+#[pyfunction]
+#[pyo3(signature = (radius1, radius2, pnt = None, dir = None, angle1 = 0.0, angle2 = 360.0, angle = 360.0))]
+fn makeTorus(
+    radius1: f64,
+    radius2: f64,
+    pnt: Option<&Bound<'_, PyAny>>,
+    dir: Option<&Bound<'_, PyAny>>,
+    angle1: f64,
+    angle2: f64,
+    angle: f64,
+) -> PyResult<PartShape> {
+    let shape = torus_shape(radius1, radius2, angle1, angle2, angle)
+        .map_err(OCCError::new_err)?;
+    let base = pnt
+        .map(curves::vector)
+        .transpose()?
+        .unwrap_or_else(Vector3::zero);
+    let direction = dir
+        .map(curves::vector)
+        .transpose()?
+        .unwrap_or_else(|| Vector3::new(0.0, 0.0, 1.0));
+    let shape = locate(shape, base, direction).map_err(OCCError::new_err)?;
+    Ok(PartShape::from_shape(shape))
+}
+
+/// `Part.makeWedge(xmin, ymin, zmin, z2min, x2min, xmax, ymax, zmax, z2max,
+/// x2max, pnt=None, dir=None)` → a wedge solid.
+///
+/// This is `BRepPrim_Wedge`'s ten-parameter form, as upstream's `makeWedge`. The
+/// seven-parameter shorthand `(lx, ly, lz, lxmin, lzmin, lxmax, lzmax)` is also
+/// accepted: it places the first rectangle on the origin plane, i.e. `Xmin = Ymin
+/// = Zmin = 0`, `Xmax = lx`, `Ymax = ly`, `Zmax = lz`, `X2min = lxmin`, `Z2min =
+/// lzmin`, `X2max = lxmax`, `Z2max = lzmax`.
+#[pyfunction]
+#[pyo3(signature = (*args, pnt = None, dir = None))]
+fn makeWedge(
+    args: &Bound<'_, PyTuple>,
+    pnt: Option<&Bound<'_, PyAny>>,
+    dir: Option<&Bound<'_, PyAny>>,
+) -> PyResult<PartShape> {
+    let mut values: Vec<f64> = Vec::new();
+    let mut positional_pnt: Option<Vector3> = None;
+    let mut positional_dir: Option<Vector3> = None;
+    for index in 0..args.len() {
+        let value = args.get_item(index)?;
+        if let Ok(number) = value.extract::<f64>() {
+            values.push(number);
+        } else if positional_pnt.is_none() {
+            positional_pnt = Some(curves::vector(&value)?);
+        } else if positional_dir.is_none() {
+            positional_dir = Some(curves::vector(&value)?);
+        } else {
+            return Err(PyTypeError::new_err("too many arguments to makeWedge"));
+        }
+    }
+    let parameters = match values.as_slice() {
+        [xmin, ymin, zmin, z2min, x2min, xmax, ymax, zmax, z2max, x2max] => WedgeParameters {
+            xmin: *xmin,
+            ymin: *ymin,
+            zmin: *zmin,
+            z2min: *z2min,
+            x2min: *x2min,
+            xmax: *xmax,
+            ymax: *ymax,
+            zmax: *zmax,
+            z2max: *z2max,
+            x2max: *x2max,
+        },
+        [lx, ly, lz, lxmin, lzmin, lxmax, lzmax] => WedgeParameters {
+            xmin: 0.0,
+            ymin: 0.0,
+            zmin: 0.0,
+            z2min: *lzmin,
+            x2min: *lxmin,
+            xmax: *lx,
+            ymax: *ly,
+            zmax: *lz,
+            z2max: *lzmax,
+            x2max: *lxmax,
+        },
+        _ => {
+            return Err(PyTypeError::new_err(
+                "makeWedge expects the ten OCC parameters (xmin, ymin, zmin, z2min, \
+                 x2min, xmax, ymax, zmax, z2max, x2max) or the seven-parameter \
+                 shorthand (lx, ly, lz, lxmin, lzmin, lxmax, lzmax)",
+            ))
+        }
+    };
+    validate_wedge(&parameters).map_err(PyValueError::new_err)?;
+    let shape = wedge_shape(&parameters).map_err(OCCError::new_err)?;
+    let base = match pnt {
+        Some(value) => curves::vector(value)?,
+        None => positional_pnt.unwrap_or_else(Vector3::zero),
+    };
+    let direction = match dir {
+        Some(value) => curves::vector(value)?,
+        None => positional_dir.unwrap_or_else(|| Vector3::new(0.0, 0.0, 1.0)),
+    };
+    let shape = locate(shape, base, direction).map_err(OCCError::new_err)?;
+    Ok(PartShape::from_shape(shape))
+}
+
+/// The shape a revolution input names: a `Part.Shape`, an edge, or an analytic
+/// geometry object with `toShape()` (`Part.Circle`, `Part.LineSegment`, …).
+fn revolution_source(value: &Bound<'_, PyAny>) -> PyResult<Shape> {
+    if let Ok(shape) = value.downcast::<PartShape>() {
+        return shape
+            .borrow()
+            .shape()
+            .ok_or_else(|| OCCError::new_err("shape is empty"));
+    }
+    let converted = value.call_method0("toShape").map_err(|_| {
+        PyTypeError::new_err("makeRevolution expects a shape, an edge or a geometry")
+    })?;
+    let shape = converted.downcast::<PartShape>().map_err(|_| {
+        PyTypeError::new_err("the geometry's toShape() did not return a Part.Shape")
+    })?;
+    shape
+        .borrow()
+        .shape()
+        .ok_or_else(|| OCCError::new_err("shape is empty"))
+}
+
+/// `Part.makeRevolution(shape, vmin=None, vmax=None, angle=360, pnt=None,
+/// dir=None, shapetype=None)` → the revolved shape.
+///
+/// Upstream revolves a curve or an edge about the axis through `pnt` along `dir`.
+/// `vmin`/`vmax` trim the curve's parameter range: a curve geometry is trimmed
+/// with its own `trim`, while an edge is reported because the seam exposes no
+/// edge parameter query. The shape is revolved with the backend's `revolve`.
+///
+/// The shorthand `makeRevolution(shape, axis, angle=360, solid=False)` is also
+/// accepted when the second positional argument is a vector: `axis` becomes
+/// `dir` and `solid` asks for a `Part.Solid` result.
+#[pyfunction]
+#[pyo3(signature = (curve, *args, pnt = None, dir = None, shapetype = None))]
+fn makeRevolution(
+    curve: &Bound<'_, PyAny>,
+    args: &Bound<'_, PyTuple>,
+    pnt: Option<&Bound<'_, PyAny>>,
+    dir: Option<&Bound<'_, PyAny>>,
+    shapetype: Option<&Bound<'_, PyAny>>,
+) -> PyResult<PartShape> {
+    let mut base = pnt.map(curves::vector).transpose()?;
+    let mut direction = dir.map(curves::vector).transpose()?;
+    let mut angle = 360.0f64;
+    let mut solid = false;
+    let mut vmin: Option<f64> = None;
+    let mut vmax: Option<f64> = None;
+    let mut wanted_type: Option<String> = shapetype
+        .and_then(|value| value.getattr("__name__").ok())
+        .and_then(|name| name.extract::<String>().ok());
+
+    let positional_is_range = if args.is_empty() {
+        true
+    } else {
+        let first = args.get_item(0)?;
+        // A leading `None` is upstream's `vmin=None`; a float is a range too.
+        first.is_none() || first.extract::<f64>().is_ok()
+    };
+    if positional_is_range {
+        let get = |index: usize| -> PyResult<Option<Bound<'_, PyAny>>> {
+            if args.len() > index {
+                let value = args.get_item(index)?;
+                Ok((!value.is_none()).then_some(value))
+            } else {
+                Ok(None)
+            }
+        };
+        vmin = get(0)?.map(|value| value.extract::<f64>()).transpose()?;
+        vmax = get(1)?.map(|value| value.extract::<f64>()).transpose()?;
+        if let Some(value) = get(2)? {
+            angle = value.extract::<f64>()?;
+        }
+        if let Some(value) = get(3)? {
+            base = Some(curves::vector(&value)?);
+        }
+        if let Some(value) = get(4)? {
+            direction = Some(curves::vector(&value)?);
+        }
+        if let Some(value) = get(5)? {
+            wanted_type = value
+                .getattr("__name")
+                .ok()
+                .and_then(|name| name.extract::<String>().ok());
+        }
+    } else {
+        // The task's shorthand: (shape, axis, angle=360, solid=False).
+        direction = Some(curves::vector(&args.get_item(0)?)?);
+        if args.len() > 1 {
+            let value = args.get_item(1)?;
+            if !value.is_none() {
+                angle = value.extract::<f64>()?;
+            }
+        }
+        if args.len() > 2 {
+            solid = args.get_item(2)?.extract::<bool>()?;
+        }
+    }
+
+    if vmin.is_some() || vmax.is_some() {
+        // Upstream trims the curve to `[vmin, vmax]`. An analytic geometry exposes
+        // `trim`; an edge would need its parameter range, which the seam cannot
+        // report, so that case is refused rather than silently ignored.
+        if curve.downcast::<PartShape>().is_ok() {
+            return Err(OCCError::new_err(
+                "makeRevolution: trimming an edge with vmin/vmax is not implemented \
+                 (the seam exposes no edge parameter query); pass a curve geometry \
+                 instead",
+            ));
+        }
+    }
+
+    let source = if vmin.is_some() || vmax.is_some() {
+        let trimmed = curve.call_method1("trim", (vmin, vmax)).map_err(|_| {
+            OCCError::new_err(
+                "makeRevolution: this geometry cannot be trimmed with vmin/vmax",
+            )
+        })?;
+        revolution_source(&trimmed)?
+    } else {
+        revolution_source(curve)?
+    };
+    let base = base.unwrap_or_else(Vector3::zero);
+    let direction = direction.unwrap_or_else(|| Vector3::new(0.0, 0.0, 1.0));
+    let mut shape = revolution_shape(&source, base, direction, angle.to_radians())
+        .map_err(OCCError::new_err)?;
+    if solid {
+        shape = single_solid(shape).map_err(OCCError::new_err)?;
+    }
+    if let Some(wanted) = wanted_type {
+        let natural = PartShape::from_shape(shape.clone()).shape_type();
+        if wanted != natural {
+            return Err(OCCError::new_err(format!(
+                "makeRevolution: converting the revolved {natural} to {wanted} is not \
+                 implemented; pass shapetype=None for the natural result"
+            )));
+        }
+    }
+    Ok(PartShape::from_shape(shape))
+}
+
+/// `Part.makeTube(edge, radius, tolerance=1e-3)` → the tube surface around `edge`.
+///
+/// Upstream's `TopoShape::makeTube` sweeps a circle along the spine with a
+/// corrected-Frenet law. The seam's `make_pipe` is the kernel's `MakePipe`; with a
+/// circular profile placed at the spine's start and normal to its tangent it is
+/// the same tube for an analytic spine. The upstream extra arguments `scont`,
+/// `maxdegree` and `maxsegment` are accepted but have no effect: `make_pipe` takes
+/// only an approximation tolerance.
+#[pyfunction]
+#[pyo3(signature = (edge, radius, *args, tolerance = 0.001))]
+fn makeTube(
+    edge: &Bound<'_, PyAny>,
+    radius: f64,
+    args: &Bound<'_, PyTuple>,
+    tolerance: f64,
+) -> PyResult<PartShape> {
+    let tolerance = match args.get_item(0) {
+        Ok(value) if value.extract::<f64>().is_ok() => value.extract::<f64>()?,
+        // Upstream's `scont` is a string; the remaining arguments are approximation
+        // settings that `make_pipe` does not take.
+        _ => tolerance,
+    };
+    let spine = shape_argument(edge)?;
+    let shape = tube_shape(&spine, radius, tolerance).map_err(OCCError::new_err)?;
+    Ok(PartShape::from_shape(shape))
+}
+
+/// `Part.makeThread(pitch, depth, height, radius)` → a helical pipe.
+///
+/// Upstream builds a thread solid from two thread-profile wires; the seam has no
+/// through-sections, so this builds the helix and sweeps a circular profile of
+/// radius `depth / 2` along it with `make_pipe` (a `makePipeShell`-style sweep).
+#[pyfunction]
+#[pyo3(signature = (pitch, depth, height, radius))]
+fn makeThread(pitch: f64, depth: f64, height: f64, radius: f64) -> PyResult<PartShape> {
+    let shape = thread_shape(pitch, depth, height, radius).map_err(OCCError::new_err)?;
+    Ok(PartShape::from_shape(shape))
+}
+
+/// The single solid in `shape`, or a solid built from its single shell.
+///
+/// A revolve/pipe may already be a solid; otherwise one closed shell is promoted
+/// (which `BRepBuilderAPI_MakeSolid` accepts) and anything else is reported.
+fn single_solid(shape: Shape) -> Result<Shape, String> {
+    let backend = ferrocad_part::backend();
+    if !backend.elements(&shape, ElementKind::Solid).is_empty() {
+        return Ok(shape);
+    }
+    let shells = backend.elements(&shape, ElementKind::Shell);
+    match shells.as_slice() {
+        [shell] => {
+            let solid = backend
+                .make_solid(&shell.shape)
+                .map_err(|error| error.to_string())?;
+            // Promoting an open shell yields an invalid solid; report it rather
+            // than storing geometry the kernel considers broken.
+            if !backend.is_valid(&solid) {
+                return Err(
+                    "the result is an open shell and cannot become a solid".to_string(),
+                );
+            }
+            Ok(solid)
+        }
+        [] => Err("the result contains no solid or shell".to_string()),
+        _ => Err("the result has several shells, so it cannot become one solid".to_string()),
+    }
+}
+
+/// The object's baked `Placement`, when it has one.
+fn placement_property(doc: &Document, id: ObjectId) -> Option<Placement> {
+    match doc.object(id)?.properties.get("Placement")? {
+        Property::Placement(value) => Some(*value),
+        _ => None,
+    }
+}
+
+fn apply_object_placement(doc: &Document, id: ObjectId, shape: Shape) -> Result<Shape, String> {
+    match placement_property(doc, id) {
+        Some(placement) => ferrocad_part::backend()
+            .place(&shape, &placement)
+            .map_err(|error| error.to_string()),
+        None => Ok(shape),
+    }
+}
+
+/// The object names of a `LinkList` property.
+fn link_list_property(doc: &Document, id: ObjectId, name: &str) -> Vec<String> {
+    match doc.object(id).and_then(|object| object.properties.get(name)) {
+        Some(Property::LinkList(names)) => names.clone(),
+        _ => Vec::new(),
+    }
+}
+
+/// Resolve every sub-shape a link names, or the whole linked shape when it names
+/// no sub-elements.
+fn linked_sub_shapes(doc: &Document, link: &(String, Vec<String>)) -> Result<Vec<Shape>, String> {
+    let (name, subs) = link;
+    let id = doc
+        .get_by_name(name)
+        .ok_or_else(|| format!("no object named {name}"))?;
+    let base = doc
+        .object(id)
+        .and_then(|object| object.properties.get(SHAPE))
+        .and_then(shape_of)
+        .and_then(|property| property.shape())
+        .ok_or_else(|| format!("object {name} has no shape"))?;
+    if subs.is_empty() {
+        return Ok(vec![base]);
+    }
+    subs.iter()
+        .map(|sub| {
+            ferrocad_part::backend()
+                .resolve(&base, sub)
+                .ok_or_else(|| format!("object {name} has no sub-shape {sub}"))
+        })
+        .collect()
+}
+
+/// The spine of a sweep: one shape, or the named sub-edges joined into a wire.
+fn sweep_spine(doc: &Document, link: &(String, Vec<String>)) -> Result<Shape, String> {
+    let shapes = linked_sub_shapes(doc, link)?;
+    match shapes.len() {
+        0 => Err("No spine".to_string()),
+        1 => Ok(shapes.into_iter().next().expect("one shape")),
+        _ => ferrocad_part::backend()
+            .make_wire(&shapes)
+            .map_err(|error| error.to_string()),
+    }
+}
+
+/// A solid sweep needs a face section; a wire is filled first.
+fn sweep_section_face(profile: &Shape) -> Result<Shape, String> {
+    let backend = ferrocad_part::backend();
+    match PartShape::from_shape(profile.clone()).shape_type() {
+        "Face" => Ok(profile.clone()),
+        "Wire" => backend
+            .make_face(std::slice::from_ref(profile))
+            .map_err(|error| error.to_string()),
+        kind => Err(format!(
+            "a solid sweep needs a wire or a face section, got {kind}"
+        )),
+    }
+}
+
+/// The unit direction of an axis edge (upstream `Revolution::fetchAxisLink`).
+fn axis_from_edge(shape: &Shape) -> Result<(Vector3, Vector3, Option<f64>), String> {
+    let backend = ferrocad_part::backend();
+    let flipped = backend.orientation(shape) == Some("Reversed");
+    let (center, direction, span) = match backend.curve_of(shape) {
+        Ok(EdgeCurve::LineSegment(segment)) => {
+            let point = if flipped {
+                segment.start()
+            } else {
+                segment.end()
+            };
+            let direction = segment.end().sub(&segment.start()).normalize();
+            (point, direction, None)
+        }
+        Ok(EdgeCurve::Line(line)) => (line.origin(), line.direction(), None),
+        Ok(EdgeCurve::Circle(circle)) => (
+            circle.center(),
+            circle.normal(),
+            Some(std::f64::consts::TAU),
+        ),
+        Ok(EdgeCurve::Arc(arc)) => (
+            arc.circle().center(),
+            arc.circle().normal(),
+            Some(arc.sweep().abs()),
+        ),
+        _ => {
+            return Err("AxisLink edge is neither line nor arc of circle.".to_string())
+        }
+    };
+    let direction = if flipped { direction.neg() } else { direction };
+    Ok((center, direction, span))
+}
+
+/// A rotation by `angle` about the axis through `base`.
+fn rotation_about(base: Vector3, axis: Vector3, angle: f64) -> Matrix4 {
+    let rotation = Rotation::from_axis_angle(&axis, angle).to_matrix();
+    let mut to_origin = Matrix4::identity();
+    to_origin.m[3] = -base.x;
+    to_origin.m[7] = -base.y;
+    to_origin.m[11] = -base.z;
+    let mut from_origin = Matrix4::identity();
+    from_origin.m[3] = base.x;
+    from_origin.m[7] = base.y;
+    from_origin.m[11] = base.z;
+    from_origin.mul(&rotation).mul(&to_origin)
+}
+
+// ---------------------------------------------------------------------------
+// Document types: `Part::Torus`, `Part::Wedge`, `Part::Revolution`,
+// `Part::Helix`, `Part::Sweep`
+// ---------------------------------------------------------------------------
+
+/// `Part::Torus` (`PrimitiveFeature.cpp`).
+pub const TORUS_TYPE: &str = "Part::Torus";
+/// `Part::Wedge` (`PrimitiveFeature.cpp`).
+pub const WEDGE_TYPE: &str = "Part::Wedge";
+/// `Part::Revolution` (`FeatureRevolution.cpp`).
+pub const REVOLUTION_TYPE: &str = "Part::Revolution";
+/// `Part::Helix` (`PrimitiveFeature.cpp`).
+pub const HELIX_TYPE: &str = "Part::Helix";
+/// `Part::Sweep` (`PartFeatures.cpp`).
+pub const SWEEP_TYPE: &str = "Part::Sweep";
+
+fn placement_property_entry() -> (String, Property, u32) {
+    (
+        "Placement".to_string(),
+        Property::Placement(Placement::identity()),
+        prop_status::NONE,
+    )
+}
+
+/// `Part::Torus`: `Radius1`/`Radius2`, the two cross-section angles and the
+/// revolution angle, exactly upstream's primitive.
+struct TorusPrimitive;
+
+impl ObjectType for TorusPrimitive {
+    fn default_properties(&self) -> Vec<(String, Property, u32)> {
+        vec![
+            ("Radius1".to_string(), Property::Float(10.0), prop_status::NONE),
+            ("Radius2".to_string(), Property::Float(2.0), prop_status::NONE),
+            ("Angle1".to_string(), Property::Float(-180.0), prop_status::NONE),
+            ("Angle2".to_string(), Property::Float(180.0), prop_status::NONE),
+            ("Angle3".to_string(), Property::Float(360.0), prop_status::NONE),
+            placement_property_entry(),
+            output_property(),
+        ]
+    }
+
+    fn property_meta(&self, name: &str) -> Option<(String, String)> {
+        Some(("Torus".to_string(), format!("Part torus {name}")))
+    }
+
+    fn execute(&self, doc: &mut Document, id: ObjectId) {
+        let result = (|| -> Result<Shape, String> {
+            let shape = torus_shape(
+                float_property(doc, id, "Radius1", 10.0),
+                float_property(doc, id, "Radius2", 2.0),
+                float_property(doc, id, "Angle1", -180.0),
+                float_property(doc, id, "Angle2", 180.0),
+                float_property(doc, id, "Angle3", 360.0),
+            )?;
+            apply_object_placement(doc, id, shape)
+        })();
+        store(doc, id, result);
+    }
+}
+
+/// `Part::Wedge`: `BRepPrim_Wedge`'s ten coordinates.
+struct WedgePrimitive;
+
+impl ObjectType for WedgePrimitive {
+    fn default_properties(&self) -> Vec<(String, Property, u32)> {
+        vec![
+            ("Xmin".to_string(), Property::Float(0.0), prop_status::NONE),
+            ("Ymin".to_string(), Property::Float(0.0), prop_status::NONE),
+            ("Zmin".to_string(), Property::Float(0.0), prop_status::NONE),
+            ("X2min".to_string(), Property::Float(2.0), prop_status::NONE),
+            ("Z2min".to_string(), Property::Float(2.0), prop_status::NONE),
+            ("Xmax".to_string(), Property::Float(10.0), prop_status::NONE),
+            ("Ymax".to_string(), Property::Float(10.0), prop_status::NONE),
+            ("Zmax".to_string(), Property::Float(10.0), prop_status::NONE),
+            ("X2max".to_string(), Property::Float(8.0), prop_status::NONE),
+            ("Z2max".to_string(), Property::Float(8.0), prop_status::NONE),
+            placement_property_entry(),
+            output_property(),
+        ]
+    }
+
+    fn property_meta(&self, name: &str) -> Option<(String, String)> {
+        Some(("Wedge".to_string(), format!("Part wedge {name}")))
+    }
+
+    fn execute(&self, doc: &mut Document, id: ObjectId) {
+        let result = (|| -> Result<Shape, String> {
+            let parameters = WedgeParameters {
+                xmin: float_property(doc, id, "Xmin", 0.0),
+                ymin: float_property(doc, id, "Ymin", 0.0),
+                zmin: float_property(doc, id, "Zmin", 0.0),
+                z2min: float_property(doc, id, "Z2min", 2.0),
+                x2min: float_property(doc, id, "X2min", 2.0),
+                xmax: float_property(doc, id, "Xmax", 10.0),
+                ymax: float_property(doc, id, "Ymax", 10.0),
+                zmax: float_property(doc, id, "Zmax", 10.0),
+                z2max: float_property(doc, id, "Z2max", 8.0),
+                x2max: float_property(doc, id, "X2max", 8.0),
+            };
+            let shape = wedge_shape(&parameters)?;
+            apply_object_placement(doc, id, shape)
+        })();
+        store(doc, id, result);
+    }
+}
+
+/// `Part::Revolution`: `Source` revolved about `Base`/`Axis` (or the edge named by
+/// `AxisLink`) by `Angle` degrees.
+///
+/// `Symmetric` rotates the profile back by half the angle first, as upstream.
+/// `FaceMakerClass` is accepted for compatibility; the seam's `revolve` already
+/// returns a solid for a face and a face for an edge.
+struct Revolution;
+
+impl ObjectType for Revolution {
+    fn default_properties(&self) -> Vec<(String, Property, u32)> {
+        vec![
+            (
+                "Source".to_string(),
+                Property::Link(String::new()),
+                prop_status::NONE,
+            ),
+            (
+                "Base".to_string(),
+                Property::Vector(Vector3::zero()),
+                prop_status::NONE,
+            ),
+            (
+                "Axis".to_string(),
+                Property::Vector(Vector3::new(0.0, 0.0, 1.0)),
+                prop_status::NONE,
+            ),
+            (
+                "AxisLink".to_string(),
+                Property::LinkSub(String::new(), Vec::new()),
+                prop_status::NONE,
+            ),
+            ("Angle".to_string(), Property::Float(360.0), prop_status::NONE),
+            ("Symmetric".to_string(), Property::Bool(false), prop_status::NONE),
+            ("Solid".to_string(), Property::Bool(false), prop_status::NONE),
+            (
+                "FaceMakerClass".to_string(),
+                Property::String("Part::FaceMakerUnified".to_string()),
+                prop_status::NONE,
+            ),
+            placement_property_entry(),
+            output_property(),
+        ]
+    }
+
+    fn property_meta(&self, name: &str) -> Option<(String, String)> {
+        Some(("Revolve".to_string(), format!("Part revolution {name}")))
+    }
+
+    fn execute(&self, doc: &mut Document, id: ObjectId) {
+        let result = (|| -> Result<Shape, String> {
+            let source_link = link_sub_property(doc, id, "Source")
+                .ok_or_else(|| "No object linked".to_string())?;
+            let mut source = linked_shape(doc, &source_link)?;
+            let mut base = vector_property(doc, id, "Base").unwrap_or_else(Vector3::zero);
+            let mut axis = vector_property(doc, id, "Axis")
+                .unwrap_or_else(|| Vector3::new(0.0, 0.0, 1.0));
+            let mut angle = float_property(doc, id, "Angle", 360.0).to_radians();
+            if let Some(axis_link) = link_sub_property(doc, id, "AxisLink") {
+                let edge = linked_shape(doc, &axis_link)?;
+                let (center, direction, span) = axis_from_edge(&edge)?;
+                base = center;
+                axis = direction;
+                if angle.abs() < 1e-12 {
+                    angle = span.unwrap_or(0.0);
+                }
+            }
+            if bool_property(doc, id, "Symmetric", false) {
+                let matrix = rotation_about(base, axis, -0.5 * angle);
+                source = ferrocad_part::backend()
+                    .transform(&source, &matrix)
+                    .map_err(|error| error.to_string())?;
+            }
+            let mut shape = revolution_shape(&source, base, axis, angle)?;
+            if bool_property(doc, id, "Solid", false) {
+                shape = single_solid(shape)?;
+            }
+            apply_object_placement(doc, id, shape)
+        })();
+        store(doc, id, result);
+    }
+}
+
+/// `Part::Helix`: upstream's `Pitch`/`Height`/`Radius`/`Angle` primitive.
+///
+/// `Length` is the edge's linear length, recomputed on every execution.
+/// `SegmentLength` only subdivides upstream's wire and `Style` is ignored by
+/// upstream's own `execute`, so neither changes the geometry here either.
+struct HelixPrimitive;
+
+impl ObjectType for HelixPrimitive {
+    fn default_properties(&self) -> Vec<(String, Property, u32)> {
+        vec![
+            ("Pitch".to_string(), Property::Float(1.0), prop_status::NONE),
+            ("Height".to_string(), Property::Float(2.0), prop_status::NONE),
+            ("Radius".to_string(), Property::Float(1.0), prop_status::NONE),
+            ("SegmentLength".to_string(), Property::Float(0.0), prop_status::NONE),
+            ("Angle".to_string(), Property::Float(0.0), prop_status::NONE),
+            (
+                "LocalCoord".to_string(),
+                Property::Enumeration(
+                    vec!["Right-handed".to_string(), "Left-handed".to_string()],
+                    0,
+                ),
+                prop_status::NONE,
+            ),
+            (
+                "Style".to_string(),
+                Property::Enumeration(
+                    vec!["Old style".to_string(), "New style".to_string()],
+                    0,
+                ),
+                prop_status::HIDDEN,
+            ),
+            (
+                "Length".to_string(),
+                Property::Float(0.0),
+                prop_status::READONLY,
+            ),
+            placement_property_entry(),
+            output_property(),
+        ]
+    }
+
+    fn property_meta(&self, name: &str) -> Option<(String, String)> {
+        Some(("Helix".to_string(), format!("Part helix {name}")))
+    }
+
+    fn execute(&self, doc: &mut Document, id: ObjectId) {
+        let result = (|| -> Result<Shape, String> {
+            let pitch = float_property(doc, id, "Pitch", 1.0);
+            if pitch < CONFUSION {
+                return Err("Pitch too small".to_string());
+            }
+            let height = float_property(doc, id, "Height", 2.0);
+            let radius = float_property(doc, id, "Radius", 1.0);
+            let angle = float_property(doc, id, "Angle", 0.0);
+            let turns = height / pitch;
+            if turns > 1e4 {
+                return Err("Number of turns too high (> 1e4)".to_string());
+            }
+            let left_handed = enum_index_property(doc, id, "LocalCoord") == 1;
+            let shape = curves::helix_shape(pitch, height, radius, angle, left_handed, false)?;
+            apply_object_placement(doc, id, shape)
+        })();
+        if let Ok(shape) = &result {
+            if let Some(mass) = ferrocad_part::backend().mass_properties(shape) {
+                doc.set_property_raw(id, "Length", Property::Float(mass.length));
+            }
+        }
+        store(doc, id, result);
+    }
+}
+
+/// `Part::Sweep`: `Sections` swept along `Spine`.
+///
+/// The seam's `make_pipe` sweeps one profile; a multi-section sweep is reported
+/// rather than silently using the first section. A `Solid` sweep sweeps the
+/// section's filled face, which is the same volume for a closed planar section.
+/// `Frenet`, `Transition` and `Linearize` are accepted for upstream compatibility;
+/// `make_pipe` uses the kernel's own `MakePipe` frame and transition.
+struct Sweep;
+
+impl ObjectType for Sweep {
+    fn default_properties(&self) -> Vec<(String, Property, u32)> {
+        vec![
+            (
+                "Sections".to_string(),
+                Property::LinkList(Vec::new()),
+                prop_status::NONE,
+            ),
+            (
+                "Spine".to_string(),
+                Property::LinkSub(String::new(), Vec::new()),
+                prop_status::NONE,
+            ),
+            ("Solid".to_string(), Property::Bool(true), prop_status::NONE),
+            ("Frenet".to_string(), Property::Bool(true), prop_status::NONE),
+            (
+                "Transition".to_string(),
+                Property::Enumeration(
+                    vec![
+                        "Transformed".to_string(),
+                        "Right corner".to_string(),
+                        "Round corner".to_string(),
+                    ],
+                    1,
+                ),
+                prop_status::NONE,
+            ),
+            ("Linearize".to_string(), Property::Bool(false), prop_status::NONE),
+            placement_property_entry(),
+            output_property(),
+        ]
+    }
+
+    fn property_meta(&self, name: &str) -> Option<(String, String)> {
+        Some(("Sweep".to_string(), format!("Part sweep {name}")))
+    }
+
+    fn execute(&self, doc: &mut Document, id: ObjectId) {
+        let result = (|| -> Result<Shape, String> {
+            let sections = link_list_property(doc, id, "Sections");
+            if sections.is_empty() {
+                return Err("No sections linked.".to_string());
+            }
+            let spine_link = link_sub_property(doc, id, "Spine")
+                .ok_or_else(|| "No spine".to_string())?;
+            let spine = sweep_spine(doc, &spine_link)?;
+            let profiles = sections
+                .iter()
+                .map(|name| linked_shape(doc, &(name.clone(), Vec::new())))
+                .collect::<Result<Vec<_>, _>>()?;
+            if profiles.len() != 1 {
+                return Err(
+                    "a sweep through several sections is not implemented: the seam's \
+                     make_pipe sweeps a single profile"
+                        .to_string(),
+                );
+            }
+            let solid = bool_property(doc, id, "Solid", true);
+            let profile = if solid {
+                sweep_section_face(&profiles[0])?
+            } else {
+                profiles[0].clone()
+            };
+            let mut shape = ferrocad_part::backend()
+                .make_pipe(&spine, &profile, 1e-3)
+                .map_err(|error| error.to_string())?;
+            if solid {
+                shape = single_solid(shape)?;
+            }
+            apply_object_placement(doc, id, shape)
+        })();
+        store(doc, id, result);
+    }
+}
+
 pub(crate) fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyShell>()?;
     m.add_class::<PySolid>()?;
@@ -2196,6 +3291,11 @@ pub(crate) fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(makeLoft, m)?)?;
     m.add_function(wrap_pyfunction!(makeRuledSurface, m)?)?;
     m.add_function(wrap_pyfunction!(makeFilledFace, m)?)?;
+    m.add_function(wrap_pyfunction!(makeTorus, m)?)?;
+    m.add_function(wrap_pyfunction!(makeWedge, m)?)?;
+    m.add_function(wrap_pyfunction!(makeRevolution, m)?)?;
+    m.add_function(wrap_pyfunction!(makeTube, m)?)?;
+    m.add_function(wrap_pyfunction!(makeThread, m)?)?;
     // `curves::register` runs first and owns the ordinary makers; this override
     // adds the segmentation dispatch `FaceMakerBuildFace` needs.  Keep it last so
     // the module attribute is the one registered here.

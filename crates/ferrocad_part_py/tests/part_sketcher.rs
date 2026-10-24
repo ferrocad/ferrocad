@@ -27,6 +27,11 @@ fn boot() {
 }
 
 fn new_document<'py>(py: Python<'py>, name: &str) -> Bound<'py, PyAny> {
+    // Importing `Part` runs `register_kernel`, which registers the Part object
+    // types (`Sketcher::SketchObject`, `PartDesign::Body`, `Part::Mirroring`).
+    // Without it, `addObject` finds only the core property table (no `Shape`
+    // output), and the result depends on which test happened to import Part first.
+    PyModule::import(py, "Part").expect("import Part");
     PyModule::import(py, "ferrocad")
         .expect("import ferrocad")
         .call_method1("newDocument", (name,))

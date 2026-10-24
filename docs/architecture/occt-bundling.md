@@ -68,6 +68,41 @@ release source. The minimal build drops the data-exchange→visualization chain:
 not need STEP colours yet, we can ship geometry first and add data exchange later,
 accepting the imaging stack only when it is asked for.
 
+### 3.1 Local development: no exports needed
+
+Fetch the same 7.8.1 prefix CI uses into the workspace once:
+
+```sh
+mkdir -p .occt
+curl -sSL https://micro.mamba.pm/api/micromamba/linux-64/latest | tar -xj -C .occt
+export MAMBA_ROOT_PREFIX="$PWD/.occt/root"
+.occt/bin/micromamba create -y -p "$PWD/.occt/prefix" -c conda-forge occt=7.8.1
+```
+
+`.cargo/config.toml` then points `OpenCASCADE_DIR`, `OCCT_INCLUDE_DIR` and
+`LD_LIBRARY_PATH` at `.occt/prefix` with `relative = true`, so
+`cargo build -p ferrocad_parametric` and `cargo run -p ferrocad_parametric` work
+without exporting anything:
+
+```toml
+[env]
+OpenCASCADE_DIR = { value = ".occt/prefix/lib/cmake/opencascade", relative = true }
+OCCT_INCLUDE_DIR = { value = ".occt/prefix/include/opencascade", relative = true }
+CMAKE_POLICY_VERSION_MINIMUM = "3.5"
+LD_LIBRARY_PATH = { value = ".occt/prefix/lib", relative = true }
+```
+
+Cargo does not read a `.env` file; `[env]` is the equivalent. A variable already set
+in the shell wins, which keeps a custom or system OCCT easy to use.
+
+`ferrocad_occt/build.rs` is also self-discovering: with `OCCT_INCLUDE_DIR` unset it
+tries `OCCT_ROOT`, `CASROOT`, `OpenCASCADE_DIR`, the workspace `.occt/prefix`, and
+common system prefixes (`/usr`, `/usr/local`, `/opt/homebrew`, `/opt/local`). It
+falls back with a warning if `OCCT_INCLUDE_DIR` is set but does not contain
+`Standard_Version.hxx`, and its failure message names the expected directory. If a
+direct `target/debug/ferrocad_parametric` (rather than `cargo run`) cannot find the
+TK libraries, add `.occt/prefix/lib` to `LD_LIBRARY_PATH`; OCCT ships no RUNPATH.
+
 ## 4. Payload layout
 
 ```

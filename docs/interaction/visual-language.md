@@ -109,14 +109,33 @@ overlays without a ghost pass. The display provider can still override per objec
 
 ### 1.5 Text and glass chrome
 
+These tokens live in `ferrocad_theme::ui` as packed sRGB — `0xRRGGBB` opaque, passed
+to `rgb()`, and `0xRRGGBBAA` translucent, passed to `rgba()`. The viewport chrome and
+the shell bind the same constants.
+
 | Token | Value | Today |
 | --- | --- | --- |
-| Text | `#D8DBE0` | `FG`, `CHROME_TEXT`, `TITLE_FG`, `INPUT_FG` |
-| Muted | `#8B919A` | `MUTED`, `CHROME_MUTED` |
-| Face label | `rgba(235, 242, 252, 0.78)` | navicube `LABEL_COLOR ≈ [0.92, 0.95, 1.0, 0.80]` |
-| Glass background | `rgba(15, 18, 24, 0.75)` | pill `0x0f1218cc` (0.80) — align to 0.75 |
-| Glass border | `#FFFFFF14` | pill, chrome `CHROME_BORDER` |
-| Chrome accent | `#67D7FF` | `CHROME_ACTIVE` (navicube bar) |
+| Text | `#D8DBE0` | `ferrocad_theme::ui::FG` (viewport chrome, shell); `TITLE_FG`, `INPUT_FG` still local |
+| Muted | `#8B919A` | `ui::MUTED` (viewport chrome, shell) |
+| Face label | `rgba(235, 242, 252, 0.78)` | navicube `LABEL_COLOR ≈ [0.92, 0.95, 1.0, 0.80]` (`ferrocad_theme::navicube`) |
+| Glass background | `rgba(15, 18, 24, 0.75)` | pill `ui::GLASS` = `#151A24` @ 0.80 — tint and alpha still differ from the token |
+| Glass border | `#FFFFFF14` | pill, chrome `ui::CHROME_LINE` |
+| Dock glass | `#16181D` @ 0.90 | `ui::DOCK_BG` |
+| Dock border | `#FFFFFF` @ 0.12 | `ui::DOCK_BORDER` |
+| Wheel glass | `rgba(15, 18, 24, 0.75)` | `ui::WHEEL_GLASS` |
+| Floating command HUD | `rgba(15, 18, 24, 0.75)` + dock border | `ui::WHEEL_GLASS` + `ui::DOCK_BORDER`; no backdrop |
+| Field glass | `rgba(15, 18, 24, 0.75)` | `TextInput` background (`ui::WHEEL_GLASS`) |
+| Field hairline | `#FFFFFF14` | `TextInput` border at rest (`ui::CHROME_LINE`) |
+| Field focus ring | `#38BDF8` | `ui::ACTIVE_ACCENT` (`TextInput` border while focused) |
+| Axis X token | `#F87171` (coral) | `ui::AXIS_X` (floating HUD label) |
+| Axis Y token | `#4ADE80` | `ui::AXIS_Y` (floating HUD label) |
+| Axis Z token | `#38BDF8` | `ui::AXIS_Z` (floating HUD label) |
+| Hover rim | `#48E5FF` | `ui::HOVER_RIM` (structural wedge) |
+| Additive tone | `#F59E0B` | `ui::PUSH_PULL_COLOR` (push/pull, extrude) |
+| Destructive tone | `#EF4444` | `ui::SUBTRACT_COLOR` (delete, pocket) |
+| Hover tint | `#38BDF8` @ 0.12 | `ui::HIGHLIGHT_TINT` (hovered wedge) |
+| Chrome accent | `#67D7FF` | `ui::CHROME_ACTIVE` (navicube bar, Dev Tools badge) |
+| Chrome active fill | `#1B2B38` @ 0.33 | `ui::CHROME_ACTIVE_BG` (the active projection segment) |
 | Error | `#EF4444` | dialog validation line |
 
 **Modal surface (A3).** An open command dialog is the one **modal** layer, and it is
@@ -128,21 +147,32 @@ subtractive crimson above, inline under the fields. No animation, no drop shadow
 the contrast step does the layering. The panel does not scroll yet; a long wizard is
 an S6 concern.
 
+The radial menu uses the same language at a different scale: a 0.75 glass torus,
+1 px `CHROME_LINE` hairlines, a hollow deadzone, and a **tone arc** on the inner
+rim (`HOVER_RIM` / `PUSH_PULL_COLOR` / `SUBTRACT_COLOR`). The destructive slot keeps
+a dim red arc at rest, so its position is legible before hover; the hovered wedge
+is a 12% `HIGHLIGHT_TINT`, never an opaque fill.
+
 ### 1.6 The convention problem (important)
 
-There are **three** colour conventions in the tree today:
+The token tables now live in one leaf crate, but the conventions are still **three**:
+the V0 extraction is under way, the normalisation (V0b) is not done.
 
-- `ferrocad_stage::gizmo` — **linear** RGBA, documented as such (`#38BDF8` stored as
-  `[0.040, 0.509, 0.939]`). Correct for the draw contract.
-- `ferrocad_viewport::navicube::theme` — mostly **sRGB-normalised** values
-  (`EDGE_COLOR = [0.84, 0.88, 0.94]` is `#D6E0F0 / 255`), with exactly one constant
-  (`TURNTABLE_COLOR`) documented as linear. Fed straight into `StateSnapshot.color`,
-  so the cube's edges render brighter than their nominal hex.
-- `ferrocad_gpui` / `ferrocad_widgets` / the viewport chrome — packed `u32` sRGB
-  (`0xD8DBE0`), which is what gpui wants.
+- `ferrocad_theme::draw` — **linear** RGBA, the draw contract.
+  `ferrocad_graphics::theme` re-exports it, so renderer code keeps its `theme::…`
+  paths. The gizmo's linear constants are still local.
+- `ferrocad_theme::navicube` — the navigation cube's palette, mostly
+  **sRGB-normalised** values (`EDGE_COLOR = [0.84, 0.88, 0.94]` is `#D6E0F0 / 255`),
+  with exactly one constant (`TURNTABLE_COLOR`) documented as linear. Fed straight into
+  `StateSnapshot.color`, so the cube's edges render brighter than their nominal hex.
+  `ferrocad_viewport::navicube::theme` re-exports it and keeps the role layer.
+- `ferrocad_theme::ui` — packed `u32` sRGB (`0xD8DBE0`), which is what gpui wants;
+  `ferrocad_gpui`, `ferrocad_widgets` and the viewport chrome bind it.
 
-V0 normalises all three onto one token table: **linear at the draw contract, packed
-sRGB at the gpui boundary**, with a round-trip test.
+V0b normalises the navicube palette onto the same convention — **linear at the draw
+contract, packed sRGB at the gpui boundary** — and extends the `ferrocad_theme`
+round-trip tests over it. The audit is still open: the values above are the build
+target until it lands.
 
 ---
 
@@ -245,16 +275,19 @@ DRAG      solid handle, amber/cyan hull, tabular pill follows
 
 | Constant | Value | Notes |
 | --- | --- | --- |
-| `HOVER_RADIUS` | 20 px | visual bloom only |
+| `HOVER_RADIUS` | 12 px | visual bloom only |
 | `GRAB_SLOP` | 12 px | today's `HIT_SLOP`; the radius that actually starts a drag |
 | Origin proximity | 5 px | the world-origin node's own, smaller radius (`axis-origin-grid.md`) |
 | Aurora flash | 120 ms | new snap point |
 | Hover in / out | 80 / 120 ms | out is slower, so a pass-over does not strobe |
 
-**The 20 vs 12 question.** The spec blooms at 20 px but the gizmo grabs at 12 px, so a
-handle can *light up* before it can be grabbed. Recommend unifying both at **20 px**
-(`HIT_SLOP` becomes 20) and accepting a slightly tighter triad interior; the alternative
-is to keep the split and treat the bloom as a hint. Decision §9.2.
+**Bloom and grab share one radius.** Unify both at **12 px**
+(`HIT_TOLERANCE_PIXELS` 2 + `HIT_PADDING_PIXELS` 10). A larger grab radius (20 px) was
+considered so a lit handle is unambiguously grabbable, but it would reach into the
+triad's interior between the stems and break the *empty centre passes through to the
+scene* contract. The bloom must match the grab radius, never exceed it: a handle lights
+up only when it can be grabbed. If a future touch mode needs a larger target, grow the
+**drawn** handle, not the invisible slop. Decision §9.2.
 
 ---
 
@@ -311,10 +344,10 @@ object (the toy does) but does not redefine the chrome tokens.
 
 | Slice | Deliverable | Acceptance |
 | --- | --- | --- |
-| **V0 — tokens** | `ferrocad_theme`; migrate gizmo, navicube theme, shell/chrome, pill; normalise to linear/packed | **partial:** `ferrocad_graphics::theme` now holds the GPU-side linear tokens (`CANVAS_VOID`, `GLASS_*`, `EDGE_*`) with hex-conversion tests; the standalone crate and the gizmo/navicube/shell migration are still open |
+| **V0 — tokens** | `ferrocad_theme`; migrate gizmo, navicube theme, shell/chrome, pill; normalise to linear/packed | **partial:** the leaf crate exists — `ferrocad_theme::ui` (packed sRGB), `draw` (linear, re-exported by `ferrocad_graphics::theme`) and `navicube` (the cube's palette) — with hex-conversion tests; the gizmo and remaining shell/widgets migration and the V0b sRGB-vs-linear normalisation (§1.6) are still open |
 | **V1 — occlusion** | `GHOST_DEPTH`; entity edge/surface defaults from the tokens; ghost wire + ghost triad | ✅ packet tests assert the front/ghost modes, the ghost is unpickable, and the grid counts include it. A full front-vs-ghost GPU readback is still worth adding alongside the existing depth-bias readback. |
 | **V2 — canvas & surfaces** | clear colour `#0F1218`; gradient; glass composites; two-tone threshold | ✅ `the_background_is_the_canvas_gradient` asserts `#0F1218`/`#161B22`; `a_two_tone_surface_reads_back_as_glass_top_and_shade` asserts both facets. V2c (true translucency) remains deferred. |
-| **V3 — states** | `HOVER_RADIUS`, in/out timings, rim bloom; `HoverReport` → status bar | a headless viewport test: at 21 px no bloom, at 19 px bloom; a gizmo-interior click reports `through: gizmo` and still selects the object behind |
+| **V3 — states** | `HOVER_RADIUS`, in/out timings, rim bloom; `HoverReport` → status bar | a headless viewport test: at 13 px no bloom, at 11 px bloom; a gizmo-interior click reports `through: gizmo` and still selects the object behind |
 | **V4 — type & bevels** | bundle JetBrains Mono + fallback chain; pill 12 px semibold; tabular runs; twin-line bevels | the pill's digits do not change advance width across `0–9`; a chamfer renders two parallel lines in a readback |
 
 V0 is the only cross-cutting slice; V1–V4 are independent afterwards.
@@ -325,8 +358,9 @@ V0 is the only cross-cutting slice; V1–V4 are independent afterwards.
 
 1. **Alpha semantics.** Ship opaque composites now and defer translucency (§1.3).
    Recommend yes; a transparency pass is a renderer project of its own.
-2. **Hover vs grab radius.** Unify at 20 px, or keep 20/12? Recommend **unify at 20**
-   so a lit handle is always grabbable. Cost: `HIT_SLOP` and its tests change.
+2. **Hover vs grab radius.** Unify at **12 px** (`HIT_SLOP`), matching the geometric
+   grab so a lit handle is always grabbable. A 20 px bloom was considered but would
+   break the triad's pass-through centre. `HIT_SLOP` and its tests stay as they are.
 3. **Font bundling.** JetBrains Mono (OFL) is redistributable; bundling adds ~300 KB and
    makes the pill deterministic across platforms. Recommend bundle, with the system
    fallback.

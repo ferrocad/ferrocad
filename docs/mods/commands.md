@@ -62,17 +62,32 @@ The shell reads these keys when it builds the viewport header and the action doc
 | `Accel` | shortcut string, for example `"Ctrl+Shift+S"` | `""` |
 | `Group` | ordering label | `""` (registration order) |
 | `CmdType` | metadata: `"ForEdit"` or `"ForView"` | `""` |
-| `FerroCAD_Surface` | where the action lives: `grid`, `workplane`, `axis`, `mods`, `dock`, `hidden` | `dock` |
+| `Checkable` | the row is a toggle: its popover stays open after the click so the status dot follows | `False` |
+| `FerroCAD_Surface` | where the action lives: `grid`, `workplane`, `axis`, `snap`, `radial`, `mods`, `dock`, `hidden` | `dock` |
 | `FerroCAD_Parent` | the surface's primary command, for a row inside its popover | `""` |
+| `FerroCAD_Short` | a compact label for that popover row (`Grid` for `Snap Grid`) | `MenuText` |
+| `FerroCAD_Tone` | a `radial` slot's semantic class: `structural`, `additive` or `destructive` | `structural` |
 | `Pixmap` | accepted and ignored; the controls are text today | — |
 
-`FerroCAD_Surface` and `FerroCAD_Parent` are **FerroCAD extensions**. Leave them out
-and the command lands on the dock, which is always safe; upstream FreeCAD ignores
-unknown resource keys. A command with `FerroCAD_Surface: "grid"` and no
-`FerroCAD_Parent` is the primary of that header control (its label runs it); a
-command with `FerroCAD_Parent: "App_ToggleGrid"` appears in the popover under it.
-`hidden` keeps a command out of the header and the dock; the Dev Tools command list
-and the app menu can still offer it.
+`FerroCAD_Surface`, `FerroCAD_Parent`, `FerroCAD_Short` and `FerroCAD_Tone` are
+**FerroCAD extensions**. Leave them out and the command lands on the dock, which is
+always safe;
+upstream FreeCAD ignores unknown resource keys. A command with
+`FerroCAD_Surface: "grid"` and no `FerroCAD_Parent` is the primary of that header
+control (its label runs it); a command with `FerroCAD_Parent: "App_ToggleGrid"`
+appears in the popover under it. `hidden` keeps a command out of the header and the
+dock; the Dev Tools command list and the app menu can still offer it. `radial` is
+special: the command is not a dock row at all — it becomes a wedge in the in-situ
+wheel, ordered by `FerroCAD_Tone` (structural, additive, destructive), so the
+destructive slot is always last (south).
+
+A popover row keeps the menu open when it represents **state**: a command declares
+`Checkable: True` or defines `IsChecked`, and the generated provider rows are state
+rows too. Several filters — or a backend choice — can then be set in one visit and
+the status dots update in place. An **action** row (a settings jump, a reload) still
+dismisses the menu, and the app menu (a launcher, not a control popover) closes on
+its one row. The command decision uses the *presence* of the flag or hook, never
+`IsChecked() == True`, so an unchecked toggle and a non-toggle row are told apart.
 
 `CmdType` is metadata only. The shell does not wrap `Activated` in a transaction
 because a command may return a dialog and act later; the command owns its

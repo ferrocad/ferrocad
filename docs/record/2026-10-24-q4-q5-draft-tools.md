@@ -77,7 +77,8 @@ reference) and this log. Updated: the [`docs/README.md`](../README.md) index, th
 and deviations), [`conformance.md`](../workbenches/conformance.md) (the native tool
 suites), [`actions-and-tools.md`](../workbenches/actions-and-tools.md) §7.1 (the point
 session), [`milestones.md`](milestones.md), [`stage.md`](../viewport/stage.md) (the
-spatial reference bindings), and the generated `python-api/FreeCADGui.md`.
+spatial reference bindings), [`documentation.md`](../documentation.md) (the slice-documentation
+timeline link), and the generated `python-api/FreeCADGui.md`.
 
 ## Next
 

@@ -16,13 +16,14 @@ obvious:
 | Component | Kind | Role |
 | --- | --- | --- |
 | `ferrocad_types` | `rlib` | Base value types (FreeCAD's `Base`): `Quantity`/`Unit`, `Vector3`/`Matrix4`/`Rotation`/`Placement`. A **leaf**. |
-| `ferrocad_graphics` | `rlib` | The **neutral graphics primitives**: the draw contract (`DrawPacket`/`RenderQueue`/`DrawBatch`/`Geometry`/`Vertex`/`Topology`, `MeshId`/`Generation`/`PickId`, `StateSnapshot`), the camera/viewport (`Camera`/`Projection`/`Viewport`/`Rect`) and CPU picking (`Ray`/`Hit`). A **leaf** above `ferrocad_types`. |
+| `ferrocad_theme` | `rlib` | The visual-language token table (V0 of [`interaction/visual-language.md`](interaction/visual-language.md)): `draw` (linear RGBA at the renderer contract), `ui` (packed sRGB at the gpui boundary), the `navicube` palette, and the `linear ↔ sRGB` round-trip helpers. A **leaf**, so every GUI crate can share it without inverting the graph. |
+| `ferrocad_graphics` | `rlib` | The **neutral graphics primitives**: the draw contract (`DrawPacket`/`RenderQueue`/`DrawBatch`/`Geometry`/`Vertex`/`Topology`, `MeshId`/`Generation`/`PickId`, `StateSnapshot`), the camera/viewport (`Camera`/`Projection`/`Viewport`/`Rect`) and CPU picking (`Ray`/`Hit`). Re-exports the `ferrocad_theme::draw` tokens from `theme`. A **leaf** above `ferrocad_types`/`ferrocad_theme`. |
 | `ferrocad_geom` | `rlib` | The geometry seam: opaque `Shape`, `History`/`ElementRef`/`ElementMap` (re-exported from `ferrocad_lineage`), and the `GeometryBackend` trait (+ `NullBackend`). No kernel. A **leaf** above `ferrocad_types`/`ferrocad_curves`/`ferrocad_lineage`. |
 | `ferrocad_lineage` | `rlib` | The kernel-independent lineage vocabulary: `ElementRef`/`History`/`ElementMap`, `Lineage`/`ReverseMap`/`MapVersion`/`NamePolicy`, generic over the payload. No geometry, no document, no OCCT. |
 | `ferrocad_occt` | `rlib` | The OCCT implementation of `GeometryBackend` (box/fuse/cut/fillet/place), via `opencascade-sys` + the sibling history bridge. Needs OCCT to build; **not** a default member. |
 | `ferrocad_core` | `rlib` | The pure-Rust engine: documents, properties, DAG, transactions, observers, expressions. No Python, no UI, no OCCT. Depends on `ferrocad_types` (and re-exports it). A **leaf** wrt the kernel. |
 | `ferrocad_py` | `cdylib` | The PyO3 extension, importable as the module `ferrocad`. The only bridge into `ferrocad_core`. |
-| `ferrocad_widgets` | `rlib` | Reusable `bite-gpui` widgets. Depends on **neither** `ferrocad_core` nor `ferrocad_py`. |
+| `ferrocad_widgets` | `rlib` | Reusable `bite-gpui` widgets: window chrome, the text field/area, the domain-free `menu` (popover rows, status dots, hover, dividers), and the radial `wheel` (a custom-painted torus with pure wedge hit-testing, plus the `WheelMenu` sidecar that owns the armed/latched gesture and its overlay). Depends on `ferrocad_theme` and `bite-gpui`; on **neither** `ferrocad_core` nor `ferrocad_py`. |
 | `ferrocad_ui` | `rlib` | The Qt Designer `.ui` reader (Q1): a typed form tree with source positions, no Qt, no Python and no rendering. **Not** the widget kit (that is `ferrocad_widgets`). |
 | `ferrocad_ui_py` | `cdylib` | The PyO3 proxy layer over `ferrocad_ui`: `FreeCADGui.PySideUic.loadUi` and its form/widget/signal proxies. No Qt, no rendering. |
 | `ferrocad_inventor` | `rlib` | The Coin/Inventor scene core: node AST, state accumulator, mesh compiler, events. Renderer-agnostic; re-exports `ferrocad_graphics`. |
@@ -31,7 +32,7 @@ obvious:
 | `ferrocad_wgpu` | `rlib` | The wgpu backend: consumes `ferrocad_graphics` draw batches (pipelines, uniforms, MSAA, offscreen target, readback). |
 | `ferrocad_inventor_py` | `cdylib` | The `pivy.coin` facade (scaffolding) over `ferrocad_inventor`. |
 | `ferrocad_stage_py` | `cdylib` | The `ferrocad.stage` facade over `ferrocad_stage` (the modern stack's Python surface). |
-| `ferrocad_viewport` | `rlib` | The `bite-gpui` viewport over an invented scene: `InventorViewport` (image path, pointer→pick→listener, clicks → `SelectionEvent`/`SelectionRef`, and the workbench `Manipulator` registry) plus a hosted `ferrocad_stage` (declarative items and interactive tools), the navigation cube (`NaviCube`), and the sample scene. Depends on `ferrocad_graphics`/`ferrocad_geom`/`ferrocad_inventor`/`ferrocad_stage` only. |
+| `ferrocad_viewport` | `rlib` | The `bite-gpui` viewport over an invented scene: `InventorViewport` (image path, pointer→pick→listener, clicks → `SelectionEvent`/`SelectionRef`, and the workbench `Manipulator` registry) plus a hosted `ferrocad_stage` (declarative items and interactive tools), the navigation cube (`NaviCube`), and the sample scene. Depends on `ferrocad_graphics`/`ferrocad_geom`/`ferrocad_inventor`/`ferrocad_stage` and the shared `ferrocad_theme` tokens. |
 | `ferrocad_gpui` | `rlib` | The `bite-gpui` application-shell library: boots CPython, provides `Shell`, `run`/`run_with`/`run_edition_with`, `HostConfig`, mounts the `ferrocad_viewport`, syncs document meshes into the stage (`display::DisplaySync`), hosts the edition's workbench manipulators (`contributions::Contributions`), and bridges the **workbench commands, selection, dialogs, accelerators, view/tool requests** (`commands`, `selection`, `dialog`, `shortcuts`, `view` — typed JSON over `FreeCADGui`). Ships no application scripts and names no workbench. |
 | `ferrocad` | `bin` | The base app (the general edition). Owns the app's Python entry module and, when packaged, its mods and interpreter; exposes `run`/`run_as`/`run_edition`/`run_edition_with`, which call `ferrocad_gpui::run_with`. |
 | `ferrocad_toy` | `bin` + `rlib` | A **kernel-free edition** and testbed: it creates a typed object (`Height`/`Width`/`Depth`/`Placement`/`DisplayMode`/`Color`), represents it through the display hook, and manipulates it with a `HeightGrip` **and** the generic `TransformGizmo`. It links no geometry module; it exists to prove the whole workbench surface is generic and to run that loop in the fast CI job. See [`toy-workbench.md`](workbenches/toy-workbench.md). |
@@ -164,9 +165,10 @@ depends on a `cdylib`.
 
 ```
 ferrocad_types     -> (crates.io only)               [leaf: Quantity, Placement, ...]
+ferrocad_theme     -> (no workspace deps)             [tokens: draw linear, ui sRGB, navicube]
 ferrocad_curves    -> ferrocad_types                 [analytic half of Part: curves, wires;
                                                      no Shape, no OCCT, no document]
-ferrocad_graphics  -> ferrocad_types                 [neutral draw contract + camera + pick; leaf]
+ferrocad_graphics  -> ferrocad_types, ferrocad_theme [neutral draw contract + camera + pick; leaf]
 ferrocad_geom      -> ferrocad_types, ferrocad_curves,
                       ferrocad_lineage
                                                      [seam: Shape, History, GeometryBackend;
@@ -178,7 +180,7 @@ ferrocad_occt      -> ferrocad_geom, ferrocad_curves,
                       ferrocad_types, opencascade-sys [kernel backend; never -> core]
 ferrocad_core      -> ferrocad_types                 [re-exports; no OCCT]
 ferrocad_py        -> ferrocad_core                  [rlib + cdylib]
-ferrocad_widgets   -> (bite-gpui only)               [must not depend on core or py]
+ferrocad_widgets   -> ferrocad_theme, bite-gpui       [must not depend on core or py]
 ferrocad_inventor  -> ferrocad_graphics, ferrocad_types
                                                      [scene core; re-exports graphics]
 ferrocad_stage     -> ferrocad_graphics, ferrocad_types, ferrocad_geom

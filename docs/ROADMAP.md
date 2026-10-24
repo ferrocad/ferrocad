@@ -8,7 +8,7 @@ Status: roadmap (2026-10-24). The actionable backlog is
 
 FerroCAD is a Rust/GPUI + PyO3 + pure-Python reimplementation of FreeCAD. The engine,
 the app shell and the Python `FreeCAD` surface exist; `Part` is now a real workbench
-(**529 upstream tests passing, 0 errors**); the native and `.FCStd` serializers are
+(**531 upstream tests passing, 0 errors**); the native and `.FCStd` serializers are
 independent; and topological naming is a lineage layer rather than a kernel concern.
 
 The bottleneck is no longer geometry. It is the **workbench platform** — objects whose

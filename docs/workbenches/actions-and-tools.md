@@ -157,15 +157,17 @@ The shell still goes through the app script, never `import Toy`:
 def commands() -> str:
     """The registered commands, with their resources and live state, as JSON."""
     entries = FreeCADGui._command_list()
-    # The bridge adds the FerroCAD_Surface/FerroCAD_Parent keys from GetResources
-    # so the shell can place each control. _command_list() itself stays upstream-shaped.
+    # The bridge adds the FerroCAD_* keys from GetResources so the shell can place
+    # each control. _command_list() itself stays upstream-shaped.
     for entry in entries:
         resources = FreeCADGui._resources(FreeCADGui._COMMANDS[entry["id"]])
         entry["surface"] = str(resources.get("FerroCAD_Surface") or "")
         entry["parent"] = str(resources.get("FerroCAD_Parent") or "")
+        entry["short"] = str(resources.get("FerroCAD_Short") or "")
+        entry["checkable"] = bool(resources.get("Checkable"))
     return _json(entries)                             # [{id, menu, tooltip, accel, group,
-                                                      #   enabled, checked, cmd_type,
-                                                      #   surface, parent}, ...]
+                                                      #   enabled, checked, checkable,
+                                                      #   cmd_type, surface, parent, short}, ...]
 
 def run_command(name: str) -> str:
     """Invoke a command; returns {ok, status?, dialog?, token?, view?, tool?}."""
@@ -192,15 +194,26 @@ The shell renders the **chrome** from `CommandInfo` (P0.6):
 | `group` | metadata; no longer decides placement |
 | `enabled` | greyed when false (the dock keeps the row) |
 | `checked` | a toggled tint (grid, snap) |
+| `checkable` | a popover row that toggles: the menu stays open after the click |
 | `cmd_type` | metadata; `ForEdit` implies an undoable edit, `ForView` does not |
-| `surface` | `grid` / `axis` / `workplane` / `mods` / `dock` / `hidden` — the control that owns it; absent means `dock` |
+| `surface` | `grid` / `axis` / `workplane` / `snap` / `mods` / `dock` / `hidden` — the control that owns it; absent means `dock` |
 | `parent` | the surface's primary command id, for a row in that control's popover |
+| `short` | a compact popover label when `menu` repeats the control's name |
 
 The list is rebuilt on the events in §3.2. A command whose `enabled` is false stays
 visible — the user should see that the action exists and why it is unavailable (the
 tooltip can carry `GetResources()["ToolTip"]`). Placement is `FerroCAD_Surface`-driven, never
 derived from `Group`; a command with no `FerroCAD_Surface` lands on the dock so it cannot
 disappear.
+
+A **state** row runs through `Shell::run_command_in_place`, which restores the open
+menu afterwards: several options can be set in one visit and the markers follow the
+live state. Both a command toggle (checkbox) and a generated provider choice (radio)
+are state rows, so the `Snap` checklist and the `Grid`/`Axes` backend switches behave
+the same way. An **action** row (a settings jump, a reload) runs through
+`Shell::run_command` and dismisses the menu. Closing a state menu is therefore
+explicit — an outside click, `Esc`, or the caret. The app menu is a launcher, not a
+control popover, so its one row still closes.
 
 ---
 
@@ -238,16 +251,17 @@ conformance table (§11).
 
 ## 6. Dialogs
 
-A command returns a **dialog spec**; the shell hosts it as a glass modal in the same
-window (no OS dialog, no Qt). Because `Activated` cannot block on the shell, the
-callback is kept by the facade and invoked later:
+A command returns a **dialog spec**; the shell hosts it in the same window (no OS
+dialog, no Qt) — a centred glass modal by default, or a **floating dielectric HUD**
+when the spec asks to keep the canvas usable. Because `Activated` cannot block on
+the shell, the callback is kept by the facade and invoked later:
 
 ```text
 shell  run_command("Toy_MakeSlab")
   → Activated() -> {title, fields, accept, on_accept}
   → facade stores on_accept under a token "d1"
   → returns {ok: true, dialog: {…}, token: "d1"}
-  → shell renders the modal
+  → shell renders the dialog
   → accept: dialog_accept("d1", {Width: 50, Depth: 40, Height: 25})
       → facade calls on_accept(values); the callback owns its transaction
       → returns {ok, status}
@@ -258,6 +272,32 @@ shell  run_command("Toy_MakeSlab")
   `value` seeds it; `min`/`max` validate numerics; `values` lists an enum. These map
   onto the existing property-editor widgets (`TextInput`, the commit-on-enter path) and
   the visual language's 11/12 px scale.
+- **Presentation.** `presentation` is `"modal"` (the default) or `"float"`. A float is
+  a compact one-row HUD with **no backdrop**, placed beside the gizmo (falling back to
+  the last pointer, then a comfortable default), so the scene stays bright and the
+  pointer keeps orbiting, selecting and dragging. Only the panel itself occludes the
+  pointer. Its first field takes focus and is selected; `Tab`/`Shift+Tab` cycle the
+  fields. Use it for geometric verbs the user is looking at.
+- **Live preview.** `preview: "translation"` drives a temporary transform from the
+  `dx`/`dy`/`dz` fields on the current selection while the dialog is open. The document
+  is untouched: no transaction, no undo step, and cancelling drops the ghost. Text that
+  does not parse yet previews as zero rather than flashing a validation error. The
+  binding is **two-way**: a gizmo drag ticks `ViewportEvent::TransformPreview`, which
+  mirrors the accumulated delta back into the fields and previews the whole selection;
+  the drag never commits on its own, so only Accept applies the pending move.
+- **Anchoring.** The gizmo (and therefore the HUD) belongs to the picked point of
+  contact: `SelectionEvent::Picked` carries a `SelectionAnchor` (world point + surface
+  normal) from the viewport's G-buffer pick. A non-spatial selection (tree or command)
+  falls back to the body's bounding-box base corner, never the interior centroid.
+- **Following the object.** A live preview offsets the overlays with the selected
+  geometry: the triad and every manipulator with a world anchor (the toy height grip)
+  move by the same delta, and clearing restores their pre-preview pose. The triad stays
+  glued even during its own drag — the interaction frame is frozen at the grab point and
+  only the drawing moves — then the frame commits to the new pose on release. After a
+  committed edit the shell **re-arms** the current selection against the new stage, so a
+  grip sits on the moved top face and the triad survives its own commit. Any other
+  interaction commit supersedes a pending translation HUD: the dialog closes and its
+  token is spent, rather than applying a stale delta on top of a height change.
 - **Lifecycle.** One dialog at a time. A second dialog request while one is open is
   rejected with a status message. Closing the document, quitting, or `Esc` cancels and
   drops the token. A token is single-use and expires on cancel.
@@ -269,8 +309,9 @@ shell  run_command("Toy_MakeSlab")
 ### 6.1 As built (A3, 2026-10-20)
 
 - **Shape.** `_run` splits a returned dict into a top-level `status`/`value` and a
-  `dialog` object with `title`, `fields`, `accept`, `cancel`; `on_accept` never
-  crosses the JSON boundary. The outcome is `{ok, dialog, token, status?}`.
+  `dialog` object with `title`, `fields`, `accept`, `cancel`, `presentation` and
+  `preview`; `on_accept` never crosses the JSON boundary. The outcome is
+  `{ok, dialog, token, status?}`.
 - **Fields.** `text`, `int`, `float`, `quantity`, `bool`, `enum`. A quantity is
   parsed by `ferrocad_types::Quantity` (so `25 mm` and `1 in` work) and sent to the
   callback as canonical millimetres. `min`/`max` apply to the numeric kinds;
@@ -278,8 +319,10 @@ shell  run_command("Toy_MakeSlab")
 - **UI.** A centred glass panel over a dimmed, mouse-blocking backdrop, with
   per-kind controls (text inputs, an on/off toggle, `‹ ›` for an enum), an inline
   error line, and the accept/cancel buttons. `Enter` in a field or on the panel
-  accepts; `Esc` cancels. A disabled command stays visible in the chrome; the modal
-  only exists while a token is open.
+  accepts; `Esc` cancels. A `"float"` spec instead paints a **one-row HUD over the
+  undimmed canvas** (no backdrop, `WHEEL_GLASS` + `DOCK_BORDER`, axis-coloured labels),
+  anchored beside the gizmo or last pointer; the canvas stays interactive. A disabled
+  command stays visible in the chrome; the dialog only exists while a token is open.
 - **Lifecycle.** One dialog at a time; a second request is rejected and its token
   is cancelled immediately. Opening a document (`bootstrap`) calls `_cancel_all`,
   so a callback from the previous document cannot be accepted. A token is popped
@@ -290,6 +333,15 @@ shell  run_command("Toy_MakeSlab")
   wraps the callback.
 - **Wizards.** A callback that returns another spec opens a new token; the shell
   replaces the modal rather than stacking it.
+- **Anchoring and two-way sync (2026-10-25).** The viewport reports the click's world
+  point in `SelectionEvent::Picked { reference, anchor }`; the shell re-anchors the
+  gizmo there (a tree selection uses `contributions::body_corner`). While a
+  `preview: "translation"` dialog is open, the shell sets the viewport's **deferred**
+  gizmo mode: drag ticks arrive as `ViewportEvent::TransformPreview { phase, total }`,
+  the shell adds the `Begin` baseline and writes the result into the Δ inputs (with
+  `TextInput::set_text`, which does not re-emit a change event), and only Accept runs
+  the callback. `Esc` cancels from the viewport too, because the HUD does not retain
+  focus once the canvas is clicked.
 
 ### 6.2 Fields and validation
 
@@ -364,14 +416,68 @@ return {"tool": "toy_measure"}                         # starts a registered too
 
   `Draft_Line`/`Draft_Wire` register through the normal command registry, start a
   `Creator` session on `Activated`, and commit with `FreeCADGui.doCommand`. The six
-  `Draft_Snap_*` commands are ordinary checkable commands, so the snap bar is the actions
-  bar rather than a Qt toolbar. The full surface, including `PlaneGui` and the four Q5
-  forms, is in [`draft-tools.md`](draft-tools.md).
+  `Draft_Snap_*` modes and the `Draft_Snap_Lock` switch are ordinary checkable commands,
+  but they declare `FerroCAD_Surface: "snap"`, so the shell renders them as the `Snap`
+  split button beside `Grid`/`Axes`/`WP` rather than as a bottom bar. The modes name the
+  switch as their `FerroCAD_Parent` (the caret popover) and carry a `FerroCAD_Short`
+  label, so the checklist reads `Grid`, `Endpoint`, … without repeating `Snap`. The full
+  surface, including `PlaneGui` and the four Q5 forms, is in
+  [`draft-tools.md`](draft-tools.md).
 
   **Gap.** The gpui viewport does not call the three driver functions yet; a real click
   still has to be routed into `draft.pick`, and `Esc`/`Enter` into `draft.escape`/
   `draft.finish`. Until then the session is headless/scriptable but not pointer-driven in
   the window.
+
+  ### 7.2 The in-situ radial menu
+
+  Object verbs are **contextual**, not ambient: they do not belong in the bottom
+  strip. A command declares `FerroCAD_Surface: "radial"` (and optionally
+  `FerroCAD_Tone: "additive" | "destructive"`), which removes it from the dock and
+  makes it a wedge in the wheel. The built-ins today are `App_Move` (structural) and
+  `App_Delete` (destructive).
+
+  | Gesture | Effect |
+  | --- | --- |
+  | Right-press | resolves the **context target** at the pointer (no selection change) and opens **armed** there |
+  | Move while armed | highlights the wedge under the pointer (`HIGHLIGHT_TINT` + the tone arc) |
+  | Release over a wedge (flick) | runs it and closes |
+  | Quick release near the press (`< 200 ms`, `< 12 px`) | **latches**: a trackpad tap leaves the wheel open instead of flashing closed |
+  | Move while latched | highlights without a button held (the overlay owns the hover) |
+  | Primary click on a wedge while latched | runs it and closes; deadzone/outside cancels |
+  | Long hold released in the deadzone | cancels |
+  | `Space` | opens **latched** at the last pointer (or the window centre); over a latched wedge it commits; with no wheel it closes |
+  | `Esc`, selection change | closes |
+
+  Both triggers are **contextual**, not blind chords: at trigger time the shell
+  re-runs the viewport's pick at the pointer (the presenter's G-buffer first — the
+  same path a click uses), so a press that lands without an intervening move cannot
+  act on a stale hover. **Opening the wheel never changes the selection.** The pick is
+  a `WheelTarget`: if it is outside the selection it is promoted only when a verb is
+  chosen; if it is already selected the whole selection is used; over void the
+  selection's verbs open at the pointer, and with neither the wheel falls back to the
+  **creation** verbs from the dock (`Toy_MakeSlab`, `Toy_Polyline`), so the same gesture
+  is never a dead end. The full interaction state machine is
+  [`selection-gizmos-and-forms.md`](../interaction/selection-gizmos-and-forms.md).
+
+  The wheel is painted by `ferrocad_widgets::wheel` (`slot_at` is pure geometry).
+  `ferrocad_widgets::wheel::WheelMenu` is the stateful **sidecar**: it owns the
+  `Armed`/`Latched` phases, the hover, the tap-vs-flick timing, dismissal and its own
+  anchored overlay (wrapped in `occlude`, so a click cannot also select the scene),
+  and it reports `WheelEvent::{Selected, Closed}`. Because the overlay claims the
+  pointer, the sidecar also carries its own hover surface. The shell only **triggers**
+  it — `open_radial` (armed), `open_radial_latched` (keyboard), and forwarding pointer
+  move/release — and maps a selected id to `commit_wheel`, which promotes the context
+  target if it was not selected and then runs the command.
+  Ordering is by tone (structural, additive, destructive), so the destructive slot is
+  always **south** (`N: Move`, `S: Delete` with the two built-ins) and muscle memory
+  does not move when a new verb lands.
+
+  The bottom dock therefore contains only **creation + global** commands
+  (`Toy_MakeSlab`, `Toy_Polyline`, `Search (Ctrl+K)`), so it never reflows when the
+  selection changes. The Dock's `Move` split and its gizmo-options popover are gone;
+  the gizmo is armed by selecting, and its settings remain reachable from
+  `Settings/Gizmo` and Dev Tools.
 
 ---
 
@@ -397,7 +503,7 @@ registry.
 | Id | Action | Notes |
 | --- | --- | --- |
 | `App_Delete` ✅ | remove the selected objects | one transaction; `IsActive` = selection non-empty |
-| `App_Move` ✅ | move the selection by `(dx, dy, dz)` | the dialog is the dock's path; `runCommand("App_Move", dx, dy, dz)` applies the same code without it |
+| `App_Move` ✅ | move the selection by `(dx, dy, dz)` | **floating** HUD beside the gizmo with a live translation preview; the canvas stays interactive, and `runCommand("App_Move", dx, dy, dz)` applies the same code without the dialog |
 | `File_New` / `File_Open` / `File_Save` / `File_SaveAs` / `File_Close` | S2 | base app, not a workbench |
 | `App_Undo` / `App_Redo` | S2 | `IsActive` from `getAvailableUndos` |
 | `Toy_MakeSlab` | create a slab | the toy's `makeSlab`, wrapped as a command (asks for Width/Depth/Height) |
@@ -465,7 +571,7 @@ using it to auto-wrap transactions is deliberately not done (§3.3).
 | **A0 — registry** ✅ | `FreeCADGui.addCommand/runCommand/listCommands`, resource defaults, duplicate/error isolation; `GuiUp` flag plumbing; Python conformance tests | a registered command runs and returns its value; a raising `Activated`/`IsActive` is isolated; duplicates raise |
 | **A1 — shell bridge + placement** ✅ | `ferrocad_shell.commands()/run_command()`, `ferrocad_gpui::commands`, a surface-placed command list with enabled/checked (the A1 flat bar was replaced by the P0.6 header/dock), rebuild on selection/doc events; `Toy_MakeSlab` registered | headless toy test: the command list surfaces the toy command, a run creates the object, undo removes it |
 | **A2 — selection + built-ins** ✅ | `FreeCADGui.Selection` snapshot pushed by the shell, multi-selection in the inspector (Ctrl/Cmd·Shift toggle), `App_Delete`, `App_Move` (delta via `runCommand`; the dialog is A3) | deleting two selected objects is one undo step; `IsActive` flips with the selection |
-| **A3 — dialogs** ✅ | the spec + token protocol, the glass modal, `text/int/float/quantity/bool/enum` fields, validation, cancel; `Toy_MakeSlab` and `App_Move` use it | create via the dialog; cancel creates nothing and leaves no transaction or token; a bad value is rejected in the shell |
+| **A3 — dialogs** ✅ | the spec + token protocol, the glass modal **and the floating HUD** (`presentation`, `preview`), `text/int/float/quantity/bool/enum` fields, validation, cancel; `Toy_MakeSlab` and `App_Move` use it | create via the dialog; cancel creates nothing and leaves no transaction or token; a bad value is rejected in the shell; `App_Move` floats beside the gizmo and previews its delta |
 | **A4 — shortcuts + status** ✅ | `Accel` parsing and window-root bindings, tooltips (ToolTip + Accel), `{"status"}` results, the `HoverReport` pass-through line | a shortcut runs the same command as a click; the status bar shows the command's message and the overlay pass-through |
 | **A5 — view/tool requests** ✅ | `{"view": …}` applied by the shell (grid state + projection), `Contributions::with_tool` + `{"tool": id}` | a checkable grid command toggles the grid state and its check mark; an unknown tool id reports cleanly |
 
@@ -577,7 +683,9 @@ Two shape decisions fell out of the build:
 | `ferrocad_gpui/src/contributions.rs` | the manipulator/gizmo factories plus `ToolFactory` and `with_tool(id, factory)` / `tool_for(id)` — the edition-level tool registry |
 | `ferrocad_gpui/src/python.rs` | `GUI: OnceLock<bool>`; `gui()`; `configure(..., gui)`; `FreeCAD.GuiUp = 1` set **before** the app script is imported so import-time workbench code sees it; `commands()` / `run_command(name)` / `set_selection(items)` / `dialog_accept(token, values)` / `dialog_cancel(token)` |
 | `ferrocad_gpui/src/shell.rs` | `ShellModel.commands`, `.selection` and `.view`; `refresh_commands` (rebuilds the shortcut list too); `run_command` (Dev Tools / dialog / view / tool / select / run → refresh → stage → status → console); `replace_selection` / `toggle_select` / `clear_selection`; the dialog state machine (`open_dialog_state`, `accept_dialog`, `finish_dialog`, `cancel_dialog`, `toggle_flag`, `cycle_choice`); `apply_view` (state + mirror + projection + re-list); `start_tool` (registry → viewport, pending until a viewport exists); `handle_key` (both windows); `toggle_dev_tools`/`open_dev_tools`; `dialog_overlay`; `settings_card_view`/`open_settings_card`/`commit_property`; `dev_tools_body`; `hover_line` in the status bar |
-| `ferrocad_gpui/src/chrome.rs` | the P0.6 primitives: `viewport_header` (grid/axes/workplane/mods), `split_button` + anchored `popover`, `action_dock`, and the Dev Tools `command_list_panel` |
+| `ferrocad_gpui/src/chrome.rs` | the P0.6 primitives: `viewport_header` (grid/axes/workplane/snap/mods), `split_button`, the anchored `popover` **adapter** over `ferrocad_widgets::menu`, `action_dock`, and the Dev Tools `command_list_panel` |
+| `ferrocad_widgets/src/menu.rs` | the domain-free menu panel: `MenuInfoRow`/`MenuRow`, the status dot, additive hover, dividers and outside-press dismissal; the caller supplies `on_row`/`on_dismiss` and owns the command semantics |
+| `ferrocad_widgets/src/wheel.rs` | the radial marking menu: `WheelSlot`/`WheelTone`, pure `slot_at`/`slot_offset`, the custom-painted glass torus, hover tint, tone arc and labels, and the `WheelMenu` sidecar that owns the gesture and its overlay (`WheelEvent::{Selected, Closed}`) |
 | `ferrocad_gpui/src/dev_tools.rs` | the `DevTools` second-window view over `Entity<Shell>` and its window options |
 | `ferrocad_viewport/src/inventor_view.rs` | `HoverReport { target, through }` — updated on every pointer move from the same pick and overlay tests the click uses; `hover_report()` |
 

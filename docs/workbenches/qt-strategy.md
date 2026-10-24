@@ -446,10 +446,9 @@ Two rules make the diagram true:
 `ViewRequest { grid, axis_cross, projection, grid_minor, grid_major, grid_radius, workplane }`
 and mirrors `ViewState` to the facade.
 
-**Routing table.** “Status” describes the shell/stage capability, not a Python binding: no
-`Snapper` or `PlaneGui` routing exists yet. `ferrocad_stage_py` does not export `Workplane`,
-`SnapContext` or `Snap` (it exports camera, shape, stage, tool, gizmo and pointer events); Q4
-adds them.
+**Routing table.** “Status” describes the shell/stage capability and its Python binding as
+built. Q4 landed the `Snapper`/`PlaneGui` routing; the nine advanced snap modes remain deferred
+because they need a live cursor and extension solving, not a binding.
 
 | Upstream call | Route | Status |
 | --- | --- | --- |
@@ -473,8 +472,6 @@ adds them.
 `SnapCandidate` and `SnapKind`; `SnapContext.snap_point` is the camera-free entry the
 headless `Snapper` uses (known-coordinate tests for grid, vertex, edge-midpoint,
 face-centre and origin snaps on a rotated workplane).
-| `QTimer.singleShot(0, cb)` | shell deferred queue (the `ToDo` list already exists) | Q2 |
-| `QTimer.singleShot(300/500, cb)` | real timer on the shell | Q2 |
 
 `DraftTools.py` constructs `Snapper()` and calls `WorkingPlane.get_working_plane()` at import,
 and `DraftGui.py` constructs `DraftToolBar()` at import. Those three import-time constructions

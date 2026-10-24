@@ -139,6 +139,10 @@ rather than restating it.
 
 ## Interaction
 
+- [interaction/selection-gizmos-and-forms.md](interaction/selection-gizmos-and-forms.md) —
+  the interaction state machine: persistent selection vs a wheel's context target,
+  wheel armed/latched phases, gizmo drag/preview/re-arm, the floating command form,
+  pointer/keyboard precedence and the invariants.
 - [interaction/axis-origin-grid.md](interaction/axis-origin-grid.md) — the spatial
   reference model: the world triad, the ground and workplane grids, face frames,
   snapping, and how the navicube relates to them.

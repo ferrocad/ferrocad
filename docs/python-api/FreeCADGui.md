@@ -124,12 +124,14 @@ The module-level snapper singleton (``FreeCADGui.Snapper``).
 | reset() | Restore the defaults (used by tests and a future workbench reset). |
 | restack() | Raise: there is no Coin tracker to lower in a headless build. |
 | setAngle(angle) | Rotate the snap grid about the workplane normal. |
+| setEnabled(enabled=True) | Enable or disable snapping globally; returns the new state. |
 | setGrid(enabled=True) | Show or hide (and enable or disable) the workplane grid. |
 | setMode(snap, enabled=True) | Explicitly set ``snap`` on or off; returns the resulting state. |
 | setPointConstraintProvider(provider) | Set the task panel that constrains snapped points. |
 | setSelectMode(enabled) | Set the select-mode flag (upstream hides snapping while selecting). |
 | setTrackers(update_grid=True) | Refresh and return the current ``SnapContext``. |
 | setWorkplane(workplane) | Adopt ``workplane`` (a ``ferrocad_stage.Workplane``) and clear rotation. |
+| set_enabled(enabled=True) | Enable or disable snapping globally; returns the new state. |
 | set_mode(snap, enabled=True) | Explicitly set ``snap`` on or off; returns the resulting state. |
 | set_workplane(workplane) | Adopt ``workplane`` (a ``ferrocad_stage.Workplane``) and clear rotation. |
 | show() | Show the workplane grid (the native half of upstream ``show``). |
@@ -137,7 +139,9 @@ The module-level snapper singleton (``FreeCADGui.Snapper``).
 | `snap_context` (property) | — |
 | supported_modes() | The modes with a native implementation, in toolbar order. |
 | toggle(snap, set_to=None) | Toggle a mode in ``mask`` (or set it explicitly); returns its state. |
+| toggleEnabled() | Flip the global snap switch; returns the new state. |
 | toggleGrid() | Flip the grid flag; returns the new state. |
+| toggle_enabled() | Flip the global snap switch; returns the new state. |
 | toggle_snap(snap, set_to=None) | Toggle a mode in ``mask`` (or set it explicitly); returns its state. |
 | unconstrain() | Drop the base point and constraint axis. |
 | unsupported_modes() | The Draft-only modes that raise when enabled, in upstream order. |

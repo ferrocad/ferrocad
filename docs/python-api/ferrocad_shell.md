@@ -16,6 +16,7 @@ _Every entry point returns a JSON string._
 | `add_namespace(name: str, value) -> None` | Expose ``value`` to the console under ``name``. |
 | `axis_summary() -> str` | The axis's provider and stem size for the shell's popover. |
 | `bootstrap(doc_name: str = 'Shell') -> str` | Create (or recreate) the sample document and report host status. |
+| `close_document(name: str) -> str` | Close a document by name. |
 | `commands() -> str` | The registered workbench commands, with resources and live state, as JSON. |
 | `dialog_accept(payload_json: str) -> str` | Accept an open dialog: ``{"token": ..., "values": {...}}``. |
 | `dialog_cancel(token: str) -> str` | Cancel an open dialog and drop its token. |
@@ -27,6 +28,7 @@ _Every entry point returns a JSON string._
 | `load_workbenches(dirs_json: str = '[]') -> str` | Best-effort workbench loading. |
 | `manipulator_specs(payload_json: str) -> str` | The handles the mods declare for the shell's current selection, as JSON. |
 | `model_tree() -> str` | Documents and their objects, for the inspector pane. |
+| `open_document(path: str) -> str` | Open a saved document and make it active (the ``--open`` path). |
 | `properties(object_name: str) -> str` | Property rows for one object, for the property editor pane. |
 | `provider_features() -> str` | Every registered provider feature, with its backends and active flag. |
 | `provider_skin(payload_json: str) -> str` | One feature's provider-supplied WGSL source, for the shell to build. |

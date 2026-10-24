@@ -51,13 +51,33 @@ The module-level singleton is `FreeCADGui.Snapper` (the same object as
 
 `Snapper.mask` is the live list of enabled mode names; `active_snaps()` returns it,
 `supported_modes()`/`unsupported_modes()` report the split, `setMode(name, on)` /
-`toggle_snap(name)` change one, and `isEnabled()` reports whether any mode is on.
+`toggle_snap(name)` change one, and `isEnabled()` reports the global switch.
+
+### The snap control
+
+The modes and the global switch are ordinary commands on the **`snap`** surface, which
+the shell renders as a `Snap` split button beside `Grid`/`Axes`/`WP` in the viewport's
+top-left pill:
+
+| Command | Resources | Role |
+| --- | --- | --- |
+| `Draft_Snap_Lock` | `FerroCAD_Surface: "snap"` | the label: flips `isEnabled()`; the mode mask survives a lock |
+| `Draft_Snap_Grid`, `…_Endpoint`, `…_Midpoint`, `…_Center`, `…_Origin`, `…_Vertex` | `FerroCAD_Surface: "snap"`, `FerroCAD_Parent: "Draft_Snap_Lock"`, `FerroCAD_Short: "<mode>"` | the caret's checklist |
+
+Declaring the parent is what keeps the modes out of the action dock: the dock renders
+only commands whose surface is `dock`, so the bottom pill stays selection verbs plus
+`Search`. `FerroCAD_Short` lets the popover show `Grid` where `Snap Grid` would repeat
+the control's name; the palette still searches the full `MenuText`. The modes are
+**state** rows (they declare `Checkable`), so clicking one leaves the popover open and
+a mask can be set in one visit; the dot follows `IsChecked`, and the menu closes on an
+outside click, `Esc` or the caret. A provider radio row behaves the same way.
 
 ### State and snapping
 
 | Member | Meaning |
 | --- | --- |
 | `affinity` | Feature tolerance in **world units** (default `1.0`) |
+| `setEnabled(on)` / `toggleEnabled()` | the global switch (the `Snap` label); leaves `mask` untouched |
 | `grid` / `setGrid(on)` / `toggleGrid()` | the workplane grid snap |
 | `workplane` / `setWorkplane(wp)` | the active `ferrocad.stage.Workplane` |
 | `context` / `snap_context` | the `ferrocad.stage.SnapContext` built from the above |

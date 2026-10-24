@@ -221,7 +221,7 @@ Nothing in the chrome needs to change for 3–5; T4/T5 become wiring once S0–S
   `No grid provider`; there is no compact/full mode row.
 - Both the **Grid** and **Axes** popovers start with one provider row per registered
   backend (id `ferrocad-provider:<feature>:<backend>`, label from the manifest, the
-  active backend checked in `#67D7FF`). Choosing a row calls
+  active backend carrying the `#38BDF8` status dot). Choosing a row calls
   `ferrocad_shell.set_provider` through `Shell::activate_provider`, applies the
   returned `view`, and re-reads both summaries. It is not a registry command: the
   shell intercepts the synthetic id in `run_command`. The generic settings/reload
@@ -282,6 +282,59 @@ Nothing in the chrome needs to change for 3–5; T4/T5 become wiring once S0–S
   the T7 test exercises. The client-decoration `title_bar` is rendered in a harness
   window for the same clicks, popover, `Esc` and row execution; the real
   client-decoration path remains visual-only.
+- **2026-10-24 — dielectric state.** Popover rows moved to the domain-free
+  `ferrocad_widgets::menu` (left `#38BDF8` dot, additive `#FFFFFF14` hover, no
+  checked fill). The action dock follows the same language: a **live tool** or a
+  checked row is `ui::ACTIVE_ACCENT` ink, not a filled `ACCENT` chip, and hover is
+  the additive `ui::ROW_HOVER`; the strip itself is `ui::DOCK_BG` over
+  `ui::DOCK_BORDER`. The dock's `Move` split keeps its caret as the options cue.
+  Popovers and the dock are now visually and behaviourally consistent (state rows
+  keep the menu open, action rows close it).
+- **2026-10-24 — object verbs are radial.** `App_Move` and `App_Delete` moved to
+  `Surface::Radial` (tone `structural` / `destructive`), so the dock is creation +
+  search (`Toy_MakeSlab`, `Toy_Polyline`, `Search`) and never reflows on selection.
+  A right-press (or `Space`) opens the in-situ wheel at the pointer; the pure
+  `ferrocad_widgets::wheel` paints it and `slot_at` hit-tests it, while the stateful
+  `WheelMenu` sidecar owns the `Armed`/`Latched` phases, the hover, the tap-vs-flick
+  timing and its own overlay. A flick commits on release; a quick tap
+  (< 200 ms, < 12 px) **latches** the wheel for trackpad use, and a primary click then
+  commits. Both the right-press and `Space` re-pick at the pointer through the
+  viewport's G-buffer path, so the wheel follows the object under the cursor rather
+  than the previous selection. **Opening the wheel never changes the selection**: the
+  pick is a context target, promoted only when a verb is chosen; empty space falls back
+  to the selection's verbs (or creation when nothing is selected), so the key is
+  contextual rather than global. A long hold released in the hollow centre cancels. The
+  dock's `Move` split (and its gizmo-options popover) is gone; the gizmo is armed by
+  selection and its settings stay in `Settings/Gizmo`.
+- **2026-10-25 — geometric dialogs float.** `App_Move` asks for
+  `"presentation": "float"`, so its dialog is a compact `WHEEL_GLASS` HUD beside the
+  gizmo instead of a centred 380 px panel over a dimmed backdrop. The canvas stays
+  interactive, the first Δ field is focused and selected (`Tab` cycles), and
+  `"preview": "translation"` composes a temporary transform on the selection while
+  typing — no transaction until `Enter`. A gizmo drag while the HUD is open is
+  **deferred** (`ViewportEvent::TransformPreview`): each tick mirrors the accumulated
+  delta into the Δ fields and keeps previewing, and only Accept applies the move, so
+  dragging and typing cannot double-apply. The gizmo itself is anchored at the picked
+  world point (`SelectionAnchor`), or the body's base corner for a tree selection, and
+  it follows a live preview (as do manipulators with a world anchor), and it stays glued
+  to the moved surface even during its own drag (a draw-only offset; the interaction
+  frame is frozen at the grab point). After a committed edit the shell re-arms the
+  current selection, so a height grip stays on the moved top face and the triad does not
+  vanish; any competing interaction (for example a height change) closes the pending HUD
+  instead of leaving a stale delta, and so does replacing or clearing the selection (the
+  form is scoped to the selection it was opened for).
+  Creation dialogs (`Toy_MakeSlab`) keep the modal presentation until they grow a
+  placement preview.
+- **2026-10-25 — the floating HUD is clamped and freezes.** Its placement is now a
+  pure rule (`place_hud`/`clamp_hud`): below-right of the gizmo (or the live pointer
+  when no gizmo is armed), kept 16 px from the window edges and 64 px above the bottom
+  dock. While the pointer is inside the painted HUD rect or a Δ field holds focus, the
+  screen position is **frozen**, so typing `500` into ΔX cannot slide the inputs out
+  from under the cursor; releasing focus and leaving the rect resumes tracking. The
+  painted rect is captured with `on_children_prepainted` for hit-testing, and hover is
+  read from `window.mouse_position()` because a mouse-move listener only fires on the
+  hovered hitbox. Tests: `a_floating_hud_is_clamped_into_the_safe_area`,
+  `a_focused_floating_hud_freezes_in_place`.
 
 ## 9. Risks
 

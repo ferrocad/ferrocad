@@ -48,7 +48,11 @@ pub struct ManipulatorFrame {
 - The basis is orthonormal and right-handed. The frame is captured at press time and a
   `set_frame` during a drag cancels the drag rather than reinterpreting its press point.
 - Anchoring policy (host-side, T2):
-  - a body or component: the **bounding-box centre** in world space;
+  - a **spatial** selection (a viewport click): the **point of contact**, from the
+    pick's `SelectionAnchor` (see [`selection-gizmos-and-forms.md`](selection-gizmos-and-forms.md)
+    §4.1); a whole-body click uses the clicked surface point, not the interior;
+  - a **non-spatial** selection (tree or command): the **bounding-box base corner**
+    (world-aligned minimum), a predictable datum rather than the interior centroid;
   - a multi-face selection: the **area-weighted centroid** of the selected sub-shapes;
   - a single flat face / sketch region: the Push-Pull stem starts at the region centroid
     with its `+N` basis along the face normal.
@@ -449,7 +453,9 @@ a **contribution** like a manipulator, and it shares the same document route:
 
 - `Contributions::with_gizmo(factory)` — the edition decides which objects get one;
   `ferrocad_toy::move_gizmo` claims whole-object selections and places it at the item's
-  centre.
+  bounding-box base corner. The shell re-anchors it at the picked world point when a
+  viewport click made the selection, so the triad belongs to the contact point rather
+  than an abstract centre; a tree selection keeps the base-corner datum.
 - `ViewportEvent::Transform(GizmoCommitEvent)` — the viewport emits the drag commit on
   release (`take_gizmo_commit` is the poll form).
 - `GizmoCommitEvent::to_interaction` — the commit becomes `"transform"` / `"apply"`
@@ -457,6 +463,13 @@ a **contribution** like a manipulator, and it shares the same document route:
   hook receives it. There is no second document hook.
 - The toy's provider composes the matrix with the object's `Placement` in one
   transaction; its end-to-end test asserts the move and its undo.
+- The shell **re-arms** the current selection after every committed edit
+  (`after_document_edit`, a dialog accept, a command run), so the triad and workbench
+  grips sit on the new geometry. A live preview offsets them with the object through
+  `Manipulator::anchor`/`set_anchor`, and the triad is **glued to the surface** even
+  during its own drag: `TransformGizmo::set_display_offset` moves only the drawing
+  while the interaction frame stays at the grab point (so `drag_to` cannot feed back),
+  then the frame commits to the new pose on release.
 
 Covered by `ferrocad_viewport`'s `the_gizmo_readout_tracks_the_drag_and_clears_on_release`
 (take + `to_interaction`), `ferrocad_gpui`'s `a_registered_gizmo_factory_claims_its_objects`,
@@ -755,31 +768,28 @@ so a spec can carry its own metadata.
 
 The gizmo is a **transient tool handle**, not a persistent scene helper, so it does not
 belong in the top-left header beside `Grid`/`Axes`/`WP`: those can be toggled in an empty
-scene, and a `Gizmo` toggle there would imply the same. The options live **on the tool**
-instead:
+scene, and a `Gizmo` toggle there would imply the same. It also does not need a dock row:
+object verbs moved to the wheel ([`selection-gizmos-and-forms.md`](selection-gizmos-and-forms.md)
+§2), and the dock is creation + global only (`Create Slab`, `Polyline`, `Search`).
 
-- the dock's `Move` entry **is** the tool: its label arms a translate gizmo for the
-  current selection (resolving a tree selection's name through the display map, so it
-  works without a viewport pick first) and the entry is tinted active while its handle
-  is live; the base edition registers `ferrocad_gpui::translate_gizmo` as its default
-  contribution, so this exists in the shipped app, not only in a workbench;
-- the caret appears only while a gizmo is armed, and opens the provider rows,
-  `Gizmo settings…` and `Move by delta…` upward into the canvas. Opening it reads the
-  provider registry (the same lazy read `Grid`/`Axes` use), which is how the two
-  backends — `FerroCAD (native)` and `FerroCAD (shader)` — become visible and
-  switchable at the tool, rather than only in Dev Tools;
-- the settings commands are **dev-only** and declare `FerroCAD_Surface: "gizmo"`, which
-  parses to `Surface::Hidden`; the dock also skips any dev-only row. Neither `Gizmo` nor
-  `Gizmo (shader)` can therefore appear as a toolbar button — they live in Dev Tools and
-  the `Settings/Gizmo` tree;
-- the caret disappears with the selection, so nothing can be clicked out of context and
-  the dock's layout is stable while a tool is drawing.
+- A **spatial selection** auto-arms the translate triad at its contact point; a tree or
+  command selection uses the body's base corner. The base edition registers
+  `ferrocad_gpui::translate_gizmo`, so this exists in the shipped app.
+- Choosing **`Move`** in the wheel promotes its context target and opens the floating
+  `ΔX/ΔY/ΔZ` form in **deferred** mode: the keys are the gizmo's, the form's Accept is
+  the single commit. The same form is the target of the planned Tab/digit escalation
+  (§ *Fast escalation* in the interaction model).
+- The **provider rows** (`FerroCAD (native)` / `FerroCAD (shader)`) and
+  `Gizmo settings…` are reachable from **`Search (Ctrl+K)`**, **Dev Tools**, and the
+  `Settings/Gizmo` tree. The settings commands are dev-only and declare
+  `FerroCAD_Surface: "gizmo"` (parsed as `Surface::Hidden`), so they never become dock or
+  wheel rows.
+- There is no dock caret to keep in sync with the selection. A small caret inside the
+  floating form that opens `Gizmo settings…` is optional future polish; the settings are
+  already one search away.
 
-The growth path is the same mechanism, not a new row: `dock_options` maps a dock command
-to the popover key it owns (`App_Move → "gizmo"`) and `dock_options_live` decides when its
-caret is worth showing. A future `Polyline ▾` or `Create Slab ▾` adds one match arm, so
-the dock stays one strip and the header keeps a single meaning (*how the viewport is
-drawn*).
+This keeps the dock layout stable while a tool is drawing and preserves one meaning for
+the header: *how the viewport is drawn*.
 
 ### What is still open (G3b)
 

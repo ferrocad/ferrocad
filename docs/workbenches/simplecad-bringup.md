@@ -649,6 +649,14 @@ Acceptance:
 - The revision (`9180c4b`, 0.38.0) is recorded with every report, as `conformance.md`
   already requires for `freecad-upstream`.
 
+**S0 landed (2026-10-24).** `tools/conformance.py --simplecad` lists and runs the
+88 `tests/unit/test_*.py` stems and self-skips without the checkout;
+`tools/simplecad_audit.py --check` compares the checkout with
+[`contracts/simplecad.json`](../../contracts/simplecad.json) (283 `.py`, 42 `Part`
+names, 0 `.ui`, 0 `Draft` imports, 1 `PartDesign` file, 0 `ViewProvider`, 156 files
+under `tests/`). The `geometry` CI job runs the audit only when a sibling
+`../simplecad` exists. The report itself and its baseline belong to S1.
+
 ### S1 — Headless unit baseline
 
 Run the 88 `tests/unit` modules **unchanged** against the FerroCAD image that links

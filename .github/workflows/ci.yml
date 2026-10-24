@@ -149,3 +149,15 @@ jobs:
           export OCCT_INCLUDE_DIR="$PWD/.occt/prefix/include/opencascade"
           export LD_LIBRARY_PATH="$PWD/.occt/prefix/lib:$LD_LIBRARY_PATH"
           cargo test -p ferrocad_occt -p ferrocad_part -p ferrocad_part_py -p ferrocad_parametric
+
+      - name: SimpleCAD S0 static audit (optional; needs a sibling checkout)
+        # S0 is measurement only. PR CI does not clone SimpleCAD, so this is a
+        # no-op there; a developer image or a future scheduled job that checks
+        # out the pinned revision gets the drift alarm. See
+        # docs/workbenches/simplecad-bringup.md §7 (S0).
+        run: |
+          if [ -d ../simplecad ]; then
+            python3 tools/simplecad_audit.py --check
+          else
+            echo "SimpleCAD checkout not present; skipping S0 audit"
+          fi

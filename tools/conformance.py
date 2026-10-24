@@ -15,6 +15,8 @@ Usage::
     python3 tools/conformance.py --root ../freecad-upstream --part      # Part workbench tests
     python3 tools/conformance.py --root ../freecad-upstream --draft     # headless Draft tests
     python3 tools/conformance.py --root ../freecad-upstream --list      # list candidates
+    python3 tools/conformance.py --simplecad --list                     # SimpleCAD unit stems
+    python3 tools/conformance.py --simplecad                            # run SimpleCAD unit tests
 
 The one-time setup (the sparse `freecad-upstream` checkout, the extension build) and
 the current baseline are in ``docs/workbenches/conformance.md``.
@@ -24,16 +26,24 @@ and `FreeCAD` and they must share one core), which the standalone `ferrocad.abi3
 does not. Run it through
 `cargo test -p ferrocad_part_py --test part_conformance -- --nocapture` (set
 `FERROCAD_UPSTREAM`), which supplies the one image and calls this harness.
+
+The `--simplecad` group has its own source root, a sibling checkout outside version
+control (default ``../simplecad``, or ``SIMPLECAD_DIR`` / ``--simplecad-root``). It
+runs ``tests/unit/test_*.py`` unchanged and self-skips when the checkout is absent,
+so normal CI stays hermetic. S0 only hooks it up; S1 records the baseline.
 """
 
 from __future__ import annotations
 
 import argparse
 import importlib.util
+import os
 import re
 import subprocess
 import sys
 import unittest
+from collections.abc import Callable
+from dataclasses import dataclass
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[1]   # ferrocad project root
@@ -89,6 +99,80 @@ DRAFT_FILES = [
     "test_airfoildat",
     "test_import",
 ]
+
+# `src/Mod/Test` also holds package plumbing; the App group's `--list` has always
+# excluded these stems.
+APP_SKIP = {"__init__", "Init", "InitGui", "unittestgui", "Metadata"}
+
+
+@dataclass(frozen=True)
+class Group:
+    """A named set of test files and the source root(s) they come from.
+
+    ``roots`` are both the directories searched for ``<stem>.py`` and the
+    directories inserted on ``sys.path``. ``import_roots`` are extra directories
+    that only need to be importable (the SimpleCAD checkout root, so
+    ``from simplecad.core import ...`` resolves). ``stems`` is a fixed list; an
+    empty tuple means the group discovers its files with ``discover``.
+
+    Keeping the roots in the descriptor is what lets the harness stop assuming a
+    single ``--root``: the App/Part/Draft groups point at one FreeCAD checkout,
+    while SimpleCAD points at a sibling checkout.
+    """
+
+    name: str
+    roots: tuple[Path, ...]
+    stems: tuple[str, ...]
+    discover: Callable[[], list[str]]
+    import_roots: tuple[Path, ...] = ()
+
+
+def simplecad_path(explicit: str | None = None) -> Path:
+    """Resolve the SimpleCAD checkout: CLI, then environment, then ``../simplecad``."""
+    if explicit:
+        return Path(explicit).expanduser().resolve()
+    env = os.environ.get("SIMPLECAD_DIR") or os.environ.get("FERROCAD_SIMPLECAD")
+    if env:
+        return Path(env).expanduser().resolve()
+    return (REPO.parent / "simplecad").resolve()
+
+
+def app_group(root: Path) -> Group:
+    return Group(
+        "app",
+        (root / "src" / "Mod" / "Test",),
+        tuple(DEFAULT_FILES),
+        lambda: list_candidates(root),
+    )
+
+
+def part_group(root: Path) -> Group:
+    return Group(
+        "part",
+        tuple(root / d for d in PART_DIRS),
+        tuple(PART_FILES),
+        lambda: list_candidates(root),
+    )
+
+
+def draft_group(root: Path) -> Group:
+    return Group(
+        "draft",
+        tuple(root / d for d in DRAFT_DIRS),
+        tuple(DRAFT_FILES),
+        lambda: list_candidates(root),
+    )
+
+
+def simplecad_group(root: Path) -> Group:
+    unit = root / "tests" / "unit"
+    return Group(
+        "simplecad",
+        (unit,),
+        (),
+        lambda: sorted(p.stem for p in unit.glob("test_*.py")),
+        import_roots=(root,),
+    )
 
 
 def _short(err) -> str:
@@ -210,18 +294,36 @@ def upstream_revision(root: Path) -> str:
 
 def list_candidates(root: Path) -> list[str]:
     test_dir = root / "src" / "Mod" / "Test"
-    skip = {"__init__", "Init", "InitGui", "unittestgui", "Metadata"}
     return sorted(
         p.stem for p in test_dir.glob("*.py")
-        if p.stem not in skip and not p.name.startswith("_")
+        if p.stem not in APP_SKIP and not p.name.startswith("_")
     )
 
 
-def render(outcomes: list[dict], root: Path | None = None) -> str:
+def package_version(root: Path) -> str | None:
+    """The checkout's ``package.xml`` version, when it has one."""
+    try:
+        manifest = (root / "package.xml").read_text(encoding="utf-8")
+    except OSError:
+        return None
+    match = re.search(r"<version>\s*([^<]+?)\s*</version>", manifest)
+    return match.group(1) if match else None
+
+
+def render(
+    outcomes: list[dict],
+    root: Path | None = None,
+    *,
+    source_label: str = "upstream",
+    source_version: str | None = None,
+) -> str:
     lines: list[str] = []
     lines.append("FreeCAD conformance report (M3d)")
     if root is not None:
-        lines.append(f"upstream: {root} @ {upstream_revision(root)}")
+        version = f", version {source_version}" if source_version else ""
+        lines.append(
+            f"{source_label}: {root} @ {upstream_revision(root)}{version}"
+        )
     lines.append("=" * 60)
 
     grand = {"pass": 0, "fail": 0, "error": 0, "skip": 0, "load_error": 0}
@@ -257,7 +359,11 @@ def render(outcomes: list[dict], root: Path | None = None) -> str:
 
 def main(argv: list[str]) -> int:
     parser = argparse.ArgumentParser(description="Run upstream tests against our FreeCAD.")
-    parser.add_argument("--root", required=True, help="path to the freecad-upstream checkout")
+    parser.add_argument(
+        "--root",
+        default=None,
+        help="path to the freecad-upstream checkout (required unless --simplecad)",
+    )
     parser.add_argument("--files", nargs="*", default=None, help="test file stems to run")
     parser.add_argument("--list", action="store_true", help="list candidate test files and exit")
     parser.add_argument(
@@ -270,32 +376,74 @@ def main(argv: list[str]) -> int:
         action="store_true",
         help="run the headless Draft workbench tests",
     )
+    parser.add_argument(
+        "--simplecad",
+        action="store_true",
+        help="run the SimpleCAD tests/unit/test_*.py modules",
+    )
+    parser.add_argument(
+        "--simplecad-root",
+        metavar="PATH",
+        default=None,
+        help=(
+            "SimpleCAD checkout (default: $SIMPLECAD_DIR, $FERROCAD_SIMPLECAD "
+            "or ../simplecad)"
+        ),
+    )
     args = parser.parse_args(argv)
 
-    root = Path(args.root).resolve()
-    test_dir = root / "src" / "Mod" / "Test"
-
+    # `--list` has always ignored `--part`/`--draft`; keep that contract and give
+    # `--simplecad` its own listing, which is also the only listing that can work
+    # without `--root`.
     if args.list:
-        print("\n".join(list_candidates(root)))
+        if args.simplecad:
+            simple_root = simplecad_path(args.simplecad_root)
+            if not simple_root.is_dir():
+                print(
+                    f"skipped: SimpleCAD checkout not found at {simple_root} "
+                    "(set SIMPLECAD_DIR, FERROCAD_SIMPLECAD or --simplecad-root)"
+                )
+                return 0
+            print("\n".join(simplecad_group(simple_root).discover()))
+            return 0
+        if args.root is None:
+            parser.error("--root is required unless --simplecad is given")
+        print("\n".join(list_candidates(Path(args.root).resolve())))
         return 0
 
     if args.part and args.draft:
         parser.error("--part and --draft are separate groups; run one at a time")
+    if args.simplecad and (args.part or args.draft):
+        parser.error("--simplecad is a separate group; run it alone")
 
-    if args.part:
-        dirs = [root / d for d in PART_DIRS]
-        stems = args.files if args.files else PART_FILES
-    elif args.draft:
-        dirs = [root / d for d in DRAFT_DIRS]
-        stems = args.files if args.files else DRAFT_FILES
+    if args.simplecad:
+        root = simplecad_path(args.simplecad_root)
+        if not root.is_dir():
+            print(
+                f"skipped: SimpleCAD checkout not found at {root} "
+                "(set SIMPLECAD_DIR, FERROCAD_SIMPLECAD or --simplecad-root)"
+            )
+            return 0
+        group = simplecad_group(root)
     else:
-        dirs = [test_dir]
-        stems = args.files if args.files else DEFAULT_FILES
+        if args.root is None:
+            parser.error("--root is required unless --simplecad is given")
+        root = Path(args.root).resolve()
+        if args.part:
+            group = part_group(root)
+        elif args.draft:
+            group = draft_group(root)
+        else:
+            group = app_group(root)
+
+    stems = list(args.files) if args.files else list(group.stems or group.discover())
 
     # The workbench package roots must be importable: the Part tests do
     # `from parttests.X import Y`, and Draft does `from drafttests import
-    # auxiliary` and `from freecad.deprecation import deprecated`.
-    for d in dirs:
+    # auxiliary` and `from freecad.deprecation import deprecated`. SimpleCAD
+    # needs its checkout root (`from simplecad.core import ...`) and `tests/unit`
+    # (`from test_dense_deletion import dense_box`).
+    for d in (*group.roots, *group.import_roots):
         if str(d) not in sys.path:
             sys.path.insert(0, str(d))
     if str(PYTHON_DIR) not in sys.path:
@@ -303,13 +451,23 @@ def main(argv: list[str]) -> int:
 
     outcomes = []
     for stem in stems:
-        path = next((d / f"{stem}.py" for d in dirs if (d / f"{stem}.py").is_file()), None)
+        path = next(
+            (d / f"{stem}.py" for d in group.roots if (d / f"{stem}.py").is_file()),
+            None,
+        )
         if path is None:
             print(f"warning: not found: {stem}", file=sys.stderr)
             continue
         outcomes.append(run_file(path))
 
-    print(render(outcomes, root))
+    print(
+        render(
+            outcomes,
+            root,
+            source_label="simplecad" if args.simplecad else "upstream",
+            source_version=package_version(root) if args.simplecad else None,
+        )
+    )
     return 0
 
 

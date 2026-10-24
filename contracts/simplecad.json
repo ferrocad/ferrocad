@@ -1,0 +1,16 @@
+{
+  "schema": 1,
+  "upstream": "https://github.com/igsova/SimpleCAD.git",
+  "measured_from": "docs/workbenches/simplecad-bringup.md §2",
+  "revision": "9180c4b",
+  "version": "0.38.0",
+  "counts": {
+    "py_files": 283,
+    "part_names": 42,
+    "ui_files": 0,
+    "draft_imports": 0,
+    "partdesign_files": 1,
+    "viewprovider_refs": 0,
+    "test_files": 156
+  }
+}

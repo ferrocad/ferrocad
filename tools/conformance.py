@@ -443,11 +443,18 @@ def main(argv: list[str]) -> int:
     # auxiliary` and `from freecad.deprecation import deprecated`. SimpleCAD
     # needs its checkout root (`from simplecad.core import ...`) and `tests/unit`
     # (`from test_dense_deletion import dense_box`).
+    #
+    # `python/` goes on the path *first*, then the group roots are inserted ahead
+    # of it. The harness measures upstream code, so an upstream package must win
+    # over a FerroCAD shim of the same name: `Draft` is the live case (the Part
+    # group needs `python/Draft` to load `TestPartMirror`, while the Draft group
+    # must run `src/Mod/Draft/Draft.py`). Our own modules (`FreeCAD`, `Part`, …)
+    # are built-ins, so path order does not affect them.
+    if str(PYTHON_DIR) not in sys.path:
+        sys.path.insert(0, str(PYTHON_DIR))
     for d in (*group.roots, *group.import_roots):
         if str(d) not in sys.path:
             sys.path.insert(0, str(d))
-    if str(PYTHON_DIR) not in sys.path:
-        sys.path.insert(0, str(PYTHON_DIR))
 
     outcomes = []
     for stem in stems:

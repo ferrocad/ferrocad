@@ -133,6 +133,28 @@ The App number matches the figure recorded in [`milestones.md`](../record/milest
 passing across eight `Mod/Test` files). The Part group is the newer, much larger gap;
 its load errors are the useful signal.
 
+### Current (2026-10-24, upstream `33adf61`, same sparse checkout)
+
+| Group | Result |
+| --- | --- |
+| Part | **444 passed**, 8 failed, 79 errored, 12 skipped, **0 files failed to load** |
+| Draft | **10 passed**, 1 failed, 0 errored, 0 skipped, 1 load error |
+
+The 2026-10-20 Part row is the pre-shim baseline: `TestPartApp.py` and
+`TestPartMirror.py` failed to load (missing `Draft`), so TestPartApp's ~300 tests never
+ran. A minimal `python/Draft` shim (`make_clone` over `App::Link`) removes both load
+errors. The harness puts the group roots ahead of `python/`, so the **Draft** group
+still runs upstream `src/Mod/Draft/Draft.py`, not the shim; its baseline is unchanged.
+
+The 8 failures are four unique tests reported twice (the standalone module plus
+TestPartApp's re-collection): `test_CircularReference`, `testAppPartMakeSweepSurface`,
+and the two compound cuts (`12 != 20`, `30 != 47`). The 79 errors are missing runtime
+API newly exposed by the loaded files, not import failures: `Sketcher::SketchObject`
+(`addGeometry`, `InternalShape`), `PartDesign::Body`, `Edge`/`Face.__new__`,
+`Part.makePlane`, `Part.Plane.toShape`, `Part.ShapeFix`, `Part.Geom2d.*`,
+`Part::RuledSurface`/`Extrusion` without a `Shape`, `ChFi2d`, and `App::Part`
+membership. Fixing them is Part-kernel breadth, not harness work.
+
 ### Reading the report
 
 - `[LOAD ERROR]` — the module could not import; the message names the missing module or

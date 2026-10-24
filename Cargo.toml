@@ -70,8 +70,12 @@ rust-version = "1.85"
 [workspace.dependencies]
 include_dir = "0.7"
 petgraph = "0.6"
+# Q2a's `ferrocad_ui_py` consumes the workspace PyO3 pin; other extension
+# crates still declare their own version/features. `abi3-py311` matches the
+# FreeCAD 1.0 baseline.
+pyo3 = { version = "0.25", features = ["abi3-py311"] }
 serde = { version = "1", features = ["derive"] }
-serde_json = "1"
+serde_json = { version = "1", features = ["float_roundtrip"] }
 unicode-segmentation = "1"
 # Internal crates carry both a `path` (for development) and a `version` (which
 # crates.io requires). Publish them in dependency order: `ferrocad_types`,

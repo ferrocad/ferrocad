@@ -1,6 +1,6 @@
 # Links: `App::Link`, link arrays, and their interlocks
 
-Status: task (2026-10-23). L0–L4 landed 2026-10-23; L5 remains. Records the owner
+Status: task (2026-10-23). L0–L5 landed (L5 on 2026-10-24). Records the owner
 decision of 2026-10-23 that the remaining
 `Part` gaps are **TNP / Links / FCStd**, and that they are one problem seen from three
 sides. Companion to [`../architecture/lineage-and-naming.md`](../architecture/lineage-and-naming.md)
@@ -86,23 +86,48 @@ while the arrays are real `ObjectType`s with their own execute.
 
 ## 3. The interlock with lineage
 
-A link stores `("Box", ["Face3"])`; the document keeps `"Face3"` as an opaque string
-and the kernel resolves it **positionally** today: `ferrocad_occt/src/backend.rs:1659-1672`
-says so in a comment — `FaceN`/`EdgeN` is the N-th sub-shape, and stable *named*
-resolution "needs the lineage mapper (a later slice)".
+A link stores `("Box", ["Face3"])`; the document keeps `"Face3"` as an opaque string. That
+string is never rewritten on read. Resolution happens **at use time**: `Part` and the link
+array's resolver consult the target shape's `ShapeProperty` lineage first
+(`resolve_element_in`), and fall back to the backend's positional resolution only when the
+shape has no lineage.
 
-The link-array references go through exactly that call: `Path`, `Axis`, `BinormalAxis`,
-`Direction` are `LinkSub`s (`link_array.rs:1023-1061`, `1425-1433`), read by `link_sub`
-(`:120-128`) and resolved by `axis_from_reference` → `edge_axis` → `backend.resolve`
-(`:1166-1225`). The same holds for `Part::Fillet`/`Chamfer` (`ferrocad_part/src/dress_up.rs:202`).
-The upstream array tests never reorder a source, so the positional fallback is not
-exercised.
+The link-array references go through that path: `Path`, `Axis`, `BinormalAxis` and `Direction`
+are `LinkSub`s, read by `link_sub` and resolved by `axis_from_reference` → `edge_axis`, which
+is lineage-aware before the backend's positional fallback. The same holds for
+`Part::Fillet`/`Chamfer` (`ferrocad_part/src/dress_up.rs`). The upstream array tests never
+reorder a source, so the positional fallback is not exercised.
 
-After a rebuild, `Face3`/`Edge1` may denote a different element, and nothing detects it.
-A link reference therefore has **persistence identity but no rebuild identity**. The
-lineage layer supplies the second: `Lineage::resolve` maps the stored name through the
-shape's element map, and a retired name must fail loudly rather than retarget
-([`lineage-and-naming.md`](../architecture/lineage-and-naming.md) §3.3, §5).
+After a rebuild, `Face3`/`Edge1` may denote a different element. A link reference therefore
+has **persistence identity but no rebuild identity** on its own. The lineage layer supplies the
+second: the stored name is looked up in the shape's forward map, and a name absent from a
+non-empty map is retired and fails rather than retargeting
+([`lineage-and-naming.md`](../architecture/lineage-and-naming.md) §0.1).
+
+### 3.1 Resolved at use time, never rewritten on read
+
+`PropertyLinkSub`, a link subname and `ElementList[i]`'s sub-element all persist the name the
+user selected. Loading a document must not "fix up" that name: a document is a record of
+intent, and rewriting it would make a save/load cycle change meaning without telling anyone.
+Resolution is therefore a read-side operation applied where the reference is consumed —
+`getSubObject`, the dress-up resolver, the array's `axis_from_reference` — through
+`resolve_element_in`. The stored name is stable; only the resolved `Shape` changes. Recording
+the map version on the reference is still open (L5); today the name is interpreted under
+whatever map the target shape carries at use time.
+
+### 3.2 Transforms replace handles, so they drop the lineage
+
+A transform produces a new `Shape`: `Shape.transformed`/`scaled`/`translated`, and a link
+execute's `write_shape`, hand back a transformed handle rather than editing the source. The
+lineage maps names to sub-shapes of the **source** handle, so carrying it across a transform
+would point the mapped handles at geometry that is no longer there. The link and array execute
+paths therefore store the result with an empty lineage (`ShapeProperty::new`, not
+`with_lineage`); `ShapeProperty::set_shape` has the same clearing rule.
+
+This is deliberate. A transform replaces the handles and does not claim sub-element identity
+across the replacement, so keeping the old map would be a false claim. If a transformed link
+must expose stable sub-elements, the transform needs its own provenance report; until then its
+sub-element names are positional on the transformed shape.
 
 The dependency split matters for sequencing:
 
@@ -125,11 +150,11 @@ complete today.
 
 | Surface | Native JSON (**verified**) | `.FCStd` read (**verified**) |
 | --- | --- | --- |
-| `PropertyLink` | Serde's variant tag plus the name; persisted by `SavedObject::from_object` unless transient/no-persist (`document/mod.rs:1008-1043`) | Read as `<Link value="Name"/>` (`fcstd.rs:390-392`) |
-| `PropertyLinkList` | Variant plus a name list | **Dropped** — not in `fcstd.rs:14-17` and no parse arm |
-| `PropertyLinkSub` | `LinkSub(name, subs_list)` | **Dropped**; the fixture writes `<LinkSub value="Sketch001" count="1"><Sub value="N_Axis"/></LinkSub>` |
-| `PropertyLinkSubList` | **No variant**: `property_types.rs:148` maps it to `Property::LinkList`, so per-item subnames are lost at `addProperty` time | **Dropped**; fixture form is `<LinkSubList count="N"><Link obj="Sketch" sub="Vertex1"/></LinkSubList>` |
-| `PropertyPlacementList` / `ElementList` (arrays) | Persisted as a `PlacementList` and a `LinkList` of names; element objects are ordinary saved objects, so their placements survive | **Dropped** (`PropertyPlacementList` and `PropertyLinkList` are not parsed), so a reopened upstream array has neither elements nor placements |
+| `PropertyLink` | Serde's variant tag plus the name; persisted by `SavedObject::from_object` unless transient/no-persist (`document/mod.rs:1008-1043`) | Read as `<Link value="Name"/>` |
+| `PropertyLinkList` | Variant plus a name list | Read as `<LinkList count><Link value="…"/>` |
+| `PropertyLinkSub` | `LinkSub(name, subs_list)` | Read as `<LinkSub value="…" count="N"><Sub value="…"/>` |
+| `PropertyLinkSubList` | **No variant**: `property_types.rs:148` maps it to `Property::LinkList`, so per-item subnames are lost at `addProperty` time | Read, but **flattened** to `LinkList`: `<LinkSubList><Link obj="…" sub="…"/>` keeps the object order and drops the subnames |
+| `PropertyPlacementList` / `ElementList` (arrays) | Persisted as a `PlacementList` and a `LinkList` of names; element objects are ordinary saved objects, so their placements survive | `PropertyPlacementList` is read; an array's elements and placements restore. `ScaleList` and copy semantics remain absent |
 
 Three link-specific losses follow:
 
@@ -141,9 +166,9 @@ Three link-specific losses follow:
    overlays properties (`document/mod.rs:878-905`); a dangling name resolves to `None`
    instead of failing the load — silent loss for a replaced source.
 
-The format task already isolates both encoders; links add two requirements to it: the
-link list/sub reader is checklist item 4, and `ElementMap` (a reference's other half) is
-item 9. The writer's property elements are in
+The format task already isolates both encoders. Links added two requirements to it: the
+link list/sub reader (checklist item 4, now landed) and `ElementMap` (a reference's other
+half, item 9, still open). The writer's property elements are in
 [`format-serializers.md`](format-serializers.md) §3.2; our fixtures confirm `<Link>`,
 `<LinkList count>`, `<LinkSub value count><Sub>` and `<LinkSubList><Link obj sub>`. How
 upstream persists `App::Link`'s element list itself is **(unverified)** — no `App::Link`
@@ -163,13 +188,16 @@ not fake sub-element resolution before the map exists.
 | **L2** | `App::Link` has output | Register the execute where a kernel exists (`ferrocad_part_py::register_kernel` is the composition root, `ferrocad_part_py/src/lib.rs:55-58`): transform the target's `Shape` by `LinkPlacement`/`Placement`, apply scale, compound when applicable; apply the array's own `Placement` in `finish_array`; return a real `Shape`. Fix `OutList` to cover all link properties | Additive for `App::Link`; the array placement fix changes geometry | L1 |
 | **L3** | Element semantics | `App::LinkElement` (or make `Part::LinkArrayElement` a registered alias), with a link back to the source, a shape (or a resolved `getSubObject`), and non-ordinal identity through lineage once available; make `ElementList[i]` addressable from `getSubObject("Array.Element3")`; keep `ShowElement` collapse reversible | Type id change for new elements; keep the old type registered so saved files load | L1, L2 |
 | **L4** | `LinkCopyOnChange` and containers | `App::LinkGroup`/`App::LinkList`; `LinkMode`; copy-on-change as a shadow object (needs an object clone/copy facility plus its dependencies). This is where "copy the source, not the shape" lands | Yes (new object types and saved-property semantics) | L2 |
-| **L5** | Sub-element resolution | Resolve `LinkSub`, link subnames and element sub-paths through `ferrocad_lineage` first, positional fallback only when no map exists; invalidate rather than retarget when the name is retired; record the map version on the reference | Behavioural for stale refs | **`ferrocad_lineage` S1–S5** |
+| **L5** | Sub-element resolution | Resolve `LinkSub`, link subnames and element sub-paths through `ferrocad_lineage` first, positional fallback only when no map exists; invalidate rather than retarget when the name is retired; record the map version on the reference | Behavioural for stale refs | **Landed 2026-10-24:** the shape's `resolve_element_name` hook is consulted by `getSubObject`; stored subnames are never rewritten |
 
 L0–L2 are the non-breaking envelope: new methods, properties and an execute path without
 changing stored references. **L0–L4 landed 2026-10-23**: real `App::LinkElement` children,
 non-uniform scale through a general transform, and the `App::LinkGroup`/`App::LinkList`
-containers. L5 remains: resolve `LinkSub`/element sub-paths through the lineage map at the
-Python layer (the Part-level resolution is S5).
+containers. At Part level, resolution is use-time and map-first (§3.1). **L5 landed
+2026-10-24:** the Python layer asks the shape value to validate a sub-element name, so a
+retired name fails and a shape without a lineage keeps the positional fallback; the stored
+`LinkSub` strings are left untouched. The remaining link work is the copy-on-change
+facility (L4's inert modes), not naming.
 
 **Where `App::Link` lives is a decision, not a detail.** The defaults are in
 `ferrocad_core`, which cannot construct a shape; the execute needs the kernel. Putting it
@@ -230,7 +258,10 @@ Part-enabled build. Splitting a geometry-free `App::Link` from a Part-side
   object clone/copy facility; the containers themselves now exist and expand.
 - **No `LinkSubList` value.** It is flattened to `LinkList` at property creation; the
   `.FCStd` reader reads link lists/subs but flattens `LinkSubList` the same way.
-- **No lineage-backed resolution.** Every `FaceN`/`EdgeN` is still an ordinal (L5).
+- **Python link layer still positional.** `Part` and the array resolver consult the lineage
+  (S5), but `LinkSub`/element sub-paths at the Python surface still resolve positionally (L5).
+  Transforms drop the lineage by design (§3.2), so a transformed link's sub-elements remain
+  positional.
 - **Not indexed.** `docs/README.md` has no entry for this file; this task may not edit it.
 
 Upstream revision: `33adf618dcebfb167795a219175e7dbb18f7a353`.

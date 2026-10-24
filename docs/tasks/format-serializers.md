@@ -1,14 +1,38 @@
 # Task — split document persistence into two serializers
 
-Status: task (2026-10-23). Records the owner decision of 2026-10-23: native JSON and
-upstream `.FCStd` become **two explicit, independently testable serializers**. F1–F8
-landed 2026-10-23: `.FCStd` is now the real ZIP container on both read and write.
-Companion
+Status: task (2026-10-23; the parallel/independent framing made explicit 2026-10-24). Records
+the owner decision of 2026-10-23: native JSON and upstream `.FCStd` become **two explicit,
+independently testable serializers**. F1–F8 landed 2026-10-23: `.FCStd` is now the real ZIP
+container on both read and write. Companion
 to [`../architecture/part-draft-layering.md`](../architecture/part-draft-layering.md), the
 [conformance runbook](../workbenches/conformance.md) and
 [`../direction/mvp-path.md`](../direction/mvp-path.md) (§8 decision 3, which this closes).
 
 **Legend.** **(verified)** = read from the tree on 2026-10-23; **(recommended)** = not implemented.
+
+## 0. Parallel, independent serializers (2026-10-24)
+
+The two serializers are **parallel and independent**. The native format is ours and may evolve;
+`.FCStd` is the conformance-tracked path. Concretely:
+
+- Neither encoder is built by transforming the other's output, and neither reader falls back to
+  the other format. The suffix selects the backend; content sniffing is gone.
+- A change to the native envelope is a native migration, not a conformance event. `.FCStd` output
+  is judged only by the upstream probes (§4).
+- Native persistence must therefore **not** be defined in terms of `.FCStd`; otherwise our own
+  format changes would move the conformance target.
+
+Lineage persistence follows from that split ([`../architecture/lineage-and-naming.md`](../architecture/lineage-and-naming.md) §0, §6):
+
+- In `.FCStd`, lineage must remain **upstream-compatible**. `PartShapeN.brp` stays raw BREP
+  (`ShapeProperty::fcstd_members` → `brep()`); the native `FCSHPROP` envelope is never placed
+  inside it. A real FreeCAD must still open the shape.
+- Lineage metadata is **additive**: a sidecar member, or an upstream-compatible `ElementMap`
+  element, rides alongside the raw BREP, and a reader that does not know it still loads the shape.
+  S6b implements the sidecar (`PartShapeN.lineage`, referenced by a `FerroCADSidecar` attribute);
+  an upstream-compatible `ElementMap` element remains a follow-up.
+- In the native format the shape and its lineage share one versioned envelope, so there is no
+  "shape without metadata" state to migrate around.
 
 ## Decision
 
@@ -18,8 +42,8 @@ to [`../architecture/part-draft-layering.md`](../architecture/part-draft-layerin
   remains canonical.
 - **Upstream `.FCStd`** is an import/export format, conformance-tracked: upstream tests
   write and reopen it; **(verified)** `ColorPerFaceTest.py`, `Document.py`.
-- Both paths are selected **explicitly**, never by sniffing content. **No `.FCStd` writer
-  exists today.**
+- Both paths are selected **explicitly**, never by sniffing content. The `.FCStd` writer emits
+  the real ZIP container (F8); it is not a JSON placeholder.
 
 ## 1. Extension and format-detection policy
 
@@ -36,7 +60,7 @@ case-insensitive; canonical spelling is lowercase `.ferrocad`.
 | --- | --- | --- | --- |
 | `.ferrocad` | native JSON only | native JSON | default save format |
 | `.fe2o3` / `.fe203` (any case) | native JSON only | native JSON | accepted aliases; `.ferrocad` is canonical |
-| `.FCStd` (any case) | ZIP + `Document.xml`; transitional JSON fallback (§1.3) | placeholder JSON now; real ZIP **after** the writer lands | conformance format |
+| `.FCStd` (any case) | ZIP + `Document.xml`; transitional JSON fallback (§1.3) | real ZIP + `Document.xml` + `GuiDocument.xml` + `PartShapeN.brp` | conformance format; upstream-compatible |
 | none / unknown | `ValueError` naming `.ferrocad`/`.fe2o3` and `.FCStd` | `ValueError` | no silent default; the GUI dialog supplies the suffix |
 
 ### 1.3 The transitional rule (retired at F8)
@@ -120,9 +144,9 @@ module-owned property types, appearance/material and `ElementMap` are still skip
 
 **Landed 2026-10-23 (F5).** `ferrocad_core::document::fcstd_write` provides
 `write_fcstd(saved, path)` (and an in-memory `encode_fcstd`): a minimal ZIP writer with a
-local CRC-32, `Document.xml`, and `PartShapeN.brp` members. It is a direct-call API —
-`saveAs` still writes the JSON placeholder (F8). The mapping below is the target; what the
-writer emits today is the subset described in §3.2.1.
+local CRC-32, `Document.xml`, and `PartShapeN.brp` members. F8 wired `saveAs` to it, so the
+JSON placeholder is gone. The mapping below is the target; what the writer emits today is
+the subset described in §3.2.1.
 
 ZIP: single-disk, unencrypted, deflated, never ZIP64; members are `Document.xml`,
 `GuiDocument.xml`, `PartShapeN.brp` and `DiffuseColor*` (no thumbnail in v1).
@@ -147,13 +171,12 @@ Lossiness to settle: `Property::String` cannot distinguish `PropertyString` from
 `App::PropertyLength`, losing `PropertyAngle`; and `python_state` is not a property. Add a
 type-id map to `SavedObject` (recommended) or accept a documented approximation.
 
-**`.brp` payloads.** `ShapeProperty::save()` already returns ASCII BREP
-(`shape_property.rs:77-82`, `ferrocad_occt::write_brep` → `BRepTools::Write`). Write it
-verbatim to `PartShape.brp`, `PartShape1.brp`, … with `<Part file="PartShapeN.brp"/>`.
-For `Part::PropertyTopoShapeList`, upstream uses one member per entry
-(`<TopoShape file="PartShapeN.M.brp"/>`), but `ShapeListProperty::save()` is one
-length-framed blob; expose per-entry blobs (an `fcstd_payloads()` hook on `ExtensionData`
-defaulting to `None`) rather than teaching core to parse the framing.
+**`.brp` payloads.** `ShapeProperty::fcstd_members()` returns raw ASCII BREP for the
+`PartShapeN.brp` member; `save()` is the **native** envelope and is not what `.FCStd` writes
+(§0). Write the raw bytes verbatim to `PartShape.brp`, `PartShape1.brp`, … with
+`<Part file="PartShapeN.brp"/>`. For `Part::PropertyTopoShapeList`, upstream uses one member
+per entry (`<TopoShape file="PartShapeN.M.brp"/>`); `ExtensionData::fcstd_members` already
+returns the per-entry list, so core never parses the list framing.
 
 **`GuiDocument.xml` is required, not optional.** `ColorPerFaceTest.py` saves, reopens,
 sets `Visibility = True` and asserts six restored `DiffuseColor` entries **(verified)**.
@@ -248,13 +271,18 @@ to `.ferrocad`. FCStd probes: `ColorPerFaceTest`, `TopoShapeListTest`, `TestLink
   2026-10-23.**
 - [x] **8. Switch.** `saveAs(.FCStd)` emits ZIP; the placeholder is gone; the magic and
   the archive members are asserted. **Landed 2026-10-23.**
-- [ ] **9. Follow-ups.** Thumbnail, `ElementMap`, an upstream-FreeCAD open check.
+- [x] **9. Lineage sidecar (S6b).** `ExtensionData::fcstd_sidecar` writes
+  `PartShapeN.lineage` beside the raw `.brp`, referenced by `FerroCADSidecar`; the reader
+  prefers it and falls back to the raw member. **Landed 2026-10-24.** Still open: the
+  thumbnail, an upstream-compatible `ElementMap` element, and an upstream-FreeCAD open
+  check.
 
 ## What is not done (2026-10-23)
 
 - **Module-payload read is partial.** `.brp` and shape-list members restore, but other
   module-owned types, shape appearance/material and `ElementMap` are skipped, and the
-  reader ignores module-specific payloads it does not recognise.
+  reader ignores module-specific payloads it does not recognise. `ElementMap` is deliberately
+  not written yet; when it lands it stays additive beside the raw `.brp` (§0).
 - **A few writer values remain lossy.** `Property::FileIncluded` and
   `Property::PythonObject` error by name; `python_state` is reported as dropped, not
   written as an upstream pickle; `ElementMap` and thumbnails are follow-ups.

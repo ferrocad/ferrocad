@@ -20,6 +20,7 @@ use ferrocad_core::object_registry::{self, ObjectType};
 use ferrocad_core::{Document, Matrix4, ObjectId, Placement, Property, Rotation, prop_status};
 use ferrocad_curves::{Arc as CurveArc, Circle, EdgeCurve, LineSegment, Vector3};
 use ferrocad_geom::{ElementKind, Lineage, Shape};
+use ferrocad_occt::surface_ops;
 use ferrocad_part::{
     make_shape_list_property, make_shape_property, shape_list_of, shape_of, ShapeListProperty,
     ShapeProperty,
@@ -153,17 +154,15 @@ impl PySolid {
 
 /// Build a solid from the collected shells.
 ///
-/// The seam's `make_solid` takes one closed shell (this slice has no cavities), so
-/// more than one shell is reported instead of silently dropping the rest.
+/// The first shell is the outer skin and any further shells are cavities
+/// (`BRepBuilderAPI_MakeSolid` + `OrientClosedSolid` in the kernel).
 fn solid_from(shells: &[Shape]) -> PyResult<Shape> {
     match shells {
         [shell] => ferrocad_part::backend()
             .make_solid(shell)
             .map_err(kernel_error),
         [] => Err(OCCError::new_err("a solid needs a shell")),
-        _ => Err(OCCError::new_err(
-            "a solid from several shells (cavities) is not implemented yet",
-        )),
+        _ => surface_ops::make_hollow_solid(shells).map_err(kernel_error),
     }
 }
 
@@ -188,7 +187,7 @@ impl PySolid {
             return Err(OCCError::new_err("Part.Solid.add expects a shell"));
         }
         // Build from the extended list before committing it, so a rejected add
-        // (a second shell) leaves the object as it was.
+        // leaves the object as it was.
         let rebuilt = {
             let mut shells = slf.shells.lock().unwrap_or_else(|e| e.into_inner());
             let mut candidate = shells.clone();
@@ -239,9 +238,10 @@ fn makeShellFromWires(shape: &Bound<'_, PyAny>, op: Option<&str>) -> PyResult<Pa
     Ok(PartShape::from_shape(shell))
 }
 
-/// `Part.makeSolid(shape, op=None)` — create a solid from the shell of `shape`.
+/// `Part.makeSolid(shape, op=None)` — create a solid from the shells of `shape`.
 ///
-/// A shell is used directly; any other shape must contain exactly one shell.
+/// A shell is used directly. Several shells make a solid with cavities: the
+/// first shell is the outer skin and the rest are hollows.
 #[pyfunction]
 #[pyo3(signature = (shape, op = None))]
 fn makeSolid(shape: &Bound<'_, PyAny>, op: Option<&str>) -> PyResult<PartShape> {
@@ -2445,8 +2445,12 @@ fn tube_shape(spine: &Shape, radius: f64, tolerance: f64) -> Result<Shape, Strin
     }
     let (start, tangent) = spine_frame(spine)?;
     let profile = circular_profile(start, tangent, radius)?;
-    ferrocad_part::backend()
-        .make_pipe(spine, &profile, tolerance)
+    // `BRepOffsetAPI_MakePipeShell` uses the corrected-Frenet trihedron, the
+    // same frame law upstream's `makeTube` asks `GeomFill` for. The approximation
+    // tolerance is not a parameter of the pipe shell; it is accepted for the
+    // upstream signature.
+    let _ = tolerance;
+    surface_ops::make_pipe_shell(spine, &[profile], false, false)
         .map_err(|error| error.to_string())
 }
 
@@ -2454,8 +2458,9 @@ fn tube_shape(spine: &Shape, radius: f64, tolerance: f64) -> Result<Shape, Strin
 ///
 /// Upstream builds a solid from two thread-profile wires on coaxial cylinders;
 /// the seam has no through-sections between wires, so the thread is built the way
-/// the task asks: the helix edge is swept with a circular profile of radius
-/// `depth / 2`, giving a helical tube that spans `depth` radially.
+/// the task asks: the exact-by-construction helix edge is swept with a circular
+/// profile of radius `depth / 2`, giving a helical tube that spans `depth`
+/// radially.
 fn thread_shape(pitch: f64, depth: f64, height: f64, radius: f64) -> Result<Shape, String> {
     if pitch < CONFUSION {
         return Err("Pitch of thread too small".to_string());
@@ -2469,14 +2474,12 @@ fn thread_shape(pitch: f64, depth: f64, height: f64, radius: f64) -> Result<Shap
     if radius < CONFUSION {
         return Err("Radius of thread too small".to_string());
     }
-    let geometry = curves::helix_geometry(pitch, height, radius, 0.0, false, false)
+    let spine = surface_ops::make_helix_edge(pitch, height, radius, 0.0, false)
         .map_err(|error| error.to_string())?;
-    let spine = ferrocad_part::backend()
-        .make_bspline_edge(&geometry.points, false)
-        .map_err(|error| error.to_string())?;
-    let profile = circular_profile(geometry.start, geometry.tangent, depth * 0.5)?;
-    ferrocad_part::backend()
-        .make_pipe(&spine, &profile, 1e-3)
+    // The helix starts at (radius, 0, 0) with tangent (0, 2*pi*radius/pitch, 1).
+    let tangent = Vector3::new(0.0, std::f64::consts::TAU * radius / pitch, 1.0).normalize();
+    let profile = circular_profile(Vector3::new(radius, 0.0, 0.0), tangent, depth * 0.5)?;
+    surface_ops::make_pipe_shell(&spine, &[profile], false, false)
         .map_err(|error| error.to_string())
 }
 
@@ -2718,10 +2721,17 @@ fn makeRevolution(
     if let Some(wanted) = wanted_type {
         let natural = PartShape::from_shape(shape.clone()).shape_type();
         if wanted != natural {
-            return Err(OCCError::new_err(format!(
-                "makeRevolution: converting the revolved {natural} to {wanted} is not \
-                 implemented; pass shapetype=None for the natural result"
-            )));
+            // A partial revolve of a face can be a shell; asking for `Part.Solid`
+            // promotes it when the result is one closed shell (upstream's
+            // `shape2pyshape` cast). Nothing else is converted.
+            if wanted == "Solid" {
+                shape = single_solid(shape).map_err(OCCError::new_err)?;
+            } else {
+                return Err(OCCError::new_err(format!(
+                    "makeRevolution: converting the revolved {natural} to {wanted} is not \
+                     implemented; pass shapetype=None for the natural result"
+                )));
+            }
         }
     }
     Ok(PartShape::from_shape(shape))
@@ -3165,7 +3175,10 @@ impl ObjectType for HelixPrimitive {
                 return Err("Number of turns too high (> 1e4)".to_string());
             }
             let left_handed = enum_index_property(doc, id, "LocalCoord") == 1;
-            let shape = curves::helix_shape(pitch, height, radius, angle, left_handed, false)?;
+            // The exact-by-construction helix: an edge whose pcurve is a straight
+            // line on an analytic cylinder/cone (upstream's `TopoShape::makeHelix`).
+            let shape = surface_ops::make_helix_edge(pitch, height, radius, angle, left_handed)
+                .map_err(|error| error.to_string())?;
             apply_object_placement(doc, id, shape)
         })();
         if let Ok(shape) = &result {
@@ -3179,11 +3192,11 @@ impl ObjectType for HelixPrimitive {
 
 /// `Part::Sweep`: `Sections` swept along `Spine`.
 ///
-/// The seam's `make_pipe` sweeps one profile; a multi-section sweep is reported
-/// rather than silently using the first section. A `Solid` sweep sweeps the
-/// section's filled face, which is the same volume for a closed planar section.
-/// `Frenet`, `Transition` and `Linearize` are accepted for upstream compatibility;
-/// `make_pipe` uses the kernel's own `MakePipe` frame and transition.
+/// The kernel's `BRepOffsetAPI_MakePipeShell` sweeps one or several profiles in
+/// order, with the `Frenet` trihedron the property selects. The `Transition`
+/// property is accepted for upstream compatibility but the shell always uses
+/// OCCT's `Transformed` transition; `Linearize` has no pipe-shell counterpart.
+/// A `Solid` sweep closes the swept shell into a solid.
 struct Sweep;
 
 impl ObjectType for Sweep {
@@ -3236,21 +3249,17 @@ impl ObjectType for Sweep {
                 .iter()
                 .map(|name| linked_shape(doc, &(name.clone(), Vec::new())))
                 .collect::<Result<Vec<_>, _>>()?;
-            if profiles.len() != 1 {
-                return Err(
-                    "a sweep through several sections is not implemented: the seam's \
-                     make_pipe sweeps a single profile"
-                        .to_string(),
-                );
-            }
             let solid = bool_property(doc, id, "Solid", true);
-            let profile = if solid {
-                sweep_section_face(&profiles[0])?
+            let frenet = bool_property(doc, id, "Frenet", true);
+            let profile_shapes = if solid {
+                profiles
+                    .iter()
+                    .map(sweep_section_face)
+                    .collect::<Result<Vec<_>, _>>()?
             } else {
-                profiles[0].clone()
+                profiles
             };
-            let mut shape = ferrocad_part::backend()
-                .make_pipe(&spine, &profile, 1e-3)
+            let mut shape = surface_ops::make_pipe_shell(&spine, &profile_shapes, solid, frenet)
                 .map_err(|error| error.to_string())?;
             if solid {
                 shape = single_solid(shape)?;

@@ -43,6 +43,7 @@ pub mod chfi2d;
 mod error;
 mod shape;
 pub mod shapefix;
+pub mod surface_ops;
 mod topology;
 
 pub use backend::OcctBackend;

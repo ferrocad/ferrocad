@@ -103,6 +103,31 @@ fn assert_bounds(shape: &Bound<'_, PyAny>, expected: [f64; 6], what: &str) {
     }
 }
 
+/// The tight bounds (`Shape.optimalBoundingBox`). A swept B-spline surface's
+/// default `BoundBox` follows its control net, which can overshoot a curving
+/// sweep even though the surface itself does not.
+fn optimal_bounds(shape: &Bound<'_, PyAny>) -> [f64; 6] {
+    let bound_box = shape
+        .call_method0("optimalBoundingBox")
+        .expect("Shape.optimalBoundingBox");
+    let value = |name: &str| {
+        number(
+            &bound_box
+                .getattr(name)
+                .unwrap_or_else(|_| panic!("BoundBox.{name}")),
+            name,
+        )
+    };
+    [
+        value("XMin"),
+        value("YMin"),
+        value("ZMin"),
+        value("XMax"),
+        value("YMax"),
+        value("ZMax"),
+    ]
+}
+
 /// A closed square wire on the XY plane with its lower-left corner at `corner`.
 fn square_wire<'py>(
     part: &Bound<'py, PyModule>,
@@ -647,9 +672,9 @@ fn make_thread_is_a_helical_pipe() {
         assert_eq!(shape_type(&thread), "Shell");
         assert!(is_valid(&thread));
         assert!(area(&thread) > 0.0);
-        // The tube stays within `radius + depth/2` radially (plus the B-spline
-        // overshoot and the profile's tilt at the start).
-        let thread_bounds = bounds(&thread);
+        // The tube stays within `radius + depth/2` radially. The tight box is
+        // used because the swept surface's control net overshoots the geometry.
+        let thread_bounds = optimal_bounds(&thread);
         assert!(
             [thread_bounds[0], thread_bounds[1], thread_bounds[3], thread_bounds[4]]
                 .iter()

@@ -43,7 +43,7 @@ mod solids;
 use std::sync::{Arc, Mutex};
 
 use ferrocad_core::{ExtensionData, ExtensionValue};
-use ferrocad_geom::{ElementKind, ElementRef, Shape, TessellationOptions};
+use ferrocad_geom::{ElementKind, ElementRef, Lineage, MapVersion, Shape, TessellationOptions};
 use ferrocad_occt::OcctBackend;
 use ferrocad_part::{ShapeListProperty, ShapeProperty, SHAPE_LIST_TYPE_NAME, TYPE_NAME};
 use pyo3::exceptions::{PyIOError, PyRuntimeError, PyValueError};
@@ -64,24 +64,34 @@ fn register_kernel() {
 /// The `Mutex` is here at the Python boundary only: `Shape` is `Send` but not `Sync`
 /// (see `ferrocad_geom`), and a `#[pyclass]` must be `Send + Sync`. It is not a lock
 /// in the seam.
+///
+/// A shape produced by an operation also carries the [`Lineage`] that operation
+/// folded: names are metadata *beside* the geometry, never part of it, so they
+/// cannot change any Python-visible value. The lineage is deliberately not carried
+/// across transforms — those replace every sub-shape handle, and a map pointing at
+/// the old handles would be worse than none.
 #[pyclass(name = "Shape", module = "Part", subclass)]
 pub struct PartShape {
     shape: Mutex<Option<Shape>>,
+    lineage: Mutex<Option<Lineage>>,
 }
 
 impl PartShape {
+    fn with_parts(shape: Option<Shape>, lineage: Option<Lineage>) -> Self {
+        PartShape {
+            shape: Mutex::new(shape),
+            lineage: Mutex::new(lineage),
+        }
+    }
+
     /// The null shape.
     pub(crate) fn empty() -> Self {
-        PartShape {
-            shape: Mutex::new(None),
-        }
+        Self::with_parts(None, None)
     }
 
     /// A second handle to the same shape (for `Shape.copy` and subclasses).
     pub(crate) fn copy_handle(&self) -> Self {
-        PartShape {
-            shape: Mutex::new(self.shape()),
-        }
+        Self::with_parts(self.shape(), self.lineage())
     }
 
     /// A copy of the wrapped shape (shape handles are cheap to clone).
@@ -89,16 +99,44 @@ impl PartShape {
         self.shape.lock().unwrap().clone()
     }
 
-    /// Wrap an existing kernel shape.
+    /// The lineage carried beside the shape, if it has one.
+    ///
+    /// Rust-side accessor: the lineage is metadata, and the only Python-visible
+    /// view is [`ElementReverseMap`](PartShape::ElementReverseMap).
+    pub fn lineage(&self) -> Option<Lineage> {
+        self.lineage
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone()
+    }
+
+    /// Wrap an existing kernel shape with no lineage (a primitive, a sub-shape, a
+    /// shape assigned from Python).
     pub(crate) fn from_shape(shape: Shape) -> Self {
-        PartShape {
-            shape: Mutex::new(Some(shape)),
-        }
+        Self::with_parts(Some(shape), None)
+    }
+
+    /// Wrap a shape together with the lineage folded when it was produced.
+    ///
+    /// An empty lineage is stored as `None`, so a shape with no relations behaves
+    /// exactly like a primitive.
+    pub(crate) fn from_shape_with_lineage(shape: Shape, lineage: Lineage) -> Self {
+        let lineage = if lineage.map().is_empty() && lineage.reverse().is_empty() {
+            None
+        } else {
+            Some(lineage)
+        };
+        Self::with_parts(Some(shape), lineage)
     }
 
     /// Replace the wrapped shape (a subclass rebuilds its base shape in place).
+    ///
+    /// The lineage is cleared: it maps names to the *old* handles, which a rebuilt
+    /// shape no longer has. This is also why transforms (which replace handles)
+    /// drop the lineage rather than carrying it.
     pub(crate) fn replace_shape(&self, shape: Option<Shape>) {
         *self.shape.lock().unwrap_or_else(|e| e.into_inner()) = shape;
+        *self.lineage.lock().unwrap_or_else(|e| e.into_inner()) = None;
     }
 
     /// The shape's topological kind (`Shape.ShapeType`), inferred from its
@@ -187,16 +225,32 @@ impl PartShape {
     fn new(value: Option<&Bound<'_, PyAny>>) -> PyResult<Self> {
         match value {
             None => Ok(Self::empty()),
-            Some(value) => Ok(Self::from_shape(shape_argument(value)?)),
+            Some(value) => {
+                let other = value.downcast::<PartShape>().map_err(|_| {
+                    pyo3::exceptions::PyTypeError::new_err("expected a Part.Shape")
+                })?;
+                let other = other.borrow();
+                if other.shape().is_none() {
+                    return Err(curves::OCCError::new_err("a null shape cannot be combined"));
+                }
+                Ok(other.copy_handle())
+            }
         }
     }
 
     /// A copy of the shape (`Shape.copy`); the kernel handle is reference-counted
-    /// so no geometry is duplicated.
+    /// so no geometry is duplicated. The lineage is copied too, unless
+    /// `noElementMap` asks for a bare shape.
     #[pyo3(signature = (noElementMap = false))]
     fn copy(&self, noElementMap: bool) -> Self {
-        let _ = noElementMap;
-        self.copy_handle()
+        if noElementMap {
+            match self.shape() {
+                Some(shape) => Self::from_shape(shape),
+                None => Self::empty(),
+            }
+        } else {
+            self.copy_handle()
+        }
     }
 
     /// The shape's placement. Kernel shapes are stored with baked geometry, so
@@ -286,6 +340,9 @@ impl PartShape {
     }
 
     /// A transformed copy (`Shape.transformed(matrix, copy=True)`).
+    ///
+    /// The lineage is dropped: a transform replaces every sub-shape handle, so the
+    /// map's old handles no longer name the result's elements.
     #[pyo3(signature = (matrix, copy = true))]
     fn transformed(
         &self,
@@ -664,9 +721,10 @@ impl PartShape {
         self.CenterOfMass(py)
     }
 
-    /// Upstream's element-map version. This kernel emits no element maps, so it
-    /// is empty and `ElementMapSize` is zero (upstream's own tests treat that as
-    /// "skip the map assertions").
+    /// Upstream's element-map version. The Python-visible forward map stays off
+    /// (S6), so it is empty and `ElementMapSize` is zero — upstream's own tests
+    /// treat that as "skip the map assertions". The lineage carried by the shape is
+    /// measured through [`ElementReverseMap`](PartShape::ElementReverseMap).
     #[getter]
     fn ElementMapVersion(&self) -> &'static str {
         ""
@@ -677,20 +735,35 @@ impl PartShape {
         0
     }
 
+    /// The lineage read backwards: `{output name: [input names...]}`.
+    ///
+    /// This exposes exactly what the operation history recorded, under the policy
+    /// the lineage was folded with; a shape without a lineage (a primitive, a
+    /// transform) returns an empty dict. It is metadata only: the forward
+    /// `ElementMap`, the version and the serialised `Content` stay off.
     #[getter]
     fn ElementReverseMap(&self, py: Python<'_>) -> PyResult<Py<PyDict>> {
-        Ok(PyDict::new(py).unbind())
+        let map = PyDict::new(py);
+        if let Some(lineage) = self.lineage() {
+            for (output, inputs) in lineage.reverse().iter() {
+                map.set_item(
+                    output,
+                    PyList::new(py, inputs.iter().map(String::as_str))?,
+                )?;
+            }
+        }
+        Ok(map.unbind())
     }
 
-    /// The serialised element map (`Shape.Content`). This kernel emits no element
-    /// maps, so it is empty; upstream prints the same `<ElementMap/>` for a fresh
-    /// box.
+    /// The serialised element map (`Shape.Content`). This kernel emits no forward
+    /// element maps, so it is empty; upstream prints the same `<ElementMap/>` for a
+    /// fresh box.
     #[getter]
     fn Content(&self) -> &'static str {
         "<ElementMap/>\n"
     }
 
-    /// The element map (`Shape.ElementMap`), empty without TNP.
+    /// The forward element map (`Shape.ElementMap`), empty without TNP.
     #[getter]
     fn ElementMap(&self, py: Python<'_>) -> PyResult<Py<PyDict>> {
         Ok(PyDict::new(py).unbind())
@@ -826,14 +899,23 @@ impl PartShape {
     ) -> PyResult<PartShape> {
         let _ = (glue, tolerance, refine, noElementMap);
         let mut shape = self.named_shape()?;
+        // Each fold is one operation with its own history; fold them forward into one
+        // lineage, the same way the geometry is folded.
+        let mut lineage = Lineage::default();
+        let mut fused = false;
         for item in shapes.try_iter()? {
             let other = shape_argument(&item?)?;
-            shape = ferrocad_part::backend()
+            let out = ferrocad_part::backend()
                 .fuse(&shape, &other)
-                .map_err(kernel_error)?
-                .shape;
+                .map_err(kernel_error)?;
+            lineage.apply(&out.history);
+            shape = out.shape;
+            fused = true;
         }
-        Ok(PartShape::from_shape(shape))
+        if !fused {
+            return Ok(self.copy_handle());
+        }
+        Ok(PartShape::from_shape_with_lineage(shape, lineage))
     }
 
     /// `Shape.extrude(vector)` — sweep the shape along `vector`.
@@ -1557,6 +1639,8 @@ enum BooleanOp {
 }
 
 impl PartShape {
+    /// Apply `matrix` to a copy. The lineage is dropped for the same reason as
+    /// [`transformed`](PartShape::transformed): the handles it records are stale.
     fn transformed_by(&self, matrix: &ferrocad_types::Matrix4) -> PyResult<PartShape> {
         let shape = self.named_shape()?;
         let moved = ferrocad_part::backend()
@@ -1583,8 +1667,10 @@ impl PartShape {
             BooleanOp::Fuse => backend.fuse(&a, &b),
             BooleanOp::Cut => backend.cut(&a, &b),
             BooleanOp::Common => backend.common(&a, &b),
-        };
-        Ok(PartShape::from_shape(result.map_err(kernel_error)?.shape))
+        }
+        .map_err(kernel_error)?;
+        let lineage = Lineage::from_history(&result.history, MapVersion::default());
+        Ok(PartShape::from_shape_with_lineage(result.shape, lineage))
     }
 }
 
@@ -1874,10 +1960,19 @@ fn cluster_union(parent: &mut [usize], a: usize, b: usize) {
 }
 
 /// `Part::PropertyPartShape` → `Part.Shape` (what `obj.Shape` returns).
+///
+/// The property's lineage travels with the handle, so a document object's shape
+/// exposes the same reverse map the operation stored.
 fn shape_to_py(py: Python<'_>, data: &dyn ExtensionData) -> Option<PyObject> {
     let property = data.as_any().downcast_ref::<ShapeProperty>()?;
     let shape = property.shape();
-    Py::new(py, PartShape { shape: Mutex::new(shape) })
+    let lineage = property.lineage();
+    let lineage = if lineage.map().is_empty() && lineage.reverse().is_empty() {
+        None
+    } else {
+        Some(lineage.clone())
+    };
+    Py::new(py, PartShape::with_parts(shape, lineage))
         .ok()
         .map(Py::into_any)
 }
@@ -1889,7 +1984,7 @@ fn shape_list_to_py(py: Python<'_>, data: &dyn ExtensionData) -> Option<PyObject
     let items = property
         .shapes()
         .into_iter()
-        .map(|shape| Py::new(py, PartShape { shape: Mutex::new(Some(shape)) }))
+        .map(|shape| Py::new(py, PartShape::from_shape(shape)))
         .collect::<PyResult<Vec<_>>>()
         .ok()?;
     let list = PyList::new(py, items).ok()?;
@@ -1897,11 +1992,18 @@ fn shape_list_to_py(py: Python<'_>, data: &dyn ExtensionData) -> Option<PyObject
 }
 
 /// `Part.Shape` → `Part::PropertyPartShape` (what `obj.Shape = shape` stores).
+///
+/// A shape's lineage is stored beside it, the same way an operation stores its
+/// result, so assigning `obj.Shape = boolean_result` does not silently discard the
+/// map (and a legacy/primitive shape still stores none).
 fn shape_to_extension(value: &Bound<'_, PyAny>) -> Option<ExtensionValue> {
     let shape = value.downcast::<PartShape>().ok()?;
-    let inner = shape.borrow().shape();
-    let property = match inner {
-        Some(shape) => ShapeProperty::new(shape),
+    let shape = shape.borrow();
+    let property = match shape.shape() {
+        Some(inner) => match shape.lineage() {
+            Some(lineage) => ShapeProperty::with_lineage(inner, lineage),
+            None => ShapeProperty::new(inner),
+        },
         None => ShapeProperty::empty(),
     };
     Some(ExtensionValue::new(Box::new(property)))

@@ -137,6 +137,26 @@ fn object_shape(doc: &Document, id: ObjectId) -> Option<Shape> {
     property(doc, id, "Shape").and_then(shape_of).and_then(|s| s.shape())
 }
 
+/// Resolve a stored sub-element name (`Edge3`, `Face1`) on `id`'s shape.
+///
+/// The shape's lineage is consulted first (S5), so a name recorded before an
+/// operation still selects the element it denoted even if its positional ordinal
+/// moved. When the object has no shape property, or no lineage to contradict it,
+/// the backend's positional resolution is the fallback. A name absent from a
+/// non-empty lineage is retired and resolves to nothing rather than moving
+/// silently to another element.
+fn resolve_element(doc: &Document, id: ObjectId, shape: &Shape, name: &str) -> Option<Shape> {
+    if let Some(property) = property(doc, id, "Shape").and_then(shape_of) {
+        if let Ok(resolved) = property.resolve_element(name) {
+            return Some(resolved);
+        }
+        if !property.lineage().map().is_empty() {
+            return None;
+        }
+    }
+    ferrocad_part::backend().resolve(shape, name)
+}
+
 // ---------------------------------------------------------------------------
 // Placements
 // ---------------------------------------------------------------------------
@@ -918,8 +938,7 @@ fn path_edges(
     let subnames: Vec<String> = subs.into_iter().filter(|sub| !sub.is_empty()).collect();
     if !subnames.is_empty() {
         for subname in subnames {
-            let sub = backend
-                .resolve(&shape, &subname)
+            let sub = resolve_element(doc, reference_id, &shape, &subname)
                 .ok_or_else(|| format!("Path subelement {subname} is missing"))?;
             edges.push(PathEdge::from_shape(backend, &sub)?);
         }
@@ -1199,7 +1218,7 @@ fn axis_from_reference(
 fn edge_axis(doc: &Document, reference_id: ObjectId, subname: &str) -> Option<(Vector3, Vector3)> {
     let shape = object_shape(doc, reference_id)?;
     let backend = ferrocad_part::backend();
-    let edge = backend.resolve(&shape, subname)?;
+    let edge = resolve_element(doc, reference_id, &shape, subname)?;
     edge_axis_of(backend.as_ref(), &edge)
 }
 

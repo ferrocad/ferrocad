@@ -42,8 +42,11 @@ ferrocad_types.workspace = true
 pyo3 = { version = "0.25", features = ["abi3-py311"] }
 
 [dev-dependencies]
-# `auto-initialize` lets the boot test embed CPython (as the app does).
+# `auto-initialize` lets the boot tests embed CPython (as the app does).
 pyo3 = { version = "0.25", features = ["abi3-py311", "auto-initialize"] }
+# The Q4 Draft tools drive `FreeCADGui.Snapper` over `ferrocad.stage`, so the
+# in-image run of `tests/test_draft_tools.py` installs that module too.
+ferrocad_stage_py.workspace = true
 serde_json.workspace = true
 
 [features]

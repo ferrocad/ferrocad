@@ -2413,6 +2413,7 @@ dependencies = [
  "ferrocad_occt",
  "ferrocad_part",
  "ferrocad_py",
+ "ferrocad_stage_py",
  "ferrocad_types",
  "pyo3",
  "serde_json",

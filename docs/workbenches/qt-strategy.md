@@ -1,12 +1,16 @@
 # Qt strategy: running upstream workbench GUIs
 
-Status: design (2026-10-21; Q0–Q3b landed 2026-10-24).
+Status: design (2026-10-21; Q0–Q5 landed 2026-10-24).
 
-**As built (2026-10-24).** Q0a–Q0d, Q1, Q2a/Q2b, Q3a and Q3b landed: Qt is out of the
-headless paths, the `.ui` reader and `PySideUic` proxies exist, and the gpui shell
-hosts a rendered `FormDialog` with accept/reject. Q4 (Draft tools and native spatial
-reference) and Q5 (the remaining forms, editing/commit and the async modal) are open;
-the plan below is unchanged.
+**As built (2026-10-24).** Q0a–Q0d, Q1, Q2a/Q2b, Q3a/Q3b, Q4 and Q5 landed: Qt is
+out of the headless paths, the `.ui` reader and `PySideUic` proxies exist, the gpui
+shell hosts a rendered `FormDialog` with accept/reject, and the Draft tools run on a
+native spatial reference. Q4 supplies `FreeCADGui.Snapper`/`draftToolBar`, the async
+`getPoint` session, a native `PlaneGui`, the `Draft_Line`/`Draft_Wire` commands and
+the checkable `Draft_Snap_*` bar; Q5 supplies the four remaining forms. The upstream
+`gui_lines` path is still blocked by missing `ViewObject`/tracker surface, so the line
+tools are a native `Creator`-shaped layer (see `qt-reduction.md` §3). The plan below
+is the design record.
 
 Choose how upstream PySide workbench GUIs — Draft first — reach FerroCAD's gpui shell.
 
@@ -451,19 +455,24 @@ adds them.
 | --- | --- | --- |
 | `Snapper.setGrid()` / `toggleGrid()` | `ViewRequest { grid }` → `ViewState` → viewport grid layers | shell supports (G5) |
 | grid spacing/size/colour prefs | `GridSpec { minor, major, radius }` + `GridStyle` | shell supports |
-| `Snapper.snap(...)` for Grid / Endpoint / Vertex / Midpoint / Center / Origin | `SnapContext` + `snap_to_geometry_with` → `SnapKind::{Grid, Vertex, EdgeMid, Centre, Origin, Point}` | Q4 |
+| `Snapper.snap(...)` for Grid / Endpoint / Vertex / Midpoint / Center / Origin | `SnapContext.snap_point` (world-space) over `snap_to_geometry_with` (screen-space) | **done** (Q4) |
 | `Snapper` modes Extension, Parallel, Perpendicular, Intersection, Angle, Special, Dimensions, Ortho, Lock | no native equivalent (only 6 `SnapKind`s vs 15 Draft modes) | deferred; the proxy raises |
-| `Snapper.getPoint(...)` | shell **input session**: register callbacks, return at once, dispatch on click/accept/escape | Q4 |
-| `Snapper.off()` / `setSelectMode()` | end the `Tool` session | Q4 |
-| `Snapper.setAngle` / `constrain` / `unconstrain` | `SnapContext` + a point constraint on the input session | Q4 (design) |
-| `Snapper.get_snap_toolbar()` | checkable `Draft_Snap_*` commands in the actions bar, not a Qt toolbar | Q4 |
+| `Snapper.getPoint(...)` | `Snapper.getPoint(callback, on_cancel=, on_finish=)`; `draft.pick`/`escape`/`finish` drive it headlessly | **done** (Q4) |
+| `Snapper.off()` / `setSelectMode()` | end the `Tool` session | **done** (Q4) |
+| `Snapper.setAngle` / `constrain` / `unconstrain` | `SnapContext` + a point/axis constraint on the input session | **done** (Q4) |
+| `Snapper.get_snap_toolbar()` | checkable `Draft_Snap_*` commands in the actions bar, not a Qt toolbar | **done** (Q4) |
 | `WorkingPlane.PlaneBase` / `Plane` (≈1,200 lines of alignment math) | **kept as source**, over `FreeCAD.Vector` | — |
-| `PlaneGui` state / `align_to_face` | `Workplane` / `FaceFrame` | Q4 |
-| `PlaneGui._update_grid` | `GridSpec` for the active frame | native equivalent (G3/G5) |
-| `PlaneGui.set_to_view` / `_center_on_view` | `ViewRequest.workplane = "view"` + camera framing | native equivalent (G5) |
-| `PlaneGui._update_gui` / `_view_observer_*` | native workplane readout; the Qt icon path is removed | Q4 |
-| `Gui.draftToolBar.<field>` | native input model; a Python adapter with the same names | Q4 |
-| `Gui.HintManager` | the shell's status channel | Q4 |
+| `PlaneGui` state / `align_to_face` | `Workplane` / `FaceFrame` | **done** (Q4) |
+| `PlaneGui._update_grid` | `GridSpec` for the active frame | **done** (Q4) |
+| `PlaneGui.set_to_view` / `_center_on_view` | `ViewRequest.workplane = "view"` + camera framing | **done** (Q4) |
+| `PlaneGui._update_gui` / `_view_observer_*` | native workplane readout; the Qt icon path is removed | **done** (Q4) |
+| `Gui.draftToolBar.<field>` | native input model; a Python adapter with the same names | **done** (Q4) |
+| `Gui.HintManager` | the shell's status channel | **done** (Q4) |
+
+`ferrocad_stage_py` now exports `Workplane`, `WorkplaneKind`, `SnapContext`, `Snap`,
+`SnapCandidate` and `SnapKind`; `SnapContext.snap_point` is the camera-free entry the
+headless `Snapper` uses (known-coordinate tests for grid, vertex, edge-midpoint,
+face-centre and origin snaps on a rotated workplane).
 | `QTimer.singleShot(0, cb)` | shell deferred queue (the `ToDo` list already exists) | Q2 |
 | `QTimer.singleShot(300/500, cb)` | real timer on the shell | Q2 |
 
@@ -509,14 +518,14 @@ element builder. It depends on `ferrocad_widgets` and `bite-gpui`, **not** on `p
 | `QDialog` | `Form` root (modal host) | Q2 |
 | `QDialogButtonBox` | `DialogButtonBox` (standard buttons) | Q2 |
 | `QFrame` | `Frame` (plain) | Q2 |
-| `QTabWidget` | `TabView` (static pages only) | Q5 |
-| `QFontComboBox` | `FontComboBox` | Q5 |
-| `QScrollArea` | `ScrollArea` | Q5 |
+| `QTabWidget` | `TabView` (static pages only) | Q5 ✅ |
+| `QFontComboBox` | `FontComboBox` | Q5 ✅ |
+| `QScrollArea` | `ScrollArea` | Q5 ✅ |
 | `QTreeView` | `TreeView` | deferred |
 | `Gui::InputField` | `QuantityField` (`rawValue`, `text`) | Q2 |
 | `Gui::QuantitySpinBox` | `QuantitySpinBox` (`rawValue`, `valueChanged`) | Q2 |
 | `Gui::ColorButton` | `ColorButton` (`color`, a `QColor` value) | Q2 |
-| `Gui::FileChooser` | `FileChooser` (`fileName`, `fileNameSelected`) | Q5 |
+| `Gui::FileChooser` | `FileChooser` (`fileName`, `fileNameSelected`) | Q5 ✅ |
 | `Gui::Pref*` (11) | registry entries only; loading raises | deferred |
 
 **Python proxy semantics.**

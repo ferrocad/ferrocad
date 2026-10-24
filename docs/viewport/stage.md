@@ -348,6 +348,12 @@ glue** — every class wraps its Rust counterpart, so no behaviour lives only in
   `GizmoMode`/`GizmoHandle` enums, and `GizmoDragEvent`/`GizmoCommitEvent` (row-major
   16-float matrices). `begin_drag`/`drag_to`/`end_drag` mirror the Rust API; `handle_event`
   dispatches a `PointerEvent` end to end.
+- **Spatial reference** — `Workplane`/`WorkplaneKind`, `SnapContext`, `Snap`,
+  `SnapCandidate` and the `SnapKind` enum. `SnapContext.snap_point(point, candidates=(),
+  tolerance=0.0)` is the **camera-free** counterpart of `snap_to_geometry_with`: a
+  candidate within the world-space tolerance wins, otherwise the point is projected onto
+  the workplane and its local `(u, v)` rounded to `minor`. This is what the headless
+  `FreeCADGui.Snapper` resolves clicks through (Q4).
 
 `ferrocad_stage_py::install(py)` registers the module as both `ferrocad_stage` and
 `ferrocad.stage`, and attaches `stage` to the `ferrocad` extension when it is loaded (so
@@ -357,9 +363,10 @@ App-side facades own the **`FreeCAD`** namespace, this one fabricates nothing: `
 is a real extension module, and creating a synthetic one would shadow it.
 
 **Verification:** the acceptance suite lives in
-[`tests/test_stage_py.py`](../../tests/test_stage_py.py) (9 cases: buffer + sequence
+[`tests/test_stage_py.py`](../../tests/test_stage_py.py) (17 cases: buffer + sequence
 ingestion, the misaligned-buffer error, attribute round-trip, `Stage` emission, a
-scripted `Tool` receiving events, and two gizmo drags asserting the emitted events). It is
+scripted `Tool` receiving events, two gizmo drags asserting the emitted events, and the
+world/rotated-workplane snap cases). It is
 the single source of truth: `crates/ferrocad_stage_py/tests/stage_py.rs` runs it against an
 **embedded** CPython, and `PYTHONPATH=python python3 tests/test_stage_py.py` runs it
 against the **built** `ferrocad_stage` extension. A second Rust test

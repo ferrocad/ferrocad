@@ -21,6 +21,7 @@ is archived in
 | 2026-10-23 | **Serializers, lineage, Qt** | Native `.ferrocad` + real `.FCStd` ZIP, the lineage layer, Links L0–L5, the `.ui` reader, and the `PySideUic` proxies. |
 | 2026-10-24 | **Part completion** | The full Part surface, live `Shape.Placement`, exact 20/47 compound-cut maps, and **531 upstream tests passing with zero errors**. |
 | 2026-10-24 | **Draft M2 green** | Attachment, `PropertyLinkSubList`, the link extension, sub-shape `getSubObject` and the hatch shim: the two Draft M2 modules pass **27/27** with zero load failures. |
+| 2026-10-24 | **Qt reduction Q4/Q5** | A native `FreeCADGui.Snapper`/`draftToolBar` over a camera-free snap API, async point sessions, the native line/wire tools and `PlaneGui`, the checkable snap bar, and the four remaining Draft forms; `pytest tests` reaches **538 passed**. |
 
 ## Current state (2026-10-24)
 
@@ -29,11 +30,11 @@ is archived in
 | Upstream Part suite | 2 passed, 1 failed, 89 errored, 4 files failed to load | **531 passed, 0 failed, 0 errored, 0 load failures** |
 | Upstream Draft suite | no group | 10 passed, 1 failed, 1 load error (upstream Draft, not a shim) |
 | Draft M2 (`test_creation`, `test_array`) | 15 passed, 1 failed, 11 errored | **27 passed, 0 failed, 0 errored, 0 load failures** |
-| Python facade | 377 passed | **444 passed, 17 skipped** (134 subtests) |
+| Python facade | 377 passed | **538 passed, 8 skipped** (172 subtests; 480 passed / 66 skipped without the stage extension) |
 | Part module | `makeBox` and a shape handle | primitives, booleans, dress-ups, links and arrays, conics, splines, NURBS conversion, `ShapeFix`, `ChFi2d`, `Sketcher`, feature objects |
 | Document format | one JSON blob | native `.ferrocad` + real `.FCStd` ZIP, with an additive lineage sidecar |
 | Naming | positional strings | lineage layer with stored maps; every reachable guarded size matches (52/58/26/24/9/6/60) plus the cuts' 20/47 |
-| Workbench platform | no Python-defined objects | `Part::FeaturePython`/`Part2DObjectPython` execute proxies and attach; the Draft M2 modules run green (27/27) |
+| Workbench platform | no Python-defined objects | `Part::FeaturePython`/`Part2DObjectPython` execute proxies and attach; the Draft M2 modules run green (27/27); the Draft tool surface (Snapper, tool bar, point sessions, line/wire, forms) is native |
 
 ### Three lessons
 
@@ -53,8 +54,9 @@ is archived in
 upstream's face-combo alias and `makeShellFromWires` (24) needs a different (ruled-shell)
 topology. Every other guarded size is reproduced.
 
-The attachment gate is crossed: both Draft M2 modules run green, so the next round is
-the Draft tools (P3) rather than more Part surface.
+The attachment gate is crossed: both Draft M2 modules run green, and the Qt-reduction
+plan's Q4/Q5 slices now supply the native spatial reference and the remaining forms.
+The next round is SimpleCAD S1 rather than more Part surface.
 
 ### What is deliberately not claimed
 

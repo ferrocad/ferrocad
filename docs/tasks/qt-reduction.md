@@ -1,8 +1,7 @@
 # Qt reduction — taking Qt out of the paths that do not need it
 
-Status: task (2026-10-23). Q0a, Q0b, Q0d, Q1, Q2a and Q2b landed 2026-10-23; Q3–Q5
-remain. Backlog entry **P2.3** in
-[`TODO-24-10-2026.md`](../TODO-24-10-2026.md). Companion to
+Status: task (2026-10-23). Q0a–Q5 landed (Q3 2026-10-24; Q4/Q5 2026-10-24). Backlog entry
+**P3** in [`TODO-24-10-2026.md`](../TODO-24-10-2026.md). Companion to
 [`qt-strategy.md`](../workbenches/qt-strategy.md) (§2–§7 remain the design; this is
 the execution plan), [`python-ui-research.md`](../interaction/python-ui-research.md),
 [`actions-and-tools.md`](../workbenches/actions-and-tools.md),
@@ -149,9 +148,38 @@ split so the smallest Qt removal lands first, before any loader work.
 | **Q1** | Landed 2026-10-23 | `ferrocad_ui` parses all 19 `.ui` files into a typed form tree (widgets, layouts, properties, spacers, custom widgets, combo items, tab pages) with source-positioned errors; no rendering. Tests pin 495 widgets and 32 classes. |
 | **Q2a** | Landed 2026-10-23 | `ferrocad_ui_py`: `FreeCADGui.PySideUic.loadUi`, `FormProxy`/`WidgetProxy`/`SignalProxy` over `ferrocad_ui`; the six core forms load headlessly without Qt. |
 | **Q2b** | Landed 2026-10-23 | Layout add/take, combo mutation, `exec_`/`accept`/`reject` results, dynamic properties, spin clamping and `Gui::FileChooser.fileName`. |
-| **Q3** | Not started | Render the six core forms on `ferrocad_widgets`/gpui; async modal behind `FreeCADGui.Control.showDialog/closeDialog` |
-| **Q4** | Not started | `FreeCADGui.Snapper`/`draftToolBar` over `ferrocad_stage`; `PlaneGui` rerouted; line/wire tools; snap bar as checkable commands |
-| **Q5** | Not started | SetStyle, Hatch, AnnotationStyleEditor, `TaskPanel_Scale.ui`, `Gui::FileChooser`; the Layers dialog and preference pages stay deferred |
+| **Q3** | Landed 2026-10-24 | Render the six core forms on `ferrocad_widgets`/gpui; async modal behind `FreeCADGui.Control.showDialog/closeDialog` |
+| **Q4** | Landed 2026-10-24 | `FreeCADGui.Snapper`/`draftToolBar` over `ferrocad_stage`; `PlaneGui` rerouted; native `Draft_Line`/`Draft_Wire`; snap bar as checkable commands |
+| **Q5** | Landed 2026-10-24 | SetStyle, Hatch, AnnotationStyleEditor, `TaskPanel_Scale.ui`, `Gui::FileChooser` — headless form drivers |
+
+**Landed 2026-10-24 (Q4/Q5).** `ferrocad_stage` gained a camera-free
+`SnapContext::snap_point` and `ferrocad_stage_py` exports `Workplane`,
+`WorkplaneKind`, `SnapContext`, `Snap`, `SnapCandidate` and `SnapKind`. On top of that,
+`python/FreeCADGui/draft.py` supplies `Snapper`, `draftToolBar`, `HintManager`,
+`InputHint`/`UserInput`, the async point session (`getPoint`, with `on_cancel`/
+`on_finish`; `draft.pick`/`escape`/`finish` drive it) and the six checkable
+`Draft_Snap_*` commands; `python/FreeCADGui/__init__.py` supplies the headless view
+(`getMainWindow`, event callbacks, `addModule`, `doCommand`). `python/FerroCADGui/tools.py`
+adds the native `PlaneGui` and the `Draft_Line`/`Draft_Wire` commands;
+`python/FerroCADGui/forms.py` drives the four Q5 forms.
+
+Measured: `pytest tests` **538 passed, 8 skipped, 172 subtests** (with the stage
+extension built); the same suite degrades to **480 passed, 66 skipped** without it. The
+line/wire creation tests also run in the shared image with the real Part kernel
+(`cargo test -p ferrocad_part_py --test draft_tools`), because the standalone pytest
+image has no `Part`.
+
+**Deviations to record.** (1) The upstream `gui_lines.Line`/`Wire` path is blocked
+headlessly: it writes `ViewObject.ShowInTree`/`Selectable`, drives picking through
+`view.addEventCallback("SoEvent", ...)`, and needs preview shapes and
+`Draft.make_line`/`make_wire` in `python/Draft` (which is the `make_clone` shim). The
+native `Creator`-shaped layer reproduces the observable contract instead, and
+`tools.upstream_report()` records the blockers. (2) The SetStyle apply/annotation
+buttons are not wired because the headless `ViewObject` lacks `LineColor`/`LineWidth`/
+`DrawStyle`/annotation properties; presets are driven through `save_preset`/
+`select_preset`. (3) Annotation styles persist to `Doc.Meta` and `ParamGet`, but are not
+pushed into live annotation view objects (same `ViewObject` gap). (4) The nine
+Draft-only snap modes raise `NotImplementedError` rather than pretending.
 
 **Landed 2026-10-23.** Q0a/Q0b/Q0d and the D1–D3 guard are in:
 `python/PySide/_qt_stub.py`, the rewritten `python/PySide/__init__.py`,
@@ -162,13 +190,14 @@ forms (495 widgets, 32 classes) with source positions. Q2a adds `ferrocad_ui_py`
 Qt runtime; Q2b adds layout surgery, combo mutation, dialog results and property access.
 A fresh process with `PySide6`/`shiboken*` blocked imports `FreeCAD`, `FreeCADGui` and
 `from draftutils import params` (160 `Mod/Draft` entries), and the `--draft` group is
-unchanged at 10 passed / 1 failed / 1 load error. Q3–Q5 are the remaining slices.
+unchanged at 10 passed / 1 failed / 1 load error. Q3 landed on 2026-10-24; Q4/Q5 are
+the slices recorded in the paragraph above.
 
-**Recommendation — priority order.** Q0a + Q0b + the §5 guard first: they are small,
-remove the actual runtime dependency, and unlock D2/D3/D6 without a loader. Then Q0d
-(the contract) and Q1/Q2 in parallel, both testable with `python3` only. Q3 starts
-when the Draft GUI work starts; Q4/Q5 follow the native input and remaining-form
-demand. Nothing in Q3–Q5 is needed for `import Part` or the shell.
+**Recommendation — priority order (historical).** Q0a + Q0b + the §5 guard first: they are
+small, remove the actual runtime dependency, and unlock D2/D3/D6 without a loader. Then
+Q0d (the contract) and Q1/Q2 in parallel, both testable with `python3` only. Q3 landed
+with the rendered form host; Q4/Q5 followed the native input and remaining-form demand.
+Nothing in Q3–Q5 is needed for `import Part` or the shell.
 
 **What to remove when Q0 lands.** The automatic `_install_aliases()` path in
 `python/PySide/__init__.py` (a real Qt import becomes an experiment, never the

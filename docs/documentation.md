@@ -87,12 +87,15 @@ duplicate it. The folders, and the rule for filing a new note:
 | `mods/` | the external contract for mod writers and API clients |
 | `user/` | generated workflow guides, in Diátaxis sections (`tools/userdocs.py`) |
 | `python-api/` | generated signature reference (`tools/api_docs.py`) |
-| `record/` | closed history: milestones, closed TODOs, incidents |
+| `record/` | closed history: compact milestones and backlogs, incidents, and `archive/` for the full detail |
+| `ROADMAP.md` (root) | the three horizons and their exit criteria |
 | `tasks/` | actionable specs with a checklist |
 
-Three kinds of file stay at the root: [`README.md`](README.md) (the index),
+Four files stay at the root: [`README.md`](README.md) (the index),
 [`architecture.md`](architecture.md) (the cross-cutting crate map that every section
-links back to), and the active `TODO-<date>.md` backlog.
+links back to), [`documentation.md`](documentation.md) (this decision),
+[`ROADMAP.md`](ROADMAP.md) (the high-level horizons), and the active `TODO-<date>.md`
+backlog.
 
 Conventions this imposes on a new note:
 
@@ -112,6 +115,10 @@ exception is `user/explanation/`, which is authored: it has no runnable subject.
   reader knows whether the note is a decision, a plan, or history before reading it.
 - **Closed work moves to `record/`.** A TODO becomes historical when a successor
   carries only the open items; it is never deleted, because it holds the measurements.
+- **The record stays compact.** `record/` keeps the timeline, the current assessment and
+  one-page closed backlogs. The slice-by-slice detail moves to `record/archive/` and is
+  linked, not restated. `ROADMAP.md` is the only forward-looking summary; the backlog is
+  where the work is tracked.
 
 ## Verification hooks
 

@@ -20,18 +20,20 @@ on the first line, so the folder only has to answer "where do I look?".
 | `mods/` | the external contract for mod writers and API clients | you are writing a mod, a script, or an automated client |
 | `user/` | **generated** workflow guides, grouped by Diátaxis quadrant | you want to do something with the app |
 | `python-api/` | **generated** signature reference | you need to know what a name accepts |
-| `record/` | closed history: milestones, the closed TODO, incidents | you need to know how we got here |
+| `record/` | closed history: milestones, closed TODOs, incidents, and their archived detail | you need to know how we got here |
 | `tasks/` | actionable specs with a checklist | you are picking up work |
 
-Four files stay at the root: this index, the [crate map](architecture.md) (the
+Five files stay at the root: this index, the [crate map](architecture.md) (the
 cross-cutting reference every section links back to), the
-[documentation decision](documentation.md), and the active backlog
-([`TODO-24-10-2026.md`](TODO-24-10-2026.md)).
+[documentation decision](documentation.md), the [high-level roadmap](ROADMAP.md), and
+the active backlog ([`TODO-24-10-2026.md`](TODO-24-10-2026.md)).
 
 ## Start here
 
 - [architecture.md](architecture.md) — crates, the call paths, the dependency rules
   between them, and the C-ABI rationale.
+- [ROADMAP.md](ROADMAP.md) — the three horizons (finish Part/OCCT, build the workbench
+  platform, prove it by use), their exit criteria, and how progress is measured.
 - [TODO-24-10-2026.md](TODO-24-10-2026.md) — the active backlog: the element-map
   format contract, the remaining OCCT seam, Python feature proxies, Qt reduction, and
   the open decisions.
@@ -195,11 +197,16 @@ rather than restating it.
 
 ## The record
 
-- [record/milestones.md](record/milestones.md) — the full milestone record (M0 through
-  the current slices), the decisions the spike unlocked, and the M3 plan.
-- [record/TODO-21-10-2026.md](record/TODO-21-10-2026.md) — closed record: the Draft
-  assessment, the measured import ladder, the five D0 fixes, and what landed on
-  2026-10-21.
+The record is deliberately compact: each closed backlog is a one-page summary, and the
+full slice-by-slice text lives in [`record/archive/`](record/archive/).
+
+- [record/milestones.md](record/milestones.md) — the high-level timeline and the
+  current assessment. The per-slice detail (M0–M4, the restructure, the MVP and
+  app-shell slices, the M3 plan) is in
+  [record/archive/milestones-detail-2026-10.md](record/archive/milestones-detail-2026-10.md).
+- [record/TODO-21-10-2026.md](record/TODO-21-10-2026.md) — closed record: the grid
+  overlay, the Draft probe, and the external mod repository; full text in
+  `record/archive/`.
 - [record/TODO-22-10-2026.md](record/TODO-22-10-2026.md) — closed record: the Part
   conformance push, the headless `ViewObject`, the `.FCStd` reader, the link arrays,
   the Ctrl+K palette, and the measurements at close.

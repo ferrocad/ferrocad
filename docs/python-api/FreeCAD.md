@@ -99,8 +99,8 @@ A drop-in, Rust-backed stand-in for FreeCAD's Python ``App`` module.
 | getGroupOfProperty(name) | `getGroupOfProperty`: the UI group the property belongs to. |
 | getLinkedObject(resolve=True) | `getLinkedObject(resolve=True)`: the object a link points at. |
 | getObject(name) | — |
-| getParent() | `getParent()`: the geo-feature group (`App::Part`) this object belongs to. |
-| getParentGeoFeatureGroup() | The geo-feature group (`App::Part`) that lists this object. |
+| getParent() | `getParent()`: the first group (plain, part or body) this object belongs to. |
+| getParentGeoFeatureGroup() | The geo-feature group (`App::Part`, `PartDesign::Body`) that lists this object. |
 | getParentGroup() | The plain group (or group-extension object) that lists this object. |
 | getPropertyByName(name) | — |
 | getPropertyStatus(name='') | `getPropertyStatus(name="")`: with no name, the supported status names. |
@@ -115,6 +115,7 @@ A drop-in, Rust-backed stand-in for FreeCAD's Python ``App`` module.
 | purgeTouched() | Mark the object as unchanged (FreeCAD `purgeTouched`). |
 | recompute() | Recompute this object (FreeCAD `DocumentObject.recompute`). |
 | removeExtension(name) | — |
+| removeObject(other) | `GroupExtension.removeObject(obj)`: drop `obj` from this group's `Group` link list (which also clears its derived parent) and return the objects that were actually removed. |
 | removeProperty(name) | — |
 | restoreContent(data) | Restore this object's content from bytes (`restoreContent`). |
 | restorePropertyContent(name, data) | Restore one property from bytes (`restorePropertyContent`). |

@@ -79,9 +79,11 @@ Kernel failure (``Part.OCCError`` when the Part module is absent).
 | --- | --- |
 | `Base` (attribute) | — |
 | `Rotation` (attribute) | — |
+| copy() | A detached copy (`Placement.copy`). |
 | inverse() | — |
 | isSame(o, tol=0.0) | — |
 | multVec(v) | Transform a vector by this placement (FreeCAD `Placement.multVec`). |
+| rotate(center, axis, angle, comp=False) | Rotate this placement in place (`Placement.rotate`). |
 | toMatrix() | — |
 
 ## Class `Precision`

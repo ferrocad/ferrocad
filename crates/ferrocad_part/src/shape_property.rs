@@ -14,10 +14,15 @@
 //!
 //! ```text
 //! "FCSHPROP" | version:u16 | shape-breplen:u64 | shape-brep
+//!             | placement-base(x,y,z:f64) | placement-quat(w,x,y,z:f64)   (v2)
 //!             | encoding:u16 | policy:str | kernel:opt-str
 //!             | forward-count:u64  (name:str, breplen:u64, brep)*
 //!             | reverse-count:u64  (output:str, input-count:u64, input:str*)*
 //! ```
+//!
+//! Version 1 (no placement) is still accepted: its fields are read with the
+//! identity placement. The stored shape is already placed (`shape == placement ·
+//! base`), so an old document needs no extra transform.
 //!
 //! Lengths are little-endian; a `str` is a `u32` byte length plus UTF-8 bytes. The
 //! main shape and every lineage sub-shape keep their raw BREP bytes inside the
@@ -40,7 +45,7 @@ use std::collections::BTreeSet;
 use std::fmt;
 
 use ferrocad_core::property_types;
-use ferrocad_core::{ExtensionData, ExtensionValue, Property};
+use ferrocad_core::{ExtensionData, ExtensionValue, Placement, Property, Rotation, Vector3};
 use ferrocad_geom::{ElementKind, ElementRef, History, Lineage, MapVersion, Shape};
 
 /// The registered property type name.
@@ -50,9 +55,11 @@ pub const TYPE_NAME: &str = "Part::PropertyPartShape";
 /// so the two forms cannot be confused.
 const MAGIC: &[u8; 8] = b"FCSHPROP";
 
-/// The envelope layout version. An unrecognised version is rejected rather than
-/// guessed at; the *legacy* raw-BREP form has no version at all and is always tried.
-const ENVELOPE_VERSION: u16 = 1;
+/// The envelope layout version. Version 1 carried the shape and lineage;
+/// version 2 appends the accumulated placement (base + quaternion). An
+/// unrecognised version is rejected rather than guessed at; the *legacy*
+/// raw-BREP form has no version at all and is always tried.
+const ENVELOPE_VERSION: u16 = 2;
 
 /// A shape-valued property.
 ///
@@ -63,6 +70,14 @@ const ENVELOPE_VERSION: u16 = 1;
 /// *is*.
 pub struct ShapeProperty {
     shape: Option<Shape>,
+    /// The accumulated placement baked into `shape`.
+    ///
+    /// The geometry is always stored placed (`shape == placement · base`), so every
+    /// query (`BoundBox`, elements, mass properties) needs no extra transform. The
+    /// placement is kept beside it so `Shape.Placement` can report it and so a later
+    /// operation can compose onto it. Both travel together through conversion to
+    /// Python and through the native envelope.
+    placement: Placement,
     lineage: Lineage,
 }
 
@@ -71,18 +86,29 @@ impl ShapeProperty {
     pub fn empty() -> Self {
         ShapeProperty {
             shape: None,
+            placement: Placement::identity(),
             lineage: Lineage::default(),
         }
     }
 
-    /// A property holding `shape`, with an empty lineage.
+    /// A property holding `shape`, with an empty lineage and the identity
+    /// placement (the geometry is not placed).
     ///
     /// Used for shapes with no operation history (a primitive, a shape assigned by
     /// Python, a legacy restore); an operation result uses
     /// [`with_lineage`](ShapeProperty::with_lineage).
     pub fn new(shape: Shape) -> Self {
+        Self::with_placement(shape, Placement::identity())
+    }
+
+    /// A property holding already-placed `shape` and the `placement` it carries.
+    ///
+    /// `shape` must already include `placement`; this constructor stores the pair
+    /// verbatim and does not re-bake the geometry.
+    pub fn with_placement(shape: Shape, placement: Placement) -> Self {
         ShapeProperty {
             shape: Some(shape),
+            placement,
             lineage: Lineage::default(),
         }
     }
@@ -91,6 +117,17 @@ impl ShapeProperty {
     pub fn with_lineage(shape: Shape, lineage: Lineage) -> Self {
         ShapeProperty {
             shape: Some(shape),
+            placement: Placement::identity(),
+            lineage,
+        }
+    }
+
+    /// A property holding already-placed `shape`, its `placement`, and the
+    /// `lineage` produced with it.
+    pub fn with_lineage_and_placement(shape: Shape, placement: Placement, lineage: Lineage) -> Self {
+        ShapeProperty {
+            shape: Some(shape),
+            placement,
             lineage,
         }
     }
@@ -100,12 +137,19 @@ impl ShapeProperty {
         self.shape.clone()
     }
 
+    /// The accumulated placement carried beside the baked geometry.
+    pub fn placement(&self) -> Placement {
+        self.placement
+    }
+
     /// Replace the held shape.
     ///
     /// The lineage is cleared: names recorded against the old shape have no meaning
-    /// for a new one, and a stale map is worse than no map.
+    /// for a new one, and a stale map is worse than no map. The placement resets to
+    /// identity because a new shape carries no accumulated placement.
     pub fn set_shape(&mut self, shape: Shape) {
         self.shape = Some(shape);
+        self.placement = Placement::identity();
         self.lineage = Lineage::default();
     }
 
@@ -119,9 +163,10 @@ impl ShapeProperty {
         self.lineage = lineage;
     }
 
-    /// Clear the held shape (and its lineage).
+    /// Clear the held shape (and its lineage and placement).
     pub fn clear(&mut self) {
         self.shape = None;
+        self.placement = Placement::identity();
         self.lineage = Lineage::default();
     }
 
@@ -245,6 +290,7 @@ impl ExtensionData for ShapeProperty {
     fn clone_box(&self) -> Box<dyn ExtensionData> {
         Box::new(ShapeProperty {
             shape: self.shape.clone(),
+            placement: self.placement,
             lineage: self.lineage.clone(),
         })
     }
@@ -282,6 +328,14 @@ impl ExtensionData for ShapeProperty {
         put_u16(&mut out, ENVELOPE_VERSION);
         put_bytes(&mut out, &brep);
 
+        // Placement (v2): base xyz then quaternion w,x,y,z.
+        out.extend_from_slice(&self.placement.base.x.to_le_bytes());
+        out.extend_from_slice(&self.placement.base.y.to_le_bytes());
+        out.extend_from_slice(&self.placement.base.z.to_le_bytes());
+        for component in self.placement.rotation.q {
+            out.extend_from_slice(&component.to_le_bytes());
+        }
+
         let version = self.lineage.version();
         put_u16(&mut out, version.encoding());
         put_str(&mut out, version.policy());
@@ -317,15 +371,17 @@ impl ExtensionData for ShapeProperty {
         Some(vec![(String::new(), self.brep())])
     }
 
-    /// Persist the lineage in `.FCStd` beside the raw BREP member.
+    /// Persist the lineage and placement in `.FCStd` beside the raw BREP member.
     ///
     /// The sidecar is the same versioned envelope [`save`](ExtensionData::save)
     /// writes, so restoring it needs no second format: the reader prefers the
     /// sidecar bytes and falls back to the raw `<Part>` member when it is absent.
-    /// Nothing is written for a shape without a lineage, so primitive shapes keep
-    /// the exact upstream archive layout.
+    /// Nothing is written for a shape without a lineage *and* without a placement,
+    /// so primitive shapes keep the exact upstream archive layout.
     fn fcstd_sidecar(&self) -> Option<(String, Vec<u8>)> {
-        if self.lineage.map().is_empty() && self.lineage.reverse().is_empty() {
+        let has_lineage = !self.lineage.map().is_empty() || !self.lineage.reverse().is_empty();
+        let has_placement = self.placement != Placement::identity();
+        if !has_lineage && !has_placement {
             return None;
         }
         let bytes = self.save();
@@ -452,6 +508,11 @@ impl<'a> Reader<'a> {
         Some(u64::from_le_bytes(bytes))
     }
 
+    fn f64(&mut self) -> Option<f64> {
+        let bytes: [u8; 8] = self.take(8)?.try_into().ok()?;
+        Some(f64::from_le_bytes(bytes))
+    }
+
     fn bytes(&mut self) -> Option<&'a [u8]> {
         let len = usize::try_from(self.u64()?).ok()?;
         self.take(len)
@@ -480,14 +541,27 @@ fn restore(bytes: &[u8]) -> Option<Box<dyn ExtensionData>> {
     Some(Box::new(ShapeProperty::new(shape)))
 }
 
+const ENVELOPE_VERSION_MIN: u16 = 1;
+
 fn restore_envelope(bytes: &[u8]) -> Option<ShapeProperty> {
     let mut reader = Reader::new(&bytes[MAGIC.len()..]);
     let version = reader.u16()?;
-    if version != ENVELOPE_VERSION {
+    if !(ENVELOPE_VERSION_MIN..=ENVELOPE_VERSION).contains(&version) {
         return None;
     }
     let backend = crate::backend();
     let shape = backend.load_shape(reader.bytes()?)?;
+
+    let placement = if version >= 2 {
+        let base = Vector3::new(reader.f64()?, reader.f64()?, reader.f64()?);
+        let q = [reader.f64()?, reader.f64()?, reader.f64()?, reader.f64()?];
+        Placement {
+            base,
+            rotation: Rotation { q, raw_axis: None },
+        }
+    } else {
+        Placement::identity()
+    };
 
     let encoding = reader.u16()?;
     let policy = reader.string()?;
@@ -523,6 +597,7 @@ fn restore_envelope(bytes: &[u8]) -> Option<ShapeProperty> {
 
     Some(ShapeProperty {
         shape: Some(shape),
+        placement,
         lineage: rebuild_lineage(
             MapVersion::new(encoding, policy, kernel),
             &entries,
@@ -890,5 +965,64 @@ mod tests {
             .expect("the restored cut has mass properties")
             .volume;
         assert!((restored_volume - volume).abs() < 1e-6, "geometry is intact");
+    }
+
+    /// The native envelope (v2) carries the placement beside the baked geometry.
+    #[test]
+    fn the_envelope_round_trips_the_placement() {
+        setup();
+        let shape = crate::make_box(2.0, 2.0, 2.0).unwrap();
+        let placement = Placement::new(
+            Vector3::new(1.0, 2.0, 3.0),
+            Rotation::from_axis_angle(&Vector3::new(0.0, 0.0, 1.0), 0.5),
+        );
+        let property = ShapeProperty::with_placement(shape, placement);
+
+        let bytes = property.save();
+        let restored = restore(&bytes).expect("the envelope restores");
+        let restored = restored
+            .as_any()
+            .downcast_ref::<ShapeProperty>()
+            .expect("a ShapeProperty");
+        assert!(
+            restored.placement().is_same(&placement, 1e-12),
+            "the placement is restored"
+        );
+
+        let volume = crate::backend()
+            .mass_properties(&property.shape().unwrap())
+            .expect("the original has mass properties")
+            .volume;
+        let restored_volume = crate::backend()
+            .mass_properties(&restored.shape().unwrap())
+            .expect("the restored shape has mass properties")
+            .volume;
+        assert!((volume - restored_volume).abs() < 1e-9, "geometry is intact");
+    }
+
+    /// A version-1 envelope (written before the placement field existed) still
+    /// restores its geometry with the identity placement.
+    #[test]
+    fn a_version_1_envelope_still_loads() {
+        setup();
+        let shape = crate::make_box(3.0, 3.0, 3.0).unwrap();
+        let mut bytes = Vec::new();
+        bytes.extend_from_slice(MAGIC);
+        put_u16(&mut bytes, 1);
+        put_bytes(&mut bytes, &crate::backend().save_shape(&shape));
+        put_u16(&mut bytes, MapVersion::default().encoding());
+        put_str(&mut bytes, MapVersion::default().policy());
+        bytes.push(0); // no kernel
+        put_u64(&mut bytes, 0); // no forward relations
+        put_u64(&mut bytes, 0); // no reverse relations
+
+        let restored = restore(&bytes).expect("v1 restores");
+        let restored = restored
+            .as_any()
+            .downcast_ref::<ShapeProperty>()
+            .expect("a ShapeProperty");
+        assert!(restored.shape().is_some(), "geometry survives");
+        assert_eq!(restored.placement(), Placement::identity());
+        assert!(restored.lineage().map().is_empty());
     }
 }

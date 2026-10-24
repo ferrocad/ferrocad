@@ -42,9 +42,10 @@ mod link_array;
 mod shape_fix;
 mod solids;
 
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
-use ferrocad_core::{ExtensionData, ExtensionValue};
+use ferrocad_core::{ExtensionData, ExtensionValue, Placement, Rotation, ScaleType, Vector3};
 use ferrocad_geom::{ElementKind, ElementRef, Lineage, MapVersion, Shape, TessellationOptions};
 use ferrocad_occt::OcctBackend;
 use ferrocad_part::{ShapeListProperty, ShapeProperty, SHAPE_LIST_TYPE_NAME, TYPE_NAME};
@@ -64,9 +65,15 @@ fn register_kernel() {
 
 /// `Part.Shape`: an opaque handle to a kernel shape.
 ///
-/// The `Mutex` is here at the Python boundary only: `Shape` is `Send` but not `Sync`
-/// (see `ferrocad_geom`), and a `#[pyclass]` must be `Send + Sync`. It is not a lock
-/// in the seam.
+/// The `Mutex`/`Arc` is here at the Python boundary only: `Shape` is `Send` but not
+/// `Sync` (see `ferrocad_geom`), and a `#[pyclass]` must be `Send + Sync`. It is not
+/// a lock in the seam.
+///
+/// The geometry is **always baked** with the accumulated [`placement`](PartShape::placement)
+/// (`geometry == placement · base`), so `BoundBox`, `Vertexes`, `normalAt`, mass
+/// properties and sub-shape access need no extra transform. The placement is kept
+/// beside it, in an `Arc` shared with the live Python `Placement` view, so mutating
+/// `shape.Placement` re-bakes the geometry and moves the description together.
 ///
 /// A shape produced by an operation also carries the [`Lineage`] that operation
 /// folded: names are metadata *beside* the geometry, never part of it, so they
@@ -75,15 +82,34 @@ fn register_kernel() {
 /// the old handles would be worse than none.
 #[pyclass(name = "Shape", module = "Part", subclass)]
 pub struct PartShape {
-    shape: Mutex<Option<Shape>>,
-    lineage: Mutex<Option<Lineage>>,
+    /// The baked geometry (pre-existing field name kept for the sub-shape wrappers
+    /// in `curves`/`solids`, which rebuild it in place).
+    shape: Arc<Mutex<Option<Shape>>>,
+    /// The accumulated placement baked into `shape`.
+    placement: Arc<Mutex<Placement>>,
+    lineage: Arc<Mutex<Option<Lineage>>>,
+    /// Bumped whenever the geometry/placement pair changes, so a `Placement` view
+    /// captured earlier detaches instead of overwriting a newer value (the same
+    /// rule the document property views use).
+    epoch: Arc<AtomicU64>,
 }
 
 impl PartShape {
     fn with_parts(shape: Option<Shape>, lineage: Option<Lineage>) -> Self {
+        Self::with_parts_and_placement(shape, Placement::identity(), lineage)
+    }
+
+    /// Wrap an already-baked shape together with the placement it carries.
+    fn with_parts_and_placement(
+        shape: Option<Shape>,
+        placement: Placement,
+        lineage: Option<Lineage>,
+    ) -> Self {
         PartShape {
-            shape: Mutex::new(shape),
-            lineage: Mutex::new(lineage),
+            shape: Arc::new(Mutex::new(shape)),
+            placement: Arc::new(Mutex::new(placement)),
+            lineage: Arc::new(Mutex::new(lineage)),
+            epoch: Arc::new(AtomicU64::new(0)),
         }
     }
 
@@ -92,14 +118,26 @@ impl PartShape {
         Self::with_parts(None, None)
     }
 
-    /// A second handle to the same shape (for `Shape.copy` and subclasses).
+    /// A second handle to an independent copy of the same shape (for `Shape.copy`
+    /// and subclasses).
     pub(crate) fn copy_handle(&self) -> Self {
-        Self::with_parts(self.shape(), self.lineage())
+        Self::with_parts_and_placement(self.shape(), self.placement(), self.lineage())
     }
 
     /// A copy of the wrapped shape (shape handles are cheap to clone).
     pub(crate) fn shape(&self) -> Option<Shape> {
-        self.shape.lock().unwrap().clone()
+        self.shape
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone()
+    }
+
+    /// The accumulated placement baked into [`shape`](PartShape::shape).
+    pub(crate) fn placement(&self) -> Placement {
+        *self
+            .placement
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
     }
 
     /// The lineage carried beside the shape, if it has one.
@@ -134,12 +172,60 @@ impl PartShape {
 
     /// Replace the wrapped shape (a subclass rebuilds its base shape in place).
     ///
-    /// The lineage is cleared: it maps names to the *old* handles, which a rebuilt
-    /// shape no longer has. This is also why transforms (which replace handles)
-    /// drop the lineage rather than carrying it.
+    /// The placement resets to identity and the lineage is cleared: the new
+    /// geometry carries neither the old accumulated placement nor the old names,
+    /// which referred to handles a rebuilt shape no longer has.
     pub(crate) fn replace_shape(&self, shape: Option<Shape>) {
+        *self
+            .placement
+            .lock()
+            .unwrap_or_else(|e| e.into_inner()) = Placement::identity();
         *self.shape.lock().unwrap_or_else(|e| e.into_inner()) = shape;
         *self.lineage.lock().unwrap_or_else(|e| e.into_inner()) = None;
+        self.epoch.fetch_add(1, Ordering::SeqCst);
+    }
+
+    /// Replace the wrapped geometry, keeping the accumulated placement (an
+    /// orientation change, such as `Shape.reverse`, does not move the shape).
+    fn replace_geometry(&self, shape: Option<Shape>) {
+        *self.shape.lock().unwrap_or_else(|e| e.into_inner()) = shape;
+        *self.lineage.lock().unwrap_or_else(|e| e.into_inner()) = None;
+        self.epoch.fetch_add(1, Ordering::SeqCst);
+    }
+
+    /// Set the absolute placement, re-baking the geometry by the placement delta.
+    fn apply_placement(&self, new: Placement) {
+        apply_placement_to(
+            &self.shape,
+            &self.placement,
+            &self.lineage,
+            &self.epoch,
+            None,
+            new,
+        );
+    }
+
+    /// Apply a global rigid transformation: `placement = loc · placement` and the
+    /// geometry moves with it. This is how `Shape.rotate`/`translated` compose.
+    fn apply_global_placement(&self, loc: Placement) {
+        let new = compose_placements(&loc, &self.placement());
+        self.apply_placement(new);
+    }
+
+    /// Apply a matrix to the placement when it is rigid, or bake it into the
+    /// geometry when it is not (scaling, shear, reflection).
+    fn apply_matrix_to_placement(&self, matrix: &ferrocad_types::Matrix4) {
+        if matrix.has_scale(1e-9) == ScaleType::NoScaling && matrix.determinant3() > 0.0 {
+            let loc = Placement::new(
+                Vector3::new(matrix.m[3], matrix.m[7], matrix.m[11]),
+                Rotation::from_matrix(matrix),
+            );
+            self.apply_global_placement(loc);
+        } else if let Some(shape) = self.shape() {
+            if let Ok(moved) = ferrocad_part::backend().transform(&shape, matrix) {
+                self.replace_shape(Some(moved));
+            }
+        }
     }
 
     /// The shape's topological kind (`Shape.ShapeType`), inferred from its
@@ -219,6 +305,57 @@ impl PartShape {
     }
 }
 
+/// Compose placements the way FreeCAD's `Placement::operator*` does: `a * b`
+/// applies `b` first, then `a` (rotation part `a.rotation * b.rotation`, base
+/// `a.rotation * b.base + a.base`).
+fn compose_placements(a: &Placement, b: &Placement) -> Placement {
+    Placement {
+        base: a.base.add(&a.rotation.to_matrix().transform(&b.base)),
+        rotation: a.rotation.multiply(&b.rotation),
+    }
+}
+
+/// Re-bake the geometry so it matches `new`, then store the placement.
+///
+/// The geometry always equals `placement · base`, so moving from the old
+/// placement to `new` is a global transform by `new · old⁻¹`. A no-op leaves the
+/// state (and the epoch) alone. The lineage is dropped: the transform replaces
+/// every sub-shape handle it used to name.
+///
+/// `expected_epoch` is the detach check for a live view: when it no longer matches
+/// the shared epoch, the view was captured before a newer change and its write is
+/// ignored.
+fn apply_placement_to(
+    shape: &Mutex<Option<Shape>>,
+    placement: &Mutex<Placement>,
+    lineage: &Mutex<Option<Lineage>>,
+    epoch: &AtomicU64,
+    expected_epoch: Option<u64>,
+    new: Placement,
+) {
+    let mut placement_guard = placement.lock().unwrap_or_else(|e| e.into_inner());
+    if let Some(expected) = expected_epoch {
+        if epoch.load(Ordering::SeqCst) != expected {
+            return;
+        }
+    }
+    if *placement_guard == new {
+        return;
+    }
+    let delta = compose_placements(&new, &placement_guard.inverse());
+    let mut shape_guard = shape.lock().unwrap_or_else(|e| e.into_inner());
+    if let Some(current) = shape_guard.as_ref() {
+        match ferrocad_part::backend().transform(current, &delta.to_matrix()) {
+            Ok(moved) => *shape_guard = Some(moved),
+            // A failed re-bake must not leave the pair inconsistent.
+            Err(_) => return,
+        }
+    }
+    *placement_guard = new;
+    *lineage.lock().unwrap_or_else(|e| e.into_inner()) = None;
+    epoch.fetch_add(1, Ordering::SeqCst);
+}
+
 /// Parse a positional element name (`Face2`) the way upstream's
 /// `shapeTypeAndIndex` does: a known kind prefix followed by a plain integer.
 ///
@@ -256,12 +393,15 @@ impl PartShape {
 
     /// A copy of the shape (`Shape.copy`); the kernel handle is reference-counted
     /// so no geometry is duplicated. The lineage is copied too, unless
-    /// `noElementMap` asks for a bare shape.
+    /// `noElementMap` asks for a bare shape. The accumulated placement is always
+    /// preserved.
     #[pyo3(signature = (noElementMap = false))]
     fn copy(&self, noElementMap: bool) -> Self {
         if noElementMap {
             match self.shape() {
-                Some(shape) => Self::from_shape(shape),
+                Some(shape) => {
+                    Self::with_parts_and_placement(Some(shape), self.placement(), None)
+                }
                 None => Self::empty(),
             }
         } else {
@@ -269,31 +409,55 @@ impl PartShape {
         }
     }
 
-    /// The shape's placement. Kernel shapes are stored with baked geometry, so
-    /// this is always the identity (`Shape.transformed` bakes the matrix in).
+    /// The shape's accumulated placement (`Shape.Placement`).
+    ///
+    /// This is a **live** view: `shape.Placement.Base = …`,
+    /// `shape.Placement.Rotation.Angle = …` and `shape.Placement.Base.x = …` all
+    /// write back. The geometry is re-baked by the placement delta, so `BoundBox`,
+    /// `Vertexes`, `normalAt` and the mass properties stay consistent. A view
+    /// captured before a later placement change detaches instead of overwriting
+    /// the newer value.
     #[getter]
     fn Placement(&self, py: Python<'_>) -> PyResult<PyObject> {
-        let module = py.import("ferrocad")?;
-        Ok(module.getattr("Placement")?.call0()?.unbind())
+        let placement = self.placement();
+        let epoch = self.epoch.load(Ordering::SeqCst);
+        let shape = Arc::clone(&self.shape);
+        let placement_cell = Arc::clone(&self.placement);
+        let lineage = Arc::clone(&self.lineage);
+        let epoch_cell = Arc::clone(&self.epoch);
+        let hook = Arc::new(move |new: Placement| {
+            apply_placement_to(
+                &shape,
+                &placement_cell,
+                &lineage,
+                &epoch_cell,
+                Some(epoch),
+                new,
+            );
+        });
+        ferrocad_py::placement_with_hook(py, placement, hook)
     }
 
-    /// Assigning a placement bakes it into the geometry (there is no separate
-    /// shape location in this kernel).
+    /// Assigning a placement replaces the accumulated placement (`Shape.Placement =
+    /// …`): the geometry is re-baked by the difference, so the shape ends up at
+    /// exactly the assigned placement rather than at `assigned · old`.
     #[setter]
     fn set_Placement(&self, value: &Bound<'_, PyAny>) -> PyResult<()> {
         let matrix = matrix_from_py(&value.call_method0("toMatrix")?)?;
-        let shape = self.named_shape()?;
-        let moved = ferrocad_part::backend()
-            .transform(&shape, &matrix)
-            .map_err(kernel_error)?;
-        self.replace_shape(Some(moved));
+        let placement = Placement::new(
+            Vector3::new(matrix.m[3], matrix.m[7], matrix.m[11]),
+            Rotation::from_matrix(&matrix),
+        );
+        self.apply_placement(placement);
         Ok(())
     }
 
     /// A copy translated by `vector` (`Shape.translated`).
     fn translated(&self, vector: &Bound<'_, PyAny>) -> PyResult<PartShape> {
         let offset = curves::vector(vector)?;
-        self.transformed_by(&translation_matrix(offset))
+        let result = self.copy_handle();
+        result.apply_global_placement(Placement::new(offset, Rotation::identity()));
+        Ok(result)
     }
 
     /// A copy scaled uniformly by `factor` about `center` (`Shape.scaled`).
@@ -357,6 +521,11 @@ impl PartShape {
 
     /// A transformed copy (`Shape.transformed(matrix, copy=True)`).
     ///
+    /// With `copy=True` (the usual path) the matrix is baked into the geometry
+    /// and the result carries the identity placement. With `copy=False` a rigid
+    /// matrix is composed onto the placement instead, matching upstream's
+    /// location-only transform; a non-rigid one falls back to baking.
+    ///
     /// The lineage is dropped: a transform replaces every sub-shape handle, so the
     /// map's old handles no longer name the result's elements.
     #[pyo3(signature = (matrix, copy = true))]
@@ -365,9 +534,13 @@ impl PartShape {
         matrix: &Bound<'_, PyAny>,
         copy: bool,
     ) -> PyResult<PartShape> {
-        let _ = copy;
-        let shape = self.named_shape()?;
         let matrix = matrix_from_py(matrix)?;
+        if !copy {
+            let result = self.copy_handle();
+            result.apply_matrix_to_placement(&matrix);
+            return Ok(result);
+        }
+        let shape = self.named_shape()?;
         let moved = ferrocad_part::backend()
             .transform(&shape, &matrix)
             .map_err(kernel_error)?;
@@ -381,21 +554,24 @@ impl PartShape {
         matrix: &Bound<'_, PyAny>,
         copy: bool,
     ) -> PyResult<PyObject> {
-        let _ = copy;
-        let shape = slf.borrow().named_shape()?;
         let matrix = matrix_from_py(matrix)?;
-        let moved = ferrocad_part::backend()
-            .transform(&shape, &matrix)
-            .map_err(kernel_error)?;
-        slf.borrow_mut().replace_shape(Some(moved));
+        if copy {
+            let shape = slf.borrow().named_shape()?;
+            let moved = ferrocad_part::backend()
+                .transform(&shape, &matrix)
+                .map_err(kernel_error)?;
+            slf.borrow().replace_shape(Some(moved));
+        } else {
+            slf.borrow().apply_matrix_to_placement(&matrix);
+        }
         Ok(slf.clone().into_any().unbind())
     }
 
     /// Rotate this shape in place about the axis through `center` along `axis`
-    /// by `angle` degrees (`Shape.rotate`). The placement is baked into the
-    /// geometry, as every other transform on this kernel is. Upstream mutates in
-    /// place and returns the shape itself (`TopoShapePy::rotate` returns
-    /// `IncRef()`), so this does too.
+    /// by `angle` degrees (`Shape.rotate`). Upstream moves the shape's location
+    /// by the rotation, so the accumulated placement becomes `R · placement`
+    /// (not a separately baked shape). Upstream mutates in place and returns the
+    /// shape itself, so this does too.
     fn rotate(
         slf: &Bound<'_, Self>,
         center: &Bound<'_, PyAny>,
@@ -409,12 +585,13 @@ impl PartShape {
                 "a rotation needs a non-zero axis",
             ));
         }
-        let matrix = rotation_matrix(center, axis, angle);
-        let shape = slf.borrow().named_shape()?;
-        let moved = ferrocad_part::backend()
-            .transform(&shape, &matrix)
-            .map_err(kernel_error)?;
-        slf.borrow_mut().replace_shape(Some(moved));
+        let rotation = Rotation::from_axis_angle(&axis, angle.to_radians());
+        // A rotation about `center` is the placement `center - R·center`, `R`.
+        let about = Placement::new(
+            center.sub(&rotation.to_matrix().transform(&center)),
+            rotation,
+        );
+        slf.borrow().apply_global_placement(about);
         Ok(slf.clone().into_any().unbind())
     }
 
@@ -424,14 +601,18 @@ impl PartShape {
             return Self::empty();
         };
         match ferrocad_part::backend().clean(&shape) {
-            Some(cleaned) => Self::from_shape(cleaned),
+            Some(cleaned) => {
+                // Cleaning changes element handles, so the old names are dropped;
+                // the accumulated placement still describes the geometry.
+                Self::with_parts_and_placement(Some(cleaned), self.placement(), None)
+            }
             None => self.copy_handle(),
         }
     }
 
     /// Whether this is the empty/null shape (FreeCAD's `Shape.isNull()`).
     fn isNull(&self) -> bool {
-        self.shape.lock().unwrap().is_none()
+        self.shape().is_none()
     }
 
     /// Whether the kernel finds every sub-shape valid (`Shape.isValid`).
@@ -1526,13 +1707,14 @@ impl PartShape {
         Ok(slf.clone().into_any().unbind())
     }
 
-    /// `Shape.reverse()` — reverse this shape's orientation in place.
+    /// `Shape.reverse()` — reverse this shape's orientation in place. The
+    /// accumulated placement is kept: reversing does not move the shape.
     fn reverse(slf: &Bound<'_, Self>) -> PyResult<()> {
         let shape = slf.borrow().named_shape()?;
         let reversed = ferrocad_part::backend()
             .reversed(&shape)
             .map_err(kernel_error)?;
-        slf.borrow_mut().replace_shape(Some(reversed));
+        slf.borrow().replace_geometry(Some(reversed));
         Ok(())
     }
 
@@ -1599,38 +1781,6 @@ fn scale_matrix(factor: f64, center: ferrocad_curves::Vector3) -> ferrocad_types
     values[3] = center.x * (1.0 - factor);
     values[7] = center.y * (1.0 - factor);
     values[11] = center.z * (1.0 - factor);
-    ferrocad_types::Matrix4::from_values(values)
-}
-
-/// Rotation by `angle` degrees about the axis through `center` along `axis`
-/// (Rodrigues' formula), with the translation that keeps `center` fixed.
-fn rotation_matrix(
-    center: ferrocad_curves::Vector3,
-    axis: ferrocad_curves::Vector3,
-    angle: f64,
-) -> ferrocad_types::Matrix4 {
-    let k = axis.normalize();
-    let radians = angle.to_radians();
-    let (sin, cos) = radians.sin_cos();
-    let t = 1.0 - cos;
-    let (kx, ky, kz) = (k.x, k.y, k.z);
-    let mut values = ferrocad_types::Matrix4::identity().m;
-    values[0] = t * kx * kx + cos;
-    values[1] = t * kx * ky - sin * kz;
-    values[2] = t * kx * kz + sin * ky;
-    values[4] = t * kx * ky + sin * kz;
-    values[5] = t * ky * ky + cos;
-    values[6] = t * ky * kz - sin * kx;
-    values[8] = t * kx * kz - sin * ky;
-    values[9] = t * ky * kz + sin * kx;
-    values[10] = t * kz * kz + cos;
-    let matrix = ferrocad_types::Matrix4::from_values(values);
-    let rotated = matrix.transform(&center);
-    let offset = center.sub(&rotated);
-    values = matrix.m;
-    values[3] = offset.x;
-    values[7] = offset.y;
-    values[11] = offset.z;
     ferrocad_types::Matrix4::from_values(values)
 }
 
@@ -2126,9 +2276,12 @@ fn shape_to_py(py: Python<'_>, data: &dyn ExtensionData) -> Option<PyObject> {
     } else {
         Some(lineage.clone())
     };
-    Py::new(py, PartShape::with_parts(shape, lineage))
-        .ok()
-        .map(Py::into_any)
+    Py::new(
+        py,
+        PartShape::with_parts_and_placement(shape, property.placement(), lineage),
+    )
+    .ok()
+    .map(Py::into_any)
 }
 
 /// `Part::PropertyTopoShapeList` → a Python list of `Part.Shape` (what `obj.Shapes`
@@ -2153,10 +2306,11 @@ fn shape_list_to_py(py: Python<'_>, data: &dyn ExtensionData) -> Option<PyObject
 fn shape_to_extension(value: &Bound<'_, PyAny>) -> Option<ExtensionValue> {
     let shape = value.downcast::<PartShape>().ok()?;
     let shape = shape.borrow();
+    let placement = shape.placement();
     let property = match shape.shape() {
         Some(inner) => match shape.lineage() {
-            Some(lineage) => ShapeProperty::with_lineage(inner, lineage),
-            None => ShapeProperty::new(inner),
+            Some(lineage) => ShapeProperty::with_lineage_and_placement(inner, placement, lineage),
+            None => ShapeProperty::with_placement(inner, placement),
         },
         None => ShapeProperty::empty(),
     };

@@ -734,16 +734,18 @@ fn property_to_py_at(
         _ => None,
     };
     let view = |kind: ViewKind| GeometryView {
-        inner: Arc::clone(inner),
-        id,
-        prop: prop.to_string(),
+        target: ViewTarget::Document {
+            inner: Arc::clone(inner),
+            id,
+            prop: prop.to_string(),
+            version,
+        },
         expect_placement,
-        version,
         kind,
     };
     match p {
         Property::Placement(pl) => PyPlacement {
-            inner: *pl,
+            inner: Arc::new(Mutex::new(*pl)),
             view: Some(view(ViewKind::Placement)),
         }
         .into_py_any(py)
@@ -767,7 +769,7 @@ fn py_to_property(value: &Bound<'_, PyAny>) -> PyResult<Property> {
         return Ok(Property::Vector(v.borrow().inner));
     }
     if let Ok(p) = value.downcast::<PyPlacement>() {
-        return Ok(Property::Placement(p.borrow().inner));
+        return Ok(Property::Placement(p.borrow().get()));
     }
     if let Ok(r) = value.downcast::<PyRotation>() {
         return Ok(Property::Rotation(r.borrow().inner));
@@ -809,7 +811,7 @@ fn py_to_property(value: &Bound<'_, PyAny>) -> PyResult<Property> {
         ));
     }
     if let Ok(v) = value.extract::<Vec<PyRef<'_, PyPlacement>>>() {
-        return Ok(Property::PlacementList(v.iter().map(|x| x.inner).collect()));
+        return Ok(Property::PlacementList(v.iter().map(|x| x.get()).collect()));
     }
     if let Ok(v) = value.extract::<Vec<PyRef<'_, PyRotation>>>() {
         return Ok(Property::RotationList(v.iter().map(|x| x.inner).collect()));
@@ -2412,7 +2414,10 @@ impl PyDocumentObject {
         let mut doc = self.inner.lock().unwrap();
         match source {
             Some(src) => doc.set_expression(self.id, prop, &src).map_err(|e| {
-                if e.starts_with("cyclic") {
+                // The core reports upstream's wording now
+                // ("{prop} reference creates a cyclic dependency."); the "cyclic"
+                // spelling is kept as a fallback for other core errors.
+                if e.contains("creates a cyclic dependency") || e.starts_with("cyclic") {
                     PyRuntimeError::new_err(e)
                 } else {
                     PyValueError::new_err(e)
@@ -3437,17 +3442,28 @@ impl PyStringID {
 /// `Document.testNotification_Issue2902Part2`).
 #[derive(Clone)]
 struct GeometryView {
-    inner: Arc<Mutex<CoreDocument>>,
-    id: ObjectId,
-    prop: String,
+    target: ViewTarget,
     /// The `Placement` the view was derived from, so a `Base`/`Rotation` sub-field
     /// write can be merged back into the whole value. `None` for a whole-value view.
     expect_placement: Option<Placement>,
-    /// The property version when the view was created. A write is dropped once
-    /// the property has been reassigned (its version changed), even if the new
-    /// value compares equal.
-    version: u64,
     kind: ViewKind,
+}
+
+/// Where a live geometry view writes its new value.
+#[derive(Clone)]
+enum ViewTarget {
+    /// A geometry property on a document. A write is dropped once the property
+    /// has been reassigned (its version changed), even if the new value compares
+    /// equal.
+    Document {
+        inner: Arc<Mutex<CoreDocument>>,
+        id: ObjectId,
+        prop: String,
+        version: u64,
+    },
+    /// A module-owned value (currently `Part.Shape`'s accumulated placement)
+    /// that installs its own write-back hook.
+    Hook(Arc<dyn Fn(Property) + Send + Sync>),
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -3471,10 +3487,6 @@ impl GeometryView {
     /// Write this view's new `value` back to the property, unless the property
     /// has since been reassigned (in which case the view is detached).
     fn write(&self, value: Property) {
-        let mut doc = self.inner.lock().unwrap();
-        if doc.property_version(self.id, &self.prop) != self.version {
-            return;
-        }
         let new = match self.kind {
             ViewKind::Placement | ViewKind::Rotation => value,
             ViewKind::PlacementBase | ViewKind::PlacementRotation => {
@@ -3489,7 +3501,16 @@ impl GeometryView {
                 Property::Placement(placement)
             }
         };
-        let _ = doc.set_property(self.id, &self.prop, new);
+        match &self.target {
+            ViewTarget::Document { inner, id, prop, version } => {
+                let mut doc = inner.lock().unwrap();
+                if doc.property_version(*id, prop) != *version {
+                    return;
+                }
+                let _ = doc.set_property(*id, prop, new);
+            }
+            ViewTarget::Hook(hook) => hook(new),
+        }
     }
 }
 
@@ -3917,7 +3938,7 @@ impl PyMatrix {
                 .unwrap());
         }
         if let Ok(p) = other.extract::<PyRef<'_, PyPlacement>>() {
-            return Ok(PyMatrix { inner: self.inner.mul(&p.inner.to_matrix()) }
+            return Ok(PyMatrix { inner: self.inner.mul(&p.get().to_matrix()) }
                 .into_py_any(py)
                 .unwrap());
         }
@@ -4270,7 +4291,9 @@ impl PyRotation {
 #[pyclass(name = "Placement", module = "ferrocad")]
 #[derive(Clone)]
 struct PyPlacement {
-    inner: Placement,
+    /// Shared so a detached placement's `Rotation`/`Base` sub-object can write
+    /// back through the parent (`p.Rotation.Angle = …`).
+    inner: Arc<Mutex<Placement>>,
     /// Set when this placement is a live view of a geometry property.
     view: Option<GeometryView>,
 }
@@ -4278,15 +4301,98 @@ struct PyPlacement {
 impl PyPlacement {
     /// A detached placement value.
     fn fresh(inner: Placement) -> Self {
-        Self { inner, view: None }
+        Self {
+            inner: Arc::new(Mutex::new(inner)),
+            view: None,
+        }
+    }
+
+    /// The current placement value.
+    fn get(&self) -> Placement {
+        *self.inner.lock().unwrap_or_else(|e| e.into_inner())
+    }
+
+    /// Replace the current placement value.
+    fn set(&self, value: Placement) {
+        *self.inner.lock().unwrap_or_else(|e| e.into_inner()) = value;
     }
 
     /// Propagate a mutation to the backing geometry property, if any.
     fn write_back(&self) {
         if let Some(view) = &self.view {
-            view.write(Property::Placement(self.inner));
+            view.write(Property::Placement(self.get()));
         }
     }
+
+    /// The view a `Base`/`Rotation` sub-object writes through.
+    ///
+    /// A document/`Shape` view reuses its own target. A **detached** placement
+    /// gets a local hook into this placement's shared cell, so
+    /// `p.Rotation.Angle = …` and `p.Base.x = …` stick to `p` itself instead of
+    /// mutating a throw-away copy.
+    fn child_view(&self, kind: ViewKind) -> GeometryView {
+        match &self.view {
+            Some(view) => view.child(kind),
+            None => {
+                let cell = Arc::clone(&self.inner);
+                GeometryView {
+                    target: ViewTarget::Hook(Arc::new(move |property| {
+                        if let Property::Placement(placement) = property {
+                            *cell.lock().unwrap_or_else(|e| e.into_inner()) = placement;
+                        }
+                    })),
+                    expect_placement: Some(self.get()),
+                    kind,
+                }
+            }
+        }
+    }
+}
+
+/// Compose two placements the way FreeCAD's `Placement::operator*` does:
+/// `a * b` applies `b` first, then `a`. In particular the rotation part is
+/// `a.rotation * b.rotation` and the base is `a.rotation * b.base + a.base`.
+///
+/// This is deliberately not `Placement::mul` from `ferrocad_types` (which is a
+/// placeholder that drops the rotation composition).
+fn compose_placements(a: &Placement, b: &Placement) -> Placement {
+    Placement {
+        base: a.base.add(&a.rotation.to_matrix().transform(&b.base)),
+        rotation: a.rotation.multiply(&b.rotation),
+    }
+}
+
+/// Build a live `Placement` value whose mutations are reported to `on_change`.
+///
+/// This is the write-through path for module-owned geometry that is not a
+/// document property. `Part.Shape` uses it so
+/// `shape.Placement.Base = …` and `shape.Placement.Rotation.Angle = …` mutate the
+/// shape's accumulated placement, exactly as the document geometry views do for
+/// `obj.Placement`. Sub-field writes (`Base.x`, `Rotation.Angle`) merge into the
+/// whole placement before the hook sees it.
+///
+/// The returned value is detached from the document property machinery: the
+/// caller owns the callback and decides what an update means (Part re-bakes its
+/// geometry by the placement delta).
+pub fn placement_with_hook(
+    py: Python<'_>,
+    value: Placement,
+    on_change: Arc<dyn Fn(Placement) + Send + Sync>,
+) -> PyResult<PyObject> {
+    let view = GeometryView {
+        target: ViewTarget::Hook(Arc::new(move |property| {
+            if let Property::Placement(placement) = property {
+                on_change(placement);
+            }
+        })),
+        expect_placement: Some(value),
+        kind: ViewKind::Placement,
+    };
+    PyPlacement {
+        inner: Arc::new(Mutex::new(value)),
+        view: Some(view),
+    }
+    .into_py_any(py)
 }
 
 #[pymethods]
@@ -4317,60 +4423,107 @@ impl PyPlacement {
     }
 
     fn inverse(&self) -> PyPlacement {
-        PyPlacement::fresh(self.inner.inverse())
+        PyPlacement::fresh(self.get().inverse())
+    }
+
+    /// A detached copy (`Placement.copy`).
+    fn copy(&self) -> PyPlacement {
+        PyPlacement::fresh(self.get())
+    }
+
+    /// Rotate this placement in place (`Placement.rotate`).
+    ///
+    /// With `comp=False` (the default, and upstream's compatibility behaviour)
+    /// the rotation is applied in the placement's own frame, `p = p * r`; with
+    /// `comp=True` it is applied in the global frame, `p = r * p`, which is what
+    /// `Shape.rotate` does.
+    #[pyo3(signature = (center, axis, angle, comp = false))]
+    fn rotate(
+        &mut self,
+        center: &Bound<'_, PyAny>,
+        axis: &Bound<'_, PyAny>,
+        angle: f64,
+        comp: bool,
+    ) -> PyResult<()> {
+        let center = extract_vector(center)?;
+        let axis = extract_vector(axis)?;
+        if axis.length() == 0.0 {
+            return Err(PyValueError::new_err("rotation axis must not be zero"));
+        }
+        let rotation = Rotation::from_axis_angle(&axis, angle.to_radians());
+        // A placement rotating about `center`: its base is `center - R * center`.
+        let about = Placement::new(center.sub(&rotation.to_matrix().transform(&center)), rotation);
+        let current = self.get();
+        let new = if comp {
+            compose_placements(&about, &current)
+        } else {
+            compose_placements(&current, &about)
+        };
+        self.set(new);
+        self.write_back();
+        Ok(())
     }
 
     fn toMatrix(&self) -> PyMatrix {
-        PyMatrix { inner: self.inner.to_matrix() }
+        PyMatrix { inner: self.get().to_matrix() }
     }
 
     #[pyo3(signature = (o, tol=0.0))]
     fn isSame(&self, o: PyRef<'_, PyPlacement>, tol: f64) -> bool {
-        self.inner.is_same(&o.inner, tol)
+        self.get().is_same(&o.get(), tol)
     }
 
     #[getter]
     fn Base(&self) -> PyVector {
-        let mut v = PyVector::fresh(self.inner.base);
-        v.view = self.view.as_ref().map(|view| view.child(ViewKind::PlacementBase));
+        let mut v = PyVector::fresh(self.get().base);
+        v.view = Some(self.child_view(ViewKind::PlacementBase));
         v
     }
     #[setter]
-    fn set_Base(&mut self, v: &Bound<'_, PyAny>) -> PyResult<()> {
-        self.inner.base = extract_vector(v)?;
+    fn set_Base(&self, v: &Bound<'_, PyAny>) -> PyResult<()> {
+        let mut placement = self.get();
+        placement.base = extract_vector(v)?;
+        self.set(placement);
         self.write_back();
         Ok(())
     }
 
     #[getter]
     fn Rotation(&self) -> PyRotation {
-        let mut r = PyRotation::fresh(self.inner.rotation, None);
-        r.view = self.view.as_ref().map(|view| view.child(ViewKind::PlacementRotation));
+        let mut r = PyRotation::fresh(self.get().rotation, None);
+        // Always install a view: a detached placement's `Rotation` writes back
+        // into the placement itself, not into a throw-away copy.
+        r.view = Some(self.child_view(ViewKind::PlacementRotation));
         r
     }
     #[setter]
-    fn set_Rotation(&mut self, q: &Bound<'_, PyAny>) -> PyResult<()> {
-        self.inner.rotation = extract_rotation(q)?;
+    fn set_Rotation(&self, q: &Bound<'_, PyAny>) -> PyResult<()> {
+        let mut placement = self.get();
+        placement.rotation = extract_rotation(q)?;
+        self.set(placement);
         self.write_back();
         Ok(())
     }
 
-    fn __mul__(&self, o: PyRef<'_, PyPlacement>) -> PyPlacement { PyPlacement::fresh(self.inner.mul(&o.inner)) }
+    fn __mul__(&self, o: PyRef<'_, PyPlacement>) -> PyPlacement {
+        PyPlacement::fresh(compose_placements(&self.get(), &o.get()))
+    }
 
     /// Transform a vector by this placement (FreeCAD `Placement.multVec`).
     fn multVec(&self, v: PyRef<'_, PyVector>) -> PyVector {
-        PyVector::fresh(self.inner.to_matrix().transform(&v.inner))
+        PyVector::fresh(self.get().to_matrix().transform(&v.inner))
     }
 
     fn __eq__(&self, other: &Bound<'_, PyAny>) -> bool {
         match other.extract::<PyRef<'_, PyPlacement>>() {
-            Ok(o) => self.inner == o.inner,
+            Ok(o) => self.get() == o.get(),
             Err(_) => false,
         }
     }
 
     fn __repr__(&self) -> String {
-        format!("Placement ({:?}, {:?})", self.inner.base, self.inner.rotation.q)
+        let placement = self.get();
+        format!("Placement ({:?}, {:?})", placement.base, placement.rotation.q)
     }
 }
 

@@ -122,3 +122,158 @@ fn boolean_lineage_is_carried_and_copy_preserves_it() {
         assert_eq!(reverse_map(&wrapped).unwrap(), entries);
     });
 }
+
+/// The first forward-map key of `shape`'s lineage: a name an operation preserved.
+fn mapped_name(shape: &Bound<'_, PyAny>) -> String {
+    let part_shape = shape.extract::<PyRef<'_, PartShape>>().expect("PartShape");
+    let lineage = part_shape.lineage().expect("the cut carries a lineage");
+    lineage
+        .map()
+        .iter()
+        .next()
+        .map(|(name, _)| name.to_string())
+        .expect("the cut has a forward map")
+}
+
+fn object_name(object: &Bound<'_, PyAny>) -> String {
+    object.getattr("Name").unwrap().extract().unwrap()
+}
+
+/// A cut of a 1 mm box out of a 2 mm box, both at the origin, recomputed.
+/// This is the primitive path's golden case: it produces both forward and
+/// reverse lineage relations.
+fn cut_document<'py>(
+    ferrocad: &Bound<'py, PyModule>,
+    name: &str,
+) -> (Bound<'py, PyAny>, Bound<'py, PyAny>) {
+    let doc = ferrocad
+        .call_method1("newDocument", (name,))
+        .expect("newDocument");
+    for object_name in ["BoxA", "BoxB"] {
+        let object = doc
+            .call_method1("addObject", ("Part::Box", object_name))
+            .expect("Part::Box");
+        let size = if object_name == "BoxA" { 2.0 } else { 1.0 };
+        for property in ["Length", "Width", "Height"] {
+            object.setattr(property, size).expect("box dimension");
+        }
+    }
+    let cut = doc
+        .call_method1("addObject", ("Part::Cut", "Cut"))
+        .expect("Part::Cut");
+    let box_a = doc.call_method1("getObject", ("BoxA",)).unwrap();
+    let box_b = doc.call_method1("getObject", ("BoxB",)).unwrap();
+    cut.setattr("Base", box_a).expect("Cut.Base");
+    cut.setattr("Tool", box_b).expect("Cut.Tool");
+    doc.call_method0("recompute").expect("recompute");
+    (doc, cut)
+}
+
+#[test]
+fn a_retired_sub_element_name_fails_instead_of_moving() {
+    let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    boot();
+    Python::with_gil(|py| {
+        let _part = PyModule::import(py, "Part").expect("import Part");
+        let ferrocad = PyModule::import(py, "ferrocad").expect("import ferrocad");
+        let (_doc, cut) = cut_document(&ferrocad, "RustLineageResolve");
+
+        let mapped = mapped_name(&cut.getattr("Shape").unwrap());
+        let resolved = cut
+            .call_method1("getSubObject", (&mapped, 1))
+            .expect("getSubObject");
+        assert_eq!(
+            object_name(&resolved),
+            "Cut",
+            "a name in the lineage still resolves to its owner"
+        );
+
+        // A name the non-empty lineage does not contain is retired: it must not
+        // silently select whatever face now has that ordinal.
+        let retired = cut
+            .call_method1("getSubObject", ("Face9999", 1))
+            .expect("getSubObject");
+        assert!(retired.is_none(), "a retired name does not resolve");
+
+        ferrocad
+            .call_method1("closeDocument", ("RustLineageResolve",))
+            .expect("closeDocument");
+    });
+}
+
+#[test]
+fn a_shape_without_a_lineage_keeps_the_positional_fallback() {
+    let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    boot();
+    Python::with_gil(|py| {
+        let part = PyModule::import(py, "Part").expect("import Part");
+        let ferrocad = PyModule::import(py, "ferrocad").expect("import ferrocad");
+        let doc = ferrocad
+            .call_method1("newDocument", ("RustLineagePositional",))
+            .expect("newDocument");
+        let feature = doc
+            .call_method1("addObject", ("Part::Feature", "Primitive"))
+            .expect("Part::Feature");
+        let shape = part
+            .call_method1("makeBox", (2.0, 2.0, 2.0))
+            .expect("makeBox");
+        feature.setattr("Shape", shape).expect("Primitive.Shape");
+
+        // No lineage: `Face1` is the first face, exactly as before L5.
+        let resolved = feature
+            .call_method1("getSubObject", ("Face1", 1))
+            .expect("getSubObject");
+        assert_eq!(object_name(&resolved), "Primitive");
+        // ...and a face the box does not have is missing, not accepted blindly.
+        let missing = feature
+            .call_method1("getSubObject", ("Face9999", 1))
+            .expect("getSubObject");
+        assert!(missing.is_none());
+
+        ferrocad
+            .call_method1("closeDocument", ("RustLineagePositional",))
+            .expect("closeDocument");
+    });
+}
+
+#[test]
+fn a_boolean_lineage_survives_an_fcstd_save_and_open() {
+    let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    boot();
+    Python::with_gil(|py| {
+        let _part = PyModule::import(py, "Part").expect("import Part");
+        let ferrocad = PyModule::import(py, "ferrocad").expect("import ferrocad");
+        let (doc, cut) = cut_document(&ferrocad, "RustLineageFcstd");
+        let before = reverse_map(&cut.getattr("Shape").unwrap()).expect("reverse map");
+        assert!(
+            !before.is_empty(),
+            "the cut carries a non-empty ElementReverseMap"
+        );
+
+        let path = std::env::temp_dir().join(format!(
+            "ferrocad_part_lineage_{}.FCStd",
+            std::process::id()
+        ));
+        doc.call_method1("saveAs", (path.to_string_lossy().as_ref(),))
+            .expect("saveAs .FCStd");
+        let original_name: String = doc.getattr("Name").unwrap().extract().unwrap();
+        ferrocad
+            .call_method1("closeDocument", (&original_name,))
+            .expect("closeDocument");
+
+        let reopened = ferrocad
+            .call_method1("openDocument", (path.to_string_lossy().as_ref(),))
+            .expect("openDocument .FCStd");
+        let reopened_cut = reopened
+            .call_method1("getObject", ("Cut",))
+            .expect("getObject Cut");
+        let after = reverse_map(&reopened_cut.getattr("Shape").unwrap()).expect("reverse map");
+        assert_eq!(after, before, "ElementReverseMap survives the round trip");
+
+        let reopened_name: String = reopened.getattr("Name").unwrap().extract().unwrap();
+        ferrocad
+            .call_method1("closeDocument", (&reopened_name,))
+            .expect("closeDocument");
+        let _ = std::fs::remove_file(&path);
+    });
+}

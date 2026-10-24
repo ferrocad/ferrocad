@@ -16,7 +16,11 @@
 //!    module value supplies `ExtensionData::fcstd_members`. A single value is
 //!    `PartShapeN.brp` (referenced by `<Part file>`); a list is
 //!    `PartShapeN.M.brp` (referenced by `<TopoShape file>` inside
-//!    `<ShapeList>`);
+//!    `<ShapeList>`). A single value may also supply an
+//!    `ExtensionData::fcstd_sidecar`; core writes it as `PartShapeN.<suffix>`
+//!    and references it from the same `<Part>` element with a
+//!    `FerroCADSidecar` attribute, which upstream ignores. The `.brp` member
+//!    stays raw BREP.
 //! 4. one member per file-backed value, named after its property (uniquified on
 //!    collision): `FloatList`, `VectorList`, `PlacementList` and `ColorList`
 //!    members, each a LE `u32` count followed by fixed-width values — exactly
@@ -968,9 +972,33 @@ fn write_property(
                     name: member.clone(),
                     data: members.into_iter().next().unwrap().1,
                 });
+                // A sidecar is module metadata (a lineage, for Part) that must
+                // not contaminate the upstream-compatible `.brp` member. Upstream
+                // reads only the attributes it knows, so the extra reference is
+                // ignored; our reader follows it when present.
+                let sidecar = value
+                    .data()
+                    .fcstd_sidecar()
+                    .map(|(suffix, data)| {
+                        let mut name = format!("{stem}.{suffix}");
+                        let mut serial = 1;
+                        while ctx.member_name_taken(&name) {
+                            name = format!("{stem}.{suffix}{serial}");
+                            serial += 1;
+                        }
+                        ctx.payload_members.push(Member {
+                            name: name.clone(),
+                            data,
+                        });
+                        name
+                    });
+                let sidecar = match sidecar {
+                    Some(name) => format!(" FerroCADSidecar=\"{}\"", escape_attr(&name)),
+                    None => String::new(),
+                };
                 out.push_str(&format!(
                     "                <Property name=\"{escaped}\" type=\"{}\"{status}>\
-                     <Part file=\"{member}\"/></Property>\n",
+                     <Part file=\"{member}\"{sidecar}/></Property>\n",
                     escape_attr(type_name)
                 ));
             } else {

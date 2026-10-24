@@ -24,7 +24,9 @@ use crate::property_types;
 /// document's own `Mutex`, not by a second lock inside the value.
 ///
 /// Only [`type_name`](ExtensionData::type_name), [`save`](ExtensionData::save),
-/// [`fcstd_members`](ExtensionData::fcstd_members) and
+/// [`fcstd_members`](ExtensionData::fcstd_members),
+/// [`fcstd_sidecar`](ExtensionData::fcstd_sidecar),
+/// [`resolve_element_name`](ExtensionData::resolve_element_name) and
 /// [`clone_box`](ExtensionData::clone_box) cross the core boundary; core never
 /// interprets the bytes.
 pub trait ExtensionData: Send {
@@ -54,6 +56,41 @@ pub trait ExtensionData: Send {
     /// instead of silently dropping the value. Core never interprets the bytes.
     fn fcstd_members(&self) -> Option<Vec<(String, Vec<u8>)>> {
         None
+    }
+    /// An optional secondary `.FCStd` member carrying module metadata that must
+    /// not go into the upstream-compatible payload.
+    ///
+    /// A module whose [`fcstd_members`](ExtensionData::fcstd_members) is a
+    /// **single** payload may return `(suffix, bytes)` here. Core writes the
+    /// bytes to `{stem}.{suffix}` and references that member from the `<Part>`
+    /// element with a `FerroCADSidecar` attribute, which upstream FreeCAD
+    /// ignores. The payload member itself (and therefore `PartShapeN.brp`) stays
+    /// exactly what `fcstd_members` returned — raw BREP for a shape — so upstream
+    /// still opens the file.
+    ///
+    /// The suffix must be a safe member-name fragment (`"lineage"`, not a path).
+    /// The default is `None`. Sidecars are not written for shape-list payloads.
+    fn fcstd_sidecar(&self) -> Option<(String, Vec<u8>)> {
+        None
+    }
+    /// Resolve a stored sub-element name against this value's lineage.
+    ///
+    /// The return type is `Result<Option<String>, &'static str>`:
+    ///
+    /// - `Ok(Some(current))` — the name denotes a current sub-element; core
+    ///   callers should use `current` (the module may return the stored name).
+    /// - `Ok(None)` — the value has no lineage for the name, so a caller may fall
+    ///   back to positional naming. This is also the default, so a module value
+    ///   that knows nothing about sub-element names keeps the old behaviour.
+    /// - `Err("retired")` — the value carries a non-empty lineage that does not
+    ///   justify the name. A caller must fail the reference rather than retarget
+    ///   it positionally.
+    /// - `Err("missing")` — the name does not denote an element of this value.
+    ///
+    /// The string payload deliberately avoids naming a core error type; the
+    /// vocabulary (`retired`/`missing`) is part of this contract.
+    fn resolve_element_name(&self, _name: &str) -> Result<Option<String>, &'static str> {
+        Ok(None)
     }
     /// Human-readable form for `Debug`.
     fn debug(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result;

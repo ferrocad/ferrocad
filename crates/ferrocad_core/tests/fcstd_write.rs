@@ -23,6 +23,7 @@ use ferrocad_core::{
 struct FakeShape {
     type_name: &'static str,
     members: Vec<(String, Vec<u8>)>,
+    sidecar: Option<(String, Vec<u8>)>,
 }
 
 impl FakeShape {
@@ -31,6 +32,21 @@ impl FakeShape {
         FakeShape {
             type_name,
             members: vec![(String::new(), data.to_vec())],
+            sidecar: None,
+        }
+    }
+
+    /// A single payload plus a module sidecar member (see `fcstd_sidecar`).
+    fn with_sidecar(
+        type_name: &'static str,
+        data: &[u8],
+        suffix: &str,
+        sidecar: &[u8],
+    ) -> Self {
+        FakeShape {
+            type_name,
+            members: vec![(String::new(), data.to_vec())],
+            sidecar: Some((suffix.to_string(), sidecar.to_vec())),
         }
     }
 
@@ -44,6 +60,7 @@ impl FakeShape {
                 .enumerate()
                 .map(|(index, data)| (index.to_string(), data.to_vec()))
                 .collect(),
+            sidecar: None,
         }
     }
 }
@@ -56,6 +73,7 @@ impl ExtensionData for FakeShape {
         Box::new(FakeShape {
             type_name: self.type_name,
             members: self.members.clone(),
+            sidecar: self.sidecar.clone(),
         })
     }
     fn as_any(&self) -> &dyn Any {
@@ -72,6 +90,9 @@ impl ExtensionData for FakeShape {
     }
     fn fcstd_members(&self) -> Option<Vec<(String, Vec<u8>)>> {
         Some(self.members.clone())
+    }
+    fn fcstd_sidecar(&self) -> Option<(String, Vec<u8>)> {
+        self.sidecar.clone()
     }
     fn debug(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "FakeShape({}, {} members)", self.type_name, self.members.len())
@@ -374,6 +395,55 @@ fn writes_a_real_zip_that_the_reader_can_open() {
     );
 
     let _ = std::fs::remove_file(&path);
+}
+
+/// A single module value can carry a sidecar member (module metadata, e.g. a
+/// lineage). The `.brp` member stays raw and the extra reference is an attribute
+/// upstream ignores.
+#[test]
+fn writes_a_sidecar_beside_the_raw_payload() {
+    let mut doc = Document::new();
+    let id = doc.add_object("Box", "App::FeaturePython");
+    doc.set_property(
+        id,
+        "Shape",
+        Property::Extension(ExtensionValue::new(Box::new(FakeShape::with_sidecar(
+            "Part::PropertyPartShape",
+            b"raw brep\n",
+            "lineage",
+            b"sidecar envelope\n",
+        )))),
+    )
+    .unwrap();
+
+    let saved = doc.to_saved("Sidecar");
+    let path = temp_path("sidecar.FCStd");
+    write_fcstd(&saved, path.to_str().unwrap()).expect("write with sidecar");
+    let bytes = std::fs::read(&path).unwrap();
+    let _ = std::fs::remove_file(&path);
+
+    // The upstream-compatible member comes first; the sidecar rides beside it,
+    // so the single shape is still `<Part file>`, never a `<ShapeList>`.
+    assert_eq!(
+        member_names(&bytes),
+        [
+            "Document.xml",
+            "GuiDocument.xml",
+            "PartShape.brp",
+            "PartShape.lineage"
+        ]
+    );
+    assert_eq!(read_member(&bytes, "PartShape.brp"), b"raw brep\n");
+    assert_eq!(
+        read_member(&bytes, "PartShape.lineage"),
+        b"sidecar envelope\n"
+    );
+
+    let xml = read_document_xml(&bytes);
+    assert!(xml.contains(
+        r#"<Part file="PartShape.brp" FerroCADSidecar="PartShape.lineage"/>"#
+    ));
+    roxmltree::Document::parse(&xml).expect("well-formed Document.xml");
 }
 
 /// A shape list becomes one `.brp` member per entry, each referenced by its own

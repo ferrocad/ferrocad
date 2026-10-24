@@ -27,9 +27,13 @@
 //! `FCSHPROP` prefix as legacy raw BREP and hands it straight to the backend, so a
 //! document written before the envelope still loads (with an empty lineage).
 //!
-//! The envelope is a *native-document* encoding. [`fcstd_members`] keeps writing raw
-//! BREP for `PartShapeN.brp`, so an upstream `.FCStd` reader still sees a BREP file;
-//! persisting the map in that format is a separate step.
+//! The envelope is a *native-document* encoding. [`fcstd_members`] keeps writing
+//! raw BREP for `PartShapeN.brp`, so an upstream `.FCStd` reader still sees a BREP
+//! file. [`fcstd_sidecar`] additionally writes the envelope to
+//! `PartShapeN.lineage`, referenced from the `<Part>` element by a
+//! `FerroCADSidecar` attribute upstream ignores; our reader prefers that member and
+//! so restores the lineage, while a file without it (upstream, or an older
+//! FerroCAD save) still loads the geometry with an empty lineage.
 
 use std::any::Any;
 use std::collections::BTreeSet;
@@ -308,10 +312,44 @@ impl ExtensionData for ShapeProperty {
 
     /// Upstream `Part::PropertyPartShape` writes one `PartShapeN.brp` member and
     /// references it from a `<Part file="…"/>` element. That member stays raw BREP
-    /// (the envelope is a native-document form), so the lineage is not written into
-    /// `.FCStd` yet.
+    /// (the envelope is a native-document form).
     fn fcstd_members(&self) -> Option<Vec<(String, Vec<u8>)>> {
         Some(vec![(String::new(), self.brep())])
+    }
+
+    /// Persist the lineage in `.FCStd` beside the raw BREP member.
+    ///
+    /// The sidecar is the same versioned envelope [`save`](ExtensionData::save)
+    /// writes, so restoring it needs no second format: the reader prefers the
+    /// sidecar bytes and falls back to the raw `<Part>` member when it is absent.
+    /// Nothing is written for a shape without a lineage, so primitive shapes keep
+    /// the exact upstream archive layout.
+    fn fcstd_sidecar(&self) -> Option<(String, Vec<u8>)> {
+        if self.lineage.map().is_empty() && self.lineage.reverse().is_empty() {
+            return None;
+        }
+        let bytes = self.save();
+        if bytes.is_empty() {
+            None
+        } else {
+            Some(("lineage".to_string(), bytes))
+        }
+    }
+
+    /// Resolve a stored name for the geometry-free Python layer.
+    ///
+    /// Only a name that looks like a sub-element (`Face1`, `Edge3`, `Vertex2`) is
+    /// answered; any other spelling is "no opinion" (`Ok(None)`) so the caller
+    /// keeps its existing behaviour for datum names and object paths.
+    fn resolve_element_name(&self, name: &str) -> Result<Option<String>, &'static str> {
+        if kind_of_name(name).is_none() {
+            return Ok(None);
+        }
+        match self.resolve_element(name) {
+            Ok(_) => Ok(Some(name.to_string())),
+            Err(ResolveElementError::Retired) => Err("retired"),
+            Err(ResolveElementError::Missing | ResolveElementError::NoShape) => Err("missing"),
+        }
     }
 
     fn debug(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -566,11 +604,47 @@ fn rebuild_lineage(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use ferrocad_core::{Document, ObjectId, Property};
     use ferrocad_occt::OcctBackend;
     use std::sync::Arc;
 
     fn setup() {
         crate::register(Arc::new(OcctBackend::new()));
+    }
+
+    /// Two overlapping boxes and the cut that consumes them, recomputed so the
+    /// cut's `Shape` carries a real lineage.
+    fn cut_document() -> (Document, ObjectId) {
+        let mut doc = Document::new();
+        for name in ["BoxA", "BoxB"] {
+            let id = doc.add_object(name, crate::BOX_TYPE);
+            // The primitive path's golden case: a 1 mm box cut out of a 2 mm box,
+            // both at the origin. It produces both forward and reverse relations.
+            let size = if name == "BoxA" { 2.0 } else { 1.0 };
+            doc.set_property(id, "Length", Property::Float(size)).unwrap();
+            doc.set_property(id, "Width", Property::Float(size)).unwrap();
+            doc.set_property(id, "Height", Property::Float(size)).unwrap();
+        }
+        doc.recompute().unwrap();
+        let cut = doc.add_object("Cut", crate::CUT_TYPE);
+        doc.set_property(cut, "Base", Property::Link("BoxA".into()))
+            .unwrap();
+        doc.set_property(cut, "Tool", Property::Link("BoxB".into()))
+            .unwrap();
+        doc.recompute().unwrap();
+        (doc, cut)
+    }
+
+    fn stored_shape_property(doc: &Document, id: ObjectId) -> &ShapeProperty {
+        shape_of(doc.object(id).unwrap().properties.get("Shape").unwrap())
+            .expect("the object owns a Part::PropertyPartShape")
+    }
+
+    fn temp_path(name: &str) -> std::path::PathBuf {
+        std::env::temp_dir().join(format!(
+            "ferrocad-part-shape-property-{}-{name}",
+            std::process::id()
+        ))
     }
 
     fn box_and_edges(size: f64) -> (Shape, Vec<ElementRef>) {
@@ -665,5 +739,156 @@ mod tests {
             ShapeProperty::empty().resolve_element("Edge1").err(),
             Some(ResolveElementError::NoShape)
         );
+    }
+
+    #[test]
+    fn the_extension_hook_answers_only_element_names() {
+        setup();
+        let (shape, edges) = box_and_edges(10.0);
+        // No lineage: a real element resolves positionally, an out-of-range one
+        // is missing, and a name that is not an element spelling has no opinion.
+        let primitive = ShapeProperty::new(shape);
+        assert_eq!(
+            primitive.resolve_element_name("Edge1"),
+            Ok(Some("Edge1".to_string()))
+        );
+        assert!(primitive.resolve_element_name("Edge99").is_err());
+        assert_eq!(primitive.resolve_element_name("N_Axis"), Ok(None));
+
+        // With a lineage, only a mapped name resolves; everything else is retired.
+        let property = ShapeProperty::with_lineage(
+            primitive.shape().unwrap(),
+            lineage_binding("Edge2", &edges[4]),
+        );
+        assert!(property.resolve_element_name("Edge2").is_ok());
+        assert!(property.resolve_element_name("Edge1").is_err());
+    }
+
+    /// S6b: a `.FCStd` save writes both the upstream-compatible raw BREP member and
+    /// a lineage sidecar, and loading restores exactly the stored reverse map.
+    #[test]
+    fn fcstd_round_trip_preserves_the_lineage() {
+        setup();
+        let (doc, cut) = cut_document();
+        let original = stored_shape_property(&doc, cut);
+        assert!(
+            !original.lineage().map().is_empty(),
+            "a cut carries forward relations"
+        );
+        assert!(
+            !original.lineage().reverse().is_empty(),
+            "a cut carries reverse relations"
+        );
+        let original_reverse = original.lineage().reverse().clone();
+        let original_version = original.lineage().version().clone();
+        let original_names: Vec<String> = original
+            .lineage()
+            .map()
+            .iter()
+            .map(|(name, _)| name.to_string())
+            .collect();
+
+        let saved = doc.to_saved("LineageRoundTrip");
+        let path = temp_path("lineage.FCStd");
+        ferrocad_core::fcstd_write::write_fcstd(&saved, path.to_str().unwrap())
+            .expect("write .FCStd");
+        let read = ferrocad_core::fcstd::read_fcstd(path.to_str().unwrap())
+            .expect("read back .FCStd");
+        let _ = std::fs::remove_file(&path);
+
+        let restored = read
+            .objects
+            .iter()
+            .find(|object| object.name == "Cut")
+            .and_then(|object| object.properties.get("Shape"))
+            .and_then(shape_of)
+            .expect("Cut.Shape is restored");
+
+        // The observable contract is the reverse map (ElementReverseMap in
+        // Part.Shape); the forward keys and version must match too.
+        assert_eq!(restored.lineage().reverse(), &original_reverse);
+        assert_eq!(restored.lineage().version(), &original_version);
+        let restored_names: Vec<String> = restored
+            .lineage()
+            .map()
+            .iter()
+            .map(|(name, _)| name.to_string())
+            .collect();
+        assert_eq!(restored_names, original_names);
+
+        // Each restored mapping still denotes the same geometry. `same_shape` is
+        // kernel identity, which a BREP round trip necessarily replaces, so
+        // compare the measured properties instead.
+        let properties = |shape: &Shape| {
+            crate::backend()
+                .mass_properties(shape)
+                .expect("a lineage sub-shape has mass properties")
+        };
+        for (name, sub_shape) in original.lineage().map().iter() {
+            let restored_sub = restored
+                .lineage()
+                .map()
+                .get(name)
+                .unwrap_or_else(|| panic!("'{name}' survives the round trip"));
+            let before = properties(sub_shape);
+            let after = properties(restored_sub);
+            let same = |a: f64, b: f64| (a - b).abs() < 1e-9;
+            assert!(
+                same(before.length, after.length)
+                    && same(before.area, after.area)
+                    && same(before.volume, after.volume)
+                    && same(before.center_of_mass.x, after.center_of_mass.x)
+                    && same(before.center_of_mass.y, after.center_of_mass.y)
+                    && same(before.center_of_mass.z, after.center_of_mass.z),
+                "'{name}' maps to the same element"
+            );
+        }
+    }
+
+    /// A file with no sidecar (upstream, or a FerroCAD save from before S6b) still
+    /// loads its raw BREP; only the lineage is absent.
+    #[test]
+    fn an_fcstd_without_a_sidecar_still_loads_the_geometry() {
+        setup();
+        let (mut doc, cut) = cut_document();
+        let shape = stored_shape_property(&doc, cut)
+            .shape()
+            .expect("the cut produced a shape");
+        let volume = crate::backend()
+            .mass_properties(&shape)
+            .expect("the cut has mass properties")
+            .volume;
+
+        // Re-wrap the same geometry without its lineage: this is exactly what the
+        // writer emits for a pre-sidecar file.
+        doc.set_property_raw(
+            cut,
+            "Shape",
+            make_shape_property(ShapeProperty::new(shape)),
+        );
+        let saved = doc.to_saved("LegacyRoundTrip");
+        let path = temp_path("legacy.FCStd");
+        ferrocad_core::fcstd_write::write_fcstd(&saved, path.to_str().unwrap())
+            .expect("write .FCStd");
+        let read = ferrocad_core::fcstd::read_fcstd(path.to_str().unwrap())
+            .expect("read back .FCStd");
+        let _ = std::fs::remove_file(&path);
+
+        let restored = read
+            .objects
+            .iter()
+            .find(|object| object.name == "Cut")
+            .and_then(|object| object.properties.get("Shape"))
+            .and_then(shape_of)
+            .expect("Cut.Shape is restored");
+        assert!(restored.lineage().map().is_empty());
+        assert!(restored.lineage().reverse().is_empty());
+
+        let restored_shape = restored.shape().expect("the BREP payload survives");
+        let restored_volume = crate::backend()
+            .mass_properties(&restored_shape)
+            .expect("the restored cut has mass properties")
+            .volume;
+        assert!((restored_volume - volume).abs() < 1e-6, "geometry is intact");
     }
 }

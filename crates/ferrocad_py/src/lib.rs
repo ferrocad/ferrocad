@@ -2127,11 +2127,34 @@ fn resolve_segments(
     }
     // Nothing matched by name: if this object owns geometry, the remaining path
     // names one of its sub-elements and the owner is the answer (upstream
-    // returns the owning feature for a sub-element reference).
-    if doc.object(current).and_then(|object| object.properties.get("Shape")).is_some() {
+    // returns the owning feature for a sub-element reference). Resolution is
+    // delegated to the shape value's lineage: a name the lineage retired fails
+    // here instead of silently selecting whatever element now has that ordinal.
+    if accepts_sub_element(doc, current, segment) {
         return Some(current);
     }
     None
+}
+
+/// Whether `segment` is a usable sub-element reference on `current`.
+///
+/// The shape value owns the rule (through the geometry-free
+/// [`ExtensionData::resolve_element_name`] hook): a current or positionally
+/// resolvable name is accepted, a retired or missing one is rejected. A value
+/// that has no opinion — including a shape without a lineage — keeps the
+/// caller's existing behaviour. Objects without a `Shape` property never accept
+/// a sub-element here.
+fn accepts_sub_element(doc: &CoreDocument, current: ObjectId, segment: &str) -> bool {
+    match doc
+        .object(current)
+        .and_then(|object| object.properties.get("Shape"))
+    {
+        Some(Property::Extension(value)) => value.data().resolve_element_name(segment).is_ok(),
+        // A non-extension `Shape` value cannot interpret names; keep the old
+        // permissive fallback rather than changing an unrelated shape type.
+        Some(_) => true,
+        None => false,
+    }
 }
 
 #[pymethods]
@@ -2996,6 +3019,10 @@ impl PyDocumentObject {
                 Ok(objs.into_py_any(py).unwrap())
             }
             // LinkSub exposes `(object_or_None, [subnames])`, or None when empty.
+            // The subnames are returned exactly as stored: they are opaque
+            // references resolved at use time (see `getSubObject`), never
+            // rewritten on read, so a native/`.FCStd` round trip is lossless
+            // even when the target's lineage retires a name after a rebuild.
             Some(Property::LinkSub(obj, subs)) => {
                 if obj.is_empty() && subs.is_empty() {
                     return Ok(py.None());

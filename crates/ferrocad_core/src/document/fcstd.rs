@@ -622,6 +622,14 @@ fn parse_property(
 /// Rebuild a module-owned property from the members a `<Part>`/`<ShapeList>`
 /// element references, delegating the bytes to the type registry.
 ///
+/// A `<Part>` element may carry a `FerroCADSidecar` attribute naming an extra
+/// member (see `ExtensionData::fcstd_sidecar`). When present, that member's bytes
+/// are preferred: it is the module's full self-describing payload (for Part, the
+/// native envelope with the lineage). If it cannot be restored — a module that is
+/// not linked, or a payload this reader cannot decode — the raw `file` member is
+/// used instead, so the geometry still loads. Files from upstream, and older
+/// FerroCAD files, have no such attribute and take the raw path unchanged.
+///
 /// `None` means the property type has no registered restore function (the module
 /// is not linked) or the element carries no payload; the caller then skips the
 /// property rather than inventing a value.
@@ -635,8 +643,17 @@ fn read_extension(
         return Ok(None);
     };
 
-    let bytes = if let Some(file) = child_attr(node, "Part", "file") {
-        archive.read(file)?
+    let bytes = if let Some(part) = child(node, "Part") {
+        if let Some(sidecar) = part.attribute("FerroCADSidecar") {
+            let side_bytes = archive.read(sidecar)?;
+            if let Some(data) = property_types::restore_extension(prop_type, &side_bytes) {
+                return Ok(Some(Property::Extension(ExtensionValue::new(data))));
+            }
+        }
+        match part.attribute("file") {
+            Some(file) => archive.read(file)?,
+            None => return Ok(None),
+        }
     } else if let Some(list) = child(node, "ShapeList") {
         read_shape_list_payload(archive, list)?
     } else {

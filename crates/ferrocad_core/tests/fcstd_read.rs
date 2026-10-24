@@ -147,7 +147,11 @@ static REGISTER: Once = Once::new();
 
 fn register_test_types() {
     REGISTER.call_once(|| {
-        for name in ["Part::PropertyPartShape", "Test::PropertyBytes"] {
+        for name in [
+            "Part::PropertyPartShape",
+            "Test::PropertyBytes",
+            "Test::PropertySidecar",
+        ] {
             property_types::register_extension(
                 name,
                 move || {
@@ -316,6 +320,24 @@ const DOCUMENT_XML: &str = r#"<?xml version='1.0' encoding='utf-8'?>
   </ObjectData>
 </Document>"#;
 
+/// The S6b form: the upstream-compatible `<Part file>` plus a module sidecar
+/// reference (`FerroCADSidecar`, which upstream ignores).
+const SIDECAR_XML: &str = r#"<?xml version='1.0' encoding='utf-8'?>
+<Document SchemaVersion="4" FileVersion="1" ProgramVersion="0.21">
+  <Objects Count="1">
+    <Object type="App::FeaturePython" name="Blob"/>
+  </Objects>
+  <ObjectData Count="1">
+    <Object name="Blob">
+      <Properties Count="1">
+        <Property name="Shape" type="Test::PropertySidecar">
+          <Part file="PartShape.brp" FerroCADSidecar="PartShape.lineage"/>
+        </Property>
+      </Properties>
+    </Object>
+  </ObjectData>
+</Document>"#;
+
 const GUI_DOCUMENT_XML: &str = r#"<?xml version='1.0' encoding='utf-8'?>
 <Document SchemaVersion="1">
   <ViewProviderData Count="1">
@@ -398,6 +420,24 @@ fn reads_a_hand_written_archive_with_payloads_and_view_state() {
     );
     // A `CustomEnumList` resolves the stored index to its name.
     assert_eq!(view.display_mode, "Rough");
+}
+
+#[test]
+fn reads_a_sidecar_in_preference_to_the_raw_part_member() {
+    register_test_types();
+
+    let mut zip = ZipBuilder::new();
+    zip.add("Document.xml", SIDECAR_XML.as_bytes());
+    zip.add("PartShape.brp", b"raw geometry payload");
+    zip.add("PartShape.lineage", b"sidecar lineage payload");
+
+    let path = temp_path("sidecar.FCStd");
+    std::fs::write(&path, zip.finish()).expect("write the test archive");
+    let saved = read_fcstd(path.to_str().unwrap()).expect("read the test archive");
+    let _ = std::fs::remove_file(&path);
+
+    let shape = recorded(&saved.objects[0].properties["Shape"]).expect("sidecar payload");
+    assert_eq!(shape.bytes, b"sidecar lineage payload");
 }
 
 // ---------------------------------------------------------------------------

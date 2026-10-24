@@ -12,6 +12,7 @@
 
 use std::collections::BTreeMap;
 use std::fmt;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 
 use crate::document::{Document, ObjectId};
@@ -106,6 +107,17 @@ pub trait ObjectType: Send + Sync {
         let _ = (doc, id, name, value);
         Ok(())
     }
+
+    /// Whether this type's `execute` delegates the rebuild to a Python proxy.
+    ///
+    /// A Python-feature type (upstream `App::FeaturePython` and its Part
+    /// subclasses) has no Rust-side rebuild: its `execute` only records a request
+    /// for the embedding interpreter (see `Document::mark_python_pending`), and
+    /// the binding runs `proxy.execute(obj)` after the document walk releases the
+    /// lock. Storage code uses this flag to tell a scripted type from a plain one.
+    fn is_python_feature(&self) -> bool {
+        false
+    }
 }
 
 fn registry() -> &'static Mutex<BTreeMap<String, Arc<dyn ObjectType>>> {
@@ -134,6 +146,29 @@ pub fn is_registered(type_id: &str) -> bool {
 /// The registered object type ids, sorted.
 pub fn names() -> Vec<String> {
     registry().lock().unwrap().keys().cloned().collect()
+}
+
+/// Whether the process has an embedding Python interpreter available to run
+/// proxy `execute` calls.
+///
+/// The binding sets this when its module is initialised. Without it a
+/// Python-feature `execute` cannot run, so it leaves the object invalid instead
+/// of pretending the rebuild succeeded.
+pub fn python_executor_available() -> bool {
+    PYTHON_EXECUTOR_AVAILABLE.load(Ordering::Relaxed)
+}
+
+/// Record whether an embedding interpreter is available (see
+/// [`python_executor_available`]). Called by the binding once, at module init.
+pub fn set_python_executor_available(available: bool) {
+    PYTHON_EXECUTOR_AVAILABLE.store(available, Ordering::Relaxed);
+}
+
+static PYTHON_EXECUTOR_AVAILABLE: AtomicBool = AtomicBool::new(false);
+
+/// Whether `type_id` has a registered Python-feature behaviour.
+pub fn is_python_feature(type_id: &str) -> bool {
+    get(type_id).is_some_and(|behavior| behavior.is_python_feature())
 }
 
 #[cfg(test)]
@@ -233,5 +268,41 @@ mod tests {
         let error = PropertyChangeError::value("bad value").to_string();
         assert_eq!(error, "bad value");
         assert!(!error.starts_with(ATTRIBUTE_REJECTION_PREFIX));
+    }
+
+    struct PythonFeature;
+    impl ObjectType for PythonFeature {
+        fn execute(&self, doc: &mut Document, id: ObjectId) {
+            doc.mark_python_pending(id);
+        }
+        fn is_python_feature(&self) -> bool {
+            true
+        }
+    }
+
+    #[test]
+    fn a_python_feature_requests_execution_after_the_recompute() {
+        register("Test::PythonFeature", Arc::new(PythonFeature));
+        assert!(is_python_feature("Test::PythonFeature"));
+        assert!(!is_python_feature("Test::Counter2"));
+
+        let mut doc = Document::new();
+        let id = doc.add_object("python", "Test::PythonFeature");
+        doc.touch(id, false);
+        let _ = doc.recompute();
+        // Core ran the type's `execute` (which only records the request) and the
+        // binding drains it after the lock is released.
+        assert!(doc.python_pending(id));
+        assert_eq!(doc.take_python_pending(), vec![id]);
+        assert!(!doc.python_pending(id));
+        assert!(doc.take_python_pending().is_empty());
+    }
+
+    #[test]
+    fn the_interpreter_availability_flag_is_process_wide() {
+        set_python_executor_available(true);
+        assert!(python_executor_available());
+        set_python_executor_available(false);
+        assert!(!python_executor_available());
     }
 }

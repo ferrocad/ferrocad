@@ -501,6 +501,7 @@ impl Document {
                 immutable_properties: Default::default(),
                 property_versions: BTreeMap::new(),
                 python_state: saved.python_state.clone(),
+                python_pending: false,
                 view: saved.view.clone(),
             },
         );

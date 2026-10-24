@@ -66,6 +66,11 @@ pub struct DocumentObject {
     pub property_versions: BTreeMap<String, u64>,
     /// Opaque base64-pickled Python state (instance `__dict__` + `Proxy`).
     pub python_state: Option<String>,
+    /// Set by a Python-feature type's `execute` when the actual rebuild must be
+    /// performed by the embedding interpreter (see
+    /// [`Document::take_python_pending`]). Never persisted: it is a request for
+    /// the current recompute, not document state.
+    pub python_pending: bool,
     /// Headless view state (`ViewObject`). `None` until a view object is first
     /// created; see [`ViewState`].
     pub view: Option<ViewState>,
@@ -160,6 +165,7 @@ impl Document {
                 immutable_properties: BTreeSet::new(),
                 property_versions: BTreeMap::new(),
                 python_state: None,
+                python_pending: false,
                 view: None,
             },
         );
@@ -892,6 +898,53 @@ impl Document {
         }
     }
 
+    /// Ask the embedding interpreter to run this object's Python proxy.
+    ///
+    /// A Python-feature [`crate::object_registry::ObjectType`] calls this from
+    /// `execute`: core cannot call Python, so it records the request and the
+    /// binding drives `proxy.execute(obj)` once the document lock is released
+    /// (see [`Document::take_python_pending`]). The request is transient and is
+    /// not persisted with the document.
+    pub fn mark_python_pending(&mut self, id: ObjectId) {
+        if let Some(obj) = self.objects.get_mut(&id) {
+            obj.python_pending = true;
+        }
+    }
+
+    /// Whether the object is still waiting for its Python proxy to run.
+    pub fn python_pending(&self, id: ObjectId) -> bool {
+        self.objects
+            .get(&id)
+            .is_some_and(|o| o.python_pending)
+    }
+
+    /// Take (and clear) one object's Python-execute request.
+    pub fn take_python_pending_one(&mut self, id: ObjectId) -> bool {
+        match self.objects.get_mut(&id) {
+            Some(obj) => std::mem::replace(&mut obj.python_pending, false),
+            None => false,
+        }
+    }
+
+    /// Take (and clear) every object's Python-execute request, in object order.
+    ///
+    /// The binding calls this after `recompute` and runs each proxy without the
+    /// document lock held, so a proxy can read and write its own object normally.
+    pub fn take_python_pending(&mut self) -> Vec<ObjectId> {
+        let pending: Vec<ObjectId> = self
+            .objects
+            .values()
+            .filter(|o| o.python_pending)
+            .map(|o| o.id)
+            .collect();
+        for id in &pending {
+            if let Some(obj) = self.objects.get_mut(id) {
+                obj.python_pending = false;
+            }
+        }
+        pending
+    }
+
     /// Mark an object invalid: its last `execute` could not produce a result.
     ///
     /// A module's [`crate::object_registry::ObjectType::execute`] calls this when the
@@ -990,6 +1043,7 @@ impl Document {
                 o.touched = false;
                 o.invalid = false;
                 o.error = None;
+                o.python_pending = false;
                 o.immutable_properties.clear();
             }
         }
@@ -1045,6 +1099,7 @@ impl Document {
         o.expressions = saved.expressions;
         o.extensions = saved.extensions.into_iter().collect();
         o.python_state = saved.python_state;
+        o.python_pending = false;
         o.view = saved.view;
         Ok(())
     }

@@ -103,10 +103,14 @@
 //!
 //! # Deliberately unsupported
 //!
-//! - [`Property::FileIncluded`] and [`Property::PythonObject`] error with
-//!   [`FcstdWriteError::UnsupportedProperty`] naming the object and property:
-//!   the first needs an archive member plus a transient directory, the second
-//!   upstream's proxy pickle.
+//! - [`Property::FileIncluded`] errors with
+//!   [`FcstdWriteError::UnsupportedProperty`] naming the object and property: it
+//!   needs an archive member plus a transient directory.
+//! - [`Property::PythonObject`] stores a base64 pickle of the assigned value, but
+//!   our reader treats every `App::PropertyPythonObject` as the object's proxy
+//!   state rather than as a property (see `fcstd`), so writing it as upstream's
+//!   `<Python value>` would restore the wrong thing. It is skipped and reported in
+//!   [`WriteReport::dropped`] instead of being written misleadingly.
 //! - A module value whose `ExtensionData::fcstd_members` is `None` errors with
 //!   [`FcstdWriteError::UnsupportedExtension`] naming its type.
 //! - `python_state` is **not** written. FerroCAD's state is a base64 pickle of
@@ -1024,6 +1028,16 @@ fn write_property(
                 out.push_str("                </Property>\n");
             }
         }
+        // A `PythonObject` is read back as proxy state rather than as a property
+        // (see `fcstd`) and has no compatible `<Python value>` form here, so it is
+        // reported as dropped instead of writing a misleading payload.
+        Property::PythonObject(_) => {
+            ctx.report.dropped.push(format!(
+                "{}.{}: App::PropertyPythonObject is read back as proxy state, not a \
+                 property; skipped rather than written as a misleading <Python value>",
+                object.name, name
+            ));
+        }
         other => {
             return Err(FcstdWriteError::UnsupportedProperty {
                 object: object.name.clone(),
@@ -1486,6 +1500,38 @@ mod tests {
     fn crc32_matches_the_reference_value() {
         assert_eq!(crc32(b"123456789"), 0xCBF4_3926);
         assert_eq!(crc32(b""), 0);
+    }
+
+    /// A `PropertyPythonObject` is read back as proxy state, not as a property,
+    /// so it must be reported as dropped rather than written as a `<Python value>`
+    /// that upstream would restore as the wrong thing.
+    #[test]
+    fn reports_a_python_object_property_as_dropped() {
+        let mut saved = SavedDocument {
+            format: "ferrocad".to_string(),
+            version: 1,
+            name: "Python".to_string(),
+            objects: Vec::new(),
+        };
+        let mut o = object("Box", "Box");
+        o.properties.insert(
+            "Proxy".into(),
+            Property::PythonObject("gASVBAAAAAAAAAB9lC4=".into()),
+        );
+        saved.objects.push(o);
+
+        let (bytes, report) = encode_fcstd_with_report(&saved).expect("encode");
+        assert!(
+            report
+                .dropped()
+                .iter()
+                .any(|note| note.contains("Box.Proxy")),
+            "the dropped Python value is reported: {:?}",
+            report.dropped()
+        );
+        let xml = String::from_utf8(read_member(&bytes, "Document.xml")).unwrap();
+        assert!(!xml.contains("App::PropertyPythonObject"), "{xml}");
+        assert!(!xml.contains("<Python"), "{xml}");
     }
 
     fn sample() -> SavedDocument {

@@ -37,6 +37,7 @@
 mod chfi2d;
 mod containers;
 mod curves;
+pub mod feature_python;
 mod link;
 mod link_array;
 mod shape_fix;
@@ -62,6 +63,7 @@ fn register_kernel() {
     link::register();
     link_array::register();
     solids::register_objects();
+    feature_python::register();
 }
 
 /// `Part.Shape`: an opaque handle to a kernel shape.

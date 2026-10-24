@@ -145,6 +145,56 @@ fn object_is_attached(inner: &Arc<Mutex<CoreDocument>>, id: ObjectId) -> bool {
     inner.lock().unwrap().object(id).is_some()
 }
 
+/// The immediate C++ base of a document-object type id, mirroring the class
+/// hierarchy upstream scripts branch on (`obj.isDerivedFrom("Part::Feature")`).
+///
+/// Only the types this model can construct are listed; an unknown type equals
+/// only itself. The `Part::` fallback covers the workbench's many feature
+/// subclasses (booleans, dress-ups, arrays, datums) without listing each one.
+fn type_parent(type_id: &str) -> Option<&'static str> {
+    Some(match type_id {
+        "App::DocumentObject" => return None,
+        "App::GeoFeature" => "App::DocumentObject",
+        "App::Feature" => "App::GeoFeature",
+        "App::FeaturePython" => "App::Feature",
+        "App::DocumentObjectGroup" => "App::DocumentObject",
+        "App::DocumentObjectGroupPython" => "App::DocumentObjectGroup",
+        "App::Part" => "App::GeoFeature",
+        "App::Link" | "App::LinkGroup" | "App::LinkList" | "App::LinkElement" => {
+            "App::DocumentObject"
+        }
+        "App::Origin" | "App::Plane" | "App::Line" | "App::Point" => "App::DocumentObject",
+        "Part::Feature" => "App::GeoFeature",
+        "Part::FeaturePython" => "Part::Feature",
+        "Part::Part2DObject" => "Part::Feature",
+        "Part::Part2DObjectPython" => "Part::Part2DObject",
+        "PartDesign::Body" => "Part::Feature",
+        "Sketcher::SketchObject" => "Part::Part2DObject",
+        // Conservatively true for every known namespace: an unknown object still
+        // derives from `App::DocumentObject`.
+        other if other.starts_with("Part::") => "Part::Feature",
+        other if other.starts_with("App::FeatureTest") => "App::Feature",
+        other if other.starts_with("App::") => "App::DocumentObject",
+        _ => return None,
+    })
+}
+
+/// Whether `type_id` is `target` or derives from it (FreeCAD `Type::isDerivedFrom`).
+fn type_is_derived_from(type_id: &str, target: &str) -> bool {
+    let mut current = type_id;
+    // The hierarchy is shallow; the bound only guards against a bad table entry.
+    for _ in 0..16 {
+        if current == target {
+            return true;
+        }
+        match type_parent(current) {
+            Some(parent) => current = parent,
+            None => return false,
+        }
+    }
+    false
+}
+
 fn forget_document(doc: &Py<PyDocument>) {
     let key = doc_key(doc);
     object_cache().lock().unwrap().retain(|(d, _), _| *d != key);
@@ -339,12 +389,23 @@ fn capture_object_state(py: Python<'_>, obj: &Bound<'_, PyDocumentObject>) -> Op
     pickle_b64(py, payload.as_any()).ok()
 }
 
+/// Outcome of restoring an object's `python_state` blob.
+#[derive(Debug, PartialEq, Eq)]
+enum ProxyRestore {
+    /// The blob held no proxy (only plain instance attributes).
+    Absent,
+    /// The proxy class was importable and has been installed on the object.
+    Installed,
+    /// The blob described a proxy that could not be reconstructed.
+    Failed(String),
+}
+
 /// Restore an object's Python instance state from a `capture_object_state` blob.
 fn apply_object_state(
     py: Python<'_>,
     obj: &Bound<'_, PyDocumentObject>,
     state: &str,
-) -> PyResult<()> {
+) -> PyResult<ProxyRestore> {
     let payload = unpickle_b64(py, state)?;
     let payload = payload.downcast::<PyDict>()?;
 
@@ -357,44 +418,54 @@ fn apply_object_state(
         }
     }
 
-    if let Ok(Some(proxy_info)) = payload.get_item("proxy") {
-        let info = proxy_info.downcast_into::<PyDict>()?;
-        let module: String = info
-            .get_item("module")?
-            .and_then(|m| m.extract().ok())
-            .unwrap_or_default();
-        let class: String = info
-            .get_item("class")?
-            .and_then(|m| m.extract().ok())
-            .unwrap_or_default();
-        let data = info
-            .get_item("data")?
-            .unwrap_or_else(|| py.None().into_bound(py));
-        if !module.is_empty() && !class.is_empty() {
-            let sys = py.import("sys")?;
-            let modules = sys.getattr("modules")?.downcast_into::<PyDict>()?;
-            let module_obj = match modules.get_item(&module)? {
-                Some(m) => m,
-                None => py
-                    .import("importlib")?
-                    .call_method1("import_module", (&module,))?,
-            };
-            if let Ok(cls) = module_obj.getattr(class.as_str()) {
-                // Bypass `__init__` (which may require the object argument).
-                let proxy = cls.getattr("__new__")?.call1((&cls,))?;
-                if proxy.hasattr("loads")? {
-                    proxy.call_method1("loads", (data,))?;
-                } else if let Ok(d) = data.downcast::<PyDict>() {
-                    let pd = proxy.getattr("__dict__")?.downcast_into::<PyDict>()?;
-                    for (k, v) in d.iter() {
-                        pd.set_item(k, v)?;
-                    }
-                }
-                obj.setattr("Proxy", proxy)?;
-            }
+    let Some(proxy_info) = payload.get_item("proxy")? else {
+        return Ok(ProxyRestore::Absent);
+    };
+    let info = proxy_info.downcast_into::<PyDict>()?;
+    let module: String = info
+        .get_item("module")?
+        .and_then(|m| m.extract().ok())
+        .unwrap_or_default();
+    let class: String = info
+        .get_item("class")?
+        .and_then(|m| m.extract().ok())
+        .unwrap_or_default();
+    let data = info
+        .get_item("data")?
+        .unwrap_or_else(|| py.None().into_bound(py));
+    if module.is_empty() || class.is_empty() {
+        return Ok(ProxyRestore::Failed(
+            "the persisted proxy names no module/class".to_string(),
+        ));
+    }
+    let sys = py.import("sys")?;
+    let modules = sys.getattr("modules")?.downcast_into::<PyDict>()?;
+    let module_obj = match modules.get_item(&module)? {
+        Some(m) => m,
+        None => py
+            .import("importlib")?
+            .call_method1("import_module", (&module,))?,
+    };
+    let cls = match module_obj.getattr(class.as_str()) {
+        Ok(cls) => cls,
+        Err(_) => {
+            return Ok(ProxyRestore::Failed(format!(
+                "the persisted proxy class '{module}.{class}' is not available"
+            )))
+        }
+    };
+    // Bypass `__init__` (which may require the object argument).
+    let proxy = cls.getattr("__new__")?.call1((&cls,))?;
+    if proxy.hasattr("loads")? {
+        proxy.call_method1("loads", (data,))?;
+    } else if let Ok(d) = data.downcast::<PyDict>() {
+        let pd = proxy.getattr("__dict__")?.downcast_into::<PyDict>()?;
+        for (k, v) in d.iter() {
+            pd.set_item(k, v)?;
         }
     }
-    Ok(())
+    obj.setattr("Proxy", proxy)?;
+    Ok(ProxyRestore::Installed)
 }
 
 /// Capture Python state for every object into its core `python_state` field.
@@ -432,7 +503,105 @@ fn apply_all_python_states(py: Python<'_>, doc_py: &Py<PyDocument>, inner: &Arc<
     };
     for (id, state) in states {
         let obj = get_or_create_object(py, doc_py, inner, id);
-        let _ = apply_object_state(py, obj.bind(py), &state);
+        let outcome = apply_object_state(py, obj.bind(py), &state);
+        let problem = match outcome {
+            Ok(ProxyRestore::Failed(reason)) => Some(reason),
+            Ok(_) => None,
+            Err(error) => Some(error.value(py).to_string()),
+        };
+        if let Some(reason) = problem {
+            // A scripted object whose proxy could not be rebuilt is honest about
+            // it: readable (its properties are loaded), but invalid until a proxy
+            // is installed and the object recomputes.
+            inner.lock().unwrap().mark_invalid_with(
+                id,
+                format!("the Python proxy could not be restored: {reason}"),
+            );
+        }
+    }
+}
+
+/// Call `proxy.onDocumentRestored(obj)` on every object that has a proxy.
+///
+/// Upstream runs this after a document is opened so a proxy can rebuild
+/// transient state (and add properties introduced by a newer version). It is
+/// deliberately not called for an undo snapshot restore, which is not a
+/// document open.
+fn notify_document_restored(py: Python<'_>, doc_py: &Py<PyDocument>, inner: &Arc<Mutex<CoreDocument>>) {
+    let ids = inner.lock().unwrap().object_ids();
+    for id in ids {
+        let obj = get_or_create_object(py, doc_py, inner, id);
+        let obj = obj.bind(py);
+        if object_proxy(obj).is_some() {
+            call_proxy_method(obj, "onDocumentRestored", None);
+        }
+    }
+}
+
+/// The object's live Python proxy (`obj.Proxy`), if it has one.
+fn object_proxy(obj: &Bound<'_, PyDocumentObject>) -> Option<Py<PyAny>> {
+    let dict = obj.getattr("__dict__").ok()?.downcast_into::<PyDict>().ok()?;
+    match dict.get_item("Proxy") {
+        Ok(Some(proxy)) if !proxy.is_none() => Some(proxy.unbind()),
+        _ => None,
+    }
+}
+
+/// Call a proxy hook (`onChanged`, `onDocumentRestored`) if the proxy defines it.
+///
+/// A proxy is user code: an exception in a notification must not make a property
+/// assignment or a document load fail, so it is swallowed, as upstream does (it
+/// logs instead).
+fn call_proxy_method(obj: &Bound<'_, PyDocumentObject>, method: &str, prop: Option<&str>) {
+    let py = obj.py();
+    let Some(proxy) = object_proxy(obj) else {
+        return;
+    };
+    let proxy = proxy.bind(py);
+    let Ok(method) = proxy.getattr(method) else {
+        return;
+    };
+    let _ = match prop {
+        Some(prop) => method.call1((obj, prop)),
+        None => method.call1((obj,)),
+    };
+}
+
+/// Run one Python feature's `proxy.execute(obj)` with the document lock released.
+///
+/// The proxy reads and writes its object through the normal Python surface, so it
+/// must not run inside `Document::recompute` (which holds the lock). Its output
+/// writes touch the object, which would schedule another execute; the request has
+/// been answered, so those flags are cleared and the object's dependents are
+/// enforced for the next pass.
+fn run_python_execute(
+    py: Python<'_>,
+    doc_py: &Py<PyDocument>,
+    inner: &Arc<Mutex<CoreDocument>>,
+    id: ObjectId,
+) {
+    let obj = get_or_create_object(py, doc_py, inner, id);
+    let obj = obj.bind(py);
+    let Some(proxy) = object_proxy(obj) else {
+        let mut doc = inner.lock().unwrap();
+        doc.purge_touched(id);
+        doc.mark_invalid_with(id, "the feature has no Python proxy to execute");
+        return;
+    };
+    let result = proxy.bind(py).call_method1("execute", (obj,));
+    {
+        let mut doc = inner.lock().unwrap();
+        doc.purge_touched(id);
+        for dependent in doc.dependents(id) {
+            doc.enforce_recompute(dependent);
+        }
+    }
+    if let Err(error) = result {
+        let message = error.value(py).to_string();
+        inner
+            .lock()
+            .unwrap()
+            .mark_invalid_with(id, format!("proxy.execute failed: {message}"));
     }
 }
 
@@ -1408,7 +1577,7 @@ impl PyDocument {
         attach: bool,
         viewType: Option<String>,
     ) -> PyResult<Py<PyDocumentObject>> {
-        let _ = (objProxy, viewProxy, attach, viewType);
+        let _ = viewType;
         if is_extension_type(r#type) {
             return Err(PyTypeError::new_err(format!(
                 "'{0}' is not a document object type",
@@ -1439,6 +1608,33 @@ impl PyDocument {
             fire_doc_str("slotOpenTransaction", &slf, &tx);
         }
         let obj = get_or_create_object(py, &doc_py, &inner, id);
+        // Store the proxies exactly where upstream does: the object proxy is the
+        // object's `Proxy` instance attribute (persisted through `python_state`),
+        // the view proxy belongs to the view object.
+        if let Some(proxy) = objProxy {
+            if !proxy.is_none() {
+                obj.bind(py).setattr("Proxy", proxy)?;
+            }
+        }
+        if let Some(proxy) = viewProxy {
+            if !proxy.is_none() {
+                let bound = obj.bind(py);
+                let this = bound.borrow();
+                let view = view_object_for(py, &this)?;
+                drop(this);
+                view.bind(py).setattr("Proxy", proxy)?;
+            }
+        }
+        // `attach=True` is how a scripted object states that its proxy provides
+        // the type's property set (`Draft.make_array` creates a link array this
+        // way). Upstream calls the proxy's `attach` after construction.
+        if attach {
+            if let Some(proxy) = objProxy {
+                if !proxy.is_none() && proxy.hasattr("attach").unwrap_or(false) {
+                    proxy.call_method1("attach", (obj.bind(py),))?;
+                }
+            }
+        }
         fire_obj("slotCreatedObject", obj.bind(py), None);
         Ok(obj)
     }
@@ -1512,15 +1708,53 @@ impl PyDocument {
         Ok(())
     }
 
-    fn recompute(slf: &Bound<'_, Self>) -> PyResult<usize> {
+    /// Recompute the document (FreeCAD `Document.recompute(objs, force, mode)`).
+    ///
+    /// Python-feature objects do not rebuild inside core's dependency walk: their
+    /// registered type only records a request (`Document::take_python_pending`),
+    /// because their `execute` is Python and must run with the document lock
+    /// released. Each pass therefore runs the proxies for the objects the walk
+    /// requested, then recomputes again so their dependents see the new output.
+    /// `objs`, `force` and `mode` are accepted for upstream compatibility; this
+    /// model always walks the whole dependency graph.
+    #[pyo3(signature = (objs=None, force=false, mode=false))]
+    fn recompute(
+        slf: &Bound<'_, Self>,
+        objs: Option<&Bound<'_, PyAny>>,
+        force: bool,
+        mode: bool,
+    ) -> PyResult<usize> {
+        let _ = (objs, force, mode);
         let py = slf.py();
         let inner = Arc::clone(&slf.borrow().inner);
         let doc_py: Py<PyDocument> = slf.clone().unbind();
-        let executed = inner
-            .lock()
-            .unwrap()
-            .recompute()
-            .map_err(PyValueError::new_err)?;
+        let mut executed: Vec<ObjectId> = Vec::new();
+        let mut rounds = 0usize;
+        loop {
+            let pass = inner
+                .lock()
+                .unwrap()
+                .recompute()
+                .map_err(PyValueError::new_err)?;
+            for id in pass {
+                if !executed.contains(&id) {
+                    executed.push(id);
+                }
+            }
+            let pending = inner.lock().unwrap().take_python_pending();
+            if pending.is_empty() {
+                break;
+            }
+            rounds += 1;
+            if rounds > 64 {
+                return Err(PyRuntimeError::new_err(
+                    "recompute did not converge: Python proxies keep touching their objects",
+                ));
+            }
+            for id in pending {
+                run_python_execute(py, &doc_py, &inner, id);
+            }
+        }
         for id in &executed {
             let obj = get_or_create_object(py, &doc_py, &inner, *id);
             fire_obj("slotRecomputedObject", obj.bind(py), None);
@@ -1631,6 +1865,7 @@ impl PyDocument {
         drop(this);
         let inner = Arc::clone(&slf.borrow().inner);
         apply_all_python_states(py, &doc_py, &inner);
+        notify_document_restored(py, &doc_py, &inner);
         Ok(())
     }
 
@@ -1869,6 +2104,7 @@ impl PyDocument {
         slf.borrow_mut().inner = Arc::new(Mutex::new(CoreDocument::from_saved(&saved)));
         let inner = Arc::clone(&slf.borrow().inner);
         apply_all_python_states(py, &doc_py, &inner);
+        notify_document_restored(py, &doc_py, &inner);
         Ok(())
     }
 
@@ -2212,6 +2448,18 @@ impl PyDocumentObject {
         }
     }
 
+    /// FreeCAD `DocumentObject.isDerivedFrom(typeId)`.
+    ///
+    /// Draft and other proxies branch on the C++ base class (`obj.isDerivedFrom
+    /// ("Part::Part2DObject")`), so the type hierarchy has to be walkable even
+    /// though our object types are registered behaviours rather than C++ classes.
+    fn isDerivedFrom(&self, type_id: &str) -> bool {
+        match self.inner.lock().unwrap().object(self.id) {
+            Some(o) => type_is_derived_from(&o.type_id, type_id),
+            None => false,
+        }
+    }
+
     /// The headless view provider (`Transparency`, `ShapeAppearance`, …).
     ///
     /// Upstream only has a view object in a GUI session; FerroCAD keeps the model
@@ -2271,13 +2519,19 @@ impl PyDocumentObject {
         value.map(|p| pyo3::Python::with_gil(|py| property_to_py(py, &p)))
     }
 
-    fn setPropertyByName(&self, name: &str, value: &Bound<'_, PyAny>) -> PyResult<()> {
+    fn setPropertyByName(slf: &Bound<'_, Self>, name: &str, value: &Bound<'_, PyAny>) -> PyResult<()> {
         let property = py_to_property(value)?;
-        self.inner
+        let (inner, id) = {
+            let this = slf.borrow();
+            (Arc::clone(&this.inner), this.id)
+        };
+        inner
             .lock()
             .unwrap()
-            .set_property(self.id, name, property)
-            .map_err(property_change_error)
+            .set_property(id, name, property)
+            .map_err(property_change_error)?;
+        call_proxy_method(slf, "onChanged", Some(name));
+        Ok(())
     }
 
     fn getTypeIdOfProperty(&self, name: &str) -> Option<String> {
@@ -2467,11 +2721,17 @@ impl PyDocumentObject {
     /// Recompute this object (FreeCAD `DocumentObject.recompute`).
     ///
     /// Runs its type behaviour now and clears its touched/execute flags; unlike
-    /// `Document.recompute` this does not walk the whole dependency graph.
+    /// `Document.recompute` this does not walk the whole dependency graph. A
+    /// Python-feature object runs its proxy here, outside the document lock.
     fn recompute(slf: &Bound<'_, Self>) -> bool {
-        let (inner, id) = {
+        let py = slf.py();
+        let (inner, id, doc_py) = {
             let this = slf.borrow();
-            (Arc::clone(&this.inner), this.id)
+            (
+                Arc::clone(&this.inner),
+                this.id,
+                this.doc.clone_ref(py),
+            )
         };
         let executed = {
             let mut doc = inner.lock().unwrap();
@@ -2480,10 +2740,17 @@ impl PyDocumentObject {
             doc.purge_touched(id);
             executed
         };
+        if inner.lock().unwrap().take_python_pending_one(id) {
+            run_python_execute(py, &doc_py, &inner, id);
+        }
         if executed {
             fire_obj("slotRecomputedObject", slf, None);
         }
-        true
+        !inner
+            .lock()
+            .unwrap()
+            .object(id)
+            .is_some_and(|object| object.invalid)
     }
 
     fn enforceRecompute(&self) {
@@ -3054,6 +3321,27 @@ impl PyDocumentObject {
         if !object_is_attached(&slf.borrow().inner, slf.borrow().id) {
             return Err(deleted_object_error(&name));
         }
+        // `Proxy` is an instance attribute (upstream `App::FeaturePython` stores
+        // it there, not as a document property). A scripted feature without a
+        // proxy reports `None`, as upstream does; other object types keep the
+        // normal `AttributeError` for an unknown attribute.
+        if name == "Proxy" {
+            let type_id = {
+                let this = slf.borrow();
+                let doc = this.inner.lock().unwrap();
+                doc.object(this.id)
+                    .map(|object| object.type_id.clone())
+                    .unwrap_or_default()
+            };
+            if type_id.ends_with("Python") {
+                let dict = slf.getattr("__dict__")?;
+                let dict = dict.downcast_into::<PyDict>()?;
+                return Ok(match dict.get_item("Proxy")? {
+                    Some(proxy) => proxy.unbind(),
+                    None => py.None(),
+                });
+            }
+        }
         if name == "Group" {
             return Ok(slf.borrow().group_members(py).into_py_any(py).unwrap());
         }
@@ -3146,10 +3434,13 @@ impl PyDocumentObject {
             fire_obj_str("slotBeforeChangeObject", slf, "Label");
             inner.lock().unwrap().set_label(id, &label);
             fire_obj_str("slotChangedObject", slf, "Label");
+            call_proxy_method(slf, "onChanged", Some("Label"));
             return Ok(());
         }
         if name == "Group" {
-            return slf.borrow().set_group(value);
+            slf.borrow().set_group(value)?;
+            call_proxy_method(slf, "onChanged", Some("Group"));
+            return Ok(());
         }
         if name.starts_with('_') {
             return set_instance_attr(slf, &name, value);
@@ -3308,6 +3599,9 @@ impl PyDocumentObject {
         let result = inner.lock().unwrap().set_property(id, &name, property);
         result.map_err(property_change_error)?;
         fire_obj_str("slotChangedObject", slf, &name);
+        // FreeCAD's `DocumentObject::onChanged` hook: a Python feature observes
+        // property writes here (`proxy.onChanged(obj, prop)`).
+        call_proxy_method(slf, "onChanged", Some(&name));
         Ok(())
     }
 
@@ -4730,6 +5024,9 @@ struct PyViewObject {
     doc: Py<PyDocument>,
     inner: Arc<Mutex<CoreDocument>>,
     id: ObjectId,
+    /// The view provider proxy (`doc.addObject(..., viewProxy=...)`, upstream
+    /// `ViewObject.Proxy`). Process state, never persisted by core.
+    proxy: Mutex<Option<Py<PyAny>>>,
 }
 
 /// The canonical `ViewObject` for a document object, created once per object.
@@ -4743,6 +5040,7 @@ fn view_object_for(py: Python<'_>, obj: &PyDocumentObject) -> PyResult<Py<PyView
             doc: obj.doc.clone_ref(py),
             inner: Arc::clone(&obj.inner),
             id: obj.id,
+            proxy: Mutex::new(None),
         },
     )?;
     *obj.view.lock().unwrap() = Some(view.clone_ref(py));
@@ -4912,6 +5210,24 @@ fn operand_color(
 
 #[pymethods]
 impl PyViewObject {
+    /// The view provider proxy, or `None` when none was supplied.
+    #[getter]
+    fn Proxy(&self, py: Python<'_>) -> PyObject {
+        match self.proxy.lock().unwrap().as_ref() {
+            Some(proxy) => proxy.clone_ref(py).into_any(),
+            None => py.None(),
+        }
+    }
+
+    #[setter]
+    fn set_Proxy(&self, value: &Bound<'_, PyAny>) {
+        *self.proxy.lock().unwrap() = if value.is_none() {
+            None
+        } else {
+            Some(value.clone().unbind())
+        };
+    }
+
     /// The document object this view object belongs to.
     #[getter]
     fn Object(&self, py: Python<'_>) -> Py<PyDocumentObject> {
@@ -5471,6 +5787,7 @@ fn openDocument(
     )?;
     documents().lock().unwrap().insert(doc_name, doc.clone_ref(py));
     apply_all_python_states(py, &doc, &handle);
+    notify_document_restored(py, &doc, &handle);
     Ok(doc)
 }
 
@@ -5552,6 +5869,9 @@ fn removeDocumentObserver(observer: &Bound<'_, PyAny>) {
 
 #[pymodule]
 pub fn ferrocad(m: &Bound<'_, PyModule>) -> PyResult<()> {
+    // Python-feature `execute` requests (Part::FeaturePython and friends) are
+    // drained by this binding, so core may now let their types rebuild.
+    ferrocad_core::object_registry::set_python_executor_available(true);
     m.add("__version__", env!("CARGO_PKG_VERSION"))?;
     m.add_class::<PyQuantity>()?;
     m.add_class::<PyUnit>()?;

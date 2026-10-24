@@ -827,6 +827,11 @@ mod tests {
 
     /// Two overlapping 10 mm boxes, recomputed and ready to link.
     fn two_boxes(doc: &mut Document) {
+        two_boxes_at(doc, 5.0, 0.0);
+    }
+
+    /// Two 10 mm boxes, the second offset by `(x, y)`, recomputed and ready to link.
+    fn two_boxes_at(doc: &mut Document, x: f64, y: f64) {
         for name in ["BoxA", "BoxB"] {
             let id = doc.add_object(name, BOX_TYPE);
             doc.set_property(id, "Length", Property::Float(10.0)).unwrap();
@@ -834,7 +839,7 @@ mod tests {
             doc.set_property(id, "Height", Property::Float(10.0)).unwrap();
             let placement = if name == "BoxB" {
                 Placement {
-                    base: ferrocad_types::Vector3::new(5.0, 0.0, 0.0),
+                    base: ferrocad_types::Vector3::new(x, y, 0.0),
                     rotation: ferrocad_types::Rotation::identity(),
                 }
             } else {
@@ -990,6 +995,12 @@ mod tests {
                 "{name} produced a shape"
             );
             assert!(!doc.object(id).unwrap().invalid, "{name} is valid");
+            if type_id == MULTIFUSE_TYPE {
+                assert!(
+                    !stored_property(&doc, id).lineage().map().is_empty(),
+                    "{name} folds its operation histories into one lineage"
+                );
+            }
         }
     }
 
@@ -1075,5 +1086,187 @@ mod tests {
         let json = serde_json::to_string(&value).unwrap();
         let back: Property = serde_json::from_str(&json).unwrap();
         assert!(shape_of(&back).unwrap().shape().is_none());
+    }
+
+    /// The `ShapeProperty` stored under `id`'s `Shape`.
+    fn stored_property(doc: &Document, id: ObjectId) -> &ShapeProperty {
+        shape_of(doc.object(id).unwrap().properties.get("Shape").unwrap())
+            .expect("the Shape property is a ShapeProperty")
+    }
+
+    /// Whether `name` is a backend positional name (`Face6`, `Edge12`, `Vertex3`, …).
+    fn is_positional_name(name: &str) -> bool {
+        ["Solid", "Shell", "Face", "Wire", "Edge", "Vertex"]
+            .iter()
+            .any(|prefix| {
+                name.strip_prefix(prefix)
+                    .and_then(|ordinal| ordinal.parse::<usize>().ok())
+                    .is_some_and(|ordinal| ordinal >= 1)
+            })
+    }
+
+    fn boolean(doc: &mut Document, name: &str, type_id: &str) -> ObjectId {
+        let id = doc.add_object(name, type_id);
+        doc.set_property(id, "Base", Property::Link("BoxA".into()))
+            .unwrap();
+        doc.set_property(id, "Tool", Property::Link("BoxB".into()))
+            .unwrap();
+        doc.recompute().unwrap();
+        id
+    }
+
+    #[test]
+    fn booleans_store_a_positional_lineage() {
+        setup();
+        let mut doc = Document::new();
+        // Corner overlap: the cut keeps more output names than the tool deletes, so
+        // both maps survive the fold's retire-by-name pass.
+        two_boxes_at(&mut doc, 5.0, 5.0);
+
+        for (type_id, name) in [(FUSE_TYPE, "Fuse"), (CUT_TYPE, "Cut")] {
+            let id = boolean(&mut doc, name, type_id);
+            let property = stored_property(&doc, id);
+            let lineage = property.lineage();
+
+            assert!(
+                !lineage.map().is_empty(),
+                "{name} kept a non-empty forward map"
+            );
+            assert!(
+                !lineage.reverse().is_empty(),
+                "{name} kept a non-empty reverse map"
+            );
+            assert_eq!(lineage.version(), &ferrocad_geom::MapVersion::default());
+
+            let mut faces = 0;
+            for (element, _) in lineage.map().iter() {
+                assert!(
+                    is_positional_name(element),
+                    "{name} forward key {element:?} is a positional name"
+                );
+                if element.starts_with("Face") {
+                    faces += 1;
+                }
+            }
+            assert!(faces > 0, "{name} names faces");
+
+            for (output, inputs) in lineage.reverse().iter() {
+                assert!(
+                    is_positional_name(output),
+                    "{name} reverse key {output:?} is a positional name"
+                );
+                assert!(!inputs.is_empty(), "{name} {output} has a producer");
+                for input in inputs {
+                    assert!(
+                        is_positional_name(input),
+                        "{name} producer {input:?} is a positional name"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn a_boolean_lineage_survives_a_json_round_trip() {
+        setup();
+        let mut doc = Document::new();
+        two_boxes_at(&mut doc, 5.0, 5.0);
+        let id = boolean(&mut doc, "Fuse", FUSE_TYPE);
+
+        let original = stored_property(&doc, id).lineage().clone();
+        assert!(!original.map().is_empty());
+        assert!(!original.reverse().is_empty());
+
+        let value = doc
+            .object(id)
+            .unwrap()
+            .properties
+            .get("Shape")
+            .unwrap()
+            .clone();
+        let json = serde_json::to_string(&value).unwrap();
+        let back: Property = serde_json::from_str(&json).unwrap();
+        let restored = shape_of(&back).unwrap();
+        assert!(restored.shape().is_some(), "the shape survives");
+
+        let lineage = restored.lineage();
+        assert_eq!(lineage.version(), original.version());
+        assert_eq!(lineage.map().len(), original.map().len());
+        assert_eq!(
+            lineage
+                .map()
+                .iter()
+                .map(|(name, _)| name)
+                .collect::<Vec<_>>(),
+            original
+                .map()
+                .iter()
+                .map(|(name, _)| name)
+                .collect::<Vec<_>>(),
+            "the forward names round-trip"
+        );
+        assert_eq!(
+            lineage
+                .reverse()
+                .iter()
+                .map(|(output, inputs)| (output, inputs.to_vec()))
+                .collect::<Vec<_>>(),
+            original
+                .reverse()
+                .iter()
+                .map(|(output, inputs)| (output, inputs.to_vec()))
+                .collect::<Vec<_>>(),
+            "the reverse relations round-trip"
+        );
+        assert!(
+            lineage
+                .map()
+                .iter()
+                .any(|(name, _)| name.starts_with("Face")),
+            "the restored map still names faces"
+        );
+    }
+
+    #[test]
+    fn legacy_raw_brep_still_restores() {
+        setup();
+        let shape = make_box(10.0, 10.0, 10.0).unwrap();
+        let raw = backend().save_shape(&shape);
+        assert!(!raw.is_empty());
+        assert!(!raw.starts_with(b"FCSHPROP"), "raw BREP is not enveloped");
+
+        let restored =
+            property_types::restore_extension(TYPE_NAME, &raw).expect("legacy raw BREP loads");
+        let property = restored
+            .as_any()
+            .downcast_ref::<ShapeProperty>()
+            .expect("restores a ShapeProperty");
+        assert!(
+            property.lineage().map().is_empty(),
+            "legacy bytes carry no lineage"
+        );
+        assert!(property.lineage().reverse().is_empty());
+        let shape = property.shape().expect("the legacy shape");
+        assert!(backend().resolve(&shape, "Face6").is_some());
+    }
+
+    #[test]
+    fn an_empty_history_leaves_the_lineage_empty() {
+        setup();
+        let mut doc = Document::new();
+        two_boxes(&mut doc);
+
+        let id = doc.add_object("Compound", COMPOUND_TYPE);
+        doc.set_property(
+            id,
+            "Links",
+            Property::LinkList(vec!["BoxA".into(), "BoxB".into()]),
+        )
+        .unwrap();
+        doc.recompute().unwrap();
+
+        let property = stored_property(&doc, id);
+        assert!(property.lineage().map().is_empty());
+        assert!(property.lineage().reverse().is_empty());
     }
 }

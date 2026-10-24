@@ -9,7 +9,7 @@
 
 use ferrocad_core::object_registry::ObjectType;
 use ferrocad_core::{Document, ObjectId, Property, prop_status};
-use ferrocad_geom::Shape;
+use ferrocad_geom::{History, Lineage, MapVersion, Shape};
 
 use crate::shape_property::{ShapeProperty, make_shape_property, shape_of};
 
@@ -100,7 +100,7 @@ impl ObjectType for Boolean {
     }
 
     fn execute(&self, doc: &mut Document, id: ObjectId) {
-        let result = (|| -> Result<Shape, String> {
+        let result = (|| -> Result<(Shape, Lineage), String> {
             let base = link(doc, id, "Base")
                 .ok_or_else(|| "the boolean has no Base link".to_string())?;
             let shape = linked_shape(doc, &base)?;
@@ -109,7 +109,7 @@ impl ObjectType for Boolean {
             let other = linked_shape(doc, &tool)?;
             self.kind
                 .operation(&shape, &other)
-                .map(|out| out.shape)
+                .map(|out| (out.shape, lineage_from(&out.history)))
                 .map_err(|error| error.to_string())
         })();
         store(doc, id, result);
@@ -138,20 +138,24 @@ impl ObjectType for Multi {
     }
 
     fn execute(&self, doc: &mut Document, id: ObjectId) {
-        let result = (|| -> Result<Shape, String> {
+        let result = (|| -> Result<(Shape, Lineage), String> {
             let names = links(doc, id, "Shapes");
             let mut shapes = names.iter().map(|name| linked_shape(doc, name));
             let mut shape = shapes
                 .next()
                 .ok_or_else(|| "the boolean has no Shapes".to_string())??;
+            // Each fold is one operation with its own history; fold them forward into
+            // one lineage, the same way the geometry is folded.
+            let mut lineage = Lineage::default();
             for other in shapes {
-                shape = self
+                let out = self
                     .kind
                     .operation(&shape, &other?)
-                    .map(|out| out.shape)
                     .map_err(|error| error.to_string())?;
+                lineage.apply(&out.history);
+                shape = out.shape;
             }
-            Ok(shape)
+            Ok((shape, lineage))
         })();
         store(doc, id, result);
     }
@@ -174,7 +178,7 @@ impl ObjectType for Compound {
     }
 
     fn execute(&self, doc: &mut Document, id: ObjectId) {
-        let result = (|| -> Result<Shape, String> {
+        let result = (|| -> Result<(Shape, Lineage), String> {
             let names = links(doc, id, "Links");
             if names.is_empty() {
                 return Err("the compound has no Links".to_string());
@@ -183,9 +187,12 @@ impl ObjectType for Compound {
                 .iter()
                 .map(|name| linked_shape(doc, name))
                 .collect::<Result<Vec<_>, _>>()?;
-            crate::backend()
+            // `make_compound` reports no history, so the lineage stays empty rather
+            // than inventing names for sub-shapes the kernel did not relate.
+            let shape = crate::backend()
                 .make_compound(&shapes)
-                .map_err(|error| error.to_string())
+                .map_err(|error| error.to_string())?;
+            Ok((shape, Lineage::default()))
         })();
         store(doc, id, result);
     }
@@ -219,11 +226,23 @@ fn linked_shape(doc: &Document, name: &str) -> Result<Shape, String> {
         .ok_or_else(|| format!("object {name} has no shape"))
 }
 
-/// Store a rebuild's outcome: the shape, or an empty output plus the invalid flag.
-fn store(doc: &mut Document, id: ObjectId, result: Result<Shape, String>) {
+/// Fold one operation's history into a fresh lineage under the default rules.
+///
+/// An empty history yields an empty lineage: no relation, no name.
+fn lineage_from(history: &History) -> Lineage {
+    Lineage::from_history(history, MapVersion::default())
+}
+
+/// Store a rebuild's outcome: the shape (and its lineage), or an empty output plus
+/// the invalid flag.
+fn store(doc: &mut Document, id: ObjectId, result: Result<(Shape, Lineage), String>) {
     match result {
-        Ok(shape) => {
-            doc.set_property_raw(id, SHAPE, make_shape_property(ShapeProperty::new(shape)));
+        Ok((shape, lineage)) => {
+            doc.set_property_raw(
+                id,
+                SHAPE,
+                make_shape_property(ShapeProperty::with_lineage(shape, lineage)),
+            );
         }
         Err(_) => {
             doc.mark_invalid(id);

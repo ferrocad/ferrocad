@@ -426,7 +426,7 @@
   },
   "ours": {
     "source": "crates/ferrocad_part_py/src",
-    "files": 8,
+    "files": 9,
     "functions": {
       "registered": 34,
       "defined": 35,
@@ -475,14 +475,28 @@
       }
     },
     "classes": {
-      "count": 45,
+      "count": 59,
       "names": [
         "Part.ChFi2d::AnaFilletAlgo",
         "Part.ChFi2d::ChamferAPI",
         "Part.ChFi2d::FilletAlgo",
+        "Part.Geom2d::ArcOfCircle2d",
+        "Part.Geom2d::ArcOfConic2d",
+        "Part.Geom2d::ArcOfEllipse2d",
+        "Part.Geom2d::ArcOfHyperbola2d",
+        "Part.Geom2d::ArcOfParabola2d",
         "Part.Geom2d::BSplineCurve2d",
+        "Part.Geom2d::BezierCurve2d",
         "Part.Geom2d::Circle2d",
+        "Part.Geom2d::Conic2d",
+        "Part.Geom2d::Curve2d",
+        "Part.Geom2d::Ellipse2d",
+        "Part.Geom2d::Geometry2d",
+        "Part.Geom2d::Hyperbola2d",
+        "Part.Geom2d::Line2d",
         "Part.Geom2d::Line2dSegment",
+        "Part.Geom2d::OffsetCurve2d",
+        "Part.Geom2d::Parabola2d",
         "Part.ShapeFix::Edge",
         "Part.ShapeFix::Face",
         "Part.ShapeFix::Root",
@@ -526,7 +540,7 @@
       "by_module": {
         "Part": 32,
         "Part.ChFi2d": 3,
-        "Part.Geom2d": 3,
+        "Part.Geom2d": 17,
         "Part.ShapeFix": 7
       }
     },
@@ -535,9 +549,9 @@
         "crates/ferrocad_part/src",
         "crates/ferrocad_part_py/src"
       ],
-      "files": 12,
-      "constants": 35,
-      "registered": 36,
+      "files": 13,
+      "constants": 37,
+      "registered": 38,
       "names": [
         "App::Link",
         "App::LinkElement",
@@ -552,6 +566,7 @@
         "Part::Cylinder",
         "Part::Extrusion",
         "Part::Feature",
+        "Part::FeaturePython",
         "Part::Fillet",
         "Part::Fuse",
         "Part::Helix",
@@ -565,6 +580,7 @@
         "Part::MultiCommon",
         "Part::MultiFuse",
         "Part::Part2DObject",
+        "Part::Part2DObjectPython",
         "Part::RegularPolygon",
         "Part::Revolution",
         "Part::RuledSurface",
@@ -589,6 +605,7 @@
         "CYLINDER_TYPE": "Part::Cylinder",
         "ELEMENT_TYPE": "App::LinkElement",
         "EXTRUSION_TYPE": "Part::Extrusion",
+        "FEATURE_PYTHON_TYPE": "Part::FeaturePython",
         "FILLET_TYPE": "Part::Fillet",
         "FUSE_TYPE": "Part::Fuse",
         "HELIX_TYPE": "Part::Helix",
@@ -600,6 +617,7 @@
         "MIRRORING_TYPE": "Part::Mirroring",
         "MULTICOMMON_TYPE": "Part::MultiCommon",
         "MULTIFUSE_TYPE": "Part::MultiFuse",
+        "PART2D_PYTHON_TYPE": "Part::Part2DObjectPython",
         "PART2D_TYPE": "Part::Part2DObject",
         "PATH_TYPE": "Part::LinkArrayPath",
         "POINT_TYPE": "Part::LinkArrayPoint",
@@ -618,81 +636,99 @@
       ],
       "unresolved": []
     },
-    "methods_heuristic": 667,
+    "methods_heuristic": 787,
     "gap_markers": {
-      "count": 11,
+      "count": 14,
       "by_kind": {
-        "not_implemented_yet": 3,
+        "not_implemented_yet": 2,
         "not_available_in_this_slice": 6,
         "unsupported": 0,
-        "not_implemented": 2
+        "not_implemented": 6
       },
       "entries": [
         {
           "kind": "not_available_in_this_slice",
           "file": "crates/ferrocad_part_py/src/curves.rs",
-          "line": 3644,
+          "line": 6681,
           "text": "\"Part.{what} is not available in this slice (the seam exposes no such query)\""
         },
         {
           "kind": "not_available_in_this_slice",
           "file": "crates/ferrocad_part_py/src/curves.rs",
-          "line": 3883,
+          "line": 6941,
           "text": "\"Part.Edge.Tolerance is not available in this slice (the seam exposes \\"
         },
         {
           "kind": "not_available_in_this_slice",
           "file": "crates/ferrocad_part_py/src/curves.rs",
-          "line": 3892,
+          "line": 6950,
           "text": "\"Part.Edge.Tolerance is not available in this slice (the seam exposes \\"
         },
         {
           "kind": "not_available_in_this_slice",
           "file": "crates/ferrocad_part_py/src/curves.rs",
-          "line": 3901,
+          "line": 6959,
           "text": "\"Part.Edge.ParameterRange is not available in this slice (the seam \\"
         },
         {
           "kind": "not_available_in_this_slice",
           "file": "crates/ferrocad_part_py/src/curves.rs",
-          "line": 3910,
+          "line": 6968,
           "text": "\"Part.Edge.FirstParameter is not available in this slice (the seam \\"
         },
         {
           "kind": "not_available_in_this_slice",
           "file": "crates/ferrocad_part_py/src/curves.rs",
-          "line": 3919,
+          "line": 6977,
           "text": "\"Part.Edge.LastParameter is not available in this slice (the seam \\"
         },
         {
           "kind": "not_implemented",
           "file": "crates/ferrocad_part_py/src/curves.rs",
-          "line": 4314,
+          "line": 25,
+          "text": "//! `NotImplementedError` rather than a silent `None`: an infinite `Line` has no"
+        },
+        {
+          "kind": "not_implemented",
+          "file": "crates/ferrocad_part_py/src/curves.rs",
+          "line": 47,
+          "text": "PyException, PyIndexError, PyNotImplementedError, PyRuntimeError, PyTypeError, PyValueError,"
+        },
+        {
+          "kind": "not_implemented",
+          "file": "crates/ferrocad_part_py/src/curves.rs",
+          "line": 3395,
+          "text": "PyNotImplementedError::new_err(format!("
+        },
+        {
+          "kind": "not_implemented",
+          "file": "crates/ferrocad_part_py/src/curves.rs",
+          "line": 6477,
+          "text": "/// `NotImplementedError` rather than answering from a curve that was never"
+        },
+        {
+          "kind": "not_implemented",
+          "file": "crates/ferrocad_part_py/src/curves.rs",
+          "line": 7372,
           "text": "Err(_) => Ok(py.NotImplemented()),"
         },
         {
           "kind": "not_implemented",
           "file": "crates/ferrocad_part_py/src/curves.rs",
-          "line": 4322,
+          "line": 7380,
           "text": "Err(_) => Ok(py.NotImplemented()),"
         },
         {
           "kind": "not_implemented_yet",
           "file": "crates/ferrocad_part_py/src/lib.rs",
-          "line": 2163,
+          "line": 2165,
           "text": "\"{operation}: partial revolutions are not implemented yet\""
         },
         {
           "kind": "not_implemented_yet",
           "file": "crates/ferrocad_part_py/src/solids.rs",
-          "line": 485,
+          "line": 499,
           "text": "\"importing .{extension} files is not implemented yet; read the file with Import instead\""
-        },
-        {
-          "kind": "not_implemented_yet",
-          "file": "crates/ferrocad_part_py/src/solids.rs",
-          "line": 761,
-          "text": "return Err(\"DirMode Edge/Normal is not implemented yet\".to_string());"
         }
       ]
     }
@@ -725,20 +761,6 @@
       "Part.BRepOffsetAPI::MakeFilling",
       "Part.BRepOffsetAPI::MakePipeShell",
       "Part.ChFi2d::FilletAPI",
-      "Part.Geom2d::ArcOfCircle2d",
-      "Part.Geom2d::ArcOfConic2d",
-      "Part.Geom2d::ArcOfEllipse2d",
-      "Part.Geom2d::ArcOfHyperbola2d",
-      "Part.Geom2d::ArcOfParabola2d",
-      "Part.Geom2d::BezierCurve2d",
-      "Part.Geom2d::Conic2d",
-      "Part.Geom2d::Curve2d",
-      "Part.Geom2d::Ellipse2d",
-      "Part.Geom2d::Geometry2d",
-      "Part.Geom2d::Hyperbola2d",
-      "Part.Geom2d::Line2d",
-      "Part.Geom2d::OffsetCurve2d",
-      "Part.Geom2d::Parabola2d",
       "Part.GeomPlate::BuildPlateSurface",
       "Part.GeomPlate::CurveConstraint",
       "Part.GeomPlate::PointConstraint",
@@ -797,7 +819,6 @@
       "Part::Face",
       "Part::FeatureExt",
       "Part::FeatureGeometrySet",
-      "Part::FeaturePython",
       "Part::FeatureReference",
       "Part::FilletBase",
       "Part::ImportBrep",
@@ -810,7 +831,6 @@
       "Part::Loft",
       "Part::Offset",
       "Part::Offset2D",
-      "Part::Part2DObjectPython",
       "Part::PathPatternExtension",
       "Part::Plane",
       "Part::PointPatternExtension",

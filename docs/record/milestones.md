@@ -21,7 +21,7 @@ is archived in
 | 2026-10-23 | **Serializers, lineage, Qt** | Native `.ferrocad` + real `.FCStd` ZIP, the lineage layer, Links L0–L5, the `.ui` reader, and the `PySideUic` proxies. |
 | 2026-10-24 | **Part completion** | The full Part surface, live `Shape.Placement`, exact 20/47 compound-cut maps, and **531 upstream tests passing with zero errors**. |
 | 2026-10-24 | **Draft M2 green** | Attachment, `PropertyLinkSubList`, the link extension, sub-shape `getSubObject` and the hatch shim: the two Draft M2 modules pass **27/27** with zero load failures. |
-| 2026-10-24 | **Qt reduction Q4/Q5** | A native `FreeCADGui.Snapper`/`draftToolBar` over a camera-free snap API, async point sessions, the native line/wire tools and `PlaneGui`, the checkable snap bar, and the four remaining Draft forms; `pytest tests` reaches **538 passed**. |
+| 2026-10-24 | **Qt reduction Q4/Q5** | A native `FreeCADGui.Snapper`/`draftToolBar` over a camera-free snap API, async point sessions, the native line/wire tools and `PlaneGui`, the checkable snap bar, and the four remaining Draft forms; `pytest tests` reaches **538 passed** ([round log](2026-10-24-q4-q5-draft-tools.md)). |
 
 ## Current state (2026-10-24)
 
@@ -77,6 +77,8 @@ The next round is SimpleCAD S1 rather than more Part surface.
 - [`TODO-21-10-2026.md`](TODO-21-10-2026.md), [`TODO-22-10-2026.md`](TODO-22-10-2026.md),
   [`TODO-23-10-2026.md`](TODO-23-10-2026.md) — the compact closed backlogs; their full
   text is in `archive/`.
+- [`2026-10-24-q4-q5-draft-tools.md`](2026-10-24-q4-q5-draft-tools.md) — the closed
+  Q4/Q5 round: what landed, the measurements, and the deviations it records.
 - [`incident-2026-10-21-session-crash.md`](incident-2026-10-21-session-crash.md) — the
   `systemd-oomd` post-mortem.
 - [`../ROADMAP.md`](../ROADMAP.md) — where the project is going next.

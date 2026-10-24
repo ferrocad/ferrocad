@@ -184,6 +184,20 @@ function as a small pure-Python shim (`python/TechDraw`) that reads the standard
 from `<getResourceDir()>/Mod/TechDraw/PAT/`; `App.getResourceDir()` ends with the
 separator upstream callers assume (`... + "Mod/TechDraw/PAT/FCPAT.pat"`).
 
+### Native tool suites (not upstream measurements)
+
+The Q4/Q5 Draft tool layer is verified by its own suites, because it is native code:
+
+```sh
+PYTHONPATH=python python3 -m pytest tests/test_draft_snapper.py tests/test_draft_tools.py tests/test_draft_forms.py -q
+cargo test -q -p ferrocad_stage -p ferrocad_stage_py --offline
+cargo test -q -p ferrocad_part_py --test draft_tools --offline   # real Part kernel
+```
+
+The standalone pytest image has no `Part`, so the creation tests use a documented
+`Part.makePolygon` stub; the in-image Rust test is the same Python suite with the real
+kernel. The surface and its gaps are in [`draft-tools.md`](draft-tools.md).
+
 ### Reading the report
 
 - `[LOAD ERROR]` — the module could not import; the message names the missing module or

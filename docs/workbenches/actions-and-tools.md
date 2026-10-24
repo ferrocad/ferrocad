@@ -349,6 +349,30 @@ return {"tool": "toy_measure"}                         # starts a registered too
 - Neither request opens a transaction. `App_ToggleGrid` is the built-in example, and
   the toy contributes `Toy_Polyline` → `toy_polyline` (`PolylineTool`).
 
+  ### 7.1 The native Draft tool session (Q4)
+
+  The Draft tools do not go through `Contributions`: a Python workbench cannot yet
+  contribute a Rust `Tool` factory, and the native layer does not need one. Instead
+  `FreeCADGui.Snapper` owns the pending point request and `FreeCADGui.draft` exposes the
+  three driver calls a shell uses:
+
+  ```python
+  FreeCADGui.draft.pick(world_point)   # snap, then invoke the pending callback once
+  FreeCADGui.draft.escape()            # drop it and run the request's on_cancel
+  FreeCADGui.draft.finish()            # run on_finish (Enter), without picking
+  ```
+
+  `Draft_Line`/`Draft_Wire` register through the normal command registry, start a
+  `Creator` session on `Activated`, and commit with `FreeCADGui.doCommand`. The six
+  `Draft_Snap_*` commands are ordinary checkable commands, so the snap bar is the actions
+  bar rather than a Qt toolbar. The full surface, including `PlaneGui` and the four Q5
+  forms, is in [`draft-tools.md`](draft-tools.md).
+
+  **Gap.** The gpui viewport does not call the three driver functions yet; a real click
+  still has to be routed into `draft.pick`, and `Esc`/`Enter` into `draft.escape`/
+  `draft.finish`. Until then the session is headless/scriptable but not pointer-driven in
+  the window.
+
 ---
 
 ## 8. GUI mode

@@ -188,6 +188,10 @@ rather than restating it.
 - [workbenches/qt-strategy.md](workbenches/qt-strategy.md) — running upstream workbench
   GUIs without Qt: the measured Qt surface, the `.ui` loader and micro-shim (option D),
   and the Q0–Q5 plan.
+- [workbenches/draft-tools.md](workbenches/draft-tools.md) — the native Draft tool layer
+  (Q4/Q5): `FreeCADGui.Snapper`, the task-panel adapter, the async point session,
+  `PlaneGui`, `Draft_Line`/`Draft_Wire`, the checkable snap bar and the four headless
+  forms — with the call path, the modes, and the known gaps.
 - [workbenches/simplecad-bringup.md](workbenches/simplecad-bringup.md) — SimpleCAD as the
   canvas-first proving ground: the measured tree, the Part gap table, and the S0–S5 plan.
 - [workbenches/grid-overlay-bringup.md](workbenches/grid-overlay-bringup.md) — a
@@ -216,6 +220,10 @@ full slice-by-slice text lives in [`record/archive/`](record/archive/).
 - [record/TODO-23-10-2026.md](record/TODO-23-10-2026.md) — closed record: the format
   serializers (F1–F8), the lineage layer (S1–S6c), Links L0–L5, the Qt-reduction
   slices (Q0–Q3b), and the Part completion (529 passed, 0 errored) at close.
+- [record/2026-10-24-q4-q5-draft-tools.md](record/2026-10-24-q4-q5-draft-tools.md) —
+  closed record: the Q4/Q5 round (camera-free snapping, the Snapper/tool-bar surface,
+  the line/wire tools and `PlaneGui`, the four forms), its measurements, and the
+  deviations it records.
 - [record/incident-2026-10-21-session-crash.md](record/incident-2026-10-21-session-crash.md)
   — post-mortem of the lost GNOME session: `systemd-oomd` killed `gnome-shell`, not the
   GPU or Wayland; the evidence, the timeline, and the prevention notes.

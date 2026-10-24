@@ -181,6 +181,10 @@ buttons are not wired because the headless `ViewObject` lacks `LineColor`/`LineW
 pushed into live annotation view objects (same `ViewObject` gap). (4) The nine
 Draft-only snap modes raise `NotImplementedError` rather than pretending.
 
+**Surface reference:** [`../workbenches/draft-tools.md`](../workbenches/draft-tools.md);
+the round's measurements and commits:
+[`../record/2026-10-24-q4-q5-draft-tools.md`](../record/2026-10-24-q4-q5-draft-tools.md).
+
 **Landed 2026-10-23.** Q0a/Q0b/Q0d and the D1–D3 guard are in:
 `python/PySide/_qt_stub.py`, the rewritten `python/PySide/__init__.py`,
 `tools/draft_contract.py`, `contracts/draft-forms.json` and

@@ -67,7 +67,8 @@ there (reference is the sibling `docs/python-api/`). The four together are what
 
 The per-slice record lives in [`milestones.md`](record/milestones.md) (M0–M4 slices 1–16, the
 FerroCAD restructure, MVP slices A1/A2/B1, and §5 for the 2026-10-23/24 Part, lineage
-and Qt round). The `ferrocad_core` crate page carries
+and Qt round). The 2026-10-24 Q4/Q5 round has its own closed record:
+[`record/2026-10-24-q4-q5-draft-tools.md`](record/2026-10-24-q4-q5-draft-tools.md). The `ferrocad_core` crate page carries
 a short **Implemented capabilities** summary so the same history is visible on docs.rs.
 
 ## Repository layout

@@ -42,18 +42,23 @@ reports zero failures, and no advertised API raises “not implemented”.
 
 ### H2 — Workbench platform (in progress)
 
-- **Python feature proxies (P2a–P2c, landed).** `Part::FeaturePython` and
+- **Python feature proxies (P2a–P2e, landed).** `Part::FeaturePython` and
   `Part::Part2DObjectPython` execute a Python `Proxy`, fire `onChanged`, honour
-  `attach=True`, persist natively and call `onDocumentRestored`. The Draft M2 modules now
-  load: `test_creation.py` runs 26 cases (15 passed, 1 failed, 10 errored) and
-  `test_array.py` loads, with **zero load errors** in those modules.
-- **Attachment (P2d, next).** `AttachmentSupport`/`MapMode` and the attach modes Draft
-  sets. Most residual Draft M2 errors are behind it.
-- **Draft M2–M5.** Real Draft objects on the proxies, the modification layer,
-  import/export, and the BIM surface on top — measured by the `drafttests` modules, not
-  by feature claims.
-- **Qt Q4/Q5.** Native spatial reference and tool input, the remaining forms, editing
-  and commit on accept, and the async modal.
+  `attach=True`, persist natively and call `onDocumentRestored`; the attachment
+  extension supplies `AttachmentSupport`/`MapMode`. The Draft M2 modules run green:
+  `test_creation.py` **26 passed** and `test_array.py` **1 passed**, with **zero
+  failures, errors or load errors**.
+- **Qt Q4/Q5 (landed).** [`workbenches/draft-tools.md`](workbenches/draft-tools.md):
+  `FreeCADGui.Snapper` over a camera-free snap API, the async point session, the native
+  `Draft_Line`/`Draft_Wire` tools and `PlaneGui`, the checkable `Draft_Snap_*` bar, and
+  the four remaining forms. The Python suite is **538 passed / 8 skipped** (172
+  subtests). The remaining gaps are recorded there: real viewport clicks are not routed
+  into `draft.pick`/`escape`/`finish` yet, the headless `ViewObject` lacks the style
+  properties SetStyle needs, and the nine Draft-only snap modes raise.
+- **Draft M3–M5.** The modification layer, import/export, and the BIM surface on top —
+  measured by the `drafttests` modules, not by feature claims.
+- **SimpleCAD S1.** The next proving ground; the Q4/Q5 tool surface is the input layer
+  it needs.
 
 **Done when** Draft creates, edits and imports headless, and no upstream workbench path
 needs Qt for its non-GUI behaviour.

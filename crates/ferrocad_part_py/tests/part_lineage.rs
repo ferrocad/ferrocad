@@ -2,7 +2,7 @@
 //!
 //! The lineage is metadata beside the shape: these tests assert that a boolean
 //! result carries one, that `ElementReverseMap` reports exactly the stored
-//! relations, and that the forward map/version/content stay off.
+//! relations, and that the element-map size/version report it.
 
 use std::sync::{Mutex, Once};
 
@@ -81,20 +81,19 @@ fn boolean_lineage_is_carried_and_copy_preserves_it() {
         expected.sort_by(|a, b| a.0.cmp(&b.0));
         assert_eq!(entries, expected);
 
-        // The rest of the element-map surface is unchanged.
-        assert_eq!(
-            cut.getattr("ElementMapVersion")
-                .unwrap()
-                .extract::<String>()
-                .unwrap(),
-            ""
-        );
+        // The element-map getters are driven by the lineage: a boolean reports its
+        // version and the number of names the naming passes produced.
+        assert!(!cut.getattr("ElementMapVersion")
+            .unwrap()
+            .extract::<String>()
+            .unwrap()
+            .is_empty());
         assert_eq!(
             cut.getattr("ElementMapSize")
                 .unwrap()
                 .extract::<usize>()
                 .unwrap(),
-            0
+            entries.len()
         );
         assert_eq!(
             cut.getattr("ElementMap")
@@ -366,16 +365,258 @@ fn compound_cut_element_maps_match_upstream_counts() {
             }
         }
 
-        // The element-map version stays off (S6c): the other upstream guards
-        // (52/58/26/10/9/24) are not reproduced yet, so a partial map is not
-        // exposed as a versioned one.
+        // The element-map version is on: the compound cuts name every element
+        // upstream names, so the map is complete for the shape it describes.
         let cut = doc.call_method1("getObject", ("cut1",)).unwrap();
         let shape = cut.getattr("Shape").unwrap();
-        assert_eq!(shape.getattr("ElementMapVersion").unwrap().extract::<String>().unwrap(), "");
-        assert_eq!(shape.getattr("ElementMapSize").unwrap().extract::<usize>().unwrap(), 0);
+        assert!(!shape
+            .getattr("ElementMapVersion")
+            .unwrap()
+            .extract::<String>()
+            .unwrap()
+            .is_empty());
+        assert_eq!(
+            shape.getattr("ElementMapSize").unwrap().extract::<usize>().unwrap(),
+            20
+        );
 
         ferrocad
             .call_method1("closeDocument", ("RustLineageCompoundCut",))
             .expect("closeDocument");
+    });
+}
+
+/// `Shape.ElementMapSize`.
+fn size(shape: &Bound<'_, PyAny>) -> usize {
+    shape
+        .getattr("ElementMapSize")
+        .expect("Shape.ElementMapSize")
+        .extract()
+        .expect("ElementMapSize as usize")
+}
+
+/// `Shape.ElementMapVersion`.
+fn version(shape: &Bound<'_, PyAny>) -> String {
+    shape
+        .getattr("ElementMapVersion")
+        .expect("Shape.ElementMapVersion")
+        .extract()
+        .expect("ElementMapVersion as str")
+}
+
+/// A document `Part::Compound` of two boxes reports the same 52 names as
+/// `Part.Compound`, which is `testTopoShapeElementMap` (and its `Part.Shape`,
+/// `copy()`, `cleaned()`, `replaceShape()` and `removeShape()` variants).
+#[test]
+fn a_document_compound_names_its_elements() {
+    let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    boot();
+    Python::with_gil(|py| {
+        let _part = PyModule::import(py, "Part").expect("import Part");
+        let ferrocad = PyModule::import(py, "ferrocad").expect("import ferrocad");
+        let doc = ferrocad
+            .call_method1("newDocument", ("RustLineageCompoundMap",))
+            .expect("newDocument");
+        for (name, length, width) in [("Box1", 1.0, 2.0), ("Box2", 2.0, 1.0)] {
+            let object = doc
+                .call_method1("addObject", ("Part::Box", name))
+                .expect("Part::Box");
+            object.setattr("Length", length).unwrap();
+            object.setattr("Width", width).unwrap();
+            object.setattr("Height", 2.0).unwrap();
+        }
+        let compound = doc
+            .call_method1("addObject", ("Part::Compound", "Compound"))
+            .expect("Part::Compound");
+        let box1 = doc.call_method1("getObject", ("Box1",)).unwrap();
+        let box2 = doc.call_method1("getObject", ("Box2",)).unwrap();
+        compound
+            .setattr("Links", PyList::new(py, [box1, box2]).unwrap())
+            .expect("Compound.Links");
+        doc.call_method0("recompute").expect("recompute");
+
+        let shape = compound.getattr("Shape").unwrap();
+        assert!(!version(&shape).is_empty(), "the document compound has a map");
+        assert_eq!(size(&shape), 52, "testTopoShapeElementMap");
+
+        // `Part.Shape(compound)` copies the map; `replaceShape`/`removeShape`
+        // carry it through (upstream keeps 52 for both).
+        let part = PyModule::import(py, "Part").expect("import Part");
+        let copied = part
+            .getattr("Shape")
+            .unwrap()
+            .call1((&shape,))
+            .expect("Part.Shape(compound)");
+        assert_eq!(size(&copied), 52, "testTopoShapePyInit");
+
+        let box2_shape = doc
+            .call_method1("getObject", ("Box2",))
+            .unwrap()
+            .getattr("Shape")
+            .unwrap();
+        let removed = shape
+            .call_method1("removeShape", (PyList::new(py, [&box2_shape]).unwrap(),))
+            .expect("removeShape");
+        assert_eq!(size(&removed), 52, "testTopoShapeRemoveShape");
+
+        ferrocad
+            .call_method1("closeDocument", ("RustLineageCompoundMap",))
+            .expect("closeDocument");
+    });
+}
+
+/// The element-map sizes upstream's `TopoShapeTest` asserts, measured on the
+/// operations this module names itself.
+///
+/// Upstream's guarded sizes are 52 (a two-box compound), 58 (the fused L), 26
+/// (cut/common/shell/solid), 10/9 (faces), 24 (loft/shell-from-wires), 6 (sweep)
+/// and 60 (a general fuse). The kernel attaches a lineage where it can name every
+/// result element exactly; those shapes report a version and are asserted here.
+/// The constructors implemented outside this module (shells, solids, lofts, faces)
+/// have not been given a map yet, so they report `""`/0 and upstream's guards skip
+/// them; their measured sizes are printed for the record, not asserted.
+#[test]
+fn element_map_sizes_match_upstream_where_the_names_are_owned() {
+    let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    boot();
+    Python::with_gil(|py| {
+        let part = PyModule::import(py, "Part").expect("import Part");
+        let box1 = part
+            .call_method1("makeBox", (1.0, 2.0, 2.0))
+            .expect("makeBox 1x2x2");
+        let box2 = part
+            .call_method1("makeBox", (2.0, 1.0, 2.0))
+            .expect("makeBox 2x1x2");
+
+        // A primitive names nothing: `testTopoShapeBox` asserts 0 and no version.
+        assert_eq!(size(&box1), 0);
+        assert_eq!(version(&box1), "");
+
+        // `Part.Compound` of two boxes: 2 × 26 names.
+        let compound = part
+            .getattr("Compound")
+            .unwrap()
+            .call1((PyList::new(py, [&box1, &box2]).unwrap(),))
+            .expect("Part.Compound");
+        assert!(!version(&compound).is_empty(), "a compound has a map");
+        assert_eq!(size(&compound), 52, "testTopoShapeElementMap");
+        assert_eq!(
+            size(&compound.call_method0("copy").unwrap()),
+            52,
+            "testTopoShapeCopy"
+        );
+        assert_eq!(
+            size(&compound.call_method1("copy", (true,)).unwrap()),
+            0,
+            "testTopoShapeCopyWithoutElementMap"
+        );
+        assert_eq!(
+            size(&compound.call_method0("cleaned").unwrap()),
+            52,
+            "testTopoShapeCleaned"
+        );
+
+        // The two-box booleans: 58 for the fused L, 26 for the box-sized results.
+        let kwargs = PyDict::new(py);
+        kwargs.set_item("noElementMap", true).unwrap();
+        let fuse = box1.call_method1("fuse", (&box2,)).unwrap();
+        assert_eq!(size(&fuse), 58, "testPartFuse / testTopoShapeFuse");
+        assert!(!version(&fuse).is_empty());
+        assert_eq!(
+            size(&box1
+                .call_method("fuse", (&box2,), Some(&kwargs))
+                .unwrap()),
+            0,
+            "testTopoShapeFuseWithoutElementMap"
+        );
+        assert_eq!(size(&box1.call_method1("cut", (&box2,)).unwrap()), 26);
+        assert_eq!(size(&box1.call_method1("common", (&box2,)).unwrap()), 26);
+        assert_eq!(
+            size(&box1
+                .call_method1("multiFuse", (PyList::new(py, [&box2]).unwrap(),))
+                .unwrap()),
+            58,
+            "testTopoShapeMultiFuse"
+        );
+        assert_eq!(
+            size(&box1
+                .call_method("multiFuse", (PyList::new(py, [&box2]).unwrap(),), Some(&kwargs))
+                .unwrap()),
+            0,
+            "testTopoShapeMultiFuseWithoutElementMap"
+        );
+
+        // General fuse: the result is a compound of bodies, so it names itself.
+        let general = box1
+            .call_method1("generalFuse", (PyList::new(py, [&box2]).unwrap(),))
+            .unwrap();
+        assert_eq!(size(&general.get_item(0).unwrap()), 60, "testTopoShapeGeneralFuse");
+
+        // A sweep names its own six elements; this is what makes upstream's test
+        // take the correct-bounds branch instead of the legacy bug's bounds.
+        let circle = part
+            .call_method1("makeCircle", (5.0,))
+            .expect("makeCircle");
+        let line = part
+            .call_method1("makeLine", ((0.0, 0.0, 0.0), (0.0, 0.0, 10.0)))
+            .expect("makeLine");
+        let sweep = part
+            .call_method1("makeSweepSurface", (&line, &circle, 0.001, 0))
+            .expect("makeSweepSurface");
+        assert!(!version(&sweep).is_empty());
+        assert_eq!(size(&sweep), 6, "testAppPartMakeSweepSurface");
+
+        // Constructors whose call sites live outside this slice: measured here so
+        // the report is grounded, not asserted (they still report no map).
+        let faces = box1.getattr("Faces").unwrap();
+        let shells = box1.getattr("Shells").unwrap();
+        let wires = box1.getattr("Wires").unwrap();
+        let section = wires.get_item(0).unwrap();
+        let section2 = wires.get_item(1).unwrap();
+        let measurements = [
+            ("makeShell(box.Faces)", part.call_method1("makeShell", (&faces,)).unwrap()),
+            (
+                "makeSolid(box.Shells[0])",
+                part.call_method1("makeSolid", (&shells.get_item(0).unwrap(),))
+                    .unwrap(),
+            ),
+            (
+                "makeLoft(Wires[0:2])",
+                part.call_method1(
+                    "makeLoft",
+                    (PyList::new(py, [&section, &section2]).unwrap(),),
+                )
+                .unwrap(),
+            ),
+            (
+                "makeShellFromWires([w0, w1])",
+                part.call_method1(
+                    "makeShellFromWires",
+                    (PyList::new(py, [&section, &section2]).unwrap(),),
+                )
+                .unwrap(),
+            ),
+            (
+                "makeFace(Faces[0], Cheese)",
+                part.call_method1(
+                    "makeFace",
+                    (&faces.get_item(0).unwrap(), "Part::FaceMakerCheese"),
+                )
+                .unwrap(),
+            ),
+            (
+                "makeFilledFace(Faces[3].Edges)",
+                part.call_method1(
+                    "makeFilledFace",
+                    (&faces.get_item(3).unwrap().getattr("Edges").unwrap(),),
+                )
+                .unwrap(),
+            ),
+        ];
+        for (label, shape) in measurements {
+            eprintln!("{label}: version={:?} size={}", version(&shape), size(&shape));
+            assert_eq!(version(&shape), "", "{label} has no map yet");
+            assert_eq!(size(&shape), 0, "{label} has no map yet");
+        }
     });
 }

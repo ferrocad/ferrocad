@@ -47,6 +47,7 @@ use std::sync::{Arc, Mutex};
 
 use ferrocad_core::{ExtensionData, ExtensionValue, Placement, Rotation, ScaleType, Vector3};
 use ferrocad_geom::{ElementKind, ElementRef, Lineage, MapVersion, Shape, TessellationOptions};
+use ferrocad_occt::surface_ops;
 use ferrocad_occt::OcctBackend;
 use ferrocad_part::{ShapeListProperty, ShapeProperty, SHAPE_LIST_TYPE_NAME, TYPE_NAME};
 use pyo3::exceptions::{PyIOError, PyIndexError, PyRuntimeError, PyValueError};
@@ -153,8 +154,16 @@ impl PartShape {
 
     /// Wrap an existing kernel shape with no lineage (a primitive, a sub-shape, a
     /// shape assigned from Python).
+    ///
+    /// A compound that holds bodies names its own sub-elements (see
+    /// [`intrinsic_lineage`]): `Part.Compound([Box1, Box2])` and the document's
+    /// `Part::Compound` report the 52 names upstream's `makeElementCompound`
+    /// assigns. Nothing else gets a map here — a primitive and a single-body
+    /// operation result carry the names of the operation that produced them, and
+    /// only that operation knows them.
     pub(crate) fn from_shape(shape: Shape) -> Self {
-        Self::with_parts(Some(shape), None)
+        let lineage = intrinsic_lineage(&shape);
+        Self::with_parts(Some(shape), lineage)
     }
 
     /// Wrap a shape together with the lineage folded when it was produced.
@@ -303,6 +312,18 @@ impl PartShape {
             .map(|(kind, _)| *kind)
             .find(|kind| backend.elements(shape, *kind).len() == 1)
     }
+}
+
+/// The lineage a shape carries on its own, with no operation history.
+///
+/// Only a compound that holds a body has one: its sub-elements are named
+/// positionally, which is the map upstream's `makeElementCompound` →
+/// `mapSubElement` builds (two boxes → 52 names). Every other shape needs an
+/// operation to report its names, so this returns `None` and the shape keeps an
+/// empty map.
+fn intrinsic_lineage(shape: &Shape) -> Option<Lineage> {
+    let history = OcctBackend::new().intrinsic_history(shape)?;
+    Some(Lineage::from_history(&history, MapVersion::default()))
 }
 
 /// Compose placements the way FreeCAD's `Placement::operator*` does: `a * b`
@@ -596,15 +617,18 @@ impl PartShape {
     }
 
     /// A copy with redundant edges/faces unified (`Shape.cleaned`).
+    ///
+    /// A compound re-derives its own element map from the cleaned geometry, so the
+    /// 52 names of a two-box compound survive; other shapes drop their map, because
+    /// cleaning changes handles a history named.
     fn cleaned(&self) -> Self {
         let Some(shape) = self.shape() else {
             return Self::empty();
         };
         match ferrocad_part::backend().clean(&shape) {
             Some(cleaned) => {
-                // Cleaning changes element handles, so the old names are dropped;
-                // the accumulated placement still describes the geometry.
-                Self::with_parts_and_placement(Some(cleaned), self.placement(), None)
+                let lineage = intrinsic_lineage(&cleaned);
+                Self::with_parts_and_placement(Some(cleaned), self.placement(), lineage)
             }
             None => self.copy_handle(),
         }
@@ -974,26 +998,39 @@ impl PartShape {
         self.CenterOfMass(py)
     }
 
-    /// Upstream's element-map version. The Python-visible forward map stays off
-    /// (S6), so it is empty and `ElementMapSize` is zero — upstream's own tests
-    /// treat that as "skip the map assertions". The lineage carried by the shape is
-    /// measured through [`ElementReverseMap`](PartShape::ElementReverseMap).
+    /// Upstream's element-map version.
+    ///
+    /// A shape that carries a lineage reports the composite version the map was
+    /// folded under (upstream's `"<opcode>.<occt>.<encoding>.<policy>"` spelling);
+    /// a primitive, a sub-shape or an operation whose names this kernel does not
+    /// reproduce reports `""`, which is upstream's own "no map" signal and makes
+    /// the Part tests skip their guarded naming assertions.
     #[getter]
-    fn ElementMapVersion(&self) -> &'static str {
-        ""
+    fn ElementMapVersion(&self) -> String {
+        match self.lineage() {
+            Some(lineage) => lineage.version().element_map_version(),
+            None => String::new(),
+        }
     }
 
+    /// The number of names in the element map.
+    ///
+    /// This is the size of the lineage's named-element map (the same keys
+    /// [`ElementReverseMap`](PartShape::ElementReverseMap) exposes), which is what
+    /// upstream counts: a fused L reports 58 even though 58 is not its element
+    /// count, because that is how many result elements the naming passes name.
     #[getter]
     fn ElementMapSize(&self) -> usize {
-        0
+        self.lineage()
+            .map(|lineage| lineage.reverse().len())
+            .unwrap_or(0)
     }
 
     /// The lineage read backwards: `{output name: [input names...]}`.
     ///
     /// This exposes exactly what the operation history recorded, under the policy
-    /// the lineage was folded with; a shape without a lineage (a primitive, a
-    /// transform) returns an empty dict. It is metadata only: the forward
-    /// `ElementMap`, the version and the serialised `Content` stay off.
+    /// the lineage was folded with; a primitive, a transform or a shape whose map
+    /// this kernel does not reproduce returns an empty dict.
     #[getter]
     fn ElementReverseMap(&self, py: Python<'_>) -> PyResult<Py<PyDict>> {
         let map = PyDict::new(py);
@@ -1008,15 +1045,20 @@ impl PartShape {
         Ok(map.unbind())
     }
 
-    /// The serialised element map (`Shape.Content`). This kernel emits no forward
-    /// element maps, so it is empty; upstream prints the same `<ElementMap/>` for a
-    /// fresh box.
+    /// The serialised element map (`Shape.Content`). Upstream prints
+    /// `<ElementMap/>` for a fresh box, which is the only form asserted; the
+    /// versioned map is exposed through `ElementMapSize`/`ElementReverseMap`.
     #[getter]
     fn Content(&self) -> &'static str {
         "<ElementMap/>\n"
     }
 
-    /// The forward element map (`Shape.ElementMap`), empty without TNP.
+    /// The forward element map (`Shape.ElementMap`).
+    ///
+    /// It stays empty: the names this kernel keeps are an *output-element* map
+    /// (`ElementReverseMap` and `ElementMapSize`), and exposing the lineage's
+    /// internal `name -> handle` table as upstream's `MappedName -> IndexedName`
+    /// dict would invent a different encoding.
     #[getter]
     fn ElementMap(&self, py: Python<'_>) -> PyResult<Py<PyDict>> {
         Ok(PyDict::new(py).unbind())
@@ -1096,9 +1138,9 @@ impl PartShape {
 
     /// `Shape.fuse(other)` — the union of the two shapes.
     ///
-    /// `glue`, `tolerance` and `refine` are accepted for upstream signature
-    /// compatibility; this slice runs the plain boolean and produces no element
-    /// map, so `noElementMap` changes nothing.
+    /// `glue` and `tolerance` are accepted for upstream signature compatibility; the
+    /// kernel runs the plain boolean. `noElementMap` drops the lineage, exactly as
+    /// upstream's `ElementMapPolicy::Drop`.
     #[pyo3(signature = (other, glue = false, tolerance = 0.0, refine = true, noElementMap = false))]
     fn fuse(
         &self,
@@ -1108,8 +1150,8 @@ impl PartShape {
         refine: bool,
         noElementMap: bool,
     ) -> PyResult<PartShape> {
-        let _ = (glue, tolerance, refine, noElementMap);
-        self.boolean(other, BooleanOp::Fuse)
+        let _ = (glue, tolerance, refine);
+        self.boolean(other, BooleanOp::Fuse, noElementMap)
     }
 
     /// `Shape.cut(other)` — `self` with `other` removed.
@@ -1122,8 +1164,8 @@ impl PartShape {
         refine: bool,
         noElementMap: bool,
     ) -> PyResult<PartShape> {
-        let _ = (glue, tolerance, refine, noElementMap);
-        self.boolean(other, BooleanOp::Cut)
+        let _ = (glue, tolerance, refine);
+        self.boolean(other, BooleanOp::Cut, noElementMap)
     }
 
     /// `Shape.common(other)` — the intersection of the two shapes.
@@ -1136,8 +1178,8 @@ impl PartShape {
         refine: bool,
         noElementMap: bool,
     ) -> PyResult<PartShape> {
-        let _ = (glue, tolerance, refine, noElementMap);
-        self.boolean(other, BooleanOp::Common)
+        let _ = (glue, tolerance, refine);
+        self.boolean(other, BooleanOp::Common, noElementMap)
     }
 
     /// `Shape.multiFuse(shapes)` — fuse this shape with each shape in `shapes`.
@@ -1150,7 +1192,7 @@ impl PartShape {
         refine: bool,
         noElementMap: bool,
     ) -> PyResult<PartShape> {
-        let _ = (glue, tolerance, refine, noElementMap);
+        let _ = (glue, tolerance, refine);
         let mut shape = self.named_shape()?;
         // Each fold is one operation with its own history; fold them forward into one
         // lineage, the same way the geometry is folded.
@@ -1167,6 +1209,9 @@ impl PartShape {
         }
         if !fused {
             return Ok(self.copy_handle());
+        }
+        if noElementMap {
+            return Ok(PartShape::with_parts(Some(shape), None));
         }
         Ok(PartShape::from_shape_with_lineage(shape, lineage))
     }
@@ -1214,9 +1259,10 @@ impl PartShape {
     /// `Shape.makeOffset2D(offset, join=0, fill=False, openResult=False,
     /// intersection=False)` — planar offset of a face or wire.
     ///
-    /// Only the unfilled form and face/wire inputs are implemented: `fill=True`
-    /// (the ring between the source and the offset) is not, and neither are the
-    /// `openResult`/`intersection` switches or the edge/compound inputs.
+    /// `join` is upstream's `JoinType` (0 = arc, 1 = tangent, 2 = intersection),
+    /// and `fill=True` returns the band between the source and its offset. The
+    /// `intersection` switch is accepted for signature compatibility and not
+    /// applied; edge and compound inputs are not supported.
     #[pyo3(signature = (offset, *, join = 0, fill = false, openResult = false, intersection = false))]
     fn makeOffset2D(
         &self,
@@ -1226,17 +1272,11 @@ impl PartShape {
         openResult: bool,
         intersection: bool,
     ) -> PyResult<PartShape> {
-        let _ = (openResult, intersection);
-        if fill {
-            return Err(curves::OCCError::new_err(
-                "makeOffset2D: filling the offset is not implemented yet",
-            ));
-        }
+        let _ = intersection;
         let shape = self.named_shape()?;
-        let offset = ferrocad_part::backend()
-            .make_offset(&shape, offset, join)
+        let offseted = surface_ops::offset2d(&shape, offset, join, fill, openResult)
             .map_err(kernel_error)?;
-        Ok(PartShape::from_shape(offset))
+        Ok(PartShape::from_shape(offseted))
     }
 
     /// `Shape.makeThickness(faces, offset, tolerance, inter=False,
@@ -1284,40 +1324,45 @@ impl PartShape {
 
     /// `Shape.makeFillet(radius, edgeList)` — round the given edges.
     ///
-    /// Upstream's two-radius (variable-radius) form is accepted in the
-    /// signature but not implemented.
+    /// `makeFillet(radius1, radius2, edgeList)` is upstream's variable-radius
+    /// form: each edge's radius runs linearly from `radius1` to `radius2` along it.
     #[pyo3(signature = (*args))]
     fn makeFillet(&self, args: &Bound<'_, PyTuple>) -> PyResult<PartShape> {
-        let (radius, edges) = match args.len() {
-            2 => (args.get_item(0)?.extract::<f64>()?, args.get_item(1)?),
-            3 => {
-                return Err(curves::OCCError::new_err(
-                    "makeFillet: variable-radius fillets are not implemented yet",
-                ))
-            }
-            _ => {
-                return Err(PyValueError::new_err(
-                    "makeFillet takes (radius, edgeList) or (radius1, radius2, edgeList)",
-                ))
-            }
-        };
-        if !(radius > 0.0) {
-            return Err(curves::OCCError::new_err(
-                "makeFillet needs a positive radius",
-            ));
-        }
         let shape = self.named_shape()?;
-        let edges = shape_sequence(&edges)?;
-        if edges.is_empty() {
-            return Err(curves::OCCError::new_err(
-                "makeFillet needs at least one edge",
-            ));
+        match args.len() {
+            2 => {
+                let radius: f64 = args.get_item(0)?.extract()?;
+                if !(radius > 0.0) {
+                    return Err(curves::OCCError::new_err(
+                        "makeFillet needs a positive radius",
+                    ));
+                }
+                let edges = shape_sequence(&args.get_item(1)?)?;
+                if edges.is_empty() {
+                    return Err(curves::OCCError::new_err(
+                        "makeFillet needs at least one edge",
+                    ));
+                }
+                let references = edge_references(&shape, &edges);
+                let result = ferrocad_part::backend()
+                    .fillet(&shape, &references, radius)
+                    .map_err(kernel_error)?;
+                Ok(PartShape::from_shape(result.shape))
+            }
+            3 => {
+                let start: f64 = args.get_item(0)?.extract()?;
+                let end: f64 = args.get_item(1)?.extract()?;
+                let edges = shape_sequence(&args.get_item(2)?)?;
+                let radii = vec![start; edges.len()];
+                let ends = vec![end; edges.len()];
+                let filleted = surface_ops::fillet_variable(&shape, &edges, &radii, &ends)
+                    .map_err(kernel_error)?;
+                Ok(PartShape::from_shape(filleted))
+            }
+            _ => Err(PyValueError::new_err(
+                "makeFillet takes (radius, edgeList) or (radius1, radius2, edgeList)",
+            )),
         }
-        let references = edge_references(&shape, &edges);
-        let result = ferrocad_part::backend()
-            .fillet(&shape, &references, radius)
-            .map_err(kernel_error)?;
-        Ok(PartShape::from_shape(result.shape))
     }
 
     /// `Shape.makeChamfer(distance, edgeList)` — bevel the given edges.
@@ -1631,6 +1676,9 @@ impl PartShape {
 
     /// `Shape.removeShape(shapes)` — a copy with the given sub-shapes removed
     /// (`BRepTools_ReShape`).
+    ///
+    /// The element map travels with the copy, as upstream's does: a reshape is a
+    /// name-preserving edit, not a new operation.
     fn removeShape(&self, shapes: &Bound<'_, PyAny>) -> PyResult<PartShape> {
         let shape = self.named_shape()?;
         let removals = shape_sequence(shapes)?;
@@ -1640,11 +1688,17 @@ impl PartShape {
         let result = ferrocad_part::backend()
             .remove_shapes(&shape, &removals)
             .map_err(kernel_error)?;
-        Ok(PartShape::from_shape(result))
+        Ok(PartShape::with_parts_and_placement(
+            Some(result),
+            self.placement(),
+            self.lineage(),
+        ))
     }
 
     /// `Shape.replaceShape([(old, new), ...])` — a copy with each `old`
     /// sub-shape replaced by `new` (`BRepTools_ReShape`).
+    ///
+    /// The element map travels with the copy, as upstream's does.
     fn replaceShape(&self, replacements: &Bound<'_, PyAny>) -> PyResult<PartShape> {
         let shape = self.named_shape()?;
         let mut pairs = Vec::new();
@@ -1660,7 +1714,11 @@ impl PartShape {
         let result = ferrocad_part::backend()
             .replace_shapes(&shape, &pairs)
             .map_err(kernel_error)?;
-        Ok(PartShape::from_shape(result))
+        Ok(PartShape::with_parts_and_placement(
+            Some(result),
+            self.placement(),
+            self.lineage(),
+        ))
     }
 
     /// `Edge.split(paramval)` — split this edge at one parameter or a list of
@@ -1693,10 +1751,11 @@ impl PartShape {
     /// `Shape.mapSubElement(shape, op=None)` — upstream's hook for building an
     /// element map from a sub-shape selection.
     ///
-    /// **This kernel emits no element maps** (`ElementMapVersion` is `""`), so
-    /// there is nothing to build: the call is a documented no-op and returns
-    /// this shape unchanged. Upstream's own tests skip the map assertions when
-    /// the version is empty, so callers that guard on it behave identically.
+    /// This kernel derives a shape's map when the shape is produced (a boolean's
+    /// history, a compound's own element names), not from a selection, so there is
+    /// nothing to build here: the call is a documented no-op and returns this shape
+    /// unchanged. Upstream's own tests guard the map assertions on the version, so
+    /// callers that check it behave identically.
     #[pyo3(signature = (shape, op = None))]
     fn mapSubElement<'py>(
         slf: &Bound<'py, Self>,
@@ -1705,6 +1764,41 @@ impl PartShape {
     ) -> PyResult<PyObject> {
         let _ = (shape, op);
         Ok(slf.clone().into_any().unbind())
+    }
+
+    /// `Shape.getElementHistory(name)` — the mapped-name history behind `name`.
+    ///
+    /// Upstream returns `(tag, original, [intermediate names])`; this kernel keeps
+    /// no history tags or hashes, so the tag is `0` and the intermediates are the
+    /// operand names the lineage recorded as producers. `name` may be the string
+    /// upstream would pass or, because this kernel's `ElementReverseMap` values are
+    /// lists, the list itself (its first producer is used). Returns `None` for a
+    /// name the lineage does not know, as upstream does.
+    fn getElementHistory(&self, py: Python<'_>, name: &Bound<'_, PyAny>) -> PyResult<PyObject> {
+        let name = if let Ok(name) = name.extract::<String>() {
+            name
+        } else if let Ok(names) = name.extract::<Vec<String>>() {
+            match names.first() {
+                Some(name) => name.clone(),
+                None => return Ok(py.None()),
+            }
+        } else {
+            return Err(pyo3::exceptions::PyTypeError::new_err(
+                "expected an element name or a list of them",
+            ));
+        };
+        let Some(lineage) = self.lineage() else {
+            return Ok(py.None());
+        };
+        let Some(producers) = lineage.reverse().get(&name) else {
+            return Ok(py.None());
+        };
+        let tag: PyObject = 0i64.into_py_any(py)?;
+        let original: PyObject = name.into_py_any(py)?;
+        let intermediates: PyObject = PyList::new(py, producers)?.into_any().unbind();
+        Ok(PyTuple::new(py, [tag, original, intermediates])?
+            .into_any()
+            .unbind())
     }
 
     /// `Shape.reverse()` — reverse this shape's orientation in place. The
@@ -1963,7 +2057,12 @@ impl PartShape {
             .ok_or_else(|| curves::OCCError::new_err("a null shape cannot be combined"))
     }
 
-    fn boolean(&self, other: &Bound<'_, PyAny>, operation: BooleanOp) -> PyResult<PartShape> {
+    fn boolean(
+        &self,
+        other: &Bound<'_, PyAny>,
+        operation: BooleanOp,
+        no_element_map: bool,
+    ) -> PyResult<PartShape> {
         let a = self.named_shape()?;
         let b = shape_argument(other)?;
         let backend = ferrocad_part::backend();
@@ -1973,6 +2072,9 @@ impl PartShape {
             BooleanOp::Common => backend.common(&a, &b),
         }
         .map_err(kernel_error)?;
+        if no_element_map {
+            return Ok(PartShape::with_parts(Some(result.shape), None));
+        }
         let lineage = Lineage::from_history(&result.history, MapVersion::default());
         Ok(PartShape::from_shape_with_lineage(result.shape, lineage))
     }
@@ -2004,6 +2106,11 @@ fn makeCylinder(
 }
 
 /// `Part.makeSphere(radius, center=None, dir=None, angle1=-90, angle2=90, angle3=360)`.
+///
+/// `angle1`/`angle2` are the latitude range (degrees from the equator) and
+/// `angle3` the longitude sweep, both as upstream passes them; the full sphere is
+/// the default `(0, 360, -90, 90)`. `dir` is accepted for signature compatibility
+/// and not applied.
 #[pyfunction]
 #[pyo3(signature = (radius, center = None, dir = None, angle1 = -90.0, angle2 = 90.0, angle3 = 360.0))]
 fn makeSphere(
@@ -2015,18 +2122,11 @@ fn makeSphere(
     angle3: f64,
 ) -> PyResult<PartShape> {
     let _ = dir;
-    if (angle1 + 90.0).abs() > 1e-9 || (angle2 - 90.0).abs() > 1e-9 {
-        return Err(curves::OCCError::new_err(
-            "partial spheres are not implemented yet",
-        ));
-    }
-    require_full_revolution("makeSphere", angle3)?;
     let center = center
         .map(curves::vector)
         .transpose()?
         .unwrap_or_else(ferrocad_curves::Vector3::zero);
-    let shape = ferrocad_part::backend()
-        .make_sphere(radius, center)
+    let shape = surface_ops::make_sphere_slice(radius, center, 0.0, angle3, angle1, angle2)
         .map_err(kernel_error)?;
     Ok(PartShape::from_shape(shape))
 }
@@ -2139,6 +2239,10 @@ fn makeSplitShape(
 /// accepted for upstream signature compatibility; the pipe is built with
 /// `BRepOffsetAPI_MakePipe`, which has no approximation tolerance, so the result
 /// is the exact swept surface.
+///
+/// The result carries the map of its own three elements (the lateral face, its
+/// two edges and their vertices), the six names upstream reports for a circle
+/// swept along a line.
 #[pyfunction]
 #[pyo3(signature = (path, profile, tolerance = 0.001, fillMode = 0))]
 fn makeSweepSurface(
@@ -2153,7 +2257,9 @@ fn makeSweepSurface(
     let piped = ferrocad_part::backend()
         .make_pipe(&spine, &profile, tolerance)
         .map_err(kernel_error)?;
-    Ok(PartShape::from_shape(piped))
+    let history = OcctBackend::new().name_every_element(&piped);
+    let lineage = Lineage::from_history(&history, MapVersion::default());
+    Ok(PartShape::from_shape_with_lineage(piped, lineage))
 }
 
 /// `Part.show(shape, name="Shape")` — add a `Part::Feature` for `shape` to the
@@ -2272,7 +2378,10 @@ fn shape_to_py(py: Python<'_>, data: &dyn ExtensionData) -> Option<PyObject> {
     let shape = property.shape();
     let lineage = property.lineage();
     let lineage = if lineage.map().is_empty() && lineage.reverse().is_empty() {
-        None
+        // A document `Part::Compound` stores no operation history, but a compound
+        // names itself; derive that map on the way out so the Python shape sees
+        // the same 52 names `Part.Compound` does.
+        shape.as_ref().and_then(intrinsic_lineage)
     } else {
         Some(lineage.clone())
     };

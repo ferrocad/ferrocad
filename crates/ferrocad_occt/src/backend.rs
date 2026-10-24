@@ -53,6 +53,65 @@ impl OcctBackend {
         OcctBackend
     }
 
+    /// Name every face, edge and vertex of `shape` positionally.
+    ///
+    /// This is the element-map rule a *container* applies to itself: upstream's
+    /// `TopoShape::makeElementCompound` calls `mapSubElement(shapes, op)`, which
+    /// gives every sub-element of the compound a name although no operation
+    /// related it to an input. A compound of two boxes therefore reports 52 names
+    /// (2 × 26). The relation is an identity one — the name denotes the element it
+    /// is — so it adds one reverse-map entry per element and no operand
+    /// provenance.
+    pub fn name_every_element(&self, shape: &Shape) -> History {
+        let mut history = History::default();
+        let Ok(occt) = downcast(shape) else {
+            return history;
+        };
+        let guard = occt.borrow();
+        let Some(inner) = guard.as_ref() else {
+            return history;
+        };
+        // A default-constructed handle is non-null as a `UniquePtr` but holds a null
+        // `TShape`; enumerating it would dereference that.
+        if inner.IsNull() {
+            return history;
+        }
+        for (kind, occt_kind) in HISTORY_KINDS {
+            let map = sub_shape_map(inner, occt_kind);
+            for ordinal in 1..=map.Extent() {
+                let element = element_ref(kind, ordinal, map.FindKey(ordinal));
+                history.push_identity(element.clone(), element);
+            }
+        }
+        history
+    }
+
+    /// The element map a shape carries without an operation history.
+    ///
+    /// A **compound that holds a body** names its own sub-elements
+    /// ([`name_every_element`](OcctBackend::name_every_element)), the mapping
+    /// upstream's `makeElementCompound` performs. Every other shape carries none: a
+    /// primitive and a single-body result are named by the operation that produced
+    /// them, and a compound of lower elements (the wires a slice returns) is an
+    /// internal container rather than a result body. When an operation does have a
+    /// history, the caller folds that instead of this map.
+    pub fn intrinsic_history(&self, shape: &Shape) -> Option<History> {
+        let occt = downcast(shape).ok()?;
+        let guard = occt.borrow();
+        let inner = guard.as_ref()?;
+        if inner.IsNull() {
+            return None;
+        }
+        if inner.ShapeType() != TopAbs_ShapeEnum::TopAbs_COMPOUND {
+            return None;
+        }
+        let solids = sub_shape_map(inner, TopAbs_ShapeEnum::TopAbs_SOLID);
+        if solids.Extent() == 0 {
+            return None;
+        }
+        Some(self.name_every_element(shape))
+    }
+
     /// Drop the dangling internal wires a fused region may carry. A wire other
     /// than the outer boundary that encloses no area is the trace of a cutter
     /// that terminated inside the face, not a hole; removing it leaves the
@@ -2754,6 +2813,68 @@ mod provenance_tests {
             BTreeSet::from([OperandId::A, OperandId::B]),
             "both operands are reported",
         );
+    }
+
+    /// The intrinsic map of a container: every element named once, nothing else.
+    ///
+    /// These are upstream's `ElementMapSize` counts for the same shapes: two boxes
+    /// combine to 52 names, a general-fused pair to 60, and a circle swept along a
+    /// line to 6. A primitive and a compound of lower elements keep no intrinsic
+    /// map; an operation result uses its own history.
+    #[test]
+    fn a_container_names_its_own_elements() {
+        use ferrocad_geom::{Lineage, MapVersion};
+        let backend = OcctBackend::new();
+        let a = backend.make_box(1.0, 2.0, 2.0).unwrap();
+        let b = backend.make_box(2.0, 1.0, 2.0).unwrap();
+
+        // A primitive has no intrinsic map; an operation result gets its names from
+        // the operation (even when OCCT hands it back as a compound).
+        assert!(backend.intrinsic_history(&a).is_none());
+        let fused = backend.fuse(&a, &b).unwrap();
+        let lineage = Lineage::from_history(&fused.history, MapVersion::default());
+        assert_eq!(lineage.reverse().len(), 58, "the boolean's own history");
+
+        // A compound of two boxes: 2 × (6 faces + 12 edges + 8 vertices).
+        let compound = backend.make_compound(&[a.clone(), b.clone()]).unwrap();
+        let history = backend
+            .intrinsic_history(&compound)
+            .expect("a compound of bodies names itself");
+        assert_eq!(history.identity.len(), 52);
+        assert!(history.modified.is_empty());
+        assert!(history.generated.is_empty());
+        assert!(history.deleted.is_empty());
+        let lineage = Lineage::from_history(&history, MapVersion::default());
+        assert_eq!(lineage.reverse().len(), 52);
+
+        // A compound of lower elements is an internal container, not a body.
+        let faces: Vec<Shape> = backend
+            .elements(&a, ElementKind::Face)
+            .into_iter()
+            .map(|element| element.shape)
+            .collect();
+        let lower = backend.make_compound(&faces).unwrap();
+        assert!(backend.intrinsic_history(&lower).is_none());
+
+        // General fuse: the result compound names all 60 elements.
+        let (result, _split) = backend.general_fuse(&[a.clone(), b.clone()]).unwrap();
+        let history = backend.intrinsic_history(&result).expect("the result names itself");
+        assert_eq!(history.identity.len(), 60);
+
+        // A sweep names its six elements (one face, three edges, two vertices).
+        use ferrocad_curves::{Circle, LineSegment};
+        let profile = backend
+            .make_edge(&ferrocad_curves::EdgeCurve::Circle(
+                Circle::new(Vector3::zero(), Vector3::new(0.0, 0.0, 1.0), 5.0).unwrap(),
+            ))
+            .unwrap();
+        let spine = backend
+            .make_edge(&ferrocad_curves::EdgeCurve::LineSegment(
+                LineSegment::new(Vector3::zero(), Vector3::new(0.0, 0.0, 10.0)).unwrap(),
+            ))
+            .unwrap();
+        let sweep = backend.make_pipe(&spine, &profile, 0.001).unwrap();
+        assert_eq!(backend.name_every_element(&sweep).identity.len(), 6);
     }
 
     #[test]

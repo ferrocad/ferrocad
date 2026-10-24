@@ -502,12 +502,34 @@ impl MapVersion {
     /// Plain names: no encoded lineage tokens, only what a positional policy emits.
     pub const ENCODING_PLAIN: u16 = 0;
 
+    /// Upstream's `TopoShape::getElementMapVersion` opcode (`OpCodes::Version`),
+    /// which is 15 at the pinned upstream commit (`33adf61`).
+    pub const OPCODE_VERSION: u16 = 15;
+
+    /// The OCCT version upstream reports, stabilized to 7.2.0 (`0x070200`) so the
+    /// string does not churn with the linked kernel.
+    pub const OCCT_VERSION: u32 = 0x070200;
+
     pub fn new(encoding: u16, policy: impl Into<String>, kernel: Option<String>) -> Self {
         Self {
             encoding,
             policy: policy.into(),
             kernel,
         }
+    }
+
+    /// The composite `ElementMapVersion` string this version describes.
+    ///
+    /// Upstream composes `"<opcode>.<occt-version-hex>."` with the naming
+    /// policy's own version tag. The three version axes are appended here so a
+    /// stored map is only valid under the rules that produced it; the leading
+    /// fields match upstream's spelling so callers that only compare the prefix
+    /// (or, as the Part tests do, test for non-emptiness) see a faithful value.
+    pub fn element_map_version(&self) -> String {
+        format!(
+            "{}.{:x}.{}.{}",
+            Self::OPCODE_VERSION, Self::OCCT_VERSION, self.encoding, self.policy
+        )
     }
 
     /// The encoding revision.
@@ -1148,6 +1170,27 @@ mod tests {
         assert_eq!(pinned.encoding(), 7);
         assert_eq!(pinned.policy(), "lineage");
         assert_eq!(pinned.kernel(), Some("occt-7.2"));
+    }
+
+    #[test]
+    fn the_element_map_version_is_a_non_empty_composite_that_tracks_the_rules() {
+        let default = MapVersion::default();
+        // Upstream's spelling: `OpCodes::Version` (15 at `33adf61`), the stabilized
+        // OCCT version in hex (7.2.0 → 70200), then this kernel's encoding and
+        // policy tags.
+        assert_eq!(default.element_map_version(), "15.70200.0.positional");
+        assert!(!default.element_map_version().is_empty());
+
+        // A different encoding or policy is a different map version, so a stored
+        // map cannot be read under rules that did not produce it.
+        assert_ne!(
+            MapVersion::new(1, "positional", None).element_map_version(),
+            default.element_map_version()
+        );
+        assert_ne!(
+            MapVersion::new(0, "lineage", None).element_map_version(),
+            default.element_map_version()
+        );
     }
 
     // -- provenance identity -------------------------------------------------

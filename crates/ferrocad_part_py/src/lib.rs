@@ -57,6 +57,7 @@ fn register_kernel() {
     ferrocad_part::register(Arc::new(OcctBackend::new()));
     link::register();
     link_array::register();
+    solids::register_objects();
 }
 
 /// `Part.Shape`: an opaque handle to a kernel shape.
@@ -375,6 +376,33 @@ impl PartShape {
         Ok(slf.clone().into_any().unbind())
     }
 
+    /// Rotate this shape in place about the axis through `center` along `axis`
+    /// by `angle` degrees (`Shape.rotate`). The placement is baked into the
+    /// geometry, as every other transform on this kernel is. Upstream mutates in
+    /// place and returns the shape itself (`TopoShapePy::rotate` returns
+    /// `IncRef()`), so this does too.
+    fn rotate(
+        slf: &Bound<'_, Self>,
+        center: &Bound<'_, PyAny>,
+        axis: &Bound<'_, PyAny>,
+        angle: f64,
+    ) -> PyResult<PyObject> {
+        let center = curves::vector(center)?;
+        let axis = curves::vector(axis)?;
+        if axis.is_null() {
+            return Err(curves::OCCError::new_err(
+                "a rotation needs a non-zero axis",
+            ));
+        }
+        let matrix = rotation_matrix(center, axis, angle);
+        let shape = slf.borrow().named_shape()?;
+        let moved = ferrocad_part::backend()
+            .transform(&shape, &matrix)
+            .map_err(kernel_error)?;
+        slf.borrow_mut().replace_shape(Some(moved));
+        Ok(slf.clone().into_any().unbind())
+    }
+
     /// A copy with redundant edges/faces unified (`Shape.cleaned`).
     fn cleaned(&self) -> Self {
         let Some(shape) = self.shape() else {
@@ -556,12 +584,41 @@ impl PartShape {
     }
 
     /// The backing surface (`Face.Surface`), when the shape is a face.
+    ///
+    /// A planar face reports the elementary plane description (with its unit
+    /// normal); any other surface reports the kernel's type id, as before.
     #[getter]
-    fn Surface(&self) -> Option<curves::PySurface> {
-        let shape = self.shape()?;
-        ferrocad_part::backend()
-            .surface_type(&shape)
-            .map(curves::PySurface::new)
+    fn Surface(&self, py: Python<'_>) -> PyResult<Option<PyObject>> {
+        let Some(shape) = self.shape() else {
+            return Ok(None);
+        };
+        let Some(type_id) = ferrocad_part::backend().surface_type(&shape) else {
+            return Ok(None);
+        };
+        if type_id == "Part::GeomPlane" {
+            let normal = planar_surface_normal(&shape)
+                .unwrap_or_else(|| ferrocad_curves::Vector3::new(0.0, 0.0, 1.0));
+            return Ok(Some(
+                Py::new(py, solids::PyPlaneSurface::new(normal))?.into_any(),
+            ));
+        }
+        Ok(Some(
+            Py::new(py, curves::PySurface::new(type_id))?.into_any(),
+        ))
+    }
+
+    /// The face normal at `(u, v)` (`Face.normalAt`).
+    ///
+    /// The seam exposes no surface evaluator, so the normal is derived from the
+    /// face's own geometry: two non-parallel edge tangents of the outer wire give
+    /// the plane's normal, flipped when the face orientation is reversed. A
+    /// non-planar face reports `Part.OCCError` instead of guessing.
+    fn normalAt(&self, py: Python<'_>, _u: f64, _v: f64) -> PyResult<PyObject> {
+        let shape = self.named_shape()?;
+        let normal = planar_face_normal(&shape).ok_or_else(|| {
+            curves::OCCError::new_err("normal not defined: only planar faces are supported")
+        })?;
+        curves::py_vector(py, normal)
     }
 
     /// The outer boundary of a face (`Face.OuterWire`).
@@ -1516,6 +1573,38 @@ fn scale_matrix(factor: f64, center: ferrocad_curves::Vector3) -> ferrocad_types
     ferrocad_types::Matrix4::from_values(values)
 }
 
+/// Rotation by `angle` degrees about the axis through `center` along `axis`
+/// (Rodrigues' formula), with the translation that keeps `center` fixed.
+fn rotation_matrix(
+    center: ferrocad_curves::Vector3,
+    axis: ferrocad_curves::Vector3,
+    angle: f64,
+) -> ferrocad_types::Matrix4 {
+    let k = axis.normalize();
+    let radians = angle.to_radians();
+    let (sin, cos) = radians.sin_cos();
+    let t = 1.0 - cos;
+    let (kx, ky, kz) = (k.x, k.y, k.z);
+    let mut values = ferrocad_types::Matrix4::identity().m;
+    values[0] = t * kx * kx + cos;
+    values[1] = t * kx * ky - sin * kz;
+    values[2] = t * kx * kz + sin * ky;
+    values[4] = t * kx * ky + sin * kz;
+    values[5] = t * ky * ky + cos;
+    values[6] = t * ky * kz - sin * kx;
+    values[8] = t * kx * kz - sin * ky;
+    values[9] = t * ky * kz + sin * kx;
+    values[10] = t * kz * kz + cos;
+    let matrix = ferrocad_types::Matrix4::from_values(values);
+    let rotated = matrix.transform(&center);
+    let offset = center.sub(&rotated);
+    values = matrix.m;
+    values[3] = offset.x;
+    values[7] = offset.y;
+    values[11] = offset.z;
+    ferrocad_types::Matrix4::from_values(values)
+}
+
 fn mirror_matrix(
     point: ferrocad_curves::Vector3,
     normal: ferrocad_curves::Vector3,
@@ -1599,6 +1688,42 @@ fn edge_references(target: &Shape, edges: &[Shape]) -> Vec<ElementRef> {
                 })
         })
         .collect()
+}
+
+/// The unit normal of a planar face's *surface*, from two non-parallel tangent
+/// directions of its outer wire. The face orientation is deliberately ignored:
+/// that flip belongs to [`planar_face_normal`] (`normalAt`).
+fn planar_surface_normal(shape: &Shape) -> Option<ferrocad_curves::Vector3> {
+    let backend = ferrocad_part::backend();
+    if backend.surface_type(shape).as_deref() != Some("Part::GeomPlane") {
+        return None;
+    }
+    let wire = backend.outer_wire(shape)?;
+    let mut directions = Vec::new();
+    for edge in backend.elements(&wire, ElementKind::Edge) {
+        if let Ok(curve) = backend.curve_of(&edge.shape) {
+            directions.push(curve.tangent_at(0.0));
+        }
+    }
+    for (index, first) in directions.iter().enumerate() {
+        for second in directions.iter().skip(index + 1) {
+            let normal = first.cross(second);
+            if normal.length() > 1e-9 {
+                return Some(normal.normalize());
+            }
+        }
+    }
+    None
+}
+
+/// The face normal at a point: the surface normal, flipped when the face's
+/// orientation is reversed (upstream's `Face.normalAt`).
+fn planar_face_normal(shape: &Shape) -> Option<ferrocad_curves::Vector3> {
+    let mut normal = planar_surface_normal(shape)?;
+    if ferrocad_part::backend().orientation(shape) == Some("Reversed") {
+        normal = normal.neg();
+    }
+    Some(normal)
 }
 
 /// The points of a shape's vertices, in the kernel's order.

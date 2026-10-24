@@ -137,7 +137,7 @@ its load errors are the useful signal.
 
 | Group | Result |
 | --- | --- |
-| Part | **529 passed**, 2 failed, **0 errored**, 12 skipped, **0 files failed to load** |
+| Part | **531 passed**, 0 failed, 0 errored, 12 skipped, **0 files failed to load** |
 | Draft | **10 passed**, 1 failed, 0 errored, 0 skipped, 1 load error |
 
 The 2026-10-20 Part row is the pre-shim baseline: `TestPartApp.py` and
@@ -148,16 +148,12 @@ semantics the loaded tests exercise. The harness puts the group roots ahead of `
 so the **Draft** group still runs upstream `src/Mod/Draft/Draft.py`, not the shim; its
 baseline is unchanged.
 
-The only remaining failure is `testAppPartMakeSweepSurface`, reported twice (the standalone
-module and `TestPartApp`'s re-collection). It is an upstream-branch artifact, not a geometry
-bug: with `ElementMapVersion == ""` the test asserts the *legacy* `GeomFill_Pipe` bounds,
-while our sweep produces the correct pipe (`[-5,-5,0]..[5,5,10]`, 6 sub-elements). Exposing
-an element-map version would take the correct branch, but the other guards assert exact map
-sizes (52/58/26/10/9/24) that are not yet reproduced, so the version stays off. **No errors
-remain**: every module loads and every API the tests touch is implemented, including the
-live `Shape.Placement`, the compound-cut naming cascade (20/47 exactly), and the full
-Part geometry surface (`ShapeFix`, `ChFi2d`, `Sketcher`, NURBS conversion, torus/wedge/
-revolution/helix/thread/tube, and the matching feature objects).
+**No failures remain.** The sweep test now takes its correct-bounds branch because the
+element-map version is enabled for shapes that carry a lineage, and the compound, fuse,
+cut/common, general-fuse and sweep maps match upstream exactly. Six guarded asserts
+still skip honestly: four consumer shapes in `solids.rs` store an empty lineage, and two
+(`FaceMakerCheese` 10, `makeShellFromWires` 24) are composed-alias counts. See
+[`../TODO-24-10-2026.md`](../TODO-24-10-2026.md) §P0.
 
 ### Reading the report
 

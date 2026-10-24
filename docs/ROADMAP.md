@@ -18,24 +18,29 @@ behaviour is a Python callback — and the remaining Qt/Draft surface on top of 
 
 | Horizon | Goal | Exit criteria | Backlog |
 | --- | --- | --- | --- |
-| **H1 — Finish Part/OCCT** | Complete the Part contract honestly | Element-map version exposed; every guarded map size reproduced; no “not implemented” left in the seam for advertised API | P0, P1 |
+| **H1 — Finish Part/OCCT** | Complete the Part contract honestly | Zero Part failures (achieved); every reachable guarded map size enabled; no “not implemented” left in the seam for advertised API | P0 remainder, P1 remainder |
 | **H2 — Workbench platform** | Make Part a platform Draft/BIM/SimpleCAD can build on | `Part::FeaturePython` executes and persists; Draft M2–M5 run headless; Q4/Q5 done | P2, P3 |
 | **H3 — Proof by use** | Prove the platform end to end | SimpleCAD S1–S5 baseline; a published `Parametric` edition; a headless BIM subset | P4, P5 |
 
-### H1 — Finish Part/OCCT (now)
+### H1 — Finish Part/OCCT (mostly done, 2026-10-24)
 
-- **The element-map version.** The reverse maps are real and persisted, and the compound
-  cuts reproduce upstream's 20/47. What remains is the format contract: the other guards
-  assert 52/58/26/10/9/24, and the version stays private until they match. That work
-  also closes the last Part failure (the sweep test's legacy-bounds branch).
-- **The seam remainder.** Partial revolutions and spheres, variable-radius fillets,
-  `makeOffset2D` filling, `DirMode Edge/Normal`, hyperbola/parabola/Bezier curves, and
-  multi-shell solids with cavities. Each currently raises a named error.
-- **The three approximations.** Exact helices, thread through-sections and B-spline tube
-  spines — documented as approximations, to be replaced with exact geometry.
+- **The element-map version.** Enabled for every shape that carries a lineage. The
+  compound (52), fuse (58), cut/common (26), general-fuse (60), sweep (6) and
+  compound-cut (20/47) sizes match upstream, and the Part suite has **zero failures**.
+  Six asserts still skip: four consumer shapes in `solids.rs` store an empty lineage
+  (their element counts already match), and two counts (`FaceMakerCheese` 10,
+  `makeShellFromWires` 24) are composed aliases rather than element names.
+- **The seam remainder.** Landed: partial spheres/revolutions, variable-radius fillets,
+  `makeOffset2D` filling, hyperbola/parabola/Bezier, multi-shell solids with cavities,
+  and an exact helix edge plus `MakePipeShell` for threads and multi-section sweeps.
+  Open: `DirMode Edge/Normal`, B-spline tube spines, wiring `Part.makeHelix` to the
+  exact edge, and upstream's two-profile thread solid.
+- **The approximations.** The exact helix exists in the kernel; the remaining work is
+  wiring the Python entry point and the thread profile.
 
-**Done when** the Part suite has zero failures, and `Part` advertises no capability it
-cannot deliver.
+**Done when** the six skipped guards have a deliberate answer (lineage or documented
+alias policy) and the four open seam items above are closed. The Part suite already
+reports zero failures.
 
 ### H2 — Workbench platform (next)
 

@@ -25,12 +25,12 @@ is archived in
 
 | Surface | Then | Now |
 | --- | --- | --- |
-| Upstream Part suite | 2 passed, 1 failed, 89 errored, 4 files failed to load | **529 passed, 2 failed, 0 errored, 0 load failures** |
+| Upstream Part suite | 2 passed, 1 failed, 89 errored, 4 files failed to load | **531 passed, 0 failed, 0 errored, 0 load failures** |
 | Upstream Draft suite | no group | 10 passed, 1 failed, 1 load error (upstream Draft, not a shim) |
 | Python facade | 377 passed | **444 passed, 17 skipped** (134 subtests) |
 | Part module | `makeBox` and a shape handle | primitives, booleans, dress-ups, links and arrays, conics, splines, NURBS conversion, `ShapeFix`, `ChFi2d`, `Sketcher`, feature objects |
 | Document format | one JSON blob | native `.ferrocad` + real `.FCStd` ZIP, with an additive lineage sidecar |
-| Naming | positional strings | lineage layer with stored maps; the compound cuts reproduce upstream's **20/47** reverse map |
+| Naming | positional strings | lineage layer with stored maps; upstream's **20/47** compound maps, and the version enabled for reachable shapes |
 
 ### Three lessons
 
@@ -46,9 +46,10 @@ is archived in
 
 ### Two asymmetries that define the next round
 
-1. **The format contract is unfinished.** The maps are real and persisted, but their
-   version is not exposed because the other guarded sizes (52/58/26/10/9/24) are not
-   reproduced.
+1. **Six guarded map asserts still skip.** Four consumer shapes (`makeShell`,
+   `makeSolid`, `makeLoft`, `makeFilledFace`) do not yet attach a lineage although their
+   element counts already match, and two counts (`FaceMakerCheese` 10,
+   `makeShellFromWires` 24) are composed aliases rather than element names.
 2. **The Python feature-proxy layer does not exist.** Part works as a library; Draft and
    SimpleCAD need objects whose `execute` is a Python callback. That is the gate between
    the two halves of the project.

@@ -127,6 +127,9 @@ exception is `user/explanation/`, which is authored: it has no runnable subject.
 - `python3 tools/userdocs.py --check` — every user page matches a fresh run of its
   workflow.
 - `python3 tools/api_docs.py --check` — every API page matches the live modules.
+- `python3 tools/part_api_audit.py --check` — the Part/OCCT surface, the registered object
+  types and the honest gap markers still match the pinned contract (self-skips without
+  the upstream checkout).
 - `python3 tools/build_book.py --check` — the mdBook tree assembles, every page is
   in `SUMMARY.md`, and every link resolves (external ones are rewritten to GitHub).
 - A relative-link sweep over `docs/**/*.md` — cheap to run, and it is what catches a

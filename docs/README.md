@@ -182,6 +182,9 @@ rather than restating it.
 - [workbenches/conformance.md](workbenches/conformance.md) — running the upstream
   FreeCAD test suite against the facade: the sparse checkout, the extension build, the
   commands and the baseline.
+- [workbenches/part-api-audit.md](workbenches/part-api-audit.md) — the repeatable
+  Part/OCCT surface audit: what we register, what upstream exposes, the gap markers, and
+  the `--check` contract used in CI.
 - [workbenches/qt-strategy.md](workbenches/qt-strategy.md) — running upstream workbench
   GUIs without Qt: the measured Qt surface, the `.ui` loader and micro-shim (option D),
   and the Q0–Q5 plan.

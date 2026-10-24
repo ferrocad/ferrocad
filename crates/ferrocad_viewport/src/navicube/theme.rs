@@ -5,10 +5,16 @@
 //! tags each piece with a [`NavicubeRole`], and a [`NavicubeTheme`] supplies the colour
 //! (see `docs/interaction/navicube-spec.md` §5 and `docs/viewport/directives.md` §5). The default theme
 //! reproduces the built palette.
+//!
+//! The raw palette itself lives in [`ferrocad_theme::navicube`] and is re-exported here,
+//! so `theme::EDGE_COLOR` and friends keep resolving while the role logic stays with the
+//! cube.
 
 use ferrocad_types::Vector3;
 
 use super::model::{Piece, PieceKind};
+
+pub use ferrocad_theme::navicube::*;
 
 /// The semantic role a piece takes this frame — the input to a [`NavicubeTheme`].
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -55,61 +61,6 @@ impl Piece {
         }
     }
 }
-
-/// The cube's resting **glass facet** colour: a faint dark tint that gives the facet
-/// volume without hiding the model behind it.
-pub const BASE_COLOR: [f32; 4] = [0.18, 0.23, 0.30, 0.16];
-/// The soft cyan a hovered bevel or corner takes.
-pub const HILITE_COLOR: [f32; 4] = [0.28, 0.90, 1.0, 0.60];
-/// A bevel adjacent to a hovered corner: a softer cyan than the hovered piece itself.
-pub const NEIGHBOUR_COLOR: [f32; 4] = [0.28, 0.65, 0.95, 0.20];
-/// The still fainter tint of an away-facing face.
-pub const INACTIVE_COLOR: [f32; 4] = [0.14, 0.18, 0.24, 0.06];
-/// A resting bevel quad: the bright machined chamfer between two face octagons.
-pub const BEVEL_COLOR: [f32; 4] = [0.86, 0.92, 1.0, 0.45];
-/// A bevel quad once the pointer is in the gizmo.
-pub const BEVEL_PROXIMITY: [f32; 4] = [0.93, 0.96, 1.0, 0.60];
-/// A bevel behind the cube: dimmed so the front wireframe dominates.
-pub const BEVEL_AWAY: [f32; 4] = [0.48, 0.53, 0.60, 0.10];
-
-/// A resting 1px outline. Front and back are deliberately far apart in alpha so the
-/// wireframe cannot flip into a Necker cube; the line pipeline is 1px, so depth is
-/// carried by opacity rather than stroke weight.
-pub const EDGE_COLOR: [f32; 4] = [0.84, 0.88, 0.94, 0.62];
-/// The outline once the pointer is in the gizmo (proximity, not a hovered piece).
-pub const EDGE_PROXIMITY: [f32; 4] = [0.90, 0.94, 1.0, 0.9];
-/// The outline of the hovered piece.
-pub const EDGE_HILITE: [f32; 4] = [0.4, 0.84, 1.0, 1.0];
-/// The outline of a bevel adjacent to a hovered corner.
-pub const EDGE_NEIGHBOUR: [f32; 4] = [0.4, 0.84, 1.0, 0.80];
-/// The outline of an away-facing face: a ghost line, not a second front edge.
-pub const EDGE_AWAY: [f32; 4] = [0.55, 0.60, 0.68, 0.10];
-/// A resting face label: bright, high-contrast ink for the filled glyphs and the compass
-/// letters.
-pub const LABEL_COLOR: [f32; 4] = [0.92, 0.95, 1.0, 0.80];
-/// A label once the pointer is in the gizmo.
-pub const LABEL_PROXIMITY: [f32; 4] = [0.98, 0.99, 1.0, 0.95];
-/// The label of the hovered piece.
-pub const LABEL_HILITE: [f32; 4] = [1.0, 1.0, 1.0, 1.0];
-/// The soft cyan ribbon behind a hovered edge. The renderer has no bloom pass and no wide
-/// lines, so "glow" is a translucent screen-space quad around the edge.
-pub const GLOW_COLOR: [f32; 4] = [0.4, 0.84, 1.0, 0.22];
-/// The compass ring at rest. It lies on the ground plane, so it must read as a turntable
-/// rather than disappear into the viewport.
-pub const RING_COLOR: [f32; 4] = [0.62, 0.68, 0.76, 0.70];
-/// The ring once the pointer is in the gizmo.
-pub const RING_PROXIMITY: [f32; 4] = [0.75, 0.81, 0.88, 0.90];
-/// The ring while hovered or scrubbed.
-pub const RING_HILITE: [f32; 4] = [0.4, 0.84, 1.0, 0.95];
-/// The dark floor disc under the cube: it grounds the glass body against the viewport.
-/// Values are **linear**, so this is much darker than its nominal `#141820` sRGB look.
-pub const TURNTABLE_COLOR: [f32; 4] = [0.008, 0.010, 0.016, 0.72];
-/// The thick rim band between the turntable's inner and outer loops.
-pub const RING_FILL: [f32; 4] = [0.59, 0.725, 0.824, 0.35];
-/// The rim band once the pointer is in the gizmo.
-pub const RING_FILL_PROXIMITY: [f32; 4] = [0.68, 0.80, 0.89, 0.45];
-/// The rim band while hovered or scrubbed.
-pub const RING_FILL_HILITE: [f32; 4] = [0.4, 0.84, 1.0, 0.55];
 
 /// The role→appearance mapping. The Rust core owns styling, so a producer resolves a
 /// [`NavicubeRole`] through a theme rather than choosing colours itself.

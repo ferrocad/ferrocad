@@ -14,6 +14,8 @@ documentation = "https://docs.rs/ferrocad_gpui"
 
 [dependencies]
 ferrocad_widgets.workspace = true
+# The token table: the shell re-exports the packed sRGB half for its modules.
+ferrocad_theme.workspace = true
 # Q3a: the typed Qt Designer form tree that `forms` renders.
 ferrocad_ui = { path = "../ferrocad_ui" }
 ferrocad_inventor.workspace = true

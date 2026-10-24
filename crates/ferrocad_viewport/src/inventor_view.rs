@@ -36,17 +36,31 @@ use ferrocad_stage::{
     axis, feedback, grid, snap_to_geometry_with,
 };
 use ferrocad_stage::screen::{project_device, scale_for};
+use ferrocad_theme::ui::{CHROME_ACTIVE, CHROME_ACTIVE_BG, CHROME_LINE, FG, MUTED};
 use ferrocad_types::{Matrix4, Placement, Rotation, Vector3};
 use gpui::{
     AnyElement, AppContext, Bounds, Context, DragMoveEvent, EventEmitter, FocusHandle, IntoElement,
     KeyDownEvent, MouseButton, MouseDownEvent, MouseExitEvent, MouseMoveEvent, MouseUpEvent,
     ObjectFit, Pixels, Point, Render, RenderImage, ScrollDelta, ScrollWheelEvent, Window, div,
-    gpu_canvas, img, prelude::*, px, rgb, rgba,
+    gpu_canvas, img, point, prelude::*, px, rgb, rgba,
 };
 use image::{Frame, ImageBuffer, Rgba};
 
 use crate::navicube::{CHROME_WIDTH, Corner, NaviCube, NavicubeLabel, YawDirection, SnapAnimation};
 use crate::presenter::{Presenter, PresenterStatus};
+
+/// Where a click landed in the world.
+///
+/// A host anchors a gizmo here rather than at an abstract body centre: the control
+/// belongs to the point of contact (the click on a face, edge or vertex), so dragging
+/// it and reading its deltas stay local to what the user pointed at.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct SelectionAnchor {
+    /// The world-space intersection point.
+    pub point: Vector3,
+    /// The world-space surface normal at the hit (zero when the producer has none).
+    pub normal: Vector3,
+}
 
 /// A selection update the viewport reports after a click.
 ///
@@ -54,10 +68,15 @@ use crate::presenter::{Presenter, PresenterStatus};
 /// [`SelectionRef::object`] is the picked [`PickId`] and its `elements` are the kernel
 /// names the mesh carries (`Face6`). The host maps the id to a document object; a
 /// viewport never depends on the document or on a kernel.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq)]
 pub enum SelectionEvent {
     /// The click hit an object, whole or through one of its named sub-elements.
-    Picked(SelectionRef),
+    Picked {
+        reference: SelectionRef,
+        /// The world point of the click, for anchoring the gizmo. `None` when the
+        /// selection did not come from a viewport pick (a tree or command selection).
+        anchor: Option<SelectionAnchor>,
+    },
     /// The click hit nothing identifiable, so the selection should clear.
     Cleared,
 }
@@ -76,6 +95,39 @@ pub struct HoverReport {
     pub through: Option<&'static str>,
 }
 
+/// A live gizmo drag, reported to a host that previews the whole selection itself.
+#[derive(Clone, Debug, PartialEq)]
+pub struct TransformPreview {
+    /// The targeted entity.
+    pub target_id: u32,
+    /// Where the drag is in its lifecycle.
+    pub phase: PreviewPhase,
+    /// The transform accumulated since the drag began.
+    pub total_transform: Matrix4,
+}
+
+/// The lifecycle of a [`TransformPreview`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PreviewPhase {
+    /// The handle was grabbed; the host captures its current values as a baseline.
+    Begin,
+    /// The pointer moved; `total_transform` is relative to the drag's start.
+    Update,
+    /// The button was released. Nothing was committed; the host owns the decision.
+    End,
+}
+
+/// The overlay anchors captured when a live preview began.
+///
+/// A preview is absolute (the host reports the distance from the object's document
+/// pose), so each tick must offset from the **same** captured pose rather than from
+/// the previous tick.
+#[derive(Clone, Debug, Default)]
+struct PreviewHome {
+    gizmo: Option<Vector3>,
+    manipulators: Vec<Option<Vector3>>,
+}
+
 /// A state change the viewport reports to its host on gpui's event channel.
 ///
 /// The viewport itself never applies a selection or writes a document; it reports what
@@ -90,6 +142,9 @@ pub enum ViewportEvent {
     /// A gizmo drag ended. The host converts it with
     /// [`GizmoCommitEvent::to_interaction`] and routes it like any other commit.
     Transform(GizmoCommitEvent),
+    /// A gizmo drag tick while the host has deferred the commit. The host mirrors the
+    /// delta into its editable values and previews the whole selection itself.
+    TransformPreview(TransformPreview),
     /// The active tool's status changed: it started, gained a point, finished, or was
     /// cancelled. `status.active` is false once the session ended, so the host hides
     /// its tool strip.
@@ -146,6 +201,14 @@ pub struct InventorViewport<V: InventorView> {
     gizmo_value: Option<GizmoValue>,
     /// The logical pointer position of the latest gizmo drag tick (the ring tag anchor).
     gizmo_pointer: Option<[f32; 2]>,
+    /// While set, a gizmo drag reports [`ViewportEvent::TransformPreview`] and never
+    /// commits on release: the host previews the whole selection and commits when its
+    /// own editor accepts. Set by the host while a translation HUD is open.
+    gizmo_deferred: bool,
+    /// A drag tick waiting for the next gpui handler to emit it.
+    transform_preview: Option<TransformPreview>,
+    /// The overlay anchors a live preview offsets from (see [`Self::preview_translation`]).
+    preview_home: Option<PreviewHome>,
     queue: RenderQueue,
     /// The semantic directives the last compile produced (active `SoEventCallback` ids,
     /// navicube overlays). Invisible to the renderer; the viewport consumes them.
@@ -180,6 +243,9 @@ pub struct InventorViewport<V: InventorView> {
     selection: Option<SelectionEvent>,
     /// A neutral summary of what a click would do under the pointer (A4).
     hover_report: HoverReport,
+    /// The world point of the hovered pick, for a host that anchors a contextual
+    /// action (the `Space` wheel, a gizmo) where the user is pointing.
+    hover_anchor: Option<SelectionAnchor>,
     /// The reference grid's geometry (G2). Always allocated: `grid_enabled` decides
     /// whether the ground field is drawn and `axis.enabled` whether the triads are.
     grid: GridMesh,
@@ -784,6 +850,9 @@ impl<V: InventorView> InventorViewport<V> {
             focus: None,
             gizmo_value: None,
             gizmo_pointer: None,
+            gizmo_deferred: false,
+            transform_preview: None,
+            preview_home: None,
             queue,
             directives,
             listeners: Vec::new(),
@@ -800,6 +869,7 @@ impl<V: InventorView> InventorViewport<V> {
             hovered_part: None,
             selection: None,
             hover_report: HoverReport::default(),
+            hover_anchor: None,
             grid: GridMesh::new(),
             grid_enabled: false,
             axis: AxisStyle::default(),
@@ -952,7 +1022,30 @@ impl<V: InventorView> InventorViewport<V> {
         self.gizmo_commit = None;
         self.gizmo_value = None;
         self.gizmo_pointer = None;
+        self.preview_home = None;
         self.rebuild_gizmo_queue();
+    }
+
+    /// The active gizmo's origin in **window-space** logical pixels.
+    ///
+    /// A host uses this to float a HUD beside the handles without duplicating the
+    /// camera projection. `None` when no gizmo is shown or its origin is behind the
+    /// camera.
+    pub fn gizmo_anchor(&self) -> Option<Point<Pixels>> {
+        let device = self.gizmo.as_ref()?.origin_anchor(&self.camera)?;
+        let logical = self
+            .camera
+            .viewport
+            .to_logical([device[0].round() as i32, device[1].round() as i32]);
+        let origin = self
+            .last_bounds
+            .as_ref()
+            .map(|bounds| point(bounds.origin.x, bounds.origin.y))
+            .unwrap_or_else(|| point(px(0.0), px(0.0)));
+        Some(point(
+            px(origin.x.0 + logical[0]),
+            px(origin.y.0 + logical[1]),
+        ))
     }
 
     /// The active gizmo, if any.
@@ -999,6 +1092,55 @@ impl<V: InventorView> InventorViewport<V> {
         changed
     }
 
+    /// Defer a gizmo drag's commit to the host.
+    ///
+    /// While set, a drag reports [`ViewportEvent::TransformPreview`] for each tick and
+    /// on release instead of setting [`ViewportEvent::Transform`]. A host uses this
+    /// while an editable HUD is open: it mirrors the delta into its values and previews
+    /// the **whole** selection itself, then commits once when the user accepts.
+    pub fn set_gizmo_preview(&mut self, deferred: bool) {
+        self.gizmo_deferred = deferred;
+        if !deferred {
+            self.transform_preview = None;
+        }
+    }
+
+    /// Whether a gizmo drag is currently deferred to the host.
+    pub fn gizmo_preview(&self) -> bool {
+        self.gizmo_deferred
+    }
+
+    /// Take the queued drag tick (a gpui handler emits it as a
+    /// [`ViewportEvent::TransformPreview`]).
+    pub fn take_transform_preview(&mut self) -> Option<TransformPreview> {
+        self.transform_preview.take()
+    }
+
+    /// Emit a queued drag tick. The gpui pointer handlers call this after every update.
+    fn flush_transform_preview(&mut self, cx: &mut Context<Self>)
+    where
+        V: 'static,
+    {
+        if let Some(preview) = self.take_transform_preview() {
+            cx.emit(ViewportEvent::TransformPreview(preview));
+        }
+    }
+
+    /// Queue a drag tick for the host, when deferral is on.
+    fn queue_transform_preview(&mut self, phase: PreviewPhase, total_transform: Matrix4) {
+        if !self.gizmo_deferred {
+            return;
+        }
+        let Some(target_id) = self.gizmo.as_ref().map(TransformGizmo::target_id) else {
+            return;
+        };
+        self.transform_preview = Some(TransformPreview {
+            target_id,
+            phase,
+            total_transform,
+        });
+    }
+
     /// Replace the workspace gizmo style and forward it to every hosted gizmo and
     /// manipulator. A style change (including toggling `enabled`) rebuilds both
     /// overlays, so a disabled style draws and picks nothing while keeping the objects
@@ -1036,6 +1178,7 @@ impl<V: InventorView> InventorViewport<V> {
             self.gizmo_commit = None;
             self.gizmo_value = None;
             self.gizmo_pointer = None;
+            self.transform_preview = None;
             self.rebuild_gizmo_queue();
         }
         cancelled
@@ -1095,6 +1238,7 @@ impl<V: InventorView> InventorViewport<V> {
         self.remove_manipulator(manipulator.id());
         self.manipulators.push(manipulator);
         self.interaction_commit = None;
+        self.preview_home = None;
         self.rebuild_manipulator_queue();
     }
 
@@ -1105,6 +1249,7 @@ impl<V: InventorView> InventorViewport<V> {
         }
         self.manipulators = manipulators;
         self.interaction_commit = None;
+        self.preview_home = None;
         self.rebuild_manipulator_queue();
     }
 
@@ -1115,6 +1260,7 @@ impl<V: InventorView> InventorViewport<V> {
             .retain(|manipulator| manipulator.id() != id);
         if self.manipulators.len() != before {
             self.interaction_commit = None;
+            self.preview_home = None;
             self.rebuild_manipulator_queue();
         }
     }
@@ -1391,6 +1537,15 @@ impl<V: InventorView> InventorViewport<V> {
         &self.hover_report
     }
 
+    /// The world point of the pick under the pointer, when one is hovered.
+    ///
+    /// The companion to [`hover_report`](Self::hover_report): a host that turns a
+    /// keyboard gesture into a spatial one anchors it here, matching what a click
+    /// would have used.
+    pub fn hover_anchor(&self) -> Option<SelectionAnchor> {
+        self.hover_anchor
+    }
+
     /// Resolve a hit's `(entity, part)` into a [`SelectionRef`].
     ///
     /// The part id indexes the stage item's name table, so a click on `Face6` reports
@@ -1492,6 +1647,17 @@ impl<V: InventorView> InventorViewport<V> {
         self.handle_pointer_with_modifiers(logical, GizmoModifiers::default())
     }
 
+    /// [`handle_pointer`](Self::handle_pointer) from a **window-space** position.
+    ///
+    /// The render listeners convert every move through
+    /// [`to_local`](Self::to_local); a host uses this before a contextual action (for
+    /// example a right-press) so the pick reflects that exact position even when no
+    /// move preceded it. It runs the full hover pipeline, so the pick is the same one
+    /// a click uses — including the presenter's G-buffer when the backend supports it.
+    pub fn handle_pointer_at(&mut self, position: Point<Pixels>) -> bool {
+        self.handle_pointer_with_modifiers(self.to_local(position), GizmoModifiers::default())
+    }
+
     /// [`handle_pointer`](Self::handle_pointer) with the current keyboard modifiers. The
     /// modifiers drive an active gizmo drag (`Ctrl` frees the ring detents).
     pub fn handle_pointer_with_modifiers(
@@ -1503,6 +1669,7 @@ impl<V: InventorView> InventorViewport<V> {
         // Kept even during a drag or over the chrome: the origin node's proximity bloom
         // reads it, and stale coordinates would bloom the wrong node.
         self.pointer = Some(device);
+        self.hover_anchor = None;
         // An active drag is owned by `drag_move`: hovering here would rebuild the cube per
         // event and can clear the ring's active state mid-scrub.
         if self.ring_drag.is_some() || self.navicube_drag.is_some() || self.orbit_drag.is_some() {
@@ -1615,6 +1782,7 @@ impl<V: InventorView> InventorViewport<V> {
             };
             if let Some(event) = event {
                 self.apply_gizmo_preview(Some(event.total_transform));
+                self.queue_transform_preview(PreviewPhase::Update, event.total_transform);
                 self.gizmo_value = Some(event.value);
                 self.gizmo_pointer = Some(logical);
                 self.hover_report = HoverReport::default();
@@ -1650,6 +1818,11 @@ impl<V: InventorView> InventorViewport<V> {
             } else {
                 None
             },
+        };
+        self.hover_anchor = if consumed {
+            None
+        } else {
+            hit.as_ref().map(Self::anchor_of)
         };
         changed |= self.dispatch_tool(PointerKind::Move, device, None, hit.as_ref());
         changed | self.dispatch_hover(device, hit.as_ref())
@@ -1819,6 +1992,7 @@ impl<V: InventorView> InventorViewport<V> {
                         None => false,
                     };
                     if started {
+                        self.queue_transform_preview(PreviewPhase::Begin, Matrix4::identity());
                         self.rebuild_gizmo_queue();
                         return true;
                     }
@@ -1829,10 +2003,16 @@ impl<V: InventorView> InventorViewport<V> {
                     None => None,
                 };
                 if let Some(commit) = commit {
-                    self.gizmo_commit = Some(commit);
-                    // The host applies the committed transform to the document; clear the
-                    // preview it was showing.
-                    self.apply_gizmo_preview(None);
+                    if self.gizmo_deferred {
+                        // The host owns the commit: leave its preview in place and let
+                        // it decide when (or whether) to apply the delta.
+                        self.queue_transform_preview(PreviewPhase::End, commit.total_transform);
+                    } else {
+                        self.gizmo_commit = Some(commit);
+                        // The host applies the committed transform to the document; clear
+                        // the preview it was showing.
+                        self.apply_gizmo_preview(None);
+                    }
                     self.rebuild_gizmo_queue();
                     return true;
                 }
@@ -1867,18 +2047,40 @@ impl<V: InventorView> InventorViewport<V> {
         // ring scrub, an orbit drag and an active tool all returned or are excluded
         // above, so their gestures never also select.
         if !down && button == 1 && self.tool.is_none() && orbit_clicked {
-            self.selection = Some(
-                match hit
-                    .as_ref()
-                    .and_then(|hit| self.selection_ref(hit.id.0, hit.part))
-                {
-                    Some(reference) => SelectionEvent::Picked(reference),
-                    None => SelectionEvent::Cleared,
-                },
-            );
+            self.selection = Some(self.selection_event(hit.as_ref()));
             changed = true;
         }
         changed
+    }
+
+    /// Turn a pick into the host-facing selection event.
+    ///
+    /// The hit's world point and normal travel with the reference so the host can
+    /// anchor a gizmo at the point of contact instead of the body's centre.
+    fn selection_event(&self, hit: Option<&Hit>) -> SelectionEvent {
+        let Some(reference) = hit.and_then(|hit| self.selection_ref(hit.id.0, hit.part)) else {
+            return SelectionEvent::Cleared;
+        };
+        SelectionEvent::Picked {
+            reference,
+            anchor: hit.map(Self::anchor_of),
+        }
+    }
+
+    /// The world point and normal of a hit.
+    fn anchor_of(hit: &Hit) -> SelectionAnchor {
+        SelectionAnchor {
+            point: Vector3::new(
+                f64::from(hit.point[0]),
+                f64::from(hit.point[1]),
+                f64::from(hit.point[2]),
+            ),
+            normal: Vector3::new(
+                f64::from(hit.normal[0]),
+                f64::from(hit.normal[1]),
+                f64::from(hit.normal[2]),
+            ),
+        }
     }
 
     /// Zoom the main camera by `lines` wheel notches (positive = towards the scene).
@@ -2195,10 +2397,124 @@ impl<V: InventorView> InventorViewport<V> {
             .or_else(|| self.manipulator_readout().map(|(text, _)| text))
     }
 
+    /// Preview a world-space translation on the given entity ids without touching
+    /// the document.
+    ///
+    /// This is the typed twin of a gizmo drag: it composes a temporary transform after
+    /// each item's placement, so nothing is re-uploaded and nothing enters the undo
+    /// stack. An empty `entities` clears the preview. Returns whether the stage
+    /// changed (the caller still decides when to repaint).
+    pub fn preview_translation(&mut self, entities: &[u32], delta: [f64; 3]) -> bool {
+        let active = !entities.is_empty();
+        let mut changed = if active {
+            let target = Vector3::new(delta[0], delta[1], delta[2]);
+            // The gizmo is the control while it is being dragged; otherwise it travels
+            // with the previewed object. Grips always follow.
+            let include_gizmo = !self.gizmo.as_ref().is_some_and(|gizmo| gizmo.is_dragging());
+            self.apply_preview_overlays(target, include_gizmo)
+        } else {
+            self.restore_preview_overlays()
+        };
+        let transform = active.then(|| Matrix4::translation(delta[0], delta[1], delta[2]));
+        let mut touched = false;
+        for item in self.stage.items_mut() {
+            if entities.contains(&item.entity_id()) {
+                item.set_temporary_transform(transform);
+                touched = true;
+            } else if transform.is_none() {
+                // Clearing the preview also drops a temporary transform another path
+                // left behind, so a cancelled HUD cannot strand a ghost.
+                item.set_temporary_transform(None);
+            }
+        }
+        if touched || transform.is_none() {
+            self.stage_dirty = true;
+            changed = true;
+        }
+        if changed {
+            // A draw-only gizmo offset changes the emitted packets without marking the
+            // gizmo geometry dirty, so rebuild the overlay queue explicitly.
+            self.rebuild_gizmo_queue();
+            self.rebuild_manipulator_queue();
+        }
+        changed
+    }
+
+    /// Offset the overlays from the pose captured when the preview began.
+    ///
+    /// Absolute per tick (`home + delta`), so a typed value and a drag cannot
+    /// accumulate. The gizmo is skipped while it is the control being dragged; the
+    /// manipulators (a height grip on the top face) always follow the object.
+    fn apply_preview_overlays(&mut self, delta: Vector3, include_gizmo: bool) -> bool {
+        if self.preview_home.is_none() {
+            self.preview_home = Some(PreviewHome {
+                gizmo: self.gizmo.as_ref().map(TransformGizmo::origin),
+                manipulators: self
+                    .manipulators
+                    .iter()
+                    .map(|manipulator| manipulator.anchor())
+                    .collect(),
+            });
+        }
+        let Some(home) = self.preview_home.as_ref() else {
+            return false;
+        };
+        let mut changed = false;
+        if include_gizmo {
+            if let (Some(origin), Some(gizmo)) = (home.gizmo, self.gizmo.as_mut()) {
+                // Not dragging: the real frame follows, so hit-testing agrees with the draw.
+                gizmo.set_display_offset(None);
+                gizmo.set_origin(origin.add(&delta));
+                changed = true;
+            }
+        } else if home.gizmo.is_some() {
+            if let Some(gizmo) = self.gizmo.as_mut() {
+                // The gizmo is the control: freeze its interaction frame and move only
+                // the drawing, so the triad stays glued to the surface without feeding
+                // back into the drag math.
+                gizmo.set_display_offset(Some(delta));
+                changed = true;
+            }
+        }
+        for (manipulator, anchor) in self.manipulators.iter_mut().zip(home.manipulators.iter()) {
+            if let Some(anchor) = anchor {
+                changed |= manipulator.set_anchor(anchor.add(&delta));
+            }
+        }
+        changed
+    }
+
+    /// Restore the overlays to their pre-preview pose and forget the snapshot.
+    fn restore_preview_overlays(&mut self) -> bool {
+        let Some(home) = self.preview_home.take() else {
+            return false;
+        };
+        let mut changed = false;
+        if let (Some(origin), Some(gizmo)) = (home.gizmo, self.gizmo.as_mut()) {
+            gizmo.set_display_offset(None);
+            gizmo.set_origin(origin);
+            changed = true;
+        }
+        for (manipulator, anchor) in self.manipulators.iter_mut().zip(home.manipulators.iter()) {
+            if let Some(anchor) = anchor {
+                changed |= manipulator.set_anchor(*anchor);
+            }
+        }
+        changed
+    }
+
     /// Preview `transform` on the gizmo's target stage item (or clear the preview).
     fn apply_gizmo_preview(&mut self, transform: Option<Matrix4>) {
         let Some(target) = self.gizmo.as_ref().map(TransformGizmo::target_id) else {
             return;
+        };
+        let mut changed = match &transform {
+            Some(transform) => {
+                let delta = Vector3::new(transform.m[3], transform.m[7], transform.m[11]);
+                // The gizmo is the control here: only the grips follow the object.
+                self.apply_preview_overlays(delta, false)
+            }
+            None => self.restore_preview_overlays(),
         };
         let mut touched = false;
         for item in self.stage.items_mut() {
@@ -2209,6 +2525,11 @@ impl<V: InventorView> InventorViewport<V> {
         }
         if touched {
             self.stage_dirty = true;
+            changed = true;
+        }
+        if changed {
+            self.rebuild_gizmo_queue();
+            self.rebuild_manipulator_queue();
         }
     }
 
@@ -2257,6 +2578,7 @@ impl<V: InventorView> InventorViewport<V> {
                 .and_then(|gizmo| gizmo.drag_to_with_modifiers(&self.camera, device, modifiers));
             if let Some(event) = event {
                 self.apply_gizmo_preview(Some(event.total_transform));
+                self.queue_transform_preview(PreviewPhase::Update, event.total_transform);
                 self.gizmo_value = Some(event.value);
                 self.gizmo_pointer = Some(logical);
                 return true;
@@ -3498,6 +3820,7 @@ impl<V: InventorView + 'static> Render for InventorViewport<V> {
                     changed |= this.drag_move_with_modifiers(local, modifiers);
                 }
                 changed |= this.handle_pointer_with_modifiers(local, modifiers);
+                this.flush_transform_preview(cx);
                 if let Some(status) = this.take_tool_state() {
                     cx.emit(ViewportEvent::ToolState(status));
                 }
@@ -3517,6 +3840,7 @@ impl<V: InventorView + 'static> Render for InventorViewport<V> {
                     true,
                     modifiers,
                 );
+                this.flush_transform_preview(cx);
                 if let Some(status) = this.take_tool_state() {
                     cx.emit(ViewportEvent::ToolState(status));
                 }
@@ -3539,6 +3863,7 @@ impl<V: InventorView + 'static> Render for InventorViewport<V> {
                 let commit = this.take_interaction_commit();
                 let transform = this.take_gizmo_commit();
                 let tool_state = this.take_tool_state();
+                this.flush_transform_preview(cx);
                 if changed {
                     cx.notify();
                 }
@@ -3561,9 +3886,10 @@ impl<V: InventorView + 'static> Render for InventorViewport<V> {
             .on_drag_move::<ViewportDragMarker>(cx.listener(
                 |this, event: &DragMoveEvent<ViewportDragMarker>, _window, cx| {
                     let position = this.to_local(event.event.position);
-                    if this
-                        .drag_move_with_modifiers(position, gizmo_modifiers(event.event.modifiers))
-                    {
+                    let changed = this
+                        .drag_move_with_modifiers(position, gizmo_modifiers(event.event.modifiers));
+                    this.flush_transform_preview(cx);
+                    if changed {
                         cx.notify();
                     }
                 },
@@ -3694,12 +4020,8 @@ const CHROME_HEIGHT: f32 = 26.0;
 /// The gap between the cube's overlay rect and the pill, toward the viewport centre.
 /// Tucked to zero so the pill and the cube read as one column.
 const CHROME_GAP: f32 = 0.0;
-const CHROME_BORDER: u32 = 0xffffff14;
+/// The chrome pill's glass tint: the shell `BG` at 60%.
 const CHROME_BG: u32 = 0x0f121899;
-const CHROME_MUTED: u32 = 0x8b919a;
-const CHROME_TEXT: u32 = 0xd8dbe0;
-const CHROME_ACTIVE: u32 = 0x67d7ff;
-const CHROME_ACTIVE_BG: u32 = 0x1b2b3855;
 const CHROME_FONT: f32 = 11.0;
 
 /// The chrome bar's logical rect `[left, top, right, bottom]` under `cube`.
@@ -3765,10 +4087,10 @@ fn projection_button<V: InventorView + 'static>(
         .px(px(5.))
         .rounded_sm()
         .text_size(px(CHROME_FONT))
-        .text_color(rgb(if active { CHROME_ACTIVE } else { CHROME_MUTED }))
+        .text_color(rgb(if active { CHROME_ACTIVE } else { MUTED }))
         .when(active, |el| el.bg(rgba(CHROME_ACTIVE_BG)))
         .cursor_pointer()
-        .hover(|style| style.text_color(rgb(CHROME_TEXT)))
+        .hover(|style| style.text_color(rgb(FG)))
         .child(label)
         .on_click(cx.listener(move |this, _ev, _win, cx| {
             if this.set_orthographic(orthographic) {
@@ -3820,9 +4142,9 @@ fn yaw_button<V: InventorView + 'static>(
         .px(px(4.))
         .rounded_sm()
         .text_size(px(CHROME_FONT))
-        .text_color(rgb(CHROME_MUTED))
+        .text_color(rgb(MUTED))
         .cursor_pointer()
-        .hover(|style| style.text_color(rgb(CHROME_TEXT)))
+        .hover(|style| style.text_color(rgb(FG)))
         .child(label)
         .on_click(cx.listener(move |this, _ev, _win, cx| {
             if this.yaw(direction) {
@@ -3876,7 +4198,7 @@ fn navicube_chrome<V: InventorView + 'static>(
             cx,
         ));
 
-    let divider = div().w(px(1.)).h(px(12.)).bg(rgba(CHROME_BORDER));
+    let divider = div().w(px(1.)).h(px(12.)).bg(rgba(CHROME_LINE));
 
     let home = div()
         .id("ferrocad-navicube-home")
@@ -3886,9 +4208,9 @@ fn navicube_chrome<V: InventorView + 'static>(
         .px(px(5.))
         .rounded_sm()
         .text_size(px(CHROME_FONT))
-        .text_color(rgb(CHROME_MUTED))
+        .text_color(rgb(MUTED))
         .cursor_pointer()
-        .hover(|style| style.text_color(rgb(CHROME_TEXT)))
+        .hover(|style| style.text_color(rgb(FG)))
         .child("Home")
         .on_click(cx.listener(|this, _ev, _win, cx| {
             if this.go_home() {
@@ -3902,7 +4224,7 @@ fn navicube_chrome<V: InventorView + 'static>(
         .justify_end()
         .items_center()
         .text_size(px(CHROME_FONT))
-        .text_color(rgb(CHROME_MUTED))
+        .text_color(rgb(MUTED))
         .child(format!("{:03.0}° · {:02.0}°", angles.0, angles.1));
 
     div()
@@ -3919,7 +4241,7 @@ fn navicube_chrome<V: InventorView + 'static>(
         .rounded_sm()
         .bg(rgba(CHROME_BG))
         .border_1()
-        .border_color(rgba(CHROME_BORDER))
+        .border_color(rgba(CHROME_LINE))
         .occlude()
         .child(yaws)
         .child(projections)
@@ -4239,6 +4561,11 @@ mod tests {
     /// `Face1`/`Face2` the way a kernel tessellation lays one out: vertices duplicated
     /// per face, every primitive carrying its part id, names in `parts`.
     fn named_slab() -> ferrocad_stage::ShapeItem {
+        named_slab_for(7)
+    }
+
+    /// [`named_slab`] carrying a chosen pick id, for tests with more than one item.
+    fn named_slab_for(entity: u32) -> ferrocad_stage::ShapeItem {
         use ferrocad_geom::Tessellation;
         use ferrocad_stage::ShapeItem;
 
@@ -4262,7 +4589,7 @@ mod tests {
             vertex_parts: Vec::new(),
             parts: vec!["Face1".to_owned(), "Face2".to_owned()],
         };
-        ShapeItem::from_tessellation(7, &mesh)
+        ShapeItem::from_tessellation(entity, &mesh)
     }
 
     /// The identity camera at 1x, where device and world coordinates coincide in XY.
@@ -4301,19 +4628,27 @@ mod tests {
             view.handle_button([30.0, 50.0], 1, false),
             "the selection update repaints"
         );
-        assert_eq!(
-            view.take_selection(),
-            Some(SelectionEvent::Picked(SelectionRef::element(7, "Face1")))
+        let event = view.take_selection().expect("a selection");
+        let SelectionEvent::Picked { reference, anchor } = event else {
+            panic!("not a pick: {event:?}");
+        };
+        assert_eq!(reference, SelectionRef::element(7, "Face1"));
+        let anchor = anchor.expect("the click carries a world anchor");
+        assert!(
+            (anchor.point.z - 0.5).abs() < 1e-6,
+            "the anchor sits on the clicked face: {anchor:?}"
         );
+        assert!(anchor.normal.z > 0.9, "the normal points at the camera");
         // Taking the update consumes it.
         assert_eq!(view.take_selection(), None);
 
         view.handle_button([70.0, 50.0], 1, true);
         view.handle_button([70.0, 50.0], 1, false);
-        assert_eq!(
-            view.take_selection(),
-            Some(SelectionEvent::Picked(SelectionRef::element(7, "Face2")))
-        );
+        let event = view.take_selection().expect("a selection");
+        let SelectionEvent::Picked { reference, .. } = event else {
+            panic!("not a pick: {event:?}");
+        };
+        assert_eq!(reference, SelectionRef::element(7, "Face2"));
     }
 
     #[test]
@@ -4344,10 +4679,12 @@ mod tests {
         let mut view = identity_viewport(triangle_scene_with_id(9));
         view.handle_button([50.0, 50.0], 1, true);
         view.handle_button([50.0, 50.0], 1, false);
-        assert_eq!(
-            view.take_selection(),
-            Some(SelectionEvent::Picked(SelectionRef::whole(9)))
-        );
+        let event = view.take_selection().expect("a selection");
+        let SelectionEvent::Picked { reference, anchor } = event else {
+            panic!("not a pick: {event:?}");
+        };
+        assert_eq!(reference, SelectionRef::whole(9));
+        assert!(anchor.is_some(), "the click carries its world point");
     }
 
     #[test]
@@ -4400,6 +4737,74 @@ mod tests {
         // Before the first prepaint there is no origin; pass the point through.
         viewport.last_bounds = None;
         assert_eq!(viewport.to_local(point(px(100.0), px(60.0))), [100.0, 60.0]);
+    }
+
+    /// A contextual trigger supplies **window** coordinates; the viewport resolves
+    /// them against its element origin and runs the same pick a click uses.
+    #[test]
+    fn a_window_position_repicks_through_the_element_origin() {
+        use ferrocad_stage::Stage;
+
+        let mut view = identity_viewport(Scene::default());
+        view.set_stage(Stage::new().with_item(named_slab()));
+        view.refresh();
+        view.last_bounds = Some(Bounds::new(
+            point(px(80.0), px(40.0)),
+            size(px(640.0), px(480.0)),
+        ));
+
+        // Window (110, 90) is element-local (30, 50): the slab's left face.
+        assert!(view.handle_pointer_at(point(px(110.0), px(90.0))));
+        assert_eq!(
+            view.hover_report().target,
+            Some(SelectionRef::element(7, "Face1"))
+        );
+
+        // Window (10, 10) is outside the element: empty space, not a stale target.
+        view.handle_pointer_at(point(px(10.0), px(10.0)));
+        assert_eq!(view.hover_report().target, None);
+    }
+
+    /// A typed delta previews as a temporary transform on exactly the named items; it
+    /// never rewrites the placement, and clearing drops the ghost.
+    #[test]
+    fn a_typed_translation_previews_only_the_named_entities() {
+        use ferrocad_stage::Stage;
+
+        let mut view = identity_viewport(Scene::default());
+        view.set_stage(
+            Stage::new()
+                .with_item(named_slab_for(7))
+                .with_item(named_slab_for(8)),
+        );
+        view.refresh();
+
+        assert!(view.preview_translation(&[7], [5.0, 2.0, 0.0]));
+        let preview = view
+            .stage
+            .item(7)
+            .and_then(|item| item.temporary_transform())
+            .expect("the target previews");
+        assert_eq!(
+            preview.transform(&Vector3::zero()),
+            Vector3::new(5.0, 2.0, 0.0)
+        );
+        assert!(
+            view.stage
+                .item(8)
+                .and_then(|item| item.temporary_transform())
+                .is_none(),
+            "an unlisted item is untouched"
+        );
+
+        // Clearing is the cancel path: no temp transform survives.
+        assert!(view.preview_translation(&[], [0.0; 3]));
+        assert!(
+            view.stage
+                .item(7)
+                .and_then(|item| item.temporary_transform())
+                .is_none()
+        );
     }
 
     #[test]
@@ -5537,6 +5942,8 @@ mod tests {
         hovered: bool,
         view: Option<Matrix4>,
         item: ShapeItem,
+        /// The world anchor a preview offsets (a stand-in for a real grip).
+        anchor: Option<Vector3>,
         /// The last workspace style the viewport handed it, shared with the test so it
         /// can observe the recorded value without downcasting.
         style: Rc<RefCell<Option<GizmoStyle>>>,
@@ -5559,6 +5966,7 @@ mod tests {
                     item: ShapeItem::new(777)
                         .with_draw_mode(DrawMode::Wireframe)
                         .with_selectable(false),
+                    anchor: Some(Vector3::zero()),
                     style: style.clone(),
                 },
                 style,
@@ -5569,6 +5977,18 @@ mod tests {
     impl Manipulator for FakeManipulator {
         fn id(&self) -> &str {
             "fake"
+        }
+
+        fn anchor(&self) -> Option<Vector3> {
+            self.anchor
+        }
+
+        fn set_anchor(&mut self, anchor: Vector3) -> bool {
+            if self.anchor == Some(anchor) {
+                return false;
+            }
+            self.anchor = Some(anchor);
+            true
         }
 
         fn items(&self) -> &[ShapeItem] {
@@ -5926,6 +6346,113 @@ mod tests {
             }
         }
         panic!("the X axis handle should be pickable");
+    }
+
+    /// Deferred mode reports a drag's `Begin`/`Update`/`End` instead of committing,
+    /// so a host HUD can mirror the delta and own the commit.
+    #[test]
+    fn a_deferred_drag_reports_previews_and_never_commits() {
+        let (mut view, viewport) = translate_gizmo_view();
+        let grab = axis_x_grab(&view);
+        let release = [grab[0] + 12, grab[1]];
+
+        view.set_gizmo_preview(true);
+        assert!(view.gizmo_preview());
+        view.handle_button(viewport.to_logical(grab), 1, true);
+        let begin = view.take_transform_preview().expect("a begin");
+        assert_eq!(begin.phase, PreviewPhase::Begin);
+        assert_eq!(begin.total_transform, Matrix4::identity());
+
+        view.handle_pointer(viewport.to_logical(release));
+        let update = view.take_transform_preview().expect("an update");
+        assert_eq!(update.phase, PreviewPhase::Update);
+        assert!(
+            update.total_transform.m[3].abs() > 1e-9,
+            "the drag moved along X: {update:?}"
+        );
+        assert_eq!(
+            view.gizmo().expect("a gizmo").origin(),
+            Vector3::zero(),
+            "the interaction frame stays at the grab point"
+        );
+        assert!(
+            view.gizmo().expect("a gizmo").display_offset().is_some(),
+            "the drawn triad is glued to the moved surface"
+        );
+
+        view.handle_button(viewport.to_logical(release), 1, false);
+        let end = view.take_transform_preview().expect("an end");
+        assert_eq!(end.phase, PreviewPhase::End);
+        assert_eq!(end.total_transform, update.total_transform);
+        assert!(
+            view.take_gizmo_commit().is_none(),
+            "the host owns the commit"
+        );
+
+        // The host applies its accumulated delta: the frozen frame moves to the new
+        // surface and the draw-only offset goes away.
+        let delta = [
+            end.total_transform.m[3],
+            end.total_transform.m[7],
+            end.total_transform.m[11],
+        ];
+        assert!(view.preview_translation(&[42], delta));
+        assert!(view.gizmo().expect("a gizmo").display_offset().is_none());
+        assert_eq!(
+            view.gizmo().expect("a gizmo").origin(),
+            Vector3::new(delta[0], delta[1], delta[2])
+        );
+        assert!(view.preview_translation(&[], [0.0; 3]));
+
+        // Leaving deferred mode restores the ordinary commit path.
+        view.set_gizmo_preview(false);
+        assert!(!view.gizmo_preview());
+        view.handle_button(viewport.to_logical(grab), 1, true);
+        view.handle_pointer(viewport.to_logical(release));
+        assert!(
+            view.gizmo().expect("a gizmo").display_offset().is_some(),
+            "even a normal drag draws the triad on the surface"
+        );
+        view.handle_button(viewport.to_logical(release), 1, false);
+        assert!(
+            view.gizmo().expect("a gizmo").display_offset().is_none(),
+            "the release restores the frozen drawing"
+        );
+        assert!(view.take_gizmo_commit().is_some(), "a normal drag commits");
+        assert!(view.take_transform_preview().is_none());
+    }
+
+    #[test]
+    fn a_typed_preview_moves_the_gizmo_and_the_grips() {
+        let (mut view, _viewport) = translate_gizmo_view();
+        view.add_manipulator(Box::new(FakeManipulator::new()));
+        view.refresh();
+        let gizmo_before = view.gizmo().expect("a gizmo").origin();
+        let grip_before = view
+            .manipulator("fake")
+            .expect("the grip")
+            .anchor()
+            .expect("an anchor");
+        let delta = Vector3::new(5.0, 2.0, 0.0);
+
+        assert!(view.preview_translation(&[42], [delta.x, delta.y, delta.z]));
+        assert_eq!(
+            view.gizmo().expect("a gizmo").origin(),
+            gizmo_before.add(&delta)
+        );
+        assert_eq!(
+            view.manipulator("fake").expect("the grip").anchor(),
+            Some(grip_before.add(&delta)),
+            "the grip follows the previewed body"
+        );
+
+        // Cancelling restores both to the document pose.
+        assert!(view.preview_translation(&[], [0.0; 3]));
+        assert_eq!(view.gizmo().expect("a gizmo").origin(), gizmo_before);
+        assert_eq!(
+            view.manipulator("fake").expect("the grip").anchor(),
+            Some(grip_before)
+        );
     }
 
     #[test]

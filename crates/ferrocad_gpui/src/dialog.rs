@@ -26,6 +26,18 @@ pub struct DialogSpec {
     /// The cancel button's label.
     #[serde(default)]
     pub cancel: String,
+    /// How the shell presents the spec: `"modal"` (the default) or `"float"`.
+    ///
+    /// A floating dialog is a compact glass HUD with **no backdrop**, anchored beside
+    /// the gizmo, so the canvas stays bright and the pointer keeps working.
+    #[serde(default)]
+    pub presentation: String,
+    /// A live preview the shell drives while the dialog is edited.
+    ///
+    /// `"translation"` previews the `dx`/`dy`/`dz` fields on the selection without
+    /// touching the document. Empty means no preview.
+    #[serde(default)]
+    pub preview: String,
 }
 
 impl DialogSpec {
@@ -43,6 +55,17 @@ impl DialogSpec {
         } else {
             &self.cancel
         }
+    }
+
+    /// Whether the shell should float the dialog instead of centring it over a
+    /// dimmed backdrop.
+    pub fn is_floating(&self) -> bool {
+        self.presentation == "float"
+    }
+
+    /// Whether the spec asks for a live translation preview.
+    pub fn previews_translation(&self) -> bool {
+        self.preview == "translation"
     }
 }
 
@@ -240,6 +263,38 @@ fn text_of(state: &ValueState) -> String {
     }
 }
 
+/// The live translation a `"translation"` preview should show.
+///
+/// Text that is not a number yet (an empty field, a lone `-`, a half-typed unit)
+/// contributes zero: a preview must never block or flash an error while typing.
+/// `None` when the spec does not ask for a translation preview.
+pub fn translation_preview(spec: &DialogSpec, states: &[ValueState]) -> Option<[f64; 3]> {
+    if !spec.previews_translation() {
+        return None;
+    }
+    let mut delta = [0.0; 3];
+    for (field, state) in spec.fields.iter().zip(states) {
+        let slot = match field.name.as_str() {
+            "dx" => 0,
+            "dy" => 1,
+            "dz" => 2,
+            _ => continue,
+        };
+        let ValueState::Text(text) = state else {
+            continue;
+        };
+        let text = text.trim();
+        delta[slot] = match field.kind() {
+            Kind::Quantity => Quantity::parse(text).ok().map(|q| q.canonical_value()),
+            Kind::Float => text.parse().ok(),
+            Kind::Int => text.parse::<i64>().ok().map(|n| n as f64),
+            _ => None,
+        }
+        .unwrap_or(0.0);
+    }
+    Some(delta)
+}
+
 fn check_range(field: &DialogField, value: f64) -> Result<(), String> {
     if let Some(min) = field.min {
         if value < min {
@@ -360,5 +415,50 @@ mod tests {
         .unwrap();
         let error = collect(&spec, &[ValueState::Text(String::new())]).expect_err("unknown kind");
         assert!(error.contains("unsupported kind"), "{error}");
+    }
+
+    #[test]
+    fn presentation_and_preview_are_opt_in() {
+        let plain: DialogSpec = serde_json::from_value(serde_json::json!({
+            "fields": [{"name": "dx", "kind": "quantity"}]
+        }))
+        .unwrap();
+        assert!(!plain.is_floating(), "the default stays modal");
+        assert!(!plain.previews_translation());
+
+        let hud: DialogSpec = serde_json::from_value(serde_json::json!({
+            "presentation": "float",
+            "preview": "translation",
+            "fields": [
+                {"name": "dx", "kind": "quantity"},
+                {"name": "dy", "kind": "quantity"},
+                {"name": "dz", "kind": "quantity"},
+            ]
+        }))
+        .unwrap();
+        assert!(hud.is_floating());
+        assert!(hud.previews_translation());
+    }
+
+    #[test]
+    fn a_translation_preview_parses_what_it_can_and_zeroes_the_rest() {
+        let spec: DialogSpec = serde_json::from_value(serde_json::json!({
+            "preview": "translation",
+            "fields": [
+                {"name": "dx", "kind": "quantity"},
+                {"name": "dy", "kind": "quantity"},
+                {"name": "dz", "kind": "quantity"},
+            ]
+        }))
+        .unwrap();
+        let states = vec![
+            ValueState::Text("25 mm".to_string()),
+            ValueState::Text("-".to_string()),
+            ValueState::Text(String::new()),
+        ];
+        assert_eq!(translation_preview(&spec, &states), Some([25.0, 0.0, 0.0]));
+
+        let plain = DialogSpec::default();
+        assert_eq!(translation_preview(&plain, &states), None);
     }
 }

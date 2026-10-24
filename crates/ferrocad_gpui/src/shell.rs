@@ -12,9 +12,10 @@ use std::path::Path;
 use std::sync::{Arc, Mutex};
 
 use gpui::{
-    Anchor, AnyElement, App, Context, Entity, FocusHandle, Focusable, IntoElement, KeyDownEvent,
-    MouseButton, MouseDownEvent, MouseMoveEvent, Pixels, Point, Render, SharedString,
-    Subscription, Window, WindowHandle, anchored, deferred, div, point, prelude::*, px, rgb, rgba,
+    Anchor, AnyElement, App, Bounds, Context, Entity, FocusHandle, Focusable, IntoElement,
+    KeyDownEvent, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, Pixels, Point, Render,
+    SharedString, Size, Subscription, Window, WindowHandle, anchored, deferred, div, point, px,
+    prelude::*, rgb, rgba, size,
 };
 
 use ferrocad_geom::SelectionRef;
@@ -24,8 +25,12 @@ use ferrocad_stage::{
 };
 use ferrocad_ui::Form;
 use ferrocad_viewport::scene;
-use ferrocad_viewport::{HoverReport, InventorViewport, SelectionEvent, ViewportEvent};
+use ferrocad_viewport::{
+    HoverReport, InventorViewport, PreviewPhase, SelectionAnchor, SelectionEvent, TransformPreview,
+    ViewportEvent,
+};
 use ferrocad_wgpu::{AdapterChoice, AdapterSummary, WgpuRenderer};
+use ferrocad_widgets::wheel::{WheelEvent, WheelMenu, WheelSlot, WheelTone};
 use ferrocad_widgets::window_chrome::window_frame_with_leading;
 use ferrocad_widgets::{ChangeEvent, SubmitEvent, TextAreaState, TextInput};
 
@@ -41,12 +46,13 @@ use crate::shortcuts::Accelerator;
 use crate::dev_tools::DevTools;
 use crate::view::{ProjectionName, ViewRequest, ViewState, WorkplaneAction};
 
-pub(crate) const BG: u32 = 0x0f1218;
-pub(crate) const PANEL: u32 = 0x16181d;
-pub(crate) const PANEL_ALT: u32 = 0x1d2026;
-pub(crate) const FG: u32 = 0xd8dbe0;
-pub(crate) const MUTED: u32 = 0x8b919a;
-pub(crate) const ACCENT: u32 = 0x2f4a6d;
+// The packed-sRGB tokens live in the leaf `ferrocad_theme` crate (V0 of
+// `docs/interaction/visual-language.md`). Re-exported here so the shell's modules
+// keep their `crate::shell::FG` paths while the widget layer can use the same table
+// without depending on the shell.
+pub(crate) use ferrocad_theme::ui::{
+    ACCENT, AXIS_X, AXIS_Y, AXIS_Z, BG, DOCK_BORDER, FG, MUTED, PANEL, PANEL_ALT, WHEEL_GLASS,
+};
 
 /// The registry feature whose provider supplies the gizmo skin.
 const GIZMO_FEATURE: &str = "gizmo";
@@ -234,6 +240,28 @@ pub struct Shell {
     gpu_adapters: Option<Vec<AdapterSummary>>,
     /// The modeless settings card, opened for a `Settings/<Feature>` node.
     settings_card: Option<SettingsCard>,
+    /// The radial sidecar: it owns the gesture and its overlay. The shell only
+    /// triggers it (right-press / Space) and maps a selected id to a command.
+    wheel: Entity<WheelMenu>,
+    /// Keeps the wheel's event subscription alive.
+    _wheel_events: Subscription,
+    /// The context target the open wheel resolved. It is promoted to the selection
+    /// only when a verb is chosen; closing the wheel discards it.
+    wheel_target: Option<WheelTarget>,
+    /// The last pointer position in window coordinates. Space opens the wheel
+    /// there; a keyboard-only session falls back to the window centre.
+    last_pointer: Option<Point<Pixels>>,
+    /// The Δ fields at the moment a gizmo drag began. A drag reports its transform
+    /// relative to its own start, so this is what makes successive drags accumulate
+    /// into the same editable values.
+    drag_baseline: Option<[f64; 3]>,
+    /// The floating HUD's last painted rect (window coordinates). It is the hit-test
+    /// for "is the pointer over the HUD" and supplies the real size for clamping.
+    hud_rect: Option<Bounds<Pixels>>,
+    /// The floating HUD's frozen origin. Set while the pointer is over the HUD or a
+    /// field is focused, so typing a large Δ never slides the inputs out from under
+    /// the cursor. Cleared when both conditions lapse.
+    hud_lock: Option<Point<Pixels>>,
     /// The Dev Tools second window, if one has been opened. The window owns no model:
     /// its view reads this `Shell` entity. A closed window leaves the handle stale
     /// until the next toggle notices and reopens.
@@ -288,6 +316,18 @@ struct OpenDialog {
     error: Option<String>,
     /// Keep the per-field submit subscriptions alive for the dialog's lifetime.
     _submits: Vec<Subscription>,
+    /// Keep the per-field change subscriptions alive: a live preview reads them.
+    _changes: Vec<Subscription>,
+}
+
+/// What a wheel was opened for: a **context target**, not a selection change.
+///
+/// Opening a context menu must not mutate the document's selection; the target is
+/// promoted only when the user chooses an object verb.
+#[derive(Clone, Debug)]
+struct WheelTarget {
+    reference: SelectionRef,
+    anchor: Option<SelectionAnchor>,
 }
 
 impl Shell {
@@ -295,7 +335,8 @@ impl Shell {
     /// view is built from. The view itself is created with `from_model` because
     /// entities (the console input) need an `App` context.
     pub fn boot() -> Result<Arc<Mutex<ShellModel>>, String> {
-        let boot: Bootstrap = python::bootstrap()?;
+        let mut boot: Bootstrap = python::bootstrap()?;
+        python::open_startup_document(&mut boot)?;
         let tree = python::model_tree().unwrap_or_default();
         let mut console = vec![format!(
             "FerroCAD shell · FreeCAD {} · backend {}",
@@ -366,6 +407,19 @@ impl Shell {
                 this.run(&event.text, cx);
             },
         );
+        // The radial sidecar: one entity for the window's lifetime. It owns the
+        // gesture and overlay; the shell maps its selection to a registry command.
+        let wheel = cx.new(WheelMenu::new);
+        let wheel_events = cx.subscribe(
+            &wheel,
+            |this: &mut Shell, _wheel, event: &WheelEvent, cx| match event {
+                WheelEvent::Selected(id) => this.commit_wheel(id.as_ref(), cx),
+                WheelEvent::Closed => {
+                    this.wheel_target = None;
+                    cx.notify();
+                }
+            },
+        );
         Self {
             model,
             console,
@@ -394,6 +448,13 @@ impl Shell {
             gpu_preference: None,
             gpu_adapters: None,
             settings_card: None,
+            wheel,
+            _wheel_events: wheel_events,
+            wheel_target: None,
+            last_pointer: None,
+            drag_baseline: None,
+            hud_rect: None,
+            hud_lock: None,
             dev_tools: None,
             _viewport_events: None,
             _submit: submit,
@@ -653,6 +714,9 @@ impl Shell {
         if self.modal_open() {
             return;
         }
+        // A latched wheel is a smaller layer; a modal replaces it rather than
+        // surviving underneath the palette.
+        let _ = self.close_radial(cx);
         self.open_popover = None;
         self.popover_anchor = None;
         let input = cx.new(|cx| TextInput::new(cx, "Search commands"));
@@ -771,6 +835,7 @@ impl Shell {
         &mut self,
         event: &KeyDownEvent,
         cancel_dialog: bool,
+        window: &Window,
         cx: &mut Context<Self>,
     ) -> bool {
         // A rendered form dialog is modal like a command dialog or the palette:
@@ -796,6 +861,30 @@ impl Shell {
         if is_palette_shortcut(event) {
             self.toggle_palette(cx);
             return true;
+        }
+        // The radial menu closes before any popover: it is the most transient layer.
+        if event.keystroke.key == "escape" && self.close_radial(cx) {
+            return true;
+        }
+        // A floating dialog does not own the keyboard once the pointer clicks the
+        // canvas (the viewport focuses itself), so dismiss it here as well: `Esc` must
+        // cancel from anywhere while the HUD is open. A panel that already handled the
+        // key has cleared `dialog`, making this a no-op.
+        if event.keystroke.key == "escape" && self.dialog.is_some() {
+            self.cancel_dialog(cx);
+            return true;
+        }
+        // Space on a selection opens the object-verb wheel at the last pointer
+        // position (or the window centre for a keyboard-only session). It is the
+        // main window's gesture, so a Dev Tools key press does not open it off-screen.
+        if !cancel_dialog
+            && event.keystroke.key == "space"
+            && self.dialog.is_none()
+            && self.palette.is_none()
+            && self.settings_card.is_none()
+            && self.active_tool.is_none()
+        {
+            return self.space_radial(window, cx);
         }
         if event.keystroke.key == "escape" && self.close_popover(cx) {
             return true;
@@ -1055,6 +1144,7 @@ impl Shell {
             ViewportEvent::Selection(selection) => self.on_selection(selection, cx),
             ViewportEvent::Interaction(commit) => self.on_interaction(commit, cx),
             ViewportEvent::Transform(event) => self.on_interaction(&event.to_interaction(), cx),
+            ViewportEvent::TransformPreview(preview) => self.on_transform_preview(preview, cx),
             ViewportEvent::ToolState(status) => self.on_tool_state(status, cx),
         }
     }
@@ -1074,8 +1164,11 @@ impl Shell {
     /// A click: select the object in the inspector, and arm the manipulators and gizmo
     /// the edition's workbenches and mods contribute for that selection.
     fn on_selection(&mut self, selection: &SelectionEvent, cx: &mut Context<Self>) {
+        // A selection change invalidates the object verbs the wheel was built for.
+        let wheel = self.wheel.clone();
+        let _ = wheel.update(cx, |wheel, cx| wheel.close(cx));
         let (manipulators, gizmo) = match selection {
-            SelectionEvent::Picked(reference) => {
+            SelectionEvent::Picked { reference, anchor } => {
                 if let Some(name) = self.display.object_of(reference.object).map(str::to_string) {
                     // The viewport reports sub-elements too (`Face6`), which the facade
                     // snapshot carries for `getSelectionEx`.
@@ -1087,7 +1180,7 @@ impl Shell {
                         cx,
                     );
                 }
-                self.arm(reference, cx)
+                self.arm(reference, anchor.as_ref(), cx)
             }
             SelectionEvent::Cleared => {
                 self.clear_selection(cx);
@@ -1104,6 +1197,200 @@ impl Shell {
             });
         }
         cx.notify();
+    }
+
+    /// The object verbs the radial menu shows, in compass order.
+    ///
+    /// `target` is the wheel's context target (the object under the pointer), or `None`
+    /// when the pointer is over empty space. The registry decides which commands are
+    /// object verbs (`Surface::Radial`); the shell only orders them so the destructive
+    /// slot is last (south) and a disabled slot stays visibly muted.
+    ///
+    /// A target **outside** the current selection is not selected yet (opening a menu is
+    /// not a mutation), so the registry's selection-dependent `IsActive` cannot be the
+    /// gate. Its verbs are offered and the target is promoted when one is chosen; the
+    /// command then validates against a selection that contains it.
+    fn radial_slots(&self, target: Option<&SelectionRef>) -> Vec<WheelSlot> {
+        let model = self.model.lock().unwrap();
+        let groups = model.surfaces();
+        let target_selected = target.map_or(true, |target| {
+            self.display
+                .object_of(target.object)
+                .is_some_and(|name| model.selection.iter().any(|item| item.object == name))
+        });
+        let pending = target.is_some() && !target_selected;
+        let mut slots: Vec<WheelSlot> = groups
+            .radial
+            .iter()
+            .filter(|command| !command.dev_only)
+            .map(|command| WheelSlot {
+                id: command.id.clone().into(),
+                label: command.short_label().into(),
+                tone: match command.tone.as_str() {
+                    "additive" => WheelTone::Additive,
+                    "destructive" => WheelTone::Destructive,
+                    _ => WheelTone::Structural,
+                },
+                enabled: command.enabled || pending,
+            })
+            .collect();
+        if !slots.iter().any(|slot| slot.enabled) {
+            // Context: nothing to manipulate. The same gesture still deserves a
+            // wheel, so offer the creation verbs from the dock (the "creation /
+            // global" context). With a selection, the object verbs above win.
+            slots = groups
+                .dock
+                .iter()
+                .filter(|command| !command.dev_only)
+                .map(|command| WheelSlot {
+                    id: command.id.clone().into(),
+                    label: command.short_label().into(),
+                    tone: WheelTone::Structural,
+                    enabled: command.enabled,
+                })
+                .collect();
+        }
+        // Stable sort: structural, additive, destructive. With the two built-ins this
+        // puts Move north and Delete south, so "flick down to delete" never moves.
+        slots.sort_by_key(|slot| match slot.tone {
+            WheelTone::Structural => 0,
+            WheelTone::Additive => 1,
+            WheelTone::Destructive => 2,
+        });
+        slots
+    }
+
+    /// Resolve the object under a **window-space** pointer position without changing
+    /// the selection.
+    ///
+    /// Opening a menu is not a mutation: the wheel's context target is remembered and
+    /// promoted only when an object verb is chosen. `hover_report` is normally current
+    /// because pointer moves keep it so, but a press can arrive without an intervening
+    /// move (a trackpad tap can even deliver `Down` and `Up` before the next move), and
+    /// the press never reaches the viewport's own pick because the canvas consumes it,
+    /// so this re-picks through the same G-buffer path a click uses.
+    fn wheel_target_at(
+        &mut self,
+        position: Point<Pixels>,
+        cx: &mut Context<Self>,
+    ) -> Option<WheelTarget> {
+        let viewport = self.viewport.clone()?;
+        let (reference, anchor) = viewport.update(cx, |viewport, cx| {
+            if viewport.handle_pointer_at(position) {
+                cx.notify();
+            }
+            (
+                viewport.hover_report().target.clone(),
+                viewport.hover_anchor(),
+            )
+        });
+        Some(WheelTarget {
+            reference: reference?,
+            anchor,
+        })
+    }
+
+    /// Open the radial menu **armed** by a button press. The sidecar owns the
+    /// flick-vs-tap decision; the shell supplies the anchor, the context target and the
+    /// slots.
+    pub(crate) fn open_radial(&mut self, anchor: Point<Pixels>, cx: &mut Context<Self>) {
+        // A press is a pointer event of its own: resolve the context at its position,
+        // but leave the selection alone until a verb is chosen.
+        self.wheel_target = self.wheel_target_at(anchor, cx);
+        let slots = self.radial_slots(self.wheel_target.as_ref().map(|target| &target.reference));
+        let wheel = self.wheel.clone();
+        let opened = wheel.update(cx, |wheel, cx| wheel.open_armed(anchor, slots, cx));
+        if opened {
+            self.open_popover = None;
+        }
+    }
+
+    /// Open the radial menu **latched**, for a keyboard trigger.
+    fn open_radial_latched(&mut self, anchor: Point<Pixels>, cx: &mut Context<Self>) {
+        let slots = self.radial_slots(self.wheel_target.as_ref().map(|target| &target.reference));
+        let wheel = self.wheel.clone();
+        let opened = wheel.update(cx, |wheel, cx| wheel.open_latched(anchor, slots, cx));
+        if opened {
+            self.open_popover = None;
+        }
+    }
+
+    /// Commit a wheel choice: promote its context target (if any), then run the verb.
+    ///
+    /// The promotion is what makes a context menu act on the pointed object without
+    /// the mere act of opening it changing the selection. The target is one-shot; a
+    /// cancel discards it in the `Closed` handler.
+    fn commit_wheel(&mut self, id: &str, cx: &mut Context<Self>) {
+        if let Some(target) = self.wheel_target.take() {
+            let already_selected =
+                self.display
+                    .object_of(target.reference.object)
+                    .is_some_and(|name| {
+                        self.model
+                            .lock()
+                            .unwrap()
+                            .selection
+                            .iter()
+                            .any(|item| item.object == name)
+                    });
+            if !already_selected {
+                self.on_selection(
+                    &SelectionEvent::Picked {
+                        reference: target.reference,
+                        anchor: target.anchor,
+                    },
+                    cx,
+                );
+            }
+        }
+        self.run_command(id, cx);
+    }
+
+    /// Close the radial menu; returns whether one was open.
+    pub(crate) fn close_radial(&mut self, cx: &mut Context<Self>) -> bool {
+        let wheel = self.wheel.clone();
+        wheel.update(cx, |wheel, cx| wheel.close(cx))
+    }
+
+    /// Forward a pointer move to the sidecar (it owns the hover).
+    fn hover_radial(&mut self, position: Point<Pixels>, cx: &mut Context<Self>) {
+        let wheel = self.wheel.clone();
+        let _ = wheel.update(cx, |wheel, cx| wheel.pointer_move(position, cx));
+    }
+
+    /// Forward the arming release (the sidecar commits, latches or cancels).
+    fn release_radial(&mut self, position: Point<Pixels>, cx: &mut Context<Self>) {
+        let wheel = self.wheel.clone();
+        let _ = wheel.update(cx, |wheel, cx| wheel.pointer_up(position, cx));
+    }
+
+    /// The `Space` path: commit a hovered latched wedge, close an open wheel, or open
+    /// **contextually** — the entity under the pointer is the context target, so the key
+    /// is spatial rather than a blind global shortcut.
+    fn space_radial(&mut self, window: &Window, cx: &mut Context<Self>) -> bool {
+        let wheel = self.wheel.clone();
+        if wheel.read(cx).is_open() {
+            let committed = wheel.update(cx, |wheel, cx| wheel.commit_hovered(cx));
+            if !committed {
+                let _ = wheel.update(cx, |wheel, cx| wheel.close(cx));
+            }
+            return true;
+        }
+
+        // `Space` acts on what is under the pointer, not on a global notion of "the
+        // selection". Re-pick at the last pointer through the viewport's G-buffer
+        // path, but only as a context target: the selection changes when a verb is
+        // chosen, not when the menu opens.
+        self.wheel_target = self
+            .last_pointer
+            .and_then(|position| self.wheel_target_at(position, cx));
+
+        let anchor = self.last_pointer.unwrap_or_else(|| {
+            let size = window.viewport_size();
+            point(px(size.width.0 / 2.0), px(size.height.0 / 2.0))
+        });
+        self.open_radial_latched(anchor, cx);
+        true
     }
 
     /// The manipulators and gizmo to host for a selection.
@@ -1131,6 +1418,7 @@ impl Shell {
     fn arm(
         &mut self,
         reference: &SelectionRef,
+        anchor: Option<&SelectionAnchor>,
         cx: &mut Context<Self>,
     ) -> (Vec<Box<dyn Manipulator>>, Option<TransformGizmo>) {
         let mut manipulators: Vec<Box<dyn Manipulator>> = Vec::new();
@@ -1142,6 +1430,21 @@ impl Shell {
                     manipulators.push(manipulator);
                 }
                 gizmo = self.contributions.gizmo_for(reference, &stage);
+            }
+            // The triad belongs to the point of contact when a click made the
+            // selection. A tree or command selection has no hit, so its datum is the
+            // body's base corner (never the interior centroid).
+            if let Some(gizmo) = gizmo.as_mut() {
+                let origin = match anchor {
+                    Some(anchor) => Some(anchor.point),
+                    None if reference.is_whole() => {
+                        crate::contributions::body_corner(reference.object, &stage)
+                    }
+                    None => None,
+                };
+                if let Some(origin) = origin {
+                    gizmo.set_origin(origin);
+                }
             }
         }
 
@@ -1177,56 +1480,21 @@ impl Shell {
         (manipulators, gizmo)
     }
 
-    /// Arm the transform gizmo for the current selection (the dock's `Move` label).
-    ///
-    /// The label is the interactive tool; the numeric command stays on the caret and
-    /// on its shortcut. A selection made in the tree carries a name rather than a pick
-    /// id, so it is resolved through the display map — that is what makes `Move` work
-    /// without first clicking the object in the viewport.
-    ///
-    /// Re-arming for the same selection is idempotent (a fresh `TransformGizmo` at the
-    /// item's centre), so clicking the tool twice never leaves two handles behind.
-    pub(crate) fn arm_dock_tool(&mut self, key: &str, cx: &mut Context<Self>) {
-        if key != "gizmo" {
-            return;
-        }
-        let status = self.arm_transform_gizmo(cx);
-        self.model.lock().unwrap().status = status.clone();
-        self.console_line(status, cx);
-        cx.notify();
-    }
-
-    /// The arm step behind [`arm_dock_tool`](Self::arm_dock_tool), returning the status.
-    fn arm_transform_gizmo(&mut self, cx: &mut Context<Self>) -> String {
-        let Some(object) = self.model.lock().unwrap().selected.clone() else {
-            return "select an object to transform".to_string();
-        };
-        let Some(viewport) = self.viewport.clone() else {
-            return "no viewport".to_string();
-        };
-        let Some(entity) = self.display.entity_of(&object) else {
-            return format!("{object} is not displayed");
-        };
-        let stage = viewport.read(cx).stage().clone();
-        let gizmo = self
-            .contributions
-            .gizmo_for(&SelectionRef::whole(entity), &stage);
-        let armed = gizmo.is_some();
-        viewport.update(cx, |viewport, cx| {
-            viewport.set_gizmo(gizmo);
-            cx.notify();
-        });
-        self.model.lock().unwrap().gizmo_armed = armed;
-        if armed {
-            format!("{object}: drag the gizmo")
-        } else {
-            format!("{object}: this selection has no transform handle")
-        }
-    }
-
     /// A manipulator drag ended: apply the commit through the app script's
     /// `interaction` hook, recompute, and re-read the shapes.
     fn on_interaction(&mut self, commit: &InteractionCommit, cx: &mut Context<Self>) {
+        // Any document interaction supersedes a pending Move HUD: the height grip may
+        // have resized the body, and the pending delta is stale. Close the dialog (and
+        // its token) so it cannot apply on top of the committed change.
+        if self
+            .dialog
+            .as_ref()
+            .is_some_and(|dialog| dialog.spec.previews_translation())
+            && let Some(dialog) = self.dialog.take()
+        {
+            let _ = commands::cancel(&dialog.token);
+            self.clear_dialog_preview(cx);
+        }
         let Some(object) = self.display.object_of(commit.target).map(str::to_string) else {
             let status = format!("no document object for entity {}", commit.target);
             self.model.lock().unwrap().status = status.clone();
@@ -1267,11 +1535,52 @@ impl Shell {
                 }),
                 Err(error) => self.console_line(format!("stage: {error}"), cx),
             }
-            // A recompute drops the gizmo with the old selection; the dock's
-            // contextual control must go with it.
-            self.model.lock().unwrap().gizmo_armed = false;
         }
+        // A recompute prunes names the document lost; re-arm only what survives.
         self.refresh(cx);
+        self.rearm_selection(cx);
+    }
+
+    /// Re-arm the current selection's overlays after the geometry changed.
+    ///
+    /// A move or a resize invalidates the world anchors the handles were built for. The
+    /// height grip must follow the moved body's top face, and the transform triad must
+    /// stay attached after its own commit — so this rebuilds from the (already pruned)
+    /// selection against the new stage. A tree/command selection has no click point,
+    /// so `arm` uses the body's base corner.
+    fn rearm_selection(&mut self, cx: &mut Context<Self>) {
+        let Some(viewport) = self.viewport.clone() else {
+            return;
+        };
+        if self.active_tool.is_some() {
+            return;
+        }
+        let reference = {
+            let model = self.model.lock().unwrap();
+            model.selection.last().and_then(|primary| {
+                let object = self.display.entity_of(&primary.object)?;
+                Some(SelectionRef {
+                    object,
+                    elements: primary.elements.clone(),
+                })
+            })
+        };
+        let Some(reference) = reference else {
+            self.model.lock().unwrap().gizmo_armed = false;
+            viewport.update(cx, |viewport, cx| {
+                viewport.set_manipulators(Vec::new());
+                viewport.set_gizmo(None);
+                cx.notify();
+            });
+            return;
+        };
+        let (manipulators, gizmo) = self.arm(&reference, None, cx);
+        self.model.lock().unwrap().gizmo_armed = gizmo.is_some();
+        viewport.update(cx, |viewport, cx| {
+            viewport.set_manipulators(manipulators);
+            viewport.set_gizmo(gizmo);
+            cx.notify();
+        });
     }
 
     /// Re-read the workbench commands and their enablement.
@@ -1568,6 +1877,11 @@ impl Shell {
 
         self.refresh(cx);
         self.sync_stage(cx);
+        if self.active_tool.is_none() && selected.is_none() {
+            // A command can move or resize a selected object (or undo such an edit);
+            // keep its handles attached to the new geometry.
+            self.rearm_selection(cx);
+        }
         // A select directive brings its own status (`replace_selection` sets
         // it); a command's human status still wins when it supplies one.
         let status = if !outcome.status.is_empty() {
@@ -1582,11 +1896,38 @@ impl Shell {
         cx.notify();
     }
 
+    /// Run a command from an open popover **without dismissing the menu**.
+    ///
+    /// A **state** row — a command toggle or a generated provider choice — changes
+    /// what the menu is showing. Closing after every click hides that change and turns
+    /// a multi-select into a reopen-and-click cycle; keeping the menu open lets the
+    /// dots follow `IsChecked` (or the new active provider), and the user closes it
+    /// explicitly (an outside click, `Esc`, or the caret). One-shot action rows still
+    /// use [`Self::run_command`] and dismiss the menu.
+    ///
+    /// A command that opens a modal wins: the menu is not restored under it.
+    pub(crate) fn run_command_in_place(&mut self, id: &str, cx: &mut Context<Self>) {
+        let popover = self.open_popover.clone();
+        self.run_command(id, cx);
+        if self.dialog.is_none() && self.form_dialog.is_none() {
+            self.open_popover = popover;
+        }
+    }
+
     /// Open a command's dialog, seeding one control per field.
     fn open_dialog_state(&mut self, token: String, spec: DialogSpec, cx: &mut Context<Self>) {
+        // A wizard or a rerun replaces the previous dialog: drop any preview it left.
+        self.clear_dialog_preview(cx);
+        // A new HUD starts free: the previous freeze belonged to the old anchor.
+        self.hud_rect = None;
+        self.hud_lock = None;
+        // A dialog outranks the transient wheel.
+        let _ = self.close_radial(cx);
+        let previews_translation = spec.previews_translation();
         let mut states = Vec::with_capacity(spec.fields.len());
         let mut inputs = Vec::with_capacity(spec.fields.len());
         let mut submits = Vec::new();
+        let mut changes = Vec::new();
         for field in &spec.fields {
             states.push(ValueState::for_field(field));
             if field.kind().is_textual() {
@@ -1596,6 +1937,9 @@ impl Shell {
                     input.set_text(seed, cx);
                     input
                 });
+                // The seed is selected so the first keystroke replaces it (`0.0` + `15`
+                // must be `15`, not `0.015`).
+                input.update(cx, |input, cx| input.select_all(cx));
                 // Enter in a field accepts: the same path as the button.
                 let submit = cx.subscribe(
                     &input,
@@ -1603,8 +1947,17 @@ impl Shell {
                         this.accept_dialog(cx);
                     },
                 );
+                // Every edit drives the spec's live preview (a no-op unless it asks
+                // for one).
+                let change = cx.subscribe(
+                    &input,
+                    |this: &mut Shell, _emitter, _event: &ChangeEvent, cx| {
+                        this.preview_dialog(cx);
+                    },
+                );
                 inputs.push(Some(input));
                 submits.push(submit);
+                changes.push(change);
             } else {
                 inputs.push(None);
             }
@@ -1616,8 +1969,14 @@ impl Shell {
             inputs,
             error: None,
             _submits: submits,
+            _changes: changes,
         });
         self.focus_dialog = true;
+        if previews_translation {
+            // A gizmo drag now reports previews instead of committing: the fields and
+            // the handles describe one pending move until the dialog accepts.
+            self.defer_gizmo_preview(true, cx);
+        }
         cx.notify();
     }
 
@@ -1642,6 +2001,172 @@ impl Shell {
                 },
             )
             .collect()
+    }
+
+    /// Drive a spec's live preview from the current field text.
+    ///
+    /// `"translation"` composes a temporary transform on the selected entities; the
+    /// document is untouched, so `Esc` is a true cancel and `Enter` is still the only
+    /// commit. Text that does not parse yet previews as zero rather than flashing an
+    /// error mid-keystroke.
+    fn preview_dialog(&mut self, cx: &mut Context<Self>) {
+        let delta = {
+            let Some(dialog) = self.dialog.as_ref() else {
+                return;
+            };
+            if !dialog.spec.previews_translation() {
+                return;
+            }
+            let states = self.dialog_states(cx);
+            let Some(delta) = dialog::translation_preview(&dialog.spec, &states) else {
+                return;
+            };
+            delta
+        };
+        let entities: Vec<u32> = {
+            let model = self.model.lock().unwrap();
+            model
+                .selection
+                .iter()
+                .filter_map(|item| self.display.entity_of(&item.object))
+                .collect()
+        };
+        let Some(viewport) = self.viewport.clone() else {
+            return;
+        };
+        viewport.update(cx, |viewport, cx| {
+            if viewport.preview_translation(&entities, delta) {
+                cx.notify();
+            }
+        });
+        // The gizmo (and therefore the HUD anchor) follows the previewed object, so
+        // re-render the shell to keep the panel beside it.
+        cx.notify();
+    }
+
+    /// Drop a typed preview without changing the document (cancel or dismiss).
+    fn clear_dialog_preview(&mut self, cx: &mut Context<Self>) {
+        self.drag_baseline = None;
+        let Some(viewport) = self.viewport.clone() else {
+            return;
+        };
+        viewport.update(cx, |viewport, cx| {
+            viewport.set_gizmo_preview(false);
+            if viewport.preview_translation(&[], [0.0; 3]) {
+                cx.notify();
+            }
+        });
+    }
+
+    /// Enable or disable the viewport's deferred gizmo commit.
+    fn defer_gizmo_preview(&mut self, deferred: bool, cx: &mut Context<Self>) {
+        let Some(viewport) = self.viewport.clone() else {
+            return;
+        };
+        viewport.update(cx, |viewport, _cx| viewport.set_gizmo_preview(deferred));
+    }
+
+    /// The Δ values currently in the fields, when the spec previews a translation.
+    fn translation_in_fields(&self, cx: &App) -> Option<[f64; 3]> {
+        let dialog = self.dialog.as_ref()?;
+        if !dialog.spec.previews_translation() {
+            return None;
+        }
+        let states = self.dialog_states(cx);
+        dialog::translation_preview(&dialog.spec, &states)
+    }
+
+    /// Write a delta into the `dx`/`dy`/`dz` inputs.
+    ///
+    /// `TextInput::set_text` is programmatic, so this does **not** emit a change event:
+    /// mirroring a drag back into the fields cannot loop into another preview.
+    fn set_translation_fields(&mut self, delta: [f64; 3], cx: &mut Context<Self>) {
+        let inputs: Vec<(usize, Entity<TextInput>)> = {
+            let Some(dialog) = self.dialog.as_ref() else {
+                return;
+            };
+            dialog
+                .spec
+                .fields
+                .iter()
+                .enumerate()
+                .filter_map(|(index, field)| {
+                    let slot = match field.name.as_str() {
+                        "dx" => 0,
+                        "dy" => 1,
+                        "dz" => 2,
+                        _ => return None,
+                    };
+                    let input = dialog.inputs.get(index).and_then(Option::as_ref)?.clone();
+                    Some((slot, input))
+                })
+                .collect()
+        };
+        for (slot, input) in inputs {
+            let text = format!("{:.2}", delta[slot]);
+            input.update(cx, |input, cx| input.set_text(text, cx));
+        }
+    }
+
+    /// A live gizmo drag while a translation HUD is open: mirror the accumulated delta
+    /// into the Δ fields and keep the whole selection previewing. Nothing reaches the
+    /// document, so the drag and the typed values describe the same pending move.
+    fn on_transform_preview(&mut self, preview: &TransformPreview, cx: &mut Context<Self>) {
+        if !self
+            .dialog
+            .as_ref()
+            .is_some_and(|dialog| dialog.spec.previews_translation())
+        {
+            return;
+        }
+        if preview.phase == PreviewPhase::Begin {
+            // A drag reports its transform relative to its own start; the fields keep
+            // whatever they held, so successive drags accumulate into the same move.
+            self.drag_baseline = self.translation_in_fields(cx);
+        }
+        let baseline = self.drag_baseline.unwrap_or([0.0; 3]);
+        let m = &preview.total_transform.m;
+        let delta = [baseline[0] + m[3], baseline[1] + m[7], baseline[2] + m[11]];
+        self.set_translation_fields(delta, cx);
+        self.preview_dialog(cx);
+        if preview.phase == PreviewPhase::End {
+            self.drag_baseline = None;
+        }
+    }
+
+    /// Where a floating dialog should sit: beside the gizmo, else under the live
+    /// pointer. The gizmo wins when it is visible, so the HUD hangs off the handles
+    /// the user is about to drag; otherwise it opens where they are looking.
+    fn dialog_anchor(&self, window: &Window, cx: &App) -> Point<Pixels> {
+        self.viewport
+            .as_ref()
+            .and_then(|viewport| viewport.read(cx).gizmo_anchor())
+            .unwrap_or_else(|| window.mouse_position())
+    }
+
+    /// Move focus between a dialog's textual fields. `Tab` cycles forward; `Shift+Tab`
+    /// back. Fields without an input (bool/enum) are not stops.
+    fn cycle_dialog_focus(&mut self, backward: bool, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(dialog) = self.dialog.as_ref() else {
+            return;
+        };
+        let handles: Vec<FocusHandle> = dialog
+            .inputs
+            .iter()
+            .flatten()
+            .map(|input| input.read(cx).focus_handle(cx))
+            .collect();
+        if handles.is_empty() {
+            return;
+        }
+        let current = handles.iter().position(|handle| handle.is_focused(window));
+        let next = match (current, backward) {
+            (None, false) => 0,
+            (None, true) => handles.len() - 1,
+            (Some(index), false) => (index + 1) % handles.len(),
+            (Some(index), true) => (index + handles.len() - 1) % handles.len(),
+        };
+        window.focus(&handles[next], cx);
     }
 
     /// Validate and hand the dialog's values to the facade. Validation errors stay
@@ -1677,6 +2202,9 @@ impl Shell {
     ) {
         match result {
             Ok(outcome) if outcome.ok => {
+                // The pending move is now applied (or replaced by a wizard): release
+                // the deferred gizmo and drop the ghost before the stage rebuild.
+                self.clear_dialog_preview(cx);
                 if let (Some(spec), Some(token)) = (outcome.dialog.clone(), outcome.token.clone()) {
                     self.open_dialog_state(token, spec, cx);
                 } else {
@@ -1698,6 +2226,7 @@ impl Shell {
                 self.console_line(status, cx);
                 self.refresh(cx);
                 self.sync_stage(cx);
+                self.rearm_selection(cx);
                 // A dialog callback is how the A1 fork triggers the refresh: it has
                 // already registered or removed the overlay through the bridge.
                 self.sync_overlays(cx);
@@ -1729,6 +2258,7 @@ impl Shell {
             return;
         };
         let _ = commands::cancel(&dialog.token);
+        self.clear_dialog_preview(cx);
         self.model.lock().unwrap().status = "dialog cancelled".to_string();
         cx.notify();
     }
@@ -1774,7 +2304,9 @@ impl Shell {
             cx.notify();
             return false;
         }
-        // A header menu would sit behind the modal; dismiss it with the open.
+        // A header menu or a latched wheel would sit behind the modal; dismiss them
+        // with the open.
+        let _ = self.close_radial(cx);
         self.open_popover = None;
         self.popover_anchor = None;
         let dialog = cx.new(|_| FormDialog::new(form, name));
@@ -2088,6 +2620,22 @@ impl Shell {
     /// The push happens **before** the commands are listed, so `IsActive` sees the
     /// selection the user just made.
     fn replace_selection(&mut self, items: Vec<SelectionItem>, cx: &mut Context<Self>) {
+        // Opening menus never mutates the selection. A **new** selection, however,
+        // invalidates both an open wheel (its context target no longer matches the
+        // selection) and a pending translation form (its delta was measured against
+        // the old selection), so both close before the new selection is reported.
+        let wheel = self.wheel.clone();
+        let _ = wheel.update(cx, |wheel, cx| wheel.close(cx));
+        self.wheel_target = None;
+        if self
+            .dialog
+            .as_ref()
+            .is_some_and(|dialog| dialog.spec.previews_translation())
+            && let Some(dialog) = self.dialog.take()
+        {
+            let _ = commands::cancel(&dialog.token);
+            self.clear_dialog_preview(cx);
+        }
         let primary = items.last().map(|item| item.object.clone());
         let properties = primary
             .as_deref()
@@ -2155,16 +2703,32 @@ impl Shell {
             .iter()
             .flat_map(|doc| doc.objects.iter().map(|obj| obj.name.clone()))
             .collect();
-        let (next, primary) = {
+        let (next, primary, pruned) = {
             let m = self.model.lock().unwrap();
             let mut next = m.selection.clone();
             next.retain(|item| live_node(&item.object, &live));
+            let pruned = next.len() != m.selection.len();
             let primary = next
                 .last()
                 .map(|item| item.object.clone())
                 .or_else(|| m.selected.clone().filter(|name| live_node(name, &live)));
-            (next, primary)
+            (next, primary, pruned)
         };
+        // A deleted selection cannot keep a pending form or an open context menu.
+        if pruned {
+            let wheel = self.wheel.clone();
+            let _ = wheel.update(cx, |wheel, cx| wheel.close(cx));
+            self.wheel_target = None;
+            if self
+                .dialog
+                .as_ref()
+                .is_some_and(|dialog| dialog.spec.previews_translation())
+                && let Some(dialog) = self.dialog.take()
+            {
+                let _ = commands::cancel(&dialog.token);
+                self.clear_dialog_preview(cx);
+            }
+        }
         let properties = primary
             .as_deref()
             .map(|name| python::properties(name).unwrap_or_default())
@@ -2257,6 +2821,7 @@ impl Shell {
                 }
                 self.refresh(cx);
                 self.sync_stage(cx);
+                self.rearm_selection(cx);
                 format!("set {key}")
             }
             Ok(result) => format!("property error: {}", result.error),
@@ -2291,6 +2856,7 @@ impl Shell {
         // A console line can add objects or change values; re-read the model.
         self.refresh(cx);
         self.sync_stage(cx);
+        self.rearm_selection(cx);
         let transcript = transcript_of(&self.model);
         self.console
             .update(cx, |area, cx| area.set_transcript(transcript, cx));
@@ -2364,21 +2930,64 @@ pub(crate) fn panel_header(text: &str) -> impl IntoElement {
         .child(text.to_string())
 }
 
-/// The modal for an open command dialog (A3): a glass panel over a dimmed shell.
+/// The window margin a floating HUD keeps from every edge.
+const HUD_MARGIN: f32 = 16.0;
+/// The clearance below a floating HUD, so it never covers the bottom dock.
+const HUD_DOCK_CLEARANCE: f32 = 64.0;
+/// Where the HUD first appears relative to its anchor: below-right of the gizmo.
+const HUD_OFFSET_X: f32 = 24.0;
+const HUD_OFFSET_Y: f32 = 88.0;
+
+/// The inclusive range of HUD origins that keep the whole rect inside the viewport
+/// safe area (16 px margins, 64 px above the bottom dock).
+fn hud_origin_range(viewport: Size<Pixels>, hud: Size<Pixels>) -> (f32, f32) {
+    let max_x = (viewport.width.0 - hud.width.0 - HUD_MARGIN).max(HUD_MARGIN);
+    let max_y = (viewport.height.0 - hud.height.0 - HUD_DOCK_CLEARANCE).max(HUD_MARGIN);
+    (max_x, max_y)
+}
+
+/// Keep a HUD origin inside the viewport safe area.
+fn clamp_hud(origin: Point<Pixels>, viewport: Size<Pixels>, hud: Size<Pixels>) -> Point<Pixels> {
+    let (max_x, max_y) = hud_origin_range(viewport, hud);
+    point(
+        px(origin.x.0.clamp(HUD_MARGIN, max_x)),
+        px(origin.y.0.clamp(HUD_MARGIN, max_y)),
+    )
+}
+
+/// Where a floating HUD appears: below-right of `anchor`, clamped into the viewport
+/// safe area. `anchor` is the gizmo's visible origin (or the live pointer); the HUD
+/// must never leave the canvas, even when the gizmo is dragged into a corner.
+fn place_hud(anchor: Point<Pixels>, viewport: Size<Pixels>, hud: Size<Pixels>) -> Point<Pixels> {
+    let offset = point(px(anchor.x.0 + HUD_OFFSET_X), px(anchor.y.0 + HUD_OFFSET_Y));
+    clamp_hud(offset, viewport, hud)
+}
+
+/// A command dialog (A3): a floating dielectric HUD, or a glass modal over a dimmed
+/// shell when the spec keeps the default (`"presentation": "modal"`).
 ///
-/// The panel holds keyboard focus so `Esc` cancels; a text field's `Enter`
-/// submits through its own `SubmitEvent`, which is wired to the same accept path.
-fn dialog_overlay(shell: &mut Shell, cx: &mut Context<Shell>) -> AnyElement {
+/// A floating spec has **no backdrop**: the canvas stays bright and the gizmo keeps
+/// working, so typing a delta and dragging an arrow describe the same move. Only the
+/// panel itself occludes the pointer. Its first field takes focus, `Tab` cycles the
+/// fields, `Enter` accepts and `Esc` cancels; a text field's `Enter` submits through
+/// its own `SubmitEvent`, wired to the same accept path.
+fn dialog_overlay(shell: &mut Shell, window: &Window, cx: &mut Context<Shell>) -> AnyElement {
     let Some(dialog) = shell.dialog.as_ref() else {
         return div().into_any_element();
     };
+    let floating = dialog.spec.is_floating();
     let spec = dialog.spec.clone();
     let states = dialog.states.clone();
     let inputs = dialog.inputs.clone();
     let error = dialog.error.clone();
     let focus = shell.dialog_focus.clone();
 
-    let mut fields = div().flex().flex_col().gap_2();
+    let mut fields = div().flex().gap_2();
+    fields = if floating {
+        fields.flex_row().items_center().flex_wrap()
+    } else {
+        fields.flex_col()
+    };
     for (index, field) in spec.fields.iter().enumerate() {
         let control: AnyElement = match field.kind() {
             Kind::Bool => {
@@ -2427,32 +3036,133 @@ fn dialog_overlay(shell: &mut Shell, cx: &mut Context<Shell>) -> AnyElement {
                 .into_any_element(),
             _ => match inputs.get(index).and_then(Option::as_ref) {
                 Some(input) => div()
-                    .w(px(170.))
+                    .w(px(if floating { 84. } else { 170. }))
                     .flex_shrink_0()
                     .child(input.clone())
                     .into_any_element(),
                 None => div().into_any_element(),
             },
         };
-        fields = fields.child(
-            div()
-                .flex()
-                .flex_row()
-                .items_center()
-                .justify_between()
-                .gap_3()
-                .child(
-                    div()
-                        .text_xs()
-                        .text_color(rgb(MUTED))
-                        .child(field.label().to_string()),
-                )
-                .child(control),
-        );
+        let label_ink = if floating { axis_token(field) } else { MUTED };
+        let mut row = div()
+            .flex()
+            .flex_row()
+            .items_center()
+            .gap_2()
+            .child(
+                div()
+                    .text_xs()
+                    .text_color(rgb(label_ink))
+                    .child(field.label().to_string()),
+            )
+            .child(control);
+        if !floating {
+            row = row.justify_between().gap_3();
+        }
+        fields = fields.child(row);
+    }
+
+    let accept = spec.accept_label().to_string();
+    let cancel = spec.cancel_label().to_string();
+
+    if floating {
+        let viewport = window.viewport_size();
+        // The last painted size is the best estimate before this frame paints; the
+        // first frame uses a conservative default.
+        let hud_size = shell
+            .hud_rect
+            .map(|rect| rect.size)
+            .unwrap_or_else(|| size(px(600.0), px(72.0)));
+        // Freeze while the user is working in the HUD: over its rect, or typing into
+        // a field. Otherwise it follows the gizmo, clamped to the safe area. The
+        // rect is the one painted last frame, so entering or leaving is compared
+        // against what the pointer actually saw.
+        let focused = inputs
+            .iter()
+            .flatten()
+            .any(|input| input.read(cx).focus_handle(cx).is_focused(window));
+        let hovered = shell
+            .hud_rect
+            .is_some_and(|rect| rect.contains(&window.mouse_position()));
+        let follow = place_hud(shell.dialog_anchor(window, cx), viewport, hud_size);
+        let origin = if hovered || focused {
+            shell.hud_lock.unwrap_or(follow)
+        } else {
+            follow
+        };
+        // Resize or a new dialog may shrink the safe area under a frozen origin.
+        let origin = clamp_hud(origin, viewport, hud_size);
+        shell.hud_lock = Some(origin);
+        let mut panel = div()
+            .id("dialog-panel")
+            .debug_selector(|| "dialog-panel".to_string())
+            .flex()
+            .flex_col()
+            .gap_1()
+            .px_3()
+            .py_2()
+            .rounded_md()
+            .bg(rgba(WHEEL_GLASS))
+            .border_1()
+            .border_color(rgba(DOCK_BORDER))
+            .occlude()
+            .track_focus(&focus)
+            .focusable()
+            .on_key_down(cx.listener(|this, event: &KeyDownEvent, window, cx| {
+                match event.keystroke.key.as_str() {
+                    "escape" => this.cancel_dialog(cx),
+                    "enter" => this.accept_dialog(cx),
+                    "tab" => this.cycle_dialog_focus(event.keystroke.modifiers.shift, window, cx),
+                    _ => {}
+                }
+            }))
+            .child(
+                div()
+                    .flex()
+                    .flex_row()
+                    .items_center()
+                    .gap_3()
+                    .child(
+                        div()
+                            .text_xs()
+                            .text_color(rgb(MUTED))
+                            .child(spec.title.clone()),
+                    )
+                    .child(fields)
+                    .child(dialog_buttons(accept, cancel, true, cx)),
+            );
+        if let Some(error) = &error {
+            panel = panel.child(
+                div()
+                    .text_xs()
+                    .text_color(rgb(0xef4444))
+                    .child(error.clone()),
+            );
+        }
+        // The wrapper measures the painted panel, so the next frame can hit-test the
+        // pointer against exactly where the HUD sits. Storing bounds does not notify:
+        // it is read on the following frame.
+        let weak = cx.weak_entity();
+        let hud = div()
+            .on_children_prepainted(move |bounds, _window, cx| {
+                if let Some(rect) = bounds.first().copied() {
+                    let _ = weak.update(cx, |shell, _cx| shell.hud_rect = Some(rect));
+                }
+            })
+            .child(panel);
+        return deferred(
+            anchored()
+                .anchor(Anchor::TopLeft)
+                .position(origin)
+                .child(hud),
+        )
+        .with_priority(2)
+        .into_any_element();
     }
 
     let mut panel = div()
         .id("dialog-panel")
+        .debug_selector(|| "dialog-panel".to_string())
         .w(px(380.))
         .flex()
         .flex_col()
@@ -2486,42 +3196,11 @@ fn dialog_overlay(shell: &mut Shell, cx: &mut Context<Shell>) -> AnyElement {
                 .child(error.clone()),
         );
     }
-    let accept = spec.accept_label().to_string();
-    let cancel = spec.cancel_label().to_string();
-    panel = panel.child(
-        div()
-            .flex()
-            .flex_row()
-            .justify_end()
-            .gap_2()
-            .child(
-                div()
-                    .id("dialog-cancel")
-                    .px_3()
-                    .py_1()
-                    .rounded_sm()
-                    .bg(rgb(PANEL_ALT))
-                    .text_xs()
-                    .text_color(rgb(FG))
-                    .child(cancel)
-                    .on_click(cx.listener(|this, _event, _window, cx| this.cancel_dialog(cx))),
-            )
-            .child(
-                div()
-                    .id("dialog-accept")
-                    .px_3()
-                    .py_1()
-                    .rounded_sm()
-                    .bg(rgb(ACCENT))
-                    .text_xs()
-                    .text_color(rgb(FG))
-                    .child(accept)
-                    .on_click(cx.listener(|this, _event, _window, cx| this.accept_dialog(cx))),
-            ),
-    );
+    panel = panel.child(dialog_buttons(accept, cancel, false, cx));
 
     div()
         .id("dialog-backdrop")
+        .debug_selector(|| "dialog-backdrop".to_string())
         .absolute()
         .left(px(0.))
         .top(px(0.))
@@ -2533,6 +3212,59 @@ fn dialog_overlay(shell: &mut Shell, cx: &mut Context<Shell>) -> AnyElement {
         .occlude()
         .child(panel)
         .into_any_element()
+}
+
+/// The axis ink for a floating field: `dx`/`dy`/`dz` (or `x`/`y`/`z`) get their
+/// tokens, everything else stays muted.
+fn axis_token(field: &crate::dialog::DialogField) -> u32 {
+    match field.name.to_ascii_lowercase().as_str() {
+        "dx" | "x" => AXIS_X,
+        "dy" | "y" => AXIS_Y,
+        "dz" | "z" => AXIS_Z,
+        _ => MUTED,
+    }
+}
+
+/// The accept/cancel pair. `compact` tightens the padding for the floating HUD.
+fn dialog_buttons(
+    accept: String,
+    cancel: String,
+    compact: bool,
+    cx: &mut Context<Shell>,
+) -> impl IntoElement {
+    let pad = if compact { px(2.) } else { px(3.) };
+    div()
+        .flex()
+        .flex_row()
+        .items_center()
+        .justify_end()
+        .gap_2()
+        .child(
+            div()
+                .id("dialog-cancel")
+                .debug_selector(|| "dialog-cancel".to_string())
+                .px(pad)
+                .py_1()
+                .rounded_sm()
+                .bg(rgb(PANEL_ALT))
+                .text_xs()
+                .text_color(rgb(FG))
+                .child(cancel)
+                .on_click(cx.listener(|this, _event, _window, cx| this.cancel_dialog(cx))),
+        )
+        .child(
+            div()
+                .id("dialog-accept")
+                .debug_selector(|| "dialog-accept".to_string())
+                .px(pad)
+                .py_1()
+                .rounded_sm()
+                .bg(rgb(ACCENT))
+                .text_xs()
+                .text_color(rgb(FG))
+                .child(accept)
+                .on_click(cx.listener(|this, _event, _window, cx| this.accept_dialog(cx))),
+        )
 }
 
 /// The command palette (Ctrl+K): a focused search field over the filtered registry.
@@ -3096,8 +3828,8 @@ pub(crate) fn dev_tools_body(
         .focusable()
         // Commands and shortcuts run from either window. `Esc` also reaches the modal
         // and tool paths, which stay on the shell root.
-        .on_key_down(cx.listener(|this, event: &KeyDownEvent, _window, cx| {
-            if this.handle_key(event, true, cx) {
+        .on_key_down(cx.listener(|this, event: &KeyDownEvent, window, cx| {
+            if this.handle_key(event, true, window, cx) {
                 cx.stop_propagation();
             }
         }))
@@ -3126,10 +3858,22 @@ impl Render for Shell {
         if let Some(focus) = self.palette_restore_focus.take() {
             window.focus(&focus, cx);
         }
-        // A modal was opened outside a window context; focus it once rendered so
-        // Esc cancels and the panel receives bubbled keys.
+        // A dialog was opened outside a window context; focus its first field (or the
+        // panel, when it has none) once rendered so typing starts immediately and
+        // `Esc` still bubbles to the cancel path.
         if std::mem::take(&mut self.focus_dialog) {
-            window.focus(&self.dialog_focus, cx);
+            let first = self
+                .dialog
+                .as_ref()
+                .and_then(|dialog| dialog.inputs.iter().flatten().next())
+                .cloned();
+            match first {
+                Some(input) => {
+                    let handle = input.read(cx).focus_handle(cx);
+                    window.focus(&handle, cx);
+                }
+                None => window.focus(&self.dialog_focus, cx),
+            }
         }
         // A form opens outside a window context too. Its own element is not
         // focusable, so the shell root takes the keyboard and routes Esc/Enter.
@@ -3179,6 +3923,23 @@ impl Render for Shell {
             .flex_1()
             .min_h_0()
             .debug_selector(|| "main-canvas".to_string())
+            // The shell only triggers: a right-press arms the sidecar at the pointer,
+            // and the move/release are forwarded so it can hover, flick or latch. The
+            // sidecar owns the gesture state and its overlay. The viewport does not
+            // consume right-clicks.
+            .on_mouse_move(cx.listener(|this, event: &MouseMoveEvent, _window, cx| {
+                this.last_pointer = Some(event.position);
+                this.hover_radial(event.position, cx);
+            }))
+            .on_mouse_down(MouseButton::Right, cx.listener(|this, event: &MouseDownEvent, _window, cx| {
+                if this.active_tool.is_none() && this.dialog.is_none() {
+                    this.last_pointer = Some(event.position);
+                    this.open_radial(event.position, cx);
+                }
+            }))
+            .on_mouse_up(MouseButton::Right, cx.listener(|this, event: &MouseUpEvent, _window, cx| {
+                this.release_radial(event.position, cx);
+            }))
             .child(match &self.viewport {
                 Some(viewport) => viewport.clone().into_any_element(),
                 None => div()
@@ -3205,13 +3966,8 @@ impl Render for Shell {
                         cx,
                     )),
             )
-            .child(crate::chrome::action_dock(
-                &model,
-                self.provider_features.as_deref().unwrap_or(&[]),
-                self.open_popover.as_deref(),
-                self.popover_anchor,
-                cx,
-            ));
+            .child(crate::chrome::action_dock(&model, cx))
+            .child(self.wheel.clone().into_any_element());
         let viewport = viewport.child(canvas);
 
         let hover = self.hover_line(cx);
@@ -3255,14 +4011,19 @@ impl Render for Shell {
             .relative()
             .size_full()
             .debug_selector(|| "main-shell".to_string())
-            .on_key_down(cx.listener(|this, event: &KeyDownEvent, _window, cx| {
-                if this.handle_key(event, false, cx) {
+            .on_key_down(cx.listener(|this, event: &KeyDownEvent, window, cx| {
+                if this.handle_key(event, false, window, cx) {
                     cx.stop_propagation();
                 }
             }))
             // The settings card is dragged from its header, but the shell root sees
             // the moves so a fast drag does not stop at the card edge.
             .on_mouse_move(cx.listener(|this, event: &MouseMoveEvent, _window, cx| {
+                // The canvas records moves over the scene; the root also catches the
+                // shell's own background, so `last_pointer` stays warm for a
+                // keyboard-opened wheel. (Hover over the HUD is read from the
+                // window's mouse position, which every element sees.)
+                this.last_pointer = Some(event.position);
                 this.drag_settings_card(event.position, event.pressed_button, cx);
             }))
             .on_mouse_up(MouseButton::Left, cx.listener(|this, _event, _window, cx| {
@@ -3277,7 +4038,7 @@ impl Render for Shell {
         let body = if let Some(dialog) = self.form_dialog.clone() {
             body.child(dialog)
         } else if self.dialog.is_some() {
-            body.child(dialog_overlay(self, cx))
+            body.child(dialog_overlay(self, window, cx))
         } else if self.palette.is_some() {
             body.child(palette_overlay(self, &model, cx))
         } else if self.settings_card.is_some() {
@@ -3659,11 +4420,310 @@ if "Test_DialogView" not in FreeCADGui.listCommands():
             let _ = window.draw(cx);
         });
 
-        // The modal held focus, so Escape cancels and drops its token.
+        // The dialog held focus, so Escape cancels and drops its token.
         cx.simulate_keystrokes("escape");
         assert!(
             cx.update(|_window, cx| shell.read(cx).dialog.is_none()),
             "Escape cancelled the modal"
+        );
+    }
+
+    /// `App_Move` asks for a floating presentation: the panel paints **without** the
+    /// dimming backdrop, so the canvas and gizmo stay visible and interactive. The
+    /// first field takes focus and `Tab` walks the delta fields.
+    #[gpui::test]
+    fn the_move_dialog_floats_without_a_backdrop(cx: &mut TestAppContext) {
+        let _guard = crate::PYTHON_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let model = Shell::boot().expect("boot shell");
+        let window = cx.update(|cx| {
+            let model = model.clone();
+            cx.open_window(Default::default(), move |_window, cx| {
+                cx.new(|cx| Shell::from_model(model.clone(), cx))
+            })
+            .unwrap()
+        });
+        let mut cx = VisualTestContext::from_window(window.into(), cx);
+        let shell: Entity<Shell> = window.root(&mut cx).unwrap();
+        cx.update(|_window, cx| {
+            shell.update(cx, |shell, cx| {
+                shell.select("Params", cx);
+                shell.run_command("App_Move", cx);
+            })
+        });
+        draw(&mut cx);
+
+        assert!(cx.debug_bounds("dialog-panel").is_some(), "the HUD paints");
+        assert!(
+            cx.debug_bounds("dialog-backdrop").is_none(),
+            "a float has no dimming backdrop"
+        );
+        assert!(cx.debug_bounds("dialog-accept").is_some());
+        assert!(cx.debug_bounds("dialog-cancel").is_some());
+
+        // The first delta field took focus; Tab moves to the second.
+        let second = shell.read_with(&cx, |shell, cx| {
+            shell
+                .dialog
+                .as_ref()
+                .and_then(|dialog| dialog.inputs.iter().flatten().nth(1))
+                .map(|input| input.read(cx).focus_handle(cx))
+        });
+        let second = second.expect("a second field");
+        cx.simulate_keystrokes("tab");
+        assert!(
+            cx.update(|window, _cx| second.is_focused(window)),
+            "Tab moves focus to the next delta field"
+        );
+    }
+
+    /// Seam B: while a field is focused the floating HUD is frozen, so typing a large
+    /// delta cannot slide the inputs out from under the pointer. Releasing focus and
+    /// moving away lets it track the anchor again.
+    #[gpui::test]
+    fn a_focused_floating_hud_freezes_in_place(cx: &mut TestAppContext) {
+        let _guard = crate::PYTHON_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let model = Shell::boot().expect("boot shell");
+        let window = cx.update(|cx| {
+            let model = model.clone();
+            cx.open_window(Default::default(), move |_window, cx| {
+                cx.new(|cx| Shell::from_model(model.clone(), cx))
+            })
+            .unwrap()
+        });
+        let mut cx = VisualTestContext::from_window(window.into(), cx);
+        let shell: Entity<Shell> = window.root(&mut cx).unwrap();
+        cx.update(|_window, cx| {
+            shell.update(cx, |shell, cx| {
+                shell.select("Params", cx);
+                shell.run_command("App_Move", cx);
+            })
+        });
+        draw(&mut cx);
+
+        let viewport = cx.update(|window, _cx| window.viewport_size());
+        let before = cx.debug_bounds("dialog-panel").expect("the HUD paints");
+        let hud_size = before.size;
+        let canvas = cx.debug_bounds("main-canvas").expect("the canvas");
+        // Bottom-left of the canvas: well away from the HUD's first position.
+        let far = point(
+            canvas.origin.x + px(8.0),
+            canvas.origin.y + canvas.size.height - px(8.0),
+        );
+
+        // The first delta field holds focus, so the HUD does not chase the pointer.
+        cx.simulate_mouse_move(far, None::<MouseButton>, gpui::Modifiers::default());
+        draw(&mut cx);
+        let frozen = cx.debug_bounds("dialog-panel").expect("the HUD paints");
+        assert_eq!(
+            frozen.origin, before.origin,
+            "a focused HUD stays put while the pointer moves"
+        );
+
+        // Release focus and move again: the HUD follows the new anchor, clamped.
+        let root_focus = cx.update(|_window, cx| shell.read(cx).root_focus.clone());
+        cx.update(|window, cx| window.focus(&root_focus, cx));
+        let elsewhere = point(canvas.origin.x + px(8.0), canvas.origin.y + px(8.0));
+        cx.simulate_mouse_move(elsewhere, None::<MouseButton>, gpui::Modifiers::default());
+        draw(&mut cx);
+        let resumed = cx.debug_bounds("dialog-panel").expect("the HUD paints");
+        assert_eq!(
+            resumed.origin,
+            place_hud(elsewhere, viewport, hud_size),
+            "with focus released the HUD follows the pointer, clamped"
+        );
+        assert_ne!(resumed.origin, frozen.origin, "the HUD moved again");
+    }
+
+    /// Seam B: a floating HUD is clamped into the viewport safe area.
+    #[test]
+    fn a_floating_hud_is_clamped_into_the_safe_area() {
+        let viewport = size(px(800.0), px(600.0));
+        let hud = size(px(400.0), px(72.0));
+
+        let origin = place_hud(point(px(100.0), px(100.0)), viewport, hud);
+        assert_eq!(
+            origin,
+            point(px(124.0), px(188.0)),
+            "below-right of the anchor"
+        );
+
+        let origin = place_hud(point(px(790.0), px(590.0)), viewport, hud);
+        assert_eq!(
+            origin,
+            point(
+                px(800.0 - 400.0 - HUD_MARGIN),
+                px(600.0 - 72.0 - HUD_DOCK_CLEARANCE)
+            ),
+            "a corner anchor still leaves the margins and the dock clear"
+        );
+
+        let frozen = clamp_hud(point(px(-40.0), px(900.0)), viewport, hud);
+        assert_eq!(
+            frozen,
+            point(px(HUD_MARGIN), px(600.0 - 72.0 - HUD_DOCK_CLEARANCE)),
+            "a frozen origin is clamped without the offset"
+        );
+
+        let tiny = size(px(200.0), px(100.0));
+        let origin = place_hud(point(px(50.0), px(50.0)), tiny, hud);
+        assert_eq!(
+            origin,
+            point(px(HUD_MARGIN), px(HUD_MARGIN)),
+            "a viewport smaller than the HUD still yields the margin"
+        );
+    }
+
+    /// The text in a named dialog field (empty when the field is absent).
+    fn dialog_field(shell: &Shell, cx: &App, name: &str) -> String {
+        let Some(dialog) = shell.dialog.as_ref() else {
+            return String::new();
+        };
+        let Some(index) = dialog
+            .spec
+            .fields
+            .iter()
+            .position(|field| field.name == name)
+        else {
+            return String::new();
+        };
+        dialog
+            .inputs
+            .get(index)
+            .and_then(Option::as_ref)
+            .map(|input| input.read(cx).text().to_string())
+            .unwrap_or_default()
+    }
+
+    /// A deferred gizmo drag mirrors its accumulated delta into the Δ fields — and
+    /// successive drags accumulate from the values already there.
+    #[gpui::test]
+    fn a_gizmo_drag_updates_the_move_fields(cx: &mut TestAppContext) {
+        let _guard = crate::PYTHON_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let model = Shell::boot().expect("boot shell");
+        let window = cx.update(|cx| {
+            let model = model.clone();
+            cx.open_window(Default::default(), move |_window, cx| {
+                cx.new(|cx| Shell::from_model(model.clone(), cx))
+            })
+            .unwrap()
+        });
+        let mut cx = VisualTestContext::from_window(window.into(), cx);
+        let shell: Entity<Shell> = window.root(&mut cx).unwrap();
+        cx.update(|_window, cx| {
+            shell.update(cx, |shell, cx| {
+                shell.select("Params", cx);
+                shell.run_command("App_Move", cx);
+            })
+        });
+        draw(&mut cx);
+
+        let field = |cx: &VisualTestContext, name: &str| {
+            shell.read_with(cx, |shell, cx| dialog_field(shell, cx, name))
+        };
+        assert_eq!(field(&cx, "dx"), "0.0");
+
+        let preview = |phase, x: f64, y: f64, z: f64| TransformPreview {
+            target_id: 7,
+            phase,
+            total_transform: ferrocad_types::Matrix4::translation(x, y, z),
+        };
+        cx.update(|_window, cx| {
+            shell.update(cx, |shell, cx| {
+                shell.on_transform_preview(&preview(PreviewPhase::Begin, 0.0, 0.0, 0.0), cx);
+                shell.on_transform_preview(&preview(PreviewPhase::Update, 5.0, 0.0, 0.0), cx);
+                shell.on_transform_preview(&preview(PreviewPhase::End, 5.0, 0.0, 0.0), cx);
+            })
+        });
+        assert_eq!(field(&cx, "dx"), "5.00");
+        assert_eq!(field(&cx, "dy"), "0.00");
+
+        // The next drag starts from 5.00 and adds its own delta.
+        cx.update(|_window, cx| {
+            shell.update(cx, |shell, cx| {
+                shell.on_transform_preview(&preview(PreviewPhase::Begin, 0.0, 0.0, 0.0), cx);
+                shell.on_transform_preview(&preview(PreviewPhase::Update, 2.0, 1.0, 0.0), cx);
+                shell.on_transform_preview(&preview(PreviewPhase::End, 2.0, 1.0, 0.0), cx);
+            })
+        });
+        assert_eq!(field(&cx, "dx"), "7.00");
+        assert_eq!(field(&cx, "dy"), "1.00");
+    }
+
+    /// Any committed interaction supersedes the pending Move: a height change closes
+    /// the HUD (and spends its token) instead of leaving a stale delta on screen.
+    #[gpui::test]
+    fn a_competing_interaction_closes_the_move_hud(cx: &mut TestAppContext) {
+        let _guard = crate::PYTHON_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let model = Shell::boot().expect("boot shell");
+        let window = cx.update(|cx| {
+            let model = model.clone();
+            cx.open_window(Default::default(), move |_window, cx| {
+                cx.new(|cx| Shell::from_model(model.clone(), cx))
+            })
+            .unwrap()
+        });
+        let mut cx = VisualTestContext::from_window(window.into(), cx);
+        let shell: Entity<Shell> = window.root(&mut cx).unwrap();
+        cx.update(|_window, cx| {
+            shell.update(cx, |shell, cx| {
+                shell.select("Params", cx);
+                shell.run_command("App_Move", cx);
+            })
+        });
+        draw(&mut cx);
+        assert!(shell.read_with(&cx, |shell, _| shell.dialog.is_some()));
+
+        let height = InteractionCommit::new("toy_height", 0, "set").with_values([30.0]);
+        cx.update(|_window, cx| shell.update(cx, |shell, cx| shell.on_interaction(&height, cx)));
+        assert!(
+            shell.read_with(&cx, |shell, _| shell.dialog.is_none()),
+            "a height commit closes the Move HUD"
+        );
+    }
+
+    /// The form is scoped to its selection: clearing or replacing the selection closes
+    /// it instead of leaving a pending delta for objects that are no longer selected.
+    #[gpui::test]
+    fn a_selection_change_closes_the_move_hud(cx: &mut TestAppContext) {
+        let _guard = crate::PYTHON_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let model = Shell::boot().expect("boot shell");
+        let window = cx.update(|cx| {
+            let model = model.clone();
+            cx.open_window(Default::default(), move |_window, cx| {
+                cx.new(|cx| Shell::from_model(model.clone(), cx))
+            })
+            .unwrap()
+        });
+        let mut cx = VisualTestContext::from_window(window.into(), cx);
+        let shell: Entity<Shell> = window.root(&mut cx).unwrap();
+        cx.update(|_window, cx| {
+            shell.update(cx, |shell, cx| {
+                shell.select("Params", cx);
+                shell.run_command("App_Move", cx);
+            })
+        });
+        draw(&mut cx);
+        assert!(shell.read_with(&cx, |shell, _| shell.dialog.is_some()));
+
+        // Clearing the selection closes it.
+        cx.update(|_window, cx| shell.update(cx, |shell, cx| shell.clear_selection(cx)));
+        assert!(
+            shell.read_with(&cx, |shell, _| shell.dialog.is_none()),
+            "unselecting closes the Move HUD"
+        );
+
+        // Replacing it (a tree click) does too.
+        cx.update(|_window, cx| {
+            shell.update(cx, |shell, cx| {
+                shell.select("Params", cx);
+                shell.run_command("App_Move", cx);
+            })
+        });
+        assert!(shell.read_with(&cx, |shell, _| shell.dialog.is_some()));
+        cx.update(|_window, cx| shell.update(cx, |shell, cx| shell.select("Derived", cx)));
+        assert!(
+            shell.read_with(&cx, |shell, _| shell.dialog.is_none()),
+            "a new selection closes the Move HUD"
         );
     }
 
@@ -4708,7 +5768,8 @@ if "Test_Unannotated" not in FreeCADGui.listCommands():
         assert_eq!(find("App_ToggleAxisCross").surface(), Surface::Axis);
         assert_eq!(find("App_ViewWorkplane").surface(), Surface::Workplane);
         assert_eq!(find("Mods_Settings").surface(), Surface::Mods);
-        assert_eq!(find("App_Delete").surface(), Surface::Dock);
+        assert_eq!(find("App_Delete").surface(), Surface::Radial);
+        assert_eq!(find("App_Move").surface(), Surface::Radial);
         assert_eq!(
             find("Dev_ToggleTools").surface(),
             Surface::Hidden,
@@ -4846,7 +5907,7 @@ if "Test_Unannotated" not in FreeCADGui.listCommands():
             "provider rows come before the generic settings rows"
         );
         assert!(
-            cx.debug_bounds("hairline-2").is_some(),
+            cx.debug_bounds("grid-hairline-2").is_some(),
             "the provider group and the config group have a hairline"
         );
 
@@ -5055,6 +6116,193 @@ if "App_ReloadAxisSettings" not in FreeCADGui.listCommands():
         reset_grid_state();
     }
 
+    /// The snap filter set is spatial ambient state, so it lives beside Grid/Axes/WP
+    /// in the header, not in the action dock. The label is the global switch and the
+    /// popover is the six-mode checklist with de-noised labels.
+    #[gpui::test]
+    fn the_snap_control_lives_in_the_header_and_not_the_dock(cx: &mut TestAppContext) {
+        let _guard = crate::PYTHON_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let model = Shell::boot().expect("boot shell");
+        reset_grid_state();
+        let window = cx.update(|cx| {
+            let model = model.clone();
+            cx.open_window(Default::default(), move |_window, cx| {
+                cx.new(|cx| Shell::from_model(model.clone(), cx))
+            })
+            .unwrap()
+        });
+        let mut cx = VisualTestContext::from_window(window.into(), cx);
+        let shell: Entity<Shell> = window.root(&mut cx).unwrap();
+        draw(&mut cx);
+
+        // The control is the last item in the spatial pill, after WP.
+        let header = cx.debug_bounds("viewport-header").expect("the control pill");
+        let wp = cx.debug_bounds("wp-label").expect("the WP label");
+        let snap = cx.debug_bounds("snap-label").expect("the Snap label");
+        assert!(wp.origin.x < snap.origin.x, "Snap follows WP");
+        assert!(
+            header.contains(&snap.center()),
+            "the pill owns the Snap control"
+        );
+        assert!(
+            cx.debug_bounds("snap-state-dot").is_some(),
+            "the Snap control carries a persistent on/off dot"
+        );
+
+        // The six modes are on the snap surface and parented to the switch, so the
+        // dock does not render them any more.
+        let command_ids: Vec<String> = {
+            let model = model.lock().unwrap();
+            model.commands.iter().map(|command| command.id.clone()).collect()
+        };
+        for id in [
+            "Draft_Snap_Lock",
+            "Draft_Snap_Grid",
+            "Draft_Snap_Endpoint",
+            "Draft_Snap_Midpoint",
+            "Draft_Snap_Center",
+            "Draft_Snap_Origin",
+            "Draft_Snap_Vertex",
+        ] {
+            assert!(
+                command_ids.iter().any(|known| known.as_str() == id),
+                "{id} is registered"
+            );
+        }
+        {
+            let model = model.lock().unwrap();
+            let lock = crate::commands::find(&model.commands, "Draft_Snap_Lock")
+                .expect("the lock command");
+            assert_eq!(lock.surface(), crate::commands::Surface::Snap);
+            let grid_mode = crate::commands::find(&model.commands, "Draft_Snap_Grid")
+                .expect("the Grid mode");
+            assert_eq!(grid_mode.surface(), crate::commands::Surface::Snap);
+            assert_eq!(grid_mode.parent(), Some("Draft_Snap_Lock"));
+            assert_eq!(grid_mode.short_label(), "Grid");
+        }
+        assert!(
+            cx.debug_bounds("dock-Draft_Snap_Grid").is_none(),
+            "the snap modes left the action dock"
+        );
+        assert!(
+            cx.debug_bounds("dock-App_Delete").is_none(),
+            "the selection verbs are radial slots, not dock rows"
+        );
+        assert!(
+            cx.debug_bounds("dock-search").is_some(),
+            "the dock still carries the global search slot"
+        );
+
+        // Opening the caret does not toggle the switch.
+        fn snapping_enabled() -> bool {
+            let result = crate::python::evaluate(
+                "import FreeCADGui\nprint(FreeCADGui.Snapper.isEnabled())",
+            )
+            .expect("read the snap switch");
+            assert!(result.ok, "{}", result.output);
+            result.output.trim() == "True"
+        }
+        let before = snapping_enabled();
+        click_at(&mut cx, "snap-caret");
+        assert!(cx.update(|_window, cx| shell.read(cx).popover_open("snap")));
+        assert_eq!(snapping_enabled(), before, "the caret ran no command");
+
+        // A checkable row toggles in place: the menu stays open and the tick follows.
+        fn mode_enabled(mode: &str) -> bool {
+            let result = crate::python::evaluate(&format!(
+                "import FreeCADGui\nprint(FreeCADGui.Snapper.isEnabled({mode:?}))"
+            ))
+            .expect("read the snap mode");
+            assert!(result.ok, "{}", result.output);
+            result.output.trim() == "True"
+        }
+        draw(&mut cx);
+        // Every mode row carries the pill's left-aligned status dot; the old
+        // right-aligned checkmark is gone.
+        for dot in [
+            "snap-row-Draft_Snap_Grid-dot",
+            "snap-row-Draft_Snap_Endpoint-dot",
+            "snap-row-Draft_Snap_Midpoint-dot",
+            "snap-row-Draft_Snap_Center-dot",
+            "snap-row-Draft_Snap_Origin-dot",
+            "snap-row-Draft_Snap_Vertex-dot",
+        ] {
+            assert!(cx.debug_bounds(dot).is_some(), "{dot} exists");
+        }
+        assert!(
+            cx.debug_bounds("snap-row-Draft_Snap_Grid").is_some(),
+            "the Grid mode is a row"
+        );
+        let grid_mode = mode_enabled("Grid");
+        click_at(&mut cx, "snap-row-Draft_Snap_Grid");
+        assert!(
+            cx.update(|_window, cx| shell.read(cx).popover_open("snap")),
+            "toggling a checkable row keeps the menu open"
+        );
+        assert_eq!(mode_enabled("Grid"), !grid_mode, "the tick follows the mask");
+        click_at(&mut cx, "snap-row-Draft_Snap_Grid");
+        assert_eq!(mode_enabled("Grid"), grid_mode, "and back");
+
+        // Closing stays explicit: Esc dismisses the menu and runs no command.
+        let root = cx.update(|_window, cx| shell.read(cx).root_focus_handle());
+        cx.update(|window, cx| window.focus(&root, cx));
+        cx.simulate_keystrokes("escape");
+        assert!(!cx.update(|_window, cx| shell.read(cx).popover_open("snap")));
+        assert_eq!(snapping_enabled(), before, "Esc ran no command");
+
+        // The label is the global switch, and each click flips it.
+        click_at(&mut cx, "snap-label");
+        assert_eq!(snapping_enabled(), !before);
+        assert!(!cx.update(|_window, cx| shell.read(cx).popover_open("snap")));
+        click_at(&mut cx, "snap-label");
+        assert_eq!(snapping_enabled(), before, "and back");
+    }
+
+    /// A row that is not a toggle is a one-shot action, so it still dismisses the
+    /// menu (the checkable-row exception must not leak into actions).
+    #[gpui::test]
+    fn a_one_shot_popover_row_still_closes_the_menu(cx: &mut TestAppContext) {
+        let _guard = crate::PYTHON_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let model = Shell::boot().expect("boot shell");
+        reset_grid_state();
+        let window = cx.update(|cx| {
+            let model = model.clone();
+            cx.open_window(Default::default(), move |_window, cx| {
+                cx.new(|cx| Shell::from_model(model.clone(), cx))
+            })
+            .unwrap()
+        });
+        let mut cx = VisualTestContext::from_window(window.into(), cx);
+        let shell: Entity<Shell> = window.root(&mut cx).unwrap();
+        draw(&mut cx);
+
+        click_at(&mut cx, "grid-caret");
+        draw(&mut cx);
+        assert!(cx.update(|_window, cx| shell.read(cx).popover_open("grid")));
+        assert!(
+            cx.debug_bounds("grid-row-App_ReloadGridSettings").is_some(),
+            "the reload row is on the grid surface"
+        );
+        // A provider row is a toggle (it shows the active backend); a one-shot row
+        // has no status dot.
+        assert!(
+            cx.debug_bounds("grid-row-ferrocad-provider:grid:ferrocad-dot")
+                .is_some(),
+            "the provider row carries a status dot"
+        );
+        assert!(
+            cx.debug_bounds("grid-row-App_ReloadGridSettings-dot")
+                .is_none(),
+            "a one-shot action has no dot"
+        );
+
+        click_at(&mut cx, "grid-row-App_ReloadGridSettings");
+        assert!(
+            !cx.update(|_window, cx| shell.read(cx).popover_open("grid")),
+            "a one-shot row dismisses the menu"
+        );
+    }
+
     /// The canvas owns the full pane: there is no full-width header row above it, and
     /// the environment controls float as a compact pill over its top-left corner.
     #[gpui::test]
@@ -5235,8 +6483,8 @@ if "App_ReloadAxisSettings" not in FreeCADGui.listCommands():
         );
         click_at(&mut cx, "grid-row-ferrocad-provider:grid:coin");
         assert!(
-            !cx.update(|_window, cx| shell.read(cx).popover_open("grid")),
-            "choosing a provider closes the popover"
+            cx.update(|_window, cx| shell.read(cx).popover_open("grid")),
+            "a provider choice is a state change, so the popover stays open"
         );
         {
             let summary = cx
@@ -5288,8 +6536,8 @@ if "App_ReloadAxisSettings" not in FreeCADGui.listCommands():
         );
         click_at(&mut cx, "axis-row-ferrocad-provider:axis:coin");
         assert!(
-            !cx.update(|_window, cx| shell.read(cx).popover_open("axis")),
-            "choosing a provider closes the axis popover"
+            cx.update(|_window, cx| shell.read(cx).popover_open("axis")),
+            "the axis provider is a state row too, so the popover stays open"
         );
         {
             let summary = cx
@@ -5705,8 +6953,12 @@ if "App_ReloadAxisSettings" not in FreeCADGui.listCommands():
             size.width
         );
         assert!(
-            cx.debug_bounds("dock-App_Delete").is_some(),
-            "a disabled dock command is still visible"
+            cx.debug_bounds("dock-App_Delete").is_none(),
+            "object verbs left the dock for the radial menu"
+        );
+        assert!(
+            cx.debug_bounds("dock-App_Move").is_none(),
+            "object verbs left the dock for the radial menu"
         );
         assert!(cx.debug_bounds("dock-search").is_some());
         assert!(
@@ -5717,23 +6969,42 @@ if "App_ReloadAxisSettings" not in FreeCADGui.listCommands():
             cx.debug_bounds("dock-GizmoOverlayShader_Settings").is_none(),
             "the shader gizmo settings are dev-only and must not be on the dock"
         );
-        // The base shell only has the two modification commands, so there is no
-        // modification/creation boundary yet; a workbench that contributes a
-        // creation command inserts `dock-divider-1` there.
-        assert!(
-            cx.debug_bounds("dock-divider-2").is_some(),
-            "the Search slot has a hairline"
-        );
         assert!(
             !dock_enabled(&model, "App_Delete"),
             "nothing is selected yet"
         );
 
-        // A selection turns the built-ins on: the rows follow IsActive.
+        // A selection turns the radial verbs on. They are not dock rows any more, so
+        // the proof is the wheel: open it and check both slots and their cardinal
+        // placement (Move north, Delete south).
         cx.update(|_window, cx| shell.update(cx, |shell, cx| shell.select("Params", cx)));
         draw(&mut cx);
         assert!(dock_enabled(&model, "App_Delete"));
         assert!(dock_enabled(&model, "App_Move"));
+        cx.update(|_window, cx| {
+            shell.update(cx, |shell, cx| {
+                shell.open_radial(point(px(400.), px(300.)), cx)
+            });
+        });
+        draw(&mut cx);
+        assert!(cx.debug_bounds("radial-wheel").is_some(), "the wheel opened");
+        let move_slot = cx
+            .debug_bounds("radial-label-App_Move")
+            .expect("Move is a north slot");
+        let delete_slot = cx
+            .debug_bounds("radial-label-App_Delete")
+            .expect("Delete is a south slot");
+        assert!(
+            move_slot.origin.y < delete_slot.origin.y,
+            "Move is above Delete (north/south)"
+        );
+        assert!(
+            (move_slot.center().x.0 - delete_slot.center().x.0).abs() < 2.0,
+            "both sit on the vertical axis"
+        );
+        cx.update(|_window, cx| shell.update(cx, |shell, cx| shell.close_radial(cx)));
+        draw(&mut cx);
+        assert!(cx.debug_bounds("radial-wheel").is_none(), "the wheel closed");
 
         // The Search slot opens the command palette.
         click_at(&mut cx, "dock-search");
@@ -5744,6 +7015,228 @@ if "App_ReloadAxisSettings" not in FreeCADGui.listCommands():
         );
         assert!(cx.debug_bounds("palette").is_some());
         assert!(cx.debug_bounds("palette-input").is_some());
+    }
+
+    /// The in-situ gesture: a right-press opens the wheel at the pointer, a move
+    /// highlights the wedge under it, and the release runs that slot. A release in
+    /// the hollow centre cancels without running anything.
+    #[gpui::test]
+    fn the_radial_gesture_opens_hovers_and_runs(cx: &mut TestAppContext) {
+        let _guard = crate::PYTHON_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let model = Shell::boot().expect("boot shell");
+        // A safe verb so the gesture test never deletes the shared sample document.
+        let script = r#"
+import FreeCADGui
+class _RadialProbe:
+    def GetResources(self):
+        return {
+            "MenuText": "Radial probe",
+            "FerroCAD_Surface": "radial",
+            "FerroCAD_Tone": "structural",
+        }
+    def Activated(self):
+        return {"status": "radial probe ran"}
+if "Test_RadialProbe" not in FreeCADGui.listCommands():
+    FreeCADGui.addCommand("Test_RadialProbe", _RadialProbe())
+"#;
+        let registered = crate::python::evaluate(script).expect("register the probe");
+        assert!(registered.ok, "{}", registered.output);
+
+        let window = cx.update(|cx| {
+            let model = model.clone();
+            cx.open_window(Default::default(), move |_window, cx| {
+                cx.new(|cx| Shell::from_model(model.clone(), cx))
+            })
+            .unwrap()
+        });
+        let mut cx = VisualTestContext::from_window(window.into(), cx);
+        let shell: Entity<Shell> = window.root(&mut cx).unwrap();
+        cx.update(|_window, cx| {
+            shell.update(cx, |shell, cx| {
+                shell.refresh_commands(cx);
+                shell.select("Params", cx);
+            });
+        });
+        draw(&mut cx);
+
+        let wheel = shell.read_with(&cx, |shell, _| shell.wheel.clone());
+        let anchor = point(px(420.), px(320.));
+        cx.simulate_mouse_down(anchor, MouseButton::Right, gpui::Modifiers::default());
+        draw(&mut cx);
+        assert!(
+            wheel.read_with(&cx, |wheel, _| wheel.is_open()),
+            "the right-press opened the wheel"
+        );
+        let anchor = wheel.read_with(&cx, |wheel, _| wheel.anchor());
+        let slots = wheel.read_with(&cx, |wheel, _| wheel.slots().to_vec());
+        let index = slots
+            .iter()
+            .position(|slot| slot.id.as_ref() == "Test_RadialProbe")
+            .expect("the probe is a radial slot");
+        assert!(
+            cx.debug_bounds("radial-wheel").is_some(),
+            "the wheel is painted"
+        );
+        assert!(
+            cx.debug_bounds("radial-label-Test_RadialProbe").is_some(),
+            "the probe has a label"
+        );
+
+        let offset = ferrocad_widgets::wheel::slot_offset(index, slots.len());
+        let over_slot = point(anchor.x + offset.x, anchor.y + offset.y);
+        cx.simulate_mouse_move(
+            over_slot,
+            MouseButton::Right,
+            gpui::Modifiers::default(),
+        );
+        draw(&mut cx);
+        assert_eq!(
+            wheel.read_with(&cx, |wheel, _| wheel.hovered()),
+            Some(index),
+            "the pointer is over the probe wedge"
+        );
+
+        cx.simulate_mouse_up(over_slot, MouseButton::Right, gpui::Modifiers::default());
+        draw(&mut cx);
+        assert!(
+            !wheel.read_with(&cx, |wheel, _| wheel.is_open()),
+            "the release closes the wheel"
+        );
+        assert!(
+            model.lock().unwrap().status.contains("radial probe ran"),
+            "the released slot ran"
+        );
+
+        // A **trackpad tap** (quick down+up at the press) latches instead of
+        // flashing closed. No command runs yet.
+        model.lock().unwrap().status.clear();
+        cx.simulate_mouse_down(anchor, MouseButton::Right, gpui::Modifiers::default());
+        draw(&mut cx);
+        assert!(wheel.read_with(&cx, |wheel, _| wheel.is_open()));
+        cx.simulate_mouse_up(anchor, MouseButton::Right, gpui::Modifiers::default());
+        draw(&mut cx);
+        assert!(
+            wheel.read_with(&cx, |wheel, _| wheel.is_latched()),
+            "a quick tap latches the wheel"
+        );
+        assert!(!model.lock().unwrap().status.contains("radial probe ran"));
+
+        // In the latched wheel a primary click commits the wedge (and does not
+        // select the object under the overlay).
+        cx.simulate_mouse_move(over_slot, None::<MouseButton>, gpui::Modifiers::default());
+        draw(&mut cx);
+        assert_eq!(
+            wheel.read_with(&cx, |wheel, _| wheel.hovered()),
+            Some(index)
+        );
+        cx.simulate_mouse_down(over_slot, MouseButton::Left, gpui::Modifiers::default());
+        cx.simulate_mouse_up(over_slot, MouseButton::Left, gpui::Modifiers::default());
+        draw(&mut cx);
+        assert!(!wheel.read_with(&cx, |wheel, _| wheel.is_open()));
+        assert!(model.lock().unwrap().status.contains("radial probe ran"));
+
+        // A long hold released in the deadzone is a cancel: no command, no status.
+        model.lock().unwrap().status.clear();
+        cx.simulate_mouse_down(anchor, MouseButton::Right, gpui::Modifiers::default());
+        draw(&mut cx);
+        assert!(wheel.read_with(&cx, |wheel, _| wheel.is_open()));
+        std::thread::sleep(std::time::Duration::from_millis(220));
+        cx.simulate_mouse_up(anchor, MouseButton::Right, gpui::Modifiers::default());
+        draw(&mut cx);
+        assert!(!wheel.read_with(&cx, |wheel, _| wheel.is_open()));
+        assert!(!model.lock().unwrap().status.contains("radial probe ran"));
+
+        let cleanup = crate::python::evaluate(
+            "import FreeCADGui\nFreeCADGui.removeCommand('Test_RadialProbe')",
+        );
+        assert!(cleanup.expect("remove the probe").ok);
+    }
+
+    /// `Space` opens **latched** at the last pointer position, so a touchpad user can
+    /// open with a key and then click a wedge; a second `Space` over a wedge commits.
+    #[gpui::test]
+    fn space_opens_a_latched_wheel_and_commits(cx: &mut TestAppContext) {
+        let _guard = crate::PYTHON_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let model = Shell::boot().expect("boot shell");
+        let script = r#"
+import FreeCADGui
+class _SpaceProbe:
+    def GetResources(self):
+        return {
+            "MenuText": "Space probe",
+            "FerroCAD_Surface": "radial",
+            "FerroCAD_Tone": "structural",
+        }
+    def Activated(self):
+        return {"status": "space probe ran"}
+if "Test_SpaceProbe" not in FreeCADGui.listCommands():
+    FreeCADGui.addCommand("Test_SpaceProbe", _SpaceProbe())
+"#;
+        let registered = crate::python::evaluate(script).expect("register the probe");
+        assert!(registered.ok, "{}", registered.output);
+
+        let window = cx.update(|cx| {
+            let model = model.clone();
+            cx.open_window(Default::default(), move |_window, cx| {
+                cx.new(|cx| Shell::from_model(model.clone(), cx))
+            })
+            .unwrap()
+        });
+        let mut cx = VisualTestContext::from_window(window.into(), cx);
+        let shell: Entity<Shell> = window.root(&mut cx).unwrap();
+        cx.update(|_window, cx| {
+            shell.update(cx, |shell, cx| {
+                shell.refresh_commands(cx);
+                shell.select("Params", cx);
+            });
+        });
+        let anchor = point(px(360.), px(280.));
+        cx.simulate_mouse_move(anchor, None::<MouseButton>, gpui::Modifiers::default());
+        draw(&mut cx);
+
+        let root = cx.update(|_window, cx| shell.read(cx).root_focus_handle());
+        cx.update(|window, cx| window.focus(&root, cx));
+        cx.simulate_keystrokes("space");
+        draw(&mut cx);
+        let wheel = shell.read_with(&cx, |shell, _| shell.wheel.clone());
+        assert!(
+            wheel.read_with(&cx, |wheel, _| wheel.is_open()),
+            "Space opened the wheel"
+        );
+        assert_eq!(
+            wheel.read_with(&cx, |wheel, _| wheel.anchor()),
+            anchor,
+            "Space anchors at the last pointer"
+        );
+        assert!(
+            wheel.read_with(&cx, |wheel, _| wheel.is_latched()),
+            "a key opens latched"
+        );
+
+        let slots = wheel.read_with(&cx, |wheel, _| wheel.slots().to_vec());
+        let index = slots
+            .iter()
+            .position(|slot| slot.id.as_ref() == "Test_SpaceProbe")
+            .expect("the probe is a slot");
+        let offset = ferrocad_widgets::wheel::slot_offset(index, slots.len());
+        let over_slot = point(anchor.x + offset.x, anchor.y + offset.y);
+        cx.simulate_mouse_move(over_slot, None::<MouseButton>, gpui::Modifiers::default());
+        draw(&mut cx);
+        assert_eq!(
+            wheel.read_with(&cx, |wheel, _| wheel.hovered()),
+            Some(index)
+        );
+
+        // Space over a hovered wedge commits it.
+        cx.simulate_keystrokes("space");
+        draw(&mut cx);
+        assert!(!wheel.read_with(&cx, |wheel, _| wheel.is_open()));
+        assert!(model.lock().unwrap().status.contains("space probe ran"));
+
+        let cleanup = crate::python::evaluate(
+            "import FreeCADGui\nFreeCADGui.removeCommand('Test_SpaceProbe')",
+        );
+        assert!(cleanup.expect("remove the probe").ok);
     }
 
     /// A headless shell window for the palette tests, already drawn once.
@@ -5929,141 +7422,6 @@ if "App_ReloadAxisSettings" not in FreeCADGui.listCommands():
             .map(|doc| doc.objects.len())
             .sum();
         assert_eq!(objects_before, objects_after, "the document is untouched");
-    }
-
-    /// G3 UI (option 2): the gizmo's options live on the tool. `Move` grows a caret
-    /// only while a selection has armed a gizmo; an idle dock shows plain `Move`. The
-    /// caret opens upward, away from the bottom edge the dock sits on.
-    #[gpui::test]
-    fn the_dock_shows_the_gizmo_control_only_while_a_gizmo_is_armed(
-        cx: &mut TestAppContext,
-    ) {
-        let _guard = crate::PYTHON_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        let model = Shell::boot().expect("boot shell");
-        let window = cx.update(|cx| {
-            let model = model.clone();
-            cx.open_window(Default::default(), move |_window, cx| {
-                cx.new(|cx| Shell::from_model(model.clone(), cx))
-            })
-            .unwrap()
-        });
-        let mut cx = VisualTestContext::from_window(window.into(), cx);
-        let shell: Entity<Shell> = window.root(&mut cx).unwrap();
-        draw(&mut cx);
-
-        assert!(
-            cx.debug_bounds("dock-App_Move-caret").is_none(),
-            "nothing is armed, so Move stays plain text"
-        );
-
-        // The base shell has no gizmo factory, so set the flag the selection path sets
-        // when `arm` returns a gizmo.
-        arm_and_redraw(&model, &shell, &mut cx, true);
-        let label = cx.debug_bounds("dock-App_Move").expect("the Move entry");
-        let caret = cx
-            .debug_bounds("dock-App_Move-caret")
-            .expect("the options caret");
-        assert!(
-            caret.origin.x >= label.origin.x,
-            "the caret follows the tool label"
-        );
-        assert!(
-            cx.debug_bounds("dock-gizmo-label").is_none(),
-            "the options live on the tool, not in a second row"
-        );
-        let dock = cx.debug_bounds("action-dock").expect("the dock");
-
-        // The caret opens the menu upward into the canvas.
-        click_at(&mut cx, "dock-App_Move-caret");
-        let menu = cx
-            .debug_bounds("gizmo-popover")
-            .expect("the gizmo menu");
-        assert!(
-            menu.origin.y < dock.origin.y,
-            "the menu opens above the dock (menu {menu:?}, dock {dock:?})"
-        );
-        assert!(
-            shell.read_with(&cx, |shell, _| shell.open_popover.clone()).as_deref()
-                == Some("gizmo"),
-            "the dock owns the gizmo popover"
-        );
-
-        // Losing the gizmo removes the caret with it, but the tool entry stays.
-        arm_and_redraw(&model, &shell, &mut cx, false);
-        assert!(
-            cx.debug_bounds("dock-App_Move-caret").is_none(),
-            "the options go with the handle"
-        );
-        assert!(
-            cx.debug_bounds("dock-App_Move").is_some(),
-            "Move itself remains a plain dock entry"
-        );
-    }
-
-    /// The dock's gizmo menu is provider-aware like Grid and Axes: opening it reads the
-    /// registry, so the backends (native and shader) are visible where the tool is.
-    #[gpui::test]
-    fn the_gizmo_menu_lists_every_registered_provider(cx: &mut TestAppContext) {
-        let _guard = crate::PYTHON_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        let model = Shell::boot().expect("boot shell");
-        let window = cx.update(|cx| {
-            let model = model.clone();
-            cx.open_window(Default::default(), move |_window, cx| {
-                cx.new(|cx| Shell::from_model(model.clone(), cx))
-            })
-            .unwrap()
-        });
-        let mut cx = VisualTestContext::from_window(window.into(), cx);
-        let shell: Entity<Shell> = window.root(&mut cx).unwrap();
-        arm_and_redraw(&model, &shell, &mut cx, true);
-
-        // Opening the menu is what reads the registry (the same lazy read Grid and Axis
-        // use); before that the shell has no provider list to render.
-        cx.update(|_window, cx| {
-            shell.update(cx, |shell, cx| shell.open_popover("gizmo", cx));
-        });
-        draw(&mut cx);
-        let features = shell
-            .read_with(&cx, |shell, _| shell.provider_features.clone())
-            .expect("opening the gizmo menu reads the provider registry");
-        let gizmo = features
-            .iter()
-            .find(|feature| feature.feature == "gizmo")
-            .expect("the gizmo mods register their feature at boot");
-        assert!(!gizmo.providers.is_empty(), "the gizmo feature has a backend");
-        for (backend, selector) in [
-            ("ferrocad", "gizmo-row-ferrocad-provider:gizmo:ferrocad"),
-            (
-                "ferrocad-shader",
-                "gizmo-row-ferrocad-provider:gizmo:ferrocad-shader",
-            ),
-        ] {
-            if gizmo.providers.iter().any(|provider| provider.backend == backend) {
-                assert!(
-                    cx.debug_bounds(selector).is_some(),
-                    "{backend} is listed in the tool's menu"
-                );
-            }
-        }
-    }
-
-    /// Set the armed flag the way a selection does, and force a frame.
-    fn arm_and_redraw(
-        model: &Arc<Mutex<ShellModel>>,
-        shell: &Entity<Shell>,
-        cx: &mut VisualTestContext,
-        armed: bool,
-    ) {
-        cx.update(|_window, cx| {
-            shell.update(cx, |shell, cx| {
-                model.lock().unwrap().gizmo_armed = armed;
-                if !armed {
-                    shell.open_popover = None;
-                }
-                cx.notify();
-            });
-        });
-        draw(cx);
     }
 
     /// The dock's enablement comes from the same `IsActive` list the shell keeps.

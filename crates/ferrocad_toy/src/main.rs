@@ -7,16 +7,66 @@
 //! Part fillet arc, and names neither.
 //!
 //! Run it with `cargo run -p ferrocad_toy` (needs a display; no OCCT).
+//!
+//! `cargo run -p ferrocad_toy -- --render out.png [--size WxH]` renders the
+//! sample slab headlessly instead (needs a wgpu adapter, no display).
 
 fn main() {
-    ferrocad::run_edition_with(
-        "FerroCAD: Toy",
-        "ferrocad_toy",
-        ferrocad::Contributions::default()
-            .with_manipulator(ferrocad_toy::height_grip)
-            .with_gizmo(ferrocad_toy::move_gizmo)
-            .with_tool("toy_polyline", || {
-                Box::new(ferrocad_stage::PolylineTool::new()) as Box<dyn ferrocad_stage::Tool>
-            }),
-    );
+    let args = match ferrocad::edition_args() {
+        Ok(args) => args,
+        Err(error) => {
+            eprintln!("ferrocad: {error}");
+            std::process::exit(2);
+        }
+    };
+
+    let contributions = ferrocad::Contributions::default()
+        .with_manipulator(ferrocad_toy::height_grip)
+        .with_gizmo(ferrocad_toy::move_gizmo)
+        .with_tool("toy_polyline", || {
+            Box::new(ferrocad_stage::PolylineTool::new()) as Box<dyn ferrocad_stage::Tool>
+        });
+
+    if args.render.is_some() || args.stl.is_some() {
+        match ferrocad::render_edition_headless(
+            "FerroCAD: Toy",
+            "ferrocad_toy",
+            args.render.as_deref(),
+            args.stl.as_deref(),
+            args.size,
+            args.script.as_deref(),
+            args.open.as_deref(),
+        ) {
+            Ok(report) => {
+                println!(
+                    "ferrocad: {} object(s) [{}] from {}",
+                    report.objects.len(),
+                    report.objects.join(", "),
+                    report.document
+                );
+                if let (Some(out), Some(size)) = (args.render.as_ref(), report.size) {
+                    println!(
+                        "ferrocad: wrote PNG {} ({}x{})",
+                        out.display(),
+                        size[0],
+                        size[1]
+                    );
+                }
+                if let Some(stl) = &report.stl {
+                    println!(
+                        "ferrocad: wrote STL {} ({} triangles)",
+                        stl.path.display(),
+                        stl.triangles
+                    );
+                }
+            }
+            Err(error) => {
+                eprintln!("ferrocad: headless run failed: {error}");
+                std::process::exit(1);
+            }
+        }
+        return;
+    }
+
+    ferrocad::run_edition_with_document("FerroCAD: Toy", "ferrocad_toy", contributions, args.open);
 }

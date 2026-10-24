@@ -24,6 +24,12 @@ pub enum Surface {
     Axis,
     /// The workplane split button in the viewport header.
     Workplane,
+    /// The snap split button in the viewport header: the global switch on the label,
+    /// the individual snap modes in its popover.
+    Snap,
+    /// The in-situ radial menu's object verbs. These are not dock actions: they
+    /// materialise around the pointer when geometry is selected.
+    Radial,
     /// The mods/provider control in the viewport header.
     Mods,
     /// The selection-driven action dock over the canvas — the default.
@@ -43,6 +49,8 @@ impl Surface {
             "grid" | "header:grid" => Some(Self::Grid),
             "axis" | "axes" | "header:axis" | "header:axes" => Some(Self::Axis),
             "workplane" | "wp" | "header:workplane" | "header:wp" => Some(Self::Workplane),
+            "snap" | "snapping" | "header:snap" | "header:snapping" => Some(Self::Snap),
+            "radial" | "wheel" => Some(Self::Radial),
             "mods" | "header:mods" => Some(Self::Mods),
             // A capability surface with no chrome of its own: the gizmo's settings are
             // reached through the transform tool's options (the dock's `Move ▾`) and
@@ -60,6 +68,8 @@ impl Surface {
             Self::Grid => "grid",
             Self::Axis => "axis",
             Self::Workplane => "workplane",
+            Self::Snap => "snap",
+            Self::Radial => "radial",
             Self::Mods => "mods",
             Self::Dock => "dock",
             Self::Hidden => "hidden",
@@ -90,6 +100,14 @@ pub struct CommandInfo {
     /// `GetResources()["FerroCAD_Surface"]` — the owning surface (P0.6 extension).
     #[serde(default)]
     pub surface: String,
+    /// `GetResources()["FerroCAD_Short"]` — a compact label for a header popover,
+    /// where the control's own name makes the full one repetitive (P0.6 extension).
+    #[serde(default)]
+    pub short: String,
+    /// `GetResources()["FerroCAD_Tone"]` — a radial slot's semantic class:
+    /// `structural` (default), `additive` or `destructive` (P0.6 extension).
+    #[serde(default)]
+    pub tone: String,
     /// `GetResources()["FerroCAD_Parent"]` — the surface's primary command id, for a
     /// command offered in that control's popover (P0.6 extension).
     #[serde(default)]
@@ -100,6 +118,10 @@ pub struct CommandInfo {
     /// `IsChecked()` — for checkable commands.
     #[serde(default)]
     pub checked: bool,
+    /// `GetResources()["Checkable"]` — the row is a toggle rather than a one-shot
+    /// action, so a popover keeps its menu open after the click.
+    #[serde(default)]
+    pub checkable: bool,
     /// `GetResources()["FerroCAD_DevOnly"]` — listed in Dev Tools, hidden from the
     /// header/dock surfaces (P0.6 extension).
     #[serde(default)]
@@ -113,6 +135,15 @@ impl CommandInfo {
             &self.id
         } else {
             &self.menu
+        }
+    }
+
+    /// The compact label a header popover shows: `FerroCAD_Short`, else `MenuText`.
+    pub fn short_label(&self) -> &str {
+        if self.short.is_empty() {
+            self.label()
+        } else {
+            &self.short
         }
     }
 
@@ -134,6 +165,8 @@ pub struct SurfaceGroups<'a> {
     pub grid: Vec<&'a CommandInfo>,
     pub axis: Vec<&'a CommandInfo>,
     pub workplane: Vec<&'a CommandInfo>,
+    pub snap: Vec<&'a CommandInfo>,
+    pub radial: Vec<&'a CommandInfo>,
     pub mods: Vec<&'a CommandInfo>,
     pub dock: Vec<&'a CommandInfo>,
     pub hidden: Vec<&'a CommandInfo>,
@@ -146,6 +179,8 @@ impl<'a> SurfaceGroups<'a> {
             Surface::Grid => &self.grid,
             Surface::Axis => &self.axis,
             Surface::Workplane => &self.workplane,
+            Surface::Snap => &self.snap,
+            Surface::Radial => &self.radial,
             Surface::Mods => &self.mods,
             Surface::Dock => &self.dock,
             Surface::Hidden => &self.hidden,
@@ -159,6 +194,8 @@ impl<'a> SurfaceGroups<'a> {
             self.grid.as_slice(),
             self.axis.as_slice(),
             self.workplane.as_slice(),
+            self.snap.as_slice(),
+            self.radial.as_slice(),
             self.mods.as_slice(),
             self.dock.as_slice(),
             self.hidden.as_slice(),
@@ -178,6 +215,8 @@ pub fn group_by_surface(commands: &[CommandInfo]) -> SurfaceGroups<'_> {
             Surface::Grid => groups.grid.push(command),
             Surface::Axis => groups.axis.push(command),
             Surface::Workplane => groups.workplane.push(command),
+            Surface::Snap => groups.snap.push(command),
+            Surface::Radial => groups.radial.push(command),
             Surface::Mods => groups.mods.push(command),
             Surface::Dock => groups.dock.push(command),
             Surface::Hidden => groups.hidden.push(command),
@@ -355,6 +394,11 @@ mod tests {
         assert_eq!(Surface::parse(" axis "), Some(Surface::Axis));
         assert_eq!(Surface::parse("header:workplane"), Some(Surface::Workplane));
         assert_eq!(Surface::parse("wp"), Some(Surface::Workplane));
+        assert_eq!(Surface::parse("snap"), Some(Surface::Snap));
+        assert_eq!(Surface::parse("header:snap"), Some(Surface::Snap));
+        assert_eq!(Surface::parse("snapping"), Some(Surface::Snap));
+        assert_eq!(Surface::parse("radial"), Some(Surface::Radial));
+        assert_eq!(Surface::parse("wheel"), Some(Surface::Radial));
         assert_eq!(Surface::parse("mods"), Some(Surface::Mods));
         assert_eq!(
             Surface::parse("gizmo"),
@@ -378,6 +422,23 @@ mod tests {
         .unwrap();
         assert_eq!(annotated.surface(), Surface::Grid);
         assert_eq!(annotated.parent(), Some("App_ToggleGrid"));
+    }
+
+    /// A header popover shows `FerroCAD_Short` when the full label repeats the
+    /// control's own name (`Snap Grid` under the `Snap` control).
+    #[test]
+    fn a_short_label_is_used_in_a_popover_and_falls_back_to_the_menu_label() {
+        let annotated: CommandInfo = serde_json::from_str(
+            r#"{"id":"Draft_Snap_Grid","menu":"Snap Grid","short":"Grid"}"#,
+        )
+        .unwrap();
+        assert_eq!(annotated.label(), "Snap Grid");
+        assert_eq!(annotated.short_label(), "Grid");
+
+        let bare: CommandInfo =
+            serde_json::from_str(r#"{"id":"Draft_Snap_Origin","menu":"Snap Origin"}"#)
+                .unwrap();
+        assert_eq!(bare.short_label(), "Snap Origin", "no short label, no change");
     }
 
     /// T0/T6: every command lands on exactly one surface — the partition is total and

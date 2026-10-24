@@ -127,11 +127,7 @@ pub fn window_frame_with_leading(
 
 /// The client inset and resize grips collapse on a maximized/fullscreen window.
 fn frame_inset(maximized: bool) -> Pixels {
-    if maximized {
-        px(0.)
-    } else {
-        INSET
-    }
+    if maximized { px(0.) } else { INSET }
 }
 
 /// The title bar: an optional leading element, the title, then the platform
@@ -156,12 +152,18 @@ pub fn title_bar(title: impl Into<SharedString>, leading: Option<AnyElement>) ->
         .flex()
         .flex_row()
         .items_center()
-        .child(control_button("win-min", "\u{2013}", CONTROL_HOVER, |window| {
-            window.minimize_window()
-        }))
-        .child(control_button("win-max", "\u{25A1}", CONTROL_HOVER, |window| {
-            window.zoom_window()
-        }))
+        .child(control_button(
+            "win-min",
+            "\u{2013}",
+            CONTROL_HOVER,
+            |window| window.minimize_window(),
+        ))
+        .child(control_button(
+            "win-max",
+            "\u{25A1}",
+            CONTROL_HOVER,
+            |window| window.zoom_window(),
+        ))
         .child(control_button(
             "win-close",
             "\u{2715}",

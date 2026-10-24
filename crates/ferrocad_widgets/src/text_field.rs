@@ -17,8 +17,8 @@ use gpui::{
 
 use crate::events::{ChangeEvent, SubmitEvent};
 use crate::text_buffer::TextBuffer;
+use ferrocad_theme::ui::{ACTIVE_ACCENT, CHROME_LINE, WHEEL_GLASS};
 
-const INPUT_BG: u32 = 0x171a1f;
 const INPUT_FG: u32 = 0xd8dbe0;
 const INPUT_PLACEHOLDER: u32 = 0x6b7280;
 const CARET: u32 = 0x7aa2f7;
@@ -68,6 +68,13 @@ impl TextInput {
 
     pub fn clear(&mut self, cx: &mut Context<Self>) {
         self.set_text("", cx);
+    }
+
+    /// Select the whole content, so the next keystroke replaces the seed. A host
+    /// calls this when a field takes focus on open.
+    pub fn select_all(&mut self, cx: &mut Context<Self>) {
+        self.buffer.select_all();
+        cx.notify();
     }
 
     fn changed(&self, cx: &mut Context<Self>) {
@@ -176,7 +183,12 @@ impl TextInput {
         }
     }
 
-    fn on_mouse_down(&mut self, event: &MouseDownEvent, window: &mut Window, cx: &mut Context<Self>) {
+    fn on_mouse_down(
+        &mut self,
+        event: &MouseDownEvent,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         window.focus(&self.focus_handle, cx);
         self.is_selecting = true;
         let offset = self.index_for_mouse_position(event.position);
@@ -192,7 +204,12 @@ impl TextInput {
         self.is_selecting = false;
     }
 
-    fn on_mouse_move(&mut self, event: &MouseMoveEvent, _window: &mut Window, cx: &mut Context<Self>) {
+    fn on_mouse_move(
+        &mut self,
+        event: &MouseMoveEvent,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         if self.is_selecting {
             let offset = self.index_for_mouse_position(event.position);
             self.buffer.select_to(offset);
@@ -510,12 +527,21 @@ impl Element for TextElement {
 }
 
 impl Render for TextInput {
-    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        // The dielectric field: glass over the canvas, a hairline at rest and the
+        // state accent while focused, so the axis a keystroke will edit is obvious.
+        let focused = self.focus_handle.is_focused(window);
         div()
             .w_full()
-            .h(px(26.))
+            .h(px(28.))
             .px_2()
-            .bg(rgb(INPUT_BG))
+            .bg(rgba(WHEEL_GLASS))
+            .border_1()
+            .border_color(if focused {
+                rgb(ACTIVE_ACCENT)
+            } else {
+                rgba(CHROME_LINE)
+            })
             .text_size(px(13.))
             .line_height(px(26.))
             .cursor(CursorStyle::IBeam)

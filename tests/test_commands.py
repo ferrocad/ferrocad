@@ -180,6 +180,18 @@ class CommandRegistryTests(unittest.TestCase):
         self.assertFalse(entries["App_ToggleAxisCross"]["dev_only"])
         self.assertFalse(entries["View_AxisSettings"]["dev_only"])
 
+    def test_object_verbs_live_on_the_radial_surface(self):
+        entries = {
+            entry["id"]: entry for entry in json.loads(ferrocad_shell.commands())
+        }
+        self.assertEqual(entries["App_Delete"]["surface"], "radial")
+        self.assertEqual(entries["App_Delete"]["tone"], "destructive")
+        self.assertEqual(entries["App_Move"]["surface"], "radial")
+        self.assertEqual(entries["App_Move"]["tone"], "structural")
+        # The bottom strip is creation + search: object verbs are not dock rows.
+        self.assertNotEqual(entries["App_Delete"]["surface"], "dock")
+        self.assertNotEqual(entries["App_Move"]["surface"], "dock")
+
     def test_a_duplicate_id_raises(self):
         self.add("Test_Dup", _Command())
         with self.assertRaises(ValueError):

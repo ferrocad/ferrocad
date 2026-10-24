@@ -229,6 +229,34 @@ def _active_doc():
     return doc
 
 
+def open_document(path: str) -> str:
+    """Open a saved document and make it active (the ``--open`` path).
+
+    The source can be a native FerroCAD document or a ``.FCStd`` written by this
+    tree. Returns the opened document's name and object count; the shell reads
+    ``model_tree`` and ``stage_meshes`` after this, exactly as it does after a
+    normal bootstrap.
+    """
+    doc = FreeCAD.open(path)
+    # Keep the console's convenience name pointing at the document the viewer shows;
+    # the bootstrap sample is closed by `open_startup_document` right after this.
+    _NAMESPACE["doc"] = doc
+    _NAMESPACE.setdefault("FreeCAD", FreeCAD)
+    _NAMESPACE.setdefault("App", FreeCAD)
+    return _json({"document": doc.Name, "objects": len(doc.Objects)})
+
+
+def close_document(name: str) -> str:
+    """Close a document by name.
+
+    Used to drop the bootstrap sample after ``--open`` has made the requested
+    document active. The lifecycle call fires the document observers, so a
+    provider detaches its per-document effects.
+    """
+    FerroCAD.closeDocument(name)
+    return _json({"ok": True})
+
+
 def model_tree() -> str:
     """Documents and their objects, for the inspector pane.
 
@@ -621,11 +649,15 @@ def commands() -> str:
     ``docs/workbenches/actions-and-tools.md``); this script only marshals the list, so the
     shell names no workbench either.
 
-    FerroCAD extends ``GetResources()`` with two optional keys the upstream facade does
-    not know about: ``FerroCAD_Surface`` (which chrome surface owns the command) and
+    FerroCAD extends ``GetResources()`` with three optional keys the upstream facade
+    does not know about: ``FerroCAD_Surface`` (which chrome surface owns the command),
     ``FerroCAD_Parent`` (the surface's primary command id, for a row in that control's
-    popover). They are added here, in the shell bridge, so ``FreeCADGui`` itself stays
-    upstream-shaped; the JSON keeps the neutral field names ``surface``/``parent``.
+    popover) and ``FerroCAD_Short`` (a compact popover label, used when the full one
+    repeats the control's name). They are added here, in the shell bridge, so
+    ``FreeCADGui`` itself stays upstream-shaped; the JSON keeps the neutral field names
+    ``surface``/``parent``/``short``. A ``checkable`` flag is forwarded too, because
+    it changes row behaviour (a toggle keeps its popover open); it is true when the
+    command declares ``Checkable`` or implements ``IsChecked``.
     """
     entries = FreeCADGui._command_list()
     registry = getattr(FreeCADGui, "_COMMANDS", {})
@@ -635,6 +667,13 @@ def commands() -> str:
         resources = read_resources(command) if command is not None and read_resources else {}
         entry["surface"] = str(resources.get("FerroCAD_Surface") or "")
         entry["parent"] = str(resources.get("FerroCAD_Parent") or "")
+        entry["short"] = str(resources.get("FerroCAD_Short") or "")
+        entry["tone"] = str(resources.get("FerroCAD_Tone") or "")
+        # A command that reports checked state is a toggle even when it predates the
+        # `Checkable` key (upstream workbenches define `IsChecked`, not the resource).
+        entry["checkable"] = bool(resources.get("Checkable")) or callable(
+            getattr(command, "IsChecked", None)
+        )
     return _json(entries)
 
 
@@ -716,7 +755,8 @@ class _DeleteCommand:
             "Accel": "Del",
             "Group": "Edit",
             "CmdType": "ForEdit",
-            "FerroCAD_Surface": "dock",
+            "FerroCAD_Surface": "radial",
+            "FerroCAD_Tone": "destructive",
         }
 
     def IsActive(self):
@@ -743,8 +783,11 @@ class _MoveCommand:
     """``App_Move`` — translate the selection by ``(dx, dy, dz)``.
 
     The non-interactive twin of the gizmo. With explicit arguments it applies them
-    and returns a status; with none it returns a **dialog** the shell hosts, whose
-    callback owns the transaction (A3).
+    and returns a status; with none it returns a **floating** dialog the shell hosts.
+    The dialog asks to be anchored beside the gizmo, previews the typed delta live on
+    the selected shapes, and leaves the canvas interactive, so typing and dragging an
+    arrow describe the same move instead of masking the model. The callback owns the
+    transaction.
     """
 
     def GetResources(self):
@@ -754,7 +797,8 @@ class _MoveCommand:
             "Accel": "Ctrl+Shift+M",
             "Group": "Edit",
             "CmdType": "ForEdit",
-            "FerroCAD_Surface": "dock",
+            "FerroCAD_Surface": "radial",
+            "FerroCAD_Tone": "structural",
         }
 
     def IsActive(self):
@@ -766,6 +810,8 @@ class _MoveCommand:
         return {
             "title": "Move",
             "accept": "Move",
+            "presentation": "float",
+            "preview": "translation",
             "fields": [
                 {"name": "dx", "label": "ΔX", "kind": "quantity", "value": 0.0},
                 {"name": "dy", "label": "ΔY", "kind": "quantity", "value": 0.0},
@@ -1077,6 +1123,7 @@ class _GridCommand:
             "ToolTip": "Show the reference grid",
             "Group": "View",
             "CmdType": "ForView",
+            "Checkable": True,
             "FerroCAD_Surface": "grid",
         }
 
@@ -1105,6 +1152,7 @@ class _AxisCrossCommand:
             "ToolTip": "Show the world axis cross",
             "Group": "View",
             "CmdType": "ForView",
+            "Checkable": True,
             "FerroCAD_Surface": "axis",
         }
 

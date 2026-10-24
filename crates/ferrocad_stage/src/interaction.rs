@@ -26,6 +26,7 @@
 //! [`TransformGizmo`]: crate::TransformGizmo
 
 use ferrocad_graphics::Camera;
+use ferrocad_types::Vector3;
 
 use crate::shape::ShapeItem;
 
@@ -147,6 +148,22 @@ pub trait Manipulator {
     /// The readout to display beside the overlay (`R 3.50 mm`), if any.
     fn readout(&self) -> Option<String> {
         None
+    }
+
+    /// The world anchor this overlay marks, when it has one.
+    ///
+    /// A host uses it to keep the handle attached to an object it is previewing:
+    /// moving the object must move the grip that sits on its top face too.
+    fn anchor(&self) -> Option<Vector3> {
+        None
+    }
+
+    /// Move the overlay's world anchor. Returns whether the visuals changed.
+    ///
+    /// The next [`refresh`](Self::refresh) rebuilds the screen-invariant geometry at
+    /// the new anchor.
+    fn set_anchor(&mut self, _anchor: Vector3) -> bool {
+        false
     }
 
     /// Where the readout sits, in device pixels.

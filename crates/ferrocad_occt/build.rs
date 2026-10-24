@@ -4,29 +4,121 @@
 //! (`type TopoDS_Shape = opencascade_sys::...`) so we add the missing history /
 //! element-map calls without patching or forking `opencascade-sys`.
 //!
-//! Needs `OCCT_INCLUDE_DIR` (the OCCT `include/opencascade` directory) on the
-//! include path. Set it to a fetched OCCT prefix; see docs/architecture/occt-bundling.md.
+//! The include directory is `OCCT_INCLUDE_DIR` when set. Otherwise this script
+//! discovers it from `OCCT_ROOT`/`CASROOT`/`OpenCASCADE_DIR`, the workspace's
+//! `.occt/prefix` (the prefix CI fetches), or a common system prefix. See
+//! docs/architecture/occt-bundling.md.
+
+use std::path::{Path, PathBuf};
 
 fn main() {
-    println!("cargo:rerun-if-env-changed=OCCT_INCLUDE_DIR");
-    println!("cargo:rerun-if-changed=include/fc_history.hxx");
-    println!("cargo:rerun-if-changed=include/fc_topology.hxx");
-    println!("cargo:rerun-if-changed=include/fc_curve.hxx");
-    println!("cargo:rerun-if-changed=include/fc_shapefix.hxx");
-    println!("cargo:rerun-if-changed=include/fc_chfi2d.hxx");
-    println!("cargo:rerun-if-changed=include/fc_surface_ops.hxx");
-    println!("cargo:rerun-if-changed=src/bridge.rs");
-    println!("cargo:rerun-if-changed=src/shapefix.rs");
-    println!("cargo:rerun-if-changed=src/chfi2d.rs");
-    println!("cargo:rerun-if-changed=src/surface_ops.rs");
+    for var in [
+        "OCCT_INCLUDE_DIR",
+        "OCCT_ROOT",
+        "CASROOT",
+        "OpenCASCADE_DIR",
+    ] {
+        println!("cargo:rerun-if-env-changed={var}");
+    }
+    for file in [
+        "include/fc_history.hxx",
+        "include/fc_topology.hxx",
+        "include/fc_curve.hxx",
+        "include/fc_shapefix.hxx",
+        "include/fc_chfi2d.hxx",
+        "include/fc_surface_ops.hxx",
+        "src/bridge.rs",
+        "src/shapefix.rs",
+        "src/chfi2d.rs",
+        "src/surface_ops.rs",
+    ] {
+        println!("cargo:rerun-if-changed={file}");
+    }
 
-    let occt_include = std::env::var("OCCT_INCLUDE_DIR").expect(
-        "set OCCT_INCLUDE_DIR to the OCCT 'include/opencascade' directory \
-         (e.g. <prefix>/include/opencascade)",
-    );
+    let occt_include = find_include().unwrap_or_else(|| {
+        panic!(
+            "could not find the OCCT headers. Set OCCT_INCLUDE_DIR to the OCCT \
+             'include/opencascade' directory (e.g. <prefix>/include/opencascade), or \
+             put an OCCT 7.8 prefix at .occt/prefix (the CI recipe is in \
+             docs/architecture/occt-bundling.md)."
+        )
+    });
 
     cxx_build::bridges(["src/bridge.rs", "src/shapefix.rs", "src/chfi2d.rs", "src/surface_ops.rs"])
         .include(&occt_include)
         .std("c++14")
         .compile("ferrocad-occt-bridge");
+}
+
+/// Find the directory that contains `Standard_Version.hxx`.
+fn find_include() -> Option<PathBuf> {
+    if let Ok(value) = std::env::var("OCCT_INCLUDE_DIR") {
+        if let Some(found) = normalize(PathBuf::from(value)) {
+            return Some(found);
+        }
+        println!(
+            "cargo:warning=OCCT_INCLUDE_DIR does not contain Standard_Version.hxx; \
+             searching the known prefixes"
+        );
+    }
+
+    for var in ["OCCT_ROOT", "CASROOT", "OpenCASCADE_DIR"] {
+        if let Ok(value) = std::env::var(var) {
+            if let Some(found) = under(Path::new(&value)) {
+                return Some(found);
+            }
+        }
+    }
+
+    // The workspace-local prefix CI fetches. `CARGO_MANIFEST_DIR` is
+    // `<workspace>/crates/ferrocad_occt`, so its grandparent is the workspace.
+    if let Some(workspace) = Path::new(env!("CARGO_MANIFEST_DIR")).ancestors().nth(2) {
+        if let Some(found) = normalize(workspace.join(".occt/prefix")) {
+            return Some(found);
+        }
+    }
+    // Also accept `.occt/prefix` when cargo is invoked from a subdirectory.
+    if let Ok(cwd) = std::env::current_dir() {
+        for ancestor in cwd.ancestors() {
+            if let Some(found) = normalize(ancestor.join(".occt/prefix")) {
+                return Some(found);
+            }
+        }
+    }
+
+    // System packages (apt, brew, macports) and a few conventional roots.
+    for prefix in ["/usr", "/usr/local", "/opt/homebrew", "/opt/local"] {
+        if let Some(found) = normalize(PathBuf::from(prefix)) {
+            return Some(found);
+        }
+    }
+    None
+}
+
+/// A path that is a prefix, an include directory, or a CMake config directory.
+fn under(path: &Path) -> Option<PathBuf> {
+    if let Some(found) = normalize(path.to_path_buf()) {
+        return Some(found);
+    }
+    for ancestor in path.ancestors() {
+        if let Some(found) = normalize(ancestor.to_path_buf()) {
+            return Some(found);
+        }
+    }
+    None
+}
+
+/// Normalize `path` to a directory containing `Standard_Version.hxx`.
+///
+/// Accepts the include directory itself, the `include/` parent, or a prefix with
+/// `include/opencascade` below it.
+fn normalize(path: PathBuf) -> Option<PathBuf> {
+    let candidates = [
+        path.clone(),
+        path.join("opencascade"),
+        path.join("include").join("opencascade"),
+    ];
+    candidates
+        .into_iter()
+        .find(|candidate| candidate.join("Standard_Version.hxx").is_file())
 }

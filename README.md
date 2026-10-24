@@ -99,6 +99,7 @@ FerroCAD is a Cargo workspace (edition 2024). Crate status:
 | --- | --- | --- |
 | `crates/ferrocad` | the base app: runs the general edition (`cargo run -p ferrocad`) | published (app binary) |
 | `crates/ferrocad_types` | base value types: quantities, units, geometry (`Vector3`, `Placement`, …) | primary |
+| `crates/ferrocad_theme` | the visual-language token table: linear draw tokens and packed-sRGB UI tokens, with the round-trip helpers | primary |
 | `crates/ferrocad_graphics` | the neutral graphics primitives: the draw contract (`DrawPacket`/`RenderQueue`/`Geometry`/…), camera/viewport, and CPU picking | primary |
 | `crates/ferrocad_core` | pure-Rust model: properties, documents, recompute DAG (re-exports `ferrocad_types`) | primary |
 | `crates/ferrocad_geom` | the geometry seam: opaque `Shape`, `History`/`ElementMap`, the `GeometryBackend` trait | new |
@@ -128,11 +129,44 @@ The GUI crates (`ferrocad_viewport`, `ferrocad_widgets`, `ferrocad_gpui`, `ferro
 ./build.sh     # cargo build --release, then package the native libs into python/
 ./run.sh       # PYTHONPATH=python python3 hello_freecad.py
 cargo run -p ferrocad   # the base app window (needs a display)
+cargo run -p ferrocad_parametric -- --open target/demo/headless.FCStd  # basic .FCStd viewer
+cargo run -p ferrocad_toy -- --render target/demo/toy.png          # headless PNG (no display, no OCCT)
+cargo run -p ferrocad_parametric -- --render target/demo/part.png  # headless PNG with Part (needs OCCT)
+cargo run -p ferrocad_parametric -- --script examples/headless_part.py \
+    --render target/demo/part.png --size 1200x800             # box, bore, fillet
+# full demo: headless script → .FCStd + PNG + STL
+cargo run -p ferrocad_parametric -- --script examples/headless_gear.py \
+    --render target/demo/gear.png --stl target/demo/gear.stl --size 1400x900
+# open the saved file in the viewer
+cargo run -p ferrocad_parametric -- --open target/demo/gear.FCStd
+# or reopen and render/export it without a window
+cargo run -p ferrocad_parametric -- --open target/demo/gear.FCStd \
+    --render target/demo/gear_reopened.png --stl target/demo/gear_from_file.stl
 cargo install ferrocad  # a self-contained binary: payload embedded, unpacked on first run
 cargo xtask mods               # fetch upstream workbench scripts (default: Draft) into mods/
 cargo xtask bundle             # stage the payload into target/dist/ferrocad (--debug for speed)
 packaging/linux/appimage.sh    # wrap it into an AppImage (needs appimagetool)
 ```
+
+`--render <png>` boots the edition's app script with `GuiUp == 0`, asks its display
+hook for the tessellated document shapes, and draws one offscreen frame with the
+same `Stage` → `WgpuRenderer` path the window uses. It needs a wgpu adapter (a
+software Vulkan ICD is enough) but no display server; add `--size WxH` to choose
+the framebuffer, and `--script <py>` to build the model first (the script runs after
+the edition's sample document is created). `--open <file>` loads a saved document
+at boot instead of the sample: with a window it is the basic `.FCStd` viewer (model
+tree, properties and 3D view follow the file), and with `--render` it renders the
+file. `--stl <path>` writes the same tessellation as a binary STL (it needs no GPU
+and can be combined with `--render`). The generated `examples/toy_headless.png` is
+the Toy edition's slab rendered this way; `examples/headless_part.py` is the Part
+demo script, and `examples/headless_gear.py` builds the two-gear train shown in
+`examples/gear_headless.png`.
+
+The Parametric edition needs OCCT 7.8. Fetch the 7.8.1 prefix CI uses into
+`.occt/prefix` once (recipe in
+[docs/architecture/occt-bundling.md](docs/architecture/occt-bundling.md#31-local-development-no-exports-needed));
+`.cargo/config.toml` then supplies `OpenCASCADE_DIR`, `OCCT_INCLUDE_DIR` and
+`LD_LIBRARY_PATH` automatically, so no exports or `.env` file are needed.
 
 Expected output:
 

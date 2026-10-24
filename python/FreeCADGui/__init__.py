@@ -665,8 +665,10 @@ def _payload(result) -> dict:
 
     A dict with ``on_accept`` is a dialog spec: the callback stays here under a
     token, and the spec goes out under ``dialog`` (the callable must never reach
-    JSON). ``status``, ``value``, ``view``, ``tool`` and ``select`` stay
-    top-level; everything else is ignored until a later slice gives it meaning.
+    JSON). The shell-facing keys are ``title``, ``fields``, ``accept``, ``cancel``,
+    ``presentation`` and ``preview``; ``status``, ``value``, ``view``, ``tool`` and
+    ``select`` stay top-level; everything else is ignored until a later slice gives
+    it meaning.
     """
     payload = {"ok": True}
     if not isinstance(result, dict):
@@ -677,7 +679,14 @@ def _payload(result) -> dict:
     if callback is not None:
         payload["dialog"] = {
             key: result[key]
-            for key in ("title", "fields", "accept", "cancel")
+            for key in (
+                "title",
+                "fields",
+                "accept",
+                "cancel",
+                "presentation",
+                "preview",
+            )
             if key in result
         }
         payload["token"] = _register_dialog(callback)

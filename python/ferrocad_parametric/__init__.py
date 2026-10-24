@@ -38,9 +38,40 @@ def _display_mesh(obj):
     try:
         if shape.isNull():
             return None
-        return shape.mesh()
+        mesh = shape.mesh()
+        _apply_object_placement(mesh, getattr(obj, "Placement", None))
+        # Part objects have no view provider to choose an appearance yet: give the
+        # viewer an opaque CAD surface instead of the shell's glass placeholder.
+        mesh.setdefault("color", [0.66, 0.72, 0.80, 1.0])
+        mesh.setdefault("display", "shaded_edges")
+        return mesh
     except Exception:
         return None
+
+
+def _apply_object_placement(mesh, placement):
+    """Move a tessellation from shape-local to world coordinates.
+
+    ``Shape.mesh()`` is in the shape's own coordinates; a ``Part::Feature``'s
+    ``Placement`` is a separate document property, the way FreeCAD's view provider
+    applies it. The stage has no per-mesh placement field, so the display hook bakes
+    it here. An opened ``.FCStd`` with placed objects therefore lands where it was
+    saved, not at the origin.
+    """
+    if placement is None:
+        return
+    positions = mesh.get("positions")
+    if positions:
+        mesh["positions"] = [
+            tuple(placement.multVec(FreeCAD.Vector(*position)))
+            for position in positions
+        ]
+    normals = mesh.get("normals")
+    if normals:
+        rotation = placement.Rotation
+        mesh["normals"] = [
+            tuple(rotation.multVec(FreeCAD.Vector(*normal))) for normal in normals
+        ]
 
 
 def _interaction(obj, manipulator, action, element, values):

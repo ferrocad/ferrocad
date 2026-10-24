@@ -236,7 +236,12 @@ impl TextAreaState {
         }
     }
 
-    fn on_mouse_down(&mut self, event: &MouseDownEvent, window: &mut Window, cx: &mut Context<Self>) {
+    fn on_mouse_down(
+        &mut self,
+        event: &MouseDownEvent,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         window.focus(&self.focus_handle, cx);
         self.is_selecting = true;
         let offset = self.index_for_mouse_position(event.position);
@@ -252,7 +257,12 @@ impl TextAreaState {
         self.is_selecting = false;
     }
 
-    fn on_mouse_move(&mut self, event: &MouseMoveEvent, _window: &mut Window, cx: &mut Context<Self>) {
+    fn on_mouse_move(
+        &mut self,
+        event: &MouseMoveEvent,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         if self.is_selecting {
             let offset = self.index_for_mouse_position(event.position);
             self.buffer.select_to(offset);
@@ -378,11 +388,11 @@ impl EntityInputHandler for TextAreaState {
         let start = range.start.saturating_sub(line.start);
         let end = range.end.saturating_sub(line.start);
         Some(Bounds::from_corners(
+            point(bounds.left() + PAD_X + line.line.x_for_index(start), top),
             point(
-                bounds.left() + PAD_X + line.line.x_for_index(start),
-                top,
+                bounds.left() + PAD_X + line.line.x_for_index(end),
+                top + LINE_HEIGHT,
             ),
-            point(bounds.left() + PAD_X + line.line.x_for_index(end), top + LINE_HEIGHT),
         ))
     }
 
@@ -463,7 +473,14 @@ impl Element for TextAreaElement {
         window: &mut Window,
         cx: &mut App,
     ) -> (LayoutId, Self::RequestLayoutState) {
-        let lines = self.state.read(cx).buffer.content().split('\n').count().max(1);
+        let lines = self
+            .state
+            .read(cx)
+            .buffer
+            .content()
+            .split('\n')
+            .count()
+            .max(1);
         let mut style = Style::default();
         style.size.width = relative(1.).into();
         style.size.height = (LINE_HEIGHT * lines as f32 + PAD_Y * 2.).into();
@@ -493,9 +510,10 @@ impl Element for TextAreaElement {
         for part in content.split('\n') {
             let start = offset;
             let runs = line_runs(part, start, read_only_len, marked.as_ref(), &font);
-            let line = window
-                .text_system()
-                .shape_line(part.to_string().into(), font_size, &runs, None);
+            let line =
+                window
+                    .text_system()
+                    .shape_line(part.to_string().into(), font_size, &runs, None);
             lines.push(LineLayout { start, line });
             offset = start + part.len() + 1;
         }
@@ -533,7 +551,8 @@ impl Element for TextAreaElement {
                 if start >= stop {
                     continue;
                 }
-                let top = bounds.top() + PAD_Y + line_index(&lines, line.start) as f32 * LINE_HEIGHT;
+                let top =
+                    bounds.top() + PAD_Y + line_index(&lines, line.start) as f32 * LINE_HEIGHT;
                 selection.push(fill(
                     Bounds::from_corners(
                         point(
@@ -602,7 +621,10 @@ impl Element for TextAreaElement {
 }
 
 fn line_index(lines: &[LineLayout], start: usize) -> usize {
-    lines.iter().position(|line| line.start == start).unwrap_or(0)
+    lines
+        .iter()
+        .position(|line| line.start == start)
+        .unwrap_or(0)
 }
 
 /// Build the text runs for one line: a muted read-only part up to `read_only_len`
@@ -745,7 +767,9 @@ mod tests {
     fn set_transcript_clears_the_editable_tail(cx: &mut TestAppContext) {
         let (mut cx, area) = open(cx);
         cx.update(|_window, cx| {
-            area.update(cx, |area, cx| area.set_transcript("welcome\n>>> 3\n>>> ", cx));
+            area.update(cx, |area, cx| {
+                area.set_transcript("welcome\n>>> 3\n>>> ", cx)
+            });
         });
         assert_eq!(content(&area, &cx), "welcome\n>>> 3\n>>> ");
     }

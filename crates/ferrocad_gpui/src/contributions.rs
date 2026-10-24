@@ -16,40 +16,46 @@ use ferrocad_stage::{GizmoMode, Manipulator, Stage, Tool, TransformGizmo};
 use ferrocad_types::Vector3;
 
 /// The generic transform handle: a whole-object selection gets a translate gizmo at
-/// the item's centre.
+/// the item's **base corner**.
 ///
 /// This is the default every edition wants, so an edition only has to register it
 /// (`Contributions::new().with_gizmo(translate_gizmo)`). A sub-element selection (a
 /// face, an edge) is left to the workbench's own manipulator: the generic triad has
 /// nothing to do with a face, and the built-in `TransformGizmo` targets whole items.
 ///
-/// The gizmo's origin is the centre of the item's bounding box, so the handles frame
-/// the solid instead of sitting at its first vertex (which may be anywhere).
+/// The corner is the world-aligned minimum of the item's bounding box, a predictable
+/// datum to measure from. A click-owned gizmo does not use it: the shell re-anchors the
+/// triad at the picked point of contact (see `SelectionAnchor`).
 pub fn translate_gizmo(selection: &SelectionRef, stage: &Stage) -> Option<TransformGizmo> {
     if !selection.is_whole() {
         return None;
     }
-    let item = stage.item(selection.object)?;
+    let corner = body_corner(selection.object, stage)?;
+    Some(TransformGizmo::new(
+        selection.object,
+        corner,
+        GizmoMode::Translate,
+    ))
+}
+
+/// The world-aligned base corner (minimum X/Y/Z) of a body's bounding box.
+///
+/// `None` for an entity the stage does not carry, or one with no positions. This is
+/// the datum a non-spatial (tree or command) selection uses when it has no click
+/// anchor.
+pub fn body_corner(entity: u32, stage: &Stage) -> Option<Vector3> {
+    let item = stage.item(entity)?;
     let positions = item.positions();
+    if positions.is_empty() {
+        return None;
+    }
     let mut min = Vector3::new(f64::INFINITY, f64::INFINITY, f64::INFINITY);
-    let mut max = Vector3::new(f64::NEG_INFINITY, f64::NEG_INFINITY, f64::NEG_INFINITY);
     for [x, y, z] in positions {
         min.x = min.x.min(f64::from(*x));
         min.y = min.y.min(f64::from(*y));
         min.z = min.z.min(f64::from(*z));
-        max.x = max.x.max(f64::from(*x));
-        max.y = max.y.max(f64::from(*y));
-        max.z = max.z.max(f64::from(*z));
     }
-    if positions.is_empty() || !min.x.is_finite() || !max.x.is_finite() {
-        return None;
-    }
-    let centre = min.add(&max).scale(0.5);
-    Some(TransformGizmo::new(
-        selection.object,
-        centre,
-        GizmoMode::Translate,
-    ))
+    min.x.is_finite().then_some(min)
 }
 
 /// The manipulator a selection asks for, if the workbench has one.
@@ -337,7 +343,7 @@ mod tests {
     }
 
     #[test]
-    fn the_default_translate_gizmo_sits_at_a_whole_objects_centre() {
+    fn the_default_translate_gizmo_sits_at_a_whole_objects_base_corner() {
         use ferrocad_stage::ShapeItem;
 
         let mut stage = Stage::new();
@@ -350,9 +356,7 @@ mod tests {
         let gizmo = translate_gizmo(&SelectionRef::whole(3), &stage).expect("a gizmo");
         assert_eq!(gizmo.target_id(), 3);
         let origin = gizmo.origin();
-        assert!((origin.x - 1.0).abs() < 1e-9, "x = {}", origin.x);
-        assert!((origin.y - 1.0).abs() < 1e-9, "y = {}", origin.y);
-        assert!((origin.z - 2.0).abs() < 1e-9, "z = {}", origin.z);
+        assert_eq!(origin, Vector3::zero(), "the base corner is the datum");
 
         // A sub-element and an entity that is not displayed get no generic triad.
         assert!(translate_gizmo(&SelectionRef::element(3, "Face1"), &stage).is_none());

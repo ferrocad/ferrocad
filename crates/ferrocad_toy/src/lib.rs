@@ -391,6 +391,20 @@ impl Manipulator for HeightGrip {
         Some(HeightGrip::readout(self))
     }
 
+    fn anchor(&self) -> Option<Vector3> {
+        Some(self.top)
+    }
+
+    fn set_anchor(&mut self, anchor: Vector3) -> bool {
+        if self.top == anchor {
+            return false;
+        }
+        self.top = anchor;
+        // The cached ribbons were built at the old anchor; rebuild on the next refresh.
+        self.built = None;
+        true
+    }
+
     fn readout_anchor(&self, camera: &Camera) -> Option<[f64; 2]> {
         HeightGrip::readout_anchor(self, camera)
     }
@@ -436,21 +450,21 @@ pub fn height_grip(selection: &SelectionRef, stage: &Stage) -> Option<Box<dyn Ma
 }
 
 /// The toy workbench's gizmo factory: a **whole-object** selection gets a translate
-/// gizmo at the item's centre.
+/// gizmo at the item's bounding-box base corner.
 ///
 /// The gizmo is the generic move/rotate handle; whether an object responds is the
 /// workbench's decision. The toy offers translation (its document provider composes the
-/// committed matrix with the object's placement).
+/// committed matrix with the object's placement). The shell re-anchors the triad at the
+/// picked point when the selection came from a viewport click.
 pub fn move_gizmo(selection: &SelectionRef, stage: &Stage) -> Option<TransformGizmo> {
     if !selection.is_whole() {
         return None;
     }
     let item = stage.item(selection.object)?;
-    let (min, max) = bounds(item)?;
-    let centre = min.add(&max).scale(0.5);
+    let (min, _) = bounds(item)?;
     Some(TransformGizmo::new(
         selection.object,
-        centre,
+        min,
         GizmoMode::Translate,
     ))
 }
@@ -665,15 +679,24 @@ mod tests {
     }
 
     #[test]
-    fn the_gizmo_sits_at_the_item_centre() {
+    fn the_gizmo_sits_at_the_items_base_corner() {
         let stage = slab(7);
         let gizmo = move_gizmo(&SelectionRef::whole(7), &stage).expect("a gizmo");
         assert_eq!(gizmo.target_id(), 7);
         let origin = gizmo.origin();
-        assert!((origin.x).abs() < 1e-9);
-        assert!((origin.y).abs() < 1e-9);
-        assert!((origin.z - 10.0).abs() < 1e-9);
+        assert!((origin.x + 20.0).abs() < 1e-9, "x = {}", origin.x);
+        assert!((origin.y + 20.0).abs() < 1e-9, "y = {}", origin.y);
+        assert!(origin.z.abs() < 1e-9, "z = {}", origin.z);
         assert!(move_gizmo(&SelectionRef::element(7, "Face1"), &stage).is_none());
+    }
+
+    #[test]
+    fn a_grip_anchor_follows_the_object() {
+        let mut grip = grip();
+        let moved = grip.top().add(&Vector3::new(5.0, 0.0, 2.0));
+        assert!(grip.set_anchor(moved), "the anchor moved");
+        assert_eq!(grip.top(), moved);
+        assert!(!grip.set_anchor(moved), "an unchanged anchor is a no-op");
     }
 
     #[test]

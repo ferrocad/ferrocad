@@ -2314,6 +2314,7 @@ dependencies = [
  "ferrocad_inventor_py",
  "ferrocad_stage",
  "ferrocad_stage_py",
+ "ferrocad_theme",
  "ferrocad_types",
  "ferrocad_ui",
  "ferrocad_viewport",
@@ -2330,6 +2331,7 @@ dependencies = [
 name = "ferrocad_graphics"
 version = "0.1.2"
 dependencies = [
+ "ferrocad_theme",
  "ferrocad_types",
 ]
 
@@ -2447,6 +2449,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "ferrocad_theme"
+version = "0.1.2"
+
+[[package]]
 name = "ferrocad_toy"
 version = "0.1.2"
 dependencies = [
@@ -2492,6 +2498,7 @@ dependencies = [
  "ferrocad_graphics",
  "ferrocad_inventor",
  "ferrocad_stage",
+ "ferrocad_theme",
  "ferrocad_types",
  "image",
 ]
@@ -2514,6 +2521,7 @@ name = "ferrocad_widgets"
 version = "0.1.2"
 dependencies = [
  "bite-gpui",
+ "ferrocad_theme",
  "unicode-segmentation",
 ]
 

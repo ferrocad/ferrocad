@@ -2,8 +2,8 @@
 
 ``FreeCADGui.draft`` provides the upstream-shaped ``Snapper`` and
 ``draftToolBar`` singletons over the Rust-free snap maths in
-``ferrocad_stage``, plus the six checkable ``Draft_Snap_*`` commands, the hint
-channel and the headless main-window seam.
+``ferrocad_stage``, plus the global ``Draft_Snap_Lock`` switch, the six checkable
+``Draft_Snap_*`` modes, the hint channel and the headless main-window seam.
 
 The stage-dependent cases skip cleanly when ``ferrocad_stage`` has not been
 built; the command registry, hint helpers and task-panel state do not need it.
@@ -11,11 +11,13 @@ built; the command registry, hint helpers and task-panel state do not need it.
 
 import contextlib
 import io
+import json
 import unittest
 from unittest import mock
 
 import FreeCAD
 import FreeCADGui
+import ferrocad_shell
 from FreeCADGui import draft
 
 try:
@@ -133,6 +135,112 @@ class SnapCommandTests(DraftTestCase):
             draft.Snapper.toggle_snap("Nope")
         with self.assertRaises(TypeError):
             draft.Snapper.mask = [17]
+
+
+class SnapLockCommandTests(DraftTestCase):
+    """``Draft_Snap_Lock`` is the header's ``Snap`` label."""
+
+    def test_the_lock_is_registered_on_the_snap_surface(self):
+        self.assertIn(draft._SNAP_LOCK_ID, FreeCADGui.listCommands())
+        command = FreeCADGui._COMMANDS[draft._SNAP_LOCK_ID]
+        resources = command.GetResources()
+        self.assertEqual(resources["FerroCAD_Surface"], "snap")
+        self.assertTrue(resources["Checkable"])
+        self.assertTrue(resources["MenuText"])
+        self.assertTrue(command.IsActive())
+        self.assertTrue(command.IsChecked())
+
+    def test_the_lock_keeps_the_mode_mask(self):
+        command = FreeCADGui._COMMANDS[draft._SNAP_LOCK_ID]
+        draft.Snapper.toggle_snap("Midpoint", False)
+        mask = list(draft.Snapper.mask)
+
+        self.assertFalse(command.Activated(), "the label toggles the switch off")
+        self.assertFalse(draft.Snapper.isEnabled())
+        self.assertEqual(draft.Snapper.mask, mask, "locking does not edit the mask")
+        self.assertFalse(command.IsChecked())
+
+        self.assertTrue(command.Activated(), "and back on")
+        self.assertTrue(draft.Snapper.isEnabled())
+        self.assertEqual(draft.Snapper.mask, mask)
+
+        # An explicit status sets rather than toggles.
+        self.assertFalse(command.Activated(False))
+        self.assertFalse(draft.Snapper.isEnabled())
+        self.assertTrue(command.Activated(True))
+        self.assertTrue(draft.Snapper.isEnabled())
+        self.assertEqual(draft.Snapper.mask, mask)
+
+    def test_the_modes_point_at_the_lock_for_the_header_popover(self):
+        short = {
+            "Draft_Snap_Grid": "Grid",
+            "Draft_Snap_Endpoint": "Endpoint",
+            "Draft_Snap_Midpoint": "Midpoint",
+            "Draft_Snap_Center": "Center",
+            "Draft_Snap_Origin": "Origin",
+            "Draft_Snap_Vertex": "Vertex",
+        }
+        for command_id, mode in short.items():
+            with self.subTest(command=command_id):
+                resources = FreeCADGui._COMMANDS[command_id].GetResources()
+                self.assertEqual(resources["FerroCAD_Surface"], "snap")
+                self.assertEqual(resources["FerroCAD_Parent"], draft._SNAP_LOCK_ID)
+                self.assertEqual(resources["FerroCAD_Short"], mode)
+                self.assertEqual(resources["MenuText"], f"Snap {mode}")
+
+    def test_locking_disables_the_mode_commands(self):
+        draft.Snapper.set_enabled(False)
+        for command_id in SNAP_COMMANDS:
+            with self.subTest(command=command_id):
+                self.assertFalse(FreeCADGui._COMMANDS[command_id].IsActive())
+
+    def test_the_bridge_forwards_the_header_metadata(self):
+        entries = {
+            entry["id"]: entry for entry in json.loads(ferrocad_shell.commands())
+        }
+        short = {
+            "Draft_Snap_Grid": "Grid",
+            "Draft_Snap_Endpoint": "Endpoint",
+            "Draft_Snap_Midpoint": "Midpoint",
+            "Draft_Snap_Center": "Center",
+            "Draft_Snap_Origin": "Origin",
+            "Draft_Snap_Vertex": "Vertex",
+        }
+        for command_id, mode in short.items():
+            with self.subTest(command=command_id):
+                entry = entries[command_id]
+                self.assertEqual(entry["surface"], "snap")
+                self.assertEqual(entry["parent"], draft._SNAP_LOCK_ID)
+                self.assertEqual(entry["short"], mode)
+                self.assertTrue(entry["checkable"])
+        self.assertTrue(entries[draft._SNAP_LOCK_ID]["checkable"])
+        self.assertFalse(
+            entries["View_GridSettings"]["checkable"],
+            "a settings jump is a one-shot row",
+        )
+
+    def test_an_upstream_style_is_checked_command_is_a_toggle(self):
+        class _BareToggle:
+            """An upstream-shaped command: the state hook, no `Checkable` key."""
+
+            def GetResources(self):
+                return {"MenuText": "Bare toggle"}
+
+            def Activated(self):
+                return None
+
+            def IsChecked(self):
+                return False
+
+        FreeCADGui.addCommand("Test_BareToggle", _BareToggle())
+        try:
+            entries = {
+                entry["id"]: entry
+                for entry in json.loads(ferrocad_shell.commands())
+            }
+            self.assertTrue(entries["Test_BareToggle"]["checkable"])
+        finally:
+            FreeCADGui.removeCommand("Test_BareToggle")
 
 
 # ---------------------------------------------------------------------------

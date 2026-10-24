@@ -10,7 +10,7 @@
 //! directories to search. This mirrors FreeCAD, where the interpreter belongs to
 //! the application but the workbench (`Mod/`) scripts ship with the distribution.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
 
 use pyo3::prelude::*;
@@ -29,6 +29,9 @@ static APP_PATHS: OnceLock<Vec<PathBuf>> = OnceLock::new();
 /// Workbench (`mods/`) directories scanned at boot.
 static MODS_PATHS: OnceLock<Vec<PathBuf>> = OnceLock::new();
 
+/// The document `--open` asked for, if any. Applied by [`open_startup_document`].
+static STARTUP_DOCUMENT: OnceLock<Option<PathBuf>> = OnceLock::new();
+
 /// Whether the shell is a GUI (`FreeCAD.GuiUp`). Set by [`configure`].
 static GUI: OnceLock<bool> = OnceLock::new();
 
@@ -46,6 +49,19 @@ pub fn configure(entry_module: &str, python_paths: &[PathBuf], mods_paths: &[Pat
     let _ = APP_PATHS.set(python_paths.to_vec());
     let _ = MODS_PATHS.set(mods_paths.to_vec());
     let _ = GUI.set(gui);
+}
+
+/// Configure the document `--open` should load after bootstrap.
+///
+/// This is separate from [`configure`] so the many tests that boot the shell
+/// directly keep their current four-argument call and never open a file.
+pub fn configure_startup_document(path: Option<&Path>) {
+    let _ = STARTUP_DOCUMENT.set(path.map(Path::to_path_buf));
+}
+
+/// The configured startup document, if any.
+pub fn startup_document() -> Option<PathBuf> {
+    STARTUP_DOCUMENT.get().cloned().flatten()
 }
 
 /// Whether the shell is running as a GUI.
@@ -67,6 +83,14 @@ pub struct Bootstrap {
     pub version: String,
     pub backend: String,
     pub document: String,
+}
+
+/// The document `open_document` loaded.
+#[derive(Debug, Clone, Deserialize)]
+pub struct OpenedDocument {
+    pub document: String,
+    #[serde(default)]
+    pub objects: usize,
 }
 
 /// The outcome of loading workbench scripts: what loaded, and what raised.
@@ -346,6 +370,38 @@ pub fn bootstrap() -> Result<Bootstrap, String> {
     serde_json::from_str(&raw).map_err(|e| e.to_string())
 }
 
+/// Open a saved document and make it active (the `--open` path).
+pub fn open_document(path: &Path) -> Result<OpenedDocument, String> {
+    let path = path.to_string_lossy();
+    call_json("open_document", Some(path.as_ref()))
+}
+
+/// Close a document by name (used to drop the bootstrap sample).
+pub fn close_document(name: &str) -> Result<(), String> {
+    let _: serde_json::Value = call_json("close_document", Some(name))?;
+    Ok(())
+}
+
+/// Apply the configured startup document, if one was set.
+///
+/// `boot` describes the sample document `bootstrap` created. When `--open` named
+/// a file, this opens it, makes it active and closes the sample (unless the file
+/// itself has that name). The shell then reads `model_tree` and `stage_meshes`
+/// from the requested document, so the window and the headless render agree.
+pub fn open_startup_document(boot: &mut Bootstrap) -> Result<Option<OpenedDocument>, String> {
+    let Some(path) = startup_document() else {
+        return Ok(None);
+    };
+    let opened = open_document(&path)?;
+    if opened.document != boot.document {
+        // A failure to drop the sample does not hide the document the user asked
+        // for; the tree simply carries one extra entry.
+        let _ = close_document(&boot.document);
+    }
+    boot.document = opened.document.clone();
+    Ok(Some(opened))
+}
+
 /// The workbench directories to scan: explicit config, then `FERROCAD_MODS_PATH`,
 /// then a `mods/` directory beside the discovered `python/` tree.
 fn mods_dirs() -> Vec<PathBuf> {
@@ -407,6 +463,26 @@ pub fn model_tree() -> Result<Vec<DocumentNode>, String> {
 /// sample scene".
 pub fn stage_meshes() -> Result<Vec<crate::display::StageMesh>, String> {
     call_json("stage_meshes", None)
+}
+
+/// Execute a Python file in the embedded interpreter (the `--script` path).
+///
+/// The file runs with `__name__ == "__main__"`, after the edition's `bootstrap`
+/// has created the sample document. It may create objects, replace the active
+/// document or save files; the subsequent `stage_meshes` call sees its result.
+pub fn run_script(path: &std::path::Path) -> Result<(), String> {
+    let path = path.to_string_lossy().into_owned();
+    Python::with_gil(|py| {
+        let runpy = py.import("runpy").map_err(|e| e.to_string())?;
+        let kwargs = PyDict::new(py);
+        kwargs
+            .set_item("run_name", "__main__")
+            .map_err(|e| e.to_string())?;
+        runpy
+            .call_method("run_path", (path,), Some(&kwargs))
+            .map_err(|e| e.to_string())?;
+        Ok(())
+    })
 }
 
 /// The declarative handles the mods declare for a selection.

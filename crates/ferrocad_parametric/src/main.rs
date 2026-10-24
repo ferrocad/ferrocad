@@ -11,6 +11,14 @@
 //! would link its own module and contribute no dress-up at all.
 //!
 //! Run it with `cargo run -p ferrocad_parametric` (needs a display and OCCT).
+//!
+//! `cargo run -p ferrocad_parametric -- --open model.FCStd` opens a saved model in
+//! the shell (the basic `.FCStd` viewer path).
+//!
+//! `cargo run -p ferrocad_parametric -- --render out.png [--size WxH]` renders the
+//! sample Part solid headlessly instead (needs a wgpu adapter, no display); add
+//! `--open model.FCStd` to render the file, `--script model.py` to build one, and
+//! `--stl out.stl` to export the same tessellation as a binary STL.
 //! See `docs/architecture/repackaging.md` and `docs/architecture/occt-integration.md` §4.
 
 fn main() {
@@ -18,10 +26,62 @@ fn main() {
     use ferrocad_part_py::Part as part_module;
     pyo3::append_to_inittab!(part_module);
 
-    ferrocad::run_edition_with(
+    let args = match ferrocad::edition_args() {
+        Ok(args) => args,
+        Err(error) => {
+            eprintln!("ferrocad: {error}");
+            std::process::exit(2);
+        }
+    };
+
+    let contributions =
+        ferrocad::Contributions::default().with_manipulator(ferrocad_part_gui::fillet_manipulator);
+
+    if args.render.is_some() || args.stl.is_some() {
+        match ferrocad::render_edition_headless(
+            "FerroCAD: Parametric",
+            "ferrocad_parametric",
+            args.render.as_deref(),
+            args.stl.as_deref(),
+            args.size,
+            args.script.as_deref(),
+            args.open.as_deref(),
+        ) {
+            Ok(report) => {
+                println!(
+                    "ferrocad: {} object(s) [{}] from {}",
+                    report.objects.len(),
+                    report.objects.join(", "),
+                    report.document
+                );
+                if let (Some(out), Some(size)) = (args.render.as_ref(), report.size) {
+                    println!(
+                        "ferrocad: wrote PNG {} ({}x{})",
+                        out.display(),
+                        size[0],
+                        size[1]
+                    );
+                }
+                if let Some(stl) = &report.stl {
+                    println!(
+                        "ferrocad: wrote STL {} ({} triangles)",
+                        stl.path.display(),
+                        stl.triangles
+                    );
+                }
+            }
+            Err(error) => {
+                eprintln!("ferrocad: headless run failed: {error}");
+                std::process::exit(1);
+            }
+        }
+        return;
+    }
+
+    ferrocad::run_edition_with_document(
         "FerroCAD: Parametric",
         "ferrocad_parametric",
-        ferrocad::Contributions::default()
-            .with_manipulator(ferrocad_part_gui::fillet_manipulator),
+        contributions,
+        args.open,
     );
 }

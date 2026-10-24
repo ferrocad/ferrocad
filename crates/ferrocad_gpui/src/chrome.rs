@@ -4,8 +4,8 @@
 //! The chrome is presentation over the command registry: every control runs an id
 //! through [`Shell::run_command`](crate::shell::Shell), and every popover row is a
 //! command the registry assigned to that surface. Nothing here names a workbench;
-//! the only ids it knows are the three primary controls (grid, axes, workplane) and
-//! the synthetic provider rows a Grid/Axis popover starts with.
+//! the only ids it knows are the four primary controls (grid, axes, workplane, snap)
+//! and the synthetic provider rows a Grid/Axis popover starts with.
 //!
 //! The app menu (`☰`) is app-level chrome, not a viewport control: the shell passes it
 //! to `window_frame_with_leading`, so it lives in the main window's title bar. It is
@@ -17,29 +17,35 @@
 //! they hang from does occlude, so a press on the glass does not start an orbit.)
 
 use gpui::{
-    Anchor, ClickEvent, Context, IntoElement, MouseButton, MouseDownEvent, Point, Pixels, Render,
+    Anchor, App, ClickEvent, Context, IntoElement, MouseButton, MouseDownEvent, Point, Pixels, Render,
     SharedString, Window, anchored, deferred, div, point, prelude::*, px, rgb, rgba,
 };
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use ferrocad_wgpu::{AdapterChoice, AdapterSummary};
+use ferrocad_widgets::menu::{MenuInfoRow, MenuRow, menu};
+
+use ferrocad_theme::ui::{
+    ACTIVE_ACCENT, CHROME_ACTIVE, CHROME_LINE, DOCK_BG, DOCK_BORDER, GLASS, ROW_HOVER,
+};
 
 use crate::commands::{self, CommandInfo, Surface};
 use crate::python::{AxisSummary, GridSummary, ProviderFeature};
 use crate::shell::{ACCENT, FG, MUTED, PANEL, PANEL_ALT, Shell, ShellModel, panel_header};
 
-/// The three header controls' primary command ids.
+/// The header controls' primary command ids.
 pub const GRID: &str = "App_ToggleGrid";
 pub const AXIS: &str = "App_ToggleAxisCross";
 pub const WORKPLANE: &str = "App_ViewWorkplane";
+/// The global snap switch. The six `Draft_Snap_*` modes declare this id as their
+/// `FerroCAD_Parent`, so they appear in its popover instead of in the dock.
+pub const SNAP: &str = "Draft_Snap_Lock";
 /// The application menu's first entry (hidden from every other surface).
 pub const DEV_TOOLS: &str = "Dev_ToggleTools";
 
-/// The visual-language active ink (`CHROME_ACTIVE`): a checked row's dot/check.
-const CHROME_ACTIVE: u32 = 0x67d7ff;
-/// The 1 px dielectric hairline used between grouped rows and dock actions.
-const CHROME_LINE: u32 = 0xffffff14;
+// The chrome accents and dielectric lines are in `ferrocad_theme::ui`: the same
+// table the popover widget uses, so the pill and its rows cannot drift.
 
 /// One row in an anchored popover.
 struct PopoverRow {
@@ -47,6 +53,13 @@ struct PopoverRow {
     label: String,
     enabled: bool,
     checked: bool,
+    /// The row represents a boolean state, so it carries a status dot (a provider
+    /// choice and a command toggle both do; a one-shot action does not).
+    toggle: bool,
+    /// A **state** row (a command toggle or a provider choice) keeps the popover open
+    /// after the click, so several options can be set in one visit and the dots
+    /// follow. A one-shot action row still dismisses it.
+    keep_open: bool,
     accel: String,
     /// Draw a 1 px hairline above this row (a group boundary).
     divider_before: bool,
@@ -56,9 +69,13 @@ impl PopoverRow {
     fn of(command: &CommandInfo) -> Self {
         Self {
             id: command.id.clone(),
-            label: command.label().to_string(),
+            // A popover sits under its own control, so `Snap Grid` would repeat the
+            // control's name six times; the short label keeps the column scannable.
+            label: command.short_label().to_string(),
             enabled: command.enabled,
             checked: command.checked,
+            toggle: command.checkable,
+            keep_open: command.checkable,
             accel: command.accel.clone(),
             divider_before: false,
         }
@@ -83,6 +100,11 @@ fn provider_rows(feature: &str, providers: &[crate::python::GridProvider]) -> Ve
             },
             enabled: true,
             checked: provider.active,
+            // A provider group is a radio set: the dot shows the active backend. It
+            // is a **state** row like a checkbox, so the menu stays open and the dot
+            // follows; `activate_provider` refreshes the summary in place.
+            toggle: true,
+            keep_open: true,
             accel: String::new(),
             divider_before: false,
         })
@@ -195,6 +217,7 @@ pub(crate) fn viewport_header(
     let grid_open = open == Some("grid");
     let axis_open = open == Some("axis");
     let wp_open = open == Some("wp");
+    let snap_open = open == Some("snap");
     let grid_providers = grid
         .map(|summary| provider_rows("grid", &summary.providers))
         .unwrap_or_default();
@@ -250,6 +273,25 @@ pub(crate) fn viewport_header(
             cx,
         ));
     }
+    // Snapping is ambient spatial state, so it belongs beside Grid/Axes/WP rather
+    // than in the dock next to the selection verbs. The label is the global switch;
+    // the six modes live in the popover.
+    if let Some(command) = commands::find(&model.commands, SNAP) {
+        controls = controls.child(split_button(
+            "snap",
+            "Snap",
+            SNAP,
+            Surface::Snap,
+            snap_open,
+            Vec::new(),
+            Vec::new(),
+            anchor,
+            true,
+            command,
+            model,
+            cx,
+        ));
+    }
 
     div()
         .flex()
@@ -258,9 +300,9 @@ pub(crate) fn viewport_header(
         .gap_1()
         .p_1()
         .rounded_md()
-        .bg(rgba(0x151a24cc))
+        .bg(rgba(GLASS))
         .border_1()
-        .border_color(rgba(0xffffff14))
+        .border_color(rgba(CHROME_LINE))
         .text_xs()
         .text_color(rgb(MUTED))
         .occlude()
@@ -283,6 +325,10 @@ fn app_rows(model: &ShellModel, dev_tools_open: bool) -> Vec<PopoverRow> {
             enabled: command.enabled,
             // The registry cannot know whether a window exists; the shell can.
             checked: dev_tools_open,
+            // A toggle, but the app menu is a launcher: clicking closes it so the
+            // window it just opened is visible.
+            toggle: true,
+            keep_open: false,
             accel: command.accel.clone(),
             divider_before: false,
         });
@@ -381,13 +427,16 @@ fn split_button(
         rows = combined;
     }
 
+    // Dielectric: the pill's glass is the surface and the 6 px state dot carries
+    // on/off in `ACTIVE_ACCENT` (one ink with the popover rows). A checked control
+    // used to fill with `ACCENT`, which pulled the eye away from the model (the
+    // NaviCube bar is the reference look).
     let mut control = div()
         .relative()
         .flex()
         .flex_row()
         .items_center()
         .rounded_sm()
-        .bg(rgb(if command.checked { ACCENT } else { PANEL_ALT }))
         .when(open, |el| el.border_1().border_color(rgba(0xffffff33)));
 
     let enabled = command.enabled;
@@ -414,7 +463,7 @@ fn split_button(
                             .w(px(6.))
                             .h(px(6.))
                             .rounded_full()
-                            .bg(rgb(if command.checked { CHROME_ACTIVE } else { MUTED })),
+                            .bg(rgb(if command.checked { ACTIVE_ACCENT } else { MUTED })),
                     )
                 })
                 .child(label),
@@ -491,126 +540,62 @@ fn popover(key: &'static str, rows: Vec<PopoverRow>, cx: &mut Context<Shell>) ->
 }
 
 /// A popover with read-only value rows above its commands (T4).
+///
+/// The panel is the reusable [`ferrocad_widgets::menu`]; this function is the shell
+/// adapter: it maps registry commands to rows and turns a click into the command run.
+/// A **state** row (`keep_open`) runs in place so the menu stays open and its dot
+/// follows; an action row dismisses the menu.
 fn popover_with_info(
     key: &'static str,
     info: Vec<PopoverInfo>,
     rows: Vec<PopoverRow>,
     cx: &mut Context<Shell>,
 ) -> impl IntoElement {
-    let mut panel = div()
-        .id(SharedString::from(format!("{key}-popover")))
-        .debug_selector(move || format!("{key}-popover"))
-        .flex()
-        .flex_col()
-        .min_w(px(220.))
-        .p_1()
-        .rounded_md()
-        .bg(rgba(0x1d2026f2))
-        .border_1()
-        .border_color(rgba(0xffffff26))
-        // The app menu's popover is drawn as a child of the title bar; a press on a
-        // row must not also start a window move.
-        .on_mouse_down(MouseButton::Left, |_event, _window, cx| cx.stop_propagation())
-        .on_mouse_down_out(cx.listener(|this, _event, _window, cx| {
-            this.close_popover(cx);
-        }));
+    let keep_open: HashSet<String> = rows
+        .iter()
+        .filter(|row| row.keep_open)
+        .map(|row| row.id.clone())
+        .collect();
 
-    if info.is_empty() && rows.is_empty() {
-        panel = panel.child(
-            div()
-                .px_2()
-                .py_1()
-                .text_xs()
-                .text_color(rgb(MUTED))
-                .child("No commands on this surface"),
-        );
-    }
+    let info = info
+        .into_iter()
+        .map(|PopoverInfo { id, label }| MenuInfoRow {
+            id: id.into(),
+            label: label.into(),
+        })
+        .collect();
+    let rows = rows
+        .into_iter()
+        .map(|row| MenuRow {
+            id: row.id.into(),
+            label: row.label.into(),
+            enabled: row.enabled,
+            checked: row.checked,
+            toggle: row.toggle,
+            accel: (!row.accel.is_empty()).then(|| row.accel.into()),
+            divider_before: row.divider_before,
+        })
+        .collect();
 
-    let info_present = !info.is_empty();
-    for row in info {
-        let PopoverInfo { id, label } = row;
-        panel = panel.child(
-            div()
-                .id(SharedString::from(format!("{key}-row-{id}")))
-                .debug_selector({
-                    let id = id.clone();
-                    move || format!("{key}-row-{id}")
-                })
-                .flex()
-                .flex_row()
-                .items_center()
-                .gap_2()
-                .px_2()
-                .py_1()
-                .rounded_sm()
-                .text_xs()
-                .text_color(rgb(MUTED))
-                .child(label),
-        );
-    }
-    if info_present && !rows.is_empty() {
-        panel = panel.child(hairline(1));
-    }
+    // The widget is domain-free; route its row and dismissal callbacks back into the
+    // shell through a weak handle (no retained cycle through the popover key).
+    let shell = cx.entity().downgrade();
+    let on_row = move |id: &str, _event: &ClickEvent, _window: &mut Window, cx: &mut App| {
+        let id = id.to_string();
+        let _ = shell.update(cx, |shell, cx| {
+            if keep_open.contains(&id) {
+                shell.run_command_in_place(&id, cx);
+            } else {
+                shell.run_command(&id, cx);
+            }
+        });
+    };
+    let shell = cx.entity().downgrade();
+    let on_dismiss = move |_window: &mut Window, cx: &mut App| {
+        let _ = shell.update(cx, |shell, cx| shell.close_popover(cx));
+    };
 
-    for row in rows {
-        let PopoverRow {
-            id,
-            label,
-            enabled,
-            checked,
-            accel,
-            divider_before,
-        } = row;
-        if divider_before {
-            panel = panel.child(hairline(2));
-        }
-        let mut el = div()
-            .id(SharedString::from(format!("{key}-row-{id}")))
-            .debug_selector({
-                let id = id.clone();
-                move || format!("{key}-row-{id}")
-            })
-            .flex()
-            .flex_row()
-            .items_center()
-            .gap_2()
-            .px_2()
-            .py_1()
-            .rounded_sm()
-            .text_xs()
-            .text_color(rgb(if enabled { FG } else { MUTED }))
-            .when(checked, |el| el.bg(rgb(ACCENT)))
-            .when(enabled, |el| {
-                el.cursor_pointer().hover(|style| style.bg(rgb(PANEL)))
-            })
-            .child(label)
-            .child(div().flex_1());
-        if !accel.is_empty() {
-            el = el.child(div().text_color(rgb(MUTED)).child(accel));
-        }
-        if checked {
-            el = el.child(div().text_color(rgb(CHROME_ACTIVE)).child("✓"));
-        }
-        if enabled {
-            let id = id.clone();
-            el = el.on_click(cx.listener(move |this, _event, _window, cx| {
-                this.run_command(&id, cx);
-            }));
-        }
-        panel = panel.child(el);
-    }
-    panel
-}
-
-/// A 1 px group divider inside a popover or the dock.
-fn hairline(id: usize) -> impl IntoElement {
-    div()
-        .id(SharedString::from(format!("hairline-{id}")))
-        .debug_selector(move || format!("hairline-{id}"))
-        .h(px(1.))
-        .w_full()
-        .my_1()
-        .bg(rgba(CHROME_LINE))
+    menu(key, info, rows, on_row, on_dismiss)
 }
 
 /// A vertical 1 px divider between dock groups.
@@ -865,177 +850,6 @@ fn gpu_row(
     row
 }
 
-/// The settings command the gizmo provider ships (dev-only in the registry; the
-/// dock builds its row by hand because the control, not the command list, owns it).
-const GIZMO_SETTINGS: &str = "GizmoOverlay_Settings";
-
-/// The options a dock command owns (option 2: the caret lives on the tool itself).
-///
-/// `Move` owns the gizmo's look and settings; a future `Polyline`/`Create Slab` would
-/// add its own key here instead of growing a second row or a sub-dock.
-fn dock_options(id: &str) -> Option<&'static str> {
-    match id {
-        "App_Move" => Some("gizmo"),
-        _ => None,
-    }
-}
-
-/// Whether `key`'s options are live, i.e. worth a caret.
-///
-/// The transform options belong to the handle, not to the command: they are live
-/// exactly while a selection has armed a gizmo. A tool that owns its options answers
-/// for its own state here, so the bar stays quiet when the tool is not in play.
-fn dock_options_live(key: &str, model: &ShellModel) -> bool {
-    match key {
-        "gizmo" => model.gizmo_armed,
-        _ => false,
-    }
-}
-
-/// The rows a dock options popover shows: the feature's backend rows, then its
-/// settings entry (the same store the label writes).
-fn dock_option_rows(
-    key: &str,
-    model: &ShellModel,
-    provider_features: &[crate::python::ProviderFeature],
-) -> Vec<PopoverRow> {
-    let mut rows = provider_features
-        .iter()
-        .find(|feature| feature.feature == key)
-        .map(|feature| provider_rows(key, &feature.providers))
-        .unwrap_or_default();
-    let settings = match key {
-        "gizmo" => GIZMO_SETTINGS,
-        _ => return rows,
-    };
-    if commands::find(&model.commands, settings).is_some() {
-        rows.push(PopoverRow {
-            id: settings.to_string(),
-            label: "Gizmo settings\u{2026}".to_string(),
-            enabled: true,
-            checked: false,
-            accel: String::new(),
-            divider_before: !rows.is_empty(),
-        });
-    }
-    // The numeric twin stays reachable from the tool's menu, so moving the label to
-    // the interactive handle costs no command (the shortcut still runs it directly).
-    if let Some(row) = dock_tool_row(key, model) {
-        rows.push(row);
-    }
-    rows
-}
-
-/// The registry command a tool's menu keeps as the numeric alternative.
-fn dock_tool_row(key: &str, model: &ShellModel) -> Option<PopoverRow> {
-    let (id, label) = match key {
-        "gizmo" => ("App_Move", "Move by delta\u{2026}"),
-        _ => return None,
-    };
-    commands::find(&model.commands, id).map(|command| PopoverRow {
-        id: command.id.clone(),
-        label: label.to_string(),
-        enabled: command.enabled,
-        checked: false,
-        accel: command.accel.clone(),
-        divider_before: true,
-    })
-}
-
-/// A tool entry with its options caret: the label arms the tool, the caret opens its
-/// options upward into the canvas.
-///
-/// The label exists for every tool that has options (it is what makes the tool
-/// interactive at all); `live` only controls the caret and the active tint, so an
-/// idle dock reads as plain text and a live one shows `[ Move ▾ ]`.
-fn dock_split(
-    command: &CommandInfo,
-    key: &'static str,
-    live: bool,
-    rows: Vec<PopoverRow>,
-    open: bool,
-    anchor: Option<Point<Pixels>>,
-    cx: &mut Context<Shell>,
-) -> impl IntoElement {
-    let id = command.id.clone();
-    let mut control = div()
-        .relative()
-        .flex()
-        .flex_row()
-        .items_center()
-        .rounded_sm()
-        .when(live, |el| el.bg(rgb(ACCENT)))
-        .when(open && live, |el| {
-            el.border_1().border_color(rgba(0xffffff33))
-        });
-
-    control = control.child(
-        div()
-            .id(SharedString::from(format!("dock-{id}")))
-            .debug_selector({
-                let id = id.clone();
-                move || format!("dock-{id}")
-            })
-            .px_2()
-            .py_1()
-            .text_xs()
-            .text_color(rgb(if command.enabled { FG } else { MUTED }))
-            .when(command.enabled, |el| {
-                el.cursor_pointer().hover(|style| style.bg(rgb(PANEL)))
-            })
-            .child(command.label().to_string())
-            .when(command.enabled, |el| {
-                el.on_click(cx.listener(move |this, _event, _window, cx| {
-                    // The label is the **tool**, not the numeric command: it arms the
-                    // handle for the selection. The caret keeps the command
-                    // (`Move by delta…`) and the look settings.
-                    this.arm_dock_tool(key, cx)
-                }))
-            }),
-    );
-
-    if live {
-        control = control.child(
-            div()
-                .id(SharedString::from(format!("dock-{id}-caret")))
-                .debug_selector({
-                    let id = id.clone();
-                    move || format!("dock-{id}-caret")
-                })
-                .px_1()
-                .py_1()
-                .text_xs()
-                .text_color(rgb(FG))
-                .cursor_pointer()
-                .hover(|style| style.bg(rgb(PANEL)))
-                .child("\u{25b4}")
-                .on_mouse_down(MouseButton::Left, cx.listener(move |this, event: &MouseDownEvent, _window, _cx| {
-                    this.set_popover_anchor(event.position);
-                }))
-                .on_click(cx.listener(move |this, _event, _window, cx| this.open_popover(key, cx))),
-        );
-    }
-
-    if open && live {
-        // The dock hugs the bottom edge, so the menu grows up from the caret. The
-        // pointer is the anchor (a flex child reports a negative layout origin here,
-        // as in the header).
-        let position = anchor
-            .map(|pointer| point(pointer.x, pointer.y - px(6.)))
-            .unwrap_or_else(|| point(px(0.), px(0.)));
-        control = control.child(
-            deferred(
-                anchored()
-                    .anchor(Anchor::BottomLeft)
-                    .position(position)
-                    .snap_to_window_with_margin(px(8.))
-                    .child(popover(key, rows, cx)),
-            )
-            .with_priority(1),
-        );
-    }
-    control
-}
 
 /// The action dock: the `dock` surface as one centred strip over the bottom of the
 /// canvas.
@@ -1043,13 +857,7 @@ fn dock_split(
 /// Rows come straight from the registry, so `IsActive` (driven by the selection) is
 /// what enables or greys them. Disabled commands stay visible: the dock shows what
 /// the workbench can do, not only what is possible right now.
-pub(crate) fn action_dock(
-    model: &ShellModel,
-    provider_features: &[crate::python::ProviderFeature],
-    open_popover: Option<&str>,
-    anchor: Option<Point<Pixels>>,
-    cx: &mut Context<Shell>,
-) -> impl IntoElement {
+pub(crate) fn action_dock(model: &ShellModel, cx: &mut Context<Shell>) -> impl IntoElement {
     let dock = model.surfaces().dock;
     let mut panel = div()
         .id("action-dock")
@@ -1065,13 +873,14 @@ pub(crate) fn action_dock(
         .px_2()
         .py_1()
         .rounded_md()
-        .bg(rgba(0x16181de6))
+        .bg(rgba(DOCK_BG))
         .border_1()
-        .border_color(rgba(0xffffff1f));
+        .border_color(rgba(DOCK_BORDER));
 
-    // Options live on the tool itself (option 2), so there is no separate row to
-    // appear or disappear: `Move` grows a caret only while a gizmo is armed.
-    let mut last_group: Option<u8> = None;
+    // The dock is the **creation + global** surface: object verbs live in the
+    // in-situ radial menu, so this strip never swaps width when the selection
+    // changes.
+    let mut rendered = false;
     for command in dock {
         // A dev-only command is a diagnostics entry: the Dev Tools list and the app
         // menu show it, a runtime surface never does (the same rule
@@ -1080,38 +889,21 @@ pub(crate) fn action_dock(
         if command.dev_only {
             continue;
         }
-        // Modification (Delete/Move) and creation (workbench actions) read as two
-        // groups; the hairline makes the dielectric split visible.
-        let group = if matches!(command.id.as_str(), "App_Delete" | "App_Move") {
-            0
-        } else {
-            1
-        };
-        if last_group.is_some_and(|previous| previous != group) {
-            panel = panel.child(dock_divider(group as usize));
-        }
-        last_group = Some(group);
+        rendered = true;
 
         let id = command.id.clone();
         let enabled = command.enabled;
         let checked = command.checked;
-        // A command that owns options always renders as the tool entry: its label arms
-        // the tool, and the caret appears once the tool is live. Without this, `Move`
-        // would run the numeric dialog and there would be no way to reach the handle.
-        if let Some(key) = dock_options(&id) {
-            let live = dock_options_live(key, model);
-            let rows = dock_option_rows(key, model, provider_features);
-            panel = panel.child(dock_split(
-                command,
-                key,
-                live,
-                rows,
-                open_popover == Some(key),
-                anchor,
-                cx,
-            ));
-            continue;
-        }
+        // The dock is a command strip, not a checklist: checked/live state is
+        // **accent ink**, and the background is reserved for an additive hover.
+        let ink = if !enabled {
+            MUTED
+        } else if checked {
+            ACTIVE_ACCENT
+        } else {
+            FG
+        };
+        let hover_ink = if checked { ACTIVE_ACCENT } else { FG };
         let mut button = div()
             .id(SharedString::from(format!("dock-{id}")))
             .debug_selector({
@@ -1122,10 +914,11 @@ pub(crate) fn action_dock(
             .py_1()
             .rounded_sm()
             .text_xs()
-            .text_color(rgb(if enabled { FG } else { MUTED }))
-            .when(checked, |el| el.bg(rgb(ACCENT)))
+            .text_color(rgb(ink))
             .when(enabled, |el| {
-                el.cursor_pointer().hover(|style| style.bg(rgb(PANEL_ALT)))
+                el.cursor_pointer().hover(move |style| {
+                    style.bg(rgba(ROW_HOVER)).text_color(rgb(hover_ink))
+                })
             })
             .child(command.label().to_string());
         if enabled {
@@ -1136,7 +929,7 @@ pub(crate) fn action_dock(
         panel = panel.child(button);
     }
 
-    if last_group.is_some() {
+    if rendered {
         panel = panel.child(dock_divider(2));
     }
     panel = panel.child(
@@ -1149,7 +942,7 @@ pub(crate) fn action_dock(
             .text_xs()
             .text_color(rgb(MUTED))
             .cursor_pointer()
-            .hover(|style| style.bg(rgb(PANEL)))
+            .hover(|style| style.bg(rgba(ROW_HOVER)).text_color(rgb(FG)))
             .child("Search (Ctrl+K)")
             .on_click(cx.listener(|this, _event, _window, cx| this.open_palette(cx))),
     );

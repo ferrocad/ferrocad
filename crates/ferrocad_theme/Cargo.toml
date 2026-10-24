@@ -1,0 +1,18 @@
+[package]
+name = "ferrocad_theme"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+readme.workspace = true
+repository.workspace = true
+homepage.workspace = true
+rust-version.workspace = true
+description = "FerroCAD's visual-language tokens: linear at the draw contract, packed sRGB at the gpui boundary"
+keywords = ["cad", "gui", "theme", "tokens"]
+categories = ["gui"]
+documentation = "https://docs.rs/ferrocad_theme"
+
+[lib]
+name = "ferrocad_theme"
+
+[dependencies]

@@ -72,6 +72,10 @@ _UNSUPPORTED_MODES = (
     "Lock",
 )
 
+#: The global snap switch. The header's ``Snap`` control runs it on the label and
+#: the six modes declare it as their ``FerroCAD_Parent``.
+_SNAP_LOCK_ID = "Draft_Snap_Lock"
+
 #: ``mode -> command id`` for the checkable snap bar, in toolbar order.
 _COMMAND_IDS = {
     "Grid": "Draft_Snap_Grid",
@@ -305,6 +309,24 @@ class _Snapper:
         if snap in _UNSUPPORTED_MODES or snap not in _SUPPORTED_MODES:
             return False
         return snap in self._mask
+
+    def set_enabled(self, enabled=True):
+        """Enable or disable snapping globally; returns the new state.
+
+        The per-mode ``mask`` is left untouched, so switching snapping back on
+        restores exactly the filters the user had. This is the switch behind the
+        ``Snap`` control in the viewport header (and ``Draft_Snap_Lock``).
+        """
+        self._enabled = bool(enabled)
+        return self._enabled
+
+    def toggle_enabled(self):
+        """Flip the global snap switch; returns the new state."""
+        return self.set_enabled(not self._enabled)
+
+    #: Upstream-style camel-case aliases.
+    setEnabled = set_enabled
+    toggleEnabled = toggle_enabled
 
     def toggle_snap(self, snap, set_to=None):
         """Toggle a mode in ``mask`` (or set it explicitly); returns its state.
@@ -1010,9 +1032,14 @@ class _SnapCommand:
         return {
             "Pixmap": _COMMAND_IDS[self.mode],
             "MenuText": self.menu,
+            # Under the header's `Snap` control the mode name alone is enough; the
+            # full `Snap Midpoint` stays in the palette so it is unambiguous there.
+            "FerroCAD_Short": self.mode,
             "ToolTip": self.tooltip,
             "CmdType": "NoTransaction",
             "Checkable": True,
+            "FerroCAD_Surface": "snap",
+            "FerroCAD_Parent": _SNAP_LOCK_ID,
         }
 
     def IsActive(self):
@@ -1033,6 +1060,39 @@ class _SnapCommand:
         return f"<{_COMMAND_IDS[self.mode]} mode={self.mode!r}>"
 
 
+class _SnapLockCommand:
+    """``Draft_Snap_Lock``: the global snap switch (upstream's Snap Lock).
+
+    The label of the header's ``Snap`` control runs this command, exactly as the
+    ``Grid`` and ``Axes`` labels run theirs. The mode mask survives a lock, so
+    unlocking restores the filters that were on before.
+    """
+
+    def GetResources(self):
+        return {
+            "Pixmap": _SNAP_LOCK_ID,
+            "MenuText": "Snap Lock",
+            "ToolTip": "Turn snapping on or off; the snap modes keep their own state",
+            "CmdType": "NoTransaction",
+            "Checkable": True,
+            "FerroCAD_Surface": "snap",
+        }
+
+    def IsActive(self):
+        return True
+
+    def IsChecked(self):
+        return Snapper.isEnabled()
+
+    def Activated(self, status=None):
+        if status is None:
+            return Snapper.toggle_enabled()
+        return Snapper.set_enabled(bool(status))
+
+    def __repr__(self):
+        return f"<{_SNAP_LOCK_ID} enabled={Snapper.isEnabled()}>"
+
+
 def _command_specs():
     return (
         ("Grid", "Snap Grid", "Snaps to the intersections of grid lines"),
@@ -1045,8 +1105,10 @@ def _command_specs():
 
 
 def _register_commands():
-    """Register the six snap commands once (a reload must not raise)."""
+    """Register the snap lock and the six snap commands once (a reload must not raise)."""
     registered = set(FreeCADGui.listCommands())
+    if _SNAP_LOCK_ID not in registered:
+        FreeCADGui.addCommand(_SNAP_LOCK_ID, _SnapLockCommand())
     for mode, menu, tooltip in _command_specs():
         command_id = _COMMAND_IDS[mode]
         if command_id in registered:

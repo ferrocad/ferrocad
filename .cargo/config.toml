@@ -1,3 +1,26 @@
 [alias]
 # `cargo xtask <task>` -> the `xtask` crate (crates/xtask).
 xtask = "run --package xtask --"
+
+[build]
+# Development-only runtime lookup for the OCCT shared libraries. `target/debug`
+# and `target/debug/deps` sit at different depths, so both relative forms are
+# present; `$ORIGIN` is expanded by the dynamic loader, not the shell. Packaged
+# editions set their own library path.
+rustflags = [
+    "-C", "link-arg=-Wl,-rpath,$ORIGIN/../../.occt/prefix/lib",
+    "-C", "link-arg=-Wl,-rpath,$ORIGIN/../../../.occt/prefix/lib",
+]
+
+[env]
+# The local OCCT prefix fetched by CI (and by the recipe in
+# docs/architecture/occt-bundling.md) lives at `.occt/prefix`. `relative = true`
+# resolves these paths against the workspace root, so they work from any working
+# directory. A value already set in the environment wins, which keeps a system
+# OCCT or a custom prefix easy to use.
+OpenCASCADE_DIR = { value = ".occt/prefix/lib/cmake/opencascade", relative = true }
+OCCT_INCLUDE_DIR = { value = ".occt/prefix/include/opencascade", relative = true }
+# CMake 4.x dropped the `cmake_minimum_required` versions OCCT 7.8.1 uses.
+CMAKE_POLICY_VERSION_MINIMUM = "3.5"
+# Runtime library path for `cargo run`/`cargo test` (OCCT ships no RUNPATH).
+LD_LIBRARY_PATH = { value = ".occt/prefix/lib", relative = true }

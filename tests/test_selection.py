@@ -100,6 +100,9 @@ class SelectionTests(unittest.TestCase):
         self.assertTrue(result["ok"])
         self.assertEqual(result["dialog"]["title"], "Move")
         self.assertEqual(len(result["dialog"]["fields"]), 3)
+        # A geometric verb asks for the non-modal HUD, not the centred modal.
+        self.assertEqual(result["dialog"]["presentation"], "float")
+        self.assertEqual(result["dialog"]["preview"], "translation")
         token = result["token"]
 
         self.assertTrue(FreeCADGui._cancel(token)["ok"])

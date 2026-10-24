@@ -14,8 +14,9 @@
 //! # Building
 //!
 //! This crate needs OCCT 7.8+ and is **not** in the workspace's `default-members`,
-//! so an ordinary `cargo build`/`cargo test` does not require a kernel. To build it,
-//! point two environment variables at an OCCT prefix (see `docs/architecture/occt-bundling.md`):
+//! so an ordinary `cargo build`/`cargo test` does not require a kernel. The workspace
+//! `.cargo/config.toml` points at `.occt/prefix` automatically; with a custom prefix,
+//! export (see `docs/architecture/occt-bundling.md`):
 //!
 //! ```sh
 //! export OCCT_INCLUDE_DIR=<prefix>/include/opencascade   # for build.rs
@@ -26,7 +27,7 @@
 //!
 //! # Example
 //!
-//! ```
+//! ```ignore
 //! use ferrocad_geom::GeometryBackend;
 //! use ferrocad_occt::OcctBackend;
 //!

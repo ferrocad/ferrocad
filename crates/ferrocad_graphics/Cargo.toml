@@ -13,6 +13,7 @@ categories = ["graphics"]
 documentation = "https://docs.rs/ferrocad_graphics"
 
 [dependencies]
-# The only dependency: base value types (Matrix4 / Placement / Vector3). No wgpu, no
-# pyo3, no inventor.
+# Base value types (Matrix4 / Placement / Vector3). No wgpu, no pyo3, no inventor.
 ferrocad_types.workspace = true
+# The leaf token table; the draw half is re-exported from `theme`.
+ferrocad_theme.workspace = true

@@ -147,8 +147,7 @@ impl TextBuffer {
     pub fn replace_range(&mut self, range: Range<usize>, text: &str) {
         let start = self.clamp(range.start);
         let end = self.clamp(range.end).max(start);
-        self.content =
-            (self.content[0..start].to_owned() + text + &self.content[end..]).into();
+        self.content = (self.content[0..start].to_owned() + text + &self.content[end..]).into();
         let caret = start + text.len();
         self.selected_range = caret..caret;
         self.selection_reversed = false;
@@ -171,8 +170,7 @@ impl TextBuffer {
     ) {
         let start = self.clamp(range.start);
         let end = self.clamp(range.end).max(start);
-        self.content =
-            (self.content[0..start].to_owned() + text + &self.content[end..]).into();
+        self.content = (self.content[0..start].to_owned() + text + &self.content[end..]).into();
         self.marked_range = if text.is_empty() {
             None
         } else {

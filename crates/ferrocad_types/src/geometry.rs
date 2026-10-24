@@ -125,6 +125,15 @@ impl Matrix4 {
         Matrix4 { m }
     }
 
+    /// A pure world-space translation.
+    pub fn translation(x: f64, y: f64, z: f64) -> Self {
+        let mut m = Matrix4::identity().m;
+        m[3] = x;
+        m[7] = y;
+        m[11] = z;
+        Matrix4 { m }
+    }
+
     pub fn from_values(values: [f64; 16]) -> Self {
         Matrix4 { m: values }
     }
@@ -893,6 +902,13 @@ mod tests {
         let id = Matrix4::identity();
         let v = Vector3::new(1.0, 2.0, 3.0);
         assert_eq!(id.transform(&v), v);
+    }
+
+    #[test]
+    fn a_translation_moves_points_without_scaling() {
+        let t = Matrix4::translation(5.0, -2.0, 1.5);
+        let v = t.transform(&Vector3::new(1.0, 1.0, 1.0));
+        assert!(v.is_equal(&Vector3::new(6.0, -1.0, 2.5), 1e-12));
     }
 
     #[test]

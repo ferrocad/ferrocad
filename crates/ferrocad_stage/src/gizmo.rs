@@ -518,6 +518,10 @@ pub struct TransformGizmo {
     linear_snap: Option<f64>,
     hovered: Option<GizmoHandle>,
     active: Option<ActiveDrag>,
+    /// A draw-only offset from the interaction frame, used while a host previews a
+    /// translation during a drag. `drag_to` keeps measuring against `frame`, so moving
+    /// the drawing cannot feed back into the gesture.
+    display_offset: Option<Vector3>,
     dirty: bool,
     /// Nine fixed slots (one per [`GizmoHandle`]); unused ones are cleared. Stable mesh
     /// ids, so a rebuild is a geometry write, not a new mesh.
@@ -537,6 +541,7 @@ impl TransformGizmo {
             linear_snap: None,
             hovered: None,
             active: None,
+            display_offset: None,
             dirty: true,
             handles: (0..GizmoHandle::ALL.len()).map(new_handle).collect(),
         }
@@ -566,6 +571,40 @@ impl TransformGizmo {
     /// The gizmo's origin.
     pub fn origin(&self) -> Vector3 {
         self.frame.origin
+    }
+
+    /// The draw-only offset from the interaction frame, if any.
+    pub fn display_offset(&self) -> Option<Vector3> {
+        self.display_offset
+    }
+
+    /// Offset the **drawn** handles without moving the interaction frame.
+    ///
+    /// A host uses this while a drag previews the target: the triad stays glued to the
+    /// moving surface, while [`drag_to`](Self::drag_to) keeps measuring against the
+    /// origin captured at the press. `None` clears it. Hit testing and drag math always
+    /// use [`origin`](Self::origin), so the offset can never feed back into a gesture.
+    pub fn set_display_offset(&mut self, offset: Option<Vector3>) {
+        if self.display_offset == offset {
+            return;
+        }
+        self.display_offset = offset;
+        self.apply_colors();
+    }
+
+    /// The world point the drawing shows for `point` (the frame point plus the
+    /// draw-only offset).
+    fn display_point(&self, point: Vector3) -> Vector3 {
+        match self.display_offset {
+            Some(offset) => point.add(&offset),
+            None => point,
+        }
+    }
+
+    /// The origin in device pixels, for a host that floats a HUD beside the handles.
+    /// `None` when the origin is behind the camera.
+    pub fn origin_anchor(&self, camera: &Camera) -> Option<[f64; 2]> {
+        project_device(camera, self.display_point(self.frame.origin))
     }
 
     /// Move the gizmo (rebuilds the handle geometry on the next [`update`](Self::update)).
@@ -1107,11 +1146,13 @@ impl TransformGizmo {
         let point = match &active.start {
             DragStart::Axis { .. } => {
                 let axis = self.frame.axis(active.handle)?;
-                self.frame
-                    .origin
-                    .add(&axis.scale(self.screen_scale(camera) * 1.05))
+                self.display_point(
+                    self.frame
+                        .origin
+                        .add(&axis.scale(self.screen_scale(camera) * 1.05)),
+                )
             }
-            DragStart::Plane { .. } => self.frame.origin,
+            DragStart::Plane { .. } => self.display_point(self.frame.origin),
             DragStart::Ring { .. } => return None,
         };
         project_device(camera, point)
@@ -1172,13 +1213,18 @@ impl TransformGizmo {
     }
 
     /// Recolour every slot: active cyan or inactive slate, with a glass fill and rim for
-    /// planes.
+    /// planes. Also re-applies the draw-only preview offset (a rebuild replaces the
+    /// handle items' temporary transforms).
     fn apply_colors(&mut self) {
+        let offset = self
+            .display_offset
+            .map(|offset| Matrix4::translation(offset.x, offset.y, offset.z));
         for (index, handle) in GizmoHandle::ALL.iter().enumerate() {
             let (surface, edge) = paint_for(*handle, self.hovered == Some(*handle), &self.style);
             self.handles[index].set_surface_color(surface);
             self.handles[index].set_edge_color(edge);
             self.handles[index].set_ghost_alpha(self.style.ghost_alpha);
+            self.handles[index].set_temporary_transform(offset);
         }
     }
 }
@@ -1674,6 +1720,30 @@ mod tests {
         assert_eq!(item_count(GizmoMode::Translate), 6);
         assert_eq!(item_count(GizmoMode::Rotate), 3);
         assert_eq!(item_count(GizmoMode::Universal), 9);
+    }
+
+    #[test]
+    fn a_display_offset_moves_the_drawing_not_the_drag_frame() {
+        let mut gizmo = TransformGizmo::new(1, Vector3::zero(), GizmoMode::Translate);
+        let camera = camera(5.0);
+        gizmo.update(&camera);
+        let origin = gizmo.origin();
+        let offset = Vector3::new(5.0, 0.0, 2.0);
+
+        gizmo.set_display_offset(Some(offset));
+        assert_eq!(gizmo.origin(), origin, "the interaction frame is frozen");
+        assert_eq!(gizmo.display_offset(), Some(offset));
+        let drawn = gizmo.items()[GizmoHandle::AxisX.index()]
+            .temporary_transform()
+            .expect("the handles are offset for drawing");
+        assert_eq!(drawn.transform(&Vector3::zero()), offset);
+
+        gizmo.set_display_offset(None);
+        assert!(
+            gizmo.items()[GizmoHandle::AxisX.index()]
+                .temporary_transform()
+                .is_none()
+        );
     }
 
     #[test]

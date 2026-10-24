@@ -79,9 +79,24 @@ pub fn run_edition_with(
     entry_module: &str,
     contributions: Contributions,
 ) {
+    run_edition_with_document(app_name, entry_module, contributions, None);
+}
+
+/// [`run_edition_with`] with a document to open at boot (`--open`).
+///
+/// The file is opened after the app script's bootstrap, then the sample document
+/// is dropped. The window's title, model tree, properties and viewport all follow
+/// the opened document, which is the basic `.FCStd` viewer path.
+pub fn run_edition_with_document(
+    app_name: &str,
+    entry_module: &str,
+    contributions: Contributions,
+    open: Option<std::path::PathBuf>,
+) {
     register_core_module();
     let mut config = app_config(app_name, entry_module);
     config.contributions = contributions;
+    config.open_document = open;
     ferrocad_gpui::run_with(config);
 }
 
@@ -97,6 +112,117 @@ pub fn check_init() -> Result<(), String> {
     ferrocad_gpui::check_init(base_config("FerroCAD"))
 }
 
+pub use ferrocad_gpui::RenderReport;
+
+/// Render an edition's sample document headlessly to `out`.
+///
+/// This is the `--render <png>` path: the same boot as `--check-init`, then the
+/// edition's display hook supplies the tessellated document shapes, which are
+/// compiled to a stage and drawn with one offscreen wgpu pass. It needs a wgpu
+/// adapter (a software Vulkan ICD is enough) but no display server. The edition's
+/// own built-in modules must already be registered — `ferrocad_parametric` does
+/// that for `Part` before it calls this.
+pub fn render_edition_headless(
+    app_name: &str,
+    entry_module: &str,
+    render: Option<&std::path::Path>,
+    stl: Option<&std::path::Path>,
+    size: [u32; 2],
+    script: Option<&std::path::Path>,
+    open: Option<&std::path::Path>,
+) -> Result<RenderReport, String> {
+    register_core_module();
+    let mut config = app_config(app_name, entry_module);
+    config.open_document = open.map(std::path::Path::to_path_buf);
+    ferrocad_gpui::headless::run(&config, render, stl, size, script)
+}
+
+/// The flags an edition accepts in both its windowed and headless modes.
+#[derive(Debug, Clone)]
+pub struct EditionArgs {
+    /// `--render <png>`: render headlessly.
+    pub render: Option<std::path::PathBuf>,
+    /// `--stl <path>`: export the tessellated stage as binary STL.
+    pub stl: Option<std::path::PathBuf>,
+    /// The framebuffer size for `--render`.
+    pub size: [u32; 2],
+    /// `--script <py>`: build the model before rendering/exporting.
+    pub script: Option<std::path::PathBuf>,
+    /// `--open <file>`: open a saved document at boot (windowed or headless).
+    pub open: Option<std::path::PathBuf>,
+}
+
+impl Default for EditionArgs {
+    fn default() -> Self {
+        Self {
+            render: None,
+            stl: None,
+            size: [800, 600],
+            script: None,
+            open: None,
+        }
+    }
+}
+
+/// Parse `--render`, `--size`, `--script` and `--open` from the process arguments.
+///
+/// Unknown arguments are left to the caller's normal handling; this parser only
+/// consumes the flags it owns.
+pub fn edition_args() -> Result<EditionArgs, String> {
+    let mut parsed = EditionArgs::default();
+    let mut args = std::env::args().skip(1);
+    while let Some(arg) = args.next() {
+        match arg.as_str() {
+            "--render" => {
+                let path = args
+                    .next()
+                    .ok_or_else(|| "--render wants a path".to_string())?;
+                parsed.render = Some(std::path::PathBuf::from(path));
+            }
+            "--stl" => {
+                let path = args
+                    .next()
+                    .ok_or_else(|| "--stl wants a path".to_string())?;
+                parsed.stl = Some(std::path::PathBuf::from(path));
+            }
+            "--script" => {
+                let path = args
+                    .next()
+                    .ok_or_else(|| "--script wants a path".to_string())?;
+                parsed.script = Some(std::path::PathBuf::from(path));
+            }
+            "--open" => {
+                let path = args
+                    .next()
+                    .ok_or_else(|| "--open wants a path".to_string())?;
+                parsed.open = Some(std::path::PathBuf::from(path));
+            }
+            "--size" => {
+                let value = args
+                    .next()
+                    .ok_or_else(|| "--size wants WIDTHxHEIGHT".to_string())?;
+                parsed.size = parse_size(&value)?;
+            }
+            _ => {}
+        }
+    }
+    Ok(parsed)
+}
+
+/// `800x600` → `[800, 600]`.
+fn parse_size(value: &str) -> Result<[u32; 2], String> {
+    let (width, height) = value
+        .split_once('x')
+        .ok_or_else(|| format!("--size wants WIDTHxHEIGHT, got {value:?}"))?;
+    let parse = |part: &str| {
+        part.parse::<u32>()
+            .ok()
+            .filter(|n| *n > 0)
+            .ok_or_else(|| format!("--size wants positive integers, got {value:?}"))
+    };
+    Ok([parse(width)?, parse(height)?])
+}
+
 /// The [`HostConfig`] an edition boots with, after resolving its payload.
 fn base_config(app_name: &str) -> HostConfig {
     app_config(app_name, "ferrocad_shell")
@@ -110,5 +236,6 @@ fn app_config(app_name: &str, entry_module: &str) -> HostConfig {
         python_paths: payload.python_paths,
         mods_paths: payload.mods_paths,
         contributions: Contributions::default(),
+        open_document: None,
     }
 }

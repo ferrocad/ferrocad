@@ -17,6 +17,8 @@ pub mod dialog;
 pub mod display;
 /// Q3a: render `ferrocad_ui` forms as gpui elements and host a form dialog.
 pub mod forms;
+/// Headless edition rendering (`--render out.png`): model → stage → PNG.
+pub mod headless;
 pub mod manipulators;
 pub mod python;
 pub mod selection;
@@ -45,6 +47,7 @@ pub use contributions::{Contributions, GizmoFactory, ManipulatorFactory, transla
 pub use dev_tools::DevTools;
 pub use dialog::{DialogField, DialogSpec};
 pub use display::{DisplaySync, StageMesh};
+pub use headless::{RenderReport, StlReport, render as render_headless, run as run_headless};
 pub use selection::SelectionItem;
 pub use shell::{Shell, ShellModel};
 pub use shortcuts::Accelerator;
@@ -108,6 +111,13 @@ pub struct HostConfig {
     /// The manipulators the edition's workbenches contribute (the Part edge arc, a BIM
     /// grip, …). The base app registers none, and the shell names no workbench.
     pub contributions: Contributions,
+    /// A document to open at boot instead of showing only the sample document.
+    ///
+    /// The shell boots the app script first (which creates its sample), then opens
+    /// this file, makes it active and drops the sample. The title, model tree,
+    /// properties and viewport all follow the opened document. `None` is the normal
+    /// sample-document start.
+    pub open_document: Option<std::path::PathBuf>,
 }
 
 impl Default for HostConfig {
@@ -118,6 +128,7 @@ impl Default for HostConfig {
             mods_paths: Vec::new(),
             entry_module: "ferrocad_shell".to_string(),
             contributions: Contributions::default(),
+            open_document: None,
         }
     }
 }
@@ -138,6 +149,7 @@ pub fn run_with(config: HostConfig) {
         &config.mods_paths,
         true,
     );
+    python::configure_startup_document(config.open_document.as_deref());
 
     let model = match Shell::boot() {
         Ok(model) => model,
@@ -185,6 +197,7 @@ pub fn check_init(config: HostConfig) -> Result<(), String> {
         &config.mods_paths,
         false,
     );
+    python::configure_startup_document(config.open_document.as_deref());
     Shell::boot().map(|_| ())
 }
 

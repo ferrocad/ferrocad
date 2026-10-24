@@ -738,6 +738,20 @@ impl Manipulator for DeclarativeManipulator {
         Some(DeclarativeManipulator::readout(self))
     }
 
+    fn anchor(&self) -> Option<Vector3> {
+        Some(self.handle.frame.origin)
+    }
+
+    fn set_anchor(&mut self, anchor: Vector3) -> bool {
+        if self.handle.frame.origin == anchor {
+            return false;
+        }
+        self.handle.frame.origin = anchor;
+        // The cached handle mesh is built at the old frame; refresh rebuilds it.
+        self.built = None;
+        true
+    }
+
     fn readout_anchor(&self, camera: &Camera) -> Option<[f64; 2]> {
         DeclarativeManipulator::readout_anchor(self, camera)
     }

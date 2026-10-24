@@ -1,25 +1,38 @@
 //! # `ferrocad_ui_py` — headless proxies for Qt Designer forms
 //!
-//! Q2a of the Qt-reduction plan: expose the typed form tree from
-//! [`ferrocad_ui`] to Python as `FormProxy` / `WidgetProxy` / `SignalProxy`.
-//! `FreeCADGui.PySideUic.loadUi(path_or_file)` is the Python facade; this crate
-//! is the extension module behind it.
+//! Q2a/Q2b of the Qt-reduction plan: expose the typed form tree from
+//! [`ferrocad_ui`] to Python as `FormProxy` / `WidgetProxy` / `LayoutProxy` /
+//! `LayoutItemProxy` / `SignalProxy`. `FreeCADGui.PySideUic.loadUi(path_or_file)`
+//! is the Python facade; this crate is the extension module behind it.
 //!
 //! The surface is deliberately small:
 //!
 //! * [`FormProxy`] looks widgets up by name, resolves `findChild`, and carries
-//!   the root operations (`setWindowTitle`, `show`/`hide`/`close`,
-//!   `accept`/`reject` on `QDialog` roots).
-//! * [`WidgetProxy`] exposes `text`/`setText`, `value`/`setValue`,
-//!   `isChecked`/`setChecked`, `currentIndex`/`setCurrentIndex`/`currentText`,
-//!   `isEnabled`/`setEnabled`, `setVisible`, `objectName`, `children` and
-//!   `findChild` for the widget classes that actually have those members.
+//!   the root operations (`setWindowTitle`, `show`/`hide`/`close`, `layout`,
+//!   and `accept`/`reject`/`exec_`/`result` on `QDialog` roots).
+//! * [`WidgetProxy`] exposes `text`/`setText`, `value`/`setValue` (clamped to
+//!   `minimum`/`maximum`), `isChecked`/`setChecked`,
+//!   `currentIndex`/`setCurrentIndex`/`currentText` plus combo mutation,
+//!   `isEnabled`/`setEnabled`, `setVisible`, `setParent`, `layout`,
+//!   `setProperty`/`property`, `objectName`, `children` and `findChild` for the
+//!   widget classes that actually have those members.
+//! * [`LayoutProxy`] provides the OrthoArray-style layout surgery (`count`,
+//!   `itemAt`, `takeAt`, `addWidget`, `addLayout`) over an in-memory model with
+//!   grid positions; no geometry and no rendering.
 //! * [`SignalProxy`] is a callback list with `connect`, `disconnect` and
-//!   `emit`; the common signals are attributes on the widget.
+//!   `emit`; the common signals are attributes on the widget, and a `QDialog`
+//!   form exposes `accepted`/`rejected`.
 //!
 //! Anything outside that set raises `AttributeError` naming the form, widget
 //! class, widget name and member. There is no silent `None`, no Qt object model
 //! and no rendering.
+//!
+//! # Dialogs
+//!
+//! `exec_()` does not block and does not run an event loop: it returns the
+//! result stored by `accept()` (1) or `reject()` (0), which defaults to
+//! `QDialog::Rejected` (0). `accept`/`reject` also emit the form-level
+//! `accepted`/`rejected` signals. The real modal is Q3's gpui dialog host.
 //!
 //! # Loading
 //!
@@ -49,7 +62,7 @@ use pyo3::exceptions::{PyTypeError, PyValueError};
 use pyo3::prelude::*;
 use pyo3::types::{PyBytes, PyString};
 
-pub use proxy::{FormProxy, SignalProxy, WidgetProxy};
+pub use proxy::{FormProxy, LayoutItemProxy, LayoutProxy, SignalProxy, WidgetProxy};
 
 pyo3::create_exception!(
     ferrocad_ui_py,
@@ -162,6 +175,8 @@ fn ferrocad_ui_py(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add("UiLoadError", module.py().get_type::<UiLoadError>())?;
     module.add_class::<FormProxy>()?;
     module.add_class::<WidgetProxy>()?;
+    module.add_class::<LayoutProxy>()?;
+    module.add_class::<LayoutItemProxy>()?;
     module.add_class::<SignalProxy>()?;
     module.add_function(wrap_pyfunction!(load_ui, module)?)?;
     Ok(())

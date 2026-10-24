@@ -1,4 +1,4 @@
-"""Q2a: ``FreeCADGui.PySideUic.loadUi`` and the headless form proxies.
+"""Q2a/Q2b: ``FreeCADGui.PySideUic.loadUi`` and the headless form proxies.
 
 The extension is loaded from the cargo target directory explicitly. Cargo emits
 ``libferrocad_ui_py.so`` on Linux, while Python imports the module under the
@@ -38,6 +38,10 @@ CORE_FORMS = {
 }
 
 QT_MODULES = ("PySide", "PySide2", "PySide6", "shiboken", "shiboken2", "shiboken6")
+
+
+class QGridLayout:
+    """The class-object shape ``findChild`` accepts, without importing Qt."""
 
 
 def _library_candidates():
@@ -116,6 +120,9 @@ print("PROBE " + json.dumps({
     "after": after,
     "widget": form.button_linear_mode.objectName(),
     "title": form.windowTitle(),
+    "root_layout": form.layout().className(),
+    "root_items": form.layout().count(),
+    "linear_items": form.group_linearmode.layout().count(),
 }))
 '''
 
@@ -327,6 +334,211 @@ class UiLoaderTests(unittest.TestCase):
         widget_form = self.load("TaskPanel_OrthoArray.ui")
         with self.assertRaises(AttributeError):
             widget_form.accept()
+        with self.assertRaises(AttributeError):
+            widget_form.exec_()
+        with self.assertRaises(AttributeError):
+            widget_form.accepted
+
+    # -- Q2b: layout surgery ----------------------------------------------
+
+    def test_layout_model_adds_takes_and_reparents(self):
+        form = self.load("TaskPanel_OrthoArray.ui")
+        root = form.layout()
+        self.assertIsNotNone(root)
+        self.assertEqual(root.className(), "QGridLayout")
+        self.assertEqual(root.objectName(), "gridLayout_3")
+        self.assertEqual(root.count(), 9)
+
+        linear = form.group_linearmode.layout()
+        self.assertEqual(linear.count(), 0)
+        self.assertEqual(linear.className(), "QGridLayout")
+
+        spin = form.spinbox_n_X
+        label = form.label_n_X
+        spin.setParent(form.group_linearmode)
+        label.setParent(form.group_linearmode)
+        linear.addWidget(spin, 0, 1)
+        linear.addWidget(label, 0, 0, 1, 1)
+        self.assertEqual(linear.count(), 2)
+
+        children = [widget.objectName() for widget in form.group_linearmode.children()]
+        self.assertIn("spinbox_n_X", children)
+        self.assertIn("label_n_X", children)
+
+        # addWidget moved both widgets out of their original grid.
+        grid_number = form.findChild(QGridLayout, "grid_number")
+        self.assertEqual(grid_number.className(), "QGridLayout")
+        self.assertEqual(grid_number.count(), 4)
+
+        taken = linear.takeAt(0)
+        self.assertEqual(taken.widget().objectName(), "spinbox_n_X")
+        self.assertEqual(linear.count(), 1)
+        taken.widget().setParent(None)
+        children = [widget.objectName() for widget in form.group_linearmode.children()]
+        self.assertNotIn("spinbox_n_X", children)
+
+        with self.assertRaises(IndexError):
+            linear.takeAt(99)
+
+    def test_layouts_can_be_moved_and_found(self):
+        form = self.load("TaskPanel_OrthoArray.ui")
+        group_x = form.group_X.layout()
+        self.assertEqual(group_x.count(), 2)
+
+        nested = group_x.takeAt(0)
+        self.assertEqual(nested.layout().objectName(), "grid_X")
+        self.assertEqual(group_x.count(), 1)
+
+        linear = form.group_linearmode.layout()
+        linear.addLayout(nested.layout(), 0, 0)
+        self.assertEqual(linear.count(), 1)
+        self.assertEqual(linear.itemAt(0).layout().objectName(), "grid_X")
+        self.assertIsNone(linear.itemAt(0).widget())
+        self.assertIsNone(linear.itemAt(9))
+
+        # A layout is found by name (class object is advisory) or by class.
+        self.assertEqual(form.findChild(QGridLayout, "grid_X").className(), "QGridLayout")
+        self.assertEqual(form.findChild("grid_X").objectName(), "grid_X")
+
+        with self.assertRaises(AttributeError) as raised:
+            linear.setSpacing(4)
+        message = str(raised.exception)
+        self.assertIn("QGridLayout", message)
+        self.assertIn("setSpacing", message)
+
+    # -- Q2b: combo mutation ----------------------------------------------
+
+    def test_combo_mutation_keeps_index_and_text_consistent(self):
+        combo = self.load("TaskPanel_SetStyle.ui").DrawStyle
+        self.assertEqual(combo.count(), 4)
+        self.assertEqual([combo.itemText(i) for i in range(combo.count())],
+                         ["Solid", "Dashed", "Dotted", "DashDot"])
+
+        combo.addItem("Dashdot")
+        self.assertEqual(combo.count(), 5)
+        self.assertEqual(combo.currentIndex(), 0)
+        self.assertEqual(combo.currentText(), "Solid")
+
+        combo.setCurrentText("Dashdot")
+        self.assertEqual(combo.currentIndex(), 4)
+        self.assertEqual(combo.currentText(), "Dashdot")
+
+        combo.addItems(["A", "B"])
+        self.assertEqual(combo.count(), 7)
+        combo.setCurrentText("B")
+        self.assertEqual(combo.currentIndex(), 6)
+
+        # Non-editable boxes ignore an unknown text; the index is unchanged.
+        combo.setCurrentText("missing")
+        self.assertEqual(combo.currentIndex(), 6)
+        self.assertEqual(combo.currentText(), "B")
+
+        combo.clear()
+        self.assertEqual(combo.count(), 0)
+        self.assertEqual(combo.currentIndex(), -1)
+        self.assertEqual(combo.currentText(), "")
+
+        combo.addItem("Fresh")
+        self.assertEqual(combo.currentIndex(), 0)
+        self.assertEqual(combo.currentText(), "Fresh")
+
+        with self.assertRaises(IndexError):
+            combo.itemText(3)
+
+    # -- Q2b: dynamic properties ------------------------------------------
+
+    def test_dynamic_property_round_trip(self):
+        form = self.load("TaskPanel_OrthoArray.ui")
+
+        field = form.input_X_x
+        self.assertEqual(field.property("rawValue"), 100.0)
+        field.setProperty("rawValue", 2.5)
+        self.assertEqual(field.property("rawValue"), 2.5)
+
+        spin = form.spinbox_n_X
+        self.assertEqual(spin.property("minimum"), 1)
+        self.assertEqual(spin.property("maximum"), 1000000)
+        spin.setProperty("minimum", 5)
+        self.assertEqual(spin.property("minimum"), 5)
+        self.assertEqual(spin.value(), 5)
+
+        color = self.load("TaskPanel_SetStyle.ui").ShapeColor
+        self.assertEqual(color.property("color"), (0, 0, 0, 255))
+        color.setProperty("color", (255, 0, 0, 128))
+        self.assertEqual(color.property("color"), (255, 0, 0, 128))
+        color.setProperty("color", "#102030")
+        self.assertEqual(color.property("color"), (16, 32, 48, 255))
+
+        with self.assertRaises(AttributeError) as raised:
+            color.property("fileName")
+        message = str(raised.exception)
+        self.assertIn("Gui::ColorButton", message)
+        self.assertIn("ShapeColor", message)
+        self.assertIn("fileName", message)
+
+        with self.assertRaises(AttributeError):
+            spin.setProperty("rawValue", 1)
+        with self.assertRaises(AttributeError):
+            spin.property("bogus")
+
+    def test_spin_box_minimum_and_maximum_clamp(self):
+        spin = self.load("TaskPanel_OrthoArray.ui").spinbox_n_X
+        self.assertEqual(spin.value(), 2)
+
+        spin.setValue(0)
+        self.assertEqual(spin.value(), 1)
+        spin.setValue(2000000)
+        self.assertEqual(spin.value(), 1000000)
+
+        spin.setValue(7)
+        spin.setProperty("maximum", 5)
+        self.assertEqual(spin.value(), 5)
+        spin.setProperty("minimum", 10)
+        self.assertEqual(spin.property("minimum"), 10)
+        self.assertEqual(spin.property("maximum"), 10)
+        self.assertEqual(spin.value(), 10)
+
+        double = self.load("TaskPanel_SetStyle.ui").ScaleMultiplier
+        self.assertEqual(double.property("minimum"), 0.0)
+        self.assertEqual(double.property("maximum"), 10000.0)
+        double.setValue(-3.5)
+        self.assertEqual(double.value(), 0.0)
+
+    def test_file_chooser_file_name(self):
+        chooser = self.load("TaskShapeString.ui").fcFontFile
+        self.assertEqual(chooser.fileName(), "")
+        self.assertEqual(chooser.property("fileName"), "")
+
+        seen = []
+        chooser.fileNameChanged.connect(seen.append)
+        chooser.setFileName("/tmp/font.ttf")
+        self.assertEqual(chooser.fileName(), "/tmp/font.ttf")
+        self.assertEqual(chooser.property("fileName"), "/tmp/font.ttf")
+        chooser.setProperty("fileName", "/tmp/other.ttf")
+        self.assertEqual(chooser.fileName(), "/tmp/other.ttf")
+        self.assertEqual(seen, ["/tmp/font.ttf", "/tmp/other.ttf"])
+
+        with self.assertRaises(AttributeError):
+            self.load("TaskShapeString.ui").leText.fileName()
+
+    # -- Q2b: dialog semantics --------------------------------------------
+
+    def test_dialog_exec_result_and_signals(self):
+        dialog = self.gui.PySideUic.loadUi(str(UI_DIR / "dialogLayers.ui"))
+        self.assertEqual(dialog.result(), 0)
+        self.assertEqual(dialog.exec_(), 0)
+
+        seen = []
+        dialog.accepted.connect(lambda: seen.append("accepted"))
+        dialog.rejected.connect(lambda: seen.append("rejected"))
+
+        dialog.accept()
+        self.assertEqual(dialog.result(), 1)
+        self.assertEqual(dialog.exec_(), 1)
+        dialog.reject()
+        self.assertEqual(dialog.result(), 0)
+        self.assertEqual(dialog.exec_(), 0)
+        self.assertEqual(seen, ["accepted", "rejected"])
 
     # -- the Qt-free property ---------------------------------------------
 
@@ -355,6 +567,9 @@ class UiLoaderTests(unittest.TestCase):
         self.assertEqual(payload["after"], [])
         self.assertEqual(payload["widget"], "button_linear_mode")
         self.assertTrue(payload["title"])
+        self.assertEqual(payload["root_layout"], "QGridLayout")
+        self.assertEqual(payload["root_items"], 9)
+        self.assertEqual(payload["linear_items"], 0)
 
 
 if __name__ == "__main__":

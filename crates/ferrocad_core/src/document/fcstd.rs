@@ -1,15 +1,47 @@
 //! Reading FreeCAD's binary `.FCStd` container.
 //!
 //! An `.FCStd` file is a ZIP archive whose `Document.xml` member holds the
-//! document's objects (and whose `PartShapeN.brp` members hold B-Rep payloads).
-//! This module implements just enough of ZIP and of FreeCAD's XML schema to open
-//! old upstream documents: it does **not** read shapes, meshes, sketches or any
-//! other module-owned payload. Those properties are skipped, so the resulting
-//! [`SavedDocument`] contains the generic properties only.
+//! document's objects, `GuiDocument.xml` holds their view providers, and
+//! `PartShapeN.brp`/`DiffuseColorN` hold module-owned payloads. This module
+//! implements just enough of ZIP and of FreeCAD's XML schema to open upstream
+//! documents.
 //!
 //! Supported ZIP subset: single-disk archives, entries stored (`method = 0`) or
 //! deflated (`method = 8`), unencrypted. ZIP64 archives return
 //! [`FcstdError::Zip64`]; other methods return [`FcstdError::UnsupportedCompression`].
+//!
+//! # Module payloads
+//!
+//! A property whose value lives in a separate member is rebuilt through the
+//! property-type registry rather than interpreted here:
+//!
+//! - `<Part file="PartShapeN.brp"/>` — the member's bytes go to
+//!   [`property_types::restore_extension`] for the property's type (e.g.
+//!   `Part::PropertyPartShape`).
+//! - `<ShapeList count="…"><TopoShape file="PartShapeN.M.brp"/>…</ShapeList>` —
+//!   the members are framed as `u64` LE count, then a `u64` LE length plus bytes
+//!   per entry, and the framing goes to `restore_extension`. That is the byte
+//!   layout a module list's `ExtensionData::save` produces (see
+//!   `Part::PropertyTopoShapeList`), so the reader and the writer are inverse
+//!   without core naming a module type.
+//!
+//! The value is only restored when its module has registered a restore function;
+//! an unregistered module type (its crate is not linked) is **skipped**, exactly
+//! like any other unsupported property. No placeholder value is invented: a
+//! `Part::PropertyPartShape` never becomes a string or an empty extension. A
+//! missing member that a property does reference is an error, not a silent drop.
+//!
+//! # `GuiDocument.xml`
+//!
+//! When present, each `<ViewProvider name="…">` is matched to the object of the
+//! same name and becomes [`SavedObject::view`](super::SavedObject::view):
+//! `Visibility` (`Bool`), `Transparency` (`Integer`, also upstream's
+//! `App::PropertyPercent`), `ShapeColor` (`PropertyColor`, hex or decimal packed
+//! `0xRRGGBB00`), `DiffuseColor`/`DisplayColor` (`ColorList file="…"`, a LE `u32`
+//! count followed by one packed `0xRRGGBB00` per colour) and `DisplayMode` (an
+//! index into the provider's mode list, or a `CustomEnumList`/`String` when one
+//! is stored). Persisted colours are opaque RGBA (`alpha = 1.0`) because the
+//! stored alpha byte is unused.
 //!
 //! Property types read from `Document.xml`:
 //! `App::PropertyString`, `App::PropertyInteger`, `App::PropertyFloat`,
@@ -45,9 +77,11 @@ use std::fmt;
 use std::io::{self, Read};
 use std::path::Path;
 
-use super::{SavedDocument, SavedObject};
+use super::{SavedDocument, SavedObject, ViewState};
+use crate::extension::ExtensionValue;
 use crate::geometry::{Placement, Rotation, Vector3};
 use crate::property::Property;
+use crate::property_types;
 use crate::quantity::Quantity;
 use crate::unit::Unit;
 
@@ -70,8 +104,12 @@ pub enum FcstdError {
     BadZip(String),
     /// `Document.xml` is not valid XML.
     Xml(String),
+    /// `GuiDocument.xml` is not valid XML.
+    GuiXml(String),
     /// `Document.xml` is not UTF-8.
     Encoding(String),
+    /// `GuiDocument.xml` is not UTF-8.
+    GuiEncoding(String),
     /// A numeric attribute could not be parsed.
     Number(String),
 }
@@ -89,7 +127,9 @@ impl fmt::Display for FcstdError {
             FcstdError::MissingEntry(name) => write!(f, "missing ZIP entry '{name}'"),
             FcstdError::BadZip(msg) => write!(f, "malformed ZIP archive: {msg}"),
             FcstdError::Xml(msg) => write!(f, "malformed Document.xml: {msg}"),
+            FcstdError::GuiXml(msg) => write!(f, "malformed GuiDocument.xml: {msg}"),
             FcstdError::Encoding(msg) => write!(f, "Document.xml is not UTF-8: {msg}"),
+            FcstdError::GuiEncoding(msg) => write!(f, "GuiDocument.xml is not UTF-8: {msg}"),
             FcstdError::Number(msg) => write!(f, "invalid numeric value in Document.xml: {msg}"),
         }
     }
@@ -237,6 +277,11 @@ impl<'a> ZipArchive<'a> {
         Ok(ZipArchive { data, entries })
     }
 
+    /// Whether the archive has a member with this exact name.
+    fn contains(&self, name: &str) -> bool {
+        self.entries.contains_key(name)
+    }
+
     fn read(&self, wanted: &str) -> Result<Vec<u8>, FcstdError> {
         let entry = self
             .entries
@@ -303,9 +348,11 @@ fn u32_at(data: &[u8], offset: usize) -> Option<u32> {
 /// Read a binary FreeCAD `.FCStd` file into a [`SavedDocument`].
 ///
 /// The document name is the file stem (FreeCAD derives the internal name from
-/// the file name when opening). Module-owned properties such as
-/// `Part::PropertyPartShape` are skipped rather than faked; callers that need
-/// geometry must load the corresponding `.brp` members separately.
+/// the file name when opening). Generic properties come from `Document.xml`;
+/// module payloads (`PartShapeN.brp`) are rebuilt through the property-type
+/// registry when the owning module is loaded, and `GuiDocument.xml` supplies the
+/// view state. Skipped values and the payload/registry rule are described in the
+/// module documentation.
 pub fn read_fcstd(path: &str) -> Result<SavedDocument, FcstdError> {
     let data = std::fs::read(path)?;
     let archive = ZipArchive::parse(&data)?;
@@ -320,14 +367,31 @@ pub fn read_fcstd(path: &str) -> Result<SavedDocument, FcstdError> {
         .unwrap_or("Unnamed")
         .to_string();
 
-    parse_document(xml, name)
+    let mut saved = parse_document(xml, name, Some(&archive))?;
+
+    // The view providers are optional: documents saved without a GUI session
+    // have no `GuiDocument.xml` (and every object keeps `view: None`).
+    if archive.contains(GUI_DOCUMENT) {
+        let gui_bytes = archive.read(GUI_DOCUMENT)?;
+        let gui = std::str::from_utf8(&gui_bytes)
+            .map_err(|e| FcstdError::GuiEncoding(e.to_string()))?;
+        parse_gui_document(gui, &mut saved, &archive)?;
+    }
+
+    Ok(saved)
 }
+
+const GUI_DOCUMENT: &str = "GuiDocument.xml";
 
 // ---------------------------------------------------------------------------
 // Document.xml
 // ---------------------------------------------------------------------------
 
-fn parse_document(xml: &str, name: String) -> Result<SavedDocument, FcstdError> {
+fn parse_document(
+    xml: &str,
+    name: String,
+    archive: Option<&ZipArchive<'_>>,
+) -> Result<SavedDocument, FcstdError> {
     let doc = roxmltree::Document::parse(xml).map_err(|e| FcstdError::Xml(e.to_string()))?;
     let root = doc.root_element();
     if !root.has_tag_name("Document") {
@@ -420,7 +484,7 @@ fn parse_document(xml: &str, name: String) -> Result<SavedDocument, FcstdError> 
                         _ => {}
                     }
 
-                    if let Some(value) = parse_property(prop_type, prop)? {
+                    if let Some(value) = parse_property(prop_type, prop, archive)? {
                         properties.insert(prop_name.to_string(), value);
                     }
                 }
@@ -448,7 +512,11 @@ fn parse_document(xml: &str, name: String) -> Result<SavedDocument, FcstdError> 
     })
 }
 
-fn parse_property(prop_type: &str, node: roxmltree::Node<'_, '_>) -> Result<Option<Property>, FcstdError> {
+fn parse_property(
+    prop_type: &str,
+    node: roxmltree::Node<'_, '_>,
+    archive: Option<&ZipArchive<'_>>,
+) -> Result<Option<Property>, FcstdError> {
     let value = match prop_type {
         "App::PropertyString" => child_attr(node, "String", "value").map(|v| Property::String(v.to_string())),
         "App::PropertyInteger" => child_attr(node, "Integer", "value")
@@ -491,7 +559,213 @@ fn parse_property(prop_type: &str, node: roxmltree::Node<'_, '_>) -> Result<Opti
             .map(|i| Property::Enumeration(custom_enum_list(node), i.max(0) as usize)),
         _ => None,
     };
-    Ok(value)
+    if value.is_some() {
+        return Ok(value);
+    }
+    // No core mapping: a module-owned value may still be in a separate member.
+    read_extension(prop_type, node, archive)
+}
+
+/// Rebuild a module-owned property from the members a `<Part>`/`<ShapeList>`
+/// element references, delegating the bytes to the type registry.
+///
+/// `None` means the property type has no registered restore function (the module
+/// is not linked) or the element carries no payload; the caller then skips the
+/// property rather than inventing a value.
+fn read_extension(
+    prop_type: &str,
+    node: roxmltree::Node<'_, '_>,
+    archive: Option<&ZipArchive<'_>>,
+) -> Result<Option<Property>, FcstdError> {
+    let Some(archive) = archive else {
+        // In-memory parsing (`Document.xml` without its archive) has no members.
+        return Ok(None);
+    };
+
+    let bytes = if let Some(file) = child_attr(node, "Part", "file") {
+        archive.read(file)?
+    } else if let Some(list) = child(node, "ShapeList") {
+        read_shape_list_payload(archive, list)?
+    } else {
+        return Ok(None);
+    };
+
+    Ok(property_types::restore_extension(prop_type, &bytes)
+        .map(|data| Property::Extension(ExtensionValue::new(data))))
+}
+
+/// Frame per-entry shape members the way `ShapeListProperty::save` stores them:
+/// a `u64` LE count, then a `u64` LE length and the bytes for each entry.
+fn read_shape_list_payload(
+    archive: &ZipArchive<'_>,
+    list: roxmltree::Node<'_, '_>,
+) -> Result<Vec<u8>, FcstdError> {
+    let files: Vec<&str> = element_children(list, "TopoShape")
+        .filter_map(|entry| entry.attribute("file"))
+        .collect();
+
+    let mut bytes = Vec::new();
+    push_u64(&mut bytes, files.len() as u64);
+    for file in files {
+        let member = archive.read(file)?;
+        push_u64(&mut bytes, member.len() as u64);
+        bytes.extend_from_slice(&member);
+    }
+    Ok(bytes)
+}
+
+fn push_u64(out: &mut Vec<u8>, value: u64) {
+    out.extend_from_slice(&value.to_le_bytes());
+}
+
+// ---------------------------------------------------------------------------
+// GuiDocument.xml
+// ---------------------------------------------------------------------------
+
+/// FreeCAD's classic `DefaultShapeColor` (`0xCCCCE6FF`), used when a view
+/// provider does not persist `ShapeColor`. Alpha zero means "unset", i.e.
+/// opaque.
+const DEFAULT_SHAPE_COLOR: u32 = 0xCCCC_E6FF;
+
+/// `ViewProviderPartExt`'s display modes (the same list as
+/// `ferrocad_py::DISPLAY_MODES`).
+const PART_DISPLAY_MODES: &[&str] = &["Flat Lines", "Shaded", "Wireframe", "Points"];
+
+/// `ViewProvider2DObject`'s modes, used by `Sketcher::*` objects. The 2D provider
+/// deliberately omits `Shaded`, so index 1 is `Wireframe` (verified against
+/// `TestTangentMode3-0.21.FCStd`, where every sketch stores `DisplayMode = 1`).
+const DISPLAY_2D_MODES: &[&str] = &["Flat Lines", "Wireframe", "Points"];
+
+/// Read the `<ViewProvider>` elements into each object's [`ViewState`].
+///
+/// A provider that names an object absent from `Document.xml` is ignored; an
+/// object without a provider keeps `view: None` ("no view object was created").
+fn parse_gui_document(
+    xml: &str,
+    saved: &mut SavedDocument,
+    archive: &ZipArchive<'_>,
+) -> Result<(), FcstdError> {
+    let doc = roxmltree::Document::parse(xml).map_err(|e| FcstdError::GuiXml(e.to_string()))?;
+    let root = doc.root_element();
+    let Some(data) = child(root, "ViewProviderData") else {
+        return Ok(());
+    };
+
+    for provider in element_children(data, "ViewProvider") {
+        let Some(name) = provider.attribute("name") else {
+            continue;
+        };
+        let Some(object) = saved.objects.iter_mut().find(|object| object.name == name) else {
+            continue;
+        };
+        object.view = Some(read_view_provider(provider, &object.type_id, archive)?);
+    }
+    Ok(())
+}
+
+fn read_view_provider(
+    provider: roxmltree::Node<'_, '_>,
+    type_id: &str,
+    archive: &ZipArchive<'_>,
+) -> Result<ViewState, FcstdError> {
+    let fallback = super::color_from_packed(DEFAULT_SHAPE_COLOR, true);
+    let mut view = ViewState::new(0, fallback);
+    let Some(props) = child(provider, "Properties") else {
+        return Ok(view);
+    };
+    let property = |name: &str| {
+        element_children(props, "Property").find(|prop| prop.attribute("name") == Some(name))
+    };
+
+    if let Some(value) = property("Visibility").and_then(|p| child_attr(p, "Bool", "value")) {
+        view.visibility = value == "true" || value == "1";
+    }
+    if let Some(value) = property("Transparency")
+        .and_then(|p| child_attr(p, "Integer", "value"))
+    {
+        view.transparency = parse_i64(value, "Transparency")?.clamp(0, 100) as i32;
+    }
+    if let Some(color) = property("ShapeColor").and_then(|p| child_attr(p, "PropertyColor", "value")) {
+        let color = super::color_from_packed(parse_packed_color(color)?, true);
+        // The file does not distinguish the preference default from an explicit
+        // override; the persisted colour is both the effective and the default
+        // colour after restore, so the appearance getters stay consistent.
+        view.default_color = color;
+        view.shape_color = Some(color);
+    }
+    // Draft view providers call the same property `DisplayColor`.
+    let diffuse = property("DiffuseColor").or_else(|| property("DisplayColor"));
+    if let Some(file) = diffuse.and_then(|p| child_attr(p, "ColorList", "file")) {
+        view.diffuse_color = Some(read_colour_list(archive, file)?);
+    }
+    if let Some(mode) = property("DisplayMode").and_then(|p| display_mode_name(p, type_id)) {
+        view.display_mode = mode;
+    }
+    Ok(view)
+}
+
+/// A `PropertyColor` value: `0xRRGGBB00` (any case) or decimal.
+fn parse_packed_color(text: &str) -> Result<u32, FcstdError> {
+    let text = text.trim();
+    let parsed = match text.strip_prefix("0x").or_else(|| text.strip_prefix("0X")) {
+        Some(hex) => u32::from_str_radix(hex, 16),
+        None => text.parse::<u32>(),
+    };
+    parsed.map_err(|e| FcstdError::Number(format!("PropertyColor value = {text:?}: {e}")))
+}
+
+/// Read a `PropertyColorList` member: a LE `u32` count, then one packed
+/// `0xRRGGBB00` per colour. The stored alpha byte is unused, so every colour is
+/// restored opaque (`alpha = 1.0`).
+fn read_colour_list(
+    archive: &ZipArchive<'_>,
+    member: &str,
+) -> Result<Vec<super::Color>, FcstdError> {
+    let data = archive.read(member)?;
+    let count = u32_at(&data, 0)
+        .ok_or_else(|| {
+            FcstdError::BadZip(format!(
+                "colour member '{member}' is shorter than its count field"
+            ))
+        })? as usize;
+    let needed = count
+        .checked_mul(4)
+        .and_then(|bytes| bytes.checked_add(4))
+        .ok_or_else(|| FcstdError::BadZip(format!("colour member '{member}' count overflows")))?;
+    if data.len() < needed {
+        return Err(FcstdError::BadZip(format!(
+            "colour member '{member}' holds {count} colours but only {} bytes",
+            data.len()
+        )));
+    }
+
+    let mut colors = Vec::with_capacity(count);
+    for index in 0..count {
+        let packed = u32_at(&data, 4 + index * 4).expect("length checked above");
+        colors.push(super::color_from_packed(packed, true));
+    }
+    Ok(colors)
+}
+
+fn display_mode_name(node: roxmltree::Node<'_, '_>, type_id: &str) -> Option<String> {
+    if let Some(value) = child_attr(node, "String", "value") {
+        return Some(value.to_string());
+    }
+    let index = child_attr(node, "Integer", "value")?.parse::<usize>().ok()?;
+    if let Some(list) = child(node, "CustomEnumList") {
+        let names: Vec<&str> = element_children(list, "Enum")
+            .filter_map(|entry| entry.attribute("value"))
+            .collect();
+        if let Some(name) = names.get(index) {
+            return Some((*name).to_string());
+        }
+    }
+    let modes = if type_id.starts_with("Sketcher::") {
+        DISPLAY_2D_MODES
+    } else {
+        PART_DISPLAY_MODES
+    };
+    modes.get(index).map(|name| (*name).to_string())
 }
 
 /// The unit implied by a quantity-valued property type.
@@ -701,7 +975,7 @@ mod tests {
     use crate::prop_status;
 
     fn read(xml: &str) -> SavedDocument {
-        parse_document(xml, "Fixture".to_string()).expect("parse Document.xml")
+        parse_document(xml, "Fixture".to_string(), None).expect("parse Document.xml")
     }
 
     /// Hand-written from the upstream 0.21 element forms (see

@@ -321,6 +321,161 @@ fn extension_from_py_for(type_name: &str, value: &Bound<'_, PyAny>) -> Option<Ex
     converter(value)
 }
 
+/// Convert a sub-element name (`Edge1`, `Face3`) of a module-owned value to
+/// Python; `None` if the name is not a sub-element of this value.
+pub type SubElementToPython = fn(Python<'_>, &dyn ExtensionData, &str) -> Option<PyObject>;
+
+type SubElementResolvers = Vec<(String, SubElementToPython)>;
+
+fn sub_element_resolvers() -> &'static Mutex<SubElementResolvers> {
+    static RESOLVERS: OnceLock<Mutex<SubElementResolvers>> = OnceLock::new();
+    RESOLVERS.get_or_init(|| Mutex::new(Vec::new()))
+}
+
+/// Register how a module's own property value resolves a sub-element name to a
+/// Python object (`Part::PropertyPartShape` + `Edge1` -> `Part.Edge`).
+///
+/// `DocumentObject.getSubObject` calls this for the trailing segment of a
+/// subname, so the core stays free of any knowledge of the module's geometry:
+/// `ferrocad_py` only knows that *some* module registered a resolver, and the
+/// module knows how to turn its own value into its own Python class.
+pub fn register_sub_element_resolver(type_name: &str, resolver: SubElementToPython) {
+    let mut resolvers = sub_element_resolvers().lock().unwrap();
+    resolvers.retain(|(name, _)| name != type_name);
+    resolvers.push((type_name.to_string(), resolver));
+}
+
+/// A module-owned value's sub-element as Python, using the resolver registered
+/// for its type name (or `None` when the owning module is not loaded).
+fn sub_element_to_py(py: Python<'_>, value: &ExtensionValue, name: &str) -> Option<PyObject> {
+    let resolver = sub_element_resolvers()
+        .lock()
+        .unwrap()
+        .iter()
+        .find(|(type_name, _)| type_name == value.type_name())
+        .map(|(_, resolver)| *resolver)?;
+    resolver(py, value.data(), name)
+}
+
+// ---------------------------------------------------------------------------
+// Dynamic extension registry
+// ---------------------------------------------------------------------------
+
+/// A module's `addExtension` hook: install an extension's properties on object
+/// `id`. Returns whether the extension was provided (a missing object is
+/// `false`). Registered by name (`"Part::AttachExtensionPython"`, …) so core and
+/// this binding need no knowledge of the module.
+pub type ExtensionProvider =
+    fn(&mut ferrocad_core::Document, ferrocad_core::ObjectId) -> bool;
+
+/// A module's extension method (`changeAttacherType`, `configLinkProperty`, …).
+///
+/// The fourth argument is the call's positional-argument tuple; when the Python
+/// method also received keyword arguments, they are appended to that tuple as a
+/// final `dict` element (so `configLinkProperty(LinkedObject="Base")` arrives as
+/// `({"LinkedObject": "Base"},)`).
+pub type ExtensionMethod = fn(
+    &mut ferrocad_core::Document,
+    ferrocad_core::ObjectId,
+    &str,
+    &pyo3::Bound<'_, pyo3::PyAny>,
+) -> pyo3::PyResult<pyo3::PyObject>;
+
+type ProviderEntry = (String, ExtensionProvider);
+type MethodEntry = (String, String, ExtensionMethod);
+
+fn extension_providers() -> &'static Mutex<Vec<ProviderEntry>> {
+    static PROVIDERS: OnceLock<Mutex<Vec<ProviderEntry>>> = OnceLock::new();
+    PROVIDERS.get_or_init(|| Mutex::new(Vec::new()))
+}
+
+fn extension_methods() -> &'static Mutex<Vec<MethodEntry>> {
+    static METHODS: OnceLock<Mutex<Vec<MethodEntry>>> = OnceLock::new();
+    METHODS.get_or_init(|| Mutex::new(Vec::new()))
+}
+
+/// Register the properties an extension installs via `addExtension(name)`.
+pub fn register_extension_provider(extension: &'static str, provider: ExtensionProvider) {
+    let mut providers = extension_providers().lock().unwrap();
+    providers.retain(|(name, _)| name != extension);
+    providers.push((extension.to_string(), provider));
+}
+
+/// Register a method that an extension makes available on the objects carrying
+/// it. The method is looked up by walking the object's own extension set, so a
+/// module never edits this crate to expose it.
+pub fn register_extension_method(
+    extension: &'static str,
+    method: &'static str,
+    f: ExtensionMethod,
+) {
+    let mut methods = extension_methods().lock().unwrap();
+    methods.retain(|(ext, name, _)| !(ext == extension && name == method));
+    methods.push((extension.to_string(), method.to_string(), f));
+}
+
+/// The provider registered for `extension`, if any.
+fn extension_provider(extension: &str) -> Option<ExtensionProvider> {
+    extension_providers()
+        .lock()
+        .unwrap()
+        .iter()
+        .find(|(name, _)| name == extension)
+        .map(|(_, provider)| *provider)
+}
+
+/// The method `name` registered by any extension the object actually has.
+fn extension_method_for(
+    doc: &CoreDocument,
+    id: ObjectId,
+    name: &str,
+) -> Option<(String, ExtensionMethod)> {
+    let extensions: Vec<String> = doc
+        .object(id)
+        .map(|object| object.extensions.iter().cloned().collect())
+        .unwrap_or_default();
+    let methods = extension_methods().lock().unwrap();
+    for extension in &extensions {
+        if let Some((ext, _, method)) = methods
+            .iter()
+            .find(|(ext, method, _)| ext == extension && method == name)
+        {
+            return Some((ext.clone(), *method));
+        }
+    }
+    None
+}
+
+/// Dispatch an extension method on `slf`, raising `AttributeError` when none of
+/// the object's extensions provides it.
+fn call_extension_method(
+    slf: &Bound<'_, PyDocumentObject>,
+    method: &str,
+    args: &Bound<'_, PyAny>,
+) -> PyResult<PyObject> {
+    let (inner, id) = {
+        let this = slf.borrow();
+        (Arc::clone(&this.inner), this.id)
+    };
+    let found = {
+        let doc = inner.lock().unwrap();
+        extension_method_for(&doc, id, method)
+    };
+    let Some((_extension, f)) = found else {
+        let type_id = inner
+            .lock()
+            .unwrap()
+            .object(id)
+            .map(|object| object.type_id.clone())
+            .unwrap_or_default();
+        return Err(PyAttributeError::new_err(format!(
+            "'{type_id}' object has no attribute '{method}'"
+        )));
+    };
+    let mut doc = inner.lock().unwrap();
+    f(&mut doc, id, method, args)
+}
+
 // ---------------------------------------------------------------------------
 // Pickling helpers (for `PropertyPythonObject` and Python instance state)
 // ---------------------------------------------------------------------------
@@ -846,6 +1001,15 @@ fn property_to_py(py: Python<'_>, value: &Property) -> PyObject {
             let obj = if s.is_empty() { py.None() } else { s.clone().into_py_any(py).unwrap() };
             (obj, subs.clone()).into_py_any(py).unwrap()
         }
+        Property::LinkSubList(entries) => entries
+            .iter()
+            .map(|(name, subs)| {
+                let subs = PyTuple::new(py, subs.iter().map(String::as_str)).unwrap();
+                (name.clone(), subs).into_py_any(py).unwrap()
+            })
+            .collect::<Vec<_>>()
+            .into_py_any(py)
+            .unwrap(),
         Property::ColorList(v) => v
             .iter()
             .map(|c| (c[0], c[1], c[2], c[3]))
@@ -1025,7 +1189,15 @@ fn apply_status_name(status: &mut u32, name: &str) -> PyResult<()> {
         Some(rest) => (true, rest),
         None => (false, name),
     };
-    match status_from_name(bare) {
+    // `Immutable` is upstream's runtime `Property::Status` bit 1, which this
+    // model folds into the public `ReadOnly` flag (see the FCStd status
+    // translation). It is what Draft's link-array code sets on `PlacementList`.
+    let bit = if bare.eq_ignore_ascii_case("immutable") {
+        Some(prop_status::READONLY)
+    } else {
+        status_from_name(bare)
+    };
+    match bit {
         Some(bit) if clear => {
             *status &= !bit;
             Ok(())
@@ -1153,6 +1325,11 @@ fn py_to_link_list(value: &Bound<'_, PyAny>) -> PyResult<Vec<String>> {
     if value.is_none() {
         return Ok(vec![]);
     }
+    // Upstream's `PropertyLinkList` accepts a single object as a one-element
+    // list (`obj.Support = p1`); a sequence is the usual form.
+    if let Ok(object) = value.downcast::<PyDocumentObject>() {
+        return Ok(vec![object.borrow().name_string()]);
+    }
     if let Ok(v) = value.extract::<Vec<PyRef<'_, PyDocumentObject>>>() {
         return Ok(v.iter().map(|o| o.name_string()).collect());
     }
@@ -1219,6 +1396,96 @@ fn py_to_link_sub(value: &Bound<'_, PyAny>) -> PyResult<(String, Vec<String>)> {
     } else {
         return Err(PyTypeError::new_err(
             "LinkSub subnames must be a string or a list of strings",
+        ));
+    };
+    Ok((name, names))
+}
+
+/// Coerce a value into a link-sub-list: a list of `(object, subnames)` groups.
+///
+/// Accepted spellings mirror upstream `PropertyLinkSubList::setPyObject`:
+/// a single `DocumentObject`, a single `(object, subname-or-subnames)` pair, and
+/// a sequence of either. `None` or an empty sequence clears the property. A
+/// whole-object entry stores the empty subname `""`, which is how upstream
+/// marks it (and what Draft checks with `sel[1] == ("",)`).
+fn py_to_link_sub_list(value: &Bound<'_, PyAny>) -> PyResult<Vec<(String, Vec<String>)>> {
+    if value.is_none() {
+        return Ok(vec![]);
+    }
+    // A single object (or name) is a one-entry list with no sub-elements.
+    if let Ok(object) = value.downcast::<PyDocumentObject>() {
+        return Ok(vec![(object.borrow().name_string(), vec![String::new()])]);
+    }
+    if let Ok(name) = value.extract::<String>() {
+        return Ok(vec![(name, vec![String::new()])]);
+    }
+    // A single `(object, subnames)` pair.
+    if let Ok(entry) = py_to_link_sub_list_entry(value) {
+        return Ok(vec![entry]);
+    }
+    let mut entries = Vec::new();
+    for item in value.try_iter().map_err(|_| {
+        PyTypeError::new_err(
+            "LinkSubList expects a list of DocumentObjects or (object, subnames) pairs",
+        )
+    })? {
+        entries.push(py_to_link_sub_list_entry(&item?)?);
+    }
+    Ok(entries)
+}
+
+/// One entry of a link-sub-list: an object or an `(object, subnames)` pair.
+fn py_to_link_sub_list_entry(value: &Bound<'_, PyAny>) -> PyResult<(String, Vec<String>)> {
+    if let Ok(object) = value.downcast::<PyDocumentObject>() {
+        return Ok((object.borrow().name_string(), vec![String::new()]));
+    }
+    if let Ok(name) = value.extract::<String>() {
+        return Ok((name, vec![String::new()]));
+    }
+    let t = if let Ok(t) = value.downcast::<PyTuple>() {
+        t.iter().collect::<Vec<_>>()
+    } else if let Ok(l) = value.downcast::<pyo3::types::PyList>() {
+        // Upstream's `PropertyLinkSub::setPyObject` also accepts a 2-list, which
+        // makes `[object, "sub"]` a single pair; a 2-list of objects still falls
+        // through to the list form below.
+        l.iter().collect::<Vec<_>>()
+    } else {
+        return Err(PyTypeError::new_err(
+            "LinkSubList entries must be DocumentObjects or (object, subnames)",
+        ));
+    };
+    if t.len() != 2 {
+        return Err(PyTypeError::new_err(
+            "LinkSubList expects an (object, subnames) 2-tuple",
+        ));
+    }
+    let obj = &t[0];
+    let subs = &t[1];
+    if !obj.is_none() && obj.downcast::<PyDocumentObject>().is_err() {
+        return Err(PyTypeError::new_err(
+            "LinkSubList object must be a DocumentObject or None",
+        ));
+    }
+    let name = if obj.is_none() {
+        String::new()
+    } else {
+        obj.downcast::<PyDocumentObject>()
+            .expect("checked above")
+            .borrow()
+            .name_string()
+    };
+    let names: Vec<String> = if let Ok(s) = subs.extract::<String>() {
+        vec![s]
+    } else if let Ok(v) = subs.extract::<Vec<String>>() {
+        // An empty sub-name sequence is a whole-object reference.
+        if v.is_empty() {
+            vec![String::new()]
+        } else {
+            v
+        }
+    } else {
+        return Err(PyTypeError::new_err(
+            "LinkSubList subnames must be a string or a list of strings",
         ));
     };
     Ok((name, names))
@@ -1598,8 +1865,11 @@ impl PyDocument {
             }
             // A freshly added object with a builder is dirty, as in FreeCAD: the
             // next recompute builds its output (`Part::Box` → `Shape`) even before
-            // a property is edited.
-            if ferrocad_core::object_registry::get(r#type).is_some() {
+            // a property is edited. `App::DocumentObjectGroupPython` has no
+            // registered `ObjectType`, but its proxy must still run once.
+            if ferrocad_core::object_registry::get(r#type).is_some()
+                || r#type == "App::DocumentObjectGroupPython"
+            {
                 doc.touch(id, false);
             }
             (id, tx)
@@ -2309,17 +2579,32 @@ fn placement_of(doc: &CoreDocument, id: ObjectId) -> Placement {
         .unwrap_or_else(Placement::identity)
 }
 
+/// One resolved subname: the owning object, plus the sub-element name when the
+/// subname addressed an element of that object (`Face1`) rather than the object
+/// itself (`Array.Element3`).
+#[derive(Clone)]
+struct ResolvedSub {
+    id: ObjectId,
+    element: Option<String>,
+}
+
 /// Resolve one subname relative to `start`.
 ///
 /// Accepts a whole document-object name first (the original behaviour, which is
 /// how `App::Origin`'s `X_Axis` and friends resolve), then a dotted path.
-fn resolve_sub_name(doc: &CoreDocument, start: ObjectId, subname: &str) -> Option<ObjectId> {
+fn resolve_sub_name(doc: &CoreDocument, start: ObjectId, subname: &str) -> Option<ResolvedSub> {
     let normalised = subname.trim().trim_matches('.');
     if normalised.is_empty() {
-        return Some(start);
+        return Some(ResolvedSub {
+            id: start,
+            element: None,
+        });
     }
     if let Some(id) = doc.get_by_name(normalised) {
-        return Some(id);
+        return Some(ResolvedSub {
+            id,
+            element: None,
+        });
     }
 
     let mut segments: Vec<&str> = normalised.split('.').filter(|s| !s.is_empty()).collect();
@@ -2338,9 +2623,12 @@ fn resolve_segments(
     current: ObjectId,
     segments: &[&str],
     depth: usize,
-) -> Option<ObjectId> {
+) -> Option<ResolvedSub> {
     if segments.is_empty() {
-        return Some(current);
+        return Some(ResolvedSub {
+            id: current,
+            element: None,
+        });
     }
     if depth > 32 {
         return None;
@@ -2377,8 +2665,14 @@ fn resolve_segments(
     // returns the owning feature for a sub-element reference). Resolution is
     // delegated to the shape value's lineage: a name the lineage retired fails
     // here instead of silently selecting whatever element now has that ordinal.
+    // The element path is reported so `getSubObject` can hand it to the owning
+    // module, which turns it into a `Part.Edge`/`Part.Face`; the owner alone is
+    // what link and element resolution needs.
     if accepts_sub_element(doc, current, segment) {
-        return Some(current);
+        return Some(ResolvedSub {
+            id: current,
+            element: Some(segments.join(".")),
+        });
     }
     None
 }
@@ -2628,7 +2922,7 @@ impl PyDocumentObject {
         hidden: bool,
         locked: bool,
         enum_vals: Option<Vec<String>>,
-    ) -> PyResult<()> {
+    ) -> PyResult<Py<Self>> {
         let _ = (group, doc, locked);
         if name.is_empty() {
             return Err(PyValueError::new_err("property name must not be empty"));
@@ -2660,7 +2954,9 @@ impl PyDocumentObject {
             .add_property(id, name, default, status, group, doc)
             .map_err(PyValueError::new_err)?;
         fire_obj_str("slotAppendDynamicProperty", slf, name);
-        Ok(())
+        // Upstream returns the document object, so `addProperty(...).KeepLeftMargin = False`
+        // chains work (Draft's ShapeString relies on it).
+        Ok(slf.clone().unbind())
     }
 
     #[pyo3(signature = (prop, source=None))]
@@ -2867,6 +3163,11 @@ impl PyDocumentObject {
             if !doc.add_extension(id, name) {
                 return Err(PyValueError::new_err(format!("no object {id}")));
             }
+            // A module registers the properties its extension adds; core and
+            // this binding stay free of module names.
+            if let Some(provider) = extension_provider(name) {
+                let _ = provider(&mut doc, id);
+            }
             // Group extensions carry a `Group` link list property.
             if doc.is_group_like(id)
                 && doc
@@ -2883,6 +3184,33 @@ impl PyDocumentObject {
 
     fn hasExtension(&self, name: &str) -> bool {
         self.inner.lock().unwrap().has_extension(self.id, name)
+    }
+
+    /// `changeAttacherType(name)`: provided by an attached extension (Part's
+    /// `AttachExtensionPython`), not by this crate.
+    #[pyo3(signature = (mode))]
+    fn changeAttacherType(slf: &Bound<'_, Self>, mode: &Bound<'_, PyAny>) -> PyResult<PyObject> {
+        let args = PyTuple::new(slf.py(), [mode.clone()])?;
+        call_extension_method(slf, "changeAttacherType", args.as_any())
+    }
+
+    /// `configLinkProperty(property, **links)`: provided by an attached
+    /// extension (App's `LinkExtensionPython`), not by this crate. Keyword
+    /// arguments reach the provider as a final `dict` element of the tuple.
+    #[pyo3(signature = (*args, **kwargs))]
+    fn configLinkProperty(
+        slf: &Bound<'_, Self>,
+        args: &Bound<'_, PyTuple>,
+        kwargs: Option<&Bound<'_, PyDict>>,
+    ) -> PyResult<PyObject> {
+        let mut items: Vec<Bound<'_, PyAny>> = args.iter().collect();
+        if let Some(kwargs) = kwargs {
+            if !kwargs.is_empty() {
+                items.push(kwargs.clone().into_any());
+            }
+        }
+        let call_args = PyTuple::new(slf.py(), items)?;
+        call_extension_method(slf, "configLinkProperty", call_args.as_any())
     }
 
     fn removeExtension(&self, name: &str) -> PyResult<()> {
@@ -3210,6 +3538,9 @@ impl PyDocumentObject {
                                 Property::Link(n) => n == &name,
                                 Property::LinkList(ns) => ns.contains(&name),
                                 Property::LinkSub(obj, _) => obj == &name,
+                                Property::LinkSubList(entries) => {
+                                    entries.iter().any(|(obj, _)| obj == &name)
+                                }
                                 _ => false,
                             });
                             linked
@@ -3227,7 +3558,9 @@ impl PyDocumentObject {
     }
 
     /// Resolve sub-object(s) and return them per FreeCAD's `retType` convention:
-    /// 0 and 1 → DocumentObject, 2 → `(obj, Matrix, None)`, 3 → Placement, 4 → Matrix.
+    /// 0 → the sub-shape (`Part.Edge`/`Part.Face`, …) when `subname` names an
+    /// element, else the DocumentObject; 1 → DocumentObject; 2 →
+    /// `(obj, Matrix, None)`; 3 → Placement; 4 → Matrix.
     ///
     /// `subname` may be:
     ///
@@ -3240,6 +3573,10 @@ impl PyDocumentObject {
     ///   member, or forwarded through `LinkedObject`;
     /// - a path into a link's target (`Link.Face1`), which resolves to the object
     ///   that owns the sub-element.
+    ///
+    /// The sub-shape is produced by the module that owns the object's `Shape`
+    /// value (see [`register_sub_element_resolver`]); a module that is not loaded,
+    /// or a name its value does not recognise, falls back to the object.
     ///
     /// The placement reported with `retType` 2/3/4 is the resolved object's own
     /// `Placement` (identity if it has none); intermediate link placements are not
@@ -3270,44 +3607,93 @@ impl PyDocumentObject {
         let doc_py = slf.borrow().doc.clone_ref(py);
         let self_id = slf.borrow().id;
 
-        let resolved: Vec<(Option<ObjectId>, Placement)> = {
+        // A resolved sub-element also carries its object's `Shape` value out of
+        // the lock, so the module's resolver (which builds a `Part.Edge`, …) runs
+        // without holding the document.
+        struct Entry {
+            sub: Option<ResolvedSub>,
+            placement: Placement,
+            element_value: Option<ExtensionValue>,
+        }
+
+        let resolved: Vec<Entry> = {
             let doc = inner.lock().unwrap();
             subs.iter()
-                .map(|sub| {
-                    let id = resolve_sub_name(&doc, self_id, sub);
-                    let placement = id
-                        .map(|id| placement_of(&doc, id))
-                        .unwrap_or_else(Placement::identity);
-                    (id, placement)
+                .map(|sub| match resolve_sub_name(&doc, self_id, sub) {
+                    Some(sub) => {
+                        let placement = placement_of(&doc, sub.id);
+                        let element_value = sub.element.as_ref().and_then(|_| {
+                            match doc
+                                .object(sub.id)
+                                .and_then(|object| object.properties.get("Shape"))
+                            {
+                                Some(Property::Extension(value)) => Some(value.clone()),
+                                _ => None,
+                            }
+                        });
+                        Entry {
+                            sub: Some(sub),
+                            placement,
+                            element_value,
+                        }
+                    }
+                    None => Entry {
+                        sub: None,
+                        placement: Placement::identity(),
+                        element_value: None,
+                    },
                 })
                 .collect()
         };
 
-        let build = |id: Option<ObjectId>, pl: &Placement| -> PyObject {
-            let obj_py = id
-                .map(|id| {
-                    get_or_create_object(py, &doc_py, &inner, id)
+        let build = |entry: &Entry| -> PyObject {
+            let obj_py = entry
+                .sub
+                .as_ref()
+                .map(|sub| {
+                    get_or_create_object(py, &doc_py, &inner, sub.id)
                         .into_py_any(py)
                         .unwrap()
                 })
                 .unwrap_or_else(|| py.None());
             match retType {
-                0 | 1 => obj_py,
+                0 => {
+                    // A sub-element reference returns the element itself, through
+                    // the module that owns the `Shape` value; a whole-object
+                    // reference (empty subname, `Element3`, `Group.Child`) returns
+                    // the object.
+                    if let (Some(sub), Some(value)) = (&entry.sub, &entry.element_value) {
+                        if let Some(element) = sub.element.as_deref() {
+                            if let Some(element) = sub_element_to_py(py, value, element) {
+                                return element;
+                            }
+                        }
+                    }
+                    obj_py
+                }
+                1 => obj_py,
                 2 => {
-                    let mat_py = PyMatrix { inner: pl.to_matrix() }.into_py_any(py).unwrap();
+                    let mat_py = PyMatrix {
+                        inner: entry.placement.to_matrix(),
+                    }
+                    .into_py_any(py)
+                    .unwrap();
                     (obj_py, mat_py, py.None()).into_py_any(py).unwrap()
                 }
-                3 => PyPlacement::fresh(*pl).into_py_any(py).unwrap(),
-                4 => PyMatrix { inner: pl.to_matrix() }.into_py_any(py).unwrap(),
+                3 => PyPlacement::fresh(entry.placement).into_py_any(py).unwrap(),
+                4 => PyMatrix {
+                    inner: entry.placement.to_matrix(),
+                }
+                .into_py_any(py)
+                .unwrap(),
                 _ => py.None(),
             }
         };
 
         if resolved.len() == 1 {
-            let (id, pl) = &resolved[0];
-            Ok(build(*id, pl))
+            Ok(build(&resolved[0]))
         } else {
-            let items: Vec<PyObject> = resolved.iter().map(|(id, pl)| build(*id, pl)).collect();
+            let items: Vec<PyObject> = resolved.iter().map(build).collect();
             Ok(items.into_py_any(py).unwrap())
         }
     }
@@ -3395,8 +3781,62 @@ impl PyDocumentObject {
                 };
                 Ok((obj_py, subs.clone()).into_py_any(py).unwrap())
             }
+            // LinkSubList exposes `[(object_or_None, (subnames,)), …]`, grouped
+            // per object like upstream `PropertyLinkSubList::getPyObject`. A
+            // whole-object entry carries the empty subname `("",)`.
+            Some(Property::LinkSubList(entries)) => {
+                let items: Vec<PyObject> = entries
+                    .iter()
+                    .map(|(name, subs)| {
+                        let obj_py = if name.is_empty() {
+                            py.None()
+                        } else {
+                            match inner.lock().unwrap().get_by_name(name) {
+                                Some(id) => get_or_create_object(py, &doc_py, &inner, id)
+                                    .into_py_any(py)
+                                    .unwrap(),
+                                None => py.None(),
+                            }
+                        };
+                        let subs = PyTuple::new(py, subs.iter().map(String::as_str)).unwrap();
+                        (obj_py, subs).into_py_any(py).unwrap()
+                    })
+                    .collect();
+                Ok(items.into_py_any(py).unwrap())
+            }
             Some(p) => Ok(property_to_py_at(py, &p, &inner, this_id, &name)),
             None => {
+                // A method registered by one of the object's extensions is exposed
+                // as a callable, so modules install their whole Python surface via
+                // the registry (`positionBySupport`, …) without editing this crate.
+                if extension_method_for(&inner.lock().unwrap(), this_id, &name).is_some() {
+                    let method_inner = Arc::clone(&inner);
+                    let method_name = name.clone();
+                    let function = pyo3::types::PyCFunction::new_closure(
+                        py,
+                        None,
+                        None,
+                        move |args: &Bound<'_, PyTuple>,
+                              kwargs: Option<&Bound<'_, PyDict>>| {
+                            let mut items: Vec<Bound<'_, PyAny>> = args.iter().collect();
+                            if let Some(kwargs) = kwargs {
+                                if !kwargs.is_empty() {
+                                    items.push(kwargs.clone().into_any());
+                                }
+                            }
+                            let call = PyTuple::new(args.py(), items)?;
+                            let mut doc = method_inner.lock().unwrap();
+                            let (_, f) = extension_method_for(&doc, this_id, &method_name)
+                                .ok_or_else(|| {
+                                    PyAttributeError::new_err(format!(
+                                        "object has no attribute '{method_name}'"
+                                    ))
+                                })?;
+                            f(&mut doc, this_id, &method_name, call.as_any())
+                        },
+                    )?;
+                    return Ok(function.into_any().unbind());
+                }
                 // View-provider properties (`obj.Visibility`, `obj.Transparency`, …)
                 // are forwarded in a GUI session upstream; here the view model is
                 // always present.
@@ -3458,6 +3898,14 @@ impl PyDocumentObject {
                 let (obj, subs) = py_to_link_sub(value)?;
                 Property::LinkSub(obj, subs)
             }
+            Some(Property::LinkSubList(_)) => {
+                Property::LinkSubList(py_to_link_sub_list(value)?)
+            }
+            // A bare string is a one-element string list (`obj.Text = "Label"`).
+            Some(Property::StringList(_)) => match value.extract::<String>() {
+                Ok(s) => Property::StringList(vec![s]),
+                Err(_) => py_to_property(value)?,
+            },
             Some(Property::ColorList(_)) => Property::ColorList(py_to_color_list(value)?),
             Some(Property::PythonObject(_)) => Property::PythonObject(pickle_b64(slf.py(), value)?),
             Some(Property::FileIncluded(_)) => {
@@ -3607,7 +4055,9 @@ impl PyDocumentObject {
 
     /// Assign the `Group` link list from a sequence of objects (or names).
     fn set_group(&self, value: &Bound<'_, PyAny>) -> PyResult<()> {
-        let names: Vec<String> = if let Ok(objs) = value.extract::<Vec<PyRef<'_, PyDocumentObject>>>() {
+        let names: Vec<String> = if let Ok(object) = value.downcast::<PyDocumentObject>() {
+            vec![object.borrow().name_string()]
+        } else if let Ok(objs) = value.extract::<Vec<PyRef<'_, PyDocumentObject>>>() {
             objs.iter().map(|o| o.name_string()).collect()
         } else if let Ok(names) = value.extract::<Vec<String>>() {
             names
@@ -3890,7 +4340,64 @@ impl PyVector {
     fn negative(&self) -> PyVector { PyVector::fresh(self.inner.neg()) }
     fn dot(&self, o: PyRef<'_, PyVector>) -> f64 { self.inner.dot(&o.inner) }
     fn cross(&self, o: PyRef<'_, PyVector>) -> PyVector { PyVector::fresh(self.inner.cross(&o.inner)) }
-    fn normalize(&self) -> PyVector { PyVector::fresh(self.inner.normalize()) }
+
+    /// `multiply(factor)`: scale in place (upstream mutates and returns self).
+    fn multiply(&mut self, factor: f64) -> PyVector {
+        self.inner = self.inner.scale(factor);
+        self.write_back();
+        PyVector::fresh(self.inner)
+    }
+
+    /// `scale(factor)` or `scale(x, y, z)`: scale in place (upstream mutates and
+    /// returns self). Draft's fillets use the three-argument form.
+    #[pyo3(signature = (x, y=None, z=None))]
+    fn scale(&mut self, x: f64, y: Option<f64>, z: Option<f64>) -> PyVector {
+        self.inner = match (y, z) {
+            (Some(y), Some(z)) => Vector3::new(
+                self.inner.x * x,
+                self.inner.y * y,
+                self.inner.z * z,
+            ),
+            _ => self.inner.scale(x),
+        };
+        self.write_back();
+        PyVector::fresh(self.inner)
+    }
+
+    /// `normalize()`: normalise in place and return self (upstream's semantics).
+    fn normalize(&mut self) -> PyVector {
+        self.inner = self.inner.normalize();
+        self.write_back();
+        PyVector::fresh(self.inner)
+    }
+
+    /// `distanceToLine(base, direction)`: distance from this point to the line.
+    fn distanceToLine(&self, base: PyRef<'_, PyVector>, direction: PyRef<'_, PyVector>) -> f64 {
+        let offset = self.inner.sub(&base.inner);
+        let length = direction.inner.length();
+        if length == 0.0 {
+            offset.length()
+        } else {
+            offset.cross(&direction.inner).length() / length
+        }
+    }
+
+    /// `projectToPlane(base, normal)`: project in place onto the plane through
+    /// `base` with the given normal.
+    fn projectToPlane(
+        &mut self,
+        base: PyRef<'_, PyVector>,
+        normal: PyRef<'_, PyVector>,
+    ) -> PyVector {
+        let denominator = normal.inner.dot(&normal.inner);
+        if denominator != 0.0 {
+            let distance = self.inner.sub(&base.inner).dot(&normal.inner) / denominator;
+            self.inner = self.inner.sub(&normal.inner.scale(distance));
+            self.write_back();
+        }
+        PyVector::fresh(self.inner)
+    }
+
     fn distanceToPoint(&self, o: PyRef<'_, PyVector>) -> f64 { self.inner.distance(&o.inner) }
     fn getAngle(&self, o: PyRef<'_, PyVector>) -> f64 { self.inner.angle(&o.inner) }
     fn isEqual(&self, o: PyRef<'_, PyVector>, tol: f64) -> bool { self.inner.is_equal(&o.inner, tol) }
@@ -4375,6 +4882,129 @@ impl PyRotation {
     }
 }
 
+/// `Rotation::makeRotationByAxes` (FreeCAD `Rotation.cpp`): build a rotation from
+/// three direction vectors, honouring a three-letter priority order such as
+/// `"ZXY"`. The first non-degenerate priority direction is the main axis, the
+/// next supplies a perpendicular hint, and the third completes a right-handed
+/// basis.
+fn rotation_by_axes(
+    xdir: Vector3,
+    ydir: Vector3,
+    zdir: Vector3,
+    priority: &str,
+) -> Result<Rotation, String> {
+    const TOL: f64 = 1e-7;
+    if priority.len() != 3 {
+        return Err("makeRotationByAxes: priorityOrder must have length 3".to_string());
+    }
+    let bytes = priority.as_bytes();
+    let mut order = [0usize; 3];
+    for (i, &c) in bytes.iter().enumerate() {
+        if !(b'X'..=b'Z').contains(&c) {
+            return Err(format!(
+                "makeRotationByAxes: {priority:?} must contain only uppercase X, Y, Z"
+            ));
+        }
+        order[i] = (c - b'X') as usize;
+    }
+    if order[0] == order[1] || order[1] == order[2] || order[2] == order[0] {
+        return Err("makeRotationByAxes: not all axes are listed in priorityOrder".to_string());
+    }
+    let dirs = [xdir, ydir, zdir];
+
+    fn drop_priority(order: &mut [usize; 3], index: usize) {
+        match index {
+            0 => order.rotate_left(1),
+            1 => order.swap(1, 2),
+            _ => {}
+        }
+    }
+
+    let mut main = Vector3::zero();
+    for i in 0..3 {
+        main = dirs[order[0]];
+        if main.length() > TOL {
+            break;
+        }
+        drop_priority(&mut order, 0);
+        if i == 2 {
+            return Err("makeRotationByAxes: all directions are zero".to_string());
+        }
+    }
+    let main = main.normalize();
+
+    let mut hint = Vector3::zero();
+    for i in 0..2 {
+        hint = dirs[order[1]];
+        if hint.cross(&main).length() > TOL {
+            break;
+        }
+        drop_priority(&mut order, 1);
+        if i == 1 {
+            hint = Vector3::zero();
+        }
+    }
+    if hint.length() == 0.0 {
+        // The supplied hint is parallel to the main direction: choose one.
+        match order[0] {
+            0 => {
+                order[1] = 2;
+                order[2] = 1;
+                hint = Vector3::new(0.0, 0.0, 1.0);
+                if hint.cross(&main).length() <= TOL {
+                    hint = Vector3::new(0.0, 1.0, 0.0);
+                    order[1] = 1;
+                    order[2] = 2;
+                }
+            }
+            1 => {
+                order[1] = 2;
+                order[2] = 0;
+                hint = if main.z > -TOL {
+                    Vector3::new(0.0, 0.0, 1.0)
+                } else {
+                    Vector3::new(0.0, 0.0, -1.0)
+                };
+                if hint.cross(&main).length() <= TOL {
+                    hint = Vector3::new(1.0, 0.0, 0.0);
+                    order[1] = 0;
+                    order[2] = 2;
+                }
+            }
+            _ => {
+                order[1] = 1;
+                order[2] = 0;
+                hint = Vector3::new(0.0, 0.0, 1.0);
+                if hint.cross(&main).length() <= TOL {
+                    hint = Vector3::new(1.0, 0.0, 0.0);
+                    order[1] = 0;
+                    order[2] = 1;
+                }
+            }
+        }
+    }
+
+    let hint = hint.normalize();
+    let last = main.cross(&hint).normalize();
+    let hint = last.cross(&main).normalize();
+
+    let mut finaldirs = [Vector3::zero(); 3];
+    finaldirs[order[0]] = main;
+    finaldirs[order[1]] = hint;
+    finaldirs[order[2]] = last;
+    if finaldirs[0].cross(&finaldirs[1]).dot(&finaldirs[2]) < 0.0 {
+        finaldirs[order[2]] = finaldirs[order[2]].neg();
+    }
+
+    let mut matrix = Matrix4::identity();
+    for i in 0..3 {
+        matrix.m[i] = finaldirs[i].x;
+        matrix.m[4 + i] = finaldirs[i].y;
+        matrix.m[8 + i] = finaldirs[i].z;
+    }
+    Ok(Rotation::from_matrix(&matrix))
+}
+
 #[pymethods]
 impl PyRotation {
     #[new]
@@ -4395,24 +5025,72 @@ impl PyRotation {
                 }
             }
             2 => {
-                // `Rotation(axis, degree)` — the angle is in degrees (FreeCAD).
-                let axis: PyRef<'_, PyVector> = args.get_item(0)?.extract()?;
-                let degree: f64 = args.get_item(1)?.extract()?;
-                Rotation::from_axis_angle(&axis.inner, degree.to_radians())
+                // `Rotation(axis, degree)` (degrees) or `Rotation(from, to)`.
+                let first = args.get_item(0)?;
+                let second = args.get_item(1)?;
+                if let (Ok(from), Ok(to)) = (
+                    first.extract::<PyRef<'_, PyVector>>(),
+                    second.extract::<PyRef<'_, PyVector>>(),
+                ) {
+                    Rotation::from_vectors(from.inner, to.inner)
+                } else {
+                    let axis: PyRef<'_, PyVector> = first.extract()?;
+                    let degree: f64 = second.extract()?;
+                    Rotation::from_axis_angle(&axis.inner, degree.to_radians())
+                }
             }
             3 => {
-                let yaw: f64 = args.get_item(0)?.extract()?;
-                let pitch: f64 = args.get_item(1)?.extract()?;
-                let roll: f64 = args.get_item(2)?.extract()?;
-                Rotation::from_euler_deg(yaw, pitch, roll)
+                // `Rotation(yaw, pitch, roll)` or three direction vectors.
+                let a = args.get_item(0)?;
+                let b = args.get_item(1)?;
+                let c = args.get_item(2)?;
+                if let (Ok(va), Ok(vb), Ok(vc)) = (
+                    a.extract::<PyRef<'_, PyVector>>(),
+                    b.extract::<PyRef<'_, PyVector>>(),
+                    c.extract::<PyRef<'_, PyVector>>(),
+                ) {
+                    rotation_by_axes(va.inner, vb.inner, vc.inner, "ZXY")
+                        .map_err(PyValueError::new_err)?
+                } else {
+                    let yaw: f64 = a.extract()?;
+                    let pitch: f64 = b.extract()?;
+                    let roll: f64 = c.extract()?;
+                    Rotation::from_euler_deg(yaw, pitch, roll)
+                }
             }
             4 => {
-                // `Rotation(x, y, z, w)`.
-                let x: f64 = args.get_item(0)?.extract()?;
-                let y: f64 = args.get_item(1)?.extract()?;
-                let z: f64 = args.get_item(2)?.extract()?;
-                let w: f64 = args.get_item(3)?.extract()?;
-                Rotation { q: [w, x, y, z], raw_axis: None }
+                // `Rotation(x, y, z, w)` (quaternion) or
+                // `Rotation(xdir, ydir, zdir, priority)`.
+                let a = args.get_item(0)?;
+                let b = args.get_item(1)?;
+                let c = args.get_item(2)?;
+                let d = args.get_item(3)?;
+                if let (Ok(va), Ok(vb), Ok(vc), Ok(priority)) = (
+                    a.extract::<PyRef<'_, PyVector>>(),
+                    b.extract::<PyRef<'_, PyVector>>(),
+                    c.extract::<PyRef<'_, PyVector>>(),
+                    d.extract::<String>(),
+                ) {
+                    rotation_by_axes(va.inner, vb.inner, vc.inner, &priority)
+                        .map_err(PyValueError::new_err)?
+                } else {
+                    let x: f64 = a.extract()?;
+                    let y: f64 = b.extract()?;
+                    let z: f64 = c.extract()?;
+                    let w: f64 = d.extract()?;
+                    Rotation { q: [w, x, y, z], raw_axis: None }
+                }
+            }
+            9 => {
+                // `Rotation(a11 … a33)`: the upper-left 3x3 of a 4x4 matrix.
+                let mut m = Matrix4::identity();
+                for row in 0..3 {
+                    for column in 0..3 {
+                        m.m[row * 4 + column] =
+                            args.get_item(row * 3 + column)?.extract()?;
+                    }
+                }
+                Rotation::from_matrix(&m)
             }
             16 => {
                 let mut m = Matrix4::identity();
@@ -4423,7 +5101,7 @@ impl PyRotation {
             }
             _ => {
                 return Err(PyTypeError::new_err(
-                    "Rotation() takes 0, 1, 2, 3, 4 or 16 arguments",
+                    "Rotation() takes 0, 1, 2, 3, 4, 9 or 16 arguments",
                 ))
             }
         };
@@ -4553,6 +5231,16 @@ impl PyRotation {
 
     fn inverse(&self) -> PyRotation {
         PyRotation::fresh(self.inner.inverse(), None)
+    }
+
+    /// `inverted()`: a new rotation with the inverse value (the quaternion
+    /// conjugate). Upstream's `Rotation::inverse()` also negates the retained
+    /// axis, so an axis set for an angle-0 rotation survives the inversion.
+    fn inverted(&self) -> PyRotation {
+        PyRotation::fresh(
+            self.inner.inverse(),
+            self.axis_cache.map(|axis| axis.neg()),
+        )
     }
 
     #[pyo3(signature = (o, tol=0.0))]
@@ -4760,6 +5448,39 @@ impl PyPlacement {
 
     fn toMatrix(&self) -> PyMatrix {
         PyMatrix { inner: self.get().to_matrix() }
+    }
+
+    /// The same matrix as an attribute (`Placement.Matrix`), which upstream code
+    /// (`Draft.draftobjects.hatch`) reads as a property.
+    #[getter]
+    fn Matrix(&self) -> PyMatrix {
+        PyMatrix { inner: self.get().to_matrix() }
+    }
+
+    /// Move this placement in place (`Placement.translate`).
+    ///
+    /// Accepts a `Vector` or three floats. The rotation is unchanged and the base
+    /// moves in the global frame, matching upstream's `Placement.translate`.
+    #[pyo3(signature = (*args))]
+    fn translate(&self, args: &Bound<'_, PyTuple>) -> PyResult<()> {
+        let offset = match args.len() {
+            1 => extract_vector(&args.get_item(0)?)?,
+            3 => Vector3::new(
+                args.get_item(0)?.extract()?,
+                args.get_item(1)?.extract()?,
+                args.get_item(2)?.extract()?,
+            ),
+            _ => {
+                return Err(PyTypeError::new_err(
+                    "translate expects a vector or three floats",
+                ));
+            }
+        };
+        let mut placement = self.get();
+        placement.base = placement.base.add(&offset);
+        self.set(placement);
+        self.write_back();
+        Ok(())
     }
 
     #[pyo3(signature = (o, tol=0.0))]
@@ -5180,6 +5901,9 @@ fn operand_color(
             Property::Link(target) => vec![target],
             Property::LinkList(targets) => targets.iter().collect(),
             Property::LinkSub(target, _) => vec![target],
+            Property::LinkSubList(entries) => {
+                entries.iter().map(|(target, _)| target).collect()
+            }
             _ => continue,
         };
         for target in targets {

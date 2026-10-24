@@ -137,7 +137,7 @@ its load errors are the useful signal.
 
 | Group | Result |
 | --- | --- |
-| Part | **521 passed**, 10 failed, **0 errored**, 12 skipped, **0 files failed to load** |
+| Part | **529 passed**, 2 failed, **0 errored**, 12 skipped, **0 files failed to load** |
 | Draft | **10 passed**, 1 failed, 0 errored, 0 skipped, 1 load error |
 
 The 2026-10-20 Part row is the pre-shim baseline: `TestPartApp.py` and
@@ -148,17 +148,16 @@ semantics the loaded tests exercise. The harness puts the group roots ahead of `
 so the **Draft** group still runs upstream `src/Mod/Draft/Draft.py`, not the shim; its
 baseline is unchanged.
 
-The 10 failures are six unique cases reported twice where a module is re-collected by
-`TestPartApp`: `test_CircularReference` (the cyclic-expression message), the sweep-surface
-BoundBox (a legacy `GeomFill_Pipe` assertion), the two compound cuts (`12 != 20` and
-`30 != 47`, see [`../tasks/element-map-policy.md`](../tasks/element-map-policy.md)), and
-two placement-composition assertions (`PartTestNormals.testPlacement`,
-`PartTestShapeRotate.testPlacement`) that need a live `Shape.Placement` model. **No
-errors remain**: every module now imports and every missing API the loaded tests touch
-is implemented (`Edge`/`Face`/`Line` overloads, `makePlane`, `Ellipse`/`ArcOfEllipse`,
-`toNurbs`/`toBSpline`/`trim`, `ShapeFix`, `ChFi2d`, `Sketcher::SketchObject`,
-`PartDesign::Body`/`Part::Mirroring` shapes, `RuledSurface`/`Extrusion`,
-`App::Part.removeObject`).
+The only remaining failure is `testAppPartMakeSweepSurface`, reported twice (the standalone
+module and `TestPartApp`'s re-collection). It is an upstream-branch artifact, not a geometry
+bug: with `ElementMapVersion == ""` the test asserts the *legacy* `GeomFill_Pipe` bounds,
+while our sweep produces the correct pipe (`[-5,-5,0]..[5,5,10]`, 6 sub-elements). Exposing
+an element-map version would take the correct branch, but the other guards assert exact map
+sizes (52/58/26/10/9/24) that are not yet reproduced, so the version stays off. **No errors
+remain**: every module loads and every API the tests touch is implemented, including the
+live `Shape.Placement`, the compound-cut naming cascade (20/47 exactly), and the full
+Part geometry surface (`ShapeFix`, `ChFi2d`, `Sketcher`, NURBS conversion, torus/wedge/
+revolution/helix/thread/tube, and the matching feature objects).
 
 ### Reading the report
 

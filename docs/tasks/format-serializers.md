@@ -31,8 +31,9 @@ Lineage persistence follows from that split ([`../architecture/lineage-and-namin
   element, rides alongside the raw BREP, and a reader that does not know it still loads the shape.
   S6b implements the sidecar (`PartShapeN.lineage`, referenced by a `FerroCADSidecar` attribute);
   an upstream-compatible `ElementMap` element remains a follow-up.
-- In the native format the shape and its lineage share one versioned envelope, so there is no
-  "shape without metadata" state to migrate around.
+- In the native format the shape, its accumulated placement and its lineage share one
+  versioned envelope (v2), so there is no "shape without metadata" state to migrate around.
+  Version 1 documents (shape + lineage, no placement) still load with the identity placement.
 
 ## Decision
 
@@ -172,7 +173,8 @@ Lossiness to settle: `Property::String` cannot distinguish `PropertyString` from
 type-id map to `SavedObject` (recommended) or accept a documented approximation.
 
 **`.brp` payloads.** `ShapeProperty::fcstd_members()` returns raw ASCII BREP for the
-`PartShapeN.brp` member; `save()` is the **native** envelope and is not what `.FCStd` writes
+`PartShapeN.brp` member; `save()` is the **native** envelope (v2: raw BREP + accumulated
+placement + `MapVersion` + forward/reverse maps) and is not what `.FCStd` writes
 (§0). Write the raw bytes verbatim to `PartShape.brp`, `PartShape1.brp`, … with
 `<Part file="PartShapeN.brp"/>`. For `Part::PropertyTopoShapeList`, upstream uses one member
 per entry (`<TopoShape file="PartShapeN.M.brp"/>`); `ExtensionData::fcstd_members` already

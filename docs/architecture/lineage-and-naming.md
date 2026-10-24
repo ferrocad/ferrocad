@@ -3,8 +3,9 @@
 Status: design (2026-10-23; layering decision made explicit 2026-10-24). Refines
 [`geometry-and-topology.md`](geometry-and-topology.md) §1 and §4. The vocabulary, layer,
 provenance breadth, Part storage, map-first reference resolution and the exposed reverse map
-landed 2026-10-23; `.FCStd` map persistence (S6b) landed 2026-10-24, and the naming
-policy (S6c) remains. Companion to
+landed 2026-10-23; `.FCStd` map persistence (S6b) landed 2026-10-24, and the
+compound-cut naming counts (S6c) are now reproduced; exposing the version still
+waits for the remaining guards. Companion to
 [`occt-history-spike.md`](occt-history-spike.md), [`occt-integration.md`](occt-integration.md),
 [`part-draft-layering.md`](part-draft-layering.md), [`architecture.md`](../architecture.md) §6,
 [`conformance.md`](../workbenches/conformance.md),
@@ -73,17 +74,16 @@ loading or resolving a document cannot change its meaning. The fold itself has t
 ### 0.2 Current measured state
 
 The reverse map now carries real data and is exposed to Python. The two compound-cut cases in
-upstream `TopoShapeTest.py` measure **12** and **30** reverse-map keys; upstream asserts **20** and
-**47**. The difference is the naming/alias policy (the extra names a boolean emits), not missing
-provenance or fabricated entries. `ElementMapVersion`/`ElementMapSize` stay empty until the upstream
-sizes can be reproduced, because the other guards assert exact sizes (52/58/26/10/9/24 depending on
-the case).
+upstream `TopoShapeTest.py`, formerly **12** and **30** keys, now measure **20** and **47** —
+exactly upstream. Two changes closed the gap: the backend reproduces upstream's compound-cut
+policy (`RecursiveCutFusedTools` / `RecursiveCutCompound`, non-destructive with the automatic
+fuzzy value), and `build_history` runs the identity and upper/lower derivation passes so the
+unchanged elements are named too. `ElementMapVersion`/`ElementMapSize` stay empty because the
+other guards assert exact sizes (52/58/26/10/9/24) that are not reproduced yet, and a version
+would activate them.
 
-So the open item is **S6c**: understand upstream's naming form and close 12→20 / 30→47.
-The map is already persisted in both formats (S6b: the `PartShapeN.lineage` sidecar). This is
-a policy question, which is exactly why it belongs to the lineage layer rather than the
-kernel. The evidence-backed analysis (compound-cut rewrite + three-pass naming cascade) is in
-[`element-map-policy.md`](../tasks/element-map-policy.md); see
+So the open item is no longer the cut policy: it is **enabling the element-map version** once
+all the guarded sizes match. See [`element-map-policy.md`](../tasks/element-map-policy.md) and
 [`../TODO-23-10-2026.md`](../TODO-23-10-2026.md) §P1.
 
 ---
@@ -93,7 +93,7 @@ kernel. The evidence-backed analysis (compound-cut rewrite + three-pass naming c
 | Concern | Question | Nodes / edges | Owner | Status |
 | --- | --- | --- | --- | --- |
 | Object-graph sort | In what order do features execute? | Document objects / links, expressions | `ferrocad_core` | **Built** (`recompute_order`) |
-| Sub-shape lineage | Which face/edge does a stored name mean after a rebuild? | Elements / provenance relations | `ferrocad_lineage` | **Partial**: S1–S6b are in (map-first Part resolution, the exposed reverse map, and `.FCStd` sidecar persistence); the name policy (S6c) remains |
+| Sub-shape lineage | Which face/edge does a stored name mean after a rebuild? | Elements / provenance relations | `ferrocad_lineage` | **Partial**: S1–S6c are in (map-first Part resolution, the exposed reverse map, `.FCStd` sidecar persistence, and upstream's compound-cut counts); exposing `ElementMapVersion` waits for the remaining exact sizes |
 | Geometry construction | Inputs + parameters → shape | Solids, surfaces, algorithms | `ferrocad_occt` | **Built** for primitives, booleans, dress-ups |
 
 The earlier note said naming "needs a geometry kernel, OCCT shape history, and a persistent element
@@ -122,7 +122,7 @@ a kernel question, not an inference from a name table.
 | Provenance | `ferrocad_occt/src/backend.rs` `build_history`; `include/fc_history.hxx` | **Both operands** and faces/edges/vertices, each with `OperandId`, kind and ordinal. The *names* remain positional (`FaceN` from the operand's own enumeration); the backend still invents them. |
 | Vocabulary and fold | `crates/ferrocad_lineage`; re-exported by `ferrocad_geom` | Payload-generic, no workspace dependencies, unit-tested with `T = String` and with `Shape`. `Lineage`, `ReverseMap`, `MapVersion` and `NamePolicy` are the production types. |
 | Document and property | `ferrocad_part/src/{containers,dress_up,shape_property}.rs` | `ShapeProperty` stores the shape **plus** its `Lineage` in a versioned native envelope; boolean containers fold `OpResult.history`; `resolve_element_in` reads the map before falling back. |
-| Python | `ferrocad_part_py` | `ElementReverseMap` returns `{output: [inputs]}` from the stored reverse map. `ElementMap`/`ElementMapVersion` stay empty until S6c can reproduce upstream's sizes. |
+| Python | `ferrocad_part_py` | `ElementReverseMap` returns `{output: [inputs]}` from the stored reverse map. `ElementMap`/`ElementMapVersion` stay empty until the remaining exact sizes (52/58/26/10/9/24) are reproduced. |
 
 `build_history` enumerates both operands' elements, asks the operation for
 `Modified`/`Generated`/`IsDeleted`, maps each output into the **result's** element map, and emits
@@ -160,13 +160,13 @@ assertions (empty map, size 0, `Content`) are unconditional. The asserted sizes 
 numbers matter: **26 for a box shell/solid is exactly 6 faces + 12 edges + 8 vertices**, one entry
 per sub-shape; **58 for the fused L is not** — the test's own comment gives 8F + 12V + 18E = 38. So
 `ElementMapSize` counts **map entries**, not topology, and a boolean result carries extra names
-(aliases or encoded tokens) beyond one per element. Which entries are missing is §0.2's open policy
-question. Our facade still returns `ElementMapVersion == ""`, `ElementMapSize == 0`,
+beyond one per element; the compound-cut policy and the naming cascade now reproduce the two
+counts this note tracked. Our facade still returns `ElementMapVersion == ""`, `ElementMapSize == 0`,
 `ElementMap == {}`, `Content == "<ElementMap/>\n"` and `Hasher is None`: the *fresh box* assertions
-exactly, so every guarded naming assertion is skipped. `ElementReverseMap` is no longer empty — it
-returns the stored reverse map, which is why the two compound-cut cases now fail on a real but short
-count (12/30 vs 20/47) instead of on 0. `mapSubElement` remains a documented no-op. We are not
-failing the naming tests; we are skipping them until the sizes can be reproduced.
+exactly, so every guarded naming assertion is skipped. `ElementReverseMap` returns the stored
+reverse map, including the exact 20/47 keys for the two compound cuts. `mapSubElement` remains a
+documented no-op. We are not failing the naming tests; we are skipping them until every guarded
+size can be reproduced.
 
 ---
 
@@ -315,7 +315,7 @@ claim.
 
 | Surface | Native (`.ferrocad`, `.fe2o3`) | `.FCStd` |
 | --- | --- | --- |
-| Shape payload | `ShapeProperty::save` writes a versioned `FCSHPROP` envelope: raw BREP + `MapVersion` + forward map + reverse map. | `ShapeProperty::fcstd_members` writes raw BREP as `PartShapeN.brp`; the element does not wrap it. |
+| Shape payload | `ShapeProperty::save` writes a versioned `FCSHPROP` envelope (v2): raw BREP + the accumulated placement + `MapVersion` + forward map + reverse map. | `ShapeProperty::fcstd_members` writes raw BREP as `PartShapeN.brp`; the element does not wrap it. |
 | Lineage | Persisted inside the envelope; legacy raw BREP with no prefix still loads as an empty lineage. | **Persisted additively (S6b).** `PartShapeN.lineage` carries the same envelope and is referenced from `<Part>` by a `FerroCADSidecar` attribute upstream ignores; the reader prefers it and falls back to the raw `file` member. Upstream's own `ElementMap` form is still unreadable here (§8). |
 | Contract | Ours; versioned and free to change, with a migration. | Upstream's; every change is measured by the conformance harness. |
 
@@ -359,7 +359,9 @@ turns the upstream map assertions on; S4 then changes their values.
 **S6b landed 2026-10-24** for the persistence half: `ExtensionData::fcstd_sidecar` lets a
 module write metadata beside its upstream-compatible payload, `ShapeProperty` writes its envelope
 to `PartShapeN.lineage` (referenced by `FerroCADSidecar`), and the reader prefers it with a raw
-fallback. **S6c** remains: upstream's naming/alias policy and the 12/30 → 20/47 sizes.
+fallback. **S6c landed 2026-10-24**: compound cuts now measure 20/47, matching
+upstream, via the compound policy plus the identity/derivation naming passes.
+Exposing `ElementMapVersion` still waits for the other guards' exact sizes.
 
 **S1 landed 2026-10-23**: `crates/ferrocad_lineage` carries the three types with 7
 unit tests (`T = String`), `ferrocad_geom` re-exports them as aliases over `Shape`, and
@@ -392,10 +394,10 @@ seam owning `History`/`ElementMap`; S1 keeps that true by re-export.
 - **Exact upstream name compatibility.** We know the Python contract but not the key encoding:
   `src/App/ElementMap.h`, `ElementMap.cpp` and `ComplexGeoData` are outside the checkout. Adopt the
   keys verbatim (best `.FCStd` interop), translate, or diverge?
-- **What are the missing entries?** The compound cuts currently produce 12 and 30 reverse-map keys
-  where upstream asserts 20 and 47; the fused L's `ElementMapSize` is 58 while its topology has 38
-  elements. Aliases, encoded tokens and retained input names are all plausible. Measure against a
-  real upstream build before freezing the policy; the gate is exact, so do not guess (§0.2).
+- **What are the missing entries?** The compound cuts now produce 20 and 47 reverse-map keys,
+matching upstream; the fused L's `ElementMapSize` (58) and the other guarded sizes are still
+unreproduced, so the version stays off. The remaining work is to reproduce those sizes and then
+enable the version; do not guess (§0.2).
 - **Per-operation or per-document naming?** The evidence points to per-shape maps (`TopoShape` owns
   one, `PropertyPartShape` persists it), with a document-level override hinted at by
   `DocumentObject::getElementMapVersion` (a `todo!()` in `ferrocad_gen`). Recommendation: maps are

@@ -405,6 +405,60 @@ fn pipe_shells_sweep_profiles() {
     assert!(surface_ops::make_pipe_shell(&spine, &[], false, false).is_err());
 }
 
+/// The spine adaptors evaluate any edge: the straight-edge direction honours
+/// orientation, and a B-spline exposes the frame the analytic `curve_of` seam
+/// cannot describe. The plane finder gives an extrusion's `Normal` mode.
+#[test]
+fn spine_frames_and_plane_normals() {
+    let backend = backend();
+
+    let line = line_edge(&backend, Vector3::zero(), Vector3::new(0.0, 3.0, 0.0));
+    let (start, tangent) = surface_ops::spine_start_frame(&line).expect("line spine frame");
+    assert_close(start.x, 0.0, "line start x");
+    assert_close(start.y, 0.0, "line start y");
+    assert_close(tangent.x, 0.0, "line tangent x");
+    assert_close(tangent.y, 1.0, "line tangent y");
+    let direction = surface_ops::edge_line_direction(&line).expect("line direction");
+    assert_close(direction.y, 3.0, "the line's unnormalised direction");
+
+    // A reversed edge reports the opposite direction, as `fetchAxisLink` does.
+    let reversed = backend.reversed(&line).expect("reverse the line");
+    let reversed_direction =
+        surface_ops::edge_line_direction(&reversed).expect("reversed line direction");
+    assert_close(reversed_direction.y, -3.0, "the reversed direction");
+
+    // A line-like interpolating B-spline: the adaptor gives its start frame.
+    let bspline = backend
+        .make_bspline_edge(
+            &[
+                Vector3::zero(),
+                Vector3::new(1.0, 0.0, 0.0),
+                Vector3::new(2.0, 0.0, 0.0),
+            ],
+            false,
+        )
+        .expect("B-spline edge");
+    let (start, tangent) = surface_ops::spine_start_frame(&bspline).expect("B-spline frame");
+    assert!(start.x.abs() < 1e-6 && start.y.abs() < 1e-6 && start.z.abs() < 1e-6);
+    assert!(tangent.x > 0.99, "the B-spline starts along +X: {tangent:?}");
+
+    // A circle lies in a plane whose normal is its axis (up to sign).
+    let circle = circle_edge(
+        &backend,
+        Vector3::zero(),
+        Vector3::new(0.0, 0.0, 1.0),
+        2.0,
+    );
+    let normal = surface_ops::shape_plane_normal(&circle).expect("circle plane normal");
+    assert_close(normal.z.abs(), 1.0, "the circle's plane normal");
+    assert_close(normal.x, 0.0, "the normal has no x component");
+    assert_close(normal.y, 0.0, "the normal has no y component");
+
+    // A line is not a wire spine, but it is an edge: a non-edge is rejected.
+    let boxed = backend.make_box(1.0, 1.0, 1.0).expect("box");
+    assert!(surface_ops::spine_start_frame(&boxed).is_err());
+}
+
 // ---------------------------------------------------------------------------
 // Part consumers
 // ---------------------------------------------------------------------------

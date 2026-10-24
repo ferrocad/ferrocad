@@ -61,6 +61,20 @@ fn shape_list(value: &Bound<'_, PyAny>) -> PyResult<Vec<Shape>> {
     Ok(shapes)
 }
 
+/// Wrap a factory result with the element map its shape carries on its own.
+///
+/// `makeShell`, `makeSolid`, `makeLoft` and `makeFilledFace` return shapes whose
+/// result elements upstream's `makeElement*` namers name positionally, and the
+/// kernel reports exactly those (26/26/24/9). Attaching the map here — rather
+/// than in the shared `store` helper — keeps the guards for shapes built
+/// elsewhere off.
+fn with_intrinsic_lineage(shape: Shape) -> PartShape {
+    let lineage = ferrocad_part::backend()
+        .intrinsic_lineage(&shape)
+        .unwrap_or_default();
+    PartShape::from_shape_with_lineage(shape, lineage)
+}
+
 /// The shells of a shape: itself when it is a shell, otherwise its shells.
 fn shells_of(shape: &Shape) -> Vec<Shape> {
     ferrocad_part::backend()
@@ -220,7 +234,7 @@ fn makeShell(shapes: &Bound<'_, PyAny>, op: Option<&str>) -> PyResult<PartShape>
     let shape = ferrocad_part::backend()
         .make_shell(&shape_list(shapes)?)
         .map_err(kernel_error)?;
-    Ok(PartShape::from_shape(shape))
+    Ok(with_intrinsic_lineage(shape))
 }
 
 /// `Part.makeShellFromWires(shape, op=None)` — create a shell from boundary
@@ -248,7 +262,7 @@ fn makeSolid(shape: &Bound<'_, PyAny>, op: Option<&str>) -> PyResult<PartShape> 
     let _ = op;
     let shell = shape_argument(shape)?;
     let solid = solid_from(&shells_of(&shell))?;
-    Ok(PartShape::from_shape(solid))
+    Ok(with_intrinsic_lineage(solid))
 }
 
 /// `Part.makeLoft(shapes, solid=False, ruled=False, closed=False, max_degree=5, op=None)`.
@@ -270,7 +284,7 @@ fn makeLoft(
     let lofts = ferrocad_part::backend()
         .make_loft(&shape_list(shapes)?, solid)
         .map_err(kernel_error)?;
-    Ok(PartShape::from_shape(lofts))
+    Ok(with_intrinsic_lineage(lofts))
 }
 
 /// `Part.makeRuledSurface(edge1, edge2)` — a ruled surface between two edges.
@@ -296,7 +310,7 @@ fn makeFilledFace(shapes: &Bound<'_, PyAny>, op: Option<&str>) -> PyResult<PartS
     let face = ferrocad_part::backend()
         .make_filled_face(&shape_list(shapes)?)
         .map_err(kernel_error)?;
-    Ok(PartShape::from_shape(face))
+    Ok(with_intrinsic_lineage(face))
 }
 
 /// `Part.makeFace(wires, face_maker="Part::FaceMakerBullseye", noElementMap=False)`.
@@ -756,14 +770,54 @@ struct ExtrusionParameters {
     same_as_outer: bool,
 }
 
-fn extrusion_parameters(doc: &Document, id: ObjectId) -> Result<ExtrusionParameters, String> {
-    if enum_index_property(doc, id, "DirMode") != 0 {
-        return Err("DirMode Edge/Normal is not implemented yet".to_string());
-    }
-    let raw = vector_property(doc, id, "Dir").unwrap_or_else(|| Vector3::new(0.0, 0.0, 1.0));
+fn extrusion_parameters(doc: &mut Document, id: ObjectId) -> Result<ExtrusionParameters, String> {
+    // Upstream's `Extrusion::computeFinalParameters`: `Custom` uses `Dir`, `Edge`
+    // takes the direction of the linked line edge, and `Normal` uses the plane
+    // normal of `Base` (a sketch's local +Z). The derived vector is written back
+    // to `Dir`, so a later read of the property agrees with the extrusion.
+    let raw = match enum_index_property(doc, id, "DirMode") {
+        0 => vector_property(doc, id, "Dir").unwrap_or_else(|| Vector3::new(0.0, 0.0, 1.0)),
+        1 => {
+            let link = link_sub_property(doc, id, "DirLink").ok_or_else(|| {
+                "DirMode is set to use edge, but no edge is linked.".to_string()
+            })?;
+            let edge = linked_shape(doc, &link)?;
+            surface_ops::edge_line_direction(&edge)
+                .map_err(|_| "DirLink edge is not a line.".to_string())?
+        }
+        2 => {
+            let link = link_sub_property(doc, id, "Base")
+                .ok_or_else(|| "No object linked".to_string())?;
+            let sketch_normal = doc
+                .get_by_name(&link.0)
+                .and_then(|object| doc.object(object))
+                .filter(|object| object.type_id.as_str() == SKETCH_TYPE)
+                .and_then(|object| match object.properties.get("Placement") {
+                    Some(Property::Placement(placement)) => Some(
+                        placement
+                            .rotation
+                            .to_matrix()
+                            .transform(&Vector3::new(0.0, 0.0, 1.0)),
+                    ),
+                    _ => None,
+                });
+            match sketch_normal {
+                Some(normal) => normal,
+                None => {
+                    let base = linked_shape(doc, &link)?;
+                    surface_ops::shape_plane_normal(&base).map_err(|_| {
+                        "Can't find normal direction, because the shape is not on a plane."
+                            .to_string()
+                    })?
+                }
+            }
+        }
+        _ => return Err("Unexpected enum value".to_string()),
+    };
     if raw.length() < CONFUSION {
         return Err("Direction is zero-length".to_string());
     }
+    doc.set_property_raw(id, "Dir", Property::Vector(raw));
     let mut direction = raw.normalize();
     if bool_property(doc, id, "Reversed", false) {
         direction = direction.neg();
@@ -799,7 +853,7 @@ fn extrusion_parameters(doc: &Document, id: ObjectId) -> Result<ExtrusionParamet
     })
 }
 
-fn extrude(doc: &Document, id: ObjectId) -> Result<Shape, String> {
+fn extrude(doc: &mut Document, id: ObjectId) -> Result<Shape, String> {
     let params = extrusion_parameters(doc, id)?;
     let base = link_sub_property(doc, id, "Base")
         .ok_or_else(|| "No object linked".to_string())?;
@@ -2383,42 +2437,15 @@ fn revolution_shape(
         .map_err(|error| error.to_string())
 }
 
-/// The point of the edge's first vertex (the seam exposes no parameter query).
-fn edge_start(shape: &Shape) -> Option<Vector3> {
-    let backend = ferrocad_part::backend();
-    backend
-        .elements(shape, ElementKind::Vertex)
-        .first()
-        .and_then(|element| backend.vertex_point(&element.shape))
-}
-
-/// The frame at the start of an edge: `(point, unit tangent)`.
+/// The frame at the start of a tube spine: `(point, unit tangent)`.
 ///
-/// The seam exposes no parameter query, so this reads the analytic curve the
-/// backend reports. `curve_of` reports an edge's **basis** curve, so a line
-/// segment arrives as an infinite `Line`: the tangent is exact and the point is
-/// the edge's first vertex. A B-spline spine has no such description and is
-/// rejected rather than being oriented from a chord.
+/// The kernel's adaptors (`BRepAdaptor_Curve` for an edge, and
+/// `BRepAdaptor_CompCurve` for a wire) evaluate every bounded spine, including
+/// a B-spline, so this no longer needs the analytic `curve_of` description. A
+/// spine that is neither an edge nor a wire is reported.
 fn spine_frame(shape: &Shape) -> Result<(Vector3, Vector3), String> {
-    match ferrocad_part::backend().curve_of(shape) {
-        Ok(EdgeCurve::LineSegment(segment)) => Ok((
-            segment.start(),
-            segment.end().sub(&segment.start()).normalize(),
-        )),
-        Ok(EdgeCurve::Line(line)) => match edge_start(shape) {
-            Some(start) => Ok((start, line.direction())),
-            None => Err("a tube needs a bounded edge".to_string()),
-        },
-        Ok(EdgeCurve::Arc(arc)) => Ok((arc.start(), arc.tangent_at(arc.first()))),
-        Ok(EdgeCurve::Circle(circle)) => Ok((circle.point_at(0.0), circle.tangent_at(0.0))),
-        Ok(EdgeCurve::Ellipse(ellipse)) => Ok((ellipse.point_at(0.0), ellipse.tangent_at(0.0))),
-        Err(_) => Err(
-            "makeTube cannot orient a circular profile around a B-spline spine: the seam \
-             exposes no tangent query for it. Use Part.makeSweepSurface with an explicit \
-             profile instead."
-                .to_string(),
-        ),
-    }
+    surface_ops::spine_start_frame(shape)
+        .map_err(|_| "makeTube needs a bounded edge or wire spine".to_string())
 }
 
 /// A circular profile centred on `frame`'s point, normal to its tangent.
@@ -2740,11 +2767,11 @@ fn makeRevolution(
 /// `Part.makeTube(edge, radius, tolerance=1e-3)` → the tube surface around `edge`.
 ///
 /// Upstream's `TopoShape::makeTube` sweeps a circle along the spine with a
-/// corrected-Frenet law. The seam's `make_pipe` is the kernel's `MakePipe`; with a
-/// circular profile placed at the spine's start and normal to its tangent it is
-/// the same tube for an analytic spine. The upstream extra arguments `scont`,
-/// `maxdegree` and `maxsegment` are accepted but have no effect: `make_pipe` takes
-/// only an approximation tolerance.
+/// corrected-Frenet law. The profile is placed at the spine's start, normal to
+/// its tangent; the kernel's `BRepAdaptor_Curve` (or `BRepAdaptor_CompCurve` for
+/// a wire) supplies that frame for every bounded spine, including a B-spline.
+/// The upstream extra arguments `scont`, `maxdegree` and `maxsegment` are
+/// accepted but have no effect: the pipe shell uses OCCT's own tolerances.
 #[pyfunction]
 #[pyo3(signature = (edge, radius, *args, tolerance = 0.001))]
 fn makeTube(

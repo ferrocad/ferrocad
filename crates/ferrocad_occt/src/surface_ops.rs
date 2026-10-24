@@ -87,6 +87,15 @@ mod ffi {
             solid: bool,
             frenet: bool,
         ) -> UniquePtr<TopoDS_Shape>;
+
+        /// The point and unit tangent at the start of a spine (`[p, t]`).
+        fn fc_spine_start_frame(spine: &TopoDS_Shape) -> Vec<f64>;
+
+        /// The direction of a straight edge (`[d]`), honouring its orientation.
+        fn fc_edge_line_direction(edge: &TopoDS_Shape) -> Vec<f64>;
+
+        /// The normal of the plane a shape lies on (`[n]`).
+        fn fc_shape_plane_normal(shape: &TopoDS_Shape) -> Vec<f64>;
     }
 }
 
@@ -96,6 +105,67 @@ fn owned(shape: UniquePtr<TopoDS_Shape>, operation: &'static str) -> Result<Shap
         return Err(OcctError::NotDone { operation }.into());
     }
     Ok(Shape::new(OcctShape(shape)))
+}
+
+/// Read a `[x, y, z]` triple the bridge returned, or report the operation as
+/// not done. The header returns an empty vector on every failure path.
+fn vector3(values: &[f64], operation: &'static str) -> Result<Vector3, GeomError> {
+    if values.len() != 3 {
+        return Err(OcctError::NotDone { operation }.into());
+    }
+    Ok(Vector3::new(values[0], values[1], values[2]))
+}
+
+/// The point and unit tangent at the start of a spine edge or wire.
+///
+/// The OCCT adaptors evaluate every bounded edge, including a B-spline, so this
+/// is the frame query the analytic `curve_of` seam does not expose. A
+/// spine that is neither an edge nor a wire, or whose start tangent is
+/// degenerate, is reported as unsupported by this operation.
+pub fn spine_start_frame(spine: &Shape) -> Result<(Vector3, Vector3), GeomError> {
+    let occt_spine = downcast(spine)?;
+    let guard = occt_spine.borrow();
+    let inner = guard
+        .as_ref()
+        .ok_or(OcctError::InvalidInput { what: "null spine" })?;
+    let values = ffi::fc_spine_start_frame(inner);
+    if values.len() != 6 {
+        return Err(OcctError::NotDone {
+            operation: "spine_start_frame",
+        }
+        .into());
+    }
+    Ok((
+        Vector3::new(values[0], values[1], values[2]),
+        Vector3::new(values[3], values[4], values[5]),
+    ))
+}
+
+/// The direction of a straight edge, from its parametric start to its end and
+/// swapped for a reversed edge (upstream's `Extrusion::fetchAxisLink`).
+///
+/// A shape that is not an edge, or whose curve is not a line, is reported as
+/// not done; the caller distinguishes the two cases before calling.
+pub fn edge_line_direction(edge: &Shape) -> Result<Vector3, GeomError> {
+    let occt_edge = downcast(edge)?;
+    let guard = occt_edge.borrow();
+    let inner = guard
+        .as_ref()
+        .ok_or(OcctError::InvalidInput { what: "null edge" })?;
+    let values = ffi::fc_edge_line_direction(inner);
+    vector3(&values, "edge_line_direction")
+}
+
+/// The normal of the plane a shape lies on (upstream's
+/// `Extrusion::calculateShapeNormal`).
+pub fn shape_plane_normal(shape: &Shape) -> Result<Vector3, GeomError> {
+    let occt_shape = downcast(shape)?;
+    let guard = occt_shape.borrow();
+    let inner = guard
+        .as_ref()
+        .ok_or(OcctError::InvalidInput { what: "null shape" })?;
+    let values = ffi::fc_shape_plane_normal(inner);
+    vector3(&values, "shape_plane_normal")
 }
 
 /// The shapes as an OCCT list, rejecting backends other than this one and null

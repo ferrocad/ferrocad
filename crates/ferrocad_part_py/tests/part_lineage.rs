@@ -472,9 +472,23 @@ fn a_document_compound_names_its_elements() {
 /// (cut/common/shell/solid), 10/9 (faces), 24 (loft/shell-from-wires), 6 (sweep)
 /// and 60 (a general fuse). The kernel attaches a lineage where it can name every
 /// result element exactly; those shapes report a version and are asserted here.
-/// The constructors implemented outside this module (shells, solids, lofts, faces)
-/// have not been given a map yet, so they report `""`/0 and upstream's guards skip
-/// them; their measured sizes are printed for the record, not asserted.
+/// `makeShell`, `makeSolid`, `makeLoft` and `makeFilledFace` now attach the map
+/// the factory's own shape carries (26/26/24/9).
+///
+/// The two remaining guarded counts need more than the element names this
+/// kernel attaches:
+///
+/// - `FaceMakerCheese` names one face twice: `mapSubElement` names the nine
+///   elements of the input face, and `postBuild` gives the result face a
+///   composed alias, so upstream reports 10 for 1 face / 4 edges / 4 vertices.
+///   Reproducing it needs the face-combo naming pass, not another element name.
+/// - Upstream's `makeShellFromWires` is `BRepFill_Generator`, whose ruled shell
+///   has 4 faces / 12 edges / 8 vertices — 24 elements. This kernel deliberately
+///   builds one planar face per wire (2 faces / 8 edges / 8 vertices), the
+///   documented behaviour `part_solids` asserts, so 24 would require different
+///   geometry, not six extra names.
+///
+/// Neither reaches a map here, so upstream's guards keep skipping them.
 #[test]
 fn element_map_sizes_match_upstream_where_the_names_are_owned() {
     let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
@@ -566,19 +580,24 @@ fn element_map_sizes_match_upstream_where_the_names_are_owned() {
         assert!(!version(&sweep).is_empty());
         assert_eq!(size(&sweep), 6, "testAppPartMakeSweepSurface");
 
-        // Constructors whose call sites live outside this slice: measured here so
-        // the report is grounded, not asserted (they still report no map).
+        // Constructors that attach the map their shape carries. The kernel names
+        // every result element, so these now run upstream's guards.
         let faces = box1.getattr("Faces").unwrap();
         let shells = box1.getattr("Shells").unwrap();
         let wires = box1.getattr("Wires").unwrap();
         let section = wires.get_item(0).unwrap();
         let section2 = wires.get_item(1).unwrap();
-        let measurements = [
-            ("makeShell(box.Faces)", part.call_method1("makeShell", (&faces,)).unwrap()),
+        let named = [
+            (
+                "makeShell(box.Faces)",
+                part.call_method1("makeShell", (&faces,)).unwrap(),
+                26,
+            ),
             (
                 "makeSolid(box.Shells[0])",
                 part.call_method1("makeSolid", (&shells.get_item(0).unwrap(),))
                     .unwrap(),
+                26,
             ),
             (
                 "makeLoft(Wires[0:2])",
@@ -587,22 +606,7 @@ fn element_map_sizes_match_upstream_where_the_names_are_owned() {
                     (PyList::new(py, [&section, &section2]).unwrap(),),
                 )
                 .unwrap(),
-            ),
-            (
-                "makeShellFromWires([w0, w1])",
-                part.call_method1(
-                    "makeShellFromWires",
-                    (PyList::new(py, [&section, &section2]).unwrap(),),
-                )
-                .unwrap(),
-            ),
-            (
-                "makeFace(Faces[0], Cheese)",
-                part.call_method1(
-                    "makeFace",
-                    (&faces.get_item(0).unwrap(), "Part::FaceMakerCheese"),
-                )
-                .unwrap(),
+                24,
             ),
             (
                 "makeFilledFace(Faces[3].Edges)",
@@ -611,12 +615,55 @@ fn element_map_sizes_match_upstream_where_the_names_are_owned() {
                     (&faces.get_item(3).unwrap().getattr("Edges").unwrap(),),
                 )
                 .unwrap(),
+                9,
             ),
         ];
-        for (label, shape) in measurements {
-            eprintln!("{label}: version={:?} size={}", version(&shape), size(&shape));
-            assert_eq!(version(&shape), "", "{label} has no map yet");
-            assert_eq!(size(&shape), 0, "{label} has no map yet");
+        for (label, shape, expected) in named {
+            assert!(!version(&shape).is_empty(), "{label} has a map");
+            assert_eq!(size(&shape), expected, "{label} matches upstream");
+        }
+
+        // The two composed-alias counts. Both keep no map: the element counts
+        // below show why a faithful alias rule cannot reach upstream's numbers.
+        let shell_from_wires = part
+            .call_method1(
+                "makeShellFromWires",
+                (PyList::new(py, [&section, &section2]).unwrap(),),
+            )
+            .unwrap();
+        let cheese = part
+            .call_method1(
+                "makeFace",
+                (&faces.get_item(0).unwrap(), "Part::FaceMakerCheese"),
+            )
+            .unwrap();
+        for (label, shape, elements, upstream) in [
+            (
+                "makeShellFromWires([w0, w1])",
+                &shell_from_wires,
+                (2usize, 8usize, 8usize),
+                24usize,
+            ),
+            (
+                "makeFace(Faces[0], Cheese)",
+                &cheese,
+                (1, 4, 4),
+                10,
+            ),
+        ] {
+            let counts = (
+                shape.getattr("Faces").unwrap().len().unwrap(),
+                shape.getattr("Edges").unwrap().len().unwrap(),
+                shape.getattr("Vertexes").unwrap().len().unwrap(),
+            );
+            eprintln!(
+                "{label}: elements={counts:?} version={:?} size={} upstream={upstream}",
+                version(shape),
+                size(shape)
+            );
+            assert_eq!(counts, elements, "{label} has the documented elements");
+            assert_eq!(version(shape), "", "{label} still has no map");
+            assert_eq!(size(shape), 0, "{label} still has no map");
         }
     });
 }

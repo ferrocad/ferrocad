@@ -514,21 +514,26 @@ fn make_tube_around_a_circle() {
     });
 }
 
-/// A B-spline spine cannot be oriented: the seam exposes no tangent query.
+/// A B-spline spine is evaluated through the kernel's curve adaptor, so the
+/// tube can be swept even though `curve_of` has no analytic description for it.
 #[test]
-fn make_tube_rejects_a_bspline_spine() {
+fn make_tube_around_a_bspline_spine() {
     boot();
     Python::with_gil(|py| {
         let part = PyModule::import(py, "Part").expect("import Part");
         let helix = part
             .call_method1("makeHelix", (1.0, 4.0, 2.0))
             .expect("Part.makeHelix");
-        let error = part
+        let tube = part
             .call_method1("makeTube", (&helix, 0.5))
-            .expect_err("a B-spline spine is reported");
+            .expect("Part.makeTube(a B-spline spine)");
+        assert_eq!(shape_type(&tube), "Shell");
+        assert!(is_valid(&tube), "the swept tube is a valid shell");
+        assert!(area(&tube) > 0.0, "the tube surface has area");
+        let bounds = optimal_bounds(&tube);
         assert!(
-            error.to_string().contains("B-spline"),
-            "the error should explain the limitation: {error}"
+            bounds[0] > -3.0 && bounds[3] < 3.0 && bounds[1] > -3.0 && bounds[4] < 3.0,
+            "the tube stays around the helix: {bounds:?}"
         );
     });
 }
@@ -605,7 +610,10 @@ fn make_helix_is_conical() {
             .call_method1("makeHelix", (1.0, 4.0, 2.0, 10.0))
             .expect("conical helix");
         assert_eq!(shape_type(&helix), "Edge");
-        let widened = 2.0 + 4.0 * 10.0_f64.to_radians().tan();
+        // Upstream's default (`pvertHeight=false`) runs the cone parameter to
+        // `v = height`, so the radius grows by `height * sin(angle)`, not by the
+        // axial-rise tangent the old interpolating implementation used.
+        let widened = 2.0 + 4.0 * 10.0_f64.to_radians().sin();
         let helix_bounds = bounds(&helix);
         assert!(
             (helix_bounds[3] - widened).abs() < 0.01,
@@ -917,6 +925,101 @@ fn revolution_feature_recomputes() {
 
         freecad
             .call_method1("closeDocument", ("RevolutionFeature",))
+            .expect("closeDocument");
+    });
+}
+
+/// `Part::Extrusion` derives its direction from `DirMode`: a linked straight
+/// edge, or the plane normal of the base shape.
+#[test]
+fn extrusion_dir_modes_use_the_edge_and_the_base_normal() {
+    boot();
+    Python::with_gil(|py| {
+        let part = PyModule::import(py, "Part").expect("import Part");
+        let freecad = PyModule::import(py, "ferrocad").expect("import ferrocad");
+        let doc = freecad
+            .call_method1("newDocument", ("ExtrusionDirMode",))
+            .expect("newDocument");
+
+        // A 2x2 square in the XZ plane, so +Y is its normal.
+        let base = doc
+            .call_method1("addObject", ("Part::Feature", "Base"))
+            .expect("addObject base");
+        let xz_square = || {
+            let points = PyList::new(
+                py,
+                [
+                    vector(py, -1.0, 0.0, -1.0),
+                    vector(py, 1.0, 0.0, -1.0),
+                    vector(py, 1.0, 0.0, 1.0),
+                    vector(py, -1.0, 0.0, 1.0),
+                ],
+            )
+            .expect("point list");
+            part.call_method1("makePolygon", (points, true))
+                .expect("the XZ square")
+        };
+        base.setattr("Shape", xz_square()).expect("set Base shape");
+
+        // A five-unit line along +Y: the extrusion must follow it, not `Dir`.
+        let direction = doc
+            .call_method1("addObject", ("Part::Feature", "Direction"))
+            .expect("addObject direction");
+        direction
+            .setattr(
+                "Shape",
+                part.call_method1(
+                    "makeLine",
+                    (vector(py, 0.0, 0.0, 0.0), vector(py, 0.0, 5.0, 0.0)),
+                )
+                .expect("the direction line"),
+            )
+            .expect("set Direction shape");
+
+        let extrusion = doc
+            .call_method1("addObject", ("Part::Extrusion", "Extrusion"))
+            .expect("addObject Part::Extrusion");
+        extrusion.setattr("Base", &base).expect("set Base");
+        extrusion.setattr("Solid", true).expect("set Solid");
+        extrusion.setattr("LengthFwd", 2.0).expect("set LengthFwd");
+
+        extrusion.setattr("DirLink", &direction).expect("set DirLink");
+        extrusion.setattr("DirMode", "Edge").expect("set DirMode=Edge");
+        let along_edge = recomputed_shape(&doc, "Extrusion");
+        assert_eq!(shape_type(&along_edge), "Solid");
+        assert_close(volume(&along_edge), 8.0, "edge-directed extrusion volume");
+        assert_bounds(
+            &along_edge,
+            [-1.0, 0.0, -1.0, 1.0, 2.0, 1.0],
+            "the extrusion follows the linked edge",
+        );
+
+        // A square in the XY plane has a +Z normal, so Normal mode moves it
+        // along Z even though `Dir` still holds the edge's +Y direction.
+        base.setattr("Shape", square_wire(&part, py, (-1.0, -1.0)))
+            .expect("set the XY base");
+        extrusion.setattr("DirMode", "Normal").expect("set DirMode=Normal");
+        let along_normal = recomputed_shape(&doc, "Extrusion");
+        assert_eq!(shape_type(&along_normal), "Solid");
+        assert_close(volume(&along_normal), 2.0, "normal-directed extrusion volume");
+        let normal_bounds = bounds(&along_normal);
+        let moved_along_z = ((normal_bounds[2]).abs() < 1e-7
+            && (normal_bounds[5] - 2.0).abs() < 1e-7)
+            || ((normal_bounds[2] + 2.0).abs() < 1e-7 && (normal_bounds[5]).abs() < 1e-7);
+        assert!(
+            moved_along_z,
+            "the extrusion follows the plane normal along Z: {normal_bounds:?}"
+        );
+        assert!(
+            (normal_bounds[0] + 1.0).abs() < 1e-7
+                && (normal_bounds[3]).abs() < 1e-7
+                && (normal_bounds[1] + 1.0).abs() < 1e-7
+                && (normal_bounds[4]).abs() < 1e-7,
+            "the extrusion keeps the XY square's X/Y extent: {normal_bounds:?}"
+        );
+
+        freecad
+            .call_method1("closeDocument", ("ExtrusionDirMode",))
             .expect("closeDocument");
     });
 }

@@ -11,7 +11,9 @@
 // exception, and returns a null `unique_ptr` on failure; the Rust layer turns
 // that into `Part.OCCError` (upstream's `Base.CADKernelError`).
 
+#include <BRepAdaptor_CompCurve.hxx>
 #include <BRepAdaptor_Curve.hxx>
+#include <BRepAdaptor_Surface.hxx>
 #include <BRepBuilderAPI_MakeEdge.hxx>
 #include <BRepBuilderAPI_MakeFace.hxx>
 #include <BRepBuilderAPI_MakeSolid.hxx>
@@ -21,6 +23,7 @@
 #include <BRepFilletAPI_MakeFillet.hxx>
 #include <BRepGProp.hxx>
 #include <BRepLib.hxx>
+#include <BRepLib_FindSurface.hxx>
 #include <BRepOffsetAPI_MakeOffset.hxx>
 #include <BRepOffsetAPI_MakePipeShell.hxx>
 #include <BRepPrimAPI_MakeSphere.hxx>
@@ -32,6 +35,7 @@
 #include <Geom2d_TrimmedCurve.hxx>
 #include <Geom_ConicalSurface.hxx>
 #include <Geom_CylindricalSurface.hxx>
+#include <GeomAdaptor_Surface.hxx>
 #include <Geom_Surface.hxx>
 #include <Precision.hxx>
 #include <TopAbs_State.hxx>
@@ -58,11 +62,13 @@
 #include <gp_Pnt.hxx>
 #include <gp_Pnt2d.hxx>
 #include <gp_Trsf.hxx>
+#include <gp_Vec.hxx>
 
 #include <algorithm>
 #include <cmath>
 #include <limits>
 #include <memory>
+#include <utility>
 #include <vector>
 
 #include "rust/cxx.h"
@@ -838,5 +844,118 @@ inline std::unique_ptr<TopoDS_Shape> fc_make_pipe_shell(const TopoDS_Shape& spin
     }
     catch (...) {
         return nullptr;
+    }
+}
+
+// --- Spine frames and extrusion direction modes ---------------------------
+
+// The point and unit tangent at the start of a tube spine: an edge, or a wire
+// (the same spines `BRepOffsetAPI_MakePipeShell` accepts). `BRepAdaptor_Curve`
+// and `BRepAdaptor_CompCurve` evaluate any bounded edge, including a B-spline,
+// which the analytic curve seam cannot describe. Returns an empty vector on
+// failure, otherwise `[px, py, pz, tx, ty, tz]`.
+inline ::rust::Vec<double> fc_spine_start_frame(const TopoDS_Shape& spine)
+{
+    ::rust::Vec<double> out;
+    if (spine.IsNull()) {
+        return out;
+    }
+    try {
+        gp_Pnt point;
+        gp_Vec tangent;
+        if (spine.ShapeType() == TopAbs_EDGE) {
+            BRepAdaptor_Curve curve(TopoDS::Edge(spine));
+            curve.D1(curve.FirstParameter(), point, tangent);
+        }
+        else if (spine.ShapeType() == TopAbs_WIRE) {
+            BRepAdaptor_CompCurve curve(TopoDS::Wire(spine));
+            curve.D1(curve.FirstParameter(), point, tangent);
+        }
+        else {
+            return out;
+        }
+        if (tangent.Magnitude() <= Precision::Confusion()) {
+            return out;
+        }
+        tangent.Normalize();
+        out.push_back(point.X());
+        out.push_back(point.Y());
+        out.push_back(point.Z());
+        out.push_back(tangent.X());
+        out.push_back(tangent.Y());
+        out.push_back(tangent.Z());
+        return out;
+    }
+    catch (...) {
+        return out;
+    }
+}
+
+// The direction of a straight edge, honouring its orientation (upstream's
+// `Extrusion::fetchAxisLink`). Returns an empty vector unless `edge` is an edge
+// whose curve is a line; otherwise `[dx, dy, dz]` from its start to its end.
+inline ::rust::Vec<double> fc_edge_line_direction(const TopoDS_Shape& edge)
+{
+    ::rust::Vec<double> out;
+    if (edge.IsNull() || edge.ShapeType() != TopAbs_EDGE) {
+        return out;
+    }
+    try {
+        const TopoDS_Edge& line_edge = TopoDS::Edge(edge);
+        BRepAdaptor_Curve curve(line_edge);
+        if (curve.GetType() != GeomAbs_Line) {
+            return out;
+        }
+        gp_Pnt start = curve.Value(curve.FirstParameter());
+        gp_Pnt end = curve.Value(curve.LastParameter());
+        if (line_edge.Orientation() == TopAbs_REVERSED) {
+            std::swap(start, end);
+        }
+        gp_Vec direction(start, end);
+        if (direction.Magnitude() <= Precision::Confusion()) {
+            return out;
+        }
+        out.push_back(direction.X());
+        out.push_back(direction.Y());
+        out.push_back(direction.Z());
+        return out;
+    }
+    catch (...) {
+        return out;
+    }
+}
+
+// The normal of the plane a shape lies on (upstream's
+// `Extrusion::calculateShapeNormal`): the plane found through the shape's
+// edges, corrected by the first face's analytic plane and orientation.
+// Returns an empty vector when no plane is found; otherwise `[nx, ny, nz]`.
+inline ::rust::Vec<double> fc_shape_plane_normal(const TopoDS_Shape& shape)
+{
+    ::rust::Vec<double> out;
+    if (shape.IsNull()) {
+        return out;
+    }
+    try {
+        BRepLib_FindSurface finder(shape, -1, Standard_True);
+        if (!finder.Found()) {
+            return out;
+        }
+        GeomAdaptor_Surface adaptor(finder.Surface());
+        gp_Dir normal = adaptor.Plane().Axis().Direction();
+        TopExp_Explorer explorer(shape, TopAbs_FACE);
+        if (explorer.More()) {
+            BRepAdaptor_Surface face_surface(TopoDS::Face(explorer.Current()));
+            normal = face_surface.Plane().Axis().Direction();
+            if (explorer.Current().Orientation() == TopAbs_REVERSED) {
+                normal.Reverse();
+            }
+        }
+        out.push_back(normal.X());
+        out.push_back(normal.Y());
+        out.push_back(normal.Z());
+        return out;
+    }
+    catch (...) {
+        return out;
     }
 }

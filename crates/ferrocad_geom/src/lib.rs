@@ -718,6 +718,22 @@ pub trait GeometryBackend: Send + Sync {
         Err(unsupported("make_filled_face"))
     }
 
+    /// The element map a shape carries on its own, with no operation history.
+    ///
+    /// A result a factory builds directly (a shell, a solid, a loft, a filled
+    /// face) is named by that factory, the way upstream's `makeElementShell`,
+    /// `makeElementSolid`, `makeElementLoft` and `makeElementFilledFace` name
+    /// every result element positionally. The default has no names; a backend
+    /// that keeps positional identities overrides this.
+    ///
+    /// This is deliberately *not* attached to every shape: a primitive and a
+    /// single-body operation result carry the names of the operation that made
+    /// them, and naming all of their elements here would activate upstream's
+    /// guarded sizes for shapes whose naming policy differs.
+    fn intrinsic_lineage(&self, _shape: &Shape) -> Result<Lineage, GeomError> {
+        Ok(Lineage::default())
+    }
+
     /// Sweep `shape` along `vector` (`Shape.extrude`).
     fn extrude(&self, _shape: &Shape, _vector: Vector3) -> Result<Shape, GeomError> {
         Err(unsupported("extrude"))

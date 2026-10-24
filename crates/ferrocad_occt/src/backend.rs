@@ -22,8 +22,8 @@
 use cxx::UniquePtr;
 use ferrocad_geom::{
     Capabilities, Continuity, ElementId, ElementKind, ElementRef, GeomError, GeometryBackend,
-    History, MassProperties, OpResult, OperandId, PrincipalProperties, Shape, Tessellation,
-    TessellationOptions, unsupported,
+    History, Lineage, MapVersion, MassProperties, OpResult, OperandId, PrincipalProperties, Shape,
+    Tessellation, TessellationOptions, unsupported,
 };
 use ferrocad_curves::{Arc, Circle, EdgeCurve, Ellipse, Line, Vector3};
 use ferrocad_types::{Matrix4, Placement};
@@ -1354,6 +1354,17 @@ impl GeometryBackend for OcctBackend {
             .into());
         };
         Ok(erase(piped))
+    }
+
+    fn intrinsic_lineage(&self, shape: &Shape) -> Result<Lineage, GeomError> {
+        // A container that holds a body keeps the map `intrinsic_history` already
+        // describes; a shell, solid, loft or filled face names every result
+        // element, which is the map the factory attaches upstream. Callers decide
+        // where the count is known to match.
+        let history = self
+            .intrinsic_history(shape)
+            .unwrap_or_else(|| self.name_every_element(shape));
+        Ok(Lineage::from_history(&history, MapVersion::default()))
     }
 
     fn make_filled_face(&self, edges: &[Shape]) -> Result<Shape, GeomError> {

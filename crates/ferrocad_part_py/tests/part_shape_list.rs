@@ -26,7 +26,7 @@ fn boot() {
 /// A per-test scratch file under the system temp directory.
 fn scratch_file(tag: &str) -> PathBuf {
     std::env::temp_dir().join(format!(
-        "ferrocad_shape_list_{}_{tag}.json",
+        "ferrocad_shape_list_{}_{tag}.ferrocad",
         std::process::id()
     ))
 }

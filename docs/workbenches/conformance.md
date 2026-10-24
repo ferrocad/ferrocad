@@ -137,7 +137,7 @@ its load errors are the useful signal.
 
 | Group | Result |
 | --- | --- |
-| Part | **495 passed**, 10 failed, 26 errored, 12 skipped, **0 files failed to load** |
+| Part | **521 passed**, 10 failed, **0 errored**, 12 skipped, **0 files failed to load** |
 | Draft | **10 passed**, 1 failed, 0 errored, 0 skipped, 1 load error |
 
 The 2026-10-20 Part row is the pre-shim baseline: `TestPartApp.py` and
@@ -148,15 +148,17 @@ semantics the loaded tests exercise. The harness puts the group roots ahead of `
 so the **Draft** group still runs upstream `src/Mod/Draft/Draft.py`, not the shim; its
 baseline is unchanged.
 
-The 10 failures are four unique tests reported twice (`test_CircularReference`,
-`testAppPartMakeSweepSurface`, and the two compound cuts at `12 != 20` and `30 != 47`)
-plus two placement-composition assertions (`PartTestNormals.testPlacement`,
-`PartTestShapeRotate.testPlacement`) that need a live `Shape.Placement` model. The 26
-errors are the remaining missing surface: `Part.ShapeFix` (7),
-`BSplineCurve.buildFromPolesMultsKnots` (6), `Part.ChFi2d` (3),
-`Sketcher::SketchObject.addGeometry` (3), `PartDesign::Body.Shape` (2),
-`Part::Mirroring.Shape` (2), `Ellipse.toShape` (1, no `gp_Elips` binding), and
-`Circle`/`Ellipse.transform` (2).
+The 10 failures are six unique cases reported twice where a module is re-collected by
+`TestPartApp`: `test_CircularReference` (the cyclic-expression message), the sweep-surface
+BoundBox (a legacy `GeomFill_Pipe` assertion), the two compound cuts (`12 != 20` and
+`30 != 47`, see [`../tasks/element-map-policy.md`](../tasks/element-map-policy.md)), and
+two placement-composition assertions (`PartTestNormals.testPlacement`,
+`PartTestShapeRotate.testPlacement`) that need a live `Shape.Placement` model. **No
+errors remain**: every module now imports and every missing API the loaded tests touch
+is implemented (`Edge`/`Face`/`Line` overloads, `makePlane`, `Ellipse`/`ArcOfEllipse`,
+`toNurbs`/`toBSpline`/`trim`, `ShapeFix`, `ChFi2d`, `Sketcher::SketchObject`,
+`PartDesign::Body`/`Part::Mirroring` shapes, `RuledSurface`/`Extrusion`,
+`App::Part.removeObject`).
 
 ### Reading the report
 

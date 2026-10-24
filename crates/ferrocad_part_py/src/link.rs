@@ -27,13 +27,17 @@
 //! its modes is honoured. `execute` never reads either property. Lineage-backed
 //! sub-element resolution (L5) is also still absent.
 
-use std::sync::Arc;
+use std::collections::BTreeMap;
+use std::sync::{Arc, Mutex, OnceLock};
 
 use ferrocad_core::geometry::{Matrix4, Placement, Rotation, Vector3};
 use ferrocad_core::object_registry::{self, ObjectType};
 use ferrocad_core::{prop_status, Document, ObjectId, Property};
 use ferrocad_geom::Shape;
 use ferrocad_part::{make_shape_property, shape_of, ShapeProperty};
+use pyo3::exceptions::PyValueError;
+use pyo3::prelude::*;
+use pyo3::types::{PyDict, PyTuple};
 
 /// The `App::Link` type id. `Part::LinkArray*` are treated as its peers by the
 /// query layer's link table.
@@ -72,6 +76,164 @@ pub(crate) fn register() {
     let containers: Arc<dyn ObjectType> = Arc::new(LinkContainerObject);
     object_registry::register(LINK_GROUP_TYPE, containers.clone());
     object_registry::register(LINK_LIST_TYPE, containers);
+    ferrocad_py::register_extension_provider(LINK_EXTENSION, provide_link_extension);
+    ferrocad_py::register_extension_method(
+        LINK_EXTENSION,
+        "configLinkProperty",
+        config_link_property_method,
+    );
+}
+
+// ---------------------------------------------------------------------------
+// App::LinkExtensionPython
+// ---------------------------------------------------------------------------
+
+/// The script-added link extension (`obj.addExtension("App::LinkExtensionPython")`
+/// then `obj.configLinkProperty(...)`), used by Draft's link-aware arrays.
+pub(crate) const LINK_EXTENSION: &str = "App::LinkExtensionPython";
+
+/// The properties `App::LinkExtension` adds.
+///
+/// This is [`link_properties`] without the shape-valued `Shape` (the object
+/// already owns one) plus `ColoredElements`, the element colour list upstream's
+/// link base carries. `Placement` is in the list too, but the provider only adds
+/// the properties the object does not already have, so a `Part::FeaturePython`'s
+/// own `Placement` is kept rather than shadowed.
+fn extension_properties() -> Vec<(String, Property, u32)> {
+    let mut properties: Vec<(String, Property, u32)> = link_properties()
+        .into_iter()
+        .filter(|(name, _, _)| name != "Shape")
+        .collect();
+    properties.push((
+        "ColoredElements".to_string(),
+        Property::LinkSub(String::new(), Vec::new()),
+        prop_status::HIDDEN,
+    ));
+    properties
+}
+
+/// The provider `addExtension("App::LinkExtensionPython")` calls: add every link
+/// property the object is missing, leaving existing values (notably `Placement`)
+/// untouched.
+fn provide_link_extension(doc: &mut Document, id: ObjectId) -> bool {
+    let missing: Vec<(String, Property, u32)> = {
+        let Some(object) = doc.object(id) else {
+            return false;
+        };
+        extension_properties()
+            .into_iter()
+            .filter(|(name, _, _)| object.properties.get(name).is_none())
+            .collect()
+    };
+    // A fresh attachment starts from a clean configuration; the mapping is
+    // in-session state, not document state.
+    link_configs().lock().unwrap().remove(&(document_key(doc), id));
+    for (name, value, status) in missing {
+        if doc
+            .add_property(id, &name, value, status, "Link", "")
+            .is_err()
+        {
+            return false;
+        }
+    }
+    true
+}
+
+/// What `configLinkProperty` recorded for one object.
+#[derive(Default)]
+struct LinkConfig {
+    /// Object properties the extension treats as link properties (positional
+    /// arguments of `configLinkProperty`).
+    linked: Vec<String>,
+    /// Extension property name → the object property that supplies it, e.g.
+    /// `LinkedObject` → `Base` for Draft's `configLinkProperty(LinkedObject="Base")`.
+    sources: BTreeMap<String, String>,
+}
+
+fn link_configs() -> &'static Mutex<BTreeMap<(usize, ObjectId), LinkConfig>> {
+    static CONFIGS: OnceLock<Mutex<BTreeMap<(usize, ObjectId), LinkConfig>>> = OnceLock::new();
+    CONFIGS.get_or_init(|| Mutex::new(BTreeMap::new()))
+}
+
+/// A document's identity for the in-session configuration table. A `Document`
+/// lives behind the Python binding's `Arc<Mutex<...>>`, so its address is stable
+/// for as long as the configuration can be consulted.
+fn document_key(doc: &Document) -> usize {
+    doc as *const Document as usize
+}
+
+/// Validate and record `configLinkProperty(properties, **links)`.
+///
+/// `properties` are positional names of the object's own properties that the
+/// extension should treat as link properties. `links` maps an extension property
+/// to the object property that supplies it, as in Draft's
+/// `configLinkProperty(LinkedObject="Base")` (the object's `Base` property is the
+/// link target). Every named *object* property must exist: a miss is an error
+/// naming it, never a silent no-op.
+fn configure_link_property(
+    doc: &Document,
+    id: ObjectId,
+    properties: &[String],
+    links: &[(String, String)],
+) -> Result<(), String> {
+    let Some(object) = doc.object(id) else {
+        return Err(format!("no object {id}"));
+    };
+    for name in properties {
+        if object.properties.get(name).is_none() {
+            return Err(format!(
+                "configLinkProperty: object '{}' has no property '{name}'",
+                object.name
+            ));
+        }
+    }
+    for (link, source) in links {
+        if object.properties.get(source).is_none() {
+            return Err(format!(
+                "configLinkProperty: object '{}' has no property '{source}' \
+                 for the link property '{link}'",
+                object.name
+            ));
+        }
+    }
+    let mut configs = link_configs().lock().unwrap();
+    let config = configs.entry((document_key(doc), id)).or_default();
+    for name in properties {
+        if !config.linked.contains(name) {
+            config.linked.push(name.clone());
+        }
+    }
+    for (link, source) in links {
+        config.sources.insert(link.clone(), source.clone());
+    }
+    Ok(())
+}
+
+/// `configLinkProperty(property, **links)` as an extension method.
+///
+/// Upstream's signature is positional property names plus keyword link mappings.
+/// The binding hands them over as the positional tuple with a final `dict` when
+/// kwargs were given, e.g. `("Placement", {"LinkedObject": "Base"})`.
+fn config_link_property_method(
+    doc: &mut Document,
+    id: ObjectId,
+    _method: &str,
+    args: &Bound<'_, PyAny>,
+) -> PyResult<PyObject> {
+    let py = args.py();
+    let mut properties: Vec<String> = Vec::new();
+    let mut links: Vec<(String, String)> = Vec::new();
+    for item in args.downcast::<PyTuple>()?.iter() {
+        if let Ok(kwargs) = item.downcast::<PyDict>() {
+            for (key, value) in kwargs.iter() {
+                links.push((key.extract()?, value.extract()?));
+            }
+        } else {
+            properties.push(item.extract()?);
+        }
+    }
+    configure_link_property(doc, id, &properties, &links).map_err(PyValueError::new_err)?;
+    Ok(py.None())
 }
 
 // ---------------------------------------------------------------------------
@@ -825,6 +987,111 @@ mod tests {
         assert!((placement.base.x - 3.0).abs() < 1e-12);
         assert!((placement.base.y - 2.0).abs() < 1e-12);
         assert!((placement.base.z).abs() < 1e-12);
+    }
+
+    #[test]
+    fn extension_properties_cover_the_link_surface_without_shape() {
+        let names: Vec<String> = extension_properties()
+            .into_iter()
+            .map(|(name, _, _)| name)
+            .collect();
+        for expected in [
+            "LinkedObject",
+            "Placement",
+            "LinkPlacement",
+            "Scale",
+            "ScaleVector",
+            "LinkTransform",
+            "LinkMode",
+            "LinkCopyOnChange",
+            "ShowElement",
+            "ElementCount",
+            "PlacementList",
+            "ElementList",
+            "ColoredElements",
+        ] {
+            assert!(names.iter().any(|name| name == expected), "missing {expected}");
+        }
+        assert!(
+            !names.iter().any(|name| name == "Shape"),
+            "the extension must not re-add the object's Shape"
+        );
+    }
+
+    #[test]
+    fn link_extension_provider_adds_missing_properties_and_keeps_placement() {
+        let mut doc = Document::new();
+        let id = doc.add_object("Array", "Part::FeaturePython");
+        let placement = Placement {
+            base: Vector3::new(1.0, 2.0, 3.0),
+            rotation: ferrocad_core::Rotation::identity(),
+        };
+        doc.set_property(id, "Placement", Property::Placement(placement))
+            .unwrap();
+
+        assert!(provide_link_extension(&mut doc, id));
+        let object = doc.object(id).unwrap();
+        assert!(matches!(
+            object.properties.get("LinkedObject"),
+            Some(Property::Link(_))
+        ));
+        assert!(matches!(
+            object.properties.get("LinkTransform"),
+            Some(Property::Bool(false))
+        ));
+        assert!(object.properties.get("ShowElement").is_some());
+        assert!(object.properties.get("PlacementList").is_some());
+        assert_eq!(
+            object.properties.get("Placement"),
+            Some(&Property::Placement(placement)),
+            "the object's own Placement value is kept"
+        );
+
+        // Idempotent: a second attach adds nothing and does not fail.
+        assert!(provide_link_extension(&mut doc, id));
+    }
+
+    #[test]
+    fn config_link_property_records_links_and_rejects_missing_properties() {
+        let mut doc = Document::new();
+        let id = doc.add_object("Array", "Part::FeaturePython");
+        doc.set_property(id, "Base", Property::Link(String::new()))
+            .unwrap();
+        doc.set_property(id, "Placement", Property::Placement(Placement::identity()))
+            .unwrap();
+        assert!(provide_link_extension(&mut doc, id));
+
+        configure_link_property(
+            &doc,
+            id,
+            &["Placement".to_string()],
+            &[("LinkedObject".to_string(), "Base".to_string())],
+        )
+        .expect("Base exists, so the mapping is accepted");
+        {
+            let configs = link_configs().lock().unwrap();
+            let config = configs.get(&(document_key(&doc), id)).unwrap();
+            assert_eq!(config.linked, vec!["Placement".to_string()]);
+            assert_eq!(
+                config.sources.get("LinkedObject").map(String::as_str),
+                Some("Base")
+            );
+        }
+
+        // An unknown source property is an error, not a silent no-op.
+        let error = configure_link_property(
+            &doc,
+            id,
+            &[],
+            &[("ShowElement".to_string(), "Missing".to_string())],
+        )
+        .unwrap_err();
+        assert!(error.contains("Missing"), "{error}");
+
+        // An unknown positional property is an error too.
+        let error = configure_link_property(&doc, id, &["Missing".to_string()], &[])
+            .unwrap_err();
+        assert!(error.contains("Missing"), "{error}");
     }
 
     #[test]

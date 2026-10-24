@@ -164,6 +164,12 @@ pub struct PyLineSegment {
 
 #[pymethods]
 impl PyLineSegment {
+    /// The registered type name (`Part::GeomLineSegment`), as upstream reports it.
+    #[getter]
+    fn TypeId(&self) -> &'static str {
+        "Part::GeomLineSegment"
+    }
+
     #[new]
     fn new(start: &Bound<'_, PyAny>, end: &Bound<'_, PyAny>) -> PyResult<Self> {
         let curve = LineSegment::new(vector(start)?, vector(end)?).map_err(curve_error)?;
@@ -199,6 +205,12 @@ pub struct PyLine {
 
 #[pymethods]
 impl PyLine {
+    /// The registered type name (`Part::GeomLine`), as upstream reports it.
+    #[getter]
+    fn TypeId(&self) -> &'static str {
+        "Part::GeomLine"
+    }
+
     /// `Part.Line()` is upstream's default `Geom_Line`: the infinite line through
     /// the origin along `+Z`. `origin` and `direction` may be given together.
     #[new]
@@ -328,6 +340,12 @@ pub struct PyCircle {
 
 #[pymethods]
 impl PyCircle {
+    /// The registered type name (`Part::GeomCircle`), as upstream reports it.
+    #[getter]
+    fn TypeId(&self) -> &'static str {
+        "Part::GeomCircle"
+    }
+
     #[new]
     #[pyo3(signature = (center = None, normal = None, radius = 1.0))]
     fn new(
@@ -435,6 +453,49 @@ impl PyCircle {
     }
 }
 
+/// The circle through three points and the arc from `p1` through `p2` to `p3`
+/// (`GC_MakeCircle` + `GC_MakeArcOfCircle`). The points must be distinct and not
+/// collinear; the centre is the circumcentre of the triangle.
+fn arc_through_three_points(p1: Vector3, p2: Vector3, p3: Vector3) -> PyResult<Arc> {
+    let a = p2.sub(&p1);
+    let b = p3.sub(&p1);
+    let normal = a.cross(&b);
+    let normal_length = normal.length();
+    if normal_length <= TOLERANCE {
+        return Err(OCCError::new_err(
+            "Three points are collinear or coincident",
+        ));
+    }
+    // Circumcentre: p1 + (|a|² (b × n) + |b|² (n × a)) / (2 |n|²).
+    let offset = b
+        .cross(&normal)
+        .scale(a.sqr())
+        .add(&normal.cross(&a).scale(b.sqr()))
+        .scale(1.0 / (2.0 * normal_length * normal_length));
+    let center = p1.add(&offset);
+    let x_axis = p1.sub(&center);
+    let radius = x_axis.length();
+    if radius <= TOLERANCE {
+        return Err(OCCError::new_err("Three points are coincident"));
+    }
+    let circle = Circle::with_axis(center, normal, x_axis, radius).map_err(curve_error)?;
+    let y_axis = circle.y_axis();
+    let angle = |point: &Vector3| {
+        let offset = point.sub(&center);
+        offset.dot(&y_axis).atan2(offset.dot(&circle.x_axis()))
+    };
+    let first = angle(&p1);
+    let through = (angle(&p2) - first).rem_euclid(std::f64::consts::TAU);
+    let end = (angle(&p3) - first).rem_euclid(std::f64::consts::TAU);
+    // Follow the parameter direction that passes through `p2`.
+    let last = if through < end {
+        first + end
+    } else {
+        first + end - std::f64::consts::TAU
+    };
+    Arc::new(circle, first, last).map_err(curve_error)
+}
+
 /// `Part.ArcOfCircle(circle, first, last)` — a circular arc (the `Part.Arc` alias).
 #[pyclass(name = "ArcOfCircle", module = "Part")]
 #[derive(Clone)]
@@ -444,10 +505,58 @@ pub struct PyArcOfCircle {
 
 #[pymethods]
 impl PyArcOfCircle {
+    /// The registered type name (`Part::GeomArcOfCircle`), as upstream reports it.
+    #[getter]
+    fn TypeId(&self) -> &'static str {
+        "Part::GeomArcOfCircle"
+    }
+
+    /// `Part.ArcOfCircle(circle, first, last)` (the aliased `Part.Arc` form) or
+    /// `Part.ArcOfCircle(p1, p2, p3)` / `Part.ArcOfCircle([p1, p2, p3])`, the arc
+    /// through three points (`GC_MakeArcOfCircle`).
     #[new]
-    fn new(circle: &Bound<'_, PyAny>, first: f64, last: f64) -> PyResult<Self> {
-        let circle = circle.extract::<PyRef<PyCircle>>()?;
-        let curve = Arc::new(circle.curve, first, last).map_err(curve_error)?;
+    #[pyo3(signature = (circle, first = None, last = None))]
+    fn new(
+        circle: &Bound<'_, PyAny>,
+        first: Option<&Bound<'_, PyAny>>,
+        last: Option<&Bound<'_, PyAny>>,
+    ) -> PyResult<Self> {
+        if let Ok(circle) = circle.extract::<PyRef<'_, PyCircle>>() {
+            let (Some(first), Some(last)) = (first, last) else {
+                return Err(PyTypeError::new_err(
+                    "ArcOfCircle(circle, first, last) needs both an angle range",
+                ));
+            };
+            let curve = Arc::new(circle.curve, first.extract()?, last.extract()?)
+                .map_err(curve_error)?;
+            return Ok(Self { curve });
+        }
+        let (p1, p2, p3) = match (first, last) {
+            (Some(first), Some(last)) => (vector(circle)?, vector(first)?, vector(last)?),
+            (None, None) => {
+                let sequence = circle.downcast::<PySequence>().map_err(|_| {
+                    PyTypeError::new_err(
+                        "ArcOfCircle expects (circle, first, last) or three points",
+                    )
+                })?;
+                if sequence.len().ok() != Some(3) {
+                    return Err(PyTypeError::new_err(
+                        "ArcOfCircle expects exactly three points",
+                    ));
+                }
+                (
+                    vector(&sequence.get_item(0)?)?,
+                    vector(&sequence.get_item(1)?)?,
+                    vector(&sequence.get_item(2)?)?,
+                )
+            }
+            _ => {
+                return Err(PyTypeError::new_err(
+                    "ArcOfCircle expects (circle, first, last) or three points",
+                ));
+            }
+        };
+        let curve = arc_through_three_points(p1, p2, p3)?;
         Ok(Self { curve })
     }
 
@@ -538,6 +647,12 @@ pub struct PyEllipse {
 
 #[pymethods]
 impl PyEllipse {
+    /// The registered type name (`Part::GeomEllipse`), as upstream reports it.
+    #[getter]
+    fn TypeId(&self) -> &'static str {
+        "Part::GeomEllipse"
+    }
+
     #[new]
     #[pyo3(signature = (center = None, major_radius = 1.0, minor_radius = 0.5))]
     fn new(
@@ -729,6 +844,12 @@ pub struct PyArcOfEllipse {
 
 #[pymethods]
 impl PyArcOfEllipse {
+    /// The registered type name (`Part::GeomArcOfEllipse`), as upstream reports it.
+    #[getter]
+    fn TypeId(&self) -> &'static str {
+        "Part::GeomArcOfEllipse"
+    }
+
     #[new]
     fn new(ellipse: &Bound<'_, PyAny>, first: f64, last: f64) -> PyResult<Self> {
         let ellipse = ellipse.extract::<PyRef<'_, PyEllipse>>()?.curve;
@@ -875,6 +996,12 @@ pub struct PyHyperbola {
 
 #[pymethods]
 impl PyHyperbola {
+    /// The registered type name (`Part::GeomHyperbola`), as upstream reports it.
+    #[getter]
+    fn TypeId(&self) -> &'static str {
+        "Part::GeomHyperbola"
+    }
+
     #[new]
     #[pyo3(signature = (*args))]
     fn new(args: &Bound<'_, PyTuple>) -> PyResult<Self> {
@@ -1103,6 +1230,12 @@ pub struct PyArcOfHyperbola {
 
 #[pymethods]
 impl PyArcOfHyperbola {
+    /// The registered type name (`Part::GeomArcOfHyperbola`), as upstream reports it.
+    #[getter]
+    fn TypeId(&self) -> &'static str {
+        "Part::GeomArcOfHyperbola"
+    }
+
     #[new]
     #[pyo3(signature = (hyperbola, first, last, sense = true))]
     fn new(
@@ -1298,6 +1431,12 @@ pub struct PyParabola {
 
 #[pymethods]
 impl PyParabola {
+    /// The registered type name (`Part::GeomParabola`), as upstream reports it.
+    #[getter]
+    fn TypeId(&self) -> &'static str {
+        "Part::GeomParabola"
+    }
+
     #[new]
     #[pyo3(signature = (*args))]
     fn new(args: &Bound<'_, PyTuple>) -> PyResult<Self> {
@@ -1536,6 +1675,12 @@ pub struct PyArcOfParabola {
 
 #[pymethods]
 impl PyArcOfParabola {
+    /// The registered type name (`Part::GeomArcOfParabola`), as upstream reports it.
+    #[getter]
+    fn TypeId(&self) -> &'static str {
+        "Part::GeomArcOfParabola"
+    }
+
     #[new]
     #[pyo3(signature = (parabola, first, last, sense = true))]
     fn new(
@@ -1717,6 +1862,12 @@ impl PyBezierCurve {
 
 #[pymethods]
 impl PyBezierCurve {
+    /// The registered type name (`Part::GeomBezierCurve`), as upstream reports it.
+    #[getter]
+    fn TypeId(&self) -> &'static str {
+        "Part::GeomBezierCurve"
+    }
+
     /// `Part.BezierCurve()` (upstream's default two-pole curve) or
     /// `Part.BezierCurve(poles, weights=None)`.
     #[new]
@@ -1947,8 +2098,25 @@ pub struct PyPlane {
     normal: Vector3,
 }
 
+impl PyPlane {
+    /// A plane through `origin` with `normal` (normalised), for the Rust side
+    /// (`Shape.findPlane`). The Python constructor validates the same way.
+    pub(crate) fn from_parts(origin: Vector3, normal: Vector3) -> Self {
+        Self {
+            location: origin,
+            normal: normal.normalize(),
+        }
+    }
+}
+
 #[pymethods]
 impl PyPlane {
+    /// The registered type name (`Part::GeomPlane`), as upstream reports it.
+    #[getter]
+    fn TypeId(&self) -> &'static str {
+        "Part::GeomPlane"
+    }
+
     #[new]
     #[pyo3(signature = (origin = None, normal = None))]
     fn new(origin: Option<&Bound<'_, PyAny>>, normal: Option<&Bound<'_, PyAny>>) -> PyResult<Self> {
@@ -2056,6 +2224,12 @@ pub struct PyCylinder {
 
 #[pymethods]
 impl PyCylinder {
+    /// The registered type name (`Part::GeomCylinder`), as upstream reports it.
+    #[getter]
+    fn TypeId(&self) -> &'static str {
+        "Part::GeomCylinder"
+    }
+
     #[new]
     #[pyo3(signature = (radius = 1.0, center = None, axis = None))]
     fn new(
@@ -2125,6 +2299,12 @@ pub struct PySphere {
 
 #[pymethods]
 impl PySphere {
+    /// The registered type name (`Part::GeomSphere`), as upstream reports it.
+    #[getter]
+    fn TypeId(&self) -> &'static str {
+        "Part::GeomSphere"
+    }
+
     #[new]
     #[pyo3(signature = (radius = 1.0, center = None, axis = None))]
     fn new(
@@ -2209,6 +2389,12 @@ pub struct PyRectangularTrimmedSurface {
 
 #[pymethods]
 impl PyRectangularTrimmedSurface {
+    /// The registered type name (`Part::GeomRectangularTrimmedSurface`).
+    #[getter]
+    fn TypeId(&self) -> &'static str {
+        "Part::GeomRectangularTrimmedSurface"
+    }
+
     #[new]
     fn new(
         surface: &Bound<'_, PyAny>,
@@ -2848,6 +3034,12 @@ fn build_spline(
 
 #[pymethods]
 impl PyBSplineCurve {
+    /// The registered type name (`Part::GeomBSplineCurve`), as upstream reports it.
+    #[getter]
+    fn TypeId(&self) -> &'static str {
+        "Part::GeomBSplineCurve"
+    }
+
     /// `Part.BSplineCurve()` (empty) or
     /// `Part.BSplineCurve(poles, mults=None, knots=None, periodic=False,
     /// degree=3, weights=None, CheckRational=True)`.
@@ -6682,6 +6874,28 @@ fn edge_query_error(what: &str) -> PyErr {
     ))
 }
 
+/// An edge's start (`first`) or end vertex.
+///
+/// The kernel lists an edge's vertices in topological order but exposes no
+/// "first endpoint" query, so the list's first/last entry is the endpoint. A
+/// closed edge has one vertex, which answers both ends.
+fn edge_vertex(edge: &PyRef<'_, PyEdge>, first: bool) -> PyResult<Py<PyVertex>> {
+    let what = if first { "firstVertex" } else { "lastVertex" };
+    require_edge(edge.as_super(), what)?;
+    let shape = edge
+        .as_super()
+        .shape()
+        .ok_or_else(|| empty_error(what))?;
+    let vertices = backend().elements(&shape, ElementKind::Vertex);
+    let vertex = if first {
+        vertices.first()
+    } else {
+        vertices.last()
+    }
+    .ok_or_else(|| OCCError::new_err(format!("Part.{what}: the edge has no vertices")))?;
+    Py::new(edge.py(), PyVertex::from_shape(vertex.shape.clone())?)
+}
+
 /// One edge: a kernel shape plus, when it was built from an analytic curve, that
 /// curve (so `Curve` can report the exact parameterisation).
 #[derive(Clone)]
@@ -7020,13 +7234,11 @@ impl PyEdge {
     }
 
     fn firstVertex(slf: PyRef<'_, Self>) -> PyResult<Py<PyVertex>> {
-        require_edge(slf.as_super(), "firstVertex")?;
-        Err(edge_query_error("firstVertex"))
+        edge_vertex(&slf, true)
     }
 
     fn lastVertex(slf: PyRef<'_, Self>) -> PyResult<Py<PyVertex>> {
-        require_edge(slf.as_super(), "lastVertex")?;
-        Err(edge_query_error("lastVertex"))
+        edge_vertex(&slf, false)
     }
 
     fn getParameterByLength(slf: PyRef<'_, Self>, _length: f64) -> PyResult<f64> {
@@ -7415,7 +7627,8 @@ impl PyFace {
 /// The kernel shapes of a wire, a single shape, or a list of either.
 fn wire_shapes(value: &Bound<'_, PyAny>) -> PyResult<Vec<Shape>> {
     if let Ok(compound) = value.downcast::<crate::containers::PyCompound>() {
-        return Ok(compound.borrow().children());
+        let compound = compound.borrow();
+        return Ok(compound.children(compound.as_super()));
     }
     if let Ok(wire) = value.downcast::<PyWire>() {
         let base = wire.borrow();
@@ -7563,14 +7776,22 @@ fn makeLine(py: Python<'_>, p1: &Bound<'_, PyAny>, p2: &Bound<'_, PyAny>) -> PyR
     Ok(Py::new(py, PyEdge::from_curve(EdgeCurve::LineSegment(segment))?)?.into_any())
 }
 
-/// `Part.makeCircle(radius, center=None, normal=None)` → an edge.
+/// `Part.makeCircle(radius, center=None, normal=None, angle1=None, angle2=None)` →
+/// an edge.
+///
+/// Upstream's own signature is `makeCircle(radius, [pnt, dir, angle1, angle2])`:
+/// the two angles are in degrees and turn the result into a trimmed arc edge
+/// (`Draft`'s `Circle` proxy calls exactly that form). With equal or omitted
+/// angles the edge is the full circle.
 #[pyfunction]
-#[pyo3(signature = (radius, center = None, normal = None))]
+#[pyo3(signature = (radius, center = None, normal = None, angle1 = None, angle2 = None))]
 fn makeCircle(
     py: Python<'_>,
     radius: f64,
     center: Option<&Bound<'_, PyAny>>,
     normal: Option<&Bound<'_, PyAny>>,
+    angle1: Option<f64>,
+    angle2: Option<f64>,
 ) -> PyResult<PyObject> {
     let center = center.map(vector).transpose()?.unwrap_or_else(Vector3::zero);
     let normal = normal
@@ -7578,7 +7799,17 @@ fn makeCircle(
         .transpose()?
         .unwrap_or_else(|| Vector3::new(0.0, 0.0, 1.0));
     let circle = Circle::new(center, normal, radius).map_err(curve_error)?;
-    Ok(Py::new(py, PyEdge::from_curve(EdgeCurve::Circle(circle))?)?.into_any())
+    let first = angle1.unwrap_or(0.0);
+    let last = angle2.unwrap_or(360.0);
+    // Upstream keeps a full circle when the endpoints coincide (`angle1 ==
+    // angle2`); an omitted pair defaults to 0°/360°, which is also full.
+    if (last - first).abs() <= ANGULAR_TOLERANCE
+        || (last - first).abs() >= 360.0 - ANGULAR_TOLERANCE
+    {
+        return Ok(Py::new(py, PyEdge::from_curve(EdgeCurve::Circle(circle))?)?.into_any());
+    }
+    let arc = Arc::new(circle, first.to_radians(), last.to_radians()).map_err(curve_error)?;
+    Ok(Py::new(py, PyEdge::from_curve(EdgeCurve::Arc(arc))?)?.into_any())
 }
 
 /// `Part.makePolygon(points, closed=False)` → a `Part.Wire`.

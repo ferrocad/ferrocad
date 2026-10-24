@@ -33,6 +33,13 @@ The remaining failure is the shared `Part` kernel rather than a Draft bug:
 fails on `import Part`. See
 [`../tasks/d0-draft-import.md`](../tasks/d0-draft-import.md).
 
+The **Draft M2 modules** are measured separately from that fixed list, because they need
+the Python feature proxies: after P2a–P2c (2026-10-24), `drafttests/test_creation.py`
+loads and runs 26 cases (15 passed, 1 failed, 10 errored), `test_array.py` loads
+(1 errored), and **both have zero load errors**. The residual errors are attachment
+(`AttachmentSupport`/`MapMode`) and a few link/property coercions; see
+[`../tasks/part-feature-proxies.md`](../tasks/part-feature-proxies.md).
+
 ---
 
 ## 2. One-time setup

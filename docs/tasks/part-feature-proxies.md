@@ -1,6 +1,7 @@
 # Task — Python feature proxies (`Part::FeaturePython` and friends)
 
 Status: task (2026-10-24). P2 in [`../TODO-24-10-2026.md`](../TODO-24-10-2026.md).
+**P2a–P2c landed 2026-10-24; P2d (attachment) and P2e (the residual Draft errors) are open.**
 Companion to [`../architecture/part-draft-layering.md`](../architecture/part-draft-layering.md)
 §9 (M2), [`../architecture/python-bindings.md`](../architecture/python-bindings.md) and
 [`../architecture/property-value-extension.md`](../architecture/property-value-extension.md).
@@ -42,11 +43,21 @@ The observable contract that matters:
 
 | Slice | Work | Acceptance |
 | --- | --- | --- |
-| **P2a** | Register `Part::FeaturePython` as an `ObjectType` whose `execute` calls the stored Python proxy. Store the proxy in `Property::PythonObject`; expose `Proxy` on the object. | A script object recomputes and its `Shape` is visible; `cargo test -p ferrocad_part_py` green. |
-| **P2b** | `doc.addObject(..., objProxy=..., viewProxy=...)` and `getObject(...).Proxy`; `onChanged` after a property write. | A proxy that counts `execute`/`onChanged` calls observes the right counts. |
-| **P2c** | Persist and restore the proxy in both formats; call `onDocumentRestored`. Native JSON uses the existing `python_state` envelope; `.FCStd` follows upstream's `<Python value>` only if the payload can be made compatible (otherwise report it in `WriteReport::dropped`). | Save → open → recompute with the same proxy; a document without a proxy still loads. |
+| **P2a ✅** | Register `Part::FeaturePython` as an `ObjectType` whose `execute` calls the stored Python proxy. Store the proxy in `Property::PythonObject`; expose `Proxy` on the object. | A script object recomputes and its `Shape` is visible; `cargo test -p ferrocad_part_py` green. |
+| **P2b ✅** | `doc.addObject(..., objProxy=..., viewProxy=...)` and `getObject(...).Proxy`; `onChanged` after a property write. | A proxy that counts `execute`/`onChanged` calls observes the right counts. |
+| **P2c ✅** | Persist and restore the proxy in both formats; call `onDocumentRestored`. Native JSON uses the existing `python_state` envelope; `.FCStd` follows upstream's `<Python value>` only if the payload can be made compatible (otherwise report it in `WriteReport::dropped`). | Save → open → recompute with the same proxy; a document without a proxy still loads. |
 | **P2d** | `Part::Part2DObjectPython` with `AttachmentSupport`/`MapMode` and the plane/line/point attach modes Draft sets. | A sketch-like 2D object attaches to a face and survives recompute. |
 | **P2e** | Draft M2 acceptance: run the two `drafttests` modules against the proxies. | Record the pass/load counts; do not gate on a number. |
+
+**As built (2026-10-24).** The proxies execute outside the document mutex, drain their
+pending requests, purge the touch flags they set and recompute dependents (a 64-round
+non-convergence guard). `onChanged` fires after attribute, `setPropertyByName`, `Label`
+and `Group` writes; `attach=True` calls `proxy.attach(obj)`; `isDerivedFrom` carries the
+Part/App hierarchy Draft branches on. Native persistence reuses `python_state`; `.FCStd`
+reports the dropped proxy and still round-trips the shape. `Part::Part2DObjectPython`
+exists with `Shape`/`Placement` but its attachment properties are P2d.
+`drafttests/test_creation.py` now loads and runs 26 cases (15 passed, 1 failed, 10
+errored); `test_array.py` loads (1 errored); both have zero load errors.
 
 ## Constraints
 

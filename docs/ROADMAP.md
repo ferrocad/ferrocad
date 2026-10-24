@@ -22,33 +22,36 @@ behaviour is a Python callback — and the remaining Qt/Draft surface on top of 
 | **H2 — Workbench platform** | Make Part a platform Draft/BIM/SimpleCAD can build on | `Part::FeaturePython` executes and persists; Draft M2–M5 run headless; Q4/Q5 done | P2, P3 |
 | **H3 — Proof by use** | Prove the platform end to end | SimpleCAD S1–S5 baseline; a published `Parametric` edition; a headless BIM subset | P4, P5 |
 
-### H1 — Finish Part/OCCT (mostly done, 2026-10-24)
+### H1 — Finish Part/OCCT (complete except a documented tail, 2026-10-24)
 
 - **The element-map version.** Enabled for every shape that carries a lineage. The
-  compound (52), fuse (58), cut/common (26), general-fuse (60), sweep (6) and
-  compound-cut (20/47) sizes match upstream, and the Part suite has **zero failures**.
-  Six asserts still skip: four consumer shapes in `solids.rs` store an empty lineage
-  (their element counts already match), and two counts (`FaceMakerCheese` 10,
-  `makeShellFromWires` 24) are composed aliases rather than element names.
+  compound (52), fuse (58), cut/common (26), general-fuse (60), sweep (6), shell/solid
+  (26), loft (24), filled face (9) and compound-cut (20/47) sizes match upstream, and the
+  Part suite has **zero failures**. The two remaining guarded counts are documented
+  non-results: `FaceMakerCheese` (10) needs upstream's face-combo alias, and
+  `makeShellFromWires` (24) needs a different (ruled-shell) topology.
 - **The seam remainder.** Landed: partial spheres/revolutions, variable-radius fillets,
-  `makeOffset2D` filling, hyperbola/parabola/Bezier, multi-shell solids with cavities,
-  and an exact helix edge plus `MakePipeShell` for threads and multi-section sweeps.
-  Open: `DirMode Edge/Normal`, B-spline tube spines, wiring `Part.makeHelix` to the
-  exact edge, and upstream's two-profile thread solid.
-- **The approximations.** The exact helix exists in the kernel; the remaining work is
-  wiring the Python entry point and the thread profile.
+  `makeOffset2D` filling, hyperbola/parabola/Bezier (including `Geom2d`), multi-shell
+  solids, `DirMode Edge/Normal`, B-spline tube spines, the exact `makeHelix`/
+  `makeLongHelix` edge, and `MakePipeShell` threads and multi-section sweeps.
+- **The tail.** Upstream's two-profile thread solid and the `curve_of` kinds that still
+  report `unsupported`. Neither blocks another workbench.
 
-**Done when** the six skipped guards have a deliberate answer (lineage or documented
-alias policy) and the four open seam items above are closed. The Part suite already
-reports zero failures.
+**Done when** the tail above is closed or deliberately documented. The Part suite already
+reports zero failures, and no advertised API raises “not implemented”.
 
-### H2 — Workbench platform (next)
+### H2 — Workbench platform (in progress)
 
-- **Python feature proxies.** `Part::FeaturePython` and `Part::Part2DObjectPython`:
-  proxy `execute`/`onChanged`, a shape output, attachment, and persistence. This is the
-  gate between “Part works” and “Draft works”.
-- **Draft M2–M5.** Real Draft objects, the modification layer, import/export, and the
-  BIM surface on top — measured by the `drafttests` modules, not by feature claims.
+- **Python feature proxies (P2a–P2c, landed).** `Part::FeaturePython` and
+  `Part::Part2DObjectPython` execute a Python `Proxy`, fire `onChanged`, honour
+  `attach=True`, persist natively and call `onDocumentRestored`. The Draft M2 modules now
+  load: `test_creation.py` runs 26 cases (15 passed, 1 failed, 10 errored) and
+  `test_array.py` loads, with **zero load errors** in those modules.
+- **Attachment (P2d, next).** `AttachmentSupport`/`MapMode` and the attach modes Draft
+  sets. Most residual Draft M2 errors are behind it.
+- **Draft M2–M5.** Real Draft objects on the proxies, the modification layer,
+  import/export, and the BIM surface on top — measured by the `drafttests` modules, not
+  by feature claims.
 - **Qt Q4/Q5.** Native spatial reference and tool input, the remaining forms, editing
   and commit on accept, and the async modal.
 

@@ -30,7 +30,8 @@ is archived in
 | Python facade | 377 passed | **444 passed, 17 skipped** (134 subtests) |
 | Part module | `makeBox` and a shape handle | primitives, booleans, dress-ups, links and arrays, conics, splines, NURBS conversion, `ShapeFix`, `ChFi2d`, `Sketcher`, feature objects |
 | Document format | one JSON blob | native `.ferrocad` + real `.FCStd` ZIP, with an additive lineage sidecar |
-| Naming | positional strings | lineage layer with stored maps; upstream's **20/47** compound maps, and the version enabled for reachable shapes |
+| Naming | positional strings | lineage layer with stored maps; every reachable guarded size matches (52/58/26/24/9/6/60) plus the cuts' 20/47 |
+| Workbench platform | no Python-defined objects | `Part::FeaturePython`/`Part2DObjectPython` execute proxies; the Draft M2 modules load with zero load errors |
 
 ### Three lessons
 
@@ -46,13 +47,12 @@ is archived in
 
 ### Two asymmetries that define the next round
 
-1. **Six guarded map asserts still skip.** Four consumer shapes (`makeShell`,
-   `makeSolid`, `makeLoft`, `makeFilledFace`) do not yet attach a lineage although their
-   element counts already match, and two counts (`FaceMakerCheese` 10,
-   `makeShellFromWires` 24) are composed aliases rather than element names.
-2. **The Python feature-proxy layer does not exist.** Part works as a library; Draft and
-   SimpleCAD need objects whose `execute` is a Python callback. That is the gate between
-   the two halves of the project.
+1. **Two guarded map counts remain documented non-results.** `FaceMakerCheese` (10) needs
+   upstream's face-combo alias and `makeShellFromWires` (24) needs a different
+   (ruled-shell) topology. Every other guarded size is reproduced.
+2. **Attachment is the last gate to real Draft objects.** The proxies execute and
+   persist, but `AttachmentSupport`/`MapMode` is still missing; most residual Draft M2
+   errors are behind it.
 
 ### What is deliberately not claimed
 

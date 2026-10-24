@@ -1,15 +1,17 @@
 # Task — the compound-cut element-map size gap (S6c)
 
-Status: **implemented (2026-10-24).** Upstream is the pinned checkout
-`../freecad-upstream` at `33adf61`. The analysis below drove the implementation: the
-compound cuts measure **20** and **47**, the compound (52), fuse (58), cut/common (26),
-general-fuse (60) and sweep (6) guards also match, and `ElementMapVersion` is enabled for
-every shape that carries a lineage. Six asserts still skip: four consumer shapes in
-`solids.rs` store an empty lineage, and two counts (`FaceMakerCheese` 10,
-`makeShellFromWires` 24) are composed aliases, not element names.
+Status: **implemented for every reachable shape (2026-10-24).** Upstream is the pinned
+checkout `../freecad-upstream` at `33adf61`. The compound cuts measure **20** and **47**;
+the compound (52), fuse (58), cut/common (26), general-fuse (60), sweep (6), shell/solid
+(26), loft (24) and filled-face (9) guards also match; and `ElementMapVersion` is enabled
+for every shape that carries a lineage. Four consumer shapes were closed by attaching the
+intrinsic map. Two asserts still skip by design: `FaceMakerCheese` (10) needs upstream's
+face-combo alias, and `makeShellFromWires` (24) needs a different (ruled-shell) topology —
+both measured and recorded in `part_lineage.rs`.
 
 `TopoShapeTest.testPartCompoundCut1` expects 20 reverse-map keys and
-`testPartCompoundCut2` expects 47; this kernel reports 12 and 30. The gap is
+`testPartCompoundCut2` expects 47; this kernel reported 12 and 30 before the policy
+landed. The gap was
 **not** an alias, `_1`/`_2`, or duplicate-name policy. It has two independent
 causes: upstream rewrites compound cuts before handing them to OCCT, and it
 then names *every* result sub-element through a cascade of name-derivation

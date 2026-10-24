@@ -74,8 +74,8 @@
 //! - `PropertyEnumeration` stores only the selected index. The allowed values
 //!   are the object's constructor defaults, so the [`Property::Enumeration`]
 //!   value list stays empty unless the file carries a `CustomEnumList`.
-//! - `PropertyLinkSubList` is flattened to [`Property::LinkList`]: the object
-//!   order survives, the per-link sub-element names do not.
+//! - `PropertyLinkSubList` keeps each link's sub-element names: `<LinkSubList>`
+//!   holds `<Link obj="…" sub="…"/>` entries, which are regrouped by object.
 //! - `PropertyColor` (one value) becomes a one-element [`Property::ColorList`],
 //!   so re-saving writes `App::PropertyColorList`.
 //! - `PropertyRotation` stores axis and angle, not the quaternion; the restored
@@ -564,9 +564,11 @@ fn parse_property(
         "App::PropertyLinkSub" | "App::PropertyLinkSubHidden" => {
             parse_link_sub(node).map(|(name, subs)| Property::LinkSub(name, subs))
         }
-        // Our model has no LinkSubList variant. The object names are kept in
-        // order; the per-link `<Link sub="…">` element names are dropped.
-        "App::PropertyLinkSubList" => Some(Property::LinkList(parse_link_sub_list(node))),
+        "App::PropertyLinkSubList"
+        | "App::PropertyLinkSubListGlobal"
+        | "App::PropertyLinkSubListHidden" => {
+            Some(Property::LinkSubList(parse_link_sub_list(node)))
+        }
         "App::PropertyStringList" => Some(Property::StringList(parse_string_list(node))),
         "App::PropertyFloatList" => Some(Property::FloatList(parse_float_list(node, archive)?)),
         "App::PropertyIntegerList" => Some(Property::IntegerList(parse_integer_list(node)?)),
@@ -868,14 +870,26 @@ fn parse_link_list(node: roxmltree::Node<'_, '_>) -> Vec<String> {
 
 /// `PropertyLinkSubList` entries are `<Link obj="…" sub="…"/>` (note `obj`,
 /// unlike the `value` attribute of `<Link>` in a plain `LinkList`).
-fn parse_link_sub_list(node: roxmltree::Node<'_, '_>) -> Vec<String> {
+///
+/// Upstream stores one flat entry per sub-element and regroups consecutive
+/// entries that name the same object when it reads them back; we do the same so
+/// a group with several subnames survives our own write/read round trip.
+fn parse_link_sub_list(node: roxmltree::Node<'_, '_>) -> Vec<(String, Vec<String>)> {
     let Some(list) = child(node, "LinkSubList") else {
         return Vec::new();
     };
-    element_children(list, "Link")
-        .filter_map(|n| n.attribute("obj"))
-        .map(str::to_string)
-        .collect()
+    let mut entries: Vec<(String, Vec<String>)> = Vec::new();
+    for link in element_children(list, "Link") {
+        let Some(name) = link.attribute("obj") else {
+            continue;
+        };
+        let sub = link.attribute("sub").unwrap_or_default();
+        match entries.last_mut() {
+            Some((last, subs)) if last == name => subs.push(sub.to_string()),
+            _ => entries.push((name.to_string(), vec![sub.to_string()])),
+        }
+    }
+    entries
 }
 
 fn custom_enum_list(node: roxmltree::Node<'_, '_>) -> Vec<String> {
@@ -1433,12 +1447,13 @@ mod tests {
             o.properties.get("Group"),
             Some(&Property::LinkList(vec!["A".to_string(), "B".to_string()]))
         );
-        // LinkSubList is flattened to the object names, in order.
+        // LinkSubList keeps each link's sub-element names, regrouping consecutive
+        // entries that name the same object.
         assert_eq!(
             o.properties.get("Support"),
-            Some(&Property::LinkList(vec![
-                "Sketch".to_string(),
-                "XY_Plane".to_string()
+            Some(&Property::LinkSubList(vec![
+                ("Sketch".to_string(), vec!["Vertex1".to_string()]),
+                ("XY_Plane".to_string(), vec![String::new()]),
             ]))
         );
         assert_eq!(

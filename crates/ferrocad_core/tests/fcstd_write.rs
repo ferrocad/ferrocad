@@ -182,6 +182,15 @@ fn sample() -> Document {
     .unwrap();
     doc.set_property(
         box_id,
+        "Support",
+        Property::LinkSubList(vec![(
+            "Tool".into(),
+            vec!["Face1".into(), "Face2".into()],
+        )]),
+    )
+    .unwrap();
+    doc.set_property(
+        box_id,
         "Tags",
         Property::StringList(vec!["one".into(), "two".into()]),
     )
@@ -370,6 +379,13 @@ fn writes_a_real_zip_that_the_reader_can_open() {
             "Tool".into(),
             vec!["N_Axis".into(), "Face1".into()]
         ))
+    );
+    assert_eq!(
+        object.properties.get("Support"),
+        Some(&Property::LinkSubList(vec![(
+            "Tool".into(),
+            vec!["Face1".into(), "Face2".into()],
+        )]))
     );
     assert_eq!(
         object.properties.get("Tags"),
@@ -944,6 +960,7 @@ fn written_document_keeps_the_native_name_and_label_separate() {
             "Ratio".to_string(),
             "ReferenceAxis".to_string(),
             "Size".to_string(),
+            "Support".to_string(),
             "Tags".to_string(),
             "Target".to_string(),
             "Tilt".to_string(),

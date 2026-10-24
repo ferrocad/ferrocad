@@ -176,7 +176,7 @@ pub fn default_properties(type_id: &str) -> Vec<(&'static str, Property, u32)> {
             ("Link", Property::Link(String::new()), NONE),
             ("LinkSub", Property::LinkSub(String::new(), Vec::new()), NONE),
             ("LinkList", Property::LinkList(vec![]), NONE),
-            ("LinkSubList", Property::LinkList(vec![]), NONE),
+            ("LinkSubList", Property::LinkSubList(vec![]), NONE),
             ("ColourList", Property::ColorList(vec![]), NONE),
             ("Matrix", Property::Matrix(Matrix4::identity()), NONE),
             ("Vector", Property::Vector(Vector3::new(1.0, 2.0, 3.0)), NONE),
@@ -225,7 +225,9 @@ pub fn default_properties(type_id: &str) -> Vec<(&'static str, Property, u32)> {
             ("Object", Property::Link(String::new()), NONE),
             ("Attribute", Property::String(String::new()), NONE),
         ],
-        "App::DocumentObjectGroup" => vec![("Group", Property::LinkList(vec![]), NONE)],
+        "App::DocumentObjectGroup" | "App::DocumentObjectGroupPython" => {
+            vec![("Group", Property::LinkList(vec![]), NONE)]
+        }
         // The geometry-free half of `App::Link`'s property base. The `Part`
         // composition root registers an `ObjectType` for the same type id with the
         // full set (including the shape-valued `Shape`), which takes precedence;

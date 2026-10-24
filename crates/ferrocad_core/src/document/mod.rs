@@ -358,6 +358,7 @@ impl Document {
         self.object(id)
             .map(|o| {
                 o.type_id == "App::DocumentObjectGroup"
+                    || o.type_id == "App::DocumentObjectGroupPython"
                     || Self::is_geo_group_type(&o.type_id)
                     || o.extensions
                         .iter()
@@ -413,6 +414,9 @@ impl Document {
                         Property::Link(n) => add(n),
                         Property::LinkList(ns) => ns.iter().for_each(|n| add(n)),
                         Property::LinkSub(n, _) => add(n),
+                        Property::LinkSubList(links) => {
+                            links.iter().for_each(|(n, _)| add(n))
+                        }
                         _ => {}
                     }
                 }
@@ -856,6 +860,14 @@ impl Document {
         if let Some(behavior) = crate::object_registry::get(&type_id) {
             behavior.execute(self, id);
             return !self.objects.get(&id).is_some_and(|object| object.invalid);
+        }
+        // `App::DocumentObjectGroupPython` is a plain `App::DocumentObjectGroup`
+        // with a Python proxy. Like the other `*Python` types it has no Rust
+        // rebuild: request the proxy's `execute` and let the embedding
+        // interpreter run it after the recompute walk releases the lock.
+        if type_id == "App::DocumentObjectGroupPython" {
+            self.mark_python_pending(id);
+            return true;
         }
         if !type_id.starts_with("App::FeatureTest") {
             return true;

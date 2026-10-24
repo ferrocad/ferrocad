@@ -145,7 +145,15 @@ fn seed(map: &mut BTreeMap<String, Factory>) {
     insert(map, "App::PropertyLinkSubHidden", || {
         Property::LinkSub(String::new(), Vec::new())
     });
-    insert(map, "App::PropertyLinkSubList", || Property::LinkList(Vec::new()));
+    insert(map, "App::PropertyLinkSubList", || {
+        Property::LinkSubList(Vec::new())
+    });
+    insert(map, "App::PropertyLinkSubListGlobal", || {
+        Property::LinkSubList(Vec::new())
+    });
+    insert(map, "App::PropertyLinkSubListHidden", || {
+        Property::LinkSubList(Vec::new())
+    });
 
     // Lists.
     insert(map, "App::PropertyFloatList", || Property::FloatList(Vec::new()));

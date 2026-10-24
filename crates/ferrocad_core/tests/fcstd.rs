@@ -154,12 +154,12 @@ fn reads_lengths_angles_enumerations_links_and_expressions() {
         sketch.properties.get("MapMode"),
         Some(&Property::Enumeration(Vec::new(), 6))
     );
-    // `Support` is a LinkSubList; it flattens to the linked object names.
+    // `Support` is a LinkSubList; the per-link sub-element names survive.
     assert_eq!(
         sketch.properties.get("Support"),
-        Some(&Property::LinkList(vec![
-            "Sketch".to_string(),
-            "XY_Plane".to_string()
+        Some(&Property::LinkSubList(vec![
+            ("Sketch".to_string(), vec!["Vertex1".to_string()]),
+            ("XY_Plane".to_string(), vec![String::new()]),
         ]))
     );
     // The status attribute is upstream's internal mask: 8 = Hidden (1<<3),
@@ -225,7 +225,7 @@ fn reads_lengths_angles_enumerations_links_and_expressions() {
     assert!(!sketch2.properties.contains_key("ExpressionEngine"));
 }
 
-/// A `<LinkList>` of real names (not a flattened LinkSubList).
+/// A `<LinkList>` of real names (not a LinkSubList).
 #[test]
 fn reads_link_lists() {
     let Some(path) = fixture() else {

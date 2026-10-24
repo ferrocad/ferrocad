@@ -32,6 +32,9 @@ pub enum Property {
     LinkList(Vec<String>),
     /// A link plus sub-element names, stored by object name (POC simplification).
     LinkSub(String, Vec<String>),
+    /// A list of links, each with its own sub-element names
+    /// (`App::PropertyLinkSubList`): one `(object name, subnames)` entry per link.
+    LinkSubList(Vec<(String, Vec<String>)>),
     /// RGBA colors in the 0..1 range (`App::PropertyColorList`).
     ColorList(Vec<[f64; 4]>),
     /// An arbitrary Python object, stored as a base64-encoded pickle
@@ -86,6 +89,7 @@ impl Property {
             Property::Link(_) => "App::PropertyLink",
             Property::LinkList(_) => "App::PropertyLinkList",
             Property::LinkSub(_, _) => "App::PropertyLinkSub",
+            Property::LinkSubList(_) => "App::PropertyLinkSubList",
             Property::ColorList(_) => "App::PropertyColorList",
             Property::PythonObject(_) => "App::PropertyPythonObject",
             Property::FileIncluded(_) => "App::PropertyFileIncluded",

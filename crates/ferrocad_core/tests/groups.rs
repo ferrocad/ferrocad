@@ -8,7 +8,7 @@
 
 use ferrocad_core::prop_status;
 use ferrocad_core::Property;
-use ferrocad_core::{Document, Placement};
+use ferrocad_core::{native, Document, Placement};
 
 #[test]
 fn geo_group_types_are_groups_but_plain_groups_are_not_geo() {
@@ -31,6 +31,39 @@ fn geo_group_types_are_groups_but_plain_groups_are_not_geo() {
     assert!(Document::is_geo_group_type("App::Part"));
     assert!(Document::is_geo_group_type("PartDesign::Body"));
     assert!(!Document::is_geo_group_type("App::DocumentObjectGroup"));
+}
+
+#[test]
+fn a_python_group_is_a_group_and_persists_like_one() {
+    let mut doc = Document::new();
+    let group = doc.add_object("PyGroup", "App::DocumentObjectGroupPython");
+    let _feature = doc.add_object("Feature", "App::FeatureTest");
+
+    // A Python group is an `App::DocumentObjectGroup` with a proxy: it is a
+    // (non-geo) group and carries the same `Group` link list.
+    assert!(doc.is_group_like(group));
+    assert!(!doc.is_geo_group_like(group));
+    assert_eq!(
+        doc.object(group).unwrap().properties.get("Group"),
+        Some(&Property::LinkList(vec![]))
+    );
+
+    doc.set_property(group, "Group", Property::LinkList(vec!["Feature".into()]))
+        .expect("Group accepts members");
+
+    let saved = doc.to_saved("Python group");
+    let bytes = native::encode(&saved).expect("encode");
+    let restored = native::decode("python-group.ferrocad", &bytes).expect("decode");
+    let object = restored
+        .objects
+        .iter()
+        .find(|o| o.name == "PyGroup")
+        .expect("PyGroup persists");
+    assert_eq!(object.type_id, "App::DocumentObjectGroupPython");
+    assert_eq!(
+        object.properties.get("Group"),
+        Some(&Property::LinkList(vec!["Feature".to_string()]))
+    );
 }
 
 #[test]

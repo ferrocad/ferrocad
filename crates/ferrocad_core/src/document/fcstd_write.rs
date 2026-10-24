@@ -55,6 +55,7 @@
 //! | `Link` | `<Link value=…>` |
 //! | `LinkList` | `<LinkList count><Link value=…>…` |
 //! | `LinkSub` | `<LinkSub value=… count><Sub value=…>…` |
+//! | `LinkSubList` | `<LinkSubList count><Link obj=… sub=…>…` (one `<Link>` per subname) |
 //! | `StringList` | `<StringList count><String value=…>…` |
 //! | `FloatList` | `<FloatList file="…">` (member: `u32` count + `f64`s) |
 //! | `IntegerList` | `<IntegerList count><I v=…>…` |
@@ -68,8 +69,8 @@
 //!
 //! In addition:
 //!
-//! - `<Objects>` carries `ObjectDeps` derived from `Link`/`LinkList`/`LinkSub`
-//!   properties and from `Object.Property` references in expression sources.
+//! - `<Objects>` carries `ObjectDeps` derived from `Link`/`LinkList`/`LinkSub`/
+//!   `LinkSubList` properties and from `Object.Property` references in expression sources.
 //! - The object's [`SavedObject::expressions`] are written as
 //!   `<App::PropertyExpressionEngine><ExpressionEngine><Expression path
 //!   expression>`, the same shape the reader's expression pass consumes.
@@ -428,6 +429,13 @@ fn object_deps(doc: &SavedDocument, object: &SavedObject) -> Vec<String> {
             Property::LinkSub(target, _) => {
                 if target != &object.name && doc.objects.iter().any(|o| &o.name == target) {
                     deps.push(target.clone());
+                }
+            }
+            Property::LinkSubList(entries) => {
+                for (target, _) in entries {
+                    if target != &object.name && doc.objects.iter().any(|o| &o.name == target) {
+                        deps.push(target.clone());
+                    }
                 }
             }
             _ => {}
@@ -805,6 +813,37 @@ fn write_property(
                 ));
             }
             out.push_str("                    </LinkSub>\n");
+            out.push_str("                </Property>\n");
+        }
+        Property::LinkSubList(entries) => {
+            // Upstream stores one flat `<Link>` per sub-element and regroups
+            // consecutive entries naming the same object on read; a whole-object
+            // entry is `<Link obj="…" sub=""/>`.
+            let count: usize = entries
+                .iter()
+                .map(|(_, subs)| subs.len().max(1))
+                .sum();
+            out.push_str(&format!(
+                "                <Property name=\"{escaped}\" type=\"App::PropertyLinkSubList\"{status}>\n"
+            ));
+            out.push_str(&format!("                    <LinkSubList count=\"{count}\">\n"));
+            for (target, subs) in entries {
+                if subs.is_empty() {
+                    out.push_str(&format!(
+                        "                        <Link obj=\"{}\" sub=\"\"/>\n",
+                        escape_attr(target)
+                    ));
+                } else {
+                    for sub in subs {
+                        out.push_str(&format!(
+                            "                        <Link obj=\"{}\" sub=\"{}\"/>\n",
+                            escape_attr(target),
+                            escape_attr(sub)
+                        ));
+                    }
+                }
+            }
+            out.push_str("                    </LinkSubList>\n");
             out.push_str("                </Property>\n");
         }
         Property::StringList(values) => {
@@ -1572,6 +1611,13 @@ mod tests {
             Property::LinkSub("Tool".into(), vec!["N_Axis".into(), "Face1".into()]),
         );
         prop.properties.insert(
+            "Support".into(),
+            Property::LinkSubList(vec![
+                ("Tool".into(), vec!["Face1".into(), "Face2".into()]),
+                ("Box".into(), Vec::new()),
+            ]),
+        );
+        prop.properties.insert(
             "Tags".into(),
             Property::StringList(vec!["one".into(), "two".into()]),
         );
@@ -1635,6 +1681,11 @@ mod tests {
         assert!(xml.contains("<LinkList count=\"2\">"));
         assert!(xml.contains("<LinkSub value=\"Tool\" count=\"2\">"));
         assert!(xml.contains("<Sub value=\"Face1\"/>"));
+        assert!(xml.contains("type=\"App::PropertyLinkSubList\">"));
+        assert!(xml.contains("<LinkSubList count=\"3\">"));
+        assert!(xml.contains("<Link obj=\"Tool\" sub=\"Face1\"/>"));
+        assert!(xml.contains("<Link obj=\"Tool\" sub=\"Face2\"/>"));
+        assert!(xml.contains("<Link obj=\"Box\" sub=\"\"/>"));
         assert!(xml.contains("<StringList count=\"2\">"));
         assert!(xml.contains("<Integer value=\"2\" CustomEnum=\"true\"/>"));
         assert!(xml.contains("<CustomEnumList count=\"3\">"));

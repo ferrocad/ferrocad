@@ -82,7 +82,9 @@ the case).
 So the open item is **S6c**: understand upstream's naming form and close 12→20 / 30→47.
 The map is already persisted in both formats (S6b: the `PartShapeN.lineage` sidecar). This is
 a policy question, which is exactly why it belongs to the lineage layer rather than the
-kernel. See [`../TODO-23-10-2026.md`](../TODO-23-10-2026.md) §P1.
+kernel. The evidence-backed analysis (compound-cut rewrite + three-pass naming cascade) is in
+[`element-map-policy.md`](../tasks/element-map-policy.md); see
+[`../TODO-23-10-2026.md`](../TODO-23-10-2026.md) §P1.
 
 ---
 

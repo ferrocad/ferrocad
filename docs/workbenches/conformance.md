@@ -137,23 +137,26 @@ its load errors are the useful signal.
 
 | Group | Result |
 | --- | --- |
-| Part | **444 passed**, 8 failed, 79 errored, 12 skipped, **0 files failed to load** |
+| Part | **495 passed**, 10 failed, 26 errored, 12 skipped, **0 files failed to load** |
 | Draft | **10 passed**, 1 failed, 0 errored, 0 skipped, 1 load error |
 
 The 2026-10-20 Part row is the pre-shim baseline: `TestPartApp.py` and
 `TestPartMirror.py` failed to load (missing `Draft`), so TestPartApp's ~300 tests never
-ran. A minimal `python/Draft` shim (`make_clone` over `App::Link`) removes both load
-errors. The harness puts the group roots ahead of `python/`, so the **Draft** group
-still runs upstream `src/Mod/Draft/Draft.py`, not the shim; its baseline is unchanged.
+ran. A minimal `python/Draft` shim (`make_clone` over `App::Link`) removed both load
+errors; the Part-surface slices then added the constructors, surfaces and group
+semantics the loaded tests exercise. The harness puts the group roots ahead of `python/`,
+so the **Draft** group still runs upstream `src/Mod/Draft/Draft.py`, not the shim; its
+baseline is unchanged.
 
-The 8 failures are four unique tests reported twice (the standalone module plus
-TestPartApp's re-collection): `test_CircularReference`, `testAppPartMakeSweepSurface`,
-and the two compound cuts (`12 != 20`, `30 != 47`). The 79 errors are missing runtime
-API newly exposed by the loaded files, not import failures: `Sketcher::SketchObject`
-(`addGeometry`, `InternalShape`), `PartDesign::Body`, `Edge`/`Face.__new__`,
-`Part.makePlane`, `Part.Plane.toShape`, `Part.ShapeFix`, `Part.Geom2d.*`,
-`Part::RuledSurface`/`Extrusion` without a `Shape`, `ChFi2d`, and `App::Part`
-membership. Fixing them is Part-kernel breadth, not harness work.
+The 10 failures are four unique tests reported twice (`test_CircularReference`,
+`testAppPartMakeSweepSurface`, and the two compound cuts at `12 != 20` and `30 != 47`)
+plus two placement-composition assertions (`PartTestNormals.testPlacement`,
+`PartTestShapeRotate.testPlacement`) that need a live `Shape.Placement` model. The 26
+errors are the remaining missing surface: `Part.ShapeFix` (7),
+`BSplineCurve.buildFromPolesMultsKnots` (6), `Part.ChFi2d` (3),
+`Sketcher::SketchObject.addGeometry` (3), `PartDesign::Body.Shape` (2),
+`Part::Mirroring.Shape` (2), `Ellipse.toShape` (1, no `gp_Elips` binding), and
+`Circle`/`Ellipse.transform` (2).
 
 ### Reading the report
 

@@ -15,6 +15,8 @@ pub mod contributions;
 pub mod dev_tools;
 pub mod dialog;
 pub mod display;
+/// Q3a: render `ferrocad_ui` forms as gpui elements and host a form dialog.
+pub mod forms;
 pub mod manipulators;
 pub mod python;
 pub mod selection;

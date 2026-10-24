@@ -14,6 +14,8 @@ documentation = "https://docs.rs/ferrocad_gpui"
 
 [dependencies]
 ferrocad_widgets.workspace = true
+# Q3a: the typed Qt Designer form tree that `forms` renders.
+ferrocad_ui = { path = "../ferrocad_ui" }
 ferrocad_inventor.workspace = true
 # The selection vocabulary (`SelectionRef`) and tessellation the host fills a stage from.
 ferrocad_geom.workspace = true

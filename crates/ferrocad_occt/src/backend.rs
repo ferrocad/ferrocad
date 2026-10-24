@@ -128,6 +128,203 @@ impl OcctBackend {
             shape.clone()
         }
     }
+
+    /// A B-spline edge from explicit poles, weights, unique knots and
+    /// multiplicities (`Part.BSplineCurve.buildFromPolesMultsKnots`).
+    ///
+    /// The [`GeometryBackend`] seam's `make_bspline_poles` only knows the uniform
+    /// clamped/periodic form (its arguments are poles, degree and the periodic
+    /// flag), so the general knot vector has no seam entry point. This is the
+    /// kernel's own constructor, used by the Part curve binding when the user
+    /// supplies knots and multiplicities.
+    #[allow(clippy::too_many_arguments)]
+    pub fn make_bspline_poles_mults_knots(
+        &self,
+        poles: &[Vector3],
+        weights: &[f64],
+        knots: &[f64],
+        multiplicities: &[i32],
+        degree: i32,
+        periodic: bool,
+        check_rational: bool,
+    ) -> Result<Shape, GeomError> {
+        let mut coords = Vec::with_capacity(poles.len() * 3);
+        for pole in poles {
+            coords.extend_from_slice(&[pole.x, pole.y, pole.z]);
+        }
+        let edge = bridge::fc_bspline_edge(
+            &coords,
+            weights,
+            knots,
+            multiplicities,
+            degree,
+            periodic,
+            check_rational,
+        );
+        let Some(edge) = edge.as_ref() else {
+            return Err(OcctError::NotDone {
+                operation: "make_bspline_poles_mults_knots",
+            }
+            .into());
+        };
+        Ok(erase(edge))
+    }
+
+    /// The flattened state of the B-spline with the given poles, weights, knots
+    /// and multiplicities, read back from OCCT (see
+    /// [`make_bspline_poles_mults_knots`](Self::make_bspline_poles_mults_knots)).
+    /// `None` when the arguments do not describe a valid curve.
+    #[allow(clippy::too_many_arguments)]
+    pub fn bspline_state(
+        &self,
+        poles: &[Vector3],
+        weights: &[f64],
+        knots: &[f64],
+        multiplicities: &[i32],
+        degree: i32,
+        periodic: bool,
+        check_rational: bool,
+    ) -> Option<Vec<f64>> {
+        let coords = flatten(poles);
+        let state = bridge::fc_bspline_probe(
+            &coords,
+            weights,
+            knots,
+            multiplicities,
+            degree,
+            periodic,
+            check_rational,
+        );
+        (!state.is_empty()).then_some(state)
+    }
+
+    /// The flattened state of the B-spline interpolating `points`
+    /// (`Part.BSplineCurve.interpolate`), read back from OCCT. `None` when the
+    /// interpolation fails.
+    pub fn bspline_interpolated_state(&self, points: &[Vector3], periodic: bool) -> Option<Vec<f64>> {
+        let state = bridge::fc_bspline_probe_interpolated(&flatten(points), periodic);
+        (!state.is_empty()).then_some(state)
+    }
+
+    /// The state of the same curve after `SetPeriodic`/`SetNotPeriodic`. `None`
+    /// when the conversion is rejected.
+    #[allow(clippy::too_many_arguments)]
+    pub fn bspline_periodic_state(
+        &self,
+        poles: &[Vector3],
+        weights: &[f64],
+        knots: &[f64],
+        multiplicities: &[i32],
+        degree: i32,
+        periodic: bool,
+        check_rational: bool,
+        target_periodic: bool,
+    ) -> Option<Vec<f64>> {
+        let state = bridge::fc_bspline_set_periodic(
+            &flatten(poles),
+            weights,
+            knots,
+            multiplicities,
+            degree,
+            periodic,
+            check_rational,
+            target_periodic,
+        );
+        (!state.is_empty()).then_some(state)
+    }
+
+    /// `Geom_BSplineCurve::Resolution`: the parameter tolerance equivalent to
+    /// `tolerance`. `None` when the curve cannot be built.
+    #[allow(clippy::too_many_arguments)]
+    pub fn bspline_resolution(
+        &self,
+        poles: &[Vector3],
+        weights: &[f64],
+        knots: &[f64],
+        multiplicities: &[i32],
+        degree: i32,
+        periodic: bool,
+        check_rational: bool,
+        tolerance: f64,
+    ) -> Option<f64> {
+        let resolution = bridge::fc_bspline_resolution(
+            &flatten(poles),
+            weights,
+            knots,
+            multiplicities,
+            degree,
+            periodic,
+            check_rational,
+            tolerance,
+        );
+        resolution.is_finite().then_some(resolution)
+    }
+
+    /// The point at parameter `u` on the B-spline with the given state
+    /// (`BSplineCurve.value(u)`). `None` when the curve cannot be built or the
+    /// parameter is outside its domain.
+    #[allow(clippy::too_many_arguments)]
+    pub fn bspline_point(
+        &self,
+        poles: &[Vector3],
+        weights: &[f64],
+        knots: &[f64],
+        multiplicities: &[i32],
+        degree: i32,
+        periodic: bool,
+        check_rational: bool,
+        u: f64,
+    ) -> Option<Vector3> {
+        let point = bridge::fc_bspline_point(
+            &flatten(poles),
+            weights,
+            knots,
+            multiplicities,
+            degree,
+            periodic,
+            check_rational,
+            u,
+        );
+        (point.len() == 3).then(|| Vector3::new(point[0], point[1], point[2]))
+    }
+
+    /// A conic converted to a B-spline over `[first, last]`, flattened like
+    /// [`bspline_state`](Self::bspline_state). `kind` is 2 for a circle and 3 for
+    /// an ellipse; `x_axis` is the direction of parameter 0. With `nurbs` the
+    /// exact rational conversion is used (`GeomConic::toNurbs`), otherwise the
+    /// approximation of `GeomCurve::toBSpline`. `None` on failure.
+    #[allow(clippy::too_many_arguments)]
+    pub fn conic_spline_state(
+        &self,
+        kind: i32,
+        center: Vector3,
+        normal: Vector3,
+        x_axis: Vector3,
+        major: f64,
+        minor: f64,
+        first: f64,
+        last: f64,
+        nurbs: bool,
+    ) -> Option<Vec<f64>> {
+        let state = bridge::fc_conic_to_spline(
+            kind,
+            center.x,
+            center.y,
+            center.z,
+            normal.x,
+            normal.y,
+            normal.z,
+            x_axis.x,
+            x_axis.y,
+            x_axis.z,
+            major,
+            minor,
+            first,
+            last,
+            nurbs,
+        );
+        (!state.is_empty()).then_some(state)
+    }
 }
 
 impl GeometryBackend for OcctBackend {
@@ -250,9 +447,7 @@ impl GeometryBackend for OcctBackend {
                 Ok(erase(ffi::topo_ds::cast_edge_to_shape(make.pin_mut().Edge())))
             }
             EdgeCurve::Line(_) => Err(unsupported("make_edge for an infinite line")),
-            EdgeCurve::Ellipse(_) => Err(unsupported(
-                "make_edge for an ellipse (the OCCT bindings expose no gp_Elips)",
-            )),
+            EdgeCurve::Ellipse(ellipse) => edge_from_ellipse(ellipse),
         }
     }
 
@@ -1948,6 +2143,15 @@ fn point(vector: Vector3) -> UniquePtr<ffi::gp::gp_Pnt> {
     ffi::gp::new_point(vector.x, vector.y, vector.z)
 }
 
+/// A flat xyz list, the form the `fc_curve.hxx` B-spline helpers take.
+fn flatten(points: &[Vector3]) -> Vec<f64> {
+    let mut coords = Vec::with_capacity(points.len() * 3);
+    for point in points {
+        coords.extend_from_slice(&[point.x, point.y, point.z]);
+    }
+    coords
+}
+
 /// A circular edge from the analytic circle.
 ///
 /// The edge's parameterisation origin is OCCT's choice: `gp_Ax2` is built from a
@@ -1967,6 +2171,34 @@ fn edge_from_circle(circle: &Circle) -> Result<Shape, GeomError> {
         .into());
     }
     Ok(erase(ffi::topo_ds::cast_edge_to_shape(make.pin_mut().Edge())))
+}
+
+/// A full elliptical edge from the analytic ellipse.
+///
+/// The frame goes through explicitly (centre, plane normal, major-axis direction,
+/// the two radii) because `gp_Elips`' axis placement carries all of them; the
+/// edge parameterisation starts on the major axis.
+fn edge_from_ellipse(ellipse: &Ellipse) -> Result<Shape, GeomError> {
+    let edge = bridge::fc_ellipse_edge(
+        ellipse.center().x,
+        ellipse.center().y,
+        ellipse.center().z,
+        ellipse.normal().x,
+        ellipse.normal().y,
+        ellipse.normal().z,
+        ellipse.x_axis().x,
+        ellipse.x_axis().y,
+        ellipse.x_axis().z,
+        ellipse.major_radius(),
+        ellipse.minor_radius(),
+    );
+    let Some(edge) = edge.as_ref() else {
+        return Err(OcctError::NotDone {
+            operation: "make_edge (ellipse)",
+        }
+        .into());
+    };
+    Ok(erase(edge))
 }
 
 #[cfg(test)]
@@ -2234,5 +2466,154 @@ mod provenance_tests {
                 "the relation lists are deterministic",
             );
         }
+    }
+}
+
+#[cfg(test)]
+mod curve_bridge_tests {
+    //! The analytic curve helpers behind `Part.Circle`/`Part.Ellipse` and the
+    //! explicit-knot `Part.BSplineCurve`: round-trip the OCCT side without
+    //! involving the Python binding.
+
+    use ferrocad_curves::{EdgeCurve, Ellipse, Vector3};
+    use ferrocad_geom::GeometryBackend;
+
+    use super::*;
+
+    /// The layout `fc_bspline_push_state` writes.
+    const DEGREE: usize = 0;
+    const NB_POLES: usize = 2;
+    const NB_KNOTS: usize = 3;
+    const PERIODIC: usize = 4;
+    const FIRST_PARAMETER: usize = 12;
+    const LAST_PARAMETER: usize = 13;
+    const CONTINUITY: usize = 16;
+
+    #[test]
+    fn an_ellipse_round_trips_through_an_edge() {
+        let backend = OcctBackend::new();
+        let ellipse = Ellipse::with_axis(
+            Vector3::new(1.0, 2.0, 3.0),
+            Vector3::new(0.0, 0.0, 1.0),
+            Vector3::new(1.0, 0.0, 0.0),
+            5.0,
+            3.0,
+        )
+        .unwrap();
+        let edge = backend
+            .make_edge(&EdgeCurve::Ellipse(ellipse))
+            .expect("an ellipse has an OCCT edge");
+
+        let EdgeCurve::Ellipse(back) = backend.curve_of(&edge).unwrap() else {
+            panic!("the ellipse edge's basis curve is an ellipse");
+        };
+        assert!((back.center().sub(&ellipse.center())).length() < 1e-9);
+        assert!((back.major_radius() - 5.0).abs() < 1e-9);
+        assert!((back.minor_radius() - 3.0).abs() < 1e-9);
+        assert!((back.normal().sub(&ellipse.normal())).length() < 1e-9);
+        assert!((back.x_axis().sub(&ellipse.x_axis())).length() < 1e-9);
+    }
+
+    /// The upstream `PartTestBSplineCurve` NURBS: four poles and the knots
+    /// `(0, 0.5, 1)` with multiplicities `(3, 1, 3)` at degree 2.
+    fn upstream_nurbs_poles() -> [Vector3; 4] {
+        [
+            Vector3::new(0.0, 0.0, 0.0),
+            Vector3::new(1.0, 1.0, 0.0),
+            Vector3::new(2.0, 0.0, 0.0),
+            Vector3::new(1.0, -1.0, 0.0),
+        ]
+    }
+
+    #[test]
+    fn an_explicit_knot_vector_reads_back_from_occt() {
+        let backend = OcctBackend::new();
+        let poles = upstream_nurbs_poles();
+        let state = backend
+            .bspline_state(
+                &poles,
+                &[1.0; 4],
+                &[0.0, 0.5, 1.0],
+                &[3, 1, 3],
+                2,
+                false,
+                true,
+            )
+            .expect("the upstream NURBS builds");
+
+        assert_eq!(state[DEGREE], 2.0);
+        assert_eq!(state[NB_POLES], 4.0);
+        assert_eq!(state[NB_KNOTS], 3.0);
+        assert_eq!(state[PERIODIC], 0.0);
+        assert_eq!(state[FIRST_PARAMETER], 0.0);
+        assert_eq!(state[LAST_PARAMETER], 1.0);
+        assert_eq!(state[CONTINUITY], 2.0, "C1 at the inner knot (mult 1, degree 2)");
+
+        // The same arrays also build the edge, exactly.
+        let edge = backend
+            .make_bspline_poles_mults_knots(
+                &poles,
+                &[1.0; 4],
+                &[0.0, 0.5, 1.0],
+                &[3, 1, 3],
+                2,
+                false,
+                true,
+            )
+            .expect("the explicit B-spline has an edge");
+        assert!(backend.curve_of(&edge).is_err(), "a B-spline is not analytic");
+        assert_eq!(backend.elements(&edge, ElementKind::Edge).len(), 1);
+    }
+
+    #[test]
+    fn the_periodic_conversion_restructures_the_curve() {
+        let backend = OcctBackend::new();
+        let poles = [
+            Vector3::new(0.0, 0.0, 0.0),
+            Vector3::new(1.0, 1.0, 0.0),
+            Vector3::new(2.0, 0.0, 0.0),
+        ];
+        let state = backend
+            .bspline_state(&poles, &[1.0; 3], &[0.0, 1.0], &[3, 3], 2, false, true)
+            .expect("the clamped quadratic builds");
+        assert_eq!(state[PERIODIC], 0.0);
+        assert_eq!(state[NB_POLES], 3.0);
+
+        // `SetPeriodic` is a structural change (the curve is not closed, so OCCT
+        // drops the redundant pole); the state must come from OCCT, not from a
+        // flag flip.
+        let periodic = backend
+            .bspline_periodic_state(
+                &poles,
+                &[1.0; 3],
+                &[0.0, 1.0],
+                &[3, 3],
+                2,
+                false,
+                true,
+                true,
+            )
+            .expect("SetPeriodic succeeds");
+        assert_eq!(periodic[PERIODIC], 1.0);
+        assert_eq!(periodic[NB_POLES], 2.0);
+    }
+
+    #[test]
+    fn the_resolution_is_reported_by_occt() {
+        let backend = OcctBackend::new();
+        let poles = upstream_nurbs_poles();
+        let resolution = backend
+            .bspline_resolution(
+                &poles,
+                &[1.0; 4],
+                &[0.0, 0.5, 1.0],
+                &[3, 1, 3],
+                2,
+                false,
+                true,
+                0.5,
+            )
+            .expect("the resolution is finite");
+        assert!(resolution > 0.0);
     }
 }

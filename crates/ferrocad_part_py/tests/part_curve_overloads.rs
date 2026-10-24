@@ -226,10 +226,26 @@ fn ellipse_surface_and_writable_circle_radius() {
             .expect_err("minor > major");
         assert!(error.is_instance(py, &occ_error_type(py)), "{error}");
 
-        // No `gp_Elips` binding exists, so an exact elliptical edge cannot be
-        // built; the failure must be a clear OCCError.
-        let error = ellipse.call_method0("toShape").expect_err("no gp_Elips");
-        assert!(error.is_instance(py, &occ_error_type(py)), "{error}");
+        // `toShape()` builds the exact analytic ellipse edge (`Geom_Ellipse`),
+        // not a NURBS approximation: the edge reports the same two radii back.
+        let edge = ellipse.call_method0("toShape").expect("Ellipse.toShape");
+        assert!(
+            !edge
+                .call_method0("isNull")
+                .unwrap()
+                .extract::<bool>()
+                .unwrap(),
+            "an ellipse has an exact edge"
+        );
+        let curve = edge.getattr("Curve").expect("Edge.Curve");
+        assert_eq!(
+            curve.getattr("MajorRadius").unwrap().extract::<f64>().unwrap(),
+            120.0
+        );
+        assert_eq!(
+            curve.getattr("MinorRadius").unwrap().extract::<f64>().unwrap(),
+            30.0
+        );
 
         // `Circle.Radius` has upstream's setter (upstream's `testCircleToNurbs`).
         let circle = part.getattr("Circle").unwrap().call0().expect("Part.Circle()");

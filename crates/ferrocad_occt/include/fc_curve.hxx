@@ -43,11 +43,14 @@
 #include <TopoDS_CompSolid.hxx>
 #include <TopoDS_Compound.hxx>
 #include <BRep_Tool.hxx>
+#include <BSplCLib.hxx>
 #include <Geom2dAPI_InterCurveCurve.hxx>
 #include <Geom2dAPI_ProjectPointOnCurve.hxx>
 #include <Geom2d_Curve.hxx>
 #include <GeomAPI.hxx>
+#include <GeomAPI_Interpolate.hxx>
 #include <GeomAdaptor_Surface.hxx>
+#include <GeomConvert.hxx>
 #include <Geom_BSplineCurve.hxx>
 #include <Geom_Conic.hxx>
 #include <GProp_GProps.hxx>
@@ -56,6 +59,7 @@
 #include <TColStd_Array1OfInteger.hxx>
 #include <TColStd_Array1OfReal.hxx>
 #include <TColgp_Array1OfPnt.hxx>
+#include <TColgp_HArray1OfPnt.hxx>
 #include <GeomAbs_JoinType.hxx>
 #include <GeomAbs_Shape.hxx>
 #include <Geom_Circle.hxx>
@@ -64,6 +68,7 @@
 #include <Geom_Ellipse.hxx>
 #include <Geom_Line.hxx>
 #include <Geom_TrimmedCurve.hxx>
+#include <ShapeConstruct_Curve.hxx>
 #include <Standard_Type.hxx>
 #include <gp_Pln.hxx>
 #include <TopoDS.hxx>
@@ -87,6 +92,8 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdint>
+#include <limits>
 #include <memory>
 #include <vector>
 
@@ -321,6 +328,415 @@ inline std::unique_ptr<Handle_Geom_Curve> fc_bspline_from_poles(rust::Slice<cons
     Handle(Geom_BSplineCurve) curve =
         new Geom_BSplineCurve(poles, knots, multiplicities, degree, Standard_False);
     return std::unique_ptr<Handle_Geom_Curve>(new Handle(Geom_Curve)(curve));
+  }
+  catch (...) {
+    return nullptr;
+  }
+}
+
+// A full elliptical edge (`Part.Ellipse.toShape`). The frame is passed explicitly
+// (centre, normal, major-axis direction, the two radii) so the caller keeps its
+// own possibly rotated frame; `gp_Ax2` re-orthogonalises the x direction.
+// Returns null on failure.
+inline std::unique_ptr<TopoDS_Shape> fc_ellipse_edge(double ox,
+                                                   double oy,
+                                                   double oz,
+                                                   double nx,
+                                                   double ny,
+                                                   double nz,
+                                                   double xx,
+                                                   double xy,
+                                                   double xz,
+                                                   double major,
+                                                   double minor)
+{
+  try {
+    const gp_Ax2 position(gp_Pnt(ox, oy, oz), gp_Dir(nx, ny, nz), gp_Dir(xx, xy, xz));
+    const gp_Elips elips(position, major, minor);
+    Handle(Geom_Ellipse) curve = new Geom_Ellipse(elips);
+    BRepBuilderAPI_MakeEdge make(curve);
+    if (!make.IsDone()) {
+      return nullptr;
+    }
+    return std::unique_ptr<TopoDS_Shape>(new TopoDS_Shape(make.Edge()));
+  }
+  catch (...) {
+    return nullptr;
+  }
+}
+
+// The general B-spline form behind `Part.BSplineCurve.buildFromPolesMultsKnots`
+// (and its constructor): explicit poles, weights, unique knots and
+// multiplicities. `fc_bspline_from_poles` above is the uniform shortcut.
+// `coords` is a flat xyz list, `weights` one value per pole, and `multiplicities`
+// one value per knot. Returns a null handle on failure (including an OCCT
+// exception).
+inline Handle(Geom_BSplineCurve) fc_bspline_curve(rust::Slice<const double> coords,
+                                                 rust::Slice<const double> weights,
+                                                 rust::Slice<const double> knots,
+                                                 rust::Slice<const int32_t> multiplicities,
+                                                 int degree,
+                                                 bool periodic,
+                                                 bool check_rational)
+{
+  Handle(Geom_BSplineCurve) curve;
+  const int pole_count = static_cast<int>(coords.size() / 3);
+  const int knot_count = static_cast<int>(knots.size());
+  if (pole_count < 2 || knot_count < 1 || degree < 1 || degree > Geom_BSplineCurve::MaxDegree()
+      || static_cast<int>(weights.size()) != pole_count
+      || static_cast<int>(multiplicities.size()) != knot_count) {
+    return curve;
+  }
+  try {
+    TColgp_Array1OfPnt poles(1, pole_count);
+    TColStd_Array1OfReal pole_weights(1, pole_count);
+    for (int i = 0; i < pole_count; ++i) {
+      poles.SetValue(i + 1, gp_Pnt(coords[3 * i], coords[3 * i + 1], coords[3 * i + 2]));
+      pole_weights.SetValue(i + 1, weights[i]);
+    }
+    TColStd_Array1OfReal knot_values(1, knot_count);
+    TColStd_Array1OfInteger knot_mults(1, knot_count);
+    for (int i = 0; i < knot_count; ++i) {
+      knot_values.SetValue(i + 1, knots[i]);
+      knot_mults.SetValue(i + 1, multiplicities[i]);
+    }
+    curve = new Geom_BSplineCurve(poles,
+                                  pole_weights,
+                                  knot_values,
+                                  knot_mults,
+                                  degree,
+                                  periodic,
+                                  check_rational);
+  }
+  catch (...) {
+    curve.Nullify();
+  }
+  return curve;
+}
+
+// The flattened state of a B-spline that Python's `Part.BSplineCurve` mirrors.
+// Every value is read back from OCCT, so a query can never disagree with the
+// curve `toShape` would build:
+//
+//   [degree, maxDegree, nbPoles, nbKnots, periodic, rational,
+//    start xyz, end xyz,
+//    firstParameter, lastParameter, firstUKnotIndex, lastUKnotIndex, continuity,
+//    knotSequenceCount, <knot sequence>,
+//    knotsCount, <knots>,
+//    multsCount, <mults>,
+//    polesCount, <poles xyz>,
+//    weightsCount, <weights>]
+//
+// `continuity` is the `GeomAbs_Shape` value (0 = C0, 6 = CN).
+inline void fc_bspline_push_state(rust::Vec<double>& out, Handle(Geom_BSplineCurve) curve)
+{
+  out.push_back(curve->Degree());
+  out.push_back(Geom_BSplineCurve::MaxDegree());
+  out.push_back(curve->NbPoles());
+  out.push_back(curve->NbKnots());
+  out.push_back(curve->IsPeriodic() ? 1.0 : 0.0);
+  out.push_back(curve->IsRational() ? 1.0 : 0.0);
+
+  fc_curve_push_point(out, curve->StartPoint());
+  fc_curve_push_point(out, curve->EndPoint());
+  out.push_back(curve->FirstParameter());
+  out.push_back(curve->LastParameter());
+  out.push_back(curve->FirstUKnotIndex());
+  out.push_back(curve->LastUKnotIndex());
+  out.push_back(static_cast<double>(curve->Continuity()));
+
+  // The expanded knot sequence: every knot repeated by its multiplicity (a
+  // periodic curve uses the shorter sequence upstream's `KnotSequence` takes).
+  Standard_Integer sequence_length = 0;
+  if (curve->IsPeriodic()) {
+    sequence_length = curve->NbPoles() + 2 * curve->Degree() - curve->Multiplicity(1) + 2;
+  }
+  else {
+    for (Standard_Integer i = 1; i <= curve->NbKnots(); ++i) {
+      sequence_length += curve->Multiplicity(i);
+    }
+  }
+  TColStd_Array1OfReal sequence(1, sequence_length);
+  curve->KnotSequence(sequence);
+  out.push_back(sequence_length);
+  for (Standard_Integer i = 1; i <= sequence_length; ++i) {
+    out.push_back(sequence.Value(i));
+  }
+
+  const TColStd_Array1OfReal& knots = curve->Knots();
+  out.push_back(knots.Length());
+  for (Standard_Integer i = knots.Lower(); i <= knots.Upper(); ++i) {
+    out.push_back(knots.Value(i));
+  }
+
+  const TColStd_Array1OfInteger& mults = curve->Multiplicities();
+  out.push_back(mults.Length());
+  for (Standard_Integer i = mults.Lower(); i <= mults.Upper(); ++i) {
+    out.push_back(mults.Value(i));
+  }
+
+  const TColgp_Array1OfPnt& poles = curve->Poles();
+  out.push_back(poles.Length());
+  for (Standard_Integer i = poles.Lower(); i <= poles.Upper(); ++i) {
+    fc_curve_push_point(out, poles.Value(i));
+  }
+
+  // `Geom_BSplineCurve` leaves its weight array null on a non-rational curve
+  // (`Weights()` would then dereference a null handle), so read them through
+  // the array-filling overload, which reports 1.0 for that case.
+  TColStd_Array1OfReal weight_values(1, curve->NbPoles());
+  curve->Weights(weight_values);
+  out.push_back(weight_values.Length());
+  for (Standard_Integer i = weight_values.Lower(); i <= weight_values.Upper(); ++i) {
+    out.push_back(weight_values.Value(i));
+  }
+}
+
+// The state of the B-spline built from explicit poles/weights/knots/mults, or an
+// empty vector when the arguments do not describe a valid curve.
+inline rust::Vec<double> fc_bspline_probe(rust::Slice<const double> coords,
+                                          rust::Slice<const double> weights,
+                                          rust::Slice<const double> knots,
+                                          rust::Slice<const int32_t> multiplicities,
+                                          int degree,
+                                          bool periodic,
+                                          bool check_rational)
+{
+  rust::Vec<double> out;
+  try {
+    Handle(Geom_BSplineCurve) curve = fc_bspline_curve(
+        coords, weights, knots, multiplicities, degree, periodic, check_rational);
+    if (curve.IsNull()) {
+      return out;
+    }
+    fc_bspline_push_state(out, curve);
+  }
+  catch (...) {
+    out.clear();
+  }
+  return out;
+}
+
+// The state of the interpolating B-spline through `coords` (`buildFromPoles`
+// with `interpolate=True`, and `interpolate` itself). Empty on failure.
+inline rust::Vec<double> fc_bspline_probe_interpolated(rust::Slice<const double> coords, bool periodic)
+{
+  rust::Vec<double> out;
+  const int count = static_cast<int>(coords.size() / 3);
+  if (count < 2) {
+    return out;
+  }
+  try {
+    Handle(TColgp_HArray1OfPnt) points = new TColgp_HArray1OfPnt(1, count);
+    for (int i = 0; i < count; ++i) {
+      points->SetValue(i + 1, gp_Pnt(coords[3 * i], coords[3 * i + 1], coords[3 * i + 2]));
+    }
+    GeomAPI_Interpolate interpolate(points, periodic, 1e-7);
+    interpolate.Perform();
+    if (!interpolate.IsDone()) {
+      return out;
+    }
+    Handle(Geom_BSplineCurve) curve = interpolate.Curve();
+    if (curve.IsNull()) {
+      return out;
+    }
+    fc_bspline_push_state(out, curve);
+  }
+  catch (...) {
+    out.clear();
+  }
+  return out;
+}
+
+// Rebuild the curve, convert it to (or from) the periodic form, and return the
+// new state. `SetPeriodic`/`SetNotPeriodic` restructure the knots and poles, so
+// this cannot be mirrored by editing the flat arrays. Empty on failure.
+inline rust::Vec<double> fc_bspline_set_periodic(rust::Slice<const double> coords,
+                                                 rust::Slice<const double> weights,
+                                                 rust::Slice<const double> knots,
+                                                 rust::Slice<const int32_t> multiplicities,
+                                                 int degree,
+                                                 bool periodic,
+                                                 bool check_rational,
+                                                 bool target_periodic)
+{
+  rust::Vec<double> out;
+  try {
+    Handle(Geom_BSplineCurve) curve = fc_bspline_curve(
+        coords, weights, knots, multiplicities, degree, periodic, check_rational);
+    if (curve.IsNull()) {
+      return out;
+    }
+    if (target_periodic) {
+      curve->SetPeriodic();
+    }
+    else {
+      curve->SetNotPeriodic();
+    }
+    fc_bspline_push_state(out, curve);
+  }
+  catch (...) {
+    out.clear();
+  }
+  return out;
+}
+
+// `Geom_BSplineCurve::Resolution`: the parameter tolerance for a 3D tolerance.
+// NaN when the curve cannot be built.
+inline double fc_bspline_resolution(rust::Slice<const double> coords,
+                                    rust::Slice<const double> weights,
+                                    rust::Slice<const double> knots,
+                                    rust::Slice<const int32_t> multiplicities,
+                                    int degree,
+                                    bool periodic,
+                                    bool check_rational,
+                                    double tolerance)
+{
+  try {
+    Handle(Geom_BSplineCurve) curve = fc_bspline_curve(
+        coords, weights, knots, multiplicities, degree, periodic, check_rational);
+    if (curve.IsNull()) {
+      return std::numeric_limits<double>::quiet_NaN();
+    }
+    Standard_Real u_tolerance = 0.0;
+    curve->Resolution(tolerance, u_tolerance);
+    return u_tolerance;
+  }
+  catch (...) {
+    return std::numeric_limits<double>::quiet_NaN();
+  }
+}
+
+// A conic from its frame (`gp_Ax2(P, N, Vx)`), the description the Part curve
+// binding keeps: `kind` 2 = circle, 3 = ellipse, `x_axis` the direction of
+// parameter 0 (the circle's x axis / the ellipse's major axis).
+inline Handle(Geom_Conic) fc_conic_from_frame(int kind,
+                                             double ox,
+                                             double oy,
+                                             double oz,
+                                             double nx,
+                                             double ny,
+                                             double nz,
+                                             double xx,
+                                             double xy,
+                                             double xz,
+                                             double major,
+                                             double minor)
+{
+  gp_Ax2 axis(gp_Pnt(ox, oy, oz), gp_Dir(nx, ny, nz), gp_Dir(xx, xy, xz));
+  if (kind == 2) {
+    return new Geom_Circle(gp_Circ(axis, major));
+  }
+  return new Geom_Ellipse(gp_Elips(axis, major, minor));
+}
+
+// A conic over the parameter range [first, last] as a B-spline, flattened like
+// `fc_bspline_probe`.
+//
+// With `nurbs` this is upstream's `GeomConic::toNurbs`: the trimmed conic is
+// converted exactly (a rational B-spline, never sampled) and its knots are
+// reparametrised back onto [first, last] when the conversion moved them. Without
+// it this is `GeomCurve::toBSpline` (`ShapeConstruct_Curve::ConvertToBSpline`,
+// which approximates a conic). Empty on failure.
+inline rust::Vec<double> fc_conic_to_spline(int kind,
+                                            double ox,
+                                            double oy,
+                                            double oz,
+                                            double nx,
+                                            double ny,
+                                            double nz,
+                                            double xx,
+                                            double xy,
+                                            double xz,
+                                            double major,
+                                            double minor,
+                                            double first,
+                                            double last,
+                                            bool nurbs)
+{
+  rust::Vec<double> out;
+  try {
+    Handle(Geom_Conic) conic = fc_conic_from_frame(
+        kind, ox, oy, oz, nx, ny, nz, xx, xy, xz, major, minor);
+    Handle(Geom_BSplineCurve) spline;
+    if (nurbs) {
+      Handle(Geom_Curve) trimmed = new Geom_TrimmedCurve(conic, first, last);
+      spline = GeomConvert::CurveToBSplineCurve(trimmed);
+      Standard_Real fnew = spline->FirstParameter();
+      Standard_Real lnew = spline->LastParameter();
+      Standard_Real utol = 0.0;
+      if (!spline->IsPeriodic()) {
+        spline->Resolution(Precision::Confusion(), utol);
+        if (std::abs(first - fnew) > utol || std::abs(last - lnew) > utol) {
+          TColStd_Array1OfReal knots(1, spline->NbKnots());
+          spline->Knots(knots);
+          BSplCLib::Reparametrize(first, last, knots);
+          spline->SetKnots(knots);
+        }
+      }
+    }
+    else {
+      ShapeConstruct_Curve converter;
+      spline = converter.ConvertToBSpline(conic, first, last, Precision::Confusion());
+    }
+    if (spline.IsNull()) {
+      return out;
+    }
+    fc_bspline_push_state(out, spline);
+  }
+  catch (...) {
+    out.clear();
+  }
+  return out;
+}
+
+// The point at parameter `u` on the B-spline with the given arrays (`value(u)`),
+// or an empty vector when the curve cannot be built or evaluated.
+inline rust::Vec<double> fc_bspline_point(rust::Slice<const double> coords,
+                                          rust::Slice<const double> weights,
+                                          rust::Slice<const double> knots,
+                                          rust::Slice<const int32_t> multiplicities,
+                                          int degree,
+                                          bool periodic,
+                                          bool check_rational,
+                                          double u)
+{
+  rust::Vec<double> out;
+  try {
+    Handle(Geom_BSplineCurve) curve = fc_bspline_curve(
+        coords, weights, knots, multiplicities, degree, periodic, check_rational);
+    if (curve.IsNull()) {
+      return out;
+    }
+    fc_curve_push_point(out, curve->Value(u));
+  }
+  catch (...) {
+    out.clear();
+  }
+  return out;
+}
+
+// A B-spline edge from explicit poles/weights/knots/mults. Returns null when the
+// arguments do not describe a valid curve.
+inline std::unique_ptr<TopoDS_Shape> fc_bspline_edge(rust::Slice<const double> coords,
+                                                    rust::Slice<const double> weights,
+                                                    rust::Slice<const double> knots,
+                                                    rust::Slice<const int32_t> multiplicities,
+                                                    int degree,
+                                                    bool periodic,
+                                                    bool check_rational)
+{
+  try {
+    Handle(Geom_BSplineCurve) curve = fc_bspline_curve(
+        coords, weights, knots, multiplicities, degree, periodic, check_rational);
+    if (curve.IsNull()) {
+      return nullptr;
+    }
+    BRepBuilderAPI_MakeEdge make(curve);
+    if (!make.IsDone()) {
+      return nullptr;
+    }
+    return std::unique_ptr<TopoDS_Shape>(new TopoDS_Shape(make.Edge()));
   }
   catch (...) {
     return nullptr;

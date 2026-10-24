@@ -16,9 +16,7 @@
 //! `Part.makeCylinder`/`Part.makeSphere`.
 //!
 //! Deliberate limits for this slice, all reported as `Part.OCCError` rather than a
-//! silent `None`: an infinite `Line` has no edge, an `Ellipse` *edge* needs a
-//! `gp_Elips` binding the kernel crate does not expose (the curve itself is
-//! available as [`Part.Ellipse`](PyEllipse)), and face/solid constructors
+//! silent `None`: an infinite `Line` has no edge, and face/solid constructors
 //! (`makeFace`, `makeSolid`, …) are still to come. `Line2dSegment.toShape(surface)`
 //! attaches the 2D segment as the edge's pcurve but does **not** project it onto the
 //! surface: no `GeomProjLib` binding exists here, and `Part.Cylinder`/`Part.Sphere`
@@ -30,10 +28,12 @@
 use std::sync::Mutex;
 
 use ferrocad_curves::{
-    Arc, Circle, CurveError, EdgeCurve, Ellipse, Line, LineSegment, Vector3, polygon,
+    ANGULAR_TOLERANCE, Arc, Circle, CurveError, EdgeCurve, Ellipse, Line, LineSegment, Vector3,
+    polygon,
 };
 use ferrocad_geom::{ElementKind, Shape};
 use ferrocad_part::backend;
+use ferrocad_types::Matrix4;
 use pyo3::create_exception;
 use pyo3::exceptions::{PyException, PyIndexError, PyRuntimeError, PyTypeError, PyValueError};
 use pyo3::prelude::*;
@@ -130,7 +130,11 @@ fn curve_to_py(py: Python<'_>, curve: EdgeCurve) -> PyResult<PyObject> {
             Ok(Py::new(py, PyLineSegment { curve: segment })?.into_any())
         }
         EdgeCurve::Circle(circle) => Ok(Py::new(py, PyCircle { curve: circle })?.into_any()),
-        EdgeCurve::Arc(arc) => Ok(Py::new(py, PyArcOfCircle { curve: arc })?.into_any()),
+        // Upstream's `TopoShapeEdgePy::getCurve` returns the *basis* curve of the
+        // edge's `BRepAdaptor_Curve`, so a trimmed circular edge reports a
+        // `Part.Circle` (with the edge's span available as First/LastParameter),
+        // never an `ArcOfCircle`. `Part.ChFi2d` asserts exactly that.
+        EdgeCurve::Arc(arc) => Ok(Py::new(py, PyCircle { curve: arc.circle() })?.into_any()),
         EdgeCurve::Ellipse(ellipse) => {
             Ok(Py::new(py, PyEllipse { curve: ellipse })?.into_any())
         }
@@ -231,6 +235,80 @@ impl PyLine {
     }
 }
 
+/// Read a `ferrocad.Matrix` through its `A11`…`A44` elements.
+fn matrix_argument(value: &Bound<'_, PyAny>) -> PyResult<Matrix4> {
+    let mut values = [0.0; 16];
+    for row in 1..=4 {
+        for column in 1..=4 {
+            let name = format!("A{row}{column}");
+            values[(row - 1) * 4 + (column - 1)] = value.getattr(name)?.extract()?;
+        }
+    }
+    Ok(Matrix4::from_values(values))
+}
+
+/// The image of an analytic curve's frame under `matrix`.
+///
+/// Upstream's `Geometry::transform` builds a `gp_Trsf` from the matrix and calls
+/// `Geom_Circle::Transform`/`Geom_Ellipse::Transform`; `gp_Trsf::SetValues`
+/// accepts only a similarity (rotation, mirror, translation or uniform scale),
+/// and `gp_Ax2::Transform` re-derives the normal from the transformed x and y
+/// axes, so a mirror flips it. A general affine matrix is rejected rather than
+/// sheared, as upstream's `Standard_ConstructionError` would.
+fn transformed_frame(matrix: &Matrix4, normal: Vector3, x_axis: Vector3) -> PyResult<(Vector3, Vector3, f64)> {
+    let m = &matrix.m;
+    let linear = |v: Vector3| {
+        Vector3::new(
+            m[0] * v.x + m[1] * v.y + m[2] * v.z,
+            m[4] * v.x + m[5] * v.y + m[6] * v.z,
+            m[8] * v.x + m[9] * v.y + m[10] * v.z,
+        )
+    };
+    let column = |offset: usize| Vector3::new(m[offset], m[offset + 4], m[offset + 8]);
+    let (e1, e2, e3) = (column(0), column(1), column(2));
+    let scale = e1.length();
+    if !scale.is_finite() || scale <= 0.0 {
+        return Err(OCCError::new_err(
+            "a curve transform needs a non-singular matrix",
+        ));
+    }
+    let tolerance = 1e-9 * scale * scale;
+    let similar = e1.dot(&e2).abs() <= tolerance
+        && e1.dot(&e3).abs() <= tolerance
+        && e2.dot(&e3).abs() <= tolerance
+        && (e2.length() - scale).abs() <= 1e-9 * scale
+        && (e3.length() - scale).abs() <= 1e-9 * scale;
+    if !similar {
+        return Err(OCCError::new_err(
+            "a curve transform needs a similarity matrix (rotation, mirror or uniform scale)",
+        ));
+    }
+    let x_axis = linear(x_axis).scale(1.0 / scale);
+    let y_axis = linear(normal.cross(&x_axis)).scale(1.0 / scale);
+    Ok((x_axis, x_axis.cross(&y_axis), scale))
+}
+
+/// A circle mutated by `matrix` in place (`Geom_Circle::Transform`).
+fn transformed_circle(circle: &Circle, matrix: &Matrix4) -> PyResult<Circle> {
+    let (x_axis, normal, scale) = transformed_frame(matrix, circle.normal(), circle.x_axis())?;
+    let center = matrix.transform(&circle.center());
+    Circle::with_axis(center, normal, x_axis, circle.radius() * scale).map_err(curve_error)
+}
+
+/// An ellipse mutated by `matrix` in place (`Geom_Ellipse::Transform`).
+fn transformed_ellipse(ellipse: &Ellipse, matrix: &Matrix4) -> PyResult<Ellipse> {
+    let (x_axis, normal, scale) = transformed_frame(matrix, ellipse.normal(), ellipse.x_axis())?;
+    let center = matrix.transform(&ellipse.center());
+    Ellipse::with_axis(
+        center,
+        normal,
+        x_axis,
+        ellipse.major_radius() * scale,
+        ellipse.minor_radius() * scale,
+    )
+    .map_err(curve_error)
+}
+
 /// `Part.Circle(center, normal, radius)` — a full circle.
 #[pyclass(name = "Circle", module = "Part")]
 #[derive(Clone)]
@@ -288,6 +366,63 @@ impl PyCircle {
     fn toShape(&self, py: Python<'_>) -> PyResult<Py<PyEdge>> {
         Py::new(py, PyEdge::from_curve(EdgeCurve::Circle(self.curve))?)
     }
+
+    /// `Circle.transform(matrix)` — apply a similarity transform in place, as
+    /// upstream's `Geom_Circle::Transform` does.
+    fn transform(&mut self, matrix: &Bound<'_, PyAny>) -> PyResult<()> {
+        let matrix = matrix_argument(matrix)?;
+        self.curve = transformed_circle(&self.curve, &matrix)?;
+        Ok(())
+    }
+
+    /// `value(u)`: the point at angle `u` (upstream's `Geom_Curve::Value`).
+    fn value(&self, py: Python<'_>, angle: f64) -> PyResult<PyObject> {
+        py_vector(py, self.curve.point_at(angle))
+    }
+
+    /// `toNurbs(first=0, last=2π)`: the exact rational B-spline for the circle
+    /// over the given parameter range (upstream's `GeomCircle::toNurbs`).
+    #[pyo3(signature = (first = None, last = None))]
+    fn toNurbs(
+        &self,
+        py: Python<'_>,
+        first: Option<f64>,
+        last: Option<f64>,
+    ) -> PyResult<Py<PyBSplineCurve>> {
+        let first = first.unwrap_or(0.0);
+        let last = last.unwrap_or(std::f64::consts::TAU);
+        conic_spline(py, &Conic::Circle(self.curve), first, last, true)
+    }
+
+    /// `toBSpline(first=0, last=2π)`: the B-spline upstream builds with
+    /// `ShapeConstruct_Curve` (an approximation, unlike [`toNurbs`](Self::toNurbs)).
+    #[pyo3(signature = (first = None, last = None))]
+    fn toBSpline(
+        &self,
+        py: Python<'_>,
+        first: Option<f64>,
+        last: Option<f64>,
+    ) -> PyResult<Py<PyBSplineCurve>> {
+        let first = first.unwrap_or(0.0);
+        let last = last.unwrap_or(std::f64::consts::TAU);
+        conic_spline(py, &Conic::Circle(self.curve), first, last, false)
+    }
+
+    /// `trim(first=0, last=2π)`: the arc over the given parameter range, as a
+    /// `Part.ArcOfCircle` (upstream's `GeometryCurvePy::trim` routed through
+    /// `makeTrimmedCurvePy`).
+    #[pyo3(signature = (first = None, last = None))]
+    fn trim(
+        &self,
+        py: Python<'_>,
+        first: Option<f64>,
+        last: Option<f64>,
+    ) -> PyResult<Py<PyArcOfCircle>> {
+        let first = first.unwrap_or(0.0);
+        let last = last.unwrap_or(std::f64::consts::TAU);
+        let curve = Arc::new(self.curve, first, last).map_err(curve_error)?;
+        Py::new(py, PyArcOfCircle { curve })
+    }
 }
 
 /// `Part.ArcOfCircle(circle, first, last)` — a circular arc (the `Part.Arc` alias).
@@ -334,6 +469,39 @@ impl PyArcOfCircle {
     #[getter]
     fn LastParameter(&self) -> f64 {
         self.curve.last()
+    }
+
+    /// `value(u)`: the point at angle `u` (the basis circle's parameter).
+    fn value(&self, py: Python<'_>, angle: f64) -> PyResult<PyObject> {
+        py_vector(py, self.curve.point_at(angle))
+    }
+
+    /// `toNurbs(first, last)`: the exact rational B-spline over the arc (the
+    /// range defaults to the arc's own parameters, as upstream's
+    /// `GeomArcOfCircle::toNurbs`).
+    #[pyo3(signature = (first = None, last = None))]
+    fn toNurbs(
+        &self,
+        py: Python<'_>,
+        first: Option<f64>,
+        last: Option<f64>,
+    ) -> PyResult<Py<PyBSplineCurve>> {
+        let first = first.unwrap_or(self.curve.first());
+        let last = last.unwrap_or(self.curve.last());
+        conic_spline(py, &Conic::Circle(self.curve.circle()), first, last, true)
+    }
+
+    /// `toBSpline(first, last)`: the approximating conversion over the arc.
+    #[pyo3(signature = (first = None, last = None))]
+    fn toBSpline(
+        &self,
+        py: Python<'_>,
+        first: Option<f64>,
+        last: Option<f64>,
+    ) -> PyResult<Py<PyBSplineCurve>> {
+        let first = first.unwrap_or(self.curve.first());
+        let last = last.unwrap_or(self.curve.last());
+        conic_spline(py, &Conic::Circle(self.curve.circle()), first, last, false)
     }
 
     fn toShape(&self, py: Python<'_>) -> PyResult<Py<PyEdge>> {
@@ -454,14 +622,75 @@ impl PyEllipse {
 
     /// The ellipse as an edge.
     ///
-    /// Not available in this slice: `ferrocad_occt` has no `gp_Elips` binding, so
-    /// the seam's `make_edge` refuses an `EdgeCurve::Ellipse`. Raising here keeps
-    /// that a clear error instead of returning an approximated curve.
-    fn toShape(&self, _py: Python<'_>) -> PyResult<Py<PyEdge>> {
-        Err(OCCError::new_err(
-            "Part.Ellipse.toShape() is not available: the OCCT bindings expose no \
-             gp_Elips, so an exact elliptical edge cannot be built",
-        ))
+    /// A `Geom_Ellipse`-backed `BRepBuilderAPI_MakeEdge`: the ellipse's own frame
+    /// (centre, plane normal, major axis and the two radii) is handed to
+    /// `gp_Elips`, so the edge is the exact analytic ellipse, not a NURBS
+    /// approximation.
+    fn toShape(&self, py: Python<'_>) -> PyResult<Py<PyEdge>> {
+        Py::new(py, PyEdge::from_curve(EdgeCurve::Ellipse(self.curve))?)
+    }
+
+    /// `Ellipse.transform(matrix)` — apply a similarity transform in place, as
+    /// upstream's `Geom_Ellipse::Transform` does.
+    fn transform(&mut self, matrix: &Bound<'_, PyAny>) -> PyResult<()> {
+        let matrix = matrix_argument(matrix)?;
+        self.curve = transformed_ellipse(&self.curve, &matrix)?;
+        Ok(())
+    }
+
+    /// `toNurbs(first=0, last=2π)`: the exact rational B-spline for the ellipse
+    /// over the given parameter range (upstream's `GeomEllipse::toNurbs`).
+    #[pyo3(signature = (first = None, last = None))]
+    fn toNurbs(
+        &self,
+        py: Python<'_>,
+        first: Option<f64>,
+        last: Option<f64>,
+    ) -> PyResult<Py<PyBSplineCurve>> {
+        let first = first.unwrap_or(0.0);
+        let last = last.unwrap_or(std::f64::consts::TAU);
+        conic_spline(py, &Conic::Ellipse(self.curve), first, last, true)
+    }
+
+    /// `toBSpline(first=0, last=2π)`: the B-spline upstream builds with
+    /// `ShapeConstruct_Curve` (an approximation, unlike [`toNurbs`](Self::toNurbs)).
+    #[pyo3(signature = (first = None, last = None))]
+    fn toBSpline(
+        &self,
+        py: Python<'_>,
+        first: Option<f64>,
+        last: Option<f64>,
+    ) -> PyResult<Py<PyBSplineCurve>> {
+        let first = first.unwrap_or(0.0);
+        let last = last.unwrap_or(std::f64::consts::TAU);
+        conic_spline(py, &Conic::Ellipse(self.curve), first, last, false)
+    }
+
+    /// `trim(first=0, last=2π)`: the elliptical arc over the given parameter
+    /// range, as a `Part.ArcOfEllipse` (upstream's `GeometryCurvePy::trim`).
+    #[pyo3(signature = (first = None, last = None))]
+    fn trim(
+        &self,
+        py: Python<'_>,
+        first: Option<f64>,
+        last: Option<f64>,
+    ) -> PyResult<Py<PyArcOfEllipse>> {
+        let first = first.unwrap_or(0.0);
+        let last = last.unwrap_or(std::f64::consts::TAU);
+        if !first.is_finite()
+            || !last.is_finite()
+            || (last - first).abs() <= ANGULAR_TOLERANCE
+        {
+            return Err(OCCError::new_err("an ellipse arc needs a non-zero sweep"));
+        }
+        Py::new(
+            py,
+            PyArcOfEllipse {
+                ellipse: self.curve,
+                first,
+                last,
+            },
+        )
     }
 
     fn __repr__(&self) -> String {
@@ -471,6 +700,133 @@ impl PyEllipse {
             self.curve.major_radius(),
             self.curve.minor_radius()
         )
+    }
+}
+
+/// `Part.ArcOfEllipse(ellipse, first, last)` — a portion of an ellipse
+/// (upstream's `Part::GeomArcOfEllipse`), what [`PyEllipse::trim`] returns.
+///
+/// Like `Geom_TrimmedCurve`, the parameter is the basis ellipse's angle, so
+/// `value(u)` and `FirstParameter()`/`LastParameter()` live on the ellipse's own
+/// parameterisation.
+#[pyclass(name = "ArcOfEllipse", module = "Part")]
+#[derive(Clone)]
+pub struct PyArcOfEllipse {
+    ellipse: Ellipse,
+    first: f64,
+    last: f64,
+}
+
+#[pymethods]
+impl PyArcOfEllipse {
+    #[new]
+    fn new(ellipse: &Bound<'_, PyAny>, first: f64, last: f64) -> PyResult<Self> {
+        let ellipse = ellipse.extract::<PyRef<'_, PyEllipse>>()?.curve;
+        if !first.is_finite()
+            || !last.is_finite()
+            || (last - first).abs() <= ANGULAR_TOLERANCE
+        {
+            return Err(OCCError::new_err("an ellipse arc needs a non-zero sweep"));
+        }
+        Ok(Self {
+            ellipse,
+            first,
+            last,
+        })
+    }
+
+    /// The supporting ellipse (upstream's `Ellipse`).
+    #[getter]
+    fn Ellipse(&self, py: Python<'_>) -> PyResult<Py<PyEllipse>> {
+        Py::new(
+            py,
+            PyEllipse {
+                curve: self.ellipse,
+            },
+        )
+    }
+
+    #[getter]
+    fn Center(&self, py: Python<'_>) -> PyResult<PyObject> {
+        py_vector(py, self.ellipse.center())
+    }
+
+    #[getter]
+    fn Axis(&self, py: Python<'_>) -> PyResult<PyObject> {
+        py_vector(py, self.ellipse.normal())
+    }
+
+    #[getter]
+    fn MajorAxis(&self, py: Python<'_>) -> PyResult<PyObject> {
+        py_vector(py, self.ellipse.x_axis())
+    }
+
+    #[getter]
+    fn MinorAxis(&self, py: Python<'_>) -> PyResult<PyObject> {
+        py_vector(py, self.ellipse.y_axis())
+    }
+
+    #[getter]
+    fn MajorRadius(&self) -> f64 {
+        self.ellipse.major_radius()
+    }
+
+    #[getter]
+    fn MinorRadius(&self) -> f64 {
+        self.ellipse.minor_radius()
+    }
+
+    #[getter]
+    fn StartPoint(&self, py: Python<'_>) -> PyResult<PyObject> {
+        py_vector(py, self.ellipse.point_at(self.first))
+    }
+
+    #[getter]
+    fn EndPoint(&self, py: Python<'_>) -> PyResult<PyObject> {
+        py_vector(py, self.ellipse.point_at(self.last))
+    }
+
+    #[getter]
+    fn FirstParameter(&self) -> f64 {
+        self.first
+    }
+
+    #[getter]
+    fn LastParameter(&self) -> f64 {
+        self.last
+    }
+
+    /// `value(u)`: the point at angle `u` (the basis ellipse's parameter).
+    fn value(&self, py: Python<'_>, angle: f64) -> PyResult<PyObject> {
+        py_vector(py, self.ellipse.point_at(angle))
+    }
+
+    /// `toNurbs(first, last)`: the exact rational B-spline over the arc (the
+    /// range defaults to the arc's own parameters, as upstream's
+    /// `GeomArcOfEllipse::toNurbs`).
+    #[pyo3(signature = (first = None, last = None))]
+    fn toNurbs(
+        &self,
+        py: Python<'_>,
+        first: Option<f64>,
+        last: Option<f64>,
+    ) -> PyResult<Py<PyBSplineCurve>> {
+        let first = first.unwrap_or(self.first);
+        let last = last.unwrap_or(self.last);
+        conic_spline(py, &Conic::Ellipse(self.ellipse), first, last, true)
+    }
+
+    /// `toBSpline(first, last)`: the approximating conversion over the arc.
+    #[pyo3(signature = (first = None, last = None))]
+    fn toBSpline(
+        &self,
+        py: Python<'_>,
+        first: Option<f64>,
+        last: Option<f64>,
+    ) -> PyResult<Py<PyBSplineCurve>> {
+        let first = first.unwrap_or(self.first);
+        let last = last.unwrap_or(self.last);
+        conic_spline(py, &Conic::Ellipse(self.ellipse), first, last, false)
     }
 }
 
@@ -936,13 +1292,259 @@ impl PySurface {
 
 /// `Part.BSplineCurve()` — an interpolating B-spline, a curve object like
 /// `Part.LineSegment`; `toShape()` turns it into a `Part.Edge`.
+///
+/// The curve itself is OCCT's `Geom_BSplineCurve`. Rather than reimplementing
+/// B-spline evaluation in Rust, the binding keeps the state OCCT reports back
+/// (poles, weights, knots, multiplicities, degree, periodic/rational flag), so
+/// `Degree`, `KnotSequence`, `getPole` … and `toShape` can never disagree, and a
+/// mutation (`setKnot`, `setPole`, `setPeriodic`) is followed by a fresh read.
 #[pyclass(name = "BSplineCurve", module = "Part")]
 pub struct PyBSplineCurve {
-    points: Mutex<Vec<Vector3>>,
-    periodic: Mutex<bool>,
-    /// `Some(degree)` when the curve came from control points; `None` for the
-    /// interpolating form.
-    degree: Mutex<Option<i32>>,
+    /// `None` for `Part.BSplineCurve()`, which has no geometry yet.
+    state: Mutex<Option<SplineState>>,
+}
+
+/// The flattened state a B-spline reports, in the layout `fc_curve.hxx`'s
+/// `fc_bspline_push_state` writes.
+#[derive(Clone)]
+struct SplineState {
+    degree: i32,
+    max_degree: i32,
+    periodic: bool,
+    rational: bool,
+    start: Vector3,
+    end: Vector3,
+    first_parameter: f64,
+    last_parameter: f64,
+    first_u_knot: i32,
+    last_u_knot: i32,
+    continuity: i32,
+    knot_sequence: Vec<f64>,
+    knots: Vec<f64>,
+    mults: Vec<i32>,
+    poles: Vec<Vector3>,
+    weights: Vec<f64>,
+}
+
+/// A cursor over the flat `f64` state `fc_curve.hxx` returns.
+struct StateReader<'a> {
+    data: &'a [f64],
+    at: usize,
+}
+
+impl<'a> StateReader<'a> {
+    fn new(data: &'a [f64]) -> Self {
+        Self { data, at: 0 }
+    }
+
+    fn number(&mut self) -> Option<f64> {
+        let value = *self.data.get(self.at)?;
+        self.at += 1;
+        Some(value)
+    }
+
+    fn integer(&mut self) -> Option<i32> {
+        Some(self.number()? as i32)
+    }
+
+    fn count(&mut self) -> Option<usize> {
+        Some(self.integer()?.max(0) as usize)
+    }
+
+    fn point(&mut self) -> Option<Vector3> {
+        Some(Vector3::new(self.number()?, self.number()?, self.number()?))
+    }
+
+    fn numbers(&mut self, count: usize) -> Option<Vec<f64>> {
+        let end = self.at.checked_add(count)?;
+        let values = self.data.get(self.at..end)?;
+        self.at = end;
+        Some(values.to_vec())
+    }
+}
+
+impl SplineState {
+    fn from_blob(blob: &[f64]) -> Option<Self> {
+        let mut reader = StateReader::new(blob);
+        let degree = reader.integer()?;
+        let max_degree = reader.integer()?;
+        let _nb_poles = reader.integer()?;
+        let _nb_knots = reader.integer()?;
+        let periodic = reader.number()? != 0.0;
+        let rational = reader.number()? != 0.0;
+        let start = reader.point()?;
+        let end = reader.point()?;
+        let first_parameter = reader.number()?;
+        let last_parameter = reader.number()?;
+        let first_u_knot = reader.integer()?;
+        let last_u_knot = reader.integer()?;
+        let continuity = reader.integer()?;
+        let sequence_length = reader.count()?;
+        let knot_sequence = reader.numbers(sequence_length)?;
+        let knot_count = reader.count()?;
+        let knots = reader.numbers(knot_count)?;
+        let mult_count = reader.count()?;
+        let mults = reader
+            .numbers(mult_count)?
+            .into_iter()
+            .map(|value| value as i32)
+            .collect();
+        let pole_count = reader.count()?;
+        let mut poles = Vec::with_capacity(pole_count);
+        for _ in 0..pole_count {
+            poles.push(reader.point()?);
+        }
+        let weight_count = reader.count()?;
+        let weights = reader.numbers(weight_count)?;
+        Some(Self {
+            degree,
+            max_degree,
+            periodic,
+            rational,
+            start,
+            end,
+            first_parameter,
+            last_parameter,
+            first_u_knot,
+            last_u_knot,
+            continuity,
+            knot_sequence,
+            knots,
+            mults,
+            poles,
+            weights,
+        })
+    }
+
+    /// Rebuild `checkRational` for the stored curve: a rational curve must keep
+    /// its weights, a non-rational one is reconstructed from unit weights.
+    fn check_rational(&self) -> bool {
+        !self.rational
+    }
+
+    /// The name upstream's `Continuity` reports for a `GeomAbs_Shape` value.
+    fn continuity_name(&self) -> &'static str {
+        match self.continuity {
+            0 => "C0",
+            1 => "G1",
+            2 => "C1",
+            3 => "G2",
+            4 => "C2",
+            5 => "C3",
+            _ => "CN",
+        }
+    }
+}
+
+/// The B-spline entry points the `ferrocad_geom` seam does not carry (explicit
+/// knots, read-back state, periodicity conversion, resolution). `Part` is the
+/// OCCT workbench, so its curve binding talks to the OCCT backend directly.
+fn occt() -> ferrocad_occt::OcctBackend {
+    ferrocad_occt::OcctBackend::new()
+}
+
+/// A conic the Part binding converts to B-splines: a full circle or ellipse.
+///
+/// `toNurbs`/`toBSpline`/`trim` on both classes share the conversion, and only
+/// the frame (two equal radii for a circle) distinguishes them.
+enum Conic {
+    Circle(Circle),
+    Ellipse(Ellipse),
+}
+
+impl Conic {
+    /// `(kind, centre, normal, x axis, major radius, minor radius)`; `kind` is
+    /// the `fc_conic_to_spline` tag (2 = circle, 3 = ellipse).
+    fn frame(&self) -> (i32, Vector3, Vector3, Vector3, f64, f64) {
+        match self {
+            Conic::Circle(circle) => (
+                2,
+                circle.center(),
+                circle.normal(),
+                circle.x_axis(),
+                circle.radius(),
+                circle.radius(),
+            ),
+            Conic::Ellipse(ellipse) => (
+                3,
+                ellipse.center(),
+                ellipse.normal(),
+                ellipse.x_axis(),
+                ellipse.major_radius(),
+                ellipse.minor_radius(),
+            ),
+        }
+    }
+}
+
+/// Whether the range is a whole conic, the case upstream's `GeomCircle::toNurbs`
+/// and `GeomEllipse::toNurbs` answer with their seven-pole rational cubic rather
+/// than the generic trimmed-curve conversion (they compare `first`/`last` with
+/// `0`/`2π` exactly, too).
+fn is_full_conic(first: f64, last: f64) -> bool {
+    first == 0.0 && last == std::f64::consts::TAU
+}
+
+/// Upstream's whole-conic `toNurbs`: a degree-3 rational B-spline with seven
+/// poles, the end weights raised to 3, and knots `0, π, 2π` for a circle (`0, 1,
+/// 2` for an ellipse — upstream's own asymmetry).
+///
+/// The poles are given in the conic's local frame and mapped through its
+/// `gp_Ax3`, so parameter 0 is the point on the x axis and the curve starts on
+/// `value(0)` exactly.
+fn full_conic_nurbs(conic: &Conic) -> PyResult<SplineState> {
+    let (_, center, normal, x_axis, major, minor) = conic.frame();
+    let y_axis = normal.cross(&x_axis);
+    let local = [
+        (major, 0.0),
+        (major, 2.0 * minor),
+        (-major, 2.0 * minor),
+        (-major, 0.0),
+        (-major, -2.0 * minor),
+        (major, -2.0 * minor),
+        (major, 0.0),
+    ];
+    let poles: Vec<Vector3> = local
+        .iter()
+        .map(|(x, y)| center.add(&x_axis.scale(*x)).add(&y_axis.scale(*y)))
+        .collect();
+    let weights = vec![3.0, 1.0, 1.0, 3.0, 1.0, 1.0, 3.0];
+    let (knots, mults) = match conic {
+        Conic::Circle(_) => (
+            vec![0.0, std::f64::consts::PI, std::f64::consts::TAU],
+            vec![4, 3, 4],
+        ),
+        Conic::Ellipse(_) => (vec![0.0, 1.0, 2.0], vec![4, 3, 4]),
+    };
+    let blob = occt()
+        .bspline_state(&poles, &weights, &knots, &mults, 3, false, true)
+        .ok_or_else(|| OCCError::new_err("conversion to a NURBS failed"))?;
+    SplineState::from_blob(&blob)
+        .ok_or_else(|| OCCError::new_err("conversion to a NURBS failed"))
+}
+
+/// `conic.toNurbs(first, last)` / `conic.toBSpline(first, last)` as a
+/// `Part.BSplineCurve`.
+///
+/// `nurbs` selects the exact rational conversion (upstream's
+/// `GeomConic::toNurbs`) over the approximating `GeomCurve::toBSpline`.
+fn conic_spline(
+    py: Python<'_>,
+    conic: &Conic,
+    first: f64,
+    last: f64,
+    nurbs: bool,
+) -> PyResult<Py<PyBSplineCurve>> {
+    if nurbs && is_full_conic(first, last) {
+        return Py::new(py, PyBSplineCurve::from_state(full_conic_nurbs(conic)?));
+    }
+    let (kind, center, normal, x_axis, major, minor) = conic.frame();
+    let blob = occt()
+        .conic_spline_state(kind, center, normal, x_axis, major, minor, first, last, nurbs)
+        .ok_or_else(|| OCCError::new_err("conversion to a B-spline failed"))?;
+    let state = SplineState::from_blob(&blob)
+        .ok_or_else(|| OCCError::new_err("conversion to a B-spline failed"))?;
+    Py::new(py, PyBSplineCurve::from_state(state))
 }
 
 fn parse_points(points: &Bound<'_, PyAny>) -> PyResult<Vec<Vector3>> {
@@ -953,22 +1555,171 @@ fn parse_points(points: &Bound<'_, PyAny>) -> PyResult<Vec<Vector3>> {
     Ok(parsed)
 }
 
+fn parse_floats(values: &Bound<'_, PyAny>) -> PyResult<Vec<f64>> {
+    let mut parsed = Vec::new();
+    for value in values.try_iter()? {
+        parsed.push(value?.extract::<f64>()?);
+    }
+    Ok(parsed)
+}
+
+fn parse_integers(values: &Bound<'_, PyAny>) -> PyResult<Vec<i32>> {
+    let mut parsed = Vec::new();
+    for value in values.try_iter()? {
+        parsed.push(value?.extract::<i32>()?);
+    }
+    Ok(parsed)
+}
+
+/// Build the state from poles (and optional multiplicities, knots and weights),
+/// mirroring `BSplineCurvePy::buildFromPolesMultsKnots` step by step: the same
+/// guesses for an omitted knot vector, the same multiplicity checks and the same
+/// "number of poles and sum of mults" rule.
+fn build_spline(
+    poles: &Bound<'_, PyAny>,
+    mults: Option<&Bound<'_, PyAny>>,
+    knots: Option<&Bound<'_, PyAny>>,
+    periodic: bool,
+    mut degree: i32,
+    weights: Option<&Bound<'_, PyAny>>,
+    check_rational: bool,
+) -> PyResult<SplineState> {
+    let poles = parse_points(poles)?;
+    if poles.len() < 2 {
+        return Err(OCCError::new_err("need two or more poles"));
+    }
+    let given_mults = mults.map(parse_integers).transpose()?;
+    let given_knots = knots.map(parse_floats).transpose()?;
+
+    let knot_count = match (&given_mults, &given_knots) {
+        (Some(mults), Some(knots)) => {
+            if mults.len() != knots.len() {
+                return Err(OCCError::new_err("number of knots and mults mismatch"));
+            }
+            mults.len()
+        }
+        (Some(mults), None) => mults.len(),
+        (None, Some(knots)) => knots.len(),
+        (None, None) => {
+            let count = poles.len() as i32;
+            if periodic {
+                if count < degree {
+                    degree = count;
+                }
+                (count + 1) as usize
+            }
+            else {
+                if count <= degree {
+                    degree = count - 1;
+                }
+                (count - degree + 1) as usize
+            }
+        }
+    };
+    if knot_count == 0 || degree < 1 {
+        return Err(OCCError::new_err("failed to create spline"));
+    }
+
+    let mults = match given_mults {
+        Some(mults) => mults,
+        None => {
+            let mut mults = vec![1; knot_count];
+            if !periodic {
+                mults[0] = degree + 1;
+                mults[knot_count - 1] = degree + 1;
+            }
+            mults
+        }
+    };
+    let sum_of_mults: i32 = if periodic {
+        mults[..mults.len().saturating_sub(1)].iter().sum()
+    }
+    else {
+        mults.iter().sum()
+    };
+    if mults.len() >= 3 {
+        for multiplicity in &mults[1..mults.len() - 1] {
+            if *multiplicity > degree {
+                return Err(OCCError::new_err(
+                    "multiplicity of inner knot higher than degree",
+                ));
+            }
+        }
+    }
+
+    let knots = match given_knots {
+        Some(knots) => knots,
+        None => {
+            if knot_count == 1 {
+                vec![0.0]
+            }
+            else {
+                (0..knot_count)
+                    .map(|index| index as f64 / (knot_count - 1) as f64)
+                    .collect()
+            }
+        }
+    };
+
+    let weights = match weights.map(parse_floats).transpose()? {
+        Some(weights) => {
+            if weights.len() != poles.len() {
+                return Err(OCCError::new_err("number of poles and weights mismatch"));
+            }
+            weights
+        }
+        None => vec![1.0; poles.len()],
+    };
+
+    let pole_count = poles.len() as i32;
+    let consistent = if periodic {
+        sum_of_mults == pole_count
+    }
+    else {
+        sum_of_mults - degree - 1 == pole_count
+    };
+    if !consistent {
+        return Err(OCCError::new_err("number of poles and sum of mults mismatch"));
+    }
+
+    let blob = occt()
+        .bspline_state(&poles, &weights, &knots, &mults, degree, periodic, check_rational)
+        .ok_or_else(|| OCCError::new_err("failed to create spline"))?;
+    SplineState::from_blob(&blob).ok_or_else(|| OCCError::new_err("failed to create spline"))
+}
+
 #[pymethods]
 impl PyBSplineCurve {
-    /// `Part.BSplineCurve()` (empty) or `Part.BSplineCurve(poles, knots, weights,
-    /// periodic, degree, knotSequence, checkRational)` (from control points).
-    /// Only the poles, periodic flag and degree are used in this slice.
+    /// `Part.BSplineCurve()` (empty) or
+    /// `Part.BSplineCurve(poles, mults=None, knots=None, periodic=False,
+    /// degree=3, weights=None, CheckRational=True)`.
+    ///
+    /// Upstream's `PyInit` delegates to `buildFromPolesMultsKnots`, so the
+    /// constructor is the same parser with positional arguments only.
     #[new]
     #[pyo3(signature = (*args))]
     fn new(args: &Bound<'_, PyTuple>) -> PyResult<Self> {
         if args.len() == 0 {
             return Ok(Self {
-                points: Mutex::new(Vec::new()),
-                periodic: Mutex::new(false),
-                degree: Mutex::new(None),
+                state: Mutex::new(None),
             });
         }
-        let points = parse_points(&args.get_item(0)?)?;
+        if args.len() > 7 {
+            return Err(PyTypeError::new_err(
+                "B-spline constructor accepts:\n\
+                 -- poles, [mults, knots, periodic, degree, weights, CheckRational]\n\
+                 -- empty parameter list",
+            ));
+        }
+        let optional = |index: usize| -> PyResult<Option<Bound<'_, PyAny>>> {
+            match args.get_item(index) {
+                Ok(value) if !value.is_none() => Ok(Some(value)),
+                _ => Ok(None),
+            }
+        };
+        let poles = args.get_item(0)?;
+        let mults = optional(1)?;
+        let knots = optional(2)?;
         let periodic = args
             .get_item(3)
             .ok()
@@ -979,44 +1730,115 @@ impl PyBSplineCurve {
             .ok()
             .and_then(|value| value.extract::<i32>().ok())
             .unwrap_or(3);
+        let weights = optional(5)?;
+        let check_rational = args
+            .get_item(6)
+            .ok()
+            .and_then(|value| value.extract::<bool>().ok())
+            .unwrap_or(true);
+        let state = build_spline(
+            &poles,
+            mults.as_ref(),
+            knots.as_ref(),
+            periodic,
+            degree,
+            weights.as_ref(),
+            check_rational,
+        )?;
         Ok(Self {
-            points: Mutex::new(points),
-            periodic: Mutex::new(periodic),
-            degree: Mutex::new(Some(degree)),
+            state: Mutex::new(Some(state)),
         })
     }
 
-    /// Build the curve from control points:
-    /// `buildFromPoles(poles, periodic=False, degree=1, tolerance=1e-7,
-    /// checkRational=True)`.
+    /// Build the curve from poles, multiplicities and knots:
+    /// `buildFromPolesMultsKnots(poles, mults=None, knots=None, periodic=False,
+    /// degree=3, weights=None, CheckRational=True)`.
     ///
-    /// The tolerance and rational check are accepted for signature compatibility;
-    /// the kernel builder here only takes the poles, the degree and the periodic
-    /// flag. As upstream does, the degree is capped at `len(poles) - 1`.
-    #[pyo3(signature = (poles, periodic = false, degree = 1, tolerance = 1e-7, checkRational = true))]
+    /// With no knots the vector is uniform on `[0, 1]`; with no multiplicities
+    /// every inner knot is simple and the end knots carry `degree + 1`.
+    #[pyo3(signature = (poles, mults = None, knots = None, periodic = false, degree = 3, weights = None, CheckRational = true))]
+    fn buildFromPolesMultsKnots(
+        &self,
+        poles: &Bound<'_, PyAny>,
+        mults: Option<&Bound<'_, PyAny>>,
+        knots: Option<&Bound<'_, PyAny>>,
+        periodic: bool,
+        degree: i32,
+        weights: Option<&Bound<'_, PyAny>>,
+        CheckRational: bool,
+    ) -> PyResult<()> {
+        let state = build_spline(poles, mults, knots, periodic, degree, weights, CheckRational)?;
+        *self.state.lock().unwrap_or_else(|e| e.into_inner()) = Some(state);
+        Ok(())
+    }
+
+    /// Build the curve from control points:
+    /// `buildFromPoles(poles, periodic=False, degree=3, interpolate=False)`.
+    ///
+    /// As upstream does, the degree is capped at `len(poles) - 1`. `interpolate`
+    /// only changes the periodic knot structure (upstream never interpolates
+    /// here); use [`interpolate`](Self::interpolate) for that.
+    #[pyo3(signature = (poles, periodic = false, degree = 3, interpolate = false))]
     fn buildFromPoles(
         &self,
         poles: &Bound<'_, PyAny>,
         periodic: bool,
         degree: i32,
-        tolerance: f64,
-        checkRational: bool,
+        interpolate: bool,
     ) -> PyResult<()> {
-        let _ = (tolerance, checkRational);
         let parsed = parse_points(poles)?;
         if parsed.len() < 2 {
-            return Err(OCCError::new_err(
-                "a B-spline needs at least two poles",
-            ));
+            return Err(OCCError::new_err("a B-spline needs at least two poles"));
         }
-        let degree = degree.min(parsed.len() as i32 - 1);
-        *self.points.lock().unwrap_or_else(|e| e.into_inner()) = parsed;
-        *self.periodic.lock().unwrap_or_else(|e| e.into_inner()) = periodic;
-        *self.degree.lock().unwrap_or_else(|e| e.into_inner()) = Some(degree);
+        let degree = degree.min(parsed.len() as i32 - 1).max(1);
+        let mult = if periodic {
+            if interpolate {
+                degree
+            }
+            else {
+                1
+            }
+        }
+        else {
+            degree + 1
+        };
+        let knot_count = if periodic {
+            if interpolate {
+                parsed.len() as i32 - degree + 2
+            }
+            else {
+                parsed.len() as i32 + 1
+            }
+        }
+        else {
+            parsed.len() as i32 - degree + 1
+        };
+        let knot_count = knot_count.max(2) as usize;
+        let knots: Vec<f64> = (0..knot_count)
+            .map(|index| index as f64 / (knot_count - 1) as f64)
+            .collect();
+        let mut mults = vec![1; knot_count];
+        mults[0] = mult;
+        mults[knot_count - 1] = mult;
+        let weights = vec![1.0; parsed.len()];
+        let blob = occt()
+            .bspline_state(
+                &parsed,
+                &weights,
+                &knots,
+                &mults,
+                degree,
+                periodic,
+                true,
+            )
+            .ok_or_else(|| OCCError::new_err("failed to create spline"))?;
+        let state =
+            SplineState::from_blob(&blob).ok_or_else(|| OCCError::new_err("failed to create spline"))?;
+        *self.state.lock().unwrap_or_else(|e| e.into_inner()) = Some(state);
         Ok(())
     }
 
-    /// Interpolate a B-spline through `points`.
+    /// Interpolate a B-spline through `points` (`GeomAPI_Interpolate`).
     #[pyo3(signature = (points, PeriodicFlag = false, Tolerance = 1e-7))]
     fn interpolate(
         &self,
@@ -1031,29 +1853,29 @@ impl PyBSplineCurve {
                 "a B-spline needs at least two interpolation points",
             ));
         }
-        *self.points.lock().unwrap_or_else(|e| e.into_inner()) = parsed;
-        *self.periodic.lock().unwrap_or_else(|e| e.into_inner()) = PeriodicFlag;
-        *self.degree.lock().unwrap_or_else(|e| e.into_inner()) = None;
+        let blob = occt()
+            .bspline_interpolated_state(&parsed, PeriodicFlag)
+            .ok_or_else(|| OCCError::new_err("failed to interpolate the B-spline"))?;
+        let state = SplineState::from_blob(&blob)
+            .ok_or_else(|| OCCError::new_err("failed to interpolate the B-spline"))?;
+        *self.state.lock().unwrap_or_else(|e| e.into_inner()) = Some(state);
         Ok(())
     }
 
     /// The curve as an edge.
     fn toShape(&self, py: Python<'_>) -> PyResult<Py<PyEdge>> {
-        let points = self
-            .points
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .clone();
-        let periodic = *self.periodic.lock().unwrap_or_else(|e| e.into_inner());
-        let degree = *self.degree.lock().unwrap_or_else(|e| e.into_inner());
-        let shape = match degree {
-            Some(degree) => backend()
-                .make_bspline_poles(&points, degree, periodic)
-                .map_err(kernel_error)?,
-            None => backend()
-                .make_bspline_edge(&points, periodic)
-                .map_err(kernel_error)?,
-        };
+        let state = self.state()?;
+        let shape = occt()
+            .make_bspline_poles_mults_knots(
+                &state.poles,
+                &state.weights,
+                &state.knots,
+                &state.mults,
+                state.degree,
+                state.periodic,
+                state.check_rational(),
+            )
+            .map_err(kernel_error)?;
         Py::new(
             py,
             PyEdge::from_entry(EdgeEntry {
@@ -1063,12 +1885,294 @@ impl PyBSplineCurve {
         )
     }
 
-    fn __repr__(&self) -> String {
-        format!(
-            "Part.BSplineCurve({} points)",
-            self.points.lock().unwrap_or_else(|e| e.into_inner()).len()
-        )
+    /// `value(u)`: the point at parameter `u` (`Geom_BSplineCurve::Value`).
+    fn value(&self, py: Python<'_>, u: f64) -> PyResult<PyObject> {
+        let state = self.state()?;
+        let point = occt()
+            .bspline_point(
+                &state.poles,
+                &state.weights,
+                &state.knots,
+                &state.mults,
+                state.degree,
+                state.periodic,
+                state.check_rational(),
+                u,
+            )
+            .ok_or_else(|| OCCError::new_err("failed to evaluate the B-spline"))?;
+        py_vector(py, point)
     }
+
+    #[getter]
+    fn Degree(&self) -> PyResult<i32> {
+        Ok(self.state()?.degree)
+    }
+
+    #[getter]
+    fn MaxDegree(&self) -> PyResult<i32> {
+        Ok(self.state()?.max_degree)
+    }
+
+    #[getter]
+    fn NbPoles(&self) -> PyResult<usize> {
+        Ok(self.state()?.poles.len())
+    }
+
+    #[getter]
+    fn NbKnots(&self) -> PyResult<usize> {
+        Ok(self.state()?.knots.len())
+    }
+
+    #[getter]
+    fn StartPoint(&self, py: Python<'_>) -> PyResult<PyObject> {
+        py_vector(py, self.state()?.start)
+    }
+
+    #[getter]
+    fn EndPoint(&self, py: Python<'_>) -> PyResult<PyObject> {
+        py_vector(py, self.state()?.end)
+    }
+
+    #[getter]
+    fn FirstParameter(&self) -> PyResult<f64> {
+        Ok(self.state()?.first_parameter)
+    }
+
+    #[getter]
+    fn LastParameter(&self) -> PyResult<f64> {
+        Ok(self.state()?.last_parameter)
+    }
+
+    #[getter]
+    fn FirstUKnotIndex(&self) -> PyResult<i32> {
+        Ok(self.state()?.first_u_knot)
+    }
+
+    #[getter]
+    fn LastUKnotIndex(&self) -> PyResult<i32> {
+        Ok(self.state()?.last_u_knot)
+    }
+
+    #[getter]
+    fn KnotSequence(&self) -> PyResult<Vec<f64>> {
+        Ok(self.state()?.knot_sequence)
+    }
+
+    /// The continuity (`GeomAbs_C0` … `GeomAbs_CN`), as upstream reports it.
+    #[getter]
+    fn Continuity(&self) -> PyResult<&'static str> {
+        Ok(self.state()?.continuity_name())
+    }
+
+    fn isPeriodic(&self) -> PyResult<bool> {
+        Ok(self.state()?.periodic)
+    }
+
+    fn isRational(&self) -> PyResult<bool> {
+        Ok(self.state()?.rational)
+    }
+
+    fn getKnot(&self, index: i32) -> PyResult<f64> {
+        let state = self.state()?;
+        knot_at(&state, index)
+    }
+
+    fn getKnots(&self) -> PyResult<Vec<f64>> {
+        Ok(self.state()?.knots)
+    }
+
+    fn getMultiplicity(&self, index: i32) -> PyResult<i32> {
+        let state = self.state()?;
+        let position = index_at(state.mults.len(), index)? as usize;
+        Ok(state.mults[position - 1])
+    }
+
+    fn getMultiplicities(&self) -> PyResult<Vec<i32>> {
+        Ok(self.state()?.mults)
+    }
+
+    fn getPole(&self, py: Python<'_>, index: i32) -> PyResult<PyObject> {
+        let state = self.state()?;
+        let position = index_at(state.poles.len(), index)? as usize - 1;
+        py_vector(py, state.poles[position])
+    }
+
+    fn getPoles(&self, py: Python<'_>) -> PyResult<Vec<PyObject>> {
+        let state = self.state()?;
+        state
+            .poles
+            .iter()
+            .map(|pole| py_vector(py, *pole))
+            .collect()
+    }
+
+    /// Each pole as `(x, y, z, weight)`.
+    fn getPolesAndWeights(&self) -> PyResult<Vec<(f64, f64, f64, f64)>> {
+        let state = self.state()?;
+        Ok(state
+            .poles
+            .iter()
+            .zip(state.weights.iter())
+            .map(|(pole, weight)| (pole.x, pole.y, pole.z, *weight))
+            .collect())
+    }
+
+    fn getWeight(&self, index: i32) -> PyResult<f64> {
+        let state = self.state()?;
+        let position = index_at(state.weights.len(), index)? as usize - 1;
+        Ok(state.weights[position])
+    }
+
+    fn getWeights(&self) -> PyResult<Vec<f64>> {
+        Ok(self.state()?.weights)
+    }
+
+    /// The parameter tolerance equivalent to a 3D `tolerance`
+    /// (`Geom_BSplineCurve::Resolution`).
+    fn getResolution(&self, tolerance: f64) -> PyResult<f64> {
+        let state = self.state()?;
+        occt()
+            .bspline_resolution(
+                &state.poles,
+                &state.weights,
+                &state.knots,
+                &state.mults,
+                state.degree,
+                state.periodic,
+                state.check_rational(),
+                tolerance,
+            )
+            .ok_or_else(|| OCCError::new_err("failed to compute the spline resolution"))
+    }
+
+    /// `setKnot(Index, Value, M=-1)`: assign unique knot `Index` (and optionally
+    /// its multiplicity).
+    #[pyo3(signature = (index, value, multiplicity = None))]
+    fn setKnot(&self, index: i32, value: f64, multiplicity: Option<i32>) -> PyResult<()> {
+        let mut state = self.state()?;
+        let position = index_at(state.knots.len(), index)? as usize - 1;
+        // OCCT keeps the unique knots ordered: the new value must stay strictly
+        // between its neighbours (`Geom_BSplineCurve::SetKnot`).
+        if position > 0 && value <= state.knots[position - 1] {
+            return Err(OCCError::new_err("knot value is not increasing"));
+        }
+        if position + 1 < state.knots.len() && value >= state.knots[position + 1] {
+            return Err(OCCError::new_err("knot value is not increasing"));
+        }
+        state.knots[position] = value;
+        if let Some(multiplicity) = multiplicity {
+            // OCCT allows increasing a multiplicity, never decreasing it.
+            if multiplicity < state.mults[position] || multiplicity > state.degree {
+                return Err(OCCError::new_err("invalid knot multiplicity"));
+            }
+            state.mults[position] = multiplicity;
+        }
+        *self.state.lock().unwrap_or_else(|e| e.into_inner()) = Some(state);
+        Ok(())
+    }
+
+    /// `setPole(Index, Point, Weight=-1)`: move pole `Index` (and optionally set
+    /// its weight).
+    #[pyo3(signature = (index, point, weight = None))]
+    fn setPole(
+        &self,
+        index: i32,
+        point: &Bound<'_, PyAny>,
+        weight: Option<f64>,
+    ) -> PyResult<()> {
+        let mut state = self.state()?;
+        let position = index_at(state.poles.len(), index)? as usize - 1;
+        state.poles[position] = vector(point)?;
+        if let Some(weight) = weight {
+            if !(weight > 0.0) {
+                return Err(OCCError::new_err("weight must be positive"));
+            }
+            state.weights[position] = weight;
+            state.rational = true;
+        }
+        *self.state.lock().unwrap_or_else(|e| e.into_inner()) = Some(state);
+        Ok(())
+    }
+
+    /// Convert to the periodic form (`Geom_BSplineCurve::SetPeriodic`).
+    fn setPeriodic(&self) -> PyResult<()> {
+        self.set_periodicity(true)
+    }
+
+    /// Convert out of the periodic form (`Geom_BSplineCurve::SetNotPeriodic`).
+    fn setNotPeriodic(&self) -> PyResult<()> {
+        self.set_periodicity(false)
+    }
+
+    /// `copy.copy` on the curve; upstream implements `__reduce__` for the same.
+    fn __copy__(&self) -> Self {
+        Self {
+            state: Mutex::new(self.state.lock().unwrap_or_else(|e| e.into_inner()).clone()),
+        }
+    }
+
+    fn __repr__(&self) -> String {
+        match &*self.state.lock().unwrap_or_else(|e| e.into_inner()) {
+            Some(state) => format!(
+                "Part.BSplineCurve({} poles, degree {})",
+                state.poles.len(),
+                state.degree
+            ),
+            None => "Part.BSplineCurve()".to_string(),
+        }
+    }
+}
+
+impl PyBSplineCurve {
+    /// A spline that already carries OCCT's state (what `toNurbs`/`toBSpline`
+    /// on the analytic curves return).
+    fn from_state(state: SplineState) -> Self {
+        Self {
+            state: Mutex::new(Some(state)),
+        }
+    }
+
+    fn state(&self) -> PyResult<SplineState> {
+        self.state
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone()
+            .ok_or_else(|| OCCError::new_err("the B-spline is empty"))
+    }
+
+    fn set_periodicity(&self, target: bool) -> PyResult<()> {
+        let state = self.state()?;
+        let blob = occt()
+            .bspline_periodic_state(
+                &state.poles,
+                &state.weights,
+                &state.knots,
+                &state.mults,
+                state.degree,
+                state.periodic,
+                state.check_rational(),
+                target,
+            )
+            .ok_or_else(|| OCCError::new_err("failed to change the spline's periodicity"))?;
+        let state = SplineState::from_blob(&blob)
+            .ok_or_else(|| OCCError::new_err("failed to change the spline's periodicity"))?;
+        *self.state.lock().unwrap_or_else(|e| e.into_inner()) = Some(state);
+        Ok(())
+    }
+}
+
+/// Translate a 1-based OCCT index, reporting a bad one as `Part.OCCError` (which
+/// is what upstream's caught `Standard_OutOfRange` becomes).
+fn index_at(length: usize, index: i32) -> PyResult<i32> {
+    if index < 1 || index as usize > length {
+        return Err(OCCError::new_err("index out of range"));
+    }
+    Ok(index)
+}
+
+fn knot_at(state: &SplineState, index: i32) -> PyResult<f64> {
+    let position = index_at(state.knots.len(), index)? as usize;
+    Ok(state.knots[position - 1])
 }
 
 // ---------------------------------------------------------------------------
@@ -1519,9 +2623,12 @@ impl PyEdge {
     /// The analytic curve (`edge.Curve` upstream). `None` when the kernel cannot
     /// classify it.
     ///
-    /// The kernel's **basis** curve wins: a segment's edge reports a `Line`, as
-    /// upstream does. The stored analytic curve is the fallback for a shape the
-    /// kernel cannot classify. An empty edge raises `ValueError`, as upstream.
+    /// The edge's **basis** curve, as upstream's `TopoShapeEdgePy::getCurve`
+    /// reports it: a segment's edge is a `Line`, and a trimmed circular edge is a
+    /// `Circle` (not an `ArcOfCircle`) — the span is available through
+    /// `FirstParameter`/`LastParameter`. The stored analytic curve is the fallback
+    /// for a shape the kernel cannot classify. An empty edge raises `ValueError`,
+    /// as upstream.
     #[getter]
     fn Curve(&self, py: Python<'_>) -> PyResult<Option<PyObject>> {
         let Some(entry) = self.entry() else {
@@ -2301,6 +3408,7 @@ pub(crate) fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyCircle>()?;
     m.add_class::<PyArcOfCircle>()?;
     m.add_class::<PyEllipse>()?;
+    m.add_class::<PyArcOfEllipse>()?;
     m.add_class::<PyPlane>()?;
     m.add_class::<PyCylinder>()?;
     m.add_class::<PySphere>()?;

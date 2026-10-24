@@ -190,6 +190,110 @@ mod ffi {
             periodic: bool,
         ) -> UniquePtr<Handle_Geom_Curve>;
 
+        /// A full elliptical edge from its centre, normal, major-axis direction
+        /// and the two radii (`Part.Ellipse.toShape`), or null on failure.
+        fn fc_ellipse_edge(
+            ox: f64,
+            oy: f64,
+            oz: f64,
+            nx: f64,
+            ny: f64,
+            nz: f64,
+            xx: f64,
+            xy: f64,
+            xz: f64,
+            major: f64,
+            minor: f64,
+        ) -> UniquePtr<TopoDS_Shape>;
+
+        /// A B-spline edge from explicit poles, weights, knots and multiplicities
+        /// (upstream's `buildFromPolesMultsKnots`), or null on failure.
+        fn fc_bspline_edge(
+            coords: &[f64],
+            weights: &[f64],
+            knots: &[f64],
+            multiplicities: &[i32],
+            degree: i32,
+            periodic: bool,
+            check_rational: bool,
+        ) -> UniquePtr<TopoDS_Shape>;
+
+        /// The flattened state of the B-spline built from the given arrays, or
+        /// empty when the arguments do not describe a valid curve. See
+        /// `fc_bspline_push_state` in `fc_curve.hxx` for the layout.
+        fn fc_bspline_probe(
+            coords: &[f64],
+            weights: &[f64],
+            knots: &[f64],
+            multiplicities: &[i32],
+            degree: i32,
+            periodic: bool,
+            check_rational: bool,
+        ) -> Vec<f64>;
+
+        /// The flattened state of the B-spline interpolating `coords`, or empty.
+        fn fc_bspline_probe_interpolated(coords: &[f64], periodic: bool) -> Vec<f64>;
+
+        /// Rebuild the curve in (or out of) the periodic form and return its new
+        /// flattened state, or empty.
+        fn fc_bspline_set_periodic(
+            coords: &[f64],
+            weights: &[f64],
+            knots: &[f64],
+            multiplicities: &[i32],
+            degree: i32,
+            periodic: bool,
+            check_rational: bool,
+            target_periodic: bool,
+        ) -> Vec<f64>;
+
+        /// `Geom_BSplineCurve::Resolution` for a 3D tolerance (NaN on failure).
+        fn fc_bspline_resolution(
+            coords: &[f64],
+            weights: &[f64],
+            knots: &[f64],
+            multiplicities: &[i32],
+            degree: i32,
+            periodic: bool,
+            check_rational: bool,
+            tolerance: f64,
+        ) -> f64;
+
+        /// The point at parameter `u` on the B-spline with the given state, or
+        /// empty on failure. See `fc_curve.hxx`.
+        fn fc_bspline_point(
+            coords: &[f64],
+            weights: &[f64],
+            knots: &[f64],
+            multiplicities: &[i32],
+            degree: i32,
+            periodic: bool,
+            check_rational: bool,
+            u: f64,
+        ) -> Vec<f64>;
+
+        /// A conic (2 = circle, 3 = ellipse) over `[first, last]` as a B-spline,
+        /// flattened like `fc_bspline_probe`. `nurbs` selects the exact rational
+        /// conversion (`GeomConic::toNurbs`) rather than the approximating
+        /// `GeomCurve::toBSpline`. Empty on failure. See `fc_curve.hxx`.
+        fn fc_conic_to_spline(
+            kind: i32,
+            ox: f64,
+            oy: f64,
+            oz: f64,
+            nx: f64,
+            ny: f64,
+            nz: f64,
+            xx: f64,
+            xy: f64,
+            xz: f64,
+            major: f64,
+            minor: f64,
+            first: f64,
+            last: f64,
+            nurbs: bool,
+        ) -> Vec<f64>;
+
         /// `TopTools_IndexedMapOfShape::FindIndex`, which the crate does not bridge.
         fn fc_indexed_map_find_index(
             map: &TopTools_IndexedMapOfShape,

@@ -38,6 +38,14 @@ A document's 3D view, shaped like upstream's ``View3DInventor``.
 | --- | --- |
 | getSceneGraph() | The document's scene root (``None`` when Coin is unavailable). |
 
+## Object `PySideUic`
+
+``FreeCADGui.PySideUic``: the headless ``.ui`` loader.
+
+| Member | Summary |
+| --- | --- |
+| loadUi(path_or_file) | Load a form from a path, a ``:/`` resource or a ``QFile``-like object. |
+
 ## Object `Selection`
 
 A snapshot of what the shell has selected.

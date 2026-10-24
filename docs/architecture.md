@@ -24,6 +24,7 @@ obvious:
 | `ferrocad_py` | `cdylib` | The PyO3 extension, importable as the module `ferrocad`. The only bridge into `ferrocad_core`. |
 | `ferrocad_widgets` | `rlib` | Reusable `bite-gpui` widgets. Depends on **neither** `ferrocad_core` nor `ferrocad_py`. |
 | `ferrocad_ui` | `rlib` | The Qt Designer `.ui` reader (Q1): a typed form tree with source positions, no Qt, no Python and no rendering. **Not** the widget kit (that is `ferrocad_widgets`). |
+| `ferrocad_ui_py` | `cdylib` | The PyO3 proxy layer over `ferrocad_ui`: `FreeCADGui.PySideUic.loadUi` and its form/widget/signal proxies. No Qt, no rendering. |
 | `ferrocad_inventor` | `rlib` | The Coin/Inventor scene core: node AST, state accumulator, mesh compiler, events. Renderer-agnostic; re-exports `ferrocad_graphics`. |
 | `ferrocad_stage` | `rlib` | The modern declarative CAD presentation: `ShapeItem`s on a `Stage`, interactive tools, the `TransformGizmo`, and the `Manipulator`/`InteractionCommit` seam a **workbench** implements to add its own draggable overlay. All compiled straight to `ferrocad_graphics` (no scene graph, no arena). Consumes `ferrocad_geom`'s tessellation vocabulary. Workbench-agnostic: it names no kernel, no document and no module. **Decoupled from `ferrocad_inventor`.** |
 | `ferrocad_part_gui` | `rlib` | The Part workbench's **presentation**: the edge dress-up manipulator (`DressUpScrubber`), its arc math and the `dress_up_scrubber_for`/`fillet_manipulator` factory. Implements `ferrocad_stage::Manipulator`. **No kernel, no document, no `pyo3`, no OCCT.** Linked only by an edition that has Part. |
@@ -172,6 +173,7 @@ ferrocad_geom      -> ferrocad_types, ferrocad_curves,
                                                      `make_edge`/`curve_of` cross into curves]
 ferrocad_lineage   -> (no workspace deps)             [name, history, map, policy]
 ferrocad_ui        -> roxmltree                        [.ui reader; no Qt, no gpui]
+ferrocad_ui_py     -> ferrocad_ui, pyo3                 [PySideUic proxies; no Qt]
 ferrocad_occt      -> ferrocad_geom, ferrocad_curves,
                       ferrocad_types, opencascade-sys [kernel backend; never -> core]
 ferrocad_core      -> ferrocad_types                 [re-exports; no OCCT]

@@ -182,11 +182,9 @@ Part-enabled build. Splitting a geometry-free `App::Link` from a Part-side
 ## 6. Tests
 
 - **Link arrays (present).** `TestLinkArray{Point,Linear,Path,Circular}.py` are in the
-  `--part` group (`tools/conformance.py:66-74`): **19 of 27 reported cases pass**.
-  The remaining eight are one property-change hook (five cases), the missing execute
-  error text in `getStatusString`, recompute on restore, and a one-ulp quaternion
-  difference; the TODO entry records the eight and their causes. Rust coverage is
-  `crates/ferrocad_part_py/tests/part_link_array.rs` (3 tests).
+  `--part` group (`tools/conformance.py:66-74`): **all 24 reported cases pass** (was
+  19/27 before the property-change hook, execute-error text and recompute-on-restore
+  work). Rust coverage is `crates/ferrocad_part_py/tests/part_link_array.rs` (6 tests).
 - **`App::Link` shape/placement (new).** Mirror `TestPartMirror.py:119` without
   `PartDesign`: link a `Part::Box`, set `Placement` and `LinkPlacement`, assert the
   bound box moves; link a link; set `LinkTransform`/`Scale` and assert composition.

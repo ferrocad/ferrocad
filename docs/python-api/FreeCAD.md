@@ -104,7 +104,7 @@ A drop-in, Rust-backed stand-in for FreeCAD's Python ``App`` module.
 | getParentGroup() | The plain group (or group-extension object) that lists this object. |
 | getPropertyByName(name) | — |
 | getPropertyStatus(name='') | `getPropertyStatus(name="")`: with no name, the supported status names. |
-| getStatusString() | A short status string: `Invalid`, `Touched` or `Valid`. |
+| getStatusString() | A short status string: `Invalid[: message]`, `Touched` or `Valid`. |
 | getSubObject(subname, retType=0, matrix=None, transform=True, depth=0) | Resolve sub-object(s) and return them per FreeCAD's `retType` convention: 0 and 1 → DocumentObject, 2 → `(obj, Matrix, None)`, 3 → Placement, 4 → Matrix. |
 | getTypeIdOfProperty(name) | — |
 | getTypeOfProperty(name) | `getTypeOfProperty`: the property's status flags as text names. |

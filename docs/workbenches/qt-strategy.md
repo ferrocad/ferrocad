@@ -754,8 +754,8 @@ pure-Python shim, Q0b ported the `:/ui/…` reader to plain Python, and Q0d pinn
 contract in `contracts/draft-forms.json`. With Qt blocked, `import draftutils.params`
 now succeeds (160 `Mod/Draft` entries).
 
-**What remains.** Q2–Q5 remain: there is no `PySideUic.loadUi`, no form/widget/signal
-proxies, no rendered panel, no `Snapper` adapter and no `TaskPanel_Scale.ui`. Q1 is in as
-`crates/ferrocad_ui`, which parses all 19 forms into a typed tree (495 widgets, 32
-classes); the shim's `.ui` support is still only the `QFile` resource read that §2.6
-needed.
+**What remains.** Q2b–Q5 remain: layout mutation and dialog semantics, the rendered
+panel, the `Snapper` adapter and `TaskPanel_Scale.ui`. Q1 is in as `crates/ferrocad_ui`
+(19 forms, 495 widgets, 32 classes) and Q2a as `crates/ferrocad_ui_py`, so
+`FreeCADGui.PySideUic.loadUi` returns a form/widget/signal proxy tree headlessly; the
+shim's `.ui` support is still only the `QFile` resource read that §2.6 needed.

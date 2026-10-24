@@ -1,9 +1,9 @@
 # Task — split document persistence into two serializers
 
 Status: task (2026-10-23). Records the owner decision of 2026-10-23: native JSON and
-upstream `.FCStd` become **two explicit, independently testable serializers**. F1–F7
-landed 2026-10-23; the `.FCStd` writer is a direct-call API and is not yet wired to
-`saveAs` (F8). Companion
+upstream `.FCStd` become **two explicit, independently testable serializers**. F1–F7 and
+the read half of F8 (payloads + `GuiDocument.xml`) landed 2026-10-23; the writer is a
+direct-call API and is not yet wired to `saveAs` (F8 switch). Companion
 to [`../architecture/part-draft-layering.md`](../architecture/part-draft-layering.md), the
 [conformance runbook](../workbenches/conformance.md) and
 [`../direction/mvp-path.md`](../direction/mvp-path.md) (§8 decision 3, which this closes).
@@ -120,9 +120,10 @@ encryption) and reads `Document.xml` into `SavedDocument`. Since 2026-10-23 (F4)
 reads `PropertyLength`/`PropertyAngle`, `PropertyEnumeration`, `PropertyLinkSub`,
 `PropertyLinkList`, `PropertyLinkSubList` (flattened to `LinkList`), `PropertyPythonObject`
 (into `python_state`) and the expression engine, and translates upstream's property
-`status` bitmask. It still deliberately skips `.brp` members and module-owned types such
-as shape lists; a reopened upstream document loses its shapes but keeps its scalars,
-links, placements, expressions and proxies.
+`status` bitmask. Since F8a it also restores module payloads: `<Part file>` and
+`<ShapeList>` members go back through `property_types::restore_extension`, and
+`GuiDocument.xml` restores `Visibility`, `Transparency`, colours and `DisplayMode`. Other
+module-owned property types, appearance/material and `ElementMap` are still skipped.
 
 ### 3.2 Writer breakdown **(recommended)**
 
@@ -265,8 +266,9 @@ to `.ferrocad`. FCStd probes: `ColorPerFaceTest`, `TopoShapeListTest`, `TestLink
   writes a full ZIP including `GuiDocument.xml`, but `saveAs(.FCStd)` still emits the
   JSON placeholder; F8 is the switch. `python_state` is reported as dropped rather than
   written as an upstream pickle, and a handful of property variants still error by name.
-- **Module-payload read.** `.brp` members are still skipped by the reader; a document
-  written by `write_fcstd` reads back its scalars/links/placements but not its shapes.
+- **Module-payload read is partial.** `.brp` and shape-list members now restore, but
+  other module-owned types, shape appearance/material and `ElementMap` are skipped, and
+  the reader ignores module-specific payloads it does not recognise.
 - **Document metadata is not persisted.** `SavedDocument` has no UID, comment, meta or
   dates; `PyDocument.meta`/`comment` are not saved **(verified)**.
 - **Type ids are lossy** for `String`-backed types; no `SavedObject` type map. No

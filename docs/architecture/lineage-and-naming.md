@@ -1,8 +1,8 @@
 # Lineage and naming: a layer, not a geometry kernel
 
 Status: design (2026-10-23). Refines [`geometry-and-topology.md`](geometry-and-topology.md) §1 and §4.
-The first migration steps landed 2026-10-23: the vocabulary, the lineage layer and the
-provenance breadth now live in `ferrocad_lineage`/the backend. Companion to [`occt-history-spike.md`](occt-history-spike.md), [`occt-integration.md`](occt-integration.md),
+The vocabulary, layer, provenance breadth and Part storage landed 2026-10-23; references
+and format persistence remain. Companion to [`occt-history-spike.md`](occt-history-spike.md), [`occt-integration.md`](occt-integration.md),
 [`part-draft-layering.md`](part-draft-layering.md), [`architecture.md`](../architecture.md) §6,
 [`conformance.md`](../workbenches/conformance.md),
 [`spikes/occt-history-rs/README.md`](../../spikes/occt-history-rs/README.md), and
@@ -25,7 +25,7 @@ geometry. Nothing here was implemented; no code was changed and no tests were ru
 | Concern | Question | Nodes / edges | Owner | Status |
 | --- | --- | --- | --- | --- |
 | Object-graph sort | In what order do features execute? | Document objects / links, expressions | `ferrocad_core` | **Built** (`recompute_order`) |
-| Sub-shape lineage | Which face/edge does a stored name mean after a rebuild? | Elements / provenance relations | **proposal:** `ferrocad_lineage` | **Partial**: S1/S2 moved the vocabulary and layer, S4 made the backend report both operands and all sub-shape kinds; nothing consumes it yet |
+| Sub-shape lineage | Which face/edge does a stored name mean after a rebuild? | Elements / provenance relations | **proposal:** `ferrocad_lineage` | **Partial**: S1/S2/S4 are in, S3 stores the map with the shape; references and format persistence (S5/S6) remain |
 | Geometry construction | Inputs + parameters → shape | Solids, surfaces, algorithms | `ferrocad_occt` | **Built** for primitives, booleans, dress-ups |
 
 The earlier note said naming "needs a geometry kernel, OCCT shape history, and a persistent element
@@ -279,7 +279,11 @@ no Part consumer. **S4 landed the same day** (ahead of S3): `History<T>` carries
 payload-free `Provenance` list, and the OCCT backend now enumerates **both operands** and
 faces/edges/vertices, recording `OperandId`, kind and ordinal. Names stay positional and
 `ElementMapVersion` is untouched; the fuse/cut golden histories assert the counts and
-determinism.
+determinism. **S3 landed after it**: `ShapeProperty` persists a versioned lineage
+envelope (magic + version + BREP + forward/reverse maps), legacy raw BREP still loads,
+and the boolean containers fold the backend history. The Python-visible
+`ElementMap`/`ElementMapVersion` remain empty — flipping those waits for S5/S6, when the
+names and sizes can be reproduced.
 
 S1 and S2 were deliberately boring: move types, add a policy. Until S3 the empty-map behaviour (`""`, `0`,
 `<ElementMap/>`) stays exactly as it is — honest about having no map rather than faking a `Face1`

@@ -51,6 +51,14 @@ pub struct DocumentObject {
     pub touched: bool,
     /// Set when the object's last recompute failed (reported as `Invalid`).
     pub invalid: bool,
+    /// The last execute failure message, reported by `getStatusString` as
+    /// `Invalid: <message>`. Cleared when an execute succeeds; never persisted.
+    pub error: Option<String>,
+    /// Properties whose current value is immutable (FreeCAD's property
+    /// `Property::Immutable` status). An [`ObjectType::execute`] recomputes this
+    /// set, and [`ObjectType::on_property_change`] can consult it to refuse a
+    /// write with `AttributeError` instead of `ValueError`. Never persisted.
+    pub immutable_properties: BTreeSet<String>,
     /// Monotonic counter per property, bumped on every `set_property`. Used to
     /// detect that a geometry handle (e.g. `obj.Placement.Base`) still refers to
     /// the current property value: reassigning the property invalidates old
@@ -148,6 +156,8 @@ impl Document {
                 must_execute: false,
                 touched: false,
                 invalid: false,
+                error: None,
+                immutable_properties: BTreeSet::new(),
                 property_versions: BTreeMap::new(),
                 python_state: None,
                 view: None,
@@ -467,6 +477,19 @@ impl Document {
                 .ok_or_else(|| format!("no object {object}"))?;
             obj.properties.get(name).cloned()
         };
+        // Let the registered type veto the write before anything is committed.
+        // The hook sees the pre-assignment state, and its error text carries the
+        // Python exception class (see `PropertyChangeError`).
+        let type_id = self
+            .objects
+            .get(&object)
+            .map(|o| o.type_id.clone())
+            .unwrap_or_default();
+        if let Some(behavior) = crate::object_registry::get(&type_id) {
+            behavior
+                .on_property_change(self, object, name, &value)
+                .map_err(|error| error.to_string())?;
+        }
         let status = self
             .objects
             .get(&object)
@@ -512,6 +535,26 @@ impl Document {
             .get(&object)
             .and_then(|o| o.property_versions.get(name).copied())
             .unwrap_or(0)
+    }
+
+    /// Mark a property immutable (or mutable again). An [`ObjectType::execute`]
+    /// uses this to mirror FreeCAD's `Property::Immutable` status; the value is
+    /// derived state, so it is never persisted.
+    pub fn set_property_immutable(&mut self, object: ObjectId, name: &str, immutable: bool) {
+        if let Some(obj) = self.objects.get_mut(&object) {
+            if immutable {
+                obj.immutable_properties.insert(name.to_string());
+            } else {
+                obj.immutable_properties.remove(name);
+            }
+        }
+    }
+
+    /// Whether a property is currently immutable.
+    pub fn is_property_immutable(&self, object: ObjectId, name: &str) -> bool {
+        self.objects
+            .get(&object)
+            .is_some_and(|obj| obj.immutable_properties.contains(name))
     }
 
     /// Add a property with an explicit status mask. Unlike `set_property`, this
@@ -714,6 +757,7 @@ impl Document {
                     // flag, so the failure survives the recompute that reported it.
                     if executed_ok {
                         obj.invalid = false;
+                        obj.error = None;
                     }
                 }
                 if let Some(deps) = dependents.get(&id).cloned() {
@@ -778,6 +822,7 @@ impl Document {
         // A rebuild starts from a clean slate; an execute that fails marks it again.
         if let Some(object) = self.objects.get_mut(&id) {
             object.invalid = false;
+            object.error = None;
         }
         let type_id = match self.objects.get(&id) {
             Some(obj) => obj.type_id.clone(),
@@ -839,6 +884,17 @@ impl Document {
     pub fn mark_invalid(&mut self, id: ObjectId) {
         if let Some(obj) = self.objects.get_mut(&id) {
             obj.invalid = true;
+            obj.error = None;
+        }
+    }
+
+    /// Mark an object invalid and remember why, so `getStatusString` can report
+    /// `Invalid: <message>`. The message is cleared by the next successful
+    /// execute, exactly like [`mark_invalid`](Self::mark_invalid)'s flag.
+    pub fn mark_invalid_with(&mut self, id: ObjectId, message: impl Into<String>) {
+        if let Some(obj) = self.objects.get_mut(&id) {
+            obj.invalid = true;
+            obj.error = Some(message.into());
         }
     }
 
@@ -909,9 +965,15 @@ impl Document {
                 o.extensions = obj.extensions.iter().cloned().collect();
                 o.python_state = obj.python_state.clone();
                 o.view = obj.view.clone();
-                o.must_execute = false;
+                // Persisted outputs are a cache, not the truth: upstream rebuilds
+                // the document after loading. Mark objects that have a registered
+                // behaviour so the next `Document::recompute` runs `execute` again;
+                // core-only types have no behaviour and stay clean.
+                o.must_execute = crate::object_registry::is_registered(&obj.type_id);
                 o.touched = false;
                 o.invalid = false;
+                o.error = None;
+                o.immutable_properties.clear();
             }
         }
         doc

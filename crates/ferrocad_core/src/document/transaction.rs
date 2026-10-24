@@ -497,6 +497,8 @@ impl Document {
                 must_execute: false,
                 touched: false,
                 invalid: false,
+                error: None,
+                immutable_properties: Default::default(),
                 property_versions: BTreeMap::new(),
                 python_state: saved.python_state.clone(),
                 view: saved.view.clone(),

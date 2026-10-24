@@ -14,7 +14,7 @@
 use std::sync::Arc;
 
 use ferrocad_core::geometry::{Matrix4, Placement, Rotation, Vector3};
-use ferrocad_core::object_registry::{self, ObjectType};
+use ferrocad_core::object_registry::{self, ObjectType, PropertyChangeError};
 use ferrocad_core::quantity::Quantity;
 use ferrocad_core::unit::Unit;
 use ferrocad_core::{prop_status, Document, ObjectId, Property};
@@ -209,6 +209,50 @@ fn element_suppressed(doc: &Document, id: ObjectId) -> bool {
     )
 }
 
+/// Whether any generated element is suppressed (upstream
+/// `LinkArray::hasSuppressedElements`).
+fn has_suppressed_elements(doc: &Document, id: ObjectId) -> bool {
+    element_ids(doc, id)
+        .into_iter()
+        .any(|element| element_suppressed(doc, element))
+}
+
+/// Refresh the array's computed property status (upstream
+/// `LinkArray::enforceLinkArrayPropertyStatus`). `ShowElement` is immutable
+/// while an element is suppressed, because collapsing would delete that flag.
+fn enforce_array_property_status(doc: &mut Document, id: ObjectId) {
+    let immutable = has_suppressed_elements(doc, id);
+    doc.set_property_immutable(id, "ShowElement", immutable);
+}
+
+/// Shared `ObjectType::on_property_change` for every link array.
+///
+/// Upstream refuses to hide an array's elements while one of them is
+/// suppressed. The exception class depends on whether the array has executed
+/// since the suppression was recorded: `execute` refreshes `ShowElement`'s
+/// immutable status, and a write to an immutable property raises
+/// `AttributeError`; before that refresh the guard runs from `onChanged` and
+/// raises `ValueError`.
+fn array_property_change(
+    doc: &Document,
+    id: ObjectId,
+    name: &str,
+    value: &Property,
+) -> Result<(), PropertyChangeError> {
+    if name != "ShowElement" || !matches!(value, Property::Bool(false)) {
+        return Ok(());
+    }
+    if !has_suppressed_elements(doc, id) {
+        return Ok(());
+    }
+    let message = "Restore suppressed instances before hiding array elements";
+    if doc.is_property_immutable(id, "ShowElement") {
+        Err(PropertyChangeError::attribute(message))
+    } else {
+        Err(PropertyChangeError::value(message))
+    }
+}
+
 /// Write the computed result of an array.
 ///
 /// `element_flags` is `Some` for linear arrays, whose per-element suppression is
@@ -289,6 +333,7 @@ impl ObjectType for PointArray {
     }
 
     fn execute(&self, doc: &mut Document, id: ObjectId) {
+        enforce_array_property_status(doc, id);
         let Some(point_object) = link_name(doc, id, "PointObject") else {
             finish_array(doc, id, &[], None);
             return;
@@ -344,6 +389,16 @@ impl ObjectType for PointArray {
             result.push(translation(base));
         }
         finish_array(doc, id, &result, None);
+    }
+
+    fn on_property_change(
+        &self,
+        doc: &Document,
+        id: ObjectId,
+        name: &str,
+        value: &Property,
+    ) -> Result<(), PropertyChangeError> {
+        array_property_change(doc, id, name, value)
     }
 }
 
@@ -570,6 +625,7 @@ impl ObjectType for LinearArray {
     }
 
     fn execute(&self, doc: &mut Document, id: ObjectId) {
+        enforce_array_property_status(doc, id);
         let occurrences = int_property(doc, id, "Occurrences", 2);
         let occurrences2 = int_property(doc, id, "Occurrences2", 1);
         if occurrences < 1 || occurrences2 < 1 {
@@ -626,6 +682,16 @@ impl ObjectType for LinearArray {
 
         doc.set_property_raw(id, "GeneratedOccurrences2", Property::Integer(occurrences2));
         finish_array(doc, id, &result, Some(&flags));
+    }
+
+    fn on_property_change(
+        &self,
+        doc: &Document,
+        id: ObjectId,
+        name: &str,
+        value: &Property,
+    ) -> Result<(), PropertyChangeError> {
+        array_property_change(doc, id, name, value)
     }
 }
 
@@ -977,6 +1043,7 @@ impl ObjectType for PathArray {
     }
 
     fn execute(&self, doc: &mut Document, id: ObjectId) {
+        enforce_array_property_status(doc, id);
         // A null `Path` is silent (upstream's `getElementPlacements` returns {});
         // only a broken path is invalid.
         if link_sub(doc, id, "Path").0.is_none() {
@@ -1069,6 +1136,16 @@ impl ObjectType for PathArray {
             result.push(path_frame(&edges[index], local, align, reversed, vertical));
         }
         finish_array(doc, id, &result, None);
+    }
+
+    fn on_property_change(
+        &self,
+        doc: &Document,
+        id: ObjectId,
+        name: &str,
+        value: &Property,
+    ) -> Result<(), PropertyChangeError> {
+        array_property_change(doc, id, name, value)
     }
 }
 
@@ -1323,10 +1400,23 @@ impl ObjectType for CircularArray {
     }
 
     fn execute(&self, doc: &mut Document, id: ObjectId) {
+        enforce_array_property_status(doc, id);
         match circular_placements(doc, id) {
             Ok(result) => finish_array(doc, id, &result, None),
-            Err(_) => doc.mark_invalid(id),
+            // Keep the failure text: `getStatusString` reports it so the user can
+            // see why the pattern was rejected (the occurrence limit, here).
+            Err(message) => doc.mark_invalid_with(id, message),
         }
+    }
+
+    fn on_property_change(
+        &self,
+        doc: &Document,
+        id: ObjectId,
+        name: &str,
+        value: &Property,
+    ) -> Result<(), PropertyChangeError> {
+        array_property_change(doc, id, name, value)
     }
 }
 
@@ -1381,10 +1471,21 @@ impl ObjectType for PolarArray {
     }
 
     fn execute(&self, doc: &mut Document, id: ObjectId) {
+        enforce_array_property_status(doc, id);
         match polar_placements(doc, id) {
             Ok(result) => finish_array(doc, id, &result, None),
-            Err(_) => doc.mark_invalid(id),
+            Err(message) => doc.mark_invalid_with(id, message),
         }
+    }
+
+    fn on_property_change(
+        &self,
+        doc: &Document,
+        id: ObjectId,
+        name: &str,
+        value: &Property,
+    ) -> Result<(), PropertyChangeError> {
+        array_property_change(doc, id, name, value)
     }
 }
 

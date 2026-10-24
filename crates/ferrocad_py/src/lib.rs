@@ -129,6 +129,17 @@ fn deleted_object_error(attr: &str) -> PyErr {
     ))
 }
 
+/// Map a `Document::set_property` rejection to the exception the object-type
+/// hook asked for. A [`PropertyChangeError::Attribute`] renders with a marker
+/// prefix (see `object_registry::ATTRIBUTE_REJECTION_PREFIX`); every other
+/// rejection stays a `ValueError`, as before.
+fn property_change_error(error: String) -> PyErr {
+    match error.strip_prefix(ferrocad_core::object_registry::ATTRIBUTE_REJECTION_PREFIX) {
+        Some(message) => PyAttributeError::new_err(message.to_string()),
+        None => PyValueError::new_err(error),
+    }
+}
+
 /// True if `id` still names an object in the document.
 fn object_is_attached(inner: &Arc<Mutex<CoreDocument>>, id: ObjectId) -> bool {
     inner.lock().unwrap().object(id).is_some()
@@ -2213,7 +2224,7 @@ impl PyDocumentObject {
             .lock()
             .unwrap()
             .set_property(self.id, name, property)
-            .map_err(PyValueError::new_err)
+            .map_err(property_change_error)
     }
 
     fn getTypeIdOfProperty(&self, name: &str) -> Option<String> {
@@ -2428,11 +2439,18 @@ impl PyDocumentObject {
         self.inner.lock().unwrap().purge_touched(self.id);
     }
 
-    /// A short status string: `Invalid`, `Touched` or `Valid`.
+    /// A short status string: `Invalid[: message]`, `Touched` or `Valid`.
+    ///
+    /// FreeCAD reports the execute failure after the state, so a rejected
+    /// pattern shows its reason (`Invalid: Circular pattern created more than
+    /// 10000 circles`) instead of a bare `Invalid`.
     fn getStatusString(&self) -> String {
         let doc = self.inner.lock().unwrap();
         match doc.object(self.id) {
-            Some(o) if o.invalid => "Invalid".to_string(),
+            Some(o) if o.invalid => match o.error.as_deref() {
+                Some(message) if !message.is_empty() => format!("Invalid: {message}"),
+                _ => "Invalid".to_string(),
+            },
             Some(o) if o.must_execute => "Touched".to_string(),
             _ => "Valid".to_string(),
         }
@@ -3165,7 +3183,7 @@ impl PyDocumentObject {
         };
         fire_obj_str("slotBeforeChangeObject", slf, &name);
         let result = inner.lock().unwrap().set_property(id, &name, property);
-        result.map_err(PyValueError::new_err)?;
+        result.map_err(property_change_error)?;
         fire_obj_str("slotChangedObject", slf, &name);
         Ok(())
     }

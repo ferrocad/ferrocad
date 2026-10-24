@@ -30,12 +30,19 @@ What is here today:
   stays Qt-free and importable before it is built;
 * a **read-only selection snapshot** (``Selection.getSelection`` etc.), filled by
   the shell;
+* the **headless window seam** — ``getMainWindow().getActiveWindow()`` returns
+  the active document view (or a view without a scene graph), with the event
+  callback slots, ``fitAll``, ``redraw`` and ``getPoint`` Draft's utilities ask
+  for; ``addModule`` / ``doCommand`` carry a command's delayed work;
+* the **Draft control surface** (Q4) — ``Snapper``, ``draftToolBar``, the hint
+  channel and the checkable ``Draft_Snap_*`` commands, all installed by the
+  ``draft`` submodule at the end of this file;
 * the private bridge helpers the app script calls (``_command_list``,
   ``_run``, ``_accept``, ``_cancel``) and the document-view cache helpers.
 
 What is still absent: ``ViewProvider`` (per-object view objects) and live view
 sync (camera, fit, redraw); those are later work. See
-``docs/workbenches/actions-and-tools.md``.
+``docs/workbenches/actions-and-tools.md`` and ``FreeCADGui/draft.py``.
 """
 
 from __future__ import annotations
@@ -146,16 +153,78 @@ def _detach_children(root) -> None:
 class View3DInventor:
     """A document's 3D view, shaped like upstream's ``View3DInventor``.
 
-    Only ``getSceneGraph`` is implemented today: enough for a script to attach a
-    Coin node. Camera, viewer and redraw methods arrive with view sync.
+    ``getSceneGraph`` is the real surface: enough for a script to attach a Coin
+    node. The remaining members are the headless half of the view protocol that
+    ``draftutils.gui_utils.get_3d_view`` and Draft's Snapper reach for:
+    event callbacks are stored in this view, ``fitAll``/``redraw`` report that
+    the request was accepted, and ``getPoint`` defers to the Snapper session
+    driver. There is no camera to move, so fitting and redrawing are request
+    bookkeeping rather than rendering.
     """
 
     def __init__(self, document: "GuiDocument") -> None:
         self._document = document
+        # FreeCADGui's view protocol: event name -> callbacks.
+        self._event_callbacks: dict = {}
+        self._fits: int = 0
+        self._redraws: int = 0
 
     def getSceneGraph(self):
         """The document's scene root (``None`` when Coin is unavailable)."""
         return self._document._scene_graph()
+
+    def addEventCallback(self, name, callback) -> None:
+        """Register ``callback`` for the Coin event ``name``.
+
+        Coin is absent in a headless build, so the callbacks are kept here for
+        the shell/tests to drain; no event is ever emitted by this view.
+        """
+        if not isinstance(name, str) or not name:
+            raise ValueError("an event callback name must be a non-empty string")
+        if not callable(callback):
+            raise TypeError("an event callback must be callable")
+        self._event_callbacks.setdefault(name, []).append(callback)
+
+    def removeEventCallback(self, name, callback) -> bool:
+        """Drop ``callback`` from ``name``; returns whether it was registered."""
+        callbacks = self._event_callbacks.get(name)
+        if not callbacks:
+            return False
+        try:
+            callbacks.remove(callback)
+        except ValueError:
+            return False
+        if not callbacks:
+            del self._event_callbacks[name]
+        return True
+
+    def fitAll(self):
+        """Accept a fit request (there is no camera in a headless view)."""
+        self._fits += 1
+        return True
+
+    def redraw(self):
+        """Accept a redraw request (the shell repaints from the scene graph)."""
+        self._redraws += 1
+        return True
+
+    def getPoint(self, callback=None, *args):
+        """Start a Snapper point session on this view.
+
+        A headless view cannot receive a click, so a callback is required: the
+        caller drives it with :func:`FreeCADGui.draft.pick`.
+        """
+        if callback is None:
+            raise RuntimeError(
+                "a headless view has no interactive point picker; pass a "
+                "callback and drive it with FreeCADGui.draft.pick(point)"
+            )
+        snapper = globals().get("Snapper")
+        if snapper is None:
+            raise RuntimeError(
+                "FreeCADGui.Snapper is unavailable; the Draft module did not load"
+            )
+        return snapper.getPoint(callback, *args)
 
 
 class GuiDocument:
@@ -319,10 +388,140 @@ def removeDocumentObserver(observer) -> bool:
     return FerroCADGui.removeDocumentListener(observer)
 
 
+# ---------------------------------------------------------------------------
+# The headless window, hints and command helpers
+# ---------------------------------------------------------------------------
+
+
+class _NoDocument:
+    """The document-shaped stand-in behind the window with no open document."""
+
+    @staticmethod
+    def _scene_graph():
+        return None
+
+
+#: The single headless 3D view used when no App document is open.
+_HEADLESS_VIEW = View3DInventor(_NoDocument())
+
+
+class _HeadlessMainWindow:
+    """The small ``getMainWindow()`` object a headless GUI exposes.
+
+    Upstream tools call ``getActiveWindow()`` for a view and occasionally probe
+    for a toolbar child. The active document's real :class:`View3DInventor` is
+    returned when one exists; otherwise a shared view with no scene graph is
+    used, so ``gui_utils.get_3d_view()`` never has to special-case a missing
+    window when ``FreeCAD.GuiUp`` is set.
+    """
+
+    Name = "FerroCAD MainWindow"
+    ObjectName = "FerroCAD MainWindow"
+
+    def getActiveWindow(self):
+        document = activeDocument()
+        if document is not None:
+            return document.ActiveView
+        return _HEADLESS_VIEW
+
+    def getWindowsOfType(self, _type=None):
+        """Every open document view (the headless analogue of the window list)."""
+        return [entry.ActiveView for entry in _DOCUMENTS.values() if not entry._closed]
+
+    def findChild(self, *_args, **_kwargs):
+        """No Qt child widgets exist in a headless build."""
+        return None
+
+    def addToolBar(self, *_args, **_kwargs):
+        """Accept (and ignore) a toolbar attachment; the shell owns chrome."""
+        return None
+
+    def removeToolBar(self, *_args, **_kwargs):
+        """Accept (and ignore) a toolbar removal; the shell owns chrome."""
+        return None
+
+    def getObjectName(self):
+        return self.ObjectName
+
+
+_MAIN_WINDOW = _HeadlessMainWindow()
+
+
+#: Modules recorded by :func:`addModule` for the next commit. They are names,
+#: not imported objects: the shell resolves them when it builds the transaction.
+_PENDING_MODULES: list = []
+
+
+def addModule(name: str) -> None:
+    """Record a module name for the next commit without importing it.
+
+    Upstream ``Gui.addModule`` delays the import until the command actually
+    executes. FerroCAD keeps the name here for the shell and never imports it in
+    this call, so importing a tool's module cannot have side effects early.
+    """
+    if not isinstance(name, str) or not name:
+        raise ValueError("a module name must be a non-empty string")
+    if name not in _PENDING_MODULES:
+        _PENDING_MODULES.append(name)
+
+
+def _take_modules() -> list:
+    """Consume and return the modules recorded since the last commit."""
+    modules = list(_PENDING_MODULES)
+    _PENDING_MODULES.clear()
+    return modules
+
+
+def doCommand(text: str):
+    """Evaluate a Python command string in ``FreeCAD``'s namespace.
+
+    Upstream Draft's line tools commit their work through ``Gui.doCommand``.
+    When ``FreeCAD.runCommand`` exists it is used, matching upstream's host
+    hook; otherwise the source is executed with ``exec`` against the ``FreeCAD``
+    module's globals, so ``import Draft`` and ``FreeCAD.newDocument`` resolve as
+    they do in a macro. A failure is raised as a ``RuntimeError`` that keeps the
+    original exception as its cause.
+    """
+    if not isinstance(text, str) or not text.strip():
+        raise ValueError("FreeCADGui.doCommand needs a non-empty command string")
+    runner = getattr(FreeCAD, "runCommand", None)
+    try:
+        if callable(runner):
+            return runner(text)
+        exec(compile(text, "<FreeCADGui.doCommand>", "exec"), FreeCAD.__dict__)
+    except Exception as exc:  # noqa: BLE001 - re-raised with the command text
+        raise RuntimeError(
+            f"FreeCADGui.doCommand failed: {_error_text(exc)}\n{text}"
+        ) from exc
+    return None
+
+
+def getMainWindow():
+    """The headless main window (a stable singleton).
+
+    ``getActiveWindow()`` returns the active document's view when there is one,
+    else a view with ``getSceneGraph() is None``. The view protocol includes the
+    event-callback slots, ``fitAll``, ``redraw`` and ``getPoint``.
+    """
+    return _MAIN_WINDOW
+
+
+#: Set when the Draft extension could not be installed at the end of this module.
+_DRAFT_IMPORT_ERROR = None
+
+#: Names installed by ``FreeCADGui.draft``; used for the degraded-build error.
+_DRAFT_NAMES = ("draft", "Snapper", "draftToolBar", "HintManager", "InputHint", "UserInput")
+
+
 def __getattr__(name):
     # PEP 562: resolved lazily because the active document changes over time.
     if name == "ActiveDocument":
         return activeDocument()
+    if name in _DRAFT_NAMES and _DRAFT_IMPORT_ERROR is not None:
+        raise ImportError(
+            f"FreeCADGui.{name} is unavailable: the Draft GUI module failed to "
+            f"import ({_error_text(_DRAFT_IMPORT_ERROR)})"
+        ) from _DRAFT_IMPORT_ERROR
     raise AttributeError("module 'FreeCADGui' has no attribute '%s'" % name)
 
 
@@ -634,3 +833,17 @@ class _PySideUic:
 
 
 PySideUic = _PySideUic()
+
+
+# ---------------------------------------------------------------------------
+# Draft: the native Snapper, the task-panel adapter and the snap commands
+# ---------------------------------------------------------------------------
+
+# The import is guarded: a build without the Rust stage extension must still
+# import ``FreeCADGui``. ``draft`` imports ``ferrocad_stage`` lazily, so a
+# missing extension surfaces as a clear ``ImportError`` from a Snapper method
+# (and ``__getattr__`` re-raises this failure for the installed names).
+try:
+    from . import draft as draft  # noqa: F401  (installs Snapper/draftToolBar)
+except Exception as _exc:  # noqa: BLE001 - keep the facade importable
+    _DRAFT_IMPORT_ERROR = _exc

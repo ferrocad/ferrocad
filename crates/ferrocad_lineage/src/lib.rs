@@ -128,6 +128,30 @@ pub enum Relation {
     Deleted,
 }
 
+/// One naming derivation, distinct from production provenance.
+///
+/// A [`History`]'s `modified`/`generated` lists answer "which *input* element
+/// produced this output". A derivation answers a different question: which
+/// *result* element gave this result element its name. Upstream's element-map
+/// builder names unnamed lower elements after the named upper element that
+/// contains them (`…;U1`) and unnamed higher elements after their named boundary
+/// (`…;L`); each such step is one `Derivation`. The relation is incidence, not
+/// provenance, so it carries no operand identity.
+///
+/// When a lineage folds a derivation into its reverse map, it resolves `source`
+/// through the producers already recorded for it, so a chain
+/// (`Face1 → Edge2 → Vertex3`) reports the operand elements that named `Face1`
+/// rather than an intermediate result element. That keeps every reverse-map
+/// producer an operand element name, and matches upstream's encoded names, which
+/// carry the source element's whole provenance.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Derivation<T> {
+    /// The element whose name was used.
+    pub source: ElementRef<T>,
+    /// The element that was named from it.
+    pub target: ElementRef<T>,
+}
+
 /// The identity behind one relation in a [`History`].
 ///
 /// A history's relation lists carry sub-shape handles and positional names; a
@@ -168,6 +192,18 @@ pub struct History<T> {
     pub modified: Vec<(ElementRef<T>, ElementRef<T>)>,
     /// Inputs that do not survive into the output.
     pub deleted: Vec<ElementRef<T>>,
+    /// `(input, output)` pairs where the input survives unchanged (`IsSame`).
+    ///
+    /// Upstream names these by copying the input's name; they are not
+    /// modifications, so they stay out of `modified`/`generated` and out of the
+    /// provenance side table.
+    pub identity: Vec<(ElementRef<T>, ElementRef<T>)>,
+    /// Naming steps derived from the result's own incidence graph.
+    ///
+    /// Each entry names `target` after `source`; see [`Derivation`]. They are
+    /// folded into the reverse map as naming relations, never as operand
+    /// provenance.
+    pub derived: Vec<Derivation<T>>,
     /// The identity behind every input relation above.
     ///
     /// One entry per `modified`/`generated` pair and per `deleted` input. Entries
@@ -184,6 +220,8 @@ impl<T> Default for History<T> {
             generated: Vec::new(),
             modified: Vec::new(),
             deleted: Vec::new(),
+            identity: Vec::new(),
+            derived: Vec::new(),
             provenance: Vec::new(),
         }
     }
@@ -195,6 +233,8 @@ impl<T> History<T> {
         self.generated.is_empty()
             && self.modified.is_empty()
             && self.deleted.is_empty()
+            && self.identity.is_empty()
+            && self.derived.is_empty()
             && self.provenance.is_empty()
     }
 
@@ -232,6 +272,20 @@ impl<T> History<T> {
         self.provenance
             .push(Provenance::new(input_id, Relation::Deleted, None));
         self.deleted.push(input);
+    }
+
+    /// Record an input that survives unchanged as `output`.
+    ///
+    /// This is the identity (`IsSame`) mapping upstream's `mapSubElement` copies:
+    /// the input's name comes to mean the same sub-shape in the result. It is not
+    /// a modification, so it adds no provenance entry.
+    pub fn push_identity(&mut self, input: ElementRef<T>, output: ElementRef<T>) {
+        self.identity.push((input, output));
+    }
+
+    /// Record one naming step derived from the result's incidence graph.
+    pub fn push_derived(&mut self, source: ElementRef<T>, target: ElementRef<T>) {
+        self.derived.push(Derivation { source, target });
     }
 
     /// The provenance entries for one relation kind, in reported order.
@@ -301,17 +355,30 @@ impl<T> ElementMap<T> {
     /// Input names are the names the history was built with. With positional names
     /// that is the input shape's own ordinal; a lineage-derived naming scheme can feed
     /// the same method with better names later.
+    ///
+    /// Deletions retire the *previous* binding first: the deleted list describes
+    /// inputs, whose positional spelling may coincide with an output of this same
+    /// operation (operands and results have independent positional namespaces).
+    /// Retiring first lets this operation's own outputs keep their names while a
+    /// stale binding still fails to resolve.
     pub fn apply(&mut self, history: &History<T>)
     where
         T: Clone,
     {
-        for (input, output) in history.modified.iter().chain(&history.generated) {
+        for deleted in &history.deleted {
+            self.entries.remove(&deleted.name);
+        }
+        // Identity first: an unchanged sub-shape keeps its input name, exactly as
+        // upstream's `mapSubElement` runs before the modified/generated pass.
+        for (input, output) in &history.identity {
             self.entries
                 .entry(input.name.clone())
                 .or_insert_with(|| output.shape.clone());
         }
-        for deleted in &history.deleted {
-            self.entries.remove(&deleted.name);
+        for (input, output) in history.modified.iter().chain(&history.generated) {
+            self.entries
+                .entry(input.name.clone())
+                .or_insert_with(|| output.shape.clone());
         }
     }
 
@@ -483,6 +550,10 @@ impl Default for MapVersion {
 /// values are opaque payloads carrying no name, so it is folded from [`History`]
 /// alongside the forward map, by [`Lineage`].
 ///
+/// A derived name (`Face1` naming its edges) is recorded against the producers
+/// that named its source, so the producer lists always contain operand element
+/// names.
+///
 /// Representation: `output name -> input names`, both `String`. Keys live in a
 /// `BTreeMap`, so iteration is in name order; each producer list is de-duplicated
 /// and **sorted**, so the reverse map is canonical for a set of relations — the
@@ -623,9 +694,11 @@ impl<T> Lineage<T> {
     ///
     /// The forward map is exactly [`ElementMap::apply`]: an input name comes to mean
     /// its output sub-shape, the first output wins when one input produced several,
-    /// and a deleted input's name is retired. The reverse map records every
-    /// `(input, output)` relation (including the outputs the forward map cannot keep)
-    /// and retires a deleted name both as an output and as a producer.
+    /// and a deleted input's name is retired. Deletions are retired *before* this
+    /// operation's own relations are recorded, because inputs and outputs have
+    /// independent positional namespaces. The reverse map records every
+    /// `(input, output)` relation (including the outputs the forward map cannot keep),
+    /// the identity names, and the derived (incidence) names.
     ///
     /// Folding is **idempotent**: applying the same history again leaves both maps
     /// unchanged. The forward map's `or_insert` cannot rebind an existing name and
@@ -636,12 +709,38 @@ impl<T> Lineage<T> {
     where
         T: Clone,
     {
+        // Retire the previous bindings a deleted input named, then record this
+        // operation's own naming relations. Inputs and outputs have independent
+        // positional namespaces, so a deleted `Face1` must not erase the result's
+        // own `Face1`.
+        for deleted in &history.deleted {
+            self.reverse.retire(&deleted.name);
+        }
         // Same order as `ElementMap::apply`, so the two maps agree on "first".
+        for (input, output) in &history.identity {
+            self.reverse.record(&input.name, &output.name);
+        }
         for (input, output) in history.modified.iter().chain(&history.generated) {
             self.reverse.record(&input.name, &output.name);
         }
-        for deleted in &history.deleted {
-            self.reverse.retire(&deleted.name);
+        // Derived names are named *from* a result element, not produced by an
+        // operand. Resolve the source to the producers that named it, so every
+        // reverse-map producer stays an operand element name (which is also a
+        // forward-map key) rather than an intermediate derived name. A source
+        // with no recorded producer is reported as itself.
+        for derivation in &history.derived {
+            let producers = self
+                .reverse
+                .inputs_for(&derivation.source.name)
+                .to_vec();
+            if producers.is_empty() {
+                self.reverse
+                    .record(&derivation.source.name, &derivation.target.name);
+            } else {
+                for producer in producers {
+                    self.reverse.record(&producer, &derivation.target.name);
+                }
+            }
         }
         self.map.apply(history);
     }
@@ -1132,5 +1231,80 @@ mod tests {
         assert_eq!(map_entries(&annotated), map_entries(&plain));
         assert_eq!(with_metadata.provenance.len(), 1);
         assert!(without_metadata.provenance.is_empty());
+    }
+
+    // -- identity and derivation --------------------------------------------
+
+    #[test]
+    fn identity_names_fold_into_both_maps_without_provenance() {
+        let mut history = History::default();
+        history.push_identity(element("in", "Face1"), element("out", "Face1"));
+
+        let lineage = Lineage::from_history(&history, MapVersion::default());
+        assert_eq!(lineage.get("Face1"), Some(&"out".to_string()));
+        assert_eq!(producers(lineage.reverse(), "Face1"), ["Face1"]);
+        // An unchanged element is not a modification and carries no identity
+        // entry in the operand provenance table.
+        assert!(history.provenance.is_empty());
+        assert!(history.modified.is_empty() && history.generated.is_empty());
+    }
+
+    #[test]
+    fn derived_names_fold_into_the_reverse_map_only() {
+        let mut history = History::default();
+        history.push_derived(element("face", "Face1"), element("edge", "Edge2"));
+
+        let lineage = Lineage::from_history(&history, MapVersion::default());
+        assert_eq!(producers(lineage.reverse(), "Edge2"), ["Face1"]);
+        // A derivation is incidence, not production: it binds no forward shape.
+        assert!(lineage.map().is_empty());
+        assert!(history.provenance.is_empty());
+    }
+
+    #[test]
+    fn a_deleted_input_does_not_erase_this_historys_own_output_name() {
+        // Inputs and outputs have independent positional namespaces, so a tool
+        // element `Face1` being deleted must not retire the *result's* `Face1`.
+        let mut history = History::default();
+        history.deleted.push(element("tool", "Face1"));
+        history
+            .modified
+            .push((element("base", "Face1"), element("out", "Face1")));
+
+        let lineage = Lineage::from_history(&history, MapVersion::default());
+        assert_eq!(producers(lineage.reverse(), "Face1"), ["Face1"]);
+        assert_eq!(lineage.get("Face1"), Some(&"out".to_string()));
+    }
+
+    #[test]
+    fn folding_identity_and_derived_relations_is_idempotent() {
+        let mut history = History::default();
+        history.deleted.push(element("tool", "Face9"));
+        history.push_identity(element("in", "Face1"), element("out", "Face1"));
+        history.push_derived(element("face", "Face1"), element("edge", "Edge2"));
+
+        let mut once = Lineage::from_history(&history, MapVersion::default());
+        let before = (
+            map_entries(once.map())
+                .into_iter()
+                .map(|(name, value)| (name.to_string(), value.clone()))
+                .collect::<Vec<_>>(),
+            reverse_entries(once.reverse())
+                .into_iter()
+                .map(|(name, inputs)| (name.to_string(), inputs.to_vec()))
+                .collect::<Vec<_>>(),
+        );
+        once.apply(&history);
+        let after = (
+            map_entries(once.map())
+                .into_iter()
+                .map(|(name, value)| (name.to_string(), value.clone()))
+                .collect::<Vec<_>>(),
+            reverse_entries(once.reverse())
+                .into_iter()
+                .map(|(name, inputs)| (name.to_string(), inputs.to_vec()))
+                .collect::<Vec<_>>(),
+        );
+        assert_eq!(before, after);
     }
 }

@@ -403,6 +403,35 @@ mod ffi {
             op: Pin<&mut BRepAlgoAPI_Common>,
             shape: &TopoDS_Shape,
         ) -> bool;
+
+        /// A default-constructed cut operation that can be reconfigured and
+        /// rebuilt several times (upstream's recursive compound policy).
+        fn fc_cut_new_op() -> UniquePtr<BRepAlgoAPI_Cut>;
+
+        /// Switch a cut operation between `BOPAlgo_CUT` and `BOPAlgo_FUSE`.
+        fn fc_cut_set_operation(op: Pin<&mut BRepAlgoAPI_Cut>, fuse: bool);
+
+        /// Install the argument/tool lists (`SetArguments`/`SetTools`).
+        fn fc_cut_configure(
+            op: Pin<&mut BRepAlgoAPI_Cut>,
+            arguments: &TopTools_ListOfShape,
+            tools: &TopTools_ListOfShape,
+        );
+
+        /// `Build()` with a default progress range.
+        fn fc_cut_build(op: Pin<&mut BRepAlgoAPI_Cut>);
+
+        /// Upstream's constructor settings: run parallel, non-destructive.
+        fn fc_cut_prepare(op: Pin<&mut BRepAlgoAPI_Cut>);
+
+        /// Upstream's automatic fuzzy value from the current argument/tool bounds.
+        fn fc_cut_set_auto_fuzzy(op: Pin<&mut BRepAlgoAPI_Cut>);
+
+        /// The number of *direct* children (`TopoDS_Iterator`).
+        fn fc_shape_child_count(shape: &TopoDS_Shape) -> i32;
+
+        /// The `index`-th (1-based) direct child, or null.
+        fn fc_shape_child(shape: &TopoDS_Shape, index: i32) -> UniquePtr<TopoDS_Shape>;
     }
 }
 

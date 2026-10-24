@@ -1,16 +1,24 @@
 #pragma once
 
+#include <BOPAlgo_Operation.hxx>
 #include <BRepAlgoAPI_Common.hxx>
 #include <BRepAlgoAPI_Cut.hxx>
 #include <BRepAlgoAPI_Fuse.hxx>
+#include <BRepBndLib.hxx>
 #include <BRepBuilderAPI_MakeShape.hxx>
 #include <BRepTools.hxx>
 #include <BRep_Builder.hxx>
+#include <Bnd_Box.hxx>
+#include <Message_ProgressRange.hxx>
+#include <Precision.hxx>
 #include <TopTools_IndexedMapOfShape.hxx>
 #include <TopTools_ListIteratorOfListOfShape.hxx>
 #include <TopTools_ListOfShape.hxx>
+#include <TopoDS_Compound.hxx>
+#include <TopoDS_Iterator.hxx>
 #include <TopoDS_Shape.hxx>
 
+#include <cmath>
 #include <memory>
 #include <sstream>
 #include <string>
@@ -110,6 +118,80 @@ inline void fc_brep_common_generated(BRepAlgoAPI_Common& op, const TopoDS_Shape&
 inline bool fc_brep_common_is_deleted(BRepAlgoAPI_Common& op, const TopoDS_Shape& s)
 {
     return op.IsDeleted(s);
+}
+
+// --- one reusable cut operation ---------------------------------------------
+//
+// Upstream's `FCBRepAlgoAPI_BooleanOperation::Build` reuses a *single* operation
+// object and calls `Build()` several times: once to fuse a compound tool, then
+// for the cut, or once per child when the base is a compound. Its history
+// therefore describes the last internal build. These helpers expose the setters
+// the crate does not bridge so the same policy can be driven from Rust.
+
+inline std::unique_ptr<BRepAlgoAPI_Cut> fc_cut_new_op()
+{
+    return std::make_unique<BRepAlgoAPI_Cut>();
+}
+
+inline void fc_cut_set_operation(BRepAlgoAPI_Cut& op, bool fuse)
+{
+    op.SetOperation(fuse ? BOPAlgo_FUSE : BOPAlgo_CUT);
+}
+
+inline void fc_cut_configure(BRepAlgoAPI_Cut& op, const TopTools_ListOfShape& arguments,
+                             const TopTools_ListOfShape& tools)
+{
+    op.SetArguments(arguments);
+    op.SetTools(tools);
+}
+
+inline void fc_cut_build(BRepAlgoAPI_Cut& op)
+{
+    Message_ProgressRange range;
+    op.Build(range);
+}
+
+// Upstream's `FCBRepAlgoAPI_BooleanOperation` constructor settings:
+// non-destructive so the operands are not rewritten in place, and an automatic
+// fuzzy value derived from the combined bounds.
+inline void fc_cut_prepare(BRepAlgoAPI_Cut& op)
+{
+    op.SetRunParallel(Standard_True);
+    op.SetNonDestructive(Standard_True);
+}
+
+inline void fc_cut_set_auto_fuzzy(BRepAlgoAPI_Cut& op)
+{
+    Bnd_Box bounds;
+    for (TopTools_ListIteratorOfListOfShape it(op.Arguments()); it.More(); it.Next())
+        BRepBndLib::Add(it.Value(), bounds);
+    for (TopTools_ListIteratorOfListOfShape it(op.Tools()); it.More(); it.Next())
+        BRepBndLib::Add(it.Value(), bounds);
+    // `FuzzyHelper::getBooleanFuzzy()` defaults to 1.0.
+    op.SetFuzzyValue(1.0 * std::sqrt(bounds.SquareExtent()) * Precision::Confusion());
+}
+
+// --- shape structure --------------------------------------------------------
+// `TopoDS_Iterator` walks the *direct* children of a shape, which is what
+// upstream's `RecursiveAddTools`/`RecursiveCutCompound` iterate (unlike
+// `TopExp::MapShapes`, which recurses).
+
+inline int fc_shape_child_count(const TopoDS_Shape& shape)
+{
+    int count = 0;
+    for (TopoDS_Iterator it(shape); it.More(); it.Next())
+        ++count;
+    return count;
+}
+
+inline std::unique_ptr<TopoDS_Shape> fc_shape_child(const TopoDS_Shape& shape, int index)
+{
+    int current = 0;
+    for (TopoDS_Iterator it(shape); it.More(); it.Next()) {
+        if (++current == index)
+            return std::make_unique<TopoDS_Shape>(it.Value());
+    }
+    return nullptr;
 }
 
 // --- BREP persistence -------------------------------------------------------

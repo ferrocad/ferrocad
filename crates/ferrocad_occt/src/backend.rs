@@ -8,10 +8,16 @@
 //! also carries an [`ElementId`] (operand, kind, 1-based ordinal), so two operands
 //! that both report a `Face1` remain distinguishable.
 //!
-//! Unchanged sub-shapes are deliberately **absent** from the history: an input that
-//! is neither modified, generated, nor deleted simply survives as itself, and the
-//! mapper treats an unmapped, non-deleted input that way. (Verified in
-//! `spikes/occt-history-rs`.)
+//! Unchanged sub-shapes are deliberately **absent** from `modified`/`generated`:
+//! an input that is neither modified, generated, nor deleted simply survives as
+//! itself, and the mapper treats an unmapped, non-deleted input that way. (Verified
+//! in `spikes/occt-history-rs`.) They are reported separately as `identity`
+//! relations, and the result's own incidence graph adds `derived` naming steps, so
+//! the reverse map names every result element upstream names.
+//!
+//! `cut` also reproduces upstream's compound policy
+//! (`FCBRepAlgoAPI_BooleanOperation::Build`): a compound tool is flattened and
+//! fused before the cut, and a compound base is cut child by child.
 
 use cxx::UniquePtr;
 use ferrocad_geom::{
@@ -22,6 +28,8 @@ use ferrocad_geom::{
 use ferrocad_curves::{Arc, Circle, EdgeCurve, Ellipse, Line, Vector3};
 use ferrocad_types::{Matrix4, Placement};
 use opencascade_sys as ffi;
+
+use std::collections::BTreeSet;
 
 use ffi::top_abs::TopAbs_ShapeEnum;
 use ffi::top_abs::TopAbs_Orientation;
@@ -1015,11 +1023,26 @@ impl GeometryBackend for OcctBackend {
         let sb = b_guard
             .as_ref()
             .ok_or(OcctError::InvalidInput { what: "null shape" })?;
-        let mut op = ffi::b_rep_algo_api::BRepAlgoAPI_Cut_new(sa, sb);
-        if !op.IsDone() {
+
+        // Upstream's `FCBRepAlgoAPI_BooleanOperation::Build` rewrites a compound
+        // cut before OCCT sees it. One operation object is reused for every
+        // internal build, so its history describes the last of them — which is
+        // exactly what the element map is built from.
+        let mut op = bridge::fc_cut_new_op();
+        // The constructor-time settings, taken from the *original* operands: the
+        // fuzzy value is not recomputed for the internal fuse/cut builds.
+        let initial_arguments = shape_list(&[sa]);
+        let initial_tools = shape_list(&[sb]);
+        bridge::fc_cut_configure(op.pin_mut(), &initial_arguments, &initial_tools);
+        bridge::fc_cut_prepare(op.pin_mut());
+        bridge::fc_cut_set_auto_fuzzy(op.pin_mut());
+
+        let Some(result) = build_cut_policy(&mut op, &[sa], &[sb], CutOperation::Cut) else {
             return Err(OcctError::NotDone { operation: "cut" }.into());
-        }
-        let out_maps = sub_shape_maps(op.pin_mut().Shape());
+        };
+
+        let result = result.as_ref().expect("the cut result");
+        let out_maps = sub_shape_maps(result);
         let history = build_history(
             [(OperandId::A, sa), (OperandId::B, sb)],
             &out_maps,
@@ -1029,7 +1052,7 @@ impl GeometryBackend for OcctBackend {
                 bridge::fc_brep_cut_is_deleted(op.pin_mut(), sub)
             },
         );
-        Ok(OpResult::new(erase(op.pin_mut().Shape()), history))
+        Ok(OpResult::new(erase(result), history))
     }
 
     fn fillet(
@@ -1957,6 +1980,154 @@ impl GeometryBackend for OcctBackend {
     }
 }
 
+/// Which operation a reusable upstream-style operation object is configured for.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum CutOperation {
+    Cut,
+    Fuse,
+}
+
+/// A copy of an OCCT shape handle (reference-counted).
+fn owned(shape: &TopoDS_Shape) -> UniquePtr<TopoDS_Shape> {
+    ffi::topo_ds::TopoDS_Shape_to_owned(shape)
+}
+
+/// Borrow every non-null handle in `shapes`.
+fn refs(shapes: &[UniquePtr<TopoDS_Shape>]) -> Vec<&TopoDS_Shape> {
+    shapes.iter().filter_map(|shape| shape.as_ref()).collect()
+}
+
+/// The *direct* children of a shape, in `TopoDS_Iterator` order.
+///
+/// Unlike `TopExp::MapShapes`, this does not recurse: it is the iteration
+/// upstream's `RecursiveAddTools`/`RecursiveCutCompound` perform.
+fn direct_children(shape: &TopoDS_Shape) -> Vec<UniquePtr<TopoDS_Shape>> {
+    let count = bridge::fc_shape_child_count(shape);
+    (1..=count)
+        .map(|index| bridge::fc_shape_child(shape, index))
+        .filter(|child| !child.is_null())
+        .collect()
+}
+
+/// Flatten a shape's compound children recursively, as `RecursiveAddTools` does.
+fn flatten_compound(shape: &TopoDS_Shape) -> Vec<UniquePtr<TopoDS_Shape>> {
+    let mut out = Vec::new();
+    flatten_compound_into(shape, &mut out);
+    out
+}
+
+fn flatten_compound_into(shape: &TopoDS_Shape, out: &mut Vec<UniquePtr<TopoDS_Shape>>) {
+    if shape.ShapeType() == TopAbs_ShapeEnum::TopAbs_COMPOUND {
+        for child in direct_children(shape) {
+            if let Some(child) = child.as_ref() {
+                flatten_compound_into(child, out);
+            }
+        }
+    } else {
+        out.push(owned(shape));
+    }
+}
+
+/// An OCCT shape list holding the given handles, in order.
+fn shape_list(shapes: &[&TopoDS_Shape]) -> UniquePtr<TopTools_ListOfShape> {
+    let mut list = ffi::top_tools::new_list_of_shape();
+    for shape in shapes {
+        let _ = list.pin_mut().Append(shape);
+    }
+    list
+}
+
+/// A compound of the given shapes, in order.
+fn compound_of(shapes: &[&TopoDS_Shape]) -> UniquePtr<TopoDS_Shape> {
+    let mut compound = ffi::topo_ds::TopoDS_Compound_new();
+    let builder = ffi::b_rep::BRep_Builder_new();
+    let builder = ffi::b_rep::BRep_Builder_upcast_to_topods_builder(&builder);
+    builder.MakeCompound(compound.pin_mut());
+    let mut compound = ffi::topo_ds::TopoDS_Compound_as_shape(compound);
+    for shape in shapes {
+        builder.Add(compound.pin_mut(), shape);
+    }
+    compound
+}
+
+/// Upstream's `FCBRepAlgoAPI_BooleanOperation::Build`, for a cut.
+///
+/// - **Compound tool**, one argument (`RecursiveCutFusedTools`): flatten the
+///   tool's compound children. With two or more pieces, fuse them on this same
+///   operation object and use the fused result (flattened again when it is a
+///   compound) as the tool list. A single-child compound is cut as-is.
+/// - **Compound base**, one argument (`RecursiveCutCompound`): cut each direct
+///   child with the unchanged tool and assemble the per-child results into a new
+///   compound. The operation object keeps the history of the last child build,
+///   exactly as upstream's does.
+/// - Otherwise the plain two-list boolean is built.
+///
+/// Returns `None` when OCCT reports the build not done.
+fn build_cut_policy(
+    op: &mut UniquePtr<ffi::b_rep_algo_api::BRepAlgoAPI_Cut>,
+    arguments: &[&TopoDS_Shape],
+    tools: &[&TopoDS_Shape],
+    operation: CutOperation,
+) -> Option<UniquePtr<TopoDS_Shape>> {
+    if operation == CutOperation::Cut
+        && arguments.len() == 1
+        && tools.len() == 1
+        && tools[0].ShapeType() == TopAbs_ShapeEnum::TopAbs_COMPOUND
+    {
+        let mut pieces = flatten_compound(tools[0]);
+        if pieces.len() >= 2 {
+            // Fuse the tool pieces before cutting. Upstream flips
+            // `myOperation` on the cut object and calls `Build()` again.
+            let first = pieces.remove(0);
+            let rest = refs(&pieces);
+            let fuse_arguments = [first.as_ref().expect("a tool piece")];
+            let argument_list = shape_list(&fuse_arguments);
+            let tool_list = shape_list(&rest);
+            bridge::fc_cut_set_operation(op.pin_mut(), true);
+            bridge::fc_cut_configure(op.pin_mut(), &argument_list, &tool_list);
+            bridge::fc_cut_build(op.pin_mut());
+            bridge::fc_cut_set_operation(op.pin_mut(), false);
+            if !op.IsDone() {
+                return None;
+            }
+            let fused = owned(op.pin_mut().Shape());
+            // `RecursiveAddTools(myShape)`: a fused result that is still a
+            // compound did not all touch, so cut with its pieces individually.
+            pieces = flatten_compound(fused.as_ref().expect("the fused tool"));
+        }
+
+        let tool_refs = refs(&pieces);
+        let argument_list = shape_list(arguments);
+        let tool_list = shape_list(&tool_refs);
+        bridge::fc_cut_set_operation(op.pin_mut(), false);
+        bridge::fc_cut_configure(op.pin_mut(), &argument_list, &tool_list);
+        bridge::fc_cut_build(op.pin_mut());
+        return op.IsDone().then(|| owned(op.pin_mut().Shape()));
+    }
+
+    if operation == CutOperation::Cut
+        && arguments.len() == 1
+        && arguments[0].ShapeType() == TopAbs_ShapeEnum::TopAbs_COMPOUND
+    {
+        let mut results = Vec::new();
+        for child in direct_children(arguments[0]) {
+            let child = child.as_ref().expect("a compound child");
+            let child_arguments = [child];
+            let out = build_cut_policy(op, &child_arguments, tools, CutOperation::Cut)?;
+            results.push(out);
+        }
+        let result_refs = refs(&results);
+        return Some(compound_of(&result_refs));
+    }
+
+    let argument_list = shape_list(arguments);
+    let tool_list = shape_list(tools);
+    bridge::fc_cut_set_operation(op.pin_mut(), operation == CutOperation::Fuse);
+    bridge::fc_cut_configure(op.pin_mut(), &argument_list, &tool_list);
+    bridge::fc_cut_build(op.pin_mut());
+    op.IsDone().then(|| owned(op.pin_mut().Shape()))
+}
+
 /// The sub-shape kinds a boolean reports lineage for, coarsest first.
 ///
 /// The order is fixed so a history is deterministic; it is not the order of the
@@ -2044,11 +2215,202 @@ where
         }
     }
 
+    // The identity (`IsSame`) pass: an unchanged input keeps its name in the
+    // result. Upstream's `mapSubElement` runs this before the modified/generated
+    // names, so `ElementMap::apply` folds it first too.
+    add_identity_relations(&mut history, operands, out_maps);
+
+    // The reverse/forward derivation passes. They name result elements from the
+    // result's own incidence graph; see `add_derived_names`.
+    add_derived_names(&mut history, out_maps);
+
     // The identity side table is canonical: sorted by operand, kind, ordinal,
     // relation and output, so the order OCCT reported relations in cannot change
     // how a history compares. The relation lists above keep reporting order.
     history.provenance.sort();
     history
+}
+
+/// The `(kind, 1-based ordinal)` behind a positional element name.
+fn element_key(name: &str) -> Option<(ElementKind, i32)> {
+    for kind in [ElementKind::Face, ElementKind::Edge, ElementKind::Vertex] {
+        if let Some(rest) = name.strip_prefix(kind.prefix()) {
+            if let Ok(ordinal) = rest.parse::<i32>() {
+                return Some((kind, ordinal));
+            }
+        }
+    }
+    None
+}
+
+/// Record every input sub-element that survives unchanged as the same result
+/// sub-element (`IsSame`), under the same kind.
+///
+/// This is upstream's `mapSubElement(shapes)` identity mapping: it names a result
+/// element after the input element it literally still is, without claiming the
+/// operation modified or generated it.
+fn add_identity_relations(
+    history: &mut History,
+    operands: [(OperandId, &TopoDS_Shape); 2],
+    out_maps: &[(ElementKind, UniquePtr<Map>); 3],
+) {
+    for (_operand, in_shape) in operands {
+        for (kind_index, (kind, occt_kind)) in HISTORY_KINDS.into_iter().enumerate() {
+            let in_map = sub_shape_map(in_shape, occt_kind);
+            let out_map = &out_maps[kind_index].1;
+            for ordinal in 1..=in_map.Extent() {
+                let element = in_map.FindKey(ordinal);
+                let index = bridge::fc_indexed_map_find_index(out_map, element);
+                if index > 0 {
+                    history.push_identity(
+                        element_ref(kind, ordinal, element),
+                        element_ref(kind, index, out_map.FindKey(index)),
+                    );
+                }
+            }
+        }
+    }
+}
+
+/// Name result elements from the result's incidence graph, mirroring upstream's
+/// derivation passes.
+///
+/// 1. **Reverse** (faces, then edges): a *named* upper element names the lower
+///    elements it contains that are still unnamed (`Face1` names its edges, an
+///    edge names its vertices).
+/// 2. **Forward** (edges, then faces): a still-unnamed higher element is named
+///    from its lower elements, but only when **all** of them are named. An edge
+///    uses its vertices; a face uses the edges of its outer wire, as upstream
+///    does.
+///
+/// A derivation is recorded as a naming relation, not as operand provenance.
+fn add_derived_names(history: &mut History, out_maps: &[(ElementKind, UniquePtr<Map>); 3]) {
+    let face_map = &out_maps[0].1;
+    let edge_map = &out_maps[1].1;
+    let vertex_map = &out_maps[2].1;
+
+    let mut named: BTreeSet<(ElementKind, i32)> = BTreeSet::new();
+    for (_, output) in history.modified.iter().chain(&history.generated) {
+        if let Some(key) = element_key(&output.name) {
+            named.insert(key);
+        }
+    }
+    for (_, output) in &history.identity {
+        if let Some(key) = element_key(&output.name) {
+            named.insert(key);
+        }
+    }
+
+    // Reverse pass: face -> edge, then edge -> vertex.
+    for (upper_kind, upper_map, lower_kind, lower_occt) in [
+        (
+            ElementKind::Face,
+            face_map,
+            ElementKind::Edge,
+            TopAbs_ShapeEnum::TopAbs_EDGE,
+        ),
+        (
+            ElementKind::Edge,
+            edge_map,
+            ElementKind::Vertex,
+            TopAbs_ShapeEnum::TopAbs_VERTEX,
+        ),
+    ] {
+        let lower_map = if lower_kind == ElementKind::Edge {
+            edge_map
+        } else {
+            vertex_map
+        };
+        for index in 1..=upper_map.Extent() {
+            if !named.contains(&(upper_kind, index)) {
+                continue;
+            }
+            let upper = upper_map.FindKey(index);
+            let sub = sub_shape_map(upper, lower_occt);
+            for sub_index in 1..=sub.Extent() {
+                let lower_shape = sub.FindKey(sub_index);
+                let lower_index = bridge::fc_indexed_map_find_index(lower_map, lower_shape);
+                if lower_index <= 0 || named.contains(&(lower_kind, lower_index)) {
+                    continue;
+                }
+                history.push_derived(
+                    element_ref(upper_kind, index, upper),
+                    element_ref(lower_kind, lower_index, lower_map.FindKey(lower_index)),
+                );
+                named.insert((lower_kind, lower_index));
+            }
+        }
+    }
+
+    // Forward pass: edges from their vertices.
+    for index in 1..=edge_map.Extent() {
+        if named.contains(&(ElementKind::Edge, index)) {
+            continue;
+        }
+        let edge = edge_map.FindKey(index);
+        let Some(lower) = complete_lower(&edge, TopAbs_ShapeEnum::TopAbs_VERTEX, vertex_map, &named)
+        else {
+            continue;
+        };
+        for ordinal in lower {
+            history.push_derived(
+                element_ref(ElementKind::Vertex, ordinal, vertex_map.FindKey(ordinal)),
+                element_ref(ElementKind::Edge, index, edge),
+            );
+        }
+        named.insert((ElementKind::Edge, index));
+    }
+
+    // Forward pass: faces from the edges of their outer wire.
+    for index in 1..=face_map.Extent() {
+        if named.contains(&(ElementKind::Face, index)) {
+            continue;
+        }
+        let face = face_map.FindKey(index);
+        let wire = ffi::b_rep_tools::outer_wire(bridge::fc_shape_as_face(face));
+        let Some(wire) = wire.as_ref() else {
+            continue;
+        };
+        let wire = ffi::topo_ds::cast_wire_to_shape(wire);
+        let Some(lower) = complete_lower(wire, TopAbs_ShapeEnum::TopAbs_EDGE, edge_map, &named)
+        else {
+            continue;
+        };
+        for ordinal in lower {
+            history.push_derived(
+                element_ref(ElementKind::Edge, ordinal, edge_map.FindKey(ordinal)),
+                element_ref(ElementKind::Face, index, face),
+            );
+        }
+        named.insert((ElementKind::Face, index));
+    }
+}
+
+/// The distinct lower-element ordinals of `shape`, or `None` unless there is at
+/// least one and every one is already `named`.
+fn complete_lower(
+    shape: &TopoDS_Shape,
+    kind: TopAbs_ShapeEnum,
+    map: &UniquePtr<Map>,
+    named: &BTreeSet<(ElementKind, i32)>,
+) -> Option<Vec<i32>> {
+    let element_kind = if kind == TopAbs_ShapeEnum::TopAbs_EDGE {
+        ElementKind::Edge
+    } else {
+        ElementKind::Vertex
+    };
+    let sub = sub_shape_map(shape, kind);
+    let mut ordinals: Vec<i32> = Vec::new();
+    for index in 1..=sub.Extent() {
+        let index = bridge::fc_indexed_map_find_index(map, sub.FindKey(index));
+        if index <= 0 || !named.contains(&(element_kind, index)) {
+            return None;
+        }
+        if !ordinals.contains(&index) {
+            ordinals.push(index);
+        }
+    }
+    (!ordinals.is_empty()).then_some(ordinals)
 }
 
 /// A positional element reference into an operand (`FaceN`, `EdgeN`, `VertexN`).

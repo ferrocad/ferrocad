@@ -8,7 +8,7 @@ use std::sync::{Mutex, Once};
 
 use ferrocad_part_py::PartShape;
 use pyo3::prelude::*;
-use pyo3::types::{PyDict, PyModule};
+use pyo3::types::{PyDict, PyList, PyModule};
 
 static TEST_LOCK: Mutex<()> = Mutex::new(());
 
@@ -275,5 +275,107 @@ fn a_boolean_lineage_survives_an_fcstd_save_and_open() {
             .call_method1("closeDocument", (&reopened_name,))
             .expect("closeDocument");
         let _ = std::fs::remove_file(&path);
+    });
+}
+
+/// S6c: the compound-cut element maps, measured against upstream's reference
+/// keys from `TopoShapeTest.testPartCompoundCut1/2` (pinned `33adf61`).
+///
+/// `Part::Cut` rewrites a compound cut the way `FCBRepAlgoAPI_BooleanOperation`
+/// does and the lineage names every result element upstream names (identity,
+/// modified/generated, then the upper/lower derivation passes).
+#[test]
+fn compound_cut_element_maps_match_upstream_counts() {
+    let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    boot();
+    Python::with_gil(|py| {
+        let _part = PyModule::import(py, "Part").expect("import Part");
+        let ferrocad = PyModule::import(py, "ferrocad").expect("import ferrocad");
+        let doc = ferrocad
+            .call_method1("newDocument", ("RustLineageCompoundCut",))
+            .expect("newDocument");
+        for (name, length, width) in [("Box1", 1.0, 2.0), ("Box2", 2.0, 1.0)] {
+            let object = doc
+                .call_method1("addObject", ("Part::Box", name))
+                .expect("Part::Box");
+            object.setattr("Length", length).unwrap();
+            object.setattr("Width", width).unwrap();
+            object.setattr("Height", 2.0).unwrap();
+        }
+        let cylinder = doc
+            .call_method1("addObject", ("Part::Cylinder", "Cylinder1"))
+            .expect("Part::Cylinder");
+        cylinder.setattr("Radius", 0.5).unwrap();
+        cylinder.setattr("Height", 2.0).unwrap();
+        cylinder.setattr("Angle", 360.0).unwrap();
+        let compound = doc
+            .call_method1("addObject", ("Part::Compound", "Compound1"))
+            .expect("Part::Compound");
+        let box1 = doc.call_method1("getObject", ("Box1",)).unwrap();
+        let box2 = doc.call_method1("getObject", ("Box2",)).unwrap();
+        compound
+            .setattr("Links", PyList::new(py, [box1, box2]).unwrap())
+            .expect("Compound.Links");
+        doc.call_method0("recompute").expect("recompute");
+
+        // `Cyl − Compound` and `Compound − Cyl`, as the upstream tests build them.
+        for (base, tool, label, expected) in [
+            (
+                "Cylinder1",
+                "Compound1",
+                "cut1",
+                &[
+                    "Vertex6", "Vertex5", "Edge7", "Edge8", "Edge9", "Edge5", "Edge6",
+                    "Face4", "Face2", "Edge1", "Vertex4", "Edge4", "Vertex3", "Edge2",
+                    "Edge3", "Face1", "Face5", "Face3", "Vertex1", "Vertex2",
+                ][..],
+            ),
+            (
+                "Compound1",
+                "Cylinder1",
+                "cut2",
+                &[
+                    "Vertex3", "Vertex4", "Vertex8", "Vertex10", "Vertex7", "Vertex9",
+                    "Vertex13", "Vertex14", "Vertex18", "Vertex20", "Vertex17", "Vertex19",
+                    "Edge3", "Edge15", "Edge9", "Edge12", "Edge13", "Edge11", "Edge8",
+                    "Edge17", "Edge18", "Edge19", "Edge30", "Edge24", "Edge27", "Edge28",
+                    "Edge29", "Edge25", "Edge26", "Edge23", "Face7", "Face4", "Face8",
+                    "Face14", "Face13", "Face11", "Face12", "Face10", "Edge22", "Vertex12",
+                    "Edge20", "Vertex11", "Edge21", "Edge16", "Face9", "Vertex15", "Vertex16",
+                ][..],
+            ),
+        ] {
+            let cut = doc
+                .call_method1("addObject", ("Part::Cut", label))
+                .expect("Part::Cut");
+            let base = doc.call_method1("getObject", (base,)).unwrap();
+            let tool = doc.call_method1("getObject", (tool,)).unwrap();
+            cut.setattr("Base", base).unwrap();
+            cut.setattr("Tool", tool).unwrap();
+            cut.setattr("Refine", false).unwrap();
+            doc.call_method0("recompute").expect("recompute");
+
+            let keys: Vec<String> = reverse_map(&cut.getattr("Shape").unwrap())
+                .expect("reverse map")
+                .into_iter()
+                .map(|(key, _)| key)
+                .collect();
+            assert_eq!(keys.len(), expected.len(), "{label} names every upstream key");
+            for key in expected {
+                assert!(keys.iter().any(|named| named == key), "{label} is missing {key}");
+            }
+        }
+
+        // The element-map version stays off (S6c): the other upstream guards
+        // (52/58/26/10/9/24) are not reproduced yet, so a partial map is not
+        // exposed as a versioned one.
+        let cut = doc.call_method1("getObject", ("cut1",)).unwrap();
+        let shape = cut.getattr("Shape").unwrap();
+        assert_eq!(shape.getattr("ElementMapVersion").unwrap().extract::<String>().unwrap(), "");
+        assert_eq!(shape.getattr("ElementMapSize").unwrap().extract::<usize>().unwrap(), 0);
+
+        ferrocad
+            .call_method1("closeDocument", ("RustLineageCompoundCut",))
+            .expect("closeDocument");
     });
 }

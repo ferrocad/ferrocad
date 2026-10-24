@@ -1,7 +1,10 @@
 # Task — the compound-cut element-map size gap (S6c)
 
-Status: **analysis only; no code changed.** Upstream is the pinned checkout
-`../freecad-upstream` at `33adf61`.
+Status: **resolved (2026-10-24).** Upstream is the pinned checkout
+`../freecad-upstream` at `33adf61`. The analysis below drove the implementation: with the
+compound-cut policy and the naming cascade in place, `testPartCompoundCut1` and `2` now
+measure **20** and **47**, exactly upstream's counts. `ElementMapVersion`/`ElementMapSize`
+remain off because the other guards' sizes (52/58/26/10/9/24) are not reproduced yet.
 
 `TopoShapeTest.testPartCompoundCut1` expects 20 reverse-map keys and
 `testPartCompoundCut2` expects 47; this kernel reports 12 and 30. The gap is

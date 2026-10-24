@@ -25,6 +25,9 @@ What is here today:
 * the **document views** — ``getDocument`` / ``activeDocument`` (and the lazy
   ``ActiveDocument``) return a ``GuiDocument``; ``ActiveView.getSceneGraph``
   returns a per-document ``pivy.coin.SoSeparator`` that scripts can mutate;
+* the **headless form loader** — ``PySideUic.loadUi`` returns a proxy tree from
+  ``ferrocad_ui_py`` (Q2a). The extension is imported lazily, so this module
+  stays Qt-free and importable before it is built;
 * a **read-only selection snapshot** (``Selection.getSelection`` etc.), filled by
   the shell;
 * the private bridge helpers the app script calls (``_command_list``,
@@ -37,6 +40,7 @@ sync (camera, fit, redraw); those are later work. See
 
 from __future__ import annotations
 
+import os
 import sys
 
 import FreeCAD
@@ -562,3 +566,71 @@ class _Selection:
 
 
 Selection = _Selection()
+
+
+# ---------------------------------------------------------------------------
+# Qt Designer forms (Q2a)
+# ---------------------------------------------------------------------------
+
+
+def _import_ui_extension():
+    """Import the headless form-proxy extension on first use.
+
+    The lazy import keeps ``import FreeCADGui`` free of the extension (and of
+    Qt), which is what lets the headless facade work when the native module has
+    not been built. A missing module is an actionable ``ImportError``, not a
+    silent no-op.
+    """
+    try:
+        import ferrocad_ui_py
+    except ImportError as exc:
+        raise ImportError(
+            "FreeCADGui.PySideUic.loadUi requires the `ferrocad_ui_py` "
+            "extension module. Build it with `cargo build -p ferrocad_ui_py` "
+            "and make the resulting library importable as `ferrocad_ui_py` "
+            "(copy `libferrocad_ui_py.so` to `ferrocad_ui_py.abi3.so` in the "
+            "`python/` directory, or point PYTHONPATH at it)."
+        ) from exc
+    return ferrocad_ui_py
+
+
+def _resolve_resource(path: str):
+    """Open a ``:/...`` resource through the pure-Python PySide reader."""
+    from PySide.QtCore import QFile
+
+    handle = QFile(path)
+    if not handle.open(QFile.ReadOnly):
+        raise OSError(f"FreeCADGui.PySideUic.loadUi: cannot open resource {path!r}")
+    return handle
+
+
+class _PySideUic:
+    """``FreeCADGui.PySideUic``: the headless ``.ui`` loader.
+
+    ``loadUi`` returns a proxy tree (``FormProxy``), never a window. The typed
+    proxy classes live in ``ferrocad_ui_py`` and are imported on first use, so
+    merely importing ``FreeCADGui`` stays free of both Qt and the extension.
+    """
+
+    @staticmethod
+    def loadUi(path_or_file):
+        """Load a form from a path, a ``:/`` resource or a ``QFile``-like object."""
+        module = _import_ui_extension()
+
+        if isinstance(path_or_file, (str, bytes, os.PathLike)):
+            path = os.fsdecode(os.fspath(path_or_file))
+            if path.startswith(":"):
+                return module.load_ui(_resolve_resource(path), path)
+            return module.load_ui(path)
+
+        if hasattr(path_or_file, "readAll") or hasattr(path_or_file, "data"):
+            return module.load_ui(path_or_file)
+
+        raise TypeError(
+            "FreeCADGui.PySideUic.loadUi expects a path, a ':/' resource, or a "
+            "QFile-like object with readAll()/data(), got "
+            f"{type(path_or_file).__name__}"
+        )
+
+
+PySideUic = _PySideUic()

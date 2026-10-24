@@ -1,0 +1,44 @@
+# Q2a: the Python proxy layer over `ferrocad_ui`.
+#
+# `ferrocad_ui` parses a Qt Designer `.ui` form into a typed tree. This crate
+# turns that tree into Python `FormProxy`/`WidgetProxy`/`SignalProxy` objects so
+# `FreeCADGui.PySideUic.loadUi` can hand a headless form to an upstream panel.
+# It deliberately contains no Qt, no rendering and no general Qt emulation: a
+# member outside the small model below raises `AttributeError` instead of
+# returning `None`.
+#
+# `rlib` so a host can link the proxy types directly, `cdylib` so it can ship as
+# the standalone `ferrocad_ui_py` extension module. Needs CPython headers, so it
+# is a workspace member but NOT in `default-members`.
+[package]
+name = "ferrocad_ui_py"
+version = "0.1.2"
+edition.workspace = true
+license.workspace = true
+readme.workspace = true
+repository.workspace = true
+homepage.workspace = true
+rust-version.workspace = true
+description = "The PyO3 proxy layer over ferrocad_ui (headless Qt Designer form proxies)"
+keywords = ["cad", "freecad", "qt", "python", "ui"]
+categories = ["api-bindings"]
+documentation = "https://docs.rs/ferrocad_ui_py"
+
+[lib]
+name = "ferrocad_ui_py"
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+ferrocad_ui = { path = "../ferrocad_ui" }
+# `extension-module` is deliberately not a hard feature (see ferrocad_py): it is
+# enabled only when packaging the standalone extension module. Plain builds and
+# `cargo test` link libpython so the proxy types can be exercised in-process.
+pyo3.workspace = true
+
+[dev-dependencies]
+# `auto-initialize` lets the proxy tests embed CPython.
+pyo3 = { workspace = true, features = ["auto-initialize"] }
+
+[features]
+# Enabled by maturin / build.sh when producing the Python extension module.
+extension-module = ["pyo3/extension-module"]

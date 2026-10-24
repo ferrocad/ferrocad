@@ -66,4 +66,15 @@ if [ -f "$stage_src" ]; then
     echo "packaged python/ferrocad_stage.abi3.so"
 fi
 
+# Package the `.ui` proxy layer (`FreeCADGui.PySideUic.loadUi`, Q2a).
+echo "== building ferrocad_ui_py (FreeCADGui.PySideUic) =="
+cargo build --release --offline --manifest-path "$HERE/Cargo.toml" \
+    -p ferrocad_ui_py --features ferrocad_ui_py/extension-module
+
+ui_py_src="$TARGET/libferrocad_ui_py.so"
+if [ -f "$ui_py_src" ]; then
+    cp "$ui_py_src" "$HERE/python/ferrocad_ui_py.abi3.so"
+    echo "packaged python/ferrocad_ui_py.abi3.so"
+fi
+
 echo "build OK"

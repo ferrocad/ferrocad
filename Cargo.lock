@@ -2474,6 +2474,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "ferrocad_ui_py"
+version = "0.1.2"
+dependencies = [
+ "ferrocad_ui",
+ "pyo3",
+]
+
+[[package]]
 name = "ferrocad_viewport"
 version = "0.1.2"
 dependencies = [

@@ -28,16 +28,20 @@ mod enums;
 mod gizmo;
 mod input;
 mod shape;
+mod snap;
 mod stage;
 mod tool;
+mod workplane;
 
 pub use camera::Camera;
 pub use enums::{DrawMode, GizmoHandle, GizmoMode, MouseButton, PointerKind};
 pub use gizmo::{GizmoCommitEvent, GizmoDragEvent, TransformGizmo};
 pub use input::{Hit, PointerEvent};
 pub use shape::ShapeItem;
+pub use snap::{Snap, SnapCandidate, SnapContext, SnapKind};
 pub use stage::{Stage, extract_stage};
 pub use tool::{PyTool, Tool, extract_tool};
+pub use workplane::{Workplane, WorkplaneKind};
 
 /// The `ferrocad_stage` extension module (the surface of `ferrocad.stage`).
 #[pymodule]
@@ -51,6 +55,8 @@ pub fn ferrocad_stage(m: &Bound<'_, PyModule>) -> PyResult<()> {
     stage::register(m)?;
     tool::register(m)?;
     gizmo::register(m)?;
+    workplane::register(m)?;
+    snap::register(m)?;
     Ok(())
 }
 

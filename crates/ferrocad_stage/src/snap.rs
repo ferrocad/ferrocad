@@ -82,6 +82,73 @@ impl SnapContext {
             major: minor * 10.0,
         }
     }
+
+    /// Resolve a snap for a **world-space** point (the headless counterpart of
+    /// [`snap_to_geometry_with`], which needs a camera).
+    ///
+    /// A candidate within `tolerance` (Euclidean world distance) wins; ties go to the
+    /// earlier candidate, matching [`nearest_feature`]. Otherwise the point is projected
+    /// onto the workplane and its local `(u, v)` rounded to [`minor`](Self::minor),
+    /// reporting whether the node is also a `major` intersection. With `tolerance <= 0`
+    /// feature snapshots are disabled. With `minor <= 0` the projected point is returned
+    /// as [`SnapKind::Point`].
+    pub fn snap_point(&self, point: Vector3, candidates: &[SnapCandidate], tolerance: f64) -> Snap {
+        if tolerance > 0.0 {
+            // Candidates are tested in order and only a **strictly** closer point replaces
+            // the current best, so the caller's order breaks ties (as in
+            // `nearest_feature`). A candidate exactly at the tolerance is still inside it.
+            let mut best: Option<(f64, SnapCandidate)> = None;
+            for candidate in candidates {
+                let distance = candidate.point.distance(&point);
+                if distance > tolerance {
+                    continue;
+                }
+                if best.as_ref().is_none_or(|(closest, _)| distance < *closest) {
+                    best = Some((distance, *candidate));
+                }
+            }
+            if let Some((_, feature)) = best {
+                return Snap {
+                    point: [
+                        feature.point.x as f32,
+                        feature.point.y as f32,
+                        feature.point.z as f32,
+                    ],
+                    kind: feature.kind,
+                    local: Some(self.workplane.project(feature.point)),
+                    major: false,
+                };
+            }
+        }
+
+        let local = self.workplane.project(point);
+        if self.minor <= 0.0 {
+            let projected = self.workplane.point(local[0], local[1]);
+            return Snap {
+                point: [
+                    projected.x as f32,
+                    projected.y as f32,
+                    projected.z as f32,
+                ],
+                kind: SnapKind::Point,
+                local: Some(local),
+                major: false,
+            };
+        }
+
+        let (a, b, major) = snap_local(local, self.minor, self.major);
+        let projected = self.workplane.point(a, b);
+        Snap {
+            point: [
+                projected.x as f32,
+                projected.y as f32,
+                projected.z as f32,
+            ],
+            kind: SnapKind::Grid,
+            local: Some([a, b]),
+            major,
+        }
+    }
 }
 
 /// Resolve a snap for `event`, preferring a feature over the picked point and the grid.
@@ -284,6 +351,166 @@ mod tests {
         .unwrap();
         assert!(snap.major, "{snap:?}");
         assert_eq!(snap.local, Some([0.0, 0.0]));
+    }
+
+    /// A rotated frame at `(10, 0, 5)` with `u = (1, 1, 0)/√2`, `v = (-1, 1, 0)/√2`
+    /// and `n = +Z`.
+    fn rotated() -> Workplane {
+        let s = 0.5f64.sqrt();
+        Workplane::new(
+            Vector3::new(10.0, 0.0, 5.0),
+            Vector3::new(s, s, 0.0),
+            Vector3::new(-s, s, 0.0),
+            crate::workplane::WorkplaneKind::Datum("Rotated".into()),
+        )
+        .expect("a frame")
+    }
+
+    fn assert_point(actual: [f32; 3], expected: Vector3) {
+        assert!((f64::from(actual[0]) - expected.x).abs() < 1e-4, "{actual:?}");
+        assert!((f64::from(actual[1]) - expected.y).abs() < 1e-4, "{actual:?}");
+        assert!((f64::from(actual[2]) - expected.z).abs() < 1e-4, "{actual:?}");
+    }
+
+    #[test]
+    fn a_world_point_snaps_to_the_world_grid() {
+        let context = SnapContext::world(0.5);
+        let snap = context.snap_point(Vector3::new(1.2, -0.6, 3.0), &[], 0.0);
+        assert_eq!(snap.kind, SnapKind::Grid);
+        assert_eq!(snap.local, Some([1.0, -0.5]));
+        assert_point(snap.point, Vector3::new(1.0, -0.5, 0.0));
+        assert!(!snap.major);
+    }
+
+    #[test]
+    fn a_rotated_workplane_snaps_in_its_own_coordinates() {
+        let context = SnapContext {
+            workplane: rotated(),
+            minor: 1.0,
+            major: 10.0,
+        };
+        let on_plane = context.workplane.point(2.0, 3.0);
+        // A point off the plane still projects onto it: the normal component is dropped.
+        let off_plane = on_plane.add(&context.workplane.n.scale(4.0));
+        let snap = context.snap_point(off_plane, &[], 0.0);
+        assert_eq!(snap.kind, SnapKind::Grid);
+        let local = snap.local.expect("local coordinates");
+        assert!((local[0] - 2.0).abs() < 1e-9, "{local:?}");
+        assert!((local[1] - 3.0).abs() < 1e-9, "{local:?}");
+        assert_point(snap.point, on_plane);
+        assert!(!snap.major);
+    }
+
+    #[test]
+    fn a_feature_within_tolerance_wins_over_the_grid() {
+        let context = SnapContext::world(1.0);
+        let candidate = SnapCandidate {
+            point: Vector3::new(2.4, 2.4, 0.0),
+            kind: SnapKind::Vertex,
+        };
+        let snap = context.snap_point(Vector3::new(2.1, 2.1, 0.0), &[candidate], 0.5);
+        assert_eq!(snap.kind, SnapKind::Vertex);
+        assert_point(snap.point, candidate.point);
+        assert_eq!(snap.local, Some([2.4, 2.4]));
+        assert!(!snap.major);
+
+        // Outside the tolerance the grid node (2, 2) wins instead.
+        let snap = context.snap_point(Vector3::new(2.1, 2.1, 0.0), &[candidate], 0.1);
+        assert_eq!(snap.kind, SnapKind::Grid);
+        assert_eq!(snap.local, Some([2.0, 2.0]));
+    }
+
+    #[test]
+    fn the_tolerance_is_measured_in_world_distance() {
+        let context = SnapContext::world(1.0);
+        // 3-4-5: the candidate is 5 away from the point.
+        let candidate = SnapCandidate {
+            point: Vector3::new(3.0, 4.0, 0.0),
+            kind: SnapKind::Vertex,
+        };
+        let point = Vector3::new(0.0, 0.0, 0.0);
+        assert_eq!(
+            context.snap_point(point, &[candidate], 4.9).kind,
+            SnapKind::Grid
+        );
+        assert_eq!(
+            context.snap_point(point, &[candidate], 5.0).kind,
+            SnapKind::Vertex,
+            "a candidate exactly at the tolerance is inside it"
+        );
+        assert_eq!(
+            context.snap_point(point, &[candidate], 5.1).kind,
+            SnapKind::Vertex
+        );
+        // `tolerance <= 0` disables feature snapshots entirely.
+        assert_eq!(
+            context.snap_point(point, &[candidate], 0.0).kind,
+            SnapKind::Grid
+        );
+    }
+
+    #[test]
+    fn a_tie_goes_to_the_earlier_candidate() {
+        let context = SnapContext::world(1.0);
+        let point = Vector3::new(0.0, 0.0, 0.0);
+        let candidates = [
+            SnapCandidate {
+                point: Vector3::new(1.0, 0.0, 0.0),
+                kind: SnapKind::Vertex,
+            },
+            SnapCandidate {
+                point: Vector3::new(-1.0, 0.0, 0.0),
+                kind: SnapKind::EdgeMid,
+            },
+        ];
+        let snap = context.snap_point(point, &candidates, 5.0);
+        assert_eq!(snap.kind, SnapKind::Vertex);
+        assert_point(snap.point, Vector3::new(1.0, 0.0, 0.0));
+    }
+
+    #[test]
+    fn the_origin_edge_mid_and_centre_kinds_are_reported() {
+        let context = SnapContext::world(1.0);
+        for (kind, point) in [
+            (SnapKind::Origin, Vector3::new(0.0, 0.0, 0.0)),
+            (SnapKind::EdgeMid, Vector3::new(5.0, 1.0, 0.0)),
+            (SnapKind::Centre, Vector3::new(-2.0, 3.0, 0.0)),
+        ] {
+            let candidate = SnapCandidate { point, kind };
+            let snap = context.snap_point(point, &[candidate], 0.25);
+            assert_eq!(snap.kind, kind);
+            assert_point(snap.point, point);
+            assert_eq!(snap.local, Some([point.x, point.y]));
+            assert!(!snap.major);
+        }
+    }
+
+    #[test]
+    fn a_non_positive_minor_returns_the_projected_point() {
+        let context = SnapContext {
+            workplane: rotated(),
+            minor: 0.0,
+            major: 0.0,
+        };
+        let on_plane = context.workplane.point(2.4, 3.6);
+        let off_plane = on_plane.add(&context.workplane.n.scale(2.0));
+        let snap = context.snap_point(off_plane, &[], 0.0);
+        assert_eq!(snap.kind, SnapKind::Point);
+        assert_point(snap.point, on_plane);
+        let local = snap.local.expect("local coordinates");
+        assert!((local[0] - 2.4).abs() < 1e-9, "{local:?}");
+        assert!((local[1] - 3.6).abs() < 1e-9, "{local:?}");
+        assert!(!snap.major);
+
+        // A negative step behaves the same and also disables the grid.
+        let context = SnapContext {
+            workplane: Workplane::world(),
+            minor: -1.0,
+            major: 10.0,
+        };
+        let snap = context.snap_point(Vector3::new(1.3, 2.7, 0.0), &[], 0.0);
+        assert_eq!(snap.kind, SnapKind::Point);
+        assert_eq!(snap.local, Some([1.3, 2.7]));
     }
 
     #[test]

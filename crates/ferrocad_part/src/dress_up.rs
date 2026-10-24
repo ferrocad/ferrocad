@@ -11,14 +11,17 @@
 //!
 //! `Base` is a `PropertyLinkSub` — the object **name** plus the selected sub-element
 //! names — so it is also the recompute dependency: changing the base (or its shape)
-//! re-executes the feature. `execute` resolves each name through the injected backend,
-//! expands it to its tangent chain when `Propagate` is set, runs the kernel operation,
-//! and writes the result to the output `Shape` property.
+//! re-executes the feature. `execute` resolves each name through the base shape's
+//! lineage first and the backend's positional names second (see
+//! [`resolve_element_in`]), expands it to its tangent chain when `Propagate` is set,
+//! runs the kernel operation, and writes the result to the output `Shape` property.
 //!
 //! A rebuild that cannot run (no base, no edges, a name that no longer resolves, a
 //! kernel error) marks the object invalid and leaves `Shape` empty, the way FreeCAD
-//! clears a feature that failed to recompute. The viewport sees that as a null shape;
-//! `DocumentObject::invalid` reports it to a host.
+//! clears a feature that failed to recompute. A name that the base shape's lineage no
+//! longer justifies fails here rather than moving to whatever edge now holds that
+//! ordinal. The viewport sees that as a null shape; `DocumentObject::invalid` reports
+//! it to a host.
 //!
 //! # Property surface
 //!
@@ -56,9 +59,12 @@
 use ferrocad_core::object_registry::ObjectType;
 use ferrocad_core::prop_status;
 use ferrocad_core::{Document, ObjectId, Property};
-use ferrocad_geom::{ElementRef, Shape};
+use ferrocad_geom::{ElementRef, Lineage, Shape};
 
-use crate::shape_property::{ShapeProperty, make_shape_property, shape_of};
+use crate::shape_property::{
+    ResolveElementError, ShapeProperty, make_shape_property, positional_name, resolve_element_in,
+    shape_of,
+};
 
 /// `Part::Fillet`'s registered type id.
 pub const FILLET_TYPE: &str = "Part::Fillet";
@@ -177,7 +183,7 @@ struct Request {
     edges: Vec<ElementRef>,
 }
 
-/// Read the inputs and resolve the edge names through the injected backend.
+/// Read the inputs and resolve the edge names through the base shape's lineage.
 fn rebuild(doc: &Document, id: ObjectId) -> Result<Request, String> {
     let (object, linked) = base(doc, id)?;
     if doc.object(id).is_some_and(|this| this.name == object) {
@@ -187,7 +193,7 @@ fn rebuild(doc: &Document, id: ObjectId) -> Result<Request, String> {
     if names.is_empty() {
         return Err("the feature selects no edges".to_string());
     }
-    let source = source_shape(doc, &object)?;
+    let (source, lineage) = source_shape(doc, &object)?;
     let propagate = !matches!(property(doc, id, PROPAGATE), Some(Property::Bool(false)));
 
     let backend = crate::backend();
@@ -198,15 +204,28 @@ fn rebuild(doc: &Document, id: ObjectId) -> Result<Request, String> {
         if edges.iter().any(|existing| existing.name == name) {
             continue;
         }
-        let sub = backend
-            .resolve(&source, &name)
-            .ok_or_else(|| format!("{name} does not exist on the base shape"))?;
+        let sub = resolve_element_in(&source, &lineage, &name).map_err(|error| match error {
+            ResolveElementError::Retired => format!(
+                "{name} is not in the base shape's lineage (a retired or unknown name)"
+            ),
+            ResolveElementError::NoShape | ResolveElementError::Missing => {
+                format!("{name} does not exist on the base shape")
+            }
+        })?;
+        // The kernel and the chain walker speak the shape's own positional names, so a
+        // sub-shape found through the lineage is relabelled with the name the source
+        // shape gives it. Transient: the stored name is what resolved it, and nothing
+        // here is persisted. Without that label a chain cannot be walked by name — and
+        // keeping the stored name would be worse, since `Edge1` would then match the
+        // *ordinal* edge in the walker, the very retarget this path exists to avoid.
+        let local = positional_name(&source, &name, &sub);
+        let walkable = propagate && local.is_some();
         let edge = ElementRef {
             shape: sub,
-            name: name.clone(),
+            name: local.unwrap_or(name),
         };
         // A dress-up applies to the whole smooth chain, not to one segment of it.
-        let candidates = if propagate {
+        let candidates = if walkable {
             ferrocad_geom::tangent_chain(backend.as_ref(), &source, &edge)
         } else {
             vec![edge]
@@ -248,16 +267,20 @@ fn selection(doc: &Document, id: ObjectId, linked: Vec<String>) -> Vec<String> {
     unique
 }
 
-/// The shape a linked object currently holds.
-fn source_shape(doc: &Document, name: &str) -> Result<Shape, String> {
+/// The shape a linked object currently holds, plus the lineage stored beside it.
+fn source_shape(doc: &Document, name: &str) -> Result<(Shape, Lineage), String> {
     let id = doc
         .get_by_name(name)
         .ok_or_else(|| format!("no object named {name}"))?;
-    doc.object(id)
+    let property = doc
+        .object(id)
         .and_then(|object| object.properties.get(SHAPE))
         .and_then(shape_of)
-        .and_then(|property| property.shape())
-        .ok_or_else(|| format!("object {name} has no shape"))
+        .ok_or_else(|| format!("object {name} has no shape"))?;
+    let shape = property
+        .shape()
+        .ok_or_else(|| format!("object {name} has no shape"))?;
+    Ok((shape, property.lineage().clone()))
 }
 
 /// Store a rebuild's outcome: the shape, or an empty output plus the invalid flag.
@@ -311,6 +334,27 @@ mod tests {
         doc.set_property(id, SHAPE, make_shape_property(ShapeProperty::new(shape)))
             .unwrap();
         id
+    }
+
+    /// A lineage that binds `name` to `target`, as an operation that preserved the
+    /// name across a rebuild would report it.
+    fn lineage_binding(name: &str, target: &ElementRef) -> Lineage {
+        let mut history = ferrocad_geom::History::default();
+        history.modified.push((
+            ElementRef {
+                shape: target.shape.clone(),
+                name: name.to_string(),
+            },
+            target.clone(),
+        ));
+        Lineage::from_history(&history, ferrocad_geom::MapVersion::default())
+    }
+
+    fn direct_fillet(shape: &Shape, edge: &ElementRef, radius: f64) -> Shape {
+        crate::backend()
+            .fillet(shape, std::slice::from_ref(edge), radius)
+            .unwrap()
+            .shape
     }
 
     fn stored_shape(doc: &Document, id: ObjectId) -> Option<Shape> {
@@ -612,6 +656,82 @@ mod tests {
         doc.recompute().unwrap();
         assert!(doc.object(fillet).unwrap().invalid);
         assert!(stored_shape(&doc, fillet).is_none());
+    }
+
+    #[test]
+    fn a_fillet_resolves_its_edge_through_the_base_lineage() {
+        setup();
+        let mut doc = Document::new();
+        let shape = crate::make_box(10.0, 10.0, 10.0).unwrap();
+        let edges = crate::backend().elements(&shape, ElementKind::Edge);
+        // `Edge1` was preserved across some earlier operation and now means edge 5.
+        let mapped = edges[4].clone();
+        let box_id = doc.add_object("Box", "Part::Feature");
+        doc.set_property(
+            box_id,
+            SHAPE,
+            make_shape_property(ShapeProperty::with_lineage(
+                shape.clone(),
+                lineage_binding("Edge1", &mapped),
+            )),
+        )
+        .unwrap();
+
+        let fillet = add_fillet(&mut doc, box_id, &["Edge1"]);
+        doc.set_property(fillet, "Radius", Property::Float(2.0))
+            .unwrap();
+        doc.recompute().unwrap();
+
+        assert!(!doc.object(fillet).unwrap().invalid, "the rebuild succeeded");
+        let out = stored_shape(&doc, fillet).expect("the output shape is set");
+        assert_eq!(face_count(&out), 7, "the fillet adds one face to a box");
+
+        let expected = direct_fillet(&shape, &mapped, 2.0);
+        let positional = direct_fillet(&shape, &edges[0], 2.0);
+        assert!(
+            (fingerprint(&expected) - fingerprint(&positional)).abs() > 1e-2,
+            "the premise: the two edges fillet differently ({} vs {})",
+            fingerprint(&expected),
+            fingerprint(&positional)
+        );
+        assert!(
+            (fingerprint(&out) - fingerprint(&expected)).abs() < 1e-2,
+            "the mapped edge was filleted, not the edge its ordinal names ({} vs {})",
+            fingerprint(&out),
+            fingerprint(&expected)
+        );
+    }
+
+    #[test]
+    fn a_retired_edge_fails_instead_of_moving_to_another_edge() {
+        setup();
+        let mut doc = Document::new();
+        let shape = crate::make_box(10.0, 10.0, 10.0).unwrap();
+        let edges = crate::backend().elements(&shape, ElementKind::Edge);
+        // A non-empty map that never mentions `Edge1`: a positional fallback would
+        // silently dress whatever edge now has that ordinal.
+        let box_id = doc.add_object("Box", "Part::Feature");
+        doc.set_property(
+            box_id,
+            SHAPE,
+            make_shape_property(ShapeProperty::with_lineage(
+                shape,
+                lineage_binding("Edge2", &edges[4]),
+            )),
+        )
+        .unwrap();
+
+        let fillet = add_fillet(&mut doc, box_id, &["Edge1"]);
+        doc.recompute().unwrap();
+
+        assert!(
+            doc.object(fillet).unwrap().invalid,
+            "a name the lineage does not justify fails the rebuild"
+        );
+        assert!(
+            stored_shape(&doc, fillet).is_none(),
+            "the output is cleared, not filleted elsewhere"
+        );
     }
 
     #[test]

@@ -6,8 +6,9 @@
 //! - **`Part::Feature`** — an object type with a `Shape` and a `Placement`, via
 //!   [`ferrocad_core::object_registry::ObjectType`];
 //! - **`Part::Fillet`** / **`Part::Chamfer`** — parametric dress-up features whose
-//!   `execute` resolves their selected edge names through the backend, expands them to
-//!   tangent chains, and writes the rebuilt shape to their output `Shape`;
+//!   `execute` resolves their selected edge names through the base shape's lineage
+//!   first and the backend's positional names second, expands them to tangent chains,
+//!   and writes the rebuilt shape to their output `Shape`;
 //! - **`Part::PropertyPartShape`** — a property *value* type holding a
 //!   [`ferrocad_geom::Shape`], via [`ferrocad_core::extension`];
 //! - **`Part::PropertyTopoShapeList`** — the list counterpart, holding an ordered
@@ -41,7 +42,9 @@ pub use dress_up::{CHAMFER_TYPE, FILLET_TYPE};
 pub use containers::{
     COMMON_TYPE, COMPOUND_TYPE, CUT_TYPE, FUSE_TYPE, MULTICOMMON_TYPE, MULTIFUSE_TYPE,
 };
-pub use shape_property::{make_shape_property, shape_of, ShapeProperty, TYPE_NAME};
+pub use shape_property::{
+    make_shape_property, resolve_element_in, shape_of, ResolveElementError, ShapeProperty, TYPE_NAME,
+};
 
 /// The registered type name of the shape-list property.
 pub const SHAPE_LIST_TYPE_NAME: &str = "Part::PropertyTopoShapeList";

@@ -37,7 +37,7 @@ use std::fmt;
 
 use ferrocad_core::property_types;
 use ferrocad_core::{ExtensionData, ExtensionValue, Property};
-use ferrocad_geom::{ElementRef, History, Lineage, MapVersion, Shape};
+use ferrocad_geom::{ElementKind, ElementRef, History, Lineage, MapVersion, Shape};
 
 /// The registered property type name.
 pub const TYPE_NAME: &str = "Part::PropertyPartShape";
@@ -54,7 +54,9 @@ const ENVELOPE_VERSION: u16 = 1;
 ///
 /// The lineage is carried **beside** the shape, never used for equality: two
 /// properties are equal when their shapes are the same handle, whatever maps they
-/// hold. The map is how a stored name is resolved, not part of what the shape *is*.
+/// hold. The map is how a stored name is resolved — see
+/// [`resolve_element`](ShapeProperty::resolve_element) — not part of what the shape
+/// *is*.
 pub struct ShapeProperty {
     shape: Option<Shape>,
     lineage: Lineage,
@@ -119,6 +121,14 @@ impl ShapeProperty {
         self.lineage = Lineage::default();
     }
 
+    /// Resolve a stored sub-element name (`Edge1`, `Face3`) to the sub-shape it
+    /// denotes, consulting the lineage first. See [`resolve_element_in`] for the
+    /// exact rule.
+    pub fn resolve_element(&self, name: &str) -> Result<Shape, ResolveElementError> {
+        let shape = self.shape.as_ref().ok_or(ResolveElementError::NoShape)?;
+        resolve_element_in(shape, &self.lineage, name)
+    }
+
     /// The raw backend encoding of the held shape, without the envelope.
     ///
     /// This is what upstream's `.FCStd` `PartShapeN.brp` member expects.
@@ -128,6 +138,99 @@ impl ShapeProperty {
             None => Vec::new(),
         }
     }
+}
+
+// ---------------------------------------------------------------------------
+// Resolving a stored sub-element reference
+// ---------------------------------------------------------------------------
+
+/// Why a stored sub-element name could not be turned into a kernel sub-shape.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ResolveElementError {
+    /// The property holds no shape, so no name can resolve.
+    NoShape,
+    /// The shape carries a lineage and its forward map does not contain the name:
+    /// the element was retired, or the name never belonged to this lineage. The
+    /// reference fails instead of falling back positionally, since a positional
+    /// guess could silently select a different element.
+    Retired,
+    /// The shape carries no lineage and the backend has no positional element with
+    /// this name.
+    Missing,
+}
+
+impl fmt::Display for ResolveElementError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::NoShape => f.write_str("the property holds no shape"),
+            Self::Retired => f.write_str("the name is not in the shape's lineage"),
+            Self::Missing => f.write_str("the name does not exist on the shape"),
+        }
+    }
+}
+
+/// Resolve `name` against `shape`, consulting `lineage` first.
+///
+/// The rule is *preserved or invalid, never moved*:
+///
+/// 1. **A name present in the forward map resolves to the mapped sub-shape.** The
+///    map records where a name went across earlier operations (a boolean's face 6
+///    is now output face 3), so it outranks the name's ordinal — which may denote a
+///    different element after an inserted or deleted one.
+/// 2. **A name absent from the map falls back to positional resolution only when the
+///    shape carries no lineage** — that is, when the forward map is empty. With no
+///    relations there is nothing for a positional meaning to contradict, and
+///    `Edge1` meaning the first edge is all that can be known (a primitive, a shape
+///    assigned from Python, a legacy restore).
+/// 3. **A name absent from a non-empty map is [`Retired`](ResolveElementError::Retired).**
+///    The lineage exists and does not justify the name: it was retired by an
+///    operation, or it names something that never lived here. Falling back
+///    positionally would be a guess that could retarget the reference to another
+///    edge, so it fails loudly instead — a stale reference makes its feature invalid
+///    rather than silently dressing the wrong element.
+///
+/// The map is read, never written: resolution does not bind, retire or rename.
+pub fn resolve_element_in(
+    shape: &Shape,
+    lineage: &Lineage,
+    name: &str,
+) -> Result<Shape, ResolveElementError> {
+    if let Some(mapped) = lineage.map().get(name) {
+        return Ok(mapped.clone());
+    }
+    if !lineage.map().is_empty() {
+        return Err(ResolveElementError::Retired);
+    }
+    crate::backend()
+        .resolve(shape, name)
+        .ok_or(ResolveElementError::Missing)
+}
+
+/// The element kind a stored name starts with (`Edge1` → `Edge`), if it names one.
+pub(crate) fn kind_of_name(name: &str) -> Option<ElementKind> {
+    ElementKind::ALL.into_iter().find(|kind| {
+        name.strip_prefix(kind.prefix())
+            .is_some_and(|ordinal| ordinal.parse::<usize>().is_ok_and(|n| n >= 1))
+    })
+}
+
+/// The name `shape`'s own element enumeration gives `sub`, when `sub` is one of its
+/// elements.
+///
+/// A sub-shape resolved through the lineage is relabelled with this before a tangent
+/// chain is walked, because [`ferrocad_geom::tangent_chain`] matches seeds against
+/// the shape's positional names (`Edge5`), not against stored ones (`Edge1`). The
+/// label is transient: the stored name is never rewritten. Comparison is topological
+/// ([`GeometryBackend::same_shape`](ferrocad_geom::GeometryBackend::same_shape)), since
+/// a fresh enumeration hands out fresh handles.
+pub(crate) fn positional_name(shape: &Shape, name: &str, sub: &Shape) -> Option<String> {
+    let kind = kind_of_name(name)?;
+    let backend = crate::backend();
+    backend
+        .elements(shape, kind)
+        .into_iter()
+        .find(|element| backend.same_shape(&element.shape, sub))
+        .map(|element| element.name)
 }
 
 impl ExtensionData for ShapeProperty {
@@ -458,4 +561,109 @@ fn rebuild_lineage(
     }
     lineage.apply(&replay);
     lineage
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use ferrocad_occt::OcctBackend;
+    use std::sync::Arc;
+
+    fn setup() {
+        crate::register(Arc::new(OcctBackend::new()));
+    }
+
+    fn box_and_edges(size: f64) -> (Shape, Vec<ElementRef>) {
+        let shape = crate::make_box(size, size, size).unwrap();
+        let edges = crate::backend().elements(&shape, ElementKind::Edge);
+        (shape, edges)
+    }
+
+    /// A lineage that binds `name` to `target`, as an operation that preserved the
+    /// name across a rebuild would report it.
+    fn lineage_binding(name: &str, target: &ElementRef) -> Lineage {
+        let mut history = History::default();
+        history.modified.push((
+            ElementRef {
+                shape: target.shape.clone(),
+                name: name.to_string(),
+            },
+            target.clone(),
+        ));
+        Lineage::from_history(&history, MapVersion::default())
+    }
+
+    #[test]
+    fn a_mapped_name_resolves_to_the_mapped_edge() {
+        setup();
+        let (shape, edges) = box_and_edges(10.0);
+        // `Edge1` was preserved across some operation and now means edge 5.
+        let mapped = edges[4].clone();
+        let property = ShapeProperty::with_lineage(shape, lineage_binding("Edge1", &mapped));
+
+        let resolved = property.resolve_element("Edge1").expect("Edge1 resolves");
+        assert!(
+            crate::backend().same_shape(&resolved, &mapped.shape),
+            "the mapped edge is chosen"
+        );
+        assert!(
+            !crate::backend().same_shape(&resolved, &edges[0].shape),
+            "not the edge its ordinal names"
+        );
+    }
+
+    #[test]
+    fn without_a_lineage_a_name_resolves_positionally() {
+        setup();
+        let (shape, edges) = box_and_edges(10.0);
+        let property = ShapeProperty::new(shape);
+        assert!(property.lineage().map().is_empty());
+
+        let resolved = property.resolve_element("Edge1").expect("Edge1 resolves");
+        assert!(
+            crate::backend().same_shape(&resolved, &edges[0].shape),
+            "the first edge is chosen"
+        );
+        assert_eq!(
+            property.resolve_element("Edge99").err(),
+            Some(ResolveElementError::Missing),
+            "a name no edge has does not resolve"
+        );
+    }
+
+    #[test]
+    fn a_lineage_without_the_name_does_not_retarget() {
+        setup();
+        let (shape, edges) = box_and_edges(10.0);
+        // A non-empty map that never mentions `Edge1`: the lineage exists, so a
+        // positional fallback would silently pick up whatever edge now has that
+        // ordinal.
+        let property = ShapeProperty::with_lineage(shape, lineage_binding("Edge2", &edges[4]));
+        assert!(!property.lineage().map().is_empty());
+
+        assert_eq!(
+            property.resolve_element("Edge1").err(),
+            Some(ResolveElementError::Retired),
+            "a name the map does not justify fails instead of moving"
+        );
+        assert_eq!(
+            property.resolve_element("Edge99").err(),
+            Some(ResolveElementError::Retired),
+            "an unknown name fails the same way"
+        );
+        let mapped = property.resolve_element("Edge2").expect("Edge2 resolves");
+        assert!(
+            crate::backend().same_shape(&mapped, &edges[4].shape),
+            "the mapped name still works"
+        );
+    }
+
+    #[test]
+    fn an_empty_property_resolves_nothing() {
+        setup();
+        assert_eq!(
+            ShapeProperty::empty().resolve_element("Edge1").err(),
+            Some(ResolveElementError::NoShape)
+        );
+    }
 }

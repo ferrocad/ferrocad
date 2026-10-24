@@ -153,10 +153,16 @@ __cmake__: dict = {}
 
 
 def getResourceDir():
-    """The FerroCAD resource root (upstream's install prefix)."""
+    """The FerroCAD resource root (upstream's ``<prefix>/share``).
+
+    The result ends with the platform separator: upstream callers concatenate a
+    relative path directly (``App.getResourceDir() + "Mod/TechDraw/..."``).
+    Workbench data lives under ``Mod/`` here, mirroring FreeCAD's install layout.
+    """
     import os
 
-    return os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    return os.path.join(root, "")
 
 
 __all__ = [

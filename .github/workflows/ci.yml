@@ -161,3 +161,15 @@ jobs:
           else
             echo "SimpleCAD checkout not present; skipping S0 audit"
           fi
+
+      - name: Part/OCCT API audit (optional; needs a sibling checkout)
+        # Measurement only: compares crates/ferrocad_part_py with upstream's
+        # Part/App surface. PR CI does not clone freecad-upstream, so this is a
+        # no-op there; a developer image gets the drift alarm. See
+        # docs/workbenches/part-api-audit.md.
+        run: |
+          if [ -d ../freecad-upstream ]; then
+            python3 tools/part_api_audit.py --check
+          else
+            echo "freecad-upstream checkout not present; skipping Part API audit"
+          fi

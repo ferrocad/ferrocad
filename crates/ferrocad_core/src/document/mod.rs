@@ -331,13 +331,28 @@ impl Document {
         }
     }
 
-    /// Whether the object acts as a group (document group, part, or has a
+    /// Whether `type_id` denotes a geo-feature group (a placeable container
+    /// with its own coordinate system): `App::Part` and `PartDesign::Body`
+    /// (upstream `Part::BodyBase` carries `App::OriginGroupExtension`).
+    pub fn is_geo_group_type(type_id: &str) -> bool {
+        matches!(type_id, "App::Part" | "PartDesign::Body")
+    }
+
+    /// Whether the object acts as a geo-feature group and is therefore a
+    /// `getParent()`/`getParentGeoFeatureGroup()` parent.
+    pub fn is_geo_group_like(&self, id: ObjectId) -> bool {
+        self.object(id)
+            .map(|o| Self::is_geo_group_type(&o.type_id))
+            .unwrap_or(false)
+    }
+
+    /// Whether the object acts as a group (document group, part, body, or has a
     /// group extension) and therefore carries a `Group` link list.
     pub fn is_group_like(&self, id: ObjectId) -> bool {
         self.object(id)
             .map(|o| {
                 o.type_id == "App::DocumentObjectGroup"
-                    || o.type_id == "App::Part"
+                    || Self::is_geo_group_type(&o.type_id)
                     || o.extensions
                         .iter()
                         .any(|e| extension_is_or_derives(e, "App::GroupExtension"))

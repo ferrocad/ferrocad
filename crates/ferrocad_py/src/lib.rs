@@ -1113,9 +1113,19 @@ fn set_instance_attr(
     dict.downcast_into::<PyDict>()?.set_item(name, value)
 }
 
-/// Find the plain group (`geo == false`) or geo-feature group (`geo == true`)
-/// that lists `slf` in its `Group` link list.
-fn parent_of(slf: &Bound<'_, PyDocumentObject>, geo: bool) -> Option<Py<PyDocumentObject>> {
+/// Which kind of group a `getParent*()` query is looking for.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum ParentScope {
+    /// `getParentGroup()`: plain groups only (upstream returns no geo group).
+    Plain,
+    /// `getParentGeoFeatureGroup()`: placeable groups (`App::Part`, `PartDesign::Body`).
+    Geo,
+    /// `getParent()`: the first group parent of any kind.
+    Any,
+}
+
+/// Find the group of `scope` that lists `slf` in its `Group` link list.
+fn parent_of(slf: &Bound<'_, PyDocumentObject>, scope: ParentScope) -> Option<Py<PyDocumentObject>> {
     let py = slf.py();
     let inner = Arc::clone(&slf.borrow().inner);
     let doc_py = slf.borrow().doc.clone_ref(py);
@@ -1123,15 +1133,14 @@ fn parent_of(slf: &Bound<'_, PyDocumentObject>, geo: bool) -> Option<Py<PyDocume
     let found = {
         let doc = inner.lock().unwrap();
         doc.object_ids().into_iter().find(|id| {
-            match doc.object(*id) {
-                Some(other) => {
-                    (other.type_id == "App::Part") == geo
-                        && doc.is_group_like(*id)
-                        && matches!(other.properties.get("Group"),
-                            Some(Property::LinkList(links)) if links.contains(&name))
-                }
-                None => false,
-            }
+            let matches_scope = match scope {
+                ParentScope::Plain => doc.is_group_like(*id) && !doc.is_geo_group_like(*id),
+                ParentScope::Geo => doc.is_geo_group_like(*id),
+                ParentScope::Any => doc.is_group_like(*id),
+            };
+            matches_scope
+                && matches!(doc.object(*id).and_then(|o| o.properties.get("Group")),
+                    Some(Property::LinkList(links)) if links.contains(&name))
         })
     };
     found.map(|id| get_or_create_object(py, &doc_py, &inner, id))
@@ -2674,6 +2683,60 @@ impl PyDocumentObject {
         Ok(())
     }
 
+    /// `GroupExtension.removeObject(obj)`: drop `obj` from this group's `Group`
+    /// link list (which also clears its derived parent) and return the objects
+    /// that were actually removed.
+    ///
+    /// A non-member is not an error: upstream's `removeObjects` filters the
+    /// list and returns an empty vector, so the object and group are unchanged.
+    /// Like `addObject`, the method only exists on group extensions upstream, so
+    /// a non-group object refuses with `AttributeError`.
+    fn removeObject(
+        &self,
+        py: Python<'_>,
+        other: &Bound<'_, PyAny>,
+    ) -> PyResult<Vec<Py<PyDocumentObject>>> {
+        let other_ref: PyRef<'_, PyDocumentObject> = other
+            .extract()
+            .map_err(|_| PyTypeError::new_err("removeObject expects a DocumentObject"))?;
+        let other_id = other_ref.id;
+        let other_name = other_ref.name_string();
+        drop(other_ref);
+
+        let mut doc = self.inner.lock().unwrap();
+        let type_id = doc
+            .object(self.id)
+            .map(|o| o.type_id.clone())
+            .unwrap_or_default();
+        if !doc.is_group_like(self.id) && !is_link_group_type(&type_id) {
+            return Err(PyAttributeError::new_err(format!(
+                "'{type_id}' object has no attribute 'removeObject'"
+            )));
+        }
+
+        let mut links = match doc.object(self.id).and_then(|o| o.properties.get("Group")) {
+            Some(Property::LinkList(links)) => links.clone(),
+            _ => vec![],
+        };
+        let before = links.len();
+        links.retain(|name| name != &other_name);
+        if links.len() == before {
+            // Upstream returns the list of removed objects: a non-member is a no-op.
+            return Ok(Vec::new());
+        }
+        doc.set_property(self.id, "Group", Property::LinkList(links))
+            .map_err(PyValueError::new_err)?;
+        drop(doc);
+
+        let doc_py = self.doc.clone_ref(py);
+        Ok(vec![get_or_create_object(
+            py,
+            &doc_py,
+            &self.inner,
+            other_id,
+        )])
+    }
+
     fn hasObject(&self, other: &Bound<'_, PyAny>) -> PyResult<bool> {
         let other_ref: PyRef<'_, PyDocumentObject> = other
             .extract()
@@ -2707,17 +2770,17 @@ impl PyDocumentObject {
 
     /// The plain group (or group-extension object) that lists this object.
     fn getParentGroup(slf: &Bound<'_, Self>) -> Option<Py<PyDocumentObject>> {
-        parent_of(slf, false)
+        parent_of(slf, ParentScope::Plain)
     }
 
-    /// The geo-feature group (`App::Part`) that lists this object.
+    /// The geo-feature group (`App::Part`, `PartDesign::Body`) that lists this object.
     fn getParentGeoFeatureGroup(slf: &Bound<'_, Self>) -> Option<Py<PyDocumentObject>> {
-        parent_of(slf, true)
+        parent_of(slf, ParentScope::Geo)
     }
 
-    /// `getParent()`: the geo-feature group (`App::Part`) this object belongs to.
+    /// `getParent()`: the first group (plain, part or body) this object belongs to.
     fn getParent(slf: &Bound<'_, Self>) -> Option<Py<PyDocumentObject>> {
-        parent_of(slf, true)
+        parent_of(slf, ParentScope::Any)
     }
 
     /// `App::Link.setLink(obj)`: point `LinkedObject` at `obj` (or clear it with

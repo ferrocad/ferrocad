@@ -271,6 +271,19 @@ pub fn default_properties(type_id: &str) -> Vec<(&'static str, Property, u32)> {
             ("Group", Property::LinkList(vec![]), NONE),
             ("Placement", Property::Placement(Placement::identity()), NONE),
         ],
+        // `PartDesign::Body` is a GeoFeatureGroup container upstream
+        // (`Part::BodyBase`: `Part::Feature` + `App::OriginGroupExtension`). Core
+        // cannot build the shape half, so this is the geometry-free surface: the
+        // `Group` membership, its `Tip`/`BaseFeature`/`Origin` links and the
+        // `AllowCompound` flag. The `Part` composition root owns the shape half.
+        "PartDesign::Body" => vec![
+            ("Group", Property::LinkList(vec![]), NONE),
+            ("Tip", Property::Link(String::new()), NONE),
+            ("BaseFeature", Property::Link(String::new()), NONE),
+            ("Origin", Property::Link(String::new()), HIDDEN),
+            ("Placement", Property::Placement(Placement::identity()), NONE),
+            ("AllowCompound", Property::Bool(true), NONE),
+        ],
         "App::DocumentObjectFileIncluded" => {
             vec![("File", Property::FileIncluded(String::new()), NONE)]
         }

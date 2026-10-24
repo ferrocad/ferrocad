@@ -28,7 +28,8 @@
 use std::sync::Mutex;
 
 use ferrocad_curves::{
-    ANGULAR_TOLERANCE, Arc, Circle, CurveError, EdgeCurve, Ellipse, Line, LineSegment, Vector3,
+    ANGULAR_TOLERANCE, Arc, ArcOfHyperbola, ArcOfParabola, BezierCurve, Circle, CurveError,
+    EdgeCurve, Ellipse, Hyperbola, Line, LineSegment, NurbsCurve, Parabola, TOLERANCE, Vector3,
     polygon,
 };
 use ferrocad_geom::{ElementKind, Shape};
@@ -830,6 +831,1103 @@ impl PyArcOfEllipse {
     }
 }
 
+/// Construct upstream's `Hyperbola(S1, S2, Center)` form: the major axis runs
+/// from `Center` to `S1`, and the minor radius is the distance from `S2` to it.
+fn hyperbola_from_three_points(
+    s1: Vector3,
+    s2: Vector3,
+    center: Vector3,
+) -> PyResult<Hyperbola> {
+    let major_axis = s1.sub(&center);
+    let major = major_axis.length();
+    if major <= TOLERANCE {
+        return Err(OCCError::new_err("the hyperbola points are confused"));
+    }
+    let x_axis = major_axis.scale(1.0 / major);
+    let offset = s2.sub(&center);
+    let minor_axis = offset.sub(&x_axis.scale(offset.dot(&x_axis)));
+    if minor_axis.length() <= TOLERANCE {
+        return Err(OCCError::new_err("the hyperbola points are collinear"));
+    }
+    Hyperbola::with_axis(center, x_axis.cross(&offset), x_axis, major, minor_axis.length())
+        .map_err(curve_error)
+}
+
+/// `Part.Hyperbola()` — one branch of a hyperbola (`Part::GeomHyperbola`).
+///
+/// The constructors mirror upstream: empty (a `2`/`1` hyperbola in the XY plane),
+/// a copy, `(Center, MajorRadius, MinorRadius)` (normal `+Z`) and
+/// `(S1, S2, Center)` (the plane through the three points).
+#[pyclass(name = "Hyperbola", module = "Part")]
+#[derive(Clone)]
+pub struct PyHyperbola {
+    curve: Hyperbola,
+}
+
+#[pymethods]
+impl PyHyperbola {
+    #[new]
+    #[pyo3(signature = (*args))]
+    fn new(args: &Bound<'_, PyTuple>) -> PyResult<Self> {
+        match args.len() {
+            0 => Ok(Self {
+                curve: Hyperbola::with_axis(
+                    Vector3::zero(),
+                    Vector3::new(0.0, 0.0, 1.0),
+                    Vector3::new(1.0, 0.0, 0.0),
+                    2.0,
+                    1.0,
+                )
+                .map_err(curve_error)?,
+            }),
+            1 => {
+                let other = args.get_item(0)?;
+                let other = other.extract::<PyRef<'_, PyHyperbola>>()?;
+                Ok(Self { curve: other.curve })
+            }
+            3 => {
+                let first = args.get_item(0)?;
+                let second = args.get_item(1)?;
+                let third = args.get_item(2)?;
+                if let (Ok(major), Ok(minor)) =
+                    (second.extract::<f64>(), third.extract::<f64>())
+                {
+                    let center = vector(&first)?;
+                    return Ok(Self {
+                        curve: Hyperbola::with_axis(
+                            center,
+                            Vector3::new(0.0, 0.0, 1.0),
+                            Vector3::new(1.0, 0.0, 0.0),
+                            major,
+                            minor,
+                        )
+                        .map_err(curve_error)?,
+                    });
+                }
+                Ok(Self {
+                    curve: hyperbola_from_three_points(
+                        vector(&first)?,
+                        vector(&second)?,
+                        vector(&third)?,
+                    )?,
+                })
+            }
+            _ => Err(PyTypeError::new_err(
+                "Hyperbola constructor accepts:\n\
+                 -- empty parameter list\n\
+                 -- Hyperbola\n\
+                 -- Point, double, double\n\
+                 -- Point, Point, Point",
+            )),
+        }
+    }
+
+    #[getter]
+    fn Center(&self, py: Python<'_>) -> PyResult<PyObject> {
+        py_vector(py, self.curve.center())
+    }
+
+    /// The centre (upstream's newer name for `Center`).
+    #[getter]
+    fn Location(&self, py: Python<'_>) -> PyResult<PyObject> {
+        py_vector(py, self.curve.center())
+    }
+
+    #[getter]
+    fn Axis(&self, py: Python<'_>) -> PyResult<PyObject> {
+        py_vector(py, self.curve.normal())
+    }
+
+    #[getter]
+    fn XAxis(&self, py: Python<'_>) -> PyResult<PyObject> {
+        py_vector(py, self.curve.x_axis())
+    }
+
+    #[getter]
+    fn YAxis(&self, py: Python<'_>) -> PyResult<PyObject> {
+        py_vector(py, self.curve.y_axis())
+    }
+
+    #[getter]
+    fn MajorRadius(&self) -> f64 {
+        self.curve.major_radius()
+    }
+
+    #[setter]
+    fn set_MajorRadius(&mut self, value: f64) -> PyResult<()> {
+        self.curve = Hyperbola::with_axis(
+            self.curve.center(),
+            self.curve.normal(),
+            self.curve.x_axis(),
+            value,
+            self.curve.minor_radius(),
+        )
+        .map_err(curve_error)?;
+        Ok(())
+    }
+
+    #[getter]
+    fn MinorRadius(&self) -> f64 {
+        self.curve.minor_radius()
+    }
+
+    #[setter]
+    fn set_MinorRadius(&mut self, value: f64) -> PyResult<()> {
+        self.curve = Hyperbola::with_axis(
+            self.curve.center(),
+            self.curve.normal(),
+            self.curve.x_axis(),
+            self.curve.major_radius(),
+            value,
+        )
+        .map_err(curve_error)?;
+        Ok(())
+    }
+
+    /// The focal distance (`sqrt(MajorRadius^2 + MinorRadius^2)`).
+    #[getter]
+    fn Focal(&self) -> f64 {
+        self.curve.focal()
+    }
+
+    #[getter]
+    fn Focus1(&self, py: Python<'_>) -> PyResult<PyObject> {
+        py_vector(py, self.curve.focus1())
+    }
+
+    #[getter]
+    fn Focus2(&self, py: Python<'_>) -> PyResult<PyObject> {
+        py_vector(py, self.curve.focus2())
+    }
+
+    #[getter]
+    fn Eccentricity(&self) -> f64 {
+        self.curve.eccentricity()
+    }
+
+    /// OCC reports an unbounded conic's range as `±Precision::Infinite()`.
+    #[getter]
+    fn FirstParameter(&self) -> f64 {
+        -2.0e100
+    }
+
+    #[getter]
+    fn LastParameter(&self) -> f64 {
+        2.0e100
+    }
+
+    /// `value(u)`: `center + a*cosh(u)*X + b*sinh(u)*Y`.
+    fn value(&self, py: Python<'_>, u: f64) -> PyResult<PyObject> {
+        if !u.is_finite() {
+            return Err(OCCError::new_err("the hyperbola parameter must be finite"));
+        }
+        py_vector(py, self.curve.point_at(u))
+    }
+
+    /// `trim(first, last)`: the `Part.ArcOfHyperbola` over the given range.
+    #[pyo3(signature = (first = None, last = None))]
+    fn trim(
+        &self,
+        py: Python<'_>,
+        first: Option<f64>,
+        last: Option<f64>,
+    ) -> PyResult<Py<PyArcOfHyperbola>> {
+        let (first, last) = required_range(first, last, "hyperbola")?;
+        let arc = self.curve.trim(first, last).map_err(curve_error)?;
+        Py::new(py, PyArcOfHyperbola { arc })
+    }
+
+    /// The exact rational quadratic B-spline over `[first, last]`.
+    #[pyo3(signature = (first = None, last = None))]
+    fn toNurbs(
+        &self,
+        py: Python<'_>,
+        first: Option<f64>,
+        last: Option<f64>,
+    ) -> PyResult<Py<PyBSplineCurve>> {
+        let (first, last) = required_range(first, last, "hyperbola")?;
+        let nurbs = self.curve.nurbs(first, last).map_err(curve_error)?;
+        spline_curve(py, &nurbs)
+    }
+
+    /// The same exact conversion as [`toNurbs`](Self::toNurbs).
+    #[pyo3(signature = (first = None, last = None))]
+    fn toBSpline(
+        &self,
+        py: Python<'_>,
+        first: Option<f64>,
+        last: Option<f64>,
+    ) -> PyResult<Py<PyBSplineCurve>> {
+        self.toNurbs(py, first, last)
+    }
+
+    /// The exact edge over `[first, last]` (a rational quadratic B-spline).
+    #[pyo3(signature = (first = None, last = None))]
+    fn toShape(
+        &self,
+        py: Python<'_>,
+        first: Option<f64>,
+        last: Option<f64>,
+    ) -> PyResult<Py<PyEdge>> {
+        let (first, last) = required_range(first, last, "hyperbola")?;
+        let nurbs = self.curve.nurbs(first, last).map_err(curve_error)?;
+        spline_edge(py, &nurbs)
+    }
+
+    fn __repr__(&self) -> String {
+        format!(
+            "Part.Hyperbola({:?}, {}, {})",
+            self.curve.center(),
+            self.curve.major_radius(),
+            self.curve.minor_radius()
+        )
+    }
+}
+
+/// `Part.ArcOfHyperbola(hyperbola, first, last, sense=True)` — a portion of a
+/// hyperbola (`Part::GeomArcOfHyperbola`), what [`PyHyperbola::trim`] returns.
+#[pyclass(name = "ArcOfHyperbola", module = "Part")]
+#[derive(Clone)]
+pub struct PyArcOfHyperbola {
+    arc: ArcOfHyperbola,
+}
+
+#[pymethods]
+impl PyArcOfHyperbola {
+    #[new]
+    #[pyo3(signature = (hyperbola, first, last, sense = true))]
+    fn new(
+        hyperbola: &Bound<'_, PyAny>,
+        first: f64,
+        last: f64,
+        sense: bool,
+    ) -> PyResult<Self> {
+        let _ = sense;
+        let curve = hyperbola.extract::<PyRef<'_, PyHyperbola>>()?.curve;
+        let arc = curve.trim(first, last).map_err(curve_error)?;
+        Ok(Self { arc })
+    }
+
+    /// The supporting hyperbola (`GeomArcOfHyperbola::getHyperbola`).
+    #[getter]
+    fn Hyperbola(&self, py: Python<'_>) -> PyResult<Py<PyHyperbola>> {
+        Py::new(
+            py,
+            PyHyperbola {
+                curve: self.arc.hyperbola(),
+            },
+        )
+    }
+
+    #[getter]
+    fn Center(&self, py: Python<'_>) -> PyResult<PyObject> {
+        py_vector(py, self.arc.hyperbola().center())
+    }
+
+    #[getter]
+    fn Location(&self, py: Python<'_>) -> PyResult<PyObject> {
+        py_vector(py, self.arc.hyperbola().center())
+    }
+
+    #[getter]
+    fn Axis(&self, py: Python<'_>) -> PyResult<PyObject> {
+        py_vector(py, self.arc.hyperbola().normal())
+    }
+
+    #[getter]
+    fn XAxis(&self, py: Python<'_>) -> PyResult<PyObject> {
+        py_vector(py, self.arc.hyperbola().x_axis())
+    }
+
+    #[getter]
+    fn YAxis(&self, py: Python<'_>) -> PyResult<PyObject> {
+        py_vector(py, self.arc.hyperbola().y_axis())
+    }
+
+    #[getter]
+    fn MajorRadius(&self) -> f64 {
+        self.arc.hyperbola().major_radius()
+    }
+
+    #[setter]
+    fn set_MajorRadius(&mut self, value: f64) -> PyResult<()> {
+        let hyperbola = Hyperbola::with_axis(
+            self.arc.hyperbola().center(),
+            self.arc.hyperbola().normal(),
+            self.arc.hyperbola().x_axis(),
+            value,
+            self.arc.hyperbola().minor_radius(),
+        )
+        .map_err(curve_error)?;
+        self.arc = ArcOfHyperbola::new(hyperbola, self.arc.first(), self.arc.last())
+            .map_err(curve_error)?;
+        Ok(())
+    }
+
+    #[getter]
+    fn MinorRadius(&self) -> f64 {
+        self.arc.hyperbola().minor_radius()
+    }
+
+    #[setter]
+    fn set_MinorRadius(&mut self, value: f64) -> PyResult<()> {
+        let hyperbola = Hyperbola::with_axis(
+            self.arc.hyperbola().center(),
+            self.arc.hyperbola().normal(),
+            self.arc.hyperbola().x_axis(),
+            self.arc.hyperbola().major_radius(),
+            value,
+        )
+        .map_err(curve_error)?;
+        self.arc = ArcOfHyperbola::new(hyperbola, self.arc.first(), self.arc.last())
+            .map_err(curve_error)?;
+        Ok(())
+    }
+
+    #[getter]
+    fn Focal(&self) -> f64 {
+        self.arc.hyperbola().focal()
+    }
+
+    #[getter]
+    fn Focus1(&self, py: Python<'_>) -> PyResult<PyObject> {
+        py_vector(py, self.arc.hyperbola().focus1())
+    }
+
+    #[getter]
+    fn Focus2(&self, py: Python<'_>) -> PyResult<PyObject> {
+        py_vector(py, self.arc.hyperbola().focus2())
+    }
+
+    #[getter]
+    fn FirstParameter(&self) -> f64 {
+        self.arc.first()
+    }
+
+    #[getter]
+    fn LastParameter(&self) -> f64 {
+        self.arc.last()
+    }
+
+    #[getter]
+    fn StartPoint(&self, py: Python<'_>) -> PyResult<PyObject> {
+        py_vector(py, self.arc.start())
+    }
+
+    #[getter]
+    fn EndPoint(&self, py: Python<'_>) -> PyResult<PyObject> {
+        py_vector(py, self.arc.end())
+    }
+
+    fn value(&self, py: Python<'_>, u: f64) -> PyResult<PyObject> {
+        py_vector(py, self.arc.point_at(u))
+    }
+
+    #[pyo3(signature = (first = None, last = None))]
+    fn toNurbs(
+        &self,
+        py: Python<'_>,
+        first: Option<f64>,
+        last: Option<f64>,
+    ) -> PyResult<Py<PyBSplineCurve>> {
+        let first = first.unwrap_or(self.arc.first());
+        let last = last.unwrap_or(self.arc.last());
+        let nurbs = self
+            .arc
+            .hyperbola()
+            .nurbs(first, last)
+            .map_err(curve_error)?;
+        spline_curve(py, &nurbs)
+    }
+
+    #[pyo3(signature = (first = None, last = None))]
+    fn toBSpline(
+        &self,
+        py: Python<'_>,
+        first: Option<f64>,
+        last: Option<f64>,
+    ) -> PyResult<Py<PyBSplineCurve>> {
+        self.toNurbs(py, first, last)
+    }
+
+    /// The exact edge over the arc's range (or an explicit sub-range).
+    #[pyo3(signature = (first = None, last = None))]
+    fn toShape(
+        &self,
+        py: Python<'_>,
+        first: Option<f64>,
+        last: Option<f64>,
+    ) -> PyResult<Py<PyEdge>> {
+        let first = first.unwrap_or(self.arc.first());
+        let last = last.unwrap_or(self.arc.last());
+        let nurbs = self
+            .arc
+            .hyperbola()
+            .nurbs(first, last)
+            .map_err(curve_error)?;
+        spline_edge(py, &nurbs)
+    }
+
+    fn __repr__(&self) -> String {
+        format!(
+            "Part.ArcOfHyperbola({}, {})",
+            self.arc.first(),
+            self.arc.last()
+        )
+    }
+}
+
+/// `Part.Parabola()` — a parabola (`Part::GeomParabola`).
+///
+/// The constructors mirror upstream: empty (focal `1`, vertex at the origin),
+/// a copy, and `(Focus, Center, Normal)` where `Center` is the vertex.
+#[pyclass(name = "Parabola", module = "Part")]
+#[derive(Clone)]
+pub struct PyParabola {
+    curve: Parabola,
+}
+
+#[pymethods]
+impl PyParabola {
+    #[new]
+    #[pyo3(signature = (*args))]
+    fn new(args: &Bound<'_, PyTuple>) -> PyResult<Self> {
+        match args.len() {
+            0 => Ok(Self {
+                curve: Parabola::with_axis(
+                    Vector3::zero(),
+                    Vector3::new(0.0, 0.0, 1.0),
+                    Vector3::new(1.0, 0.0, 0.0),
+                    1.0,
+                )
+                .map_err(curve_error)?,
+            }),
+            1 => {
+                let other = args.get_item(0)?;
+                let other = other.extract::<PyRef<'_, PyParabola>>()?;
+                Ok(Self { curve: other.curve })
+            }
+            3 => {
+                let focus = vector(&args.get_item(0)?)?;
+                let center = vector(&args.get_item(1)?)?;
+                let normal = vector(&args.get_item(2)?)?;
+                let x_axis = focus.sub(&center);
+                let focal = x_axis.length();
+                Ok(Self {
+                    curve: Parabola::with_axis(center, normal, x_axis, focal)
+                        .map_err(curve_error)?,
+                })
+            }
+            _ => Err(PyTypeError::new_err(
+                "Parabola constructor accepts:\n\
+                 -- empty parameter list\n\
+                 -- Parabola\n\
+                 -- Point, Point, Point",
+            )),
+        }
+    }
+
+    #[getter]
+    fn Center(&self, py: Python<'_>) -> PyResult<PyObject> {
+        py_vector(py, self.curve.vertex())
+    }
+
+    /// The vertex (upstream's newer name for `Center`).
+    #[getter]
+    fn Location(&self, py: Python<'_>) -> PyResult<PyObject> {
+        py_vector(py, self.curve.vertex())
+    }
+
+    #[getter]
+    fn Axis(&self, py: Python<'_>) -> PyResult<PyObject> {
+        py_vector(py, self.curve.normal())
+    }
+
+    #[getter]
+    fn XAxis(&self, py: Python<'_>) -> PyResult<PyObject> {
+        py_vector(py, self.curve.x_axis())
+    }
+
+    #[getter]
+    fn YAxis(&self, py: Python<'_>) -> PyResult<PyObject> {
+        py_vector(py, self.curve.y_axis())
+    }
+
+    #[getter]
+    fn Focal(&self) -> f64 {
+        self.curve.focal()
+    }
+
+    #[setter]
+    fn set_Focal(&mut self, value: f64) -> PyResult<()> {
+        self.curve = Parabola::with_axis(
+            self.curve.vertex(),
+            self.curve.normal(),
+            self.curve.x_axis(),
+            value,
+        )
+        .map_err(curve_error)?;
+        Ok(())
+    }
+
+    #[getter]
+    fn Focus(&self, py: Python<'_>) -> PyResult<PyObject> {
+        py_vector(py, self.curve.focus())
+    }
+
+    #[getter]
+    fn Parameter(&self) -> f64 {
+        self.curve.parameter()
+    }
+
+    #[getter]
+    fn Eccentricity(&self) -> f64 {
+        self.curve.eccentricity()
+    }
+
+    #[getter]
+    fn FirstParameter(&self) -> f64 {
+        -2.0e100
+    }
+
+    #[getter]
+    fn LastParameter(&self) -> f64 {
+        2.0e100
+    }
+
+    /// `value(u)`: `vertex + (u^2 / (4*focal))*X + u*Y`.
+    fn value(&self, py: Python<'_>, u: f64) -> PyResult<PyObject> {
+        if !u.is_finite() {
+            return Err(OCCError::new_err("the parabola parameter must be finite"));
+        }
+        py_vector(py, self.curve.point_at(u))
+    }
+
+    /// Fit the parabola `x = a*y^2 + b*y + c` through three points that lie in a
+    /// plane parallel to XY (upstream's `ParabolaPy::compute`).
+    fn compute(
+        &mut self,
+        p1: &Bound<'_, PyAny>,
+        p2: &Bound<'_, PyAny>,
+        p3: &Bound<'_, PyAny>,
+    ) -> PyResult<()> {
+        let v1 = vector(p1)?;
+        let v2 = vector(p2)?;
+        let v3 = vector(p3)?;
+        if v1.sub(&v2).cross(&v3.sub(&v2)).length() < 0.0001 {
+            return Err(OCCError::new_err("Points are collinear"));
+        }
+        let determinant = |m: [[f64; 3]; 3]| -> f64 {
+            m[0][0] * (m[1][1] * m[2][2] - m[1][2] * m[2][1])
+                - m[0][1] * (m[1][0] * m[2][2] - m[1][2] * m[2][0])
+                + m[0][2] * (m[1][0] * m[2][1] - m[1][1] * m[2][0])
+        };
+        let y = [v1.y, v2.y, v3.y];
+        let x = [v1.x, v2.x, v3.x];
+        let fit = determinant([
+            [y[0] * y[0], y[0], 1.0],
+            [y[1] * y[1], y[1], 1.0],
+            [y[2] * y[2], y[2], 1.0],
+        ]);
+        if fit.abs() <= 1e-12 {
+            return Err(OCCError::new_err("Points are collinear"));
+        }
+        let a = determinant([[x[0], y[0], 1.0], [x[1], y[1], 1.0], [x[2], y[2], 1.0]]) / fit;
+        let b = determinant([
+            [y[0] * y[0], x[0], 1.0],
+            [y[1] * y[1], x[1], 1.0],
+            [y[2] * y[2], x[2], 1.0],
+        ]) / fit;
+        let c = determinant([
+            [y[0] * y[0], y[0], x[0]],
+            [y[1] * y[1], y[1], x[1]],
+            [y[2] * y[2], y[2], x[2]],
+        ]) / fit;
+        if !a.is_finite() || a.abs() <= 1e-12 {
+            return Err(OCCError::new_err("Points are collinear"));
+        }
+        let focal = 1.0 / (4.0 * a.abs());
+        let vertex_y = -b / (2.0 * a);
+        let vertex_x = a * vertex_y * vertex_y + b * vertex_y + c;
+        self.curve = Parabola::with_axis(
+            Vector3::new(vertex_x, vertex_y, v1.z),
+            Vector3::new(0.0, 0.0, 1.0),
+            Vector3::new(1.0, 0.0, 0.0),
+            focal,
+        )
+        .map_err(curve_error)?;
+        Ok(())
+    }
+
+    /// `trim(first, last)`: the `Part.ArcOfParabola` over the given range.
+    #[pyo3(signature = (first = None, last = None))]
+    fn trim(
+        &self,
+        py: Python<'_>,
+        first: Option<f64>,
+        last: Option<f64>,
+    ) -> PyResult<Py<PyArcOfParabola>> {
+        let (first, last) = required_range(first, last, "parabola")?;
+        let arc = self.curve.trim(first, last).map_err(curve_error)?;
+        Py::new(py, PyArcOfParabola { arc })
+    }
+
+    /// The exact quadratic B-spline over `[first, last]`.
+    #[pyo3(signature = (first = None, last = None))]
+    fn toNurbs(
+        &self,
+        py: Python<'_>,
+        first: Option<f64>,
+        last: Option<f64>,
+    ) -> PyResult<Py<PyBSplineCurve>> {
+        let (first, last) = required_range(first, last, "parabola")?;
+        let nurbs = self.curve.nurbs(first, last).map_err(curve_error)?;
+        spline_curve(py, &nurbs)
+    }
+
+    #[pyo3(signature = (first = None, last = None))]
+    fn toBSpline(
+        &self,
+        py: Python<'_>,
+        first: Option<f64>,
+        last: Option<f64>,
+    ) -> PyResult<Py<PyBSplineCurve>> {
+        self.toNurbs(py, first, last)
+    }
+
+    /// The exact edge over `[first, last]` (a quadratic B-spline).
+    #[pyo3(signature = (first = None, last = None))]
+    fn toShape(
+        &self,
+        py: Python<'_>,
+        first: Option<f64>,
+        last: Option<f64>,
+    ) -> PyResult<Py<PyEdge>> {
+        let (first, last) = required_range(first, last, "parabola")?;
+        let nurbs = self.curve.nurbs(first, last).map_err(curve_error)?;
+        spline_edge(py, &nurbs)
+    }
+
+    fn __repr__(&self) -> String {
+        format!(
+            "Part.Parabola({:?}, {})",
+            self.curve.vertex(),
+            self.curve.focal()
+        )
+    }
+}
+
+/// `Part.ArcOfParabola(parabola, first, last, sense=True)` — a portion of a
+/// parabola (`Part::GeomArcOfParabola`), what [`PyParabola::trim`] returns.
+#[pyclass(name = "ArcOfParabola", module = "Part")]
+#[derive(Clone)]
+pub struct PyArcOfParabola {
+    arc: ArcOfParabola,
+}
+
+#[pymethods]
+impl PyArcOfParabola {
+    #[new]
+    #[pyo3(signature = (parabola, first, last, sense = true))]
+    fn new(
+        parabola: &Bound<'_, PyAny>,
+        first: f64,
+        last: f64,
+        sense: bool,
+    ) -> PyResult<Self> {
+        let _ = sense;
+        let curve = parabola.extract::<PyRef<'_, PyParabola>>()?.curve;
+        let arc = curve.trim(first, last).map_err(curve_error)?;
+        Ok(Self { arc })
+    }
+
+    /// The supporting parabola (`GeomArcOfParabola::getParabola`).
+    #[getter]
+    fn Parabola(&self, py: Python<'_>) -> PyResult<Py<PyParabola>> {
+        Py::new(
+            py,
+            PyParabola {
+                curve: self.arc.parabola(),
+            },
+        )
+    }
+
+    #[getter]
+    fn Center(&self, py: Python<'_>) -> PyResult<PyObject> {
+        py_vector(py, self.arc.parabola().vertex())
+    }
+
+    #[getter]
+    fn Location(&self, py: Python<'_>) -> PyResult<PyObject> {
+        py_vector(py, self.arc.parabola().vertex())
+    }
+
+    #[getter]
+    fn Axis(&self, py: Python<'_>) -> PyResult<PyObject> {
+        py_vector(py, self.arc.parabola().normal())
+    }
+
+    #[getter]
+    fn XAxis(&self, py: Python<'_>) -> PyResult<PyObject> {
+        py_vector(py, self.arc.parabola().x_axis())
+    }
+
+    #[getter]
+    fn YAxis(&self, py: Python<'_>) -> PyResult<PyObject> {
+        py_vector(py, self.arc.parabola().y_axis())
+    }
+
+    #[getter]
+    fn Focal(&self) -> f64 {
+        self.arc.parabola().focal()
+    }
+
+    #[setter]
+    fn set_Focal(&mut self, value: f64) -> PyResult<()> {
+        let parabola = Parabola::with_axis(
+            self.arc.parabola().vertex(),
+            self.arc.parabola().normal(),
+            self.arc.parabola().x_axis(),
+            value,
+        )
+        .map_err(curve_error)?;
+        self.arc = ArcOfParabola::new(parabola, self.arc.first(), self.arc.last())
+            .map_err(curve_error)?;
+        Ok(())
+    }
+
+    #[getter]
+    fn Focus(&self, py: Python<'_>) -> PyResult<PyObject> {
+        py_vector(py, self.arc.parabola().focus())
+    }
+
+    #[getter]
+    fn Parameter(&self) -> f64 {
+        self.arc.parabola().parameter()
+    }
+
+    #[getter]
+    fn FirstParameter(&self) -> f64 {
+        self.arc.first()
+    }
+
+    #[getter]
+    fn LastParameter(&self) -> f64 {
+        self.arc.last()
+    }
+
+    #[getter]
+    fn StartPoint(&self, py: Python<'_>) -> PyResult<PyObject> {
+        py_vector(py, self.arc.start())
+    }
+
+    #[getter]
+    fn EndPoint(&self, py: Python<'_>) -> PyResult<PyObject> {
+        py_vector(py, self.arc.end())
+    }
+
+    fn value(&self, py: Python<'_>, u: f64) -> PyResult<PyObject> {
+        py_vector(py, self.arc.point_at(u))
+    }
+
+    #[pyo3(signature = (first = None, last = None))]
+    fn toNurbs(
+        &self,
+        py: Python<'_>,
+        first: Option<f64>,
+        last: Option<f64>,
+    ) -> PyResult<Py<PyBSplineCurve>> {
+        let first = first.unwrap_or(self.arc.first());
+        let last = last.unwrap_or(self.arc.last());
+        let nurbs = self
+            .arc
+            .parabola()
+            .nurbs(first, last)
+            .map_err(curve_error)?;
+        spline_curve(py, &nurbs)
+    }
+
+    #[pyo3(signature = (first = None, last = None))]
+    fn toBSpline(
+        &self,
+        py: Python<'_>,
+        first: Option<f64>,
+        last: Option<f64>,
+    ) -> PyResult<Py<PyBSplineCurve>> {
+        self.toNurbs(py, first, last)
+    }
+
+    /// The exact edge over the arc's range (or an explicit sub-range).
+    #[pyo3(signature = (first = None, last = None))]
+    fn toShape(
+        &self,
+        py: Python<'_>,
+        first: Option<f64>,
+        last: Option<f64>,
+    ) -> PyResult<Py<PyEdge>> {
+        let first = first.unwrap_or(self.arc.first());
+        let last = last.unwrap_or(self.arc.last());
+        let nurbs = self
+            .arc
+            .parabola()
+            .nurbs(first, last)
+            .map_err(curve_error)?;
+        spline_edge(py, &nurbs)
+    }
+
+    fn __repr__(&self) -> String {
+        format!(
+            "Part.ArcOfParabola({}, {})",
+            self.arc.first(),
+            self.arc.last()
+        )
+    }
+}
+
+/// `Part.BezierCurve()` — a rational or non-rational Bezier curve
+/// (`Part::GeomBezierCurve`), evaluated with de Casteljau subdivision.
+///
+/// A default curve has upstream's two poles `(0, 0, 0)`/`(0, 0, 1)`; use
+/// `setPoles` (or the optional poles argument) to shape it. Every degree up to
+/// OCCT's 25 is supported, and `toShape`/`toNurbs` convert it exactly to a
+/// clamped B-spline.
+#[pyclass(name = "BezierCurve", module = "Part")]
+pub struct PyBezierCurve {
+    curve: Mutex<BezierCurve>,
+}
+
+impl PyBezierCurve {
+    fn curve(&self) -> BezierCurve {
+        self.curve.lock().unwrap_or_else(|e| e.into_inner()).clone()
+    }
+
+    fn store(&self, curve: BezierCurve) {
+        *self.curve.lock().unwrap_or_else(|e| e.into_inner()) = curve;
+    }
+}
+
+#[pymethods]
+impl PyBezierCurve {
+    /// `Part.BezierCurve()` (upstream's default two-pole curve) or
+    /// `Part.BezierCurve(poles, weights=None)`.
+    #[new]
+    #[pyo3(signature = (poles = None, weights = None))]
+    fn new(
+        poles: Option<&Bound<'_, PyAny>>,
+        weights: Option<&Bound<'_, PyAny>>,
+    ) -> PyResult<Self> {
+        let Some(poles) = poles else {
+            return Ok(Self {
+                curve: Mutex::new(BezierCurve::default()),
+            });
+        };
+        if let Ok(other) = poles.extract::<PyRef<'_, PyBezierCurve>>() {
+            return Ok(Self {
+                curve: Mutex::new(other.curve()),
+            });
+        }
+        let points = parse_points(poles)?;
+        let weights = match weights {
+            Some(weights) => parse_floats(weights)?,
+            None => vec![1.0; points.len()],
+        };
+        let curve = BezierCurve::new(points, weights).map_err(curve_error)?;
+        Ok(Self {
+            curve: Mutex::new(curve),
+        })
+    }
+
+    #[getter]
+    fn Degree(&self) -> i32 {
+        self.curve().degree()
+    }
+
+    #[getter]
+    fn MaxDegree(&self) -> i32 {
+        25
+    }
+
+    #[getter]
+    fn NbPoles(&self) -> usize {
+        self.curve().poles().len()
+    }
+
+    #[getter]
+    fn StartPoint(&self, py: Python<'_>) -> PyResult<PyObject> {
+        py_vector(py, self.curve().start())
+    }
+
+    #[getter]
+    fn EndPoint(&self, py: Python<'_>) -> PyResult<PyObject> {
+        py_vector(py, self.curve().end())
+    }
+
+    #[getter]
+    fn FirstParameter(&self) -> f64 {
+        self.curve().first()
+    }
+
+    #[getter]
+    fn LastParameter(&self) -> f64 {
+        self.curve().last()
+    }
+
+    fn isRational(&self) -> bool {
+        self.curve().is_rational()
+    }
+
+    fn isPeriodic(&self) -> bool {
+        false
+    }
+
+    fn isClosed(&self) -> bool {
+        self.curve().is_closed()
+    }
+
+    fn getPole(&self, py: Python<'_>, index: i32) -> PyResult<PyObject> {
+        let curve = self.curve();
+        let position = index_at(curve.poles().len(), index)? as usize - 1;
+        py_vector(py, curve.poles()[position])
+    }
+
+    fn getPoles(&self, py: Python<'_>) -> PyResult<Vec<PyObject>> {
+        let curve = self.curve();
+        curve
+            .poles()
+            .iter()
+            .map(|pole| py_vector(py, *pole))
+            .collect()
+    }
+
+    #[pyo3(signature = (index, pole, weight = None))]
+    fn setPole(
+        &self,
+        index: i32,
+        pole: &Bound<'_, PyAny>,
+        weight: Option<f64>,
+    ) -> PyResult<()> {
+        let mut curve = self.curve();
+        let position = index_at(curve.poles().len(), index)? as usize - 1;
+        // Upstream treats a negative weight as "keep the current one".
+        let weight = weight.filter(|weight| *weight >= 0.0);
+        curve
+            .set_pole(position, vector(pole)?, weight)
+            .map_err(curve_error)?;
+        self.store(curve);
+        Ok(())
+    }
+
+    fn setPoles(&self, poles: &Bound<'_, PyAny>) -> PyResult<()> {
+        let mut curve = self.curve();
+        curve.set_poles(parse_points(poles)?).map_err(curve_error)?;
+        self.store(curve);
+        Ok(())
+    }
+
+    fn getWeight(&self, index: i32) -> PyResult<f64> {
+        let curve = self.curve();
+        let position = index_at(curve.weights().len(), index)? as usize - 1;
+        Ok(curve.weights()[position])
+    }
+
+    fn setWeight(&self, index: i32, weight: f64) -> PyResult<()> {
+        let mut curve = self.curve();
+        let position = index_at(curve.weights().len(), index)? as usize - 1;
+        curve.set_weight(position, weight).map_err(curve_error)?;
+        self.store(curve);
+        Ok(())
+    }
+
+    fn getWeights(&self) -> Vec<f64> {
+        self.curve().weights().to_vec()
+    }
+
+    /// `value(u)`: rational de Casteljau on the curve's own range.
+    fn value(&self, py: Python<'_>, u: f64) -> PyResult<PyObject> {
+        if !u.is_finite() {
+            return Err(OCCError::new_err("the Bezier parameter must be finite"));
+        }
+        py_vector(py, self.curve().point_at(u))
+    }
+
+    /// `trim(first, last)`: the segmented curve, still a `Part.BezierCurve`
+    /// (upstream's `makeFromTrimmedCurve` returns a Bezier here).
+    #[pyo3(signature = (first = None, last = None))]
+    fn trim(
+        &self,
+        py: Python<'_>,
+        first: Option<f64>,
+        last: Option<f64>,
+    ) -> PyResult<Py<PyBezierCurve>> {
+        let curve = self.curve();
+        let first = first.unwrap_or(curve.first());
+        let last = last.unwrap_or(curve.last());
+        let part = curve.trim(first, last).map_err(curve_error)?;
+        Py::new(
+            py,
+            PyBezierCurve {
+                curve: Mutex::new(part),
+            },
+        )
+    }
+
+    /// `segment(u1, u2)`: trim in place (`Geom_BezierCurve::Segment`).
+    fn segment(&self, first: f64, last: f64) -> PyResult<()> {
+        let part = self.curve().trim(first, last).map_err(curve_error)?;
+        self.store(part);
+        Ok(())
+    }
+
+    /// The exact B-spline form over `[first, last]`.
+    #[pyo3(signature = (first = None, last = None))]
+    fn toNurbs(
+        &self,
+        py: Python<'_>,
+        first: Option<f64>,
+        last: Option<f64>,
+    ) -> PyResult<Py<PyBSplineCurve>> {
+        let curve = self.curve();
+        let first = first.unwrap_or(curve.first());
+        let last = last.unwrap_or(curve.last());
+        let part = curve.trim(first, last).map_err(curve_error)?;
+        spline_curve(py, &part.nurbs())
+    }
+
+    #[pyo3(signature = (first = None, last = None))]
+    fn toBSpline(
+        &self,
+        py: Python<'_>,
+        first: Option<f64>,
+        last: Option<f64>,
+    ) -> PyResult<Py<PyBSplineCurve>> {
+        self.toNurbs(py, first, last)
+    }
+
+    /// The exact edge over `[first, last]` (a clamped B-spline).
+    #[pyo3(signature = (first = None, last = None))]
+    fn toShape(
+        &self,
+        py: Python<'_>,
+        first: Option<f64>,
+        last: Option<f64>,
+    ) -> PyResult<Py<PyEdge>> {
+        let curve = self.curve();
+        let first = first.unwrap_or(curve.first());
+        let last = last.unwrap_or(curve.last());
+        let part = curve.trim(first, last).map_err(curve_error)?;
+        spline_edge(py, &part.nurbs())
+    }
+
+    fn __repr__(&self) -> String {
+        let curve = self.curve();
+        format!(
+            "Part.BezierCurve({} poles, degree {})",
+            curve.poles().len(),
+            curve.degree()
+        )
+    }
+}
+
 /// `Part.Plane(origin=None, normal=None)` — an infinite plane, the XY plane
 /// (`Part.Plane()`) by default.
 #[pyclass(name = "Plane", module = "Part")]
@@ -1545,6 +2643,57 @@ fn conic_spline(
     let state = SplineState::from_blob(&blob)
         .ok_or_else(|| OCCError::new_err("conversion to a B-spline failed"))?;
     Py::new(py, PyBSplineCurve::from_state(state))
+}
+
+/// Read a [`NurbsCurve`] back through OCCT so the Python curve and the edge
+/// `toShape` builds agree exactly.
+fn nurbs_state(curve: &NurbsCurve) -> PyResult<SplineState> {
+    let blob = occt()
+        .bspline_state(
+            curve.poles(),
+            curve.weights(),
+            curve.knots(),
+            curve.mults(),
+            curve.degree(),
+            false,
+            !curve.is_rational(),
+        )
+        .ok_or_else(|| OCCError::new_err("conversion to a B-spline failed"))?;
+    SplineState::from_blob(&blob).ok_or_else(|| OCCError::new_err("conversion to a B-spline failed"))
+}
+
+/// A `Part.BSplineCurve` carrying the exact conversion of a conic or a Bezier.
+fn spline_curve(py: Python<'_>, curve: &NurbsCurve) -> PyResult<Py<PyBSplineCurve>> {
+    Py::new(py, PyBSplineCurve::from_state(nurbs_state(curve)?))
+}
+
+/// An exact edge from a B-spline description. `Edge.Curve` reports that very
+/// B-spline (the edge's stored geometry), as OCCT would for the built edge.
+fn spline_edge(py: Python<'_>, curve: &NurbsCurve) -> PyResult<Py<PyEdge>> {
+    let state = nurbs_state(curve)?;
+    let shape = occt()
+        .make_bspline_poles_mults_knots(
+            &state.poles,
+            &state.weights,
+            &state.knots,
+            &state.mults,
+            state.degree,
+            state.periodic,
+            state.check_rational(),
+        )
+        .map_err(kernel_error)?;
+    Py::new(py, PyEdge::from_bspline(shape, state))
+}
+
+/// A hyperbola and a parabola are unbounded, so converting one needs an explicit
+/// finite parameter range (upstream defaults to `±Infinity`, which fails).
+fn required_range(first: Option<f64>, last: Option<f64>, what: &str) -> PyResult<(f64, f64)> {
+    match (first, last) {
+        (Some(first), Some(last)) => Ok((first, last)),
+        _ => Err(OCCError::new_err(format!(
+            "a {what} is unbounded; pass a finite parameter range"
+        ))),
+    }
 }
 
 fn parse_points(points: &Bound<'_, PyAny>) -> PyResult<Vec<Vector3>> {
@@ -2513,6 +3662,10 @@ pub struct PyEdge {
     /// Kept beside the entry because `EdgeEntry` is also built by the shape layer
     /// (`Edges`/`getSubShape`), which never has a pcurve to supply.
     curve2d: Mutex<Option<Curve2d>>,
+    /// The exact B-spline an edge built from a conic or a Bezier stores. There is
+    /// no `EdgeCurve` variant for it, so it is carried beside the entry and
+    /// reported by `Curve` when the kernel cannot classify the edge.
+    bspline: Mutex<Option<SplineState>>,
 }
 
 impl PyEdge {
@@ -2520,6 +3673,7 @@ impl PyEdge {
         PyClassInitializer::from(PartShape::from_shape(entry.shape.clone())).add_subclass(Self {
             entry: Mutex::new(Some(entry)),
             curve2d: Mutex::new(None),
+            bspline: Mutex::new(None),
         })
     }
 
@@ -2528,6 +3682,7 @@ impl PyEdge {
         PyClassInitializer::from(PartShape::empty()).add_subclass(Self {
             entry: Mutex::new(None),
             curve2d: Mutex::new(None),
+            bspline: Mutex::new(None),
         })
     }
 
@@ -2543,6 +3698,19 @@ impl PyEdge {
         PyClassInitializer::from(PartShape::from_shape(entry.shape.clone())).add_subclass(Self {
             entry: Mutex::new(Some(entry)),
             curve2d: Mutex::new(Some(curve2d)),
+            bspline: Mutex::new(None),
+        })
+    }
+
+    /// An edge whose geometry is an exact B-spline (a conic or a Bezier).
+    fn from_bspline(shape: Shape, state: SplineState) -> PyClassInitializer<Self> {
+        PyClassInitializer::from(PartShape::from_shape(shape.clone())).add_subclass(Self {
+            entry: Mutex::new(Some(EdgeEntry {
+                shape,
+                curve: None,
+            })),
+            curve2d: Mutex::new(None),
+            bspline: Mutex::new(Some(state)),
         })
     }
 
@@ -2636,10 +3804,20 @@ impl PyEdge {
         };
         match backend().curve_of(&entry.shape) {
             Ok(curve) => Ok(Some(curve_to_py(py, curve)?)),
-            Err(_) => match entry.curve {
-                Some(curve) => Ok(Some(curve_to_py(py, curve)?)),
-                None => Ok(None),
-            },
+            Err(_) => {
+                if let Some(curve) = entry.curve {
+                    return Ok(Some(curve_to_py(py, curve)?));
+                }
+                let state = self
+                    .bspline
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .clone();
+                match state {
+                    Some(state) => Ok(Some(Py::new(py, PyBSplineCurve::from_state(state))?.into_any())),
+                    None => Ok(None),
+                }
+            }
         }
     }
 
@@ -3784,6 +4962,11 @@ pub(crate) fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyArcOfCircle>()?;
     m.add_class::<PyEllipse>()?;
     m.add_class::<PyArcOfEllipse>()?;
+    m.add_class::<PyHyperbola>()?;
+    m.add_class::<PyArcOfHyperbola>()?;
+    m.add_class::<PyParabola>()?;
+    m.add_class::<PyArcOfParabola>()?;
+    m.add_class::<PyBezierCurve>()?;
     m.add_class::<PyPlane>()?;
     m.add_class::<PyCylinder>()?;
     m.add_class::<PySphere>()?;

@@ -7,7 +7,8 @@
 //! seam (`make_edge`), so this leaf never names a `Shape`, OCCT or a document.
 //!
 //! - [`curve`] — [`Vector2`], [`Line`], [`LineSegment`], [`Circle`], [`Arc`],
-//!   [`Ellipse`] and the [`EdgeCurve`] enum, with OCC/Part parameterisation.
+//!   [`Ellipse`], [`Hyperbola`], [`Parabola`], [`BezierCurve`] and the
+//!   [`EdgeCurve`] enum, with OCC/Part parameterisation.
 //! - [`wire`] — [`Wire`] as an ordered edge list, [`polygon`] and [`sort_edges`]
 //!   (upstream's `__sortEdges__`).
 //!
@@ -46,7 +47,10 @@ use std::fmt;
 pub mod curve;
 pub mod wire;
 
-pub use curve::{Arc, Circle, EdgeCurve, Ellipse, Line, LineSegment, Vector2};
+pub use curve::{
+    Arc, ArcOfHyperbola, ArcOfParabola, BezierCurve, Circle, EdgeCurve, Ellipse, Hyperbola, Line,
+    LineSegment, NurbsCurve, Parabola, Vector2,
+};
 pub use ferrocad_types::Vector3;
 pub use wire::{Wire, polygon, sort_edges};
 
@@ -67,6 +71,10 @@ pub enum CurveError {
     NotBounded,
     /// The edges do not form one chain within the tolerance.
     Disconnected,
+    /// A parameter range was empty, reversed, or not finite.
+    InvalidParameter,
+    /// The polynomial degree exceeds OCCT's maximum (`25`).
+    DegreeTooHigh,
 }
 
 impl fmt::Display for CurveError {
@@ -76,6 +84,8 @@ impl fmt::Display for CurveError {
             CurveError::TooFewPoints => f.write_str("too few points for a wire"),
             CurveError::NotBounded => f.write_str("an infinite line has no endpoints"),
             CurveError::Disconnected => f.write_str("the edges do not form one chain"),
+            CurveError::InvalidParameter => f.write_str("invalid parameter range"),
+            CurveError::DegreeTooHigh => f.write_str("the polynomial degree is too high"),
         }
     }
 }

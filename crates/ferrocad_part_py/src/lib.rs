@@ -50,7 +50,7 @@ use ferrocad_core::{ExtensionData, ExtensionValue, Placement, Rotation, ScaleTyp
 use ferrocad_geom::{ElementKind, ElementRef, Lineage, MapVersion, Shape, TessellationOptions};
 use ferrocad_occt::surface_ops;
 use ferrocad_occt::OcctBackend;
-use ferrocad_part::{ShapeListProperty, ShapeProperty, SHAPE_LIST_TYPE_NAME, TYPE_NAME};
+use ferrocad_part::{resolve_element_in, ShapeListProperty, ShapeProperty, SHAPE_LIST_TYPE_NAME, TYPE_NAME};
 use pyo3::exceptions::{PyIOError, PyIndexError, PyRuntimeError, PyValueError};
 use pyo3::prelude::*;
 use pyo3::types::{PyBytes, PyDict, PyList, PyModule, PyTuple};
@@ -237,6 +237,14 @@ impl PartShape {
                 self.replace_shape(Some(moved));
             }
         }
+    }
+
+    /// A counter bumped whenever the geometry is replaced or moved.
+    ///
+    /// A subclass that derives state from the B-Rep (`Part.Compound` keeps its
+    /// children) compares it to know when that state is stale.
+    pub(crate) fn epoch(&self) -> u64 {
+        self.epoch.load(Ordering::SeqCst)
     }
 
     /// The shape's topological kind (`Shape.ShapeType`), inferred from its
@@ -590,7 +598,7 @@ impl PartShape {
         Ok(slf.clone().into_any().unbind())
     }
 
-    /// Rotate this shape in place about the axis through `center` along `axis`
+    /// Rotate this shape in place about the axis through `center` along `axis`,
     /// by `angle` degrees (`Shape.rotate`). Upstream moves the shape's location
     /// by the rotation, so the accumulated placement becomes `R · placement`
     /// (not a separately baked shape). Upstream mutates in place and returns the
@@ -852,6 +860,59 @@ impl PartShape {
         match ferrocad_part::backend().outer_wire(&shape) {
             Some(wire) => Ok(Some(Py::new(py, curves::PyWire::from_shape(wire))?)),
             None => Ok(None),
+        }
+    }
+
+    /// The plane a planar face lies in (`Shape.findPlane`), or `None`.
+    ///
+    /// The normal comes from the outer wire (the same derivation as
+    /// [`normalAt`](Self::normalAt)) and the origin is one of the face's
+    /// vertices. `tol` bounds every vertex's distance from the plane, so a shape
+    /// that is only nearly planar reports `None`. A boundary with fewer than two
+    /// distinct straight tangents (a full circle, for example) has no derivable
+    /// normal yet and also reports `None`.
+    #[pyo3(signature = (tol = 1e-7))]
+    fn findPlane(&self, py: Python<'_>, tol: f64) -> PyResult<PyObject> {
+        let Some(shape) = self.shape() else {
+            return Ok(py.None());
+        };
+        let Some(normal) = planar_face_normal(&shape) else {
+            return Ok(py.None());
+        };
+        let points = vertex_points(&shape);
+        let Some(origin) = points.first().copied() else {
+            return Ok(py.None());
+        };
+        let tolerance = tol.max(1e-12);
+        if !points
+            .iter()
+            .all(|point| point.sub(&origin).dot(&normal).abs() <= tolerance)
+        {
+            return Ok(py.None());
+        }
+        Ok(Py::new(py, curves::PyPlane::from_parts(origin, normal))?.into_any())
+    }
+
+    /// `Shape.getSubShape(name[, strict=False])` — the named sub-element as its
+    /// own shape (`Part.Edge`, `Part.Vertex`, or a `Part.Shape` handle).
+    ///
+    /// The name is resolved through the shape's lineage first and positionally
+    /// second (see [`resolve_element_in`]). Without `strict`, a name the shape
+    /// cannot resolve returns a null shape, as upstream does.
+    #[pyo3(signature = (name, strict = false))]
+    fn getSubShape(&self, py: Python<'_>, name: &str, strict: bool) -> PyResult<PyObject> {
+        let Some(shape) = self.shape() else {
+            return Err(curves::OCCError::new_err(
+                "a null shape has no sub-shapes",
+            ));
+        };
+        let lineage = self.lineage().unwrap_or_default();
+        match resolve_element_in(&shape, &lineage, name) {
+            Ok(sub) => sub_element_shape_to_py(py, sub),
+            Err(error) if strict => Err(curves::OCCError::new_err(format!(
+                "getSubShape: '{name}': {error}"
+            ))),
+            Err(_) => Ok(Py::new(py, PartShape::empty())?.into_any()),
         }
     }
 
@@ -2168,6 +2229,102 @@ fn require_full_revolution(operation: &str, angle: f64) -> PyResult<()> {
     Ok(())
 }
 
+/// The `Shape` value of a document object, as the `Part.Shape` its `obj.Shape`
+/// returns. The document-object wrapper lives in `ferrocad_py` and is opaque here,
+/// so the value is reached through the same Python attribute the scripts use.
+fn object_shape(obj: &Bound<'_, PyAny>) -> PyResult<(String, Shape, Placement, Lineage)> {
+    let name = obj
+        .getattr("Name")
+        .and_then(|value| value.extract::<String>())
+        .unwrap_or_default();
+    let shape_value = obj
+        .getattr("Shape")
+        .map_err(|_| curves::OCCError::new_err("Part.getShape expects an object with a Shape"))?;
+    let shape = shape_value.downcast::<PartShape>().map_err(|_| {
+        curves::OCCError::new_err(format!("Part.getShape: '{name}' has no Shape"))
+    })?;
+    let borrowed = shape.borrow();
+    let geometry = borrowed.shape().ok_or_else(|| {
+        curves::OCCError::new_err(format!("Part.getShape: '{name}' has a null Shape"))
+    })?;
+    Ok((
+        name,
+        geometry,
+        borrowed.placement(),
+        borrowed.lineage().unwrap_or_default(),
+    ))
+}
+
+/// `Part.getShape(obj, subname='', needSubElement=False, transform=False,
+/// retType=0, matrix=None)` → `Part.Shape`.
+///
+/// Upstream returns an object's `Shape`, or the sub-element `subname` names
+/// (`Face1`, `Edge3`, …). The name is resolved through the shape's lineage first
+/// and positionally second ([`resolve_element_in`]), so a stored name from an
+/// earlier operation still selects its own element.
+///
+/// The compatibility arguments are documented rather than silently ignored:
+///
+/// - `needSubElement`: a named sub-element is resolved either way. The element
+///   map always travels with the returned `Part.Shape`, so there is no reduced
+///   form to choose for `False`.
+/// - `transform`: apply the object's `Placement` when the stored shape is local
+///   (its accumulated placement is the identity — a Python proxy's shape). A
+///   native Part feature bakes its placement into the stored shape, so applying
+///   it again would move it twice and is skipped.
+/// - `retType`: 0 and 1 both return the shape (upstream's 1 also carries the
+///   element map, which ours always does); any other value raises.
+/// - `matrix`: upstream's optional output matrix, not produced here.
+#[pyfunction]
+#[pyo3(signature = (obj, subname = "", needSubElement = false, transform = false, retType = 0, matrix = None))]
+fn getShape(
+    py: Python<'_>,
+    obj: &Bound<'_, PyAny>,
+    subname: &str,
+    needSubElement: bool,
+    transform: bool,
+    retType: i64,
+    matrix: Option<&Bound<'_, PyAny>>,
+) -> PyResult<PyObject> {
+    let _ = (needSubElement, matrix);
+    if !matches!(retType, 0 | 1) {
+        return Err(curves::OCCError::new_err(format!(
+            "Part.getShape: retType {retType} is not supported"
+        )));
+    }
+    let (name, shape, placement, lineage) = object_shape(obj)?;
+    let subname = subname.trim();
+    let mut resolved = if subname.is_empty() {
+        shape
+    } else {
+        resolve_element_in(&shape, &lineage, subname).map_err(|error| {
+            curves::OCCError::new_err(format!(
+                "Part.getShape: '{name}' has no sub-element '{subname}': {error}"
+            ))
+        })?
+    };
+    if transform && placement.is_same(&Placement::identity(), 1e-12) {
+        if let Ok(object_placement) = obj.getattr("Placement") {
+            let matrix = object_placement.call_method0("toMatrix")?;
+            let matrix = matrix_from_py(&matrix)?;
+            resolved = ferrocad_part::backend()
+                .transform(&resolved, &matrix)
+                .map_err(kernel_error)?;
+        }
+    }
+    let shape = if subname.is_empty() {
+        let lineage = if lineage.map().is_empty() && lineage.reverse().is_empty() {
+            None
+        } else {
+            Some(lineage)
+        };
+        PartShape::with_parts_and_placement(Some(resolved), placement, lineage)
+    } else {
+        PartShape::from_shape(resolved)
+    };
+    Py::new(py, shape).map(Py::into_any)
+}
+
 /// `Part.makeBox(length, width, height, pnt=None, dir=None)` → a `Part.Shape`.
 #[pyfunction]
 #[pyo3(signature = (length, width, height, pnt = None, dir = None))]
@@ -2371,6 +2528,39 @@ fn cluster_union(parent: &mut [usize], a: usize, b: usize) {
     }
 }
 
+/// Wrap one sub-element in the Python class its kind uses: `Part.Edge`,
+/// `Part.Vertex`, or a generic `Part.Shape` handle (`Part.Face`, `Part.Wire`, …).
+///
+/// This is the wrapper `getSubObject("Edge1")` and `Shape.getSubShape("Edge1")`
+/// return, so a caller can use the element's edge-specific API (`.Curve`,
+/// `.firstVertex()`) without a separate cast.
+fn sub_element_shape_to_py(py: Python<'_>, shape: Shape) -> PyResult<PyObject> {
+    match PartShape::kind_of(&shape) {
+        Some(ElementKind::Edge) => Ok(Py::new(
+            py,
+            curves::PyEdge::from_entry(curves::EdgeEntry { shape, curve: None }),
+        )?
+        .into_any()),
+        Some(ElementKind::Vertex) => {
+            Ok(Py::new(py, curves::PyVertex::from_shape(shape)?)?.into_any())
+        }
+        _ => Ok(Py::new(py, PartShape::from_shape(shape))?.into_any()),
+    }
+}
+
+/// `Part::PropertyPartShape`'s sub-element resolver: `Edge1` → `Part.Edge`.
+///
+/// Registered with `ferrocad_py` at import, this is what
+/// `DocumentObject.getSubObject("Edge1")` returns for a Part feature (upstream
+/// `Part::FeaturePy::getSubObject`). A name the shape cannot resolve returns
+/// `None`, so the caller falls back to the owning object.
+fn shape_sub_element_to_py(py: Python<'_>, data: &dyn ExtensionData, name: &str) -> Option<PyObject> {
+    let property = data.as_any().downcast_ref::<ShapeProperty>()?;
+    let shape = property.shape()?;
+    let sub = resolve_element_in(&shape, &property.lineage(), name).ok()?;
+    sub_element_shape_to_py(py, sub).ok()
+}
+
 /// `Part::PropertyPartShape` → `Part.Shape` (what `obj.Shape` returns).
 ///
 /// The property's lineage travels with the handle, so a document object's shape
@@ -2446,12 +2636,14 @@ fn shape_list_to_extension(value: &Bound<'_, PyAny>) -> Option<ExtensionValue> {
 pub fn Part(m: &Bound<'_, PyModule>) -> PyResult<()> {
     register_kernel();
     ferrocad_py::register_extension_converter(TYPE_NAME, shape_to_py, shape_to_extension);
+    ferrocad_py::register_sub_element_resolver(TYPE_NAME, shape_sub_element_to_py);
     ferrocad_py::register_extension_converter(
         SHAPE_LIST_TYPE_NAME,
         shape_list_to_py,
         shape_list_to_extension,
     );
     m.add_class::<PartShape>()?;
+    m.add_function(wrap_pyfunction!(getShape, m)?)?;
     m.add_function(wrap_pyfunction!(makeBox, m)?)?;
     m.add_function(wrap_pyfunction!(makeCylinder, m)?)?;
     m.add_function(wrap_pyfunction!(makeSphere, m)?)?;

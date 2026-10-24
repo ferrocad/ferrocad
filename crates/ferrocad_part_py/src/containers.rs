@@ -7,7 +7,7 @@
 
 use std::sync::Mutex;
 
-use ferrocad_geom::Shape;
+use ferrocad_geom::{ElementKind, Shape};
 use pyo3::exceptions::PyTypeError;
 use pyo3::prelude::*;
 use pyo3::types::PyModule;
@@ -19,14 +19,41 @@ use crate::PartShape;
 #[pyclass(name = "Compound", module = "Part", extends = PartShape)]
 pub struct PyCompound {
     children: Mutex<Vec<Shape>>,
+    /// The base shape's [`PartShape::epoch`] the cache was taken at.
+    cached_at: Mutex<u64>,
 }
 
 impl PyCompound {
-    pub(crate) fn children(&self) -> Vec<Shape> {
-        self.children
+    /// The child shapes, in insertion order.
+    ///
+    /// The cache is re-derived from the compound's current B-Rep whenever the
+    /// base shape changed through the inherited API (`Shape.rotate`,
+    /// `Shape.transformShape`, …). Without that check a rotated compound kept
+    /// reporting its children's pre-rotation geometry — which is what
+    /// `Part.makeCompound([rotated])` would then rebuild from.
+    pub(crate) fn children(&self, base: &PartShape) -> Vec<Shape> {
+        self.children_at(base.epoch(), base.shape())
+    }
+
+    /// [`children`](Self::children) for a base reached through a `PyRefMut`,
+    /// where the base cannot be borrowed at the same time as the subclass.
+    pub(crate) fn children_at(&self, epoch: u64, shape: Option<Shape>) -> Vec<Shape> {
+        let mut cached_at = self.cached_at.lock().unwrap_or_else(|e| e.into_inner());
+        if *cached_at == epoch {
+            drop(cached_at);
+            return self
+                .children
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .clone();
+        }
+        let children = direct_children(shape.as_ref());
+        *self
+            .children
             .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .clone()
+            .unwrap_or_else(|e| e.into_inner()) = children.clone();
+        *cached_at = epoch;
+        children
     }
 
     fn initializer(children: Vec<Shape>) -> PyResult<PyClassInitializer<Self>> {
@@ -38,10 +65,39 @@ impl PyCompound {
                 .map_err(|error| OCCError::new_err(error.to_string()))?;
             PartShape::from_shape(shape)
         };
+        let epoch = base.epoch();
         Ok(PyClassInitializer::from(base).add_subclass(Self {
             children: Mutex::new(children),
+            cached_at: Mutex::new(epoch),
         }))
     }
+}
+
+/// The direct sub-shapes of `base`, highest dimension first.
+///
+/// A compound's children have no kernel query of their own, so this walks the
+/// element lists and takes the first kind that is present — the same inference
+/// `Shape.SubShapes` makes. A compound that mixes dimensions (a solid and an
+/// edge, say) therefore reports only its highest-dimension children.
+fn direct_children(shape: Option<&Shape>) -> Vec<Shape> {
+    let Some(shape) = shape else {
+        return Vec::new();
+    };
+    let backend = ferrocad_part::backend();
+    for kind in [
+        ElementKind::Solid,
+        ElementKind::Shell,
+        ElementKind::Face,
+        ElementKind::Wire,
+        ElementKind::Edge,
+        ElementKind::Vertex,
+    ] {
+        let elements = backend.elements(shape, kind);
+        if !elements.is_empty() {
+            return elements.into_iter().map(|element| element.shape).collect();
+        }
+    }
+    Vec::new()
 }
 
 #[pymethods]
@@ -59,35 +115,36 @@ impl PyCompound {
     /// Append one shape (or another compound's children) and rebuild the compound.
     fn add(mut slf: PyRefMut<'_, Self>, shape: &Bound<'_, PyAny>) -> PyResult<()> {
         let added = shapes_argument(shape)?;
-        let rebuilt = {
-            let mut children = slf.children.lock().unwrap_or_else(|e| e.into_inner());
-            children.extend(added);
-            ferrocad_part::backend()
-                .make_compound(&children)
-                .map_err(|error| OCCError::new_err(error.to_string()))?
+        let (epoch, current) = {
+            let base = slf.as_super();
+            (base.epoch(), base.shape())
         };
+        let mut children = PyCompound::children_at(&slf, epoch, current);
+        children.extend(added);
+        let rebuilt = ferrocad_part::backend()
+            .make_compound(&children)
+            .map_err(|error| OCCError::new_err(error.to_string()))?;
         slf.as_super().replace_shape(Some(rebuilt));
+        *slf.children.lock().unwrap_or_else(|e| e.into_inner()) = children;
+        *slf.cached_at.lock().unwrap_or_else(|e| e.into_inner()) = slf.as_super().epoch();
         Ok(())
     }
 
     /// The child shapes, in insertion order.
     #[getter]
-    fn Shapes(&self, py: Python<'_>) -> PyResult<Vec<Py<PartShape>>> {
-        self.children()
+    fn Shapes(slf: PyRef<'_, Self>, py: Python<'_>) -> PyResult<Vec<Py<PartShape>>> {
+        slf.children(slf.as_super())
             .into_iter()
             .map(|shape| Py::new(py, PartShape::from_shape(shape)))
             .collect()
     }
 
-    fn __len__(&self) -> usize {
-        self.children
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .len()
+    fn __len__(slf: PyRef<'_, Self>) -> usize {
+        slf.children(slf.as_super()).len()
     }
 
-    fn __repr__(&self) -> String {
-        format!("Part.Compound({} shapes)", self.__len__())
+    fn __repr__(slf: PyRef<'_, Self>) -> String {
+        format!("Part.Compound({} shapes)", slf.children(slf.as_super()).len())
     }
 }
 
@@ -158,9 +215,10 @@ fn makeCompound(py: Python<'_>, shapes: &Bound<'_, PyAny>) -> PyResult<Py<PyComp
 
 /// The kernel shapes named by a `Part.Shape`, a `Part.Compound`, or an iterable
 /// of either.
-fn shapes_argument(value: &Bound<'_, PyAny>) -> PyResult<Vec<Shape>> {
+pub(crate) fn shapes_argument(value: &Bound<'_, PyAny>) -> PyResult<Vec<Shape>> {
     if let Ok(compound) = value.downcast::<PyCompound>() {
-        return Ok(compound.borrow().children());
+        let compound = compound.borrow();
+        return Ok(compound.children(compound.as_super()));
     }
     if let Ok(shape) = value.downcast::<PartShape>() {
         let inner = shape

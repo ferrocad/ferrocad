@@ -304,3 +304,42 @@ fn translated_rotates_and_reassigns_stay_consistent() {
         assert!((center.getattr("x").unwrap().extract::<f64>().unwrap() - 8.0).abs() < 1e-9);
     });
 }
+
+#[test]
+fn placement_translate_and_matrix_match_the_property_forms() {
+    boot();
+    Python::with_gil(|py| {
+        let ferrocad = PyModule::import(py, "ferrocad").expect("import ferrocad");
+        let placement_class = ferrocad.getattr("Placement").expect("Placement");
+        let vector_class = ferrocad.getattr("Vector").expect("Vector");
+
+        let placement = placement_class.call0().expect("Placement()");
+        let offset = vector_class.call1((1.0, 2.0, 3.0)).expect("Vector");
+        placement
+            .call_method1("translate", (&offset,))
+            .expect("translate(vector)");
+        // Three floats are the other accepted form.
+        placement
+            .call_method1("translate", (4.0, 5.0, 6.0))
+            .expect("translate(x, y, z)");
+
+        let base = placement.getattr("Base").unwrap();
+        for (name, expected) in [("x", 5.0), ("y", 7.0), ("z", 9.0)] {
+            let value: f64 = base.getattr(name).unwrap().extract().unwrap();
+            assert!((value - expected).abs() < 1e-12, "Base.{name}");
+        }
+
+        // `Placement.Matrix` is the same matrix `toMatrix()` returns.
+        let matrix = placement.getattr("Matrix").expect("Placement.Matrix");
+        let to_matrix = placement.call_method0("toMatrix").expect("toMatrix");
+        for name in ["A14", "A24", "A34"] {
+            let from_attribute: f64 = matrix.getattr(name).unwrap().extract().unwrap();
+            let from_method: f64 = to_matrix.getattr(name).unwrap().extract().unwrap();
+            assert!((from_attribute - from_method).abs() < 1e-12, "{name}");
+        }
+        let tx: f64 = matrix.getattr("A14").unwrap().extract().unwrap();
+        let ty: f64 = matrix.getattr("A24").unwrap().extract().unwrap();
+        let tz: f64 = matrix.getattr("A34").unwrap().extract().unwrap();
+        assert!((tx - 5.0).abs() < 1e-12 && (ty - 7.0).abs() < 1e-12 && (tz - 9.0).abs() < 1e-12);
+    });
+}

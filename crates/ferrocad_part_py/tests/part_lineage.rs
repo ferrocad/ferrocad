@@ -201,6 +201,102 @@ fn a_retired_sub_element_name_fails_instead_of_moving() {
 }
 
 #[test]
+fn a_sub_element_reference_returns_the_element_shape() {
+    let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    boot();
+    Python::with_gil(|py| {
+        let part = PyModule::import(py, "Part").expect("import Part");
+        let ferrocad = PyModule::import(py, "ferrocad").expect("import ferrocad");
+        let doc = ferrocad
+            .call_method1("newDocument", ("RustSubElementShape",))
+            .expect("newDocument");
+        let feature = doc
+            .call_method1("addObject", ("Part::Feature", "Box"))
+            .expect("Part::Feature");
+        let shape = part
+            .call_method1("makeBox", (2.0, 2.0, 2.0))
+            .expect("makeBox");
+        feature.setattr("Shape", shape).expect("Box.Shape");
+
+        // retType 0 names a sub-element, so upstream's `Part::FeaturePy`
+        // returns the element itself (the resolver the Part module registered).
+        let face = feature
+            .call_method1("getSubObject", ("Face1",))
+            .expect("getSubObject Face1");
+        assert_eq!(
+            face.getattr("ShapeType").unwrap().extract::<String>().unwrap(),
+            "Face"
+        );
+        let area: f64 = face.getattr("Area").unwrap().extract().unwrap();
+        assert!((area - 4.0).abs() < 1e-9, "Face1 of a 2 mm box is 4 mm^2");
+
+        let edge = feature
+            .call_method1("getSubObject", ("Edge1",))
+            .expect("getSubObject Edge1");
+        assert_eq!(
+            edge.getattr("ShapeType").unwrap().extract::<String>().unwrap(),
+            "Edge"
+        );
+        // The wrapper is a `Part.Edge`, so its analytic curve is available.
+        assert_eq!(
+            edge.getattr("Curve")
+                .unwrap()
+                .getattr("TypeId")
+                .unwrap()
+                .extract::<String>()
+                .unwrap(),
+            "Part::GeomLine"
+        );
+
+        // retType 1 keeps returning the owning object (what the Draft helpers use).
+        let object = feature
+            .call_method1("getSubObject", ("Face1", 1))
+            .expect("getSubObject Face1 retType 1");
+        assert_eq!(object_name(&object), "Box");
+
+        // `Shape.getSubShape` resolves the same name through the lineage.
+        let via_shape = feature
+            .getattr("Shape")
+            .unwrap()
+            .call_method1("getSubShape", ("Face1",))
+            .unwrap();
+        assert_eq!(
+            via_shape
+                .getattr("ShapeType")
+                .unwrap()
+                .extract::<String>()
+                .unwrap(),
+            "Face"
+        );
+        let missing = feature
+            .getattr("Shape")
+            .unwrap()
+            .call_method1("getSubShape", ("Face99",))
+            .unwrap();
+        assert!(
+            missing.call_method0("isNull").unwrap().extract::<bool>().unwrap(),
+            "a missing name yields a null shape unless strict"
+        );
+
+        // A planar face reports the plane it lies in; the plane's normal is the
+        // face's own normal (up to orientation).
+        let plane = face.call_method0("findPlane").expect("Face.findPlane");
+        let axis = plane.getattr("Axis").unwrap();
+        let face_normal = face.call_method1("normalAt", (0.0, 0.0)).unwrap();
+        let dot: f64 = axis
+            .call_method1("dot", (&face_normal,))
+            .unwrap()
+            .extract()
+            .unwrap();
+        assert!((dot.abs() - 1.0).abs() < 1e-9, "the plane follows the face normal");
+
+        ferrocad
+            .call_method1("closeDocument", ("RustSubElementShape",))
+            .expect("closeDocument");
+    });
+}
+
+#[test]
 fn a_shape_without_a_lineage_keeps_the_positional_fallback() {
     let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     boot();

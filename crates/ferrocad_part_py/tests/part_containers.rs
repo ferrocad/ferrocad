@@ -381,3 +381,39 @@ fn a_compound_of_wires_is_accepted_by_make_face() {
         assert!(!face.call_method0("isNull").unwrap().extract::<bool>().unwrap());
     });
 }
+
+/// A compound caches its children, but the cache must follow the B-Rep when the
+/// inherited `Shape` API moves it: rebuilding from a rotated compound with stale
+/// children silently drops the rotation (Draft's hatch does exactly this).
+#[test]
+fn a_rotated_compound_rebuilds_from_its_current_children() {
+    boot();
+    Python::with_gil(|py| {
+        let part = PyModule::import(py, "Part").expect("import Part");
+        let ferrocad = PyModule::import(py, "ferrocad").expect("import ferrocad");
+        let vector = ferrocad.getattr("Vector").expect("Vector");
+        let origin = vector.call1((0.0, 0.0, 0.0)).unwrap();
+        let z_axis = vector.call1((0.0, 0.0, 1.0)).unwrap();
+
+        let edge = part
+            .call_method1("makeLine", ((0.0, 0.0, 0.0), (1.0, 0.0, 0.0)))
+            .expect("makeLine");
+        let children = PyList::new(py, [&edge]).unwrap();
+        let compound = part
+            .call_method1("makeCompound", (&children,))
+            .expect("makeCompound");
+
+        compound
+            .call_method1("rotate", (&origin, &z_axis, 90.0))
+            .expect("compound.rotate");
+
+        let rebuilt = part
+            .call_method1("makeCompound", (PyList::new(py, [&compound]).unwrap(),))
+            .expect("makeCompound([rotated])");
+        let bounds = rebuilt.getattr("BoundBox").expect("BoundBox");
+        let x_max: f64 = bounds.getattr("XMax").unwrap().extract().unwrap();
+        let y_max: f64 = bounds.getattr("YMax").unwrap().extract().unwrap();
+        assert!(x_max.abs() < 1e-9, "the edge must no longer run along +x");
+        assert!((y_max - 1.0).abs() < 1e-9, "the edge must run along +y");
+    });
+}

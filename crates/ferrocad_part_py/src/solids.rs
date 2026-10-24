@@ -44,7 +44,8 @@ fn kernel_error(error: ferrocad_geom::GeomError) -> PyErr {
 /// either (upstream's `getPyShapes`).
 fn shape_list(value: &Bound<'_, PyAny>) -> PyResult<Vec<Shape>> {
     if let Ok(compound) = value.downcast::<PyCompound>() {
-        return Ok(compound.borrow().children());
+        let compound = compound.borrow();
+        return Ok(compound.children(compound.as_super()));
     }
     if value.downcast::<PartShape>().is_ok() {
         return Ok(vec![shape_argument(value)?]);

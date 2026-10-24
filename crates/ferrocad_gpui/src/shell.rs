@@ -8,6 +8,7 @@
 //! come in later slices (see `docs/direction/app-shell-vision.md`).
 
 use std::collections::{HashMap, HashSet};
+use std::path::Path;
 use std::sync::{Arc, Mutex};
 
 use gpui::{
@@ -21,6 +22,7 @@ use ferrocad_inventor::{Scene, Viewport};
 use ferrocad_stage::{
     DeclarativeManipulator, InteractionCommit, Manipulator, ToolStatus, TransformGizmo,
 };
+use ferrocad_ui::Form;
 use ferrocad_viewport::scene;
 use ferrocad_viewport::{HoverReport, InventorViewport, SelectionEvent, ViewportEvent};
 use ferrocad_wgpu::{AdapterChoice, AdapterSummary, WgpuRenderer};
@@ -31,6 +33,7 @@ use crate::commands::{self, CommandInfo};
 use crate::contributions::Contributions;
 use crate::dialog::{self, DialogSpec, Kind, ValueState};
 use crate::display::{DisplaySync, StageMesh};
+use crate::forms::{FormDialog, FormEvent, FormResult};
 use crate::manipulators;
 use crate::python::{self, AxisSummary, Bootstrap, DocumentNode, GridSummary, PropRow};
 use crate::selection::{self, SelectionItem};
@@ -185,6 +188,17 @@ pub struct Shell {
     dialog_focus: FocusHandle,
     /// Focus the modal on the next render (it is opened outside a window context).
     focus_dialog: bool,
+    /// The rendered form dialog (`FreeCADGui.Control.showDialog`). It owns the
+    /// keyboard while present; a command dialog and a form never share the shell.
+    form_dialog: Option<Entity<FormDialog>>,
+    /// Keeps the form's [`FormEvent`] subscription alive; a footer-button close
+    /// releases the shell modal through it.
+    form_events: Option<Subscription>,
+    /// Focus the shell root on the next render after a form opens, so `Esc`
+    /// (reject) and `Enter` (accept) reach [`Shell::handle_key`].
+    focus_form: bool,
+    /// The result the last form left when it closed (`None` for `closeDialog`).
+    form_result: Option<FormResult>,
     /// The Ctrl+K command palette, when it is open.
     palette: Option<Palette>,
     /// Focus the palette's field on the next render (it opens outside a window
@@ -364,6 +378,10 @@ impl Shell {
             dialog: None,
             dialog_focus: cx.focus_handle(),
             focus_dialog: false,
+            form_dialog: None,
+            form_events: None,
+            focus_form: false,
+            form_result: None,
             palette: None,
             focus_palette: false,
             palette_restore_focus: None,
@@ -632,7 +650,7 @@ impl Shell {
     /// deliberately not opened over a command dialog: that dialog owns the keyboard
     /// and its own accept/cancel path.
     pub(crate) fn open_palette(&mut self, cx: &mut Context<Self>) {
-        if self.palette.is_some() || self.dialog.is_some() {
+        if self.modal_open() {
             return;
         }
         self.open_popover = None;
@@ -755,6 +773,22 @@ impl Shell {
         cancel_dialog: bool,
         cx: &mut Context<Self>,
     ) -> bool {
+        // A rendered form dialog is modal like a command dialog or the palette:
+        // Esc rejects it, Enter accepts it, and no registry accelerator (or Ctrl+K)
+        // fires over it. Keys it does not own bubble without running a command.
+        if self.form_dialog.is_some() {
+            return match event.keystroke.key.as_str() {
+                "escape" => {
+                    self.reject_form(cx);
+                    true
+                }
+                "enter" => {
+                    self.accept_form(cx);
+                    true
+                }
+                _ => false,
+            };
+        }
         // The palette is modal: Esc closes it before the popover, tool and card paths.
         if event.keystroke.key == "escape" && self.close_palette(cx) {
             return true;
@@ -1260,9 +1294,9 @@ impl Shell {
     /// A modal owns the keyboard while it is open, and a disabled command does not
     /// fire (the same rule the bar shows).
     fn shortcut_for(&self, event: &KeyDownEvent) -> Option<String> {
-        // A modal owns the keyboard while either is open: a registry accelerator must
-        // not fire over a dialog or while the user is typing a palette query.
-        if self.dialog.is_some() || self.palette.is_some() {
+        // A modal owns the keyboard while any is open: a registry accelerator must
+        // not fire over a dialog, a form, or while the user is typing a palette query.
+        if self.modal_open() {
             return None;
         }
         let (_, id) = self
@@ -1473,7 +1507,7 @@ impl Shell {
         }
 
         if let (Some(spec), Some(token)) = (outcome.dialog.clone(), outcome.token.clone()) {
-            let status = if self.dialog.is_some() {
+            let status = if self.dialog.is_some() || self.form_dialog.is_some() {
                 let _ = commands::cancel(&token);
                 "a dialog is already open".to_string()
             } else {
@@ -1696,6 +1730,134 @@ impl Shell {
         };
         let _ = commands::cancel(&dialog.token);
         self.model.lock().unwrap().status = "dialog cancelled".to_string();
+        cx.notify();
+    }
+
+    /// Whether a modal currently owns the shell: a command dialog, the palette or
+    /// a rendered form. At most one of them may be present, so a second backdrop
+    /// can never be stacked on the first.
+    fn modal_open(&self) -> bool {
+        self.dialog.is_some() || self.palette.is_some() || self.form_dialog.is_some()
+    }
+
+    /// Whether a rendered form dialog is open (`FreeCADGui.Control.showDialog`).
+    pub fn form_open(&self) -> bool {
+        self.form_dialog.is_some()
+    }
+
+    /// The open form dialog, for tests and for the host that drives it.
+    pub fn form_dialog(&self) -> Option<&Entity<FormDialog>> {
+        self.form_dialog.as_ref()
+    }
+
+    /// The result the last form left (`None` for a plain `closeDialog`).
+    pub fn last_form_result(&self) -> Option<FormResult> {
+        self.form_result
+    }
+
+    /// Open a parsed form as the shell's modal.
+    ///
+    /// This mirrors `FreeCADGui.Control.showDialog`: the form is rendered above
+    /// the workspace and owns `Esc` (reject) and `Enter` (accept). When a command
+    /// dialog, the palette or another form already owns the shell, nothing is
+    /// opened and `false` is returned, so the caller can drop its request.
+    pub fn open_form(
+        &mut self,
+        form: Form,
+        name: impl Into<String>,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        if self.modal_open() {
+            let status = "a dialog is already open".to_string();
+            self.model.lock().unwrap().status = status.clone();
+            self.console_line(status, cx);
+            cx.notify();
+            return false;
+        }
+        // A header menu would sit behind the modal; dismiss it with the open.
+        self.open_popover = None;
+        self.popover_anchor = None;
+        let dialog = cx.new(|_| FormDialog::new(form, name));
+        let events = cx.subscribe(&dialog, |this: &mut Shell, dialog, event: &FormEvent, cx| {
+            this.finish_form(&dialog, event, cx);
+        });
+        let opened = dialog.read(cx).name().to_string();
+        self.form_dialog = Some(dialog);
+        self.form_events = Some(events);
+        self.form_result = None;
+        self.focus_form = true;
+        let status = format!("form {opened}: open");
+        self.model.lock().unwrap().status = status.clone();
+        self.console_line(status, cx);
+        cx.notify();
+        true
+    }
+
+    /// Read a `.ui` file and open it as the shell's modal.
+    ///
+    /// `Ok(false)` means another modal already owns the shell (see [`open_form`]);
+    /// `Err` is a read/parse failure with the file named.
+    pub fn open_form_path(
+        &mut self,
+        path: impl AsRef<Path>,
+        name: impl Into<String>,
+        cx: &mut Context<Self>,
+    ) -> Result<bool, String> {
+        let path = path.as_ref();
+        let form = Form::from_path(path)
+            .map_err(|error| format!("{}: {error}", path.display()))?;
+        Ok(self.open_form(form, name, cx))
+    }
+
+    /// Close the open form without recording a result
+    /// (`FreeCADGui.Control.closeDialog`). Returns whether one was open.
+    pub fn close_form(&mut self, cx: &mut Context<Self>) -> bool {
+        let Some(dialog) = self.form_dialog.clone() else {
+            return false;
+        };
+        dialog.update(cx, |dialog, cx| dialog.close(cx));
+        true
+    }
+
+    /// Reject the open form; the modal is released through [`FormEvent`].
+    fn reject_form(&mut self, cx: &mut Context<Self>) {
+        if let Some(dialog) = self.form_dialog.clone() {
+            dialog.update(cx, |dialog, cx| dialog.reject(cx));
+        }
+    }
+
+    /// Accept the open form; the modal is released through [`FormEvent`].
+    fn accept_form(&mut self, cx: &mut Context<Self>) {
+        if let Some(dialog) = self.form_dialog.clone() {
+            dialog.update(cx, |dialog, cx| dialog.accept(cx));
+        }
+    }
+
+    /// Release the shell's modal when the form closes, whether that was `Esc`,
+    /// `Enter`, a footer button or `close_form`.
+    fn finish_form(
+        &mut self,
+        dialog: &Entity<FormDialog>,
+        event: &FormEvent,
+        cx: &mut Context<Self>,
+    ) {
+        // A late event from a form the shell already released must not clear a
+        // newer modal.
+        if self.form_dialog.as_ref().map(|dialog| dialog.entity_id()) != Some(dialog.entity_id()) {
+            return;
+        }
+        let FormEvent::Closed(result) = event;
+        let name = dialog.read(cx).name().to_string();
+        self.form_dialog = None;
+        self.form_events = None;
+        self.form_result = *result;
+        let status = match result {
+            Some(FormResult::Accepted) => format!("form {name}: accepted"),
+            Some(FormResult::Rejected) => format!("form {name}: rejected"),
+            None => format!("form {name}: closed"),
+        };
+        self.model.lock().unwrap().status = status.clone();
+        self.console_line(status, cx);
         cx.notify();
     }
 
@@ -2969,6 +3131,11 @@ impl Render for Shell {
         if std::mem::take(&mut self.focus_dialog) {
             window.focus(&self.dialog_focus, cx);
         }
+        // A form opens outside a window context too. Its own element is not
+        // focusable, so the shell root takes the keyboard and routes Esc/Enter.
+        if std::mem::take(&mut self.focus_form) {
+            window.focus(&self.root_focus, cx);
+        }
         // The palette was just opened (from either window): remember what held the
         // keyboard so closing can give it back, then move focus to the query field.
         // The palette lives in the main window, so a Ctrl+K pressed in Dev Tools
@@ -3104,7 +3271,12 @@ impl Render for Shell {
             .track_focus(&self.root_focus)
             .focusable()
             .child(content);
-        let body = if self.dialog.is_some() {
+        // The form dialog draws its own full-window backdrop and occludes the
+        // workspace. Only one modal is rendered at a time, so no second backdrop
+        // can stack on it.
+        let body = if let Some(dialog) = self.form_dialog.clone() {
+            body.child(dialog)
+        } else if self.dialog.is_some() {
             body.child(dialog_overlay(self, cx))
         } else if self.palette.is_some() {
             body.child(palette_overlay(self, &model, cx))
@@ -3493,6 +3665,156 @@ if "Test_DialogView" not in FreeCADGui.listCommands():
             cx.update(|_window, cx| shell.read(cx).dialog.is_none()),
             "Escape cancelled the modal"
         );
+    }
+
+    /// A small inline form for the shell-hosting tests: a root, one checkbox and
+    /// the footer every [`FormDialog`] draws.
+    const INLINE_FORM: &str = r#"
+<ui version="4.0">
+ <class>InlineForm</class>
+ <widget class="QWidget" name="Form">
+  <layout class="QVBoxLayout" name="column">
+   <item><widget class="QCheckBox" name="flag">
+    <property name="text"><string>Flag</string></property>
+   </widget></item>
+  </layout>
+ </widget>
+</ui>
+"#;
+
+    fn inline_form() -> Form {
+        Form::parse_str(INLINE_FORM).expect("inline form")
+    }
+
+    /// Q3b: the shell hosts a rendered [`FormDialog`] as its modal, above the
+    /// workspace and with the form's stable selectors. Only one modal (and one
+    /// backdrop) exists at a time, and `closeDialog` releases it.
+    #[gpui::test]
+    fn a_form_dialog_opens_over_the_shell(cx: &mut TestAppContext) {
+        let _guard = crate::PYTHON_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let (mut cx, shell, _model) = palette_window(cx);
+
+        let opened = cx.update(|_window, cx| {
+            shell.update(cx, |shell, cx| shell.open_form(inline_form(), "Inline", cx))
+        });
+        assert!(opened, "the form opened");
+        draw(&mut cx);
+
+        for selector in [
+            "form-Inline",
+            "form-Inline-flag",
+            "form-Inline-panel",
+            "form-Inline-accept",
+            "form-Inline-reject",
+        ] {
+            assert!(
+                cx.debug_bounds(selector).is_some(),
+                "{selector} is rendered"
+            );
+        }
+        assert!(
+            cx.debug_bounds("dialog-backdrop").is_none(),
+            "the form draws the only backdrop"
+        );
+        assert!(
+            cx.debug_bounds("palette").is_none(),
+            "no palette is drawn behind the form"
+        );
+
+        // The command dialog and the palette both refuse while the form owns the
+        // shell, so a second modal cannot stack on the first.
+        let second = cx.update(|_window, cx| {
+            shell.update(cx, |shell, cx| {
+                shell.open_form(inline_form(), "Other", cx)
+            })
+        });
+        assert!(!second, "one modal at a time");
+        // `closeDialog` hides it and records no result.
+        let closed = cx.update(|_window, cx| shell.update(cx, |shell, cx| shell.close_form(cx)));
+        assert!(closed, "close_form released the open form");
+        assert!(!shell.read_with(&cx, |shell, _| shell.form_open()));
+        assert_eq!(
+            shell.read_with(&cx, |shell, _| shell.last_form_result()),
+            None,
+            "close records no result"
+        );
+        draw(&mut cx);
+        assert!(cx.debug_bounds("form-Inline").is_none());
+    }
+
+    /// Q3b: Esc rejects and Enter accepts the open form; both are routed through
+    /// the shell's key path because the form itself is not focusable.
+    #[gpui::test]
+    fn escape_rejects_and_enter_accepts_the_open_form(cx: &mut TestAppContext) {
+        let _guard = crate::PYTHON_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let (mut cx, shell, _model) = palette_window(cx);
+
+        let opened = cx.update(|_window, cx| {
+            shell.update(cx, |shell, cx| shell.open_form(inline_form(), "Inline", cx))
+        });
+        assert!(opened);
+        draw(&mut cx);
+
+        cx.simulate_keystrokes("escape");
+        draw(&mut cx);
+        assert!(!shell.read_with(&cx, |shell, _| shell.form_open()));
+        assert_eq!(
+            shell.read_with(&cx, |shell, _| shell.last_form_result()),
+            Some(FormResult::Rejected)
+        );
+        assert!(cx.debug_bounds("form-Inline").is_none());
+
+        let opened = cx.update(|_window, cx| {
+            shell.update(cx, |shell, cx| shell.open_form(inline_form(), "Inline", cx))
+        });
+        assert!(opened, "a closed form can be reopened");
+        draw(&mut cx);
+        cx.simulate_keystrokes("enter");
+        draw(&mut cx);
+        assert!(!shell.read_with(&cx, |shell, _| shell.form_open()));
+        assert_eq!(
+            shell.read_with(&cx, |shell, _| shell.last_form_result()),
+            Some(FormResult::Accepted)
+        );
+        assert!(cx.debug_bounds("form-Inline").is_none());
+    }
+
+    /// Q3b: a registry accelerator must not fire over the form modal, even though
+    /// it would run when the shell root has focus normally.
+    #[gpui::test]
+    fn a_command_accelerator_does_not_fire_over_a_form(cx: &mut TestAppContext) {
+        let _guard = crate::PYTHON_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let (mut cx, shell, model) = palette_window(cx);
+
+        let script = r#"
+import FreeCADGui
+class _FormShortcut:
+    def GetResources(self):
+        return {"MenuText": "Form shortcut", "Accel": "Ctrl+Alt+Shift+Y"}
+    def Activated(self):
+        return {"status": "shortcut ran over the form"}
+if "Test_FormShortcut" not in FreeCADGui.listCommands():
+    FreeCADGui.addCommand("Test_FormShortcut", _FormShortcut())
+"#;
+        let registered = cx.update(|_window, _cx| crate::python::evaluate(script));
+        assert!(registered.unwrap().ok);
+        cx.update(|_window, cx| shell.update(cx, |shell, cx| shell.refresh_commands(cx)));
+
+        let opened = cx.update(|_window, cx| {
+            shell.update(cx, |shell, cx| shell.open_form(inline_form(), "Inline", cx))
+        });
+        assert!(opened);
+        draw(&mut cx);
+        cx.simulate_keystrokes("ctrl-alt-shift-y");
+        draw(&mut cx);
+
+        let status = model.lock().unwrap().status.clone();
+        assert_ne!(status, "shortcut ran over the form");
+        assert!(
+            shell.read_with(&cx, |shell, _| shell.form_open()),
+            "the form still owns the shell"
+        );
+        assert!(cx.debug_bounds("form-Inline").is_some());
     }
 
     /// A4: a registered accelerator runs the same command path as a click, even

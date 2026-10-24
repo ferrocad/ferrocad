@@ -71,19 +71,22 @@
 //!
 //! # Shell wiring (Q3b)
 //!
-//! `shell.rs` still renders command specs through its own modal. Q3b should
-//! hold an `Option<Entity<FormDialog>>` on the shell, add it as an absolute
-//! full-window child when present (the dialog renders its own backdrop), and
-//! route `FreeCADGui.Control.showDialog/closeDialog` to `FormDialog::show` /
-//! `close`. No shell file is changed here so the two modal implementations do
-//! not collide.
+//! `shell.rs` holds an `Option<Entity<FormDialog>>` and renders it as an
+//! absolute, full-window child above the workspace (the dialog draws its own
+//! backdrop). [`FormDialog::accept`], [`FormDialog::reject`] and
+//! [`FormDialog::close`] emit [`FormEvent::Closed`], so the shell learns about a
+//! footer-button close as well as one driven by its own `Esc`/`Enter` handling.
+//! The shell's `open_form`/`open_form_path`/`close_form` mirror
+//! `FreeCADGui.Control.showDialog`/`closeDialog`; a form and a command dialog
+//! never share the shell.
 
 use std::collections::HashSet;
 use std::path::Path;
 use std::sync::{Mutex, OnceLock};
 
 use gpui::{
-    AnyElement, Context, Div, IntoElement, Render, Window, div, prelude::*, px, rgb, rgba,
+    AnyElement, Context, Div, EventEmitter, IntoElement, Render, Window, div, prelude::*, px, rgb,
+    rgba,
 };
 
 use ferrocad_ui::{Form, LayoutId, LayoutItem, LayoutItemKind, PropertyValue, Widget, WidgetId};
@@ -109,6 +112,18 @@ impl FormResult {
         }
     }
 }
+
+/// What a [`FormDialog`] reports to its host when it closes.
+///
+/// `Closed(None)` is a plain [`FormDialog::close`] (`closeDialog`), which records
+/// no result. A host that embeds the dialog listens so a footer-button click
+/// releases the modal just like its own `Esc`/`Enter` handling would.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FormEvent {
+    Closed(Option<FormResult>),
+}
+
+impl EventEmitter<FormEvent> for FormDialog {}
 
 /// The Qt classes the renderer knows how to draw.
 ///
@@ -447,6 +462,7 @@ impl FormDialog {
     pub fn close(&mut self, cx: &mut Context<Self>) {
         self.open = false;
         cx.notify();
+        cx.emit(FormEvent::Closed(None));
     }
 
     /// Accept the form: record [`FormResult::Accepted`] and close.
@@ -454,6 +470,7 @@ impl FormDialog {
         self.result = Some(FormResult::Accepted);
         self.open = false;
         cx.notify();
+        cx.emit(FormEvent::Closed(self.result));
     }
 
     /// Reject the form: record [`FormResult::Rejected`] and close.
@@ -461,6 +478,7 @@ impl FormDialog {
         self.result = Some(FormResult::Rejected);
         self.open = false;
         cx.notify();
+        cx.emit(FormEvent::Closed(self.result));
     }
 
     /// Activate a tab page by widget name (the SetStyle test uses this).

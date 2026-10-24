@@ -39,8 +39,10 @@
 
 mod backend;
 mod bridge;
+pub mod chfi2d;
 mod error;
 mod shape;
+pub mod shapefix;
 mod topology;
 
 pub use backend::OcctBackend;
@@ -414,7 +416,7 @@ mod tests {
     }
 
     #[test]
-    fn make_edge_reports_the_kinds_the_bindings_cannot_build() {
+    fn make_edge_builds_the_bounded_kinds_and_rejects_an_infinite_line() {
         use ferrocad_curves::{EdgeCurve, Ellipse, Line, Vector3};
         let backend = OcctBackend::new();
         let line =
@@ -423,7 +425,14 @@ mod tests {
         let ellipse = EdgeCurve::Ellipse(
             Ellipse::new(Vector3::zero(), Vector3::new(0.0, 0.0, 1.0), 3.0, 1.0).unwrap(),
         );
-        assert!(backend.make_edge(&ellipse).is_err());
+        let edge = backend
+            .make_edge(&ellipse)
+            .expect("an ellipse now has an exact gp_Elips edge");
+        let EdgeCurve::Ellipse(back) = backend.curve_of(&edge).unwrap() else {
+            panic!("an elliptical edge reports its basis ellipse");
+        };
+        assert!((back.major_radius() - 3.0).abs() < 1e-9);
+        assert!((back.minor_radius() - 1.0).abs() < 1e-9);
     }
 
     #[test]

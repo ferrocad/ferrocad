@@ -30,6 +30,16 @@ The `Base` value types FreeCAD exposes as a submodule.
 | isValid() | — |
 | setVoid() | — |
 
+## Class `CADKernelError`
+
+Kernel failure (``Part.OCCError`` when the Part module is absent).
+
+| Member | Summary |
+| --- | --- |
+| add_note(note, /) | Add a note to the exception |
+| `args` (attribute) | — |
+| with_traceback(tb, /) | Set self.__traceback__ to tb and return self. |
+
 ## Class `Material`
 
 | Member | Summary |

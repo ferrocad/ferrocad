@@ -13,7 +13,7 @@ here.
 | Module | Public names | What it is |
 | --- | --- | --- |
 | [`FreeCAD`](FreeCAD.md) | 15 | Upstream-compatible surface: documents, objects, the base value types. |
-| [`FreeCAD.Base`](FreeCAD.Base.md) | 12 | The `Base` value types FreeCAD exposes as a submodule. |
+| [`FreeCAD.Base`](FreeCAD.Base.md) | 13 | The `Base` value types FreeCAD exposes as a submodule. |
 | [`FreeCAD.Units`](FreeCAD.Units.md) | 9 | Quantity parsing, units and number formatting. |
 | [`FreeCAD.Console`](FreeCAD.Console.md) | 5 | The console sink a workbench prints through. |
 | [`FreeCADGui`](FreeCADGui.md) | 12 | Upstream-compatible GUI surface: commands, selection and dialogs. |

@@ -24,6 +24,17 @@ from ferrocad import (
     Vector2d,
 )
 
+try:
+    # Upstream reports kernel failures as ``Base.CADKernelError``; this image
+    # raises ``Part.OCCError`` for the same condition, so the upstream tests'
+    # ``assertRaises(Base.CADKernelError)`` keeps its meaning. ``Part`` is a
+    # separate module, so a core-only install falls back to a local class.
+    from Part import OCCError as CADKernelError
+except ImportError:  # pragma: no cover - core-only installs
+
+    class CADKernelError(Exception):
+        """Kernel failure (``Part.OCCError`` when the Part module is absent)."""
+
 
 class ScaleType(IntEnum):
     """Scaling mode returned by ``Matrix.hasScale()`` (``Base::ScaleType``)."""
@@ -84,4 +95,5 @@ __all__ = [
     "Material",
     "ScaleType",
     "Precision",
+    "CADKernelError",
 ]

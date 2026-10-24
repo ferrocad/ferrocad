@@ -34,10 +34,12 @@
 
 #![allow(non_snake_case)]
 
+mod chfi2d;
 mod containers;
 mod curves;
 mod link;
 mod link_array;
+mod shape_fix;
 mod solids;
 
 use std::sync::{Arc, Mutex};
@@ -46,7 +48,7 @@ use ferrocad_core::{ExtensionData, ExtensionValue};
 use ferrocad_geom::{ElementKind, ElementRef, Lineage, MapVersion, Shape, TessellationOptions};
 use ferrocad_occt::OcctBackend;
 use ferrocad_part::{ShapeListProperty, ShapeProperty, SHAPE_LIST_TYPE_NAME, TYPE_NAME};
-use pyo3::exceptions::{PyIOError, PyRuntimeError, PyValueError};
+use pyo3::exceptions::{PyIOError, PyIndexError, PyRuntimeError, PyValueError};
 use pyo3::prelude::*;
 use pyo3::types::{PyBytes, PyDict, PyList, PyModule, PyTuple};
 use pyo3::IntoPyObjectExt;
@@ -215,6 +217,19 @@ impl PartShape {
             .map(|(kind, _)| *kind)
             .find(|kind| backend.elements(shape, *kind).len() == 1)
     }
+}
+
+/// Parse a positional element name (`Face2`) the way upstream's
+/// `shapeTypeAndIndex` does: a known kind prefix followed by a plain integer.
+///
+/// A missing prefix (`InvalidName`) or trailing text (`Face6_abc`) yields
+/// `None`, which `getElement` reports as a `ValueError`. The returned ordinal is
+/// still unchecked against the shape; `0` is rejected by the caller.
+fn parse_element_name(name: &str) -> Option<(ElementKind, usize)> {
+    ElementKind::ALL.into_iter().find_map(|kind| {
+        let rest = name.strip_prefix(kind.prefix())?;
+        rest.parse::<usize>().ok().map(|index| (kind, index))
+    })
 }
 
 #[pymethods]
@@ -1386,13 +1401,27 @@ impl PartShape {
 
     /// `Shape.getElement(name)` — resolve a sub-element name (`Face2`) to the
     /// sub-shape. Without an element map this is the positional resolution.
+    ///
+    /// The failure modes mirror upstream's `getSubTopoShape`: a name whose
+    /// spelling is not a known kind followed by a positive integer (including
+    /// `InvalidName` and a stray suffix such as `Face6_abc`) is a `ValueError`,
+    /// and a well-spelled name past the shape's last element of that kind is an
+    /// `IndexError`. A null shape is a `ValueError` as well.
     fn getElement(&self, name: &str) -> PyResult<PartShape> {
         let Some(shape) = self.shape() else {
-            return Ok(PartShape::empty());
+            return Err(PyValueError::new_err("null shape"));
         };
+        let Some((_kind, index)) = parse_element_name(name) else {
+            return Err(PyValueError::new_err(format!("Invalid shape name {name}")));
+        };
+        if index == 0 {
+            return Err(PyValueError::new_err(format!("Invalid shape index {index}")));
+        }
         match ferrocad_part::backend().resolve(&shape, name) {
             Some(resolved) => Ok(PartShape::from_shape(resolved)),
-            None => Ok(PartShape::empty()),
+            None => Err(PyIndexError::new_err(format!(
+                "Shape index {index} out of bound"
+            ))),
         }
     }
 
@@ -2169,5 +2198,7 @@ pub fn Part(m: &Bound<'_, PyModule>) -> PyResult<()> {
     curves::register(m)?;
     containers::register(m)?;
     solids::register(m)?;
+    shape_fix::register(m)?;
+    chfi2d::register(m)?;
     Ok(())
 }

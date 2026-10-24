@@ -16,6 +16,7 @@ mod ffi {
         include!("ferrocad_occt/include/fc_history.hxx");
         include!("ferrocad_occt/include/fc_topology.hxx");
         include!("ferrocad_occt/include/fc_curve.hxx");
+        include!("ferrocad_occt/include/fc_transform.hxx");
 
         // Reuse the crate's opaque types. cxx shares these across bridges by path.
         type BRepAlgoAPI_Fuse = opencascade_sys::b_rep_algo_api::BRepAlgoAPI_Fuse;
@@ -177,6 +178,10 @@ mod ffi {
 
         /// Install a row-major 4x4 matrix into an OCCT transform.
         fn fc_trsf_from_matrix(m: &[f64], out: Pin<&mut gp_Trsf>) -> bool;
+
+        /// Apply a general affine transform (`BRepBuilderAPI_GTransform`), or
+        /// null on failure.
+        fn fc_gtransform(shape: &TopoDS_Shape, matrix: &[f64]) -> UniquePtr<TopoDS_Shape>;
 
         /// A B-spline from control points (flat xyz), or null on failure.
         fn fc_bspline_from_poles(

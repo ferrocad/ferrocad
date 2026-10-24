@@ -12,10 +12,20 @@
 //! and adds the shape-valued `Shape`. That helper is the one property list the
 //! link and the `Part::LinkArray*` types share.
 //!
-//! This is slice L1–L3 of `docs/tasks/links.md`. Element expansion is real:
+//! This is slices L1–L4 of `docs/tasks/links.md`. Element expansion is real:
 //! `ShowElement` creates [`ELEMENT_TYPE`] children with a `Placement`, a link
 //! back to the source and a derived `Shape`, and collapsing removes them again.
-//! Copy-on-change and lineage-backed sub-element resolution remain absent.
+//! L4 adds a non-uniform `ScaleVector` (through the backend's general-affine
+//! transform) and the [`LINK_GROUP_TYPE`]/[`LINK_LIST_TYPE`] containers, whose
+//! `ElementList` is their `Group` membership.
+//!
+//! **`LinkMode` and `LinkCopyOnChange` are stored but inert.** A FerroCAD link is
+//! a name reference to one object (or, for a container, a list of names), which
+//! is upstream's `KeepLink` behaviour; `AutoDelete` would need a delete cascade
+//! and `Translate` a standalone copy, neither of which exists. Copy-on-change
+//! needs an object clone/copy facility that this tree does not have, so none of
+//! its modes is honoured. `execute` never reads either property. Lineage-backed
+//! sub-element resolution (L5) is also still absent.
 
 use std::sync::Arc;
 
@@ -33,6 +43,14 @@ pub(crate) const LINK_TYPE: &str = "App::Link";
 /// `App::LinkElement`).
 pub(crate) const ELEMENT_TYPE: &str = "App::LinkElement";
 
+/// A link to many objects (upstream `App::LinkGroup`). Its `ElementList` is its
+/// `Group` membership, so `Element1` resolves to the first member.
+pub(crate) const LINK_GROUP_TYPE: &str = "App::LinkGroup";
+
+/// The list form of a link container (upstream `App::LinkList`). Registered with
+/// the same behaviour as [`LINK_GROUP_TYPE`]: it follows its link list.
+pub(crate) const LINK_LIST_TYPE: &str = "App::LinkList";
+
 /// The element type FerroCAD used before L3. It is registered with the same
 /// behaviour as [`ELEMENT_TYPE`] so documents saved by earlier versions still
 /// load and recompute.
@@ -44,13 +62,16 @@ pub(crate) const LEGACY_ELEMENT_TYPE: &str = "Part::LinkArrayElement";
 pub(crate) const HIDDEN_OUTPUT: u32 =
     prop_status::HIDDEN | prop_status::OUTPUT | prop_status::NORECOMPUTE | prop_status::READONLY;
 
-/// Register `App::Link`, `App::LinkElement` and the legacy element type id.
-/// Idempotent.
+/// Register `App::Link`, its containers, `App::LinkElement` and the legacy
+/// element type id. Idempotent.
 pub(crate) fn register() {
     object_registry::register(LINK_TYPE, Arc::new(LinkObject));
     let elements: Arc<dyn ObjectType> = Arc::new(LinkElementObject);
     object_registry::register(ELEMENT_TYPE, elements.clone());
     object_registry::register(LEGACY_ELEMENT_TYPE, elements);
+    let containers: Arc<dyn ObjectType> = Arc::new(LinkContainerObject);
+    object_registry::register(LINK_GROUP_TYPE, containers.clone());
+    object_registry::register(LINK_LIST_TYPE, containers);
 }
 
 // ---------------------------------------------------------------------------
@@ -86,6 +107,10 @@ pub(crate) fn link_properties() -> Vec<(String, Property, u32)> {
             Property::Bool(false),
             prop_status::NONE,
         ),
+        // Stored for upstream compatibility, never read by `execute`: a link is
+        // a name reference (`LinkedObject`), i.e. `KeepLink`; `AutoDelete` and
+        // `Translate` need a delete cascade / copy facility that does not exist.
+        // See the module docs.
         (
             "LinkMode".to_string(),
             Property::Enumeration(
@@ -97,6 +122,8 @@ pub(crate) fn link_properties() -> Vec<(String, Property, u32)> {
             ),
             prop_status::NONE,
         ),
+        // Inert: there is no object clone/copy facility, so none of the modes can
+        // be honoured. Do not invent copy-on-change semantics here.
         (
             "LinkCopyOnChange".to_string(),
             Property::Enumeration(
@@ -134,6 +161,22 @@ pub(crate) fn link_properties() -> Vec<(String, Property, u32)> {
         "Shape".to_string(),
         make_shape_property(ShapeProperty::empty()),
         HIDDEN_OUTPUT,
+    ));
+    properties
+}
+
+/// The property base of `App::LinkGroup` / `App::LinkList`.
+///
+/// A container is a link whose element set is its `Group` membership rather than
+/// one transformed source, so it gets the whole link base plus `Group`. Its
+/// `ElementList` is the same membership (upstream's `isLinkGroup()` convention),
+/// which is why no generated `App::LinkElement` children are created for it.
+pub(crate) fn container_properties() -> Vec<(String, Property, u32)> {
+    let mut properties = link_properties();
+    properties.push((
+        "Group".to_string(),
+        Property::LinkList(Vec::new()),
+        prop_status::NONE,
     ));
     properties
 }
@@ -242,31 +285,75 @@ fn link_target(doc: &Document, id: ObjectId) -> Option<String> {
     }
 }
 
+/// The transform a link applies to its target's geometry.
+///
+/// `general` records whether the 4x4 is an affine transform that the similarity
+/// path (an OCCT `gp_Trsf`) cannot represent — a non-uniform `ScaleVector`.
+/// Uniform scale stays on the cheaper similarity path.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct LinkTransform {
+    pub(crate) matrix: Matrix4,
+    pub(crate) general: bool,
+}
+
+impl LinkTransform {
+    /// The identity transform (the arrays compose their own element placements).
+    pub(crate) fn identity() -> Self {
+        Self {
+            matrix: Matrix4::identity(),
+            general: false,
+        }
+    }
+
+    /// Compose a local placement after this transform.
+    fn then(&self, local: &Matrix4) -> Self {
+        Self {
+            matrix: self.matrix.mul(local),
+            general: self.general,
+        }
+    }
+}
+
 /// The transform an `App::Link` applies to its target's shape.
 ///
 /// - `LinkTransform = false` (default): the link's own `Placement`.
 /// - `LinkTransform = true`: `LinkPlacement`, the link's global placement.
 ///
-/// `Scale` multiplies `ScaleVector` when the vector is uniform. A non-uniform
-/// `ScaleVector` needs a general affine transform, which the kernel transform
-/// path (an OCCT `gp_Trsf`, i.e. a similarity) cannot represent; it is left for
-/// L4 and only `Scale` is applied today.
-fn link_matrix(doc: &Document, id: ObjectId) -> Matrix4 {
+/// `Scale` multiplies `ScaleVector`. A uniform vector folds into one uniform
+/// factor; a non-uniform vector becomes a diagonal affine scale applied after the
+/// placement, which [`transformed`] sends through the kernel's general-transform
+/// path (`BRepBuilderAPI_GTransform`) because a similarity cannot express it.
+fn link_transform(doc: &Document, id: ObjectId) -> LinkTransform {
     let placement = if bool_property(doc, id, "LinkTransform", false) {
         placement_property(doc, id, "LinkPlacement")
     } else {
         placement_property(doc, id, "Placement")
     };
-    let mut matrix = placement.to_matrix();
+    let matrix = placement.to_matrix();
 
     let scale = float_property(doc, id, "Scale", 1.0);
     let vector = vector_property(doc, id, "ScaleVector", Vector3::new(1.0, 1.0, 1.0));
     let uniform = (vector.x - vector.y).abs() <= 1e-12 && (vector.x - vector.z).abs() <= 1e-12;
-    let factor = if uniform { scale * vector.x } else { scale };
-    if (factor - 1.0).abs() > 1e-12 {
-        matrix = matrix.mul(&uniform_scale_matrix(factor));
+    if uniform {
+        let factor = scale * vector.x;
+        LinkTransform {
+            matrix: if (factor - 1.0).abs() > 1e-12 {
+                matrix.mul(&uniform_scale_matrix(factor))
+            } else {
+                matrix
+            },
+            general: false,
+        }
+    } else {
+        let mut values = Matrix4::identity().m;
+        values[0] = scale * vector.x;
+        values[5] = scale * vector.y;
+        values[10] = scale * vector.z;
+        LinkTransform {
+            matrix: matrix.mul(&Matrix4::from_values(values)),
+            general: true,
+        }
     }
-    matrix
 }
 
 fn uniform_scale_matrix(factor: f64) -> Matrix4 {
@@ -316,12 +403,19 @@ fn linked_shape(doc: &Document, name: &str) -> Option<Shape> {
         .and_then(|property| property.shape())
 }
 
-/// Transform `source` by `matrix`, cloning it when the transform is the identity.
-fn transformed(source: &Shape, matrix: &Matrix4) -> Option<Shape> {
-    if matrix.is_unity(1e-12) {
+/// Transform `source` by `transform`, cloning it when the transform is the
+/// identity and choosing the similarity or general-affine kernel path.
+fn transformed(source: &Shape, transform: &LinkTransform) -> Option<Shape> {
+    if transform.matrix.is_unity(1e-12) {
         Some(source.clone())
+    } else if transform.general {
+        ferrocad_part::backend()
+            .general_transform(source, &transform.matrix)
+            .ok()
     } else {
-        ferrocad_part::backend().transform(source, matrix).ok()
+        ferrocad_part::backend()
+            .transform(source, &transform.matrix)
+            .ok()
     }
 }
 
@@ -383,7 +477,7 @@ pub(crate) fn sync_elements(
     owner: ObjectId,
     placements: &[Placement],
     flags: Option<&[bool]>,
-    parent_matrix: &Matrix4,
+    parent: &LinkTransform,
 ) -> Result<bool, ()> {
     doc.set_property_raw(
         owner,
@@ -429,8 +523,8 @@ pub(crate) fn sync_elements(
         Some(source) => placements
             .iter()
             .map(|placement| {
-                let matrix = parent_matrix.mul(&placement.to_matrix());
-                transformed(source, &matrix).ok_or(())
+                let element = parent.then(&placement.to_matrix());
+                transformed(source, &element).ok_or(())
             })
             .collect::<Result<Vec<Shape>, ()>>()?
             .into_iter()
@@ -511,19 +605,19 @@ impl ObjectType for LinkObject {
             return;
         };
 
-        let matrix = link_matrix(doc, id);
+        let transform = link_transform(doc, id);
         let placements = app_link_placements(doc, id);
         if placements.is_empty() {
             // No element expansion: the link is a single transformed instance.
             clear_elements(doc, id);
-            match transformed(&source, &matrix) {
+            match transformed(&source, &transform) {
                 Some(shape) => write_shape(doc, id, Some(shape)),
                 None => doc.mark_invalid(id),
             }
             return;
         }
 
-        match sync_elements(doc, id, &placements, None, &matrix) {
+        match sync_elements(doc, id, &placements, None, &transform) {
             Ok(true) => {
                 // The generated children carry the geometry while expanded.
                 write_shape(doc, id, None);
@@ -532,8 +626,8 @@ impl ObjectType for LinkObject {
                 // Collapsed: one compound of every transformed instance.
                 let mut shapes = Vec::with_capacity(placements.len());
                 for placement in &placements {
-                    let element_matrix = matrix.mul(&placement.to_matrix());
-                    match transformed(&source, &element_matrix) {
+                    let element = transform.then(&placement.to_matrix());
+                    match transformed(&source, &element) {
                         Some(shape) => shapes.push(shape),
                         None => {
                             doc.mark_invalid(id);
@@ -587,10 +681,74 @@ impl ObjectType for LinkElementObject {
             write_shape(doc, id, None);
             return;
         };
-        let matrix = link_matrix(doc, id);
-        match transformed(&source, &matrix) {
+        let transform = link_transform(doc, id);
+        match transformed(&source, &transform) {
             Some(shape) => write_shape(doc, id, Some(shape)),
             None => doc.mark_invalid(id),
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// The link containers
+// ---------------------------------------------------------------------------
+
+/// `App::LinkGroup` / `App::LinkList`: a link to many objects.
+///
+/// Upstream marks these with `isLinkGroup()` and lets `ElementList` hold the
+/// actual grouped objects, not generated `App::LinkElement` children. That is the
+/// model here: `ElementList` is the resolved `Group` membership, `ElementCount`
+/// its size, and `Shape` the compound of the members transformed by the
+/// container's own link transform. `ShowElement` therefore has no effect on a
+/// container (there are no generated children to show or hide).
+///
+/// `LinkedObject` remains the ordinary base link property; when it is empty,
+/// `getLinkedObject` reports `None` exactly as it does for an empty `App::Link`.
+struct LinkContainerObject;
+
+impl ObjectType for LinkContainerObject {
+    fn default_properties(&self) -> Vec<(String, Property, u32)> {
+        container_properties()
+    }
+
+    fn execute(&self, doc: &mut Document, id: ObjectId) {
+        let members: Vec<String> = match property(doc, id, "Group") {
+            Some(Property::LinkList(names)) => names
+                .iter()
+                .filter(|name| doc.get_by_name(name).is_some())
+                .cloned()
+                .collect(),
+            _ => Vec::new(),
+        };
+        doc.set_property_raw(
+            id,
+            "ElementCount",
+            Property::Integer(members.len() as i64),
+        );
+        doc.set_property_raw(id, "ElementList", Property::LinkList(members.clone()));
+        doc.set_property_raw(id, "PlacementList", Property::PlacementList(Vec::new()));
+
+        let transform = link_transform(doc, id);
+        let mut shapes = Vec::with_capacity(members.len());
+        for name in &members {
+            let Some(source) = linked_shape(doc, name) else {
+                continue;
+            };
+            match transformed(&source, &transform) {
+                Some(shape) => shapes.push(shape),
+                None => {
+                    doc.mark_invalid(id);
+                    return;
+                }
+            }
+        }
+        if shapes.is_empty() {
+            write_shape(doc, id, None);
+            return;
+        }
+        match ferrocad_part::backend().make_compound(&shapes) {
+            Ok(compound) => write_shape(doc, id, Some(compound)),
+            Err(_) => doc.mark_invalid(id),
         }
     }
 }
@@ -619,6 +777,25 @@ mod tests {
             "Shape",
         ] {
             assert!(names.contains(&expected), "missing {expected}");
+        }
+    }
+
+    #[test]
+    fn container_properties_add_group_to_the_link_base() {
+        let names: Vec<String> = container_properties()
+            .into_iter()
+            .map(|(name, _, _)| name)
+            .collect();
+        for expected in [
+            "Group",
+            "LinkedObject",
+            "Placement",
+            "ElementCount",
+            "PlacementList",
+            "ElementList",
+            "Shape",
+        ] {
+            assert!(names.iter().any(|name| name == expected), "missing {expected}");
         }
     }
 

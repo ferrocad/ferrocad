@@ -921,6 +921,21 @@ pub trait GeometryBackend: Send + Sync {
         Err(unsupported("transform"))
     }
 
+    /// Apply a general (affine) 4x4 matrix to `shape`.
+    ///
+    /// [`transform`](GeometryBackend::transform) installs a `gp_Trsf`, which is a
+    /// similarity and therefore cannot express shear or a non-uniform scale. A
+    /// caller that needs those (an `App::Link` with a non-uniform
+    /// `ScaleVector`) uses this operation instead, which OCCT implements with
+    /// `BRepBuilderAPI_GTransform`. The matrix's last row must be `(0, 0, 0, 1)`.
+    ///
+    /// The default reports the operation as unsupported, so a backend that only
+    /// has the similarity path keeps compiling and fails explicitly instead of
+    /// silently dropping the non-uniform part of the transform.
+    fn general_transform(&self, _shape: &Shape, _matrix: &Matrix4) -> Result<Shape, GeomError> {
+        Err(unsupported("general_transform"))
+    }
+
     /// Resolve a stable sub-element name against `shape`, if it still exists.
     fn resolve(&self, shape: &Shape, name: &str) -> Option<Shape>;
 

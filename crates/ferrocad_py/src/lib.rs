@@ -1555,10 +1555,10 @@ impl PyDocument {
     // -- persistence ---------------------------------------------------------
     /// Save under `path`, selecting the serializer from the suffix.
     ///
-    /// `.ferrocad` writes native JSON; `.FCStd` currently writes the native bytes
-    /// as a placeholder (`FcstdWriter::JsonPlaceholder`) until the FCStd writer
-    /// lands. The suffix, not the content, decides — and an unknown suffix is an
-    /// error. Both the path and the format are recorded for later `save()` calls.
+    /// `.ferrocad` writes native JSON; `.FCStd` writes the upstream ZIP container
+    /// (`Document.xml`, `GuiDocument.xml`, `.brp` members). The suffix, not the
+    /// content, decides — and an unknown suffix is an error. Both the path and the
+    /// format are recorded for later `save()` calls.
     fn saveAs(slf: &Bound<'_, Self>, path: &str) -> PyResult<()> {
         let format = DocumentFormat::from_path(path).map_err(|e| PyValueError::new_err(e.to_string()))?;
         let py = slf.py();
@@ -1992,14 +1992,28 @@ fn element_index(name: &str) -> i64 {
     }
 }
 
-/// The generated element child of `id` addressed by `segment`.
+/// Link containers (upstream `isLinkGroup()`): their `ElementList` is their
+/// `Group` membership rather than generated `_ElementN` children.
+fn is_link_group_type(type_id: &str) -> bool {
+    matches!(type_id, "App::LinkGroup" | "App::LinkList")
+}
+
+/// The element child of `id` addressed by `segment`.
 ///
-/// `ElementList` holds ordinary document-object names in element order; an
-/// index spelling maps through that order, while a full name is matched
-/// directly. Elements generated in L3 are real objects with their own
-/// `Placement` and `Shape`, so no special handling is needed here.
+/// `ElementList` holds ordinary document-object names in element order; a full
+/// name is matched directly, while an index spelling maps through that order.
+///
+/// The ordinal convention differs by type, matching the two upstream shapes of
+/// `ElementList`:
+///
+/// - a **link group** stores its members directly, so `Element1` is the first
+///   member (1-based, as `getElementIndex` reports it);
+/// - a generated element set (an `App::Link` or `Part::LinkArray*`) names its
+///   children `_Element0`, `_Element1`, …, and `ElementN` addresses the child
+///   whose ordinal is `N` (so `Element0` is also addressable).
 fn element_child(doc: &CoreDocument, id: ObjectId, segment: &str) -> Option<ObjectId> {
-    let names = match doc.object(id)?.properties.get("ElementList") {
+    let object = doc.object(id)?;
+    let names = match object.properties.get("ElementList") {
         Some(Property::LinkList(names)) => names,
         _ => return None,
     };
@@ -2010,7 +2024,12 @@ fn element_child(doc: &CoreDocument, id: ObjectId, segment: &str) -> Option<Obje
     if index < 0 {
         return None;
     }
-    doc.get_by_name(names.get(index as usize)?)
+    let position = if is_link_group_type(&object.type_id) {
+        usize::try_from(index.checked_sub(1)?).ok()?
+    } else {
+        index as usize
+    };
+    doc.get_by_name(names.get(position)?)
 }
 
 /// Whether `id` owns a non-empty `ElementList`.
@@ -2602,8 +2621,12 @@ impl PyDocumentObject {
         drop(other_ref);
 
         let mut doc = self.inner.lock().unwrap();
-        if !doc.is_group_like(self.id) {
-            let type_id = doc.object(self.id).map(|o| o.type_id.clone()).unwrap_or_default();
+        let type_id = doc
+            .object(self.id)
+            .map(|o| o.type_id.clone())
+            .unwrap_or_default();
+        let link_group = is_link_group_type(&type_id);
+        if !doc.is_group_like(self.id) && !link_group {
             return Err(PyAttributeError::new_err(format!(
                 "'{type_id}' is not a group; add a group extension first"
             )));
@@ -2620,7 +2643,12 @@ impl PyDocumentObject {
             links.push(other_name);
         }
         doc.set_property(self.id, "Group", Property::LinkList(links))
-            .map_err(PyValueError::new_err)
+            .map_err(PyValueError::new_err)?;
+        if link_group {
+            // See `set_group`: a container's output depends on its members' shapes.
+            doc.add_dependency(self.id, other_id);
+        }
+        Ok(())
     }
 
     fn hasObject(&self, other: &Bound<'_, PyAny>) -> PyResult<bool> {
@@ -3206,8 +3234,28 @@ impl PyDocumentObject {
                 doc.unlink_from_groups(member);
             }
         }
+        let type_id = doc
+            .object(self.id)
+            .map(|object| object.type_id.clone())
+            .unwrap_or_default();
+        let members: Vec<ObjectId> = names
+            .iter()
+            .filter_map(|name| doc.get_by_name(name))
+            .collect();
         doc.set_property(self.id, "Group", Property::LinkList(names))
-            .map_err(PyValueError::new_err)
+            .map_err(PyValueError::new_err)?;
+        // A group's membership does not order recompute (core deliberately skips
+        // `Group`), but a link container derives its *shape* from its members, so
+        // it must run after them. Record the edges only for the containers, which
+        // is the same distinction as upstream's `isLinkGroup()`.
+        if is_link_group_type(&type_id) {
+            for member in members {
+                if member != self.id {
+                    doc.add_dependency(self.id, member);
+                }
+            }
+        }
+        Ok(())
     }
 }
 

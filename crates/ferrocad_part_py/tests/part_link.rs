@@ -537,3 +537,229 @@ fn array_element_paths_reach_generated_children() {
         close_document(&ferrocad, "RustArrayElementsL3").expect("closeDocument");
     });
 }
+
+#[test]
+fn non_uniform_scale_vector_stretches_the_linked_shape() {
+    let _guard = TEST_LOCK.lock().unwrap_or_else(|error| error.into_inner());
+    boot();
+    Python::with_gil(|py| {
+        let _part = PyModule::import(py, "Part").expect("import Part");
+        let ferrocad = PyModule::import(py, "ferrocad").expect("import ferrocad");
+
+        let doc = new_document(&ferrocad, "RustLinkScaleVector").expect("newDocument");
+        let source = doc
+            .call_method1("addObject", ("Part::Box", "Source"))
+            .expect("Source box");
+        let link = doc
+            .call_method1("addObject", ("App::Link", "Link"))
+            .expect("App::Link");
+        link.setattr("LinkedObject", &source).expect("LinkedObject");
+        // Non-uniform: the general affine path, not the gp_Trsf similarity path.
+        link.setattr(
+            "ScaleVector",
+            vector(&ferrocad, 2.0, 1.0, 1.0).unwrap(),
+        )
+        .expect("ScaleVector");
+        doc.call_method0("recompute").expect("recompute");
+
+        let shape = link.getattr("Shape").expect("Link.Shape");
+        assert!(!shape.call_method0("isNull").unwrap().extract::<bool>().unwrap());
+        // Part::Box defaults to 10 x 10 x 10 at the origin.
+        assert!((bound(&shape, "XMin").unwrap()).abs() < 1e-6);
+        assert!((bound(&shape, "XMax").unwrap() - 20.0).abs() < 1e-6);
+        assert!((bound(&shape, "YMin").unwrap()).abs() < 1e-6);
+        assert!((bound(&shape, "YMax").unwrap() - 10.0).abs() < 1e-6);
+        assert!((bound(&shape, "ZMin").unwrap()).abs() < 1e-6);
+        assert!((bound(&shape, "ZMax").unwrap() - 10.0).abs() < 1e-6);
+
+        // `Scale` multiplies every component of the vector.
+        link.setattr("Scale", 0.5).expect("Scale");
+        doc.call_method0("recompute").expect("recompute");
+        let shape = link.getattr("Shape").expect("Link.Shape");
+        assert!((bound(&shape, "XMax").unwrap() - 10.0).abs() < 1e-6);
+        assert!((bound(&shape, "YMax").unwrap() - 5.0).abs() < 1e-6);
+
+        close_document(&ferrocad, "RustLinkScaleVector").expect("closeDocument");
+    });
+}
+
+#[test]
+fn link_group_expands_its_members() {
+    let _guard = TEST_LOCK.lock().unwrap_or_else(|error| error.into_inner());
+    boot();
+    Python::with_gil(|py| {
+        let _part = PyModule::import(py, "Part").expect("import Part");
+        let ferrocad = PyModule::import(py, "ferrocad").expect("import ferrocad");
+
+        let doc = new_document(&ferrocad, "RustLinkGroup").expect("newDocument");
+        let first = doc
+            .call_method1("addObject", ("Part::Box", "BoxA"))
+            .expect("BoxA");
+        let second = doc
+            .call_method1("addObject", ("Part::Box", "BoxB"))
+            .expect("BoxB");
+        let group = doc
+            .call_method1("addObject", ("App::LinkGroup", "Group"))
+            .expect("App::LinkGroup");
+        group
+            .setattr("Group", (&first, &second))
+            .expect("Group");
+        doc.call_method0("recompute").expect("recompute");
+
+        // A container's `ElementList` is its membership, not generated children.
+        assert_eq!(group.getattr("ElementCount").unwrap().extract::<i64>().unwrap(), 2);
+        let elements = group.getattr("ElementList").expect("ElementList");
+        assert_eq!(elements.len().unwrap(), 2);
+        assert_eq!(name_of(&elements.get_item(0).unwrap()).unwrap(), "BoxA");
+        assert_eq!(name_of(&elements.get_item(1).unwrap()).unwrap(), "BoxB");
+
+        // `ElementN` and the member's own name both resolve through the group.
+        for (subname, expected) in [
+            ("Element1", "BoxA"),
+            ("Element2", "BoxB"),
+            ("Group.Element2", "BoxB"),
+            ("BoxA", "BoxA"),
+        ] {
+            let resolved = group.call_method1("getSubObject", (subname, 1)).unwrap();
+            assert_eq!(name_of(&resolved).unwrap(), expected, "{subname}");
+        }
+        // Out of range is missing, and the group still writes a compound shape.
+        assert!(group
+            .call_method1("getSubObject", ("Element3", 1))
+            .unwrap()
+            .is_none());
+        let shape = group.getattr("Shape").expect("Group.Shape");
+        assert!(!shape.call_method0("isNull").unwrap().extract::<bool>().unwrap());
+
+        // `App::LinkList` follows the same list: Element1 is its first member.
+        let third = doc
+            .call_method1("addObject", ("Part::Box", "BoxC"))
+            .expect("BoxC");
+        let fourth = doc
+            .call_method1("addObject", ("Part::Box", "BoxD"))
+            .expect("BoxD");
+        let list = doc
+            .call_method1("addObject", ("App::LinkList", "List"))
+            .expect("App::LinkList");
+        list.setattr("Group", (&third, &fourth)).expect("List.Group");
+        doc.call_method0("recompute").expect("recompute");
+        assert_eq!(
+            name_of(&list.call_method1("getSubObject", ("Element1", 1)).unwrap()).unwrap(),
+            "BoxC"
+        );
+        assert_eq!(
+            name_of(&list.call_method1("getSubObject", ("Element2", 1)).unwrap()).unwrap(),
+            "BoxD"
+        );
+
+        close_document(&ferrocad, "RustLinkGroup").expect("closeDocument");
+    });
+}
+
+#[test]
+fn is_link_and_get_linked_object_on_the_containers() {
+    let _guard = TEST_LOCK.lock().unwrap_or_else(|error| error.into_inner());
+    boot();
+    Python::with_gil(|py| {
+        let _part = PyModule::import(py, "Part").expect("import Part");
+        let ferrocad = PyModule::import(py, "ferrocad").expect("import ferrocad");
+
+        let doc = new_document(&ferrocad, "RustLinkContainers").expect("newDocument");
+        let source = doc
+            .call_method1("addObject", ("Part::Box", "Box"))
+            .expect("Box");
+        let group = doc
+            .call_method1("addObject", ("App::LinkGroup", "Group"))
+            .expect("App::LinkGroup");
+        let list = doc
+            .call_method1("addObject", ("App::LinkList", "List"))
+            .expect("App::LinkList");
+
+        for container in [&group, &list] {
+            assert!(container
+                .call_method0("isLink")
+                .unwrap()
+                .extract::<bool>()
+                .unwrap());
+            // With no `LinkedObject`, a container is an empty link, exactly like
+            // an `App::Link` with no target.
+            assert!(container.call_method0("getLinkedObject").unwrap().is_none());
+            assert!(container
+                .call_method1("getLinkedObject", (false,))
+                .unwrap()
+                .is_none());
+
+            container
+                .setattr("LinkedObject", &source)
+                .expect("LinkedObject");
+            doc.call_method0("recompute").expect("recompute");
+            assert_eq!(
+                name_of(&container.call_method0("getLinkedObject").unwrap()).unwrap(),
+                "Box"
+            );
+            assert_eq!(
+                name_of(&container.call_method1("getLinkedObject", (false,)).unwrap())
+                    .unwrap(),
+                "Box"
+            );
+        }
+
+        close_document(&ferrocad, "RustLinkContainers").expect("closeDocument");
+    });
+}
+
+#[test]
+fn link_mode_and_copy_on_change_are_stored_but_inert() {
+    let _guard = TEST_LOCK.lock().unwrap_or_else(|error| error.into_inner());
+    boot();
+    Python::with_gil(|py| {
+        let _part = PyModule::import(py, "Part").expect("import Part");
+        let ferrocad = PyModule::import(py, "ferrocad").expect("import ferrocad");
+
+        let doc = new_document(&ferrocad, "RustLinkModes").expect("newDocument");
+        let source = doc
+            .call_method1("addObject", ("Part::Box", "Source"))
+            .expect("Source box");
+        let link = doc
+            .call_method1("addObject", ("App::Link", "Link"))
+            .expect("App::Link");
+        link.setattr("LinkedObject", &source).expect("LinkedObject");
+        doc.call_method0("recompute").expect("recompute");
+
+        // All three LinkMode values are accepted and stored, but none changes
+        // the geometry: a FerroCAD link is always a name reference (KeepLink),
+        // and AutoDelete/Translate need lifecycle or copy machinery we do not have.
+        for mode in ["AutoDelete", "KeepLink", "Translate"] {
+            link.setattr("LinkMode", mode).expect("LinkMode");
+            doc.call_method0("recompute").expect("recompute");
+            assert_eq!(
+                link.getattr("LinkMode")
+                    .unwrap()
+                    .extract::<String>()
+                    .unwrap(),
+                mode
+            );
+            let shape = link.getattr("Shape").expect("Link.Shape");
+            assert!((bound(&shape, "XMax").unwrap() - 10.0).abs() < 1e-6, "{mode}");
+        }
+
+        // Copy-on-change is inert for the same reason: there is no clone/copy
+        // facility, so every value is stored and none is honoured.
+        for mode in ["Disabled", "Enabled", "Owned", "Tracking"] {
+            link.setattr("LinkCopyOnChange", mode)
+                .expect("LinkCopyOnChange");
+            doc.call_method0("recompute").expect("recompute");
+            assert_eq!(
+                link.getattr("LinkCopyOnChange")
+                    .unwrap()
+                    .extract::<String>()
+                    .unwrap(),
+                mode
+            );
+            let shape = link.getattr("Shape").expect("Link.Shape");
+            assert!((bound(&shape, "XMax").unwrap() - 10.0).abs() < 1e-6, "{mode}");
+        }
+
+        close_document(&ferrocad, "RustLinkModes").expect("closeDocument");
+    });
+}

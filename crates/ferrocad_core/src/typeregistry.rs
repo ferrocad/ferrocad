@@ -53,6 +53,78 @@ pub fn property_meta(type_id: &str, name: &str) -> (&'static str, &'static str) 
     (if in_group { GROUP } else { "" }, doc)
 }
 
+/// The geometry-free `App::Link` property base: every link property except the
+/// shape-valued `Shape`, which only the Part composition root can construct.
+///
+/// `LinkMode` is stored for upstream compatibility. In this model a link is
+/// always a name reference (`LinkedObject`), which is the `KeepLink` behaviour:
+/// a missing target leaves a valid but empty link. `AutoDelete` (a delete
+/// cascade) and `Translate` (a standalone copy) need a document lifecycle or
+/// copy facility the tree does not have, so all three values are accepted and
+/// behave the same. `LinkCopyOnChange` is inert for the same reason; `execute`
+/// never reads it.
+fn link_base_defaults() -> Vec<(&'static str, Property, u32)> {
+    use prop_status::{HIDDEN, NONE, NORECOMPUTE, OUTPUT, READONLY};
+    vec![
+        (
+            "Placement",
+            Property::Placement(Placement::identity()),
+            NONE,
+        ),
+        (
+            "LinkPlacement",
+            Property::Placement(Placement::identity()),
+            NONE,
+        ),
+        ("Scale", Property::Float(1.0), NONE),
+        (
+            "ScaleVector",
+            Property::Vector(Vector3::new(1.0, 1.0, 1.0)),
+            NONE,
+        ),
+        ("LinkTransform", Property::Bool(false), NONE),
+        (
+            "LinkMode",
+            Property::Enumeration(
+                ["AutoDelete", "KeepLink", "Translate"]
+                    .iter()
+                    .map(|s| s.to_string())
+                    .collect(),
+                0,
+            ),
+            NONE,
+        ),
+        (
+            "LinkCopyOnChange",
+            Property::Enumeration(
+                ["Disabled", "Enabled", "Owned", "Tracking"]
+                    .iter()
+                    .map(|s| s.to_string())
+                    .collect(),
+                0,
+            ),
+            NONE,
+        ),
+        ("LinkedObject", Property::Link(String::new()), NONE),
+        ("ShowElement", Property::Bool(true), NONE),
+        (
+            "ElementCount",
+            Property::Integer(0),
+            HIDDEN | OUTPUT | NORECOMPUTE | READONLY,
+        ),
+        (
+            "PlacementList",
+            Property::PlacementList(Vec::new()),
+            HIDDEN | OUTPUT | NORECOMPUTE | READONLY,
+        ),
+        (
+            "ElementList",
+            Property::LinkList(Vec::new()),
+            HIDDEN | OUTPUT | NORECOMPUTE | READONLY,
+        ),
+    ]
+}
+
 /// `(name, default, status)` for each of the type's properties.
 pub fn default_properties(type_id: &str) -> Vec<(&'static str, Property, u32)> {
     use prop_status::{HIDDEN, NONE, NORECOMPUTE, OUTPUT, READONLY, TRANSIENT};
@@ -158,66 +230,17 @@ pub fn default_properties(type_id: &str) -> Vec<(&'static str, Property, u32)> {
         // composition root registers an `ObjectType` for the same type id with the
         // full set (including the shape-valued `Shape`), which takes precedence;
         // this table is what a document sees when `Part` was never imported.
-        // `LinkMode`/`LinkCopyOnChange` values follow upstream's enumerations but
-        // are not interpreted yet (L4).
-        "App::Link" => vec![
-            (
-                "Placement",
-                Property::Placement(Placement::identity()),
-                NONE,
-            ),
-            (
-                "LinkPlacement",
-                Property::Placement(Placement::identity()),
-                NONE,
-            ),
-            ("Scale", Property::Float(1.0), NONE),
-            (
-                "ScaleVector",
-                Property::Vector(Vector3::new(1.0, 1.0, 1.0)),
-                NONE,
-            ),
-            ("LinkTransform", Property::Bool(false), NONE),
-            (
-                "LinkMode",
-                Property::Enumeration(
-                    ["AutoDelete", "KeepLink", "Translate"]
-                        .iter()
-                        .map(|s| s.to_string())
-                        .collect(),
-                    0,
-                ),
-                NONE,
-            ),
-            (
-                "LinkCopyOnChange",
-                Property::Enumeration(
-                    ["Disabled", "Enabled", "Owned", "Tracking"]
-                        .iter()
-                        .map(|s| s.to_string())
-                        .collect(),
-                    0,
-                ),
-                NONE,
-            ),
-            ("LinkedObject", Property::Link(String::new()), NONE),
-            ("ShowElement", Property::Bool(true), NONE),
-            (
-                "ElementCount",
-                Property::Integer(0),
-                HIDDEN | OUTPUT | NORECOMPUTE | READONLY,
-            ),
-            (
-                "PlacementList",
-                Property::PlacementList(Vec::new()),
-                HIDDEN | OUTPUT | NORECOMPUTE | READONLY,
-            ),
-            (
-                "ElementList",
-                Property::LinkList(Vec::new()),
-                HIDDEN | OUTPUT | NORECOMPUTE | READONLY,
-            ),
-        ],
+        "App::Link" => link_base_defaults(),
+        // Link containers (L4). Their `ElementList` is their `Group` membership,
+        // so `Group.Element1` resolves to the first member object (upstream's
+        // `isLinkGroup()` behaviour); `App::LinkList` follows the same list. Core
+        // cannot construct a shape, so `Shape` is added by the Part composition
+        // root, exactly as for `App::Link`.
+        "App::LinkGroup" | "App::LinkList" => {
+            let mut properties = link_base_defaults();
+            properties.push(("Group", Property::LinkList(vec![]), NONE));
+            properties
+        }
         // The geometry-free half of the generated element type. The `Part`
         // composition root registers an `ObjectType` for the same type id with the
         // full set (including the shape-valued `Shape`). New elements are created

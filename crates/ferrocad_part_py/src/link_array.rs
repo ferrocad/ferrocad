@@ -271,7 +271,8 @@ fn finish_array(
     element_flags: Option<&[bool]>,
 ) {
     let matrix = Matrix4::identity();
-    match crate::link::sync_elements(doc, id, result, element_flags, &matrix) {
+    let transform = crate::link::LinkTransform::identity();
+    match crate::link::sync_elements(doc, id, result, element_flags, &transform) {
         Ok(true) => crate::link::write_shape(doc, id, None),
         Ok(false) => {
             let shape = collapsed_shape(doc, id, result, &matrix);

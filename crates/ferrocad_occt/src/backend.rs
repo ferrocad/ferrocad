@@ -1670,6 +1670,35 @@ impl GeometryBackend for OcctBackend {
         Ok(out)
     }
 
+    fn general_transform(&self, shape: &Shape, matrix: &Matrix4) -> Result<Shape, GeomError> {
+        let occt = downcast(shape)?;
+        let guard = occt.borrow();
+        let inner = guard
+            .as_ref()
+            .ok_or(OcctError::InvalidInput { what: "null shape" })?;
+        // `gp_GTrsf` holds only the affine 3x4 block; reject a perspective
+        // matrix instead of silently dropping its last row.
+        let m = &matrix.m;
+        if m[12].abs() > 1e-12
+            || m[13].abs() > 1e-12
+            || m[14].abs() > 1e-12
+            || (m[15] - 1.0).abs() > 1e-12
+        {
+            return Err(OcctError::InvalidInput {
+                what: "matrix is not affine",
+            }
+            .into());
+        }
+        let result = bridge::fc_gtransform(inner, m);
+        let Some(result) = result.as_ref() else {
+            return Err(OcctError::NotDone {
+                operation: "general_transform",
+            }
+            .into());
+        };
+        Ok(erase(result))
+    }
+
     fn resolve(&self, shape: &Shape, name: &str) -> Option<Shape> {
         // Positional fallback only: `FaceN`/`EdgeN` -> the N-th sub-shape. Stable
         // *named* resolution needs the lineage mapper (a later slice); this mirrors

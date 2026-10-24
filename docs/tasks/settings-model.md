@@ -1,6 +1,6 @@
 # Task — provider-advertised settings and the `Settings` tree
 
-Status: task (2026-10-22). P0.7 in [`../TODO-23-10-2026.md`](../TODO-23-10-2026.md).
+Status: task (2026-10-22). P0.7 in [`../TODO-24-10-2026.md`](../TODO-24-10-2026.md).
 Companion to [`toolbar-chrome.md`](toolbar-chrome.md) §6,
 [`../workbenches/mod-providers.md`](../workbenches/mod-providers.md),
 [`../architecture/property-types.md`](../architecture/property-types.md) and

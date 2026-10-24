@@ -26,15 +26,18 @@ on the first line, so the folder only has to answer "where do I look?".
 Four files stay at the root: this index, the [crate map](architecture.md) (the
 cross-cutting reference every section links back to), the
 [documentation decision](documentation.md), and the active backlog
-([`TODO-23-10-2026.md`](TODO-23-10-2026.md)).
+([`TODO-24-10-2026.md`](TODO-24-10-2026.md)).
 
 ## Start here
 
 - [architecture.md](architecture.md) — crates, the call paths, the dependency rules
   between them, and the C-ABI rationale.
-- [TODO-23-10-2026.md](TODO-23-10-2026.md) — the active backlog: the format
-  serializer split, the lineage layer (TNP), Links, the remaining Part conformance
-  gaps, Qt reduction, and the open decisions.
+- [TODO-24-10-2026.md](TODO-24-10-2026.md) — the active backlog: the element-map
+  format contract, the remaining OCCT seam, Python feature proxies, Qt reduction, and
+  the open decisions.
+- [record/TODO-23-10-2026.md](record/TODO-23-10-2026.md) — the closed 2026-10-23
+  backlog: the Part conformance push, the serializer split, the lineage layer, Links
+  and the Qt-reduction slices, with the measurements at close.
 - [documentation.md](documentation.md) — how the project is documented (Diátaxis,
   rustdoc-first, and this layout).
 
@@ -200,6 +203,9 @@ rather than restating it.
 - [record/TODO-22-10-2026.md](record/TODO-22-10-2026.md) — closed record: the Part
   conformance push, the headless `ViewObject`, the `.FCStd` reader, the link arrays,
   the Ctrl+K palette, and the measurements at close.
+- [record/TODO-23-10-2026.md](record/TODO-23-10-2026.md) — closed record: the format
+  serializers (F1–F8), the lineage layer (S1–S6c), Links L0–L5, the Qt-reduction
+  slices (Q0–Q3b), and the Part completion (529 passed, 0 errored) at close.
 - [record/incident-2026-10-21-session-crash.md](record/incident-2026-10-21-session-crash.md)
   — post-mortem of the lost GNOME session: `systemd-oomd` killed `gnome-shell`, not the
   GPU or Wayland; the evidence, the timeline, and the prevention notes.
@@ -213,6 +219,12 @@ rather than restating it.
   `--draft` conformance group.
 - [tasks/p2-architecture.md](tasks/p2-architecture.md) — `ferrocad_curves`, the
   Part/Draft seam, the Qt split plane, and the SimpleCAD order.
+- [tasks/part-feature-proxies.md](tasks/part-feature-proxies.md) — `Part::FeaturePython`
+  and `Part::Part2DObjectPython`: the proxy `execute`/`onChanged` contract, attachment,
+  persistence, and the Draft M2 acceptance slices.
+- [tasks/element-map-policy.md](tasks/element-map-policy.md) — why the compound cuts
+  needed the compound-BOP policy plus the naming cascade, and what remains before
+  `ElementMapVersion` can be exposed.
 - [tasks/format-serializers.md](tasks/format-serializers.md) — split persistence into a
   native `.ferrocad` JSON serializer and an upstream `.FCStd` import/export backend, so
   conformance tracking is independent of our own format.

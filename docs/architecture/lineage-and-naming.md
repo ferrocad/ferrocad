@@ -84,7 +84,7 @@ would activate them.
 
 So the open item is no longer the cut policy: it is **enabling the element-map version** once
 all the guarded sizes match. See [`element-map-policy.md`](../tasks/element-map-policy.md) and
-[`../TODO-23-10-2026.md`](../TODO-23-10-2026.md) §P1.
+[`../TODO-24-10-2026.md`](../TODO-24-10-2026.md) §P1.
 
 ---
 

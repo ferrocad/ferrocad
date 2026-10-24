@@ -66,7 +66,8 @@ there (reference is the sibling `docs/python-api/`). The four together are what
 ## Slice documentation
 
 The per-slice record lives in [`milestones.md`](record/milestones.md) (M0–M4 slices 1–16, the
-FerroCAD restructure, and MVP slices A1/A2/B1). The `ferrocad_core` crate page carries
+FerroCAD restructure, MVP slices A1/A2/B1, and §5 for the 2026-10-23/24 Part, lineage
+and Qt round). The `ferrocad_core` crate page carries
 a short **Implemented capabilities** summary so the same history is visible on docs.rs.
 
 ## Repository layout

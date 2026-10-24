@@ -725,6 +725,13 @@ obvious GUI import (a heuristic; see §10).
 The slice totals above are the non-GUI files that map to the Part/Draft seam, not
 the whole suite.
 
+**As built (2026-10-24).** M0 and M1 landed: `import Draft` is headless and the
+`ferrocad_curves`/`Part` curve layer is real, so the Draft suite runs (10 passed,
+1 failed, 1 load error at upstream `33adf61`). M2 is blocked only on the Python
+feature proxies (`Part::FeaturePython`/`Part2DObjectPython`), specified in
+[`../tasks/part-feature-proxies.md`](../tasks/part-feature-proxies.md); the Part
+side they build on now passes 529 upstream tests with no errors. M3–M5 are untouched.
+
 What M0 does **not** need:
 
 - OCCT. `import Draft` touches no `Part` attribute at import time (§2.2).

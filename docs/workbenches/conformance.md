@@ -1,6 +1,6 @@
 # Conformance: running the upstream suite
 
-Status: reference (2026-10-20). The harness is milestone **M3d**
+Status: reference (2026-10-20; baselines updated 2026-10-24). The harness is milestone **M3d**
 ([`milestones.md`](../record/milestones.md)); this note is the setup and runbook for it.
 
 The conformance harness answers one question: **how much of FreeCAD's own headless

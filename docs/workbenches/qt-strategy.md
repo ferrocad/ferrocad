@@ -1,6 +1,12 @@
 # Qt strategy: running upstream workbench GUIs
 
-Status: design (2026-10-21).
+Status: design (2026-10-21; Q0–Q3b landed 2026-10-24).
+
+**As built (2026-10-24).** Q0a–Q0d, Q1, Q2a/Q2b, Q3a and Q3b landed: Qt is out of the
+headless paths, the `.ui` reader and `PySideUic` proxies exist, and the gpui shell
+hosts a rendered `FormDialog` with accept/reject. Q4 (Draft tools and native spatial
+reference) and Q5 (the remaining forms, editing/commit and the async modal) are open;
+the plan below is unchanged.
 
 Choose how upstream PySide workbench GUIs — Draft first — reach FerroCAD's gpui shell.
 

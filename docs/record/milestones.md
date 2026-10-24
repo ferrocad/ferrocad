@@ -1345,3 +1345,62 @@ the CPU pick. Verified: inventor/wgpu/gpui tests green (incl. a headless shell
 paint that attaches the viewport when a GPU is present). Next: layout-driven
 sizing, overlays/multi-viewport (NaviCube), the g-buffer pick, and growing the
 facade.
+
+---
+
+## 5. Where the project stands (2026-10-24)
+
+Status: record (2026-10-24). Measurements from the tree at the close of the
+2026-10-23 backlog; the open work is in [`../TODO-24-10-2026.md`](../TODO-24-10-2026.md).
+
+Three days of work changed what the project is, not just what it passes. At the start
+of the 2026-10-23 backlog `Part` was a crate with a few primitives; by the close it is
+a workbench whose upstream test suite loads completely and mostly passes.
+
+| Surface | Then | Now (2026-10-24) |
+| --- | --- | --- |
+| Upstream Part suite | 2 passed, 1 failed, 89 errored, 4 files failed to load | **529 passed, 2 failed, 0 errored, 0 load failures** |
+| Upstream Draft suite | no group | 10 passed, 1 failed, 1 load error (upstream Draft, not a shim) |
+| Python facade | 377 passed | **444 passed, 17 skipped** (134 subtests) |
+| Part module | `makeBox`, a shape handle | primitives, booleans, dress-ups, links and arrays, conics, splines, NURBS conversion, `ShapeFix`, `ChFi2d`, `Sketcher`, feature objects |
+| Document format | one JSON blob | native `.ferrocad` + real `.FCStd` ZIP, with an additive lineage sidecar |
+| Naming | positional strings | lineage layer with stored maps; the compound cuts reproduce upstream's **20/47** reverse map |
+
+### Three things that mattered more than expected
+
+1. **The conformance harness is the design tool, not the scoreboard.** Every semantic
+   correction in the round — the edge-curve basis, the live `Placement`, the
+   cyclic-expression wording, the compound-cut policy — was found by an upstream test
+   that had been *skipped* or *unloaded* a day earlier. Loading the tests was worth more
+   than adding API.
+2. **Separating naming from geometry survived contact.** The lineage layer is
+   payload-generic, the kernel reports provenance and nothing else, and Part stores and
+   applies policy. That is why the 20/47 result was a naming change rather than a
+   geometry rewrite, and why the `.FCStd` sidecar could be added without touching the
+   native format.
+3. **Honest approximations beat silent ones.** Helices are interpolating B-splines,
+   threads are helical pipes, and tubes accept only analytic spines — each says so at
+   the call site and in this record. The alternative (a shape that looks right and is
+   subtly wrong) would have poisoned the conformance signal.
+
+### Two asymmetries that now define the next round
+
+1. **The format contract is unfinished.** The maps are real and persisted, but their
+   *version* is not exposed because the other guarded sizes (52/58/26/10/9/24) are not
+   reproduced. Until then the only remaining Part failure is a test that branches on
+   that version.
+2. **The Python feature-proxy layer does not exist.** `Part` works as a library;
+   Draft and SimpleCAD need objects whose `execute` is a Python callback. That is the
+   gate between the two halves of the project, and it is why the next backlog puts
+   `Part::FeaturePython` ahead of more kernel breadth.
+
+### What is deliberately not claimed
+
+- **Drop-in FreeCAD compatibility.** 529 upstream Part tests passing is a strong,
+  measured subset, not the whole workbench: PartDesign, Sketcher's solver, FEM, CAM and
+  the GUI workbenches are out of scope here.
+- **A finished `.FCStd` writer.** It round-trips our documents and is read by our
+  reader; an upstream-FreeCAD open check is still a follow-up.
+- **Element-map parity.** The two compound cuts match exactly; the other guarded shapes
+  do not yet.
+- **Any performance claim.** The suite measures behaviour, not speed.

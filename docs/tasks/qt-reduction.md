@@ -2,7 +2,7 @@
 
 Status: task (2026-10-23). Q0a, Q0b, Q0d, Q1, Q2a and Q2b landed 2026-10-23; Q3–Q5
 remain. Backlog entry **P2.3** in
-[`TODO-23-10-2026.md`](../TODO-23-10-2026.md). Companion to
+[`TODO-24-10-2026.md`](../TODO-24-10-2026.md). Companion to
 [`qt-strategy.md`](../workbenches/qt-strategy.md) (§2–§7 remain the design; this is
 the execution plan), [`python-ui-research.md`](../interaction/python-ui-research.md),
 [`actions-and-tools.md`](../workbenches/actions-and-tools.md),

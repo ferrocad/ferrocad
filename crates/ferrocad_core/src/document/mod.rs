@@ -688,7 +688,9 @@ impl Document {
         }
         graph.insert(target.clone(), new_deps);
         if graph_reaches(&graph, &target, &target) {
-            return Err(format!("cyclic dependency detected for '{prop}'"));
+            // Upstream `PropertyExpressionEngine` wording, keyed by the path as the
+            // caller wrote it (so a self-relative path keeps its leading '.').
+            return Err(format!("{prop} reference creates a cyclic dependency."));
         }
 
         let old_source = self
@@ -1311,6 +1313,9 @@ fn resolve_path(obj: &DocumentObject, path: &str) -> Option<f64> {
 /// `PropertyLength` stays a length with its unit). Deeper paths descend into
 /// `Placement`/`Rotation`/`Vector` sub-objects.
 fn assign_path(obj: &mut DocumentObject, path: &str, value: f64) -> Result<(), String> {
+    // A leading '.' is a self-relative path (`.Placement.Base.x`); it names this
+    // object's own property, so the marker is not part of the path itself.
+    let path = path.trim_start_matches('.');
     let segs: Vec<&str> = path.split('.').collect();
     let (root, rest) = segs.split_first().ok_or_else(|| "empty path".to_string())?;
     if rest.is_empty() {

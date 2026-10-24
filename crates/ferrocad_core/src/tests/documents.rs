@@ -143,6 +143,65 @@ fn nested_path_expressions_read_and_write() {
 }
 
 #[test]
+fn cyclic_expression_uses_upstream_wording() {
+    let mut doc = Document::new();
+    let cube = doc.add_object("Cube", "App::FeatureTest");
+    doc.set_property(cube, "Width", Property::Float(10.0)).unwrap();
+    doc.set_property(cube, "Length", Property::Float(10.0)).unwrap();
+
+    doc.set_expression(cube, "Length", "Width + 10mm").unwrap();
+    let err = doc.set_expression(cube, "Width", "Length + 10mm").unwrap_err();
+    assert_eq!(err, "Width reference creates a cyclic dependency.");
+    // The rejected expression is not installed.
+    assert_eq!(
+        doc.object(cube).unwrap().expressions.get("Width").map(String::as_str),
+        None
+    );
+
+    // A self-reference is a cycle as well (upstream `Width = Width + 1`).
+    let err = doc.set_expression(cube, "Height", "Height + 1").unwrap_err();
+    assert_eq!(err, "Height reference creates a cyclic dependency.");
+
+    // A binding failure that is not a cycle keeps its own (non-cycle) message,
+    // which the Python layer maps to `ValueError` rather than `RuntimeError`.
+    let err = doc.set_expression(cube, "Length", "1 +").unwrap_err();
+    assert!(!err.contains("cyclic"), "unexpected cycle wording in {err:?}");
+}
+
+#[test]
+fn cyclic_expression_on_self_relative_nested_path() {
+    let mut doc = Document::new();
+    let cube = doc.add_object("Cube", "App::FeatureTest");
+    doc.set_property(
+        cube,
+        "Placement",
+        Property::Placement(Placement::new(Vector3::zero(), Rotation::identity())),
+    )
+    .unwrap();
+
+    // Upstream regression_tests.test_CircularReference: two self-relative paths
+    // on the same object that reference each other.
+    doc.set_expression(cube, ".Placement.Base.x", ".Placement.Base.y + 10mm")
+        .unwrap();
+    let err = doc
+        .set_expression(cube, ".Placement.Base.y", ".Placement.Base.x + 10mm")
+        .unwrap_err();
+    assert_eq!(err, ".Placement.Base.y reference creates a cyclic dependency.");
+
+    // The surviving expression still evaluates; the dotted target path is written
+    // back into the placement, and a second recompute is stable.
+    doc.recompute().unwrap();
+    let base_x = |doc: &Document| match doc.object(cube).unwrap().properties.get("Placement") {
+        Some(Property::Placement(p)) => p.base.x,
+        other => panic!("expected a placement, got {other:?}"),
+    };
+    let first = base_x(&doc);
+    assert_eq!(first, 10.0);
+    doc.recompute().unwrap();
+    assert_eq!(base_x(&doc), first);
+}
+
+#[test]
 fn root_and_topological_objects() {
     let mut doc = Document::new();
     let a = doc.add_object("A", "App::FeatureTest");

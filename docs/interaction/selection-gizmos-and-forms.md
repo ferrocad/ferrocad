@@ -35,7 +35,7 @@ command/dialog protocol).
 | --- | --- | --- |
 | **Selection** | The persistent set of document objects (and optional sub-elements) that commands act on. The last item is primary. Pushed to `FreeCADGui.Selection`. | `Shell` |
 | **Context target** | The object under the pointer when a wheel opens. Used only to populate/act on that wheel; not a selection. | `Shell` (`WheelTarget`) |
-| **Anchor** | The world point a gizmo belongs at: the click's `SelectionAnchor.point`, or the body's bounding-box base corner when the selection is not spatial. | `InventorViewport` → `Shell` → `TransformGizmo` |
+| **Origin** | The world point a gizmo hugs: the display provider's declared placement origin (`StageMesh.origin`), or the body's bounding-box base corner when it reports none. | `ferrocad_stage` (`ShapeItem::anchor`) → `TransformGizmo` |
 | **Gizmo** | The generic transform triad (`TransformGizmo`) with translate/rotate/universal handle sets. | `ferrocad_stage` |
 | **Manipulator** | A workbench handle contributed by a factory (the toy height grip, the Part fillet arc). | workbench crate |
 | **Wheel** | The radial marking menu (`WheelMenu`): armed/latched phases and its own anchored overlay. | `ferrocad_widgets` |
@@ -116,9 +116,10 @@ selection. The rule is therefore:
 
 ### 4.1 Anchor and modes
 
-- The triad is anchored at the **contact point** for a spatial selection, and at the
-  **bounding-box base corner** for a tree/command selection. Never the interior
-  centroid.
+- The triad hugs the object's **own origin** (the display provider's placement base
+  point, else the bounding-box base corner), which also makes it an origin indicator.
+  A click does not move it; a user-chosen origin is an explicit, snapped gesture
+  ([`transform-ux.md`](transform-ux.md) §3).
 - Modes: `Translate` (axis stems + plane handles), `Rotate` (rings), `Universal` (both).
   The generic factory currently offers `Translate` for whole objects; sub-element
   transforms await a target-aware interaction commit.

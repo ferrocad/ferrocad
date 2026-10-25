@@ -109,9 +109,11 @@ Two generic mechanisms, one document path:
   whole-object selection, anchors at the top-face centroid, draws a screen-invariant
   stem projecting up into empty space (44 px), and drags the height. Its commit is
   `toy_height` / `set` with `[height]`.
-- **The `TransformGizmo`** (`ferrocad_toy::move_gizmo`). It sits at the item's
-  bounding-box base corner, and a viewport click re-anchors it at the picked world
-  point. It offers translation. Its commit is converted by
+- **The `TransformGizmo`** (`ferrocad_toy::move_gizmo`). It hugs the item's own origin
+  (the placement's base point, which the display hook reports; the bounding-box corner
+  only when a mesh declares none), so the triad doubles as an origin indicator and sits
+  where a rotate pivot would turn. It does not follow the click. It offers translation.
+  Its commit is converted by
   `GizmoCommitEvent::to_interaction`: `transform` / `apply` with the 16 row-major
   matrix elements. The provider composes it with the current placement, so the object
   moves in world space.

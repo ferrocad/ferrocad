@@ -21,20 +21,20 @@ use ferrocad_types::Vector3;
 /// This is the default every edition wants, so an edition only has to register it
 /// (`Contributions::new().with_gizmo(translate_gizmo)`). The gizmo targets the whole
 /// item even when the selection names a sub-element: a click on a face or an edge is a
-/// **spatial** selection, and the shell re-anchors the triad at that point of contact
-/// (`SelectionAnchor`), so dragging it and reading its deltas stay local to what the
-/// user pointed at. Declining sub-elements here made the Part edition look like it had
-/// no gizmo at all: its meshes carry `Face1`/`Edge1`/… names, so every click resolved
-/// to an element, while the toy's single untagged part resolved to the whole body.
+/// **spatial** selection, and the triad still acts on the body. (Declining
+/// sub-elements here made the Part edition look like it had no gizmo at all: its
+/// meshes carry `Face1`/`Edge1`/… names, so every click resolved to an element, while
+/// the toy's single untagged part resolved to the whole body.)
 ///
-/// The base corner is the world-aligned minimum of the item's bounding box, a
-/// predictable datum for a selection that did not come from a viewport pick (a tree or
-/// command selection has no hit point).
+/// The triad **hugs the object's own origin** (`ShapeItem::anchor`): the display
+/// provider may report the placement's base point, which doubles as a visual origin
+/// indicator, and a rotate gizmo pivots about it. A mesh with no declared origin falls
+/// back to its bounding box's base corner.
 pub fn translate_gizmo(selection: &SelectionRef, stage: &Stage) -> Option<TransformGizmo> {
-    let corner = body_corner(selection.object, stage)?;
+    let anchor = stage.item(selection.object)?.anchor()?;
     Some(TransformGizmo::new(
         selection.object,
-        corner,
+        anchor,
         GizmoMode::Translate,
     ))
 }
@@ -369,6 +369,22 @@ mod tests {
         assert_eq!(face.target_id(), 3);
         assert_eq!(face.origin(), Vector3::zero());
         assert!(translate_gizmo(&SelectionRef::whole(9), &stage).is_none());
+
+        // A provider-declared origin wins over the bounding-box corner: this is what
+        // makes the triad hug the object's own origin and double as an indicator.
+        let mut placed = Stage::new();
+        placed.add_item(
+            ShapeItem::new(4)
+                .with_shape(
+                    vec![[2.0, 3.0, 4.0], [4.0, 5.0, 6.0]],
+                    Vec::new(),
+                    Vec::new(),
+                    Vec::new(),
+                )
+                .with_origin(Some([10.0, 20.0, 30.0])),
+        );
+        let hugged = translate_gizmo(&SelectionRef::whole(4), &placed).expect("a gizmo");
+        assert_eq!(hugged.origin(), Vector3::new(10.0, 20.0, 30.0));
     }
 
     #[test]

@@ -44,34 +44,24 @@ after the factory, because every factory returns a fresh `Translate` gizmo
 
 ## 2. Pivot policy
 
-The anchor is `frame.origin`, and that same point is the rotation centre. Split the jobs:
-the **anchor** is where the triad is drawn and the translation is grabbed (pivot-free,
-so only an attention anchor); the **pivot** is what rotation turns about.
+**Recommendation: the triad hugs the object's own origin, and that origin is the pivot of
+every mode.** The display provider reports the placement's base point (`StageMesh.origin`
+→ `ShapeItem::anchor`), so the triad sits on the point the object is defined at and
+doubles as an **origin indicator**; a mesh that does not report one falls back to its
+bounding-box base corner. A click does not move it: for translation the pivot does not
+change the result, and a different centre is a deliberate, snapped gesture (§3).
 
-**Recommendation: the visible origin is the pivot for the active mode; switching modes
-re-places it at the mode's default unless a user origin is set (§3).** The move is
-visible; never keep the pivot hidden behind a fixed anchor.
+| Mode | Whole body | Face / edge / vertex | Multi sub-element | Tree/command |
+| --- | --- | --- | --- | --- |
+| Translate | object origin | object origin (the body moves) | no triad until the commit fans out | object origin |
+| Rotate | object origin | object origin (the body turns) | no triad until the commit fans out | object origin |
+| Push-pull (§4) | — | face centroid, `+N` — a manipulator, not the triad | — | — |
 
-| Mode | Whole body | Face | Edge / vertex | Multi sub-element | Tree/command |
-| --- | --- | --- | --- | --- | --- |
-| Translate | click contact (today) | click contact (today) | click contact (today) | **no triad** until the commit fans out | base corner (today) |
-| Rotate | **bbox centre** | face centroid | edge midpoint / vertex | area-weighted centroid (after fan-out) | bbox centre |
-| Push-pull (§4) | — | face centroid, `+N` | — | — | — |
+The origin travels with the body: the display hook bakes the placement into the positions
+and re-reports the base point, so a re-arm after a commit, a resize or an undo puts the
+triad back where the object says its origin is. No shell-side bookkeeping, no stale-point
+rule. A face click still acts on the **body**; see §1 for the frame wording.
 
-Centroids need no kernel call: the stage item carries `parts`, positions and triangles
-(`shape.rs:257-307`), and the face workplane already derives a centroid and averaged
-normal (`axis-origin-grid.md:99-102`). The bbox centre is a one-pass companion to
-`body_corner` (`contributions.rs:47-60`). A face selection rotates the **body** about the
-face centroid; to rotate about the body centre, select the body (§5).
-
-**The `SelectionDatum` rule.** Keep offset-from-base-corner, but make it survive rotation:
-on a successful `transform/apply` commit, transform the stored world anchor by the commit
-matrix and re-express it against the **new** corner (`M · (corner + offset) − corner'`).
-One rule covers translation and rotation, and makes the comment at `shell.rs:337-346`
-true. A resize (the toy height grip) is not a matrix; it keeps the corner offset, the
-known approximation. A tree/command selection is the base corner in Translate and the
-bbox centre in Rotate. A **user origin** (§3) follows a translation and stays fixed under
-a rotation about itself; a new selection or a wheel promotion clears it.
 
 **Multi-selection is not a triad case yet.** `arm`/`GizmoFactory::create` see one
 `SelectionRef` (`contributions.rs:84-87`) and the commit names one target, so a triad
@@ -80,9 +70,11 @@ would move only the primary. Until the commit fans out, suppress the triad; the 
 
 ## 3. Origin drag (re-pivot)
 
-**Recommendation: a small centre handle in `Rotate` and `Universal` only; pass-through in
-`Translate`.** Dragging the origin is worthless while only translation exists, and it is
-the only way to choose a rotation centre that is not the mode default.
+**Recommendation: a centre handle that moves the working origin, for both translate and
+rotate; ship it once rotation exists.** Dragging it is the only way to rotate about a
+point that is not the object's origin, and the same gesture gives translation a datum
+that is not the origin. It is deferred because, while the triad only translates, the
+pivot cannot change the result — the object origin (§2) is already an honest indicator.
 
 - **Hit.** A separate `Origin` target, not a transform handle. Project a 10 px disc
   (`snap::FEATURE_PIXELS`); priority **origin > axis > plane > ring**, appended after
@@ -94,8 +86,10 @@ the only way to choose a rotation centre that is not the mode default.
 - **Frame and release.** Move the **real** frame live: `set_display_offset` exists so a
   transform drag's math cannot follow its drawing (`gizmo.rs:581-593`), but a pivot drag
   has no solver. On release a new `ViewportEvent::GizmoOrigin { point, kind }` carries the
-  world point; the shell stores `SelectionDatum { source: User, point }`. No transaction,
-  no undo, no recompute. `Esc` restores the pre-drag frame and datum.
+  world point; the shell stores it as a session **user origin** (`Option<Vector3>`, not
+  undoable, not a document property), cleared by a new selection or a wheel promotion and
+  applied instead of the object origin while it is set. `Esc` restores the pre-drag
+  frame and clears it.
 - **With `Move`'s deferred form.** Disable the origin handle while a
   `preview: "translation"` form is open: the pivot is harmless to translation arithmetic,
   but the HUD is anchored to the visible origin (`shell.rs:2219-2224`) and must not slide
@@ -158,21 +152,50 @@ pivot for Rotate.
 | 1 | "Contact point" is where the gizmo *belongs* (`gizmo-manipulators.md:50-58`, `selection-gizmos-and-forms.md:37-38`), and code makes it `frame.origin` (`shell.rs:1506-1516`); no page defines the **rotation** pivot, yet the rings rotate about that origin | split anchor (translation) from pivot (rotation); §2 |
 | 2 | "Never the interior centroid" (`selection-gizmos-and-forms.md:119-121`) vs the multi-face **area-weighted centroid** (`gizmo-manipulators.md:56`) | both hold for different jobs: never the translate anchor; the centroid is the rotate/push-pull pivot; §2 |
 | 3 | The triad "targets the whole item even when the selection names a sub-element" (`contributions.rs:22-28`, `gizmo-manipulators.md:779-782`), while sub-element transforms are called the next thing (`selection-gizmos-and-forms.md:122-124`, `329-333`) and `to_interaction` drops `element` (`gizmo.rs:461-473`) | triad stays whole-body; a face gets a manipulator, never a face triad, until the commit carries the element; §4 |
-| 4 | `SelectionDatum` says "a rotation would rotate the offset too" (`shell.rs:337-346`), but `resolve` only adds the offset to the new corner (`shell.rs:367-376`) | apply the commit matrix to the stored anchor on re-arm; §2 |
+| 4 | `SelectionDatum` promised rotation handling (`shell.rs:337-346`) | the type is gone: the triad hugs the object's own origin, so there is no stored click point to rotate; a user origin replaces it when re-pivot lands; §2 |
 | 5 | "Clicking an already-selected object does not replace a multi-selection" (`selection-gizmos-and-forms.md:55-56`), but every viewport pick makes a one-item selection (`shell.rs:1233-1251`) | correct the doc; viewport multi-select is out of scope, and the triad is suppressed for a multi-selection; §2 |
 | 6 | Rust `GizmoMode::default()` is `Translate` (`gizmo.rs:110-114`); the Python `TransformGizmo` binding defaults to `Universal` (`ferrocad_stage_py/src/gizmo.rs:104`) | Translate is the app default; align or document the binding default; §1 |
-| 7 | "The triad's centre remains pass-through" (`selection-gizmos-and-forms.md:260-261`; `gizmo-manipulators.md:192-198`) vs the origin drag | pass-through in Translate only; a 10 px origin handle in Rotate/Universal; §3 |
-| 8 | §19 rejects a `Gizmo` header toggle because "the header means how the viewport is drawn" (`gizmo-manipulators.md:767-771`), while a `Gizmo` control is in flight | consistent if it selects a mode/presentation (Translate/Rotate/Both), not an on/off enable; the wheel keeps the verbs; §1 |
+| 7 | "The triad's centre remains pass-through" (`selection-gizmos-and-forms.md:260-261`; `gizmo-manipulators.md:192-198`) vs the origin drag | pass-through until re-pivot ships; then a 10 px origin handle in every mode; §3 |
+| 8 | §19 rejected a `Gizmo` header toggle (`gizmo-manipulators.md:767-771`) | the control that landed is **configuration** (show, providers, settings, reset), not a mode switch — consistent with “the header means how the viewport is drawn”; the wheel owns the verbs; §1 |
 
 ## 6. Minimum implementation order
 
 | # | Slice | Acceptance | Touches |
 | --- | --- | --- | --- |
-| 1 | **Rotate mode** — `Shell::gizmo_mode` applied after the factory; `App_Rotate` radial verb via a `{"view": …}` mode request; header mirror | A body shows rings only; a 90° ring drag commits one `transform/apply`; the mode survives re-arm; Translate shows no rings | `ferrocad_gpui/src/shell.rs`, `view.rs`; `python/ferrocad_shell/__init__.py`; `chrome.rs` as the in-flight control lands |
-| 2 | **Pivot policy** — bbox centre, face/edge/vertex centroids, mode-dependent pivot, datum transformed by the commit matrix; no triad for multi-selection | Rotating a body keeps its bbox centre fixed; a face selection rotates the body about the face centroid and says so; a translate after a rotate keeps the anchor on the same surface point | `ferrocad_gpui/src/contributions.rs`, `shell.rs` |
-| 3 | **Re-pivot** — centre handle, snap reuse, `GizmoOrigin` event, user-origin persistence, disabled during the Move HUD | The centre snaps to a vertex/edge mid/face centre; a ring drag rotates about it; a new selection clears it; the Move HUD disables it | `ferrocad_stage/src/gizmo.rs`, `ferrocad_viewport/src/inventor_view.rs`, `shell.rs` |
-| 4 | **Select mode** — double-click a face/edge upgrades to the whole body | Click selects `Face6`; double-click selects the body and re-pivots at its centre; a click on another face returns to that face | `inventor_view.rs`; `shell.rs` (status, datum clear) |
+| 0 | **Origin anchor — landed 2026-10-25** — `StageMesh.origin` → `ShapeItem::anchor`; the triad hugs it; the click no longer re-anchors | The toy slab's triad sits at its placement point, not the bbox corner; a move keeps it on the origin; a mesh without an origin falls back to the corner | `ferrocad_stage/src/shape.rs`, `ferrocad_gpui/{display,contributions,shell}.rs`, both app scripts |
+| 1 | **Rotate mode** — `Shell::gizmo_mode` applied after the factory; `App_Rotate` radial verb via a `{"view": …}` mode request; header mirror | A body shows rings only; a 90° ring drag commits one `transform/apply`; the mode survives re-arm; Translate shows no rings | `ferrocad_gpui/src/shell.rs`, `view.rs`; `python/ferrocad_shell/__init__.py`; `chrome.rs` |
+| 2 | **Multi-selection guard** — no triad while more than one object is selected (the commit names one target) | Selecting two bodies shows no triad and the wheel's `Move` still moves both | `ferrocad_gpui/src/shell.rs` |
+| 3 | **Re-pivot** — centre handle in every mode, snap reuse, `GizmoOrigin` event, session user origin, disabled during the Move HUD | The centre snaps to a vertex/edge mid/face centre; a ring drag rotates about it; a new selection clears it; the Move HUD disables it | `ferrocad_stage/src/gizmo.rs`, `ferrocad_viewport/src/inventor_view.rs`, `shell.rs` |
+| 4 | **Select mode** — double-click a face/edge upgrades to the whole body | Click selects `Face6`; double-click selects the body; a click on another face returns to that face | `inventor_view.rs`; `shell.rs` (status) |
 | 5 | **Push/pull stem** — Part manipulator + edition hook; stem/pill live, solid on release, one transaction | A face shows an amber normal stem; dragging commits an extrusion/pocket that recomputes; undo restores; non-planar faces show no stem | `ferrocad_part_gui/src/…`; `python/ferrocad_parametric/__init__.py`; no `ferrocad_occt` change |
 
 Slices 1–2 are the transform slice proper; 3 depends on 1; 4 is gated on 1; 5 does not
 depend on 4 (a face is already the default) but follows 2 so the centroid helper is shared.
+
+## 7. Structure for several gizmos
+
+The current container is one `TransformGizmo` with a `GizmoMode` (`Translate` /
+`Rotate` / `Universal`), hosted through `Contributions::gizmo_for` →
+`Option<TransformGizmo>` → `viewport.set_gizmo`. That is enough for the triad and not
+enough for what comes next (bevel, push/pull, axis handles): they differ in hit rules,
+constraints, previews and commits, so they should not grow inside `TransformGizmo`.
+
+**Recommendation: keep one *type* per gizmo kind, host a set, compose by mode.**
+
+- **Kinds are independent.** `translate`, `rotate` and `universal` become separate
+  constructors (or types) over the same frame math, each with its own handle set, hit
+  test and drag solver — so each is unit-tested alone, and `universal` is a composition
+  rather than a third implementation.
+- **The registry holds a set.** `Contributions::gizmo_for` becomes `gizmos_for → Vec`, and
+  the viewport hosts a list with a stable priority (most recently registered first, the
+  same rule manipulators use). A workbench gizmo and the triad then coexist without
+  one shadowing the other.
+- **The edition composes, the wheel preselects.** An edition registers the kinds it
+  offers; a wheel verb (`Move`, `Rotate`) narrows the set to that kind for the session,
+  and a new selection keeps the mode until another verb changes it. No verb ⇒ the
+  edition's default set.
+- **The height grip is the rehearsal.** It is a `Manipulator` today (`height_grip`),
+  coupled to the toy's `Height` property and drawn with `GizmoStyle`. It should become an
+  **axis-handle gizmo** once the kinds/trait split exists: same origin policy, same
+  readout, same commit route, but owned by the gizmo registry instead of the manipulator
+  registry — which is what makes the Part push/pull stem cheap.

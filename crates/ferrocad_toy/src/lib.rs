@@ -450,21 +450,23 @@ pub fn height_grip(selection: &SelectionRef, stage: &Stage) -> Option<Box<dyn Ma
 }
 
 /// The toy workbench's gizmo factory: a **whole-object** selection gets a translate
-/// gizmo at the item's bounding-box base corner.
+/// gizmo at the item's own origin.
 ///
-/// The gizmo is the generic move/rotate handle; whether an object responds is the
-/// workbench's decision. The toy offers translation (its document provider composes the
-/// committed matrix with the object's placement). The shell re-anchors the triad at the
-/// picked point when the selection came from a viewport click.
+/// The gizmo is the generic move handle; whether an object responds is the workbench's
+/// decision. The toy offers translation (its document provider composes the committed
+/// matrix with the object's placement). The datum is the same one the base edition uses
+/// ([`ferrocad_stage::ShapeItem::anchor`]): the placement origin when the provider reports
+/// it, otherwise the bounding box's base corner — so the triad doubles as an origin
+/// indicator.
 pub fn move_gizmo(selection: &SelectionRef, stage: &Stage) -> Option<TransformGizmo> {
     if !selection.is_whole() {
         return None;
     }
     let item = stage.item(selection.object)?;
-    let (min, _) = bounds(item)?;
+    let origin = item.anchor()?;
     Some(TransformGizmo::new(
         selection.object,
-        min,
+        origin,
         GizmoMode::Translate,
     ))
 }

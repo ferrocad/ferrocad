@@ -65,7 +65,13 @@ def _display_mesh(obj):
         if shape.isNull():
             return None
         mesh = shape.mesh()
-        _apply_object_placement(mesh, getattr(obj, "Placement", None))
+        placement = getattr(obj, "Placement", None)
+        _apply_object_placement(mesh, placement)
+        # The object's own origin (the placement's base point). The triad hugs it — an
+        # origin indicator — and a rotate pivot turns about it.
+        if placement is not None:
+            base = placement.Base
+            mesh["origin"] = (base.x, base.y, base.z)
         # `DisplayMode` and `Color` are dynamic properties this workbench adds. An
         # opened `.FCStd` or a `Part::Feature` created elsewhere may not have them,
         # so fall back to the opaque grey surface with its edges.

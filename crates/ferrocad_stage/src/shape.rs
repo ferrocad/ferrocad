@@ -8,7 +8,7 @@ use ferrocad_graphics::{
     DepthCompare, DepthState, DrawPacket, Generation, Geometry, MeshId, PickId, RenderQueue,
     ShaderProgram, StateSnapshot, Topology, Vertex, theme,
 };
-use ferrocad_types::{Matrix4, Placement};
+use ferrocad_types::{Matrix4, Placement, Vector3};
 
 /// How a [`ShapeItem`] is drawn.
 ///
@@ -137,6 +137,10 @@ pub struct ShapeItem {
     /// The sub-element id of each position ([`ferrocad_graphics::Vertex::part_idx`]);
     /// empty means every vertex is part `0`.
     parts: Vec<u32>,
+    /// The object's own origin in world space (the placement's base point), when the
+    /// provider knows it. A gizmo hugs it and doubles as an origin indicator; absent
+    /// means the caller falls back to the bounding box's base corner.
+    origin: Option<[f32; 3]>,
     /// Part id → sub-element name (`Face6`), copied from [`Tessellation::parts`].
     part_names: Vec<String>,
     /// The position indices of the topological vertices.
@@ -181,6 +185,7 @@ impl ShapeItem {
             triangles: Vec::new(),
             edges: Vec::new(),
             parts: Vec::new(),
+            origin: None,
             part_names: Vec::new(),
             vertices: Vec::new(),
             show_vertices: false,
@@ -546,6 +551,39 @@ impl ShapeItem {
     /// The vertex positions.
     pub fn positions(&self) -> &[[f32; 3]] {
         &self.positions
+    }
+
+    /// The object's own origin in world space, when the display provider supplied it.
+    pub fn origin(&self) -> Option<[f32; 3]> {
+        self.origin
+    }
+
+    /// The datum a transform gizmo hugs.
+    ///
+    /// The provider's declared origin wins — it is the object's real placement point, so
+    /// a triad there reads as "this is the origin" and doubles as an origin indicator —
+    /// and a rotate gizmo pivots about it. A mesh that does not report one falls back to
+    /// the world-aligned minimum of its bounding box, a predictable datum that never
+    /// floats inside the solid.
+    pub fn anchor(&self) -> Option<Vector3> {
+        if let Some([x, y, z]) = self.origin {
+            return Some(Vector3::new(f64::from(x), f64::from(y), f64::from(z)));
+        }
+        self.positions.iter().fold(None, |acc, [x, y, z]| {
+            let point = Vector3::new(f64::from(*x), f64::from(*y), f64::from(*z));
+            Some(match acc {
+                None => point,
+                Some(min) => {
+                    Vector3::new(min.x.min(point.x), min.y.min(point.y), min.z.min(point.z))
+                }
+            })
+        })
+    }
+
+    /// Declare the object's own origin (the placement's base point).
+    pub fn with_origin(mut self, origin: Option<[f32; 3]>) -> Self {
+        self.origin = origin;
+        self
     }
 
     /// The per-vertex normals (empty when the surface is flat-shaded per triangle).
@@ -1037,6 +1075,19 @@ mod tests {
         let mut queue = RenderQueue::default();
         item.emit(&mut queue);
         queue
+    }
+
+    /// The gizmo datum: a declared origin wins, the bounding-box corner is the fallback.
+    #[test]
+    fn the_anchor_is_the_declared_origin_or_the_bounding_box_corner() {
+        let item = triangle_item();
+        assert_eq!(
+            item.anchor(),
+            Some(Vector3::zero()),
+            "no origin: the bounding-box minimum"
+        );
+        let placed = item.with_origin(Some([5.0, 6.0, 7.0]));
+        assert_eq!(placed.anchor(), Some(Vector3::new(5.0, 6.0, 7.0)));
     }
 
     #[test]

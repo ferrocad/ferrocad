@@ -48,14 +48,17 @@ pub struct ManipulatorFrame {
 - The basis is orthonormal and right-handed. The frame is captured at press time and a
   `set_frame` during a drag cancels the drag rather than reinterpreting its press point.
 - Anchoring policy (host-side, T2):
-  - a **spatial** selection (a viewport click): the **point of contact**, from the
-    pick's `SelectionAnchor` (see [`selection-gizmos-and-forms.md`](selection-gizmos-and-forms.md)
-    §4.1); a whole-body click uses the clicked surface point, not the interior;
-  - a **non-spatial** selection (tree or command): the **bounding-box base corner**
-    (world-aligned minimum), a predictable datum rather than the interior centroid;
-  - a multi-face selection: the **area-weighted centroid** of the selected sub-shapes;
-  - a single flat face / sketch region: the Push-Pull stem starts at the region centroid
-    with its `+N` basis along the face normal.
+  - the triad **hugs the object's own origin**: the display provider reports the
+    placement's base point (`StageMesh.origin` → `ShapeItem::anchor`), which doubles as
+    an origin indicator and is the point a rotate gizmo pivots about;
+  - a mesh with no declared origin falls back to its **bounding-box base corner**
+    (world-aligned minimum) — a predictable datum, never the interior centroid;
+  - a click does **not** move the triad: for translation the pivot does not change the
+    result, and a user-chosen origin is an explicit, snapped gesture
+    ([`transform-ux.md`](transform-ux.md) §3);
+  - a multi-face selection has no triad until the commit fans out;
+  - a Push-Pull stem is a workbench manipulator, not the triad: it starts at the face
+    region's centroid with its `+N` basis along the normal.
 
 ## 2. Axis constraint and degeneracy
 
@@ -453,9 +456,9 @@ a **contribution** like a manipulator, and it shares the same document route:
 
 - `Contributions::with_gizmo(factory)` — the edition decides which objects get one;
   `ferrocad_toy::move_gizmo` claims whole-object selections and places it at the item's
-  bounding-box base corner. The shell re-anchors it at the picked world point when a
-  viewport click made the selection, so the triad belongs to the contact point rather
-  than an abstract centre; a tree selection keeps the base-corner datum.
+  own origin (the placement base point, else the bounding-box base corner). The triad
+  therefore stays on the object's origin as the geometry moves; there is no shell-side
+  re-anchoring.
 - `ViewportEvent::Transform(GizmoCommitEvent)` — the viewport emits the drag commit on
   release (`take_gizmo_commit` is the poll form).
 - `GizmoCommitEvent::to_interaction` — the commit becomes `"transform"` / `"apply"`
@@ -778,14 +781,14 @@ header's one meaning — *how the viewport is drawn* — without implying that a
 a scene helper you can toggle in an empty scene. See
 [`transform-ux.md`](transform-ux.md) for the mode/pivot design behind the next handles.
 
-- A **spatial selection** auto-arms the translate triad at its contact point; a tree or
-  command selection uses the body's base corner. The base edition registers
+- The triad **hugs the selected object's own origin** (the placement base point,
+  reported by the display provider, else the bounding-box base corner) and pivots about
+  it in every mode. The base edition registers
   `ferrocad_gpui::translate_gizmo`, so this exists in the shipped app. It claims **any
 displayed item**, including a selection that names a sub-element (`Face1`): a Part click
 is tagged by the OCCT tessellation, so it always resolves to an element, and declining
 those left the Parametric edition with no triad at all while the toy's untagged mesh
-showed one. The gizmo still targets the whole body; the anchor only decides where it is
-drawn.
+showed one. The gizmo still targets the whole body; the origin doubles as an indicator.
 - Choosing **`Move`** in the wheel promotes its context target and opens the floating
   `ΔX/ΔY/ΔZ` form in **deferred** mode: the keys are the gizmo's, the form's Accept is
   the single commit. The same form is the target of the planned Tab/digit escalation

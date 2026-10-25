@@ -110,6 +110,9 @@ def _slab_mesh(width: float, depth: float, height: float, placement) -> dict:
         "vertices": [],
         "vertex_parts": [],
         "parts": [],
+        # The object's own origin: the triad hugs it and doubles as an origin
+        # indicator, and a rotate pivot would turn about it.
+        "origin": (placement.Base.x, placement.Base.y, placement.Base.z),
     }
 
 

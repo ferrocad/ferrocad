@@ -288,6 +288,7 @@ mod tests {
             vertices: Vec::new(),
             vertex_parts: Vec::new(),
             parts: Vec::new(),
+            origin: None,
             color: None,
             display: None,
         }

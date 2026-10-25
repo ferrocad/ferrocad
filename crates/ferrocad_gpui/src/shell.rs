@@ -23,7 +23,6 @@ use ferrocad_inventor::{Scene, Viewport};
 use ferrocad_stage::{
     DeclarativeManipulator, InteractionCommit, Manipulator, ToolStatus, TransformGizmo,
 };
-use ferrocad_types::Vector3;
 use ferrocad_ui::Form;
 use ferrocad_viewport::scene;
 use ferrocad_viewport::{
@@ -249,9 +248,6 @@ pub struct Shell {
     /// The context target the open wheel resolved. It is promoted to the selection
     /// only when a verb is chosen; closing the wheel discards it.
     wheel_target: Option<WheelTarget>,
-    /// The current selection's click point, kept relative to its body so a re-arm
-    /// after a commit keeps the triad on the point the user grabbed.
-    selection_datum: Option<SelectionDatum>,
     /// The last pointer position in window coordinates. Space opens the wheel
     /// there; a keyboard-only session falls back to the window centre.
     last_pointer: Option<Point<Pixels>>,
@@ -332,48 +328,6 @@ struct OpenDialog {
 struct WheelTarget {
     reference: SelectionRef,
     anchor: Option<SelectionAnchor>,
-}
-
-/// A click anchor preserved **relative to the body it belongs to**.
-///
-/// The triad belongs to the point of contact, not to an abstract centre, and it must
-/// stay attached when the body moves: a commit re-arms the selection, so a stored
-/// *world* point would be left behind at the old place while the geometry moved away
-/// (which is why the triad used to jump to the base corner after a drag). Storing the
-/// offset from the body's bounding-box corner lets `rearm_selection` re-resolve the
-/// point against the live stage, so the triad travels with the geometry — through a
-/// move, a resize, and undo/redo. A rotation would rotate the offset too; that lands
-/// with the rotate gizmo.
-#[derive(Clone, Copy, Debug)]
-struct SelectionDatum {
-    /// `anchor.point - body_corner(entity)` at pick time.
-    offset: Vector3,
-    /// The surface normal at the hit (`zero` when the producer had none).
-    normal: Vector3,
-}
-
-impl SelectionDatum {
-    fn from_anchor(anchor: &SelectionAnchor, corner: Vector3) -> Self {
-        Self {
-            offset: Vector3::new(
-                anchor.point.x - corner.x,
-                anchor.point.y - corner.y,
-                anchor.point.z - corner.z,
-            ),
-            normal: anchor.normal,
-        }
-    }
-
-    fn resolve(&self, corner: Vector3) -> SelectionAnchor {
-        SelectionAnchor {
-            point: Vector3::new(
-                corner.x + self.offset.x,
-                corner.y + self.offset.y,
-                corner.z + self.offset.z,
-            ),
-            normal: self.normal,
-        }
-    }
 }
 
 impl Shell {
@@ -513,7 +467,6 @@ impl Shell {
             wheel,
             _wheel_events: wheel_events,
             wheel_target: None,
-            selection_datum: None,
             last_pointer: None,
             drag_baseline: None,
             hud_rect: None,
@@ -1231,7 +1184,7 @@ impl Shell {
         let wheel = self.wheel.clone();
         let _ = wheel.update(cx, |wheel, cx| wheel.close(cx));
         let (manipulators, gizmo) = match selection {
-            SelectionEvent::Picked { reference, anchor } => {
+            SelectionEvent::Picked { reference, .. } => {
                 if let Some(name) = self.display.object_of(reference.object).map(str::to_string) {
                     // The viewport reports sub-elements too (`Face6`), which the facade
                     // snapshot carries for `getSelectionEx`.
@@ -1243,15 +1196,9 @@ impl Shell {
                         cx,
                     );
                 }
-                self.selection_datum = anchor.as_ref().and_then(|anchor| {
-                    let stage = self.viewport.as_ref()?.read(cx).stage().clone();
-                    let corner = crate::contributions::body_corner(reference.object, &stage)?;
-                    Some(SelectionDatum::from_anchor(anchor, corner))
-                });
-                self.arm(reference, anchor.as_ref(), cx)
+                self.arm(reference, cx)
             }
             SelectionEvent::Cleared => {
-                self.selection_datum = None;
                 self.clear_selection(cx);
                 (Vec::new(), None)
             }
@@ -1487,7 +1434,6 @@ impl Shell {
     fn arm(
         &mut self,
         reference: &SelectionRef,
-        anchor: Option<&SelectionAnchor>,
         cx: &mut Context<Self>,
     ) -> (Vec<Box<dyn Manipulator>>, Option<TransformGizmo>) {
         let mut manipulators: Vec<Box<dyn Manipulator>> = Vec::new();
@@ -1498,22 +1444,12 @@ impl Shell {
                 if let Some(manipulator) = self.contributions.manipulator_for(reference, &stage) {
                     manipulators.push(manipulator);
                 }
+                // The factory owns the datum: the triad hugs the object's own origin
+                // (`ShapeItem::anchor`), which also makes it an origin indicator and the
+                // pivot a rotate gizmo needs. A click point is deliberately not used —
+                // for translation the pivot does not change the result, and re-pivoting
+                // will be an explicit, snapped gesture (see transform-ux.md).
                 gizmo = self.contributions.gizmo_for(reference, &stage);
-            }
-            // The triad belongs to the point of contact when a click made the
-            // selection. A tree or command selection has no hit, so its datum is the
-            // body's base corner (never the interior centroid).
-            if let Some(gizmo) = gizmo.as_mut() {
-                let origin = match anchor {
-                    Some(anchor) => Some(anchor.point),
-                    None if reference.is_whole() => {
-                        crate::contributions::body_corner(reference.object, &stage)
-                    }
-                    None => None,
-                };
-                if let Some(origin) = origin {
-                    gizmo.set_origin(origin);
-                }
             }
         }
 
@@ -1615,9 +1551,8 @@ impl Shell {
     /// A move or a resize invalidates the world anchors the handles were built for. The
     /// height grip must follow the moved body's top face, and the transform triad must
     /// stay attached after its own commit — so this rebuilds from the (already pruned)
-    /// selection against the new stage, re-resolving a click-made selection's datum.
-    /// A tree/command selection has no click point, so `arm` uses the body's base
-    /// corner.
+    /// selection against the new stage. The factory re-reads the object's origin, so the
+    /// triad tracks the geometry without any shell-side bookkeeping.
     fn rearm_selection(&mut self, cx: &mut Context<Self>) {
         let Some(viewport) = self.viewport.clone() else {
             return;
@@ -1636,7 +1571,6 @@ impl Shell {
             })
         };
         let Some(reference) = reference else {
-            self.selection_datum = None;
             self.model.lock().unwrap().gizmo_armed = false;
             viewport.update(cx, |viewport, cx| {
                 viewport.set_manipulators(Vec::new());
@@ -1645,15 +1579,7 @@ impl Shell {
             });
             return;
         };
-        // Re-resolve the click point against the *new* geometry: the datum is stored
-        // relative to the body's base corner, so the triad stays on the point the user
-        // grabbed instead of snapping back to the corner after its own commit.
-        let anchor = self.selection_datum.and_then(|datum| {
-            let stage = viewport.read(cx).stage();
-            crate::contributions::body_corner(reference.object, stage)
-                .map(|corner| datum.resolve(corner))
-        });
-        let (manipulators, gizmo) = self.arm(&reference, anchor.as_ref(), cx);
+        let (manipulators, gizmo) = self.arm(&reference, cx);
         self.model.lock().unwrap().gizmo_armed = gizmo.is_some();
         viewport.update(cx, |viewport, cx| {
             viewport.set_manipulators(manipulators);
@@ -4192,27 +4118,6 @@ mod tests {
             "import FerroCAD\nFerroCAD.Grid.reset()\nFerroCAD.Axis.reset()\nFerroCAD.Gizmo.reset()\n",
         );
         Shell::boot().expect("boot shell")
-    }
-
-    /// The click datum is stored relative to the body's base corner, so it follows the
-    /// geometry instead of being left behind at the old world point.
-    #[test]
-    fn a_click_datum_follows_its_body() {
-        let corner = Vector3::new(0.0, 0.0, 0.0);
-        let anchor = SelectionAnchor {
-            point: Vector3::new(2.0, 3.0, 4.0),
-            normal: Vector3::new(0.0, 0.0, 1.0),
-        };
-        let datum = SelectionDatum::from_anchor(&anchor, corner);
-
-        // Unmoved: the same point.
-        assert_eq!(datum.resolve(corner).point, anchor.point);
-
-        // The body moved by +10 in x: the point moves with it, the normal does not.
-        let moved = Vector3::new(10.0, 0.0, 0.0);
-        let resolved = datum.resolve(moved);
-        assert_eq!(resolved.point, Vector3::new(12.0, 3.0, 4.0));
-        assert_eq!(resolved.normal, anchor.normal);
     }
 
     /// A *stored* visibility switch reaches the first window.

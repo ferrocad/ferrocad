@@ -47,6 +47,12 @@ pub struct StageMesh {
     pub vertex_parts: Vec<u32>,
     #[serde(default)]
     pub parts: Vec<String>,
+    /// The object's own origin in world space (the placement's base point), when the
+    /// provider knows it. The transform triad hugs it — which also makes it an origin
+    /// indicator — and a rotate gizmo pivots about it. Absent falls back to the
+    /// bounding box's base corner.
+    #[serde(default)]
+    pub origin: Option<[f32; 3]>,
     /// The object's RGBA surface colour (linear, 0..1), if the provider supplies one.
     #[serde(default)]
     pub color: Option<[f32; 4]>,
@@ -102,6 +108,7 @@ impl DisplaySync {
             }
             let mut item = ShapeItem::from_tessellation(mesh.entity, &mesh.tessellation())
                 .with_draw_mode(display_mode(mesh.display.as_deref()))
+                .with_origin(mesh.origin)
                 // Document solids get the V1 occluded-edge ghost; overlays do not.
                 .with_ghost_edges();
             if mesh.color.is_none() {
@@ -181,6 +188,7 @@ mod tests {
             vertices: Vec::new(),
             vertex_parts: Vec::new(),
             parts: vec!["Face1".to_string(), "Edge1".to_string()],
+            origin: Some([0.0, 0.0, 0.0]),
             color: None,
             display: None,
         }

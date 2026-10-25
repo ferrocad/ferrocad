@@ -142,12 +142,14 @@ base and edition jobs. Because macOS is blocked and the **Windows leg does not
 build**, a `v*` tag yields **three** artifacts (two base, one parametric), not
 six.
 
-**Windows is blocked in the OCCT bridge.** The first `v0.1.4` run got through the
-OCCT fetch and into `cargo build -p ferrocad_parametric` on `windows-latest`,
-where `opencascade-sys 0.3.0`'s cxx bridge fails with C2440. The cause is that
-OCCT's `DEFINE_STANDARD_HANDLE` makes `Handle_T` a **derived class** on MSVC (for
-C++/CLI export) while `Handle(C)` stays `opencascade::handle<C>`, so the two are
-distinct types there and identical on GCC/Clang.
+**Windows is blocked in the OCCT bridge.** Tracked as
+[ferrocad#1](https://github.com/ferrocad/ferrocad/issues/1) (with the full
+diagnosis, the attribution and the option table). The first `v0.1.4` run got
+through the OCCT fetch and into `cargo build -p ferrocad_parametric` on
+`windows-latest`, where `opencascade-sys 0.3.0`'s cxx bridge fails with C2440. The
+cause is that OCCT's `DEFINE_STANDARD_HANDLE` makes `Handle_T` a **derived class**
+on MSVC (for C++/CLI export) while `Handle(C)` stays `opencascade::handle<C>`, so
+the two are distinct types there and identical on GCC/Clang.
 
 Two instances, one fixed:
 

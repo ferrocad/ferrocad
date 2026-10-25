@@ -152,4 +152,44 @@ CPython. Confirm the exact exception wording at adoption time.
   conda prefix; and whether to ship data exchange (and thus the imaging stack) in v1.
 - Static (`builtin`) OCCT as an alternative release path: no `lib/` to bundle, one
   artifact per platform, but a slower CI and a bigger binary.
-- macOS/Windows closure implementations (`install_name_tool` fix-ups; DLL search order).
+- The macOS closure (`install_name_tool` fix-ups, `otool`/signing). The Windows half is
+  implemented and exercised; see [`edition-publishing.md`](edition-publishing.md) §6 and
+  [`macos.md`](macos.md).
+
+## 8. Why 7.8.1, and what OCCT 8.x would need (2026-10-25)
+
+OCCT 8.0 exists — `V8_0_0` (2026-05-07) and `V8_0_1` (2026-07-30) — and conda-forge
+publishes both for `linux-64`, `linux-aarch64`, `linux-ppc64le`, `osx-64`,
+`osx-arm64` **and `win-64`**. Availability is not the problem.
+
+**8.0 does remove the legacy handle aliases.** In 7.8.1 every class header ends with
+`DEFINE_STANDARD_HANDLE(Geom_Surface, Geom_Geometry)`, which on MSVC defines
+`Handle_Geom_Surface` as a *derived class* (the C++/CLI export hack) instead of the
+alias it is on GCC/Clang — the type split that made the Windows build fail. In
+`V8_0_1`, `Geom_Surface.hxx`, `Geom_Curve.hxx` and `Poly_Triangulation.hxx` no longer
+invoke the macro at all; the API spells handles `occ::handle<T>` (a new alias for
+`opencascade::handle<T>` in `Standard_Handle.hxx`). The macro itself survives only for
+user code, marked deprecated. So a future major upgrade does dissolve the problem the
+vendored `opencascade-sys` patch works around.
+
+**It cannot be adopted today.** `opencascade-sys 0.3.0` is written against 7.8:
+
+- `build.rs` pins `const OCCT_VERSION: (u8, u8) = (7, 8)` and panics when the found
+  header's major version is not 7, so a conda 8.0 prefix is rejected outright;
+- its bridge headers name `Handle_Geom_Surface`, `Handle_Poly_Triangulation`, …, which
+  8.0 no longer defines anywhere, so the bridge would not compile even without the
+  version gate;
+- upstream has no OCCT 8 support and no tracking issue (latest release 0.3.0).
+
+An 8.x migration is therefore a **binding port**, not a version bump: every
+handle-typed bridge signature in `opencascade-sys` moves to `occ::handle<T>`/`Handle(T)`
+(which is the same rewrite as PR #234's alternative, but mandatory and wider), plus
+whatever else 8.0 removed that we cannot see until the crate compiles. Our own layer is
+small — `crates/ferrocad_occt/include` uses six `Handle_Geom_Curve` and 27 deprecated
+`Standard_Boolean`/`Standard_True`/`Standard_False` spellings, which are warnings only —
+but the geometry conformance suite would have to be re-measured against 8.0 anyway.
+
+**Decision:** release on 7.8.1 with the vendored `opencascade-sys` (0.3.0 + upstream
+PR #234; see [`edition-publishing.md`](edition-publishing.md) §6). Revisit OCCT 8 when a
+published `opencascade-sys` supports it — at that point both `third_party/` patches
+(handle aliases and the MSVC bridge) should be droppable in one step.

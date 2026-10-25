@@ -38,8 +38,9 @@ Python is needed:
 | Platform | Download |
 | --- | --- |
 | Linux (x86_64) | [`ferrocad-x86_64.AppImage`](https://github.com/ferrocad/ferrocad/releases/latest/download/ferrocad-x86_64.AppImage) |
-| macOS (arm64) | [`FerroCAD.dmg`](https://github.com/ferrocad/ferrocad/releases/latest/download/FerroCAD.dmg) |
 | Windows (x86_64) | [`ferrocad-windows-x86_64.zip`](https://github.com/ferrocad/ferrocad/releases/latest/download/ferrocad-windows-x86_64.zip) |
+| Linux (x86_64, Part edition) | [`ferrocad-parametric-x86_64.AppImage`](https://github.com/ferrocad/ferrocad/releases/latest/download/ferrocad-parametric-x86_64.AppImage) |
+| Windows (x86_64, Part edition) | [`ferrocad-parametric-windows-x86_64.zip`](https://github.com/ferrocad/ferrocad/releases/latest/download/ferrocad-parametric-windows-x86_64.zip) |
 
 The Linux AppImage is a single executable:
 
@@ -62,10 +63,11 @@ The binary embeds the Python payload and unpacks it on first run (see
 [Embedded Python](#embedded-python-running-scripts-from-rust)). The Python package
 (`pip install ferrocad`, the `FreeCAD` API without a GUI) is not on PyPI yet.
 
-> **macOS**: the `.app` is ad-hoc signed, so a downloaded DMG needs
-> `xattr -dr com.apple.quarantine /Applications/FerroCAD.app` (or right-click →
-> Open) on first launch. **Windows**: the zip is unsigned, so SmartScreen may warn
-> on first run.
+> **macOS** is not shipped yet: the pinned GPUI Metal backend does not compile, so
+> there is no `.dmg` in the releases. See
+> [`docs/architecture/macos.md`](docs/architecture/macos.md) for the diagnosis and
+> the re-enable checklist. **Windows**: the zip is unsigned, so SmartScreen may
+> warn on first run.
 
 ## The idea
 

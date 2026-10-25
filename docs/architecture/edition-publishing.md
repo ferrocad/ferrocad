@@ -147,10 +147,14 @@ import reader (`crates/xtask/src/pe.rs`, unit-tested on a synthetic PE image);
 puts `bin/` (and `lib/`, for an alternate layout) on `PATH`. The Windows job has
 not run in this sandbox, so the PE walker and that leg are **untested against a
 real Windows binary**. OCCT license staging is shared by every platform. macOS
-remains deliberately blocked on upstream `bite-gp-apple 1.24.402` (it uses
-`cocoa` without declaring it); `xtask` reports that and does not attempt an
-`otool`/`install_name_tool` walk. Do not re-enable the macOS release leg until
-the GPUI fork declares `cocoa`.
+remains deliberately blocked on upstream `bite-gp-apple 1.24.402` (it imports
+`cocoa` without declaring it, and the import is dead); `xtask` reports that and
+does not attempt an `otool`/`install_name_tool` walk. The diagnosis, the temporary
+vendored patch (`third_party/bite-gp-apple`) and the full re-enable checklist are
+in [`macos.md`](macos.md); the upstream report is
+[bite-gpui/bite-gpui#14](https://github.com/bite-gpui/bite-gpui/issues/14). Do not
+re-enable the macOS release leg until a fixed GPUI fork lands and the checklist's
+signing/closure work exists.
 
 E4 (the bundled wheel) is still out of scope.
 

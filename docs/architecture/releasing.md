@@ -357,3 +357,6 @@ upstream fork bug, independent of this workspace; macOS returns with the next
 GPUI-fork update (the Windows dmabuf fix in 1.24.402 is why the family is on that
 release). The same applies to the Parametric edition on macOS: its bundler
 reports the blocker instead of attempting an `otool`/`install_name_tool` walk.
+The bundle of that work — diagnosis, the temporary vendored patch and the
+re-enable checklist — is in [`macos.md`](macos.md); the upstream report is
+[bite-gpui/bite-gpui#14](https://github.com/bite-gpui/bite-gpui/issues/14).

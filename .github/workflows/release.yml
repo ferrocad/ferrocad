@@ -9,10 +9,10 @@ name: Release
 # produces the Parametric edition's AppImage and Windows zip (with the OCCT
 # closure); `release` attaches them to a GitHub Release.
 #
-# macOS is deliberately absent: the pinned `bite-gp-apple 1.24.402` uses `cocoa`
-# without declaring it, so the build does not compile. That is an upstream
-# fork bug, not something to work around here. See
-# docs/architecture/releasing.md and docs/architecture/edition-publishing.md.
+# macOS is deliberately absent: the pinned `bite-gp-apple 1.24.402` imports
+# `cocoa` without declaring it (a dead import), so it does not compile for Apple
+# targets. `third_party/bite-gp-apple` patches that import; the rest of the macOS
+# work is unverified. See docs/architecture/macos.md.
 on:
   push:
     tags: ["v*"]

@@ -591,8 +591,6 @@ checksum = "1e4b40c7323adcfc0a41c4b88143ed58346ff65a288fc144329c5c45e05d70c6"
 [[package]]
 name = "bite-gp-apple"
 version = "1.24.402"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c87586803f9c01d6bba4bb681d5ab92a3e79e288bfd56d6d0d7f2c69d528be1c"
 dependencies = [
  "anyhow",
  "async-task",

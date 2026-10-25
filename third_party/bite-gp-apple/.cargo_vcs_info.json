@@ -1,0 +1,7 @@
+{
+  "git": {
+    "sha1": "8b288f1a2a06ed463d56228823a2f28a911e8855",
+    "dirty": true
+  },
+  "path_in_vcs": "crates/gpui_apple"
+}

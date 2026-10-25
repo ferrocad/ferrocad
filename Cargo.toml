@@ -128,3 +128,8 @@ windows = "0.62.2"
 [profile.release]
 opt-level = 3
 lto = true
+
+# Temporary patch: bite-gp-apple 1.24.402/1.25.202 import `cocoa` without
+# declaring it. See third_party/bite-gp-apple/PATCHES.md.
+[patch.crates-io]
+bite-gp-apple = { path = "third_party/bite-gp-apple" }

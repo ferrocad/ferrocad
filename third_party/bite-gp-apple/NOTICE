@@ -1,0 +1,12 @@
+bite-gpui
+
+This crate is derived from Zed's gpui and is distributed under the
+Apache License, Version 2.0. It has been modified: the crate has been
+restructured and renamed as part of the bite-gpui rearchitecture, and
+the manifest rewritten so it can be consumed as an independent package.
+
+    upstream:  https://github.com/zed-industries/zed (1.24.4)
+    built from: https://github.com/bite-gpui/bite-gpui.git branch bite_v1.24.x
+    version:   1.24.402
+
+See LICENSE-APACHE for the full licence text.

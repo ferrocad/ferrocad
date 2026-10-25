@@ -113,6 +113,15 @@ ferrocad_widgets = { path = "crates/ferrocad_widgets", version = "0.1.2" }
 ferrocad_gpui = { path = "crates/ferrocad_gpui", version = "0.1.2" }
 ferrocad = { path = "crates/ferrocad", version = "0.1.2" }
 
+# Cargo cannot express "gpu-allocator must use the same `windows` crate as
+# wgpu-hal". `gpu-allocator 0.28` accepts 0.53–0.62 while `sysinfo` caps at 0.57,
+# so `Cargo.lock` pins gpu-allocator to `windows 0.62.2` (the version wgpu-hal
+# uses). Mixing 0.57 with 0.62 breaks the DX12 API boundary on Windows
+# (`ResourceCategory`, `ID3D12Heap`), which is how the Windows job failed on
+# 2026-10-25. After `cargo update`, re-check that pin.
+[workspace.metadata.gpu-allocator]
+windows = "0.62.2"
+
 # `lto` pays off for the extension/shared libraries; keep it workspace-wide.
 [profile.release]
 opt-level = 3

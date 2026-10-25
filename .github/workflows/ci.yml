@@ -79,6 +79,22 @@ jobs:
         with:
           python-version: "3.12"
 
+      - name: Check the D3D12 windows-crate pin
+        # `gpu-allocator` (wgpu-hal's DX12 allocator) and wgpu-hal must build
+        # against the same `windows` crate. `gpu-allocator 0.28` accepts
+        # 0.53–0.62 while `sysinfo` caps at 0.57, so Cargo.lock pins
+        # gpu-allocator to 0.62.2. See Cargo.toml [workspace.metadata].
+        shell: python
+        run: |
+          import sys
+          lock = open("Cargo.lock", encoding="utf-8").read()
+          block = lock.split('name = "gpu-allocator"', 1)[1].split("[[package]]", 1)[0]
+          if '"windows 0.62.2"' not in block:
+              sys.exit(
+                  "Cargo.lock must pin gpu-allocator to windows 0.62.2; "
+                  "see Cargo.toml [workspace.metadata.gpu-allocator]"
+              )
+
       - name: Build the FreeCAD extension module (for the shell tests)
         # The shell tests import the FreeCAD facade, which imports the `ferrocad`
         # extension. On Windows the extension is a `.pyd`, not an `.abi3.so`.

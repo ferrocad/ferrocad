@@ -16,7 +16,7 @@ is theirs; a writer should never have to duplicate a fact across them.
 | # | Audience | What they need | Entry point | Tooling |
 | --- | --- | --- | --- | --- |
 | 1 | **Users of FerroCAD** | do a task in the app or a script | [`user/`](user/README.md), in Diátaxis quadrants | generated from executable workflows + mdBook |
-| 2 | **Users of the API** — mod writers, script writers, AI agents, MCP servers | the contract, the exact surface, and the JSON boundary | [`mods/`](mods/README.md) and [`python-api/`](python-api/README.md) | authored contract guide + generated reference |
+| 2 | **Users of the API** — mod writers, script writers, AI agents, MCP servers | the contract, the exact surface, and the JSON boundary | [`mods/`](mods/README.md) and [`python-api/`](python-api/index.md) | authored contract guide + generated reference |
 | 3 | **Developers of FerroCAD** | why it is shaped this way, and what to build next | `direction/`, `architecture/`, `viewport/`, `interaction/`, `workbenches/`, `record/`, `tasks/`; rustdoc | authored notes + rustdoc |
 | 4 | **Developers of upstream FreeCAD and of mods used by FerroCAD** | compatibility, divergence, and how to run upstream code here | [`workbenches/`](workbenches/conformance.md) (conformance, Qt strategy, Part/Draft layering) and `architecture/` | authored notes + the executable conformance harness |
 
@@ -66,7 +66,7 @@ for audiences 3 and 4 stay in the repository.
 | --- | --- |
 | **Tutorial** (learning) | [`user/tutorials/`](user/tutorials/first-model.md) — generated from an executable workflow; `ferrocad_core` crate page (`crates/ferrocad_core/src/lib.rs`, `# Tutorial`, a runnable doc test); `README.md` quickstart |
 | **How-to** (tasks) | [`user/how-to/`](user/how-to/documents-and-properties.md) — generated from executable workflows in `tools/workflows/`; `ferrocad_core` crate page `# How-to guides`; README build/run/test/packaging sections |
-| **Reference** (information) | [`python-api/`](python-api/README.md) — generated from the live modules; rustdoc item/module pages; the behaviour of the `FreeCAD` surface = upstream FreeCAD's reference |
+| **Reference** (information) | [`python-api/`](python-api/index.md) — generated from the live modules; rustdoc item/module pages; the behaviour of the `FreeCAD` surface = upstream FreeCAD's reference |
 | **Explanation** (understanding) | [`user/explanation/`](user/explanation/how-the-shell-talks-to-the-document.md) — hand-written, links into the design notes; `ferrocad_core` crate page `# Explanation`; [`direction/rewrite-strategy.md`](direction/rewrite-strategy.md), [`direction/mvp-path.md`](direction/mvp-path.md), [`interaction/python-ui-research.md`](interaction/python-ui-research.md) |
 
 `docs/user/` is the Diátaxis slice of the docs: three of the four quadrants live

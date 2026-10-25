@@ -134,7 +134,7 @@ class TestRenderIndex(unittest.TestCase):
             index.index("## Explanation"),
         ]
         self.assertEqual(order, sorted(order))
-        self.assertIn("../python-api/README.md", index)
+        self.assertIn("../python-api/index.md", index)
 
     def test_an_authored_explanation_page_is_listed(self):
         index = userdocs.render_index([])
@@ -173,7 +173,7 @@ class TestBook(unittest.TestCase):
         source = build_book.USER / "explanation" / "x.md"
         out = build_book._rewrite_links("[api](../../python-api/)", source)
         # `user/` is dropped on assembly, so one `../` is enough in the book.
-        self.assertIn("(../python-api/README.md)", out)
+        self.assertIn("(../python-api/index.md)", out)
 
     def test_user_is_dropped_from_the_published_path(self):
         self.assertEqual(
@@ -196,6 +196,15 @@ class TestBook(unittest.TestCase):
             'site-url = "https://ferrocad.github.io/docs/"',
             build_book.book_toml("https://ferrocad.github.io/docs/"),
         )
+
+    def test_the_reference_landing_page_is_index(self):
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as tmp:
+            src = build_book.assemble(Path(tmp))
+            summary = (src / "SUMMARY.md").read_text()
+        self.assertIn("(python-api/index.md)", summary)
+        self.assertNotIn("python-api/README.md", summary)
 
     def test_external_urls_are_untouched(self):
         source = build_book.USER / "README.md"

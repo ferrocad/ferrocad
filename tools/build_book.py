@@ -160,9 +160,15 @@ def _rewrite_links(text: str, source: Path) -> str:
             return whole
 
         candidate = Path(os.path.normpath(source_dir / path))
-        # A link to a directory becomes a link to its index, which mdBook can serve.
-        if candidate.is_dir() and _inside_book(candidate / "README.md"):
-            candidate = candidate / "README.md"
+        # A link to a directory becomes a link to its landing page, which mdBook
+        # serves as `index.html`. Prefer an explicit `index.md` (the generated API
+        # reference) and fall back to `README.md`.
+        if candidate.is_dir():
+            for name in ("index.md", "README.md"):
+                page = candidate / name
+                if page.is_file() and _inside_book(page):
+                    candidate = page
+                    break
 
         if _inside_book(candidate):
             # Normalised so a directory link becomes its index page, which mdBook serves.
@@ -201,14 +207,25 @@ def _summary(src: Path) -> str:
             rel
             for _source, rel in _copied(src)
             if rel.as_posix().startswith(folder + "/")
-            and rel.name != "README.md"
+            and rel.name not in ("README.md", "index.md")
         ]
         if not pages:
             continue
         lines += [f"# {part}", ""]
-        readme = src / folder / "README.md"
-        if readme.is_file():
-            lines.append(f"- [{_title(readme)}]({folder}/README.md)")
+        # The section's landing page: `index.md` (the generated API reference) or
+        # `README.md`. mdBook serves either as `index.html`.
+        landing = next(
+            (
+                src / folder / name
+                for name in ("index.md", "README.md")
+                if (src / folder / name).is_file()
+            ),
+            None,
+        )
+        if landing is not None:
+            lines.append(
+                f"- [{_title(landing)}]({landing.relative_to(src).as_posix()})"
+            )
             indent = "  "
         else:
             indent = ""

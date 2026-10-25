@@ -10,7 +10,7 @@ has no page — this index is the progress list, not a backlog.
 The pages are grouped the way Diátaxis groups them: a **tutorial** teaches by
 doing, a **how-to guide** answers one task, the **reference** lists what exists,
 and an **explanation** page says why. Reference is the generated
-[Python API reference](../python-api/README.md).
+[Python API reference](../python-api/index.md).
 
 ## Tutorials
 
@@ -37,7 +37,7 @@ Task-oriented: do one specific thing.
 
 Generated from the live modules by `tools/api_docs.py`:
 
-- [Python API reference](../python-api/README.md)
+- [Python API reference](../python-api/index.md)
 
 ## Explanation
 

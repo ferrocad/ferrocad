@@ -391,7 +391,7 @@ def main(argv: list[str]) -> int:
         outputs[DOC_DIR / f"{_page_name(description['module'])}.md"] = render_module(
             description, role, note
         )
-    outputs[DOC_DIR / "README.md"] = render_index(descriptions)
+    outputs[DOC_DIR / "index.md"] = render_index(descriptions)
 
     stale = []
     for target, text in outputs.items():

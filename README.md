@@ -229,7 +229,7 @@ per-module pages are the reference.
 The **product surface is Python** (`import FreeCAD`) and deliberately mirrors upstream FreeCAD, so
 the *behaviour* reference is FreeCAD's own. What FerroCAD adds is generated and verified:
 [`docs/user/`](docs/user/README.md) renders one page per implemented workflow by **running** it
-against the facade, and [`docs/python-api/`](docs/python-api/README.md) is a signature reference read
+against the facade, and [`docs/python-api/`](docs/python-api/index.md) is a signature reference read
 from the live modules. CI runs `tools/userdocs.py --check` and `tools/api_docs.py --check`, so neither
 can drift from the code. Narrative notes live in the repository `docs/` ([index](docs/README.md)).
 An mdBook edition of both — tutorials, how-to guides, reference, explanation — is

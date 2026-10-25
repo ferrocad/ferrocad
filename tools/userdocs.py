@@ -37,7 +37,7 @@ WORKFLOW_DIR = REPO / "tools" / "workflows"
 DOC_DIR = REPO / "docs" / "user"
 IMAGE_DIR = DOC_DIR / "images"
 PYTHON_DIR = REPO / "python"
-API_README = "../python-api/README.md"
+API_README = "../python-api/index.md"
 
 #: Diátaxis sections, in reading order. Reference lives in `docs/python-api/`,
 #: which is generated separately, so it is linked rather than scanned.
@@ -62,7 +62,7 @@ has no page — this index is the progress list, not a backlog.
 The pages are grouped the way Diátaxis groups them: a **tutorial** teaches by
 doing, a **how-to guide** answers one task, the **reference** lists what exists,
 and an **explanation** page says why. Reference is the generated
-[Python API reference](../python-api/README.md).
+[Python API reference](../python-api/index.md).
 """
 
 INDEX_FOOTER = """## Regenerating

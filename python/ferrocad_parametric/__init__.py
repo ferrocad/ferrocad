@@ -2,13 +2,21 @@
 
 The base app's script (`ferrocad_shell`) is deliberately geometry-free: it knows the
 document model and nothing about kernels. This edition links the Part workbench, so
-it registers the two **module hooks** Part needs and seeds the demo solid:
+it registers the two **module hooks** Part needs, seeds the demo solid, and offers
+one creation command:
 
 * `FerroCAD.register_display_provider` — how a `Part` object is tessellated for the
   viewport;
 * `FerroCAD.register_interaction_provider` — what a manipulator commit means (the edge
   dress-up arc's `dress_up` / `fillet` / `chamfer`, and the generic gizmo's
-  `transform` / `apply` as a placement change).
+  `transform` / `apply` as a placement change);
+* `Part_Box` — a dock command that creates a box in one transaction, the way the toy
+  workbench's `Toy_MakeSlab` does.
+
+Objects this script creates carry `DisplayMode` and `Color` dynamic properties. A
+`Part::Feature` has no view provider here, so the display hook reads those properties
+and falls back to the edition's original opaque grey when they are absent (an opened
+`.FCStd`, or an object created outside this workbench).
 
 The Rust half of the same contribution (the scrubber itself) is
 `ferrocad_part_gui::fillet_manipulator`, which the edition's `main` adds to
@@ -23,6 +31,7 @@ it must re-export every entry point the shell calls.
 from __future__ import annotations
 
 import FreeCAD
+import FreeCADGui
 import FerroCAD
 import Part  # noqa: F401  (links the kernel; registers Part::Feature/Fillet/Chamfer)
 
@@ -30,6 +39,20 @@ import Part  # noqa: F401  (links the kernel; registers Part::Feature/Fillet/Cha
 # `set_property`, `evaluate`, `stage_meshes`, `interaction`, ...).
 from ferrocad_shell import *  # noqa: F401,F403
 from ferrocad_shell import bootstrap as _base_bootstrap
+
+DEFAULT_LENGTH = 20.0
+DEFAULT_WIDTH = 20.0
+DEFAULT_HEIGHT = 20.0
+# RGBA in the 0..1 range; alpha is unused. This is the opaque CAD grey the edition
+# has always given Part objects, now also the default of their `Color` property.
+DEFAULT_COLOR = (0.66, 0.72, 0.80, 1.0)
+
+_DISPLAY_MODES = ("Shaded", "ShadedWithEdges", "Wireframe")
+_DISPLAY_KEYS = {
+    "Shaded": "shaded",
+    "ShadedWithEdges": "shaded_edges",
+    "Wireframe": "wireframe",
+}
 
 
 def _display_mesh(obj):
@@ -42,10 +65,13 @@ def _display_mesh(obj):
             return None
         mesh = shape.mesh()
         _apply_object_placement(mesh, getattr(obj, "Placement", None))
-        # Part objects have no view provider to choose an appearance yet: give the
-        # viewer an opaque CAD surface instead of the shell's glass placeholder.
-        mesh.setdefault("color", [0.66, 0.72, 0.80, 1.0])
-        mesh.setdefault("display", "shaded_edges")
+        # `DisplayMode` and `Color` are dynamic properties this workbench adds. An
+        # opened `.FCStd` or a `Part::Feature` created elsewhere may not have them,
+        # so fall back to the opaque grey surface with its edges.
+        colors = getattr(obj, "Color", None)
+        mesh["color"] = list(colors[0]) if colors else list(DEFAULT_COLOR)
+        mode = str(getattr(obj, "DisplayMode", "") or "")
+        mesh["display"] = _DISPLAY_KEYS.get(mode, "shaded_edges")
         return mesh
     except Exception:
         return None
@@ -140,11 +166,86 @@ FerroCAD.register_display_provider(_display_mesh)
 FerroCAD.register_interaction_provider(_interaction)
 
 
+def _add_appearance(obj):
+    """Add the display properties a bare ``Part::Feature`` does not define.
+
+    Part objects have no view provider in this build, so the appearance is a pair of
+    dynamic properties the display hook reads. The names and values match the toy
+    workbench's ``DisplayMode``/``Color`` convention.
+    """
+    obj.addProperty(
+        "App::PropertyEnumeration", "DisplayMode", "Part", "How the object is drawn"
+    )
+    obj.DisplayMode = list(_DISPLAY_MODES)
+    obj.DisplayMode = "ShadedWithEdges"
+    obj.addProperty("App::PropertyColor", "Color", "Part", "Surface colour")
+    obj.Color = [DEFAULT_COLOR]
+    return obj
+
+
+def _add_box(doc, length, width, height, x, y, name):
+    """Add the object and its properties; the caller owns the transaction."""
+    box = doc.addObject("Part::Feature", name)
+    box.Shape = Part.makeBox(float(length), float(width), float(height))
+    _add_appearance(box)
+    box.Placement = FreeCAD.Placement(FreeCAD.Vector(float(x), float(y), 0.0))
+    return box
+
+
+def makeBox(
+    length=DEFAULT_LENGTH,
+    width=DEFAULT_WIDTH,
+    height=DEFAULT_HEIGHT,
+    x=0.0,
+    y=0.0,
+    name="Box",
+):
+    """Create a Part box in the active document as one undoable transaction.
+
+    This is the workbench's creation command: it adds a typed object with its
+    properties, and the shell picks it up through the display hook on the next sync.
+    """
+    doc = FreeCAD.ActiveDocument
+    if doc is None:
+        doc = FreeCAD.newDocument("Unnamed")
+    doc.openTransaction("Create Box")
+    try:
+        box = _add_box(doc, length, width, height, x, y, name)
+        doc.recompute()
+        doc.commitTransaction()
+    except Exception:
+        doc.abortTransaction()
+        raise
+    return box
+
+
+class _MakeBoxCommand:
+    """``Part_Box`` — add a box to the document."""
+
+    def GetResources(self):
+        return {
+            "MenuText": "Create Box",
+            "ToolTip": "Add a box to the document",
+            "Group": "Part",
+            "CmdType": "ForEdit",
+            "FerroCAD_Surface": "dock",
+        }
+
+    def IsActive(self):
+        return FreeCAD.ActiveDocument is not None
+
+    def Activated(self):
+        box = makeBox()
+        return {"status": f"created {box.Name}"}
+
+
+FreeCADGui.addCommand("Part_Box", _MakeBoxCommand())
+
+
 def bootstrap(doc_name: str = "Shell") -> str:
     """The base sample document plus a 20 mm solid for the viewport."""
     payload = _base_bootstrap(doc_name)
     doc = FreeCAD.ActiveDocument
-    box = doc.addObject("Part::Feature", "Box")
-    box.Shape = Part.makeBox(20.0, 20.0, 20.0)
+    _add_box(doc, DEFAULT_LENGTH, DEFAULT_WIDTH, DEFAULT_HEIGHT, 0.0, 0.0, "Box")
     doc.recompute()
     return payload

@@ -7,12 +7,14 @@ it registers the two **module hooks** Part needs and seeds the demo solid:
 * `FerroCAD.register_display_provider` — how a `Part` object is tessellated for the
   viewport;
 * `FerroCAD.register_interaction_provider` — what a manipulator commit means (the edge
-  dress-up arc's `dress_up` / `fillet` / `chamfer`).
+  dress-up arc's `dress_up` / `fillet` / `chamfer`, and the generic gizmo's
+  `transform` / `apply` as a placement change).
 
 The Rust half of the same contribution (the scrubber itself) is
-`ferrocad_part_gui::fillet_manipulator`, which the edition's `main` registers with
-the shell. The shell hosts it through the generic `Manipulator` seam, so it never
-names Part.
+`ferrocad_part_gui::fillet_manipulator`, which the edition's `main` adds to
+`ferrocad::base_contributions()` — the composition that already carries the shared
+translate gizmo. The shell hosts both through the generic `Manipulator` and
+`TransformGizmo` seams, so it never names Part.
 
 The shell imports this module by name (the edition's `HostConfig.entry_module`), so
 it must re-export every entry point the shell calls.

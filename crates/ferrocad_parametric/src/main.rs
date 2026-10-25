@@ -3,11 +3,13 @@
 //! The edition's whole job is composition: it links [`ferrocad_part_py`] (which
 //! links OCCT), registers `Part` in the *same image* as the core bindings, names its
 //! own app script (`ferrocad_parametric`) — which registers the Part display and
-//! interaction providers — and contributes the Part **manipulator** (the edge
-//! dress-up arc) to the shell. Then it delegates to the base app's shell.
+//! interaction providers — and adds the Part **manipulator** (the edge dress-up arc)
+//! to the base contributions. Then it delegates to the base app's shell.
 //!
 //! The manipulator is the only Rust-side Part code; the shell hosts it through the
-//! generic `Manipulator` seam and routes its commits to the app script. A BIM edition
+//! generic `Manipulator` seam and routes its commits to the app script. The shared
+//! translate gizmo comes from [`ferrocad::base_contributions`], so the edition only
+//! adds what its workbench owns (and never loses the base triad). A BIM edition
 //! would link its own module and contribute no dress-up at all.
 //!
 //! Run it with `cargo run -p ferrocad_parametric` (needs a display and OCCT).

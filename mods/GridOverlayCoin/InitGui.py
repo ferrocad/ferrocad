@@ -159,19 +159,19 @@ def save_settings(values):
         SETTINGS.SetFloat("shadow_opacity", float(values["shadow_opacity"]))
 
 
-def _grid_view(enabled):
+def _grid_view(overlay):
     """The view request for one overlay state, carrying the native ``grid`` flag.
 
     The overlay replaces the native ground while it is bound, so the request
-    says both: ``grid`` keeps a checkable command's mark in step with the one
-    switch, and ``grid_overlay`` hides the native layer. Without the semantic
+    says both: ``grid`` is the feature's stored switch and ``grid_overlay`` hides
+    the native layer when this backend is actually drawing. Without the semantic
     API (upstream) there is nothing to extend but the overlay flag.
     """
     grid = grid_api()
     if grid is None:
-        return {"view": {"grid_overlay": bool(enabled)}}
+        return {"view": {"grid_overlay": bool(overlay)}}
     request = grid.apply()
-    request["view"]["grid_overlay"] = bool(enabled)
+    request["view"]["grid_overlay"] = bool(overlay)
     return request
 
 
@@ -688,32 +688,39 @@ Gui._GridOverlayCoinManager = manager
 
 
 def activate():
-    """Become the drawn grid: turn the shared switch on and bind the overlay.
+    """Become the drawn grid without changing whether the grid is shown.
 
-    The switch is the one ``FerroCAD.Grid`` store, so taking the grid over turns
-    it on; the returned request rebinds the overlay and hides the native ground
-    in the same repaint. The private knob is only the upstream fallback.
+    ``FerroCAD.Grid.enabled`` is the feature's switch: the user owns it through
+    ``App_ToggleGrid``/``Settings/Grid``. This hook only binds the overlay when
+    that switch is on; ``activate`` also runs on document activation and on a
+    provider switch, so writing the switch here would undo a user's "off".
+
+    The returned request carries the stored visibility and, only while the
+    overlay is actually drawing, the ``grid_overlay`` claim that hides the
+    native ground. The private knob is only the upstream fallback.
     """
     grid = grid_api()
     if grid is None:
         manager.ensure_grid()
         return None
-    grid.enabled = True
+    visible = setting("enabled")
     manager.ensure_grid()
-    return _grid_view(True)
+    return _grid_view(visible)
 
 
 def deactivate():
-    """Detach every overlay this mod registered and restore the hidden default.
+    """Detach every overlay this mod registered, keeping the feature switch.
 
-    Only visibility moves: the appearance knobs stay, so switching back is
-    lossless (the ``deactivate`` contract in ``docs/workbenches/mod-providers.md``).
+    Only the overlay goes away: ``FerroCAD.Grid.enabled`` and the appearance
+    knobs stay, so switching back is lossless (the ``deactivate`` contract in
+    ``docs/workbenches/mod-providers.md``). The request releases the
+    ``grid_overlay`` claim so the incoming native backend draws the stored
+    policy.
     """
     manager.remove_grid()
     grid = grid_api()
     if grid is None:
         return None
-    grid.enabled = False
     return _grid_view(False)
 
 

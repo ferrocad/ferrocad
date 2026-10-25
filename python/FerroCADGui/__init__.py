@@ -220,10 +220,13 @@ def _document_event(event: str, name: str) -> None:
 # A mod that replaces a feature's implementation (the semantic and Coin grids
 # are the first pair) declares itself from ``InitGui.py`` with
 # :func:`registerProvider`. The registry keeps exactly one active backend per
-# feature and switches the viewport state by calling the outgoing provider's
-# ``deactivate`` and the incoming provider's ``activate``. A command that changed
-# shared state without switching can ask the active backend to re-read it with
-# :func:`refreshProviders`. See ``docs/workbenches/mod-providers.md``.
+# feature and selects it by calling the outgoing provider's ``deactivate`` and
+# the incoming provider's ``activate``. Those callbacks own the implementation
+# and its viewport claim, **not** the feature's visibility switch: ``activate``
+# also runs on document activation, so writing ``enabled`` there would undo a
+# user's "off". A command that changed shared state without switching can ask
+# the active backend to re-read it with :func:`refreshProviders`. See
+# ``docs/mods/providers.md`` and ``docs/workbenches/mod-providers.md``.
 # ---------------------------------------------------------------------------
 
 

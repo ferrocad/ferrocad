@@ -141,24 +141,25 @@ def _view():
 
 
 def activate():
-    """Become the drawn gizmo: enable it.
+    """Become the drawn gizmo without changing whether it is shown.
 
-    Returns the ``{"view": …}`` request so a switch repaints at once. The
-    registry catches errors; the preference write is idempotent.
+    ``FerroCAD.Gizmo.enabled`` is the feature's switch. This hook only claims the
+    shader backend, so a document activation or a backend switch cannot undo a
+    user's "off".
     """
-    gizmo = gizmo_api()
-    if gizmo is None:
+    if gizmo_api() is None:
         return {"status": UPSTREAM_STATUS}
-    gizmo.enabled = True
     return _view()
 
 
 def deactivate():
-    """Leave the drawn gizmo: hide it, keeping every other preference."""
-    gizmo = gizmo_api()
-    if gizmo is None:
+    """Stop being the drawn gizmo, keeping every preference.
+
+    The skin is data, so leaving it only repeats the backend claim. ``enabled``
+    and the appearance values stay exactly as the user left them.
+    """
+    if gizmo_api() is None:
         return {"status": UPSTREAM_STATUS}
-    gizmo.enabled = False
     return _view()
 
 

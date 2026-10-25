@@ -431,19 +431,26 @@ class GizmoOverlayModTests(unittest.TestCase):
         self.assertEqual(by_name["ghost_alpha"]["value"], "0.35")
         self.assertEqual(by_name["ring_snap_deg"]["value"], "15.0")
 
-    def test_activate_and_deactivate_toggle_enabled(self):
+    def test_activate_and_deactivate_preserve_enabled(self):
+        """The callbacks select the backend; the feature owns the switch."""
         self.gizmo.enabled = False
         result = self.mod.activate()
-        self.assertTrue(self.gizmo.enabled)
+        self.assertFalse(self.gizmo.enabled, "activate does not turn the gizmo on")
         expected = self.gizmo.apply()
         expected["view"]["gizmo"]["backend"] = "ferrocad"
         self.assertEqual(result, expected)
 
         result = self.mod.deactivate()
-        self.assertFalse(self.gizmo.enabled)
+        self.assertFalse(self.gizmo.enabled, "deactivate does not turn the gizmo off")
         expected = self.gizmo.apply()
         expected["view"]["gizmo"]["backend"] = "ferrocad"
         self.assertEqual(result, expected)
+
+        self.gizmo.enabled = True
+        self.mod.activate()
+        self.assertTrue(self.gizmo.enabled, "activate leaves an enabled gizmo on")
+        self.mod.deactivate()
+        self.assertTrue(self.gizmo.enabled, "deactivate leaves an enabled gizmo on")
 
     def test_the_callbacks_always_name_the_native_backend(self):
         FerroCADGui.registerProvider("gizmo", "coin", "Coin", priority=20)
@@ -591,21 +598,66 @@ class GizmoOverlayShaderModTests(unittest.TestCase):
         self.assertEqual(self.mod.settings_node(), "Settings/Gizmo")
         self.assertEqual(self.spec(), {"select": "Settings/Gizmo"})
 
-    def test_activate_and_deactivate_toggle_enabled(self):
+    def test_activate_and_deactivate_preserve_enabled(self):
+        """The shader callbacks select the backend; the feature owns the switch."""
         self.gizmo.enabled = False
         result = self.mod.activate()
-        self.assertTrue(self.gizmo.enabled)
+        self.assertFalse(self.gizmo.enabled, "activate does not turn the gizmo on")
         expected = self.gizmo.apply()
         expected["view"]["gizmo"]["backend"] = "ferrocad-shader"
         self.assertEqual(result, expected)
         self.assertEqual(result["view"]["gizmo"]["backend"], "ferrocad-shader")
 
         result = self.mod.deactivate()
-        self.assertFalse(self.gizmo.enabled)
+        self.assertFalse(self.gizmo.enabled, "deactivate does not turn the gizmo off")
         expected = self.gizmo.apply()
         expected["view"]["gizmo"]["backend"] = "ferrocad-shader"
         self.assertEqual(result, expected)
         self.assertEqual(result["view"]["gizmo"]["backend"], "ferrocad-shader")
+
+        self.gizmo.enabled = True
+        self.mod.activate()
+        self.assertTrue(self.gizmo.enabled, "activate leaves an enabled gizmo on")
+        self.mod.deactivate()
+        self.assertTrue(self.gizmo.enabled, "deactivate leaves an enabled gizmo on")
+
+    def test_visibility_survives_document_activation_and_provider_switch(self):
+        """Both gizmo backends must leave ``enabled`` for the feature/user."""
+        try:
+            self.gizmo.enabled = False
+            FreeCAD.newDocument("GizmoVisibilityOff")
+            FreeCAD.setActiveDocument("GizmoVisibilityOff")
+            self.assertFalse(
+                self.gizmo.enabled, "opening a document must not turn the gizmo on"
+            )
+
+            FerroCADGui.setActiveProvider("gizmo", "ferrocad")
+            self.assertFalse(
+                self.gizmo.enabled, "switching to native must not turn the gizmo on"
+            )
+            FerroCADGui.setActiveProvider("gizmo", "ferrocad-shader")
+            self.assertFalse(
+                self.gizmo.enabled, "switching to shader must not turn the gizmo on"
+            )
+
+            self.gizmo.enabled = True
+            FreeCAD.newDocument("GizmoVisibilityOn")
+            FreeCAD.setActiveDocument("GizmoVisibilityOn")
+            self.assertTrue(
+                self.gizmo.enabled, "opening another document must keep the gizmo on"
+            )
+
+            FerroCADGui.setActiveProvider("gizmo", "ferrocad")
+            self.assertTrue(
+                self.gizmo.enabled, "switching to native must keep the gizmo on"
+            )
+            FerroCADGui.setActiveProvider("gizmo", "ferrocad-shader")
+            self.assertTrue(
+                self.gizmo.enabled, "switching to shader must keep the gizmo on"
+            )
+        finally:
+            for name in list(FreeCAD.listDocuments()):
+                FreeCAD.closeDocument(name)
 
     def test_the_callbacks_always_name_the_shader_backend(self):
         FerroCADGui.setActiveProvider("gizmo", "ferrocad")

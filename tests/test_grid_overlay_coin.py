@@ -269,6 +269,9 @@ class GridOverlayCoinTests(unittest.TestCase):
         self.assertEqual(self.spec(), {"select": "Settings/Grid"})
 
     def test_activated_returns_the_six_field_dialog(self):
+        # The switch is a stored preference, not something a provider sets, so seed
+        # the "on" state explicitly before reading the dialog's rows.
+        FerroCAD.Grid.enabled = True
         spec = self.fallback_spec()
         self.assertEqual(spec["title"], "Grid Overlay (Coin) Settings")
         self.assertEqual(spec["accept"], "Apply")

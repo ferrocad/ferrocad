@@ -505,7 +505,8 @@ def _view(overlay):
     """``FerroCAD.Axis.apply()`` with this backend's native-triad claim.
 
     ``overlay=True`` tells the shell that this backend draws the axis itself and
-    must hide the native triad; the shell still gates the claim on ``enabled``.
+    must hide the native triad. The claim follows the stored ``enabled`` switch:
+    a disabled axis has nothing to hide, so it claims ``False``.
     """
     request = axis_api().apply()
     request["view"]["axis"]["overlay"] = bool(overlay)
@@ -513,22 +514,32 @@ def _view(overlay):
 
 
 def activate():
-    """Become the drawn axis cross: rebuild, bind and claim the native hide."""
+    """Become the drawn axis cross without changing whether it is shown.
+
+    ``FerroCAD.Axis.enabled`` is the feature's switch. This hook only rebuilds
+    and binds the overlay from the stored policy, then claims the native hide
+    when the axis is actually on. ``activate`` also runs on document activation
+    and on a provider switch, so writing the switch here would undo a user's
+    "off".
+    """
     axis = axis_api()
     if axis is None:
         return {"status": UPSTREAM_STATUS}
     if overlay_api() is None:
         return {"status": UPSTREAM_STATUS}
-    axis.enabled = True
     root = overlay()
     if root is None:
         return {"status": UPSTREAM_STATUS}
     root.apply_state(axis.snapshot())
-    return _view(True)
+    return _view(bool(axis.enabled))
 
 
 def deactivate():
-    """Leave the drawn axis cross: detach the overlay, keeping every preference."""
+    """Stop being the drawn axis cross, keeping every preference.
+
+    The overlay is detached and the native-hide claim released; ``enabled`` and
+    the appearance values stay exactly as the user left them.
+    """
     root = _overlay
     if root is not None:
         root.set_visible(False)
@@ -541,8 +552,8 @@ def refresh():
 
     The shell's axis toggle writes ``FerroCAD.Axis.enabled`` and asks the registry
     for a refresh, so the overlay follows the one switch without a second store.
-    While this backend is active it owns the native-hide claim; the caller still
-    gates it on ``enabled``.
+    While this backend is active it owns the native-hide claim, but the claim
+    follows ``enabled``: a disabled axis claims no overlay.
     """
     axis = axis_api()
     if axis is None:
@@ -551,7 +562,7 @@ def refresh():
     if root is None:
         return {"status": UPSTREAM_STATUS}
     root.apply_state(axis.snapshot())
-    return _view(True)
+    return _view(bool(axis.enabled))
 
 
 # Registration is idempotent across an add-on reload.

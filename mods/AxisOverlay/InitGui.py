@@ -100,24 +100,29 @@ def _view(overlay):
 
 
 def activate():
-    """Become the drawn axis cross: enable it.
+    """Become the drawn axis cross without changing whether it is shown.
 
-    Returns the ``{"view": …}`` request so a switch repaints at once. The
-    registry catches errors; the preference write is idempotent.
+    ``FerroCAD.Axis.enabled`` is the feature's switch, owned by
+    ``App_ToggleAxisCross``/``Settings/Axis``. This hook only selects the native
+    implementation and keeps the native triad claim off; writing the switch here
+    would turn a user's "off" back on when a document opens or a backend is
+    switched.
     """
     axis = axis_api()
     if axis is None:
         return {"status": UPSTREAM_STATUS}
-    axis.enabled = True
     return _view(False)
 
 
 def deactivate():
-    """Leave the drawn axis cross: hide it, keeping every other preference."""
+    """Stop being the drawn axis cross, keeping every preference.
+
+    The native backend draws the triad itself, so leaving it only repeats the
+    ``overlay=False`` claim. ``enabled`` stays exactly as the user left it.
+    """
     axis = axis_api()
     if axis is None:
         return {"status": UPSTREAM_STATUS}
-    axis.enabled = False
     return _view(False)
 
 

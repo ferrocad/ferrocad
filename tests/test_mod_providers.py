@@ -124,11 +124,16 @@ class ModProviderTests(unittest.TestCase):
 
     # -- the grid toggle over the Coin provider --------------------------
     def switch_to_coin(self, name="Toggle"):
-        """Open a document and make Coin the drawn grid; return its overlay."""
+        """Open a document and make Coin the drawn grid; return its overlay.
+
+        The user's switch is written first: ``activate`` only selects the
+        implementation, so it must preserve this value rather than turn it on.
+        """
         FreeCAD.newDocument(name)
         FreeCAD.setActiveDocument(name)
+        self.grid.enabled = True
         FerroCADGui.setActiveProvider(GRID, "coin")
-        self.assertTrue(self.grid.enabled, "coin activate turns the one switch on")
+        self.assertTrue(self.grid.enabled, "a provider switch preserves the switch")
         overlay = self.coin.manager.items[name]
         self.assertTrue(overlay.visible)
         self.assertIn(overlay.root, coin_suite.COIN._registered)
@@ -349,6 +354,7 @@ class ModProviderTests(unittest.TestCase):
     def test_switching_the_grid_backends_adds_and_removes_the_coin_overlay(self):
         FreeCAD.newDocument("Providers")
         FreeCAD.setActiveDocument("Providers")
+        self.grid.enabled = True
         self.assertEqual(
             FerroCADGui.activeProvider(GRID), "ferrocad", "the declared default"
         )
@@ -366,17 +372,67 @@ class ModProviderTests(unittest.TestCase):
         self.assertEqual(result["previous"], "coin")
         self.assertEqual(self.coin.manager.items, {})
         self.assertEqual(coin_suite.COIN._registered, [], "the Coin overlay is gone")
-        self.assertTrue(self.grid.enabled, "native activate enables the native grid")
+        self.assertTrue(self.grid.enabled, "native deactivate keeps the switch")
         self.assertTrue(result["view"]["grid"])
 
         result = FerroCADGui.setActiveProvider(GRID, "coin")
         self.assertIn("Providers", self.coin.manager.items)
         self.assertTrue(coin_suite.COIN._registered, "the Coin overlay is re-added")
         self.assertTrue(
-            self.grid.enabled, "coin activate turns the one grid switch on"
+            self.grid.enabled, "coin activate keeps the one grid switch"
         )
         self.assertTrue(result["view"]["grid"])
         self.assertTrue(result["view"]["grid_overlay"], "the native ground is hidden")
+
+    # -- visibility is a stored preference -------------------------------
+    def test_visibility_survives_document_activation_and_provider_switches(self):
+        """``activate``/``deactivate`` never write the feature's master switch.
+
+        The registry runs ``activate`` when a document opens and on a provider
+        switch. Before this rule, every shipped backend wrote ``enabled = True``
+        there, so a user's "off" lasted only until the next document event.
+        """
+        self.grid.enabled = False
+        FreeCAD.newDocument("VisibilityOff")
+        FreeCAD.setActiveDocument("VisibilityOff")
+        self.assertFalse(
+            self.grid.enabled, "opening a document must not turn the grid on"
+        )
+
+        FerroCADGui.setActiveProvider(GRID, "coin")
+        self.assertFalse(
+            self.grid.enabled, "switching to Coin must not turn the grid on"
+        )
+        self.assertNotIn(
+            "VisibilityOff",
+            self.coin.manager.items,
+            "a disabled grid has no overlay to draw",
+        )
+        self.assertFalse(self.coin.setting("enabled"))
+
+        FerroCADGui.setActiveProvider(GRID, "ferrocad")
+        self.assertFalse(
+            self.grid.enabled, "switching back must not turn the grid on"
+        )
+
+        # The converse: an "on" must survive the same lifecycle.
+        self.grid.enabled = True
+        FreeCAD.newDocument("VisibilityOn")
+        FreeCAD.setActiveDocument("VisibilityOn")
+        self.assertTrue(
+            self.grid.enabled, "opening another document must keep the grid on"
+        )
+
+        FerroCADGui.setActiveProvider(GRID, "coin")
+        self.assertTrue(
+            self.grid.enabled, "switching to Coin must keep the grid on"
+        )
+        self.assertIn("VisibilityOn", self.coin.manager.items)
+
+        FerroCADGui.setActiveProvider(GRID, "ferrocad")
+        self.assertTrue(
+            self.grid.enabled, "switching back must keep the grid on"
+        )
 
     # -- the inactive command --------------------------------------------
     def test_the_inactive_coin_command_reports_and_changes_nothing(self):
@@ -414,6 +470,7 @@ class ModProviderTests(unittest.TestCase):
     def test_mods_settings_lists_both_grid_providers_and_switches(self):
         FreeCAD.newDocument("Mods")
         FreeCAD.setActiveDocument("Mods")
+        self.grid.enabled = True
         FerroCADGui.setActiveProvider(GRID, "ferrocad")
 
         run = FreeCADGui._run(MODS_COMMAND)

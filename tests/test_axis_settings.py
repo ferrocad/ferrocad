@@ -677,19 +677,66 @@ class AxisOverlayModTests(unittest.TestCase):
         self.assertEqual(by_name["length"]["value"], "80.0")
         self.assertEqual(by_name["ghost_alpha"]["value"], "0.1")
 
-    def test_activate_and_deactivate_toggle_enabled(self):
+    def test_activate_and_deactivate_preserve_enabled(self):
+        """The callbacks select the backend; the feature owns the switch."""
         self.axis.enabled = False
         result = self.mod.activate()
-        self.assertTrue(self.axis.enabled)
+        self.assertFalse(self.axis.enabled, "activate does not turn the axis on")
         expected = self.axis.apply()
         expected["view"]["axis"]["overlay"] = False
         self.assertEqual(result, expected)
 
         result = self.mod.deactivate()
-        self.assertFalse(self.axis.enabled)
+        self.assertFalse(self.axis.enabled, "deactivate does not turn the axis off")
         expected = self.axis.apply()
         expected["view"]["axis"]["overlay"] = False
         self.assertEqual(result, expected)
+
+        self.axis.enabled = True
+        self.mod.activate()
+        self.assertTrue(self.axis.enabled, "activate leaves an enabled axis on")
+        self.mod.deactivate()
+        self.assertTrue(self.axis.enabled, "deactivate leaves an enabled axis on")
+
+    def test_visibility_survives_document_activation_and_provider_switch(self):
+        """Document events and backend switches must not write ``enabled``."""
+        FerroCADGui.registerProvider("axis", "other", "Other", priority=0)
+        try:
+            self.axis.enabled = False
+            FreeCAD.newDocument("AxisVisibilityOff")
+            FreeCAD.setActiveDocument("AxisVisibilityOff")
+            self.assertFalse(
+                self.axis.enabled, "opening a document must not turn the axis on"
+            )
+
+            FerroCADGui.setActiveProvider("axis", "other")
+            self.assertFalse(
+                self.axis.enabled, "switching away must not turn the axis on"
+            )
+            FerroCADGui.setActiveProvider("axis", "ferrocad")
+            self.assertFalse(
+                self.axis.enabled, "switching back must not turn the axis on"
+            )
+
+            self.axis.enabled = True
+            FreeCAD.newDocument("AxisVisibilityOn")
+            FreeCAD.setActiveDocument("AxisVisibilityOn")
+            self.assertTrue(
+                self.axis.enabled, "opening another document must keep the axis on"
+            )
+
+            FerroCADGui.setActiveProvider("axis", "other")
+            self.assertTrue(
+                self.axis.enabled, "switching away must keep the axis on"
+            )
+            FerroCADGui.setActiveProvider("axis", "ferrocad")
+            self.assertTrue(
+                self.axis.enabled, "switching back must keep the axis on"
+            )
+        finally:
+            FerroCADGui.unregisterProvider("axis", "other")
+            for name in list(FreeCAD.listDocuments()):
+                FreeCAD.closeDocument(name)
 
     def test_the_native_backend_never_claims_the_overlay(self):
         self.axis.enabled = True

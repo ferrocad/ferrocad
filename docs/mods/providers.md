@@ -215,14 +215,23 @@ are reported and collected, never raised.
 This is the rule that keeps two implementations from disagreeing about "on":
 
 - The **feature** owns one master switch and the command that writes it.
+- **A provider's `activate`/`deactivate` never write that switch.** They select
+  an implementation and make their claim (`overlay`, `backend`, or the grid's
+  `grid_overlay`); visibility stays wherever the user left it. This matters
+  because the registry runs `activate` on every document activation and on
+  every provider switch, not only when the user asks for the feature.
 - A provider's own knobs are for appearance, not for the master switch.
-- `activate`/`deactivate` select an implementation; they are not the only place
-  the feature is turned on.
 - A provider that draws from its own store must implement `refresh` so a
   feature-level change reaches it.
 - An inactive backend checks `activeProvider(feature)` before drawing and in
   `Activated`, and reports why it refused. `IsActive` stays `True` so the entry
   remains visible.
+
+The consequence is that a stored "off" survives opening or switching a
+document, and a stored "on" survives switching away and back. The boot path
+applies the stored visibility like any other value: the temporary
+`ViewRequest::without_visibility` strip was removed once the mods stopped owning
+the switch.
 
 The grid is the worked example:
 
@@ -253,9 +262,12 @@ hook and the feature-owned switch rule.
 - [ ] Check `FerroCADGui.activeProvider(feature)` before drawing and in
       `Activated`; return a `{"status": ...}` naming the active backend when it
       is not you.
+- [ ] Never write the feature's master switch in `activate`/`deactivate`; the
+      feature's toggle (or settings row) owns it. Return the stored visibility
+      with your claim instead.
 - [ ] Make `activate` idempotent and safe with no document.
 - [ ] Make `deactivate` undo only what `activate` added; leave user settings
-      alone.
+      alone, including the master switch.
 - [ ] Implement `refresh` if the feature's master switch lives outside your
       store.
 - [ ] Keep appearance settings in your own `ParamGet` group.

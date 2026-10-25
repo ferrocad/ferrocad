@@ -345,6 +345,7 @@ class AxisOverlayCoinTests(unittest.TestCase):
 
     # -- the pull bridge ------------------------------------------------
     def test_activate_registers_the_overlay_and_deactivate_removes_it(self):
+        self.axis.enabled = True
         with mock.patch.object(FerroCADGui, "addOverlay") as add, \
                 mock.patch.object(FerroCADGui, "removeOverlay") as remove:
             result = self.mod.activate()
@@ -352,13 +353,28 @@ class AxisOverlayCoinTests(unittest.TestCase):
             root = add.call_args.args[0]
             self.assertIsInstance(root, COIN.SoSwitch)
             self.assertEqual(root.whichChild, COIN.SO_SWITCH_ALL)
-            self.assertTrue(self.axis.enabled)
+            self.assertTrue(self.axis.enabled, "activate preserves the switch")
             self.assertIs(result["view"]["axis"]["overlay"], True)
 
             result = self.mod.deactivate()
             remove.assert_called_once_with(root)
             self.assertEqual(root.whichChild, COIN.SO_SWITCH_NONE)
             self.assertIs(result["view"]["axis"]["overlay"], False)
+
+    def test_activate_preserves_the_switch_and_only_claims_an_enabled_overlay(self):
+        self.axis.enabled = False
+        with mock.patch.object(FerroCADGui, "addOverlay") as add:
+            result = self.mod.activate()
+
+        self.assertFalse(self.axis.enabled, "activate does not turn the axis on")
+        self.assertIs(result["view"]["axis"]["overlay"], False)
+        self.assertFalse(self.mod._overlay.visible, "a disabled overlay is not bound")
+        add.assert_not_called()
+
+        self.axis.enabled = True
+        result = self.mod.activate()
+        self.assertTrue(self.axis.enabled, "activate preserves an enabled switch")
+        self.assertIs(result["view"]["axis"]["overlay"], True)
 
     def test_refresh_rebuilds_and_re_registers_the_same_root(self):
         with mock.patch.object(FerroCADGui, "addOverlay") as add, \

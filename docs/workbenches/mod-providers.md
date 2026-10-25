@@ -154,6 +154,10 @@ mod:
 | active document **deactivated** or **closed** | the applied backends' `deactivate`, then forget them as applied |
 | any document **created** | nothing; activation attaches the providers |
 
+`activate` here selects and attaches the implementation; it never writes the
+feature's `enabled` preference. Opening or switching a document therefore cannot
+turn a feature the user switched off back on.
+
 This is what makes "activate on open, deactivate on close" immediate and
 symmetric. It is also **idempotent**: the applied record is removed *before* the
 `deactivate` callback runs, so a document that is deactivated and then closed
@@ -184,8 +188,10 @@ and nothing more:
 
 - detach/remove what `activate` added (the Coin mod removes its overlay with
   `manager.remove_grid()`);
-- restore the shared default the incoming backend expects (the FerroCAD-native mod
-  sets `FerroCAD.Grid.enabled = False`, the native grid's documented default);
+- leave the feature's master switch alone. Visibility belongs to the feature
+  (`FerroCAD.Grid.enabled`/`Axis.enabled`/`Gizmo.enabled` via
+  `App_ToggleGrid`/`App_ToggleAxisCross` or the `Settings/<Feature>` rows), so a
+  switch away and back preserves exactly what the user chose;
 - **do not** clear the user's own settings. The FerroCAD-native mod leaves colour,
   spacing and shadows alone, so switching away and back is lossless;
 - be idempotent and safe when there is no document (`activate` on Coin with no
@@ -201,10 +207,11 @@ so an inactive backend cannot draw behind the active one.
 
 | Mod | feature | backend | priority | activate | deactivate |
 | --- | --- | --- | --- | --- | --- |
-| `mods/GridOverlay` | `grid` | `ferrocad` | 10 | `FerroCAD.Grid.enabled = True`, `apply()` | `enabled = False`, `apply()` |
-| `mods/GridOverlayCoin` | `grid` | `coin` | 0 | `manager.ensure_grid()` | `manager.remove_grid()` |
+| `mods/GridOverlay` | `grid` | `ferrocad` | 10 | claim the native implementation; return `apply()` | same; no viewport change |
+| `mods/GridOverlayCoin` | `grid` | `coin` | 0 | `manager.ensure_grid()`, `grid_overlay = <stored switch>` | `manager.remove_grid()`, `grid_overlay = false` |
 
-Both keep their own command (`GridOverlay_Settings`,
+Neither callback writes `enabled`: the grid stays off if it was off, and on if
+it was on. Both keep their own command (`GridOverlay_Settings`,
 `GridOverlayCoin_Settings`) and their own settings; neither implementation was
 removed. The FerroCAD-native backend is the default because it needs no Coin facade.
 

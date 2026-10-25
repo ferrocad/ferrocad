@@ -98,28 +98,31 @@ def inactive_status():
 
 
 def activate():
-    """Become the drawn grid: enable the native grid.
+    """Become the drawn grid without changing whether the grid is shown.
 
-    Returns the ``{"view": …}`` request so a switch repaints at once. The
-    registry catches errors; the preference write is idempotent.
+    ``FerroCAD.Grid.enabled`` is the feature's switch: the user owns it through
+    ``App_ToggleGrid``/``Settings/Grid``. This hook only selects the native
+    implementation, so it must not write the switch — ``activate`` also runs on
+    document activation and on every provider switch, and either would undo a
+    user's "off". The returned ``{"view": …}`` request carries the stored
+    visibility and appearance so a switch repaints immediately.
     """
     grid = grid_api()
     if grid is None:
         return {"status": UPSTREAM_STATUS}
-    grid.enabled = True
     return grid.apply()
 
 
 def deactivate():
-    """Leave the drawn grid: restore the native grid's default (hidden).
+    """Stop being the drawn grid without changing whether the grid is shown.
 
-    Only visibility is restored; the user's colour and spacing preferences are
-    left alone, so switching back is lossless.
+    The native backend adds nothing to the viewport, so leaving it is a no-op
+    apart from returning the stored policy. Colour, spacing and ``enabled`` are
+    all left alone, so switching away and back is lossless.
     """
     grid = grid_api()
     if grid is None:
         return {"status": UPSTREAM_STATUS}
-    grid.enabled = False
     return grid.apply()
 
 

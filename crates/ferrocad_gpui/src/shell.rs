@@ -31,6 +31,7 @@ use ferrocad_viewport::{
 };
 use ferrocad_wgpu::{AdapterChoice, AdapterSummary, WgpuRenderer};
 use ferrocad_widgets::accordion::{AccordionSection, AccordionState, accordion};
+use ferrocad_widgets::color;
 use ferrocad_widgets::scroll::scroll_area;
 use ferrocad_widgets::wheel::{WheelEvent, WheelMenu, WheelSlot, WheelTone};
 use ferrocad_widgets::window_chrome::window_frame_with_leading;
@@ -58,6 +59,9 @@ pub(crate) use ferrocad_theme::ui::{
 
 /// The registry feature whose provider supplies the gizmo skin.
 const GIZMO_FEATURE: &str = "gizmo";
+
+/// The property-row kind whose string value is a `#rrggbb` colour.
+const KIND_COLOR: &str = "color";
 
 /// Whether two names address the same tree node.
 ///
@@ -242,6 +246,9 @@ pub struct Shell {
     gpu_adapters: Option<Vec<AdapterSummary>>,
     /// The modeless settings card, opened for a `Settings/<Feature>` node.
     settings_card: Option<SettingsCard>,
+    /// The property key whose inline colour palette is expanded, if any. It is UI
+    /// state only: the value itself lives in the parameter store.
+    color_picker: Option<String>,
     /// The radial sidecar: it owns the gesture and its overlay. The shell only
     /// triggers it (right-press / Space) and maps a selected id to a command.
     wheel: Entity<WheelMenu>,
@@ -491,6 +498,7 @@ impl Shell {
             gpu_preference: None,
             gpu_adapters: None,
             settings_card: None,
+            color_picker: None,
             wheel,
             _wheel_events: wheel_events,
             wheel_target: None,
@@ -706,6 +714,7 @@ impl Shell {
 
     /// Close the settings card; returns whether it was open.
     fn close_settings_card(&mut self, cx: &mut Context<Self>) -> bool {
+        self.color_picker = None;
         if self.settings_card.take().is_some() {
             cx.notify();
             true
@@ -2680,6 +2689,7 @@ impl Shell {
             .map(|name| python::properties(name).unwrap_or_default())
             .unwrap_or_default();
         self.prop_inputs.clear();
+        self.color_picker = None;
         let status = match (items.len(), primary.as_deref()) {
             (0, _) | (_, None) => "selection cleared".to_string(),
             (1, Some(name)) => format!("selected {name}"),
@@ -2845,6 +2855,9 @@ impl Shell {
         };
         let status = match python::set_property(object, property, text) {
             Ok(result) if result.ok => {
+                // The edit is done, so a palette that asked for it can close (the
+                // typed-hex path and the swatch path share this commit).
+                self.color_picker = None;
                 if let Some(input) = self.prop_inputs.get_mut(key) {
                     input.seeded = text.to_string();
                 }
@@ -2874,6 +2887,16 @@ impl Shell {
             Err(e) => format!("property error: {e}"),
         };
         self.model.lock().unwrap().status = status;
+        cx.notify();
+    }
+
+    /// Toggle the inline colour palette under a settings row.
+    fn toggle_color_picker(&mut self, key: &str, cx: &mut Context<Self>) {
+        self.color_picker = if self.color_picker.as_deref() == Some(key) {
+            None
+        } else {
+            Some(key.to_string())
+        };
         cx.notify();
     }
 
@@ -3596,12 +3619,37 @@ pub(crate) fn properties_panel(
                     let key = format!("{name}.{}", row.name);
                     let state = shell.ensure_prop_input(&key, &row.value, window, cx);
                     let selector = format!("prop-{key}");
-                    div()
-                        .debug_selector(move || selector.clone())
-                        .w(px(150.))
-                        .flex_shrink_0()
-                        .child(state)
-                        .into_any_element()
+                    if row.kind == KIND_COLOR {
+                        // A colour row keeps its text field (a typed hex still works)
+                        // and gains a swatch that expands the palette under the row.
+                        let swatch_key = key.clone();
+                        let open = shell.color_picker.as_deref() == Some(key.as_str());
+                        div()
+                            .debug_selector(move || selector.clone())
+                            .flex()
+                            .flex_row()
+                            .items_center()
+                            .gap_2()
+                            .w(px(180.))
+                            .flex_shrink_0()
+                            .child(color::swatch(
+                                SharedString::from(format!("color-{key}")),
+                                &row.value,
+                                open,
+                                cx.listener(move |this, _event, _window, cx| {
+                                    this.toggle_color_picker(&swatch_key, cx);
+                                }),
+                            ))
+                            .child(div().w(px(120.)).child(state))
+                            .into_any_element()
+                    } else {
+                        div()
+                            .debug_selector(move || selector.clone())
+                            .w(px(150.))
+                            .flex_shrink_0()
+                            .child(state)
+                            .into_any_element()
+                    }
                 } else {
                     let value = if row.status.is_empty() {
                         row.value.clone()
@@ -3651,6 +3699,29 @@ pub(crate) fn properties_panel(
                         )
                         .child(value),
                 );
+
+                // The palette expands under its row, inside the same scroll
+                // container: no overlay, so it works in the card and in Dev Tools.
+                if row.editable && row.kind == KIND_COLOR {
+                    let key = format!("{name}.{}", row.name);
+                    if shell.color_picker.as_deref() == Some(key.as_str()) {
+                        let weak = cx.weak_entity();
+                        let pick_key = key.clone();
+                        rows = rows.child(div().flex().px_2().pb_1().pl(px(12.)).child(
+                            color::palette(
+                                SharedString::from(format!("color-{key}")),
+                                &row.value,
+                                move |hex, _event, _window, cx| {
+                                    let _ = weak.update(cx, |shell, cx| {
+                                        shell.commit_property(&pick_key, hex, cx);
+                                        shell.color_picker = None;
+                                        cx.notify();
+                                    });
+                                },
+                            ),
+                        ));
+                    }
+                }
             }
         }
     }
@@ -7057,6 +7128,64 @@ if "App_ReloadAxisSettings" not in FreeCADGui.listCommands():
             field.size.height > px(0.),
             "Dev Tools field bounds {field:?}"
         );
+
+        reset_grid_state();
+    }
+
+    /// A colour row shows a swatch; clicking it expands the palette, and a pick
+    /// commits through the same property path as a typed hex.
+    #[gpui::test]
+    fn a_colour_setting_opens_the_palette_and_commits(cx: &mut TestAppContext) {
+        let _guard = crate::PYTHON_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let model = boot_shell();
+        reset_grid_state();
+        let window = cx.update(|cx| {
+            let model = model.clone();
+            cx.open_window(Default::default(), move |_window, cx| {
+                cx.new(|cx| Shell::from_model(model.clone(), cx))
+            })
+            .unwrap()
+        });
+        let mut cx = VisualTestContext::from_window(window.into(), cx);
+        let shell: Entity<Shell> = window.root(&mut cx).unwrap();
+        cx.update(|_window, cx| {
+            shell.update(cx, |shell, cx| shell.run_command("View_GridSettings", cx))
+        });
+        draw(&mut cx);
+
+        assert!(
+            cx.debug_bounds("color-Settings/Grid.color-swatch")
+                .is_some(),
+            "the colour row has a swatch"
+        );
+        assert!(
+            cx.debug_bounds("color-Settings/Grid.color-palette")
+                .is_none()
+        );
+
+        click_at(&mut cx, "color-Settings/Grid.color-swatch");
+        draw(&mut cx);
+        assert!(
+            cx.debug_bounds("color-Settings/Grid.color-palette")
+                .is_some(),
+            "the swatch opens the palette"
+        );
+
+        click_at(&mut cx, "color-Settings/Grid.color-pick-ef4444");
+        draw(&mut cx);
+        assert!(
+            cx.debug_bounds("color-Settings/Grid.color-palette")
+                .is_none(),
+            "picking closes the palette"
+        );
+        let stored = model
+            .lock()
+            .unwrap()
+            .properties
+            .iter()
+            .find(|row| row.name == "color")
+            .map(|row| row.value.clone());
+        assert_eq!(stored.as_deref(), Some("#ef4444"), "the pick was committed");
 
         reset_grid_state();
     }

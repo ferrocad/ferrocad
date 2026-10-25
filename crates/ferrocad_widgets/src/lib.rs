@@ -5,6 +5,7 @@
 //!   when the column runs out of height.
 //! * [`scroll`] adds the scrollbar gpui never paints: a tracked scroll area and a
 //!   draggable thumb.
+//! * [`color`] is the property editor's colour row: a swatch and a fixed palette.
 //! * [`window_chrome::window_frame`] draws client-side decorations (title bar and
 //!   resize grips) where the compositor does not.
 //! * [`text_field::TextInput`] is a single-line editable field that emits
@@ -18,6 +19,7 @@
 //!   (armed/latched, tap-vs-flick, hover, overlay and dismissal).
 
 pub mod accordion;
+pub mod color;
 pub mod events;
 pub mod menu;
 pub mod scroll;
@@ -28,6 +30,7 @@ pub mod wheel;
 pub mod window_chrome;
 
 pub use accordion::{AccordionLayout, AccordionSection, AccordionState, accordion, resolve_layout};
+pub use color::{normalize_hex, palette, parse_hex, swatch};
 pub use events::{ChangeEvent, SubmitEvent};
 pub use menu::{MenuInfoRow, MenuRow, menu};
 pub use scroll::{scroll_area, scroll_thumb, thumb_bounds};

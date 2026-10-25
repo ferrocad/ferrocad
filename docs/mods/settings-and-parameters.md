@@ -178,6 +178,13 @@ under `Settings/<Feature>`; `setSetting` validates and then runs the backend's
 different dialog per mod. A provider with no `settings` keeps its `command` as its
 settings entry.
 
+The supported kinds are `text`, `bool`, `int`, `float`, `quantity` (with `unit`),
+`enum` (with `choices`) and `color`. A `color` value is a `#rrggbb` string, and the
+property pane renders it as a swatch plus the hex field: clicking the swatch expands
+`ferrocad_widgets::color::palette` under the row, and a pick commits through the same
+path as typing the hex. The palette is a fixed set of neutrals and accents; typing an
+arbitrary colour still works.
+
 The `refresh` result is only a **request**. It reaches the viewport when the
 caller applies it: a command or a dialog does, the `Settings/<Feature>` property
 pane does not (see [Precedence](#precedence-who-wins-and-when)).

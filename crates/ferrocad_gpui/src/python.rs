@@ -148,10 +148,9 @@ pub struct PropRow {
     /// defaults` on a settings card).
     #[serde(default)]
     pub command: Option<String>,
-    /// The editor kind (`text`, `bool`, `int`, `float`, `quantity`, `enum`).
-    /// Used to pick the control once the editor has more than a text field.
+    /// The editor kind (`text`, `bool`, `int`, `float`, `quantity`, `enum`,
+    /// `color`). It picks the control: a `color` row gets a swatch and a palette.
     #[serde(default)]
-    #[allow(dead_code)]
     pub kind: String,
 }
 

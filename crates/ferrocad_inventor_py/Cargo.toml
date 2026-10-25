@@ -10,7 +10,7 @@
 # it is a workspace member but NOT in `default-members`.
 [package]
 name = "ferrocad_inventor_py"
-version = "0.1.3"
+version = "0.1.4"
 edition.workspace = true
 license.workspace = true
 readme.workspace = true

@@ -160,8 +160,10 @@ application. See [`releasing.md`](releasing.md).
 | macOS | `.app` in a `.dmg` | `hdiutil`/`create-dmg`; codesign + notarize |
 | Windows | portable `.exe` or MSIX | WiX/MSIX, or a zip |
 
-**Status (v0.1.3).** The release workflow publishes the Linux AppImage and the
-Windows `.zip`; the macOS `.dmg` is blocked because `bite-gp-apple 1.24.402`
+**Status (v0.1.4).** The release workflow publishes the Linux AppImage and the
+Windows `.zip` for the base app, plus the same pair for the Parametric edition
+(`ferrocad-parametric-*`, with the OCCT closure under `lib/`); the macOS `.dmg` is
+blocked because `bite-gp-apple 1.24.402`
 (the GPUI Metal backend) uses `cocoa` without declaring it. See
 [`releasing.md`](releasing.md) §5. Each artifact bundles the pinned
 `python-build-standalone` runtime (the build job runs `cargo xtask python` before

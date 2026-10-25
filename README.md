@@ -12,7 +12,7 @@ Python import namespace stays `FreeCAD`; the project/distribution is `ferrocad`.
 | --- | --- | --- |
 | **Engine** | the pure-Rust document model behind the `FreeCAD` API | `A1`/`B1`/`A2`/`B2` done; conformance **160 passing** (`Document.py` 87/137, ~18 real gaps). Persistence (`C`) and the MVP surface (`D`) outstanding. |
 | **App shell** | the `bite-gpui` window driving the engine through embedded CPython | `S1` done: decorated window, inspector, property editor, Python console, status bar. `S2`–`S6` planned. |
-| **Distribution** | how it ships | done: `v0.1.3`, twenty-one crates on crates.io, three self-contained artifacts (AppImage / `.dmg` / zip) plus `cargo install`. |
+| **Distribution** | how it ships | done: `v0.1.4`, twenty-one crates on crates.io, four self-contained artifacts (base and Parametric AppImage/zip pairs) plus `cargo install`. |
 | **Workbenches** | reusing upstream workbenches | `cargo xtask mods` fetches `Draft`; loading is best-effort and stops on the `FreeCADGui` stub (`Workbench`, `addWorkbench`, …) and the missing `FreeCAD.addImportType`. |
 
 This is a proof of concept, not a product. It exists to validate the single
@@ -171,7 +171,7 @@ The Parametric edition needs OCCT 7.8. Fetch the 7.8.1 prefix CI uses into
 Expected output:
 
 ```
-FreeCAD version : 0.1.3
+FreeCAD version : 0.1.4
 Active document : HelloWorld
 Document label  : HelloWorld
 Object count    : 1

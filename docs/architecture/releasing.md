@@ -6,7 +6,7 @@ Status: reference (2026-10-05). Companion to
 how the workspace reaches its consumers: the Rust crates on crates.io and the
 `FreeCAD`-namespace Python distribution on PyPI.
 
-**Status (2026-10-25, `0.1.3`).** Twenty-one crates are published:
+**Status (2026-10-25, `0.1.4`).** Twenty-one crates are published:
 `ferrocad_types`, `ferrocad_theme`, `ferrocad_lineage`, `ferrocad_curves`,
 `ferrocad_ui`, `ferrocad_core`, `ferrocad_geom`, `ferrocad_graphics`,
 `ferrocad_widgets`, `ferrocad_inventor`, `ferrocad_stage`, `ferrocad_inventor_py`,
@@ -17,7 +17,7 @@ how the workspace reaches its consumers: the Rust crates on crates.io and the
 wgpu, viewport), because `ferrocad_gpui` and the app now depend on it. Versions are
 **per crate**: a release may bump only the crates whose sources changed, and the
 publish workflow skips the rest (their version is already on crates.io); this
-release bumps all of them to `0.1.3` in lockstep. `[workspace.package] version` is
+release bumps all of them to `0.1.4` in lockstep. `[workspace.package] version` is
 the release/product version the git tag is checked against. The same tag produces
 the self-contained desktop artifacts on the GitHub Releases page (§5): the base
 app's Linux/Windows pair and, since the edition bundler landed, the Parametric
@@ -125,15 +125,15 @@ development) and a `version` (which the registry requires):
 
 ```toml
 # [workspace.dependencies]
-ferrocad_types = { path = "crates/ferrocad_types", version = "0.1.3" }
-ferrocad_core  = { path = "crates/ferrocad_core",  version = "0.1.3" }
+ferrocad_types = { path = "crates/ferrocad_types", version = "0.1.4" }
+ferrocad_core  = { path = "crates/ferrocad_core",  version = "0.1.4" }
 # ... one line per crate, all at the release version
 ```
 
 Each dependency's `version` requirement must be satisfied by the version that
 crate publishes at, and each crate's own `[package] version` is explicit (or
 inherited from `[workspace.package]`) accordingly. A coordinated release bumps every
-crate to the same version (this one, `0.1.3`); a targeted one bumps only the crates
+crate to the same version (this one, `0.1.4`); a targeted one bumps only the crates
 whose sources changed and leaves the rest at their published version, so the
 workflow republishes only those.
 
@@ -341,12 +341,14 @@ order therefore includes the dev-dependency edges (`part_py` → `stage_py`, `wg
 `stage`, `part` → `occt`). The desktop artifacts still ship the base `ferrocad`
 binary.
 
-**After `v0.1.3` (unreleased).** `release.yml` gained an `edition` job that fetches
-OCCT 7.8.1, builds `ferrocad_parametric`, walks its library closure and attaches
-`ferrocad-parametric-x86_64.AppImage` and
-`ferrocad-parametric-windows-x86_64.zip` beside the base artifacts. The macOS leg
-was removed from the release matrix because the pinned GPUI fork does not build
-there; see the note below.
+**`v0.1.4` (the edition round).** `release.yml` gained an `edition` job that
+fetches OCCT 7.8.1, builds `ferrocad_parametric`, walks its library closure and
+attaches `ferrocad-parametric-x86_64.AppImage` and
+`ferrocad-parametric-windows-x86_64.zip` beside the base artifacts, so a tag now
+yields four. The macOS leg was removed from the release matrix because the pinned
+GPUI fork does not build there; see the note below. The crates themselves are a
+patch bump of the same 21 (no new crate), carrying the Part edition's move-gizmo
+fix, its `Color`/`DisplayMode` properties and `Part_Box`.
 
 **macOS is absent from `v0.1.3`.** The release with these crates published is
 Linux and Windows only: `bite-gp-apple 1.24.402` (the GPUI Metal backend) uses

@@ -9,7 +9,7 @@
 # Needs CPython headers, so it is a workspace member but NOT in `default-members`.
 [package]
 name = "ferrocad_stage_py"
-version = "0.1.3"
+version = "0.1.4"
 edition.workspace = true
 license.workspace = true
 readme.workspace = true

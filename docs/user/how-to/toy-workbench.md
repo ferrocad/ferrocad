@@ -29,7 +29,7 @@ payload = json.loads(ferrocad_toy.bootstrap("Toy"))
 {
   "backend": "ferrocad",
   "document": "Toy",
-  "version": "0.1.3"
+  "version": "0.1.4"
 }
 ```
 

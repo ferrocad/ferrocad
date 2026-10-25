@@ -6,7 +6,7 @@
 # (pivy-compatible `coin`) facade scripts against.
 [package]
 name = "ferrocad_inventor"
-version = "0.1.3"
+version = "0.1.4"
 edition.workspace = true
 license.workspace = true
 readme.workspace = true

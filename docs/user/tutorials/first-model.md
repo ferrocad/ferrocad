@@ -21,7 +21,7 @@ import FreeCAD
 
 | Read back | Value |
 | --- | --- |
-| Version | 0.1.3 |
+| Version | 0.1.4 |
 | Backend | ferrocad |
 
 ## 2. Make a document

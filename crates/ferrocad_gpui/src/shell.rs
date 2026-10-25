@@ -7007,6 +7007,60 @@ if "App_ReloadAxisSettings" not in FreeCADGui.listCommands():
         reset_grid_state();
     }
 
+    /// The settings rows are *painted*, not merely built: both the card and the Dev
+    /// Tools property pane go through `properties_panel`, and the field elements must
+    /// have real bounds inside the scroll area.
+    #[gpui::test]
+    fn the_settings_rows_are_painted(cx: &mut TestAppContext) {
+        let _guard = crate::PYTHON_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let model = boot_shell();
+        reset_grid_state();
+        let window = cx.update(|cx| {
+            let model = model.clone();
+            cx.open_window(Default::default(), move |_window, cx| {
+                cx.new(|cx| Shell::from_model(model.clone(), cx))
+            })
+            .unwrap()
+        });
+        let mut cx = VisualTestContext::from_window(window.into(), cx);
+        let shell: Entity<Shell> = window.root(&mut cx).unwrap();
+
+        cx.update(|_window, cx| {
+            shell.update(cx, |shell, cx| shell.run_command("View_GridSettings", cx))
+        });
+        draw(&mut cx);
+
+        let area = cx
+            .debug_bounds("dev-properties-area")
+            .expect("the settings card's scroll area is painted");
+        assert!(area.size.height > px(0.), "area bounds {area:?}");
+        let field = cx
+            .debug_bounds("prop-Settings/Grid.provider")
+            .expect("the provider field is painted");
+        assert!(
+            field.size.width > px(0.) && field.size.height > px(0.),
+            "field bounds {field:?}"
+        );
+
+        // The same pane in Dev Tools must not collapse either. It shares the shell's
+        // selection, so the settings rows are already there.
+        let mut dev_cx = open_dev_tools(&mut cx, &shell);
+        show_dev_section(&mut cx, &shell, &mut dev_cx, dev_section::PROPERTIES);
+        let area = dev_cx
+            .debug_bounds("dev-properties-area")
+            .expect("the Dev Tools properties panes is painted");
+        assert!(area.size.height > px(0.), "Dev Tools area bounds {area:?}");
+        let field = dev_cx
+            .debug_bounds("prop-Settings/Grid.provider")
+            .expect("the Dev Tools settings field is painted");
+        assert!(
+            field.size.height > px(0.),
+            "Dev Tools field bounds {field:?}"
+        );
+
+        reset_grid_state();
+    }
+
     /// P0.8: a click/focus inside the card must not fall through to the canvas and
     /// clear the selection (which would drop the card).
     #[gpui::test]

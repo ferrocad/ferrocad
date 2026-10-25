@@ -422,12 +422,16 @@ impl Render for TextAreaState {
         div()
             .id("text-area-root")
             .relative()
+            .flex()
+            .flex_col()
             .flex_1()
             .min_h_0()
             .child(
                 div()
                     .id("text-area")
-                    .size_full()
+                    // Flex growth, not `height: 100%` (see `scroll::scroll_area`).
+                    .flex_1()
+                    .min_h_0()
                     .overflow_y_scroll()
                     .track_scroll(&self.scroll)
                     .bg(rgb(AREA_BG))

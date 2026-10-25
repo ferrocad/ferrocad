@@ -206,6 +206,8 @@ pub fn scroll_area(
         .id(SharedString::from(format!("{key}-area")))
         .debug_selector(move || format!("{key}-area"))
         .relative()
+        .flex()
+        .flex_col()
         .flex_1()
         .min_h_0()
         .child(
@@ -213,7 +215,10 @@ pub fn scroll_area(
                 .id(SharedString::from(format!("{key}-scroll")))
                 .flex()
                 .flex_col()
-                .size_full()
+                // Grow by flex, not by `height: 100%`: a percentage height inside a
+                // flex-resolved parent can resolve to 0, which silently emptied the
+                // settings card.
+                .flex_1()
                 .min_h_0()
                 .overflow_y_scroll()
                 .track_scroll(scroll)

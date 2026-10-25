@@ -499,7 +499,11 @@ impl Shell {
             hud_rect: None,
             hud_lock: None,
             dev_tools: None,
-            dev_accordion: AccordionState::new(dev_section::COMMANDS),
+            dev_accordion: AccordionState::with_open([
+                dev_section::COMMANDS,
+                dev_section::MODEL,
+                dev_section::PROPERTIES,
+            ]),
             dev_scroll: DevScroll::default(),
             _viewport_events: None,
             _submit: submit,
@@ -3953,7 +3957,7 @@ pub(crate) fn dev_tools_body(
             "dev",
             sections,
             bodies,
-            shell.dev_accordion,
+            shell.dev_accordion.clone(),
             available,
             on_toggle,
         ))
@@ -4278,7 +4282,7 @@ mod tests {
 
         // The console lives in Dev Tools now: open it, then drive the same focus path.
         let mut dev_cx = open_dev_tools(&mut cx, &shell);
-        open_dev_section(&mut cx, &shell, &mut dev_cx, dev_section::CONSOLE);
+        show_dev_section(&mut cx, &shell, &mut dev_cx, dev_section::CONSOLE);
         assert!(
             dev_cx.debug_bounds("console-text-thumb").is_some(),
             "the console text area carries a scrollbar"
@@ -4331,7 +4335,7 @@ mod tests {
         });
         // The property editor is a collapsed pane now: expand it before typing, or the
         // field would exist but never be painted (and so never take focus).
-        open_dev_section(&mut cx, &shell, &mut dev_cx, dev_section::PROPERTIES);
+        show_dev_section(&mut cx, &shell, &mut dev_cx, dev_section::PROPERTIES);
 
         let field = shell.read_with(&cx, |shell, _| {
             shell
@@ -5084,7 +5088,7 @@ if "Test_Shortcut" not in FreeCADGui.listCommands():
         // bubbles to the Dev Tools root and runs the command — the same shell path as
         // a click, from either window.
         let mut dev_cx = open_dev_tools(&mut cx, &shell);
-        open_dev_section(&mut cx, &shell, &mut dev_cx, dev_section::CONSOLE);
+        show_dev_section(&mut cx, &shell, &mut dev_cx, dev_section::CONSOLE);
         let console = shell.read_with(&cx, |shell, cx| shell.console_focus_handle(cx));
         dev_cx.update(|window, cx| window.focus(&console, cx));
         dev_cx.simulate_keystrokes("ctrl-shift-k");
@@ -5454,11 +5458,11 @@ if "Test_Tool" not in FreeCADGui.listCommands():
         dev_cx
     }
 
-    /// Expand one Dev Tools pane.
+    /// Show one Dev Tools pane and close the others.
     ///
-    /// The window is an accordion: only the open pane paints its body, so a test that
-    /// reads a pane's selectors opens it first.
-    fn open_dev_section(
+    /// The panes share the remaining height, so a test that reads one pane's
+    /// selectors narrows the set first. Multi-open state has its own test.
+    fn show_dev_section(
         cx: &mut VisualTestContext,
         shell: &Entity<Shell>,
         dev_cx: &mut VisualTestContext,
@@ -5466,7 +5470,7 @@ if "Test_Tool" not in FreeCADGui.listCommands():
     ) {
         cx.update(|_window, cx| {
             shell.update(cx, |shell, cx| {
-                shell.dev_accordion.open_section(section);
+                shell.dev_accordion.open_only(section);
                 cx.notify();
             })
         });
@@ -5531,8 +5535,8 @@ if "Test_Tool" not in FreeCADGui.listCommands():
         assert!(commands.iter().all(|command| !command.id.is_empty()));
 
         let mut dev_cx = open_dev_tools(&mut cx, &shell);
-        // The window is an accordion: Commands is the default pane, the rest are
-        // headers only until they are opened.
+        // The window is an accordion: Commands, Model and Properties start open and
+        // share the height; the rest are headers only.
         assert!(dev_cx.debug_bounds("dev-command-list").is_some());
         for selector in [
             "dev-header-providers",
@@ -5544,22 +5548,36 @@ if "Test_Tool" not in FreeCADGui.listCommands():
         ] {
             assert!(
                 dev_cx.debug_bounds(selector).is_some(),
-                "{selector} is a collapsed header"
+                "{selector} is a header"
             );
         }
         assert!(
-            dev_cx.debug_bounds("tree-panel").is_none(),
-            "a collapsed pane paints no body"
+            dev_cx.debug_bounds("tree-panel").is_some(),
+            "the model tree is open beside the commands"
         );
-        assert!(dev_cx.debug_bounds("properties-panel").is_none());
+        assert!(
+            dev_cx.debug_bounds("properties-panel").is_some(),
+            "the property editor is open beside the model tree"
+        );
         assert!(dev_cx.debug_bounds("console-panel").is_none());
         assert!(
             dev_cx.debug_bounds("dev-command-App_Delete").is_some(),
             "a disabled command is still listed"
         );
 
-        // Every pane is reachable: opening one replaces the previous body.
-        open_dev_section(&mut cx, &shell, &mut dev_cx, dev_section::PROPERTIES);
+        // Toggling a header adds a pane without closing the others.
+        click_at(&mut dev_cx, "dev-header-console");
+        dev_cx.update(|window, cx| {
+            let _ = window.draw(cx);
+        });
+        assert!(dev_cx.debug_bounds("console-panel").is_some());
+        assert!(
+            dev_cx.debug_bounds("dev-command-list").is_some(),
+            "opening one pane leaves the others open"
+        );
+
+        // Narrowing the set is still available when a pane needs the height.
+        show_dev_section(&mut cx, &shell, &mut dev_cx, dev_section::PROPERTIES);
         assert!(dev_cx.debug_bounds("properties-panel").is_some());
         assert!(
             dev_cx.debug_bounds("dev-properties-thumb").is_some(),
@@ -5567,9 +5585,9 @@ if "Test_Tool" not in FreeCADGui.listCommands():
         );
         assert!(
             dev_cx.debug_bounds("dev-command-list").is_none(),
-            "the previous body collapsed into its header"
+            "open_only closed the other panes"
         );
-        open_dev_section(&mut cx, &shell, &mut dev_cx, dev_section::COMMANDS);
+        show_dev_section(&mut cx, &shell, &mut dev_cx, dev_section::COMMANDS);
         assert!(dev_cx.debug_bounds("dev-command-list").is_some());
         assert!(dev_cx.debug_bounds("dev-commands-thumb").is_some());
 
@@ -5614,10 +5632,10 @@ if "Test_Tool" not in FreeCADGui.listCommands():
         assert_eq!(model.lock().unwrap().status, "view: no viewport");
     }
 
-    /// Clicking a header toggles its pane: the clicked one opens and the previous one
-    /// collapses; a second click on the open header leaves headers only.
+    /// Clicking a header toggles only that pane; the other open panes keep their
+    /// bodies. A second click on the same header closes it again.
     #[gpui::test]
-    fn a_dev_tools_header_click_collapses_and_expands_a_pane(cx: &mut TestAppContext) {
+    fn a_dev_tools_header_click_toggles_only_its_pane(cx: &mut TestAppContext) {
         let _guard = crate::PYTHON_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let model = boot_shell();
         let window = cx.update(|cx| {
@@ -5642,12 +5660,11 @@ if "Test_Tool" not in FreeCADGui.listCommands():
             "the clicked header opens its pane"
         );
         assert!(
-            dev_cx.debug_bounds("dev-command-list").is_none(),
-            "the previous pane collapsed"
+            dev_cx.debug_bounds("dev-command-list").is_some(),
+            "the other open panes stay open"
         );
-        assert_eq!(
-            cx.update(|_window, cx| shell.read(cx).dev_accordion.open()),
-            Some(dev_section::PROVIDERS),
+        assert!(
+            cx.update(|_window, cx| shell.read(cx).dev_accordion.is_open(dev_section::PROVIDERS)),
             "the click reached the shell's state"
         );
 
@@ -5663,7 +5680,10 @@ if "Test_Tool" not in FreeCADGui.listCommands():
             dev_cx.debug_bounds("dev-header-providers").is_some(),
             "the header itself stays"
         );
-        assert!(dev_cx.debug_bounds("dev-command-list").is_none());
+        assert!(
+            dev_cx.debug_bounds("dev-command-list").is_some(),
+            "closing one pane leaves the others open"
+        );
     }
 
     /// Reset the interpreter's process-global grid store and preferences.
@@ -5779,7 +5799,7 @@ for group in legacy:
         let mut dev_cx = open_dev_tools(&mut cx, &shell);
 
         // The providers pane is collapsed by default; its header opens it.
-        open_dev_section(&mut cx, &shell, &mut dev_cx, dev_section::PROVIDERS);
+        show_dev_section(&mut cx, &shell, &mut dev_cx, dev_section::PROVIDERS);
         assert!(
             dev_cx.debug_bounds("dev-providers").is_some(),
             "the providers panel is in the Dev Tools window"
@@ -5858,7 +5878,7 @@ for group in legacy:
         let shell: Entity<Shell> = window.root(&mut cx).unwrap();
         let mut dev_cx = open_dev_tools(&mut cx, &shell);
 
-        open_dev_section(&mut cx, &shell, &mut dev_cx, dev_section::GPU);
+        show_dev_section(&mut cx, &shell, &mut dev_cx, dev_section::GPU);
         cx.update(|_window, cx| {
             shell.update(cx, |shell, _| {
                 shell.gpu_preference = Some("adapter:Llvm".to_string());

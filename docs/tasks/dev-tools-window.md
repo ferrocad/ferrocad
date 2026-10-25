@@ -206,13 +206,15 @@ its modal over the viewport, where the user is looking.
   same heights as *preferred* values, and every pane keeps a header.
   `ferrocad_widgets::window_chrome::content_height` removes the client title bar and
   insets from `viewport_size()` so the fit test is against the real content box. In
-  the default window the stack does not fit, so only the open pane paints its body;
-  Commands is the default (it is why the window exists) and the choice is
-  `Shell::dev_accordion`, so it survives closing and reopening the window. Clicking a
-  header opens that pane and collapses the previous one; clicking the open header
-  leaves headers only. In a window tall enough for every body, all bodies show until
-  the first header click, after which the manual choice wins. Tests that type into the
-  console or a property field therefore expand their pane first — an unpainted field
+  the default window the stack does not fit, so the open panes each paint a body and
+  share the remaining height. Commands, Model and Properties start open (the tree and
+  the property editor are useful side by side); Providers, GPU and Console start
+  collapsed. The choice is `Shell::dev_accordion`, so it survives closing and
+  reopening the window. Clicking a header **toggles only that pane** — the others keep
+  their bodies — so any set can be open at once; `open_only`/`close_all` narrow it when
+  a pane needs the height. In a window tall enough for every body, all bodies show
+  until the first header click, after which the manual set wins. Tests that type into
+  the console or a property field therefore show their pane first — an unpainted field
   cannot take focus.
 - **Scrollbars (2026-10-25).** gpui reserves `scrollbar_width` in the layout but paints
   nothing, and the published `bite-gpui` crates ship no scrollbar element (Zed's lives

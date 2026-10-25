@@ -2,18 +2,21 @@
 //! stack runs out of height.
 //!
 //! The widget owns presentation and the *policy* of when a body is painted; the host
-//! owns the open section and every body's content. Three layouts come out of
+//! owns the open sections and every body's content. Two layouts come out of
 //! [`resolve_layout`]:
 //!
 //! * [`AccordionLayout::All`] — every body fits at its preferred height, so every
 //!   body is painted. This is the default until the user clicks a header.
-//! * [`AccordionLayout::Expanded(Some(i))`] — the stack is too short: section `i`
-//!   absorbs the leftover height and every other body is hidden under its header.
-//! * [`AccordionLayout::Expanded(None)`] — the user collapsed the open section, so
-//!   only headers are painted.
+//! * [`AccordionLayout::Expanded`] — the stack is too short: the listed sections
+//!   each paint a body and share the leftover height; an empty list paints headers
+//!   only.
+//!
+//! **Any number of sections may be open at once** — the set is the state, not a
+//! single index. Clicking a header toggles just that section, so a user can keep the
+//! model tree and the property editor open together and let the rest collapse.
 //!
 //! The first click on a header switches the state to **manual**: from then on the
-//! open section is the only body, even in a window tall enough for all of them. That
+//! open set is the only body set, even in a window tall enough for all of them. That
 //! keeps the control predictable — an automatic re-expansion that undid a deliberate
 //! collapse would be worse than one extra click.
 //!
@@ -68,28 +71,39 @@ impl AccordionSection {
     }
 }
 
-/// Which section is expanded, and whether the user has taken the choice over.
+/// Which sections are open, and whether the user has taken the choice over.
 ///
-/// `open` is the section expanded when the stack is too short. It is also the one a
-/// click opens; the default (`Default::default()`) has every body collapsed.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+/// `open` is the ascending set of sections that paint a body when the stack is too
+/// short. Any number may be open. The default (`Default::default()`) has every body
+/// collapsed.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct AccordionState {
-    open: Option<usize>,
+    open: Vec<usize>,
     manual: bool,
 }
 
 impl AccordionState {
     /// A state whose section `open` expands as soon as the stack is too short.
     pub fn new(open: usize) -> Self {
+        Self::with_open([open])
+    }
+
+    /// A state with exactly `open` expanded when the stack is too short.
+    pub fn with_open(open: impl IntoIterator<Item = usize>) -> Self {
         Self {
-            open: Some(open),
+            open: sorted(open),
             manual: false,
         }
     }
 
-    /// The section that is (or would be) expanded.
-    pub fn open(&self) -> Option<usize> {
-        self.open
+    /// The open sections, ascending.
+    pub fn open_sections(&self) -> &[usize] {
+        &self.open
+    }
+
+    /// Whether `index` is open.
+    pub fn is_open(&self, index: usize) -> bool {
+        self.open.contains(&index)
     }
 
     /// Whether the user has clicked a header, which stops the auto-expansion.
@@ -97,30 +111,55 @@ impl AccordionState {
         self.manual
     }
 
-    /// Expand `index`, taking the choice over from the auto-expansion.
+    /// Add `index` to the open set, taking the choice over from the auto-expansion.
     pub fn open_section(&mut self, index: usize) {
-        self.open = Some(index);
+        if !self.is_open(index) {
+            self.open.push(index);
+            self.open.sort_unstable();
+        }
         self.manual = true;
     }
 
-    /// Click a header: expand that section, or collapse it when it is already open.
+    /// Show only `index`, closing every other body.
+    pub fn open_only(&mut self, index: usize) {
+        self.open = vec![index];
+        self.manual = true;
+    }
+
+    /// Collapse every body, leaving headers only.
+    pub fn close_all(&mut self) {
+        self.open.clear();
+        self.manual = true;
+    }
+
+    /// Click a header: add that section, or remove it when it is already open.
+    /// Other sections keep their state.
     pub fn toggle(&mut self, index: usize) {
-        self.open = if self.open == Some(index) {
-            None
+        if let Some(position) = self.open.iter().position(|open| *open == index) {
+            self.open.remove(position);
         } else {
-            Some(index)
-        };
+            self.open.push(index);
+            self.open.sort_unstable();
+        }
         self.manual = true;
     }
 }
 
+/// A de-duplicated, ascending open set.
+fn sorted(open: impl IntoIterator<Item = usize>) -> Vec<usize> {
+    let mut open: Vec<usize> = open.into_iter().collect();
+    open.sort_unstable();
+    open.dedup();
+    open
+}
+
 /// The layout [`resolve_layout`] picks for a stack in `available` height.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum AccordionLayout {
     /// Every body fits at its preferred height.
     All,
-    /// One body absorbs the remaining height; `None` paints headers only.
-    Expanded(Option<usize>),
+    /// These sections share the remaining height; an empty list paints headers only.
+    Expanded(Vec<usize>),
 }
 
 /// The height the stack needs when every body is at its preferred size.
@@ -143,7 +182,14 @@ pub fn resolve_layout(
     if !state.is_manual() && preferred_height(sections) <= available {
         return AccordionLayout::All;
     }
-    AccordionLayout::Expanded(state.open().filter(|index| *index < sections.len()))
+    AccordionLayout::Expanded(
+        state
+            .open_sections()
+            .iter()
+            .copied()
+            .filter(|index| *index < sections.len())
+            .collect(),
+    )
 }
 
 /// Render the accordion.
@@ -176,9 +222,9 @@ pub fn accordion(
         .bg(rgb(PANEL));
 
     for (index, section) in sections.into_iter().enumerate() {
-        let open = match layout {
+        let open = match &layout {
             AccordionLayout::All => true,
-            AccordionLayout::Expanded(open) => open == Some(index),
+            AccordionLayout::Expanded(open) => open.contains(&index),
         };
 
         let header_id = format!("{key}-header-{}", section.id);
@@ -233,7 +279,7 @@ pub fn accordion(
             .min_h_0()
             .overflow_hidden()
             .child(body);
-        body = match layout {
+        body = match &layout {
             // The preferred height is a floor; the bodies share the leftover space.
             AccordionLayout::All => body.flex_1().min_h(section.preferred_height),
             AccordionLayout::Expanded(_) => body.flex_1(),
@@ -274,12 +320,13 @@ mod tests {
     }
 
     #[test]
-    fn a_short_stack_expands_only_the_open_section() {
-        let sections = [section("a", 100.), section("b", 50.)];
-        let state = AccordionState::new(1);
+    fn a_short_stack_expands_the_open_sections() {
+        let sections = [section("a", 100.), section("b", 50.), section("c", 20.)];
+        let state = AccordionState::with_open([0, 2]);
         assert_eq!(
             resolve_layout(&sections, px(100.), &state),
-            AccordionLayout::Expanded(Some(1))
+            AccordionLayout::Expanded(vec![0, 2]),
+            "both open sections paint; the closed one does not"
         );
     }
 
@@ -288,18 +335,38 @@ mod tests {
         let sections = [section("a", 100.)];
         assert_eq!(
             resolve_layout(&sections, px(10.), &AccordionState::default()),
-            AccordionLayout::Expanded(None)
+            AccordionLayout::Expanded(Vec::new())
         );
     }
 
     #[test]
-    fn a_click_opens_a_section_and_a_second_click_closes_it() {
+    fn a_click_toggles_only_its_own_section() {
         let mut state = AccordionState::default();
         state.toggle(2);
-        assert_eq!(state.open(), Some(2));
+        assert!(state.is_open(2));
+        state.toggle(0);
+        assert!(
+            state.is_open(2) && state.is_open(0),
+            "opening one section leaves the others open"
+        );
         assert!(state.is_manual(), "a click takes the choice over");
         state.toggle(2);
-        assert_eq!(state.open(), None);
+        assert_eq!(state.open_sections().to_vec(), vec![0]);
+    }
+
+    #[test]
+    fn the_open_set_is_sorted_and_deduplicated() {
+        let state = AccordionState::with_open([3, 1, 3]);
+        assert_eq!(state.open_sections().to_vec(), vec![1, 3]);
+    }
+
+    #[test]
+    fn open_only_replaces_the_set_and_close_all_empties_it() {
+        let mut state = AccordionState::with_open([0, 1]);
+        state.open_only(2);
+        assert_eq!(state.open_sections().to_vec(), vec![2]);
+        state.close_all();
+        assert!(state.open_sections().is_empty());
     }
 
     #[test]
@@ -309,7 +376,7 @@ mod tests {
         state.toggle(1);
         assert_eq!(
             resolve_layout(&sections, px(1000.), &state),
-            AccordionLayout::Expanded(Some(1)),
+            AccordionLayout::Expanded(vec![1]),
             "a deliberate collapse is not undone by a resize"
         );
     }
@@ -320,7 +387,7 @@ mod tests {
         let state = AccordionState::new(4);
         assert_eq!(
             resolve_layout(&sections, px(10.), &state),
-            AccordionLayout::Expanded(None)
+            AccordionLayout::Expanded(Vec::new())
         );
     }
 
@@ -337,13 +404,13 @@ mod tests {
                 .map(|section| div().child(section.title.clone()).into_any_element())
                 .collect();
             let toggled = self.toggled.clone();
-            let state = self.state;
+            let state = self.state.clone();
             accordion(
                 "accordion-test",
                 sections,
                 bodies,
                 state,
-                // Too short for both bodies: only the open one may paint.
+                // Too short for both bodies: only the open ones may paint.
                 px(80.),
                 move |index, _event, _window, _cx| toggled.borrow_mut().push(index),
             )
@@ -357,7 +424,7 @@ mod tests {
     }
 
     #[gpui::test]
-    fn a_short_accordion_paints_its_headers_and_one_body(cx: &mut TestAppContext) {
+    fn a_short_accordion_paints_its_headers_and_the_open_body(cx: &mut TestAppContext) {
         let harness = Harness {
             state: AccordionState::new(0),
             toggled: Rc::default(),
@@ -384,6 +451,28 @@ mod tests {
             visual.debug_bounds("accordion-test-body-second").is_none(),
             "a collapsed section has no body"
         );
+    }
+
+    /// Two sections can stay open together; each gets a body in a short stack.
+    #[gpui::test]
+    fn two_open_sections_paint_two_bodies(cx: &mut TestAppContext) {
+        let harness = Harness {
+            state: AccordionState::with_open([0, 1]),
+            toggled: Rc::default(),
+        };
+        let window = cx.update(|cx| {
+            cx.open_window(Default::default(), move |_window, cx| cx.new(|_| harness))
+                .unwrap()
+        });
+        let mut visual = VisualTestContext::from_window(window.into(), cx);
+        draw(&mut visual);
+
+        for selector in ["accordion-test-body-first", "accordion-test-body-second"] {
+            assert!(
+                visual.debug_bounds(selector).is_some(),
+                "{selector} is rendered while both sections are open"
+            );
+        }
     }
 
     #[gpui::test]

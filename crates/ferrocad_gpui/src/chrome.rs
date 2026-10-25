@@ -33,7 +33,7 @@ use ferrocad_theme::ui::{
 
 use crate::commands::{self, CommandInfo, Surface};
 use crate::python::{AxisSummary, GridSummary, ProviderFeature};
-use crate::shell::{ACCENT, FG, MUTED, PANEL, PANEL_ALT, Shell, ShellModel, panel_header};
+use crate::shell::{ACCENT, FG, MUTED, PANEL, PANEL_ALT, Shell, ShellModel};
 
 /// The header controls' primary command ids.
 pub const GRID: &str = "App_ToggleGrid";
@@ -775,13 +775,10 @@ pub(crate) fn providers_panel(
         .debug_selector(|| "dev-providers".to_string())
         .flex()
         .flex_col()
-        .flex_shrink_0()
-        .max_h(px(180.))
+        .flex_1()
+        .min_h_0()
         .overflow_y_scroll()
-        .bg(rgb(PANEL))
-        .border_b_1()
-        .border_color(rgba(0xffffff14))
-        .child(panel_header("Providers"));
+        .bg(rgb(PANEL));
 
     if features.is_empty() {
         return panel.child(
@@ -876,13 +873,10 @@ pub(crate) fn gpu_panel(
         .debug_selector(|| "gpu-panel".to_string())
         .flex()
         .flex_col()
-        .flex_shrink_0()
-        .max_h(px(200.))
+        .flex_1()
+        .min_h_0()
         .overflow_y_scroll()
         .bg(rgb(PANEL))
-        .border_b_1()
-        .border_color(rgba(0xffffff14))
-        .child(panel_header("GPU adapter"))
         .child(
             div()
                 .px_2()
@@ -1216,11 +1210,10 @@ pub(crate) fn command_list_panel(
     div()
         .flex()
         .flex_col()
-        .h(px(240.))
-        .flex_shrink_0()
+        .h_full()
+        .min_h_0()
         .bg(rgb(PANEL))
         .debug_selector(|| "dev-command-list".to_string())
-        .child(panel_header("Commands"))
         .child(rows)
 }
 

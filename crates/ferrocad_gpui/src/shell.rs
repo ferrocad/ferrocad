@@ -30,6 +30,7 @@ use ferrocad_viewport::{
     ViewportEvent,
 };
 use ferrocad_wgpu::{AdapterChoice, AdapterSummary, WgpuRenderer};
+use ferrocad_widgets::accordion::{AccordionSection, AccordionState, accordion};
 use ferrocad_widgets::wheel::{WheelEvent, WheelMenu, WheelSlot, WheelTone};
 use ferrocad_widgets::window_chrome::window_frame_with_leading;
 use ferrocad_widgets::{ChangeEvent, SubmitEvent, TextAreaState, TextInput};
@@ -266,6 +267,10 @@ pub struct Shell {
     /// its view reads this `Shell` entity. A closed window leaves the handle stale
     /// until the next toggle notices and reopens.
     dev_tools: Option<WindowHandle<DevTools>>,
+    /// Which Dev Tools panel is expanded. The window's column cannot hold every
+    /// pane, so the inactive ones collapse to their headers (see
+    /// [`ferrocad_widgets::accordion`]); this outlives a closed and reopened window.
+    dev_accordion: AccordionState,
     /// The viewport's event subscription (selection and interaction commits).
     _viewport_events: Option<Subscription>,
     _submit: Subscription,
@@ -472,6 +477,7 @@ impl Shell {
             hud_rect: None,
             hud_lock: None,
             dev_tools: None,
+            dev_accordion: AccordionState::new(dev_section::COMMANDS),
             _viewport_events: None,
             _submit: submit,
         }
@@ -2929,20 +2935,6 @@ fn tool_strip(status: &ToolStatus, cx: &mut Context<Shell>) -> impl IntoElement 
         )
 }
 
-/// A slim panel header bar.
-pub(crate) fn panel_header(text: &str) -> impl IntoElement {
-    div()
-        .flex()
-        .flex_row()
-        .items_center()
-        .px_2()
-        .py_1()
-        .bg(rgb(PANEL_ALT))
-        .text_xs()
-        .text_color(rgb(MUTED))
-        .child(text.to_string())
-}
-
 /// The window margin a floating HUD keeps from every edge.
 const HUD_MARGIN: f32 = 16.0;
 /// The clearance below a floating HUD, so it never covers the bottom dock.
@@ -3442,6 +3434,9 @@ fn dialog_arrow(
 }
 
 /// The model inspector: documents and their objects.
+///
+/// The accordion supplies the section header, so the pane is only the scrollable
+/// rows.
 pub(crate) fn tree_panel(model: &ShellModel, cx: &mut Context<Shell>) -> impl IntoElement {
     let mut rows = div()
         .id("tree-scroll")
@@ -3509,7 +3504,6 @@ pub(crate) fn tree_panel(model: &ShellModel, cx: &mut Context<Shell>) -> impl In
         .min_h_0()
         .bg(rgb(PANEL))
         .debug_selector(|| "tree-panel".to_string())
-        .child(panel_header("Model"))
         .child(rows)
 }
 
@@ -3519,7 +3513,6 @@ pub(crate) fn properties_panel(
     shell: &mut Shell,
     model: &ShellModel,
     window: &Window,
-    title: Option<&str>,
     cx: &mut Context<Shell>,
 ) -> impl IntoElement + use<> {
     let mut rows = div()
@@ -3650,10 +3643,6 @@ pub(crate) fn properties_panel(
         .min_h_0()
         .bg(rgb(PANEL))
         .debug_selector(|| "properties-panel".to_string());
-    let panel = match title {
-        Some(title) => panel.child(panel_header(title)),
-        None => panel,
-    };
     panel.child(rows)
 }
 
@@ -3723,7 +3712,7 @@ fn settings_card_view(
                 })),
         );
 
-    let panel = properties_panel(shell, model, window, None, cx);
+    let panel = properties_panel(shell, model, window, cx);
     let card = div()
         .id("settings-card")
         .debug_selector(|| "settings-card".to_string())
@@ -3831,16 +3820,35 @@ pub(crate) fn console_panel(
     div()
         .flex()
         .flex_col()
-        .h(px(160.))
+        .h_full()
+        .min_h_0()
         .bg(rgb(PANEL))
         .debug_selector(|| "console-panel".to_string())
-        .child(panel_header("Python console"))
         .child(console.clone())
         .child(actions)
 }
 
+/// Section indices in the Dev Tools accordion, in render order.
+///
+/// The body list is built in this order; the tests name indices through these
+/// constants, which is why the module allows dead code in a non-test build.
+#[allow(dead_code)]
+mod dev_section {
+    pub const PROVIDERS: usize = 0;
+    pub const GPU: usize = 1;
+    pub const COMMANDS: usize = 2;
+    pub const MODEL: usize = 3;
+    pub const PROPERTIES: usize = 4;
+    pub const CONSOLE: usize = 5;
+}
+
 /// The Dev Tools window's body: the whole command surface, the inspector, the property
 /// editor and the console in one column (P0.5).
+///
+/// The column cannot hold every pane at once, so the panes are an accordion
+/// ([`ferrocad_widgets::accordion`]): each keeps a header, and the layout gives the
+/// remaining height to the open one. Whichever pane is open survives closing and
+/// reopening the window (`Shell::dev_accordion`).
 ///
 /// It is built from the shell's `Context`, so every row runs against the same `Shell`
 /// entity the main window renders. The viewport is deliberately **not** here: gpui can
@@ -3857,6 +3865,44 @@ pub(crate) fn dev_tools_body(
     let in_use = shell.in_use_adapter(cx);
     // The commands the losing provider owns: listed, but not runnable (P0 provider UX).
     let inactive = crate::chrome::inactive_provider_commands(shell.provider_features());
+
+    // Preferred heights are the old fixed pane sizes; they are only used to decide
+    // whether the whole stack fits (it does not in the default window).
+    let gpu = shell.gpu_setting().to_string();
+    let command_count = model.commands.len();
+    let sections = vec![
+        AccordionSection::new("providers", "Providers", px(160.)),
+        AccordionSection::new("gpu", "GPU adapter", px(180.)).with_summary(gpu),
+        AccordionSection::new("commands", "Commands", px(260.))
+            .with_summary(format!("{command_count}")),
+        AccordionSection::new("model", "Model", px(200.)),
+        AccordionSection::new("properties", "Properties", px(240.)),
+        AccordionSection::new("console", "Python console", px(160.)),
+    ];
+    let bodies: Vec<AnyElement> = vec![
+        crate::chrome::providers_panel(shell.provider_features(), cx).into_any_element(),
+        crate::chrome::gpu_panel(
+            shell.gpu_setting(),
+            shell.gpu_adapters(),
+            in_use.as_ref(),
+            cx,
+        )
+        .into_any_element(),
+        crate::chrome::command_list_panel(&model, &inactive, cx).into_any_element(),
+        tree_panel(&model, cx).into_any_element(),
+        properties_panel(shell, &model, window, cx).into_any_element(),
+        console_panel(&shell.console, cx).into_any_element(),
+    ];
+    let available = ferrocad_widgets::window_chrome::content_height(window);
+    let weak = cx.weak_entity();
+    let on_toggle =
+        move |index: usize, _event: &gpui::ClickEvent, _window: &mut Window, cx: &mut App| {
+            let _ = weak.update(cx, |shell, cx| {
+                shell.dev_accordion.toggle(index);
+                cx.notify();
+            });
+        };
+
     div()
         .id("dev-tools-root")
         .flex()
@@ -3874,17 +3920,14 @@ pub(crate) fn dev_tools_body(
                 cx.stop_propagation();
             }
         }))
-        .child(crate::chrome::providers_panel(shell.provider_features(), cx))
-        .child(crate::chrome::gpu_panel(
-            shell.gpu_setting(),
-            shell.gpu_adapters(),
-            in_use.as_ref(),
-            cx,
+        .child(accordion(
+            "dev",
+            sections,
+            bodies,
+            shell.dev_accordion,
+            available,
+            on_toggle,
         ))
-        .child(crate::chrome::command_list_panel(&model, &inactive, cx))
-        .child(tree_panel(&model, cx))
-        .child(properties_panel(shell, &model, window, Some("Properties"), cx))
-        .child(console_panel(&shell.console, cx))
         .into_any_element()
 }
 
@@ -4206,6 +4249,7 @@ mod tests {
 
         // The console lives in Dev Tools now: open it, then drive the same focus path.
         let mut dev_cx = open_dev_tools(&mut cx, &shell);
+        open_dev_section(&mut cx, &shell, &mut dev_cx, dev_section::CONSOLE);
 
         // Typing in the console input and pressing Enter runs the line through the
         // interpreter (S5 previewed): the log gains the echoed line and the result,
@@ -4252,9 +4296,9 @@ mod tests {
                 cx.notify();
             });
         });
-        dev_cx.update(|window, cx| {
-            let _ = window.draw(cx);
-        });
+        // The property editor is a collapsed pane now: expand it before typing, or the
+        // field would exist but never be painted (and so never take focus).
+        open_dev_section(&mut cx, &shell, &mut dev_cx, dev_section::PROPERTIES);
 
         let field = shell.read_with(&cx, |shell, _| {
             shell
@@ -5007,6 +5051,7 @@ if "Test_Shortcut" not in FreeCADGui.listCommands():
         // bubbles to the Dev Tools root and runs the command — the same shell path as
         // a click, from either window.
         let mut dev_cx = open_dev_tools(&mut cx, &shell);
+        open_dev_section(&mut cx, &shell, &mut dev_cx, dev_section::CONSOLE);
         let console = shell.read_with(&cx, |shell, cx| shell.console_focus_handle(cx));
         dev_cx.update(|window, cx| window.focus(&console, cx));
         dev_cx.simulate_keystrokes("ctrl-shift-k");
@@ -5376,6 +5421,27 @@ if "Test_Tool" not in FreeCADGui.listCommands():
         dev_cx
     }
 
+    /// Expand one Dev Tools pane.
+    ///
+    /// The window is an accordion: only the open pane paints its body, so a test that
+    /// reads a pane's selectors opens it first.
+    fn open_dev_section(
+        cx: &mut VisualTestContext,
+        shell: &Entity<Shell>,
+        dev_cx: &mut VisualTestContext,
+        section: usize,
+    ) {
+        cx.update(|_window, cx| {
+            shell.update(cx, |shell, cx| {
+                shell.dev_accordion.open_section(section);
+                cx.notify();
+            })
+        });
+        dev_cx.update(|window, cx| {
+            let _ = window.draw(cx);
+        });
+    }
+
     /// P0.5/D3: the main window keeps the frame, the viewport and the status line.
     /// The panels are in the second window, not merely hidden.
     #[gpui::test]
@@ -5432,14 +5498,42 @@ if "Test_Tool" not in FreeCADGui.listCommands():
         assert!(commands.iter().all(|command| !command.id.is_empty()));
 
         let mut dev_cx = open_dev_tools(&mut cx, &shell);
+        // The window is an accordion: Commands is the default pane, the rest are
+        // headers only until they are opened.
         assert!(dev_cx.debug_bounds("dev-command-list").is_some());
-        assert!(dev_cx.debug_bounds("tree-panel").is_some());
-        assert!(dev_cx.debug_bounds("properties-panel").is_some());
-        assert!(dev_cx.debug_bounds("console-panel").is_some());
+        for selector in [
+            "dev-header-providers",
+            "dev-header-gpu",
+            "dev-header-commands",
+            "dev-header-model",
+            "dev-header-properties",
+            "dev-header-console",
+        ] {
+            assert!(
+                dev_cx.debug_bounds(selector).is_some(),
+                "{selector} is a collapsed header"
+            );
+        }
+        assert!(
+            dev_cx.debug_bounds("tree-panel").is_none(),
+            "a collapsed pane paints no body"
+        );
+        assert!(dev_cx.debug_bounds("properties-panel").is_none());
+        assert!(dev_cx.debug_bounds("console-panel").is_none());
         assert!(
             dev_cx.debug_bounds("dev-command-App_Delete").is_some(),
             "a disabled command is still listed"
         );
+
+        // Every pane is reachable: opening one replaces the previous body.
+        open_dev_section(&mut cx, &shell, &mut dev_cx, dev_section::PROPERTIES);
+        assert!(dev_cx.debug_bounds("properties-panel").is_some());
+        assert!(
+            dev_cx.debug_bounds("dev-command-list").is_none(),
+            "the previous body collapsed into its header"
+        );
+        open_dev_section(&mut cx, &shell, &mut dev_cx, dev_section::COMMANDS);
+        assert!(dev_cx.debug_bounds("dev-command-list").is_some());
 
         // Selecting in the inspector feeds the property editor from the same entity.
         cx.update(|_window, cx| shell.update(cx, |shell, cx| shell.select("Params", cx)));
@@ -5594,6 +5688,8 @@ for group in legacy:
         let shell: Entity<Shell> = window.root(&mut cx).unwrap();
         let mut dev_cx = open_dev_tools(&mut cx, &shell);
 
+        // The providers pane is collapsed by default; its header opens it.
+        open_dev_section(&mut cx, &shell, &mut dev_cx, dev_section::PROVIDERS);
         assert!(
             dev_cx.debug_bounds("dev-providers").is_some(),
             "the providers panel is in the Dev Tools window"
@@ -5668,6 +5764,7 @@ for group in legacy:
         let shell: Entity<Shell> = window.root(&mut cx).unwrap();
         let mut dev_cx = open_dev_tools(&mut cx, &shell);
 
+        open_dev_section(&mut cx, &shell, &mut dev_cx, dev_section::GPU);
         cx.update(|_window, cx| {
             shell.update(cx, |shell, _| {
                 shell.gpu_preference = Some("adapter:Llvm".to_string());

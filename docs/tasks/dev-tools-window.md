@@ -199,6 +199,21 @@ its modal over the viewport, where the user is looking.
   assertions. The real client-decoration frame is visual-only.
 - Shortcuts run from both windows through `Shell::handle_key`; the Dev Tools root also
   forwards `Esc` to an open modal in the main window.
+- **Pane accordion (2026-10-25).** The column could not hold every pane: the old
+  fixed heights summed to more than the 760 px default window (Providers 180, GPU 200,
+  Commands 240, Console 160, plus the two flexible panes), so the lower ones were
+  simply clipped. The panes are now `ferrocad_widgets::accordion` sections with the
+  same heights as *preferred* values, and every pane keeps a header.
+  `ferrocad_widgets::window_chrome::content_height` removes the client title bar and
+  insets from `viewport_size()` so the fit test is against the real content box. In
+  the default window the stack does not fit, so only the open pane paints its body;
+  Commands is the default (it is why the window exists) and the choice is
+  `Shell::dev_accordion`, so it survives closing and reopening the window. Clicking a
+  header opens that pane and collapses the previous one; clicking the open header
+  leaves headers only. In a window tall enough for every body, all bodies show until
+  the first header click, after which the manual choice wins. Tests that type into the
+  console or a property field therefore expand their pane first — an unpainted field
+  cannot take focus.
 
 ## Risks
 

@@ -1,6 +1,8 @@
 //! Reusable `bite-gpui` widgets shared by the FerroCAD shell and the bite-gpui
 //! book.
 //!
+//! * [`accordion`] stacks titled sections and gives the bodies up to their headers
+//!   when the column runs out of height.
 //! * [`window_chrome::window_frame`] draws client-side decorations (title bar and
 //!   resize grips) where the compositor does not.
 //! * [`text_field::TextInput`] is a single-line editable field that emits
@@ -13,6 +15,7 @@
 //!   the semantic tone arcs, plus the [`WheelMenu`] sidecar that owns the gesture
 //!   (armed/latched, tap-vs-flick, hover, overlay and dismissal).
 
+pub mod accordion;
 pub mod events;
 pub mod menu;
 pub mod text_area;
@@ -21,6 +24,7 @@ pub mod text_field;
 pub mod wheel;
 pub mod window_chrome;
 
+pub use accordion::{AccordionLayout, AccordionSection, AccordionState, accordion, resolve_layout};
 pub use events::{ChangeEvent, SubmitEvent};
 pub use menu::{MenuInfoRow, MenuRow, menu};
 pub use text_area::TextAreaState;

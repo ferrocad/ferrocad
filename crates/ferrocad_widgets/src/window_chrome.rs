@@ -130,6 +130,50 @@ fn frame_inset(maximized: bool) -> Pixels {
     if maximized { px(0.) } else { INSET }
 }
 
+/// The height `content` gets inside a framed window.
+///
+/// A client-decorated window draws a title bar and a resize-grip band *inside* the
+/// viewport, so a host that decides how much content fits (an accordion, a
+/// virtualized list) needs this rather than [`Window::viewport_size`]. A window the
+/// compositor decorates, or one `window_frame` leaves bare, hands the whole viewport
+/// to `content`.
+pub fn content_height(window: &Window) -> Pixels {
+    let Decorations::Client { tiling } = window.window_decorations() else {
+        return window.viewport_size().height;
+    };
+    let maximized = window.is_maximized()
+        || matches!(window.window_bounds(), gpui::WindowBounds::Fullscreen(_));
+    framed_content_height(
+        window.viewport_size().height,
+        true,
+        maximized,
+        tiling.top,
+        tiling.bottom,
+    )
+}
+
+/// The pure part of [`content_height`].
+fn framed_content_height(
+    viewport: Pixels,
+    client: bool,
+    maximized: bool,
+    tiling_top: bool,
+    tiling_bottom: bool,
+) -> Pixels {
+    if !client {
+        return viewport;
+    }
+    let inset = frame_inset(maximized);
+    let mut height = viewport - TITLE_BAR_HEIGHT;
+    if !tiling_top {
+        height -= inset;
+    }
+    if !tiling_bottom {
+        height -= inset;
+    }
+    height.max(px(0.))
+}
+
 /// The title bar: an optional leading element, the title, then the platform
 /// controls.
 ///
@@ -281,6 +325,38 @@ mod tests {
     fn the_frame_inset_collapses_when_maximized() {
         assert_eq!(frame_inset(false), INSET);
         assert_eq!(frame_inset(true), px(0.));
+    }
+
+    /// The frame takes the title bar and the two inset bands off the viewport, and
+    /// a server-decorated window keeps all of it.
+    #[test]
+    fn content_height_removes_the_client_frame() {
+        let viewport = px(800.);
+        assert_eq!(
+            framed_content_height(viewport, true, false, false, false),
+            px(800. - 32. - 12.),
+            "title bar plus both inset bands"
+        );
+        assert_eq!(
+            framed_content_height(viewport, true, false, true, true),
+            px(800. - 32.),
+            "a tiled edge has no inset"
+        );
+        assert_eq!(
+            framed_content_height(viewport, true, true, false, false),
+            px(800. - 32.),
+            "a maximized window keeps only the title bar"
+        );
+        assert_eq!(
+            framed_content_height(viewport, false, false, false, false),
+            viewport,
+            "no client frame: the content gets the viewport"
+        );
+        assert_eq!(
+            framed_content_height(px(20.), true, false, false, false),
+            px(0.),
+            "a tiny window clamps at zero"
+        );
     }
 
     /// Pure geometry: the resize-grip hit regions hug the border and leave the

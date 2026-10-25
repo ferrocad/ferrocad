@@ -28,6 +28,11 @@ jobs:
         working-directory: crates/ferrocad_core
         run: cargo test
 
+      - name: xtask unit tests (bundler closure + PE import walker)
+        # `xtask` is a build tool outside `default-members`, so the root
+        # `cargo test` would skip it. It is dependency-free and fast.
+        run: cargo test -p xtask
+
       - name: Build the FreeCAD extension module (for the shell tests)
         # The shell tests import the FreeCAD facade, which imports the `ferrocad`
         # extension. Locally `build.sh` leaves the `.so` in `python/`; CI must

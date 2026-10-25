@@ -8,7 +8,13 @@ HERE=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 if [ -d "$HERE/runtime" ]; then
     export PYTHONHOME="$HERE/runtime"
     export PATH="$HERE/runtime/bin:$PATH"
-    LD_LIBRARY_PATH="$HERE/runtime/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+fi
+
+# The bundled OCCT toolkits live in lib/ (OCCT ships no RUNPATH), and the CPython
+# runtime's libpython in runtime/lib. Both must be on the loader's path; nothing
+# on the host is assumed.
+if [ -d "$HERE/lib" ] || [ -d "$HERE/runtime/lib" ]; then
+    LD_LIBRARY_PATH="$HERE/lib:$HERE/runtime/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
     export LD_LIBRARY_PATH
 fi
 

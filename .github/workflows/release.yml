@@ -5,8 +5,14 @@ name: Release
 #   git tag v0.1.0 && git push origin v0.1.0
 #
 # The `verify` job checks the tag against the workspace version and runs the
-# tests; `build` produces the AppImage, .dmg and Windows zip; `release` attaches
-# them to a GitHub Release.
+# tests; `build` produces the base app's AppImage and Windows zip; `edition`
+# produces the Parametric edition's AppImage and Windows zip (with the OCCT
+# closure); `release` attaches them to a GitHub Release.
+#
+# macOS is deliberately absent: the pinned `bite-gp-apple 1.24.402` uses `cocoa`
+# without declaring it, so the build does not compile. That is an upstream
+# fork bug, not something to work around here. See
+# docs/architecture/releasing.md and docs/architecture/edition-publishing.md.
 on:
   push:
     tags: ["v*"]
@@ -59,9 +65,6 @@ jobs:
           - os: ubuntu-latest
             artifact_name: ferrocad-linux
             artifact_path: target/dist/ferrocad-x86_64.AppImage
-          - os: macos-latest
-            artifact_name: ferrocad-macos
-            artifact_path: target/dist/FerroCAD.dmg
           - os: windows-latest
             artifact_name: ferrocad-windows
             artifact_path: target/dist/ferrocad-windows-x86_64.zip
@@ -78,7 +81,7 @@ jobs:
         # would need `vcruntime140.dll` from the VC++ redistributable on the
         # user's machine. `crt-static` (permitted alongside the bundled `libpython`
         # DLL) removes that dependency, keeping the zip self-contained like the
-        # AppImage and the `.dmg`. See docs/architecture/distribution.md section 6.
+        # AppImage. See docs/architecture/distribution.md section 6.
         if: runner.os == 'Windows'
         shell: pwsh
         run: echo "RUSTFLAGS=-C target-feature=+crt-static" >> $env:GITHUB_ENV
@@ -113,10 +116,6 @@ jobs:
         if: runner.os == 'Linux'
         run: bash packaging/linux/appimage.sh
 
-      - name: Package (macOS)
-        if: runner.os == 'macOS'
-        run: bash packaging/macos/app.sh
-
       - name: Package (Windows)
         if: runner.os == 'Windows'
         run: pwsh -File packaging/windows/portable.ps1
@@ -141,8 +140,119 @@ jobs:
           path: ${{ matrix.artifact_path }}
           if-no-files-found: error
 
+  # The Parametric edition: the base app plus the Part workbench, linked against
+  # OCCT. The OCCT 7.8.1 prefix compiles the crates and is then walked by
+  # `xtask bundle --occt`, so one source of truth feeds both (see
+  # docs/architecture/occt-bundling.md). `--check-init` boots the staged payload
+  # headlessly before the artifact is wrapped; the AppImage/zip is run again
+  # afterwards.
+  edition:
+    needs: verify
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            artifact_name: ferrocad-parametric-linux
+            artifact_path: target/dist/ferrocad-parametric-x86_64.AppImage
+          - os: windows-latest
+            artifact_name: ferrocad-parametric-windows
+            artifact_path: target/dist/ferrocad-parametric-windows-x86_64.zip
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Link the CRT statically (self-contained Windows build)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: echo "RUSTFLAGS=-C target-feature=+crt-static" >> $env:GITHUB_ENV
+
+      - name: GPUI system libraries (Linux)
+        if: runner.os == 'Linux'
+        uses: ./.github/actions/linux-desktop-deps
+        with:
+          extra: librsvg2-bin python3-dev
+
+      - name: Fetch OCCT 7.8.1 (conda-forge, rootless) — Linux
+        if: runner.os == 'Linux'
+        env:
+          MAMBA_ROOT_PREFIX: ${{ github.workspace }}/.occt/root
+        run: |
+          mkdir -p .occt
+          curl -sSL https://micro.mamba.pm/api/micromamba/linux-64/latest | tar -xj -C .occt
+          .occt/bin/micromamba create -y -p "$PWD/.occt/prefix" -c conda-forge occt=7.8.1
+
+      - name: Fetch OCCT 7.8.1 (conda-forge, rootless) — Windows
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path .occt | Out-Null
+          Invoke-WebRequest -Uri https://micro.mamba.pm/api/micromamba/win-64/latest -OutFile .occt/micromamba.tar.bz2
+          tar -xjf .occt/micromamba.tar.bz2 -C .occt
+          $mamba = (Get-ChildItem -Path .occt -Recurse -Filter micromamba.exe | Select-Object -First 1).FullName
+          if (-not $mamba) { throw "micromamba.exe not found" }
+          $env:MAMBA_ROOT_PREFIX = "$PWD/.occt/root"
+          & $mamba create -y -p "$PWD/.occt/prefix" -c conda-forge occt=7.8.1
+          if ($LASTEXITCODE -ne 0) { throw "micromamba create failed" }
+          # conda-forge's Windows layout nests under Library/; the workspace
+          # .cargo/config.toml paths assume the Unix layout, so override them.
+          "OpenCASCADE_DIR=$PWD/.occt/prefix/Library/lib/cmake/opencascade" >> $env:GITHUB_ENV
+          "OCCT_INCLUDE_DIR=$PWD/.occt/prefix/Library/include/opencascade" >> $env:GITHUB_ENV
+          "PATH=$PWD/.occt/prefix/Library/bin;$env:PATH" >> $env:GITHUB_ENV
+
+      - name: AppImage tooling (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          rsvg-convert -w 256 -h 256 packaging/icon/ferrocad.svg -o packaging/linux/ferrocad.png
+          mkdir -p tools
+          curl -fL -o tools/appimagetool-x86_64.AppImage \
+            https://github.com/AppImage/appimagetool/releases/download/continuous/appimagetool-x86_64.AppImage
+          chmod +x tools/appimagetool-x86_64.AppImage
+
+      - name: Fetch workbench scripts
+        run: cargo xtask mods
+
+      - name: Fetch the bundled CPython runtime
+        run: cargo xtask python
+
+      - name: Bundle and package the edition (Linux)
+        if: runner.os == 'Linux'
+        run: bash packaging/linux/appimage.sh --edition parametric --occt --check-init
+
+      - name: Bundle and package the edition (Windows)
+        if: runner.os == 'Windows'
+        run: pwsh -File packaging/windows/portable.ps1 -Edition parametric -Occt -CheckInit
+
+      - name: Smoke-test the AppImage
+        # AppRun sets LD_LIBRARY_PATH to the bundled lib/ and runtime/; the boot
+        # imports the facade and the Part module, then exits (no window/GPU).
+        if: runner.os == 'Linux'
+        run: |
+          APPIMAGE_EXTRACT_AND_RUN=1 \
+            ./target/dist/ferrocad-parametric-x86_64.AppImage --check-init
+
+      - name: Smoke-test the packaged layout (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $scratch = Join-Path $env:RUNNER_TEMP 'ferrocad-parametric-smoke'
+          if (Test-Path $scratch) { Remove-Item -Recurse -Force $scratch }
+          Expand-Archive -Path target\dist\ferrocad-parametric-windows-x86_64.zip -DestinationPath $scratch
+          & "$scratch\ferrocad.bat" --check-init
+          if ($LASTEXITCODE -ne 0) { throw "ferrocad --check-init failed with exit code $LASTEXITCODE" }
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact_name }}
+          path: ${{ matrix.artifact_path }}
+          if-no-files-found: error
+
   release:
-    needs: build
+    needs: [build, edition]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -151,9 +261,9 @@ jobs:
           path: dist
 
       - name: Install archive tools
-        # 7z reads the .dmg (APFS) and unzip reads the Windows zip; the AppImage
-        # is inspected by running it with --appimage-extract (no FUSE needed).
-        run: sudo apt-get update && sudo apt-get install -y p7zip-full unzip
+        # unzip reads the Windows zips; the AppImages are inspected by running
+        # them with --appimage-extract (no FUSE needed).
+        run: sudo apt-get update && sudo apt-get install -y unzip
 
       - name: Generate the release body from the artifacts
         run: packaging/release-notes.sh dist > release-body.md

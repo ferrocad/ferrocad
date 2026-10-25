@@ -5,7 +5,11 @@
 # PATH, via APPIMAGETOOL, or as tools/appimagetool-<arch>.AppImage. An .AppImage
 # tool is run with --appimage-extract-and-run, so FUSE is not required.
 #
-#   packaging/linux/appimage.sh [--debug]
+#   packaging/linux/appimage.sh [--debug] [--edition parametric] [--occt]
+#                               [--check-init]
+#
+# The base app's artifact is ferrocad-<arch>.AppImage; an edition's is
+# ferrocad-<edition>-<arch>.AppImage (see docs/architecture/edition-publishing.md).
 set -eu
 
 HERE=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
@@ -16,12 +20,42 @@ if [ -f "$ROOT/../.toolchain/env.sh" ]; then
     . "$ROOT/../.toolchain/env.sh"
 fi
 
-# Stage the payload (pass through flags such as --debug).
+# `bundle` owns the payload directory name; mirror its edition spelling here so
+# the launcher and the artifact agree. Every flag (including --occt and
+# --check-init) is passed through unchanged.
+EDITION=""
+want_edition=0
+for arg in "$@"; do
+    if [ "$want_edition" = 1 ]; then
+        EDITION=$arg
+        want_edition=0
+        continue
+    fi
+    case "$arg" in
+        --edition) want_edition=1 ;;
+        --edition=*) EDITION=${arg#--edition=} ;;
+    esac
+done
+case "$EDITION" in
+    "" | ferrocad | base) EDITION="" ;;
+    ferrocad_parametric | ferrocad-parametric) EDITION=parametric ;;
+esac
+
 cargo xtask bundle "$@"
 
 ARCH=$(uname -m)
-APPDIR="$ROOT/target/dist/ferrocad"
-OUT="$ROOT/target/dist/ferrocad-$ARCH.AppImage"
+if [ -n "$EDITION" ]; then
+    APPDIR="$ROOT/target/dist/ferrocad-$EDITION"
+    OUT="$ROOT/target/dist/ferrocad-$EDITION-$ARCH.AppImage"
+else
+    APPDIR="$ROOT/target/dist/ferrocad"
+    OUT="$ROOT/target/dist/ferrocad-$ARCH.AppImage"
+fi
+
+if [ ! -d "$APPDIR" ]; then
+    echo "no staged payload at $APPDIR (did bundle --edition $EDITION fail?)" >&2
+    exit 1
+fi
 
 # AppImage glue: the AppDir needs AppRun, a .desktop entry and an icon.
 cp "$HERE/AppRun" "$APPDIR/AppRun"

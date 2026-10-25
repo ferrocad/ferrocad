@@ -17,6 +17,11 @@
 //! `cargo run -p ferrocad_parametric -- --open model.FCStd` opens a saved model in
 //! the shell (the basic `.FCStd` viewer path).
 //!
+//! `cargo run -p ferrocad_parametric -- --check-init` boots the interpreter, the
+//! linked `Part` module and the payload, then exits without a window (no display,
+//! no GPU). Packaging runs it on an unpacked artifact; see
+//! `docs/architecture/edition-publishing.md`.
+//!
 //! `cargo run -p ferrocad_parametric -- --render out.png [--size WxH]` renders the
 //! sample Part solid headlessly instead (needs a wgpu adapter, no display); add
 //! `--open model.FCStd` to render the file, `--script model.py` to build one, and
@@ -27,6 +32,29 @@ fn main() {
     // Register the Part module as a built-in, before the interpreter initialises.
     use ferrocad_part_py::Part as part_module;
     pyo3::append_to_inittab!(part_module);
+
+    // Editions parse their own flags, so the base app's `--check-init` branch does
+    // not reach them. Run the same boot here, then import the edition's app script:
+    // it is the module that imports `Part` and registers the display hooks, so this
+    // is what proves the kernel and the payload work together. `GuiUp` is 0 (the
+    // same stub the base check uses), so no window or GPU is involved.
+    if std::env::args().skip(1).any(|arg| arg == "--check-init") {
+        let result = ferrocad::check_init().and_then(|()| {
+            pyo3::Python::with_gil(|py| {
+                py.import("ferrocad_parametric")
+                    .map(|_| ())
+                    .map_err(|error| error.to_string())
+            })
+        });
+        match result {
+            Ok(()) => println!("ferrocad: init OK"),
+            Err(error) => {
+                eprintln!("ferrocad: init failed: {error}");
+                std::process::exit(1);
+            }
+        }
+        return;
+    }
 
     let args = match ferrocad::edition_args() {
         Ok(args) => args,

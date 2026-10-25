@@ -1,20 +1,29 @@
 # Packaging FerroCAD
 
 Platform scripts that wrap the payload staged by `cargo xtask bundle`
-(`target/dist/ferrocad/`) into a distributable artifact:
+(`target/dist/ferrocad/`, or `target/dist/ferrocad-<edition>/`) into a
+distributable artifact:
 
 | Platform | Script | Artifact | Needs |
 | --- | --- | --- | --- |
 | Linux | `linux/appimage.sh` | `target/dist/ferrocad-<arch>.AppImage` | `appimagetool` |
+| Linux (edition) | `linux/appimage.sh --edition parametric --occt` | `target/dist/ferrocad-parametric-<arch>.AppImage` | `appimagetool` + an OCCT 7.8.1 prefix |
 | macOS | `macos/app.sh` | `target/dist/FerroCAD.app` (+ `FerroCAD.dmg`) | macOS; `hdiutil` for the dmg |
 | Windows | `windows/portable.ps1` | `target/dist/ferrocad-windows-x86_64/` + `.zip` | PowerShell |
+| Windows (edition) | `windows/portable.ps1 -Edition parametric -Occt` | `target/dist/ferrocad-parametric-windows-x86_64.zip` | PowerShell + an OCCT 7.8.1 prefix |
+
+The macOS packager remains in the tree but is not run by `release.yml` while the
+pinned GPUI fork does not build on macOS (see
+`docs/architecture/edition-publishing.md`).
 
 Workbench scripts are fetched first with `cargo xtask mods` (a pinned upstream
 FreeCAD revision, default `Draft`) into `mods/`; the packagers ship them loose.
 The release workflow runs it before packaging.
 
 Each script runs `cargo xtask bundle` first, so one command produces the artifact.
-Pass `--debug` (or `-DebugBuild` on Windows) for a fast, unstripped build.
+Pass `--debug` (or `-DebugBuild` on Windows) for a fast, unstripped build; pass
+`--edition parametric --occt` (or `-Edition parametric -Occt`) for the Part
+edition, which also stages the OCCT closure.
 
 ## The payload
 
@@ -22,13 +31,19 @@ Pass `--debug` (or `-DebugBuild` on Windows) for a fast, unstripped build.
 the current host:
 
 ```
-target/dist/ferrocad/
+target/dist/ferrocad[-<edition>]/
 ├── bin/ferrocad[.exe]        the app binary (links the PyO3 bindings built in)
+├── lib/                      OCCT toolkit closure (editions with --occt)
+├── MANIFEST                  the bundled libraries and their sources
 ├── python/                   FreeCAD, FreeCADGui, ferrocad_shell, ferrocad_spike
 ├── mods/                     workbenches
 ├── runtime/                  bundled CPython (when fetched; self-contained)
-└── LICENSES/                 LGPL-2.1-or-later
+└── LICENSES/                 LGPL-2.1-or-later + OCCT (LGPL-2.1 with exception)
 ```
+
+On Windows the closure's `.dll`s are staged in `bin/` beside `ferrocad.exe`
+rather than in `lib/`, so the loader's default search order finds them.
+`MANIFEST` sits at the payload root.
 
 There is no separate `lib/ferrocad.abi3.so`: the binary registers the PyO3 module
 as a built-in `ferrocad` module, so the interpreter finds it without a file on
@@ -37,7 +52,9 @@ by `build.sh`; the app does not need it.)
 
 Each packager adds its own launcher (AppRun, the `.app` launcher, `ferrocad.bat`)
 that sets `FERROCAD_PYTHON_PATH`, `FERROCAD_MODS_PATH` and `PYTHONPATH`, so the
-embedded interpreter finds `python/` and `mods/`.
+embedded interpreter finds `python/` and `mods/`. When an OCCT closure is staged,
+`AppRun` also prepends `lib/` to `LD_LIBRARY_PATH` and `ferrocad.bat` prepends
+`bin/`/`lib/` to `PATH`; OCCT ships no `RUNPATH` of its own.
 
 ## Notes
 
@@ -74,5 +91,12 @@ embedded interpreter finds `python/` and `mods/`.
   `docs/architecture/distribution.md` §6.
 - **`--check-init` verifies a packaged layout without a display.** The app boots
   its embedded interpreter, native dependencies, built-in modules, facade and
-  workbenches, then exits (no window, no GPU). The release workflow runs it on the
-  unpacked Windows zip; it is useful on any platform to smoke-test an artifact.
+  workbenches, then exits (no window, no GPU). `xtask bundle --check-init` runs it
+  on the staged payload with only the bundled `lib/` and `runtime/lib` on the
+  loader path, before the AppImage/zip is wrapped; `release.yml` also runs the
+  unpacked artifact. It works for the base app and for the Parametric edition.
+- **OCCT is only bundled when asked.** `bundle --edition parametric` refuses to
+  proceed without `--occt` (or `--occt-prefix`), because the binary links OCCT and
+  an artifact without the closure would only work on a machine with a matching
+  system OCCT. The walk uses `readelf -d`/`ldd` on Linux and the PE import table
+  on Windows, and records what it copied in `MANIFEST`.

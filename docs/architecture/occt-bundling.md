@@ -192,4 +192,9 @@ but the geometry conformance suite would have to be re-measured against 8.0 anyw
 **Decision:** release on 7.8.1 with the vendored `opencascade-sys` (0.3.0 + upstream
 PR #234; see [`edition-publishing.md`](edition-publishing.md) §6). Revisit OCCT 8 when a
 published `opencascade-sys` supports it — at that point both `third_party/` patches
-(handle aliases and the MSVC bridge) should be droppable in one step.
+(handle aliases and the MSVC bridge) should be droppable in one step. Tracked upstream
+as [bschwind/opencascade-rs#237](https://github.com/bschwind/opencascade-rs/issues/237),
+which asks for 8.x support and points out that spelling the bridge's handles
+`opencascade::handle<T>` (what 8.0 uses, and what `occ::handle<T>` aliases) fixes MSVC
+*and* 8.0 in one change; we offered to run an `occt=8.0.1` CI leg against a branch to
+measure what else 8.0 removed.

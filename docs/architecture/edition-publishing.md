@@ -148,8 +148,9 @@ diagnosis, the attribution and the option table). The defect is already fixed
 upstream by [bschwind/opencascade-rs#234](https://github.com/bschwind/opencascade-rs/pull/234)
 (open, mergeable, awaiting maintainer review; a downstream user reports it green
 on Windows/MSVC 14.44 and macOS), which covers the `unique_ptr` sites, the cxx
-pointer bindings *and* the `advapi32` link closure — the plan is to port it onto
-`third_party/opencascade-sys` instead of growing our own patch. The first `v0.1.4` run got
+pointer bindings *and* the `advapi32` link closure. It is ported onto
+`third_party/opencascade-sys`, replacing the earlier 17-line patch; the next
+gate is a green `edition-windows` run. The first `v0.1.4` run got
 through the OCCT fetch and into `cargo build -p ferrocad_parametric` on
 `windows-latest`, where `opencascade-sys 0.3.0`'s cxx bridge fails with C2440. The
 cause is that OCCT's `DEFINE_STANDARD_HANDLE` makes `Handle_T` a **derived class**

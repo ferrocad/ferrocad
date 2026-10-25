@@ -103,7 +103,11 @@ fn the_coin_and_semantic_grid_mods_load_and_register_an_overlay() {
         assert!(outcome.ok, "{id} raised: {}", outcome.error);
     }
 
-    // 4. The semantic backend wins by priority at registration; switch to the Coin
+    // 4. The feature owns the switch: a provider switch selects the implementation,
+    //    it does not turn the grid on, and the Coin mod only builds its overlay while
+    //    the stored switch is on. Enable it explicitly before switching.
+    evaluate("import FerroCAD\nFerroCAD.Grid.enabled = True");
+    //    The semantic backend wins by priority at registration; switch to the Coin
     //    backend so the overlay bridge this test guards is the active one.
     evaluate("import FerroCADGui; FerroCADGui.setActiveProvider('grid', 'coin')");
 

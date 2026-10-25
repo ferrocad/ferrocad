@@ -766,11 +766,17 @@ so a spec can carry its own metadata.
 
 ### Where the control lives
 
-The gizmo is a **transient tool handle**, not a persistent scene helper, so it does not
-belong in the top-left header beside `Grid`/`Axes`/`WP`: those can be toggled in an empty
-scene, and a `Gizmo` toggle there would imply the same. It also does not need a dock row:
-object verbs moved to the wheel ([`selection-gizmos-and-forms.md`](selection-gizmos-and-forms.md)
-§2), and the dock is creation + global only (`Create Slab`, `Polyline`, `Search`).
+The **handles** are a transient tool handle, not a persistent scene helper, so they are
+not a dock row: object verbs moved to the wheel
+([`selection-gizmos-and-forms.md`](selection-gizmos-and-forms.md) §2), and the dock is
+creation + global only (`Create Slab`, `Polyline`, `Search`). What the top-left header
+owns is the **gizmo's configuration**, not its handles: a `Gizmo ▾` control sits between
+`WP` and `Snap` (the same split-button shape as `Grid`/`Axes`) and opens a popover with
+`Show gizmo` (the `enabled` switch), the provider rows (`FerroCAD (native)` /
+`FerroCAD (shader)`), `Gizmo settings…` and `Reset to edition defaults`. That matches the
+header's one meaning — *how the viewport is drawn* — without implying that a handle is
+a scene helper you can toggle in an empty scene. See
+[`transform-ux.md`](transform-ux.md) for the mode/pivot design behind the next handles.
 
 - A **spatial selection** auto-arms the translate triad at its contact point; a tree or
   command selection uses the body's base corner. The base edition registers
@@ -784,14 +790,13 @@ drawn.
   `ΔX/ΔY/ΔZ` form in **deferred** mode: the keys are the gizmo's, the form's Accept is
   the single commit. The same form is the target of the planned Tab/digit escalation
   (§ *Fast escalation* in the interaction model).
-- The **provider rows** (`FerroCAD (native)` / `FerroCAD (shader)`) and
-  `Gizmo settings…` are reachable from **`Search (Ctrl+K)`**, **Dev Tools**, and the
-  `Settings/Gizmo` tree. The settings commands are dev-only and declare
-  `FerroCAD_Surface: "gizmo"` (parsed as `Surface::Hidden`), so they never become dock or
-  wheel rows.
-- There is no dock caret to keep in sync with the selection. A small caret inside the
-  floating form that opens `Gizmo settings…` is optional future polish; the settings are
-  already one search away.
+- The **provider rows** (`FerroCAD (native)` / `FerroCAD (shader)`), `Gizmo settings…`
+  and `Reset to edition defaults` are in the header control above, and also reachable
+  from **`Search (Ctrl+K)`**, **Dev Tools**, and the `Settings/Gizmo` tree. The settings
+  commands are dev-only and declare `FerroCAD_Surface: "gizmo"` (parsed as
+  `Surface::Hidden`), so they never become dock or wheel rows.
+- There is no dock caret to keep in sync with the selection; the header control is
+  configuration, independent of what is selected.
 
 This keeps the dock layout stable while a tool is drawing and preserves one meaning for
 the header: *how the viewport is drawn*.

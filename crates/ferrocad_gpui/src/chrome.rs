@@ -4,8 +4,9 @@
 //! The chrome is presentation over the command registry: every control runs an id
 //! through [`Shell::run_command`](crate::shell::Shell), and every popover row is a
 //! command the registry assigned to that surface. Nothing here names a workbench;
-//! the only ids it knows are the four primary controls (grid, axes, workplane, snap)
-//! and the synthetic provider rows a Grid/Axis popover starts with.
+//! the only ids it knows are the five primary controls (grid, axes, gizmo,
+//! workplane, snap) and the synthetic provider rows a Grid/Axis/Gizmo popover
+//! starts with.
 //!
 //! The app menu (`☰`) is app-level chrome, not a viewport control: the shell passes it
 //! to `window_frame_with_leading`, so it lives in the main window's title bar. It is
@@ -37,12 +38,19 @@ use crate::shell::{ACCENT, FG, MUTED, PANEL, PANEL_ALT, Shell, ShellModel, panel
 /// The header controls' primary command ids.
 pub const GRID: &str = "App_ToggleGrid";
 pub const AXIS: &str = "App_ToggleAxisCross";
+/// The gizmo split control's primary command: show or hide the transform gizmo.
+pub const GIZMO: &str = "App_ToggleGizmo";
 pub const WORKPLANE: &str = "App_ViewWorkplane";
 /// The global snap switch. The six `Draft_Snap_*` modes declare this id as their
 /// `FerroCAD_Parent`, so they appear in its popover instead of in the dock.
 pub const SNAP: &str = "Draft_Snap_Lock";
 /// The application menu's first entry (hidden from every other surface).
 pub const DEV_TOOLS: &str = "Dev_ToggleTools";
+
+/// The command the Gizmo popover's reset row runs.
+const RESET_GIZMO: &str = "App_ResetGizmoAppearance";
+/// The provider feature the Gizmo popover switches.
+const GIZMO_FEATURE: &str = "gizmo";
 
 // The chrome accents and dielectric lines are in `ferrocad_theme::ui`: the same
 // table the popover widget uses, so the pill and its rows cannot drift.
@@ -195,8 +203,97 @@ fn axis_info(summary: Option<&AxisSummary>) -> Vec<PopoverInfo> {
     info
 }
 
+/// The Gizmo popover's provider row, from the feature the shell read when the
+/// popover opened.
+///
+/// With no gizmo provider registered one muted row says so; a missing feature
+/// (bridge failure) omits the rows rather than inventing them, exactly as
+/// [`grid_info`] and [`axis_info`] do.
+fn gizmo_info(feature: Option<&ProviderFeature>) -> Vec<PopoverInfo> {
+    let Some(feature) = feature else {
+        return Vec::new();
+    };
+    let provider = feature
+        .providers
+        .iter()
+        .find(|provider| provider.active)
+        .or_else(|| feature.providers.first());
+    let Some(provider) = provider else {
+        return vec![PopoverInfo {
+            id: "no-provider".to_string(),
+            label: "No gizmo provider".to_string(),
+        }];
+    };
+    let label = if provider.label.is_empty() {
+        provider.backend.clone()
+    } else {
+        provider.label.clone()
+    };
+    vec![PopoverInfo {
+        id: "provider".to_string(),
+        label: format!("Provider: {label}"),
+    }]
+}
+
+/// The Gizmo popover's rows, in render order.
+///
+/// Provider choices lead (the mode group), then the `Show gizmo` state row and
+/// two actions. `Gizmo settings…` runs the active backend's registered settings
+/// command, which selects the `Settings/Gizmo` node — the same path the axis and
+/// grid settings rows use, not a second one. The reset row runs the appearance
+/// reset command.
+fn gizmo_rows(feature: Option<&ProviderFeature>, commands: &[CommandInfo]) -> Vec<PopoverRow> {
+    let mut rows = feature
+        .map(|feature| provider_rows(GIZMO_FEATURE, &feature.providers))
+        .unwrap_or_default();
+
+    // The primary is a state row: the menu stays open so the dot follows.
+    if let Some(command) = commands::find(commands, GIZMO) {
+        let mut row = PopoverRow::of(command);
+        row.label = "Show gizmo".to_string();
+        row.divider_before = !rows.is_empty();
+        rows.push(row);
+    }
+
+    // The active backend owns the settings command; fall back to any backend that
+    // advertises one so the row is not lost to a provider without a command.
+    let settings = feature.and_then(|feature| {
+        feature
+            .providers
+            .iter()
+            .find(|provider| provider.active)
+            .and_then(|provider| provider.command.as_deref())
+            .or_else(|| {
+                feature
+                    .providers
+                    .iter()
+                    .find_map(|provider| provider.command.as_deref())
+            })
+    });
+    if let Some(command) = settings.and_then(|id| commands::find(commands, id)) {
+        let mut row = PopoverRow::of(command);
+        row.label = "Gizmo settings…".to_string();
+        rows.push(row);
+    }
+
+    if let Some(command) = commands::find(commands, RESET_GIZMO) {
+        rows.push(PopoverRow {
+            id: command.id.clone(),
+            label: "Reset to edition defaults".to_string(),
+            enabled: command.enabled,
+            checked: false,
+            toggle: false,
+            keep_open: false,
+            accel: command.accel.clone(),
+            divider_before: false,
+        });
+    }
+
+    rows
+}
+
 /// The viewport environment controls as a compact floating pill: the
-/// grid/axes/workplane controls in one row.
+/// grid/axes/gizmo/workplane controls in one row.
 ///
 /// It is not a pane header. The shell overlays it on the canvas' top-left corner, so the
 /// scene reaches the title bar instead of losing a full-width row (and the redundant
@@ -216,6 +313,7 @@ pub(crate) fn viewport_header(
 ) -> impl IntoElement {
     let grid_open = open == Some("grid");
     let axis_open = open == Some("axis");
+    let gizmo_open = open == Some("gizmo");
     let wp_open = open == Some("wp");
     let snap_open = open == Some("snap");
     let grid_providers = grid
@@ -224,6 +322,20 @@ pub(crate) fn viewport_header(
     let axis_providers = axis
         .map(|summary| provider_rows("axis", &summary.providers))
         .unwrap_or_default();
+    // The gizmo has no summary bridge and the model does not carry the provider
+    // list, so read the registry while the popover is open; a bridge failure
+    // leaves the rows out.
+    let gizmo_feature = if gizmo_open {
+        crate::python::provider_features()
+            .ok()
+            .and_then(|features| {
+                features
+                    .into_iter()
+                    .find(|feature| feature.feature == GIZMO_FEATURE)
+            })
+    } else {
+        None
+    };
     let mut controls = div().flex().flex_row().items_center().gap_1();
     if let Some(command) = commands::find(&model.commands, GRID) {
         controls = controls.child(split_button(
@@ -270,6 +382,23 @@ pub(crate) fn viewport_header(
             false,
             command,
             model,
+            cx,
+        ));
+    }
+    // The gizmo is a capability like the grid and axis cross: its label toggles
+    // visibility and its caret exposes the provider switch and settings. It sits
+    // between WP and Snap so the environment controls keep one visual order.
+    if let Some(command) = commands::find(&model.commands, GIZMO) {
+        controls = controls.child(split_button_with_rows(
+            "gizmo",
+            "Gizmo",
+            GIZMO,
+            gizmo_open,
+            gizmo_info(gizmo_feature.as_ref()),
+            gizmo_rows(gizmo_feature.as_ref(), &model.commands),
+            anchor,
+            true,
+            command,
             cx,
         ));
     }
@@ -426,7 +555,28 @@ fn split_button(
         combined.append(&mut rows);
         rows = combined;
     }
+    split_button_with_rows(
+        key, label, primary, open, info, rows, anchor, state_dot, command, cx,
+    )
+}
 
+/// A split button from an explicit row list.
+///
+/// [`split_button`] derives the rows from the registry surface; the Gizmo control
+/// builds its own because its settings commands are dev-only and its provider
+/// list is not a summary. The visual language is identical.
+fn split_button_with_rows(
+    key: &'static str,
+    label: &'static str,
+    primary: &'static str,
+    open: bool,
+    info: Vec<PopoverInfo>,
+    rows: Vec<PopoverRow>,
+    anchor: Option<Point<Pixels>>,
+    state_dot: bool,
+    command: &CommandInfo,
+    cx: &mut Context<Shell>,
+) -> impl IntoElement {
     // Dielectric: the pill's glass is the surface and the 6 px state dot carries
     // on/off in `ACTIVE_ACCENT` (one ink with the popover rows). A checked control
     // used to fill with `ACCENT`, which pulled the eye away from the model (the
@@ -1097,6 +1247,22 @@ impl Render for CommandTooltip {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use gpui::{Modifiers, TestAppContext, VisualTestContext};
+
+    /// Paint the window once so a following `simulate_*` has hitboxes to dispatch to.
+    fn draw(cx: &mut VisualTestContext) {
+        cx.update(|window, cx| {
+            let _ = window.draw(cx);
+        });
+    }
+
+    /// Click the centre of the element with `selector` (it must have been drawn).
+    fn click_at(cx: &mut VisualTestContext, selector: &'static str) {
+        let bounds = cx
+            .debug_bounds(selector)
+            .unwrap_or_else(|| panic!("{selector} has no bounds"));
+        cx.simulate_click(bounds.center(), Modifiers::default());
+    }
 
     #[test]
     fn no_summary_omits_the_grid_info_rows() {
@@ -1347,6 +1513,229 @@ mod tests {
                 "AxisOverlayCoin_Settings",
                 "App_ReloadAxisSettings"
             ]
+        );
+    }
+
+    /// A gizmo feature with the native backend active and the shader backend
+    /// offered, the shape `python::provider_features()` returns.
+    fn gizmo_feature() -> ProviderFeature {
+        ProviderFeature {
+            feature: "gizmo".to_string(),
+            providers: vec![
+                crate::python::GridProvider {
+                    backend: "ferrocad".to_string(),
+                    label: "FerroCAD (native)".to_string(),
+                    active: true,
+                    command: Some("GizmoOverlay_Settings".to_string()),
+                },
+                crate::python::GridProvider {
+                    backend: "ferrocad-shader".to_string(),
+                    label: "FerroCAD (shader)".to_string(),
+                    active: false,
+                    command: Some("GizmoOverlayShader_Settings".to_string()),
+                },
+            ],
+        }
+    }
+
+    /// The registry entries the Gizmo popover needs, with the toggle's check mark
+    /// supplied by the caller.
+    fn gizmo_commands(checked: bool) -> Vec<CommandInfo> {
+        vec![
+            CommandInfo {
+                id: GIZMO.to_string(),
+                menu: "Gizmo".to_string(),
+                checkable: true,
+                checked,
+                enabled: true,
+                ..Default::default()
+            },
+            CommandInfo {
+                id: "GizmoOverlay_Settings".to_string(),
+                menu: "Gizmo".to_string(),
+                enabled: true,
+                ..Default::default()
+            },
+            CommandInfo {
+                id: "GizmoOverlayShader_Settings".to_string(),
+                menu: "Gizmo (shader)".to_string(),
+                enabled: true,
+                ..Default::default()
+            },
+            CommandInfo {
+                id: RESET_GIZMO.to_string(),
+                menu: "Reset gizmo appearance".to_string(),
+                enabled: true,
+                ..Default::default()
+            },
+        ]
+    }
+
+    /// The caret lists the two gizmo backends, then the show/settings/reset rows,
+    /// with the same state-row semantics as Grid and Axes.
+    #[test]
+    fn the_gizmo_popover_lists_the_providers_the_toggle_the_settings_row_and_the_reset() {
+        let feature = gizmo_feature();
+        let rows = gizmo_rows(Some(&feature), &gizmo_commands(true));
+        let ids: Vec<&str> = rows.iter().map(|row| row.id.as_str()).collect();
+        assert_eq!(
+            ids,
+            [
+                "ferrocad-provider:gizmo:ferrocad",
+                "ferrocad-provider:gizmo:ferrocad-shader",
+                GIZMO,
+                "GizmoOverlay_Settings",
+                RESET_GIZMO,
+            ]
+        );
+
+        assert_eq!(rows[0].label, "FerroCAD (native)");
+        assert!(rows[0].checked, "the active backend is checked");
+        assert!(
+            rows[0].toggle && rows[0].keep_open,
+            "a provider choice is a state row"
+        );
+        assert_eq!(rows[1].label, "FerroCAD (shader)");
+        assert!(!rows[1].checked);
+
+        assert_eq!(rows[2].label, "Show gizmo");
+        assert!(rows[2].checked, "an enabled gizmo reads as checked");
+        assert!(
+            rows[2].toggle && rows[2].keep_open,
+            "the toggle keeps the menu open"
+        );
+        assert!(
+            rows[2].divider_before,
+            "a hairline separates the mode group from the commands"
+        );
+
+        assert_eq!(rows[3].label, "Gizmo settings…");
+        assert!(!rows[3].toggle && !rows[3].keep_open, "a one-shot action");
+
+        assert_eq!(rows[4].label, "Reset to edition defaults");
+        assert!(!rows[4].toggle && !rows[4].keep_open);
+    }
+
+    /// The check mark follows the command's `IsChecked`, so a disabled gizmo reads
+    /// unchecked; without a provider feature only the command rows remain.
+    #[test]
+    fn a_disabled_gizmo_reads_as_unchecked_in_the_gizmo_popover() {
+        let rows = gizmo_rows(None, &gizmo_commands(false));
+        assert_eq!(
+            rows.len(),
+            2,
+            "no provider rows and no settings row without a feature"
+        );
+        assert_eq!(rows[0].id, GIZMO);
+        assert_eq!(rows[0].label, "Show gizmo");
+        assert!(!rows[0].checked, "a disabled gizmo is unchecked");
+        assert!(rows[0].toggle && rows[0].keep_open);
+        assert_eq!(rows[1].id, RESET_GIZMO);
+    }
+
+    /// `Gizmo settings…` runs the active backend's settings command, which is the
+    /// one path that selects `Settings/Gizmo` (the axis/grid rows' pattern).
+    #[test]
+    fn the_gizmo_settings_row_follows_the_active_backend() {
+        let mut feature = gizmo_feature();
+        feature.providers[0].active = false;
+        feature.providers[1].active = true;
+        let rows = gizmo_rows(Some(&feature), &gizmo_commands(true));
+        let settings = rows
+            .iter()
+            .find(|row| row.label == "Gizmo settings…")
+            .expect("the settings row");
+        assert_eq!(settings.id, "GizmoOverlayShader_Settings");
+    }
+
+    /// The info row names the active backend and falls back to the backend id when
+    /// the provider advertises no label; no feature and no provider each read as an
+    /// honest empty state.
+    #[test]
+    fn the_gizmo_info_names_the_active_provider_and_says_when_there_is_none() {
+        assert!(gizmo_info(None).is_empty());
+
+        let feature = gizmo_feature();
+        let info = gizmo_info(Some(&feature));
+        assert_eq!(info.len(), 1);
+        assert_eq!(info[0].id, "provider");
+        assert_eq!(info[0].label, "Provider: FerroCAD (native)");
+
+        let empty = ProviderFeature {
+            feature: "gizmo".to_string(),
+            providers: Vec::new(),
+        };
+        let info = gizmo_info(Some(&empty));
+        assert_eq!(info[0].id, "no-provider");
+        assert_eq!(info[0].label, "No gizmo provider");
+
+        let unlabelled = ProviderFeature {
+            feature: "gizmo".to_string(),
+            providers: vec![crate::python::GridProvider {
+                backend: "ferrocad-shader".to_string(),
+                label: String::new(),
+                active: true,
+                command: None,
+            }],
+        };
+        assert_eq!(
+            gizmo_info(Some(&unlabelled))[0].label,
+            "Provider: ferrocad-shader"
+        );
+    }
+
+    /// The header builds with the Gizmo control between `WP` and `Snap`, and its
+    /// caret opens the popover with the expected rows.
+    #[gpui::test]
+    fn the_header_builds_with_the_gizmo_control(cx: &mut TestAppContext) {
+        let _guard = crate::PYTHON_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let model = Shell::boot().expect("boot shell");
+        let window = cx.update(|cx| {
+            let model = model.clone();
+            cx.open_window(Default::default(), move |_window, cx| {
+                cx.new(|cx| Shell::from_model(model.clone(), cx))
+            })
+            .unwrap()
+        });
+        let mut cx = VisualTestContext::from_window(window.into(), cx);
+        draw(&mut cx);
+
+        assert!(cx.debug_bounds("viewport-header").is_some());
+        let wp = cx.debug_bounds("wp-label").expect("the workplane control");
+        let gizmo = cx.debug_bounds("gizmo-label").expect("the gizmo control");
+        let snap = cx.debug_bounds("snap-label").expect("the snap control");
+        assert!(
+            wp.origin.x < gizmo.origin.x && gizmo.origin.x < snap.origin.x,
+            "Gizmo sits between WP and Snap"
+        );
+        assert!(
+            cx.debug_bounds("gizmo-state-dot").is_some(),
+            "the pill carries the on/off dot"
+        );
+
+        click_at(&mut cx, "gizmo-caret");
+        draw(&mut cx);
+        assert!(
+            cx.debug_bounds("gizmo-popover").is_some(),
+            "the caret opens the gizmo popover"
+        );
+        for selector in [
+            "gizmo-row-provider",
+            "gizmo-row-ferrocad-provider:gizmo:ferrocad",
+            "gizmo-row-App_ToggleGizmo",
+            "gizmo-row-App_ResetGizmoAppearance",
+        ] {
+            assert!(
+                cx.debug_bounds(selector).is_some(),
+                "{selector} is rendered"
+            );
+        }
+        assert!(
+            cx.debug_bounds("gizmo-row-GizmoOverlay_Settings").is_some()
+                || cx
+                    .debug_bounds("gizmo-row-GizmoOverlayShader_Settings")
+                    .is_some(),
+            "the active backend's settings row is rendered"
         );
     }
 }

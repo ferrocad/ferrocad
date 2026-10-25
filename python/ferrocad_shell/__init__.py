@@ -1236,6 +1236,43 @@ class _AxisCrossCommand:
 FreeCADGui.addCommand("App_ToggleAxisCross", _AxisCrossCommand())
 
 
+class _GizmoCommand:
+    """``App_ToggleGizmo`` — show or hide the transform gizmo.
+
+    ``FerroCAD.Gizmo.enabled`` is the one gizmo switch; this command owns it and
+    returns the partial ``{"view": {"gizmo": {"enabled": …}}}`` request the
+    shell applies. ``IsChecked`` reads the same store, so the header pill's dot,
+    the popover row and the drawn handles cannot disagree. The gizmo has no
+    shell-mirrored ``ViewState`` field (unlike the grid and axis cross), so the
+    semantic store is the check mark's source of truth.
+    """
+
+    def GetResources(self):
+        return {
+            "MenuText": "Gizmo",
+            "ToolTip": "Show the transform gizmo",
+            "Group": "View",
+            "CmdType": "ForView",
+            "Checkable": True,
+            "FerroCAD_Surface": "gizmo",
+        }
+
+    def IsChecked(self):
+        gizmo = getattr(FerroCAD, "Gizmo", None)
+        return bool(gizmo.enabled) if gizmo is not None else False
+
+    def Activated(self):
+        gizmo = getattr(FerroCAD, "Gizmo", None)
+        if gizmo is None:
+            return {"status": "gizmo appearance is unavailable in this build"}
+        enabled = not gizmo.enabled
+        gizmo.enabled = enabled
+        return {"view": {"gizmo": {"enabled": enabled}}}
+
+
+FreeCADGui.addCommand("App_ToggleGizmo", _GizmoCommand())
+
+
 class _ReloadAxisSettingsCommand:
     """``App_ReloadAxisSettings`` — apply the axis preferences without a restart.
 

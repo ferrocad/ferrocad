@@ -23,6 +23,7 @@ use ferrocad_inventor::{Scene, Viewport};
 use ferrocad_stage::{
     DeclarativeManipulator, InteractionCommit, Manipulator, ToolStatus, TransformGizmo,
 };
+use ferrocad_types::Vector3;
 use ferrocad_ui::Form;
 use ferrocad_viewport::scene;
 use ferrocad_viewport::{
@@ -248,6 +249,9 @@ pub struct Shell {
     /// The context target the open wheel resolved. It is promoted to the selection
     /// only when a verb is chosen; closing the wheel discards it.
     wheel_target: Option<WheelTarget>,
+    /// The current selection's click point, kept relative to its body so a re-arm
+    /// after a commit keeps the triad on the point the user grabbed.
+    selection_datum: Option<SelectionDatum>,
     /// The last pointer position in window coordinates. Space opens the wheel
     /// there; a keyboard-only session falls back to the window centre.
     last_pointer: Option<Point<Pixels>>,
@@ -330,6 +334,48 @@ struct WheelTarget {
     anchor: Option<SelectionAnchor>,
 }
 
+/// A click anchor preserved **relative to the body it belongs to**.
+///
+/// The triad belongs to the point of contact, not to an abstract centre, and it must
+/// stay attached when the body moves: a commit re-arms the selection, so a stored
+/// *world* point would be left behind at the old place while the geometry moved away
+/// (which is why the triad used to jump to the base corner after a drag). Storing the
+/// offset from the body's bounding-box corner lets `rearm_selection` re-resolve the
+/// point against the live stage, so the triad travels with the geometry — through a
+/// move, a resize, and undo/redo. A rotation would rotate the offset too; that lands
+/// with the rotate gizmo.
+#[derive(Clone, Copy, Debug)]
+struct SelectionDatum {
+    /// `anchor.point - body_corner(entity)` at pick time.
+    offset: Vector3,
+    /// The surface normal at the hit (`zero` when the producer had none).
+    normal: Vector3,
+}
+
+impl SelectionDatum {
+    fn from_anchor(anchor: &SelectionAnchor, corner: Vector3) -> Self {
+        Self {
+            offset: Vector3::new(
+                anchor.point.x - corner.x,
+                anchor.point.y - corner.y,
+                anchor.point.z - corner.z,
+            ),
+            normal: anchor.normal,
+        }
+    }
+
+    fn resolve(&self, corner: Vector3) -> SelectionAnchor {
+        SelectionAnchor {
+            point: Vector3::new(
+                corner.x + self.offset.x,
+                corner.y + self.offset.y,
+                corner.z + self.offset.z,
+            ),
+            normal: self.normal,
+        }
+    }
+}
+
 impl Shell {
     /// Boot the interpreter, create the sample document, and return the model the
     /// view is built from. The view itself is created with `from_model` because
@@ -373,7 +419,23 @@ impl Shell {
         // A fresh document starts with an empty selection snapshot: the process may
         // have booted before (tests), and stale names must not leak into `IsActive`.
         let _ = selection::push(&[]);
-        let _ = python::set_view_state(&ViewState::default());
+        // The edition's appearance preset is materialised in the parameter store, but a
+        // *stored* value is not a request: without this the first window would draw the
+        // built-in Rust defaults and only pick up the preset after the user touched a
+        // setting. Ask the facade to fold the preset and the user's values into one
+        // request, then apply it exactly like a command's.
+        let mut view = ViewState::default();
+        match python::appearance_view() {
+            Ok(report) => {
+                if let Some(request) = report.view.as_ref() {
+                    if let Err(error) = view.apply(&request.without_visibility()) {
+                        console.push(format!("appearance: {error}"));
+                    }
+                }
+            }
+            Err(error) => console.push(format!("appearance: {error}")),
+        }
+        let _ = python::set_view_state(&view);
         let commands = commands::list().unwrap_or_default();
         Ok(Arc::new(Mutex::new(ShellModel {
             title: format!("FerroCAD — {}", boot.document),
@@ -384,7 +446,7 @@ impl Shell {
             selection: Vec::new(),
             properties: Vec::new(),
             commands,
-            view: ViewState::default(),
+            view,
             tool: None,
             gizmo_armed: false,
             console,
@@ -451,6 +513,7 @@ impl Shell {
             wheel,
             _wheel_events: wheel_events,
             wheel_target: None,
+            selection_datum: None,
             last_pointer: None,
             drag_baseline: None,
             hud_rect: None,
@@ -1180,9 +1243,15 @@ impl Shell {
                         cx,
                     );
                 }
+                self.selection_datum = anchor.as_ref().and_then(|anchor| {
+                    let stage = self.viewport.as_ref()?.read(cx).stage().clone();
+                    let corner = crate::contributions::body_corner(reference.object, &stage)?;
+                    Some(SelectionDatum::from_anchor(anchor, corner))
+                });
                 self.arm(reference, anchor.as_ref(), cx)
             }
             SelectionEvent::Cleared => {
+                self.selection_datum = None;
                 self.clear_selection(cx);
                 (Vec::new(), None)
             }
@@ -1546,8 +1615,9 @@ impl Shell {
     /// A move or a resize invalidates the world anchors the handles were built for. The
     /// height grip must follow the moved body's top face, and the transform triad must
     /// stay attached after its own commit — so this rebuilds from the (already pruned)
-    /// selection against the new stage. A tree/command selection has no click point,
-    /// so `arm` uses the body's base corner.
+    /// selection against the new stage, re-resolving a click-made selection's datum.
+    /// A tree/command selection has no click point, so `arm` uses the body's base
+    /// corner.
     fn rearm_selection(&mut self, cx: &mut Context<Self>) {
         let Some(viewport) = self.viewport.clone() else {
             return;
@@ -1566,6 +1636,7 @@ impl Shell {
             })
         };
         let Some(reference) = reference else {
+            self.selection_datum = None;
             self.model.lock().unwrap().gizmo_armed = false;
             viewport.update(cx, |viewport, cx| {
                 viewport.set_manipulators(Vec::new());
@@ -1574,7 +1645,15 @@ impl Shell {
             });
             return;
         };
-        let (manipulators, gizmo) = self.arm(&reference, None, cx);
+        // Re-resolve the click point against the *new* geometry: the datum is stored
+        // relative to the body's base corner, so the triad stays on the point the user
+        // grabbed instead of snapping back to the corner after its own commit.
+        let anchor = self.selection_datum.and_then(|datum| {
+            let stage = viewport.read(cx).stage();
+            crate::contributions::body_corner(reference.object, stage)
+                .map(|corner| datum.resolve(corner))
+        });
+        let (manipulators, gizmo) = self.arm(&reference, anchor.as_ref(), cx);
         self.model.lock().unwrap().gizmo_armed = gizmo.is_some();
         viewport.update(cx, |viewport, cx| {
             viewport.set_manipulators(manipulators);
@@ -2819,6 +2898,14 @@ impl Shell {
                     self.axis_summary = python::axis_summary().ok();
                     self.provider_features = python::provider_features().ok();
                 }
+                // A settings row can ask for the change to be drawn (a palette, a grid
+                // spacing, a provider). Applying it here is what makes an edit visible
+                // immediately rather than at the next unrelated repaint.
+                if let Some(request) = result.view.clone() {
+                    if let Err(error) = self.apply_view(&request, cx) {
+                        self.console_line(format!("view: {error}"), cx);
+                    }
+                }
                 self.refresh(cx);
                 self.sync_stage(cx);
                 self.rearm_selection(cx);
@@ -3538,7 +3625,35 @@ pub(crate) fn properties_panel(
                     .child(name.clone()),
             );
             for row in &model.properties {
-                let value: AnyElement = if row.editable {
+                let value: AnyElement = if let Some(command) = row.command.clone() {
+                    // A generated action row (the settings card's `Reset to edition
+                    // defaults`). It runs a real command, not a property edit, so the
+                    // request it returns (the restored appearance) is applied by
+                    // `run_command` rather than dropped.
+                    let label = if row.label.is_empty() {
+                        row.name.clone()
+                    } else {
+                        row.label.clone()
+                    };
+                    let selector = format!("prop-command-{command}");
+                    div()
+                        .debug_selector(move || selector.clone())
+                        .id(SharedString::from(format!("prop-command-{command}")))
+                        .flex_shrink_0()
+                        .px_2()
+                        .py_1()
+                        .rounded_sm()
+                        .text_xs()
+                        .text_color(rgb(FG))
+                        .cursor_pointer()
+                        .hover(|style| style.bg(rgb(PANEL_ALT)))
+                        .on_click(cx.listener(move |shell, _event, _window, cx| {
+                            shell.run_command(&command, cx);
+                            cx.notify();
+                        }))
+                        .child(label)
+                        .into_any_element()
+                } else if row.editable {
                     let key = format!("{name}.{}", row.name);
                     let state = shell.ensure_prop_input(&key, &row.value, window, cx);
                     let selector = format!("prop-{key}");
@@ -4064,6 +4179,27 @@ impl Render for Shell {
 mod tests {
     use super::*;
     use gpui::{Entity, TestAppContext, VisualTestContext};
+
+    /// The click datum is stored relative to the body's base corner, so it follows the
+    /// geometry instead of being left behind at the old world point.
+    #[test]
+    fn a_click_datum_follows_its_body() {
+        let corner = Vector3::new(0.0, 0.0, 0.0);
+        let anchor = SelectionAnchor {
+            point: Vector3::new(2.0, 3.0, 4.0),
+            normal: Vector3::new(0.0, 0.0, 1.0),
+        };
+        let datum = SelectionDatum::from_anchor(&anchor, corner);
+
+        // Unmoved: the same point.
+        assert_eq!(datum.resolve(corner).point, anchor.point);
+
+        // The body moved by +10 in x: the point moves with it, the normal does not.
+        let moved = Vector3::new(10.0, 0.0, 0.0);
+        let resolved = datum.resolve(moved);
+        assert_eq!(resolved.point, Vector3::new(12.0, 3.0, 4.0));
+        assert_eq!(resolved.normal, anchor.normal);
+    }
 
     /// S1 end-to-end, headless: boot the interpreter, read the sample document
     /// through it, round-trip the console, and render the shell.

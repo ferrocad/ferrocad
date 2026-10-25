@@ -56,6 +56,32 @@ pub struct ViewRequest {
     pub workplane: Option<String>,
 }
 
+impl ViewRequest {
+    /// The request with its **visibility** switches removed, keeping appearance.
+    ///
+    /// Stored appearance is applied once at boot, but `grid`/`axis.enabled`/
+    /// `gizmo.enabled` are also written by a provider's `activate` — and the shipped
+    /// overlays write `enabled = True` when a document opens, so applying the merged
+    /// store verbatim would turn features on behind the user's back and change the
+    /// first window's state. The appearance layer only colours and spaces what is
+    /// already drawn; visibility stays a command/toggle decision until the provider
+    /// lifecycle stops writing it.
+    pub fn without_visibility(&self) -> Self {
+        let mut request = self.clone();
+        request.grid = None;
+        request.axis_cross = None;
+        request.projection = None;
+        request.workplane = None;
+        if let Some(axis) = request.axis.as_mut() {
+            axis.enabled = None;
+        }
+        if let Some(gizmo) = request.gizmo.as_mut() {
+            gizmo.enabled = None;
+        }
+        request
+    }
+}
+
 /// A parameterized axis-cross change (`view.axis`). Every field is optional; an
 /// omitted field keeps the current value.
 #[derive(Debug, Clone, Default, Deserialize, PartialEq)]

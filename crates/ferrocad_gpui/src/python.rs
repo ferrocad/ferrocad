@@ -133,6 +133,10 @@ pub struct ObjectNode {
 #[derive(Debug, Clone, Deserialize)]
 pub struct PropRow {
     pub name: String,
+    /// A display label for a generated row (a command button). Empty for a normal
+    /// property, whose label is its name.
+    #[serde(default)]
+    pub label: String,
     #[serde(rename = "type")]
     pub type_id: String,
     pub value: String,
@@ -140,6 +144,10 @@ pub struct PropRow {
     /// Whether the editor can change this property.
     #[serde(default)]
     pub editable: bool,
+    /// The command this row runs instead of editing a value (`Reset to edition
+    /// defaults` on a settings card).
+    #[serde(default)]
+    pub command: Option<String>,
     /// The editor kind (`text`, `bool`, `int`, `float`, `quantity`, `enum`).
     /// Used to pick the control once the editor has more than a text field.
     #[serde(default)]
@@ -153,6 +161,11 @@ pub struct SetResult {
     pub ok: bool,
     #[serde(default)]
     pub error: String,
+    /// A presentation change the edit asks for (a settings row that changes the grid
+    /// spacing or the gizmo palette). Without this the edit would be stored but the
+    /// viewport would keep drawing the old state until something else repainted it.
+    #[serde(default)]
+    pub view: Option<crate::view::ViewRequest>,
 }
 
 /// The outcome of evaluating a console line.
@@ -671,6 +684,16 @@ pub fn dialog_cancel(token: &str) -> Result<crate::commands::CommandOutcome, Str
 
 pub fn properties(object: &str) -> Result<Vec<PropRow>, String> {
     call_json("properties", Some(object))
+}
+
+/// The appearance the edition's preset (and the user's stored values) resolve to.
+///
+/// Returns a command-outcome shape so the boot path can apply `view` through the same
+/// [`ViewState::apply`](crate::view::ViewState::apply) it uses for a command. Called
+/// once, before the first window: stored appearance is a *value*, not a request, so
+/// nothing would draw it otherwise.
+pub fn appearance_view() -> Result<crate::commands::CommandOutcome, String> {
+    call_json("appearance_view", None)
 }
 
 pub fn evaluate(code: &str) -> Result<EvalResult, String> {

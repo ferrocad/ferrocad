@@ -4,9 +4,13 @@
 //! script registers the display and interaction providers, and the manipulator is the
 //! one `main` contributes. It needs OCCT.
 //!
-//! The test follows the shell's path: selection → the edition's factory → a drag →
+//! The tests follow the shell's path: selection → the edition's factory → a drag →
 //! neutral `InteractionCommit` → entity-to-object map → the app script's `interaction`
-//! hook → a recomputed `Part::Fillet` → re-sync.
+//! hook → a recomputed document → re-sync.
+//!
+//! The first test covers the Part edge dress-up arc (a `Part::Fillet`); the second
+//! covers the shared translate gizmo, so the edition's composition of
+//! `ferrocad::base_contributions()` with the Part manipulator keeps its move handle.
 
 use std::sync::{Mutex, Once};
 
@@ -15,7 +19,8 @@ use ferrocad_gpui::DisplaySync;
 use ferrocad_gpui::python;
 use ferrocad_graphics::{Camera, Projection, Viewport};
 use ferrocad_part_gui::{DressUpMode, dress_up_scrubber_for};
-use ferrocad_stage::Manipulator;
+use ferrocad_stage::screen::project_device;
+use ferrocad_stage::{GizmoHandle, Manipulator, Stage};
 use ferrocad_types::{Placement, Rotation, Vector3};
 
 /// The tests share one interpreter and one document registry.
@@ -44,6 +49,24 @@ fn camera() -> Camera {
         },
         viewport: Viewport::new([400, 400], 1.0),
     }
+}
+
+/// Run a line on the console surface (the app script's namespace).
+fn evaluate(code: &str) -> String {
+    let result = python::evaluate(code).expect("the interpreter ran");
+    assert!(result.ok, "{code} failed:\n{}", result.output);
+    result.output
+}
+
+/// An item's minimum x — the world-space corner the gizmo is armed at.
+fn min_x(stage: &Stage, entity: u32) -> f64 {
+    stage
+        .item(entity)
+        .expect("the item")
+        .positions()
+        .iter()
+        .map(|position| f64::from(position[0]))
+        .fold(f64::INFINITY, f64::min)
 }
 
 #[test]
@@ -128,5 +151,98 @@ fn the_part_fillet_manipulator_drives_the_document() {
     assert!(
         stage.items().iter().all(|item| item.entity_id() != entity),
         "the old box entity is gone"
+    );
+}
+
+/// The Part edition starts from `ferrocad::base_contributions()`, not
+/// `Contributions::default()`, so composing its fillet manipulator must not drop the
+/// shared move gizmo. This is the regression that motivated the fix: the triad was
+/// simply absent, and a test that only checked `result.ok` after a hand-built commit
+/// would never have noticed.
+#[test]
+fn the_part_move_gizmo_translates_the_box_and_undoes() {
+    let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    boot();
+
+    let meshes = python::stage_meshes().expect("stage meshes");
+    let box_mesh = meshes
+        .iter()
+        .find(|mesh| mesh.object == "Box")
+        .expect("the seeded Box is displayed");
+    let entity = box_mesh.entity;
+
+    let mut display = DisplaySync::new();
+    let stage = display.build(meshes);
+    assert_eq!(display.object_of(entity), Some("Box"));
+
+    // The edition's composition (`main` does this): base contributions plus the
+    // Part dress-up factory. A whole-object selection must still arm the gizmo.
+    let contributions =
+        ferrocad::base_contributions().with_manipulator(ferrocad_part_gui::fillet_manipulator);
+    let mut gizmo = contributions
+        .gizmo_for(&SelectionRef::whole(entity), &stage)
+        .expect("the base composition arms the move gizmo for a whole body");
+    assert_eq!(gizmo.target_id(), entity);
+
+    let camera = camera();
+    gizmo.update(&camera);
+
+    let x_before = min_x(&stage, entity);
+    assert!(
+        x_before.abs() < 1e-6,
+        "the seeded 20 mm box sits at x = 0: {x_before}"
+    );
+
+    // Grab the middle of the X stem and drag it 30 px along +X. The camera looks
+    // along +Z, so X projects across the viewport and the stem is grabbable.
+    let stem = gizmo
+        .origin()
+        .add(&Vector3::new(gizmo.scale() * 0.5, 0.0, 0.0));
+    let device = project_device(&camera, stem).expect("the X stem projects");
+    let grab = [device[0].round() as i32, device[1].round() as i32];
+    assert!(gizmo.begin_drag(GizmoHandle::AxisX, &camera, grab));
+    assert!(
+        gizmo.drag_to(&camera, [grab[0] + 30, grab[1]]).is_some(),
+        "the drag moved the gizmo"
+    );
+    let commit = gizmo.end_drag().expect("a gizmo commit").to_interaction();
+
+    assert_eq!(commit.manipulator, "transform");
+    assert_eq!(commit.action, "apply");
+    assert_eq!(commit.values.len(), 16, "a row-major 4x4 transform");
+    // Row-major (FreeCAD A11..A44): A14/A24/A34 are the translation.
+    let delta_x = commit.values[3];
+    assert!(
+        delta_x > 1.0,
+        "the drag asks for a visible +X move: {delta_x}"
+    );
+
+    // The shell's route: commit → entity map → the app script's `interaction` hook.
+    let object = display.object_of(commit.target).expect("the object");
+    let result = python::apply_interaction(&commit, object).expect("the hook ran");
+    assert!(result.ok, "move failed: {}", result.error);
+
+    // The re-synced box is at the dragged placement, by the transform's own delta.
+    let meshes = python::stage_meshes().expect("stage meshes");
+    let stage = display.build(meshes);
+    let x_after = min_x(&stage, entity);
+    assert!(
+        (x_after - (x_before + delta_x)).abs() < 0.05,
+        "the box moved by the commit's {delta_x:.3}: {x_before} → {x_after}"
+    );
+    assert!(
+        x_after > x_before + 1.0,
+        "the displayed geometry actually moved: {x_before} → {x_after}"
+    );
+
+    // The app hook wraps the move in one named transaction, so one undo puts the
+    // body back where it was.
+    evaluate("doc.undo()");
+    let meshes = python::stage_meshes().expect("stage meshes");
+    let stage = display.build(meshes);
+    let x_restored = min_x(&stage, entity);
+    assert!(
+        (x_restored - x_before).abs() < 1e-6,
+        "undo restores the placement: {x_restored} vs {x_before}"
     );
 }

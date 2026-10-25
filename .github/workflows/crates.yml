@@ -27,10 +27,7 @@ jobs:
       - name: GPUI system libraries
         # `cargo publish` verify-builds each crate in isolation; the GPUI stack
         # needs fontconfig, xcb and xkbcommon dev packages to build and link.
-        run: >
-          sudo apt-get update && sudo apt-get install -y
-          libfontconfig1-dev pkg-config
-          libxcb1-dev libxkbcommon-dev libxkbcommon-x11-dev
+        uses: ./.github/actions/linux-desktop-deps
 
       - name: Fetch OCCT 7.8.1 (conda-forge, rootless)
         # `cargo publish` verify-builds `ferrocad_occt` and `ferrocad_part_py`,

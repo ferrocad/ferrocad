@@ -20,10 +20,9 @@ jobs:
         with:
           python-version: "3.12"
       - name: Install CPython headers + GPUI system libraries (PyO3, X11/xkb/fontconfig)
-        run: >
-          sudo apt-get update && sudo apt-get install -y
-          python3-dev libfontconfig1-dev pkg-config
-          libxcb1-dev libxkbcommon-dev libxkbcommon-x11-dev
+        uses: ./.github/actions/linux-desktop-deps
+        with:
+          extra: python3-dev
 
       - name: ferrocad_core (pure Rust) tests
         working-directory: crates/ferrocad_core
@@ -103,10 +102,9 @@ jobs:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
       - name: Install Xvfb + software Vulkan (lavapipe) + CPython headers + GPUI libs
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y xvfb mesa-vulkan-drivers python3-dev \
-            libfontconfig1-dev pkg-config libxcb1-dev libxkbcommon-dev libxkbcommon-x11-dev
+        uses: ./.github/actions/linux-desktop-deps
+        with:
+          extra: xvfb mesa-vulkan-drivers python3-dev
       - name: Fetch OCCT 7.8.1 (conda-forge, rootless) for the Part workbench
         run: |
           mkdir -p .occt
@@ -140,8 +138,10 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
-      - name: Install CPython headers (PyO3, for the ferrocad_part_py boot test)
-        run: sudo apt-get update && sudo apt-get install -y python3-dev
+      - name: Install CPython headers + GPUI system libraries (the edition links GPUI)
+        uses: ./.github/actions/linux-desktop-deps
+        with:
+          extra: python3-dev
       - name: Fetch OCCT 7.8.1 (conda-forge, rootless)
         run: |
           mkdir -p .occt

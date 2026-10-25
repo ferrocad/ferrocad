@@ -1,0 +1,26 @@
+name: Linux desktop dependencies
+description: >
+  Install the system libraries the GPUI stack needs to build and link on Linux
+  (fontconfig, xcb, xkbcommon). Pass `extra` for job-specific packages such as
+  `python3-dev`, `xvfb mesa-vulkan-drivers` or `librsvg2-bin`.
+
+# One definition for every Linux job: the same list used to be copied into five
+# workflows, and a job that built a GUI-linking crate without the copy failed at
+# `yeslogic-fontconfig-sys` (2026-10-25). Add a package here, not in a job.
+inputs:
+  extra:
+    description: Additional apt packages, space separated.
+    required: false
+    default: ""
+
+runs:
+  using: composite
+  steps:
+    - name: Install the desktop and job packages
+      shell: bash
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y \
+          libfontconfig1-dev pkg-config \
+          libxcb1-dev libxkbcommon-dev libxkbcommon-x11-dev \
+          ${{ inputs.extra }}

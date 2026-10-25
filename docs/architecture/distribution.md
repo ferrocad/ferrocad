@@ -160,15 +160,16 @@ application. See [`releasing.md`](releasing.md).
 | macOS | `.app` in a `.dmg` | `hdiutil`/`create-dmg`; codesign + notarize |
 | Windows | portable `.exe` or MSIX | WiX/MSIX, or a zip |
 
-**Status (v0.1.3).** The release workflow builds and publishes all three desktop
-artifacts — the Linux AppImage, the macOS `.dmg` and the Windows `.zip` — each
-bundling the pinned `python-build-standalone` runtime (the build job runs
-`cargo xtask python` before `bundle`, so the host is compiled against that
-interpreter and the runtime ships as `runtime/`). The Windows leg was re-enabled at
-`v0.1.1`: the upstream `bite-gp-windows` build failure (`unresolved import gpui`)
-was fixed by bumping `bite-gpui` to `1.21.1`, so the matrix now runs
-`packaging/windows/portable.ps1` to produce the `.zip`. See
-`.github/workflows/release.yml`.
+**Status (v0.1.3).** The release workflow publishes the Linux AppImage and the
+Windows `.zip`; the macOS `.dmg` is blocked because `bite-gp-apple 1.24.402`
+(the GPUI Metal backend) uses `cocoa` without declaring it. See
+[`releasing.md`](releasing.md) §5. Each artifact bundles the pinned
+`python-build-standalone` runtime (the build job runs `cargo xtask python` before
+`bundle`, so the host is compiled against that interpreter and the runtime ships
+as `runtime/`). The Windows leg was re-enabled at `v0.1.1`: the upstream
+`bite-gp-windows` build failure (`unresolved import gpui`) was fixed by bumping
+`bite-gpui` to `1.21.1`, so the matrix now runs `packaging/windows/portable.ps1`
+to produce the `.zip`. See `.github/workflows/release.yml`.
 
 ### Known issue: the comctl32 v6 manifest and `cargo test`
 

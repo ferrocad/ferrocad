@@ -323,3 +323,10 @@ and `ferrocad_viewport` — because `ferrocad_gpui` now depends on them. The pub
 order therefore includes the dev-dependency edges (`part_py` → `stage_py`, `wgpu` →
 `stage`, `part` → `occt`). The desktop artifacts still ship the base `ferrocad`
 binary.
+
+**macOS is absent from `v0.1.3`.** The release with these crates published is
+Linux and Windows only: `bite-gp-apple 1.24.402` (the GPUI Metal backend) uses
+`cocoa` without declaring it, so the macOS build fails to compile. That is an
+upstream fork bug, independent of this workspace; macOS returns with the next
+GPUI-fork update (the Windows dmabuf fix in 1.24.402 is why the family is on that
+release).

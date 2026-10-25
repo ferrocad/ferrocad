@@ -172,7 +172,30 @@ class TestBook(unittest.TestCase):
     def test_a_directory_link_becomes_its_index_page(self):
         source = build_book.USER / "explanation" / "x.md"
         out = build_book._rewrite_links("[api](../../python-api/)", source)
-        self.assertIn("(../../python-api/README.md)", out)
+        # `user/` is dropped on assembly, so one `../` is enough in the book.
+        self.assertIn("(../python-api/README.md)", out)
+
+    def test_user_is_dropped_from_the_published_path(self):
+        self.assertEqual(
+            build_book._book_path(build_book.USER / "tutorials" / "x.md").as_posix(),
+            "tutorials/x.md",
+        )
+        self.assertEqual(
+            build_book._book_path(build_book.API / "FreeCAD.md").as_posix(),
+            "python-api/FreeCAD.md",
+        )
+
+    def test_a_cross_section_link_is_recomputed_for_the_book_layout(self):
+        source = build_book.USER / "how-to" / "x.md"
+        out = build_book._rewrite_links("[ref](../../python-api/FreeCAD.md)", source)
+        self.assertIn("(../python-api/FreeCAD.md)", out)
+
+    def test_site_url_is_only_emitted_when_set(self):
+        self.assertNotIn("site-url", build_book.book_toml(""))
+        self.assertIn(
+            'site-url = "https://ferrocad.github.io/docs/"',
+            build_book.book_toml("https://ferrocad.github.io/docs/"),
+        )
 
     def test_external_urls_are_untouched(self):
         source = build_book.USER / "README.md"

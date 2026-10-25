@@ -18,6 +18,8 @@ Usage::
     python3 tools/build_book.py --check    # assemble to a temp dir and validate
     python3 tools/build_book.py            # assemble into target/user-book/
     python3 tools/build_book.py --build    # also run `mdbook build`
+    python3 tools/build_book.py --build --site-url https://ferrocad.github.io/docs/
+                                           # the published build: sets the 404 base
 
 Requires no mdBook for ``--check``; ``--build`` needs ``mdbook`` on ``PATH``.
 """
@@ -42,28 +44,43 @@ DEFAULT_OUT = REPO / "target" / "user-book"
 GITHUB = "https://github.com/ferrocad/ferrocad/blob/main"
 BOOK_TITLE = "FerroCAD User Guide"
 
-#: (folder under `src/`, part title), in Diátaxis reading order.
+#: (folder under `src/`, part title), in Diátaxis reading order. The `user/`
+#: level is dropped on assembly, so the published URLs are `/tutorials/...`
+#: rather than `/user/tutorials/...`.
 PARTS = [
-    ("user/tutorials", "Tutorials"),
-    ("user/how-to", "How-to guides"),
+    ("tutorials", "Tutorials"),
+    ("how-to", "How-to guides"),
     ("python-api", "Reference"),
-    ("user/explanation", "Explanation"),
+    ("explanation", "Explanation"),
     ("mods", "Mod writers"),
 ]
 
-BOOK_TOML = f"""[book]
-title = "{BOOK_TITLE}"
-authors = ["The FerroCAD authors"]
-language = "en"
-src = "src"
 
-[build]
-build-dir = "book"
-create-missing = false
+def book_toml(site_url: str = "") -> str:
+    """The mdBook configuration for the assembled tree.
 
-[output.html]
-default-theme = "navy"
-"""
+    `site_url` is only needed when the book is served from a subdirectory: mdBook
+    uses it as the `<base>` of the generated `404.html`, whose assets must resolve
+    from the site root rather than from the missing page's (arbitrary) depth.
+    Normal pages keep relative links, so an empty value is fine for local builds.
+    """
+    lines = [
+        "[book]",
+        f'title = "{BOOK_TITLE}"',
+        'authors = ["The FerroCAD authors"]',
+        'language = "en"',
+        'src = "src"',
+        "",
+        "[build]",
+        'build-dir = "book"',
+        "create-missing = false",
+        "",
+        "[output.html]",
+        'default-theme = "navy"',
+    ]
+    if site_url:
+        lines.append(f'site-url = "{site_url}"')
+    return "\n".join(lines) + "\n"
 
 LINK = re.compile(r"(!?\[([^\]]*)\]\(([^)\s]+)\))")
 HEADING = re.compile(r"^# (.+)$", re.M)
@@ -72,16 +89,29 @@ HEADING = re.compile(r"^# (.+)$", re.M)
 # ---------------------------------------------------------------------------
 # Sources
 # ---------------------------------------------------------------------------
+def _book_path(source: Path) -> Path:
+    """Where `source` lands under `src/` (the assembled tree).
+
+    `docs/user/` loses its `user/` level so the published paths are
+    `/tutorials/...`, `/how-to/...` and `/explanation/...`; the reference and
+    mods sections keep their folder name.
+    """
+    resolved = source.resolve()
+    if resolved.is_relative_to(USER.resolve()):
+        return resolved.relative_to(USER.resolve())
+    return resolved.relative_to(DOCS.resolve())
+
+
 def book_sources() -> list[tuple[Path, Path]]:
     """(absolute source, path under ``src/``) for every page and asset."""
     pairs: list[tuple[Path, Path]] = []
     for path in sorted(USER.rglob("*")):
         if path.is_file() and (path.suffix == ".md" or "images" in path.parts):
-            pairs.append((path, path.relative_to(DOCS)))
+            pairs.append((path, _book_path(path)))
     for path in sorted(API.glob("*.md")):
-        pairs.append((path, path.relative_to(DOCS)))
+        pairs.append((path, _book_path(path)))
     for path in sorted(MODS.glob("*.md")):
-        pairs.append((path, path.relative_to(DOCS)))
+        pairs.append((path, _book_path(path)))
     return pairs
 
 
@@ -112,8 +142,14 @@ def _order(path: Path) -> tuple:
 # Link rewriting
 # ---------------------------------------------------------------------------
 def _rewrite_links(text: str, source: Path) -> str:
-    """Point links that leave the book at the repository on GitHub."""
+    """Point links that leave the book at the repository on GitHub.
+
+    Links that stay inside the book are recomputed from the *assembled* layout
+    (`_book_path`), not from the source layout, because the `user/` level is
+    dropped on assembly: a link from `how-to/` to `python-api/` loses one `../`.
+    """
     source_dir = source.parent
+    source_book = _book_path(source)
 
     def replace(match: re.Match) -> str:
         whole, label, target = match.group(1), match.group(2), match.group(3)
@@ -130,7 +166,9 @@ def _rewrite_links(text: str, source: Path) -> str:
 
         if _inside_book(candidate):
             # Normalised so a directory link becomes its index page, which mdBook serves.
-            keep = os.path.relpath(candidate, source_dir).replace(os.sep, "/")
+            keep = os.path.relpath(_book_path(candidate), source_book.parent).replace(
+                os.sep, "/"
+            )
             new_label = label
         else:
             try:
@@ -156,7 +194,7 @@ def _rewrite_links(text: str, source: Path) -> str:
 # Assembly
 # ---------------------------------------------------------------------------
 def _summary(src: Path) -> str:
-    lines = ["# Summary", "", "[Introduction](user/README.md)", ""]
+    lines = ["# Summary", "", "[Introduction](README.md)", ""]
 
     for folder, part in PARTS:
         pages = [
@@ -188,7 +226,7 @@ def _copied(src: Path) -> list[tuple[Path, Path]]:
     ]
 
 
-def assemble(out: Path) -> Path:
+def assemble(out: Path, site_url: str = "") -> Path:
     """Write a complete mdBook source tree under ``out``; return ``out/src``."""
     src = out / "src"
     if src.exists():
@@ -204,7 +242,7 @@ def assemble(out: Path) -> Path:
             shutil.copyfile(source, target)
 
     (src / "SUMMARY.md").write_text(_summary(src))
-    (out / "book.toml").write_text(BOOK_TOML)
+    (out / "book.toml").write_text(book_toml(site_url))
     return src
 
 
@@ -247,6 +285,15 @@ def main(argv: list[str]) -> int:
     parser.add_argument("--check", action="store_true", help="validate, write nothing")
     parser.add_argument("--build", action="store_true", help="run `mdbook build`")
     parser.add_argument("--out", type=Path, default=DEFAULT_OUT, help="output directory")
+    parser.add_argument(
+        "--site-url",
+        default="",
+        help=(
+            "the public URL the book is served from (for the 404 page's base); "
+            "required when hosting under a subdirectory, e.g. "
+            "https://ferrocad.github.io/docs/"
+        ),
+    )
     args = parser.parse_args(argv)
 
     if args.check:
@@ -255,7 +302,7 @@ def main(argv: list[str]) -> int:
         out = args.out
         out.mkdir(parents=True, exist_ok=True)
 
-    src = assemble(out)
+    src = assemble(out, args.site_url)
     problems = validate(src)
     if problems:
         for problem in problems:

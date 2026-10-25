@@ -30,7 +30,11 @@ into one mdBook (tutorials, how-to, reference, explanation, mod writers). It is 
 at <https://ferrocad.github.io/docs/> from the separate
 [`ferrocad/docs`](https://github.com/ferrocad/docs) repository. That repository holds
 only the Pages workflow: it checks out a **shallow, sparse copy** of this repository
-(`docs/` and `tools/`), runs `tools/build_book.py --build`, and deploys the result. The
+(`docs/` and `tools/`), runs
+`tools/build_book.py --build --site-url https://ferrocad.github.io/docs/`, and deploys
+the result. Assembly drops the `user/` level, so the published paths are
+`/tutorials/…`, `/how-to/…` and `/explanation/…`; `--site-url` sets the `<base>` of
+mdBook's `404.html` so a mistyped URL still loads its assets from `/docs/`. The
 content, the generators and the freshness checks stay here; `ferrocad/docs` only
 renders and deploys, so there is no second copy to fall out of date. The internal notes
 for audiences 3 and 4 stay in the repository.

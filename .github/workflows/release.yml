@@ -151,13 +151,16 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
+        # Linux only for now. The Windows leg gets as far as compiling
+        # `opencascade-sys 0.3.0`, whose cxx bridge does not build with MSVC
+        # (`b_rep.hxx`: `opencascade::handle<T>*` → `std::unique_ptr<Handle_T>`
+        # conversions, error C2440). Adding the Windows entry back is the only
+        # change needed once that is fixed; its steps below already exist. See
+        # docs/architecture/edition-publishing.md §6.
         include:
           - os: ubuntu-latest
             artifact_name: ferrocad-parametric-linux
             artifact_path: target/dist/ferrocad-parametric-x86_64.AppImage
-          - os: windows-latest
-            artifact_name: ferrocad-parametric-windows
-            artifact_path: target/dist/ferrocad-parametric-windows-x86_64.zip
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4

@@ -79,8 +79,9 @@ Numbered like the `D` slices in [`distribution.md`](distribution.md) §7.
   AppImage boots with `import Part` available and no system OCCT installed.
 - **E2.** `release.yml` builds `ferrocad-parametric-*` beside `ferrocad-*`, fetching
   the per-platform OCCT prefix, and attaches both to the Release. *Acceptance:* a
-  `v*` tag yields six artifacts (four while macOS is blocked — see §6); the
-  Windows one passes `--check-init`.
+  `v*` tag yields six artifacts (four while macOS is blocked, three while the
+  Parametric Windows build is blocked too — see §6); the Windows one passes
+  `--check-init`.
 - **E3.** macOS and Windows closures (`otool -L`/`install_name_tool`; PE import
   walk) and the license staging for all three. *Acceptance:* each platform's
   `--check-init` runs with only the bundled `lib/`.
@@ -132,14 +133,23 @@ shared shell.
 `ferrocad-parametric-x86_64.AppImage`; the base invocation and artifact name are
 unchanged.
 
-**E2 — implemented in the workflow; not executed here.** `.github/workflows/release.yml`
-has an `edition` job (Linux + Windows) that fetches OCCT 7.8.1 from conda-forge
-with micromamba, runs `cargo xtask mods` and `cargo xtask python`, then
+**E2 — implemented and run for `v0.1.4`.** `.github/workflows/release.yml` has an
+`edition` job that fetches OCCT 7.8.1 from conda-forge with micromamba, runs
+`cargo xtask mods` and `cargo xtask python`, then
 `bundle --edition parametric --occt --check-init` and the platform packager. It
-uploads `ferrocad-parametric-x86_64.AppImage` and
-`ferrocad-parametric-windows-x86_64.zip`; the release job waits for both the base
-and edition jobs. Because macOS is blocked, a `v*` tag yields **four** artifacts
-(two base, two parametric), not six.
+uploads `ferrocad-parametric-x86_64.AppImage`; the release job waits for both the
+base and edition jobs. Because macOS is blocked and the **Windows leg does not
+build**, a `v*` tag yields **three** artifacts (two base, one parametric), not
+six.
+
+**Windows is blocked in `opencascade-sys`.** The first `v0.1.4` run got through
+the OCCT fetch and into `cargo build -p ferrocad_parametric` on `windows-latest`,
+where `opencascade-sys 0.3.0`'s cxx bridge fails with C2440 in `b_rep.hxx`
+(`opencascade::handle<Geom_Surface>*` and friends cannot be passed to
+`std::unique_ptr<Handle_Geom_Surface>`), on VS 18 / MSVC 14.51. The edition matrix
+is therefore Linux-only; adding the Windows entry back is the single workflow
+change needed once that bridge builds (its steps are still in the job). The PE
+closure walker and `ferrocad.bat` are ready for it.
 
 **E3 — partial.** The Windows closure is implemented with a dependency-free PE
 import reader (`crates/xtask/src/pe.rs`, unit-tested on a synthetic PE image);

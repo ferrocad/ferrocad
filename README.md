@@ -12,7 +12,7 @@ Python import namespace stays `FreeCAD`; the project/distribution is `ferrocad`.
 | --- | --- | --- |
 | **Engine** | the pure-Rust document model behind the `FreeCAD` API | `A1`/`B1`/`A2`/`B2` done; conformance **160 passing** (`Document.py` 87/137, ~18 real gaps). Persistence (`C`) and the MVP surface (`D`) outstanding. |
 | **App shell** | the `bite-gpui` window driving the engine through embedded CPython | `S1` done: decorated window, inspector, property editor, Python console, status bar. `S2`–`S6` planned. |
-| **Distribution** | how it ships | done: `v0.1.4`, twenty-one crates on crates.io, four self-contained artifacts (base and Parametric AppImage/zip pairs) plus `cargo install`. |
+| **Distribution** | how it ships | done: `v0.1.4`, twenty-one crates on crates.io, three self-contained artifacts (base AppImage/zip and the Parametric AppImage) plus `cargo install`. |
 | **Workbenches** | reusing upstream workbenches | `cargo xtask mods` fetches `Draft`; loading is best-effort and stops on the `FreeCADGui` stub (`Workbench`, `addWorkbench`, …) and the missing `FreeCAD.addImportType`. |
 
 This is a proof of concept, not a product. It exists to validate the single
@@ -40,7 +40,6 @@ Python is needed:
 | Linux (x86_64) | [`ferrocad-x86_64.AppImage`](https://github.com/ferrocad/ferrocad/releases/latest/download/ferrocad-x86_64.AppImage) |
 | Windows (x86_64) | [`ferrocad-windows-x86_64.zip`](https://github.com/ferrocad/ferrocad/releases/latest/download/ferrocad-windows-x86_64.zip) |
 | Linux (x86_64, Part edition) | [`ferrocad-parametric-x86_64.AppImage`](https://github.com/ferrocad/ferrocad/releases/latest/download/ferrocad-parametric-x86_64.AppImage) |
-| Windows (x86_64, Part edition) | [`ferrocad-parametric-windows-x86_64.zip`](https://github.com/ferrocad/ferrocad/releases/latest/download/ferrocad-parametric-windows-x86_64.zip) |
 
 The Linux AppImage is a single executable:
 

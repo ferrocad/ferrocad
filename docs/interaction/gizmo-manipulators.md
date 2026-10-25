@@ -774,7 +774,12 @@ object verbs moved to the wheel ([`selection-gizmos-and-forms.md`](selection-giz
 
 - A **spatial selection** auto-arms the translate triad at its contact point; a tree or
   command selection uses the body's base corner. The base edition registers
-  `ferrocad_gpui::translate_gizmo`, so this exists in the shipped app.
+  `ferrocad_gpui::translate_gizmo`, so this exists in the shipped app. It claims **any
+displayed item**, including a selection that names a sub-element (`Face1`): a Part click
+is tagged by the OCCT tessellation, so it always resolves to an element, and declining
+those left the Parametric edition with no triad at all while the toy's untagged mesh
+showed one. The gizmo still targets the whole body; the anchor only decides where it is
+drawn.
 - Choosing **`Move`** in the wheel promotes its context target and opens the floating
   `ΔX/ΔY/ΔZ` form in **deferred** mode: the keys are the gizmo's, the form's Accept is
   the single commit. The same form is the target of the planned Tab/digit escalation

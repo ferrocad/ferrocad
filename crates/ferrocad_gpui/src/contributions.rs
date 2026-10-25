@@ -15,21 +15,22 @@ use ferrocad_geom::SelectionRef;
 use ferrocad_stage::{GizmoMode, Manipulator, Stage, Tool, TransformGizmo};
 use ferrocad_types::Vector3;
 
-/// The generic transform handle: a whole-object selection gets a translate gizmo at
-/// the item's **base corner**.
+/// The generic transform handle: any selection on a displayed item gets a translate
+/// gizmo.
 ///
 /// This is the default every edition wants, so an edition only has to register it
-/// (`Contributions::new().with_gizmo(translate_gizmo)`). A sub-element selection (a
-/// face, an edge) is left to the workbench's own manipulator: the generic triad has
-/// nothing to do with a face, and the built-in `TransformGizmo` targets whole items.
+/// (`Contributions::new().with_gizmo(translate_gizmo)`). The gizmo targets the whole
+/// item even when the selection names a sub-element: a click on a face or an edge is a
+/// **spatial** selection, and the shell re-anchors the triad at that point of contact
+/// (`SelectionAnchor`), so dragging it and reading its deltas stay local to what the
+/// user pointed at. Declining sub-elements here made the Part edition look like it had
+/// no gizmo at all: its meshes carry `Face1`/`Edge1`/… names, so every click resolved
+/// to an element, while the toy's single untagged part resolved to the whole body.
 ///
-/// The corner is the world-aligned minimum of the item's bounding box, a predictable
-/// datum to measure from. A click-owned gizmo does not use it: the shell re-anchors the
-/// triad at the picked point of contact (see `SelectionAnchor`).
+/// The base corner is the world-aligned minimum of the item's bounding box, a
+/// predictable datum for a selection that did not come from a viewport pick (a tree or
+/// command selection has no hit point).
 pub fn translate_gizmo(selection: &SelectionRef, stage: &Stage) -> Option<TransformGizmo> {
-    if !selection.is_whole() {
-        return None;
-    }
     let corner = body_corner(selection.object, stage)?;
     Some(TransformGizmo::new(
         selection.object,
@@ -343,7 +344,7 @@ mod tests {
     }
 
     #[test]
-    fn the_default_translate_gizmo_sits_at_a_whole_objects_base_corner() {
+    fn the_default_translate_gizmo_claims_whole_objects_and_sub_elements() {
         use ferrocad_stage::ShapeItem;
 
         let mut stage = Stage::new();
@@ -355,11 +356,18 @@ mod tests {
         ));
         let gizmo = translate_gizmo(&SelectionRef::whole(3), &stage).expect("a gizmo");
         assert_eq!(gizmo.target_id(), 3);
-        let origin = gizmo.origin();
-        assert_eq!(origin, Vector3::zero(), "the base corner is the datum");
+        assert_eq!(
+            gizmo.origin(),
+            Vector3::zero(),
+            "the base corner is the datum"
+        );
 
-        // A sub-element and an entity that is not displayed get no generic triad.
-        assert!(translate_gizmo(&SelectionRef::element(3, "Face1"), &stage).is_none());
+        // A sub-element still gets the triad (the shell re-anchors it at the click);
+        // an entity that is not displayed does not.
+        let face = translate_gizmo(&SelectionRef::element(3, "Face1"), &stage)
+            .expect("a face selection arms the triad for its body");
+        assert_eq!(face.target_id(), 3);
+        assert_eq!(face.origin(), Vector3::zero());
         assert!(translate_gizmo(&SelectionRef::whole(9), &stage).is_none());
     }
 

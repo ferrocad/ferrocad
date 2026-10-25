@@ -298,15 +298,16 @@ mod tests {
         assert!(without_base.gizmo_for(&selection, &stage).is_none());
     }
 
-    /// The generic triad is a whole-object handle; a sub-element selection is left to
-    /// the workbench's own manipulator.
+    /// A Part click resolves to a *named* element (`Face1`, `Edge1`, …), because the
+    /// OCCT tessellation tags its parts; the toy's mesh has no names. The shared triad
+    /// must still arm for that selection — otherwise the Part edition shows no gizmo at
+    /// all while the toy shows one, which is exactly what happened.
     #[test]
-    fn the_shared_move_gizmo_does_not_claim_a_sub_element() {
+    fn the_shared_move_gizmo_claims_a_named_sub_element_too() {
         let stage = stage_with_a_box();
-        assert!(
-            base_contributions()
-                .gizmo_for(&SelectionRef::element(7, "Face1"), &stage)
-                .is_none()
-        );
+        let gizmo = base_contributions()
+            .gizmo_for(&SelectionRef::element(7, "Face1"), &stage)
+            .expect("a face selection arms the triad for its body");
+        assert_eq!(gizmo.target_id(), 7);
     }
 }

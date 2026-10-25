@@ -184,6 +184,15 @@ fn the_part_move_gizmo_translates_the_box_and_undoes() {
         .expect("the base composition arms the move gizmo for a whole body");
     assert_eq!(gizmo.target_id(), entity);
 
+    // A click on the Part box resolves to a *named* element, because the OCCT
+    // tessellation tags `Face1`/`Edge1`/…; the toy's mesh is one untagged part. That
+    // selection must arm the triad too, or the edition shows no gizmo at all — the
+    // regression this test exists for.
+    let face = contributions
+        .gizmo_for(&SelectionRef::element(entity, "Face1"), &stage)
+        .expect("a face click arms the triad for its body");
+    assert_eq!(face.target_id(), entity);
+
     let camera = camera();
     gizmo.update(&camera);
 

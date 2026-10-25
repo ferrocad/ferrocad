@@ -26,10 +26,14 @@ surface is generated from the modules, so `mods/` links to it rather than restat
 it.
 
 The published artifact is `tools/build_book.py`, which assembles audiences 1 and 2
-into one mdBook (tutorials, how-to, reference, explanation, mod writers). A **green CI
-run** on `main` triggers `.github/workflows/docs.yml`, which renders that commit and
-deploys it to GitHub Pages at <https://ferrocad.github.io/ferrocad/>; a red run never
-publishes. The internal notes for audiences 3 and 4 stay in the repository.
+into one mdBook (tutorials, how-to, reference, explanation, mod writers). It is served
+at <https://ferrocad.github.io/docs/> from the separate
+[`ferrocad/docs`](https://github.com/ferrocad/docs) repository. That repository holds
+only the Pages workflow: it checks out a **shallow, sparse copy** of this repository
+(`docs/` and `tools/`), runs `tools/build_book.py --build`, and deploys the result. The
+content, the generators and the freshness checks stay here; `ferrocad/docs` only
+renders and deploys, so there is no second copy to fall out of date. The internal notes
+for audiences 3 and 4 stay in the repository.
 
 ## Why rustdoc first
 
@@ -143,7 +147,7 @@ All of these run in CI; the docs checks are in the `headless` job.
 ### Reproducibility of the generated pages
 
 The docs checks and the published build use **CPython 3.12** (pinned with
-`actions/setup-python` in `ci.yml` and `docs.yml`). The interpreter must be fixed
+`actions/setup-python` in `ci.yml` here and in the docs repository's Pages workflow). The interpreter must be fixed
 because the API reference is read from the live modules: an interpreter upgrade can
 change what `inspect` reports for *inherited* builtins (`int.bit_count`,
 `Exception.add_note`, …). `tools/api_docs.py` therefore documents only the members a
@@ -152,9 +156,8 @@ class **declares** — it walks the MRO, keeps every project base, and stops at
 `int`'s surface. With that rule the output is byte-identical on 3.12 and 3.14 (the
 drift that failed CI on 2026-10-25).
 
-The publishing workflow deliberately runs no generator that imports Python modules:
-`build_book.py` only assembles the committed `docs/user/`, `docs/python-api/` and
-`docs/mods/` pages, so a Pages deploy cannot publish content that the `headless`
-job has not already verified. It is triggered by a successful `CI` run
-(`workflow_run`) and checks out that run's exact `head_sha`, so the deployed book
-always corresponds to the commit CI tested.
+The docs repository's Pages workflow deliberately runs no generator that imports
+Python modules: `build_book.py` only assembles the committed `docs/user/`,
+`docs/python-api/` and `docs/mods/` pages, so publishing cannot invent content. It
+builds from a shallow copy of `main`, and the freshness guarantee comes from this
+repository's `headless` job, which checks the generated pages on every push.

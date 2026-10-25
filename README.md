@@ -234,7 +234,10 @@ from the live modules. CI runs `tools/userdocs.py --check` and `tools/api_docs.p
 can drift from the code. Narrative notes live in the repository `docs/` ([index](docs/README.md)).
 An mdBook edition of both — tutorials, how-to guides, reference, explanation — is
 assembled by `tools/build_book.py` (`--build` renders it with
-[mdBook](https://rust-lang.github.io/mdBook/)).
+[mdBook](https://rust-lang.github.io/mdBook/)) and published at
+<https://ferrocad.github.io/docs/> from the
+[`ferrocad/docs`](https://github.com/ferrocad/docs) repository, whose Pages workflow
+renders a shallow copy of `docs/` and `tools/`.
 A Sphinx/mkdocstrings site is the natural next step once a Python doc build can run in CI; until
 then rustdoc is the verifiable source of truth for the Rust side.
 

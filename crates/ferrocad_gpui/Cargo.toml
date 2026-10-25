@@ -32,19 +32,22 @@ ferrocad_inventor_py.workspace = true
 ferrocad_stage_py.workspace = true
 ferrocad_wgpu.workspace = true
 ferrocad_types.workspace = true
-bite-gpui = { version = "=1.24.401" }
+bite-gpui = { version = "=1.24.402" }
 # Zero-copy presentation: hand the viewport's wgpu target to gpui's window renderer,
 # as a dma-buf when the device can export one and as a same-device view otherwise.
 # 0.1.3 ships `WgpuSharedBufferRing`, the producer-side fix for the residual black
 # frames (bite-gpui/gpui_interop#1): present only a fence-free frame and recycle a
 # slot on the consumer's release.
-# `bite-gpui` is pinned to the exact 1.24.401 release on purpose: the 1.25 line moved
+# `bite-gpui` is pinned to the exact 1.24.402 release on purpose: the 1.25 line moved
 # to wgpu 30, and a different wgpu major would split the window's device from
 # `ferrocad_wgpu` (wgpu 29), losing zero-copy. Bump both together with the renderer.
+# Keep the transitive `bite-gp-*` crates on 1.24.402 too: their requirements are
+# caret ranges, so a plain `cargo update` floats them to 1.25.x while `bite-gpui`
+# stays on 1.24.x, mixing wgpu majors. Pin each family crate explicitly.
 gpui_interop = { version = "0.1.3", features = ["gpui", "wgpu"], optional = true }
 # The window renderer's device and the `ImportedTextureExt` handle used by the
 # same-device path. Must match the `bite-gpui` release above.
-gpui_wgpu = { package = "bite-gp-wgpu", version = "=1.24.401", optional = true }
+gpui_wgpu = { package = "bite-gp-wgpu", version = "=1.24.402", optional = true }
 # Embedding CPython in the host (not the extension-module mode).
 pyo3 = { version = "0.25", features = ["auto-initialize"] }
 serde.workspace = true
@@ -62,4 +65,4 @@ gpu-interop = ["dep:gpui_interop", "dep:gpui_wgpu"]
 
 [dev-dependencies]
 # `test-support` enables TestAppContext / VisualTestContext / #[gpui::test].
-bite-gpui = { version = "=1.24.401", features = ["test-support"] }
+bite-gpui = { version = "=1.24.402", features = ["test-support"] }

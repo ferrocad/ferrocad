@@ -590,9 +590,9 @@ checksum = "1e4b40c7323adcfc0a41c4b88143ed58346ff65a288fc144329c5c45e05d70c6"
 
 [[package]]
 name = "bite-gp-apple"
-version = "1.24.401"
+version = "1.24.402"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "512295fa0515f4b5b7044d13e7b4c2c1ab79e7d52ed1fb50c1e01067800bbdcf"
+checksum = "c87586803f9c01d6bba4bb681d5ab92a3e79e288bfd56d6d0d7f2c69d528be1c"
 dependencies = [
  "anyhow",
  "async-task",
@@ -621,9 +621,9 @@ dependencies = [
 
 [[package]]
 name = "bite-gp-authoring"
-version = "1.24.401"
+version = "1.24.402"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2c5af0ec3fc5cab512bf41adb6a055ecfcdee729f9647960f761a3a4812a97fd"
+checksum = "13b8be24bdc65ba35f0bae96f2b2bd4f655f64be7fbfc918942ec19e1dc60774"
 dependencies = [
  "accesskit",
  "anyhow",
@@ -690,9 +690,9 @@ dependencies = [
 
 [[package]]
 name = "bite-gp-collections"
-version = "1.25.202"
+version = "1.24.402"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "cb3c214277c593f0a723891c9e28a879a30d924aa10a79d6c6af6e67583fee87"
+checksum = "833129ab627fd04b665438d972cd22deb595427cdbd88af6adf67f1079d885c4"
 dependencies = [
  "bite-gp-gpui-util",
  "indexmap",
@@ -701,9 +701,9 @@ dependencies = [
 
 [[package]]
 name = "bite-gp-derive-refineable"
-version = "1.25.202"
+version = "1.24.402"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6f086e7e2b47c7aa6fc3878142a2b4760a1ed8a1bb518b9fbf052f8b63c6f6b9"
+checksum = "29cf6d123ec0fdc6f5b0e7d0e84adf47206423f6a30ff586471c85fe8b2e940e"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -712,9 +712,9 @@ dependencies = [
 
 [[package]]
 name = "bite-gp-engine"
-version = "1.24.401"
+version = "1.24.402"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5bbb1dbc99baef4dfa4c547acc738184fc94809f93bc818216aede6f8d7a9303"
+checksum = "3b9a2f332c262e6bbcb4a33e7e849eaee972cca85a0a636324d7393e9f55d7cb"
 dependencies = [
  "anyhow",
  "bite-gp-collections",
@@ -736,9 +736,9 @@ dependencies = [
 
 [[package]]
 name = "bite-gp-engine-default"
-version = "1.24.401"
+version = "1.24.402"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "44321b165a8db9d0d53ecd6c66c43ee94a104d995109c13665bd198569c30596"
+checksum = "71a2b82d9938e848c8cdb5108ef72bc8a0ab2fb6535fd5bd48186fc9d6c169c5"
 dependencies = [
  "anyhow",
  "async-channel",
@@ -754,9 +754,9 @@ dependencies = [
 
 [[package]]
 name = "bite-gp-gpui-util"
-version = "1.25.202"
+version = "1.24.402"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "150557a0385294970fc4fef36360c15e2850d2695a28fa4e2396e75c5dcbe7a1"
+checksum = "5d44bbf3646c51209a99835ee5e3243abc07a00961b314efaa56327cffffe149"
 dependencies = [
  "anyhow",
  "log",
@@ -765,9 +765,9 @@ dependencies = [
 
 [[package]]
 name = "bite-gp-http-client"
-version = "1.24.401"
+version = "1.24.402"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e871affb360bf1104db9c3f48ace967ce50d2531682a92dd6f7a2f037e5faa2f"
+checksum = "009e6e05d4f8c1dd820181e8f89fe18210eca8ba8e09a38bd5d0b984696fd22f"
 dependencies = [
  "anyhow",
  "bytes",
@@ -784,9 +784,9 @@ dependencies = [
 
 [[package]]
 name = "bite-gp-linux"
-version = "1.24.401"
+version = "1.24.402"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a6749c73cf51ad02dfd6ec610f9390c3207f14fc33721afde95c15b919175073"
+checksum = "2e4f13c47fea63ebfbbb5ca7af6629c13c8b6d3e9c7920129ab2654eb6b6edcb"
 dependencies = [
  "accesskit",
  "accesskit_unix",
@@ -831,9 +831,9 @@ dependencies = [
 
 [[package]]
 name = "bite-gp-macos"
-version = "1.24.401"
+version = "1.24.402"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a0c68169a03adf4c3559df82a426ef9c8060342e55e084ebd6a0dddd8868287d"
+checksum = "361735873c0480367d320009942577de2b7a484ea3a70a796c4c8b6416876ae7"
 dependencies = [
  "accesskit",
  "accesskit_macos",
@@ -876,9 +876,9 @@ dependencies = [
 
 [[package]]
 name = "bite-gp-macros"
-version = "1.24.401"
+version = "1.24.402"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "63aa6c419231e56a365ddb1c20b328632a0b3c43f3ccc7b410dc36c44e28e5c8"
+checksum = "d1d4343f98cf28d8376015dd3d01c703094e3d4765d827f324de51193c2ada73"
 dependencies = [
  "heck 0.5.0",
  "proc-macro2",
@@ -888,9 +888,9 @@ dependencies = [
 
 [[package]]
 name = "bite-gp-perf"
-version = "1.24.401"
+version = "1.24.402"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "829356d21cc269020ecaef3e61790ae955166118387da9ae293b73a77be56b6a"
+checksum = "26c5201d779fb095ace88550564f61856426218b969d90632bf5176e89ec5c8c"
 dependencies = [
  "bite-gp-collections",
  "serde",
@@ -898,9 +898,9 @@ dependencies = [
 
 [[package]]
 name = "bite-gp-platform"
-version = "1.24.401"
+version = "1.24.402"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a1697ef4f9909004e08179b8f1f1e71e7632472bf304d426f574e46f5e22af40"
+checksum = "cd0f6df5c7ae8a0fadc096da24bf7f264107bf2c42ec1b765afff70200d9e56f"
 dependencies = [
  "accesskit",
  "anyhow",
@@ -942,18 +942,18 @@ dependencies = [
 
 [[package]]
 name = "bite-gp-refineable"
-version = "1.25.202"
+version = "1.24.402"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "20905cbf6494801865e2f3b71140d3965790c561e03c0f1996329f9ccefe0274"
+checksum = "bb21874ddc2e23e90882e2c7c3dfbf9917fed8c7f0b8a4a2b21f50012a71739b"
 dependencies = [
  "bite-gp-derive-refineable",
 ]
 
 [[package]]
 name = "bite-gp-runtime"
-version = "1.24.401"
+version = "1.24.402"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "50211ac18c800fab3c6e78397858167ea04876bd5ce481d822222c717e32579a"
+checksum = "25630b460d32caed4b9c66c130c4336b9a908b164294b04d296b636908742821"
 dependencies = [
  "anyhow",
  "bite-gp-authoring",
@@ -961,9 +961,9 @@ dependencies = [
 
 [[package]]
 name = "bite-gp-scheduler"
-version = "1.24.401"
+version = "1.24.402"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2faba2880559047dfaedc9c64b9ddb5590357ebd7ff7bc16b4834352fbcf7905"
+checksum = "b62ab03ac8bb5bcf5e6caf3e3b2605dfda4e2494572bfe98f602cdcf0334c736"
 dependencies = [
  "async-task",
  "backtrace",
@@ -978,9 +978,9 @@ dependencies = [
 
 [[package]]
 name = "bite-gp-shared-string"
-version = "1.24.401"
+version = "1.24.402"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3b428e332ec363a47b2c3a7e351fa118ab6e8337d889770037bbbff9a856cc9c"
+checksum = "24f895f3d13cbb3c0958cf6a071a38b0ed8e936d4c0559342a420092a526c885"
 dependencies = [
  "schemars",
  "serde",
@@ -989,9 +989,9 @@ dependencies = [
 
 [[package]]
 name = "bite-gp-sum-tree"
-version = "1.24.401"
+version = "1.24.402"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "01e3ba9475573cb2757008d1e31f980d0c3b0e1928b1cb64fd033baaaf1a872f"
+checksum = "cf8f702c9ae316bf8753b9e0d5f4c448ef0d98834edbfe840902efe742de7ff4"
 dependencies = [
  "bite-gp-ztracing",
  "heapless",
@@ -1001,9 +1001,9 @@ dependencies = [
 
 [[package]]
 name = "bite-gp-types"
-version = "1.24.401"
+version = "1.24.402"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "38b3b988b8e00dbc3b133bac8bd287ae5f99853330722f560cc4a46679ce6213"
+checksum = "0f916cb84f1e4a0dd5a8ba1beb96dae7ef87a8cdfc3117cae275bc207f49642f"
 dependencies = [
  "anyhow",
  "bite-gp-refineable",
@@ -1018,9 +1018,9 @@ dependencies = [
 
 [[package]]
 name = "bite-gp-util-macros"
-version = "1.24.401"
+version = "1.24.402"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2efb2db7ca83613917e144415b163f285df7982ef851c4bd1952e6b65d91c75d"
+checksum = "b0c3b030c8c569d2abf990ae04c0f55e621e8017e0aaeb9b7217667d43c80501"
 dependencies = [
  "bite-gp-perf",
  "quote",
@@ -1029,9 +1029,9 @@ dependencies = [
 
 [[package]]
 name = "bite-gp-web"
-version = "1.24.401"
+version = "1.24.402"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d20a202245181496e0363c53560eadc045e87e6dccf15cdd0212a46b62a7ec29"
+checksum = "54f1da600fe5ea8cde8f7b702b66af8e36d0f19101fc94ae51878d7ffe09006a"
 dependencies = [
  "anyhow",
  "bite-gp-engine",
@@ -1059,9 +1059,9 @@ dependencies = [
 
 [[package]]
 name = "bite-gp-wgpu"
-version = "1.24.401"
+version = "1.24.402"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "43ddb8e02f50af8a5ee281f3c9685366cd7ee293f561c693c391c0d4bbee078b"
+checksum = "16c575c084756aabc63dcad7d12cd65e822db4191e2428d861bb802d4f3b5399"
 dependencies = [
  "anyhow",
  "ash",
@@ -1091,9 +1091,9 @@ dependencies = [
 
 [[package]]
 name = "bite-gp-windows"
-version = "1.24.401"
+version = "1.24.402"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f8a3012950815348bc03730db7b1be6e5a43b98e9a05b06421fd2cba62dd0399"
+checksum = "6350cf3f8c27b7f0b88561769e4dab8f57b1da9e815d93e91ebf3695a06f490d"
 dependencies = [
  "accesskit",
  "accesskit_windows",
@@ -1122,9 +1122,9 @@ dependencies = [
 
 [[package]]
 name = "bite-gp-ztracing"
-version = "1.24.401"
+version = "1.24.402"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "821e200e2988ffce8e1b804d3f6bc5256e078aa5957356d79ac48c803727a67c"
+checksum = "498f5c07ce58f2130cec075d5d2a2a473e0d02c55250e897c0c111bd8326f204"
 dependencies = [
  "bite-gp-ztracing-macro",
  "tracing",
@@ -1132,15 +1132,15 @@ dependencies = [
 
 [[package]]
 name = "bite-gp-ztracing-macro"
-version = "1.24.401"
+version = "1.24.402"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d00d6d1c3aa1bc3d0588dcec350e1f432c4cacf835fab357cdbb67519b324ba5"
+checksum = "bd430ca576c318e9927a9df285be42e4f7884ae9b805ac5d4b1ff8b140eded49"
 
 [[package]]
 name = "bite-gpui"
-version = "1.24.401"
+version = "1.24.402"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a58ddafe8d00f265c58de68f9289acf8510f3bde5d567f97095bc9daff4d54df"
+checksum = "80978c4754849c3261416bf86971a94ea1cf2ea6ed9218040ef216a1879f0cc6"
 dependencies = [
  "anyhow",
  "bindgen",
@@ -2178,7 +2178,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "39cab71617ae0d63f51a36d69f866391735b51691dbda63cf6f96d042b63efeb"
 dependencies = [
  "libc",
- "windows-sys 0.59.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -5256,7 +5256,7 @@ dependencies = [
  "errno",
  "libc",
  "linux-raw-sys",
- "windows-sys 0.59.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -5862,7 +5862,7 @@ dependencies = [
  "getrandom 0.4.3",
  "once_cell",
  "rustix",
- "windows-sys 0.59.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]

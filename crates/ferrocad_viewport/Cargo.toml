@@ -25,7 +25,7 @@ ferrocad_geom.workspace = true
 # The modern declarative producer: a Stage of items drawn beside the inventor scene.
 ferrocad_stage.workspace = true
 ferrocad_types.workspace = true
-bite-gpui = { version = "=1.24.401" }
+bite-gpui = { version = "=1.24.402" }
 # The image path wraps readback pixels as a gpui `RenderImage`, which holds
 # `image::Frame`s; gpui does not re-export the `image` crate.
 image = "0.25"

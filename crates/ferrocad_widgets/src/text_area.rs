@@ -417,23 +417,32 @@ impl EntityInputHandler for TextAreaState {
 
 impl Render for TextAreaState {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        // The scroll container is wrapped so the scrollbar overlay stays fixed while
+        // the text scrolls inside it (gpui paints no scrollbar of its own).
         div()
-            .id("text-area")
+            .id("text-area-root")
+            .relative()
             .flex_1()
             .min_h_0()
-            .overflow_y_scroll()
-            .track_scroll(&self.scroll)
-            .bg(rgb(AREA_BG))
-            .text_size(px(13.))
-            .line_height(LINE_HEIGHT)
-            .cursor(CursorStyle::IBeam)
-            .track_focus(&self.focus_handle)
-            .on_key_down(cx.listener(Self::on_key_down))
-            .on_mouse_down(MouseButton::Left, cx.listener(Self::on_mouse_down))
-            .on_mouse_up(MouseButton::Left, cx.listener(Self::on_mouse_up))
-            .on_mouse_up_out(MouseButton::Left, cx.listener(Self::on_mouse_up))
-            .on_mouse_move(cx.listener(Self::on_mouse_move))
-            .child(TextAreaElement { state: cx.entity() })
+            .child(
+                div()
+                    .id("text-area")
+                    .size_full()
+                    .overflow_y_scroll()
+                    .track_scroll(&self.scroll)
+                    .bg(rgb(AREA_BG))
+                    .text_size(px(13.))
+                    .line_height(LINE_HEIGHT)
+                    .cursor(CursorStyle::IBeam)
+                    .track_focus(&self.focus_handle)
+                    .on_key_down(cx.listener(Self::on_key_down))
+                    .on_mouse_down(MouseButton::Left, cx.listener(Self::on_mouse_down))
+                    .on_mouse_up(MouseButton::Left, cx.listener(Self::on_mouse_up))
+                    .on_mouse_up_out(MouseButton::Left, cx.listener(Self::on_mouse_up))
+                    .on_mouse_move(cx.listener(Self::on_mouse_move))
+                    .child(TextAreaElement { state: cx.entity() }),
+            )
+            .child(crate::scroll::scroll_thumb("console-text", &self.scroll))
     }
 }
 

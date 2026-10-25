@@ -14,8 +14,8 @@ use std::sync::{Arc, Mutex};
 use gpui::{
     Anchor, AnyElement, App, Bounds, Context, Entity, FocusHandle, Focusable, IntoElement,
     KeyDownEvent, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, Pixels, Point, Render,
-    SharedString, Size, Subscription, Window, WindowHandle, anchored, deferred, div, point, px,
-    prelude::*, rgb, rgba, size,
+    ScrollHandle, SharedString, Size, Subscription, Window, WindowHandle, anchored, deferred, div,
+    point, prelude::*, px, rgb, rgba, size,
 };
 
 use ferrocad_geom::SelectionRef;
@@ -31,6 +31,7 @@ use ferrocad_viewport::{
 };
 use ferrocad_wgpu::{AdapterChoice, AdapterSummary, WgpuRenderer};
 use ferrocad_widgets::accordion::{AccordionSection, AccordionState, accordion};
+use ferrocad_widgets::scroll::scroll_area;
 use ferrocad_widgets::wheel::{WheelEvent, WheelMenu, WheelSlot, WheelTone};
 use ferrocad_widgets::window_chrome::window_frame_with_leading;
 use ferrocad_widgets::{ChangeEvent, SubmitEvent, TextAreaState, TextInput};
@@ -271,6 +272,11 @@ pub struct Shell {
     /// pane, so the inactive ones collapse to their headers (see
     /// [`ferrocad_widgets::accordion`]); this outlives a closed and reopened window.
     dev_accordion: AccordionState,
+    /// The Dev Tools panes' scroll positions. gpui reserves scrollbar space but
+    /// paints no scrollbar, so the widget needs a tracked handle to size and place
+    /// its thumb; owning them here keeps a pane's position across repaints and a
+    /// closed/reopened window.
+    dev_scroll: DevScroll,
     /// The viewport's event subscription (selection and interaction commits).
     _viewport_events: Option<Subscription>,
     _submit: Subscription,
@@ -281,6 +287,22 @@ struct PropInput {
     state: Entity<TextInput>,
     seeded: String,
     _submit: Subscription,
+}
+
+/// One tracked scroll handle per Dev Tools pane.
+///
+/// `ScrollHandle` is a shared cell, so cloning it is cheap; the shell owns the set
+/// only so each pane keeps its position across repaints and window reopens. The
+/// settings card has its own handle because it is a separate surface over the same
+/// property rows.
+#[derive(Default)]
+struct DevScroll {
+    providers: ScrollHandle,
+    gpu: ScrollHandle,
+    commands: ScrollHandle,
+    model: ScrollHandle,
+    properties: ScrollHandle,
+    settings: ScrollHandle,
 }
 
 /// The modeless settings card (A3/T5): a draggable 380 px panel over the canvas
@@ -478,6 +500,7 @@ impl Shell {
             hud_lock: None,
             dev_tools: None,
             dev_accordion: AccordionState::new(dev_section::COMMANDS),
+            dev_scroll: DevScroll::default(),
             _viewport_events: None,
             _submit: submit,
         }
@@ -3437,14 +3460,12 @@ fn dialog_arrow(
 ///
 /// The accordion supplies the section header, so the pane is only the scrollable
 /// rows.
-pub(crate) fn tree_panel(model: &ShellModel, cx: &mut Context<Shell>) -> impl IntoElement {
-    let mut rows = div()
-        .id("tree-scroll")
-        .flex()
-        .flex_col()
-        .flex_1()
-        .min_h_0()
-        .overflow_y_scroll();
+pub(crate) fn tree_panel(
+    model: &ShellModel,
+    scroll: &ScrollHandle,
+    cx: &mut Context<Shell>,
+) -> impl IntoElement {
+    let mut rows = div().flex().flex_col();
 
     for doc in &model.tree {
         rows = rows.child(
@@ -3504,7 +3525,7 @@ pub(crate) fn tree_panel(model: &ShellModel, cx: &mut Context<Shell>) -> impl In
         .min_h_0()
         .bg(rgb(PANEL))
         .debug_selector(|| "tree-panel".to_string())
-        .child(rows)
+        .child(scroll_area("dev-model", scroll, rows))
 }
 
 /// The property editor: read-only rows plus an uncontrolled field for each
@@ -3513,15 +3534,10 @@ pub(crate) fn properties_panel(
     shell: &mut Shell,
     model: &ShellModel,
     window: &Window,
+    scroll: &ScrollHandle,
     cx: &mut Context<Shell>,
 ) -> impl IntoElement + use<> {
-    let mut rows = div()
-        .id("properties-scroll")
-        .flex()
-        .flex_col()
-        .flex_1()
-        .min_h_0()
-        .overflow_y_scroll();
+    let mut rows = div().flex().flex_col();
 
     match &model.selected {
         None => {
@@ -3643,7 +3659,7 @@ pub(crate) fn properties_panel(
         .min_h_0()
         .bg(rgb(PANEL))
         .debug_selector(|| "properties-panel".to_string());
-    panel.child(rows)
+    panel.child(scroll_area("dev-properties", scroll, rows))
 }
 
 /// The title the settings card uses for a synthetic node (`Settings/Grid` ->
@@ -3712,7 +3728,10 @@ fn settings_card_view(
                 })),
         );
 
-    let panel = properties_panel(shell, model, window, cx);
+    let panel = {
+        let scroll = shell.dev_scroll.settings.clone();
+        properties_panel(shell, model, window, &scroll, cx)
+    };
     let card = div()
         .id("settings-card")
         .debug_selector(|| "settings-card".to_string())
@@ -3865,6 +3884,13 @@ pub(crate) fn dev_tools_body(
     let in_use = shell.in_use_adapter(cx);
     // The commands the losing provider owns: listed, but not runnable (P0 provider UX).
     let inactive = crate::chrome::inactive_provider_commands(shell.provider_features());
+    // Each pane keeps its scrollbar handle on the shell; cloning one is an `Rc` bump,
+    // and it keeps the mutable `shell` borrow out of the argument lists below.
+    let providers_scroll = shell.dev_scroll.providers.clone();
+    let gpu_scroll = shell.dev_scroll.gpu.clone();
+    let commands_scroll = shell.dev_scroll.commands.clone();
+    let model_scroll = shell.dev_scroll.model.clone();
+    let properties_scroll = shell.dev_scroll.properties.clone();
 
     // Preferred heights are the old fixed pane sizes; they are only used to decide
     // whether the whole stack fits (it does not in the default window).
@@ -3880,17 +3906,20 @@ pub(crate) fn dev_tools_body(
         AccordionSection::new("console", "Python console", px(160.)),
     ];
     let bodies: Vec<AnyElement> = vec![
-        crate::chrome::providers_panel(shell.provider_features(), cx).into_any_element(),
+        crate::chrome::providers_panel(shell.provider_features(), &providers_scroll, cx)
+            .into_any_element(),
         crate::chrome::gpu_panel(
             shell.gpu_setting(),
             shell.gpu_adapters(),
             in_use.as_ref(),
+            &gpu_scroll,
             cx,
         )
         .into_any_element(),
-        crate::chrome::command_list_panel(&model, &inactive, cx).into_any_element(),
-        tree_panel(&model, cx).into_any_element(),
-        properties_panel(shell, &model, window, cx).into_any_element(),
+        crate::chrome::command_list_panel(&model, &inactive, &commands_scroll, cx)
+            .into_any_element(),
+        tree_panel(&model, &model_scroll, cx).into_any_element(),
+        properties_panel(shell, &model, window, &properties_scroll, cx).into_any_element(),
         console_panel(&shell.console, cx).into_any_element(),
     ];
     let available = ferrocad_widgets::window_chrome::content_height(window);
@@ -4250,6 +4279,10 @@ mod tests {
         // The console lives in Dev Tools now: open it, then drive the same focus path.
         let mut dev_cx = open_dev_tools(&mut cx, &shell);
         open_dev_section(&mut cx, &shell, &mut dev_cx, dev_section::CONSOLE);
+        assert!(
+            dev_cx.debug_bounds("console-text-thumb").is_some(),
+            "the console text area carries a scrollbar"
+        );
 
         // Typing in the console input and pressing Enter runs the line through the
         // interpreter (S5 previewed): the log gains the echoed line and the result,
@@ -5529,11 +5562,16 @@ if "Test_Tool" not in FreeCADGui.listCommands():
         open_dev_section(&mut cx, &shell, &mut dev_cx, dev_section::PROPERTIES);
         assert!(dev_cx.debug_bounds("properties-panel").is_some());
         assert!(
+            dev_cx.debug_bounds("dev-properties-thumb").is_some(),
+            "the property pane carries the scrollbar gpui never paints"
+        );
+        assert!(
             dev_cx.debug_bounds("dev-command-list").is_none(),
             "the previous body collapsed into its header"
         );
         open_dev_section(&mut cx, &shell, &mut dev_cx, dev_section::COMMANDS);
         assert!(dev_cx.debug_bounds("dev-command-list").is_some());
+        assert!(dev_cx.debug_bounds("dev-commands-thumb").is_some());
 
         // Selecting in the inspector feeds the property editor from the same entity.
         cx.update(|_window, cx| shell.update(cx, |shell, cx| shell.select("Params", cx)));
@@ -5574,6 +5612,58 @@ if "Test_Tool" not in FreeCADGui.listCommands():
             shell.update(cx, |shell, cx| shell.run_command("App_ViewWorkplane", cx))
         });
         assert_eq!(model.lock().unwrap().status, "view: no viewport");
+    }
+
+    /// Clicking a header toggles its pane: the clicked one opens and the previous one
+    /// collapses; a second click on the open header leaves headers only.
+    #[gpui::test]
+    fn a_dev_tools_header_click_collapses_and_expands_a_pane(cx: &mut TestAppContext) {
+        let _guard = crate::PYTHON_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let model = boot_shell();
+        let window = cx.update(|cx| {
+            let model = model.clone();
+            cx.open_window(Default::default(), move |_window, cx| {
+                cx.new(|cx| Shell::from_model(model.clone(), cx))
+            })
+            .unwrap()
+        });
+        let mut cx = VisualTestContext::from_window(window.into(), cx);
+        let shell: Entity<Shell> = window.root(&mut cx).unwrap();
+        let mut dev_cx = open_dev_tools(&mut cx, &shell);
+
+        assert!(dev_cx.debug_bounds("dev-command-list").is_some());
+
+        click_at(&mut dev_cx, "dev-header-providers");
+        dev_cx.update(|window, cx| {
+            let _ = window.draw(cx);
+        });
+        assert!(
+            dev_cx.debug_bounds("dev-providers").is_some(),
+            "the clicked header opens its pane"
+        );
+        assert!(
+            dev_cx.debug_bounds("dev-command-list").is_none(),
+            "the previous pane collapsed"
+        );
+        assert_eq!(
+            cx.update(|_window, cx| shell.read(cx).dev_accordion.open()),
+            Some(dev_section::PROVIDERS),
+            "the click reached the shell's state"
+        );
+
+        click_at(&mut dev_cx, "dev-header-providers");
+        dev_cx.update(|window, cx| {
+            let _ = window.draw(cx);
+        });
+        assert!(
+            dev_cx.debug_bounds("dev-providers").is_none(),
+            "clicking the open header collapses it"
+        );
+        assert!(
+            dev_cx.debug_bounds("dev-header-providers").is_some(),
+            "the header itself stays"
+        );
+        assert!(dev_cx.debug_bounds("dev-command-list").is_none());
     }
 
     /// Reset the interpreter's process-global grid store and preferences.
@@ -5693,6 +5783,10 @@ for group in legacy:
         assert!(
             dev_cx.debug_bounds("dev-providers").is_some(),
             "the providers panel is in the Dev Tools window"
+        );
+        assert!(
+            dev_cx.debug_bounds("dev-providers-thumb").is_some(),
+            "the pane carries a scrollbar"
         );
         assert!(
             dev_cx.debug_bounds("dev-provider-grid-coin").is_some(),

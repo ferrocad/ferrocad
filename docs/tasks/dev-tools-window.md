@@ -214,6 +214,18 @@ its modal over the viewport, where the user is looking.
   the first header click, after which the manual choice wins. Tests that type into the
   console or a property field therefore expand their pane first — an unpainted field
   cannot take focus.
+- **Scrollbars (2026-10-25).** gpui reserves `scrollbar_width` in the layout but paints
+  nothing, and the published `bite-gpui` crates ship no scrollbar element (Zed's lives
+  in its private `ui` crate). Every `overflow_y_scroll()` pane therefore scrolled with
+  no affordance. `ferrocad_widgets::scroll` supplies it: `scroll_area` wraps the rows in
+  a tracked scroll container and overlays a 4 px thumb (20 % white, accent while
+  dragged) on a 10 px hit strip; the console's text area, which owns its container,
+  takes `scroll_thumb` alone. The thumb is painted by a `canvas`, so it tracks the live
+  offset without the shell re-rendering. Pressing the track jumps the scroll to that
+  position; dragging the thumb scrolls; a wheel event over the strip is forwarded to
+  the tracked handle, since the strip has no scrollable ancestor of its own.
+  `Shell::dev_scroll` holds one handle per Dev Tools pane so a pane keeps its position
+  across repaints and window reopens.
 
 ## Risks
 

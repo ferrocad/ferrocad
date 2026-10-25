@@ -18,14 +18,16 @@
 //! they hang from does occlude, so a press on the glass does not start an orbit.)
 
 use gpui::{
-    Anchor, App, ClickEvent, Context, IntoElement, MouseButton, MouseDownEvent, Point, Pixels, Render,
-    SharedString, Window, anchored, deferred, div, point, prelude::*, px, rgb, rgba,
+    Anchor, App, ClickEvent, Context, IntoElement, MouseButton, MouseDownEvent, Pixels, Point,
+    Render, ScrollHandle, SharedString, Window, anchored, deferred, div, point, prelude::*, px,
+    rgb, rgba,
 };
 
 use std::collections::{HashMap, HashSet};
 
 use ferrocad_wgpu::{AdapterChoice, AdapterSummary};
 use ferrocad_widgets::menu::{MenuInfoRow, MenuRow, menu};
+use ferrocad_widgets::scroll::scroll_area;
 
 use ferrocad_theme::ui::{
     ACTIVE_ACCENT, CHROME_ACTIVE, CHROME_LINE, DOCK_BG, DOCK_BORDER, GLASS, ROW_HOVER,
@@ -768,20 +770,13 @@ fn dock_divider(id: usize) -> impl IntoElement {
 /// `Shell::activate_provider` path as a header popover row.
 pub(crate) fn providers_panel(
     features: &[ProviderFeature],
+    scroll: &ScrollHandle,
     cx: &mut Context<Shell>,
 ) -> impl IntoElement {
-    let mut panel = div()
-        .id("dev-providers")
-        .debug_selector(|| "dev-providers".to_string())
-        .flex()
-        .flex_col()
-        .flex_1()
-        .min_h_0()
-        .overflow_y_scroll()
-        .bg(rgb(PANEL));
+    let mut rows = div().flex().flex_col();
 
     if features.is_empty() {
-        return panel.child(
+        rows = rows.child(
             div()
                 .px_2()
                 .py_1()
@@ -841,9 +836,18 @@ pub(crate) fn providers_panel(
                     .child(label),
             );
         }
-        panel = panel.child(row);
+        rows = rows.child(row);
     }
-    panel
+
+    div()
+        .id("dev-providers")
+        .debug_selector(|| "dev-providers".to_string())
+        .flex()
+        .flex_col()
+        .flex_1()
+        .min_h_0()
+        .bg(rgb(PANEL))
+        .child(scroll_area("dev-providers", scroll, rows))
 }
 
 /// The Dev Tools GPU panel (dev-only): the persisted adapter choice and the
@@ -862,21 +866,16 @@ pub(crate) fn gpu_panel(
     preference: &str,
     adapters: &[AdapterSummary],
     in_use: Option<&AdapterSummary>,
+    scroll: &ScrollHandle,
     cx: &mut Context<Shell>,
 ) -> impl IntoElement {
     // An invalid stored value is what the viewport falls back from, so `Auto` is
     // the honest active row in that case.
     let parsed = AdapterChoice::parse(preference).ok();
     let auto_active = parsed.is_none() || parsed.as_ref() == Some(&AdapterChoice::Auto);
-    let mut panel = div()
-        .id("dev-gpu")
-        .debug_selector(|| "gpu-panel".to_string())
+    let mut rows = div()
         .flex()
         .flex_col()
-        .flex_1()
-        .min_h_0()
-        .overflow_y_scroll()
-        .bg(rgb(PANEL))
         .child(
             div()
                 .px_2()
@@ -886,7 +885,7 @@ pub(crate) fn gpu_panel(
                 .child(format!("setting: {preference}")),
         );
 
-    panel = panel.child(gpu_row(
+    rows = rows.child(gpu_row(
         "dev-gpu-auto",
         "Auto",
         "let wgpu pick",
@@ -904,7 +903,7 @@ pub(crate) fn gpu_panel(
             "{} · {} · {}",
             adapter.backend, adapter.device_type, adapter.driver
         );
-        panel = panel.child(gpu_row(
+        rows = rows.child(gpu_row(
             &format!("dev-gpu-adapter-{index}"),
             &adapter.name,
             &detail,
@@ -915,7 +914,7 @@ pub(crate) fn gpu_panel(
     }
 
     if adapters.is_empty() {
-        panel = panel.child(
+        rows = rows.child(
             div()
                 .px_2()
                 .py_1()
@@ -929,7 +928,7 @@ pub(crate) fn gpu_panel(
         Some(adapter) => format!("in use: {} ({})", adapter.name, adapter.backend),
         None => "in use: no viewport".to_string(),
     };
-    panel
+    rows = rows
         .child(
             div()
                 .px_2()
@@ -949,7 +948,17 @@ pub(crate) fn gpu_panel(
                     "Click a row to select it. Zero-copy presentation keeps the window \
                      adapter; the choice applies to the image path.",
                 ),
-        )
+        );
+
+    div()
+        .id("dev-gpu")
+        .debug_selector(|| "gpu-panel".to_string())
+        .flex()
+        .flex_col()
+        .flex_1()
+        .min_h_0()
+        .bg(rgb(PANEL))
+        .child(scroll_area("dev-gpu", scroll, rows))
 }
 
 /// One GPU adapter row: label, backend/device/driver detail, and an `active` marker.
@@ -1134,15 +1143,10 @@ pub(crate) fn inactive_provider_commands(features: &[ProviderFeature]) -> HashMa
 pub(crate) fn command_list_panel(
     model: &ShellModel,
     inactive: &HashMap<String, String>,
+    scroll: &ScrollHandle,
     cx: &mut Context<Shell>,
 ) -> impl IntoElement {
-    let mut rows = div()
-        .id("dev-command-scroll")
-        .flex()
-        .flex_col()
-        .flex_1()
-        .min_h_0()
-        .overflow_y_scroll();
+    let mut rows = div().flex().flex_col();
 
     for command in &model.commands {
         let id = command.id.clone();
@@ -1214,7 +1218,7 @@ pub(crate) fn command_list_panel(
         .min_h_0()
         .bg(rgb(PANEL))
         .debug_selector(|| "dev-command-list".to_string())
-        .child(rows)
+        .child(scroll_area("dev-commands", scroll, rows))
 }
 
 /// A command row's hover text: `ToolTip` and the accelerator.

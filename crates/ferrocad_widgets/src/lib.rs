@@ -3,6 +3,8 @@
 //!
 //! * [`accordion`] stacks titled sections and gives the bodies up to their headers
 //!   when the column runs out of height.
+//! * [`scroll`] adds the scrollbar gpui never paints: a tracked scroll area and a
+//!   draggable thumb.
 //! * [`window_chrome::window_frame`] draws client-side decorations (title bar and
 //!   resize grips) where the compositor does not.
 //! * [`text_field::TextInput`] is a single-line editable field that emits
@@ -18,6 +20,7 @@
 pub mod accordion;
 pub mod events;
 pub mod menu;
+pub mod scroll;
 pub mod text_area;
 pub mod text_buffer;
 pub mod text_field;
@@ -27,6 +30,7 @@ pub mod window_chrome;
 pub use accordion::{AccordionLayout, AccordionSection, AccordionState, accordion, resolve_layout};
 pub use events::{ChangeEvent, SubmitEvent};
 pub use menu::{MenuInfoRow, MenuRow, menu};
+pub use scroll::{scroll_area, scroll_thumb, thumb_bounds};
 pub use text_area::TextAreaState;
 pub use text_buffer::TextBuffer;
 pub use text_field::TextInput;

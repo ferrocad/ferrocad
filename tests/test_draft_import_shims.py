@@ -359,8 +359,14 @@ class FreecadExtPackageTests(unittest.TestCase):
             importlib.import_module("freecad.deprecation")
         self.assertIn("freecad", str(raised.exception))
 
+    @unittest.skipUnless(
+        UPSTREAM_DEPRECATION.is_file(),
+        f"upstream src/Ext/freecad is not available at {UPSTREAM}",
+    )
     def test_typing_extensions_is_available(self):
-        # `freecad.deprecation` imports `typing_extensions.deprecated`.
+        # `freecad.deprecation` — upstream's module, not FerroCAD — imports
+        # `typing_extensions.deprecated`. FerroCAD itself does not depend on it, so
+        # a minimal CI interpreter without the upstream tree has nothing to check.
         module = importlib.import_module("typing_extensions")
         self.assertTrue(callable(module.deprecated))
 

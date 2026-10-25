@@ -149,9 +149,18 @@ pub struct PropRow {
     #[serde(default)]
     pub command: Option<String>,
     /// The editor kind (`text`, `bool`, `int`, `float`, `quantity`, `enum`,
-    /// `color`). It picks the control: a `color` row gets a swatch and a palette.
+    /// `color`). It picks the control: a `color` row gets a swatch and a palette,
+    /// a bounded number gets the slider overlay.
     #[serde(default)]
     pub kind: String,
+    /// The editor's inclusive bounds, when the schema declares them.
+    #[serde(default)]
+    pub min: Option<f64>,
+    #[serde(default)]
+    pub max: Option<f64>,
+    /// The quantity unit (`mm`), shown in the slider's readout.
+    #[serde(default)]
+    pub unit: Option<String>,
 }
 
 /// The outcome of a property edit.

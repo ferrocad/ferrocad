@@ -180,10 +180,17 @@ settings entry.
 
 The supported kinds are `text`, `bool`, `int`, `float`, `quantity` (with `unit`),
 `enum` (with `choices`) and `color`. A `color` value is a `#rrggbb` string, and the
-property pane renders it as a swatch plus the hex field: clicking the swatch expands
-`ferrocad_widgets::color::palette` under the row, and a pick commits through the same
-path as typing the hex. The palette is a fixed set of neutrals and accents; typing an
-arbitrary colour still works.
+property pane renders it as a swatch plus the hex field: clicking the swatch opens
+`ferrocad_widgets::color::palette` as an anchored overlay, and a pick commits through
+the same path as typing the hex. The palette is a fixed set of neutrals and accents;
+typing an arbitrary colour still works.
+
+A numeric row that declares both `min` and `max` gets a slim track beside the field;
+clicking it opens `ferrocad_widgets::slider` as an anchored overlay. The scale is
+**logarithmic when `min > 0`**, so equal drag distances change the value by equal
+factors (the gizmo's 8..400 px handle size is usable across its whole range); a range
+that includes zero (`0..1` opacity) stays linear. The value commits on release rather
+than on every mouse move, so a drag is one edit instead of dozens of undo steps.
 
 The `refresh` result is only a **request**. It reaches the viewport when the
 caller applies it: a command or a dialog does, the `Settings/<Feature>` property

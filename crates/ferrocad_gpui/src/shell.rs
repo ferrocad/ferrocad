@@ -14,8 +14,8 @@ use std::sync::{Arc, Mutex};
 use gpui::{
     Anchor, AnyElement, App, Bounds, Context, Entity, FocusHandle, Focusable, IntoElement,
     KeyDownEvent, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, Pixels, Point, Render,
-    ScrollHandle, SharedString, Size, Subscription, Window, WindowHandle, anchored, deferred, div,
-    point, prelude::*, px, rgb, rgba, size,
+    ScrollHandle, SharedString, Size, Subscription, Window, WindowHandle, WindowId, anchored,
+    canvas, deferred, div, point, prelude::*, px, rgb, rgba, size,
 };
 
 use ferrocad_geom::SelectionRef;
@@ -33,6 +33,7 @@ use ferrocad_wgpu::{AdapterChoice, AdapterSummary, WgpuRenderer};
 use ferrocad_widgets::accordion::{AccordionSection, AccordionState, accordion};
 use ferrocad_widgets::color;
 use ferrocad_widgets::scroll::scroll_area;
+use ferrocad_widgets::slider;
 use ferrocad_widgets::wheel::{WheelEvent, WheelMenu, WheelSlot, WheelTone};
 use ferrocad_widgets::window_chrome::window_frame_with_leading;
 use ferrocad_widgets::{ChangeEvent, SubmitEvent, TextAreaState, TextInput};
@@ -246,9 +247,9 @@ pub struct Shell {
     gpu_adapters: Option<Vec<AdapterSummary>>,
     /// The modeless settings card, opened for a `Settings/<Feature>` node.
     settings_card: Option<SettingsCard>,
-    /// The property key whose inline colour palette is expanded, if any. It is UI
-    /// state only: the value itself lives in the parameter store.
-    color_picker: Option<String>,
+    /// The anchored overlay a property row opened (a colour palette or a range
+    /// slider). It is UI state only: the value itself lives in the parameter store.
+    row_popup: Option<RowPopup>,
     /// The radial sidecar: it owns the gesture and its overlay. The shell only
     /// triggers it (right-press / Space) and maps a selected id to a command.
     wheel: Entity<WheelMenu>,
@@ -310,6 +311,49 @@ struct DevScroll {
     model: ScrollHandle,
     properties: ScrollHandle,
     settings: ScrollHandle,
+}
+
+/// What an anchored property-row overlay shows.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum RowPopupKind {
+    /// The fixed colour palette (`kind == "color"`).
+    Color,
+    /// The log/linear range slider (a bounded number).
+    Slider,
+}
+
+/// A slider's declared range.
+#[derive(Clone, Copy, Debug)]
+struct RowRange {
+    min: f64,
+    max: f64,
+}
+
+/// The overlay a property row opens, anchored below the pointer.
+///
+/// It floats over the pane instead of pushing its rows down (the palette used to
+/// expand inline). `window` gates rendering: the same rows are built for the
+/// settings card and for the Dev Tools window, and the overlay belongs to the one
+/// that was clicked.
+struct RowPopup {
+    key: String,
+    label: String,
+    kind: RowPopupKind,
+    /// The row value when the popup opened (`#94a3b8`, `80`, `10 mm`).
+    value: String,
+    /// The slider's range; `None` for the palette.
+    range: Option<RowRange>,
+    /// The quantity unit (`mm`), for the slider's readout.
+    unit: String,
+    /// The pointer position that opened it (window coordinates).
+    anchor: Point<Pixels>,
+    /// The slider track's last painted bounds.
+    track: Option<Bounds<Pixels>>,
+    /// The window that opened it.
+    window: WindowId,
+    /// The slider value while dragging (committed on release).
+    draft: Option<f64>,
+    dragging: bool,
 }
 
 /// The modeless settings card (A3/T5): a draggable 380 px panel over the canvas
@@ -498,7 +542,7 @@ impl Shell {
             gpu_preference: None,
             gpu_adapters: None,
             settings_card: None,
-            color_picker: None,
+            row_popup: None,
             wheel,
             _wheel_events: wheel_events,
             wheel_target: None,
@@ -714,7 +758,7 @@ impl Shell {
 
     /// Close the settings card; returns whether it was open.
     fn close_settings_card(&mut self, cx: &mut Context<Self>) -> bool {
-        self.color_picker = None;
+        self.row_popup = None;
         if self.settings_card.take().is_some() {
             cx.notify();
             true
@@ -2689,7 +2733,7 @@ impl Shell {
             .map(|name| python::properties(name).unwrap_or_default())
             .unwrap_or_default();
         self.prop_inputs.clear();
-        self.color_picker = None;
+        self.row_popup = None;
         let status = match (items.len(), primary.as_deref()) {
             (0, _) | (_, None) => "selection cleared".to_string(),
             (1, Some(name)) => format!("selected {name}"),
@@ -2857,7 +2901,7 @@ impl Shell {
             Ok(result) if result.ok => {
                 // The edit is done, so a palette that asked for it can close (the
                 // typed-hex path and the swatch path share this commit).
-                self.color_picker = None;
+                self.row_popup = None;
                 if let Some(input) = self.prop_inputs.get_mut(key) {
                     input.seeded = text.to_string();
                 }
@@ -2890,14 +2934,71 @@ impl Shell {
         cx.notify();
     }
 
-    /// Toggle the inline colour palette under a settings row.
-    fn toggle_color_picker(&mut self, key: &str, cx: &mut Context<Self>) {
-        self.color_picker = if self.color_picker.as_deref() == Some(key) {
-            None
-        } else {
-            Some(key.to_string())
-        };
+    /// Open the colour palette under a property row.
+    ///
+    /// Opening is deliberately not a toggle: an outside press dismisses the
+    /// overlay before the swatch's click is dispatched, so a toggle here would
+    /// immediately reopen it (the same rule as the header popovers).
+    fn open_color_popup(
+        &mut self,
+        key: &str,
+        label: &str,
+        value: &str,
+        anchor: Point<Pixels>,
+        window: WindowId,
+        cx: &mut Context<Self>,
+    ) {
+        self.row_popup = Some(RowPopup {
+            key: key.to_string(),
+            label: label.to_string(),
+            kind: RowPopupKind::Color,
+            value: value.to_string(),
+            range: None,
+            unit: String::new(),
+            anchor,
+            track: None,
+            window,
+            draft: None,
+            dragging: false,
+        });
         cx.notify();
+    }
+
+    /// Open the range slider for a bounded numeric property.
+    #[allow(clippy::too_many_arguments)]
+    fn open_slider_popup(
+        &mut self,
+        key: &str,
+        label: &str,
+        value: &str,
+        min: f64,
+        max: f64,
+        unit: &str,
+        anchor: Point<Pixels>,
+        window: WindowId,
+        cx: &mut Context<Self>,
+    ) {
+        self.row_popup = Some(RowPopup {
+            key: key.to_string(),
+            label: label.to_string(),
+            kind: RowPopupKind::Slider,
+            value: value.to_string(),
+            range: Some(RowRange { min, max }),
+            unit: unit.to_string(),
+            anchor,
+            track: None,
+            window,
+            draft: None,
+            dragging: false,
+        });
+        cx.notify();
+    }
+
+    /// Dismiss the row overlay, if one is open.
+    fn close_row_popup(&mut self, cx: &mut Context<Self>) {
+        if self.row_popup.take().is_some() {
+            cx.notify();
+        }
     }
 
     /// Run a console snippet, refresh the tree (the model may have changed), and
@@ -3619,11 +3720,20 @@ pub(crate) fn properties_panel(
                     let key = format!("{name}.{}", row.name);
                     let state = shell.ensure_prop_input(&key, &row.value, window, cx);
                     let selector = format!("prop-{key}");
+                    let bounded = row.min.is_some()
+                        && row.max.is_some()
+                        && matches!(row.kind.as_str(), "float" | "int" | "quantity");
+                    let label = row_label(row);
+                    let open = shell
+                        .row_popup
+                        .as_ref()
+                        .is_some_and(|popup| popup.key == key);
                     if row.kind == KIND_COLOR {
                         // A colour row keeps its text field (a typed hex still works)
-                        // and gains a swatch that expands the palette under the row.
-                        let swatch_key = key.clone();
-                        let open = shell.color_picker.as_deref() == Some(key.as_str());
+                        // and gains a swatch that opens the palette overlay.
+                        let popup_key = key.clone();
+                        let popup_label = label.clone();
+                        let popup_value = row.value.clone();
                         div()
                             .debug_selector(move || selector.clone())
                             .flex()
@@ -3636,11 +3746,55 @@ pub(crate) fn properties_panel(
                                 SharedString::from(format!("color-{key}")),
                                 &row.value,
                                 open,
-                                cx.listener(move |this, _event, _window, cx| {
-                                    this.toggle_color_picker(&swatch_key, cx);
+                                cx.listener(move |this, event: &gpui::ClickEvent, window, cx| {
+                                    this.open_color_popup(
+                                        &popup_key,
+                                        &popup_label,
+                                        &popup_value,
+                                        event.position(),
+                                        window.window_handle().window_id(),
+                                        cx,
+                                    );
                                 }),
                             ))
                             .child(div().w(px(120.)).child(state))
+                            .into_any_element()
+                    } else if bounded {
+                        // A row with a declared range gets the mini track that opens
+                        // the slider overlay; typing an exact value still works.
+                        let popup_key = key.clone();
+                        let popup_label = label.clone();
+                        let popup_value = row.value.clone();
+                        let popup_unit = row.unit.clone().unwrap_or_default();
+                        let min = row.min.unwrap_or(0.0);
+                        let max = row.max.unwrap_or(1.0);
+                        let current = row_number(&row.value).unwrap_or(min);
+                        div()
+                            .debug_selector(move || selector.clone())
+                            .flex()
+                            .flex_row()
+                            .items_center()
+                            .gap_1()
+                            .w(px(180.))
+                            .flex_shrink_0()
+                            .child(div().w(px(112.)).child(state))
+                            .child(slider::trigger(
+                                SharedString::from(format!("slider-{key}")),
+                                slider::fraction(current, min, max),
+                                cx.listener(move |this, event: &gpui::ClickEvent, window, cx| {
+                                    this.open_slider_popup(
+                                        &popup_key,
+                                        &popup_label,
+                                        &popup_value,
+                                        min,
+                                        max,
+                                        &popup_unit,
+                                        event.position(),
+                                        window.window_handle().window_id(),
+                                        cx,
+                                    );
+                                }),
+                            ))
                             .into_any_element()
                     } else {
                         div()
@@ -3699,29 +3853,6 @@ pub(crate) fn properties_panel(
                         )
                         .child(value),
                 );
-
-                // The palette expands under its row, inside the same scroll
-                // container: no overlay, so it works in the card and in Dev Tools.
-                if row.editable && row.kind == KIND_COLOR {
-                    let key = format!("{name}.{}", row.name);
-                    if shell.color_picker.as_deref() == Some(key.as_str()) {
-                        let weak = cx.weak_entity();
-                        let pick_key = key.clone();
-                        rows = rows.child(div().flex().px_2().pb_1().pl(px(12.)).child(
-                            color::palette(
-                                SharedString::from(format!("color-{key}")),
-                                &row.value,
-                                move |hex, _event, _window, cx| {
-                                    let _ = weak.update(cx, |shell, cx| {
-                                        shell.commit_property(&pick_key, hex, cx);
-                                        shell.color_picker = None;
-                                        cx.notify();
-                                    });
-                                },
-                            ),
-                        ));
-                    }
-                }
             }
         }
     }
@@ -3734,7 +3865,294 @@ pub(crate) fn properties_panel(
         .min_h_0()
         .bg(rgb(PANEL))
         .debug_selector(|| "properties-panel".to_string());
-    panel.child(scroll_area("dev-properties", scroll, rows))
+    let panel = panel.child(scroll_area("dev-properties", scroll, rows));
+    match row_popup_overlay(shell, window, cx) {
+        Some(overlay) => panel.child(overlay),
+        None => panel,
+    }
+}
+
+/// The display label for a property row: its `label` when the schema supplied
+/// one, otherwise its name.
+fn row_label(row: &crate::python::PropRow) -> String {
+    if row.label.is_empty() {
+        row.name.clone()
+    } else {
+        row.label.clone()
+    }
+}
+
+/// The number a property row displays (`80`, `0.3`, `10 mm` -> 10).
+fn row_number(value: &str) -> Option<f64> {
+    value.split_whitespace().next()?.parse().ok()
+}
+
+/// The pointer position as a 0..1 fraction of the slider track.
+fn track_fraction(popup: &RowPopup, x: Pixels) -> f32 {
+    let Some(track) = popup.track else {
+        return 0.0;
+    };
+    let width = track.size.width.0.max(1.0);
+    ((x.0 - track.left().0) / width).clamp(0.0, 1.0)
+}
+
+/// The anchored overlay a property row opened: the colour palette or the range
+/// slider.
+///
+/// It floats below the pointer, so it covers the pane instead of pushing its rows
+/// down, and it is `deferred`, so it is not clipped by the scrolling pane. Only the
+/// window that opened it renders it: the same property rows are built for the
+/// settings card and for the Dev Tools window.
+fn row_popup_overlay(
+    shell: &mut Shell,
+    window: &Window,
+    cx: &mut Context<Shell>,
+) -> Option<AnyElement> {
+    let popup = shell.row_popup.as_ref()?;
+    if popup.window != window.window_handle().window_id() {
+        return None;
+    }
+    let key = popup.key.clone();
+    let label = popup.label.clone();
+    let value = popup.value.clone();
+    let anchor = popup.anchor;
+    let kind = popup.kind;
+    let range = popup.range;
+    let unit = popup.unit.clone();
+    let draft = popup.draft;
+
+    let close = {
+        let weak = cx.weak_entity();
+        move |_event: &MouseDownEvent, _window: &mut Window, cx: &mut App| {
+            let _ = weak.update(cx, |shell, cx| shell.close_row_popup(cx));
+        }
+    };
+
+    let body: AnyElement = match kind {
+        RowPopupKind::Color => {
+            let weak = cx.weak_entity();
+            let pick_key = key.clone();
+            color::palette(
+                SharedString::from(format!("color-{key}")),
+                &value,
+                move |hex, _event, _window, cx| {
+                    let _ = weak.update(cx, |shell, cx| {
+                        shell.commit_property(&pick_key, hex, cx);
+                    });
+                },
+            )
+            .into_any_element()
+        }
+        RowPopupKind::Slider => {
+            let Some(range) = range else {
+                return None;
+            };
+            let current = draft.unwrap_or_else(|| row_number(&value).unwrap_or(range.min));
+            let position = slider::fraction(current, range.min, range.max);
+            let readout = if unit.is_empty() {
+                slider::format_value(current)
+            } else {
+                format!("{} {unit}", slider::format_value(current))
+            };
+
+            let track_selector = format!("slider-{key}-track");
+            let marker = canvas(
+                move |_bounds, _window, _cx| {},
+                move |bounds, (), window, _cx| {
+                    let height = px(6.);
+                    let track = Bounds::new(
+                        point(bounds.left(), bounds.center().y - height / 2.0),
+                        size(bounds.size.width, height),
+                    );
+                    window.paint_quad(fill_track(track));
+                    let filled = bounds.size.width.0 * position;
+                    if filled > 0.0 {
+                        window.paint_quad(fill_filled(Bounds::new(
+                            point(bounds.left(), bounds.center().y - height / 2.0),
+                            size(px(filled), height),
+                        )));
+                    }
+                    let thumb_x = bounds.left().0 + position * (bounds.size.width.0 - 12.0).max(0.0);
+                    window.paint_quad(fill_thumb(Bounds::new(
+                        point(px(thumb_x), bounds.center().y - px(6.)),
+                        size(px(12.), px(12.)),
+                    )));
+                },
+            )
+            .size_full();
+
+            let down = {
+                let weak = cx.weak_entity();
+                let drag_key = key.clone();
+                move |event: &MouseDownEvent, _window: &mut Window, cx: &mut App| {
+                    let x = event.position.x;
+                    let _ = weak.update(cx, |shell, cx| {
+                        if let Some(popup) = shell.row_popup.as_mut() {
+                            if popup.key == drag_key {
+                                if let Some(range) = popup.range {
+                                    popup.dragging = true;
+                                    popup.draft = Some(slider::value_at(
+                                        track_fraction(popup, x),
+                                        range.min,
+                                        range.max,
+                                    ));
+                                }
+                            }
+                        }
+                        cx.notify();
+                    });
+                    cx.stop_propagation();
+                }
+            };
+            let moved = {
+                let weak = cx.weak_entity();
+                let drag_key = key.clone();
+                move |event: &MouseMoveEvent, _window: &mut Window, cx: &mut App| {
+                    if !event.dragging() {
+                        return;
+                    }
+                    let x = event.position.x;
+                    let _ = weak.update(cx, |shell, cx| {
+                        if let Some(popup) = shell.row_popup.as_mut() {
+                            if popup.key == drag_key && popup.dragging {
+                                if let Some(range) = popup.range {
+                                    popup.draft = Some(slider::value_at(
+                                        track_fraction(popup, x),
+                                        range.min,
+                                        range.max,
+                                    ));
+                                    cx.notify();
+                                }
+                            }
+                        }
+                    });
+                }
+            };
+            let commit = {
+                let weak = cx.weak_entity();
+                let drag_key = key.clone();
+                move |_event: &MouseUpEvent, _window: &mut Window, cx: &mut App| {
+                    let _ = weak.update(cx, |shell, cx| {
+                        if shell.row_popup.as_ref().is_some_and(|p| p.key == drag_key) {
+                            if let Some(popup) = shell.row_popup.take() {
+                                if let Some(draft) = popup.draft {
+                                    shell.commit_property(
+                                        &popup.key,
+                                        &slider::format_value(draft),
+                                        cx,
+                                    );
+                                }
+                            }
+                            cx.notify();
+                        }
+                    });
+                }
+            };
+            let track = div()
+                // The bounds listener has to sit on the plain `Div` (it is not on
+                // `Stateful`), so the wrapper records its child's track rect.
+                .on_children_prepainted({
+                    let weak = cx.weak_entity();
+                    let bounds_key = key.clone();
+                    move |bounds, _window, cx| {
+                        if let Some(rect) = bounds.first().copied() {
+                            let _ = weak.update(cx, |shell, _cx| {
+                                if let Some(popup) = shell.row_popup.as_mut() {
+                                    if popup.key == bounds_key {
+                                        popup.track = Some(rect);
+                                    }
+                                }
+                            });
+                        }
+                    }
+                })
+                .child(
+                    div()
+                        .id(SharedString::from(track_selector.clone()))
+                        .debug_selector(move || track_selector.clone())
+                        .relative()
+                        .h(px(20.))
+                        .w_full()
+                        .cursor_pointer()
+                        .on_mouse_down(MouseButton::Left, down)
+                        .on_mouse_move(moved)
+                        .on_mouse_up(MouseButton::Left, commit.clone())
+                        .on_mouse_up_out(MouseButton::Left, commit)
+                        .child(marker),
+                );
+
+            let ends = div()
+                .flex()
+                .flex_row()
+                .justify_between()
+                .text_color(rgb(MUTED))
+                .child(slider::format_value(range.min))
+                .child(slider::format_value(range.max));
+
+            div()
+                .flex()
+                .flex_col()
+                .gap_1()
+                .child(
+                    div()
+                        .flex()
+                        .flex_row()
+                        .justify_between()
+                        .gap_2()
+                        .text_color(rgb(FG))
+                        .child(label)
+                        .child(div().text_color(rgb(MUTED)).child(readout)),
+                )
+                .child(track)
+                .child(ends)
+                .into_any_element()
+        }
+    };
+
+    let panel = div()
+        .id("row-popup")
+        .debug_selector(|| "row-popup".to_string())
+        .w(px(232.))
+        .flex()
+        .flex_col()
+        .gap_1()
+        .p_2()
+        .rounded_md()
+        .bg(rgba(WHEEL_GLASS))
+        .border_1()
+        .border_color(rgba(DOCK_BORDER))
+        .occlude()
+        .text_xs()
+        .on_mouse_down(MouseButton::Left, |_event, _window, cx| {
+            cx.stop_propagation()
+        })
+        .on_mouse_down_out(close)
+        .child(body);
+
+    Some(
+        deferred(
+            anchored()
+                .anchor(Anchor::TopLeft)
+                .position(point(anchor.x, anchor.y + px(6.)))
+                .snap_to_window_with_margin(px(8.))
+                .child(panel),
+        )
+        .with_priority(2)
+        .into_any_element(),
+    )
+}
+
+/// The slider track's painted background, fill and thumb.
+fn fill_track(bounds: Bounds<Pixels>) -> gpui::PaintQuad {
+    gpui::fill(bounds, rgb(PANEL_ALT)).corner_radii(px(3.))
+}
+
+fn fill_filled(bounds: Bounds<Pixels>) -> gpui::PaintQuad {
+    gpui::fill(bounds, rgb(ACCENT)).corner_radii(px(3.))
+}
+
+fn fill_thumb(bounds: Bounds<Pixels>) -> gpui::PaintQuad {
+    gpui::fill(bounds, rgb(0x48e5ff)).corner_radii(px(6.))
 }
 
 /// The title the settings card uses for a synthetic node (`Settings/Grid` ->
@@ -7188,6 +7606,74 @@ if "App_ReloadAxisSettings" not in FreeCADGui.listCommands():
         assert_eq!(stored.as_deref(), Some("#ef4444"), "the pick was committed");
 
         reset_grid_state();
+    }
+
+    /// A bounded numeric setting opens the slider overlay; the drag commits on
+    /// release. The mapping is logarithmic, so 75 % of 8..400 is well above the
+    /// arithmetic midpoint.
+    #[gpui::test]
+    fn a_bounded_setting_opens_the_slider_and_commits(cx: &mut TestAppContext) {
+        let _guard = crate::PYTHON_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let model = boot_shell();
+        let window = cx.update(|cx| {
+            let model = model.clone();
+            cx.open_window(Default::default(), move |_window, cx| {
+                cx.new(|cx| Shell::from_model(model.clone(), cx))
+            })
+            .unwrap()
+        });
+        let mut cx = VisualTestContext::from_window(window.into(), cx);
+        let shell: Entity<Shell> = window.root(&mut cx).unwrap();
+
+        cx.update(|_window, cx| {
+            shell.update(cx, |shell, cx| shell.select("Settings/Gizmo", cx))
+        });
+        draw(&mut cx);
+
+        assert!(
+            cx.debug_bounds("slider-Settings/Gizmo.size-trigger")
+                .is_some(),
+            "the bounded row has a slider trigger"
+        );
+        click_at(&mut cx, "slider-Settings/Gizmo.size-trigger");
+        draw(&mut cx);
+
+        let track = cx
+            .debug_bounds("slider-Settings/Gizmo.size-track")
+            .expect("the slider overlay is rendered");
+        let at = point(
+            track.left() + track.size.width * 0.75,
+            track.center().y,
+        );
+        cx.simulate_mouse_down(at, MouseButton::Left, gpui::Modifiers::default());
+        cx.simulate_mouse_up(at, MouseButton::Left, gpui::Modifiers::default());
+        draw(&mut cx);
+
+        assert!(
+            cx.debug_bounds("row-popup").is_none(),
+            "the slider closes on release"
+        );
+        let stored = model
+            .lock()
+            .unwrap()
+            .properties
+            .iter()
+            .find(|row| row.name == "size")
+            .map(|row| row.value.clone())
+            .expect("the size row");
+        let size: f64 = stored
+            .split_whitespace()
+            .next()
+            .unwrap_or_default()
+            .parse()
+            .expect("a number");
+        assert!(
+            size > 100.0 && size < 400.0,
+            "75 % of 8..400 on a log scale, got {stored:?}"
+        );
+
+        // Leave the shared interpreter on its default for the other tests.
+        let _ = crate::python::evaluate("import FerroCAD\nFerroCAD.Gizmo.reset()");
     }
 
     /// P0.8: a click/focus inside the card must not fall through to the canvas and

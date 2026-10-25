@@ -1029,9 +1029,10 @@ def settings(feature: str, backend=None) -> list:
     """The settings rows of ``feature``'s active provider (or ``backend``).
 
     The rows use the property pane's contract — ``name``, ``label``, ``type``,
-    ``value``, ``status``, ``editable``, ``kind``, plus ``unit``/``choices``
-    where the schema declares them — so the pane needs no new renderer. ``value``
-    is the display string (``"10 mm"`` for a quantity).
+    ``value``, ``status``, ``editable``, ``kind``, plus ``unit``/``min``/``max``
+    and ``choices`` where the schema declares them — so the pane needs no new
+    renderer. ``value`` is the display string (``"10 mm"`` for a quantity);
+    ``min``/``max`` are what make a bounded row offer the range slider.
 
     Nothing is written here: an unset value shows its declared default. ``[]``
     means "nothing to show": an unknown feature or backend, no provider at all,
@@ -1070,6 +1071,10 @@ def settings(feature: str, backend=None) -> list:
         }
         if "unit" in spec:
             row["unit"] = spec["unit"]
+        if "min" in spec:
+            row["min"] = spec["min"]
+        if "max" in spec:
+            row["max"] = spec["max"]
         if "choices" in spec:
             row["choices"] = list(spec["choices"])
         rows.append(row)

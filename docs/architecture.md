@@ -323,7 +323,7 @@ ferrocad_stage        Manipulator · InteractionCommit · Stage · ShapeItem    
       ▲
 ferrocad_part_gui     DressUpScrubber · dress_up_scrubber_for · fillet_manipulator
       ▲
-ferrocad_parametric   Contributions::with_manipulator(fillet_manipulator)
+ferrocad_parametric   base_contributions().with_manipulator(fillet_manipulator)
       ▲
 ferrocad_gpui         hosts whatever factories the edition registered; names none
 ```
@@ -357,10 +357,17 @@ What a workbench registers, and what the base app does not:
 
 | Edition | Rust contribution | Python provider |
 | --- | --- | --- |
-| base (`ferrocad`) | none | none (`display_mesh` yields nothing) |
-| Parametric | `ferrocad_part_gui::fillet_manipulator` | `Part::Fillet` / `Part::Chamfer` |
-| Toy | `ferrocad_toy::height_grip` + `move_gizmo` | `Height`, `Placement`, the display properties |
+| base (`ferrocad`) | none beyond `base_contributions()` | none (`display_mesh` yields nothing) |
+| Parametric | `ferrocad_part_gui::fillet_manipulator`, on top of `base_contributions()` | `Part::Fillet` / `Part::Chamfer`, and the `transform` commit |
+| Toy | `ferrocad_toy::height_grip` + `move_gizmo`, on top of `base_contributions()` | `Height`, `Placement`, the display properties |
 | BIM (future) | its own factories, or none | its own `interaction` provider |
+
+An edition starts from [`ferrocad::base_contributions()`](../crates/ferrocad/src/lib.rs),
+not from `Contributions::default()`: the base composition carries the shared move
+gizmo (the generic triad at a whole object's base corner), and a workbench
+manipulator is **added** to it. Starting from `default()` still compiles and still
+hosts the workbench manipulator, which is exactly how the Part edition lost its
+triad.
 
 The gizmo is a contribution too: `Contributions::with_gizmo(factory)` returns a
 `TransformGizmo` for a selection. The viewport reports a drag as

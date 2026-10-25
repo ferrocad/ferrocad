@@ -97,8 +97,10 @@ fn main() {
     ferrocad::run_edition_with(
         "FerroCAD: Parametric",
         "ferrocad_parametric",
-        // The workbench's manipulator; the shell hosts it generically.
-        ferrocad::Contributions::default()
+        // The workbench's manipulator; the shell hosts it generically. The shared
+        // move gizmo comes from `base_contributions`, so the edition only adds what
+        // its workbench owns.
+        ferrocad::base_contributions()
             .with_manipulator(ferrocad_part_gui::fillet_manipulator),
     );
 }

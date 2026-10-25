@@ -161,7 +161,7 @@ None of them names a workbench.
 | Path | What |
 | --- | --- |
 | `crates/ferrocad_toy/src/lib.rs` | `HeightGrip`, the `height_grip` and `move_gizmo` factories, 7 unit tests |
-| `crates/ferrocad_toy/src/main.rs` | the edition: `run_edition_with(…, Contributions::with_manipulator(…).with_gizmo(…))` |
+| `crates/ferrocad_toy/src/main.rs` | the edition: `run_edition_with(…, base_contributions().with_manipulator(…).with_gizmo(…))` |
 | `python/ferrocad_toy/__init__.py` | the app script: `makeSlab`, the display and interaction providers, the `Toy` console name |
 | `crates/ferrocad_toy/tests/round_trip.rs` | the end-to-end test: representation, creation + undo/redo, grip, gizmo, save/open |
 | `crates/ferrocad_parametric/tests/manipulator_round_trip.rs` | the same loop with the real Part arc and a `Part::Fillet` |

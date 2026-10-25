@@ -75,7 +75,15 @@ def _apply_object_placement(mesh, placement):
 
 
 def _interaction(obj, manipulator, action, element, values):
-    """Apply a manipulator commit: the Part edge dress-up (fillet/chamfer).
+    """Apply a manipulator commit: the Part edge dress-up or a move.
+
+    Two operations reach this workbench:
+
+    * ``dress_up`` / ``fillet``/``chamfer`` — the Rust edge scrubber; ``values`` are
+      the radius and the second distance.
+    * ``transform`` / ``apply`` — the generic ``TransformGizmo``; ``values`` are the 16
+      row-major elements of the world-space transform, composed with the object's
+      current placement (the same contract the toy workbench implements).
 
     The manipulator names its operation and orders the numbers; this hook owns what
     that means for Part. The feature is named ``<object>_<mode>`` and reused on later
@@ -83,6 +91,19 @@ def _interaction(obj, manipulator, action, element, values):
     is recomputed before returning, so the caller can re-read :func:`stage_meshes`
     straight away.
     """
+    if manipulator == "transform" and action == "apply" and len(values) == 16:
+        delta = FreeCAD.Placement(FreeCAD.Matrix(*values))
+        doc = obj.Document
+        doc.openTransaction(f"Move {obj.Name}")
+        try:
+            obj.Placement = delta * obj.Placement
+            doc.recompute()
+            doc.commitTransaction()
+        except Exception as exc:
+            doc.abortTransaction()
+            return {"ok": False, "error": str(exc)}
+        return {"ok": True}
+
     if manipulator != "dress_up":
         return None
     mode = {"fillet": "Fillet", "chamfer": "Chamfer"}.get(action)

@@ -2262,8 +2262,10 @@ dependencies = [
 name = "ferrocad"
 version = "0.1.3"
 dependencies = [
+ "ferrocad_geom",
  "ferrocad_gpui",
  "ferrocad_py",
+ "ferrocad_stage",
  "include_dir",
  "pyo3",
 ]

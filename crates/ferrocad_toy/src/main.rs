@@ -20,7 +20,7 @@ fn main() {
         }
     };
 
-    let contributions = ferrocad::Contributions::default()
+    let contributions = ferrocad::base_contributions()
         .with_manipulator(ferrocad_toy::height_grip)
         .with_gizmo(ferrocad_toy::move_gizmo)
         .with_tool("toy_polyline", || {

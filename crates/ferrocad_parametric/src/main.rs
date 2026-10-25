@@ -35,7 +35,7 @@ fn main() {
     };
 
     let contributions =
-        ferrocad::Contributions::default().with_manipulator(ferrocad_part_gui::fillet_manipulator);
+        ferrocad::base_contributions().with_manipulator(ferrocad_part_gui::fillet_manipulator);
 
     if args.render.is_some() || args.stl.is_some() {
         match ferrocad::render_edition_headless(

@@ -65,7 +65,15 @@ pub fn run_edition(app_name: &str, entry_module: &str) {
 /// selection). Workbench manipulators — the Part edge dress-up arc, a height grip —
 /// stay with the edition that links them, which is why this is a default and not a
 /// global registration in the shell.
-fn base_contributions() -> Contributions {
+///
+/// Editions start from this rather than from `Contributions::default()`, so adding a
+/// workbench manipulator cannot silently drop the shared move gizmo:
+///
+/// ```ignore
+/// let contributions = ferrocad::base_contributions()
+///     .with_manipulator(ferrocad_part_gui::fillet_manipulator);
+/// ```
+pub fn base_contributions() -> Contributions {
     Contributions::new().with_gizmo(ferrocad_gpui::translate_gizmo)
 }
 
@@ -237,5 +245,68 @@ fn app_config(app_name: &str, entry_module: &str) -> HostConfig {
         mods_paths: payload.mods_paths,
         contributions: Contributions::default(),
         open_document: None,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use ferrocad_geom::SelectionRef;
+    use ferrocad_stage::{ShapeItem, Stage};
+
+    use super::*;
+
+    fn stage_with_a_box() -> Stage {
+        let mut stage = Stage::new();
+        stage.add_item(ShapeItem::new(7).with_shape(
+            vec![[0.0, 0.0, 0.0], [2.0, 2.0, 4.0]],
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+        ));
+        stage
+    }
+
+    /// An edition adds its workbench manipulators on top of [`base_contributions`],
+    /// so the shared move gizmo must survive the composition.
+    ///
+    /// The Part edition used to start from `Contributions::default()`, which quietly
+    /// left a selected body with no triad while the toy edition (which does start from
+    /// the base) still had one.
+    #[test]
+    fn adding_a_manipulator_keeps_the_shared_move_gizmo() {
+        let stage = stage_with_a_box();
+        let selection = SelectionRef::whole(7);
+
+        let base = base_contributions();
+        assert_eq!(
+            base.gizmo_for(&selection, &stage)
+                .map(|gizmo| gizmo.target_id()),
+            Some(7),
+            "the base composition arms the move gizmo for a whole-object selection"
+        );
+
+        let with_manipulator =
+            base_contributions().with_manipulator(|_: &SelectionRef, _: &Stage| None);
+        assert!(
+            with_manipulator.gizmo_for(&selection, &stage).is_some(),
+            "a workbench manipulator must not replace the gizmo registry"
+        );
+
+        // The shape that dropped the triad, kept as the contrast for the assertion above.
+        let without_base =
+            Contributions::default().with_manipulator(|_: &SelectionRef, _: &Stage| None);
+        assert!(without_base.gizmo_for(&selection, &stage).is_none());
+    }
+
+    /// The generic triad is a whole-object handle; a sub-element selection is left to
+    /// the workbench's own manipulator.
+    #[test]
+    fn the_shared_move_gizmo_does_not_claim_a_sub_element() {
+        let stage = stage_with_a_box();
+        assert!(
+            base_contributions()
+                .gizmo_for(&SelectionRef::element(7, "Face1"), &stage)
+                .is_none()
+        );
     }
 }

@@ -45,6 +45,12 @@ pyo3 = { version = "0.25", features = ["auto-initialize"] }
 # the executable). Optional: installers ship the same files loose instead.
 include_dir = { workspace = true, optional = true }
 
+[dev-dependencies]
+# The regression test for `base_contributions` builds a one-item stage; neither crate
+# is needed by the library itself.
+ferrocad_geom.workspace = true
+ferrocad_stage.workspace = true
+
 [features]
 default = ["embedded-payload"]
 # Embed `python/` and `mods/` at compile time (see `build.rs`). A development

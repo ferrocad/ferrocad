@@ -146,10 +146,21 @@ six.
 the OCCT fetch and into `cargo build -p ferrocad_parametric` on `windows-latest`,
 where `opencascade-sys 0.3.0`'s cxx bridge fails with C2440 in `b_rep.hxx`
 (`opencascade::handle<Geom_Surface>*` and friends cannot be passed to
-`std::unique_ptr<Handle_Geom_Surface>`), on VS 18 / MSVC 14.51. The edition matrix
-is therefore Linux-only; adding the Windows entry back is the single workflow
-change needed once that bridge builds (its steps are still in the job). The PE
-closure walker and `ferrocad.bat` are ready for it.
+`std::unique_ptr<Handle_Geom_Surface>`), on VS 18 / MSVC 14.51. The cause is that
+OCCT's `DEFINE_STANDARD_HANDLE` makes `Handle_T` a **derived class** on MSVC
+(for C++/CLI export) and a typedef on GCC/Clang, while the crate's bridge
+allocates the base `opencascade::handle<T>`. `third_party/opencascade-sys` is a
+vendored copy with the 17 affected allocations constructing `new Handle_T(…)`
+(the crate's own idiom elsewhere), pinned through `[patch.crates-io]`; it
+compiles on Linux and against a reproducer that defines the MSVC macro body.
+
+Until a real `windows-latest` run is green, the edition matrix stays Linux-only.
+`.github/workflows/edition-windows.yml` is the manual check
+(`gh workflow run edition-windows.yml`): OCCT fetch, `cargo build -p
+ferrocad_occt`, `bundle --edition parametric --occt --check-init`, the portable
+zip and its smoke test. When it passes, add the Windows entry back to the matrix
+and delete that file; the PE closure walker and `ferrocad.bat` are already
+ready.
 
 **E3 — partial.** The Windows closure is implemented with a dependency-free PE
 import reader (`crates/xtask/src/pe.rs`, unit-tested on a synthetic PE image);

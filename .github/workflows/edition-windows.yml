@@ -1,0 +1,82 @@
+name: Edition build check (Windows)
+
+# Manual-only, one platform: prove that the Parametric edition's Windows build
+# works before its entry is restored to `release.yml`'s `edition` matrix.
+#
+# It exists because `opencascade-sys` never compiled with MSVC until the vendored
+# patch in `third_party/opencascade-sys` (OCCT's `Handle_T` is a derived class on
+# MSVC, a typedef elsewhere — see that directory's `PATCHES.md`). The regular
+# `windows` CI job does not build the kernel, and running a 10-minute OCCT fetch on
+# every push is not worth it, so this job is dispatch-only.
+#
+#   gh workflow run edition-windows.yml
+#
+# When it is green, add the Windows entry back to the `edition` matrix in
+# `release.yml` and delete this file.
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  bundle:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Link the CRT statically (self-contained Windows build)
+        shell: pwsh
+        run: echo "RUSTFLAGS=-C target-feature=+crt-static" >> $env:GITHUB_ENV
+
+      - name: Fetch OCCT 7.8.1 (conda-forge, rootless)
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path .occt | Out-Null
+          Invoke-WebRequest -Uri https://micro.mamba.pm/api/micromamba/win-64/latest -OutFile .occt/micromamba.tar.bz2
+          tar -xjf .occt/micromamba.tar.bz2 -C .occt
+          $mamba = (Get-ChildItem -Path .occt -Recurse -Filter micromamba.exe | Select-Object -First 1).FullName
+          if (-not $mamba) { throw "micromamba.exe not found" }
+          $env:MAMBA_ROOT_PREFIX = "$PWD/.occt/root"
+          & $mamba create -y -p "$PWD/.occt/prefix" -c conda-forge occt=7.8.1
+          if ($LASTEXITCODE -ne 0) { throw "micromamba create failed" }
+          # conda-forge's Windows layout nests under Library/; the workspace
+          # .cargo/config.toml paths assume the Unix layout, so override them.
+          "OpenCASCADE_DIR=$PWD/.occt/prefix/Library/lib/cmake/opencascade" >> $env:GITHUB_ENV
+          "OCCT_INCLUDE_DIR=$PWD/.occt/prefix/Library/include/opencascade" >> $env:GITHUB_ENV
+          "PATH=$PWD/.occt/prefix/Library/bin;$env:PATH" >> $env:GITHUB_ENV
+
+      - name: Fetch the bundled CPython runtime
+        run: cargo xtask python
+
+      - name: Fetch workbench scripts
+        run: cargo xtask mods
+
+      - name: Kernel crate (the step that used to fail with C2440)
+        run: cargo build -p ferrocad_occt --release
+
+      - name: Bundle the edition and boot it headlessly
+        run: cargo xtask bundle --edition parametric --occt --check-init
+
+      - name: Package the portable zip
+        run: pwsh -File packaging/windows/portable.ps1 -Edition parametric -Occt
+
+      - name: Smoke-test the packaged layout
+        shell: pwsh
+        run: |
+          $scratch = Join-Path $env:RUNNER_TEMP 'ferrocad-parametric-smoke'
+          if (Test-Path $scratch) { Remove-Item -Recurse -Force $scratch }
+          Expand-Archive -Path target\dist\ferrocad-parametric-windows-x86_64.zip -DestinationPath $scratch
+          & "$scratch\ferrocad.bat" --check-init
+          if ($LASTEXITCODE -ne 0) { throw "ferrocad --check-init failed with exit code $LASTEXITCODE" }
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ferrocad-parametric-windows
+          path: target/dist/ferrocad-parametric-windows-x86_64.zip
+          if-no-files-found: error

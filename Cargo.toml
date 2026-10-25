@@ -131,5 +131,11 @@ lto = true
 
 # Temporary patch: bite-gp-apple 1.24.402/1.25.202 import `cocoa` without
 # declaring it. See third_party/bite-gp-apple/PATCHES.md.
+#
+# opencascade-sys 0.3.0 allocates `opencascade::handle<T>` where its
+# `unique_ptr<Handle_T>` requires `Handle_T`; that is fine on GCC/Clang (typedef)
+# but not on MSVC (OCCT defines `Handle_T` as a derived class). See
+# third_party/opencascade-sys/PATCHES.md.
 [patch.crates-io]
 bite-gp-apple = { path = "third_party/bite-gp-apple" }
+opencascade-sys = { path = "third_party/opencascade-sys" }

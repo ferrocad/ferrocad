@@ -32,6 +32,7 @@ from __future__ import annotations
 import FreeCAD
 import FreeCADGui
 import FerroCAD
+import FerroCADGui
 
 # The shell's data functions (`bootstrap`, `model_tree`, `properties`,
 # `set_property`, `evaluate`, `add_namespace`, `stage_meshes`, `interaction`, ...).
@@ -175,6 +176,59 @@ def _interaction(obj, manipulator, action, element, values):
 
 FerroCAD.register_display_provider(_display_mesh)
 FerroCAD.register_interaction_provider(_interaction)
+
+
+#: The toy edition's appearance preset (declared, not yet materialised).
+#:
+#: The toy slab is a mid-blue linear ``(0.26, 0.55, 0.85)``: Rec.709 luminance
+#: ``Y = 0.2126*0.26 + 0.7152*0.55 + 0.0722*0.85 = 0.510`` (sRGB ``#8bc4ed``).
+#: The shell background is ``#0f1218`` (``Y = 0.006``). The shared gizmo's
+#: ``#38bdf8`` is ``Y = 0.440`` at hue 198, i.e. only ``1.14:1`` against the
+#: slab and in the same blue/cyan family: it disappears into the object.
+#:
+#: The preset moves the manipulator to the complementary warm side instead:
+#:
+#: * active ``#ffd9a3``: ``Y = 0.735``, ``1.40:1`` against the slab,
+#:   ``14.0:1`` against the background, hue 35 (163 degrees from the slab's
+#:   ~198) and clearly lighter than the inactive;
+#: * inactive ``#b08f6f``: desaturated warm, ``Y = 0.300`` (``0.271`` after the
+#:   token's 0.9 alpha over the background), ``1.75:1`` against the slab and
+#:   ``5.7:1`` against the background;
+#: * axis Z ``#fbbf24`` replaces the blue ``#38bdf8`` (hue 43 at the default
+#:   0.65 opacity: ``Y = 0.378`` effective, ``7.7:1`` against the background),
+#:   while the conventional red X and green Y stems are unchanged;
+#: * grid ``#b8a894`` is a warm neutral (hue 33) at the 0.15 token alpha, so the
+#:   ground stays a faint ``Y = 0.066`` and stops echoing the slab's blue.
+#:
+#: Why not demand WCAG's 3:1 non-text ratio? Against a mid-luminance object
+#: (``Y = 0.510``) and a near-black background (``Y = 0.006``) no single colour
+#: can reach 3:1 on both sides: it would need ``Y >= 1.63`` (impossible) or
+#: ``Y <= 0.137``, and the dark option is itself only ``3.3:1`` against the
+#: background. Thin emissive strokes need to stay legible on the canvas, so the
+#: preset separates by hue and by the active/inactive lightness gap, not by a
+#: 3:1 luminance ratio it cannot have. These are token arithmetic only; the
+#: colours were not visually inspected in this environment.
+APPEARANCE_PRESETS = {
+    "gizmo": {
+        "active_color": "#ffd9a3",
+        "inactive_color": "#b08f6f",
+    },
+    "axis": {
+        "color_z": "#fbbf24",
+    },
+    "grid": {
+        "color": "#b8a894",
+    },
+}
+
+
+def _register_appearance():
+    """Declare the toy preset through the GUI facade (idempotent)."""
+    for feature, values in APPEARANCE_PRESETS.items():
+        FerroCADGui.registerAppearancePreset(feature, values)
+
+
+_register_appearance()
 
 
 class _MakeSlabCommand:
@@ -324,6 +378,9 @@ class _Console:
 
 def bootstrap(doc_name: str = "Toy") -> str:
     """The base sample document plus one toy slab, and the ``Toy`` console name."""
+    # Materialise the edition preset under the user's persisted values. The
+    # settings facades read that store, so every later command sees the preset.
+    FerroCADGui.installAppearancePresets()
     payload = _base_bootstrap(doc_name)
     doc = FreeCAD.ActiveDocument
     _add_slab(doc, DEFAULT_WIDTH, DEFAULT_DEPTH, DEFAULT_HEIGHT, 0.0, 0.0, "Slab")

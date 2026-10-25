@@ -421,8 +421,10 @@ class GizmoOverlayModTests(unittest.TestCase):
         rows = json.loads(ferrocad_shell.properties("Settings/Gizmo"))
         self.assertEqual(rows[0]["name"], "provider")
         self.assertEqual(rows[0]["value"], "FerroCAD (native)")
-        self.assertEqual([row["name"] for row in rows[1:]], list(ATTRIBUTES))
-        by_name = {row["name"]: row for row in rows[1:]}
+        # An edition preset adds a trailing action row; the schema rows keep their order.
+        schema = [row for row in rows[1:] if row["name"] != "reset"]
+        self.assertEqual([row["name"] for row in schema], list(ATTRIBUTES))
+        by_name = {row["name"]: row for row in schema}
         self.assertEqual(by_name["enabled"]["value"], "True")
         self.assertEqual(by_name["active_color"]["value"], "#38bdf8")
         self.assertEqual(by_name["size"]["value"], "80.0")
@@ -644,9 +646,10 @@ class GizmoOverlayShaderModTests(unittest.TestCase):
         rows = json.loads(ferrocad_shell.properties("Settings/Gizmo"))
         self.assertEqual(rows[0]["name"], "provider")
         self.assertEqual(rows[0]["value"], "FerroCAD (shader)")
-        self.assertEqual([row["name"] for row in rows[1:]], list(ATTRIBUTES))
+        schema = [row for row in rows[1:] if row["name"] != "reset"]
+        self.assertEqual([row["name"] for row in schema], list(ATTRIBUTES))
         self.assertEqual(
-            {row["name"]: row["value"] for row in rows[1:]}["size"], "80.0"
+            {row["name"]: row["value"] for row in schema}["size"], "80.0"
         )
 
     def test_reloading_init_gui_does_not_double_register(self):

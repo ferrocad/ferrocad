@@ -350,6 +350,22 @@ def _settings_properties(feature: str) -> list:
         }
     ]
     rows.extend(FerroCADGui.settings(feature))
+    reset = _APPEARANCE_RESET_COMMANDS.get(feature)
+    if reset is not None and reset in FreeCADGui.listCommands():
+        # An action row, not a setting: a settings-surface button runs `command`.
+        # The property pane keeps it read-only until the host renders that kind.
+        rows.append(
+            {
+                "name": "reset",
+                "label": "Reset to edition defaults",
+                "type": "FerroCAD::Command",
+                "value": "",
+                "status": "action",
+                "editable": False,
+                "kind": "command",
+                "command": reset,
+            }
+        )
     return rows
 
 
@@ -485,6 +501,20 @@ def _set_setting(feature: str, object_name: str, prop: str, text: str) -> dict:
             return FerroCADGui.setActiveProvider(feature, backend)
         except Exception as exc:  # noqa: BLE001 - a bad id is not fatal here
             return {"ok": False, "error": str(exc)}
+    if prop == "reset":
+        result = FerroCADGui.resetAppearance(feature)
+        if not result.get("ok"):
+            detail = result.get("status") or "; ".join(result.get("errors") or [])
+            return {"ok": False, "error": detail or "appearance reset failed"}
+        return {
+            "ok": True,
+            "feature": feature,
+            "name": "reset",
+            "value": "",
+            "status": result.get("status") or "",
+            "view": result.get("view") or {},
+            "errors": list(result.get("errors") or []),
+        }
     return FerroCADGui.setSetting(feature, prop, text)
 
 
@@ -731,6 +761,31 @@ def set_view_state(state_json: str) -> str:
     return _json({"ok": True})
 
 
+def appearance_view() -> str:
+    """The appearance policy the shell should apply at boot, as JSON.
+
+    This is the Python half of the boot hook: it installs the edition's declared
+    presets under the user's persisted values and then asks
+    ``FerroCAD.Gizmo``/``Axis``/``Grid`` for their current policy. The reply is a
+    command outcome — ``ok``, ``error``, ``status`` and ``view`` — so a host can
+    decode it with the same ``CommandOutcome`` type it uses for a command; the
+    ``view`` is then applied exactly as a command's. ``errors`` repeats any
+    per-capability problem. A host applies it after the workbenches load and
+    before the first frame's state is final.
+    """
+    result = FerroCADGui.appearanceView()
+    errors = [str(error) for error in result.get("errors") or []]
+    return _json(
+        {
+            "ok": not errors,
+            "error": "; ".join(errors),
+            "status": "",
+            "view": dict(result.get("view") or {}),
+            "errors": errors,
+        }
+    )
+
+
 # ---------------------------------------------------------------------------
 # Built-in commands (A2)
 #
@@ -863,6 +918,15 @@ _GRID_SETTINGS_NODE = "Settings/Grid"
 
 #: The one axis-settings surface the axis settings command selects.
 _AXIS_SETTINGS_NODE = "Settings/Axis"
+
+#: The reset command a feature's settings surface offers, when it has one. The
+#: row's ``command`` field is what a button hook runs; a generic text edit of
+#: ``reset`` goes through the same Python surface in :func:`_set_setting`.
+_APPEARANCE_RESET_COMMANDS = {
+    "gizmo": "App_ResetGizmoAppearance",
+    "axis": "App_ResetAxisAppearance",
+    "grid": "App_ResetGridAppearance",
+}
 
 
 def grid_summary() -> str:
@@ -1229,6 +1293,72 @@ class _AxisSettingsCommand:
 
 
 FreeCADGui.addCommand("View_AxisSettings", _AxisSettingsCommand())
+
+
+class _ResetAppearanceCommand:
+    """``App_Reset<Feature>Appearance`` — restore the edition's appearance preset.
+
+    The Python surface is :func:`FerroCADGui.resetAppearance`; this class only
+    names the command a settings-surface button runs. The view request it returns
+    is what repaints the shell, so a button must execute the command (rather than
+    a generic property write) to close the loop.
+    """
+
+    feature = ""
+    label = ""
+    tooltip = ""
+    surface = "hidden"
+    parent = ""
+
+    def GetResources(self):
+        return {
+            "MenuText": self.label,
+            "ToolTip": self.tooltip,
+            "Group": "View",
+            "CmdType": "ForView",
+            "FerroCAD_Surface": self.surface,
+            "FerroCAD_Parent": self.parent,
+        }
+
+    def Activated(self):
+        result = FerroCADGui.resetAppearance(self.feature)
+        if not result.get("ok"):
+            detail = result.get("status") or "; ".join(result.get("errors") or [])
+            return {"status": detail or "appearance reset failed"}
+        return {"view": result.get("view") or {}, "status": result.get("status") or ""}
+
+
+class _ResetGizmoAppearanceCommand(_ResetAppearanceCommand):
+    """``App_ResetGizmoAppearance`` — the toy/parametric gizmo preset."""
+
+    feature = "gizmo"
+    label = "Reset gizmo appearance"
+    tooltip = "Restore the edition's gizmo colours and sizes"
+
+
+class _ResetAxisAppearanceCommand(_ResetAppearanceCommand):
+    """``App_ResetAxisAppearance`` — the edition's axis-cross preset."""
+
+    feature = "axis"
+    label = "Reset axis appearance"
+    tooltip = "Restore the edition's axis-cross colours and sizes"
+    surface = "axis"
+    parent = "App_ToggleAxisCross"
+
+
+class _ResetGridAppearanceCommand(_ResetAppearanceCommand):
+    """``App_ResetGridAppearance`` — the edition's grid preset."""
+
+    feature = "grid"
+    label = "Reset grid appearance"
+    tooltip = "Restore the edition's grid colour and spacing"
+    surface = "grid"
+    parent = "App_ToggleGrid"
+
+
+FreeCADGui.addCommand("App_ResetGizmoAppearance", _ResetGizmoAppearanceCommand())
+FreeCADGui.addCommand("App_ResetAxisAppearance", _ResetAxisAppearanceCommand())
+FreeCADGui.addCommand("App_ResetGridAppearance", _ResetGridAppearanceCommand())
 
 
 class _GridSettingsCommand:

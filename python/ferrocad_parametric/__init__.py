@@ -33,6 +33,7 @@ from __future__ import annotations
 import FreeCAD
 import FreeCADGui
 import FerroCAD
+import FerroCADGui
 import Part  # noqa: F401  (links the kernel; registers Part::Feature/Fillet/Chamfer)
 
 # The shell's data functions (`bootstrap`, `model_tree`, `properties`,
@@ -166,6 +167,39 @@ FerroCAD.register_display_provider(_display_mesh)
 FerroCAD.register_interaction_provider(_interaction)
 
 
+#: The parametric edition's appearance preset (declared, not yet materialised).
+#:
+#: Parametric is the neutral edition: Part objects are the opaque grey
+#: ``(0.66, 0.72, 0.80)`` (linear ``Y = 0.716``), so the gizmo has no blue object
+#: to fight. The preset deliberately pins today's tokens rather than changing
+#: them, so a reset restores the familiar look even if a shared default moves
+#: later. Declaring the values also documents that the grey edition owns a
+#: neutral palette, unlike the toy's contrast preset.
+APPEARANCE_PRESETS = {
+    "gizmo": {
+        "active_color": "#38bdf8",
+        "inactive_color": "#94a3b8",
+    },
+    "axis": {
+        "color_x": "#f87171",
+        "color_y": "#4ade80",
+        "color_z": "#38bdf8",
+    },
+    "grid": {
+        "color": "#94a3b8",
+    },
+}
+
+
+def _register_appearance():
+    """Declare the parametric preset through the GUI facade (idempotent)."""
+    for feature, values in APPEARANCE_PRESETS.items():
+        FerroCADGui.registerAppearancePreset(feature, values)
+
+
+_register_appearance()
+
+
 def _add_appearance(obj):
     """Add the display properties a bare ``Part::Feature`` does not define.
 
@@ -244,6 +278,9 @@ FreeCADGui.addCommand("Part_Box", _MakeBoxCommand())
 
 def bootstrap(doc_name: str = "Shell") -> str:
     """The base sample document plus a 20 mm solid for the viewport."""
+    # Materialise the edition preset under the user's persisted values. The
+    # settings facades read that store, so every later command sees the preset.
+    FerroCADGui.installAppearancePresets()
     payload = _base_bootstrap(doc_name)
     doc = FreeCAD.ActiveDocument
     _add_box(doc, DEFAULT_LENGTH, DEFAULT_WIDTH, DEFAULT_HEIGHT, 0.0, 0.0, "Box")

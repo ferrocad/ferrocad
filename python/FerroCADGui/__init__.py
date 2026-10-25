@@ -18,6 +18,11 @@ What lives here:
   ``registerProvider(..., settings=[...])``; ``settings`` returns the active
   backend's rows in the property-pane row shape and ``setSetting`` validates,
   stores and refreshes (see ``docs/tasks/settings-model.md`` S0);
+* the **edition appearance presets** — ``registerAppearancePreset`` /
+  ``installAppearancePresets`` / ``resetAppearance``: an edition declares its own
+  defaults for the gizmo, axis and grid appearance. The preset is a fallback
+  layer under the user's persisted parameter values, and ``resetAppearance``
+  restores it (see ``docs/mods/settings-and-parameters.md``);
 * the **pull overlay bridge** — ``addOverlay`` / ``removeOverlay`` (Coin);
 * the **document-listener slot** — ``addDocumentListener`` /
   ``removeDocumentListener``, with ``onDocumentCreated`` / ``onDocumentActivated``
@@ -36,6 +41,8 @@ app script calls (``_command_list``, ``_run``, ``_accept``, ``_cancel``) stay on
 
 from __future__ import annotations
 
+import importlib
+import json
 import re
 import sys
 
@@ -1132,6 +1139,432 @@ def setSetting(feature: str, name: str, value) -> dict:
 
 
 # ---------------------------------------------------------------------------
+# Edition appearance presets
+#
+# An edition (toy, parametric, a future one) ships an opinion about what its
+# gizmo, axis cross and grid should look like. That opinion belongs *under* the
+# user's settings, not beside them: the persisted parameter group is the user
+# layer, and the edition only supplies values where the user has not chosen one.
+#
+# The semantic facades (``FerroCAD.Gizmo`` / ``Axis`` / ``Grid``) read the
+# provider group directly, so the preset is materialised into that same group
+# (no parallel store) and a marker remembers which values the preset wrote. On a
+# later install a value is replaced only when it still equals the marker, so a
+# user override survives both a restart and a preset change. Resetting is the
+# inverse: clear the capability store, then install the preset again.
+# ---------------------------------------------------------------------------
+
+#: The provider feature -> the private semantic module that owns its schema.
+_APPEARANCE_MODULES = {"gizmo": "_gizmo", "axis": "_axis", "grid": "_grid"}
+
+#: The provider feature -> the public facade attribute (``FerroCAD.Gizmo`` ...).
+_APPEARANCE_FACADES = {"gizmo": "Gizmo", "axis": "Axis", "grid": "Grid"}
+
+#: The appearance features every edition may preset, in reset order.
+_APPEARANCE_FEATURES = ("gizmo", "axis", "grid")
+
+#: The backend whose parameter group is the semantic store. The facades keep
+#: their values in the native provider's group even when another backend draws.
+_APPEARANCE_NATIVE = "ferrocad"
+
+#: The key that records the values the last install wrote (a JSON object). The
+#: value is provenance, not a setting: ``settings`` and the facades ignore it.
+_APPEARANCE_PRESET_MARKER = "__appearance_preset__"
+
+#: ``feature -> {setting: value}`` declared by the edition, in declaration order.
+_APPEARANCE_PRESETS: dict = {}
+
+
+def _semantic_module(feature):
+    """The private semantic module that owns ``feature``'s schema, or ``None``.
+
+    Upstream FreeCAD (and a headless build without the capability) has no
+    ``FerroCAD._gizmo``; a preset is then kept but cannot be installed.
+    """
+    module_name = _APPEARANCE_MODULES.get(feature)
+    if module_name is None:
+        return None
+    try:
+        return importlib.import_module("FerroCAD." + module_name)
+    except Exception:  # noqa: BLE001 - no semantic API is a normal upstream build
+        return None
+
+
+def _appearance_facade(feature):
+    """``FerroCAD.Gizmo``/``Axis``/``Grid`` for ``feature``, or ``None``."""
+    attribute = _APPEARANCE_FACADES.get(feature)
+    if attribute is None:
+        return None
+    try:
+        import FerroCAD
+    except Exception:  # noqa: BLE001 - upstream FreeCAD has no FerroCAD
+        return None
+    try:
+        return getattr(FerroCAD, attribute)
+    except Exception:  # noqa: BLE001 - the capability is missing
+        return None
+
+
+def _semantic_specs(feature):
+    """The capability's canonical ``name -> schema entry`` map."""
+    module = _semantic_module(feature)
+    if module is None:
+        return {}
+    return {entry["name"]: entry for entry in module.SETTINGS_SCHEMA}
+
+
+def _preset_group(feature):
+    """The parameter group that holds ``feature``'s resolved values."""
+    return _settings_group(feature, _APPEARANCE_NATIVE)
+
+
+def _preset_marker(group):
+    """The provenance record of the last install, ``{}`` when absent/corrupt."""
+    try:
+        raw = group.GetString(_APPEARANCE_PRESET_MARKER, "")
+        data = json.loads(raw) if raw else {}
+    except Exception:  # noqa: BLE001 - a corrupt marker must not block boot
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def _stored_value(group, name):
+    """The value in ``group`` under ``name``, or ``None`` when it is unset.
+
+    The typed lists distinguish an unset value from a stored default; a typed
+    ``Get*`` call cannot.
+    """
+    if name in group.GetBools():
+        return group.GetBool(name)
+    if name in group.GetInts():
+        return group.GetInt(name)
+    if name in group.GetFloats():
+        return group.GetFloat(name)
+    if name in group.GetStrings():
+        return group.GetString(name)
+    return None
+
+
+def _remove_value(group, name):
+    """Drop ``name`` from every scalar kind in ``group`` (absent is a no-op)."""
+    group.RemBool(name)
+    group.RemInt(name)
+    group.RemFloat(name)
+    group.RemString(name)
+
+
+def _write_preset_value(group, name, value, spec) -> None:
+    """Write one preset value under the schema's kind (or the value's own type)."""
+    if spec is not None:
+        _write_setting(spec, group, value)
+        return
+    if isinstance(value, bool):
+        group.SetBool(name, value)
+    elif isinstance(value, int):
+        group.SetInt(name, value)
+    elif isinstance(value, float):
+        group.SetFloat(name, value)
+    else:
+        group.SetString(name, str(value))
+
+
+def _spec_for(feature, name):
+    """The schema entry for ``name``: the capability's, else the provider's.
+
+    The preset belongs to the capability store, so the capability's canonical
+    kind wins even while another backend is active. A provider schema is only a
+    fallback for a feature without a semantic module (a third-party capability).
+    """
+    spec = _semantic_specs(feature).get(name)
+    if spec is not None:
+        return spec
+    records = _PROVIDERS.get(feature)
+    if records:
+        active = _selected(feature)
+        order = [active] + [backend for backend in records if backend != active]
+        for backend in order:
+            record = records.get(backend)
+            if record is None:
+                continue
+            for spec in record.get("settings") or []:
+                if spec["name"] == name:
+                    return spec
+    return None
+
+
+def _normalise_preset(feature, values):
+    """Validate a declaration against the capability schema (or its value types)."""
+    if not isinstance(feature, str) or not feature.strip():
+        raise ValueError("an appearance feature must be a non-empty string")
+    feature = feature.strip()
+    if not isinstance(values, dict):
+        raise TypeError(
+            "appearance preset %r must be a dict of setting -> value" % feature
+        )
+    specs = _semantic_specs(feature)
+    preset = {}
+    for name, value in values.items():
+        if not isinstance(name, str) or not name.strip():
+            raise ValueError("an appearance setting name must be a non-empty string")
+        name = name.strip()
+        spec = specs.get(name)
+        if specs and spec is None:
+            known = ", ".join(sorted(specs))
+            raise ValueError(
+                "appearance preset %r has no setting %r; known: %s"
+                % (feature, name, known)
+            )
+        if spec is not None:
+            preset[name] = _coerce_setting(spec, value)
+        elif isinstance(value, (bool, int, float, str)):
+            preset[name] = value
+        else:
+            raise TypeError(
+                "appearance setting %r of %r must be a bool, number or string"
+                % (name, feature)
+            )
+    return feature, preset
+
+
+def registerAppearancePreset(feature: str, values: dict) -> dict:
+    """Declare an edition's default appearance for ``feature`` (declaration only).
+
+    ``feature`` is ``"gizmo"``, ``"axis"`` or ``"grid"`` for the built-in
+    capabilities; ``values`` maps a setting name (the schema's ``name``) to a
+    value. A name the capability does not declare, or a value its schema rejects,
+    raises immediately, so a typo fails at import rather than silently doing
+    nothing.
+
+    Declaring stores the preset and returns a JSON-safe manifest; it does **not**
+    write a parameter. The edition's ``bootstrap()`` calls
+    :func:`installAppearancePresets` (and the shell can call
+    :func:`appearanceView`), which materialises the preset only where the user
+    has no value. Re-declaring replaces the previous preset; call
+    :func:`unregisterAppearancePreset` to remove it.
+    """
+    feature, preset = _normalise_preset(feature, values)
+    _APPEARANCE_PRESETS[feature] = preset
+    return {"feature": feature, "settings": dict(preset)}
+
+
+def unregisterAppearancePreset(feature: str) -> bool:
+    """Remove a declared preset and any values it still owns.
+
+    Values the user changed are left alone. Returns whether a preset was
+    declared. This is the reload/teardown counterpart of
+    :func:`registerAppearancePreset`.
+    """
+    if feature not in _APPEARANCE_PRESETS:
+        return False
+    _install_preset(feature, {})
+    del _APPEARANCE_PRESETS[feature]
+    return True
+
+
+def appearancePreset(feature: str):
+    """A copy of the declared preset for ``feature``, or ``None`` when none is."""
+    preset = _APPEARANCE_PRESETS.get(feature)
+    return None if preset is None else dict(preset)
+
+
+def appearancePresets() -> dict:
+    """Every declared preset, ``{feature: {setting: value}}``, in declaration order."""
+    return {feature: dict(preset) for feature, preset in _APPEARANCE_PRESETS.items()}
+
+
+def _install_preset(feature, preset) -> int:
+    """Materialise ``preset`` without overwriting a user value; return the writes.
+
+    The marker holds the values the previous install wrote. A value is "owned"
+    when it still equals that record, or when it is absent on a first install.
+    Only owned values are written or removed; anything else is a user override.
+
+    The record cannot distinguish a user value that happens to equal the preset
+    from the preset's own write: a later preset change may replace that one
+    value. Every other user value is preserved.
+    """
+    group = _preset_group(feature)
+    previous = _preset_marker(group)
+    writes = 0
+    for name in sorted(set(previous) | set(preset)):
+        stored = _stored_value(group, name)
+        if name in previous:
+            owned = type(stored) is type(previous[name]) and stored == previous[name]
+        else:
+            # First install: fill only an unset value. A value already present
+            # was chosen by the user (or another preset) and stays.
+            owned = stored is None
+        if not owned:
+            continue
+        if name in preset:
+            spec = _spec_for(feature, name)
+            value = preset[name]
+            if spec is not None:
+                value = _coerce_setting(spec, value)
+            before = stored
+            _write_preset_value(group, name, value, spec)
+            if before is None or type(before) is not type(value) or before != value:
+                writes += 1
+        else:
+            _remove_value(group, name)
+            writes += 1
+    if preset:
+        group.SetString(
+            _APPEARANCE_PRESET_MARKER, json.dumps(preset, sort_keys=True)
+        )
+    elif _APPEARANCE_PRESET_MARKER in group.GetStrings():
+        group.RemString(_APPEARANCE_PRESET_MARKER)
+    return writes
+
+
+def installAppearancePresets(feature=None) -> dict:
+    """Materialise declared presets under the user's values (idempotent).
+
+    With no ``feature``, every declared preset is installed; with one, only that
+    feature's. Nothing is written where the user already has a value, and a
+    value the previous preset wrote is replaced only when it is unchanged. This
+    is the boot step; ``FerroCADGui.resetAppearance`` calls it after clearing the
+    store. Returns ``ok``, the features that were installed, the write count per
+    feature and any errors (a broken setting does not stop the others).
+    """
+    if feature is None:
+        features = list(_APPEARANCE_PRESETS)
+    elif isinstance(feature, str) and feature.strip():
+        features = [feature.strip()]
+    else:
+        raise ValueError("an appearance feature must be a non-empty string or None")
+    writes = {}
+    errors = []
+    for name in features:
+        preset = _APPEARANCE_PRESETS.get(name)
+        if preset is None:
+            continue
+        try:
+            writes[name] = _install_preset(name, preset)
+        except Exception as exc:  # noqa: BLE001 - one feature is not fatal
+            errors.append("%s: %s" % (name, _error_text(exc)))
+    return {
+        "ok": not errors,
+        "features": list(writes),
+        "writes": writes,
+        "errors": errors,
+    }
+
+
+def _appearance_request_features(feature):
+    """The features a view request covers: one, or the three capabilities."""
+    if feature is None:
+        return list(_APPEARANCE_FEATURES)
+    if not isinstance(feature, str) or not feature.strip():
+        raise ValueError("an appearance feature must be a non-empty string or None")
+    return [feature.strip()]
+
+
+def _feature_view(feature):
+    """One capability's current ``{"view": …}`` request, or ``None``."""
+    facade = _appearance_facade(feature)
+    if facade is None:
+        return None
+    return facade.apply()
+
+
+def appearanceView(feature=None) -> dict:
+    """The ``{"view": …}`` request for the current appearance policy.
+
+    This is the boot hook: it installs the declared presets, then asks each
+    capability (``FerroCAD.Gizmo``/``Axis``/``Grid``) for its current policy, so
+    an edition's defaults and a user's persisted values both reach the shell.
+    With no ``feature`` the three built-in capabilities are merged; with one,
+    only that feature is. Errors are collected rather than raised, because the
+    shell may call this across the interpreter boundary.
+    """
+    installAppearancePresets(feature)
+    view = {}
+    errors = []
+    for name in _appearance_request_features(feature):
+        try:
+            request = _feature_view(name)
+        except Exception as exc:  # noqa: BLE001 - one capability is not fatal
+            errors.append("%s: %s" % (name, _error_text(exc)))
+            continue
+        if isinstance(request, dict):
+            view.update(request.get("view") or {})
+    return {"view": view, "errors": errors}
+
+
+def _clear_axis_legacy() -> None:
+    """Drop the pre-split ``GridAxisCross`` flags that outlive an axis reset.
+
+    ``FerroCAD.Axis`` migrates that old key when ``enabled`` is unset. A
+    deliberate appearance reset must remove it, or the migrated user value would
+    veto the edition preset it is supposed to restore.
+    """
+    module = _semantic_module("axis")
+    paths = (
+        getattr(
+            module,
+            "LEGACY_GRID_PREFERENCES",
+            "User parameter:BaseApp/Preferences/Mods/grid/ferrocad",
+        ),
+        getattr(
+            module,
+            "LEGACY_PREFERENCES",
+            "User parameter:BaseApp/Preferences/View",
+        ),
+    )
+    for path in paths:
+        FreeCAD.ParamGet(path).RemBool("GridAxisCross")
+
+
+def resetAppearance(feature=None) -> dict:
+    """Restore the edition preset (or the built-in defaults) for ``feature``.
+
+    The capability store is cleared first (including the grid's legacy keys and
+    the axis's old ``GridAxisCross``), then the declared preset is installed
+    again, so the reset returns the edition's values rather than the hard-coded
+    defaults. The result carries the merged ``view`` request a command returns;
+    errors are collected, never raised. With no ``feature`` the three built-in
+    capabilities are reset together.
+    """
+    features = _appearance_request_features(feature)
+    view = {}
+    statuses = []
+    errors = []
+    for name in features:
+        if name not in _APPEARANCE_FEATURES and name not in _APPEARANCE_PRESETS:
+            errors.append("no appearance settings for %r" % name)
+            continue
+        try:
+            facade = _appearance_facade(name)
+            if facade is not None:
+                facade.reset()
+            else:
+                _preset_group(name).Clear()
+            if name == "axis":
+                _clear_axis_legacy()
+            preset = _APPEARANCE_PRESETS.get(name, {})
+            _install_preset(name, preset)
+            if facade is not None:
+                request = facade.apply()
+                view.update(request.get("view") or {})
+            statuses.append(
+                "%s reset to the edition preset" % name
+                if preset
+                else "%s reset to defaults" % name
+            )
+        except Exception as exc:  # noqa: BLE001 - one feature is not fatal
+            errors.append("%s: %s" % (name, _error_text(exc)))
+    return {
+        "ok": not errors,
+        "feature": feature,
+        "features": features,
+        "view": view,
+        "status": "; ".join(statuses),
+        "errors": errors,
+    }
+
+
+# ---------------------------------------------------------------------------
 # Pull-based overlays (G5)
 # ---------------------------------------------------------------------------
 
@@ -1206,6 +1639,13 @@ __all__ = [
     "refreshProviders",
     "settings",
     "setSetting",
+    "registerAppearancePreset",
+    "unregisterAppearancePreset",
+    "appearancePreset",
+    "appearancePresets",
+    "installAppearancePresets",
+    "appearanceView",
+    "resetAppearance",
     "addOverlay",
     "removeOverlay",
     "ViewState",

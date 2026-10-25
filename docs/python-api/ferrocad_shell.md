@@ -14,6 +14,7 @@ _Every entry point returns a JSON string._
 | Function | Summary |
 | --- | --- |
 | `add_namespace(name: str, value) -> None` | Expose ``value`` to the console under ``name``. |
+| `appearance_view() -> str` | The appearance policy the shell should apply at boot, as JSON. |
 | `axis_summary() -> str` | The axis's provider and stem size for the shell's popover. |
 | `bootstrap(doc_name: str = 'Shell') -> str` | Create (or recreate) the sample document and report host status. |
 | `close_document(name: str) -> str` | Close a document by name. |

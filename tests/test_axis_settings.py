@@ -669,10 +669,9 @@ class AxisOverlayModTests(unittest.TestCase):
         rows = json.loads(ferrocad_shell.properties("Settings/Axis"))
         self.assertEqual(rows[0]["name"], "provider")
         self.assertEqual(rows[0]["value"], "FerroCAD (native)")
-        self.assertEqual(
-            [row["name"] for row in rows[1:]], list(ATTRIBUTES)
-        )
-        by_name = {row["name"]: row for row in rows[1:]}
+        schema = [row for row in rows[1:] if row["name"] != "reset"]
+        self.assertEqual([row["name"] for row in schema], list(ATTRIBUTES))
+        by_name = {row["name"]: row for row in schema}
         self.assertEqual(by_name["enabled"]["value"], "True")
         self.assertEqual(by_name["color_x"]["value"], "#f87171")
         self.assertEqual(by_name["length"]["value"], "80.0")

@@ -1,0 +1,79 @@
+name: Docs
+
+# Publish the mdBook edition of the user documentation to GitHub Pages:
+#
+#   https://ferrocad.github.io/ferrocad/
+#
+# Publishing is gated on a **green CI run** for the same commit: the `headless`
+# job in ci.yml runs `userdocs.py --check`, `api_docs.py --check` and
+# `build_book.py --check`, so Pages cannot serve a page whose generator no
+# longer matches the code. This workflow only assembles the committed pages and
+# renders them, so it needs no Python extension, no GPU and no display.
+#
+# One-time repository setup: Settings → Pages → Build and deployment →
+# Source: **GitHub Actions** (the `configure-pages` step can enable it too).
+on:
+  workflow_run:
+    workflows: ["CI"]
+    types: [completed]
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+# One deployment at a time; never cancel a running one mid-upload.
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  build:
+    # A red CI run (any job) never reaches Pages. A manual run is always allowed.
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      github.event.workflow_run.conclusion == 'success'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # For a CI-triggered run, publish the commit CI actually tested —
+          # not whatever `main` points at by the time this job starts.
+          ref: ${{ github.event.workflow_run.head_sha || github.sha }}
+
+      # The docs tools are stdlib-only, but pin the interpreter so the rendered
+      # book matches the reference the CI checks produce. Keep this in step with
+      # the `headless` job in ci.yml and docs/documentation.md.
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - uses: peaceiris/actions-mdbook@v2
+        with:
+          mdbook-version: latest
+
+      - name: Assemble and build the user book
+        # This also validates the tree: every page is in SUMMARY.md and every
+        # relative link resolves.
+        run: python3 tools/build_book.py --build
+
+      - uses: actions/configure-pages@v5
+        with:
+          # Enable Pages with the workflow token when it is not on yet.
+          enablement: true
+
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: target/user-book/book
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4

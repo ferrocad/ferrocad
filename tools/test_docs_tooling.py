@@ -243,5 +243,33 @@ class TestApiDocs(unittest.TestCase):
         self.assertIn("`v`", page)
 
 
+    def test_members_exclude_inherited_builtins(self):
+        # `dir()` (and therefore the old renderer) included everything a value
+        # type inherits from `int`/`Exception`. CPython point releases report
+        # those differently, which is exactly what made the pages stale in CI.
+        from enum import IntEnum
+
+        class Scale(IntEnum):
+            Small = 1
+            Large = 2
+
+        class Failure(Exception):
+            """A kernel failure."""
+
+            def retry(self):
+                return None
+
+        scale = [row["name"] for row in api_docs._members(Scale)]
+        self.assertIn("Small", scale)
+        self.assertIn("Large", scale)
+        self.assertNotIn("bit_count", scale)
+        self.assertNotIn("conjugate", scale)
+
+        failure = [row["name"] for row in api_docs._members(Failure)]
+        self.assertIn("retry", failure)
+        self.assertNotIn("add_note", failure)
+        self.assertNotIn("with_traceback", failure)
+
+
 if __name__ == "__main__":
     unittest.main()

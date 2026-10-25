@@ -143,13 +143,30 @@ def _public_names(module) -> list[str]:
     return sorted(set(out))
 
 
+def _member_names(cls) -> list[str]:
+    """The public names `cls` declares, not the builtins it inherits.
+
+    `dir()` walks the whole MRO, so a value type like an `IntEnum` would list
+    `int.bit_count` and an exception would list `Exception.add_note`. Their
+    signatures and docstrings are rendered differently by different CPython point
+    releases (and say nothing about FerroCAD's surface), so including them makes
+    the generated page depend on the interpreter that ran the generator. Walk the
+    MRO, skip the stdlib bases, and keep every project base's declarations.
+    """
+    names: set[str] = set()
+    for klass in cls.__mro__:
+        module = getattr(klass, "__module__", "")
+        if module == "builtins" or module == "enum" or module.startswith("enum."):
+            continue
+        names.update(klass.__dict__)
+    return sorted(name for name in names if not name.startswith("_"))
+
+
 def _members(obj) -> list[dict]:
     """Public members of a class or singleton, with their kind."""
     cls = obj if inspect.isclass(obj) else type(obj)
     rows = []
-    for name in dir(cls):
-        if name.startswith("_"):
-            continue
+    for name in _member_names(cls):
         try:
             raw = inspect.getattr_static(cls, name)
         except AttributeError:

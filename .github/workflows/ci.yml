@@ -12,6 +12,13 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
+      # Pin the interpreter: `tools/api_docs.py` reads signatures from the live
+      # modules, and CPython point releases report inherited builtins differently
+      # (the generator now ignores those, but pinning keeps the whole facade and
+      # the doc build reproducible). Keep this in step with docs/documentation.md.
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
       - name: Install CPython headers + GPUI system libraries (PyO3, X11/xkb/fontconfig)
         run: >
           sudo apt-get update && sudo apt-get install -y

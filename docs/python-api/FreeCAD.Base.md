@@ -34,12 +34,6 @@ The `Base` value types FreeCAD exposes as a submodule.
 
 Kernel failure (``Part.OCCError`` when the Part module is absent).
 
-| Member | Summary |
-| --- | --- |
-| add_note(note, /) | Add a note to the exception |
-| `args` (attribute) | — |
-| with_traceback(tb, /) | Set self.__traceback__ to tb and return self. |
-
 ## Class `Material`
 
 | Member | Summary |
@@ -149,17 +143,6 @@ Scaling mode returned by ``Matrix.hasScale()`` (``Base::ScaleType``).
 | `NonUniformRight` (attribute) | — |
 | `Other` (attribute) | — |
 | `Uniform` (attribute) | — |
-| as_integer_ratio() | Return a pair of integers, whose ratio is equal to the original int. |
-| bit_count() | Number of ones in the binary representation of the absolute value of self. |
-| bit_length() | Number of bits necessary to represent self in binary. |
-| conjugate() | Returns self, the complex conjugate of any int. |
-| `denominator` (attribute) | — |
-| from_bytes(bytes, byteorder='big', *, signed=False) | Return the integer represented by the given array of bytes. |
-| `imag` (attribute) | — |
-| is_integer() | Returns True. Exists for duck type compatibility with float.is_integer. |
-| `numerator` (attribute) | — |
-| `real` (attribute) | — |
-| to_bytes(length=1, byteorder='big', *, signed=False) | Return an array of bytes representing an integer. |
 
 ## Class `TypeId`
 

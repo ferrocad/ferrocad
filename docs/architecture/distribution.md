@@ -160,7 +160,7 @@ application. See [`releasing.md`](releasing.md).
 | macOS | `.app` in a `.dmg` | `hdiutil`/`create-dmg`; codesign + notarize |
 | Windows | portable `.exe` or MSIX | WiX/MSIX, or a zip |
 
-**Status (v0.1.2).** The release workflow builds and publishes all three desktop
+**Status (v0.1.3).** The release workflow builds and publishes all three desktop
 artifacts — the Linux AppImage, the macOS `.dmg` and the Windows `.zip` — each
 bundling the pinned `python-build-standalone` runtime (the build job runs
 `cargo xtask python` before `bundle`, so the host is compiled against that

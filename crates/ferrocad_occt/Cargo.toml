@@ -5,7 +5,7 @@
 # See docs/architecture/occt-integration.md and docs/architecture/occt-bundling.md.
 [package]
 name = "ferrocad_occt"
-version = "0.1.2"
+version = "0.1.3"
 edition.workspace = true
 license.workspace = true
 readme.workspace = true

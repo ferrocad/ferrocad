@@ -11,7 +11,7 @@
 # CI must provide OCCT for its verify-build (see `.github/workflows/crates.yml`).
 [package]
 name = "ferrocad_part_py"
-version = "0.1.2"
+version = "0.1.3"
 edition.workspace = true
 license.workspace = true
 readme.workspace = true

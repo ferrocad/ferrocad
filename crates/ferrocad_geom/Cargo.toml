@@ -1,6 +1,6 @@
 [package]
 name = "ferrocad_geom"
-version = "0.1.2"
+version = "0.1.3"
 edition.workspace = true
 license.workspace = true
 readme.workspace = true
@@ -18,4 +18,4 @@ name = "ferrocad_geom"
 [dependencies]
 ferrocad_types.workspace = true
 ferrocad_curves.workspace = true
-ferrocad_lineage = { path = "../ferrocad_lineage", version = "0.1.2" }
+ferrocad_lineage.workspace = true

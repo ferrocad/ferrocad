@@ -10,7 +10,7 @@ distributable artifact:
 | Linux (edition) | `linux/appimage.sh --edition parametric --occt` | `target/dist/ferrocad-parametric-<arch>.AppImage` | `appimagetool` + an OCCT 7.8.1 prefix |
 | macOS | `macos/app.sh` | `target/dist/FerroCAD.app` (+ `FerroCAD.dmg`) | macOS; `hdiutil` for the dmg |
 | Windows | `windows/portable.ps1` | `target/dist/ferrocad-windows-x86_64/` + `.zip` | PowerShell |
-| Windows (edition) | `windows/portable.ps1 -Edition parametric -Occt` | `target/dist/ferrocad-parametric-windows-x86_64.zip` | PowerShell + an OCCT 7.8.1 prefix (**blocked**: `opencascade-sys` does not build with MSVC) |
+| Windows (edition) | `windows/portable.ps1 -Edition parametric -Occt` | `target/dist/ferrocad-parametric-windows-x86_64.zip` | PowerShell + an OCCT 7.8.1 prefix |
 
 The macOS packager remains in the tree but is not run by `release.yml` while the
 pinned GPUI fork does not build on macOS (see

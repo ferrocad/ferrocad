@@ -162,10 +162,11 @@ application. See [`releasing.md`](releasing.md).
 
 **Status (v0.1.4).** The release workflow publishes the Linux AppImage and the
 Windows `.zip` for the base app, plus the Parametric Linux AppImage
-(`ferrocad-parametric-*`, with the OCCT closure under `lib/`); the macOS `.dmg` is
-blocked because `bite-gp-apple 1.24.402`
-(the GPUI Metal backend) uses `cocoa` without declaring it, and the Parametric
-Windows zip is blocked in `opencascade-sys 0.3.0`'s MSVC build. See
+(`ferrocad-parametric-*`, with the OCCT closure under `lib/`); the Parametric
+Windows zip joins them from the next tag (the MSVC bridge fix is in
+`third_party/opencascade-sys`). The macOS `.dmg` is still blocked because
+`bite-gp-apple 1.24.402`
+(the GPUI Metal backend) uses `cocoa` without declaring it. See
 [`releasing.md`](releasing.md) §5. Each artifact bundles the pinned
 `python-build-standalone` runtime (the build job runs `cargo xtask python` before
 `bundle`, so the host is compiled against that interpreter and the runtime ships

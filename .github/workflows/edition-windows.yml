@@ -1,18 +1,18 @@
 name: Edition build check (Windows)
 
-# Manual-only, one platform: prove that the Parametric edition's Windows build
-# works before its entry is restored to `release.yml`'s `edition` matrix.
-#
-# It exists because `opencascade-sys` never compiled with MSVC until the vendored
-# patch in `third_party/opencascade-sys` (OCCT's `Handle_T` is a derived class on
-# MSVC, a typedef elsewhere — see that directory's `PATCHES.md`). The regular
-# `windows` CI job does not build the kernel, and running a 10-minute OCCT fetch on
-# every push is not worth it, so this job is dispatch-only.
+# Manual-only, one platform: the on-demand reproduction of `release.yml`'s
+# `edition (windows-latest)` leg, useful when you want the answer without cutting
+# a tag. It exists because OCCT never compiled with MSVC until the vendored
+# `opencascade-sys` patch (`third_party/opencascade-sys`, upstream
+# bschwind/opencascade-rs#234 — OCCT's `Handle_T` is a derived class on MSVC, a
+# typedef elsewhere; see that directory's `PATCHES.md`). The regular `windows` CI
+# job does not build the kernel, and a 10-minute OCCT fetch on every push is not
+# worth it, so this is dispatch-only.
 #
 #   gh workflow run edition-windows.yml
 #
-# When it is green, add the Windows entry back to the `edition` matrix in
-# `release.yml` and delete this file.
+# Green on 2026-10-25 (kernel build, `bundle --check-init`, portable zip and its
+# smoke test). `release.yml` is authoritative; keep the two in step.
 
 on:
   workflow_dispatch:

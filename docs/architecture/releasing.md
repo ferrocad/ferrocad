@@ -277,19 +277,20 @@ runtime:
 | Linux (base) | `ferrocad-x86_64.AppImage` | `packaging/linux/appimage.sh` (`appimagetool`) |
 | Windows (base) | `ferrocad-windows-x86_64.zip` | `packaging/windows/portable.ps1` |
 | Linux (Parametric) | `ferrocad-parametric-x86_64.AppImage` | `packaging/linux/appimage.sh --edition parametric --occt` |
-| Windows (Parametric) | `ferrocad-parametric-windows-x86_64.zip` — **blocked**, see below | `packaging/windows/portable.ps1 -Edition parametric -Occt` |
+| Windows (Parametric) | `ferrocad-parametric-windows-x86_64.zip` | `packaging/windows/portable.ps1 -Edition parametric -Occt` |
 
 The Parametric edition additionally bundles the OCCT 7.8.1 toolkit closure under
 `lib/`, so `import Part` works without a system OCCT. The closure and OCCT license
 staging are described in [`edition-publishing.md`](edition-publishing.md) and
 [`occt-bundling.md`](occt-bundling.md).
 
-**The Windows edition is blocked.** `opencascade-sys 0.3.0`'s cxx bridge does not
-compile with MSVC (`b_rep.hxx`: `opencascade::handle<T>*` →
-`std::unique_ptr<Handle_T>` conversions, C2440 on VS 18 / MSVC 14.51), so
-`release.yml` publishes the Parametric AppImage only. Adding the Windows matrix
-entry back is the only workflow change needed once the C++ bridge builds; the
-job's Windows steps are still in place.
+**The Windows edition needed a vendored OCCT binding.** `opencascade-sys 0.3.0`
+does not compile with MSVC — OCCT's `Handle_T` is a derived class there, not the
+`Handle(T)` alias — so `third_party/opencascade-sys` carries upstream
+[PR #234](https://github.com/bschwind/opencascade-rs/pull/234) (the three fix
+classes plus `advapi32`). Verified end to end on `windows-latest` on 2026-10-25;
+see [`edition-publishing.md`](edition-publishing.md) §6 and
+[ferrocad#1](https://github.com/ferrocad/ferrocad/issues/1).
 
 **macOS is not shipped.** `bite-gp-apple 1.24.402` uses `cocoa` without declaring
 it, so the macOS build does not compile; the release workflow's macOS leg was
@@ -349,12 +350,13 @@ binary.
 
 **`v0.1.4` (the edition round).** `release.yml` gained an `edition` job that
 fetches OCCT 7.8.1, builds `ferrocad_parametric`, walks its library closure and
-attaches `ferrocad-parametric-x86_64.AppImage` beside the base artifacts, so a tag
-yields three (the Parametric Windows zip is blocked in `opencascade-sys`'s MSVC
-build). The macOS leg was removed from the release matrix because the pinned
-GPUI fork does not build there; see the note below. The crates themselves are a
-patch bump of the same 21 (no new crate), carrying the Part edition's move-gizmo
-fix, its `Color`/`DisplayMode` properties and `Part_Box`.
+attaches `ferrocad-parametric-x86_64.AppImage` beside the base artifacts, so that
+tag yielded three (its Windows leg predated the MSVC fix, below). The macOS leg
+was removed from the release matrix because the pinned GPUI fork does not build
+there; see the note below. The crates themselves are a patch bump of the same 21
+(no new crate), carrying the Part edition's move-gizmo fix, its
+`Color`/`DisplayMode` properties and `Part_Box`. **From the next tag the Windows
+Parametric zip is included too**, so a `v*` tag yields four.
 
 **macOS is absent from `v0.1.3`.** The release with these crates published is
 Linux and Windows only: `bite-gp-apple 1.24.402` (the GPUI Metal backend) uses

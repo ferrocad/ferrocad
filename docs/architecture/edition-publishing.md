@@ -77,11 +77,10 @@ Numbered like the `D` slices in [`distribution.md`](distribution.md) §7.
   library path. Build a local AppImage from the edition and run `--check-init`
   against the unpacked payload, then open a window, on Linux. *Acceptance:* the
   AppImage boots with `import Part` available and no system OCCT installed.
-- **E2.** `release.yml` builds `ferrocad-parametric-*` beside `ferrocad-*`, fetching
+**E2.** `release.yml` builds `ferrocad-parametric-*` beside `ferrocad-*`, fetching
   the per-platform OCCT prefix, and attaches both to the Release. *Acceptance:* a
-  `v*` tag yields six artifacts (four while macOS is blocked, three while the
-  Parametric Windows build is blocked too — see §6); the Windows one passes
-  `--check-init`.
+  `v*` tag yields six artifacts (four while macOS is blocked — see §6); the
+  Windows one passes `--check-init`.
 - **E3.** macOS and Windows closures (`otool -L`/`install_name_tool`; PE import
   walk) and the license staging for all three. *Acceptance:* each platform's
   `--check-init` runs with only the bundled `lib/`.
@@ -133,59 +132,41 @@ shared shell.
 `ferrocad-parametric-x86_64.AppImage`; the base invocation and artifact name are
 unchanged.
 
-**E2 — implemented and run for `v0.1.4`.** `.github/workflows/release.yml` has an
-`edition` job that fetches OCCT 7.8.1 from conda-forge with micromamba, runs
-`cargo xtask mods` and `cargo xtask python`, then
-`bundle --edition parametric --occt --check-init` and the platform packager. It
-uploads `ferrocad-parametric-x86_64.AppImage`; the release job waits for both the
-base and edition jobs. Because macOS is blocked and the **Windows leg does not
-build**, a `v*` tag yields **three** artifacts (two base, one parametric), not
-six.
+**E2 — implemented; `v0.1.5` is the first four-artifact release.**
+`.github/workflows/release.yml` has an `edition` job (Linux + Windows) that
+fetches OCCT 7.8.1, builds `ferrocad_parametric`, walks its library closure and
+uploads the Parametric artifact beside the base ones. `v0.1.4` shipped three
+(its Windows leg predated the MSVC fix); a tag from here on yields **four**:
+two base, two Parametric. macOS is still absent, so six would be the full set.
 
-**Windows is blocked in the OCCT bridge.** Tracked as
-[ferrocad#1](https://github.com/ferrocad/ferrocad/issues/1) (with the full
-diagnosis, the attribution and the option table). The defect is already fixed
-upstream by [bschwind/opencascade-rs#234](https://github.com/bschwind/opencascade-rs/pull/234)
-(open, mergeable, awaiting maintainer review; a downstream user reports it green
-on Windows/MSVC 14.44 and macOS), which covers the `unique_ptr` sites, the cxx
-pointer bindings *and* the `advapi32` link closure. It is ported onto
-`third_party/opencascade-sys`, replacing the earlier 17-line patch; the next
-gate is a green `edition-windows` run. The first `v0.1.4` run got
-through the OCCT fetch and into `cargo build -p ferrocad_parametric` on
-`windows-latest`, where `opencascade-sys 0.3.0`'s cxx bridge fails with C2440. The
-cause is that OCCT's `DEFINE_STANDARD_HANDLE` makes `Handle_T` a **derived class**
-on MSVC (for C++/CLI export) while `Handle(C)` stays `opencascade::handle<C>`, so
-the two are distinct types there and identical on GCC/Clang.
+**The Windows bridge needed a vendored patch.** `opencascade-sys` 0.3.0 does not
+build with MSVC. OCCT's `DEFINE_STANDARD_HANDLE` makes `Handle_T` a **derived
+class** on MSVC (for C++/CLI export) while `Handle(C)` stays
+`opencascade::handle<C>`, so the two are distinct types there and identical on
+GCC/Clang; the crate's bridge assumed the alias. Three symptoms: the
+`unique_ptr<Handle_T>` allocations, cxx's member/function-pointer bindings, and
+a link closure that needs `advapi32`. Upstream PR
+[bschwind/opencascade-rs#234](https://github.com/bschwind/opencascade-rs/pull/234)
+fixes all three and `third_party/opencascade-sys` is 0.3.0 with it applied
+(details and the removal condition in that directory's `PATCHES.md`). Verified
+end to end on `windows-latest` on 2026-10-25: `cargo build -p ferrocad_occt`,
+`bundle --edition parametric --occt --check-init`, the portable zip and
+`ferrocad.bat --check-init` on the unpacked artifact. `.github/workflows/edition-windows.yml`
+stays as the dispatch-only reproduction; drop the vendored crate and the
+`[patch.crates-io]` entry once a fixed `opencascade-sys` release exists.
+Tracking: [ferrocad#1](https://github.com/ferrocad/ferrocad/issues/1).
 
-Two instances, one fixed:
-
-- `third_party/opencascade-sys` patches 17 allocations in six headers to construct
-  `new Handle_T(…)` instead of `new opencascade::handle<T>(…)` (valid under both
-  definitions, and the crate's own idiom elsewhere). `fc_curve.hxx` in this
-  workspace had the same pattern once and is fixed in place.
-- **Open:** cxx's `#[Self = "Type"]` shims take the member's address first
-  (`void (*f)(const TopoDS_Face&, const Handle_Poly_Triangulation&) =
-  &::BRepLib_ToolTriangulatedShape::ComputeNormals;`), so they only resolve when
-  the bridge's `Handle_T` is OCCT's `Handle(T)`. Every such binding whose
-  signature mentions a handle fails on MSVC with `cannot convert from
-  'overloaded-function'`. The candidate fixes (force OCCT's compatibility
-  typedef in the bridge translation units; wrap the affected functions as free
-  functions; report upstream) are listed in the TODO backlog.
-
-Until a real `windows-latest` run is green, the edition matrix stays Linux-only.
-`.github/workflows/edition-windows.yml` is the manual check
-(`gh workflow run edition-windows.yml`): OCCT fetch, `cargo build -p
-ferrocad_occt`, `bundle --edition parametric --occt --check-init`, the portable
-zip and its smoke test. When it passes, add the Windows entry back to the matrix
-and delete that file; the PE closure walker and `ferrocad.bat` are already
-ready.
+The `v0.1.4` first run failed here; the mechanism, the 17-site patch we started
+with and the two follow-on classes are described above and in
+[ferrocad#1](https://github.com/ferrocad/ferrocad/issues/1).
 
 **E3 — partial.** The Windows closure is implemented with a dependency-free PE
 import reader (`crates/xtask/src/pe.rs`, unit-tested on a synthetic PE image);
 `bundle --occt` copies the OCCT DLLs beside `ferrocad.exe` and `ferrocad.bat`
-puts `bin/` (and `lib/`, for an alternate layout) on `PATH`. The Windows job has
-not run in this sandbox, so the PE walker and that leg are **untested against a
-real Windows binary**. OCCT license staging is shared by every platform. macOS
+puts `bin/` (and `lib/`, for an alternate layout) on `PATH`. That path is now
+exercised for real: the 2026-10-25 `edition-windows` run built the edition,
+bundled the DLLs, packaged the zip and passed `ferrocad.bat --check-init` on the
+unpacked artifact. OCCT license staging is shared by every platform. macOS
 remains deliberately blocked on upstream `bite-gp-apple 1.24.402` (it imports
 `cocoa` without declaring it, and the import is dead); `xtask` reports that and
 does not attempt an `otool`/`install_name_tool` walk. The diagnosis, the temporary

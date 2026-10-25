@@ -2,10 +2,9 @@
 
 Every artifact is self-contained: it bundles CPython, the `FreeCAD` Python facade
 and the `Draft` workbench, so no system Python is required. The
-`ferrocad-parametric-x86_64.AppImage` adds the Part workbench and bundles the OCCT
-toolkit closure under `lib/`, so `import Part` works with no system OCCT
-installed. (A Windows Parametric zip is not published yet: the OCCT binding does
-not build with MSVC.)
+`ferrocad-parametric-*` artifacts add the Part workbench and bundle the OCCT
+toolkit closure under `lib/` (beside `ferrocad.exe` on Windows), so `import Part`
+works with no system OCCT installed.
 
 <!--ARTIFACTS-->
 

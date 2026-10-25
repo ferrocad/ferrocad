@@ -428,7 +428,7 @@ impl Shell {
         match python::appearance_view() {
             Ok(report) => {
                 if let Some(request) = report.view.as_ref() {
-                    if let Err(error) = view.apply(&request.without_visibility()) {
+                    if let Err(error) = view.apply(request) {
                         console.push(format!("appearance: {error}"));
                     }
                 }
@@ -4180,6 +4180,20 @@ mod tests {
     use super::*;
     use gpui::{Entity, TestAppContext, VisualTestContext};
 
+    /// Boot the shell from a known appearance state.
+    ///
+    /// Tests share one interpreter and one parameter store, and stored appearance is
+    /// applied at boot now that providers no longer write visibility — a toggle left
+    /// behind by an earlier test would otherwise decide what this test's window draws.
+    /// Reset the three capability stores first; before the first boot in a process the
+    /// facade is not importable, and there is nothing to reset.
+    fn boot_shell() -> Arc<Mutex<ShellModel>> {
+        let _ = crate::python::evaluate(
+            "import FerroCAD\nFerroCAD.Grid.reset()\nFerroCAD.Axis.reset()\nFerroCAD.Gizmo.reset()\n",
+        );
+        Shell::boot().expect("boot shell")
+    }
+
     /// The click datum is stored relative to the body's base corner, so it follows the
     /// geometry instead of being left behind at the old world point.
     #[test]
@@ -4201,6 +4215,47 @@ mod tests {
         assert_eq!(resolved.normal, anchor.normal);
     }
 
+    /// A *stored* visibility switch reaches the first window.
+    ///
+    /// This is the payoff of "the feature owns the switch": a provider's `activate`
+    /// no longer writes `enabled`, so the boot appearance query returns the user's
+    /// values instead of a feature that document activation turned on (opening the
+    /// sample document used to enable the grid, which is why the boot path stripped
+    /// visibility for a while).
+    #[test]
+    fn a_stored_visibility_switch_reaches_the_first_window() {
+        let _guard = crate::PYTHON_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        // First boot puts the facade on `sys.path`, which the writes below need.
+        let _ = boot_shell();
+        let result = crate::python::evaluate(
+            "import FerroCAD\n\
+             FerroCAD.Grid.enabled = False\n\
+             FerroCAD.Axis.enabled = False\n\
+             FerroCAD.Gizmo.enabled = False\n",
+        )
+        .expect("the interpreter ran");
+        assert!(result.ok, "{}", result.output);
+
+        // Deliberately not `boot_shell`: this boot must see the switches just written.
+        let model = Shell::boot().expect("boot shell");
+        {
+            let view = model.lock().unwrap().view.clone();
+            assert!(!view.grid, "the stored grid switch reaches the model");
+            assert!(
+                !view.axis.enabled,
+                "the stored axis switch reaches the model"
+            );
+            assert!(
+                !view.gizmo.enabled,
+                "the stored gizmo switch reaches the model"
+            );
+        }
+
+        // Leave the shared interpreter on the built-in defaults for other tests.
+        reset_grid_state();
+        let _ = crate::python::evaluate("import FerroCAD\nFerroCAD.Gizmo.reset()\n");
+    }
+
     /// S1 end-to-end, headless: boot the interpreter, read the sample document
     /// through it, round-trip the console, and render the shell.
     #[gpui::test]
@@ -4210,7 +4265,7 @@ mod tests {
             .lock()
             .unwrap_or_else(|e| e.into_inner());
 
-        let model = Shell::boot().expect("boot shell");
+        let model = boot_shell();
         {
             let m = model.lock().unwrap();
             let doc = m
@@ -4271,7 +4326,7 @@ mod tests {
     fn editing_a_property_commits_in_a_transaction(cx: &mut TestAppContext) {
         let _guard = crate::PYTHON_LOCK.lock().unwrap_or_else(|e| e.into_inner());
 
-        let model = Shell::boot().expect("boot shell");
+        let model = boot_shell();
         let window = cx.update(|cx| {
             let model = model.clone();
             cx.open_window(Default::default(), move |_window, cx| {
@@ -4342,7 +4397,7 @@ mod tests {
     #[gpui::test]
     fn a_multi_selection_is_pushed_and_enables_the_built_ins(cx: &mut TestAppContext) {
         let _guard = crate::PYTHON_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        let model = Shell::boot().expect("boot shell");
+        let model = boot_shell();
         let shell = cx.update(|cx| cx.new(|cx| Shell::from_model(model.clone(), cx)));
 
         // Nothing selected: Delete and Move are visible but disabled.
@@ -4391,7 +4446,7 @@ mod tests {
     #[gpui::test]
     fn a_command_dialog_validates_accepts_and_cancels(cx: &mut TestAppContext) {
         let _guard = crate::PYTHON_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        let model = Shell::boot().expect("boot shell");
+        let model = boot_shell();
         let shell = cx.update(|cx| cx.new(|cx| Shell::from_model(model.clone(), cx)));
 
         let script = r#"
@@ -4473,7 +4528,7 @@ if "Test_Dialog" not in FreeCADGui.listCommands():
     #[gpui::test]
     fn a_dialog_view_request_changes_the_view_state(cx: &mut TestAppContext) {
         let _guard = crate::PYTHON_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        let model = Shell::boot().expect("boot shell");
+        let model = boot_shell();
         // Boot first: it puts the facade on `sys.path`, which the reset needs.
         reset_grid_state();
         let shell = cx.update(|cx| cx.new(|cx| Shell::from_model(model.clone(), cx)));
@@ -4519,7 +4574,7 @@ if "Test_DialogView" not in FreeCADGui.listCommands():
     #[gpui::test]
     fn the_command_dialog_renders_and_escape_cancels(cx: &mut TestAppContext) {
         let _guard = crate::PYTHON_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        let model = Shell::boot().expect("boot shell");
+        let model = boot_shell();
         let window = cx.update(|cx| {
             let model = model.clone();
             cx.open_window(Default::default(), move |_window, cx| {
@@ -4570,7 +4625,7 @@ if "Test_DialogView" not in FreeCADGui.listCommands():
     #[gpui::test]
     fn the_move_dialog_floats_without_a_backdrop(cx: &mut TestAppContext) {
         let _guard = crate::PYTHON_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        let model = Shell::boot().expect("boot shell");
+        let model = boot_shell();
         let window = cx.update(|cx| {
             let model = model.clone();
             cx.open_window(Default::default(), move |_window, cx| {
@@ -4618,7 +4673,7 @@ if "Test_DialogView" not in FreeCADGui.listCommands():
     #[gpui::test]
     fn a_focused_floating_hud_freezes_in_place(cx: &mut TestAppContext) {
         let _guard = crate::PYTHON_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        let model = Shell::boot().expect("boot shell");
+        let model = boot_shell();
         let window = cx.update(|cx| {
             let model = model.clone();
             cx.open_window(Default::default(), move |_window, cx| {
@@ -4735,7 +4790,7 @@ if "Test_DialogView" not in FreeCADGui.listCommands():
     #[gpui::test]
     fn a_gizmo_drag_updates_the_move_fields(cx: &mut TestAppContext) {
         let _guard = crate::PYTHON_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        let model = Shell::boot().expect("boot shell");
+        let model = boot_shell();
         let window = cx.update(|cx| {
             let model = model.clone();
             cx.open_window(Default::default(), move |_window, cx| {
@@ -4790,7 +4845,7 @@ if "Test_DialogView" not in FreeCADGui.listCommands():
     #[gpui::test]
     fn a_competing_interaction_closes_the_move_hud(cx: &mut TestAppContext) {
         let _guard = crate::PYTHON_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        let model = Shell::boot().expect("boot shell");
+        let model = boot_shell();
         let window = cx.update(|cx| {
             let model = model.clone();
             cx.open_window(Default::default(), move |_window, cx| {
@@ -4822,7 +4877,7 @@ if "Test_DialogView" not in FreeCADGui.listCommands():
     #[gpui::test]
     fn a_selection_change_closes_the_move_hud(cx: &mut TestAppContext) {
         let _guard = crate::PYTHON_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        let model = Shell::boot().expect("boot shell");
+        let model = boot_shell();
         let window = cx.update(|cx| {
             let model = model.clone();
             cx.open_window(Default::default(), move |_window, cx| {
@@ -5018,7 +5073,7 @@ if "Test_FormShortcut" not in FreeCADGui.listCommands():
     #[gpui::test]
     fn a_shortcut_runs_the_command(cx: &mut TestAppContext) {
         let _guard = crate::PYTHON_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        let model = Shell::boot().expect("boot shell");
+        let model = boot_shell();
         let window = cx.update(|cx| {
             let model = model.clone();
             cx.open_window(Default::default(), move |_window, cx| {
@@ -5073,7 +5128,7 @@ if "Test_Shortcut" not in FreeCADGui.listCommands():
     #[gpui::test]
     fn a_view_request_toggles_the_grid_and_its_check_mark(cx: &mut TestAppContext) {
         let _guard = crate::PYTHON_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        let model = Shell::boot().expect("boot shell");
+        let model = boot_shell();
         // Boot first: it puts the facade on `sys.path`, which the reset needs.
         reset_grid_state();
         let shell = cx.update(|cx| cx.new(|cx| Shell::from_model(model.clone(), cx)));
@@ -5104,7 +5159,7 @@ if "Test_Shortcut" not in FreeCADGui.listCommands():
     #[gpui::test]
     fn the_axis_cross_is_toggled_separately(cx: &mut TestAppContext) {
         let _guard = crate::PYTHON_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        let model = Shell::boot().expect("boot shell");
+        let model = boot_shell();
         // Boot first: it puts the facade on `sys.path`, which the reset needs.
         reset_grid_state();
         let shell = cx.update(|cx| cx.new(|cx| Shell::from_model(model.clone(), cx)));
@@ -5128,7 +5183,7 @@ if "Test_Shortcut" not in FreeCADGui.listCommands():
     #[gpui::test]
     fn a_view_axis_request_reaches_the_state(cx: &mut TestAppContext) {
         let _guard = crate::PYTHON_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        let model = Shell::boot().expect("boot shell");
+        let model = boot_shell();
         let shell = cx.update(|cx| cx.new(|cx| Shell::from_model(model.clone(), cx)));
 
         let request: ViewRequest = serde_json::from_str(
@@ -5201,7 +5256,7 @@ if "Test_Shortcut" not in FreeCADGui.listCommands():
     #[test]
     fn a_plain_boot_supplies_no_gizmo_skin() {
         let _guard = crate::PYTHON_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        let _model = Shell::boot().expect("boot shell");
+        let _model = boot_shell();
         assert_eq!(
             crate::python::provider_skin("gizmo").expect("the provider skin bridge"),
             None
@@ -5216,7 +5271,7 @@ if "Test_Shortcut" not in FreeCADGui.listCommands():
         cx: &mut TestAppContext,
     ) {
         let _guard = crate::PYTHON_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        let model = Shell::boot().expect("boot shell");
+        let model = boot_shell();
         let window = cx.update(|cx| {
             let model = model.clone();
             cx.open_window(Default::default(), move |_window, cx| {
@@ -5276,7 +5331,7 @@ if "Test_Shortcut" not in FreeCADGui.listCommands():
     #[gpui::test]
     fn a_tool_request_resolves_by_id(cx: &mut TestAppContext) {
         let _guard = crate::PYTHON_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        let model = Shell::boot().expect("boot shell");
+        let model = boot_shell();
         let shell = cx.update(|cx| cx.new(|cx| Shell::from_model(model.clone(), cx)));
         cx.update(|cx| {
             shell.update(cx, |shell, _| {
@@ -5317,7 +5372,7 @@ if "Test_Tool" not in FreeCADGui.listCommands():
     #[gpui::test]
     fn cancelling_a_tool_clears_the_strip_and_commits_nothing(cx: &mut TestAppContext) {
         let _guard = crate::PYTHON_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        let model = Shell::boot().expect("boot shell");
+        let model = boot_shell();
         let shell = cx.update(|cx| cx.new(|cx| Shell::from_model(model.clone(), cx)));
         cx.update(|cx| {
             shell.update(cx, |shell, _| {
@@ -5357,7 +5412,7 @@ if "Test_Tool" not in FreeCADGui.listCommands():
     #[gpui::test]
     fn the_tool_strip_renders_without_a_display(cx: &mut TestAppContext) {
         let _guard = crate::PYTHON_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        let model = Shell::boot().expect("boot shell");
+        let model = boot_shell();
         let window = cx.update(|cx| {
             let model = model.clone();
             cx.open_window(Default::default(), move |_window, cx| {
@@ -5421,7 +5476,7 @@ if "Test_Tool" not in FreeCADGui.listCommands():
     #[gpui::test]
     fn the_main_window_carries_only_the_viewport_and_status(cx: &mut TestAppContext) {
         let _guard = crate::PYTHON_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        let model = Shell::boot().expect("boot shell");
+        let model = boot_shell();
         let window = cx.update(|cx| {
             let model = model.clone();
             cx.open_window(Default::default(), move |_window, cx| {
@@ -5450,7 +5505,7 @@ if "Test_Tool" not in FreeCADGui.listCommands():
     #[gpui::test]
     fn the_dev_tools_window_lists_commands_with_enablement(cx: &mut TestAppContext) {
         let _guard = crate::PYTHON_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        let model = Shell::boot().expect("boot shell");
+        let model = boot_shell();
         let window = cx.update(|cx| {
             let model = model.clone();
             cx.open_window(Default::default(), move |_window, cx| {
@@ -5556,7 +5611,7 @@ for group in legacy:
     #[gpui::test]
     fn toggling_dev_tools_preserves_the_model(cx: &mut TestAppContext) {
         let _guard = crate::PYTHON_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        let model = Shell::boot().expect("boot shell");
+        let model = boot_shell();
         let window = cx.update(|cx| {
             let model = model.clone();
             cx.open_window(Default::default(), move |_window, cx| {
@@ -5621,7 +5676,7 @@ for group in legacy:
     #[gpui::test]
     fn the_dev_tools_providers_panel_switches_a_backend(cx: &mut TestAppContext) {
         let _guard = crate::PYTHON_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        let model = Shell::boot().expect("boot shell");
+        let model = boot_shell();
         reset_grid_state();
         let window = cx.update(|cx| {
             let model = model.clone();
@@ -5696,7 +5751,7 @@ for group in legacy:
     #[gpui::test]
     fn the_dev_tools_gpu_panel_marks_the_active_row(cx: &mut TestAppContext) {
         let _guard = crate::PYTHON_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        let model = Shell::boot().expect("boot shell");
+        let model = boot_shell();
         let window = cx.update(|cx| {
             let model = model.clone();
             cx.open_window(Default::default(), move |_window, cx| {
@@ -5754,7 +5809,7 @@ for group in legacy:
     #[gpui::test]
     fn an_unknown_gpu_setting_falls_back_to_auto(cx: &mut TestAppContext) {
         let _guard = crate::PYTHON_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        let model = Shell::boot().expect("boot shell");
+        let model = boot_shell();
         write_gpu_preference("not-a-real-form");
         let window = cx.update(|cx| {
             let model = model.clone();
@@ -5789,7 +5844,7 @@ for group in legacy:
     #[gpui::test]
     fn a_gpu_panel_row_persists_the_choice(cx: &mut TestAppContext) {
         let _guard = crate::PYTHON_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        let model = Shell::boot().expect("boot shell");
+        let model = boot_shell();
         let adapters = ferrocad_wgpu::adapter::adapters();
         let Some(adapter) = adapters.first() else {
             return;
@@ -5828,7 +5883,7 @@ for group in legacy:
     #[gpui::test]
     fn the_dev_tools_command_has_a_headless_status(_cx: &mut TestAppContext) {
         let _guard = crate::PYTHON_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        let model = Shell::boot().expect("boot shell");
+        let model = boot_shell();
         drop(model);
 
         let outcome = crate::commands::run(crate::dev_tools::TOGGLE_COMMAND).expect("the bridge");
@@ -5867,7 +5922,7 @@ for group in legacy:
     #[gpui::test]
     fn every_registered_command_lands_on_exactly_one_surface(_cx: &mut TestAppContext) {
         let _guard = crate::PYTHON_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        let _model = Shell::boot().expect("boot shell");
+        let _model = boot_shell();
 
         // A mod that predates the metadata must still appear, on the dock.
         let script = r#"
@@ -5931,7 +5986,7 @@ if "Test_Unannotated" not in FreeCADGui.listCommands():
     #[gpui::test]
     fn the_grid_split_button_runs_the_label_and_the_caret_opens(cx: &mut TestAppContext) {
         let _guard = crate::PYTHON_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        let model = Shell::boot().expect("boot shell");
+        let model = boot_shell();
         // Boot first: it puts the facade on `sys.path`, which the reset needs.
         reset_grid_state();
         let window = cx.update(|cx| {
@@ -6117,7 +6172,7 @@ if "Test_Unannotated" not in FreeCADGui.listCommands():
     #[gpui::test]
     fn the_axis_split_button_runs_the_label_and_the_caret_opens(cx: &mut TestAppContext) {
         let _guard = crate::PYTHON_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        let model = Shell::boot().expect("boot shell");
+        let model = boot_shell();
         // Boot first: it puts the facade on `sys.path`, which the reset needs.
         reset_grid_state();
         let window = cx.update(|cx| {
@@ -6258,7 +6313,7 @@ if "App_ReloadAxisSettings" not in FreeCADGui.listCommands():
     #[gpui::test]
     fn the_snap_control_lives_in_the_header_and_not_the_dock(cx: &mut TestAppContext) {
         let _guard = crate::PYTHON_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        let model = Shell::boot().expect("boot shell");
+        let model = boot_shell();
         reset_grid_state();
         let window = cx.update(|cx| {
             let model = model.clone();
@@ -6399,7 +6454,7 @@ if "App_ReloadAxisSettings" not in FreeCADGui.listCommands():
     #[gpui::test]
     fn a_one_shot_popover_row_still_closes_the_menu(cx: &mut TestAppContext) {
         let _guard = crate::PYTHON_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        let model = Shell::boot().expect("boot shell");
+        let model = boot_shell();
         reset_grid_state();
         let window = cx.update(|cx| {
             let model = model.clone();
@@ -6446,7 +6501,7 @@ if "App_ReloadAxisSettings" not in FreeCADGui.listCommands():
         cx: &mut TestAppContext,
     ) {
         let _guard = crate::PYTHON_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        let model = Shell::boot().expect("boot shell");
+        let model = boot_shell();
         let window = cx.update(|cx| {
             let model = model.clone();
             cx.open_window(Default::default(), move |_window, cx| {
@@ -6495,7 +6550,7 @@ if "App_ReloadAxisSettings" not in FreeCADGui.listCommands():
     #[gpui::test]
     fn the_grid_popover_reports_the_active_provider_and_spacing(cx: &mut TestAppContext) {
         let _guard = crate::PYTHON_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        let model = Shell::boot().expect("boot shell");
+        let model = boot_shell();
         // Boot first: it puts the facade on `sys.path`, which the reset needs.
         reset_grid_state();
         let window = cx.update(|cx| {
@@ -6595,7 +6650,7 @@ if "App_ReloadAxisSettings" not in FreeCADGui.listCommands():
     #[gpui::test]
     fn provider_rows_switch_the_active_backend(cx: &mut TestAppContext) {
         let _guard = crate::PYTHON_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        let model = Shell::boot().expect("boot shell");
+        let model = boot_shell();
         // Boot first: it puts the facade on `sys.path`, which the reset needs.
         reset_grid_state();
         let window = cx.update(|cx| {
@@ -6608,6 +6663,18 @@ if "App_ReloadAxisSettings" not in FreeCADGui.listCommands():
         let mut cx = VisualTestContext::from_window(window.into(), cx);
         let shell: Entity<Shell> = window.root(&mut cx).unwrap();
         draw(&mut cx);
+
+        // The feature owns the switch: turn the grid on explicitly. A provider hook
+        // selects an implementation and claims the drawing; it must not change
+        // visibility, so the overlay assertion below is about drawing, not enabling.
+        cx.update(|_window, cx| {
+            shell.update(cx, |shell, cx| shell.run_command("App_ToggleGrid", cx))
+        });
+        draw(&mut cx);
+        assert!(
+            model.lock().unwrap().view.grid,
+            "the grid is on before the provider switch"
+        );
 
         // Grid: the Coin row switches the backend and closes the menu.
         click_at(&mut cx, "grid-caret");
@@ -6644,7 +6711,11 @@ if "App_ReloadAxisSettings" not in FreeCADGui.listCommands():
             );
             assert!(
                 m.view.grid_overlay,
-                "the returned view request was applied"
+                "the provider's overlay claim was applied"
+            );
+            assert!(
+                m.view.grid,
+                "switching a provider must not change the visibility switch"
             );
         }
 
@@ -6701,7 +6772,7 @@ if "App_ReloadAxisSettings" not in FreeCADGui.listCommands():
     #[gpui::test]
     fn view_grid_settings_selects_the_settings_node(cx: &mut TestAppContext) {
         let _guard = crate::PYTHON_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        let model = Shell::boot().expect("boot shell");
+        let model = boot_shell();
         // Boot first: it puts the facade on `sys.path`, which the reset needs.
         reset_grid_state();
         // The command returns the directive; `FreeCADGui._payload` must forward it.
@@ -6825,7 +6896,7 @@ if "App_ReloadAxisSettings" not in FreeCADGui.listCommands():
     #[gpui::test]
     fn clicking_a_settings_field_keeps_the_card_open(cx: &mut TestAppContext) {
         let _guard = crate::PYTHON_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        let model = Shell::boot().expect("boot shell");
+        let model = boot_shell();
         reset_grid_state();
         let window = cx.update(|cx| {
             let model = model.clone();
@@ -6880,7 +6951,7 @@ if "App_ReloadAxisSettings" not in FreeCADGui.listCommands():
     #[gpui::test]
     fn editing_a_settings_row_updates_the_properties(cx: &mut TestAppContext) {
         let _guard = crate::PYTHON_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        let model = Shell::boot().expect("boot shell");
+        let model = boot_shell();
         // Boot first: it puts the facade on `sys.path`, which the reset needs.
         reset_grid_state();
         let window = cx.update(|cx| {
@@ -6951,7 +7022,7 @@ if "App_ReloadAxisSettings" not in FreeCADGui.listCommands():
     #[gpui::test]
     fn the_app_menu_opens_dev_tools(cx: &mut TestAppContext) {
         let _guard = crate::PYTHON_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        let model = Shell::boot().expect("boot shell");
+        let model = boot_shell();
         let window = cx.update(|cx| {
             let model = model.clone();
             cx.open_window(Default::default(), move |_window, cx| {
@@ -7064,7 +7135,7 @@ if "App_ReloadAxisSettings" not in FreeCADGui.listCommands():
     #[gpui::test]
     fn the_action_dock_follows_the_selection(cx: &mut TestAppContext) {
         let _guard = crate::PYTHON_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        let model = Shell::boot().expect("boot shell");
+        let model = boot_shell();
         let window = cx.update(|cx| {
             let model = model.clone();
             cx.open_window(Default::default(), move |_window, cx| {
@@ -7159,7 +7230,7 @@ if "App_ReloadAxisSettings" not in FreeCADGui.listCommands():
     #[gpui::test]
     fn the_radial_gesture_opens_hovers_and_runs(cx: &mut TestAppContext) {
         let _guard = crate::PYTHON_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        let model = Shell::boot().expect("boot shell");
+        let model = boot_shell();
         // A safe verb so the gesture test never deletes the shared sample document.
         let script = r#"
 import FreeCADGui
@@ -7293,7 +7364,7 @@ if "Test_RadialProbe" not in FreeCADGui.listCommands():
     #[gpui::test]
     fn space_opens_a_latched_wheel_and_commits(cx: &mut TestAppContext) {
         let _guard = crate::PYTHON_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        let model = Shell::boot().expect("boot shell");
+        let model = boot_shell();
         let script = r#"
 import FreeCADGui
 class _SpaceProbe:
@@ -7379,7 +7450,7 @@ if "Test_SpaceProbe" not in FreeCADGui.listCommands():
     fn palette_window(
         cx: &mut TestAppContext,
     ) -> (VisualTestContext, Entity<Shell>, Arc<Mutex<ShellModel>>) {
-        let model = Shell::boot().expect("boot shell");
+        let model = boot_shell();
         let window = cx.update(|cx| {
             let model = model.clone();
             cx.open_window(Default::default(), move |_window, cx| {
@@ -7626,7 +7697,7 @@ if "Test_SpaceProbe" not in FreeCADGui.listCommands():
     #[gpui::test]
     fn a_grid_request_reaches_the_viewport(cx: &mut TestAppContext) {
         let _guard = crate::PYTHON_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        let model = Shell::boot().expect("boot shell");
+        let model = boot_shell();
         // Boot first: it puts the facade on `sys.path`, which the reset needs.
         reset_grid_state();
         let window = cx.update(|cx| {
@@ -7681,7 +7752,7 @@ if "Test_SpaceProbe" not in FreeCADGui.listCommands():
     #[gpui::test]
     fn a_grid_settings_request_reaches_the_viewport(cx: &mut TestAppContext) {
         let _guard = crate::PYTHON_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        let model = Shell::boot().expect("boot shell");
+        let model = boot_shell();
         // Boot first: it puts the facade on `sys.path`, which the reset needs.
         reset_grid_state();
         let window = cx.update(|cx| {
@@ -7740,7 +7811,7 @@ grid.radius = 750.0
     #[gpui::test]
     fn a_workplane_request_needs_a_viewport(cx: &mut TestAppContext) {
         let _guard = crate::PYTHON_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        let model = Shell::boot().expect("boot shell");
+        let model = boot_shell();
         let shell = cx.update(|cx| cx.new(|cx| Shell::from_model(model.clone(), cx)));
 
         cx.update(|cx| {

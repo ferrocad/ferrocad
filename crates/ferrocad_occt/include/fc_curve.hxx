@@ -327,7 +327,7 @@ inline std::unique_ptr<Handle_Geom_Curve> fc_bspline_from_poles(rust::Slice<cons
     }
     Handle(Geom_BSplineCurve) curve =
         new Geom_BSplineCurve(poles, knots, multiplicities, degree, Standard_False);
-    return std::unique_ptr<Handle_Geom_Curve>(new Handle(Geom_Curve)(curve));
+    return std::unique_ptr<Handle_Geom_Curve>(new Handle_Geom_Curve(curve));
   }
   catch (...) {
     return nullptr;

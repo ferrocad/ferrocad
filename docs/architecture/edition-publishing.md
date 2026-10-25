@@ -142,17 +142,27 @@ base and edition jobs. Because macOS is blocked and the **Windows leg does not
 build**, a `v*` tag yields **three** artifacts (two base, one parametric), not
 six.
 
-**Windows is blocked in `opencascade-sys`.** The first `v0.1.4` run got through
-the OCCT fetch and into `cargo build -p ferrocad_parametric` on `windows-latest`,
-where `opencascade-sys 0.3.0`'s cxx bridge fails with C2440 in `b_rep.hxx`
-(`opencascade::handle<Geom_Surface>*` and friends cannot be passed to
-`std::unique_ptr<Handle_Geom_Surface>`), on VS 18 / MSVC 14.51. The cause is that
-OCCT's `DEFINE_STANDARD_HANDLE` makes `Handle_T` a **derived class** on MSVC
-(for C++/CLI export) and a typedef on GCC/Clang, while the crate's bridge
-allocates the base `opencascade::handle<T>`. `third_party/opencascade-sys` is a
-vendored copy with the 17 affected allocations constructing `new Handle_T(…)`
-(the crate's own idiom elsewhere), pinned through `[patch.crates-io]`; it
-compiles on Linux and against a reproducer that defines the MSVC macro body.
+**Windows is blocked in the OCCT bridge.** The first `v0.1.4` run got through the
+OCCT fetch and into `cargo build -p ferrocad_parametric` on `windows-latest`,
+where `opencascade-sys 0.3.0`'s cxx bridge fails with C2440. The cause is that
+OCCT's `DEFINE_STANDARD_HANDLE` makes `Handle_T` a **derived class** on MSVC (for
+C++/CLI export) while `Handle(C)` stays `opencascade::handle<C>`, so the two are
+distinct types there and identical on GCC/Clang.
+
+Two instances, one fixed:
+
+- `third_party/opencascade-sys` patches 17 allocations in six headers to construct
+  `new Handle_T(…)` instead of `new opencascade::handle<T>(…)` (valid under both
+  definitions, and the crate's own idiom elsewhere). `fc_curve.hxx` in this
+  workspace had the same pattern once and is fixed in place.
+- **Open:** cxx's `#[Self = "Type"]` shims take the member's address first
+  (`void (*f)(const TopoDS_Face&, const Handle_Poly_Triangulation&) =
+  &::BRepLib_ToolTriangulatedShape::ComputeNormals;`), so they only resolve when
+  the bridge's `Handle_T` is OCCT's `Handle(T)`. Every such binding whose
+  signature mentions a handle fails on MSVC with `cannot convert from
+  'overloaded-function'`. The candidate fixes (force OCCT's compatibility
+  typedef in the bridge translation units; wrap the affected functions as free
+  functions; report upstream) are listed in the TODO backlog.
 
 Until a real `windows-latest` run is green, the edition matrix stays Linux-only.
 `.github/workflows/edition-windows.yml` is the manual check

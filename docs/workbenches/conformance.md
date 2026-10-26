@@ -120,12 +120,19 @@ python3 tools/conformance.py --root ../freecad-upstream --list
 # The Part group: through the one image that links Part + FreeCAD
 FERROCAD_UPSTREAM=$PWD/../freecad-upstream \
   cargo test -p ferrocad_part_py --test part_conformance -- --nocapture
+
+# SimpleCAD: the same image, plus Mesh and MeshPart
+FERROCAD_SIMPLECAD=$PWD/../simplecad \
+  cargo test -p ferrocad_part_py --test simplecad_conformance -- --nocapture
 ```
 
 `tools/conformance.py --part` also exists, but only an image that links both modules
 can run it; the cargo test supplies that image and calls the harness in-process. The
 test is **skipped** when `FERROCAD_UPSTREAM` is unset, so ordinary `cargo test` stays
-hermetic.
+hermetic. `simplecad_conformance` is the same pattern: it boots `ferrocad`, `Part`,
+`Mesh` and `MeshPart` in one process, resolves the checkout from `SIMPLECAD_DIR`,
+`FERROCAD_SIMPLECAD` or `../simplecad`, and skips when there is none.
+`FERROCAD_SIMPLECAD_FILES="test_mesh_slicing …"` narrows a run.
 
 ---
 
@@ -214,7 +221,8 @@ kernel. The surface and its gaps are in [`draft-tools.md`](draft-tools.md).
 - The `headless` CI job builds `python/ferrocad.abi3.so` and runs the Python tests, but
   it does **not** clone upstream: conformance is a local measurement, because the
   numbers move with upstream and are not yet a gate.
-- `part_conformance` self-skips without `FERROCAD_UPSTREAM`.
+- `part_conformance` self-skips without `FERROCAD_UPSTREAM`; `simplecad_conformance`
+  self-skips without the SimpleCAD checkout.
 - If we later want a tracked number, a scheduled job can clone the sparse tree at a
   pinned tag and publish the report. That is not in place.
 

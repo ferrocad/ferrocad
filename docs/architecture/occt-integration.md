@@ -264,9 +264,10 @@ The extraction is a refactor with its own tests, so it lands in stages:
     `FerroCAD.display_mesh`/`FerroCAD.interaction` providers (`architecture.md` §9), so
     `ferrocad_shell` names no workbench. The Part edition's app script
     (`python/ferrocad_parametric`, selected with `run_edition_with`) imports `Part`,
-    registers the hooks (the tessellation via `Part.Shape.mesh` and the feature edit as
-    one transaction) and seeds the demo solid. The Rust-side manipulator is
-    `ferrocad_part_gui::fillet_manipulator`, contributed through
+    registers the hooks (the tessellation via `Part.Shape.mesh`, the upstream-shaped
+    `Part.Shape.tessellate` for `Mesh`/SimpleCAD, and the feature edit as
+    one transaction) and seeds the demo solid. The Rust-side manipulators are
+    `ferrocad_part_gui::fillet_manipulator` and `push_pull_manipulator`, contributed through
     `Contributions`; `ferrocad_gpui` maps a picked entity to the object and applies the
     neutral commit through the script's `interaction` hook. The shell still links no
     kernel (`ferrocad_part`/OCCT remain Python-side), and the base app links neither.

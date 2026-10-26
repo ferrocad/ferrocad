@@ -693,7 +693,53 @@ Acceptance:
   `FERROCAD_SIMPLECAD` is unset, mirroring `FERROCAD_UPSTREAM`.
 - No file under `../simplecad` is modified.
 
-#### S1 baseline — 2026-10-26
+#### S1 baseline — 2026-10-26, the Part + Mesh image
+
+Measured **in the application image** rather than the bare extension: the
+`simplecad_conformance` Rust test boots `ferrocad`, `Part`, `Mesh` and `MeshPart`
+as built-in modules in one process and runs `tools/conformance.py --simplecad`
+in-process (the same pattern as `part_conformance`). That is the image that
+matters: `import Part`, `import Mesh` and `import FreeCAD` see one core.
+
+| Item | Value |
+| --- | --- |
+| Command | `FERROCAD_SIMPLECAD=$PWD/../simplecad cargo test -p ferrocad_part_py --test simplecad_conformance -- --nocapture` |
+| SimpleCAD | `9180c4b` — 0.38.0 |
+| Modules attempted | **88** |
+| Modules loaded | **88** |
+| Load errors | **0** |
+| Test outcomes | **312 passed, 28 failed, 740 errored, 2 skipped** |
+| Harness exceptions | **0** |
+
+The ten `Mesh` modules now load and run:
+
+| Module | pass | fail | error |
+| --- | ---: | ---: | ---: |
+| `test_analytic` | 2 | 0 | 12 |
+| `test_clipboard` | 1 | 0 | 4 |
+| `test_idle_work` | 8 | 1 | 6 |
+| `test_mesh_conversion` | 1 | 0 | 9 |
+| `test_mesh_glue` | 1 | 0 | 5 |
+| `test_mesh_slicing` | 0 | 1 | 9 |
+| `test_mesh_stretch` | 4 | 0 | 1 |
+| `test_mesh_surfaces` | 1 | 0 | 6 |
+| `test_precision` | 5 | 1 | 5 |
+| `test_surface_wrap` | 4 | 0 | 25 |
+
+What loads but still errors is **per-test API**, not a module boundary. The dominant
+non-Mesh gaps are `Shape.copy()` (upstream is a deep B-Rep copy; ours is a handle
+copy), `PartShape.__hash__/__eq__`, `BoundBox.DiagonalLength`,
+`App.Placement(other)` copy construction, `Wire.OrderedVertexes`,
+`Shape.isClosed`, `sewShape`, `distToShape`, `getTolerance`,
+`importBrepFromString`, `Part.valueAt`, and rebaking a document object's
+`Placement` into `Shape`. The Mesh-side failures are mostly the same Part gaps
+reached through `planar.py`/`curved.py`; `test_mesh_collisions` also has one
+agreement failure (7 vs 8.55) from our self-intersection detector.
+
+The bare-image baseline below is kept for comparison: it is what a `.so`-only
+checkout (no `Part`, no `Mesh`) measures.
+
+#### S1 baseline — 2026-10-26, the bare image
 
 Measured on the **bare `python/` extension image**, not the Part-linked edition:
 `python/ferrocad.abi3.so` (FreeCAD `0.1.4`, `rust-fc`) plus the `python/` facade,
@@ -987,10 +1033,10 @@ kernel is ready.
 
 ## 9. Open questions and what could not be verified
 
-1. **The Part-linked baseline is still missing.** S1 ran the harness on the bare
-   `python/` image on 2026-10-26 (§7): 71 of 88 modules failed to load (`Part` 61,
-   `Mesh` 10), so the S2/S3 “target” percentages remain estimates. The Part-linked
-   image and its run are still to come.
+1. **The S1 image exists; the S2 numbers do not.** The Part + Mesh image loads
+   all 88 modules (§7, 2026-10-26) and measures **312 passed, 28 failed, 740
+errored, 2 skipped**. The remaining work is per-test Part API, and the S2/S3
+   “target” percentages stay estimates until those run green.
 2. **Network was unavailable.** SimpleCAD could not be re-cloned, updated, or
    inspected beyond the local `--depth 1` checkout; no dependency was installed.
 3. **Release cadence is not measurable.** The SimpleCAD clone has one commit. The

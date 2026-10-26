@@ -22,13 +22,15 @@ obvious:
 | `ferrocad_lineage` | `rlib` | The kernel-independent lineage vocabulary: `ElementRef`/`History`/`ElementMap`, `Lineage`/`ReverseMap`/`MapVersion`/`NamePolicy`, generic over the payload. No geometry, no document, no OCCT. |
 | `ferrocad_occt` | `rlib` | The OCCT implementation of `GeometryBackend` (box/fuse/cut/fillet/place), via `opencascade-sys` + the sibling history bridge. Needs OCCT to build; **not** a default member. |
 | `ferrocad_core` | `rlib` | The pure-Rust engine: documents, properties, DAG, transactions, observers, expressions. No Python, no UI, no OCCT. Depends on `ferrocad_types` (and re-exports it). A **leaf** wrt the kernel. |
+| `ferrocad_mesh` | `rlib` | The Mesh workbench core: the `Mesh` payload (points, facets, placement), STL, area/volume/component/planar/intersection/boundary operations, `Mesh::PropertyMeshKernel` and `Mesh::Feature`. No OCCT, no Python. |
 | `ferrocad_py` | `cdylib` | The PyO3 extension, importable as the module `ferrocad`. The only bridge into `ferrocad_core`. |
+| `ferrocad_mesh_py` | `cdylib` | The `Mesh` and `MeshPart` Python modules over `ferrocad_mesh`. `MeshPart` reaches `Part` through Python (`tessellate`, `makePolygon`), so this crate does not link the kernel. |
 | `ferrocad_widgets` | `rlib` | Reusable `bite-gpui` widgets: window chrome, the text field/area, the domain-free `menu` (popover rows, status dots, hover, dividers), and the radial `wheel` (a custom-painted torus with pure wedge hit-testing, plus the `WheelMenu` sidecar that owns the armed/latched gesture and its overlay). Depends on `ferrocad_theme` and `bite-gpui`; on **neither** `ferrocad_core` nor `ferrocad_py`. |
 | `ferrocad_ui` | `rlib` | The Qt Designer `.ui` reader (Q1): a typed form tree with source positions, no Qt, no Python and no rendering. **Not** the widget kit (that is `ferrocad_widgets`). |
 | `ferrocad_ui_py` | `cdylib` | The PyO3 proxy layer over `ferrocad_ui`: `FreeCADGui.PySideUic.loadUi` and its form/widget/signal proxies. No Qt, no rendering. |
 | `ferrocad_inventor` | `rlib` | The Coin/Inventor scene core: node AST, state accumulator, mesh compiler, events. Renderer-agnostic; re-exports `ferrocad_graphics`. |
 | `ferrocad_stage` | `rlib` | The modern declarative CAD presentation: `ShapeItem`s on a `Stage`, interactive tools, the `TransformGizmo`, and the `Manipulator`/`InteractionCommit` seam a **workbench** implements to add its own draggable overlay. All compiled straight to `ferrocad_graphics` (no scene graph, no arena). Consumes `ferrocad_geom`'s tessellation vocabulary. Workbench-agnostic: it names no kernel, no document and no module. **Decoupled from `ferrocad_inventor`.** |
-| `ferrocad_part_gui` | `rlib` | The Part workbench's **presentation**: the edge dress-up manipulator (`DressUpScrubber`), its arc math and the `dress_up_scrubber_for`/`fillet_manipulator` factory. Implements `ferrocad_stage::Manipulator`. **No kernel, no document, no `pyo3`, no OCCT.** Linked only by an edition that has Part. |
+| `ferrocad_part_gui` | `rlib` | The Part workbench's **presentation**: the edge dress-up manipulator (`DressUpScrubber`) and the planar-face push/pull stem (`PushPullStem`), with their factories. Implements `ferrocad_stage::Manipulator`. **No kernel, no document, no `pyo3`, no OCCT.** Linked only by an edition that has Part. |
 | `ferrocad_wgpu` | `rlib` | The wgpu backend: consumes `ferrocad_graphics` draw batches (pipelines, uniforms, MSAA, offscreen target, readback). |
 | `ferrocad_inventor_py` | `cdylib` | The `pivy.coin` facade (scaffolding) over `ferrocad_inventor`. |
 | `ferrocad_stage_py` | `cdylib` | The `ferrocad.stage` facade over `ferrocad_stage` (the modern stack's Python surface). |
@@ -173,6 +175,8 @@ ferrocad_geom      -> ferrocad_types, ferrocad_curves,
                       ferrocad_lineage
                                                      [seam: Shape, History, GeometryBackend;
                                                      `make_edge`/`curve_of` cross into curves]
+ferrocad_mesh      -> ferrocad_core, ferrocad_types   [mesh payload, STL, operations,
+                                                     Mesh::Feature; no OCCT, no Python]
 ferrocad_lineage   -> (no workspace deps)             [name, history, map, policy]
 ferrocad_ui        -> roxmltree                        [.ui reader; no Qt, no gpui]
 ferrocad_ui_py     -> ferrocad_ui, pyo3                 [PySideUic proxies; no Qt]
@@ -206,7 +210,8 @@ ferrocad_gpui      -> ferrocad_widgets, ferrocad_viewport,
 ferrocad           -> ferrocad_gpui, ferrocad_py     [base app: links the module in, embeds payload]
                                                      [run_edition: an edition's app script]
 ferrocad_parametric -> ferrocad, ferrocad_part_py,
-                       ferrocad_part_gui             [the edition registers Part's manipulator]
+                       ferrocad_mesh_py,
+                       ferrocad_part_gui             [the edition registers Part and Mesh]
 ferrocad_toy       -> ferrocad, ferrocad_gpui, ferrocad_stage,
                       ferrocad_geom, ferrocad_graphics,
                       ferrocad_types                 [kernel-free edition + testbed]

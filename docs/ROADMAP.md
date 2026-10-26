@@ -66,8 +66,14 @@ needs Qt for its non-GUI behaviour.
 
 ### H3 — Proof by use (then)
 
-- **SimpleCAD S1–S5.** A second consumer as the proving ground: run its suite against a
-  Part/pivy image, classify every module, and grow the shared kernel where it hurts.
+- **SimpleCAD S1–S2 — the image is in.** The Mesh track landed 2026-10-26:
+  `ferrocad_mesh` (payload, STL, operations, `Mesh::Feature`), `ferrocad_mesh_py`
+  (`Mesh`, `MeshPart`), `Part.Shape.tessellate`, `BOPTools.SplitAPI` and the
+  import-time PySide surface. All **88/88** SimpleCAD unit modules load in one
+  in-process `ferrocad` + `Part` + `Mesh` image; **312 pass, 28 fail, 740 error,
+  2 skip**. What remains is per-test Part API (deep `Shape.copy()`,
+  `PartShape.__hash__/__eq__`, `BoundBox.DiagonalLength`, `Wire.OrderedVertexes`,
+  `sewShape`, `distToShape`, `Shape.isClosed`, …), then S2.
 - **Publish the edition.** The `Parametric` artifact (OCCT closure, launcher, release
   matrix) and the Diátaxis book as a release artifact.
 - **BIM headless subset.** The `Arch`/BIM modules that do not need a GUI.

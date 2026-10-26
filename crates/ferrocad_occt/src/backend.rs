@@ -1650,6 +1650,46 @@ impl GeometryBackend for OcctBackend {
         })
     }
 
+    fn center_of_mass(&self, shape: &Shape) -> Option<Vector3> {
+        let occt = downcast(shape).ok()?;
+        let guard = occt.borrow();
+        let inner = guard.as_ref()?;
+        if inner.ShapeType() == TopAbs_ShapeEnum::TopAbs_VERTEX {
+            let pnt = ffi::b_rep::BRep_Tool_Pnt(bridge::fc_shape_as_vertex(inner));
+            return Some(Vector3::new(pnt.X(), pnt.Y(), pnt.Z()));
+        }
+        let mut props = ffi::g_prop::GProps_new();
+        match inner.ShapeType() {
+            TopAbs_ShapeEnum::TopAbs_EDGE | TopAbs_ShapeEnum::TopAbs_WIRE => {
+                ffi::b_rep_g_prop::BRepGProp::LinearProperties(
+                    inner,
+                    props.pin_mut(),
+                    false,
+                    false,
+                );
+            }
+            TopAbs_ShapeEnum::TopAbs_FACE | TopAbs_ShapeEnum::TopAbs_SHELL => {
+                ffi::b_rep_g_prop::BRepGProp::SurfaceProperties(
+                    inner,
+                    props.pin_mut(),
+                    false,
+                    false,
+                );
+            }
+            _ => {
+                ffi::b_rep_g_prop::BRepGProp::VolumeProperties(
+                    inner,
+                    props.pin_mut(),
+                    false,
+                    false,
+                    false,
+                );
+            }
+        }
+        let centre = ffi::g_prop::GProp_GProps_CentreOfMass(&props);
+        Some(Vector3::new(centre.X(), centre.Y(), centre.Z()))
+    }
+
     fn is_valid(&self, shape: &Shape) -> bool {
         let Ok(occt) = downcast(shape) else {
             return false;
@@ -2249,6 +2289,31 @@ impl GeometryBackend for OcctBackend {
         })
     }
 
+    fn bspline_surface_face(&self, rows: &[Vec<Vector3>]) -> Result<Shape, GeomError> {
+        let nx = rows.len();
+        let ny = rows.first().map(Vec::len).unwrap_or(0);
+        if nx < 2 || ny < 2 || rows.iter().any(|row| row.len() != ny) {
+            return Err(OcctError::InvalidInput {
+                what: "a B-spline surface needs a rectangular grid of at least two by two points",
+            }
+            .into());
+        }
+        let mut coordinates = Vec::with_capacity(nx * ny * 3);
+        for row in rows {
+            for point in row {
+                coordinates.extend_from_slice(&[point.x, point.y, point.z]);
+            }
+        }
+        let face = bridge::fc_bspline_surface_face(&coordinates, nx as i32, ny as i32);
+        let Some(face) = face.as_ref() else {
+            return Err(OcctError::NotDone {
+                operation: "bspline_surface_face",
+            }
+            .into());
+        };
+        Ok(erase(face))
+    }
+
     fn is_equal(&self, a: &Shape, b: &Shape) -> Result<bool, GeomError> {
         let a_occt = downcast(a)?;
         let b_occt = downcast(b)?;
@@ -2315,6 +2380,34 @@ impl GeometryBackend for OcctBackend {
             .into());
         };
         Ok(erase(reversed))
+    }
+
+    fn with_orientation(&self, shape: &Shape, orientation: &str) -> Result<Shape, GeomError> {
+        let occt = downcast(shape)?;
+        let guard = occt.borrow();
+        let inner = guard
+            .as_ref()
+            .ok_or(OcctError::InvalidInput { what: "null shape" })?;
+        let value = match orientation {
+            "Forward" => 0,
+            "Reversed" => 1,
+            "Internal" => 2,
+            "External" => 3,
+            _ => {
+                return Err(OcctError::InvalidInput {
+                    what: "an orientation is Forward, Reversed, Internal or External",
+                }
+                .into());
+            }
+        };
+        let oriented = bridge::fc_with_orientation(inner, value);
+        let Some(oriented) = oriented.as_ref() else {
+            return Err(OcctError::NotDone {
+                operation: "with_orientation",
+            }
+            .into());
+        };
+        Ok(erase(oriented))
     }
 
     fn remove_shapes(&self, shape: &Shape, shapes: &[Shape]) -> Result<Shape, GeomError> {

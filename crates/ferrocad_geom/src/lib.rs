@@ -814,6 +814,14 @@ pub trait GeometryBackend: Send + Sync {
         Err(unsupported("to_nurbs"))
     }
 
+    /// A copy of `shape` with a new orientation (`Shape.Orientation = …`).
+    ///
+    /// The accepted names are FreeCAD's: `"Forward"`, `"Reversed"`, `"Internal"`
+    /// and `"External"`. The default reports the operation as unsupported.
+    fn with_orientation(&self, _shape: &Shape, _orientation: &str) -> Result<Shape, GeomError> {
+        Err(unsupported("with_orientation"))
+    }
+
     /// The sub-shapes of an arbitrary OCCT shape type (`"Compound"`,
     /// `"CompSolid"`), in kernel order, as the `TopExp::MapShapes` walk visits
     /// them.
@@ -958,6 +966,17 @@ pub trait GeometryBackend: Send + Sync {
     /// `CenterOfMass`). A backend that cannot measure the shape reports `None`.
     fn mass_properties(&self, _shape: &Shape) -> Option<MassProperties> {
         None
+    }
+
+    /// The centre of mass in the property regime that matches the shape type
+    /// (`Shape.CenterOfMass`): volume for a solid, surface for a face or shell,
+    /// linear for an edge or wire, and the point for a vertex.
+    ///
+    /// The default uses [`mass_properties`](Self::mass_properties), which is the
+    /// volume regime.
+    fn center_of_mass(&self, shape: &Shape) -> Option<Vector3> {
+        self.mass_properties(shape)
+            .map(|mass| mass.center_of_mass)
     }
 
     /// The first moments of volume `(lx, ly, lz)` (`Shape.StaticMoments`),
@@ -1236,6 +1255,14 @@ pub trait GeometryBackend: Send + Sync {
         _rows: &[Vec<Vector3>],
     ) -> Result<BsplineSurfaceData, GeomError> {
         Err(unsupported("bspline_surface_interpolate"))
+    }
+
+    /// The face of the interpolating B-spline surface through `rows`
+    /// (`BSplineSurface.toShape`).
+    ///
+    /// The default reports the operation as unsupported.
+    fn bspline_surface_face(&self, _rows: &[Vec<Vector3>]) -> Result<Shape, GeomError> {
+        Err(unsupported("bspline_surface_face"))
     }
 
     /// The 3D point of a face at surface parameters `(u, v)` (`Face.valueAt`,

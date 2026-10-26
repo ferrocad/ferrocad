@@ -469,6 +469,17 @@ mod ffi {
         /// grid of points; the bounds and expanded knot sequences, or empty.
         fn fc_bspline_surface_interpolate(coords: &[f64], nx: i32, ny: i32) -> Vec<f64>;
 
+        /// The face of the interpolating B-spline surface through the grid, or null
+        /// (`BSplineSurface.toShape`).
+        fn fc_bspline_surface_face(coords: &[f64], nx: i32, ny: i32)
+            -> UniquePtr<TopoDS_Shape>;
+
+        /// A copy of the shape with a numeric `TopAbs_Orientation`, or null.
+        fn fc_with_orientation(
+            shape: &TopoDS_Shape,
+            orientation: i32,
+        ) -> UniquePtr<TopoDS_Shape>;
+
         /// The sub-shapes of a numeric `TopAbs_ShapeEnum` as a compound
         /// (`TopExp::MapShapes`), or null.
         fn fc_shape_sub_shapes_of_type(shape: &TopoDS_Shape, kind: i32) -> UniquePtr<TopoDS_Shape>;

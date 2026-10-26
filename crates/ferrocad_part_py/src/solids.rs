@@ -1588,6 +1588,9 @@ pub struct PyBSplineSurface {
     /// interpolated surface); `None` derives them from the knot vectors.
     u_bounds: Option<(f64, f64)>,
     v_bounds: Option<(f64, f64)>,
+    /// The interpolation grid, kept so `toShape` can rebuild the surface's face
+    /// (`None` for the torus alias).
+    points: Option<Vec<Vec<Vector3>>>,
 }
 
 impl PyBSplineSurface {
@@ -1599,6 +1602,7 @@ impl PyBSplineSurface {
             v_periodic: false,
             u_bounds: None,
             v_bounds: None,
+            points: None,
         }
     }
 }
@@ -1614,6 +1618,7 @@ impl PyBSplineSurface {
             v_periodic: false,
             u_bounds: None,
             v_bounds: None,
+            points: None,
         }
     }
 
@@ -1669,7 +1674,25 @@ impl PyBSplineSurface {
         self.v_bounds = Some(data.v_bounds);
         self.u_periodic = false;
         self.v_periodic = false;
+        self.points = Some(rows);
         Ok(())
+    }
+
+    /// The face of the interpolated surface (`BSplineSurface.toShape`,
+    /// `BRepBuilderAPI_MakeFace(Geom_Surface, tol)`).
+    ///
+    /// An empty or directly constructed surface has no grid to build from, so it
+    /// raises `OCCError` rather than returning an empty face.
+    fn toShape(&self, py: Python<'_>) -> PyResult<Py<curves::PyFace>> {
+        let points = self.points.as_ref().ok_or_else(|| {
+            OCCError::new_err(
+                "BSplineSurface.toShape needs an interpolated surface (call interpolate first)",
+            )
+        })?;
+        let shape = ferrocad_part::backend()
+            .bspline_surface_face(points)
+            .map_err(|error| OCCError::new_err(error.to_string()))?;
+        Py::new(py, curves::PyFace::from_shape(shape))
     }
 
     fn setUPeriodic(&mut self) {

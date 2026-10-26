@@ -357,3 +357,105 @@ assert abs(normal.Length - 1.0) < 1e-9
         );
     });
 }
+
+#[test]
+fn orientation_is_settable_and_keeps_the_geometry() {
+    boot();
+    Python::with_gil(|py| {
+        run(
+            py,
+            r#"
+import Part
+
+box = Part.makeBox(2, 3, 4)
+area = box.Area
+assert box.Orientation == "Forward", box.Orientation
+
+box.Orientation = "Reversed"
+assert box.Orientation == "Reversed", box.Orientation
+assert abs(box.Area - area) < 1e-9, "an orientation change must not change the geometry"
+
+box.Orientation = "Forward"
+assert box.Orientation == "Forward"
+
+face = box.Faces[0]
+face.Orientation = "Internal"
+assert face.Orientation == "Internal", face.Orientation
+face.Orientation = "Forward"
+assert face.Orientation == "Forward"
+
+try:
+    box.Orientation = "Sideways"
+    raise AssertionError("an unknown orientation must raise")
+except Part.OCCError:
+    pass
+"#,
+        );
+    });
+}
+
+#[test]
+fn bspline_surface_to_shape_builds_the_face() {
+    boot();
+    Python::with_gil(|py| {
+        run(
+            py,
+            r#"
+import Part
+from ferrocad import Vector as V
+
+surface = Part.BSplineSurface()
+surface.interpolate([
+    [V(x, y, 0.1 * x * x + 0.065 * y * y) for y in (0, 5, 10, 15)]
+    for x in (0, 5, 10, 15)
+])
+face = surface.toShape()
+
+assert face.ShapeType == "Face", face.ShapeType
+assert face.Area > 0.0, face.Area
+box = face.BoundBox
+assert abs(box.XMin) < 1e-6 and abs(box.XMax - 15.0) < 1e-6, (box.XMin, box.XMax)
+assert abs(box.YMin) < 1e-6 and abs(box.YMax - 15.0) < 1e-6, (box.YMin, box.YMax)
+assert len(face.Faces) == 1
+
+try:
+    Part.BSplineSurface().toShape()
+    raise AssertionError("an empty surface has no shape")
+except Part.OCCError:
+    pass
+"#,
+        );
+    });
+}
+
+#[test]
+fn center_of_mass_follows_the_shape_type() {
+    boot();
+    Python::with_gil(|py| {
+        run(
+            py,
+            r#"
+import Part
+from ferrocad import Vector as V
+
+def near(point, expected, what):
+    assert abs(point.x - expected[0]) < 1e-6, (what, point)
+    assert abs(point.y - expected[1]) < 1e-6, (what, point)
+    assert abs(point.z - expected[2]) < 1e-6, (what, point)
+
+face = Part.makePlane(10, 10)
+near(face.CenterOfMass, (5, 5, 0), "face")
+near(face.CenterOfGravity, (5, 5, 0), "face alias")
+
+edge = Part.makeLine(V(0, 0, 0), V(10, 0, 0))
+near(edge.CenterOfMass, (5, 0, 0), "edge")
+
+solid = Part.makeBox(2, 2, 2)
+near(solid.CenterOfMass, (1, 1, 1), "solid")
+
+vertex = Part.Vertex(V(1, 2, 3))
+near(vertex.CenterOfMass, (1, 2, 3), "vertex")
+"#,
+        );
+    });
+}

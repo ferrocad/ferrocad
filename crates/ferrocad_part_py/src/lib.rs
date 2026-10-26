@@ -1737,11 +1737,14 @@ impl PartShape {
     }
 
     /// The centre of mass (`Shape.CenterOfMass`).
+    ///
+    /// The property regime follows the shape type: volume for a solid, surface for
+    /// a face or shell, linear for an edge or wire, and the point for a vertex.
     #[getter]
     fn CenterOfMass(&self, py: Python<'_>) -> PyResult<PyObject> {
         let point = self
-            .mass_properties()
-            .map(|mass| mass.center_of_mass)
+            .shape()
+            .and_then(|shape| ferrocad_part::backend().center_of_mass(&shape))
             .unwrap_or_else(ferrocad_curves::Vector3::zero);
         curves::py_vector(py, point)
     }
@@ -1839,6 +1842,25 @@ impl PartShape {
         ferrocad_part::backend()
             .orientation(&shape)
             .unwrap_or("Forward")
+    }
+
+    /// Set the shape orientation (`Shape.Orientation = "Reversed"`).
+    ///
+    /// The four FreeCAD names are accepted (`Forward`, `Reversed`, `Internal`,
+    /// `External`); the geometry and the placement are unchanged, and the lineage
+    /// map is kept because an orientation change does not alter the topology. A
+    /// null shape and an unknown name are errors.
+    #[setter]
+    fn set_Orientation(&mut self, value: &str) -> PyResult<()> {
+        let shape = self
+            .shape()
+            .ok_or_else(|| curves::OCCError::new_err("a null shape has no orientation"))?;
+        let oriented = ferrocad_part::backend()
+            .with_orientation(&shape, value)
+            .map_err(kernel_error)?;
+        *self.shape.lock().unwrap_or_else(|e| e.into_inner()) = Some(oriented);
+        self.epoch.fetch_add(1, Ordering::SeqCst);
+        Ok(())
     }
 
     /// Upstream's type id for a `TopoShape`.

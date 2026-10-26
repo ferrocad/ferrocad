@@ -39,6 +39,7 @@
 #include <ShapeAnalysis_Shell.hxx>
 #include <TColgp_Array2OfPnt.hxx>
 #include <TColStd_Array1OfReal.hxx>
+#include <TopAbs_Orientation.hxx>
 #include <TopAbs_ShapeEnum.hxx>
 #include <TopExp.hxx>
 #include <TopExp_Explorer.hxx>
@@ -56,6 +57,7 @@
 
 #include <cmath>
 #include <limits>
+#include <memory>
 #include <stdexcept>
 
 #include "rust/cxx.h"
@@ -522,6 +524,55 @@ inline rust::Vec<double> fc_bspline_surface_interpolate(rust::Slice<const double
         out.clear();
     }
     return out;
+}
+
+// The face of the interpolating B-spline surface through the grid
+// (`BSplineSurface.toShape`). Null on failure.
+inline std::unique_ptr<TopoDS_Shape> fc_bspline_surface_face(rust::Slice<const double> coords,
+                                                             int nx,
+                                                             int ny)
+{
+    if (nx < 2 || ny < 2 || coords.size() != static_cast<std::size_t>(3 * nx * ny))
+        return nullptr;
+    try {
+        TColgp_Array2OfPnt points(1, nx, 1, ny);
+        for (int u = 0; u < nx; ++u) {
+            for (int v = 0; v < ny; ++v) {
+                const std::size_t at = 3 * (static_cast<std::size_t>(u) * ny + v);
+                points.SetValue(
+                    u + 1, v + 1, gp_Pnt(coords[at], coords[at + 1], coords[at + 2]));
+            }
+        }
+        GeomAPI_PointsToBSplineSurface interpolation;
+        interpolation.Interpolate(points);
+        const Handle(Geom_BSplineSurface) surface = interpolation.Surface();
+        if (surface.IsNull())
+            return nullptr;
+        BRepBuilderAPI_MakeFace make(surface, Precision::Confusion());
+        if (!make.IsDone())
+            return nullptr;
+        return std::make_unique<TopoDS_Shape>(make.Shape());
+    }
+    catch (...) {
+        return nullptr;
+    }
+}
+
+// A copy of `shape` with `orientation` (`TopAbs_FORWARD`=0, REVERSED=1,
+// INTERNAL=2, EXTERNAL=3). Null on failure.
+inline std::unique_ptr<TopoDS_Shape> fc_with_orientation(const TopoDS_Shape& shape,
+                                                         int32_t orientation)
+{
+    if (shape.IsNull() || orientation < 0 || orientation > 3)
+        return nullptr;
+    try {
+        TopoDS_Shape copy = shape;
+        copy.Orientation(static_cast<TopAbs_Orientation>(orientation));
+        return std::make_unique<TopoDS_Shape>(copy);
+    }
+    catch (...) {
+        return nullptr;
+    }
 }
 
 // --- aggregate enumeration -------------------------------------------------

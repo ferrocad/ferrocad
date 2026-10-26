@@ -1358,9 +1358,9 @@
       ],
       "unresolved": []
     },
-    "methods_heuristic": 861,
+    "methods_heuristic": 863,
     "methods": {
-      "count": 1669,
+      "count": 1670,
       "distinct": 349,
       "classes": {
         "Part.ChFi2d::AnaFilletAlgo": [
@@ -2270,7 +2270,8 @@
           "new",
           "scaleKnotsToBounds",
           "setUPeriodic",
-          "setVPeriodic"
+          "setVPeriodic",
+          "toShape"
         ],
         "Part::BezierCurve": [
           "Degree",
@@ -3232,7 +3233,7 @@
         {
           "kind": "not_implemented_yet",
           "file": "crates/ferrocad_part_py/src/lib.rs",
-          "line": 2982,
+          "line": 3004,
           "text": "\"{operation}: partial revolutions are not implemented yet\""
         },
         {
@@ -3582,7 +3583,7 @@
   "coverage": {
     "methods": {
       "upstream_declared": 609,
-      "ours_declared": 1669,
+      "ours_declared": 1670,
       "upstream_distinct": 408,
       "covered_distinct": 205,
       "fraction": 0.5025,

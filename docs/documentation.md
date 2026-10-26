@@ -165,3 +165,11 @@ Python modules: `build_book.py` only assembles the committed `docs/user/`,
 `docs/python-api/` and `docs/mods/` pages, so publishing cannot invent content. It
 builds from a shallow copy of `main`, and the freshness guarantee comes from this
 repository's `headless` job, which checks the generated pages on every push.
+
+The generator also pins the **modules**, not just the interpreter. It makes
+`ferrocad_combined`, `Part`, `Mesh` and `MeshPart` unimportable while it runs, so a
+developer checkout with `ferrocad_combined.abi3.so` in `python/` produces the same
+pages as CI's base-only job. Importing the workbenches would add members that only
+exist after `Part` loads (for example `SketchObject.addGeometry` on
+`ferrocad.DocumentObject`) and would swap Part's `CADKernelError` docstring; the
+workbench surfaces are measured by `tools/part_api_audit.py` instead.

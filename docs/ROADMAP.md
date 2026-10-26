@@ -33,9 +33,10 @@ behaviour is a Python callback — and the remaining Qt/Draft surface on top of 
 - **The seam remainder.** Landed: partial spheres/revolutions, variable-radius fillets,
   `makeOffset2D` filling, hyperbola/parabola/Bezier (including `Geom2d`), multi-shell
   solids, `DirMode Edge/Normal`, B-spline tube spines, the exact `makeHelix`/
-  `makeLongHelix` edge, and `MakePipeShell` threads and multi-section sweeps.
-- **The tail.** Upstream's two-profile thread solid and the `curve_of` kinds that still
-  report `unsupported`. Neither blocks another workbench.
+  `makeLongHelix` edge, `MakePipeShell` threads and multi-section sweeps, and upstream's
+  two-profile thread solid (`BRepOffsetAPI_ThruSections`, 2026-10-26).
+- **The tail.** The `curve_of` kinds that still report `unsupported` (hyperbola,
+  parabola, Bezier, B-spline, offset); it does not block another workbench.
 
 **Done when** the tail above is closed or deliberately documented. The Part suite already
 reports zero failures, and no advertised API raises “not implemented”.

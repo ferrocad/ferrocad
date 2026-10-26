@@ -6,7 +6,7 @@ Status: design (2026-10-21).
 hypothesis that it is a better proving ground than `src/Mod/Draft`, map its geometry
 and interaction onto what FerroCAD has already built, and give an ordered bring-up
 plan **S0–S5**. This is a measurement and a plan; no source file was changed and no
-test was executed for it.
+test was executed for it (S1's executed baseline is dated 2026-10-26, §7).
 
 Companion to [`TODO-21-10-2026.md`](../record/TODO-21-10-2026.md) (the measurement stash and
 the three open decisions), [`conformance.md`](conformance.md) (the upstream harness
@@ -34,7 +34,7 @@ reopening them.
 | SimpleCAD history | shallow (`--depth 1`): **1 commit**; release cadence is not measurable from git |
 | Upstream FreeCAD checkout | `../freecad-upstream` at `33adf61` (2026-10-14), sparse `src/Mod/{Test,Part,Draft,BIM}`, `src/Ext` |
 | Package metadata | `package.xml` 0.38.0, MIT, `freecadmin` 1.1 |
-| Test execution | **none.** Every test number here is a static count of `def test_`, test classes and assertion sites. |
+| Test execution | **none at the 2026-10-21 measurement.** S1's executed baseline (2026-10-26) is in §7; every other test number here is a static count of `def test_`, test classes and assertion sites. |
 | Network | unavailable; nothing was cloned, fetched or installed |
 
 Counts are over the whole SimpleCAD tree unless a table says `tests/unit` or
@@ -496,11 +496,13 @@ The upstream flow is:
    `removeSplitter`, validity/area/volume checks, and a single transaction.
 
 FerroCAD has the **math** (`TransformGizmo`’s axis projection, `screen::scale_for`)
-but not the **operation**: there is no `Face.extrude`, no push/pull manipulator, and
-`ferrocad_part_gui` contributes only the edge dress-up arc. S2.2 supplies `extrude`;
-S4 supplies the manipulator and the preview. The exact-volume acceptance already
-exists in `tests/gui/gui_smoke.py`: a 40 × 30 rectangle becomes area 1200, then a
-20 mm pull becomes volume 24000.
+and, since 2026-10-26, a **push/pull manipulator**
+(`ferrocad_part_gui::PushPullStem`) plus a parametric hook that builds
+`Part::Extrusion` and one `Part::Fuse`/`Part::Cut` in a transaction. It has no
+`Face.extrude` on the SimpleCAD shape API and no in-progress solid preview. S2.2
+supplies `extrude`; S4 supplies SimpleCAD's own pull session and preview. The
+exact-volume acceptance already exists in `tests/gui/gui_smoke.py`: a 40 × 30
+rectangle becomes area 1200, then a 20 mm pull becomes volume 24000.
 
 ### 5.4 What each FerroCAD capability corresponds to
 
@@ -512,7 +514,7 @@ exists in `tests/gui/gui_smoke.py`: a 40 × 30 rectangle becomes area 1200, then
 | `ferrocad_stage/src/input.rs` | `PointerEvent`, `PointerKind`, `MouseButton` | `coin_event`’s `SoMouseButtonEvent`/`SoLocation2Event` payload | **exists** — a structured replacement |
 | `ferrocad_stage/src/tool.rs` | `Tool` trait, transient items, stable identities | `gui/tools/*` sessions and `Controller`’s tool state machine | **exists (different API)** |
 | `ferrocad_stage/src/interaction.rs` | `InteractionCommit`, `Manipulator` | `document/operations.commit*` plus each tool’s `commit()` | **partial** — the commit is neutral data, but the Python side has no `Manipulator` seam |
-| `ferrocad_stage/src/gizmo.rs` | axis/plane/ring drag, projection, screen scale | Move/Rotate/Scale sessions; `axis_point`/`pull_drag` math | **partial** — transform gizmo exists; no push/pull mode |
+| `ferrocad_stage/src/gizmo.rs` | axis/plane/ring drag, projection, screen scale | Move/Rotate/Scale sessions; `axis_point`/`pull_drag` math | **partial** — transform gizmo and the Part push/pull stem exist (2026-10-26); no SimpleCAD-style pull session or solid preview |
 | `ferrocad_viewport::InventorViewport` | pick, hover, selection, tool dispatch | `Gui.activeDocument().activeView()` plus `getObjectsInfo`/`addEventCallbackPivy` | **missing adapter** |
 | `ferrocad_wgpu::pick` | G-buffer `[entity, part]` pick | `view.getObjectsInfo` (ordered list) / `getObjectInfo` | **partial** — top hit only |
 | `docs/interaction/topology-selection.md` F0 | `SelectionRef { object, elements }`, part names | `Gui.Selection` plus `Component` (`Face6`) | **partial** — selection is a read-only snapshot |
@@ -690,6 +692,89 @@ Acceptance:
 - A cargo test (`ferrocad_parametric` or a dedicated harness test) self-skips when
   `FERROCAD_SIMPLECAD` is unset, mirroring `FERROCAD_UPSTREAM`.
 - No file under `../simplecad` is modified.
+
+#### S1 baseline — 2026-10-26
+
+Measured on the **bare `python/` extension image**, not the Part-linked edition:
+`python/ferrocad.abi3.so` (FreeCAD `0.1.4`, `rust-fc`) plus the `python/` facade,
+`python/PySide` and the system packages. The image has **no `Part`** and no
+`Mesh`/`MeshPart`. A harness-capable Part-linked image is still missing: the
+prebuilt edition binary has no harness flag (`--check-init`/`--render`/`--script`
+only), the §7.1 in-process runner does not exist, and the 2026-10-26 box was at
+~98 % disk with other builds in flight, so no rebuild was attempted.
+
+| Item | Value |
+| --- | --- |
+| Interpreter | CPython **3.14.4** (system `python3`) |
+| FerroCAD revision | **`1427f3d`** (2026-10-26); `python/ferrocad.abi3.so` is from 2026-10-25 12:32 and may predate HEAD |
+| SimpleCAD revision | **`9180c4b`** — `9180c4b2992c3a52c810f2b708ec2ed26d9ddf1a`, 0.38.0 |
+| Packages | numpy 2.3.5, scipy 1.16.3, pivy 0.6.10 (present; no load error names it), PySide6 6.10.2 (unused: the `PySide` stub wins, see below) |
+| Command | `PYTHONPATH=python python3 tools/conformance.py --simplecad` |
+| Modules discovered / attempted | **88 / 88** |
+| Modules loaded / load errors | **17 / 71** |
+| Test outcomes | **165 passed, 0 failed, 1 errored, 1 skipped** (167 records) |
+| Harness exceptions | **0**; exit 0, summary printed |
+| SimpleCAD worktree | clean (`git status --porcelain` empty); only ignored `__pycache__` |
+
+| Bucket | Modules | Notes |
+| --- | --- | --- |
+| pass | 15 modules: `test_command_state`, `test_mcp_protocol`, `test_mesh_handles`, `test_mesh_preview`, `test_mesh_region`, `test_mesh_region_adapter`, `test_mesh_region_mcp`, `test_mesh_region_ui`, `test_mesh_retriangulate`, `test_mesh_stretch_adapter`, `test_mesh_transform`, `test_mesh_worker_diagnostics`, `test_startup`, `test_surface_fit`, `test_viewport_style` | 153 tests; none stopped at a missing dependency |
+| pass + skip | `test_mesh_collisions` | 8 pass, 1 skip: `NativeAgreementTests` is masked by its guarded import, not excluded |
+| pass + error | `test_panel_placement` | 4 pass; `AnchorTests.setUpClass` errors in `QApplication([])` |
+| load error: `Part` | 61 modules (list below) | `import Part` fails; the module body never runs |
+| load error: `Mesh` | 10 modules (list below) | `import Mesh` is the first missing module; these may also need `Part` |
+
+`Part` load errors (61): `test_appearance`, `test_arcs`, `test_arrow_planes`,
+`test_center_snapping`, `test_circle_regions`, `test_circles`, `test_coincident`,
+`test_deformation`, `test_degenerate_drawing`, `test_dense_deletion`,
+`test_dense_drawing`, `test_dense_pull`, `test_edge_deletion`,
+`test_edge_merge_seams`, `test_edge_snapping`, `test_elongating`,
+`test_face_click_snap`, `test_face_division`, `test_forming`, `test_geometry`,
+`test_healing`, `test_hole_closing`, `test_intersection`, `test_joints`,
+`test_length_label`, `test_line_axes`, `test_line_regions`, `test_locking`,
+`test_loop_faces`, `test_material_mapping`, `test_measuring`, `test_mirror`,
+`test_offsetting`, `test_pick`, `test_polygons`, `test_preferences`,
+`test_pull_contact`, `test_pull_references`, `test_pull_split`, `test_push_pull_ui`,
+`test_rotate_edges`, `test_rotation`, `test_rounding`, `test_seams`, `test_selection`,
+`test_slicing`, `test_smart_select`, `test_spatial_lines`, `test_spheres`,
+`test_subdivision`, `test_subdivision_patterns`, `test_subdivision_surfaces`,
+`test_surface_drawing`, `test_surface_edit`, `test_surface_line`,
+`test_surface_offset`, `test_surface_ops`, `test_surface_pull`, `test_union`,
+`test_vertex_edit`, `test_visibility`.
+
+`Mesh` load errors (10): `test_analytic`, `test_clipboard`, `test_idle_work`,
+`test_mesh_conversion`, `test_mesh_glue`, `test_mesh_slicing`, `test_mesh_stretch`,
+`test_mesh_surfaces`, `test_precision`, `test_surface_wrap`.
+
+Blockers, stated as measured:
+
+- **This is not a Part baseline.** 61 of 88 modules stopped at `import Part`
+  because the standalone extension exports no `Part`. The draw/pull suites (137
+  tests) and the boolean/edit suites that S2 counts never executed, so the S2/S3
+  targets remain estimates. The Part-linked image is the missing piece; loading
+  the separate `target/debug/deps/libferrocad_part_py.so` would not satisfy the
+  one-core rule (S1) and was not used.
+- **No `Mesh`/`MeshPart`.** The 10 modules above stop at `import Mesh`; they are
+  consistent with the expected load-error signal, not a harness failure. S3.4 still
+  has to decide the mesh boundary.
+- **The `PySide` stub shadows PySide6.** `simplecad.gui.qt` tries `PySide` first, so
+  the repo's `python/PySide` stub wins over the installed PySide6 6.10.2. The
+  stub's `QApplication` has no `__init__`, so `QApplication([])` raises
+  `TypeError: QApplication() takes no arguments` in
+  `test_panel_placement.AnchorTests.setUpClass`; its one test does not run. The
+  repo's opt-in `FERROCAD_PYSIDE_BACKEND=PySide6` was not set, matching the
+  headless CI convention.
+- **The one skip is a masked load failure.** `test_mesh_collisions` wraps
+  `import FreeCAD, Mesh, MeshPart, Part` in `try/except ImportError: App = None`, so
+  the missing `Mesh` makes `@unittest.skipIf(App is None, 'needs FreeCAD')` skip
+  `NativeAgreementTests`. It is not an intentional exclusion.
+- **The 165 passes are not a parity signal.** They come from the 17 modules that
+  load without `Part`/`Mesh`; no upstream test was changed and no SimpleCAD file
+  was modified.
+- **Harness and audit.** `tools/conformance.py` produced a summary with 0 uncaught
+  exceptions, so no harness change was needed. `python3 tools/simplecad_audit.py
+  --check` reported no drift (283 `.py`, 42 `Part` names, 0 `.ui`, 0 `Draft`
+  imports, 1 `PartDesign` file, 0 `ViewProvider`, 156 files under `tests/`).
 
 ### S2 — The `Part` planar/topology slice
 
@@ -902,8 +987,10 @@ kernel is ready.
 
 ## 9. Open questions and what could not be verified
 
-1. **No tests were run.** The conformance baseline for SimpleCAD does not exist yet;
-   S1 creates it. All “target” percentages in §7 are estimates.
+1. **The Part-linked baseline is still missing.** S1 ran the harness on the bare
+   `python/` image on 2026-10-26 (§7): 71 of 88 modules failed to load (`Part` 61,
+   `Mesh` 10), so the S2/S3 “target” percentages remain estimates. The Part-linked
+   image and its run are still to come.
 2. **Network was unavailable.** SimpleCAD could not be re-cloned, updated, or
    inspected beyond the local `--depth 1` checkout; no dependency was installed.
 3. **Release cadence is not measurable.** The SimpleCAD clone has one commit. The

@@ -2,9 +2,10 @@
 
 Status: **T1 (Spatial Transactor math), T2 (analytic screen-space hit-testing), T3
 (modifiers, typed values and the readout) and T4 (visual language and ribbons) built
-(2026-10-20), the F0 topology prerequisite is complete (F0.1–F0.6), and F1 (the edge
-dress-up arc) is built: selection, tangent chains, the parametric
-`Part::Fillet`/`Part::Chamfer` features, and the arc scrubber that drives them.**
+(2026-10-20), the F0 topology prerequisite is complete (F0.1–F0.6), F1 (the edge
+dress-up arc) is built (selection, tangent chains, the parametric
+`Part::Fillet`/`Part::Chamfer` features, and the arc scrubber that drives them), and
+F2 (the face push/pull stem) and the re-pivot origin handle are built (2026-10-26).**
 
 Companions: [`stage.md`](../viewport/stage.md) (the stage gizmo), [`geometry-and-topology.md`](../architecture/geometry-and-topology.md)
 (the `ElementRef`/`ElementMap` seam), [`occt-integration.md`](../architecture/occt-integration.md) (the
@@ -185,16 +186,21 @@ for drawing. This is what allows padding without invisible pick geometry:
 - **Axes:** project the pick segment (`0.18·scale` … `scale`) and measure point-to-segment
   distance. The inner 18% is excluded so the shared centre is not claimed by all three
   stems.
+- **Origin/centre:** a 10 px projected disc at the frame origin
+  (`GizmoTarget::Origin`, appended after `GizmoHandle::ALL` so every handle pick id is
+  unchanged). It is drawn as a camera-facing disc with the same ink and casing as the
+  stems, and grows on hover like a hovered stroke.
 - **Planes:** project the quad; the interior is grabbable, and the rim gets the padding.
 - **Rings:** a face-on ring is tested in 3D — intersect the ray with the ring plane and
   require the hit radius to be within the pixel slop of `scale`. An edge-on ring projects
   to a line through the centre, so its screen-space fallback excludes the inner
   `0.18·projected_radius`; the centre is therefore never “on” an edge-on ring.
 - **Padding:** `HIT_TOLERANCE_PIXELS = 2` + `HIT_PADDING_PIXELS = 10` (12 px total).
-- **Priority:** axis > plane > ring, then nearest stroke, then front-most depth.
-- **Pass-through:** the interior is not in the pick set, so a click through it reaches the
-  tool/scene exactly as `InventorViewport::handle_pointer` already does when no handle is
-  hit. `InventorViewport::gizmo_handle_at` now delegates to `TransformGizmo::hit`.
+- **Priority:** origin > axis > plane > ring, then nearest stroke, then front-most depth.
+- **Pass-through:** outside the origin disc, the interior is not in the pick set, so a
+  click through it reaches the tool/scene exactly as `InventorViewport::handle_pointer`
+  already does when no handle is hit. `InventorViewport::gizmo_handle_at` delegates to
+  `TransformGizmo::hit`.
 
 Do **not** implement padding as invisible pick geometry: that would consume clicks meant
 for background features and break pass-through. The analytic test consumes the event only
@@ -204,8 +210,10 @@ Tests: `the_triad_interior_passes_through`, `an_axis_is_pickable_along_its_stem`
 `the_grab_padding_reaches_past_the_stroke`, `a_point_beyond_the_padding_passes_through`,
 `a_plane_quad_is_pickable_in_its_interior`, `a_ring_is_pickable_on_its_arc`,
 `an_axis_wins_over_an_overlapping_ring`, `hidden_handles_are_not_picked`,
-`the_hit_does_not_need_a_preceding_update`, `a_local_frame_hit_follows_the_basis`, and
-`the_gizmo_interior_falls_through_to_the_scene` (viewport).
+`the_hit_does_not_need_a_preceding_update`, `a_local_frame_hit_follows_the_basis`,
+`the_origin_handle_is_pickable_inside_its_ten_pixel_disc`,
+`the_origin_handle_wins_the_hit_priority`, `the_origin_target_is_appended_after_the_handles`,
+and `the_gizmo_interior_falls_through_to_the_scene` (viewport).
 
 ## 7. Lifecycle and modifiers
 
@@ -227,7 +235,8 @@ stateDiagram-v2
   in the plane spanned by that stem and the screen-horizontal.
 - `Ctrl` (or the platform's secondary modifier) — free rotation (15° detents are the
   default).
-- `Esc` — cancel the drag and restore the pre-drag preview.
+- `Esc` — cancel the drag and restore the pre-drag preview. A re-pivot drag restores
+  the pre-drag **origin** (and the shell drops its session user origin).
 - `Tab` / a digit — focus the numeric tag for exact entry (still deferred; the tag is
   read-only in T3).
 - The viewport receives modifiers through `handle_pointer_with_modifiers`,
@@ -283,6 +292,26 @@ its padded outline/area is pickable.
 | **T4 — visual language** | cyan/slate tokens, filled arrowheads, glass planes, shared 2 px feathered ribbon | ✅ built |
 | **F0 — topology prerequisite** | pixel → `ElementRef` selection (faces/edges), tangent-chain traversal, `chamfer` in `GeometryBackend`, parametric feature objects | ✅ built (F0.1–F0.6) |
 | **F1 — edge dress-up arc** | `DressUpScrubber`: camera-facing arc over the selected edge, screen-space hit test, radial scrub with snap/bounds, typed readout, viewport commit | ✅ built |
+| **F2 — face push/pull stem** | `PushPullStem`: tessellation-derived planar face frame, amber normal stem on the shared axis solver, neutral `push_pull` commit, parametric extrusion/fuse/cut hook | ✅ built (2026-10-26) |
+| **R — re-pivot origin handle** | `GizmoTarget::Origin`, 10 px disc, snap through the viewport's candidates, `GizmoOrigin` + session user origin | ✅ built (2026-10-26) |
+
+### 9.1 Re-pivot and push/pull as built (2026-10-26)
+
+- **Origin handle.** `GizmoTarget { Handle(GizmoHandle), Origin }`; `Origin` is appended
+  after `GizmoHandle::ALL` and takes `GIZMO_BASE_ID + 9`, so the existing ids stay put.
+  `TransformGizmo::hit` returns a `GizmoTarget`; `hovered()`/`set_hovered()` stay
+  handle-only for the Python surface, while `hovered_target()`/`set_hovered_target()`
+  cover the origin. `set_origin_enabled` hides and unpicks it; `GizmoMode::shows` keeps
+  it visible in every mode (it is the pivot, not a degree of freedom). The viewport
+  emits `ViewportEvent::GizmoOrigin { point, kind }` on release; `Esc` restores the
+  pre-drag origin.
+- **Push/pull stem.** A `Manipulator` in `ferrocad_part_gui::push_pull`, not a triad
+  mode: it resolves the named face from `ShapeItem`'s `part_names` and per-triangle
+  `parts`, requires planarity, and reuses the triad's axis solver with the face normal
+  as local Z. The commit is `push_pull` + `extrude`/`pocket` + the element + the signed
+  distance; the edition's `_interaction` hook owns the `Part::Extrusion` and the
+  boolean. The factory returns `None` for an edge, so it composes with the dress-up
+  factory in the same `Contributions` registry.
 
 ## 10. T1 as built (2026-10-20)
 
@@ -505,9 +534,10 @@ and `ferrocad_toy`'s `the_toy_workbench_creates_represents_manipulates_and_recor
 
 ## 15. Deferred and why
 
-- **Push-Pull** needs a sketch-region / face selection and a solid/sketch model to preview
-  an additive boss or subtractive pocket. The interaction is a 1D constraint plus a
-  volume preview; it can reuse T1's axis solver once the context exists.
+- **Push-Pull** is **built (2026-10-26)** as a Part manipulator rather than a triad mode:
+  `ferrocad_part_gui::PushPullStem` plus the parametric `push_pull` hook. What remains
+  is the ghost prism preview (the solid appears on release) and a per-tick boolean ghost,
+  which needs a kernel recompute per frame and is out of scope.
 - **Fillet/Chamfer** is end-to-end: `GeometryBackend::{fillet, chamfer}`, `tangent_chain`,
   click selection, the parametric features, the `Manipulator` seam and the
   `ferrocad_part_gui::DressUpScrubber`, and the host wiring

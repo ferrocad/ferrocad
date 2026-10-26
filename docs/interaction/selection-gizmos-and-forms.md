@@ -259,7 +259,9 @@ rendered form dialog (backdrop occludes everything)
 ```
 
 - Workbench manipulators are **more specific** than the generic triad and claim their
-grab targets first (`gizmo-manipulators.md` §14). The triad's centre remains pass-through.
+grab targets first (`gizmo-manipulators.md` §14). The triad's centre is the
+  origin/pivot handle (`transform-ux.md` §3); while that handle is disabled (the
+  translation HUD) the centre is pass-through again.
 - The canvas's right-press is gated on **no active tool and no command dialog**.
 - A floating HUD's panel is the only part that occludes; the rest of the canvas behaves
   normally.

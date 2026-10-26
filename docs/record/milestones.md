@@ -44,9 +44,9 @@ is archived in
 2. **Separating naming from geometry survived contact.** `ferrocad_lineage` owns the
    vocabulary and policy, the kernel reports provenance, and Part stores and applies it.
    That is why the 20/47 result was a naming change, not a geometry rewrite.
-3. **Honest approximations beat silent ones.** Helices are interpolating B-splines,
-   threads are helical pipes, and tubes accept only analytic spines — each says so at
-   the call site and in the record.
+3. **Honest approximations beat silent ones.** A helix has no polynomial 3D OCCT curve,
+   so its 3D representative is an interpolating B-spline built from the exact pcurve;
+   the seam says so at the call site and in the record.
 
 ### The remaining Part asymmetry
 

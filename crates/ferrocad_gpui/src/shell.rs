@@ -32,6 +32,7 @@ use ferrocad_viewport::{
 use ferrocad_wgpu::{AdapterChoice, AdapterSummary, WgpuRenderer};
 use ferrocad_widgets::accordion::{AccordionSection, AccordionState, accordion};
 use ferrocad_widgets::color;
+use ferrocad_widgets::form;
 use ferrocad_widgets::scroll::scroll_area;
 use ferrocad_widgets::slider;
 use ferrocad_widgets::wheel::{WheelEvent, WheelMenu, WheelSlot, WheelTone};
@@ -63,6 +64,10 @@ const GIZMO_FEATURE: &str = "gizmo";
 
 /// The property-row kind whose string value is a `#rrggbb` colour.
 const KIND_COLOR: &str = "color";
+/// The property-row kind of a boolean (rendered as a toggle switch).
+const KIND_BOOL: &str = "bool";
+/// The property-row kind of an enumeration (rendered as a select box).
+const KIND_ENUM: &str = "enum";
 
 /// Whether two names address the same tree node.
 ///
@@ -320,6 +325,8 @@ enum RowPopupKind {
     Color,
     /// The log/linear range slider (a bounded number).
     Slider,
+    /// The choices of an enumeration (`kind == "enum"`).
+    Choices,
 }
 
 /// A slider's declared range.
@@ -345,6 +352,10 @@ struct RowPopup {
     range: Option<RowRange>,
     /// The quantity unit (`mm`), for the slider's readout.
     unit: String,
+    /// An enumeration's options, for the dropdown.
+    choices: Vec<String>,
+    /// When set, a pick edits this dialog field instead of `key`'s property.
+    dialog_field: Option<usize>,
     /// The pointer position that opened it (window coordinates).
     anchor: Point<Pixels>,
     /// The slider track's last painted bounds.
@@ -2543,25 +2554,6 @@ impl Shell {
         cx.notify();
     }
 
-    /// Move an enum field by `delta` options, wrapping.
-    fn cycle_choice(&mut self, index: usize, delta: isize, cx: &mut Context<Self>) {
-        if let Some(dialog) = self.dialog.as_mut() {
-            let len = dialog
-                .spec
-                .fields
-                .get(index)
-                .map(|field| field.values.len())
-                .unwrap_or(0);
-            if len > 0 {
-                if let Some(ValueState::Choice(choice)) = dialog.states.get_mut(index) {
-                    *choice = (*choice as isize + delta).rem_euclid(len as isize) as usize;
-                    dialog.error = None;
-                }
-            }
-        }
-        cx.notify();
-    }
-
     /// Apply a command's presentation request (A5, G5): perform a workplane action, or
     /// update the shell's view state, mirror it to `FerroCADGui.ViewState`, and apply it
     /// to the viewport when one exists. Returns a one-line summary for the status bar.
@@ -3001,6 +2993,8 @@ impl Shell {
             value: value.to_string(),
             range: None,
             unit: String::new(),
+            choices: Vec::new(),
+            dialog_field: None,
             anchor,
             track: None,
             window,
@@ -3031,12 +3025,63 @@ impl Shell {
             value: value.to_string(),
             range: Some(RowRange { min, max }),
             unit: unit.to_string(),
+            choices: Vec::new(),
+            dialog_field: None,
             anchor,
             track: None,
             window,
             draft: None,
             dragging: false,
         });
+        cx.notify();
+    }
+
+    /// Open the dropdown for an enumeration row or a dialog field.
+    #[allow(clippy::too_many_arguments)]
+    fn open_choice_popup(
+        &mut self,
+        key: &str,
+        value: &str,
+        choices: Vec<String>,
+        dialog_field: Option<usize>,
+        anchor: Point<Pixels>,
+        window: WindowId,
+        cx: &mut Context<Self>,
+    ) {
+        self.row_popup = Some(RowPopup {
+            key: key.to_string(),
+            label: String::new(),
+            kind: RowPopupKind::Choices,
+            value: value.to_string(),
+            range: None,
+            unit: String::new(),
+            choices,
+            dialog_field,
+            anchor,
+            track: None,
+            window,
+            draft: None,
+            dragging: false,
+        });
+        cx.notify();
+    }
+
+    /// Pick a dialog enum's option from the dropdown.
+    fn set_dialog_choice(&mut self, index: usize, choice: &str, cx: &mut Context<Self>) {
+        if let Some(dialog) = self.dialog.as_mut() {
+            let position = dialog
+                .spec
+                .fields
+                .get(index)
+                .and_then(|field| field.values.iter().position(|value| value == choice));
+            if let Some(position) = position {
+                if let Some(state) = dialog.states.get_mut(index) {
+                    *state = ValueState::Choice(position);
+                    dialog.error = None;
+                }
+            }
+        }
+        self.row_popup = None;
         cx.notify();
     }
 
@@ -3194,20 +3239,12 @@ fn dialog_overlay(shell: &mut Shell, window: &Window, cx: &mut Context<Shell>) -
         let control: AnyElement = match field.kind() {
             Kind::Bool => {
                 let checked = matches!(states.get(index), Some(ValueState::Flag(true)));
-                let label = if checked { "on" } else { "off" };
-                div()
-                    .id(SharedString::from(format!("dialog-bool-{index}")))
-                    .px_2()
-                    .py_1()
-                    .rounded_sm()
-                    .bg(rgb(if checked { ACCENT } else { PANEL_ALT }))
-                    .text_xs()
-                    .text_color(rgb(FG))
-                    .child(label)
-                    .on_click(
-                        cx.listener(move |this, _event, _window, cx| this.toggle_flag(index, cx)),
-                    )
-                    .into_any_element()
+                form::toggle(
+                    SharedString::from(format!("dialog-bool-{index}")),
+                    checked,
+                    cx.listener(move |this, _event, _window, cx| this.toggle_flag(index, cx)),
+                )
+                .into_any_element()
             }
             Kind::Enum => {
                 let choice = match states.get(index) {
@@ -3215,20 +3252,33 @@ fn dialog_overlay(shell: &mut Shell, window: &Window, cx: &mut Context<Shell>) -
                     _ => 0,
                 };
                 let value = field.values.get(choice).cloned().unwrap_or_default();
+                let key = format!("dialog-enum-{index}");
+                let open = shell
+                    .row_popup
+                    .as_ref()
+                    .is_some_and(|popup| popup.key == key);
+                let values = field.values.clone();
+                let click_key = key.clone();
+                let click_value = value.clone();
                 div()
-                    .flex()
-                    .flex_row()
-                    .items_center()
-                    .gap_1()
-                    .child(dialog_arrow("‹", index, -1, cx))
-                    .child(
-                        div()
-                            .min_w(px(84.))
-                            .text_xs()
-                            .text_color(rgb(FG))
-                            .child(value),
-                    )
-                    .child(dialog_arrow("›", index, 1, cx))
+                    .w(px(if floating { 132. } else { 170. }))
+                    .flex_shrink_0()
+                    .child(form::select_box(
+                        SharedString::from(key),
+                        &value,
+                        open,
+                        cx.listener(move |this, event: &gpui::ClickEvent, window, cx| {
+                            this.open_choice_popup(
+                                &click_key,
+                                &click_value,
+                                values.clone(),
+                                Some(index),
+                                event.position(),
+                                window.window_handle().window_id(),
+                                cx,
+                            );
+                        }),
+                    ))
                     .into_any_element()
             }
             Kind::Unknown => div()
@@ -3612,24 +3662,6 @@ fn palette_overlay(
         .into_any_element()
 }
 
-/// An enum field's `‹` / `›` button.
-fn dialog_arrow(
-    label: &str,
-    index: usize,
-    delta: isize,
-    cx: &mut Context<Shell>,
-) -> impl IntoElement {
-    div()
-        .id(SharedString::from(format!("dialog-arrow-{index}-{delta}")))
-        .px_1()
-        .rounded_sm()
-        .bg(rgb(PANEL_ALT))
-        .text_xs()
-        .text_color(rgb(FG))
-        .child(label.to_string())
-        .on_click(cx.listener(move |this, _event, _window, cx| this.cycle_choice(index, delta, cx)))
-}
-
 /// The model inspector: documents and their objects.
 ///
 /// The accordion supplies the section header, so the pane is only the scrollable
@@ -3789,7 +3821,6 @@ fn properties_rows_panel(
                         .into_any_element()
                 } else if row.editable {
                     let key = format!("{name}.{}", row.name);
-                    let state = shell.ensure_prop_input(&key, &row.value, window, cx);
                     let selector = format!("prop-{key}");
                     let bounded = row.min.is_some()
                         && row.max.is_some()
@@ -3800,6 +3831,7 @@ fn properties_rows_panel(
                         .as_ref()
                         .is_some_and(|popup| popup.key == key);
                     if row.kind == KIND_COLOR {
+                        let state = shell.ensure_prop_input(&key, &row.value, window, cx);
                         // A colour row keeps its text field (a typed hex still works)
                         // and gains a swatch that opens the palette overlay.
                         let popup_key = key.clone();
@@ -3830,7 +3862,56 @@ fn properties_rows_panel(
                             ))
                             .child(div().w(px(120.)).child(state))
                             .into_any_element()
+                    } else if row.kind == KIND_BOOL {
+                        // A boolean is a switch, not a text field: a click flips it
+                        // and commits the opposite of what the row shows.
+                        let commit_key = key.clone();
+                        let checked = row_bool(&row.value);
+                        div()
+                            .debug_selector(move || selector.clone())
+                            .w(px(150.))
+                            .flex_shrink_0()
+                            .child(form::toggle(
+                                SharedString::from(format!("prop-bool-{key}")),
+                                checked,
+                                cx.listener(move |this, _event, _window, cx| {
+                                    this.commit_property(
+                                        &commit_key,
+                                        if checked { "false" } else { "true" },
+                                        cx,
+                                    );
+                                }),
+                            ))
+                            .into_any_element()
+                    } else if row.kind == KIND_ENUM && !row.choices.is_empty() {
+                        // An enumeration is a select box; its options open in the
+                        // same anchored overlay as the palette.
+                        let popup_key = key.clone();
+                        let popup_value = row.value.clone();
+                        let popup_choices = row.choices.clone();
+                        div()
+                            .debug_selector(move || selector.clone())
+                            .w(px(150.))
+                            .flex_shrink_0()
+                            .child(form::select_box(
+                                SharedString::from(format!("prop-enum-{key}")),
+                                &row.value,
+                                open,
+                                cx.listener(move |this, event: &gpui::ClickEvent, window, cx| {
+                                    this.open_choice_popup(
+                                        &popup_key,
+                                        &popup_value,
+                                        popup_choices.clone(),
+                                        None,
+                                        event.position(),
+                                        window.window_handle().window_id(),
+                                        cx,
+                                    );
+                                }),
+                            ))
+                            .into_any_element()
                     } else if bounded {
+                        let state = shell.ensure_prop_input(&key, &row.value, window, cx);
                         // A row with a declared range gets the mini track that opens
                         // the slider overlay; typing an exact value still works.
                         let popup_key = key.clone();
@@ -3868,6 +3949,7 @@ fn properties_rows_panel(
                             ))
                             .into_any_element()
                     } else {
+                        let state = shell.ensure_prop_input(&key, &row.value, window, cx);
                         div()
                             .debug_selector(move || selector.clone())
                             .w(px(150.))
@@ -3936,11 +4018,7 @@ fn properties_rows_panel(
         .min_h_0()
         .bg(rgb(PANEL))
         .debug_selector(|| "properties-panel".to_string());
-    let panel = panel.child(scroll_area("dev-properties", scroll, rows));
-    match row_popup_overlay(shell, window, cx) {
-        Some(overlay) => panel.child(overlay),
-        None => panel,
-    }
+    panel.child(scroll_area("dev-properties", scroll, rows))
 }
 
 /// The display label for a property row: its `label` when the schema supplied
@@ -3956,6 +4034,15 @@ fn row_label(row: &crate::python::PropRow) -> String {
 /// The number a property row displays (`80`, `0.3`, `10 mm` -> 10).
 fn row_number(value: &str) -> Option<f64> {
     value.split_whitespace().next()?.parse().ok()
+}
+
+/// Whether a property row's display value reads as `true` (`True`, `1`, `yes`,
+/// `on` — the Python and parameter stores spell it differently).
+fn row_bool(value: &str) -> bool {
+    matches!(
+        value.trim().to_ascii_lowercase().as_str(),
+        "true" | "1" | "yes" | "on"
+    )
 }
 
 /// The pointer position as a 0..1 fraction of the slider track.
@@ -3990,6 +4077,8 @@ fn row_popup_overlay(
     let kind = popup.kind;
     let range = popup.range;
     let unit = popup.unit.clone();
+    let choices = popup.choices.clone();
+    let dialog_field = popup.dialog_field;
     let draft = popup.draft;
 
     let close = {
@@ -4009,6 +4098,22 @@ fn row_popup_overlay(
                 move |hex, _event, _window, cx| {
                     let _ = weak.update(cx, |shell, cx| {
                         shell.commit_property(&pick_key, hex, cx);
+                    });
+                },
+            )
+            .into_any_element()
+        }
+        RowPopupKind::Choices => {
+            let weak = cx.weak_entity();
+            let pick_key = key.clone();
+            form::choice_list(
+                SharedString::from(format!("choose-{key}")),
+                &choices,
+                &value,
+                move |choice, _event, _window, cx| {
+                    let _ = weak.update(cx, |shell, cx| match dialog_field {
+                        Some(index) => shell.set_dialog_choice(index, choice, cx),
+                        None => shell.commit_property(&pick_key, choice, cx),
                     });
                 },
             )
@@ -4520,6 +4625,12 @@ pub(crate) fn dev_tools_body(
             available,
             on_toggle,
         ))
+        // A row overlay (the colour palette, the slider or an enum dropdown) opened
+        // from this window's property pane. It is a window-root child so it does not
+        // depend on which pane is open; `row_popup_overlay` ignores other windows.
+        .when_some(row_popup_overlay(shell, window, cx), |root, overlay| {
+            root.child(overlay)
+        })
         .into_any_element()
 }
 
@@ -4721,6 +4832,14 @@ impl Render for Shell {
             body.child(settings_card_view(self, window, cx))
         } else {
             body
+        };
+        // A row overlay (the colour palette, the slider or an enum dropdown) is
+        // anchored at its click and can belong to the canvas, the settings card or a
+        // dialog, so it is a root child rather than part of a pane. Its priority
+        // keeps it above the card and the dialog HUD.
+        let body = match row_popup_overlay(self, window, cx) {
+            Some(overlay) => body.child(overlay),
+            None => body,
         };
         // The app menu lives in the window title bar, not the viewport header: it is
         // app-level chrome, and the title bar is the one place a native-looking app
@@ -7581,8 +7700,14 @@ if "App_ReloadAxisSettings" not in FreeCADGui.listCommands():
             keys
         });
         assert!(
-            keys.iter().any(|key| key == "Settings/Grid.provider"),
-            "fields: {keys:?}"
+            cx.debug_bounds("prop-enum-Settings/Grid.provider-select")
+                .is_some(),
+            "the provider row is a select box"
+        );
+        assert!(
+            cx.debug_bounds("prop-bool-Settings/Grid.enabled-toggle")
+                .is_some(),
+            "the enabled row is a toggle switch"
         );
         assert!(
             keys.iter().any(|key| key == "Settings/Grid.minor"),
@@ -7829,6 +7954,192 @@ if "App_ReloadAxisSettings" not in FreeCADGui.listCommands():
 
         // Leave the shared interpreter on its default for the other tests.
         let _ = crate::python::evaluate("import FerroCAD\nFerroCAD.Gizmo.reset()");
+    }
+
+    /// A command dialog renders a bool as a toggle switch and an enum as a select
+    /// box whose dropdown updates the dialog's pending value.
+    #[gpui::test]
+    fn a_dialog_uses_the_toggle_and_select_box(cx: &mut TestAppContext) {
+        let _guard = crate::PYTHON_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let model = boot_shell();
+        let window = cx.update(|cx| {
+            let model = model.clone();
+            cx.open_window(Default::default(), move |_window, cx| {
+                cx.new(|cx| Shell::from_model(model.clone(), cx))
+            })
+            .unwrap()
+        });
+        let mut cx = VisualTestContext::from_window(window.into(), cx);
+        let shell: Entity<Shell> = window.root(&mut cx).unwrap();
+
+        let script = r#"
+import FreeCADGui
+class _TestForm:
+    def GetResources(self):
+        return {"MenuText": "Form", "Group": "Edit", "CmdType": "ForEdit"}
+    def IsActive(self):
+        return True
+    def Activated(self):
+        return {
+            "title": "Test form",
+            "fields": [
+                {"name": "on", "label": "On", "kind": "bool", "value": False},
+                {"name": "mode", "label": "Mode", "kind": "enum",
+                 "values": ["fast", "safe"], "value": "safe"},
+            ],
+            "on_accept": lambda values: {"status": "form ok"},
+        }
+if "Test_Form" not in FreeCADGui.listCommands():
+    FreeCADGui.addCommand("Test_Form", _TestForm())
+"#;
+        assert!(crate::python::evaluate(script).unwrap().ok);
+        cx.update(|_window, cx| {
+            shell.update(cx, |shell, cx| {
+                shell.refresh_commands(cx);
+                shell.run_command("Test_Form", cx);
+            })
+        });
+        draw(&mut cx);
+
+        assert!(
+            cx.debug_bounds("dialog-bool-0-toggle").is_some(),
+            "a bool field is a toggle"
+        );
+        assert!(
+            cx.debug_bounds("dialog-enum-1-select").is_some(),
+            "an enum field is a select box"
+        );
+
+        click_at(&mut cx, "dialog-bool-0-toggle");
+        draw(&mut cx);
+        let flag = cx.update(|_window, cx| {
+            matches!(
+                shell.read(cx).dialog.as_ref().and_then(|d| d.states.first()),
+                Some(ValueState::Flag(true))
+            )
+        });
+        assert!(flag, "the toggle flipped the dialog flag");
+
+        click_at(&mut cx, "dialog-enum-1-select");
+        draw(&mut cx);
+        assert!(
+            cx.debug_bounds("choose-dialog-enum-1-choices").is_some(),
+            "the dropdown lists the enum values"
+        );
+        click_at(&mut cx, "choose-dialog-enum-1-choice-0");
+        draw(&mut cx);
+        let choice = cx.update(|_window, cx| {
+            match shell.read(cx).dialog.as_ref().and_then(|d| d.states.get(1)) {
+                Some(ValueState::Choice(choice)) => Some(*choice),
+                _ => None,
+            }
+        });
+        assert_eq!(choice, Some(0), "the dropdown set the dialog choice");
+    }
+
+    /// A boolean setting is a toggle switch; a click commits the opposite value.
+    #[gpui::test]
+    fn a_bool_row_is_a_toggle_that_commits(cx: &mut TestAppContext) {
+        let _guard = crate::PYTHON_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let model = boot_shell();
+        reset_grid_state();
+        let window = cx.update(|cx| {
+            let model = model.clone();
+            cx.open_window(Default::default(), move |_window, cx| {
+                cx.new(|cx| Shell::from_model(model.clone(), cx))
+            })
+            .unwrap()
+        });
+        let mut cx = VisualTestContext::from_window(window.into(), cx);
+        let shell: Entity<Shell> = window.root(&mut cx).unwrap();
+        cx.update(|_window, cx| {
+            shell.update(cx, |shell, cx| shell.run_command("View_GridSettings", cx))
+        });
+        draw(&mut cx);
+
+        let before = shell.read_with(&cx, |shell, _| {
+            shell.settings_card.as_ref().and_then(|card| {
+                card.rows
+                    .iter()
+                    .find(|row| row.name == "enabled")
+                    .map(|row| row.value.clone())
+            })
+        });
+        assert_eq!(before.as_deref(), Some("False"), "the grid starts off");
+        assert!(
+            cx.debug_bounds("prop-bool-Settings/Grid.enabled-toggle")
+                .is_some(),
+            "a bool row is a toggle"
+        );
+
+        click_at(&mut cx, "prop-bool-Settings/Grid.enabled-toggle");
+        draw(&mut cx);
+        let after = shell.read_with(&cx, |shell, _| {
+            shell.settings_card.as_ref().and_then(|card| {
+                card.rows
+                    .iter()
+                    .find(|row| row.name == "enabled")
+                    .map(|row| row.value.clone())
+            })
+        });
+        assert_eq!(after.as_deref(), Some("True"), "the toggle committed true");
+
+        reset_grid_state();
+    }
+
+    /// An enumeration setting is a select box; a pick commits through the same
+    /// property path as typing.
+    #[gpui::test]
+    fn an_enum_row_is_a_select_box_that_commits(cx: &mut TestAppContext) {
+        let _guard = crate::PYTHON_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let model = boot_shell();
+        reset_grid_state();
+        let window = cx.update(|cx| {
+            let model = model.clone();
+            cx.open_window(Default::default(), move |_window, cx| {
+                cx.new(|cx| Shell::from_model(model.clone(), cx))
+            })
+            .unwrap()
+        });
+        let mut cx = VisualTestContext::from_window(window.into(), cx);
+        let shell: Entity<Shell> = window.root(&mut cx).unwrap();
+        cx.update(|_window, cx| {
+            shell.update(cx, |shell, cx| shell.run_command("View_GridSettings", cx))
+        });
+        draw(&mut cx);
+
+        assert!(
+            cx.debug_bounds("prop-enum-Settings/Grid.provider-select")
+                .is_some(),
+            "the provider row is a select box"
+        );
+        click_at(&mut cx, "prop-enum-Settings/Grid.provider-select");
+        draw(&mut cx);
+        assert!(
+            cx.debug_bounds("choose-Settings/Grid.provider-choices")
+                .is_some(),
+            "the dropdown lists the providers"
+        );
+
+        // The providers are listed in registration order: native first, Coin second.
+        click_at(&mut cx, "choose-Settings/Grid.provider-choice-1");
+        draw(&mut cx);
+        let backend = cx.update(|_window, cx| {
+            shell
+                .read(cx)
+                .grid_summary
+                .as_ref()
+                .and_then(|summary| summary.backend.clone())
+        });
+        assert_eq!(backend.as_deref(), Some("coin"), "the pick switched the provider");
+
+        // Leave the shared registry on the native backend for the other tests.
+        cx.update(|_window, cx| {
+            shell.update(cx, |shell, cx| {
+                shell.run_command("ferrocad-provider:grid:ferrocad", cx)
+            })
+        });
+        reset_grid_state();
     }
 
     /// P0.8: a click/focus inside the card must not fall through to the canvas and

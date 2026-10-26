@@ -6,6 +6,8 @@
 //! * [`scroll`] adds the scrollbar gpui never paints: a tracked scroll area and a
 //!   draggable thumb.
 //! * [`color`] is the property editor's colour row: a swatch and a fixed palette.
+//! * [`form`] is the form controls: a boolean toggle switch and an enum select box
+//!   with its dropdown list.
 //! * [`slider`] maps a bounded number onto a log (or linear) track for the
 //!   property editor's range overlay.
 //! * [`window_chrome::window_frame`] draws client-side decorations (title bar and
@@ -23,6 +25,7 @@
 pub mod accordion;
 pub mod color;
 pub mod events;
+pub mod form;
 pub mod menu;
 pub mod scroll;
 pub mod slider;
@@ -35,6 +38,7 @@ pub mod window_chrome;
 pub use accordion::{AccordionLayout, AccordionSection, AccordionState, accordion, resolve_layout};
 pub use color::{normalize_hex, palette, parse_hex, swatch};
 pub use events::{ChangeEvent, SubmitEvent};
+pub use form::{choice_list, select_box, toggle};
 pub use menu::{MenuInfoRow, MenuRow, menu};
 pub use scroll::{scroll_area, scroll_thumb, thumb_bounds};
 pub use slider::{fraction as slider_fraction, trigger as slider_trigger};

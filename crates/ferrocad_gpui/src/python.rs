@@ -161,6 +161,10 @@ pub struct PropRow {
     /// The quantity unit (`mm`), shown in the slider's readout.
     #[serde(default)]
     pub unit: Option<String>,
+    /// An enumeration's options. Empty for every other kind; an enum row with
+    /// choices renders as a select box instead of a text field.
+    #[serde(default)]
+    pub choices: Vec<String>,
 }
 
 /// The outcome of a property edit.

@@ -178,6 +178,22 @@ jobs:
           export LD_LIBRARY_PATH="$PWD/.occt/prefix/lib:$LD_LIBRARY_PATH"
           cargo test -p ferrocad_occt -p ferrocad_part -p ferrocad_part_py -p ferrocad_parametric
 
+      - name: Build the combined Python image and import it from a host interpreter
+        # `ferrocad_image.abi3.so` is the one extension that links App + Part +
+        # Mesh, so a plain host CPython can `import Part`/`import Mesh` and they
+        # share one document registry. This is the packaged-image gate the
+        # in-process harness cannot express; see
+        # docs/workbenches/part-api-audit.md and crates/ferrocad_image_py.
+        run: |
+          export CMAKE_POLICY_VERSION_MINIMUM=3.5
+          export PYO3_USE_ABI3_FORWARD_COMPATIBILITY=1
+          export OpenCASCADE_DIR="$PWD/.occt/prefix/lib/cmake/opencascade"
+          export OCCT_INCLUDE_DIR="$PWD/.occt/prefix/include/opencascade"
+          export LD_LIBRARY_PATH="$PWD/.occt/prefix/lib:$LD_LIBRARY_PATH"
+          cargo build -p ferrocad_image_py --features ferrocad_image_py/extension-module
+          cp target/debug/libferrocad_image_py.so python/ferrocad_image.abi3.so
+          PYTHONPATH=python python3 tests/test_python_image.py -v
+
       - name: SimpleCAD S0 static audit (optional; needs a sibling checkout)
         # S0 is measurement only. PR CI does not clone SimpleCAD, so this is a
         # no-op there; a developer image or a future scheduled job that checks

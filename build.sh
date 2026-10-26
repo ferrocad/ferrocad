@@ -77,4 +77,26 @@ if [ -f "$ui_py_src" ]; then
     echo "packaged python/ferrocad_ui_py.abi3.so"
 fi
 
+# Package the combined App/Part/Mesh/MeshPart image. Unlike the standalone
+# `ferrocad.abi3.so`, one `.so` links every module, so `import Part`,
+# `import Mesh` and `import FreeCAD` share one document registry (see
+# docs/architecture/occt-integration.md §4). It needs OCCT; a workspace without an
+# OCCT prefix keeps the core-only image and the Part/Mesh shims report the gap.
+if [ -d "$HERE/.occt/prefix" ] || [ -n "${OpenCASCADE_DIR:-}" ] \
+    || [ -n "${OCCT_INCLUDE_DIR:-}" ] || [ -n "${OCCT_ROOT:-}" ] || [ -n "${CASROOT:-}" ]; then
+    echo "== building ferrocad_image_py (App + Part + Mesh) =="
+    if cargo build --release --offline --manifest-path "$HERE/Cargo.toml" \
+        -p ferrocad_image_py --features ferrocad_image_py/extension-module; then
+        image_src="$TARGET/libferrocad_image_py.so"
+        if [ -f "$image_src" ]; then
+            cp "$image_src" "$HERE/python/ferrocad_image.abi3.so"
+            echo "packaged python/ferrocad_image.abi3.so"
+        fi
+    else
+        echo "warning: ferrocad_image_py not built; Part/Mesh stay unavailable" >&2
+    fi
+else
+    echo "== skipping ferrocad_image_py (no OCCT prefix) =="
+fi
+
 echo "build OK"

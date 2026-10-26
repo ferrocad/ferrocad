@@ -31,9 +31,9 @@ static BOOT: Once = Once::new();
 
 fn boot() {
     BOOT.call_once(|| {
-        ferrocad::register_core_module();
-        use ferrocad_part_py::Part as part_module;
-        pyo3::append_to_inittab!(part_module);
+        // The edition registers the combined image's four modules; the test boots
+        // the same image so Part and the shell share one core.
+        ferrocad_image_py::register_builtins();
         python::configure("ferrocad_parametric", &[], &[], false);
     });
     python::bootstrap().expect("boot the edition");

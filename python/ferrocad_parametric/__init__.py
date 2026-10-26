@@ -77,7 +77,7 @@ def _display_mesh(obj):
             return None
         mesh = shape.mesh()
         placement = getattr(obj, "Placement", None)
-        _apply_object_placement(mesh, placement)
+        _apply_object_placement(mesh, placement, shape=shape)
         # The object's own origin (the placement's base point). The triad hugs it — an
         # origin indicator — and a rotate pivot turns about it.
         if placement is not None:
@@ -95,7 +95,7 @@ def _display_mesh(obj):
         return None
 
 
-def _apply_object_placement(mesh, placement):
+def _apply_object_placement(mesh, placement, shape=None):
     """Move a tessellation from shape-local to world coordinates.
 
     ``Shape.mesh()`` is in the shape's own coordinates; a ``Part::Feature``'s
@@ -103,9 +103,24 @@ def _apply_object_placement(mesh, placement):
     applies it. The stage has no per-mesh placement field, so the display hook bakes
     it here. An opened ``.FCStd`` with placed objects therefore lands where it was
     saved, not at the origin.
+
+    A ``PartShape``'s geometry is *always* baked with its own accumulated
+    ``Placement`` (``geometry == placement · base``), and the ``Part::Feature``
+    sync keeps that accumulated placement equal to the object's. Applying the
+    object placement again would double it, so a shape whose placement already
+    equals the object's is left alone. A Python proxy stores local geometry with
+    an identity placement, so its object placement is applied here.
     """
     if placement is None:
         return
+    if shape is not None:
+        shape_placement = getattr(shape, "Placement", None)
+        if shape_placement is not None:
+            try:
+                if shape_placement.isSame(placement, 1e-9):
+                    return
+            except Exception:
+                pass
     positions = mesh.get("positions")
     if positions:
         mesh["positions"] = [

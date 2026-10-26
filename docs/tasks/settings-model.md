@@ -185,7 +185,9 @@ S0–S4 landed; S5 (document-scoped overrides) remains optional.
   The card owns its node and rows (`SettingsCard { node, rows }`), re-read after
   every edit, reset or provider switch, because `ShellModel::properties` follows the
   selection. It is dismissed only by its `✕` or `Esc`, and it draws above the
-  transient overlays (deferred priority 4).
+  transient overlays (deferred priority 4). The card keeps its 420 px height: the
+  rows scroll inside it (the content wrapper must be a **column**, or the panel is
+  laid out at its full content height and clipped with nothing to scroll).
 - Selecting a `Settings/<Feature>` node **in the tree** still retargets the card —
   that is the explicit inspector path — while the Dev Tools pane shows the node's
   rows. A settings *command* does not move the selection at all.

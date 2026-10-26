@@ -4422,7 +4422,19 @@ fn settings_card_view(
             this.end_settings_drag(cx);
         }))
         .child(header)
-        .child(div().flex_1().min_h_0().overflow_hidden().child(panel));
+        .child(
+            // A **column** wrapper: as a row, the panel's height was its content
+            // height, so the rows were laid out past the card and clipped with
+            // nothing to scroll. In a column, `flex_1` constrains the panel to the
+            // card's content height and the scroll area gets a real viewport.
+            div()
+                .flex()
+                .flex_col()
+                .flex_1()
+                .min_h_0()
+                .overflow_hidden()
+                .child(panel),
+        );
 
     deferred(
         anchored()
@@ -8140,6 +8152,107 @@ if "Test_Form" not in FreeCADGui.listCommands():
             })
         });
         reset_grid_state();
+    }
+
+    /// A settings pane with more rows than its height is scrollable: the rows must
+    /// not be compressed into the viewport (which would clip them instead of
+    /// overflowing), and a wheel over it must move the tracked handle.
+    #[gpui::test]
+    fn a_crowded_settings_pane_scrolls(cx: &mut TestAppContext) {
+        let _guard = crate::PYTHON_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let model = boot_shell();
+        let window = cx.update(|cx| {
+            let model = model.clone();
+            cx.open_window(Default::default(), move |_window, cx| {
+                cx.new(|cx| Shell::from_model(model.clone(), cx))
+            })
+            .unwrap()
+        });
+        let mut cx = VisualTestContext::from_window(window.into(), cx);
+        let shell: Entity<Shell> = window.root(&mut cx).unwrap();
+
+        // The card's last row must be visible inside its scroll viewport; if it is
+        // clipped, the rows were compressed instead of overflowing.
+        cx.update(|_window, cx| {
+            shell.update(cx, |shell, cx| shell.select("Settings/Axis", cx))
+        });
+        draw(&mut cx);
+        let area = cx
+            .debug_bounds("dev-properties-area")
+            .expect("the card's scroll area");
+        let last = cx
+            .debug_bounds("prop-command-App_ResetAxisAppearance")
+            .expect("the card's last row");
+        let card = cx.debug_bounds("settings-card").expect("the card");
+        assert_eq!(card.size.height, px(420.), "the card keeps its height");
+        assert!(
+            area.size.height < card.size.height,
+            "the viewport stays inside the card: card {:?}, area {:?}",
+            card.size.height,
+            area.size.height
+        );
+        let max = cx.update(|_window, cx| shell.read(cx).dev_scroll.settings.max_offset().y);
+        assert!(
+            max > px(0.),
+            "the axis rows overflow the viewport (max {max:?})"
+        );
+        assert!(
+            last.bottom() > area.bottom(),
+            "the last row starts below the viewport: {:?} vs {:?}",
+            last.bottom(),
+            area.bottom()
+        );
+
+        // A wheel over the card scrolls it.
+        cx.simulate_mouse_move(area.center(), None, gpui::Modifiers::default());
+        cx.simulate_event(gpui::ScrollWheelEvent {
+            position: area.center(),
+            delta: gpui::ScrollDelta::Pixels(point(px(0.), px(-80.))),
+            modifiers: gpui::Modifiers::default(),
+            touch_phase: gpui::TouchPhase::Moved,
+        });
+        draw(&mut cx);
+        let offset = cx.update(|_window, cx| shell.read(cx).dev_scroll.settings.offset().y);
+        assert!(
+            offset < px(0.),
+            "the wheel over the card scrolled it (offset {offset:?})"
+        );
+
+        // The default Dev Tools layout keeps Commands, Model and Properties open,
+        // so the property pane is short and its settings rows must overflow.
+        let mut dev_cx = open_dev_tools(&mut cx, &shell);
+        cx.update(|_window, cx| {
+            shell.update(cx, |shell, cx| shell.select("Settings/Gizmo", cx))
+        });
+        dev_cx.update(|window, cx| {
+            let _ = window.draw(cx);
+        });
+
+        let max = cx.update(|_window, cx| shell.read(cx).dev_scroll.properties.max_offset().y);
+        assert!(
+            max > px(0.),
+            "the settings rows overflow the pane, so it is scrollable (max {max:?})"
+        );
+
+        let area = dev_cx
+            .debug_bounds("dev-properties-area")
+            .expect("the properties pane");
+        dev_cx.simulate_mouse_move(area.center(), None, gpui::Modifiers::default());
+        dev_cx.simulate_event(gpui::ScrollWheelEvent {
+            position: area.center(),
+            delta: gpui::ScrollDelta::Pixels(point(px(0.), px(-40.))),
+            modifiers: gpui::Modifiers::default(),
+            touch_phase: gpui::TouchPhase::Moved,
+        });
+        dev_cx.update(|window, cx| {
+            let _ = window.draw(cx);
+        });
+
+        let offset = cx.update(|_window, cx| shell.read(cx).dev_scroll.properties.offset().y);
+        assert!(
+            offset < px(0.),
+            "a wheel over the pane scrolled it (offset {offset:?})"
+        );
     }
 
     /// P0.8: a click/focus inside the card must not fall through to the canvas and

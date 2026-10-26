@@ -183,10 +183,27 @@ lives in the module that owns the property type.
 `ferrocad_core::application`. Two separate extension modules (`.so` files) each statically
 link their own copy of that state, so a standalone `Part.abi3.so` would not see the
 documents `import FreeCAD` created. Part must therefore be linked into the same image as
-the core bindings — the app does this with `pyo3::append_to_inittab!`; so must the wheel.
-`ferrocad_part_py` ships as `rlib` (for that composition) and `cdylib` (for the future
-standalone). Wiring it into `crates/ferrocad` and the wheel — which also means bundling
-OCCT (see [`occt-bundling.md`](occt-bundling.md)) — is the next packaging step.
+the core bindings. That image is
+[`crates/ferrocad_image_py`](../../crates/ferrocad_image_py/src/lib.rs):
+
+- the edition binaries call `ferrocad_image_py::register_builtins()` before the
+  interpreter starts (`append_to_inittab!` for `ferrocad`, `Part`, `Mesh` and
+  `MeshPart`);
+- `python/ferrocad_image.abi3.so` runs the same four module inits in an already
+  running host interpreter and publishes them in `sys.modules`;
+- `python/Part.py`, `python/Mesh.py` and `python/MeshPart.py` are one-line shims
+  that import that extension, so a plain `import Part` resolves even when the host
+  has nothing else loaded;
+- `python/FreeCAD/__init__.py` imports the image first when it is present, so the
+  facade cannot pick up a standalone `ferrocad.abi3.so` with a second core.
+
+`ferrocad_part_py` and `ferrocad_mesh_py` still ship `rlib` + `cdylib`, but the
+standalone cdylibs are only useful for isolated experiments; mixing them with the
+combined image would create two cores. `ferrocad_toy` is deliberately kernel-free
+and registers none of these modules. The image needs OCCT (`./build.sh` builds it
+when `.occt/prefix` is present); `tests/test_python_image.py` is the packaged-image
+gate that proves the four modules share one registry, and the in-process equivalent
+is `crates/ferrocad_image_py/tests/shared_image.rs`.
 
 ## 7. Reuse by other workbenches
 

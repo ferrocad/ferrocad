@@ -388,6 +388,10 @@ python/FreeCAD/           drop-in module: __init__.py (facade)
     Units.py              units facade (Quantity)
     Console.py            minimal Print* logging facade
 python/ferrocad.abi3.so   built PyO3 bindings (module `ferrocad`, gitignored; for the wheel/`build.sh`, not the app)
+python/ferrocad_image.abi3.so  the combined App+Part+Mesh image (gitignored; `./build.sh`)
+python/Part.py            shim: publishes the combined image and aliases its `Part`
+python/Mesh.py            shim: the same image's `Mesh`
+python/MeshPart.py        shim: the same image's `MeshPart`
 python/ferrocad_gen.abi3.so generated skeleton bindings, M3c (gitignored)
 python/FreeCADGui/        console-mode Gui stub
 python/ferrocad_spike/    Python declarative UI spike module
@@ -401,6 +405,7 @@ crates/ferrocad_occt/     OCCT backend (needs OCCT 7.8+)
 crates/ferrocad_part/     Part workbench: Part::Feature, Part::PropertyPartShape
 crates/ferrocad_part_py/  the `Part` Python module (makeBox, Shape); links OCCT
 crates/ferrocad_mesh_py/  the `Mesh` and `MeshPart` Python modules
+crates/ferrocad_image_py/ one `.so` linking ferrocad + Part + Mesh + MeshPart (shared core)
 crates/ferrocad/          the base app binary (cargo run -p ferrocad)
     src/main.rs           entry: calls ferrocad::run()
     src/lib.rs            run/run_as + register_core_module (edition entry point)

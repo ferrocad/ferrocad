@@ -3449,17 +3449,18 @@ fn parse_bezier(tail: &[f64], first: f64, last: f64) -> Result<EdgeCurve, GeomEr
     Ok(EdgeCurve::BezierCurve(curve))
 }
 
-/// A B-spline payload: `[degree, pole_count, knot_count, mult_count] poles weights
-/// knots mults`.
+/// A B-spline payload: `[degree, pole_count, knot_count, mult_count, periodic]`
+/// poles weights knots mults.
 fn parse_bspline(tail: &[f64]) -> Result<EdgeCurve, GeomError> {
     let header = tail
-        .get(..4)
+        .get(..5)
         .ok_or_else(|| unsupported("curve_of: truncated B-spline"))?;
     let degree = header[0] as i32;
     let pole_count = header[1] as usize;
     let knot_count = header[2] as usize;
     let mult_count = header[3] as usize;
-    let mut at = 4;
+    let periodic = header[4] != 0.0;
+    let mut at = 5;
     let poles = parse_points(
         tail.get(at..).ok_or_else(|| unsupported("curve_of: truncated B-spline"))?,
         pole_count,
@@ -3481,7 +3482,11 @@ fn parse_bspline(tail: &[f64]) -> Result<EdgeCurve, GeomError> {
         .iter()
         .map(|value| *value as i32)
         .collect();
-    let curve = NurbsCurve::new(degree, knots, mults, poles, weights)?;
+    let curve = if periodic {
+        NurbsCurve::new_periodic(degree, knots, mults, poles, weights)?
+    } else {
+        NurbsCurve::new(degree, knots, mults, poles, weights)?
+    };
     Ok(EdgeCurve::BSplineCurve(curve))
 }
 
@@ -3563,6 +3568,7 @@ fn edge_from_nurbs(curve: &NurbsCurve) -> Result<Shape, GeomError> {
         curve.knots(),
         curve.mults(),
         curve.degree(),
+        curve.is_periodic(),
         curve.first(),
         curve.last(),
     );
@@ -4120,6 +4126,66 @@ mod curve_bridge_tests {
             .expect("SetPeriodic succeeds");
         assert_eq!(periodic[PERIODIC], 1.0);
         assert_eq!(periodic[NB_POLES], 2.0);
+    }
+
+    #[test]
+    fn a_periodic_bspline_round_trips_through_an_edge() {
+        use std::f64::consts::TAU;
+
+        let backend = OcctBackend::new();
+        // OCCT's own form for a full circle after `BRepBuilderAPI_NurbsConvert`:
+        // three rational quadratic arcs, each knot doubled, period `2π`.
+        let step = TAU / 3.0;
+        let poles = [
+            Vector3::new(5.0, 0.0, 10.0),
+            Vector3::new(5.0, 8.660_254_037_844_387, 10.0),
+            Vector3::new(-2.5, 4.330_127_018_922_193, 10.0),
+            Vector3::new(-10.0, 0.0, 10.0),
+            Vector3::new(-2.5, -4.330_127_018_922_193, 10.0),
+            Vector3::new(5.0, -8.660_254_037_844_387, 10.0),
+        ];
+        let weights = [1.0, 0.5, 1.0, 0.5, 1.0, 0.5];
+        let knots = [0.0, step, 2.0 * step, TAU];
+        let mults = [2, 2, 2, 2];
+
+        let edge = backend
+            .make_bspline_poles_mults_knots(&poles, &weights, &knots, &mults, 2, true, true)
+            .expect("a periodic spline has an edge");
+        let EdgeCurve::BSplineCurve(curve) = backend.curve_of(&edge).unwrap() else {
+            panic!("a periodic spline reports its B-spline form");
+        };
+        assert!(curve.is_periodic());
+        assert_eq!(curve.degree(), 2);
+        assert_eq!(curve.poles().len(), 6);
+        assert_eq!(curve.weights(), &weights[..]);
+        assert_eq!(curve.knots(), &knots[..]);
+        assert_eq!(curve.mults(), &mults[..]);
+        assert!((curve.first() - 0.0).abs() < 1e-12);
+        assert!((curve.last() - TAU).abs() < 1e-12);
+
+        // Parameter 0 is the joint at `+X`; the period end returns to it.
+        let start = curve.point_at(0.0).unwrap();
+        assert!((start.sub(&Vector3::new(5.0, 0.0, 10.0))).length() < 1e-9);
+        assert!((curve.point_at(TAU).unwrap().sub(&start)).length() < 1e-9);
+
+        // `make_edge` rebuilds the same periodic curve, not a clamped copy.
+        let rebuilt = backend
+            .make_edge(&EdgeCurve::BSplineCurve(curve.clone()))
+            .expect("the periodic curve has an edge");
+        let EdgeCurve::BSplineCurve(back) = backend.curve_of(&rebuilt).unwrap() else {
+            panic!("the rebuilt edge still reports a B-spline");
+        };
+        assert!(back.is_periodic());
+        assert_eq!(back.poles().len(), 6);
+        for parameter in [0.0, 0.4, 1.7, 4.2, TAU - 0.1] {
+            let point = back.point_at(parameter).unwrap();
+            assert!(
+                point.sub(&curve.point_at(parameter).unwrap()).length() < 1e-9,
+                "the rebuilt curve moved at {parameter}"
+            );
+            let radius = (point.x * point.x + point.y * point.y).sqrt();
+            assert!((radius - 5.0).abs() < 1e-9);
+        }
     }
 
     #[test]

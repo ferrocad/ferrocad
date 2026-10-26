@@ -229,13 +229,14 @@ mod ffi {
         fn fc_bezier_edge(coords: &[f64], weights: &[f64]) -> UniquePtr<TopoDS_Shape>;
 
         /// A B-spline edge from explicit poles/weights/knots/mults over the range,
-        /// or null on failure.
+        /// or null on failure. `periodic` keeps a periodic knot vector periodic.
         fn fc_bspline_edge_range(
             coords: &[f64],
             weights: &[f64],
             knots: &[f64],
             multiplicities: &[i32],
             degree: i32,
+            periodic: bool,
             first: f64,
             last: f64,
         ) -> UniquePtr<TopoDS_Shape>;

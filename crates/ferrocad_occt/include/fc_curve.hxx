@@ -23,10 +23,13 @@
 //
 // The tail holds what does not fit the header:
 //   kind 6: [pole_count], pole_count*3 coordinates, pole_count weights.
-//   kind 7: [degree, pole_count, knot_count, mult_count], pole_count*3
-//           coordinates, pole_count weights, knot_count knots, mult_count
-//           multiplicities. Periodic splines report kind 0 (their knot/mult
-//           relation is not the clamped one the Rust model holds).
+//   kind 7: [degree, pole_count, knot_count, mult_count, periodic],
+//           pole_count*3 coordinates, pole_count weights, knot_count knots,
+//           mult_count multiplicities. `periodic` is 1 when OCCT reports a
+//           periodic `Geom_BSplineCurve`; its knots still carry the period-end
+//           knot, so `sum(mults) = pole_count + mult[0]` rather than the clamped
+//           `pole_count + degree + 1`. A trimmed edge of a periodic curve is
+//           segmented first, so it reports the (clamped) segment.
 //   kind 8: [basis_length] followed by a complete nested payload of that length.
 //
 // An edge's `BRep_Tool::Curve` may wrap the basis in `Geom_TrimmedCurve`; the
@@ -299,11 +302,13 @@ inline void fc_curve_append(rust::Vec<double>& out,
 
   if (curve->IsKind(STANDARD_TYPE(Geom_BSplineCurve))) {
     Handle(Geom_BSplineCurve) spline = Handle(Geom_BSplineCurve)::DownCast(curve);
-    if (spline.IsNull() || spline->IsPeriodic()) {
+    if (spline.IsNull()) {
       return;
     }
     // A B-spline edge may trim a wider knot domain without a wrapper; re-segment
-    // so the bounds survive in the knot vector itself.
+    // so the bounds survive in the knot vector itself. `Segment` returns a
+    // non-periodic curve, so a periodic curve is only reported when the edge
+    // covers the whole period.
     const double domain_first = spline->FirstParameter();
     const double domain_last = spline->LastParameter();
     if (first > domain_first + 1e-12 || last < domain_last - 1e-12) {
@@ -327,6 +332,7 @@ inline void fc_curve_append(rust::Vec<double>& out,
     out.push_back(static_cast<double>(pole_count));
     out.push_back(static_cast<double>(knot_count));
     out.push_back(static_cast<double>(knot_count));
+    out.push_back(spline->IsPeriodic() ? 1.0 : 0.0);
     for (Standard_Integer i = 1; i <= pole_count; ++i) {
       fc_curve_push_point(out, spline->Pole(i));
     }
@@ -473,19 +479,21 @@ inline std::unique_ptr<TopoDS_Shape> fc_bezier_edge(rust::Slice<const double> co
 }
 
 // A B-spline edge over `[first, last]`, re-segmenting the curve when the range is
-// narrower than its knot domain. Returns null on failure.
+// narrower than its knot domain. A periodic curve keeps its periodic form when
+// the edge covers the whole period. Returns null on failure.
 inline std::unique_ptr<TopoDS_Shape> fc_bspline_edge_range(rust::Slice<const double> coords,
                                                            rust::Slice<const double> weights,
                                                            rust::Slice<const double> knots,
                                                            rust::Slice<const int32_t> multiplicities,
                                                            int degree,
+                                                           bool periodic,
                                                            double first,
                                                            double last)
 {
   try {
     Handle(Geom_BSplineCurve) curve =
-        fc_bspline_curve(coords, weights, knots, multiplicities, degree, false, false);
-    if (curve.IsNull() || curve->IsPeriodic()) {
+        fc_bspline_curve(coords, weights, knots, multiplicities, degree, periodic, false);
+    if (curve.IsNull()) {
       return nullptr;
     }
     if (first > curve->FirstParameter() + 1e-12 || last < curve->LastParameter() - 1e-12) {

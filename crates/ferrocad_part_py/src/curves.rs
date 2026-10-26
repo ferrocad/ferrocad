@@ -3382,7 +3382,7 @@ fn nurbs_state(curve: &NurbsCurve) -> PyResult<SplineState> {
             curve.knots(),
             curve.mults(),
             curve.degree(),
-            false,
+            curve.is_periodic(),
             !curve.is_rational(),
         )
         .ok_or_else(|| OCCError::new_err("conversion to a B-spline failed"))?;
@@ -4022,17 +4022,17 @@ impl PyBSplineCurve {
             .ok_or_else(|| OCCError::new_err("the B-spline is empty"))
     }
 
-    /// The clamped B-spline description behind this curve, for `Part.Edge(...)`.
+    /// The B-spline description behind this curve, for `Part.Edge(...)`.
     fn to_nurbs(&self) -> PyResult<NurbsCurve> {
         let state = self.state()?;
-        NurbsCurve::new(
-            state.degree,
-            state.knots,
-            state.mults,
-            state.poles,
-            state.weights,
-        )
-        .map_err(curve_error)
+        let periodic = state.periodic;
+        let (degree, knots, mults, poles, weights) =
+            (state.degree, state.knots, state.mults, state.poles, state.weights);
+        if periodic {
+            NurbsCurve::new_periodic(degree, knots, mults, poles, weights).map_err(curve_error)
+        } else {
+            NurbsCurve::new(degree, knots, mults, poles, weights).map_err(curve_error)
+        }
     }
 
     fn set_periodicity(&self, target: bool) -> PyResult<()> {

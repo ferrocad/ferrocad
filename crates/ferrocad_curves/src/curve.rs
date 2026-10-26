@@ -647,6 +647,10 @@ fn sampled_length(point_at: &dyn Fn(f64) -> Vector3, first: f64, last: f64) -> f
 ///
 /// It is the exact conversion target for the conics and for a Bezier curve, so
 /// the Part binding never has to approximate them by sampling.
+///
+/// [`NurbsCurve::new`] describes a clamped spline; [`NurbsCurve::new_periodic`]
+/// describes a periodic one, whose poles and knots repeat with the period (see
+/// [`is_periodic`](Self::is_periodic)).
 #[derive(Debug, Clone, PartialEq)]
 pub struct NurbsCurve {
     degree: i32,
@@ -654,6 +658,7 @@ pub struct NurbsCurve {
     mults: Vec<i32>,
     poles: Vec<Vector3>,
     weights: Vec<f64>,
+    periodic: bool,
 }
 
 impl NurbsCurve {
@@ -695,6 +700,56 @@ impl NurbsCurve {
             mults,
             poles,
             weights,
+            periodic: false,
+        })
+    }
+
+    /// A periodic rational B-spline.
+    ///
+    /// Periodicity changes the knot/multiplicity relation. The poles are cyclic,
+    /// `Pole(i + n) = Pole(i)`, and so are the knots,
+    /// `Knot(i + k) = Knot(i) + period`. The stored knot table therefore includes
+    /// the knot that ends the period (its multiplicity repeats the first one), and
+    /// the multiplicities sum to `poles.len() + mults[0]` instead of the clamped
+    /// `poles.len() + degree + 1`. The period is
+    /// `knots.last() - knots.first()`.
+    pub fn new_periodic(
+        degree: i32,
+        knots: Vec<f64>,
+        mults: Vec<i32>,
+        poles: Vec<Vector3>,
+        weights: Vec<f64>,
+    ) -> Result<Self, CurveError> {
+        if degree < 1 || poles.len() < 2 || poles.len() != weights.len() {
+            return Err(CurveError::Degenerate);
+        }
+        if degree > 25 {
+            return Err(CurveError::DegreeTooHigh);
+        }
+        if knots.len() < 2 || knots.len() != mults.len() {
+            return Err(CurveError::Degenerate);
+        }
+        if knots.iter().any(|knot| !knot.is_finite())
+            || !knots.windows(2).all(|pair| pair[0] < pair[1])
+        {
+            return Err(CurveError::InvalidParameter);
+        }
+        if mults[0] != mults[mults.len() - 1]
+            || mults.iter().any(|mult| *mult < 1 || *mult > degree)
+            || mults.iter().sum::<i32>() != poles.len() as i32 + mults[0]
+        {
+            return Err(CurveError::Degenerate);
+        }
+        if weights.iter().any(|weight| !weight.is_finite() || *weight <= 0.0) {
+            return Err(CurveError::Degenerate);
+        }
+        Ok(Self {
+            degree,
+            knots,
+            mults,
+            poles,
+            weights,
+            periodic: true,
         })
     }
 
@@ -738,6 +793,12 @@ impl NurbsCurve {
         self.weights.iter().any(|weight| (*weight - 1.0).abs() > 1e-12)
     }
 
+    /// Whether the poles and knots repeat with the period (OCCT's
+    /// `Geom_BSplineCurve::IsPeriodic`).
+    pub fn is_periodic(&self) -> bool {
+        self.periodic
+    }
+
     /// The full knot vector (each unique knot repeated by its multiplicity).
     fn full_knots(&self) -> Vec<f64> {
         let mut full = Vec::new();
@@ -749,15 +810,101 @@ impl NurbsCurve {
         full
     }
 
+    /// The knot sequence and cyclic pole map that evaluate a periodic curve on
+    /// `[first, last]` as an ordinary B-spline.
+    ///
+    /// OCCT stores one period of knots plus the period-end knot. Writing that
+    /// sequence out with its multiplicities and adding the
+    /// `degree + 1 - mult(first)` knots that wrap in from either side gives a
+    /// flat knot vector whose first `degree` knots precede the domain; the poles
+    /// are then simply the original poles repeated cyclically.
+    fn periodic_extension(&self) -> Option<(Vec<f64>, Vec<usize>)> {
+        let degree = self.degree as usize;
+        let first_mult = *self.mults.first()? as usize;
+        let last_mult = *self.mults.last()? as usize;
+        if first_mult == 0 || last_mult == 0 {
+            return None;
+        }
+        let mut sequence = Vec::new();
+        for (knot, mult) in self.knots.iter().zip(&self.mults) {
+            for _ in 0..*mult {
+                sequence.push(*knot);
+            }
+        }
+        let period = self.last() - self.first();
+        if !(period > 0.0) {
+            return None;
+        }
+        // The continuity at the first knot: how many knots wrap in from each end.
+        let wrap = (degree + 1).saturating_sub(first_mult);
+        let first_last = sequence.len().checked_sub(last_mult)?;
+        if wrap == 0 || first_last < wrap || first_mult + wrap > sequence.len() {
+            return None;
+        }
+        let mut extended = Vec::with_capacity(sequence.len() + 2 * wrap);
+        for value in &sequence[first_last - wrap..first_last] {
+            extended.push(*value - period);
+        }
+        extended.extend_from_slice(&sequence);
+        for value in &sequence[first_mult..first_mult + wrap] {
+            extended.push(*value + period);
+        }
+        let pole_count = extended.len().checked_sub(degree + 1)?;
+        if self.poles.is_empty() {
+            return None;
+        }
+        let cyclic = (0..pole_count).map(|index| index % self.poles.len()).collect();
+        Some((extended, cyclic))
+    }
+
+    /// The homogeneous (weighted) control point at `index`.
+    fn homogeneous(&self, index: usize) -> [f64; 4] {
+        let weight = self.weights[index];
+        [
+            self.poles[index].x * weight,
+            self.poles[index].y * weight,
+            self.poles[index].z * weight,
+            weight,
+        ]
+    }
+
     /// The point at parameter `u` by rational de Boor evaluation.
     ///
-    /// `None` when the description is not a clamped B-spline or the parameter
+    /// A periodic parameter outside `[first, last]` wraps, and `last` is the same
+    /// point as `first`. `None` when the description is invalid or the parameter
     /// is not finite.
     pub fn point_at(&self, u: f64) -> Option<Vector3> {
         if !u.is_finite() {
             return None;
         }
         let degree = self.degree as usize;
+        if self.periodic {
+            let (full, cyclic) = self.periodic_extension()?;
+            let last_index = full.len().checked_sub(degree + 1)?;
+            let first = *full.get(degree)?;
+            let last = *full.get(last_index)?;
+            let period = last - first;
+            if !(period > 0.0) {
+                return None;
+            }
+            // `last` is the start of the next period; every other value wraps.
+            let u = if u == last {
+                first
+            } else {
+                first + (u - first).rem_euclid(period)
+            };
+            let mut span = degree;
+            if u >= last {
+                span = last_index - 1;
+            } else {
+                while span + 1 < last_index && !(u >= full[span] && u < full[span + 1]) {
+                    span += 1;
+                }
+            }
+            return de_boor(degree, &full, u, span, |index| {
+                self.homogeneous(cyclic[index])
+            });
+        }
         let full = self.full_knots();
         let last_pole = self.poles.len().checked_sub(1)?;
         if full.len() != self.poles.len() + degree + 1 {
@@ -775,42 +922,7 @@ impl NurbsCurve {
                 span += 1;
             }
         }
-        let homogeneous = |index: usize| {
-            let weight = self.weights[index];
-            [
-                self.poles[index].x * weight,
-                self.poles[index].y * weight,
-                self.poles[index].z * weight,
-                weight,
-            ]
-        };
-        let mut d: Vec<[f64; 4]> = (0..=degree)
-            .map(|index| homogeneous(span + index - degree))
-            .collect();
-        for r in 1..=degree {
-            for j in (r..=degree).rev() {
-                let knot = j + span - degree;
-                let denominator = full[knot + degree + 1 - r] - full[knot];
-                let alpha = if denominator.abs() > 0.0 {
-                    (u - full[knot]) / denominator
-                } else {
-                    0.0
-                };
-                for component in 0..4 {
-                    d[j][component] =
-                        (1.0 - alpha) * d[j - 1][component] + alpha * d[j][component];
-                }
-            }
-        }
-        let result = d[degree];
-        if result[3].abs() <= f64::EPSILON {
-            return None;
-        }
-        Some(Vector3::new(
-            result[0] / result[3],
-            result[1] / result[3],
-            result[2] / result[3],
-        ))
+        de_boor(degree, &full, u, span, |index| self.homogeneous(index))
     }
 
     /// The unit tangent at `u`, by a central difference of [`point_at`](Self::point_at).
@@ -823,8 +935,12 @@ impl NurbsCurve {
             return Vector3::zero();
         }
         let step = ((last - first) * 1e-6).max(1e-9);
-        let low = (u - step).max(first);
-        let high = (u + step).min(last);
+        // A periodic parameter wraps through the seam, so it is not clamped.
+        let (low, high) = if self.periodic {
+            (u - step, u + step)
+        } else {
+            ((u - step).max(first), (u + step).min(last))
+        };
         if !(high > low) {
             return Vector3::zero();
         }
@@ -847,9 +963,21 @@ impl NurbsCurve {
     /// The same curve traversed in the opposite parameter direction.
     ///
     /// The control points and weights are reversed, and every knot `k` becomes
-    /// `first + last - k`, so the new curve's domain is unchanged.
+    /// `first + last - k`, so the new curve's domain is unchanged. A periodic
+    /// curve's poles are cyclic, so the reversed list is rotated back onto the
+    /// seam; otherwise its parameterisation would start one arc late.
     pub fn reversed(&self) -> Self {
         let (first, last) = (self.first(), self.last());
+        let mut poles: Vec<Vector3> = self.poles.iter().rev().copied().collect();
+        let mut weights: Vec<f64> = self.weights.iter().rev().copied().collect();
+        if self.periodic {
+            let count = self.poles.len();
+            let first_mult = self.mults.first().copied().unwrap_or(1) as i64;
+            let extended_poles = count as i64 + self.degree as i64 + 1 - first_mult;
+            let shift = (count as i64 - extended_poles).rem_euclid(count as i64) as usize;
+            poles.rotate_left(shift);
+            weights.rotate_left(shift);
+        }
         Self {
             degree: self.degree,
             knots: self
@@ -859,10 +987,47 @@ impl NurbsCurve {
                 .map(|knot| first + last - knot)
                 .collect(),
             mults: self.mults.iter().rev().copied().collect(),
-            poles: self.poles.iter().rev().copied().collect(),
-            weights: self.weights.iter().rev().copied().collect(),
+            poles,
+            weights,
+            periodic: self.periodic,
         }
     }
+}
+
+/// Rational de Boor evaluation of one span.
+///
+/// `span` indexes the flat knot vector; `pole(index)` returns the homogeneous
+/// control point for the basis function at flat knot index `index` (a clamped
+/// curve uses the index directly, a periodic one maps it through the cyclic
+/// pole list).
+fn de_boor<F>(degree: usize, knots: &[f64], u: f64, span: usize, pole: F) -> Option<Vector3>
+where
+    F: Fn(usize) -> [f64; 4],
+{
+    let mut d: Vec<[f64; 4]> = (0..=degree).map(|index| pole(span + index - degree)).collect();
+    for r in 1..=degree {
+        for j in (r..=degree).rev() {
+            let knot = j + span - degree;
+            let denominator = knots[knot + degree + 1 - r] - knots[knot];
+            let alpha = if denominator.abs() > 0.0 {
+                (u - knots[knot]) / denominator
+            } else {
+                0.0
+            };
+            for component in 0..4 {
+                d[j][component] = (1.0 - alpha) * d[j - 1][component] + alpha * d[j][component];
+            }
+        }
+    }
+    let result = d[degree];
+    if result[3].abs() <= f64::EPSILON {
+        return None;
+    }
+    Some(Vector3::new(
+        result[0] / result[3],
+        result[1] / result[3],
+        result[2] / result[3],
+    ))
 }
 
 /// One branch of a hyperbola (`Part::GeomHyperbola`):
@@ -2443,5 +2608,111 @@ mod tests {
         assert!(close(reversed.start(), arc_offset.end()));
         assert!(close(reversed.end(), arc_offset.start()));
         assert!((reversed.offset() - arc_offset.offset()).abs() < TOL);
+    }
+
+    /// The periodic cubic in OCCT's own form for the lateral face of a cylinder
+    /// (`BRepBuilderAPI_NurbsConvert` on a full circle): a rational quadratic with
+    /// six poles, four knots each doubled, and the period `2π`.
+    fn periodic_circle() -> NurbsCurve {
+        let axis = std::f64::consts::TAU / 3.0;
+        NurbsCurve::new_periodic(
+            2,
+            vec![0.0, axis, 2.0 * axis, 3.0 * axis],
+            vec![2, 2, 2, 2],
+            vec![
+                Vector3::new(5.0, 0.0, 10.0),
+                Vector3::new(5.0, 8.660_254_037_844_387, 10.0),
+                Vector3::new(-2.5, 4.330_127_018_922_193, 10.0),
+                Vector3::new(-10.0, 0.0, 10.0),
+                Vector3::new(-2.5, -4.330_127_018_922_193, 10.0),
+                Vector3::new(5.0, -8.660_254_037_844_387, 10.0),
+            ],
+            vec![1.0, 0.5, 1.0, 0.5, 1.0, 0.5],
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn a_periodic_bspline_wraps_its_knots_and_poles() {
+        let spline = periodic_circle();
+        assert!(spline.is_periodic());
+        assert_eq!(spline.degree(), 2);
+        assert_eq!(spline.poles().len(), 6);
+        assert_eq!(spline.first(), 0.0);
+        assert!((spline.last() - std::f64::consts::TAU).abs() < TOL);
+        assert!(spline.is_rational());
+
+        // The curve passes through the arc joints at the doubled knots.
+        assert!(close(spline.point_at(0.0).unwrap(), Vector3::new(5.0, 0.0, 10.0)));
+        assert!(close(
+            spline.point_at(std::f64::consts::TAU / 3.0).unwrap(),
+            Vector3::new(-2.5, 4.330_127_018_922_193, 10.0)
+        ));
+        // The period end is the start point, and parameters wrap.
+        assert!(close(
+            spline.point_at(std::f64::consts::TAU).unwrap(),
+            spline.point_at(0.0).unwrap()
+        ));
+        assert!(close(
+            spline.point_at(-std::f64::consts::FRAC_PI_3).unwrap(),
+            spline.point_at(5.0 * std::f64::consts::FRAC_PI_3).unwrap()
+        ));
+
+        // Every point lies on the radius-5 circle in the z = 10 plane.
+        for step in 0..24 {
+            let parameter = std::f64::consts::TAU * step as f64 / 24.0;
+            let point = spline.point_at(parameter).unwrap();
+            let radius = (point.x * point.x + point.y * point.y).sqrt();
+            assert!((radius - 5.0).abs() < 1e-9, "radius {radius} at {parameter}");
+            assert!((point.z - 10.0).abs() < 1e-12);
+        }
+        assert!((spline.length(spline.first(), spline.last()) - 10.0 * std::f64::consts::PI).abs() < 1e-2);
+
+        // Reversing keeps the periodic form and mirrors the parameterisation.
+        let reversed = spline.reversed();
+        assert!(reversed.is_periodic());
+        for parameter in [0.0, 0.4, 1.7, 4.2, 6.1] {
+            assert!(close(
+                reversed.point_at(parameter).unwrap(),
+                spline
+                    .point_at(std::f64::consts::TAU - parameter)
+                    .unwrap()
+            ));
+        }
+    }
+
+    #[test]
+    fn the_clamped_and_periodic_forms_reject_each_other_s_knots() {
+        let axis = std::f64::consts::TAU / 3.0;
+        let poles = periodic_circle().poles().to_vec();
+        let weights = periodic_circle().weights().to_vec();
+
+        // The clamped relation is `sum(mults) = poles + degree + 1`.
+        assert!(
+            NurbsCurve::new(
+                2,
+                vec![0.0, axis, 2.0 * axis, 3.0 * axis],
+                vec![2, 2, 2, 2],
+                poles.clone(),
+                weights.clone(),
+            )
+            .is_err()
+        );
+
+        // A periodic end multiplicity is at most the degree.
+        assert!(
+            NurbsCurve::new_periodic(
+                2,
+                vec![0.0, 1.0],
+                vec![3, 3],
+                vec![
+                    Vector3::zero(),
+                    Vector3::new(1.0, 1.0, 0.0),
+                    Vector3::new(2.0, 0.0, 0.0),
+                ],
+                vec![1.0, 1.0, 1.0],
+            )
+            .is_err()
+        );
     }
 }

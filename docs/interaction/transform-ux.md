@@ -216,3 +216,18 @@ rehearsal for the kinds split is still the toy height grip below.
   **axis-handle gizmo** once the kinds/trait split exists: same origin policy, same
   readout, same commit route, but owned by the gizmo registry instead of the manipulator
   registry — which is what makes the Part push/pull stem cheap.
+
+**Built (2026-10-27).** `GizmoKind` (`Translate`/`Rotate`/`Universal`) is the kind
+vocabulary, ordered specific → composed; `TransformGizmo::{translate,rotate,universal}`
+build each kind over the same frame math, and `GizmoSet` hosts them (`gizmos()`,
+`narrow(session)`, ordered `hit`). `GizmoFactory::kinds()` declares what a provider
+offers; `Contributions::gizmos_for(selection, stage) -> Vec<TransformGizmo>` orders the
+most recently registered factory first and the factory's kinds specific before
+`universal`; `with_gizmo_kinds` composes a subset. The shell's `armed_gizmos` hosts the
+set and `armed_gizmo` narrows it with the sticky mode.
+
+The toy height grip has a `HeightGizmo` adapter (`kind == Translate`, `AxisZ`) as the
+proof, but the viewport still hosts one `TransformGizmo` and emits `GizmoCommitEvent`,
+so the adapter is registered through the manipulator registry until the host/commit
+typing accepts a trait object. Re-narrowing the live hosted gizmo in `set_gizmo_mode` is
+the remaining step; a new selection is already narrowed authoritatively.

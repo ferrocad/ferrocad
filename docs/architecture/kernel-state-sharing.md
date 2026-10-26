@@ -1,11 +1,12 @@
 # Kernel state sharing
 
-Status: implemented (2026-10-26). The two supported compositions, the
+Status: implemented (2026-10-26; K2a 2026-10-27). The two supported compositions, the
 `ferrocad_core::kernel()` facade (`05cf713`, K3), the `_kernel_id` identity
-diagnostic (K0, `beca5fb`), and the mixed-image guard (K1, `9869d76`) are all live.
-Subinterpreter isolation (K2) is deferred debt, and the modular-wheel `PyCapsule`
-C-ABI (K4) remains an unscheduled proposal gated on whether separate binary wheels
-are ever needed. Task record:
+diagnostic (K0, `beca5fb`), the mixed-image guard (K1, `9869d76`) and the
+interpreter-scoped `ferrocad_py` caches (K2a) are live. K2c (bucket reclamation and
+PEP 3121 multi-phase state) is parked, and the modular-wheel `PyCapsule` C-ABI (K4)
+remains an unscheduled proposal gated on whether separate binary wheels are ever
+needed. Task record:
 [`../tasks/kernel-state-sharing.md`](../tasks/kernel-state-sharing.md) (K0–K4).
 
 Companion to [`repackaging.md`](repackaging.md) (the edition model),
@@ -52,7 +53,7 @@ Every piece of state in FerroCAD belongs to one of four scopes:
 | **Process-wide core state** | `ferrocad_core::kernel()` (`Kernel` facade over `application()`, `object_registry`, `property_types`) | Document registry, active document, observers, object-type behaviours, property factories and restore hooks | **Exactly one** per process |
 | **Workbench singleton** | `ferrocad_part::backend()` (`OnceLock<Arc<dyn GeometryBackend>>`), `ferrocad_mesh::register` flag | OCCT geometry backend, element-name/geometry operations | One per process, installed by the composition root; never a second document/type registry |
 | **Document state** | `ferrocad_core::Document` (`Arc<Mutex<Document>>` / `DocumentHandle`) | Object graph, property bags, per-document undo stack, recompute DAG | One per open document, owned by `kernel().documents()` |
-| **Interpreter state** | PyO3 module objects, classes/exceptions, `ferrocad_py` caches, `python/FerroCAD/__init__.py` provider lists | `Py<PyType>` handles, custom exceptions, converter/resolver tables, display/interaction providers | Process-global under the single-interpreter assumption (K2 tracks PEP 3121 / per-interpreter scoping) |
+| **Interpreter state** | PyO3 module objects, classes/exceptions; `ferrocad_py`'s `Py`-owning tables, keyed by `PyInterpreterState_GetID()`; `python/FerroCAD/__init__.py` provider lists | `Py<PyType>` handles, custom exceptions, document/object/observer caches, display/interaction providers | One bucket per interpreter for the `Py`-owning tables; the converter/resolver/provider/method tables hold no `Py` and stay process-wide |
 
 ### The `ferrocad_core::kernel()` boundary (`05cf713`)
 
@@ -74,6 +75,18 @@ object-type `OnceLock`s.
   on `Document`, not in a global keyed by document name.
 - **Workbench-local caches.** They belong to the workbench crate; the Part backend is
   the sanctioned example.
+
+### Known deviations
+
+- **`ferrocad_py` scopes only its `Py`-owning tables by interpreter (K2a).**
+  `documents`, `objects` and `observers` live in one
+  `HashMap<u64, InterpreterState>` keyed by `PyInterpreterState_GetID()`, so a second
+  interpreter cannot see the first's `Py` objects. The converter/resolver/provider/
+  method tables hold `(String, fn …)` pairs with no `Py`, so they stay process-wide.
+  Buckets are not reclaimed when an interpreter is destroyed, and CPython still
+  refuses the single-phase `#[pymodule]` in a subinterpreter; both are K2c.
+- **The `Kernel` facade is a handle, not a state migration.** `kernel()` returns the
+  existing registries; the free functions remain and reach the same state.
 
 ## 3. The two supported compositions
 

@@ -1,8 +1,9 @@
 # Task — the `Mesh` / `MeshPart` / `Mesh::Feature` contract
 
-Status: implemented 2026-10-26 (M1); the measured results are at the end of §5.
-P4 in [`../TODO-26-10-2026.md`](../TODO-26-10-2026.md)
-(§P4). Companion to
+Status: implemented 2026-10-26 (M1); M1b landed 2026-10-27 (`meshFromShape(Segments=True)`,
+facet groups and `.bms`; the `.FCStd` mesh member is the remaining piece). The
+measured results are at the end of §5. P4 in
+[`../TODO-26-10-2026.md`](../TODO-26-10-2026.md) (§P4). Companion to
 [`../workbenches/simplecad-bringup.md`](../workbenches/simplecad-bringup.md) §7
 (S1 baseline, both images) and §S3.4.
 
@@ -332,13 +333,10 @@ self-skips without one; `FERROCAD_SIMPLECAD_FILES` narrows a run.
 
 ### 4.5 Deferred
 
-- `.bms` read/write and the job/worker path (`jobs/mesh.py:56,213`,
-  `scripts/mesh_worker.py:27-48`).
-- `.FCStd` mesh members (`<Mesh file="…">` + `MeshKernel.bms`); the native
-  `.ferrocad` extension property is enough for the ten.
-- `MeshPart.meshFromShape` is not in M1; it is M1b (it unlocks `test_intersection`,
-  `test_joints`, `test_spheres`, `test_union`, `test_mesh_collisions` once Part
-  is present).
+- `.FCStd` mesh members (`<Mesh file="…">` + `MeshKernel.bms`). The BMS bytes exist;
+  core needs a per-property `fcstd_kind()` (member stem, tag, extension) so the
+  writer can emit `MeshKernel1.bms` and the reader can restore
+  `Mesh::PropertyMeshKernel`. The object's `Placement` stays authoritative.
 - `Mesh.createSphere/createCylinder/createCone/createTorus/createPlane`.
 - `decimate` (only reached when `convert(..., simplify>0)`; the ten pass 0).
 - Boolean/self-intersection **repair** (`removeSelfIntersections`,
@@ -349,6 +347,23 @@ self-skips without one; `FERROCAD_SIMPLECAD_FILES` narrows a run.
   `meshFromShape` signatures.
 - A live `obj.Mesh` view (write-through mutation). No SimpleCAD caller mutates
   `obj.Mesh` in place.
+
+### 4.6 M1b built (2026-10-27)
+
+- `MeshPart.meshFromShape(..., Segments=True)` tessellates each `Shape.Faces` entry
+  and records one facet group per face; a duck-typed shape without `Faces` falls
+  back to one whole-shape group.
+- `Mesh` carries `segments: Vec<Vec<u32>>` with `count_segments`/`segment`/
+  `add_segment`/`from_segmented_facets`; the Python surface is
+  `countSegments()`/`getSegment(i)` (an out-of-range index raises `IndexError`).
+  In-place topology mutators drop the groups because the facet indices would be
+  stale, and BMS does not persist them (upstream's kernel dump has none).
+- `.bms` read/write (`ferrocad_mesh/src/bms.rs`) implements FreeCAD's `MeshIO::BMS`:
+  magic `0xA0B0C0D0`, 256-byte info, `f32` points, per-facet indices plus derived
+  neighbours, bbox. It does **not** weld, so duplicate point identities survive.
+  The placement is carried in the info field under a `FerroCAD-BMS` marker;
+  FreeCAD-written files read as identity. `Mesh.Mesh(path)`/`write(path)` dispatch
+  `.bms` and `.stl` by suffix.
 
 ## 5. Acceptance
 

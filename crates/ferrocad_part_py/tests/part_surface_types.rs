@@ -176,7 +176,13 @@ fn a_box_face_surface_is_a_plane_and_parameter_round_trips_exactly() {
             components(&location),
         );
         let axis = components(&surface.getattr("Axis").expect("Plane.Axis"));
-        let normal = components(&surface.getattr("normal").expect("Plane.normal"));
+        // `normal` is upstream's `GeomSurface.normal(u, v)` method (constant on a
+        // plane), not a property; `Axis` is the property form.
+        let normal = components(
+            &surface
+                .call_method1("normal", (0.0, 0.0))
+                .expect("Plane.normal(u, v)"),
+        );
         assert!(
             dot(axis, normal).abs() > 1.0 - 1e-9,
             "Axis {axis:?} and normal {normal:?} differ"

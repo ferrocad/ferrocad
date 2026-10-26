@@ -2803,6 +2803,20 @@ impl PyDocumentObject {
             .unwrap_or_default()
     }
 
+    /// Whether the object is valid (`DocumentObject.isValid`).
+    ///
+    /// A geometry object reports its `Shape`'s validity; an object without a
+    /// `Shape` property is valid.
+    fn isValid(slf: &Bound<'_, Self>) -> bool {
+        let Ok(shape) = slf.getattr("Shape") else {
+            return true;
+        };
+        shape
+            .call_method0("isValid")
+            .and_then(|value| value.extract::<bool>())
+            .unwrap_or(true)
+    }
+
     fn getPropertyByName(&self, name: &str) -> Option<PyObject> {
         let value = {
             let doc = self.inner.lock().unwrap();
@@ -5389,11 +5403,15 @@ pub fn placement_with_hook(
 #[pymethods]
 impl PyPlacement {
     #[new]
-    #[pyo3(signature = (base=None, rotation=None))]
-    fn new(base: Option<&Bound<'_, PyAny>>, rotation: Option<&Bound<'_, PyAny>>) -> PyResult<Self> {
+    #[pyo3(signature = (base=None, rotation=None, center=None))]
+    fn new(
+        base: Option<&Bound<'_, PyAny>>,
+        rotation: Option<&Bound<'_, PyAny>>,
+        center: Option<&Bound<'_, PyAny>>,
+    ) -> PyResult<Self> {
         // `Placement(otherPlacement)` copies the base and rotation (upstream's
         // copy constructor), and `Placement(matrix)` builds from a 4x4 matrix.
-        if rotation.is_none() {
+        if rotation.is_none() && center.is_none() {
             if let Some(b) = base {
                 if let Ok(other) = b.extract::<PyRef<'_, PyPlacement>>() {
                     return Ok(Self::fresh(other.get()));
@@ -5413,6 +5431,15 @@ impl PyPlacement {
         let r = match rotation {
             Some(q) => extract_rotation(q)?,
             None => Rotation::identity(),
+        };
+        // `Placement(base, rotation, center)` rotates about `center`: the base
+        // becomes `center + base - rotation·center`, as upstream does.
+        let b = match center {
+            Some(c) => {
+                let c = extract_vector(c)?;
+                c.add(&b).sub(&r.to_matrix().transform(&c))
+            }
+            None => b,
         };
         Ok(Self::fresh(Placement::new(b, r)))
     }
@@ -5535,6 +5562,35 @@ impl PyPlacement {
 
     fn __mul__(&self, o: PyRef<'_, PyPlacement>) -> PyPlacement {
         PyPlacement::fresh(compose_placements(&self.get(), &o.get()))
+    }
+
+    /// Compose this placement with `other` (`Placement.multiply`).
+    ///
+    /// Upstream's `mod` selects what is composed:
+    ///
+    /// - `0` (default): the full placement, `self * other`;
+    /// - `1`: the rotations only;
+    /// - `2`: the translation only, `self.Base + self.Rotation * other.Base`.
+    ///
+    /// The result is a new placement; neither operand changes.
+    #[pyo3(signature = (other, r#mod = 0))]
+    fn multiply(&self, other: PyRef<'_, PyPlacement>, r#mod: i32) -> PyResult<PyPlacement> {
+        let left = self.get();
+        let right = other.get();
+        let composed = match r#mod {
+            0 => compose_placements(&left, &right),
+            1 => Placement::new(left.base, left.rotation.multiply(&right.rotation)),
+            2 => Placement::new(
+                left.base.add(&left.rotation.to_matrix().transform(&right.base)),
+                left.rotation,
+            ),
+            _ => {
+                return Err(PyValueError::new_err(
+                    "Placement.multiply mod must be 0 (all), 1 (rotation) or 2 (translation)",
+                ));
+            }
+        };
+        Ok(PyPlacement::fresh(composed))
     }
 
     /// Transform a vector by this placement (FreeCAD `Placement.multVec`).
@@ -5704,6 +5760,34 @@ impl PyMaterial {
         self.diffuse = color;
         // A colour change is not a transparency change (upstream PR 11866): only
         // the colour slot moves.
+        if let Some(owner) = &self.owner {
+            update_view_state(&owner.inner, owner.id, |state| match owner.slot {
+                MaterialSlot::Appearance(index) => state.set_appearance_slot(index, color),
+                MaterialSlot::Material => state.material = Some(color),
+            });
+        }
+        Ok(())
+    }
+
+    /// The material's transparency in `[0, 1]` (`Material.Transparency`).
+    ///
+    /// Upstream keeps transparency separate from the diffuse colour and reports
+    /// it as the complement of the alpha channel.
+    #[getter]
+    fn Transparency(&self) -> f64 {
+        1.0 - self.diffuse[3]
+    }
+
+    #[setter]
+    fn set_Transparency(&mut self, value: f64) -> PyResult<()> {
+        if !(0.0..=1.0).contains(&value) {
+            return Err(PyValueError::new_err(
+                "Transparency must be between 0.0 and 1.0",
+            ));
+        }
+        let mut color = self.diffuse;
+        color[3] = 1.0 - value;
+        self.diffuse = color;
         if let Some(owner) = &self.owner {
             update_view_state(&owner.inner, owner.id, |state| match owner.slot {
                 MaterialSlot::Appearance(index) => state.set_appearance_slot(index, color),
@@ -6364,8 +6448,16 @@ impl PyBoundBox {
         self.valid
     }
 
-    #[pyo3(signature = (x, y, z))]
+    #[pyo3(signature = (x, y = None, z = None))]
     fn add(&mut self, x: &Bound<'_, PyAny>, y: Option<f64>, z: Option<f64>) -> PyResult<()> {
+        // `BoundBox.add(otherBox)` grows this box by another box's extent.
+        if let Ok(other) = x.extract::<PyRef<'_, PyBoundBox>>() {
+            if other.valid {
+                self.add_point(other.min);
+                self.add_point(other.max);
+            }
+            return Ok(());
+        }
         if let Ok(v) = x.extract::<PyRef<'_, PyVector>>() {
             self.add_point([v.inner.x, v.inner.y, v.inner.z]);
             return Ok(());

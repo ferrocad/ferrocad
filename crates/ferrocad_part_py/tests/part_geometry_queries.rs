@@ -5,7 +5,7 @@
 //! Same boot as the other Part tests: `ferrocad` + `Part` as built-ins, one core,
 //! one OCCT backend. It needs OCCT (see `docs/architecture/occt-bundling.md`).
 
-use pyo3::exceptions::{PyNotImplementedError, PyTypeError, PyValueError};
+use pyo3::exceptions::{PyTypeError, PyValueError};
 use pyo3::prelude::*;
 use pyo3::types::{PyDict, PyList, PyModule, PyTuple, PyType};
 
@@ -144,29 +144,46 @@ fn tolerance_is_the_positive_kernel_value() {
             }
         }
 
-        // Upstream's non-default modes and shape-type filters are not computed
-        // here; they must say so instead of returning the maximum.
-        let error = box_shape
-            .call_method1("getTolerance", (1,))
-            .expect_err("getTolerance(1)");
-        assert!(error.is_instance_of::<PyNotImplementedError>(py), "{error}");
+        // Upstream's modes: positive is the maximum, negative the minimum and
+        // zero the average over the considered sub-shapes.
+        let maximum = number(
+            &box_shape
+                .call_method1("getTolerance", (1,))
+                .expect("getTolerance(1)"),
+        );
+        let minimum = number(
+            &box_shape
+                .call_method1("getTolerance", (-1,))
+                .expect("getTolerance(-1)"),
+        );
+        let slack = maximum * 1e-12;
+        assert!(maximum.is_finite() && maximum > 0.0, "{maximum}");
+        assert!(minimum.is_finite() && minimum > 0.0, "{minimum}");
+        assert!(minimum <= tolerance + slack && tolerance <= maximum + slack);
 
+        // A shape-type filter restricts the considered sub-shapes.
         let vertex = part.getattr("Vertex").expect("Part.Vertex");
-        let error = box_shape
-            .call_method1("getTolerance", (0, vertex))
-            .expect_err("getTolerance(0, Part.Vertex)");
-        assert!(error.is_instance_of::<PyNotImplementedError>(py), "{error}");
+        let vertex_maximum = number(
+            &box_shape
+                .call_method1("getTolerance", (1, vertex))
+                .expect("getTolerance(1, Part.Vertex)"),
+        );
+        assert!(
+            vertex_maximum.is_finite() && vertex_maximum > 0.0 && vertex_maximum <= maximum + slack
+        );
 
         // The filter is also accepted as the `type` keyword, as upstream names it.
         let kwargs = PyDict::new(py);
-        kwargs.set_item("mode", 0).unwrap();
+        kwargs.set_item("mode", 1).unwrap();
         kwargs
             .set_item("type", part.getattr("Vertex").unwrap())
             .unwrap();
-        let error = box_shape
-            .call_method("getTolerance", (), Some(&kwargs))
-            .expect_err("getTolerance(mode=0, type=Part.Vertex)");
-        assert!(error.is_instance_of::<PyNotImplementedError>(py), "{error}");
+        let keyword_maximum = number(
+            &box_shape
+                .call_method("getTolerance", (), Some(&kwargs))
+                .expect("getTolerance(mode=1, type=Part.Vertex)"),
+        );
+        assert!((keyword_maximum - vertex_maximum).abs() < 1e-15);
     });
 }
 

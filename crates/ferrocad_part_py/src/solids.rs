@@ -92,6 +92,19 @@ pub struct PyShell {
 }
 
 impl PyShell {
+    /// Wrap an existing shell shape (a `Shape.Shells` result) as a `Part.Shell`,
+    /// keeping its B-Rep and lineage rather than rebuilding the shell.
+    pub(crate) fn from_shape(shape: Shape) -> PyClassInitializer<Self> {
+        let faces = ferrocad_part::backend()
+            .elements(&shape, ElementKind::Face)
+            .into_iter()
+            .map(|element| element.shape)
+            .collect();
+        PyClassInitializer::from(PartShape::from_shape(shape)).add_subclass(Self {
+            faces: Mutex::new(faces),
+        })
+    }
+
     fn initializer(faces: Vec<Shape>) -> PyResult<PyClassInitializer<Self>> {
         let base = if faces.is_empty() {
             PartShape::empty()
@@ -154,6 +167,15 @@ pub struct PySolid {
 }
 
 impl PySolid {
+    /// Wrap an existing solid shape (a `Shape.Solids` result) as a `Part.Solid`,
+    /// keeping its B-Rep and lineage rather than rebuilding the solid.
+    pub(crate) fn from_shape(shape: Shape) -> PyClassInitializer<Self> {
+        let shells = shells_of(&shape);
+        PyClassInitializer::from(PartShape::from_shape(shape)).add_subclass(Self {
+            shells: Mutex::new(shells),
+        })
+    }
+
     fn initializer(shells: Vec<Shape>) -> PyResult<PyClassInitializer<Self>> {
         let base = if shells.is_empty() {
             PartShape::empty()

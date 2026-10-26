@@ -63,7 +63,7 @@ use ferrocad_part::{
 };
 use ferrocad_py::PyVector;
 use pyo3::exceptions::{
-    PyIOError, PyIndexError, PyNotImplementedError, PyRuntimeError, PyTypeError, PyValueError,
+    PyIOError, PyIndexError, PyRuntimeError, PyTypeError, PyValueError,
 };
 use pyo3::prelude::*;
 use pyo3::types::{PyBytes, PyDict, PyList, PyModule, PyTuple};
@@ -424,10 +424,13 @@ impl PartShape {
     }
 
     /// The sub-shapes of one kind, in the kernel's order.
+    ///
+    /// A null shape has none, so its getters return `[]` rather than raising —
+    /// upstream's `TopoDS_Iterator` over an empty shape is likewise empty.
     pub(crate) fn sub_shapes(&self, kind: ElementKind) -> PyResult<Vec<Shape>> {
-        let shape = self
-            .shape()
-            .ok_or_else(|| PyValueError::new_err("a null shape has no sub-shapes"))?;
+        let Some(shape) = self.shape() else {
+            return Ok(Vec::new());
+        };
         Ok(ferrocad_part::backend()
             .elements(&shape, kind)
             .into_iter()
@@ -633,6 +636,20 @@ impl PartShape {
         Ok(result)
     }
 
+    /// Translate this shape in place and return it (`Shape.translate`).
+    ///
+    /// Upstream moves the shape's location by the translation and returns the
+    /// shape itself, so the geometry ends up at `T · placement`; this does too.
+    fn translate(
+        slf: &Bound<'_, Self>,
+        vector: &Bound<'_, PyAny>,
+    ) -> PyResult<PyObject> {
+        let offset = curves::vector(vector)?;
+        slf.borrow()
+            .apply_global_placement(Placement::new(offset, Rotation::identity()));
+        Ok(slf.clone().into_any().unbind())
+    }
+
     /// A copy scaled uniformly by `factor` about `center` (`Shape.scaled`).
     #[pyo3(signature = (factor, center = None))]
     fn scaled(
@@ -694,9 +711,11 @@ impl PartShape {
         py: Python<'_>,
         shape_type: Option<&str>,
     ) -> PyResult<Vec<Py<PartShape>>> {
-        let shape = self
-            .shape()
-            .ok_or_else(|| PyValueError::new_err("a null shape has no sub-shapes"))?;
+        let shape = match self.shape() {
+            Some(shape) => shape,
+            // A null shape has no children (upstream's `childShapes` is empty).
+            None => return Ok(Vec::new()),
+        };
         let shapes: Vec<Shape> = match shape_type {
             Some(name) => {
                 let kind = ElementKind::ALL
@@ -912,31 +931,91 @@ impl PartShape {
 
     /// The shape's geometric tolerance (`Shape.getTolerance`).
     ///
-    /// Only the default query is implemented: `mode=0` with `type=None`
-    /// (`TopAbs_SHAPE`) reports the kernel tolerance for the whole shape, which
-    /// this backend computes as the maximum stored on its sub-shapes. Upstream's
-    /// `mode=0` is instead the average, `mode > 0` the maximum and `mode < 0` the
-    /// minimum, while `type` restricts the sub-shape kinds. Because the seam has
-    /// only that single value, any non-default combination raises
-    /// `NotImplementedError` instead of silently reporting it as the answer.
+    /// `mode` follows upstream's `ShapeAnalysis_ShapeTolerance`: `0` is the
+    /// average over the considered sub-shapes, a positive value the maximum and a
+    /// negative value the minimum. `type` restricts the kinds considered
+    /// (`Part.Vertex`, `Part.Edge`, `Part.Face`, or the combined `Part.Shell`
+    /// form); `None` is upstream's `TopAbs_SHAPE` — vertices, edges and faces.
     #[pyo3(signature = (mode = 0, r#type = None))]
     fn getTolerance(&self, mode: i32, r#type: Option<&Bound<'_, PyAny>>) -> PyResult<f64> {
-        if mode != 0 || r#type.is_some() {
-            let type_name = match r#type {
-                Some(value) => value.repr()?.to_string(),
-                None => "None".to_string(),
-            };
-            return Err(PyNotImplementedError::new_err(format!(
-                "getTolerance(mode={mode}, type={type_name}) is not implemented; \
-                 only the default getTolerance(0, None) (all sub-shapes) is supported"
-            )));
+        let shape = self
+            .shape()
+            .ok_or_else(|| curves::OCCError::new_err("a null shape has no tolerance"))?;
+        let kinds: Vec<ElementKind> = match r#type {
+            None => vec![ElementKind::Vertex, ElementKind::Edge, ElementKind::Face],
+            Some(value) => {
+                let kind = element_kind_from_py_type(value).map_err(|_| {
+                    PyTypeError::new_err(
+                        "getTolerance type must be Part.Vertex, Part.Edge, Part.Face or Part.Shell",
+                    )
+                })?;
+                match kind {
+                    ElementKind::Vertex | ElementKind::Edge | ElementKind::Face => vec![kind],
+                    // Upstream's SHELL form combines the shell with its faces,
+                    // edges and vertices.
+                    ElementKind::Shell => vec![
+                        ElementKind::Shell,
+                        ElementKind::Face,
+                        ElementKind::Edge,
+                        ElementKind::Vertex,
+                    ],
+                    _ => {
+                        return Err(PyTypeError::new_err(
+                            "getTolerance type must be Part.Vertex, Part.Edge, Part.Face or Part.Shell",
+                        ));
+                    }
+                }
+            }
+        };
+        let backend = ferrocad_part::backend();
+        let mut values = Vec::new();
+        for kind in kinds {
+            for element in backend.elements(&shape, kind) {
+                if let Ok(tolerance) = backend.shape_tolerance(&element.shape) {
+                    values.push(tolerance);
+                }
+            }
         }
+        if values.is_empty() {
+            return Ok(0.0);
+        }
+        Ok(if mode == 0 {
+            values.iter().sum::<f64>() / values.len() as f64
+        } else if mode > 0 {
+            values.iter().copied().fold(f64::MIN, f64::max)
+        } else {
+            values.iter().copied().fold(f64::MAX, f64::min)
+        })
+    }
+
+    /// The shape's geometric tolerance (`Shape.Tolerance`): the kernel value on a
+    /// vertex, edge or face, and the maximum over those sub-shapes on a higher
+    /// shape.
+    #[getter]
+    fn Tolerance(&self) -> PyResult<f64> {
         let shape = self
             .shape()
             .ok_or_else(|| curves::OCCError::new_err("a null shape has no tolerance"))?;
         ferrocad_part::backend()
             .shape_tolerance(&shape)
             .map_err(kernel_error)
+    }
+
+    /// Check the shape for topological and geometric validity
+    /// (`Shape.check`).
+    ///
+    /// Upstream raises `ValueError` on the first problem and returns `None` for a
+    /// valid (or null) shape; the seam exposes `BRepCheck_Analyzer`, so this does
+    /// the same.
+    #[pyo3(signature = (run_bop_check = false))]
+    fn check(&self, run_bop_check: bool) -> PyResult<()> {
+        let _ = run_bop_check;
+        if let Some(shape) = self.shape() {
+            if !ferrocad_part::backend().is_valid(&shape) {
+                return Err(PyValueError::new_err("the shape is not valid"));
+            }
+        }
+        Ok(())
     }
 
     /// The minimum distance between this shape and `other` (`Shape.distToShape`).
@@ -1280,23 +1359,21 @@ impl PartShape {
         self.childShapes(py, None)
     }
 
-    /// The solids (`Shape.Solids`) as `Part.Shape` handles. There is no
-    /// `Part.Solid` class yet, so a solid stays a generic shape handle.
+    /// The solids (`Shape.Solids`) as [`Part.Solid`](solids::PySolid) handles.
     #[getter]
-    fn Solids(&self, py: Python<'_>) -> PyResult<Vec<Py<PartShape>>> {
+    fn Solids(&self, py: Python<'_>) -> PyResult<Vec<Py<solids::PySolid>>> {
         self.sub_shapes(ElementKind::Solid)?
             .into_iter()
-            .map(|shape| Py::new(py, PartShape::from_shape(shape)))
+            .map(|shape| Py::new(py, solids::PySolid::from_shape(shape)))
             .collect()
     }
 
-    /// The shells (`Shape.Shells`) as `Part.Shape` handles. There is no
-    /// `Part.Shell` class yet, so a shell stays a generic shape handle.
+    /// The shells (`Shape.Shells`) as [`Part.Shell`](solids::PyShell) handles.
     #[getter]
-    fn Shells(&self, py: Python<'_>) -> PyResult<Vec<Py<PartShape>>> {
+    fn Shells(&self, py: Python<'_>) -> PyResult<Vec<Py<solids::PyShell>>> {
         self.sub_shapes(ElementKind::Shell)?
             .into_iter()
-            .map(|shape| Py::new(py, PartShape::from_shape(shape)))
+            .map(|shape| Py::new(py, solids::PyShell::from_shape(shape)))
             .collect()
     }
 
@@ -1756,61 +1833,62 @@ impl PartShape {
 
     /// `Shape.fuse(other)` — the union of the two shapes.
     ///
-    /// `glue` and `tolerance` are accepted for upstream signature compatibility; the
-    /// kernel runs the plain boolean. `noElementMap` drops the lineage, exactly as
-    /// upstream's `ElementMapPolicy::Drop`.
-    #[pyo3(signature = (other, glue = false, tolerance = 0.0, refine = true, noElementMap = false))]
+    /// `glue` and `tolerance` are accepted for upstream signature compatibility
+    /// (`glue` is coerced for truthiness, so a float is accepted as upstream
+    /// allows); the kernel runs the plain boolean. `noElementMap` drops the
+    /// lineage, exactly as upstream's `ElementMapPolicy::Drop`.
+    #[pyo3(signature = (other, glue = None, tolerance = 0.0, refine = true, noElementMap = false))]
     fn fuse(
         &self,
         other: &Bound<'_, PyAny>,
-        glue: bool,
+        glue: Option<&Bound<'_, PyAny>>,
         tolerance: f64,
         refine: bool,
         noElementMap: bool,
     ) -> PyResult<PartShape> {
-        let _ = (glue, tolerance, refine);
+        let _ = (truthy(glue), tolerance, refine);
         self.boolean(other, BooleanOp::Fuse, noElementMap)
     }
 
     /// `Shape.cut(other)` — `self` with `other` removed.
-    #[pyo3(signature = (other, glue = false, tolerance = 0.0, refine = true, noElementMap = false))]
+    #[pyo3(signature = (other, glue = None, tolerance = 0.0, refine = true, noElementMap = false))]
     fn cut(
         &self,
         other: &Bound<'_, PyAny>,
-        glue: bool,
+        glue: Option<&Bound<'_, PyAny>>,
         tolerance: f64,
         refine: bool,
         noElementMap: bool,
     ) -> PyResult<PartShape> {
-        let _ = (glue, tolerance, refine);
+        let _ = (truthy(glue), tolerance, refine);
         self.boolean(other, BooleanOp::Cut, noElementMap)
     }
 
     /// `Shape.common(other)` — the intersection of the two shapes.
-    #[pyo3(signature = (other, glue = false, tolerance = 0.0, refine = true, noElementMap = false))]
+    #[pyo3(signature = (other, glue = None, tolerance = 0.0, refine = true, noElementMap = false))]
     fn common(
         &self,
         other: &Bound<'_, PyAny>,
-        glue: bool,
+        glue: Option<&Bound<'_, PyAny>>,
         tolerance: f64,
         refine: bool,
         noElementMap: bool,
     ) -> PyResult<PartShape> {
-        let _ = (glue, tolerance, refine);
+        let _ = (truthy(glue), tolerance, refine);
         self.boolean(other, BooleanOp::Common, noElementMap)
     }
 
     /// `Shape.multiFuse(shapes)` — fuse this shape with each shape in `shapes`.
-    #[pyo3(signature = (shapes, glue = false, tolerance = 0.0, refine = true, noElementMap = false))]
+    #[pyo3(signature = (shapes, glue = None, tolerance = 0.0, refine = true, noElementMap = false))]
     fn multiFuse(
         &self,
         shapes: &Bound<'_, PyAny>,
-        glue: bool,
+        glue: Option<&Bound<'_, PyAny>>,
         tolerance: f64,
         refine: bool,
         noElementMap: bool,
     ) -> PyResult<PartShape> {
-        let _ = (glue, tolerance, refine);
+        let _ = (truthy(glue), tolerance, refine);
         let mut shape = self.named_shape()?;
         // Each fold is one operation with its own history; fold them forward into one
         // lineage, the same way the geometry is folded.
@@ -2569,6 +2647,16 @@ fn matrix_from_py(value: &Bound<'_, PyAny>) -> PyResult<ferrocad_types::Matrix4>
         }
     }
     Ok(ferrocad_types::Matrix4::from_values(values))
+}
+
+/// Python truthiness for an optional flag argument.
+///
+/// Upstream parses the `glue`/`refine` style flags with `PyObject_IsTrue`, so
+/// any object is accepted (SimpleCAD passes a float `glue`).
+fn truthy(value: Option<&Bound<'_, PyAny>>) -> bool {
+    value
+        .and_then(|value| value.is_truthy().ok())
+        .unwrap_or(false)
 }
 
 /// The shape wrapped by a Python `Part.Shape` (or one of its subclasses).

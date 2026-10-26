@@ -377,6 +377,27 @@ impl PyCircle {
         self.curve.radius()
     }
 
+    /// The circle's in-plane X direction (`Circle.XAxis`).
+    #[getter]
+    fn XAxis(&self, py: Python<'_>) -> PyResult<PyObject> {
+        py_vector(py, self.curve.x_axis())
+    }
+
+    /// Replace the circle's in-plane X direction, keeping its centre, plane and
+    /// radius (`Circle.XAxis = …`).
+    #[setter]
+    fn set_XAxis(&mut self, value: &Bound<'_, PyAny>) -> PyResult<()> {
+        let x_axis = vector(value)?;
+        self.curve = Circle::with_axis(
+            self.curve.center(),
+            self.curve.normal(),
+            x_axis,
+            self.curve.radius(),
+        )
+        .map_err(curve_error)?;
+        Ok(())
+    }
+
     /// Upstream's `GeomCircle::setRadius`: the centre and the plane are kept, the
     /// radius is replaced (a non-positive radius raises `Part.OCCError`).
     #[setter]
@@ -568,6 +589,12 @@ impl PyArcOfCircle {
     #[getter]
     fn Radius(&self) -> f64 {
         self.curve.circle().radius()
+    }
+
+    /// The arc's plane normal (`ArcOfCircle.Axis`), the underlying circle's axis.
+    #[getter]
+    fn Axis(&self, py: Python<'_>) -> PyResult<PyObject> {
+        py_vector(py, self.curve.circle().normal())
     }
 
     #[getter]
@@ -2088,6 +2115,28 @@ impl PyBezierCurve {
     }
 }
 
+/// Whether two elementary surface frames are the same within tolerance, the way
+/// upstream's `GeomElementarySurface::isSame` compares a `gp_Ax3`: the locations
+/// coincide and the directions agree (allowing the right-handed frame flips OCC
+/// may choose).
+fn same_surface_frame(
+    first: (&Vector3, &Vector3, &Vector3, &Vector3),
+    second: (&Vector3, &Vector3, &Vector3, &Vector3),
+    tol: f64,
+    atol: f64,
+) -> bool {
+    fn angle(a: &Vector3, b: &Vector3) -> f64 {
+        a.dot(b).clamp(-1.0, 1.0).acos()
+    }
+    let (a_loc, a_dir, a_x, a_y) = first;
+    let (b_loc, b_dir, b_x, b_y) = second;
+    a_loc.sub(b_loc).sqr() <= tol * tol
+        && angle(a_dir, b_dir) <= atol
+        && ((angle(a_x, b_x) <= atol && angle(a_y, b_y) <= atol)
+            || (angle(a_x, b_y) <= atol && angle(a_y, &b_x.neg()) <= atol)
+            || (angle(a_y, b_x) <= atol && angle(a_x, &b_y.neg()) <= atol))
+}
+
 /// `Part.Plane(origin=None, normal=None)` — an infinite plane, the XY plane
 /// (`Part.Plane()`) by default.
 #[pyclass(name = "Plane", module = "Part")]
@@ -2181,6 +2230,41 @@ impl PyPlane {
         )
     }
 
+    /// The point at surface parameters `(u, v)` (`GeomSurface.value`).
+    fn value(&self, py: Python<'_>, u: f64, v: f64) -> PyResult<PyObject> {
+        let point = self
+            .location
+            .add(&self.x_dir.scale(u))
+            .add(&self.y_dir.scale(v));
+        py_vector(py, point)
+    }
+
+    /// A plane is periodic in neither parameter (`GeomSurface.isUPeriodic`).
+    fn isUPeriodic(&self) -> bool {
+        false
+    }
+
+    /// A plane is periodic in neither parameter (`GeomSurface.isVPeriodic`).
+    fn isVPeriodic(&self) -> bool {
+        false
+    }
+
+    /// A plane has no period (`GeomSurface.UPeriod`).
+    fn UPeriod(&self) -> f64 {
+        0.0
+    }
+
+    /// A plane has no period (`GeomSurface.VPeriod`).
+    fn VPeriod(&self) -> f64 {
+        0.0
+    }
+
+    /// The principal curvature in `kind` (`GeomSurface.curvature`); a plane is
+    /// flat, so every kind is zero.
+    fn curvature(&self, _u: f64, _v: f64, _kind: &str) -> f64 {
+        0.0
+    }
+
     /// The plane's origin (upstream's `Plane.Position`).
     #[getter]
     fn Location(&self, py: Python<'_>) -> PyResult<PyObject> {
@@ -2191,6 +2275,21 @@ impl PyPlane {
     #[getter]
     fn Axis(&self, py: Python<'_>) -> PyResult<PyObject> {
         py_vector(py, self.normal)
+    }
+
+    /// Whether `other` is the same plane within `tol`/`atol`
+    /// (`GeomSurface.isSame`).
+    #[pyo3(signature = (other, tol = 1e-7, atol = 1e-10))]
+    fn isSame(&self, other: &Bound<'_, PyAny>, tol: f64, atol: f64) -> bool {
+        let Ok(other) = other.extract::<PyRef<'_, PyPlane>>() else {
+            return false;
+        };
+        same_surface_frame(
+            (&self.location, &self.normal, &self.x_dir, &self.y_dir),
+            (&other.location, &other.normal, &other.x_dir, &other.y_dir),
+            tol,
+            atol,
+        )
     }
 
     /// The intersection with `other` as a list of lines: empty when the planes are
@@ -2342,6 +2441,24 @@ impl PyCylinder {
         py_vector(py, self.axis)
     }
 
+    /// Whether `other` is the same cylinder within `tol`/`atol`
+    /// (`GeomSurface.isSame`), including the radius.
+    #[pyo3(signature = (other, tol = 1e-7, atol = 1e-10))]
+    fn isSame(&self, other: &Bound<'_, PyAny>, tol: f64, atol: f64) -> bool {
+        let Ok(other) = other.extract::<PyRef<'_, PyCylinder>>() else {
+            return false;
+        };
+        let y_dir = self.axis.cross(&self.x_dir);
+        let other_y = other.axis.cross(&other.x_dir);
+        (self.radius - other.radius).abs() <= tol
+            && same_surface_frame(
+                (&self.center, &self.axis, &self.x_dir, &y_dir),
+                (&other.center, &other.axis, &other.x_dir, &other_y),
+                tol,
+                atol,
+            )
+    }
+
     /// The unit normal at `(u, v)` (upstream `GeomSurface.normal`): radial at
     /// `u`, independent of `v`.
     fn normal(&self, py: Python<'_>, u: f64, _v: f64) -> PyResult<PyObject> {
@@ -2364,6 +2481,54 @@ impl PyCylinder {
         Ok(PyTuple::new(py, [u, offset.dot(&self.axis)])?
             .into_any()
             .unbind())
+    }
+
+    /// The point at surface parameters `(u, v)` (`GeomSurface.value`): the
+    /// radius at angle `u`, at height `v` along the axis.
+    fn value(&self, py: Python<'_>, u: f64, v: f64) -> PyResult<PyObject> {
+        let y_dir = self.axis.cross(&self.x_dir);
+        let radial = self.x_dir.scale(u.cos()).add(&y_dir.scale(u.sin()));
+        let point = self
+            .center
+            .add(&radial.scale(self.radius))
+            .add(&self.axis.scale(v));
+        py_vector(py, point)
+    }
+
+    /// A cylinder is periodic around its axis (`GeomSurface.isUPeriodic`).
+    fn isUPeriodic(&self) -> bool {
+        true
+    }
+
+    /// A cylinder's height is unbounded, not periodic (`GeomSurface.isVPeriodic`).
+    fn isVPeriodic(&self) -> bool {
+        false
+    }
+
+    /// The angular period around the axis (`GeomSurface.UPeriod`).
+    fn UPeriod(&self) -> f64 {
+        std::f64::consts::TAU
+    }
+
+    /// A cylinder has no V period (`GeomSurface.VPeriod`).
+    fn VPeriod(&self) -> f64 {
+        0.0
+    }
+
+    /// The principal curvature in `kind` (`GeomSurface.curvature`): `1/r` around
+    /// the circumference and `0` along the axis.
+    fn curvature(&self, _u: f64, _v: f64, kind: &str) -> PyResult<f64> {
+        let curvature = 1.0 / self.radius;
+        Ok(match kind {
+            "Max" | "Maximum" => curvature,
+            "Min" | "Minimum" | "Gaussian" => 0.0,
+            "Mean" => curvature / 2.0,
+            other => {
+                return Err(OCCError::new_err(format!(
+                    "unknown curvature kind {other:?}; use Max, Min, Gaussian or Mean"
+                )));
+            }
+        })
     }
 
     fn __repr__(&self) -> String {
@@ -2464,6 +2629,24 @@ impl PySphere {
         py_vector(py, self.axis)
     }
 
+    /// Whether `other` is the same sphere within `tol`/`atol`
+    /// (`GeomSurface.isSame`), including the radius.
+    #[pyo3(signature = (other, tol = 1e-7, atol = 1e-10))]
+    fn isSame(&self, other: &Bound<'_, PyAny>, tol: f64, atol: f64) -> bool {
+        let Ok(other) = other.extract::<PyRef<'_, PySphere>>() else {
+            return false;
+        };
+        let y_dir = self.axis.cross(&self.x_dir);
+        let other_y = other.axis.cross(&other.x_dir);
+        (self.radius - other.radius).abs() <= tol
+            && same_surface_frame(
+                (&self.center, &self.axis, &self.x_dir, &y_dir),
+                (&other.center, &other.axis, &other.x_dir, &other_y),
+                tol,
+                atol,
+            )
+    }
+
     /// The unit normal at `(u, v)` (upstream `GeomSurface.normal`): the radial
     /// direction at that longitude/latitude.
     fn normal(&self, py: Python<'_>, u: f64, v: f64) -> PyResult<PyObject> {
@@ -2491,6 +2674,52 @@ impl PySphere {
         Ok(PyTuple::new(py, [u, latitude.asin()])?
             .into_any()
             .unbind())
+    }
+
+    /// The point at surface parameters `(u, v)` (`GeomSurface.value`).
+    fn value(&self, py: Python<'_>, u: f64, v: f64) -> PyResult<PyObject> {
+        let y_dir = self.axis.cross(&self.x_dir);
+        let radial = self
+            .x_dir
+            .scale(v.cos() * u.cos())
+            .add(&y_dir.scale(v.cos() * u.sin()))
+            .add(&self.axis.scale(v.sin()));
+        py_vector(py, self.center.add(&radial.scale(self.radius)))
+    }
+
+    /// A sphere is periodic in longitude (`GeomSurface.isUPeriodic`).
+    fn isUPeriodic(&self) -> bool {
+        true
+    }
+
+    /// A sphere is not periodic in latitude (`GeomSurface.isVPeriodic`).
+    fn isVPeriodic(&self) -> bool {
+        false
+    }
+
+    /// The angular period around the axis (`GeomSurface.UPeriod`).
+    fn UPeriod(&self) -> f64 {
+        std::f64::consts::TAU
+    }
+
+    /// A sphere has no V period (`GeomSurface.VPeriod`).
+    fn VPeriod(&self) -> f64 {
+        0.0
+    }
+
+    /// The principal curvature in `kind` (`GeomSurface.curvature`); a sphere is
+    /// umbilical, so every kind is `1/r` (Gaussian `1/r²`, mean `1/r`).
+    fn curvature(&self, _u: f64, _v: f64, kind: &str) -> PyResult<f64> {
+        let curvature = 1.0 / self.radius;
+        Ok(match kind {
+            "Max" | "Maximum" | "Min" | "Minimum" | "Mean" => curvature,
+            "Gaussian" => curvature * curvature,
+            other => {
+                return Err(OCCError::new_err(format!(
+                    "unknown curvature kind {other:?}; use Max, Min, Gaussian or Mean"
+                )));
+            }
+        })
     }
 
     fn __repr__(&self) -> String {
@@ -7296,11 +7525,13 @@ impl PyEdge {
 
     #[getter]
     fn Tolerance(slf: PyRef<'_, Self>) -> PyResult<f64> {
-        require_edge(slf.as_super(), "Tolerance")?;
-        Err(OCCError::new_err(
-            "Part.Edge.Tolerance is not available in this slice (the seam exposes \
-             no edge tolerance)",
-        ))
+        let shape = slf
+            .as_super()
+            .shape()
+            .ok_or_else(|| empty_error("Tolerance"))?;
+        backend()
+            .shape_tolerance(&shape)
+            .map_err(kernel_error)
     }
 
     #[setter]
@@ -7391,9 +7622,14 @@ impl PyEdge {
         py_vector(py, point)
     }
 
-    fn tangentAt(slf: PyRef<'_, Self>, _parameter: f64) -> PyResult<PyObject> {
-        require_edge(slf.as_super(), "tangentAt")?;
-        Err(edge_query_error("tangentAt"))
+    /// The unit tangent at curve parameter `t` (`Edge.tangentAt`), the
+    /// normalised first derivative of the edge's curve.
+    fn tangentAt(slf: PyRef<'_, Self>, py: Python<'_>, parameter: f64) -> PyResult<PyObject> {
+        let shape = slf
+            .as_super()
+            .shape()
+            .ok_or_else(|| empty_error("tangentAt"))?;
+        py_vector(py, edge_derivative(&shape, parameter)?.normalize())
     }
 
     fn normalAt(slf: PyRef<'_, Self>, _parameter: f64) -> PyResult<PyObject> {
@@ -7411,9 +7647,13 @@ impl PyEdge {
         Err(edge_query_error("centerOfCurvatureAt"))
     }
 
-    fn derivative1At(slf: PyRef<'_, Self>, _parameter: f64) -> PyResult<PyObject> {
-        require_edge(slf.as_super(), "derivative1At")?;
-        Err(edge_query_error("derivative1At"))
+    /// The first derivative at curve parameter `t` (`Edge.derivative1At`).
+    fn derivative1At(slf: PyRef<'_, Self>, py: Python<'_>, parameter: f64) -> PyResult<PyObject> {
+        let shape = slf
+            .as_super()
+            .shape()
+            .ok_or_else(|| empty_error("derivative1At"))?;
+        py_vector(py, edge_derivative(&shape, parameter)?)
     }
 
     fn derivative2At(slf: PyRef<'_, Self>, _parameter: f64) -> PyResult<PyObject> {
@@ -7964,6 +8204,47 @@ fn planar_wire_normal(shape: &Shape) -> Option<Vector3> {
     None
 }
 
+/// The first partial derivatives `(∂P/∂u, ∂P/∂v)` of a face's surface at
+/// `(u, v)`, by central differences over `Face.valueAt`.
+///
+/// The seam exposes the surface point but not a `D1` query, so this differentiates
+/// numerically; the step is scaled to the parameter magnitude so large
+/// parameters do not lose precision.
+fn surface_derivatives(shape: &Shape, u: f64, v: f64) -> PyResult<(Vector3, Vector3)> {
+    let backend = backend();
+    let h = 1e-6 * (1.0 + u.abs().max(v.abs()));
+    let plus_u = backend
+        .face_value_at(shape, u + h, v)
+        .map_err(kernel_error)?;
+    let minus_u = backend
+        .face_value_at(shape, u - h, v)
+        .map_err(kernel_error)?;
+    let plus_v = backend
+        .face_value_at(shape, u, v + h)
+        .map_err(kernel_error)?;
+    let minus_v = backend
+        .face_value_at(shape, u, v - h)
+        .map_err(kernel_error)?;
+    Ok((
+        plus_u.sub(&minus_u).scale(1.0 / (2.0 * h)),
+        plus_v.sub(&minus_v).scale(1.0 / (2.0 * h)),
+    ))
+}
+
+/// The derivative of an edge's curve at `parameter`, by central differences over
+/// `Edge.valueAt` (the seam exposes no `Geom_Curve::DN`).
+fn edge_derivative(shape: &Shape, parameter: f64) -> PyResult<Vector3> {
+    let backend = backend();
+    let h = 1e-6 * (1.0 + parameter.abs());
+    let plus = backend
+        .edge_value_at(shape, parameter + h)
+        .map_err(kernel_error)?;
+    let minus = backend
+        .edge_value_at(shape, parameter - h)
+        .map_err(kernel_error)?;
+    Ok(plus.sub(&minus).scale(1.0 / (2.0 * h)))
+}
+
 /// The outward unit normal of a face at surface parameters `(u, v)`.
 ///
 /// A classified surface gives the analytic normal (constant on a plane, radial
@@ -8111,9 +8392,17 @@ impl PyFace {
         Err(edge_query_error("curvatureAt"))
     }
 
-    fn derivative1At(slf: PyRef<'_, Self>, _u: f64, _v: f64) -> PyResult<PyObject> {
-        require_edge(slf.as_super(), "derivative1At")?;
-        Err(edge_query_error("derivative1At"))
+    /// The first partial derivatives `(∂P/∂u, ∂P/∂v)` at surface parameters
+    /// `(u, v)` (`Face.derivative1At`, upstream's `GeomSurface.derivative1At`).
+    fn derivative1At(slf: PyRef<'_, Self>, py: Python<'_>, u: f64, v: f64) -> PyResult<PyObject> {
+        let shape = slf
+            .as_super()
+            .shape()
+            .ok_or_else(|| empty_error("derivative1At"))?;
+        let (du, dv) = surface_derivatives(&shape, u, v)?;
+        Ok(PyTuple::new(py, [py_vector(py, du)?, py_vector(py, dv)?])?
+            .into_any()
+            .unbind())
     }
 
     fn derivative2At(slf: PyRef<'_, Self>, _u: f64, _v: f64) -> PyResult<PyObject> {
@@ -8133,8 +8422,13 @@ impl PyFace {
 
     #[getter]
     fn Tolerance(slf: PyRef<'_, Self>) -> PyResult<f64> {
-        require_edge(slf.as_super(), "Tolerance")?;
-        Err(edge_query_error("Tolerance"))
+        let shape = slf
+            .as_super()
+            .shape()
+            .ok_or_else(|| empty_error("Tolerance"))?;
+        backend()
+            .shape_tolerance(&shape)
+            .map_err(kernel_error)
     }
 
     #[setter]

@@ -4,6 +4,9 @@
 
 use super::*;
 
+/// The Δ field names in X/Y/Z order.
+const AXIS_FIELDS: [&str; 3] = ["dx", "dy", "dz"];
+
 impl Shell {
     /// Open a command's dialog, seeding one control per field.
     pub(super) fn open_dialog_state(&mut self, token: String, spec: DialogSpec, cx: &mut Context<Self>) {
@@ -138,11 +141,13 @@ impl Shell {
     /// Drop a typed preview without changing the document (cancel or dismiss).
     pub(super) fn clear_dialog_preview(&mut self, cx: &mut Context<Self>) {
         self.drag_baseline = None;
+        // Also releases the deferred drag session, so an escalated HUD restores the
+        // gizmo's normal commit-on-release path when it is cancelled.
+        self.defer_gizmo_preview(false, cx);
         let Some(viewport) = self.viewport.clone() else {
             return;
         };
         viewport.update(cx, |viewport, cx| {
-            viewport.set_gizmo_preview(false);
             if viewport.preview_translation(&[], [0.0; 3]) {
                 cx.notify();
             }
@@ -151,10 +156,126 @@ impl Shell {
 
     /// Enable or disable the viewport's deferred gizmo commit.
     pub(super) fn defer_gizmo_preview(&mut self, deferred: bool, cx: &mut Context<Self>) {
+        self.gizmo_deferred = deferred;
+        if !deferred {
+            // The drag snapshot belonged to the deferred session; cancel/dismiss has
+            // restored the normal commit path.
+            self.gizmo_drag = None;
+        }
         let Some(viewport) = self.viewport.clone() else {
             return;
         };
         viewport.update(cx, |viewport, _cx| viewport.set_gizmo_preview(deferred));
+    }
+
+    /// The current drag translation to seed the Move HUD from.
+    ///
+    /// The viewport is the authority while it exists: the live readout names the
+    /// constrained axis, and the draw-only offset is the accumulated translation the
+    /// handles are already showing. Without one (headless, or before
+    /// `enable_viewport`) the last mirrored preview is used; an idle gizmo seeds zero
+    /// and only picks the focus from the handle under the pointer.
+    pub(super) fn gizmo_seed(&self, cx: &App) -> GizmoSeed {
+        let Some(viewport) = self.viewport.as_ref() else {
+            return self.gizmo_drag.unwrap_or_default();
+        };
+        let viewport = viewport.read(cx);
+        let Some(gizmo) = viewport.gizmo() else {
+            return self.gizmo_drag.unwrap_or_default();
+        };
+        let mut seed = GizmoSeed::default();
+        if let Some(value) = viewport.gizmo_value() {
+            match value {
+                GizmoValue::Linear { axis, applied, .. } => {
+                    seed.axis = axis_index(axis);
+                    seed.delta[seed.axis] = applied;
+                }
+                GizmoValue::Planar { applied, .. } => {
+                    // A plane has two free axes; the HUD's convention is to focus X.
+                    seed.axis = 0;
+                    seed.delta = [applied.x, applied.y, applied.z];
+                }
+                GizmoValue::Angular { axis, .. } => {
+                    // A ring drag has no translation to seed yet; the axis still
+                    // decides which field takes focus.
+                    seed.axis = axis_index(axis);
+                }
+            }
+        }
+        // The offset is the whole drag's preview translation (the readout's `applied`
+        // is only the constrained component), so it wins when present.
+        if let Some(offset) = gizmo.display_offset() {
+            seed = GizmoSeed {
+                axis: seed.axis,
+                delta: [offset.x, offset.y, offset.z],
+            };
+        }
+        // Idle: there is no tick, so the field follows the handle under the pointer.
+        if viewport.gizmo_value().is_none()
+            && let Some(handle) = gizmo.hovered()
+        {
+            seed.axis = handle_axis_index(handle);
+        }
+        seed
+    }
+
+    /// The input for the dialog field named `name`, when it has one.
+    fn dialog_input(&self, name: &str) -> Option<Entity<TextInput>> {
+        let dialog = self.dialog.as_ref()?;
+        let index = dialog
+            .spec
+            .fields
+            .iter()
+            .position(|field| field.name == name)?;
+        dialog.inputs.get(index).and_then(Option::as_ref).cloned()
+    }
+
+    /// Escalate an armed gizmo into the floating Move HUD.
+    ///
+    /// Reuses the wheel's `Move` verb (same token, mode switch and deferred session),
+    /// seeds the Δ fields with `seed`, and focuses the field for the armed handle.
+    /// `typed` is the numeric key that opened it: it replaces the freshly seeded value
+    /// and previews immediately, like typing into a selected field.
+    pub(super) fn escalate_to_move_hud(
+        &mut self,
+        seed: GizmoSeed,
+        typed: Option<char>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        // The wheel's verb, so there is one HUD definition and one token protocol.
+        self.run_command("App_Move", cx);
+        let Some(dialog) = self.dialog.as_ref() else {
+            return false;
+        };
+        if !dialog.spec.previews_translation() {
+            return true;
+        }
+        // `open_dialog_state` already defers a translation spec; repeat it here so the
+        // escalation owns the requirement and a mid-drag release can never commit.
+        self.defer_gizmo_preview(true, cx);
+        self.set_translation_fields(seed.delta, cx);
+        let name = AXIS_FIELDS[seed.axis.min(AXIS_FIELDS.len() - 1)];
+        let Some(input) = self.dialog_input(name) else {
+            return true;
+        };
+        // `open_dialog_state` asks the next render to focus the first field. The
+        // escalation always opens by keyboard, so take that over now and focus the
+        // field the armed handle names instead.
+        self.focus_dialog = false;
+        let handle = input.read(cx).focus_handle(cx);
+        window.focus(&handle, cx);
+        if let Some(ch) = typed {
+            input.update(cx, |input, cx| input.set_text(ch.to_string(), cx));
+            // `set_text` is programmatic (no change event), so drive the preview here.
+            self.preview_dialog(cx);
+        } else {
+            // Select the seed so the next keystroke replaces it (`0.00` + `5` must be
+            // `5`, not `0.005`).
+            input.update(cx, |input, cx| input.select_all(cx));
+        }
+        cx.notify();
+        true
     }
 
     /// The Δ values currently in the fields, when the spec previews a translation.
@@ -203,6 +324,12 @@ impl Shell {
     /// into the Δ fields and keep the whole selection previewing. Nothing reaches the
     /// document, so the drag and the typed values describe the same pending move.
     pub(super) fn on_transform_preview(&mut self, preview: &TransformPreview, cx: &mut Context<Self>) {
+        let m = &preview.total_transform.m;
+        let drag = [m[3], m[7], m[11]];
+        // Mirror the pending drag even before a HUD is open, so an escalation from the
+        // keyboard can seed itself from the tick that is already on screen.
+        self.gizmo_drag = (preview.phase != PreviewPhase::End)
+            .then(|| GizmoSeed::from_translation(drag));
         if !self
             .dialog
             .as_ref()
@@ -216,8 +343,11 @@ impl Shell {
             self.drag_baseline = self.translation_in_fields(cx);
         }
         let baseline = self.drag_baseline.unwrap_or([0.0; 3]);
-        let m = &preview.total_transform.m;
-        let delta = [baseline[0] + m[3], baseline[1] + m[7], baseline[2] + m[11]];
+        let delta = [
+            baseline[0] + drag[0],
+            baseline[1] + drag[1],
+            baseline[2] + drag[2],
+        ];
         self.set_translation_fields(delta, cx);
         self.preview_dialog(cx);
         if preview.phase == PreviewPhase::End {
@@ -361,4 +491,24 @@ impl Shell {
         self.dialog.is_some() || self.palette.is_some() || self.form_dialog.is_some()
     }
 
+}
+
+/// The field index for a gizmo axis (X, Y, Z).
+fn axis_index(axis: GizmoAxis) -> usize {
+    match axis {
+        GizmoAxis::X => 0,
+        GizmoAxis::Y => 1,
+        GizmoAxis::Z => 2,
+    }
+}
+
+/// The field index for an armed handle. A plane (or the origin) focuses X, per the
+/// HUD's typed-field order.
+fn handle_axis_index(handle: GizmoHandle) -> usize {
+    match handle {
+        GizmoHandle::AxisX | GizmoHandle::RotateX => 0,
+        GizmoHandle::AxisY | GizmoHandle::RotateY => 1,
+        GizmoHandle::AxisZ | GizmoHandle::RotateZ => 2,
+        GizmoHandle::PlaneXY | GizmoHandle::PlaneXZ | GizmoHandle::PlaneYZ => 0,
+    }
 }

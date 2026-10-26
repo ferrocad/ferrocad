@@ -21,8 +21,8 @@ use gpui::{
 use ferrocad_geom::SelectionRef;
 use ferrocad_inventor::{Scene, Viewport};
 use ferrocad_stage::{
-    DeclarativeManipulator, GizmoMode, InteractionCommit, Manipulator, SnapKind, ToolStatus,
-    TransformGizmo,
+    DeclarativeManipulator, GizmoAxis, GizmoHandle, GizmoMode, GizmoValue, InteractionCommit,
+    Manipulator, SnapKind, ToolStatus, TransformGizmo,
 };
 use ferrocad_types::Vector3;
 use ferrocad_ui::Form;
@@ -133,6 +133,43 @@ fn palette_filtered<'a>(commands: &'a [CommandInfo], query: &str) -> Vec<&'a Com
         .collect()
 }
 
+/// The key that escalates an armed gizmo into the Move HUD.
+///
+/// `Tab` opens the HUD with no typed character; a numeric key (`0-9`, `-`, `.`)
+/// opens it and the character is inserted into the focused field. Chorded keys and
+/// shifted symbols are not escalation: they belong to the shortcut/typing path.
+fn escalation_key(event: &KeyDownEvent) -> Option<Option<char>> {
+    let modifiers = &event.keystroke.modifiers;
+    if modifiers.control || modifiers.alt || modifiers.platform {
+        return None;
+    }
+    if event.keystroke.key == "tab" {
+        return Some(None);
+    }
+    if modifiers.shift {
+        return None;
+    }
+    // Prefer the typed character: a shifted digit's `key` is still its base digit
+    // while `key_char` carries the symbol the user actually typed.
+    let typed = match event.keystroke.key_char.as_deref() {
+        Some(text) => {
+            let mut chars = text.chars();
+            match (chars.next(), chars.next()) {
+                (Some(ch), None) => Some(ch),
+                _ => None,
+            }
+        }
+        None => {
+            let mut chars = event.keystroke.key.chars();
+            match (chars.next(), chars.next()) {
+                (Some(ch), None) => Some(ch),
+                _ => None,
+            }
+        }
+    }?;
+    matches!(typed, '0'..='9' | '-' | '.').then_some(Some(typed))
+}
+
 /// Whether the event is the palette's `Ctrl+K` (`Cmd+K` on macOS).
 fn is_palette_shortcut(event: &KeyDownEvent) -> bool {
     let modifiers = &event.keystroke.modifiers;
@@ -177,6 +214,30 @@ fn snap_name(kind: SnapKind) -> &'static str {
         SnapKind::EdgeMid => "edge mid",
         SnapKind::Centre => "face centre",
         SnapKind::Origin => "origin",
+    }
+}
+
+/// The translation a gizmo drag is already showing, used to seed the Move HUD when
+/// escalation starts.
+///
+/// `axis` is the field the HUD should focus (0 = X, 1 = Y, 2 = Z); a plane drag
+/// focuses X, matching the typed-field order.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub(super) struct GizmoSeed {
+    pub axis: usize,
+    pub delta: [f64; 3],
+}
+
+impl GizmoSeed {
+    /// Seed from a world-space translation, deriving the axis from the component
+    /// that moved (a plane or an unmoved drag focuses X).
+    fn from_translation(delta: [f64; 3]) -> Self {
+        let axis = match (delta[0] != 0.0, delta[1] != 0.0, delta[2] != 0.0) {
+            (false, true, false) => 1,
+            (false, false, true) => 2,
+            _ => 0,
+        };
+        Self { axis, delta }
     }
 }
 
@@ -326,6 +387,13 @@ pub struct Shell {
     /// relative to its own start, so this is what makes successive drags accumulate
     /// into the same editable values.
     drag_baseline: Option<[f64; 3]>,
+    /// Whether the current gizmo drag is deferred to the Move HUD. This mirrors the
+    /// viewport's `set_gizmo_preview` so the shell can answer Esc/cancel without a
+    /// viewport (headless tests, or before `enable_viewport`).
+    gizmo_deferred: bool,
+    /// The accumulated delta of the deferred drag, mirrored from the last
+    /// [`TransformPreview`]. It seeds an escalation when there is no viewport to ask.
+    gizmo_drag: Option<GizmoSeed>,
     /// The floating HUD's last painted rect (window coordinates). It is the hit-test
     /// for "is the pointer over the HUD" and supplies the real size for clamping.
     hud_rect: Option<Bounds<Pixels>>,
@@ -643,6 +711,8 @@ impl Shell {
             wheel_target: None,
             last_pointer: None,
             drag_baseline: None,
+            gizmo_deferred: false,
+            gizmo_drag: None,
             hud_rect: None,
             hud_lock: None,
             dev_tools: None,
@@ -713,7 +783,7 @@ impl Shell {
         &mut self,
         event: &KeyDownEvent,
         cancel_dialog: bool,
-        window: &Window,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) -> bool {
         // A rendered form dialog is modal like a command dialog or the palette:
@@ -783,6 +853,20 @@ impl Shell {
             // A session pivot is a pending re-pivot: Esc drops it and rebuilds the
             // triad at the object origin.
             if self.clear_user_origin(cx) {
+                return true;
+            }
+        }
+        // Fast escalation (P3): while a TransformGizmo is armed, `Tab` or a numeric
+        // key opens the floating Move HUD instead of traversing focus or typing into
+        // whatever happened to be focused. It is seeded with the live drag delta
+        // (zero when idle) and focuses the field for the armed handle. A modal keeps
+        // its own keys, so `Tab` still cycles an open dialog's fields.
+        if !self.modal_open()
+            && self.model.lock().unwrap().gizmo_armed
+            && let Some(typed) = escalation_key(event)
+        {
+            let seed = self.gizmo_seed(cx);
+            if self.escalate_to_move_hud(seed, typed, window, cx) {
                 return true;
             }
         }

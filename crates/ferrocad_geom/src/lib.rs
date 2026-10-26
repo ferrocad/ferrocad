@@ -59,10 +59,10 @@ use ferrocad_curves::EdgeCurve;
 
 /// The elementary description of a face's backing surface (`Face.Surface`).
 ///
-/// `Plane`, `Cylinder` and `Sphere` carry the frame the backend's surface
-/// evaluator uses, so a point's parameters computed from the frame round-trip
-/// through `face_value_at`. `Other` keeps only the FreeCAD type id for surfaces
-/// this slice does not classify (cone, torus, B-spline, …).
+/// The analytic variants carry the frame the backend's surface evaluator uses, so
+/// a point's parameters computed from the frame round-trip through
+/// `face_value_at`. `Other` keeps only the FreeCAD type id for surfaces this
+/// slice does not classify (a B-spline, a surface of revolution, …).
 #[derive(Clone, Debug, PartialEq)]
 pub enum SurfaceData {
     /// A plane: `point = origin + u * x_dir + v * y_dir`.
@@ -73,23 +73,116 @@ pub enum SurfaceData {
         normal: Vector3,
     },
     /// A cylinder: `point = origin + radius * (cos(u) * x_dir + sin(u) * y_dir)
-    /// + v * axis`, with `y_dir = axis × x_dir`.
+    /// + v * axis`, with `y_dir = axis × x_dir` for a direct frame and
+    /// `x_dir × axis` for an indirect one (`direct`).
     Cylinder {
         origin: Vector3,
         axis: Vector3,
         x_dir: Vector3,
         radius: f64,
+        direct: bool,
     },
     /// A sphere: `point = center + radius * (cos(v) * (cos(u) * x_dir
-    /// + sin(u) * y_dir) + sin(v) * axis)`, with `y_dir = axis × x_dir`.
+    /// + sin(u) * y_dir) + sin(v) * axis)`, with the same `direct` rule for
+    /// `y_dir` as [`Cylinder`](Self::Cylinder).
     Sphere {
         center: Vector3,
         axis: Vector3,
         x_dir: Vector3,
         radius: f64,
+        direct: bool,
+    },
+    /// A cone: OCCT's parameterisation, `point = origin + (radius + v *
+    /// sin(semi_angle)) * (cos(u) * x_dir + sin(u) * y_dir) + v *
+    /// cos(semi_angle) * axis`, with `y_dir = axis × x_dir`. `v` is the slant
+    /// distance along the surface, as `Geom_ConicalSurface` defines it. The
+    /// origin is the point on the axis where the radius is `radius` (OCCT's
+    /// `gp_Cone` reference plane), not the apex.
+    Cone {
+        origin: Vector3,
+        axis: Vector3,
+        x_dir: Vector3,
+        radius: f64,
+        semi_angle: f64,
+        direct: bool,
+    },
+    /// A torus: `point = center + (major_radius + minor_radius * cos(v)) *
+    /// (cos(u) * x_dir + sin(u) * y_dir) + minor_radius * sin(v) * axis`, with
+    /// the same `direct` rule for `y_dir` as [`Cylinder`](Self::Cylinder).
+    Torus {
+        center: Vector3,
+        axis: Vector3,
+        x_dir: Vector3,
+        major_radius: f64,
+        minor_radius: f64,
+        direct: bool,
     },
     /// Any other surface, identified only by its FreeCAD type id.
     Other { type_id: String },
+}
+
+/// An elementary surface to build a face on (`Part.Face(surface, wires)`).
+///
+/// This is the construction-side counterpart of [`SurfaceData`]: the Python
+/// surface objects describe their surface with these parameters, and the backend
+/// turns them into its own surface handle before bounding it with wires.
+#[derive(Clone, Debug, PartialEq)]
+pub enum SurfaceSpec {
+    /// The plane through `origin` with `normal` and in-plane `u` direction `x_dir`.
+    Plane {
+        origin: Vector3,
+        normal: Vector3,
+        x_dir: Vector3,
+        direct: bool,
+    },
+    /// The cylinder of `radius` about the axis through `origin` along `axis`.
+    Cylinder {
+        origin: Vector3,
+        axis: Vector3,
+        x_dir: Vector3,
+        radius: f64,
+        direct: bool,
+    },
+    /// The cone of `radius` at `origin`, opening along `axis` with `semi_angle`.
+    Cone {
+        origin: Vector3,
+        axis: Vector3,
+        x_dir: Vector3,
+        radius: f64,
+        semi_angle: f64,
+        direct: bool,
+    },
+    /// The sphere of `radius` about `center` whose pole is along `axis`.
+    Sphere {
+        center: Vector3,
+        axis: Vector3,
+        x_dir: Vector3,
+        radius: f64,
+        direct: bool,
+    },
+    /// The torus about `center` with the given radii.
+    Torus {
+        center: Vector3,
+        axis: Vector3,
+        x_dir: Vector3,
+        major_radius: f64,
+        minor_radius: f64,
+        direct: bool,
+    },
+}
+
+/// The knot/bounds description an interpolating B-spline surface reports.
+///
+/// The knot vectors are the **expanded** sequences (`Geom_BSplineSurface::
+/// KnotSequence`), the same shape upstream's `UKnotSequence`/`VKnotSequence`
+/// return.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct BsplineSurfaceData {
+    pub u_knots: Vec<f64>,
+    pub v_knots: Vec<f64>,
+    /// The parameter bounds `(first, last)` of each direction.
+    pub u_bounds: (f64, f64),
+    pub v_bounds: (f64, f64),
 }
 
 // ---------------------------------------------------------------------------
@@ -672,20 +765,65 @@ pub trait GeometryBackend: Send + Sync {
         Err(unsupported("make_faces"))
     }
 
+    /// A face on an elementary `surface`, bounded by `wires`
+    /// (`Part.Face(surface, wires)`).
+    ///
+    /// The first wire is the boundary and the rest are added as further bounds;
+    /// upstream's `BRepBuilderAPI_MakeFace(Geom_Surface, wire)` does not reorder
+    /// them, so an inner wire only subtracts if it is already reverse-oriented.
+    ///
+    /// The default reports the operation as unsupported.
+    fn make_face_on_surface(
+        &self,
+        _surface: &SurfaceSpec,
+        _wires: &[Shape],
+    ) -> Result<Shape, GeomError> {
+        Err(unsupported("make_face_on_surface"))
+    }
+
     /// The backing surface's FreeCAD type id (`Face.Surface.TypeId`).
     fn surface_type(&self, _shape: &Shape) -> Option<String> {
         None
     }
 
     /// The backing surface's elementary frame (`Face.Surface` for a plane,
-    /// cylinder or sphere), in the **actual** parameterisation the backend's
-    /// `face_value_at` uses (`BRepAdaptor_Surface` for OCCT).
+    /// cylinder, cone, sphere or torus), in the **actual** parameterisation the
+    /// backend's `face_value_at` uses.
     ///
     /// The default reports no data; a backend that can classify a face's
-    /// surface overrides this. Other surface kinds (a cone, torus or B-spline)
-    /// are reported as [`SurfaceData::Other`] so the type id is still available.
+    /// surface overrides this. Other surface kinds (a B-spline, a surface of
+    /// revolution, …) are reported as [`SurfaceData::Other`] so the type id is
+    /// still available.
     fn surface_data(&self, _shape: &Shape) -> Option<SurfaceData> {
         None
+    }
+
+    /// Sew the faces of `shape` into shells (`Shape.sewShape`,
+    /// `BRepBuilderAPI_Sewing`), joining boundaries within `tolerance`.
+    ///
+    /// The default reports the operation as unsupported.
+    fn sew(&self, _shape: &Shape, _tolerance: f64) -> Result<Shape, GeomError> {
+        Err(unsupported("sew"))
+    }
+
+    /// Convert every curve and surface to its NURBS form (`Shape.toNurbs`,
+    /// `BRepBuilderAPI_NurbsConvert`).
+    ///
+    /// The default reports the operation as unsupported.
+    fn to_nurbs(&self, _shape: &Shape) -> Result<Shape, GeomError> {
+        Err(unsupported("to_nurbs"))
+    }
+
+    /// The sub-shapes of an arbitrary OCCT shape type (`"Compound"`,
+    /// `"CompSolid"`), in kernel order, as the `TopExp::MapShapes` walk visits
+    /// them.
+    ///
+    /// [`ElementKind`] deliberately covers only the six picked kinds; this is the
+    /// escape hatch for the two aggregate types (`Shape.Compounds` /
+    /// `Shape.CompSolids`), which are enumerated but never picked. The default
+    /// reports none.
+    fn sub_shapes_of_type(&self, _shape: &Shape, _kind: &str) -> Vec<Shape> {
+        Vec::new()
     }
 
     /// The outer boundary wire of a face (`Face.OuterWire`).
@@ -1039,6 +1177,65 @@ pub trait GeometryBackend: Send + Sync {
     /// The default reports the operation as unsupported.
     fn edge_value_at(&self, _edge: &Shape, _t: f64) -> Result<Vector3, GeomError> {
         Err(unsupported("edge_value_at"))
+    }
+
+    /// Sample an edge into points (`Edge.discretize`).
+    ///
+    /// `mode` is upstream's keyword choice: `0` = `Number` (uniform arc-length
+    /// abscissa points), `1` = `Distance` (uniform arc-length spacing), `2` =
+    /// `Deflection` (uniform sagitta), `3` = `Angular`/`Curvature` (tangential
+    /// deflection; `value` is the angular step, `curvature` the linear one, and
+    /// `minimum` the least number of points). `first`/`last` trim the span.
+    ///
+    /// The default reports the operation as unsupported.
+    fn edge_discretize(
+        &self,
+        _edge: &Shape,
+        _mode: i32,
+        _value: f64,
+        _curvature: f64,
+        _minimum: i32,
+        _first: f64,
+        _last: f64,
+    ) -> Result<Vec<Vector3>, GeomError> {
+        Err(unsupported("edge_discretize"))
+    }
+
+    /// The curve parameter `length` along the edge from its first parameter
+    /// (`Edge.getParameterByLength`, `GCPnts_AbscissaPoint`).
+    ///
+    /// A negative length counts back from the end; a length outside the edge
+    /// reports an error. `tolerance` is upstream's accuracy argument.
+    ///
+    /// The default reports the operation as unsupported.
+    fn edge_parameter_by_length(
+        &self,
+        _edge: &Shape,
+        _length: f64,
+        _tolerance: f64,
+    ) -> Result<f64, GeomError> {
+        Err(unsupported("edge_parameter_by_length"))
+    }
+
+    /// The boundary edges of a shell that have only one adjacent face
+    /// (`Shell.getFreeEdges`, `ShapeAnalysis_Shell`), as a compound.
+    ///
+    /// The default reports the operation as unsupported.
+    fn shell_free_edges(&self, _shell: &Shape) -> Result<Shape, GeomError> {
+        Err(unsupported("shell_free_edges"))
+    }
+
+    /// Interpolate a B-spline surface through a row-major grid of points
+    /// (`BSplineSurface.interpolate`, `GeomAPI_PointsToBSplineSurface`).
+    ///
+    /// `rows` is indexed `[u][v]`: `rows[0]` is the first row of points, and the
+    /// grid must have at least two rows and two points per row. The default
+    /// reports the operation as unsupported.
+    fn bspline_surface_interpolate(
+        &self,
+        _rows: &[Vec<Vector3>],
+    ) -> Result<BsplineSurfaceData, GeomError> {
+        Err(unsupported("bspline_surface_interpolate"))
     }
 
     /// The 3D point of a face at surface parameters `(u, v)` (`Face.valueAt`,

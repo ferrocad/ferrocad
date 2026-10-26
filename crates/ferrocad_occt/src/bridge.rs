@@ -17,6 +17,7 @@ mod ffi {
         include!("ferrocad_occt/include/fc_topology.hxx");
         include!("ferrocad_occt/include/fc_curve.hxx");
         include!("ferrocad_occt/include/fc_transform.hxx");
+        include!("ferrocad_occt/src/fc_part_ops.hxx");
 
         // Reuse the crate's opaque types. cxx shares these across bridges by path.
         type BRepAlgoAPI_Fuse = opencascade_sys::b_rep_algo_api::BRepAlgoAPI_Fuse;
@@ -419,8 +420,58 @@ mod ffi {
         ) -> bool;
 
         /// The face's backing surface frame, tagged by kind (`BRepAdaptor_Surface`
-        /// for a plane, cylinder or sphere); empty for any other surface.
+        /// for a plane, cylinder, cone, sphere or torus); empty for any other
+        /// surface.
         fn fc_face_surface_data(shape: &TopoDS_Shape, out: &mut Vec<f64>);
+
+        /// `fc_face_surface_data` with the cone (4) and torus (5) cases added.
+        fn fc_face_surface_frame(shape: &TopoDS_Shape, out: &mut Vec<f64>);
+
+        /// Sew a shape's faces into shells (`BRepBuilderAPI_Sewing`), or null.
+        fn fc_sew_shape(shape: &TopoDS_Shape, tolerance: f64) -> UniquePtr<TopoDS_Shape>;
+
+        /// Convert every curve and surface to a B-spline
+        /// (`BRepBuilderAPI_NurbsConvert`), or null.
+        fn fc_to_nurbs(shape: &TopoDS_Shape) -> UniquePtr<TopoDS_Shape>;
+
+        /// `Edge.discretize` points as flat xyz; empty on failure. `mode` is
+        /// 0 = Number, 1 = Distance, 2 = Deflection, 3 = Angular/Curvature.
+        fn fc_edge_discretize(
+            shape: &TopoDS_Shape,
+            mode: i32,
+            value: f64,
+            curvature: f64,
+            minimum: i32,
+            first: f64,
+            last: f64,
+        ) -> Vec<f64>;
+
+        /// The curve parameter at arc length `length` (`GCPnts_AbscissaPoint`),
+        /// or `NaN` when the length is out of range.
+        fn fc_edge_parameter_by_length(
+            shape: &TopoDS_Shape,
+            length: f64,
+            tolerance: f64,
+        ) -> f64;
+
+        /// The free (single-face) edges of a shell as a compound
+        /// (`ShapeAnalysis_Shell`), or null.
+        fn fc_shell_free_edges(shell: &TopoDS_Shape) -> UniquePtr<TopoDS_Shape>;
+
+        /// A face on an elementary surface (flat spec, see
+        /// `ferrocad_occt/src/fc_part_ops.hxx`) bounded by `wires`, or null.
+        fn fc_make_face_on_surface(
+            spec: &[f64],
+            wires: &TopTools_ListOfShape,
+        ) -> UniquePtr<TopoDS_Shape>;
+
+        /// `GeomAPI_PointsToBSplineSurface` through a row-major `nx` by `ny`
+        /// grid of points; the bounds and expanded knot sequences, or empty.
+        fn fc_bspline_surface_interpolate(coords: &[f64], nx: i32, ny: i32) -> Vec<f64>;
+
+        /// The sub-shapes of a numeric `TopAbs_ShapeEnum` as a compound
+        /// (`TopExp::MapShapes`), or null.
+        fn fc_shape_sub_shapes_of_type(shape: &TopoDS_Shape, kind: i32) -> UniquePtr<TopoDS_Shape>;
 
         /// Serialise a shape to BREP bytes (in memory; the crate only does files).
         fn fc_brep_write(shape: &TopoDS_Shape, out: &mut Vec<u8>);

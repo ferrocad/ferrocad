@@ -585,6 +585,35 @@ impl PartShape {
         ))
     }
 
+    /// Sew the shape's faces into shells (`Shape.sewShape`), joining boundaries
+    /// within `tolerance` (`BRepBuilderAPI_Sewing`).
+    ///
+    /// Upstream mutates the shape in place and returns `None`; so does this, and
+    /// the geometry keeps the placement it was baked with.
+    #[pyo3(signature = (tolerance = 1e-6))]
+    fn sewShape(&self, tolerance: f64) -> PyResult<()> {
+        let shape = self.named_shape()?;
+        let sewn = ferrocad_part::backend()
+            .sew(&shape, tolerance)
+            .map_err(kernel_error)?;
+        self.replace_geometry(Some(sewn));
+        Ok(())
+    }
+
+    /// A copy with every curve and surface converted to a NURBS
+    /// (`Shape.toNurbs`, `BRepBuilderAPI_NurbsConvert`).
+    fn toNurbs(&self) -> PyResult<Self> {
+        let shape = self.named_shape()?;
+        let converted = ferrocad_part::backend()
+            .to_nurbs(&shape)
+            .map_err(kernel_error)?;
+        Ok(Self::with_parts_and_placement(
+            Some(converted),
+            self.placement(),
+            None,
+        ))
+    }
+
     /// The shape's accumulated placement (`Shape.Placement`).
     ///
     /// This is a **live** view: `shape.Placement.Base = …`,
@@ -1445,9 +1474,10 @@ impl PartShape {
                 axis,
                 x_dir,
                 radius,
+                direct,
             } => Py::new(
                 py,
-                curves::PyCylinder::from_parts(radius, origin, axis, x_dir),
+                curves::PyCylinder::from_parts(radius, origin, axis, x_dir, direct),
             )?
             .into_any(),
             SurfaceData::Sphere {
@@ -1455,9 +1485,41 @@ impl PartShape {
                 axis,
                 x_dir,
                 radius,
+                direct,
             } => Py::new(
                 py,
-                curves::PySphere::from_parts(radius, center, axis, x_dir),
+                curves::PySphere::from_parts(radius, center, axis, x_dir, direct),
+            )?
+            .into_any(),
+            SurfaceData::Cone {
+                origin,
+                axis,
+                x_dir,
+                radius,
+                semi_angle,
+                direct,
+            } => Py::new(
+                py,
+                solids::PyCone::from_parts(radius, origin, axis, x_dir, semi_angle, direct),
+            )?
+            .into_any(),
+            SurfaceData::Torus {
+                center,
+                axis,
+                x_dir,
+                major_radius,
+                minor_radius,
+                direct,
+            } => Py::new(
+                py,
+                solids::PyToroid::from_parts(
+                    major_radius,
+                    minor_radius,
+                    center,
+                    axis,
+                    x_dir,
+                    direct,
+                ),
             )?
             .into_any(),
             SurfaceData::Other { type_id } => {
@@ -1785,21 +1847,36 @@ impl PartShape {
         "Part::TopoShape"
     }
 
-    /// The compound children (`Shape.Compounds`). The seam's element
-    /// enumeration has no `Compound` kind (`count_sub_shapes` counts them
-    /// recursively but cannot list them), so this is always empty rather than
-    /// guessed. A compound's direct members are still available through
-    /// [`childShapes`](Self::childShapes) and [`SubShapes`](Self::SubShapes).
+    /// The compound children (`Shape.Compounds`), from `TopExp::MapShapes` over
+    /// `TopAbs_COMPOUND`.
+    ///
+    /// This is upstream's enumeration, so it is exact: nested compounds appear,
+    /// and a compound reports itself as well (the map starts at the shape). A
+    /// shape with no compound sub-shape reports `[]`.
     #[getter]
-    fn Compounds(&self, py: Python<'_>) -> Py<PyList> {
-        PyList::empty(py).unbind()
+    fn Compounds(&self, py: Python<'_>) -> PyResult<Py<PyList>> {
+        let list = PyList::empty(py);
+        let Some(shape) = self.shape() else {
+            return Ok(list.unbind());
+        };
+        for compound in ferrocad_part::backend().sub_shapes_of_type(&shape, "Compound") {
+            list.append(PartShape::from_shape(compound))?;
+        }
+        Ok(list.unbind())
     }
 
-    /// The comp-solid children (`Shape.CompSolids`). The seam has no enumeration
-    /// for comp-solids inside a shape, so this is always empty.
+    /// The comp-solid children (`Shape.CompSolids`), from `TopExp::MapShapes`
+    /// over `TopAbs_COMPSOLID`.
     #[getter]
-    fn CompSolids(&self, py: Python<'_>) -> Py<PyList> {
-        PyList::empty(py).unbind()
+    fn CompSolids(&self, py: Python<'_>) -> PyResult<Py<PyList>> {
+        let list = PyList::empty(py);
+        let Some(shape) = self.shape() else {
+            return Ok(list.unbind());
+        };
+        for comp_solid in ferrocad_part::backend().sub_shapes_of_type(&shape, "CompSolid") {
+            list.append(PartShape::from_shape(comp_solid))?;
+        }
+        Ok(list.unbind())
     }
 
     /// `Shape.Vertex1`, `Shape.Edge2`, `Shape.Face3`, … — the kernel's 1-based

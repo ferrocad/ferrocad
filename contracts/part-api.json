@@ -1358,10 +1358,10 @@
       ],
       "unresolved": []
     },
-    "methods_heuristic": 854,
+    "methods_heuristic": 861,
     "methods": {
-      "count": 1652,
-      "distinct": 347,
+      "count": 1669,
+      "distinct": 349,
       "classes": {
         "Part.ChFi2d::AnaFilletAlgo": [
           "__repr__",
@@ -1980,6 +1980,7 @@
           "derivative1At",
           "derivative2At",
           "derivative3At",
+          "discretize",
           "firstVertex",
           "fixAddCurve3d",
           "fixAddPCurve",
@@ -2263,6 +2264,7 @@
           "VKnotSequence",
           "__repr__",
           "bounds",
+          "interpolate",
           "isUPeriodic",
           "isVPeriodic",
           "new",
@@ -2404,10 +2406,12 @@
           "rotate",
           "scaled",
           "section",
+          "sewShape",
           "slice",
           "slices",
           "split",
           "tessellate",
+          "toNurbs",
           "transformShape",
           "transformed",
           "translate",
@@ -2506,10 +2510,12 @@
           "rotate",
           "scaled",
           "section",
+          "sewShape",
           "slice",
           "slices",
           "split",
           "tessellate",
+          "toNurbs",
           "transformShape",
           "transformed",
           "translate",
@@ -2521,6 +2527,7 @@
           "Center",
           "Radius",
           "SemiAngle",
+          "TypeId",
           "__repr__",
           "getDN",
           "new",
@@ -2759,10 +2766,12 @@
           "rotate",
           "scaled",
           "section",
+          "sewShape",
           "slice",
           "slices",
           "split",
           "tessellate",
+          "toNurbs",
           "transformShape",
           "transformed",
           "translate",
@@ -2835,6 +2844,7 @@
           "getChildShapes",
           "getElement",
           "getElementHistory",
+          "getFreeEdges",
           "getSubShape",
           "getTolerance",
           "importBrepFromString",
@@ -2869,12 +2879,14 @@
           "scaled",
           "section",
           "setNonManifoldFlag",
+          "sewShape",
           "shape",
           "shell",
           "slice",
           "slices",
           "split",
           "tessellate",
+          "toNurbs",
           "transformShape",
           "transformed",
           "translate",
@@ -2978,6 +2990,7 @@
           "rotate",
           "scaled",
           "section",
+          "sewShape",
           "shape",
           "slice",
           "slices",
@@ -2985,6 +2998,7 @@
           "solidFromShell",
           "split",
           "tessellate",
+          "toNurbs",
           "transformShape",
           "transformed",
           "translate",
@@ -3012,6 +3026,7 @@
           "Center",
           "MajorRadius",
           "MinorRadius",
+          "TypeId",
           "__repr__",
           "new",
           "toBSpline",
@@ -3113,10 +3128,12 @@
           "rotate",
           "scaled",
           "section",
+          "sewShape",
           "slice",
           "slices",
           "split",
           "tessellate",
+          "toNurbs",
           "toShape",
           "transformShape",
           "transformed",
@@ -3137,13 +3154,13 @@
         {
           "kind": "not_available_in_this_slice",
           "file": "crates/ferrocad_part_py/src/curves.rs",
-          "line": 7248,
+          "line": 7275,
           "text": "\"Part.{what} is not available in this slice (the seam exposes no such query)\""
         },
         {
           "kind": "not_available_in_this_slice",
           "file": "crates/ferrocad_part_py/src/curves.rs",
-          "line": 7541,
+          "line": 7568,
           "text": "\"Part.Edge.Tolerance is not available in this slice (the seam exposes \\"
         },
         {
@@ -3161,67 +3178,67 @@
         {
           "kind": "not_implemented",
           "file": "crates/ferrocad_part_py/src/curves.rs",
-          "line": 3962,
+          "line": 3989,
           "text": "PyNotImplementedError::new_err(format!("
         },
         {
           "kind": "not_implemented",
           "file": "crates/ferrocad_part_py/src/curves.rs",
-          "line": 7044,
+          "line": 7071,
           "text": "/// `NotImplementedError` rather than answering from a curve that was never"
         },
         {
           "kind": "not_implemented",
           "file": "crates/ferrocad_part_py/src/curves.rs",
-          "line": 8135,
+          "line": 8283,
           "text": "Err(_) => Ok(py.NotImplemented()),"
         },
         {
           "kind": "not_implemented",
           "file": "crates/ferrocad_part_py/src/curves.rs",
-          "line": 8143,
+          "line": 8291,
           "text": "Err(_) => Ok(py.NotImplemented()),"
-        },
-        {
-          "kind": "not_implemented",
-          "file": "crates/ferrocad_part_py/src/lib.rs",
-          "line": 1109,
-          "text": "/// raising. A non-shape operand returns `NotImplemented`, letting Python try"
-        },
-        {
-          "kind": "not_implemented",
-          "file": "crates/ferrocad_part_py/src/lib.rs",
-          "line": 1113,
-          "text": "return Ok(py.NotImplemented());"
-        },
-        {
-          "kind": "not_implemented",
-          "file": "crates/ferrocad_part_py/src/lib.rs",
-          "line": 1122,
-          "text": "Err(_) => Ok(py.NotImplemented()),"
-        },
-        {
-          "kind": "not_implemented",
-          "file": "crates/ferrocad_part_py/src/lib.rs",
-          "line": 1131,
-          "text": "return Ok(py.NotImplemented());"
         },
         {
           "kind": "not_implemented",
           "file": "crates/ferrocad_part_py/src/lib.rs",
           "line": 1138,
+          "text": "/// raising. A non-shape operand returns `NotImplemented`, letting Python try"
+        },
+        {
+          "kind": "not_implemented",
+          "file": "crates/ferrocad_part_py/src/lib.rs",
+          "line": 1142,
+          "text": "return Ok(py.NotImplemented());"
+        },
+        {
+          "kind": "not_implemented",
+          "file": "crates/ferrocad_part_py/src/lib.rs",
+          "line": 1151,
+          "text": "Err(_) => Ok(py.NotImplemented()),"
+        },
+        {
+          "kind": "not_implemented",
+          "file": "crates/ferrocad_part_py/src/lib.rs",
+          "line": 1160,
+          "text": "return Ok(py.NotImplemented());"
+        },
+        {
+          "kind": "not_implemented",
+          "file": "crates/ferrocad_part_py/src/lib.rs",
+          "line": 1167,
           "text": "Err(_) => Ok(py.NotImplemented()),"
         },
         {
           "kind": "not_implemented_yet",
           "file": "crates/ferrocad_part_py/src/lib.rs",
-          "line": 2905,
+          "line": 2982,
           "text": "\"{operation}: partial revolutions are not implemented yet\""
         },
         {
           "kind": "not_implemented_yet",
           "file": "crates/ferrocad_part_py/src/solids.rs",
-          "line": 522,
+          "line": 538,
           "text": "\"importing .{extension} files is not implemented yet; read the file with Import instead\""
         }
       ]
@@ -3409,7 +3426,6 @@
         "insertUKnots",
         "insertVKnot",
         "insertVKnots",
-        "interpolate",
         "isUClosed",
         "isURational",
         "isVClosed",
@@ -3491,8 +3507,6 @@
         "removeInternalWires",
         "rotated",
         "scale",
-        "sewShape",
-        "toNurbs",
         "transformGeometry",
         "writeInventor"
       ],
@@ -3568,10 +3582,10 @@
   "coverage": {
     "methods": {
       "upstream_declared": 609,
-      "ours_declared": 1652,
+      "ours_declared": 1669,
       "upstream_distinct": 408,
-      "covered_distinct": 203,
-      "fraction": 0.4975,
+      "covered_distinct": 205,
+      "fraction": 0.5025,
       "missing_distinct": [
         "AngleXU",
         "Attacher",
@@ -3640,7 +3654,6 @@
         "getExtensionOfName",
         "getExtensionOfType",
         "getExtensions",
-        "getFreeEdges",
         "getModeInfo",
         "getMomentOfInertia",
         "getRadiusOfGyration",
@@ -3765,7 +3778,6 @@
         "setVOrigin",
         "setWeightCol",
         "setWeightRow",
-        "sewShape",
         "simulate",
         "suggestModes",
         "toBezier",

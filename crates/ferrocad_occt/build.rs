@@ -27,6 +27,7 @@ fn main() {
         "include/fc_shapefix.hxx",
         "include/fc_chfi2d.hxx",
         "include/fc_surface_ops.hxx",
+        "src/fc_part_ops.hxx",
         "src/bridge.rs",
         "src/shapefix.rs",
         "src/chfi2d.rs",

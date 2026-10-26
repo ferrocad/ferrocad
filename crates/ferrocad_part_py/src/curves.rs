@@ -38,7 +38,7 @@ use ferrocad_curves::{
     EdgeCurve, Ellipse, Hyperbola, Line, LineSegment, NurbsCurve, Parabola, TOLERANCE, Vector3,
     polygon,
 };
-use ferrocad_geom::{ElementKind, Shape, SurfaceData};
+use ferrocad_geom::{ElementKind, Shape, SurfaceData, SurfaceSpec};
 use ferrocad_occt::surface_ops;
 use ferrocad_part::backend;
 use ferrocad_types::Matrix4;
@@ -2368,9 +2368,20 @@ pub struct PyCylinder {
     axis: Vector3,
     /// The surface's `u = 0` direction (upstream's `gp_Ax3::XDirection`).
     x_dir: Vector3,
+    /// Whether the frame is direct (`y_dir = axis × x_dir`) or indirect.
+    direct: bool,
 }
 
 impl PyCylinder {
+    fn y_dir(&self) -> Vector3 {
+        let y = self.axis.cross(&self.x_dir);
+        if self.direct {
+            y
+        } else {
+            y.neg()
+        }
+    }
+
     /// A cylinder with the backend's own surface frame (`gp_Ax3`), so
     /// [`parameter`](Self::parameter) and `Face.valueAt` agree exactly.
     pub(crate) fn from_parts(
@@ -2378,12 +2389,14 @@ impl PyCylinder {
         origin: Vector3,
         axis: Vector3,
         x_dir: Vector3,
+        direct: bool,
     ) -> Self {
         Self {
             radius,
             center: origin,
             axis: axis.normalize(),
             x_dir: x_dir.normalize(),
+            direct,
         }
     }
 }
@@ -2421,6 +2434,7 @@ impl PyCylinder {
             center,
             axis,
             x_dir,
+            direct: true,
         })
     }
 
@@ -2462,7 +2476,7 @@ impl PyCylinder {
     /// The unit normal at `(u, v)` (upstream `GeomSurface.normal`): radial at
     /// `u`, independent of `v`.
     fn normal(&self, py: Python<'_>, u: f64, _v: f64) -> PyResult<PyObject> {
-        let y_dir = self.axis.cross(&self.x_dir);
+        let y_dir = self.y_dir();
         let radial = self.x_dir.scale(u.cos()).add(&y_dir.scale(u.sin()));
         py_vector(py, radial)
     }
@@ -2473,7 +2487,7 @@ impl PyCylinder {
     fn parameter(&self, py: Python<'_>, point: &Bound<'_, PyAny>) -> PyResult<PyObject> {
         let point = vector(point)?;
         let offset = point.sub(&self.center);
-        let y_dir = self.axis.cross(&self.x_dir);
+        let y_dir = self.y_dir();
         let mut u = offset.dot(&y_dir).atan2(offset.dot(&self.x_dir));
         if u < 0.0 {
             u += std::f64::consts::TAU;
@@ -2486,7 +2500,7 @@ impl PyCylinder {
     /// The point at surface parameters `(u, v)` (`GeomSurface.value`): the
     /// radius at angle `u`, at height `v` along the axis.
     fn value(&self, py: Python<'_>, u: f64, v: f64) -> PyResult<PyObject> {
-        let y_dir = self.axis.cross(&self.x_dir);
+        let y_dir = self.y_dir();
         let radial = self.x_dir.scale(u.cos()).add(&y_dir.scale(u.sin()));
         let point = self
             .center
@@ -2556,9 +2570,19 @@ pub struct PySphere {
     axis: Vector3,
     /// The surface's `u = 0` direction (upstream's `gp_Ax3::XDirection`).
     x_dir: Vector3,
+    /// Whether the frame is direct (`y_dir = axis × x_dir`) or indirect.
+    direct: bool,
 }
 
 impl PySphere {
+    fn y_dir(&self) -> Vector3 {
+        let y = self.axis.cross(&self.x_dir);
+        if self.direct {
+            y
+        } else {
+            y.neg()
+        }
+    }
     /// A sphere with the backend's own surface frame (`gp_Ax3`), so
     /// [`parameter`](Self::parameter) and `Face.valueAt` agree exactly.
     pub(crate) fn from_parts(
@@ -2566,12 +2590,14 @@ impl PySphere {
         center: Vector3,
         axis: Vector3,
         x_dir: Vector3,
+        direct: bool,
     ) -> Self {
         Self {
             radius,
             center,
             axis: axis.normalize(),
             x_dir: x_dir.normalize(),
+            direct,
         }
     }
 }
@@ -2609,6 +2635,7 @@ impl PySphere {
             center,
             axis,
             x_dir,
+            direct: true,
         })
     }
 
@@ -2636,8 +2663,8 @@ impl PySphere {
         let Ok(other) = other.extract::<PyRef<'_, PySphere>>() else {
             return false;
         };
-        let y_dir = self.axis.cross(&self.x_dir);
-        let other_y = other.axis.cross(&other.x_dir);
+        let y_dir = self.y_dir();
+        let other_y = other.y_dir();
         (self.radius - other.radius).abs() <= tol
             && same_surface_frame(
                 (&self.center, &self.axis, &self.x_dir, &y_dir),
@@ -2650,7 +2677,7 @@ impl PySphere {
     /// The unit normal at `(u, v)` (upstream `GeomSurface.normal`): the radial
     /// direction at that longitude/latitude.
     fn normal(&self, py: Python<'_>, u: f64, v: f64) -> PyResult<PyObject> {
-        let y_dir = self.axis.cross(&self.x_dir);
+        let y_dir = self.y_dir();
         let radial = self
             .x_dir
             .scale(v.cos() * u.cos())
@@ -2665,7 +2692,7 @@ impl PySphere {
     fn parameter(&self, py: Python<'_>, point: &Bound<'_, PyAny>) -> PyResult<PyObject> {
         let point = vector(point)?;
         let offset = point.sub(&self.center);
-        let y_dir = self.axis.cross(&self.x_dir);
+        let y_dir = self.y_dir();
         let mut u = offset.dot(&y_dir).atan2(offset.dot(&self.x_dir));
         if u < 0.0 {
             u += std::f64::consts::TAU;
@@ -2678,7 +2705,7 @@ impl PySphere {
 
     /// The point at surface parameters `(u, v)` (`GeomSurface.value`).
     fn value(&self, py: Python<'_>, u: f64, v: f64) -> PyResult<PyObject> {
-        let y_dir = self.axis.cross(&self.x_dir);
+        let y_dir = self.y_dir();
         let radial = self
             .x_dir
             .scale(v.cos() * u.cos())
@@ -7674,9 +7701,130 @@ impl PyEdge {
         edge_vertex(&slf, false)
     }
 
-    fn getParameterByLength(slf: PyRef<'_, Self>, _length: f64) -> PyResult<f64> {
-        require_edge(slf.as_super(), "getParameterByLength")?;
-        Err(edge_query_error("getParameterByLength"))
+    /// Sample the edge into points (`Edge.discretize`), upstream's
+    /// `GCPnts_*` samplers.
+    ///
+    /// - a positional int, or `Number=n`, gives `n` points at uniform arc length;
+    /// - a positional float, or `Distance=d`, gives points every `d` along the
+    ///   edge;
+    /// - `Deflection=d` bounds the sagitta;
+    /// - `Angular=a, Curvature=c, Minimum=n` bounds the turn and the chord error.
+    ///
+    /// `First`/`Last` trim the sampled span. Only `Number`, `Distance`,
+    /// `Deflection` and `Angular`/`Curvature` are supported; the quasi-uniform
+    /// forms report an honest `OCCError` rather than silently approximating.
+    #[pyo3(signature = (*args, **kwargs))]
+    fn discretize(
+        slf: PyRef<'_, Self>,
+        py: Python<'_>,
+        args: &Bound<'_, PyTuple>,
+        kwargs: Option<&Bound<'_, PyDict>>,
+    ) -> PyResult<Vec<PyObject>> {
+        let shape = slf
+            .as_super()
+            .shape()
+            .ok_or_else(|| empty_error("discretize"))?;
+
+        let mut mode = -1;
+        let mut value = 0.0;
+        let mut curvature = 0.0;
+        let mut minimum = 2;
+
+        if args.len() > 1 {
+            return Err(PyTypeError::new_err(
+                "discretize expects one number or keyword arguments",
+            ));
+        }
+        if args.len() == 1 {
+            let argument = args.get_item(0)?;
+            if argument.is_instance_of::<pyo3::types::PyInt>() {
+                mode = 0;
+                value = argument.extract::<i64>()? as f64;
+            } else if argument.is_instance_of::<pyo3::types::PyFloat>() {
+                mode = 1;
+                value = argument.extract::<f64>()?;
+            } else {
+                return Err(PyTypeError::new_err("Either int or float expected"));
+            }
+        }
+
+        let mut first = f64::NAN;
+        let mut last = f64::NAN;
+        if let Some(kwargs) = kwargs {
+            let number = |name: &str| -> PyResult<Option<f64>> {
+                match kwargs.get_item(name)? {
+                    Some(value) => Ok(Some(value.extract::<f64>()?)),
+                    None => Ok(None),
+                }
+            };
+            if let Some(value) = number("First")? {
+                first = value;
+            }
+            if let Some(value) = number("Last")? {
+                last = value;
+            }
+            if let Some(number) = number("Number")? {
+                mode = 0;
+                value = number;
+            } else if let Some(distance) = number("Distance")? {
+                mode = 1;
+                value = distance;
+            } else if let Some(deflection) = number("Deflection")? {
+                mode = 2;
+                value = deflection;
+            } else if let Some(angular) = number("Angular")? {
+                mode = 3;
+                value = angular;
+                curvature = number("Curvature")?.unwrap_or(0.1);
+                if let Some(count) = number("Minimum")? {
+                    minimum = count as i32;
+                }
+            } else if let Some(curvature_value) = number("Curvature")? {
+                mode = 3;
+                value = 0.1;
+                curvature = curvature_value;
+                if let Some(count) = number("Minimum")? {
+                    minimum = count as i32;
+                }
+            }
+        }
+        if mode < 0 {
+            return Err(PyTypeError::new_err(
+                "discretize expects Number, Distance, Deflection or Angular/Curvature",
+            ));
+        }
+
+        let points = backend()
+            .edge_discretize(&shape, mode, value, curvature, minimum, first, last)
+            .map_err(|_| OCCError::new_err("Discretization of edge failed"))?;
+        points.iter().map(|point| py_vector(py, *point)).collect()
+    }
+
+    /// The curve parameter at arc length `length` from the first parameter
+    /// (`Edge.getParameterByLength`, `GCPnts_AbscissaPoint`).
+    ///
+    /// A negative length counts back from the end, and a length outside the
+    /// edge raises `ValueError`, as upstream.
+    #[pyo3(signature = (length, tolerance = 1e-7))]
+    fn getParameterByLength(
+        slf: PyRef<'_, Self>,
+        length: f64,
+        tolerance: f64,
+    ) -> PyResult<f64> {
+        let shape = slf
+            .as_super()
+            .shape()
+            .ok_or_else(|| empty_error("getParameterByLength"))?;
+        backend()
+            .edge_parameter_by_length(&shape, length, tolerance)
+            .map_err(|error| {
+                let message = error.to_string();
+                if message.contains("out of range") {
+                    PyValueError::new_err("value out of range")
+                } else {
+                    OCCError::new_err(message)
+                }
+            })
     }
 
     fn parameterAt(
@@ -8245,6 +8393,17 @@ fn edge_derivative(shape: &Shape, parameter: f64) -> PyResult<Vector3> {
     Ok(plus.sub(&minus).scale(1.0 / (2.0 * h)))
 }
 
+/// The `v` direction of a surface frame: `axis × x_dir` for a direct frame and
+/// the opposite for an indirect one.
+fn surface_y_dir(axis: Vector3, x_dir: Vector3, direct: bool) -> Vector3 {
+    let y_dir = axis.cross(&x_dir);
+    if direct {
+        y_dir
+    } else {
+        y_dir.neg()
+    }
+}
+
 /// The outward unit normal of a face at surface parameters `(u, v)`.
 ///
 /// A classified surface gives the analytic normal (constant on a plane, radial
@@ -8256,12 +8415,43 @@ fn surface_normal(shape: &Shape, u: f64, v: f64) -> PyResult<Vector3> {
     let backend = backend();
     let normal = match backend.surface_data(shape) {
         Some(SurfaceData::Plane { normal, .. }) => Some(normal),
-        Some(SurfaceData::Cylinder { axis, x_dir, .. }) => {
-            let y_dir = axis.cross(&x_dir);
+        Some(SurfaceData::Cylinder {
+            axis,
+            x_dir,
+            direct,
+            ..
+        }) => {
+            let y_dir = surface_y_dir(axis, x_dir, direct);
             Some(x_dir.scale(u.cos()).add(&y_dir.scale(u.sin())))
         }
-        Some(SurfaceData::Sphere { axis, x_dir, .. }) => {
-            let y_dir = axis.cross(&x_dir);
+        Some(SurfaceData::Sphere {
+            axis,
+            x_dir,
+            direct,
+            ..
+        }) => {
+            let y_dir = surface_y_dir(axis, x_dir, direct);
+            let radial = x_dir.scale(u.cos()).add(&y_dir.scale(u.sin()));
+            Some(radial.scale(v.cos()).add(&axis.scale(v.sin())))
+        }
+        Some(SurfaceData::Cone {
+            axis,
+            x_dir,
+            semi_angle,
+            direct,
+            ..
+        }) => {
+            let y_dir = surface_y_dir(axis, x_dir, direct);
+            let radial = x_dir.scale(u.cos()).add(&y_dir.scale(u.sin()));
+            Some(radial.scale(semi_angle.cos()).sub(&axis.scale(semi_angle.sin())))
+        }
+        Some(SurfaceData::Torus {
+            axis,
+            x_dir,
+            direct,
+            ..
+        }) => {
+            let y_dir = surface_y_dir(axis, x_dir, direct);
             let radial = x_dir.scale(u.cos()).add(&y_dir.scale(u.sin()));
             Some(radial.scale(v.cos()).add(&axis.scale(v.sin())))
         }
@@ -8321,19 +8511,99 @@ fn wire_shapes(value: &Bound<'_, PyAny>) -> PyResult<Vec<Shape>> {
     Ok(shapes)
 }
 
+/// The elementary surface a `Part.Face(surface, wires)` call should build on,
+/// when `value` is one of the analytic surface objects.
+///
+/// A trimmed surface or a generic `Part.GeomSurface` is deliberately rejected:
+/// neither carries the exact analytic description the kernel constructor needs.
+fn face_surface_spec(value: &Bound<'_, PyAny>) -> Option<SurfaceSpec> {
+    if let Ok(plane) = value.downcast::<PyPlane>() {
+        let plane = plane.borrow();
+        let direct = plane.normal.cross(&plane.x_dir).dot(&plane.y_dir) > 0.0;
+        return Some(SurfaceSpec::Plane {
+            origin: plane.location,
+            normal: plane.normal,
+            x_dir: plane.x_dir,
+            direct,
+        });
+    }
+    if let Ok(cylinder) = value.downcast::<PyCylinder>() {
+        let cylinder = cylinder.borrow();
+        return Some(SurfaceSpec::Cylinder {
+            origin: cylinder.center,
+            axis: cylinder.axis,
+            x_dir: cylinder.x_dir,
+            radius: cylinder.radius,
+            direct: cylinder.direct,
+        });
+    }
+    if let Ok(sphere) = value.downcast::<PySphere>() {
+        let sphere = sphere.borrow();
+        return Some(SurfaceSpec::Sphere {
+            center: sphere.center,
+            axis: sphere.axis,
+            x_dir: sphere.x_dir,
+            radius: sphere.radius,
+            direct: sphere.direct,
+        });
+    }
+    if let Ok(cone) = value.downcast::<crate::solids::PyCone>() {
+        return Some(cone.borrow().spec());
+    }
+    if let Ok(torus) = value.downcast::<crate::solids::PyToroid>() {
+        return Some(torus.borrow().spec());
+    }
+    None
+}
+
 #[pymethods]
 impl PyFace {
+    /// `Part.Face(wire)`, `Part.Face([outer, hole…])` or
+    /// `Part.Face(surface, wires)`.
+    ///
+    /// The first form builds a planar face from one or more boundary wires (the
+    /// rest are holes). The second is upstream's
+    /// `BRepBuilderAPI_MakeFace(Geom_Surface, wire)`: the boundary lies on the
+    /// given elementary surface (`Part.Plane`, `Cylinder`, `Cone`, `Sphere` or
+    /// `Toroid`), so a face of a cylinder or a cone can be rebuilt without
+    /// passing through a solid. `face_maker` keeps upstream's
+    /// `"Part::FaceMakerUnified"` selector for the planar form.
     #[new]
-    #[pyo3(signature = (value = None, face_maker = "Part::FaceMakerBullseye"))]
+    #[pyo3(signature = (value = None, face_maker = None))]
     fn new(
         value: Option<&Bound<'_, PyAny>>,
-        face_maker: &str,
+        face_maker: Option<&Bound<'_, PyAny>>,
     ) -> PyResult<PyClassInitializer<Self>> {
         let Some(value) = value else {
             return Ok(Self::empty_initializer());
         };
+        if let Some(surface) = face_surface_spec(value) {
+            let Some(wires) = face_maker else {
+                return Err(PyTypeError::new_err(
+                    "Part.Face(surface, wires) needs boundary wires",
+                ));
+            };
+            if wires.downcast::<pyo3::types::PyString>().is_ok() {
+                return Err(PyTypeError::new_err(
+                    "Part.Face(surface, wires) needs boundary wires, not a face-maker name",
+                ));
+            }
+            let shapes = wire_shapes(wires)?;
+            let shape = backend()
+                .make_face_on_surface(&surface, &shapes)
+                .map_err(face_error)?;
+            return Ok(Self::initializer(shape));
+        }
+        let maker = match face_maker {
+            Some(maker) => maker.extract::<String>().map_err(|_| {
+                PyTypeError::new_err(
+                    "Part.Face expects a face-maker name or, for a surface, boundary wires",
+                )
+            })?,
+            None => "Part::FaceMakerBullseye".to_string(),
+        };
         let shapes = wire_shapes(value)?;
-        let shape = if face_maker == "Part::FaceMakerUnified" {
+        let shape = if maker == "Part::FaceMakerUnified" {
             backend().make_faces(&shapes).map_err(face_error)?
         } else {
             backend().make_face(&shapes).map_err(kernel_error)?

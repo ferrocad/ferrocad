@@ -19,7 +19,7 @@ use std::sync::{Arc, Mutex};
 use ferrocad_core::object_registry::{self, ObjectType};
 use ferrocad_core::{Document, Matrix4, ObjectId, Placement, Property, Rotation, prop_status};
 use ferrocad_curves::{Arc as CurveArc, Circle, EdgeCurve, LineSegment, Vector3};
-use ferrocad_geom::{ElementKind, Lineage, Shape};
+use ferrocad_geom::{ElementKind, Lineage, Shape, SurfaceSpec};
 use ferrocad_occt::surface_ops;
 use ferrocad_part::{
     make_shape_list_property, make_shape_property, shape_list_of, shape_of, ShapeListProperty,
@@ -153,6 +153,22 @@ impl PyShell {
             .lock()
             .unwrap_or_else(|e| e.into_inner())
             .len()
+    }
+
+    /// The shell's free edges (`Shell.getFreeEdges`): the boundary edges shared
+    /// by a single face, as a compound (`ShapeAnalysis_Shell`).
+    ///
+    /// The compound keeps the shell's placement. This is how an opening is found
+    /// (`Part.Wire(Part.sortEdges(shell.getFreeEdges().Edges))`).
+    fn getFreeEdges(slf: PyRef<'_, Self>) -> PyResult<PartShape> {
+        let shape = slf
+            .as_super()
+            .shape()
+            .ok_or_else(|| OCCError::new_err("an empty shell has no edges"))?;
+        let free = ferrocad_part::backend()
+            .shell_free_edges(&shape)
+            .map_err(kernel_error)?;
+        Ok(PartShape::from_shape(free))
     }
 
     fn __repr__(&self) -> String {
@@ -1089,11 +1105,51 @@ pub struct PyCone {
     center: Vector3,
     /// The unit axis direction.
     axis: Vector3,
+    /// The surface's `u = 0` direction (upstream's `gp_Ax3::XDirection`).
+    x_dir: Vector3,
+    /// Whether the frame is direct (`y_dir = axis × x_dir`) or indirect.
+    direct: bool,
 }
 
 impl PyCone {
+    /// A cone with the backend's own surface frame, so `parameter` and
+    /// `Face.valueAt` agree exactly.
+    pub(crate) fn from_parts(
+        radius: f64,
+        center: Vector3,
+        axis: Vector3,
+        x_dir: Vector3,
+        semi_angle: f64,
+        direct: bool,
+    ) -> Self {
+        Self {
+            radius,
+            semi_angle,
+            center,
+            axis: axis.normalize(),
+            x_dir: x_dir.normalize(),
+            direct,
+        }
+    }
+
     fn frame(&self) -> (Vector3, Vector3) {
-        surface_frame(self.axis)
+        let mut y = self.axis.cross(&self.x_dir);
+        if !self.direct {
+            y = y.neg();
+        }
+        (self.x_dir, y)
+    }
+
+    /// The analytic description `Part.Face(cone, wires)` builds on.
+    pub(crate) fn spec(&self) -> SurfaceSpec {
+        SurfaceSpec::Cone {
+            origin: self.center,
+            axis: self.axis,
+            x_dir: self.x_dir,
+            radius: self.radius,
+            semi_angle: self.semi_angle,
+            direct: self.direct,
+        }
     }
 
     /// The apex: where the radius vanishes along the axis.
@@ -1129,17 +1185,27 @@ impl PyCone {
                 "Part.Cone needs a semi-angle below 90 degrees",
             ));
         }
+        let axis = axis.normalize();
+        let (x_dir, _) = surface_frame(axis);
         Ok(Self {
             radius,
             semi_angle,
             center,
-            axis: axis.normalize(),
+            axis,
+            x_dir,
+            direct: true,
         })
     }
 
     #[getter]
     fn Radius(&self) -> f64 {
         self.radius
+    }
+
+    /// Upstream's `Part::GeomCone` type id.
+    #[getter]
+    fn TypeId(&self) -> &'static str {
+        "Part::GeomCone"
     }
 
     #[setter]
@@ -1186,6 +1252,9 @@ impl PyCone {
             return Err(OCCError::new_err("Part.Cone needs a non-zero axis"));
         }
         self.axis = axis.normalize();
+        let (x_dir, _) = surface_frame(self.axis);
+        self.x_dir = x_dir;
+        self.direct = true;
         Ok(())
     }
 
@@ -1194,29 +1263,30 @@ impl PyCone {
         curves::py_vector(py, self.apex())
     }
 
-    /// The surface point at `(u, v)`: `u` around the axis, `v` along it.
+    /// The surface point at `(u, v)`: `u` around the axis, `v` the slant
+    /// distance along the surface (`Geom_ConicalSurface`'s parameterisation).
     fn value(&self, py: Python<'_>, u: f64, v: f64) -> PyResult<PyObject> {
         let (x, y) = self.frame();
-        let radius = self.radius + v * self.semi_angle.tan();
+        let radius = self.radius + v * self.semi_angle.sin();
         let radial = x.scale(u.cos()).add(&y.scale(u.sin()));
         let point = self
             .center
             .add(&radial.scale(radius))
-            .add(&self.axis.scale(v));
+            .add(&self.axis.scale(v * self.semi_angle.cos()));
         curves::py_vector(py, point)
     }
 
     /// `getDN(u, v, Nu, Nv)` — the analytic derivative of the cone surface.
     fn getDN(&self, py: Python<'_>, u: f64, v: f64, Nu: u32, Nv: u32) -> PyResult<PyObject> {
         let (x, y) = self.frame();
-        let tan = self.semi_angle.tan();
-        let radius = self.radius + v * tan;
+        let (sin, cos) = (self.semi_angle.sin(), self.semi_angle.cos());
+        let radius = self.radius + v * sin;
         let radial = x.scale(u.cos()).add(&y.scale(u.sin()));
         let tangent = x.scale(-u.sin()).add(&y.scale(u.cos()));
         let vector = match (Nu, Nv) {
             (1, 0) => tangent.scale(radius),
-            (0, 1) => radial.scale(tan).add(&self.axis),
-            (1, 1) => tangent.scale(tan),
+            (0, 1) => radial.scale(sin).add(&self.axis.scale(cos)),
+            (1, 1) => tangent.scale(sin),
             (2, 0) => radial.scale(-radius),
             (0, 2) => Vector3::zero(),
             _ => {
@@ -1229,17 +1299,19 @@ impl PyCone {
     }
 
     /// The `(u, v)` parameters of a point on the surface (the inverse of
-    /// [`value`](PyCone::value)).
+    /// [`value`](PyCone::value)). `v` is the slant distance.
     fn parameter(&self, point: &Bound<'_, PyAny>) -> PyResult<(f64, f64)> {
         let point = curves::vector(point)?;
         let relative = point.sub(&self.center);
-        let v = relative.dot(&self.axis);
+        let axial = relative.dot(&self.axis);
         let (x, y) = self.frame();
-        let radial = relative.sub(&self.axis.scale(v));
+        let radial = relative.sub(&self.axis.scale(axial));
         let mut u = radial.dot(&y).atan2(radial.dot(&x));
         if u < 0.0 {
             u += 2.0 * PI;
         }
+        let cos = self.semi_angle.cos();
+        let v = if cos.abs() > 1e-12 { axial / cos } else { axial };
         Ok((u, v))
     }
 
@@ -1304,11 +1376,51 @@ pub struct PyToroid {
     minor_radius: f64,
     center: Vector3,
     axis: Vector3,
+    /// The surface's `u = 0` direction (upstream's `gp_Ax3::XDirection`).
+    x_dir: Vector3,
+    /// Whether the frame is direct (`y_dir = axis × x_dir`) or indirect.
+    direct: bool,
 }
 
 impl PyToroid {
+    /// A torus with the backend's own surface frame, so `parameter` and
+    /// `Face.valueAt` agree exactly.
+    pub(crate) fn from_parts(
+        major_radius: f64,
+        minor_radius: f64,
+        center: Vector3,
+        axis: Vector3,
+        x_dir: Vector3,
+        direct: bool,
+    ) -> Self {
+        Self {
+            major_radius,
+            minor_radius,
+            center,
+            axis: axis.normalize(),
+            x_dir: x_dir.normalize(),
+            direct,
+        }
+    }
+
     fn frame(&self) -> (Vector3, Vector3) {
-        surface_frame(self.axis)
+        let mut y = self.axis.cross(&self.x_dir);
+        if !self.direct {
+            y = y.neg();
+        }
+        (self.x_dir, y)
+    }
+
+    /// The analytic description `Part.Face(torus, wires)` builds on.
+    pub(crate) fn spec(&self) -> SurfaceSpec {
+        SurfaceSpec::Torus {
+            center: self.center,
+            axis: self.axis,
+            x_dir: self.x_dir,
+            major_radius: self.major_radius,
+            minor_radius: self.minor_radius,
+            direct: self.direct,
+        }
     }
 }
 
@@ -1338,17 +1450,27 @@ impl PyToroid {
         if axis.is_null() {
             return Err(OCCError::new_err("Part.Toroid needs a non-zero axis"));
         }
+        let axis = axis.normalize();
+        let (x_dir, _) = surface_frame(axis);
         Ok(Self {
             major_radius,
             minor_radius,
             center,
-            axis: axis.normalize(),
+            axis,
+            x_dir,
+            direct: true,
         })
     }
 
     #[getter]
     fn MajorRadius(&self) -> f64 {
         self.major_radius
+    }
+
+    /// Upstream's `Part::GeomToroid` type id.
+    #[getter]
+    fn TypeId(&self) -> &'static str {
+        "Part::GeomToroid"
     }
 
     #[setter]
@@ -1401,6 +1523,9 @@ impl PyToroid {
             return Err(OCCError::new_err("Part.Toroid needs a non-zero axis"));
         }
         self.axis = axis.normalize();
+        let (x_dir, _) = surface_frame(self.axis);
+        self.x_dir = x_dir;
+        self.direct = true;
         Ok(())
     }
 
@@ -1459,6 +1584,10 @@ pub struct PyBSplineSurface {
     v_knots: Vec<f64>,
     u_periodic: bool,
     v_periodic: bool,
+    /// The parameter bounds when they differ from the knot extents (an
+    /// interpolated surface); `None` derives them from the knot vectors.
+    u_bounds: Option<(f64, f64)>,
+    v_bounds: Option<(f64, f64)>,
 }
 
 impl PyBSplineSurface {
@@ -1468,6 +1597,8 @@ impl PyBSplineSurface {
             v_knots: circle_knots(),
             u_periodic: false,
             v_periodic: false,
+            u_bounds: None,
+            v_bounds: None,
         }
     }
 }
@@ -1481,7 +1612,64 @@ impl PyBSplineSurface {
             v_knots: Vec::new(),
             u_periodic: false,
             v_periodic: false,
+            u_bounds: None,
+            v_bounds: None,
         }
+    }
+
+    /// `interpolate(Points, X0, dX, Y0, dY)` — interpolate a grid of points
+    /// (`GeomAPI_PointsToBSplineSurface`).
+    ///
+    /// `Points` is indexed `[u][v]` and must be at least 2 by 2. With no spacing
+    /// arguments each entry is a vector; with `X0`/`dX`/`Y0`/`dY` the entries are
+    /// z values on a regular XY grid, as upstream's second form. The surface is
+    /// stored as its bounds and expanded knot sequences, which `bounds`, `UKnotSequence`
+    /// and `VKnotSequence` report.
+    #[pyo3(signature = (points, x0 = None, dx = None, y0 = None, dy = None))]
+    fn interpolate(
+        &mut self,
+        points: &Bound<'_, PyAny>,
+        x0: Option<f64>,
+        dx: Option<f64>,
+        y0: Option<f64>,
+        dy: Option<f64>,
+    ) -> PyResult<()> {
+        let spaced = x0.is_some() || dx.is_some() || y0.is_some() || dy.is_some();
+        let mut rows: Vec<Vec<Vector3>> = Vec::new();
+        for (u, row) in points.try_iter()?.enumerate() {
+            let mut values = Vec::new();
+            for (v, item) in row?.try_iter()?.enumerate() {
+                let item = item?;
+                if spaced {
+                    let z = item.extract::<f64>().map_err(|_| {
+                        PyTypeError::new_err(
+                            "interpolate with a spacing expects a grid of z values",
+                        )
+                    })?;
+                    values.push(Vector3::new(
+                        x0.unwrap_or(0.0) + u as f64 * dx.unwrap_or(1.0),
+                        y0.unwrap_or(0.0) + v as f64 * dy.unwrap_or(1.0),
+                        z,
+                    ));
+                } else {
+                    values.push(curves::vector(&item)?);
+                }
+            }
+            rows.push(values);
+        }
+        if rows.len() < 2 || rows[0].len() < 2 {
+            return Err(OCCError::new_err("not enough points given"));
+        }
+        let data = ferrocad_part::backend()
+            .bspline_surface_interpolate(&rows)
+            .map_err(kernel_error)?;
+        self.u_knots = data.u_knots;
+        self.v_knots = data.v_knots;
+        self.u_bounds = Some(data.u_bounds);
+        self.v_bounds = Some(data.v_bounds);
+        self.u_periodic = false;
+        self.v_periodic = false;
+        Ok(())
     }
 
     fn setUPeriodic(&mut self) {
@@ -1512,18 +1700,27 @@ impl PyBSplineSurface {
 
     /// `(u1, u2, v1, v2)` — the current parameter bounds.
     fn bounds(&self) -> (f64, f64, f64, f64) {
-        (
-            self.u_knots.first().copied().unwrap_or(0.0),
-            self.u_knots.last().copied().unwrap_or(0.0),
-            self.v_knots.first().copied().unwrap_or(0.0),
-            self.v_knots.last().copied().unwrap_or(0.0),
-        )
+        let u = self.u_bounds.unwrap_or_else(|| {
+            (
+                self.u_knots.first().copied().unwrap_or(0.0),
+                self.u_knots.last().copied().unwrap_or(0.0),
+            )
+        });
+        let v = self.v_bounds.unwrap_or_else(|| {
+            (
+                self.v_knots.first().copied().unwrap_or(0.0),
+                self.v_knots.last().copied().unwrap_or(0.0),
+            )
+        });
+        (u.0, u.1, v.0, v.1)
     }
 
     /// Linearly rescale both knot vectors to the requested bounds.
     fn scaleKnotsToBounds(&mut self, u0: f64, u1: f64, v0: f64, v1: f64) {
         scale_knots(&mut self.u_knots, u0, u1);
         scale_knots(&mut self.v_knots, v0, v1);
+        self.u_bounds = Some((u0, u1));
+        self.v_bounds = Some((v0, v1));
     }
 
     fn __repr__(&self) -> String {

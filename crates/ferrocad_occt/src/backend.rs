@@ -22,9 +22,10 @@
 use cxx::UniquePtr;
 use ferrocad_curves::{Arc, Circle, EdgeCurve, Ellipse, Line, Vector3};
 use ferrocad_geom::{
-    Capabilities, Continuity, ElementId, ElementKind, ElementRef, GeomError, GeometryBackend,
-    History, Lineage, MapVersion, MassProperties, OpResult, OperandId, PrincipalProperties, Shape,
-    ShapeDistance, SurfaceData, Tessellation, TessellationOptions, unsupported,
+    BsplineSurfaceData, Capabilities, Continuity, ElementId, ElementKind, ElementRef, GeomError,
+    GeometryBackend, History, Lineage, MapVersion, MassProperties, OpResult, OperandId,
+    PrincipalProperties, Shape, ShapeDistance, SurfaceData, SurfaceSpec, Tessellation,
+    TessellationOptions, unsupported,
 };
 use ferrocad_types::{Matrix4, Placement};
 use opencascade_sys as ffi;
@@ -965,6 +966,43 @@ impl GeometryBackend for OcctBackend {
         }
     }
 
+    fn make_face_on_surface(
+        &self,
+        surface: &SurfaceSpec,
+        wires: &[Shape],
+    ) -> Result<Shape, GeomError> {
+        if wires.is_empty() {
+            return Err(OcctError::InvalidInput {
+                what: "a face needs a wire",
+            }
+            .into());
+        }
+        let mut list = ffi::top_tools::new_list_of_shape();
+        for wire in wires {
+            let occt = downcast(wire)?;
+            let guard = occt.borrow();
+            let inner = guard
+                .as_ref()
+                .ok_or(OcctError::InvalidInput { what: "null wire" })?;
+            if !bridge::fc_is_wire(inner) {
+                return Err(OcctError::InvalidInput {
+                    what: "make_face_on_surface expects wires",
+                }
+                .into());
+            }
+            let _ = list.pin_mut().Append(inner);
+        }
+        let spec = surface_spec(surface);
+        let face = bridge::fc_make_face_on_surface(&spec, &list);
+        match face.as_ref() {
+            Some(face) => Ok(erase(face)),
+            None => Err(OcctError::NotDone {
+                operation: "make_face_on_surface",
+            }
+            .into()),
+        }
+    }
+
     fn surface_type(&self, shape: &Shape) -> Option<String> {
         let occt = downcast(shape).ok()?;
         let guard = occt.borrow();
@@ -997,32 +1035,116 @@ impl GeometryBackend for OcctBackend {
             if !bridge::fc_is_face(inner) {
                 return None;
             }
-            bridge::fc_face_surface_data(inner, &mut raw);
+            bridge::fc_face_surface_frame(inner, &mut raw);
         }
         let point = |at: usize| Vector3::new(raw[at], raw[at + 1], raw[at + 2]);
         match raw.first().copied() {
-            Some(1.0) if raw.len() >= 13 => Some(SurfaceData::Plane {
+            Some(1.0) if raw.len() >= 14 => Some(SurfaceData::Plane {
                 origin: point(1),
                 x_dir: point(4),
                 y_dir: point(7),
                 normal: point(10),
             }),
-            Some(2.0) if raw.len() >= 11 => Some(SurfaceData::Cylinder {
+            Some(2.0) if raw.len() >= 12 => Some(SurfaceData::Cylinder {
                 origin: point(1),
                 axis: point(4),
                 x_dir: point(7),
                 radius: raw[10],
+                direct: raw[11] > 0.5,
             }),
-            Some(3.0) if raw.len() >= 11 => Some(SurfaceData::Sphere {
+            Some(3.0) if raw.len() >= 12 => Some(SurfaceData::Sphere {
                 center: point(1),
                 axis: point(4),
                 x_dir: point(7),
                 radius: raw[10],
+                direct: raw[11] > 0.5,
+            }),
+            Some(4.0) if raw.len() >= 13 => Some(SurfaceData::Cone {
+                origin: point(1),
+                axis: point(4),
+                x_dir: point(7),
+                radius: raw[10],
+                semi_angle: raw[11],
+                direct: raw[12] > 0.5,
+            }),
+            Some(5.0) if raw.len() >= 13 => Some(SurfaceData::Torus {
+                center: point(1),
+                axis: point(4),
+                x_dir: point(7),
+                major_radius: raw[10],
+                minor_radius: raw[11],
+                direct: raw[12] > 0.5,
             }),
             _ => self
                 .surface_type(shape)
                 .map(|type_id| SurfaceData::Other { type_id }),
         }
+    }
+
+    fn sew(&self, shape: &Shape, tolerance: f64) -> Result<Shape, GeomError> {
+        let occt = downcast(shape)?;
+        let guard = occt.borrow();
+        let inner = guard
+            .as_ref()
+            .ok_or(OcctError::InvalidInput { what: "null shape" })?;
+        let sewn = bridge::fc_sew_shape(inner, tolerance);
+        match sewn.as_ref() {
+            Some(sewn) => Ok(erase(sewn)),
+            None => Err(OcctError::NotDone { operation: "sew" }.into()),
+        }
+    }
+
+    fn to_nurbs(&self, shape: &Shape) -> Result<Shape, GeomError> {
+        let occt = downcast(shape)?;
+        let guard = occt.borrow();
+        let inner = guard
+            .as_ref()
+            .ok_or(OcctError::InvalidInput { what: "null shape" })?;
+        let converted = bridge::fc_to_nurbs(inner);
+        match converted.as_ref() {
+            Some(converted) => Ok(erase(converted)),
+            None => Err(OcctError::NotDone {
+                operation: "to_nurbs",
+            }
+            .into()),
+        }
+    }
+
+    fn sub_shapes_of_type(&self, shape: &Shape, kind: &str) -> Vec<Shape> {
+        let Ok(occt) = downcast(shape) else {
+            return Vec::new();
+        };
+        let guard = occt.borrow();
+        let Some(inner) = guard.as_ref() else {
+            return Vec::new();
+        };
+        // `TopAbs_COMPOUND` is 0 and `TopAbs_COMPSOLID` is 1 in OCCT's
+        // `TopAbs_ShapeEnum`; the cxx enum is not castable from Rust.
+        let shape_type = match kind {
+            "Compound" => 0,
+            "CompSolid" => 1,
+            _ => return Vec::new(),
+        };
+        let Some(compound) = bridge::fc_shape_sub_shapes_of_type(inner, shape_type)
+            .as_ref()
+            .map(erase)
+        else {
+            return Vec::new();
+        };
+        // `fc_shape_sub_shapes_of_type` wraps the map in a compound so it can
+        // cross the bridge; its direct children are the sub-shapes themselves.
+        let compound_occt = match downcast(&compound) {
+            Ok(occt) => occt,
+            Err(_) => return Vec::new(),
+        };
+        let compound_guard = compound_occt.borrow();
+        let Some(compound_inner) = compound_guard.as_ref() else {
+            return Vec::new();
+        };
+        let count = bridge::fc_shape_child_count(compound_inner);
+        (1..=count)
+            .filter_map(|index| bridge::fc_shape_child(compound_inner, index).as_ref().map(erase))
+            .collect()
     }
 
     fn outer_wire(&self, shape: &Shape) -> Option<Shape> {
@@ -2000,6 +2122,133 @@ impl GeometryBackend for OcctBackend {
         Ok(Vector3::new(x, y, z))
     }
 
+    fn edge_discretize(
+        &self,
+        edge: &Shape,
+        mode: i32,
+        value: f64,
+        curvature: f64,
+        minimum: i32,
+        first: f64,
+        last: f64,
+    ) -> Result<Vec<Vector3>, GeomError> {
+        let occt = downcast(edge)?;
+        let guard = occt.borrow();
+        let inner = guard
+            .as_ref()
+            .ok_or(OcctError::InvalidInput { what: "null edge" })?;
+        if !bridge::fc_is_edge(inner) {
+            return Err(OcctError::InvalidInput {
+                what: "not an edge",
+            }
+            .into());
+        }
+        let coordinates = bridge::fc_edge_discretize(
+            inner, mode, value, curvature, minimum, first, last,
+        );
+        if coordinates.is_empty() || coordinates.len() % 3 != 0 {
+            return Err(OcctError::NotDone {
+                operation: "edge_discretize",
+            }
+            .into());
+        }
+        Ok(coordinates
+            .chunks_exact(3)
+            .map(|point| Vector3::new(point[0], point[1], point[2]))
+            .collect())
+    }
+
+    fn edge_parameter_by_length(
+        &self,
+        edge: &Shape,
+        length: f64,
+        tolerance: f64,
+    ) -> Result<f64, GeomError> {
+        let occt = downcast(edge)?;
+        let guard = occt.borrow();
+        let inner = guard
+            .as_ref()
+            .ok_or(OcctError::InvalidInput { what: "null edge" })?;
+        if !bridge::fc_is_edge(inner) {
+            return Err(OcctError::InvalidInput {
+                what: "not an edge",
+            }
+            .into());
+        }
+        let parameter = bridge::fc_edge_parameter_by_length(inner, length, tolerance);
+        if !parameter.is_finite() {
+            return Err(OcctError::InvalidInput {
+                what: "value out of range",
+            }
+            .into());
+        }
+        Ok(parameter)
+    }
+
+    fn shell_free_edges(&self, shell: &Shape) -> Result<Shape, GeomError> {
+        let occt = downcast(shell)?;
+        let guard = occt.borrow();
+        let inner = guard
+            .as_ref()
+            .ok_or(OcctError::InvalidInput { what: "null shell" })?;
+        let free = bridge::fc_shell_free_edges(inner);
+        match free.as_ref() {
+            Some(free) => Ok(erase(free)),
+            None => Err(OcctError::NotDone {
+                operation: "shell_free_edges",
+            }
+            .into()),
+        }
+    }
+
+    fn bspline_surface_interpolate(
+        &self,
+        rows: &[Vec<Vector3>],
+    ) -> Result<BsplineSurfaceData, GeomError> {
+        let nx = rows.len();
+        let ny = rows.first().map(Vec::len).unwrap_or(0);
+        if nx < 2 || ny < 2 || rows.iter().any(|row| row.len() != ny) {
+            return Err(OcctError::InvalidInput {
+                what: "a B-spline surface needs a rectangular grid of at least two by two points",
+            }
+            .into());
+        }
+        let mut coordinates = Vec::with_capacity(nx * ny * 3);
+        for row in rows {
+            for point in row {
+                coordinates.extend_from_slice(&[point.x, point.y, point.z]);
+            }
+        }
+        let raw = bridge::fc_bspline_surface_interpolate(&coordinates, nx as i32, ny as i32);
+        // bounds (4), nu + u knots, nv + v knots
+        if raw.len() < 6 {
+            return Err(OcctError::NotDone {
+                operation: "bspline_surface_interpolate",
+            }
+            .into());
+        }
+        let mut cursor = 4;
+        let mut sequence = || -> Option<Vec<f64>> {
+            let length = *raw.get(cursor)? as usize;
+            cursor += 1;
+            let values = raw.get(cursor..cursor + length)?.to_vec();
+            cursor += length;
+            Some(values)
+        };
+        let u_knots = sequence().ok_or(OcctError::NotDone {
+            operation: "bspline_surface_interpolate",
+        })?;
+        let v_knots = sequence().ok_or(OcctError::NotDone {
+            operation: "bspline_surface_interpolate",
+        })?;
+        Ok(BsplineSurfaceData {
+            u_knots,
+            v_knots,
+            u_bounds: (raw[0], raw[1]),
+            v_bounds: (raw[2], raw[3]),
+        })
+    }
+
     fn is_equal(&self, a: &Shape, b: &Shape) -> Result<bool, GeomError> {
         let a_occt = downcast(a)?;
         let b_occt = downcast(b)?;
@@ -2339,6 +2588,93 @@ fn flatten_compound_into(shape: &TopoDS_Shape, out: &mut Vec<UniquePtr<TopoDS_Sh
     } else {
         out.push(owned(shape));
     }
+}
+
+/// Flatten an elementary surface into the layout `fc_make_face_on_surface`
+/// takes: kind, origin, axis (the normal for a plane), the `u` direction, then
+/// radius, semi-angle, major and minor radius.
+fn surface_spec(surface: &SurfaceSpec) -> Vec<f64> {
+    fn put(spec: &mut [f64], at: usize, point: Vector3) {
+        spec[at] = point.x;
+        spec[at + 1] = point.y;
+        spec[at + 2] = point.z;
+    }
+    let mut spec = vec![0.0; 15];
+    match surface {
+        SurfaceSpec::Plane {
+            origin,
+            normal,
+            x_dir,
+            direct,
+        } => {
+            spec[0] = 0.0;
+            put(&mut spec, 1, *origin);
+            put(&mut spec, 4, *normal);
+            put(&mut spec, 7, *x_dir);
+            spec[14] = f64::from(u8::from(*direct));
+        }
+        SurfaceSpec::Cylinder {
+            origin,
+            axis,
+            x_dir,
+            radius,
+            direct,
+        } => {
+            spec[0] = 1.0;
+            put(&mut spec, 1, *origin);
+            put(&mut spec, 4, *axis);
+            put(&mut spec, 7, *x_dir);
+            spec[10] = *radius;
+            spec[14] = f64::from(u8::from(*direct));
+        }
+        SurfaceSpec::Cone {
+            origin,
+            axis,
+            x_dir,
+            radius,
+            semi_angle,
+            direct,
+        } => {
+            spec[0] = 2.0;
+            put(&mut spec, 1, *origin);
+            put(&mut spec, 4, *axis);
+            put(&mut spec, 7, *x_dir);
+            spec[10] = *radius;
+            spec[11] = *semi_angle;
+            spec[14] = f64::from(u8::from(*direct));
+        }
+        SurfaceSpec::Sphere {
+            center,
+            axis,
+            x_dir,
+            radius,
+            direct,
+        } => {
+            spec[0] = 3.0;
+            put(&mut spec, 1, *center);
+            put(&mut spec, 4, *axis);
+            put(&mut spec, 7, *x_dir);
+            spec[10] = *radius;
+            spec[14] = f64::from(u8::from(*direct));
+        }
+        SurfaceSpec::Torus {
+            center,
+            axis,
+            x_dir,
+            major_radius,
+            minor_radius,
+            direct,
+        } => {
+            spec[0] = 4.0;
+            put(&mut spec, 1, *center);
+            put(&mut spec, 4, *axis);
+            put(&mut spec, 7, *x_dir);
+            spec[12] = *major_radius;
+            spec[13] = *minor_radius;
+            spec[14] = f64::from(u8::from(*direct));
+        }
+    }
+    spec
 }
 
 /// An OCCT shape list holding the given handles, in order.
@@ -3937,10 +4273,14 @@ mod geometry_query_tests {
                 origin,
                 axis,
                 x_dir,
+                direct,
                 ..
             } => {
                 let offset = point.sub(origin);
-                let y_dir = axis.cross(x_dir);
+                let mut y_dir = axis.cross(x_dir);
+                if !direct {
+                    y_dir = y_dir.neg();
+                }
                 let mut u = offset.dot(&y_dir).atan2(offset.dot(x_dir));
                 if u < 0.0 {
                     u += std::f64::consts::TAU;
@@ -3952,14 +4292,61 @@ mod geometry_query_tests {
                 axis,
                 x_dir,
                 radius,
+                direct,
             } => {
                 let offset = point.sub(center);
-                let y_dir = axis.cross(x_dir);
+                let mut y_dir = axis.cross(x_dir);
+                if !direct {
+                    y_dir = y_dir.neg();
+                }
                 let mut u = offset.dot(&y_dir).atan2(offset.dot(x_dir));
                 if u < 0.0 {
                     u += std::f64::consts::TAU;
                 }
                 let v = (offset.dot(axis) / radius).clamp(-1.0, 1.0).asin();
+                (u, v)
+            }
+            SurfaceData::Cone {
+                origin,
+                axis,
+                x_dir,
+                semi_angle,
+                direct,
+                ..
+            } => {
+                let offset = point.sub(origin);
+                let mut y_dir = axis.cross(x_dir);
+                if !direct {
+                    y_dir = y_dir.neg();
+                }
+                let axial = offset.dot(axis);
+                let radial = offset.sub(&axis.scale(axial));
+                let mut u = radial.dot(&y_dir).atan2(radial.dot(x_dir));
+                if u < 0.0 {
+                    u += std::f64::consts::TAU;
+                }
+                (u, axial / semi_angle.cos())
+            }
+            SurfaceData::Torus {
+                center,
+                axis,
+                x_dir,
+                major_radius,
+                direct,
+                minor_radius: _,
+            } => {
+                let offset = point.sub(center);
+                let mut y_dir = axis.cross(x_dir);
+                if !direct {
+                    y_dir = y_dir.neg();
+                }
+                let height = offset.dot(axis);
+                let radial = offset.sub(&axis.scale(height));
+                let mut u = radial.dot(&y_dir).atan2(radial.dot(x_dir));
+                if u < 0.0 {
+                    u += std::f64::consts::TAU;
+                }
+                let v = height.atan2(radial.length() - major_radius);
                 (u, v)
             }
             SurfaceData::Other { .. } => panic!("a classified surface was expected"),
@@ -4023,6 +4410,7 @@ mod geometry_query_tests {
             axis,
             x_dir,
             radius,
+            ..
         } = &surface
         else {
             unreachable!();
@@ -4057,6 +4445,7 @@ mod geometry_query_tests {
             axis,
             x_dir,
             radius,
+            ..
         } = &surface
         else {
             panic!("a sphere face is spherical, got {surface:?}");
@@ -4077,7 +4466,7 @@ mod geometry_query_tests {
     }
 
     #[test]
-    fn other_surfaces_keep_a_generic_type_id() {
+    fn cone_and_torus_faces_are_classified_and_parameter_round_trips() {
         let backend = OcctBackend::new();
         let cone = backend
             .make_cone(
@@ -4088,17 +4477,38 @@ mod geometry_query_tests {
                 Vector3::new(0.0, 0.0, 1.0),
             )
             .expect("a cone");
-        let surface = backend
-            .elements(&cone, ElementKind::Face)
+        let faces = backend.elements(&cone, ElementKind::Face);
+        let (face, surface) = faces
             .iter()
             .find_map(|face| match backend.surface_data(&face.shape) {
-                Some(SurfaceData::Other { type_id }) if type_id == "Part::GeomCone" => {
-                    Some(type_id)
-                }
+                Some(surface @ SurfaceData::Cone { .. }) => Some((face.shape.clone(), surface)),
                 _ => None,
             })
-            .expect("a conical face is generic");
-        assert_eq!(surface, "Part::GeomCone");
+            .expect("a conical face");
+        let SurfaceData::Cone {
+            origin,
+            axis,
+            x_dir,
+            radius,
+            semi_angle,
+            ..
+        } = &surface
+        else {
+            unreachable!();
+        };
+        assert!((radius - 2.0).abs() < 1e-9);
+        assert!(semi_angle.is_finite() && semi_angle.abs() > 0.0);
+        assert!(x_dir.dot(axis).abs() < 1e-12);
+        let _ = origin;
+
+        for (u, v) in [(0.0, 0.0), (0.8, 1.5), (4.0, 3.0)] {
+            let point = backend.face_value_at(&face, u, v).unwrap();
+            let (u2, v2) = parameters(&surface, point);
+            assert!((u2 - u).abs() < 1e-9, "u {u} -> {u2}");
+            assert!((v2 - v).abs() < 1e-9, "v {v} -> {v2}");
+            let back = backend.face_value_at(&face, u2, v2).unwrap();
+            assert!(close(back, point), "{back:?} != {point:?}");
+        }
 
         // A non-face reports no surface at all.
         let edge = backend.elements(&cone, ElementKind::Edge)[0].shape.clone();

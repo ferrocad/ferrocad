@@ -36,6 +36,7 @@ Format codes accepted by ``toNumber``.
 | `UserString` (attribute) | — |
 | `Value` (attribute) | — |
 | getValueAs(unit) | — |
+| isEqual(other, tol=0.0) | `Quantity.isEqual(other, tol=0)`: equal units and values within `tol`. Upstream requires another `Quantity` (a bare number is a `TypeError`). |
 | toStr() | — |
 | value_in(unit) | — |
 | value_mm() | — |

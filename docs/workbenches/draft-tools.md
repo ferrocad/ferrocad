@@ -282,3 +282,92 @@ tests; the in-image Rust test is the one that proves the real kernel path.
 | `python/FerroCADGui/Resources/ui/TaskPanel_Scale.ui` | the converted scale form |
 | `tests/test_draft_snapper.py`, `tests/test_draft_tools.py`, `tests/test_draft_forms.py` | the acceptance suites |
 | `crates/ferrocad_part_py/tests/draft_tools.rs` | the same tool suite with the real Part kernel |
+
+## 10. Draft M3 conformance (`drafttests/test_modification.py`)
+
+Status: measured 2026-10-26 against upstream `33adf61`. The harness runs upstream's
+Draft unchanged (its package roots precede `python/`, so `import Draft` is the real
+workbench):
+
+```sh
+python3 tools/conformance.py --root ../freecad-upstream --draft --files test_modification
+```
+
+| Run | pass | fail | error | skip |
+| --- | --- | --- | --- | --- |
+| before M3 | 17 | 0 | 16 | 0 |
+| after this round | **22** | 1 | 10 | 0 |
+
+Five tests moved from `error` to `pass`: `test_copy`, `test_move`, `test_rotate`,
+`test_scale_rectangle`, `test_scale_spline`. Everything left is blocked on the
+shared kernel, not on a missing Draft-layer call.
+
+### What the layer now provides (`crates/ferrocad_py`)
+
+- **Editor modes.** `DocumentObject.getEditorMode(name)` returns the flags stored by
+  `setEditorMode`, which now writes the property's status bits (`ReadOnly`,
+  `Hidden`, `NoRecompute`) instead of only firing the observer. Both upstream forms
+  are accepted: the legacy int (`0` default, `1` ReadOnly, `2` Hidden, `3` both) and
+  a name sequence (`["ReadOnly", "Hidden"]`). `Draft/draftutils/utils.py:957` reads
+  `getEditorMode("Placement")` for move/rotate/scale.
+- **Placement.** `Placement.isIdentity()` and the mutating `Placement.move(vector)`
+  (writing back through a document property). `Draft.move`/`rotate`/`scale` branch
+  on both.
+- **Matrix.** `Matrix(otherMatrix)` and `Matrix(placement)` copy construction, and
+  `Matrix.multiply(vector)` (matrix × vector returns a `Vector`), both used by
+  `Draft.scale._get_scaled_matrix` and `DraftVecUtils`.
+- **Quantities.** `App::PropertyVectorDistance` now builds a `Vector` property
+  (Draft wire `Start`/`End`), and a `Quantity` accepts a plain number in `+`/`-`,
+  `abs()`, rich comparisons, and `isEqual(other, tol=0)`. That is what
+  `unittest.assertAlmostEqual(obj.Length, 8.0, delta=…)` needs.
+- **Strict `addObject`.** An id that is neither a registered behaviour nor a known
+  base/Python-feature type now raises `ValueError: Unknown C++ type '<id>'`, as
+  upstream does. `Part::Prism` used to fabricate a bare `DocumentObject` with
+  neither `Placement` nor `Shape`, which is why the Prism tests surfaced as
+  attribute errors. The App/Part groups and the pytest suites are unchanged (Part
+  **531 passed** / 0 failed / 0 errored / 12 skipped; no App-group failure mentions
+  `Unknown C++ type`).
+
+`tools/conformance.py`'s `DRAFT_FILES` now also runs `test_creation`, `test_array`,
+`test_dwg` and `test_oca`, all of which are green:
+
+| `--draft` module | pass | fail | error | skip |
+| --- | --- | --- | --- | --- |
+| `test_base` (helper module) | 0 | 0 | 0 | 0 |
+| `test_grid_settings` | 5 | 0 | 0 | 0 |
+| `test_pivy` | 2 | 0 | 0 | 0 |
+| `test_airfoildat` | 2 | 0 | 0 | 0 |
+| `test_import` | 4 | 0 | 0 | 0 |
+| `test_creation` | 26 | 0 | 0 | 0 |
+| `test_array` | 1 | 0 | 0 | 0 |
+| `test_dwg` | 2 | 0 | 0 | 0 |
+| `test_oca` | 2 | 0 | 0 | 0 |
+| **whole group** | **44** | **0** | **0** | **0** |
+
+Neighbouring modules measured with `--files` (the rest of the headless Draft suite):
+`test_svg` 3/0/3/1, `test_dxf` 1/0/1/0, `test_draftgeomutils` 0/0/10/0;
+`test_trimex` defines no test cases in this checkout. Against the start-of-round
+baseline (`test_creation` 26, `test_array` 1, `test_import` 4, `test_dwg` 2,
+`test_oca` 2, `test_svg` 2/0/4/1, `test_dxf` 1/0/1, `test_draftgeomutils` 0/0/10)
+only `test_svg` moved (**+1 pass**, from `Matrix.multiply(vector)` in
+`DraftVecUtils.get_rotation_matrix`).
+
+### Remaining blockers (all kernel hand-offs)
+
+| Test(s) | Blocker | Owner |
+| --- | --- | --- |
+| `test_offset_open`, `test_offset_rectangle_with_face`, `test_offset_closed_with_reversed_edge` | `obj.Shape` on a `Part::Feature(Python)` is a bare `Part.Shape` even when a `Part.Wire` was assigned, so `isinstance(obj.Shape, Part.Wire)` is false and `offsetWire` returns `None` (`Draft/offset.py:147`). The shape property getter must preserve the derived wrapper. | Part (`ferrocad_part_py`) |
+| `test_scale_part_feature_arcs`, `test_scale_part_feature_lines` | `Part.Shape([subshape, …])` is not a constructor (`TypeError: expected a Part.Shape` at `test_modification.py:735`/`:791`); upstream builds a compound from a sequence. | Part (`ferrocad_part_py`) |
+| `test_scale_wire` | A Draft wire's `Shape.Vertexes` are local. Upstream's `Part::Feature.Shape` carries the object `Placement` as its OCCT `Location`, so the test's global coordinates come back; `Shape.Placement` must equal `obj.Placement`. | Part (`ferrocad_part_py`) |
+| `test_upgrade` | `shape.isClosed()` is true while `shape.Wires[0].isClosed()` is false for the same wire, so `Draft.upgrade` keeps "closing" the wire instead of making a face and `self.doc.ActiveObject` is a `Part::Feature` without `Proxy`. | Part (`ferrocad_part_py` shape queries) |
+| `test_downgrade` | `Part.makePolygon([a, b, c, a, a])` raises `Part.OCCError: degenerate geometry`. OCC's `BRepBuilderAPI_MakePolygon::Add` ignores a point coincident with the previous one; `ferrocad_curves::wire::polygon` rejects it. (Upstream reaches that list because `PropertyVectorList` returns a live list and `Draft`'s wire proxy pops the repeated closing point; here the getter returns a fresh list, so the pop does not persist.) | kernel (`ferrocad_curves`, optionally the property getter) |
+| `test_shape_2d_view`, `test_draft_to_techdraw` | `Part::Prism` is not implemented; `addObject` now reports `ValueError: Unknown C++ type 'Part::Prism'` at the creation line. The TechDraw case also needs `TechDraw::DrawPage`/`DrawSVGTemplate`/`DrawViewDraft`. | Part track (+ TechDraw for the second) |
+| `test_draft_to_sketch` | `ModuleNotFoundError: No module named 'Sketcher'` (`Draft/make_sketch.py:92`). | Part/Sketcher track |
+
+Part-kernel progress noted during measurement: `Shape.hashCode()` and the derived
+`Part.Wire` wrapper (for directly constructed wires) landed while this round ran, so
+`test_upgrade` gets past `upgrade.py:462`; `Part::Feature.Shape` still loses the
+wrapper and the `Wires[0]` closure is still inconsistent. `Shape.fix()` /
+`Shape.OrderedEdges` (the `test_draftgeomutils` blockers) and
+`TechDraw.projectToSVG` (three `test_svg` errors) are likewise kernel/shims work,
+not part of M3.

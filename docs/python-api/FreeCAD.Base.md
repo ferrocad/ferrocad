@@ -57,7 +57,7 @@ Kernel failure (``Part.OCCError`` when the Part module is absent).
 | isUnity(tol=0.0) | — |
 | move(*args) | — |
 | multVec(v) | Transform a vector by this matrix (FreeCAD `Matrix.multVec`). |
-| multiply(o) | — |
+| multiply(other) | `Matrix.multiply(other)`: matrix × matrix, or matrix × vector. |
 | nullify() | — |
 | rotateX(angle) | — |
 | rotateY(angle) | — |
@@ -78,7 +78,9 @@ Kernel failure (``Part.OCCError`` when the Part module is absent).
 | `Rotation` (attribute) | — |
 | copy() | A detached copy (`Placement.copy`). |
 | inverse() | — |
+| isIdentity() | Whether this placement is the identity (`Placement.isIdentity`). |
 | isSame(o, tol=0.0) | — |
+| move(vector) | Translate this placement in place (`Placement.move`). |
 | multVec(v) | Transform a vector by this placement (FreeCAD `Placement.multVec`). |
 | multiply(other, mod=0) | Compose this placement with `other` (`Placement.multiply`). |
 | rotate(center, axis, angle, comp=False) | Rotate this placement in place (`Placement.rotate`). |
@@ -108,6 +110,7 @@ Kernel failure (``Part.OCCError`` when the Part module is absent).
 | `UserString` (attribute) | — |
 | `Value` (attribute) | — |
 | getValueAs(unit) | — |
+| isEqual(other, tol=0.0) | `Quantity.isEqual(other, tol=0)`: equal units and values within `tol`. Upstream requires another `Quantity` (a bare number is a `TypeError`). |
 | toStr() | — |
 | value_in(unit) | — |
 | value_mm() | — |

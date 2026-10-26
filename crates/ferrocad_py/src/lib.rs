@@ -262,6 +262,55 @@ fn type_is_derived_from(type_id: &str, target: &str) -> bool {
     false
 }
 
+/// Whether `addObject` may construct `type_id` (upstream `Base::Type` lookup).
+///
+/// The model has no single C++ type registry: the native behaviours
+/// ([`ferrocad_core::object_registry`]), the geometry-free default-property table
+/// (`App::FeatureTest`, `App::Link`, `App::DocumentObjectGroup`, …) and the
+/// Python-feature types handled by this crate together are the registered set.
+/// `App::Origin`/`Plane`/`Line`/`Point` and `App::Annotation` are real upstream
+/// types that core constructs without a behaviour or default table entry. Keep
+/// the second group in sync with `ferrocad_core::typeregistry::default_properties`
+/// (that module is private to the core).
+fn known_object_type(type_id: &str) -> bool {
+    if ferrocad_core::object_registry::is_registered(type_id) {
+        return true;
+    }
+    matches!(
+        type_id,
+        // Base/feature types (real upstream types with no behaviour here).
+        "App::DocumentObject"
+            | "App::GeoFeature"
+            | "App::Feature"
+            | "App::FeaturePython"
+            | "App::DocumentObjectGroupPython"
+            | "App::Origin"
+            | "App::Plane"
+            | "App::Line"
+            | "App::Point"
+            | "App::Annotation"
+            | "Part::Feature"
+            | "Part::FeaturePython"
+            | "Part::Part2DObject"
+            | "Part::Part2DObjectPython"
+            // Types core can construct from its default-property table.
+            | "App::FeatureTest"
+            | "App::FeatureTestColumn"
+            | "App::FeatureTestRow"
+            | "App::FeatureTestAbsAddress"
+            | "App::FeatureTestPlacement"
+            | "App::FeatureTestAttribute"
+            | "App::DocumentObjectGroup"
+            | "App::DocumentObjectFileIncluded"
+            | "App::Part"
+            | "App::Link"
+            | "App::LinkGroup"
+            | "App::LinkList"
+            | "App::LinkElement"
+            | "PartDesign::Body"
+    )
+}
+
 fn forget_document(doc: &Py<PyDocument>) {
     let key = doc_key(doc);
     with_objects(|cache| cache.retain(|(d, _), _| *d != key));
@@ -973,18 +1022,27 @@ impl PyQuantity {
     }
 
     // arithmetic
+    ///
+    /// A plain number is a dimensionless operand; upstream's `Quantity`
+    /// operators let it adopt this quantity's unit (so `8 mm - 1` is `7 mm`),
+    /// which `unittest.assertAlmostEqual(Quantity, float)` relies on.
     fn __add__(&self, other: &Bound<'_, PyAny>) -> PyResult<PyQuantity> {
-        let o = other
-            .extract::<PyRef<'_, PyQuantity>>()
-            .map_err(|_| PyTypeError::new_err("can only add Quantity to Quantity"))?;
-        Ok(PyQuantity { inner: self.inner.add(&o.inner).map_err(PyValueError::new_err)? })
+        let o = self.arith_operand(other)?;
+        Ok(PyQuantity { inner: self.inner.add(&o).map_err(PyValueError::new_err)? })
     }
 
     fn __sub__(&self, other: &Bound<'_, PyAny>) -> PyResult<PyQuantity> {
-        let o = other
-            .extract::<PyRef<'_, PyQuantity>>()
-            .map_err(|_| PyTypeError::new_err("can only subtract Quantity from Quantity"))?;
-        Ok(PyQuantity { inner: self.inner.sub(&o.inner).map_err(PyValueError::new_err)? })
+        let o = self.arith_operand(other)?;
+        Ok(PyQuantity { inner: self.inner.sub(&o).map_err(PyValueError::new_err)? })
+    }
+
+    fn __abs__(&self) -> PyQuantity {
+        let inner = if self.inner.canonical_value() < 0.0 {
+            self.inner.neg()
+        } else {
+            self.inner
+        };
+        PyQuantity { inner }
     }
 
     fn __mul__(&self, other: &Bound<'_, PyAny>) -> PyResult<PyQuantity> {
@@ -1020,8 +1078,65 @@ impl PyQuantity {
         }
     }
 
+    /// `Quantity.isEqual(other, tol=0)`: equal units and values within `tol`.
+    /// Upstream requires another `Quantity` (a bare number is a `TypeError`).
+    #[pyo3(signature = (other, tol=0.0))]
+    fn isEqual(&self, other: &Bound<'_, PyAny>, tol: f64) -> PyResult<bool> {
+        let o = other
+            .extract::<PyRef<'_, PyQuantity>>()
+            .map_err(|_| PyTypeError::new_err("isEqual expects a Quantity"))?;
+        Ok(self.inner.sig() == o.inner.sig()
+            && (self.inner.canonical_value() - o.inner.canonical_value()).abs() <= tol)
+    }
+
+    fn __lt__(&self, other: &Bound<'_, PyAny>) -> PyResult<bool> {
+        self.compare(other).map(|o| o == std::cmp::Ordering::Less)
+    }
+
+    fn __le__(&self, other: &Bound<'_, PyAny>) -> PyResult<bool> {
+        self.compare(other)
+            .map(|o| o != std::cmp::Ordering::Greater)
+    }
+
+    fn __gt__(&self, other: &Bound<'_, PyAny>) -> PyResult<bool> {
+        self.compare(other)
+            .map(|o| o == std::cmp::Ordering::Greater)
+    }
+
+    fn __ge__(&self, other: &Bound<'_, PyAny>) -> PyResult<bool> {
+        self.compare(other).map(|o| o != std::cmp::Ordering::Less)
+    }
+
     fn __repr__(&self) -> String {
         self.inner.to_string()
+    }
+}
+
+impl PyQuantity {
+    /// Coerce an arithmetic operand: a `Quantity`, or a plain number treated as
+    /// dimensionless (which adopts this quantity's unit, as upstream does).
+    fn arith_operand(&self, other: &Bound<'_, PyAny>) -> PyResult<Quantity> {
+        if let Ok(o) = other.extract::<PyRef<'_, PyQuantity>>() {
+            return Ok(o.inner);
+        }
+        if let Ok(value) = other.extract::<f64>() {
+            return Ok(Quantity::new(value, self.inner.unit()));
+        }
+        Err(PyTypeError::new_err(
+            "operand must be a Quantity or a number",
+        ))
+    }
+
+    fn compare(&self, other: &Bound<'_, PyAny>) -> PyResult<std::cmp::Ordering> {
+        let o = self.arith_operand(other)?;
+        if self.inner.sig() != o.sig() {
+            return Err(PyValueError::new_err("incompatible units"));
+        }
+        Ok(self
+            .inner
+            .canonical_value()
+            .partial_cmp(&o.canonical_value())
+            .unwrap_or(std::cmp::Ordering::Equal))
     }
 }
 
@@ -1277,6 +1392,47 @@ fn apply_status_name(status: &mut u32, name: &str) -> PyResult<()> {
             "unknown property status '{name}'"
         ))),
     }
+}
+
+/// The status bits that `setEditorMode`/`getEditorMode` manage (upstream
+/// `Property::Status`: `ReadOnly`, `Hidden`, `NoRecompute`).
+const EDITOR_MODE_BITS: u32 =
+    prop_status::READONLY | prop_status::HIDDEN | prop_status::NORECOMPUTE;
+
+/// Parse `setEditorMode`'s argument into a status mask.
+///
+/// FreeCAD accepts the legacy bit number (`0` default, `1` ReadOnly, `2`
+/// Hidden, `3` both) or a sequence of names (`["ReadOnly", "Hidden"]`).
+fn parse_editor_modes(modes: &Bound<'_, PyAny>) -> PyResult<u32> {
+    if let Ok(number) = modes.extract::<i64>() {
+        return match number {
+            0 => Ok(prop_status::NONE),
+            1 => Ok(prop_status::READONLY),
+            2 => Ok(prop_status::HIDDEN),
+            3 => Ok(prop_status::READONLY | prop_status::HIDDEN),
+            other => Err(PyValueError::new_err(format!(
+                "editor mode must be 0 (default), 1 (ReadOnly), 2 (Hidden) or 3 (both), not {other}"
+            ))),
+        };
+    }
+    let mut status = prop_status::NONE;
+    for item in modes.try_iter()? {
+        let name: String = item?.extract().map_err(|_| {
+            PyTypeError::new_err("editor mode must be an int or a sequence of mode names")
+        })?;
+        let bit = match name.as_str() {
+            "ReadOnly" => prop_status::READONLY,
+            "Hidden" => prop_status::HIDDEN,
+            "NoRecompute" => prop_status::NORECOMPUTE,
+            other => {
+                return Err(PyValueError::new_err(format!(
+                    "unknown editor mode '{other}'"
+                )));
+            }
+        };
+        status |= bit;
+    }
+    Ok(status)
 }
 
 
@@ -1915,6 +2071,16 @@ impl PyDocument {
         if is_extension_type(r#type) {
             return Err(PyTypeError::new_err(format!(
                 "'{0}' is not a document object type",
+                r#type
+            )));
+        }
+        // Upstream resolves the type through `Base::Type` and raises rather than
+        // inventing an object. Fabricating a bare `DocumentObject` would otherwise
+        // hide the real gap (`Part::Prism` silently had neither `Placement` nor
+        // `Shape`).
+        if !known_object_type(r#type) {
+            return Err(PyValueError::new_err(format!(
+                "Unknown C++ type '{0}'",
                 r#type
             )));
         }
@@ -3028,11 +3194,18 @@ impl PyDocumentObject {
         if name.is_empty() {
             return Err(PyValueError::new_err("property name must not be empty"));
         }
-        // Resolve the type through the registry (FreeCAD's `Base::Type` by name):
-        // an unknown type is an error, never a silent default.
-        let base = ferrocad_core::property_types::default_for(type_id).ok_or_else(|| {
-            PyTypeError::new_err(format!("'{type_id}' is not a property type"))
-        })?;
+        // `App::PropertyVectorDistance` is upstream's `PropertyVector` whose
+        // components carry distance units; its Python value is a `Vector` (Draft's
+        // wire `Start`/`End`). Core's property-type registry groups it with the
+        // scalar unit types, which would make `obj.Start` a `Quantity`, so build the
+        // vector here. (Core's registry — and therefore FCStd restore — still needs
+        // the same correction; see the M3 Draft hand-off note.)
+        let base = match type_id {
+            "App::PropertyVectorDistance" => Property::Vector(Vector3::zero()),
+            _ => ferrocad_core::property_types::default_for(type_id).ok_or_else(|| {
+                PyTypeError::new_err(format!("'{type_id}' is not a property type"))
+            })?,
+        };
         let mut status = attr.max(0) as u32;
         if read_only {
             status |= prop_status::READONLY;
@@ -3176,9 +3349,52 @@ impl PyDocumentObject {
         }
     }
 
-    /// Record a property editor mode (`ReadOnly`, …); POC: fires the event only.
-    fn setEditorMode(slf: &Bound<'_, Self>, prop: &str, _modes: &Bound<'_, PyAny>) {
+    /// Set a property's editor mode (`DocumentObject.setEditorMode`).
+    ///
+    /// Upstream stores these in the property's status bits, which this model
+    /// already keeps (`PropertyContainer`'s per-property status). The argument
+    /// is either the legacy bit number (`0` default, `1` ReadOnly, `2` Hidden,
+    /// `3` both) or a sequence of names (`["ReadOnly", "Hidden"]`), exactly as
+    /// FreeCAD accepts. Only the editor bits are replaced; other status flags
+    /// (`Output`, `Transient`, …) are preserved.
+    fn setEditorMode(slf: &Bound<'_, Self>, prop: &str, modes: &Bound<'_, PyAny>) -> PyResult<()> {
+        let mode_bits = parse_editor_modes(modes)?;
+        let (inner, id) = {
+            let this = slf.borrow();
+            (Arc::clone(&this.inner), this.id)
+        };
+        let current = inner
+            .lock()
+            .unwrap()
+            .property_status(id, prop)
+            .ok_or_else(|| PyAttributeError::new_err(format!("no property '{prop}'")))?;
+        let status = (current & !EDITOR_MODE_BITS) | mode_bits;
+        inner.lock().unwrap().set_property_status(id, prop, status);
         fire_obj_str("slotChangePropertyEditor", slf, prop);
+        Ok(())
+    }
+
+    /// Read a property's editor mode (`DocumentObject.getEditorMode`).
+    ///
+    /// Returns the names of the editor-mode status bits that are set, so a
+    /// `setEditorMode(…, ["ReadOnly"])` round-trips through
+    /// `getEditorMode(…)` (Draft reads `Placement` this way).
+    fn getEditorMode(&self, prop: &str) -> PyResult<Vec<String>> {
+        let doc = self.inner.lock().unwrap();
+        let status = doc
+            .property_status(self.id, prop)
+            .ok_or_else(|| PyAttributeError::new_err(format!("no property '{prop}'")))?;
+        let mut names = Vec::new();
+        if status & prop_status::READONLY != 0 {
+            names.push("ReadOnly".to_string());
+        }
+        if status & prop_status::HIDDEN != 0 {
+            names.push("Hidden".to_string());
+        }
+        if status & prop_status::NORECOMPUTE != 0 {
+            names.push("NoRecompute".to_string());
+        }
+        Ok(names)
     }
 
     fn removeProperty(slf: &Bound<'_, Self>, name: &str) -> PyResult<()> {
@@ -4622,6 +4838,20 @@ impl PyMatrix {
         let mut m = Matrix4::identity();
         match args.len() {
             0 => {}
+            1 => {
+                // Copy constructor: `Matrix(otherMatrix)` and `Matrix(placement)`
+                // both exist upstream (`Draft.scale` passes `pla.Matrix`).
+                let arg = args.get_item(0)?;
+                if let Ok(other) = arg.extract::<PyRef<'_, PyMatrix>>() {
+                    return Ok(Self { inner: other.inner });
+                }
+                if let Ok(placement) = arg.extract::<PyRef<'_, PyPlacement>>() {
+                    return Ok(Self { inner: placement.get().to_matrix() });
+                }
+                return Err(PyTypeError::new_err(
+                    "Matrix() expects a Matrix, a Placement, or 4, 12 or 16 floats",
+                ));
+            }
             4 => {
                 for i in 0..4 {
                     m.m[i] = args.get_item(i)?.extract()?;
@@ -4765,8 +4995,25 @@ impl PyMatrix {
         )
     }
 
-    fn multiply(&self, o: PyRef<'_, PyMatrix>) -> PyMatrix {
-        PyMatrix { inner: self.inner.mul(&o.inner) }
+    /// `Matrix.multiply(other)`: matrix × matrix, or matrix × vector.
+    ///
+    /// Upstream returns a `Matrix` for a matrix operand and a `Vector` for a
+    /// vector operand (`DraftVecUtils.get_rotation_matrix` does the latter).
+    fn multiply(&self, other: &Bound<'_, PyAny>) -> PyResult<PyObject> {
+        let py = other.py();
+        if let Ok(o) = other.extract::<PyRef<'_, PyMatrix>>() {
+            return Ok(PyMatrix { inner: self.inner.mul(&o.inner) }
+                .into_py_any(py)
+                .unwrap());
+        }
+        if let Ok(v) = other.extract::<PyRef<'_, PyVector>>() {
+            return Ok(PyVector::fresh(self.inner.transform(&v.inner))
+                .into_py_any(py)
+                .unwrap());
+        }
+        Err(PyTypeError::new_err(
+            "Matrix.multiply expects a Matrix or a Vector",
+        ))
     }
 
     /// Transform a vector by this matrix (FreeCAD `Matrix.multVec`).
@@ -5613,6 +5860,29 @@ impl PyPlacement {
     #[pyo3(signature = (o, tol=0.0))]
     fn isSame(&self, o: PyRef<'_, PyPlacement>, tol: f64) -> bool {
         self.get().is_same(&o.get(), tol)
+    }
+
+    /// Whether this placement is the identity (`Placement.isIdentity`).
+    ///
+    /// Upstream compares the base and rotation exactly; a tiny tolerance is
+    /// used here so a placement built by composing e.g. two 180° rotations is
+    /// still recognised as the identity.
+    fn isIdentity(&self) -> bool {
+        self.get().is_same(&Placement::identity(), 0.0)
+    }
+
+    /// Translate this placement in place (`Placement.move`).
+    ///
+    /// Unlike `translate`, this is mutating and returns `None`, matching
+    /// upstream's `Base::Placement::move`. `Draft.move` calls
+    /// `obj.Placement.move(vector)`, which writes back through the property.
+    #[pyo3(name = "move")]
+    fn move_(&self, vector: &Bound<'_, PyAny>) -> PyResult<()> {
+        let mut placement = self.get();
+        placement.base = placement.base.add(&extract_vector(vector)?);
+        self.set(placement);
+        self.write_back();
+        Ok(())
     }
 
     #[getter]

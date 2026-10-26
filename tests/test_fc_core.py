@@ -72,8 +72,11 @@ def test_label_and_default_naming():
     doc = fc.newDocument("Naming")
     first = doc.addObject("App::FeaturePython")
     assert first.Name == "FeaturePython"
-    second = doc.addObject("Part::Box")
-    assert second.Name == "Box"
+    # A *different* registered type gets its own default name. `Part::Box`
+    # would need the Part module, which this script deliberately does not
+    # import: it exercises the bare `ferrocad` binding.
+    second = doc.addObject("App::Feature")
+    assert second.Name == "Feature"
     third = doc.addObject("App::FeaturePython")
     assert third.Name == "FeaturePython001"
 

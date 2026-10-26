@@ -71,6 +71,23 @@ class TestUnitsAndBase(unittest.TestCase):
             FreeCAD.Units.parseQuantity(t[0]).getValueAs("psi").Value, 1.0, places=8
         )
 
+    def test_quantity_arithmetic_with_numbers(self):
+        # Upstream's quantity operators let a plain number act as a dimensionless
+        # operand and keep the unit: `8 mm - 1` is `7 mm`. Draft's scale test
+        # compares a `Length` property with a float through `assertAlmostEqual`.
+        q = FreeCAD.Units.Quantity("8 mm")
+        self.assertEqual(q - 1, FreeCAD.Units.Quantity("7 mm"))
+        self.assertEqual(q + 2, FreeCAD.Units.Quantity("10 mm"))
+        self.assertTrue(abs(q - 8) <= 1e-6)
+        self.assertTrue(q.isEqual(FreeCAD.Units.Quantity("8 mm"), 1e-6))
+        self.assertFalse(q.isEqual(FreeCAD.Units.Quantity("9 mm"), 1e-6))
+        self.assertTrue(FreeCAD.Units.Quantity("8 mm") < 9.0)
+        self.assertTrue(FreeCAD.Units.Quantity("8 mm") <= 8.0)
+        self.assertTrue(FreeCAD.Units.Quantity("8 mm") > 7.0)
+        self.assertTrue(FreeCAD.Units.Quantity("8 mm") >= 8.0)
+        with self.assertRaises(TypeError):
+            q.isEqual(FreeCAD.Vector(8, 0, 0))
+
 
 class TestConsole(unittest.TestCase):
     def test_print_methods_exist(self):
@@ -166,6 +183,24 @@ class TestGeometry(unittest.TestCase):
     def test_placement_identity(self):
         p = FreeCAD.Placement()
         self.assertEqual(p.Base, FreeCAD.Vector(0, 0, 0))
+        self.assertTrue(p.isIdentity())
+        self.assertIsNone(p.move(FreeCAD.Vector(1, 2, 3)))
+        self.assertEqual(p.Base, FreeCAD.Vector(1, 2, 3))
+        self.assertFalse(p.isIdentity())
+        # A rotated placement is not the identity either.
+        rotated = FreeCAD.Placement()
+        rotated.Rotation = FreeCAD.Rotation(FreeCAD.Vector(0, 0, 1), 90)
+        self.assertFalse(rotated.isIdentity())
+
+    def test_matrix_copy_constructor(self):
+        p = FreeCAD.Placement(
+            FreeCAD.Vector(1, 2, 3), FreeCAD.Rotation(FreeCAD.Vector(0, 0, 1), 90)
+        )
+        self.assertEqual(FreeCAD.Matrix(p.Matrix), p.toMatrix())
+        self.assertEqual(FreeCAD.Matrix(p), p.toMatrix())
+        # `Matrix.multiply` also takes a vector (DraftVecUtils does this).
+        v = FreeCAD.Vector(1, 0, 0)
+        self.assertEqual(p.Matrix.multiply(v), p.Matrix.multVec(v))
 
     def test_placement_from_tuple(self):
         p = FreeCAD.Placement()
@@ -1214,7 +1249,7 @@ class TestBaseTypes(unittest.TestCase):
 
 class TestPropertyStatus(unittest.TestCase):
     def tearDown(self):
-        for name in ("Status", "NoPersist"):
+        for name in ("Status", "NoPersist", "Editor"):
             if FreeCAD.getDocument(name) is not None:
                 FreeCAD.closeDocument(name)
 
@@ -1274,6 +1309,34 @@ class TestPropertyStatus(unittest.TestCase):
             obj2.getTypeOfProperty("Gone")
         FreeCAD.closeDocument(doc2.Name)
 
+    def test_editor_modes_roundtrip(self):
+        # `setEditorMode` stores the editor flags in the property's status bits
+        # (upstream's `Property::ReadOnly`/`Hidden`), which `getEditorMode` reads
+        # back. Draft's modifiers call `getEditorMode("Placement")`.
+        doc = FreeCAD.newDocument("Editor")
+        obj = doc.addObject("App::FeaturePython", "Obj")
+        obj.addProperty("App::PropertyLength", "Height")
+        self.assertEqual(obj.getEditorMode("Height"), [])
+
+        obj.setEditorMode("Height", 1)
+        self.assertEqual(obj.getEditorMode("Height"), ["ReadOnly"])
+        self.assertIn("ReadOnly", obj.getPropertyStatus("Height"))
+
+        obj.setEditorMode("Height", ["Hidden"])
+        self.assertEqual(obj.getEditorMode("Height"), ["Hidden"])
+
+        obj.setEditorMode("Height", ["ReadOnly", "Hidden"])
+        self.assertEqual(obj.getEditorMode("Height"), ["ReadOnly", "Hidden"])
+
+        obj.setEditorMode("Height", 0)
+        self.assertEqual(obj.getEditorMode("Height"), [])
+
+        with self.assertRaises(AttributeError):
+            obj.getEditorMode("Missing")
+        with self.assertRaises(ValueError):
+            obj.setEditorMode("Height", 7)
+        FreeCAD.closeDocument("Editor")
+
 
 class TestPropertyMetadataAndConstraints(unittest.TestCase):
     def test_property_metadata(self):
@@ -1331,6 +1394,16 @@ class TestObjectLifecycle(unittest.TestCase):
         with self.assertRaises(Exception):
             _ = obj.Name
         FreeCAD.closeDocument("Lifecycle")
+
+    def test_unknown_object_type_raises(self):
+        # Upstream resolves the type through `Base::Type` (`ValueError: Unknown
+        # C++ type`) instead of fabricating an object that has no properties.
+        doc = FreeCAD.newDocument("UnknownType")
+        with self.assertRaises(ValueError) as caught:
+            doc.addObject("Part::Prism", "Prism")
+        self.assertIn("Unknown C++ type", str(caught.exception))
+        self.assertEqual(doc.Objects, [])
+        FreeCAD.closeDocument("UnknownType")
 
 
 class TestGeometryWriteThrough(unittest.TestCase):

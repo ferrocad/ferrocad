@@ -97,6 +97,7 @@ A drop-in, Rust-backed stand-in for FreeCAD's Python ``App`` module.
 | enforceRecompute() | — |
 | evalExpression(source) | Evaluate an expression source in this object's context. |
 | getDocumentationOfProperty(name) | `getDocumentationOfProperty`: the property's documentation string. |
+| getEditorMode(prop) | Read a property's editor mode (`DocumentObject.getEditorMode`). |
 | getElementIndex(name) | `getElementIndex(name)`: the index in an element reference. |
 | getEnumerationsOfProperty(name) | `getEnumerationsOfProperty`: an enumeration's allowed values, else `None`. |
 | getGroupOfProperty(name) | `getGroupOfProperty`: the UI group the property belongs to. |
@@ -124,7 +125,7 @@ A drop-in, Rust-backed stand-in for FreeCAD's Python ``App`` module.
 | removeProperty(name) | — |
 | restoreContent(data) | Restore this object's content from bytes (`restoreContent`). |
 | restorePropertyContent(name, data) | Restore one property from bytes (`restorePropertyContent`). |
-| setEditorMode(prop, _modes) | Record a property editor mode (`ReadOnly`, …); POC: fires the event only. |
+| setEditorMode(prop, modes) | Set a property's editor mode (`DocumentObject.setEditorMode`). |
 | setExpression(prop, source=None) | — |
 | setLink(value, subname=None) | `App::Link.setLink(obj)`: point `LinkedObject` at `obj` (or clear it with `None`). `subname` narrows the link to one sub-element of the target. |
 | setPropertyByName(name, value) | — |

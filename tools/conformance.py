@@ -98,6 +98,13 @@ DRAFT_FILES = [
     "test_pivy",
     "test_airfoildat",
     "test_import",
+    # M2/M3 modules that now run green in this group (they need the combined
+    # App+Part image, as `test_import` already did). `test_modification` stays out
+    # until its remaining kernel gaps close; see docs/workbenches/draft-tools.md.
+    "test_creation",
+    "test_array",
+    "test_dwg",
+    "test_oca",
 ]
 
 # `src/Mod/Test` also holds package plumbing; the App group's `--list` has always

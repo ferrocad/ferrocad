@@ -55,6 +55,7 @@ A drop-in, Rust-backed stand-in for FreeCAD's Python ``App`` module.
 | getAvailableUndos(id=0) | The number of undo steps, or the depth of transaction `id` (FreeCAD `getAvailableUndos`). |
 | getBookedTransactionID() | — |
 | getObject(key) | — |
+| getObjectsByLabel(label) | The objects whose `Label` is exactly `label` (`Document.getObjectsByLabel`). |
 | getTempFileName(basename) | A file name inside the transient directory (`getTempFileName`). |
 | isAutoCreated() | — |
 | load(path) | — |

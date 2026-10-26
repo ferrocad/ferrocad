@@ -1909,6 +1909,26 @@ impl PyDocument {
         Ok(obj)
     }
 
+    /// The objects whose `Label` is exactly `label` (`Document.getObjectsByLabel`).
+    ///
+    /// Upstream compares the user-visible Label, not the internal Name. The result
+    /// keeps document order and is empty when nothing matches.
+    fn getObjectsByLabel(slf: &Bound<'_, Self>, label: &str) -> Vec<Py<PyDocumentObject>> {
+        let py = slf.py();
+        let inner = Arc::clone(&slf.borrow().inner);
+        let doc_py: Py<PyDocument> = slf.clone().unbind();
+        let ids = {
+            let doc = inner.lock().unwrap();
+            doc.object_ids()
+                .into_iter()
+                .filter(|id| doc.object(*id).is_some_and(|object| object.label == label))
+                .collect::<Vec<_>>()
+        };
+        ids.into_iter()
+            .map(|id| get_or_create_object(py, &doc_py, &inner, id))
+            .collect()
+    }
+
     fn getObject(
         slf: &Bound<'_, Self>,
         key: &Bound<'_, PyAny>,

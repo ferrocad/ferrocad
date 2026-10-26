@@ -20,12 +20,22 @@ use crate::property::Property;
 use crate::quantity::Quantity;
 use crate::unit::Unit;
 
-type Factory = Box<dyn Fn() -> Property + Send + Sync>;
+/// A factory that produces a fresh default value for a property type.
+pub type PropertyFactory = Box<dyn Fn() -> Property + Send + Sync>;
 
-fn registry() -> &'static Mutex<BTreeMap<String, Factory>> {
-    static REGISTRY: OnceLock<Mutex<BTreeMap<String, Factory>>> = OnceLock::new();
+/// The process-wide property-type registry: FreeCAD type name → factory.
+///
+/// This is kernel state, reached through [`crate::kernel()`] as well as the free
+/// functions in this module. A workbench crate must not introduce its own
+/// `OnceLock<…Registry>`: it would be a second registry, invisible to the kernel
+/// and to every other module.
+pub type PropertyRegistry = Mutex<BTreeMap<String, PropertyFactory>>;
+
+/// The one process-wide property-type registry.
+pub(crate) fn registry() -> &'static PropertyRegistry {
+    static REGISTRY: OnceLock<PropertyRegistry> = OnceLock::new();
     REGISTRY.get_or_init(|| {
-        let mut map: BTreeMap<String, Factory> = BTreeMap::new();
+        let mut map: BTreeMap<String, PropertyFactory> = BTreeMap::new();
         seed(&mut map);
         Mutex::new(map)
     })
@@ -40,10 +50,18 @@ pub fn register(name: &str, factory: impl Fn() -> Property + Send + Sync + 'stat
         .insert(name.to_string(), Box::new(factory));
 }
 
-type RestoreFn = fn(&[u8]) -> Option<Box<dyn ExtensionData>>;
+/// Reconstructs a registered extension value from its saved bytes.
+pub type RestoreFn = fn(&[u8]) -> Option<Box<dyn ExtensionData>>;
 
-fn extensions() -> &'static Mutex<BTreeMap<String, RestoreFn>> {
-    static EXTENSIONS: OnceLock<Mutex<BTreeMap<String, RestoreFn>>> = OnceLock::new();
+/// The process-wide extension-restore registry: type name → restore hook.
+///
+/// Sibling of [`PropertyRegistry`]; both are kernel state and are reached through
+/// [`crate::kernel()`] (`properties()` and `property_extensions()`).
+pub type PropertyExtensionRegistry = Mutex<BTreeMap<String, RestoreFn>>;
+
+/// The one process-wide extension-restore registry.
+pub(crate) fn extensions() -> &'static PropertyExtensionRegistry {
+    static EXTENSIONS: OnceLock<PropertyExtensionRegistry> = OnceLock::new();
     EXTENSIONS.get_or_init(|| Mutex::new(BTreeMap::new()))
 }
 
@@ -86,12 +104,12 @@ pub fn names() -> Vec<String> {
     registry().lock().unwrap().keys().cloned().collect()
 }
 
-fn seed(map: &mut BTreeMap<String, Factory>) {
+fn seed(map: &mut BTreeMap<String, PropertyFactory>) {
     fn length() -> Property {
         Property::Quantity(Quantity::new(0.0, Unit::Millimeter))
     }
     fn insert(
-        map: &mut BTreeMap<String, Factory>,
+        map: &mut BTreeMap<String, PropertyFactory>,
         name: &str,
         factory: impl Fn() -> Property + Send + Sync + 'static,
     ) {

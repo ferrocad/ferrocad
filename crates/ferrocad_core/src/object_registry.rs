@@ -136,8 +136,17 @@ pub trait ObjectType: Send + Sync {
     }
 }
 
-fn registry() -> &'static Mutex<BTreeMap<String, Arc<dyn ObjectType>>> {
-    static REGISTRY: OnceLock<Mutex<BTreeMap<String, Arc<dyn ObjectType>>>> = OnceLock::new();
+/// The process-wide object-type registry: a type id maps to its behaviour.
+///
+/// This is kernel state, reached through [`crate::kernel()`] as well as the free
+/// functions in this module. A workbench crate must not introduce its own
+/// `OnceLock<…Registry>`: it would be a second registry, invisible to the kernel
+/// and to every other module.
+pub type ObjectTypeRegistry = Mutex<BTreeMap<String, Arc<dyn ObjectType>>>;
+
+/// The one process-wide object-type registry.
+pub(crate) fn registry() -> &'static ObjectTypeRegistry {
+    static REGISTRY: OnceLock<ObjectTypeRegistry> = OnceLock::new();
     REGISTRY.get_or_init(|| Mutex::new(BTreeMap::new()))
 }
 

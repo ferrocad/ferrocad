@@ -106,6 +106,7 @@ mod application;
 mod document;
 mod expr;
 mod extension;
+mod kernel;
 mod observer;
 pub mod object_registry;
 mod property;
@@ -119,6 +120,7 @@ mod typeregistry;
 pub use ferrocad_types::{geometry, quantity, unit};
 
 pub use application::{application, application_id, Application, DocumentHandle, DocumentObserver};
+pub use kernel::{kernel, Kernel};
 pub use document::{
     color_from_packed, color_to_packed, sanitize_name, Color, Document, DocumentObject, ObjectId,
     SavedDocument, ViewState,

@@ -5,6 +5,7 @@
 //! `quantity`, `unit`, `stringhasher`).
 
 mod documents;
+mod kernel;
 mod properties;
 mod quantities;
 mod transactions;

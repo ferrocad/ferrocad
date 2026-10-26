@@ -2,9 +2,9 @@
 //!
 //! An `.FCStd` file is a ZIP archive whose `Document.xml` member holds the
 //! document's objects, `GuiDocument.xml` holds their view providers, and
-//! `PartShapeN.brp`/`DiffuseColorN`/property-named members hold values that are
-//! not stored inline. This module implements just enough of ZIP and of
-//! FreeCAD's XML schema to open upstream documents.
+//! `PartShapeN.brp`/`MeshKernelN.bms`/`DiffuseColorN`/property-named members hold
+//! values that are not stored inline. This module implements just enough of ZIP
+//! and of FreeCAD's XML schema to open upstream documents.
 //!
 //! Supported ZIP subset: single-disk archives, entries stored (`method = 0`) or
 //! deflated (`method = 8`), unencrypted. ZIP64 archives return
@@ -18,6 +18,9 @@
 //! - `<Part file="PartShapeN.brp"/>` — the member's bytes go to
 //!   [`property_types::restore_extension`] for the property's type (e.g.
 //!   `Part::PropertyPartShape`).
+//! - `<Mesh file="MeshKernelN.bms"/>` — the same registry path for a
+//!   `Mesh::PropertyMeshKernel`; a missing or undecodable member is an error
+//!   rather than an empty mesh.
 //! - `<ShapeList count="…"><TopoShape file="PartShapeN.M.brp"/>…</ShapeList>` —
 //!   the members are framed as `u64` LE count, then a `u64` LE length plus bytes
 //!   per entry, and the framing goes to `restore_extension`. That is the byte
@@ -117,6 +120,8 @@ pub enum FcstdError {
     UnsupportedCompression(u16),
     /// A required member (`Document.xml`) is missing.
     MissingEntry(String),
+    /// A module payload member is present but cannot be restored.
+    MalformedMember(String),
     /// The ZIP structure is malformed.
     BadZip(String),
     /// `Document.xml` is not valid XML.
@@ -142,6 +147,7 @@ impl fmt::Display for FcstdError {
                 write!(f, "unsupported ZIP compression method {method}")
             }
             FcstdError::MissingEntry(name) => write!(f, "missing ZIP entry '{name}'"),
+            FcstdError::MalformedMember(msg) => write!(f, "malformed .FCStd member: {msg}"),
             FcstdError::BadZip(msg) => write!(f, "malformed ZIP archive: {msg}"),
             FcstdError::Xml(msg) => write!(f, "malformed Document.xml: {msg}"),
             FcstdError::GuiXml(msg) => write!(f, "malformed GuiDocument.xml: {msg}"),
@@ -366,10 +372,10 @@ fn u32_at(data: &[u8], offset: usize) -> Option<u32> {
 ///
 /// The document name is the file stem (FreeCAD derives the internal name from
 /// the file name when opening). Generic properties come from `Document.xml`;
-/// module payloads (`PartShapeN.brp`) are rebuilt through the property-type
-/// registry when the owning module is loaded, and `GuiDocument.xml` supplies the
-/// view state. Skipped values and the payload/registry rule are described in the
-/// module documentation.
+/// module payloads (`PartShapeN.brp`, `MeshKernelN.bms`) are rebuilt through the
+/// property-type registry when the owning module is loaded, and `GuiDocument.xml`
+/// supplies the view state. Skipped values and the payload/registry rule are
+/// described in the module documentation.
 pub fn read_fcstd(path: &str) -> Result<SavedDocument, FcstdError> {
     let data = std::fs::read(path)?;
     let archive = ZipArchive::parse(&data)?;
@@ -621,20 +627,24 @@ fn parse_property(
     read_extension(prop_type, node, archive)
 }
 
-/// Rebuild a module-owned property from the members a `<Part>`/`<ShapeList>`
-/// element references, delegating the bytes to the type registry.
+/// Rebuild a module-owned property from the members a `<Part>`/`<Mesh>`/
+/// `<ShapeList>` element references, delegating the bytes to the type registry.
 ///
-/// A `<Part>` element may carry a `FerroCADSidecar` attribute naming an extra
-/// member (see `ExtensionData::fcstd_sidecar`). When present, that member's bytes
-/// are preferred: it is the module's full self-describing payload (for Part, the
-/// native envelope with the lineage). If it cannot be restored — a module that is
-/// not linked, or a payload this reader cannot decode — the raw `file` member is
-/// used instead, so the geometry still loads. Files from upstream, and older
-/// FerroCAD files, have no such attribute and take the raw path unchanged.
+/// A single-payload element may carry a `FerroCADSidecar` attribute naming an
+/// extra member (see `ExtensionData::fcstd_sidecar`). When present, that member's
+/// bytes are preferred: it is the module's full self-describing payload (for
+/// Part, the native envelope with the lineage). If it cannot be restored — a
+/// module that is not linked, or a payload this reader cannot decode — the raw
+/// `file` member is used instead, so the geometry still loads. Files from
+/// upstream, and older FerroCAD files, have no such attribute and take the raw
+/// path unchanged.
 ///
 /// `None` means the property type has no registered restore function (the module
 /// is not linked) or the element carries no payload; the caller then skips the
-/// property rather than inventing a value.
+/// property rather than inventing a value. A `<Mesh>` element is strict: because
+/// an empty mesh is never a safe substitute, a mesh element without a `file`
+/// member, or bytes that fail to restore for a registered mesh type, is an
+/// error.
 fn read_extension(
     prop_type: &str,
     node: roxmltree::Node<'_, '_>,
@@ -645,25 +655,61 @@ fn read_extension(
         return Ok(None);
     };
 
-    let bytes = if let Some(part) = child(node, "Part") {
-        if let Some(sidecar) = part.attribute("FerroCADSidecar") {
-            let side_bytes = archive.read(sidecar)?;
-            if let Some(data) = property_types::restore_extension(prop_type, &side_bytes) {
-                return Ok(Some(Property::Extension(ExtensionValue::new(data))));
-            }
+    // `<Part>` (Part shapes) and `<Mesh>` (Mesh kernels) are the single-payload
+    // module elements; `<ShapeList>` is the list form. The element tag only
+    // selects the member layout — the property's registered type decides how the
+    // bytes are decoded.
+    if let Some(part) = child(node, "Part") {
+        return read_single_payload(prop_type, part, archive, false);
+    }
+    if let Some(mesh) = child(node, "Mesh") {
+        return read_single_payload(prop_type, mesh, archive, true);
+    }
+    if let Some(list) = child(node, "ShapeList") {
+        let bytes = read_shape_list_payload(archive, list)?;
+        return Ok(property_types::restore_extension(prop_type, &bytes)
+            .map(|data| Property::Extension(ExtensionValue::new(data))));
+    }
+    Ok(None)
+}
+
+/// Restore a one-member module payload (`<Part file>` or `<Mesh file>`).
+///
+/// `strict` makes an absent `file` attribute, or a member a registered type
+/// cannot decode, an error instead of a skipped property. It is set for `<Mesh>`
+/// so a lost mesh never becomes a silent empty one; `<Part>` keeps the historical
+/// skip-if-undecodable behaviour.
+fn read_single_payload(
+    prop_type: &str,
+    element: roxmltree::Node<'_, '_>,
+    archive: &ZipArchive<'_>,
+    strict: bool,
+) -> Result<Option<Property>, FcstdError> {
+    if let Some(sidecar) = element.attribute("FerroCADSidecar") {
+        let side_bytes = archive.read(sidecar)?;
+        if let Some(data) = property_types::restore_extension(prop_type, &side_bytes) {
+            return Ok(Some(Property::Extension(ExtensionValue::new(data))));
         }
-        match part.attribute("file") {
-            Some(file) => archive.read(file)?,
-            None => return Ok(None),
+    }
+    let Some(file) = element.attribute("file") else {
+        if strict {
+            return Err(FcstdError::MalformedMember(format!(
+                "<{}> for '{prop_type}' has no 'file' attribute",
+                element.tag_name().name()
+            )));
         }
-    } else if let Some(list) = child(node, "ShapeList") {
-        read_shape_list_payload(archive, list)?
-    } else {
         return Ok(None);
     };
-
-    Ok(property_types::restore_extension(prop_type, &bytes)
-        .map(|data| Property::Extension(ExtensionValue::new(data))))
+    let bytes = archive.read(file)?;
+    match property_types::restore_extension(prop_type, &bytes) {
+        Some(data) => Ok(Some(Property::Extension(ExtensionValue::new(data)))),
+        None if strict && property_types::contains(prop_type) => {
+            Err(FcstdError::MalformedMember(format!(
+                "cannot restore '{prop_type}' from member '{file}'"
+            )))
+        }
+        None => Ok(None),
+    }
 }
 
 /// Frame per-entry shape members the way `ShapeListProperty::save` stores them:

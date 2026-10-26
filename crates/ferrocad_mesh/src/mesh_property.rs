@@ -25,8 +25,8 @@ use std::sync::Arc;
 use ferrocad_core::object_registry::{self, ObjectType};
 use ferrocad_core::property_types;
 use ferrocad_core::{
-    Document, ExtensionData, ExtensionValue, ObjectId, Placement, Property, Rotation, Vector3,
-    prop_status,
+    Document, ExtensionData, ExtensionValue, FcstdKind, ObjectId, Placement, Property, Rotation,
+    Vector3, prop_status,
 };
 
 use crate::mesh::Mesh;
@@ -142,20 +142,20 @@ impl ExtensionData for MeshProperty {
         out
     }
 
-    /// `.FCStd` mesh members are a later slice: they need a core change first.
+    /// `.FCStd` stores the mesh in its own `MeshKernelN.bms` member, exactly as
+    /// upstream's `PropertyMeshKernel::Save` does (`<Mesh file="MeshKernel.bms"/>`).
     ///
-    /// The intended shape is one **single-payload** entry — an empty suffix and
-    /// the bytes [`Mesh::write_bms`](Mesh::write_bms) produces — so upstream's
-    /// `MeshKernelN.bms` / `<Mesh file="…"/>` pair can be emitted. Core's
-    /// `.FCStd` writer currently hardcodes the `PartShapeN` stem and the `<Part>`
-    /// element, so returning the bytes today would mislabel the member (and
-    /// therefore the property type on restore). `MeshProperty` should also learn
-    /// the matching restore path: read the member bytes with
-    /// [`Mesh::read_bms`](Mesh::read_bms) and keep the object's `Placement`
-    /// authoritative. A native (`.ferrocad`) document persists this property
-    /// through [`save`](ExtensionData::save).
+    /// The bytes come from [`Mesh::write_bms_bytes`](Mesh::write_bms_bytes), so the
+    /// save needs no temp file. The mesh placement also rides in the BMS info
+    /// field; the object's `Placement` property stays authoritative, and for a
+    /// FerroCAD-written document the two are kept in sync.
     fn fcstd_members(&self) -> Option<Vec<(String, Vec<u8>)>> {
-        None
+        let bytes = self.mesh.write_bms_bytes().ok()?;
+        Some(vec![(String::new(), bytes)])
+    }
+
+    fn fcstd_kind(&self) -> FcstdKind {
+        FcstdKind::new("MeshKernel", "Mesh", "bms")
     }
 
     fn debug(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -331,7 +331,18 @@ fn restore(bytes: &[u8]) -> Option<Box<dyn ExtensionData>> {
     if bytes.is_empty() {
         return Some(Box::new(MeshProperty::empty()));
     }
+    // Native documents use the hand-written envelope; `.FCStd` members are the
+    // raw `.bms` kernel dump. The two magics are disjoint, so the form is
+    // unambiguous.
+    if bytes.starts_with(MAGIC) {
+        return restore_envelope(bytes);
+    }
+    Mesh::read_bms_from(bytes)
+        .ok()
+        .map(|mesh| Box::new(MeshProperty::new(mesh)) as Box<dyn ExtensionData>)
+}
 
+fn restore_envelope(bytes: &[u8]) -> Option<Box<dyn ExtensionData>> {
     let mut reader = Reader::new(bytes);
     if reader.take(MAGIC.len())? != MAGIC.as_slice() {
         return None;
@@ -564,5 +575,62 @@ mod tests {
         assert_eq!(restored_mesh, &mesh);
         assert_eq!(restored_mesh.volume(), 6.0);
         assert!(restored_mesh.is_solid());
+    }
+
+    /// A `Mesh::Feature` is persisted as `<Mesh file="MeshKernel.bms"/>` plus a
+    /// raw `.bms` member, and restores without a temp file on the reader side.
+    ///
+    /// The `<Mesh>` element itself is asserted by
+    /// `document::fcstd_write::tests::a_module_kind_selects_the_member_and_element`;
+    /// ZIP member names are the only part of an archive readable without inflating
+    /// `Document.xml`.
+    #[test]
+    fn a_mesh_round_trips_through_an_fcstd_file() {
+        crate::register();
+        let mut doc = Document::new();
+        let id = doc.add_object("MeshObj", FEATURE_TYPE);
+        let mut mesh = Mesh::box_(1.0, 2.0, 3.0).unwrap();
+        let placement = Placement::new(
+            Vector3::new(1.0, 2.0, 3.0),
+            Rotation::from_axis_angle(&Vector3::new(0.0, 0.0, 1.0), 0.5),
+        );
+        mesh.set_placement(placement);
+        doc.set_property(
+            id,
+            "Mesh",
+            make_mesh_property(MeshProperty::new(mesh.clone())),
+        )
+        .unwrap();
+        // `Mesh` assignment adopts the mesh transform into the object `Placement`.
+        assert_eq!(
+            doc.object(id).unwrap().properties.get("Placement"),
+            Some(&Property::Placement(placement))
+        );
+
+        let saved = doc.to_saved("FcstdMesh");
+        let bytes = ferrocad_core::fcstd_write::encode_fcstd(&saved).expect("encode .FCStd");
+        // Member names are stored as plain ASCII in the ZIP headers.
+        let archive = String::from_utf8_lossy(&bytes);
+        assert!(archive.contains("MeshKernel.bms"), "the mesh is a .bms member");
+        assert!(
+            !archive.contains("PartShape"),
+            "a mesh must not be saved as a Part member"
+        );
+
+        let path = temp_path("mesh.FCStd");
+        std::fs::write(&path, &bytes).unwrap();
+        let saved = ferrocad_core::fcstd::read_fcstd(path.to_str().unwrap()).expect("read .FCStd");
+        let _ = std::fs::remove_file(&path);
+
+        let restored = Document::from_saved(&saved);
+        let restored_mesh = stored_mesh(&restored, id);
+        assert_eq!(restored_mesh, &mesh, "the mesh survives .FCStd");
+        assert!(restored_mesh.is_solid());
+        assert_eq!(restored_mesh.placement(), placement);
+        assert_eq!(
+            restored.object(id).unwrap().properties.get("Placement"),
+            Some(&Property::Placement(placement)),
+            "the object Placement is authoritative and survives"
+        );
     }
 }

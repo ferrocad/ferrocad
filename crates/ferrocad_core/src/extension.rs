@@ -16,6 +16,36 @@ use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
 use crate::property_types;
 
+/// The `.FCStd` shape of a module-owned payload: the archive member stem, the
+/// `Document.xml` element tag and the member's file extension.
+///
+/// A single payload is written as `{stem}.{extension}` and referenced by
+/// `<{tag} file="…"/>`; a repeated stem is numbered (`MeshKernel1.bms`). Core
+/// never interprets the payload bytes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct FcstdKind {
+    /// Base member name without the extension, e.g. `"PartShape"`.
+    pub stem: &'static str,
+    /// `Document.xml` element for a single payload, e.g. `"Part"`.
+    pub tag: &'static str,
+    /// Member extension without the dot, e.g. `"brp"`.
+    pub extension: &'static str,
+}
+
+impl FcstdKind {
+    /// A kind from its three parts.
+    pub const fn new(stem: &'static str, tag: &'static str, extension: &'static str) -> Self {
+        FcstdKind {
+            stem,
+            tag,
+            extension,
+        }
+    }
+
+    /// The default kind: `PartShapeN.brp` referenced by `<Part file="…"/>`.
+    pub const PART_SHAPE: FcstdKind = FcstdKind::new("PartShape", "Part", "brp");
+}
+
 /// A module-owned property value.
 ///
 /// Must be `Send` because documents are shared behind `Arc<Mutex<…>>` (and `Arc<Mutex<T>>`
@@ -25,6 +55,7 @@ use crate::property_types;
 ///
 /// Only [`type_name`](ExtensionData::type_name), [`save`](ExtensionData::save),
 /// [`fcstd_members`](ExtensionData::fcstd_members),
+/// [`fcstd_kind`](ExtensionData::fcstd_kind),
 /// [`fcstd_sidecar`](ExtensionData::fcstd_sidecar),
 /// [`resolve_element_name`](ExtensionData::resolve_element_name) and
 /// [`clone_box`](ExtensionData::clone_box) cross the core boundary; core never
@@ -43,11 +74,12 @@ pub trait ExtensionData: Send {
     /// The value's `Document.xml` payload for a binary `.FCStd` save.
     ///
     /// A module value that upstream persists in separate ZIP members (shapes,
-    /// shape lists) returns them here; core only figures out the member stem and
-    /// writes the bytes verbatim. The tuple is `(suffix, bytes)`:
+    /// shape lists) returns them here; core writes the bytes verbatim under the
+    /// names [`fcstd_kind`](ExtensionData::fcstd_kind) supplies. The tuple is
+    /// `(suffix, bytes)`:
     ///
     /// - one entry with an **empty** suffix is a single payload, written as
-    ///   `PartShapeN.brp` with `<Part file="…"/>`;
+    ///   `{stem}.{extension}` (the default kind: `PartShapeN.brp`);
     /// - entries with a non-empty suffix (`"0"`, `"1"`, …) are a list, written
     ///   as `PartShapeN.M.brp` with `<ShapeList count="…"><TopoShape file="…"/>`.
     ///
@@ -56,6 +88,16 @@ pub trait ExtensionData: Send {
     /// instead of silently dropping the value. Core never interprets the bytes.
     fn fcstd_members(&self) -> Option<Vec<(String, Vec<u8>)>> {
         None
+    }
+    /// The archive member stem, XML tag and file extension for
+    /// [`fcstd_members`](ExtensionData::fcstd_members).
+    ///
+    /// The default is the Part shape kind (`PartShapeN.brp` under `<Part>`), so a
+    /// module that only supplies the bytes keeps working unchanged. A value
+    /// persisted as `MeshKernelN.bms` under `<Mesh>` returns that kind instead.
+    /// Core uses it for both the member name and the element it writes.
+    fn fcstd_kind(&self) -> FcstdKind {
+        FcstdKind::PART_SHAPE
     }
     /// An optional secondary `.FCStd` member carrying module metadata that must
     /// not go into the upstream-compatible payload.

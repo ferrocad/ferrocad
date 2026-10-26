@@ -44,9 +44,11 @@
 //!   deduplication, degenerate-facet removal, normal harmonisation, connected
 //!   components, planar segmentation, self-intersection detection and boundary
 //!   loops. They all operate on the local points and keep the placement.
-//! - **`.FCStd` mesh members** are a later slice: `fcstd_members()` returns `None`
-//!   because core's `.FCStd` writer currently hardcodes the `PartShapeN` stem.
-//!   Native (`.ferrocad`) documents persist the property normally.
+//! - **`.FCStd` mesh members** are supported: `fcstd_members()` returns the raw
+//!   `.bms` bytes and `fcstd_kind()` names them `MeshKernelN.bms`, which core
+//!   writes as `<Mesh file="…"/>`. Restoring needs no temp file; the object's
+//!   `Placement` stays authoritative over the copy in the BMS info field.
+//!   Native (`.ferrocad`) documents keep using the hand-written envelope.
 //! - **`MeshPart.wireFromSegment`**'s wire construction is out of scope; the Part
 //!   bridge needs a kernel and a shape type, which this crate deliberately does
 //!   not have. [`Mesh::boundary_loops`] supplies the kernel half (the ordered

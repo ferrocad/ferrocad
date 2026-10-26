@@ -12,15 +12,17 @@
 //! 1. `Document.xml` — the document, its objects and their dependencies;
 //! 2. `GuiDocument.xml` — one view provider per object that has a
 //!    [`ViewState`](super::ViewState);
-//! 3. `PartShape.brp`, `PartShape1.brp`, … — one member per property whose
-//!    module value supplies `ExtensionData::fcstd_members`. A single value is
-//!    `PartShapeN.brp` (referenced by `<Part file>`); a list is
+//! 3. `PartShape.brp`, `PartShape1.brp`, … and `MeshKernel.bms`,
+//!    `MeshKernel1.bms`, … — one member per property whose module value supplies
+//!    `ExtensionData::fcstd_members`. The member stem, element tag and extension
+//!    come from `ExtensionData::fcstd_kind` (default: `PartShapeN.brp` under
+//!    `<Part>`; a mesh is `MeshKernelN.bms` under `<Mesh>`). A single value is
+//!    `{stem}.{extension}` (referenced by `<{tag} file>`); a list is
 //!    `PartShapeN.M.brp` (referenced by `<TopoShape file>` inside
 //!    `<ShapeList>`). A single value may also supply an
-//!    `ExtensionData::fcstd_sidecar`; core writes it as `PartShapeN.<suffix>`
-//!    and references it from the same `<Part>` element with a
-//!    `FerroCADSidecar` attribute, which upstream ignores. The `.brp` member
-//!    stays raw BREP.
+//!    `ExtensionData::fcstd_sidecar`; core writes it as `{stem}.<suffix>`
+//!    and references it from the same element with a `FerroCADSidecar`
+//!    attribute, which upstream ignores. The primary member is untouched.
 //! 4. one member per file-backed value, named after its property (uniquified on
 //!    collision): `FloatList`, `VectorList`, `PlacementList` and `ColorList`
 //!    members, each a LE `u32` count followed by fixed-width values — exactly
@@ -65,7 +67,7 @@
 //! | `Enumeration` | `<Integer value=index>` (+ `<CustomEnumList>` when the allowed values are known) |
 //! | `IntegerConstraint` | `<Integer value min max step>` |
 //! | `FloatConstraint` | `<Float value min max step>` |
-//! | `Extension` | module payload: `<Part file>` or `<ShapeList><TopoShape file>…` |
+//! | `Extension` | module payload: `<Part file>`, `<Mesh file>`, or `<ShapeList><TopoShape file>…` |
 //!
 //! In addition:
 //!
@@ -127,6 +129,7 @@
 //! authoritative: a `Label` property is always emitted from it, so a hand-built
 //! `SavedDocument` whose `properties` map has no `Label` entry still round-trips.
 
+use std::collections::BTreeMap;
 use std::fmt;
 use std::io::{self, Write};
 
@@ -135,6 +138,7 @@ use flate2::Compression;
 
 use super::{SavedDocument, SavedObject};
 use crate::expr;
+use crate::extension::FcstdKind;
 use crate::geometry::Rotation;
 use crate::property::Property;
 use crate::quantity::Quantity;
@@ -305,12 +309,35 @@ struct Context {
     payload_members: Vec<Member>,
     data_members: Vec<Member>,
     colour_members: Vec<Member>,
-    payload_index: usize,
+    /// Number of payloads already written per `(stem, extension)`, reproducing
+    /// upstream `Writer::getUniqueFileName`'s per-extension numbering
+    /// (`MeshKernel.bms`, `MeshKernel1.bms`, …).
+    payload_counts: BTreeMap<(&'static str, &'static str), usize>,
     colour_index: usize,
     report: WriteReport,
 }
 
 impl Context {
+    /// Allocate the next unique stem for `kind`, upstream's `Writer::addFile`
+    /// shape: the member is named after the payload and numbered when taken.
+    fn add_payload_stem(&mut self, kind: &FcstdKind) -> String {
+        let key = (kind.stem, kind.extension);
+        let mut count = self.payload_counts.get(&key).copied().unwrap_or(0);
+        let stem = loop {
+            let candidate = if count == 0 {
+                kind.stem.to_string()
+            } else {
+                format!("{}{count}", kind.stem)
+            };
+            count += 1;
+            if !self.member_name_taken(&format!("{candidate}.{}", kind.extension)) {
+                break candidate;
+            }
+        };
+        self.payload_counts.insert(key, count);
+        stem
+    }
+
     /// Place a value in its own archive member, upstream's `Writer::addFile` shape:
     /// the member is named after the property, uniquified when taken.
     fn add_data_member(&mut self, base: &str, data: Vec<u8>) -> String {
@@ -992,8 +1019,8 @@ fn write_property(
         }
         Property::Extension(value) => {
             let type_name = value.type_name();
-            // The module owns both the encoding and the element form; core only
-            // allocates the `PartShapeN` stem and places the bytes verbatim.
+            // The module owns the encoding, the member kind and the element form;
+            // core only allocates a unique stem and places the bytes verbatim.
             let Some(members) = value.data().fcstd_members() else {
                 return Err(FcstdWriteError::UnsupportedExtension {
                     object: object.name.clone(),
@@ -1001,39 +1028,34 @@ fn write_property(
                     type_name: type_name.to_string(),
                 });
             };
-
-            let stem = if ctx.payload_index == 0 {
-                "PartShape".to_string()
-            } else {
-                format!("PartShape{}", ctx.payload_index)
-            };
-            ctx.payload_index += 1;
+            let kind = value.data().fcstd_kind();
+            let stem = ctx.add_payload_stem(&kind);
 
             if members.len() == 1 && members[0].0.is_empty() {
-                let member = format!("{stem}.brp");
+                let member = format!("{stem}.{}", kind.extension);
                 ctx.payload_members.push(Member {
                     name: member.clone(),
                     data: members.into_iter().next().unwrap().1,
                 });
                 // A sidecar is module metadata (a lineage, for Part) that must
-                // not contaminate the upstream-compatible `.brp` member. Upstream
+                // not contaminate the upstream-compatible payload member. Upstream
                 // reads only the attributes it knows, so the extra reference is
                 // ignored; our reader follows it when present.
                 let sidecar = value
                     .data()
                     .fcstd_sidecar()
                     .map(|(suffix, data)| {
-                        let mut name = format!("{stem}.{suffix}");
+                        let mut sidecar = format!("{stem}.{suffix}");
                         let mut serial = 1;
-                        while ctx.member_name_taken(&name) {
-                            name = format!("{stem}.{suffix}{serial}");
+                        while ctx.member_name_taken(&sidecar) {
+                            sidecar = format!("{stem}.{suffix}{serial}");
                             serial += 1;
                         }
                         ctx.payload_members.push(Member {
-                            name: name.clone(),
+                            name: sidecar.clone(),
                             data,
                         });
-                        name
+                        sidecar
                     });
                 let sidecar = match sidecar {
                     Some(name) => format!(" FerroCADSidecar=\"{}\"", escape_attr(&name)),
@@ -1041,8 +1063,9 @@ fn write_property(
                 };
                 out.push_str(&format!(
                     "                <Property name=\"{escaped}\" type=\"{}\"{status}>\
-                     <Part file=\"{member}\"{sidecar}/></Property>\n",
-                    escape_attr(type_name)
+                     <{tag} file=\"{member}\"{sidecar}/></Property>\n",
+                    escape_attr(type_name),
+                    tag = kind.tag,
                 ));
             } else {
                 out.push_str(&format!(
@@ -1054,7 +1077,7 @@ fn write_property(
                     members.len()
                 ));
                 for (suffix, data) in members {
-                    let member = format!("{stem}.{suffix}.brp");
+                    let member = format!("{stem}.{suffix}.{}", kind.extension);
                     ctx.payload_members.push(Member {
                         name: member.clone(),
                         data,
@@ -1470,6 +1493,40 @@ mod tests {
         }
     }
 
+    /// A module value with the Mesh `.FCStd` kind: `MeshKernelN.bms` under
+    /// `<Mesh>`. The payload bytes are opaque to core.
+    struct FakeMesh(Vec<u8>);
+
+    impl ExtensionData for FakeMesh {
+        fn type_name(&self) -> &str {
+            "Mesh::PropertyMeshKernel"
+        }
+        fn clone_box(&self) -> Box<dyn ExtensionData> {
+            Box::new(FakeMesh(self.0.clone()))
+        }
+        fn as_any(&self) -> &dyn Any {
+            self
+        }
+        fn eq(&self, other: &dyn ExtensionData) -> bool {
+            other
+                .as_any()
+                .downcast_ref::<FakeMesh>()
+                .is_some_and(|o| o.0 == self.0)
+        }
+        fn save(&self) -> Vec<u8> {
+            self.0.clone()
+        }
+        fn fcstd_members(&self) -> Option<Vec<(String, Vec<u8>)>> {
+            Some(vec![(String::new(), self.0.clone())])
+        }
+        fn fcstd_kind(&self) -> FcstdKind {
+            FcstdKind::new("MeshKernel", "Mesh", "bms")
+        }
+        fn debug(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+            write!(f, "FakeMesh({} bytes)", self.0.len())
+        }
+    }
+
     fn object(name: &str, label: &str) -> SavedObject {
         SavedObject {
             name: name.to_string(),
@@ -1709,6 +1766,54 @@ mod tests {
 
         // The shape member holds the module bytes verbatim.
         assert_eq!(read_member(&bytes, "PartShape.brp"), b"fake brep payload\n");
+    }
+
+    /// A module payload's kind owns both the member name and the element tag,
+    /// and numbering is per kind (a Part shape does not consume a Mesh number).
+    #[test]
+    fn a_module_kind_selects_the_member_and_element() {
+        let mut saved = SavedDocument {
+            format: "ferrocad".to_string(),
+            version: 1,
+            name: "Kinds".to_string(),
+            objects: Vec::new(),
+        };
+        let mut part = object("Box", "Box");
+        part.properties.insert(
+            "Shape".into(),
+            Property::Extension(ExtensionValue::new(Box::new(FakeShape(b"brep".to_vec())))),
+        );
+        let mut first = object("Mesh1", "Mesh1");
+        first.properties.insert(
+            "Mesh".into(),
+            Property::Extension(ExtensionValue::new(Box::new(FakeMesh(vec![1, 2, 3])))),
+        );
+        let mut second = object("Mesh2", "Mesh2");
+        second.properties.insert(
+            "Mesh".into(),
+            Property::Extension(ExtensionValue::new(Box::new(FakeMesh(vec![4, 5, 6])))),
+        );
+        saved.objects = vec![part, first, second];
+
+        let bytes = encode_fcstd(&saved).expect("encode");
+        let names: Vec<String> = members(&bytes).into_iter().map(|(name, ..)| name).collect();
+        assert_eq!(
+            names,
+            [
+                "Document.xml",
+                "GuiDocument.xml",
+                "PartShape.brp",
+                "MeshKernel.bms",
+                "MeshKernel1.bms",
+            ]
+        );
+
+        let xml = String::from_utf8(read_member(&bytes, "Document.xml")).unwrap();
+        assert!(xml.contains("<Part file=\"PartShape.brp\"/>"), "{xml}");
+        assert!(xml.contains("<Mesh file=\"MeshKernel.bms\"/>"), "{xml}");
+        assert!(xml.contains("<Mesh file=\"MeshKernel1.bms\"/>"), "{xml}");
+        assert_eq!(read_member(&bytes, "MeshKernel.bms"), [1, 2, 3]);
+        assert_eq!(read_member(&bytes, "MeshKernel1.bms"), [4, 5, 6]);
     }
 
     #[test]

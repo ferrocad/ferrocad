@@ -130,7 +130,7 @@ pub use document::fcstd_write;
 pub use document::format;
 pub use document::format::DocumentFormat;
 pub use document::native;
-pub use extension::{ExtensionData, ExtensionValue};
+pub use extension::{ExtensionData, ExtensionValue, FcstdKind};
 pub use geometry::{Matrix4, Placement, Rotation, ScaleType, TypeId, Vector3};
 pub use observer::Observer;
 pub use property::{prop_status, status_from_name, status_names, Property, PropertyContainer};

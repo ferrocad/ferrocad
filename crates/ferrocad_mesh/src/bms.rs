@@ -56,6 +56,29 @@ impl Mesh {
     /// edge used by exactly two facets links them, and a border or non-manifold
     /// edge is written as open.
     pub fn write_bms(&self, path: impl AsRef<Path>) -> io::Result<()> {
+        let mut writer = BufWriter::new(fs::File::create(path)?);
+        self.write_bms_stream(&mut writer)?;
+        writer.flush()
+    }
+
+    /// Append this mesh's `.bms` bytes to `out`.
+    ///
+    /// This is the in-memory form of [`write_bms`](Mesh::write_bms), used by
+    /// `.FCStd` saves so the archive member can be produced without a temp file.
+    /// The bytes are identical to what [`write_bms`](Mesh::write_bms) writes.
+    pub fn write_bms_to(&self, out: &mut Vec<u8>) -> io::Result<()> {
+        self.write_bms_stream(out)
+    }
+
+    /// This mesh's `.bms` bytes.
+    pub fn write_bms_bytes(&self) -> io::Result<Vec<u8>> {
+        let mut out = Vec::new();
+        self.write_bms_to(&mut out)?;
+        Ok(out)
+    }
+
+    /// Write this mesh to `writer` in the BMS layout.
+    fn write_bms_stream(&self, writer: &mut impl Write) -> io::Result<()> {
         let point_count = u32::try_from(self.count_points()).map_err(|_| {
             io::Error::new(
                 io::ErrorKind::InvalidInput,
@@ -69,7 +92,6 @@ impl Mesh {
             )
         })?;
 
-        let mut writer = BufWriter::new(fs::File::create(path)?);
         writer.write_all(&MAGIC.to_le_bytes())?;
         writer.write_all(&VERSION.to_le_bytes())?;
         writer.write_all(&encode_info(self.placement()))?;
@@ -77,9 +99,9 @@ impl Mesh {
         writer.write_all(&facet_count.to_le_bytes())?;
 
         for point in self.points() {
-            write_f32(&mut writer, point.x)?;
-            write_f32(&mut writer, point.y)?;
-            write_f32(&mut writer, point.z)?;
+            write_f32(writer, point.x)?;
+            write_f32(writer, point.y)?;
+            write_f32(writer, point.z)?;
         }
 
         let neighbours = facet_neighbours(self);
@@ -101,9 +123,17 @@ impl Mesh {
             bounds.min.z,
             bounds.max.z,
         ] {
-            write_f32(&mut writer, value)?;
+            write_f32(writer, value)?;
         }
-        writer.flush()
+        Ok(())
+    }
+
+    /// Read a FreeCAD `.bms` payload from memory.
+    ///
+    /// This is the in-memory form of [`read_bms`](Mesh::read_bms), used to
+    /// restore a `.FCStd` member without a temp file.
+    pub fn read_bms_from(bytes: &[u8]) -> Result<Mesh, MeshError> {
+        parse(bytes)
     }
 
     /// Read a FreeCAD `.bms` file into a mesh.
@@ -115,7 +145,7 @@ impl Mesh {
     /// rejected with [`MeshError::MalformedBms`].
     pub fn read_bms(path: impl AsRef<Path>) -> Result<Mesh, MeshError> {
         let bytes = fs::read(path)?;
-        parse(&bytes)
+        Self::read_bms_from(&bytes)
     }
 }
 

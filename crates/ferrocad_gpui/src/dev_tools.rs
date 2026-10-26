@@ -12,8 +12,8 @@
 
 use gpui::{
     App, Context, Entity, FocusHandle, Focusable, IntoElement, Render, Subscription, Window,
-    WindowBackgroundAppearance, WindowBounds, WindowDecorations, WindowOptions, bounds, point, px,
-    size,
+    WindowBackgroundAppearance, WindowBounds, WindowDecorations, WindowKind, WindowOptions, bounds,
+    point, px, size,
 };
 
 use ferrocad_widgets::window_frame;
@@ -30,6 +30,12 @@ pub const TITLE: &str = "FerroCAD Dev Tools";
 
 /// Default bounds: a narrow tall window beside the main one (which opens at 80,80 and
 /// is 1180 wide).
+///
+/// `WindowKind::Floating` is the **always-on-top** option: on macOS it sets the native
+/// floating window level, and on X11/Wayland it makes the window transient for the main
+/// one, so a window manager that honours the hint keeps it above its parent while the
+/// user orbits the model. Windows has no such hint in this gpui version and treats it
+/// as a normal window.
 pub fn window_options() -> WindowOptions {
     WindowOptions {
         titlebar: Some(gpui::TitlebarOptions {
@@ -39,6 +45,7 @@ pub fn window_options() -> WindowOptions {
         }),
         window_background: WindowBackgroundAppearance::Opaque,
         window_decorations: Some(WindowDecorations::Client),
+        kind: WindowKind::Floating,
         is_movable: true,
         is_resizable: true,
         app_owns_titlebar_drag: true,
@@ -81,11 +88,28 @@ impl Render for DevTools {
         // The panels are built from the shell's context so their listeners run against
         // the same entity the main window renders. This happens at frame time, never
         // inside a shell update, so the borrow is not re-entrant.
-        let body = self
-            .shell
-            .update(cx, |shell, cx| {
-                crate::shell::dev_tools_body(shell, &self.focus, window, cx)
-            });
+        let body = self.shell.update(cx, |shell, cx| {
+            crate::shell::dev_tools_body(shell, &self.focus, window, cx)
+        });
         window_frame(window, TITLE, body)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The Dev Tools window is a tool: it floats above the main window instead of
+    /// hiding behind it while the user works in the viewport.
+    #[test]
+    fn the_window_floats_above_the_main_one() {
+        let options = window_options();
+        assert_eq!(options.kind, WindowKind::Floating);
+        assert!(options.is_movable, "the user can park it");
+        assert!(options.is_resizable, "the panes can be given room");
+        assert_eq!(
+            options.titlebar.as_ref().and_then(|t| t.title.as_deref()),
+            Some(TITLE)
+        );
     }
 }

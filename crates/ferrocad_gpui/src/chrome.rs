@@ -26,6 +26,7 @@ use gpui::{
 use std::collections::{HashMap, HashSet};
 
 use ferrocad_wgpu::{AdapterChoice, AdapterSummary};
+use ferrocad_widgets::icon;
 use ferrocad_widgets::menu::{MenuInfoRow, MenuRow, menu};
 use ferrocad_widgets::scroll::scroll_area;
 
@@ -1219,6 +1220,36 @@ pub(crate) fn command_list_panel(
         .bg(rgb(PANEL))
         .debug_selector(|| "dev-command-list".to_string())
         .child(scroll_area("dev-commands", scroll, rows))
+}
+
+/// The status bar's literal bug: toggles the Dev Tools window.
+///
+/// The bug is a painted [`icon::bug`] (no font dependency), inked with the accent
+/// while the window is open. The status bar is its home because Dev Tools is a tool
+/// for the shell, not a modelling verb the viewport dock should carry.
+pub(crate) fn dev_tools_button(active: bool, cx: &mut Context<Shell>) -> impl IntoElement {
+    let tip: SharedString = if active {
+        "Dev Tools: open (Ctrl+Shift+D)"
+    } else {
+        "Dev Tools (Ctrl+Shift+D)"
+    }
+    .into();
+    div()
+        .id("dev-tools-bug")
+        .debug_selector(|| "dev-tools-bug".to_string())
+        .w(px(22.))
+        .h(px(18.))
+        .flex()
+        .items_center()
+        .justify_center()
+        .rounded_sm()
+        .cursor_pointer()
+        .hover(|style| style.bg(rgb(PANEL)))
+        .on_click(cx.listener(|this, _event, _window, cx| {
+            this.run_command(DEV_TOOLS, cx);
+        }))
+        .tooltip(move |_window, cx| cx.new(|_| CommandTooltip { text: tip.clone() }).into())
+        .child(icon::bug("dev-tools-icon", active))
 }
 
 /// A command row's hover text: `ToolTip` and the accelerator.

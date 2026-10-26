@@ -12,6 +12,7 @@
 //!   property editor's range overlay.
 //! * [`dial`] is the unbounded counterpart: a jog dial that changes a dimension by
 //!   a ratio, with no invented range to clamp.
+//! * [`icon`] holds painted pictograms (the status bar's Dev Tools bug).
 //! * [`window_chrome::window_frame`] draws client-side decorations (title bar and
 //!   resize grips) where the compositor does not.
 //! * [`text_field::TextInput`] is a single-line editable field that emits
@@ -29,6 +30,7 @@ pub mod color;
 pub mod dial;
 pub mod events;
 pub mod form;
+pub mod icon;
 pub mod menu;
 pub mod scroll;
 pub mod slider;
@@ -43,6 +45,7 @@ pub use color::{normalize_hex, palette, parse_hex, swatch};
 pub use dial::{Dial, face as dial_face, trigger as dial_trigger, value_for as dial_value};
 pub use events::{ChangeEvent, SubmitEvent};
 pub use form::{choice_list, select_box, toggle};
+pub use icon::bug;
 pub use menu::{MenuInfoRow, MenuRow, menu};
 pub use scroll::{scroll_area, scroll_thumb, thumb_bounds};
 pub use slider::{fraction as slider_fraction, trigger as slider_trigger};

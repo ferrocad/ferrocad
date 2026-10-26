@@ -5009,7 +5009,15 @@ impl Render for Shell {
                         el.child(div().text_color(rgb(0x38bdf8)).child(hover.clone()))
                     }),
             )
-            .child(format!("FreeCAD {} · {}", model.version, model.backend));
+            .child(
+                div()
+                    .flex()
+                    .flex_row()
+                    .items_center()
+                    .gap_2()
+                    .child(format!("FreeCAD {} · {}", model.version, model.backend))
+                    .child(crate::chrome::dev_tools_button(dev_tools_open, cx)),
+            );
 
         // The reset: the main window is the frame, the viewport and the status line.
         // The actions, inspector, property editor and console live in Dev Tools, and a
@@ -8939,6 +8947,52 @@ if "Test_Form" not in FreeCADGui.listCommands():
                 .iter()
                 .any(|handle| handle.downcast::<DevTools>().is_some()),
             "the Dev Tools window exists"
+        );
+    }
+
+    /// The status bar's literal bug is the discoverable toggle: it opens and closes
+    /// Dev Tools without going through the title-bar menu.
+    #[gpui::test]
+    fn the_status_bar_bug_toggles_dev_tools(cx: &mut TestAppContext) {
+        let _guard = crate::PYTHON_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let model = boot_shell();
+        let window = cx.update(|cx| {
+            let model = model.clone();
+            cx.open_window(Default::default(), move |_window, cx| {
+                cx.new(|cx| Shell::from_model(model.clone(), cx))
+            })
+            .unwrap()
+        });
+        let mut cx = VisualTestContext::from_window(window.into(), cx);
+        let shell: Entity<Shell> = window.root(&mut cx).unwrap();
+        draw(&mut cx);
+
+        let bug = cx
+            .debug_bounds("dev-tools-bug")
+            .expect("the status bar bug");
+        let viewport = cx.debug_bounds("main-viewport").expect("the viewport");
+        assert!(
+            bug.center().y > viewport.center().y,
+            "the bug sits in the bottom strip (bug {bug:?}, viewport {viewport:?})"
+        );
+        assert!(!cx.update(|_window, cx| shell.read(cx).dev_tools_open(cx)));
+
+        click_at(&mut cx, "dev-tools-bug");
+        assert!(
+            cx.update(|_window, cx| shell.read(cx).dev_tools_open(cx)),
+            "the bug opens Dev Tools"
+        );
+        assert!(
+            cx.windows()
+                .iter()
+                .any(|handle| handle.downcast::<DevTools>().is_some()),
+            "the Dev Tools window exists"
+        );
+
+        click_at(&mut cx, "dev-tools-bug");
+        assert!(
+            !cx.update(|_window, cx| shell.read(cx).dev_tools_open(cx)),
+            "a second click closes it"
         );
     }
 

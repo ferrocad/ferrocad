@@ -86,7 +86,13 @@ its modal over the viewport, where the user is looking.
   rebuilds the view around the same `Shell` entity.
 - Default bounds: a narrow tall window (about 420×760), title “FerroCAD Dev Tools”,
   placed beside the main window. Use the existing `window_frame` so it is decorated
-  consistently.
+  consistently. The window is `WindowKind::Floating`: macOS gives it the native
+  floating level and X11/Wayland make it transient for the main window, so it stays
+  above the model while the user orbits (Windows has no such hint in this version).
+- A literal **bug button** sits at the right of the status bar
+  (`chrome::dev_tools_button`, painted by `ferrocad_widgets::icon::bug`). It runs
+  `Dev_ToggleTools`, so the toggle is visible without opening the title-bar menu, and
+  it inks with the accent while the window is open.
 - Commands: register `Dev_ToggleTools` (menu text “Dev Tools”, accel `Ctrl+Shift+D`).
   When no second window can be opened (headless, or a platform refusal), return a
   clear `{"status": …}` and leave the main window unchanged.

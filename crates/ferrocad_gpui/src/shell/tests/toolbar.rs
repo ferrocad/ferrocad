@@ -1802,3 +1802,83 @@ fn the_status_bar_bug_toggles_dev_tools(cx: &mut TestAppContext) {
         "a second click closes it"
     );
 }
+
+/// P5: a collapsed Dev Tools pane keeps its slot at zero height and paints no
+/// body, so it leaves neither a paint sliver nor an invisible hit area. An open
+/// pane keeps a real body; toggling the header moves the same slot between the
+/// two states.
+#[gpui::test]
+fn a_collapsed_dev_pane_is_zero_height_and_paints_no_body(cx: &mut TestAppContext) {
+    let _guard = crate::PYTHON_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let model = boot_shell();
+    let window = cx.update(|cx| {
+        let model = model.clone();
+        cx.open_window(Default::default(), move |_window, cx| {
+            cx.new(|cx| Shell::from_model(model.clone(), cx))
+        })
+        .unwrap()
+    });
+    let mut cx = VisualTestContext::from_window(window.into(), cx);
+    let shell: Entity<Shell> = window.root(&mut cx).unwrap();
+    let mut dev_cx = open_dev_tools(&mut cx, &shell);
+
+    // The console starts collapsed: its slot takes no height and its panel is
+    // not painted.
+    let collapsed = dev_cx
+        .debug_bounds("dev-body-console")
+        .expect("a collapsed pane keeps a zero-height slot");
+    assert_eq!(
+        collapsed.size.height,
+        px(0.),
+        "the collapsed console pane has no height (bounds {collapsed:?})"
+    );
+    assert!(
+        dev_cx.debug_bounds("console-panel").is_none(),
+        "a collapsed pane paints no body"
+    );
+
+    // Commands is open: a real body with a real height.
+    let expanded = dev_cx
+        .debug_bounds("dev-body-commands")
+        .expect("an open pane has a body slot");
+    assert!(
+        expanded.size.height > px(0.),
+        "the open commands pane keeps its height (bounds {expanded:?})"
+    );
+    assert!(
+        dev_cx.debug_bounds("dev-command-list").is_some(),
+        "the open pane paints its body"
+    );
+
+    // Opening the console turns the same slot into a painted body; closing it
+    // returns the slot to zero and drops the body again.
+    click_at(&mut dev_cx, "dev-header-console");
+    dev_cx.update(|window, cx| {
+        let _ = window.draw(cx);
+    });
+    let opened = dev_cx
+        .debug_bounds("dev-body-console")
+        .expect("the opened pane has a body slot");
+    assert!(
+        opened.size.height > px(0.),
+        "an opened pane gets its height back (bounds {opened:?})"
+    );
+    assert!(dev_cx.debug_bounds("console-panel").is_some());
+
+    click_at(&mut dev_cx, "dev-header-console");
+    dev_cx.update(|window, cx| {
+        let _ = window.draw(cx);
+    });
+    let collapsed = dev_cx
+        .debug_bounds("dev-body-console")
+        .expect("the collapsed pane keeps a slot after a second click");
+    assert_eq!(
+        collapsed.size.height,
+        px(0.),
+        "collapsing again returns the pane to zero height (bounds {collapsed:?})"
+    );
+    assert!(
+        dev_cx.debug_bounds("console-panel").is_none(),
+        "the collapsed pane no longer paints its body"
+    );
+}

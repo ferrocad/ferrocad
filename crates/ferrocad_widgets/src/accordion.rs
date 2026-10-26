@@ -196,9 +196,10 @@ pub fn resolve_layout(
 ///
 /// `key` namespaces the debug selectors: `{key}-accordion`, `{key}-header-{id}` and
 /// `{key}-body-{id}`. `bodies` is one element per section, in order; a body is only
-/// painted for a section the layout expands. `on_toggle` receives the clicked
-/// section's index — the widget does not own the state, so the caller decides what a
-/// click means and re-renders.
+/// painted for a section the layout expands. Every section keeps its body slot, but a
+/// collapsed one is zero-height and clipped, so it takes no space, paints nothing and
+/// owns no hit area. `on_toggle` receives the clicked section's index — the widget does
+/// not own the state, so the caller decides what a click means and re-renders.
 pub fn accordion(
     key: &'static str,
     sections: Vec<AccordionSection>,
@@ -263,12 +264,11 @@ pub fn accordion(
         }
         stack = stack.child(header);
 
-        if !open {
-            continue;
-        }
-        let Some(body) = bodies.get_mut(index).and_then(Option::take) else {
-            continue;
-        };
+        // Every section keeps a body slot, open or collapsed. A collapsed slot is
+        // zero-sized along the stack axis and `overflow_hidden`, so it takes no
+        // room, paints nothing and owns no hit area; the body element is dropped
+        // with it, so a collapsed pane cannot leave a paint sliver behind. An open
+        // slot keeps the old body (`flex_1`, clipped, scrolling on its own).
         let body_id = format!("{key}-body-{}", section.id);
         let body_selector = body_id.clone();
         let mut body = div()
@@ -276,15 +276,28 @@ pub fn accordion(
             .debug_selector(move || body_selector)
             .flex()
             .flex_col()
+            .w_full()
             .min_h_0()
-            .overflow_hidden()
-            .child(body);
+            .overflow_hidden();
+
+        if !open {
+            body = body.h(px(0.)).flex_shrink_0();
+            stack = stack.child(body);
+            continue;
+        }
+        let Some(content) = bodies.get_mut(index).and_then(Option::take) else {
+            // No body was supplied: collapse the slot rather than leaving an
+            // empty flexible pane behind.
+            body = body.h(px(0.)).flex_shrink_0();
+            stack = stack.child(body);
+            continue;
+        };
         body = match &layout {
             // The preferred height is a floor; the bodies share the leftover space.
             AccordionLayout::All => body.flex_1().min_h(section.preferred_height),
             AccordionLayout::Expanded(_) => body.flex_1(),
         };
-        stack = stack.child(body);
+        stack = stack.child(body.child(content));
     }
 
     stack
@@ -448,8 +461,12 @@ mod tests {
             );
         }
         assert!(
-            visual.debug_bounds("accordion-test-body-second").is_none(),
-            "a collapsed section has no body"
+            visual.debug_bounds("accordion-test-body-second").is_some_and(|bounds| bounds.size.height == px(0.)),
+            "a collapsed section keeps a zero-height slot"
+        );
+        assert!(
+            visual.debug_bounds("accordion-test-body-first").is_some_and(|bounds| bounds.size.height > px(0.)),
+            "the open section has a real body"
         );
     }
 

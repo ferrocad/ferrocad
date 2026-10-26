@@ -21,6 +21,7 @@ use crate::screen::{
     push_ribbon_uv, scale_for, to3,
 };
 use crate::shape::{DrawMode, ShapeItem};
+use crate::snap::FEATURE_PIXELS;
 
 /// The pick id of the first gizmo handle (`GizmoHandle::ALL[0]`).
 ///
@@ -181,6 +182,8 @@ pub enum HandleKind {
     Plane,
     /// A rotation ring.
     Ring,
+    /// The draggable origin/centre control (not a transform handle).
+    Origin,
 }
 
 /// A gizmo sub-handle (a degree of freedom).
@@ -273,6 +276,75 @@ impl GizmoHandle {
     }
 }
 
+/// A pick target on the gizmo: one of the transform handles, or the separate
+/// origin/centre control.
+///
+/// The origin is **not** a transform handle: it has no axis, plane or ring solver.
+/// It is appended after [`GizmoHandle::ALL`] so every existing handle keeps its pick
+/// id; [`GizmoTarget::Origin`] takes the next id.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum GizmoTarget {
+    /// A transform handle (axis, plane or ring).
+    Handle(GizmoHandle),
+    /// The draggable origin/centre control.
+    Origin,
+}
+
+impl GizmoTarget {
+    /// Every target, in pick-id order: the handles first, then the origin.
+    pub const ALL: [GizmoTarget; GizmoHandle::ALL.len() + 1] = [
+        GizmoTarget::Handle(GizmoHandle::AxisX),
+        GizmoTarget::Handle(GizmoHandle::AxisY),
+        GizmoTarget::Handle(GizmoHandle::AxisZ),
+        GizmoTarget::Handle(GizmoHandle::PlaneXY),
+        GizmoTarget::Handle(GizmoHandle::PlaneXZ),
+        GizmoTarget::Handle(GizmoHandle::PlaneYZ),
+        GizmoTarget::Handle(GizmoHandle::RotateX),
+        GizmoTarget::Handle(GizmoHandle::RotateY),
+        GizmoTarget::Handle(GizmoHandle::RotateZ),
+        GizmoTarget::Origin,
+    ];
+
+    /// The class of the target.
+    pub fn kind(self) -> HandleKind {
+        match self {
+            GizmoTarget::Handle(handle) => handle.kind(),
+            GizmoTarget::Origin => HandleKind::Origin,
+        }
+    }
+
+    /// The transform handle this target is, if it is one.
+    pub fn handle(self) -> Option<GizmoHandle> {
+        match self {
+            GizmoTarget::Handle(handle) => Some(handle),
+            GizmoTarget::Origin => None,
+        }
+    }
+
+    /// The pick id this target carries. The origin is appended after the handles, so
+    /// the existing ids do not move.
+    pub fn pick_id(self) -> u32 {
+        match self {
+            GizmoTarget::Handle(handle) => handle.pick_id(),
+            GizmoTarget::Origin => GIZMO_BASE_ID + GizmoHandle::ALL.len() as u32,
+        }
+    }
+
+    /// The target carrying `id`, if any.
+    pub fn from_pick_id(id: u32) -> Option<GizmoTarget> {
+        let index = id.checked_sub(GIZMO_BASE_ID)? as usize;
+        GizmoTarget::ALL.get(index).copied()
+    }
+
+    #[cfg(test)]
+    fn index(self) -> usize {
+        GizmoTarget::ALL
+            .iter()
+            .position(|target| *target == self)
+            .expect("target is one of ALL")
+    }
+}
+
 /// Above this `|ray.direction · axis|` the axis is too close to the view direction for
 /// the parametric solver, so the screen-space fallback takes over.
 const VIEW_ALIGNED_COS: f64 = 0.97;
@@ -280,14 +352,18 @@ const VIEW_ALIGNED_COS: f64 = 0.97;
 /// scrubbed unambiguously; the handle is disabled for that frame.
 const MIN_SCREEN_AXIS_PIXELS: f64 = 1.0;
 /// Where an axis becomes pickable along its stem, as a fraction of the world scale. The
-/// inner part is where all three axes meet; excluding it keeps the triad centre
-/// transparent to pointer events.
+/// inner part is where all three axes meet; excluding it leaves the centre to the
+/// separate origin/centre handle (or to the scene while that handle is disabled).
 const AXIS_PICK_START: f64 = 0.18;
 /// The number of segments in a ring's hit polyline (matches `ring_handle`).
 const RING_PICK_SEGMENTS: usize = 48;
 /// Below this `|ray.direction · ring_axis|` the ring is too edge-on for the 3D
 /// plane/radius test; the screen-space polyline fallback takes over.
 const RING_EDGE_ON_COS: f64 = 0.2;
+/// The projected radius of the origin/centre disc, as a multiple of the handle stroke.
+/// With the default 2 px stroke the disc is 5 px in radius inside the 10 px hit disc
+/// and the stems' excluded 18 % band.
+const ORIGIN_RADIUS_PER_STROKE: f64 = 2.5;
 
 /// The orthonormal frame a manipulator's handles act in.
 ///
@@ -570,20 +646,24 @@ pub struct TransformGizmo {
     view: Option<Matrix4>,
     /// The linear grid step, if grid snapping is enabled.
     linear_snap: Option<f64>,
-    hovered: Option<GizmoHandle>,
+    hovered: Option<GizmoTarget>,
     active: Option<ActiveDrag>,
     /// A draw-only offset from the interaction frame, used while a host previews a
     /// translation during a drag. `drag_to` keeps measuring against `frame`, so moving
     /// the drawing cannot feed back into the gesture.
     display_offset: Option<Vector3>,
+    /// Whether the origin/centre control participates. A host disables it while the
+    /// floating Move form is open: that HUD is anchored to the visible origin and must
+    /// not slide under the user's typing.
+    origin_enabled: bool,
     dirty: bool,
     /// The per-handle alpha multiplier from the grazing-angle test (`1.0` square to the
     /// view, `0.0` collapsed to a line or dot). Rebuilt with the geometry.
-    fade: [f32; GizmoHandle::ALL.len()],
-    /// Nine fixed slots (one per [`GizmoHandle`]); unused ones are cleared. Stable mesh
+    fade: [f32; GizmoTarget::ALL.len()],
+    /// Ten fixed slots (one per [`GizmoTarget`]); unused ones are cleared. Stable mesh
     /// ids, so a rebuild is a geometry write, not a new mesh.
     handles: Vec<ShapeItem>,
-    /// The non-pickable outline pass drawn behind `handles` (a wider ribbon in
+    /// The non-pickable outline pass drawn behind `handles` (a wider ribbon or disc in
     /// [`GizmoStyle::outline`]). Empty slots when the halo is disabled.
     halos: Vec<ShapeItem>,
 }
@@ -602,10 +682,11 @@ impl TransformGizmo {
             hovered: None,
             active: None,
             display_offset: None,
+            origin_enabled: true,
             dirty: true,
-            fade: [1.0; GizmoHandle::ALL.len()],
-            handles: (0..GizmoHandle::ALL.len()).map(new_handle).collect(),
-            halos: (0..GizmoHandle::ALL.len()).map(new_halo).collect(),
+            fade: [1.0; GizmoTarget::ALL.len()],
+            handles: (0..GizmoTarget::ALL.len()).map(new_handle).collect(),
+            halos: (0..GizmoTarget::ALL.len()).map(new_halo).collect(),
         }
     }
 
@@ -671,6 +752,9 @@ impl TransformGizmo {
 
     /// Move the gizmo (rebuilds the handle geometry on the next [`update`](Self::update)).
     pub fn set_origin(&mut self, origin: Vector3) {
+        if self.frame.origin == origin {
+            return;
+        }
         self.frame.origin = origin;
         self.dirty = true;
     }
@@ -728,9 +812,37 @@ impl TransformGizmo {
         scale_for(camera, self.frame.origin, self.style.size)
     }
 
-    /// The handle under the pointer (set by the host from a pick).
+    /// The transform handle under the pointer (set by the host from a pick).
+    ///
+    /// The origin/centre control is not a transform handle; use
+    /// [`hovered_target`](Self::hovered_target) when it matters.
     pub fn hovered(&self) -> Option<GizmoHandle> {
+        self.hovered.and_then(GizmoTarget::handle)
+    }
+
+    /// The target under the pointer (a transform handle or the origin control).
+    pub fn hovered_target(&self) -> Option<GizmoTarget> {
         self.hovered
+    }
+
+    /// Whether the origin/centre control participates (drawn and pickable).
+    pub fn origin_enabled(&self) -> bool {
+        self.origin_enabled
+    }
+
+    /// Enable or disable the origin/centre control. A host disables it while the
+    /// floating Move form is open. Returns whether the state changed.
+    pub fn set_origin_enabled(&mut self, enabled: bool) -> bool {
+        if self.origin_enabled == enabled {
+            return false;
+        }
+        self.origin_enabled = enabled;
+        if !enabled && self.hovered == Some(GizmoTarget::Origin) {
+            self.hovered = None;
+        }
+        self.dirty = true;
+        self.apply_colors();
+        true
     }
 
     /// Whether a drag is in progress.
@@ -767,8 +879,10 @@ impl TransformGizmo {
             .collect()
     }
 
-    /// The handle under `device` within the analytic grab radius, or `None` when the
-    /// pointer is in the triad's empty interior (which must pass through to the scene).
+    /// The gizmo target under `device` within the analytic grab radius, or `None` when
+    /// the pointer is in the triad's empty interior (which must pass through to the
+    /// scene). The origin/centre disc is a target of its own; the empty interior is the
+    /// space just outside it.
     ///
     /// The test projects the same axis segments, plane quads and ring polylines the
     /// producers draw, then measures screen-space distance. It is **analytic** rather
@@ -777,9 +891,11 @@ impl TransformGizmo {
     /// [`GizmoStyle::hit_radius_px`], floored at [`MIN_HIT_RADIUS_PX`] so a thin stem
     /// still has a 24 px target (WCAG 2.5.8).
     ///
-    /// Priority is **axis > plane > ring**, then nearest stroke, then front-most. Only
-    /// handles shown by [`GizmoMode`] participate.
-    pub fn hit(&self, camera: &Camera, device: [i32; 2]) -> Option<GizmoHandle> {
+    /// Priority is **origin > axis > plane > ring**, then nearest stroke, then
+    /// front-most. Only handles shown by [`GizmoMode`] participate, and the origin
+    /// control only while [`origin_enabled`](Self::origin_enabled) (a host disables it
+    /// while the Move HUD is open).
+    pub fn hit(&self, camera: &Camera, device: [i32; 2]) -> Option<GizmoTarget> {
         let scale = self.screen_scale(camera);
         if !scale.is_finite() || scale <= 0.0 {
             return None;
@@ -791,15 +907,27 @@ impl TransformGizmo {
         let Some(ray) = camera.ray_through(device) else {
             return None;
         };
-        let mut best: Option<(f64, f64, GizmoHandle)> = None;
+        let mut best: Option<(f64, f64, GizmoTarget)> = None;
+
+        // 0. The origin/centre control: a 10 px projected disc. It sits inside the axis
+        //    stems' excluded 18 % so it steals no stem; being tested first gives it the
+        //    documented priority when a smaller gizmo makes the bands overlap.
+        if self.origin_enabled && self.mode.shows(GizmoTarget::Origin) {
+            if let Some(projected) = project_device(camera, frame.origin) {
+                let distance = (projected[0] - pointer[0]).hypot(projected[1] - pointer[1]);
+                if distance <= FEATURE_PIXELS {
+                    return Some(GizmoTarget::Origin);
+                }
+            }
+        }
 
         // 1. Axis stems. The pick segment starts `AXIS_PICK_START` along the stem so the
         //    shared centre is not ambiguously claimed by three handles at once.
         for handle in GizmoHandle::ALL {
-            if !self.mode.shows(handle) || handle.kind() != HandleKind::Axis {
+            if !self.mode.shows(GizmoTarget::Handle(handle)) || handle.kind() != HandleKind::Axis {
                 continue;
             }
-            if self.grazing_fade(handle, camera) <= GRAZING_HIT_FLOOR {
+            if self.grazing_fade(GizmoTarget::Handle(handle), camera) <= GRAZING_HIT_FLOOR {
                 continue;
             }
             let axis = frame.axis(handle).expect("axis handle");
@@ -818,18 +946,23 @@ impl TransformGizmo {
                 continue;
             }
             let world = start.add(&end.sub(&start).scale(t));
-            consider(&mut best, distance, eye.sub(&world).length(), handle);
+            consider(
+                &mut best,
+                distance,
+                eye.sub(&world).length(),
+                GizmoTarget::Handle(handle),
+            );
         }
-        if let Some((_, _, handle)) = best {
-            return Some(handle);
+        if let Some((_, _, target)) = best {
+            return Some(target);
         }
 
         // 2. Plane quads: the whole quad is grabbable, plus padding around its rim.
         for handle in GizmoHandle::ALL {
-            if !self.mode.shows(handle) || handle.kind() != HandleKind::Plane {
+            if !self.mode.shows(GizmoTarget::Handle(handle)) || handle.kind() != HandleKind::Plane {
                 continue;
             }
-            if self.grazing_fade(handle, camera) <= GRAZING_HIT_FLOOR {
+            if self.grazing_fade(GizmoTarget::Handle(handle), camera) <= GRAZING_HIT_FLOOR {
                 continue;
             }
             let (u, v) = frame.plane_axes(handle).expect("plane handle");
@@ -865,10 +998,15 @@ impl TransformGizmo {
                 .origin
                 .add(&u.scale(0.525 * scale))
                 .add(&v.scale(0.525 * scale));
-            consider(&mut best, distance, eye.sub(&centre).length(), handle);
+            consider(
+                &mut best,
+                distance,
+                eye.sub(&centre).length(),
+                GizmoTarget::Handle(handle),
+            );
         }
-        if let Some((_, _, handle)) = best {
-            return Some(handle);
+        if let Some((_, _, target)) = best {
+            return Some(target);
         }
 
         // 3. Rotation rings. A visible ring is tested in its own plane: the ray's hit
@@ -876,7 +1014,7 @@ impl TransformGizmo {
         //    the centre, so its screen fallback excludes the inner part exactly like the
         //    axis stems (otherwise the centre would be "on" every edge-on ring).
         for handle in GizmoHandle::ALL {
-            if !self.mode.shows(handle) || handle.kind() != HandleKind::Ring {
+            if !self.mode.shows(GizmoTarget::Handle(handle)) || handle.kind() != HandleKind::Ring {
                 continue;
             }
             let axis = frame.axis(handle).expect("ring handle");
@@ -900,7 +1038,7 @@ impl TransformGizmo {
                     &mut best,
                     error / world_per_pixel,
                     eye.sub(&ring_point).length(),
-                    handle,
+                    GizmoTarget::Handle(handle),
                 );
             } else {
                 let (u, v) = orthonormal_basis(axis);
@@ -943,19 +1081,33 @@ impl TransformGizmo {
                 if nearest > slop {
                     continue;
                 }
-                consider(&mut best, nearest, eye.sub(&nearest_world).length(), handle);
+                consider(
+                    &mut best,
+                    nearest,
+                    eye.sub(&nearest_world).length(),
+                    GizmoTarget::Handle(handle),
+                );
             }
         }
 
-        best.map(|(_, _, handle)| handle)
+        best.map(|(_, _, target)| target)
     }
 
     /// Highlight `handle` (or clear). Returns whether the visuals changed.
+    ///
+    /// This is the transform-handle form; the origin control is not a handle. A host
+    /// that hit-tests the whole gizmo uses [`set_hovered_target`](Self::set_hovered_target).
     pub fn set_hovered(&mut self, handle: Option<GizmoHandle>) -> bool {
-        if self.hovered == handle {
+        self.set_hovered_target(handle.map(GizmoTarget::Handle))
+    }
+
+    /// Highlight a gizmo target (a transform handle or the origin control), or clear.
+    /// Returns whether the visuals changed.
+    pub fn set_hovered_target(&mut self, target: Option<GizmoTarget>) -> bool {
+        if self.hovered == target {
             return false;
         }
-        self.hovered = handle;
+        self.hovered = target;
         // The hover cue is also a stroke-width change, which is baked into the ribbon
         // geometry; mark the gizmo for a rebuild as well as recolouring it.
         self.dirty = true;
@@ -999,6 +1151,7 @@ impl TransformGizmo {
         let frame = self.frame;
         let origin = frame.origin;
         let (start, constraint, value) = match handle.kind() {
+            HandleKind::Origin => return false,
             HandleKind::Axis if modifiers.shift => {
                 let axis = frame.axis(handle).expect("an axis handle has an axis");
                 let normal = shift_plane_normal(camera, axis);
@@ -1105,7 +1258,7 @@ impl TransformGizmo {
             total: Matrix4::identity(),
         });
         // Highlight the grabbed handle.
-        self.hovered = Some(handle);
+        self.hovered = Some(GizmoTarget::Handle(handle));
         self.apply_colors();
         true
     }
@@ -1258,8 +1411,12 @@ impl TransformGizmo {
     /// cluster; a nearly edge-on plane flattens to a sliver. Both are faded out and
     /// dropped from the analytic hit test so a 2 px artifact cannot be grabbed by accident.
     /// A ring stays live even edge-on: it still projects to an arc.
-    fn grazing_fade(&self, handle: GizmoHandle, camera: &Camera) -> f32 {
+    fn grazing_fade(&self, target: GizmoTarget, camera: &Camera) -> f32 {
         let forward = camera_forward(camera);
+        let Some(handle) = target.handle() else {
+            // The origin control is a screen-facing disc and never collapses.
+            return 1.0;
+        };
         match handle.kind() {
             HandleKind::Axis => {
                 let alignment = self
@@ -1280,6 +1437,7 @@ impl TransformGizmo {
                     .clamp(0.0, 1.0) as f32
             }
             HandleKind::Ring => 1.0,
+            HandleKind::Origin => 1.0,
         }
     }
 
@@ -1293,10 +1451,12 @@ impl TransformGizmo {
         let halo = self.style.halo_width.max(0.0);
         let world_per_pixel = scale / self.style.size.max(1e-9);
         let forward = camera_forward(camera);
-        for (index, handle) in GizmoHandle::ALL.iter().enumerate() {
-            let fade = self.grazing_fade(*handle, camera);
+        for (index, target) in GizmoTarget::ALL.iter().enumerate() {
+            let fade = self.grazing_fade(*target, camera);
             self.fade[index] = fade;
-            let live = self.mode.shows(*handle) && fade > 1e-3;
+            let live = self.mode.shows(*target)
+                && fade > 1e-3
+                && !(*target == GizmoTarget::Origin && !self.origin_enabled);
             let slot = &mut self.handles[index];
             let halo_slot = &mut self.halos[index];
             if !live {
@@ -1305,16 +1465,29 @@ impl TransformGizmo {
                 continue;
             }
             // The non-colour hover cue: a hovered stem/ring gets a wider stroke (and
-            // therefore a wider halo) instead of relying on the accent hue alone.
-            let hovered = self.hovered == Some(*handle);
+            // therefore a wider halo); the origin disc grows the same way.
+            let hovered = self.hovered == Some(*target);
             let stroke = if hovered { width * hover_scale } else { width };
             let halo_stroke = stroke + 2.0 * halo;
+            let Some(handle) = target.handle() else {
+                // The origin/centre control: a camera-facing disc in the same tokens as
+                // the rest of the triad, with a wider disc behind it as its casing.
+                let radius = stroke * ORIGIN_RADIUS_PER_STROKE;
+                origin_handle(slot, origin, forward, radius, world_per_pixel);
+                if halo > 0.0 {
+                    origin_handle(halo_slot, origin, forward, radius + halo, world_per_pixel);
+                } else {
+                    halo_slot.set_shape(Vec::new(), Vec::new(), Vec::new(), Vec::new());
+                }
+                continue;
+            };
             match handle.kind() {
+                HandleKind::Origin => {}
                 HandleKind::Axis => {
                     axis_handle(
                         slot,
                         origin,
-                        frame.axis(*handle).expect("axis"),
+                        frame.axis(handle).expect("axis"),
                         scale,
                         world_per_pixel,
                         stroke,
@@ -1324,7 +1497,7 @@ impl TransformGizmo {
                         axis_handle(
                             halo_slot,
                             origin,
-                            frame.axis(*handle).expect("axis"),
+                            frame.axis(handle).expect("axis"),
                             scale,
                             world_per_pixel,
                             halo_stroke,
@@ -1335,7 +1508,7 @@ impl TransformGizmo {
                     }
                 }
                 HandleKind::Plane => {
-                    let (u, v) = frame.plane_axes(*handle).expect("plane axes");
+                    let (u, v) = frame.plane_axes(handle).expect("plane axes");
                     plane_handle(slot, origin, u, v, scale, hovered);
                     if halo > 0.0 {
                         plane_halo(
@@ -1355,7 +1528,7 @@ impl TransformGizmo {
                     ring_handle(
                         slot,
                         origin,
-                        frame.axis(*handle).expect("ring"),
+                        frame.axis(handle).expect("ring"),
                         scale,
                         world_per_pixel,
                         stroke,
@@ -1365,7 +1538,7 @@ impl TransformGizmo {
                         ring_handle(
                             halo_slot,
                             origin,
-                            frame.axis(*handle).expect("ring"),
+                            frame.axis(handle).expect("ring"),
                             scale,
                             world_per_pixel,
                             halo_stroke,
@@ -1389,10 +1562,10 @@ impl TransformGizmo {
             .display_offset
             .map(|offset| Matrix4::translation(offset.x, offset.y, offset.z));
         let outline_alpha = self.style.outline[3] * self.style.opacity;
-        for (index, handle) in GizmoHandle::ALL.iter().enumerate() {
+        for (index, target) in GizmoTarget::ALL.iter().enumerate() {
             let fade = self.fade[index];
             let (mut surface, mut edge) =
-                paint_for(*handle, self.hovered == Some(*handle), &self.style);
+                paint_for(*target, self.hovered == Some(*target), &self.style);
             surface[3] *= fade;
             edge[3] *= fade;
             self.handles[index].set_surface_color(surface);
@@ -1411,12 +1584,16 @@ impl TransformGizmo {
 }
 
 impl GizmoMode {
-    /// Whether `handle` is shown in this mode.
-    fn shows(self, handle: GizmoHandle) -> bool {
-        match self {
-            GizmoMode::Translate => handle.kind() != HandleKind::Ring,
-            GizmoMode::Rotate => handle.kind() == HandleKind::Ring,
-            GizmoMode::Universal => true,
+    /// Whether `target` is shown in this mode. The origin/centre control is shown in
+    /// every mode; it is the pivot, not a degree of freedom.
+    fn shows(self, target: GizmoTarget) -> bool {
+        match target {
+            GizmoTarget::Origin => true,
+            GizmoTarget::Handle(handle) => match self {
+                GizmoMode::Translate => handle.kind() != HandleKind::Ring,
+                GizmoMode::Rotate => handle.kind() == HandleKind::Ring,
+                GizmoMode::Universal => true,
+            },
         }
     }
 }
@@ -1429,21 +1606,25 @@ impl GizmoMode {
 /// [`OVERLAY_DEPTH`](crate::shape::OVERLAY_DEPTH): an object-origin triad otherwise sits
 /// inside the body, fails the `Less` test, and shows only its occluded ghost pass.
 fn new_handle(index: usize) -> ShapeItem {
-    let handle = GizmoHandle::ALL[index];
-    let mode = match handle.kind() {
+    let target = GizmoTarget::ALL[index];
+    let mode = match target.kind() {
         HandleKind::Plane => DrawMode::ShadedWithEdges,
-        HandleKind::Axis | HandleKind::Ring => DrawMode::Shaded,
+        HandleKind::Axis | HandleKind::Ring | HandleKind::Origin => DrawMode::Shaded,
     };
     let item = ShapeItem::new(GIZMO_BASE_ID + index as u32)
         .with_draw_mode(mode)
         .with_surface_depth(crate::shape::OVERLAY_DEPTH)
         .with_wire_depth(crate::shape::OVERLAY_DEPTH);
-    // Axes and rings are screen-space ribbons and take the feathered, unlit stage. A
-    // plane is a quad whose uv is not a lateral coordinate, so it stays on `fs_main`.
-    if handle.kind() == HandleKind::Plane {
-        item
-    } else {
+    // Axes, rings and the origin disc are screen-space controls and take the unlit,
+    // feathered stage. A plane is a quad whose uv is not a lateral coordinate, so it
+    // stays on `fs_main`.
+    if matches!(
+        target.kind(),
+        HandleKind::Axis | HandleKind::Ring | HandleKind::Origin
+    ) {
         item.with_ribbon_aa()
+    } else {
+        item
     }
 }
 
@@ -1451,14 +1632,18 @@ fn new_handle(index: usize) -> ShapeItem {
 /// non-selectable so the halo never adds a pick target, and its ids sit outside the
 /// handle pick range.
 fn new_halo(index: usize) -> ShapeItem {
+    let target = GizmoTarget::ALL[index];
     let item = ShapeItem::new(GIZMO_BASE_ID + 100 + index as u32)
         .with_draw_mode(DrawMode::Shaded)
         .with_surface_depth(crate::shape::OVERLAY_DEPTH)
         .with_selectable(false);
-    if GizmoHandle::ALL[index].kind() == HandleKind::Plane {
-        item
-    } else {
+    if matches!(
+        target.kind(),
+        HandleKind::Axis | HandleKind::Ring | HandleKind::Origin
+    ) {
         item.with_ribbon_aa()
+    } else {
+        item
     }
 }
 
@@ -1656,24 +1841,58 @@ fn ring_handle(
     item.set_shape_uv(positions, Vec::new(), uvs, triangles, Vec::new());
 }
 
+/// The origin/centre control: a camera-facing disc in the handle ink.
+///
+/// It is a filled fan rather than a ribbon so it stays a stable disc at any view; the
+/// host draws its wider halo slot behind it as the same casing the stems use. `radius`
+/// is in device pixels and `world_per_pixel` comes from the gizmo's screen-invariant
+/// scale, so the disc keeps its footprint as the camera zooms.
+fn origin_handle(
+    item: &mut ShapeItem,
+    origin: Vector3,
+    forward: Vector3,
+    radius_pixels: f64,
+    world_per_pixel: f64,
+) {
+    let (u, v) = orthonormal_basis(forward);
+    let radius = radius_pixels * world_per_pixel;
+    let segments = 24usize;
+    let mut positions = Vec::with_capacity(segments + 1);
+    let mut uvs = Vec::with_capacity(segments + 1);
+    positions.push(to3(origin));
+    // The filled cap uses the lateral centre everywhere, so the ribbon feather keeps
+    // the whole disc at full coverage (only its silhouette is anti-aliased).
+    uvs.push(RIBBON_UV_CENTRE);
+    for i in 0..segments {
+        let angle = TAU * i as f64 / segments as f64;
+        let point = origin
+            .add(&u.scale(radius * angle.cos()))
+            .add(&v.scale(radius * angle.sin()));
+        positions.push(to3(point));
+        uvs.push(RIBBON_UV_CENTRE);
+    }
+    let mut triangles = Vec::with_capacity(segments * 3);
+    for i in 0..segments {
+        let next = (i + 1) % segments;
+        triangles.extend_from_slice(&[0, i as u32 + 1, next as u32 + 1]);
+    }
+    item.set_shape_uv(positions, Vec::new(), uvs, triangles, Vec::new());
+}
+
 /// The surface and edge colours for a handle. Axes and rings are strokes; planes are a
 /// translucent glass fill with a stroke rim.
 ///
 /// The visible alpha is the token alpha times [`GizmoStyle::opacity`]. The glass fill
 /// always uses the style's active RGB, at the legacy `0.10`/`0.28` ink scaled by the
 /// opacity, so the inactive stroke does not tint the plane.
-fn paint_for(
-    handle: GizmoHandle,
-    hovered: bool,
-    style: &GizmoStyle,
-) -> ([f32; 4], [f32; 4]) {
+fn paint_for(target: GizmoTarget, hovered: bool, style: &GizmoStyle) -> ([f32; 4], [f32; 4]) {
     let token = if hovered {
         style.active
     } else {
         style.inactive
     };
     let stroke = [token[0], token[1], token[2], token[3] * style.opacity];
-    match handle.kind() {
+    match target.kind() {
         HandleKind::Plane => {
             let glass = if hovered {
                 GLASS_HIGHLIGHT[3]
@@ -1685,7 +1904,7 @@ fn paint_for(
                 stroke,
             )
         }
-        HandleKind::Axis | HandleKind::Ring => (stroke, stroke),
+        HandleKind::Axis | HandleKind::Ring | HandleKind::Origin => (stroke, stroke),
     }
 }
 
@@ -1757,10 +1976,10 @@ fn point_in_polygon(point: [f64; 2], polygon: &[[f64; 2]]) -> bool {
 
 /// Keep the nearer stroke, or the front-most one when two strokes are equally close.
 fn consider(
-    best: &mut Option<(f64, f64, GizmoHandle)>,
+    best: &mut Option<(f64, f64, GizmoTarget)>,
     distance: f64,
     depth: f64,
-    handle: GizmoHandle,
+    target: GizmoTarget,
 ) {
     let replace = match best {
         None => true,
@@ -1770,7 +1989,7 @@ fn consider(
         }
     };
     if replace {
-        *best = Some((distance, depth, handle));
+        *best = Some((distance, depth, target));
     }
 }
 
@@ -1986,6 +2205,131 @@ mod tests {
     }
 
     #[test]
+    fn the_origin_target_is_appended_after_the_handles() {
+        // Every existing handle keeps its pick id; the origin takes the next one.
+        for handle in GizmoHandle::ALL {
+            assert_eq!(
+                GizmoTarget::Handle(handle).pick_id(),
+                handle.pick_id(),
+                "the handle ids are unchanged"
+            );
+        }
+        let origin = GizmoTarget::Origin.pick_id();
+        assert_eq!(origin, GIZMO_BASE_ID + GizmoHandle::ALL.len() as u32);
+        assert_eq!(GizmoTarget::from_pick_id(origin), Some(GizmoTarget::Origin));
+
+        let mut seen = Vec::new();
+        for target in GizmoTarget::ALL {
+            let id = target.pick_id();
+            assert!(!seen.contains(&id), "pick ids are distinct");
+            seen.push(id);
+            assert_eq!(GizmoTarget::from_pick_id(id), Some(target));
+        }
+        assert_eq!(GizmoTarget::from_pick_id(origin + 1), None);
+    }
+
+    #[test]
+    fn the_origin_handle_is_pickable_inside_its_ten_pixel_disc() {
+        let camera = camera(5.0);
+        let mut gizmo = TransformGizmo::new(1, Vector3::zero(), GizmoMode::Translate);
+        gizmo.update(&camera);
+        // Five pixels from the centre: inside the 10 px disc.
+        assert_eq!(gizmo.hit(&camera, [55, 50]), Some(GizmoTarget::Origin));
+        // Eleven pixels diagonally: outside the disc, and far enough from the stems'
+        // pick segments that no handle claims it either.
+        assert_eq!(gizmo.hit(&camera, [58, 58]), None);
+    }
+
+    #[test]
+    fn the_origin_handle_wins_the_hit_priority() {
+        let camera = camera(5.0);
+        // A small triad makes the origin disc, the stem padding and the plane/ring bands
+        // overlap, so the result shows which target is tested first.
+        let mut style = GizmoStyle::default();
+        style.size = 15.0;
+        let mut gizmo = TransformGizmo::new(1, Vector3::zero(), GizmoMode::Universal);
+        gizmo.set_style(&style);
+        gizmo.update(&camera);
+
+        // Seven pixels diagonally: inside the origin disc and within the padded band of
+        // the X/Y stems, the XY plane and the Z ring.
+        assert_eq!(gizmo.hit(&camera, [55, 55]), Some(GizmoTarget::Origin));
+        // With the origin out of the way the same point resolves to a handle, proving the
+        // bands really do overlap. (A point inside the origin disc is always within the
+        // 12 px stem padding too, so origin > axis also covers the plane band.)
+        assert!(gizmo.set_origin_enabled(false));
+        gizmo.update(&camera);
+        assert!(matches!(
+            gizmo.hit(&camera, [55, 55]),
+            Some(GizmoTarget::Handle(_))
+        ));
+
+        // Rings alone (no axes/planes): 10 px out is exactly on the origin disc and in
+        // the edge-on XZ ring's padded band, and the origin still wins.
+        let mut rings = TransformGizmo::new(1, Vector3::zero(), GizmoMode::Rotate);
+        rings.set_style(&style);
+        rings.update(&camera);
+        assert_eq!(rings.hit(&camera, [60, 50]), Some(GizmoTarget::Origin));
+        assert!(rings.set_origin_enabled(false));
+        rings.update(&camera);
+        assert_eq!(
+            rings.hit(&camera, [60, 50]),
+            Some(GizmoTarget::Handle(GizmoHandle::RotateY))
+        );
+    }
+
+    #[test]
+    fn a_disabled_origin_is_not_drawn_or_picked() {
+        let camera = camera(5.0);
+        let mut gizmo = TransformGizmo::new(1, Vector3::zero(), GizmoMode::Translate);
+        gizmo.update(&camera);
+        assert_eq!(gizmo.hit(&camera, CENTRE), Some(GizmoTarget::Origin));
+
+        assert!(gizmo.set_origin_enabled(false));
+        assert!(!gizmo.set_origin_enabled(false), "unchanged is a no-op");
+        gizmo.update(&camera);
+        assert_eq!(gizmo.hit(&camera, CENTRE), None);
+        assert!(
+            gizmo.items()[GizmoTarget::Origin.index()]
+                .positions()
+                .is_empty(),
+            "the hidden origin draws nothing"
+        );
+        assert!(
+            gizmo.halos()[GizmoTarget::Origin.index()]
+                .positions()
+                .is_empty()
+        );
+
+        assert!(gizmo.set_origin_enabled(true));
+        gizmo.update(&camera);
+        assert_eq!(gizmo.hit(&camera, CENTRE), Some(GizmoTarget::Origin));
+    }
+
+    #[test]
+    fn the_origin_handle_uses_the_handle_tokens_and_casing() {
+        let camera = tilted_camera(5.0);
+        let mut gizmo = TransformGizmo::new(1, Vector3::zero(), GizmoMode::Universal);
+        gizmo.update(&camera);
+        let origin = GizmoTarget::Origin.index();
+        assert_eq!(gizmo.items()[origin].surface_color(), INACTIVE_COLOR);
+        assert!(!gizmo.items()[origin].positions().is_empty());
+
+        // The casing is the same non-pickable outline pass the stems use.
+        let halo = &gizmo.halos()[origin];
+        assert!(!halo.selectable());
+        assert!(!halo.positions().is_empty());
+        assert_eq!(halo.surface_color(), OUTLINE_COLOR);
+
+        assert!(gizmo.set_hovered_target(Some(GizmoTarget::Origin)));
+        assert_eq!(gizmo.items()[origin].surface_color(), ACTIVE_COLOR);
+        assert!(
+            gizmo.update(&camera),
+            "the hover cue grows the disc, so it rebuilds"
+        );
+    }
+
+    #[test]
     fn the_scale_is_invariant_to_the_camera_distance() {
         let origin = Vector3::zero();
         let near = scale_for(&camera(4.0), origin, DEFAULT_PIXELS);
@@ -2032,9 +2376,9 @@ mod tests {
                 })
                 .count()
         };
-        assert_eq!(item_count(GizmoMode::Translate), 6);
-        assert_eq!(item_count(GizmoMode::Rotate), 3);
-        assert_eq!(item_count(GizmoMode::Universal), 9);
+        assert_eq!(item_count(GizmoMode::Translate), 7);
+        assert_eq!(item_count(GizmoMode::Rotate), 4);
+        assert_eq!(item_count(GizmoMode::Universal), 10);
     }
 
     #[test]
@@ -2256,16 +2600,21 @@ mod tests {
     fn the_triad_interior_passes_through() {
         let mut gizmo = TransformGizmo::new(1, Vector3::zero(), GizmoMode::Universal);
         gizmo.update(&camera(5.0));
-        // The axes only start at 0.18·scale and the planes/rings are farther out; the
-        // shared centre belongs to no handle, so a click there reaches the scene.
-        assert_eq!(gizmo.hit(&camera(5.0), CENTRE), None);
+        // The re-pivot handle owns the shared centre (it is not a transform handle).
+        assert_eq!(gizmo.hit(&camera(5.0), CENTRE), Some(GizmoTarget::Origin));
+        // It is only a 10 px disc, so the interior just outside it still passes through:
+        // the stems only start at 0.18·scale (~20 px) and the planes are farther out.
+        assert_eq!(gizmo.hit(&camera(5.0), [65, 65]), None);
     }
 
     #[test]
     fn an_axis_is_pickable_along_its_stem() {
         let mut gizmo = TransformGizmo::new(1, Vector3::zero(), GizmoMode::Translate);
         gizmo.update(&camera(5.0));
-        assert_eq!(gizmo.hit(&camera(5.0), [80, 50]), Some(GizmoHandle::AxisX));
+        assert_eq!(
+            gizmo.hit(&camera(5.0), [80, 50]),
+            Some(GizmoTarget::Handle(GizmoHandle::AxisX))
+        );
     }
 
     #[test]
@@ -2274,7 +2623,10 @@ mod tests {
         gizmo.update(&camera(5.0));
         // Eight pixels above the X stem: outside the 2 px stroke, inside the 10 px grab
         // padding.
-        assert_eq!(gizmo.hit(&camera(5.0), [80, 58]), Some(GizmoHandle::AxisX));
+        assert_eq!(
+            gizmo.hit(&camera(5.0), [80, 58]),
+            Some(GizmoTarget::Handle(GizmoHandle::AxisX))
+        );
     }
 
     #[test]
@@ -2291,7 +2643,7 @@ mod tests {
         // The XY quad spans 0.35..0.7·scale in +X/+Y; [92, 92] is inside that band.
         assert_eq!(
             gizmo.hit(&camera(5.0), [92, 92]),
-            Some(GizmoHandle::PlaneXY)
+            Some(GizmoTarget::Handle(GizmoHandle::PlaneXY))
         );
     }
 
@@ -2302,7 +2654,7 @@ mod tests {
         // 45° on the Z ring at the 110 px radius (the X/Y rings are edge-on here).
         assert_eq!(
             gizmo.hit(&camera(5.0), [128, 128]),
-            Some(GizmoHandle::RotateZ)
+            Some(GizmoTarget::Handle(GizmoHandle::RotateZ))
         );
     }
 
@@ -2312,7 +2664,10 @@ mod tests {
         gizmo.update(&camera(5.0));
         // Forty pixels along +X lies on the X stem and on the edge-on Y ring's projected
         // line; the axis has priority.
-        assert_eq!(gizmo.hit(&camera(5.0), [90, 50]), Some(GizmoHandle::AxisX));
+        assert_eq!(
+            gizmo.hit(&camera(5.0), [90, 50]),
+            Some(GizmoTarget::Handle(GizmoHandle::AxisX))
+        );
     }
 
     #[test]
@@ -2321,7 +2676,7 @@ mod tests {
         translate.update(&camera(5.0));
         assert_eq!(
             translate.hit(&camera(5.0), [95, 95]),
-            Some(GizmoHandle::PlaneXY)
+            Some(GizmoTarget::Handle(GizmoHandle::PlaneXY))
         );
 
         // The same point in rotate mode is between the displayed rings.
@@ -2335,7 +2690,10 @@ mod tests {
         // `hit` recomputes the screen scale, so an event that arrives before the next
         // frame still lands on the drawn geometry.
         let gizmo = TransformGizmo::new(1, Vector3::zero(), GizmoMode::Translate);
-        assert_eq!(gizmo.hit(&camera(5.0), [80, 50]), Some(GizmoHandle::AxisX));
+        assert_eq!(
+            gizmo.hit(&camera(5.0), [80, 50]),
+            Some(GizmoTarget::Handle(GizmoHandle::AxisX))
+        );
     }
 
     #[test]
@@ -2347,9 +2705,15 @@ mod tests {
         ));
         gizmo.update(&camera(5.0));
         // Local X is world +Y, so the vertical screen stem is AxisX.
-        assert_eq!(gizmo.hit(&camera(5.0), [50, 80]), Some(GizmoHandle::AxisX));
+        assert_eq!(
+            gizmo.hit(&camera(5.0), [50, 80]),
+            Some(GizmoTarget::Handle(GizmoHandle::AxisX))
+        );
         // Local Y is world −X, so the leftward stem is AxisY.
-        assert_eq!(gizmo.hit(&camera(5.0), [20, 50]), Some(GizmoHandle::AxisY));
+        assert_eq!(
+            gizmo.hit(&camera(5.0), [20, 50]),
+            Some(GizmoTarget::Handle(GizmoHandle::AxisY))
+        );
     }
 
     #[test]
@@ -2598,7 +2962,10 @@ mod tests {
         style.hit_radius_px = 20.0;
         assert!(gizmo.set_style(&style));
         gizmo.update(&camera);
-        assert_eq!(gizmo.hit(&camera, [80, 65]), Some(GizmoHandle::AxisX));
+        assert_eq!(
+            gizmo.hit(&camera, [80, 65]),
+            Some(GizmoTarget::Handle(GizmoHandle::AxisX))
+        );
     }
 
     #[test]
@@ -2610,7 +2977,10 @@ mod tests {
         assert!(gizmo.set_style(&style));
         gizmo.update(&camera);
         // 8 px off the stem is still inside the floored 12 px radius.
-        assert_eq!(gizmo.hit(&camera, [80, 58]), Some(GizmoHandle::AxisX));
+        assert_eq!(
+            gizmo.hit(&camera, [80, 58]),
+            Some(GizmoTarget::Handle(GizmoHandle::AxisX))
+        );
     }
 
     #[test]
@@ -2669,10 +3039,22 @@ mod tests {
 
         // Looking down +Z: the Z axis points at the camera, the XZ/YZ planes are
         // edge-on, and the XY plane faces it.
-        assert_eq!(gizmo.grazing_fade(GizmoHandle::AxisZ, &camera), 0.0);
-        assert_eq!(gizmo.grazing_fade(GizmoHandle::PlaneXZ, &camera), 0.0);
-        assert_eq!(gizmo.grazing_fade(GizmoHandle::PlaneYZ, &camera), 0.0);
-        assert_eq!(gizmo.grazing_fade(GizmoHandle::PlaneXY, &camera), 1.0);
+        assert_eq!(
+            gizmo.grazing_fade(GizmoTarget::Handle(GizmoHandle::AxisZ), &camera),
+            0.0
+        );
+        assert_eq!(
+            gizmo.grazing_fade(GizmoTarget::Handle(GizmoHandle::PlaneXZ), &camera),
+            0.0
+        );
+        assert_eq!(
+            gizmo.grazing_fade(GizmoTarget::Handle(GizmoHandle::PlaneYZ), &camera),
+            0.0
+        );
+        assert_eq!(
+            gizmo.grazing_fade(GizmoTarget::Handle(GizmoHandle::PlaneXY), &camera),
+            1.0
+        );
         assert!(
             gizmo.items()[GizmoHandle::AxisZ.index()]
                 .positions()
@@ -2694,7 +3076,7 @@ mod tests {
         // A three-quarter view brings the Z axis back.
         let tilted = tilted_camera(5.0);
         assert!(gizmo.update(&tilted));
-        assert!(gizmo.grazing_fade(GizmoHandle::AxisZ, &tilted) > 0.9);
+        assert!(gizmo.grazing_fade(GizmoTarget::Handle(GizmoHandle::AxisZ), &tilted) > 0.9);
         assert!(
             !gizmo.items()[GizmoHandle::AxisZ.index()]
                 .positions()

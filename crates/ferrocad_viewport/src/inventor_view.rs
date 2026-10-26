@@ -20,7 +20,7 @@ use std::time::{Duration, Instant};
 use ferrocad_geom::SelectionRef;
 use ferrocad_graphics::{
     Camera, DepthState, DrawPacket, Generation, Geometry, Hit, MeshId, PickId, Projection,
-    RenderQueue, SHADOW_MAX, ShadowFootprint, ShaderProgram, StateSnapshot, Topology, Vertex,
+    RenderQueue, SHADOW_MAX, ShaderProgram, ShadowFootprint, StateSnapshot, Topology, Vertex,
     Viewport, apply_shadows, pick_at_hit,
 };
 use ferrocad_inventor::{
@@ -30,7 +30,7 @@ use ferrocad_inventor::{
 use ferrocad_stage::Stage;
 use ferrocad_stage::shape::{GHOST_DEPTH, WIRE_DEPTH_BIAS};
 use ferrocad_stage::{
-    AxisStyle, FaceFrame, GizmoCommitEvent, GizmoHandle, GizmoMode, GizmoModifiers, GizmoStyle,
+    AxisStyle, FaceFrame, GizmoCommitEvent, GizmoMode, GizmoModifiers, GizmoStyle, GizmoTarget,
     GizmoValue, GridSpec, GridStyle, InteractionCommit, Manipulator, MouseButton as StageButton,
     PointerEvent, PointerKind, SnapCandidate, SnapContext, SnapKind, Tool, ToolStatus,
     TransformGizmo, Workplane, axis, feedback, grid, snap_to_geometry_with,
@@ -145,6 +145,15 @@ pub enum ViewportEvent {
     /// A gizmo drag tick while the host has deferred the commit. The host mirrors the
     /// delta into its editable values and previews the whole selection itself.
     TransformPreview(TransformPreview),
+    /// The origin/centre handle was dragged and released. `point` is the snapped world
+    /// pivot and `kind` names the snap that won. This is **not** a transform commit: the
+    /// host stores it as session state (it is not undoable and not a document property).
+    GizmoOrigin {
+        /// The snapped world point the pivot moved to.
+        point: Vector3,
+        /// What the point snapped to.
+        kind: SnapKind,
+    },
     /// The active tool's status changed: it started, gained a point, finished, or was
     /// cancelled. `status.active` is false once the session ended, so the host hides
     /// its tool strip.
@@ -205,6 +214,11 @@ pub struct InventorViewport<V: InventorView> {
     /// commits on release: the host previews the whole selection and commits when its
     /// own editor accepts. Set by the host while a translation HUD is open.
     gizmo_deferred: bool,
+    /// The in-progress re-pivot: the frame origin at the press (for `Esc`) and the
+    /// snapped point/kind under the pointer.
+    gizmo_origin_drag: Option<GizmoOriginDrag>,
+    /// The released re-pivot waiting to be emitted as [`ViewportEvent::GizmoOrigin`].
+    gizmo_origin: Option<(Vector3, SnapKind)>,
     /// A drag tick waiting for the next gpui handler to emit it.
     transform_preview: Option<TransformPreview>,
     /// The overlay anchors a live preview offsets from (see [`Self::preview_translation`]).
@@ -352,6 +366,14 @@ struct RingDrag {
     /// subtree, so measuring against the live rotation would feed the yaw we apply back
     /// into the next pointer angle; freezing it makes the scrub integrate exactly.
     reference: Rotation,
+}
+
+/// A re-pivot in progress. The frame moves live; `home` is what `Esc` restores.
+#[derive(Clone, Copy, Debug)]
+struct GizmoOriginDrag {
+    home: Vector3,
+    point: Vector3,
+    kind: SnapKind,
 }
 
 /// Yaw detents, in degrees: the ring snaps to these magnetic headings on release.
@@ -854,6 +876,8 @@ impl<V: InventorView> InventorViewport<V> {
             gizmo_value: None,
             gizmo_pointer: None,
             gizmo_deferred: false,
+            gizmo_origin_drag: None,
+            gizmo_origin: None,
             transform_preview: None,
             preview_home: None,
             queue,
@@ -1011,6 +1035,7 @@ impl<V: InventorView> InventorViewport<V> {
     pub fn with_gizmo(mut self, mut gizmo: TransformGizmo) -> Self {
         gizmo.set_linear_snap(self.snap_grid);
         gizmo.set_style(&self.gizmo_style);
+        gizmo.set_origin_enabled(!self.gizmo_deferred);
         self.gizmo = Some(gizmo);
         self
     }
@@ -1020,11 +1045,14 @@ impl<V: InventorView> InventorViewport<V> {
         if let Some(gizmo) = gizmo.as_mut() {
             gizmo.set_linear_snap(self.snap_grid);
             gizmo.set_style(&self.gizmo_style);
+            gizmo.set_origin_enabled(!self.gizmo_deferred);
         }
         self.gizmo = gizmo;
         self.gizmo_commit = None;
         self.gizmo_value = None;
         self.gizmo_pointer = None;
+        self.gizmo_origin_drag = None;
+        self.gizmo_origin = None;
         self.preview_home = None;
         self.rebuild_gizmo_queue();
     }
@@ -1128,6 +1156,35 @@ impl<V: InventorView> InventorViewport<V> {
         if !deferred {
             self.transform_preview = None;
         }
+        // The Move HUD is anchored to the visible origin, so the pivot handle is
+        // disabled while its translation form is open; closing it re-enables the handle.
+        self.set_gizmo_origin_enabled(!deferred);
+    }
+
+    /// Enable or disable the gizmo's origin/centre handle.
+    ///
+    /// A host disables it while the floating Move HUD is open: the HUD is anchored to
+    /// the visible origin and must not slide under the user's typing. Returns whether
+    /// the handle state changed.
+    pub fn set_gizmo_origin_enabled(&mut self, enabled: bool) -> bool {
+        if !enabled {
+            self.cancel_gizmo_origin_drag();
+        }
+        let Some(gizmo) = self.gizmo.as_mut() else {
+            return false;
+        };
+        if !gizmo.set_origin_enabled(enabled) {
+            return false;
+        }
+        gizmo.update(&self.camera);
+        self.rebuild_gizmo_queue();
+        true
+    }
+
+    /// Take the released re-pivot, for the host to emit as
+    /// [`ViewportEvent::GizmoOrigin`].
+    pub fn take_gizmo_origin(&mut self) -> Option<(Vector3, SnapKind)> {
+        self.gizmo_origin.take()
     }
 
     /// Whether a gizmo drag is currently deferred to the host.
@@ -1196,9 +1253,13 @@ impl<V: InventorView> InventorViewport<V> {
 
     /// Cancel the active gizmo drag and clear its preview and readout, restoring the
     /// target's pre-drag transform. Returns whether a drag was active.
+    ///
+    /// A re-pivot is a gizmo drag too: cancelling it restores the frame origin from
+    /// before the gesture (the host clears its session user origin separately).
     pub fn cancel_gizmo_drag(&mut self) -> bool {
+        let origin = self.cancel_gizmo_origin_drag();
         let cancelled = self.gizmo.as_mut().is_some_and(|gizmo| gizmo.cancel_drag());
-        if cancelled {
+        if cancelled || origin {
             self.apply_gizmo_preview(None);
             self.gizmo_commit = None;
             self.gizmo_value = None;
@@ -1206,7 +1267,106 @@ impl<V: InventorView> InventorViewport<V> {
             self.transform_preview = None;
             self.rebuild_gizmo_queue();
         }
-        cancelled
+        cancelled || origin
+    }
+
+    /// Begin a re-pivot from the origin/centre handle at `device`.
+    fn begin_gizmo_origin_drag(&mut self, device: [i32; 2]) -> bool {
+        let Some(home) = self.gizmo.as_ref().map(TransformGizmo::origin) else {
+            return false;
+        };
+        let hit = self.pick(device);
+        let Some((point, kind)) = self.gizmo_origin_snap(device, hit.as_ref()) else {
+            return false;
+        };
+        self.gizmo_origin = None;
+        self.gizmo_origin_drag = Some(GizmoOriginDrag { home, point, kind });
+        self.apply_gizmo_origin(point);
+        true
+    }
+
+    /// Advance a live re-pivot to `device`, moving the **real** frame (a pivot drag has
+    /// no solver, so it needs no draw-only offset). Returns whether anything changed.
+    fn update_gizmo_origin_drag(&mut self, device: [i32; 2]) -> bool {
+        let hit = self.pick(device);
+        let Some((point, kind)) = self.gizmo_origin_snap(device, hit.as_ref()) else {
+            return false;
+        };
+        let Some(mut drag) = self.gizmo_origin_drag else {
+            return false;
+        };
+        let changed = drag.point != point || drag.kind != kind;
+        drag.point = point;
+        drag.kind = kind;
+        self.gizmo_origin_drag = Some(drag);
+        if !changed {
+            return false;
+        }
+        self.apply_gizmo_origin(point);
+        true
+    }
+
+    /// Release the re-pivot: queue [`ViewportEvent::GizmoOrigin`] with the snapped point
+    /// and kind. Nothing is committed to the document.
+    fn finish_gizmo_origin_drag(&mut self) -> bool {
+        let Some(drag) = self.gizmo_origin_drag.take() else {
+            return false;
+        };
+        self.gizmo_origin = Some((drag.point, drag.kind));
+        self.rebuild_gizmo_queue();
+        true
+    }
+
+    /// Abort a live re-pivot, restoring the frame origin from the press. Returns whether
+    /// a drag was active.
+    pub fn cancel_gizmo_origin_drag(&mut self) -> bool {
+        let Some(drag) = self.gizmo_origin_drag.take() else {
+            return false;
+        };
+        self.gizmo_origin = None;
+        if let Some(gizmo) = self.gizmo.as_mut() {
+            gizmo.set_origin(drag.home);
+            gizmo.update(&self.camera);
+        }
+        self.rebuild_gizmo_queue();
+        true
+    }
+
+    /// Move the real frame to the snapped pivot and redraw the handles there.
+    fn apply_gizmo_origin(&mut self, point: Vector3) {
+        if let Some(gizmo) = self.gizmo.as_mut() {
+            gizmo.set_origin(point);
+            gizmo.update(&self.camera);
+        }
+        self.rebuild_gizmo_queue();
+    }
+
+    /// Resolve the pivot under `device` through the viewport's own snap pipeline: a
+    /// topological vertex, edge midpoint, face centre or workplane origin within
+    /// [`ferrocad_stage::snap::FEATURE_PIXELS`] wins, then the ray's point on the hovered
+    /// body, then the active workplane/grid. `None` when no snap applies.
+    fn gizmo_origin_snap(
+        &self,
+        device: [i32; 2],
+        hit: Option<&Hit>,
+    ) -> Option<(Vector3, SnapKind)> {
+        let event = PointerEvent {
+            kind: PointerKind::Move,
+            position: device,
+            button: None,
+            hit: hit.copied(),
+        };
+        let candidates = self.snap_candidates(hit);
+        let context = self.snap_context();
+        let snap = snap_to_geometry_with(&event, &self.camera, context.as_ref(), &candidates)?;
+        Some((
+            Vector3::new(
+                f64::from(snap.point[0]),
+                f64::from(snap.point[1]),
+                f64::from(snap.point[2]),
+            ),
+            snap.kind,
+        ))
     }
 
     /// Handle a key press. `Esc` cancels the active tool first, then a manipulator
@@ -1713,6 +1873,12 @@ impl<V: InventorView> InventorViewport<V> {
             return changed;
         }
         let mut changed = false;
+        // A live re-pivot owns the move: the real frame follows the snapped pointer.
+        if self.gizmo_origin_drag.is_some() {
+            let changed = self.update_gizmo_origin_drag(device);
+            self.hover_report = HoverReport::default();
+            return changed;
+        }
         let mut in_cube = false;
         let mut cube_hit = None;
         let mut ring = false;
@@ -1814,10 +1980,10 @@ impl<V: InventorView> InventorViewport<V> {
                 return true;
             }
         } else if self.gizmo_style.enabled && self.gizmo.is_some() {
-            let handle = self.gizmo_handle_at(device);
-            gizmo_hover = handle.is_some();
+            let target = self.gizmo_handle_at(device);
+            gizmo_hover = target.is_some();
             let recoloured = match self.gizmo.as_mut() {
-                Some(gizmo) => gizmo.set_hovered(handle),
+                Some(gizmo) => gizmo.set_hovered_target(target),
                 None => false,
             };
             if recoloured {
@@ -1913,10 +2079,17 @@ impl<V: InventorView> InventorViewport<V> {
             self.ring_drag = None;
             return self.finish_ring_drag();
         }
+        let device = self.camera.viewport.to_device(logical);
+        // A re-pivot release is not a transform commit: it moves the frame and reports
+        // the snapped pivot to the host. Finish it before the chrome/cube/scene gestures
+        // so a release that strayed over the chrome still ends the drag.
+        if !down && self.gizmo_origin_drag.is_some() {
+            self.update_gizmo_origin_drag(device);
+            return self.finish_gizmo_origin_drag();
+        }
         if self.chrome_contains(logical) {
             return false;
         }
-        let device = self.camera.viewport.to_device(logical);
         let in_cube = self
             .navicube
             .as_ref()
@@ -2015,17 +2188,27 @@ impl<V: InventorView> InventorViewport<V> {
         // The gizmo takes priority over the tool and the scene.
         if self.gizmo_style.enabled && self.gizmo.is_some() {
             if down {
-                if let Some(handle) = self.gizmo_handle_at(device) {
-                    let started = match self.gizmo.as_mut() {
-                        Some(gizmo) => {
-                            gizmo.begin_drag_with_modifiers(handle, &self.camera, device, modifiers)
+                if let Some(target) = self.gizmo_handle_at(device) {
+                    if target == GizmoTarget::Origin {
+                        // The origin/centre handle moves the frame, not the target.
+                        if self.begin_gizmo_origin_drag(device) {
+                            return true;
                         }
-                        None => false,
-                    };
-                    if started {
-                        self.queue_transform_preview(PreviewPhase::Begin, Matrix4::identity());
-                        self.rebuild_gizmo_queue();
-                        return true;
+                    } else if let Some(handle) = target.handle() {
+                        let started = match self.gizmo.as_mut() {
+                            Some(gizmo) => gizmo.begin_drag_with_modifiers(
+                                handle,
+                                &self.camera,
+                                device,
+                                modifiers,
+                            ),
+                            None => false,
+                        };
+                        if started {
+                            self.queue_transform_preview(PreviewPhase::Begin, Matrix4::identity());
+                            self.rebuild_gizmo_queue();
+                            return true;
+                        }
                     }
                 }
             } else if self.gizmo.as_ref().is_some_and(|gizmo| gizmo.is_dragging()) {
@@ -2295,11 +2478,11 @@ impl<V: InventorView> InventorViewport<V> {
         self.transient = queue;
     }
 
-    /// The gizmo handle under a device position, if any. The gizmo owns an **analytic**
-    /// screen-space hit test (2 px stroke + 10 px grab padding), so the triad's empty
-    /// interior never claims a click meant for the scene. A disabled style picks
-    /// nothing, so the click falls through to the scene beneath.
-    fn gizmo_handle_at(&self, device: [i32; 2]) -> Option<GizmoHandle> {
+    /// The gizmo target under a device position, if any. The gizmo owns an **analytic**
+    /// screen-space hit test (2 px stroke + 10 px grab padding, plus the 10 px origin
+    /// disc), so the triad's empty interior never claims a click meant for the scene. A
+    /// disabled style picks nothing, so the click falls through to the scene beneath.
+    fn gizmo_handle_at(&self, device: [i32; 2]) -> Option<GizmoTarget> {
         if !self.gizmo_style.enabled {
             return None;
         }
@@ -2388,6 +2571,17 @@ impl<V: InventorView> InventorViewport<V> {
     fn gizmo_readout(&self) -> Option<(String, [f32; 2])> {
         if !self.gizmo_style.enabled || !self.gizmo_style.show_readout {
             return None;
+        }
+        if let Some(drag) = self.gizmo_origin_drag.as_ref() {
+            let anchor = project_device(&self.camera, drag.point)
+                .map(|device| {
+                    self.camera
+                        .viewport
+                        .to_logical([device[0].round() as i32, device[1].round() as i32])
+                })
+                .or(self.gizmo_pointer)
+                .unwrap_or([0.0, 0.0]);
+            return Some((format!("pivot · {}", snap_name(drag.kind)), anchor));
         }
         let value = self.gizmo_value?;
         let gizmo = self.gizmo.as_ref()?;
@@ -2586,6 +2780,11 @@ impl<V: InventorView> InventorViewport<V> {
     fn drag_move_with_modifiers(&mut self, logical: [f32; 2], modifiers: GizmoModifiers) -> bool {
         if self.chrome_contains(logical) {
             return false;
+        }
+        // A live re-pivot owns the drag, including moves outside the element.
+        if self.gizmo_origin_drag.is_some() {
+            let device = self.camera.viewport.to_device(logical);
+            return self.update_gizmo_origin_drag(device);
         }
         // An active manipulator drag owns the gesture, even when the pointer leaves the
         // element (gpui keeps delivering the drag). A disabled style stops servicing
@@ -3901,6 +4100,7 @@ impl<V: InventorView + 'static> Render for InventorViewport<V> {
                 let selection = this.take_selection();
                 let commit = this.take_interaction_commit();
                 let transform = this.take_gizmo_commit();
+                let origin = this.take_gizmo_origin();
                 let tool_state = this.take_tool_state();
                 this.flush_transform_preview(cx);
                 if changed {
@@ -3917,6 +4117,9 @@ impl<V: InventorView + 'static> Render for InventorViewport<V> {
                 }
                 if let Some(transform) = transform {
                     cx.emit(ViewportEvent::Transform(transform));
+                }
+                if let Some((point, kind)) = origin {
+                    cx.emit(ViewportEvent::GizmoOrigin { point, kind });
                 }
             }))
             .on_drag(ViewportDragMarker, |_, _, _, cx| {
@@ -4356,6 +4559,18 @@ fn axis_labels(labels: &[AxisLabel]) -> impl IntoElement {
         );
     }
     layer
+}
+
+/// The human name of a snap kind, for the pivot readout.
+fn snap_name(kind: SnapKind) -> &'static str {
+    match kind {
+        SnapKind::Point => "surface",
+        SnapKind::Grid => "grid",
+        SnapKind::Vertex => "vertex",
+        SnapKind::EdgeMid => "edge mid",
+        SnapKind::Centre => "face centre",
+        SnapKind::Origin => "origin",
+    }
 }
 
 /// A snap's dimension pill: `ΔU` over `ΔV`, in the readout tokens.
@@ -5908,7 +6123,9 @@ mod tests {
 
     #[test]
     fn a_gizmo_drag_previews_a_transform_on_the_target_item() {
-        use ferrocad_stage::{GizmoHandle, GizmoMode, ShapeItem, Stage, TransformGizmo};
+        use ferrocad_stage::{
+            GizmoHandle, GizmoMode, GizmoTarget, ShapeItem, Stage, TransformGizmo,
+        };
         use ferrocad_types::Vector3;
 
         let size = [100u32, 100u32];
@@ -5946,7 +6163,7 @@ mod tests {
         for x in 0..100i32 {
             for y in 0..100i32 {
                 if view.gizmo().expect("gizmo").hit(&view.camera, [x, y])
-                    == Some(GizmoHandle::AxisX)
+                    == Some(GizmoTarget::Handle(GizmoHandle::AxisX))
                 {
                     grab = Some([x, y]);
                 }
@@ -5980,9 +6197,170 @@ mod tests {
         );
     }
 
+    /// A large single-face triangle at `z = 0.5`, tagged `Face1`, for the pivot-snap
+    /// tests. Its vertices, edge midpoints and face centre are well separated in device
+    /// pixels under the identity camera.
+    fn snap_triangle() -> ferrocad_stage::ShapeItem {
+        use ferrocad_geom::Tessellation;
+        use ferrocad_stage::ShapeItem;
+
+        let mesh = Tessellation {
+            positions: vec![[-0.6, -0.6, 0.5], [0.6, -0.6, 0.5], [0.0, 0.6, 0.5]],
+            normals: Vec::new(),
+            triangles: vec![0, 1, 2],
+            triangle_parts: vec![0],
+            edges: vec![0, 1, 1, 2, 2, 0],
+            segment_parts: vec![0, 0, 0],
+            vertices: vec![0, 1, 2],
+            vertex_parts: Vec::new(),
+            parts: vec!["Face1".to_owned()],
+        };
+        ShapeItem::from_tessellation(7, &mesh)
+    }
+
+    #[test]
+    fn the_origin_snap_prefers_a_feature_then_the_workplane_grid() {
+        use ferrocad_stage::Stage;
+
+        let mut view = identity_viewport(Scene::default());
+        view.set_stage(Stage::new().with_item(snap_triangle()));
+        view.set_snap_grid(Some(0.25));
+        let hit = Hit {
+            id: PickId(7),
+            point: [0.0, 0.0, 0.5],
+            normal: [0.0, 0.0, 1.0],
+            part: 0,
+            element: None,
+            topology: Topology::Triangles,
+            distance: 1.0,
+        };
+        let kind = |device| {
+            view.gizmo_origin_snap(device, Some(&hit))
+                .map(|(_, kind)| kind)
+        };
+
+        // The triangle's vertex at (-0.6, -0.6) projects to (20, 20).
+        assert_eq!(kind([22, 22]), Some(SnapKind::Vertex));
+        // The base edge midpoint projects to (50, 20).
+        assert_eq!(kind([50, 22]), Some(SnapKind::EdgeMid));
+        // Its area-weighted centroid is (0, -0.2) → (50, 40).
+        assert_eq!(kind([50, 40]), Some(SnapKind::Centre));
+        // The workplane origin is (50, 50), also inside the face.
+        assert_eq!(kind([50, 50]), Some(SnapKind::Origin));
+
+        // With nothing under the pointer the workplane grid takes over; the point is on
+        // the z = 0 plane, and no second snap set is invented.
+        view.set_stage(Stage::new());
+        let (point, grid) = view
+            .gizmo_origin_snap([60, 60], None)
+            .expect("the grid fallback applies");
+        assert_eq!(grid, SnapKind::Grid);
+        assert!(point.z.abs() < 1e-9, "the grid point lies on the workplane");
+    }
+
+    #[test]
+    fn the_origin_handle_moves_the_real_frame_and_reports_the_snap() {
+        use ferrocad_stage::{GizmoMode, GizmoTarget, TransformGizmo};
+
+        let camera = gizmo_camera([100, 100]);
+        let viewport = camera.viewport;
+        let mut view = InventorViewport::new(fake(ImageData::default()), camera, Scene::default());
+        view.set_snap_grid(Some(0.25));
+        view.set_gizmo(Some(TransformGizmo::new(
+            42,
+            Vector3::zero(),
+            GizmoMode::Translate,
+        )));
+        view.refresh();
+        let home = view.gizmo().expect("a gizmo").origin();
+
+        // The centre is the re-pivot handle, not a transform handle.
+        assert_eq!(view.gizmo_handle_at([50, 50]), Some(GizmoTarget::Origin));
+        assert!(view.handle_button(viewport.to_logical([50, 50]), 1, true));
+        assert!(view.gizmo_origin_drag.is_some());
+        assert!(
+            view.take_gizmo_origin().is_none(),
+            "nothing yet on the press"
+        );
+
+        // A move drags the **real** frame (no draw-only offset): the pivot has no solver.
+        assert!(view.handle_pointer(viewport.to_logical([62, 58])));
+        assert_ne!(view.gizmo().expect("a gizmo").origin(), home);
+        assert!(view.gizmo().expect("a gizmo").display_offset().is_none());
+        let text = view.readout_text().expect("the pivot readout is live");
+        assert!(text.contains("pivot"), "readout: {text}");
+        assert!(text.contains("grid"), "the readout names the snap: {text}");
+
+        // Release reports the pivot, not a transform commit.
+        assert!(view.handle_button(viewport.to_logical([62, 58]), 1, false));
+        let (point, kind) = view.take_gizmo_origin().expect("a pivot event");
+        assert_eq!(kind, SnapKind::Grid);
+        assert_eq!(view.gizmo().expect("a gizmo").origin(), point);
+        assert!(view.take_gizmo_commit().is_none(), "not a transform commit");
+        assert!(view.take_selection().is_none(), "not a click selection");
+    }
+
+    #[test]
+    fn escape_restores_the_pre_drag_pivot_origin() {
+        use ferrocad_stage::{GizmoMode, TransformGizmo};
+
+        let camera = gizmo_camera([100, 100]);
+        let viewport = camera.viewport;
+        let mut view = InventorViewport::new(fake(ImageData::default()), camera, Scene::default());
+        view.set_snap_grid(Some(0.25));
+        view.set_gizmo(Some(TransformGizmo::new(
+            42,
+            Vector3::zero(),
+            GizmoMode::Translate,
+        )));
+        view.refresh();
+        let home = view.gizmo().expect("a gizmo").origin();
+
+        assert!(view.handle_button(viewport.to_logical([50, 50]), 1, true));
+        assert!(view.handle_pointer(viewport.to_logical([62, 58])));
+        assert_ne!(view.gizmo().expect("a gizmo").origin(), home);
+
+        assert!(view.handle_key(&escape_key()));
+        assert_eq!(view.gizmo().expect("a gizmo").origin(), home);
+        assert!(view.gizmo_origin_drag.is_none());
+        assert!(view.take_gizmo_origin().is_none(), "Esc emits no pivot");
+    }
+
+    #[test]
+    fn the_move_hud_disables_the_origin_handle() {
+        let (mut view, _viewport) = translate_gizmo_view();
+        let origin = GizmoTarget::ALL
+            .iter()
+            .position(|target| *target == GizmoTarget::Origin)
+            .expect("the origin target");
+        assert_eq!(view.gizmo_handle_at([50, 50]), Some(GizmoTarget::Origin));
+
+        view.set_gizmo_preview(true);
+        assert_eq!(
+            view.gizmo_handle_at([50, 50]),
+            None,
+            "no pivot while the HUD is open"
+        );
+        assert!(
+            view.gizmo().expect("a gizmo").items()[origin]
+                .positions()
+                .is_empty(),
+            "the disabled origin is not drawn"
+        );
+
+        view.set_gizmo_preview(false);
+        assert_eq!(view.gizmo_handle_at([50, 50]), Some(GizmoTarget::Origin));
+        assert!(
+            !view.gizmo().expect("a gizmo").items()[origin]
+                .positions()
+                .is_empty(),
+            "closing the form restores the handle"
+        );
+    }
+
     #[test]
     fn the_gizmo_interior_falls_through_to_the_scene() {
-        use ferrocad_stage::{GizmoMode, ShapeItem, Stage, TransformGizmo};
+        use ferrocad_stage::{GizmoMode, GizmoTarget, ShapeItem, Stage, TransformGizmo};
         use ferrocad_types::Vector3;
 
         let size = [100u32, 100u32];
@@ -6014,10 +6392,16 @@ mod tests {
 
         assert_eq!(
             view.gizmo().expect("gizmo").hit(&view.camera, [50, 50]),
+            Some(GizmoTarget::Origin),
+            "the centre is the re-pivot handle now"
+        );
+        // The 10 px disc does not swallow the empty interior around it. A press there
+        // leaves the gizmo alone and starts a scene orbit.
+        assert_eq!(
+            view.gizmo().expect("gizmo").hit(&view.camera, [60, 60]),
             None
         );
-        // A press in the empty interior leaves the gizmo alone and starts a scene orbit.
-        assert!(!view.handle_button(viewport.to_logical([50, 50]), 1, true));
+        assert!(!view.handle_button(viewport.to_logical([60, 60]), 1, true));
         assert!(!view.gizmo().expect("gizmo").is_dragging());
         assert!(
             view.orbit_drag.is_some(),
@@ -6429,11 +6813,12 @@ mod tests {
 
     /// The first device position whose analytic hit test lands on the X axis.
     fn axis_x_grab(view: &InventorViewport<FakeView>) -> [i32; 2] {
-        use ferrocad_stage::GizmoHandle;
+        use ferrocad_stage::{GizmoHandle, GizmoTarget};
         let gizmo = view.gizmo().expect("a gizmo");
         for x in 0..100 {
             for y in 0..100 {
-                if gizmo.hit(&view.camera, [x, y]) == Some(GizmoHandle::AxisX) {
+                if gizmo.hit(&view.camera, [x, y]) == Some(GizmoTarget::Handle(GizmoHandle::AxisX))
+                {
                     return [x, y];
                 }
             }
@@ -6707,7 +7092,7 @@ mod tests {
 
     #[test]
     fn a_skinned_gizmo_still_hits_and_commits_through_the_native_gizmo() {
-        use ferrocad_stage::GizmoHandle;
+        use ferrocad_stage::{GizmoHandle, GizmoTarget};
 
         let (mut view, viewport) = translate_gizmo_view();
         assert!(view.set_gizmo_skin(Some(TEST_SKIN_WGSL.into())));
@@ -6724,7 +7109,7 @@ mod tests {
         let grab = axis_x_grab(&view);
         assert_eq!(
             view.gizmo_handle_at(grab),
-            Some(GizmoHandle::AxisX),
+            Some(GizmoTarget::Handle(GizmoHandle::AxisX)),
             "the native gizmo still owns picking"
         );
 

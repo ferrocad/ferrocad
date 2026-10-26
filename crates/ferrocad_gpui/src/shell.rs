@@ -21,8 +21,10 @@ use gpui::{
 use ferrocad_geom::SelectionRef;
 use ferrocad_inventor::{Scene, Viewport};
 use ferrocad_stage::{
-    DeclarativeManipulator, GizmoMode, InteractionCommit, Manipulator, ToolStatus, TransformGizmo,
+    DeclarativeManipulator, GizmoMode, InteractionCommit, Manipulator, SnapKind, ToolStatus,
+    TransformGizmo,
 };
+use ferrocad_types::Vector3;
 use ferrocad_ui::Form;
 use ferrocad_viewport::scene;
 use ferrocad_viewport::{
@@ -150,6 +152,18 @@ fn gizmo_backend_note(previous: &str, current: &str, skin_supplied: bool) -> Opt
     ))
 }
 
+/// The status-line name of a pivot snap.
+fn snap_name(kind: SnapKind) -> &'static str {
+    match kind {
+        SnapKind::Point => "surface",
+        SnapKind::Grid => "grid",
+        SnapKind::Vertex => "vertex",
+        SnapKind::EdgeMid => "edge mid",
+        SnapKind::Centre => "face centre",
+        SnapKind::Origin => "origin",
+    }
+}
+
 /// The gizmo mode a command's `gizmo` directive names.
 ///
 /// `translate`/`move`, `rotate` and `universal`/`both` are the accepted spellings;
@@ -270,6 +284,11 @@ pub struct Shell {
     /// setting: it survives re-selection and re-arming, and a `Move` resets it to
     /// translate because that command's fields describe a translation.
     gizmo_mode: GizmoMode,
+    /// The session pivot the user dragged the origin handle to. It is applied instead of
+    /// the object origin while set; it is not undoable and not a document property. A
+    /// selection change or a wheel promotion clears it, and `Esc` restores the object
+    /// origin.
+    user_origin: Option<Vector3>,
     /// The anchored overlay a property row opened (a colour palette or a range
     /// slider). It is UI state only: the value itself lives in the parameter store.
     row_popup: Option<RowPopup>,
@@ -600,6 +619,7 @@ impl Shell {
             gpu_adapters: None,
             settings_card: None,
             gizmo_mode: GizmoMode::Translate,
+            user_origin: None,
             row_popup: None,
             scrub: None,
             wheel,
@@ -1085,6 +1105,11 @@ impl Shell {
             if self.dialog.is_none() && self.close_settings_card(cx) {
                 return true;
             }
+            // A session pivot is a pending re-pivot: Esc drops it and rebuilds the
+            // triad at the object origin.
+            if self.clear_user_origin(cx) {
+                return true;
+            }
         }
         if let Some(id) = self.shortcut_for(event) {
             self.run_command(&id, cx);
@@ -1328,8 +1353,17 @@ impl Shell {
             ViewportEvent::Interaction(commit) => self.on_interaction(commit, cx),
             ViewportEvent::Transform(event) => self.on_interaction(&event.to_interaction(), cx),
             ViewportEvent::TransformPreview(preview) => self.on_transform_preview(preview, cx),
+            ViewportEvent::GizmoOrigin { point, kind } => self.on_gizmo_origin(*point, *kind, cx),
             ViewportEvent::ToolState(status) => self.on_tool_state(status, cx),
         }
+    }
+
+    /// The origin/centre handle was released: remember the snapped pivot as the session
+    /// user origin. This is not a transform commit and never touches the document.
+    fn on_gizmo_origin(&mut self, point: Vector3, kind: SnapKind, cx: &mut Context<Self>) {
+        self.user_origin = Some(point);
+        self.model.lock().unwrap().status = format!("pivot: {}", snap_name(kind));
+        cx.notify();
     }
 
     /// A tool started, gained a point, finished or was cancelled: mirror its status
@@ -1517,6 +1551,10 @@ impl Shell {
                             .any(|item| item.object == name)
                     });
             if !already_selected {
+                // A promotion changes the selection subject; a session pivot belonged to
+                // the old subject, so it goes away. (`replace_selection` clears it too;
+                // this also covers a host whose display map cannot name the target.)
+                self.user_origin = None;
                 self.on_selection(
                     &SelectionEvent::Picked {
                         reference: target.reference,
@@ -1621,9 +1659,13 @@ impl Shell {
         }
 
         // The factory's datum is the object origin; the handle set is the shell's
-        // session mode (every factory returns a fresh Translate gizmo).
+        // session mode (every factory returns a fresh Translate gizmo). A session user
+        // origin replaces the datum while set, so a re-arm keeps the user's pivot.
         if let Some(gizmo) = gizmo.as_mut() {
             gizmo.set_mode(self.gizmo_mode);
+            let object_origin = gizmo.origin();
+            gizmo.set_origin(self.gizmo_origin_for(object_origin));
+            gizmo.set_origin_enabled(self.gizmo_origin_enabled());
         }
 
         // Mod-declared handles come after the compiled one. The selection's object
@@ -1656,6 +1698,40 @@ impl Shell {
         }
 
         (manipulators, gizmo)
+    }
+
+    /// The pivot the triad should use for an object whose factory reported
+    /// `object_origin`: the session user origin while set, else that datum.
+    fn gizmo_origin_for(&self, object_origin: Vector3) -> Vector3 {
+        self.user_origin.unwrap_or(object_origin)
+    }
+
+    /// Whether the origin/centre handle is enabled. The floating Move HUD is anchored
+    /// to the visible origin, so the pivot handle is disabled while its translation
+    /// form is open; closing the form re-enables it.
+    fn gizmo_origin_enabled(&self) -> bool {
+        !self
+            .dialog
+            .as_ref()
+            .is_some_and(|dialog| dialog.spec.previews_translation())
+    }
+
+    /// Drop the session pivot and rebuild the selection's triad at the object origin.
+    /// Returns whether a user origin was set.
+    fn clear_user_origin(&mut self, cx: &mut Context<Self>) -> bool {
+        if self.user_origin.take().is_none() {
+            return false;
+        }
+        if let Some(viewport) = self.viewport.clone() {
+            viewport.update(cx, |viewport, cx| {
+                viewport.cancel_gizmo_origin_drag();
+                cx.notify();
+            });
+        }
+        // The factory reports the object origin, so a re-arm restores the frame.
+        self.rearm_selection(cx);
+        cx.notify();
+        true
     }
 
     /// Switch the transform gizmo's handle set from a command's `gizmo` directive.
@@ -2846,6 +2922,8 @@ impl Shell {
         let wheel = self.wheel.clone();
         let _ = wheel.update(cx, |wheel, cx| wheel.close(cx));
         self.wheel_target = None;
+        // A new selection is a new pivot subject: the session user origin goes away.
+        self.user_origin = None;
         if self
             .dialog
             .as_ref()
@@ -5754,6 +5832,121 @@ mod tests {
         shell.update(cx, |shell, cx| shell.cancel_dialog(cx));
     }
 
+    /// Slice 3: the origin handle reports a session pivot, the triad uses it, a new
+    /// selection or a wheel promotion clears it, and `Esc` restores the object origin.
+    #[gpui::test]
+    fn the_session_pivot_follows_the_origin_event_and_escape_restores_it(cx: &mut TestAppContext) {
+        let _guard = crate::PYTHON_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let model = boot_shell();
+        let window = cx.update(|cx| {
+            let model = model.clone();
+            cx.open_window(Default::default(), move |_window, cx| {
+                cx.new(|cx| Shell::from_model(model.clone(), cx))
+            })
+            .unwrap()
+        });
+        let mut cx = VisualTestContext::from_window(window.into(), cx);
+        let shell: Entity<Shell> = window.root(&mut cx).unwrap();
+        draw(&mut cx);
+
+        let pivot = Vector3::new(2.0, 3.0, 0.0);
+        cx.update(|_window, cx| {
+            shell.update(cx, |shell, cx| {
+                shell.select("Params", cx);
+                shell.on_viewport_event(
+                    &ViewportEvent::GizmoOrigin {
+                        point: pivot,
+                        kind: SnapKind::Vertex,
+                    },
+                    cx,
+                );
+            });
+        });
+        assert_eq!(
+            shell.read_with(&cx, |shell, _| shell.user_origin),
+            Some(pivot)
+        );
+
+        // The frame uses the session pivot: a fresh factory gizmo is moved to it.
+        let mut gizmo = TransformGizmo::new(7, Vector3::zero(), GizmoMode::Translate);
+        let object_origin = gizmo.origin();
+        let origin = shell.read_with(&cx, |shell, _| shell.gizmo_origin_for(object_origin));
+        gizmo.set_origin(origin);
+        assert_eq!(gizmo.origin(), pivot);
+
+        // Esc drops the pivot; the next arm reports the object origin again.
+        let root = shell.read_with(&cx, |shell, _| shell.root_focus_handle());
+        cx.update(|window, cx| window.focus(&root, cx));
+        cx.simulate_keystrokes("escape");
+        assert_eq!(shell.read_with(&cx, |shell, _| shell.user_origin), None);
+        let fresh = TransformGizmo::new(7, Vector3::zero(), GizmoMode::Translate);
+        assert_eq!(
+            shell.read_with(&cx, |shell, _| shell.gizmo_origin_for(fresh.origin())),
+            Vector3::zero()
+        );
+
+        // A wheel promotion (a context target acted on) clears it as well.
+        cx.update(|_window, cx| {
+            shell.update(cx, |shell, cx| {
+                shell.on_viewport_event(
+                    &ViewportEvent::GizmoOrigin {
+                        point: pivot,
+                        kind: SnapKind::Grid,
+                    },
+                    cx,
+                );
+                shell.wheel_target = Some(WheelTarget {
+                    reference: SelectionRef {
+                        object: 7,
+                        elements: Vec::new(),
+                    },
+                    anchor: None,
+                });
+                shell.commit_wheel("App_Rotate", cx);
+            });
+        });
+        assert_eq!(shell.read_with(&cx, |shell, _| shell.user_origin), None);
+
+        // A new selection clears it too.
+        cx.update(|_window, cx| {
+            shell.update(cx, |shell, cx| {
+                shell.on_viewport_event(
+                    &ViewportEvent::GizmoOrigin {
+                        point: pivot,
+                        kind: SnapKind::EdgeMid,
+                    },
+                    cx,
+                );
+                shell.toggle_select("Derived", cx);
+            });
+        });
+        assert_eq!(shell.read_with(&cx, |shell, _| shell.user_origin), None);
+    }
+
+    /// The Move form is anchored to the visible origin, so the pivot handle is disabled
+    /// while it is open and re-enabled when the form closes.
+    #[gpui::test]
+    fn the_move_hud_disables_the_origin_handle(cx: &mut TestAppContext) {
+        let _guard = crate::PYTHON_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let model = boot_shell();
+        let shell = cx.update(|cx| cx.new(|cx| Shell::from_model(model.clone(), cx)));
+
+        shell.update(cx, |shell, cx| shell.select("Params", cx));
+        assert!(shell.read_with(cx, |shell, _| shell.gizmo_origin_enabled()));
+
+        shell.update(cx, |shell, cx| shell.run_command("App_Move", cx));
+        assert!(
+            !shell.read_with(cx, |shell, _| shell.gizmo_origin_enabled()),
+            "the translation HUD owns the anchor"
+        );
+
+        shell.update(cx, |shell, cx| shell.cancel_dialog(cx));
+        assert!(
+            shell.read_with(cx, |shell, _| shell.gizmo_origin_enabled()),
+            "closing the form re-enables the handle"
+        );
+    }
+
     /// A3: a command's dialog is validated in the shell, accepted once, and a bad
     /// value keeps the modal open. The command is registered through the console,
     /// so the test exercises the same registry a workbench uses.
@@ -7041,7 +7234,6 @@ for group in legacy:
         let reset = crate::python::evaluate(script).expect("reset the grid state");
         assert!(reset.ok, "{}", reset.output);
     }
-
 
     /// P0.5/D4/D5: closing and reopening preserves the model, the selection and the
     /// console; the second window never owns a copy.

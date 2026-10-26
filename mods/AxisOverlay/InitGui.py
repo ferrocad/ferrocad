@@ -199,10 +199,6 @@ class AxisOverlayCommand:
     def IsActive(self):
         return True
 
-    def IsChecked(self):
-        """The active axis backend reads as the selected mode."""
-        return is_active()
-
     def Activated(self):
         if not is_active():
             return {"status": inactive_status()}

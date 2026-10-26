@@ -618,10 +618,6 @@ class GridOverlayCoinCommand:
     def IsActive(self):
         return True
 
-    def IsChecked(self):
-        """The active grid backend reads as the selected mode in the Grid menu."""
-        return is_active()
-
     def Activated(self):
         if not is_active():
             return {"status": inactive_status()}

@@ -230,10 +230,6 @@ class GizmoOverlayShaderCommand:
     def IsActive(self):
         return True
 
-    def IsChecked(self):
-        """The active gizmo backend reads as the selected mode."""
-        return is_active()
-
     def Activated(self):
         node = settings_node()
         if node is not None:

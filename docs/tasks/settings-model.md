@@ -176,18 +176,27 @@ S0–S4 landed; S5 (document-scoped overrides) remains optional.
 - `View_GridSettings` and the per-mod settings commands return
   `{"select": "Settings/Grid"}` when a grid provider is registered; the modal is
   the fallback only when none is. `CommandOutcome` gained a `select` directive (the
-  facade's `_payload` forwards it), and `Shell::run_command` feeds it through the
-  same selection path a tree click uses. The tree spelling (`Settings/grid`) and
-  the directive's display form (`Settings/Grid`) are treated as one node.
-- Selecting a `Settings/<Feature>` node (from the tree or a command's `select`
-  directive) opens the **modeless settings card**: a draggable 380 px panel over
-  the canvas, no backdrop scrim, a `✕`/`Esc` dismissal, and the same property rows.
-  It reuses `properties_panel` and `commit_property` -> `set_property`; the Dev
-  Tools pane remains a second view of the same `prop_inputs`. No second renderer
-  and no separate settings screen.
+  facade's `_payload` forwards it), and `Shell::run_command` **opens the floating
+  settings card** for a settings node instead of feeding it through the selection
+  path. The tree spelling (`Settings/grid`) and the directive's display form
+  (`Settings/Grid`) are treated as one node.
+- A settings panel is a **tool, not a selection**. Opening it leaves the current
+  object selected (and its gizmo armed); a later selection change does not close it.
+  The card owns its node and rows (`SettingsCard { node, rows }`), re-read after
+  every edit, reset or provider switch, because `ShellModel::properties` follows the
+  selection. It is dismissed only by its `✕` or `Esc`, and it draws above the
+  transient overlays (deferred priority 4).
+- Selecting a `Settings/<Feature>` node **in the tree** still retargets the card —
+  that is the explicit inspector path — while the Dev Tools pane shows the node's
+  rows. A settings *command* does not move the selection at all.
+- The settings rows in a header menu are **actions**: they dismiss the menu. The mod
+  settings commands no longer report `IsChecked` (which had made them look like state
+  rows and kept the menu open), and `run_command_in_place` refuses to restore a menu
+  whose run opened a settings card.
 - gpui tests cover the tree row, the `select` directive, the rows (`provider`, the
-  schema names), an edit, the card's open/drag/close/Esc lifecycle, and that the
-  pane creates a field per editable row.
+  schema names), an edit, the card's open/drag/close/Esc lifecycle, that the pane
+  creates a field per editable row, that the menu closes on a settings row, and that
+  the selection and the card survive each other.
 
 ### S3 — the parameter store is file-backed
 

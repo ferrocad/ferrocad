@@ -179,11 +179,14 @@ different dialog per mod. A provider with no `settings` keeps its `command` as i
 settings entry.
 
 The supported kinds are `text`, `bool`, `int`, `float`, `quantity` (with `unit`),
-`enum` (with `choices`) and `color`. A `color` value is a `#rrggbb` string, and the
-property pane renders it as a swatch plus the hex field: clicking the swatch opens
-`ferrocad_widgets::color::palette` as an anchored overlay, and a pick commits through
-the same path as typing the hex. The palette is a fixed set of neutrals and accents;
-typing an arbitrary colour still works.
+`enum` (with `choices`) and `color`. A settings command opens the floating card for
+the feature's node **without changing the selection** (the object keeps its gizmo),
+and the card stays until its `✕` or `Esc` — a later selection change does not close
+it. A `color` value is a `#rrggbb` string, and the property pane renders it as a
+swatch plus the hex field: clicking the swatch opens `ferrocad_widgets::color::palette`
+as an anchored overlay, and a pick commits through the same path as typing the hex.
+The palette is a fixed set of neutrals and accents; typing an arbitrary colour still
+works.
 
 A numeric row that declares both `min` and `max` gets a slim track beside the field;
 clicking it opens `ferrocad_widgets::slider` as an anchored overlay. The scale is

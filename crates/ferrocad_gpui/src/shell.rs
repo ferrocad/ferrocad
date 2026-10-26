@@ -356,10 +356,18 @@ struct RowPopup {
     dragging: bool,
 }
 
-/// The modeless settings card (A3/T5): a draggable 380 px panel over the canvas
-/// with no backdrop, so the viewport stays interactive. It shows the selected
-/// `Settings/<Feature>` node through the same property rows the Dev Tools pane uses.
+/// The modeless settings card (A3/T5): a draggable 380 px panel over the canvas.
+///
+/// It shows one `Settings/<Feature>` node and is **independent of the document
+/// selection**: opening settings must not deselect the object being edited (which
+/// used to drop its gizmo), and selecting something else must not close the card.
+/// It is dismissed explicitly — its `✕` or `Esc`.
 struct SettingsCard {
+    /// The synthetic settings node the card edits (`Settings/Gizmo`).
+    node: String,
+    /// The rows for `node`, re-read after every edit: the card cannot use
+    /// `ShellModel::properties`, which follows the selection.
+    rows: Vec<PropRow>,
     /// Window coordinates of the card's top-left corner.
     position: Point<Pixels>,
     /// Pointer and card origin when a drag starts.
@@ -742,17 +750,39 @@ impl Shell {
         self.popover_anchor = Some(position);
     }
 
-    /// Open the modeless settings card for a `Settings/<Feature>` selection.
+    /// Open (or retarget) the modeless settings card for a `Settings/<Feature>`
+    /// node.
     ///
-    /// The card keeps its last position and size when reopened; it is the visible
-    /// surface T5 previously reached only through the Dev Tools property pane.
-    fn open_settings_card(&mut self, cx: &mut Context<Self>) {
-        if self.settings_card.is_none() {
-            self.settings_card = Some(SettingsCard {
-                position: point(px(220.), px(96.)),
-                drag: None,
-            });
-            cx.notify();
+    /// This deliberately does **not** touch the document selection: a settings
+    /// panel is a tool over the model, not a selection, so the object being edited
+    /// keeps its selection and its gizmo. The card is dismissed only by its own
+    /// `✕` or `Esc`.
+    fn open_settings_card(&mut self, node: &str, cx: &mut Context<Self>) {
+        let rows = python::properties(node).unwrap_or_default();
+        match self.settings_card.as_mut() {
+            Some(card) => {
+                card.node = node.to_string();
+                card.rows = rows;
+            }
+            None => {
+                self.settings_card = Some(SettingsCard {
+                    node: node.to_string(),
+                    rows,
+                    position: point(px(220.), px(96.)),
+                    drag: None,
+                });
+            }
+        }
+        cx.notify();
+    }
+
+    /// Re-read the card's rows (after an edit, a reset or a provider switch).
+    fn refresh_settings_card(&mut self) {
+        let Some(card) = self.settings_card.as_mut() else {
+            return;
+        };
+        if let Ok(rows) = python::properties(&card.node) {
+            card.rows = rows;
         }
     }
 
@@ -1814,6 +1844,8 @@ impl Shell {
         // follows the new provider.
         self.grid_summary = python::grid_summary().ok();
         self.axis_summary = python::axis_summary().ok();
+        // A provider switch can change the settings schema the card shows.
+        self.refresh_settings_card();
         self.provider_features = python::provider_features().ok();
         self.refresh(cx);
 
@@ -1951,24 +1983,32 @@ impl Shell {
         }
 
         // A **select** directive (T5, S2) is not a failure: the command asks the
-        // shell to show a model-tree node — the synthetic `Settings/<Feature>`
-        // root — so the Properties pane renders its rows. It goes through the
-        // same selection path a tree click uses, so the pane, the facade
-        // snapshot and every command's `IsActive` agree.
+        // shell to show a model-tree node. A `Settings/<Feature>` node opens the
+        // floating settings card **without** changing the selection — a settings
+        // panel is a tool, not a selection, so the object being edited keeps its
+        // selection and its gizmo. Every other node is a selection as before.
         let selected = outcome
             .select
             .clone()
             .filter(|name| !name.trim().is_empty());
-        if let Some(name) = &selected {
-            self.select(name, cx);
-            if name.starts_with("Settings/") {
-                self.open_settings_card(cx);
+        let changed_selection = match &selected {
+            Some(name) if name.starts_with("Settings/") => {
+                self.open_settings_card(name, cx);
+                false
             }
-        }
+            Some(name) => {
+                self.select(name, cx);
+                true
+            }
+            None => false,
+        };
 
         self.refresh(cx);
         self.sync_stage(cx);
-        if self.active_tool.is_none() && selected.is_none() {
+        // A settings action (the reset row, a provider switch) changes the rows the
+        // card shows; this is a no-op while the card is closed.
+        self.refresh_settings_card();
+        if self.active_tool.is_none() && !changed_selection {
             // A command can move or resize a selected object (or undo such an edit);
             // keep its handles attached to the new geometry.
             self.rearm_selection(cx);
@@ -1999,8 +2039,16 @@ impl Shell {
     /// A command that opens a modal wins: the menu is not restored under it.
     pub(crate) fn run_command_in_place(&mut self, id: &str, cx: &mut Context<Self>) {
         let popover = self.open_popover.clone();
+        let card_before = self.settings_card.is_some();
         self.run_command(id, cx);
-        if self.dialog.is_none() && self.form_dialog.is_none() {
+        // A run that opened a dialog, a form or the settings card owns the screen
+        // now, so the menu must not stay on top of it even when the command reports
+        // `IsChecked` (a settings command's check state means "this backend is
+        // active", not "keep the menu open").
+        let opened_surface = self.dialog.is_some()
+            || self.form_dialog.is_some()
+            || (self.settings_card.is_some() && !card_before);
+        if !opened_surface {
             self.open_popover = popover;
         }
     }
@@ -2739,9 +2787,13 @@ impl Shell {
             (1, Some(name)) => format!("selected {name}"),
             (count, Some(name)) => format!("selected {count} · {name}"),
         };
+        // A tree click on a settings node retargets the card. Selecting an object
+        // does **not** close it: the settings panel is dismissed explicitly, so a
+        // user can keep editing while an object stays selected (and its gizmo on).
         let settings_node = primary
             .as_deref()
-            .is_some_and(|name| name.starts_with("Settings/"));
+            .filter(|name| name.starts_with("Settings/"))
+            .map(str::to_string);
         {
             let mut m = self.model.lock().unwrap();
             m.selection = items;
@@ -2749,10 +2801,8 @@ impl Shell {
             m.properties = properties;
             m.status = status;
         }
-        if settings_node {
-            self.open_settings_card(cx);
-        } else {
-            self.settings_card = None;
+        if let Some(node) = &settings_node {
+            self.open_settings_card(node, cx);
         }
         if let Err(error) = self.push_selection() {
             self.console_line(format!("selection: {error}"), cx);
@@ -2825,13 +2875,6 @@ impl Shell {
             .as_deref()
             .map(|name| python::properties(name).unwrap_or_default())
             .unwrap_or_default();
-        // A document selection has no settings card; a `Settings/...` node keeps it.
-        if !primary
-            .as_deref()
-            .is_some_and(|name| name.starts_with("Settings/"))
-        {
-            self.settings_card = None;
-        }
         {
             let mut m = self.model.lock().unwrap();
             m.tree = tree;
@@ -2925,6 +2968,9 @@ impl Shell {
                 self.refresh(cx);
                 self.sync_stage(cx);
                 self.rearm_selection(cx);
+                // The card owns its own rows, so a settings edit has to re-read
+                // them here as well as refresh the model's properties.
+                self.refresh_settings_card();
                 format!("set {key}")
             }
             Ok(result) => format!("property error: {}", result.error),
@@ -3658,6 +3704,9 @@ pub(crate) fn tree_panel(
 
 /// The property editor: read-only rows plus an uncontrolled field for each
 /// editable property.
+///
+/// The Dev Tools pane shows the current selection; the settings card calls
+/// [`properties_rows_panel`] directly with its own node and rows.
 pub(crate) fn properties_panel(
     shell: &mut Shell,
     model: &ShellModel,
@@ -3665,9 +3714,31 @@ pub(crate) fn properties_panel(
     scroll: &ScrollHandle,
     cx: &mut Context<Shell>,
 ) -> impl IntoElement + use<> {
+    properties_rows_panel(
+        shell,
+        model.selected.as_deref(),
+        &model.properties,
+        window,
+        scroll,
+        cx,
+    )
+}
+
+/// The property rows for one node.
+///
+/// The rows come in as a parameter so a surface that does not own the selection
+/// (the floating settings card) can show its own node.
+fn properties_rows_panel(
+    shell: &mut Shell,
+    selected: Option<&str>,
+    properties: &[PropRow],
+    window: &Window,
+    scroll: &ScrollHandle,
+    cx: &mut Context<Shell>,
+) -> impl IntoElement + use<> {
     let mut rows = div().flex().flex_col();
 
-    match &model.selected {
+    match selected {
         None => {
             rows = rows.child(
                 div()
@@ -3685,9 +3756,9 @@ pub(crate) fn properties_panel(
                     .py_1()
                     .text_xs()
                     .text_color(rgb(FG))
-                    .child(name.clone()),
+                    .child(name.to_string()),
             );
-            for row in &model.properties {
+            for row in properties {
                 let value: AnyElement = if let Some(command) = row.command.clone() {
                     // A generated action row (the settings card's `Reset to edition
                     // defaults`). It runs a real command, not a property edit, so the
@@ -4137,7 +4208,9 @@ fn row_popup_overlay(
                 .snap_to_window_with_margin(px(8.))
                 .child(panel),
         )
-        .with_priority(2)
+        // Above the settings card (priority 4): the palette and the slider are
+        // opened *from* the card and must paint over it.
+        .with_priority(5)
         .into_any_element(),
     )
 }
@@ -4169,25 +4242,20 @@ fn settings_title(name: &str) -> String {
 
 /// The modeless settings card (A3/T5): a draggable `380 px` panel over the canvas.
 ///
-/// It has no backdrop, renders the same rows as the Dev Tools property pane, and is
-/// dismissed with its `✕` or `Esc`. The position is window coordinates so it survives
-/// a drag across the canvas.
+/// It has no backdrop, renders its own `Settings/<Feature>` rows (not the current
+/// selection's), and is dismissed with its `✕` or `Esc` — never by a selection
+/// change. The position is window coordinates so it survives a drag across the
+/// canvas.
 fn settings_card_view(
     shell: &mut Shell,
-    model: &ShellModel,
     window: &Window,
     cx: &mut Context<Shell>,
 ) -> impl IntoElement {
-    let position = shell
-        .settings_card
-        .as_ref()
-        .map(|card| card.position)
-        .unwrap_or_else(|| point(px(220.), px(96.)));
-    let title = model
-        .selected
-        .as_deref()
-        .map(settings_title)
-        .unwrap_or_else(|| "Settings".to_string());
+    let (position, node, rows) = match shell.settings_card.as_ref() {
+        Some(card) => (card.position, card.node.clone(), card.rows.clone()),
+        None => (point(px(220.), px(96.)), String::new(), Vec::new()),
+    };
+    let title = settings_title(&node);
 
     let header = div()
         .id("settings-card-header")
@@ -4223,7 +4291,7 @@ fn settings_card_view(
 
     let panel = {
         let scroll = shell.dev_scroll.settings.clone();
-        properties_panel(shell, model, window, &scroll, cx)
+        properties_rows_panel(shell, Some(&node), &rows, window, &scroll, cx)
     };
     let card = div()
         .id("settings-card")
@@ -4258,7 +4326,9 @@ fn settings_card_view(
             .snap_to_window_with_margin(px(8.))
             .child(card),
     )
-    .with_priority(2)
+    // Above the floating HUD and the wheel: the card is what the user is working
+    // in, and it must not be covered by a transient overlay.
+    .with_priority(4)
 }
 
 /// The globally bindable accelerators for `commands`.
@@ -4648,7 +4718,7 @@ impl Render for Shell {
         } else if self.palette.is_some() {
             body.child(palette_overlay(self, &model, cx))
         } else if self.settings_card.is_some() {
-            body.child(settings_card_view(self, &model, window, cx))
+            body.child(settings_card_view(self, window, cx))
         } else {
             body
         };
@@ -7199,7 +7269,8 @@ if "App_ReloadAxisSettings" not in FreeCADGui.listCommands():
                 "the other backend is listed but not active"
             );
         }
-        // The active backend's mode row is checked; the inactive one is not.
+        // A settings command is an **action**, not a checkable state row (the
+        // provider rows above it carry the active dot).
         {
             let model = model.lock().unwrap();
             let checked = |id: &str| {
@@ -7211,13 +7282,10 @@ if "App_ReloadAxisSettings" not in FreeCADGui.listCommands():
                     .unwrap_or(false)
             };
             assert!(
-                checked("GridOverlay_Settings"),
-                "the active native backend reads as checked"
+                !checked("GridOverlay_Settings"),
+                "the settings row is an action, not a checked mode"
             );
-            assert!(
-                !checked("GridOverlayCoin_Settings"),
-                "the inactive Coin backend is unchecked"
-            );
+            assert!(!checked("GridOverlayCoin_Settings"));
         }
 
         // Switching the provider through the Settings node's selector refreshes
@@ -7374,8 +7442,71 @@ if "App_ReloadAxisSettings" not in FreeCADGui.listCommands():
 
     /// T5/S2: `View_GridSettings` asks the shell to select the synthetic
     /// `Settings/Grid` node, and the existing Properties pane renders its rows.
+    /// A settings entry in a header menu is an **action** row: clicking it closes
+    /// the menu, opens the card for that feature, and leaves the selection alone.
     #[gpui::test]
-    fn view_grid_settings_selects_the_settings_node(cx: &mut TestAppContext) {
+    fn a_settings_menu_row_closes_the_popover(cx: &mut TestAppContext) {
+        let _guard = crate::PYTHON_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let model = boot_shell();
+        let window = cx.update(|cx| {
+            let model = model.clone();
+            cx.open_window(Default::default(), move |_window, cx| {
+                cx.new(|cx| Shell::from_model(model.clone(), cx))
+            })
+            .unwrap()
+        });
+        let mut cx = VisualTestContext::from_window(window.into(), cx);
+        let shell: Entity<Shell> = window.root(&mut cx).unwrap();
+
+        cx.update(|_window, cx| {
+            shell.update(cx, |shell, cx| shell.select("Params", cx))
+        });
+        draw(&mut cx);
+
+        click_at(&mut cx, "gizmo-caret");
+        draw(&mut cx);
+        assert!(cx.debug_bounds("gizmo-popover").is_some());
+
+        let settings_row = if cx
+            .debug_bounds("gizmo-row-GizmoOverlay_Settings")
+            .is_some()
+        {
+            "gizmo-row-GizmoOverlay_Settings"
+        } else {
+            "gizmo-row-GizmoOverlayShader_Settings"
+        };
+        click_at(&mut cx, settings_row);
+        draw(&mut cx);
+
+        assert!(
+            cx.debug_bounds("gizmo-popover").is_none(),
+            "choosing a settings entry closes the menu"
+        );
+        let node = cx.update(|_window, cx| {
+            shell
+                .read(cx)
+                .settings_card
+                .as_ref()
+                .map(|card| card.node.clone())
+        });
+        assert_eq!(
+            node.as_deref(),
+            Some("Settings/Gizmo"),
+            "the card opened for the gizmo"
+        );
+        let selected = model.lock().unwrap().selected.clone();
+        assert_eq!(
+            selected.as_deref(),
+            Some("Params"),
+            "the object stayed selected"
+        );
+    }
+
+    /// `View_GridSettings` opens the floating card **without** changing the
+    /// selection: a settings panel is a tool, so the edited object keeps its
+    /// selection and its gizmo.
+    #[gpui::test]
+    fn view_grid_settings_opens_the_card_without_selecting(cx: &mut TestAppContext) {
         let _guard = crate::PYTHON_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let model = boot_shell();
         // Boot first: it puts the facade on `sys.path`, which the reset needs.
@@ -7399,6 +7530,10 @@ if "App_ReloadAxisSettings" not in FreeCADGui.listCommands():
         let shell: Entity<Shell> = window.root(&mut cx).unwrap();
 
         cx.update(|_window, cx| {
+            shell.update(cx, |shell, cx| shell.select("Params", cx))
+        });
+
+        cx.update(|_window, cx| {
             shell.update(cx, |shell, cx| shell.run_command("View_GridSettings", cx))
         });
 
@@ -7406,22 +7541,28 @@ if "App_ReloadAxisSettings" not in FreeCADGui.listCommands():
             let m = model.lock().unwrap();
             assert_eq!(
                 m.selected.as_deref(),
-                Some("Settings/Grid"),
-                "the directive selected the node"
+                Some("Params"),
+                "opening settings keeps the object selected"
             );
             assert!(
-                m.selection.iter().any(|item| item.is("Settings/Grid")),
-                "through the normal selection path"
+                m.selection.iter().any(|item| item.is("Params")),
+                "the selection list is untouched"
             );
-            let names: Vec<&str> = m.properties.iter().map(|row| row.name.as_str()).collect();
-            assert!(names.contains(&"provider"), "rows: {names:?}");
-            assert!(names.contains(&"minor"), "rows: {names:?}");
             assert!(
-                m.status.contains("Settings/Grid"),
-                "the selection status is kept: {}",
+                m.status.contains("Params"),
+                "no settings node replaced the status: {}",
                 m.status
             );
         }
+        let (node, rows) = cx.update(|_window, cx| {
+            let shell = shell.read(cx);
+            let card = shell.settings_card.as_ref().expect("the settings card");
+            (card.node.clone(), card.rows.clone())
+        });
+        assert_eq!(node, "Settings/Grid", "the card edits the requested node");
+        let names: Vec<&str> = rows.iter().map(|row| row.name.as_str()).collect();
+        assert!(names.contains(&"provider"), "rows: {names:?}");
+        assert!(names.contains(&"minor"), "rows: {names:?}");
         assert!(
             cx.update(|_window, cx| shell.read(cx).dialog.is_none()),
             "the select directive is not the modal fallback"
@@ -7478,6 +7619,16 @@ if "App_ReloadAxisSettings" not in FreeCADGui.listCommands():
             "the header drag moved the card"
         );
 
+        // Selecting another object does not close the panel: it is dismissed only
+        // by its own ✕ or Esc.
+        cx.update(|_window, cx| {
+            shell.update(cx, |shell, cx| shell.select("Derived", cx))
+        });
+        assert!(
+            cx.update(|_window, cx| shell.read(cx).settings_card.is_some()),
+            "a selection change leaves the settings panel open"
+        );
+
         // The close button and Esc both dismiss it without losing the selection.
         click_at(&mut cx, "settings-card-close");
         assert!(cx.update(|_window, cx| shell.read(cx).settings_card.is_none()));
@@ -7531,8 +7682,11 @@ if "App_ReloadAxisSettings" not in FreeCADGui.listCommands():
             "field bounds {field:?}"
         );
 
-        // The same pane in Dev Tools must not collapse either. It shares the shell's
-        // selection, so the settings rows are already there.
+        // The same pane in Dev Tools must not collapse either. It is selection
+        // driven, so select the settings node there explicitly.
+        cx.update(|_window, cx| {
+            shell.update(cx, |shell, cx| shell.select("Settings/Grid", cx))
+        });
         let mut dev_cx = open_dev_tools(&mut cx, &shell);
         show_dev_section(&mut cx, &shell, &mut dev_cx, dev_section::PROPERTIES);
         let area = dev_cx
@@ -7596,13 +7750,14 @@ if "App_ReloadAxisSettings" not in FreeCADGui.listCommands():
                 .is_none(),
             "picking closes the palette"
         );
-        let stored = model
-            .lock()
-            .unwrap()
-            .properties
-            .iter()
-            .find(|row| row.name == "color")
-            .map(|row| row.value.clone());
+        let stored = cx.update(|_window, cx| {
+            shell.read(cx).settings_card.as_ref().and_then(|card| {
+                card.rows
+                    .iter()
+                    .find(|row| row.name == "color")
+                    .map(|row| row.value.clone())
+            })
+        });
         assert_eq!(stored.as_deref(), Some("#ef4444"), "the pick was committed");
 
         reset_grid_state();
@@ -7714,16 +7869,23 @@ if "App_ReloadAxisSettings" not in FreeCADGui.listCommands():
 
         {
             let m = model.lock().unwrap();
-            assert_eq!(
-                m.selected.as_deref(),
-                Some("Settings/Grid"),
-                "the field click did not clear the selection"
-            );
             assert!(
-                m.properties.iter().any(|row| row.name == "minor"),
-                "the settings rows are still loaded"
+                m.selected.is_none(),
+                "opening settings does not select a node"
             );
         }
+        let rows = cx.update(|_window, cx| {
+            shell
+                .read(cx)
+                .settings_card
+                .as_ref()
+                .map(|card| card.rows.clone())
+                .unwrap_or_default()
+        });
+        assert!(
+            rows.iter().any(|row| row.name == "minor"),
+            "the settings rows are still loaded"
+        );
         assert!(
             cx.update(|_window, cx| shell.read(cx).settings_card.is_some()),
             "the card stays open while a field is edited"

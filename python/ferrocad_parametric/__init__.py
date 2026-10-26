@@ -8,8 +8,9 @@ one creation command:
 * `FerroCAD.register_display_provider` — how a `Part` object is tessellated for the
   viewport;
 * `FerroCAD.register_interaction_provider` — what a manipulator commit means (the edge
-  dress-up arc's `dress_up` / `fillet` / `chamfer`, and the generic gizmo's
-  `transform` / `apply` as a placement change);
+  dress-up arc's `dress_up` / `fillet` / `chamfer`, the face push/pull stem's
+  `push_pull` / `extrude` / `pocket`, and the generic gizmo's `transform` / `apply` as
+  a placement change);
 * `Part_Box` — a dock command that creates a box in one transaction, the way the toy
   workbench's `Toy_MakeSlab` does.
 
@@ -18,17 +19,19 @@ Objects this script creates carry `DisplayMode` and `Color` dynamic properties. 
 and falls back to the edition's original opaque grey when they are absent (an opened
 `.FCStd`, or an object created outside this workbench).
 
-The Rust half of the same contribution (the scrubber itself) is
-`ferrocad_part_gui::fillet_manipulator`, which the edition's `main` adds to
-`ferrocad::base_contributions()` — the composition that already carries the shared
-translate gizmo. The shell hosts both through the generic `Manipulator` and
-`TransformGizmo` seams, so it never names Part.
+The Rust half of the same contribution (the scrubber and the stem) is
+`ferrocad_part_gui::fillet_manipulator` and `ferrocad_part_gui::push_pull_manipulator`,
+which the edition's `main` adds to `ferrocad::base_contributions()` — the composition
+that already carries the shared translate gizmo. The shell hosts both through the
+generic `Manipulator` and `TransformGizmo` seams, so it never names Part.
 
 The shell imports this module by name (the edition's `HostConfig.entry_module`), so
 it must re-export every entry point the shell calls.
 """
 
 from __future__ import annotations
+
+import math
 
 import FreeCAD
 import FreeCADGui
@@ -58,6 +61,14 @@ _DISPLAY_KEYS = {
 
 def _display_mesh(obj):
     """Tessellate a shape-bearing object (the Part display hook)."""
+    # An invisible object is not drawn, the same as upstream's view provider. This is
+    # what keeps a push/pull's intermediate `Part::Extrusion` out of the stage: the
+    # boolean result is the visible solid, and the prism it was built from is hidden.
+    try:
+        if not obj.Visibility:
+            return None
+    except Exception:
+        pass
     shape = getattr(obj, "Shape", None)
     if shape is None:
         return None
@@ -109,13 +120,123 @@ def _apply_object_placement(mesh, placement):
         ]
 
 
-def _interaction(obj, manipulator, action, element, values):
-    """Apply a manipulator commit: the Part edge dress-up or a move.
+def _face_normal(obj, element):
+    """The outward unit normal of a face, in the shape's **local** frame.
 
-    Two operations reach this workbench:
+    The viewport's ``SelectionAnchor.normal`` is world-space because
+    :func:`_apply_object_placement` bakes the object's ``Placement`` into the display
+    tessellation. ``Part::Extrusion`` works in shape-local coordinates, so this hook
+    re-derives the normal from the shape's own mesh rather than undoing the placement.
+
+    The kernel duplicates vertices per face and tags each triangle with its part id, so
+    the named face is exactly the triangles whose part id matches; their area-weighted
+    cross-product sum is the outward normal. ``None`` when the element is absent or the
+    triangles cancel (a non-planar face).
+    """
+    shape = getattr(obj, "Shape", None)
+    if shape is None or shape.isNull():
+        return None
+    mesh = shape.mesh()
+    parts = list(mesh.get("parts") or ())
+    try:
+        face = parts.index(element)
+    except ValueError:
+        return None
+    positions = mesh.get("positions") or ()
+    triangles = mesh.get("triangles") or ()
+    triangle_parts = mesh.get("triangle_parts") or ()
+    normal = [0.0, 0.0, 0.0]
+    for index, part in enumerate(triangle_parts):
+        if part != face:
+            continue
+        base = 3 * index
+        try:
+            a = positions[triangles[base]]
+            b = positions[triangles[base + 1]]
+            c = positions[triangles[base + 2]]
+        except (IndexError, TypeError):
+            continue
+        ab = (b[0] - a[0], b[1] - a[1], b[2] - a[2])
+        ac = (c[0] - a[0], c[1] - a[1], c[2] - a[2])
+        normal[0] += ab[1] * ac[2] - ab[2] * ac[1]
+        normal[1] += ab[2] * ac[0] - ab[0] * ac[2]
+        normal[2] += ab[0] * ac[1] - ab[1] * ac[0]
+    length = math.sqrt(sum(component * component for component in normal))
+    if length < 1e-12:
+        return None
+    return tuple(component / length for component in normal)
+
+
+def _push_pull(obj, element, distance):
+    """Extrude or pocket the named face by ``distance`` in one transaction.
+
+    ``distance`` is signed along the face's outward normal. The extrusion is built in
+    the body's **shape-local** frame (``_face_normal``) and a ``Part::Extrusion``
+    resolves the named sub-shape as its ``Base``. A positive distance is fused, a
+    negative one cut; both are one undoable transaction. The intermediate extrusion is
+    hidden, so the boolean result is the only solid the display hook draws.
+    """
+    if abs(distance) < 1e-9:
+        return {"ok": True}
+    if not element:
+        return {"ok": False, "error": "push/pull needs a face element"}
+    normal = _face_normal(obj, element)
+    if normal is None:
+        return {"ok": False, "error": f"{element} is not a planar face"}
+
+    doc = obj.Document
+    label = "Extrude" if distance > 0.0 else "Pocket"
+    doc.openTransaction(f"{label} {obj.Name}")
+    try:
+        extrusion = doc.getObject(f"{obj.Name}_Extrusion")
+        if extrusion is None:
+            extrusion = doc.addObject("Part::Extrusion", f"{obj.Name}_Extrusion")
+        extrusion.Base = (obj, [element])
+        extrusion.DirMode = "Custom"
+        extrusion.Dir = FreeCAD.Vector(*normal)
+        extrusion.Solid = True
+        extrusion.LengthFwd = abs(distance)
+        extrusion.Reversed = distance < 0.0
+        extrusion.Visibility = False
+
+        kind = "Part::Fuse" if distance > 0.0 else "Part::Cut"
+        feature_name = f"{obj.Name}_{'Fuse' if distance > 0.0 else 'Cut'}"
+        feature = doc.getObject(feature_name)
+        if feature is None:
+            feature = doc.addObject(kind, feature_name)
+        feature.Base = obj
+        feature.Tool = extrusion
+        # The boolean is built from shape-local operands (the display hook bakes the
+        # body's `Placement`), and `Part::Fuse`/`Cut` carry no Placement of their own,
+        # so give the result the body's placement to keep a moved body where it was.
+        placement = getattr(obj, "Placement", None)
+        if placement is not None:
+            if not hasattr(feature, "Placement"):
+                feature.addProperty(
+                    "App::PropertyPlacement",
+                    "Placement",
+                    "Base",
+                    "Placement of the combined solid",
+                )
+            feature.Placement = placement
+        doc.recompute()
+        doc.commitTransaction()
+    except Exception as exc:
+        doc.abortTransaction()
+        return {"ok": False, "error": str(exc)}
+    return {"ok": True, "feature": feature_name}
+
+
+def _interaction(obj, manipulator, action, element, values):
+    """Apply a manipulator commit: a Part dress-up, a push/pull or a move.
+
+    Three operations reach this workbench:
 
     * ``dress_up`` / ``fillet``/``chamfer`` — the Rust edge scrubber; ``values`` are
       the radius and the second distance.
+    * ``push_pull`` / ``extrude``/``pocket`` — the Rust face stem; ``values[0]`` is the
+      signed distance along the face normal. Outward is an ``extrude`` (fuse), inward a
+      ``pocket`` (cut).
     * ``transform`` / ``apply`` — the generic ``TransformGizmo``; ``values`` are the 16
       row-major elements of the world-space transform, composed with the object's
       current placement (the same contract the toy workbench implements).
@@ -138,6 +259,9 @@ def _interaction(obj, manipulator, action, element, values):
             doc.abortTransaction()
             return {"ok": False, "error": str(exc)}
         return {"ok": True}
+
+    if manipulator == "push_pull" and action in ("extrude", "pocket") and values:
+        return _push_pull(obj, element, float(values[0]))
 
     if manipulator != "dress_up":
         return None

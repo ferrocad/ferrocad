@@ -20,7 +20,10 @@
 //! fused before the cut, and a compound base is cut child by child.
 
 use cxx::UniquePtr;
-use ferrocad_curves::{Arc, Circle, EdgeCurve, Ellipse, Line, Vector3};
+use ferrocad_curves::{
+    Arc, ArcOfHyperbola, ArcOfParabola, BezierCurve, Circle, EdgeCurve, Ellipse, EllipticalArc,
+    Hyperbola, Line, NurbsCurve, OffsetCurve, Parabola, Vector3,
+};
 use ferrocad_geom::{
     BsplineSurfaceData, Capabilities, Continuity, ElementId, ElementKind, ElementRef, GeomError,
     GeometryBackend, History, Lineage, MapVersion, MassProperties, OpResult, OperandId,
@@ -513,6 +516,65 @@ impl GeometryBackend for OcctBackend {
             }
             EdgeCurve::Line(_) => Err(unsupported("make_edge for an infinite line")),
             EdgeCurve::Ellipse(ellipse) => edge_from_ellipse(ellipse),
+            EdgeCurve::EllipticalArc(arc) => {
+                let ellipse = arc.ellipse();
+                edge_from_conic(
+                    3,
+                    &ellipse,
+                    arc.first(),
+                    arc.last(),
+                    "make_edge (elliptical arc)",
+                )
+            }
+            EdgeCurve::Hyperbola(_) => Err(unsupported("make_edge for an unbounded hyperbola")),
+            EdgeCurve::ArcOfHyperbola(arc) => {
+                let hyperbola = arc.hyperbola();
+                edge_from_conic(
+                    4,
+                    &hyperbola,
+                    arc.first(),
+                    arc.last(),
+                    "make_edge (arc of hyperbola)",
+                )
+            }
+            EdgeCurve::Parabola(_) => Err(unsupported("make_edge for an unbounded parabola")),
+            EdgeCurve::ArcOfParabola(arc) => {
+                let parabola = arc.parabola();
+                edge_from_conic(
+                    5,
+                    &parabola,
+                    arc.first(),
+                    arc.last(),
+                    "make_edge (arc of parabola)",
+                )
+            }
+            EdgeCurve::BezierCurve(curve) => edge_from_bezier(curve),
+            EdgeCurve::BSplineCurve(curve) => edge_from_nurbs(curve),
+            EdgeCurve::OffsetCurve(curve) => {
+                let basis = self.make_edge(curve.basis())?;
+                let basis_occt = downcast(&basis)?;
+                let basis_guard = basis_occt.borrow();
+                let basis_inner = basis_guard
+                    .as_ref()
+                    .ok_or(OcctError::InvalidInput { what: "null basis edge" })?;
+                let direction = curve.direction();
+                let edge = bridge::fc_offset_curve_edge(
+                    basis_inner,
+                    curve.offset(),
+                    direction.x,
+                    direction.y,
+                    direction.z,
+                    curve.first(),
+                    curve.last(),
+                );
+                let Some(edge) = edge.as_ref() else {
+                    return Err(OcctError::NotDone {
+                        operation: "make_edge (offset curve)",
+                    }
+                    .into());
+                };
+                Ok(erase(edge))
+            }
         }
     }
 
@@ -1168,26 +1230,7 @@ impl GeometryBackend for OcctBackend {
         if data.len() < 14 {
             return Err(unsupported("curve_of: the bridge returned no curve data"));
         }
-        let origin = Vector3::new(data[1], data[2], data[3]);
-        let direction = Vector3::new(data[4], data[5], data[6]);
-        let x_axis = Vector3::new(data[7], data[8], data[9]);
-        let (first, last) = (data[10], data[11]);
-        let (major, minor) = (data[12], data[13]);
-        match data[0] as i32 {
-            1 => Ok(EdgeCurve::Line(Line::new(origin, direction)?)),
-            2 => {
-                let circle = Circle::with_axis(origin, direction, x_axis, major)?;
-                if (last - first).abs() >= std::f64::consts::TAU - 1e-9 {
-                    Ok(EdgeCurve::Circle(circle))
-                } else {
-                    Ok(EdgeCurve::Arc(Arc::new(circle, first, last)?))
-                }
-            }
-            3 => Ok(EdgeCurve::Ellipse(Ellipse::with_axis(
-                origin, direction, x_axis, major, minor,
-            )?)),
-            _ => Err(unsupported("curve_of: unsupported curve type")),
-        }
+        parse_edge_curve(&data)
     }
 
     fn fuse(&self, a: &Shape, b: &Shape) -> Result<OpResult, GeomError> {
@@ -3278,6 +3321,260 @@ fn flatten(points: &[Vector3]) -> Vec<f64> {
     coords
 }
 
+/// The frame of an elliptical conic, in the form `fc_conic_edge` takes.
+trait ConicFrame {
+    fn conic_frame(&self) -> (Vector3, Vector3, Vector3, f64, f64);
+}
+
+impl ConicFrame for Ellipse {
+    fn conic_frame(&self) -> (Vector3, Vector3, Vector3, f64, f64) {
+        (
+            self.center(),
+            self.normal(),
+            self.x_axis(),
+            self.major_radius(),
+            self.minor_radius(),
+        )
+    }
+}
+
+impl ConicFrame for Hyperbola {
+    fn conic_frame(&self) -> (Vector3, Vector3, Vector3, f64, f64) {
+        (
+            self.center(),
+            self.normal(),
+            self.x_axis(),
+            self.major_radius(),
+            self.minor_radius(),
+        )
+    }
+}
+
+impl ConicFrame for Parabola {
+    fn conic_frame(&self) -> (Vector3, Vector3, Vector3, f64, f64) {
+        (
+            self.vertex(),
+            self.normal(),
+            self.x_axis(),
+            self.focal(),
+            0.0,
+        )
+    }
+}
+
+/// Read the flat payload `fc_curve.hxx`'s `fc_edge_curve` writes.
+///
+/// See that function for the layout: a 14-value header plus a kind-specific tail.
+fn parse_edge_curve(data: &[f64]) -> Result<EdgeCurve, GeomError> {
+    if data.len() < 14 {
+        return Err(unsupported("curve_of: the bridge returned no curve data"));
+    }
+    let origin = Vector3::new(data[1], data[2], data[3]);
+    let direction = Vector3::new(data[4], data[5], data[6]);
+    let x_axis = Vector3::new(data[7], data[8], data[9]);
+    let (first, last) = (data[10], data[11]);
+    let (major, minor) = (data[12], data[13]);
+    let tail = &data[14..];
+    match data[0] as i32 {
+        1 => Ok(EdgeCurve::Line(Line::new(origin, direction)?)),
+        2 => {
+            let circle = Circle::with_axis(origin, direction, x_axis, major)?;
+            if (last - first).abs() >= std::f64::consts::TAU - 1e-9 {
+                Ok(EdgeCurve::Circle(circle))
+            } else {
+                Ok(EdgeCurve::Arc(Arc::new(circle, first, last)?))
+            }
+        }
+        3 => {
+            let ellipse = Ellipse::with_axis(origin, direction, x_axis, major, minor)?;
+            if (last - first).abs() >= std::f64::consts::TAU - 1e-9 {
+                Ok(EdgeCurve::Ellipse(ellipse))
+            } else {
+                Ok(EdgeCurve::EllipticalArc(EllipticalArc::new(
+                    ellipse, first, last,
+                )?))
+            }
+        }
+        4 => {
+            let hyperbola = Hyperbola::with_axis(origin, direction, x_axis, major, minor)?;
+            Ok(EdgeCurve::ArcOfHyperbola(ArcOfHyperbola::new(
+                hyperbola, first, last,
+            )?))
+        }
+        5 => {
+            let parabola = Parabola::with_axis(origin, direction, x_axis, major)?;
+            Ok(EdgeCurve::ArcOfParabola(ArcOfParabola::new(
+                parabola, first, last,
+            )?))
+        }
+        6 => parse_bezier(tail, first, last),
+        7 => parse_bspline(tail),
+        8 => parse_offset(tail, direction, major, first, last),
+        _ => Err(unsupported("curve_of: unsupported curve type")),
+    }
+}
+
+/// `count` consecutive xyz triples from `values`.
+fn parse_points(values: &[f64], count: usize) -> Result<Vec<Vector3>, GeomError> {
+    let count3 = count.checked_mul(3).ok_or_else(|| unsupported("curve_of: truncated poles"))?;
+    let coordinates = values
+        .get(..count3)
+        .ok_or_else(|| unsupported("curve_of: truncated poles"))?;
+    Ok(coordinates
+        .chunks_exact(3)
+        .map(|triple| Vector3::new(triple[0], triple[1], triple[2]))
+        .collect())
+}
+
+/// A Bezier payload: `[pole_count] poles weights`.
+fn parse_bezier(tail: &[f64], first: f64, last: f64) -> Result<EdgeCurve, GeomError> {
+    let count = tail
+        .first()
+        .map(|value| *value as usize)
+        .ok_or_else(|| unsupported("curve_of: truncated Bezier"))?;
+    let poles = parse_points(&tail[1..], count)?;
+    let weight_start = 1 + count * 3;
+    let weights = tail
+        .get(weight_start..weight_start + count)
+        .ok_or_else(|| unsupported("curve_of: truncated Bezier weights"))?
+        .to_vec();
+    let base = BezierCurve::new(poles, weights)?;
+    // `Geom_BezierCurve` is always parameterised on `[0, 1]`; a narrower edge
+    // range selects the segment while keeping the edge's parameters.
+    let curve = if (first - 0.0).abs() <= 1e-12 && (last - 1.0).abs() <= 1e-12 {
+        base
+    } else {
+        base.trim(first, last).unwrap_or(base)
+    };
+    Ok(EdgeCurve::BezierCurve(curve))
+}
+
+/// A B-spline payload: `[degree, pole_count, knot_count, mult_count] poles weights
+/// knots mults`.
+fn parse_bspline(tail: &[f64]) -> Result<EdgeCurve, GeomError> {
+    let header = tail
+        .get(..4)
+        .ok_or_else(|| unsupported("curve_of: truncated B-spline"))?;
+    let degree = header[0] as i32;
+    let pole_count = header[1] as usize;
+    let knot_count = header[2] as usize;
+    let mult_count = header[3] as usize;
+    let mut at = 4;
+    let poles = parse_points(
+        tail.get(at..).ok_or_else(|| unsupported("curve_of: truncated B-spline"))?,
+        pole_count,
+    )?;
+    at += pole_count * 3;
+    let weights = tail
+        .get(at..at + pole_count)
+        .ok_or_else(|| unsupported("curve_of: truncated B-spline weights"))?
+        .to_vec();
+    at += pole_count;
+    let knots = tail
+        .get(at..at + knot_count)
+        .ok_or_else(|| unsupported("curve_of: truncated B-spline knots"))?
+        .to_vec();
+    at += knot_count;
+    let mults = tail
+        .get(at..at + mult_count)
+        .ok_or_else(|| unsupported("curve_of: truncated B-spline multiplicities"))?
+        .iter()
+        .map(|value| *value as i32)
+        .collect();
+    let curve = NurbsCurve::new(degree, knots, mults, poles, weights)?;
+    Ok(EdgeCurve::BSplineCurve(curve))
+}
+
+/// An offset payload: `[basis_length]` then a nested payload.
+fn parse_offset(
+    tail: &[f64],
+    direction: Vector3,
+    offset: f64,
+    first: f64,
+    last: f64,
+) -> Result<EdgeCurve, GeomError> {
+    let length = tail
+        .first()
+        .map(|value| *value as usize)
+        .ok_or_else(|| unsupported("curve_of: truncated offset curve"))?;
+    let basis_data = tail
+        .get(1..1 + length)
+        .ok_or_else(|| unsupported("curve_of: truncated offset basis"))?;
+    let basis = parse_edge_curve(basis_data)?;
+    Ok(EdgeCurve::OffsetCurve(OffsetCurve::new(
+        basis, offset, direction, first, last,
+    )?))
+}
+
+/// A trimmed conic edge (ellipse, hyperbola or parabola) from its frame.
+fn edge_from_conic<T: ConicFrame>(
+    kind: i32,
+    curve: &T,
+    first: f64,
+    last: f64,
+    what: &'static str,
+) -> Result<Shape, GeomError> {
+    let (center, normal, x_axis, major, minor) = curve.conic_frame();
+    let edge = bridge::fc_conic_edge(
+        kind,
+        center.x,
+        center.y,
+        center.z,
+        normal.x,
+        normal.y,
+        normal.z,
+        x_axis.x,
+        x_axis.y,
+        x_axis.z,
+        major,
+        minor,
+        first,
+        last,
+    );
+    let Some(edge) = edge.as_ref() else {
+        return Err(OcctError::NotDone { operation: what }.into());
+    };
+    Ok(erase(edge))
+}
+
+/// A Bezier edge (`Geom_BezierCurve`).
+///
+/// OCCT parameterises a Bezier on `[0, 1]`; a curve stored over another range is
+/// re-expressed there (the geometry is unchanged, but the edge's parameters are
+/// `[0, 1]`). The Python `toShape` path keeps arbitrary ranges by converting to a
+/// B-spline instead.
+fn edge_from_bezier(curve: &BezierCurve) -> Result<Shape, GeomError> {
+    let edge = bridge::fc_bezier_edge(&flatten(curve.poles()), curve.weights());
+    let Some(edge) = edge.as_ref() else {
+        return Err(OcctError::NotDone {
+            operation: "make_edge (Bezier)",
+        }
+        .into());
+    };
+    Ok(erase(edge))
+}
+
+/// A B-spline edge, re-segmenting when the stored range is narrower than the knot
+/// domain.
+fn edge_from_nurbs(curve: &NurbsCurve) -> Result<Shape, GeomError> {
+    let edge = bridge::fc_bspline_edge_range(
+        &flatten(curve.poles()),
+        curve.weights(),
+        curve.knots(),
+        curve.mults(),
+        curve.degree(),
+        curve.first(),
+        curve.last(),
+    );
+    let Some(edge) = edge.as_ref() else {
+        return Err(OcctError::NotDone {
+            operation: "make_edge (B-spline)",
+        }
+        .into());
+    };
+    Ok(erase(edge))
+}
+
 /// A circular edge from the analytic circle.
 ///
 /// The edge's parameterisation origin is OCCT's choice: `gp_Ax2` is built from a
@@ -3786,8 +4083,8 @@ mod curve_bridge_tests {
             )
             .expect("the explicit B-spline has an edge");
         assert!(
-            backend.curve_of(&edge).is_err(),
-            "a B-spline is not analytic"
+            matches!(backend.curve_of(&edge), Ok(EdgeCurve::BSplineCurve(_))),
+            "a B-spline now reports its poles, weights and knots"
         );
         assert_eq!(backend.elements(&edge, ElementKind::Edge).len(), 1);
     }

@@ -205,6 +205,53 @@ mod ffi {
             minor: f64,
         ) -> UniquePtr<TopoDS_Shape>;
 
+        /// A trimmed conic edge over `[first, last]`: 3 = ellipse, 4 = hyperbola,
+        /// 5 = parabola. Null on failure.
+        #[allow(clippy::too_many_arguments)]
+        fn fc_conic_edge(
+            kind: i32,
+            ox: f64,
+            oy: f64,
+            oz: f64,
+            nx: f64,
+            ny: f64,
+            nz: f64,
+            xx: f64,
+            xy: f64,
+            xz: f64,
+            major: f64,
+            minor: f64,
+            first: f64,
+            last: f64,
+        ) -> UniquePtr<TopoDS_Shape>;
+
+        /// A Bezier edge from explicit poles and weights, or null on failure.
+        fn fc_bezier_edge(coords: &[f64], weights: &[f64]) -> UniquePtr<TopoDS_Shape>;
+
+        /// A B-spline edge from explicit poles/weights/knots/mults over the range,
+        /// or null on failure.
+        fn fc_bspline_edge_range(
+            coords: &[f64],
+            weights: &[f64],
+            knots: &[f64],
+            multiplicities: &[i32],
+            degree: i32,
+            first: f64,
+            last: f64,
+        ) -> UniquePtr<TopoDS_Shape>;
+
+        /// An edge of the offset curve of `basis` over `[first, last]`, or null on
+        /// failure.
+        fn fc_offset_curve_edge(
+            basis: &TopoDS_Shape,
+            offset: f64,
+            dx: f64,
+            dy: f64,
+            dz: f64,
+            first: f64,
+            last: f64,
+        ) -> UniquePtr<TopoDS_Shape>;
+
         /// A B-spline edge from explicit poles, weights, knots and multiplicities
         /// (upstream's `buildFromPolesMultsKnots`), or null on failure.
         fn fc_bspline_edge(

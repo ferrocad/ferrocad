@@ -762,7 +762,7 @@ impl PathEdge {
                 let start = origin.add(&direction.scale(first));
                 let end = origin.add(&direction.scale(last));
                 Ok(PathEdge {
-                    curve,
+                    curve: curve.clone(),
                     length: (last - first).abs(),
                     line_origin: origin,
                     line_direction: direction,
@@ -777,7 +777,7 @@ impl PathEdge {
                 let start = segment.start();
                 let end = segment.end();
                 Ok(PathEdge {
-                    curve,
+                    curve: curve.clone(),
                     length: start.distance(&end),
                     line_origin: start,
                     line_direction: end.sub(&start).normalize(),
@@ -789,7 +789,7 @@ impl PathEdge {
                 })
             }
             EdgeCurve::Circle(circle) => Ok(PathEdge {
-                curve,
+                curve: curve.clone(),
                 length: circle.length(),
                 line_origin: Vector3::zero(),
                 line_direction: Vector3::zero(),
@@ -803,7 +803,7 @@ impl PathEdge {
                 let radius = arc.circle().radius();
                 let sweep = arc.sweep();
                 Ok(PathEdge {
-                    curve,
+                    curve: curve.clone(),
                     length: radius * sweep.abs(),
                     line_origin: Vector3::zero(),
                     line_direction: Vector3::zero(),
@@ -817,7 +817,7 @@ impl PathEdge {
             EdgeCurve::Ellipse(ellipse) => {
                 let point = ellipse.point_at(0.0);
                 Ok(PathEdge {
-                    curve,
+                    curve: curve.clone(),
                     length: ellipse.length(),
                     line_origin: Vector3::zero(),
                     line_direction: Vector3::zero(),
@@ -828,6 +828,10 @@ impl PathEdge {
                     end: point,
                 })
             }
+            // The remaining analytic kinds (elliptical/conic arcs, Bezier,
+            // B-spline and offset curves) have no uniform distance-to-parameter
+            // mapping here; a path array reports them as unsupported.
+            _ => Err("Path edge has no supported curve".to_string()),
         }
     }
 
@@ -857,6 +861,7 @@ impl PathEdge {
                 };
                 ellipse.point_at(parameter)
             }
+            _ => self.start,
         }
     }
 
@@ -878,6 +883,7 @@ impl PathEdge {
                 };
                 ellipse.tangent_at(parameter)
             }
+            _ => Vector3::zero(),
         }
     }
 }
@@ -1232,6 +1238,18 @@ fn edge_axis_of(backend: &dyn GeometryBackend, edge: &Shape) -> Option<(Vector3,
         EdgeCurve::Circle(circle) => Some((circle.center(), circle.normal())),
         EdgeCurve::Arc(arc) => Some((arc.circle().center(), arc.circle().normal())),
         EdgeCurve::Ellipse(ellipse) => Some((ellipse.center(), ellipse.normal())),
+        EdgeCurve::EllipticalArc(arc) => {
+            Some((arc.ellipse().center(), arc.ellipse().normal()))
+        }
+        EdgeCurve::Hyperbola(hyperbola) => Some((hyperbola.center(), hyperbola.normal())),
+        EdgeCurve::ArcOfHyperbola(arc) => {
+            Some((arc.hyperbola().center(), arc.hyperbola().normal()))
+        }
+        EdgeCurve::Parabola(parabola) => Some((parabola.vertex(), parabola.normal())),
+        EdgeCurve::ArcOfParabola(arc) => {
+            Some((arc.parabola().vertex(), arc.parabola().normal()))
+        }
+        _ => None,
     }
 }
 

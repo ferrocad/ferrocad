@@ -7,8 +7,9 @@
 //! seam (`make_edge`), so this leaf never names a `Shape`, OCCT or a document.
 //!
 //! - [`curve`] — [`Vector2`], [`Line`], [`LineSegment`], [`Circle`], [`Arc`],
-//!   [`Ellipse`], [`Hyperbola`], [`Parabola`], [`BezierCurve`] and the
-//!   [`EdgeCurve`] enum, with OCC/Part parameterisation.
+//!   [`Ellipse`], [`EllipticalArc`], [`Hyperbola`], [`Parabola`], [`BezierCurve`],
+//!   [`NurbsCurve`], [`OffsetCurve`] and the [`EdgeCurve`] enum, with OCC/Part
+//!   parameterisation.
 //! - [`wire`] — [`Wire`] as an ordered edge list, [`polygon`] and [`sort_edges`]
 //!   (upstream's `__sortEdges__`).
 //!
@@ -48,8 +49,8 @@ pub mod curve;
 pub mod wire;
 
 pub use curve::{
-    Arc, ArcOfHyperbola, ArcOfParabola, BezierCurve, Circle, EdgeCurve, Ellipse, Hyperbola, Line,
-    LineSegment, NurbsCurve, Parabola, Vector2,
+    Arc, ArcOfHyperbola, ArcOfParabola, BezierCurve, Circle, EdgeCurve, Ellipse, EllipticalArc,
+    Hyperbola, Line, LineSegment, NurbsCurve, OffsetCurve, Parabola, Vector2,
 };
 pub use ferrocad_types::Vector3;
 pub use wire::{Wire, polygon, sort_edges};

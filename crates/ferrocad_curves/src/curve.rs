@@ -523,6 +523,96 @@ impl Ellipse {
         let h = ((a - b) / (a + b)).powi(2);
         std::f64::consts::PI * (a + b) * (1.0 + 3.0 * h / (10.0 + (4.0 - 3.0 * h).sqrt()))
     }
+
+    /// The portion of the ellipse between `first` and `last` (radians).
+    pub fn trim(&self, first: f64, last: f64) -> Result<EllipticalArc, CurveError> {
+        EllipticalArc::new(*self, first, last)
+    }
+}
+
+/// A portion of an ellipse (`Part::GeomArcOfEllipse`), parameterised by angle.
+///
+/// Like [`Arc`], `first` and `last` are stored as given, so a negative sweep runs
+/// clockwise and [`EllipticalArc::reversed`] traverses the same geometry the other
+/// way.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct EllipticalArc {
+    ellipse: Ellipse,
+    first: f64,
+    last: f64,
+}
+
+impl EllipticalArc {
+    /// The ellipse between `first` and `last` (radians); a zero sweep is rejected.
+    pub fn new(ellipse: Ellipse, first: f64, last: f64) -> Result<Self, CurveError> {
+        if !first.is_finite() || !last.is_finite() || (last - first).abs() <= ANGULAR_TOLERANCE {
+            return Err(CurveError::Degenerate);
+        }
+        Ok(Self {
+            ellipse,
+            first,
+            last,
+        })
+    }
+
+    /// The supporting ellipse.
+    pub fn ellipse(&self) -> Ellipse {
+        self.ellipse
+    }
+
+    /// The first angle.
+    pub fn first(&self) -> f64 {
+        self.first
+    }
+
+    /// The last angle.
+    pub fn last(&self) -> f64 {
+        self.last
+    }
+
+    /// The signed sweep (`last - first`; negative runs clockwise).
+    pub fn sweep(&self) -> f64 {
+        self.last - self.first
+    }
+
+    /// The point at `angle`.
+    pub fn point_at(&self, angle: f64) -> Vector3 {
+        self.ellipse.point_at(angle)
+    }
+
+    /// The unit tangent at `angle`.
+    pub fn tangent_at(&self, angle: f64) -> Vector3 {
+        self.ellipse.tangent_at(angle)
+    }
+
+    /// The first endpoint.
+    pub fn start(&self) -> Vector3 {
+        self.point_at(self.first)
+    }
+
+    /// The last endpoint.
+    pub fn end(&self) -> Vector3 {
+        self.point_at(self.last)
+    }
+
+    /// The arc length, by sampling the ellipse's speed (there is no closed form).
+    pub fn length(&self) -> f64 {
+        sampled_length(&|angle| self.point_at(angle), self.first, self.last)
+    }
+
+    /// Whether the sweep is a full turn.
+    pub fn is_closed(&self) -> bool {
+        (self.sweep().abs() - TAU).abs() <= ANGULAR_TOLERANCE
+    }
+
+    /// The same arc traversed in the opposite direction.
+    pub fn reversed(&self) -> Self {
+        Self {
+            ellipse: self.ellipse,
+            first: self.last,
+            last: self.first,
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -535,6 +625,21 @@ fn forward_range(first: f64, last: f64) -> Result<(f64, f64), CurveError> {
         return Err(CurveError::InvalidParameter);
     }
     Ok((first, last))
+}
+
+/// A curve's arc length by sampling `point_at`; `512` straight pieces follow a
+/// smooth curve closely enough for a display/measurement length.
+fn sampled_length(point_at: &dyn Fn(f64) -> Vector3, first: f64, last: f64) -> f64 {
+    const STEPS: usize = 512;
+    let mut length = 0.0;
+    let mut previous = point_at(first);
+    for step in 1..=STEPS {
+        let parameter = first + (last - first) * step as f64 / STEPS as f64;
+        let current = point_at(parameter);
+        length += previous.distance(&current);
+        previous = current;
+    }
+    length
 }
 
 /// A rational B-spline in the form the `Part.BSplineCurve` binding consumes:
@@ -706,6 +811,57 @@ impl NurbsCurve {
             result[1] / result[3],
             result[2] / result[3],
         ))
+    }
+
+    /// The unit tangent at `u`, by a central difference of [`point_at`](Self::point_at).
+    ///
+    /// The curve is only stored as poles/knots here, so this avoids a second
+    /// derivative implementation; the step is `1e-6` of the knot span.
+    pub fn tangent_at(&self, u: f64) -> Vector3 {
+        let (first, last) = (self.first(), self.last());
+        if !(last > first) {
+            return Vector3::zero();
+        }
+        let step = ((last - first) * 1e-6).max(1e-9);
+        let low = (u - step).max(first);
+        let high = (u + step).min(last);
+        if !(high > low) {
+            return Vector3::zero();
+        }
+        let (Some(low), Some(high)) = (self.point_at(low), self.point_at(high)) else {
+            return Vector3::zero();
+        };
+        unit(high.sub(&low)).unwrap_or_else(Vector3::zero)
+    }
+
+    /// The arc length over `[first, last]` by sampling [`point_at`](Self::point_at).
+    pub fn length(&self, first: f64, last: f64) -> f64 {
+        let fallback = self.point_at(first).unwrap_or_else(Vector3::zero);
+        sampled_length(
+            &|u| self.point_at(u).unwrap_or(fallback),
+            first.min(last),
+            first.max(last),
+        )
+    }
+
+    /// The same curve traversed in the opposite parameter direction.
+    ///
+    /// The control points and weights are reversed, and every knot `k` becomes
+    /// `first + last - k`, so the new curve's domain is unchanged.
+    pub fn reversed(&self) -> Self {
+        let (first, last) = (self.first(), self.last());
+        Self {
+            degree: self.degree,
+            knots: self
+                .knots
+                .iter()
+                .rev()
+                .map(|knot| first + last - knot)
+                .collect(),
+            mults: self.mults.iter().rev().copied().collect(),
+            poles: self.poles.iter().rev().copied().collect(),
+            weights: self.weights.iter().rev().copied().collect(),
+        }
     }
 }
 
@@ -916,6 +1072,20 @@ impl ArcOfHyperbola {
     pub fn nurbs(&self) -> Result<NurbsCurve, CurveError> {
         self.hyperbola.nurbs(self.first, self.last)
     }
+
+    /// The arc length, by sampling the supporting hyperbola.
+    pub fn length(&self) -> f64 {
+        sampled_length(&|u| self.point_at(u), self.first, self.last)
+    }
+
+    /// The same arc traversed in the opposite direction.
+    pub fn reversed(&self) -> Self {
+        Self {
+            hyperbola: self.hyperbola,
+            first: self.last,
+            last: self.first,
+        }
+    }
 }
 
 /// A parabola (`Part::GeomParabola`): `Y^2 = 2*p*X` with `p = 2*focal` in its
@@ -1093,6 +1263,20 @@ impl ArcOfParabola {
     /// The exact quadratic B-spline over the arc.
     pub fn nurbs(&self) -> Result<NurbsCurve, CurveError> {
         self.parabola.nurbs(self.first, self.last)
+    }
+
+    /// The arc length, by sampling the parabola.
+    pub fn length(&self) -> f64 {
+        sampled_length(&|u| self.point_at(u), self.first, self.last)
+    }
+
+    /// The same arc traversed in the opposite direction.
+    pub fn reversed(&self) -> Self {
+        Self {
+            parabola: self.parabola,
+            first: self.last,
+            last: self.first,
+        }
     }
 }
 
@@ -1398,6 +1582,156 @@ impl BezierCurve {
         )
         .expect("a Bezier curve is a valid clamped B-spline")
     }
+
+    /// The arc length over the curve's range, by sampling.
+    pub fn length(&self) -> f64 {
+        sampled_length(&|u| self.point_at(u), self.first, self.last)
+    }
+
+    /// The same curve traversed in the opposite parameter direction.
+    pub fn reversed(&self) -> Self {
+        Self {
+            poles: self.poles.iter().rev().copied().collect(),
+            weights: self.weights.iter().rev().copied().collect(),
+            first: self.first,
+            last: self.last,
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// OffsetCurve
+// ---------------------------------------------------------------------------
+
+/// An offset of another curve (`Part::GeomOffsetCurve`): the basis curve moved a
+/// constant distance along the normal `tangent × direction`.
+///
+/// OCCT's parameterisation is the basis curve's, so `first`/`last` are the basis
+/// parameter range and may be trimmed further by an edge. The basis is boxed
+/// because an offset can wrap any [`EdgeCurve`] (and an offset curve can even be
+/// the basis of another one).
+#[derive(Debug, Clone, PartialEq)]
+pub struct OffsetCurve {
+    basis: Box<EdgeCurve>,
+    offset: f64,
+    direction: Vector3,
+    first: f64,
+    last: f64,
+}
+
+impl OffsetCurve {
+    /// The offset of `basis` over `[first, last]`.
+    pub fn new(
+        basis: EdgeCurve,
+        offset: f64,
+        direction: Vector3,
+        first: f64,
+        last: f64,
+    ) -> Result<Self, CurveError> {
+        if !offset.is_finite() {
+            return Err(CurveError::Degenerate);
+        }
+        if !first.is_finite() || !last.is_finite() || last <= first {
+            return Err(CurveError::InvalidParameter);
+        }
+        Ok(Self {
+            basis: Box::new(basis),
+            offset,
+            direction: unit(direction).ok_or(CurveError::Degenerate)?,
+            first,
+            last,
+        })
+    }
+
+    /// The offset of a bounded basis over the basis' own parameter range.
+    pub fn of(basis: EdgeCurve, offset: f64, direction: Vector3) -> Result<Self, CurveError> {
+        let (first, last) = basis.parameter_range().ok_or(CurveError::NotBounded)?;
+        Self::new(basis, offset, direction, first, last)
+    }
+
+    /// The curve being offset.
+    pub fn basis(&self) -> &EdgeCurve {
+        &self.basis
+    }
+
+    /// The signed offset distance.
+    pub fn offset(&self) -> f64 {
+        self.offset
+    }
+
+    /// The unit direction the offset is measured against.
+    pub fn direction(&self) -> Vector3 {
+        self.direction
+    }
+
+    /// The first parameter (the basis parameterisation).
+    pub fn first(&self) -> f64 {
+        self.first
+    }
+
+    /// The last parameter (the basis parameterisation).
+    pub fn last(&self) -> f64 {
+        self.last
+    }
+
+    /// The point at `u`: `basis(u) + offset * (tangent × direction)`, normalised so
+    /// the shift has length `|offset|` (OCCT's `Geom_OffsetCurve::Value`).
+    pub fn point_at(&self, u: f64) -> Vector3 {
+        let normal = self.basis.tangent_at(u).cross(&self.direction);
+        let length = normal.length();
+        let shift = if length > TOLERANCE {
+            normal.scale(self.offset / length)
+        } else {
+            Vector3::zero()
+        };
+        self.basis.point_at(u).add(&shift)
+    }
+
+    /// The unit tangent at `u`, by a central difference of [`point_at`](Self::point_at).
+    pub fn tangent_at(&self, u: f64) -> Vector3 {
+        let step = ((self.last - self.first) * 1e-6).max(1e-9);
+        let low = (u - step).max(self.first);
+        let high = (u + step).min(self.last);
+        if !(high > low) {
+            return self.basis.tangent_at(u);
+        }
+        unit(self.point_at(high).sub(&self.point_at(low))).unwrap_or_else(|| self.basis.tangent_at(u))
+    }
+
+    /// The first endpoint.
+    pub fn start(&self) -> Vector3 {
+        self.point_at(self.first)
+    }
+
+    /// The last endpoint.
+    pub fn end(&self) -> Vector3 {
+        self.point_at(self.last)
+    }
+
+    /// The arc length over `[first, last]`, by sampling.
+    pub fn length(&self) -> f64 {
+        sampled_length(&|u| self.point_at(u), self.first, self.last)
+    }
+
+    /// Whether the offset ends where it starts.
+    pub fn is_closed(&self) -> bool {
+        self.start().distance(&self.end()) <= TOLERANCE
+    }
+
+    /// The same geometry traversed the other way.
+    ///
+    /// The offset's parameterisation is the basis curve's, so reversing is just a
+    /// swap of the traversal bounds: the point and its offset normal stay the
+    /// same function of the parameter.
+    pub fn reversed(&self) -> Self {
+        Self {
+            basis: self.basis.clone(),
+            offset: self.offset,
+            direction: self.direction,
+            first: self.last,
+            last: self.first,
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -1406,8 +1740,10 @@ impl BezierCurve {
 
 /// One analytic curve, as a `Part` edge's geometry (`edge.Curve` upstream).
 ///
-/// The infinite [`Line`] has no endpoints, so it cannot be part of a [`Wire`].
-#[derive(Debug, Clone, Copy, PartialEq)]
+/// The infinite [`Line`], [`Hyperbola`] and [`Parabola`] have no endpoints, so they
+/// cannot be part of a [`Wire`]. Owned poles/weights make this `Clone` rather than
+/// `Copy`.
+#[derive(Debug, Clone, PartialEq)]
 pub enum EdgeCurve {
     /// An infinite line.
     Line(Line),
@@ -1419,6 +1755,22 @@ pub enum EdgeCurve {
     Arc(Arc),
     /// A full ellipse.
     Ellipse(Ellipse),
+    /// A portion of an ellipse.
+    EllipticalArc(EllipticalArc),
+    /// A whole branch of a hyperbola (unbounded).
+    Hyperbola(Hyperbola),
+    /// A portion of a hyperbola.
+    ArcOfHyperbola(ArcOfHyperbola),
+    /// A whole parabola (unbounded).
+    Parabola(Parabola),
+    /// A portion of a parabola.
+    ArcOfParabola(ArcOfParabola),
+    /// A rational or non-rational Bezier curve.
+    BezierCurve(BezierCurve),
+    /// A rational B-spline with its poles, weights, knots and multiplicities.
+    BSplineCurve(NurbsCurve),
+    /// A constant offset of another curve.
+    OffsetCurve(OffsetCurve),
 }
 
 impl EdgeCurve {
@@ -1430,6 +1782,16 @@ impl EdgeCurve {
             EdgeCurve::Circle(curve) => curve.point_at(parameter),
             EdgeCurve::Arc(curve) => curve.point_at(parameter),
             EdgeCurve::Ellipse(curve) => curve.point_at(parameter),
+            EdgeCurve::EllipticalArc(curve) => curve.point_at(parameter),
+            EdgeCurve::Hyperbola(curve) => curve.point_at(parameter),
+            EdgeCurve::ArcOfHyperbola(curve) => curve.point_at(parameter),
+            EdgeCurve::Parabola(curve) => curve.point_at(parameter),
+            EdgeCurve::ArcOfParabola(curve) => curve.point_at(parameter),
+            EdgeCurve::BezierCurve(curve) => curve.point_at(parameter),
+            EdgeCurve::BSplineCurve(curve) => {
+                curve.point_at(parameter).unwrap_or_else(Vector3::zero)
+            }
+            EdgeCurve::OffsetCurve(curve) => curve.point_at(parameter),
         }
     }
 
@@ -1441,27 +1803,41 @@ impl EdgeCurve {
             EdgeCurve::Circle(curve) => curve.tangent_at(parameter),
             EdgeCurve::Arc(curve) => curve.tangent_at(parameter),
             EdgeCurve::Ellipse(curve) => curve.tangent_at(parameter),
+            EdgeCurve::EllipticalArc(curve) => curve.tangent_at(parameter),
+            EdgeCurve::Hyperbola(curve) => curve.tangent_at(parameter),
+            EdgeCurve::ArcOfHyperbola(curve) => curve.hyperbola().tangent_at(parameter),
+            EdgeCurve::Parabola(curve) => curve.tangent_at(parameter),
+            EdgeCurve::ArcOfParabola(curve) => curve.parabola().tangent_at(parameter),
+            EdgeCurve::BezierCurve(curve) => curve.tangent_at(parameter),
+            EdgeCurve::BSplineCurve(curve) => curve.tangent_at(parameter),
+            EdgeCurve::OffsetCurve(curve) => curve.tangent_at(parameter),
         }
     }
 
-    /// The length (`f64::INFINITY` for an infinite line; the ellipse value is an
-    /// approximation).
+    /// The length (`f64::INFINITY` for the unbounded kinds; the elliptical and
+    /// spline values are sampled approximations).
     pub fn length(&self) -> f64 {
         match self {
-            EdgeCurve::Line(_) => f64::INFINITY,
+            EdgeCurve::Line(_) | EdgeCurve::Hyperbola(_) | EdgeCurve::Parabola(_) => f64::INFINITY,
             EdgeCurve::LineSegment(curve) => curve.length(),
             EdgeCurve::Circle(curve) => curve.length(),
             EdgeCurve::Arc(curve) => curve.length(),
             EdgeCurve::Ellipse(curve) => curve.length(),
+            EdgeCurve::EllipticalArc(curve) => curve.length(),
+            EdgeCurve::ArcOfHyperbola(curve) => curve.length(),
+            EdgeCurve::ArcOfParabola(curve) => curve.length(),
+            EdgeCurve::BezierCurve(curve) => curve.length(),
+            EdgeCurve::BSplineCurve(curve) => curve.length(curve.first(), curve.last()),
+            EdgeCurve::OffsetCurve(curve) => curve.length(),
         }
     }
 
-    /// The start and end points, or `None` for an infinite [`Line`].
+    /// The start and end points, or `None` for an unbounded curve.
     ///
-    /// A circle or an ellipse reports the same point twice.
+    /// A circle or a full ellipse reports the same point twice.
     pub fn endpoints(&self) -> Option<(Vector3, Vector3)> {
         match self {
-            EdgeCurve::Line(_) => None,
+            EdgeCurve::Line(_) | EdgeCurve::Hyperbola(_) | EdgeCurve::Parabola(_) => None,
             EdgeCurve::LineSegment(curve) => Some((curve.start(), curve.end())),
             EdgeCurve::Circle(curve) => {
                 let point = curve.point_at(0.0);
@@ -1472,15 +1848,40 @@ impl EdgeCurve {
                 let point = curve.point_at(0.0);
                 Some((point, point))
             }
+            EdgeCurve::EllipticalArc(curve) => Some((curve.start(), curve.end())),
+            EdgeCurve::ArcOfHyperbola(curve) => Some((curve.start(), curve.end())),
+            EdgeCurve::ArcOfParabola(curve) => Some((curve.start(), curve.end())),
+            EdgeCurve::BezierCurve(curve) => Some((curve.start(), curve.end())),
+            EdgeCurve::BSplineCurve(curve) => Some((
+                curve.point_at(curve.first()).unwrap_or_else(Vector3::zero),
+                curve.point_at(curve.last()).unwrap_or_else(Vector3::zero),
+            )),
+            EdgeCurve::OffsetCurve(curve) => Some((curve.start(), curve.end())),
         }
     }
 
     /// Whether the curve ends where it starts.
     pub fn is_closed(&self) -> bool {
         match self {
-            EdgeCurve::Line(_) | EdgeCurve::LineSegment(_) => false,
+            EdgeCurve::Line(_)
+            | EdgeCurve::LineSegment(_)
+            | EdgeCurve::Hyperbola(_)
+            | EdgeCurve::Parabola(_)
+            | EdgeCurve::ArcOfHyperbola(_)
+            | EdgeCurve::ArcOfParabola(_) => false,
             EdgeCurve::Circle(_) | EdgeCurve::Ellipse(_) => true,
             EdgeCurve::Arc(curve) => curve.is_closed(),
+            EdgeCurve::EllipticalArc(curve) => curve.is_closed(),
+            EdgeCurve::BezierCurve(curve) => curve.is_closed(),
+            EdgeCurve::BSplineCurve(curve) => {
+                let start = curve.point_at(curve.first());
+                let end = curve.point_at(curve.last());
+                match (start, end) {
+                    (Some(start), Some(end)) => start.distance(&end) <= TOLERANCE,
+                    _ => false,
+                }
+            }
+            EdgeCurve::OffsetCurve(curve) => curve.is_closed(),
         }
     }
 
@@ -1495,6 +1896,33 @@ impl EdgeCurve {
             EdgeCurve::Circle(curve) => EdgeCurve::Circle(*curve),
             EdgeCurve::Arc(curve) => EdgeCurve::Arc(curve.reversed()),
             EdgeCurve::Ellipse(curve) => EdgeCurve::Ellipse(*curve),
+            EdgeCurve::EllipticalArc(curve) => EdgeCurve::EllipticalArc(curve.reversed()),
+            EdgeCurve::Hyperbola(curve) => EdgeCurve::Hyperbola(*curve),
+            EdgeCurve::ArcOfHyperbola(curve) => EdgeCurve::ArcOfHyperbola(curve.reversed()),
+            EdgeCurve::Parabola(curve) => EdgeCurve::Parabola(*curve),
+            EdgeCurve::ArcOfParabola(curve) => EdgeCurve::ArcOfParabola(curve.reversed()),
+            EdgeCurve::BezierCurve(curve) => EdgeCurve::BezierCurve(curve.reversed()),
+            EdgeCurve::BSplineCurve(curve) => EdgeCurve::BSplineCurve(curve.reversed()),
+            EdgeCurve::OffsetCurve(curve) => EdgeCurve::OffsetCurve(curve.reversed()),
+        }
+    }
+
+    /// The parameter range `[first, last]`, or `None` for an unbounded curve.
+    ///
+    /// A bounded line segment is `[0, 1]` and a full circle/ellipse is
+    /// `[0, 2π]`; the arcs report their own (possibly reversed) range.
+    pub fn parameter_range(&self) -> Option<(f64, f64)> {
+        match self {
+            EdgeCurve::Line(_) | EdgeCurve::Hyperbola(_) | EdgeCurve::Parabola(_) => None,
+            EdgeCurve::LineSegment(_) => Some((0.0, 1.0)),
+            EdgeCurve::Circle(_) | EdgeCurve::Ellipse(_) => Some((0.0, TAU)),
+            EdgeCurve::Arc(curve) => Some((curve.first(), curve.last())),
+            EdgeCurve::EllipticalArc(curve) => Some((curve.first(), curve.last())),
+            EdgeCurve::ArcOfHyperbola(curve) => Some((curve.first(), curve.last())),
+            EdgeCurve::ArcOfParabola(curve) => Some((curve.first(), curve.last())),
+            EdgeCurve::BezierCurve(curve) => Some((curve.first(), curve.last())),
+            EdgeCurve::BSplineCurve(curve) => Some((curve.first(), curve.last())),
+            EdgeCurve::OffsetCurve(curve) => Some((curve.first(), curve.last())),
         }
     }
 
@@ -1506,6 +1934,14 @@ impl EdgeCurve {
             EdgeCurve::Circle(_) => "Circle",
             EdgeCurve::Arc(_) => "ArcOfCircle",
             EdgeCurve::Ellipse(_) => "Ellipse",
+            EdgeCurve::EllipticalArc(_) => "ArcOfEllipse",
+            EdgeCurve::Hyperbola(_) => "Hyperbola",
+            EdgeCurve::ArcOfHyperbola(_) => "ArcOfHyperbola",
+            EdgeCurve::Parabola(_) => "Parabola",
+            EdgeCurve::ArcOfParabola(_) => "ArcOfParabola",
+            EdgeCurve::BezierCurve(_) => "BezierCurve",
+            EdgeCurve::BSplineCurve(_) => "BSplineCurve",
+            EdgeCurve::OffsetCurve(_) => "OffsetCurve",
         }
     }
 }
@@ -1894,28 +2330,118 @@ mod tests {
     }
 
     #[test]
-    fn a_bezier_nurbs_keeps_its_poles_and_degree() {
-        let bezier = BezierCurve::with_range(
+    fn an_elliptical_arc_keeps_its_bounds_and_reverses() {
+        let ellipse = Ellipse::with_axis(
+            Vector3::zero(),
+            axis_z(),
+            axis_x(),
+            3.0,
+            1.0,
+        )
+        .unwrap();
+        let arc = ellipse.trim(0.5, 1.25).unwrap();
+        assert_eq!(arc.first(), 0.5);
+        assert_eq!(arc.last(), 1.25);
+        assert!(close(arc.start(), ellipse.point_at(0.5)));
+        assert!(close(arc.end(), ellipse.point_at(1.25)));
+        let reversed = arc.reversed();
+        assert!(close(reversed.start(), arc.end()));
+        assert!(close(reversed.end(), arc.start()));
+        assert!(arc.length() > 0.0);
+    }
+
+    #[test]
+    fn a_conic_arc_is_a_bounded_edge_curve() {
+        let hyperbola = Hyperbola::with_axis(
+            Vector3::zero(),
+            axis_z(),
+            axis_x(),
+            2.0,
+            1.0,
+        )
+        .unwrap();
+        let arc = EdgeCurve::ArcOfHyperbola(hyperbola.trim(-0.5, 0.75).unwrap());
+        assert_eq!(arc.kind(), "ArcOfHyperbola");
+        assert_eq!(arc.parameter_range(), Some((-0.5, 0.75)));
+        assert!(arc.endpoints().is_some());
+        assert!(!arc.is_closed());
+        assert!(arc.length() > 0.0);
+        let reversed = arc.reversed();
+        assert!(reversed
+            .endpoints()
+            .unwrap()
+            .0
+            .distance(&arc.endpoints().unwrap().1)
+            < TOL);
+
+        let parabola = Parabola::with_axis(Vector3::zero(), axis_z(), axis_x(), 0.5).unwrap();
+        let arc = EdgeCurve::ArcOfParabola(parabola.trim(-1.0, 2.0).unwrap());
+        assert_eq!(arc.kind(), "ArcOfParabola");
+        assert_eq!(arc.parameter_range(), Some((-1.0, 2.0)));
+        assert!(arc.endpoints().is_some());
+
+        // The whole conics are unbounded, like an infinite line.
+        assert!(EdgeCurve::Hyperbola(hyperbola).endpoints().is_none());
+        assert!(EdgeCurve::Parabola(parabola).endpoints().is_none());
+    }
+
+    #[test]
+    fn a_bspline_reversal_mirrors_its_knots() {
+        let spline = NurbsCurve::new(
+            2,
+            vec![0.0, 1.0],
+            vec![3, 3],
             vec![
                 Vector3::zero(),
                 Vector3::new(1.0, 2.0, 0.0),
                 Vector3::new(2.0, 0.0, 0.0),
             ],
             vec![1.0, 1.0, 1.0],
-            2.0,
-            5.0,
         )
         .unwrap();
-        let spline = bezier.nurbs();
-        assert_eq!(spline.degree(), 2);
-        assert_eq!(spline.knots(), &[2.0, 5.0]);
-        assert_eq!(spline.mults(), &[3, 3]);
-        assert_eq!(spline.poles(), bezier.poles());
-        for parameter in [2.0, 3.0, 4.0, 5.0] {
+        let reversed = spline.reversed();
+        for parameter in [0.0, 0.25, 0.5, 0.75, 1.0] {
             assert!(close(
-                spline.point_at(parameter).unwrap(),
-                bezier.point_at(parameter)
+                reversed.point_at(parameter).unwrap(),
+                spline.point_at(1.0 - parameter).unwrap()
             ));
         }
+        assert!((reversed.tangent_at(0.0).dot(&spline.tangent_at(1.0)) + 1.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn an_offset_curve_follows_the_basis_normal() {
+        let circle = Circle::new(Vector3::zero(), axis_z(), 2.0).unwrap();
+        let basis = EdgeCurve::Circle(circle);
+        let offset = OffsetCurve::new(
+            basis.clone(),
+            0.5,
+            axis_z(),
+            0.0,
+            std::f64::consts::TAU,
+        )
+        .unwrap();
+        assert_eq!(offset.basis().kind(), "Circle");
+        assert!((offset.offset() - 0.5).abs() < TOL);
+        // A +Z offset of a circle at +X moves outwards.
+        assert!(close(offset.point_at(0.0), Vector3::new(2.5, 0.0, 0.0)));
+        let edge = EdgeCurve::OffsetCurve(offset);
+        assert_eq!(edge.kind(), "OffsetCurve");
+        assert!(edge.parameter_range().is_some());
+        assert!(edge.endpoints().is_some());
+
+        // Reversing swaps the traversal bounds without moving the curve.
+        let arc_offset = OffsetCurve::new(
+            basis,
+            0.5,
+            axis_z(),
+            0.0,
+            std::f64::consts::FRAC_PI_2,
+        )
+        .unwrap();
+        let reversed = arc_offset.reversed();
+        assert!(close(reversed.start(), arc_offset.end()));
+        assert!(close(reversed.end(), arc_offset.start()));
+        assert!((reversed.offset() - arc_offset.offset()).abs() < TOL);
     }
 }

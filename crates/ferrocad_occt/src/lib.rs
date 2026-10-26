@@ -438,6 +438,188 @@ mod tests {
     }
 
     #[test]
+    fn an_elliptical_arc_round_trips_with_its_bounds() {
+        use ferrocad_curves::{EdgeCurve, Ellipse, Vector3};
+        let backend = OcctBackend::new();
+        let ellipse = Ellipse::with_axis(
+            Vector3::new(1.0, 2.0, 3.0),
+            Vector3::new(0.0, 0.0, 1.0),
+            Vector3::new(1.0, 0.0, 0.0),
+            3.0,
+            1.0,
+        )
+        .unwrap();
+        let arc = ellipse.trim(0.25, 1.5).unwrap();
+        let edge = backend.make_edge(&EdgeCurve::EllipticalArc(arc)).unwrap();
+        let EdgeCurve::EllipticalArc(back) = backend.curve_of(&edge).unwrap() else {
+            panic!("a trimmed ellipse edge is an elliptical arc");
+        };
+        assert!((back.first() - 0.25).abs() < 1e-9);
+        assert!((back.last() - 1.5).abs() < 1e-9);
+        assert!((back.ellipse().major_radius() - 3.0).abs() < 1e-9);
+        assert!((back.ellipse().minor_radius() - 1.0).abs() < 1e-9);
+        assert!(back.start().distance(&arc.start()) < 1e-9);
+        assert!(back.end().distance(&arc.end()) < 1e-9);
+    }
+
+    #[test]
+    fn a_hyperbola_arc_round_trips_with_its_frame_and_bounds() {
+        use ferrocad_curves::{ArcOfHyperbola, EdgeCurve, Hyperbola, Vector3};
+        let backend = OcctBackend::new();
+        let hyperbola = Hyperbola::with_axis(
+            Vector3::new(1.0, 2.0, 3.0),
+            Vector3::new(0.0, 0.0, 1.0),
+            Vector3::new(1.0, 0.0, 0.0),
+            2.0,
+            1.0,
+        )
+        .unwrap();
+        let arc = ArcOfHyperbola::new(hyperbola, -0.5, 0.75).unwrap();
+        let edge = backend.make_edge(&EdgeCurve::ArcOfHyperbola(arc)).unwrap();
+        let EdgeCurve::ArcOfHyperbola(back) = backend.curve_of(&edge).unwrap() else {
+            panic!("a trimmed hyperbola edge is an arc of hyperbola");
+        };
+        assert!((back.first() - -0.5).abs() < 1e-9);
+        assert!((back.last() - 0.75).abs() < 1e-9);
+        assert!((back.hyperbola().major_radius() - 2.0).abs() < 1e-9);
+        assert!((back.hyperbola().minor_radius() - 1.0).abs() < 1e-9);
+        assert!(back.start().distance(&arc.start()) < 1e-9);
+        assert!(back.end().distance(&arc.end()) < 1e-9);
+    }
+
+    #[test]
+    fn a_parabola_arc_round_trips_with_its_frame_and_bounds() {
+        use ferrocad_curves::{ArcOfParabola, EdgeCurve, Parabola, Vector3};
+        let backend = OcctBackend::new();
+        let parabola = Parabola::with_axis(
+            Vector3::new(1.0, 2.0, 3.0),
+            Vector3::new(0.0, 0.0, 1.0),
+            Vector3::new(1.0, 0.0, 0.0),
+            0.5,
+        )
+        .unwrap();
+        let arc = ArcOfParabola::new(parabola, -1.0, 2.0).unwrap();
+        let edge = backend.make_edge(&EdgeCurve::ArcOfParabola(arc)).unwrap();
+        let EdgeCurve::ArcOfParabola(back) = backend.curve_of(&edge).unwrap() else {
+            panic!("a trimmed parabola edge is an arc of parabola");
+        };
+        assert!((back.first() - -1.0).abs() < 1e-9);
+        assert!((back.last() - 2.0).abs() < 1e-9);
+        assert!((back.parabola().focal() - 0.5).abs() < 1e-9);
+        assert!(back.start().distance(&arc.start()) < 1e-9);
+        assert!(back.end().distance(&arc.end()) < 1e-9);
+    }
+
+    #[test]
+    fn a_bezier_edge_round_trips_with_poles_weights_and_bounds() {
+        use ferrocad_curves::{BezierCurve, EdgeCurve, Vector3};
+        let backend = OcctBackend::new();
+        let poles = vec![
+            Vector3::new(0.0, 0.0, 0.0),
+            Vector3::new(1.0, 2.0, 0.0),
+            Vector3::new(2.0, 0.0, 0.0),
+        ];
+        let bezier = BezierCurve::new(poles.clone(), vec![1.0, 1.0, 1.0]).unwrap();
+        let edge = backend.make_edge(&EdgeCurve::BezierCurve(bezier.clone())).unwrap();
+        let EdgeCurve::BezierCurve(back) = backend.curve_of(&edge).unwrap() else {
+            panic!("a Bezier edge reports a Bezier curve");
+        };
+        assert_eq!(back.poles(), poles.as_slice());
+        assert_eq!(back.weights(), &[1.0, 1.0, 1.0]);
+        assert!((back.first() - 0.0).abs() < 1e-12);
+        assert!((back.last() - 1.0).abs() < 1e-12);
+        for parameter in [0.0, 0.25, 0.5, 0.75, 1.0] {
+            assert!(back.point_at(parameter).distance(&bezier.point_at(parameter)) < 1e-9);
+        }
+    }
+
+    #[test]
+    fn a_rational_bspline_edge_round_trips_with_its_data_and_bounds() {
+        use ferrocad_curves::{EdgeCurve, NurbsCurve, Vector3};
+        let backend = OcctBackend::new();
+        let curve = NurbsCurve::new(
+            2,
+            vec![0.0, 2.0],
+            vec![3, 3],
+            vec![
+                Vector3::new(0.0, 0.0, 0.0),
+                Vector3::new(1.0, 1.0, 0.0),
+                Vector3::new(2.0, 0.0, 0.0),
+            ],
+            vec![1.0, 0.5, 1.0],
+        )
+        .unwrap();
+        let edge = backend.make_edge(&EdgeCurve::BSplineCurve(curve.clone())).unwrap();
+        let EdgeCurve::BSplineCurve(back) = backend.curve_of(&edge).unwrap() else {
+            panic!("a B-spline edge reports a B-spline curve");
+        };
+        assert_eq!(back.degree(), 2);
+        assert_eq!(back.poles(), curve.poles());
+        assert_eq!(back.weights(), curve.weights());
+        assert_eq!(back.knots(), &[0.0, 2.0]);
+        assert!((back.first() - 0.0).abs() < 1e-12);
+        assert!((back.last() - 2.0).abs() < 1e-12);
+        for parameter in [0.0, 0.5, 1.0, 1.5, 2.0] {
+            assert!(back.point_at(parameter).unwrap().distance(&curve.point_at(parameter).unwrap()) < 1e-9);
+        }
+    }
+
+    #[test]
+    fn a_trimmed_bspline_edge_keeps_the_trim_range() {
+        use ferrocad_curves::{EdgeCurve, NurbsCurve, Vector3};
+        let backend = OcctBackend::new();
+        let curve = NurbsCurve::new(
+            2,
+            vec![0.0, 2.0],
+            vec![3, 3],
+            vec![
+                Vector3::new(0.0, 0.0, 0.0),
+                Vector3::new(1.0, 1.0, 0.0),
+                Vector3::new(2.0, 0.0, 0.0),
+            ],
+            vec![1.0, 1.0, 1.0],
+        )
+        .unwrap();
+        let edge = backend
+            .make_edge(&EdgeCurve::BSplineCurve(curve))
+            .unwrap();
+        let pieces = backend.split_edge(&edge, &[0.7, 1.3]).unwrap();
+        let edges = backend.elements(&pieces, ElementKind::Edge);
+        assert_eq!(edges.len(), 3);
+        let EdgeCurve::BSplineCurve(back) = backend.curve_of(&edges[1].shape).unwrap() else {
+            panic!("a trimmed B-spline edge still reports a B-spline");
+        };
+        assert!((back.first() - 0.7).abs() < 1e-9, "first was {}", back.first());
+        assert!((back.last() - 1.3).abs() < 1e-9, "last was {}", back.last());
+    }
+
+    #[test]
+    fn an_offset_curve_edge_round_trips_with_its_basis_and_offset() {
+        use ferrocad_curves::{Circle, EdgeCurve, OffsetCurve, Vector3};
+        let backend = OcctBackend::new();
+        let circle = Circle::new(Vector3::zero(), Vector3::new(0.0, 0.0, 1.0), 2.0).unwrap();
+        let basis = EdgeCurve::Circle(circle);
+        let offset = OffsetCurve::new(
+            basis.clone(),
+            0.5,
+            Vector3::new(0.0, 0.0, 1.0),
+            0.0,
+            std::f64::consts::TAU,
+        )
+        .unwrap();
+        let edge = backend.make_edge(&EdgeCurve::OffsetCurve(offset.clone())).unwrap();
+        let EdgeCurve::OffsetCurve(back) = backend.curve_of(&edge).unwrap() else {
+            panic!("an offset edge reports an offset curve");
+        };
+        assert!((back.offset() - 0.5).abs() < 1e-9);
+        assert!(back.direction().sub(&Vector3::new(0.0, 0.0, 1.0)).length() < 1e-9);
+        assert_eq!(back.basis().kind(), "Circle");
+        assert!((back.first() - 0.0).abs() < 1e-9);
+        assert!((back.last() - std::f64::consts::TAU).abs() < 1e-9);
+        assert!((back.point_at(0.0).length() - 2.5).abs() < 1e-9);
+    }
+
+    #[test]
     fn curve_of_a_non_edge_is_unsupported() {
         let backend = OcctBackend::new();
         let cube = backend.make_box(1.0, 1.0, 1.0).unwrap();

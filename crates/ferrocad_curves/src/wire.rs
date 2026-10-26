@@ -116,7 +116,7 @@ pub fn sort_edges(edges: &[EdgeCurve], tolerance: f64) -> Result<Vec<EdgeCurve>,
         for (index, edge) in remaining.iter().enumerate() {
             let (start, end) = edge.endpoints().expect("bounded");
             if start.distance(&cursor) <= tolerance {
-                next = Some((index, *edge, end));
+                next = Some((index, edge.clone(), end));
                 break;
             }
             if end.distance(&cursor) <= tolerance {
@@ -206,7 +206,7 @@ mod tests {
     fn sort_edges_tolerates_near_coincident_endpoints() {
         let a = segment(0.0, 0.0, 1.0, 0.0);
         let b = segment(1.0 + 1e-9, 0.0, 2.0, 0.0);
-        let sorted = sort_edges(&[a, b], TOLERANCE).unwrap();
+        let sorted = sort_edges(&[a.clone(), b.clone()], TOLERANCE).unwrap();
         assert_eq!(sorted.len(), 2);
         assert!(ends(&sorted[1]).0.distance(&ends(&sorted[0]).1) <= TOLERANCE);
         assert_eq!(
@@ -220,7 +220,7 @@ mod tests {
     fn sort_edges_reports_a_gap_and_an_unbounded_edge() {
         let a = segment(0.0, 0.0, 1.0, 0.0);
         let b = segment(2.0, 0.0, 3.0, 0.0);
-        assert_eq!(sort_edges(&[a, b], TOLERANCE), Err(CurveError::Disconnected));
+        assert_eq!(sort_edges(&[a.clone(), b], TOLERANCE), Err(CurveError::Disconnected));
 
         let line = EdgeCurve::Line(crate::Line::new(
             Vector3::zero(),
@@ -237,7 +237,7 @@ mod tests {
         let a = segment(0.0, 0.0, 1.0, 0.0);
         let b = segment(1.0, 0.0, 1.0, 1.0);
         let c = segment(1.0, 1.0, 0.0, 0.0);
-        let open = Wire::new(vec![a, b]).unwrap();
+        let open = Wire::new(vec![a.clone(), b.clone()]).unwrap();
         assert!(!open.is_closed());
         assert!((open.length() - 2.0).abs() < 1e-9);
 

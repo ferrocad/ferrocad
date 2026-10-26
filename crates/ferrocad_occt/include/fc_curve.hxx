@@ -6,17 +6,31 @@
 // type or a `Geom_*`'s parameters, so the classification lives here. Companion to
 // `fc_history.hxx` / `fc_topology.hxx`; see `docs/tasks/p2-architecture.md` P2.2.
 //
-// The result is one flat `rust::Vec<double>` (a shared struct would have to be
-// declared in the cxx bridge both ways):
+// The result is one flat `rust::Vec<double>`. Every payload starts with the same
+// 14-value header, so the previous line/circle/ellipse format is unchanged:
 //
-//   [kind, ox, oy, oz, dx, dy, dz, xx, xy, xz, first, last, major, minor]
+//   [kind, ox, oy, oz, dx, dy, dz, xx, xy, xz, first, last, major, minor, tail…]
 //
-// kind: 0 = unsupported, 1 = line, 2 = circle/arc, 3 = ellipse.
-// `o` is the line origin / circle centre / ellipse centre; `d` the line direction
-// or the plane normal; `x` the circle/ellipse's x axis (major axis for an
-// ellipse); `first`/`last` the trimmed parameter range; `major` the circle radius
-// or the ellipse major radius; `minor` the ellipse minor radius (unused for a
-// circle). On kind 0 every other value is 0.
+// kind: 0 = unsupported, 1 = line, 2 = circle/arc, 3 = ellipse/elliptical arc,
+//       4 = hyperbola/arc, 5 = parabola/arc, 6 = Bezier, 7 = B-spline,
+//       8 = offset curve.
+//
+// `o` is the line origin / conic centre / parabola vertex; `d` the line direction,
+// the plane normal or the offset direction; `x` the circle/ellipse x axis or the
+// conic's symmetry axis; `first`/`last` the edge's trimmed parameter range;
+// `major`/`minor` the conic radii (parabola: `major` is the focal length; offset:
+// `major` is the signed offset). On kind 0 every other value is 0.
+//
+// The tail holds what does not fit the header:
+//   kind 6: [pole_count], pole_count*3 coordinates, pole_count weights.
+//   kind 7: [degree, pole_count, knot_count, mult_count], pole_count*3
+//           coordinates, pole_count weights, knot_count knots, mult_count
+//           multiplicities. Periodic splines report kind 0 (their knot/mult
+//           relation is not the clamped one the Rust model holds).
+//   kind 8: [basis_length] followed by a complete nested payload of that length.
+//
+// An edge's `BRep_Tool::Curve` may wrap the basis in `Geom_TrimmedCurve`; the
+// basis is classified and `first`/`last` come from the trim.
 
 #include <BOPAlgo_BuilderFace.hxx>
 #include <BRepAdaptor_Curve.hxx>
@@ -62,9 +76,15 @@
 #include <TColgp_HArray1OfPnt.hxx>
 #include <GeomAbs_JoinType.hxx>
 #include <GeomAbs_Shape.hxx>
-#include <Geom_Circle.hxx>
+#include <Geom_Hyperbola.hxx>
+#include <Geom_Parabola.hxx>
+#include <Geom_BezierCurve.hxx>
+#include <Geom_OffsetCurve.hxx>
+#include <gp_Hypr.hxx>
+#include <gp_Parab.hxx>
 #include <Message_ProgressRange.hxx>
 #include <Geom_Curve.hxx>
+#include <Geom_Circle.hxx>
 #include <Geom_Ellipse.hxx>
 #include <Geom_Line.hxx>
 #include <Geom_TrimmedCurve.hxx>
@@ -99,6 +119,14 @@
 
 #include "rust/cxx.h"
 
+inline Handle(Geom_BSplineCurve) fc_bspline_curve(rust::Slice<const double> coords,
+                                                 rust::Slice<const double> weights,
+                                                 rust::Slice<const double> knots,
+                                                 rust::Slice<const int32_t> multiplicities,
+                                                 int degree,
+                                                 bool periodic,
+                                                 bool check_rational);
+
 inline void fc_curve_push_point(rust::Vec<double>& out, const gp_Pnt& point)
 {
   out.push_back(point.X());
@@ -113,109 +141,403 @@ inline void fc_curve_push_dir(rust::Vec<double>& out, const gp_Dir& direction)
   out.push_back(direction.Z());
 }
 
+inline void fc_curve_push_header(rust::Vec<double>& out, double first, double last)
+{
+  const std::size_t at = out.size();
+  for (int i = 0; i < 14; ++i) {
+    out.push_back(0.0);
+  }
+  out[at + 10] = first;
+  out[at + 11] = last;
+}
+
+inline void fc_curve_append(rust::Vec<double>& out,
+                            const Handle(Geom_Curve)& input,
+                            double first,
+                            double last,
+                            int depth)
+{
+  fc_curve_push_header(out, first, last);
+  const std::size_t at = out.size() - 14;
+  if (input.IsNull() || depth > 8) {
+    return;
+  }
+
+  Handle(Geom_Curve) curve = input;
+  if (curve->IsKind(STANDARD_TYPE(Geom_TrimmedCurve))) {
+    Handle(Geom_TrimmedCurve) trimmed = Handle(Geom_TrimmedCurve)::DownCast(curve);
+    if (!trimmed.IsNull()) {
+      first = trimmed->FirstParameter();
+      last = trimmed->LastParameter();
+      out[at + 10] = first;
+      out[at + 11] = last;
+      curve = trimmed->BasisCurve();
+    }
+  }
+  if (curve.IsNull()) {
+    return;
+  }
+
+  if (curve->IsKind(STANDARD_TYPE(Geom_Line))) {
+    Handle(Geom_Line) line = Handle(Geom_Line)::DownCast(curve);
+    if (line.IsNull()) {
+      return;
+    }
+    const gp_Lin& lin = line->Lin();
+    out[at] = 1.0;
+    out[at + 1] = lin.Location().X();
+    out[at + 2] = lin.Location().Y();
+    out[at + 3] = lin.Location().Z();
+    out[at + 4] = lin.Direction().X();
+    out[at + 5] = lin.Direction().Y();
+    out[at + 6] = lin.Direction().Z();
+    return;
+  }
+
+  if (curve->IsKind(STANDARD_TYPE(Geom_Circle))) {
+    Handle(Geom_Circle) circle = Handle(Geom_Circle)::DownCast(curve);
+    if (circle.IsNull()) {
+      return;
+    }
+    const gp_Circ& circ = circle->Circ();
+    const gp_Ax2& position = circ.Position();
+    out[at] = 2.0;
+    out[at + 1] = position.Location().X();
+    out[at + 2] = position.Location().Y();
+    out[at + 3] = position.Location().Z();
+    out[at + 4] = position.Direction().X();
+    out[at + 5] = position.Direction().Y();
+    out[at + 6] = position.Direction().Z();
+    out[at + 7] = position.XDirection().X();
+    out[at + 8] = position.XDirection().Y();
+    out[at + 9] = position.XDirection().Z();
+    out[at + 12] = circ.Radius();
+    return;
+  }
+
+  if (curve->IsKind(STANDARD_TYPE(Geom_Ellipse))) {
+    Handle(Geom_Ellipse) ellipse = Handle(Geom_Ellipse)::DownCast(curve);
+    if (ellipse.IsNull()) {
+      return;
+    }
+    const gp_Elips& elips = ellipse->Elips();
+    const gp_Ax2& position = elips.Position();
+    out[at] = 3.0;
+    out[at + 1] = position.Location().X();
+    out[at + 2] = position.Location().Y();
+    out[at + 3] = position.Location().Z();
+    out[at + 4] = position.Direction().X();
+    out[at + 5] = position.Direction().Y();
+    out[at + 6] = position.Direction().Z();
+    out[at + 7] = position.XDirection().X();
+    out[at + 8] = position.XDirection().Y();
+    out[at + 9] = position.XDirection().Z();
+    out[at + 12] = elips.MajorRadius();
+    out[at + 13] = elips.MinorRadius();
+    return;
+  }
+
+  if (curve->IsKind(STANDARD_TYPE(Geom_Hyperbola))) {
+    Handle(Geom_Hyperbola) hyperbola = Handle(Geom_Hyperbola)::DownCast(curve);
+    if (hyperbola.IsNull()) {
+      return;
+    }
+    const gp_Hypr& hypr = hyperbola->Hypr();
+    const gp_Ax2& position = hypr.Position();
+    out[at] = 4.0;
+    out[at + 1] = position.Location().X();
+    out[at + 2] = position.Location().Y();
+    out[at + 3] = position.Location().Z();
+    out[at + 4] = position.Direction().X();
+    out[at + 5] = position.Direction().Y();
+    out[at + 6] = position.Direction().Z();
+    out[at + 7] = position.XDirection().X();
+    out[at + 8] = position.XDirection().Y();
+    out[at + 9] = position.XDirection().Z();
+    out[at + 12] = hypr.MajorRadius();
+    out[at + 13] = hypr.MinorRadius();
+    return;
+  }
+
+  if (curve->IsKind(STANDARD_TYPE(Geom_Parabola))) {
+    Handle(Geom_Parabola) parabola = Handle(Geom_Parabola)::DownCast(curve);
+    if (parabola.IsNull()) {
+      return;
+    }
+    const gp_Parab& parab = parabola->Parab();
+    const gp_Ax2& position = parab.Position();
+    out[at] = 5.0;
+    out[at + 1] = position.Location().X();
+    out[at + 2] = position.Location().Y();
+    out[at + 3] = position.Location().Z();
+    out[at + 4] = position.Direction().X();
+    out[at + 5] = position.Direction().Y();
+    out[at + 6] = position.Direction().Z();
+    out[at + 7] = position.XDirection().X();
+    out[at + 8] = position.XDirection().Y();
+    out[at + 9] = position.XDirection().Z();
+    out[at + 12] = parab.Focal();
+    return;
+  }
+
+  if (curve->IsKind(STANDARD_TYPE(Geom_BezierCurve))) {
+    Handle(Geom_BezierCurve) bezier = Handle(Geom_BezierCurve)::DownCast(curve);
+    if (bezier.IsNull()) {
+      return;
+    }
+    out[at] = 6.0;
+    const Standard_Integer count = bezier->NbPoles();
+    out.push_back(static_cast<double>(count));
+    for (Standard_Integer i = 1; i <= count; ++i) {
+      fc_curve_push_point(out, bezier->Pole(i));
+    }
+    for (Standard_Integer i = 1; i <= count; ++i) {
+      out.push_back(bezier->Weight(i));
+    }
+    return;
+  }
+
+  if (curve->IsKind(STANDARD_TYPE(Geom_BSplineCurve))) {
+    Handle(Geom_BSplineCurve) spline = Handle(Geom_BSplineCurve)::DownCast(curve);
+    if (spline.IsNull() || spline->IsPeriodic()) {
+      return;
+    }
+    // A B-spline edge may trim a wider knot domain without a wrapper; re-segment
+    // so the bounds survive in the knot vector itself.
+    const double domain_first = spline->FirstParameter();
+    const double domain_last = spline->LastParameter();
+    if (first > domain_first + 1e-12 || last < domain_last - 1e-12) {
+      Handle(Geom_BSplineCurve) segment =
+          Handle(Geom_BSplineCurve)::DownCast(spline->Copy());
+      if (segment.IsNull()) {
+        return;
+      }
+      segment->Segment(first, last);
+      spline = segment;
+      first = spline->FirstParameter();
+      last = spline->LastParameter();
+      out[at + 10] = first;
+      out[at + 11] = last;
+    }
+    out[at] = 7.0;
+    const Standard_Integer degree = spline->Degree();
+    const Standard_Integer pole_count = spline->NbPoles();
+    const Standard_Integer knot_count = spline->NbKnots();
+    out.push_back(static_cast<double>(degree));
+    out.push_back(static_cast<double>(pole_count));
+    out.push_back(static_cast<double>(knot_count));
+    out.push_back(static_cast<double>(knot_count));
+    for (Standard_Integer i = 1; i <= pole_count; ++i) {
+      fc_curve_push_point(out, spline->Pole(i));
+    }
+    for (Standard_Integer i = 1; i <= pole_count; ++i) {
+      out.push_back(spline->Weight(i));
+    }
+    for (Standard_Integer i = 1; i <= knot_count; ++i) {
+      out.push_back(spline->Knot(i));
+    }
+    for (Standard_Integer i = 1; i <= knot_count; ++i) {
+      out.push_back(static_cast<double>(spline->Multiplicity(i)));
+    }
+    return;
+  }
+
+  if (curve->IsKind(STANDARD_TYPE(Geom_OffsetCurve))) {
+    Handle(Geom_OffsetCurve) offset = Handle(Geom_OffsetCurve)::DownCast(curve);
+    if (offset.IsNull()) {
+      return;
+    }
+    const gp_Dir& direction = offset->Direction();
+    out[at] = 8.0;
+    out[at + 4] = direction.X();
+    out[at + 5] = direction.Y();
+    out[at + 6] = direction.Z();
+    out[at + 12] = offset->Offset();
+    const std::size_t length_at = out.size();
+    out.push_back(0.0);
+    const Handle(Geom_Curve)& basis = offset->BasisCurve();
+    fc_curve_append(out,
+                    basis,
+                    basis.IsNull() ? first : basis->FirstParameter(),
+                    basis.IsNull() ? last : basis->LastParameter(),
+                    depth + 1);
+    out[length_at] = static_cast<double>(out.size() - length_at - 1);
+    return;
+  }
+}
+
 inline rust::Vec<double> fc_edge_curve(const TopoDS_Shape& shape)
 {
   rust::Vec<double> out;
-  out.reserve(14);
-  out.push_back(0.0); // kind, replaced below
-  for (int i = 0; i < 13; ++i) {
-    out.push_back(0.0);
-  }
+  out.reserve(64);
 
   if (shape.IsNull() || shape.ShapeType() != TopAbs_EDGE) {
+    fc_curve_push_header(out, 0.0, 0.0);
     return out;
   }
   const TopoDS_Edge& edge = TopoDS::Edge(shape);
   double first = 0.0;
   double last = 0.0;
   Handle(Geom_Curve) curve = BRep_Tool::Curve(edge, first, last);
-  if (curve.IsNull()) {
-    return out;
+  try {
+    fc_curve_append(out, curve, first, last, 0);
   }
-
-  // `BRep_Tool::Curve` keeps the trimming curve for an arc; classify its basis.
-  if (curve->IsKind(STANDARD_TYPE(Geom_TrimmedCurve))) {
-    Handle(Geom_TrimmedCurve) trimmed = Handle(Geom_TrimmedCurve)::DownCast(curve);
-    if (!trimmed.IsNull()) {
-      first = trimmed->FirstParameter();
-      last = trimmed->LastParameter();
-      curve = trimmed->BasisCurve();
-    }
+  catch (...) {
+    out.clear();
+    fc_curve_push_header(out, 0.0, 0.0);
   }
-
-  rust::Vec<double> data;
-  data.reserve(14);
-  data.push_back(0.0);
-  const gp_Pnt origin(0.0, 0.0, 0.0);
-  const gp_Dir direction(0.0, 0.0, 1.0);
-  fc_curve_push_point(data, origin);
-  fc_curve_push_dir(data, direction);
-  fc_curve_push_dir(data, direction);
-  data.push_back(first);
-  data.push_back(last);
-  data.push_back(0.0);
-  data.push_back(0.0);
-
-  if (curve->IsKind(STANDARD_TYPE(Geom_Line))) {
-    Handle(Geom_Line) line = Handle(Geom_Line)::DownCast(curve);
-    if (line.IsNull()) {
-      return out;
-    }
-    const gp_Lin& lin = line->Lin();
-    data[0] = 1.0;
-    data[1] = lin.Location().X();
-    data[2] = lin.Location().Y();
-    data[3] = lin.Location().Z();
-    data[4] = lin.Direction().X();
-    data[5] = lin.Direction().Y();
-    data[6] = lin.Direction().Z();
-    return data;
-  }
-
-  if (curve->IsKind(STANDARD_TYPE(Geom_Circle))) {
-    Handle(Geom_Circle) circle = Handle(Geom_Circle)::DownCast(curve);
-    if (circle.IsNull()) {
-      return out;
-    }
-    const gp_Circ& circ = circle->Circ();
-    const gp_Ax2& position = circ.Position();
-    data[0] = 2.0;
-    data[1] = position.Location().X();
-    data[2] = position.Location().Y();
-    data[3] = position.Location().Z();
-    data[4] = position.Direction().X();
-    data[5] = position.Direction().Y();
-    data[6] = position.Direction().Z();
-    data[7] = position.XDirection().X();
-    data[8] = position.XDirection().Y();
-    data[9] = position.XDirection().Z();
-    data[12] = circ.Radius();
-    return data;
-  }
-
-  if (curve->IsKind(STANDARD_TYPE(Geom_Ellipse))) {
-    Handle(Geom_Ellipse) ellipse = Handle(Geom_Ellipse)::DownCast(curve);
-    if (ellipse.IsNull()) {
-      return out;
-    }
-    const gp_Elips& elips = ellipse->Elips();
-    const gp_Ax2& position = elips.Position();
-    data[0] = 3.0;
-    data[1] = position.Location().X();
-    data[2] = position.Location().Y();
-    data[3] = position.Location().Z();
-    data[4] = position.Direction().X();
-    data[5] = position.Direction().Y();
-    data[6] = position.Direction().Z();
-    data[7] = position.XDirection().X();
-    data[8] = position.XDirection().Y();
-    data[9] = position.XDirection().Z();
-    data[12] = elips.MajorRadius();
-    data[13] = elips.MinorRadius();
-    return data;
-  }
-
   return out;
+}
+
+// A trimmed conic edge: kind 3 = ellipse, 4 = hyperbola, 5 = parabola. The frame
+// is passed explicitly so the caller keeps its own possibly rotated axes.
+// Returns null on failure.
+inline std::unique_ptr<TopoDS_Shape> fc_conic_edge(int kind,
+                                                   double ox,
+                                                   double oy,
+                                                   double oz,
+                                                   double nx,
+                                                   double ny,
+                                                   double nz,
+                                                   double xx,
+                                                   double xy,
+                                                   double xz,
+                                                   double major,
+                                                   double minor,
+                                                   double first,
+                                                   double last)
+{
+  try {
+    const gp_Ax2 position(gp_Pnt(ox, oy, oz), gp_Dir(nx, ny, nz), gp_Dir(xx, xy, xz));
+    Handle(Geom_Curve) curve;
+    if (kind == 3) {
+      curve = new Geom_Ellipse(gp_Elips(position, major, minor));
+    }
+    else if (kind == 4) {
+      curve = new Geom_Hyperbola(gp_Hypr(position, major, minor));
+    }
+    else if (kind == 5) {
+      curve = new Geom_Parabola(gp_Parab(position, major));
+    }
+    else {
+      return nullptr;
+    }
+    BRepBuilderAPI_MakeEdge make(curve, first, last);
+    if (!make.IsDone()) {
+      return nullptr;
+    }
+    return std::unique_ptr<TopoDS_Shape>(new TopoDS_Shape(make.Edge()));
+  }
+  catch (...) {
+    return nullptr;
+  }
+}
+
+// A Bezier edge from explicit poles/weights over the curve's natural [0, 1]
+// parameter range (`Geom_BezierCurve` is always parameterised on [0, 1]). Returns
+// null on failure.
+inline std::unique_ptr<TopoDS_Shape> fc_bezier_edge(rust::Slice<const double> coords,
+                                                    rust::Slice<const double> weights)
+{
+  const int count = static_cast<int>(coords.size() / 3);
+  if (count < 2 || static_cast<int>(weights.size()) != count) {
+    return nullptr;
+  }
+  try {
+    TColgp_Array1OfPnt poles(1, count);
+    bool rational = false;
+    for (int i = 0; i < count; ++i) {
+      poles.SetValue(i + 1, gp_Pnt(coords[3 * i], coords[3 * i + 1], coords[3 * i + 2]));
+      rational = rational || std::abs(weights[i] - 1.0) > 1e-12;
+    }
+    Handle(Geom_BezierCurve) curve;
+    if (rational) {
+      TColStd_Array1OfReal values(1, count);
+      for (int i = 0; i < count; ++i) {
+        values.SetValue(i + 1, weights[i]);
+      }
+      curve = new Geom_BezierCurve(poles, values);
+    }
+    else {
+      curve = new Geom_BezierCurve(poles);
+    }
+    BRepBuilderAPI_MakeEdge make(curve);
+    if (!make.IsDone()) {
+      return nullptr;
+    }
+    return std::unique_ptr<TopoDS_Shape>(new TopoDS_Shape(make.Edge()));
+  }
+  catch (...) {
+    return nullptr;
+  }
+}
+
+// A B-spline edge over `[first, last]`, re-segmenting the curve when the range is
+// narrower than its knot domain. Returns null on failure.
+inline std::unique_ptr<TopoDS_Shape> fc_bspline_edge_range(rust::Slice<const double> coords,
+                                                           rust::Slice<const double> weights,
+                                                           rust::Slice<const double> knots,
+                                                           rust::Slice<const int32_t> multiplicities,
+                                                           int degree,
+                                                           double first,
+                                                           double last)
+{
+  try {
+    Handle(Geom_BSplineCurve) curve =
+        fc_bspline_curve(coords, weights, knots, multiplicities, degree, false, false);
+    if (curve.IsNull() || curve->IsPeriodic()) {
+      return nullptr;
+    }
+    if (first > curve->FirstParameter() + 1e-12 || last < curve->LastParameter() - 1e-12) {
+      Handle(Geom_BSplineCurve) segment = Handle(Geom_BSplineCurve)::DownCast(curve->Copy());
+      if (segment.IsNull()) {
+        return nullptr;
+      }
+      segment->Segment(first, last);
+      curve = segment;
+    }
+    BRepBuilderAPI_MakeEdge make(curve);
+    if (!make.IsDone()) {
+      return nullptr;
+    }
+    return std::unique_ptr<TopoDS_Shape>(new TopoDS_Shape(make.Edge()));
+  }
+  catch (...) {
+    return nullptr;
+  }
+}
+
+// An edge of the offset curve of `basis` over `[first, last]`. The basis' own
+// curve (and its parameterisation) is read back from the edge. Returns null on
+// failure.
+inline std::unique_ptr<TopoDS_Shape> fc_offset_curve_edge(const TopoDS_Shape& basis,
+                                                          double offset,
+                                                          double dx,
+                                                          double dy,
+                                                          double dz,
+                                                          double first,
+                                                          double last)
+{
+  try {
+    if (basis.IsNull() || basis.ShapeType() != TopAbs_EDGE) {
+      return nullptr;
+    }
+    double basis_first = 0.0;
+    double basis_last = 0.0;
+    Handle(Geom_Curve) base = BRep_Tool::Curve(TopoDS::Edge(basis), basis_first, basis_last);
+    if (base.IsNull()) {
+      return nullptr;
+    }
+    Handle(Geom_OffsetCurve) curve = new Geom_OffsetCurve(base, offset, gp_Dir(dx, dy, dz));
+    BRepBuilderAPI_MakeEdge make(curve, first, last);
+    if (!make.IsDone()) {
+      return nullptr;
+    }
+    return std::unique_ptr<TopoDS_Shape>(new TopoDS_Shape(make.Edge()));
+  }
+  catch (...) {
+    return nullptr;
+  }
 }
 
 // The edge view of a shape, for `BRepBuilderAPI_MakeWire::Add`.

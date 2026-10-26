@@ -35,8 +35,8 @@ use std::sync::Mutex;
 
 use ferrocad_curves::{
     ANGULAR_TOLERANCE, Arc, ArcOfHyperbola, ArcOfParabola, BezierCurve, Circle, CurveError,
-    EdgeCurve, Ellipse, Hyperbola, Line, LineSegment, NurbsCurve, Parabola, TOLERANCE, Vector3,
-    polygon,
+    EdgeCurve, Ellipse, EllipticalArc, Hyperbola, Line, LineSegment, NurbsCurve, OffsetCurve,
+    Parabola, TOLERANCE, Vector3, polygon,
 };
 use ferrocad_geom::{ElementKind, Shape, SurfaceData, SurfaceSpec};
 use ferrocad_occt::surface_ops;
@@ -147,6 +147,49 @@ fn curve_to_py(py: Python<'_>, curve: EdgeCurve) -> PyResult<PyObject> {
         EdgeCurve::Arc(arc) => Ok(Py::new(py, PyCircle { curve: arc.circle() })?.into_any()),
         EdgeCurve::Ellipse(ellipse) => {
             Ok(Py::new(py, PyEllipse { curve: ellipse })?.into_any())
+        }
+        // The same basis rule for the other trimmed conics and the ellipse arc.
+        EdgeCurve::EllipticalArc(arc) => Ok(Py::new(
+            py,
+            PyEllipse {
+                curve: arc.ellipse(),
+            },
+        )?
+        .into_any()),
+        EdgeCurve::Hyperbola(hyperbola) => {
+            Ok(Py::new(py, PyHyperbola { curve: hyperbola })?.into_any())
+        }
+        EdgeCurve::ArcOfHyperbola(arc) => Ok(Py::new(
+            py,
+            PyHyperbola {
+                curve: arc.hyperbola(),
+            },
+        )?
+        .into_any()),
+        EdgeCurve::Parabola(parabola) => {
+            Ok(Py::new(py, PyParabola { curve: parabola })?.into_any())
+        }
+        EdgeCurve::ArcOfParabola(arc) => Ok(Py::new(
+            py,
+            PyParabola {
+                curve: arc.parabola(),
+            },
+        )?
+        .into_any()),
+        EdgeCurve::BezierCurve(bezier) => Ok(Py::new(
+            py,
+            PyBezierCurve {
+                curve: Mutex::new(bezier),
+            },
+        )?
+        .into_any()),
+        EdgeCurve::BSplineCurve(spline) => Ok(Py::new(
+            py,
+            PyBSplineCurve::from_state(nurbs_state(&spline)?),
+        )?
+        .into_any()),
+        EdgeCurve::OffsetCurve(offset) => {
+            Ok(Py::new(py, PyOffsetCurve { curve: offset })?.into_any())
         }
     }
 }
@@ -1861,6 +1904,93 @@ impl PyArcOfParabola {
             "Part.ArcOfParabola({}, {})",
             self.arc.first(),
             self.arc.last()
+        )
+    }
+}
+
+/// `Part.OffsetCurve(basis, offset, direction)` — a constant offset of another
+/// curve (`Part::GeomOffsetCurve`). `Edge.Curve` reports this class for an edge
+/// whose kernel curve is a `Geom_OffsetCurve`.
+#[pyclass(name = "OffsetCurve", module = "Part")]
+#[derive(Clone)]
+pub struct PyOffsetCurve {
+    curve: OffsetCurve,
+}
+
+#[pymethods]
+impl PyOffsetCurve {
+    /// The registered type name (`Part::GeomOffsetCurve`), as upstream reports it.
+    #[getter]
+    fn TypeId(&self) -> &'static str {
+        "Part::GeomOffsetCurve"
+    }
+
+    #[new]
+    fn new(
+        basis: &Bound<'_, PyAny>,
+        offset: f64,
+        direction: &Bound<'_, PyAny>,
+    ) -> PyResult<Self> {
+        let entry = PyEdge::entry_from(basis)?;
+        let basis_curve = match entry.curve {
+            Some(curve) => curve,
+            None => backend().curve_of(&entry.shape).map_err(kernel_error)?,
+        };
+        let direction = vector(direction)?;
+        let (first, last) = basis_curve
+            .parameter_range()
+            .ok_or_else(|| OCCError::new_err("an offset needs a bounded basis curve"))?;
+        let curve = OffsetCurve::new(basis_curve, offset, direction, first, last)
+            .map_err(curve_error)?;
+        Ok(Self { curve })
+    }
+
+    /// The curve being offset (upstream's `BasisCurve`).
+    #[getter]
+    fn BasisCurve(&self, py: Python<'_>) -> PyResult<PyObject> {
+        curve_to_py(py, self.curve.basis().clone())
+    }
+
+    /// The signed offset distance.
+    #[getter]
+    fn Offset(&self) -> f64 {
+        self.curve.offset()
+    }
+
+    /// The unit direction the offset is measured against.
+    #[getter]
+    fn Direction(&self, py: Python<'_>) -> PyResult<PyObject> {
+        py_vector(py, self.curve.direction())
+    }
+
+    #[getter]
+    fn FirstParameter(&self) -> f64 {
+        self.curve.first()
+    }
+
+    #[getter]
+    fn LastParameter(&self) -> f64 {
+        self.curve.last()
+    }
+
+    /// The point at the basis parameter `u`.
+    fn value(&self, py: Python<'_>, parameter: f64) -> PyResult<PyObject> {
+        py_vector(py, self.curve.point_at(parameter))
+    }
+
+    /// The offset as an edge.
+    fn toShape(&self, py: Python<'_>) -> PyResult<Py<PyEdge>> {
+        Py::new(
+            py,
+            PyEdge::from_curve(EdgeCurve::OffsetCurve(self.curve.clone()))?,
+        )
+    }
+
+    fn __repr__(&self) -> String {
+        format!(
+            "Part.OffsetCurve({}, {})",
+            self.curve.basis().kind(),
+            self.curve.offset()
         )
     }
 }
@@ -3890,6 +4020,19 @@ impl PyBSplineCurve {
             .unwrap_or_else(|e| e.into_inner())
             .clone()
             .ok_or_else(|| OCCError::new_err("the B-spline is empty"))
+    }
+
+    /// The clamped B-spline description behind this curve, for `Part.Edge(...)`.
+    fn to_nurbs(&self) -> PyResult<NurbsCurve> {
+        let state = self.state()?;
+        NurbsCurve::new(
+            state.degree,
+            state.knots,
+            state.mults,
+            state.poles,
+            state.weights,
+        )
+        .map_err(curve_error)
     }
 
     fn set_periodicity(&self, target: bool) -> PyResult<()> {
@@ -7421,6 +7564,72 @@ impl PyEdge {
                 curve: Some(curve),
             });
         }
+        if let Ok(ellipse) = value.downcast::<PyEllipse>() {
+            let curve = EdgeCurve::Ellipse(ellipse.borrow().curve);
+            return Ok(EdgeEntry {
+                shape: shape_from_curve(&curve)?,
+                curve: Some(curve),
+            });
+        }
+        if let Ok(arc) = value.downcast::<PyArcOfEllipse>() {
+            let arc = arc.borrow();
+            let curve = EdgeCurve::EllipticalArc(
+                EllipticalArc::new(arc.ellipse, arc.first, arc.last).map_err(curve_error)?,
+            );
+            return Ok(EdgeEntry {
+                shape: shape_from_curve(&curve)?,
+                curve: Some(curve),
+            });
+        }
+        if let Ok(hyperbola) = value.downcast::<PyHyperbola>() {
+            let curve = EdgeCurve::Hyperbola(hyperbola.borrow().curve);
+            return Ok(EdgeEntry {
+                shape: shape_from_curve(&curve)?,
+                curve: Some(curve),
+            });
+        }
+        if let Ok(arc) = value.downcast::<PyArcOfHyperbola>() {
+            let curve = EdgeCurve::ArcOfHyperbola(arc.borrow().arc.clone());
+            return Ok(EdgeEntry {
+                shape: shape_from_curve(&curve)?,
+                curve: Some(curve),
+            });
+        }
+        if let Ok(parabola) = value.downcast::<PyParabola>() {
+            let curve = EdgeCurve::Parabola(parabola.borrow().curve);
+            return Ok(EdgeEntry {
+                shape: shape_from_curve(&curve)?,
+                curve: Some(curve),
+            });
+        }
+        if let Ok(arc) = value.downcast::<PyArcOfParabola>() {
+            let curve = EdgeCurve::ArcOfParabola(arc.borrow().arc.clone());
+            return Ok(EdgeEntry {
+                shape: shape_from_curve(&curve)?,
+                curve: Some(curve),
+            });
+        }
+        if let Ok(bezier) = value.downcast::<PyBezierCurve>() {
+            let curve = EdgeCurve::BezierCurve(bezier.borrow().curve());
+            return Ok(EdgeEntry {
+                shape: shape_from_curve(&curve)?,
+                curve: Some(curve),
+            });
+        }
+        if let Ok(spline) = value.downcast::<PyBSplineCurve>() {
+            let curve = EdgeCurve::BSplineCurve(spline.borrow().to_nurbs()?);
+            return Ok(EdgeEntry {
+                shape: shape_from_curve(&curve)?,
+                curve: Some(curve),
+            });
+        }
+        if let Ok(offset) = value.downcast::<PyOffsetCurve>() {
+            let curve = EdgeCurve::OffsetCurve(offset.borrow().curve.clone());
+            return Ok(EdgeEntry {
+                shape: shape_from_curve(&curve)?,
+                curve: Some(curve),
+            });
+        }
         if let Ok(shape) = value.downcast::<PartShape>() {
             let inner = shape
                 .borrow()
@@ -7983,7 +8192,10 @@ impl PyWire {
             return false;
         };
         let points = |curve: EdgeCurve| curve.endpoints();
-        match (first.curve.and_then(points), last.curve.and_then(points)) {
+        match (
+            first.curve.clone().and_then(points),
+            last.curve.clone().and_then(points),
+        ) {
             (Some((start, _)), Some((_, end))) => {
                 start.distance(&end) <= ferrocad_curves::TOLERANCE
             }
@@ -9331,6 +9543,7 @@ pub(crate) fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyParabola>()?;
     m.add_class::<PyArcOfParabola>()?;
     m.add_class::<PyBezierCurve>()?;
+    m.add_class::<PyOffsetCurve>()?;
     m.add_class::<PyPlane>()?;
     m.add_class::<PyCylinder>()?;
     m.add_class::<PySphere>()?;

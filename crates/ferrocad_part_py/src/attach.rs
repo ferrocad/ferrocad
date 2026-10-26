@@ -658,6 +658,12 @@ fn point_and_tangent(curve: &ferrocad_curves::EdgeCurve, parameter: f64) -> (Vec
             curve.point_at(t * std::f64::consts::TAU),
             curve.tangent_at(t * std::f64::consts::TAU),
         ),
+        EdgeCurve::EllipticalArc(arc) => {
+            let angle = arc.first() + t * (arc.last() - arc.first());
+            (arc.point_at(angle), arc.tangent_at(angle))
+        }
+        // The remaining analytic kinds use the edge parameter directly.
+        _ => (curve.point_at(t), curve.tangent_at(t)),
     }
 }
 
@@ -701,6 +707,15 @@ fn object_axes(support: &ResolvedSupport) -> Result<(Vector3, Vector3, Vector3, 
             ellipse.normal(),
             ellipse.center(),
         )),
+        ferrocad_curves::EdgeCurve::EllipticalArc(arc) => {
+            let ellipse = arc.ellipse();
+            Ok((
+                ellipse.x_axis(),
+                ellipse.y_axis(),
+                ellipse.normal(),
+                ellipse.center(),
+            ))
+        }
         _ => Err(
             "ObjectXY/ObjectXZ/ObjectYZ need a conic section edge or a whole object"
                 .to_string(),
@@ -891,6 +906,7 @@ fn calculate_placement(
             let curve = edge_curve(shape, "the focus support")?;
             let ellipse = match curve {
                 ferrocad_curves::EdgeCurve::Ellipse(ellipse) => ellipse,
+                ferrocad_curves::EdgeCurve::EllipticalArc(arc) => arc.ellipse(),
                 _ => return Err(format!("{mode} needs an ellipse support")),
             };
             point_placement(focus_point(&ellipse, mode == "Focus1")?)?

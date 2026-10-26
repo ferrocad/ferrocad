@@ -1197,7 +1197,7 @@
       }
     },
     "classes": {
-      "count": 59,
+      "count": 60,
       "names": [
         "Part.ChFi2d::AnaFilletAlgo",
         "Part.ChFi2d::ChamferAPI",
@@ -1247,6 +1247,7 @@
         "Part::Hyperbola",
         "Part::Line",
         "Part::LineSegment",
+        "Part::OffsetCurve",
         "Part::Parabola",
         "Part::Plane",
         "Part::PlaneSurface",
@@ -1260,7 +1261,7 @@
         "Part::Wire"
       ],
       "by_module": {
-        "Part": 32,
+        "Part": 33,
         "Part.ChFi2d": 3,
         "Part.Geom2d": 17,
         "Part.ShapeFix": 7
@@ -1358,10 +1359,10 @@
       ],
       "unresolved": []
     },
-    "methods_heuristic": 863,
+    "methods_heuristic": 873,
     "methods": {
-      "count": 1670,
-      "distinct": 349,
+      "count": 1680,
+      "distinct": 350,
       "classes": {
         "Part.ChFi2d::AnaFilletAlgo": [
           "__repr__",
@@ -2620,6 +2621,18 @@
           "new",
           "toShape"
         ],
+        "Part::OffsetCurve": [
+          "BasisCurve",
+          "Direction",
+          "FirstParameter",
+          "LastParameter",
+          "Offset",
+          "TypeId",
+          "__repr__",
+          "new",
+          "toShape",
+          "value"
+        ],
         "Part::Parabola": [
           "Axis",
           "Center",
@@ -3155,13 +3168,13 @@
         {
           "kind": "not_available_in_this_slice",
           "file": "crates/ferrocad_part_py/src/curves.rs",
-          "line": 7275,
+          "line": 7418,
           "text": "\"Part.{what} is not available in this slice (the seam exposes no such query)\""
         },
         {
           "kind": "not_available_in_this_slice",
           "file": "crates/ferrocad_part_py/src/curves.rs",
-          "line": 7568,
+          "line": 7777,
           "text": "\"Part.Edge.Tolerance is not available in this slice (the seam exposes \\"
         },
         {
@@ -3179,25 +3192,25 @@
         {
           "kind": "not_implemented",
           "file": "crates/ferrocad_part_py/src/curves.rs",
-          "line": 3989,
+          "line": 4132,
           "text": "PyNotImplementedError::new_err(format!("
         },
         {
           "kind": "not_implemented",
           "file": "crates/ferrocad_part_py/src/curves.rs",
-          "line": 7071,
+          "line": 7214,
           "text": "/// `NotImplementedError` rather than answering from a curve that was never"
         },
         {
           "kind": "not_implemented",
           "file": "crates/ferrocad_part_py/src/curves.rs",
-          "line": 8283,
+          "line": 8495,
           "text": "Err(_) => Ok(py.NotImplemented()),"
         },
         {
           "kind": "not_implemented",
           "file": "crates/ferrocad_part_py/src/curves.rs",
-          "line": 8291,
+          "line": 8503,
           "text": "Err(_) => Ok(py.NotImplemented()),"
         },
         {
@@ -3301,7 +3314,6 @@
       "Part::GeometryDoubleExtension",
       "Part::GeometryIntExtension",
       "Part::GeometryStringExtension",
-      "Part::OffsetCurve",
       "Part::OffsetSurface",
       "Part::Part2DObject",
       "Part::PlateSurface",
@@ -3467,6 +3479,10 @@
       "Part::LineSegment": [
         "setParameterRange"
       ],
+      "Part::OffsetCurve": [
+        "OffsetDirection",
+        "OffsetValue"
+      ],
       "Part::RectangularTrimmedSurface": [
         "setTrim"
       ],
@@ -3538,7 +3554,6 @@
       "Part::GeometryIntExtension",
       "Part::GeometryStringExtension",
       "Part::GeometrySurface",
-      "Part::OffsetCurve",
       "Part::OffsetSurface",
       "Part::PartFeature",
       "Part::PlateSurface",
@@ -3583,7 +3598,7 @@
   "coverage": {
     "methods": {
       "upstream_declared": 609,
-      "ours_declared": 1670,
+      "ours_declared": 1680,
       "upstream_distinct": 408,
       "covered_distinct": 205,
       "fraction": 0.5025,
@@ -3792,7 +3807,7 @@
         "writeInventor",
         "writeParametersToFeature"
       ],
-      "shared_classes": 20,
+      "shared_classes": 21,
       "classes": [
         "Part::ArcOfCircle",
         "Part::ArcOfEllipse",
@@ -3808,6 +3823,7 @@
         "Part::Hyperbola",
         "Part::Line",
         "Part::LineSegment",
+        "Part::OffsetCurve",
         "Part::Parabola",
         "Part::Plane",
         "Part::RectangularTrimmedSurface",

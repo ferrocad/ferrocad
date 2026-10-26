@@ -213,6 +213,7 @@ commands = json.loads(ferrocad_shell.commands())
 | --- | --- | --- | --- |
 | App_Delete | Edit | ForEdit | false |
 | App_Move | Edit | ForEdit | false |
+| App_Rotate | Edit | ForEdit | false |
 | Mods_Settings | Edit | ForEdit | true |
 | Toy_MakeSlab | Toy | ForEdit | true |
 | Toy_Polyline | Toy | ForView | true |

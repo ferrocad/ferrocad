@@ -30,10 +30,10 @@ use ferrocad_inventor::{
 use ferrocad_stage::Stage;
 use ferrocad_stage::shape::{GHOST_DEPTH, WIRE_DEPTH_BIAS};
 use ferrocad_stage::{
-    AxisStyle, FaceFrame, GizmoCommitEvent, GizmoHandle, GizmoModifiers, GizmoStyle, GizmoValue,
-    GridSpec, GridStyle, InteractionCommit, Manipulator, MouseButton as StageButton, PointerEvent,
-    PointerKind, SnapCandidate, SnapContext, SnapKind, Tool, ToolStatus, TransformGizmo, Workplane,
-    axis, feedback, grid, snap_to_geometry_with,
+    AxisStyle, FaceFrame, GizmoCommitEvent, GizmoHandle, GizmoMode, GizmoModifiers, GizmoStyle,
+    GizmoValue, GridSpec, GridStyle, InteractionCommit, Manipulator, MouseButton as StageButton,
+    PointerEvent, PointerKind, SnapCandidate, SnapContext, SnapKind, Tool, ToolStatus,
+    TransformGizmo, Workplane, axis, feedback, grid, snap_to_geometry_with,
 };
 use ferrocad_stage::screen::{project_device, scale_for};
 use ferrocad_theme::ui::{CHROME_ACTIVE, CHROME_ACTIVE_BG, CHROME_LINE, FG, MUTED};
@@ -1051,6 +1051,28 @@ impl<V: InventorView> InventorViewport<V> {
     /// The active gizmo, if any.
     pub fn gizmo(&self) -> Option<&TransformGizmo> {
         self.gizmo.as_ref()
+    }
+
+    /// Which handles the gizmo shows (translate, rotate or both). Returns whether
+    /// the mode changed.
+    ///
+    /// The mode changes the handle **set**, so the compiled overlay is rebuilt; a
+    /// host that changes it through [`gizmo_mut`](Self::gizmo_mut) would leave the
+    /// old handles drawn and pickable.
+    pub fn set_gizmo_mode(&mut self, mode: GizmoMode) -> bool {
+        let Some(gizmo) = self.gizmo.as_mut() else {
+            return false;
+        };
+        if gizmo.mode() == mode {
+            return false;
+        }
+        gizmo.set_mode(mode);
+        // The mode changes the handle set: rebuild the geometry from the current
+        // camera before compiling it, or the overlay would keep the old handles
+        // until the next paint.
+        gizmo.update(&self.camera);
+        self.rebuild_gizmo_queue();
+        true
     }
 
     /// The workspace gizmo style every hosted gizmo and manipulator is given.
@@ -5811,6 +5833,38 @@ mod tests {
             .iter()
             .find(|item| item.entity_id() == 42)
             .and_then(|item| item.temporary_transform())
+    }
+
+    /// A mode change is a handle-set change: the compiled overlay must be rebuilt,
+    /// not just the stage object, or the old handles stay pickable.
+    #[test]
+    fn changing_the_gizmo_mode_rebuilds_the_handle_overlay() {
+        use ferrocad_stage::GizmoMode;
+
+        let (mut view, _viewport) = gizmo_view(TransformGizmo::new(
+            42,
+            Vector3::zero(),
+            GizmoMode::Translate,
+        ));
+        let (rotate, _viewport) =
+            gizmo_view(TransformGizmo::new(42, Vector3::zero(), GizmoMode::Rotate));
+        assert_ne!(
+            view.gizmo_queue.len(),
+            rotate.gizmo_queue.len(),
+            "the two modes compile different overlays"
+        );
+
+        assert!(view.set_gizmo_mode(GizmoMode::Rotate));
+        assert_eq!(view.gizmo().expect("a gizmo").mode(), GizmoMode::Rotate);
+        assert_eq!(
+            view.gizmo_queue.len(),
+            rotate.gizmo_queue.len(),
+            "the compiled overlay matches the ring-only gizmo"
+        );
+        assert!(
+            !view.set_gizmo_mode(GizmoMode::Rotate),
+            "setting the same mode is a no-op"
+        );
     }
 
     #[test]

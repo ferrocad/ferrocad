@@ -87,6 +87,11 @@ class SelectionTests(unittest.TestCase):
         FreeCADGui.Selection._set([("A", []), ("B", [])])
         result = FreeCADGui.runCommand("App_Move", 10.0, 0.0, 0.0)
         self.assertEqual(result["status"], "moved 2 object(s)")
+        self.assertEqual(
+            result["gizmo"],
+            "translate",
+            "Move forces the translate handles even after a rotate session",
+        )
         for obj in (self.a, self.b):
             self.assertAlmostEqual(obj.Placement.Base.x, 10.0, places=6)
 
@@ -103,10 +108,30 @@ class SelectionTests(unittest.TestCase):
         # A geometric verb asks for the non-modal HUD, not the centred modal.
         self.assertEqual(result["dialog"]["presentation"], "float")
         self.assertEqual(result["dialog"]["preview"], "translation")
+        self.assertEqual(
+            result["gizmo"],
+            "translate",
+            "the deferred fields and the visible arrows agree",
+        )
         token = result["token"]
 
         self.assertTrue(FreeCADGui._cancel(token)["ok"])
         self.assertFalse(FreeCADGui._accept(token, {})["ok"], "the token is spent")
+        self.assertAlmostEqual(self.a.Placement.Base.x, 0.0, places=6)
+
+    def test_rotate_selects_the_rotation_gizmo(self):
+        """The wheel's Rotate verb puts the triad in its ring mode."""
+        self.assertFalse(self.entry("App_Rotate")["enabled"])
+        FreeCADGui.Selection._set([("A", [])])
+        self.assertTrue(self.entry("App_Rotate")["enabled"])
+
+        result = FreeCADGui._run("App_Rotate")
+        self.assertTrue(result["ok"], result)
+        self.assertEqual(result["gizmo"], "rotate")
+        self.assertIn("ring", result["status"])
+
+        # Mode-only: it changes no geometry and opens no transaction.
+        self.assertEqual(self.doc.CountObjects, 2)
         self.assertAlmostEqual(self.a.Placement.Base.x, 0.0, places=6)
 
 

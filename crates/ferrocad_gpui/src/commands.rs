@@ -292,6 +292,12 @@ pub struct CommandOutcome {
     /// failure, and needs no transaction.
     #[serde(default)]
     pub select: Option<String>,
+    /// A transform-gizmo mode the command wants (`translate`, `rotate`,
+    /// `universal`). Session tool state, not a document edit: `Move` returns
+    /// `translate` so the deferred HUD's fields and the visible arrows agree, and
+    /// the wheel's `Rotate` returns `rotate`.
+    #[serde(default)]
+    pub gizmo: Option<String>,
 }
 
 /// The registered commands, with their live state.

@@ -21,7 +21,7 @@ workbench scripts port, and it keeps the shell naming no workbench.
 | `FreeCAD.GuiUp` | `0`, hardcoded in the facade | ✅ `1` in the app, `0` headless (§8, §16) |
 | Command registry in the shell | ▢ none; the console has three hardcoded buttons (`version()`, `objects`, `recompute()`) | ✅ header controls, popovers and dock over the registry (A1, P0.6) |
 | Multi-selection | ▢ the inspector held one name; nothing pushed it to Python | ✅ click / Ctrl·Shift-click, pushed to the facade (A2) |
-| Built-in commands | ▢ none | ✅ `App_Delete`, `App_Move` (A2) |
+| Built-in commands | ▢ none | ✅ `App_Delete`, `App_Move`, `App_Rotate` (A2) |
 | Menu bar / toolbar / shortcuts | ▢ none (S2) | ◐ header controls, action dock and the title-bar app menu; `Accel` bindings are A4 |
 | Workbench entry points | module hooks (`register_display_provider`, `register_interaction_provider`) and `ferrocad_shell.add_namespace` | ✅ plus `FreeCADGui.addCommand` |
 | Interactive tools | `ferrocad_stage::Tool` (polyline), `Manipulator`, `TransformGizmo`; contributed in Rust | same |
@@ -435,8 +435,8 @@ return {"tool": "toy_measure"}                         # starts a registered too
   Object verbs are **contextual**, not ambient: they do not belong in the bottom
   strip. A command declares `FerroCAD_Surface: "radial"` (and optionally
   `FerroCAD_Tone: "additive" | "destructive"`), which removes it from the dock and
-  makes it a wedge in the wheel. The built-ins today are `App_Move` (structural) and
-  `App_Delete` (destructive).
+  makes it a wedge in the wheel. The built-ins today are `App_Move` and
+  `App_Rotate` (structural) and `App_Delete` (destructive).
 
   | Gesture | Effect |
   | --- | --- |
@@ -504,7 +504,8 @@ registry.
 | Id | Action | Notes |
 | --- | --- | --- |
 | `App_Delete` ✅ | remove the selected objects | one transaction; `IsActive` = selection non-empty |
-| `App_Move` ✅ | move the selection by `(dx, dy, dz)` | **floating** HUD beside the gizmo with a live translation preview; the canvas stays interactive, and `runCommand("App_Move", dx, dy, dz)` applies the same code without the dialog |
+| `App_Move` ✅ | move the selection by `(dx, dy, dz)` | **floating** HUD beside the gizmo with a live translation preview; the canvas stays interactive, and `runCommand("App_Move", dx, dy, dz)` applies the same code without the dialog. Returns `"gizmo": "translate"` so the HUD and the arrows agree |
+| `App_Rotate` ✅ | switch the transform gizmo to its rotation rings | a mode-only verb (no form, no transaction): returns `"gizmo": "rotate"`; the ring drag commits the same `transform` interaction a Move drag does. `Ctrl+Shift+R` |
 | `File_New` / `File_Open` / `File_Save` / `File_SaveAs` / `File_Close` | S2 | base app, not a workbench |
 | `App_Undo` / `App_Redo` | S2 | `IsActive` from `getAvailableUndos` |
 | `Toy_MakeSlab` | create a slab | the toy's `makeSlab`, wrapped as a command (asks for Width/Depth/Height) |
@@ -571,7 +572,7 @@ using it to auto-wrap transactions is deliberately not done (§3.3).
 | --- | --- | --- |
 | **A0 — registry** ✅ | `FreeCADGui.addCommand/runCommand/listCommands`, resource defaults, duplicate/error isolation; `GuiUp` flag plumbing; Python conformance tests | a registered command runs and returns its value; a raising `Activated`/`IsActive` is isolated; duplicates raise |
 | **A1 — shell bridge + placement** ✅ | `ferrocad_shell.commands()/run_command()`, `ferrocad_gpui::commands`, a surface-placed command list with enabled/checked (the A1 flat bar was replaced by the P0.6 header/dock), rebuild on selection/doc events; `Toy_MakeSlab` registered | headless toy test: the command list surfaces the toy command, a run creates the object, undo removes it |
-| **A2 — selection + built-ins** ✅ | `FreeCADGui.Selection` snapshot pushed by the shell, multi-selection in the inspector (Ctrl/Cmd·Shift toggle), `App_Delete`, `App_Move` (delta via `runCommand`; the dialog is A3) | deleting two selected objects is one undo step; `IsActive` flips with the selection |
+| **A2 — selection + built-ins** ✅ | `FreeCADGui.Selection` snapshot pushed by the shell, multi-selection in the inspector (Ctrl/Cmd·Shift toggle), `App_Delete`, `App_Move` (delta via `runCommand`; the dialog is A3), `App_Rotate` (session gizmo mode) | deleting two selected objects is one undo step; `IsActive` flips with the selection; Rotate returns `gizmo: rotate` |
 | **A3 — dialogs** ✅ | the spec + token protocol, the glass modal **and the floating HUD** (`presentation`, `preview`), `text/int/float/quantity/bool/enum` fields, validation, cancel; `Toy_MakeSlab` and `App_Move` use it | create via the dialog; cancel creates nothing and leaves no transaction or token; a bad value is rejected in the shell; `App_Move` floats beside the gizmo and previews its delta |
 | **A4 — shortcuts + status** ✅ | `Accel` parsing and window-root bindings, tooltips (ToolTip + Accel), `{"status"}` results, the `HoverReport` pass-through line | a shortcut runs the same command as a click; the status bar shows the command's message and the overlay pass-through |
 | **A5 — view/tool requests** ✅ | `{"view": …}` applied by the shell (grid state + projection), `Contributions::with_tool` + `{"tool": id}` | a checkable grid command toggles the grid state and its check mark; an unknown tool id reports cleanly |
@@ -659,7 +660,7 @@ through — without the shell naming the workbench.
 | File | What it does |
 | --- | --- |
 | `python/FreeCADGui/__init__.py` | the registry (`addCommand`, `removeCommand`, `listCommands`, `runCommand`); `Command` duck-typing (`Activated` required, `GetResources`/`IsActive`/`IsChecked` optional); per-command error isolation with `_report_once`; the private bridge `_command_list()` / `_run(name)`; the **token registry** `_accept`/`_cancel`/`_cancel_all`; the read-only `Selection` snapshot |
-| `python/ferrocad_shell/__init__.py` | `commands()` and `run_command(name)` — the two functions `ferrocad_gpui::python::call_json` calls; `set_selection(payload)` (the snapshot push); `set_view_state(payload)` (the view mirror); `dialog_accept(payload)` / `dialog_cancel(token)`; the built-ins `App_Delete`, `App_Move` and the checkable `App_ToggleGrid` |
+| `python/ferrocad_shell/__init__.py` | `commands()` and `run_command(name)` — the two functions `ferrocad_gpui::python::call_json` calls; `set_selection(payload)` (the snapshot push); `set_view_state(payload)` (the view mirror); `dialog_accept(payload)` / `dialog_cancel(token)`; the built-ins `App_Delete`, `App_Move`, `App_Rotate` and the checkable `App_ToggleGrid` |
 | `python/ferrocad_toy/__init__.py` | `Toy_MakeSlab` (`MenuText` "Create Slab", `ToolTip`, `Accel` "Ctrl+Shift+S", `Group` "Toy", `CmdType` "ForEdit") returns a three-quantity dialog whose `_make_from_dialog` callback creates the slab; `Toy_Polyline` returns `{"tool": "toy_polyline"}` |
 
 Two shape decisions fell out of the build:
@@ -698,7 +699,7 @@ Two shape decisions fell out of the build:
 | `ferrocad_viewport/src/inventor_view.rs` | `HoverReport { target, through }` — updated on every pointer move from the same pick and overlay tests the click uses; `hover_report()` |
 
 The commands are dispatched from the chrome (the floating viewport pill, popovers, dock)
-or the Dev Tools list — there is no flat strip. Because `App_Delete`/`App_Move` are registered
+or the Dev Tools list — there is no flat strip. Because `App_Delete`/`App_Move`/`App_Rotate` are registered
 by the base app script, **every** edition has dock rows; they are greyed until
 something is selected. A disabled command stays visible (its label in the muted token)
 — the user should see that the action exists. A checked command carries the accent.
@@ -717,7 +718,7 @@ pushes the pruned set, so `IsActive` cannot latch onto a dead object.
 | Test | Asserts |
 | --- | --- |
 | `tests/test_commands.py` (7) | register/list/run, resource defaults, duplicate id raises, a command without `Activated` raises, a raising `Activated` is isolated, a raising `IsActive` disables only that command, an unknown id raises |
-| `tests/test_selection.py` (7) | the snapshot resolves objects and `Face6` sub-elements; a deleted name drops out; `IsActive` flips with the snapshot; two selected objects delete in one undo step; `App_Move` translates every selected object and undoes as one step |
+| `tests/test_selection.py` (8) | the snapshot resolves objects and `Face6` sub-elements; a deleted name drops out; `IsActive` flips with the snapshot; two selected objects delete in one undo step; `App_Move` translates every selected object and undoes as one step; `App_Rotate` reports `gizmo: rotate` and changes no geometry |
 | `tests/test_dialogs.py` (6) | a spec becomes a token with no callable in the JSON; accept runs once and spends the token; cancel drops it; a callback can return a new dialog; a raising callback is isolated; `_cancel_all` clears everything |
 | `tests/test_view_tools.py` (4) | the view-state defaults; the checkable grid command closes the loop through the mirror; `tool` and `view` survive the payload; a status and a view can coexist |
 | `crates/ferrocad_toy/tests/commands.rs` | `Toy_MakeSlab` is listed with its label/group/type and enabled; running it returns a dialog and creates nothing; accepting creates the slab; the token is spent; one undo removes it |

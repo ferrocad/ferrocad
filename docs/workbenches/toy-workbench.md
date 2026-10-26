@@ -122,12 +122,13 @@ The shell hosts both from the edition's `Contributions`; it never learns what a 
 or a transform means.
 
 The **app-level** built-ins come for free: `ferrocad_shell` registers `App_Delete`,
-`App_Move` and the checkable `App_ToggleGrid`, so every edition (the toy included)
-has them in the actions bar. Delete removes the whole selection as one transaction;
-Move opens a ΔX/ΔY/ΔZ dialog (its non-interactive form,
-`runCommand("App_Move", dx, dy, dz)`, skips the modal); Grid flips the shell's grid
-state through a `view` request (rendering is G5). A Ctrl/Cmd-click in the inspector
-builds the multi-selection they act on.
+`App_Move`, `App_Rotate` and the checkable `App_ToggleGrid`, so every edition (the toy
+included) has them in the actions bar. Delete removes the whole selection as one
+transaction; Move opens a ΔX/ΔY/ΔZ dialog (its non-interactive form,
+`runCommand("App_Move", dx, dy, dz)`, skips the modal); Rotate switches the same triad
+to its rings (`gizmo: rotate`), and a ring drag commits the generic `transform`
+interaction; Grid flips the shell's grid state through a `view` request (rendering is
+G5). A Ctrl/Cmd-click in the inspector builds the multi-selection they act on.
 
 The toy also contributes a **tool**: `Toy_Polyline` returns `{"tool":
 "toy_polyline"}`, and the edition registers `ferrocad_stage::PolylineTool` under that

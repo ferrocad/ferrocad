@@ -1,7 +1,9 @@
 # Transform interaction: modes, pivots, re-pivoting and push/pull
 
-Status: **design note (2026-10-25), nothing implemented.** "Today" means at `d3c5853`;
-"unhosted" means the code exists but no host selects it; everything else is proposed.
+Status: **design note (2026-10-25).** The mode set and the wheel's `Rotate` verb
+landed 2026-10-26; re-pivot, push/pull and body/face selection remain proposed.
+"Today" means at `d3c5853`; "unhosted" means the code exists but no host selects it;
+everything else is proposed.
 Companions: [`gizmo-manipulators.md`](gizmo-manipulators.md) (triad math and hit test),
 [`selection-gizmos-and-forms.md`](selection-gizmos-and-forms.md) (wheel, form, deferred
 drag), [`topology-selection.md`](topology-selection.md) (sub-element names),
@@ -11,7 +13,7 @@ drag), [`topology-selection.md`](topology-selection.md) (sub-element names),
 
 | Piece | State | Where |
 | --- | --- | --- |
-| Triad handles | Translate today; Rotate and Universal **defined, unhosted** | `gizmo.rs:109-119`, `1232-1240`; only `translate_gizmo` (`contributions.rs:33-40`) is hosted |
+| Triad handles | Translate is the default; **Rotate is hosted** through the shell's session mode; Universal is defined but not surfaced | `gizmo.rs:109-119`, `1232-1240`; `contributions.rs:33-40`; `shell.rs` `gizmo_mode`/`set_gizmo_mode` |
 | Click anchor / `SelectionDatum` | today, translation-only | `shell.rs:1506-1516`, `337-377`, `1621-1663`; `SelectionAnchor` at `inventor_view.rs:52-63` |
 | Face/edge tags, `Move` + Δ form, feature snaps | today | `inventor_view.rs:1556-1564`; `ferrocad_shell/__init__.py:837-903`; `snap.rs:20-46` |
 | Face-normal push/pull | proposed | kernel pieces exist (§4) |
@@ -32,7 +34,18 @@ after the factory, because every factory returns a fresh `Translate` gizmo
 | Wheel `Move` | `Translate` (+ opens the Δ form) | the existing verb means "move"; it must force Translate so the deferred drag and fields agree (`selection-gizmos-and-forms.md:230-235`) |
 | New wheel `Rotate` | `Rotate` | the object-verb vocabulary is where users look for "what to do" |
 | Header `Gizmo` control (in flight) | the same state; may expose **Both** | the mode is which handles are drawn, so it is presentation, the header's existing meaning (`gizmo-manipulators.md:767-771`, `796-797`) |
-| Keyboard | none in this slice | `shortcuts.rs:64-76` refuses printable keys without a chord; a later `Ctrl+Shift+R` beside `Ctrl+Shift+M` is safe, a bare `R` is not |
+| Keyboard | `Ctrl+Shift+R` (registered on `App_Rotate`) | `shortcuts.rs:64-76` binds chorded keys; a bare `R` stays unbound |
+
+**As built (2026-10-26).** `Shell::gizmo_mode` is the sticky session state; `arm`
+applies it after the factory (`gizmo.set_mode`), so a re-selection or a re-arm keeps
+the chosen handle set. A command returns a top-level `"gizmo": "translate" |
+"rotate" | "universal"` directive from `Activated`; the shell applies it before a
+dialog opens. `App_Rotate` returns `rotate` (a mode-only verb: no form, no
+transaction), and `App_Move` returns `translate` on both its HUD and its
+`(dx,dy,dz)` path. The radial menu lists `App_Rotate` beside `App_Move`; with three
+verbs the slots are N/SE/SW, so Delete is south-west rather than due south.
+Switching away from translate cancels an open translation HUD, whose Δ fields would
+no longer describe the visible handles.
 
 - The mode is **sticky** across re-arm and selection; only a document open (or `Move`)
   resets it. A rotate commit stays in rotate mode instead of snapping back to arrows.

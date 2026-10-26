@@ -943,12 +943,17 @@ class _MoveCommand:
 
     def Activated(self, dx=None, dy=None, dz=None):
         if dx is not None or dy is not None or dz is not None:
-            return _move_selection(float(dx or 0.0), float(dy or 0.0), float(dz or 0.0))
+            result = _move_selection(float(dx or 0.0), float(dy or 0.0), float(dz or 0.0))
+            result.setdefault("gizmo", "translate")
+            return result
         return {
             "title": "Move",
             "accept": "Move",
             "presentation": "float",
             "preview": "translation",
+            # The deferred HUD's Δ fields and the visible handles must agree: Move
+            # forces the translate arrows even when the session was left in rotate.
+            "gizmo": "translate",
             "fields": [
                 {"name": "dx", "label": "ΔX", "kind": "quantity", "value": 0.0},
                 {"name": "dy", "label": "ΔY", "kind": "quantity", "value": 0.0},
@@ -959,6 +964,39 @@ class _MoveCommand:
                 float(values.get("dy", 0.0)),
                 float(values.get("dz", 0.0)),
             ),
+        }
+
+
+class _RotateCommand:
+    """``App_Rotate`` — put the transform gizmo in its rotation mode.
+
+    The rings on the triad are the interaction; this is the discoverable verb that
+    makes them the active handles (the radial menu is where object verbs live). A
+    ring drag commits the same ``transform`` interaction a Move drag does, so the
+    rotation is one undoable placement edit.
+
+    Unlike Move there is no form: an angle is spatial (you see the ring and the
+    ghost), and the host's readout already shows ``ΔθZ +15.0°`` while dragging.
+    """
+
+    def GetResources(self):
+        return {
+            "MenuText": "Rotate",
+            "ToolTip": "Rotate the selected objects about the gizmo origin",
+            "Accel": "Ctrl+Shift+R",
+            "Group": "Edit",
+            "CmdType": "ForEdit",
+            "FerroCAD_Surface": "radial",
+            "FerroCAD_Tone": "structural",
+        }
+
+    def IsActive(self):
+        return FreeCAD.ActiveDocument is not None and bool(_selection())
+
+    def Activated(self):
+        return {
+            "status": "rotate: drag a ring (Ctrl for continuous)",
+            "gizmo": "rotate",
         }
 
 
@@ -983,6 +1021,7 @@ def _move_selection(dx, dy, dz):
 
 FreeCADGui.addCommand("App_Delete", _DeleteCommand())
 FreeCADGui.addCommand("App_Move", _MoveCommand())
+FreeCADGui.addCommand("App_Rotate", _RotateCommand())
 
 
 #: The provider feature whose backend may own the drawn grid. The shell names

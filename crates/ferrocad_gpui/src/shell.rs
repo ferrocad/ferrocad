@@ -21,7 +21,7 @@ use gpui::{
 use ferrocad_geom::SelectionRef;
 use ferrocad_inventor::{Scene, Viewport};
 use ferrocad_stage::{
-    DeclarativeManipulator, InteractionCommit, Manipulator, ToolStatus, TransformGizmo,
+    DeclarativeManipulator, GizmoMode, InteractionCommit, Manipulator, ToolStatus, TransformGizmo,
 };
 use ferrocad_ui::Form;
 use ferrocad_viewport::scene;
@@ -150,6 +150,19 @@ fn gizmo_backend_note(previous: &str, current: &str, skin_supplied: bool) -> Opt
     ))
 }
 
+/// The gizmo mode a command's `gizmo` directive names.
+///
+/// `translate`/`move`, `rotate` and `universal`/`both` are the accepted spellings;
+/// an unknown one is reported by the caller rather than guessed.
+fn gizmo_mode_named(name: &str) -> Option<GizmoMode> {
+    match name.trim().to_ascii_lowercase().as_str() {
+        "translate" | "move" => Some(GizmoMode::Translate),
+        "rotate" => Some(GizmoMode::Rotate),
+        "universal" | "both" => Some(GizmoMode::Universal),
+        _ => None,
+    }
+}
+
 /// Everything the window renders, kept in an `Arc<Mutex<_>>` so click handlers
 /// can mutate it and tests can inspect it.
 #[derive(Debug, Default, Clone)]
@@ -253,6 +266,10 @@ pub struct Shell {
     gpu_adapters: Option<Vec<AdapterSummary>>,
     /// The modeless settings card, opened for a `Settings/<Feature>` node.
     settings_card: Option<SettingsCard>,
+    /// Which handles the transform gizmo shows. Session tool state, not a document
+    /// setting: it survives re-selection and re-arming, and a `Move` resets it to
+    /// translate because that command's fields describe a translation.
+    gizmo_mode: GizmoMode,
     /// The anchored overlay a property row opened (a colour palette or a range
     /// slider). It is UI state only: the value itself lives in the parameter store.
     row_popup: Option<RowPopup>,
@@ -582,6 +599,7 @@ impl Shell {
             gpu_preference: None,
             gpu_adapters: None,
             settings_card: None,
+            gizmo_mode: GizmoMode::Translate,
             row_popup: None,
             scrub: None,
             wheel,
@@ -1602,6 +1620,12 @@ impl Shell {
             }
         }
 
+        // The factory's datum is the object origin; the handle set is the shell's
+        // session mode (every factory returns a fresh Translate gizmo).
+        if let Some(gizmo) = gizmo.as_mut() {
+            gizmo.set_mode(self.gizmo_mode);
+        }
+
         // Mod-declared handles come after the compiled one. The selection's object
         // name and first sub-element are what a provider needs to decide.
         let object = self
@@ -1632,6 +1656,41 @@ impl Shell {
         }
 
         (manipulators, gizmo)
+    }
+
+    /// Switch the transform gizmo's handle set from a command's `gizmo` directive.
+    ///
+    /// The mode is session state: it survives re-selection and re-arming (the next
+    /// `arm` applies it), and `Move` resets it to translate because that command's
+    /// fields describe a translation. Switching away from translate cancels an open
+    /// translation HUD: its Δ fields would no longer describe the visible handles.
+    fn set_gizmo_mode(&mut self, name: &str, cx: &mut Context<Self>) {
+        let Some(mode) = gizmo_mode_named(name) else {
+            self.console_line(format!("gizmo: unknown mode {name:?}"), cx);
+            return;
+        };
+        if self.gizmo_mode == mode {
+            return;
+        }
+        if mode != GizmoMode::Translate
+            && self
+                .dialog
+                .as_ref()
+                .is_some_and(|dialog| dialog.spec.previews_translation())
+        {
+            self.cancel_dialog(cx);
+        }
+        self.gizmo_mode = mode;
+        // A viewport with no gizmo armed keeps the stored mode and applies it at the
+        // next `arm`; one that does rebuilds its handle overlay now.
+        if let Some(viewport) = self.viewport.clone() {
+            viewport.update(cx, |viewport, cx| {
+                if viewport.set_gizmo_mode(mode) {
+                    cx.notify();
+                }
+            });
+        }
+        cx.notify();
     }
 
     /// A manipulator drag ended: apply the commit through the app script's
@@ -1969,6 +2028,13 @@ impl Shell {
             self.console_line(status, cx);
             cx.notify();
             return;
+        }
+
+        // A gizmo-mode directive is session tool state. Apply it before a dialog:
+        // `Move` returns `translate` (its Δ fields and the visible arrows must
+        // agree) and opens the HUD in the same run.
+        if let Some(mode) = outcome.gizmo.clone() {
+            self.set_gizmo_mode(&mode, cx);
         }
 
         if let (Some(spec), Some(token)) = (outcome.dialog.clone(), outcome.token.clone()) {
@@ -5632,6 +5698,62 @@ mod tests {
         assert!(model.lock().unwrap().selection.is_empty());
     }
 
+    /// The wheel's Rotate verb is the discoverable way into the rings: it switches
+    /// the session mode, and Move forces Translate again so its Δ HUD and the
+    /// visible arrows agree.
+    #[gpui::test]
+    fn the_rotate_verb_switches_the_gizmo_mode(cx: &mut TestAppContext) {
+        let _guard = crate::PYTHON_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let model = boot_shell();
+        let shell = cx.update(|cx| cx.new(|cx| Shell::from_model(model.clone(), cx)));
+
+        shell.update(cx, |shell, cx| shell.select("Params", cx));
+        let slots: Vec<(String, bool)> = shell.update(cx, |shell, _| {
+            shell
+                .radial_slots(None)
+                .into_iter()
+                .map(|slot| (slot.id.to_string(), slot.enabled))
+                .collect()
+        });
+        assert!(
+            slots
+                .iter()
+                .any(|(id, enabled)| id == "App_Rotate" && *enabled),
+            "the wheel offers Rotate for a selected object: {slots:?}"
+        );
+        assert!(
+            slots.iter().any(|(id, _)| id == "App_Move"),
+            "slots: {slots:?}"
+        );
+        assert_eq!(
+            shell.update(cx, |shell, _| shell.gizmo_mode),
+            GizmoMode::Translate,
+            "translate is the session default"
+        );
+
+        shell.update(cx, |shell, cx| shell.run_command("App_Rotate", cx));
+        assert_eq!(
+            shell.update(cx, |shell, _| shell.gizmo_mode),
+            GizmoMode::Rotate,
+            "the verb put the triad in its ring mode"
+        );
+        let status = shell.update(cx, |shell, _| shell.model.lock().unwrap().status.clone());
+        assert!(status.contains("ring"), "status: {status}");
+
+        // Move resets the mode before it opens its floating HUD.
+        shell.update(cx, |shell, cx| shell.run_command("App_Move", cx));
+        assert_eq!(
+            shell.update(cx, |shell, _| shell.gizmo_mode),
+            GizmoMode::Translate,
+            "Move forces the arrows so its fields match the handles"
+        );
+        assert!(
+            shell.update(cx, |shell, _| shell.dialog.is_some()),
+            "the Move HUD opened"
+        );
+        shell.update(cx, |shell, cx| shell.cancel_dialog(cx));
+    }
+
     /// A3: a command's dialog is validated in the shell, accepted once, and a bad
     /// value keeps the modal open. The command is registered through the console,
     /// so the test exercises the same registry a workbench uses.
@@ -9131,16 +9253,19 @@ if "Test_Form" not in FreeCADGui.listCommands():
         let move_slot = cx
             .debug_bounds("radial-label-App_Move")
             .expect("Move is a north slot");
+        let rotate_slot = cx
+            .debug_bounds("radial-label-App_Rotate")
+            .expect("Rotate is a slot");
         let delete_slot = cx
             .debug_bounds("radial-label-App_Delete")
-            .expect("Delete is a south slot");
+            .expect("Delete is a slot");
         assert!(
-            move_slot.origin.y < delete_slot.origin.y,
-            "Move is above Delete (north/south)"
+            move_slot.origin.y < rotate_slot.origin.y && move_slot.origin.y < delete_slot.origin.y,
+            "Move is the north slot (above Rotate and Delete)"
         );
         assert!(
-            (move_slot.center().x.0 - delete_slot.center().x.0).abs() < 2.0,
-            "both sit on the vertical axis"
+            rotate_slot.center().x > delete_slot.center().x,
+            "Rotate is the south-east slot and Delete the south-west one"
         );
         cx.update(|_window, cx| shell.update(cx, |shell, cx| shell.close_radial(cx)));
         draw(&mut cx);

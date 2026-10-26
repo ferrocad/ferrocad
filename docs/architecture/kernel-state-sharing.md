@@ -1,8 +1,9 @@
 # Kernel state sharing
 
 Status: current architecture (2026-10-26). The two supported compositions described
-here are implemented. The consolidated `Kernel` facade, the `_kernel_id` diagnostic,
-and the modular-wheel `PyCapsule` ABI are **proposals** and are labelled as such.
+here are implemented, as is the `_kernel_id` identity diagnostic (K0) and the
+mixed-image guard (K1). The consolidated `Kernel` facade and the modular-wheel
+`PyCapsule` ABI are **proposals** and are labelled as such.
 Work items: [`../tasks/kernel-state-sharing.md`](../tasks/kernel-state-sharing.md)
 (K0–K4).
 
@@ -235,27 +236,28 @@ sys.modules[__name__] = sys.modules["Part"]
 
 ## 5. Verification
 
-The invariant is checked by these existing gates; `--check-init` covers only part
-of it:
+The invariant is checked by these gates:
 
 | Gate | What it proves |
 | --- | --- |
-| `crates/ferrocad_part_py/tests/part_boot.rs` | `Part` and `ferrocad` in one image: `Part.makeBox` returns a `Part.Shape`, and `obj.Shape = shape` round-trips through `Part::Feature` with `isSame` |
-| `crates/ferrocad_combined_py/tests/combined.rs` | All four modules import; a `Part::Feature` and a `Mesh::Feature` live in one document; `type(obj.Shape) is Part.Shape`, `type(obj.Mesh) is Mesh.Mesh`, and `MeshPart.meshFromShape` consumes the Part shape |
-| `tests/test_packaged_modules.py` | The same composition from a real host CPython with `PYTHONPATH=python`, including `import FreeCAD` before `import Part`; skips when `ferrocad_combined.abi3.so` is not built |
+| `crates/ferrocad_part_py/tests/part_boot.rs` | `Part` and `ferrocad` in one image: both report the same `_kernel_id`; `Part.makeBox` returns a `Part.Shape`, and `obj.Shape = shape` round-trips through `Part::Feature` with `isSame` |
+| `crates/ferrocad_combined_py/tests/combined.rs` | All four modules import and report one `_kernel_id`; a `Part::Feature` and a `Mesh::Feature` live in one document; `type(obj.Shape) is Part.Shape`, `type(obj.Mesh) is Mesh.Mesh`, and `MeshPart.meshFromShape` consumes the Part shape |
+| `crates/ferrocad_combined_py/tests/mixed_image.rs` | `install()` refuses an interpreter whose `Part` is a built-in, and does not replace it; a file-based `Part.py` is not mistaken for a built-in |
+| `tests/test_packaged_modules.py` | The same composition from a real host CPython with `PYTHONPATH=python`, including `import FreeCAD` before `import Part`, with the `_kernel_id` equality assertion; skips when `ferrocad_combined.abi3.so` is not built |
 | `cargo test -p ferrocad_parametric` | The edition's manipulator round trips (fillet and the move gizmo) through the app script and document; the move-gizmo test also asserts one undo restores the placement |
-| `ferrocad_parametric --check-init` | The base boot plus the edition's app script import (which imports `Part`). The base shell creates its sample `Shell` document; this check does **not** add a `Part::Feature` or assert kernel identity |
+| `ferrocad_parametric --check-init` | The base boot, the edition's app script import, `_kernel_id` equality across `FreeCAD`/`Part`/`Mesh`/`MeshPart`, and a document with a `Part::Feature` holding a `Part.makeBox` |
 
-### Proposed diagnostics (not implemented)
+### Diagnostics in place
 
-- **`_kernel_id` on every module.** Return
-  `ferrocad_core::application() as *const _ as usize` from `ferrocad`, `Part`,
-  `Mesh` and `MeshPart`, and re-export it from the `FreeCAD` facade. Then
-  `--check-init` can assert `FreeCAD._kernel_id == Part._kernel_id ==
-  Mesh._kernel_id` and fail loudly on a split linkage.
-- **A document/Box assertion in `--check-init`.** Create a document, add a
-  `Part::Feature`, assign a `Part.makeBox`, and close it.
-- **A capsule mismatch test** for the modular-wheel proposal in §6.
+- **`_kernel_id` on every module.** Each `#[pymodule]` init adds
+  `ferrocad_core::application_id()` (the address of the process-wide
+  `Application`), and `python/FreeCAD/__init__.py` and
+  `python/FerroCAD/__init__.py` re-export it. `--check-init` and the three test
+  targets assert all four values are equal, so a split linkage fails loudly.
+- **A document/Box assertion in `--check-init`.** It creates a document, adds a
+  `Part::Feature`, assigns a `Part.makeBox`, checks `ShapeType == "Solid"` and
+  closes the document.
+- **A capsule mismatch test** remains proposed with the modular-wheel ABI in §6.
 
 ## 6. Modular wheels and the capsule ABI (proposal)
 

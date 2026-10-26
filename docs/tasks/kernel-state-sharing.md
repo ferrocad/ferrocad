@@ -33,8 +33,8 @@ What remains is the difference between "the composition happens to be correct" a
 | Geometry backend | `ferrocad_part::backend()` behind a private `BACKEND: OnceLock<...>` | Implemented; one per process, installed by the composition root |
 | Python-object caches | `ferrocad_py` `DOCUMENTS`, `OBJECT_CACHE`, `OBSERVERS`, `CONVERTERS`, `RESOLVERS` | Implemented; process-wide, single-interpreter only |
 | Display/interaction providers | module-level Python lists in `python/FerroCAD/__init__.py` | Implemented; process-wide by the same assumption |
-| Module identity diagnostic | — | **Missing** |
-| Mixed-image guard | — | **Missing** |
+| Module identity diagnostic | `ferrocad_core::application_id()`, `_kernel_id` on every module | Implemented (K0) |
+| Mixed-image guard | `ferrocad_combined_py::install()` refuses built-ins | Implemented (K1) |
 | Kernel facade | — | **Missing** (proposal) |
 | Capsule ABI | — | **Missing** (proposal) |
 
@@ -50,7 +50,7 @@ none of them asserts a process identity.
 | --- | --- | --- | --- | --- |
 | **K0** | S | Observable kernel identity: `_kernel_id` on all four modules, re-exported by `FreeCAD`; extend `--check-init` with identity + document/Part assertions | All gates assert `FreeCAD._kernel_id == Part._kernel_id == Mesh._kernel_id == MeshPart._kernel_id`; `--check-init` creates and closes a document with a `Part::Feature` | — |
 | **K1** | S/M | Mixed-image guard and composition matrix: `install()` refuses to replace an edition's built-ins; CI runs `--check-init` and the packaged test | Importing the on-disk combined extension in an edition fails cleanly; CI red if `Part` is missing or the IDs differ | K0 |
-| **K2** | L | Interpreter-scoped Python state: move the `ferrocad_py` caches out of `std::sync::OnceLock` (evaluate `pyo3::sync::GILOnceCell` vs multi-phase module state) | Two subinterpreters do not share `Py` objects; single-interpreter tests and SimpleCAD unchanged | K0 |
+| **K2** | L | Interpreter-scoped Python state: move the `ferrocad_py` caches out of `std::sync::OnceLock`; key them by `PyInterpreterState_GetID()` or use PEP 3121 multi-phase module state | Two subinterpreters do not share `Py` objects; single-interpreter tests and SimpleCAD unchanged | K0 |
 | **K3** | M | `ferrocad_core::Kernel` facade: one handle for `documents()`, `object_types()`, `properties()`; free functions stay as wrappers; no new workbench registries | `kernel().documents()` sees `application()` documents; no behaviour change; new workbench code uses the facade | K0 |
 | **K4** | XL | Modular-wheel capsule ABI: `ferrocad_core_capi` + a versioned `PyCapsule`; satellite modules borrow the core instead of linking it | A satellite `.so` has no `ferrocad_core` in its link map and can register an object type; a version mismatch raises `ImportError` | Decision below |
 
@@ -127,9 +127,12 @@ The `ferrocad_py` caches hold `Py<...>` values in process-wide `OnceLock`s. That
 is safe with one interpreter and unsafe with two: the second interpreter can see
 a `PyObject` it does not own.
 
-- Evaluate `pyo3::sync::GILOnceCell` (per-interpreter) against PyO3 multi-phase
-  module state for each table. Prefer the smallest move that makes the values
-  interpreter-owned.
+- Evaluate keying the existing caches by `PyInterpreterState_GetID()` (the smallest
+  diff, and it keeps the single-phase `#[pymodule]`) against PEP 3121 multi-phase
+  module state (where CPython allocates a per-module struct on each
+  `PyModuleObject`). Note: `pyo3::sync::GILOnceCell` / `PyOnceLock` is
+  GIL-synchronized but still **process-global**, so it does not isolate
+  subinterpreters on its own.
 - Split the work: K2a documents/object cache; K2b observers/converters/resolvers;
   K2c a subinterpreter test (skipped when the runtime lacks `_xxsubinterpreters`).
 - Keep the Rust-side process state (`Application`, object types, property types,
@@ -194,4 +197,21 @@ capsule is only for **separately distributed** wheels (`ferrocad` +
 
 ## As built
 
-Nothing yet; this task is the 2026-10-26 cut.
+**K0 and K1 landed 2026-10-26.**
+
+- **K0 — identity.** `ferrocad_core::application_id()` returns the address of the
+  process-wide `Application`. Every `#[pymodule]` init (`ferrocad`, `Part`, `Mesh`,
+  `MeshPart`) adds it as `_kernel_id`; the `FreeCAD` and `FerroCAD` facades
+  re-export it. `--check-init` now asserts equality across all four modules and
+  creates, fills and closes a `Part::Feature` document; `part_boot`, `combined`
+  and `tests/test_packaged_modules.py` assert the same identity in their own
+  compositions. The packaged test imports `Part` first so it cannot pick up a
+  standalone `ferrocad.abi3.so` as a second core.
+- **K1 — mixed-image guard.** `ferrocad_combined_py::install()` first honours its
+  idempotence marker, then returns `ImportError` when `Part` resolves to
+  `BuiltinImporter` (the edition image) instead of publishing over the built-ins.
+  `crates/ferrocad_combined_py/tests/mixed_image.rs` covers the built-in and
+  file-module cases. CI's geometry job builds `ferrocad_parametric` and runs
+  `--check-init` right after the packaged test, with the on-disk extension present.
+
+K2–K4 remain open; K4 still waits on the modular-wheel decision.

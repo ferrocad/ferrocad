@@ -70,9 +70,11 @@ pub mod tool;
 pub mod workplane;
 
 pub use gizmo::{
+    DEFAULT_GHOST_ALPHA, DEFAULT_HALO_WIDTH, DEFAULT_HIT_RADIUS_PX, DEFAULT_HOVER_SCALE,
     GIZMO_BASE_ID, GizmoAxis, GizmoCommitEvent, GizmoConstraint, GizmoDragEvent, GizmoHandle,
-    GizmoMode, GizmoModifiers, GizmoStyle, GizmoValue, HandleKind, ManipulatorFrame,
-    NATIVE_BACKEND, SKIN_BACKEND, TRANSFORM_ID, TransformGizmo,
+    GizmoMode, GizmoModifiers, GizmoStyle, GizmoValue, HandleKind, MAX_GHOST_ALPHA,
+    MIN_HIT_RADIUS_PX, ManipulatorFrame, NATIVE_BACKEND, OUTLINE_COLOR, SKIN_BACKEND,
+    TRANSFORM_ID, TransformGizmo,
 };
 pub use axis::AxisStyle;
 pub use declarative::{DeclarativeHandle, DeclarativeKind, DeclarativeManipulator, DeclarativeShape};

@@ -190,6 +190,16 @@ field: clicking the swatch opens `ferrocad_widgets::color::palette` as an anchor
 overlay, and a pick commits through the same path as typing the hex. The palette is a
 fixed set of neutrals and accents; typing an arbitrary colour still works.
 
+A numeric entry may also carry a `step` hint. The editor does not snap on its own: the
+capability's setter quantises the value before it is stored, so the pane, the store and
+every other reader agree. The gizmo's rotation detent is the shipped example —
+`ring_snap_deg` is stored as a 5° multiple (WCAG 2.5.7: an arbitrary detent such as
+`49.62°` demands micro-precision), with `0` kept as "continuous". The same setters apply
+the accessibility floors documented in
+[`../interaction/gizmo-manipulators.md`](../interaction/gizmo-manipulators.md) §17: a
+`hit_radius_px` below 12 is raised, `ghost_alpha` is capped at 0.5, and `hover_scale`
+below 1 is rejected.
+
 Document objects use the same row contract, so a workbench's properties reach the
 pane with the same controls. `ferrocad_shell.properties()` maps
 `App::PropertyBool` to `bool`, `App::PropertyEnumeration` to `enum` (with the

@@ -1818,6 +1818,12 @@ impl<V: InventorView> InventorViewport<V> {
                 None => false,
             };
             if recoloured {
+                // The hover cue widens the hovered handle, so rebuild its geometry
+                // before recompiling the overlay (the colour change alone would need
+                // only the queue rebuild).
+                if let Some(gizmo) = self.gizmo.as_mut() {
+                    gizmo.update(&self.camera);
+                }
                 self.rebuild_gizmo_queue();
                 self.hover_report = HoverReport::default();
                 return true;
@@ -2322,11 +2328,19 @@ impl<V: InventorView> InventorViewport<V> {
             if let Some(gizmo) = self.gizmo.as_ref() {
                 match self.gizmo_skin.as_ref().filter(|_| self.skin_active()) {
                     Some(program) => {
+                        // The outline pass stays native: it is the contrast aid, and a
+                        // skin must not be able to remove it.
+                        for item in gizmo.halos() {
+                            item.emit(&mut queue);
+                        }
                         for item in gizmo.skinned_items(program) {
                             item.emit(&mut queue);
                         }
                     }
                     None => {
+                        for item in gizmo.halos() {
+                            item.emit(&mut queue);
+                        }
                         for item in gizmo.items() {
                             item.emit(&mut queue);
                         }
@@ -6540,12 +6554,30 @@ mod tests {
             native_packets,
             "the skin keeps the native packet count"
         );
+        let skinned = view
+            .gizmo_queue
+            .packets
+            .iter()
+            .filter(|packet| packet.state.id != PickId(0))
+            .collect::<Vec<_>>();
+        assert!(!skinned.is_empty(), "there are handle packets to skin");
         assert!(
-            view.gizmo_queue
-                .packets
+            skinned
                 .iter()
                 .all(|packet| packet.state.program.as_ref() == Some(&program)),
             "every handle packet carries the skin"
+        );
+        // The outline pass is the contrast aid, so a skin must not be able to remove it.
+        let halos = view
+            .gizmo_queue
+            .packets
+            .iter()
+            .filter(|packet| packet.state.id == PickId(0))
+            .collect::<Vec<_>>();
+        assert!(!halos.is_empty(), "the halo pass is drawn");
+        assert!(
+            halos.iter().all(|packet| packet.state.program.is_none()),
+            "the halo stays native under a skin"
         );
 
         // Clearing the skin restores the native packets.
@@ -6557,6 +6589,27 @@ mod tests {
                 .iter()
                 .all(|packet| packet.state.program.is_none()),
             "the native look is restored"
+        );
+    }
+
+    #[test]
+    fn the_gizmo_halo_draws_behind_the_handles() {
+        let (view, _viewport) = translate_gizmo_view();
+        let halo = view
+            .gizmo_queue
+            .packets
+            .iter()
+            .position(|packet| packet.state.id == PickId(0))
+            .expect("the halo pass is drawn");
+        let handle = view
+            .gizmo_queue
+            .packets
+            .iter()
+            .position(|packet| packet.state.id != PickId(0))
+            .expect("the handles are drawn");
+        assert!(
+            halo < handle,
+            "the halo is a background pass and must precede the full-width handles"
         );
     }
 
@@ -6596,8 +6649,17 @@ mod tests {
             view.gizmo_queue
                 .packets
                 .iter()
+                .filter(|packet| packet.state.id != PickId(0))
                 .all(|packet| packet.state.program.is_some()),
             "the skin is drawn once it exists"
+        );
+        assert!(
+            view.gizmo_queue
+                .packets
+                .iter()
+                .filter(|packet| packet.state.id == PickId(0))
+                .all(|packet| packet.state.program.is_none()),
+            "the halo stays native"
         );
 
         let mut style = view.gizmo_style().clone();
@@ -6612,6 +6674,7 @@ mod tests {
             view.gizmo_queue
                 .packets
                 .iter()
+                .filter(|packet| packet.state.id != PickId(0))
                 .all(|packet| packet.state.program.is_some()),
             "the stored skin resumes with the style"
         );
@@ -6627,6 +6690,7 @@ mod tests {
             view.gizmo_queue
                 .packets
                 .iter()
+                .filter(|packet| packet.state.id != PickId(0))
                 .all(|packet| packet.state.program.is_some()),
             "the drag runs against a skinned queue"
         );

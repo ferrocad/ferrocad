@@ -517,11 +517,15 @@ omitted field keeps its current value:
 | `enabled` | bool | whether the handles draw and pick at all |
 | `backend` | string | a **provider claim**: which backend owns the visuals |
 | `active_color` / `inactive_color` | `#rgb`/`#rrggbb` | the hovered and idle handle ink |
+| `outline_color` | `#rgb`/`#rrggbb` | the halo ink behind the handles (the contrast aid) |
 | `size` | f64 px | the triad's screen-invariant radius |
 | `width` | f64 px | the stem/ribbon stroke width |
+| `halo_width` | f64 px | the outline width around a handle, clamped `0..=8`; `0` disables it |
+| `hover_scale` | f64 | the hovered handle's stroke multiplier, clamped `1..=4`; `1` disables it |
+| `hit_radius_px` | f64 px | the analytic grab radius, clamped `12..=48` (a 24 px target) |
 | `opacity` | f32 | a multiplier over every handle's alpha, clamped `0..=1` |
-| `ghost_alpha` | f32 | the occluded (`DepthMode::Greater`) pass, clamped `0..=1` |
-| `ring_snap_deg` | f64 | the rotation detent, clamped `0..=180`; `0` is continuous |
+| `ghost_alpha` | f32 | the occluded (`DepthMode::Greater`) pass, clamped `0..=0.5` |
+| `ring_snap_deg` | f64 | the rotation detent, clamped `0..=180` and stepped to a 5° multiple; `0` is continuous |
 | `show_readout` | bool | the numeric pills |
 
 The hex spellings are **RGB-only**: the role's token alpha is preserved (the idle
@@ -532,6 +536,33 @@ inactive token keeps its `0.9`). That is why re-sending the Python defaults
 and `Viewport::set_gizmo_style` forwards it to every hosted manipulator and to the
 `TransformGizmo` — including objects hosted *after* the style was set, so a selection
 armed later adopts the current workspace look without a re-send.
+
+### The accessibility defaults (WCAG 2.2 AA)
+
+Four knobs exist because the default triad failed the accessibility success criteria,
+not as cosmetic extras. They are ordinary style fields, so a preset or the settings card
+can change them, and the **view enforces the floors and ceilings** rather than trusting
+the caller (`crates/ferrocad_gpui/src/view.rs`). The Python facade applies the same
+rules (`python/FerroCAD/_gizmo.py`), so both views of the store agree.
+
+| Property | Default | Criterion | Why |
+| --- | --- | --- | --- |
+| `outline_color` + `halo_width` | `#0f172a`, `1.5 px` | SC 1.4.11 non-text contrast (3:1) | The accent and the idle slate are close in luminance to mid-blue geometry (the toy slab). A dark halo separates a handle from it without relying on hue. |
+| `hover_scale` | `1.5` | SC 1.4.1 use of colour | `#38bdf8` against `#d8dbe0` is only 1.49:1, so hover cannot be colour-only. The hovered stem and ring also widen (`width × hover_scale`). |
+| `hit_radius_px` | `12.0` (24 px target) | SC 2.5.8 target size (minimum) | The analytic grab radius is floored at 12 px, so a 1.5 px stem still has a 24 × 24 px target. |
+| `ghost_alpha` | `0.20`, max `0.5` | — (occlusion legibility) | Above half, an occluded handle reads as another front handle, which destroys the depth cue. The old `0.35` already leaned that way. |
+| `ring_snap_deg` | `15°`, stepped to 5° | SC 2.5.7 dragging movements | An arbitrary fractional detent (the old free ring reported `49.62°`) demands micro-precision. Every stored value is a 5° multiple; `0` stays continuous for power users. |
+
+The halo is a **separate, non-selectable pass** drawn before the handles
+(`TransformGizmo::halos()`, ids `GIZMO_BASE_ID + 100 + index`). It is wider than the
+handle ribbon by `halo_width` on each side and follows the hover width cue. Because it
+is not selectable it adds no pick target; because it stays **native** under a shader
+skin, a skin cannot remove the contrast aid (`ferrocad_viewport` emits it before the
+skinned handles).
+
+**Caveat:** the contrast figures in this table are arithmetic in sRGB, not a visual
+measurement on a display. The renderer applies the tokens as-is; a future calibration
+pass can tighten them, but the floors above are the contract.
 
 ### Style vs claim
 
@@ -564,7 +595,7 @@ re-selection.
 ### What drives it
 
 `mods/GizmoOverlay` registers the `gizmo`/`ferrocad` provider and `FerroCAD.Gizmo`
-writes the nine stored values, returning `FerroCAD.Gizmo.apply()` as the view request.
+writes the thirteen stored values, returning `FerroCAD.Gizmo.apply()` as the view request.
 See [`../tasks/settings-model.md`](../tasks/settings-model.md) §S4c.
 
 Covered by `ferrocad_stage`'s `a_style_ghost_alpha_reaches_every_handle` and
@@ -578,8 +609,9 @@ Covered by `ferrocad_stage`'s `a_style_ghost_alpha_reaches_every_handle` and
 
 ### G1 follow-ups
 
-- `size`/`width`/`ring_snap_deg` are baked into cached geometry, so a change rebuilds on
-  the next `update`; the ghost alpha and the colours apply immediately.
+- `size`/`width`/`halo_width`/`hover_scale`/`ring_snap_deg` are baked into cached geometry,
+  so a change rebuilds on the next `update`; the ghost alpha and the colours apply
+  immediately.
 
 ## 18. G2 as built (2026-10-22) — the shader skin
 

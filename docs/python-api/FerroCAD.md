@@ -52,11 +52,15 @@ The ``FerroCAD.Gizmo`` singleton (see the module docstring).
 | `active_color` (property) | The hovered/active handle's ink as a canonical lowercase ``#rrggbb``. |
 | apply() -> dict | The ``{"view": …}`` request for the current settings. |
 | `enabled` (property) | Whether the manipulator gizmos are shown. |
-| `ghost_alpha` (property) | The alpha of the occluded (ghosted) handles in ``0..1``. |
+| `ghost_alpha` (property) | The alpha of the occluded (ghosted) handles in ``0..0.5``. |
+| `halo_width` (property) | The outline width around a handle, in pixels; ``0`` disables it. |
+| `hit_radius_px` (property) | The analytic grab radius in pixels (at least 12, for a 24 px target). |
+| `hover_scale` (property) | The stroke-width multiplier of the hovered handle (``1`` disables). |
 | `inactive_color` (property) | The idle handle's ink as a canonical lowercase ``#rrggbb``. |
 | `opacity` (property) | The handles' opacity in ``0..1``. |
+| `outline_color` (property) | The outline/halo ink as a canonical lowercase ``#rrggbb``. |
 | reset() -> None | Clear the gizmo store (only the gizmo provider's own group). |
-| `ring_snap_deg` (property) | The rotation ring's snap increment in degrees. |
+| `ring_snap_deg` (property) | The rotation ring's snap increment in degrees (a 5° multiple; 0 = free). |
 | schema() -> list | A copy of :data:`SETTINGS_SCHEMA` (the rows the provider advertises). |
 | `show_readout` (property) | Whether the drag readout is drawn next to the gizmo. |
 | `size` (property) | The handle size in pixels. |

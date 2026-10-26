@@ -47,10 +47,14 @@ ATTRIBUTES = {
     "enabled": True,
     "active_color": "#38bdf8",
     "inactive_color": "#94a3b8",
+    "outline_color": "#0f172a",
     "size": 80.0,
     "width": 1.5,
+    "halo_width": 1.5,
+    "hover_scale": 1.5,
+    "hit_radius_px": 12.0,
     "opacity": 1.0,
-    "ghost_alpha": 0.35,
+    "ghost_alpha": 0.2,
     "ring_snap_deg": 15.0,
     "show_readout": True,
 }
@@ -105,8 +109,12 @@ class GizmoApiTests(unittest.TestCase):
                 "enabled": "bool",
                 "active_color": "color",
                 "inactive_color": "color",
+                "outline_color": "color",
                 "size": "float",
                 "width": "float",
+                "halo_width": "float",
+                "hover_scale": "float",
+                "hit_radius_px": "float",
                 "opacity": "float",
                 "ghost_alpha": "float",
                 "ring_snap_deg": "float",
@@ -123,11 +131,20 @@ class GizmoApiTests(unittest.TestCase):
             {
                 "size": (8.0, 400.0),
                 "width": (0.5, 6.0),
+                "halo_width": (0.0, 8.0),
+                "hover_scale": (1.0, 4.0),
+                "hit_radius_px": (12.0, 48.0),
                 "opacity": (0.0, 1.0),
-                "ghost_alpha": (0.0, 1.0),
+                # The occluded alpha ceiling keeps a ghost visibly behind a handle.
+                "ghost_alpha": (0.0, 0.5),
                 "ring_snap_deg": (0.0, 180.0),
             },
         )
+        steps = {
+            entry["name"]: entry.get("step")
+            for entry in _gizmo.GIZMO_SETTINGS_SCHEMA
+        }
+        self.assertEqual(steps["ring_snap_deg"], 5.0, "5° detents (WCAG 2.5.7)")
 
         # ``schema()`` is a copy: a caller cannot mutate the canonical list.
         schema = self.gizmo.schema()
@@ -138,19 +155,38 @@ class GizmoApiTests(unittest.TestCase):
         self.assertTrue(self.gizmo.enabled)
         self.assertEqual(self.gizmo.active_color, "#38bdf8")
         self.assertEqual(self.gizmo.inactive_color, "#94a3b8")
+        self.assertEqual(self.gizmo.outline_color, "#0f172a")
         self.assertEqual(self.gizmo.size, 80.0)
         self.assertEqual(self.gizmo.width, 1.5)
+        self.assertEqual(self.gizmo.halo_width, 1.5)
+        self.assertEqual(self.gizmo.hover_scale, 1.5)
+        self.assertEqual(self.gizmo.hit_radius_px, 12.0)
         self.assertEqual(self.gizmo.opacity, 1.0)
-        self.assertEqual(self.gizmo.ghost_alpha, 0.35)
+        self.assertEqual(self.gizmo.ghost_alpha, 0.2)
         self.assertEqual(self.gizmo.ring_snap_deg, 15.0)
         self.assertTrue(self.gizmo.show_readout)
+
+    def test_the_defaults_meet_the_wcag_floor(self):
+        # 12 px radius = a 24 px target (SC 2.5.8).
+        self.assertGreaterEqual(self.gizmo.hit_radius_px, 12.0)
+        # A non-zero contrast halo (SC 1.4.11) and a non-colour hover cue (SC 1.4.1).
+        self.assertGreater(self.gizmo.halo_width, 0.0)
+        self.assertGreater(self.gizmo.hover_scale, 1.0)
+        # An occluded handle stays below half so it reads as "behind" (not a front one).
+        self.assertLessEqual(self.gizmo.ghost_alpha, 0.5)
+        # The detent is a 5° multiple (SC 2.5.7).
+        self.assertEqual(self.gizmo.ring_snap_deg % 5.0, 0.0)
 
     def test_the_store_uses_the_schema_names(self):
         self.gizmo.enabled = False
         self.gizmo.active_color = "#FF0000"
         self.gizmo.inactive_color = "#0f0"
+        self.gizmo.outline_color = "#00F"
         self.gizmo.size = 120.0
         self.gizmo.width = 3.5
+        self.gizmo.halo_width = 2.5
+        self.gizmo.hover_scale = 2.0
+        self.gizmo.hit_radius_px = 20.0
         self.gizmo.opacity = 0.25
         self.gizmo.ghost_alpha = 0.4
         self.gizmo.ring_snap_deg = 45.0
@@ -159,8 +195,12 @@ class GizmoApiTests(unittest.TestCase):
         self.assertFalse(self.prefs.GetBool("enabled", True))
         self.assertEqual(self.prefs.GetString("active_color", ""), "#ff0000")
         self.assertEqual(self.prefs.GetString("inactive_color", ""), "#00ff00")
+        self.assertEqual(self.prefs.GetString("outline_color", ""), "#0000ff")
         self.assertAlmostEqual(self.prefs.GetFloat("size", -1.0), 120.0)
         self.assertAlmostEqual(self.prefs.GetFloat("width", -1.0), 3.5)
+        self.assertAlmostEqual(self.prefs.GetFloat("halo_width", -1.0), 2.5)
+        self.assertAlmostEqual(self.prefs.GetFloat("hover_scale", -1.0), 2.0)
+        self.assertAlmostEqual(self.prefs.GetFloat("hit_radius_px", -1.0), 20.0)
         self.assertAlmostEqual(self.prefs.GetFloat("opacity", -1.0), 0.25)
         self.assertAlmostEqual(self.prefs.GetFloat("ghost_alpha", -1.0), 0.4)
         self.assertAlmostEqual(self.prefs.GetFloat("ring_snap_deg", -1.0), 45.0)
@@ -174,16 +214,24 @@ class GizmoApiTests(unittest.TestCase):
         self.assertEqual(self.gizmo.active_color, "#ff0000")
         self.gizmo.inactive_color = "#0F0"
         self.assertEqual(self.gizmo.inactive_color, "#00ff00")
+        self.gizmo.outline_color = "#0F172A"
+        self.assertEqual(self.gizmo.outline_color, "#0f172a")
 
         for name, value in (
             ("size", 8.0),
             ("size", 400.0),
             ("width", 0.5),
             ("width", 6.0),
+            ("halo_width", 0.0),
+            ("halo_width", 8.0),
+            ("hover_scale", 1.0),
+            ("hover_scale", 4.0),
+            ("hit_radius_px", 12.0),
+            ("hit_radius_px", 48.0),
             ("opacity", 0.0),
             ("opacity", 1.0),
             ("ghost_alpha", 0.0),
-            ("ghost_alpha", 1.0),
+            ("ghost_alpha", 0.5),
             ("ring_snap_deg", 0.0),
             ("ring_snap_deg", 180.0),
         ):
@@ -193,6 +241,21 @@ class GizmoApiTests(unittest.TestCase):
         self.gizmo.show_readout = False
         self.assertFalse(self.gizmo.show_readout)
 
+    def test_the_occluded_alpha_is_clamped_on_both_sides(self):
+        self.gizmo.ghost_alpha = 0.9
+        self.assertEqual(self.gizmo.ghost_alpha, 0.5, "the stored value is clamped")
+        self.assertAlmostEqual(self.prefs.GetFloat("ghost_alpha", -1.0), 0.5)
+
+        # A legacy value above the ceiling is reported clamped, not raised.
+        self.prefs.SetFloat("ghost_alpha", 0.8)
+        self.assertEqual(self.gizmo.ghost_alpha, 0.5)
+
+    def test_the_rotation_snap_steps_to_five_degree_detents(self):
+        for given, applied in ((7.0, 5.0), (12.4, 10.0), (12.5, 15.0), (22.4, 20.0), (0.0, 0.0)):
+            self.gizmo.ring_snap_deg = given
+            self.assertEqual(self.gizmo.ring_snap_deg, applied, "%s°" % given)
+            self.assertAlmostEqual(self.prefs.GetFloat("ring_snap_deg", -1.0), applied)
+
     def test_bools_are_coerced(self):
         self.gizmo.enabled = 0
         self.assertIs(self.gizmo.enabled, False)
@@ -201,18 +264,21 @@ class GizmoApiTests(unittest.TestCase):
 
     def test_a_bad_colour_raises_and_leaves_the_store_untouched(self):
         for bad in ("", "red", "#12", "#1234", "#1234567", "#gggggg", "#12345g", 42, None):
-            for name in ("active_color", "inactive_color"):
+            for name in ("active_color", "inactive_color", "outline_color"):
                 with self.assertRaises(ValueError, msg="%s=%r" % (name, bad)):
                     setattr(self.gizmo, name, bad)
         self.assertEqual(
-            (self.gizmo.active_color, self.gizmo.inactive_color),
-            ("#38bdf8", "#94a3b8"),
+            (self.gizmo.active_color, self.gizmo.inactive_color), ("#38bdf8", "#94a3b8")
         )
+        self.assertEqual(self.gizmo.outline_color, "#0f172a")
 
     def test_bad_numbers_raise_and_leave_the_store_untouched(self):
         cases = {
             "size": (7.9, 400.1, 0.0, -1.0, math.nan, math.inf, -math.inf),
             "width": (0.4, 6.1, 0.0, -1.0, math.nan, math.inf),
+            "halo_width": (-0.1, 8.1, math.nan, math.inf),
+            "hover_scale": (0.9, 4.1, math.nan, math.inf),
+            "hit_radius_px": (11.9, 48.1, math.nan, math.inf),
             "opacity": (-0.1, 1.1, math.nan, math.inf),
             "ghost_alpha": (-0.1, 1.1, math.nan, math.inf),
             "ring_snap_deg": (-0.1, 180.1, math.nan, math.inf),
@@ -224,18 +290,25 @@ class GizmoApiTests(unittest.TestCase):
 
         self.assertEqual(self.gizmo.size, 80.0)
         self.assertEqual(self.gizmo.width, 1.5)
+        self.assertEqual(self.gizmo.halo_width, 1.5)
+        self.assertEqual(self.gizmo.hover_scale, 1.5)
+        self.assertEqual(self.gizmo.hit_radius_px, 12.0)
         self.assertEqual(self.gizmo.opacity, 1.0)
-        self.assertEqual(self.gizmo.ghost_alpha, 0.35)
+        self.assertEqual(self.gizmo.ghost_alpha, 0.2)
         self.assertEqual(self.gizmo.ring_snap_deg, 15.0)
 
     def test_apply_builds_the_exact_gizmo_view(self):
         self.gizmo.enabled = True
         self.gizmo.active_color = "#38bdf8"
         self.gizmo.inactive_color = "#94a3b8"
+        self.gizmo.outline_color = "#0f172a"
         self.gizmo.size = 80.0
         self.gizmo.width = 1.5
+        self.gizmo.halo_width = 1.5
+        self.gizmo.hover_scale = 1.5
+        self.gizmo.hit_radius_px = 12.0
         self.gizmo.opacity = 1.0
-        self.gizmo.ghost_alpha = 0.35
+        self.gizmo.ghost_alpha = 0.2
         self.gizmo.ring_snap_deg = 15.0
         self.gizmo.show_readout = True
 
@@ -248,10 +321,14 @@ class GizmoApiTests(unittest.TestCase):
                         "backend": "ferrocad",
                         "active_color": "#38bdf8",
                         "inactive_color": "#94a3b8",
+                        "outline_color": "#0f172a",
                         "size": 80.0,
                         "width": 1.5,
+                        "halo_width": 1.5,
+                        "hover_scale": 1.5,
+                        "hit_radius_px": 12.0,
                         "opacity": 1.0,
-                        "ghost_alpha": 0.35,
+                        "ghost_alpha": 0.2,
                         "ring_snap_deg": 15.0,
                         "show_readout": True,
                     }
@@ -428,7 +505,9 @@ class GizmoOverlayModTests(unittest.TestCase):
         self.assertEqual(by_name["enabled"]["value"], "True")
         self.assertEqual(by_name["active_color"]["value"], "#38bdf8")
         self.assertEqual(by_name["size"]["value"], "80.0")
-        self.assertEqual(by_name["ghost_alpha"]["value"], "0.35")
+        self.assertEqual(by_name["outline_color"]["value"], "#0f172a")
+        self.assertEqual(by_name["hit_radius_px"]["value"], "12.0")
+        self.assertEqual(by_name["ghost_alpha"]["value"], "0.2")
         self.assertEqual(by_name["ring_snap_deg"]["value"], "15.0")
 
     def test_activate_and_deactivate_preserve_enabled(self):

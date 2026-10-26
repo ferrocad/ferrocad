@@ -17,8 +17,8 @@ use ferrocad_types::{Matrix4, Placement, Rotation, Vector3};
 
 use crate::interaction::InteractionCommit;
 use crate::screen::{
-    HIT_SLOP, STROKE_PIXELS, camera_forward, camera_position, point_segment_distance,
-    project_device, push_ribbon, scale_for, to3,
+    STROKE_PIXELS, camera_forward, camera_position, point_segment_distance, project_device,
+    push_ribbon, scale_for, to3,
 };
 use crate::shape::{DrawMode, ShapeItem};
 
@@ -53,6 +53,29 @@ pub const SUBTRACT_COLOR: [f32; 4] = [0.863, 0.058, 0.058, 1.0];
 /// The default rotation detent of the rings, in degrees.
 pub const DEFAULT_RING_SNAP_DEG: f64 = 15.0;
 
+/// The default outline colour (`#0F172A`, linear RGBA).
+///
+/// The halo is the WCAG 1.4.11 non-text-contrast aid: it separates a handle from
+/// mid-luminance geometry (the toy's blue slab sits at the same lightness as the
+/// cyan stems) without relying on hue alone.
+pub const OUTLINE_COLOR: [f32; 4] = [0.0048, 0.0086, 0.0232, 1.0];
+/// The default outline width around a handle, in device pixels.
+pub const DEFAULT_HALO_WIDTH: f64 = 1.5;
+/// The default stroke-width multiplier of the hovered/grabbed handle.
+///
+/// This is the non-colour cue for hover (WCAG 1.4.1): the accent and the idle ink
+/// are too close in luminance to carry the state by colour alone.
+pub const DEFAULT_HOVER_SCALE: f64 = 1.5;
+/// The minimum analytic grab radius, in device pixels (24 px target, WCAG 2.5.8).
+pub const MIN_HIT_RADIUS_PX: f64 = 12.0;
+/// The default analytic grab radius, in device pixels.
+pub const DEFAULT_HIT_RADIUS_PX: f64 = MIN_HIT_RADIUS_PX;
+/// The largest occluded-handle alpha that still reads as "behind" rather than
+/// "another front handle".
+pub const MAX_GHOST_ALPHA: f32 = 0.5;
+/// The default occluded-handle alpha.
+pub const DEFAULT_GHOST_ALPHA: f32 = 0.20;
+
 /// The workspace gizmo/manipulator appearance and behaviour.
 ///
 /// This is the shared style contract: the native gizmo, the workbench manipulators
@@ -75,6 +98,15 @@ pub struct GizmoStyle {
     pub active: [f32; 4],
     /// The linear RGBA of an idle handle.
     pub inactive: [f32; 4],
+    /// The linear RGBA of the outline/halo behind the handles.
+    pub outline: [f32; 4],
+    /// The outline width around a handle, in device pixels; `0` disables it.
+    pub halo_width: f64,
+    /// The stroke-width multiplier of the hovered/grabbed handle (`1.0` disables).
+    pub hover_scale: f64,
+    /// The analytic grab radius, in device pixels (at least
+    /// [`MIN_HIT_RADIUS_PX`]).
+    pub hit_radius_px: f64,
     /// The target radius of the triad, in device pixels (screen-invariant).
     pub size: f64,
     /// The stroke width of the axes and rings, in device pixels.
@@ -96,10 +128,14 @@ impl Default for GizmoStyle {
             backend: NATIVE_BACKEND.to_string(),
             active: ACTIVE_COLOR,
             inactive: INACTIVE_COLOR,
+            outline: OUTLINE_COLOR,
+            halo_width: DEFAULT_HALO_WIDTH,
+            hover_scale: DEFAULT_HOVER_SCALE,
+            hit_radius_px: DEFAULT_HIT_RADIUS_PX,
             size: DEFAULT_PIXELS,
             width: STROKE_PIXELS,
             opacity: 1.0,
-            ghost_alpha: crate::shape::GHOST_SURFACE_ALPHA,
+            ghost_alpha: DEFAULT_GHOST_ALPHA,
             ring_snap_deg: DEFAULT_RING_SNAP_DEG,
             show_readout: true,
         }
@@ -526,6 +562,9 @@ pub struct TransformGizmo {
     /// Nine fixed slots (one per [`GizmoHandle`]); unused ones are cleared. Stable mesh
     /// ids, so a rebuild is a geometry write, not a new mesh.
     handles: Vec<ShapeItem>,
+    /// The non-pickable outline pass drawn behind `handles` (a wider ribbon in
+    /// [`GizmoStyle::outline`]). Empty slots when the halo is disabled.
+    halos: Vec<ShapeItem>,
 }
 
 impl TransformGizmo {
@@ -544,6 +583,7 @@ impl TransformGizmo {
             display_offset: None,
             dirty: true,
             handles: (0..GizmoHandle::ALL.len()).map(new_handle).collect(),
+            halos: (0..GizmoHandle::ALL.len()).map(new_halo).collect(),
         }
     }
 
@@ -681,6 +721,14 @@ impl TransformGizmo {
         &self.handles
     }
 
+    /// The outline pass drawn **before** [`items`](Self::items).
+    ///
+    /// These are wider ribbons in [`GizmoStyle::outline`] and are not selectable, so
+    /// the WCAG non-text-contrast halo never becomes an extra pick target.
+    pub fn halos(&self) -> &[ShapeItem] {
+        &self.halos
+    }
+
     /// The handle items re-materialised with an authored skin program.
     ///
     /// The clone keeps the same mesh identity and generation (so the renderer's upload
@@ -697,13 +745,15 @@ impl TransformGizmo {
             .collect()
     }
 
-    /// The handle under `device` within the analytic grab padding, or `None` when the
+    /// The handle under `device` within the analytic grab radius, or `None` when the
     /// pointer is in the triad's empty interior (which must pass through to the scene).
     ///
     /// The test projects the same axis segments, plane quads and ring polylines the
     /// producers draw, then measures screen-space distance. It is **analytic** rather
-    /// than a rasterised pick so the 2 px stroke + 10 px padding does not require extra
-    /// pick geometry, which would swallow clicks meant for background features.
+    /// than a rasterised pick so the grab radius does not require extra pick geometry,
+    /// which would swallow clicks meant for background features. The radius is
+    /// [`GizmoStyle::hit_radius_px`], floored at [`MIN_HIT_RADIUS_PX`] so a thin stem
+    /// still has a 24 px target (WCAG 2.5.8).
     ///
     /// Priority is **axis > plane > ring**, then nearest stroke, then front-most. Only
     /// handles shown by [`GizmoMode`] participate.
@@ -712,6 +762,7 @@ impl TransformGizmo {
         if !scale.is_finite() || scale <= 0.0 {
             return None;
         }
+        let slop = self.style.hit_radius_px.max(MIN_HIT_RADIUS_PX);
         let frame = self.frame;
         let eye = camera_position(&camera.view);
         let pointer = [f64::from(device[0]), f64::from(device[1])];
@@ -738,7 +789,7 @@ impl TransformGizmo {
                 continue;
             }
             let (distance, t) = point_segment_distance(pointer, a, b);
-            if distance > HIT_SLOP {
+            if distance > slop {
                 continue;
             }
             let world = start.add(&end.sub(&start).scale(t));
@@ -779,7 +830,7 @@ impl TransformGizmo {
                 }
                 nearest
             };
-            if distance > HIT_SLOP {
+            if distance > slop {
                 continue;
             }
             let centre = frame
@@ -813,7 +864,7 @@ impl TransformGizmo {
                 }
                 let world_per_pixel = scale_for(camera, hit, 1.0).max(1e-9);
                 let error = (radius - scale).abs();
-                if error > HIT_SLOP * world_per_pixel {
+                if error > slop * world_per_pixel {
                     continue;
                 }
                 let ring_point = frame.origin.add(&radial.scale(scale / radius));
@@ -861,7 +912,7 @@ impl TransformGizmo {
                         nearest_world = world[i].add(&world[j].sub(&world[i]).scale(t));
                     }
                 }
-                if nearest > HIT_SLOP {
+                if nearest > slop {
                     continue;
                 }
                 consider(&mut best, nearest, eye.sub(&nearest_world).length(), handle);
@@ -877,6 +928,9 @@ impl TransformGizmo {
             return false;
         }
         self.hovered = handle;
+        // The hover cue is also a stroke-width change, which is baked into the ribbon
+        // geometry; mark the gizmo for a rebuild as well as recolouring it.
+        self.dirty = true;
         self.apply_colors();
         true
     }
@@ -1175,37 +1229,91 @@ impl TransformGizmo {
         let origin = frame.origin;
         let scale = self.scale;
         let width = self.style.width;
+        let hover_scale = self.style.hover_scale.max(1.0);
+        let halo = self.style.halo_width.max(0.0);
         let world_per_pixel = scale / self.style.size.max(1e-9);
         let forward = camera_forward(camera);
         for (index, handle) in GizmoHandle::ALL.iter().enumerate() {
             let slot = &mut self.handles[index];
+            let halo_slot = &mut self.halos[index];
             if !self.mode.shows(*handle) {
                 slot.set_shape(Vec::new(), Vec::new(), Vec::new(), Vec::new());
+                halo_slot.set_shape(Vec::new(), Vec::new(), Vec::new(), Vec::new());
                 continue;
             }
+            // The non-colour hover cue: a hovered stem/ring gets a wider stroke (and
+            // therefore a wider halo) instead of relying on the accent hue alone.
+            let stroke = if self.hovered == Some(*handle) {
+                width * hover_scale
+            } else {
+                width
+            };
+            let halo_stroke = stroke + 2.0 * halo;
             match handle.kind() {
-                HandleKind::Axis => axis_handle(
-                    slot,
-                    origin,
-                    frame.axis(*handle).expect("axis"),
-                    scale,
-                    world_per_pixel,
-                    width,
-                    forward,
-                ),
+                HandleKind::Axis => {
+                    axis_handle(
+                        slot,
+                        origin,
+                        frame.axis(*handle).expect("axis"),
+                        scale,
+                        world_per_pixel,
+                        stroke,
+                        forward,
+                    );
+                    if halo > 0.0 {
+                        axis_handle(
+                            halo_slot,
+                            origin,
+                            frame.axis(*handle).expect("axis"),
+                            scale,
+                            world_per_pixel,
+                            halo_stroke,
+                            forward,
+                        );
+                    } else {
+                        halo_slot.set_shape(Vec::new(), Vec::new(), Vec::new(), Vec::new());
+                    }
+                }
                 HandleKind::Plane => {
                     let (u, v) = frame.plane_axes(*handle).expect("plane axes");
-                    plane_handle(slot, origin, u, v, scale)
+                    plane_handle(slot, origin, u, v, scale);
+                    if halo > 0.0 {
+                        plane_halo(
+                            halo_slot,
+                            origin,
+                            u,
+                            v,
+                            scale,
+                            halo / self.style.size.max(1e-9),
+                        );
+                    } else {
+                        halo_slot.set_shape(Vec::new(), Vec::new(), Vec::new(), Vec::new());
+                    }
                 }
-                HandleKind::Ring => ring_handle(
-                    slot,
-                    origin,
-                    frame.axis(*handle).expect("ring"),
-                    scale,
-                    world_per_pixel,
-                    width,
-                    forward,
-                ),
+                HandleKind::Ring => {
+                    ring_handle(
+                        slot,
+                        origin,
+                        frame.axis(*handle).expect("ring"),
+                        scale,
+                        world_per_pixel,
+                        stroke,
+                        forward,
+                    );
+                    if halo > 0.0 {
+                        ring_handle(
+                            halo_slot,
+                            origin,
+                            frame.axis(*handle).expect("ring"),
+                            scale,
+                            world_per_pixel,
+                            halo_stroke,
+                            forward,
+                        );
+                    } else {
+                        halo_slot.set_shape(Vec::new(), Vec::new(), Vec::new(), Vec::new());
+                    }
+                }
             }
         }
         self.apply_colors();
@@ -1219,12 +1327,21 @@ impl TransformGizmo {
         let offset = self
             .display_offset
             .map(|offset| Matrix4::translation(offset.x, offset.y, offset.z));
+        let outline = [
+            self.style.outline[0],
+            self.style.outline[1],
+            self.style.outline[2],
+            self.style.outline[3] * self.style.opacity,
+        ];
         for (index, handle) in GizmoHandle::ALL.iter().enumerate() {
             let (surface, edge) = paint_for(*handle, self.hovered == Some(*handle), &self.style);
             self.handles[index].set_surface_color(surface);
             self.handles[index].set_edge_color(edge);
             self.handles[index].set_ghost_alpha(self.style.ghost_alpha);
             self.handles[index].set_temporary_transform(offset);
+            self.halos[index].set_surface_color(outline);
+            self.halos[index].set_ghost_alpha(self.style.ghost_alpha);
+            self.halos[index].set_temporary_transform(offset);
         }
     }
 }
@@ -1256,6 +1373,17 @@ fn new_handle(index: usize) -> ShapeItem {
         // 35 % through the `Greater` ghost pass.
         .with_blended_surface()
         .with_ghost_surface()
+}
+
+/// The outline slot behind a handle: a wider ribbon in the outline ink. It is
+/// non-selectable so the halo never adds a pick target, and its ids sit outside the
+/// handle pick range.
+fn new_halo(index: usize) -> ShapeItem {
+    ShapeItem::new(GIZMO_BASE_ID + 100 + index as u32)
+        .with_draw_mode(DrawMode::Shaded)
+        .with_blended_surface()
+        .with_ghost_surface()
+        .with_selectable(false)
 }
 
 /// A translation axis: a style-width shaft ribbon plus a micro-chevron at the tip.
@@ -1323,6 +1451,55 @@ fn plane_handle(item: &mut ShapeItem, origin: Vector3, u: Vector3, v: Vector3, s
         vec![0, 1, 2, 0, 2, 3],
         vec![0, 1, 1, 2, 2, 3, 3, 0],
     );
+}
+
+/// The outline behind a plane: the same square, expanded by `margin` (a fraction of
+/// the triad's radius, i.e. `halo_px / size_px`).
+/// The glass plane's halo: a border band just outside its edge.
+///
+/// A filled backing quad would draw an opaque dark rectangle *through* the plane's
+/// `0.10`-alpha glass and hide the fill; the band is the outline only.
+fn plane_halo(
+    item: &mut ShapeItem,
+    origin: Vector3,
+    u: Vector3,
+    v: Vector3,
+    scale: f64,
+    margin: f64,
+) {
+    let corner = |a: f64, b: f64| to3(origin.add(&u.scale(a * scale)).add(&v.scale(b * scale)));
+    let lo = 0.35;
+    let hi = 0.7;
+    let outer_lo = lo - margin;
+    let outer_hi = hi + margin;
+    let mut positions = Vec::new();
+    let mut triangles = Vec::new();
+    let mut quad = |a: (f64, f64), b: (f64, f64), c: (f64, f64), d: (f64, f64)| {
+        let base = positions.len() as u32;
+        positions.extend([
+            corner(a.0, a.1),
+            corner(b.0, b.1),
+            corner(c.0, c.1),
+            corner(d.0, d.1),
+        ]);
+        triangles.extend([base, base + 1, base + 2, base, base + 2, base + 3]);
+    };
+    // Bottom, top, left, right — the four bands that frame the plane.
+    quad(
+        (outer_lo, outer_lo),
+        (outer_hi, outer_lo),
+        (outer_hi, lo),
+        (outer_lo, lo),
+    );
+    quad(
+        (outer_lo, hi),
+        (outer_hi, hi),
+        (outer_hi, outer_hi),
+        (outer_lo, outer_hi),
+    );
+    quad((outer_lo, lo), (lo, lo), (lo, hi), (outer_lo, hi));
+    quad((hi, lo), (outer_hi, lo), (outer_hi, hi), (hi, hi));
+    item.set_shape(positions, Vec::new(), triangles, Vec::new());
 }
 
 /// A rotation ring: a style-width ribbon around the circle.
@@ -2207,6 +2384,123 @@ mod tests {
         );
     }
 
+    /// The world width of an axis ribbon's shaft, measured across its first quad.
+    fn shaft_width(item: &ShapeItem) -> f64 {
+        let positions = item.positions();
+        let point = |index: usize| {
+            Vector3::new(
+                f64::from(positions[index][0]),
+                f64::from(positions[index][1]),
+                f64::from(positions[index][2]),
+            )
+        };
+        point(0).sub(&point(3)).length()
+    }
+
+    #[test]
+    fn the_halo_is_a_wider_non_pickable_pass() {
+        let camera = camera(5.0);
+        let mut gizmo = TransformGizmo::new(1, Vector3::zero(), GizmoMode::Translate);
+        gizmo.update(&camera);
+        let handle = &gizmo.items()[GizmoHandle::AxisX.index()];
+        let halo = &gizmo.halos()[GizmoHandle::AxisX.index()];
+        assert!(!halo.selectable(), "the halo must never be a pick target");
+        assert!(!halo.positions().is_empty(), "the halo has a ribbon");
+        assert_eq!(halo.surface_color(), OUTLINE_COLOR);
+
+        // The halo is the stroke plus `halo_width` on each side.
+        let expected = (DEFAULT_HALO_WIDTH * 2.0 + STROKE_PIXELS) * gizmo.scale() / DEFAULT_PIXELS;
+        let width = shaft_width(halo);
+        assert!(
+            (width - expected).abs() < 1e-6,
+            "the halo should be {expected} world units, got {width}"
+        );
+        assert!(width > shaft_width(handle));
+
+        // The plane halo is a border band (four quads), not a filled backing: a filled
+        // quad would darken the glass fill it is supposed to outline.
+        let plane = &gizmo.halos()[GizmoHandle::PlaneXY.index()];
+        assert_eq!(plane.positions().len(), 16, "four framing quads");
+        assert_eq!(plane.triangles().len(), 24, "six indices per quad");
+    }
+
+    #[test]
+    fn a_zero_halo_width_draws_no_halo() {
+        let camera = camera(5.0);
+        let mut gizmo = TransformGizmo::new(1, Vector3::zero(), GizmoMode::Translate);
+        gizmo.update(&camera);
+        assert!(
+            !gizmo.halos()[GizmoHandle::AxisX.index()]
+                .positions()
+                .is_empty()
+        );
+
+        let mut style = GizmoStyle::default();
+        style.halo_width = 0.0;
+        assert!(gizmo.set_style(&style));
+        gizmo.update(&camera);
+        for item in gizmo.halos() {
+            assert!(
+                item.positions().is_empty(),
+                "a zero halo width must clear every slot"
+            );
+        }
+    }
+
+    #[test]
+    fn the_grab_radius_follows_the_style() {
+        let camera = camera(5.0);
+        let mut gizmo = TransformGizmo::new(1, Vector3::zero(), GizmoMode::Translate);
+        gizmo.update(&camera);
+        // 15 px above the X stem: outside the default 12 px grab radius.
+        assert_eq!(gizmo.hit(&camera, [80, 65]), None);
+
+        let mut style = GizmoStyle::default();
+        style.hit_radius_px = 20.0;
+        assert!(gizmo.set_style(&style));
+        gizmo.update(&camera);
+        assert_eq!(gizmo.hit(&camera, [80, 65]), Some(GizmoHandle::AxisX));
+    }
+
+    #[test]
+    fn a_grab_radius_below_the_wcag_minimum_is_floored() {
+        let camera = camera(5.0);
+        let mut gizmo = TransformGizmo::new(1, Vector3::zero(), GizmoMode::Translate);
+        let mut style = GizmoStyle::default();
+        style.hit_radius_px = 0.0;
+        assert!(gizmo.set_style(&style));
+        gizmo.update(&camera);
+        // 8 px off the stem is still inside the floored 12 px radius.
+        assert_eq!(gizmo.hit(&camera, [80, 58]), Some(GizmoHandle::AxisX));
+    }
+
+    #[test]
+    fn hovering_widens_the_stroke_and_its_halo() {
+        let camera = camera(5.0);
+        let mut gizmo = TransformGizmo::new(1, Vector3::zero(), GizmoMode::Translate);
+        gizmo.update(&camera);
+        let idle = shaft_width(&gizmo.items()[GizmoHandle::AxisX.index()]);
+        assert!(gizmo.set_hovered(Some(GizmoHandle::AxisX)));
+        assert!(
+            gizmo.update(&camera),
+            "the non-colour hover cue must rebuild the geometry"
+        );
+        let hovered = shaft_width(&gizmo.items()[GizmoHandle::AxisX.index()]);
+        assert!(
+            (hovered / idle - DEFAULT_HOVER_SCALE).abs() < 1e-5,
+            "the hover cue scales the stroke by {DEFAULT_HOVER_SCALE}: {hovered} vs {idle}"
+        );
+        // The halo follows the widened stroke so the outline stays even.
+        let expected_halo = (DEFAULT_HALO_WIDTH * 2.0 + STROKE_PIXELS * DEFAULT_HOVER_SCALE)
+            * gizmo.scale()
+            / DEFAULT_PIXELS;
+        let halo = shaft_width(&gizmo.halos()[GizmoHandle::AxisX.index()]);
+        assert!(
+            (halo - expected_halo).abs() < 1e-6,
+            "the hovered halo should be {expected_halo} world units, got {halo}"
+        );
+    }
+
     #[test]
     fn the_gizmo_strokes_are_ribbons() {
         let mut gizmo = TransformGizmo::new(1, Vector3::zero(), GizmoMode::Universal);
@@ -2277,16 +2571,23 @@ mod tests {
     }
 
     #[test]
-    fn the_default_style_reproduces_the_legacy_tokens_and_geometry() {
+    fn the_default_style_carries_the_tokens_and_the_accessibility_defaults() {
         let style = GizmoStyle::default();
         assert!(style.enabled);
         assert_eq!(style.backend, "ferrocad");
         assert_eq!(style.active, ACTIVE_COLOR);
         assert_eq!(style.inactive, INACTIVE_COLOR, "the legacy 0.9 alpha");
+        assert_eq!(style.outline, OUTLINE_COLOR);
         assert_eq!(style.size, DEFAULT_PIXELS);
         assert_eq!(style.width, STROKE_PIXELS);
+        assert_eq!(style.halo_width, DEFAULT_HALO_WIDTH);
+        assert_eq!(style.hover_scale, DEFAULT_HOVER_SCALE);
+        assert_eq!(style.hit_radius_px, DEFAULT_HIT_RADIUS_PX);
+        assert!(style.hit_radius_px >= MIN_HIT_RADIUS_PX, "24 px target");
         assert_eq!(style.opacity, 1.0);
-        assert_eq!(style.ghost_alpha, 0.35);
+        // Below the legacy 0.35 so an occluded handle stays visibly behind a front one.
+        assert_eq!(style.ghost_alpha, DEFAULT_GHOST_ALPHA);
+        assert!(style.ghost_alpha <= MAX_GHOST_ALPHA);
         assert_eq!(style.ring_snap_deg, 15.0);
         assert!(style.show_readout);
 

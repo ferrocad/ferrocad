@@ -9,7 +9,7 @@
 //! the active workplane. The shell performs it on the viewport and reports the outcome.
 
 use ferrocad_stage::grid;
-use ferrocad_stage::{AxisStyle, GizmoStyle};
+use ferrocad_stage::{AxisStyle, GizmoStyle, MAX_GHOST_ALPHA, MIN_HIT_RADIUS_PX};
 use serde::Deserialize;
 
 /// A presentation change a command returns. Never undoable, never a document edit.
@@ -115,6 +115,18 @@ pub struct GizmoRequest {
     /// The idle handle's ink. The hex is RGB-only; the current alpha is kept.
     #[serde(default)]
     pub inactive_color: Option<String>,
+    /// The outline/halo ink behind the handles. RGB-only; the alpha is kept.
+    #[serde(default)]
+    pub outline_color: Option<String>,
+    /// The outline width around a handle, in device pixels (`0` disables it).
+    #[serde(default)]
+    pub halo_width: Option<f64>,
+    /// The stroke-width multiplier of the hovered/grabbed handle (`1.0` disables).
+    #[serde(default)]
+    pub hover_scale: Option<f64>,
+    /// The analytic grab radius, in device pixels (clamped up to the 24 px target).
+    #[serde(default)]
+    pub hit_radius_px: Option<f64>,
     /// The triad's target radius, in device pixels (finite and positive).
     #[serde(default)]
     pub size: Option<f64>,
@@ -332,8 +344,13 @@ impl ViewState {
                     .as_deref()
                     .map(grid::parse_srgb_hex)
                     .transpose()?,
+                gizmo
+                    .outline_color
+                    .as_deref()
+                    .map(grid::parse_srgb_hex)
+                    .transpose()?,
             ],
-            None => [None, None],
+            None => [None, None, None],
         };
         let gizmo_backend = match request.gizmo.as_ref().and_then(|gizmo| gizmo.backend.as_deref())
         {
@@ -364,6 +381,26 @@ impl ViewState {
                             "gizmo {name} must be positive and finite, got {value}"
                         ));
                     }
+                }
+            }
+            for (name, value) in [
+                ("halo width", gizmo.halo_width),
+                ("hover scale", gizmo.hover_scale),
+                ("hit radius", gizmo.hit_radius_px),
+            ] {
+                if let Some(value) = value {
+                    if !(value.is_finite() && value >= 0.0) {
+                        return Err(format!(
+                            "gizmo {name} must be non-negative and finite, got {value}"
+                        ));
+                    }
+                }
+            }
+            if let Some(scale) = gizmo.hover_scale {
+                if scale < 1.0 {
+                    return Err(format!(
+                        "gizmo hover scale must be at least 1.0, got {scale}"
+                    ));
                 }
             }
             if let Some(snap) = gizmo.ring_snap_deg {
@@ -491,7 +528,7 @@ impl ViewState {
                     summary = Some(if enabled { "gizmo on" } else { "gizmo off" });
                 }
             }
-            let [active, inactive] = gizmo_colors;
+            let [active, inactive, outline] = gizmo_colors;
             if let Some(color) = active {
                 // Compare in the 8-bit sRGB space, as the axis colours do: the default
                 // tokens are authored at three decimals. The hex carries no alpha, so the
@@ -505,6 +542,34 @@ impl ViewState {
                 if ink_hex(self.gizmo.inactive) != ink_hex(color) {
                     self.gizmo.inactive =
                         [color[0], color[1], color[2], self.gizmo.inactive[3]];
+                    styled = true;
+                }
+            }
+            if let Some(color) = outline {
+                if ink_hex(self.gizmo.outline) != ink_hex(color) {
+                    self.gizmo.outline = [color[0], color[1], color[2], self.gizmo.outline[3]];
+                    styled = true;
+                }
+            }
+            if let Some(width) = gizmo.halo_width {
+                let width = width.clamp(0.0, 8.0);
+                if (self.gizmo.halo_width - width).abs() > 1e-12 {
+                    self.gizmo.halo_width = width;
+                    styled = true;
+                }
+            }
+            if let Some(scale) = gizmo.hover_scale {
+                let scale = scale.clamp(1.0, 4.0);
+                if (self.gizmo.hover_scale - scale).abs() > 1e-12 {
+                    self.gizmo.hover_scale = scale;
+                    styled = true;
+                }
+            }
+            if let Some(radius) = gizmo.hit_radius_px {
+                // A grab target below 24 px fails WCAG 2.5.8, so the floor is the spec.
+                let radius = radius.clamp(MIN_HIT_RADIUS_PX, 48.0);
+                if (self.gizmo.hit_radius_px - radius).abs() > 1e-12 {
+                    self.gizmo.hit_radius_px = radius;
                     styled = true;
                 }
             }
@@ -528,15 +593,19 @@ impl ViewState {
                 }
             }
             if let Some(ghost_alpha) = gizmo.ghost_alpha {
-                let ghost_alpha = ghost_alpha.clamp(0.0, 1.0);
+                // Above half, an occluded handle reads as a front handle; the WCAG
+                // setting clamps rather than trusting the caller.
+                let ghost_alpha = ghost_alpha.clamp(0.0, MAX_GHOST_ALPHA);
                 if (self.gizmo.ghost_alpha - ghost_alpha).abs() > f32::EPSILON {
                     self.gizmo.ghost_alpha = ghost_alpha;
                     styled = true;
                 }
             }
             if let Some(snap) = gizmo.ring_snap_deg {
-                // Zero is continuous rotation, hence the clamp rather than a rejection.
+                // Zero is continuous rotation; otherwise the detent is a 5° multiple so
+                // a motor-impaired drag never has to hit an arbitrary fraction.
                 let snap = snap.clamp(0.0, 180.0);
+                let snap = (snap / 5.0).round() * 5.0;
                 if (self.gizmo.ring_snap_deg - snap).abs() > 1e-12 {
                     self.gizmo.ring_snap_deg = snap;
                     styled = true;
@@ -926,7 +995,7 @@ mod tests {
     }
 
     #[test]
-    fn the_gizmo_defaults_reproduce_the_legacy_look() {
+    fn the_gizmo_defaults_carry_the_accessibility_policy() {
         let state = ViewState::default();
         assert_eq!(state.gizmo, GizmoStyle::default());
         assert!(state.gizmo.enabled);
@@ -934,7 +1003,8 @@ mod tests {
         assert_eq!(state.gizmo.size, 80.0);
         assert_eq!(state.gizmo.width, 1.5);
         assert_eq!(state.gizmo.opacity, 1.0);
-        assert_eq!(state.gizmo.ghost_alpha, 0.35);
+        // The WCAG 2.2 AA defaults: a contrast halo, a non-colour hover cue, a 24 px
+        // target and an occluded alpha that stays visibly behind a front handle.
         assert_eq!(state.gizmo.ring_snap_deg, 15.0);
         assert!(state.gizmo.show_readout);
         assert_eq!(state.gizmo.inactive[3], 0.9, "the legacy inactive alpha");
@@ -947,8 +1017,11 @@ mod tests {
             r##"{"gizmo": {
                 "enabled": true, "backend": "ferrocad",
                 "active_color": "#38bdf8", "inactive_color": "#94a3b8",
-                "size": 80.0, "width": 1.5, "opacity": 1.0,
-                "ghost_alpha": 0.35, "ring_snap_deg": 15.0, "show_readout": true
+                "outline_color": "#0f172a",
+                "size": 80.0, "width": 1.5, "halo_width": 1.5,
+                "hover_scale": 1.5, "hit_radius_px": 12.0,
+                "opacity": 1.0,
+                "ghost_alpha": 0.2, "ring_snap_deg": 15.0, "show_readout": true
             }}"##,
         )
         .expect("the contract's request shape");
@@ -1056,6 +1129,68 @@ mod tests {
         assert_eq!(state.gizmo.ghost_alpha, 0.0);
         assert_eq!(state.gizmo.ring_snap_deg, 180.0);
         assert_eq!(state.apply(&request).unwrap(), "view unchanged");
+
+        // Above half, an occluded handle reads as a front handle: the ceiling is 0.5.
+        let ghost: ViewRequest =
+            serde_json::from_str(r#"{"gizmo": {"ghost_alpha": 0.9}}"#).unwrap();
+        assert_eq!(state.apply(&ghost).unwrap(), "gizmo style");
+        assert_eq!(state.gizmo.ghost_alpha, 0.5);
+
+        // The detent is stepped to 5° multiples (and 0 stays continuous).
+        for (input, applied) in [(7.0, 5.0), (12.4, 10.0), (180.0, 180.0), (0.0, 0.0)] {
+            let snap: ViewRequest = ViewRequest {
+                gizmo: Some(GizmoRequest {
+                    ring_snap_deg: Some(input),
+                    ..Default::default()
+                }),
+                ..Default::default()
+            };
+            state.apply(&snap).unwrap();
+            assert_eq!(state.gizmo.ring_snap_deg, applied, "{input}°");
+        }
+    }
+
+    #[test]
+    fn the_accessibility_knobs_apply_and_clamp() {
+        let mut state = ViewState::default();
+        let request: ViewRequest = serde_json::from_str(
+            r##"{"gizmo": {
+                "outline_color": "#010203",
+                "halo_width": 3.0, "hover_scale": 2.0, "hit_radius_px": 20.0
+            }}"##,
+        )
+        .unwrap();
+        assert_eq!(state.apply(&request).unwrap(), "gizmo style");
+        let mut outline = grid::parse_srgb_hex("#010203").unwrap();
+        outline[3] = 1.0;
+        assert_eq!(state.gizmo.outline, outline, "the outline alpha is kept");
+        assert_eq!(state.gizmo.halo_width, 3.0);
+        assert_eq!(state.gizmo.hover_scale, 2.0);
+        assert_eq!(state.gizmo.hit_radius_px, 20.0);
+        assert_eq!(state.apply(&request).unwrap(), "view unchanged");
+
+        // A grab radius below 24 px is clamped up to the WCAG 2.5.8 floor.
+        let small: ViewRequest =
+            serde_json::from_str(r#"{"gizmo": {"hit_radius_px": 2.0}}"#).unwrap();
+        assert_eq!(state.apply(&small).unwrap(), "gizmo style");
+        assert_eq!(state.gizmo.hit_radius_px, 12.0);
+
+        // The halo and hover scale have ceilings so the gizmo cannot blot the canvas.
+        let large: ViewRequest =
+            serde_json::from_str(r#"{"gizmo": {"halo_width": 40.0, "hover_scale": 9.0}}"#).unwrap();
+        state.apply(&large).unwrap();
+        assert_eq!(state.gizmo.halo_width, 8.0);
+        assert_eq!(state.gizmo.hover_scale, 4.0);
+    }
+
+    #[test]
+    fn a_hover_scale_below_one_is_rejected() {
+        let mut state = ViewState::default();
+        let request: ViewRequest =
+            serde_json::from_str(r#"{"grid": true, "gizmo": {"hover_scale": 0.5}}"#).unwrap();
+        assert!(state.apply(&request).is_err());
+        assert!(!state.grid, "nothing was applied");
+        assert_eq!(state.gizmo, GizmoStyle::default());
     }
 
     #[test]

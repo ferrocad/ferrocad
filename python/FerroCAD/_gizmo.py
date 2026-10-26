@@ -37,11 +37,26 @@ PREFERENCES = "User parameter:BaseApp/Preferences/Mods/%s/%s" % (FEATURE, BACKEN
 DEFAULT_ENABLED = True
 DEFAULT_ACTIVE_COLOR = "#38bdf8"
 DEFAULT_INACTIVE_COLOR = "#94a3b8"
+#: The halo behind the handles. It is the WCAG 1.4.11 non-text-contrast aid: the
+#: accent and the slate tokens are close in luminance to a mid-blue model, so a
+#: dark outline is what keeps a handle readable over it.
+DEFAULT_OUTLINE_COLOR = "#0f172a"
+DEFAULT_HALO_WIDTH = 1.5
 DEFAULT_SIZE = 80.0
 DEFAULT_WIDTH = 1.5
+#: The hover cue is a wider stroke as well as the accent colour (WCAG 1.4.1: use of
+#: colour alone is not enough).
+DEFAULT_HOVER_SCALE = 1.5
+#: 12 px radius = a 24 × 24 px target (WCAG 2.5.8).
+DEFAULT_HIT_RADIUS_PX = 12.0
+MIN_HIT_RADIUS_PX = 12.0
 DEFAULT_OPACITY = 1.0
-DEFAULT_GHOST_ALPHA = 0.35
+#: Above half, an occluded handle reads as a front handle; the setting is clamped.
+DEFAULT_GHOST_ALPHA = 0.20
+MAX_GHOST_ALPHA = 0.5
 DEFAULT_RING_SNAP_DEG = 15.0
+#: The detent is stepped in 5° increments; `0` means continuous rotation.
+RING_SNAP_STEP_DEG = 5.0
 DEFAULT_SHOW_READOUT = True
 
 #: The canonical gizmo schema. It is the one description of the manipulator
@@ -69,6 +84,12 @@ SETTINGS_SCHEMA = (
         "default": DEFAULT_INACTIVE_COLOR,
     },
     {
+        "name": "outline_color",
+        "label": "Handle outline",
+        "kind": "color",
+        "default": DEFAULT_OUTLINE_COLOR,
+    },
+    {
         "name": "size",
         "label": "Handle size (px)",
         "kind": "float",
@@ -85,6 +106,30 @@ SETTINGS_SCHEMA = (
         "max": 6.0,
     },
     {
+        "name": "halo_width",
+        "label": "Outline width (px)",
+        "kind": "float",
+        "default": DEFAULT_HALO_WIDTH,
+        "min": 0.0,
+        "max": 8.0,
+    },
+    {
+        "name": "hover_scale",
+        "label": "Hover stroke scale",
+        "kind": "float",
+        "default": DEFAULT_HOVER_SCALE,
+        "min": 1.0,
+        "max": 4.0,
+    },
+    {
+        "name": "hit_radius_px",
+        "label": "Grab radius (px)",
+        "kind": "float",
+        "default": DEFAULT_HIT_RADIUS_PX,
+        "min": MIN_HIT_RADIUS_PX,
+        "max": 48.0,
+    },
+    {
         "name": "opacity",
         "label": "Opacity",
         "kind": "float",
@@ -98,7 +143,7 @@ SETTINGS_SCHEMA = (
         "kind": "float",
         "default": DEFAULT_GHOST_ALPHA,
         "min": 0.0,
-        "max": 1.0,
+        "max": MAX_GHOST_ALPHA,
     },
     {
         "name": "ring_snap_deg",
@@ -107,6 +152,7 @@ SETTINGS_SCHEMA = (
         "default": DEFAULT_RING_SNAP_DEG,
         "min": 0.0,
         "max": 180.0,
+        "step": RING_SNAP_STEP_DEG,
     },
     {
         "name": "show_readout",
@@ -201,6 +247,18 @@ def _measured(spec: dict, value, name: str) -> float:
     )
 
 
+def _ring_snap(value) -> float:
+    """Validate the rotation snap and step it to the nearest 5° detent.
+
+    ``0`` means continuous rotation. The rounding is half-up (``floor(x + 0.5)``)
+    rather than Python's banker's ``round`` so it matches the Rust view's
+    ``f64::round`` exactly; both operands are non-negative here.
+    """
+    number = _number(value, "the rotation snap", minimum=0.0, maximum=180.0)
+    steps = math.floor(number / RING_SNAP_STEP_DEG + 0.5)
+    return steps * RING_SNAP_STEP_DEG
+
+
 def _backend() -> str:
     """The backend an ``apply()`` request should name.
 
@@ -254,6 +312,19 @@ class _GizmoSettings:
     def inactive_color(self, value) -> None:
         _write(_SPECS["inactive_color"], _colour(value))
 
+    @property
+    def outline_color(self) -> str:
+        """The outline/halo ink as a canonical lowercase ``#rrggbb``.
+
+        The halo is the non-text-contrast aid (WCAG 1.4.11); it separates a handle
+        from mid-luminance geometry without relying on hue.
+        """
+        return _colour(_read(_SPECS["outline_color"]))
+
+    @outline_color.setter
+    def outline_color(self, value) -> None:
+        _write(_SPECS["outline_color"], _colour(value))
+
     # -- geometry -----------------------------------------------------------
     @property
     def size(self) -> float:
@@ -274,6 +345,54 @@ class _GizmoSettings:
         _write(_SPECS["width"], _measured(_SPECS["width"], value, "the gizmo width"))
 
     @property
+    def halo_width(self) -> float:
+        """The outline width around a handle, in pixels; ``0`` disables it."""
+        return _measured(
+            _SPECS["halo_width"],
+            _read(_SPECS["halo_width"]),
+            "the gizmo halo width",
+        )
+
+    @halo_width.setter
+    def halo_width(self, value) -> None:
+        _write(
+            _SPECS["halo_width"],
+            _measured(_SPECS["halo_width"], value, "the gizmo halo width"),
+        )
+
+    @property
+    def hover_scale(self) -> float:
+        """The stroke-width multiplier of the hovered handle (``1`` disables)."""
+        return _measured(
+            _SPECS["hover_scale"],
+            _read(_SPECS["hover_scale"]),
+            "the gizmo hover scale",
+        )
+
+    @hover_scale.setter
+    def hover_scale(self, value) -> None:
+        _write(
+            _SPECS["hover_scale"],
+            _measured(_SPECS["hover_scale"], value, "the gizmo hover scale"),
+        )
+
+    @property
+    def hit_radius_px(self) -> float:
+        """The analytic grab radius in pixels (at least 12, for a 24 px target)."""
+        return _measured(
+            _SPECS["hit_radius_px"],
+            _read(_SPECS["hit_radius_px"]),
+            "the gizmo hit radius",
+        )
+
+    @hit_radius_px.setter
+    def hit_radius_px(self, value) -> None:
+        _write(
+            _SPECS["hit_radius_px"],
+            _measured(_SPECS["hit_radius_px"], value, "the gizmo hit radius"),
+        )
+
+    @property
     def opacity(self) -> float:
         """The handles' opacity in ``0..1``."""
         return _measured(
@@ -291,35 +410,33 @@ class _GizmoSettings:
 
     @property
     def ghost_alpha(self) -> float:
-        """The alpha of the occluded (ghosted) handles in ``0..1``."""
-        return _measured(
-            _SPECS["ghost_alpha"],
+        """The alpha of the occluded (ghosted) handles in ``0..0.5``.
+
+        The ceiling keeps an occluded handle visibly *behind* a front one; a value
+        above half reads as another handle rather than an occluded one. A legacy
+        stored value above the ceiling is reported clamped so the API never breaks.
+        """
+        value = _number(
             _read(_SPECS["ghost_alpha"]),
             "the gizmo ghost alpha",
+            minimum=0.0,
+            maximum=1.0,
         )
+        return min(value, MAX_GHOST_ALPHA)
 
     @ghost_alpha.setter
     def ghost_alpha(self, value) -> None:
-        _write(
-            _SPECS["ghost_alpha"],
-            _measured(_SPECS["ghost_alpha"], value, "the gizmo ghost alpha"),
-        )
+        number = _number(value, "the gizmo ghost alpha", minimum=0.0, maximum=1.0)
+        _write(_SPECS["ghost_alpha"], min(number, MAX_GHOST_ALPHA))
 
     @property
     def ring_snap_deg(self) -> float:
-        """The rotation ring's snap increment in degrees."""
-        return _measured(
-            _SPECS["ring_snap_deg"],
-            _read(_SPECS["ring_snap_deg"]),
-            "the gizmo ring snap",
-        )
+        """The rotation ring's snap increment in degrees (a 5° multiple; 0 = free)."""
+        return _ring_snap(_read(_SPECS["ring_snap_deg"]))
 
     @ring_snap_deg.setter
     def ring_snap_deg(self, value) -> None:
-        _write(
-            _SPECS["ring_snap_deg"],
-            _measured(_SPECS["ring_snap_deg"], value, "the gizmo ring snap"),
-        )
+        _write(_SPECS["ring_snap_deg"], _ring_snap(value))
 
     # -- decoration ---------------------------------------------------------
     @property
@@ -341,8 +458,12 @@ class _GizmoSettings:
                     "backend": _backend(),
                     "active_color": self.active_color,
                     "inactive_color": self.inactive_color,
+                    "outline_color": self.outline_color,
                     "size": self.size,
                     "width": self.width,
+                    "halo_width": self.halo_width,
+                    "hover_scale": self.hover_scale,
+                    "hit_radius_px": self.hit_radius_px,
                     "opacity": self.opacity,
                     "ghost_alpha": self.ghost_alpha,
                     "ring_snap_deg": self.ring_snap_deg,
@@ -363,8 +484,12 @@ class _GizmoSettings:
             "enabled": self.enabled,
             "active_color": self.active_color,
             "inactive_color": self.inactive_color,
+            "outline_color": self.outline_color,
             "size": self.size,
             "width": self.width,
+            "halo_width": self.halo_width,
+            "hover_scale": self.hover_scale,
+            "hit_radius_px": self.hit_radius_px,
             "opacity": self.opacity,
             "ghost_alpha": self.ghost_alpha,
             "ring_snap_deg": self.ring_snap_deg,

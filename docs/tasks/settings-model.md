@@ -270,14 +270,18 @@ S0–S4 landed; S5 (document-scoped overrides) remains optional.
 ### S4c — gizmo is a capability
 
 - The manipulator gizmo is now a capability like the grid and the axis cross:
-  `FerroCAD._gizmo` defines `FEATURE = "gizmo"`, `GIZMO_SETTINGS_SCHEMA` (nine
-  rows: `enabled`, `active_color`, `inactive_color`, `size`, `width`, `opacity`,
-  `ghost_alpha`, `ring_snap_deg`, `show_readout`) and the provider group
+  `FerroCAD._gizmo` defines `FEATURE = "gizmo"`, `GIZMO_SETTINGS_SCHEMA` (thirteen
+  rows: `enabled`, `active_color`, `inactive_color`, `outline_color`, `size`,
+  `width`, `halo_width`, `hover_scale`, `hit_radius_px`, `opacity`, `ghost_alpha`,
+  `ring_snap_deg`, `show_readout`) and the provider group
   `User parameter:BaseApp/Preferences/Mods/gizmo/ferrocad`. There is no legacy
-  key to migrate; `reset()` clears only this group.
+  key to migrate; `reset()` clears only this group. The four WCAG rows
+  (`outline_color`/`halo_width`, `hover_scale`, `hit_radius_px`, plus the
+  `ghost_alpha` ceiling) are documented in
+  [`../interaction/gizmo-manipulators.md`](../interaction/gizmo-manipulators.md) §17.
 - `FerroCAD.Gizmo.apply()` returns `{"view": {"gizmo": {…}}}` and adds
   `backend` from `FerroCADGui.activeProvider("gizmo")` (else `"ferrocad"`).
-  `backend` is not a schema row: `snapshot()` is the nine stored values, and
+  `backend` is not a schema row: `snapshot()` is the thirteen stored values, and
   `mods/GizmoOverlay` (the `gizmo`/`ferrocad` provider, priority 10) forces
   `"ferrocad"` in its activate/deactivate/refresh requests.
 - `mods/GizmoOverlay/InitGui.py` advertises the schema, so `Settings/Gizmo` and
@@ -288,15 +292,19 @@ S0–S4 landed; S5 (document-scoped overrides) remains optional.
   primary) and `FerroCAD_DevOnly: "true"`.
 - This section is the settings/store half (G0). The Rust half (G1) landed as
   `view.gizmo`: `ViewRequest.gizmo` → `ViewState.gizmo: ferrocad_stage::GizmoStyle`,
-  validated atomically (bad colour / non-positive size or width / empty backend
-  rejects the whole request; `opacity` and `ghost_alpha` clamp to `0..=1`, the ring
-  detent to `0..=180`). The hex colours are RGB-only, so the role's token alpha is
+  validated atomically (bad colour / non-positive size or width / empty backend /
+  `hover_scale < 1` rejects the whole request; `opacity` clamps to `0..=1`,
+  `ghost_alpha` to `0..=0.5`, `halo_width` to `0..=8`, `hover_scale` to `1..=4`,
+  `hit_radius_px` to `12..=48`, and the ring detent to `0..=180` then to a 5°
+  multiple). The hex colours are RGB-only, so the role's token alpha is
   kept. `Viewport::set_gizmo_style` forwards the style to every hosted manipulator
   and to the `TransformGizmo`, including objects hosted later, and owns the
   `enabled` (draw/pick) and `show_readout` gates; the shell arms the native handles
   even while disabled, so re-enabling needs no re-selection. `ghost_alpha` now
   reaches `ShapeItem`'s occluded pass (`with_ghost_alpha`/`set_ghost_alpha`) instead
-  of being a stored-only value.
+  of being a stored-only value. The `outline`/`halo_width` pair is the WCAG 1.4.11
+  contrast aid and `hover_scale` the 1.4.1 non-colour cue; the halo stays native
+  under a shader skin.
 - `backend` is stored as a **provider claim**, not an implementation. Hosting is
   data-driven: `ferrocad` is hosted by the build, and any other id is hosted by the
   **skin its provider supplies** through

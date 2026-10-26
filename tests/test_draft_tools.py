@@ -25,6 +25,7 @@ Run::
 from __future__ import annotations
 
 import contextlib
+import json
 import math
 import os
 import sys
@@ -40,6 +41,7 @@ if str(PYTHON_DIR) not in sys.path:
 
 import FreeCAD
 import FreeCADGui
+import ferrocad_shell
 
 try:
     import ferrocad_stage as stage
@@ -471,6 +473,94 @@ class WireToolTests(_SessionTestCase):
         self.assertEqual(len(self.doc.Objects), before)
         self.assertFalse(self.wire.is_active)
         self.assertIsNone(FreeCADGui.draftToolBar.sourceCmd)
+
+
+# ---------------------------------------------------------------------------
+# The shell bridge: a real viewport click reaches the Draft point session
+# ---------------------------------------------------------------------------
+
+
+@needs_stage
+class DraftRoutingBridgeTests(_SessionTestCase):
+    def test_the_command_requests_the_python_tool(self):
+        payload = json.loads(ferrocad_shell.run_command("Draft_Line"))
+        self.assertTrue(payload.get("ok"), payload)
+        self.assertEqual(payload.get("tool"), "python:draft")
+        self.assertTrue(self.line.is_active)
+
+    def test_bridge_clicks_feed_the_session_and_finish_commits(self):
+        payload = json.loads(ferrocad_shell.run_command("Draft_Line"))
+        self.assertEqual(payload.get("tool"), "python:draft")
+
+        bridge = ferrocad_shell.tool_bridge("draft")
+        for point in ((0.0, 0.0, 0.0), (5.0, 0.0, 0.0)):
+            event = stage.PointerEvent.down(
+                (0, 0), stage.MouseButton.Left
+            ).with_snap(point)
+            self.assertTrue(bridge.on_event(event))
+
+        status = bridge.status()
+        self.assertTrue(status["active"])
+        self.assertEqual(status["points"], 2)
+        self.assertEqual(status["label"], "Line")
+
+        with _part_module():
+            self.assertTrue(ferrocad_shell.tool_command("draft", "finish"))
+
+        self.assertEqual(len(self.doc.Objects), 1)
+        self.assertFalse(self.line.is_active)
+        self.assertIsNone(FreeCADGui.draftToolBar.sourceCmd)
+
+    def test_escape_through_the_bridge_commits_nothing(self):
+        json.loads(ferrocad_shell.run_command("Draft_Line"))
+        bridge = ferrocad_shell.tool_bridge("draft")
+        bridge.on_event(
+            stage.PointerEvent.down((0, 0), stage.MouseButton.Left).with_snap(
+                (1.0, 1.0, 0.0)
+            )
+        )
+        before = len(self.doc.Objects)
+        self.assertTrue(ferrocad_shell.tool_command("draft", "escape"))
+        self.assertEqual(len(self.doc.Objects), before)
+        self.assertFalse(self.line.is_active)
+
+
+class HeadlessViewStyleTests(unittest.TestCase):
+    """``SetStyle`` writes the line/point properties on the headless ViewObject."""
+
+    def setUp(self):
+        self.doc = FreeCAD.newDocument(self.id().replace(".", "_")[:40])
+        self.obj = self.doc.addObject("App::FeatureTest", "Styled")
+        self.addCleanup(self._cleanup)
+
+    def _cleanup(self):
+        try:
+            FreeCAD.closeDocument(self.doc.Name)
+        except Exception:  # noqa: BLE001 - a failing test may have closed it
+            pass
+
+    def test_the_style_properties_round_trip(self):
+        view = self.obj.ViewObject
+        view.LineColor = (1.0, 0.25, 0.0, 1.0)
+        self.assertEqual(
+            tuple(round(component, 3) for component in view.LineColor),
+            (1.0, 0.25, 0.0, 1.0),
+        )
+        view.LineWidth = 4
+        self.assertEqual(view.LineWidth, 4)
+        view.PointColor = 0xFF0000FF
+        self.assertEqual(
+            tuple(round(component, 3) for component in view.PointColor),
+            (1.0, 0.0, 0.0, 1.0),
+        )
+        view.PointSize = 6
+        self.assertEqual(view.PointSize, 6)
+        view.DrawStyle = "Dashed"
+        self.assertEqual(view.DrawStyle, "Dashed")
+
+    def test_an_unknown_draw_style_is_rejected(self):
+        with self.assertRaises(ValueError):
+            self.obj.ViewObject.DrawStyle = "Squiggly"
 
 
 if __name__ == "__main__":

@@ -80,6 +80,14 @@ _kernel_id = _fc._kernel_id
 # Core/utility submodules (the M4 Base/Units/Console surface).
 from . import Base, Units, Console
 
+# The native ``ferrocad.ViewObject`` models the App-side appearance state. The
+# line/point style properties Draft's ``SetStyle`` writes are installed on the
+# class here, so a headless ``obj.ViewObject.LineColor = ...`` sets and reads
+# back (see ``_view_style`` for why they are not native yet).
+from . import _view_style as _view_style
+
+_view_style.install()
+
 ScaleType = Base.ScaleType
 
 addDocumentObserver = _fc.addDocumentObserver
@@ -151,6 +159,7 @@ def closeDocument(name):
     if current is not None and current.Name == document.Name:
         _notify_document("deactivated", document.Name)
     _fc.closeDocument(name)
+    _view_style.forget_document(document.Name)
     _notify_document("closed", document.Name)
 
 def getDocument(name):

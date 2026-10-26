@@ -40,3 +40,12 @@ _Every entry point returns a JSON string._
 | `set_selection(pairs_json: str) -> str` | Replace ``FreeCADGui.Selection`` with the shell's selection. |
 | `set_view_state(state_json: str) -> str` | Mirror the shell's presentation state to ``FerroCADGui.ViewState``. |
 | `stage_meshes() -> str` | The tessellated shapes the viewport draws, as JSON. |
+| `tool_bridge(name: str)` | The ``ferrocad_stage.Tool`` that forwards viewport input to ``name``. |
+| `tool_command(name: str, verb: str) -> bool` | Send a session verb (``cancel``/``finish``) to a Python-backed tool. |
+
+## Values
+
+| Name | Summary / value |
+| --- | --- |
+| `DRAFT_TOOL` | 'draft' |
+| `PYTHON_TOOL_PREFIX` | 'python:' |

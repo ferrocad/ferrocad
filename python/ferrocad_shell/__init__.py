@@ -794,6 +794,122 @@ def run_command(name: str) -> str:
     return _json(FreeCADGui._run(name))
 
 
+# ---------------------------------------------------------------------------
+# Python-backed interactive tools (the viewport bridge)
+# ---------------------------------------------------------------------------
+
+#: The id prefix a command uses to request a Python-backed tool session.
+#: The Rust shell strips it and asks :func:`tool_bridge` for the named bridge.
+PYTHON_TOOL_PREFIX = "python:"
+
+#: The bridge name serving the Draft point session.
+DRAFT_TOOL = "draft"
+
+#: ``bridge verb -> FreeCADGui.draft method``. ``cancel`` is Escape and
+#: ``finish`` is Enter; both are idempotent, so the shell may call them on the
+#: way to ending a session that already ended itself.
+_TOOL_VERBS = {
+    "cancel": "escape",
+    "escape": "escape",
+    "finish": "finish",
+    "enter": "finish",
+}
+
+#: One bridge instance per name, so the viewport and a direct caller share the
+#: same Python object (the bridge itself carries no state).
+_TOOL_BRIDGES: dict = {}
+
+
+def tool_bridge(name: str):
+    """The ``ferrocad_stage.Tool`` that forwards viewport input to ``name``.
+
+    The shell wraps this in a native tool and installs it on the viewport. A left
+    click on the viewport arrives as a ``PointerEvent`` whose ``snap`` is the
+    point the viewport already resolved; the bridge hands that point to
+    ``FreeCADGui.draft.pick``. ``status`` reports the live Draft session (label,
+    placed point count and hint) for the shell's tool strip, and ``cancel``
+    ends it through ``draft.escape``.
+
+    Raises ``KeyError`` for an unknown name; the shell reports that as "no such
+    tool".
+    """
+    name = str(name)
+    if name != DRAFT_TOOL:
+        raise KeyError(f"no Python tool bridge {name!r}")
+    bridge = _TOOL_BRIDGES.get(name)
+    if bridge is None:
+        bridge = _make_draft_bridge()
+        _TOOL_BRIDGES[name] = bridge
+    return bridge
+
+
+def tool_command(name: str, verb: str) -> bool:
+    """Send a session verb (``cancel``/``finish``) to a Python-backed tool.
+
+    Returns whether the bridge existed and its action ran. This is the key path:
+    ``Esc`` maps to ``draft.escape`` and ``Enter`` to ``draft.finish``.
+    """
+    if str(name) != DRAFT_TOOL:
+        return False
+    draft = getattr(FreeCADGui, "draft", None)
+    action = getattr(draft, _TOOL_VERBS.get(str(verb), str(verb)), None)
+    if not callable(action):
+        return False
+    try:
+        action()
+    except Exception:  # noqa: BLE001 - one broken session is not fatal
+        traceback.print_exc()
+        return False
+    return True
+
+
+def _make_draft_bridge():
+    """Build the Draft bridge (lazily: the stage extension is optional)."""
+    import ferrocad_stage as stage
+
+    class DraftTool(stage.Tool):
+        """Forward a viewport click to the live Draft point session."""
+
+        def on_event(self, event):
+            if event.kind != stage.PointerKind.Down:
+                return False
+            if event.button != stage.MouseButton.Left:
+                return False
+            # The viewport resolves the world point (a feature snap, the picked
+            # surface point or the grid node); fall back to the raw hit as the
+            # headless tests and a snap-less viewport provide it.
+            point = event.snap
+            if point is None:
+                point = event.world()
+            if point is None:
+                return False
+            draft = getattr(FreeCADGui, "draft", None)
+            pick = getattr(draft, "pick", None)
+            if not callable(pick):
+                return False
+            pick(tuple(point))
+            return True
+
+        def status(self):
+            snapper = getattr(FreeCADGui, "Snapper", None)
+            source = getattr(
+                getattr(FreeCADGui, "draftToolBar", None), "sourceCmd", None
+            )
+            running = bool(getattr(snapper, "running", False))
+            return {
+                "id": DRAFT_TOOL,
+                "label": getattr(source, "feature_name", None) or "Draft",
+                "active": bool(running and source is not None),
+                "points": len(getattr(source, "node", ()) or ()),
+                "hint": getattr(source, "last_hint", "") or "",
+            }
+
+        def cancel(self):
+            return tool_command(DRAFT_TOOL, "cancel")
+
+    return DraftTool()
+
+
 def dialog_accept(payload_json: str) -> str:
     """Accept an open dialog: ``{"token": ..., "values": {...}}``.
 

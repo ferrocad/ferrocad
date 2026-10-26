@@ -119,7 +119,8 @@ The module-level snapper singleton (``FreeCADGui.Snapper``).
 | hide() | Hide the workplane grid (the native half of upstream ``hide``). |
 | isEnabled(snap=None) | Whether snapping is globally enabled, or whether ``snap`` is on. |
 | `mask` (property) | The active mode names (a live list, in activation order). |
-| mode_enabled(mode) | Whether ``mode`` is in ``mask`` (an unsupported mode is never on). |
+| mode_enabled(mode) | Whether ``mode`` is in ``mask`` (``Lock`` reports the global switch). |
+| mode_note(mode) | The honest limitation of a Draft-only mode, or ``""`` for a native one. |
 | off() | End the current point request without invoking its callback. |
 | reset() | Restore the defaults (used by tests and a future workbench reset). |
 | restack() | Raise: there is no Coin tracker to lower in a headless build. |
@@ -137,14 +138,15 @@ The module-level snapper singleton (``FreeCADGui.Snapper``).
 | show() | Show the workplane grid (the native half of upstream ``show``). |
 | snap(point, candidates=None) | Snap a world ``point`` and return the resolved ``(x, y, z)``. |
 | `snap_context` (property) | — |
-| supported_modes() | The modes with a native implementation, in toolbar order. |
+| snap_status() | The live snap state, with an honest note for every inert mode. |
+| supported_modes() | The modes with a native ``SnapKind`` filter, in toolbar order. |
 | toggle(snap, set_to=None) | Toggle a mode in ``mask`` (or set it explicitly); returns its state. |
 | toggleEnabled() | Flip the global snap switch; returns the new state. |
 | toggleGrid() | Flip the grid flag; returns the new state. |
 | toggle_enabled() | Flip the global snap switch; returns the new state. |
 | toggle_snap(snap, set_to=None) | Toggle a mode in ``mask`` (or set it explicitly); returns its state. |
 | unconstrain() | Drop the base point and constraint axis. |
-| unsupported_modes() | The Draft-only modes that raise when enabled, in upstream order. |
+| unsupported_modes() | The Draft-only modes, in upstream order (they toggle as no-ops). |
 | `workplane` (property) | The effective workplane, with :meth:`setAngle` applied. |
 
 ## Object `draftToolBar`

@@ -82,6 +82,7 @@ __all__ = [
     "register_commands",
     "get_command",
     "upstream_report",
+    "TOOL_ID",
 ]
 
 
@@ -759,6 +760,15 @@ def _active_tool():
     return _ACTIVE_TOOL
 
 
+#: The shell's Python-backed Draft tool id (``python:<bridge name>``).
+#:
+#: ``Creator.Activated`` asks the shell for this tool through
+#: ``FreeCADGui._request_tool``; ``python/ferrocad_shell`` serves the bridge
+#: named ``draft``, which forwards viewport pointer events to
+#: ``FreeCADGui.draft.pick``.
+TOOL_ID = "python:draft"
+
+
 class Creator:
     """A point-session creation tool in the shape upstream's ``Creator`` uses.
 
@@ -834,6 +844,14 @@ class Creator:
 
         self._register_point_input()
         self._show_hint(self._next_hint())
+        # Hand the live session to the shell's viewport bridge. A left click then
+        # arrives as ``FreeCADGui.draft.pick`` (through
+        # ``ferrocad_shell.tool_bridge("draft")``), Esc reaches
+        # ``draft.escape`` and Enter reaches ``draft.finish``. ``_request_tool``
+        # returns None, so ``Activated`` keeps its upstream-shaped return value.
+        request = getattr(FreeCADGui, "_request_tool", None)
+        if callable(request):
+            request(TOOL_ID)
         return None
 
     def finish(self, cont=False, closed=False):

@@ -8,8 +8,9 @@ adapter that Draft tools and macros import as ``FreeCADGui.Snapper``.
 What is native
 --------------
 
-* six snap modes -- ``Grid``, ``Endpoint``, ``Midpoint``, ``Center``, ``Origin``
-  and ``Vertex`` -- backed by ``ferrocad_stage.SnapContext``;
+* six snap modes with a real ``SnapKind`` filter -- ``Grid``, ``Endpoint``,
+  ``Midpoint``, ``Center``, ``Origin`` and ``Vertex`` -- backed by
+  ``ferrocad_stage.SnapContext``;
 * the workplane/grid frame, including an in-plane grid rotation
   (:meth:`Snapper.setAngle`);
 * point sessions (:meth:`Snapper.getPoint`) driven headlessly by
@@ -17,18 +18,21 @@ What is native
   interactive tools rely on;
 * a stored point-constraint provider and axis constraint
   (:meth:`Snapper.constrain`), which ``draftToolBar.validatePoint`` consults;
-* the six checkable ``Draft_Snap_*`` commands.
+* the checkable ``Draft_Snap_*`` commands for **every** Draft snap mode.
 
-What is deliberately absent
-----------------------------
+What is a reported no-op
+------------------------
 
-The Draft-only snaps (``Extension``, ``Parallel``, ``Perpendicular``,
-``Intersection``, ``Angle``, ``Special``, ``Dimensions``, ``Ortho`` and
-``Lock``) need an edge/face extension solver and a live cursor; enabling one
-raises ``NotImplementedError`` instead of pretending. Coin trackers are absent
-too, so :meth:`Snapper.restack` and :meth:`Snapper.cycleSnapObject` raise, while
-:meth:`Snapper.setTrackers` does the one thing it can natively: refresh and
-return the current :class:`SnapContext`.
+The Draft-only snaps toggle without raising, but most of them need a live
+cursor, a reference edge or an extension solver that a headless snap does not
+have. ``Near`` and ``WorkingPlane`` describe work the pick already does (the
+nearest hit point and the workplane projection); the rest are honest no-ops.
+:meth:`Snapper.snap_status` and :meth:`Snapper.mode_note` report exactly which
+is which, so a checked-but-inert mode is never mistaken for a working one.
+Coin trackers are absent too, so :meth:`Snapper.restack` and
+:meth:`Snapper.cycleSnapObject` raise, while :meth:`Snapper.setTrackers` does
+the one thing it can natively: refresh and return the current
+:class:`SnapContext`.
 
 The module never imports ``ferrocad_stage`` at import time. ``import FreeCADGui``
 must keep working in a build where the extension is missing; the extension is
@@ -53,27 +57,56 @@ __all__ = [
     "finish",
     "supported_modes",
     "unsupported_modes",
+    "snap_status",
     "SNAP_TOOLBAR",
 ]
 
-#: The snap modes with a native ``SnapKind`` behind them, in toolbar order.
+#: The snap modes with a native ``SnapKind`` filter behind them, in toolbar order.
 _SUPPORTED_MODES = ("Grid", "Endpoint", "Midpoint", "Center", "Origin", "Vertex")
 
-#: Draft modes that need a live cursor / extension solver, in upstream order.
+#: Draft-only modes whose work the pick already does. They toggle and filter
+#: nothing; the note is what ``snap_status()`` reports.
+_PASSTHROUGH_MODES = {
+    "Near": "the picked point is already the nearest point on the hit face or edge",
+    "WorkingPlane": "snapped points are already projected onto the active workplane",
+}
+
+#: Draft-only modes with no native meaning. They toggle honestly, and the note
+#: says what they would need; no snap point is invented.
+_NOOP_MODES = {
+    "Extension": "needs an edge-extension solver and a live cursor",
+    "Parallel": "needs a reference edge and a live cursor",
+    "Perpendicular": "needs a reference edge or face and a live cursor",
+    "Intersection": "needs two live edges or faces under the cursor",
+    "Special": "needs object-defined special points",
+    "Dimensions": "draws temporary dimensions only; it does not move the snap point",
+    "Angle": "needs a circular edge and a live cursor",
+    "Ortho": "needs the previous point and a live cursor",
+}
+
+#: The Draft-only modes, in upstream order (``Near`` is also accepted as
+#: ``Nearest``; upstream spells the command ``Draft_Snap_Near``).
 _UNSUPPORTED_MODES = (
     "Extension",
     "Parallel",
     "Perpendicular",
     "Intersection",
-    "Angle",
+    "Near",
     "Special",
+    "WorkingPlane",
     "Dimensions",
+    "Angle",
     "Ortho",
-    "Lock",
 )
 
+#: Every mode the snap bar can toggle.
+_ALL_MODES = _SUPPORTED_MODES + _UNSUPPORTED_MODES
+
+#: Alternative spellings a macro may use for a canonical mode name.
+_MODE_ALIASES = {"Nearest": "Near"}
+
 #: The global snap switch. The header's ``Snap`` control runs it on the label and
-#: the six modes declare it as their ``FerroCAD_Parent``.
+#: the modes declare it as their ``FerroCAD_Parent``.
 _SNAP_LOCK_ID = "Draft_Snap_Lock"
 
 #: ``mode -> command id`` for the checkable snap bar, in toolbar order.
@@ -84,14 +117,25 @@ _COMMAND_IDS = {
     "Center": "Draft_Snap_Center",
     "Origin": "Draft_Snap_Origin",
     "Vertex": "Draft_Snap_Vertex",
+    "Extension": "Draft_Snap_Extension",
+    "Parallel": "Draft_Snap_Parallel",
+    "Perpendicular": "Draft_Snap_Perpendicular",
+    "Intersection": "Draft_Snap_Intersection",
+    "Near": "Draft_Snap_Near",
+    "Special": "Draft_Snap_Special",
+    "WorkingPlane": "Draft_Snap_WorkingPlane",
+    "Dimensions": "Draft_Snap_Dimensions",
+    "Angle": "Draft_Snap_Angle",
+    "Ortho": "Draft_Snap_Ortho",
 }
 
 #: The checkable snap-bar command ids (what ``get_snap_toolbar`` returns).
-SNAP_TOOLBAR = tuple(_COMMAND_IDS[mode] for mode in _SUPPORTED_MODES)
+SNAP_TOOLBAR = tuple(_COMMAND_IDS[mode] for mode in _ALL_MODES)
 
 #: ``mode -> SnapKind name``. ``Endpoint`` and ``Vertex`` are both topological
 #: vertices in the native snap API; the two Draft modes remain distinct names in
-#: ``mask`` because the toolbar exposes both upstream.
+#: ``mask`` because the toolbar exposes both upstream. A mode absent here is not
+#: a feature filter (see ``_PASSTHROUGH_MODES``/``_NOOP_MODES``).
 _MODE_KINDS = {
     "Endpoint": "Vertex",
     "Midpoint": "EdgeMid",
@@ -176,17 +220,24 @@ def _unit(value):
 
 
 def supported_modes():
-    """The snap modes with a native implementation, in toolbar order."""
+    """The snap modes with a native ``SnapKind`` filter, in toolbar order."""
     return list(_SUPPORTED_MODES)
 
 
 def unsupported_modes():
     """The Draft-only snap modes, in upstream order.
 
-    Enabling any of these raises ``NotImplementedError``; the list is exposed so
-    a menu can grey them out instead of discovering that one by one.
+    They toggle without raising, but they add no candidate filter: most need a
+    live cursor or an extension solver, while ``Near`` and ``WorkingPlane``
+    describe work the pick already does. Use :func:`snap_status` (or
+    :meth:`Snapper.mode_note`) for the per-mode reason.
     """
     return list(_UNSUPPORTED_MODES)
+
+
+def snap_status():
+    """The live snap state, including the honest notes for the Draft-only modes."""
+    return Snapper.snap_status()
 
 
 class _PointRequest:
@@ -271,44 +322,64 @@ class _Snapper:
         modes = []
         for name in names:
             mode = self._enabled_mode_name(name)
+            if mode == "Lock":
+                # ``Lock`` is the global switch, not a filter; enabling it in a
+                # mask is a request to turn snapping on.
+                self._enabled = True
+                continue
             if mode not in modes:
                 modes.append(mode)
         self._mask = modes
 
     @staticmethod
     def _enabled_mode_name(mode):
-        """Validate a mode name for an **enabling** operation."""
+        """Validate and canonicalize a mode name."""
         if not isinstance(mode, str):
             raise TypeError(f"a snap mode must be a string, got {type(mode).__name__}")
-        if mode in _UNSUPPORTED_MODES:
-            raise NotImplementedError(
-                f"Snapper: the {mode!r} snap mode needs a live cursor or an "
-                "edge/face extension solver and is not implemented natively; "
-                "supported modes are "
-                + ", ".join(_SUPPORTED_MODES)
-            )
-        if mode not in _SUPPORTED_MODES:
+        mode = _MODE_ALIASES.get(mode, mode)
+        if mode == "Lock":
+            return mode
+        if mode not in _ALL_MODES:
             raise ValueError(
-                f"Snapper: unknown snap mode {mode!r}; supported modes are "
-                + ", ".join(_SUPPORTED_MODES)
+                f"Snapper: unknown snap mode {mode!r}; modes are "
+                + ", ".join(_ALL_MODES)
             )
         return mode
 
+    @staticmethod
+    def mode_note(mode):
+        """The honest limitation of a Draft-only mode, or ``""`` for a native one."""
+        if not isinstance(mode, str):
+            return ""
+        mode = _MODE_ALIASES.get(mode, mode)
+        return _PASSTHROUGH_MODES.get(mode) or _NOOP_MODES.get(mode) or ""
+
     def mode_enabled(self, mode):
-        """Whether ``mode`` is in ``mask`` (an unsupported mode is never on)."""
+        """Whether ``mode`` is in ``mask`` (``Lock`` reports the global switch)."""
+        if not isinstance(mode, str):
+            return False
+        mode = _MODE_ALIASES.get(mode, mode)
+        if mode == "Lock":
+            return bool(self._enabled)
         return mode in self._mask
 
     def isEnabled(self, snap=None):
         """Whether snapping is globally enabled, or whether ``snap`` is on.
 
         Upstream calls ``isEnabled("Endpoint")``; ``isEnabled()`` is the global
-        check the snap-bar commands use for ``IsActive``.
+        check the snap-bar commands use for ``IsActive``. ``isEnabled("Lock")``
+        reports the global switch too.
         """
         if snap is None:
             return bool(self._enabled)
-        if snap in _UNSUPPORTED_MODES or snap not in _SUPPORTED_MODES:
+        if not isinstance(snap, str):
             return False
-        return snap in self._mask
+        mode = _MODE_ALIASES.get(snap, snap)
+        if mode == "Lock":
+            return bool(self._enabled)
+        if mode not in _ALL_MODES:
+            return False
+        return mode in self._mask
 
     def set_enabled(self, enabled=True):
         """Enable or disable snapping globally; returns the new state.
@@ -331,28 +402,27 @@ class _Snapper:
     def toggle_snap(self, snap, set_to=None):
         """Toggle a mode in ``mask`` (or set it explicitly); returns its state.
 
-        Enabling a Draft-only mode raises ``NotImplementedError`` naming it.
-        A no-op disable is accepted so a menu that clears every mode does not
-        fail on one that was never implemented.
+        Every Draft mode toggles without raising. The mode's work may still be a
+        reported no-op (:meth:`mode_note`); the toggle only records the user's
+        choice, exactly as upstream's snap bar does. ``Lock`` is the global
+        switch, so toggling it calls :meth:`toggle_enabled` instead of adding a
+        filter.
         """
-        if snap in _UNSUPPORTED_MODES:
-            if set_to is False:
-                return False
-            raise NotImplementedError(
-                f"Snapper: the {snap!r} snap mode needs a live cursor or an "
-                "edge/face extension solver and is not implemented natively"
-            )
-        self._enabled_mode_name(snap)
+        mode = self._enabled_mode_name(snap)
+        if mode == "Lock":
+            if set_to is None:
+                return self.toggle_enabled()
+            return self.set_enabled(bool(set_to))
         if set_to is None:
-            enabled = snap not in self._mask
+            enabled = mode not in self._mask
         else:
             enabled = bool(set_to)
         if enabled:
-            if snap not in self._mask:
-                self._mask.append(snap)
+            if mode not in self._mask:
+                self._mask.append(mode)
         else:
-            if snap in self._mask:
-                self._mask.remove(snap)
+            if mode in self._mask:
+                self._mask.remove(mode)
         return enabled
 
     #: Upstream spells the same operation ``toggle_snap``.
@@ -377,13 +447,36 @@ class _Snapper:
 
     @staticmethod
     def supported_modes():
-        """The modes with a native implementation, in toolbar order."""
+        """The modes with a native ``SnapKind`` filter, in toolbar order."""
         return supported_modes()
 
     @staticmethod
     def unsupported_modes():
-        """The Draft-only modes that raise when enabled, in upstream order."""
+        """The Draft-only modes, in upstream order (they toggle as no-ops)."""
         return unsupported_modes()
+
+    def snap_status(self):
+        """The live snap state, with an honest note for every inert mode.
+
+        ``active`` is the user's checked-mode list. ``passthrough`` names the
+        modes whose work the pick already does, and ``noop`` the ones that need
+        a live cursor or an extension solver. ``notes`` is the same information
+        filtered to the modes currently active, so a caller can report exactly
+        which checked modes are not moving the snap point.
+        """
+        notes = {}
+        for mode in self._mask:
+            note = self.mode_note(mode)
+            if note:
+                notes[mode] = note
+        return {
+            "enabled": bool(self._enabled),
+            "active": list(self._mask),
+            "supported": list(_SUPPORTED_MODES),
+            "passthrough": dict(_PASSTHROUGH_MODES),
+            "noop": dict(_NOOP_MODES),
+            "notes": notes,
+        }
 
     # -- workplane, grid and context --------------------------------------
 
@@ -1029,13 +1122,17 @@ class _SnapCommand:
         self.tooltip = tooltip
 
     def GetResources(self):
+        tooltip = self.tooltip
+        note = Snapper.mode_note(self.mode)
+        if note:
+            tooltip = f"{tooltip} ({note})"
         return {
             "Pixmap": _COMMAND_IDS[self.mode],
             "MenuText": self.menu,
             # Under the header's `Snap` control the mode name alone is enough; the
             # full `Snap Midpoint` stays in the palette so it is unambiguous there.
             "FerroCAD_Short": self.mode,
-            "ToolTip": self.tooltip,
+            "ToolTip": tooltip,
             "CmdType": "NoTransaction",
             "Checkable": True,
             "FerroCAD_Surface": "snap",
@@ -1101,11 +1198,21 @@ def _command_specs():
         ("Center", "Snap Center", "Snaps to the centre of a face or arc"),
         ("Origin", "Snap Origin", "Snaps to the workplane origin"),
         ("Vertex", "Snap Vertex", "Snaps to a topological vertex"),
+        ("Extension", "Snap Extension", "Snaps to an edge's extension line"),
+        ("Parallel", "Snap Parallel", "Snaps to a line parallel to an edge"),
+        ("Perpendicular", "Snap Perpendicular", "Snaps to a perpendicular point"),
+        ("Intersection", "Snap Intersection", "Snaps to two edges/faces crossing"),
+        ("Near", "Snap Near", "Snaps to the nearest point on a face or edge"),
+        ("Special", "Snap Special", "Snaps to object-defined special points"),
+        ("WorkingPlane", "Snap Working Plane", "Projects points onto the workplane"),
+        ("Dimensions", "Snap Dimensions", "Shows temporary X/Y dimensions"),
+        ("Angle", "Snap Angle", "Snaps to cardinal points on circular edges"),
+        ("Ortho", "Snap Ortho", "Snaps to 45-degree lines from the previous point"),
     )
 
 
 def _register_commands():
-    """Register the snap lock and the six snap commands once (a reload must not raise)."""
+    """Register the snap lock and every mode command once (a reload must not raise)."""
     registered = set(FreeCADGui.listCommands())
     if _SNAP_LOCK_ID not in registered:
         FreeCADGui.addCommand(_SNAP_LOCK_ID, _SnapLockCommand())

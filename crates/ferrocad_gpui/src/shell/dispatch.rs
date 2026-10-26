@@ -2,7 +2,56 @@
 //!
 //! Split out of `shell.rs`; the paths and behaviour are unchanged.
 
+use pyo3::prelude::{PyAnyMethods, Python};
+
 use super::*;
+
+/// The id prefix for an interactive tool whose session lives in Python.
+///
+/// A command returns e.g. `python:draft`; `python/ferrocad_shell` serves the
+/// `draft` bridge, which forwards viewport input to `FreeCADGui.draft`. Keeping
+/// the prefix here (rather than a magic string in every path) also means the
+/// edition's Rust tool registry and the Python bridge share one lookup.
+pub(super) const PYTHON_TOOL_PREFIX: &str = "python:";
+
+/// Build the Python-backed tool `name` through the shell bridge.
+///
+/// The bridge is a `ferrocad.stage.Tool` instance; [`ferrocad_stage_py::PyTool`]
+/// makes it a native [`ferrocad_stage::Tool`], so the viewport treats it exactly
+/// like the Rust tools. A missing facade or bridge is reported as "no such
+/// tool" by the caller, never as a panic: a build without the Python stage
+/// extension still runs the rest of the shell.
+fn python_tool(name: &str) -> Result<Box<dyn ferrocad_stage::Tool>, String> {
+    Python::with_gil(|py| {
+        let module = py.import("ferrocad_shell").map_err(|error| error.to_string())?;
+        let object = module
+            .getattr("tool_bridge")
+            .map_err(|error| error.to_string())?
+            .call1((name,))
+            .map_err(|error| error.to_string())?;
+        let tool = ferrocad_stage_py::extract_tool(py, object.unbind())
+            .map_err(|error| error.to_string())?;
+        Ok(Box::new(tool) as Box<dyn ferrocad_stage::Tool>)
+    })
+}
+
+/// Send a session verb (`cancel`/`finish`) to a Python-backed tool.
+fn python_tool_command(name: &str, verb: &str) -> bool {
+    Python::with_gil(|py| {
+        let result = py
+            .import("ferrocad_shell")
+            .and_then(|module| module.getattr("tool_command"))
+            .and_then(|function| function.call1((name, verb)))
+            .and_then(|value| value.extract::<bool>());
+        match result {
+            Ok(handled) => handled,
+            Err(error) => {
+                eprintln!("ferrocad: python tool {name}/{verb}: {error}");
+                false
+            }
+        }
+    })
+}
 
 impl Shell {
     /// The command a key event should run, if any.
@@ -457,13 +506,15 @@ impl Shell {
         }))
     }
 
-    /// Start an interactive tool through the edition's registry (A5). The tool owns
-    /// pointer events until it ends; no document transaction is opened. Its status is
-    /// mirrored into the model immediately, so the tool strip appears even when no
-    /// viewport is available (a headless window or a machine without a GPU).
+    /// Start an interactive tool through the edition's registry (A5), or through
+    /// the Python bridge for a `python:<name>` id. The tool owns pointer events
+    /// until it ends; no document transaction is opened. Its status is mirrored
+    /// into the model immediately, so the tool strip appears even when no viewport
+    /// is available (a headless window or a machine without a GPU).
     pub(super) fn start_tool(&mut self, id: &str, cx: &mut Context<Self>) -> String {
-        let Some(tool) = self.contributions.tool_for(id) else {
-            return format!("no such tool {id}");
+        let tool = match self.tool_for(id) {
+            Ok(tool) => tool,
+            Err(error) => return error,
         };
         let status = tool.status();
         self.active_tool = Some(id.to_string());
@@ -489,11 +540,34 @@ impl Shell {
         format!("tool: {id}")
     }
 
+    /// Resolve a tool id: the edition's Rust registry, or a Python bridge.
+    pub(super) fn tool_for(
+        &self,
+        id: &str,
+    ) -> Result<Box<dyn ferrocad_stage::Tool>, String> {
+        if let Some(name) = id.strip_prefix(PYTHON_TOOL_PREFIX) {
+            return python_tool(name).map_err(|error| format!("tool {id}: {error}"));
+        }
+        self.contributions
+            .tool_for(id)
+            .ok_or_else(|| format!("no such tool {id}"))
+    }
+
     /// Cancel the active tool session (the tool strip's **Cancel** button). The tool
     /// clears its transient geometry and ends; the strip disappears. This is the same
     /// path as `Esc` and never writes the document. Returns whether a session existed.
     pub fn cancel_tool(&mut self, cx: &mut Context<Self>) -> bool {
         let had_tool = self.active_tool.is_some() || self.model.lock().unwrap().tool.is_some();
+        // A Python session is not necessarily owned by a viewport (a headless
+        // window has none), so end it here as well. The bridge action is
+        // idempotent, so the viewport's `Tool::cancel` forwarding it again is safe.
+        if let Some(name) = self
+            .active_tool
+            .as_deref()
+            .and_then(|id| id.strip_prefix(PYTHON_TOOL_PREFIX))
+        {
+            python_tool_command(name, "cancel");
+        }
         let mut pending = None;
         if let Some(viewport) = self.viewport.clone() {
             pending = viewport.update(cx, |viewport, cx| {
@@ -511,6 +585,46 @@ impl Shell {
         self.model.lock().unwrap().tool = None;
         cx.notify();
         had_tool
+    }
+
+    /// Finish the active Python-backed tool session (`Enter`).
+    ///
+    /// The Python half commits through its own `doCommand` (a `Draft.make_line`
+    /// for the Line tool), then the native session is dropped so the tool strip
+    /// and the pointer both return to the shell. Returns whether a Python
+    /// session was active.
+    pub fn finish_tool(&mut self, cx: &mut Context<Self>) -> bool {
+        let Some(name) = self
+            .active_tool
+            .as_deref()
+            .and_then(|id| id.strip_prefix(PYTHON_TOOL_PREFIX))
+            .map(str::to_string)
+        else {
+            return false;
+        };
+        python_tool_command(&name, "finish");
+        let mut pending = None;
+        if let Some(viewport) = self.viewport.clone() {
+            pending = viewport.update(cx, |viewport, cx| {
+                let finished = viewport.finish_tool();
+                if finished {
+                    cx.notify();
+                }
+                viewport.take_tool_state()
+            });
+        }
+        if let Some(status) = pending {
+            self.on_viewport_event(&ViewportEvent::ToolState(status), cx);
+        }
+        self.active_tool = None;
+        self.model.lock().unwrap().tool = None;
+        // The commit ran through the Python `doCommand`, which the shell does not
+        // see as a command result: refresh the model and rebuild the stage so the
+        // new object appears without a manual reload.
+        self.refresh(cx);
+        self.sync_stage(cx);
+        cx.notify();
+        true
     }
 
 }

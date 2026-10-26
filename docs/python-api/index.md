@@ -19,7 +19,7 @@ here.
 | [`FreeCADGui`](FreeCADGui.md) | 20 | Upstream-compatible GUI surface: commands, selection and dialogs. |
 | [`FerroCAD`](FerroCAD.md) | 11 | FerroCAD-only surface: the semantic grid and the module hooks. |
 | [`FerroCADGui`](FerroCADGui.md) | 22 | FerroCAD-only GUI surface: providers, settings, overlays and view state. |
-| [`ferrocad_shell`](ferrocad_shell.md) | 27 | The host bridge the shell calls. Not upstream API: it is how FerroCAD's window (and `tools/userdocs.py`) drive the facade. |
+| [`ferrocad_shell`](ferrocad_shell.md) | 31 | The host bridge the shell calls. Not upstream API: it is how FerroCAD's window (and `tools/userdocs.py`) drive the facade. |
 
 ## Scope and honesty
 

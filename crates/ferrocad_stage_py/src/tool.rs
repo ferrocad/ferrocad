@@ -7,6 +7,7 @@
 use ferrocad_stage as fs;
 use pyo3::exceptions::PyTypeError;
 use pyo3::prelude::*;
+use pyo3::types::PyDict;
 
 use crate::input::PointerEvent;
 use crate::shape::ShapeItem;
@@ -122,6 +123,56 @@ impl fs::Tool for PyTool {
 
     fn items(&self) -> &[fs::ShapeItem] {
         &self.items
+    }
+
+    /// Read the live status from a Python `status()` method, when the tool has one.
+    ///
+    /// The method returns a mapping with `id`, `label`, `active`, `points` and
+    /// `hint`; a missing method (or a raising one) means "no session state", which
+    /// is exactly what the default [`fs::ToolStatus::inactive`] describes.
+    fn status(&self) -> fs::ToolStatus {
+        Python::with_gil(|py| {
+            let Ok(value) = self.object.bind(py).call_method0("status") else {
+                return fs::ToolStatus::inactive();
+            };
+            let Ok(status) = value.downcast::<PyDict>() else {
+                return fs::ToolStatus::inactive();
+            };
+            let string = |key: &str| {
+                status
+                    .get_item(key)
+                    .ok()
+                    .flatten()
+                    .and_then(|value| value.extract::<String>().ok())
+                    .unwrap_or_default()
+            };
+            fs::ToolStatus {
+                id: string("id"),
+                label: string("label"),
+                active: status
+                    .get_item("active")
+                    .ok()
+                    .flatten()
+                    .and_then(|value| value.extract::<bool>().ok())
+                    .unwrap_or(false),
+                points: status
+                    .get_item("points")
+                    .ok()
+                    .flatten()
+                    .and_then(|value| value.extract::<usize>().ok())
+                    .unwrap_or(0),
+                hint: string("hint"),
+            }
+        })
+    }
+
+    /// Forward cancellation to a Python `cancel()` method, when the tool has one.
+    /// Returns whether the handler ran (a tool without one cancels nothing).
+    fn cancel(&mut self) -> bool {
+        Python::with_gil(|py| match self.object.bind(py).call_method0("cancel") {
+            Ok(value) => value.extract::<bool>().unwrap_or(true),
+            Err(_) => false,
+        })
     }
 }
 

@@ -57,6 +57,14 @@ __version__ = "0.1.0"
 #: Registered commands, in registration order.
 _COMMANDS: dict = {}
 
+#: A tool id a command asked the shell to start from inside ``Activated``.
+#:
+#: Upstream commands return ``None``; keeping that return shape while still
+#: letting a command request an interactive tool is done with this side channel.
+#: ``_run`` consumes it (and clears it first, so a direct ``Activated`` call in a
+#: test cannot leak into an unrelated command).
+_pending_tool = None
+
 #: ``(command, method)`` pairs already reported, so a broken command does not
 #: spam the console on every refresh.
 _REPORTED: set = set()
@@ -641,14 +649,34 @@ def _run(name: str) -> dict:
     ``value``, or a ``dialog`` spec with a single-use ``token`` (see
     ``docs/workbenches/actions-and-tools.md``).
     """
+    global _pending_tool
     command = _COMMANDS.get(name)
     if command is None:
         return {"ok": False, "error": f"unknown command {name!r}"}
+    # A request from an earlier direct ``Activated`` call must not attach to this
+    # command. Read the flag *after* the call, below.
+    _pending_tool = None
     try:
         result = command.Activated()
     except Exception as exc:  # noqa: BLE001 - one broken command is not fatal
         return {"ok": False, "error": _error_text(exc)}
-    return _payload(result)
+    payload = _payload(result)
+    pending, _pending_tool = _pending_tool, None
+    if pending is not None:
+        payload.setdefault("tool", pending)
+    return payload
+
+
+def _request_tool(tool_id: str) -> None:
+    """Ask the shell to start ``tool_id`` after ``Activated`` returns.
+
+    Returns ``None`` so a command's upstream-shaped ``Activated`` can end with
+    ``return FreeCADGui._request_tool(...)``. The id is forwarded verbatim; the
+    shell starts a Python-backed bridge for a ``python:<name>`` id.
+    """
+    global _pending_tool
+    _pending_tool = str(tool_id)
+    return None
 
 
 def _register_dialog(callback) -> str:
@@ -725,7 +753,9 @@ def _cancel(token: str) -> dict:
 
 def _cancel_all() -> None:
     """Drop every open dialog (document close, boot, quit)."""
+    global _pending_tool
     _DIALOGS.clear()
+    _pending_tool = None
 
 
 # ---------------------------------------------------------------------------

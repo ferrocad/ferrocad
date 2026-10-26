@@ -856,6 +856,19 @@ impl Shell {
                 return true;
             }
         }
+        // Enter accepts a Python-backed tool session (Draft's Line/Wire collect
+        // points there). The tool commits through its own `doCommand`; the shell
+        // then drops the native session. Rust tools keep their own Enter handling
+        // in the viewport.
+        if event.keystroke.key == "enter"
+            && !self.modal_open()
+            && self.active_tool.as_deref().is_some_and(|id| {
+                id.starts_with(dispatch::PYTHON_TOOL_PREFIX)
+            })
+        {
+            self.finish_tool(cx);
+            return true;
+        }
         // Fast escalation (P3): while a TransformGizmo is armed, `Tab` or a numeric
         // key opens the floating Move HUD instead of traversing focus or typing into
         // whatever happened to be focused. It is seeded with the live drag delta
@@ -987,10 +1000,13 @@ impl Shell {
             viewport.set_gizmo_skin(gizmo_skin);
         }
         // A tool started before the viewport existed (a script, a command while no
-        // GPU was available) is applied now that there is one.
-        if let Some(id) = self.active_tool.as_deref() {
-            if let Some(tool) = self.contributions.tool_for(id) {
-                viewport.set_tool(Some(tool));
+        // GPU was available) is applied now that there is one. A Python-backed
+        // tool gets a fresh bridge: the session state lives in Python, so the
+        // object is stateless between frames.
+        if let Some(id) = self.active_tool.clone() {
+            match self.tool_for(&id) {
+                Ok(tool) => viewport.set_tool(Some(tool)),
+                Err(error) => self.console_line(error, cx),
             }
         }
         if let Some(error) = viewport.take_shader_error() {

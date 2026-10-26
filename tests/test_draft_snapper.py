@@ -34,6 +34,16 @@ SNAP_COMMANDS = [
     "Draft_Snap_Center",
     "Draft_Snap_Origin",
     "Draft_Snap_Vertex",
+    "Draft_Snap_Extension",
+    "Draft_Snap_Parallel",
+    "Draft_Snap_Perpendicular",
+    "Draft_Snap_Intersection",
+    "Draft_Snap_Near",
+    "Draft_Snap_Special",
+    "Draft_Snap_WorkingPlane",
+    "Draft_Snap_Dimensions",
+    "Draft_Snap_Angle",
+    "Draft_Snap_Ortho",
 ]
 
 
@@ -105,7 +115,7 @@ class SnapCommandTests(DraftTestCase):
         self.assertTrue(command.IsActive())
         self.assertTrue(command.IsChecked())
 
-    def test_every_draft_only_mode_raises_and_names_itself(self):
+    def test_every_draft_only_mode_toggles_and_reports_its_limitation(self):
         self.assertEqual(
             draft.unsupported_modes(),
             [
@@ -113,22 +123,43 @@ class SnapCommandTests(DraftTestCase):
                 "Parallel",
                 "Perpendicular",
                 "Intersection",
-                "Angle",
+                "Near",
                 "Special",
+                "WorkingPlane",
                 "Dimensions",
+                "Angle",
                 "Ortho",
-                "Lock",
             ],
         )
+        status = draft.snap_status()
+        self.assertEqual(
+            set(status["noop"]) | set(status["passthrough"]),
+            set(draft.unsupported_modes()),
+        )
+
         for mode in draft.unsupported_modes():
             with self.subTest(mode=mode):
-                with self.assertRaises(NotImplementedError) as caught:
-                    draft.Snapper.toggle_snap(mode)
-                self.assertIn(mode, str(caught.exception))
-                with self.assertRaises(NotImplementedError):
-                    draft.Snapper.enable(mode)
-                with self.assertRaises(NotImplementedError):
-                    draft.Snapper.mask = [mode]
+                self.assertTrue(
+                    draft.Snapper.mode_note(mode),
+                    f"{mode} must state its limitation",
+                )
+                command = FreeCADGui._COMMANDS[draft._COMMAND_IDS[mode]]
+                self.assertFalse(command.IsChecked())
+                command.Activated()
+                self.assertTrue(command.IsChecked())
+                self.assertIn(mode, draft.Snapper.mask)
+                self.assertIn(mode, draft.snap_status()["notes"])
+                command.Activated()
+                self.assertFalse(command.IsChecked())
+                self.assertNotIn(mode, draft.Snapper.mask)
+
+                # The mask accepts a Draft-only mode; enable/disable do not raise.
+                draft.Snapper.mask = [mode]
+                self.assertTrue(draft.Snapper.mode_enabled(mode))
+                draft.Snapper.enable(mode)
+                draft.Snapper.disable(mode)
+                self.assertFalse(draft.Snapper.mode_enabled(mode))
+                draft.Snapper.mask = list(draft.supported_modes())
 
     def test_unknown_modes_are_rejected(self):
         with self.assertRaises(ValueError):

@@ -65,13 +65,14 @@ What is deliberately *not* modelled
 * ``QFontComboBox`` has no font enumeration in the proxy, so seeding a font
   adds that family to the combo's items before selecting it.
 * The SetStyle ``applyButton``/``annotButton`` and the preset ``saveButton``
-  are not wired to signals. The former need the view properties upstream's
-  ``ViewProvider`` exposes (``LineColor``, ``LineWidth``, ``PointColor``,
-  ``DrawStyle``, annotation fonts, ...); the headless ``ViewObject`` models only
-  ``ShapeColor``, ``Transparency``, ``ShapeAppearance`` and ``DisplayMode``, so
-  a partial application would be worse than an explicit gap. The latter needs
-  ``QInputDialog``, which the shim raises on. Use :meth:`SetStylePanel.save_preset`
-  and :meth:`SetStylePanel.select_preset` instead.
+  are not wired to signals. Accept **does** apply the shape-view subset
+  (``LineColor``, ``LineWidth``, ``PointColor``, ``PointSize``, ``DrawStyle``,
+  ``ShapeColor``, ``Transparency``, ``DisplayMode``) to the selected objects'
+  headless ``ViewObject``; annotation fonts need properties the headless model
+  does not carry, so those fields only persist as Draft defaults. The
+  ``saveButton`` needs ``QInputDialog``, which the shim raises on. Use
+  :meth:`SetStylePanel.save_preset` and :meth:`SetStylePanel.select_preset`
+  instead.
 """
 
 from __future__ import annotations
@@ -115,6 +116,12 @@ _LOCAL_UI_DIR = _MODULE_DIR / "Resources" / "ui"
 
 #: Upstream's arrow/dimension enumerations (``draftutils/utils.py``).
 ARROW_TYPES = ("Dot", "Circle", "Arrow", "Tick", "Tick-2", "None")
+
+#: Upstream's draw styles, in ``DefaultDrawStyle`` index order.
+DRAW_STYLES = ("Solid", "Dashed", "Dotted", "Dashdot")
+
+#: Upstream's shape display modes, in ``DefaultDisplayMode`` index order.
+DISPLAY_MODES = ("Flat Lines", "Shaded", "Wireframe", "Points")
 
 
 # ---------------------------------------------------------------------------
@@ -701,13 +708,64 @@ class SetStylePanel(PanelController):
         values = self._storage_values()
         for field in _STYLE_FIELDS:
             _write_parameter(field, values[field.name])
+        applied = self._apply_to_selection(values)
+        if applied:
+            suffix = "; applied to " + ", ".join(applied)
+        elif FreeCADGui.Selection.getSelection():
+            suffix = "; the selected object has no headless view style properties"
+        else:
+            suffix = "; nothing selected, so the defaults apply to new objects"
         return {
             "status": (
                 f"style applied: {len(values)} values written to "
-                f"{DRAFT_PREFERENCES}"
+                f"{DRAFT_PREFERENCES}{suffix}"
             ),
             "value": self._json_values(),
         }
+
+    @staticmethod
+    def _apply_to_selection(values) -> list:
+        """Push the shape-view subset onto the selected view objects.
+
+        Upstream's ``apply_style_to_obj`` gates each assignment on the view
+        object's ``PropertiesList``; the headless model now advertises the
+        line/point style properties alongside the native appearance ones, so
+        the same rule works here. Annotation-only fields are skipped: the
+        headless ``ViewObject`` has no font/text properties to receive them.
+        """
+        applied = []
+        for obj in FreeCADGui.Selection.getSelection():
+            view = getattr(obj, "ViewObject", None)
+            if view is None:
+                continue
+            properties = set(getattr(view, "PropertiesList", ()) or ())
+            if "LineColor" not in properties:
+                continue
+            if "ShapeColor" in properties:
+                view.ShapeColor = _rgba_tuple(int(values["ShapeColor"]))
+            if "Transparency" in properties:
+                view.Transparency = int(values["Transparency"])
+            if "LineColor" in properties:
+                view.LineColor = _rgba_tuple(int(values["LineColor"]))
+            if "LineWidth" in properties:
+                view.LineWidth = int(values["LineWidth"])
+            if "PointColor" in properties:
+                view.PointColor = _rgba_tuple(int(values["PointColor"]))
+            if "PointSize" in properties:
+                view.PointSize = int(values["PointSize"])
+            if "DrawStyle" in properties:
+                index = int(values["DrawStyle"])
+                view.DrawStyle = (
+                    DRAW_STYLES[index] if 0 <= index < len(DRAW_STYLES) else DRAW_STYLES[0]
+                )
+            if "DisplayMode" in properties:
+                index = int(values["DisplayMode"])
+                modes = getattr(view, "listDisplayModes", None)
+                modes = list(modes()) if callable(modes) else list(DISPLAY_MODES)
+                if 0 <= index < len(modes):
+                    view.DisplayMode = modes[index]
+            applied.append(obj.Name)
+        return applied
 
 
 # ---------------------------------------------------------------------------
@@ -1277,6 +1335,8 @@ del _instance
 
 __all__ = [
     "ARROW_TYPES",
+    "DRAW_STYLES",
+    "DISPLAY_MODES",
     "COMMANDS",
     "DRAFT_PREFERENCES",
     "PRESET_KEY",

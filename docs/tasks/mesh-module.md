@@ -387,14 +387,16 @@ slice; `M1b` is the wider `MeshPart.meshFromShape` slice.
 Measured 2026-10-26 with the image described above:
 
 - **88/88 modules load, 0 load errors.**
-- **312 passed, 28 failed, 740 errored, 2 skipped.**
+- **362 passed, 36 failed, 673 errored, 2 skipped.**
 - `Mesh`/`MeshPart` load errors: **0**. The last load error was an unrelated
   `QtCore.Qt.UserRole` lookup in the PySide stub, now covered.
 
-The remaining failures are per-test Part API (deep `Shape.copy()`,
-`PartShape.__hash__/__eq__`, `BoundBox.DiagonalLength`, `Placement(other)`,
-`Wire.OrderedVertexes`, `sewShape`, `distToShape`, `Shape.isClosed`, and the rest
-listed in `../TODO-26-10-2026.md` §P4), not module boundaries.
+The remaining failures are per-test Part API (flat-face/`Surface` typing,
+`sewShape`, `childShapes` direct children, `discretize`, `getObjectsByLabel`,
+`Material.Transparency`, and the like, listed in `../TODO-26-10-2026.md` §P4),
+not module boundaries. The earlier identity/query gaps (`Shape.copy()`,
+`__hash__`/`__eq__`, `DiagonalLength`, `Placement(other)`, `OrderedVertexes`,
+`isClosed`, `distToShape`, `valueAt`) are now implemented.
 
 ```sh
 FERROCAD_SIMPLECAD=$PWD/../simplecad cargo test -p ferrocad_part_py \

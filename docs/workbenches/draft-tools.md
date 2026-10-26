@@ -201,6 +201,14 @@ The commit goes through `FerroCADGui.tools.make_line` / `make_wire`, which is al
 installed on `Draft` when that module lacks them. The upstream `gui_lines` path is
 **not** used; `tools.upstream_report()` explains why (see §7).
 
+**Viewport routing (2026-10-27).** `Creator.Activated` asks the shell for
+`python:draft` (`FreeCADGui._request_tool`); the command payload carries that id and
+the shell starts `ferrocad_shell.tool_bridge("draft")` as a native
+`ferrocad_stage.Tool`. A left click arrives with the resolved snap point and calls
+`draft.pick`; `Esc`/`Enter` reach `draft.escape`/`draft.finish` through
+`ferrocad_shell.tool_command("draft", …)`. The `Draft_Line`/`Draft_Wire` commands are
+registered by importing `FerroCADGui.tools` (the edition opts in).
+
 ## 6. The Q5 forms (`FerroCADGui.forms`)
 
 | Command | Form | Accept path |
@@ -229,18 +237,18 @@ controller adds `presets()`, `save_preset(name)`, `delete_preset(name)`,
 
 ## 7. What is not there yet
 
-- **Real viewport clicks.** The session is complete and script-driven; gpui pointer
-  events still need to call `draft.pick` / `draft.escape` / `draft.finish`.
-- **The upstream `gui_lines` route.** Blocked by the headless `ViewObject`
-  (`ShowInTree`, `Selectable`), `SoEvent` picking, preview shapes and the
-  `python/Draft` shim's missing `make_line`/`make_wire`. `tools.upstream_report()`
-  records the four blockers.
-- **Apply paths that need view properties.** SetStyle's apply/annotation buttons and
-  live annotation-object updates need `LineColor`/`LineWidth`/`PointColor`/
-  `DrawStyle`/annotation fonts, which the headless `ViewObject` does not model. The
-  parameters persist; the view objects are not touched.
-- **The nine Draft-only snap modes.** They need a live cursor and extension solving;
-  enabling one raises rather than returning a wrong snap.
+- **The upstream `gui_lines` route.** Still blocked by `SoEvent` picking, preview
+  shapes and the `python/Draft` shim's missing `make_line`/`make_wire`; the headless
+  `ViewObject` style properties are now present. `tools.upstream_report()` records the
+  blockers.
+- **Annotation fonts and live annotation updates.** SetStyle's shape subset
+  (`LineColor`, `LineWidth`, `PointColor`, `PointSize`, `DrawStyle`, `ShapeColor`,
+  `Transparency`, `DisplayMode`) now applies to the selection; the annotation-only
+  fields persist as Draft defaults because the headless `ViewObject` has no font/text
+  properties.
+- **The nine Draft-only snap modes.** They toggle without raising; `mode_note()` and
+  `snap_status()` report which are passthrough (`Near`, `WorkingPlane`) and which need
+  a live cursor or an extension solver. The snap point is never invented.
 
 ## 8. Verifying it
 

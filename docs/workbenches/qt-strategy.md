@@ -8,7 +8,8 @@ shell hosts a rendered `FormDialog` with accept/reject, and the Draft tools run 
 native spatial reference. Q4 supplies `FreeCADGui.Snapper`/`draftToolBar`, the async
 `getPoint` session, a native `PlaneGui`, the `Draft_Line`/`Draft_Wire` commands and
 the checkable `Draft_Snap_*` bar; Q5 supplies the four remaining forms. The upstream
-`gui_lines` path is still blocked by missing `ViewObject`/tracker surface, so the line
+`gui_lines` path is still blocked by missing `SoEvent`/tracker surface (the headless
+`ViewObject` style properties are now shimmed), so the line
 tools are a native `Creator`-shaped layer (see `qt-reduction.md` §3). The plan below
 is the design record.
 

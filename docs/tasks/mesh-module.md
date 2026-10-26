@@ -1,7 +1,7 @@
 # Task — the `Mesh` / `MeshPart` / `Mesh::Feature` contract
 
 Status: implemented 2026-10-26 (M1); M1b landed 2026-10-27 (`meshFromShape(Segments=True)`,
-facet groups and `.bms`; the `.FCStd` mesh member is the remaining piece). The
+facet groups, `.bms`, and the `.FCStd` `<Mesh file="…">`/`MeshKernel.bms` member). The
 measured results are at the end of §5. P4 in
 [`../TODO-26-10-2026.md`](../TODO-26-10-2026.md) (§P4). Companion to
 [`../workbenches/simplecad-bringup.md`](../workbenches/simplecad-bringup.md) §7
@@ -333,11 +333,7 @@ self-skips without one; `FERROCAD_SIMPLECAD_FILES` narrows a run.
 
 ### 4.5 Deferred
 
-- `.FCStd` mesh members (`<Mesh file="…">` + `MeshKernel.bms`). The BMS bytes exist;
-  core needs a per-property `fcstd_kind()` (member stem, tag, extension) so the
-  writer can emit `MeshKernel1.bms` and the reader can restore
-  `Mesh::PropertyMeshKernel`. The object's `Placement` stays authoritative.
-- `Mesh.createSphere/createCylinder/createCone/createTorus/createPlane`.
+- `Mesh.createSphere/createCylinder/createCone/createTorus/createPlane`,
 - `decimate` (only reached when `convert(..., simplify>0)`; the ten pass 0).
 - Boolean/self-intersection **repair** (`removeSelfIntersections`,
   `fixSelfIntersections`, `removeFoldsOnSurface`), mesh booleans and smoothing.
@@ -364,6 +360,13 @@ self-skips without one; `FERROCAD_SIMPLECAD_FILES` narrows a run.
   The placement is carried in the info field under a `FerroCAD-BMS` marker;
   FreeCAD-written files read as identity. `Mesh.Mesh(path)`/`write(path)` dispatch
   `.bms` and `.stl` by suffix.
+- `.FCStd` persistence: `ExtensionData::fcstd_kind()` names the member stem, XML tag
+  and extension (`FcstdKind::PART_SHAPE` by default; the mesh uses
+  `("MeshKernel", "Mesh", "bms")`). The writer emits `MeshKernel.bms` /
+  `MeshKernel1.bms` and `<Mesh file="…"/>`; the reader restores
+  `Mesh::PropertyMeshKernel` through the registered factory, and a malformed member
+  is an error rather than an empty mesh. `Mesh::write_bms_to`/`read_bms_from` keep
+  the restore in memory. The object's `Placement` stays authoritative.
 
 ## 5. Acceptance
 

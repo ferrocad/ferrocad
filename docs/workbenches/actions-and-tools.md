@@ -425,10 +425,12 @@ return {"tool": "toy_measure"}                         # starts a registered too
   surface, including `PlaneGui` and the four Q5 forms, is in
   [`draft-tools.md`](draft-tools.md).
 
-  **Gap.** The gpui viewport does not call the three driver functions yet; a real click
-  still has to be routed into `draft.pick`, and `Esc`/`Enter` into `draft.escape`/
-  `draft.finish`. Until then the session is headless/scriptable but not pointer-driven in
-  the window.
+  **Built (2026-10-27).** A real click is routed: `Creator.Activated` asks the shell
+  for `python:draft`, and the shell starts a `ferrocad_stage.Tool` bridge whose
+  `on_event` calls `draft.pick` with the resolved snap point. `Esc` calls
+  `draft.escape` and `Enter` calls `draft.finish` through
+  `ferrocad_shell.tool_command`. The commands are registered by importing
+  `FerroCADGui.tools`.
 
   ### 7.2 The in-situ radial menu
 

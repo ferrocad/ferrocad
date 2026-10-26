@@ -235,7 +235,7 @@ stateDiagram-v2
   with no modifiers. The root element is focusable (`track_focus` + `focusable`) and the
   mouse-down handler focuses it, so `on_key_down` receives the Esc key.
 
-## 8. Visual tokens and the 1.5 px stroke
+## 8. Visual tokens and the 2 px ribbon
 
 The token set is shared with the rest of the UI; [`visual-language.md`](visual-language.md)
 is the authority, and the table below is the subset this manipulator uses.
@@ -256,13 +256,22 @@ is the intended sRGB look.
 shared [`ferrocad_graphics::screen_ribbon`] utility builds a quad around a segment in the
 plane perpendicular to the view direction. The navicube's `edge_glow` and the gizmo's
 axes/rings both use it. The gizmo derives its half-width from the screen-invariant scale
-(`STROKE_PIXELS * 0.5 * scale / DEFAULT_PIXELS`), so the stroke is 1.5 device pixels at
-the gizmo's depth. A true wide-line pipeline remains a separate renderer slice.
+(`DEFAULT_GIZMO_WIDTH * 0.5 * scale / DEFAULT_PIXELS`, 2 px by default), so the stroke
+keeps a constant device-pixel width at the gizmo's depth. A true wide-line pipeline
+remains a separate renderer slice.
 
-The visual pass replaces the RGB axis colours with cyan/slate, trims the arrowhead to a
-micro-chevron (two ribbon arms), and makes the plane quad a glass fill with a 1 px rim.
-Interior transparency is a hit-test rule, not a visual one: the glass quad is visible but
-only its padded outline/area is pickable.
+Each ribbon vertex also carries a **lateral UV** (`x = 0` on one edge, `1` on the other).
+A ribbon packet sets `StateSnapshot::ribbon`, which selects the unlit `fs_ribbon`
+fragment stage: `fwidth(uv.x)` is one screen pixel in UV units whatever the width, so the
+last pixel of each side is feathered with `smoothstep`. That is the SDF-style AA the
+hard triangle-quad edge lacked; it is independent of the 4× MSAA target. The filled
+arrowhead is one triangle (lateral centre, full coverage) so its edges get a single
+silhouette instead of two stroked caps meeting at the tip.
+
+The visual pass replaces the RGB axis colours with cyan/slate, draws a filled arrowhead,
+and makes the plane quad a glass fill with only its outer **L-corner** rim. Interior
+transparency is a hit-test rule, not a visual one: the glass quad is visible but only
+its padded outline/area is pickable.
 
 ## 9. Slice plan
 
@@ -271,7 +280,7 @@ only its padded outline/area is pickable.
 | **T1 — solver backbone** | `ManipulatorFrame`, view-aligned axis fallback, edge-on plane/ring fallbacks, relative 15° detents, `GizmoModifiers`, unit tests | ✅ built |
 | **T2 — analytic hit test** | projected segment/quad/polyline tests, 2 + 10 px tolerance, priority, pass-through tests | ✅ built |
 | **T3 — modifiers and readout** | gpui modifier/key plumbing, `GizmoValue` on the event, projected numeric tag, Esc cancel, linear grid snapping | ✅ built |
-| **T4 — visual language** | cyan/slate tokens, micro-chevrons, glass planes, shared 1.5 px ribbon | ✅ built |
+| **T4 — visual language** | cyan/slate tokens, filled arrowheads, glass planes, shared 2 px feathered ribbon | ✅ built |
 | **F0 — topology prerequisite** | pixel → `ElementRef` selection (faces/edges), tangent-chain traversal, `chamfer` in `GeometryBackend`, parametric feature objects | ✅ built (F0.1–F0.6) |
 | **F1 — edge dress-up arc** | `DressUpScrubber`: camera-facing arc over the selected edge, screen-space hit test, radial scrub with snap/bounds, typed readout, viewport commit | ✅ built |
 
@@ -370,15 +379,19 @@ classes.
 
 - Tokens `ACTIVE_COLOR` (`#38BDF8`), `INACTIVE_COLOR` (`#94A3B8`), `GLASS_COLOR`,
   `GLASS_HIGHLIGHT`, `PUSH_PULL_COLOR` and `SUBTRACT_COLOR`, stored linear.
-- Axes are a 1.5 px shaft ribbon plus a V-shaped micro-chevron; rings are a 1.5 px
-  ribbon loop. Planes are a translucent glass quad with a 1 px rim. `new_handle` changed
+- Axes are a 2 px shaft ribbon plus a V-shaped chevron (9 px deep, 7 px half-spread,
+  1.5× the stem width); rings are a 2 px ribbon loop. Planes are a translucent glass
+  quad with only the **outer L-corner** rim drawn (the two edges at the far corner), so
+  the plane reads as a direction, not a floating rectangle. `new_handle` builds
   accordingly: axes/rings are `Shaded`, planes are `ShadedWithEdges`.
-- Every handle opts into `with_blended_surface()` + `with_ghost_surface()`: the visible
-  part is the normal blended ribbon (planes blend at 10 %), and the part behind a solid
-  is re-emitted at `GizmoStyle::ghost_alpha` (20 % by default) with a `Greater` depth
-  test. The toy's `HeightGrip` uses the same pair for its stem and crossbar, and the
-  dress-up arc's halo pass does too.
-- Both workbench manipulators now draw their casing/halo from the style rather than a
+- The triad is a **control overlay**, so its surface *and* wire passes use
+  `OVERLAY_DEPTH` (`DepthCompare::Always`, no write) and it emits **no ghost pass**. An
+  object-origin triad sits inside or on the body; a `Less` test rejected the whole
+  foreground and left only the 20 % ghost visible, which read as a watermark. Empty
+  interior clicks still pass through because the hit test is analytic, not depth-based.
+  The toy's `HeightGrip` and the dress-up arc keep the depth-tested + ghost treatment:
+  they are surface-tied and may legitimately be hidden by another body.
+- Both workbench manipulators draw their casing/halo from the style rather than a
   hard-coded token: the toy grip's casing is `outline` sized by `halo_width` on each
   side, and the dress-up arc gained the same halo pass. Hover widens the stroke by
   `hover_scale`, and `hit_radius_px` replaces the fixed `HIT_SLOP` (see §17).
@@ -406,7 +419,7 @@ stage, and **not** the shell; see `architecture.md` §10):
   edge's projected direction `u` and the in-plane perpendicular `n = forward × u`; it runs
   from `anchor + r·u` through `anchor + r·n` to `anchor − r·u`. Because `r` **is** the
   fillet radius, the drawing is a true dimension: growing the radius grows the arc. A
-  1.5 px ribbon (32 segments) and the radius tick `anchor → apex` share the T4 tokens.
+  2 px ribbon (32 segments) and the radius tick `anchor → apex` share the T4 tokens.
 - **Degeneracy.** An edge projecting under 4 px (seen end-on, or behind the eye) falls
   back to a stable screen-horizontal, so the arc keeps a usable orientation and stays
   scrubbable; a polyline with fewer than two points still gets an arc (and no hit).
@@ -522,13 +535,13 @@ omitted field keeps its current value:
 | `backend` | string | a **provider claim**: which backend owns the visuals |
 | `active_color` / `inactive_color` | `#rgb`/`#rrggbb` | the hovered and idle handle ink |
 | `outline_color` | `#rgb`/`#rrggbb` | the halo ink behind the handles (the contrast aid) |
-| `size` | f64 px | the triad's screen-invariant radius |
-| `width` | f64 px | the stem/ribbon stroke width |
+| `size` | f64 px | the triad's screen-invariant radius (**110** by default) |
+| `width` | f64 px | the stem/ribbon stroke width (**2** by default) |
 | `halo_width` | f64 px | the outline width around a handle, clamped `0..=8`; `0` disables it |
 | `hover_scale` | f64 | the hovered handle's stroke multiplier, clamped `1..=4`; `1` disables it |
 | `hit_radius_px` | f64 px | the analytic grab radius, clamped `12..=48` (a 24 px target) |
 | `opacity` | f32 | a multiplier over every handle's alpha, clamped `0..=1` |
-| `ghost_alpha` | f32 | the occluded (`DepthMode::Greater`) pass, clamped `0..=0.5` |
+| `ghost_alpha` | f32 | the occluded (`DepthMode::Greater`) pass of the **workbench manipulators**, clamped `0..=0.5`; the triad is always on top and does not emit a ghost |
 | `ring_snap_deg` | f64 | the rotation detent, clamped `0..=180` and stepped to a 5° multiple; `0` is continuous |
 | `show_readout` | bool | the numeric pills |
 
@@ -551,10 +564,10 @@ rules (`python/FerroCAD/_gizmo.py`), so both views of the store agree.
 
 | Property | Default | Criterion | Why |
 | --- | --- | --- | --- |
-| `outline_color` + `halo_width` | `#0f172a`, `1.5 px` | SC 1.4.11 non-text contrast (3:1) | The accent and the idle slate are close in luminance to mid-blue geometry (the toy slab). A dark halo separates a handle from it without relying on hue. |
+| `outline_color` + `halo_width` | `#0f172a`, `1.0 px` | SC 1.4.11 non-text contrast (3:1) | The accent and the idle slate are close in luminance to mid-blue geometry (the toy slab). A dark halo separates a handle from it without relying on hue. The alpha stays 1.0: at 0.45 over the slab it falls to ~1.7:1, below the 3:1 floor. |
 | `hover_scale` | `1.5` | SC 1.4.1 use of colour | `#38bdf8` against `#d8dbe0` is only 1.49:1, so hover cannot be colour-only. The hovered stem and ring also widen (`width × hover_scale`). |
-| `hit_radius_px` | `12.0` (24 px target) | SC 2.5.8 target size (minimum) | The analytic grab radius is floored at 12 px, so a 1.5 px stem still has a 24 × 24 px target. |
-| `ghost_alpha` | `0.20`, max `0.5` | — (occlusion legibility) | Above half, an occluded handle reads as another front handle, which destroys the depth cue. The old `0.35` already leaned that way. |
+| `hit_radius_px` | `12.0` (24 px target) | SC 2.5.8 target size (minimum) | The analytic grab radius is floored at 12 px, so the 2 px stem still has a 24 × 24 px target. |
+| `ghost_alpha` | `0.20`, max `0.5` | — (manipulator occlusion) | Applies to the workbench manipulators only. Above half, an occluded handle reads as another front handle, which destroys the depth cue. The triad itself is an `Always` overlay and never enters the ghost pass. |
 | `ring_snap_deg` | `15°`, stepped to 5° | SC 2.5.7 dragging movements | An arbitrary fractional detent (the old free ring reported `49.62°`) demands micro-precision. Every stored value is a 5° multiple; `0` stays continuous for power users. |
 
 The halo is a **separate, non-selectable pass** drawn before the handles
@@ -563,6 +576,16 @@ handle ribbon by `halo_width` on each side and follows the hover width cue. Beca
 is not selectable it adds no pick target; because it stays **native** under a shader
 skin, a skin cannot remove the contrast aid (`ferrocad_viewport` emits it before the
 skinned handles).
+
+**The triad is drawn on top.** Both the halo and the handle passes use
+`OVERLAY_DEPTH` (`DepthCompare::Always`, no depth write) and emit no ghost pass
+(`crates/ferrocad_stage/src/shape.rs`, `gizmo.rs::new_handle`/`new_halo`). This is the
+lesson of the 2026-10-26 screenshot: at an object-origin anchor the triad is inside the
+body, so a depth-tested foreground pass is rejected and only the 20 % ghost remains — a
+faint watermark. The analytic hit test still keeps the empty interior passing through;
+the depth buffer is not what makes a gizmo clickable. `ghost_alpha` therefore applies to
+the surface-tied workbench manipulators (height grip, dress-up arc), which use
+`BLENDED_DEPTH`/`GHOST_DEPTH` as before.
 
 **Caveat:** the contrast figures in this table are arithmetic in sRGB, not a visual
 measurement on a display. The renderer applies the tokens as-is; a future calibration

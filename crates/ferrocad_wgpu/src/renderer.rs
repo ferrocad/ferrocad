@@ -16,8 +16,8 @@ use std::collections::HashMap;
 use std::fmt;
 
 use ferrocad_graphics::{
-    Camera, DepthState, DrawBatch, DrawPacket, Generation, Geometry, Hit, MeshId, PickId, Rect,
-    RenderQueue, ShaderProgram, StateSnapshot, Topology, theme,
+    Camera, DepthCompare, DepthState, DrawBatch, DrawPacket, Generation, Geometry, Hit, MeshId,
+    PickId, Rect, RenderQueue, ShaderProgram, StateSnapshot, Topology, theme,
 };
 use ferrocad_inventor::{ImageData, InventorView, ViewSpec};
 use ferrocad_types::{Matrix4, Vector3};
@@ -438,6 +438,7 @@ impl WgpuRenderer {
                         false,
                         batch.topology(),
                         &snapshot.depth,
+                        snapshot.ribbon,
                     ));
                     pass.set_bind_group(
                         0,
@@ -719,8 +720,9 @@ impl WgpuRenderer {
                         pass.set_pipeline(self.pipelines.for_state(
                             &self.context.device,
                             view.overlay,
-                            batch.topology,
+                            batch.topology(),
                             &snapshot.depth,
+                            snapshot.ribbon,
                         ));
                         pass.set_bind_group(
                             0,
@@ -1365,6 +1367,60 @@ mod tests {
         );
     }
 
+    /// The ribbon fragment stage feathers the last pixel of each side. The quad spans
+    /// `uv.x` 0..1 over 16 px, shifted half a pixel so its left edge falls through the
+    /// centre of column 7: that column is half-covered, while column 8 and the centre
+    /// are solid. Without the `smoothstep` stage the edge is a hard step.
+    #[test]
+    fn a_ribbon_feathers_its_silhouette() {
+        let _gpu = gpu_guard();
+        let Ok(mut renderer) = WgpuRenderer::new_default([32, 32]) else {
+            eprintln!("no GPU adapter available; skipping ribbon AA test");
+            return;
+        };
+        let mut packet = pick_packet(
+            90,
+            0,
+            0,
+            Topology::Triangles,
+            vec![
+                [-0.53125, -1.0, 0.5],
+                [0.46875, -1.0, 0.5],
+                [0.46875, 1.0, 0.5],
+                [-0.53125, 1.0, 0.5],
+            ],
+            vec![0, 1, 2, 0, 2, 3],
+        );
+        let geometry = packet.geometry.as_mut().expect("geometry");
+        for (vertex, uv) in
+            geometry
+                .vertices
+                .iter_mut()
+                .zip([[0.0, 0.0], [1.0, 0.0], [1.0, 1.0], [0.0, 1.0]])
+        {
+            vertex.uv = uv;
+        }
+        packet.state.color = [1.0, 1.0, 1.0, 1.0];
+        packet.state.ribbon = true;
+        packet.state.depth = DepthState {
+            test: true,
+            write: false,
+            compare: DepthCompare::Always,
+        };
+        let mut queue = RenderQueue::default();
+        queue.packets.push(packet);
+        renderer.draw(&queue, &Camera::identity()).expect("draw");
+        let image = renderer.image().expect("readback");
+        let red = |x: u32| image.rgba[((16 * 32 + x) * 4) as usize];
+        let edge = red(7);
+        assert!(
+            (40..200).contains(&edge),
+            "the edge column is half-covered, not a hard step: {edge}"
+        );
+        assert!(red(8) > 240, "the next column is solid: {}", red(8));
+        assert!(red(16) > 240, "the centre is solid: {}", red(16));
+    }
+
     /// V2: the canvas is the `#0F1218 → #161B22` vertical gradient, not the legacy
     /// grey.
     #[test]
@@ -1950,6 +2006,7 @@ mod tests {
                 id: PickId(id),
                 depth: Default::default(),
                 pickable: true,
+                ribbon: false,
                 program: None,
             },
         }

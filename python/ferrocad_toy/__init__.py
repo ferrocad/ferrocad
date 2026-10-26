@@ -189,14 +189,15 @@ FerroCAD.register_interaction_provider(_interaction)
 #: ``#38bdf8`` is ``Y = 0.440`` at hue 198, i.e. only ``1.14:1`` against the
 #: slab and in the same blue/cyan family: it disappears into the object.
 #:
-#: The preset moves the manipulator to the complementary warm side instead:
+#: The preset replaces the stroke with a cool ice-white idle handle and a warm
+#: amber active handle, so the gizmo separates by hue *and* by lightness:
 #:
-#: * active ``#ffd9a3``: ``Y = 0.735``, ``1.40:1`` against the slab,
-#:   ``14.0:1`` against the background, hue 35 (163 degrees from the slab's
-#:   ~198) and clearly lighter than the inactive;
-#: * inactive ``#b08f6f``: desaturated warm, ``Y = 0.300`` (``0.271`` after the
-#:   token's 0.9 alpha over the background), ``1.75:1`` against the slab and
-#:   ``5.7:1`` against the background;
+#: * inactive ``#e2e8f0``: ``Y = 0.802``, ``1.52:1`` against the slab and
+#:   ``15.2:1`` against the background — the lightest ink, so it never mixes
+#:   into the blue;
+#: * active ``#fbbf24``: ``Y = 0.579`` at hue 43 (a 155° turn from the slab's
+#:   ~198), ``11.2:1`` against the background; hover also widens the stroke by
+#:   ``hover_scale``, so the state is not carried by colour alone;
 #: * axis Z ``#fbbf24`` replaces the blue ``#38bdf8`` (hue 43 at the default
 #:   0.65 opacity: ``Y = 0.378`` effective, ``7.7:1`` against the background),
 #:   while the conventional red X and green Y stems are unchanged;
@@ -209,16 +210,15 @@ FerroCAD.register_interaction_provider(_interaction)
 #: ``Y >= 1.63`` (impossible) or ``Y <= 0.137``, and the dark option is itself
 #: only ``3.3:1`` against the background. The shared gizmo **halo** closes that
 #: gap instead: its ``#0f172a`` outline (``Y = 0.009``) is ``9.5:1`` against the
-#: slab and ``13.3:1`` against the amber stroke, so the 1.5 px boundary carries
-#: SC 1.4.11. The outline is nearly invisible on the canvas itself (``1.05:1``),
-#: which is fine: there the stroke's ``14:1`` does the work. The preset still
-#: separates the stroke body by hue and by the active/inactive lightness gap.
-#: These are token arithmetic only; the colours were not visually inspected in
-#: this environment.
+#: slab, ``10.7:1`` against the amber stroke and ``14.5:1`` against the ice-white
+#: one, so the 1 px boundary carries SC 1.4.11. On the canvas itself the
+#: outline is nearly invisible (``1.05:1``), which is fine: the strokes are
+#: 11–15:1 there. These are token arithmetic only; the colours were not visually
+#: inspected in this environment.
 APPEARANCE_PRESETS = {
     "gizmo": {
-        "active_color": "#ffd9a3",
-        "inactive_color": "#b08f6f",
+        "active_color": "#fbbf24",
+        "inactive_color": "#e2e8f0",
     },
     "axis": {
         "color_z": "#fbbf24",

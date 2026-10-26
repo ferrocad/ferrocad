@@ -81,6 +81,7 @@ impl State {
             id: self.id,
             depth: self.depth,
             pickable: self.pickable,
+            ribbon: false,
             program: self.program.clone(),
         }
     }

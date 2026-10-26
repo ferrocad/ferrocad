@@ -17,8 +17,8 @@ use ferrocad_types::{Matrix4, Placement, Rotation, Vector3};
 
 use crate::interaction::InteractionCommit;
 use crate::screen::{
-    STROKE_PIXELS, camera_forward, camera_position, point_segment_distance, project_device,
-    push_ribbon, scale_for, to3,
+    RIBBON_UV_CENTRE, camera_forward, camera_position, point_segment_distance, project_device,
+    push_ribbon_uv, scale_for, to3,
 };
 use crate::shape::{DrawMode, ShapeItem};
 
@@ -28,7 +28,7 @@ use crate::shape::{DrawMode, ShapeItem};
 pub const GIZMO_BASE_ID: u32 = 1_000_000;
 
 /// The default target radius, in device pixels.
-pub const DEFAULT_PIXELS: f64 = 80.0;
+pub const DEFAULT_PIXELS: f64 = 110.0;
 
 /// The provider id of the native FerroCAD gizmo visuals.
 pub const NATIVE_BACKEND: &str = "ferrocad";
@@ -60,7 +60,12 @@ pub const DEFAULT_RING_SNAP_DEG: f64 = 15.0;
 /// cyan stems) without relying on hue alone.
 pub const OUTLINE_COLOR: [f32; 4] = [0.0048, 0.0086, 0.0232, 1.0];
 /// The default outline width around a handle, in device pixels.
-pub const DEFAULT_HALO_WIDTH: f64 = 1.5;
+pub const DEFAULT_HALO_WIDTH: f64 = 1.0;
+/// The default stroke width of the axes and rings, in device pixels.
+///
+/// It is deliberately wider than the 1.5 px axis-cross stroke: a gizmo is a primary
+/// control, and a 2 px stem keeps its arrowhead and ribbon legible over a busy model.
+pub const DEFAULT_GIZMO_WIDTH: f64 = 2.0;
 /// The default stroke-width multiplier of the hovered/grabbed handle.
 ///
 /// This is the non-colour cue for hover (WCAG 1.4.1): the accent and the idle ink
@@ -133,7 +138,7 @@ impl Default for GizmoStyle {
             hover_scale: DEFAULT_HOVER_SCALE,
             hit_radius_px: DEFAULT_HIT_RADIUS_PX,
             size: DEFAULT_PIXELS,
-            width: STROKE_PIXELS,
+            width: DEFAULT_GIZMO_WIDTH,
             opacity: 1.0,
             ghost_alpha: DEFAULT_GHOST_ALPHA,
             ring_snap_deg: DEFAULT_RING_SNAP_DEG,
@@ -1337,10 +1342,8 @@ impl TransformGizmo {
             let (surface, edge) = paint_for(*handle, self.hovered == Some(*handle), &self.style);
             self.handles[index].set_surface_color(surface);
             self.handles[index].set_edge_color(edge);
-            self.handles[index].set_ghost_alpha(self.style.ghost_alpha);
             self.handles[index].set_temporary_transform(offset);
             self.halos[index].set_surface_color(outline);
-            self.halos[index].set_ghost_alpha(self.style.ghost_alpha);
             self.halos[index].set_temporary_transform(offset);
         }
     }
@@ -1360,33 +1363,49 @@ impl GizmoMode {
 // --- geometry ---------------------------------------------------------------------
 
 /// A fresh handle slot: the pick id and the draw mode its kind needs.
+///
+/// A handle is a **control overlay**, so its surface and wire passes use
+/// [`OVERLAY_DEPTH`](crate::shape::OVERLAY_DEPTH): an object-origin triad otherwise sits
+/// inside the body, fails the `Less` test, and shows only its occluded ghost pass.
 fn new_handle(index: usize) -> ShapeItem {
     let handle = GizmoHandle::ALL[index];
     let mode = match handle.kind() {
         HandleKind::Plane => DrawMode::ShadedWithEdges,
         HandleKind::Axis | HandleKind::Ring => DrawMode::Shaded,
     };
-    ShapeItem::new(GIZMO_BASE_ID + index as u32)
+    let item = ShapeItem::new(GIZMO_BASE_ID + index as u32)
         .with_draw_mode(mode)
-        // Ribbons and glass planes are translucent and must stay readable when the
-        // solid occludes them: blend the visible part, then draw the hidden part at
-        // 35 % through the `Greater` ghost pass.
-        .with_blended_surface()
-        .with_ghost_surface()
+        .with_surface_depth(crate::shape::OVERLAY_DEPTH)
+        .with_wire_depth(crate::shape::OVERLAY_DEPTH);
+    // Axes and rings are screen-space ribbons and take the feathered, unlit stage. A
+    // plane is a quad whose uv is not a lateral coordinate, so it stays on `fs_main`.
+    if handle.kind() == HandleKind::Plane {
+        item
+    } else {
+        item.with_ribbon_aa()
+    }
 }
 
 /// The outline slot behind a handle: a wider ribbon in the outline ink. It is
 /// non-selectable so the halo never adds a pick target, and its ids sit outside the
 /// handle pick range.
 fn new_halo(index: usize) -> ShapeItem {
-    ShapeItem::new(GIZMO_BASE_ID + 100 + index as u32)
+    let item = ShapeItem::new(GIZMO_BASE_ID + 100 + index as u32)
         .with_draw_mode(DrawMode::Shaded)
-        .with_blended_surface()
-        .with_ghost_surface()
-        .with_selectable(false)
+        .with_surface_depth(crate::shape::OVERLAY_DEPTH)
+        .with_selectable(false);
+    if GizmoHandle::ALL[index].kind() == HandleKind::Plane {
+        item
+    } else {
+        item.with_ribbon_aa()
+    }
 }
 
-/// A translation axis: a style-width shaft ribbon plus a micro-chevron at the tip.
+/// A translation axis: a style-width shaft ribbon plus a filled arrowhead at the tip.
+///
+/// The arrowhead is one triangle rather than two stroked wings: separate ribbon caps at
+/// the tip left a notch where their halos met, which read as a boxy pixel cluster at
+/// high zoom. A filled triangle has a single outline and no joint.
 fn axis_handle(
     item: &mut ShapeItem,
     origin: Vector3,
@@ -1399,18 +1418,21 @@ fn axis_handle(
     let tip = origin.add(&axis.scale(scale));
     let half = width * 0.5 * world_per_pixel;
     let mut positions = Vec::new();
+    let mut uvs = Vec::new();
     let mut triangles = Vec::new();
 
-    push_ribbon(
+    push_ribbon_uv(
         &mut positions,
+        &mut uvs,
         &mut triangles,
         screen_ribbon(origin, tip, half, forward),
     );
 
-    // A V-shaped chevron just behind the tip, in the plane of the stem and the
-    // screen-perpendicular. No bulky cone.
-    let depth = 5.0 * world_per_pixel;
-    let spread = 4.0 * world_per_pixel;
+    // A filled arrowhead just behind the tip, in the plane of the stem and the
+    // screen-perpendicular. The wing span is deliberately larger than the stem; the
+    // shape is dilated by the ribbon's half-width so the halo pass gets an even outline.
+    let depth = 9.0 * world_per_pixel;
+    let spread = 7.0 * world_per_pixel;
     let base = tip.sub(&axis.scale(depth));
     let perp = {
         let candidate = axis.cross(&forward);
@@ -1422,21 +1444,43 @@ fn axis_handle(
     };
     let left = base.add(&perp.scale(spread));
     let right = base.sub(&perp.scale(spread));
-    push_ribbon(
-        &mut positions,
-        &mut triangles,
-        screen_ribbon(tip, left, half, forward),
-    );
-    push_ribbon(
-        &mut positions,
-        &mut triangles,
-        screen_ribbon(tip, right, half, forward),
-    );
+    let (tip, left, right) = dilate_triangle(tip, left, right, half);
+    let start = positions.len() as u32;
+    for point in [tip, left, right] {
+        positions.push(to3(point));
+        // A constant lateral centre keeps the fill at full coverage; its silhouette is
+        // anti-aliased by MSAA, not by the ribbon feather.
+        uvs.push(RIBBON_UV_CENTRE);
+    }
+    triangles.extend_from_slice(&[start, start + 1, start + 2]);
 
-    item.set_shape(positions, Vec::new(), triangles, Vec::new());
+    item.set_shape_uv(positions, Vec::new(), uvs, triangles, Vec::new());
 }
 
-/// A planar handle: a translucent glass square with a 1 px rim.
+/// Grow a triangle by `grow` world units, scaling it about its centroid by the factor
+/// that moves each edge out by `grow` (its inradius is `area / semiperimeter`).
+fn dilate_triangle(
+    tip: Vector3,
+    left: Vector3,
+    right: Vector3,
+    grow: f64,
+) -> (Vector3, Vector3, Vector3) {
+    let a = left.sub(&tip);
+    let b = right.sub(&tip);
+    let area = a.cross(&b).length() * 0.5;
+    let sides = a.length() + b.length() + left.sub(&right).length();
+    let inradius = (area / (sides * 0.5)).max(1e-12);
+    let factor = 1.0 + grow / inradius;
+    let centroid = tip.add(&left).add(&right).scale(1.0 / 3.0);
+    let outward = |vertex: Vector3| centroid.add(&vertex.sub(&centroid).scale(factor));
+    (outward(tip), outward(left), outward(right))
+}
+
+/// A planar handle: a translucent glass square with an outer L-corner rim.
+///
+/// Only the two edges at the far corner are drawn. A full four-sided rim made the
+/// 0.35..0.7 quad read as a floating rectangle rather than a plane handle; the L keeps
+/// the direction cue without boxing the axis in.
 fn plane_handle(item: &mut ShapeItem, origin: Vector3, u: Vector3, v: Vector3, scale: f64) {
     let corner = |a: f64, b: f64| to3(origin.add(&u.scale(a * scale)).add(&v.scale(b * scale)));
     let positions = vec![
@@ -1449,16 +1493,16 @@ fn plane_handle(item: &mut ShapeItem, origin: Vector3, u: Vector3, v: Vector3, s
         positions,
         Vec::new(),
         vec![0, 1, 2, 0, 2, 3],
-        vec![0, 1, 1, 2, 2, 3, 3, 0],
+        // The far corner is vertex 2; only its two incident edges form the L.
+        vec![1, 2, 2, 3],
     );
 }
 
-/// The outline behind a plane: the same square, expanded by `margin` (a fraction of
-/// the triad's radius, i.e. `halo_px / size_px`).
-/// The glass plane's halo: a border band just outside its edge.
+/// The glass plane's halo: an L-corner band just outside its two outer edges.
 ///
 /// A filled backing quad would draw an opaque dark rectangle *through* the plane's
-/// `0.10`-alpha glass and hide the fill; the band is the outline only.
+/// `0.10`-alpha glass and hide the fill; a full four-band frame would close the square
+/// again. Only the two bands next to the drawn rim are emitted.
 fn plane_halo(
     item: &mut ShapeItem,
     origin: Vector3,
@@ -1484,20 +1528,14 @@ fn plane_halo(
         ]);
         triangles.extend([base, base + 1, base + 2, base, base + 2, base + 3]);
     };
-    // Bottom, top, left, right — the four bands that frame the plane.
-    quad(
-        (outer_lo, outer_lo),
-        (outer_hi, outer_lo),
-        (outer_hi, lo),
-        (outer_lo, lo),
-    );
+    // Only the two outer bands, matching the plane's L-corner rim: a full rectangle
+    // would close the square again and rebuild the floating-box illusion.
     quad(
         (outer_lo, hi),
         (outer_hi, hi),
         (outer_hi, outer_hi),
         (outer_lo, outer_hi),
     );
-    quad((outer_lo, lo), (lo, lo), (lo, hi), (outer_lo, hi));
     quad((hi, lo), (outer_hi, lo), (outer_hi, hi), (hi, hi));
     item.set_shape(positions, Vec::new(), triangles, Vec::new());
 }
@@ -1516,6 +1554,7 @@ fn ring_handle(
     let half = width * 0.5 * world_per_pixel;
     let segments = 48usize;
     let mut positions = Vec::new();
+    let mut uvs = Vec::new();
     let mut triangles = Vec::new();
     for i in 0..segments {
         let a = TAU * i as f64 / segments as f64;
@@ -1526,13 +1565,14 @@ fn ring_handle(
         let to = origin
             .add(&u.scale(scale * b.cos()))
             .add(&v.scale(scale * b.sin()));
-        push_ribbon(
+        push_ribbon_uv(
             &mut positions,
+            &mut uvs,
             &mut triangles,
             screen_ribbon(from, to, half, forward),
         );
     }
-    item.set_shape(positions, Vec::new(), triangles, Vec::new());
+    item.set_shape_uv(positions, Vec::new(), uvs, triangles, Vec::new());
 }
 
 /// The surface and edge colours for a handle. Axes and rings are strokes; planes are a
@@ -2150,7 +2190,7 @@ mod tests {
     fn a_plane_quad_is_pickable_in_its_interior() {
         let mut gizmo = TransformGizmo::new(1, Vector3::zero(), GizmoMode::Translate);
         gizmo.update(&camera(5.0));
-        // The XY quad spans 0.35..0.7·scale in +X/+Y; its centre is ~42 px out.
+        // The XY quad spans 0.35..0.7·scale in +X/+Y; [92, 92] is inside that band.
         assert_eq!(
             gizmo.hit(&camera(5.0), [92, 92]),
             Some(GizmoHandle::PlaneXY)
@@ -2161,9 +2201,9 @@ mod tests {
     fn a_ring_is_pickable_on_its_arc() {
         let mut gizmo = TransformGizmo::new(1, Vector3::zero(), GizmoMode::Rotate);
         gizmo.update(&camera(5.0));
-        // 45° on the Z ring (the X/Y rings are edge-on lines at this view).
+        // 45° on the Z ring at the 110 px radius (the X/Y rings are edge-on here).
         assert_eq!(
-            gizmo.hit(&camera(5.0), [107, 107]),
+            gizmo.hit(&camera(5.0), [128, 128]),
             Some(GizmoHandle::RotateZ)
         );
     }
@@ -2182,14 +2222,14 @@ mod tests {
         let mut translate = TransformGizmo::new(1, Vector3::zero(), GizmoMode::Translate);
         translate.update(&camera(5.0));
         assert_eq!(
-            translate.hit(&camera(5.0), [80, 80]),
+            translate.hit(&camera(5.0), [95, 95]),
             Some(GizmoHandle::PlaneXY)
         );
 
         // The same point in rotate mode is between the displayed rings.
         let mut rotate = TransformGizmo::new(1, Vector3::zero(), GizmoMode::Rotate);
         rotate.update(&camera(5.0));
-        assert_eq!(rotate.hit(&camera(5.0), [80, 80]), None);
+        assert_eq!(rotate.hit(&camera(5.0), [95, 95]), None);
     }
 
     #[test]
@@ -2409,7 +2449,8 @@ mod tests {
         assert_eq!(halo.surface_color(), OUTLINE_COLOR);
 
         // The halo is the stroke plus `halo_width` on each side.
-        let expected = (DEFAULT_HALO_WIDTH * 2.0 + STROKE_PIXELS) * gizmo.scale() / DEFAULT_PIXELS;
+        let expected =
+            (DEFAULT_HALO_WIDTH * 2.0 + DEFAULT_GIZMO_WIDTH) * gizmo.scale() / DEFAULT_PIXELS;
         let width = shaft_width(halo);
         assert!(
             (width - expected).abs() < 1e-6,
@@ -2417,11 +2458,11 @@ mod tests {
         );
         assert!(width > shaft_width(handle));
 
-        // The plane halo is a border band (four quads), not a filled backing: a filled
-        // quad would darken the glass fill it is supposed to outline.
+        // The plane halo is an L-corner band (two quads), matching the rim: a full
+        // rectangle would close the square again.
         let plane = &gizmo.halos()[GizmoHandle::PlaneXY.index()];
-        assert_eq!(plane.positions().len(), 16, "four framing quads");
-        assert_eq!(plane.triangles().len(), 24, "six indices per quad");
+        assert_eq!(plane.positions().len(), 8, "two framing quads");
+        assert_eq!(plane.triangles().len(), 12, "six indices per quad");
     }
 
     #[test]
@@ -2491,7 +2532,7 @@ mod tests {
             "the hover cue scales the stroke by {DEFAULT_HOVER_SCALE}: {hovered} vs {idle}"
         );
         // The halo follows the widened stroke so the outline stays even.
-        let expected_halo = (DEFAULT_HALO_WIDTH * 2.0 + STROKE_PIXELS * DEFAULT_HOVER_SCALE)
+        let expected_halo = (DEFAULT_HALO_WIDTH * 2.0 + DEFAULT_GIZMO_WIDTH * DEFAULT_HOVER_SCALE)
             * gizmo.scale()
             / DEFAULT_PIXELS;
         let halo = shaft_width(&gizmo.halos()[GizmoHandle::AxisX.index()]);
@@ -2521,7 +2562,7 @@ mod tests {
 
         let plane = &gizmo.items()[GizmoHandle::PlaneXY.index()];
         assert_eq!(plane.draw_mode(), DrawMode::ShadedWithEdges);
-        assert_eq!(plane.edges().len(), 8, "the glass plane keeps its 1 px rim");
+        assert_eq!(plane.edges().len(), 4, "only the outer L-corner is drawn");
     }
 
     #[test]
@@ -2550,7 +2591,7 @@ mod tests {
     }
 
     #[test]
-    fn the_axis_ribbon_is_one_and_a_half_pixels_wide() {
+    fn the_axis_ribbon_uses_the_default_gizmo_width() {
         let mut gizmo = TransformGizmo::new(1, Vector3::zero(), GizmoMode::Translate);
         gizmo.update(&camera(5.0));
         let positions = gizmo.items()[GizmoHandle::AxisX.index()].positions();
@@ -2563,7 +2604,7 @@ mod tests {
         };
         // The first quad is the shaft; corners 0 and 3 straddle the stem.
         let width = point(0).sub(&point(3)).length();
-        let expected = STROKE_PIXELS * gizmo.scale() / DEFAULT_PIXELS;
+        let expected = DEFAULT_GIZMO_WIDTH * gizmo.scale() / DEFAULT_PIXELS;
         assert!(
             (width - expected).abs() < 1e-6,
             "the stroke should be {expected} world units, got {width}"
@@ -2579,7 +2620,7 @@ mod tests {
         assert_eq!(style.inactive, INACTIVE_COLOR, "the legacy 0.9 alpha");
         assert_eq!(style.outline, OUTLINE_COLOR);
         assert_eq!(style.size, DEFAULT_PIXELS);
-        assert_eq!(style.width, STROKE_PIXELS);
+        assert_eq!(style.width, DEFAULT_GIZMO_WIDTH);
         assert_eq!(style.halo_width, DEFAULT_HALO_WIDTH);
         assert_eq!(style.hover_scale, DEFAULT_HOVER_SCALE);
         assert_eq!(style.hit_radius_px, DEFAULT_HIT_RADIUS_PX);
@@ -2593,7 +2634,7 @@ mod tests {
 
         let gizmo = TransformGizmo::new(1, Vector3::zero(), GizmoMode::Translate);
         assert_eq!(gizmo.style(), &style);
-        // The footprint is the legacy 80 px radius.
+        // The footprint is the default 110 px radius.
         let camera = camera(5.0);
         let legacy = scale_for(&camera, Vector3::zero(), DEFAULT_PIXELS);
         assert!((gizmo.screen_scale(&camera) - legacy).abs() < 1e-12);
@@ -2696,21 +2737,33 @@ mod tests {
     }
 
     #[test]
-    fn a_style_ghost_alpha_reaches_every_handle() {
+    fn the_triad_draws_on_top_without_a_ghost_pass() {
         let mut gizmo = TransformGizmo::new(1, Vector3::zero(), GizmoMode::Universal);
-        for item in gizmo.items() {
-            assert_eq!(item.ghost_alpha(), crate::shape::GHOST_SURFACE_ALPHA);
+        gizmo.update(&camera(5.0));
+        for (index, item) in gizmo.items().iter().enumerate() {
+            assert_eq!(
+                item.surface_depth(),
+                crate::shape::OVERLAY_DEPTH,
+                "handle {index} is a control overlay"
+            );
+            assert_eq!(item.wire_depth(), crate::shape::OVERLAY_DEPTH);
+            assert!(
+                !item.ghost_surface(),
+                "no occluded pass may dim the triad"
+            );
+        }
+        for (index, item) in gizmo.halos().iter().enumerate() {
+            assert_eq!(item.surface_depth(), crate::shape::OVERLAY_DEPTH);
+            assert!(!item.ghost_surface(), "halo {index} stays on top");
         }
 
+        // `ghost_alpha` no longer touches the triad: it is reserved for the workbench
+        // manipulators, which are deliberately occluded by other bodies.
         let mut style = GizmoStyle::default();
         style.ghost_alpha = 0.5;
         assert!(gizmo.set_style(&style));
-        for (index, item) in gizmo.items().iter().enumerate() {
-            assert_eq!(
-                item.ghost_alpha(),
-                0.5,
-                "handle {index} must take the style's ghost alpha"
-            );
+        for item in gizmo.items() {
+            assert!(!item.ghost_surface());
         }
     }
 

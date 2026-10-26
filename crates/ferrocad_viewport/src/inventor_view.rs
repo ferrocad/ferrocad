@@ -497,6 +497,7 @@ impl MarkerLayer {
                 id: PickId(0),
                 depth: Default::default(),
                 pickable: false,
+                ribbon: false,
                 program: None,
             },
         });
@@ -666,6 +667,7 @@ impl GridLayer {
                 id: PickId(0),
                 depth,
                 pickable: false,
+                ribbon: false,
                 program: None,
             },
         }
@@ -799,6 +801,7 @@ fn feedback_packet(
             id: PickId(0),
             depth: Default::default(),
             pickable: false,
+            ribbon: false,
             program: None,
         },
     }

@@ -54,7 +54,7 @@ use ferrocad_geom::SelectionRef;
 use ferrocad_graphics::Camera;
 use ferrocad_stage::gizmo::{GizmoStyle, MIN_HIT_RADIUS_PX};
 use ferrocad_stage::screen::{
-    camera_forward, point_segment_distance, project_device, push_ribbon, scale_for,
+    camera_forward, point_segment_distance, project_device, push_ribbon_uv, scale_for,
 };
 use ferrocad_stage::{DrawMode, InteractionCommit, Manipulator, ShapeItem, Stage};
 use ferrocad_types::{Matrix4, Vector3};
@@ -206,12 +206,14 @@ impl DressUpScrubber {
                     .with_selectable(false)
                     .with_blended_surface()
                     .with_ghost_surface()
-                    .with_ghost_alpha(ghost_alpha),
+                    .with_ghost_alpha(ghost_alpha)
+                    .with_ribbon_aa(),
                 ShapeItem::new(DRESS_UP_PICK_ID)
                     .with_draw_mode(DrawMode::Shaded)
                     .with_selectable(false)
                     .with_ghost_surface()
-                    .with_ghost_alpha(ghost_alpha),
+                    .with_ghost_alpha(ghost_alpha)
+                    .with_ribbon_aa(),
             ],
         }
     }
@@ -491,11 +493,13 @@ impl DressUpScrubber {
 
         let ribbons = |half: f64| {
             let mut positions = Vec::new();
+            let mut uvs = Vec::new();
             let mut triangles = Vec::new();
             let points = self.arc_points(camera);
             for pair in points.windows(2) {
-                push_ribbon(
+                push_ribbon_uv(
                     &mut positions,
+                    &mut uvs,
                     &mut triangles,
                     ferrocad_graphics::screen_ribbon(pair[0], pair[1], half, forward),
                 );
@@ -504,23 +508,36 @@ impl DressUpScrubber {
             // the most natural place to grab, so it is part of the stroke.
             if let Some((_, n)) = self.arc_basis(camera) {
                 let apex = anchor.add(&n.scale(self.value.max(0.0)));
-                push_ribbon(
+                push_ribbon_uv(
                     &mut positions,
+                    &mut uvs,
                     &mut triangles,
                     ferrocad_graphics::screen_ribbon(anchor, apex, half, forward),
                 );
             }
-            (positions, triangles)
+            (positions, uvs, triangles)
         };
 
-        let (stroke_positions, stroke_triangles) = ribbons(stroke_half);
+        let (stroke_positions, stroke_uvs, stroke_triangles) = ribbons(stroke_half);
         if halo > 0.0 {
-            let (halo_positions, halo_triangles) = ribbons(halo_half);
-            self.items[0].set_shape(halo_positions, Vec::new(), halo_triangles, Vec::new());
+            let (halo_positions, halo_uvs, halo_triangles) = ribbons(halo_half);
+            self.items[0].set_shape_uv(
+                halo_positions,
+                Vec::new(),
+                halo_uvs,
+                halo_triangles,
+                Vec::new(),
+            );
         } else {
             self.items[0].set_shape(Vec::new(), Vec::new(), Vec::new(), Vec::new());
         }
-        self.items[1].set_shape(stroke_positions, Vec::new(), stroke_triangles, Vec::new());
+        self.items[1].set_shape_uv(
+            stroke_positions,
+            Vec::new(),
+            stroke_uvs,
+            stroke_triangles,
+            Vec::new(),
+        );
         self.apply_color();
     }
 

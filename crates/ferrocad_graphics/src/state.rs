@@ -533,6 +533,14 @@ pub struct StateSnapshot {
     /// `pickable` is false. A program packet is additionally skipped unconditionally, so
     /// its placeholder quad can never shadow the scene.
     pub pickable: bool,
+    /// Whether the draw is a screen-space **ribbon** that should use the unlit,
+    /// anti-aliased fragment stage (`fs_ribbon`).
+    ///
+    /// A ribbon's `uv.x` carries the lateral position (`0` at one edge, `1` at the
+    /// other), so the fragment shader feathers the silhouette with `smoothstep` instead
+    /// of relying on MSAA coverage alone. Normal surfaces leave this false and keep
+    /// `fs_main`.
+    pub ribbon: bool,
     /// The shader program that owns shading for this draw, if any.
     ///
     /// Scene-graph producers set this from an active `SoShaderProgram`; a renderer
@@ -552,6 +560,7 @@ impl Default for StateSnapshot {
             id: PickId::default(),
             depth: DepthState::default(),
             pickable: true,
+            ribbon: false,
             program: None,
         }
     }

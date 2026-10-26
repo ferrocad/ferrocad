@@ -86,6 +86,8 @@ pub struct PipelineKey {
     pub depth_compare: wgpu::CompareFunction,
     /// Whether a passing fragment writes depth.
     pub depth_write: bool,
+    /// Whether the draw uses the unlit, anti-aliased ribbon fragment stage.
+    pub ribbon: bool,
 }
 
 impl PipelineKey {
@@ -96,14 +98,16 @@ impl PipelineKey {
             topology: wgpu_topology(topology),
             depth_compare: compare_function(depth.effective_compare()),
             depth_write: depth.effective_write(),
+            ribbon: false,
         }
     }
 
     /// Whether the six base pipelines already draw this state (the default: compare
     /// `Less` and write). The overlay *view* additionally forces its own pair of
-    /// pipelines, which is unchanged pre-existing behaviour.
+    /// pipelines, which is unchanged pre-existing behaviour. A ribbon is never a base
+    /// pipeline, because the base fragment stage does not bound its coverage.
     pub fn is_base(&self) -> bool {
-        self.depth_compare == wgpu::CompareFunction::Less && self.depth_write
+        !self.ribbon && self.depth_compare == wgpu::CompareFunction::Less && self.depth_write
     }
 }
 
@@ -187,6 +191,7 @@ impl ScenePipelines {
                 depth_compare,
                 sample_count,
                 color_format,
+                "fs_main",
             )
         };
 
@@ -327,8 +332,10 @@ impl ScenePipelines {
         overlay: bool,
         topology: Topology,
         depth: &DepthState,
+        ribbon: bool,
     ) -> &wgpu::RenderPipeline {
-        let key = PipelineKey::new(overlay, topology, depth);
+        let mut key = PipelineKey::new(overlay, topology, depth);
+        key.ribbon = ribbon;
         if key.is_base() {
             return self.for_draw(overlay, topology);
         }
@@ -366,6 +373,7 @@ fn create_pipeline(
     depth_compare: wgpu::CompareFunction,
     sample_count: u32,
     color_format: wgpu::TextureFormat,
+    fragment_entry: &str,
 ) -> wgpu::RenderPipeline {
     let vertex_buffers = scene_vertex_layout();
     device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
@@ -395,7 +403,7 @@ fn create_pipeline(
         },
         fragment: Some(wgpu::FragmentState {
             module: shader,
-            entry_point: Some("fs_main"),
+            entry_point: Some(fragment_entry),
             compilation_options: Default::default(),
             targets: &[Some(wgpu::ColorTargetState {
                 format: color_format,
@@ -440,7 +448,7 @@ fn create_variant(
         device,
         layout,
         shader,
-        "ferrocad depth variant",
+        "ferrocad variant",
         key.topology,
         blend,
         bias,
@@ -448,6 +456,7 @@ fn create_variant(
         key.depth_compare,
         sample_count,
         color_format,
+        if key.ribbon { "fs_ribbon" } else { "fs_main" },
     )
 }
 
@@ -474,6 +483,21 @@ mod tests {
             wgpu::CompareFunction::Always,
             "the packet state, not the overlay flag, decides the compare"
         );
+    }
+
+    /// A ribbon is never a base pipeline: the base fragment stage is lit and has no
+    /// silhouette feather, so the key must select the `fs_ribbon` variant.
+    #[test]
+    fn a_ribbon_never_uses_a_base_pipeline() {
+        let default = DepthState::default();
+        let mut key = PipelineKey::new(false, Topology::Triangles, &default);
+        assert!(key.is_base());
+        key.ribbon = true;
+        assert!(!key.is_base());
+
+        // The ribbon key stays distinct from the same depth state without it.
+        let plain = PipelineKey::new(false, Topology::Triangles, &default);
+        assert_ne!(key, plain);
     }
 
     /// The pure key mapping `SoDepthBuffer` needs: `test FALSE` → `Always`, `write FALSE`

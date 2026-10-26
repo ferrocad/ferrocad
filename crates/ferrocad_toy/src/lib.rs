@@ -27,7 +27,7 @@ use ferrocad_geom::SelectionRef;
 use ferrocad_graphics::{Camera, screen_ribbon};
 use ferrocad_stage::gizmo::{GizmoStyle, MIN_HIT_RADIUS_PX};
 use ferrocad_stage::screen::{
-    camera_forward, point_segment_distance, project_device, push_ribbon, scale_for,
+    camera_forward, point_segment_distance, project_device, push_ribbon_uv, scale_for,
 };
 use ferrocad_stage::{DrawMode, InteractionCommit, Manipulator, ShapeItem, Stage};
 use ferrocad_stage::{GizmoMode, TransformGizmo};
@@ -93,13 +93,15 @@ impl HeightGrip {
             items: [
                 ShapeItem::new(TOY_GRIP_PICK_ID)
                     .with_draw_mode(DrawMode::Shaded)
-                    .with_selectable(false),
+                    .with_selectable(false)
+                    .with_ribbon_aa(),
                 ShapeItem::new(TOY_GRIP_PICK_ID + 1)
                     .with_draw_mode(DrawMode::Shaded)
                     .with_selectable(false)
                     .with_blended_surface()
                     .with_ghost_surface()
-                    .with_ghost_alpha(ghost_alpha),
+                    .with_ghost_alpha(ghost_alpha)
+                    .with_ribbon_aa(),
             ],
         }
     }
@@ -312,24 +314,33 @@ impl HeightGrip {
 
         let ribbons = |half: f64| {
             let mut positions = Vec::new();
+            let mut uvs = Vec::new();
             let mut triangles = Vec::new();
-            push_ribbon(
+            push_ribbon_uv(
                 &mut positions,
+                &mut uvs,
                 &mut triangles,
                 screen_ribbon(self.top, stem_end, half, forward),
             );
-            push_ribbon(
+            push_ribbon_uv(
                 &mut positions,
+                &mut uvs,
                 &mut triangles,
                 screen_ribbon(left, right, half, forward),
             );
-            (positions, triangles)
+            (positions, uvs, triangles)
         };
 
-        let (stroke_positions, stroke_triangles) = ribbons(stroke_half);
+        let (stroke_positions, stroke_uvs, stroke_triangles) = ribbons(stroke_half);
         if halo > 0.0 {
-            let (casing_positions, casing_triangles) = ribbons(casing_half);
-            self.items[0].set_shape(casing_positions, Vec::new(), casing_triangles, Vec::new());
+            let (casing_positions, casing_uvs, casing_triangles) = ribbons(casing_half);
+            self.items[0].set_shape_uv(
+                casing_positions,
+                Vec::new(),
+                casing_uvs,
+                casing_triangles,
+                Vec::new(),
+            );
         } else {
             self.items[0].set_shape(Vec::new(), Vec::new(), Vec::new(), Vec::new());
         }
@@ -346,7 +357,13 @@ impl HeightGrip {
                 ]
             })
             .collect();
-        self.items[1].set_shape(stroke_positions, Vec::new(), stroke_triangles, Vec::new());
+        self.items[1].set_shape_uv(
+            stroke_positions,
+            Vec::new(),
+            stroke_uvs,
+            stroke_triangles,
+            Vec::new(),
+        );
         self.apply_color();
     }
 

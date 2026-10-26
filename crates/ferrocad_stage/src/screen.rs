@@ -119,3 +119,32 @@ pub fn push_ribbon(
     }
     triangles.extend_from_slice(&[base, base + 1, base + 2, base, base + 2, base + 3]);
 }
+
+/// The lateral texture coordinate of each corner of a [`screen_ribbon`] quad.
+///
+/// The quad is `[a+side, b+side, b-side, a-side]`, so `x` is `1` on the `+side` edge
+/// and `0` on the `-side` edge; `y` runs along the segment. The anti-aliased ribbon
+/// fragment stage feathers the last screen pixel of each side from this coordinate.
+const RIBBON_UVS: [[f32; 2]; 4] = [[1.0, 0.0], [1.0, 1.0], [0.0, 1.0], [0.0, 0.0]];
+
+/// Append a ribbon quad **and** its lateral UVs, for the anti-aliased ribbon pass.
+pub fn push_ribbon_uv(
+    positions: &mut Vec<[f32; 3]>,
+    uvs: &mut Vec<[f32; 2]>,
+    triangles: &mut Vec<u32>,
+    quad: Option<[Vector3; 4]>,
+) {
+    let Some(quad) = quad else {
+        return;
+    };
+    let base = positions.len() as u32;
+    for point in quad {
+        positions.push(to3(point));
+    }
+    uvs.extend_from_slice(&RIBBON_UVS);
+    triangles.extend_from_slice(&[base, base + 1, base + 2, base, base + 2, base + 3]);
+}
+
+/// The UV a filled ribbon-end cap uses: the centre of the width, so the anti-aliasing
+/// feather leaves it at full coverage (`lateral == 0`).
+pub const RIBBON_UV_CENTRE: [f32; 2] = [0.5, 0.5];

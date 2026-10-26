@@ -1000,8 +1000,8 @@ mod tests {
         assert_eq!(state.gizmo, GizmoStyle::default());
         assert!(state.gizmo.enabled);
         assert_eq!(state.gizmo.backend, "ferrocad");
-        assert_eq!(state.gizmo.size, 80.0);
-        assert_eq!(state.gizmo.width, 1.5);
+        assert_eq!(state.gizmo.size, 110.0);
+        assert_eq!(state.gizmo.width, 2.0);
         assert_eq!(state.gizmo.opacity, 1.0);
         // The WCAG 2.2 AA defaults: a contrast halo, a non-colour hover cue, a 24 px
         // target and an occluded alpha that stays visibly behind a front handle.
@@ -1018,7 +1018,7 @@ mod tests {
                 "enabled": true, "backend": "ferrocad",
                 "active_color": "#38bdf8", "inactive_color": "#94a3b8",
                 "outline_color": "#0f172a",
-                "size": 80.0, "width": 1.5, "halo_width": 1.5,
+                "size": 110.0, "width": 2.0, "halo_width": 1.0,
                 "hover_scale": 1.5, "hit_radius_px": 12.0,
                 "opacity": 1.0,
                 "ghost_alpha": 0.2, "ring_snap_deg": 15.0, "show_readout": true

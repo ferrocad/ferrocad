@@ -48,9 +48,9 @@ ATTRIBUTES = {
     "active_color": "#38bdf8",
     "inactive_color": "#94a3b8",
     "outline_color": "#0f172a",
-    "size": 80.0,
-    "width": 1.5,
-    "halo_width": 1.5,
+    "size": 110.0,
+    "width": 2.0,
+    "halo_width": 1.0,
     "hover_scale": 1.5,
     "hit_radius_px": 12.0,
     "opacity": 1.0,
@@ -156,9 +156,9 @@ class GizmoApiTests(unittest.TestCase):
         self.assertEqual(self.gizmo.active_color, "#38bdf8")
         self.assertEqual(self.gizmo.inactive_color, "#94a3b8")
         self.assertEqual(self.gizmo.outline_color, "#0f172a")
-        self.assertEqual(self.gizmo.size, 80.0)
-        self.assertEqual(self.gizmo.width, 1.5)
-        self.assertEqual(self.gizmo.halo_width, 1.5)
+        self.assertEqual(self.gizmo.size, 110.0)
+        self.assertEqual(self.gizmo.width, 2.0)
+        self.assertEqual(self.gizmo.halo_width, 1.0)
         self.assertEqual(self.gizmo.hover_scale, 1.5)
         self.assertEqual(self.gizmo.hit_radius_px, 12.0)
         self.assertEqual(self.gizmo.opacity, 1.0)
@@ -288,9 +288,9 @@ class GizmoApiTests(unittest.TestCase):
                 with self.assertRaises(ValueError, msg="%s=%r" % (name, value)):
                     setattr(self.gizmo, name, value)
 
-        self.assertEqual(self.gizmo.size, 80.0)
-        self.assertEqual(self.gizmo.width, 1.5)
-        self.assertEqual(self.gizmo.halo_width, 1.5)
+        self.assertEqual(self.gizmo.size, 110.0)
+        self.assertEqual(self.gizmo.width, 2.0)
+        self.assertEqual(self.gizmo.halo_width, 1.0)
         self.assertEqual(self.gizmo.hover_scale, 1.5)
         self.assertEqual(self.gizmo.hit_radius_px, 12.0)
         self.assertEqual(self.gizmo.opacity, 1.0)
@@ -302,9 +302,9 @@ class GizmoApiTests(unittest.TestCase):
         self.gizmo.active_color = "#38bdf8"
         self.gizmo.inactive_color = "#94a3b8"
         self.gizmo.outline_color = "#0f172a"
-        self.gizmo.size = 80.0
-        self.gizmo.width = 1.5
-        self.gizmo.halo_width = 1.5
+        self.gizmo.size = 110.0
+        self.gizmo.width = 2.0
+        self.gizmo.halo_width = 1.0
         self.gizmo.hover_scale = 1.5
         self.gizmo.hit_radius_px = 12.0
         self.gizmo.opacity = 1.0
@@ -322,9 +322,9 @@ class GizmoApiTests(unittest.TestCase):
                         "active_color": "#38bdf8",
                         "inactive_color": "#94a3b8",
                         "outline_color": "#0f172a",
-                        "size": 80.0,
-                        "width": 1.5,
-                        "halo_width": 1.5,
+                        "size": 110.0,
+                        "width": 2.0,
+                        "halo_width": 1.0,
                         "hover_scale": 1.5,
                         "hit_radius_px": 12.0,
                         "opacity": 1.0,
@@ -391,7 +391,7 @@ class GizmoApiTests(unittest.TestCase):
         )
         self.assertTrue(self.gizmo.enabled)
         self.assertEqual(self.gizmo.active_color, "#38bdf8")
-        self.assertEqual(self.gizmo.size, 80.0)
+        self.assertEqual(self.gizmo.size, 110.0)
         axis.RemBool("enabled")
 
 
@@ -504,7 +504,7 @@ class GizmoOverlayModTests(unittest.TestCase):
         by_name = {row["name"]: row for row in schema}
         self.assertEqual(by_name["enabled"]["value"], "True")
         self.assertEqual(by_name["active_color"]["value"], "#38bdf8")
-        self.assertEqual(by_name["size"]["value"], "80.0")
+        self.assertEqual(by_name["size"]["value"], "110.0")
         self.assertEqual(by_name["outline_color"]["value"], "#0f172a")
         self.assertEqual(by_name["hit_radius_px"]["value"], "12.0")
         self.assertEqual(by_name["ghost_alpha"]["value"], "0.2")
@@ -598,7 +598,7 @@ class GizmoOverlayModTests(unittest.TestCase):
         self.assertEqual(self.gizmo.active_color, "#38bdf8")
         with self.assertRaises(ValueError):
             spec["on_accept"]({"size": 401.0})
-        self.assertEqual(self.gizmo.size, 80.0)
+        self.assertEqual(self.gizmo.size, 110.0)
 
     def test_the_fallback_dialog_reports_without_the_gizmo_api(self):
         FerroCADGui.unregisterProvider("gizmo", "ferrocad")
@@ -780,7 +780,7 @@ class GizmoOverlayShaderModTests(unittest.TestCase):
         schema = [row for row in rows[1:] if row["name"] != "reset"]
         self.assertEqual([row["name"] for row in schema], list(ATTRIBUTES))
         self.assertEqual(
-            {row["name"]: row["value"] for row in schema}["size"], "80.0"
+            {row["name"]: row["value"] for row in schema}["size"], "110.0"
         )
 
     def test_reloading_init_gui_does_not_double_register(self):
@@ -912,7 +912,7 @@ class GizmoOverlayShaderModTests(unittest.TestCase):
         self.assertEqual(self.gizmo.active_color, "#38bdf8")
         with self.assertRaises(ValueError):
             spec["on_accept"]({"size": 401.0})
-        self.assertEqual(self.gizmo.size, 80.0)
+        self.assertEqual(self.gizmo.size, 110.0)
 
     def test_the_fallback_dialog_reports_without_the_gizmo_api(self):
         clear_providers()

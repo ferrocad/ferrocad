@@ -452,6 +452,7 @@ mod tests {
                 id: PickId(0),
                 depth: Default::default(),
                 pickable: true,
+                ribbon: false,
                 program: None,
             },
         }

@@ -41,9 +41,9 @@ DEFAULT_INACTIVE_COLOR = "#94a3b8"
 #: accent and the slate tokens are close in luminance to a mid-blue model, so a
 #: dark outline is what keeps a handle readable over it.
 DEFAULT_OUTLINE_COLOR = "#0f172a"
-DEFAULT_HALO_WIDTH = 1.5
-DEFAULT_SIZE = 80.0
-DEFAULT_WIDTH = 1.5
+DEFAULT_HALO_WIDTH = 1.0
+DEFAULT_SIZE = 110.0
+DEFAULT_WIDTH = 2.0
 #: The hover cue is a wider stroke as well as the accent colour (WCAG 1.4.1: use of
 #: colour alone is not enough).
 DEFAULT_HOVER_SCALE = 1.5

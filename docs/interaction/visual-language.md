@@ -199,17 +199,18 @@ target until it lands.
 
 ## 3. Stroke weight and occlusion
 
-WebGPU lines and points are **1 px**. Anything that must read as 1.5 px is a
-**screen-space ribbon** (triangles), which is already how the gizmo, the dress-up arc
-and the navicube glow work. There is therefore no "line width" knob; weight is carried
-by **opacity and pairing**, per the spec.
+WebGPU lines and points are **1 px**. Anything wider is a **screen-space ribbon**
+(triangles), which is how the gizmo (2 px by default), the dress-up arc and the
+navicube glow work. A ribbon carries a lateral UV and is drawn by the unlit
+`fs_ribbon` stage, which feathers its last pixel so the silhouette is smooth at any
+zoom; there is no "line width" knob, weight is carried by **opacity and pairing**.
 
 | Class | How | State |
 | --- | --- | --- |
 | Front-facing primary edges | 1 px `Lines`, front-edge token | ✅ `theme::EDGE_FRONT` |
 | Occluded / back edges | 1 px `Lines`, ghost token | ✅ depth-`Greater`, no write, `theme::EDGE_OCCLUDED` |
 | Machined bevels | twin parallel lines, `0.08` model units apart | ▢ geometry-level, deferred (V4) |
-| Gizmo / manipulator strokes | 1.5 px ribbons + `outline` halo; visible 100 %, occluded 20 % | ✅ |
+| Gizmo / manipulator strokes | 2 px ribbons + `outline` halo; the triad is Always-on-top (no ghost), manipulators 100 % / 20 % occluded | ✅ |
 | Dashed rays | runs of short segments | ✓ technique, used by the grid spec |
 
 **The occlusion gap is closed.** The contract was already `DepthState`
@@ -282,7 +283,7 @@ DRAG      solid handle, amber/cyan hull, tabular pill follows
 | Hover in / out | 80 / 120 ms | out is slower, so a pass-over does not strobe |
 
 **Bloom and grab share one radius.** Both default to **12 px**, now expressed as the
-style's `hit_radius_px` (floored at 12 so a 1.5 px stem still has a 24 × 24 px target,
+style's `hit_radius_px` (floored at 12 so a 2 px stem still has a 24 × 24 px target,
 WCAG 2.5.8). A larger grab radius (20 px) is available in the settings but is **not** the
 default: it reaches into the triad's interior between the stems and shrinks the *empty
 centre passes through to the scene* deadzone. The bloom must match the grab radius,

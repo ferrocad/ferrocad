@@ -307,24 +307,24 @@ class AppearancePresetTests(unittest.TestCase):
     def test_the_toy_preset_contrasts_with_the_blue_object(self):
         module = self.use_edition("ferrocad_toy")
         preset = module.APPEARANCE_PRESETS["gizmo"]
-        self.assertEqual(preset["active_color"], "#ffd9a3")
-        self.assertEqual(preset["inactive_color"], "#b08f6f")
+        self.assertEqual(preset["active_color"], "#fbbf24")
+        self.assertEqual(preset["inactive_color"], "#e2e8f0")
 
         result = self.install()
         self.assertTrue(result["ok"], result)
-        self.assertEqual(FerroCAD.Gizmo.active_color, "#ffd9a3")
-        self.assertEqual(FerroCAD.Gizmo.inactive_color, "#b08f6f")
+        self.assertEqual(FerroCAD.Gizmo.active_color, "#fbbf24")
+        self.assertEqual(FerroCAD.Gizmo.inactive_color, "#e2e8f0")
         self.assertEqual(FerroCAD.Axis.color_z, "#fbbf24")
         self.assertEqual(FerroCAD.Grid.color, "#b8a894")
 
         object_y = _luminance(OBJECT_LINEAR)
-        active_y = _luminance("#ffd9a3")
-        inactive_y = _luminance("#b08f6f")
+        active_y = _luminance("#fbbf24")
+        inactive_y = _luminance("#e2e8f0")
         default_y = _luminance(_gizmo.DEFAULT_ACTIVE_COLOR)
         background_y = _luminance(BACKGROUND_HEX)
 
-        # The point of the preset: a warmer hue and a larger luminance gap than
-        # the shared cyan, while staying clearly visible on the dark canvas.
+        # The point of the preset: a warm active hue and a light idle ink, so the
+        # stroke separates from the slab by hue and by lightness.
         object_hue = _hue(
             "".join("%02x" % round(_srgb(value) * 255) for value in OBJECT_LINEAR)
         )
@@ -339,22 +339,27 @@ class AppearancePresetTests(unittest.TestCase):
             "the toy active handle is on the opposite side of the hue wheel",
         )
         self.assertGreater(active_y, default_y)
-        self.assertGreater(
-            _contrast(active_y, object_y),
-            _contrast(default_y, object_y),
-        )
         self.assertGreater(_contrast(active_y, background_y), 10.0)
-        self.assertGreater(_contrast(inactive_y, background_y), 5.0)
-        self.assertGreater(active_y, inactive_y, "active reads above inactive")
+        self.assertGreater(_contrast(inactive_y, background_y), 12.0)
+        self.assertGreater(
+            inactive_y, active_y, "the idle handle is the lightest ink"
+        )
+        self.assertGreater(
+            _hue_distance(
+                _hue(preset["active_color"]), _hue(preset["inactive_color"])
+            ),
+            120,
+            "active and idle also differ by hue",
+        )
         self.assertLess(_hue(preset["active_color"]), 60.0, "warm, not magenta")
-        self.assertLess(_hue(preset["inactive_color"]), 60.0)
         self.assertLess(_hue("#b8a894"), 60.0)
 
-        # The shared halo is what carries SC 1.4.11 over the slab: both the
-        # outline/object and outline/stroke boundaries clear 3:1.
+        # The shared halo is what carries SC 1.4.11 over the slab: the
+        # outline/object and outline/stroke boundaries all clear 3:1.
         outline_y = _luminance(_gizmo.DEFAULT_OUTLINE_COLOR)
         self.assertGreaterEqual(_contrast(outline_y, object_y), 3.0)
         self.assertGreaterEqual(_contrast(outline_y, active_y), 3.0)
+        self.assertGreaterEqual(_contrast(outline_y, inactive_y), 3.0)
 
     def test_the_parametric_preset_pins_the_neutral_look(self):
         try:

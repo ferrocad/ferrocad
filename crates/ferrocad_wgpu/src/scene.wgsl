@@ -70,3 +70,24 @@ fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
     let lit = base * (ambient + (1.0 - ambient) * diffuse);
     return vec4<f32>(lit, albedo.a);
 }
+
+// A screen-space control ribbon: unlit, and feathered over its last screen pixel.
+//
+// `uv.x` is the lateral coordinate across the quad (0 at one edge, 1 at the other), so
+// `fwidth(uv.x)` is exactly one pixel in uv units whatever the ribbon's width. That
+// turns the hard triangle-quad staircase into a smooth vector edge without a texture
+// or a per-draw width uniform. A vertex that leaves `uv.x` at 0.5 (the filled
+// arrowhead) gets full coverage everywhere.
+@fragment
+fn fs_ribbon(input: VertexOutput) -> @location(0) vec4<f32> {
+    // `fwidth(uv.x)` is one screen pixel in uv units whatever the ribbon's width, so
+    // convert both the half-width and the fragment's distance to pixels and feather a
+    // single pixel around the geometric edge. Full coverage is kept for any fragment
+    // whose centre is at least half a pixel inside the edge.
+    let fw = max(fwidth(input.uv.x), 1e-6);
+    let half_width = 0.5 / fw;
+    let distance = abs(input.uv.x - 0.5) / fw;
+    let coverage = 1.0 - smoothstep(half_width - 0.5, half_width + 0.5, distance);
+    let ink = globals.color * input.color;
+    return vec4<f32>(ink.rgb, ink.a * coverage);
+}

@@ -72,6 +72,20 @@ pub const BLENDED_DEPTH: DepthState = DepthState {
     compare: DepthCompare::Less,
 };
 
+/// A manipulator overlay's depth state: draw **on top of the scene**, write no depth.
+///
+/// A gizmo is a control, not scene geometry. When its origin sits inside or on the model
+/// (the usual case for an object-origin triad), a `Less` test rejects the whole foreground
+/// pass and leaves only the [`GHOST_DEPTH`] pass at `ghost_alpha` seeing through, which
+/// reads as a faint watermark. `Always` keeps the handles fully legible; the analytic hit
+/// test, not the depth buffer, is what keeps clicks in the empty interior passing through.
+/// The non-default state also selects the renderer's blended variant, so `opacity` works.
+pub const OVERLAY_DEPTH: DepthState = DepthState {
+    test: true,
+    write: false,
+    compare: DepthCompare::Always,
+};
+
 /// How much of an overlay's ink an occluded ghost pass keeps (35%).
 pub const GHOST_SURFACE_ALPHA: f32 = 0.35;
 
@@ -128,10 +142,20 @@ pub struct ShapeItem {
     /// The surface pass's depth state. The opaque default writes depth; a translucent
     /// gizmo plane or ribbon uses [`BLENDED_DEPTH`].
     surface_depth: DepthState,
+    /// The wire pass's depth state. It is normally the opaque default; a control overlay
+    /// uses [`OVERLAY_DEPTH`] so its rim cannot be swallowed by the body it marks.
+    wire_depth: DepthState,
     edge_width: f32,
     selectable: bool,
     positions: Vec<[f32; 3]>,
     normals: Vec<[f32; 3]>,
+    /// Per-position texture coordinates; empty means `[0, 0]` everywhere.
+    ///
+    /// A screen-space ribbon puts its lateral coordinate in `x` (`0` at one edge,
+    /// `1` at the other) so the `fs_ribbon` stage can feather the silhouette.
+    uvs: Vec<[f32; 2]>,
+    /// Whether the surface uses the unlit, anti-aliased ribbon fragment stage.
+    ribbon_aa: bool,
     triangles: Vec<u32>,
     edges: Vec<u32>,
     /// The sub-element id of each position ([`ferrocad_graphics::Vertex::part_idx`]);
@@ -178,10 +202,13 @@ impl ShapeItem {
             ghost_surface: false,
             ghost_alpha: GHOST_SURFACE_ALPHA,
             surface_depth: DepthState::default(),
+            wire_depth: DepthState::default(),
             edge_width: 1.0,
             selectable: true,
             positions: Vec::new(),
             normals: Vec::new(),
+            uvs: Vec::new(),
+            ribbon_aa: false,
             triangles: Vec::new(),
             edges: Vec::new(),
             parts: Vec::new(),
@@ -232,8 +259,36 @@ impl ShapeItem {
         edges: Vec<u32>,
         parts: Vec<u32>,
     ) {
+        self.set_mesh_uv(positions, normals, Vec::new(), triangles, edges, parts);
+    }
+
+    /// Replace the tessellation with per-vertex texture coordinates.
+    ///
+    /// `uvs` is indexed by position; an empty list means `[0, 0]` everywhere. A ribbon
+    /// needs this to carry its lateral coordinate to the anti-aliasing fragment stage.
+    pub fn set_shape_uv(
+        &mut self,
+        positions: Vec<[f32; 3]>,
+        normals: Vec<[f32; 3]>,
+        uvs: Vec<[f32; 2]>,
+        triangles: Vec<u32>,
+        edges: Vec<u32>,
+    ) {
+        self.set_mesh_uv(positions, normals, uvs, triangles, edges, Vec::new());
+    }
+
+    fn set_mesh_uv(
+        &mut self,
+        positions: Vec<[f32; 3]>,
+        normals: Vec<[f32; 3]>,
+        uvs: Vec<[f32; 2]>,
+        triangles: Vec<u32>,
+        edges: Vec<u32>,
+        parts: Vec<u32>,
+    ) {
         self.positions = positions;
         self.normals = normals;
+        self.uvs = uvs;
         self.triangles = triangles;
         self.edges = edges;
         self.parts = parts;
@@ -425,6 +480,17 @@ impl ShapeItem {
         self.ghost_surface
     }
 
+    /// Use the unlit, anti-aliased ribbon fragment stage for this item's surface.
+    pub fn with_ribbon_aa(mut self) -> Self {
+        self.ribbon_aa = true;
+        self
+    }
+
+    /// Whether the surface uses the unlit, anti-aliased ribbon fragment stage.
+    pub fn ribbon_aa(&self) -> bool {
+        self.ribbon_aa
+    }
+
     /// Make the surface pass translucent (test on, write off, [`BLENDED_DEPTH`]).
     pub fn with_blended_surface(mut self) -> Self {
         self.surface_depth = BLENDED_DEPTH;
@@ -434,6 +500,12 @@ impl ShapeItem {
     /// Set the surface pass's depth state explicitly.
     pub fn with_surface_depth(mut self, depth: DepthState) -> Self {
         self.surface_depth = depth;
+        self
+    }
+
+    /// Set the wire pass's depth state explicitly.
+    pub fn with_wire_depth(mut self, depth: DepthState) -> Self {
+        self.wire_depth = depth;
         self
     }
 
@@ -526,6 +598,16 @@ impl ShapeItem {
     /// The surface colour.
     pub fn surface_color(&self) -> [f32; 4] {
         self.surface_color
+    }
+
+    /// The surface pass's depth state.
+    pub fn surface_depth(&self) -> DepthState {
+        self.surface_depth
+    }
+
+    /// The wire pass's depth state.
+    pub fn wire_depth(&self) -> DepthState {
+        self.wire_depth
     }
 
     /// The edge colour.
@@ -684,7 +766,7 @@ impl ShapeItem {
         }
         if self.draw_mode.has_edges() {
             if let Some(geometry) = self.wire_geometry() {
-                queue.packets.push(self.packet(
+                queue.packets.push(self.packet_with_depth(
                     self.wire_mesh,
                     Topology::Lines,
                     geometry.clone(),
@@ -692,6 +774,8 @@ impl ShapeItem {
                     self.edge_color,
                     WIRE_DEPTH_BIAS,
                     self.generation,
+                    self.wire_depth,
+                    true,
                 ));
                 if self.ghost_edges {
                     // Pass only where the solid already wrote a nearer depth: the
@@ -834,6 +918,7 @@ impl ShapeItem {
                 id: self.pick_id(),
                 depth,
                 pickable,
+                ribbon: self.ribbon_aa,
                 program: self.program.clone(),
             },
         }
@@ -854,7 +939,7 @@ impl ShapeItem {
                 .map(|((index, position), normal)| Vertex {
                     position: *position,
                     normal: *normal,
-                    uv: [0.0, 0.0],
+                    uv: self.uvs.get(index).copied().unwrap_or([0.0, 0.0]),
                     part_idx: self.parts.get(index).copied().unwrap_or(0),
                     color: [1.0, 1.0, 1.0, 1.0],
                 })
@@ -864,7 +949,12 @@ impl ShapeItem {
                 indices: self.triangles.clone(),
             })
         } else {
-            Some(flat_surface(&self.positions, &self.triangles, &self.parts))
+            Some(flat_surface(
+                &self.positions,
+                &self.uvs,
+                &self.triangles,
+                &self.parts,
+            ))
         }
     }
 
@@ -940,7 +1030,12 @@ impl ShapeItem {
         if selected.is_empty() {
             return None;
         }
-        Some(flat_surface(&self.positions, &selected, &self.parts))
+        Some(flat_surface(
+            &self.positions,
+            &self.uvs,
+            &selected,
+            &self.parts,
+        ))
     }
 
     /// The highlighted edge segments.
@@ -1001,7 +1096,12 @@ fn ghosted(color: [f32; 4], alpha: f32) -> [f32; 4] {
     [color[0], color[1], color[2], color[3] * alpha]
 }
 
-fn flat_surface(positions: &[[f32; 3]], triangles: &[u32], parts: &[u32]) -> Geometry {
+fn flat_surface(
+    positions: &[[f32; 3]],
+    uvs: &[[f32; 2]],
+    triangles: &[u32],
+    parts: &[u32],
+) -> Geometry {
     let mut vertices = Vec::with_capacity(triangles.len());
     let mut indices = Vec::with_capacity(triangles.len());
     for tri in triangles.chunks_exact(3) {
@@ -1021,7 +1121,7 @@ fn flat_surface(positions: &[[f32; 3]], triangles: &[u32], parts: &[u32]) -> Geo
             vertices.push(Vertex {
                 position: *position,
                 normal,
-                uv: [0.0, 0.0],
+                uv: uvs.get(index as usize).copied().unwrap_or([0.0, 0.0]),
                 part_idx: parts.get(index as usize).copied().unwrap_or(0),
                 color: [1.0, 1.0, 1.0, 1.0],
             });

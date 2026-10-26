@@ -1,6 +1,6 @@
 //! End-to-end: the **Part edition's** dress-up arc, through the generic registry.
 //!
-//! This is the real edition: `Part` and `ferrocad` share one image (one core), the app
+//! This is the real edition: `Part` and `ferrocad` share one process (one core), the app
 //! script registers the display and interaction providers, and the manipulator is the
 //! one `main` contributes. It needs OCCT.
 //!
@@ -31,9 +31,9 @@ static BOOT: Once = Once::new();
 
 fn boot() {
     BOOT.call_once(|| {
-        // The edition registers the combined image's four modules; the test boots
-        // the same image so Part and the shell share one core.
-        ferrocad_image_py::register_builtins();
+        // The edition registers the combined extension's four modules; the test boots
+        // the same module set so Part and the shell share one core.
+        ferrocad_combined_py::register_builtins();
         python::configure("ferrocad_parametric", &[], &[], false);
     });
     python::bootstrap().expect("boot the edition");

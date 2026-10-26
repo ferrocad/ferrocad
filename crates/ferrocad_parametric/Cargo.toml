@@ -25,9 +25,9 @@ path = "src/main.rs"
 
 [dependencies]
 ferrocad.workspace = true
-# The combined App/Part/Mesh/MeshPart image: registering its built-ins is what
+# The combined App/Part/Mesh/MeshPart extension: registering its built-ins is what
 # puts `Part`, `Mesh` and `MeshPart` in this edition's embedded interpreter.
-ferrocad_image_py.workspace = true
+ferrocad_combined_py.workspace = true
 # The Part workbench's manipulator (the edge dress-up arc), contributed to the shell.
 ferrocad_part_gui.workspace = true
 pyo3 = { version = "0.25", features = ["auto-initialize"] }

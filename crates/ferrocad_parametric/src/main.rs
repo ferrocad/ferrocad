@@ -1,7 +1,7 @@
 //! FerroCAD: Parametric — the base app plus the Part workbench.
 //!
 //! The edition's whole job is composition: it links [`ferrocad_part_py`] (which
-//! links OCCT), registers `Part` in the *same image* as the core bindings, names its
+//! links OCCT), registers `Part` in the *same process* as the core bindings, names its
 //! own app script (`ferrocad_parametric`) — which registers the Part display and
 //! interaction providers — and adds the Part **manipulators** (the edge dress-up arc
 //! and the face push/pull stem) to the base contributions. Then it delegates to the
@@ -31,11 +31,11 @@
 
 fn main() {
     // Register the workbench modules as built-ins, before the interpreter
-    // initialises. All of them must share this image: `MeshPart` builds its wires
+    // initialises. All of them must share this process: `MeshPart` builds its wires
     // through `Part.makePolygon`, and `Mesh::Feature` lives in the same document
-    // registry as the Part objects. The combined image crate owns that list, so
+    // registry as the Part objects. The combined-extension crate owns that list, so
     // this edition and the packaged extension cannot drift apart.
-    ferrocad_image_py::register_builtins();
+    ferrocad_combined_py::register_builtins();
 
     // Editions parse their own flags, so the base app's `--check-init` branch does
     // not reach them. Run the same boot here, then import the edition's app script:

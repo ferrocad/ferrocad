@@ -179,31 +179,31 @@ from_python)`. Without it, `obj.Shape` reads as `None`; with it, it round-trips 
 `Part.Shape`. This is the same split as upstream, where the value's Python representation
 lives in the module that owns the property type.
 
-**Why one image.** The registry is a process-global `OnceLock`, like
+**Why one extension.** The registry is a process-global `OnceLock`, like
 `ferrocad_core::application`. Two separate extension modules (`.so` files) each statically
 link their own copy of that state, so a standalone `Part.abi3.so` would not see the
-documents `import FreeCAD` created. Part must therefore be linked into the same image as
-the core bindings. That image is
-[`crates/ferrocad_image_py`](../../crates/ferrocad_image_py/src/lib.rs):
+documents `import FreeCAD` created. Part must therefore be linked into the same extension as
+the core bindings. That extension is
+[`crates/ferrocad_combined_py`](../../crates/ferrocad_combined_py/src/lib.rs):
 
-- the edition binaries call `ferrocad_image_py::register_builtins()` before the
+- the edition binaries call `ferrocad_combined_py::register_builtins()` before the
   interpreter starts (`append_to_inittab!` for `ferrocad`, `Part`, `Mesh` and
   `MeshPart`);
-- `python/ferrocad_image.abi3.so` runs the same four module inits in an already
+- `python/ferrocad_combined.abi3.so` runs the same four module inits in an already
   running host interpreter and publishes them in `sys.modules`;
 - `python/Part.py`, `python/Mesh.py` and `python/MeshPart.py` are one-line shims
   that import that extension, so a plain `import Part` resolves even when the host
   has nothing else loaded;
-- `python/FreeCAD/__init__.py` imports the image first when it is present, so the
+- `python/FreeCAD/__init__.py` imports the extension first when it is present, so the
   facade cannot pick up a standalone `ferrocad.abi3.so` with a second core.
 
 `ferrocad_part_py` and `ferrocad_mesh_py` still ship `rlib` + `cdylib`, but the
 standalone cdylibs are only useful for isolated experiments; mixing them with the
-combined image would create two cores. `ferrocad_toy` is deliberately kernel-free
-and registers none of these modules. The image needs OCCT (`./build.sh` builds it
-when `.occt/prefix` is present); `tests/test_python_image.py` is the packaged-image
+combined extension would create two cores. `ferrocad_toy` is deliberately kernel-free
+and registers none of these modules. The extension needs OCCT (`./build.sh` builds it
+when `.occt/prefix` is present); `tests/test_packaged_modules.py` is the packaged-module
 gate that proves the four modules share one registry, and the in-process equivalent
-is `crates/ferrocad_image_py/tests/shared_image.rs`.
+is `crates/ferrocad_combined_py/tests/combined.rs`.
 
 ## 7. Reuse by other workbenches
 

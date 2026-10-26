@@ -5,7 +5,7 @@ set -eu
 HERE=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 PYTHONPATH="$HERE/python${PYTHONPATH:+:$PYTHONPATH}"
 export PYTHONPATH
-# `python/ferrocad_image.abi3.so` links OCCT, which ships no RUNPATH. The app
+# `python/ferrocad_combined.abi3.so` links OCCT, which ships no RUNPATH. The app
 # launcher sets this from the packaged `lib/`; a development checkout uses the
 # prefix fetched into `.occt/`.
 if [ -d "$HERE/.occt/prefix/lib" ]; then

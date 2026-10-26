@@ -1,8 +1,8 @@
-//! One image: `ferrocad` + `Part` + `Mesh` + `MeshPart` sharing one core.
+//! One extension: `ferrocad` + `Part` + `Mesh` + `MeshPart` sharing one core.
 //!
 //! This is the composition the packaged app performs and the combined
-//! `ferrocad_image.abi3.so` reproduces for a host interpreter. It fails if any of
-//! the modules was linked (or published) as a second image: the document registry
+//! `ferrocad_combined.abi3.so` reproduces for a host interpreter. It fails if any of
+//! the modules was linked (or published) as a second extension: the document registry
 //! and the extension converters are process-wide, not per module.
 //!
 //! It needs OCCT (see `docs/architecture/occt-bundling.md`).
@@ -16,7 +16,7 @@ use pyo3::types::PyDict;
 /// (`auto-initialize` does that on the first `Python::with_gil`).
 fn boot() {
     static BOOT: std::sync::Once = std::sync::Once::new();
-    BOOT.call_once(ferrocad_image_py::register_builtins);
+    BOOT.call_once(ferrocad_combined_py::register_builtins);
 }
 
 fn run(py: Python<'_>, source: &str) {

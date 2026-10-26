@@ -1,16 +1,16 @@
-"""The packaged image: ``import Part`` / ``Mesh`` / ``FreeCAD`` from ``python/``.
+"""The packaged modules: ``import Part`` / ``Mesh`` / ``FreeCAD`` from ``python/``.
 
 The Rust conformance harness boots the modules as built-ins, which hides whether
-the *installed* image can be imported at all. This test starts a plain host
+the *installed* modules can be imported at all. This test starts a plain host
 CPython with ``PYTHONPATH=python`` — exactly what a user does — and checks that the
-shims reach the combined ``ferrocad_image`` extension and that the four modules
+shims reach the combined ``ferrocad_combined`` extension and that the four modules
 share one document registry.
 
-It skips when ``python/ferrocad_image.abi3.so`` has not been built. Build it with
+It skips when ``python/ferrocad_combined.abi3.so`` has not been built. Build it with
 ``./build.sh`` (needs OCCT) or, for a quick local check::
 
-    cargo build -p ferrocad_image_py --features ferrocad_image_py/extension-module
-    cp target/debug/libferrocad_image_py.so python/ferrocad_image.abi3.so
+    cargo build -p ferrocad_combined_py --features ferrocad_combined_py/extension-module
+    cp target/debug/libferrocad_combined_py.so python/ferrocad_combined.abi3.so
 """
 
 from __future__ import annotations
@@ -23,7 +23,7 @@ from pathlib import Path
 
 PYTHON_DIR = Path(__file__).resolve().parents[1] / "python"
 REPO = PYTHON_DIR.parent
-IMAGE = PYTHON_DIR / "ferrocad_image.abi3.so"
+IMAGE = PYTHON_DIR / "ferrocad_combined.abi3.so"
 # The extension links OCCT, which ships no RUNPATH. The app launcher sets this
 # from the packaged `lib/`; a development checkout has the prefix in `.occt/`.
 OCCT_LIB = REPO / ".occt" / "prefix" / "lib"
@@ -70,7 +70,7 @@ obj = doc.addObject("Part::Feature", "Box")
 assert obj.Shape.isNull(), "a fresh Part::Feature is null"
 
 # The shape assigned through `Part` must be the one `FreeCAD` reads back: this
-# only holds when both modules come from the same image.
+# only holds when both modules come from the same extension.
 obj.Shape = Part.makeBox(1, 1, 1)
 assert type(obj.Shape) is Part.Shape, type(obj.Shape)
 assert not obj.Shape.isNull()
@@ -98,9 +98,9 @@ def _run(source: str) -> subprocess.CompletedProcess[str]:
 
 
 @unittest.skipUnless(
-    IMAGE.is_file(), "ferrocad_image.abi3.so is not built; run ./build.sh"
+    IMAGE.is_file(), "ferrocad_combined.abi3.so is not built; run ./build.sh"
 )
-class PackagedImageTests(unittest.TestCase):
+class PackagedModulesTests(unittest.TestCase):
     def assert_ok(self, source: str) -> None:
         result = _run(source)
         self.assertEqual(

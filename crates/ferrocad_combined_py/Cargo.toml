@@ -1,21 +1,21 @@
-# The combined Python image: `ferrocad` + `Part` + `Mesh` + `MeshPart` in one `.so`.
+# The combined Python extension: `ferrocad` + `Part` + `Mesh` + `MeshPart` in one `.so`.
 #
 # Each extension module links its own copy of `ferrocad_core`, so two separate
 # `.so` files would each own a document registry: a `Part::Box` added through an
 # `App::Document` from one module would be unknown to the other. This crate exists
-# to be the one image that links all four, which is what `import Part`,
+# to be the one extension that links all four, which is what `import Part`,
 # `import Mesh` and `import FreeCAD` need in a host interpreter (the app binary
 # already registers the same four modules as built-ins).
 #
 # It builds an `rlib` (so the editions and tests can call
 # `register_builtins()` before the interpreter starts) and a `cdylib`
-# (`ferrocad_image.abi3.so`) whose module init publishes the four modules into
+# (`ferrocad_combined.abi3.so`) whose module init publishes the four modules into
 # `sys.modules`, for a host Python that is already running.
 #
 # It needs CPython headers and OCCT, so it is a workspace member but NOT in
 # `default-members`.
 [package]
-name = "ferrocad_image_py"
+name = "ferrocad_combined_py"
 version = "0.1.4"
 edition.workspace = true
 license.workspace = true
@@ -24,15 +24,15 @@ repository.workspace = true
 homepage.workspace = true
 rust-version.workspace = true
 publish = false
-description = "One Python image exposing ferrocad, Part, Mesh and MeshPart over a shared core"
+description = "One Python extension exposing ferrocad, Part, Mesh and MeshPart over a shared core"
 keywords = ["cad", "freecad", "mesh", "pyo3"]
 categories = ["science"]
-documentation = "https://docs.rs/ferrocad_image_py"
+documentation = "https://docs.rs/ferrocad_combined_py"
 
 [lib]
-name = "ferrocad_image_py"
+name = "ferrocad_combined_py"
 # `rlib` for the editions/tests that register the modules as built-ins; `cdylib`
-# for `python/ferrocad_image.abi3.so`, the combined host-interpreter image.
+# for `python/ferrocad_combined.abi3.so`, the combined host-interpreter extension.
 crate-type = ["cdylib", "rlib"]
 
 [dependencies]
@@ -44,9 +44,9 @@ ferrocad_py.workspace = true
 pyo3 = { version = "0.25", features = ["abi3-py311"] }
 
 [dev-dependencies]
-# `auto-initialize` lets the shared-image test embed CPython (as the app does).
+# `auto-initialize` lets the combined-extension test embed CPython (as the app does).
 pyo3 = { version = "0.25", features = ["abi3-py311", "auto-initialize"] }
 
 [features]
-# Enabled when producing `ferrocad_image.abi3.so`.
+# Enabled when producing `ferrocad_combined.abi3.so`.
 extension-module = ["pyo3/extension-module"]

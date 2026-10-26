@@ -2269,6 +2269,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "ferrocad_combined_py"
+version = "0.1.4"
+dependencies = [
+ "ferrocad_mesh_py",
+ "ferrocad_part_py",
+ "ferrocad_py",
+ "pyo3",
+]
+
+[[package]]
 name = "ferrocad_core"
 version = "0.1.4"
 dependencies = [
@@ -2336,16 +2346,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "ferrocad_image_py"
-version = "0.1.4"
-dependencies = [
- "ferrocad_mesh_py",
- "ferrocad_part_py",
- "ferrocad_py",
- "pyo3",
-]
-
-[[package]]
 name = "ferrocad_inventor"
 version = "0.1.4"
 dependencies = [
@@ -2404,10 +2404,10 @@ name = "ferrocad_parametric"
 version = "0.1.4"
 dependencies = [
  "ferrocad",
+ "ferrocad_combined_py",
  "ferrocad_geom",
  "ferrocad_gpui",
  "ferrocad_graphics",
- "ferrocad_image_py",
  "ferrocad_part_gui",
  "ferrocad_stage",
  "ferrocad_types",

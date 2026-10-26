@@ -16,7 +16,7 @@ members = [
     "crates/ferrocad_geom",
     "crates/ferrocad_mesh",
     "crates/ferrocad_mesh_py",
-    "crates/ferrocad_image_py",
+    "crates/ferrocad_combined_py",
     "crates/ferrocad_occt",
     "crates/ferrocad_part",
     "crates/ferrocad_part_gui",
@@ -106,7 +106,7 @@ ferrocad_core = { path = "crates/ferrocad_core", version = "0.1.4" }
 ferrocad_geom = { path = "crates/ferrocad_geom", version = "0.1.4" }
 ferrocad_mesh = { path = "crates/ferrocad_mesh", version = "0.1.4" }
 ferrocad_mesh_py = { path = "crates/ferrocad_mesh_py", version = "0.1.4" }
-ferrocad_image_py = { path = "crates/ferrocad_image_py", version = "0.1.4" }
+ferrocad_combined_py = { path = "crates/ferrocad_combined_py", version = "0.1.4" }
 ferrocad_occt = { path = "crates/ferrocad_occt", version = "0.1.4" }
 ferrocad_part = { path = "crates/ferrocad_part", version = "0.1.4" }
 ferrocad_part_py = { path = "crates/ferrocad_part_py", version = "0.1.4" }

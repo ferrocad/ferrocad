@@ -1,6 +1,6 @@
-"""The `Part` module, from the combined FerroCAD image.
+"""The `Part` module, from the combined FerroCAD extension.
 
-`ferrocad_image.abi3.so` links `ferrocad`, `Part`, `Mesh` and `MeshPart` into one
+`ferrocad_combined.abi3.so` links `ferrocad`, `Part`, `Mesh` and `MeshPart` into one
 extension, so they share a single document registry and a single geometry core.
 Its module init publishes the four real module objects in ``sys.modules``; this
 file only makes a plain ``import Part`` reach the published ``Part``.
@@ -13,10 +13,10 @@ binaries register the same four modules as built-ins and never reach this file.
 import sys
 
 try:
-    import ferrocad_image  # noqa: F401  publishes sys.modules["Part"]
+    import ferrocad_combined  # noqa: F401  publishes sys.modules["Part"]
 except ImportError as error:  # pragma: no cover - depends on the build
     raise ImportError(
-        "Part needs the combined ferrocad_image extension; run ./build.sh"
+        "Part needs the combined ferrocad_combined extension; run ./build.sh"
     ) from error
 
 sys.modules[__name__] = sys.modules["Part"]

@@ -30,11 +30,11 @@ import weakref
 
 
 def _part_is_builtin() -> bool:
-    """Whether `Part` is registered as a built-in (the app's edition image).
+    """Whether `Part` is registered as a built-in (the app's edition build).
 
     An edition links `ferrocad`, `Part`, `Mesh` and `MeshPart` into the binary, so
-    they already share one core and `FreeCAD` must not import a second image from
-    disk. A host interpreter has no built-in `Part`; `importlib` then finds the
+    they already share one core and `FreeCAD` must not import a second extension
+    from disk. A host interpreter has no built-in `Part`; `importlib` then finds the
     `python/Part.py` shim (or nothing at all), and the combined extension is the
     right source for all four modules.
     """
@@ -45,14 +45,14 @@ def _part_is_builtin() -> bool:
     return spec is not None and spec.loader is importlib.machinery.BuiltinImporter
 
 
-# Prefer the combined image when the host has no built-in Part. It publishes
+# Prefer the combined extension when the host has no built-in Part. It publishes
 # `ferrocad`, `Part`, `Mesh` and `MeshPart` from one `.so`, so they share a
 # document registry; a standalone `ferrocad.abi3.so` would give this facade a
-# second core. A kernel-free image has neither, so the import is optional.
+# second core. A kernel-free build has neither, so the import is optional.
 if not _part_is_builtin():
     try:
-        import ferrocad_image as _ferrocad_image  # noqa: F401
-        del _ferrocad_image
+        import ferrocad_combined as _ferrocad_combined  # noqa: F401
+        del _ferrocad_combined
     except ImportError:
         pass
 

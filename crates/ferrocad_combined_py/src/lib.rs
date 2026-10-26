@@ -1,10 +1,10 @@
-//! One Python image for the whole app surface.
+//! One Python extension for the whole app surface.
 //!
 //! FerroCAD's Python surface is four modules (`ferrocad`, `Part`, `Mesh`,
 //! `MeshPart`) over one process-wide core. Linking them as four separate
-//! extension modules does **not** produce that image: each `.so` statically links
-//! its own `ferrocad_core`, so `Part.makeBox` and `App.newDocument` would see
-//! different document registries and different kernel state.
+//! extension modules does **not** produce that surface: each `.so` statically
+//! links its own `ferrocad_core`, so `Part.makeBox` and `App.newDocument` would
+//! see different document registries and different kernel state.
 //!
 //! This crate is the composition root that links all four together:
 //!
@@ -13,11 +13,11 @@
 //!   test harness). It **must** run before the interpreter initialises.
 //! - [`install`] builds the same module objects and publishes them in
 //!   `sys.modules`, for a host Python that is already running. The standalone
-//!   `ferrocad_image` extension calls it during its own module init; the
+//!   `ferrocad_combined` extension calls it during its own module init; the
 //!   `python/Part.py`, `python/Mesh.py` and `python/MeshPart.py` shims import
 //!   that extension, so a plain `import Part` still resolves.
 //!
-//! Importing `ferrocad_image` therefore makes all four modules available and
+//! Importing `ferrocad_combined` therefore makes all four modules available and
 //! sharing one core. The shims never create a second copy: [`install`] marks the
 //! modules it publishes and is idempotent.
 
@@ -25,8 +25,8 @@ use pyo3::prelude::*;
 use pyo3::types::PyModule;
 
 /// Attribute set on every module [`install`] publishes, so a second call (from
-/// another shim, or `FreeCAD` after `Part`) does not rebuild the image.
-const MARKER: &str = "__ferrocad_shared_image__";
+/// another shim, or `FreeCAD` after `Part`) does not rebuild the extension.
+const MARKER: &str = "__ferrocad_combined__";
 
 /// Append the four modules to the interpreter's built-in table.
 ///
@@ -46,11 +46,11 @@ pub fn register_builtins() {
 /// Publish the four modules into `sys.modules` in an already-running interpreter.
 ///
 /// This is the runtime counterpart of [`register_builtins`], for a host that
-/// imports `ferrocad_image` instead of embedding the modules. It is idempotent:
+/// imports `ferrocad_combined` instead of embedding the modules. It is idempotent:
 /// modules this function published carry [`MARKER`] and are left alone.
 ///
 /// A module that was imported from a *different* `.so` (for example a standalone
-/// `Part.abi3.so`) is replaced, because it cannot share this image's core.
+/// `Part.abi3.so`) is replaced, because it cannot share this extension's core.
 pub fn install(py: Python<'_>) -> PyResult<()> {
     let modules = py.import("sys")?.getattr("modules")?;
     if installed(&modules) {
@@ -63,7 +63,7 @@ pub fn install(py: Python<'_>) -> PyResult<()> {
     Ok(())
 }
 
-/// Whether `sys.modules` already holds the image this crate published.
+/// Whether `sys.modules` already holds the extension this crate published.
 fn installed(modules: &Bound<'_, pyo3::types::PyAny>) -> bool {
     match modules.get_item("Part") {
         Ok(module) => module.getattr(MARKER).is_ok(),
@@ -85,14 +85,14 @@ fn publish(
     Ok(())
 }
 
-/// The standalone `ferrocad_image` extension.
+/// The standalone `ferrocad_combined` extension.
 ///
 /// Creating a module object and calling another `#[pymodule]` init is the only way
 /// to add top-level modules after CPython has started, which is the situation an
 /// imported extension module is in. All four are built by this same `.so`, so they
 /// share one core.
 #[pymodule]
-pub fn ferrocad_image(m: &Bound<'_, PyModule>) -> PyResult<()> {
+pub fn ferrocad_combined(m: &Bound<'_, PyModule>) -> PyResult<()> {
     let py = m.py();
     install(py)?;
     let modules = py.import("sys")?.getattr("modules")?;

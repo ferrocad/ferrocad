@@ -20,19 +20,19 @@
 //! fused before the cut, and a compound base is cut child by child.
 
 use cxx::UniquePtr;
+use ferrocad_curves::{Arc, Circle, EdgeCurve, Ellipse, Line, Vector3};
 use ferrocad_geom::{
     Capabilities, Continuity, ElementId, ElementKind, ElementRef, GeomError, GeometryBackend,
     History, Lineage, MapVersion, MassProperties, OpResult, OperandId, PrincipalProperties, Shape,
-    Tessellation, TessellationOptions, unsupported,
+    ShapeDistance, Tessellation, TessellationOptions, unsupported,
 };
-use ferrocad_curves::{Arc, Circle, EdgeCurve, Ellipse, Line, Vector3};
 use ferrocad_types::{Matrix4, Placement};
 use opencascade_sys as ffi;
 
 use std::collections::BTreeSet;
 
-use ffi::top_abs::TopAbs_ShapeEnum;
 use ffi::top_abs::TopAbs_Orientation;
+use ffi::top_abs::TopAbs_ShapeEnum;
 use ffi::top_tools::TopTools_IndexedMapOfShape;
 use ffi::top_tools::TopTools_ListOfShape;
 use ffi::topo_ds::TopoDS_Shape;
@@ -188,7 +188,8 @@ impl OcctBackend {
         };
         let cleaned_area = area(&cleaned);
         let original_area = area(shape);
-        if cleaned_area > 0.0 && (cleaned_area - original_area).abs() <= 1e-9 * original_area.max(1.0)
+        if cleaned_area > 0.0
+            && (cleaned_area - original_area).abs() <= 1e-9 * original_area.max(1.0)
         {
             cleaned
         } else {
@@ -268,7 +269,11 @@ impl OcctBackend {
     /// The flattened state of the B-spline interpolating `points`
     /// (`Part.BSplineCurve.interpolate`), read back from OCCT. `None` when the
     /// interpolation fails.
-    pub fn bspline_interpolated_state(&self, points: &[Vector3], periodic: bool) -> Option<Vec<f64>> {
+    pub fn bspline_interpolated_state(
+        &self,
+        points: &[Vector3],
+        periodic: bool,
+    ) -> Option<Vec<f64>> {
         let state = bridge::fc_bspline_probe_interpolated(&flatten(points), periodic);
         (!state.is_empty()).then_some(state)
     }
@@ -374,21 +379,8 @@ impl OcctBackend {
         nurbs: bool,
     ) -> Option<Vec<f64>> {
         let state = bridge::fc_conic_to_spline(
-            kind,
-            center.x,
-            center.y,
-            center.z,
-            normal.x,
-            normal.y,
-            normal.z,
-            x_axis.x,
-            x_axis.y,
-            x_axis.z,
-            major,
-            minor,
-            first,
-            last,
-            nurbs,
+            kind, center.x, center.y, center.z, normal.x, normal.y, normal.z, x_axis.x, x_axis.y,
+            x_axis.z, major, minor, first, last, nurbs,
         );
         (!state.is_empty()).then_some(state)
     }
@@ -397,11 +389,13 @@ impl OcctBackend {
 impl GeometryBackend for OcctBackend {
     fn make_box(&self, length: f64, width: f64, height: f64) -> Result<Shape, GeomError> {
         let origin = ffi::gp::new_point(0.0, 0.0, 0.0);
-        let mut make =
-            ffi::b_rep_prim_api::BRepPrimAPI_MakeBox_new(&origin, length, width, height);
+        let mut make = ffi::b_rep_prim_api::BRepPrimAPI_MakeBox_new(&origin, length, width, height);
         let shape = erase(make.pin_mut().Shape());
         if !make.IsDone() {
-            return Err(OcctError::NotDone { operation: "make_box" }.into());
+            return Err(OcctError::NotDone {
+                operation: "make_box",
+            }
+            .into());
         }
         Ok(shape)
     }
@@ -429,11 +423,8 @@ impl GeometryBackend for OcctBackend {
         let origin = point(center);
         let direction = ffi::gp::gp_Dir_new(0.0, 0.0, 1.0);
         let axis = ffi::gp::gp_Ax2_new(&origin, &direction);
-        let mut make = ffi::b_rep_prim_api::BRepPrimAPI_MakeSphere_new(
-            &axis,
-            radius,
-            std::f64::consts::TAU,
-        );
+        let mut make =
+            ffi::b_rep_prim_api::BRepPrimAPI_MakeSphere_new(&axis, radius, std::f64::consts::TAU);
         let shape = erase(make.pin_mut().Shape());
         if !make.IsDone() {
             return Err(OcctError::NotDone {
@@ -478,9 +469,14 @@ impl GeometryBackend for OcctBackend {
                 let mut make =
                     ffi::b_rep_builder_api::BRepBuilderAPI_MakeEdge_gp_Pnt_gp_Pnt(&start, &end);
                 if !make.IsDone() {
-                    return Err(OcctError::NotDone { operation: "make_edge" }.into());
+                    return Err(OcctError::NotDone {
+                        operation: "make_edge",
+                    }
+                    .into());
                 }
-                Ok(erase(ffi::topo_ds::cast_edge_to_shape(make.pin_mut().Edge())))
+                Ok(erase(ffi::topo_ds::cast_edge_to_shape(
+                    make.pin_mut().Edge(),
+                )))
             }
             EdgeCurve::Circle(circle) => edge_from_circle(circle),
             EdgeCurve::Arc(arc) => {
@@ -492,9 +488,8 @@ impl GeometryBackend for OcctBackend {
                 let start = point(arc.start());
                 let middle = point(arc.point_at(arc.first() + arc.sweep() / 2.0));
                 let end = point(arc.end());
-                let arc_maker = ffi::gc::GC_MakeArcOfCircle_point_point_point(
-                    &start, &middle, &end,
-                );
+                let arc_maker =
+                    ffi::gc::GC_MakeArcOfCircle_point_point_point(&start, &middle, &end);
                 let trimmed = ffi::gc::GC_MakeArcOfCircle_Value(&*arc_maker);
                 if trimmed.is_null() {
                     return Err(OcctError::NotDone {
@@ -511,7 +506,9 @@ impl GeometryBackend for OcctBackend {
                     }
                     .into());
                 }
-                Ok(erase(ffi::topo_ds::cast_edge_to_shape(make.pin_mut().Edge())))
+                Ok(erase(ffi::topo_ds::cast_edge_to_shape(
+                    make.pin_mut().Edge(),
+                )))
             }
             EdgeCurve::Line(_) => Err(unsupported("make_edge for an infinite line")),
             EdgeCurve::Ellipse(ellipse) => edge_from_ellipse(ellipse),
@@ -540,7 +537,9 @@ impl GeometryBackend for OcctBackend {
             }
             .into());
         }
-        Ok(erase(ffi::topo_ds::cast_wire_to_shape(make.pin_mut().Wire())))
+        Ok(erase(ffi::topo_ds::cast_wire_to_shape(
+            make.pin_mut().Wire(),
+        )))
     }
 
     fn make_vertex(&self, at: Vector3) -> Result<Shape, GeomError> {
@@ -562,11 +561,7 @@ impl GeometryBackend for OcctBackend {
         Some(Vector3::new(pnt.X(), pnt.Y(), pnt.Z()))
     }
 
-    fn make_bspline_edge(
-        &self,
-        points: &[Vector3],
-        periodic: bool,
-    ) -> Result<Shape, GeomError> {
+    fn make_bspline_edge(&self, points: &[Vector3], periodic: bool) -> Result<Shape, GeomError> {
         if points.len() < 2 {
             return Err(OcctError::InvalidInput {
                 what: "a B-spline needs at least two points",
@@ -578,8 +573,7 @@ impl GeometryBackend for OcctBackend {
             let value = point(*value);
             array.pin_mut().SetValue(index as i32 + 1, &value);
         }
-        let array =
-            ffi::t_col_gp::new_HandleTColgpHArray1OfPnt_from_TColgpHArray1OfPnt(array);
+        let array = ffi::t_col_gp::new_HandleTColgpHArray1OfPnt_from_TColgpHArray1OfPnt(array);
         let mut interpolate = ffi::geom_api::GeomAPI_Interpolate_new(&array, periodic, 1e-7);
         interpolate.pin_mut().Perform();
         let curve = ffi::geom_api::GeomAPI_Interpolate_Curve(&interpolate);
@@ -671,9 +665,9 @@ impl GeometryBackend for OcctBackend {
             // A hole must run opposite to the outer boundary; reverse it so the
             // builder subtracts its area instead of adding another outer boundary.
             let reversed = bridge::fc_reversed(inner);
-            let reversed = reversed.as_ref().ok_or(OcctError::InvalidInput {
-                what: "null wire",
-            })?;
+            let reversed = reversed
+                .as_ref()
+                .ok_or(OcctError::InvalidInput { what: "null wire" })?;
             make.pin_mut().add_wire(bridge::fc_shape_as_wire(reversed));
             if !make.IsDone() {
                 return Err(OcctError::NotDone {
@@ -899,9 +893,8 @@ impl GeometryBackend for OcctBackend {
                         let mut kept = Vec::new();
                         for index in 1..=map.Extent() {
                             let region = erase(map.FindKey(index));
-                            let inside_hole = odd
-                                .iter()
-                                .any(|&hole| contains(&faces[hole], &region));
+                            let inside_hole =
+                                odd.iter().any(|&hole| contains(&faces[hole], &region));
                             if !inside_hole {
                                 kept.push(region);
                             }
@@ -926,9 +919,8 @@ impl GeometryBackend for OcctBackend {
                         .filter(|&child| parent[child] == Some(node))
                         .map(|child| (area(&faces[child]), wires[child].clone()))
                         .collect();
-                    holes.sort_by(|a, b| {
-                        b.0.partial_cmp(&a.0).unwrap_or(std::cmp::Ordering::Equal)
-                    });
+                    holes
+                        .sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap_or(std::cmp::Ordering::Equal));
                     boundaries.extend(holes.into_iter().map(|(_, wire)| wire));
                     if let Ok(face) = self.make_face(&boundaries) {
                         built.push(face);
@@ -1033,11 +1025,7 @@ impl GeometryBackend for OcctBackend {
                 }
             }
             3 => Ok(EdgeCurve::Ellipse(Ellipse::with_axis(
-                origin,
-                direction,
-                x_axis,
-                major,
-                minor,
+                origin, direction, x_axis, major, minor,
             )?)),
             _ => Err(unsupported("curve_of: unsupported curve type")),
         }
@@ -1136,7 +1124,10 @@ impl GeometryBackend for OcctBackend {
             .ok_or(OcctError::InvalidInput { what: "null shape" })?;
         let mut op = ffi::b_rep_algo_api::BRepAlgoAPI_Common_new(sa, sb);
         if !op.IsDone() {
-            return Err(OcctError::NotDone { operation: "common" }.into());
+            return Err(OcctError::NotDone {
+                operation: "common",
+            }
+            .into());
         }
         let out_maps = sub_shape_maps(op.pin_mut().Shape());
         let history = build_history(
@@ -1215,9 +1206,8 @@ impl GeometryBackend for OcctBackend {
             }
             .into());
         }
-        let mut make = ffi::b_rep_builder_api::BRepBuilderAPI_MakeSolid_new(
-            bridge::fc_shape_as_shell(inner),
-        );
+        let mut make =
+            ffi::b_rep_builder_api::BRepBuilderAPI_MakeSolid_new(bridge::fc_shape_as_shell(inner));
         let shape = erase(make.pin_mut().Shape());
         if !make.IsDone() {
             return Err(OcctError::NotDone {
@@ -1343,9 +1333,9 @@ impl GeometryBackend for OcctBackend {
             .ok_or(OcctError::InvalidInput { what: "null spine" })?;
         let profile_occt = downcast(profile)?;
         let profile_guard = profile_occt.borrow();
-        let profile_inner = profile_guard
-            .as_ref()
-            .ok_or(OcctError::InvalidInput { what: "null profile" })?;
+        let profile_inner = profile_guard.as_ref().ok_or(OcctError::InvalidInput {
+            what: "null profile",
+        })?;
         let piped = bridge::fc_pipe(spine_inner, profile_inner, tolerance);
         let Some(piped) = piped.as_ref() else {
             return Err(OcctError::NotDone {
@@ -1539,9 +1529,8 @@ impl GeometryBackend for OcctBackend {
         if values.len() < 17 {
             return None;
         }
-        let axis = |offset: usize| {
-            Vector3::new(values[offset], values[offset + 1], values[offset + 2])
-        };
+        let axis =
+            |offset: usize| Vector3::new(values[offset], values[offset + 1], values[offset + 2]);
         Some(PrincipalProperties {
             symmetry_axis: values[0] != 0.0,
             symmetry_point: values[1] != 0.0,
@@ -1817,7 +1806,10 @@ impl GeometryBackend for OcctBackend {
             .as_ref()
             .ok_or(OcctError::InvalidInput { what: "null edge" })?;
         if !bridge::fc_is_edge(inner) {
-            return Err(OcctError::InvalidInput { what: "not an edge" }.into());
+            return Err(OcctError::InvalidInput {
+                what: "not an edge",
+            }
+            .into());
         }
         Ok(bridge::fc_edge_degenerated(inner))
     }
@@ -1834,7 +1826,10 @@ impl GeometryBackend for OcctBackend {
             .as_ref()
             .ok_or(OcctError::InvalidInput { what: "null face" })?;
         if !bridge::fc_is_edge(edge_inner) {
-            return Err(OcctError::InvalidInput { what: "not an edge" }.into());
+            return Err(OcctError::InvalidInput {
+                what: "not an edge",
+            }
+            .into());
         }
         if !bridge::fc_is_face(face_inner) {
             return Err(OcctError::InvalidInput { what: "not a face" }.into());
@@ -1849,7 +1844,10 @@ impl GeometryBackend for OcctBackend {
             .as_ref()
             .ok_or(OcctError::InvalidInput { what: "null edge" })?;
         if !bridge::fc_is_edge(inner) {
-            return Err(OcctError::InvalidInput { what: "not an edge" }.into());
+            return Err(OcctError::InvalidInput {
+                what: "not an edge",
+            }
+            .into());
         }
         let (mut first, mut last) = (0.0, 0.0);
         bridge::fc_edge_range(inner, &mut first, &mut last);
@@ -1870,6 +1868,101 @@ impl GeometryBackend for OcctBackend {
         Ok((u0, u1, v0, v1))
     }
 
+    fn dist_to_shape(&self, first: &Shape, second: &Shape) -> Result<ShapeDistance, GeomError> {
+        let first_occt = downcast(first)?;
+        let second_occt = downcast(second)?;
+        let first_guard = first_occt.borrow();
+        let second_guard = second_occt.borrow();
+        let first_inner = first_guard
+            .as_ref()
+            .ok_or(OcctError::InvalidInput { what: "null shape" })?;
+        let second_inner = second_guard
+            .as_ref()
+            .ok_or(OcctError::InvalidInput { what: "null shape" })?;
+        let (mut distance, mut first_x, mut first_y, mut first_z) = (0.0, 0.0, 0.0, 0.0);
+        let (mut second_x, mut second_y, mut second_z) = (0.0, 0.0, 0.0);
+        if !bridge::fc_dist_to_shape(
+            first_inner,
+            second_inner,
+            &mut distance,
+            &mut first_x,
+            &mut first_y,
+            &mut first_z,
+            &mut second_x,
+            &mut second_y,
+            &mut second_z,
+        ) {
+            return Err(OcctError::NotDone {
+                operation: "dist_to_shape",
+            }
+            .into());
+        }
+        Ok(ShapeDistance {
+            distance,
+            first: Vector3::new(first_x, first_y, first_z),
+            second: Vector3::new(second_x, second_y, second_z),
+        })
+    }
+
+    fn is_closed(&self, shape: &Shape) -> Result<bool, GeomError> {
+        let occt = downcast(shape)?;
+        let guard = occt.borrow();
+        let inner = guard
+            .as_ref()
+            .ok_or(OcctError::InvalidInput { what: "null shape" })?;
+        Ok(bridge::fc_is_closed(inner))
+    }
+
+    fn shape_tolerance(&self, shape: &Shape) -> Result<f64, GeomError> {
+        let occt = downcast(shape)?;
+        let guard = occt.borrow();
+        let inner = guard
+            .as_ref()
+            .ok_or(OcctError::InvalidInput { what: "null shape" })?;
+        Ok(bridge::fc_shape_tolerance(inner))
+    }
+
+    fn edge_value_at(&self, edge: &Shape, t: f64) -> Result<Vector3, GeomError> {
+        let occt = downcast(edge)?;
+        let guard = occt.borrow();
+        let inner = guard
+            .as_ref()
+            .ok_or(OcctError::InvalidInput { what: "null edge" })?;
+        if !bridge::fc_is_edge(inner) {
+            return Err(OcctError::InvalidInput {
+                what: "not an edge",
+            }
+            .into());
+        }
+        let (mut x, mut y, mut z) = (0.0, 0.0, 0.0);
+        if !bridge::fc_edge_value(inner, t, &mut x, &mut y, &mut z) {
+            return Err(OcctError::NotDone {
+                operation: "edge_value_at",
+            }
+            .into());
+        }
+        Ok(Vector3::new(x, y, z))
+    }
+
+    fn face_value_at(&self, face: &Shape, u: f64, v: f64) -> Result<Vector3, GeomError> {
+        let occt = downcast(face)?;
+        let guard = occt.borrow();
+        let inner = guard
+            .as_ref()
+            .ok_or(OcctError::InvalidInput { what: "null face" })?;
+        if !bridge::fc_is_face(inner) {
+            return Err(OcctError::InvalidInput { what: "not a face" }.into());
+        }
+        let (mut x, mut y, mut z) = (0.0, 0.0, 0.0);
+        if !bridge::fc_face_value(inner, u, v, &mut x, &mut y, &mut z) {
+            return Err(OcctError::NotDone {
+                operation: "face_value_at",
+            }
+            .into());
+        }
+        Ok(Vector3::new(x, y, z))
+    }
+
     fn is_equal(&self, a: &Shape, b: &Shape) -> Result<bool, GeomError> {
         let a_occt = downcast(a)?;
         let b_occt = downcast(b)?;
@@ -1879,6 +1972,34 @@ impl GeometryBackend for OcctBackend {
             (Some(a_inner), Some(b_inner)) => Ok(a_inner.IsEqual(b_inner)),
             _ => Ok(false),
         }
+    }
+
+    fn copy_shape(&self, shape: &Shape) -> Result<Shape, GeomError> {
+        let occt = downcast(shape)?;
+        let guard = occt.borrow();
+        let inner = guard
+            .as_ref()
+            .ok_or(OcctError::InvalidInput { what: "null shape" })?;
+        if inner.IsNull() {
+            return Err(OcctError::InvalidInput { what: "null shape" }.into());
+        }
+        let copy = bridge::fc_copy_shape(inner);
+        let Some(copy) = copy.as_ref() else {
+            return Err(OcctError::NotDone {
+                operation: "copy_shape",
+            }
+            .into());
+        };
+        Ok(erase(copy))
+    }
+
+    fn shape_hash(&self, shape: &Shape) -> Result<u64, GeomError> {
+        let occt = downcast(shape)?;
+        let guard = occt.borrow();
+        let inner = guard
+            .as_ref()
+            .ok_or(OcctError::InvalidInput { what: "null shape" })?;
+        Ok(bridge::fc_shape_hash(inner, u64::MAX))
     }
 
     fn orientation(&self, shape: &Shape) -> Option<&'static str> {
@@ -1998,13 +2119,7 @@ impl GeometryBackend for OcctBackend {
         let guard = occt.borrow();
         let inner = guard.as_ref()?;
         let mut props = ffi::g_prop::GProps_new();
-        ffi::b_rep_g_prop::BRepGProp::VolumeProperties(
-            inner,
-            props.pin_mut(),
-            false,
-            false,
-            false,
-        );
+        ffi::b_rep_g_prop::BRepGProp::VolumeProperties(inner, props.pin_mut(), false, false, false);
         let (mut lx, mut ly, mut lz) = (0.0, 0.0, 0.0);
         props.StaticMoments(&mut lx, &mut ly, &mut lz);
         Some([lx, ly, lz])
@@ -2530,7 +2645,8 @@ fn add_derived_names(history: &mut History, out_maps: &[(ElementKind, UniquePtr<
             continue;
         }
         let edge = edge_map.FindKey(index);
-        let Some(lower) = complete_lower(&edge, TopAbs_ShapeEnum::TopAbs_VERTEX, vertex_map, &named)
+        let Some(lower) =
+            complete_lower(&edge, TopAbs_ShapeEnum::TopAbs_VERTEX, vertex_map, &named)
         else {
             continue;
         };
@@ -2714,7 +2830,9 @@ fn edge_from_circle(circle: &Circle) -> Result<Shape, GeomError> {
         }
         .into());
     }
-    Ok(erase(ffi::topo_ds::cast_edge_to_shape(make.pin_mut().Edge())))
+    Ok(erase(ffi::topo_ds::cast_edge_to_shape(
+        make.pin_mut().Edge(),
+    )))
 }
 
 /// A full elliptical edge from the analytic ellipse.
@@ -2791,10 +2909,14 @@ mod provenance_tests {
         counts
     }
 
-    fn expected(entries: &[(OperandId, &str, Relation, usize)]) -> BTreeMap<(OperandId, String, Relation), usize> {
+    fn expected(
+        entries: &[(OperandId, &str, Relation, usize)],
+    ) -> BTreeMap<(OperandId, String, Relation), usize> {
         entries
             .iter()
-            .map(|(operand, kind, relation, count)| ((*operand, kind.to_string(), *relation), *count))
+            .map(|(operand, kind, relation, count)| {
+                ((*operand, kind.to_string(), *relation), *count)
+            })
             .collect()
     }
 
@@ -2822,7 +2944,12 @@ mod provenance_tests {
         }
         for (input, output) in &history.generated {
             let (kind, ordinal) = split_name(&input.name);
-            entries.push((kind, ordinal, Relation::Generated, Some(output.name.clone())));
+            entries.push((
+                kind,
+                ordinal,
+                Relation::Generated,
+                Some(output.name.clone()),
+            ));
         }
         for input in &history.deleted {
             let (kind, ordinal) = split_name(&input.name);
@@ -2864,7 +2991,11 @@ mod provenance_tests {
                 .iter()
                 .map(|(input, output)| (input.name.clone(), output.name.clone()))
                 .collect(),
-            history.deleted.iter().map(|input| input.name.clone()).collect(),
+            history
+                .deleted
+                .iter()
+                .map(|input| input.name.clone())
+                .collect(),
         )
     }
 
@@ -2981,7 +3112,9 @@ mod provenance_tests {
 
         // General fuse: the result compound names all 60 elements.
         let (result, _split) = backend.general_fuse(&[a.clone(), b.clone()]).unwrap();
-        let history = backend.intrinsic_history(&result).expect("the result names itself");
+        let history = backend
+            .intrinsic_history(&result)
+            .expect("the result names itself");
         assert_eq!(history.identity.len(), 60);
 
         // A sweep names its six elements (one face, three edges, two vertices).
@@ -3017,9 +3150,17 @@ mod provenance_tests {
                 (OperandId::B, "Vertex", Relation::Deleted, 1),
             ]),
         );
-        assert!(out.history.generated.is_empty(), "fuse generates no new elements");
+        assert!(
+            out.history.generated.is_empty(),
+            "fuse generates no new elements"
+        );
 
-        assert_histories_are_coherent(&backend, [(&a, OperandId::A), (&b, OperandId::B)], &out.shape, &out.history);
+        assert_histories_are_coherent(
+            &backend,
+            [(&a, OperandId::A), (&b, OperandId::B)],
+            &out.shape,
+            &out.history,
+        );
 
         // Identity is canonical: the side table is sorted even though the relation
         // lists stay in reporting order.
@@ -3048,9 +3189,17 @@ mod provenance_tests {
                 (OperandId::B, "Vertex", Relation::Deleted, 7),
             ]),
         );
-        assert!(out.history.generated.is_empty(), "cut generates no new elements");
+        assert!(
+            out.history.generated.is_empty(),
+            "cut generates no new elements"
+        );
 
-        assert_histories_are_coherent(&backend, [(&a, OperandId::A), (&b, OperandId::B)], &out.shape, &out.history);
+        assert_histories_are_coherent(
+            &backend,
+            [(&a, OperandId::A), (&b, OperandId::B)],
+            &out.shape,
+            &out.history,
+        );
     }
 
     #[test]
@@ -3153,7 +3302,10 @@ mod curve_bridge_tests {
         assert_eq!(state[PERIODIC], 0.0);
         assert_eq!(state[FIRST_PARAMETER], 0.0);
         assert_eq!(state[LAST_PARAMETER], 1.0);
-        assert_eq!(state[CONTINUITY], 2.0, "C1 at the inner knot (mult 1, degree 2)");
+        assert_eq!(
+            state[CONTINUITY], 2.0,
+            "C1 at the inner knot (mult 1, degree 2)"
+        );
 
         // The same arrays also build the edge, exactly.
         let edge = backend
@@ -3167,7 +3319,10 @@ mod curve_bridge_tests {
                 true,
             )
             .expect("the explicit B-spline has an edge");
-        assert!(backend.curve_of(&edge).is_err(), "a B-spline is not analytic");
+        assert!(
+            backend.curve_of(&edge).is_err(),
+            "a B-spline is not analytic"
+        );
         assert_eq!(backend.elements(&edge, ElementKind::Edge).len(), 1);
     }
 
@@ -3237,9 +3392,7 @@ mod shape_query_tests {
     use super::*;
 
     fn box_shape() -> Shape {
-        OcctBackend::new()
-            .make_box(2.0, 3.0, 4.0)
-            .expect("a box")
+        OcctBackend::new().make_box(2.0, 3.0, 4.0).expect("a box")
     }
 
     #[test]
@@ -3267,13 +3420,7 @@ mod shape_query_tests {
     fn a_cone_apex_has_a_degenerate_edge() {
         let backend = OcctBackend::new();
         let cone = backend
-            .make_cone(
-                5.0,
-                0.0,
-                10.0,
-                Vector3::zero(),
-                Vector3::new(0.0, 0.0, 1.0),
-            )
+            .make_cone(5.0, 0.0, 10.0, Vector3::zero(), Vector3::new(0.0, 0.0, 1.0))
             .expect("a cone with an apex");
 
         let edges = backend.elements(&cone, ElementKind::Edge);
@@ -3298,12 +3445,7 @@ mod shape_query_tests {
     fn a_cylinder_seam_is_closed_on_its_face() {
         let backend = OcctBackend::new();
         let cylinder = backend
-            .make_cylinder(
-                5.0,
-                10.0,
-                Vector3::zero(),
-                Vector3::new(0.0, 0.0, 1.0),
-            )
+            .make_cylinder(5.0, 10.0, Vector3::zero(), Vector3::new(0.0, 0.0, 1.0))
             .expect("a cylinder");
         let edges = backend.elements(&cylinder, ElementKind::Edge);
         let faces = backend.elements(&cylinder, ElementKind::Face);
@@ -3330,12 +3472,7 @@ mod shape_query_tests {
     fn parameter_ranges_match_the_face_and_edge_geometry() {
         let backend = OcctBackend::new();
         let cylinder = backend
-            .make_cylinder(
-                5.0,
-                10.0,
-                Vector3::zero(),
-                Vector3::new(0.0, 0.0, 1.0),
-            )
+            .make_cylinder(5.0, 10.0, Vector3::zero(), Vector3::new(0.0, 0.0, 1.0))
             .expect("a cylinder");
         let face = backend.elements(&cylinder, ElementKind::Face)[0]
             .shape
@@ -3380,5 +3517,367 @@ mod shape_query_tests {
             !backend.is_equal(&box_shape, &reversed).unwrap(),
             "isEqual sees the orientation difference"
         );
+    }
+
+    #[test]
+    fn a_copy_has_a_new_tshape_and_the_same_geometry() {
+        let backend = OcctBackend::new();
+        let box_shape = box_shape();
+        let copy = backend.copy_shape(&box_shape).expect("a deep copy");
+
+        assert!(!backend.same_shape(&box_shape, &copy), "a new TShape");
+        assert!(!backend.is_equal(&box_shape, &copy).unwrap());
+        let original = backend.mass_properties(&box_shape).expect("box mass");
+        let copied = backend.mass_properties(&copy).expect("copy mass");
+        assert!(
+            (original.volume - copied.volume).abs() < 1e-9,
+            "the copy has the same volume"
+        );
+        assert!(
+            (original.area - copied.area).abs() < 1e-9,
+            "the copy has the same area"
+        );
+    }
+
+    #[test]
+    fn the_shape_hash_follows_is_same_not_orientation() {
+        let backend = OcctBackend::new();
+        let box_shape = box_shape();
+        let hash = backend.shape_hash(&box_shape).unwrap();
+
+        // Another handle around the same TShape hashes the same.
+        let same = {
+            let occt = downcast(&box_shape).unwrap();
+            let guard = occt.borrow();
+            erase(guard.as_ref().unwrap())
+        };
+        assert_eq!(backend.shape_hash(&same).unwrap(), hash);
+
+        // Orientation is not part of `IsSame`, so it is not part of the hash.
+        let reversed = backend.reversed(&box_shape).unwrap();
+        assert_eq!(backend.shape_hash(&reversed).unwrap(), hash);
+
+        // A deep copy is a different TShape and hashes differently.
+        let copy = backend.copy_shape(&box_shape).unwrap();
+        assert_ne!(backend.shape_hash(&copy).unwrap(), hash);
+    }
+}
+
+#[cfg(test)]
+mod geometry_query_tests {
+    //! The closest-point, closedness, tolerance and parameter-evaluation
+    //! queries (`Shape.distToShape`/`isClosed`/`getTolerance`, `Edge.valueAt`
+    //! and `Face.valueAt`) against real OCCT primitives.
+
+    use std::f64::consts::{FRAC_PI_2, PI};
+
+    use ferrocad_curves::LineSegment;
+    use ferrocad_geom::{ElementKind, GeometryBackend};
+    use ferrocad_types::{Placement, Rotation};
+
+    use super::*;
+
+    fn placed_box(offset: Vector3) -> Shape {
+        let backend = OcctBackend::new();
+        backend
+            .place(
+                &backend.make_box(2.0, 2.0, 2.0).expect("a box"),
+                &Placement {
+                    base: offset,
+                    rotation: Rotation::identity(),
+                },
+            )
+            .expect("a placed box")
+    }
+
+    fn box_shape() -> Shape {
+        OcctBackend::new().make_box(2.0, 3.0, 4.0).expect("a box")
+    }
+
+    /// A planar rectangular face on `z = 0`, from `(0, 0)` to `(width, height)`.
+    fn rectangle_face(width: f64, height: f64) -> Shape {
+        let backend = OcctBackend::new();
+        let corners = [
+            Vector3::new(0.0, 0.0, 0.0),
+            Vector3::new(width, 0.0, 0.0),
+            Vector3::new(width, height, 0.0),
+            Vector3::new(0.0, height, 0.0),
+        ];
+        let mut edges = Vec::with_capacity(4);
+        for i in 0..4 {
+            let segment =
+                LineSegment::new(corners[i], corners[(i + 1) % 4]).expect("a rectangle side");
+            edges.push(
+                backend
+                    .make_edge(&EdgeCurve::LineSegment(segment))
+                    .expect("an edge"),
+            );
+        }
+        let wire = backend.make_wire(&edges).expect("a wire");
+        backend.make_face(&[wire]).expect("a face")
+    }
+
+    fn close(a: Vector3, b: Vector3) -> bool {
+        a.distance(&b) < 1e-7
+    }
+
+    // --- dist_to_shape ---------------------------------------------------
+
+    #[test]
+    fn two_boxes_five_apart_report_the_gap_and_its_endpoints() {
+        let backend = OcctBackend::new();
+        let first = placed_box(Vector3::zero());
+        let second = placed_box(Vector3::new(7.0, 0.0, 0.0));
+        let result = backend.dist_to_shape(&first, &second).unwrap();
+
+        assert!((result.distance - 5.0).abs() < 1e-9, "{}", result.distance);
+        assert!(close(
+            result.first,
+            Vector3::new(2.0, result.first.y, result.first.z)
+        ));
+        assert!(close(
+            result.second,
+            Vector3::new(7.0, result.first.y, result.first.z)
+        ));
+        assert!((result.first.distance(&result.second) - 5.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn intersecting_boxes_are_zero_apart() {
+        let backend = OcctBackend::new();
+        let first = placed_box(Vector3::zero());
+        let second = placed_box(Vector3::new(1.0, 1.0, 1.0));
+        let result = backend.dist_to_shape(&first, &second).unwrap();
+
+        assert!(result.distance.abs() < 1e-9, "{}", result.distance);
+        assert!(close(result.first, result.second));
+    }
+
+    #[test]
+    fn a_vertex_and_a_face_report_both_closest_points() {
+        let backend = OcctBackend::new();
+        let face = rectangle_face(2.0, 3.0);
+        let vertex = backend
+            .make_vertex(Vector3::new(1.0, 1.5, 5.0))
+            .expect("a vertex");
+
+        let result = backend.dist_to_shape(&vertex, &face).unwrap();
+        assert!((result.distance - 5.0).abs() < 1e-9, "{}", result.distance);
+        assert!(
+            close(result.first, Vector3::new(1.0, 1.5, 5.0)),
+            "{:?}",
+            result.first
+        );
+        assert!(
+            close(result.second, Vector3::new(1.0, 1.5, 0.0)),
+            "{:?}",
+            result.second
+        );
+
+        // The pair follows the operand order, so swapping swaps the points.
+        let swapped = backend.dist_to_shape(&face, &vertex).unwrap();
+        assert!(close(swapped.first, result.second));
+        assert!(close(swapped.second, result.first));
+        assert!((swapped.distance - result.distance).abs() < 1e-9);
+    }
+
+    // --- is_closed -------------------------------------------------------
+
+    #[test]
+    fn a_box_solid_is_closed() {
+        let backend = OcctBackend::new();
+        assert!(backend.is_closed(&box_shape()).unwrap());
+    }
+
+    #[test]
+    fn an_open_shell_and_a_bare_face_are_not_closed() {
+        let backend = OcctBackend::new();
+        let box_shape = box_shape();
+        let face = backend.elements(&box_shape, ElementKind::Face)[0]
+            .shape
+            .clone();
+        assert!(!backend.is_closed(&face).unwrap(), "a bare face is open");
+
+        let open_shell = backend
+            .make_shell(std::slice::from_ref(&face))
+            .expect("a one-face shell");
+        assert!(
+            !backend.is_closed(&open_shell).unwrap(),
+            "one face leaves free boundaries"
+        );
+    }
+
+    #[test]
+    fn a_wire_and_an_edge_are_closed_when_they_have_no_free_ends() {
+        let backend = OcctBackend::new();
+
+        let circle =
+            Circle::new(Vector3::zero(), Vector3::new(0.0, 0.0, 1.0), 2.0).expect("a circle");
+        let circle_edge = backend
+            .make_edge(&EdgeCurve::Circle(circle))
+            .expect("a circle edge");
+        assert!(
+            backend.is_closed(&circle_edge).unwrap(),
+            "a circle edge closes on itself"
+        );
+        let closed_wire = backend
+            .make_wire(std::slice::from_ref(&circle_edge))
+            .expect("a circle wire");
+        assert!(backend.is_closed(&closed_wire).unwrap());
+
+        let segment =
+            LineSegment::new(Vector3::zero(), Vector3::new(1.0, 0.0, 0.0)).expect("a segment");
+        let segment_edge = backend
+            .make_edge(&EdgeCurve::LineSegment(segment))
+            .expect("a segment edge");
+        assert!(!backend.is_closed(&segment_edge).unwrap());
+        let open_wire = backend
+            .make_wire(std::slice::from_ref(&segment_edge))
+            .expect("a segment wire");
+        assert!(!backend.is_closed(&open_wire).unwrap());
+    }
+
+    #[test]
+    fn a_cylinders_shell_is_closed() {
+        let backend = OcctBackend::new();
+        let cylinder = backend
+            .make_cylinder(5.0, 10.0, Vector3::zero(), Vector3::new(0.0, 0.0, 1.0))
+            .expect("a cylinder");
+        let shells = backend.elements(&cylinder, ElementKind::Shell);
+        assert_eq!(shells.len(), 1);
+        assert!(backend.is_closed(&shells[0].shape).unwrap());
+    }
+
+    // --- shape_tolerance -------------------------------------------------
+
+    #[test]
+    fn a_fresh_box_reports_a_positive_kernel_tolerance() {
+        let backend = OcctBackend::new();
+        let box_shape = box_shape();
+        let tolerance = backend.shape_tolerance(&box_shape).unwrap();
+        assert!(tolerance.is_finite() && tolerance > 0.0, "{tolerance}");
+
+        for kind in [ElementKind::Vertex, ElementKind::Edge, ElementKind::Face] {
+            let element = &backend.elements(&box_shape, kind)[0].shape;
+            let tolerance = backend.shape_tolerance(element).unwrap();
+            assert!(
+                tolerance.is_finite() && tolerance > 0.0,
+                "{kind:?}: {tolerance}"
+            );
+        }
+    }
+
+    // --- value_at --------------------------------------------------------
+
+    #[test]
+    fn a_box_edge_maps_its_parameter_endpoints_to_vertices() {
+        let backend = OcctBackend::new();
+        let unit = backend.make_box(1.0, 1.0, 1.0).expect("a unit box");
+        let edge = backend.elements(&unit, ElementKind::Edge)[0].shape.clone();
+        let (first, last) = backend.edge_parameter_range(&edge).unwrap();
+        let start = backend.edge_value_at(&edge, first).unwrap();
+        let end = backend.edge_value_at(&edge, last).unwrap();
+
+        let vertices: Vec<Vector3> = backend
+            .elements(&unit, ElementKind::Vertex)
+            .iter()
+            .map(|vertex| backend.vertex_point(&vertex.shape).expect("a vertex point"))
+            .collect();
+        assert!(
+            vertices.iter().any(|vertex| close(*vertex, start)),
+            "{start:?}"
+        );
+        assert!(vertices.iter().any(|vertex| close(*vertex, end)), "{end:?}");
+        assert!((start.distance(&end) - 1.0).abs() < 1e-9);
+
+        // A line's parameter is arc length, so the midpoint is the midpoint.
+        let middle = backend.edge_value_at(&edge, 0.5 * (first + last)).unwrap();
+        let expected = start.add(&end).scale(0.5);
+        assert!(close(middle, expected), "{middle:?} != {expected:?}");
+    }
+
+    #[test]
+    fn a_plane_face_evaluates_the_expected_point() {
+        let backend = OcctBackend::new();
+        let face = rectangle_face(2.0, 3.0);
+        let (u0, u1, v0, v1) = backend.face_parameter_range(&face).unwrap();
+
+        // A plane is affine in (u, v), so the middle of the parameter bounds is
+        // the middle of the rectangle.
+        let center = backend
+            .face_value_at(&face, 0.5 * (u0 + u1), 0.5 * (v0 + v1))
+            .unwrap();
+        assert!(close(center, Vector3::new(1.0, 1.5, 0.0)), "{center:?}");
+
+        let corners = [
+            Vector3::new(0.0, 0.0, 0.0),
+            Vector3::new(2.0, 0.0, 0.0),
+            Vector3::new(2.0, 3.0, 0.0),
+            Vector3::new(0.0, 3.0, 0.0),
+        ];
+        for (u, v) in [(u0, v0), (u1, v0), (u1, v1), (u0, v1)] {
+            let point = backend.face_value_at(&face, u, v).unwrap();
+            assert!(
+                corners.iter().any(|corner| close(*corner, point)),
+                "{point:?} is not a rectangle corner"
+            );
+        }
+    }
+
+    #[test]
+    fn a_sphere_face_evaluates_its_parameters_and_poles() {
+        let backend = OcctBackend::new();
+        let radius = 2.0;
+        let sphere = backend
+            .make_sphere(radius, Vector3::zero())
+            .expect("a sphere");
+        let face = backend.elements(&sphere, ElementKind::Face)[0]
+            .shape
+            .clone();
+        let (u0, u1, v0, v1) = backend.face_parameter_range(&face).unwrap();
+
+        // `Geom_SphericalSurface`: P(u, v) = R * (cos v cos u, cos v sin u, sin v)
+        // with u in [0, 2*pi] and v in [-pi/2, pi/2].
+        assert!((u0 - 0.0).abs() < 1e-9, "u0 = {u0}");
+        assert!((u1 - 2.0 * PI).abs() < 1e-9, "u1 = {u1}");
+        assert!((v0 + FRAC_PI_2).abs() < 1e-9, "v0 = {v0}");
+        assert!((v1 - FRAC_PI_2).abs() < 1e-9, "v1 = {v1}");
+
+        // (0, 0) is on the equator, on the surface's X axis.
+        let equator = backend.face_value_at(&face, 0.0, 0.0).unwrap();
+        assert!(
+            close(equator, Vector3::new(radius, 0.0, 0.0)),
+            "{equator:?}"
+        );
+
+        // Every u at v = +pi/2 is the north pole, every u at v = -pi/2 the south.
+        let north = backend.face_value_at(&face, 0.0, v1).unwrap();
+        assert!(close(north, Vector3::new(0.0, 0.0, radius)), "{north:?}");
+        let south = backend.face_value_at(&face, PI, v0).unwrap();
+        assert!(close(south, Vector3::new(0.0, 0.0, -radius)), "{south:?}");
+    }
+
+    #[test]
+    fn value_at_rejects_the_wrong_shape_type() {
+        let backend = OcctBackend::new();
+        let box_shape = box_shape();
+        let face = backend.elements(&box_shape, ElementKind::Face)[0]
+            .shape
+            .clone();
+        let edge = backend.elements(&box_shape, ElementKind::Edge)[0]
+            .shape
+            .clone();
+
+        let error = backend.edge_value_at(&face, 0.0).unwrap_err();
+        assert!(matches!(
+            error.downcast_ref::<OcctError>(),
+            Some(OcctError::InvalidInput { .. })
+        ));
+
+        let error = backend.face_value_at(&edge, 0.0, 0.0).unwrap_err();
+        assert!(matches!(
+            error.downcast_ref::<OcctError>(),
+            Some(OcctError::InvalidInput { .. })
+        ));
     }
 }

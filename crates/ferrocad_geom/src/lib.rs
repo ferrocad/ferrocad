@@ -531,6 +531,18 @@ pub struct PrincipalProperties {
     pub radius_of_gyration: (f64, f64, f64),
 }
 
+/// The result of a closest-point query between two shapes
+/// (`BRepExtrema_DistShapeShape`, upstream `Shape.distToShape`).
+///
+/// `first` is the closest point on the first shape and `second` the closest
+/// point on the second, so the pair spans exactly `distance`.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct ShapeDistance {
+    pub distance: f64,
+    pub first: Vector3,
+    pub second: Vector3,
+}
+
 pub trait GeometryBackend: Send + Sync {
     /// A rectangular box with its corner at the origin.
     fn make_box(&self, length: f64, width: f64, height: f64) -> Result<Shape, GeomError>;
@@ -593,11 +605,7 @@ pub trait GeometryBackend: Send + Sync {
     }
 
     /// An interpolating B-spline edge through `points` (`Part.BSplineCurve`).
-    fn make_bspline_edge(
-        &self,
-        _points: &[Vector3],
-        _periodic: bool,
-    ) -> Result<Shape, GeomError> {
+    fn make_bspline_edge(&self, _points: &[Vector3], _periodic: bool) -> Result<Shape, GeomError> {
         Err(unsupported("make_bspline_edge"))
     }
 
@@ -888,6 +896,21 @@ pub trait GeometryBackend: Send + Sync {
         a.is_same(b)
     }
 
+    /// A deep copy of `shape` (FreeCAD `Shape.copy`): the same geometry and
+    /// location in a **new** TShape, so the result is no longer `same_shape` with
+    /// the source. The default clones the handle, which is correct for a backend
+    /// whose shapes are immutable values.
+    fn copy_shape(&self, shape: &Shape) -> Result<Shape, GeomError> {
+        Ok(shape.clone())
+    }
+
+    /// A hash consistent with [`same_shape`](Self::same_shape): the same TShape
+    /// and location hash alike whatever the orientation. The default reports the
+    /// operation as unsupported.
+    fn shape_hash(&self, _shape: &Shape) -> Result<u64, GeomError> {
+        Err(unsupported("shape_hash"))
+    }
+
     /// The number of sub-shapes of `kind` (`Shape.countElement`).
     ///
     /// `kind` is upstream's shape-type spelling (`Face`, `Edge`, `Vertex`,
@@ -928,6 +951,52 @@ pub trait GeometryBackend: Send + Sync {
     /// The default reports the operation as unsupported.
     fn face_parameter_range(&self, _face: &Shape) -> Result<(f64, f64, f64, f64), GeomError> {
         Err(unsupported("face_parameter_range"))
+    }
+
+    /// The minimum distance between two shapes and the closest point on each
+    /// (`Shape.distToShape`, `BRepExtrema_DistShapeShape`).
+    ///
+    /// [`ShapeDistance::first`](ShapeDistance) lies on the first shape and
+    /// [`second`](ShapeDistance::second) on the second.
+    ///
+    /// The default reports the operation as unsupported.
+    fn dist_to_shape(&self, _first: &Shape, _second: &Shape) -> Result<ShapeDistance, GeomError> {
+        Err(unsupported("dist_to_shape"))
+    }
+
+    /// Whether `shape` is closed (`Shape.isClosed`).
+    ///
+    /// Upstream defines this per shape type: a solid or comp-solid when every
+    /// shell is closed; a shell, wire or edge (and a face or vertex) via
+    /// `BRep_Tool::IsClosed`; and a compound when every shell, and every face,
+    /// wire, edge and vertex not contained in a higher element, is closed.
+    ///
+    /// The default reports the operation as unsupported.
+    fn is_closed(&self, _shape: &Shape) -> Result<bool, GeomError> {
+        Err(unsupported("is_closed"))
+    }
+
+    /// The shape's geometric tolerance (`Shape.getTolerance`).
+    ///
+    /// The default reports the operation as unsupported.
+    fn shape_tolerance(&self, _shape: &Shape) -> Result<f64, GeomError> {
+        Err(unsupported("shape_tolerance"))
+    }
+
+    /// The 3D point of an edge at curve parameter `t` (`Edge.valueAt`,
+    /// `BRepAdaptor_Curve::Value`). A non-edge is invalid input.
+    ///
+    /// The default reports the operation as unsupported.
+    fn edge_value_at(&self, _edge: &Shape, _t: f64) -> Result<Vector3, GeomError> {
+        Err(unsupported("edge_value_at"))
+    }
+
+    /// The 3D point of a face at surface parameters `(u, v)` (`Face.valueAt`,
+    /// `BRepAdaptor_Surface::Value`). A non-face is invalid input.
+    ///
+    /// The default reports the operation as unsupported.
+    fn face_value_at(&self, _face: &Shape, _u: f64, _v: f64) -> Result<Vector3, GeomError> {
+        Err(unsupported("face_value_at"))
     }
 
     /// Whether two shapes are equal (`TopoDS_Shape::IsEqual`): they share the
@@ -977,8 +1046,12 @@ pub trait GeometryBackend: Send + Sync {
     }
 
     /// Round the given edges of `shape`.
-    fn fillet(&self, shape: &Shape, edges: &[ElementRef], radius: f64)
-    -> Result<OpResult, GeomError>;
+    fn fillet(
+        &self,
+        shape: &Shape,
+        edges: &[ElementRef],
+        radius: f64,
+    ) -> Result<OpResult, GeomError>;
 
     /// Apply a placement (transform) to `shape`.
     fn place(&self, shape: &Shape, placement: &Placement) -> Result<Shape, GeomError>;

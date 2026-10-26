@@ -637,14 +637,14 @@
       ],
       "unresolved": []
     },
-    "methods_heuristic": 811,
+    "methods_heuristic": 820,
     "gap_markers": {
-      "count": 11,
+      "count": 19,
       "by_kind": {
         "not_implemented_yet": 2,
         "not_available_in_this_slice": 3,
         "unsupported": 0,
-        "not_implemented": 6
+        "not_implemented": 14
       },
       "entries": [
         {
@@ -692,19 +692,67 @@
         {
           "kind": "not_implemented",
           "file": "crates/ferrocad_part_py/src/curves.rs",
-          "line": 7623,
+          "line": 7749,
           "text": "Err(_) => Ok(py.NotImplemented()),"
         },
         {
           "kind": "not_implemented",
           "file": "crates/ferrocad_part_py/src/curves.rs",
-          "line": 7631,
+          "line": 7757,
+          "text": "Err(_) => Ok(py.NotImplemented()),"
+        },
+        {
+          "kind": "not_implemented",
+          "file": "crates/ferrocad_part_py/src/lib.rs",
+          "line": 64,
+          "text": "PyIOError, PyIndexError, PyNotImplementedError, PyRuntimeError, PyTypeError, PyValueError,"
+        },
+        {
+          "kind": "not_implemented",
+          "file": "crates/ferrocad_part_py/src/lib.rs",
+          "line": 827,
+          "text": "/// `NotImplementedError` instead of silently reporting it as the answer."
+        },
+        {
+          "kind": "not_implemented",
+          "file": "crates/ferrocad_part_py/src/lib.rs",
+          "line": 835,
+          "text": "return Err(PyNotImplementedError::new_err(format!("
+        },
+        {
+          "kind": "not_implemented",
+          "file": "crates/ferrocad_part_py/src/lib.rs",
+          "line": 936,
+          "text": "/// raising. A non-shape operand returns `NotImplemented`, letting Python try"
+        },
+        {
+          "kind": "not_implemented",
+          "file": "crates/ferrocad_part_py/src/lib.rs",
+          "line": 940,
+          "text": "return Ok(py.NotImplemented());"
+        },
+        {
+          "kind": "not_implemented",
+          "file": "crates/ferrocad_part_py/src/lib.rs",
+          "line": 949,
+          "text": "Err(_) => Ok(py.NotImplemented()),"
+        },
+        {
+          "kind": "not_implemented",
+          "file": "crates/ferrocad_part_py/src/lib.rs",
+          "line": 958,
+          "text": "return Ok(py.NotImplemented());"
+        },
+        {
+          "kind": "not_implemented",
+          "file": "crates/ferrocad_part_py/src/lib.rs",
+          "line": 965,
           "text": "Err(_) => Ok(py.NotImplemented()),"
         },
         {
           "kind": "not_implemented_yet",
           "file": "crates/ferrocad_part_py/src/lib.rs",
-          "line": 2340,
+          "line": 2691,
           "text": "\"{operation}: partial revolutions are not implemented yet\""
         },
         {

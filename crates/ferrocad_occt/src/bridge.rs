@@ -66,10 +66,8 @@ mod ffi {
         fn fc_is_shell(shape: &TopoDS_Shape) -> bool;
 
         /// A ruled surface between two edges (`BRepFill::Face`), or null.
-        fn fc_ruled_surface(
-            first: &TopoDS_Shape,
-            second: &TopoDS_Shape,
-        ) -> UniquePtr<TopoDS_Shape>;
+        fn fc_ruled_surface(first: &TopoDS_Shape, second: &TopoDS_Shape)
+        -> UniquePtr<TopoDS_Shape>;
 
         /// Planar offset of a face or wire (`BRepOffsetAPI_MakeOffset`), or null.
         fn fc_offset(shape: &TopoDS_Shape, distance: f64, join: i32) -> UniquePtr<TopoDS_Shape>;
@@ -83,10 +81,7 @@ mod ffi {
         ) -> UniquePtr<TopoDS_Shape>;
 
         /// The intersection of two shapes (`BRepAlgoAPI_Section`), or null.
-        fn fc_section(
-            first: &TopoDS_Shape,
-            second: &TopoDS_Shape,
-        ) -> UniquePtr<TopoDS_Shape>;
+        fn fc_section(first: &TopoDS_Shape, second: &TopoDS_Shape) -> UniquePtr<TopoDS_Shape>;
 
         /// The wires where `shape` meets the plane `d·x = distance`, or null.
         fn fc_slice(
@@ -115,6 +110,12 @@ mod ffi {
         /// `TopoDS_Shape::IsSame` (ignores orientation).
         fn fc_is_same(first: &TopoDS_Shape, second: &TopoDS_Shape) -> bool;
 
+        /// A deep copy with a new TShape (`BRepBuilderAPI_Copy`), or null.
+        fn fc_copy_shape(shape: &TopoDS_Shape) -> UniquePtr<TopoDS_Shape>;
+
+        /// A hash consistent with `IsSame` (TShape + location, orientation ignored).
+        fn fc_shape_hash(shape: &TopoDS_Shape, upper: u64) -> u64;
+
         /// Remove sub-shapes (`BRepTools_ReShape`), or null.
         fn fc_reshape_remove(
             shape: &TopoDS_Shape,
@@ -132,10 +133,7 @@ mod ffi {
         fn fc_is_valid(shape: &TopoDS_Shape) -> bool;
 
         /// Split an edge at curve parameters into a wire of pieces, or null.
-        fn fc_split_edge(
-            shape: &TopoDS_Shape,
-            parameters: &[f64],
-        ) -> UniquePtr<TopoDS_Shape>;
+        fn fc_split_edge(shape: &TopoDS_Shape, parameters: &[f64]) -> UniquePtr<TopoDS_Shape>;
 
         /// Split `shape` with the parallel `tools`/`faces` lists
         /// (`BRepFeat_SplitShape`), filling the two result groups.
@@ -295,10 +293,8 @@ mod ffi {
         ) -> Vec<f64>;
 
         /// `TopTools_IndexedMapOfShape::FindIndex`, which the crate does not bridge.
-        fn fc_indexed_map_find_index(
-            map: &TopTools_IndexedMapOfShape,
-            shape: &TopoDS_Shape,
-        ) -> i32;
+        fn fc_indexed_map_find_index(map: &TopTools_IndexedMapOfShape, shape: &TopoDS_Shape)
+        -> i32;
 
         /// Like `fc_indexed_map_find_index`, but ignores orientation (`IsSame`).
         fn fc_indexed_map_find_index_same(
@@ -380,6 +376,47 @@ mod ffi {
 
         /// The number of direct children (`TopoDS_Iterator`).
         fn fc_direct_child_count(shape: &TopoDS_Shape) -> i32;
+
+        /// The minimum distance between two shapes and the closest point on each
+        /// (`BRepExtrema_DistShapeShape`). False when there is no solution.
+        fn fc_dist_to_shape(
+            first: &TopoDS_Shape,
+            second: &TopoDS_Shape,
+            distance: &mut f64,
+            first_x: &mut f64,
+            first_y: &mut f64,
+            first_z: &mut f64,
+            second_x: &mut f64,
+            second_y: &mut f64,
+            second_z: &mut f64,
+        ) -> bool;
+
+        /// Upstream `TopoShape::isClosed`.
+        fn fc_is_closed(shape: &TopoDS_Shape) -> bool;
+
+        /// The shape's geometric tolerance (`BRep_Tool::Tolerance`).
+        fn fc_shape_tolerance(shape: &TopoDS_Shape) -> f64;
+
+        /// The point of an edge at curve parameter `parameter`
+        /// (`BRepAdaptor_Curve::Value`).
+        fn fc_edge_value(
+            shape: &TopoDS_Shape,
+            parameter: f64,
+            x: &mut f64,
+            y: &mut f64,
+            z: &mut f64,
+        ) -> bool;
+
+        /// The point of a face at surface parameters `(u, v)`
+        /// (`BRepAdaptor_Surface::Value`).
+        fn fc_face_value(
+            shape: &TopoDS_Shape,
+            u: f64,
+            v: f64,
+            x: &mut f64,
+            y: &mut f64,
+            z: &mut f64,
+        ) -> bool;
 
         /// Serialise a shape to BREP bytes (in memory; the crate only does files).
         fn fc_brep_write(shape: &TopoDS_Shape, out: &mut Vec<u8>);

@@ -9,13 +9,18 @@
 // separate translation unit is needed.
 
 #include <BRepAdaptor_Curve.hxx>
+#include <BRepAdaptor_Surface.hxx>
+#include <BRepBuilderAPI_Copy.hxx>
 #include <BRepBuilderAPI_MakeShape.hxx>
+#include <BRepExtrema_DistShapeShape.hxx>
 #include <BRepFilletAPI_MakeChamfer.hxx>
 #include <BRepFilletAPI_MakeFillet.hxx>
 #include <BRepTools.hxx>
 #include <BRep_Tool.hxx>
 #include <GeomAbs_Shape.hxx>
+#include <TopAbs_ShapeEnum.hxx>
 #include <TopExp.hxx>
+#include <TopExp_Explorer.hxx>
 #include <TopTools_IndexedDataMapOfShapeListOfShape.hxx>
 #include <TopTools_IndexedMapOfShape.hxx>
 #include <TopTools_ListIteratorOfListOfShape.hxx>
@@ -29,9 +34,40 @@
 #include <gp_Pnt.hxx>
 #include <gp_Vec.hxx>
 
+#include <algorithm>
 #include <stdexcept>
+#include <functional>
+#include <memory>
 
 #include "rust/cxx.h"
+
+// --- shape identity ----------------------------------------------------------
+
+// A deep copy with a new TShape (`BRepBuilderAPI_Copy`), which is what upstream
+// `Shape.copy()` is. The geometry is copied too, so the result is no longer
+// `IsSame`/`IsEqual` with the source but has the same volume and area.
+inline std::unique_ptr<TopoDS_Shape> fc_copy_shape(const TopoDS_Shape& shape)
+{
+    if (shape.IsNull())
+        return nullptr;
+    BRepBuilderAPI_Copy copier(shape, Standard_True, Standard_False);
+    if (!copier.IsDone())
+        return nullptr;
+    return std::make_unique<TopoDS_Shape>(copier.Shape());
+}
+
+// A hash consistent with `TopoDS_Shape::IsSame`: the TShape pointer and the
+// location, ignoring the orientation. Two handles to one sub-shape hash alike even
+// when one was reversed, which is what SimpleCAD's `hash(edge)` buckets need.
+inline uint64_t fc_shape_hash(const TopoDS_Shape& shape, uint64_t upper)
+{
+    if (shape.IsNull() || upper == 0)
+        return 0;
+    size_t hash = std::hash<const void*>{}(shape.TShape().get());
+    const size_t location = shape.Location().HashCode();
+    hash ^= location + 0x9e3779b97f4a7c15ULL + (hash << 6) + (hash >> 2);
+    return static_cast<uint64_t>(hash % upper);
+}
 
 // --- ancestors ---------------------------------------------------------------
 // `TopExp::MapShapesAndAncestors` is bridged, but the resulting
@@ -106,6 +142,159 @@ inline int fc_direct_child_count(const TopoDS_Shape& shape)
     for (TopoDS_Iterator it(shape); it.More(); it.Next())
         ++count;
     return count;
+}
+
+// --- geometry queries --------------------------------------------------------
+// `BRepExtrema_DistShapeShape`, `BRepAdaptor_Surface::Value`,
+// `BRepAdaptor_Curve::Value` and `BRep_Tool::Tolerance` are not bridged by the
+// crate.
+
+// The minimum distance between two shapes and the closest point on each.
+// `first`/`second` receive the point on the first/second shape respectively.
+// Returns false when the extrema solver reports no solution.
+inline bool fc_dist_to_shape(const TopoDS_Shape& first,
+                             const TopoDS_Shape& second,
+                             double& distance,
+                             double& first_x,
+                             double& first_y,
+                             double& first_z,
+                             double& second_x,
+                             double& second_y,
+                             double& second_z)
+{
+    if (first.IsNull() || second.IsNull())
+        return false;
+    BRepExtrema_DistShapeShape dist(first, second);
+    if (!dist.IsDone() || dist.NbSolution() < 1)
+        return false;
+    distance = dist.Value();
+    const gp_Pnt p1 = dist.PointOnShape1(1);
+    const gp_Pnt p2 = dist.PointOnShape2(1);
+    first_x = p1.X();
+    first_y = p1.Y();
+    first_z = p1.Z();
+    second_x = p2.X();
+    second_y = p2.Y();
+    second_z = p2.Z();
+    return true;
+}
+
+// Upstream `TopoShape::isClosed` (`Mod/Part/App/TopoShape.cpp`): a shell, wire
+// or edge asks `BRep_Tool::IsClosed`; a solid or comp-solid requires every shell
+// to be closed; a compound also requires every face, wire, edge and vertex that
+// is not contained in a higher element to be closed; a face or vertex falls
+// through to `BRep_Tool::IsClosed`, i.e. its own `Closed` flag.
+inline bool fc_is_closed(const TopoDS_Shape& shape)
+{
+    if (shape.IsNull())
+        return false;
+    bool closed = false;
+    switch (shape.ShapeType())
+    {
+        case TopAbs_SHELL:
+        case TopAbs_WIRE:
+        case TopAbs_EDGE:
+        case TopAbs_FACE:
+        case TopAbs_VERTEX:
+        case TopAbs_SHAPE:
+            closed = BRep_Tool::IsClosed(shape);
+            break;
+        case TopAbs_COMPSOLID:
+        case TopAbs_SOLID:
+            closed = true;
+            for (TopExp_Explorer xp(shape, TopAbs_SHELL); xp.More(); xp.Next())
+                closed = closed && BRep_Tool::IsClosed(xp.Current());
+            break;
+        case TopAbs_COMPOUND:
+            closed = true;
+            for (TopExp_Explorer xp(shape, TopAbs_SHELL); xp.More(); xp.Next())
+                closed = closed && BRep_Tool::IsClosed(xp.Current());
+            for (TopExp_Explorer xp(shape, TopAbs_FACE, TopAbs_SHELL); xp.More(); xp.Next())
+                closed = closed && BRep_Tool::IsClosed(xp.Current());
+            for (TopExp_Explorer xp(shape, TopAbs_WIRE, TopAbs_FACE); xp.More(); xp.Next())
+                closed = closed && BRep_Tool::IsClosed(xp.Current());
+            for (TopExp_Explorer xp(shape, TopAbs_EDGE, TopAbs_WIRE); xp.More(); xp.Next())
+                closed = closed && BRep_Tool::IsClosed(xp.Current());
+            for (TopExp_Explorer xp(shape, TopAbs_VERTEX, TopAbs_EDGE); xp.More(); xp.Next())
+                closed = closed && BRep_Tool::IsClosed(xp.Current());
+            break;
+    }
+    return closed;
+}
+
+// The geometric tolerance of a shape (`BRep_Tool::Tolerance`). The crate only
+// exposes it per vertex, edge and face, so a higher shape reports the maximum
+// over its sub-shapes, matching `ShapeAnalysis_ShapeTolerance`'s default.
+inline double fc_shape_tolerance(const TopoDS_Shape& shape)
+{
+    if (shape.IsNull())
+        return 0.0;
+    switch (shape.ShapeType())
+    {
+        case TopAbs_VERTEX:
+            return BRep_Tool::Tolerance(TopoDS::Vertex(shape));
+        case TopAbs_EDGE:
+            return BRep_Tool::Tolerance(TopoDS::Edge(shape));
+        case TopAbs_FACE:
+            return BRep_Tool::Tolerance(TopoDS::Face(shape));
+        default:
+            break;
+    }
+    double tolerance = 0.0;
+    for (TopExp_Explorer xp(shape, TopAbs_VERTEX); xp.More(); xp.Next())
+        tolerance = std::max(tolerance, BRep_Tool::Tolerance(TopoDS::Vertex(xp.Current())));
+    for (TopExp_Explorer xp(shape, TopAbs_EDGE); xp.More(); xp.Next())
+        tolerance = std::max(tolerance, BRep_Tool::Tolerance(TopoDS::Edge(xp.Current())));
+    for (TopExp_Explorer xp(shape, TopAbs_FACE); xp.More(); xp.Next())
+        tolerance = std::max(tolerance, BRep_Tool::Tolerance(TopoDS::Face(xp.Current())));
+    return tolerance;
+}
+
+// The 3D point of an edge at curve parameter `parameter`
+// (`BRepAdaptor_Curve::Value`; upstream `Edge.valueAt`).
+inline bool fc_edge_value(const TopoDS_Shape& shape,
+                          double parameter,
+                          double& x,
+                          double& y,
+                          double& z)
+{
+    try
+    {
+        BRepAdaptor_Curve curve(TopoDS::Edge(shape));
+        const gp_Pnt p = curve.Value(parameter);
+        x = p.X();
+        y = p.Y();
+        z = p.Z();
+        return true;
+    }
+    catch (...)
+    {
+        return false;
+    }
+}
+
+// The 3D point of a face at surface parameters `(u, v)`
+// (`BRepAdaptor_Surface::Value`; upstream `Face.valueAt`).
+inline bool fc_face_value(const TopoDS_Shape& shape,
+                          double u,
+                          double v,
+                          double& x,
+                          double& y,
+                          double& z)
+{
+    try
+    {
+        BRepAdaptor_Surface surface(TopoDS::Face(shape));
+        const gp_Pnt p = surface.Value(u, v);
+        x = p.X();
+        y = p.Y();
+        z = p.Z();
+        return true;
+    }
+    catch (...)
+    {
+        return false;
+    }
 }
 
 // --- asymmetric chamfer ------------------------------------------------------

@@ -5391,9 +5391,13 @@ impl PyPlacement {
     #[new]
     #[pyo3(signature = (base=None, rotation=None))]
     fn new(base: Option<&Bound<'_, PyAny>>, rotation: Option<&Bound<'_, PyAny>>) -> PyResult<Self> {
-        // `Placement(matrix)` builds from a 4x4 transformation matrix.
+        // `Placement(otherPlacement)` copies the base and rotation (upstream's
+        // copy constructor), and `Placement(matrix)` builds from a 4x4 matrix.
         if rotation.is_none() {
             if let Some(b) = base {
+                if let Ok(other) = b.extract::<PyRef<'_, PyPlacement>>() {
+                    return Ok(Self::fresh(other.get()));
+                }
                 if let Ok(m) = b.extract::<PyRef<'_, PyMatrix>>() {
                     return Ok(Self::fresh(Placement::new(
                         Vector3::new(m.inner.m[3], m.inner.m[7], m.inner.m[11]),
@@ -6382,6 +6386,19 @@ impl PyBoundBox {
     #[getter]
     fn ZLength(&self) -> f64 {
         self.max[2] - self.min[2]
+    }
+
+    /// The length of the space diagonal (`sqrt(dx² + dy² + dz²)`); `0` for an
+    /// empty/invalid box, matching upstream's usable extent.
+    #[getter]
+    fn DiagonalLength(&self) -> f64 {
+        if !self.valid {
+            return 0.0;
+        }
+        let dx = self.max[0] - self.min[0];
+        let dy = self.max[1] - self.min[1];
+        let dz = self.max[2] - self.min[2];
+        (dx * dx + dy * dy + dz * dz).sqrt()
     }
 
     #[getter]

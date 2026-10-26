@@ -7232,9 +7232,17 @@ impl PyEdge {
             .map_err(kernel_error)
     }
 
-    fn valueAt(slf: PyRef<'_, Self>, _parameter: f64) -> PyResult<PyObject> {
-        require_edge(slf.as_super(), "valueAt")?;
-        Err(edge_query_error("valueAt"))
+    /// The 3D point at curve parameter `t` (`Edge.valueAt`, upstream's
+    /// `BRepAdaptor_Curve::Value`). An empty edge raises `ValueError`.
+    fn valueAt(slf: PyRef<'_, Self>, py: Python<'_>, parameter: f64) -> PyResult<PyObject> {
+        let shape = slf
+            .as_super()
+            .shape()
+            .ok_or_else(|| empty_error("valueAt"))?;
+        let point = backend()
+            .edge_value_at(&shape, parameter)
+            .map_err(kernel_error)?;
+        py_vector(py, point)
     }
 
     fn tangentAt(slf: PyRef<'_, Self>, _parameter: f64) -> PyResult<PyObject> {
@@ -7409,6 +7417,30 @@ impl PyWire {
             .collect()
     }
 
+    /// The wire's vertices in edge-chain order (`Wire.OrderedVertexes`): the
+    /// start vertex of each edge, following the vertices adjacent edges share,
+    /// plus the final vertex of an open wire. A closed wire reports each corner
+    /// once, as upstream's `BRepTools_WireExplorer` walk does.
+    ///
+    /// A wire that is not one chain (or an edge without a clean pair of
+    /// endpoints) falls back to the kernel's vertex list, so the result is never
+    /// worse than `Vertexes`.
+    #[getter]
+    fn OrderedVertexes(slf: PyRef<'_, Self>, py: Python<'_>) -> PyResult<Vec<Py<PyVertex>>> {
+        if slf.as_super().shape().is_none() {
+            return Ok(Vec::new());
+        }
+        let edges = slf.as_super().sub_shapes(ElementKind::Edge)?;
+        let shapes = match ordered_vertex_shapes(&edges) {
+            Some(shapes) => shapes,
+            None => slf.as_super().sub_shapes(ElementKind::Vertex)?,
+        };
+        shapes
+            .into_iter()
+            .map(|shape| Py::new(py, PyVertex::from_shape(shape)?))
+            .collect()
+    }
+
     /// Whether the chain closes, judged from the analytic endpoints this slice
     /// carries. A wire built only from shapes cannot answer (reported `False`).
     fn isClosed(&self) -> bool {
@@ -7451,6 +7483,100 @@ impl PyWire {
     fn __repr__(&self) -> String {
         format!("Part.Wire({} edges)", self.entries().len())
     }
+}
+
+/// The two endpoint vertices of an edge, in either order.
+///
+/// A closed edge (a full circle) has one vertex used at both ends; a shape with
+/// anything other than one or two vertices is not a chainable edge.
+fn edge_endpoint_shapes(edge: &Shape) -> Option<(Shape, Shape)> {
+    let vertices = backend().elements(edge, ElementKind::Vertex);
+    match vertices.as_slice() {
+        [vertex] => Some((vertex.shape.clone(), vertex.shape.clone())),
+        [first, second] => Some((first.shape.clone(), second.shape.clone())),
+        _ => None,
+    }
+}
+
+/// Order a wire's vertices by following the vertices adjacent edges share.
+///
+/// `None` when the edges do not form one chain. The walk starts at the first
+/// edge and grows both ways, so an open wire whose first edge is in the middle
+/// still comes out end-to-end. Edge directions are irrelevant: a wire is a
+/// cyclic chain, and an open wire's direction only decides which end is first.
+fn ordered_vertex_shapes(edges: &[Shape]) -> Option<Vec<Shape>> {
+    if edges.is_empty() {
+        return Some(Vec::new());
+    }
+    let endpoints = edges
+        .iter()
+        .map(edge_endpoint_shapes)
+        .collect::<Option<Vec<_>>>()?;
+    let same = |a: &Shape, b: &Shape| backend().same_shape(a, b);
+
+    let mut used = vec![false; edges.len()];
+    used[0] = true;
+    let (first, second) = endpoints[0].clone();
+
+    // Grow from the first edge's second endpoint.
+    let mut back = vec![second.clone()];
+    let mut tail = second;
+    loop {
+        let Some((index, next)) = endpoints.iter().enumerate().find_map(|(index, (a, b))| {
+            if used[index] {
+                None
+            } else if same(&tail, a) {
+                Some((index, b.clone()))
+            } else if same(&tail, b) {
+                Some((index, a.clone()))
+            } else {
+                None
+            }
+        }) else {
+            break;
+        };
+        used[index] = true;
+        tail = next.clone();
+        back.push(next);
+    }
+
+    // Grow the other way from the first edge's first endpoint.
+    let mut front = vec![first.clone()];
+    let mut head = first;
+    loop {
+        let Some((index, next)) = endpoints.iter().enumerate().find_map(|(index, (a, b))| {
+            if used[index] {
+                None
+            } else if same(&head, a) {
+                Some((index, b.clone()))
+            } else if same(&head, b) {
+                Some((index, a.clone()))
+            } else {
+                None
+            }
+        }) else {
+            break;
+        };
+        used[index] = true;
+        head = next.clone();
+        front.push(next);
+    }
+
+    if used.iter().any(|used| !used) {
+        return None;
+    }
+
+    // `front` runs [first, …, far end]; reverse it so it ends at the junction
+    // `first`, then append the chain that starts at the second endpoint.
+    front.reverse();
+    let mut ordered = front;
+    ordered.extend(back);
+
+    // A chain that closes on itself reports its starting corner once.
+    if ordered.len() > 1 && same(&ordered[0], &ordered[ordered.len() - 1]) {
+        ordered.pop();
+    }
+    Some(ordered)
 }
 
 // ---------------------------------------------------------------------------
@@ -7657,6 +7783,11 @@ impl PyFace {
         PyClassInitializer::from(PartShape::from_shape(shape)).add_subclass(Self)
     }
 
+    /// Wrap an existing face shape (`ancestorsOfType`, a sub-shape query).
+    pub(crate) fn from_shape(shape: Shape) -> PyClassInitializer<Self> {
+        Self::initializer(shape)
+    }
+
     /// The empty face `Part.Face()`: a null shape with no boundary.
     fn empty_initializer() -> PyClassInitializer<Self> {
         PyClassInitializer::from(PartShape::empty()).add_subclass(Self)
@@ -7745,9 +7876,17 @@ impl PyFace {
     // for them on a real face either, so those report `OCCError` instead of
     // inventing an answer.
 
-    fn valueAt(slf: PyRef<'_, Self>, _u: f64, _v: f64) -> PyResult<PyObject> {
-        require_edge(slf.as_super(), "valueAt")?;
-        Err(edge_query_error("valueAt"))
+    /// The 3D point at surface parameters `(u, v)` (`Face.valueAt`, upstream's
+    /// `BRepAdaptor_Surface::Value`). An empty face raises `ValueError`.
+    fn valueAt(slf: PyRef<'_, Self>, py: Python<'_>, u: f64, v: f64) -> PyResult<PyObject> {
+        let shape = slf
+            .as_super()
+            .shape()
+            .ok_or_else(|| empty_error("valueAt"))?;
+        let point = backend()
+            .face_value_at(&shape, u, v)
+            .map_err(kernel_error)?;
+        py_vector(py, point)
     }
 
     fn normalAt(slf: PyRef<'_, Self>, _u: f64, _v: f64) -> PyResult<PyObject> {

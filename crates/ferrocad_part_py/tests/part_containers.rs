@@ -66,8 +66,11 @@ fn booleans_and_compounds_round_trip() {
         assert!((box_a.getattr("Area").unwrap().extract::<f64>().unwrap() - 24.0).abs() < 1e-9);
         let center = box_a.getattr("CenterOfMass").expect("CenterOfMass");
         assert!((center.getattr("x").unwrap().extract::<f64>().unwrap() - 1.0).abs() < 1e-9);
+        // `copy()` is a deep copy (`BRepBuilderAPI_Copy`): a new TShape, so it is
+        // not `isSame`, but the geometry is identical.
         let copied = box_a.call_method0("copy").expect("Shape.copy");
-        assert!(copied.call_method1("isSame", (&box_a,)).unwrap().extract::<bool>().unwrap());
+        assert!(!copied.call_method1("isSame", (&box_a,)).unwrap().extract::<bool>().unwrap());
+        assert!((copied.getattr("Volume").unwrap().extract::<f64>().unwrap() - 8.0).abs() < 1e-9);
         let cleaned = box_a.call_method0("cleaned").expect("Shape.cleaned");
         assert!((cleaned.getattr("Volume").unwrap().extract::<f64>().unwrap() - 8.0).abs() < 1e-9);
         let shape_class = part.getattr("Shape").unwrap();

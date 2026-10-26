@@ -208,18 +208,20 @@ than on every mouse move, so a drag is one edit instead of dozens of undo steps.
 
 The rule is **declared range, position control**: a `float`/`int`/`quantity` row with
 both `min` and `max` gets the slider track. A quantity without a complete range gets
-the **jog dial** (`ferrocad_widgets::dial`) instead. A dimension is unbounded
-(`PropertyLength` has no range), so inventing a window for a track would be a lie:
-the dial changes the value by a ratio — 48 px of horizontal travel doubles it, at any
-magnitude — and has nothing to clamp. Dragging right raises the value, including a
-negative one (whose magnitude then shrinks); a value of exactly zero cannot be scaled,
-so it scrubs linearly at one unit per eight px. The face paints the needle at the drag
-angle and fills a ring for up to a full turn; the small glyph in the row follows the
-same gesture. The readout and the committed string carry the row's unit (`40 mm`),
-taken from the schema's `unit` or, for a document property, from the suffix of its
-displayed value; a bare number would assign a dimensionless quantity and strip a
-property's unit. A plain `float`/`int` without bounds gets neither control — there is
-no unit whose scale would make a ratio meaningful.
+the **scrub handle** (`ferrocad_widgets::scrub`) instead. A dimension is unbounded
+(`PropertyLength` has no range), so inventing a window for a track would be a lie.
+The handle is dragged **directly**: vertical travel changes the value by a ratio —
+48 px doubles it, at any magnitude — so there is nothing to clamp. While the button
+is held, a scale appears beside the pointer: **logarithmic above zero**, **linear**
+around zero and for negative values, with labelled ticks and an accent marker at
+the current value. Dragging up raises the value, including a negative one (whose
+magnitude then shrinks); a value of exactly zero cannot be scaled, so it scrubs
+linearly at one unit per eight px. The release commits one edit, and the readout
+carries the row's unit (`40 mm`), taken from the schema's `unit` or, for a document
+property, from the suffix of its displayed value; a bare number would assign a
+dimensionless quantity and strip a property's unit. A plain `float`/`int` without
+bounds gets neither control — there is no unit whose scale would make a ratio
+meaningful.
 
 The `refresh` result is only a **request**. It reaches the viewport when the
 caller applies it: a command or a dialog does, the `Settings/<Feature>` property

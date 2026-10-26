@@ -32,9 +32,9 @@ use ferrocad_viewport::{
 use ferrocad_wgpu::{AdapterChoice, AdapterSummary, WgpuRenderer};
 use ferrocad_widgets::accordion::{AccordionSection, AccordionState, accordion};
 use ferrocad_widgets::color;
-use ferrocad_widgets::dial;
 use ferrocad_widgets::form;
 use ferrocad_widgets::scroll::scroll_area;
+use ferrocad_widgets::scrub;
 use ferrocad_widgets::slider;
 use ferrocad_widgets::wheel::{WheelEvent, WheelMenu, WheelSlot, WheelTone};
 use ferrocad_widgets::window_chrome::window_frame_with_leading;
@@ -256,6 +256,9 @@ pub struct Shell {
     /// The anchored overlay a property row opened (a colour palette or a range
     /// slider). It is UI state only: the value itself lives in the parameter store.
     row_popup: Option<RowPopup>,
+    /// The live vertical scrub from a property row's handle. It owns the scale
+    /// overlay and the release commit; `None` when no handle is held.
+    scrub: Option<ScrubDrag>,
     /// The radial sidecar: it owns the gesture and its overlay. The shell only
     /// triggers it (right-press / Space) and maps a selected id to a command.
     wheel: Entity<WheelMenu>,
@@ -326,8 +329,6 @@ enum RowPopupKind {
     Color,
     /// The log/linear range slider (a number with declared bounds).
     Slider,
-    /// The unbounded jog dial (a dimension without a declared range).
-    Dial,
     /// The choices of an enumeration (`kind == "enum"`).
     Choices,
 }
@@ -367,9 +368,24 @@ struct RowPopup {
     window: WindowId,
     /// The slider value while dragging (committed on release).
     draft: Option<f64>,
-    /// The dial gesture while dragging a dimension (committed on release).
-    dial: Option<dial::Dial>,
     dragging: bool,
+}
+
+/// A live vertical scrub from a property row's handle.
+///
+/// The overlay is not a `RowPopup`: the handle is dragged directly, the scale
+/// appears while the button is held, and the release commits. The window root
+/// forwards the moves (a drag leaves the 18 px handle immediately), and `window`
+/// keeps the overlay in the window that started it.
+struct ScrubDrag {
+    /// The `<object>.<property>` key `commit_property` takes.
+    key: String,
+    label: String,
+    unit: String,
+    scrub: scrub::Scrub,
+    /// The press position; the scale is anchored beside it.
+    anchor: Point<Pixels>,
+    window: WindowId,
 }
 
 /// The modeless settings card (A3/T5): a draggable 380 px panel over the canvas.
@@ -567,6 +583,7 @@ impl Shell {
             gpu_adapters: None,
             settings_card: None,
             row_popup: None,
+            scrub: None,
             wheel,
             _wheel_events: wheel_events,
             wheel_target: None,
@@ -2979,6 +2996,59 @@ impl Shell {
         cx.notify();
     }
 
+    /// Start dragging a property row's scrub handle: the gesture begins at the
+    /// press, and the window root forwards the moves while the button is held.
+    #[allow(clippy::too_many_arguments)]
+    fn start_scrub(
+        &mut self,
+        key: &str,
+        label: &str,
+        unit: &str,
+        start: f64,
+        at: Point<Pixels>,
+        window: WindowId,
+        cx: &mut Context<Self>,
+    ) {
+        self.scrub = Some(ScrubDrag {
+            key: key.to_string(),
+            label: label.to_string(),
+            unit: unit.to_string(),
+            scrub: scrub::Scrub::new(start, at),
+            anchor: at,
+            window,
+        });
+        cx.notify();
+    }
+
+    /// Continue a scrub from a window-root mouse move.
+    fn drag_scrub(
+        &mut self,
+        position: Point<Pixels>,
+        pressed: Option<MouseButton>,
+        cx: &mut Context<Self>,
+    ) {
+        if pressed != Some(MouseButton::Left) {
+            return;
+        }
+        let Some(drag) = self.scrub.as_mut() else {
+            return;
+        };
+        drag.scrub.drag_to(position);
+        cx.notify();
+    }
+
+    /// Finish a scrub: one commit on release, or nothing if the pointer never moved.
+    fn end_scrub(&mut self, cx: &mut Context<Self>) {
+        let Some(drag) = self.scrub.take() else {
+            return;
+        };
+        if drag.scrub.changed() {
+            let text = drag.scrub.text(&drag.unit);
+            self.commit_property(&drag.key, &text, cx);
+        }
+        cx.notify();
+    }
+
     /// Open the colour palette under a property row.
     ///
     /// Opening is deliberately not a toggle: an outside press dismisses the
@@ -3006,7 +3076,6 @@ impl Shell {
             track: None,
             window,
             draft: None,
-            dial: None,
             dragging: false,
         });
         cx.notify();
@@ -3040,41 +3109,6 @@ impl Shell {
             track: None,
             window,
             draft: None,
-            dial: None,
-            dragging: false,
-        });
-        cx.notify();
-    }
-
-    /// Open the jog dial for a dimension without a declared range.
-    ///
-    /// The gesture starts on the face's press, not here: opening the overlay does
-    /// not change the value, and `value` is the row's current text.
-    #[allow(clippy::too_many_arguments)]
-    fn open_dial_popup(
-        &mut self,
-        key: &str,
-        label: &str,
-        value: &str,
-        unit: &str,
-        anchor: Point<Pixels>,
-        window: WindowId,
-        cx: &mut Context<Self>,
-    ) {
-        self.row_popup = Some(RowPopup {
-            key: key.to_string(),
-            label: label.to_string(),
-            kind: RowPopupKind::Dial,
-            value: value.to_string(),
-            range: None,
-            unit: unit.to_string(),
-            choices: Vec::new(),
-            dialog_field: None,
-            anchor,
-            track: None,
-            window,
-            draft: None,
-            dial: None,
             dragging: false,
         });
         cx.notify();
@@ -3105,7 +3139,6 @@ impl Shell {
             track: None,
             window,
             draft: None,
-            dial: None,
             dragging: false,
         });
         cx.notify();
@@ -3874,8 +3907,8 @@ fn properties_rows_panel(
                         None
                     };
                     // A dimension without a declared range is not a position on a
-                    // track: it gets the jog dial instead of an invented window.
-                    let dial = row.kind == "quantity" && slider_range.is_none();
+                    // track: its handle is dragged directly and a scale appears.
+                    let scrubbable = row.kind == "quantity" && slider_range.is_none();
                     let label = row_label(row);
                     let open = shell
                         .row_popup
@@ -3997,19 +4030,18 @@ fn properties_rows_panel(
                                 }),
                             ))
                             .into_any_element()
-                    } else if dial {
+                    } else if scrubbable {
                         let state = shell.ensure_prop_input(&key, &row.value, window, cx);
-                        // The open gesture, when there is one, so the glyph's needle
-                        // follows the drag (the widget owns the mapping and the ink).
-                        let open_dial = shell
-                            .row_popup
-                            .as_ref()
-                            .filter(|popup| popup.key == key)
-                            .and_then(|popup| popup.dial);
-                        let popup_key = key.clone();
-                        let popup_label = label.clone();
-                        let popup_value = row.value.clone();
-                        let popup_unit = row_unit(row);
+                        // The handle is dragged directly. The press starts the gesture
+                        // at the pointer and the window root forwards the moves, so the
+                        // scale appears while the button is held (no second click); the
+                        // release commits.
+                        let active = shell.scrub.as_ref().is_some_and(|drag| drag.key == key);
+                        let start = row_number(&row.value).unwrap_or(0.0);
+                        let drag_key = key.clone();
+                        let drag_label = label.clone();
+                        let drag_unit = row_unit(row);
+                        let handle_key = format!("scrub-{key}");
                         div()
                             .debug_selector(move || selector.clone())
                             .flex()
@@ -4019,21 +4051,40 @@ fn properties_rows_panel(
                             .w(px(180.))
                             .flex_shrink_0()
                             .child(div().w(px(112.)).child(state))
-                            .child(dial::trigger(
-                                SharedString::from(format!("dial-{key}")),
-                                open_dial,
-                                cx.listener(move |this, event: &gpui::ClickEvent, window, cx| {
-                                    this.open_dial_popup(
-                                        &popup_key,
-                                        &popup_label,
-                                        &popup_value,
-                                        &popup_unit,
-                                        event.position(),
-                                        window.window_handle().window_id(),
-                                        cx,
-                                    );
-                                }),
-                            ))
+                            .child(
+                                div()
+                                    .id(SharedString::from(handle_key.clone()))
+                                    .debug_selector(move || handle_key.clone())
+                                    .w(px(22.))
+                                    .h(px(18.))
+                                    .flex()
+                                    .items_center()
+                                    .justify_center()
+                                    .rounded_sm()
+                                    .cursor_ns_resize()
+                                    .hover(|style| style.bg(rgb(PANEL)))
+                                    .on_mouse_down(
+                                        MouseButton::Left,
+                                        cx.listener(
+                                            move |this, event: &MouseDownEvent, window, cx| {
+                                                this.start_scrub(
+                                                    &drag_key,
+                                                    &drag_label,
+                                                    &drag_unit,
+                                                    start,
+                                                    event.position,
+                                                    window.window_handle().window_id(),
+                                                    cx,
+                                                );
+                                                cx.stop_propagation();
+                                            },
+                                        ),
+                                    )
+                                    .child(scrub::handle(
+                                        SharedString::from(format!("scrub-{key}")),
+                                        active,
+                                    )),
+                            )
                             .into_any_element()
                     } else {
                         let state = shell.ensure_prop_input(&key, &row.value, window, cx);
@@ -4163,7 +4214,8 @@ fn track_fraction(popup: &RowPopup, x: Pixels) -> f32 {
 }
 
 /// The anchored overlay a property row opened: the colour palette, the range
-/// slider, the jog dial or an enumeration's dropdown.
+/// slider or an enumeration's dropdown. (The scrub's scale is a separate overlay
+/// driven by the held handle.)
 ///
 /// It floats below the pointer, so it covers the pane instead of pushing its rows
 /// down, and it is `deferred`, so it is not clipped by the scrolling pane. Only the
@@ -4188,7 +4240,6 @@ fn row_popup_overlay(
     let choices = popup.choices.clone();
     let dialog_field = popup.dialog_field;
     let draft = popup.draft;
-    let dial_state = popup.dial;
 
     let close = {
         let weak = cx.weak_entity();
@@ -4397,110 +4448,6 @@ fn row_popup_overlay(
                 .child(ends)
                 .into_any_element()
         }
-        RowPopupKind::Dial => {
-            let start = row_number(&value).unwrap_or(0.0);
-            // At rest the needle points up; while dragging it follows the gesture.
-            let painted =
-                dial_state.unwrap_or_else(|| dial::Dial::new(start, point(px(0.), px(0.))));
-            let readout = match dial_state {
-                Some(dial) => dial.text(&unit),
-                None => value.clone(),
-            };
-
-            let weak = cx.weak_entity();
-            let down_key = key.clone();
-            let down = move |event: &MouseDownEvent, _window: &mut Window, cx: &mut App| {
-                let at = event.position;
-                let _ = weak.update(cx, |shell, cx| {
-                    if let Some(popup) = shell.row_popup.as_mut() {
-                        if popup.key == down_key {
-                            popup.dial = Some(dial::Dial::new(start, at));
-                            popup.dragging = true;
-                        }
-                    }
-                    cx.notify();
-                });
-                cx.stop_propagation();
-            };
-
-            let weak = cx.weak_entity();
-            let move_key = key.clone();
-            let moved = move |event: &MouseMoveEvent, _window: &mut Window, cx: &mut App| {
-                if !event.dragging() {
-                    return;
-                }
-                let at = event.position;
-                let _ = weak.update(cx, |shell, cx| {
-                    if let Some(popup) = shell.row_popup.as_mut() {
-                        if popup.key == move_key && popup.dragging {
-                            if let Some(dial) = popup.dial.as_mut() {
-                                dial.drag_to(at);
-                            }
-                        }
-                    }
-                    cx.notify();
-                });
-            };
-
-            let weak = cx.weak_entity();
-            let commit_key = key.clone();
-            let commit_unit = unit.clone();
-            let commit = move |_event: &MouseUpEvent, _window: &mut Window, cx: &mut App| {
-                let _ = weak.update(cx, |shell, cx| {
-                    if shell
-                        .row_popup
-                        .as_ref()
-                        .is_some_and(|popup| popup.key == commit_key)
-                    {
-                        if let Some(popup) = shell.row_popup.take() {
-                            if let Some(dial) = popup.dial.filter(|dial| dial.changed()) {
-                                let text = dial.text(&commit_unit);
-                                shell.commit_property(&popup.key, &text, cx);
-                            }
-                        }
-                        cx.notify();
-                    }
-                });
-            };
-
-            let pad = div()
-                .id(SharedString::from(format!("dial-{key}-pad")))
-                .debug_selector({
-                    let selector = format!("dial-{key}-pad");
-                    move || selector.clone()
-                })
-                .cursor_ew_resize()
-                // The press starts the gesture, so opening the overlay never edits
-                // the value by itself.
-                .on_mouse_down(MouseButton::Left, down)
-                .on_mouse_move(moved)
-                .on_mouse_up(MouseButton::Left, commit.clone())
-                .on_mouse_up_out(MouseButton::Left, commit)
-                .child(dial::face(
-                    SharedString::from(format!("dial-{key}")),
-                    painted,
-                ));
-
-            div()
-                .flex()
-                .flex_col()
-                .items_center()
-                .gap_1()
-                .child(
-                    div()
-                        .flex()
-                        .flex_row()
-                        .w_full()
-                        .justify_between()
-                        .gap_2()
-                        .text_color(rgb(FG))
-                        .child(label)
-                        .child(div().text_color(rgb(MUTED)).child(readout)),
-                )
-                .child(pad)
-                .child(div().text_color(rgb(MUTED)).child("drag horizontally"))
-                .into_any_element()
-        }
     };
 
     let panel = div()
@@ -4534,6 +4481,31 @@ fn row_popup_overlay(
         // Above the settings card (priority 4): the palette, slider and dial are
         // opened *from* the card and must paint over it.
         .with_priority(5)
+        .into_any_element(),
+    )
+}
+
+/// The scale shown while a property row's handle is being dragged.
+///
+/// It is anchored beside the press (so it does not chase the pointer) and deferred,
+/// so it paints over the pane and the settings card. Only the window that owns the
+/// gesture renders it.
+fn scrub_overlay(shell: &Shell, window: &Window) -> Option<AnyElement> {
+    let drag = shell.scrub.as_ref()?;
+    if drag.window != window.window_handle().window_id() {
+        return None;
+    }
+    let panel = scrub::scale("property-scrub", &drag.label, drag.scrub, &drag.unit);
+    Some(
+        deferred(
+            anchored()
+                .anchor(Anchor::TopLeft)
+                .position(point(drag.anchor.x + px(24.), drag.anchor.y - px(90.)))
+                .snap_to_window_with_margin(px(8.))
+                .child(panel),
+        )
+        // Above the row overlay (5): the scale is the active gesture's feedback.
+        .with_priority(6)
         .into_any_element(),
     )
 }
@@ -4635,10 +4607,24 @@ fn settings_card_view(
         // card, so the card follows the drag itself.
         .on_mouse_move(cx.listener(|this, event: &MouseMoveEvent, _window, cx| {
             this.drag_settings_card(event.position, event.pressed_button, cx);
+            this.drag_scrub(event.position, event.pressed_button, cx);
         }))
-        .on_mouse_up(MouseButton::Left, cx.listener(|this, _event, _window, cx| {
-            this.end_settings_drag(cx);
-        }))
+        .on_mouse_up(
+            MouseButton::Left,
+            cx.listener(|this, _event, _window, cx| {
+                this.end_settings_drag(cx);
+                this.end_scrub(cx);
+            }),
+        )
+        // A press elsewhere ends a scrub whose release was lost (for example when
+        // the pointer left the window). The handle stops propagation, so its own
+        // press reaches `start_scrub` and not this.
+        .on_mouse_down(
+            MouseButton::Left,
+            cx.listener(|this, _event, _window, cx| {
+                this.end_scrub(cx);
+            }),
+        )
         .child(header)
         .child(
             // A **column** wrapper: as a row, the panel's height was its content
@@ -4847,6 +4833,23 @@ pub(crate) fn dev_tools_body(
                 cx.stop_propagation();
             }
         }))
+        // A scrub's moves leave the 18 px handle immediately; the window root sees
+        // them all, so the scale keeps following the pointer.
+        .on_mouse_move(cx.listener(|this, event: &MouseMoveEvent, _window, cx| {
+            this.drag_scrub(event.position, event.pressed_button, cx);
+        }))
+        .on_mouse_up(
+            MouseButton::Left,
+            cx.listener(|this, _event, _window, cx| {
+                this.end_scrub(cx);
+            }),
+        )
+        .on_mouse_down(
+            MouseButton::Left,
+            cx.listener(|this, _event, _window, cx| {
+                this.end_scrub(cx);
+            }),
+        )
         .child(accordion(
             "dev",
             sections,
@@ -4859,6 +4862,10 @@ pub(crate) fn dev_tools_body(
         // from this window's property pane. It is a window-root child so it does not
         // depend on which pane is open; `row_popup_overlay` ignores other windows.
         .when_some(row_popup_overlay(shell, window, cx), |root, overlay| {
+            root.child(overlay)
+        })
+        // The scale of a handle being dragged in this window's property pane.
+        .when_some(scrub_overlay(shell, window), |root, overlay| {
             root.child(overlay)
         })
         .into_any_element()
@@ -5050,10 +5057,21 @@ impl Render for Shell {
                 // window's mouse position, which every element sees.)
                 this.last_pointer = Some(event.position);
                 this.drag_settings_card(event.position, event.pressed_button, cx);
+                this.drag_scrub(event.position, event.pressed_button, cx);
             }))
-            .on_mouse_up(MouseButton::Left, cx.listener(|this, _event, _window, cx| {
-                this.end_settings_drag(cx);
-            }))
+            .on_mouse_up(
+                MouseButton::Left,
+                cx.listener(|this, _event, _window, cx| {
+                    this.end_settings_drag(cx);
+                    this.end_scrub(cx);
+                }),
+            )
+            .on_mouse_down(
+                MouseButton::Left,
+                cx.listener(|this, _event, _window, cx| {
+                    this.end_scrub(cx);
+                }),
+            )
             .track_focus(&self.root_focus)
             .focusable()
             .child(content);
@@ -5076,6 +5094,12 @@ impl Render for Shell {
         // dialog, so it is a root child rather than part of a pane. Its priority
         // keeps it above the card and the dialog HUD.
         let body = match row_popup_overlay(self, window, cx) {
+            Some(overlay) => body.child(overlay),
+            None => body,
+        };
+        // The scale of a handle being dragged in the settings card (the card can
+        // live in this window).
+        let body = match scrub_overlay(self, window) {
             Some(overlay) => body.child(overlay),
             None => body,
         };
@@ -5412,11 +5436,11 @@ mod tests {
         );
     }
 
-    /// A document quantity declares no range, so the row gets the jog dial rather
-    /// than a track with an invented window. Two doublings is 96 px, and the commit
-    /// carries the unit so a length stays a length.
+    /// A document quantity declares no range, so its handle is dragged **directly**:
+    /// a scale appears while the button is held, vertical travel changes the value
+    /// (two doublings is 96 px), and the release commits with the unit.
     #[gpui::test]
-    fn a_document_quantity_gets_a_dial_that_keeps_its_unit(cx: &mut TestAppContext) {
+    fn a_document_quantity_is_scrubbed_directly(cx: &mut TestAppContext) {
         let _guard = crate::PYTHON_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let model = boot_shell();
         let window = cx.update(|cx| {
@@ -5461,44 +5485,45 @@ mod tests {
             "the property declares no range"
         );
 
-        assert!(
-            dev_cx.debug_bounds("dial-Params.Length-trigger").is_some(),
-            "an unbounded quantity gets the dial"
-        );
+        let handle = dev_cx
+            .debug_bounds("scrub-Params.Length")
+            .expect("an unbounded quantity gets a drag handle");
         assert!(
             dev_cx
                 .debug_bounds("slider-Params.Length-trigger")
                 .is_none(),
             "no invented range means no slider"
         );
-        click_at(&mut dev_cx, "dial-Params.Length-trigger");
+
+        // Press the handle and travel 96 px up (two doublings). The scale must be
+        // on screen while the button is held, before any release.
+        let press = handle.center();
+        let release = point(press.x, press.y - px(2.0 * scrub::DOUBLING_PX));
+        dev_cx.simulate_mouse_down(press, MouseButton::Left, gpui::Modifiers::default());
         dev_cx.update(|window, cx| {
             let _ = window.draw(cx);
         });
-        let popup = shell.read_with(&cx, |shell, _| {
-            shell
-                .row_popup
-                .as_ref()
-                .map(|popup| (popup.kind, popup.key.clone()))
-        });
-        assert_eq!(
-            popup,
-            Some((RowPopupKind::Dial, "Params.Length".to_string())),
-            "the trigger opens the dial"
+        assert!(
+            dev_cx.debug_bounds("property-scrub-scale").is_some(),
+            "the scale appears as soon as the handle is held"
+        );
+        assert!(
+            cx.update(|_window, cx| shell.read(cx).scrub.is_some()),
+            "the gesture started on the press"
         );
 
-        // Press near the face's left edge and travel 96 px (two doublings) right.
-        let face = dev_cx
-            .debug_bounds("dial-Params.Length-face")
-            .expect("the dial face is rendered");
-        let press = point(face.left() + px(4.0), face.center().y);
-        let release = point(press.x + px(2.0 * dial::DOUBLING_PX), press.y);
-        dev_cx.simulate_mouse_down(press, MouseButton::Left, gpui::Modifiers::default());
         dev_cx.simulate_mouse_move(release, MouseButton::Left, gpui::Modifiers::default());
+        dev_cx.update(|window, cx| {
+            let _ = window.draw(cx);
+        });
         dev_cx.simulate_mouse_up(release, MouseButton::Left, gpui::Modifiers::default());
         dev_cx.update(|window, cx| {
             let _ = window.draw(cx);
         });
+        assert!(
+            dev_cx.debug_bounds("property-scrub-scale").is_none(),
+            "the scale closes on release"
+        );
 
         let value = crate::python::properties("Params")
             .expect("properties")

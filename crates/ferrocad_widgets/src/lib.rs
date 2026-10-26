@@ -10,8 +10,8 @@
 //!   with its dropdown list.
 //! * [`slider`] maps a bounded number onto a log (or linear) track for the
 //!   property editor's range overlay.
-//! * [`dial`] is the unbounded counterpart: a jog dial that changes a dimension by
-//!   a ratio, with no invented range to clamp.
+//! * [`scrub`] is the unbounded numeric control: drag the handle in the row and a
+//!   linear/log scale appears with the current value.
 //! * [`icon`] holds painted pictograms (the status bar's Dev Tools bug).
 //! * [`window_chrome::window_frame`] draws client-side decorations (title bar and
 //!   resize grips) where the compositor does not.
@@ -27,12 +27,12 @@
 
 pub mod accordion;
 pub mod color;
-pub mod dial;
 pub mod events;
 pub mod form;
 pub mod icon;
 pub mod menu;
 pub mod scroll;
+pub mod scrub;
 pub mod slider;
 pub mod text_area;
 pub mod text_buffer;
@@ -42,12 +42,12 @@ pub mod window_chrome;
 
 pub use accordion::{AccordionLayout, AccordionSection, AccordionState, accordion, resolve_layout};
 pub use color::{normalize_hex, palette, parse_hex, swatch};
-pub use dial::{Dial, face as dial_face, trigger as dial_trigger, value_for as dial_value};
 pub use events::{ChangeEvent, SubmitEvent};
 pub use form::{choice_list, select_box, toggle};
 pub use icon::bug;
 pub use menu::{MenuInfoRow, MenuRow, menu};
 pub use scroll::{scroll_area, scroll_thumb, thumb_bounds};
+pub use scrub::{Scale, Scrub, Tick};
 pub use slider::{fraction as slider_fraction, trigger as slider_trigger};
 pub use text_area::TextAreaState;
 pub use text_buffer::TextBuffer;

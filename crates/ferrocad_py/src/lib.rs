@@ -29,9 +29,11 @@
 //! # Explanation
 //!
 //! Each core document or object is shared with Python behind an
-//! `Arc<Mutex<..>>`. Observer arguments are backed by a global identity cache so
-//! the same object compares equal with `is` across calls. Because the types are
-//! built with the `abi3` stable ABI, one binary works across CPython versions.
+//! `Arc<Mutex<..>>`. Observer arguments are backed by an identity cache scoped to
+//! the CPython interpreter that created them, so the same object compares equal
+//! with `is` across calls without leaking a wrapper from one interpreter into
+//! another. Because the types are built with the `abi3` stable ABI, one binary
+//! works across CPython versions.
 //!
 //! The crate is compiled as a `cdylib` extension module (not published docs); the
 //! Rust-level API reference here is thin by design — the interesting surface is the
@@ -60,32 +62,97 @@ use pyo3::types::{PyAny, PyAnyMethods, PyBool, PyBytes, PyDict, PyDictMethods, P
 use pyo3::IntoPyObjectExt;
 
 // ---------------------------------------------------------------------------
-// Observer registry + object identity cache
+// Interpreter-scoped Python state
 // ---------------------------------------------------------------------------
+//
+// Ownership rule:
+//
+// * **Rust registries stay process-wide.** `ferrocad_core::application`, the
+//   object-type/property-type/property-extension registries and the restore
+//   hooks hold plain Rust data. They are shared by every interpreter in the
+//   process and exposed as one kernel (`ferrocad_core::kernel()`). This also
+//   covers this crate's converter, sub-element-resolver, provider and method
+//   tables: their entries are names and `fn` pointers, never a `Py` value.
+// * **Only interpreter-owned wrappers are scoped.** A `Py<..>` belongs to the
+//   CPython interpreter that created it; handing interpreter B a wrapper that
+//   points into interpreter A's object graph would be undefined behaviour.
+//
+// `GILOnceCell`/`PyOnceLock` do not express that distinction: they serialize
+// access under the GIL, but the stored value is still process-global. Every
+// table that stores a `Py` value (observers, object identity, document
+// wrappers) therefore lives in one map keyed by `PyInterpreterState_GetID()`,
+// which is exactly the boundary that matters.
+//
+// CPython allocates interpreter IDs from a process-wide, monotonically
+// increasing counter and never reuses them, so a bucket can only be reached by
+// the interpreter it was created for. Buckets are not reclaimed when an
+// interpreter is destroyed: we only ever touch the *current* interpreter's
+// bucket, so a dead interpreter's `Py` refcounts are never adjusted from
+// another interpreter (and this static is never dropped at process exit).
 
-/// Python objects registered via `FreeCAD.addDocumentObserver`.
-static OBSERVERS: OnceLock<Mutex<Vec<Py<PyAny>>>> = OnceLock::new();
+/// Python-owned registries, one bucket per CPython interpreter.
+static INTERPRETER_STATE: OnceLock<Mutex<HashMap<u64, InterpreterState>>> = OnceLock::new();
 
-/// Canonical `Py<PyDocumentObject>` per `(document pointer, object id)`, so the
-/// same Rust object always maps to the *same* Python object (needed for `is`).
-static OBJECT_CACHE: OnceLock<Mutex<HashMap<(usize, ObjectId), Py<PyDocumentObject>>>> = OnceLock::new();
+/// Key used when CPython cannot report an interpreter ID (`_GetID` returns -1).
+/// Cache access always runs under the GIL, so this only appears for a broken
+/// thread state; grouping such calls in one bucket is the conservative choice.
+const UNKNOWN_INTERPRETER: u64 = u64::MAX;
 
-/// Canonical `Py<PyDocument>` per open-document name, so `getDocument`/`listDocuments`
-/// return the *same* Python object (needed for `is`). Document *existence*, the
-/// active document and name allocation live in `ferrocad_core::application`; this
-/// cache only preserves Python object identity for the wrappers.
-static DOCUMENTS: OnceLock<Mutex<BTreeMap<String, Py<PyDocument>>>> = OnceLock::new();
-
-fn documents() -> &'static Mutex<BTreeMap<String, Py<PyDocument>>> {
-    DOCUMENTS.get_or_init(|| Mutex::new(BTreeMap::new()))
+/// The CPython interpreter the calling thread is currently running.
+///
+/// Every caller of the accessors below holds the GIL (they create, clone or
+/// drop `Py` values), which guarantees a thread state - and therefore an
+/// interpreter - is current. `PyInterpreterState_Get()`/`_GetID()` are part of
+/// the stable ABI on CPython 3.9+ (ID since 3.7).
+fn current_interpreter() -> u64 {
+    // SAFETY: the caller is attached to an interpreter (it may not touch `Py`
+    // values otherwise); both calls are read-only queries of the thread state.
+    let id = unsafe { pyo3::ffi::PyInterpreterState_GetID(pyo3::ffi::PyInterpreterState_Get()) };
+    if id < 0 { UNKNOWN_INTERPRETER } else { id as u64 }
 }
 
-fn observers() -> &'static Mutex<Vec<Py<PyAny>>> {
-    OBSERVERS.get_or_init(|| Mutex::new(Vec::new()))
+/// Everything this module keeps on behalf of one interpreter.
+#[derive(Default)]
+struct InterpreterState {
+    /// Python objects registered via `FreeCAD.addDocumentObserver`.
+    observers: Vec<Py<PyAny>>,
+
+    /// Canonical `Py<PyDocumentObject>` per `(document pointer, object id)`, so
+    /// the same Rust object always maps to the *same* Python object (needed for
+    /// `is`).
+    objects: HashMap<(usize, ObjectId), Py<PyDocumentObject>>,
+
+    /// Canonical `Py<PyDocument>` per open-document name, so `getDocument`/
+    /// `listDocuments` return the *same* Python object (needed for `is`).
+    /// Document *existence*, the active document and name allocation live in
+    /// `ferrocad_core::application`; this cache only preserves Python object
+    /// identity for the wrappers.
+    documents: BTreeMap<String, Py<PyDocument>>,
 }
 
-fn object_cache() -> &'static Mutex<HashMap<(usize, ObjectId), Py<PyDocumentObject>>> {
-    OBJECT_CACHE.get_or_init(|| Mutex::new(HashMap::new()))
+/// Run `f` against the current interpreter's Python-owned registries.
+///
+/// Every caller holds the GIL: the tables built on this store `Py` values, so
+/// they cannot be used without one.
+fn interpreter_state<R>(f: impl FnOnce(&mut InterpreterState) -> R) -> R {
+    let id = current_interpreter();
+    let mut states = INTERPRETER_STATE
+        .get_or_init(|| Mutex::new(HashMap::new()))
+        .lock()
+        .unwrap();
+    f(states.entry(id).or_default())
+}
+
+fn with_documents<R>(f: impl FnOnce(&mut BTreeMap<String, Py<PyDocument>>) -> R) -> R {
+    interpreter_state(|state| f(&mut state.documents))
+}
+
+fn with_observers<R>(f: impl FnOnce(&mut Vec<Py<PyAny>>) -> R) -> R {
+    interpreter_state(|state| f(&mut state.observers))
+}
+
+fn with_objects<R>(f: impl FnOnce(&mut HashMap<(usize, ObjectId), Py<PyDocumentObject>>) -> R) -> R {
+    interpreter_state(|state| f(&mut state.objects))
 }
 
 fn doc_key(doc: &Py<PyDocument>) -> usize {
@@ -100,8 +167,8 @@ fn get_or_create_object(
     id: ObjectId,
 ) -> Py<PyDocumentObject> {
     let key = (doc_key(doc), id);
-    if let Some(existing) = object_cache().lock().unwrap().get(&key) {
-        return existing.clone_ref(py);
+    if let Some(existing) = with_objects(|cache| cache.get(&key).map(|obj| obj.clone_ref(py))) {
+        return existing;
     }
     let obj = Py::new(
         py,
@@ -113,12 +180,12 @@ fn get_or_create_object(
         },
     )
     .unwrap();
-    object_cache().lock().unwrap().insert(key, obj.clone_ref(py));
+    with_objects(|cache| cache.insert(key, obj.clone_ref(py)));
     obj
 }
 
 fn forget_object(doc: &Py<PyDocument>, id: ObjectId) {
-    object_cache().lock().unwrap().remove(&(doc_key(doc), id));
+    with_objects(|cache| cache.remove(&(doc_key(doc), id)));
 }
 
 /// Error for any access on a document object that is no longer in its document
@@ -197,16 +264,11 @@ fn type_is_derived_from(type_id: &str, target: &str) -> bool {
 
 fn forget_document(doc: &Py<PyDocument>) {
     let key = doc_key(doc);
-    object_cache().lock().unwrap().retain(|(d, _), _| *d != key);
+    with_objects(|cache| cache.retain(|(d, _), _| *d != key));
 }
 
 fn observer_snapshot(py: Python<'_>) -> Vec<Py<PyAny>> {
-    observers()
-        .lock()
-        .unwrap()
-        .iter()
-        .map(|o| o.clone_ref(py))
-        .collect()
+    with_observers(|observers| observers.iter().map(|o| o.clone_ref(py)).collect())
 }
 
 /// Call `slot` on every registered observer, swallowing per-observer errors.
@@ -261,6 +323,8 @@ pub type PythonToExtension = fn(&Bound<'_, PyAny>) -> Option<ExtensionValue>;
 
 type ExtensionConverters = Vec<(String, ExtensionToPython, PythonToExtension)>;
 
+/// Process-wide: entries hold names and `fn` pointers, never a `Py` value, so
+/// they are interpreter-agnostic (see the ownership rule above).
 fn extension_converters() -> &'static Mutex<ExtensionConverters> {
     static CONVERTERS: OnceLock<Mutex<ExtensionConverters>> = OnceLock::new();
     CONVERTERS.get_or_init(|| Mutex::new(Vec::new()))
@@ -327,6 +391,7 @@ pub type SubElementToPython = fn(Python<'_>, &dyn ExtensionData, &str) -> Option
 
 type SubElementResolvers = Vec<(String, SubElementToPython)>;
 
+/// Process-wide: entries hold names and `fn` pointers, never a `Py` value.
 fn sub_element_resolvers() -> &'static Mutex<SubElementResolvers> {
     static RESOLVERS: OnceLock<Mutex<SubElementResolvers>> = OnceLock::new();
     RESOLVERS.get_or_init(|| Mutex::new(Vec::new()))
@@ -384,11 +449,13 @@ pub type ExtensionMethod = fn(
 type ProviderEntry = (String, ExtensionProvider);
 type MethodEntry = (String, String, ExtensionMethod);
 
+/// Process-wide: entries hold names and `fn` pointers, never a `Py` value.
 fn extension_providers() -> &'static Mutex<Vec<ProviderEntry>> {
     static PROVIDERS: OnceLock<Mutex<Vec<ProviderEntry>>> = OnceLock::new();
     PROVIDERS.get_or_init(|| Mutex::new(Vec::new()))
 }
 
+/// Process-wide: entries hold names and `fn` pointers, never a `Py` value.
 fn extension_methods() -> &'static Mutex<Vec<MethodEntry>> {
     static METHODS: OnceLock<Mutex<Vec<MethodEntry>>> = OnceLock::new();
     METHODS.get_or_init(|| Mutex::new(Vec::new()))
@@ -6616,7 +6683,7 @@ fn newDocument(py: Python<'_>, name: Option<String>) -> PyResult<Py<PyDocument>>
             comment: Mutex::new(String::new()),
         },
     )?;
-    documents().lock().unwrap().insert(doc_name, doc.clone_ref(py));
+    with_documents(|docs| docs.insert(doc_name, doc.clone_ref(py)));
     let bound = doc.bind(py);
     fire_doc("slotCreatedDocument", bound, None);
     fire_doc_str("slotBeforeChangeDocument", bound, "Label");
@@ -6666,7 +6733,7 @@ fn openDocument(
             comment: Mutex::new(String::new()),
         },
     )?;
-    documents().lock().unwrap().insert(doc_name, doc.clone_ref(py));
+    with_documents(|docs| docs.insert(doc_name, doc.clone_ref(py)));
     apply_all_python_states(py, &doc, &handle);
     notify_document_restored(py, &doc, &handle);
     Ok(doc)
@@ -6675,24 +6742,21 @@ fn openDocument(
 /// The registered Python wrapper for an open document, if any.
 #[pyfunction]
 fn getDocument(py: Python<'_>, name: &str) -> Option<Py<PyDocument>> {
-    documents().lock().unwrap().get(name).map(|doc| doc.clone_ref(py))
+    with_documents(|docs| docs.get(name).map(|doc| doc.clone_ref(py)))
 }
 
 /// `name -> wrapper` for every open document.
 #[pyfunction]
 fn listDocuments(py: Python<'_>) -> BTreeMap<String, Py<PyDocument>> {
-    documents()
-        .lock()
-        .unwrap()
-        .iter()
-        .map(|(name, doc)| (name.clone(), doc.clone_ref(py)))
-        .collect()
+    with_documents(|docs| {
+        docs.iter().map(|(name, doc)| (name.clone(), doc.clone_ref(py))).collect()
+    })
 }
 
 /// Close a document; emits the deletion signal. Returns whether it was open.
 #[pyfunction]
 fn closeDocument(py: Python<'_>, name: &str) -> bool {
-    let doc = documents().lock().unwrap().remove(name);
+    let doc = with_documents(|docs| docs.remove(name));
     application().lock().unwrap().close_document(name);
     match doc {
         Some(doc) => {
@@ -6717,7 +6781,7 @@ fn setActiveDocument(py: Python<'_>, name: &str) -> bool {
         changed
     };
     if changed {
-        let doc = documents().lock().unwrap().get(name).map(|d| d.clone_ref(py));
+        let doc = with_documents(|docs| docs.get(name).map(|d| d.clone_ref(py)));
         if let Some(doc) = doc {
             fire_doc("slotActivateDocument", doc.bind(py), None);
         }
@@ -6729,23 +6793,31 @@ fn setActiveDocument(py: Python<'_>, name: &str) -> bool {
 #[pyfunction]
 fn activeDocument(py: Python<'_>) -> Option<Py<PyDocument>> {
     let name = application().lock().unwrap().active().map(str::to_string)?;
-    documents().lock().unwrap().get(&name).map(|doc| doc.clone_ref(py))
+    with_documents(|docs| docs.get(&name).map(|doc| doc.clone_ref(py)))
 }
 
 #[pyfunction]
 fn addDocumentObserver(observer: Py<PyAny>) {
-    let mut obs = observers().lock().unwrap();
-    if !obs.iter().any(|o| o.as_ptr() == observer.as_ptr()) {
-        obs.push(observer);
-    }
+    with_observers(|obs| {
+        if !obs.iter().any(|o| o.as_ptr() == observer.as_ptr()) {
+            obs.push(observer);
+        }
+    });
 }
 
 #[pyfunction]
 fn removeDocumentObserver(observer: &Bound<'_, PyAny>) {
-    observers()
-        .lock()
-        .unwrap()
-        .retain(|o| o.as_ptr() != observer.as_ptr());
+    // Drop the removed observers only after the registry lock is released: an
+    // observer is arbitrary Python, so its `__del__` may re-enter this module.
+    let removed = with_observers(|obs| {
+        let target = observer.as_ptr();
+        let (removed, kept): (Vec<_>, Vec<_>) = std::mem::take(obs)
+            .into_iter()
+            .partition(|o| o.as_ptr() == target);
+        *obs = kept;
+        removed
+    });
+    drop(removed);
 }
 
 #[pymodule]
@@ -6786,19 +6858,232 @@ pub fn ferrocad(m: &Bound<'_, PyModule>) -> PyResult<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use pyo3::types::PyTuple;
+    use pyo3::types::{PyModule, PyTuple};
+    use std::ffi::CString;
     use std::sync::Once;
 
+    /// Start CPython and publish `ferrocad` as a built-in module.
+    ///
     /// The extension is built without `pyo3/auto-initialize` (it is a library
-    /// module), so tests must start the interpreter themselves.
+    /// module), so tests must start the interpreter themselves. The module is
+    /// registered in the same `Once` because the subinterpreter test imports it
+    /// from the child interpreter, and `append_to_inittab!` must run before the
+    /// first interpreter exists.
     fn init_python() {
         static INIT: Once = Once::new();
-        INIT.call_once(pyo3::prepare_freethreaded_python);
+        INIT.call_once(|| {
+            use crate::ferrocad as ferrocad_module;
+            pyo3::append_to_inittab!(ferrocad_module);
+            pyo3::prepare_freethreaded_python();
+        });
+    }
+
+    /// The module that creates subinterpreters: `_interpreters` on CPython 3.13+
+    /// (it replaced `_xxsubinterpreters`); `None` when neither exists.
+    fn subinterpreter_api(py: Python<'_>) -> Option<Bound<'_, PyModule>> {
+        py.import("_interpreters")
+            .or_else(|_| py.import("_xxsubinterpreters"))
+            .ok()
+    }
+
+    /// The interpreter ID CPython reports for the calling interpreter.
+    ///
+    /// CPython 3.14's `_interpreters.get_current()` returns
+    /// `(interpreter id, thread id)`; older releases return the ID alone.
+    fn reported_interpreter_id(py: Python<'_>) -> Option<u64> {
+        let module = subinterpreter_api(py)?;
+        let current = module.getattr("get_current").ok()?.call0().ok()?;
+        if let Ok(id) = current.extract::<u64>() {
+            return Some(id);
+        }
+        current.get_item(0).ok()?.extract::<u64>().ok()
     }
 
     fn quantity_args(py: Python<'_>, second: Py<PyAny>) -> PyResult<Bound<'_, PyTuple>> {
         let value: Py<PyAny> = 100.0f64.into_py_any(py)?;
         PyTuple::new(py, [value, second])
+    }
+
+    /// Python-owned wrappers are keyed by the interpreter that created them: a
+    /// bucket written for another interpreter must be invisible here.
+    #[test]
+    fn interpreter_state_is_keyed_by_the_cpython_interpreter() {
+        init_python();
+        Python::with_gil(|py| {
+            let current = current_interpreter();
+            if let Some(reported) = reported_interpreter_id(py) {
+                assert_eq!(
+                    current, reported,
+                    "the cache key must be CPython's own interpreter ID"
+                );
+            }
+
+            // CPython's IDs grow from a process-wide counter, so this one can
+            // never be allocated; it stands for "a different interpreter".
+            const OTHER: u64 = u64::MAX - 1;
+            let marker: Py<PyAny> = "owned by the other interpreter".into_py_any(py).unwrap();
+            INTERPRETER_STATE
+                .get_or_init(|| Mutex::new(HashMap::new()))
+                .lock()
+                .unwrap()
+                .entry(OTHER)
+                .or_default()
+                .observers
+                .push(marker);
+
+            assert!(
+                with_observers(|observers| observers.is_empty()),
+                "state keyed for interpreter {OTHER} leaked into interpreter {current}"
+            );
+        });
+    }
+
+    /// A real second interpreter must not see the first one's cached wrappers.
+    ///
+    /// Runs a child interpreter through `_interpreters`/`_xxsubinterpreters`
+    /// when this CPython ships one, and skips otherwise. The module is a
+    /// single-phase `#[pymodule]`, which CPython refuses to load in an isolated
+    /// subinterpreter (and which PyO3 0.25 also rejects: its `make_module`
+    /// guards against a second initialisation), so on current builds the child
+    /// cannot import `ferrocad`; the test then asserts that no
+    /// interpreter-scoped state was created for it. Once PyO3 grows multi-phase
+    /// module state the import succeeds, and the child must observe an empty
+    /// document cache.
+    #[test]
+    fn a_second_interpreter_does_not_see_the_first_interpreters_state() {
+        init_python();
+        Python::with_gil(|py| {
+            if subinterpreter_api(py).is_none() {
+                eprintln!(
+                    "skipping a_second_interpreter_does_not_see_the_first_interpreters_state: \
+                     this CPython has no subinterpreter API"
+                );
+                return;
+            }
+
+            // Populate this interpreter's wrapper caches.
+            const DOC: &str = "InterpreterScope";
+            let _doc = newDocument(py, Some(DOC.to_string())).expect("newDocument");
+            let main_id = current_interpreter();
+            assert!(with_documents(|docs| docs.contains_key(DOC)));
+
+            let report = std::env::temp_dir()
+                .join(format!("ferrocad-subinterpreter-{}.txt", std::process::id()));
+            let _ = std::fs::remove_file(&report);
+            let report_path = report.to_string_lossy();
+
+            // Runs *inside* the child interpreter, which cannot share objects
+            // with this one: the only channel is the report file.
+            let body = format!(
+                r#"
+def _current_id():
+    try:
+        import _interpreters as si
+    except ImportError:
+        import _xxsubinterpreters as si
+    current = si.get_current()
+    if isinstance(current, tuple):
+        current = current[0]
+    return current
+
+lines = ["ID {{}}".format(_current_id())]
+try:
+    import ferrocad as App
+except BaseException as exc:
+    lines.append("IMPORT-REFUSED {{}}: {{}}".format(type(exc).__name__, exc))
+else:
+    lines.append("DOCUMENTS {{!r}}".format(sorted(App.listDocuments())))
+    lines.append("GET {{!r}}".format(App.getDocument({doc:?})))
+with open({report:?}, "w") as handle:
+    handle.write("\n".join(lines))
+"#,
+                doc = DOC,
+                report = report_path,
+            );
+
+            let script = format!(
+                r#"
+try:
+    import _interpreters as si
+except ImportError:
+    import _xxsubinterpreters as si
+
+try:
+    interp = si.create()
+except BaseException as exc:
+    with open({report:?}, "w") as handle:
+        handle.write("NO-SPAWN {{}}: {{}}".format(type(exc).__name__, exc))
+else:
+    try:
+        si.run_string(interp, {body:?})
+    finally:
+        si.destroy(interp)
+"#,
+                report = report_path,
+                body = body,
+            );
+            py.run(
+                &CString::new(script).expect("the script has no NUL"),
+                None,
+                None,
+            )
+            .expect("the subinterpreter script ran");
+
+            let report_text = std::fs::read_to_string(&report).unwrap_or_default();
+            let _ = std::fs::remove_file(&report);
+            let mut lines = report_text.lines();
+            let first = lines.next().unwrap_or_default();
+
+            if let Some(reason) = first.strip_prefix("NO-SPAWN ") {
+                eprintln!(
+                    "skipping a_second_interpreter_does_not_see_the_first_interpreters_state: \
+                     could not spawn a subinterpreter ({reason})"
+                );
+            } else {
+                let sub_id: u64 = first
+                    .strip_prefix("ID ")
+                    .and_then(|id| id.parse().ok())
+                    .unwrap_or_else(|| {
+                        panic!("the child interpreter did not report an ID: {report_text:?}")
+                    });
+                assert_ne!(
+                    sub_id, main_id,
+                    "a child interpreter has its own CPython interpreter ID"
+                );
+
+                let import_line = lines.next().unwrap_or_default();
+                let documents_line = lines.next().unwrap_or_default();
+                let get_line = lines.next().unwrap_or_default();
+
+                if import_line.starts_with("IMPORT-REFUSED ") {
+                    // The child never reached the caches (CPython rejects a
+                    // single-phase module in a subinterpreter, and PyO3 0.25
+                    // rejects a second `make_module`), so it must not have
+                    // registered a bucket either.
+                    let has_bucket = INTERPRETER_STATE
+                        .get_or_init(|| Mutex::new(HashMap::new()))
+                        .lock()
+                        .unwrap()
+                        .contains_key(&sub_id);
+                    assert!(!has_bucket, "a refused import created state for {sub_id}");
+                    eprintln!("interpreter {sub_id}: {import_line} (isolated: no state created)");
+                } else {
+                    eprintln!("interpreter {sub_id}: {documents_line} / {get_line}");
+                    assert_eq!(
+                        documents_line, "DOCUMENTS []",
+                        "the child interpreter saw this interpreter's documents: {report_text:?}"
+                    );
+                    assert_eq!(
+                        get_line, "GET None",
+                        "the child interpreter saw this interpreter's wrapper: {report_text:?}"
+                    );
+                }
+            }
+
+            // The parent's state is untouched by whatever the child did.
+            assert!(getDocument(py, DOC).is_some());
+            assert!(closeDocument(py, DOC));
+        });
     }
 
     #[test]

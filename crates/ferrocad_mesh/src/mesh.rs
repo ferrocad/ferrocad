@@ -64,8 +64,19 @@ pub enum MeshError {
         /// The facet that is degenerate.
         facet: usize,
     },
+    /// A facet group references a facet that does not exist.
+    SegmentIndexOutOfRange {
+        /// The group that carries the bad index.
+        segment: usize,
+        /// The offending facet index.
+        index: u32,
+        /// How many facets the mesh has.
+        facet_count: usize,
+    },
     /// An STL file could not be understood.
     MalformedStl(String),
+    /// A `.bms` file could not be understood.
+    MalformedBms(String),
     /// Reading the file failed.
     Io(std::io::Error),
 }
@@ -87,7 +98,16 @@ impl fmt::Display for MeshError {
             MeshError::DegenerateFacet { facet } => {
                 write!(f, "facet {facet} repeats a point index")
             }
+            MeshError::SegmentIndexOutOfRange {
+                segment,
+                index,
+                facet_count,
+            } => write!(
+                f,
+                "facet group {segment} references facet {index}, but the mesh has only {facet_count} facets"
+            ),
             MeshError::MalformedStl(message) => write!(f, "malformed STL: {message}"),
+            MeshError::MalformedBms(message) => write!(f, "malformed BMS: {message}"),
             MeshError::Io(error) => write!(f, "mesh I/O error: {error}"),
         }
     }
@@ -118,6 +138,11 @@ impl From<std::io::Error> for MeshError {
 pub struct Mesh {
     points: Vec<Vector3>,
     facets: Vec<[u32; 3]>,
+    /// Facet-index groups (FreeCAD `Mesh.Segment`s). Empty unless a builder such
+    /// as `MeshPart.meshFromShape(..., Segments=True)` recorded them; the groups
+    /// are not derived from `facets` and any topology-changing operation drops
+    /// them.
+    segments: Vec<Vec<u32>>,
     placement: Placement,
 }
 
@@ -127,6 +152,7 @@ impl Mesh {
         Mesh {
             points: Vec::new(),
             facets: Vec::new(),
+            segments: Vec::new(),
             placement: Placement::identity(),
         }
     }
@@ -143,6 +169,7 @@ impl Mesh {
         Ok(Mesh {
             points,
             facets,
+            segments: Vec::new(),
             placement: Placement::identity(),
         })
     }
@@ -172,6 +199,92 @@ impl Mesh {
         }
 
         Self::new(points, indices)
+    }
+
+    /// A mesh from per-part triangle lists, welding shared vertices within
+    /// `tolerance` and recording one facet-index group per part.
+    ///
+    /// This is the kernel half of `MeshPart.meshFromShape(..., Segments=True)`:
+    /// each part is one shape face tessellated on its own, and the parts' shared
+    /// boundary vertices only coincide within `gp::Resolution()`. Points are
+    /// accumulated in first-seen order, so the first part's points come first.
+    /// A facet that collapses to fewer than three distinct welded points is
+    /// dropped (upstream's tessellator does the same); a part whose facets all
+    /// collapse still contributes its group, so `count_segments()` always equals
+    /// the number of parts.
+    ///
+    /// A non-positive or non-finite `tolerance` falls back to exact-bit welding.
+    /// The placement starts at the identity.
+    pub fn from_segmented_facets(
+        parts: &[(Vec<Vector3>, Vec<[u32; 3]>)],
+        tolerance: f64,
+    ) -> Result<Self, MeshError> {
+        let tolerance = if tolerance.is_finite() && tolerance > 0.0 {
+            tolerance
+        } else {
+            0.0
+        };
+        let mut points: Vec<Vector3> = Vec::new();
+        let mut facets: Vec<[u32; 3]> = Vec::new();
+        let mut segments: Vec<Vec<u32>> = Vec::with_capacity(parts.len());
+        let mut cells: HashMap<(i64, i64, i64), Vec<u32>> = HashMap::new();
+        let mut exact: HashMap<(u64, u64, u64), u32> = HashMap::new();
+
+        for (part_points, part_facets) in parts {
+            for (facet_index, facet) in part_facets.iter().enumerate() {
+                for &index in facet {
+                    if index as usize >= part_points.len() {
+                        return Err(MeshError::IndexOutOfRange {
+                            facet: facet_index,
+                            index,
+                            point_count: part_points.len(),
+                        });
+                    }
+                }
+            }
+
+            // A part's own points are welded once; the shared grid only sees the
+            // first occurrence of each, so a face-local duplicate does not cost
+            // a neighbour search.
+            let mut local: HashMap<u32, u32> = HashMap::with_capacity(part_points.len());
+            let mut group = Vec::with_capacity(part_facets.len());
+            for facet in part_facets {
+                let mut welded = [0u32; 3];
+                for (slot, &index) in facet.iter().enumerate() {
+                    welded[slot] = match local.get(&index).copied() {
+                        Some(mapped) => mapped,
+                        None => {
+                            let position = part_points[index as usize];
+                            let mapped = if tolerance > 0.0 {
+                                weld_within(position, tolerance, &mut points, &mut cells)
+                            } else {
+                                match exact.get(&point_key(position)).copied() {
+                                    Some(mapped) => mapped,
+                                    None => {
+                                        let mapped = points.len() as u32;
+                                        points.push(position);
+                                        exact.insert(point_key(position), mapped);
+                                        mapped
+                                    }
+                                }
+                            };
+                            local.insert(index, mapped);
+                            mapped
+                        }
+                    };
+                }
+                if welded[0] == welded[1] || welded[1] == welded[2] || welded[0] == welded[2] {
+                    continue;
+                }
+                group.push(facets.len() as u32);
+                facets.push(welded);
+            }
+            segments.push(group);
+        }
+
+        let mut mesh = Self::new(points, facets)?;
+        mesh.segments = segments;
+        Ok(mesh)
     }
 
     /// A box centred on the origin with edges along +X, +Y and +Z
@@ -237,6 +350,49 @@ impl Mesh {
     /// The number of facets.
     pub fn count_facets(&self) -> usize {
         self.facets.len()
+    }
+
+    /// The facet groups recorded by a segmented builder (FreeCAD
+    /// `Mesh.countSegments`/`getSegment`). Empty unless one was used.
+    pub fn segments(&self) -> &[Vec<u32>] {
+        &self.segments
+    }
+
+    /// The number of facet groups.
+    pub fn count_segments(&self) -> usize {
+        self.segments.len()
+    }
+
+    /// One facet group, or `None` when `index` is out of range.
+    pub fn segment(&self, index: usize) -> Option<&[u32]> {
+        self.segments.get(index).map(Vec::as_slice)
+    }
+
+    /// Append a facet group, rejecting an index outside the facet list.
+    ///
+    /// Groups are kept verbatim (they are not deduplicated or ordered). Any
+    /// later topology change drops all groups, because their indices would no
+    /// longer mean the same facets.
+    pub fn add_segment(
+        &mut self,
+        facets: impl IntoIterator<Item = u32>,
+    ) -> Result<(), MeshError> {
+        let group: Vec<u32> = facets.into_iter().collect();
+        let facet_count = self.count_facets();
+        if let Some(&index) = group.iter().find(|&&index| index as usize >= facet_count) {
+            return Err(MeshError::SegmentIndexOutOfRange {
+                segment: self.segments.len(),
+                index,
+                facet_count,
+            });
+        }
+        self.segments.push(group);
+        Ok(())
+    }
+
+    /// Drop every facet group.
+    pub fn clear_segments(&mut self) {
+        self.segments.clear();
     }
 
     /// The placement stored beside the mesh.
@@ -407,6 +563,7 @@ impl Mesh {
     /// produce an inconsistent value.
     pub fn is_valid(&self) -> bool {
         validate(&self.points, &self.facets).is_ok()
+            && validate_segments(&self.segments, self.facets.len()).is_ok()
     }
 }
 
@@ -432,6 +589,60 @@ fn validate(points: &[Vector3], facets: &[[u32; 3]]) -> Result<(), MeshError> {
         }
     }
     Ok(())
+}
+
+/// Check that every facet group addresses an existing facet.
+fn validate_segments(segments: &[Vec<u32>], facet_count: usize) -> Result<(), MeshError> {
+    for (segment, group) in segments.iter().enumerate() {
+        for &index in group {
+            if index as usize >= facet_count {
+                return Err(MeshError::SegmentIndexOutOfRange {
+                    segment,
+                    index,
+                    facet_count,
+                });
+            }
+        }
+    }
+    Ok(())
+}
+
+/// The welded index of `position`: an existing point within `tolerance` on every
+/// axis, or a new one. The spatial hash stores points in cells of that size and
+/// searches the 27 neighbours, so a point just across a cell boundary still
+/// finds its twin (the same weld `Shape.tessellate` performs).
+fn weld_within(
+    position: Vector3,
+    tolerance: f64,
+    points: &mut Vec<Vector3>,
+    cells: &mut HashMap<(i64, i64, i64), Vec<u32>>,
+) -> u32 {
+    let key = (
+        (position.x / tolerance).floor() as i64,
+        (position.y / tolerance).floor() as i64,
+        (position.z / tolerance).floor() as i64,
+    );
+    for dx in -1..=1 {
+        for dy in -1..=1 {
+            for dz in -1..=1 {
+                if let Some(bucket) = cells.get(&(key.0 + dx, key.1 + dy, key.2 + dz)) {
+                    for &candidate in bucket {
+                        let point = points[candidate as usize];
+                        if (point.x - position.x).abs() <= tolerance
+                            && (point.y - position.y).abs() <= tolerance
+                            && (point.z - position.z).abs() <= tolerance
+                        {
+                            return candidate;
+                        }
+                    }
+                }
+            }
+        }
+    }
+    let index = points.len() as u32;
+    points.push(position);
+    cells.entry(key).or_default().push(index);
+    index
 }
 
 /// The three undirected edges of a facet, each with its ends sorted so shared
@@ -653,5 +864,103 @@ mod tests {
         let points = mesh.placed_points();
         assert_eq!(points.len(), 8);
         assert!(points.iter().all(|point| (point.x - 10.0).abs() <= 0.5));
+    }
+
+    #[test]
+    fn segmented_faces_weld_across_their_shared_edges() {
+        // Six box faces tessellated independently: each face carries its own four
+        // corners, and the shared corners differ by 1e-9 (inside the 1e-7 weld).
+        let (l, w, h) = (2.0, 3.0, 4.0);
+        let cube = Mesh::box_(l, w, h).unwrap();
+        let groups = [[0, 1], [2, 3], [4, 5], [6, 7], [8, 9], [10, 11]];
+
+        let mut parts = Vec::new();
+        for (face, group) in groups.iter().enumerate() {
+            let mut points: Vec<Vector3> = Vec::new();
+            let mut facets = Vec::new();
+            let mut local = std::collections::HashMap::new();
+            let nudge = face as f64 * 1e-9;
+            for &facet_index in group {
+                let mut mapped = [0u32; 3];
+                for (slot, &corner) in cube.facets()[facet_index].iter().enumerate() {
+                    mapped[slot] = *local.entry(corner).or_insert_with(|| {
+                        let point = cube.points()[corner as usize];
+                        points.push(Vector3::new(
+                            point.x + nudge,
+                            point.y + nudge,
+                            point.z + nudge,
+                        ));
+                        (points.len() - 1) as u32
+                    });
+                }
+                facets.push(mapped);
+            }
+            parts.push((points, facets));
+        }
+
+        let mesh = Mesh::from_segmented_facets(&parts, 1e-7).unwrap();
+        assert_eq!(mesh.count_points(), 8);
+        assert_eq!(mesh.count_facets(), 12);
+        assert_eq!(mesh.count_segments(), 6);
+        assert!(mesh.segments().iter().all(|group| group.len() == 2));
+        assert!(mesh.is_solid());
+        assert!(!mesh.has_non_manifolds());
+        assert!((mesh.volume() - 24.0).abs() < 1e-6);
+        assert!(mesh.is_valid());
+        let covered: usize = mesh.segments().iter().map(Vec::len).sum();
+        assert_eq!(covered, mesh.count_facets());
+        for (index, group) in mesh.segments().iter().enumerate() {
+            assert_eq!(mesh.segment(index), Some(group.as_slice()));
+        }
+    }
+
+    #[test]
+    fn a_segment_must_index_an_existing_facet() {
+        let mut mesh = Mesh::box_(1.0, 1.0, 1.0).unwrap();
+        mesh.add_segment([0, 1]).unwrap();
+        assert_eq!(mesh.count_segments(), 1);
+        let error = mesh.add_segment([0, 12]).unwrap_err();
+        assert!(
+            matches!(
+                error,
+                MeshError::SegmentIndexOutOfRange {
+                    segment: 1,
+                    index: 12,
+                    facet_count: 12
+                }
+            ),
+            "{error}"
+        );
+        assert!(mesh.is_valid(), "the rejected group is not stored");
+        assert_eq!(mesh.count_segments(), 1);
+        // A group that bypasses the check makes `is_valid` report the mesh invalid.
+        mesh.segments.push(vec![12]);
+        assert!(!mesh.is_valid(), "a bad group makes the mesh invalid");
+        mesh.clear_segments();
+        assert_eq!(mesh.count_segments(), 0);
+        assert!(mesh.is_valid());
+    }
+
+    #[test]
+    fn an_empty_part_keeps_its_segment() {
+        let mesh = Mesh::from_segmented_facets(
+            &[
+                (
+                    vec![
+                        Vector3::zero(),
+                        Vector3::new(1.0, 0.0, 0.0),
+                        Vector3::new(0.0, 1.0, 0.0),
+                    ],
+                    vec![[0, 1, 2]],
+                ),
+                (Vec::new(), Vec::new()),
+            ],
+            1e-7,
+        )
+        .unwrap();
+        assert_eq!(mesh.count_segments(), 2, "one group per part");
+        assert_eq!(mesh.segment(0), Some(&[0u32][..]));
+        assert_eq!(mesh.segment(1), Some(&[][..]));
+        assert_eq!(mesh.segment(2), None);
     }
 }

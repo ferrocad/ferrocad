@@ -286,7 +286,8 @@ impl Mesh {
     ///
     /// Going through [`Mesh::new`] re-runs the structural validation; the
     /// operations above only remove or re-wind facets and remap points, so they
-    /// cannot violate it.
+    /// cannot violate it. The new topology has no facet groups: every mutator
+    /// changes facet indices, so any group recorded earlier would be stale.
     fn replace_topology(&mut self, points: Vec<Vector3>, facets: Vec<[u32; 3]>) {
         let placement = self.placement();
         let mut mesh =

@@ -25,7 +25,7 @@ use ferrocad_core::{ExtensionData, ExtensionValue};
 use ferrocad_mesh::{Mesh as CoreMesh, MeshError, MeshProperty};
 use ferrocad_py::{PyBoundBox, PyPlacement, PyVector};
 use ferrocad_types::Vector3;
-use pyo3::exceptions::{PyIOError, PyNotImplementedError, PyTypeError, PyValueError};
+use pyo3::exceptions::{PyIOError, PyIndexError, PyNotImplementedError, PyTypeError, PyValueError};
 use pyo3::prelude::*;
 use pyo3::types::{PyDict, PyModule, PyTuple};
 
@@ -338,38 +338,47 @@ impl PyMesh {
 
     fn read(path: &std::path::Path) -> PyResult<Self> {
         check_suffix(path)?;
-        CoreMesh::read_stl(path)
-            .map(Self::from_core)
-            .map_err(mesh_error)
+        let mesh = if has_suffix(path, "bms") {
+            CoreMesh::read_bms(path)
+        } else {
+            CoreMesh::read_stl(path)
+        };
+        mesh.map(Self::from_core).map_err(mesh_error)
     }
 }
 
-/// The one file suffix this slice supports (`Mesh.Mesh(path)` / `write(path)`).
-const SUPPORTED_SUFFIX: &str = "stl";
+/// The file suffixes `Mesh.Mesh(path)` and `Mesh.write(path)` support.
+const SUPPORTED_SUFFIXES: [&str; 2] = ["stl", "bms"];
 
-/// Reject a path whose suffix is not the supported one, naming it.
-fn check_suffix(path: &std::path::Path) -> PyResult<()> {
-    let suffix = path
-        .extension()
+/// Whether `path` carries `suffix`, case-insensitively.
+fn has_suffix(path: &std::path::Path, suffix: &str) -> bool {
+    path.extension()
         .and_then(|extension| extension.to_str())
-        .unwrap_or("");
-    if suffix.eq_ignore_ascii_case(SUPPORTED_SUFFIX) {
+        .is_some_and(|extension| extension.eq_ignore_ascii_case(suffix))
+}
+
+/// Reject a path whose suffix is not one of [`SUPPORTED_SUFFIXES`], naming it.
+fn check_suffix(path: &std::path::Path) -> PyResult<()> {
+    if SUPPORTED_SUFFIXES
+        .iter()
+        .any(|suffix| has_suffix(path, suffix))
+    {
         return Ok(());
     }
-    let found = if suffix.is_empty() {
-        "no suffix".to_string()
-    } else {
-        format!(".{suffix}")
+    let found = match path.extension().and_then(|extension| extension.to_str()) {
+        Some(suffix) if !suffix.is_empty() => format!(".{suffix}"),
+        _ => "no suffix".to_string(),
     };
     Err(PyValueError::new_err(format!(
-        "unsupported mesh file format ({found}): only .{SUPPORTED_SUFFIX} is supported"
+        "unsupported mesh file format ({found}): only .stl and .bms are supported"
     )))
 }
 
 #[pymethods]
 impl PyMesh {
-    /// `Mesh.Mesh()` — empty; `Mesh.Mesh(other)` — copy (placement included);
-    /// `Mesh.Mesh((points, facets))`; `Mesh.Mesh([tri, …])`; `Mesh.Mesh(path)`.
+    /// `Mesh.Mesh()` — empty; `Mesh.Mesh(other)` — copy (points, facets,
+    /// groups and placement); `Mesh.Mesh((points, facets))`;
+    /// `Mesh.Mesh([tri, …])`; `Mesh.Mesh(path)` for `.stl` or `.bms`.
     #[new]
     #[pyo3(signature = (*args))]
     fn new(args: &Bound<'_, PyTuple>) -> PyResult<Self> {
@@ -512,12 +521,16 @@ impl PyMesh {
         self.clone()
     }
 
-    /// Write binary STL from the **local** points.
+    /// Write the **local** points as binary STL (`.stl`) or FreeCAD BMS
+    /// (`.bms`). The placement is not baked into either format.
     fn write(&self, path: PathBuf) -> PyResult<()> {
         check_suffix(&path)?;
-        self.inner
-            .write_stl(&path)
-            .map_err(|error| PyIOError::new_err(error.to_string()))
+        let result = if has_suffix(&path, "bms") {
+            self.inner.write_bms(&path)
+        } else {
+            self.inner.write_stl(&path)
+        };
+        result.map_err(|error| PyIOError::new_err(error.to_string()))
     }
 
     fn removeDuplicatedPoints(&mut self) {
@@ -549,6 +562,30 @@ impl PyMesh {
     #[pyo3(signature = (deviation, minFacets = 0))]
     fn getPlanarSegments(&self, deviation: f64, minFacets: usize) -> Vec<Vec<usize>> {
         self.inner.planar_segments(deviation, minFacets)
+    }
+
+    /// The number of facet groups (FreeCAD `Mesh.countSegments`).
+    ///
+    /// These are the groups `MeshPart.meshFromShape(..., Segments=True)` records
+    /// (one per shape face), not the planar segmentation of
+    /// [`getPlanarSegments`](Self::getPlanarSegments).
+    fn countSegments(&self) -> usize {
+        self.inner.count_segments()
+    }
+
+    /// One facet group, as a list of 0-based facet indices.
+    ///
+    /// Raises `IndexError` when `index` is out of range, like upstream.
+    fn getSegment(&self, index: i64) -> PyResult<Vec<u32>> {
+        let count = self.inner.count_segments();
+        if index < 0 || index as usize >= count {
+            return Err(PyIndexError::new_err("index out of range"));
+        }
+        Ok(self
+            .inner
+            .segment(index as usize)
+            .expect("a checked segment index")
+            .to_vec())
     }
 
     fn countComponents(&self) -> usize {

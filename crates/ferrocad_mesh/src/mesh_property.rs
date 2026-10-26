@@ -142,10 +142,18 @@ impl ExtensionData for MeshProperty {
         out
     }
 
-    /// `.FCStd` mesh members (`MeshShapeN`/`MeshN`) are a later slice: upstream
-    /// persists a mesh in a separate ZIP member, and core's `.FCStd` writer
-    /// currently hardcodes the `PartShapeN` stem. A native (`.ferrocad`) document
-    /// persists this property through [`save`](ExtensionData::save).
+    /// `.FCStd` mesh members are a later slice: they need a core change first.
+    ///
+    /// The intended shape is one **single-payload** entry — an empty suffix and
+    /// the bytes [`Mesh::write_bms`](Mesh::write_bms) produces — so upstream's
+    /// `MeshKernelN.bms` / `<Mesh file="…"/>` pair can be emitted. Core's
+    /// `.FCStd` writer currently hardcodes the `PartShapeN` stem and the `<Part>`
+    /// element, so returning the bytes today would mislabel the member (and
+    /// therefore the property type on restore). `MeshProperty` should also learn
+    /// the matching restore path: read the member bytes with
+    /// [`Mesh::read_bms`](Mesh::read_bms) and keep the object's `Placement`
+    /// authoritative. A native (`.ferrocad`) document persists this property
+    /// through [`save`](ExtensionData::save).
     fn fcstd_members(&self) -> Option<Vec<(String, Vec<u8>)>> {
         None
     }

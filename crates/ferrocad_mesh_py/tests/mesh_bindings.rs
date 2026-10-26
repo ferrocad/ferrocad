@@ -254,6 +254,55 @@ for bad in (os.path.join(folder, "box.obj"), os.path.join(folder, "box")):
 }
 
 #[test]
+fn a_box_writes_and_reads_back_through_bms() {
+    boot();
+    Python::with_gil(|py| {
+        run(
+            py,
+            r#"
+import os
+import tempfile
+import Mesh
+import ferrocad as App
+
+folder = tempfile.mkdtemp()
+path = os.path.join(folder, "box.bms")
+
+box = Mesh.createBox(2, 3, 4)
+box.Placement = App.Placement(App.Vector(7, 8, 9))
+local = [tuple(p) for p in box.Points]
+facets = box.Topology[1]
+box.write(path)
+
+restored = Mesh.Mesh(path)
+assert restored.CountFacets == 12, restored.CountFacets
+assert restored.CountPoints == 8, restored.CountPoints
+assert restored.Topology[1] == facets, restored.Topology[1]
+for got, want in zip([tuple(p) for p in restored.Points], local):
+    assert all(abs(a - b) < 1e-5 for a, b in zip(got, want)), (got, want)
+assert restored.isSolid() and not restored.hasNonManifolds()
+assert abs(restored.Volume - 24.0) < 1e-4, restored.Volume
+
+# The placement rides in the BMS info field; the points stay local.
+assert tuple(restored.Placement.Base) == (7, 8, 9), restored.Placement.Base
+assert tuple(restored.BoundBox.Center) == (7.0, 8.0, 9.0), restored.BoundBox.Center
+
+# BMS keeps duplicate point identities that STL would weld.
+points = [App.Vector(0, 0, 0), App.Vector(1, 0, 0),
+          App.Vector(0, 1, 0), App.Vector(1, 0, 0)]
+noisy = Mesh.Mesh((points, [(0, 1, 2), (0, 3, 2)]))
+noisy_path = os.path.join(folder, "duplicates.bms")
+noisy.write(noisy_path)
+back = Mesh.Mesh(noisy_path)
+assert back.CountPoints == 4, back.CountPoints
+assert back.CountFacets == 2, back.CountFacets
+assert back.Topology[1] == [(0, 1, 2), (0, 3, 2)], back.Topology[1]
+"#,
+        );
+    });
+}
+
+#[test]
 fn a_mesh_feature_tracks_its_placement_without_a_recompute() {
     boot();
     Python::with_gil(|py| {
@@ -303,6 +352,7 @@ fn mesh_part_builds_a_mesh_from_a_shape() {
         run(
             py,
             r#"
+import Mesh
 import MeshPart
 import Part
 import ferrocad as App
@@ -319,13 +369,33 @@ assert tuple(mesh.Placement.Base) == (0, 0, 0)
 # Positional form: (Shape, LinearDeflection, AngularDeflection, Relative, Segments).
 same = MeshPart.meshFromShape(shape, 0.1, 0.5, False, False)
 assert same.CountPoints == 8 and same.CountFacets == 12
+assert same.countSegments() == 0, "plain meshFromShape records no groups"
 
+# Segments=True: one facet group per box face, welded into one closed mesh.
+segmented = MeshPart.meshFromShape(shape, 0.1, 0.5, False, True)
+assert segmented.CountPoints == 8, segmented.CountPoints
+assert segmented.CountFacets == 12, segmented.CountFacets
+assert segmented.countSegments() == 6, segmented.countSegments()
+assert segmented.isSolid() and not segmented.hasNonManifolds()
+
+covered = []
+for index in range(segmented.countSegments()):
+    group = segmented.getSegment(index)
+    assert len(group) == 2, (index, group)
+    assert all(0 <= facet < segmented.CountFacets for facet in group), group
+    covered.extend(group)
+assert sorted(covered) == list(range(12)), sorted(covered)
+copy = Mesh.Mesh(segmented)
+assert copy.countSegments() == 6, "a copy keeps the facet groups"
+assert copy.getSegment(0) == segmented.getSegment(0)
+
+# Upstream raises IndexError for an out-of-range group.
 try:
-    MeshPart.meshFromShape(shape, 0.1, 0.5, False, True)
-except NotImplementedError:
+    segmented.getSegment(6)
+except IndexError:
     pass
 else:
-    raise AssertionError("Segments=True must raise NotImplementedError")
+    raise AssertionError("getSegment(6) must raise IndexError")
 "#,
         );
     });

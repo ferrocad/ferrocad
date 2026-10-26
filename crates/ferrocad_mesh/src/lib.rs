@@ -32,12 +32,18 @@
 //!
 //! - **STL** is supported in both directions: binary writing and binary/ASCII
 //!   reading, with exact-coordinate welding on read.
+//! - **`.bms`** is FreeCAD's binary mesh format (`MeshIO::BMS`): a kernel dump
+//!   that preserves point identities STL cannot. Both directions are supported;
+//!   the reader accepts little- and big-endian files and the writer stores the
+//!   mesh placement in the format's free-form info field.
+//! - **Facet groups** (`Mesh.countSegments`/`getSegment`) are stored beside the
+//!   facets. [`Mesh::from_segmented_facets`] builds them while welding per-face
+//!   tessellations, which is the kernel half of
+//!   `MeshPart.meshFromShape(..., Segments=True)`.
 //! - **Editing and analysis** live beside the payload: `area`, point/facet
 //!   deduplication, degenerate-facet removal, normal harmonisation, connected
 //!   components, planar segmentation, self-intersection detection and boundary
 //!   loops. They all operate on the local points and keep the placement.
-//! - **`.bms`** (SimpleCAD's own job-layer mesh format) is out of scope for this
-//!   slice and is neither read nor written.
 //! - **`.FCStd` mesh members** are a later slice: `fcstd_members()` returns `None`
 //!   because core's `.FCStd` writer currently hardcodes the `PartShapeN` stem.
 //!   Native (`.ferrocad`) documents persist the property normally.
@@ -46,6 +52,7 @@
 //!   not have. [`Mesh::boundary_loops`] supplies the kernel half (the ordered
 //!   point loops) for that binding.
 
+mod bms;
 mod boundary;
 mod components;
 mod intersect;

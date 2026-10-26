@@ -1,13 +1,11 @@
 //! STL import and export.
 //!
-//! Only STL is in scope for this slice. SimpleCAD's own job-layer `.bms` format is
-//! a later addition; it is not read or written here.
-//!
-//! The writer emits **binary** STL: an 80-byte header, a little-endian `u32` facet
-//! count, then one 50-byte record per facet (a normal and three vertices, each three
-//! `f32`, plus a `u16` attribute). The reader accepts binary and ASCII STL and
-//! **welds exactly equal vertex coordinates**, so a box written and read back is a
-//! closed manifold rather than 36 disconnected triangles.
+//! FreeCAD's `.bms` kernel format lives in [`crate::bms`]; this module is only the
+//! STL side. The writer emits **binary** STL: an 80-byte header, a little-endian
+//! `u32` facet count, then one 50-byte record per facet (a normal and three
+//! vertices, each three `f32`, plus a `u16` attribute). The reader accepts binary
+//! and ASCII STL and **welds exactly equal vertex coordinates**, so a box written
+//! and read back is a closed manifold rather than 36 disconnected triangles.
 
 use std::fs;
 use std::io::{self, Write};

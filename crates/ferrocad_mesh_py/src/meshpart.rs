@@ -7,11 +7,15 @@
 
 use ferrocad_mesh::Mesh as CoreMesh;
 use ferrocad_py::PyVector;
-use pyo3::exceptions::{PyNotImplementedError, PyTypeError, PyValueError};
+use pyo3::exceptions::{PyTypeError, PyValueError};
 use pyo3::prelude::*;
 use pyo3::types::{PyList, PyModule, PyTuple};
 
 use crate::{PyMesh, index_triple, mesh_error, point, py_point};
+
+/// The tessellation weld: `gp::Resolution()`, the tolerance upstream's
+/// `Mesher::Vertex` uses for its `std::set`.
+const WELD_TOLERANCE: f64 = 1e-7;
 
 /// `MeshPart.meshFromShape(Shape, LinearDeflection=0.5, AngularDeflection=0.5,
 /// Relative=False, Segments=False)` → `Mesh.Mesh`.
@@ -23,8 +27,13 @@ use crate::{PyMesh, index_triple, mesh_error, point, py_point};
 /// preserved and the mesh placement starts at the identity.
 ///
 /// `Relative` is accepted and ignored (the tessellator is always absolute in
-/// this slice). `Segments=True` is **not implemented** (M1b): it raises
-/// `NotImplementedError` instead of silently returning an unsegmented mesh.
+/// this slice).
+///
+/// With `Segments=True` each shape **face** (`Shape.Faces`) is tessellated on
+/// its own and the per-face parts are welded together within
+/// [`WELD_TOLERANCE`], exactly like upstream's `Mesher` (one facet group per
+/// face, not one per connected region). A duck-typed shape without a `Faces`
+/// attribute falls back to one whole-shape tessellation in a single group.
 #[pyfunction]
 #[pyo3(signature = (Shape, LinearDeflection = 0.5, AngularDeflection = 0.5, Relative = false, Segments = false))]
 fn meshFromShape(
@@ -35,14 +44,40 @@ fn meshFromShape(
     Segments: bool,
 ) -> PyResult<PyMesh> {
     let _ = Relative;
+
     if Segments {
-        return Err(PyNotImplementedError::new_err(
-            "MeshPart.meshFromShape(..., Segments=True) is not implemented (M1b); \
-             it needs one facet group per face",
-        ));
+        let parts = match Shape.getattr("Faces") {
+            Ok(faces) => faces
+                .try_iter()?
+                .map(|face| {
+                    let face = face?;
+                    tessellate(&face, LinearDeflection, AngularDeflection)
+                })
+                .collect::<PyResult<Vec<_>>>()?,
+            Err(_) => vec![tessellate(Shape, LinearDeflection, AngularDeflection)?],
+        };
+        return CoreMesh::from_segmented_facets(&parts, WELD_TOLERANCE)
+            .map(PyMesh::from_core)
+            .map_err(mesh_error);
     }
 
-    let tessellation = Shape.call_method1("tessellate", (LinearDeflection, AngularDeflection))?;
+    let (points, facets) = tessellate(Shape, LinearDeflection, AngularDeflection)?;
+    CoreMesh::new(points, facets)
+        .map(PyMesh::from_core)
+        .map_err(mesh_error)
+}
+
+/// Read a shape's `(points, facets)` tessellation.
+///
+/// The upstream signature takes the linear deflection first and the angular one
+/// second (radians), which is the order the binding already exposes.
+fn tessellate(
+    shape: &Bound<'_, PyAny>,
+    linear_deflection: f64,
+    angular_deflection: f64,
+) -> PyResult<(Vec<ferrocad_types::Vector3>, Vec<[u32; 3]>)> {
+    let tessellation =
+        shape.call_method1("tessellate", (linear_deflection, angular_deflection))?;
     let tessellation = tessellation.downcast::<PyTuple>().map_err(|_| {
         PyTypeError::new_err("Shape.tessellate() must return a (points, facets) tuple")
     })?;
@@ -62,19 +97,17 @@ fn meshFromShape(
         .try_iter()?
         .map(|item| index_triple(&item?))
         .collect::<PyResult<_>>()?;
-
-    CoreMesh::new(points, facets)
-        .map(PyMesh::from_core)
-        .map_err(mesh_error)
+    Ok((points, facets))
 }
 
 /// `MeshPart.wireFromSegment(mesh, group)` → `list[Part.Wire]`.
 ///
 /// `group` is a Python list of 0-based facet indices (as returned by
-/// `Mesh.getPlanarSegments`). The boundary loops are computed on the **local**
-/// kernel and each one is handed to `Part.makePolygon(points, True)` in
-/// upstream's **reverse** boundary order, so a placed mesh's wires are
-/// unplaced. An out-of-range facet index raises `ValueError`.
+/// `Mesh.getPlanarSegments`, or by `Mesh.getSegment` after a segmented
+/// `meshFromShape`). The boundary loops are computed on the **local** kernel and
+/// each one is handed to `Part.makePolygon(points, True)` in upstream's
+/// **reverse** boundary order, so a placed mesh's wires are unplaced. An
+/// out-of-range facet index raises `ValueError`.
 #[pyfunction]
 fn wireFromSegment(
     py: Python<'_>,

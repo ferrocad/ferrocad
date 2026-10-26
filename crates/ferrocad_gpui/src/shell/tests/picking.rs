@@ -130,3 +130,80 @@ fn a_whole_body_selection_arms_the_gizmo_at_the_object_origin(cx: &mut TestAppCo
         "a sub-element still anchors at the object origin, not the click"
     );
 }
+
+/// The shell arms the registry **set**, not one narrowed gizmo: a workbench gizmo and
+/// the shared triad coexist, the most recently registered workbench answers first, a
+/// verb re-narrows the whole set without dropping entries, and a session pivot moves
+/// only the controls anchored at the object datum.
+#[gpui::test]
+fn the_hosted_set_keeps_a_workbench_gizmo_beside_the_shared_triad(cx: &mut TestAppContext) {
+    use ferrocad_stage::{GizmoKind, GizmoSet, TransformGizmo};
+
+    let _guard = crate::PYTHON_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let model = boot_shell();
+    let shell = cx.update(|cx| cx.new(|cx| Shell::from_model(model.clone(), cx)));
+
+    // The workbench's own datum, distinct from the body origin (2, 3, 4).
+    let workbench = Vector3::new(5.0, 0.0, 0.0);
+    shell.update(cx, |shell, _cx| {
+        shell.set_contributions(
+            Contributions::new()
+                .with_gizmo(translate_gizmo)
+                .with_gizmo(move |_selection: &SelectionRef, _stage: &Stage| {
+                    Some(TransformGizmo::translate(7, workbench))
+                }),
+        );
+    });
+
+    let stage = body_stage([2.0, 3.0, 4.0]);
+    let set = shell.read_with(cx, |shell, _| {
+        shell.arm_gizmos(&SelectionRef::whole(7), &stage)
+    });
+    assert_eq!(
+        set.len(),
+        6,
+        "both factories contribute one entry per offered kind"
+    );
+    assert_eq!(
+        set.primary().map(|index| set.gizmos()[index].origin()),
+        Some(workbench),
+        "the most recently registered factory answers the pointer first"
+    );
+    assert_eq!(
+        set.offered().len(),
+        2,
+        "the workbench gizmo and the triad coexist at their own anchors"
+    );
+
+    // A verb re-narrows the same six entries; none is dropped.
+    let mut set = set;
+    assert!(set.set_session(GizmoKind::Rotate));
+    assert_eq!(set.len(), 6);
+    assert_eq!(
+        set.offered().len(),
+        2,
+        "the rotate entries replace the translate ones in place"
+    );
+
+    // A session pivot re-anchors only what sat at the object datum.
+    shell.update(cx, |shell, cx| {
+        shell.on_gizmo_origin(Vector3::new(9.0, 9.0, 9.0), SnapKind::Vertex, cx);
+    });
+    let set: GizmoSet = shell.read_with(cx, |shell, _| {
+        shell.arm_gizmos(&SelectionRef::whole(7), &stage)
+    });
+    assert_eq!(
+        set.gizmos()[0].origin(),
+        workbench,
+        "a workbench gizmo keeps its own datum"
+    );
+    assert_eq!(
+        set.primary().map(|index| set.gizmos()[index].origin()),
+        Some(workbench)
+    );
+    assert_eq!(
+        set.gizmos()[3].origin(),
+        Vector3::new(9.0, 9.0, 9.0),
+        "the triad follows the session pivot"
+    );
+}

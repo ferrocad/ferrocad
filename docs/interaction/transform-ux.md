@@ -227,7 +227,15 @@ most recently registered factory first and the factory's kinds specific before
 set and `armed_gizmo` narrows it with the sticky mode.
 
 The toy height grip has a `HeightGizmo` adapter (`kind == Translate`, `AxisZ`) as the
-proof, but the viewport still hosts one `TransformGizmo` and emits `GizmoCommitEvent`,
-so the adapter is registered through the manipulator registry until the host/commit
-typing accepts a trait object. Re-narrowing the live hosted gizmo in `set_gizmo_mode` is
-the remaining step; a new selection is already narrowed authoritatively.
+proof. The viewport now hosts the whole `GizmoSet`: drawing, hit/hover/press/drag and the
+re-pivot record the grabbed entry's index, so a lower-priority gizmo cannot steal a
+gesture, and `set_gizmo_mode` rewrites the **session** kind of every hosted entry rather
+than replacing the one gizmo (`GizmoSet::set_session`). An entry that cannot serve the
+session stays hosted but unoffered, so no registered kind is lost; a verb the edition
+did not register offers nothing rather than substituting another kind. The grip now
+builds the same `GizmoCommitEvent` a translate triad does (`GizmoCommitEvent::
+to_interaction_with` -> `toy_height`/`set`), so move and height share one commit path.
+
+The remaining step is the trait-object host: `GizmoFactory`/`GizmoSet` still accept only
+`TransformGizmo`, so a workbench gizmo with a different interface is registered through
+the manipulator registry even though its commit already rides the shared route.

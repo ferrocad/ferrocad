@@ -299,6 +299,53 @@ its padded outline/area is pickable.
 | **F1 — edge dress-up arc** | `DressUpScrubber`: camera-facing arc over the selected edge, screen-space hit test, radial scrub with snap/bounds, typed readout, viewport commit | ✅ built |
 | **F2 — face push/pull stem** | `PushPullStem`: tessellation-derived planar face frame, amber normal stem on the shared axis solver, neutral `push_pull` commit, parametric extrusion/fuse/cut hook | ✅ built (2026-10-26) |
 | **R — re-pivot origin handle** | `GizmoTarget::Origin`, 10 px disc, snap through the viewport's candidates, `GizmoOrigin` + session user origin | ✅ built (2026-10-26) |
+| **K — kinds and set hosting** | `GizmoKind`, `GizmoFactory::kinds`, `Contributions::gizmos_for`, `GizmoSet` hosted by the viewport, session re-narrowing, the grip's shared commit | ✅ built (2026-10-27) |
+
+### 9.2 Kinds and set hosting as built (2026-10-27)
+
+- **One type per kind, a set at the host.** `GizmoKind` (`Translate`, `Rotate`,
+  `Universal`) is built over the same frame, hit and solver math;
+  `TransformGizmo::{translate,rotate,universal}` are the constructors and `Universal`
+  is the composition (`kind.shows(target)` is the union of the specific kinds).
+- **The registry holds a set.** `Contributions::gizmos_for` returns one entry per kind
+  a factory declares (`GizmoFactory::kinds`), most recently registered factory first and
+  specific kinds before `universal`; `with_gizmo_kinds` composes a subset.
+- **The viewport hosts the set.** `InventorViewport::set_gizmos(GizmoSet)` stores the
+  whole registry set. `GizmoSet::set_session(kind)` re-narrows it **in place**: every
+  entry whose registered kind `serves` the session takes it, and the others stay hosted
+  but unoffered (`offered()`), so a later wheel verb switches back without re-querying
+  the registry or re-selecting. `GizmoSet::single(gizmo)` is the historical one-gizmo
+  host: a lone control is re-kinded by every verb because it has nothing else to show.
+  A registry set never substitutes a kind the edition did not register — a `Rotate` verb
+  on a translate-only edition offers nothing.
+- **The order is the hit priority.** `GizmoSet::hit` walks the **offered** entries in
+  order and returns the first analytic claim with its index, so the viewport dispatches
+  the press, hover and drag to exactly that entry; a lower-priority gizmo cannot steal
+  it. Entries that share a frame origin are the same control at different compositions
+  (one prototype per registration), so the earlier one shadows the later and a specific
+  kind is never drawn twice over the composed one; a disabled entry neither draws nor
+  shadows. A workbench gizmo and the shared triad therefore coexist at their own
+  anchors, and a session re-pivot re-anchors only the controls sitting at the object's
+  datum.
+- **The height grip rides the same commit.** `HeightGrip` drags through a
+  `TransformGizmo` axis solver (local Z is the stem) and, on release, produces the same
+  `GizmoCommitEvent` a translate triad does; the workbench converts it with
+  `GizmoCommitEvent::to_interaction_with` into `toy_height`/`set`, while the triad uses
+  `to_interaction` for `transform`/`apply`. One drag vocabulary, one commit event, one
+  shell route (`on_interaction`) — the difference is the id, the action and the scalar
+  the workbench reads. A stem that points at the eye cannot be scrubbed by the axis
+  solver, so the grip falls back to the pointer's vertical screen travel with the same
+  commit.
+- **Covered by** `ferrocad_stage`'s
+  `the_session_offers_one_kind_per_control_and_keeps_the_others_hosted`,
+  `the_kind_order_decides_which_gizmo_answers_the_pointer`,
+  `a_session_no_entry_can_serve_offers_nothing_but_keeps_the_set` and
+  `a_single_hosted_gizmo_is_re_kinded_by_every_session`; `ferrocad_viewport`'s
+  `hosting_a_set_re_narrows_without_dropping_the_other_kinds` and
+  `the_highest_priority_gizmo_takes_the_press`; `ferrocad_gpui`'s
+  `the_hosted_set_keeps_a_workbench_gizmo_beside_the_shared_triad`; and
+  `ferrocad_toy`'s `the_height_drag_commits_the_shared_gizmo_event` and
+  `a_head_on_stem_still_commits_a_gizmo_event`.
 
 ### 9.1 Re-pivot and push/pull as built (2026-10-26)
 

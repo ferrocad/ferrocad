@@ -659,9 +659,33 @@ impl GizmoCommitEvent {
     /// with the object's current placement; the shell never needs to know what the
     /// transform means.
     pub fn to_interaction(&self) -> InteractionCommit {
-        InteractionCommit::new(TRANSFORM_ID, self.target_id, "apply")
-            .with_values(self.total_transform.m)
-            .with_readout(self.value.readout())
+        self.to_interaction_with(
+            TRANSFORM_ID,
+            "apply",
+            self.total_transform.m,
+            self.value.readout(),
+        )
+    }
+
+    /// Convert the same commit into a **workbench-owned** interaction.
+    ///
+    /// An axis-handle gizmo (the toy height grip, the Part push/pull stem) owns a
+    /// document property rather than a placement, but it must not grow a second drag or
+    /// commit route: it drags through the shared gizmo solver, and on release it hands
+    /// the resulting [`GizmoCommitEvent`] to its workbench, which names its own id, its
+    /// own action and the numbers it derives from the drag. That keeps one commit
+    /// vocabulary and one shell route (`on_interaction`) for move and for every
+    /// workbench gizmo.
+    pub fn to_interaction_with(
+        &self,
+        manipulator: impl Into<String>,
+        action: impl Into<String>,
+        values: impl IntoIterator<Item = f64>,
+        readout: impl Into<String>,
+    ) -> InteractionCommit {
+        InteractionCommit::new(manipulator, self.target_id, action)
+            .with_values(values)
+            .with_readout(readout)
     }
 }
 
@@ -1680,30 +1704,74 @@ impl TransformGizmo {
 /// An ordered set of transform gizmos: the registry's host-side form.
 ///
 /// **The order is the hit priority.** An entry earlier in the set answers before a
-/// later one: [`hit`](Self::hit) walks the set in order and the first gizmo whose
-/// analytic hit test claims the pointer wins. A registry builds the order by putting
-/// its most recently registered factory first (the same rule the manipulator registry
-/// uses) and, within one registration, the specific kinds before the composed
+/// later one: [`hit`](Self::hit) walks the offered entries in order and the first gizmo
+/// whose analytic hit test claims the pointer wins. A registry builds the order by
+/// putting its most recently registered factory first (the same rule the manipulator
+/// registry uses) and, within one registration, the specific kinds before the composed
 /// [`Universal`](GizmoKind::Universal) one.
 ///
-/// A host that can show only one gizmo (the current viewport) calls
-/// [`narrow`](Self::narrow) with the session kind and hosts the result; a host that can
-/// show several iterates [`gizmos`](Self::gizmos) and dispatches a hit to the entry
-/// [`hit`](Self::hit) reports.
+/// A host narrows the set to the session kind a wheel verb names
+/// ([`set_session`](Self::set_session)) and hosts the whole set: the entries that serve
+/// the session are **offered** (drawn and picked, in priority order), while the others
+/// stay in the set so a later verb can show them again without re-querying the
+/// registry. Entries that share a frame origin are the same control at different
+/// compositions — the registry emits one entry per kind from one prototype — so the
+/// earlier one shadows the later and a specific kind is never drawn twice over the
+/// composed one.
 #[derive(Clone, Debug, Default)]
 pub struct GizmoSet {
     gizmos: Vec<TransformGizmo>,
+    /// The kind each entry was **registered** with. [`set_session`](Self::set_session)
+    /// rewrites an entry's own kind to the session, so the registered kind is what
+    /// decides whether it can serve a future verb.
+    registered: Vec<GizmoKind>,
+    /// The session kind the hosted set is narrowed to.
+    session: GizmoKind,
 }
 
 impl GizmoSet {
-    /// A set in priority order (first = highest priority).
+    /// A set in priority order (first = highest priority), narrowed to the default
+    /// (translate) session.
     pub fn new(gizmos: Vec<TransformGizmo>) -> Self {
-        Self { gizmos }
+        let registered = gizmos.iter().map(TransformGizmo::kind).collect();
+        Self {
+            gizmos,
+            registered,
+            session: GizmoKind::default(),
+        }
+    }
+
+    /// The historical **one-gizmo host**: a single control that answers every session
+    /// verb.
+    ///
+    /// A host that can show only one gizmo has nothing else to offer, so its control is
+    /// registered as [`Universal`](GizmoKind::Universal) and re-kinded by every session:
+    /// the `Move` verb leaves arrows, `Rotate` leaves rings. A registry set built with
+    /// [`new`](Self::new) keeps the edition's declared kinds instead, so a verb the
+    /// edition does not offer shows nothing rather than substituting one.
+    pub fn single(gizmo: TransformGizmo) -> Self {
+        let session = gizmo.kind();
+        Self {
+            gizmos: vec![gizmo],
+            registered: vec![GizmoKind::Universal],
+            session,
+        }
     }
 
     /// The gizmos, in priority order.
     pub fn gizmos(&self) -> &[TransformGizmo] {
         &self.gizmos
+    }
+
+    /// The gizmos, in priority order, mutably (for a host that services hover, drags
+    /// and preview offsets on the hosted entries).
+    pub fn gizmos_mut(&mut self) -> &mut [TransformGizmo] {
+        &mut self.gizmos
+    }
+
+    /// The entry at `index`, mutably.
+    pub fn gizmo_mut(&mut self, index: usize) -> Option<&mut TransformGizmo> {
+        self.gizmos.get_mut(index)
     }
 
     /// Whether the registry offered no gizmos for the selection.
@@ -1716,33 +1784,124 @@ impl GizmoSet {
         self.gizmos.len()
     }
 
-    /// The kinds in the set, in priority order.
+    /// The entries' kinds in priority order: each entry's registered kind until
+    /// [`set_session`](Self::set_session) narrows it.
     pub fn kinds(&self) -> Vec<GizmoKind> {
         self.gizmos.iter().map(TransformGizmo::kind).collect()
+    }
+
+    /// The session kind the hosted set is narrowed to.
+    pub fn session(&self) -> GizmoKind {
+        self.session
+    }
+
+    /// The kind an entry takes under `session`.
+    fn session_kind(&self, index: usize) -> GizmoKind {
+        match self.registered.get(index) {
+            Some(registered) if registered.serves(self.session) => self.session,
+            Some(registered) => *registered,
+            None => self.session,
+        }
+    }
+
+    /// Whether the entry at `index` is **offered** for the current session: its
+    /// registered kind can serve the session, so the host draws and picks it.
+    pub fn serves_session(&self, index: usize) -> bool {
+        self.registered
+            .get(index)
+            .is_some_and(|kind| kind.serves(self.session))
+    }
+
+    /// Re-narrow the hosted set to `session`, in place.
+    ///
+    /// Every entry that can serve the session takes its kind; the others stay hosted
+    /// but stop being offered, so switching the verb back needs no re-query. A drag or
+    /// hover on an entry whose offering changed is cancelled: its handles are no longer
+    /// the ones the pointer was acting on. Returns whether the hosted handles changed.
+    pub fn set_session(&mut self, session: GizmoKind) -> bool {
+        let previous = self.session;
+        self.session = session;
+        let mut changed = false;
+        for index in 0..self.gizmos.len() {
+            let was_offered = self.registered[index].serves(previous);
+            let kind = self.session_kind(index);
+            if was_offered == self.serves_session(index) && self.gizmos[index].kind() == kind {
+                continue;
+            }
+            // The handle set changes under the pointer: drop whatever it was doing.
+            self.gizmos[index].cancel_drag();
+            self.gizmos[index].set_hovered_target(None);
+            self.gizmos[index].set_kind(kind);
+            changed = true;
+        }
+        changed
+    }
+
+    /// The entries on offer for the current session, in priority order.
+    ///
+    /// A disabled gizmo is absent from the pointer's point of view (its
+    /// [`GizmoStyle::enabled`] is false), so it is left out and cannot shadow a live
+    /// entry at the same origin. An entry whose frame origin matches an earlier offered
+    /// one is shadowed: the registry derives one entry per kind from one prototype, and
+    /// the earlier (more specific, or more recently registered) entry is the control.
+    pub fn offered(&self) -> Vec<usize> {
+        let mut origins: Vec<Vector3> = Vec::new();
+        let mut offered = Vec::new();
+        for index in 0..self.gizmos.len() {
+            if !self.serves_session(index) || !self.gizmos[index].style().enabled {
+                continue;
+            }
+            let origin = self.gizmos[index].origin();
+            if origins.contains(&origin) {
+                continue;
+            }
+            origins.push(origin);
+            offered.push(index);
+        }
+        offered
+    }
+
+    /// The first entry the host treats as *the* gizmo, in priority order. `None` when no
+    /// entry serves the session (the edition did not register that kind).
+    ///
+    /// This is the first [`offered`](Self::offered) entry while the style is enabled. A
+    /// set whose controls are all hidden still answers: the host *holds* them, and an
+    /// accessor (the anchor, the readout, the style) must keep working, so the fallback
+    /// is the first entry that serves the session.
+    pub fn primary(&self) -> Option<usize> {
+        self.offered()
+            .into_iter()
+            .next()
+            .or_else(|| (0..self.gizmos.len()).find(|index| self.serves_session(*index)))
+    }
+
+    /// The index of the offered entry with an **active drag**, if any.
+    pub fn dragging(&self) -> Option<usize> {
+        self.offered()
+            .into_iter()
+            .find(|index| self.gizmos[*index].is_dragging())
     }
 
     /// The highest-priority gizmo that can serve `session`, with its **handles narrowed
     /// to that session**.
     ///
     /// A wheel verb (`Move`, `Rotate`) narrows the edition's set to the one kind the
-    /// verb names. The first entry whose kind [`serves`](GizmoKind::serves) the session
-    /// wins, so the set order still decides between two candidates. A universal entry
-    /// serving a specific session is re-moded, so the hosted handles are the specific
-    /// kind's (a `Move` verb never leaves rings pickable).
+    /// verb names. The first entry whose **registered** kind
+    /// [`serves`](GizmoKind::serves) the session wins, so the set order still decides
+    /// between two candidates. A universal entry serving a specific session is
+    /// re-moded, so the hosted handles are the specific kind's (a `Move` verb never
+    /// leaves rings pickable).
     ///
     /// `None` when the edition offers no kind that can serve the session: a kind an
     /// edition does not register is genuinely absent, not silently substituted.
     pub fn narrow(&self, session: GizmoKind) -> Option<TransformGizmo> {
-        let gizmo = self
-            .gizmos
-            .iter()
-            .find(|gizmo| gizmo.kind().serves(session))?;
-        let mut narrowed = gizmo.clone();
+        let index = (0..self.gizmos.len()).find(|index| self.registered[*index].serves(session))?;
+        let mut narrowed = self.gizmos[index].clone();
         narrowed.set_kind(session);
         Some(narrowed)
     }
 
-    /// The first **enabled** gizmo (in priority order) whose analytic hit test claims
+    /// The first **offered** gizmo (in priority order) whose analytic hit test claims
     /// `device`.
     ///
     /// Returns the set index and the target so a host can dispatch the press to the
@@ -1751,15 +1910,11 @@ impl GizmoSet {
     /// is absent from the pointer's point of view, while the entry itself stays in the
     /// set so re-enabling it needs no re-selection.
     pub fn hit(&self, camera: &Camera, device: [i32; 2]) -> Option<(usize, GizmoTarget)> {
-        self.gizmos
-            .iter()
-            .enumerate()
-            .filter(|(_, gizmo)| gizmo.style().enabled)
-            .find_map(|(index, gizmo)| {
-                gizmo
-                    .hit(camera, device)
-                    .map(|target| (index, target))
-            })
+        self.offered().into_iter().find_map(|index| {
+            self.gizmos[index]
+                .hit(camera, device)
+                .map(|target| (index, target))
+        })
     }
 }
 
@@ -3784,5 +3939,120 @@ mod tests {
             .expect("the enabled entry still answers");
         assert_eq!(index, 1, "a disabled kind is not a hit target");
         assert_eq!(set.len(), 2, "the entry stays hosted for re-enabling");
+        assert_eq!(
+            set.offered(),
+            vec![1],
+            "a disabled entry neither draws nor shadows the live one"
+        );
+    }
+
+    /// The session narrows the **hosted set in place**: one control per kind is offered
+    /// (specific before composed), and re-narrowing never drops the other entries, so a
+    /// verb can switch back without re-querying the registry.
+    #[test]
+    fn the_session_offers_one_kind_per_control_and_keeps_the_others_hosted() {
+        let mut set = GizmoSet::new(vec![
+            TransformGizmo::translate(1, Vector3::zero()),
+            TransformGizmo::rotate(1, Vector3::zero()),
+            TransformGizmo::universal(1, Vector3::zero()),
+        ]);
+
+        assert!(set.set_session(GizmoKind::Translate));
+        assert_eq!(
+            set.offered(),
+            vec![0],
+            "the specific translate entry shadows the composed one"
+        );
+        assert_eq!(set.primary(), Some(0));
+
+        assert!(set.set_session(GizmoKind::Rotate));
+        assert_eq!(set.offered(), vec![1], "the rotate entry answers now");
+        assert_eq!(set.primary(), Some(1));
+        assert_eq!(
+            set.len(),
+            3,
+            "re-narrowing re-kinds the hosted set, it does not replace it"
+        );
+        assert_eq!(set.kinds()[2], GizmoKind::Rotate, "the composed entry is re-moded");
+
+        assert!(set.set_session(GizmoKind::Universal));
+        assert_eq!(set.offered(), vec![2], "only the composed entry owns both sets");
+        assert_eq!(set.len(), 3);
+
+        // Back to a kind it served before: the hosted entries switch again.
+        assert!(set.set_session(GizmoKind::Translate));
+        assert_eq!(set.offered(), vec![0]);
+        assert!(!set.set_session(GizmoKind::Translate), "the same session is a no-op");
+    }
+
+    /// The set's hit priority is resolved **per offered entry**: with the registry's
+    /// (translate, rotate, universal) order the axis hit goes to the specific translate
+    /// entry and the ring hit to the specific rotate entry, never to the composed one.
+    #[test]
+    fn the_kind_order_decides_which_gizmo_answers_the_pointer() {
+        let camera = Camera {
+            viewport: Viewport::new([400, 400], 1.0),
+            ..tilted_camera(5.0)
+        };
+        let mut set = GizmoSet::new(vec![
+            TransformGizmo::translate(1, Vector3::zero()),
+            TransformGizmo::rotate(1, Vector3::zero()),
+            TransformGizmo::universal(1, Vector3::zero()),
+        ]);
+
+        set.set_session(GizmoKind::Translate);
+        let axis = (0..400i32)
+            .flat_map(|x| (0..400i32).map(move |y| [x, y]))
+            .find_map(|device| {
+                set.hit(&camera, device)
+                    .filter(|(_, target)| target.kind() == HandleKind::Axis)
+            })
+            .expect("a stem is pickable");
+        assert_eq!(axis.0, 0, "the specific translate entry answers");
+
+        set.set_session(GizmoKind::Rotate);
+        let ring = (0..400i32)
+            .flat_map(|x| (0..400i32).map(move |y| [x, y]))
+            .find_map(|device| {
+                set.hit(&camera, device)
+                    .filter(|(_, target)| target.kind() == HandleKind::Ring)
+            })
+            .expect("a ring is pickable");
+        assert_eq!(ring.0, 1, "the specific rotate entry owns the rings");
+        assert_eq!(
+            set.primary(),
+            Some(1),
+            "the host accessor follows the offered entry"
+        );
+    }
+
+    /// A verb the edition does not offer shows nothing, and the entry stays hosted so
+    /// the next verb that does offer it needs no re-selection.
+    #[test]
+    fn a_session_no_entry_can_serve_offers_nothing_but_keeps_the_set() {
+        let mut set = GizmoSet::new(vec![TransformGizmo::translate(1, Vector3::zero())]);
+        assert!(set.set_session(GizmoKind::Rotate));
+        assert!(set.offered().is_empty(), "no ring entry was registered");
+        assert_eq!(set.primary(), None);
+        assert_eq!(set.len(), 1, "the translate entry stays hosted");
+
+        assert!(set.set_session(GizmoKind::Translate));
+        assert_eq!(set.offered(), vec![0], "it answers its own verb again");
+    }
+
+    /// The historical one-gizmo host: a lone control has no alternative to offer, so
+    /// every session verb re-kinds it (the pre-registry behaviour).
+    #[test]
+    fn a_single_hosted_gizmo_is_re_kinded_by_every_session() {
+        let mut set = GizmoSet::single(TransformGizmo::translate(1, Vector3::zero()));
+        assert_eq!(set.offered(), vec![0]);
+
+        assert!(set.set_session(GizmoKind::Rotate));
+        assert_eq!(set.offered(), vec![0]);
+        assert_eq!(set.gizmos()[0].kind(), GizmoKind::Rotate);
+
+        assert!(set.set_session(GizmoKind::Universal));
+        assert_eq!(set.gizmos()[0].kind(), GizmoKind::Universal);
+        assert_eq!(set.len(), 1);
     }
 }

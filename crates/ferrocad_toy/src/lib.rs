@@ -30,7 +30,10 @@ use ferrocad_stage::screen::{
     camera_forward, point_segment_distance, project_device, push_ribbon_uv, scale_for,
 };
 use ferrocad_stage::{DrawMode, InteractionCommit, Manipulator, ShapeItem, Stage};
-use ferrocad_stage::{GizmoHandle, GizmoKind, GizmoTarget, ManipulatorFrame, TransformGizmo};
+use ferrocad_stage::{
+    GizmoAxis, GizmoCommitEvent, GizmoConstraint, GizmoDragEvent, GizmoHandle, GizmoKind,
+    GizmoTarget, GizmoValue, ManipulatorFrame, TransformGizmo,
+};
 use ferrocad_types::{Matrix4, Vector3};
 
 /// The manipulator's registry id (`InteractionCommit::manipulator`).
@@ -50,8 +53,19 @@ const STEM_PIXELS: f64 = 44.0;
 ///
 /// The anchor is the top centre of the displayed item; the handle is a screen-invariant
 /// stem projecting **up** from that anchor into empty space plus a cross at its tip.
-/// Dragging up grows the height by the pointer's **vertical travel**, in screen-invariant
-/// world units.
+/// Dragging up grows the height by the pointer's travel along the stem's axis.
+///
+/// The drag and the commit are the **shared gizmo's**, not a private path: `solver` is a
+/// [`TransformGizmo`] whose frame is the grip's anchor with world axes, so local Z is
+/// the stem, and [`begin_drag`](Self::begin_drag) starts the very `AxisZ` axis solver a
+/// translate triad uses. On release the grip turns the resulting
+/// [`GizmoCommitEvent`](ferrocad_stage::GizmoCommitEvent) into its workbench
+/// interaction, exactly as the triad turns its own into `transform/apply` (see
+/// `docs/interaction/transform-ux.md` §7).
+///
+/// A stem seen end-on collapses to a dot, so the axis solver has no direction to scrub;
+/// the grip then falls back to the pointer's vertical screen travel, the same
+/// screen-invariant mapping, which keeps a top-down resize working.
 ///
 /// The casing behind the stroke is the shared [`GizmoStyle::outline`] halo, sized by
 /// [`GizmoStyle::halo_width`]. It is the WCAG 1.4.11 contrast aid: the toy's blue slab
@@ -64,11 +78,15 @@ pub struct HeightGrip {
     /// Top centre of the item, in world space.
     top: Vector3,
     height: f64,
-    /// `(press device y, height at press)` while a drag is active.
-    press: Option<(f64, f64)>,
+    /// The active drag: the press device `y`, the height at the press, and whether the
+    /// shared axis solver owns it (otherwise the screen-travel fallback does).
+    press: Option<HeightPress>,
     hovered: bool,
     /// The workspace appearance.
     style: GizmoStyle,
+    /// The shared axis solver: its frame is the anchor with world axes, so its local Z
+    /// is the stem and only the `AxisZ` grab is ever started.
+    solver: TransformGizmo,
     /// The camera view and height the cached stroke was built for.
     view: Option<Matrix4>,
     built: Option<f64>,
@@ -76,11 +94,25 @@ pub struct HeightGrip {
     items: [ShapeItem; 2],
 }
 
+/// The bookkeeping of an active height drag.
+#[derive(Clone, Copy, Debug)]
+struct HeightPress {
+    /// The press position's device `y` (bottom-left origin, so up is larger).
+    device_y: f64,
+    /// The height when the drag began.
+    height: f64,
+    /// Whether the shared [`TransformGizmo`] axis solver owns the drag. It cannot when
+    /// the stem points at the eye (the axis projects to under a pixel).
+    solved: bool,
+}
+
 impl HeightGrip {
     /// A grip for the item whose top centre is `top`, starting at `height`.
     pub fn new(target: u32, top: Vector3, height: f64) -> Self {
         let style = GizmoStyle::default();
         let ghost_alpha = style.ghost_alpha;
+        let mut solver = TransformGizmo::translate(target, top);
+        solver.set_style(&style);
         Self {
             target,
             top,
@@ -88,6 +120,7 @@ impl HeightGrip {
             press: None,
             hovered: false,
             style,
+            solver,
             view: None,
             built: None,
             items: [
@@ -172,8 +205,10 @@ impl HeightGrip {
     ///
     /// The stroke width is baked into the cached ribbons, so a style change forces the
     /// next [`update`](Self::update) to rebuild them. The default style reproduces the
-    /// legacy 1.5 px inactive/active stroke exactly.
+    /// legacy 1.5 px inactive/active stroke exactly. The shared solver is given the same
+    /// style, so its screen-space fallback scales with the grip.
     pub fn set_style(&mut self, style: &GizmoStyle) -> bool {
+        self.solver.set_style(style);
         if self.style == *style {
             return false;
         }
@@ -219,23 +254,45 @@ impl HeightGrip {
     }
 
     /// Begin a drag at `device`.
+    ///
+    /// The shared [`TransformGizmo`] axis solver starts the `AxisZ` drag when the stem
+    /// can be scrubbed; a stem that points at the eye (the solver has no direction) falls
+    /// back to the pointer's vertical travel. Either way the grip owns the height and the
+    /// release produces the same [`GizmoCommitEvent`](ferrocad_stage::GizmoCommitEvent).
     pub fn begin_drag(&mut self, camera: &Camera, device: [i32; 2]) -> bool {
         if !self.hit(camera, device) {
             return false;
         }
-        self.press = Some((f64::from(device[1]), self.height));
+        let solved = self
+            .solver
+            .begin_drag(GizmoHandle::AxisZ, camera, device);
+        self.press = Some(HeightPress {
+            device_y: f64::from(device[1]),
+            height: self.height,
+            solved,
+        });
         // The grabbed state widens the stroke, so the next update must rebuild it.
         self.built = None;
         self.apply_color();
         true
     }
 
-    /// Advance the drag. The device origin is bottom-left, so a larger `y` is **up**.
+    /// Advance the drag. The shared axis solver supplies the travel along the stem when
+    /// it can; the fallback is the pointer's vertical screen travel (the device origin is
+    /// bottom-left, so a larger `y` is **up**).
     pub fn drag_to(&mut self, camera: &Camera, device: [i32; 2]) -> Option<f64> {
-        let (press_y, press_height) = self.press?;
-        let world_per_pixel = scale_for(camera, self.top, 1.0).max(1e-12);
-        let height =
-            (press_height + (f64::from(device[1]) - press_y) * world_per_pixel).max(MIN_HEIGHT);
+        let press = self.press?;
+        let delta = if press.solved {
+            let event = self.solver.drag_to(camera, device)?;
+            match event.value {
+                GizmoValue::Linear { applied, .. } => applied,
+                _ => return None,
+            }
+        } else {
+            let world_per_pixel = scale_for(camera, self.top, 1.0).max(1e-12);
+            (f64::from(device[1]) - press.device_y) * world_per_pixel
+        };
+        let height = (press.height + delta).max(MIN_HEIGHT);
         if (height - self.height).abs() <= 1e-12 {
             return None;
         }
@@ -243,23 +300,45 @@ impl HeightGrip {
         Some(height)
     }
 
+    /// End the drag, returning the shared **gizmo commit**.
+    ///
+    /// This is the event a translate triad produces (`Axis`, a `Linear` value and the
+    /// world transform), so the height grip and the triad share one commit vocabulary
+    /// and one shell route. [`end_drag`](Self::end_drag) turns it into the workbench's
+    /// `toy_height/set` interaction.
+    pub fn end_gizmo_drag(&mut self) -> Option<GizmoCommitEvent> {
+        let press = self.press.take()?;
+        // The solver must not keep a stale drag: the grip owns the committed value (it
+        // clamps at `MIN_HEIGHT`), not the solver's last tick.
+        self.solver.cancel_drag();
+        self.built = None;
+        let delta = self.height - press.height;
+        Some(gizmo_commit(self.target, delta))
+    }
+
     /// End the drag, returning the value to commit.
     pub fn end_drag(&mut self) -> Option<InteractionCommit> {
-        self.press.take()?;
-        self.built = None;
-        Some(
-            InteractionCommit::new(TOY_HEIGHT_ID, self.target, "set")
-                .with_values([self.height])
-                .with_readout(self.readout()),
+        let commit = self.end_gizmo_drag()?;
+        Some(self.interaction(&commit))
+    }
+
+    /// The workbench interaction for a gizmo commit: the grip's own id, action and value.
+    fn interaction(&self, commit: &GizmoCommitEvent) -> InteractionCommit {
+        commit.to_interaction_with(
+            TOY_HEIGHT_ID,
+            "set",
+            [self.height],
+            self.readout(),
         )
     }
 
     /// Cancel the drag, restoring the press value. Returns whether a drag was active.
     pub fn cancel_drag(&mut self) -> bool {
-        let Some((_, height)) = self.press.take() else {
+        let Some(press) = self.press.take() else {
             return false;
         };
-        self.height = height;
+        self.solver.cancel_drag();
+        self.height = press.height;
         self.built = None;
         self.apply_color();
         true
@@ -431,6 +510,8 @@ impl Manipulator for HeightGrip {
             return false;
         }
         self.top = anchor;
+        // The solver's frame is the stem base, so a moved grip drags along the new stem.
+        self.solver.set_frame(ManipulatorFrame::world(anchor));
         // The cached ribbons were built at the old anchor; rebuild on the next refresh.
         self.built = None;
         true
@@ -447,12 +528,16 @@ impl Manipulator for HeightGrip {
 /// screen-invariant stem, an analytic grab test, a drag value and a neutral commit.
 /// This adapter adds the vocabulary the gizmo registry names — a [`GizmoKind`], the
 /// [`GizmoHandle::AxisZ`] the stem stands for, and the [`ManipulatorFrame`] the axis
-/// acts in — without moving the solver, the readout or the commit.
+/// acts in — and it speaks the gizmo **drag/commit** vocabulary too: `begin_drag`/
+/// `drag_to` drive the shared axis solver and `end_drag` returns the same
+/// [`GizmoCommitEvent`] a translate triad does.
 ///
-/// It is still registered through the manipulator route: the gpui registry and the
-/// viewport host [`TransformGizmo`] values, whose commit is `transform/apply`, while
-/// this gizmo commits `toy_height/set`. Once a host accepts a gizmo trait object, the
-/// adapter is the entry that moves into the gizmo registry unchanged. See
+/// It is still *registered* through the manipulator route: the gpui registry's
+/// `GizmoFactory` returns [`TransformGizmo`] values, whose commit is `transform/apply`,
+/// while this gizmo commits `toy_height/set`. The workbench converts the shared commit
+/// with [`GizmoCommitEvent::to_interaction_with`], which is the same conversion the triad
+/// uses (`to_interaction`). Once a host accepts a workbench gizmo in the hosted set, the
+/// adapter moves into the gizmo registry unchanged. See
 /// `docs/interaction/transform-ux.md` §7.
 #[derive(Clone, Debug)]
 pub struct HeightGizmo {
@@ -513,6 +598,58 @@ impl HeightGizmo {
             .then_some(GizmoTarget::Handle(self.handle()))
     }
 
+    /// Begin an axis drag on `handle` (only [`GizmoHandle::AxisZ`] exists).
+    ///
+    /// The grip's shared solver owns the drag, so this is the same entry point a
+    /// translate triad's `AxisZ` has.
+    pub fn begin_drag(
+        &mut self,
+        handle: GizmoHandle,
+        camera: &Camera,
+        device: [i32; 2],
+    ) -> bool {
+        handle == self.handle() && self.grip.begin_drag(camera, device)
+    }
+
+    /// Advance the axis drag, in the gizmo's drag vocabulary.
+    ///
+    /// `value.applied` is the height gained since the press (the grip's height minus the
+    /// press height) and `total_transform` the matching `+Z` translation, so a host that
+    /// mirrors a triad drag can mirror this one the same way.
+    pub fn drag_to(&mut self, camera: &Camera, device: [i32; 2]) -> Option<GizmoDragEvent> {
+        let before = self.grip.height();
+        let height = self.grip.drag_to(camera, device)?;
+        let press = self.grip.press?.height;
+        let delta = height - before;
+        Some(GizmoDragEvent {
+            target_id: self.target_id(),
+            active_handle: self.handle(),
+            constraint: GizmoConstraint::Axis(GizmoAxis::Z),
+            value: GizmoValue::Linear {
+                axis: GizmoAxis::Z,
+                raw: height - press,
+                applied: height - press,
+            },
+            delta_transform: Matrix4::translation(0.0, 0.0, delta),
+            total_transform: Matrix4::translation(0.0, 0.0, height - press),
+        })
+    }
+
+    /// End the drag, returning the shared **gizmo commit**.
+    pub fn end_drag(&mut self) -> Option<GizmoCommitEvent> {
+        self.grip.end_gizmo_drag()
+    }
+
+    /// Cancel the drag, restoring the press height.
+    pub fn cancel_drag(&mut self) -> bool {
+        self.grip.cancel_drag()
+    }
+
+    /// Whether a drag is in progress.
+    pub fn is_dragging(&self) -> bool {
+        self.grip.is_dragging()
+    }
+
     /// The overlay items, casing first so the stroke sits on top of it.
     pub fn items(&self) -> &[ShapeItem] {
         self.grip.items()
@@ -558,23 +695,25 @@ impl Manipulator for HeightGizmo {
     }
 
     fn drag_begin(&mut self, camera: &Camera, device: [i32; 2]) -> bool {
-        self.grip.begin_drag(camera, device)
+        let handle = self.handle();
+        HeightGizmo::begin_drag(self, handle, camera, device)
     }
 
     fn drag_update(&mut self, camera: &Camera, device: [i32; 2]) -> bool {
-        self.grip.drag_to(camera, device).is_some()
+        HeightGizmo::drag_to(self, camera, device).is_some()
     }
 
     fn drag_end(&mut self) -> Option<InteractionCommit> {
-        self.grip.end_drag()
+        let commit = HeightGizmo::end_drag(self)?;
+        Some(self.grip.interaction(&commit))
     }
 
     fn drag_cancel(&mut self) -> bool {
-        self.grip.cancel_drag()
+        HeightGizmo::cancel_drag(self)
     }
 
     fn is_dragging(&self) -> bool {
-        self.grip.is_dragging()
+        HeightGizmo::is_dragging(self)
     }
 
     fn set_hovered(&mut self, hovered: bool) -> bool {
@@ -603,6 +742,25 @@ impl Manipulator for HeightGizmo {
 
     fn readout_anchor(&self, camera: &Camera) -> Option<[f64; 2]> {
         HeightGizmo::readout_anchor(self, camera)
+    }
+}
+
+/// The shared gizmo commit for a height drag: the stem's axis constraint, the linear
+/// travel and the `+Z` world translation.
+///
+/// It is deliberately the **same event type** a translate triad produces, so the grip
+/// rides the gizmo commit path rather than inventing a second one; the difference is only
+/// the workbench conversion (`toy_height/set` instead of `transform/apply`).
+fn gizmo_commit(target: u32, delta: f64) -> GizmoCommitEvent {
+    GizmoCommitEvent {
+        target_id: target,
+        constraint: GizmoConstraint::Axis(GizmoAxis::Z),
+        value: GizmoValue::Linear {
+            axis: GizmoAxis::Z,
+            raw: delta,
+            applied: delta,
+        },
+        total_transform: Matrix4::translation(0.0, 0.0, delta),
     }
 }
 
@@ -803,6 +961,82 @@ mod tests {
         assert_eq!(commit.action, "set");
         assert_eq!(commit.values.len(), 1);
         assert!(commit.readout.starts_with("H "));
+    }
+
+    /// The drag and the release produce the **shared gizmo** vocabulary: the same
+    /// `GizmoDragEvent`/`GizmoCommitEvent` a translate triad produces, converted by the
+    /// workbench into its own `toy_height/set` interaction.
+    #[test]
+    fn the_height_drag_commits_the_shared_gizmo_event() {
+        let mut gizmo = height_gizmo(&SelectionRef::whole(7), &slab(7)).expect("a gizmo");
+        let camera = tilted_camera(200.0);
+        let top = project_device(&camera, gizmo.grip().top()).expect("the top");
+        let tip = gizmo.readout_anchor(&camera).expect("the stem tip");
+        let grab = [
+            ((top[0] + tip[0]) * 0.5).round() as i32,
+            ((top[1] + tip[1]) * 0.5).round() as i32,
+        ];
+        let press_height = gizmo.grip().height();
+
+        assert!(HeightGizmo::begin_drag(
+            &mut gizmo,
+            GizmoHandle::AxisZ,
+            &camera,
+            grab
+        ));
+        assert!(
+            !HeightGizmo::begin_drag(&mut gizmo, GizmoHandle::AxisX, &camera, grab),
+            "the grip offers one axis"
+        );
+        let tick = HeightGizmo::drag_to(&mut gizmo, &camera, [grab[0], grab[1] + 30])
+            .expect("the drag tick");
+        assert_eq!(tick.active_handle, GizmoHandle::AxisZ);
+        assert_eq!(tick.constraint, GizmoConstraint::Axis(GizmoAxis::Z));
+        let GizmoValue::Linear { applied, .. } = tick.value else {
+            panic!("an axis drag is a linear value");
+        };
+        assert!(applied > 0.0, "dragging up grows the height");
+        assert!((applied - (gizmo.grip().height() - press_height)).abs() < 1e-9);
+        assert_eq!(tick.total_transform, Matrix4::translation(0.0, 0.0, applied));
+
+        let commit = HeightGizmo::end_drag(&mut gizmo).expect("a gizmo commit");
+        assert_eq!(commit.target_id, 7);
+        assert_eq!(commit.constraint, GizmoConstraint::Axis(GizmoAxis::Z));
+        assert_eq!(
+            commit.total_transform,
+            Matrix4::translation(0.0, 0.0, gizmo.grip().height() - press_height)
+        );
+
+        // The workbench conversion is the same one-way funnel translate uses: the grip
+        // only names its own id, action and scalar.
+        let interaction = commit.to_interaction_with(
+            TOY_HEIGHT_ID,
+            "set",
+            [gizmo.grip().height()],
+            gizmo.readout(),
+        );
+        assert_eq!(interaction.manipulator, TOY_HEIGHT_ID);
+        assert_eq!(interaction.action, "set");
+        assert_eq!(interaction.values, vec![gizmo.grip().height()]);
+        assert!(interaction.values[0] > press_height);
+    }
+
+    /// A stem pointing at the eye cannot be scrubbed by the axis solver; the grip keeps
+    /// the same commit while falling back to the pointer's vertical travel.
+    #[test]
+    fn a_head_on_stem_still_commits_a_gizmo_event() {
+        let mut gizmo = height_gizmo(&SelectionRef::whole(7), &slab(7)).expect("a gizmo");
+        let camera = camera(200.0);
+        let anchor = gizmo.readout_anchor(&camera).expect("an anchor");
+        let grab = [anchor[0].round() as i32, anchor[1].round() as i32];
+
+        assert!(gizmo.drag_begin(&camera, grab));
+        assert!(gizmo.drag_update(&camera, [grab[0], grab[1] + 25]));
+        let commit = HeightGizmo::end_drag(&mut gizmo).expect("a gizmo commit");
+        assert_eq!(commit.constraint, GizmoConstraint::Axis(GizmoAxis::Z));
+        let delta = gizmo.grip().height() - 20.0;
+        assert!(delta > 0.0, "dragging up grows the height ({delta})");
+        assert_eq!(commit.total_transform, Matrix4::translation(0.0, 0.0, delta));
     }
 
     #[test]

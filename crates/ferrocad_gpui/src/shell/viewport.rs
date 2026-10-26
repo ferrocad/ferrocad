@@ -4,7 +4,7 @@
 
 use super::*;
 use super::picking::click_target;
-use ferrocad_stage::{GizmoSet, Stage};
+use ferrocad_stage::{GizmoSet, ShapeItem, Stage};
 
 impl Shell {
     /// Re-read the document's shapes into the viewport's stage.
@@ -132,7 +132,7 @@ impl Shell {
         // A selection change invalidates the object verbs the wheel was built for.
         let wheel = self.wheel.clone();
         let _ = wheel.update(cx, |wheel, cx| wheel.close(cx));
-        let (manipulators, gizmo) = match selection {
+        let (manipulators, gizmos) = match selection {
             SelectionEvent::Picked {
                 reference,
                 click_count,
@@ -156,15 +156,20 @@ impl Shell {
             }
             SelectionEvent::Cleared => {
                 self.clear_selection(cx);
-                (Vec::new(), None)
+                (Vec::new(), GizmoSet::default())
             }
         };
-        let armed = gizmo.is_some();
+        let armed = !gizmos.is_empty();
         self.model.lock().unwrap().gizmo_armed = armed;
+        let mode = self.gizmo_mode;
         if let Some(viewport) = self.viewport.clone() {
             viewport.update(cx, |viewport, cx| {
                 viewport.set_manipulators(manipulators);
-                viewport.set_gizmo(gizmo);
+                viewport.set_gizmos(gizmos);
+                // The shell's session kind is authoritative: a viewport created after
+                // the verb was chosen (a headless run that gained a GPU) starts at the
+                // default and must catch up here.
+                viewport.set_gizmo_mode(mode);
                 cx.notify();
             });
         }
@@ -370,7 +375,7 @@ impl Shell {
         true
     }
 
-    /// The manipulators and gizmo to host for a selection.
+    /// The manipulators and gizmos to host for a selection.
     ///
     /// The compiled workbench manipulator (if any) comes first; the handles a mod
     /// declares for this selection follow it, in provider order. The viewport picks
@@ -383,12 +388,12 @@ impl Shell {
     /// manipulator: conversion errors are appended to the console after the valid
     /// handles were collected.
     ///
-    /// The shell always hosts (arms) the native manipulator/gizmo for a selection, even
-    /// when [`GizmoStyle::enabled`](ferrocad_stage::GizmoStyle::enabled) is false: the viewport
-    /// owns that gate, and a disabled style keeps the objects hosted while drawing,
-    /// hover, picking and drag servicing are suppressed. Keeping one authority for the
-    /// switch means re-enabling the gizmo from settings restores the handles without a
-    /// re-selection.
+    /// The shell always hosts (arms) the native manipulator/gizmo set for a selection,
+    /// even when [`GizmoStyle::enabled`](ferrocad_stage::GizmoStyle::enabled) is false:
+    /// the viewport owns that gate, and a disabled style keeps the objects hosted while
+    /// drawing, hover, picking and drag servicing are suppressed. Keeping one authority
+    /// for the switch means re-enabling the gizmo from settings restores the handles
+    /// without a re-selection.
     ///
     /// The stage is cloned out of the viewport before anything is updated: a re-entrant
     /// `update` on the same entity panics.
@@ -396,9 +401,9 @@ impl Shell {
         &mut self,
         reference: &SelectionRef,
         cx: &mut Context<Self>,
-    ) -> (Vec<Box<dyn Manipulator>>, Option<TransformGizmo>) {
+    ) -> (Vec<Box<dyn Manipulator>>, GizmoSet) {
         let mut manipulators: Vec<Box<dyn Manipulator>> = Vec::new();
-        let mut gizmo = None;
+        let mut gizmos = GizmoSet::default();
         if let Some(viewport) = self.viewport.as_ref() {
             let stage = viewport.read(cx).stage().clone();
             if !self.contributions.is_empty() {
@@ -410,7 +415,7 @@ impl Shell {
                 // pivot a rotate gizmo needs. A click point is deliberately not used —
                 // for translation the pivot does not change the result, and re-pivoting
                 // will be an explicit, snapped gesture (see transform-ux.md).
-                gizmo = self.armed_gizmo(reference, &stage);
+                gizmos = self.arm_gizmos(reference, &stage);
             }
         }
 
@@ -443,35 +448,50 @@ impl Shell {
             }
         }
 
-        (manipulators, gizmo)
+        (manipulators, gizmos)
     }
 
     /// The edition's transform gizmos for `reference`, in the registry's hit-priority
     /// order, evaluated against `stage`.
     ///
     /// This is the hosted **set**: a workbench gizmo and the shared triad can coexist,
-    /// and the first entry is the one that answers the pointer. The shell still arms a
-    /// single gizmo (the viewport hosts one), so [`armed_gizmo`](Self::armed_gizmo)
-    /// narrows this set to the session kind; a host that can draw several can take the
-    /// set as-is.
+    /// and the first entry is the one that answers the pointer. The viewport narrows it
+    /// to the session kind (the wheel's `Move`/`Rotate` verbs) and re-narrows it in place
+    /// when the verb changes, so the kinds an edition registered are never lost.
     pub(super) fn armed_gizmos(&self, reference: &SelectionRef, stage: &Stage) -> GizmoSet {
         GizmoSet::new(self.contributions.gizmos_for(reference, stage))
     }
 
-    /// The edition's transform gizmo for `reference`, evaluated against `stage` and
-    /// carrying the session policy.
+    /// The registry set with the **session policy** applied to every entry: the
+    /// re-pivot's user origin replaces the factory datum while it is set, and the
+    /// origin/centre handle is disabled while the translation HUD is open.
     ///
-    /// The registry offers a set (one entry per offered kind); the sticky session kind
-    /// (`gizmo_mode`, set by the wheel's `Move`/`Rotate` verbs and by `App_Rotate`)
-    /// **narrows** it to the one kind the verb names. If the edition does not offer that
-    /// kind the selection has no gizmo instead of silently substituting another kind.
-    /// The set order is the hit priority, so the first entry serving the session wins.
+    /// The policy is applied per entry rather than after narrowing, because the viewport
+    /// hosts the whole set: an entry the current verb does not offer is still a candidate
+    /// for the next one and must already carry the datum. The session pivot re-anchors
+    /// only the controls that sit **at the object's own datum** (the shared triad and any
+    /// workbench control anchored with it); a workbench gizmo that owns a different
+    /// anchor (a grip on the top face) keeps it, because the pivot is a property of the
+    /// triad, not of every handle in the set.
+    pub(super) fn arm_gizmos(&self, reference: &SelectionRef, stage: &Stage) -> GizmoSet {
+        let mut gizmos = self.armed_gizmos(reference, stage);
+        let datum = stage.item(reference.object).and_then(ShapeItem::anchor);
+        for gizmo in gizmos.gizmos_mut() {
+            let object_origin = gizmo.origin();
+            if datum == Some(object_origin) {
+                gizmo.set_origin(self.gizmo_origin_for(object_origin));
+            }
+            gizmo.set_origin_enabled(self.gizmo_origin_enabled());
+        }
+        gizmos
+    }
+
+    /// The edition's transform gizmo for `reference`, as a **single** control: the
+    /// registry set narrowed to one kind with the session policy applied.
     ///
-    /// The factory owns the datum: the triad hugs the object's own origin
-    /// (`ShapeItem::anchor`). The shell applies the session user origin while set. Split
-    /// out of [`arm`](Self::arm) so the pivot policy is testable without a GPU viewport;
-    /// a whole-body selection and a sub-element selection resolve to the same body
-    /// origin.
+    /// Kept alongside [`arm_gizmos`](Self::arm_gizmos) for a host that shows one gizmo
+    /// (and for the pivot tests): the set form is what the viewport hosts.
+    #[cfg_attr(not(test), allow(dead_code))]
     pub(super) fn armed_gizmo(
         &self,
         reference: &SelectionRef,
@@ -650,11 +670,13 @@ impl Shell {
             });
             return;
         };
-        let (manipulators, gizmo) = self.arm(&reference, cx);
-        self.model.lock().unwrap().gizmo_armed = gizmo.is_some();
+        let (manipulators, gizmos) = self.arm(&reference, cx);
+        self.model.lock().unwrap().gizmo_armed = !gizmos.is_empty();
+        let mode = self.gizmo_mode;
         viewport.update(cx, |viewport, cx| {
             viewport.set_manipulators(manipulators);
-            viewport.set_gizmo(gizmo);
+            viewport.set_gizmos(gizmos);
+            viewport.set_gizmo_mode(mode);
             cx.notify();
         });
     }

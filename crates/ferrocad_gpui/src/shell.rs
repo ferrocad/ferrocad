@@ -32,6 +32,7 @@ use ferrocad_viewport::{
 use ferrocad_wgpu::{AdapterChoice, AdapterSummary, WgpuRenderer};
 use ferrocad_widgets::accordion::{AccordionSection, AccordionState, accordion};
 use ferrocad_widgets::color;
+use ferrocad_widgets::dial;
 use ferrocad_widgets::form;
 use ferrocad_widgets::scroll::scroll_area;
 use ferrocad_widgets::slider;
@@ -323,8 +324,10 @@ struct DevScroll {
 enum RowPopupKind {
     /// The fixed colour palette (`kind == "color"`).
     Color,
-    /// The log/linear range slider (a bounded number or any quantity).
+    /// The log/linear range slider (a number with declared bounds).
     Slider,
+    /// The unbounded jog dial (a dimension without a declared range).
+    Dial,
     /// The choices of an enumeration (`kind == "enum"`).
     Choices,
 }
@@ -350,7 +353,7 @@ struct RowPopup {
     value: String,
     /// The slider's range; `None` for the palette.
     range: Option<RowRange>,
-    /// The quantity unit (`mm`), for the slider's readout.
+    /// The quantity unit (`mm`), for the slider's and dial's readout.
     unit: String,
     /// An enumeration's options, for the dropdown.
     choices: Vec<String>,
@@ -364,6 +367,8 @@ struct RowPopup {
     window: WindowId,
     /// The slider value while dragging (committed on release).
     draft: Option<f64>,
+    /// The dial gesture while dragging a dimension (committed on release).
+    dial: Option<dial::Dial>,
     dragging: bool,
 }
 
@@ -3001,14 +3006,14 @@ impl Shell {
             track: None,
             window,
             draft: None,
+            dial: None,
             dragging: false,
         });
         cx.notify();
     }
 
-    /// Open the range slider for a numeric property. A `float`/`int` row passes its
-    /// declared range; a quantity passes the window `slider_range` derived when it
-    /// has no bounds. `unit` is carried into the readout and the commit.
+    /// Open the range slider for a numeric property with declared bounds.
+    /// `unit` is carried into the readout and the commit.
     #[allow(clippy::too_many_arguments)]
     fn open_slider_popup(
         &mut self,
@@ -3035,6 +3040,41 @@ impl Shell {
             track: None,
             window,
             draft: None,
+            dial: None,
+            dragging: false,
+        });
+        cx.notify();
+    }
+
+    /// Open the jog dial for a dimension without a declared range.
+    ///
+    /// The gesture starts on the face's press, not here: opening the overlay does
+    /// not change the value, and `value` is the row's current text.
+    #[allow(clippy::too_many_arguments)]
+    fn open_dial_popup(
+        &mut self,
+        key: &str,
+        label: &str,
+        value: &str,
+        unit: &str,
+        anchor: Point<Pixels>,
+        window: WindowId,
+        cx: &mut Context<Self>,
+    ) {
+        self.row_popup = Some(RowPopup {
+            key: key.to_string(),
+            label: label.to_string(),
+            kind: RowPopupKind::Dial,
+            value: value.to_string(),
+            range: None,
+            unit: unit.to_string(),
+            choices: Vec::new(),
+            dialog_field: None,
+            anchor,
+            track: None,
+            window,
+            draft: None,
+            dial: None,
             dragging: false,
         });
         cx.notify();
@@ -3065,6 +3105,7 @@ impl Shell {
             track: None,
             window,
             draft: None,
+            dial: None,
             dragging: false,
         });
         cx.notify();
@@ -3826,7 +3867,15 @@ fn properties_rows_panel(
                 } else if row.editable {
                     let key = format!("{name}.{}", row.name);
                     let selector = format!("prop-{key}");
-                    let range = slider_range(row);
+                    let slider_range = if matches!(row.kind.as_str(), "float" | "int" | "quantity")
+                    {
+                        row.min.zip(row.max).filter(|(min, max)| max > min)
+                    } else {
+                        None
+                    };
+                    // A dimension without a declared range is not a position on a
+                    // track: it gets the jog dial instead of an invented window.
+                    let dial = row.kind == "quantity" && slider_range.is_none();
                     let label = row_label(row);
                     let open = shell
                         .row_popup
@@ -3912,9 +3961,9 @@ fn properties_rows_panel(
                                 }),
                             ))
                             .into_any_element()
-                    } else if let Some((min, max)) = range {
+                    } else if let Some((min, max)) = slider_range {
                         let state = shell.ensure_prop_input(&key, &row.value, window, cx);
-                        // A row with a slider window gets the mini track that opens
+                        // A row with a declared range gets the mini track that opens
                         // the overlay; typing an exact value still works.
                         let popup_key = key.clone();
                         let popup_label = label.clone();
@@ -3940,6 +3989,44 @@ fn properties_rows_panel(
                                         &popup_value,
                                         min,
                                         max,
+                                        &popup_unit,
+                                        event.position(),
+                                        window.window_handle().window_id(),
+                                        cx,
+                                    );
+                                }),
+                            ))
+                            .into_any_element()
+                    } else if dial {
+                        let state = shell.ensure_prop_input(&key, &row.value, window, cx);
+                        // The open gesture, when there is one, so the glyph's needle
+                        // follows the drag (the widget owns the mapping and the ink).
+                        let open_dial = shell
+                            .row_popup
+                            .as_ref()
+                            .filter(|popup| popup.key == key)
+                            .and_then(|popup| popup.dial);
+                        let popup_key = key.clone();
+                        let popup_label = label.clone();
+                        let popup_value = row.value.clone();
+                        let popup_unit = row_unit(row);
+                        div()
+                            .debug_selector(move || selector.clone())
+                            .flex()
+                            .flex_row()
+                            .items_center()
+                            .gap_1()
+                            .w(px(180.))
+                            .flex_shrink_0()
+                            .child(div().w(px(112.)).child(state))
+                            .child(dial::trigger(
+                                SharedString::from(format!("dial-{key}")),
+                                open_dial,
+                                cx.listener(move |this, event: &gpui::ClickEvent, window, cx| {
+                                    this.open_dial_popup(
+                                        &popup_key,
+                                        &popup_label,
+                                        &popup_value,
                                         &popup_unit,
                                         event.position(),
                                         window.window_handle().window_id(),
@@ -4036,51 +4123,11 @@ fn row_number(value: &str) -> Option<f64> {
     value.split_whitespace().next()?.parse().ok()
 }
 
-/// How far either side of the current value a derived scrub window reaches.
-const SCRUB_FACTOR: f64 = 100.0;
-
-/// The range a row's slider scrubs, or `None` when the row has no slider.
-///
-/// A `float`/`int` row needs both declared bounds: an abstract number has no
-/// unit, so there is no honest way to invent a range. A **quantity** always gets
-/// one — dimensions are what users want to scrub, and a workbench's property
-/// need not declare a range. Without a declared bound the window is a decade
-/// around the current value, so it always contains that value and merely
-/// opening the slider never changes it. Declared bounds tighten the window, so
-/// the slider never offers a value the setter would reject.
-fn slider_range(row: &PropRow) -> Option<(f64, f64)> {
-    let value = row_number(&row.value).unwrap_or(0.0);
-    let (mut min, mut max) = match row.kind.as_str() {
-        "quantity" if value > 0.0 => (value / SCRUB_FACTOR, value * SCRUB_FACTOR),
-        "quantity" if value < 0.0 => {
-            // The slider's log scale needs a positive floor; a symmetric linear
-            // window keeps a negative angle or offset usable.
-            let span = value.abs() * SCRUB_FACTOR;
-            (-span, span)
-        }
-        // A zero value has no decade to centre on: span the declared range, or
-        // a unit-ish window either side so the value can leave zero.
-        "quantity" => (row.min.unwrap_or(-1.0), row.max.unwrap_or(1.0)),
-        "float" | "int" => (row.min?, row.max?),
-        _ => return None,
-    };
-    if let Some(declared) = row.min {
-        min = min.max(declared);
-    }
-    if let Some(declared) = row.max {
-        max = max.min(declared);
-    }
-    if !(max > min) {
-        return None;
-    }
-    Some((min, max))
-}
-
-/// The unit a quantity row's readout and slider commit carry.
+/// The unit a quantity row's overlay readout and commit carry.
 ///
 /// A schema row declares `unit`; a document property's row has none, so the
 /// unit is the suffix of its displayed value (`10 mm` -> `mm`). Without it the
-/// slider's commit would assign a dimensionless quantity and strip the unit.
+/// dial or slider commit would assign a dimensionless quantity and strip it.
 fn row_unit(row: &PropRow) -> String {
     if let Some(unit) = row.unit.as_deref().filter(|unit| !unit.is_empty()) {
         return unit.to_string();
@@ -4115,8 +4162,8 @@ fn track_fraction(popup: &RowPopup, x: Pixels) -> f32 {
     ((x.0 - track.left().0) / width).clamp(0.0, 1.0)
 }
 
-/// The anchored overlay a property row opened: the colour palette or the range
-/// slider.
+/// The anchored overlay a property row opened: the colour palette, the range
+/// slider, the jog dial or an enumeration's dropdown.
 ///
 /// It floats below the pointer, so it covers the pane instead of pushing its rows
 /// down, and it is `deferred`, so it is not clipped by the scrolling pane. Only the
@@ -4141,6 +4188,7 @@ fn row_popup_overlay(
     let choices = popup.choices.clone();
     let dialog_field = popup.dialog_field;
     let draft = popup.draft;
+    let dial_state = popup.dial;
 
     let close = {
         let weak = cx.weak_entity();
@@ -4349,6 +4397,110 @@ fn row_popup_overlay(
                 .child(ends)
                 .into_any_element()
         }
+        RowPopupKind::Dial => {
+            let start = row_number(&value).unwrap_or(0.0);
+            // At rest the needle points up; while dragging it follows the gesture.
+            let painted =
+                dial_state.unwrap_or_else(|| dial::Dial::new(start, point(px(0.), px(0.))));
+            let readout = match dial_state {
+                Some(dial) => dial.text(&unit),
+                None => value.clone(),
+            };
+
+            let weak = cx.weak_entity();
+            let down_key = key.clone();
+            let down = move |event: &MouseDownEvent, _window: &mut Window, cx: &mut App| {
+                let at = event.position;
+                let _ = weak.update(cx, |shell, cx| {
+                    if let Some(popup) = shell.row_popup.as_mut() {
+                        if popup.key == down_key {
+                            popup.dial = Some(dial::Dial::new(start, at));
+                            popup.dragging = true;
+                        }
+                    }
+                    cx.notify();
+                });
+                cx.stop_propagation();
+            };
+
+            let weak = cx.weak_entity();
+            let move_key = key.clone();
+            let moved = move |event: &MouseMoveEvent, _window: &mut Window, cx: &mut App| {
+                if !event.dragging() {
+                    return;
+                }
+                let at = event.position;
+                let _ = weak.update(cx, |shell, cx| {
+                    if let Some(popup) = shell.row_popup.as_mut() {
+                        if popup.key == move_key && popup.dragging {
+                            if let Some(dial) = popup.dial.as_mut() {
+                                dial.drag_to(at);
+                            }
+                        }
+                    }
+                    cx.notify();
+                });
+            };
+
+            let weak = cx.weak_entity();
+            let commit_key = key.clone();
+            let commit_unit = unit.clone();
+            let commit = move |_event: &MouseUpEvent, _window: &mut Window, cx: &mut App| {
+                let _ = weak.update(cx, |shell, cx| {
+                    if shell
+                        .row_popup
+                        .as_ref()
+                        .is_some_and(|popup| popup.key == commit_key)
+                    {
+                        if let Some(popup) = shell.row_popup.take() {
+                            if let Some(dial) = popup.dial.filter(|dial| dial.changed()) {
+                                let text = dial.text(&commit_unit);
+                                shell.commit_property(&popup.key, &text, cx);
+                            }
+                        }
+                        cx.notify();
+                    }
+                });
+            };
+
+            let pad = div()
+                .id(SharedString::from(format!("dial-{key}-pad")))
+                .debug_selector({
+                    let selector = format!("dial-{key}-pad");
+                    move || selector.clone()
+                })
+                .cursor_ew_resize()
+                // The press starts the gesture, so opening the overlay never edits
+                // the value by itself.
+                .on_mouse_down(MouseButton::Left, down)
+                .on_mouse_move(moved)
+                .on_mouse_up(MouseButton::Left, commit.clone())
+                .on_mouse_up_out(MouseButton::Left, commit)
+                .child(dial::face(
+                    SharedString::from(format!("dial-{key}")),
+                    painted,
+                ));
+
+            div()
+                .flex()
+                .flex_col()
+                .items_center()
+                .gap_1()
+                .child(
+                    div()
+                        .flex()
+                        .flex_row()
+                        .w_full()
+                        .justify_between()
+                        .gap_2()
+                        .text_color(rgb(FG))
+                        .child(label)
+                        .child(div().text_color(rgb(MUTED)).child(readout)),
+                )
+                .child(pad)
+                .child(div().text_color(rgb(MUTED)).child("drag horizontally"))
+                .into_any_element()
+        }
     };
 
     let panel = div()
@@ -4379,7 +4531,7 @@ fn row_popup_overlay(
                 .snap_to_window_with_margin(px(8.))
                 .child(panel),
         )
-        // Above the settings card (priority 4): the palette and the slider are
+        // Above the settings card (priority 4): the palette, slider and dial are
         // opened *from* the card and must paint over it.
         .with_priority(5)
         .into_any_element(),
@@ -5252,11 +5404,11 @@ mod tests {
         );
     }
 
-    /// A document quantity declares no range, but it is still scrubbable: the pane
-    /// derives a decade window around the value, and the commit carries the unit so
-    /// a length stays a length.
+    /// A document quantity declares no range, so the row gets the jog dial rather
+    /// than a track with an invented window. Two doublings is 96 px, and the commit
+    /// carries the unit so a length stays a length.
     #[gpui::test]
-    fn a_document_quantity_gets_a_slider_that_keeps_its_unit(cx: &mut TestAppContext) {
+    fn a_document_quantity_gets_a_dial_that_keeps_its_unit(cx: &mut TestAppContext) {
         let _guard = crate::PYTHON_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let model = boot_shell();
         let window = cx.update(|cx| {
@@ -5302,23 +5454,40 @@ mod tests {
         );
 
         assert!(
+            dev_cx.debug_bounds("dial-Params.Length-trigger").is_some(),
+            "an unbounded quantity gets the dial"
+        );
+        assert!(
             dev_cx
                 .debug_bounds("slider-Params.Length-trigger")
-                .is_some(),
-            "an unbounded quantity still gets a slider"
+                .is_none(),
+            "no invented range means no slider"
         );
-        click_at(&mut dev_cx, "slider-Params.Length-trigger");
+        click_at(&mut dev_cx, "dial-Params.Length-trigger");
         dev_cx.update(|window, cx| {
             let _ = window.draw(cx);
         });
+        let popup = shell.read_with(&cx, |shell, _| {
+            shell
+                .row_popup
+                .as_ref()
+                .map(|popup| (popup.kind, popup.key.clone()))
+        });
+        assert_eq!(
+            popup,
+            Some((RowPopupKind::Dial, "Params.Length".to_string())),
+            "the trigger opens the dial"
+        );
 
-        // 75 % of the derived 0.1..1000 mm window on its log scale is 100 mm.
-        let track = dev_cx
-            .debug_bounds("slider-Params.Length-track")
-            .expect("the slider overlay is rendered");
-        let at = point(track.left() + track.size.width * 0.75, track.center().y);
-        dev_cx.simulate_mouse_down(at, MouseButton::Left, gpui::Modifiers::default());
-        dev_cx.simulate_mouse_up(at, MouseButton::Left, gpui::Modifiers::default());
+        // Press near the face's left edge and travel 96 px (two doublings) right.
+        let face = dev_cx
+            .debug_bounds("dial-Params.Length-face")
+            .expect("the dial face is rendered");
+        let press = point(face.left() + px(4.0), face.center().y);
+        let release = point(press.x + px(2.0 * dial::DOUBLING_PX), press.y);
+        dev_cx.simulate_mouse_down(press, MouseButton::Left, gpui::Modifiers::default());
+        dev_cx.simulate_mouse_move(release, MouseButton::Left, gpui::Modifiers::default());
+        dev_cx.simulate_mouse_up(release, MouseButton::Left, gpui::Modifiers::default());
         dev_cx.update(|window, cx| {
             let _ = window.draw(cx);
         });
@@ -5329,7 +5498,7 @@ mod tests {
             .find(|row| row.name == "Length")
             .map(|row| row.value)
             .unwrap_or_default();
-        assert_eq!(value, "100 mm", "the slider commits with the row's unit");
+        assert_eq!(value, "40 mm", "four times 10 mm, with the row's unit");
     }
 
     fn quantity_row(value: &str, min: Option<f64>, max: Option<f64>) -> PropRow {
@@ -5349,43 +5518,8 @@ mod tests {
         }
     }
 
-    /// A quantity with no declared range still gets a window that contains its
-    /// value; a declared bound only tightens it.
-    #[test]
-    fn a_quantity_slider_window_always_contains_the_value() {
-        assert_eq!(
-            slider_range(&quantity_row("10 mm", None, None)),
-            Some((0.1, 1000.0)),
-            "a decade either side of the value"
-        );
-        assert_eq!(
-            slider_range(&quantity_row("10 mm", Some(0.001), Some(50.0))),
-            Some((0.1, 50.0)),
-            "declared bounds tighten the window"
-        );
-        assert_eq!(
-            slider_range(&quantity_row("0 mm", Some(0.0), Some(1000.0))),
-            Some((0.0, 1000.0)),
-            "zero spans the declared range"
-        );
-        assert_eq!(
-            slider_range(&quantity_row("0 mm", None, None)),
-            Some((-1.0, 1.0)),
-            "zero without bounds can leave in either direction"
-        );
-        assert_eq!(
-            slider_range(&quantity_row("-30 deg", None, None)),
-            Some((-3000.0, 3000.0)),
-            "a negative value uses a symmetric linear window"
-        );
-
-        let mut plain = quantity_row("1", None, None);
-        plain.kind = "float".into();
-        assert_eq!(slider_range(&plain), None, "a plain number needs bounds");
-    }
-
     /// A document quantity's unit is the suffix of its displayed value; a schema
-    /// row declares it. Either way the slider commit keeps it.
+    /// row declares it. Either way the dial commit keeps it.
     #[test]
     fn a_quantity_row_reports_the_unit_its_commit_carries() {
         assert_eq!(row_unit(&quantity_row("10 mm", None, None)), "mm");

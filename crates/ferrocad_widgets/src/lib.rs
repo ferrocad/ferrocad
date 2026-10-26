@@ -10,6 +10,8 @@
 //!   with its dropdown list.
 //! * [`slider`] maps a bounded number onto a log (or linear) track for the
 //!   property editor's range overlay.
+//! * [`dial`] is the unbounded counterpart: a jog dial that changes a dimension by
+//!   a ratio, with no invented range to clamp.
 //! * [`window_chrome::window_frame`] draws client-side decorations (title bar and
 //!   resize grips) where the compositor does not.
 //! * [`text_field::TextInput`] is a single-line editable field that emits
@@ -24,6 +26,7 @@
 
 pub mod accordion;
 pub mod color;
+pub mod dial;
 pub mod events;
 pub mod form;
 pub mod menu;
@@ -37,6 +40,7 @@ pub mod window_chrome;
 
 pub use accordion::{AccordionLayout, AccordionSection, AccordionState, accordion, resolve_layout};
 pub use color::{normalize_hex, palette, parse_hex, swatch};
+pub use dial::{Dial, face as dial_face, trigger as dial_trigger, value_for as dial_value};
 pub use events::{ChangeEvent, SubmitEvent};
 pub use form::{choice_list, select_box, toggle};
 pub use menu::{MenuInfoRow, MenuRow, menu};

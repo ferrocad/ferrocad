@@ -1,4 +1,4 @@
-//! A range slider for a bounded number or a dimension.
+//! A range slider for a bounded number.
 //!
 //! Settings that declare both `min` and `max` (the gizmo's handle size, a stroke
 //! width, an opacity, a snap angle) are unpleasant to set by typing: the useful

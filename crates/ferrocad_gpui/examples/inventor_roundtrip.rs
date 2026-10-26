@@ -25,7 +25,7 @@ use ferrocad_viewport::InventorViewport;
 use ferrocad_viewport::scene::{HoverHighlight, sample_camera, sample_scene};
 use ferrocad_inventor::{
     Camera, Event, EventListener, InventorView, Node, NodeKind, Scene, ViewSpec, Viewport,
-    compile_with, pick_at_hit,
+    compile_diagnostic, pick_at_hit,
 };
 use ferrocad_wgpu::WgpuRenderer;
 use gpui::{App, AppContext, WindowBounds, WindowOptions, application, bounds, point, px, size};
@@ -146,7 +146,11 @@ mod.manager.refresh()
 
 /// Headless: simulate a hover over the cube's centre, render, and write a PNG.
 fn render_headless(mut scene: Scene, camera: ferrocad_inventor::Camera, path: &str) {
-    let (queue, directives) = compile_with(&scene, &camera.viewport);
+    // A tool, not the viewport: keep the frame if one program is malformed and report it.
+    let (queue, directives, error) = compile_diagnostic(&scene, &camera.viewport, None);
+    if let Some(error) = error {
+        eprintln!("ferrocad: shader program: {error}");
+    }
     let [width, height] = camera.viewport.device_size();
     let centre = camera
         .viewport
@@ -172,7 +176,10 @@ fn render_headless(mut scene: Scene, camera: ferrocad_inventor::Camera, path: &s
         },
         hit.as_ref(),
     );
-    let (queue, _) = compile_with(&scene, &camera.viewport);
+    let (queue, _, error) = compile_diagnostic(&scene, &camera.viewport, None);
+    if let Some(error) = error {
+        eprintln!("ferrocad: shader program: {error}");
+    }
 
     let mut renderer = WgpuRenderer::new_default(SIZE).unwrap_or_else(|e| {
         eprintln!("ferrocad: could not create a GPU renderer: {e}");

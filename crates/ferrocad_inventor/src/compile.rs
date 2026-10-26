@@ -29,7 +29,9 @@ use crate::state::State;
 /// Compile `scene` into a `(RenderQueue, Directives)` pair at a device-pixel ratio of 1.
 ///
 /// A convenience for callers that have no viewport (tests, headless tools); the
-/// host uses [`compile_with`].
+/// host path is [`compile_with`]. Like it, this panics on a malformed shader
+/// program; use [`compile_with_base`] or [`compile_diagnostic`] for a scene the
+/// caller does not control.
 pub fn compile(scene: &Scene) -> (RenderQueue, Directives) {
     compile_with(scene, &Viewport::default())
 }
@@ -56,6 +58,16 @@ pub fn compile(scene: &Scene) -> (RenderQueue, Directives) {
 ///
 /// [`Scene::root`] is treated as a group: its children are traversed at the top level.
 ///
+/// # Host convenience
+///
+/// This is the **host-facing** entry point: it is for code that can accept a panic
+/// because a malformed program is a bug in its own in-process scene. The viewport
+/// does not use it — it calls [`compile_diagnostic`] so a malformed program costs the
+/// program, not the frame. **Library and tool callers** that render user-authored or
+/// Python-authored scenes should not call `compile_with`: use [`compile_diagnostic`]
+/// to draw the rest of the scene and report the error, or [`compile_with_base`] to
+/// refuse a partial frame with an `Err`.
+///
 /// This wrapper has no base directory for Coin's `sourceProgram` paths, so a stage that
 /// uses only `sourceProgram` fails loudly (it panics). Use [`compile_with_base`] when
 /// the caller can name the directory.
@@ -63,7 +75,8 @@ pub fn compile(scene: &Scene) -> (RenderQueue, Directives) {
 /// # Panics
 ///
 /// Panics if a shader program cannot be assembled. Headless tools that must handle
-/// the error should call [`compile_with_base`].
+/// the error should call [`compile_with_base`] (refuse the frame) or
+/// [`compile_diagnostic`] (draw and report).
 pub fn compile_with(scene: &Scene, viewport: &Viewport) -> (RenderQueue, Directives) {
     compile_with_base(scene, viewport, None)
         .unwrap_or_else(|error| panic!("shader program extraction failed: {error}"))

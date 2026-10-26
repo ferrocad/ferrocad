@@ -4670,7 +4670,7 @@ pub fn render_image(image: ImageData) -> RenderImage {
 mod tests {
     use super::*;
     use ferrocad_graphics::{Projection, ShadowFootprint, Topology};
-    use ferrocad_inventor::{Node, NodeKind, compile_with};
+    use ferrocad_inventor::{Node, NodeKind, compile_with_base};
     use ferrocad_stage::{DrawMode, ShapeItem};
     use ferrocad_types::{Placement, Rotation, Vector3};
     use gpui::{Bounds, point, px, size};
@@ -5983,7 +5983,10 @@ mod tests {
             ..Camera::identity()
         };
         let scene = triangle_scene();
-        let expected = compile_with(&scene, &camera.viewport).0.len();
+        let expected = compile_with_base(&scene, &camera.viewport, None)
+            .expect("the triangle scene compiles")
+            .0
+            .len();
         let viewport = InventorViewport::new(fake(ImageData::default()), camera, scene);
         assert_eq!(viewport.queue.len(), expected);
         assert_eq!(viewport.scene().root.children.len(), 3);

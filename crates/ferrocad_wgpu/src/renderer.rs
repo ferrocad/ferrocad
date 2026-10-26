@@ -1302,7 +1302,7 @@ pub(crate) fn block_on<F: std::future::Future>(future: F) -> F::Output {
 mod tests {
     use super::*;
     use ferrocad_graphics::{PickId, Topology, Viewport};
-    use ferrocad_inventor::{Node, NodeKind, Scene, compile, compile_with};
+    use ferrocad_inventor::{Node, NodeKind, Scene, compile, compile_with_base};
 
     /// Serializes the GPU tests. The suite runs in one process with one thread per test,
     /// and the (software) adapter can fault when several `wgpu` devices are driven at
@@ -1797,7 +1797,8 @@ mod tests {
 
         // One unified queue: the legacy compile, then the stage's batches appended.
         let merge = || {
-            let (mut queue, _) = compile_with(&scene, &viewport);
+            let (mut queue, _) = compile_with_base(&scene, &viewport, None)
+                .expect("the coexistence scene compiles");
             stage.emit_batches(&mut queue);
             queue
         };

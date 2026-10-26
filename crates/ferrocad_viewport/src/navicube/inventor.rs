@@ -7,7 +7,7 @@
 use std::sync::Arc;
 
 use ferrocad_graphics::{RenderQueue, Texture2, Topology, Viewport};
-use ferrocad_inventor::{Node, NodeKind, Scene, compile_with};
+use ferrocad_inventor::{Node, NodeKind, Scene, compile_diagnostic};
 use ferrocad_types::{Matrix4, Placement, Rotation, Vector3};
 
 use super::model::{
@@ -432,12 +432,16 @@ fn field(kind: NodeKind) -> Node {
 /// The navigation cube as a compiled inventor [`Scene`]: the legacy [`NavicubeView`]
 /// implementation.
 ///
-/// It holds the last compiled [`RenderQueue`]; [`rebuild`](NavicubeView::rebuild) walks
-/// a fresh [`scene_with`] and compiles it. A stable visual state compiles to the same
-/// mesh ids, so the renderer's upload cache hits.
+/// It holds the last compiled [`RenderQueue`] and the last program-assembly diagnostic;
+/// [`rebuild`](NavicubeView::rebuild) walks a fresh [`scene_with`] and compiles it. A
+/// stable visual state compiles to the same mesh ids, so the renderer's upload cache
+/// hits.
 #[derive(Default)]
 pub struct InventorProducer {
     queue: RenderQueue,
+    /// The last shader-program assembly error, if any (see [`Self::take_shader_error`]).
+    /// The cube still draws: only the malformed program is dropped.
+    shader_error: Option<String>,
 }
 
 impl InventorProducer {
@@ -445,13 +449,42 @@ impl InventorProducer {
     pub fn new() -> Self {
         Self::default()
     }
+
+    /// Compile `scene` into the cube's queue without panicking on a malformed program.
+    ///
+    /// This is deliberately [`compile_diagnostic`] rather than
+    /// [`compile_with`](ferrocad_inventor::compile_with): the producer is not the
+    /// viewport, so it must keep drawing the packets that did assemble and report the
+    /// diagnostic instead of aborting the frame. The error is logged and kept for
+    /// [`take_shader_error`](Self::take_shader_error); a later successful compile
+    /// clears it.
+    fn compile_scene(&mut self, scene: &Scene, viewport: &Viewport) -> Option<String> {
+        let (queue, _, error) = compile_diagnostic(scene, viewport, None);
+        self.queue = queue;
+        let error = error.map(|error| {
+            let message = error.to_string();
+            eprintln!("ferrocad: navigation cube shader program: {message}");
+            message
+        });
+        self.shader_error = error.clone();
+        error
+    }
+
+    /// Take the last program-assembly diagnostic, if any. The cube still drew (the
+    /// malformed program was dropped); a host holding the concrete producer reports it
+    /// once and clears it, like [`InventorViewport::take_shader_error`].
+    ///
+    /// [`InventorViewport::take_shader_error`]: crate::InventorViewport::take_shader_error
+    pub fn take_shader_error(&mut self) -> Option<String> {
+        self.shader_error.take()
+    }
 }
 
 impl NavicubeView for InventorProducer {
     fn rebuild(&mut self, viewport: &Viewport, visual: &NavicubeVisual, theme: &NavicubeTheme) {
         let mut scene = scene_with(visual, theme);
         set_orientation(&mut scene, visual.orientation);
-        self.queue = compile_with(&scene, viewport).0;
+        self.compile_scene(&scene, viewport);
     }
 
     fn queue(&self) -> &RenderQueue {
@@ -534,6 +567,62 @@ mod tests {
             }),
             "a hovered face gains a cyan outline"
         );
+    }
+
+    #[test]
+    fn a_malformed_program_is_reported_without_panicking() {
+        use ferrocad_inventor::{ShaderStage, ShaderStageKind};
+
+        // Two vertex stages cannot assemble. The producer is a caller outside the
+        // viewport: its compile path must report the diagnostic and keep the rest of
+        // the scene drawable, unlike `compile_with`, which panics.
+        let stage = || Node {
+            kind: NodeKind::ShaderStage(ShaderStage {
+                kind: ShaderStageKind::Vertex,
+                source: Some("@vertex fn vs() -> @builtin(position) vec4f { vec4f() }".to_owned()),
+                source_program: None,
+            }),
+            children: vec![],
+        };
+        let scene = Scene {
+            root: Node {
+                kind: NodeKind::Separator,
+                children: vec![
+                    field(NodeKind::Coordinate3(vec![
+                        [0.0, 0.0, 0.0],
+                        [1.0, 0.0, 0.0],
+                        [0.0, 1.0, 0.0],
+                    ])),
+                    Node {
+                        kind: NodeKind::ShaderProgram,
+                        children: vec![stage(), stage()],
+                    },
+                    field(NodeKind::Mesh {
+                        indices: vec![0, 1, 2],
+                        normal_indices: vec![],
+                        topology: Topology::Triangles,
+                    }),
+                ],
+            },
+        };
+
+        let mut producer = InventorProducer::new();
+        // `compile_with` would panic here; the producer's path must not.
+        let error = producer
+            .compile_scene(&scene, &Viewport::new([64, 64], 1.0))
+            .expect("the malformed program is reported");
+        assert_eq!(
+            producer.queue().len(),
+            1,
+            "the mesh after the malformed program still draws"
+        );
+        assert!(error.contains("SoVertexShader"), "names the stage: {error}");
+        assert_eq!(
+            producer.take_shader_error().as_deref(),
+            Some(error.as_str()),
+            "the diagnostic is kept for the host"
+        );
+        assert!(producer.take_shader_error().is_none(), "taking clears it");
     }
 
     #[test]

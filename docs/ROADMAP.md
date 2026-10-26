@@ -70,12 +70,12 @@ needs Qt for its non-GUI behaviour.
   `ferrocad_mesh` (payload, STL, operations, `Mesh::Feature`), `ferrocad_mesh_py`
   (`Mesh`, `MeshPart`), `Part.Shape.tessellate`, `BOPTools.SplitAPI` and the
   import-time PySide surface. All **88/88** SimpleCAD unit modules load in one
-  in-process `ferrocad` + `Part` + `Mesh` image; **362 pass, 36 fail, 673 error,
-  2 skip**. The identity/query frontier closed (`Shape.copy()` deep copy,
-  `__hash__`/`__eq__`, `Placement(other)`, `DiagonalLength`, `OrderedVertexes`,
-  `isClosed`, `distToShape`, `valueAt`). What remains is flat-face / `Surface`
-  typing, `sewShape`, `childShapes` direct children, `discretize` and the rest
-  of the measured list — then S2.
+  in-process `ferrocad` + `Part` + `Mesh` image; **405 pass, 43 fail, 635 error,
+  2 skip**. The identity, query and representation frontier closed (deep
+  `Shape.copy()`, `__hash__`/`__eq__`, `Placement(other)`, typed `Faces`/`Wires`,
+  `Face.Surface` classification with `parameter()`). What remains is
+  `Part.Solid`/`Part.Shell`, exact compound enumeration, `sewShape`,
+  `discretize` and the rest of the measured list — then S2.
 - **Publish the edition.** The `Parametric` artifact (OCCT closure, launcher, release
   matrix) and the Diátaxis book as a release artifact.
 - **BIM headless subset.** The `Arch`/BIM modules that do not need a GUI.

@@ -325,9 +325,9 @@ self-skips without one; `FERROCAD_SIMPLECAD_FILES` narrows a run.
 | --- | --- |
 | `ObjectType` post-write hook `on_property_changed` called from `Document::set_property` **and** `restore_property_value` (`crates/ferrocad_core/src/object_registry.rs`, `document/mod.rs`, `document/transaction.rs`) | **Landed.** `Mesh::Feature` mirrors `Placement` ↔ the mesh property; undo/redo re-runs it. |
 | `type_parent` entries for `Mesh::Feature` (and `Mesh::FeaturePython`) in `ferrocad_py` (`crates/ferrocad_py/src/lib.rs:154-180`) | Upstream base is `App::GeoFeature` (`MeshFeature.h:54`); `isDerivedFrom('Mesh::Feature')` must also answer `App::GeoFeature`. |
-| `PyBoundBox::DiagonalLength` (`crates/ferrocad_py/src/lib.rs:6311-6366`) | Required by `slicing.py:89,195`; the class has `XLength/YLength/ZLength` and `Center` but no `DiagonalLength`. |
+| `PyBoundBox::DiagonalLength` (`crates/ferrocad_py/src/lib.rs:6311-6366`) | **Landed.** `sqrt(dx²+dy²+dz²)`, 0 for an empty box. |
 | `Shape.tessellate` that welds at `gp::Resolution()` and drops degenerate facets | **Landed** in `ferrocad_part_py`; `Mesh.Mesh(tessellate).isSolid()` holds for a box (8 points / 12 facets). |
-| `Part.Wire.OrderedVertexes` (`crates/ferrocad_part_py/src/curves.rs`, next to `PyWire::Vertexes`) | `planar.py:160` reads it directly; `curved.py:501` falls back to unordered `Vertexes`. `wireFromSegment`'s wires must answer it. |
+| `Part.Wire.OrderedVertexes` (`crates/ferrocad_part_py/src/curves.rs`, next to `PyWire::Vertexes`) | **Landed.** Walks the B-Rep edge chain by shared vertices and falls back to `Vertexes` when the wire is not one chain. |
 | `Mesh::PropertyMesh::fcstd_members` returning `None` | Core's `.FCStd` writer then **errors** on any document with a `Mesh::Feature` (`crates/ferrocad_core/src/document/fcstd_write.rs:993-1003`). That is acceptable for the unit slice (they never save) but must be stated; `.FCStd` support is coupled to `.bms` (`MeshKernel.bms`). |
 
 ### 4.5 Deferred
@@ -387,16 +387,18 @@ slice; `M1b` is the wider `MeshPart.meshFromShape` slice.
 Measured 2026-10-26 with the image described above:
 
 - **88/88 modules load, 0 load errors.**
-- **362 passed, 36 failed, 673 errored, 2 skipped.**
+- **405 passed, 43 failed, 635 errored, 2 skipped.**
 - `Mesh`/`MeshPart` load errors: **0**. The last load error was an unrelated
   `QtCore.Qt.UserRole` lookup in the PySide stub, now covered.
 
-The remaining failures are per-test Part API (flat-face/`Surface` typing,
-`sewShape`, `childShapes` direct children, `discretize`, `getObjectsByLabel`,
+The remaining failures are per-test Part API (`Part.Solid`/`Part.Shell` classes,
+exact compound enumeration, null-shape getters, `sewShape`, `discretize`,
+`derivative1At`, `BSplineSurface.interpolate`, `getObjectsByLabel`,
 `Material.Transparency`, and the like, listed in `../TODO-26-10-2026.md` §P4),
-not module boundaries. The earlier identity/query gaps (`Shape.copy()`,
-`__hash__`/`__eq__`, `DiagonalLength`, `Placement(other)`, `OrderedVertexes`,
-`isClosed`, `distToShape`, `valueAt`) are now implemented.
+not module boundaries. The earlier gaps (`Shape.copy()`, `__hash__`/`__eq__`,
+`DiagonalLength`, `Placement(other)`, `OrderedVertexes`, `isClosed`,
+`distToShape`, `valueAt`, typed `Faces`/`Wires`, `Face.Surface` classification)
+are now implemented.
 
 ```sh
 FERROCAD_SIMPLECAD=$PWD/../simplecad cargo test -p ferrocad_part_py \

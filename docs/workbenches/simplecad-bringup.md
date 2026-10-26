@@ -708,7 +708,7 @@ matters: `import Part`, `import Mesh` and `import FreeCAD` see one core.
 | Modules attempted | **88** |
 | Modules loaded | **88** |
 | Load errors | **0** |
-| Test outcomes | **362 passed, 36 failed, 673 errored, 2 skipped** |
+| Test outcomes | **405 passed, 43 failed, 635 errored, 2 skipped** |
 | Harness exceptions | **0** |
 
 The ten `Mesh` modules now load and run:
@@ -716,29 +716,30 @@ The ten `Mesh` modules now load and run:
 | Module | pass | fail | error |
 | --- | ---: | ---: | ---: |
 | `test_analytic` | 2 | 0 | 12 |
-| `test_clipboard` | 3 | 0 | 2 |
+| `test_clipboard` | 4 | 0 | 1 |
 | `test_idle_work` | 8 | 1 | 6 |
-| `test_mesh_conversion` | 1 | 1 | 8 |
+| `test_mesh_conversion` | 2 | 0 | 8 |
 | `test_mesh_glue` | 4 | 0 | 2 |
 | `test_mesh_slicing` | 3 | 1 | 3 |
 | `test_mesh_stretch` | 5 | 0 | 0 |
 | `test_mesh_surfaces` | 1 | 0 | 6 |
 | `test_precision` | 6 | 0 | 5 |
-| `test_surface_wrap` | 5 | 1 | 23 |
+| `test_surface_wrap` | 5 | 0 | 24 |
 
-What loads but still errors is **per-test API**, not a module boundary. The identity and
-query slices closed the biggest cluster: `Shape.copy()` is now a deep copy,
-`__hash__`/`__eq__` distinguish `isSame` from `isEqual`, `App.Placement(other)`
-copy-construction works, and `BoundBox.DiagonalLength`, `Wire.OrderedVertexes`,
-`Shape.isClosed`, `getTolerance`, `distToShape`, `Edge`/`Face.valueAt` and
-`importBrepFromString` exist. The dominant remaining gaps are now:
-**flat-face / `Surface` typing** (`Shape.Faces` still yields plain `Shape`
-objects, and `Part.Plane`/`PlaneSurface` classification is missing — this blocks
-most push/pull and `valueAt`-on-a-face tests), `sewShape`, `Shape.childShapes()`
-direct-child semantics, `discretize`, `getObjectsByLabel`,
-`Material.Transparency`, the `test_transformed_container_rejected` validation,
-and `Part.PlaneSurface.parameter`. `test_mesh_collisions` also has one agreement
-failure (7 vs 8.55) from our self-intersection detector.
+What loads but still errors is **per-test API**, not a module boundary. The last two
+slices closed the largest seam: `Shape.Faces`/`Wires` return typed `Part.Face`/
+`Part.Wire` wrappers (so `Faces[0].valueAt` and `Surface` work), `childShapes()`
+is one topological level (`TopoDS_Iterator` semantics), and `Face.Surface` now
+returns `Part.Plane`/`Part.Cylinder`/`Part.Sphere` with a `parameter(point)` that
+round-trips through `valueAt`; `normalAt` is analytic for those three. The
+dominant remaining gaps are now: **`Part.Solid`/`Part.Shell` classes** (so
+`Solids`/`Shells` stay plain handles), exact compound enumeration
+(`Shape.Compounds`, nested compounds, member order), null-shape getters
+returning `[]` instead of raising, `sewShape`, `discretize`, `derivative1At`,
+`BSplineSurface.interpolate`, `getObjectsByLabel`, `Material.Transparency`, the
+`test_transformed_container_rejected` validation, and cone/torus surface
+typing. `test_mesh_collisions` also has one agreement failure (7 vs 8.55) from
+our self-intersection detector.
 
 The bare-image baseline below is kept for comparison: it is what a `.so`-only
 checkout (no `Part`, no `Mesh`) measures.
@@ -1038,7 +1039,7 @@ kernel is ready.
 ## 9. Open questions and what could not be verified
 
 1. **The S1 image exists; the S2 numbers do not.** The Part + Mesh image loads
-   all 88 modules (§7, 2026-10-26) and measures **362 passed, 36 failed, 673
+   all 88 modules (§7, 2026-10-26) and measures **405 passed, 43 failed, 635
 errored, 2 skipped**. The remaining work is per-test Part API, and the S2/S3
    “target” percentages stay estimates until those run green.
 2. **Network was unavailable.** SimpleCAD could not be re-cloned, updated, or

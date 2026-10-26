@@ -355,11 +355,12 @@ const MIN_SCREEN_AXIS_PIXELS: f64 = 1.0;
 /// inner part is where all three axes meet; excluding it leaves the centre to the
 /// separate origin/centre handle (or to the scene while that handle is disabled).
 const AXIS_PICK_START: f64 = 0.18;
-/// The number of segments in a ring's hit polyline (matches `ring_handle`).
-const RING_PICK_SEGMENTS: usize = 48;
-/// Below this `|ray.direction · ring_axis|` the ring is too edge-on for the 3D
-/// plane/radius test; the screen-space polyline fallback takes over.
+/// Below this `|ray.direction · ring_axis|` a ring is edge-on: its plane collapses to a
+/// line through the centre, so it fades out and stops accepting hits (the same policy
+/// as an edge-on plane).
 const RING_EDGE_ON_COS: f64 = 0.2;
+/// The alignment at which a grazing ring has full alpha (0.35 = ~20° from edge-on).
+const RING_CLEAR_COS: f64 = 0.35;
 /// The projected radius of the origin/centre disc, as a multiple of the handle stroke.
 /// With the default 2 px stroke the disc is 5 px in radius inside the 10 px hit disc
 /// and the stems' excluded 18 % band.
@@ -503,12 +504,14 @@ pub enum GizmoValue {
     },
     /// A 2D translation. `raw`/`applied` are world-space deltas in the drag plane.
     Planar { raw: Vector3, applied: Vector3 },
-    /// A rotation. `raw_deg` is the unsnapped angle; `applied_deg` is what the
-    /// transform used (after the 15° detent, unless `Ctrl` was held).
+    /// A rotation. `raw_deg` is the unsnapped sweep; `applied_deg` is what the
+    /// transform used (after the detent, unless `Ctrl` was held). `detent_deg` is the
+    /// detent that was active for the tick, or `0` for free rotation.
     Angular {
         axis: GizmoAxis,
         raw_deg: f64,
         applied_deg: f64,
+        detent_deg: f64,
     },
 }
 
@@ -522,8 +525,19 @@ impl GizmoValue {
                 format!("Δ{} {:+.1} mm", axis.letter(), applied)
             }
             Self::Angular {
-                axis, applied_deg, ..
-            } => format!("Δθ{} {:+.1}°", axis.letter(), applied_deg),
+                axis,
+                applied_deg,
+                detent_deg,
+                ..
+            } => {
+                let mut text = format!("Δθ{} {:+.1}°", axis.letter(), applied_deg);
+                if detent_deg > 0.0 {
+                    text.push_str(&format!(" ({detent_deg:.1}°)"));
+                } else {
+                    text.push_str(" (free)");
+                }
+                text
+            }
             Self::Planar { applied, .. } => {
                 let mut parts = Vec::new();
                 for (axis, value) in [
@@ -628,8 +642,13 @@ enum DragStart {
         last: Vector3,
         normal: Vector3,
     },
-    /// Arc: the angle at grab time, and the last applied (possibly snapped) angle.
-    Ring { start: f64, last: f64 },
+    /// Arc: the last measured pointer angle (to unwrap each frame's step), the
+    /// accumulated sweep since the press, and the last applied (snapped) sweep.
+    Ring {
+        previous: f64,
+        swept: f64,
+        last: f64,
+    },
 }
 
 /// An interactive transform triad.
@@ -884,12 +903,12 @@ impl TransformGizmo {
     /// scene). The origin/centre disc is a target of its own; the empty interior is the
     /// space just outside it.
     ///
-    /// The test projects the same axis segments, plane quads and ring polylines the
-    /// producers draw, then measures screen-space distance. It is **analytic** rather
-    /// than a rasterised pick so the grab radius does not require extra pick geometry,
-    /// which would swallow clicks meant for background features. The radius is
-    /// [`GizmoStyle::hit_radius_px`], floored at [`MIN_HIT_RADIUS_PX`] so a thin stem
-    /// still has a 24 px target (WCAG 2.5.8).
+    /// The test projects the same axis segments and plane quads the producers draw and
+    /// intersects the ray with each ring's plane, then measures screen-space distance. It
+    /// is **analytic** rather than a rasterised pick so the grab radius does not require
+    /// extra pick geometry, which would swallow clicks meant for background features. The
+    /// radius is [`GizmoStyle::hit_radius_px`], floored at [`MIN_HIT_RADIUS_PX`] so a thin
+    /// stem still has a 24 px target (WCAG 2.5.8).
     ///
     /// Priority is **origin > axis > plane > ring**, then nearest stroke, then
     /// front-most. Only handles shown by [`GizmoMode`] participate, and the origin
@@ -1009,85 +1028,41 @@ impl TransformGizmo {
             return Some(target);
         }
 
-        // 3. Rotation rings. A visible ring is tested in its own plane: the ray's hit
-        //    must land near the ring radius. An edge-on ring projects to a line through
-        //    the centre, so its screen fallback excludes the inner part exactly like the
-        //    axis stems (otherwise the centre would be "on" every edge-on ring).
+        // 3. Rotation rings. A ring is tested in its own plane: the ray's hit must land
+        //    near the ring radius. An edge-on ring collapses to a line through the centre
+        //    and is excluded, like an edge-on plane, so it cannot steal a click from the
+        //    axis stem that shares its projected stroke.
         for handle in GizmoHandle::ALL {
             if !self.mode.shows(GizmoTarget::Handle(handle)) || handle.kind() != HandleKind::Ring {
                 continue;
             }
             let axis = frame.axis(handle).expect("ring handle");
-            let denominator = to_vec(ray.direction).dot(&axis);
-            if denominator.abs() > RING_EDGE_ON_COS {
-                let Some(hit) = ray_plane(&ray, frame.origin, axis) else {
-                    continue;
-                };
-                let radial = hit.sub(&frame.origin);
-                let radius = radial.length();
-                if radius < 1e-9 {
-                    continue;
-                }
-                let world_per_pixel = scale_for(camera, hit, 1.0).max(1e-9);
-                let error = (radius - scale).abs();
-                if error > slop * world_per_pixel {
-                    continue;
-                }
-                let ring_point = frame.origin.add(&radial.scale(scale / radius));
-                consider(
-                    &mut best,
-                    error / world_per_pixel,
-                    eye.sub(&ring_point).length(),
-                    GizmoTarget::Handle(handle),
-                );
-            } else {
-                let (u, v) = orthonormal_basis(axis);
-                let Some(centre) = project_device(camera, frame.origin) else {
-                    continue;
-                };
-                let mut projected = Vec::with_capacity(RING_PICK_SEGMENTS);
-                let mut world = Vec::with_capacity(RING_PICK_SEGMENTS);
-                for i in 0..RING_PICK_SEGMENTS {
-                    let angle = TAU * i as f64 / RING_PICK_SEGMENTS as f64;
-                    let point = frame
-                        .origin
-                        .add(&u.scale(scale * angle.cos()))
-                        .add(&v.scale(scale * angle.sin()));
-                    world.push(point);
-                    projected.push(project_device(camera, point));
-                }
-                let projected_radius = projected
-                    .iter()
-                    .filter_map(|point| *point)
-                    .map(|point| (point[0] - centre[0]).hypot(point[1] - centre[1]))
-                    .fold(0.0_f64, f64::max);
-                let pointer_radius = (pointer[0] - centre[0]).hypot(pointer[1] - centre[1]);
-                if pointer_radius < AXIS_PICK_START * projected_radius {
-                    continue;
-                }
-                let mut nearest = f64::INFINITY;
-                let mut nearest_world = frame.origin;
-                for i in 0..RING_PICK_SEGMENTS {
-                    let j = (i + 1) % RING_PICK_SEGMENTS;
-                    let (Some(a), Some(b)) = (projected[i], projected[j]) else {
-                        continue;
-                    };
-                    let (distance, t) = point_segment_distance(pointer, a, b);
-                    if distance < nearest {
-                        nearest = distance;
-                        nearest_world = world[i].add(&world[j].sub(&world[i]).scale(t));
-                    }
-                }
-                if nearest > slop {
-                    continue;
-                }
-                consider(
-                    &mut best,
-                    nearest,
-                    eye.sub(&nearest_world).length(),
-                    GizmoTarget::Handle(handle),
-                );
+            if to_vec(ray.direction).dot(&axis).abs() < RING_EDGE_ON_COS {
+                continue;
             }
+            if self.grazing_fade(GizmoTarget::Handle(handle), camera) <= GRAZING_HIT_FLOOR {
+                continue;
+            }
+            let Some(hit) = ray_plane(&ray, frame.origin, axis) else {
+                continue;
+            };
+            let radial = hit.sub(&frame.origin);
+            let radius = radial.length();
+            if radius < 1e-9 {
+                continue;
+            }
+            let world_per_pixel = scale_for(camera, hit, 1.0).max(1e-9);
+            let error = (radius - scale).abs();
+            if error > slop * world_per_pixel {
+                continue;
+            }
+            let ring_point = frame.origin.add(&radial.scale(scale / radius));
+            consider(
+                &mut best,
+                error / world_per_pixel,
+                eye.sub(&ring_point).length(),
+                GizmoTarget::Handle(handle),
+            );
         }
 
         best.map(|(_, _, target)| target)
@@ -1238,7 +1213,8 @@ impl TransformGizmo {
                 };
                 (
                     DragStart::Ring {
-                        start: angle,
+                        previous: angle,
+                        swept: 0.0,
                         last: 0.0,
                     },
                     GizmoConstraint::Ring(axis_label),
@@ -1246,6 +1222,11 @@ impl TransformGizmo {
                         axis: axis_label,
                         raw_deg: 0.0,
                         applied_deg: 0.0,
+                        detent_deg: if modifiers.ctrl {
+                            0.0
+                        } else {
+                            self.style.ring_snap_deg
+                        },
                     },
                 )
             }
@@ -1284,7 +1265,8 @@ impl TransformGizmo {
         let target_id = self.target_id;
         let forward = camera_forward(camera);
         let grid = self.linear_snap;
-        let ring_snap = self.style.ring_snap_deg.to_radians();
+        let ring_snap_deg = self.style.ring_snap_deg;
+        let ring_snap = ring_snap_deg.to_radians();
         let active = self.active.as_mut()?;
         let handle = active.handle;
         let constraint = active.constraint;
@@ -1336,12 +1318,20 @@ impl TransformGizmo {
                     GizmoValue::Planar { raw, applied },
                 )
             }
-            DragStart::Ring { start, last } => {
+            DragStart::Ring {
+                previous,
+                swept,
+                last,
+            } => {
                 let axis = frame.axis(handle).expect("ring handle");
                 let axis_label = axis_of(handle).expect("ring label");
                 let angle = ring_angle_with_fallback(&ray, origin, axis, forward)?;
-                let raw = wrap_pi(angle - *start);
-                let (_, applied) = ring_detent(raw, modifiers.ctrl, ring_snap);
+                // Unwrap each frame's step, not the whole sweep from the press: a drag
+                // that crosses ±π must keep turning the same way instead of jumping back
+                // a full turn. The accumulation also allows more than one revolution.
+                *swept += wrap_pi(angle - *previous);
+                *previous = angle;
+                let (raw, applied) = ring_detent(*swept, modifiers.ctrl, ring_snap);
                 let delta = applied - *last;
                 *last = applied;
                 (
@@ -1351,6 +1341,11 @@ impl TransformGizmo {
                         axis: axis_label,
                         raw_deg: raw.to_degrees(),
                         applied_deg: applied.to_degrees(),
+                        detent_deg: if modifiers.ctrl {
+                            0.0
+                        } else {
+                            ring_snap_deg
+                        },
                     },
                 )
             }
@@ -1408,9 +1403,9 @@ impl TransformGizmo {
     /// the camera, falling to `0.0` when it collapses to a line or a dot.
     ///
     /// A nearly edge-on axis points into the screen and its arrowhead sits in the origin
-    /// cluster; a nearly edge-on plane flattens to a sliver. Both are faded out and
-    /// dropped from the analytic hit test so a 2 px artifact cannot be grabbed by accident.
-    /// A ring stays live even edge-on: it still projects to an arc.
+    /// cluster; a nearly edge-on plane flattens to a sliver, and a nearly edge-on ring
+    /// flattens to a line through the centre. All three are faded out and dropped from the
+    /// analytic hit test so a thin artifact cannot be grabbed by accident.
     fn grazing_fade(&self, target: GizmoTarget, camera: &Camera) -> f32 {
         let forward = camera_forward(camera);
         let Some(handle) = target.handle() else {
@@ -1436,7 +1431,15 @@ impl TransformGizmo {
                 ((alignment - PLANE_EDGE_ON_COS) / (PLANE_CLEAR_COS - PLANE_EDGE_ON_COS))
                     .clamp(0.0, 1.0) as f32
             }
-            HandleKind::Ring => 1.0,
+            HandleKind::Ring => {
+                let alignment = self
+                    .frame
+                    .axis(handle)
+                    .map(|axis| axis.dot(&forward).abs())
+                    .unwrap_or(0.0);
+                ((alignment - RING_EDGE_ON_COS) / (RING_CLEAR_COS - RING_EDGE_ON_COS))
+                    .clamp(0.0, 1.0) as f32
+            }
             HandleKind::Origin => 1.0,
         }
     }
@@ -2093,11 +2096,12 @@ fn angle_at(hit: Vector3, centre: Vector3, axis: Vector3) -> Option<f64> {
     Some(v.dot(&up).atan2(v.dot(&reference)))
 }
 
-/// Snap a ring's raw accumulated angle to relative `detent` radians, or leave it free.
+/// Snap a ring's accumulated sweep to relative `detent` radians, or leave it free.
 /// Returns `(raw, applied)`; the detents are relative to the drag's start, so grabbing a
 /// rotated body does not jump on the first pixel. A non-positive `detent` is continuous.
+/// The sweep is **not** wrapped here: the caller unwraps each frame's step, so a drag may
+/// pass ±180° and keep turning instead of folding back a full turn.
 fn ring_detent(raw: f64, free: bool, detent: f64) -> (f64, f64) {
-    let raw = wrap_pi(raw);
     if free || !(detent > 1e-9) {
         (raw, raw)
     } else {
@@ -2264,8 +2268,9 @@ mod tests {
             Some(GizmoTarget::Handle(_))
         ));
 
-        // Rings alone (no axes/planes): 10 px out is exactly on the origin disc and in
-        // the edge-on XZ ring's padded band, and the origin still wins.
+        // Rings alone (no axes/planes): 10 px out is exactly on the origin disc and inside
+        // the face-on Z ring's padded band, and the origin still wins. (The X/Y rings are
+        // edge-on here and no longer take part in the hit test.)
         let mut rings = TransformGizmo::new(1, Vector3::zero(), GizmoMode::Rotate);
         rings.set_style(&style);
         rings.update(&camera);
@@ -2274,7 +2279,7 @@ mod tests {
         rings.update(&camera);
         assert_eq!(
             rings.hit(&camera, [60, 50]),
-            Some(GizmoTarget::Handle(GizmoHandle::RotateY))
+            Some(GizmoTarget::Handle(GizmoHandle::RotateZ))
         );
     }
 
@@ -2587,9 +2592,12 @@ mod tests {
         let (raw, snapped) = ring_detent(7.0_f64.to_radians(), true, step);
         assert!((snapped - raw).abs() < 1e-12, "Ctrl is free rotation");
 
-        // The raw delta is unwrapped across ±π.
-        let (raw, _) = ring_detent(3.0 * std::f64::consts::FRAC_PI_2, false, step);
-        assert!((raw + std::f64::consts::FRAC_PI_2).abs() < 1e-12, "{raw}");
+        // A sweep past ±π is unwrapped by the caller; the helper snaps the total.
+        let (raw, _) = ring_detent(wrap_pi(3.0 * std::f64::consts::FRAC_PI_2), false, step);
+        assert!(
+            (raw + std::f64::consts::FRAC_PI_2).abs() < 1e-12,
+            "{raw}"
+        );
 
         // A non-positive detent is continuous.
         let (raw, snapped) = ring_detent(7.0_f64.to_radians(), false, 0.0);
@@ -2660,13 +2668,65 @@ mod tests {
 
     #[test]
     fn an_axis_wins_over_an_overlapping_ring() {
+        // A small triad puts the face-on Z ring's arc across the X stem; the axis is
+        // tested first, so it wins the overlap.
+        let mut style = GizmoStyle::default();
+        style.size = 15.0;
         let mut gizmo = TransformGizmo::new(1, Vector3::zero(), GizmoMode::Universal);
+        gizmo.set_style(&style);
         gizmo.update(&camera(5.0));
-        // Forty pixels along +X lies on the X stem and on the edge-on Y ring's projected
-        // line; the axis has priority.
         assert_eq!(
-            gizmo.hit(&camera(5.0), [90, 50]),
+            gizmo.hit(&camera(5.0), [65, 50]),
             Some(GizmoTarget::Handle(GizmoHandle::AxisX))
+        );
+    }
+
+    #[test]
+    fn an_edge_on_ring_leaves_the_hit_test() {
+        let camera = camera(5.0);
+        // Looking down −Z the X and Y rings are edge-on and the Z ring faces the camera.
+        let mut rings = TransformGizmo::new(1, Vector3::zero(), GizmoMode::Rotate);
+        rings.set_origin_enabled(false);
+        rings.update(&camera);
+        assert_eq!(
+            rings.grazing_fade(GizmoTarget::Handle(GizmoHandle::RotateX), &camera),
+            0.0
+        );
+        assert_eq!(
+            rings.grazing_fade(GizmoTarget::Handle(GizmoHandle::RotateY), &camera),
+            0.0
+        );
+        assert_eq!(
+            rings.grazing_fade(GizmoTarget::Handle(GizmoHandle::RotateZ), &camera),
+            1.0
+        );
+        assert!(
+            rings.items()[GizmoHandle::RotateX.index()]
+                .positions()
+                .is_empty(),
+            "a faded ring keeps no geometry"
+        );
+        // Forty-five pixels out along +X lies on the edge-on Y ring's projected line, but
+        // that ring no longer participates; the Z ring's arc is at 110 px.
+        assert_eq!(rings.hit(&camera, [95, 50]), None);
+        // The face-on Z ring still behaves.
+        assert_eq!(
+            rings.hit(&camera, [128, 128]),
+            Some(GizmoTarget::Handle(GizmoHandle::RotateZ))
+        );
+
+        // The axis and plane handles at the same view are unaffected.
+        let mut universal = TransformGizmo::new(1, Vector3::zero(), GizmoMode::Universal);
+        universal.update(&camera);
+        assert_eq!(
+            universal.hit(&camera, [95, 50]),
+            Some(GizmoTarget::Handle(GizmoHandle::AxisX))
+        );
+        let mut translate = TransformGizmo::new(1, Vector3::zero(), GizmoMode::Translate);
+        translate.update(&camera);
+        assert_eq!(
+            translate.hit(&camera, [92, 92]),
+            Some(GizmoTarget::Handle(GizmoHandle::PlaneXY))
         );
     }
 
@@ -2762,8 +2822,10 @@ mod tests {
                 axis: GizmoAxis::Z,
                 raw_deg,
                 applied_deg,
+                detent_deg,
             } => {
                 assert!(raw_deg.abs() > 1.0, "raw {raw_deg}");
+                assert_eq!(detent_deg, DEFAULT_RING_SNAP_DEG);
                 let expected = (raw_deg / 15.0).round() * 15.0;
                 assert!(
                     (applied_deg - expected).abs() < 1e-9,
@@ -2773,6 +2835,11 @@ mod tests {
             other => panic!("expected an angular Z value, got {other:?}"),
         }
         assert!(event.value.readout().contains('°'));
+        assert!(
+            event.value.readout().contains("(15.0°)"),
+            "the readout names the active detent: {}",
+            event.value.readout()
+        );
     }
 
     #[test]
@@ -2790,13 +2857,89 @@ mod tests {
             GizmoValue::Angular {
                 raw_deg,
                 applied_deg,
+                detent_deg,
                 ..
-            } => assert!(
-                (raw_deg - applied_deg).abs() < 1e-9,
-                "Ctrl must not snap: {raw_deg} vs {applied_deg}"
-            ),
+            } => {
+                assert!(
+                    (raw_deg - applied_deg).abs() < 1e-9,
+                    "Ctrl must not snap: {raw_deg} vs {applied_deg}"
+                );
+                assert_eq!(detent_deg, 0.0, "free rotation has no active detent");
+                assert!(event.value.readout().contains("(free)"));
+            }
             other => panic!("expected an angular value, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn a_ring_drag_sweeps_past_half_a_turn_and_snaps_to_the_detent() {
+        let camera = camera(5.0);
+        // A 30 px ring so the whole sweep fits in the 100 px viewport.
+        let mut style = GizmoStyle::default();
+        style.size = 30.0;
+        style.ring_snap_deg = 5.0;
+        let mut gizmo = TransformGizmo::new(1, Vector3::zero(), GizmoMode::Rotate);
+        gizmo.set_style(&style);
+
+        // Press at 0° on the Z ring and walk 200° around it in 40° steps. The measured
+        // angle crosses the atan2 seam at ±180° between the fourth and fifth steps.
+        assert!(gizmo.begin_drag(GizmoHandle::RotateZ, &camera, [80, 50]));
+        let mut event = None;
+        for step in 1..=5 {
+            let phi = (40.0 * f64::from(step)).to_radians();
+            let device = [
+                (50.0 + 30.0 * phi.cos()).round() as i32,
+                (50.0 + 30.0 * phi.sin()).round() as i32,
+            ];
+            event = gizmo.drag_to(&camera, device);
+        }
+        let value = event.expect("drag tick").value;
+        let GizmoValue::Angular {
+            applied_deg,
+            detent_deg,
+            ..
+        } = value
+        else {
+            panic!("expected an angular value, got {value:?}");
+        };
+        assert_eq!(detent_deg, 5.0);
+        assert!(
+            applied_deg.abs() > 180.0,
+            "the sweep must not fold back at ±180°: {applied_deg}"
+        );
+        assert!(
+            (applied_deg / 5.0 - (applied_deg / 5.0).round()).abs() < 1e-9,
+            "the sweep is on a 5° detent: {applied_deg}"
+        );
+
+        let readout = value.readout();
+        assert!(
+            readout.contains(&format!("{applied_deg:+.1}°")),
+            "the readout carries the snapped degrees: {readout}"
+        );
+        assert!(
+            readout.contains("(5.0°)"),
+            "the readout names the active detent: {readout}"
+        );
+    }
+
+    #[test]
+    fn the_ring_readout_shows_the_snapped_angle_and_the_detent() {
+        let value = GizmoValue::Angular {
+            axis: GizmoAxis::X,
+            raw_deg: 48.2,
+            applied_deg: 45.0,
+            detent_deg: 15.0,
+        };
+        assert_eq!(value.readout(), "ΔθX +45.0° (15.0°)");
+
+        let free = GizmoValue::Angular {
+            axis: GizmoAxis::Z,
+            raw_deg: -12.4,
+            applied_deg: -12.4,
+            detent_deg: 0.0,
+        };
+        assert_eq!(free.readout(), "ΔθZ -12.4° (free)");
     }
 
     #[test]

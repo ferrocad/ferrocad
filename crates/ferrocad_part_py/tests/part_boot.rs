@@ -36,6 +36,11 @@ fn part_shares_one_core_with_ferrocad() {
         let part = PyModule::import(py, "Part").expect("import Part");
         let ferrocad = PyModule::import(py, "ferrocad").expect("import ferrocad");
 
+        // One process, one core: both modules report the same application identity.
+        let part_id: usize = part.getattr("_kernel_id").unwrap().extract().unwrap();
+        let ferrocad_id: usize = ferrocad.getattr("_kernel_id").unwrap().extract().unwrap();
+        assert_eq!(part_id, ferrocad_id, "Part and ferrocad were linked as separate cores");
+
         // `Part.makeBox` produces a `Part.Shape`.
         let shape = part
             .call_method1("makeBox", (2.0, 3.0, 4.0))

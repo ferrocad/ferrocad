@@ -115,6 +115,7 @@ fn wireFromSegment(
 /// The `MeshPart` module.
 #[pymodule]
 pub fn MeshPart(m: &Bound<'_, PyModule>) -> PyResult<()> {
+    m.add("_kernel_id", ferrocad_core::application_id())?;
     m.add_function(wrap_pyfunction!(meshFromShape, m)?)?;
     m.add_function(wrap_pyfunction!(wireFromSegment, m)?)?;
     Ok(())

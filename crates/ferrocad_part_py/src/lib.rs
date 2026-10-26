@@ -3451,6 +3451,7 @@ pub fn Part(m: &Bound<'_, PyModule>) -> PyResult<()> {
         shape_list_to_extension,
     );
     m.add_class::<PartShape>()?;
+    m.add("_kernel_id", ferrocad_core::application_id())?;
     m.add_function(wrap_pyfunction!(getShape, m)?)?;
     m.add_function(wrap_pyfunction!(makeBox, m)?)?;
     m.add_function(wrap_pyfunction!(makeCylinder, m)?)?;

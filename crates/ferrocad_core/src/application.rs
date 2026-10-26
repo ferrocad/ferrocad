@@ -168,6 +168,16 @@ pub fn application() -> &'static Mutex<Application> {
     APPLICATION.get_or_init(|| Mutex::new(Application::new()))
 }
 
+/// A process-unique identity for the one application core.
+///
+/// This is the address of the process-wide [`application`], so every module that
+/// links the same `ferrocad_core` reports the same value. A split image (two
+/// cores in one process) reports different values, which lets a boot check assert
+/// the one-core invariant.
+pub fn application_id() -> usize {
+    application() as *const Mutex<Application> as usize
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -35,6 +35,9 @@ import sys
 
 import FreeCAD as _FreeCAD
 
+# The process-wide core identity, re-exported for parity with `FreeCAD`.
+_kernel_id = _FreeCAD._kernel_id
+
 from ._params import parameter_file, set_parameter_file
 
 # ---------------------------------------------------------------------------

@@ -29,6 +29,24 @@
 //! `--stl out.stl` to export the same tessellation as a binary STL.
 //! See `docs/architecture/repackaging.md` and `docs/architecture/occt-integration.md` §4.
 
+/// The `--check-init` payload: assert that all four modules share one kernel and
+/// exercise a document by building and closing a `Part::Feature`.
+const CHECK_INIT_SCRIPT: &str = r#"
+import FreeCAD, Part, Mesh, MeshPart
+assert FreeCAD._kernel_id == Part._kernel_id == Mesh._kernel_id == MeshPart._kernel_id, (
+    "the modules do not share one kernel: %r != %r != %r != %r"
+    % (FreeCAD._kernel_id, Part._kernel_id, Mesh._kernel_id, MeshPart._kernel_id)
+)
+name = "__ferrocad_check_init__"
+if FreeCAD.getDocument(name) is not None:
+    FreeCAD.closeDocument(name)
+doc = FreeCAD.newDocument(name)
+boxed = doc.addObject("Part::Feature", "Box")
+boxed.Shape = Part.makeBox(1, 1, 1)
+assert boxed.Shape.ShapeType == "Solid", boxed.Shape.ShapeType
+FreeCAD.closeDocument(name)
+"#;
+
 fn main() {
     // Register the workbench modules as built-ins, before the interpreter
     // initialises. All of them must share this process: `MeshPart` builds its wires
@@ -44,11 +62,15 @@ fn main() {
     // same stub the base check uses), so no window or GPU is involved.
     if std::env::args().skip(1).any(|arg| arg == "--check-init") {
         let result = ferrocad::check_init().and_then(|()| {
-            pyo3::Python::with_gil(|py| {
-                py.import("ferrocad_parametric")
-                    .map(|_| ())
-                    .map_err(|error| error.to_string())
+            pyo3::Python::with_gil(|py| -> pyo3::PyResult<()> {
+                py.import("ferrocad_parametric")?;
+                let script = std::ffi::CString::new(CHECK_INIT_SCRIPT)
+                    .expect("the check-init script has no NUL");
+                let globals = pyo3::types::PyDict::new(py);
+                py.run(&script, Some(&globals), None)?;
+                Ok(())
             })
+            .map_err(|error| error.to_string())
         });
         match result {
             Ok(()) => println!("ferrocad: init OK"),

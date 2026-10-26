@@ -627,6 +627,7 @@ pub fn Mesh(m: &Bound<'_, PyModule>) -> PyResult<()> {
     );
     m.add_class::<PyMesh>()?;
     m.add_class::<PyFacet>()?;
+    m.add("_kernel_id", ferrocad_core::application_id())?;
     m.add_function(wrap_pyfunction!(createBox, m)?)?;
     Ok(())
 }

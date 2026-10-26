@@ -6728,6 +6728,7 @@ pub fn ferrocad(m: &Bound<'_, PyModule>) -> PyResult<()> {
     // drained by this binding, so core may now let their types rebuild.
     ferrocad_core::object_registry::set_python_executor_available(true);
     m.add("__version__", env!("CARGO_PKG_VERSION"))?;
+    m.add("_kernel_id", ferrocad_core::application_id())?;
     m.add_class::<PyQuantity>()?;
     m.add_class::<PyUnit>()?;
     m.add_class::<PyVector>()?;

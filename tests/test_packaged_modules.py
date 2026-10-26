@@ -29,10 +29,18 @@ IMAGE = PYTHON_DIR / "ferrocad_combined.abi3.so"
 OCCT_LIB = REPO / ".occt" / "prefix" / "lib"
 
 SHARED_CORE = r"""
-import ferrocad as App
+# Import Part first: its shim imports the combined extension, which publishes
+# `ferrocad` into sys.modules. Importing `ferrocad` first would pick up a
+# standalone python/ferrocad.abi3.so and create a second core.
 import Part
+import ferrocad as App
 import Mesh
 import MeshPart
+
+assert App._kernel_id == Part._kernel_id == Mesh._kernel_id == MeshPart._kernel_id, (
+    "the modules do not share one kernel: %r != %r != %r != %r"
+    % (App._kernel_id, Part._kernel_id, Mesh._kernel_id, MeshPart._kernel_id)
+)
 
 name = "PackagedImage"
 if name in App.listDocuments():
@@ -61,6 +69,15 @@ print("ok")
 FREECAD_FIRST = r"""
 import FreeCAD
 import Part
+import Mesh
+import MeshPart
+
+# One process, one core: the facade and every workbench module report the same
+# application identity when the combined extension publishes them.
+assert FreeCAD._kernel_id == Part._kernel_id == Mesh._kernel_id == MeshPart._kernel_id, (
+    "the modules do not share one kernel: %r != %r != %r != %r"
+    % (FreeCAD._kernel_id, Part._kernel_id, Mesh._kernel_id, MeshPart._kernel_id)
+)
 
 name = "PackagedImageFreeCAD"
 if name in FreeCAD.listDocuments():

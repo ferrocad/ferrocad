@@ -75,6 +75,7 @@ Material = _fc.Material
 Vector2d = _fc.Vector2d
 GuiUp = 0
 __version__ = _fc.__version__
+_kernel_id = _fc._kernel_id
 
 # Core/utility submodules (the M4 Base/Units/Console surface).
 from . import Base, Units, Console

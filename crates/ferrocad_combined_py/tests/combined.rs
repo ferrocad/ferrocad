@@ -37,6 +37,12 @@ import Part
 import Mesh
 import MeshPart
 
+# One process, one core: every module reports the same application identity.
+assert App._kernel_id == Part._kernel_id == Mesh._kernel_id == MeshPart._kernel_id, (
+    "the modules do not share one kernel: %r != %r != %r != %r"
+    % (App._kernel_id, Part._kernel_id, Mesh._kernel_id, MeshPart._kernel_id)
+)
+
 name = "SharedPythonImage"
 if name in App.listDocuments():
     App.closeDocument(name)

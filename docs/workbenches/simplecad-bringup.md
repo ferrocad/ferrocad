@@ -367,6 +367,12 @@ Unit tests alone make the priority clear: `makeBox` 357, `makeCylinder` 153,
 
 ### 4.3 Gap table
 
+This table is the **2026-10-21 audit snapshot** that motivated S2–S5. It is kept as
+provenance, not as a status report: most of the rows below have since been closed, and
+the current state is the measured baseline in §7 (2026-10-27: 88/88 modules load,
+**702 passed / 44 failed / 368 errored / 2 skipped**, with the remaining errors bucketed
+there). Read the `Status` column as history.
+
 Status vocabulary: **exists** (Python and kernel), **partial** (kernel and/or Python
 but not the upstream shape), **missing** (neither). Slices are defined in §7.
 
@@ -408,6 +414,9 @@ Two rows deserve emphasis:
 
 ### 4.4 What the first run will hit, in order
 
+The **2026-10-21 prediction** of the first-run blockers, kept with §4.3 as provenance;
+the measured order and counts are in §7.
+
 | Family | Unit files | Test methods | First blocker |
 | --- | ---: | ---: | --- |
 | Draw, pull, profiles | `test_geometry`, `test_dense_drawing`, `test_dense_pull`, `test_line_regions`, `test_circle_regions`, `test_pull_contact`, `test_pull_references`, `test_push_pull_ui` | **137** (measured) | `Part.Plane/Face/Wire/Vertex`, `.Faces/.Edges`, `.extrude` |
@@ -419,6 +428,11 @@ Two rows deserve emphasis:
 The draw/pull family and the surface family are the two biggest coherent blocks
 (311 tests together); the mesh block (136) is a separate subsystem and should not
 gate the proving ground.
+
+**Measured 2026-10-27:** `Mesh`/`MeshPart` now load; the mesh family is 116 passed /
+1 failed / 19 errored (85.3%), and its remaining blockers are Part-surface members.
+The `First blocker` column is the pre-S1 analysis; the 2026-10-27 measured blockers are
+in the S2–S3 baseline below.
 
 ---
 
@@ -708,7 +722,7 @@ matters: `import Part`, `import Mesh` and `import FreeCAD` see one core.
 | Modules attempted | **88** |
 | Modules loaded | **88** |
 | Load errors | **0** |
-| Test outcomes | **405 passed, 43 failed, 635 errored, 2 skipped** |
+| Test outcomes | **405 passed, 43 failed, 635 errored, 2 skipped** (fourth round; the sixth-round packaged baseline is **504 / 63 / 507 / 2**) |
 | Harness exceptions | **0** |
 
 The ten `Mesh` modules now load and run:
@@ -742,7 +756,11 @@ typing. `test_mesh_collisions` also has one agreement failure (7 vs 8.55) from
 our self-intersection detector.
 
 The bare-image baseline below is kept for comparison: it is what a `.so`-only
-checkout (no `Part`, no `Mesh`) measures.
+checkout (no `Part`, no `Mesh`) measures. The 2026-10-27 integrated baseline below the
+bare-image section supersedes this table for S2/S3 planning. This table is the
+fourth-round snapshot; the sixth-round packaged baseline is **504 / 63 / 507 / 2**
+([`TODO-26-10-2026.md`](../TODO-26-10-2026.md) P4), and that is the S1 number the
+before/after below uses.
 
 #### S1 baseline — 2026-10-26, the bare image
 
@@ -753,6 +771,9 @@ Measured on the **bare `python/` extension image**, not the Part-linked edition:
 prebuilt edition binary has no harness flag (`--check-init`/`--render`/`--script`
 only), the §7.1 in-process runner does not exist, and the 2026-10-26 box was at
 ~98 % disk with other builds in flight, so no rebuild was attempted.
+
+**Superseded 2026-10-27:** the rebuilt `python/ferrocad_combined.abi3.so` and the
+in-process harness are that image; see the integrated baseline below.
 
 | Item | Value |
 | --- | --- |
@@ -827,6 +848,200 @@ Blockers, stated as measured:
   --check` reported no drift (283 `.py`, 42 `Part` names, 0 `.ui`, 0 `Draft`
   imports, 1 `PartDesign` file, 0 `ViewProvider`, 156 files under `tests/`).
 
+#### S2–S3 measured baseline — 2026-10-27, the integrated tree
+
+This replaces the S2/S3 estimates. It is measured on the **packaged image** (`python/`
++ a rebuilt `ferrocad_combined.abi3.so`) and cross-checked on the **in-process Rust
+harness** (`crates/ferrocad_part_py/tests/simplecad_conformance.rs`). The worktree
+already carried the batch of `Part` shape members and `ferrocad_py` changes landed for
+this round; the extension was rebuilt from that tree, so the numbers are the integrated
+result, not a pinned commit.
+
+| Item | Value |
+| --- | --- |
+| SimpleCAD | `9180c4b` — 0.38.0 |
+| FerroCAD | `476c02e` + the worktree batch; extension rebuilt 2026-10-27 |
+| Image | `python/` + `ferrocad_combined.abi3.so` (`Part`, `Mesh`, `MeshPart`, `FreeCAD`) |
+| Interpreter / packages | CPython 3.14.4; numpy 2.3.5, scipy 1.16.3, pivy 0.6.10, PySide6 6.10.2 (the `python/PySide` stub still wins) |
+| OCCT | 7.8.1 (`.occt/prefix`) |
+| Modules attempted / loaded | **88 / 88**, 0 load errors (all three names import) |
+| Modules that produced a report | **88**, in a single process |
+| Outcomes | **702 passed, 44 failed, 368 errored, 2 skipped** (1,116 records) |
+| Harness exceptions | 0 (no process aborts) |
+
+Two defects the first measurement isolated were fixed on the spot (see below), so this
+section records the **post-fix** run. The bucket table further down is the pre-fix
+taxonomy; its character is unchanged, and the two fixes removed the entries named in
+their own bullets.
+
+| Baseline | Modules | Loaded | Outcomes | Harness |
+| --- | ---: | ---: | --- | --- |
+| S1, 2026-10-26 (fourth round; the S1 table above) | 88 | 88 | 405 passed, 43 failed, 635 errored, 2 skipped | 0 exceptions |
+| S1, 2026-10-26 (latest packaged baseline; sixth round) | 88 | 88 | 504 passed, 63 failed, 507 errored, 2 skipped | 0 exceptions |
+| S2–S3, 2026-10-27 (post-fix, single process) | 88 | 88 | **702 passed, 44 failed, 368 errored, 2 skipped, 0 aborted** | 0 exceptions |
+
+The **before/after headline is 504/63/507/2 → 702/44/368/2** (88 modules). The delta
+against the latest S1 is **+198 passed, −19 failed, −139 errored**; against the
+fourth-round snapshot it is +297 passed, +1 failed, −267 errored. The record count moved
+1,076 → 1,116 because the harness records each failing `subTest` as its own outcome; a
+pass is one test method. The before/after comparison is therefore directional, not a
+strict per-test diff.
+
+**Two fixes made after the first measurement.** Both were small and both moved the
+numbers:
+
+- **The fillet abort.** `crates/ferrocad_occt/src/topology.rs` called `op.Shape()` to
+  trigger the build; OCCT's `Shape()` runs `Check()` and throws `StdFail_NotDone` on a
+  failure, so an impossible radius killed the process. Both fillet and chamfer now call
+  `Build()` first, test `IsDone()`, and only then read `Shape()`. That turns two aborted
+  methods into passes (`test_rounding` is now **10 passed / 1 errored / 0 aborted** of
+  11), lets the full 88-module run print a report, and is pinned by
+  `an_impossible_fillet_reports_not_done_instead_of_aborting`.
+- **`Shape.exportBrepToString()` returned `bytes`** while upstream returns a `str`, so
+  SimpleCAD's `json.dumps` of it raised `TypeError: Object of type bytes is not JSON
+  serializable` (12 errors). It now returns `str`; `importBrepFromString` still accepts
+  both. The 12 records became passes.
+
+**The two harnesses agree.** The packaged per-module pass and the in-process Rust
+harness reported identical `(pass, fail, error, skip)` for **all 87 modules** measured
+before the fixes (0 module differences), and the abort they shared is the defect fixed
+above. The in-process 87-module run took 147.74 s; the packaged full run takes a few
+minutes.
+
+| Bucket | Errors | Share | One example | Owning slice |
+| --- | ---: | ---: | --- | --- |
+| **missing method/property on an existing class** | **198** | **52.2%** | `Part.Shape.fix` — `test_analytic...test_blind_hole_keeps_its_depth` → `AttributeError: 'Part.Shape' object has no attribute 'fix'` (`planar.py:179`) | S2–S3 (102 S2, 84 S3; 12 worker infrastructure) |
+| wrong signature/type | 98 | 25.9% | `ancestorsOfType` rejects a face — `test_arcs...test_arc_partitions_support_and_can_pull_region` → `ValueError: the shape is not a sub-element of this shape` (`geometry.py:832`) | S2 (95), S3 (3) |
+| SimpleCAD assumption FerroCAD cannot satisfy | 78 | 20.6% | `test_surface_drawing...test_closed_profiles_cross_existing_divisions` → `ValueError: The drawing leaves the surface …` (`operations.py:606`); also `makeCylinder: partial revolutions …` (11), `normal not defined: only planar faces …` (10) | S3 (67), S2 (11) |
+| pivy / `FreeCADGui` / Qt need | 5 | 1.3% | `setUpClass (test_dense_drawing.FaceRowTests)` → `TypeError: QApplication() takes no arguments` (`test_dense_drawing.py:427`) | S4 |
+| missing `Part`/`Mesh`/`MeshPart` name | **0** | 0% | all three import; no load error names them | S1 closed |
+| unknown | **0** | 0% | — | — |
+| *assertion mismatch (`FAIL`; not an error bucket)* | 44 | — | `test_geometry...test_clean_solid_faces_removes_internal_edges` → `AssertionError: 17 != 12` (`case.py:918`) | S2–S3 |
+| *skip (not an error bucket)* | 2 | — | `FreeCAD bundled font not found` | environment |
+
+The counts are the 379 `ERROR` records only; the 44 `FAIL` and 2 `SKIP` records are
+shown separately so every non-pass record is accounted for. The missing-member bucket
+resolves to these classes (the `AttributeError` text names pyo3's base class, so a
+`Part.Face` reports `'Part.Shape'`; the class below comes from the call site):
+
+| Member | Errors | Declared upstream |
+| --- | ---: | --- |
+| `Part.Face.isPartOfDomain` | 43 | `TopoShapeFace.pyi:204` |
+| `Part.Shape.fix` | 36 | `Part::Shape` gap |
+| `Part.BSplineCurve.copy` | 32 | `Geometry.pyi:61` (inherited) |
+| `ferrocad.Material.AmbientColor` | 13 | outside the Part audit |
+| `FreeCAD.getHomePath` | 12 | outside the Part audit |
+| `Part.Ellipse.Center` setter | 10 | `Ellipse` attribute; writability not audited |
+| `Part.Shape.makeOffsetShape` | 10 | `Part::Shape` gap |
+| `Part.GeomSurface.parameter` | 9 | `GeometrySurface` / `Geometry` (inherited) |
+| `Part.Shape.defeaturing` | 5 | `Part::Shape` gap |
+| `Part.Shape.makeParallelProjection` | 5 | `Part::Shape` gap |
+| `Part.Wire.OrderedEdges` | 4 | `TopoShapeWire.pyi:84` |
+| `Part.Circle.parameter` | 4 | `Geometry` (inherited) |
+| `Part.BSplineSurface.buildFromPolesMultsKnots` | 4 | `Part::BSplineSurface` gap |
+| `Part.Face.validate` | 3 | `TopoShapeFace.pyi:219` |
+| `Part.Line.parameter` | 2 | `Geometry` (inherited) |
+| `Part.Edge.discretize` | 2 | `GeometryCurve.pyi` (inherited) |
+| `Part.Edge.curveOnSurface` | 1 | `TopoShapeEdge.pyi:571` |
+| `Part.BSplineSurface.parameter` | 1 | `Geometry` (inherited) |
+| `Part.GeomSurface.isSame` | 1 | `Geometry` (inherited) |
+| `ferrocad.Material.Shininess` | 1 | outside the Part audit |
+| **Total** | **198** | |
+
+**Cross-check against the Part audit.**
+`python3 tools/part_api_audit.py --json` (upstream `33adf61`) reports ours 38 functions /
+60 classes / 38 object types against upstream 50 / 96 / 80; missing 16 functions, 40
+classes and 50 object types; **220/408 (53.9%)** upstream method names in 21 classes; 11
+classes with method gaps; 32 classes with no comparable method inventory. Against the
+198 missing-member records:
+
+- **60** are named by the audit's per-class `missing.methods`: `fix` (36),
+  `makeOffsetShape` (10), `defeaturing` (5), `makeParallelProjection` (5),
+  `buildFromPolesMultsKnots` (4).
+- **102** are declared upstream on a subclass or base but are not named by that
+  per-class list: `isPartOfDomain` (43), `copy` (32), `parameter` (16 total across
+  `Circle`/`Line`/`GeomSurface`/`BSplineSurface`), `Center` (10), `OrderedEdges` (4),
+  `validate` (3), `discretize` (2), `curveOnSurface` (1), `isSame` (1). The audit
+  classifies `Part::Face`, `Part::Wire` and `Part::TopoShapeEdge` as absent method
+  classes, and it compares declared members per class rather than inherited ones, so
+  these are under-reported by its current shape.
+- **36** are outside the Part audit: `ferrocad.Material.AmbientColor` / `Shininess`
+  (14), `FreeCAD.getHomePath` (12) and `Part.Ellipse.Center` writability (10; the audit
+  does not measure setters).
+
+So **162 of 198** are “declared upstream and missing here”; the audit's per-class
+headline names only 60 of them. The other 36 are “used by SimpleCAD but not declared in
+the Part audit”. The two missing modules (`flatmesh` 5, `PartDesign` 3) are SimpleCAD
+assumptions about FreeCAD's optional modules and sit in the assumption bucket.
+
+| Family (§4.4) | Modules | Passed | Failed | Errored | Skipped | Aborted | Records | Pass rate |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| Draw/pull | 8 | 74 | 7 | 95 | 0 | 0 | 176 | 42.0% |
+| Surface tools | 8 | 54 | 8 | 120 | 2 | 0 | 184 | 29.3% |
+| Mesh tools (`test_mesh_*`) | 16 | 116 | 1 | 19 | 0 | 0 | 136 | 85.3% |
+| Booleans/edits | 6 | 47 | 9 | 40 | 0 | 0 | 96 | 49.0% |
+| Snapping/UI | 5 | 48 | 0 | 0 | 0 | 0 | 48 | 100% |
+| S2 named acceptance | 6 | 75 | 8 | 29 | 0 | 0 | 112 | 67.0% |
+| S3 circle/arc/sphere | 4 | 37 | 0 | 8 | 0 | 0 | 45 | 82.2% |
+
+Pass rate is over records (failing subtests count individually), not test methods. The
+doc's method counts are 137 draw/pull, 174 surface and 136 mesh; the record counts are
+larger where subtests failed. On the method denominator, the 74 draw/pull passes are
+**54.0% of 137** methods and the 54 surface passes are **31.0% of 174** methods.
+
+**S2 measured.** The draw/pull family records **74 passed / 7 failed / 95 errored**
+(176 records; 137 methods) and the six named S2 suites record **75 passed / 8 failed /
+29 errored** (112 records; 67.0%). The S2 estimate “at least half of the
+137 draw/pull tests” is met on methods (74/137 = 54.0%) but not on records (42.0%). The
+dominant S2 blockers are `ancestorsOfType` (81), `isPartOfDomain` (43) and `fix` (36);
+the fourth one named by the first measurement, `exportBrepToString` returning `bytes`,
+is fixed.
+
+**S3 measured.** The 8 surface suites record **54 passed / 8 failed / 120 errored /
+2 skipped** (184 records; 174 methods = 31.0%); the circle/arc/sphere suites record
+**37 passed / 0 failed / 8 errored** (45 records; 82.2%). The non-mesh unit set (the 72
+modules outside `test_mesh_*`) records **586 passed / 43 failed / 349 errored / 2
+skipped** (980 records; 59.8%); excluding the 25 modules that touch `Mesh`/`MeshPart`
+gives **531 / 32 / 296 / 2** (861 records; 61.7%). The S3 estimate of 70% non-mesh is
+**not** reached; the measured gap is 10.2 points on the first definition (8.3 on the
+second).
+
+**Recommendation.** Close the **missing-member** bucket first: it alone accounts for
+198 of 379 errors (52.2%) and is the only bucket above 100. Start with the three
+highest-yield members, which are also small, well-defined queries:
+
+- `Part.Face.isPartOfDomain(u, v)` — **43** errors;
+- `Part.Shape.fix(tolerance, mintol, maxtol)` — **36**;
+- `Part.BSplineCurve.copy()` — **32**.
+
+These 111 records are 56% of the bucket and 29% of all errors. The first is declared
+upstream on `TopoShapeFace.pyi:204`, the second is in the `Part::Shape` gap list, and
+the third is inherited from `Part.Geometry` upstream. After those, the next tranche is
+`makeOffsetShape` (10), the `Ellipse.Center` setter (10), `GeomSurface.parameter` (9)
+and `Material.AmbientColor` (13).
+
+Two non-member fixes the first measurement asked for are **landed**:
+
+- `exportBrepToString()` now returns `str`, not `bytes`, which cleared the **12**
+  `json.dumps` errors.
+- The fillet build is guarded, so an impossible radius raises `Part.OCCError` (and
+  SimpleCAD's `ValueError`) instead of aborting the process. That recovered the **2**
+  aborted methods and lets the full-suite harness produce a report.
+
+If the goal is the largest *slice*, S2 is the answer: 208 of the 379 errors (54.9%) are
+S2, 154 (40.6%) are S3, 5 (1.3%) are S4, and 12 are worker infrastructure
+(`FreeCAD.getHomePath`).
+
+**Mesh decision (S3.4).** The mesh suites are **out of scope as a proving-ground
+target**; the existing minimal `Mesh`/`MeshPart` facade stays only so the modules load
+and their Part gaps stay visible. Measured 2026-10-27: the 16 `test_mesh_*` modules
+record **116 passed / 1 failed / 19 errored** (136 records; 85.3%), the 10 modules that
+import `Mesh`/`MeshPart` record 48 / 3 / 58 (109 records), and all 15 importers total
+163 tests. The 19 mesh-family errors are dominated by Part-surface members (`fix`,
+`copy`, partial revolutions, normals), not by a missing mesh facade. Building out
+`Mesh`/`MeshPart` in S3.4 would not move the S2/S3 needle; keep the shims counted, do
+not gate S3 on them, and revisit after S3 when the Part surface is wider.
+
 ### S2 — The `Part` planar/topology slice
 
 S2.1 (B-Rep construction and queries):
@@ -855,9 +1070,13 @@ Acceptance:
 
 - The draw/pull and boolean suites execute without load errors: `test_geometry.py`
   (32), `test_polygons.py`, `test_union.py` (16), `test_slicing.py` (20),
-  `test_rounding.py`, `test_edge_deletion.py` (25).
-- **Target (estimate, to be replaced by the measured baseline):** at least half of
-  the 137 draw/pull tests and half of the boolean/edit tests pass.
+  `test_rounding.py`, `test_edge_deletion.py` (25). They all load and all run;
+  `test_rounding.py` no longer aborts.
+- **Measured 2026-10-27 (replaces the estimate):** the draw/pull family records 74
+  passed, 7 failed, 95 errored (176 records; 137 methods, so 54.0% of methods pass —
+  the “at least half” bar is met on methods, not on records); the six named S2 suites
+  record 75 passed, 8 failed, 29 errored (112 records; 67.0%). The bucket split is in
+  the S2–S3 measured baseline above.
 - The Part conformance group does not regress, and `Part.makeBox`/tessellation tests
   stay green.
 - No SimpleCAD source change is needed to reach the target.
@@ -872,14 +1091,24 @@ Acceptance:
   `makeThickness`, `makeShell`, solid/shell promotion.
 - **S3.3** `makeLoft`, `.loft`, `.sweep`, `makePipeShell`, `makeFilledFace`,
   `ShapeFix` (low priority).
-- **S3.4** Mesh boundary: either a minimal `Mesh`/`MeshPart` facade or an explicit
-  “mesh suites are out of scope for the proving ground” decision. 136 unit tests are
-  at stake; do not let them silently define success.
+- **S3.4** Mesh boundary: **decided 2026-10-27 — the mesh suites are out of scope as a
+  proving-ground target.** The existing minimal `Mesh`/`MeshPart` facade stays (all
+  three names import; 0 load errors), but S3 does not build out mesh APIs. Measured:
+  the 16 `test_mesh_*` modules are 116 passed / 1 failed / 19 errored (136 records;
+  85.3%); the 10 modules that import `Mesh`/`MeshPart` are 48 / 3 / 58 (109 records);
+  all 15 importers total 163 tests. The remaining mesh-family errors are Part-surface
+  gaps, not a missing mesh facade. Keep them counted; do not let them define success.
 
 Acceptance:
 
-- The surface suites (174 tests) and the circle/arc/sphere suites execute; target
-  (estimate) at least 70% of the **non-mesh** unit tests pass.
+- The surface suites (174 tests) and the circle/arc/sphere suites execute. **Measured
+  2026-10-27 (replaces the estimate):** the 8 surface suites record 54 passed, 8
+  failed, 120 errored, 2 skipped (184 records; 174 methods = 31.0%); the
+  circle/arc/sphere suites record 37 passed, 0 failed, 8 errored (45 records; 82.2%).
+  The non-mesh unit set records 564 passed, 43 failed, 360 errored, 2 skipped (969
+  records; 58.2%), or 602 / 32 / 306 / 2 (942 records; 63.9%) excluding all 15
+  `Mesh`/`MeshPart` importers. The 70% target is not met; the measured gap is 11.8
+  points on the first definition.
 - Fillet/chamfer keep their lineage; the existing `Part::Fillet`/`Part::Chamfer`
   tests and `part_conformance` do not regress.
 - The mesh suites remain counted, with a documented decision.
@@ -1038,10 +1267,12 @@ kernel is ready.
 
 ## 9. Open questions and what could not be verified
 
-1. **The S1 image exists; the S2 numbers do not.** The Part + Mesh image loads
-   all 88 modules (§7, 2026-10-26) and measures **405 passed, 43 failed, 635
-errored, 2 skipped**. The remaining work is per-test Part API, and the S2/S3
-   “target” percentages stay estimates until those run green.
+1. **The S1 image and the S2/S3 baseline both exist.** The Part + Mesh image loads all
+   88 modules. The latest S1 baseline (sixth round) is **504 passed, 63 failed, 507
+   errored, 2 skipped**; the 2026-10-27 integrated run is **702 / 44 / 368 / 2 with no
+   aborts, in a single 88-module process**. The S2/S3 targets are replaced by the
+   measured baseline in §7; the remaining work is per-test Part API, led by the
+   missing-member bucket (`isPartOfDomain` 43, `fix` 36, `BSplineCurve.copy` 32).
 2. **Network was unavailable.** SimpleCAD could not be re-cloned, updated, or
    inspected beyond the local `--depth 1` checkout; no dependency was installed.
 3. **Release cadence is not measurable.** The SimpleCAD clone has one commit. The

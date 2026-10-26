@@ -12,6 +12,7 @@ The `Base` value types FreeCAD exposes as a submodule.
 | Member | Summary |
 | --- | --- |
 | `Center` (attribute) | — |
+| `DiagonalLength` (attribute) | — |
 | `XLength` (attribute) | — |
 | `XMax` (attribute) | — |
 | `XMin` (attribute) | — |
@@ -21,7 +22,7 @@ The `Base` value types FreeCAD exposes as a submodule.
 | `ZLength` (attribute) | — |
 | `ZMax` (attribute) | — |
 | `ZMin` (attribute) | — |
-| add(x, y, z) | — |
+| add(x, y=None, z=None) | — |
 | enlarge(amount) | Grow the box by `amount` in every direction (`BoundBox.enlarge`). |
 | getIntersectionPoint(point, direction) | The first box-surface point hit by a ray from `point` along `direction`. |
 | intersect(other) | — |
@@ -39,6 +40,7 @@ Kernel failure (``Part.OCCError`` when the Part module is absent).
 | Member | Summary |
 | --- | --- |
 | `DiffuseColor` (attribute) | — |
+| `Transparency` (attribute) | — |
 
 ## Class `Matrix`
 
@@ -78,6 +80,7 @@ Kernel failure (``Part.OCCError`` when the Part module is absent).
 | inverse() | — |
 | isSame(o, tol=0.0) | — |
 | multVec(v) | Transform a vector by this placement (FreeCAD `Placement.multVec`). |
+| multiply(other, mod=0) | Compose this placement with `other` (`Placement.multiply`). |
 | rotate(center, axis, angle, comp=False) | Rotate this placement in place (`Placement.rotate`). |
 | toMatrix() | — |
 | translate(*args) | Move this placement in place (`Placement.translate`). |

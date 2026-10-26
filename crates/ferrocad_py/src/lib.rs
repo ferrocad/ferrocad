@@ -5573,7 +5573,13 @@ impl PyPlacement {
     /// - `2`: the translation only, `self.Base + self.Rotation * other.Base`.
     ///
     /// The result is a new placement; neither operand changes.
-    #[pyo3(signature = (other, r#mod = 0))]
+    // An explicit `text_signature`: PyO3 0.25 looks the default up by the Python
+    // name (`mod`), so a raw-identifier parameter (`r#mod`) renders `mod=...`
+    // instead of `mod=0`.
+    #[pyo3(
+        signature = (other, r#mod = 0),
+        text_signature = "($self, other, mod=0)"
+    )]
     fn multiply(&self, other: PyRef<'_, PyPlacement>, r#mod: i32) -> PyResult<PyPlacement> {
         let left = self.get();
         let right = other.get();

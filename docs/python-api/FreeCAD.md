@@ -115,6 +115,7 @@ A drop-in, Rust-backed stand-in for FreeCAD's Python ``App`` module.
 | hasObject(other) | — |
 | isDerivedFrom(type_id) | FreeCAD `DocumentObject.isDerivedFrom(typeId)`. |
 | isLink() | `isLink()`: true for `App::Link` and its registered containers, and for the `Part::LinkArray*` types. |
+| isValid() | Whether the object is valid (`DocumentObject.isValid`). |
 | purgeTouched() | Mark the object as unchanged (FreeCAD `purgeTouched`). |
 | recompute() | Recompute this object (FreeCAD `DocumentObject.recompute`). |
 | removeExtension(name) | — |

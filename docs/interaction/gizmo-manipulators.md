@@ -144,7 +144,9 @@ The accumulated delta is `wrap_pi(θ − θ_press)` and is then passed through
 - **default:** snap to **15°** detents relative to the press orientation:
   `round(raw / 15°) · 15°`;
 - **Ctrl:** free rotation (`GizmoModifiers.ctrl`);
-- the raw delta is unwrapped into `(-π, π]`, so a drag across ±π does not jump.
+- each frame unwraps only its own step (`wrap_pi(θ − θ_previous)`) and adds it to the
+  accumulated sweep, so crossing the atan2 seam keeps turning the same way and a drag
+  can sweep more than one revolution.
 
 The detents are **relative**, so grabbing an already-rotated body does not jump to the
 world grid on the first frame. `TransformGizmo::drag_to_with_modifiers` is the host entry
@@ -152,7 +154,8 @@ point; `drag_to` uses the default (snapped) modifiers until T3 threads the keybo
 through gpui.
 
 Tests: `ring_detents_are_relative_and_ctrl_frees_them`,
-`a_ring_drag_rotates_about_the_axis`.
+`a_ring_drag_rotates_about_the_axis`,
+`a_ring_drag_sweeps_past_half_a_turn_and_snaps_to_the_detent`.
 
 ## 5. Snapping and numeric readout
 
@@ -163,14 +166,15 @@ enum GizmoConstraint { Axis(Axis), Plane(Normal), Ring(Axis) }
 enum GizmoValue {
     Linear  { axis: GizmoAxis, raw: f64, applied: f64 },
     Planar  { raw: Vector3, applied: Vector3 },
-    Angular { axis: GizmoAxis, raw_deg: f64, applied_deg: f64 },
+    Angular { axis: GizmoAxis, raw_deg: f64, applied_deg: f64, detent_deg: f64 },
 }
 ```
 
 `GizmoDragEvent` and `GizmoCommitEvent` carry `constraint` and `value`. The gpui tag is
 projected at the handle tip (axis), the plane anchor, or the pointer (ring) and uses a
-monospace/tabular face: `ΔX +24.5 mm`, `ΔθZ +15.0°`, or `ΔX … ΔY …` for a plane. It is a
-text layer over the image (like the navicube labels), so it never steals pointer events.
+monospace/tabular face: `ΔX +24.5 mm`, `ΔθZ +15.0° (15.0°)` (`(free)` under `Ctrl`), or
+`ΔX … ΔY …` for a plane. It is a text layer over the image (like the navicube labels), so
+it never steals pointer events.
 
 Linear grid snapping reuses `InventorViewport::snap_grid`: `set_gizmo`/`set_snap_grid`
 pass the step to `TransformGizmo::set_linear_snap`, and the transform uses the **applied**
@@ -192,9 +196,10 @@ for drawing. This is what allows padding without invisible pick geometry:
   stems, and grows on hover like a hovered stroke.
 - **Planes:** project the quad; the interior is grabbable, and the rim gets the padding.
 - **Rings:** a face-on ring is tested in 3D — intersect the ray with the ring plane and
-  require the hit radius to be within the pixel slop of `scale`. An edge-on ring projects
-  to a line through the centre, so its screen-space fallback excludes the inner
-  `0.18·projected_radius`; the centre is therefore never “on” an edge-on ring.
+  require the hit radius to be within the pixel slop of `scale`. A ring whose plane is
+  edge-on (`|ray.direction · ring_axis| < 0.2`) is **excluded from the hit test** (and
+  fades out of the drawing), so it cannot steal a click from the axis stem; there is no
+  screen-space fallback for an edge-on ring.
 - **Padding:** `HIT_TOLERANCE_PIXELS = 2` + `HIT_PADDING_PIXELS = 10` (12 px total).
 - **Priority:** origin > axis > plane > ring, then nearest stroke, then front-most depth.
 - **Pass-through:** outside the origin disc, the interior is not in the pick set, so a

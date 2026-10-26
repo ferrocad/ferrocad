@@ -1,7 +1,8 @@
 # Task — kernel state sharing
 
-Status: task (2026-10-26). The split-kernel bug is fixed; **K0–K1 are the open
-hardening work**, K2–K3 are debt, and K4 is a gated proposal. Design authority:
+Status: task (2026-10-26). The split-kernel bug is fixed; **K0–K1 and K3 landed**
+(the identity diagnostic, the mixed-image guard, the `Kernel` facade), K2 is debt, and
+K4 is a gated proposal. Design authority:
 [`../architecture/kernel-state-sharing.md`](../architecture/kernel-state-sharing.md).
 Backlog: [`../TODO-26-10-2026.md`](../TODO-26-10-2026.md) P6.
 
@@ -35,7 +36,7 @@ What remains is the difference between "the composition happens to be correct" a
 | Display/interaction providers | module-level Python lists in `python/FerroCAD/__init__.py` | Implemented; process-wide by the same assumption |
 | Module identity diagnostic | `ferrocad_core::application_id()`, `_kernel_id` on every module | Implemented (K0) |
 | Mixed-image guard | `ferrocad_combined_py::install()` refuses built-ins | Implemented (K1) |
-| Kernel facade | — | **Missing** (proposal) |
+| Kernel facade | `ferrocad_core::kernel()` over the existing registries: `documents()`, `object_types()`, `properties()`, `property_extensions()` | Implemented (K3) |
 | Capsule ABI | — | **Missing** (proposal) |
 
 The existing gates are `crates/ferrocad_part_py/tests/part_boot.rs`,
@@ -190,14 +191,14 @@ capsule is only for **separately distributed** wheels (`ferrocad` +
 
 1. **K0** — it is small and makes every later slice measurable.
 2. **K1** — close the only remaining path to a mixed image in the app.
-3. **K3** — the facade is low-risk and gives K2 a place to live.
+3. **K3 — landed 2026-10-26** — the facade is low-risk and gives K2 a place to live.
 4. **K2** — the largest refactor; land it only when a second interpreter is
    actually needed or when a cache bug points at it.
 5. **K4** — only after the modular-wheel decision.
 
 ## As built
 
-**K0 and K1 landed 2026-10-26.**
+**K0, K1 and K3 landed 2026-10-26.**
 
 - **K0 — identity.** `ferrocad_core::application_id()` returns the address of the
   process-wide `Application`. Every `#[pymodule]` init (`ferrocad`, `Part`, `Mesh`,
@@ -213,5 +214,12 @@ capsule is only for **separately distributed** wheels (`ferrocad` +
   `crates/ferrocad_combined_py/tests/mixed_image.rs` covers the built-in and
   file-module cases. CI's geometry job builds `ferrocad_parametric` and runs
   `--check-init` right after the packaged test, with the on-disk extension present.
+- **K3 — `Kernel` facade.** `crates/ferrocad_core/src/kernel.rs` adds
+  `pub fn kernel() -> &'static Kernel` with `documents()` (`&'static Mutex<Application>`),
+  `object_types()`, `properties()` and `property_extensions()`. It is a handle over the
+  existing `OnceLock`s, not a state move: the free functions (`application()`,
+  `object_registry::*`, `property_types::*`) remain and reach the same state.
+  `src/tests/kernel.rs` asserts a document, object type, property type and restore hook
+  registered through the free functions are visible through `kernel()`.
 
-K2–K4 remain open; K4 still waits on the modular-wheel decision.
+K2 and K4 remain open; K4 still waits on the modular-wheel decision.

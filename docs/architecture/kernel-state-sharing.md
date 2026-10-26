@@ -70,7 +70,7 @@ Part owns a geometry backend that is not part of the document core.
 
 | Scope | Current realization | Examples | Rule |
 | --- | --- | --- | --- |
-| **Process-wide core state** | `ferrocad_core::application()` (`OnceLock<Mutex<Application>>`), `ferrocad_core::object_registry`, `ferrocad_core::property_types` | Document registry, active document, document observers, object-type behaviours, property factories and extension restore hooks | **Exactly one** per process |
+| **Process-wide core state** | `ferrocad_core::kernel()` over `ferrocad_core::application()` (`OnceLock<Mutex<Application>>`), `object_registry` (`ObjectTypeRegistry`), `property_types` (`PropertyRegistry` + `PropertyExtensionRegistry`) | Document registry, active document, document observers, object-type behaviours, property factories and extension restore hooks | **Exactly one** per process; a workbench crate must not introduce its own `OnceLock<…Registry>` |
 | **Interpreter state** | PyO3 module objects and their classes/exceptions; the `ferrocad_py` caches (see "Known deviations") | `Py<PyType>` handles, custom exceptions, converter/resolver tables | One per interpreter in principle; **currently single-interpreter only** |
 | **Document state** | `ferrocad_core::Document`, held as `Arc<Mutex<Document>>` (`DocumentHandle`) | Object graph, property bags, per-document undo stack, recompute DAG | One per open document, owned by the `Application` registry |
 | **Workbench singleton** | `ferrocad_part::backend()` (a private `BACKEND: OnceLock<Arc<dyn GeometryBackend>>` behind it), `ferrocad_mesh::register`'s idempotence flag | The OCCT backend, the kernel's element-name/geometry operations | One per process, installed by the composition root; never a second document or object-type registry |
@@ -90,9 +90,13 @@ Part owns a geometry backend that is not part of the document core.
 
 ### Known deviations
 
-The rule above describes the target; two current details are worth stating plainly
+The rule above describes the target; the current details are worth stating plainly
 rather than implying the code is cleaner than it is:
 
+- **The kernel facade is a handle, not a state migration.** `ferrocad_core::kernel()`
+  returns `&'static Kernel`; `documents()`, `object_types()`, `properties()` and
+  `property_extensions()` return the existing `OnceLock`s. `application()`,
+  `object_registry::*` and `property_types::*` remain and reach the same state.
 - **`ferrocad_py` keeps Python-object caches in process-wide `OnceLock`s.**
   `DOCUMENTS`, `OBJECT_CACHE`, `OBSERVERS`, the extension converters and the
   sub-element resolvers are all process-global. That is correct for the
@@ -246,6 +250,7 @@ The invariant is checked by these gates:
 | `tests/test_packaged_modules.py` | The same composition from a real host CPython with `PYTHONPATH=python`, including `import FreeCAD` before `import Part`, with the `_kernel_id` equality assertion; skips when `ferrocad_combined.abi3.so` is not built |
 | `cargo test -p ferrocad_parametric` | The edition's manipulator round trips (fillet and the move gizmo) through the app script and document; the move-gizmo test also asserts one undo restores the placement |
 | `ferrocad_parametric --check-init` | The base boot, the edition's app script import, `_kernel_id` equality across `FreeCAD`/`Part`/`Mesh`/`MeshPart`, and a document with a `Part::Feature` holding a `Part.makeBox` |
+| `crates/ferrocad_core/src/tests/kernel.rs` | `kernel().documents()` sees a document created through `application()`; object types, property types and extension restore hooks registered through the free functions are visible through `kernel()` |
 
 ### Diagnostics in place
 

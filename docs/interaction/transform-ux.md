@@ -2,7 +2,7 @@
 
 Status: **design note (2026-10-25).** The mode set (slice 1) and the wheel's `Rotate`
 verb landed 2026-10-26; re-pivot (slice 3) and push/pull (slice 5) also landed
-2026-10-26. Select mode (slice 4) remains proposed. "Today" means at `d3c5853` for
+2026-10-26. Select mode (slice 4) landed 2026-10-26. "Today" means at `d3c5853` for
 the unbuilt parts; the landed slices are marked where they appear.
 Companions: [`gizmo-manipulators.md`](gizmo-manipulators.md) (triad math and hit test),
 [`selection-gizmos-and-forms.md`](selection-gizmos-and-forms.md) (wheel, form, deferred
@@ -150,16 +150,15 @@ There is no whole-body mode: a Part click is tagged, so it always resolves to a 
 | Header `Select: Body/Face` | explicit, persistent | one flag gating `part_name` in `selection_ref` (`inventor_view.rs:1560-1563`); a second header mode | fallback |
 | Wheel "Select body" | only after right-click | a command plus promotion; heavy for a frequent switch | reject |
 | `Alt`-click | common in CAD | window managers grab it on Linux | reject |
-| **Double-click the face** | spatial, no mode to remember | click timing in the viewport; first click selects the face, second upgrades | **recommend** |
+| **Double-click the face** | spatial, no mode to remember | click timing in the viewport; first click selects the face, second upgrades | **built** |
 | Select-through filter | invisible | a filter model with no clear default | reject |
 
-**Recommendation: double-click a face or edge to upgrade to
+**Built (2026-10-26): a double-click on a face or edge upgrades to
 `SelectionRef::whole(entity)`; a single click returns to sub-element scope.** The viewport
-keeps the last selection press `(Instant, point, PickId)`; a second press within ~400 ms
-and ~6 px on the same entity reports the body. Nothing below the viewport changes:
-`selection_ref` still resolves the part; only an upgrade branch in `selection_event`
-(`inventor_view.rs:2056-2084`) is new. Gate it after slice 1: its purpose is a sane body
-pivot for Rotate.
+uses gpui's `MouseDownEvent::click_count` (no timing heuristic of its own), carries it on
+`SelectionEvent::Picked`, and the shell's `click_target` upgrades `click_count >= 2` to
+the body. A later single click on a face returns to that face; a third click stays whole
+(no toggling). The triad still arms at the object's own origin for either scope.
 
 ## Contradictions to reconcile
 
@@ -182,7 +181,7 @@ pivot for Rotate.
 | 1 | **Rotate mode** — `Shell::gizmo_mode` applied after the factory; `App_Rotate` radial verb via a `{"view": …}` mode request; header mirror | A body shows rings only; a 90° ring drag commits one `transform/apply`; the mode survives re-arm; Translate shows no rings | `ferrocad_gpui/src/shell.rs`, `view.rs`; `python/ferrocad_shell/__init__.py`; `chrome.rs` |
 | 2 | **Multi-selection guard** — no triad while more than one object is selected (the commit names one target) | Selecting two bodies shows no triad and the wheel's `Move` still moves both | `ferrocad_gpui/src/shell.rs` |
 | 3 | **Re-pivot — landed 2026-10-26** — `GizmoTarget::Origin`, the snap pipeline, `GizmoOrigin`, session user origin, disabled during the Move HUD | The centre snaps to a vertex/edge mid/face centre/grid; a ring drag rotates about it; a new selection clears it; the Move HUD disables it | `ferrocad_stage/src/gizmo.rs`, `ferrocad_viewport/src/inventor_view.rs`, `shell.rs` |
-| 4 | **Select mode** — double-click a face/edge upgrades to the whole body | Click selects `Face6`; double-click selects the body; a click on another face returns to that face | `inventor_view.rs`; `shell.rs` (status) |
+| 4 | **Select mode — landed 2026-10-26** — double-click a face/edge upgrades to the whole body; `MouseDownEvent::click_count` rides on `SelectionEvent::Picked` | Click selects `Face6`; double-click selects the body; a click on another face returns to that face; the triad arms at the object origin either way | `ferrocad_viewport/src/inventor_view.rs`; `shell/{viewport,picking}.rs` |
 | 5 | **Push/pull stem — landed 2026-10-26** — Part manipulator + edition hook; stem/pill live, solid on release, one transaction | A face shows an amber normal stem; dragging commits an extrusion/pocket that recomputes; undo restores; non-planar faces show no stem | `ferrocad_part_gui/src/push_pull.rs`; `python/ferrocad_parametric/__init__.py` |
 
 Slices 1–2 are the transform slice proper; 3 depends on 1; 4 is gated on 1; 5 does not

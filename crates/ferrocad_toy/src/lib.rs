@@ -25,9 +25,9 @@
 
 use ferrocad_geom::SelectionRef;
 use ferrocad_graphics::{Camera, screen_ribbon};
-use ferrocad_stage::gizmo::GizmoStyle;
+use ferrocad_stage::gizmo::{GizmoStyle, MIN_HIT_RADIUS_PX};
 use ferrocad_stage::screen::{
-    HIT_SLOP, camera_forward, point_segment_distance, project_device, push_ribbon, scale_for,
+    camera_forward, point_segment_distance, project_device, push_ribbon, scale_for,
 };
 use ferrocad_stage::{DrawMode, InteractionCommit, Manipulator, ShapeItem, Stage};
 use ferrocad_stage::{GizmoMode, TransformGizmo};
@@ -45,12 +45,6 @@ pub const MIN_HEIGHT: f64 = 0.1;
 
 /// The grip stem's screen-invariant length, in device pixels.
 const STEM_PIXELS: f64 = 44.0;
-/// The dark casing around the grip stroke, in device pixels (the stroke itself is
-/// [`GizmoStyle::width`] wide).
-const CASING_PIXELS: f64 = 3.0;
-/// The dark casing ink: the canvas void, so the grip reads against a bright selected
-/// slab as well as against the dark canvas.
-const CASING_COLOR: [f32; 4] = [0.004777, 0.006049, 0.009134, 1.0];
 
 /// A vertical grip that drags the slab's `Height` property.
 ///
@@ -58,6 +52,12 @@ const CASING_COLOR: [f32; 4] = [0.004777, 0.006049, 0.009134, 1.0];
 /// stem projecting **up** from that anchor into empty space plus a cross at its tip.
 /// Dragging up grows the height by the pointer's **vertical travel**, in screen-invariant
 /// world units.
+///
+/// The casing behind the stroke is the shared [`GizmoStyle::outline`] halo, sized by
+/// [`GizmoStyle::halo_width`]. It is the WCAG 1.4.11 contrast aid: the toy's blue slab
+/// sits at the same lightness as the cyan stem, so a dark outline is what keeps the
+/// grip readable over it. A hover (or an active drag) also widens the stroke by
+/// [`GizmoStyle::hover_scale`], the non-colour cue for WCAG 1.4.1.
 #[derive(Clone, Debug)]
 pub struct HeightGrip {
     target: u32,
@@ -93,9 +93,7 @@ impl HeightGrip {
             items: [
                 ShapeItem::new(TOY_GRIP_PICK_ID)
                     .with_draw_mode(DrawMode::Shaded)
-                    .with_selectable(false)
-                    .with_surface_color(CASING_COLOR)
-                    .with_edge_color(CASING_COLOR),
+                    .with_selectable(false),
                 ShapeItem::new(TOY_GRIP_PICK_ID + 1)
                     .with_draw_mode(DrawMode::Shaded)
                     .with_selectable(false)
@@ -147,6 +145,9 @@ impl HeightGrip {
             return false;
         }
         self.hovered = hovered;
+        // The hover cue is also a stroke-width change, which is baked into the cached
+        // ribbons; force the next `update` to rebuild them.
+        self.built = None;
         self.apply_color();
         true
     }
@@ -190,10 +191,19 @@ impl HeightGrip {
         self.items[1].set_surface_color(color);
         self.items[1].set_edge_color(color);
         self.items[1].set_ghost_alpha(self.style.ghost_alpha);
+        // The casing is the outline/halo ink, dimmed with the rest of the style.
+        let outline = [
+            self.style.outline[0],
+            self.style.outline[1],
+            self.style.outline[2],
+            self.style.outline[3] * self.style.opacity,
+        ];
+        self.items[0].set_surface_color(outline);
+        self.items[0].set_edge_color(outline);
     }
 
-    /// Whether `device` is on the grip (the top anchor or the stem, within the shared
-    /// grab slop).
+    /// Whether `device` is on the grip (the top anchor or the stem, within the style's
+    /// grab radius).
     pub fn hit(&self, camera: &Camera, device: [i32; 2]) -> bool {
         let Some(anchor) = project_device(camera, self.top) else {
             return false;
@@ -202,7 +212,8 @@ impl HeightGrip {
             return false;
         };
         let point = [f64::from(device[0]), f64::from(device[1])];
-        point_segment_distance(point, anchor, tip).0 <= HIT_SLOP
+        let slop = self.style.hit_radius_px.max(MIN_HIT_RADIUS_PX);
+        point_segment_distance(point, anchor, tip).0 <= slop
     }
 
     /// Begin a drag at `device`.
@@ -211,6 +222,8 @@ impl HeightGrip {
             return false;
         }
         self.press = Some((f64::from(device[1]), self.height));
+        // The grabbed state widens the stroke, so the next update must rebuild it.
+        self.built = None;
         self.apply_color();
         true
     }
@@ -231,6 +244,7 @@ impl HeightGrip {
     /// End the drag, returning the value to commit.
     pub fn end_drag(&mut self) -> Option<InteractionCommit> {
         self.press.take()?;
+        self.built = None;
         Some(
             InteractionCommit::new(TOY_HEIGHT_ID, self.target, "set")
                 .with_values([self.height])
@@ -244,6 +258,7 @@ impl HeightGrip {
             return false;
         };
         self.height = height;
+        self.built = None;
         self.apply_color();
         true
     }
@@ -266,18 +281,23 @@ impl HeightGrip {
         Vector3::new(self.top.x, self.top.y, self.top.z + length)
     }
 
-    /// Rebuild the geometry: a 1.5 px ribbon from the top centre up into empty space,
-    /// plus a crossbar at its tip, each over a wider dark casing. The stem, crossbar and
-    /// casing are screen-invariant, so the target stays grabbable at any zoom.
+    /// Rebuild the geometry: a `width`-wide ribbon from the top centre up into empty
+    /// space, plus a crossbar at its tip, over a casing that is `halo_width` wider on
+    /// each side. The stem, crossbar, casing and the hover widen are screen-invariant,
+    /// so the target stays grabbable at any zoom.
     fn build(&mut self, camera: &Camera) {
         let stem_end = self.stem_end(camera);
         let crossbar_half = scale_for(camera, self.top, 5.0);
-        let stroke_half = scale_for(camera, self.top, self.style.width / 2.0);
-        let casing_half = scale_for(
-            camera,
-            self.top,
-            (self.style.width + CASING_PIXELS) / 2.0,
-        );
+        let active = self.hovered || self.is_dragging();
+        let hover_scale = self.style.hover_scale.max(1.0);
+        let halo = self.style.halo_width.max(0.0);
+        let stroke_pixels = if active {
+            self.style.width * hover_scale
+        } else {
+            self.style.width
+        };
+        let stroke_half = scale_for(camera, self.top, stroke_pixels / 2.0);
+        let casing_half = scale_for(camera, self.top, (stroke_pixels + 2.0 * halo) / 2.0);
         let forward = camera_forward(camera);
         let left = Vector3::new(
             stem_end.x - crossbar_half,
@@ -307,7 +327,12 @@ impl HeightGrip {
         };
 
         let (stroke_positions, stroke_triangles) = ribbons(stroke_half);
-        let (casing_positions, casing_triangles) = ribbons(casing_half);
+        if halo > 0.0 {
+            let (casing_positions, casing_triangles) = ribbons(casing_half);
+            self.items[0].set_shape(casing_positions, Vec::new(), casing_triangles, Vec::new());
+        } else {
+            self.items[0].set_shape(Vec::new(), Vec::new(), Vec::new(), Vec::new());
+        }
         // The stroke is coplanar with the casing; nudge it half a pixel toward the eye so
         // the depth test lets the coloured ribbon win deterministically.
         let toward_eye = camera_forward(camera).scale(-scale_for(camera, self.top, 0.5));
@@ -321,18 +346,7 @@ impl HeightGrip {
                 ]
             })
             .collect();
-        self.items[0].set_shape(
-            casing_positions,
-            Vec::new(),
-            casing_triangles,
-            Vec::new(),
-        );
-        self.items[1].set_shape(
-            stroke_positions,
-            Vec::new(),
-            stroke_triangles,
-            Vec::new(),
-        );
+        self.items[1].set_shape(stroke_positions, Vec::new(), stroke_triangles, Vec::new());
         self.apply_color();
     }
 
@@ -568,7 +582,7 @@ mod tests {
             assert_eq!(item.positions().len(), 8, "two ribbon quads");
             assert_eq!(item.triangles().len(), 12, "six indices per quad");
         }
-        assert_eq!(casing.surface_color(), CASING_COLOR);
+        assert_eq!(casing.surface_color(), GizmoStyle::default().outline);
         assert_eq!(stroke.surface_color(), GizmoStyle::default().inactive);
 
         // The geometry spans the top-face centroid up to the stem tip; neither ribbon
@@ -609,8 +623,10 @@ mod tests {
         let mut style = GizmoStyle::default();
         style.inactive = [0.0, 1.0, 0.0, 0.8];
         style.active = [1.0, 0.0, 0.0, 1.0];
+        style.outline = [0.0, 0.0, 1.0, 1.0];
         style.opacity = 0.5;
         style.width = 5.0;
+        style.halo_width = 2.0;
         style.ghost_alpha = 0.6;
         assert!(grip.set_style(&style));
         assert_eq!(
@@ -639,13 +655,14 @@ mod tests {
             "a 5 px stroke: {width} vs {expected}"
         );
 
-        // The casing keeps its extra 3 px on either side of the styled stroke.
+        // The casing is the style's outline ink, dimmed by the opacity.
         let casing = &grip.items()[0];
+        assert_eq!(casing.surface_color(), [0.0, 0.0, 1.0, 0.5]);
         let casing_width = point(casing, 0).sub(&point(casing, 3)).length();
-        let expected = (style.width + CASING_PIXELS) * per_pixel;
+        let expected = (style.width + 2.0 * style.halo_width) * per_pixel;
         assert!(
             (casing_width - expected).abs() < 1e-6,
-            "the casing is stroke + 3 px: {casing_width} vs {expected}"
+            "the casing is stroke + 2·halo: {casing_width} vs {expected}"
         );
 
         // The active token is used while hovered, still scaled by the opacity.
@@ -750,6 +767,84 @@ mod tests {
         );
         let commit = grip.end_drag().expect("a commit");
         assert!(commit.values[0] >= MIN_HEIGHT);
+    }
+
+    #[test]
+    fn a_zero_halo_width_draws_no_casing() {
+        let mut grip = grip();
+        let camera = tilted_camera(200.0);
+        grip.update(&camera);
+        assert!(!grip.items()[0].positions().is_empty());
+
+        let mut style = grip.style().clone();
+        style.halo_width = 0.0;
+        assert!(grip.set_style(&style));
+        assert!(grip.update(&camera));
+        assert!(
+            grip.items()[0].positions().is_empty(),
+            "a zero halo width leaves only the stroke"
+        );
+    }
+
+    #[test]
+    fn hovering_widens_the_stroke_and_the_casing() {
+        let mut grip = grip();
+        let camera = tilted_camera(200.0);
+        grip.update(&camera);
+        let width = |grip: &HeightGrip, slot: usize| {
+            let positions = grip.items()[slot].positions();
+            let point = |index: usize| {
+                Vector3::new(
+                    f64::from(positions[index][0]),
+                    f64::from(positions[index][1]),
+                    f64::from(positions[index][2]),
+                )
+            };
+            point(0).sub(&point(3)).length()
+        };
+        let idle_stroke = width(&grip, 1);
+
+        assert!(grip.set_hovered(true));
+        assert!(
+            grip.update(&camera),
+            "the width cue is baked, so hover must rebuild"
+        );
+        let scale = grip.style().hover_scale;
+        assert!(
+            (width(&grip, 1) / idle_stroke - scale).abs() < 1e-5,
+            "the hovered stroke is {scale}× wider"
+        );
+        // The casing follows the widened stroke, so the halo on each side is unchanged.
+        let per_pixel = scale_for(&camera, grip.top(), 1.0);
+        let expected = width(&grip, 1) + 2.0 * grip.style().halo_width * per_pixel;
+        assert!(
+            (width(&grip, 0) - expected).abs() < 1e-5,
+            "the hovered casing keeps its halo: {} vs {expected}",
+            width(&grip, 0)
+        );
+    }
+
+    #[test]
+    fn the_grab_radius_follows_the_style() {
+        let mut grip = grip();
+        let camera = tilted_camera(200.0);
+        let top = project_device(&camera, grip.top()).expect("the top");
+        let tip = project_device(&camera, grip.stem_end(&camera)).expect("the stem tip");
+        let middle = [
+            ((top[0] + tip[0]) * 0.5).round() as i32,
+            ((top[1] + tip[1]) * 0.5).round() as i32,
+        ];
+        // 15 px to the side of the stem is outside the default 12 px radius.
+        let off = [middle[0] + 15, middle[1]];
+        assert!(!grip.hit(&camera, off));
+
+        let mut style = grip.style().clone();
+        style.hit_radius_px = 20.0;
+        assert!(grip.set_style(&style));
+        assert!(
+            grip.hit(&camera, off),
+            "the configured radius reaches 15 px"
+        );
     }
 
     #[test]

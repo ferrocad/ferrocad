@@ -375,13 +375,17 @@ classes.
   accordingly: axes/rings are `Shaded`, planes are `ShadedWithEdges`.
 - Every handle opts into `with_blended_surface()` + `with_ghost_surface()`: the visible
   part is the normal blended ribbon (planes blend at 10 %), and the part behind a solid
-  is re-emitted at `GHOST_SURFACE_ALPHA` (35 %) with a `Greater` depth test. The toy's
-  `HeightGrip` uses the same pair for its stem and crossbar, with a wider dark casing
-  under the 1.5 px stroke.
+  is re-emitted at `GizmoStyle::ghost_alpha` (20 % by default) with a `Greater` depth
+  test. The toy's `HeightGrip` uses the same pair for its stem and crossbar, and the
+  dress-up arc's halo pass does too.
+- Both workbench manipulators now draw their casing/halo from the style rather than a
+  hard-coded token: the toy grip's casing is `outline` sized by `halo_width` on each
+  side, and the dress-up arc gained the same halo pass. Hover widens the stroke by
+  `hover_scale`, and `hit_radius_px` replaces the fixed `HIT_SLOP` (see §17).
 - The gizmo rebuilds when the camera view changes (the ribbons depend on the view
   direction), as well as when the scale/origin/mode change.
-- A hovered handle uses the active cyan; the rest stay slate. Hovering a plane raises the
-  glass fill and turns its rim cyan.
+- A hovered handle uses the active cyan and a `hover_scale`-wider stroke; the rest stay
+  slate. Hovering a plane raises the glass fill and turns its rim cyan.
 
 Verification: `cargo test -p ferrocad_graphics --lib` — 20 tests (3 new ribbon cases);
 `cargo test -p ferrocad_stage --lib` — 55 tests (3 new visual cases: ribbon draw modes,
@@ -407,8 +411,8 @@ stage, and **not** the shell; see `architecture.md` §10):
   back to a stable screen-horizontal, so the arc keeps a usable orientation and stays
   scrubbable; a polyline with fewer than two points still gets an arc (and no hit).
 - **Hit test.** Analytic screen distance to the arc polyline and the tick, within the
-  shared `HIT_SLOP` (2 px stroke + 10 px padding). The area between the edge and the arc
-  is **not** part of the target, so a click there reaches the scene.
+  style's `hit_radius_px` (12 px by default, a 24 px target). The area between the edge
+  and the arc is **not** part of the target, so a click there reaches the scene.
 - **Scrub.** The value changes by the pointer's **radial travel** from the press
   (`Δpx · scale_for(camera, anchor, 1)`), never by an absolute projection, so grabbing the
   arc anywhere does not jump. The result is snapped (`step`) and clamped
@@ -779,12 +783,12 @@ so a spec can carry its own metadata.
   with `θ = value`, `(u, v) = orthonormal_basis(axis)` and `radius_world = scale_for(camera,
   origin, radius)`. The value offset is what moves the handle; there is no implicit stem,
   so the mesh is the grab target.
-- **Hit is analytic, per kind.** An axis accepts a `HIT_SLOP` band around its projected
-  stem (`origin → origin + axis·value`) **and** the projected bbox of its mesh, so a wide
-  handle stays grabbable where the thin stem does not pass. A ring accepts a `HIT_SLOP`
-  band around the projected 32-segment circle and rejects its interior (an edge-on ring
-  projects to a line; the segment distance handles that, and the interior rejection keeps
-  the centre free for whatever is behind it).
+- **Hit is analytic, per kind.** An axis accepts a band of `GizmoStyle::hit_radius_px`
+  around its projected stem (`origin → origin + axis·value`) **and** the projected bbox
+  of its mesh, so a wide handle stays grabbable where the thin stem does not pass. A ring
+  accepts the same band around the projected 32-segment circle and rejects its interior
+  (an edge-on ring projects to a line; the segment distance handles that, and the
+  interior rejection keeps the centre free for whatever is behind it).
 - **Drag.** An axis projects the frame origin and one world unit along the axis, so the
   value follows the pointer one-for-one on screen (`value = press + dot(δ, û) /
   pixels_per_world`); an axis pointing at the camera has no screen direction and does not

@@ -209,7 +209,7 @@ by **opacity and pairing**, per the spec.
 | Front-facing primary edges | 1 px `Lines`, front-edge token | ✅ `theme::EDGE_FRONT` |
 | Occluded / back edges | 1 px `Lines`, ghost token | ✅ depth-`Greater`, no write, `theme::EDGE_OCCLUDED` |
 | Machined bevels | twin parallel lines, `0.08` model units apart | ▢ geometry-level, deferred (V4) |
-| Gizmo / manipulator strokes | 1.5 px ribbons + dark casing; visible 100 %, occluded 35 % | ✅ |
+| Gizmo / manipulator strokes | 1.5 px ribbons + `outline` halo; visible 100 %, occluded 20 % | ✅ |
 | Dashed rays | runs of short segments | ✓ technique, used by the grid spec |
 
 **The occlusion gap is closed.** The contract was already `DepthState`
@@ -276,18 +276,18 @@ DRAG      solid handle, amber/cyan hull, tabular pill follows
 | Constant | Value | Notes |
 | --- | --- | --- |
 | `HOVER_RADIUS` | 12 px | visual bloom only |
-| `GRAB_SLOP` | 12 px | today's `HIT_SLOP`; the radius that actually starts a drag |
+| `GRAB_SLOP` | `GizmoStyle::hit_radius_px` | 12 px default, floored at 12 (a 24 px target); the radius that starts a drag |
 | Origin proximity | 5 px | the world-origin node's own, smaller radius (`axis-origin-grid.md`) |
 | Aurora flash | 120 ms | new snap point |
 | Hover in / out | 80 / 120 ms | out is slower, so a pass-over does not strobe |
 
-**Bloom and grab share one radius.** Unify both at **12 px**
-(`HIT_TOLERANCE_PIXELS` 2 + `HIT_PADDING_PIXELS` 10). A larger grab radius (20 px) was
-considered so a lit handle is unambiguously grabbable, but it would reach into the
-triad's interior between the stems and break the *empty centre passes through to the
-scene* contract. The bloom must match the grab radius, never exceed it: a handle lights
-up only when it can be grabbed. If a future touch mode needs a larger target, grow the
-**drawn** handle, not the invisible slop. Decision §9.2.
+**Bloom and grab share one radius.** Both default to **12 px**, now expressed as the
+style's `hit_radius_px` (floored at 12 so a 1.5 px stem still has a 24 × 24 px target,
+WCAG 2.5.8). A larger grab radius (20 px) is available in the settings but is **not** the
+default: it reaches into the triad's interior between the stems and shrinks the *empty
+centre passes through to the scene* deadzone. The bloom must match the grab radius,
+never exceed it: a handle lights up only when it can be grabbed. If a future touch mode
+needs a larger target, grow the **drawn** handle, not the invisible slop. Decision §9.2.
 
 ---
 
@@ -358,9 +358,11 @@ V0 is the only cross-cutting slice; V1–V4 are independent afterwards.
 
 1. **Alpha semantics.** Ship opaque composites now and defer translucency (§1.3).
    Recommend yes; a transparency pass is a renderer project of its own.
-2. **Hover vs grab radius.** Unify at **12 px** (`HIT_SLOP`), matching the geometric
-   grab so a lit handle is always grabbable. A 20 px bloom was considered but would
-   break the triad's pass-through centre. `HIT_SLOP` and its tests stay as they are.
+2. **Hover vs grab radius.** Unify at **12 px**, now the floored default of
+   `GizmoStyle::hit_radius_px`, so a lit handle is always grabbable. A 20 px bloom is
+   offered as a setting but is not the default: it breaks the triad's pass-through
+   centre. The pure stage style keeps `hit_radius_px` as the single source; the viewport
+   clamps it to `12..=48`.
 3. **Font bundling.** JetBrains Mono (OFL) is redistributable; bundling adds ~300 KB and
    makes the pill deterministic across platforms. Recommend bundle, with the system
    fallback.

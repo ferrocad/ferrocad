@@ -203,14 +203,18 @@ FerroCAD.register_interaction_provider(_interaction)
 #: * grid ``#b8a894`` is a warm neutral (hue 33) at the 0.15 token alpha, so the
 #:   ground stays a faint ``Y = 0.066`` and stops echoing the slab's blue.
 #:
-#: Why not demand WCAG's 3:1 non-text ratio? Against a mid-luminance object
-#: (``Y = 0.510``) and a near-black background (``Y = 0.006``) no single colour
-#: can reach 3:1 on both sides: it would need ``Y >= 1.63`` (impossible) or
-#: ``Y <= 0.137``, and the dark option is itself only ``3.3:1`` against the
-#: background. Thin emissive strokes need to stay legible on the canvas, so the
-#: preset separates by hue and by the active/inactive lightness gap, not by a
-#: 3:1 luminance ratio it cannot have. These are token arithmetic only; the
-#: colours were not visually inspected in this environment.
+#: Why not demand WCAG's 3:1 non-text ratio from the stroke alone? Against a
+#: mid-luminance object (``Y = 0.510``) and a near-black background
+#: (``Y = 0.006``) no single colour can reach 3:1 on both sides: it would need
+#: ``Y >= 1.63`` (impossible) or ``Y <= 0.137``, and the dark option is itself
+#: only ``3.3:1`` against the background. The shared gizmo **halo** closes that
+#: gap instead: its ``#0f172a`` outline (``Y = 0.009``) is ``9.5:1`` against the
+#: slab and ``13.3:1`` against the amber stroke, so the 1.5 px boundary carries
+#: SC 1.4.11. The outline is nearly invisible on the canvas itself (``1.05:1``),
+#: which is fine: there the stroke's ``14:1`` does the work. The preset still
+#: separates the stroke body by hue and by the active/inactive lightness gap.
+#: These are token arithmetic only; the colours were not visually inspected in
+#: this environment.
 APPEARANCE_PRESETS = {
     "gizmo": {
         "active_color": "#ffd9a3",

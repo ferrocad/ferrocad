@@ -52,9 +52,9 @@ use std::f64::consts::PI;
 
 use ferrocad_geom::SelectionRef;
 use ferrocad_graphics::Camera;
-use ferrocad_stage::gizmo::GizmoStyle;
+use ferrocad_stage::gizmo::{GizmoStyle, MIN_HIT_RADIUS_PX};
 use ferrocad_stage::screen::{
-    HIT_SLOP, camera_forward, point_segment_distance, project_device, push_ribbon, scale_for,
+    camera_forward, point_segment_distance, project_device, push_ribbon, scale_for,
 };
 use ferrocad_stage::{DrawMode, InteractionCommit, Manipulator, ShapeItem, Stage};
 use ferrocad_types::{Matrix4, Vector3};
@@ -166,7 +166,8 @@ pub struct DressUpScrubber {
     view: Option<Matrix4>,
     built: Option<f64>,
     dirty: bool,
-    item: ShapeItem,
+    /// The draw order: the halo (a wider arc in the outline ink) first, the stroke on top.
+    items: [ShapeItem; 2],
 }
 
 impl DressUpScrubber {
@@ -199,11 +200,19 @@ impl DressUpScrubber {
             view: None,
             built: None,
             dirty: true,
-            item: ShapeItem::new(DRESS_UP_PICK_ID)
-                .with_draw_mode(DrawMode::Shaded)
-                .with_selectable(false)
-                .with_ghost_surface()
-                .with_ghost_alpha(ghost_alpha),
+            items: [
+                ShapeItem::new(DRESS_UP_PICK_ID + 1)
+                    .with_draw_mode(DrawMode::Shaded)
+                    .with_selectable(false)
+                    .with_blended_surface()
+                    .with_ghost_surface()
+                    .with_ghost_alpha(ghost_alpha),
+                ShapeItem::new(DRESS_UP_PICK_ID)
+                    .with_draw_mode(DrawMode::Shaded)
+                    .with_selectable(false)
+                    .with_ghost_surface()
+                    .with_ghost_alpha(ghost_alpha),
+            ],
         }
     }
 
@@ -311,9 +320,9 @@ impl DressUpScrubber {
         self.hovered
     }
 
-    /// The stroke item, for the overlay queue.
+    /// The overlay items, halo first so the stroke sits on top of it.
     pub fn items(&self) -> &[ShapeItem] {
-        std::slice::from_ref(&self.item)
+        &self.items
     }
 
     /// Highlight (or un-highlight) the arc. Returns whether the visuals changed.
@@ -362,12 +371,21 @@ impl DressUpScrubber {
         &self.style
     }
 
-    /// Recolour the cached item without rebuilding its geometry.
+    /// Recolour the cached items without rebuilding their geometry.
     fn apply_color(&mut self) {
         let stroke = self.stroke_color();
-        self.item.set_surface_color(stroke);
-        self.item.set_edge_color(stroke);
-        self.item.set_ghost_alpha(self.style.ghost_alpha);
+        self.items[1].set_surface_color(stroke);
+        self.items[1].set_edge_color(stroke);
+        self.items[1].set_ghost_alpha(self.style.ghost_alpha);
+        let outline = [
+            self.style.outline[0],
+            self.style.outline[1],
+            self.style.outline[2],
+            self.style.outline[3] * self.style.opacity,
+        ];
+        self.items[0].set_surface_color(outline);
+        self.items[0].set_edge_color(outline);
+        self.items[0].set_ghost_alpha(self.style.ghost_alpha);
     }
 
     /// The world point the arc is centred on: the midpoint of the edge's middle segment.
@@ -449,47 +467,66 @@ impl DressUpScrubber {
         true
     }
 
-    /// Rebuild the stroke geometry.
+    /// Rebuild the stroke geometry: the arc and its radius tick, with a wider halo pass
+    /// behind them when the style enables one.
     fn build(&mut self, camera: &Camera) {
         let Some(anchor) = self.anchor() else {
-            self.item
-                .set_shape(Vec::new(), Vec::new(), Vec::new(), Vec::new());
+            for item in &mut self.items {
+                item.set_shape(Vec::new(), Vec::new(), Vec::new(), Vec::new());
+            }
             return;
         };
         let forward = camera_forward(camera);
-        let half = self.style.width * 0.5 * scale_for(camera, anchor, 1.0);
-        let mut positions = Vec::new();
-        let mut triangles = Vec::new();
+        let per_pixel = scale_for(camera, anchor, 1.0);
+        let active = self.hovered || self.is_dragging();
+        let hover_scale = self.style.hover_scale.max(1.0);
+        let halo = self.style.halo_width.max(0.0);
+        let stroke_pixels = if active {
+            self.style.width * hover_scale
+        } else {
+            self.style.width
+        };
+        let stroke_half = stroke_pixels * 0.5 * per_pixel;
+        let halo_half = (stroke_pixels + 2.0 * halo) * 0.5 * per_pixel;
 
-        let points = self.arc_points(camera);
-        for pair in points.windows(2) {
-            push_ribbon(
-                &mut positions,
-                &mut triangles,
-                ferrocad_graphics::screen_ribbon(pair[0], pair[1], half, forward),
-            );
-        }
-        // The radius tick: anchor → arc apex. This is the dimension's "R" line and the
-        // most natural place to grab, so it is part of the stroke.
-        if let Some((_, n)) = self.arc_basis(camera) {
-            let apex = anchor.add(&n.scale(self.value.max(0.0)));
-            push_ribbon(
-                &mut positions,
-                &mut triangles,
-                ferrocad_graphics::screen_ribbon(anchor, apex, half, forward),
-            );
-        }
+        let ribbons = |half: f64| {
+            let mut positions = Vec::new();
+            let mut triangles = Vec::new();
+            let points = self.arc_points(camera);
+            for pair in points.windows(2) {
+                push_ribbon(
+                    &mut positions,
+                    &mut triangles,
+                    ferrocad_graphics::screen_ribbon(pair[0], pair[1], half, forward),
+                );
+            }
+            // The radius tick: anchor → arc apex. This is the dimension's "R" line and
+            // the most natural place to grab, so it is part of the stroke.
+            if let Some((_, n)) = self.arc_basis(camera) {
+                let apex = anchor.add(&n.scale(self.value.max(0.0)));
+                push_ribbon(
+                    &mut positions,
+                    &mut triangles,
+                    ferrocad_graphics::screen_ribbon(anchor, apex, half, forward),
+                );
+            }
+            (positions, triangles)
+        };
 
-        let stroke = self.stroke_color();
-        self.item.set_surface_color(stroke);
-        self.item.set_edge_color(stroke);
-        self.item
-            .set_shape(positions, Vec::new(), triangles, Vec::new());
+        let (stroke_positions, stroke_triangles) = ribbons(stroke_half);
+        if halo > 0.0 {
+            let (halo_positions, halo_triangles) = ribbons(halo_half);
+            self.items[0].set_shape(halo_positions, Vec::new(), halo_triangles, Vec::new());
+        } else {
+            self.items[0].set_shape(Vec::new(), Vec::new(), Vec::new(), Vec::new());
+        }
+        self.items[1].set_shape(stroke_positions, Vec::new(), stroke_triangles, Vec::new());
+        self.apply_color();
     }
 
-    /// Whether the pointer is on the arc or its radius tick, within the shared
-    /// stroke tolerance + grab padding. The area between the edge and the arc is
-    /// **not** part of the target, so it passes through to the scene.
+    /// Whether the pointer is on the arc or its radius tick, within the style's grab
+    /// radius. The area between the edge and the arc is **not** part of the target, so it
+    /// passes through to the scene.
     pub fn hit(&self, camera: &Camera, device: [i32; 2]) -> bool {
         let pointer = [f64::from(device[0]), f64::from(device[1])];
         let points: Vec<[f64; 2]> = self
@@ -513,7 +550,7 @@ impl DressUpScrubber {
                 nearest = nearest.min(distance);
             }
         }
-        nearest <= HIT_SLOP
+        nearest <= self.style.hit_radius_px.max(MIN_HIT_RADIUS_PX)
     }
 
     /// Begin a scrub at `device`. The press is recorded relative to the anchor, so the
@@ -580,8 +617,8 @@ impl DressUpScrubber {
         };
         if (self.value - drag.press_value).abs() > 1e-12 {
             self.value = drag.press_value;
-            self.dirty = true;
         }
+        self.dirty = true;
         self.apply_color();
         true
     }
@@ -977,7 +1014,7 @@ mod tests {
         let mut scrubber = scrubber(DressUpMode::Fillet);
         assert!(scrubber.update(&camera), "the first update builds");
         assert!(!scrubber.update(&camera), "an unchanged camera is a no-op");
-        assert!(!scrubber.items()[0].positions().is_empty());
+        assert!(!scrubber.items()[1].positions().is_empty());
         scrubber.set_value(0.5);
         assert!(scrubber.update(&camera), "a value change rebuilds");
     }
@@ -990,9 +1027,9 @@ mod tests {
         assert!(!scrubber.set_hovered(true), "unchanged is a no-op");
         let idle = GizmoStyle::default().inactive;
         let active = GizmoStyle::default().active;
-        assert_eq!(scrubber.items()[0].surface_color(), active);
+        assert_eq!(scrubber.items()[1].surface_color(), active);
         assert!(scrubber.set_hovered(false));
-        assert_eq!(scrubber.items()[0].surface_color(), idle);
+        assert_eq!(scrubber.items()[1].surface_color(), idle);
     }
 
     #[test]
@@ -1004,20 +1041,22 @@ mod tests {
         let mut style = GizmoStyle::default();
         style.inactive = [0.0, 1.0, 0.0, 0.8];
         style.active = [1.0, 0.0, 0.0, 1.0];
+        style.outline = [0.0, 0.0, 1.0, 1.0];
         style.opacity = 0.5;
         style.width = 4.0;
+        style.halo_width = 2.0;
         style.ghost_alpha = 0.6;
         assert!(scrubber.set_style(&style));
         assert_eq!(
-            scrubber.items()[0].ghost_alpha(),
+            scrubber.items()[1].ghost_alpha(),
             0.6,
             "the ghost alpha reaches the arc immediately"
         );
         assert!(scrubber.update(&camera), "the style forces a rebuild");
         assert!(!scrubber.set_style(&style), "the same style is a no-op");
 
-        assert_eq!(scrubber.items()[0].surface_color(), [0.0, 1.0, 0.0, 0.4]);
-        let positions = scrubber.items()[0].positions();
+        assert_eq!(scrubber.items()[1].surface_color(), [0.0, 1.0, 0.0, 0.4]);
+        let positions = scrubber.items()[1].positions();
         let point = |index: usize| {
             Vector3::new(
                 f64::from(positions[index][0]),
@@ -1027,15 +1066,92 @@ mod tests {
         };
         let width = point(0).sub(&point(3)).length();
         let anchor = scrubber.anchor().expect("an anchor");
-        let expected = style.width * scale_for(&camera, anchor, 1.0);
+        let per_pixel = scale_for(&camera, anchor, 1.0);
+        let expected = style.width * per_pixel;
         assert!(
             (width - expected).abs() < 1e-6,
             "a 4 px arc: {width} vs {expected}"
         );
 
+        // The halo is the style's outline ink, dimmed by the opacity, and 2·halo wider.
+        let halo = &scrubber.items()[0];
+        assert_eq!(halo.surface_color(), [0.0, 0.0, 1.0, 0.5]);
+        let halo_positions = halo.positions();
+        let halo_point = |index: usize| {
+            Vector3::new(
+                f64::from(halo_positions[index][0]),
+                f64::from(halo_positions[index][1]),
+                f64::from(halo_positions[index][2]),
+            )
+        };
+        let halo_width = halo_point(0).sub(&halo_point(3)).length();
+        let expected = (style.width + 2.0 * style.halo_width) * per_pixel;
+        assert!(
+            (halo_width - expected).abs() < 1e-6,
+            "the halo is stroke + 2·halo: {halo_width} vs {expected}"
+        );
+
+        // Hovering widens the stroke and rebuilds it; the colour is already active.
         assert!(scrubber.set_hovered(true));
-        assert_eq!(scrubber.items()[0].surface_color(), [1.0, 0.0, 0.0, 0.5]);
+        assert!(scrubber.update(&camera), "the width cue forces a rebuild");
+        let hovered_positions = scrubber.items()[1].positions();
+        let width = Vector3::new(
+            f64::from(hovered_positions[0][0]),
+            f64::from(hovered_positions[0][1]),
+            f64::from(hovered_positions[0][2]),
+        )
+        .sub(&Vector3::new(
+            f64::from(hovered_positions[3][0]),
+            f64::from(hovered_positions[3][1]),
+            f64::from(hovered_positions[3][2]),
+        ))
+        .length();
+        let expected = style.width * style.hover_scale * per_pixel;
+        assert!(
+            (width - expected).abs() < 1e-6,
+            "the hovered stroke is {}× wider: {width} vs {expected}",
+            style.hover_scale
+        );
+        assert_eq!(scrubber.items()[1].surface_color(), [1.0, 0.0, 0.0, 0.5]);
         assert_eq!(scrubber.style(), &style);
+    }
+
+    #[test]
+    fn a_zero_halo_width_draws_no_halo() {
+        let camera = camera(5.0);
+        let mut scrubber = scrubber(DressUpMode::Fillet);
+        assert!(scrubber.update(&camera));
+        assert!(!scrubber.items()[0].positions().is_empty());
+
+        let mut style = scrubber.style().clone();
+        style.halo_width = 0.0;
+        assert!(scrubber.set_style(&style));
+        assert!(scrubber.update(&camera));
+        assert!(
+            scrubber.items()[0].positions().is_empty(),
+            "a zero halo width leaves only the stroke"
+        );
+    }
+
+    #[test]
+    fn the_grab_radius_follows_the_style() {
+        let camera = camera(5.0);
+        let mut scrubber = scrubber(DressUpMode::Fillet);
+        let (grab, outward) = grip(&camera, &scrubber);
+        // 15 px beyond the arc stroke is outside the default 12 px radius.
+        let off = [
+            (f64::from(grab[0]) + outward[0] * 15.0).round() as i32,
+            (f64::from(grab[1]) + outward[1] * 15.0).round() as i32,
+        ];
+        assert!(!scrubber.hit(&camera, off));
+
+        let mut style = scrubber.style().clone();
+        style.hit_radius_px = 20.0;
+        assert!(scrubber.set_style(&style));
+        assert!(
+            scrubber.hit(&camera, off),
+            "the configured radius reaches 15 px"
+        );
     }
 
     #[test]

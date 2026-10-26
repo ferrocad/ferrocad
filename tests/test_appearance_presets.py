@@ -350,6 +350,12 @@ class AppearancePresetTests(unittest.TestCase):
         self.assertLess(_hue(preset["inactive_color"]), 60.0)
         self.assertLess(_hue("#b8a894"), 60.0)
 
+        # The shared halo is what carries SC 1.4.11 over the slab: both the
+        # outline/object and outline/stroke boundaries clear 3:1.
+        outline_y = _luminance(_gizmo.DEFAULT_OUTLINE_COLOR)
+        self.assertGreaterEqual(_contrast(outline_y, object_y), 3.0)
+        self.assertGreaterEqual(_contrast(outline_y, active_y), 3.0)
+
     def test_the_parametric_preset_pins_the_neutral_look(self):
         try:
             module = importlib.import_module("ferrocad_parametric")

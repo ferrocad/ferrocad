@@ -3,6 +3,8 @@
 //! Split out of `shell.rs`; the paths and behaviour are unchanged.
 
 use super::*;
+use super::picking::click_target;
+use ferrocad_stage::Stage;
 
 impl Shell {
     /// Re-read the document's shapes into the viewport's stage.
@@ -131,7 +133,14 @@ impl Shell {
         let wheel = self.wheel.clone();
         let _ = wheel.update(cx, |wheel, cx| wheel.close(cx));
         let (manipulators, gizmo) = match selection {
-            SelectionEvent::Picked { reference, .. } => {
+            SelectionEvent::Picked {
+                reference,
+                click_count,
+                ..
+            } => {
+                // A double click on a face or edge promotes the pick to the whole
+                // body; a single click keeps the sub-element the picker resolved.
+                let reference = &click_target(reference, *click_count);
                 if let Some(name) = self.display.object_of(reference.object).map(str::to_string) {
                     // The viewport reports sub-elements too (`Face6`), which the facade
                     // snapshot carries for `getSelectionEx`.
@@ -305,6 +314,7 @@ impl Shell {
                     &SelectionEvent::Picked {
                         reference: target.reference,
                         anchor: target.anchor,
+                        click_count: 1,
                     },
                     cx,
                 );
@@ -400,18 +410,8 @@ impl Shell {
                 // pivot a rotate gizmo needs. A click point is deliberately not used —
                 // for translation the pivot does not change the result, and re-pivoting
                 // will be an explicit, snapped gesture (see transform-ux.md).
-                gizmo = self.contributions.gizmo_for(reference, &stage);
+                gizmo = self.armed_gizmo(reference, &stage);
             }
-        }
-
-        // The factory's datum is the object origin; the handle set is the shell's
-        // session mode (every factory returns a fresh Translate gizmo). A session user
-        // origin replaces the datum while set, so a re-arm keeps the user's pivot.
-        if let Some(gizmo) = gizmo.as_mut() {
-            gizmo.set_mode(self.gizmo_mode);
-            let object_origin = gizmo.origin();
-            gizmo.set_origin(self.gizmo_origin_for(object_origin));
-            gizmo.set_origin_enabled(self.gizmo_origin_enabled());
         }
 
         // Mod-declared handles come after the compiled one. The selection's object
@@ -444,6 +444,30 @@ impl Shell {
         }
 
         (manipulators, gizmo)
+    }
+
+    /// The edition's transform gizmo for `reference`, evaluated against `stage` and
+    /// carrying the session policy.
+    ///
+    /// The factory owns the datum: the triad hugs the object's own origin
+    /// (`ShapeItem::anchor`). The shell applies the sticky handle set (`gizmo_mode`)
+    /// and, while set, the session user origin. Split out of [`arm`](Self::arm) so the
+    /// pivot policy is testable without a GPU viewport; a whole-body selection and a
+    /// sub-element selection resolve to the same body origin.
+    pub(super) fn armed_gizmo(
+        &self,
+        reference: &SelectionRef,
+        stage: &Stage,
+    ) -> Option<TransformGizmo> {
+        // The factory's datum is the object origin; the handle set is the shell's
+        // session mode (every factory returns a fresh Translate gizmo). A session user
+        // origin replaces the datum while set, so a re-arm keeps the user's pivot.
+        let mut gizmo = self.contributions.gizmo_for(reference, stage)?;
+        gizmo.set_mode(self.gizmo_mode);
+        let object_origin = gizmo.origin();
+        gizmo.set_origin(self.gizmo_origin_for(object_origin));
+        gizmo.set_origin_enabled(self.gizmo_origin_enabled());
+        Some(gizmo)
     }
 
     /// The pivot the triad should use for an object whose factory reported

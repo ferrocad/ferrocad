@@ -76,6 +76,11 @@ pub enum SelectionEvent {
         /// The world point of the click, for anchoring the gizmo. `None` when the
         /// selection did not come from a viewport pick (a tree or command selection).
         anchor: Option<SelectionAnchor>,
+        /// How many clicks the press was part of (gpui's `MouseDownEvent::click_count`):
+        /// `1` for a single click, `2` for the second click of a double click. The
+        /// viewport reports the sub-element it hit; the host uses the count to decide
+        /// whether to keep that scope or upgrade to the whole body.
+        click_count: usize,
     },
     /// The click hit nothing identifiable, so the selection should clear.
     Cleared,
@@ -255,6 +260,10 @@ pub struct InventorViewport<V: InventorView> {
     hovered_part: Option<u32>,
     /// The selection update produced by the last click, for the host to consume.
     selection: Option<SelectionEvent>,
+    /// gpui's click count for the most recent left press. The release reports it with
+    /// the selection so the host can tell a single click from a double click; the
+    /// viewport itself only resolves what was hit.
+    press_click_count: usize,
     /// A neutral summary of what a click would do under the pointer (A4).
     hover_report: HoverReport,
     /// The world point of the hovered pick, for a host that anchors a contextual
@@ -895,6 +904,7 @@ impl<V: InventorView> InventorViewport<V> {
             hover: None,
             hovered_part: None,
             selection: None,
+            press_click_count: 1,
             hover_report: HoverReport::default(),
             hover_anchor: None,
             grid: GridMesh::new(),
@@ -2032,7 +2042,13 @@ impl<V: InventorView> InventorViewport<V> {
     /// scene starts a possible main-camera orbit, which becomes real once the drag
     /// passes the threshold. Gizmo handles and active tools keep priority.
     pub fn handle_button(&mut self, logical: [f32; 2], button: u8, down: bool) -> bool {
-        self.handle_button_with_modifiers(logical, button, down, GizmoModifiers::default())
+        self.handle_button_with_modifiers_and_click_count(
+            logical,
+            button,
+            down,
+            GizmoModifiers::default(),
+            1,
+        )
     }
 
     /// [`handle_button`](Self::handle_button) with the keyboard state captured at the
@@ -2045,6 +2061,27 @@ impl<V: InventorView> InventorViewport<V> {
         down: bool,
         modifiers: GizmoModifiers,
     ) -> bool {
+        self.handle_button_with_modifiers_and_click_count(logical, button, down, modifiers, 1)
+    }
+
+    /// [`handle_button_with_modifiers`](Self::handle_button_with_modifiers) carrying
+    /// gpui's click count for the press.
+    ///
+    /// The release event has no count of its own, so the press stores it and the
+    /// selection reports it: a double click can upgrade the pick to the whole body at
+    /// the host without the viewport guessing timing or distance.
+    pub fn handle_button_with_modifiers_and_click_count(
+        &mut self,
+        logical: [f32; 2],
+        button: u8,
+        down: bool,
+        modifiers: GizmoModifiers,
+        click_count: usize,
+    ) -> bool {
+        // The selection is built on the release; remember the press's count for it.
+        if down && button == 1 {
+            self.press_click_count = click_count.max(1);
+        }
         // A button change ends the readout; the drag/commit event carries the value.
         self.gizmo_value = None;
         self.gizmo_pointer = None;
@@ -2261,7 +2298,7 @@ impl<V: InventorView> InventorViewport<V> {
         // ring scrub, an orbit drag and an active tool all returned or are excluded
         // above, so their gestures never also select.
         if !down && button == 1 && self.tool.is_none() && orbit_clicked {
-            self.selection = Some(self.selection_event(hit.as_ref()));
+            self.selection = Some(self.selection_event(hit.as_ref(), self.press_click_count));
             changed = true;
         }
         changed
@@ -2271,13 +2308,14 @@ impl<V: InventorView> InventorViewport<V> {
     ///
     /// The hit's world point and normal travel with the reference so the host can
     /// anchor a gizmo at the point of contact instead of the body's centre.
-    fn selection_event(&self, hit: Option<&Hit>) -> SelectionEvent {
+    fn selection_event(&self, hit: Option<&Hit>, click_count: usize) -> SelectionEvent {
         let Some(reference) = hit.and_then(|hit| self.selection_ref(hit.id.0, hit.part)) else {
             return SelectionEvent::Cleared;
         };
         SelectionEvent::Picked {
             reference,
             anchor: hit.map(Self::anchor_of),
+            click_count,
         }
     }
 
@@ -4072,11 +4110,12 @@ impl<V: InventorView + 'static> Render for InventorViewport<V> {
                 }
                 let local = this.to_local(event.position);
                 let modifiers = gizmo_modifiers(event.modifiers);
-                let changed = this.handle_button_with_modifiers(
+                let changed = this.handle_button_with_modifiers_and_click_count(
                     local,
                     mouse_button(event.button),
                     true,
                     modifiers,
+                    event.click_count,
                 );
                 this.flush_transform_preview(cx);
                 if let Some(status) = this.take_tool_state() {
@@ -4883,10 +4922,16 @@ mod tests {
             "the selection update repaints"
         );
         let event = view.take_selection().expect("a selection");
-        let SelectionEvent::Picked { reference, anchor } = event else {
+        let SelectionEvent::Picked {
+            reference,
+            anchor,
+            click_count,
+        } = event
+        else {
             panic!("not a pick: {event:?}");
         };
         assert_eq!(reference, SelectionRef::element(7, "Face1"));
+        assert_eq!(click_count, 1, "a plain click reports one click");
         let anchor = anchor.expect("the click carries a world anchor");
         assert!(
             (anchor.point.z - 0.5).abs() < 1e-6,
@@ -4903,6 +4948,53 @@ mod tests {
             panic!("not a pick: {event:?}");
         };
         assert_eq!(reference, SelectionRef::element(7, "Face2"));
+    }
+
+    /// The viewport reports gpui's click count alongside the raw sub-element pick. A
+    /// host uses the count to upgrade a double click to the whole body; the viewport
+    /// never guesses a double click from timing or distance.
+    #[test]
+    fn a_click_reports_the_press_click_count() {
+        use ferrocad_stage::Stage;
+
+        let mut view = identity_viewport(Scene::default());
+        view.set_stage(Stage::new().with_item(named_slab()));
+        view.refresh();
+
+        let modifiers = GizmoModifiers::default();
+        view.handle_button_with_modifiers_and_click_count([30.0, 50.0], 1, true, modifiers, 1);
+        view.handle_button_with_modifiers([30.0, 50.0], 1, false, modifiers);
+        let event = view.take_selection().expect("a selection");
+        let SelectionEvent::Picked {
+            reference,
+            click_count,
+            ..
+        } = event
+        else {
+            panic!("not a pick: {event:?}");
+        };
+        assert_eq!(reference, SelectionRef::element(7, "Face1"));
+        assert_eq!(click_count, 1, "a single click reports one");
+
+        // The second press of a double click stores its count; the release reports it
+        // with the same element reference, which is what the host upgrades.
+        view.handle_button_with_modifiers_and_click_count([30.0, 50.0], 1, true, modifiers, 2);
+        view.handle_button_with_modifiers([30.0, 50.0], 1, false, modifiers);
+        let event = view.take_selection().expect("a selection");
+        let SelectionEvent::Picked {
+            reference,
+            click_count,
+            ..
+        } = event
+        else {
+            panic!("not a pick: {event:?}");
+        };
+        assert_eq!(
+            reference,
+            SelectionRef::element(7, "Face1"),
+            "the viewport still reports what it hit"
+        );
+        assert_eq!(click_count, 2, "the host upgrades on the count");
     }
 
     #[test]
@@ -4934,7 +5026,7 @@ mod tests {
         view.handle_button([50.0, 50.0], 1, true);
         view.handle_button([50.0, 50.0], 1, false);
         let event = view.take_selection().expect("a selection");
-        let SelectionEvent::Picked { reference, anchor } = event else {
+        let SelectionEvent::Picked { reference, anchor, .. } = event else {
             panic!("not a pick: {event:?}");
         };
         assert_eq!(reference, SelectionRef::whole(9));

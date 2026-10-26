@@ -4,6 +4,21 @@
 
 use super::*;
 
+/// The selection a click asks for.
+///
+/// A single click keeps the sub-element the picker resolved (`Face6`). A double
+/// click — gpui reports `click_count >= 2` on the second press — upgrades that pick
+/// to the whole body, so the triad names the body and Rotate pivots about its own
+/// origin. The count travels with the [`SelectionEvent`], so the shell never guesses
+/// a double click from time or distance.
+pub(super) fn click_target(reference: &SelectionRef, click_count: usize) -> SelectionRef {
+    if click_count >= 2 {
+        SelectionRef::whole(reference.object)
+    } else {
+        reference.clone()
+    }
+}
+
 impl Shell {
     /// Replace the selection with one whole object (a plain click).
     pub(super) fn select(&mut self, name: &str, cx: &mut Context<Self>) {

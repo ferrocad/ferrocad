@@ -1,6 +1,6 @@
 # Task — Python feature proxies (`Part::FeaturePython` and friends)
 
-Status: task (2026-10-24). P2 in [`../TODO-24-10-2026.md`](../TODO-24-10-2026.md).
+Status: task (2026-10-24). P2 in [`../record/TODO-24-10-2026.md`](../record/TODO-24-10-2026.md).
 **P2a–P2e landed 2026-10-24; both Draft M2 modules run green.**
 Companion to [`../architecture/part-draft-layering.md`](../architecture/part-draft-layering.md)
 §9 (M2), [`../architecture/python-bindings.md`](../architecture/python-bindings.md) and

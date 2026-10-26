@@ -161,7 +161,7 @@ element-map version is enabled for shapes that carry a lineage, and the compound
 cut/common, general-fuse and sweep maps match upstream exactly. Six guarded asserts
 still skip honestly: four consumer shapes in `solids.rs` store an empty lineage, and two
 (`FaceMakerCheese` 10, `makeShellFromWires` 24) are composed-alias counts. See
-[`../TODO-24-10-2026.md`](../TODO-24-10-2026.md) §P0.
+[`../record/TODO-24-10-2026.md`](../record/TODO-24-10-2026.md) §P0.
 
 ### Draft M2 (Python feature proxies)
 

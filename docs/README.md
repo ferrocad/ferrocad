@@ -26,7 +26,7 @@ on the first line, so the folder only has to answer "where do I look?".
 Five files stay at the root: this index, the [crate map](architecture.md) (the
 cross-cutting reference every section links back to), the
 [documentation decision](documentation.md), the [high-level roadmap](ROADMAP.md), and
-the active backlog ([`TODO-24-10-2026.md`](TODO-24-10-2026.md)).
+the active backlog ([`TODO-26-10-2026.md`](TODO-26-10-2026.md)).
 
 ## Start here
 
@@ -34,9 +34,12 @@ the active backlog ([`TODO-24-10-2026.md`](TODO-24-10-2026.md)).
   between them, and the C-ABI rationale.
 - [ROADMAP.md](ROADMAP.md) — the three horizons (finish Part/OCCT, build the workbench
   platform, prove it by use), their exit criteria, and how progress is measured.
-- [TODO-24-10-2026.md](TODO-24-10-2026.md) — the active backlog: the element-map
-  format contract, the remaining OCCT seam, Python feature proxies, Qt reduction, and
-  the open decisions.
+- [TODO-26-10-2026.md](TODO-26-10-2026.md) — the active backlog: the interaction and
+  gizmo remainder (re-pivot, select mode, push/pull, the gizmo registry split), the
+  OCCT seam tail, the Draft surface, SimpleCAD S1, and packaging/polish.
+- [record/TODO-24-10-2026.md](record/TODO-24-10-2026.md) — the closed 2026-10-24
+  backlog: the element map, the OCCT seam, the Python feature proxies and the Qt
+  reduction, with the measurements at close.
 - [record/TODO-23-10-2026.md](record/TODO-23-10-2026.md) — the closed 2026-10-23
   backlog: the Part conformance push, the serializer split, the lineage layer, Links
   and the Qt-reduction slices, with the measurements at close.
@@ -224,6 +227,9 @@ full slice-by-slice text lives in [`record/archive/`](record/archive/).
 - [record/TODO-23-10-2026.md](record/TODO-23-10-2026.md) — closed record: the format
   serializers (F1–F8), the lineage layer (S1–S6c), Links L0–L5, the Qt-reduction
   slices (Q0–Q3b), and the Part completion (529 passed, 0 errored) at close.
+- [record/TODO-24-10-2026.md](record/TODO-24-10-2026.md) — closed record: the element
+  map (P0), the OCCT seam (P1), the Python feature proxies (P2), and the Qt reduction
+  through Q5 (P3), with the measurements at close.
 - [record/2026-10-24-q4-q5-draft-tools.md](record/2026-10-24-q4-q5-draft-tools.md) —
   closed record: the Q4/Q5 round (camera-free snapping, the Snapper/tool-bar surface,
   the line/wire tools and `PlaneGui`, the four forms), its measurements, and the

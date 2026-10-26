@@ -1,7 +1,7 @@
 # Qt reduction — taking Qt out of the paths that do not need it
 
 Status: task (2026-10-23). Q0a–Q5 landed (Q3 2026-10-24; Q4/Q5 2026-10-24). Backlog entry
-**P3** in [`TODO-24-10-2026.md`](../TODO-24-10-2026.md). Companion to
+**P3** in [`../record/TODO-24-10-2026.md`](../record/TODO-24-10-2026.md). Companion to
 [`qt-strategy.md`](../workbenches/qt-strategy.md) (§2–§7 remain the design; this is
 the execution plan), [`python-ui-research.md`](../interaction/python-ui-research.md),
 [`actions-and-tools.md`](../workbenches/actions-and-tools.md),

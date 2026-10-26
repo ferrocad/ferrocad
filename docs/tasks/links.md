@@ -6,7 +6,7 @@ decision of 2026-10-23 that the remaining
 sides. Companion to [`../architecture/lineage-and-naming.md`](../architecture/lineage-and-naming.md)
 (the lineage layer this doc depends on) and [`format-serializers.md`](format-serializers.md)
 (the two encoders). Backlog: the `Part` kernel entry in
-[`../TODO-24-10-2026.md`](../TODO-24-10-2026.md) §P1; conformance method in
+[`../record/TODO-24-10-2026.md`](../record/TODO-24-10-2026.md) §P1; conformance method in
 [`../workbenches/conformance.md`](../workbenches/conformance.md).
 
 **Legend.** **(verified)** = read from this tree on 2026-10-23, upstream `33adf61`.

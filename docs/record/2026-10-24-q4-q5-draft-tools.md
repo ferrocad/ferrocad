@@ -1,7 +1,7 @@
 # Round log — 2026-10-24: Q4/Q5 native Draft tools
 
 Status: record. Closes the **Q4/Q5 items** of P3 in
-[`../TODO-24-10-2026.md`](../TODO-24-10-2026.md); the plan is
+[`TODO-24-10-2026.md`](TODO-24-10-2026.md); the plan is
 [`../tasks/qt-reduction.md`](../tasks/qt-reduction.md) Q4/Q5 and the surface reference is
 [`../workbenches/draft-tools.md`](../workbenches/draft-tools.md).
 

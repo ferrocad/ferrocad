@@ -78,13 +78,15 @@ upstream `TopoShapeTest.py`, formerly **12** and **30** keys, now measure **20**
 exactly upstream. Two changes closed the gap: the backend reproduces upstream's compound-cut
 policy (`RecursiveCutFusedTools` / `RecursiveCutCompound`, non-destructive with the automatic
 fuzzy value), and `build_history` runs the identity and upper/lower derivation passes so the
-unchanged elements are named too. `ElementMapVersion`/`ElementMapSize` stay empty because the
-other guards assert exact sizes (52/58/26/10/9/24) that are not reproduced yet, and a version
-would activate them.
+unchanged elements are named too. `ElementMapVersion`/`ElementMapSize` are now
+populated for every shape that carries a lineage: the guarded sizes (52/58/26/60/6/26/
+26/24/9, plus the 20/47 cuts) are reproduced, so upstream's guards run and pass instead
+of being skipped.
 
-So the open item is no longer the cut policy: it is **enabling the element-map version** once
-all the guarded sizes match. See [`element-map-policy.md`](../tasks/element-map-policy.md) and
-[`../TODO-24-10-2026.md`](../TODO-24-10-2026.md) §P1.
+The remaining non-results are the two composed-alias counts (`FaceMakerCheese` 10,
+`makeShellFromWires` 24), which are documented in
+[`element-map-policy.md`](../tasks/element-map-policy.md) and
+[`../record/TODO-24-10-2026.md`](../record/TODO-24-10-2026.md) §P0.
 
 ---
 

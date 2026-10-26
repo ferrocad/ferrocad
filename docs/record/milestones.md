@@ -75,8 +75,9 @@ The next round is SimpleCAD S1 rather than more Part surface.
   M0–M4 slice, the restructure, the MVP and app-shell slices, the reactor decisions, and
   the M3 plan, with their measurements.
 - [`TODO-21-10-2026.md`](TODO-21-10-2026.md), [`TODO-22-10-2026.md`](TODO-22-10-2026.md),
-  [`TODO-23-10-2026.md`](TODO-23-10-2026.md) — the compact closed backlogs; their full
-  text is in `archive/`.
+  [`TODO-23-10-2026.md`](TODO-23-10-2026.md), [`TODO-24-10-2026.md`](TODO-24-10-2026.md)
+  — the compact closed backlogs; their full text is in `archive/` or, for the 24 record,
+  in the file itself.
 - [`2026-10-24-q4-q5-draft-tools.md`](2026-10-24-q4-q5-draft-tools.md) — the closed
   Q4/Q5 round: what landed, the measurements, and the deviations it records.
 - [`incident-2026-10-21-session-crash.md`](incident-2026-10-21-session-crash.md) — the

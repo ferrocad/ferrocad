@@ -1352,7 +1352,7 @@ facade.
 ## 5. Where the project stands (2026-10-24)
 
 Status: record (2026-10-24). Measurements from the tree at the close of the
-2026-10-23 backlog; the open work is in [`../TODO-24-10-2026.md`](../../TODO-24-10-2026.md).
+2026-10-23 backlog; the open work is in [`../TODO-24-10-2026.md`](../TODO-24-10-2026.md).
 
 Three days of work changed what the project is, not just what it passes. At the start
 of the 2026-10-23 backlog `Part` was a crate with a few primitives; by the close it is

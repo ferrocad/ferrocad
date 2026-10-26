@@ -397,8 +397,16 @@ classes.
   `hover_scale`, and `hit_radius_px` replaces the fixed `HIT_SLOP` (see §17).
 - The gizmo rebuilds when the camera view changes (the ribbons depend on the view
   direction), as well as when the scale/origin/mode change.
-- A hovered handle uses the active cyan and a `hover_scale`-wider stroke; the rest stay
-  slate. Hovering a plane raises the glass fill and turns its rim cyan.
+- A hovered handle uses the active ink and a `hover_scale`-wider stroke; the rest stay
+  slate. Hovering a plane raises its glass fill to `0.50` and closes the L rim and halo
+  into the **full dark casing**, so the hovered tile reads like an arrow handle instead
+  of a quiet tint.
+- **Grazing angles fade out.** A handle that collapses to a line or dot is faded and
+  dropped from the analytic hit test: an axis when `|axis · view| > 0.96` (full by
+  `0.90`), a plane when `|normal · view| < 0.15` (full by `0.35`). Without it, a nearly
+  edge-on plane is a 2 px sliver and a camera-facing axis buries its arrowhead in the
+  origin cluster, both easy to grab by accident. Rings stay live: even edge-on a ring
+  still projects to an arc.
 
 Verification: `cargo test -p ferrocad_graphics --lib` — 20 tests (3 new ribbon cases);
 `cargo test -p ferrocad_stage --lib` — 55 tests (3 new visual cases: ribbon draw modes,
@@ -565,7 +573,7 @@ rules (`python/FerroCAD/_gizmo.py`), so both views of the store agree.
 | Property | Default | Criterion | Why |
 | --- | --- | --- | --- |
 | `outline_color` + `halo_width` | `#0f172a`, `1.0 px` | SC 1.4.11 non-text contrast (3:1) | The accent and the idle slate are close in luminance to mid-blue geometry (the toy slab). A dark halo separates a handle from it without relying on hue. The alpha stays 1.0: at 0.45 over the slab it falls to ~1.7:1, below the 3:1 floor. |
-| `hover_scale` | `1.5` | SC 1.4.1 use of colour | `#38bdf8` against `#d8dbe0` is only 1.49:1, so hover cannot be colour-only. The hovered stem and ring also widen (`width × hover_scale`). |
+| `hover_scale` | `1.5` | SC 1.4.1 use of colour | `#38bdf8` against `#d8dbe0` is only 1.49:1, so hover cannot be colour-only. The hovered stem and ring also widen (`width × hover_scale`); a hovered plane raises its glass fill to `0.50` and draws the full dark casing. |
 | `hit_radius_px` | `12.0` (24 px target) | SC 2.5.8 target size (minimum) | The analytic grab radius is floored at 12 px, so the 2 px stem still has a 24 × 24 px target. |
 | `ghost_alpha` | `0.20`, max `0.5` | — (manipulator occlusion) | Applies to the workbench manipulators only. Above half, an occluded handle reads as another front handle, which destroys the depth cue. The triad itself is an `Always` overlay and never enters the ghost pass. |
 | `ring_snap_deg` | `15°`, stepped to 5° | SC 2.5.7 dragging movements | An arbitrary fractional detent (the old free ring reported `49.62°`) demands micro-precision. Every stored value is a 5° multiple; `0` stays continuous for power users. |

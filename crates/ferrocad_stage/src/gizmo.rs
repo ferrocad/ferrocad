@@ -27,6 +27,19 @@ use crate::shape::{DrawMode, ShapeItem};
 /// High, so it cannot collide with document entity ids.
 pub const GIZMO_BASE_ID: u32 = 1_000_000;
 
+/// Above this `|axis · view_forward|` an axis points at the camera and collapses to a
+/// dot; it fades out and stops accepting hits.
+const AXIS_EDGE_ON_COS: f64 = 0.96;
+/// The alignment at which a grazing axis has full alpha (0.90 = ~26° off the view).
+const AXIS_CLEAR_COS: f64 = 0.90;
+/// Below this `|plane_normal · view_forward|` a plane is edge-on and projects to a
+/// sliver; it fades out and stops accepting hits.
+const PLANE_EDGE_ON_COS: f64 = 0.15;
+/// The alignment at which a grazing plane has full alpha (0.35 = ~20° from edge-on).
+const PLANE_CLEAR_COS: f64 = 0.35;
+/// A handle below this fade is not pickable (it is visually gone).
+const GRAZING_HIT_FLOOR: f32 = 0.05;
+
 /// The default target radius, in device pixels.
 pub const DEFAULT_PIXELS: f64 = 110.0;
 
@@ -44,7 +57,7 @@ pub const INACTIVE_COLOR: [f32; 4] = [0.296, 0.366, 0.479, 0.9];
 /// Translucent glass plane (`rgba(56, 189, 248, 0.10)`).
 pub const GLASS_COLOR: [f32; 4] = [0.040, 0.509, 0.939, 0.10];
 /// Glass plane while hovered.
-pub const GLASS_HIGHLIGHT: [f32; 4] = [0.040, 0.509, 0.939, 0.28];
+pub const GLASS_HIGHLIGHT: [f32; 4] = [0.040, 0.509, 0.939, 0.50];
 /// Push-pull stem (`#F59E0B`); reserved for the push-pull manipulator.
 pub const PUSH_PULL_COLOR: [f32; 4] = [0.913, 0.342, 0.003, 1.0];
 /// Subtractive preview (`#EF4444`); reserved for the push-pull manipulator.
@@ -564,6 +577,9 @@ pub struct TransformGizmo {
     /// the drawing cannot feed back into the gesture.
     display_offset: Option<Vector3>,
     dirty: bool,
+    /// The per-handle alpha multiplier from the grazing-angle test (`1.0` square to the
+    /// view, `0.0` collapsed to a line or dot). Rebuilt with the geometry.
+    fade: [f32; GizmoHandle::ALL.len()],
     /// Nine fixed slots (one per [`GizmoHandle`]); unused ones are cleared. Stable mesh
     /// ids, so a rebuild is a geometry write, not a new mesh.
     handles: Vec<ShapeItem>,
@@ -587,6 +603,7 @@ impl TransformGizmo {
             active: None,
             display_offset: None,
             dirty: true,
+            fade: [1.0; GizmoHandle::ALL.len()],
             handles: (0..GizmoHandle::ALL.len()).map(new_handle).collect(),
             halos: (0..GizmoHandle::ALL.len()).map(new_halo).collect(),
         }
@@ -782,6 +799,9 @@ impl TransformGizmo {
             if !self.mode.shows(handle) || handle.kind() != HandleKind::Axis {
                 continue;
             }
+            if self.grazing_fade(handle, camera) <= GRAZING_HIT_FLOOR {
+                continue;
+            }
             let axis = frame.axis(handle).expect("axis handle");
             let start = frame.origin.add(&axis.scale(AXIS_PICK_START * scale));
             let end = frame.origin.add(&axis.scale(scale));
@@ -807,6 +827,9 @@ impl TransformGizmo {
         // 2. Plane quads: the whole quad is grabbable, plus padding around its rim.
         for handle in GizmoHandle::ALL {
             if !self.mode.shows(handle) || handle.kind() != HandleKind::Plane {
+                continue;
+            }
+            if self.grazing_fade(handle, camera) <= GRAZING_HIT_FLOOR {
                 continue;
             }
             let (u, v) = frame.plane_axes(handle).expect("plane handle");
@@ -1228,6 +1251,38 @@ impl TransformGizmo {
         })
     }
 
+    /// The alpha multiplier for a handle at the current view: `1.0` when the handle faces
+    /// the camera, falling to `0.0` when it collapses to a line or a dot.
+    ///
+    /// A nearly edge-on axis points into the screen and its arrowhead sits in the origin
+    /// cluster; a nearly edge-on plane flattens to a sliver. Both are faded out and
+    /// dropped from the analytic hit test so a 2 px artifact cannot be grabbed by accident.
+    /// A ring stays live even edge-on: it still projects to an arc.
+    fn grazing_fade(&self, handle: GizmoHandle, camera: &Camera) -> f32 {
+        let forward = camera_forward(camera);
+        match handle.kind() {
+            HandleKind::Axis => {
+                let alignment = self
+                    .frame
+                    .axis(handle)
+                    .map(|axis| axis.dot(&forward).abs())
+                    .unwrap_or(0.0);
+                ((AXIS_EDGE_ON_COS - alignment) / (AXIS_EDGE_ON_COS - AXIS_CLEAR_COS))
+                    .clamp(0.0, 1.0) as f32
+            }
+            HandleKind::Plane => {
+                let alignment = self
+                    .frame
+                    .plane_normal(handle)
+                    .map(|normal| normal.dot(&forward).abs())
+                    .unwrap_or(1.0);
+                ((alignment - PLANE_EDGE_ON_COS) / (PLANE_CLEAR_COS - PLANE_EDGE_ON_COS))
+                    .clamp(0.0, 1.0) as f32
+            }
+            HandleKind::Ring => 1.0,
+        }
+    }
+
     /// Write every slot's geometry for the current mode, scale and camera.
     fn build(&mut self, camera: &Camera) {
         let frame = self.frame;
@@ -1239,20 +1294,20 @@ impl TransformGizmo {
         let world_per_pixel = scale / self.style.size.max(1e-9);
         let forward = camera_forward(camera);
         for (index, handle) in GizmoHandle::ALL.iter().enumerate() {
+            let fade = self.grazing_fade(*handle, camera);
+            self.fade[index] = fade;
+            let live = self.mode.shows(*handle) && fade > 1e-3;
             let slot = &mut self.handles[index];
             let halo_slot = &mut self.halos[index];
-            if !self.mode.shows(*handle) {
+            if !live {
                 slot.set_shape(Vec::new(), Vec::new(), Vec::new(), Vec::new());
                 halo_slot.set_shape(Vec::new(), Vec::new(), Vec::new(), Vec::new());
                 continue;
             }
             // The non-colour hover cue: a hovered stem/ring gets a wider stroke (and
             // therefore a wider halo) instead of relying on the accent hue alone.
-            let stroke = if self.hovered == Some(*handle) {
-                width * hover_scale
-            } else {
-                width
-            };
+            let hovered = self.hovered == Some(*handle);
+            let stroke = if hovered { width * hover_scale } else { width };
             let halo_stroke = stroke + 2.0 * halo;
             match handle.kind() {
                 HandleKind::Axis => {
@@ -1281,7 +1336,7 @@ impl TransformGizmo {
                 }
                 HandleKind::Plane => {
                     let (u, v) = frame.plane_axes(*handle).expect("plane axes");
-                    plane_handle(slot, origin, u, v, scale);
+                    plane_handle(slot, origin, u, v, scale, hovered);
                     if halo > 0.0 {
                         plane_halo(
                             halo_slot,
@@ -1290,6 +1345,7 @@ impl TransformGizmo {
                             v,
                             scale,
                             halo / self.style.size.max(1e-9),
+                            hovered,
                         );
                     } else {
                         halo_slot.set_shape(Vec::new(), Vec::new(), Vec::new(), Vec::new());
@@ -1332,17 +1388,22 @@ impl TransformGizmo {
         let offset = self
             .display_offset
             .map(|offset| Matrix4::translation(offset.x, offset.y, offset.z));
-        let outline = [
-            self.style.outline[0],
-            self.style.outline[1],
-            self.style.outline[2],
-            self.style.outline[3] * self.style.opacity,
-        ];
+        let outline_alpha = self.style.outline[3] * self.style.opacity;
         for (index, handle) in GizmoHandle::ALL.iter().enumerate() {
-            let (surface, edge) = paint_for(*handle, self.hovered == Some(*handle), &self.style);
+            let fade = self.fade[index];
+            let (mut surface, mut edge) =
+                paint_for(*handle, self.hovered == Some(*handle), &self.style);
+            surface[3] *= fade;
+            edge[3] *= fade;
             self.handles[index].set_surface_color(surface);
             self.handles[index].set_edge_color(edge);
             self.handles[index].set_temporary_transform(offset);
+            let outline = [
+                self.style.outline[0],
+                self.style.outline[1],
+                self.style.outline[2],
+                outline_alpha * fade,
+            ];
             self.halos[index].set_surface_color(outline);
             self.halos[index].set_temporary_transform(offset);
         }
@@ -1478,10 +1539,17 @@ fn dilate_triangle(
 
 /// A planar handle: a translucent glass square with an outer L-corner rim.
 ///
-/// Only the two edges at the far corner are drawn. A full four-sided rim made the
-/// 0.35..0.7 quad read as a floating rectangle rather than a plane handle; the L keeps
-/// the direction cue without boxing the axis in.
-fn plane_handle(item: &mut ShapeItem, origin: Vector3, u: Vector3, v: Vector3, scale: f64) {
+/// At rest only the two edges at the far corner are drawn: a full four-sided rim made
+/// the 0.35..0.7 quad read as a floating rectangle. A **hovered** plane closes the rim
+/// so the whole tile reads like an arrow handle (the dark halo below does the same).
+fn plane_handle(
+    item: &mut ShapeItem,
+    origin: Vector3,
+    u: Vector3,
+    v: Vector3,
+    scale: f64,
+    hovered: bool,
+) {
     let corner = |a: f64, b: f64| to3(origin.add(&u.scale(a * scale)).add(&v.scale(b * scale)));
     let positions = vec![
         corner(0.35, 0.35),
@@ -1489,13 +1557,13 @@ fn plane_handle(item: &mut ShapeItem, origin: Vector3, u: Vector3, v: Vector3, s
         corner(0.7, 0.7),
         corner(0.35, 0.7),
     ];
-    item.set_shape(
-        positions,
-        Vec::new(),
-        vec![0, 1, 2, 0, 2, 3],
+    let edges = if hovered {
+        vec![0, 1, 1, 2, 2, 3, 3, 0]
+    } else {
         // The far corner is vertex 2; only its two incident edges form the L.
-        vec![1, 2, 2, 3],
-    );
+        vec![1, 2, 2, 3]
+    };
+    item.set_shape(positions, Vec::new(), vec![0, 1, 2, 0, 2, 3], edges);
 }
 
 /// The glass plane's halo: an L-corner band just outside its two outer edges.
@@ -1510,6 +1578,7 @@ fn plane_halo(
     v: Vector3,
     scale: f64,
     margin: f64,
+    hovered: bool,
 ) {
     let corner = |a: f64, b: f64| to3(origin.add(&u.scale(a * scale)).add(&v.scale(b * scale)));
     let lo = 0.35;
@@ -1528,14 +1597,26 @@ fn plane_halo(
         ]);
         triangles.extend([base, base + 1, base + 2, base, base + 2, base + 3]);
     };
-    // Only the two outer bands, matching the plane's L-corner rim: a full rectangle
-    // would close the square again and rebuild the floating-box illusion.
+    // At rest only the two outer bands, matching the plane's L-corner rim: a full
+    // rectangle would close the square again. A hovered plane gets the full 1 px casing
+    // so it matches the dark-cased arrow handles.
+    if hovered {
+        quad(
+            (outer_lo, outer_lo),
+            (outer_hi, outer_lo),
+            (outer_hi, lo),
+            (outer_lo, lo),
+        );
+    }
     quad(
         (outer_lo, hi),
         (outer_hi, hi),
         (outer_hi, outer_hi),
         (outer_lo, outer_hi),
     );
+    if hovered {
+        quad((outer_lo, lo), (lo, lo), (lo, hi), (outer_lo, hi));
+    }
     quad((hi, lo), (outer_hi, lo), (outer_hi, hi), (hi, hi));
     item.set_shape(positions, Vec::new(), triangles, Vec::new());
 }
@@ -1866,6 +1947,23 @@ mod tests {
         }
     }
 
+    /// A 30° / 35° three-quarter view, so every triad handle is clear of the
+    /// grazing-angle fade that an axis-aligned view triggers.
+    fn tilted_camera(eye_z: f64) -> Camera {
+        let rotation = Rotation::from_axis_angle(
+            &Vector3::new(1.0, 0.0, 0.0),
+            (-35.0_f64).to_radians(),
+        )
+        .multiply(&Rotation::from_axis_angle(
+            &Vector3::new(0.0, 0.0, 1.0),
+            35.0_f64.to_radians(),
+        ));
+        Camera {
+            view: Placement::new(Vector3::new(0.0, 0.0, -eye_z), rotation).to_matrix(),
+            ..camera(eye_z)
+        }
+    }
+
     const CENTRE: [i32; 2] = [50, 50];
     const RIGHT: [i32; 2] = [75, 50];
     const UP: [i32; 2] = [50, 75];
@@ -1924,7 +2022,7 @@ mod tests {
     fn the_mode_controls_which_handles_are_built() {
         let item_count = |mode| {
             let mut gizmo = TransformGizmo::new(1, Vector3::zero(), mode);
-            gizmo.update(&camera(5.0));
+            gizmo.update(&tilted_camera(5.0));
             gizmo.items()
                 .iter()
                 .filter(|item| {
@@ -2543,6 +2641,68 @@ mod tests {
     }
 
     #[test]
+    fn a_hovered_plane_gets_the_full_casing() {
+        let camera = tilted_camera(5.0);
+        let mut gizmo = TransformGizmo::new(1, Vector3::zero(), GizmoMode::Translate);
+        gizmo.update(&camera);
+        let edges =
+            |gizmo: &TransformGizmo| gizmo.items()[GizmoHandle::PlaneXY.index()].edges().len();
+        let halo = |gizmo: &TransformGizmo| {
+            gizmo.halos()[GizmoHandle::PlaneXY.index()]
+                .positions()
+                .len()
+        };
+        assert_eq!(edges(&gizmo), 4, "at rest the rim is the outer L");
+        assert_eq!(halo(&gizmo), 8, "two halo bands at rest");
+
+        assert!(gizmo.set_hovered(Some(GizmoHandle::PlaneXY)));
+        assert!(gizmo.update(&camera), "the rim is baked, so hover rebuilds");
+        assert_eq!(edges(&gizmo), 8, "the hovered rim closes the square");
+        assert_eq!(halo(&gizmo), 16, "all four halo bands when hovered");
+    }
+
+    #[test]
+    fn an_edge_on_handle_fades_and_leaves_the_hit_test() {
+        let camera = camera(5.0);
+        let mut gizmo = TransformGizmo::new(1, Vector3::zero(), GizmoMode::Universal);
+        gizmo.update(&camera);
+
+        // Looking down +Z: the Z axis points at the camera, the XZ/YZ planes are
+        // edge-on, and the XY plane faces it.
+        assert_eq!(gizmo.grazing_fade(GizmoHandle::AxisZ, &camera), 0.0);
+        assert_eq!(gizmo.grazing_fade(GizmoHandle::PlaneXZ, &camera), 0.0);
+        assert_eq!(gizmo.grazing_fade(GizmoHandle::PlaneYZ, &camera), 0.0);
+        assert_eq!(gizmo.grazing_fade(GizmoHandle::PlaneXY, &camera), 1.0);
+        assert!(
+            gizmo.items()[GizmoHandle::AxisZ.index()]
+                .positions()
+                .is_empty(),
+            "a faded axis keeps no geometry"
+        );
+        assert!(
+            gizmo.items()[GizmoHandle::PlaneXZ.index()]
+                .positions()
+                .is_empty(),
+            "a faded plane keeps no geometry"
+        );
+        assert!(
+            !gizmo.items()[GizmoHandle::PlaneXY.index()]
+                .positions()
+                .is_empty()
+        );
+
+        // A three-quarter view brings the Z axis back.
+        let tilted = tilted_camera(5.0);
+        assert!(gizmo.update(&tilted));
+        assert!(gizmo.grazing_fade(GizmoHandle::AxisZ, &tilted) > 0.9);
+        assert!(
+            !gizmo.items()[GizmoHandle::AxisZ.index()]
+                .positions()
+                .is_empty()
+        );
+    }
+
+    #[test]
     fn the_gizmo_strokes_are_ribbons() {
         let mut gizmo = TransformGizmo::new(1, Vector3::zero(), GizmoMode::Universal);
         gizmo.update(&camera(5.0));
@@ -2568,7 +2728,7 @@ mod tests {
     #[test]
     fn the_manipulator_tokens_follow_the_active_state() {
         let mut gizmo = TransformGizmo::new(1, Vector3::zero(), GizmoMode::Universal);
-        gizmo.update(&camera(5.0));
+        gizmo.update(&tilted_camera(5.0));
         let surface = |gizmo: &TransformGizmo, handle: GizmoHandle| {
             gizmo.items()[handle.index()].surface_color()
         };
@@ -2688,7 +2848,7 @@ mod tests {
         // A hovered handle uses the active colour at `alpha * opacity`; the plane's
         // highlighted glass keeps its 0.28 ink, scaled by the opacity.
         assert!(gizmo.set_hovered(Some(GizmoHandle::PlaneXY)));
-        assert_eq!(surface(&gizmo, GizmoHandle::PlaneXY), [1.0, 0.0, 0.0, 0.14]);
+        assert_eq!(surface(&gizmo, GizmoHandle::PlaneXY), [1.0, 0.0, 0.0, 0.25]);
         assert_eq!(edge(&gizmo, GizmoHandle::PlaneXY), [1.0, 0.0, 0.0, 0.5]);
         assert_eq!(surface(&gizmo, GizmoHandle::AxisX), [0.0, 1.0, 0.0, 0.4]);
 
@@ -2747,10 +2907,7 @@ mod tests {
                 "handle {index} is a control overlay"
             );
             assert_eq!(item.wire_depth(), crate::shape::OVERLAY_DEPTH);
-            assert!(
-                !item.ghost_surface(),
-                "no occluded pass may dim the triad"
-            );
+            assert!(!item.ghost_surface(), "no occluded pass may dim the triad");
         }
         for (index, item) in gizmo.halos().iter().enumerate() {
             assert_eq!(item.surface_depth(), crate::shape::OVERLAY_DEPTH);

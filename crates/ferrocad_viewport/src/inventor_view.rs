@@ -5814,13 +5814,35 @@ mod tests {
         }
     }
 
+    /// A three-quarter camera for the gizmo tests. An axis-aligned view fades the axis
+    /// and the two planes that collapse to a line, so the handle-count and packet-count
+    /// tests need every handle live.
+    fn gizmo_camera(size: [u32; 2]) -> Camera {
+        use ferrocad_types::{Placement, Rotation, Vector3};
+        let rotation =
+            Rotation::from_axis_angle(&Vector3::new(1.0, 0.0, 0.0), (-35.0_f64).to_radians())
+                .multiply(&Rotation::from_axis_angle(
+                    &Vector3::new(0.0, 0.0, 1.0),
+                    35.0_f64.to_radians(),
+                ));
+        Camera {
+            view: Placement::new(Vector3::new(0.0, 0.0, -5.0), rotation).to_matrix(),
+            projection: Projection::Perspective {
+                fov_y: 45.0f64.to_radians(),
+                near: 0.1,
+                far: 100.0,
+            },
+            viewport: ferrocad_graphics::Viewport::new(size, 1.0),
+        }
+    }
+
     /// A 100×100 viewport with a triangle at the origin and one gizmo target.
     fn gizmo_view(
         gizmo: TransformGizmo,
     ) -> (InventorViewport<FakeView>, ferrocad_graphics::Viewport) {
         use ferrocad_stage::ShapeItem;
 
-        let camera = perspective_camera([100, 100]);
+        let camera = gizmo_camera([100, 100]);
         let viewport = camera.viewport;
         let mut stage = Stage::new();
         stage.add_item(ShapeItem::new(42).with_shape(
@@ -6802,8 +6824,10 @@ mod tests {
             Vector3::zero(),
             GizmoMode::Translate,
         ));
-        assert!(view.handle_button(viewport.to_logical([80, 50]), 1, true));
-        assert!(view.handle_pointer(viewport.to_logical([92, 50])));
+        let grab = axis_x_grab(&view);
+        let release = [grab[0] + 12, grab[1]];
+        assert!(view.handle_button(viewport.to_logical(grab), 1, true));
+        assert!(view.handle_pointer(viewport.to_logical(release)));
         assert!(preview(&view).is_some(), "the drag previews a transform");
         assert!(view.gizmo_value().is_some());
 
@@ -6840,13 +6864,15 @@ mod tests {
             Vector3::zero(),
             GizmoMode::Translate,
         ));
-        assert!(view.handle_button(viewport.to_logical([80, 50]), 1, true));
-        assert!(view.handle_pointer(viewport.to_logical([92, 50])));
+        let grab = axis_x_grab(&view);
+        let release = [grab[0] + 12, grab[1]];
+        assert!(view.handle_button(viewport.to_logical(grab), 1, true));
+        assert!(view.handle_pointer(viewport.to_logical(release)));
         let value = view.gizmo_value().expect("a readout value");
         assert!(matches!(value, GizmoValue::Linear { .. }));
         assert!(value.readout().contains("ΔX"), "{}", value.readout());
 
-        assert!(view.handle_button(viewport.to_logical([92, 50]), 1, false));
+        assert!(view.handle_button(viewport.to_logical(release), 1, false));
         assert!(view.gizmo_value().is_none(), "the tag clears on release");
         let commit = view.last_gizmo_commit().expect("a commit");
         assert!(matches!(commit.value, GizmoValue::Linear { .. }));
@@ -6875,9 +6901,10 @@ mod tests {
             shift: true,
             ..Default::default()
         };
-        assert!(view.handle_button_with_modifiers(viewport.to_logical([80, 50]), 1, true, shift));
+        let grab = axis_x_grab(&view);
+        assert!(view.handle_button_with_modifiers(viewport.to_logical(grab), 1, true, shift));
         assert!(view.handle_pointer_with_modifiers(
-            viewport.to_logical([80, 65]),
+            viewport.to_logical([grab[0], grab[1] + 15]),
             GizmoModifiers::default()
         ));
         assert!(

@@ -430,11 +430,11 @@ fn brep_strings_round_trip() {
         let box_shape = part
             .call_method1("makeBox", (2.0, 3.0, 4.0))
             .expect("makeBox");
-        let brep: Vec<u8> = box_shape
+        let brep: String = box_shape
             .call_method0("exportBrepToString")
             .expect("exportBrepToString")
             .extract()
-            .expect("BREP bytes");
+            .expect("BREP text");
         assert!(!brep.is_empty());
 
         // The empty shape loads in place (upstream's `TopoShape::importBrep`).
@@ -445,7 +445,7 @@ fn brep_strings_round_trip() {
             .expect("Part.Shape()");
         restored
             .call_method1("importBrepFromString", (brep.clone(),))
-            .expect("importBrepFromString(bytes)");
+            .expect("importBrepFromString(str)");
         assert!(restored
             .call_method0("isClosed")
             .expect("isClosed")
@@ -455,16 +455,17 @@ fn brep_strings_round_trip() {
         assert!((volume - 24.0).abs() < 1e-9, "{volume}");
 
         // OCCT's BREP text is canonical, so re-exporting reproduces it.
-        let again: Vec<u8> = restored
+        let again: String = restored
             .call_method0("exportBrepToString")
             .expect("re-export")
             .extract()
-            .expect("BREP bytes");
+            .expect("BREP text");
         assert_eq!(again, brep);
 
-        // A `str` (what upstream returns) is accepted too, and the call replaces
-        // an existing shape rather than only filling a null one.
-        let text = String::from_utf8(brep.clone()).expect("BREP text is UTF-8");
+        // A `bytes` payload (what this binding used to return) is still
+        // accepted, and the call replaces an existing shape rather than only
+        // filling a null one.
+        let text = brep.as_bytes().to_vec();
         let target = part
             .call_method1("makeBox", (1.0, 1.0, 1.0))
             .expect("a small box");

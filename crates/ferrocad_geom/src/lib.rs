@@ -368,6 +368,27 @@ impl ElementKind {
     ];
 }
 
+/// Which sub-shapes a tolerance query or fixer considers, matching upstream's
+/// `ShapeAnalysis_ShapeTolerance`/`ShapeFix_ShapeTolerance` shape-type argument.
+///
+/// The spellings are FreeCAD's `Part.Shape` subclasses: [`All`](Self::All) is
+/// upstream's default (`TopAbs_SHAPE`) and covers vertices, edges and faces;
+/// [`Shell`](Self::Shell) is the combined form that also visits the shell's
+/// faces, edges and vertices.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ToleranceKind {
+    /// Every vertex, edge and face (`Part.Shape`).
+    All,
+    Vertex,
+    Edge,
+    Face,
+    /// Edges **and** their vertices (`Part.Wire`), as upstream documents it.
+    Wire,
+    /// The shell plus its faces, edges and vertices.
+    Shell,
+    Solid,
+}
+
 /// How smoothly two elements meet, as far as tangent propagation is concerned.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Continuity {
@@ -1188,6 +1209,177 @@ pub trait GeometryBackend: Send + Sync {
     /// The default reports the operation as unsupported.
     fn shape_tolerance(&self, _shape: &Shape) -> Result<f64, GeomError> {
         Err(unsupported("shape_tolerance"))
+    }
+
+    /// Whether `point` lies inside `shape` (`Shape.isInside`).
+    ///
+    /// Upstream's rule is not uniform: a vertex, edge, wire or face answers with
+    /// the point-to-shape distance (`BRepExtrema_DistShapeShape`), so a point on
+    /// the element is inside; every other shape is classified with
+    /// `BRepClass3d_SolidClassifier`, where `check_face` promotes a point the
+    /// classifier reports on the boundary (`IsOnAFace`) to inside.
+    ///
+    /// The default reports the operation as unsupported.
+    fn is_inside(
+        &self,
+        _shape: &Shape,
+        _point: Vector3,
+        _tolerance: f64,
+        _check_face: bool,
+    ) -> Result<bool, GeomError> {
+        Err(unsupported("is_inside"))
+    }
+
+    /// Whether two shapes share the same TShape, whatever their locations and
+    /// orientations (`TopoDS_Shape::IsPartner`, `Shape.isPartner`).
+    ///
+    /// Contrast [`same_shape`](Self::same_shape), which also compares the
+    /// location. The default reports the operation as unsupported.
+    fn is_partner(&self, _a: &Shape, _b: &Shape) -> Result<bool, GeomError> {
+        Err(unsupported("is_partner"))
+    }
+
+    /// A copy of `shape` with the complement of its orientation
+    /// (`TopoDS_Shape::Complement`, `Shape.complement`): `Forward`↔`Reversed`
+    /// and `Internal`↔`External`, unlike [`reversed`](Self::reversed) which only
+    /// toggles the first pair.
+    ///
+    /// The default reports the operation as unsupported.
+    fn complement(&self, _shape: &Shape) -> Result<Shape, GeomError> {
+        Err(unsupported("complement"))
+    }
+
+    /// Apply a general affine matrix to the **underlying geometry** and return a
+    /// new shape (`Shape.transformGeometry`, `BRepBuilderAPI_GTransform`).
+    ///
+    /// The source is never modified: upstream copies it before transforming
+    /// (`BRepBuilderAPI_Copy`), because `gp_GTrsf` rejects a non-orthogonal
+    /// transform on a shared shape. `copy` is upstream's flag for whether the
+    /// transformed copy is itself duplicated; either way the result is a distinct
+    /// shape.
+    ///
+    /// The default reports the operation as unsupported.
+    fn transform_geometry(
+        &self,
+        _shape: &Shape,
+        _matrix: &Matrix4,
+        _copy: bool,
+    ) -> Result<Shape, GeomError> {
+        Err(unsupported("transform_geometry"))
+    }
+
+    /// The average (`mode == 0`), maximum (`mode > 0`) or minimum (`mode < 0`)
+    /// tolerance over the shape's sub-shapes (`Shape.globalTolerance`,
+    /// `ShapeAnalysis_ShapeTolerance`).
+    ///
+    /// The default reports the operation as unsupported.
+    fn global_tolerance(&self, _shape: &Shape, _mode: i32) -> Result<f64, GeomError> {
+        Err(unsupported("global_tolerance"))
+    }
+
+    /// Enforce `value` as the tolerance of every sub-shape `kind` selects
+    /// (`Shape.fixTolerance`, `ShapeFix_ShapeTolerance::SetTolerance`).
+    ///
+    /// This mutates the sub-shape tolerances of `shape` in place, exactly as the
+    /// kernel fixer does; the shape handle itself is unchanged.
+    ///
+    /// The default reports the operation as unsupported.
+    fn fix_tolerance(
+        &self,
+        _shape: &Shape,
+        _value: f64,
+        _kind: ToleranceKind,
+    ) -> Result<(), GeomError> {
+        Err(unsupported("fix_tolerance"))
+    }
+
+    /// Limit the tolerances of the sub-shapes `kind` selects
+    /// (`Shape.limitTolerance`, `ShapeFix_ShapeTolerance::LimitTolerance`).
+    ///
+    /// `tmax == tmin` forces that value, `tmin == 0` caps at `tmax`, and
+    /// `tmax < tmin` raises the minimum to `tmin`. Returns whether any tolerance
+    /// changed. The default reports the operation as unsupported.
+    fn limit_tolerance(
+        &self,
+        _shape: &Shape,
+        _tmin: f64,
+        _tmax: f64,
+        _kind: ToleranceKind,
+    ) -> Result<bool, GeomError> {
+        Err(unsupported("limit_tolerance"))
+    }
+
+    /// The sub-shapes whose tolerance lies within `[minimum, maximum]`
+    /// (`Shape.inTolerance`, `ShapeAnalysis_ShapeTolerance::InTolerance`).
+    ///
+    /// The default reports the operation as unsupported.
+    fn tolerance_in(
+        &self,
+        _shape: &Shape,
+        _minimum: f64,
+        _maximum: f64,
+        _kind: ToleranceKind,
+    ) -> Result<Vec<Shape>, GeomError> {
+        Err(unsupported("tolerance_in"))
+    }
+
+    /// The sub-shapes whose tolerance is greater than `value`
+    /// (`Shape.overTolerance`, `ShapeAnalysis_ShapeTolerance::OverTolerance`).
+    ///
+    /// The default reports the operation as unsupported.
+    fn tolerance_over(
+        &self,
+        _shape: &Shape,
+        _value: f64,
+        _kind: ToleranceKind,
+    ) -> Result<Vec<Shape>, GeomError> {
+        Err(unsupported("tolerance_over"))
+    }
+
+    /// Sort the edges of `shape` into wires (`Shape.makeWires`).
+    ///
+    /// The result is a compound of every wire found, even when there is only one,
+    /// matching upstream's `TopoShape::makeWires`. `op` is accepted for signature
+    /// compatibility (upstream only uses it to label the element map, which this
+    /// seam does not build here); `tolerance` is the `ShapeFix_Wire` precision.
+    ///
+    /// The default reports the operation as unsupported.
+    fn make_wires(
+        &self,
+        _shape: &Shape,
+        _op: &str,
+        _tolerance: f64,
+    ) -> Result<Shape, GeomError> {
+        Err(unsupported("make_wires"))
+    }
+
+    /// Remove the internal wires (holes) whose area is below `minimum_area`
+    /// (`Shape.removeInternalWires`, `ShapeUpgrade_RemoveInternalWires`).
+    ///
+    /// Returns the resulting shape and whether the kernel reports that it
+    /// performed a removal — upstream's `Perform()` flag, which is `false` when
+    /// there was nothing to remove even though the returned shape is still valid.
+    ///
+    /// The default reports the operation as unsupported.
+    fn remove_internal_wires(
+        &self,
+        _shape: &Shape,
+        _minimum_area: f64,
+    ) -> Result<(Shape, bool), GeomError> {
+        Err(unsupported("remove_internal_wires"))
+    }
+
+    /// The shape as a **binary STL** (`Shape.exportStl`), meshed with
+    /// `deflection`.
+    ///
+    /// The kernel owns the encoding, like [`save_shape`](Self::save_shape); the
+    /// caller only writes the bytes. Upstream writes binary STL through
+    /// `StlAPI_Writer` after meshing with `BRepMesh_IncrementalMesh`, and the
+    /// angular deflection is derived from the linear one.
+    ///
+    /// The default reports the operation as unsupported.
+    fn stl_bytes(&self, _shape: &Shape, _deflection: f64) -> Result<Vec<u8>, GeomError> {
+        Err(unsupported("stl_bytes"))
     }
 
     /// The 3D point of an edge at curve parameter `t` (`Edge.valueAt`,

@@ -81,12 +81,12 @@ fn part_shares_one_core_with_ferrocad() {
             "the round-tripped shape is the same kernel object"
         );
 
-        // The shape is real geometry: it serialises to non-empty BREP.
-        let brep: Vec<u8> = after
+        // The shape is real geometry: it serialises to non-empty BREP text.
+        let brep: String = after
             .call_method0("exportBrepToString")
             .expect("exportBrepToString")
             .extract()
-            .expect("BREP bytes");
+            .expect("BREP text");
         assert!(!brep.is_empty(), "an OCCT box must serialise to BREP");
     });
 }

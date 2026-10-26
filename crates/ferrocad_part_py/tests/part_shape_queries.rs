@@ -261,3 +261,93 @@ fn is_equal_is_stricter_than_is_same() {
         assert!(error.is_instance_of::<PyTypeError>(py), "{error}");
     });
 }
+
+/// Run a Python snippet against the booted `Part` module.
+fn run(py: Python<'_>, source: &str) {
+    use pyo3::types::PyDict;
+    use std::ffi::CString;
+
+    let code = CString::new(source).expect("the snippet has no NUL");
+    let globals = PyDict::new(py);
+    if let Err(error) = py.run(&code, Some(&globals), None) {
+        error.print(py);
+        panic!("the Part shape-query snippet failed:\n{source}");
+    }
+}
+
+#[test]
+fn hash_code_follows_is_same_and_accepts_the_upper_bound() {
+    boot();
+    Python::with_gil(|py| {
+        run(
+            py,
+            r#"
+import Part
+
+box = Part.makeBox(2, 3, 4)
+
+# Stable within the process, and equal exactly when the TShape and location are
+# (orientation ignored), like upstream's `ShapeMapHasher`.
+assert box.hashCode() == box.hashCode()
+assert box.hashCode() == Part.Shape(box).hashCode()
+assert box.hashCode() == box.reversed().hashCode(), "orientation is not part of the hash"
+assert box.hashCode() != box.copy().hashCode(), "a new TShape hashes differently"
+
+# Sub-shape wrappers around one kernel element hash alike, which is how
+# SimpleCAD keys its edge/face adjacency maps.
+assert box.Edges[0].hashCode() == box.Edges[0].hashCode()
+assert len({box.Edges[0].hashCode(), box.Edges[0].hashCode()}) == 1
+assert len({edge.hashCode() for edge in box.Edges}) == 12
+
+# `upper` is upstream's modulo bound (IntegerLast by default), so the value is
+# non-negative and below it.
+assert 0 <= box.hashCode() <= 2**31 - 1
+assert 0 <= box.hashCode(10) < 10
+assert box.hashCode(1) == 0
+
+# A null shape hashes to 0, matching `hash(Part.Shape())`.
+assert Part.Shape().hashCode() == 0
+"#,
+        );
+    });
+}
+
+#[test]
+fn is_partner_ignores_location_and_orientation() {
+    boot();
+    Python::with_gil(|py| {
+        run(
+            py,
+            r#"
+import Part
+
+box = Part.makeBox(2, 3, 4)
+
+assert box.isPartner(box)
+assert box.isPartner(Part.Shape(box))
+assert box.isPartner(box.reversed()), "orientation is not part of the partner test"
+assert box.isSame(box.reversed()) and box.isPartner(box.reversed())
+
+# A deep copy has a new TShape, so it is not a partner even though its geometry
+# is identical.
+assert box.isPartner(box.copy()) is False
+assert box.isSame(box.copy()) is False
+
+# `isPartner` is weaker than `isSame`: a same-TShape handle with a different
+# location would be a partner but not same. This seam bakes transforms into a
+# new TShape, so the observable case here is a different shape.
+other = Part.makeBox(5, 5, 5)
+assert box.isPartner(other) is False
+
+# Null shapes and non-shapes.
+assert Part.Shape().isPartner(box) is False
+assert box.isPartner(Part.Shape()) is False
+try:
+    box.isPartner(42)
+    raise AssertionError("a non-shape argument must raise")
+except TypeError:
+    pass
+"#,
+        );
+    });
+}

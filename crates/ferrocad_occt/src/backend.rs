@@ -28,7 +28,7 @@ use ferrocad_geom::{
     BsplineSurfaceData, Capabilities, Continuity, ElementId, ElementKind, ElementRef, GeomError,
     GeometryBackend, History, Lineage, MapVersion, MassProperties, OpResult, OperandId,
     PrincipalProperties, Shape, ShapeDistance, SurfaceData, SurfaceSpec, Tessellation,
-    TessellationOptions, unsupported,
+    TessellationOptions, ToleranceKind, unsupported,
 };
 use ferrocad_types::{Matrix4, Placement};
 use opencascade_sys as ffi;
@@ -2164,6 +2164,260 @@ impl GeometryBackend for OcctBackend {
         Ok(bridge::fc_shape_tolerance(inner))
     }
 
+    fn is_inside(
+        &self,
+        shape: &Shape,
+        point: Vector3,
+        tolerance: f64,
+        check_face: bool,
+    ) -> Result<bool, GeomError> {
+        let occt = downcast(shape)?;
+        let guard = occt.borrow();
+        let inner = guard
+            .as_ref()
+            .ok_or(OcctError::InvalidInput { what: "null shape" })?;
+        match bridge::fc_is_inside(
+            inner,
+            point.x,
+            point.y,
+            point.z,
+            tolerance,
+            check_face,
+        ) {
+            1 => Ok(true),
+            0 => Ok(false),
+            _ => Err(OcctError::NotDone {
+                operation: "is_inside",
+            }
+            .into()),
+        }
+    }
+
+    fn is_partner(&self, first: &Shape, second: &Shape) -> Result<bool, GeomError> {
+        let first_occt = downcast(first)?;
+        let second_occt = downcast(second)?;
+        let first_guard = first_occt.borrow();
+        let second_guard = second_occt.borrow();
+        match (first_guard.as_ref(), second_guard.as_ref()) {
+            (Some(a), Some(b)) => Ok(bridge::fc_is_partner(a, b)),
+            _ => Ok(false),
+        }
+    }
+
+    fn complement(&self, shape: &Shape) -> Result<Shape, GeomError> {
+        let occt = downcast(shape)?;
+        let guard = occt.borrow();
+        let inner = guard
+            .as_ref()
+            .ok_or(OcctError::InvalidInput { what: "null shape" })?;
+        let complemented = bridge::fc_complement(inner);
+        let Some(complemented) = complemented.as_ref() else {
+            return Err(OcctError::NotDone {
+                operation: "complement",
+            }
+            .into());
+        };
+        Ok(erase(complemented))
+    }
+
+    fn transform_geometry(
+        &self,
+        shape: &Shape,
+        matrix: &Matrix4,
+        copy: bool,
+    ) -> Result<Shape, GeomError> {
+        let occt = downcast(shape)?;
+        let guard = occt.borrow();
+        let inner = guard
+            .as_ref()
+            .ok_or(OcctError::InvalidInput { what: "null shape" })?;
+        let m = &matrix.m;
+        if m[12].abs() > 1e-12
+            || m[13].abs() > 1e-12
+            || m[14].abs() > 1e-12
+            || (m[15] - 1.0).abs() > 1e-12
+        {
+            return Err(OcctError::InvalidInput {
+                what: "matrix is not affine",
+            }
+            .into());
+        }
+        let result = bridge::fc_transform_geometry(inner, m, copy);
+        let Some(result) = result.as_ref() else {
+            return Err(OcctError::NotDone {
+                operation: "transform_geometry",
+            }
+            .into());
+        };
+        Ok(erase(result))
+    }
+
+    fn global_tolerance(&self, shape: &Shape, mode: i32) -> Result<f64, GeomError> {
+        let occt = downcast(shape)?;
+        let guard = occt.borrow();
+        let inner = guard
+            .as_ref()
+            .ok_or(OcctError::InvalidInput { what: "null shape" })?;
+        let value = bridge::fc_global_tolerance(inner, mode);
+        if !value.is_finite() {
+            return Err(OcctError::NotDone {
+                operation: "global_tolerance",
+            }
+            .into());
+        }
+        Ok(value)
+    }
+
+    fn fix_tolerance(
+        &self,
+        shape: &Shape,
+        value: f64,
+        kind: ToleranceKind,
+    ) -> Result<(), GeomError> {
+        let occt = downcast(shape)?;
+        let guard = occt.borrow();
+        let inner = guard
+            .as_ref()
+            .ok_or(OcctError::InvalidInput { what: "null shape" })?;
+        if !bridge::fc_fix_tolerance(inner, value, tolerance_shape_type(kind)) {
+            return Err(OcctError::InvalidInput {
+                what: "a tolerance is a finite, non-negative number",
+            }
+            .into());
+        }
+        Ok(())
+    }
+
+    fn limit_tolerance(
+        &self,
+        shape: &Shape,
+        minimum: f64,
+        maximum: f64,
+        kind: ToleranceKind,
+    ) -> Result<bool, GeomError> {
+        let occt = downcast(shape)?;
+        let guard = occt.borrow();
+        let inner = guard
+            .as_ref()
+            .ok_or(OcctError::InvalidInput { what: "null shape" })?;
+        if !minimum.is_finite() || !maximum.is_finite() {
+            return Err(OcctError::InvalidInput {
+                what: "tolerances are finite numbers",
+            }
+            .into());
+        }
+        Ok(bridge::fc_limit_tolerance(
+            inner,
+            minimum,
+            maximum,
+            tolerance_shape_type(kind),
+        ))
+    }
+
+    fn tolerance_in(
+        &self,
+        shape: &Shape,
+        minimum: f64,
+        maximum: f64,
+        kind: ToleranceKind,
+    ) -> Result<Vec<Shape>, GeomError> {
+        let occt = downcast(shape)?;
+        let guard = occt.borrow();
+        let inner = guard
+            .as_ref()
+            .ok_or(OcctError::InvalidInput { what: "null shape" })?;
+        let mut list = ffi::top_tools::new_list_of_shape();
+        bridge::fc_tolerance_in(
+            inner,
+            minimum,
+            maximum,
+            tolerance_shape_type(kind),
+            list.pin_mut(),
+        );
+        Ok(list_shapes(&list))
+    }
+
+    fn tolerance_over(
+        &self,
+        shape: &Shape,
+        value: f64,
+        kind: ToleranceKind,
+    ) -> Result<Vec<Shape>, GeomError> {
+        let occt = downcast(shape)?;
+        let guard = occt.borrow();
+        let inner = guard
+            .as_ref()
+            .ok_or(OcctError::InvalidInput { what: "null shape" })?;
+        let mut list = ffi::top_tools::new_list_of_shape();
+        bridge::fc_tolerance_over(inner, value, tolerance_shape_type(kind), list.pin_mut());
+        Ok(list_shapes(&list))
+    }
+
+    fn make_wires(
+        &self,
+        shape: &Shape,
+        _op: &str,
+        tolerance: f64,
+    ) -> Result<Shape, GeomError> {
+        let occt = downcast(shape)?;
+        let guard = occt.borrow();
+        let inner = guard
+            .as_ref()
+            .ok_or(OcctError::InvalidInput { what: "null shape" })?;
+        let wires = bridge::fc_make_wires(inner, tolerance);
+        let Some(wires) = wires.as_ref() else {
+            return Err(OcctError::NotDone {
+                operation: "make_wires",
+            }
+            .into());
+        };
+        Ok(erase(wires))
+    }
+
+    fn remove_internal_wires(
+        &self,
+        shape: &Shape,
+        minimum_area: f64,
+    ) -> Result<(Shape, bool), GeomError> {
+        let occt = downcast(shape)?;
+        let guard = occt.borrow();
+        let inner = guard
+            .as_ref()
+            .ok_or(OcctError::InvalidInput { what: "null shape" })?;
+        let mut fix = bridge::fc_remove_internal_wires_new();
+        let performed = fix.pin_mut().perform(inner, minimum_area);
+        let result = fix.result();
+        let Some(result) = result.as_ref() else {
+            return Err(OcctError::NotDone {
+                operation: "remove_internal_wires",
+            }
+            .into());
+        };
+        Ok((erase(result), performed))
+    }
+
+    fn stl_bytes(&self, shape: &Shape, deflection: f64) -> Result<Vec<u8>, GeomError> {
+        let occt = downcast(shape)?;
+        let guard = occt.borrow();
+        let inner = guard
+            .as_ref()
+            .ok_or(OcctError::InvalidInput { what: "null shape" })?;
+        if !deflection.is_finite() || deflection <= 0.0 {
+            return Err(OcctError::InvalidInput {
+                what: "the deflection is a positive number",
+            }
+            .into());
+        }
+        let bytes = bridge::fc_stl_bytes(inner, deflection);
+        if bytes.is_empty() {
+            return Err(OcctError::NotDone {
+                operation: "stl_bytes",
+            }
+            .into());
+        }
+        Ok(bytes.to_vec())
+    }
+
     fn edge_value_at(&self, edge: &Shape, t: f64) -> Result<Vector3, GeomError> {
         let occt = downcast(edge)?;
         let guard = occt.borrow();
@@ -2683,6 +2937,32 @@ impl GeometryBackend for OcctBackend {
 enum CutOperation {
     Cut,
     Fuse,
+}
+
+/// The `TopAbs_ShapeEnum` value upstream's `ShapeTypeFromPyType` picks for a
+/// `Part.Shape` subclass, as the integer the sibling bridge takes.
+///
+/// cxx exposes a shared enum as a transparent struct, so its `repr` field is the
+/// OCCT discriminant (`TopAbs_SHAPE` is 8, `TopAbs_VERTEX` 7, …).
+fn tolerance_shape_type(kind: ToleranceKind) -> i32 {
+    let value = match kind {
+        ToleranceKind::All => TopAbs_ShapeEnum::TopAbs_SHAPE,
+        ToleranceKind::Solid => TopAbs_ShapeEnum::TopAbs_SOLID,
+        ToleranceKind::Shell => TopAbs_ShapeEnum::TopAbs_SHELL,
+        ToleranceKind::Face => TopAbs_ShapeEnum::TopAbs_FACE,
+        ToleranceKind::Wire => TopAbs_ShapeEnum::TopAbs_WIRE,
+        ToleranceKind::Edge => TopAbs_ShapeEnum::TopAbs_EDGE,
+        ToleranceKind::Vertex => TopAbs_ShapeEnum::TopAbs_VERTEX,
+    };
+    value.repr as i32
+}
+
+/// A copy of every shape in a bridged `TopTools_ListOfShape`.
+fn list_shapes(list: &TopTools_ListOfShape) -> Vec<Shape> {
+    let count = bridge::fc_list_size(list);
+    (1..=count)
+        .map(|index| erase(bridge::fc_list_value(list, index)))
+        .collect()
 }
 
 /// A copy of an OCCT shape handle (reference-counted).

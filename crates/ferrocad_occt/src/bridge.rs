@@ -17,6 +17,7 @@ mod ffi {
         include!("ferrocad_occt/include/fc_topology.hxx");
         include!("ferrocad_occt/include/fc_curve.hxx");
         include!("ferrocad_occt/include/fc_transform.hxx");
+        include!("ferrocad_occt/include/fc_shape_ops.hxx");
         include!("ferrocad_occt/src/fc_part_ops.hxx");
 
         // Reuse the crate's opaque types. cxx shares these across bridges by path.
@@ -116,6 +117,77 @@ mod ffi {
 
         /// A hash consistent with `IsSame` (TShape + location, orientation ignored).
         fn fc_shape_hash(shape: &TopoDS_Shape, upper: u64) -> u64;
+
+        /// `Shape.isInside`: 1 inside, 0 outside, -1 when the kernel fails.
+        fn fc_is_inside(
+            shape: &TopoDS_Shape,
+            x: f64,
+            y: f64,
+            z: f64,
+            tolerance: f64,
+            check_face: bool,
+        ) -> i32;
+
+        /// `TopoDS_Shape::IsPartner` (same TShape, any location/orientation).
+        fn fc_is_partner(first: &TopoDS_Shape, second: &TopoDS_Shape) -> bool;
+
+        /// A copy with the complement of the orientation, or null.
+        fn fc_complement(shape: &TopoDS_Shape) -> UniquePtr<TopoDS_Shape>;
+
+        /// `Shape.transformGeometry`: copy, then `BRepBuilderAPI_GTransform`.
+        fn fc_transform_geometry(
+            shape: &TopoDS_Shape,
+            matrix: &[f64],
+            copy: bool,
+        ) -> UniquePtr<TopoDS_Shape>;
+
+        /// `ShapeAnalysis_ShapeTolerance` average/maximum/minimum (NaN on failure).
+        fn fc_global_tolerance(shape: &TopoDS_Shape, mode: i32) -> f64;
+
+        /// `ShapeFix_ShapeTolerance::SetTolerance` (mutates the TShape in place).
+        fn fc_fix_tolerance(shape: &TopoDS_Shape, value: f64, shape_type: i32) -> bool;
+
+        /// `ShapeFix_ShapeTolerance::LimitTolerance`.
+        fn fc_limit_tolerance(
+            shape: &TopoDS_Shape,
+            minimum: f64,
+            maximum: f64,
+            shape_type: i32,
+        ) -> bool;
+
+        /// `ShapeAnalysis_ShapeTolerance::InTolerance`, appended to `out`.
+        fn fc_tolerance_in(
+            shape: &TopoDS_Shape,
+            minimum: f64,
+            maximum: f64,
+            shape_type: i32,
+            out: Pin<&mut TopTools_ListOfShape>,
+        );
+
+        /// `ShapeAnalysis_ShapeTolerance::OverTolerance`, appended to `out`.
+        fn fc_tolerance_over(
+            shape: &TopoDS_Shape,
+            value: f64,
+            shape_type: i32,
+            out: Pin<&mut TopTools_ListOfShape>,
+        );
+
+        /// `Shape.makeWires`: a compound of the wires found, or null.
+        fn fc_make_wires(shape: &TopoDS_Shape, tolerance: f64)
+        -> UniquePtr<TopoDS_Shape>;
+
+        /// A `ShapeUpgrade_RemoveInternalWires` run (see `fc_shape_ops.hxx`).
+        type FcRemoveInternalWires;
+        fn fc_remove_internal_wires_new() -> UniquePtr<FcRemoveInternalWires>;
+        fn perform(
+            self: Pin<&mut FcRemoveInternalWires>,
+            shape: &TopoDS_Shape,
+            minimum_area: f64,
+        ) -> bool;
+        fn result(self: &FcRemoveInternalWires) -> UniquePtr<TopoDS_Shape>;
+
+        /// Binary STL bytes for `Shape.exportStl`, or empty on failure.
+        fn fc_stl_bytes(shape: &TopoDS_Shape, deflection: f64) -> Vec<u8>;
 
         /// Remove sub-shapes (`BRepTools_ReShape`), or null.
         fn fc_reshape_remove(

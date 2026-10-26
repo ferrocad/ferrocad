@@ -54,6 +54,7 @@ use ferrocad_core::{
 };
 use ferrocad_geom::{
     ElementKind, ElementRef, Lineage, MapVersion, Shape, SurfaceData, TessellationOptions,
+    ToleranceKind,
 };
 use ferrocad_occt::surface_ops;
 use ferrocad_occt::OcctBackend;
@@ -486,6 +487,28 @@ fn compose_placements(a: &Placement, b: &Placement) -> Placement {
     }
 }
 
+/// The global placement of a rotation by `degrees` about the axis through
+/// `center`, or `Part.OCCError` when the axis is degenerate.
+///
+/// This is the placement upstream's `TopoShape::rotate` applies to the shape's
+/// location: base `center - R·center`, rotation `R`.
+fn rotation_placement(
+    center: ferrocad_curves::Vector3,
+    axis: ferrocad_curves::Vector3,
+    degrees: f64,
+) -> PyResult<Placement> {
+    if axis.is_null() {
+        return Err(curves::OCCError::new_err(
+            "a rotation needs a non-zero axis",
+        ));
+    }
+    let rotation = Rotation::from_axis_angle(&axis, degrees.to_radians());
+    Ok(Placement::new(
+        center.sub(&rotation.to_matrix().transform(&center)),
+        rotation,
+    ))
+}
+
 /// Re-bake the geometry so it matches `new`, then store the placement.
 ///
 /// The geometry always equals `placement · base`, so moving from the old
@@ -893,17 +916,7 @@ impl PartShape {
     ) -> PyResult<PyObject> {
         let center = curves::vector(center)?;
         let axis = curves::vector(axis)?;
-        if axis.is_null() {
-            return Err(curves::OCCError::new_err(
-                "a rotation needs a non-zero axis",
-            ));
-        }
-        let rotation = Rotation::from_axis_angle(&axis, angle.to_radians());
-        // A rotation about `center` is the placement `center - R·center`, `R`.
-        let about = Placement::new(
-            center.sub(&rotation.to_matrix().transform(&center)),
-            rotation,
-        );
+        let about = rotation_placement(center, axis, angle)?;
         slf.borrow().apply_global_placement(about);
         Ok(slf.clone().into_any().unbind())
     }
@@ -1240,12 +1253,18 @@ impl PartShape {
     }
 
     /// The BREP encoding of the shape, as `bytes`.
-    fn exportBrepToString(&self, py: Python<'_>) -> PyResult<Py<PyBytes>> {
+    /// `Shape.exportBrepToString` — the BREP text of the shape.
+    ///
+    /// Upstream returns a `str` and so does this; `importBrepFromString` accepts
+    /// that `str` back (and still accepts `bytes` for callers written against
+    /// the older binding, which returned `PyBytes`).
+    fn exportBrepToString(&self) -> PyResult<String> {
         let shape = self
             .shape()
             .ok_or_else(|| PyValueError::new_err("cannot export a null shape"))?;
         let bytes = ferrocad_part::backend().save_shape(&shape);
-        Ok(PyBytes::new(py, &bytes).unbind())
+        String::from_utf8(bytes)
+            .map_err(|_| curves::OCCError::new_err("the BREP export is not valid UTF-8"))
     }
 
     /// A display mesh with per-primitive sub-element ids and names.
@@ -2651,6 +2670,322 @@ impl PartShape {
             .map_err(kernel_error)?;
         Ok(PartShape::from_shape(reversed))
     }
+
+    /// Whether `point` lies inside this shape (`Shape.isInside`).
+    ///
+    /// Upstream's rule is not uniform. A vertex, edge, wire or face answers with
+    /// the point-to-shape distance (`BRepExtrema_DistShapeShape`), so a point on
+    /// the element is inside whatever `checkFace` says. Every other shape is
+    /// classified by `BRepClass3d_SolidClassifier`; `checkFace` then also counts
+    /// a point the classifier reports lying on a boundary face
+    /// (`IsOnAFace`), which is otherwise `ON` rather than `IN`.
+    ///
+    /// `point` may be a `Base.Vector`, a `(x, y, z)` sequence or any object with
+    /// `x`/`y`/`z`. A null shape raises `Part.OCCError`, as upstream does.
+    #[pyo3(signature = (point, tolerance, checkFace = false))]
+    fn isInside(
+        &self,
+        point: &Bound<'_, PyAny>,
+        tolerance: f64,
+        checkFace: bool,
+    ) -> PyResult<bool> {
+        let point = curves::vector(point)?;
+        let shape = self.named_shape()?;
+        ferrocad_part::backend()
+            .is_inside(&shape, point, tolerance, checkFace)
+            .map_err(kernel_error)
+    }
+
+    /// The identity hash upstream's `ShapeMapHasher`/`TopoDS_Shape::HashCode`
+    /// reports (`Shape.hashCode`).
+    ///
+    /// It follows [`isSame`](PartShape::isSame): TShape and location, orientation
+    /// ignored, so every wrapper around one kernel sub-shape hashes alike and a
+    /// deep copy does not. `upper` is upstream's bound (`IntegerLast()` by
+    /// default); the value is taken modulo it. A null shape hashes to `0` (it is
+    /// equal to nothing).
+    #[pyo3(signature = (upper = i32::MAX))]
+    fn hashCode(&self, upper: i32) -> u64 {
+        let Some(shape) = self.shape() else {
+            return 0;
+        };
+        let upper = if upper > 0 { upper as u64 } else { 1 };
+        ferrocad_part::backend()
+            .shape_hash(&shape)
+            .map(|hash| hash % upper)
+            .unwrap_or(0)
+    }
+
+    /// Whether both shapes share the same geometry, ignoring placement and
+    /// orientation (`Shape.isPartner`, `TopoDS_Shape::IsPartner`).
+    ///
+    /// This is weaker than [`isSame`](PartShape::isSame), which also compares the
+    /// location. A null shape on either side answers `false`; a non-shape is a
+    /// `TypeError`.
+    fn isPartner(&self, other: &Bound<'_, PyAny>) -> PyResult<bool> {
+        let other = other
+            .downcast::<PartShape>()
+            .map_err(|_| PyTypeError::new_err("isPartner expects a Part.Shape"))?;
+        let a = self.shape();
+        let b = other.borrow().shape();
+        match (a, b) {
+            (Some(a), Some(b)) => ferrocad_part::backend()
+                .is_partner(&a, &b)
+                .map_err(kernel_error),
+            _ => Ok(false),
+        }
+    }
+
+    /// Apply a 4x4 matrix to the shape's **geometry** and return a new shape
+    /// (`Shape.transformGeometry`, `BRepBuilderAPI_GTransform`).
+    ///
+    /// Unlike [`transformed`](PartShape::transformed), which installs a `gp_Trsf`
+    /// (a similarity), this path goes through `gp_GTrsf`, so it can express a
+    /// non-uniform scale or shear: a circle becomes an ellipse. The source shape
+    /// is not modified, matching upstream's `copy` flag default. The result has
+    /// the identity placement, because the whole transformation is baked in.
+    #[pyo3(signature = (matrix, copy = false))]
+    fn transformGeometry(
+        &self,
+        matrix: &Bound<'_, PyAny>,
+        copy: bool,
+    ) -> PyResult<PartShape> {
+        let matrix = matrix_from_py(matrix)?;
+        let shape = self.named_shape()?;
+        let moved = ferrocad_part::backend()
+            .transform_geometry(&shape, &matrix, copy)
+            .map_err(kernel_error)?;
+        Ok(PartShape::from_shape(moved))
+    }
+
+    /// A copy rotated by `degree` about the axis through `center` along `axis`
+    /// (`Shape.rotated`).
+    ///
+    /// This is upstream's `rotated`, i.e. a copy followed by the in-place
+    /// [`rotate`](PartShape::rotate); the original shape is untouched.
+    fn rotated(
+        &self,
+        center: &Bound<'_, PyAny>,
+        axis: &Bound<'_, PyAny>,
+        degree: f64,
+    ) -> PyResult<PartShape> {
+        let center = curves::vector(center)?;
+        let axis = curves::vector(axis)?;
+        let about = rotation_placement(center, axis, degree)?;
+        let result = self.copy_handle();
+        result.apply_global_placement(about);
+        Ok(result)
+    }
+
+    /// Scale this shape in place by `factor` about `base` (the origin by
+    /// default) and return it (`Shape.scale`).
+    ///
+    /// This is upstream's in-place form; [`scaled`](PartShape::scaled) is the
+    /// copy form. As upstream insists, a factor below the kernel's confusion
+    /// tolerance is a `ValueError`; the scale is baked into the geometry, so the
+    /// accumulated placement resets to the identity.
+    #[pyo3(signature = (factor, base = None))]
+    fn scale(
+        slf: &Bound<'_, Self>,
+        factor: f64,
+        base: Option<&Bound<'_, PyAny>>,
+    ) -> PyResult<PyObject> {
+        if factor.abs() < ferrocad_curves::TOLERANCE {
+            return Err(PyValueError::new_err("scale factor too small"));
+        }
+        let center = base
+            .map(curves::vector)
+            .transpose()?
+            .unwrap_or_else(ferrocad_curves::Vector3::zero);
+        let matrix = scale_matrix(factor, center);
+        let shape = slf.borrow().named_shape()?;
+        let moved = ferrocad_part::backend()
+            .transform(&shape, &matrix)
+            .map_err(kernel_error)?;
+        slf.borrow().replace_shape(Some(moved));
+        Ok(slf.clone().into_any().unbind())
+    }
+
+    /// The average (`mode == 0`), maximum (`mode > 0`) or minimum (`mode < 0`)
+    /// tolerance over this shape's vertices, edges and faces
+    /// (`Shape.globalTolerance`, `ShapeAnalysis_ShapeTolerance`).
+    fn globalTolerance(&self, mode: i32) -> PyResult<f64> {
+        let shape = self
+            .shape()
+            .ok_or_else(|| curves::OCCError::new_err("a null shape has no tolerance"))?;
+        ferrocad_part::backend()
+            .global_tolerance(&shape, mode)
+            .map_err(kernel_error)
+    }
+
+    /// Enforce `value` as the tolerance of every sub-shape `ShapeType` selects
+    /// (`Shape.fixTolerance`, `ShapeFix_ShapeTolerance::SetTolerance`).
+    ///
+    /// The tolerances live in the shared TShape, so fixing them on a sub-shape
+    /// (a `Part.Vertex`, an `Edge`, …) is visible on the shape it came from, as
+    /// upstream's in-place fixer is. `ShapeType` is a `Part.Shape` subclass:
+    /// `Part.Shape` (the default) covers vertices, edges and faces; `Vertex`,
+    /// `Edge`, `Face`, `Wire` and `Shell` narrow it.
+    #[pyo3(signature = (value, ShapeType = None))]
+    fn fixTolerance(&self, value: f64, ShapeType: Option<&Bound<'_, PyAny>>) -> PyResult<()> {
+        let kind = tolerance_kind(ShapeType, true)?;
+        let shape = self
+            .shape()
+            .ok_or_else(|| curves::OCCError::new_err("a null shape has no tolerance"))?;
+        ferrocad_part::backend()
+            .fix_tolerance(&shape, value, kind)
+            .map_err(kernel_error)
+    }
+
+    /// Limit the tolerances of the sub-shapes `ShapeType` selects
+    /// (`Shape.limitTolerance`, `ShapeFix_ShapeTolerance::LimitTolerance`).
+    ///
+    /// `tmax == tmin` forces that value, `tmin == 0` caps at `tmax`, and
+    /// `tmax < tmin` raises the minimum to `tmin`. Returns whether any tolerance
+    /// changed.
+    #[pyo3(signature = (tmin, tmax = 0.0, ShapeType = None))]
+    fn limitTolerance(
+        &self,
+        tmin: f64,
+        tmax: f64,
+        ShapeType: Option<&Bound<'_, PyAny>>,
+    ) -> PyResult<bool> {
+        let kind = tolerance_kind(ShapeType, true)?;
+        let shape = self
+            .shape()
+            .ok_or_else(|| curves::OCCError::new_err("a null shape has no tolerance"))?;
+        ferrocad_part::backend()
+            .limit_tolerance(&shape, tmin, tmax, kind)
+            .map_err(kernel_error)
+    }
+
+    /// The sub-shapes whose tolerance lies within `[valmin, valmax]`
+    /// (`Shape.inTolerance`, `ShapeAnalysis_ShapeTolerance::InTolerance`).
+    #[pyo3(signature = (valmin, valmax, ShapeType = None))]
+    fn inTolerance(
+        &self,
+        py: Python<'_>,
+        valmin: f64,
+        valmax: f64,
+        ShapeType: Option<&Bound<'_, PyAny>>,
+    ) -> PyResult<Vec<Py<PartShape>>> {
+        let kind = tolerance_kind(ShapeType, false)?;
+        let shape = self
+            .shape()
+            .ok_or_else(|| curves::OCCError::new_err("a null shape has no tolerance"))?;
+        let found = ferrocad_part::backend()
+            .tolerance_in(&shape, valmin, valmax, kind)
+            .map_err(kernel_error)?;
+        found
+            .into_iter()
+            .map(|shape| Py::new(py, PartShape::from_shape(shape)))
+            .collect()
+    }
+
+    /// The sub-shapes whose tolerance is greater than `value`
+    /// (`Shape.overTolerance`, `ShapeAnalysis_ShapeTolerance::OverTolerance`).
+    #[pyo3(signature = (value, ShapeType = None))]
+    fn overTolerance(
+        &self,
+        py: Python<'_>,
+        value: f64,
+        ShapeType: Option<&Bound<'_, PyAny>>,
+    ) -> PyResult<Vec<Py<PartShape>>> {
+        let kind = tolerance_kind(ShapeType, false)?;
+        let shape = self
+            .shape()
+            .ok_or_else(|| curves::OCCError::new_err("a null shape has no tolerance"))?;
+        let found = ferrocad_part::backend()
+            .tolerance_over(&shape, value, kind)
+            .map_err(kernel_error)?;
+        found
+            .into_iter()
+            .map(|shape| Py::new(py, PartShape::from_shape(shape)))
+            .collect()
+    }
+
+    /// Sort this shape's edges into wires (`Shape.makeWires`).
+    ///
+    /// The result is a **compound** of every wire found, even when there is only
+    /// one, matching upstream's `TopoShape::makeWires`; a connected chain gives a
+    /// one-wire compound. (The shape-kind inference behind `ShapeType` cannot
+    /// tell a one-wire compound from a bare wire, so it reports `Wire` there; the
+    /// `Wires`/`Edges` getters are the reliable view.) `op` is accepted for
+    /// signature compatibility — upstream only uses it to label the element map,
+    /// and this seam builds no map here.
+    #[pyo3(signature = (op = ""))]
+    fn makeWires(&self, op: &str) -> PyResult<PartShape> {
+        let shape = self.named_shape()?;
+        let wires = ferrocad_part::backend()
+            .make_wires(&shape, op, 0.0)
+            .map_err(kernel_error)?;
+        Ok(PartShape::from_shape(wires))
+    }
+
+    /// Remove the internal wires (holes) whose area is below `minimalArea`, in
+    /// place, and report whether the kernel performed a removal
+    /// (`Shape.removeInternalWires`, `ShapeUpgrade_RemoveInternalWires`).
+    ///
+    /// A shape with no internal wire keeps its geometry and returns `false`.
+    fn removeInternalWires(&self, minimalArea: f64) -> PyResult<bool> {
+        let shape = self.named_shape()?;
+        let (result, performed) = ferrocad_part::backend()
+            .remove_internal_wires(&shape, minimalArea)
+            .map_err(kernel_error)?;
+        self.replace_geometry(Some(result));
+        Ok(performed)
+    }
+
+    /// Destroy the reference to the underlying shape, in place
+    /// (`Shape.nullify`): afterwards [`isNull`](PartShape::isNull) is true.
+    fn nullify(&self) {
+        self.replace_shape(None);
+    }
+
+    /// Complement this shape's orientation in place (`Shape.complement`):
+    /// `Forward`↔`Reversed` **and** `Internal`↔`External`.
+    ///
+    /// This is stronger than [`reverse`](PartShape::reverse), which only swaps the
+    /// first pair. The geometry does not move, so the accumulated placement is
+    /// kept.
+    fn complement(&self) -> PyResult<()> {
+        let shape = self.named_shape()?;
+        let complemented = ferrocad_part::backend()
+            .complement(&shape)
+            .map_err(kernel_error)?;
+        self.replace_geometry(Some(complemented));
+        Ok(())
+    }
+
+    /// Read a BREP file into this shape, replacing its contents in place
+    /// (`Shape.read`).
+    ///
+    /// Upstream also accepts IGES and STEP here; this seam only has the BREP
+    /// reader (`BRepTools::Read`, the other side of
+    /// [`exportBrep`](PartShape::exportBrep)), so a `.stp`/`.igs` file raises
+    /// `Part.OCCError` instead of being silently ignored.
+    fn read(&self, filename: &str) -> PyResult<()> {
+        let shape = read_brep_file(filename)?;
+        self.replace_shape(Some(shape));
+        Ok(())
+    }
+
+    /// Write this shape as a binary STL file (`Shape.exportStl`).
+    ///
+    /// `deflection` is the linear deflection of the mesh the kernel builds, as
+    /// upstream's `BRepMesh_IncrementalMesh` argument; the angular deflection is
+    /// derived from it. A null shape is a `ValueError`; an I/O failure is an
+    /// `OSError`.
+    #[pyo3(signature = (filename, deflection = 0.01))]
+    fn exportStl(&self, filename: &str, deflection: f64) -> PyResult<()> {
+        let shape = self
+            .shape()
+            .ok_or_else(|| PyValueError::new_err("cannot export a null shape"))?;
+        let bytes = ferrocad_part::backend()
+            .stl_bytes(&shape, deflection)
+            .map_err(kernel_error)?;
+        std::fs::write(filename, bytes).map_err(|e| PyIOError::new_err(e.to_string()))
+    }
 }
 
 /// The sub-shape kinds, highest dimension first, with their FreeCAD names.
@@ -3237,6 +3572,93 @@ fn show(py: Python<'_>, shape: &Bound<'_, PyAny>, name: Option<&str>) -> PyResul
     Ok(object.unbind())
 }
 
+/// `Part.read(name)` — read a BREP file and return its shape.
+///
+/// Upstream's `Part.read` accepts IGES, STEP and BREP; this seam only has the
+/// BREP reader, so the other extensions raise `Part.OCCError` rather than being
+/// treated as unknown files. A missing or unreadable file is an `OSError`, as
+/// upstream's `Base.FileNotFoundError` is.
+#[pyfunction]
+fn read(filename: &str) -> PyResult<PartShape> {
+    Ok(PartShape::from_shape(read_brep_file(filename)?))
+}
+
+/// `Part.open(name)` — read a BREP file into a **new document**.
+///
+/// Upstream creates a document named after the file and adds one `Part::Feature`
+/// holding the shape, then recomputes it; so does this, using the same
+/// `ferrocad` document API as [`show`]. The deprecated upstream warning
+/// ("use Import.open") is not reproduced: the function still does its documented
+/// job here.
+#[pyfunction]
+fn open(py: Python<'_>, filename: &str) -> PyResult<()> {
+    let shape = read_brep_file(filename)?;
+    let name = std::path::Path::new(filename)
+        .file_stem()
+        .and_then(|stem| stem.to_str())
+        .filter(|stem| !stem.is_empty())
+        .ok_or_else(|| PyValueError::new_err("the file has no name"))?
+        .to_string();
+    let app = py.import("ferrocad")?;
+    let document = app.call_method1("newDocument", (name.clone(),))?;
+    let object = document.call_method1("addObject", ("Part::Feature", name))?;
+    object.setattr("Shape", PartShape::from_shape(shape))?;
+    document.call_method0("recompute")?;
+    Ok(())
+}
+
+/// `Part.getFacets(shape)` — the shape's triangles as three-point tuples.
+///
+/// Upstream reads the face triangulations that already exist on the shape and
+/// drops a facet whose points collapse within `0.01`; this seam meshes on demand
+/// at a `0.1` linear deflection (a shape here has no display mesh to reuse) and
+/// applies the same degeneracy filter. The points are `(x, y, z)` tuples, as
+/// upstream returns them, not `Vector`s.
+#[pyfunction]
+fn getFacets(py: Python<'_>, shape: &Bound<'_, PyAny>) -> PyResult<Py<PyList>> {
+    let shape = shape_argument(shape)?;
+    let options = TessellationOptions::absolute(0.1);
+    let mesh = ferrocad_part::backend()
+        .tessellate(&shape, &options)
+        .map_err(kernel_error)?;
+    // Upstream's `gp_Pnt::IsEqual(other, 0.01)`: every coordinate within the
+    // tolerance.
+    let same = |a: [f32; 3], b: [f32; 3]| {
+        (a[0] - b[0]).abs() <= 0.01
+            && (a[1] - b[1]).abs() <= 0.01
+            && (a[2] - b[2]).abs() <= 0.01
+    };
+    let list = PyList::empty(py);
+    for triangle in mesh.triangles.chunks_exact(3) {
+        let mut points = [[0.0f32; 3]; 3];
+        let mut valid = true;
+        for (slot, index) in points.iter_mut().zip(triangle) {
+            match mesh.positions.get(*index as usize) {
+                Some(point) => *slot = *point,
+                None => {
+                    valid = false;
+                    break;
+                }
+            }
+        }
+        if !valid {
+            continue;
+        }
+        if same(points[0], points[1]) || same(points[1], points[2]) || same(points[2], points[0]) {
+            continue;
+        }
+        let facet = points.map(|point| {
+            (
+                f64::from(point[0]),
+                f64::from(point[1]),
+                f64::from(point[2]),
+            )
+        });
+        list.append(PyTuple::new(py, facet)?)?;
+    }
+    Ok(list.unbind())
+}
+
 /// `Part.getSortedClusters(edges)` — group edges into connected clusters.
 ///
 /// The kernel reports no adjacency between loose edges, so the clusters are
@@ -3333,6 +3755,69 @@ fn element_kind_from_py_type(value: &Bound<'_, PyAny>) -> PyResult<ElementKind> 
         .into_iter()
         .find(|kind| kind.prefix() == name)
         .ok_or_else(|| PyTypeError::new_err("ancestorsOfType expects a Part.Shape subclass"))
+}
+
+/// The shape type a tolerance method's `ShapeType` argument names.
+///
+/// Upstream takes a *type object* (`Part.Vertex`), not a string, and the accepted
+/// set depends on the method: `inTolerance`/`overTolerance` allow Shape, Vertex,
+/// Edge, Face and Shell (every other subtype is a `TypeError`), while the fixers
+/// also accept Wire, Solid and the aggregate types, which
+/// `ShapeFix_ShapeTolerance` treats as "all sub-shapes".
+fn tolerance_kind(value: Option<&Bound<'_, PyAny>>, fixer: bool) -> PyResult<ToleranceKind> {
+    let Some(value) = value else {
+        return Ok(ToleranceKind::All);
+    };
+    let name: String = value
+        .getattr("__name__")
+        .and_then(|name| name.extract())
+        .map_err(|_| {
+            PyTypeError::new_err("shape type must be a Part.Shape subclass, e.g. Part.Vertex")
+        })?;
+    let (kind, queryable) = match name.as_str() {
+        "Shape" => (ToleranceKind::All, true),
+        "Vertex" => (ToleranceKind::Vertex, true),
+        "Edge" => (ToleranceKind::Edge, true),
+        "Face" => (ToleranceKind::Face, true),
+        "Shell" => (ToleranceKind::Shell, true),
+        "Wire" => (ToleranceKind::Wire, false),
+        "Solid" => (ToleranceKind::Solid, false),
+        // `ShapeFix_ShapeTolerance` treats any other `TopAbs_ShapeEnum` as "all",
+        // so these two map to the same branch rather than needing a kind of their
+        // own.
+        "Compound" | "CompSolid" => (ToleranceKind::All, false),
+        _ => {
+            return Err(PyTypeError::new_err(
+                "shape type must be Shape, Vertex, Edge, Face or Shell",
+            ));
+        }
+    };
+    if !fixer && !queryable {
+        return Err(PyTypeError::new_err(
+            "shape type must be Shape, Vertex, Edge, Face or Shell",
+        ));
+    }
+    Ok(kind)
+}
+
+/// The extension check upstream's `TopoShape::read` performs, restricted to the
+/// one format this seam can decode.
+fn read_brep_file(filename: &str) -> PyResult<Shape> {
+    let path = std::path::Path::new(filename);
+    let extension = path
+        .extension()
+        .and_then(|extension| extension.to_str())
+        .map(str::to_ascii_lowercase)
+        .ok_or_else(|| PyValueError::new_err("the file has no extension"))?;
+    if !matches!(extension.as_str(), "brp" | "brep") {
+        return Err(curves::OCCError::new_err(format!(
+            "cannot read {filename}: only BREP files (.brp, .brep) are supported"
+        )));
+    }
+    let bytes = std::fs::read(path).map_err(|error| PyIOError::new_err(error.to_string()))?;
+    ferrocad_part::backend()
+        .load_shape(&bytes)
+        .ok_or_else(|| curves::OCCError::new_err(format!("{filename} is not a valid BREP shape")))
 }
 
 /// Wrap a sub-element in the Python subclass for its kind.
@@ -3559,6 +4044,9 @@ pub fn Part(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(makeSplitShape, m)?)?;
     m.add_function(wrap_pyfunction!(makeSweepSurface, m)?)?;
     m.add_function(wrap_pyfunction!(show, m)?)?;
+    m.add_function(wrap_pyfunction!(read, m)?)?;
+    m.add_function(wrap_pyfunction!(open, m)?)?;
+    m.add_function(wrap_pyfunction!(getFacets, m)?)?;
     m.add_function(wrap_pyfunction!(getSortedClusters, m)?)?;
     curves::register(m)?;
     containers::register(m)?;

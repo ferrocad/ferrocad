@@ -459,3 +459,391 @@ near(vertex.CenterOfMass, (1, 2, 3), "vertex")
         );
     });
 }
+
+#[test]
+fn is_inside_classifies_points_by_shape_type() {
+    boot();
+    Python::with_gil(|py| {
+        run(
+            py,
+            r#"
+import Part
+from ferrocad import Vector as V
+
+box = Part.makeBox(10, 10, 10)
+
+# A solid: a point in the interior is IN; one well outside is OUT.
+assert box.isInside(V(5, 5, 5), 1e-7, True)
+assert box.isInside(V(5, 5, 5), 1e-7, False)
+assert not box.isInside(V(15, 5, 5), 1e-7, True)
+assert not box.isInside(V(15, 5, 5), 1e-7, False)
+
+# A point exactly on a boundary face is ON, not IN: `checkFace` is what makes
+# it count as inside (upstream's `IsOnAFace`).
+assert not box.isInside(V(5, 5, 10), 1e-7, False)
+assert box.isInside(V(5, 5, 10), 1e-7, True)
+
+# A face answers with a distance test, so a point on it is inside whatever
+# `checkFace` says.
+face = box.Faces[0]
+centre = face.CenterOfMass
+assert face.isInside(centre, 1e-6, False)
+assert face.isInside((centre.x, centre.y, centre.z), 1e-6, False)
+assert not face.isInside(V(100, 100, 100), 1e-6, True)
+
+# An edge behaves the same way.
+edge = box.Edges[0]
+assert edge.isInside(edge.CenterOfMass, 1e-6, False)
+
+try:
+    Part.Shape().isInside(V(0, 0, 0), 1e-7, False)
+    raise AssertionError("a null shape cannot be classified")
+except Part.OCCError:
+    pass
+"#,
+        );
+    });
+}
+
+#[test]
+fn transform_geometry_applies_a_non_uniform_affine_matrix() {
+    boot();
+    Python::with_gil(|py| {
+        run(
+            py,
+            r#"
+import Part
+import ferrocad as App
+from ferrocad import Vector as V
+
+circle = Part.makeCircle(5)
+assert circle.ShapeType == "Edge"
+
+# `gp_Trsf` (transformShape/transformed) cannot express an affinity; this path
+# goes through `gp_GTrsf`, so the circle becomes an ellipse.
+affinity = App.Matrix()
+affinity.A11 = 2.0
+ellipse = circle.transformGeometry(affinity)
+
+# The affine image of a radius-5 circle is the ellipse with semi-axes 10 and 5.
+# (The kernel may keep it analytic or approximate it as a B-spline, so probe the
+# curve rather than its type — and `BoundBox` of a B-spline is the pole box.)
+for point in [V(10, 0, 0), V(-10, 0, 0), V(0, 5, 0), V(0, -5, 0)]:
+    distance = ellipse.distToShape(Part.Vertex(point))[0]
+    assert distance < 1e-6, (point, distance)
+assert ellipse.distToShape(Part.Vertex(V(10, 5, 0)))[0] > 0.1
+
+# The source is untouched (upstream copies before `BRepBuilderAPI_GTransform`).
+assert circle.distToShape(Part.Vertex(V(5, 0, 0)))[0] < 1e-9
+assert circle.distToShape(Part.Vertex(V(0, 5, 0)))[0] < 1e-9
+
+# A perspective matrix is rejected instead of silently losing its last row.
+bad = App.Matrix()
+bad.A41 = 1.0
+try:
+    circle.transformGeometry(bad)
+    raise AssertionError("a non-affine matrix must raise")
+except Part.OCCError:
+    pass
+"#,
+        );
+    });
+}
+
+#[test]
+fn rotated_and_scale_leave_or_take_the_source_as_documented() {
+    boot();
+    Python::with_gil(|py| {
+        run(
+            py,
+            r#"
+import Part
+from ferrocad import Vector as V
+
+box = Part.makeBox(10, 20, 30)
+
+rotated = box.rotated(V(0, 0, 0), V(0, 0, 1), 90)
+assert rotated is not box
+bounds = rotated.BoundBox
+assert abs(bounds.XMin + 20.0) < 1e-6, bounds.XMin
+assert abs(bounds.XMax) < 1e-6, bounds.XMax
+assert abs(bounds.YMin) < 1e-6, bounds.YMin
+assert abs(bounds.YMax - 10.0) < 1e-6, bounds.YMax
+assert abs(bounds.ZMax - 30.0) < 1e-6, bounds.ZMax
+assert abs(box.BoundBox.XMax - 10.0) < 1e-6, "rotated() must not touch the source"
+assert abs(box.Volume - 6000.0) < 1e-6
+
+try:
+    box.rotated(V(0, 0, 0), V(0, 0, 0), 45)
+    raise AssertionError("a zero axis must raise")
+except Part.OCCError:
+    pass
+
+# `scale` is the in-place form and returns the shape itself.
+scaled = box.scale(2.0, V(0, 0, 0))
+assert scaled is box
+assert abs(box.Volume - 48000.0) < 1e-6, box.Volume
+
+# `scaled` is the copy form, about the given point.
+copy = Part.makeBox(2, 2, 2).scaled(0.5, V(2, 2, 2))
+assert abs(copy.Volume - 1.0) < 1e-6
+assert abs(copy.BoundBox.XMin - 1.0) < 1e-6
+assert abs(copy.BoundBox.XMax - 2.0) < 1e-6
+
+try:
+    Part.makeBox(1, 1, 1).scale(1e-12)
+    raise AssertionError("a factor below the kernel confusion must raise")
+except ValueError as error:
+    assert "too small" in str(error), error
+"#,
+        );
+    });
+}
+
+#[test]
+fn make_wires_sorts_edges_into_a_compound() {
+    boot();
+    Python::with_gil(|py| {
+        run(
+            py,
+            r#"
+import Part
+from ferrocad import Vector as V
+
+# A connected chain becomes one wire, whatever order the edges are given in.
+chain = Part.makeCompound([
+    Part.makeLine(V(1, 0, 0), V(1, 1, 0)),
+    Part.makeLine(V(0, 0, 0), V(1, 0, 0)),
+])
+wires = chain.makeWires()
+# The kernel result is a compound; `ShapeType` cannot tell a one-wire compound
+# from a bare wire (see `PartShape::shape_type`), so accept either spelling.
+assert wires.ShapeType in ("Compound", "Wire"), wires.ShapeType
+assert len(wires.Wires) == 1, len(wires.Wires)
+assert len(wires.Edges) == 2
+assert abs(wires.Wires[0].Length - 2.0) < 1e-9, wires.Wires[0].Length
+
+# Two disjoint chains become two wires in one compound.
+loose = Part.makeCompound([
+    Part.makeLine(V(0, 0, 0), V(1, 0, 0)),
+    Part.makeLine(V(5, 0, 0), V(6, 0, 0)),
+])
+assert len(loose.makeWires().Wires) == 2
+
+# The upstream signature also takes the `op` label.
+assert len(chain.makeWires("op").Wires) == 1
+
+# A single closed wire (a face boundary) stays one wire with four edges.
+face_wires = Part.makeBox(1, 1, 1).Faces[0].makeWires()
+assert len(face_wires.Wires) == 1
+assert len(face_wires.Edges) == 4
+"#,
+        );
+    });
+}
+
+#[test]
+fn remove_internal_wires_drops_holes_below_the_minimum_area() {
+    boot();
+    Python::with_gil(|py| {
+        run(
+            py,
+            r#"
+import Part
+from ferrocad import Vector as V
+
+plane = Part.makeBox(20, 20, 10)
+top = [face for face in plane.Faces if abs(face.BoundBox.ZMin - 10.0) < 1e-9][0]
+hole = Part.Wire(Part.makePolygon([
+    V(5, 5, 10), V(15, 5, 10), V(15, 15, 10), V(5, 15, 10), V(5, 5, 10),
+]))
+hole.reverse()
+face = Part.Face(top.Surface, [top.OuterWire, hole])
+assert abs(face.Area - 300.0) < 1e-6, face.Area
+
+# `minimalArea` is the largest hole that is removed: the 10x10 hole goes when it
+# is above the hole's area, not merely when it is zero (upstream passes the value
+# straight to `MinArea`, which removes holes *smaller* than it).
+assert face.removeInternalWires(200.0) is True
+assert abs(face.Area - 400.0) < 1e-6, face.Area
+
+# Nothing to remove: the geometry is kept and the flag is false.
+plain = Part.makePlane(10, 10)
+assert plain.removeInternalWires(200.0) is False
+assert abs(plain.Area - 100.0) < 1e-6
+"#,
+        );
+    });
+}
+
+#[test]
+fn nullify_and_complement_change_the_handle_in_place() {
+    boot();
+    Python::with_gil(|py| {
+        run(
+            py,
+            r#"
+import Part
+
+box = Part.makeBox(2, 3, 4)
+area = box.Area
+assert box.Orientation == "Forward"
+
+assert box.complement() is None
+assert box.Orientation == "Reversed", box.Orientation
+assert abs(box.Area - area) < 1e-9, "complementing must not move the shape"
+box.complement()
+assert box.Orientation == "Forward"
+
+# `complement` also maps Internal <-> External, which `reverse` does not.
+face = box.Faces[0]
+face.Orientation = "Internal"
+face.complement()
+assert face.Orientation == "External", face.Orientation
+face.complement()
+assert face.Orientation == "Internal", face.Orientation
+
+assert box.nullify() is None
+assert box.isNull()
+"#,
+        );
+    });
+}
+
+#[test]
+fn tolerance_family_reads_and_writes_the_kernel_values() {
+    boot();
+    Python::with_gil(|py| {
+        run(
+            py,
+            r#"
+import Part
+
+box = Part.makeBox(1, 1, 1)
+
+# The kernel's default tolerance is gp::Resolution (1e-7).
+assert abs(box.globalTolerance(1) - 1e-7) < 1e-12, box.globalTolerance(1)
+assert box.globalTolerance(0) > 0.0
+assert box.globalTolerance(-1) > 0.0
+assert box.globalTolerance(-1) <= box.globalTolerance(1)
+
+# Enforce a value on every vertex, edge and face.
+box.fixTolerance(1e-3)
+assert abs(box.globalTolerance(1) - 1e-3) < 1e-12, box.globalTolerance(1)
+assert abs(box.Edges[0].Tolerance - 1e-3) < 1e-12
+
+# The tolerances live in the shared TShape, so fixing a sub-shape is visible on
+# the shape it came from (SimpleCAD's vertex-healing idiom).
+other = Part.makeBox(1, 1, 1)
+other.Vertexes[0].fixTolerance(1e-2)
+assert abs(other.Vertexes[0].Tolerance - 1e-2) < 1e-12, other.Vertexes[0].Tolerance
+
+# Only the named kind changes.
+typed = Part.makeBox(1, 1, 1)
+typed.fixTolerance(5e-3, Part.Face)
+assert abs(typed.Faces[0].Tolerance - 5e-3) < 1e-12
+assert abs(typed.Edges[0].Tolerance - 1e-7) < 1e-12
+
+# limitTolerance raises the minimum; a second call changes nothing.
+limited = Part.makeBox(1, 1, 1)
+assert limited.limitTolerance(1e-4) is True
+assert abs(limited.globalTolerance(-1) - 1e-4) < 1e-12
+assert limited.limitTolerance(1e-4) is False
+
+# The queries select the sub-shapes by their tolerance.
+assert len(limited.overTolerance(1e-5)) > 0
+assert len(limited.inTolerance(1e-4, 1e-4)) > 0
+assert limited.inTolerance(1.0, 2.0) == []
+
+try:
+    limited.inTolerance(1e-4, 1e-4, Part.Solid)
+    raise AssertionError("inTolerance only accepts Shape, Vertex, Edge, Face or Shell")
+except TypeError:
+    pass
+
+try:
+    Part.Shape().globalTolerance(1)
+    raise AssertionError("a null shape has no global tolerance")
+except Part.OCCError:
+    pass
+"#,
+        );
+    });
+}
+
+#[test]
+fn read_export_stl_open_and_get_facets_round_trip() {
+    boot();
+    Python::with_gil(|py| {
+        run(
+            py,
+            r#"
+import os
+import tempfile
+
+import Part
+
+box = Part.makeBox(2, 3, 4)
+
+with tempfile.TemporaryDirectory() as folder:
+    brep = os.path.join(folder, "gap_round_trip.brep")
+    box.exportBrep(brep)
+
+    loaded = Part.read(brep)
+    assert loaded.ShapeType == "Solid", loaded.ShapeType
+    assert abs(loaded.Volume - 24.0) < 1e-9, loaded.Volume
+    assert abs(loaded.Area - box.Area) < 1e-9
+
+    imported = Part.Shape()
+    imported.read(brep)
+    assert imported.ShapeType == "Solid"
+    assert abs(imported.Volume - 24.0) < 1e-9
+
+    stl = os.path.join(folder, "gap_round_trip.stl")
+    assert box.exportStl(stl) is None
+    data = open(stl, "rb").read()
+    facets = int.from_bytes(data[80:84], "little")
+    assert facets == 12, facets
+    assert len(data) == 84 + 50 * facets, len(data)
+
+    # The upstream default deflection is 0.01; a finer one is accepted too.
+    fine = os.path.join(folder, "fine.stl")
+    box.exportStl(fine, 0.001)
+    assert os.path.getsize(fine) == 84 + 50 * 12
+
+    # `Part.open` creates a document named after the file with one Part::Feature.
+    assert Part.open(brep) is None
+    import ferrocad as App
+    document = App.activeDocument()
+    assert document is not None
+    feature = document.getObject("gap_round_trip")
+    assert feature is not None, document.Objects
+    assert abs(feature.Shape.Volume - 24.0) < 1e-9
+
+    # `getFacets` returns 3-tuples of (x, y, z) floats, twelve for a box.
+    facets = Part.getFacets(box)
+    assert len(facets) == 12, len(facets)
+    for facet in facets:
+        assert len(facet) == 3
+        for point in facet:
+            assert len(point) == 3 and all(isinstance(value, float) for value in point)
+    assert Part.getFacets(Part.makeLine((0, 0, 0), (1, 0, 0))) == []
+
+    # A STEP/IGES file is not readable here; the extension is refused before
+    # the missing file is even opened.
+    try:
+        Part.read(os.path.join(folder, "missing.step"))
+        raise AssertionError("only BREP files are supported")
+    except Part.OCCError as error:
+        assert "BREP" in str(error), error
+
+    # A missing BREP file is an OSError, as upstream's FileNotFoundError is.
+    try:
+        Part.read(os.path.join(folder, "missing.brep"))
+        raise AssertionError("a missing file must raise")
+    except OSError:
+        pass
+"#,
+        );
+    });
+}

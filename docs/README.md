@@ -108,6 +108,9 @@ rather than restating it.
   namespace rule: which names stay upstream-compatible and which are FerroCAD-only.
 - [architecture/distribution.md](architecture/distribution.md) — how the app runs and is
   packaged (payload, bundled runtime, artifacts).
+- [architecture/kernel-state-sharing.md](architecture/kernel-state-sharing.md) — the
+  one-process-wide-core invariant, the state scopes, and the combined extension
+  vs edition compositions.
 - [architecture/repackaging.md](architecture/repackaging.md) — editions and the
   repackaging vision.
 - [architecture/edition-publishing.md](architecture/edition-publishing.md) — how the
@@ -258,6 +261,9 @@ full slice-by-slice text lives in [`record/archive/`](record/archive/).
   conformance tracking is independent of our own format.
 - [tasks/links.md](tasks/links.md) — the `App::Link`/link-array surface, and how link
   sub-element references depend on the lineage layer and the file formats.
+- [tasks/kernel-state-sharing.md](tasks/kernel-state-sharing.md) — K0–K4: the
+  one-core identity diagnostic, the mixed-image guard, interpreter-scoped Py caches,
+  the `Kernel` facade, and the gated modular-wheel capsule.
 - [tasks/qt-reduction.md](tasks/qt-reduction.md) — where Qt/PySide enters today, the
   measurable done criteria, and Q0a–Q0d ahead of the Draft GUI plan.
 - [tasks/grid-visibility.md](tasks/grid-visibility.md) — the grid toggle only moves

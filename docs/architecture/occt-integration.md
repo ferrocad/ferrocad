@@ -183,7 +183,9 @@ lives in the module that owns the property type.
 `ferrocad_core::application`. Two separate extension modules (`.so` files) each statically
 link their own copy of that state, so a standalone `Part.abi3.so` would not see the
 documents `import FreeCAD` created. Part must therefore be linked into the same extension as
-the core bindings. That extension is
+the core bindings. See
+[`kernel-state-sharing.md`](kernel-state-sharing.md) for the symbol-isolation analysis
+and the state scopes. That extension is
 [`crates/ferrocad_combined_py`](../../crates/ferrocad_combined_py/src/lib.rs):
 
 - the edition binaries call `ferrocad_combined_py::register_builtins()` before the

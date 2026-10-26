@@ -2,8 +2,10 @@
 
 Status: plan (2026-10-08); E1/E2 implemented, E3 partial (2026-10-25).
 Companion to [`repackaging.md`](repackaging.md) (the edition model),
-[`distribution.md`](distribution.md) (the payload/artifact mechanics) and
-[`occt-bundling.md`](occt-bundling.md) (the kernel closure).
+[`distribution.md`](distribution.md) (the payload/artifact mechanics),
+[`occt-bundling.md`](occt-bundling.md) (the kernel closure), and
+[`kernel-state-sharing.md`](kernel-state-sharing.md) (the one-core invariant and
+the state scopes).
 
 `ferrocad_parametric` runs from a source checkout (`cargo run -p
 ferrocad_parametric`), but it is not shipped. This note settles how the first
@@ -85,7 +87,9 @@ Numbered like the `D` slices in [`distribution.md`](distribution.md) §7.
   walk) and the license staging for all three. *Acceptance:* each platform's
   `--check-init` runs with only the bundled `lib/`.
 - **E4 (optional).** A wheel that bundles Part (`pip install ferrocad[parametric]`),
-  subject to manylinux OCCT constraints — a separate, heavier question.
+  subject to manylinux OCCT constraints — a separate, heavier question. A bundled
+  wheel can ship `ferrocad_combined.abi3.so`; the capsule ABI in §8 is only for
+  separately distributed wheels.
 
 ## 5. Decisions to make
 
@@ -132,7 +136,7 @@ shared shell.
 `ferrocad-parametric-x86_64.AppImage`; the base invocation and artifact name are
 unchanged.
 
-**E2 — implemented; `v0.1.5` is the first four-artifact release.**
+**E2 — implemented; the next tag (`v0.1.5`) will be the first four-artifact release.**
 `.github/workflows/release.yml` has an `edition` job (Linux + Windows) that
 fetches OCCT 7.8.1, builds `ferrocad_parametric`, walks its library closure and
 uploads the Parametric artifact beside the base ones. `v0.1.4` shipped three
@@ -176,7 +180,8 @@ in [`macos.md`](macos.md); the upstream report is
 re-enable the macOS release leg until a fixed GPUI fork lands and the checklist's
 signing/closure work exists.
 
-E4 (the bundled wheel) is still out of scope.
+E4 (the bundled wheel) is still out of scope; §8 describes the composition it would
+reuse.
 
 ## 7. What does not change
 
@@ -184,3 +189,36 @@ The Python facade, the `mods/` workbenches and the CPython runtime bundling are
 identical for both editions — only the binary and the added `lib/` differ. So the
 payload layout in [`distribution.md`](distribution.md) §4 holds, with `lib/`
 finally populated.
+
+## 8. State sharing
+
+An edition binary (`ferrocad_parametric`) and the host-Python extension
+(`ferrocad_combined_py`, imported as `ferrocad_combined`) are two packaging
+compositions of the same invariant: **exactly one process-wide FerroCAD core**
+(`ferrocad_core::application()` and its registries) per process. See
+[`kernel-state-sharing.md`](kernel-state-sharing.md) for the symbol-isolation root
+cause and the state scopes.
+
+| Composition | Artifact | How single-core state is guaranteed |
+| :--- | :--- | :--- |
+| `ferrocad_parametric` | `bin/ferrocad` | Links `ferrocad_core`, `ferrocad_py`, `ferrocad_part_py` and `ferrocad_mesh_py` as `rlib`s into one executable, and calls `ferrocad_combined_py::register_builtins()` before the interpreter starts. |
+| `ferrocad_combined_py` | `ferrocad_combined.abi3.so` | Links the same `rlib` graph into one shared library and publishes `ferrocad`, `Part`, `Mesh` and `MeshPart` into `sys.modules`. `python/FreeCAD` imports it only when `Part` is not a built-in. |
+| Modular wheels (proposal) | separate `cdylib` wheels | The core would export a versioned `#[repr(C)]` service table through a `PyCapsule`; satellites consume it instead of linking a private `ferrocad_core`. Not implemented. |
+
+Three rules keep the current slices independent of future modular-wheel work:
+
+1. **No second core registry in a workbench crate.** `ferrocad_part_py` and
+   `ferrocad_mesh_py` register into `ferrocad_core`'s object-type and property
+   registries; they keep only workbench-local singletons (for example the OCCT
+   `GeometryBackend`). They must never define their own document registry.
+2. **Scoped state separation.** Documents and object/property factories are
+   process-wide (`ferrocad_core::Application`, `object_registry`,
+   `property_types`); PyO3 classes, exceptions and Python-object caches are
+   interpreter state (the current `ferrocad_py` `OnceLock` caches are a known
+   single-interpreter limitation); object graphs live on `App::Document`.
+3. **Verified, not assumed.** `crates/ferrocad_part_py/tests/part_boot.rs` creates
+   a `Part::Feature` and round-trips a `Part.Shape` with `ferrocad`;
+   `crates/ferrocad_combined_py/tests/combined.rs` and
+   `tests/test_packaged_modules.py` also round-trip a `Mesh` through `Part`,
+   `Mesh` and `MeshPart`. The `_kernel_id` identity check and the capsule
+   handshake are proposals, not current diagnostics.

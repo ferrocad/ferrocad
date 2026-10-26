@@ -87,21 +87,26 @@ workbench set and the window branding, and the base app stays minimal. So a
 Part-enabled application is `ferrocad_parametric`, an edition.
 
 The edition is thin: it registers the extra built-in module(s), names its app script
-and sets its window title.
+and sets its window title. The registration goes through one shared list
+(`ferrocad_combined_py::register_builtins()`, which appends `ferrocad`, `Part`,
+`Mesh` and `MeshPart`), so the edition and the host-Python extension cannot drift.
+See [`kernel-state-sharing.md`](kernel-state-sharing.md).
 
 ```rust
 // crates/ferrocad_parametric/src/main.rs
 fn main() {
-    use ferrocad_part_py::Part as part_module;
-    pyo3::append_to_inittab!(part_module); // same image => one core
-    ferrocad::run_edition_with(
+    // One process, one core: the four modules are appended to the built-in table
+    // before the interpreter initialises.
+    ferrocad_combined_py::register_builtins();
+
+    let contributions = ferrocad::base_contributions()
+        .with_manipulator(ferrocad_part_gui::fillet_manipulator)
+        .with_manipulator(ferrocad_part_gui::push_pull_manipulator);
+    ferrocad::run_edition_with_document(
         "FerroCAD: Parametric",
         "ferrocad_parametric",
-        // The workbench's manipulator; the shell hosts it generically. The shared
-        // move gizmo comes from `base_contributions`, so the edition only adds what
-        // its workbench owns.
-        ferrocad::base_contributions()
-            .with_manipulator(ferrocad_part_gui::fillet_manipulator),
+        contributions,
+        None,
     );
 }
 ```

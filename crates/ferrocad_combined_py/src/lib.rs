@@ -20,7 +20,12 @@
 //! Importing `ferrocad_combined` therefore makes all four modules available and
 //! sharing one core. The shims never create a second copy: [`install`] marks the
 //! modules it publishes and is idempotent.
+//!
+//! A host that already has `Part` built in (an edition binary) must not import
+//! this extension: the built-ins share the edition's core, and publishing over
+//! them would create a second one. [`install`] detects that image and refuses.
 
+use pyo3::exceptions::PyImportError;
 use pyo3::prelude::*;
 use pyo3::types::PyModule;
 
@@ -51,16 +56,53 @@ pub fn register_builtins() {
 ///
 /// A module that was imported from a *different* `.so` (for example a standalone
 /// `Part.abi3.so`) is replaced, because it cannot share this extension's core.
+///
+/// A module registered with `PyImport_AppendInittab` (an edition binary) is not
+/// replaced. The built-ins already share the edition's core, so publishing these
+/// modules would give the interpreter a second one; `install` returns an
+/// `ImportError` instead. This is the same rule as `_part_is_builtin` in
+/// `python/FreeCAD/__init__.py`.
 pub fn install(py: Python<'_>) -> PyResult<()> {
     let modules = py.import("sys")?.getattr("modules")?;
     if installed(&modules) {
         return Ok(());
+    }
+    if is_builtin_module(py, "Part") {
+        return Err(PyImportError::new_err(
+            "ferrocad_combined is not needed: this interpreter already has \
+             ferrocad/Part/Mesh/MeshPart built in",
+        ));
     }
     publish(py, &modules, "ferrocad", ferrocad_py::ferrocad)?;
     publish(py, &modules, "Part", ferrocad_part_py::Part)?;
     publish(py, &modules, "Mesh", ferrocad_mesh_py::Mesh)?;
     publish(py, &modules, "MeshPart", ferrocad_mesh_py::MeshPart)?;
     Ok(())
+}
+
+/// Whether `name` resolves to a module compiled into the interpreter.
+///
+/// This is the edition's image: `PyImport_AppendInittab` puts the module in
+/// `sys.builtin_module_names`, and `importlib.util.find_spec` reports
+/// `BuiltinImporter` as its loader (whether or not it has been imported yet). A
+/// host interpreter instead finds `python/Part.py` or a standalone `.abi3.so`, so
+/// the loader is not `BuiltinImporter`.
+///
+/// The lookup mirrors `_part_is_builtin` in `python/FreeCAD/__init__.py`; an
+/// import failure is treated as "not built in", as it is there.
+pub fn is_builtin_module(py: Python<'_>, name: &str) -> bool {
+    let probe = || -> PyResult<bool> {
+        let util = py.import("importlib.util")?;
+        let machinery = py.import("importlib.machinery")?;
+        let spec = util.call_method1("find_spec", (name,))?;
+        if spec.is_none() {
+            return Ok(false);
+        }
+        Ok(spec
+            .getattr("loader")?
+            .is(&machinery.getattr("BuiltinImporter")?))
+    };
+    probe().unwrap_or(false)
 }
 
 /// Whether `sys.modules` already holds the extension this crate published.

@@ -194,6 +194,22 @@ jobs:
           cp target/debug/libferrocad_combined_py.so python/ferrocad_combined.abi3.so
           PYTHONPATH=python python3 tests/test_packaged_modules.py -v
 
+      - name: Boot the edition and check its built-in kernel image
+        # K1: the previous step leaves `python/ferrocad_combined.abi3.so` on disk,
+        # so the edition boots with the on-disk extension present. It must still
+        # use its own built-ins (one kernel for App + Part + Mesh + MeshPart) and
+        # `import ferrocad_combined` must refuse to replace them. `--check-init`
+        # asserts the kernel identity and exercises a Part::Feature document (K0).
+        run: |
+          export CMAKE_POLICY_VERSION_MINIMUM=3.5
+          export PYO3_USE_ABI3_FORWARD_COMPATIBILITY=1
+          export OpenCASCADE_DIR="$PWD/.occt/prefix/lib/cmake/opencascade"
+          export OCCT_INCLUDE_DIR="$PWD/.occt/prefix/include/opencascade"
+          export LD_LIBRARY_PATH="$PWD/.occt/prefix/lib:$LD_LIBRARY_PATH"
+          export PYTHONPATH="$PWD/python:$PYTHONPATH"
+          cargo build -p ferrocad_parametric
+          target/debug/ferrocad_parametric --check-init
+
       - name: SimpleCAD S0 static audit (optional; needs a sibling checkout)
         # S0 is measurement only. PR CI does not clone SimpleCAD, so this is a
         # no-op there; a developer image or a future scheduled job that checks

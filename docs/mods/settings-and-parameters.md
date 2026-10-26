@@ -206,6 +206,18 @@ factors (the gizmo's 8..400 px handle size is usable across its whole range); a 
 that includes zero (`0..1` opacity) stays linear. The value commits on release rather
 than on every mouse move, so a drag is one edit instead of dozens of undo steps.
 
+A **quantity** row always gets the track, because a dimension is something users
+scrub and a property is not required to declare a range. When a bound is missing the
+pane derives a window of one decade either side of the current value
+(`value/100 .. value*100`; a negative value gets a symmetric linear window, and zero
+spans the declared range or a small window either way). The window always contains
+the value, so opening the slider never changes it, and a declared bound only tightens
+it — the slider never offers a value the setter would reject. The drag readout and the
+committed string carry the row's unit (`100 mm`), taken from the schema's `unit` or,
+for a document property, from the suffix of its displayed value; a bare number would
+assign a dimensionless quantity and strip a property's unit. Plain `float`/`int` rows
+still need both bounds: an abstract number has no unit to derive a window from.
+
 The `refresh` result is only a **request**. It reaches the viewport when the
 caller applies it: a command or a dialog does, the `Settings/<Feature>` property
 pane does not (see [Precedence](#precedence-who-wins-and-when)).

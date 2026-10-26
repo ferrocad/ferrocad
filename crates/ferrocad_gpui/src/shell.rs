@@ -323,7 +323,7 @@ struct DevScroll {
 enum RowPopupKind {
     /// The fixed colour palette (`kind == "color"`).
     Color,
-    /// The log/linear range slider (a bounded number).
+    /// The log/linear range slider (a bounded number or any quantity).
     Slider,
     /// The choices of an enumeration (`kind == "enum"`).
     Choices,
@@ -3006,7 +3006,9 @@ impl Shell {
         cx.notify();
     }
 
-    /// Open the range slider for a bounded numeric property.
+    /// Open the range slider for a numeric property. A `float`/`int` row passes its
+    /// declared range; a quantity passes the window `slider_range` derived when it
+    /// has no bounds. `unit` is carried into the readout and the commit.
     #[allow(clippy::too_many_arguments)]
     fn open_slider_popup(
         &mut self,
@@ -3824,9 +3826,7 @@ fn properties_rows_panel(
                 } else if row.editable {
                     let key = format!("{name}.{}", row.name);
                     let selector = format!("prop-{key}");
-                    let bounded = row.min.is_some()
-                        && row.max.is_some()
-                        && matches!(row.kind.as_str(), "float" | "int" | "quantity");
+                    let range = slider_range(row);
                     let label = row_label(row);
                     let open = shell
                         .row_popup
@@ -3912,16 +3912,14 @@ fn properties_rows_panel(
                                 }),
                             ))
                             .into_any_element()
-                    } else if bounded {
+                    } else if let Some((min, max)) = range {
                         let state = shell.ensure_prop_input(&key, &row.value, window, cx);
-                        // A row with a declared range gets the mini track that opens
-                        // the slider overlay; typing an exact value still works.
+                        // A row with a slider window gets the mini track that opens
+                        // the overlay; typing an exact value still works.
                         let popup_key = key.clone();
                         let popup_label = label.clone();
                         let popup_value = row.value.clone();
-                        let popup_unit = row.unit.clone().unwrap_or_default();
-                        let min = row.min.unwrap_or(0.0);
-                        let max = row.max.unwrap_or(1.0);
+                        let popup_unit = row_unit(row);
                         let current = row_number(&row.value).unwrap_or(min);
                         div()
                             .debug_selector(move || selector.clone())
@@ -4036,6 +4034,67 @@ fn row_label(row: &crate::python::PropRow) -> String {
 /// The number a property row displays (`80`, `0.3`, `10 mm` -> 10).
 fn row_number(value: &str) -> Option<f64> {
     value.split_whitespace().next()?.parse().ok()
+}
+
+/// How far either side of the current value a derived scrub window reaches.
+const SCRUB_FACTOR: f64 = 100.0;
+
+/// The range a row's slider scrubs, or `None` when the row has no slider.
+///
+/// A `float`/`int` row needs both declared bounds: an abstract number has no
+/// unit, so there is no honest way to invent a range. A **quantity** always gets
+/// one — dimensions are what users want to scrub, and a workbench's property
+/// need not declare a range. Without a declared bound the window is a decade
+/// around the current value, so it always contains that value and merely
+/// opening the slider never changes it. Declared bounds tighten the window, so
+/// the slider never offers a value the setter would reject.
+fn slider_range(row: &PropRow) -> Option<(f64, f64)> {
+    let value = row_number(&row.value).unwrap_or(0.0);
+    let (mut min, mut max) = match row.kind.as_str() {
+        "quantity" if value > 0.0 => (value / SCRUB_FACTOR, value * SCRUB_FACTOR),
+        "quantity" if value < 0.0 => {
+            // The slider's log scale needs a positive floor; a symmetric linear
+            // window keeps a negative angle or offset usable.
+            let span = value.abs() * SCRUB_FACTOR;
+            (-span, span)
+        }
+        // A zero value has no decade to centre on: span the declared range, or
+        // a unit-ish window either side so the value can leave zero.
+        "quantity" => (row.min.unwrap_or(-1.0), row.max.unwrap_or(1.0)),
+        "float" | "int" => (row.min?, row.max?),
+        _ => return None,
+    };
+    if let Some(declared) = row.min {
+        min = min.max(declared);
+    }
+    if let Some(declared) = row.max {
+        max = max.min(declared);
+    }
+    if !(max > min) {
+        return None;
+    }
+    Some((min, max))
+}
+
+/// The unit a quantity row's readout and slider commit carry.
+///
+/// A schema row declares `unit`; a document property's row has none, so the
+/// unit is the suffix of its displayed value (`10 mm` -> `mm`). Without it the
+/// slider's commit would assign a dimensionless quantity and strip the unit.
+fn row_unit(row: &PropRow) -> String {
+    if let Some(unit) = row.unit.as_deref().filter(|unit| !unit.is_empty()) {
+        return unit.to_string();
+    }
+    if row.kind != "quantity" {
+        return String::new();
+    }
+    row.value
+        .trim()
+        .trim_start_matches(|c: char| {
+            c.is_ascii_digit() || matches!(c, '+' | '-' | '.' | 'e' | 'E')
+        })
+        .trim()
+        .to_string()
 }
 
 /// Whether a property row's display value reads as `true` (`True`, `1`, `yes`,
@@ -4214,11 +4273,16 @@ fn row_popup_overlay(
                         if shell.row_popup.as_ref().is_some_and(|p| p.key == drag_key) {
                             if let Some(popup) = shell.row_popup.take() {
                                 if let Some(draft) = popup.draft {
-                                    shell.commit_property(
-                                        &popup.key,
-                                        &slider::format_value(draft),
-                                        cx,
-                                    );
+                                    let text = if popup.unit.is_empty() {
+                                        slider::format_value(draft)
+                                    } else {
+                                        // A document quantity has no schema `unit`:
+                                        // its unit comes from the displayed value.
+                                        // Sending a bare number would assign a
+                                        // dimensionless quantity and strip it.
+                                        format!("{} {}", slider::format_value(draft), popup.unit)
+                                    };
+                                    shell.commit_property(&popup.key, &text, cx);
                                 }
                             }
                             cx.notify();
@@ -5186,6 +5250,151 @@ mod tests {
             Some("#ef4444"),
             "the hex field follows the palette"
         );
+    }
+
+    /// A document quantity declares no range, but it is still scrubbable: the pane
+    /// derives a decade window around the value, and the commit carries the unit so
+    /// a length stays a length.
+    #[gpui::test]
+    fn a_document_quantity_gets_a_slider_that_keeps_its_unit(cx: &mut TestAppContext) {
+        let _guard = crate::PYTHON_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let model = boot_shell();
+        let window = cx.update(|cx| {
+            let model = model.clone();
+            cx.open_window(Default::default(), move |_window, cx| {
+                cx.new(|cx| Shell::from_model(model.clone(), cx))
+            })
+            .unwrap()
+        });
+        let mut cx = VisualTestContext::from_window(window.into(), cx);
+        let shell: Entity<Shell> = window.root(&mut cx).unwrap();
+        let mut dev_cx = open_dev_tools(&mut cx, &shell);
+        cx.update(|_window, cx| {
+            shell.update(cx, |shell, cx| {
+                shell.select("Params", cx);
+                cx.notify();
+            });
+        });
+        show_dev_section(&mut cx, &shell, &mut dev_cx, dev_section::PROPERTIES);
+
+        let row = shell.read_with(&cx, |shell, _| {
+            shell
+                .model
+                .lock()
+                .unwrap()
+                .properties
+                .iter()
+                .find(|row| row.name == "Length")
+                .map(|row| (row.kind.clone(), row.value.clone(), row.min, row.max))
+        });
+        assert_eq!(
+            row.as_ref().map(|(kind, ..)| kind.as_str()),
+            Some("quantity")
+        );
+        assert_eq!(
+            row.as_ref().map(|(_, value, ..)| value.as_str()),
+            Some("10 mm")
+        );
+        assert_eq!(
+            row.as_ref().map(|(_, _, min, max)| (*min, *max)),
+            Some((None, None)),
+            "the property declares no range"
+        );
+
+        assert!(
+            dev_cx
+                .debug_bounds("slider-Params.Length-trigger")
+                .is_some(),
+            "an unbounded quantity still gets a slider"
+        );
+        click_at(&mut dev_cx, "slider-Params.Length-trigger");
+        dev_cx.update(|window, cx| {
+            let _ = window.draw(cx);
+        });
+
+        // 75 % of the derived 0.1..1000 mm window on its log scale is 100 mm.
+        let track = dev_cx
+            .debug_bounds("slider-Params.Length-track")
+            .expect("the slider overlay is rendered");
+        let at = point(track.left() + track.size.width * 0.75, track.center().y);
+        dev_cx.simulate_mouse_down(at, MouseButton::Left, gpui::Modifiers::default());
+        dev_cx.simulate_mouse_up(at, MouseButton::Left, gpui::Modifiers::default());
+        dev_cx.update(|window, cx| {
+            let _ = window.draw(cx);
+        });
+
+        let value = crate::python::properties("Params")
+            .expect("properties")
+            .into_iter()
+            .find(|row| row.name == "Length")
+            .map(|row| row.value)
+            .unwrap_or_default();
+        assert_eq!(value, "100 mm", "the slider commits with the row's unit");
+    }
+
+    fn quantity_row(value: &str, min: Option<f64>, max: Option<f64>) -> PropRow {
+        PropRow {
+            name: "Length".into(),
+            label: String::new(),
+            type_id: "App::PropertyLength".into(),
+            value: value.into(),
+            status: String::new(),
+            editable: true,
+            command: None,
+            kind: "quantity".into(),
+            min,
+            max,
+            unit: None,
+            choices: Vec::new(),
+        }
+    }
+
+    /// A quantity with no declared range still gets a window that contains its
+    /// value; a declared bound only tightens it.
+    #[test]
+    fn a_quantity_slider_window_always_contains_the_value() {
+        assert_eq!(
+            slider_range(&quantity_row("10 mm", None, None)),
+            Some((0.1, 1000.0)),
+            "a decade either side of the value"
+        );
+        assert_eq!(
+            slider_range(&quantity_row("10 mm", Some(0.001), Some(50.0))),
+            Some((0.1, 50.0)),
+            "declared bounds tighten the window"
+        );
+        assert_eq!(
+            slider_range(&quantity_row("0 mm", Some(0.0), Some(1000.0))),
+            Some((0.0, 1000.0)),
+            "zero spans the declared range"
+        );
+        assert_eq!(
+            slider_range(&quantity_row("0 mm", None, None)),
+            Some((-1.0, 1.0)),
+            "zero without bounds can leave in either direction"
+        );
+        assert_eq!(
+            slider_range(&quantity_row("-30 deg", None, None)),
+            Some((-3000.0, 3000.0)),
+            "a negative value uses a symmetric linear window"
+        );
+
+        let mut plain = quantity_row("1", None, None);
+        plain.kind = "float".into();
+        assert_eq!(slider_range(&plain), None, "a plain number needs bounds");
+    }
+
+    /// A document quantity's unit is the suffix of its displayed value; a schema
+    /// row declares it. Either way the slider commit keeps it.
+    #[test]
+    fn a_quantity_row_reports_the_unit_its_commit_carries() {
+        assert_eq!(row_unit(&quantity_row("10 mm", None, None)), "mm");
+        assert_eq!(row_unit(&quantity_row("30 deg", None, None)), "deg");
+        assert_eq!(row_unit(&quantity_row("42.3", None, None)), "");
+
+        let mut declared = quantity_row("10 mm", None, None);
+        declared.unit = Some("mm".into());
+        assert_eq!(row_unit(&declared), "mm");
     }
 
     /// A2: the shell owns the selection, pushes it to `FreeCADGui.Selection`, and a

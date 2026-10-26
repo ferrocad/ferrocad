@@ -161,16 +161,64 @@ impl Default for GizmoStyle {
     }
 }
 
-/// Which handles a gizmo shows.
+/// The kind of transform gizmo: which degrees of freedom it offers.
+///
+/// Each kind is one construction over the shared frame, hit and solver math
+/// ([`TransformGizmo::translate`], [`TransformGizmo::rotate`] and
+/// [`TransformGizmo::universal`]); `universal` is the **composition** of the two
+/// specific kinds rather than a third handle set. A registry hosts a set of kinds and
+/// a session verb narrows the set to one (see [`GizmoSet::narrow`]).
+///
+/// [`GizmoMode`] is the historical name for the same type and remains an alias, so
+/// the viewport, Python surface and command vocabulary keep compiling unchanged. A
+/// *mode* is a kind narrowed to a session.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub enum GizmoMode {
+pub enum GizmoKind {
     /// Translation axes and planar quads.
     #[default]
     Translate,
     /// Rotation rings.
     Rotate,
-    /// Everything (translation + rotation).
+    /// Everything: the composition of [`Translate`](Self::Translate) and
+    /// [`Rotate`](Self::Rotate).
     Universal,
+}
+
+/// The session selector for a gizmo set (the historical name of [`GizmoKind`]).
+pub type GizmoMode = GizmoKind;
+
+impl GizmoKind {
+    /// Every kind, **specific first**: a priority list prefers a concrete kind over
+    /// the composed [`Universal`](Self::Universal) one.
+    pub const ALL: [GizmoKind; 3] = [Self::Translate, Self::Rotate, Self::Universal];
+
+    /// Whether an *offered* kind can serve the `session` kind a wheel verb names.
+    ///
+    /// A specific kind serves only itself; [`Universal`](Self::Universal) serves every
+    /// request because it owns every handle. This is the filter a host applies to a
+    /// registry set before narrowing it, and the reason a kind an edition does not
+    /// offer cannot appear when its verb is chosen.
+    pub fn serves(self, session: GizmoKind) -> bool {
+        match self {
+            Self::Universal => true,
+            specific => specific == session,
+        }
+    }
+
+    /// Whether `target` is shown by a gizmo of this kind. The origin/centre control is
+    /// shown in every kind; it is the pivot, not a degree of freedom.
+    pub fn shows(self, target: GizmoTarget) -> bool {
+        match target {
+            GizmoTarget::Origin => true,
+            GizmoTarget::Handle(handle) => match self {
+                Self::Translate => handle.kind() != HandleKind::Ring,
+                Self::Rotate => handle.kind() == HandleKind::Ring,
+                // The composition, not a third implementation: a universal gizmo shows
+                // exactly the union of the specific kinds' handles.
+                Self::Universal => Self::Translate.shows(target) || Self::Rotate.shows(target),
+            },
+        }
+    }
 }
 
 /// The class of a handle.
@@ -656,7 +704,7 @@ enum DragStart {
 pub struct TransformGizmo {
     target_id: u32,
     frame: ManipulatorFrame,
-    mode: GizmoMode,
+    kind: GizmoKind,
     /// The workspace appearance and behaviour.
     style: GizmoStyle,
     /// The current world radius (recomputed from the camera by [`update`](Self::update)).
@@ -688,12 +736,17 @@ pub struct TransformGizmo {
 }
 
 impl TransformGizmo {
-    /// A gizmo for `target_id`, centred at `origin` and aligned with the world axes.
-    pub fn new(target_id: u32, origin: Vector3, mode: GizmoMode) -> Self {
+    /// A gizmo for `target_id`, centred at `origin`, showing `kind`'s handles and
+    /// aligned with the world axes.
+    ///
+    /// Prefer the per-kind constructors ([`translate`](Self::translate),
+    /// [`rotate`](Self::rotate), [`universal`](Self::universal)) when the kind is known
+    /// at the call site; this general form is for a registry that is handed a kind.
+    pub fn new(target_id: u32, origin: Vector3, kind: GizmoKind) -> Self {
         Self {
             target_id,
             frame: ManipulatorFrame::world(origin),
-            mode,
+            kind,
             style: GizmoStyle::default(),
             scale: 0.0,
             view: None,
@@ -707,6 +760,21 @@ impl TransformGizmo {
             handles: (0..GizmoTarget::ALL.len()).map(new_handle).collect(),
             halos: (0..GizmoTarget::ALL.len()).map(new_halo).collect(),
         }
+    }
+
+    /// A **translate** gizmo: axes and planar quads, no rings.
+    pub fn translate(target_id: u32, origin: Vector3) -> Self {
+        Self::new(target_id, origin, GizmoKind::Translate)
+    }
+
+    /// A **rotate** gizmo: the three rings only.
+    pub fn rotate(target_id: u32, origin: Vector3) -> Self {
+        Self::new(target_id, origin, GizmoKind::Rotate)
+    }
+
+    /// A **universal** gizmo: the composition of translate and rotate.
+    pub fn universal(target_id: u32, origin: Vector3) -> Self {
+        Self::new(target_id, origin, GizmoKind::Universal)
     }
 
     /// The targeted entity id.
@@ -778,14 +846,37 @@ impl TransformGizmo {
         self.dirty = true;
     }
 
-    /// The current mode.
+    /// The current kind (the session mode while this is the hosted gizmo).
+    pub fn kind(&self) -> GizmoKind {
+        self.kind
+    }
+
+    /// The current session mode. This is [`kind`](Self::kind) under its historical
+    /// name: a kind narrowed to a session.
     pub fn mode(&self) -> GizmoMode {
-        self.mode
+        self.kind
+    }
+
+    /// Change the kind, rebuilding on the next [`update`](Self::update).
+    ///
+    /// A host that is *narrowing* a registry set should use [`GizmoSet::narrow`]
+    /// instead of mutating a shared gizmo: the set order is the priority rule.
+    pub fn set_kind(&mut self, kind: GizmoKind) {
+        self.set_mode(kind);
+    }
+
+    /// The builder form of [`set_kind`](Self::set_kind).
+    pub fn with_kind(mut self, kind: GizmoKind) -> Self {
+        self.set_kind(kind);
+        self
     }
 
     /// Change the mode (rebuilds on the next [`update`](Self::update)).
     pub fn set_mode(&mut self, mode: GizmoMode) {
-        self.mode = mode;
+        if self.kind == mode {
+            return;
+        }
+        self.kind = mode;
         self.dirty = true;
     }
 
@@ -911,7 +1002,7 @@ impl TransformGizmo {
     /// stem still has a 24 px target (WCAG 2.5.8).
     ///
     /// Priority is **origin > axis > plane > ring**, then nearest stroke, then
-    /// front-most. Only handles shown by [`GizmoMode`] participate, and the origin
+    /// front-most. Only handles shown by [`GizmoKind`] participate, and the origin
     /// control only while [`origin_enabled`](Self::origin_enabled) (a host disables it
     /// while the Move HUD is open).
     pub fn hit(&self, camera: &Camera, device: [i32; 2]) -> Option<GizmoTarget> {
@@ -931,7 +1022,7 @@ impl TransformGizmo {
         // 0. The origin/centre control: a 10 px projected disc. It sits inside the axis
         //    stems' excluded 18 % so it steals no stem; being tested first gives it the
         //    documented priority when a smaller gizmo makes the bands overlap.
-        if self.origin_enabled && self.mode.shows(GizmoTarget::Origin) {
+        if self.origin_enabled && self.kind.shows(GizmoTarget::Origin) {
             if let Some(projected) = project_device(camera, frame.origin) {
                 let distance = (projected[0] - pointer[0]).hypot(projected[1] - pointer[1]);
                 if distance <= FEATURE_PIXELS {
@@ -943,7 +1034,7 @@ impl TransformGizmo {
         // 1. Axis stems. The pick segment starts `AXIS_PICK_START` along the stem so the
         //    shared centre is not ambiguously claimed by three handles at once.
         for handle in GizmoHandle::ALL {
-            if !self.mode.shows(GizmoTarget::Handle(handle)) || handle.kind() != HandleKind::Axis {
+            if !self.kind.shows(GizmoTarget::Handle(handle)) || handle.kind() != HandleKind::Axis {
                 continue;
             }
             if self.grazing_fade(GizmoTarget::Handle(handle), camera) <= GRAZING_HIT_FLOOR {
@@ -978,7 +1069,7 @@ impl TransformGizmo {
 
         // 2. Plane quads: the whole quad is grabbable, plus padding around its rim.
         for handle in GizmoHandle::ALL {
-            if !self.mode.shows(GizmoTarget::Handle(handle)) || handle.kind() != HandleKind::Plane {
+            if !self.kind.shows(GizmoTarget::Handle(handle)) || handle.kind() != HandleKind::Plane {
                 continue;
             }
             if self.grazing_fade(GizmoTarget::Handle(handle), camera) <= GRAZING_HIT_FLOOR {
@@ -1033,7 +1124,7 @@ impl TransformGizmo {
         //    and is excluded, like an edge-on plane, so it cannot steal a click from the
         //    axis stem that shares its projected stroke.
         for handle in GizmoHandle::ALL {
-            if !self.mode.shows(GizmoTarget::Handle(handle)) || handle.kind() != HandleKind::Ring {
+            if !self.kind.shows(GizmoTarget::Handle(handle)) || handle.kind() != HandleKind::Ring {
                 continue;
             }
             let axis = frame.axis(handle).expect("ring handle");
@@ -1457,7 +1548,7 @@ impl TransformGizmo {
         for (index, target) in GizmoTarget::ALL.iter().enumerate() {
             let fade = self.grazing_fade(*target, camera);
             self.fade[index] = fade;
-            let live = self.mode.shows(*target)
+            let live = self.kind.shows(*target)
                 && fade > 1e-3
                 && !(*target == GizmoTarget::Origin && !self.origin_enabled);
             let slot = &mut self.handles[index];
@@ -1586,18 +1677,89 @@ impl TransformGizmo {
     }
 }
 
-impl GizmoMode {
-    /// Whether `target` is shown in this mode. The origin/centre control is shown in
-    /// every mode; it is the pivot, not a degree of freedom.
-    fn shows(self, target: GizmoTarget) -> bool {
-        match target {
-            GizmoTarget::Origin => true,
-            GizmoTarget::Handle(handle) => match self {
-                GizmoMode::Translate => handle.kind() != HandleKind::Ring,
-                GizmoMode::Rotate => handle.kind() == HandleKind::Ring,
-                GizmoMode::Universal => true,
-            },
-        }
+/// An ordered set of transform gizmos: the registry's host-side form.
+///
+/// **The order is the hit priority.** An entry earlier in the set answers before a
+/// later one: [`hit`](Self::hit) walks the set in order and the first gizmo whose
+/// analytic hit test claims the pointer wins. A registry builds the order by putting
+/// its most recently registered factory first (the same rule the manipulator registry
+/// uses) and, within one registration, the specific kinds before the composed
+/// [`Universal`](GizmoKind::Universal) one.
+///
+/// A host that can show only one gizmo (the current viewport) calls
+/// [`narrow`](Self::narrow) with the session kind and hosts the result; a host that can
+/// show several iterates [`gizmos`](Self::gizmos) and dispatches a hit to the entry
+/// [`hit`](Self::hit) reports.
+#[derive(Clone, Debug, Default)]
+pub struct GizmoSet {
+    gizmos: Vec<TransformGizmo>,
+}
+
+impl GizmoSet {
+    /// A set in priority order (first = highest priority).
+    pub fn new(gizmos: Vec<TransformGizmo>) -> Self {
+        Self { gizmos }
+    }
+
+    /// The gizmos, in priority order.
+    pub fn gizmos(&self) -> &[TransformGizmo] {
+        &self.gizmos
+    }
+
+    /// Whether the registry offered no gizmos for the selection.
+    pub fn is_empty(&self) -> bool {
+        self.gizmos.is_empty()
+    }
+
+    /// How many gizmos the registry offered.
+    pub fn len(&self) -> usize {
+        self.gizmos.len()
+    }
+
+    /// The kinds in the set, in priority order.
+    pub fn kinds(&self) -> Vec<GizmoKind> {
+        self.gizmos.iter().map(TransformGizmo::kind).collect()
+    }
+
+    /// The highest-priority gizmo that can serve `session`, with its **handles narrowed
+    /// to that session**.
+    ///
+    /// A wheel verb (`Move`, `Rotate`) narrows the edition's set to the one kind the
+    /// verb names. The first entry whose kind [`serves`](GizmoKind::serves) the session
+    /// wins, so the set order still decides between two candidates. A universal entry
+    /// serving a specific session is re-moded, so the hosted handles are the specific
+    /// kind's (a `Move` verb never leaves rings pickable).
+    ///
+    /// `None` when the edition offers no kind that can serve the session: a kind an
+    /// edition does not register is genuinely absent, not silently substituted.
+    pub fn narrow(&self, session: GizmoKind) -> Option<TransformGizmo> {
+        let gizmo = self
+            .gizmos
+            .iter()
+            .find(|gizmo| gizmo.kind().serves(session))?;
+        let mut narrowed = gizmo.clone();
+        narrowed.set_kind(session);
+        Some(narrowed)
+    }
+
+    /// The first **enabled** gizmo (in priority order) whose analytic hit test claims
+    /// `device`.
+    ///
+    /// Returns the set index and the target so a host can dispatch the press to the
+    /// same entry, and the caller can keep a lower-priority gizmo from stealing it. A
+    /// gizmo whose [`GizmoStyle::enabled`] is false is not a hit target: a disabled kind
+    /// is absent from the pointer's point of view, while the entry itself stays in the
+    /// set so re-enabling it needs no re-selection.
+    pub fn hit(&self, camera: &Camera, device: [i32; 2]) -> Option<(usize, GizmoTarget)> {
+        self.gizmos
+            .iter()
+            .enumerate()
+            .filter(|(_, gizmo)| gizmo.style().enabled)
+            .find_map(|(index, gizmo)| {
+                gizmo
+                    .hit(camera, device)
+                    .map(|target| (index, target))
+            })
     }
 }
 
@@ -3505,5 +3667,122 @@ mod tests {
             gizmo.items().iter().all(|item| item.program().is_none()),
             "the native handles stay unskinned"
         );
+    }
+
+    #[test]
+    fn a_kind_is_one_constructor_and_universal_composes_the_other_two() {
+        let translate = TransformGizmo::translate(1, Vector3::zero());
+        let rotate = TransformGizmo::rotate(1, Vector3::zero());
+        let universal = TransformGizmo::universal(1, Vector3::zero());
+
+        assert_eq!(translate.kind(), GizmoKind::Translate);
+        assert_eq!(rotate.kind(), GizmoKind::Rotate);
+        assert_eq!(universal.kind(), GizmoKind::Universal);
+        // The historical name is the same type, so `mode()` still answers.
+        assert_eq!(rotate.mode(), GizmoMode::Rotate);
+
+        let axis = GizmoTarget::Handle(GizmoHandle::AxisX);
+        let ring = GizmoTarget::Handle(GizmoHandle::RotateX);
+        assert!(translate.kind().shows(axis));
+        assert!(!translate.kind().shows(ring));
+        assert!(rotate.kind().shows(ring));
+        assert!(!rotate.kind().shows(axis));
+        for target in GizmoTarget::ALL {
+            assert_eq!(
+                universal.kind().shows(target),
+                translate.kind().shows(target) || rotate.kind().shows(target),
+                "universal is the union, not a third handle set: {target:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn the_set_narrows_to_the_session_kind() {
+        let set = GizmoSet::new(vec![
+            TransformGizmo::translate(1, Vector3::zero()),
+            TransformGizmo::rotate(1, Vector3::zero()),
+            TransformGizmo::universal(1, Vector3::zero()),
+        ]);
+        assert_eq!(
+            set.kinds(),
+            vec![
+                GizmoKind::Translate,
+                GizmoKind::Rotate,
+                GizmoKind::Universal
+            ]
+        );
+        assert_eq!(
+            set.narrow(GizmoKind::Translate).expect("a move").kind(),
+            GizmoKind::Translate
+        );
+        assert_eq!(
+            set.narrow(GizmoKind::Rotate).expect("a rotate").kind(),
+            GizmoKind::Rotate
+        );
+        assert_eq!(
+            set.narrow(GizmoKind::Universal)
+                .expect("both")
+                .kind(),
+            GizmoKind::Universal
+        );
+    }
+
+    #[test]
+    fn narrowing_a_universal_entry_removes_the_other_kinds_handles() {
+        let camera = tilted_camera(10.0);
+        let set = GizmoSet::new(vec![TransformGizmo::universal(1, Vector3::zero())]);
+        let mut translate = set.narrow(GizmoKind::Translate).expect("a move");
+        assert_eq!(translate.kind(), GizmoKind::Translate);
+        translate.update(&camera);
+
+        let axis = GizmoTarget::Handle(GizmoHandle::AxisX);
+        let ring = GizmoTarget::Handle(GizmoHandle::RotateX);
+        assert!(
+            !translate.items()[axis.index()].positions().is_empty(),
+            "the narrow session keeps the arrows"
+        );
+        assert!(
+            translate.items()[ring.index()].positions().is_empty(),
+            "the narrow session drops the rings"
+        );
+    }
+
+    #[test]
+    fn a_kind_the_set_does_not_offer_cannot_be_narrowed() {
+        let set = GizmoSet::new(vec![TransformGizmo::translate(1, Vector3::zero())]);
+        assert!(set.narrow(GizmoKind::Rotate).is_none());
+        assert!(set.narrow(GizmoKind::Universal).is_none());
+    }
+
+    #[test]
+    fn the_set_order_is_the_hit_priority() {
+        let camera = camera(5.0);
+        let set = GizmoSet::new(vec![
+            TransformGizmo::translate(1, Vector3::zero()),
+            TransformGizmo::translate(2, Vector3::zero()),
+        ]);
+        let (index, target) = set
+            .hit(&camera, [80, 50])
+            .expect("the X stem is grabbable");
+        assert_eq!(index, 0, "the first entry answers before a later one");
+        assert_eq!(target, GizmoTarget::Handle(GizmoHandle::AxisX));
+    }
+
+    #[test]
+    fn a_disabled_gizmo_is_absent_from_the_hit_test() {
+        let camera = camera(5.0);
+        let mut hidden = TransformGizmo::translate(1, Vector3::zero());
+        let mut style = hidden.style().clone();
+        style.enabled = false;
+        hidden.set_style(&style);
+        let set = GizmoSet::new(vec![
+            hidden,
+            TransformGizmo::translate(2, Vector3::zero()),
+        ]);
+        let (index, _) = set
+            .hit(&camera, [80, 50])
+            .expect("the enabled entry still answers");
+        assert_eq!(index, 1, "a disabled kind is not a hit target");
+        assert_eq!(set.len(), 2, "the entry stays hosted for re-enabling");
     }
 }

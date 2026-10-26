@@ -35,6 +35,12 @@
 //! Everything in this crate is workbench-agnostic: it names no kernel, no document and
 //! no module.
 //!
+//! A transform gizmo is one of three [`GizmoKind`]s (`translate`, `rotate` or the
+//! composed `universal`). A registry offers a [`GizmoSet`] — an ordered list whose order
+//! **is** the hit priority — and a session verb narrows it to one kind. The per-kind
+//! constructors ([`TransformGizmo::translate`] and friends) share the frame, hit and
+//! solver math; only the handle set differs.
+//!
 //! # Example
 //!
 //! ```
@@ -72,9 +78,9 @@ pub mod workplane;
 pub use gizmo::{
     DEFAULT_GHOST_ALPHA, DEFAULT_HALO_WIDTH, DEFAULT_HIT_RADIUS_PX, DEFAULT_HOVER_SCALE,
     GIZMO_BASE_ID, GizmoAxis, GizmoCommitEvent, GizmoConstraint, GizmoDragEvent, GizmoHandle,
-    GizmoMode, GizmoModifiers, GizmoStyle, GizmoTarget, GizmoValue, HandleKind, MAX_GHOST_ALPHA,
-    MIN_HIT_RADIUS_PX, ManipulatorFrame, NATIVE_BACKEND, OUTLINE_COLOR, SKIN_BACKEND,
-    TRANSFORM_ID, TransformGizmo,
+    GizmoKind, GizmoMode, GizmoModifiers, GizmoSet, GizmoStyle, GizmoTarget, GizmoValue,
+    HandleKind, MAX_GHOST_ALPHA, MIN_HIT_RADIUS_PX, ManipulatorFrame, NATIVE_BACKEND,
+    OUTLINE_COLOR, SKIN_BACKEND, TRANSFORM_ID, TransformGizmo,
 };
 pub use axis::AxisStyle;
 pub use declarative::{DeclarativeHandle, DeclarativeKind, DeclarativeManipulator, DeclarativeShape};

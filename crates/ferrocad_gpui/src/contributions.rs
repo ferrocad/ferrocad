@@ -5,6 +5,13 @@
 //! …) through a **factory**: the shell calls it for each selection and hosts the first
 //! match in the viewport.
 //!
+//! Gizmos are a **set**, not a single match: each factory declares the transform kinds
+//! it offers, [`Contributions::gizmos_for`] returns them in a stable hit-priority order
+//! (most recently registered first, specific kinds before the composed `universal`
+//! one), and the shell narrows the set to the session kind a wheel verb names. A
+//! workbench gizmo and the shared triad therefore coexist without one shadowing the
+//! other.
+//!
 //! A commit routes back through the app script's `interaction` hook, so the shell still
 //! names no workbench and links no kernel. A workbench that has no manipulators — BIM
 //! has no dress-up — simply registers none, and never carries the Part code.
@@ -12,19 +19,24 @@
 use std::sync::Arc;
 
 use ferrocad_geom::SelectionRef;
-use ferrocad_stage::{GizmoMode, Manipulator, Stage, Tool, TransformGizmo};
+use ferrocad_stage::{GizmoKind, Manipulator, Stage, Tool, TransformGizmo};
 use ferrocad_types::Vector3;
 
-/// The generic transform handle: any selection on a displayed item gets a translate
-/// gizmo.
+/// The generic transform handle: any selection on a displayed item gets a triad.
 ///
 /// This is the default every edition wants, so an edition only has to register it
-/// (`Contributions::new().with_gizmo(translate_gizmo)`). The gizmo targets the whole
-/// item even when the selection names a sub-element: a click on a face or an edge is a
-/// **spatial** selection, and the triad still acts on the body. (Declining
-/// sub-elements here made the Part edition look like it had no gizmo at all: its
-/// meshes carry `Face1`/`Edge1`/… names, so every click resolved to an element, while
-/// the toy's single untagged part resolved to the whole body.)
+/// (`Contributions::new().with_gizmo(translate_gizmo)`). The prototype is a **translate**
+/// gizmo; the factory declares every transform kind ([`GizmoKind::ALL`]), so the
+/// registry's set can also serve a `Rotate` or `Universal` session, and
+/// [`gizmo_for`](Contributions::gizmo_for) still returns the translate entry first. A
+/// workbench that wants only arrows registers
+/// [`with_gizmo_kinds(&[GizmoKind::Translate], …)`](Contributions::with_gizmo_kinds).
+///
+/// The gizmo targets the whole item even when the selection names a sub-element: a
+/// click on a face or an edge is a **spatial** selection, and the triad still acts on
+/// the body. (Declining sub-elements here made the Part edition look like it had no gizmo at all: its meshes carry `Face1`/`Edge1`/… names, so every click
+/// resolved to an element, while the toy's single untagged part resolved to the whole
+/// body.)
 ///
 /// The triad **hugs the object's own origin** (`ShapeItem::anchor`): the display
 /// provider may report the placement's base point, which doubles as a visual origin
@@ -32,11 +44,7 @@ use ferrocad_types::Vector3;
 /// back to its bounding box's base corner.
 pub fn translate_gizmo(selection: &SelectionRef, stage: &Stage) -> Option<TransformGizmo> {
     let anchor = stage.item(selection.object)?.anchor()?;
-    Some(TransformGizmo::new(
-        selection.object,
-        anchor,
-        GizmoMode::Translate,
-    ))
+    Some(TransformGizmo::translate(selection.object, anchor))
 }
 
 /// The world-aligned base corner (minimum X/Y/Z) of a body's bounding box.
@@ -82,8 +90,20 @@ where
 /// The gizmo is the generic move/rotate handle; a workbench decides whether its
 /// objects respond to it (a sketch may want it, a spreadsheet cell may not).
 pub trait GizmoFactory: Send + Sync {
-    /// The gizmo to show for `selection`, if this workbench offers one.
+    /// The representative gizmo for `selection`: its target, frame and style. The
+    /// registry derives one entry per offered kind from it, so a factory only builds
+    /// the datum once.
     fn create(&self, selection: &SelectionRef, stage: &Stage) -> Option<TransformGizmo>;
+
+    /// The kinds this factory offers, in **hit-priority order**.
+    ///
+    /// The default is every transform kind, specific before composed
+    /// ([`GizmoKind::ALL`]). A workbench that only wants arrows returns
+    /// `&[GizmoKind::Translate]`; a kind it does not list is genuinely absent (its
+    /// wheel verb cannot arm it), not silently substituted.
+    fn kinds(&self) -> &'static [GizmoKind] {
+        &GizmoKind::ALL
+    }
 }
 
 impl<F> GizmoFactory for F
@@ -92,6 +112,22 @@ where
 {
     fn create(&self, selection: &SelectionRef, stage: &Stage) -> Option<TransformGizmo> {
         self(selection, stage)
+    }
+}
+
+/// A gizmo factory limited to the kinds an edition composes.
+struct KindLimited<F> {
+    factory: F,
+    kinds: &'static [GizmoKind],
+}
+
+impl<F: GizmoFactory> GizmoFactory for KindLimited<F> {
+    fn create(&self, selection: &SelectionRef, stage: &Stage) -> Option<TransformGizmo> {
+        self.factory.create(selection, stage)
+    }
+
+    fn kinds(&self) -> &'static [GizmoKind] {
+        self.kinds
     }
 }
 
@@ -151,6 +187,26 @@ impl Contributions {
         self.gizmos.push(Arc::new(factory));
     }
 
+    /// The builder form of [`register_gizmo_kinds`](Self::register_gizmo_kinds).
+    pub fn with_gizmo_kinds(
+        mut self,
+        kinds: &'static [GizmoKind],
+        factory: impl GizmoFactory + 'static,
+    ) -> Self {
+        self.register_gizmo_kinds(kinds, factory);
+        self
+    }
+
+    /// Register a gizmo factory limited to the `kinds` an edition composes, in the
+    /// given priority order.
+    pub fn register_gizmo_kinds(
+        &mut self,
+        kinds: &'static [GizmoKind],
+        factory: impl GizmoFactory + 'static,
+    ) {
+        self.gizmos.push(Arc::new(KindLimited { factory, kinds }));
+    }
+
     /// The builder form of [`register_tool`](Self::register_tool).
     pub fn with_tool(mut self, id: impl Into<String>, factory: impl ToolFactory + 'static) -> Self {
         self.register_tool(id, factory);
@@ -184,12 +240,43 @@ impl Contributions {
             .find_map(|factory| factory.create(selection, stage))
     }
 
-    /// The transform gizmo for `selection`, if a workbench offers one.
+    /// The transform gizmos for `selection`, in **hit-priority order**.
+    ///
+    /// Each factory that claims the selection contributes one entry per kind it offers.
+    /// The order is stable and documented:
+    ///
+    /// 1. factories are visited **most recently registered first** (the same rule the
+    ///    manipulator registry uses, so a workbench gizmo shadows the shared triad);
+    /// 2. within one factory, `kinds()` decides, and the default order is the specific
+    ///    kinds before the composed [`Universal`](GizmoKind::Universal) one.
+    ///
+    /// The set order **is** the hit priority: a host that can draw several submits the
+    /// pointer to the first entry that claims it (see [`GizmoSet`](ferrocad_stage::GizmoSet)).
+    /// `gizmo_for` is the single-host convenience form and returns the first entry.
+    pub fn gizmos_for(
+        &self,
+        selection: &SelectionRef,
+        stage: &Stage,
+    ) -> Vec<TransformGizmo> {
+        let mut gizmos = Vec::new();
+        for factory in self.gizmos.iter().rev() {
+            let Some(prototype) = factory.create(selection, stage) else {
+                continue;
+            };
+            for &kind in factory.kinds() {
+                gizmos.push(prototype.clone().with_kind(kind));
+            }
+        }
+        gizmos
+    }
+
+    /// The highest-priority transform gizmo for `selection`, if a workbench offers one.
+    ///
+    /// This is [`gizmos_for`](Self::gizmos_for)'s first entry, with the factory's
+    /// declared kind order applied. A session verb that needs another kind narrows the
+    /// full set instead ([`GizmoSet::narrow`](ferrocad_stage::GizmoSet::narrow)).
     pub fn gizmo_for(&self, selection: &SelectionRef, stage: &Stage) -> Option<TransformGizmo> {
-        self.gizmos
-            .iter()
-            .rev()
-            .find_map(|factory| factory.create(selection, stage))
+        self.gizmos_for(selection, stage).into_iter().next()
     }
 
     /// Whether the edition contributes any manipulator, gizmo or tool.
@@ -259,6 +346,12 @@ mod tests {
 
     fn stage() -> Stage {
         Stage::new()
+    }
+
+    /// A whole-object gizmo factory at `origin`, so the tests can tell registrations
+    /// apart by their datum.
+    fn gizmo_factory(origin: Vector3) -> impl GizmoFactory + 'static {
+        move |_: &SelectionRef, _: &Stage| Some(TransformGizmo::translate(1, origin))
     }
 
     /// A tool that draws nothing; only the registry routing is under test.
@@ -389,13 +482,13 @@ mod tests {
 
     #[test]
     fn a_registered_gizmo_factory_claims_its_objects() {
-        use ferrocad_stage::{GizmoMode, TransformGizmo};
+        use ferrocad_stage::TransformGizmo;
         use ferrocad_types::Vector3;
 
         let contributions =
             Contributions::new().with_gizmo(|selection: &SelectionRef, _stage: &Stage| {
                 selection.is_whole().then(|| {
-                    TransformGizmo::new(selection.object, Vector3::zero(), GizmoMode::Translate)
+                    TransformGizmo::translate(selection.object, Vector3::zero())
                 })
             });
         assert!(!contributions.is_empty());
@@ -407,6 +500,107 @@ mod tests {
             contributions
                 .gizmo_for(&SelectionRef::element(3, "Face1"), &stage())
                 .is_none()
+        );
+    }
+
+    #[test]
+    fn the_gizmo_registry_is_ordered_latest_first_then_specific_before_composed() {
+        let contributions = Contributions::new()
+            .with_gizmo(gizmo_factory(Vector3::new(1.0, 0.0, 0.0)))
+            .with_gizmo(gizmo_factory(Vector3::new(2.0, 0.0, 0.0)));
+        let gizmos = contributions.gizmos_for(&SelectionRef::whole(7), &stage());
+
+        // Six entries: three kinds per registration. The later registration is first
+        // because that is the hit priority, and within it the specific kinds precede
+        // the universal composition.
+        assert_eq!(gizmos.len(), 6);
+        assert_eq!(
+            gizmos.iter().map(|gizmo| gizmo.origin().x).collect::<Vec<_>>(),
+            vec![2.0, 2.0, 2.0, 1.0, 1.0, 1.0]
+        );
+        assert_eq!(
+            gizmos.iter().map(|gizmo| gizmo.kind()).collect::<Vec<_>>(),
+            vec![
+                GizmoKind::Translate,
+                GizmoKind::Rotate,
+                GizmoKind::Universal,
+                GizmoKind::Translate,
+                GizmoKind::Rotate,
+                GizmoKind::Universal,
+            ]
+        );
+    }
+
+    #[test]
+    fn a_session_verb_narrows_the_registry_set_to_its_kind() {
+        use ferrocad_stage::GizmoSet;
+
+        let contributions = Contributions::new()
+            .with_gizmo(gizmo_factory(Vector3::zero()))
+            .with_gizmo(gizmo_factory(Vector3::new(1.0, 0.0, 0.0)));
+        let set = GizmoSet::new(contributions.gizmos_for(&SelectionRef::whole(7), &stage()));
+
+        let moved = set.narrow(GizmoKind::Translate).expect("a Move verb");
+        assert_eq!(moved.kind(), GizmoKind::Translate);
+        assert_eq!(moved.origin().x, 1.0, "the priority entry still wins");
+
+        let rotated = set.narrow(GizmoKind::Rotate).expect("a Rotate verb");
+        assert_eq!(rotated.kind(), GizmoKind::Rotate);
+        assert_eq!(rotated.origin().x, 1.0);
+    }
+
+    #[test]
+    fn a_kind_the_edition_does_not_offer_is_absent_when_its_verb_is_chosen() {
+        use ferrocad_stage::GizmoSet;
+
+        // An edition that composes only the move handles. Rotate is *not offered*, so
+        // the rotate verb has to leave the selection without a gizmo rather than
+        // substitute the arrows (or silently force rings onto them).
+        let contributions = Contributions::new().with_gizmo_kinds(
+            &[GizmoKind::Translate],
+            gizmo_factory(Vector3::zero()),
+        );
+        let gizmos = contributions.gizmos_for(&SelectionRef::whole(7), &stage());
+        assert_eq!(gizmos.len(), 1);
+        assert_eq!(gizmos[0].kind(), GizmoKind::Translate);
+
+        let set = GizmoSet::new(gizmos);
+        assert!(set.narrow(GizmoKind::Rotate).is_none());
+        assert!(set.narrow(GizmoKind::Universal).is_none());
+        assert_eq!(
+            set.narrow(GizmoKind::Translate)
+                .expect("the offered kind still arms")
+                .kind(),
+            GizmoKind::Translate
+        );
+    }
+
+    #[test]
+    fn the_shared_factory_offers_every_transform_kind() {
+        use ferrocad_stage::ShapeItem;
+
+        let mut stage = Stage::new();
+        stage.add_item(ShapeItem::new(3).with_shape(
+            vec![[0.0, 0.0, 0.0], [2.0, 2.0, 4.0]],
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+        ));
+        let gizmos = Contributions::new()
+            .with_gizmo(translate_gizmo)
+            .gizmos_for(&SelectionRef::whole(3), &stage);
+        assert_eq!(
+            gizmos.iter().map(|gizmo| gizmo.kind()).collect::<Vec<_>>(),
+            vec![
+                GizmoKind::Translate,
+                GizmoKind::Rotate,
+                GizmoKind::Universal
+            ]
+        );
+        assert_eq!(
+            gizmos[0].origin(),
+            Vector3::zero(),
+            "every kind keeps the factory datum"
         );
     }
 }

@@ -7,7 +7,7 @@
 //! ```text
 //! ferrocad_stage      Manipulator · InteractionCommit                     (generic)
 //!       ▲
-//! ferrocad_toy        HeightGrip · height_grip                            (this crate)
+//! ferrocad_toy        HeightGrip · HeightGizmo · height_grip              (this crate)
 //!       ▲
 //! its app script      display_mesh (a cube sized by Height) · interaction (writes it)
 //! ```
@@ -30,7 +30,7 @@ use ferrocad_stage::screen::{
     camera_forward, point_segment_distance, project_device, push_ribbon_uv, scale_for,
 };
 use ferrocad_stage::{DrawMode, InteractionCommit, Manipulator, ShapeItem, Stage};
-use ferrocad_stage::{GizmoMode, TransformGizmo};
+use ferrocad_stage::{GizmoHandle, GizmoKind, GizmoTarget, ManipulatorFrame, TransformGizmo};
 use ferrocad_types::{Matrix4, Vector3};
 
 /// The manipulator's registry id (`InteractionCommit::manipulator`).
@@ -441,6 +441,171 @@ impl Manipulator for HeightGrip {
     }
 }
 
+/// The height grip presented as an **axis-handle gizmo**.
+///
+/// [`HeightGrip`] already owns the whole grammar of a one-degree-of-freedom gizmo: a
+/// screen-invariant stem, an analytic grab test, a drag value and a neutral commit.
+/// This adapter adds the vocabulary the gizmo registry names — a [`GizmoKind`], the
+/// [`GizmoHandle::AxisZ`] the stem stands for, and the [`ManipulatorFrame`] the axis
+/// acts in — without moving the solver, the readout or the commit.
+///
+/// It is still registered through the manipulator route: the gpui registry and the
+/// viewport host [`TransformGizmo`] values, whose commit is `transform/apply`, while
+/// this gizmo commits `toy_height/set`. Once a host accepts a gizmo trait object, the
+/// adapter is the entry that moves into the gizmo registry unchanged. See
+/// `docs/interaction/transform-ux.md` §7.
+#[derive(Clone, Debug)]
+pub struct HeightGizmo {
+    grip: HeightGrip,
+}
+
+impl HeightGizmo {
+    /// A grip for the item whose top centre is `top`, starting at `height`.
+    pub fn new(target: u32, top: Vector3, height: f64) -> Self {
+        Self {
+            grip: HeightGrip::new(target, top, height),
+        }
+    }
+
+    /// The adapter over an existing grip.
+    pub fn from_grip(grip: HeightGrip) -> Self {
+        Self { grip }
+    }
+
+    /// The wrapped grip (its full solver and style surface).
+    pub fn grip(&self) -> &HeightGrip {
+        &self.grip
+    }
+
+    /// Consume the adapter, returning the grip.
+    pub fn into_grip(self) -> HeightGrip {
+        self.grip
+    }
+
+    /// The entity the grip edits.
+    pub fn target_id(&self) -> u32 {
+        self.grip.target_id()
+    }
+
+    /// The gizmo kind: a height grip is a single-axis translation.
+    pub fn kind(&self) -> GizmoKind {
+        GizmoKind::Translate
+    }
+
+    /// The one handle it offers: the local Z axis, pointing up the stem.
+    pub fn handle(&self) -> GizmoHandle {
+        GizmoHandle::AxisZ
+    }
+
+    /// The frame the handle acts in: the stem base is the origin and local Z is world
+    /// up (the grip edits the object's height along +Z).
+    pub fn frame(&self) -> ManipulatorFrame {
+        ManipulatorFrame::world(self.grip.top())
+    }
+
+    /// The gizmo pick target at `device`, in the registry's vocabulary.
+    ///
+    /// This is the same analytic test as [`HeightGrip::hit`]: a hit on the stem or its
+    /// crossbar is [`GizmoTarget::Handle`] for [`handle`](Self::handle).
+    pub fn hit(&self, camera: &Camera, device: [i32; 2]) -> Option<GizmoTarget> {
+        self.grip
+            .hit(camera, device)
+            .then_some(GizmoTarget::Handle(self.handle()))
+    }
+
+    /// The overlay items, casing first so the stroke sits on top of it.
+    pub fn items(&self) -> &[ShapeItem] {
+        self.grip.items()
+    }
+
+    /// The readout text (`H 20.00 mm`).
+    pub fn readout(&self) -> String {
+        self.grip.readout()
+    }
+
+    /// Apply the workspace gizmo style. Returns whether the style changed.
+    pub fn set_style(&mut self, style: &GizmoStyle) -> bool {
+        self.grip.set_style(style)
+    }
+
+    /// The workspace gizmo style.
+    pub fn style(&self) -> &GizmoStyle {
+        self.grip.style()
+    }
+
+    /// Rebuild the stroke when the view or the value changed.
+    pub fn update(&mut self, camera: &Camera) -> bool {
+        self.grip.update(camera)
+    }
+
+    /// Where the readout sits, in device pixels: above the stem's tip.
+    pub fn readout_anchor(&self, camera: &Camera) -> Option<[f64; 2]> {
+        self.grip.readout_anchor(camera)
+    }
+}
+
+impl Manipulator for HeightGizmo {
+    fn id(&self) -> &str {
+        TOY_HEIGHT_ID
+    }
+
+    fn items(&self) -> &[ShapeItem] {
+        HeightGizmo::items(self)
+    }
+
+    fn hit(&self, camera: &Camera, device: [i32; 2]) -> bool {
+        HeightGizmo::hit(self, camera, device).is_some()
+    }
+
+    fn drag_begin(&mut self, camera: &Camera, device: [i32; 2]) -> bool {
+        self.grip.begin_drag(camera, device)
+    }
+
+    fn drag_update(&mut self, camera: &Camera, device: [i32; 2]) -> bool {
+        self.grip.drag_to(camera, device).is_some()
+    }
+
+    fn drag_end(&mut self) -> Option<InteractionCommit> {
+        self.grip.end_drag()
+    }
+
+    fn drag_cancel(&mut self) -> bool {
+        self.grip.cancel_drag()
+    }
+
+    fn is_dragging(&self) -> bool {
+        self.grip.is_dragging()
+    }
+
+    fn set_hovered(&mut self, hovered: bool) -> bool {
+        self.grip.set_hovered(hovered)
+    }
+
+    fn set_style(&mut self, style: &GizmoStyle) -> bool {
+        HeightGizmo::set_style(self, style)
+    }
+
+    fn refresh(&mut self, camera: &Camera) -> bool {
+        self.update(camera)
+    }
+
+    fn readout(&self) -> Option<String> {
+        Some(HeightGizmo::readout(self))
+    }
+
+    fn anchor(&self) -> Option<Vector3> {
+        Some(self.grip.top())
+    }
+
+    fn set_anchor(&mut self, anchor: Vector3) -> bool {
+        self.grip.set_anchor(anchor)
+    }
+
+    fn readout_anchor(&self, camera: &Camera) -> Option<[f64; 2]> {
+        HeightGizmo::readout_anchor(self, camera)
+    }
+}
+
 /// The world-space bounds `(min, max)` of a stage item's positions.
 fn bounds(item: &ShapeItem) -> Option<(Vector3, Vector3)> {
     let positions = item.positions();
@@ -460,24 +625,36 @@ fn bounds(item: &ShapeItem) -> Option<(Vector3, Vector3)> {
     Some((min, max))
 }
 
-/// The toy workbench's manipulator factory: a **whole-object** selection arms a height
-/// grip over the item's top centre.
+/// The toy workbench's gizmo factory: a **whole-object** selection arms an
+/// axis-handle [`HeightGizmo`] over the item's top centre.
 ///
 /// Unlike the Part factory (which wants an `EdgeN`), the toy has no sub-elements, so it
-/// claims whole-object selections only. The registry does not care which rule a
-/// workbench uses.
-pub fn height_grip(selection: &SelectionRef, stage: &Stage) -> Option<Box<dyn Manipulator>> {
+/// claims whole-object selections only. The adapter is the proof that the grip really
+/// is a single-axis translate gizmo: it answers with [`GizmoKind::Translate`],
+/// [`GizmoHandle::AxisZ`] and a [`GizmoTarget`], while keeping the grip's readout and
+/// `toy_height` commit.
+pub fn height_gizmo(selection: &SelectionRef, stage: &Stage) -> Option<HeightGizmo> {
     if !selection.is_whole() {
         return None;
     }
     let item = stage.item(selection.object)?;
     let (min, max) = bounds(item)?;
     let top = Vector3::new((min.x + max.x) * 0.5, (min.y + max.y) * 0.5, max.z);
-    Some(Box::new(HeightGrip::new(
+    Some(HeightGizmo::new(
         selection.object,
         top,
         max.z - min.z,
-    )))
+    ))
+}
+
+/// The toy workbench's manipulator factory: the axis-handle gizmo, registered through
+/// the manipulator route until a host can own a workbench gizmo.
+///
+/// The shell routes both registries identically (a neutral [`InteractionCommit`]), so
+/// the adapter changes no pointer, readout or commit behaviour; it only gives the grip
+/// the gizmo vocabulary a kinds-aware host will use.
+pub fn height_grip(selection: &SelectionRef, stage: &Stage) -> Option<Box<dyn Manipulator>> {
+    Some(Box::new(height_gizmo(selection, stage)?))
 }
 
 /// The toy workbench's gizmo factory: a **whole-object** selection gets a translate
@@ -495,11 +672,7 @@ pub fn move_gizmo(selection: &SelectionRef, stage: &Stage) -> Option<TransformGi
     }
     let item = stage.item(selection.object)?;
     let origin = item.anchor()?;
-    Some(TransformGizmo::new(
-        selection.object,
-        origin,
-        GizmoMode::Translate,
-    ))
+    Some(TransformGizmo::translate(selection.object, origin))
 }
 
 #[cfg(test)]
@@ -582,6 +755,54 @@ mod tests {
         let face = project_device(&camera, top).expect("the top face");
         assert!(anchor[1] > face[1], "the readout floats above the stem");
         assert!(grip.readout().expect("a readout").starts_with("H "));
+    }
+
+    #[test]
+    fn the_height_grip_is_a_single_axis_translate_gizmo() {
+        let gizmo = height_gizmo(&SelectionRef::whole(7), &slab(7)).expect("a gizmo");
+        assert_eq!(gizmo.kind(), GizmoKind::Translate);
+        assert_eq!(gizmo.handle(), GizmoHandle::AxisZ);
+
+        // The frame is the top centre with world axes, so local Z is the stem.
+        let frame = gizmo.frame();
+        assert_eq!(frame.origin, Vector3::new(0.0, 0.0, 20.0));
+        assert_eq!(
+            frame.axis(GizmoHandle::AxisZ),
+            Some(Vector3::new(0.0, 0.0, 1.0))
+        );
+        assert_eq!(
+            gizmo.handle().axis(),
+            Some(Vector3::new(0.0, 0.0, 1.0)),
+            "the adapter names the one axis it offers"
+        );
+    }
+
+    #[test]
+    fn the_axis_handle_hit_uses_the_same_stem_and_commit() {
+        let mut gizmo = height_gizmo(&SelectionRef::whole(7), &slab(7)).expect("a gizmo");
+        let camera = tilted_camera(200.0);
+        let top = project_device(&camera, gizmo.grip().top()).expect("the top");
+        let tip = gizmo.readout_anchor(&camera).expect("the stem tip");
+        let grab = [
+            ((top[0] + tip[0]) * 0.5).round() as i32,
+            ((top[1] + tip[1]) * 0.5).round() as i32,
+        ];
+
+        assert_eq!(
+            gizmo.hit(&camera, grab),
+            Some(GizmoTarget::Handle(GizmoHandle::AxisZ))
+        );
+        assert_eq!(gizmo.hit(&camera, [0, 0]), None, "off the stem is a miss");
+
+        // The manipulator route sees the same grab, readout and `toy_height` commit.
+        assert!(Manipulator::hit(&gizmo, &camera, grab));
+        assert!(gizmo.drag_begin(&camera, grab));
+        assert!(gizmo.drag_update(&camera, [grab[0], grab[1] + 20]));
+        let commit = gizmo.drag_end().expect("a commit");
+        assert_eq!(commit.manipulator, TOY_HEIGHT_ID);
+        assert_eq!(commit.action, "set");
+        assert_eq!(commit.values.len(), 1);
+        assert!(commit.readout.starts_with("H "));
     }
 
     #[test]

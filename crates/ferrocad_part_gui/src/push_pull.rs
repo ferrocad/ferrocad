@@ -34,8 +34,8 @@
 use ferrocad_geom::SelectionRef;
 use ferrocad_graphics::Camera;
 use ferrocad_stage::gizmo::{
-    GizmoHandle, GizmoMode, GizmoStyle, GizmoValue, ManipulatorFrame, TransformGizmo,
-    MIN_HIT_RADIUS_PX, PUSH_PULL_COLOR,
+    GizmoHandle, GizmoStyle, GizmoValue, ManipulatorFrame, TransformGizmo, MIN_HIT_RADIUS_PX,
+    PUSH_PULL_COLOR,
 };
 use ferrocad_stage::screen::{
     camera_forward, point_segment_distance, project_device, push_ribbon_uv, scale_for,
@@ -165,7 +165,7 @@ impl PushPullStem {
         }
         let style = GizmoStyle::default();
         let ghost_alpha = style.ghost_alpha;
-        let mut solver = TransformGizmo::new(target_id, centroid, GizmoMode::Translate);
+        let mut solver = TransformGizmo::translate(target_id, centroid);
         solver.set_frame(frame_at(centroid, normal));
         Some(Self {
             target_id,

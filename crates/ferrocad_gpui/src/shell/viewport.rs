@@ -4,7 +4,7 @@
 
 use super::*;
 use super::picking::click_target;
-use ferrocad_stage::Stage;
+use ferrocad_stage::{GizmoSet, Stage};
 
 impl Shell {
     /// Re-read the document's shapes into the viewport's stage.
@@ -446,24 +446,41 @@ impl Shell {
         (manipulators, gizmo)
     }
 
+    /// The edition's transform gizmos for `reference`, in the registry's hit-priority
+    /// order, evaluated against `stage`.
+    ///
+    /// This is the hosted **set**: a workbench gizmo and the shared triad can coexist,
+    /// and the first entry is the one that answers the pointer. The shell still arms a
+    /// single gizmo (the viewport hosts one), so [`armed_gizmo`](Self::armed_gizmo)
+    /// narrows this set to the session kind; a host that can draw several can take the
+    /// set as-is.
+    pub(super) fn armed_gizmos(&self, reference: &SelectionRef, stage: &Stage) -> GizmoSet {
+        GizmoSet::new(self.contributions.gizmos_for(reference, stage))
+    }
+
     /// The edition's transform gizmo for `reference`, evaluated against `stage` and
     /// carrying the session policy.
     ///
+    /// The registry offers a set (one entry per offered kind); the sticky session kind
+    /// (`gizmo_mode`, set by the wheel's `Move`/`Rotate` verbs and by `App_Rotate`)
+    /// **narrows** it to the one kind the verb names. If the edition does not offer that
+    /// kind the selection has no gizmo instead of silently substituting another kind.
+    /// The set order is the hit priority, so the first entry serving the session wins.
+    ///
     /// The factory owns the datum: the triad hugs the object's own origin
-    /// (`ShapeItem::anchor`). The shell applies the sticky handle set (`gizmo_mode`)
-    /// and, while set, the session user origin. Split out of [`arm`](Self::arm) so the
-    /// pivot policy is testable without a GPU viewport; a whole-body selection and a
-    /// sub-element selection resolve to the same body origin.
+    /// (`ShapeItem::anchor`). The shell applies the session user origin while set. Split
+    /// out of [`arm`](Self::arm) so the pivot policy is testable without a GPU viewport;
+    /// a whole-body selection and a sub-element selection resolve to the same body
+    /// origin.
     pub(super) fn armed_gizmo(
         &self,
         reference: &SelectionRef,
         stage: &Stage,
     ) -> Option<TransformGizmo> {
-        // The factory's datum is the object origin; the handle set is the shell's
-        // session mode (every factory returns a fresh Translate gizmo). A session user
-        // origin replaces the datum while set, so a re-arm keeps the user's pivot.
-        let mut gizmo = self.contributions.gizmo_for(reference, stage)?;
-        gizmo.set_mode(self.gizmo_mode);
+        // The registry's set is composed by the edition; the session kind narrows it. A
+        // session user origin replaces the datum while set, so a re-arm keeps the user's
+        // pivot.
+        let mut gizmo = self.armed_gizmos(reference, stage).narrow(self.gizmo_mode)?;
         let object_origin = gizmo.origin();
         gizmo.set_origin(self.gizmo_origin_for(object_origin));
         gizmo.set_origin_enabled(self.gizmo_origin_enabled());

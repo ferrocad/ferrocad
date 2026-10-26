@@ -14,6 +14,8 @@ members = [
     "crates/ferrocad_core",
     "crates/ferrocad_lineage",
     "crates/ferrocad_geom",
+    "crates/ferrocad_mesh",
+    "crates/ferrocad_mesh_py",
     "crates/ferrocad_occt",
     "crates/ferrocad_part",
     "crates/ferrocad_part_gui",
@@ -41,8 +43,9 @@ members = [
 # OCCT-backed editions (`ferrocad_parametric`, via `ferrocad_part_py`), are workspace
 # members so `-p <crate>` works, but they are excluded from `default-members` because
 # building them is slow. The pure `ferrocad_graphics`, scene core `ferrocad_inventor`,
-# `ferrocad_stage` and `ferrocad_part_gui` (presentation only: no kernel, no GPU, no
-# CPython) stay in `default-members`.
+# `ferrocad_stage`, `ferrocad_mesh` (pure data: no kernel, no OCCT, no Python) and
+# `ferrocad_part_gui` (presentation only: no kernel, no GPU, no CPython) stay in
+# `default-members`.
 # `ferrocad_gpui` embeds CPython via PyO3 `auto-initialize`; it links fine in a
 # full `cargo build --workspace` because the extension crates keep
 # `pyo3/extension-module` opt-in (see their manifests), avoiding the libpython
@@ -53,6 +56,7 @@ default-members = [
     "crates/ferrocad_curves",
     "crates/ferrocad_core",
     "crates/ferrocad_geom",
+    "crates/ferrocad_mesh",
     "crates/ferrocad_graphics",
     "crates/ferrocad_inventor",
     "crates/ferrocad_stage",
@@ -82,8 +86,9 @@ serde_json = { version = "1", features = ["float_roundtrip"] }
 unicode-segmentation = "1"
 # Internal crates carry both a `path` (for development) and a `version` (which
 # crates.io requires). Publish them in dependency order: `ferrocad_types`,
-# `ferrocad_theme`, `ferrocad_graphics`, `ferrocad_core`, `ferrocad_geom`, `ferrocad_occt`,
-# `ferrocad_part`, `ferrocad_py`, `ferrocad_part_py`, `ferrocad_stage`,
+# `ferrocad_theme`, `ferrocad_graphics`, `ferrocad_core`, `ferrocad_geom`, `ferrocad_mesh`,
+# `ferrocad_occt`, `ferrocad_part`, `ferrocad_py`, `ferrocad_mesh_py`, `ferrocad_part_py`,
+# `ferrocad_stage`,
 # `ferrocad_part_gui`, `ferrocad_stage_py`, `ferrocad_viewport`, `ferrocad_widgets`,
 # `ferrocad_gpui` and finally the `ferrocad` app. See ../docs/architecture/releasing.md.
 #
@@ -98,6 +103,8 @@ ferrocad_curves = { path = "crates/ferrocad_curves", version = "0.1.4" }
 ferrocad_lineage = { path = "crates/ferrocad_lineage", version = "0.1.4" }
 ferrocad_core = { path = "crates/ferrocad_core", version = "0.1.4" }
 ferrocad_geom = { path = "crates/ferrocad_geom", version = "0.1.4" }
+ferrocad_mesh = { path = "crates/ferrocad_mesh", version = "0.1.4" }
+ferrocad_mesh_py = { path = "crates/ferrocad_mesh_py", version = "0.1.4" }
 ferrocad_occt = { path = "crates/ferrocad_occt", version = "0.1.4" }
 ferrocad_part = { path = "crates/ferrocad_part", version = "0.1.4" }
 ferrocad_part_py = { path = "crates/ferrocad_part_py", version = "0.1.4" }

@@ -30,9 +30,15 @@
 //! See `docs/architecture/repackaging.md` and `docs/architecture/occt-integration.md` §4.
 
 fn main() {
-    // Register the Part module as a built-in, before the interpreter initialises.
+    // Register the workbench modules as built-ins, before the interpreter
+    // initialises. All of them must share this image: `MeshPart` builds its wires
+    // through `Part.makePolygon`, and `Mesh::Feature` lives in the same document
+    // registry as the Part objects.
+    use ferrocad_mesh_py::{Mesh as mesh_module, MeshPart as meshpart_module};
     use ferrocad_part_py::Part as part_module;
     pyo3::append_to_inittab!(part_module);
+    pyo3::append_to_inittab!(mesh_module);
+    pyo3::append_to_inittab!(meshpart_module);
 
     // Editions parse their own flags, so the base app's `--check-init` branch does
     // not reach them. Run the same boot here, then import the edition's app script:

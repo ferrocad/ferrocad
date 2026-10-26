@@ -1,0 +1,51 @@
+# The Mesh workbench's Python modules (importable as `Mesh` and `MeshPart`).
+#
+# This is the composition root for Mesh: it links the pure `ferrocad_mesh` core,
+# registers `Mesh::PropertyMeshKernel` with `ferrocad_py`, and exposes `Mesh.Mesh`,
+# `Mesh.createBox`, `MeshPart.meshFromShape` and `MeshPart.wireFromSegment` on top
+# of the `ferrocad` (core) bindings. Like `ferrocad_part_py` it builds an `rlib` so
+# an application can link it in and register both modules as built-ins, and a
+# `cdylib` so it can also be shipped as a standalone extension.
+#
+# It needs CPython headers, so it is a workspace member but NOT in
+# `default-members`.
+[package]
+name = "ferrocad_mesh_py"
+version = "0.1.4"
+edition.workspace = true
+license.workspace = true
+readme.workspace = true
+repository.workspace = true
+homepage.workspace = true
+rust-version.workspace = true
+description = "The Mesh workbench Python modules (importable as `Mesh` and `MeshPart`) over ferrocad_mesh"
+keywords = ["cad", "freecad", "mesh", "pyo3"]
+categories = ["science"]
+documentation = "https://docs.rs/ferrocad_mesh_py"
+
+[lib]
+name = "ferrocad_mesh_py"
+# `rlib` for the in-process app/wheel composition; `cdylib` for a standalone
+# `Mesh.abi3.so` (built with the `extension-module` feature, as for ferrocad_py).
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+ferrocad_core.workspace = true
+ferrocad_mesh.workspace = true
+ferrocad_py.workspace = true
+ferrocad_types.workspace = true
+# `extension-module` is deliberately *not* a hard feature (see ferrocad_py): it is
+# enabled only when packaging the standalone extension module.
+pyo3 = { version = "0.25", features = ["abi3-py311"] }
+
+[dev-dependencies]
+# `auto-initialize` lets the boot tests embed CPython (as the app does).
+pyo3 = { version = "0.25", features = ["abi3-py311", "auto-initialize"] }
+# The booted tests build `Part.makeBox`, `Shape.tessellate` and `Part.makePolygon`
+# in the same image; the library itself does not depend on Part (MeshPart is
+# duck-typed).
+ferrocad_part_py.workspace = true
+
+[features]
+# Enabled when producing the standalone `Mesh` extension module.
+extension-module = ["pyo3/extension-module"]

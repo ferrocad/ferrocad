@@ -324,6 +324,50 @@ def QT_TRANSLATE_NOOP(context, text):
     return text
 
 
+class Qt:
+    """The ``QtCore.Qt`` enum namespace, for the names read at import time.
+
+    SimpleCAD's ``gui/controller.py`` builds ``ARROW_KEYS`` from
+    ``QtCore.Qt.Key_*`` while its module body runs, so the lookup must succeed
+    even with no Qt runtime. The values are Qt's real key codes; keyboard events
+    themselves are not delivered by this shim. A name outside this set raises
+    ``AttributeError`` like any other missing Qt enum.
+    """
+
+    NoButton = 0x00000000
+
+    # Item-data roles (``QtCore.Qt.UserRole`` plus the roles SimpleCAD derives
+    # from it).
+    DisplayRole = 0x00000000
+    UserRole = 0x00000100
+
+    Key_Escape = 0x01000000
+    Key_Tab = 0x01000001
+    Key_Backspace = 0x01000003
+    Key_Return = 0x01000004
+    Key_Enter = 0x01000005
+    Key_Delete = 0x01000007
+    Key_Left = 0x01000012
+    Key_Up = 0x01000013
+    Key_Right = 0x01000014
+    Key_Down = 0x01000015
+    Key_C = 0x00000043
+    Key_V = 0x00000056
+    Key_X = 0x00000058
+    Key_Z = 0x0000005A
+
+    NoModifier = 0x00000000
+    ShiftModifier = 0x02000000
+    ControlModifier = 0x04000000
+    AltModifier = 0x08000000
+    MetaModifier = 0x10000000
+
+    Tool = 0x00000001
+    WindowTitleHint = 0x00001000
+    WindowCloseButtonHint = 0x08000000
+    Horizontal = 0x00000001
+
+
 class QCoreApplication:
     """Static translation surface only; there is no Qt event loop here."""
 
@@ -682,12 +726,34 @@ class QStyledItemDelegate(_UnsupportedWidget):
     _qt_base = "QStyledItemDelegate"
 
 
+class QDialog(_UnsupportedWidget):
+    """Name only: SimpleCAD subclasses it, but a dialog needs a real Qt."""
+
+    _qt_base = "QDialog"
+    # ``exec()`` results, read by callers that never reach this shim's dialogs.
+    Rejected = 0
+    Accepted = 1
+
+
+class QTextEdit(_UnsupportedWidget):
+    _qt_base = "QTextEdit"
+
+
+class QPlainTextEdit(_UnsupportedWidget):
+    _qt_base = "QPlainTextEdit"
+
+
+class QAbstractSpinBox(_UnsupportedWidget):
+    _qt_base = "QAbstractSpinBox"
+
+
 # ---------------------------------------------------------------------------
 # Public allowlists (``python/PySide/__init__.py`` builds the modules from these)
 # ---------------------------------------------------------------------------
 
 QTCORE_EXPORTS = {
     "QT_TRANSLATE_NOOP": QT_TRANSLATE_NOOP,
+    "Qt": Qt,
     "QCoreApplication": QCoreApplication,
     "QLocale": QLocale,
     "QObject": QObject,
@@ -706,6 +772,10 @@ QTWIDGETS_EXPORTS = {
     "QWidget": QWidget,
     "QLineEdit": QLineEdit,
     "QStyledItemDelegate": QStyledItemDelegate,
+    "QDialog": QDialog,
+    "QTextEdit": QTextEdit,
+    "QPlainTextEdit": QPlainTextEdit,
+    "QAbstractSpinBox": QAbstractSpinBox,
 }
 
 __all__ = [
@@ -727,6 +797,11 @@ __all__ = [
     "QLocale",
     "QStandardPaths",
     "QT_TRANSLATE_NOOP",
+    "Qt",
+    "QDialog",
+    "QTextEdit",
+    "QPlainTextEdit",
+    "QAbstractSpinBox",
     "clear_resource_cache",
     "resource_bytes",
 ]

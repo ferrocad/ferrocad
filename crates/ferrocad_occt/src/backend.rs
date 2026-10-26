@@ -1790,6 +1790,97 @@ impl GeometryBackend for OcctBackend {
         }
     }
 
+    fn count_sub_shapes(&self, shape: &Shape, kind: &str) -> Result<usize, GeomError> {
+        let occt = downcast(shape)?;
+        let guard = occt.borrow();
+        let inner = guard
+            .as_ref()
+            .ok_or(OcctError::InvalidInput { what: "null shape" })?;
+        if inner.IsNull() {
+            return Ok(0);
+        }
+        // Upstream's `countSubShapes("SubShape")` counts the direct children, not
+        // every descendant; every other spelling counts that sub-shape kind.
+        if kind == "SubShape" {
+            return Ok(bridge::fc_direct_child_count(inner).max(0) as usize);
+        }
+        let Some(occt_kind) = count_kind(kind) else {
+            return Ok(0);
+        };
+        Ok(sub_shape_map(inner, occt_kind).Extent() as usize)
+    }
+
+    fn is_degenerate(&self, edge: &Shape) -> Result<bool, GeomError> {
+        let occt = downcast(edge)?;
+        let guard = occt.borrow();
+        let inner = guard
+            .as_ref()
+            .ok_or(OcctError::InvalidInput { what: "null edge" })?;
+        if !bridge::fc_is_edge(inner) {
+            return Err(OcctError::InvalidInput { what: "not an edge" }.into());
+        }
+        Ok(bridge::fc_edge_degenerated(inner))
+    }
+
+    fn is_seam(&self, edge: &Shape, face: &Shape) -> Result<bool, GeomError> {
+        let edge_occt = downcast(edge)?;
+        let face_occt = downcast(face)?;
+        let edge_guard = edge_occt.borrow();
+        let face_guard = face_occt.borrow();
+        let edge_inner = edge_guard
+            .as_ref()
+            .ok_or(OcctError::InvalidInput { what: "null edge" })?;
+        let face_inner = face_guard
+            .as_ref()
+            .ok_or(OcctError::InvalidInput { what: "null face" })?;
+        if !bridge::fc_is_edge(edge_inner) {
+            return Err(OcctError::InvalidInput { what: "not an edge" }.into());
+        }
+        if !bridge::fc_is_face(face_inner) {
+            return Err(OcctError::InvalidInput { what: "not a face" }.into());
+        }
+        Ok(bridge::fc_edge_is_seam(edge_inner, face_inner))
+    }
+
+    fn edge_parameter_range(&self, edge: &Shape) -> Result<(f64, f64), GeomError> {
+        let occt = downcast(edge)?;
+        let guard = occt.borrow();
+        let inner = guard
+            .as_ref()
+            .ok_or(OcctError::InvalidInput { what: "null edge" })?;
+        if !bridge::fc_is_edge(inner) {
+            return Err(OcctError::InvalidInput { what: "not an edge" }.into());
+        }
+        let (mut first, mut last) = (0.0, 0.0);
+        bridge::fc_edge_range(inner, &mut first, &mut last);
+        Ok((first, last))
+    }
+
+    fn face_parameter_range(&self, face: &Shape) -> Result<(f64, f64, f64, f64), GeomError> {
+        let occt = downcast(face)?;
+        let guard = occt.borrow();
+        let inner = guard
+            .as_ref()
+            .ok_or(OcctError::InvalidInput { what: "null face" })?;
+        if !bridge::fc_is_face(inner) {
+            return Err(OcctError::InvalidInput { what: "not a face" }.into());
+        }
+        let (mut u0, mut u1, mut v0, mut v1) = (0.0, 0.0, 0.0, 0.0);
+        bridge::fc_face_uv_bounds(inner, &mut u0, &mut u1, &mut v0, &mut v1);
+        Ok((u0, u1, v0, v1))
+    }
+
+    fn is_equal(&self, a: &Shape, b: &Shape) -> Result<bool, GeomError> {
+        let a_occt = downcast(a)?;
+        let b_occt = downcast(b)?;
+        let a_guard = a_occt.borrow();
+        let b_guard = b_occt.borrow();
+        match (a_guard.as_ref(), b_guard.as_ref()) {
+            (Some(a_inner), Some(b_inner)) => Ok(a_inner.IsEqual(b_inner)),
+            _ => Ok(false),
+        }
+    }
+
     fn orientation(&self, shape: &Shape) -> Option<&'static str> {
         let occt = downcast(shape).ok()?;
         let guard = occt.borrow();
@@ -2207,6 +2298,27 @@ const HISTORY_KINDS: [(ElementKind, TopAbs_ShapeEnum); 3] = [
     (ElementKind::Edge, TopAbs_ShapeEnum::TopAbs_EDGE),
     (ElementKind::Vertex, TopAbs_ShapeEnum::TopAbs_VERTEX),
 ];
+
+/// The OCCT shape type behind a `Shape.countElement` spelling.
+///
+/// Upstream matches a *prefix* of the name (`boost::starts_with`), so `Faces`
+/// and `Face6` both count faces. An unknown spelling counts zero.
+fn count_kind(kind: &str) -> Option<TopAbs_ShapeEnum> {
+    const KINDS: [(&str, TopAbs_ShapeEnum); 8] = [
+        ("Vertex", TopAbs_ShapeEnum::TopAbs_VERTEX),
+        ("Edge", TopAbs_ShapeEnum::TopAbs_EDGE),
+        ("Face", TopAbs_ShapeEnum::TopAbs_FACE),
+        ("Wire", TopAbs_ShapeEnum::TopAbs_WIRE),
+        ("Shell", TopAbs_ShapeEnum::TopAbs_SHELL),
+        ("Solid", TopAbs_ShapeEnum::TopAbs_SOLID),
+        ("Compound", TopAbs_ShapeEnum::TopAbs_COMPOUND),
+        ("CompSolid", TopAbs_ShapeEnum::TopAbs_COMPSOLID),
+    ];
+    KINDS
+        .iter()
+        .find(|(name, _)| kind.starts_with(name))
+        .map(|(_, occt)| *occt)
+}
 
 /// The result's sub-shape maps, one per kind in [`HISTORY_KINDS`] order.
 ///
@@ -3109,5 +3221,164 @@ mod curve_bridge_tests {
             )
             .expect("the resolution is finite");
         assert!(resolution > 0.0);
+    }
+}
+
+#[cfg(test)]
+mod shape_query_tests {
+    //! The `Shape.countElement`/`Edge.Degenerated`/`Edge.isSeam`/
+    //! `ParameterRange`/`Shape.isEqual` backend queries, against real OCCT
+    //! primitives.
+
+    use std::f64::consts::TAU;
+
+    use ferrocad_geom::{ElementKind, GeometryBackend};
+
+    use super::*;
+
+    fn box_shape() -> Shape {
+        OcctBackend::new()
+            .make_box(2.0, 3.0, 4.0)
+            .expect("a box")
+    }
+
+    #[test]
+    fn count_element_counts_a_boxes_topology() {
+        let backend = OcctBackend::new();
+        let shape = box_shape();
+
+        assert_eq!(backend.count_sub_shapes(&shape, "Face").unwrap(), 6);
+        assert_eq!(backend.count_sub_shapes(&shape, "Edge").unwrap(), 12);
+        assert_eq!(backend.count_sub_shapes(&shape, "Vertex").unwrap(), 8);
+        assert_eq!(backend.count_sub_shapes(&shape, "Solid").unwrap(), 1);
+        assert_eq!(backend.count_sub_shapes(&shape, "Shell").unwrap(), 1);
+        assert_eq!(backend.count_sub_shapes(&shape, "Compound").unwrap(), 0);
+        assert_eq!(backend.count_sub_shapes(&shape, "CompSolid").unwrap(), 0);
+
+        // Upstream matches a prefix of the spelling.
+        assert_eq!(backend.count_sub_shapes(&shape, "Faces").unwrap(), 6);
+        // `SubShape` is the direct children, here the one solid.
+        assert_eq!(backend.count_sub_shapes(&shape, "SubShape").unwrap(), 1);
+        // An unknown spelling counts zero, as upstream's silent type lookup.
+        assert_eq!(backend.count_sub_shapes(&shape, "Bogus").unwrap(), 0);
+    }
+
+    #[test]
+    fn a_cone_apex_has_a_degenerate_edge() {
+        let backend = OcctBackend::new();
+        let cone = backend
+            .make_cone(
+                5.0,
+                0.0,
+                10.0,
+                Vector3::zero(),
+                Vector3::new(0.0, 0.0, 1.0),
+            )
+            .expect("a cone with an apex");
+
+        let edges = backend.elements(&cone, ElementKind::Edge);
+        assert!(
+            edges
+                .iter()
+                .any(|edge| backend.is_degenerate(&edge.shape).unwrap()),
+            "the apex edge collapses to a point"
+        );
+
+        let box_shape = box_shape();
+        assert!(
+            backend
+                .elements(&box_shape, ElementKind::Edge)
+                .iter()
+                .all(|edge| !backend.is_degenerate(&edge.shape).unwrap()),
+            "a box has no degenerate edge"
+        );
+    }
+
+    #[test]
+    fn a_cylinder_seam_is_closed_on_its_face() {
+        let backend = OcctBackend::new();
+        let cylinder = backend
+            .make_cylinder(
+                5.0,
+                10.0,
+                Vector3::zero(),
+                Vector3::new(0.0, 0.0, 1.0),
+            )
+            .expect("a cylinder");
+        let edges = backend.elements(&cylinder, ElementKind::Edge);
+        let faces = backend.elements(&cylinder, ElementKind::Face);
+
+        assert!(
+            edges.iter().any(|edge| faces
+                .iter()
+                .any(|face| backend.is_seam(&edge.shape, &face.shape).unwrap())),
+            "a full cylinder has a seam edge"
+        );
+
+        let box_shape = box_shape();
+        let box_edges = backend.elements(&box_shape, ElementKind::Edge);
+        let box_faces = backend.elements(&box_shape, ElementKind::Face);
+        assert!(
+            box_edges.iter().all(|edge| box_faces
+                .iter()
+                .all(|face| !backend.is_seam(&edge.shape, &face.shape).unwrap())),
+            "a box has no seam edge"
+        );
+    }
+
+    #[test]
+    fn parameter_ranges_match_the_face_and_edge_geometry() {
+        let backend = OcctBackend::new();
+        let cylinder = backend
+            .make_cylinder(
+                5.0,
+                10.0,
+                Vector3::zero(),
+                Vector3::new(0.0, 0.0, 1.0),
+            )
+            .expect("a cylinder");
+        let face = backend.elements(&cylinder, ElementKind::Face)[0]
+            .shape
+            .clone();
+        let (u0, u1, v0, v1) = backend.face_parameter_range(&face).unwrap();
+        assert!((u1 - u0 - TAU).abs() < 1e-6, "a full turn in U");
+        assert!((v1 - v0 - 10.0).abs() < 1e-6, "the cylinder's height in V");
+
+        let box_shape = box_shape();
+        let edge = backend.elements(&box_shape, ElementKind::Edge)[0]
+            .shape
+            .clone();
+        let (first, last) = backend.edge_parameter_range(&edge).unwrap();
+        assert!(first.is_finite() && last.is_finite());
+        assert!(
+            [2.0, 3.0, 4.0]
+                .iter()
+                .any(|length| ((last - first) - length).abs() < 1e-9),
+            "a box edge spans one of the box's dimensions: {first}..{last}"
+        );
+    }
+
+    #[test]
+    fn is_equal_requires_the_same_orientation() {
+        let backend = OcctBackend::new();
+        let box_shape = box_shape();
+
+        // A separate handle around the same TShape, location and orientation.
+        let same = {
+            let occt = downcast(&box_shape).unwrap();
+            let guard = occt.borrow();
+            erase(guard.as_ref().unwrap())
+        };
+        assert!(backend.is_equal(&box_shape, &same).unwrap());
+
+        let reversed = backend.reversed(&box_shape).unwrap();
+        assert!(
+            backend.same_shape(&box_shape, &reversed),
+            "reversing changes orientation only"
+        );
+        assert!(
+            !backend.is_equal(&box_shape, &reversed).unwrap(),
+            "isEqual sees the orientation difference"
+        );
     }
 }

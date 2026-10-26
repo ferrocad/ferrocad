@@ -360,6 +360,27 @@ mod ffi {
         /// Two unit tangents at the edges' shared vertex (six numbers), or empty.
         fn fc_edge_tangents(edge1: &TopoDS_Edge, edge2: &TopoDS_Edge, out: &mut Vec<f64>);
 
+        /// `BRep_Tool::Degenerated`.
+        fn fc_edge_degenerated(shape: &TopoDS_Shape) -> bool;
+
+        /// `BRep_Tool::IsClosed(edge, face)`: the edge is a seam of the face.
+        fn fc_edge_is_seam(edge: &TopoDS_Shape, face: &TopoDS_Shape) -> bool;
+
+        /// The edge's curve parameter range (`BRep_Tool::Range`).
+        fn fc_edge_range(shape: &TopoDS_Shape, first: &mut f64, last: &mut f64);
+
+        /// The face's UV bounds (`BRepTools::UVBounds`).
+        fn fc_face_uv_bounds(
+            shape: &TopoDS_Shape,
+            u0: &mut f64,
+            u1: &mut f64,
+            v0: &mut f64,
+            v1: &mut f64,
+        );
+
+        /// The number of direct children (`TopoDS_Iterator`).
+        fn fc_direct_child_count(shape: &TopoDS_Shape) -> i32;
+
         /// Serialise a shape to BREP bytes (in memory; the crate only does files).
         fn fc_brep_write(shape: &TopoDS_Shape, out: &mut Vec<u8>);
         /// Read a shape from BREP bytes; null on failure.

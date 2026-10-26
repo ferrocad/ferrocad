@@ -44,6 +44,10 @@ pyo3 = { version = "0.25", features = ["abi3-py311"] }
 [dev-dependencies]
 # `auto-initialize` lets the boot tests embed CPython (as the app does).
 pyo3 = { version = "0.25", features = ["abi3-py311", "auto-initialize"] }
+# The in-image SimpleCAD run boots the Mesh workbench too, so `import Mesh` and
+# `import MeshPart` resolve. This is a dev-dependency only: the library graph stays
+# acyclic (ferrocad_mesh_py's library does not depend on ferrocad_part_py).
+ferrocad_mesh_py.workspace = true
 # The Q4 Draft tools drive `FreeCADGui.Snapper` over `ferrocad.stage`, so the
 # in-image run of `tests/test_draft_tools.py` installs that module too.
 ferrocad_stage_py.workspace = true

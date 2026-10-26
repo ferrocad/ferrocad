@@ -7167,30 +7167,69 @@ impl PyEdge {
     }
 
     #[getter]
-    fn ParameterRange(slf: PyRef<'_, Self>) -> PyResult<PyObject> {
-        require_edge(slf.as_super(), "ParameterRange")?;
-        Err(OCCError::new_err(
-            "Part.Edge.ParameterRange is not available in this slice (the seam \
-             exposes no parameter range)",
-        ))
+    fn ParameterRange(slf: PyRef<'_, Self>, py: Python<'_>) -> PyResult<PyObject> {
+        let shape = slf
+            .as_super()
+            .shape()
+            .ok_or_else(|| empty_error("ParameterRange"))?;
+        let (first, last) = backend()
+            .edge_parameter_range(&shape)
+            .map_err(kernel_error)?;
+        Ok(PyTuple::new(py, [first, last])?.into_any().unbind())
     }
 
     #[getter]
     fn FirstParameter(slf: PyRef<'_, Self>) -> PyResult<f64> {
-        require_edge(slf.as_super(), "FirstParameter")?;
-        Err(OCCError::new_err(
-            "Part.Edge.FirstParameter is not available in this slice (the seam \
-             exposes no parameter range)",
-        ))
+        let shape = slf
+            .as_super()
+            .shape()
+            .ok_or_else(|| empty_error("FirstParameter"))?;
+        Ok(backend()
+            .edge_parameter_range(&shape)
+            .map_err(kernel_error)?
+            .0)
     }
 
     #[getter]
     fn LastParameter(slf: PyRef<'_, Self>) -> PyResult<f64> {
-        require_edge(slf.as_super(), "LastParameter")?;
-        Err(OCCError::new_err(
-            "Part.Edge.LastParameter is not available in this slice (the seam \
-             exposes no parameter range)",
-        ))
+        let shape = slf
+            .as_super()
+            .shape()
+            .ok_or_else(|| empty_error("LastParameter"))?;
+        Ok(backend()
+            .edge_parameter_range(&shape)
+            .map_err(kernel_error)?
+            .1)
+    }
+
+    /// Whether the edge's 3D curve collapses to a point (`Edge.Degenerated`).
+    /// A cone apex or a sphere pole carries such an edge.
+    #[getter]
+    fn Degenerated(slf: PyRef<'_, Self>) -> PyResult<bool> {
+        let shape = slf
+            .as_super()
+            .shape()
+            .ok_or_else(|| empty_error("Degenerated"))?;
+        backend().is_degenerate(&shape).map_err(kernel_error)
+    }
+
+    /// Whether the edge is a seam of `face` (`Edge.isSeam`): it has two pcurves
+    /// on the face because the face's surface is closed.
+    fn isSeam(slf: PyRef<'_, Self>, face: &Bound<'_, PyAny>) -> PyResult<bool> {
+        let edge = slf
+            .as_super()
+            .shape()
+            .ok_or_else(|| empty_error("isSeam"))?;
+        let face = face
+            .downcast::<PartShape>()
+            .map_err(|_| PyTypeError::new_err("isSeam expects a Part.Face"))?;
+        let face_shape = face
+            .borrow()
+            .shape()
+            .ok_or_else(|| PyValueError::new_err("a null shape cannot bound a seam edge"))?;
+        backend()
+            .is_seam(&edge, &face_shape)
+            .map_err(kernel_error)
     }
 
     fn valueAt(slf: PyRef<'_, Self>, _parameter: f64) -> PyResult<PyObject> {
@@ -7759,9 +7798,15 @@ impl PyFace {
     }
 
     #[getter]
-    fn ParameterRange(slf: PyRef<'_, Self>) -> PyResult<PyObject> {
-        require_edge(slf.as_super(), "ParameterRange")?;
-        Err(edge_query_error("ParameterRange"))
+    fn ParameterRange(slf: PyRef<'_, Self>, py: Python<'_>) -> PyResult<PyObject> {
+        let shape = slf
+            .as_super()
+            .shape()
+            .ok_or_else(|| empty_error("ParameterRange"))?;
+        let (u0, u1, v0, v1) = backend()
+            .face_parameter_range(&shape)
+            .map_err(kernel_error)?;
+        Ok(PyTuple::new(py, [u0, u1, v0, v1])?.into_any().unbind())
     }
 }
 

@@ -637,12 +637,12 @@
       ],
       "unresolved": []
     },
-    "methods_heuristic": 805,
+    "methods_heuristic": 811,
     "gap_markers": {
-      "count": 14,
+      "count": 11,
       "by_kind": {
         "not_implemented_yet": 2,
-        "not_available_in_this_slice": 6,
+        "not_available_in_this_slice": 3,
         "unsupported": 0,
         "not_implemented": 6
       },
@@ -664,24 +664,6 @@
           "file": "crates/ferrocad_part_py/src/curves.rs",
           "line": 7164,
           "text": "\"Part.Edge.Tolerance is not available in this slice (the seam exposes \\"
-        },
-        {
-          "kind": "not_available_in_this_slice",
-          "file": "crates/ferrocad_part_py/src/curves.rs",
-          "line": 7173,
-          "text": "\"Part.Edge.ParameterRange is not available in this slice (the seam \\"
-        },
-        {
-          "kind": "not_available_in_this_slice",
-          "file": "crates/ferrocad_part_py/src/curves.rs",
-          "line": 7182,
-          "text": "\"Part.Edge.FirstParameter is not available in this slice (the seam \\"
-        },
-        {
-          "kind": "not_available_in_this_slice",
-          "file": "crates/ferrocad_part_py/src/curves.rs",
-          "line": 7191,
-          "text": "\"Part.Edge.LastParameter is not available in this slice (the seam \\"
         },
         {
           "kind": "not_implemented",
@@ -710,19 +692,19 @@
         {
           "kind": "not_implemented",
           "file": "crates/ferrocad_part_py/src/curves.rs",
-          "line": 7584,
+          "line": 7623,
           "text": "Err(_) => Ok(py.NotImplemented()),"
         },
         {
           "kind": "not_implemented",
           "file": "crates/ferrocad_part_py/src/curves.rs",
-          "line": 7592,
+          "line": 7631,
           "text": "Err(_) => Ok(py.NotImplemented()),"
         },
         {
           "kind": "not_implemented_yet",
           "file": "crates/ferrocad_part_py/src/lib.rs",
-          "line": 2226,
+          "line": 2340,
           "text": "\"{operation}: partial revolutions are not implemented yet\""
         },
         {

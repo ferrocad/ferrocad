@@ -541,6 +541,12 @@ impl Document {
             old: old.clone(),
             new: value.clone(),
         }));
+        // Let the registered type keep derived properties in sync (FreeCAD's
+        // `onChanged`). The write is committed already, and the hook's own writes go
+        // through `set_property_raw`, so this cannot recurse.
+        if let Some(behavior) = crate::object_registry::get(&type_id) {
+            behavior.on_property_changed(self, object, name);
+        }
         for observer in &mut self.observers {
             observer.on_property_changed(object, name, old.as_ref(), &value);
         }

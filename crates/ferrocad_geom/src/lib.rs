@@ -888,6 +888,57 @@ pub trait GeometryBackend: Send + Sync {
         a.is_same(b)
     }
 
+    /// The number of sub-shapes of `kind` (`Shape.countElement`).
+    ///
+    /// `kind` is upstream's shape-type spelling (`Face`, `Edge`, `Vertex`,
+    /// `Wire`, `Shell`, `Solid`, `Compound`, `CompSolid`); a spelling the
+    /// backend does not know counts zero. The default reports the operation as
+    /// unsupported, so a backend that cannot enumerate sub-shapes fails
+    /// explicitly.
+    fn count_sub_shapes(&self, _shape: &Shape, _kind: &str) -> Result<usize, GeomError> {
+        Err(unsupported("count_sub_shapes"))
+    }
+
+    /// Whether an edge is degenerate (`BRep_Tool::Degenerated`): its 3D curve
+    /// collapses to a point, as at a cone apex or a sphere pole.
+    ///
+    /// The default reports the operation as unsupported.
+    fn is_degenerate(&self, _edge: &Shape) -> Result<bool, GeomError> {
+        Err(unsupported("is_degenerate"))
+    }
+
+    /// Whether `edge` is a seam of `face` (`BRep_Tool::IsClosed(edge, face)`):
+    /// the edge has two pcurves in the face because the surface is closed.
+    ///
+    /// The default reports the operation as unsupported.
+    fn is_seam(&self, _edge: &Shape, _face: &Shape) -> Result<bool, GeomError> {
+        Err(unsupported("is_seam"))
+    }
+
+    /// The parameter range `(first, last)` of an edge (`BRep_Tool::Range`).
+    ///
+    /// The default reports the operation as unsupported.
+    fn edge_parameter_range(&self, _edge: &Shape) -> Result<(f64, f64), GeomError> {
+        Err(unsupported("edge_parameter_range"))
+    }
+
+    /// The parameter bounds of a face's boundary in its surface's UV space,
+    /// `(u0, u1, v0, v1)` (`BRepTools::UVBounds`).
+    ///
+    /// The default reports the operation as unsupported.
+    fn face_parameter_range(&self, _face: &Shape) -> Result<(f64, f64, f64, f64), GeomError> {
+        Err(unsupported("face_parameter_range"))
+    }
+
+    /// Whether two shapes are equal (`TopoDS_Shape::IsEqual`): they share the
+    /// same TShape and location **and** have the same orientation. Contrast
+    /// [`same_shape`](Self::same_shape), which ignores orientation.
+    ///
+    /// The default reports the operation as unsupported.
+    fn is_equal(&self, _a: &Shape, _b: &Shape) -> Result<bool, GeomError> {
+        Err(unsupported("is_equal"))
+    }
+
     /// The shape's orientation (`Shape.Orientation`).
     fn orientation(&self, _shape: &Shape) -> Option<&'static str> {
         None

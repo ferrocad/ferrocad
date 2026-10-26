@@ -12,6 +12,7 @@
 #include <BRepBuilderAPI_MakeShape.hxx>
 #include <BRepFilletAPI_MakeChamfer.hxx>
 #include <BRepFilletAPI_MakeFillet.hxx>
+#include <BRepTools.hxx>
 #include <BRep_Tool.hxx>
 #include <GeomAbs_Shape.hxx>
 #include <TopExp.hxx>
@@ -19,8 +20,10 @@
 #include <TopTools_IndexedMapOfShape.hxx>
 #include <TopTools_ListIteratorOfListOfShape.hxx>
 #include <TopTools_ListOfShape.hxx>
+#include <TopoDS.hxx>
 #include <TopoDS_Edge.hxx>
 #include <TopoDS_Face.hxx>
+#include <TopoDS_Iterator.hxx>
 #include <TopoDS_Shape.hxx>
 #include <TopoDS_Vertex.hxx>
 #include <gp_Pnt.hxx>
@@ -67,6 +70,42 @@ inline int fc_data_map_find_index_same(
         if (map.FindKey(i).IsSame(shape))
             return i;
     return 0;
+}
+
+// --- shape queries -----------------------------------------------------------
+// `BRep_Tool::Degenerated`, `BRep_Tool::IsClosed(edge, face)`, `BRep_Tool::Range`
+// and `BRepTools::UVBounds` are not bridged by the crate.
+
+inline bool fc_edge_degenerated(const TopoDS_Shape& shape)
+{
+    return BRep_Tool::Degenerated(TopoDS::Edge(shape));
+}
+
+inline bool fc_edge_is_seam(const TopoDS_Shape& edge, const TopoDS_Shape& face)
+{
+    return BRep_Tool::IsClosed(TopoDS::Edge(edge), TopoDS::Face(face));
+}
+
+inline void fc_edge_range(const TopoDS_Shape& shape, double& first, double& last)
+{
+    BRep_Tool::Range(TopoDS::Edge(shape), first, last);
+}
+
+inline void fc_face_uv_bounds(const TopoDS_Shape& shape,
+                              double& u0,
+                              double& u1,
+                              double& v0,
+                              double& v1)
+{
+    BRepTools::UVBounds(TopoDS::Face(shape), u0, u1, v0, v1);
+}
+
+inline int fc_direct_child_count(const TopoDS_Shape& shape)
+{
+    int count = 0;
+    for (TopoDS_Iterator it(shape); it.More(); it.Next())
+        ++count;
+    return count;
 }
 
 // --- asymmetric chamfer ------------------------------------------------------

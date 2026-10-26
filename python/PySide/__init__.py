@@ -12,9 +12,12 @@ Module           Names
 ===============  =========================================================
 ``QtCore``       ``QT_TRANSLATE_NOOP``, ``QCoreApplication``, ``QLocale``,
                  ``QObject``, ``QTimer``, ``SIGNAL``, ``QIODevice``,
-                 ``QFile``, ``QFileInfo``, ``QStandardPaths``
-``QtWidgets``    ``QApplication`` and the three names Draft uses as class
-                 bases (``QWidget``, ``QLineEdit``, ``QStyledItemDelegate``)
+                 ``QFile``, ``QFileInfo``, ``QStandardPaths``, plus the
+                 ``Qt`` enum namespace (arrow keys and modifiers)
+``QtWidgets``    ``QApplication`` and the names upstream uses as class bases
+                 (``QWidget``, ``QLineEdit``, ``QStyledItemDelegate``,
+                 ``QDialog``, ``QTextEdit``, ``QPlainTextEdit``,
+                 ``QAbstractSpinBox``)
 ``QtGui``        module object only; the headless Draft path evaluates no
                  QtGui name at import time
 ===============  =========================================================
@@ -90,7 +93,8 @@ _STUB_DOCS = {
     ),
     "QtWidgets": (
         "Pure-Python QtWidgets stand-in: QApplication.translate and the class "
-        "bases Draft subclasses at import time. Widgets are not constructed."
+        "bases upstream subclasses at import time (Draft's widgets and "
+        "SimpleCAD's QDialog). Widgets are not constructed."
     ),
 }
 

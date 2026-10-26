@@ -43,6 +43,7 @@ mod link_array;
 mod shape_fix;
 mod solids;
 
+use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
@@ -51,7 +52,8 @@ use ferrocad_geom::{ElementKind, ElementRef, Lineage, MapVersion, Shape, Tessell
 use ferrocad_occt::surface_ops;
 use ferrocad_occt::OcctBackend;
 use ferrocad_part::{resolve_element_in, ShapeListProperty, ShapeProperty, SHAPE_LIST_TYPE_NAME, TYPE_NAME};
-use pyo3::exceptions::{PyIOError, PyIndexError, PyRuntimeError, PyValueError};
+use ferrocad_py::PyVector;
+use pyo3::exceptions::{PyIOError, PyIndexError, PyRuntimeError, PyTypeError, PyValueError};
 use pyo3::prelude::*;
 use pyo3::types::{PyBytes, PyDict, PyList, PyModule, PyTuple};
 use pyo3::IntoPyObjectExt;
@@ -674,6 +676,43 @@ impl PartShape {
         }
     }
 
+    /// Whether two shapes are equal (`Shape.isEqual`): the same TShape and
+    /// location **and** the same orientation. `Shape.reversed()` is `isSame`
+    /// but not `isEqual`.
+    ///
+    /// A null shape (either side) raises `ValueError`, as upstream's `TopoShape`
+    /// comparison does not define equality for an empty shape.
+    fn isEqual(&self, other: &Bound<'_, PyAny>) -> PyResult<bool> {
+        let other = other
+            .downcast::<PartShape>()
+            .map_err(|_| PyTypeError::new_err("isEqual expects a Part.Shape"))?;
+        let a = self
+            .shape()
+            .ok_or_else(|| PyValueError::new_err("a null shape cannot be compared"))?;
+        let b = other
+            .borrow()
+            .shape()
+            .ok_or_else(|| PyValueError::new_err("a null shape cannot be compared"))?;
+        ferrocad_part::backend()
+            .is_equal(&a, &b)
+            .map_err(|error| PyRuntimeError::new_err(error.to_string()))
+    }
+
+    /// The number of sub-shapes of `kind` (`Shape.countElement`).
+    ///
+    /// `kind` is upstream's spelling (`Face`, `Edge`, `Vertex`, `Wire`, `Shell`,
+    /// `Solid`, `Compound`, `CompSolid`; `SubShape` counts the direct children).
+    /// An unknown spelling counts zero, matching upstream's silent type lookup.
+    /// A null shape also has no sub-shapes, so it counts zero.
+    fn countElement(&self, kind: &str) -> PyResult<usize> {
+        let Some(shape) = self.shape() else {
+            return Ok(0);
+        };
+        ferrocad_part::backend()
+            .count_sub_shapes(&shape, kind)
+            .map_err(|error| PyRuntimeError::new_err(error.to_string()))
+    }
+
     /// Write the shape as BREP to `filename` (FreeCAD's `Shape.exportBrep`).
     fn exportBrep(&self, filename: &str) -> PyResult<()> {
         let shape = self
@@ -727,6 +766,49 @@ impl PartShape {
         dict.set_item("vertex_parts", mesh.vertex_parts)?;
         dict.set_item("parts", mesh.parts)?;
         Ok(dict.into_any().unbind())
+    }
+
+    /// Upstream FreeCAD's `Shape.tessellate`: `(points, facets)`.
+    ///
+    /// `points` is a list of `Base.Vector` (the same `Vector` class as
+    /// `FreeCAD.Vector`) and `facets` a list of `(i, j, k)` index triples, so the
+    /// result can be passed straight to `Mesh.Mesh(...)`. Unlike the FerroCAD
+    /// extension [`mesh`](Self::mesh), which keeps the per-face duplicated
+    /// positions and part ids a viewport picks with, this merges vertices within
+    /// `gp::Resolution` and drops facets that collapse to a line — upstream's
+    /// shape.
+    ///
+    /// `deflection` is the linear deflection in model units; `angular` is the
+    /// angular deflection in radians.
+    #[pyo3(signature = (deflection = 0.5, angular = 0.5))]
+    fn tessellate(
+        &self,
+        py: Python<'_>,
+        deflection: f64,
+        angular: f64,
+    ) -> PyResult<(Vec<Py<PyVector>>, Vec<(usize, usize, usize)>)> {
+        let shape = self
+            .shape()
+            .ok_or_else(|| PyValueError::new_err("cannot tessellate a null shape"))?;
+        let options = TessellationOptions {
+            linear_deflection: Some(deflection),
+            angular_deflection: angular,
+            relative: false,
+        };
+        let mesh = ferrocad_part::backend()
+            .tessellate(&shape, &options)
+            .map_err(|error| PyRuntimeError::new_err(error.to_string()))?;
+
+        // Upstream merges coincident mesh vertices across faces (a box is 8 points,
+        // not one set of nodes per face) and returns only the triangle mesh. The
+        // merge tolerance is `gp::Resolution`; exact-bit equality is not enough on a
+        // curved face, where the two sides of a seam differ in the last bits.
+        let (positions, facets) = weld_triangles(&mesh.positions, &mesh.triangles);
+        let points = positions
+            .into_iter()
+            .map(|point| Py::new(py, PyVector::fresh(point)))
+            .collect::<PyResult<_>>()?;
+        Ok((points, facets))
     }
 
     fn __repr__(&self) -> String {
@@ -811,6 +893,38 @@ impl PartShape {
     #[getter]
     fn ShapeType(&self) -> &'static str {
         self.shape_type()
+    }
+
+    /// A face's parameter bounds (`Face.ParameterRange`), or an edge's
+    /// `(first, last)` (`Edge.ParameterRange`), as upstream reports them.
+    ///
+    /// A face returns the four values `(u0, u1, v0, v1)` of its boundary in the
+    /// surface's UV space (OCCT `BRepTools::UVBounds`); an edge returns the two
+    /// values of its curve range (OCCT `BRep_Tool::Range`). Another shape kind,
+    /// or a null shape, raises `ValueError`/`TypeError` rather than inventing a
+    /// range.
+    #[getter]
+    fn ParameterRange(&self, py: Python<'_>) -> PyResult<PyObject> {
+        let shape = self
+            .shape()
+            .ok_or_else(|| PyValueError::new_err("a null shape has no parameter range"))?;
+        match self.shape_type() {
+            "Face" => {
+                let (u0, u1, v0, v1) = ferrocad_part::backend()
+                    .face_parameter_range(&shape)
+                    .map_err(|error| PyRuntimeError::new_err(error.to_string()))?;
+                Ok(PyTuple::new(py, [u0, u1, v0, v1])?.into_any().unbind())
+            }
+            "Edge" => {
+                let (first, last) = ferrocad_part::backend()
+                    .edge_parameter_range(&shape)
+                    .map_err(|error| PyRuntimeError::new_err(error.to_string()))?;
+                Ok(PyTuple::new(py, [first, last])?.into_any().unbind())
+            }
+            other => Err(PyTypeError::new_err(format!(
+                "ParameterRange is not defined for a {other}"
+            ))),
+        }
     }
 
     /// The backing surface (`Face.Surface`), when the shape is a face.
@@ -2632,6 +2746,89 @@ fn shape_list_to_extension(value: &Bound<'_, PyAny>) -> Option<ExtensionValue> {
     Some(ExtensionValue::new(Box::new(ShapeListProperty::new(shapes))))
 }
 
+/// The merge tolerance for [`weld_triangles`], matching OCCT's `gp::Resolution`.
+const WELD_TOLERANCE: f64 = 1e-7;
+
+/// Merge a display tessellation's triangles into upstream's `(points, facets)`.
+///
+/// The backend's display mesh keeps a separate position per face (a pick needs the
+/// part ids) and also carries the edge/vertex samples; the upstream `tessellate`
+/// contract is a welded triangle mesh. Two vertices are the same point when they are
+/// within [`WELD_TOLERANCE`], not only when their bits are equal: the two sides of a
+/// curved face's seam can differ in the last bits. A facet that collapses to a line or
+/// a point after welding is dropped, as upstream's does.
+fn weld_triangles(
+    positions: &[[f32; 3]],
+    triangles: &[u32],
+) -> (Vec<Vector3>, Vec<(usize, usize, usize)>) {
+    let mut cells: HashMap<(i64, i64, i64), Vec<u32>> = HashMap::new();
+    let mut points: Vec<Vector3> = Vec::new();
+    let mut remap: HashMap<u32, u32> = HashMap::new();
+    let mut facets = Vec::with_capacity(triangles.len() / 3);
+
+    for triangle in triangles.chunks_exact(3) {
+        let mut facet = [0usize; 3];
+        for (slot, index) in facet.iter_mut().zip(triangle) {
+            let mapped = match remap.get(index) {
+                Some(&mapped) => mapped,
+                None => {
+                    let mapped = weld_point(positions[*index as usize], &mut cells, &mut points);
+                    remap.insert(*index, mapped);
+                    mapped
+                }
+            };
+            *slot = mapped as usize;
+        }
+        if facet[0] == facet[1] || facet[1] == facet[2] || facet[0] == facet[2] {
+            continue;
+        }
+        facets.push((facet[0], facet[1], facet[2]));
+    }
+    (points, facets)
+}
+
+/// The welded index of `position`: an existing point within [`WELD_TOLERANCE`], or a
+/// new one. The spatial hash stores points in cells of that size and searches the 27
+/// neighbours, so a point just across a cell boundary still finds its twin.
+fn weld_point(
+    position: [f32; 3],
+    cells: &mut HashMap<(i64, i64, i64), Vec<u32>>,
+    points: &mut Vec<Vector3>,
+) -> u32 {
+    let (x, y, z) = (
+        f64::from(position[0]),
+        f64::from(position[1]),
+        f64::from(position[2]),
+    );
+    let key = (
+        (x / WELD_TOLERANCE).floor() as i64,
+        (y / WELD_TOLERANCE).floor() as i64,
+        (z / WELD_TOLERANCE).floor() as i64,
+    );
+    for dx in -1..=1 {
+        for dy in -1..=1 {
+            for dz in -1..=1 {
+                let neighbour = (key.0 + dx, key.1 + dy, key.2 + dz);
+                if let Some(bucket) = cells.get(&neighbour) {
+                    for &candidate in bucket {
+                        let point = points[candidate as usize];
+                        if (point.x - x).abs() <= WELD_TOLERANCE
+                            && (point.y - y).abs() <= WELD_TOLERANCE
+                            && (point.z - z).abs() <= WELD_TOLERANCE
+                        {
+                            return candidate;
+                        }
+                    }
+                }
+            }
+        }
+    }
+    let index = points.len() as u32;
+    points.push(Vector3::new(x, y, z));
+    cells.entry(key).or_default().push(index);
+    index
+}
+
 #[pymodule]
 pub fn Part(m: &Bound<'_, PyModule>) -> PyResult<()> {
     register_kernel();
@@ -2658,4 +2855,81 @@ pub fn Part(m: &Bound<'_, PyModule>) -> PyResult<()> {
     shape_fix::register(m)?;
     chfi2d::register(m)?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tessellate_tests {
+    use super::*;
+
+    #[test]
+    fn a_box_tessellates_like_upstream() {
+        register_kernel();
+        let cube = ferrocad_part::make_box(10.0, 20.0, 30.0).expect("box");
+        let shape = PartShape::from_shape(cube);
+
+        Python::with_gil(|py| {
+            let (points, facets) = shape.tessellate(py, 0.1, 0.5).expect("tessellate");
+
+            assert_eq!(points.len(), 8, "coincident face vertices are merged");
+            assert_eq!(facets.len(), 12, "a box is twelve triangles");
+            for &(a, b, c) in &facets {
+                for index in [a, b, c] {
+                    assert!(index < points.len(), "facet index {index} out of range");
+                }
+            }
+
+            let mut min = [f64::INFINITY; 3];
+            let mut max = [f64::NEG_INFINITY; 3];
+            for point in &points {
+                let point = point.bind(py).as_any();
+                for (axis, name) in ["x", "y", "z"].into_iter().enumerate() {
+                    let value: f64 = point
+                        .getattr(name)
+                        .expect("Vector coordinate")
+                        .extract()
+                        .expect("f64 coordinate");
+                    min[axis] = min[axis].min(value);
+                    max[axis] = max[axis].max(value);
+                }
+            }
+            for (axis, extent) in [10.0, 20.0, 30.0].into_iter().enumerate() {
+                assert!((min[axis] - 0.0).abs() < 1e-6, "min {axis} = {}", min[axis]);
+                assert!(
+                    (max[axis] - extent).abs() < 1e-6,
+                    "max {axis} = {}",
+                    max[axis]
+                );
+            }
+
+            let error = PartShape::empty()
+                .tessellate(py, 0.1, 0.5)
+                .expect_err("a null shape cannot tessellate");
+            assert!(error.is_instance_of::<PyValueError>(py));
+        });
+    }
+
+    #[test]
+    fn welding_merges_a_seam_and_drops_collapsed_facets() {
+        let positions = vec![
+            [0.0, 0.0, 0.0],
+            [1.0, 0.0, 0.0],
+            [0.0, 1.0, 0.0],
+            // The same triangle again, with its seam vertices off in the last bits.
+            [0.0, 0.0, 0.0],
+            [1.00000005, 0.0, 0.0],
+            [0.0, 1.00000005, 0.0],
+        ];
+        let triangles = vec![0, 1, 2, 3, 4, 5, 0, 0, 1];
+        let (points, facets) = weld_triangles(&positions, &triangles);
+        assert_eq!(
+            points.len(),
+            3,
+            "the seam vertices merge within gp::Resolution"
+        );
+        assert_eq!(
+            facets,
+            vec![(0, 1, 2), (0, 1, 2)],
+            "the collapsed facet is dropped"
+        );
+    }
 }

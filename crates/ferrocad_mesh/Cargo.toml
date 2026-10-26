@@ -1,0 +1,29 @@
+# The Mesh workbench: the `Mesh` payload and the `Mesh::Feature` document type.
+#
+# The crate is deliberately dependency-light: `ferrocad_core` for the property and
+# object registries, `ferrocad_types` for `Vector3`/`Placement`, and nothing else.
+# It does not link OCCT, does not depend on `ferrocad_geom::Shape`, and knows
+# nothing about Python.
+[package]
+name = "ferrocad_mesh"
+version = "0.1.4"
+edition.workspace = true
+license.workspace = true
+readme.workspace = true
+repository.workspace = true
+homepage.workspace = true
+rust-version.workspace = true
+description = "FerroCAD Mesh workbench: the triangle-mesh payload, STL I/O, Mesh::PropertyMesh and Mesh::Feature"
+keywords = ["cad", "freecad", "mesh", "stl", "triangles"]
+categories = ["science"]
+documentation = "https://docs.rs/ferrocad_mesh"
+
+[lib]
+name = "ferrocad_mesh"
+
+[dependencies]
+ferrocad_core.workspace = true
+ferrocad_types.workspace = true
+
+[dev-dependencies]
+serde_json.workspace = true

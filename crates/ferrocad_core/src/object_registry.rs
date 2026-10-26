@@ -108,6 +108,22 @@ pub trait ObjectType: Send + Sync {
         Ok(())
     }
 
+    /// React to a property assignment that has already been committed (FreeCAD's
+    /// `onChanged` side of the same hook).
+    ///
+    /// [`Document::set_property`] calls this after the value is stored, so a type
+    /// can keep a **derived** property in sync without a recompute. Use
+    /// [`Document::set_property_raw`] for the derived write: it neither records an
+    /// undo step nor calls this hook, so the two cannot recurse. The default is a
+    /// no-op.
+    ///
+    /// This is where a `Mesh::Feature` mirrors `Placement` into its mesh transform
+    /// (and adopts a newly assigned mesh's transform into `Placement`), which is
+    /// why `obj.Mesh.Topology` follows `obj.Placement` immediately.
+    fn on_property_changed(&self, doc: &mut Document, id: ObjectId, name: &str) {
+        let _ = (doc, id, name);
+    }
+
     /// Whether this type's `execute` delegates the rebuild to a Python proxy.
     ///
     /// A Python-feature type (upstream `App::FeaturePython` and its Part

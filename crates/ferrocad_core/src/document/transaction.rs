@@ -458,6 +458,12 @@ impl Document {
                 obj.must_execute = true;
             }
         }
+        let type_id = obj.type_id.clone();
+        // Undo/redo must re-run the type's derived-property sync too, or a
+        // `Mesh::Feature`'s mesh transform would keep the reverted placement.
+        if let Some(behavior) = crate::object_registry::get(&type_id) {
+            behavior.on_property_changed(self, object, name);
+        }
     }
 
     /// Insert an expression without validation or recording (undo/redo path).

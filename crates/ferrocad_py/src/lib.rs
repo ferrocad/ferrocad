@@ -4260,7 +4260,7 @@ impl GeometryView {
 
 #[pyclass(name = "Vector", module = "ferrocad")]
 #[derive(Clone)]
-struct PyVector {
+pub struct PyVector {
     inner: Vector3,
     /// Set when this vector is a live view of a geometry property.
     view: Option<GeometryView>,
@@ -4268,7 +4268,10 @@ struct PyVector {
 
 impl PyVector {
     /// A detached vector value.
-    fn fresh(inner: Vector3) -> Self {
+    ///
+    /// Public so sibling Python modules (`Part`, `Mesh`, …) can return
+    /// `Base.Vector`-compatible results without duplicating the class.
+    pub fn fresh(inner: Vector3) -> Self {
         Self { inner, view: None }
     }
 
@@ -5272,7 +5275,7 @@ impl PyRotation {
 
 #[pyclass(name = "Placement", module = "ferrocad")]
 #[derive(Clone)]
-struct PyPlacement {
+pub struct PyPlacement {
     /// Shared so a detached placement's `Rotation`/`Base` sub-object can write
     /// back through the parent (`p.Rotation.Angle = …`).
     inner: Arc<Mutex<Placement>>,
@@ -5282,7 +5285,10 @@ struct PyPlacement {
 
 impl PyPlacement {
     /// A detached placement value.
-    fn fresh(inner: Placement) -> Self {
+    ///
+    /// Public so sibling Python modules (`Part`, `Mesh`, …) can return
+    /// `Base.Placement`-compatible results without duplicating the class.
+    pub fn fresh(inner: Placement) -> Self {
         Self {
             inner: Arc::new(Mutex::new(inner)),
             view: None,
@@ -5290,7 +5296,10 @@ impl PyPlacement {
     }
 
     /// The current placement value.
-    fn get(&self) -> Placement {
+    ///
+    /// Public so sibling Python modules can read a detached placement back into
+    /// their own payload.
+    pub fn get(&self) -> Placement {
         *self.inner.lock().unwrap_or_else(|e| e.into_inner())
     }
 
@@ -6232,13 +6241,26 @@ impl PyViewObject {
 
 #[pyclass(name = "BoundBox", module = "ferrocad")]
 #[derive(Clone)]
-struct PyBoundBox {
+pub struct PyBoundBox {
     min: [f64; 3],
     max: [f64; 3],
     valid: bool,
 }
 
 impl PyBoundBox {
+    /// A valid box spanning `min`..`max`.
+    ///
+    /// Public so sibling Python modules (`Mesh`, …) can return an
+    /// `App.BoundBox` without duplicating the class; the caller owns the
+    /// emptiness/validity decision.
+    pub fn fresh(min: Vector3, max: Vector3) -> Self {
+        Self {
+            min: [min.x, min.y, min.z],
+            max: [max.x, max.y, max.z],
+            valid: true,
+        }
+    }
+
     fn add_point(&mut self, p: [f64; 3]) {
         if self.valid {
             for i in 0..3 {

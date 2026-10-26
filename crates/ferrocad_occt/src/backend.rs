@@ -24,7 +24,7 @@ use ferrocad_curves::{Arc, Circle, EdgeCurve, Ellipse, Line, Vector3};
 use ferrocad_geom::{
     Capabilities, Continuity, ElementId, ElementKind, ElementRef, GeomError, GeometryBackend,
     History, Lineage, MapVersion, MassProperties, OpResult, OperandId, PrincipalProperties, Shape,
-    ShapeDistance, Tessellation, TessellationOptions, unsupported,
+    ShapeDistance, SurfaceData, Tessellation, TessellationOptions, unsupported,
 };
 use ferrocad_types::{Matrix4, Placement};
 use opencascade_sys as ffi;
@@ -986,6 +986,43 @@ impl GeometryBackend for OcctBackend {
             }
             .to_string(),
         )
+    }
+
+    fn surface_data(&self, shape: &Shape) -> Option<SurfaceData> {
+        let occt = downcast(shape).ok()?;
+        let mut raw = Vec::new();
+        {
+            let guard = occt.borrow();
+            let inner = guard.as_ref()?;
+            if !bridge::fc_is_face(inner) {
+                return None;
+            }
+            bridge::fc_face_surface_data(inner, &mut raw);
+        }
+        let point = |at: usize| Vector3::new(raw[at], raw[at + 1], raw[at + 2]);
+        match raw.first().copied() {
+            Some(1.0) if raw.len() >= 13 => Some(SurfaceData::Plane {
+                origin: point(1),
+                x_dir: point(4),
+                y_dir: point(7),
+                normal: point(10),
+            }),
+            Some(2.0) if raw.len() >= 11 => Some(SurfaceData::Cylinder {
+                origin: point(1),
+                axis: point(4),
+                x_dir: point(7),
+                radius: raw[10],
+            }),
+            Some(3.0) if raw.len() >= 11 => Some(SurfaceData::Sphere {
+                center: point(1),
+                axis: point(4),
+                x_dir: point(7),
+                radius: raw[10],
+            }),
+            _ => self
+                .surface_type(shape)
+                .map(|type_id| SurfaceData::Other { type_id }),
+        }
     }
 
     fn outer_wire(&self, shape: &Shape) -> Option<Shape> {
@@ -3879,5 +3916,192 @@ mod geometry_query_tests {
             error.downcast_ref::<OcctError>(),
             Some(OcctError::InvalidInput { .. })
         ));
+    }
+
+    // --- surface_data ----------------------------------------------------
+
+    /// The `(u, v)` a surface's own frame assigns to `point`, matching the
+    /// formulas `Part.Plane`/`Cylinder`/`Sphere.parameter` use.
+    fn parameters(surface: &SurfaceData, point: Vector3) -> (f64, f64) {
+        match surface {
+            SurfaceData::Plane {
+                origin,
+                x_dir,
+                y_dir,
+                ..
+            } => {
+                let offset = point.sub(origin);
+                (offset.dot(x_dir), offset.dot(y_dir))
+            }
+            SurfaceData::Cylinder {
+                origin,
+                axis,
+                x_dir,
+                ..
+            } => {
+                let offset = point.sub(origin);
+                let y_dir = axis.cross(x_dir);
+                let mut u = offset.dot(&y_dir).atan2(offset.dot(x_dir));
+                if u < 0.0 {
+                    u += std::f64::consts::TAU;
+                }
+                (u, offset.dot(axis))
+            }
+            SurfaceData::Sphere {
+                center,
+                axis,
+                x_dir,
+                radius,
+            } => {
+                let offset = point.sub(center);
+                let y_dir = axis.cross(x_dir);
+                let mut u = offset.dot(&y_dir).atan2(offset.dot(x_dir));
+                if u < 0.0 {
+                    u += std::f64::consts::TAU;
+                }
+                let v = (offset.dot(axis) / radius).clamp(-1.0, 1.0).asin();
+                (u, v)
+            }
+            SurfaceData::Other { .. } => panic!("a classified surface was expected"),
+        }
+    }
+
+    #[test]
+    fn a_box_face_is_a_plane_and_parameter_round_trips_exactly() {
+        let backend = OcctBackend::new();
+        let shape = box_shape();
+        let face = backend.elements(&shape, ElementKind::Face)[0]
+            .shape
+            .clone();
+        let surface = backend.surface_data(&face).expect("a box face has a surface");
+        let SurfaceData::Plane {
+            origin,
+            x_dir,
+            y_dir,
+            normal,
+        } = &surface
+        else {
+            panic!("a box face is planar, got {surface:?}");
+        };
+
+        // The frame is orthonormal and right-handed.
+        assert!((x_dir.length() - 1.0).abs() < 1e-12);
+        assert!((y_dir.length() - 1.0).abs() < 1e-12);
+        assert!((normal.length() - 1.0).abs() < 1e-12);
+        assert!(x_dir.dot(y_dir).abs() < 1e-12);
+        assert!(normal.sub(&x_dir.cross(y_dir)).length() < 1e-12);
+
+        // A point on the face's own parameter grid comes back exactly.
+        let (u, v) = (0.3, 0.7);
+        let point = backend.face_value_at(&face, u, v).unwrap();
+        let expected = origin.add(&x_dir.scale(u)).add(&y_dir.scale(v));
+        assert!(close(point, expected), "{point:?} != {expected:?}");
+        let (u2, v2) = parameters(&surface, point);
+        assert!((u2 - u).abs() < 1e-12, "u = {u2}");
+        assert!((v2 - v).abs() < 1e-12, "v = {v2}");
+        assert!(close(backend.face_value_at(&face, u2, v2).unwrap(), point));
+    }
+
+    #[test]
+    fn a_cylinder_face_is_classified_and_parameter_round_trips() {
+        let backend = OcctBackend::new();
+        let shape = backend
+            .make_cylinder(2.0, 5.0, Vector3::zero(), Vector3::new(0.0, 0.0, 1.0))
+            .expect("a cylinder");
+        let faces = backend.elements(&shape, ElementKind::Face);
+        let (face, surface) = faces
+            .iter()
+            .find_map(|face| match backend.surface_data(&face.shape) {
+                Some(surface @ SurfaceData::Cylinder { .. }) => {
+                    Some((face.shape.clone(), surface))
+                }
+                _ => None,
+            })
+            .expect("a cylindrical lateral face");
+        let SurfaceData::Cylinder {
+            origin,
+            axis,
+            x_dir,
+            radius,
+        } = &surface
+        else {
+            unreachable!();
+        };
+        assert!((radius - 2.0).abs() < 1e-12);
+        assert!(axis.sub(&Vector3::new(0.0, 0.0, 1.0)).length() < 1e-12);
+        assert!((origin.length()).abs() < 1e-12);
+        assert!(x_dir.dot(axis).abs() < 1e-12);
+
+        for (u, v) in [(0.0, 0.5), (0.7, 2.0), (5.5, 4.0)] {
+            let point = backend.face_value_at(&face, u, v).unwrap();
+            let (u2, v2) = parameters(&surface, point);
+            assert!((u2 - u).abs() < 1e-9, "u {u} -> {u2}");
+            assert!((v2 - v).abs() < 1e-9, "v {v} -> {v2}");
+            let back = backend.face_value_at(&face, u2, v2).unwrap();
+            assert!(close(back, point), "{back:?} != {point:?}");
+        }
+    }
+
+    #[test]
+    fn a_sphere_face_is_classified_and_parameter_round_trips() {
+        let backend = OcctBackend::new();
+        let shape = backend
+            .make_sphere(2.0, Vector3::new(1.0, 2.0, 3.0))
+            .expect("a sphere");
+        let face = backend.elements(&shape, ElementKind::Face)[0]
+            .shape
+            .clone();
+        let surface = backend.surface_data(&face).expect("a sphere face has a surface");
+        let SurfaceData::Sphere {
+            center,
+            axis,
+            x_dir,
+            radius,
+        } = &surface
+        else {
+            panic!("a sphere face is spherical, got {surface:?}");
+        };
+        assert!((radius - 2.0).abs() < 1e-12);
+        assert!(center.sub(&Vector3::new(1.0, 2.0, 3.0)).length() < 1e-12);
+        assert!(axis.sub(&Vector3::new(0.0, 0.0, 1.0)).length() < 1e-12);
+        assert!(x_dir.dot(axis).abs() < 1e-12);
+
+        for (u, v) in [(0.0, 0.0), (0.8, 0.4), (4.0, -1.2)] {
+            let point = backend.face_value_at(&face, u, v).unwrap();
+            let (u2, v2) = parameters(&surface, point);
+            assert!((u2 - u).abs() < 1e-9, "u {u} -> {u2}");
+            assert!((v2 - v).abs() < 1e-9, "v {v} -> {v2}");
+            let back = backend.face_value_at(&face, u2, v2).unwrap();
+            assert!(close(back, point), "{back:?} != {point:?}");
+        }
+    }
+
+    #[test]
+    fn other_surfaces_keep_a_generic_type_id() {
+        let backend = OcctBackend::new();
+        let cone = backend
+            .make_cone(
+                2.0,
+                1.0,
+                4.0,
+                Vector3::zero(),
+                Vector3::new(0.0, 0.0, 1.0),
+            )
+            .expect("a cone");
+        let surface = backend
+            .elements(&cone, ElementKind::Face)
+            .iter()
+            .find_map(|face| match backend.surface_data(&face.shape) {
+                Some(SurfaceData::Other { type_id }) if type_id == "Part::GeomCone" => {
+                    Some(type_id)
+                }
+                _ => None,
+            })
+            .expect("a conical face is generic");
+        assert_eq!(surface, "Part::GeomCone");
+
+        // A non-face reports no surface at all.
+        let edge = backend.elements(&cone, ElementKind::Edge)[0].shape.clone();
+        assert!(backend.surface_data(&edge).is_none());
     }
 }

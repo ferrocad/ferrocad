@@ -76,9 +76,7 @@ fn placement_mutation_moves_the_geometry_and_keeps_the_surface_frame() {
         // `Surface` is the un-oriented surface of the placed face, so it is the
         // negative of `normalAt` (the face was reversed) but still rotated.
         let surface = face.getattr("Surface").expect("Surface");
-        let surface_normal = surface
-            .call_method1("normal", (0.0, 0.0))
-            .expect("Surface.normal");
+        let surface_normal = surface.getattr("normal").expect("Surface.normal");
         assert!(
             dot(py, &surface_normal, &expected) < -0.9999,
             "Surface.normal must be the placed, un-oriented normal"

@@ -18,6 +18,7 @@
 #include <BRepTools.hxx>
 #include <BRep_Tool.hxx>
 #include <GeomAbs_Shape.hxx>
+#include <GeomAbs_SurfaceType.hxx>
 #include <TopAbs_ShapeEnum.hxx>
 #include <TopExp.hxx>
 #include <TopExp_Explorer.hxx>
@@ -294,6 +295,76 @@ inline bool fc_face_value(const TopoDS_Shape& shape,
     catch (...)
     {
         return false;
+    }
+}
+
+// The face's backing surface, in the frame `BRepAdaptor_Surface` evaluates with
+// (so parameters derived from it round-trip through `fc_face_value`). The
+// first value tags the kind, followed by the frame:
+//
+//   1  plane     origin xyz, x-direction xyz, y-direction xyz, normal xyz  (13)
+//   2  cylinder  origin xyz, axis xyz, x-direction xyz, radius             (11)
+//   3  sphere    centre xyz, axis xyz, x-direction xyz, radius             (11)
+//
+// Any other surface (cone, torus, B-spline, …) leaves `out` empty; the caller
+// keeps the type id instead.
+inline void fc_face_surface_data(const TopoDS_Shape& shape, rust::Vec<double>& out)
+{
+    try
+    {
+        BRepAdaptor_Surface surface(TopoDS::Face(shape));
+        const auto push_point = [&out](const gp_Pnt& p) {
+            out.push_back(p.X());
+            out.push_back(p.Y());
+            out.push_back(p.Z());
+        };
+        const auto push_dir = [&out](const gp_Dir& d) {
+            out.push_back(d.X());
+            out.push_back(d.Y());
+            out.push_back(d.Z());
+        };
+
+        switch (surface.GetType())
+        {
+            case GeomAbs_Plane:
+            {
+                const gp_Ax3 pos = surface.Plane().Position();
+                out.push_back(1.0);
+                push_point(pos.Location());
+                push_dir(pos.XDirection());
+                push_dir(pos.YDirection());
+                push_dir(pos.Direction());
+                break;
+            }
+            case GeomAbs_Cylinder:
+            {
+                const gp_Cylinder cylinder = surface.Cylinder();
+                const gp_Ax3 pos = cylinder.Position();
+                out.push_back(2.0);
+                push_point(pos.Location());
+                push_dir(pos.Direction());
+                push_dir(pos.XDirection());
+                out.push_back(cylinder.Radius());
+                break;
+            }
+            case GeomAbs_Sphere:
+            {
+                const gp_Sphere sphere = surface.Sphere();
+                const gp_Ax3 pos = sphere.Position();
+                out.push_back(3.0);
+                push_point(pos.Location());
+                push_dir(pos.Direction());
+                push_dir(pos.XDirection());
+                out.push_back(sphere.Radius());
+                break;
+            }
+            default:
+                break;
+        }
+    }
+    catch (...)
+    {
+        out.clear();
     }
 }
 

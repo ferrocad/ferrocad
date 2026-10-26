@@ -38,7 +38,7 @@ use ferrocad_curves::{
     EdgeCurve, Ellipse, Hyperbola, Line, LineSegment, NurbsCurve, Parabola, TOLERANCE, Vector3,
     polygon,
 };
-use ferrocad_geom::{ElementKind, Shape};
+use ferrocad_geom::{ElementKind, Shape, SurfaceData};
 use ferrocad_occt::surface_ops;
 use ferrocad_part::backend;
 use ferrocad_types::Matrix4;
@@ -2096,15 +2096,40 @@ pub struct PyPlane {
     location: Vector3,
     /// The unit normal, as upstream's `Geom_Plane` keeps a `gp_Dir`.
     normal: Vector3,
+    /// The in-plane `u` direction (upstream's `gp_Ax3::XDirection`).
+    x_dir: Vector3,
+    /// The in-plane `v` direction (upstream's `gp_Ax3::YDirection`).
+    y_dir: Vector3,
 }
 
 impl PyPlane {
     /// A plane through `origin` with `normal` (normalised), for the Rust side
-    /// (`Shape.findPlane`). The Python constructor validates the same way.
+    /// (`Shape.findPlane`). The frame is the one [`plane_frame`] derives, which
+    /// `toShape` also uses. The Python constructor validates the same way.
     pub(crate) fn from_parts(origin: Vector3, normal: Vector3) -> Self {
+        let normal = normal.normalize();
+        let (x_dir, y_dir) = plane_frame(&normal);
+        Self {
+            location: origin,
+            normal,
+            x_dir,
+            y_dir,
+        }
+    }
+
+    /// A plane with the backend's own surface frame (`gp_Ax3`), so
+    /// [`parameter`](Self::parameter) and `Face.valueAt` agree exactly.
+    pub(crate) fn from_frame(
+        origin: Vector3,
+        normal: Vector3,
+        x_dir: Vector3,
+        y_dir: Vector3,
+    ) -> Self {
         Self {
             location: origin,
             normal: normal.normalize(),
+            x_dir: x_dir.normalize(),
+            y_dir: y_dir.normalize(),
         }
     }
 }
@@ -2128,10 +2153,32 @@ impl PyPlane {
         if normal.is_null() {
             return Err(OCCError::new_err("Part.Plane needs a non-zero normal"));
         }
-        Ok(Self {
-            location,
-            normal: normal.normalize(),
-        })
+        Ok(Self::from_parts(location, normal))
+    }
+
+    /// The plane's origin (upstream's `Plane.Position`).
+    #[getter]
+    fn Position(&self, py: Python<'_>) -> PyResult<PyObject> {
+        py_vector(py, self.location)
+    }
+
+    /// The plane's unit normal (upstream's `Plane.normal`).
+    #[getter]
+    fn normal(&self, py: Python<'_>) -> PyResult<PyObject> {
+        py_vector(py, self.normal)
+    }
+
+    /// The parameters `(u, v)` of `point` (`Plane.parameter`): the point's
+    /// coordinates in the plane frame, `u = (p - origin)·x_dir` and
+    /// `v = (p - origin)·y_dir`.
+    fn parameter(&self, py: Python<'_>, point: &Bound<'_, PyAny>) -> PyResult<PyObject> {
+        let point = vector(point)?;
+        let offset = point.sub(&self.location);
+        Ok(
+            PyTuple::new(py, [offset.dot(&self.x_dir), offset.dot(&self.y_dir)])?
+                .into_any()
+                .unbind(),
+        )
     }
 
     /// The plane's origin (upstream's `Plane.Position`).
@@ -2220,6 +2267,26 @@ pub struct PyCylinder {
     center: Vector3,
     /// The unit axis direction (upstream's `Axis` on the surface is a direction).
     axis: Vector3,
+    /// The surface's `u = 0` direction (upstream's `gp_Ax3::XDirection`).
+    x_dir: Vector3,
+}
+
+impl PyCylinder {
+    /// A cylinder with the backend's own surface frame (`gp_Ax3`), so
+    /// [`parameter`](Self::parameter) and `Face.valueAt` agree exactly.
+    pub(crate) fn from_parts(
+        radius: f64,
+        origin: Vector3,
+        axis: Vector3,
+        x_dir: Vector3,
+    ) -> Self {
+        Self {
+            radius,
+            center: origin,
+            axis: axis.normalize(),
+            x_dir: x_dir.normalize(),
+        }
+    }
 }
 
 #[pymethods]
@@ -2248,10 +2315,13 @@ impl PyCylinder {
         if axis.is_null() {
             return Err(OCCError::new_err("Part.Cylinder needs a non-zero axis"));
         }
+        let axis = axis.normalize();
+        let (x_dir, _) = plane_frame(&axis);
         Ok(Self {
             radius,
             center,
-            axis: axis.normalize(),
+            axis,
+            x_dir,
         })
     }
 
@@ -2270,6 +2340,22 @@ impl PyCylinder {
     #[getter]
     fn Axis(&self, py: Python<'_>) -> PyResult<PyObject> {
         py_vector(py, self.axis)
+    }
+
+    /// The parameters `(u, v)` of `point` (`Cylinder.parameter`): the angle
+    /// around the axis measured from `x_dir`, normalized to OCCT's `[0, 2π)`, and
+    /// the height along the axis.
+    fn parameter(&self, py: Python<'_>, point: &Bound<'_, PyAny>) -> PyResult<PyObject> {
+        let point = vector(point)?;
+        let offset = point.sub(&self.center);
+        let y_dir = self.axis.cross(&self.x_dir);
+        let mut u = offset.dot(&y_dir).atan2(offset.dot(&self.x_dir));
+        if u < 0.0 {
+            u += std::f64::consts::TAU;
+        }
+        Ok(PyTuple::new(py, [u, offset.dot(&self.axis)])?
+            .into_any()
+            .unbind())
     }
 
     fn __repr__(&self) -> String {
@@ -2295,6 +2381,26 @@ pub struct PySphere {
     center: Vector3,
     /// The unit axis direction (upstream's `Sphere.Axis` is a direction).
     axis: Vector3,
+    /// The surface's `u = 0` direction (upstream's `gp_Ax3::XDirection`).
+    x_dir: Vector3,
+}
+
+impl PySphere {
+    /// A sphere with the backend's own surface frame (`gp_Ax3`), so
+    /// [`parameter`](Self::parameter) and `Face.valueAt` agree exactly.
+    pub(crate) fn from_parts(
+        radius: f64,
+        center: Vector3,
+        axis: Vector3,
+        x_dir: Vector3,
+    ) -> Self {
+        Self {
+            radius,
+            center,
+            axis: axis.normalize(),
+            x_dir: x_dir.normalize(),
+        }
+    }
 }
 
 #[pymethods]
@@ -2323,10 +2429,13 @@ impl PySphere {
         if axis.is_null() {
             return Err(OCCError::new_err("Part.Sphere needs a non-zero axis"));
         }
+        let axis = axis.normalize();
+        let (x_dir, _) = plane_frame(&axis);
         Ok(Self {
             radius,
             center,
-            axis: axis.normalize(),
+            axis,
+            x_dir,
         })
     }
 
@@ -2345,6 +2454,23 @@ impl PySphere {
     #[getter]
     fn Axis(&self, py: Python<'_>) -> PyResult<PyObject> {
         py_vector(py, self.axis)
+    }
+
+    /// The parameters `(u, v)` of `point` (`Sphere.parameter`): the longitude
+    /// around the axis measured from `x_dir`, normalized to OCCT's `[0, 2π)`, and
+    /// the latitude in `[-π/2, π/2]` measured from the equator.
+    fn parameter(&self, py: Python<'_>, point: &Bound<'_, PyAny>) -> PyResult<PyObject> {
+        let point = vector(point)?;
+        let offset = point.sub(&self.center);
+        let y_dir = self.axis.cross(&self.x_dir);
+        let mut u = offset.dot(&y_dir).atan2(offset.dot(&self.x_dir));
+        if u < 0.0 {
+            u += std::f64::consts::TAU;
+        }
+        let latitude = (offset.dot(&self.axis) / self.radius).clamp(-1.0, 1.0);
+        Ok(PyTuple::new(py, [u, latitude.asin()])?
+            .into_any()
+            .unbind())
     }
 
     fn __repr__(&self) -> String {
@@ -7794,6 +7920,63 @@ impl PyFace {
     }
 }
 
+/// The unit normal of a planar face's surface, from two non-parallel tangent
+/// directions of its outer wire. Used only as the fallback for a surface this
+/// slice does not classify (upstream derives the normal the same way for a
+/// plane, then flips it for a reversed face).
+fn planar_wire_normal(shape: &Shape) -> Option<Vector3> {
+    let backend = backend();
+    let wire = backend.outer_wire(shape)?;
+    let mut directions = Vec::new();
+    for edge in backend.elements(&wire, ElementKind::Edge) {
+        if let Ok(curve) = backend.curve_of(&edge.shape) {
+            directions.push(curve.tangent_at(0.0));
+        }
+    }
+    for (index, first) in directions.iter().enumerate() {
+        for second in directions.iter().skip(index + 1) {
+            let normal = first.cross(second);
+            if normal.length() > 1e-9 {
+                return Some(normal.normalize());
+            }
+        }
+    }
+    None
+}
+
+/// The outward unit normal of a face at surface parameters `(u, v)`.
+///
+/// A classified surface gives the analytic normal (constant on a plane, radial
+/// on a cylinder or sphere); any other surface falls back to the planar edge
+/// normal, and reports an honest error when that is undefined. The face
+/// orientation flips the result, as upstream's `Face.normalAt` (and
+/// `Tools::getNormal`) does.
+fn surface_normal(shape: &Shape, u: f64, v: f64) -> PyResult<Vector3> {
+    let backend = backend();
+    let normal = match backend.surface_data(shape) {
+        Some(SurfaceData::Plane { normal, .. }) => Some(normal),
+        Some(SurfaceData::Cylinder { axis, x_dir, .. }) => {
+            let y_dir = axis.cross(&x_dir);
+            Some(x_dir.scale(u.cos()).add(&y_dir.scale(u.sin())))
+        }
+        Some(SurfaceData::Sphere { axis, x_dir, .. }) => {
+            let y_dir = axis.cross(&x_dir);
+            let radial = x_dir.scale(u.cos()).add(&y_dir.scale(u.sin()));
+            Some(radial.scale(v.cos()).add(&axis.scale(v.sin())))
+        }
+        Some(SurfaceData::Other { .. }) | None => planar_wire_normal(shape),
+    };
+    let Some(mut normal) = normal else {
+        return Err(OCCError::new_err(
+            "normal not defined: only planar, cylindrical and spherical faces are supported",
+        ));
+    };
+    if backend.orientation(shape) == Some("Reversed") {
+        normal = normal.neg();
+    }
+    Ok(normal.normalize())
+}
+
 /// The kernel shapes of a wire, a single shape, or a list of either.
 fn wire_shapes(value: &Bound<'_, PyAny>) -> PyResult<Vec<Shape>> {
     if let Ok(compound) = value.downcast::<crate::containers::PyCompound>() {
@@ -7889,9 +8072,13 @@ impl PyFace {
         py_vector(py, point)
     }
 
-    fn normalAt(slf: PyRef<'_, Self>, _u: f64, _v: f64) -> PyResult<PyObject> {
-        require_edge(slf.as_super(), "normalAt")?;
-        Err(edge_query_error("normalAt"))
+    fn normalAt(slf: PyRef<'_, Self>, py: Python<'_>, u: f64, v: f64) -> PyResult<PyObject> {
+        let shape = slf
+            .as_super()
+            .shape()
+            .ok_or_else(|| empty_error("normalAt"))?;
+        let normal = surface_normal(&shape, u, v)?;
+        py_vector(py, normal)
     }
 
     fn tangentAt(slf: PyRef<'_, Self>, _u: f64, _v: f64) -> PyResult<PyObject> {

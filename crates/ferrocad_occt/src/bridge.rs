@@ -418,6 +418,10 @@ mod ffi {
             z: &mut f64,
         ) -> bool;
 
+        /// The face's backing surface frame, tagged by kind (`BRepAdaptor_Surface`
+        /// for a plane, cylinder or sphere); empty for any other surface.
+        fn fc_face_surface_data(shape: &TopoDS_Shape, out: &mut Vec<f64>);
+
         /// Serialise a shape to BREP bytes (in memory; the crate only does files).
         fn fc_brep_write(shape: &TopoDS_Shape, out: &mut Vec<u8>);
         /// Read a shape from BREP bytes; null on failure.

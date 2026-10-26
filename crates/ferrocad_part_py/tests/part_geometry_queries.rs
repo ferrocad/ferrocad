@@ -346,11 +346,9 @@ fn face_value_at_evaluates_a_plane() {
             .call_method1("makeBox", (2.0, 3.0, 4.0))
             .expect("makeBox");
         let box_face = sub_shapes(&box_shape, "Faces")[0].clone();
-        // `Shape.Faces` currently yields a plain `Part.Shape` (the flat-face
-        // typing gap), so build a real `Part.Face` from that boundary.
-        let face = part
-            .call_method1("Face", (&box_face,))
-            .expect("Part.Face(box face)");
+        // `Shape.Faces` now yields a real `Part.Face`, so its queries are
+        // available directly (no rebuild through `Part.Face(boundary)`).
+        let face = box_face.clone();
 
         let range: Vec<f64> = face
             .getattr("ParameterRange")

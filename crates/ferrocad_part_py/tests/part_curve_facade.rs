@@ -81,8 +81,8 @@ fn make_face_accepts_a_face_and_uses_its_outer_wire() {
             .expect("a box face");
         let source_type = source.get_type().name().expect("type name").to_string();
         assert!(
-            source_type == "PartShape" || source_type == "Shape",
-            "Shape.Faces yields PartShape objects, got {source_type}"
+            source_type == "Face" || source_type == "PartShape" || source_type == "Shape",
+            "Shape.Faces yields typed Part.Face wrappers, got {source_type}"
         );
         let expected = bound_lengths(&source);
 

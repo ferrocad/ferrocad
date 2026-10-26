@@ -1558,6 +1558,9 @@ pub struct PyPlaneSurface {
 }
 
 impl PyPlaneSurface {
+    /// The fallback planar surface (kept for callers that only know a normal);
+    /// `Face.Surface` itself now returns a fully classified `Part.Plane`.
+    #[allow(dead_code)]
     pub(crate) fn new(normal: Vector3) -> Self {
         Self { normal }
     }

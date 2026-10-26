@@ -52,7 +52,9 @@ use ferrocad_core::{
     Document, ExtensionData, ExtensionValue, ObjectId, Placement, Property, Rotation, ScaleType,
     Vector3,
 };
-use ferrocad_geom::{ElementKind, ElementRef, Lineage, MapVersion, Shape, TessellationOptions};
+use ferrocad_geom::{
+    ElementKind, ElementRef, Lineage, MapVersion, Shape, SurfaceData, TessellationOptions,
+};
 use ferrocad_occt::surface_ops;
 use ferrocad_occt::OcctBackend;
 use ferrocad_part::{
@@ -663,31 +665,123 @@ impl PartShape {
         Ok(slf.clone().into_any().unbind())
     }
 
-    /// The direct children (`Shape.childShapes`): the highest-level sub-shapes.
+    /// The direct children (`Shape.childShapes`): one topological level down.
+    ///
+    /// Without `shape_type` this follows upstream's `childShapes()` — the
+    /// immediate sub-shapes:
+    ///
+    /// - a compound (and a comp-solid) reports its direct members (a compound of
+    ///   two boxes gives the two solids);
+    /// - a solid reports its shell, a shell its faces, a face its wires, a wire
+    ///   its edges, and an edge its vertices — upstream's `TopoDS_Iterator`
+    ///   result;
+    /// - a vertex has none.
+    ///
+    /// A compound's members are reconstructed from the element lists because the
+    /// seam has no direct-child enumeration: a sub-shape whose coarser kind is
+    /// present in the compound is a descendant, not a member. A compound nested
+    /// directly in another is therefore reported through the shapes it holds. The
+    /// element maps are depth-first, so members of one kind keep the compound's
+    /// order; a mixed compound is sorted back into it by the first vertex each
+    /// member owns.
+    ///
+    /// With `shape_type` (for example `"Face"`) this is upstream's
+    /// `getChildShapes(type)`: *every* sub-shape of that kind, recursively, so a
+    /// box's faces are found even though they sit under its shell.
     #[pyo3(signature = (shape_type = None))]
     fn childShapes(
         &self,
         py: Python<'_>,
         shape_type: Option<&str>,
     ) -> PyResult<Vec<Py<PartShape>>> {
-        let _ = shape_type;
-        for kind in [
-            ElementKind::Solid,
-            ElementKind::Shell,
-            ElementKind::Face,
-            ElementKind::Wire,
-            ElementKind::Edge,
-            ElementKind::Vertex,
-        ] {
-            let shapes = self.sub_shapes(kind)?;
-            if !shapes.is_empty() {
-                return shapes
+        let shape = self
+            .shape()
+            .ok_or_else(|| PyValueError::new_err("a null shape has no sub-shapes"))?;
+        let shapes: Vec<Shape> = match shape_type {
+            Some(name) => {
+                let kind = ElementKind::ALL
                     .into_iter()
-                    .map(|shape| Py::new(py, PartShape::from_shape(shape)))
-                    .collect();
+                    .find(|kind| name.starts_with(kind.prefix()))
+                    .ok_or_else(|| {
+                        PyValueError::new_err(format!(
+                            "childShapes cannot enumerate {name:?}: the backend has no such element kind"
+                        ))
+                    })?;
+                self.sub_shapes(kind)?
             }
-        }
-        Ok(Vec::new())
+            None => {
+                let backend = ferrocad_part::backend();
+                let inferred = self.shape_type();
+                // The kind walk cannot tell a compound from the one shape inside
+                // it; the compound count can, and a compound never sits under a
+                // non-compound, so a non-zero count means this shape is one.
+                let is_compound = backend
+                    .count_sub_shapes(&shape, "Compound")
+                    .map(|count| count > 0)
+                    .unwrap_or(false)
+                    || inferred == "Compound";
+                if is_compound {
+                    // The direct-child count lets a homogeneous compound stop
+                    // after its coarsest kind, without ancestor queries.
+                    let total = backend.count_sub_shapes(&shape, "SubShape").ok();
+                    let mut members: Vec<Shape> = Vec::new();
+                    let mut coarser: Vec<ElementKind> = Vec::new();
+                    let mut member_kinds = 0usize;
+                    for kind in ElementKind::ALL {
+                        let before = members.len();
+                        for element in backend.elements(&shape, kind) {
+                            let nested = coarser.iter().any(|outer| {
+                                !backend.ancestors(&shape, &element, *outer).is_empty()
+                            });
+                            if !nested {
+                                members.push(element.shape);
+                            }
+                        }
+                        if members.len() > before {
+                            member_kinds += 1;
+                        }
+                        coarser.push(kind);
+                        if total == Some(members.len()) {
+                            break;
+                        }
+                    }
+                    // A single kind is already in the compound's depth-first
+                    // order. A mixed compound is grouped by kind above, so sort
+                    // it back by the first vertex each member owns (the element
+                    // maps themselves are depth-first, hence in member order).
+                    if member_kinds > 1 && members.len() > 1 {
+                        let vertices = backend.elements(&shape, ElementKind::Vertex);
+                        let position = |member: &Shape| {
+                            backend
+                                .elements(member, ElementKind::Vertex)
+                                .first()
+                                .and_then(|first| {
+                                    vertices.iter().position(|candidate| {
+                                        backend.same_shape(&candidate.shape, &first.shape)
+                                    })
+                                })
+                                .unwrap_or(usize::MAX)
+                        };
+                        members.sort_by_cached_key(position);
+                    }
+                    members
+                } else {
+                    match inferred {
+                        "Solid" => self.sub_shapes(ElementKind::Shell)?,
+                        "CompSolid" => self.sub_shapes(ElementKind::Solid)?,
+                        "Shell" => self.sub_shapes(ElementKind::Face)?,
+                        "Face" => self.sub_shapes(ElementKind::Wire)?,
+                        "Wire" => self.sub_shapes(ElementKind::Edge)?,
+                        "Edge" => self.sub_shapes(ElementKind::Vertex)?,
+                        _ => Vec::new(),
+                    }
+                }
+            }
+        };
+        shapes
+            .into_iter()
+            .map(|shape| Py::new(py, PartShape::from_shape(shape)))
+            .collect()
     }
 
     /// A transformed copy (`Shape.transformed(matrix, copy=True)`).
@@ -1150,21 +1244,22 @@ impl PartShape {
             .collect()
     }
 
-    /// The wires (`Shape.Wires`) as `Part.Shape` handles.
+    /// The wires (`Shape.Wires`) as `Part.Wire` wrappers.
     #[getter]
-    fn Wires(&self, py: Python<'_>) -> PyResult<Vec<Py<PartShape>>> {
+    fn Wires(&self, py: Python<'_>) -> PyResult<Vec<Py<curves::PyWire>>> {
         self.sub_shapes(ElementKind::Wire)?
             .into_iter()
-            .map(|shape| Py::new(py, PartShape::from_shape(shape)))
+            .map(|shape| Py::new(py, curves::PyWire::from_shape(shape)))
             .collect()
     }
 
-    /// The faces (`Shape.Faces`) as `Part.Shape` handles.
+    /// The faces (`Shape.Faces`) as `Part.Face` wrappers, so `Face.valueAt` and
+    /// `Face.Surface` are available without a cast.
     #[getter]
-    fn Faces(&self, py: Python<'_>) -> PyResult<Vec<Py<PartShape>>> {
+    fn Faces(&self, py: Python<'_>) -> PyResult<Vec<Py<curves::PyFace>>> {
         self.sub_shapes(ElementKind::Face)?
             .into_iter()
-            .map(|shape| Py::new(py, PartShape::from_shape(shape)))
+            .map(|shape| Py::new(py, curves::PyFace::from_shape(shape)))
             .collect()
     }
 
@@ -1178,14 +1273,15 @@ impl PartShape {
     }
 
     /// The direct sub-shapes (`Shape.SubShapes`): the same list
-    /// [`childShapes`](Self::childShapes) returns, matching upstream's one
-    /// immediate solid for a box.
+    /// [`childShapes`](Self::childShapes) returns without a type filter — one
+    /// topological level, or a compound's members.
     #[getter]
     fn SubShapes(&self, py: Python<'_>) -> PyResult<Vec<Py<PartShape>>> {
         self.childShapes(py, None)
     }
 
-    /// The solids (`Shape.Solids`) as `Part.Shape` handles.
+    /// The solids (`Shape.Solids`) as `Part.Shape` handles. There is no
+    /// `Part.Solid` class yet, so a solid stays a generic shape handle.
     #[getter]
     fn Solids(&self, py: Python<'_>) -> PyResult<Vec<Py<PartShape>>> {
         self.sub_shapes(ElementKind::Solid)?
@@ -1194,7 +1290,8 @@ impl PartShape {
             .collect()
     }
 
-    /// The shells (`Shape.Shells`) as `Part.Shape` handles.
+    /// The shells (`Shape.Shells`) as `Part.Shape` handles. There is no
+    /// `Part.Shell` class yet, so a shell stays a generic shape handle.
     #[getter]
     fn Shells(&self, py: Python<'_>) -> PyResult<Vec<Py<PartShape>>> {
         self.sub_shapes(ElementKind::Shell)?
@@ -1244,26 +1341,52 @@ impl PartShape {
 
     /// The backing surface (`Face.Surface`), when the shape is a face.
     ///
-    /// A planar face reports the elementary plane description (with its unit
-    /// normal); any other surface reports the kernel's type id, as before.
+    /// A plane, cylinder or sphere reports the elementary surface class
+    /// (`Part.Plane`, `Part.Cylinder`, `Part.Sphere`) with the kernel's own
+    /// parameter frame; any other surface reports the kernel's type id.
     #[getter]
     fn Surface(&self, py: Python<'_>) -> PyResult<Option<PyObject>> {
         let Some(shape) = self.shape() else {
             return Ok(None);
         };
-        let Some(type_id) = ferrocad_part::backend().surface_type(&shape) else {
+        let Some(surface) = ferrocad_part::backend().surface_data(&shape) else {
             return Ok(None);
         };
-        if type_id == "Part::GeomPlane" {
-            let normal = planar_surface_normal(&shape)
-                .unwrap_or_else(|| ferrocad_curves::Vector3::new(0.0, 0.0, 1.0));
-            return Ok(Some(
-                Py::new(py, solids::PyPlaneSurface::new(normal))?.into_any(),
-            ));
-        }
-        Ok(Some(
-            Py::new(py, curves::PySurface::new(type_id))?.into_any(),
-        ))
+        Ok(Some(match surface {
+            SurfaceData::Plane {
+                origin,
+                x_dir,
+                y_dir,
+                normal,
+            } => Py::new(
+                py,
+                curves::PyPlane::from_frame(origin, normal, x_dir, y_dir),
+            )?
+            .into_any(),
+            SurfaceData::Cylinder {
+                origin,
+                axis,
+                x_dir,
+                radius,
+            } => Py::new(
+                py,
+                curves::PyCylinder::from_parts(radius, origin, axis, x_dir),
+            )?
+            .into_any(),
+            SurfaceData::Sphere {
+                center,
+                axis,
+                x_dir,
+                radius,
+            } => Py::new(
+                py,
+                curves::PySphere::from_parts(radius, center, axis, x_dir),
+            )?
+            .into_any(),
+            SurfaceData::Other { type_id } => {
+                Py::new(py, curves::PySurface::new(type_id))?.into_any()
+            }
+        }))
     }
 
     /// The face normal at `(u, v)` (`Face.normalAt`).
@@ -1585,8 +1708,11 @@ impl PartShape {
         "Part::TopoShape"
     }
 
-    /// The compound children (`Shape.Compounds`). The seam has no enumeration for
-    /// compounds inside a shape, so this is always empty.
+    /// The compound children (`Shape.Compounds`). The seam's element
+    /// enumeration has no `Compound` kind (`count_sub_shapes` counts them
+    /// recursively but cannot list them), so this is always empty rather than
+    /// guessed. A compound's direct members are still available through
+    /// [`childShapes`](Self::childShapes) and [`SubShapes`](Self::SubShapes).
     #[getter]
     fn Compounds(&self, py: Python<'_>) -> Py<PyList> {
         PyList::empty(py).unbind()

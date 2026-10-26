@@ -79,7 +79,7 @@ fn make_plane_builds_a_planar_face() {
             surface.getattr("TypeId").unwrap().extract::<String>().unwrap(),
             "Part::GeomPlane"
         );
-        assert_components(&surface.call_method1("normal", (0.0, 0.0)).unwrap(), (0.0, 0.0, 1.0));
+        assert_components(&surface.getattr("normal").unwrap(), (0.0, 0.0, 1.0));
 
         // Reversing orients the face, not its surface.
         face.call_method0("reverse").expect("Shape.reverse");
@@ -88,7 +88,7 @@ fn make_plane_builds_a_planar_face() {
             (0.0, 0.0, -1.0),
         );
         let surface = face.getattr("Surface").expect("Face.Surface");
-        assert_components(&surface.call_method1("normal", (0.0, 0.0)).unwrap(), (0.0, 0.0, 1.0));
+        assert_components(&surface.getattr("normal").unwrap(), (0.0, 0.0, 1.0));
     });
 }
 

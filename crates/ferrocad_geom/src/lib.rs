@@ -54,6 +54,45 @@ use ferrocad_types::{Matrix4, Placement, Vector3};
 use ferrocad_curves::EdgeCurve;
 
 // ---------------------------------------------------------------------------
+// SurfaceData
+// ---------------------------------------------------------------------------
+
+/// The elementary description of a face's backing surface (`Face.Surface`).
+///
+/// `Plane`, `Cylinder` and `Sphere` carry the frame the backend's surface
+/// evaluator uses, so a point's parameters computed from the frame round-trip
+/// through `face_value_at`. `Other` keeps only the FreeCAD type id for surfaces
+/// this slice does not classify (cone, torus, B-spline, …).
+#[derive(Clone, Debug, PartialEq)]
+pub enum SurfaceData {
+    /// A plane: `point = origin + u * x_dir + v * y_dir`.
+    Plane {
+        origin: Vector3,
+        x_dir: Vector3,
+        y_dir: Vector3,
+        normal: Vector3,
+    },
+    /// A cylinder: `point = origin + radius * (cos(u) * x_dir + sin(u) * y_dir)
+    /// + v * axis`, with `y_dir = axis × x_dir`.
+    Cylinder {
+        origin: Vector3,
+        axis: Vector3,
+        x_dir: Vector3,
+        radius: f64,
+    },
+    /// A sphere: `point = center + radius * (cos(v) * (cos(u) * x_dir
+    /// + sin(u) * y_dir) + sin(v) * axis)`, with `y_dir = axis × x_dir`.
+    Sphere {
+        center: Vector3,
+        axis: Vector3,
+        x_dir: Vector3,
+        radius: f64,
+    },
+    /// Any other surface, identified only by its FreeCAD type id.
+    Other { type_id: String },
+}
+
+// ---------------------------------------------------------------------------
 // Shape
 // ---------------------------------------------------------------------------
 
@@ -635,6 +674,17 @@ pub trait GeometryBackend: Send + Sync {
 
     /// The backing surface's FreeCAD type id (`Face.Surface.TypeId`).
     fn surface_type(&self, _shape: &Shape) -> Option<String> {
+        None
+    }
+
+    /// The backing surface's elementary frame (`Face.Surface` for a plane,
+    /// cylinder or sphere), in the **actual** parameterisation the backend's
+    /// `face_value_at` uses (`BRepAdaptor_Surface` for OCCT).
+    ///
+    /// The default reports no data; a backend that can classify a face's
+    /// surface overrides this. Other surface kinds (a cone, torus or B-spline)
+    /// are reported as [`SurfaceData::Other`] so the type id is still available.
+    fn surface_data(&self, _shape: &Shape) -> Option<SurfaceData> {
         None
     }
 

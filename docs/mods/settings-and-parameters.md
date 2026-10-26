@@ -190,6 +190,15 @@ field: clicking the swatch opens `ferrocad_widgets::color::palette` as an anchor
 overlay, and a pick commits through the same path as typing the hex. The palette is a
 fixed set of neutrals and accents; typing an arbitrary colour still works.
 
+Document objects use the same row contract, so a workbench's properties reach the
+pane with the same controls. `ferrocad_shell.properties()` maps
+`App::PropertyBool` to `bool`, `App::PropertyEnumeration` to `enum` (with the
+object's own `getEnumerationsOfProperty` values as `choices`), and a single
+`App::PropertyColor` to `color`. A colour is serialised as `#rrggbb` even though
+the core stores it as a one-element RGBA `PropertyColorList`; a pick keeps the
+stored alpha and only replaces RGB. A real multi-colour list (`DiffuseColor`) has
+no single value to swatch, so it stays read-only.
+
 A numeric row that declares both `min` and `max` gets a slim track beside the field;
 clicking it opens `ferrocad_widgets::slider` as an anchored overlay. The scale is
 **logarithmic when `min > 0`**, so equal drag distances change the value by equal

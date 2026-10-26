@@ -39,6 +39,10 @@ _EDITABLE_KINDS = {
     "App::PropertyAngle": "quantity",
     "App::PropertyQuantity": "quantity",
     "App::PropertyEnumeration": "enum",
+    # `App::PropertyColor` has no separate core value: the registry seeds it as a
+    # one-element `PropertyColorList`, so the colour kind is keyed on the list
+    # type. A multi-colour list has no single value to edit and stays read-only.
+    "App::PropertyColorList": "color",
 }
 
 # The synthetic settings root. It is not a document: ``/`` is illegal in a
@@ -377,6 +381,61 @@ def _expression_properties(obj) -> set:
         return set()
 
 
+def _property_choices(obj, prop: str) -> list:
+    """An enumeration's allowed values; ``[]`` for any other property."""
+    try:
+        return list(obj.getEnumerationsOfProperty(prop) or [])
+    except Exception:
+        return []
+
+
+def _single_color(value):
+    """The single ``(r, g, b, a)`` of a colour property, else ``None``.
+
+    ``App::PropertyColor`` is stored as a one-element ``ColorList`` (that is how
+    the core registry seeds it), while ``DiffuseColor`` is a real list. Only the
+    one-colour form has a value the swatch and its hex field can edit.
+    """
+    if not isinstance(value, (list, tuple)) or len(value) != 1:
+        return None
+    rgba = value[0]
+    if not isinstance(rgba, (list, tuple)):
+        return None
+    try:
+        channels = tuple(float(channel) for channel in rgba[:4])
+    except (TypeError, ValueError):
+        return None
+    if len(channels) < 3:
+        return None
+    return channels + (1.0,) * (4 - len(channels))
+
+
+def _color_hex(rgba) -> str:
+    """``#rrggbb`` for a 0..1 RGBA tuple; the swatch and palette ignore alpha."""
+
+    def channel(value):
+        return max(0, min(255, round(value * 255.0)))
+
+    red, green, blue = (channel(value) for value in rgba[:3])
+    return f"#{red:02x}{green:02x}{blue:02x}"
+
+
+def _parse_color(text: str, alpha: float = 1.0):
+    """A ``#rgb``/``#rrggbb``/``#rrggbbaa`` editor string as a colour list."""
+    digits = text.strip()
+    if digits.startswith("#"):
+        digits = digits[1:]
+    if len(digits) == 3:
+        digits = "".join(digit * 2 for digit in digits)
+    if len(digits) not in (6, 8) or any(
+        digit not in "0123456789abcdefABCDEF" for digit in digits
+    ):
+        raise ValueError(f"invalid colour {text!r}; use #rrggbb")
+    channels = [int(digits[index : index + 2], 16) / 255.0 for index in (0, 2, 4)]
+    channels.append(int(digits[6:8], 16) / 255.0 if len(digits) == 8 else alpha)
+    return [tuple(channels)]
+
+
 def properties(object_name: str) -> str:
     """Property rows for one object, for the property editor pane.
 
@@ -409,21 +468,35 @@ def properties(object_name: str) -> str:
             status = ""
         type_id = obj.getTypeIdOfProperty(prop)
         kind = _EDITABLE_KINDS.get(type_id, "")
-        rows.append(
-            {
-                "name": prop,
-                "type": type_id,
-                "value": str(value),
-                "status": status,
-                "editable": bool(kind) and prop not in driven,
-                "kind": kind,
-            }
-        )
+        row = {
+            "name": prop,
+            "type": type_id,
+            "value": str(value),
+            "status": status,
+            "editable": False,
+            "kind": kind,
+        }
+        if kind == "enum":
+            # The select box needs the property's own options; without them the
+            # row would fall back to a text field that can only mis-spell a value.
+            row["choices"] = _property_choices(obj, prop)
+        elif kind == "color":
+            rgba = _single_color(value)
+            if rgba is None:
+                row["kind"] = ""
+            else:
+                row["value"] = _color_hex(rgba)
+        row["editable"] = bool(row["kind"]) and prop not in driven
+        rows.append(row)
     return _json(rows)
 
 
-def _coerce(kind: str, text: str):
-    """Turn an editor string into the Python value a property setter expects."""
+def _coerce(kind: str, text: str, current=None):
+    """Turn an editor string into the Python value a property setter expects.
+
+    ``current`` is the property's present value; a colour edit keeps its alpha,
+    because the swatch and the hex field only show ``#rrggbb``.
+    """
     if kind in ("text", "enum"):
         return text
     if kind == "bool":
@@ -434,6 +507,9 @@ def _coerce(kind: str, text: str):
         return float(text)
     if kind == "quantity":
         return FreeCAD.Units.Quantity(text)
+    if kind == "color":
+        rgba = _single_color(current)
+        return _parse_color(text, rgba[3] if rgba else 1.0)
     raise ValueError(f"unsupported editor kind {kind!r}")
 
 
@@ -463,7 +539,13 @@ def set_property(object_name: str, prop: str, text: str) -> str:
     if prop in _expression_properties(obj):
         return _json({"ok": False, "error": f"{prop} is set by an expression"})
     try:
-        value = _coerce(kind, text)
+        current = getattr(obj, prop)
+    except Exception:
+        current = None
+    if kind == "color" and _single_color(current) is None:
+        return _json({"ok": False, "error": f"{prop} is not a single colour"})
+    try:
+        value = _coerce(kind, text, current)
     except Exception as exc:
         return _json({"ok": False, "error": str(exc)})
 

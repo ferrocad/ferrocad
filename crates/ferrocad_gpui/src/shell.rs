@@ -2937,9 +2937,11 @@ impl Shell {
                 // The edit is done, so a palette that asked for it can close (the
                 // typed-hex path and the swatch path share this commit).
                 self.row_popup = None;
-                if let Some(input) = self.prop_inputs.get_mut(key) {
-                    input.seeded = text.to_string();
-                }
+                // The field is re-seeded from the refreshed row on the next render.
+                // Seeding it from `text` here would hide a palette pick: the text
+                // field still shows the old hex, and the "value changed underneath"
+                // check would then think they agree.
+                //
                 // A settings edit can switch the provider or change the spacing
                 // the Grid popover advertises; re-read the summary so an open
                 // popover follows the row the user just changed. The axis cross's
@@ -5065,6 +5067,125 @@ mod tests {
             .map(|row| row.value.clone())
             .unwrap_or_default();
         assert!(result.contains("50"), "Derived.Result = {result:?}");
+    }
+
+    /// A document object's own enum and colour properties get the same controls as
+    /// the `Settings/*` rows. Both surfaces share `properties_rows_panel`, so the
+    /// row data is the whole difference: the Python layer must supply an
+    /// enumeration's own options and serialise a colour as `#rrggbb`.
+    #[gpui::test]
+    fn a_document_enum_and_colour_use_the_rich_widgets(cx: &mut TestAppContext) {
+        let _guard = crate::PYTHON_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let model = boot_shell();
+        let added = crate::python::evaluate(
+            "doc.Params.addProperty('App::PropertyColor', 'Color', 'Base', 'Surface colour')\n\
+             doc.Params.Color = [(0.26, 0.55, 0.85, 1.0)]\n\
+             doc.recompute()\n\
+             'ok'",
+        )
+        .expect("the interpreter ran");
+        assert!(added.ok, "{}", added.output);
+
+        let window = cx.update(|cx| {
+            let model = model.clone();
+            cx.open_window(Default::default(), move |_window, cx| {
+                cx.new(|cx| Shell::from_model(model.clone(), cx))
+            })
+            .unwrap()
+        });
+        let mut cx = VisualTestContext::from_window(window.into(), cx);
+        let shell: Entity<Shell> = window.root(&mut cx).unwrap();
+        let mut dev_cx = open_dev_tools(&mut cx, &shell);
+        cx.update(|_window, cx| {
+            shell.update(cx, |shell, cx| {
+                shell.select("Params", cx);
+                cx.notify();
+            });
+        });
+        show_dev_section(&mut cx, &shell, &mut dev_cx, dev_section::PROPERTIES);
+
+        let rows = shell.read_with(&cx, |shell, _| {
+            shell.model.lock().unwrap().properties.clone()
+        });
+        let mode = rows
+            .iter()
+            .find(|row| row.name == "Mode")
+            .expect("Mode row");
+        assert_eq!(mode.kind, "enum");
+        assert_eq!(
+            mode.choices,
+            ["Fast".to_string(), "Accurate".to_string()],
+            "the row carries the property's own options"
+        );
+        let color = rows
+            .iter()
+            .find(|row| row.name == "Color")
+            .expect("Color row");
+        assert_eq!(color.kind, "color");
+        assert_eq!(
+            color.value, "#428cd9",
+            "the RGBA tuple is serialised as a hex swatch value"
+        );
+
+        assert!(
+            dev_cx
+                .debug_bounds("prop-enum-Params.Mode-select")
+                .is_some(),
+            "the enumeration is a select box"
+        );
+        assert!(
+            dev_cx.debug_bounds("color-Params.Color-swatch").is_some(),
+            "the colour is a swatch"
+        );
+
+        // The select box commits through the normal property path.
+        click_at(&mut dev_cx, "prop-enum-Params.Mode-select");
+        dev_cx.update(|window, cx| {
+            let _ = window.draw(cx);
+        });
+        assert!(
+            dev_cx.debug_bounds("choose-Params.Mode-choices").is_some(),
+            "the dropdown lists Fast and Accurate"
+        );
+        click_at(&mut dev_cx, "choose-Params.Mode-choice-1");
+        dev_cx.update(|window, cx| {
+            let _ = window.draw(cx);
+        });
+        let mode = crate::python::properties("Params")
+            .expect("properties")
+            .into_iter()
+            .find(|row| row.name == "Mode")
+            .map(|row| row.value)
+            .unwrap_or_default();
+        assert_eq!(mode, "Accurate", "the pick committed the enumeration");
+
+        // The palette commits a hex colour and keeps the property's alpha.
+        click_at(&mut dev_cx, "color-Params.Color-swatch");
+        dev_cx.update(|window, cx| {
+            let _ = window.draw(cx);
+        });
+        click_at(&mut dev_cx, "color-Params.Color-pick-ef4444");
+        dev_cx.update(|window, cx| {
+            let _ = window.draw(cx);
+        });
+        let color = crate::python::properties("Params")
+            .expect("properties")
+            .into_iter()
+            .find(|row| row.name == "Color")
+            .map(|row| row.value)
+            .unwrap_or_default();
+        assert_eq!(color, "#ef4444", "the palette committed the colour");
+        let field = shell.read_with(&cx, |shell, cx| {
+            shell
+                .prop_inputs
+                .get("Params.Color")
+                .map(|input| input.state.read(cx).text().to_string())
+        });
+        assert_eq!(
+            field.as_deref(),
+            Some("#ef4444"),
+            "the hex field follows the palette"
+        );
     }
 
     /// A2: the shell owns the selection, pushes it to `FreeCADGui.Selection`, and a

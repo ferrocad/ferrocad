@@ -527,6 +527,66 @@ class SettingsModelTests(unittest.TestCase):
         # An unknown brief is not mistaken for a settings path.
         self.assertEqual(json.loads(ferrocad_shell.properties("Other")), [])
 
+    def test_document_enum_and_colour_rows_carry_widget_metadata(self):
+        """The property pane's rich widgets are driven by the row data alone.
+
+        A document enumeration needs its own options for the select box, and a
+        single colour must arrive as ``#rrggbb`` for the swatch and its palette.
+        """
+        doc = FreeCAD.newDocument("Doc")
+        FreeCAD.setActiveDocument("Doc")
+        obj = doc.addObject("App::FeaturePython", "Params")
+        obj.addProperty("App::PropertyEnumeration", "Mode", "Base", "Mode")
+        obj.Mode = ["Fast", "Accurate"]
+        obj.addProperty("App::PropertyColor", "Color", "Base", "Colour")
+        obj.Color = [(0.26, 0.55, 0.85, 0.5)]
+        obj.addProperty("App::PropertyColorList", "Diffuse", "Base", "Many colours")
+        obj.Diffuse = [(1.0, 0.0, 0.0, 1.0), (0.0, 1.0, 0.0, 1.0)]
+        doc.recompute()
+
+        rows = {
+            row["name"]: row
+            for row in json.loads(ferrocad_shell.properties("Params"))
+        }
+        self.assertEqual(rows["Mode"]["kind"], "enum")
+        self.assertEqual(rows["Mode"]["choices"], ["Fast", "Accurate"])
+        self.assertTrue(rows["Mode"]["editable"])
+
+        self.assertEqual(rows["Color"]["kind"], "color")
+        self.assertEqual(rows["Color"]["value"], "#428cd9")
+        self.assertTrue(rows["Color"]["editable"])
+
+        # A real colour *list* has no single value to swatch, so it stays read-only.
+        self.assertEqual(rows["Diffuse"]["kind"], "")
+        self.assertFalse(rows["Diffuse"]["editable"])
+
+        # Both widgets commit through the normal property path.
+        picked = json.loads(ferrocad_shell.set_property("Params", "Mode", "Accurate"))
+        self.assertTrue(picked["ok"], picked)
+        self.assertEqual(obj.Mode, "Accurate")
+
+        repainted = json.loads(ferrocad_shell.set_property("Params", "Color", "#ef4444"))
+        self.assertTrue(repainted["ok"], repainted)
+        self.assertEqual(
+            [round(channel, 4) for channel in obj.Color[0]],
+            [0.9373, 0.2667, 0.2667, 0.5],
+        )
+
+        rejected = json.loads(ferrocad_shell.set_property("Params", "Color", "nope"))
+        self.assertFalse(rejected["ok"])
+        self.assertIn("invalid colour", rejected["error"])
+        # The failed edit left the stored colour (and its alpha) alone.
+        self.assertEqual(
+            [round(channel, 4) for channel in obj.Color[0]],
+            [0.9373, 0.2667, 0.2667, 0.5],
+        )
+
+        # A multi-colour list refuses a single-colour edit instead of truncating it.
+        refused = json.loads(ferrocad_shell.set_property("Params", "Diffuse", "#123456"))
+        self.assertFalse(refused["ok"])
+        self.assertIn("single colour", refused["error"])
+        self.assertEqual(len(obj.Diffuse), 2)
+
 
 if __name__ == "__main__":
     unittest.main()

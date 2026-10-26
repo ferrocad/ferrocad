@@ -25,7 +25,7 @@ use gpui::{
     rgba,
 };
 
-use ferrocad_theme::ui::{CHROME_LINE, DOCK_BORDER, FG, HOVER_RIM, MUTED, WHEEL_GLASS};
+use ferrocad_theme::ui::{CHROME_LINE, DOCK_BORDER, FG, HOVER_RIM, MUTED, PANEL};
 
 /// Vertical travel that doubles a non-zero value.
 pub const DOUBLING_PX: f32 = 48.0;
@@ -366,10 +366,11 @@ pub fn scale(
         .gap_1()
         .p_2()
         .rounded_md()
-        .bg(rgba(WHEEL_GLASS))
+        // Opaque: the scale is read while the pointer is moving over a busy pane,
+        // and a translucent panel made the ticks fight the rows behind it.
+        .bg(rgb(PANEL))
         .border_1()
         .border_color(rgba(DOCK_BORDER))
-        .occlude()
         .text_xs()
         // A press in the overlay must not reach the pane behind it.
         .on_mouse_down(gpui::MouseButton::Left, |_event, _window, cx| {

@@ -4495,12 +4495,24 @@ fn scrub_overlay(shell: &Shell, window: &Window) -> Option<AnyElement> {
     if drag.window != window.window_handle().window_id() {
         return None;
     }
+    // Place the scale beside the press, never over it: the handle is 18 px and the
+    // Dev Tools window is narrow enough that a right-side panel would be snapped
+    // back across the pointer. Once the panel covers the press, the pane stops
+    // seeing the drag.
+    let viewport = window.viewport_size();
+    let gap = px(24.);
+    let width = px(scrub::PANEL_WIDTH);
+    let mut left = drag.anchor.x + gap;
+    if left + width + px(8.) > viewport.width {
+        left = drag.anchor.x - gap - width;
+    }
+    let left = left.max(px(8.));
     let panel = scrub::scale("property-scrub", &drag.label, drag.scrub, &drag.unit);
     Some(
         deferred(
             anchored()
                 .anchor(Anchor::TopLeft)
-                .position(point(drag.anchor.x + px(24.), drag.anchor.y - px(90.)))
+                .position(point(left, drag.anchor.y - px(90.)))
                 .snap_to_window_with_margin(px(8.))
                 .child(panel),
         )
@@ -5506,6 +5518,13 @@ mod tests {
         assert!(
             dev_cx.debug_bounds("property-scrub-scale").is_some(),
             "the scale appears as soon as the handle is held"
+        );
+        let scale = dev_cx
+            .debug_bounds("property-scrub-scale")
+            .expect("the scale is on screen");
+        assert!(
+            !scale.contains(&press),
+            "the scale never covers the handle it is reporting on (scale {scale:?}, press {press:?})"
         );
         assert!(
             cx.update(|_window, cx| shell.read(cx).scrub.is_some()),

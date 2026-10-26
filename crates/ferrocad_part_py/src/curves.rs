@@ -2162,9 +2162,9 @@ impl PyPlane {
         py_vector(py, self.location)
     }
 
-    /// The plane's unit normal (upstream's `Plane.normal`).
-    #[getter]
-    fn normal(&self, py: Python<'_>) -> PyResult<PyObject> {
+    /// The unit normal at `(u, v)` (upstream `GeomSurface.normal`); it is
+    /// constant over a plane. `Plane.Axis` is the same direction as a property.
+    fn normal(&self, py: Python<'_>, _u: f64, _v: f64) -> PyResult<PyObject> {
         py_vector(py, self.normal)
     }
 
@@ -2342,6 +2342,14 @@ impl PyCylinder {
         py_vector(py, self.axis)
     }
 
+    /// The unit normal at `(u, v)` (upstream `GeomSurface.normal`): radial at
+    /// `u`, independent of `v`.
+    fn normal(&self, py: Python<'_>, u: f64, _v: f64) -> PyResult<PyObject> {
+        let y_dir = self.axis.cross(&self.x_dir);
+        let radial = self.x_dir.scale(u.cos()).add(&y_dir.scale(u.sin()));
+        py_vector(py, radial)
+    }
+
     /// The parameters `(u, v)` of `point` (`Cylinder.parameter`): the angle
     /// around the axis measured from `x_dir`, normalized to OCCT's `[0, 2π)`, and
     /// the height along the axis.
@@ -2454,6 +2462,18 @@ impl PySphere {
     #[getter]
     fn Axis(&self, py: Python<'_>) -> PyResult<PyObject> {
         py_vector(py, self.axis)
+    }
+
+    /// The unit normal at `(u, v)` (upstream `GeomSurface.normal`): the radial
+    /// direction at that longitude/latitude.
+    fn normal(&self, py: Python<'_>, u: f64, v: f64) -> PyResult<PyObject> {
+        let y_dir = self.axis.cross(&self.x_dir);
+        let radial = self
+            .x_dir
+            .scale(v.cos() * u.cos())
+            .add(&y_dir.scale(v.cos() * u.sin()))
+            .add(&self.axis.scale(v.sin()));
+        py_vector(py, radial)
     }
 
     /// The parameters `(u, v)` of `point` (`Sphere.parameter`): the longitude

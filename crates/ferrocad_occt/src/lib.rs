@@ -292,6 +292,23 @@ mod tests {
     }
 
     #[test]
+    fn an_impossible_fillet_reports_not_done_instead_of_aborting() {
+        let backend = OcctBackend::new();
+        let cube = backend.make_box(10.0, 10.0, 10.0).unwrap();
+        let edge = backend.elements(&cube, ElementKind::Edge)[0].clone();
+        // A radius far larger than the box cannot be built. OCCT's `Shape()` raises
+        // `StdFail_NotDone` in this situation, so the seam has to `Build()` and check
+        // `IsDone()` first; calling `Shape()` first aborted the process.
+        let error = backend
+            .fillet(&cube, std::slice::from_ref(&edge), 1.0e6)
+            .expect_err("an impossible fillet is an error, not a crash");
+        assert!(
+            error.to_string().contains("fillet"),
+            "the error names the operation: {error}"
+        );
+    }
+
+    #[test]
     fn a_placed_box_tessellates_at_its_location() {
         use ferrocad_types::{Placement, Rotation, Vector3};
         let backend = OcctBackend::new();

@@ -402,10 +402,10 @@ pub(crate) fn fillet(
             .ok_or(OcctError::InvalidInput { what: "null edge" })?;
         op.pin_mut().add_edge(radius, TopoDS::Edge(edge_shape));
     }
-    // `Shape()` triggers the build; `IsDone()` is meaningful afterwards.
-    {
-        let _ = op.pin_mut().Shape();
-    }
+    // `Build()` runs the algorithm without `Shape()`'s `Check()`, which raises
+    // `StdFail_NotDone` on a failure. `IsDone()` is only meaningful afterwards.
+    let progress = ffi::message::Message_ProgressRange_new();
+    op.pin_mut().Build(&progress);
     if !op.IsDone() {
         return Err(OcctError::NotDone {
             operation: "fillet",
@@ -494,9 +494,10 @@ pub(crate) fn chamfer(
             None => op.pin_mut().add_edge(d1, TopoDS::Edge(edge_shape)),
         }
     }
-    {
-        let _ = op.pin_mut().Shape();
-    }
+    // Same build-then-check as the fillet above: `Shape()` would raise
+    // `StdFail_NotDone` instead of reporting it.
+    let progress = ffi::message::Message_ProgressRange_new();
+    op.pin_mut().Build(&progress);
     if !op.IsDone() {
         return Err(OcctError::NotDone {
             operation: "chamfer",

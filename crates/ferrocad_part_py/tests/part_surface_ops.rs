@@ -677,11 +677,12 @@ fn helix_consumers_use_the_exact_edge() {
             py_length(&shape)
         );
 
-        // The thread is the same exact helix swept with a circular profile.
+        // The thread is upstream's two-profile solid (a loft through the
+        // inner/outer thread wires), not a swept circular tube.
         let thread = part
             .call_method1("makeThread", (1.0, 0.5, 4.0, 2.0))
             .expect("Part.makeThread");
-        assert_eq!(shape_type(&thread), "Shell");
+        assert_eq!(shape_type(&thread), "Solid");
         assert!(valid(&thread));
 
         freecad

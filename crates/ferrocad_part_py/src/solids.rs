@@ -2482,13 +2482,11 @@ fn tube_shape(spine: &Shape, radius: f64, tolerance: f64) -> Result<Shape, Strin
         .map_err(|error| error.to_string())
 }
 
-/// `TopoShape::makeThread` in this seam: a helical circular pipe.
+/// `TopoShape::makeThread`: a solid lofted between two thread profiles.
 ///
-/// Upstream builds a solid from two thread-profile wires on coaxial cylinders;
-/// the seam has no through-sections between wires, so the thread is built the way
-/// the task asks: the exact-by-construction helix edge is swept with a circular
-/// profile of radius `depth / 2`, giving a helical tube that spans `depth`
-/// radially.
+/// Upstream builds two thread-profile wires on coaxial cylinders of `radius`
+/// and `radius + depth` and lofts them with `BRepOffsetAPI_ThruSections`; this
+/// uses the same construction through [`surface_ops::make_thread`].
 fn thread_shape(pitch: f64, depth: f64, height: f64, radius: f64) -> Result<Shape, String> {
     if pitch < CONFUSION {
         return Err("Pitch of thread too small".to_string());
@@ -2502,13 +2500,7 @@ fn thread_shape(pitch: f64, depth: f64, height: f64, radius: f64) -> Result<Shap
     if radius < CONFUSION {
         return Err("Radius of thread too small".to_string());
     }
-    let spine = surface_ops::make_helix_edge(pitch, height, radius, 0.0, false)
-        .map_err(|error| error.to_string())?;
-    // The helix starts at (radius, 0, 0) with tangent (0, 2*pi*radius/pitch, 1).
-    let tangent = Vector3::new(0.0, std::f64::consts::TAU * radius / pitch, 1.0).normalize();
-    let profile = circular_profile(Vector3::new(radius, 0.0, 0.0), tangent, depth * 0.5)?;
-    surface_ops::make_pipe_shell(&spine, &[profile], false, false)
-        .map_err(|error| error.to_string())
+    surface_ops::make_thread(pitch, depth, height, radius).map_err(|error| error.to_string())
 }
 
 /// `Part.makeTorus(radius1, radius2, pnt=None, dir=None, angle1=0, angle2=360, angle=360)`
@@ -2792,11 +2784,11 @@ fn makeTube(
     Ok(PartShape::from_shape(shape))
 }
 
-/// `Part.makeThread(pitch, depth, height, radius)` → a helical pipe.
+/// `Part.makeThread(pitch, depth, height, radius)` → a thread solid.
 ///
-/// Upstream builds a thread solid from two thread-profile wires; the seam has no
-/// through-sections, so this builds the helix and sweeps a circular profile of
-/// radius `depth / 2` along it with `make_pipe` (a `makePipeShell`-style sweep).
+/// Upstream lofts two thread-profile wires on coaxial cylinders of `radius` and
+/// `radius + depth` into a solid with `BRepOffsetAPI_ThruSections`; this is that
+/// same two-profile solid, built by [`surface_ops::make_thread`].
 #[pyfunction]
 #[pyo3(signature = (pitch, depth, height, radius))]
 fn makeThread(pitch: f64, depth: f64, height: f64, radius: f64) -> PyResult<PartShape> {

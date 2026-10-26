@@ -26,12 +26,14 @@
 #include <BRepLib_FindSurface.hxx>
 #include <BRepOffsetAPI_MakeOffset.hxx>
 #include <BRepOffsetAPI_MakePipeShell.hxx>
+#include <BRepOffsetAPI_ThruSections.hxx>
 #include <BRepPrimAPI_MakeSphere.hxx>
 #include <BRepTools_WireExplorer.hxx>
 #include <BRep_Builder.hxx>
 #include <BRep_Tool.hxx>
 #include <GCE2d_MakeSegment.hxx>
 #include <GProp_GProps.hxx>
+#include <Geom2d_Ellipse.hxx>
 #include <Geom2d_TrimmedCurve.hxx>
 #include <Geom_ConicalSurface.hxx>
 #include <Geom_CylindricalSurface.hxx>
@@ -748,6 +750,90 @@ inline std::unique_ptr<TopoDS_Shape> fc_make_helix_edge(double pitch, double hei
         }
         BRepLib::BuildCurves3d(edge);
         return owned(edge);
+    }
+    catch (...) {
+        return nullptr;
+    }
+}
+
+// --- Two-profile thread solid ----------------------------------------------
+
+// `TopoShape::makeThread`: a solid lofted between two thread-profile wires on
+// coaxial cylinders of `radius` and `radius + depth`.
+//
+// Each profile is a half-ellipse in the surface's (u, v) parameter space —
+// major axis `2*pi`, minor axis `pitch` on the inner cylinder and `pitch / 4` on
+// the outer one — closed by its major-axis chord. The 2D curves become edges on
+// their cylinders, `BRepLib::BuildCurves3d` builds the 3D representatives, and
+// `BRepOffsetAPI_ThruSections` lofts the two wires into a solid. This is
+// upstream's construction verbatim, including the 2D placement of the ellipse.
+inline std::unique_ptr<TopoDS_Shape> fc_make_thread(double pitch, double depth,
+                                                    double height, double radius)
+{
+    using namespace fc_surface_ops_internal;
+    if (!std::isfinite(pitch) || pitch < Precision::Confusion()) {
+        return nullptr;
+    }
+    if (!std::isfinite(depth) || depth < Precision::Confusion()) {
+        return nullptr;
+    }
+    if (!std::isfinite(height) || height < Precision::Confusion()) {
+        return nullptr;
+    }
+    if (!std::isfinite(radius) || radius < Precision::Confusion()) {
+        return nullptr;
+    }
+    try {
+        const gp_Ax2 axis(gp_Pnt(0.0, 0.0, 0.0), gp_Dir(0.0, 0.0, 1.0));
+        const Handle(Geom_CylindricalSurface) inner = new Geom_CylindricalSurface(axis, radius);
+        const Handle(Geom_CylindricalSurface) outer =
+            new Geom_CylindricalSurface(axis, radius + depth);
+
+        const gp_Pnt2d center(kTwoPi, height / 2.0);
+        const gp_Dir2d direction(kTwoPi, height / 4.0);
+        const gp_Ax2d thread_axis(center, direction);
+
+        const double major = kTwoPi;
+        const Handle(Geom2d_Ellipse) ellipse_inner = new Geom2d_Ellipse(thread_axis, major, pitch);
+        const Handle(Geom2d_Ellipse) ellipse_outer =
+            new Geom2d_Ellipse(thread_axis, major, pitch / 4.0);
+        const Handle(Geom2d_TrimmedCurve) arc_inner =
+            new Geom2d_TrimmedCurve(ellipse_inner, 0.0, kPi);
+        const Handle(Geom2d_TrimmedCurve) arc_outer =
+            new Geom2d_TrimmedCurve(ellipse_outer, 0.0, kPi);
+
+        // The chord closes the half-ellipse; both wires share it, and it is the
+        // same 2D segment on both cylinders.
+        const gp_Pnt2d start = ellipse_inner->Value(0.0);
+        const gp_Pnt2d end = ellipse_inner->Value(kPi);
+        const Handle(Geom2d_TrimmedCurve) segment = GCE2d_MakeSegment(start, end);
+
+        const TopoDS_Edge inner_arc = BRepBuilderAPI_MakeEdge(arc_inner, inner);
+        const TopoDS_Edge inner_chord = BRepBuilderAPI_MakeEdge(segment, inner);
+        const TopoDS_Edge outer_arc = BRepBuilderAPI_MakeEdge(arc_outer, outer);
+        const TopoDS_Edge outer_chord = BRepBuilderAPI_MakeEdge(segment, outer);
+        if (inner_arc.IsNull() || inner_chord.IsNull() || outer_arc.IsNull()
+            || outer_chord.IsNull()) {
+            return nullptr;
+        }
+
+        BRepBuilderAPI_MakeWire inner_wire(inner_arc, inner_chord);
+        BRepBuilderAPI_MakeWire outer_wire(outer_arc, outer_chord);
+        if (!inner_wire.IsDone() || !outer_wire.IsDone()) {
+            return nullptr;
+        }
+        BRepLib::BuildCurves3d(inner_wire.Wire());
+        BRepLib::BuildCurves3d(outer_wire.Wire());
+
+        BRepOffsetAPI_ThruSections loft(Standard_True);
+        loft.AddWire(inner_wire.Wire());
+        loft.AddWire(outer_wire.Wire());
+        loft.CheckCompatibility(Standard_False);
+        loft.Build();
+        if (!loft.IsDone()) {
+            return nullptr;
+        }
+        return owned(loft.Shape());
     }
     catch (...) {
         return nullptr;

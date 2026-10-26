@@ -3,8 +3,8 @@
 //! A sibling cxx bridge over `include/fc_surface_ops.hxx` (the same pattern as
 //! [`crate::chfi2d`] and [`crate::bridge`]): `opencascade-sys` 0.3 does not
 //! bridge partial spheres, variable-radius fillets, filled planar offsets,
-//! multi-shell solids, helices or pipe shells, so the header wraps the OCCT
-//! algorithms over the crate's own `TopoDS_Shape` type.
+//! multi-shell solids, helices, pipe shells or the two-profile thread loft, so
+//! the header wraps the OCCT algorithms over the crate's own `TopoDS_Shape` type.
 //!
 //! Every public function returns `Result<Shape, GeomError>`, the seam's error
 //! type: a null result becomes `Part.OCCError` (upstream's
@@ -13,11 +13,13 @@
 //!
 //! # Exactness
 //!
-//! Partial spheres, variable fillets, offsets, hollow solids and pipe sweeps are
-//! exact OCCT constructions. A circular helix is transcendental and has no
-//! polynomial OCCT curve: [`make_helix_edge`] builds the same object upstream
-//! does, an edge whose **pcurve is exact** on an analytic cylinder/cone, with
-//! `BRepLib::BuildCurves3d` producing the 3D representative to its tolerance.
+//! Partial spheres, variable fillets, offsets, hollow solids, pipe sweeps and
+//! the thread loft are exact OCCT constructions. A circular helix is
+//! transcendental and has no polynomial OCCT curve: [`make_helix_edge`] builds
+//! the same object upstream does, an edge whose **pcurve is exact** on an
+//! analytic cylinder/cone, with `BRepLib::BuildCurves3d` producing the 3D
+//! representative to its tolerance. [`make_thread`] similarly lofts two exact
+//! 2D profiles on analytic cylinders.
 
 use cxx::UniquePtr;
 use ferrocad_curves::Vector3;
@@ -86,6 +88,14 @@ mod ffi {
             profiles: &TopTools_ListOfShape,
             solid: bool,
             frenet: bool,
+        ) -> UniquePtr<TopoDS_Shape>;
+
+        /// Upstream's two-cylinder thread loft (`TopoShape::makeThread`).
+        fn fc_make_thread(
+            pitch: f64,
+            depth: f64,
+            height: f64,
+            radius: f64,
         ) -> UniquePtr<TopoDS_Shape>;
 
         /// The point and unit tangent at the start of a spine (`[p, t]`).
@@ -419,4 +429,108 @@ pub fn make_pipe_shell(
         ffi::fc_make_pipe_shell(inner, &list, solid, frenet),
         "make_pipe_shell",
     )
+}
+
+/// Upstream's `TopoShape::makeThread`: a solid lofted between two thread-profile
+/// wires on coaxial cylinders of `radius` and `radius + depth`.
+///
+/// Each profile is a half-ellipse in the surface's `(u, v)` parameter space
+/// (major axis `2*pi`, minor axis `pitch` on the inner cylinder and `pitch / 4`
+/// on the outer one) closed by its major-axis chord. The 2D curves become edges
+/// on their cylinders, `BRepLib::BuildCurves3d` builds the 3D representatives,
+/// and `BRepOffsetAPI_ThruSections` lofts the two wires into a solid — exactly
+/// upstream's construction.
+pub fn make_thread(pitch: f64, depth: f64, height: f64, radius: f64) -> Result<Shape, GeomError> {
+    finite(pitch, "the thread pitch must be finite")?;
+    finite(depth, "the thread depth must be finite")?;
+    finite(height, "the thread height must be finite")?;
+    finite(radius, "the thread radius must be finite")?;
+    if pitch <= 0.0 {
+        return Err(OcctError::InvalidInput {
+            what: "the thread pitch must be positive",
+        }
+        .into());
+    }
+    if depth <= 0.0 {
+        return Err(OcctError::InvalidInput {
+            what: "the thread depth must be positive",
+        }
+        .into());
+    }
+    if height <= 0.0 {
+        return Err(OcctError::InvalidInput {
+            what: "the thread height must be positive",
+        }
+        .into());
+    }
+    if radius <= 0.0 {
+        return Err(OcctError::InvalidInput {
+            what: "the thread radius must be positive",
+        }
+        .into());
+    }
+    owned(
+        ffi::fc_make_thread(pitch, depth, height, radius),
+        "make_thread",
+    )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::shape::sub_shape_map;
+    use ferrocad_geom::TessellationOptions;
+    use occt::top_abs::TopAbs_ShapeEnum;
+    use occt::topo_ds::TopoDS;
+
+    const RADIUS: f64 = 2.0;
+    const DEPTH: f64 = 0.5;
+
+    /// The thread is upstream's two-profile loft: one closed shell whose
+    /// vertices lie on the inner (`radius`) and outer (`radius + depth`)
+    /// cylinders, with a positive volume and a non-empty tessellation.
+    #[test]
+    fn make_thread_is_a_closed_solid_in_its_radial_band() {
+        let shape = make_thread(1.0, DEPTH, 4.0, RADIUS).expect("the thread solid builds");
+        let occt_shape = downcast(&shape).expect("an OCCT shape");
+        let guard = occt_shape.borrow();
+        let inner = guard.as_ref().expect("a non-null shape");
+
+        assert_eq!(inner.ShapeType(), TopAbs_ShapeEnum::TopAbs_SOLID);
+        let shells = sub_shape_map(inner, TopAbs_ShapeEnum::TopAbs_SHELL);
+        assert_eq!(shells.Extent(), 1, "one shell");
+        let vertices = sub_shape_map(inner, TopAbs_ShapeEnum::TopAbs_VERTEX);
+        assert!(vertices.Extent() > 0, "non-empty");
+
+        // `only_closed` ignores open shells, so a positive mass proves the shell
+        // is closed as well as enclosing volume.
+        let mut props = occt::g_prop::GProps_new();
+        occt::b_rep_g_prop::BRepGProp::VolumeProperties(inner, props.pin_mut(), true, false, false);
+        let volume = props.Mass();
+        assert!(volume > 0.0, "positive volume, got {volume}");
+
+        // Every vertex sits on one of the two cylinders, so the radial band is
+        // exactly [radius, radius + depth].
+        let mut min_radius = f64::INFINITY;
+        let mut max_radius = 0.0_f64;
+        for index in 1..=vertices.Extent() {
+            let vertex = TopoDS::Vertex(vertices.FindKey(index));
+            let point = occt::b_rep::BRep_Tool_Pnt(vertex);
+            let radius = point.X().hypot(point.Y());
+            min_radius = min_radius.min(radius);
+            max_radius = max_radius.max(radius);
+        }
+        assert!(
+            (min_radius - RADIUS).abs() < 1e-6,
+            "inner radius was {min_radius}"
+        );
+        assert!(
+            (max_radius - (RADIUS + DEPTH)).abs() < 1e-6,
+            "outer radius was {max_radius}"
+        );
+
+        let mesh = crate::topology::tessellate(&shape, &TessellationOptions::default())
+            .expect("the thread tessellates");
+        assert!(!mesh.triangles.is_empty(), "triangles after tessellation");
+    }
 }

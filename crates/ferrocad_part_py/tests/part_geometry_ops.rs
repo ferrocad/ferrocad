@@ -670,26 +670,32 @@ fn make_long_helix_is_a_wire() {
 
 /// `Part.makeThread` sweeps a circular profile along the helix.
 #[test]
-fn make_thread_is_a_helical_pipe() {
+fn make_thread_is_a_two_profile_solid() {
     boot();
     Python::with_gil(|py| {
         let part = PyModule::import(py, "Part").expect("import Part");
         let thread = part
             .call_method1("makeThread", (1.0, 0.5, 4.0, 2.0))
             .expect("Part.makeThread(1, 0.5, 4, 2)");
-        assert_eq!(shape_type(&thread), "Shell");
+        assert_eq!(shape_type(&thread), "Solid");
         assert!(is_valid(&thread));
         assert!(area(&thread) > 0.0);
-        // The tube stays within `radius + depth/2` radially. The tight box is
-        // used because the swept surface's control net overshoots the geometry.
+        // Upstream lofts the two thread-profile wires on the cylinders at
+        // `radius` and `radius + depth`, so the solid stays near that band
+        // radially. The box is loose because the loft's B-spline control net
+        // overshoots the analytic surface (the exact vertex radii are asserted
+        // in `ferrocad_occt`'s `make_thread` test).
         let thread_bounds = optimal_bounds(&thread);
         assert!(
             [thread_bounds[0], thread_bounds[1], thread_bounds[3], thread_bounds[4]]
                 .iter()
-                .all(|value| value.abs() < 2.75),
-            "the thread stays near radius 2: {thread_bounds:?}"
+                .all(|value| value.abs() <= 2.6),
+            "the thread spans radius 2.0 to radius + depth: {thread_bounds:?}"
         );
-        assert!(thread_bounds[5] > 4.0, "the profile adds height at the end");
+        assert!(
+            thread_bounds[2] > 0.9 && thread_bounds[5] < 3.5,
+            "the thread is centred on height / 2: {thread_bounds:?}"
+        );
     });
 }
 

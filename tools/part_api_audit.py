@@ -26,6 +26,8 @@ What is derived
                             FaceMaker selectors are excluded
 ``gap_markers``             literal ``not implemented yet``, ``not available in
                             this slice``, ``unsupported(`` and ``NotImplemented``
+``methods``                 per-Python-class member names: ``fn`` items, with
+                            ``#[getter]``/``#[setter]`` folded to the property
 ``methods_heuristic``       ``fn`` items inside ``#[pymethods]`` blocks; a text
                             pass only, and deliberately not compared
 ==========================  ==================================================
@@ -36,6 +38,9 @@ What is derived
   split by their ``Py::ExtensionModule`` class;
 - Python class names from ``Base::Interpreter().addType(..., "Name")`` in
   ``AppPart.cpp``, which is more reliable than a file-name guess;
+- **member names per class from the ``.pyi`` stubs** (``@export(PythonName=…)``
+  plus the class attributes and ``def`` items), which is the method-level
+  surface the C++ sources only generate;
 - ``.pyi``/``*PyImp.cpp`` stub names, counted for the text-pass check but not
   used in the class diff (the stub is named after the C++ class, so
   ``TopoShape.pyi`` is Python's ``Part.Shape``);
@@ -99,6 +104,7 @@ FN_DECL = re.compile(r"\bfn\s+([A-Za-z_]\w*)")
 PYCLASS = re.compile(r"#\[pyclass\((.*?)\)\]", re.S)
 ATTR_NAME = re.compile(r'\bname\s*=\s*"([^"]+)"')
 ATTR_MODULE = re.compile(r'\bmodule\s*=\s*"([^"]+)"')
+ATTR_EXTENDS = re.compile(r'\bextends\s*=\s*([A-Za-z_]\w*)')
 ADD_FUNCTION = re.compile(
     r"([A-Za-z_]\w*)\s*\.add_function\s*\(\s*wrap_pyfunction!\s*\(\s*([A-Za-z_]\w*)"
 )
@@ -133,6 +139,31 @@ GET_ATTR = re.compile(r'PyObject\*\s*(\w+)\s*\(\s*(\w+)\.getAttr\("([^"]+)"\)')
 PROPERTY_SOURCE = re.compile(r"PROPERTY_SOURCE[A-Z_]*\s*\(\s*([A-Za-z_][\w:]*)\s*,")
 TYPESYSTEM_SOURCE = re.compile(r"TYPESYSTEM_SOURCE[A-Z_]*\s*\(\s*([A-Za-z_][\w:]*)\s*,")
 PART_TYPE_MACRO = re.compile(r"\bPART_[A-Z0-9_]+_TYPE\b")
+
+# --- method inventories ----------------------------------------------------
+# Our classes: `#[pyclass(...)] struct <RustType>` names the Python class, and
+# each `#[pymethods] impl <RustType>` block declares its members.
+PYCLASS_STRUCT = re.compile(
+    r"#\[pyclass\((.*?)\)\]\s*(?:pub(?:\([^)]*\))?\s+)?struct\s+([A-Za-z_]\w*)",
+    re.S,
+)
+PYMETHODS_IMPL = re.compile(r"#\[pymethods\]\s*impl\s+([A-Za-z_]\w*)", re.S)
+RUST_FN = re.compile(
+    r"(?m)^\s+(?:pub(?:\([^)]*\))?\s+)?fn\s+([A-Za-z_]\w*)(?:\s*<[^>]*>)?\s*\("
+)
+RUST_GETTER = re.compile(
+    r"#\[getter\]\s*(?:\n\s*)*(?:pub(?:\([^)]*\))?\s+)?fn\s+([A-Za-z_]\w*)(?:\s*<[^>]*>)?\s*\("
+)
+RUST_SETTER = re.compile(
+    r"#\[setter\]\s*(?:\n\s*)*(?:pub(?:\([^)]*\))?\s+)?fn\s+set_([A-Za-z_]\w*)(?:\s*<[^>]*>)?\s*\("
+)
+
+# Upstream stubs: `@export(PythonName="Part.X", ...)` then `class _:`. Members
+# are the class's own attributes and `def` items (four-space indentation).
+PYI_EXPORT_CLASS = re.compile(r"@export\((.*?)\)\s*class\s+([A-Za-z_]\w*)\s*\(", re.S)
+PYI_PYTHON_NAME = re.compile(r'PythonName\s*=\s*"([^"]+)"')
+PYI_METHOD = re.compile(r"^    (?:async\s+)?def\s+([A-Za-z_]\w*)\s*\(", re.M)
+PYI_ATTRIBUTE = re.compile(r"^    ([A-Za-z_]\w*)\s*:\s*\S", re.M)
 
 
 # ---------------------------------------------------------------------------
@@ -271,6 +302,70 @@ def _method_count(text: str) -> int:
     return total
 
 
+def _class_key(python_name: str) -> str:
+    """``Part.Geom2d.BSplineCurve`` → ``Part.Geom2d::BSplineCurve`` (our key form)."""
+    module, _, name = python_name.rpartition(".")
+    return f"{module}::{name}" if module else python_name
+
+
+def _our_methods(texts: dict[str, str]) -> dict[str, list[str]]:
+    """Python-visible member names for every ``#[pyclass]`` in the bindings.
+
+    A ``#[getter]``/``#[setter]`` pair becomes one property name, matching the
+    attribute spelling in upstream's stubs. A pyclass that ``extends = PartShape``
+    inherits that class's members, so `Part.Face.Surface` counts on `Part.Face`
+    even though `Surface` is declared on the base.
+    """
+    classes: dict[str, str] = {}
+    base_of: dict[str, str] = {}
+    for text in texts.values():
+        for match in PYCLASS_STRUCT.finditer(text):
+            attrs, rust_type = match.groups()
+            name = ATTR_NAME.search(attrs)
+            module = ATTR_MODULE.search(attrs)
+            python = name.group(1) if name else rust_type
+            prefix = module.group(1) if module else "Part"
+            key = f"{prefix}::{python}"
+            classes[rust_type] = key
+            base = ATTR_EXTENDS.search(attrs)
+            if base is not None:
+                base_of[key] = base.group(1)
+
+    bases = {key: classes.get(rust, key) for key, rust in base_of.items()}
+    direct: dict[str, set[str]] = {}
+    for text in texts.values():
+        for match in PYMETHODS_IMPL.finditer(text):
+            key = classes.get(match.group(1))
+            if key is None:
+                continue
+            brace = text.find("{", match.end())
+            if brace < 0:
+                continue
+            end = _matching(text, brace, "{", "}")
+            if end < 0:
+                continue
+            body = text[brace : end + 1]
+            names = set(RUST_GETTER.findall(body)) | set(RUST_SETTER.findall(body))
+            names.update(
+                name
+                for name in RUST_FN.findall(body)
+                if not name.startswith("set_")
+            )
+            direct.setdefault(key, set()).update(names)
+
+    def effective(key: str, seen: frozenset[str]) -> set[str]:
+        members = set(direct.get(key, ()))
+        base = bases.get(key)
+        if base is not None and base not in seen:
+            members |= effective(base, seen | {key})
+        return members
+
+    return {
+        key: sorted(effective(key, frozenset()))
+        for key in sorted(set(classes.values()) | set(direct))
+    }
+
+
 def derive_ours() -> dict:
     """Inventory the Python bindings and the object types of both Part crates."""
     binding_files = sorted(OURS_BINDING_DIR.glob("*.rs"))
@@ -351,6 +446,7 @@ def derive_ours() -> dict:
     class_modules: Counter = Counter(entry.split("::")[0] for entry in classes)
     function_modules: Counter = Counter(entry.split("::")[0] for entry in registered_functions)
 
+    methods = _our_methods(binding_texts)
     return {
         "source": OURS_SOURCE,
         "files": len(binding_files),
@@ -379,6 +475,13 @@ def derive_ours() -> dict:
             "unresolved": sorted(unresolved),
         },
         "methods_heuristic": sum(_method_count(text) for text in binding_texts.values()),
+        "methods": {
+            "count": sum(len(members) for members in methods.values()),
+            "distinct": len(
+                {member for members in methods.values() for member in members}
+            ),
+            "classes": methods,
+        },
         "gap_markers": {
             "count": len(markers),
             "by_kind": {kind: by_kind.get(kind, 0) for kind, _ in GAP_MARKERS},
@@ -428,6 +531,35 @@ def _upstream_classes(text: str) -> list[str]:
     return sorted(names)
 
 
+def _strip_docstrings(text: str) -> str:
+    """Remove ``\"\"\"…\"\"\"`` blocks (the stubs put author/licence notes in them)."""
+    return re.sub(r'""".*?"""', "", text, flags=re.S)
+
+
+def _pyi_methods(app: Path) -> dict[str, list[str]]:
+    """Python-visible members declared by upstream's ``.pyi`` stubs.
+
+    The stub's ``@export(PythonName="Part.X", …)`` is the authoritative class
+    name (``TopoShape.pyi`` is ``Part.Shape``). Module stubs and the property
+    contracts declare no class and are skipped. Dunders are left out because pyo3
+    generates most of them and upstream does not list them uniformly.
+    """
+    methods: dict[str, set[str]] = {}
+    for path in sorted(app.glob("*.pyi")):
+        if path.stem.endswith(".module") or path.stem == "PropertyPythonContracts":
+            continue
+        text = _read(path)
+        for export in PYI_EXPORT_CLASS.finditer(text):
+            named = PYI_PYTHON_NAME.search(export.group(1))
+            python_name = named.group(1) if named else f"Part.{export.group(2)}"
+            body = _strip_docstrings(text[export.end() :])
+            names = set(PYI_METHOD.findall(body)) | set(PYI_ATTRIBUTE.findall(body))
+            names = {name for name in names if not name.startswith("__")}
+            if names:
+                methods.setdefault(_class_key(python_name), set()).update(names)
+    return {key: sorted(values) for key, values in sorted(methods.items())}
+
+
 def derive_upstream(app: Path) -> dict:
     """Inventory upstream's ``src/Mod/Part/App``."""
     app_cpp = _read(app / "AppPart.cpp")
@@ -460,6 +592,7 @@ def derive_upstream(app: Path) -> dict:
     )
     pyimp = sorted(path.name[: -len("PyImp.cpp")] for path in app.glob("*PyImp.cpp"))
     stub_names = sorted(set(pyi) | set(pyimp))
+    methods = _pyi_methods(app)
 
     class_modules: Counter = Counter(name.split("::")[0] for name in classes)
 
@@ -489,6 +622,13 @@ def derive_upstream(app: Path) -> dict:
             "pyi": len(pyi),
             "pyimp": len(pyimp),
             "names": stub_names,
+        },
+        "methods": {
+            "count": sum(len(members) for members in methods.values()),
+            "distinct": len(
+                {member for members in methods.values() for member in members}
+            ),
+            "classes": methods,
         },
         "object_types": {
             "count": len(document_types),
@@ -520,8 +660,21 @@ def derive(app: Path) -> dict:
     ours_types = set(ours["object_types"]["names"])
     upstream_types = set(upstream["object_types"]["names"])
 
+    ours_methods = ours["methods"]["classes"]
+    upstream_methods = upstream["methods"]["classes"]
+    shared_method_classes = sorted(set(ours_methods) & set(upstream_methods))
+    missing_methods = {
+        key: sorted(set(upstream_methods[key]) - set(ours_methods[key]))
+        for key in shared_method_classes
+    }
+    missing_methods = {key: value for key, value in missing_methods.items() if value}
+
+    ours_names = {name for members in ours_methods.values() for name in members}
+    upstream_names = {name for members in upstream_methods.values() for name in members}
+    covered_names = upstream_names & ours_names
+
     return {
-        "schema": 1,
+        "schema": 2,
         "audit": "part-api",
         "upstream": upstream,
         "ours": ours,
@@ -529,11 +682,31 @@ def derive(app: Path) -> dict:
             "functions": sorted(upstream_functions - ours_functions),
             "classes": sorted(upstream_classes - ours_classes),
             "object_types": sorted(upstream_types - ours_types),
+            "methods": missing_methods,
+            "method_classes": sorted(set(upstream_methods) - set(ours_methods)),
         },
         "extra": {
             "functions": sorted(ours_functions - upstream_functions),
             "classes": sorted(ours_classes - upstream_classes),
             "object_types": sorted(ours_types - upstream_types),
+        },
+        "coverage": {
+            "methods": {
+                "upstream_declared": sum(
+                    len(members) for members in upstream_methods.values()
+                ),
+                "ours_declared": sum(len(members) for members in ours_methods.values()),
+                "upstream_distinct": len(upstream_names),
+                "covered_distinct": len(covered_names),
+                "fraction": (
+                    round(len(covered_names) / len(upstream_names), 4)
+                    if upstream_names
+                    else 0.0
+                ),
+                "missing_distinct": sorted(upstream_names - ours_names),
+                "shared_classes": len(shared_method_classes),
+                "classes": shared_method_classes,
+            }
         },
     }
 
@@ -624,6 +797,14 @@ def summary(found: dict) -> str:
     missing = found["missing"]
     revision = upstream.get("revision")
     tail = f" (upstream {revision})" if revision and revision != "unknown" else ""
+    coverage = found.get("coverage", {}).get("methods", {})
+    methods = (
+        f"methods {coverage['covered_distinct']}/{coverage['upstream_distinct']} "
+        f"upstream names ({coverage['fraction']:.1%}) in "
+        f"{coverage['shared_classes']} classes; "
+        if coverage
+        else ""
+    )
     return (
         "part api audit: "
         f"ours {ours['functions']['registered']} functions, "
@@ -635,6 +816,8 @@ def summary(found: dict) -> str:
         f"missing {len(missing['functions'])} functions, "
         f"{len(missing['classes'])} classes, "
         f"{len(missing['object_types'])} object types; "
+        f"{methods}"
+        f"{len(missing.get('methods', {}))} classes with method gaps; "
         f"{ours['gap_markers']['count']} gap markers{tail}"
     )
 

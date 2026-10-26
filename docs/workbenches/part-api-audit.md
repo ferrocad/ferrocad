@@ -30,8 +30,10 @@ because that is a setup error rather than a measurement.
 | ours | classes | `#[pyclass(name = "...", module = "...")]`, qualified as `Part::Edge`, `Part.ShapeFix::Edge` |
 | ours | object types | `*_TYPE` constants and literal ids passed to `object_registry::register` / a local `register` helper, in **both** `crates/ferrocad_part/src` and `crates/ferrocad_part_py/src`; loop tables are expanded when the loop variable is registered |
 | ours | gap markers | literal `not implemented yet`, `not available in this slice`, `unsupported(` and `NotImplemented` |
+| ours | **methods** | per-Python-class member names from `#[pyclass]` + `#[pymethods]`; `#[getter]`/`#[setter]` fold to the property name, and `extends = PartShape` inherits the base's members |
 | upstream | module functions | `add_varargs_method` / `add_keyword_method` / `add_noargs_method` in `AppPartPy.cpp`, split by `Py::ExtensionModule` class |
 | upstream | classes | `Base::Interpreter().addType(..., "Name")` in `AppPart.cpp`, which gives the real Python name and owning submodule |
+| upstream | **methods** | per-class member names from the `*.pyi` stubs: `@export(PythonName="Part.X", …)` names the class, then its class attributes and `def` items (docstrings stripped; dunders excluded) |
 | upstream | stub classes | file stems of `*.pyi` and `*PyImp.cpp` (a text pass, recorded but not used for the diff) |
 | upstream | object types | `PROPERTY_SOURCE*(Part::X, ...)` across `Part/App` (recursive); a registered-type inventory, not an `addObject` audit |
 | upstream | type-system types | `TYPESYSTEM_SOURCE*(Part::X, ...)`, recorded separately |
@@ -42,22 +44,24 @@ the same trees produce byte-identical JSON.
 
 ## What is *not* measured
 
-- **Methods.** `[pymethods]` blocks are only counted heuristically
-  (`ours.methods_heuristic`: every `fn` item in the block, including private
-  helpers). The count is recorded for scale but excluded from `--check`, and
-  upstream methods are not measured at all. `Part.Shape` therefore looks much
-  smaller here than it is at runtime.
 - **Signatures, defaults, return types, docstrings, exceptions.** A name can
-  match while the call contract differs.
+  match while the call contract differs. (The SimpleCAD runtime errors are the
+  practical detector for these.)
 - **Runtime registration.** `#[pyclass]` is a definition; the actual attribute
   may be conditional (for example `Cone`/`Toroid`/`BSplineSurface` are only
   added when the analytic half did not define them).
-- **Inheritance, properties, enums, `__getattr__` shims.**
+- **Upstream inheritance.** A `*.pyi` lists only the members that stub declares;
+  members inherited from an upstream base class are counted under that base. Our
+  side folds `extends = PartShape`, but a base class we do not expose
+  (`Part::GeometryCurve`, `Part::Conic`, …) still contributes its names to the
+  global denominator and appears in `missing.method_classes`.
+- **Class-level dunders.** `__init__`/`__repr__`/`__eq__` are left out because
+  pyo3 generates several and the stubs do not list them uniformly.
 - **The Python shim** (`Init.py`, `PartEnums.py` and similar). Module functions
   are read from `AppPartPy.cpp` only, so names a Python shim adds are invisible.
 - **`.pyi` names as Python names.** Stub files are named after the C++ class, so
   `TopoShape.pyi` is `Part.Shape` and `PartFeature.pyi` is `Part.Feature`; the
-  class diff uses the `addType` names instead and keeps the stub list separate.
+  method inventory uses the `@export(PythonName=…)` value instead.
 - **Property types and FaceMaker selectors.** `Part::PropertyPartShape`,
   `Part::PropertyTopoShapeList` and `Part::FaceMaker*` are not object types and
   are excluded from `ours.object_types`; only what reaches
@@ -83,14 +87,28 @@ the same trees produce byte-identical JSON.
 ## Reading the contract
 
 - `ours` / `upstream` — the counted names and the counts derived from them.
-- `missing` — upstream names absent from our surface, per function, class and
-  document-object type. For object types this is the upper bound of the H1 work
-  list (see the extension/base-class caveat above).
+  `ours.methods` and `upstream.methods` are per-class member lists; `count` sums
+  them and `distinct` is the size of the name set.
+- `missing` — upstream names absent from our surface, per function, class,
+  document-object type and method. `missing.methods` is keyed by the classes we
+  share (for example `Part::Shape`); `missing.method_classes` lists upstream
+  classes we do not expose at all.
+- `coverage.methods` — the headline number: how many of upstream's distinct
+  declared names exist on at least one of our Python classes, the fraction, and
+  the shared-class count. At the 2026-10-26 pin it is **203 of 408 names (49.8%)
+  across 20 shared classes**; the per-class gaps are the H1 work list.
 - `extra` — our names that upstream does not have in `Part/App` (for example
   `App::Link*`, `Sketcher::SketchObject`, `PartDesign::Body`, `Part.Precision`).
 - `ours.gap_markers` — every honest gap, with `file:line`, kind and source text.
   Line numbers are recorded but not compared: unrelated edits shift them.
 - `upstream.revision` — recorded but not compared; the surface is the check.
+
+### Methods are compared; the heuristic count is not
+
+`ours.methods` is the real inventory and participates in `--check`.
+`ours.methods_heuristic` (every `fn` in a `#[pymethods]` block, private helpers
+included) stays for scale and is deliberately dropped before the diff, because it
+moves with unrelated edits.
 
 ## Refreshing
 

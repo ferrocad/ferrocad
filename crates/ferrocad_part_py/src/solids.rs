@@ -26,7 +26,8 @@ use ferrocad_part::{
     ShapeProperty,
 };
 use pyo3::exceptions::{
-    PyAttributeError, PyDeprecationWarning, PyRuntimeError, PyTypeError, PyValueError,
+    PyAttributeError, PyDeprecationWarning, PyIndexError, PyRuntimeError, PyTypeError,
+    PyValueError,
 };
 use pyo3::prelude::*;
 use pyo3::types::{PyDict, PyList, PyModule, PyTuple};
@@ -393,6 +394,7 @@ pub(crate) fn register_objects() {
     object_registry::register(SKETCH_TYPE, Arc::new(SketchObject));
     object_registry::register(BODY_TYPE, Arc::new(Body));
     object_registry::register(ADDITIVE_BOX_TYPE, Arc::new(AdditiveBox));
+    object_registry::register(PRISM_TYPE, Arc::new(PrismPrimitive));
     object_registry::register(TORUS_TYPE, Arc::new(TorusPrimitive));
     object_registry::register(WEDGE_TYPE, Arc::new(WedgePrimitive));
     object_registry::register(REVOLUTION_TYPE, Arc::new(Revolution));
@@ -1574,12 +1576,21 @@ fn circle_knots() -> Vec<f64> {
 
 /// `Part.BSplineSurface` — the surface counterpart of `Part.BSplineCurve`.
 ///
-/// This slice carries the knot-vector description (`UKnotSequence`,
-/// `VKnotSequence`, `bounds`, `scaleKnotsToBounds`) that `Toroid.toBSpline`
-/// returns; the pole/weight accessors upstream also offers are not modelled.
+/// It carries the full control-point description upstream's class exposes:
+/// poles, weights, knots with multiplicities and the two degrees. Two ways build
+/// it:
+///
+/// - [`interpolate`](Self::interpolate) (`GeomAPI_PointsToBSplineSurface` through
+///   a grid), which keeps the knot sequences and bounds `Toroid.toBSpline` reports;
+/// - [`buildFromPolesMultsKnots`](Self::buildFromPolesMultsKnots), the explicit
+///   control-point form, with upstream's own validation.
+///
+/// `Face.Surface` returns this class for a B-spline face, so `UDegree`, `getPoles`
+/// and `Face.valueAt`/`parameter` agree with the face's own surface.
 #[pyclass(name = "BSplineSurface", module = "Part")]
 #[derive(Clone)]
 pub struct PyBSplineSurface {
+    /// The expanded (unique knot repeated by its multiplicity) knot sequence.
     u_knots: Vec<f64>,
     v_knots: Vec<f64>,
     u_periodic: bool,
@@ -1589,8 +1600,10 @@ pub struct PyBSplineSurface {
     u_bounds: Option<(f64, f64)>,
     v_bounds: Option<(f64, f64)>,
     /// The interpolation grid, kept so `toShape` can rebuild the surface's face
-    /// (`None` for the torus alias).
+    /// (`None` for the torus alias or an explicitly built surface).
     points: Option<Vec<Vec<Vector3>>>,
+    /// The explicit pole/knot geometry, present once the surface has been built.
+    surface: Option<ferrocad_occt::part_ops::BsplineSurface>,
 }
 
 impl PyBSplineSurface {
@@ -1603,7 +1616,41 @@ impl PyBSplineSurface {
             u_bounds: None,
             v_bounds: None,
             points: None,
+            surface: None,
         }
+    }
+
+    /// The `Part.BSplineSurface` view of a B-spline face (`Face.Surface`).
+    pub(crate) fn from_geometry(geometry: ferrocad_occt::part_ops::BsplineSurface) -> Self {
+        let expand = |knots: &[(f64, i32)]| -> Vec<f64> {
+            knots
+                .iter()
+                .flat_map(|(knot, multiplicity)| std::iter::repeat_n(*knot, (*multiplicity).max(0) as usize))
+                .collect()
+        };
+        Self {
+            u_knots: expand(&geometry.u_knots),
+            v_knots: expand(&geometry.v_knots),
+            u_periodic: geometry.u_periodic,
+            v_periodic: geometry.v_periodic,
+            u_bounds: Some(geometry.u_bounds),
+            v_bounds: Some(geometry.v_bounds),
+            points: None,
+            surface: Some(geometry),
+        }
+    }
+
+    /// The explicit geometry, if the surface has any.
+    pub(crate) fn geometry(&self) -> Option<&ferrocad_occt::part_ops::BsplineSurface> {
+        self.surface.as_ref()
+    }
+
+    fn require_geometry(&self) -> PyResult<&ferrocad_occt::part_ops::BsplineSurface> {
+        self.surface.as_ref().ok_or_else(|| {
+            OCCError::new_err(
+                "this BSplineSurface has no control points yet (call buildFromPolesMultsKnots or interpolate)",
+            )
+        })
     }
 }
 
@@ -1619,7 +1666,151 @@ impl PyBSplineSurface {
             u_bounds: None,
             v_bounds: None,
             points: None,
+            surface: None,
         }
+    }
+
+    /// The registered type name (`Part::GeomBSplineSurface`).
+    #[getter]
+    fn TypeId(&self) -> &'static str {
+        "Part::GeomBSplineSurface"
+    }
+
+    /// Build the surface from control points:
+    /// `buildFromPolesMultsKnots(poles, umults, vmults, uknots=None, vknots=None,
+    /// uperiodic=False, vperiodic=False, udegree=3, vdegree=3, weights=None)`.
+    ///
+    /// `poles` is indexed `[u][v]`. With no knots the two vectors are uniformly
+    /// spaced on `[0, 1]`; the pole/multiplicity and inner-multiplicity checks are
+    /// upstream's (`BSplineSurfacePy::buildFromPolesMultsKnots`).
+    #[pyo3(signature = (poles, umults, vmults, uknots = None, vknots = None, uperiodic = false, vperiodic = false, udegree = 3, vdegree = 3, weights = None))]
+    #[allow(clippy::too_many_arguments)]
+    fn buildFromPolesMultsKnots(
+        &mut self,
+        poles: &Bound<'_, PyAny>,
+        umults: &Bound<'_, PyAny>,
+        vmults: &Bound<'_, PyAny>,
+        uknots: Option<&Bound<'_, PyAny>>,
+        vknots: Option<&Bound<'_, PyAny>>,
+        uperiodic: bool,
+        vperiodic: bool,
+        udegree: i32,
+        vdegree: i32,
+        weights: Option<&Bound<'_, PyAny>>,
+    ) -> PyResult<()> {
+        let mut rows: Vec<Vec<Vector3>> = Vec::new();
+        for row in poles.try_iter()? {
+            rows.push(curves::parse_points(&row?)?);
+        }
+        let nu = rows.len();
+        let nv = rows.first().map_or(0, Vec::len);
+        if nu < 2 || nv < 2 {
+            return Err(OCCError::new_err("not enough points given"));
+        }
+        if rows.iter().any(|row| row.len() != nv) {
+            return Err(OCCError::new_err("poles are not a rectangular grid"));
+        }
+        // Upstream reads poles as [u][v] into a 1..nu by 1..nv OCCT array.
+        let mut grid: Vec<Vec<(Vector3, f64)>> = vec![vec![(Vector3::zero(), 1.0); nv]; nu];
+        for (u, row) in rows.iter().enumerate() {
+            for (v, point) in row.iter().enumerate() {
+                grid[u][v] = (*point, 1.0);
+            }
+        }
+        if let Some(weights) = weights {
+            let mut weight_rows: Vec<Vec<f64>> = Vec::new();
+            for row in weights.try_iter()? {
+                weight_rows.push(curves::parse_floats(&row?)?);
+            }
+            if weight_rows.len() != nu || weight_rows.iter().any(|row| row.len() != nv) {
+                return Err(OCCError::new_err("weights and poles mismatch"));
+            }
+            for (u, row) in weight_rows.iter().enumerate() {
+                for (v, weight) in row.iter().enumerate() {
+                    grid[u][v].1 = *weight;
+                }
+            }
+        }
+
+        let umults = curves::parse_integers(umults)?;
+        let vmults = curves::parse_integers(vmults)?;
+        let uknots = uknots.map(curves::parse_floats).transpose()?;
+        let vknots = vknots.map(curves::parse_floats).transpose()?;
+        if uknots.as_ref().is_some_and(|knots| knots.len() != umults.len())
+            || vknots.as_ref().is_some_and(|knots| knots.len() != vmults.len())
+        {
+            return Err(OCCError::new_err("number of knots and mults mismatch"));
+        }
+        let u_knots = uknots.unwrap_or_else(|| uniform_knots(umults.len()));
+        let v_knots = vknots.unwrap_or_else(|| uniform_knots(vmults.len()));
+
+        let sum = |mults: &[i32], periodic: bool| -> i32 {
+            let mut total = 0;
+            for (index, multiplicity) in mults.iter().enumerate() {
+                if index + 1 < mults.len() || !periodic {
+                    total += multiplicity;
+                }
+            }
+            total
+        };
+        let sum_u = sum(&umults, uperiodic);
+        let sum_v = sum(&vmults, vperiodic);
+        if (uperiodic && sum_u != nu as i32)
+            || (!uperiodic && sum_u - udegree - 1 != nu as i32)
+            || (vperiodic && sum_v != nv as i32)
+            || (!vperiodic && sum_v - vdegree - 1 != nv as i32)
+        {
+            return Err(OCCError::new_err("number of poles and sum of mults mismatch"));
+        }
+        if umults[1..umults.len().saturating_sub(1)]
+            .iter()
+            .any(|multiplicity| *multiplicity > udegree)
+            || vmults[1..vmults.len().saturating_sub(1)]
+                .iter()
+                .any(|multiplicity| *multiplicity > vdegree)
+        {
+            return Err(OCCError::new_err(
+                "multiplicity of inner knot higher than degree",
+            ));
+        }
+
+        let geometry = ferrocad_occt::part_ops::BsplineSurface {
+            u_degree: udegree,
+            v_degree: vdegree,
+            u_periodic: uperiodic,
+            v_periodic: vperiodic,
+            u_bounds: (
+                u_knots.first().copied().unwrap_or(0.0),
+                u_knots.last().copied().unwrap_or(1.0),
+            ),
+            v_bounds: (
+                v_knots.first().copied().unwrap_or(0.0),
+                v_knots.last().copied().unwrap_or(1.0),
+            ),
+            poles: grid,
+            u_knots: u_knots.into_iter().zip(umults).collect(),
+            v_knots: v_knots.into_iter().zip(vmults).collect(),
+        };
+        // Build the OCCT surface once so a malformed description fails here, as
+        // upstream's constructor does, rather than at the first query.
+        ferrocad_occt::part_ops::bspline_surface_face(&geometry).map_err(kernel_error)?;
+        self.u_knots = geometry
+            .u_knots
+            .iter()
+            .flat_map(|(knot, multiplicity)| std::iter::repeat_n(*knot, (*multiplicity).max(0) as usize))
+            .collect();
+        self.v_knots = geometry
+            .v_knots
+            .iter()
+            .flat_map(|(knot, multiplicity)| std::iter::repeat_n(*knot, (*multiplicity).max(0) as usize))
+            .collect();
+        self.u_periodic = uperiodic;
+        self.v_periodic = vperiodic;
+        self.u_bounds = Some(geometry.u_bounds);
+        self.v_bounds = Some(geometry.v_bounds);
+        self.points = None;
+        self.surface = Some(geometry);
+        Ok(())
     }
 
     /// `interpolate(Points, X0, dX, Y0, dY)` — interpolate a grid of points
@@ -1674,25 +1865,48 @@ impl PyBSplineSurface {
         self.v_bounds = Some(data.v_bounds);
         self.u_periodic = false;
         self.v_periodic = false;
-        self.points = Some(rows);
+        self.points = Some(rows.clone());
+        self.surface = None;
         Ok(())
     }
 
-    /// The face of the interpolated surface (`BSplineSurface.toShape`,
-    /// `BRepBuilderAPI_MakeFace(Geom_Surface, tol)`).
+    /// The face of the surface (`BSplineSurface.toShape`).
     ///
-    /// An empty or directly constructed surface has no grid to build from, so it
-    /// raises `OCCError` rather than returning an empty face.
+    /// A surface built from poles reports its face over the whole parameter
+    /// domain; an interpolated one rebuilds the interpolation face. An empty or
+    /// directly constructed surface raises `OCCError`.
     fn toShape(&self, py: Python<'_>) -> PyResult<Py<curves::PyFace>> {
-        let points = self.points.as_ref().ok_or_else(|| {
-            OCCError::new_err(
-                "BSplineSurface.toShape needs an interpolated surface (call interpolate first)",
-            )
-        })?;
-        let shape = ferrocad_part::backend()
-            .bspline_surface_face(points)
-            .map_err(|error| OCCError::new_err(error.to_string()))?;
+        let shape = if let Some(geometry) = &self.surface {
+            ferrocad_occt::part_ops::bspline_surface_face(geometry).map_err(kernel_error)?
+        } else if let Some(points) = &self.points {
+            ferrocad_part::backend()
+                .bspline_surface_face(points)
+                .map_err(|error| OCCError::new_err(error.to_string()))?
+        } else {
+            return Err(OCCError::new_err(
+                "BSplineSurface.toShape needs a built surface (call buildFromPolesMultsKnots or interpolate first)",
+            ));
+        };
         Py::new(py, curves::PyFace::from_shape(shape))
+    }
+
+    /// The point at surface parameters `(u, v)` (`GeomSurface.value`).
+    fn value(&self, py: Python<'_>, u: f64, v: f64) -> PyResult<PyObject> {
+        let geometry = self.require_geometry()?;
+        let point = ferrocad_occt::part_ops::bspline_surface_value(geometry, u, v)
+            .map_err(kernel_error)?;
+        curves::py_vector(py, point)
+    }
+
+    /// The `(u, v)` of `point` on the surface (`GeomSurface.parameter`).
+    fn parameter(&self, py: Python<'_>, point: &Bound<'_, PyAny>) -> PyResult<PyObject> {
+        let geometry = self.require_geometry()?;
+        let (u, v) = ferrocad_occt::part_ops::bspline_surface_parameter(
+            geometry,
+            curves::vector(point)?,
+        )
+        .map_err(kernel_error)?;
+        Ok(PyTuple::new(py, [u, v])?.into_any().unbind())
     }
 
     fn setUPeriodic(&mut self) {
@@ -1711,6 +1925,242 @@ impl PyBSplineSurface {
         self.v_periodic
     }
 
+    // --- control-point description -------------------------------------
+
+    /// The degree in `u` (`BSplineSurface.UDegree`).
+    #[getter]
+    fn UDegree(&self) -> PyResult<i32> {
+        Ok(self.require_geometry()?.u_degree)
+    }
+
+    /// The degree in `v` (`BSplineSurface.VDegree`).
+    #[getter]
+    fn VDegree(&self) -> PyResult<i32> {
+        Ok(self.require_geometry()?.v_degree)
+    }
+
+    #[getter]
+    fn MaxDegree(&self) -> PyResult<i32> {
+        let geometry = self.require_geometry()?;
+        Ok(geometry.u_degree.max(geometry.v_degree))
+    }
+
+    #[getter]
+    fn NbUPoles(&self) -> PyResult<usize> {
+        Ok(self.require_geometry()?.poles.len())
+    }
+
+    #[getter]
+    fn NbVPoles(&self) -> PyResult<usize> {
+        Ok(self.require_geometry()?.poles.first().map_or(0, Vec::len))
+    }
+
+    #[getter]
+    fn NbUKnots(&self) -> PyResult<usize> {
+        Ok(self.require_geometry()?.u_knots.len())
+    }
+
+    #[getter]
+    fn NbVKnots(&self) -> PyResult<usize> {
+        Ok(self.require_geometry()?.v_knots.len())
+    }
+
+    #[getter]
+    fn FirstUKnotIndex(&self) -> PyResult<i32> {
+        self.require_geometry()?;
+        Ok(1)
+    }
+
+    #[getter]
+    fn LastUKnotIndex(&self) -> PyResult<i32> {
+        Ok(self.require_geometry()?.u_knots.len() as i32)
+    }
+
+    #[getter]
+    fn FirstVKnotIndex(&self) -> PyResult<i32> {
+        self.require_geometry()?;
+        Ok(1)
+    }
+
+    #[getter]
+    fn LastVKnotIndex(&self) -> PyResult<i32> {
+        Ok(self.require_geometry()?.v_knots.len() as i32)
+    }
+
+    /// Whether the surface is closed in `u` (`BSplineSurface.isUClosed`).
+    fn isUClosed(&self) -> PyResult<bool> {
+        let geometry = self.require_geometry()?;
+        Ok(!geometry.poles.is_empty()
+            && geometry.poles.iter().all(|row| {
+                row.first().zip(row.last()).is_some_and(|(first, last)| {
+                    first.0.distance(&last.0) <= ferrocad_curves::TOLERANCE
+                })
+            }))
+    }
+
+    /// Whether the surface is closed in `v` (`BSplineSurface.isVClosed`).
+    fn isVClosed(&self) -> PyResult<bool> {
+        let geometry = self.require_geometry()?;
+        Ok(!geometry.poles.is_empty()
+            && geometry
+                .poles
+                .iter()
+                .all(|row| {
+                    row.first().zip(row.last()).is_some_and(|(first, last)| {
+                        first.0.distance(&last.0) <= ferrocad_curves::TOLERANCE
+                    })
+                }))
+    }
+
+    /// Whether the surface carries non-unit weights (`BSplineSurface.isURational`).
+    fn isURational(&self) -> PyResult<bool> {
+        Ok(self
+            .require_geometry()?
+            .poles
+            .iter()
+            .flatten()
+            .any(|(_, weight)| (*weight - 1.0).abs() > 1e-12))
+    }
+
+    fn isVRational(&self) -> PyResult<bool> {
+        self.isURational()
+    }
+
+    /// The poles as a `[u][v]` grid of vectors (`BSplineSurface.getPoles`).
+    fn getPoles(&self, py: Python<'_>) -> PyResult<Vec<Vec<PyObject>>> {
+        let geometry = self.require_geometry()?;
+        geometry
+            .poles
+            .iter()
+            .map(|row| {
+                row.iter()
+                    .map(|(point, _)| curves::py_vector(py, *point))
+                    .collect()
+            })
+            .collect()
+    }
+
+    /// The pole at 1-based `(u, v)` (`BSplineSurface.getPole`).
+    fn getPole(&self, py: Python<'_>, u: i32, v: i32) -> PyResult<PyObject> {
+        let geometry = self.require_geometry()?;
+        let point = pole_at(geometry, u, v)?.0;
+        curves::py_vector(py, point)
+    }
+
+    /// The weights as a `[u][v]` grid (`BSplineSurface.getWeights`).
+    fn getWeights(&self) -> PyResult<Vec<Vec<f64>>> {
+        let geometry = self.require_geometry()?;
+        Ok(geometry
+            .poles
+            .iter()
+            .map(|row| row.iter().map(|(_, weight)| *weight).collect())
+            .collect())
+    }
+
+    /// The weight at 1-based `(u, v)` (`BSplineSurface.getWeight`).
+    fn getWeight(&self, u: i32, v: i32) -> PyResult<f64> {
+        Ok(pole_at(self.require_geometry()?, u, v)?.1)
+    }
+
+    /// `(poles, weights)` in one call (`BSplineSurface.getPolesAndWeights`).
+    fn getPolesAndWeights(
+        &self,
+        py: Python<'_>,
+    ) -> PyResult<(Vec<Vec<PyObject>>, Vec<Vec<f64>>)> {
+        Ok((self.getPoles(py)?, self.getWeights()?))
+    }
+
+    /// The `index`-th distinct U knot, 1-based (`BSplineSurface.getUKnot`).
+    fn getUKnot(&self, index: i32) -> PyResult<f64> {
+        let geometry = self.require_geometry()?;
+        knot_at(&geometry.u_knots, index)
+    }
+
+    fn getVKnot(&self, index: i32) -> PyResult<f64> {
+        let geometry = self.require_geometry()?;
+        knot_at(&geometry.v_knots, index)
+    }
+
+    /// The U knot multiplicities (`BSplineSurface.getUMultiplicities`).
+    fn getUMultiplicities(&self) -> PyResult<Vec<i32>> {
+        Ok(self
+            .require_geometry()?
+            .u_knots
+            .iter()
+            .map(|(_, multiplicity)| *multiplicity)
+            .collect())
+    }
+
+    fn getVMultiplicities(&self) -> PyResult<Vec<i32>> {
+        Ok(self
+            .require_geometry()?
+            .v_knots
+            .iter()
+            .map(|(_, multiplicity)| *multiplicity)
+            .collect())
+    }
+
+    /// The multiplicity of the `index`-th U knot (`BSplineSurface.getUMultiplicity`).
+    fn getUMultiplicity(&self, index: i32) -> PyResult<i32> {
+        let geometry = self.require_geometry()?;
+        knot_multiplicity(&geometry.u_knots, index)
+    }
+
+    fn getVMultiplicity(&self, index: i32) -> PyResult<i32> {
+        let geometry = self.require_geometry()?;
+        knot_multiplicity(&geometry.v_knots, index)
+    }
+
+    /// Whether `other` describes the same surface (`Geometry.isSame(other, tol,
+    /// angulartol)`). Upstream takes both tolerances; they widen the pole
+    /// comparison, everything else (degrees, knots, periodicity) must match.
+    #[pyo3(signature = (other, tol = None, angulartol = None))]
+    fn isSame(
+        &self,
+        other: &Bound<'_, PyAny>,
+        tol: Option<f64>,
+        angulartol: Option<f64>,
+    ) -> bool {
+        let _ = angulartol;
+        let Ok(other) = other.downcast::<Self>() else {
+            return false;
+        };
+        let other = other.borrow();
+        if self.same_geometry(&other) {
+            return true;
+        }
+        match (tol, self.surface.as_ref(), other.surface.as_ref()) {
+            (Some(tol), Some(first), Some(second)) => {
+                first.u_degree == second.u_degree
+                    && first.v_degree == second.v_degree
+                    && first.u_periodic == second.u_periodic
+                    && first.v_periodic == second.v_periodic
+                    && first.u_knots == second.u_knots
+                    && first.v_knots == second.v_knots
+                    && first.poles.len() == second.poles.len()
+                    && first.poles.iter().zip(&second.poles).all(|(a, b)| {
+                        a.len() == b.len()
+                            && a.iter().zip(b).all(|((point, weight), (other, other_weight))| {
+                                point.distance(other) <= tol && (weight - other_weight).abs() <= tol
+                            })
+                    })
+            }
+            _ => false,
+        }
+    }
+
+    /// Whether `other` describes the same surface (`Geometry.isEqual`).
+    fn isEqual(&self, other: &Bound<'_, PyAny>) -> bool {
+        self.isSame(other, None, None)
+    }
+
+    /// `(u1, u2, v1, v2)` — the current parameter bounds.
+    fn bounds(&self) -> (f64, f64, f64, f64) {
+        let u = self.u_bounds.unwrap_or_else(|| self.knot_bounds(&self.u_knots));
+        let v = self.v_bounds.unwrap_or_else(|| self.knot_bounds(&self.v_knots));
+        (u.0, u.1, v.0, v.1)
+    }
+
     #[getter]
     fn UKnotSequence(&self) -> Vec<f64> {
         self.u_knots.clone()
@@ -1721,33 +2171,118 @@ impl PyBSplineSurface {
         self.v_knots.clone()
     }
 
-    /// `(u1, u2, v1, v2)` — the current parameter bounds.
-    fn bounds(&self) -> (f64, f64, f64, f64) {
-        let u = self.u_bounds.unwrap_or_else(|| {
-            (
-                self.u_knots.first().copied().unwrap_or(0.0),
-                self.u_knots.last().copied().unwrap_or(0.0),
-            )
-        });
-        let v = self.v_bounds.unwrap_or_else(|| {
-            (
-                self.v_knots.first().copied().unwrap_or(0.0),
-                self.v_knots.last().copied().unwrap_or(0.0),
-            )
-        });
-        (u.0, u.1, v.0, v.1)
-    }
-
     /// Linearly rescale both knot vectors to the requested bounds.
     fn scaleKnotsToBounds(&mut self, u0: f64, u1: f64, v0: f64, v1: f64) {
         scale_knots(&mut self.u_knots, u0, u1);
         scale_knots(&mut self.v_knots, v0, v1);
+        if let Some(surface) = &mut self.surface {
+            rescale_knots(&mut surface.u_knots, u0, u1);
+            rescale_knots(&mut surface.v_knots, v0, v1);
+            surface.u_bounds = (u0, u1);
+            surface.v_bounds = (v0, v1);
+        }
         self.u_bounds = Some((u0, u1));
         self.v_bounds = Some((v0, v1));
     }
 
     fn __repr__(&self) -> String {
         "<BSplineSurface object>".to_string()
+    }
+}
+
+impl PyBSplineSurface {
+    fn knot_bounds(&self, knots: &[f64]) -> (f64, f64) {
+        (
+            knots.first().copied().unwrap_or(0.0),
+            knots.last().copied().unwrap_or(0.0),
+        )
+    }
+
+    /// Whether the two surfaces carry the same description: the control-point
+    /// geometry when both have it, otherwise the recorded knot/pole data.
+    fn same_geometry(&self, other: &Self) -> bool {
+        match (self.surface.as_ref(), other.surface.as_ref()) {
+            (Some(first), Some(second)) => first == second,
+            (None, None) => {
+                self.u_knots == other.u_knots
+                    && self.v_knots == other.v_knots
+                    && self.points == other.points
+                    && self.u_periodic == other.u_periodic
+                    && self.v_periodic == other.v_periodic
+                    && self.u_bounds == other.u_bounds
+                    && self.v_bounds == other.v_bounds
+            }
+            _ => false,
+        }
+    }
+}
+
+/// The 1-based `(u, v)` pole and weight of a surface.
+fn pole_at(
+    geometry: &ferrocad_occt::part_ops::BsplineSurface,
+    u: i32,
+    v: i32,
+) -> PyResult<(Vector3, f64)> {
+    if u < 1 || v < 1 {
+        return Err(PyIndexError::new_err("pole indices are 1-based"));
+    }
+    geometry
+        .poles
+        .get(u as usize - 1)
+        .and_then(|row| row.get(v as usize - 1))
+        .copied()
+        .ok_or_else(|| PyIndexError::new_err("pole index out of range"))
+}
+
+fn knot_at(knots: &[(f64, i32)], index: i32) -> PyResult<f64> {
+    if index < 1 {
+        return Err(PyIndexError::new_err("knot indices are 1-based"));
+    }
+    knots
+        .get(index as usize - 1)
+        .map(|(knot, _)| *knot)
+        .ok_or_else(|| PyIndexError::new_err("knot index out of range"))
+}
+
+fn knot_multiplicity(knots: &[(f64, i32)], index: i32) -> PyResult<i32> {
+    if index < 1 {
+        return Err(PyIndexError::new_err("knot indices are 1-based"));
+    }
+    knots
+        .get(index as usize - 1)
+        .map(|(_, multiplicity)| *multiplicity)
+        .ok_or_else(|| PyIndexError::new_err("knot index out of range"))
+}
+
+/// Whether a row/column pair of `points` closes within the linear tolerance.
+
+/// A uniform knot vector on `[0, 1]` for `count` knots (upstream's default).
+fn uniform_knots(count: usize) -> Vec<f64> {
+    if count == 0 {
+        return Vec::new();
+    }
+    if count == 1 {
+        return vec![0.0];
+    }
+    (0..count)
+        .map(|index| index as f64 / (count - 1) as f64)
+        .collect()
+}
+
+/// Rescale a knots-with-multiplicities list onto new bounds.
+fn rescale_knots(knots: &mut [(f64, i32)], first: f64, last: f64) {
+    let Some(&(old_first, _)) = knots.first() else {
+        return;
+    };
+    let Some(&(old_last, _)) = knots.last() else {
+        return;
+    };
+    let span = old_last - old_first;
+    if span == 0.0 {
+        return;
+    }
+    for (knot, _) in knots.iter_mut() {
+        *knot = first + (*knot - old_first) * (last - first) / span;
     }
 }
 
@@ -3200,6 +3735,8 @@ fn rotation_about(base: Vector3, axis: Vector3, angle: f64) -> Matrix4 {
 
 /// `Part::Torus` (`PrimitiveFeature.cpp`).
 pub const TORUS_TYPE: &str = "Part::Torus";
+/// `Part::Prism` (`PrimitiveFeature.cpp`).
+pub const PRISM_TYPE: &str = "Part::Prism";
 /// `Part::Wedge` (`PrimitiveFeature.cpp`).
 pub const WEDGE_TYPE: &str = "Part::Wedge";
 /// `Part::Revolution` (`FeatureRevolution.cpp`).
@@ -3215,6 +3752,123 @@ fn placement_property_entry() -> (String, Property, u32) {
         Property::Placement(Placement::identity()),
         prop_status::NONE,
     )
+}
+
+/// `Part::Prism`: a regular polygon extruded along `+Z` (upstream's
+/// `Part::Prism` with `PrismExtension`).
+///
+/// `Polygon` is the number of sides (3 or more), `Circumradius` the centre-to-vertex
+/// radius, `Height` the extrusion distance, and `FirstAngle`/`SecondAngle` slant the
+/// extrusion in X and Y (upstream feeds `h·tan(angle)` into `BRepPrimAPI_MakePrism`).
+struct PrismPrimitive;
+
+impl ObjectType for PrismPrimitive {
+    fn default_properties(&self) -> Vec<(String, Property, u32)> {
+        vec![
+            (
+                "Polygon".to_string(),
+                Property::Integer(6),
+                prop_status::NONE,
+            ),
+            (
+                "Circumradius".to_string(),
+                Property::Float(2.0),
+                prop_status::NONE,
+            ),
+            ("Height".to_string(), Property::Float(10.0), prop_status::NONE),
+            (
+                "FirstAngle".to_string(),
+                Property::Float(0.0),
+                prop_status::NONE,
+            ),
+            (
+                "SecondAngle".to_string(),
+                Property::Float(0.0),
+                prop_status::NONE,
+            ),
+            placement_property_entry(),
+            output_property(),
+        ]
+    }
+
+    fn property_meta(&self, name: &str) -> Option<(String, String)> {
+        Some(("Prism".to_string(), format!("Part prism {name}")))
+    }
+
+    fn execute(&self, doc: &mut Document, id: ObjectId) {
+        let result = (|| -> Result<Shape, String> {
+            let polygon = integer_property(doc, id, "Polygon", 6);
+            let shape = prism_shape(
+                polygon,
+                float_property(doc, id, "Circumradius", 2.0),
+                float_property(doc, id, "Height", 10.0),
+                float_property(doc, id, "FirstAngle", 0.0),
+                float_property(doc, id, "SecondAngle", 0.0),
+            )?;
+            apply_object_placement(doc, id, shape)
+        })();
+        store(doc, id, result);
+    }
+}
+
+/// The B-Rep of a `Part::Prism`: a regular polygon face extruded along `+Z`.
+fn prism_shape(
+    polygon: i32,
+    circumradius: f64,
+    height: f64,
+    first_angle: f64,
+    second_angle: f64,
+) -> Result<Shape, String> {
+    if polygon < 3 {
+        return Err("Polygon of prism is invalid, must have 3 or more sides".to_string());
+    }
+    if circumradius <= ferrocad_curves::TOLERANCE {
+        return Err("Circumradius of the polygon, of the prism, is too small".to_string());
+    }
+    if height <= ferrocad_curves::TOLERANCE {
+        return Err("Height of prism is too small".to_string());
+    }
+    let mut points = Vec::with_capacity(polygon as usize);
+    for index in 0..polygon {
+        let angle = std::f64::consts::TAU * f64::from(index) / f64::from(polygon);
+        points.push(Vector3::new(
+            circumradius * angle.cos(),
+            circumradius * angle.sin(),
+            0.0,
+        ));
+    }
+    let mut edges = Vec::with_capacity(points.len());
+    for index in 0..points.len() {
+        let segment = LineSegment::new(points[index], points[(index + 1) % points.len()])
+            .map_err(|error| error.to_string())?;
+        edges.push(
+            ferrocad_part::backend()
+                .make_edge(&EdgeCurve::LineSegment(segment))
+                .map_err(|error| error.to_string())?,
+        );
+    }
+    let wire = ferrocad_part::backend()
+        .make_wire(&edges)
+        .map_err(|error| error.to_string())?;
+    let face = ferrocad_part::backend()
+        .make_face(&[wire])
+        .map_err(|error| error.to_string())?;
+    let direction = Vector3::new(
+        height * first_angle.to_radians().tan(),
+        height * second_angle.to_radians().tan(),
+        height,
+    );
+    ferrocad_part::backend()
+        .extrude(&face, direction)
+        .map_err(|error| error.to_string())
+}
+
+fn integer_property(doc: &Document, id: ObjectId, name: &str, default: i32) -> i32 {
+    match doc.object(id).and_then(|object| object.properties.get(name)) {
+        Some(Property::Integer(value)) => *value as i32,
+        Some(Property::Float(value)) => *value as i32,
+        _ => default,
+    }
 }
 
 /// `Part::Torus`: `Radius1`/`Radius2`, the two cross-section angles and the

@@ -71,6 +71,18 @@ impl PyCompound {
             cached_at: Mutex::new(epoch),
         }))
     }
+
+    /// Wrap an existing compound shape (a document property's `Shape`), keeping
+    /// its B-Rep and reading its direct children.
+    pub(crate) fn from_shape_existing(shape: Shape) -> PyClassInitializer<Self> {
+        let children = direct_children(Some(&shape));
+        let base = PartShape::from_shape(shape);
+        let epoch = base.epoch();
+        PyClassInitializer::from(base).add_subclass(Self {
+            children: Mutex::new(children),
+            cached_at: Mutex::new(epoch),
+        })
+    }
 }
 
 /// The direct sub-shapes of `base`, highest dimension first.
@@ -167,6 +179,19 @@ impl PyCompSolid {
         Ok(PyClassInitializer::from(base).add_subclass(Self {
             solids: Mutex::new(solids),
         }))
+    }
+
+    /// Wrap an existing comp-solid shape (a document property's `Shape`), keeping
+    /// its B-Rep and reading its solids.
+    pub(crate) fn from_shape_existing(shape: Shape) -> PyClassInitializer<Self> {
+        let solids = ferrocad_part::backend()
+            .elements(&shape, ElementKind::Solid)
+            .into_iter()
+            .map(|element| element.shape)
+            .collect();
+        PyClassInitializer::from(PartShape::from_shape(shape)).add_subclass(Self {
+            solids: Mutex::new(solids),
+        })
     }
 }
 

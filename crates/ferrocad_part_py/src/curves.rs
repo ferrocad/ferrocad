@@ -229,9 +229,45 @@ impl PyLineSegment {
         py_vector(py, self.curve.end())
     }
 
-    /// The segment as an edge (upstream's `toShape`, which returns a `Part.Edge`).
-    fn toShape(&self, py: Python<'_>) -> PyResult<Py<PyEdge>> {
-        Py::new(py, PyEdge::from_curve(EdgeCurve::LineSegment(self.curve))?)
+    /// The segment as an edge (upstream's `toShape`, which returns a `Part.Edge`),
+    /// or the piece between two parameters along it.
+    #[pyo3(signature = (first = None, last = None))]
+    fn toShape(
+        &self,
+        py: Python<'_>,
+        first: Option<f64>,
+        last: Option<f64>,
+    ) -> PyResult<Py<PyEdge>> {
+        curve_to_shape(
+            py,
+            EdgeCurve::LineSegment(self.curve),
+            first,
+            last,
+            "line segment",
+        )
+    }
+
+    /// The curve parameter of `point` (`LineSegment.parameter(point)`): the
+    /// distance from the start point along the segment.
+    fn parameter(&self, py: Python<'_>, point: &Bound<'_, PyAny>) -> PyResult<PyObject> {
+        let point = vector(point)?;
+        let start = self.curve.start();
+        let offset = point.sub(&start);
+        let span = self.curve.end().sub(&start);
+        let length = span.length();
+        let distance = if length > 0.0 {
+            offset.dot(&span.scale(1.0 / length))
+        } else {
+            0.0
+        };
+        Ok(distance.into_py_any(py)?)
+    }
+
+    /// An independent copy (`Geometry.copy`) with the same geometry.
+    fn copy(&self) -> Self {
+        Self {
+            curve: self.curve.clone(),
+        }
     }
 
     fn __repr__(&self) -> String {
@@ -291,13 +327,65 @@ impl PyLine {
         py_vector(py, projected)
     }
 
-    /// An infinite line has no bounded edge, as upstream's `GeomLine::toShape` is
-    /// documented around a parameter range.
-    fn toShape(&self, _py: Python<'_>) -> PyResult<Py<PyEdge>> {
-        Err(OCCError::new_err(
-            "an infinite Part.Line has no edge; use Part.LineSegment",
-        ))
+    /// The curve parameter of `point` (`Line.parameter(point)`): the signed
+    /// distance from the origin along the direction.
+    fn parameter(&self, py: Python<'_>, point: &Bound<'_, PyAny>) -> PyResult<PyObject> {
+        let point = vector(point)?;
+        let offset = point.sub(&self.curve.origin());
+        Ok(offset.dot(&self.curve.direction()).into_py_any(py)?)
     }
+
+    /// An independent copy (`Geometry.copy`) with the same geometry.
+    fn copy(&self) -> Self {
+        Self {
+            curve: self.curve.clone(),
+        }
+    }
+
+    /// An infinite line has no unbounded edge; with an explicit range it is the
+    /// segment between the two parameters (`GeometryCurvePy::toShape`).
+    #[pyo3(signature = (first = None, last = None))]
+    fn toShape(
+        &self,
+        py: Python<'_>,
+        first: Option<f64>,
+        last: Option<f64>,
+    ) -> PyResult<Py<PyEdge>> {
+        if first.is_none() && last.is_none() {
+            return Err(OCCError::new_err(
+                "an infinite Part.Line has no edge; use Part.LineSegment or pass a parameter range",
+            ));
+        }
+        curve_to_shape(py, EdgeCurve::Line(self.curve), first, last, "line")
+    }
+}
+
+/// `GeometryCurve.toShape(first, last)`: the whole curve's edge, or the piece
+/// between two curve parameters, as a `Part.Edge`.
+///
+/// Upstream's `GeometryCurvePy::toShape` accepts an optional range and trims the
+/// curve to it; without a range the whole (bounded) curve is the edge.
+fn curve_to_shape(
+    py: Python<'_>,
+    curve: EdgeCurve,
+    first: Option<f64>,
+    last: Option<f64>,
+    what: &str,
+) -> PyResult<Py<PyEdge>> {
+    let curve = match (first, last) {
+        (None, None) => curve,
+        (Some(first), Some(last)) => curve.trimmed(first, last).ok_or_else(|| {
+            OCCError::new_err(format!(
+                "a {what} cannot be trimmed to the given parameter range"
+            ))
+        })?,
+        _ => {
+            return Err(OCCError::new_err(format!(
+                "{what}.toShape needs both first and last parameters"
+            )));
+        }
+    };
+    Py::new(py, PyEdge::from_curve(curve)?)
 }
 
 /// Read a `ferrocad.Matrix` through its `A11`…`A44` elements.
@@ -410,9 +498,47 @@ impl PyCircle {
         py_vector(py, self.curve.center())
     }
 
+    /// Move the circle (`Circle.Center = …`), keeping its plane, frame and radius.
+    #[setter]
+    fn set_Center(&mut self, value: &Bound<'_, PyAny>) -> PyResult<()> {
+        self.curve = Circle::with_axis(
+            vector(value)?,
+            self.curve.normal(),
+            self.curve.x_axis(),
+            self.curve.radius(),
+        )
+        .map_err(curve_error)?;
+        Ok(())
+    }
+
+    /// Upstream's deprecated alias of [`Center`](Self::Center).
+    #[getter]
+    fn Location(&self, py: Python<'_>) -> PyResult<PyObject> {
+        py_vector(py, self.curve.center())
+    }
+
+    #[setter]
+    fn set_Location(&mut self, value: &Bound<'_, PyAny>) -> PyResult<()> {
+        self.set_Center(value)
+    }
+
     #[getter]
     fn Axis(&self, py: Python<'_>) -> PyResult<PyObject> {
         py_vector(py, self.curve.normal())
+    }
+
+    /// Replace the circle's plane normal (`Circle.Axis = …`), keeping the centre,
+    /// radius and the direction of the X axis projected into the new plane.
+    #[setter]
+    fn set_Axis(&mut self, value: &Bound<'_, PyAny>) -> PyResult<()> {
+        self.curve = Circle::with_axis(
+            self.curve.center(),
+            vector(value)?,
+            self.curve.x_axis(),
+            self.curve.radius(),
+        )
+        .map_err(curve_error)?;
+        Ok(())
     }
 
     #[getter]
@@ -441,6 +567,70 @@ impl PyCircle {
         Ok(())
     }
 
+    /// The circle's in-plane Y direction, `Axis × XAxis` (`Circle.YAxis`).
+    #[getter]
+    fn YAxis(&self, py: Python<'_>) -> PyResult<PyObject> {
+        py_vector(py, self.curve.y_axis())
+    }
+
+    #[setter]
+    fn set_YAxis(&mut self, value: &Bound<'_, PyAny>) -> PyResult<()> {
+        let y_axis = vector(value)?;
+        let normal = self.curve.normal();
+        self.curve = Circle::with_axis(
+            self.curve.center(),
+            normal,
+            y_axis.cross(&normal),
+            self.curve.radius(),
+        )
+        .map_err(curve_error)?;
+        Ok(())
+    }
+
+    /// The rotation of the X axis from the plane's reference direction, in radians
+    /// (`Conic.AngleXU`). A circle created without an explicit X axis is zero.
+    #[getter]
+    fn AngleXU(&self) -> f64 {
+        axis_angle(self.curve.normal(), self.curve.x_axis())
+    }
+
+    #[setter]
+    fn set_AngleXU(&mut self, value: f64) -> PyResult<()> {
+        let normal = self.curve.normal();
+        let x_axis = ferrocad_curves::rotate_about(
+            ferrocad_curves::reference_x_axis(normal),
+            normal,
+            value,
+        );
+        self.curve = Circle::with_axis(
+            self.curve.center(),
+            normal,
+            x_axis,
+            self.curve.radius(),
+        )
+        .map_err(curve_error)?;
+        Ok(())
+    }
+
+    /// The curve parameter of `point` (`Circle.parameter(point)`): its angle on
+    /// the circle, measured from the X axis.
+    fn parameter(&self, py: Python<'_>, point: &Bound<'_, PyAny>) -> PyResult<PyObject> {
+        let point = vector(point)?;
+        let offset = point.sub(&self.curve.center());
+        let y_axis = self.curve.y_axis();
+        let angle = offset
+            .dot(&y_axis)
+            .atan2(offset.dot(&self.curve.x_axis()));
+        Ok(angle.into_py_any(py)?)
+    }
+
+    /// An independent copy (`Geometry.copy`) with the same geometry.
+    fn copy(&self) -> Self {
+        Self {
+            curve: self.curve.clone(),
+        }
+    }
+
     /// Upstream's `GeomCircle::setRadius`: the centre and the plane are kept, the
     /// radius is replaced (a non-positive radius raises `Part.OCCError`).
     #[setter]
@@ -455,8 +645,16 @@ impl PyCircle {
         Ok(())
     }
 
-    fn toShape(&self, py: Python<'_>) -> PyResult<Py<PyEdge>> {
-        Py::new(py, PyEdge::from_curve(EdgeCurve::Circle(self.curve))?)
+    /// The circle as an edge, or the arc over `[first, last]`
+    /// (`GeometryCurvePy::toShape`).
+    #[pyo3(signature = (first = None, last = None))]
+    fn toShape(
+        &self,
+        py: Python<'_>,
+        first: Option<f64>,
+        last: Option<f64>,
+    ) -> PyResult<Py<PyEdge>> {
+        curve_to_shape(py, EdgeCurve::Circle(self.curve), first, last, "circle")
     }
 
     /// `Circle.transform(matrix)` — apply a similarity transform in place, as
@@ -573,6 +771,13 @@ impl PyArcOfCircle {
     #[getter]
     fn TypeId(&self) -> &'static str {
         "Part::GeomArcOfCircle"
+    }
+
+    /// An independent copy (`Geometry.copy`) with the same geometry.
+    fn copy(&self) -> Self {
+        Self {
+            curve: self.curve.clone(),
+        }
     }
 
     /// `Part.ArcOfCircle(circle, first, last)` (the aliased `Part.Arc` form) or
@@ -693,8 +898,15 @@ impl PyArcOfCircle {
         conic_spline(py, &Conic::Circle(self.curve.circle()), first, last, false)
     }
 
-    fn toShape(&self, py: Python<'_>) -> PyResult<Py<PyEdge>> {
-        Py::new(py, PyEdge::from_curve(EdgeCurve::Arc(self.curve))?)
+    /// The arc as an edge, or the sub-arc over `[first, last]`.
+    #[pyo3(signature = (first = None, last = None))]
+    fn toShape(
+        &self,
+        py: Python<'_>,
+        first: Option<f64>,
+        last: Option<f64>,
+    ) -> PyResult<Py<PyEdge>> {
+        curve_to_shape(py, EdgeCurve::Arc(self.curve), first, last, "arc")
     }
 }
 
@@ -746,10 +958,50 @@ impl PyEllipse {
         py_vector(py, self.curve.center())
     }
 
+    /// Move the ellipse (`Ellipse.Center = …`), keeping its plane, frame and radii.
+    #[setter]
+    fn set_Center(&mut self, value: &Bound<'_, PyAny>) -> PyResult<()> {
+        self.curve = Ellipse::with_axis(
+            vector(value)?,
+            self.curve.normal(),
+            self.curve.x_axis(),
+            self.curve.major_radius(),
+            self.curve.minor_radius(),
+        )
+        .map_err(curve_error)?;
+        Ok(())
+    }
+
+    /// Upstream's deprecated alias of [`Center`](Self::Center).
+    #[getter]
+    fn Location(&self, py: Python<'_>) -> PyResult<PyObject> {
+        py_vector(py, self.curve.center())
+    }
+
+    #[setter]
+    fn set_Location(&mut self, value: &Bound<'_, PyAny>) -> PyResult<()> {
+        self.set_Center(value)
+    }
+
     /// The unit normal of the ellipse's plane (upstream's `Axis`).
     #[getter]
     fn Axis(&self, py: Python<'_>) -> PyResult<PyObject> {
         py_vector(py, self.curve.normal())
+    }
+
+    /// Replace the plane normal (`Ellipse.Axis = …`), keeping the centre, radii
+    /// and the major axis projected into the new plane.
+    #[setter]
+    fn set_Axis(&mut self, value: &Bound<'_, PyAny>) -> PyResult<()> {
+        self.curve = Ellipse::with_axis(
+            self.curve.center(),
+            vector(value)?,
+            self.curve.x_axis(),
+            self.curve.major_radius(),
+            self.curve.minor_radius(),
+        )
+        .map_err(curve_error)?;
+        Ok(())
     }
 
     /// The direction of the major axis.
@@ -758,10 +1010,85 @@ impl PyEllipse {
         py_vector(py, self.curve.x_axis())
     }
 
+    /// Replace the major-axis direction (`Ellipse.XAxis = …`), keeping the centre,
+    /// plane and radii.
+    #[setter]
+    fn set_XAxis(&mut self, value: &Bound<'_, PyAny>) -> PyResult<()> {
+        self.curve = Ellipse::with_axis(
+            self.curve.center(),
+            self.curve.normal(),
+            vector(value)?,
+            self.curve.major_radius(),
+            self.curve.minor_radius(),
+        )
+        .map_err(curve_error)?;
+        Ok(())
+    }
+
     /// The direction of the minor axis.
     #[getter]
     fn MinorAxis(&self, py: Python<'_>) -> PyResult<PyObject> {
         py_vector(py, self.curve.y_axis())
+    }
+
+    #[setter]
+    fn set_YAxis(&mut self, value: &Bound<'_, PyAny>) -> PyResult<()> {
+        let y_axis = vector(value)?;
+        let normal = self.curve.normal();
+        self.curve = Ellipse::with_axis(
+            self.curve.center(),
+            normal,
+            y_axis.cross(&normal),
+            self.curve.major_radius(),
+            self.curve.minor_radius(),
+        )
+        .map_err(curve_error)?;
+        Ok(())
+    }
+
+    /// The rotation of the major axis from the plane's reference direction
+    /// (`Conic.AngleXU`), in radians.
+    #[getter]
+    fn AngleXU(&self) -> f64 {
+        axis_angle(self.curve.normal(), self.curve.x_axis())
+    }
+
+    #[setter]
+    fn set_AngleXU(&mut self, value: f64) -> PyResult<()> {
+        let normal = self.curve.normal();
+        let x_axis = ferrocad_curves::rotate_about(
+            ferrocad_curves::reference_x_axis(normal),
+            normal,
+            value,
+        );
+        self.curve = Ellipse::with_axis(
+            self.curve.center(),
+            normal,
+            x_axis,
+            self.curve.major_radius(),
+            self.curve.minor_radius(),
+        )
+        .map_err(curve_error)?;
+        Ok(())
+    }
+
+    /// The curve parameter of `point` (`Ellipse.parameter(point)`): its angle on
+    /// the ellipse, measured from the major axis.
+    fn parameter(&self, py: Python<'_>, point: &Bound<'_, PyAny>) -> PyResult<PyObject> {
+        let point = vector(point)?;
+        let offset = point.sub(&self.curve.center());
+        let y_axis = self.curve.y_axis();
+        let angle = offset
+            .dot(&y_axis)
+            .atan2(offset.dot(&self.curve.x_axis()));
+        Ok(angle.into_py_any(py)?)
+    }
+
+    /// An independent copy (`Geometry.copy`) with the same geometry.
+    fn copy(&self) -> Self {
+        Self {
+            curve: self.curve.clone(),
+        }
     }
 
     #[getter]
@@ -821,8 +1148,15 @@ impl PyEllipse {
     /// (centre, plane normal, major axis and the two radii) is handed to
     /// `gp_Elips`, so the edge is the exact analytic ellipse, not a NURBS
     /// approximation.
-    fn toShape(&self, py: Python<'_>) -> PyResult<Py<PyEdge>> {
-        Py::new(py, PyEdge::from_curve(EdgeCurve::Ellipse(self.curve))?)
+    /// The ellipse as an edge, or the elliptical arc over `[first, last]`.
+    #[pyo3(signature = (first = None, last = None))]
+    fn toShape(
+        &self,
+        py: Python<'_>,
+        first: Option<f64>,
+        last: Option<f64>,
+    ) -> PyResult<Py<PyEdge>> {
+        curve_to_shape(py, EdgeCurve::Ellipse(self.curve), first, last, "ellipse")
     }
 
     /// `Ellipse.transform(matrix)` — apply a similarity transform in place, as
@@ -918,6 +1252,15 @@ impl PyArcOfEllipse {
     #[getter]
     fn TypeId(&self) -> &'static str {
         "Part::GeomArcOfEllipse"
+    }
+
+    /// An independent copy (`Geometry.copy`) with the same geometry.
+    fn copy(&self) -> Self {
+        Self {
+            ellipse: self.ellipse,
+            first: self.first,
+            last: self.last,
+        }
     }
 
     #[new]
@@ -1029,6 +1372,21 @@ impl PyArcOfEllipse {
         let last = last.unwrap_or(self.last);
         conic_spline(py, &Conic::Ellipse(self.ellipse), first, last, false)
     }
+
+    /// The arc as an edge, or the sub-arc over `[first, last]`
+    /// (`GeometryCurvePy::toShape`).
+    #[pyo3(signature = (first = None, last = None))]
+    fn toShape(
+        &self,
+        py: Python<'_>,
+        first: Option<f64>,
+        last: Option<f64>,
+    ) -> PyResult<Py<PyEdge>> {
+        let first = first.unwrap_or(self.first);
+        let last = last.unwrap_or(self.last);
+        let arc = EllipticalArc::new(self.ellipse, first, last).map_err(curve_error)?;
+        Py::new(py, PyEdge::from_curve(EdgeCurve::EllipticalArc(arc))?)
+    }
 }
 
 /// Construct upstream's `Hyperbola(S1, S2, Center)` form: the major axis runs
@@ -1070,6 +1428,13 @@ impl PyHyperbola {
     #[getter]
     fn TypeId(&self) -> &'static str {
         "Part::GeomHyperbola"
+    }
+
+    /// An independent copy (`Geometry.copy`) with the same geometry.
+    fn copy(&self) -> Self {
+        Self {
+            curve: self.curve.clone(),
+        }
     }
 
     #[new]
@@ -1306,6 +1671,13 @@ impl PyArcOfHyperbola {
         "Part::GeomArcOfHyperbola"
     }
 
+    /// An independent copy (`Geometry.copy`) with the same geometry.
+    fn copy(&self) -> Self {
+        Self {
+            arc: self.arc.clone(),
+        }
+    }
+
     #[new]
     #[pyo3(signature = (hyperbola, first, last, sense = true))]
     fn new(
@@ -1505,6 +1877,13 @@ impl PyParabola {
     #[getter]
     fn TypeId(&self) -> &'static str {
         "Part::GeomParabola"
+    }
+
+    /// An independent copy (`Geometry.copy`) with the same geometry.
+    fn copy(&self) -> Self {
+        Self {
+            curve: self.curve.clone(),
+        }
     }
 
     #[new]
@@ -1751,6 +2130,13 @@ impl PyArcOfParabola {
         "Part::GeomArcOfParabola"
     }
 
+    /// An independent copy (`Geometry.copy`) with the same geometry.
+    fn copy(&self) -> Self {
+        Self {
+            arc: self.arc.clone(),
+        }
+    }
+
     #[new]
     #[pyo3(signature = (parabola, first, last, sense = true))]
     fn new(
@@ -1925,6 +2311,13 @@ impl PyOffsetCurve {
         "Part::GeomOffsetCurve"
     }
 
+    /// An independent copy (`Geometry.copy`) with the same geometry.
+    fn copy(&self) -> Self {
+        Self {
+            curve: self.curve.clone(),
+        }
+    }
+
     #[new]
     fn new(
         basis: &Bound<'_, PyAny>,
@@ -2023,6 +2416,13 @@ impl PyBezierCurve {
     #[getter]
     fn TypeId(&self) -> &'static str {
         "Part::GeomBezierCurve"
+    }
+
+    /// An independent copy (`Geometry.copy`) with the same geometry.
+    fn copy(&self) -> Self {
+        Self {
+            curve: Mutex::new(self.curve()),
+        }
     }
 
     /// `Part.BezierCurve()` (upstream's default two-pole curve) or
@@ -2319,6 +2719,16 @@ impl PyPlane {
     #[getter]
     fn TypeId(&self) -> &'static str {
         "Part::GeomPlane"
+    }
+
+    /// An independent copy (`Geometry.copy`) with the same surface.
+    fn copy(&self) -> Self {
+        Self {
+            location: self.location,
+            normal: self.normal,
+            x_dir: self.x_dir,
+            y_dir: self.y_dir,
+        }
     }
 
     #[new]
@@ -3090,16 +3500,23 @@ fn plane_face(
     Py::new(py, PyFace::initializer(face))
 }
 
-/// The backing surface of a face (`Face.Surface`). Only `TypeId` is carried in
-/// this slice; geometry-specific properties come later.
+/// The backing surface of a face whose kind has no dedicated class
+/// (`Face.Surface`). The face the surface was read from is kept so
+/// `parameter`/`value` evaluate the very same surface.
 #[pyclass(name = "GeomSurface", module = "Part")]
 pub struct PySurface {
     type_id: String,
+    /// The face the surface was read from. Behind a `Mutex` because a `#[pyclass]`
+    /// must be `Sync` and a kernel shape handle is only `Send`.
+    face: Mutex<Option<Shape>>,
 }
 
 impl PySurface {
-    pub(crate) fn new(type_id: String) -> Self {
-        Self { type_id }
+    pub(crate) fn new(type_id: String, face: Option<Shape>) -> Self {
+        Self {
+            type_id,
+            face: Mutex::new(face),
+        }
     }
 }
 
@@ -3110,8 +3527,33 @@ impl PySurface {
         self.type_id.clone()
     }
 
+    /// The `(u, v)` of `point` on the surface (`GeomSurface.parameter`).
+    fn parameter(&self, py: Python<'_>, point: &Bound<'_, PyAny>) -> PyResult<PyObject> {
+        let face = self.surface_face()?;
+        let (u, v) = ferrocad_occt::part_ops::face_parameter(&face, vector(point)?)
+            .map_err(kernel_error)?;
+        Ok(PyTuple::new(py, [u, v])?.into_any().unbind())
+    }
+
+    /// The point at surface parameters `(u, v)` (`GeomSurface.value`).
+    fn value(&self, py: Python<'_>, u: f64, v: f64) -> PyResult<PyObject> {
+        let face = self.surface_face()?;
+        let point = backend().face_value_at(&face, u, v).map_err(kernel_error)?;
+        py_vector(py, point)
+    }
+
     fn __repr__(&self) -> String {
         format!("Part.{}()", self.type_id.trim_start_matches("Part::"))
+    }
+}
+
+impl PySurface {
+    fn surface_face(&self) -> PyResult<Shape> {
+        self.face
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone()
+            .ok_or_else(|| OCCError::new_err("this GeomSurface has no face to evaluate"))
     }
 }
 
@@ -3423,7 +3865,7 @@ fn required_range(first: Option<f64>, last: Option<f64>, what: &str) -> PyResult
     }
 }
 
-fn parse_points(points: &Bound<'_, PyAny>) -> PyResult<Vec<Vector3>> {
+pub(crate) fn parse_points(points: &Bound<'_, PyAny>) -> PyResult<Vec<Vector3>> {
     let mut parsed = Vec::new();
     for point in points.try_iter()? {
         parsed.push(vector(&point?)?);
@@ -3431,7 +3873,7 @@ fn parse_points(points: &Bound<'_, PyAny>) -> PyResult<Vec<Vector3>> {
     Ok(parsed)
 }
 
-fn parse_floats(values: &Bound<'_, PyAny>) -> PyResult<Vec<f64>> {
+pub(crate) fn parse_floats(values: &Bound<'_, PyAny>) -> PyResult<Vec<f64>> {
     let mut parsed = Vec::new();
     for value in values.try_iter()? {
         parsed.push(value?.extract::<f64>()?);
@@ -3439,7 +3881,7 @@ fn parse_floats(values: &Bound<'_, PyAny>) -> PyResult<Vec<f64>> {
     Ok(parsed)
 }
 
-fn parse_integers(values: &Bound<'_, PyAny>) -> PyResult<Vec<i32>> {
+pub(crate) fn parse_integers(values: &Bound<'_, PyAny>) -> PyResult<Vec<i32>> {
     let mut parsed = Vec::new();
     for value in values.try_iter()? {
         parsed.push(value?.extract::<i32>()?);
@@ -3570,6 +4012,13 @@ impl PyBSplineCurve {
     #[getter]
     fn TypeId(&self) -> &'static str {
         "Part::GeomBSplineCurve"
+    }
+
+    /// An independent copy (`Geometry.copy`) with the same geometry.
+    fn copy(&self) -> Self {
+        Self {
+            state: Mutex::new(self.state.lock().unwrap_or_else(|e| e.into_inner()).clone()),
+        }
     }
 
     /// `Part.BSplineCurve()` (empty) or
@@ -3744,9 +4193,43 @@ impl PyBSplineCurve {
         Ok(())
     }
 
-    /// The curve as an edge.
-    fn toShape(&self, py: Python<'_>) -> PyResult<Py<PyEdge>> {
+    /// The curve as an edge, or the piece between two parameters
+    /// (`GeometryCurvePy::toShape`).
+    #[pyo3(signature = (first = None, last = None))]
+    fn toShape(
+        &self,
+        py: Python<'_>,
+        first: Option<f64>,
+        last: Option<f64>,
+    ) -> PyResult<Py<PyEdge>> {
         let state = self.state()?;
+        let state = match (first, last) {
+            (None, None) => state,
+            (Some(first), Some(last)) => {
+                let blob = occt()
+                    .bspline_segment(
+                        &state.poles,
+                        &state.weights,
+                        &state.knots,
+                        &state.mults,
+                        state.degree,
+                        state.periodic,
+                        state.check_rational(),
+                        first,
+                        last,
+                    )
+                    .ok_or_else(|| {
+                        OCCError::new_err("the B-spline cannot be trimmed to that parameter range")
+                    })?;
+                SplineState::from_blob(&blob)
+                    .ok_or_else(|| OCCError::new_err("failed to trim the B-spline"))?
+            }
+            _ => {
+                return Err(OCCError::new_err(
+                    "BSplineCurve.toShape needs both first and last parameters",
+                ));
+            }
+        };
         let shape = occt()
             .make_bspline_poles_mults_knots(
                 &state.poles,
@@ -3765,6 +4248,29 @@ impl PyBSplineCurve {
                 curve: None,
             }),
         )
+    }
+
+    /// `segment(u1, u2)`: restrict this curve to `[u1, u2]` in place
+    /// (`Geom_BSplineCurve::Segment`).
+    fn segment(&self, u1: f64, u2: f64) -> PyResult<()> {
+        let state = self.state()?;
+        let blob = occt()
+            .bspline_segment(
+                &state.poles,
+                &state.weights,
+                &state.knots,
+                &state.mults,
+                state.degree,
+                state.periodic,
+                state.check_rational(),
+                u1,
+                u2,
+            )
+            .ok_or_else(|| OCCError::new_err("Failed to segment BSpline curve"))?;
+        let trimmed = SplineState::from_blob(&blob)
+            .ok_or_else(|| OCCError::new_err("Failed to segment BSpline curve"))?;
+        *self.state.lock().unwrap_or_else(|e| e.into_inner()) = Some(trimmed);
+        Ok(())
     }
 
     /// `value(u)`: the point at parameter `u` (`Geom_BSplineCurve::Value`).
@@ -7281,6 +7787,26 @@ impl PyBSplineCurve2d {
         Self::record(slf, Points)
     }
 
+    /// `buildFromPolesMultsKnots(poles, mults=None, knots=None, periodic=False,
+    /// degree=3, weights=None)` — build the 2D B-spline from control points.
+    ///
+    /// The 2D binding records the poles (its `toShape` still reports that no 2D
+    /// B-spline kernel is bound), so the signature and the pole list match
+    /// upstream's `BSplineCurve2d`.
+    #[pyo3(signature = (poles, mults = None, knots = None, periodic = false, degree = 3, weights = None))]
+    fn buildFromPolesMultsKnots(
+        slf: &Bound<'_, Self>,
+        poles: &Bound<'_, PyAny>,
+        mults: Option<&Bound<'_, PyAny>>,
+        knots: Option<&Bound<'_, PyAny>>,
+        periodic: bool,
+        degree: i32,
+        weights: Option<&Bound<'_, PyAny>>,
+    ) -> PyResult<()> {
+        let _ = (mults, knots, periodic, degree, weights);
+        Self::record(slf, poles)
+    }
+
     #[pyo3(signature = (u, mult = 1, tol = 0.0))]
     fn insertKnot(&self, u: f64, mult: i32, tol: f64) -> PyResult<()> {
         let _ = (u, mult, tol);
@@ -7383,13 +7909,14 @@ fn require_surface_or_face(value: &Bound<'_, PyAny>) -> PyResult<()> {
         || value.downcast::<PyPlane>().is_ok()
         || value.downcast::<PyRectangularTrimmedSurface>().is_ok()
         || value.downcast::<PySurface>().is_ok()
+        || value.downcast::<crate::solids::PyBSplineSurface>().is_ok()
     {
         return Ok(());
     }
     Err(PyTypeError::new_err(
         "toShape(surface) expects a Part surface \
-         (Part.Plane, Part.Cylinder, Part.Sphere or Part.RectangularTrimmedSurface) \
-         or a Part.Face",
+         (Part.Plane, Part.Cylinder, Part.Sphere, Part.BSplineSurface or \
+         Part.RectangularTrimmedSurface) or a Part.Face",
     ))
 }
 
@@ -7657,13 +8184,41 @@ impl PyEdge {
 #[pymethods]
 impl PyEdge {
     /// `Part.Edge()` is upstream's empty (null) edge; `Part.Edge(value)` accepts
-    /// an edge, a curve or a `Part.Shape`.
+    /// an edge, a curve or a `Part.Shape`; `Part.Edge(curve, first, last)` is the
+    /// piece of that curve between the two parameters.
     #[new]
-    #[pyo3(signature = (value = None))]
-    fn new(value: Option<&Bound<'_, PyAny>>) -> PyResult<PyClassInitializer<Self>> {
-        match value {
-            Some(value) => Ok(Self::initializer(Self::entry_from(value)?)),
-            None => Ok(Self::null_initializer()),
+    #[pyo3(signature = (value = None, first = None, last = None))]
+    fn new(
+        value: Option<&Bound<'_, PyAny>>,
+        first: Option<f64>,
+        last: Option<f64>,
+    ) -> PyResult<PyClassInitializer<Self>> {
+        let Some(value) = value else {
+            if first.is_some() || last.is_some() {
+                return Err(PyTypeError::new_err(
+                    "Part.Edge needs a curve for a parameter range",
+                ));
+            }
+            return Ok(Self::null_initializer());
+        };
+        let entry = Self::entry_from(value)?;
+        match (first, last) {
+            (None, None) => Ok(Self::initializer(entry)),
+            (Some(first), Some(last)) => {
+                let curve = match entry.curve {
+                    Some(curve) => curve,
+                    None => backend().curve_of(&entry.shape).map_err(kernel_error)?,
+                };
+                let trimmed = curve.trimmed(first, last).ok_or_else(|| {
+                    OCCError::new_err(
+                        "Part.Edge(curve, first, last) cannot be trimmed to that range",
+                    )
+                })?;
+                Self::from_curve(trimmed)
+            }
+            _ => Err(PyTypeError::new_err(
+                "Part.Edge(curve, first, last) needs both parameters",
+            )),
         }
     }
 
@@ -8184,15 +8739,22 @@ impl PyWire {
             .collect()
     }
 
-    /// Whether the chain closes, judged from the analytic endpoints this slice
-    /// carries. A wire built only from shapes cannot answer (reported `False`).
-    fn isClosed(&self) -> bool {
-        let entries = self.entries();
+    /// Whether the wire is closed (`Wire.isClosed`).
+    ///
+    /// A wire with kernel geometry reports OCCT's own `BRep_Tool::IsClosed` flag,
+    /// exactly as `Shape.isClosed` and upstream's `TopoShape::isClosed` do, so the
+    /// wire and its `Wires[0]` never disagree. Only a wire with no kernel shape yet
+    /// falls back to comparing the analytic endpoints.
+    fn isClosed(slf: PyRef<'_, Self>) -> PyResult<bool> {
+        if let Some(shape) = slf.as_super().shape() {
+            return backend().is_closed(&shape).map_err(kernel_error);
+        }
+        let entries = slf.entries();
         let (Some(first), Some(last)) = (entries.first(), entries.last()) else {
-            return false;
+            return Ok(false);
         };
         let points = |curve: EdgeCurve| curve.endpoints();
-        match (
+        Ok(match (
             first.curve.clone().and_then(points),
             last.curve.clone().and_then(points),
         ) {
@@ -8200,7 +8762,22 @@ impl PyWire {
                 start.distance(&end) <= ferrocad_curves::TOLERANCE
             }
             _ => false,
-        }
+        })
+    }
+
+    /// The wire's edges in connection order (`Wire.OrderedEdges`), the
+    /// `BRepTools_WireExplorer` walk upstream exposes as a property.
+    #[getter]
+    fn OrderedEdges(slf: PyRef<'_, Self>, py: Python<'_>) -> PyResult<Vec<Py<PyEdge>>> {
+        let shape = slf
+            .as_super()
+            .shape()
+            .ok_or_else(|| empty_error("OrderedEdges"))?;
+        ferrocad_occt::part_ops::wire_ordered_edges(&shape)
+            .map_err(kernel_error)?
+            .into_iter()
+            .map(|edge| Py::new(py, PyEdge::from_entry(EdgeEntry { shape: edge, curve: None })))
+            .collect()
     }
 
     /// The wire as a kernel shape (already built by the constructor/`add`).
@@ -8616,6 +9193,15 @@ fn surface_y_dir(axis: Vector3, x_dir: Vector3, direct: bool) -> Vector3 {
     }
 }
 
+/// The signed angle from the plane's reference direction to `x_axis`, about
+/// `normal` (`Conic.AngleXU`). A conic framed by `Circle::new`/`Ellipse::new`
+/// reports zero.
+fn axis_angle(normal: Vector3, x_axis: Vector3) -> f64 {
+    let reference = ferrocad_curves::reference_x_axis(normal);
+    let y_axis = normal.cross(&reference);
+    x_axis.dot(&y_axis).atan2(x_axis.dot(&reference))
+}
+
 /// The outward unit normal of a face at surface parameters `(u, v)`.
 ///
 /// A classified surface gives the analytic normal (constant on a plane, radial
@@ -8789,6 +9375,21 @@ impl PyFace {
         let Some(value) = value else {
             return Ok(Self::empty_initializer());
         };
+        // A B-spline surface is trimmed through its own control-point geometry.
+        if let Ok(surface) = value.downcast::<crate::solids::PyBSplineSurface>() {
+            let geometry = surface.borrow().geometry().cloned().ok_or_else(|| {
+                OCCError::new_err("Part.Face needs a built BSplineSurface (call buildFromPolesMultsKnots)")
+            })?;
+            let Some(wires) = face_maker else {
+                return Err(PyTypeError::new_err(
+                    "Part.Face(surface, wires) needs boundary wires",
+                ));
+            };
+            let shapes = wire_shapes(wires)?;
+            let shape = ferrocad_occt::part_ops::face_on_bspline_surface(&geometry, &shapes)
+                .map_err(kernel_error)?;
+            return Ok(Self::initializer(shape));
+        }
         if let Some(surface) = face_surface_spec(value) {
             let Some(wires) = face_maker else {
                 return Err(PyTypeError::new_err(
@@ -8895,6 +9496,28 @@ impl PyFace {
     fn cutHoles(slf: PyRef<'_, Self>, _holes: &Bound<'_, PyAny>) -> PyResult<()> {
         require_edge(slf.as_super(), "cutHoles")?;
         Err(edge_query_error("cutHoles"))
+    }
+
+    /// Whether surface parameters `(u, v)` lie inside the face (`Face.isPartOfDomain`,
+    /// upstream's `BRepTopAdaptor_FClass2d`).
+    fn isPartOfDomain(slf: PyRef<'_, Self>, u: f64, v: f64) -> PyResult<bool> {
+        let shape = slf
+            .as_super()
+            .shape()
+            .ok_or_else(|| empty_error("isPartOfDomain"))?;
+        ferrocad_occt::part_ops::face_is_part_of_domain(&shape, u, v).map_err(kernel_error)
+    }
+
+    /// Repair an invalid face's wires in place (`Face.validate`), as upstream's
+    /// `TopoShapeFacePy::validate`. A valid face is left untouched.
+    fn validate(slf: PyRef<'_, Self>) -> PyResult<()> {
+        let shape = slf
+            .as_super()
+            .shape()
+            .ok_or_else(|| empty_error("validate"))?;
+        let fixed = ferrocad_occt::part_ops::validate_face(&shape).map_err(kernel_error)?;
+        slf.as_super().replace_geometry(Some(fixed));
+        Ok(())
     }
 
     fn getUVNodes(slf: PyRef<'_, Self>) -> PyResult<Vec<(f64, f64)>> {

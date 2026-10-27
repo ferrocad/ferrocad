@@ -71,7 +71,22 @@ fn part_shares_one_core_with_ferrocad() {
         obj.setattr("Shape", &shape).expect("obj.Shape = shape");
 
         let after = obj.getattr("Shape").expect("obj.Shape");
-        assert_eq!(after.get_type().name().unwrap(), "Shape");
+        // The property hands back the wrapper matching the topology, as upstream's
+        // `shape2pyshape` does: a box's solid is a `Part.Solid` (which is still a
+        // `Part.Shape`).
+        assert!(
+            after
+                .is_instance(&part.getattr("Shape").unwrap())
+                .unwrap(),
+            "obj.Shape must be a Part.Shape"
+        );
+        assert_eq!(after.get_type().name().unwrap(), "Solid");
+        assert!(
+            after
+                .is_instance(&part.getattr("Solid").unwrap())
+                .unwrap(),
+            "a solid shapes comes back as Part.Solid"
+        );
         assert!(
             !after.call_method0("isNull").unwrap().extract::<bool>().unwrap(),
             "the assigned shape is no longer null"
@@ -123,7 +138,15 @@ fn a_fillet_feature_rebuilds_through_python() {
         doc.call_method0("recompute").expect("recompute");
 
         let output = fillet.getattr("Shape").expect("fillet.Shape");
-        assert_eq!(output.get_type().name().unwrap(), "Shape");
+        // The kernel reports a compound for this fillet, so the property exposes
+        // `Part.Compound` (a `Part.Shape` subclass), as upstream's `shape2pyshape`.
+        assert_eq!(output.get_type().name().unwrap(), "Compound");
+        assert!(
+            output
+                .is_instance(&part.getattr("Shape").unwrap())
+                .unwrap(),
+            "fillet.Shape must be a Part.Shape"
+        );
         assert!(
             !output
                 .call_method0("isNull")

@@ -74,38 +74,76 @@ use pyo3::IntoPyObjectExt;
 /// point that can build a shape calls it first.
 fn register_kernel() {
     ferrocad_part::register(Arc::new(OcctBackend::new()));
-    // The document-object behavior lives in `ferrocad_part`, which is
-    // kernel-agnostic; keep its `Shape` in sync with the object's `Placement`
-    // here, where the kernel is linked.
-    install_feature_placement_sync();
     link::register();
     link_array::register();
     solids::register_objects();
     feature_python::register();
+    // The document-object behavior lives in `ferrocad_part` and the Python-feature
+    // types here; both are kernel-agnostic. Keep their `Shape` in sync with the
+    // object's `Placement` here, where the kernel is linked. Install this after
+    // the types are registered so the wrapper captures (not re-wraps) them.
+    install_feature_placement_sync();
 }
 
-/// The `Part::Feature` behaviour registered by `ferrocad_part`, captured once so
+/// The wrapped base behaviour of each Part feature type, captured once so
 /// re-installing the wrapper cannot wrap itself.
-static PART_FEATURE_BASE: OnceLock<Arc<dyn ObjectType>> = OnceLock::new();
+fn part_feature_bases() -> &'static Mutex<HashMap<&'static str, Arc<dyn ObjectType>>> {
+    static BASES: OnceLock<Mutex<HashMap<&'static str, Arc<dyn ObjectType>>>> = OnceLock::new();
+    BASES.get_or_init(|| Mutex::new(HashMap::new()))
+}
 
-/// Keep a plain Part feature's `Shape` and `Placement` in step, upstream
+/// The object types that own a `Shape`/`Placement` pair.
+///
+/// `Part::Feature` stores the object's own geometry, so a `Shape` assignment is a
+/// script handing over a world-space shape: upstream's `Feature::onChanged`
+/// adopts the shape's own transform as the `Placement`. The Python-feature types
+/// are different: their `Shape` is an *output* their proxy rebuilds during a
+/// recompute, and upstream keeps the object's `Placement` while baking it into the
+/// freshly assigned geometry. The two rules are recorded per type here.
+const PART_FEATURE_TYPES: [(&str, bool); 3] = [
+    ("Part::Feature", false),
+    (feature_python::FEATURE_PYTHON_TYPE, true),
+    (feature_python::PART2D_PYTHON_TYPE, true),
+];
+
+/// Keep a Part feature's `Shape` and `Placement` in step, upstream
 /// `Part::Feature::onChanged`.
 ///
-/// `ferrocad_part` owns the object type but is deliberately kernel-agnostic, so
-/// the transform it needs lives here, in the composition root that links OCCT.
+/// `ferrocad_part` owns the object types but is deliberately kernel-agnostic, so
+/// the transform they need lives here, in the composition root that links OCCT.
 /// The wrapper delegates everything else to the registered behaviour.
+///
+/// `Part::FeaturePython` and `Part::Part2DObjectPython` need the same rule as
+/// `Part::Feature`: upstream `Feature::onChanged` bakes the object's `Placement`
+/// into the stored `Shape`, so a Draft wire's `obj.Shape.Vertexes` are in global
+/// coordinates and `obj.Shape.Placement` is `obj.Placement`.
 fn install_feature_placement_sync() {
-    let base = PART_FEATURE_BASE
-        .get_or_init(|| {
-            object_registry::get("Part::Feature")
-                .expect("ferrocad_part registers Part::Feature")
-        })
-        .clone();
-    object_registry::register("Part::Feature", Arc::new(FeatureWithPlacement { base }));
+    let mut bases = part_feature_bases().lock().unwrap_or_else(|e| e.into_inner());
+    for (type_name, keep_placement) in PART_FEATURE_TYPES {
+        let Some(base) = object_registry::get(type_name) else {
+            continue;
+        };
+        bases.entry(type_name).or_insert_with(|| base.clone());
+        let original = bases
+            .get(type_name)
+            .expect("just inserted")
+            .clone();
+        object_registry::register(
+            type_name,
+            Arc::new(FeatureWithPlacement {
+                base: original,
+                keep_placement,
+            }),
+        );
+    }
 }
 
 struct FeatureWithPlacement {
     base: Arc<dyn ObjectType>,
+    /// Whether a `Shape` write bakes the object's `Placement` into the new
+    /// geometry (a Python feature rebuilt by its proxy) or adopts the shape's own
+    /// transform (a plain `Part::Feature`).
+    keep_placement: bool,
 }
 
 impl ObjectType for FeatureWithPlacement {
@@ -133,7 +171,7 @@ impl ObjectType for FeatureWithPlacement {
 
     fn on_property_changed(&self, doc: &mut Document, id: ObjectId, name: &str) {
         self.base.on_property_changed(doc, id, name);
-        sync_shape_and_placement(doc, id, name);
+        sync_shape_and_placement(doc, id, name, self.keep_placement);
     }
 
     fn is_python_feature(&self) -> bool {
@@ -141,19 +179,34 @@ impl ObjectType for FeatureWithPlacement {
     }
 }
 
-/// Mirror a `Part::Feature` property write onto its partner.
+/// Mirror a Part feature's property write onto its partner.
 ///
 /// - `Placement = p` re-bakes the stored geometry by `p · old⁻¹`, so
 ///   `obj.Shape` (and every query on it) follows immediately, without a
 ///   recompute, exactly as upstream's `Feature::onChanged` transforms the shape.
-/// - `Shape = s` adopts the shape's accumulated placement into `Placement`.
+/// - `Shape = s` follows upstream's `onChanged(Shape)`. A shape that carries its
+///   own accumulated placement (an operation result, or a preplaced
+///   `Part.Shape`) hands that placement to the object. Otherwise:
+///   - a plain `Part::Feature` adopts the shape's own (identity) transform, so an
+///     object whose `Placement` was rotated ends up reporting an identity
+///     placement and a world-space shape, exactly as upstream does for a script
+///     assignment outside a recompute;
+///   - a Python feature keeps its placement and bakes it into the proxy's freshly
+///     assigned local geometry, which is what upstream's recompute path does and
+///     what makes a Draft wire's `obj.Shape.Vertexes` come back in global
+///     coordinates.
 ///
 /// The writes go through [`Document::set_property_raw`], which records no undo
 /// step and does not re-run this hook. Undo/redo re-runs it from the restore path,
 /// so a reverted `Placement` also moves the shape back. Re-baking replaces every
 /// sub-shape handle, so the stored lineage is dropped (positional element names
 /// still resolve); this is the same contract `Shape.translate`/`rotate` have.
-fn sync_shape_and_placement(doc: &mut Document, id: ObjectId, name: &str) {
+fn sync_shape_and_placement(
+    doc: &mut Document,
+    id: ObjectId,
+    name: &str,
+    keep_placement: bool,
+) {
     match name {
         "Placement" => {
             let Some(Property::Placement(placement)) = doc
@@ -178,10 +231,44 @@ fn sync_shape_and_placement(doc: &mut Document, id: ObjectId, name: &str) {
             doc.set_property_raw(id, "Shape", make_shape_property(property));
         }
         "Shape" => {
-            let Some((_, placement, _lineage)) = shape_property_parts(doc, id) else {
+            let Some((Some(shape), stored_placement, _lineage)) = shape_property_parts(doc, id)
+            else {
                 return;
             };
-            doc.set_property_raw(id, "Placement", Property::Placement(placement));
+            let object_placement = doc
+                .object(id)
+                .and_then(|object| match object.properties.get("Placement") {
+                    Some(Property::Placement(placement)) => Some(*placement),
+                    _ => None,
+                })
+                .unwrap_or_else(Placement::identity);
+            if stored_placement != Placement::identity() {
+                // The assigned shape carries its own placement: adopt it.
+                if stored_placement != object_placement {
+                    doc.set_property_raw(id, "Placement", Property::Placement(stored_placement));
+                }
+                return;
+            }
+            if !keep_placement {
+                // A plain feature: the shape is world-space geometry. Adopt its
+                // (identity) transform, as upstream's non-recomputing rule does.
+                if object_placement != Placement::identity() {
+                    doc.set_property_raw(id, "Placement", Property::Placement(Placement::identity()));
+                }
+                return;
+            }
+            if object_placement == Placement::identity() {
+                return;
+            }
+            // A local shape on an object that already has a placement: bake that
+            // placement into the geometry, keeping the object where it is.
+            let Ok(moved) =
+                ferrocad_part::backend().transform(&shape, &object_placement.to_matrix())
+            else {
+                return;
+            };
+            let property = ShapeProperty::with_placement(moved, object_placement);
+            doc.set_property_raw(id, "Shape", make_shape_property(property));
         }
         _ => {}
     }
@@ -342,6 +429,23 @@ impl PartShape {
         self.epoch.fetch_add(1, Ordering::SeqCst);
     }
 
+    /// Store the placement and lineage a document property carries beside an
+    /// already-placed shape, without re-baking the geometry.
+    ///
+    /// [`shape_to_py`] wraps a `Part::Feature.Shape` in the subclass matching its
+    /// topology; the wrapper starts from [`from_shape`](Self::from_shape) and then
+    /// adopts the property's own placement, so `obj.Shape.Placement` is the
+    /// object's placement and its `Vertexes` are the same baked geometry.
+    pub(crate) fn adopt_placement_and_lineage(
+        &self,
+        placement: Placement,
+        lineage: Option<Lineage>,
+    ) {
+        *self.placement.lock().unwrap_or_else(|e| e.into_inner()) = placement;
+        *self.lineage.lock().unwrap_or_else(|e| e.into_inner()) = lineage;
+        self.epoch.fetch_add(1, Ordering::SeqCst);
+    }
+
     /// Set the absolute placement, re-baking the geometry by the placement delta.
     fn apply_placement(&self, new: Placement) {
         apply_placement_to(
@@ -363,18 +467,44 @@ impl PartShape {
 
     /// Apply a matrix to the placement when it is rigid, or bake it into the
     /// geometry when it is not (scaling, shear, reflection).
-    fn apply_matrix_to_placement(&self, matrix: &ferrocad_types::Matrix4) {
-        if matrix.has_scale(1e-9) == ScaleType::NoScaling && matrix.determinant3() > 0.0 {
-            let loc = Placement::new(
-                Vector3::new(matrix.m[3], matrix.m[7], matrix.m[11]),
-                Rotation::from_matrix(matrix),
-            );
-            self.apply_global_placement(loc);
-        } else if let Some(shape) = self.shape() {
-            if let Ok(moved) = ferrocad_part::backend().transform(&shape, matrix) {
+    ///
+    /// This is upstream's `TopoShape::transformShape(matrix, copy, checkScale)`: a
+    /// rigid matrix with `copy = False` moves the shape's location, and everything
+    /// that changes scale is baked into the geometry (a non-uniform scale through
+    /// `BRepBuilderAPI_GTransform`, so a circle really becomes an ellipse).
+    fn apply_shape_transform(
+        &self,
+        matrix: &ferrocad_types::Matrix4,
+        copy: bool,
+        check_scale: bool,
+    ) -> PyResult<()> {
+        let shape = self.named_shape()?;
+        let backend = ferrocad_part::backend();
+        if is_general_transform(matrix, check_scale) {
+            let moved = backend
+                .transform_geometry(&shape, matrix, copy)
+                .map_err(kernel_error)?;
+            self.replace_shape(Some(moved));
+        } else if matrix.has_scale(1e-9) == ScaleType::NoScaling
+            && matrix.determinant3() > 0.0
+        {
+            if copy {
+                let moved = backend.transform(&shape, matrix).map_err(kernel_error)?;
                 self.replace_shape(Some(moved));
+            } else {
+                let loc = Placement::new(
+                    Vector3::new(matrix.m[3], matrix.m[7], matrix.m[11]),
+                    Rotation::from_matrix(matrix),
+                );
+                self.apply_global_placement(loc);
             }
+        } else {
+            // A similarity (or the `gp_Trsf` approximation of an affinity when
+            // `checkScale` is off): bake it into the geometry.
+            let moved = backend.transform(&shape, matrix).map_err(kernel_error)?;
+            self.replace_shape(Some(moved));
         }
+        Ok(())
     }
 
     /// A counter bumped whenever the geometry is replaced or moved.
@@ -569,22 +699,87 @@ impl PartShape {
     /// handle as `other` (upstream's copy constructor, `TopoShape(const
     /// TopoShape&)`), so the two are `isSame`/`isEqual` and hash alike. Use
     /// [`copy`](PartShape::copy) for an independent, deep copy.
+    ///
+    /// `Part.Shape([shapes])` follows upstream's `TopoShape::PyInit`: one entry
+    /// wraps that shape (or the `toShape()` of that geometry object), and several
+    /// are **fused** (`makeElementBoolean("FUSE", …)`), not merely compounded. The
+    /// fuse is observable: fusing arcs that meet at a point unifies the shared
+    /// vertices, so `Vertexes` has one entry per corner rather than two per edge.
     #[new]
     #[pyo3(signature = (value = None))]
     fn new(value: Option<&Bound<'_, PyAny>>) -> PyResult<Self> {
-        match value {
-            None => Ok(Self::empty()),
-            Some(value) => {
-                let other = value.downcast::<PartShape>().map_err(|_| {
-                    pyo3::exceptions::PyTypeError::new_err("expected a Part.Shape")
-                })?;
-                let other = other.borrow();
-                if other.shape().is_none() {
-                    return Err(curves::OCCError::new_err("a null shape cannot be combined"));
+        let Some(value) = value else {
+            return Ok(Self::empty());
+        };
+        if let Ok(other) = value.downcast::<PartShape>() {
+            let other = other.borrow();
+            if other.shape().is_none() {
+                return Err(curves::OCCError::new_err("a null shape cannot be combined"));
+            }
+            return Ok(other.copy_handle());
+        }
+        if value.downcast::<pyo3::types::PyString>().is_ok() {
+            return Err(pyo3::exceptions::PyTypeError::new_err(
+                "expected a Part.Shape, a geometry object or a sequence of them",
+            ));
+        }
+        let mut shapes = Vec::new();
+        for item in value.try_iter()? {
+            let item = item?;
+            match item.downcast::<PartShape>() {
+                Ok(shape) => {
+                    let shape = shape.borrow();
+                    shapes.push(
+                        shape
+                            .shape()
+                            .ok_or_else(|| {
+                                curves::OCCError::new_err("a null shape cannot be combined")
+                            })?,
+                    );
                 }
-                Ok(other.copy_handle())
+                Err(_) => {
+                    // A geometry object: its `toShape()` is the edge/face to hold.
+                    let converted = item.call_method0("toShape").map_err(|_| {
+                        pyo3::exceptions::PyTypeError::new_err(
+                            "expected a Part.Shape, a geometry object or a sequence of them",
+                        )
+                    })?;
+                    let shape = converted.downcast::<PartShape>().map_err(|_| {
+                        pyo3::exceptions::PyTypeError::new_err(
+                            "a geometry's toShape() must return a Part.Shape",
+                        )
+                    })?;
+                    let shape = shape.borrow();
+                    shapes.push(
+                        shape
+                            .shape()
+                            .ok_or_else(|| {
+                                curves::OCCError::new_err("a null shape cannot be combined")
+                            })?,
+                    );
+                }
             }
         }
+        if shapes.is_empty() {
+            return Ok(Self::empty());
+        }
+        if shapes.len() == 1 {
+            return Ok(Self::from_shape(shapes.into_iter().next().expect("one shape")));
+        }
+        // Upstream `TopoShape::PyInit` fuses a sequence with
+        // `makeElementBoolean(OpCodes::Fuse, shapes)`. Folding one fuse per entry
+        // keeps the merged vertices (the observable difference from a compound)
+        // and its history, which is what names the result's elements.
+        let backend = ferrocad_part::backend();
+        let mut iter = shapes.into_iter();
+        let mut fused = iter.next().expect("two or more shapes");
+        let mut lineage = Lineage::default();
+        for target in iter {
+            let result = backend.fuse(&fused, &target).map_err(kernel_error)?;
+            lineage.apply(&result.history);
+            fused = result.shape;
+        }
+        Ok(Self::from_shape_with_lineage(fused, lineage))
     }
 
     /// A deep copy of the shape (`Shape.copy`), upstream's
@@ -864,42 +1059,36 @@ impl PartShape {
     ///
     /// The lineage is dropped: a transform replaces every sub-shape handle, so the
     /// map's old handles no longer name the result's elements.
-    #[pyo3(signature = (matrix, copy = true))]
+    #[pyo3(signature = (matrix, copy = false, checkScale = false))]
     fn transformed(
         &self,
         matrix: &Bound<'_, PyAny>,
         copy: bool,
+        checkScale: bool,
     ) -> PyResult<PartShape> {
         let matrix = matrix_from_py(matrix)?;
-        if !copy {
-            let result = self.copy_handle();
-            result.apply_matrix_to_placement(&matrix);
-            return Ok(result);
-        }
-        let shape = self.named_shape()?;
-        let moved = ferrocad_part::backend()
-            .transform(&shape, &matrix)
-            .map_err(kernel_error)?;
-        Ok(PartShape::from_shape(moved))
+        let result = self.copy_handle();
+        result.apply_shape_transform(&matrix, copy, checkScale)?;
+        Ok(result)
     }
 
     /// Transform this shape in place and return it (`Shape.transformShape`).
-    #[pyo3(signature = (matrix, copy = true))]
+    ///
+    /// Upstream's signature is `transformShape(matrix, copy=False, checkScale=False)`.
+    /// `copy = True` bakes the transformation into the geometry and leaves
+    /// `Placement` untouched; `copy = False` moves a rigid transform into the
+    /// location instead. A `checkScale` transform that is an affinity (a
+    /// non-uniform scale or shear) goes through `BRepBuilderAPI_GTransform` and is
+    /// always baked.
+    #[pyo3(signature = (matrix, copy = false, checkScale = false))]
     fn transformShape<'py>(
         slf: &Bound<'py, Self>,
         matrix: &Bound<'_, PyAny>,
         copy: bool,
+        checkScale: bool,
     ) -> PyResult<PyObject> {
         let matrix = matrix_from_py(matrix)?;
-        if copy {
-            let shape = slf.borrow().named_shape()?;
-            let moved = ferrocad_part::backend()
-                .transform(&shape, &matrix)
-                .map_err(kernel_error)?;
-            slf.borrow().replace_shape(Some(moved));
-        } else {
-            slf.borrow().apply_matrix_to_placement(&matrix);
-        }
+        slf.borrow().apply_shape_transform(&matrix, copy, checkScale)?;
         Ok(slf.clone().into_any().unbind())
     }
 
@@ -1474,6 +1663,17 @@ impl PartShape {
         let Some(shape) = self.shape() else {
             return Ok(None);
         };
+        // A B-spline face reports the full control-point class, so `UDegree`,
+        // `getPoles` and `parameter` all describe the face's own surface.
+        if ferrocad_part::backend().surface_type(&shape).as_deref()
+            == Some("Part::GeomBSplineSurface")
+        {
+            if let Some(geometry) = ferrocad_occt::part_ops::bspline_surface_data(&shape) {
+                return Ok(Some(
+                    Py::new(py, solids::PyBSplineSurface::from_geometry(geometry))?.into_any(),
+                ));
+            }
+        }
         let Some(surface) = ferrocad_part::backend().surface_data(&shape) else {
             return Ok(None);
         };
@@ -1542,7 +1742,7 @@ impl PartShape {
             )?
             .into_any(),
             SurfaceData::Other { type_id } => {
-                Py::new(py, curves::PySurface::new(type_id))?.into_any()
+                Py::new(py, curves::PySurface::new(type_id, Some(shape.clone())))?.into_any()
             }
         }))
     }
@@ -2124,6 +2324,124 @@ impl PartShape {
         Ok(PartShape::from_shape(thickened))
     }
 
+    /// `Shape.makeOffsetShape(offset, tolerance, inter=False, self_inter=False,
+    /// offsetMode=0, join=0, fill=False)` — a 3D offset.
+    ///
+    /// Upstream's `TopoShape::makeElementOffset`
+    /// (`BRepOffsetAPI_MakeOffsetShape::PerformByJoin`): `offsetMode` is
+    /// `BRepOffset_Mode` (0 skin, 1 pipe, 2 recto-verso), `join` is 0 arcs, 1
+    /// tangent, 2 intersection, and `fill=True` closes a face offset into a solid.
+    #[pyo3(signature = (offset, tolerance, inter = false, self_inter = false, offsetMode = 0, join = 0, fill = false))]
+    #[allow(clippy::too_many_arguments)]
+    fn makeOffsetShape(
+        &self,
+        offset: f64,
+        tolerance: f64,
+        inter: bool,
+        self_inter: bool,
+        offsetMode: i32,
+        join: i32,
+        fill: bool,
+    ) -> PyResult<PartShape> {
+        let shape = self.named_shape()?;
+        let result = ferrocad_occt::part_ops::offset_shape(
+            &shape,
+            offset,
+            tolerance,
+            inter,
+            self_inter,
+            offsetMode,
+            join,
+            fill,
+        )
+        .map_err(kernel_error)?;
+        Ok(PartShape::from_shape(result))
+    }
+
+    /// `Shape.fix(tolerance, mintol=0, maxtol=0)` — repair a broken shape in place
+    /// and report whether the result is valid (upstream's
+    /// `TopoShape::fix(precision, mintol, maxtol)`).
+    ///
+    /// A shape the fixer cannot improve is left as it was, so the call still
+    /// answers whether the shape is valid instead of failing.
+    #[pyo3(signature = (tolerance, mintol = 0.0, maxtol = 0.0))]
+    fn fix(&self, tolerance: f64, mintol: f64, maxtol: f64) -> PyResult<bool> {
+        let shape = self.named_shape()?;
+        let fixed = ferrocad_occt::part_ops::fix_shape(&shape, tolerance, mintol, maxtol)
+            .unwrap_or(shape);
+        let valid = ferrocad_part::backend().is_valid(&fixed);
+        self.replace_geometry(Some(fixed));
+        Ok(valid)
+    }
+
+    /// `Shape.defeaturing(faces)` — remove faces and let their neighbours grow to
+    /// close the gap (`BRepAlgoAPI_Defeaturing`).
+    fn defeaturing(&self, faces: &Bound<'_, PyAny>) -> PyResult<PartShape> {
+        let shape = self.named_shape()?;
+        let faces = shape_sequence(faces)?;
+        if faces.is_empty() {
+            return Err(curves::OCCError::new_err(
+                "defeaturing needs at least one face to remove",
+            ));
+        }
+        let result = ferrocad_occt::part_ops::defeature(&shape, &faces).map_err(kernel_error)?;
+        Ok(PartShape::from_shape(result))
+    }
+
+    /// `Shape.makeParallelProjection(tool, direction)` — project an edge or wire
+    /// onto this shape along `direction` (`BRepProj_Projection`).
+    fn makeParallelProjection(
+        &self,
+        tool: &Bound<'_, PyAny>,
+        direction: &Bound<'_, PyAny>,
+    ) -> PyResult<PartShape> {
+        let target = self.named_shape()?;
+        let tool = shape_argument(tool)?;
+        let direction = curves::vector(direction)?;
+        let projected = ferrocad_occt::part_ops::project(&tool, &target, direction, true)
+            .map_err(kernel_error)?;
+        Ok(PartShape::from_shape(projected))
+    }
+
+    /// `Shape.makePerspectiveProjection(tool, viewpoint)` — project an edge or wire
+    /// onto this shape from a viewpoint (`BRepProj_Projection`).
+    fn makePerspectiveProjection(
+        &self,
+        tool: &Bound<'_, PyAny>,
+        viewpoint: &Bound<'_, PyAny>,
+    ) -> PyResult<PartShape> {
+        let target = self.named_shape()?;
+        let tool = shape_argument(tool)?;
+        let viewpoint = curves::vector(viewpoint)?;
+        let projected = ferrocad_occt::part_ops::project(&tool, &target, viewpoint, false)
+            .map_err(kernel_error)?;
+        Ok(PartShape::from_shape(projected))
+    }
+
+    /// `Shape.makePipeShell(profiles, makeSolid=False, isFrenet=False,
+    /// transition=0)` — sweep the profiles along this spine
+    /// (`BRepOffsetAPI_MakePipeShell`).
+    ///
+    /// The upstream checkout no longer exposes this method (`makeSweepSurface`
+    /// and the Part::Sweep feature replaced it), but Draft-era scripts still call
+    /// it; `transition` is accepted and ignored, as `MakePipeShell` picks its own
+    /// transition mode here.
+    #[pyo3(signature = (profiles, makeSolid = false, isFrenet = false, transition = 0))]
+    fn makePipeShell(
+        &self,
+        profiles: &Bound<'_, PyAny>,
+        makeSolid: bool,
+        isFrenet: bool,
+        transition: i32,
+    ) -> PyResult<PartShape> {
+        let _ = transition;
+        let spine = self.named_shape()?;
+        let profiles = shape_sequence(profiles)?;
+        let swept = surface_ops::make_pipe_shell(&spine, &profiles, makeSolid, isFrenet)
+            .map_err(kernel_error)?;
+        Ok(PartShape::from_shape(swept))
+    }
+
     /// `Shape.removeSplitter()` — unify the redundant edges/faces the booleans
     /// leave behind (`ShapeUpgrade_UnifySameDomain`).
     fn removeSplitter(&self) -> PyResult<PartShape> {
@@ -2402,17 +2720,20 @@ impl PartShape {
         let base = self.named_shape()?;
         let wanted = element_kind_from_py_type(kind)?;
         let target = shape_argument(subshape)?;
-        let source_kind = PartShape::kind_of(&target).ok_or_else(|| {
-            PyValueError::new_err("ancestorsOfType expects a single sub-element")
-        })?;
+        // Upstream's `findAncestors` is a cache lookup: a shape that is not a
+        // sub-shape of this one simply has no ancestors here, so this reports an
+        // empty list rather than raising.
+        let Some(source_kind) = PartShape::kind_of(&target) else {
+            return Ok(Vec::new());
+        };
         let backend = ferrocad_part::backend();
-        let element = backend
+        let Some(element) = backend
             .elements(&base, source_kind)
             .into_iter()
             .find(|element| backend.same_shape(&element.shape, &target))
-            .ok_or_else(|| {
-                PyValueError::new_err("the shape is not a sub-element of this shape")
-            })?;
+        else {
+            return Ok(Vec::new());
+        };
         backend
             .ancestors(&base, &element, wanted)
             .into_iter()
@@ -3071,6 +3392,23 @@ fn mirror_matrix(
     Ok(ferrocad_types::Matrix4::from_values(values))
 }
 
+/// Whether upstream's `_makeTransform` routes `matrix` through
+/// `BRepBuilderAPI_GTransform` rather than the `gp_Trsf` path.
+///
+/// `checkScale = True` asks OCCT to detect an affinity (a non-uniform scale or
+/// shear) that a `gp_Trsf` cannot represent; a singular uniform scale is folded
+/// in as well, mirroring `TopoShape::_makeTransform`.
+fn is_general_transform(matrix: &ferrocad_types::Matrix4, check_scale: bool) -> bool {
+    if !check_scale {
+        return false;
+    }
+    match matrix.has_scale(1e-9) {
+        ScaleType::NoScaling => false,
+        ScaleType::Uniform => matrix.determinant3() == 0.0,
+        _ => true,
+    }
+}
+
 /// Read a `ferrocad.Matrix` through its `A11`…`A44` elements.
 fn matrix_from_py(value: &Bound<'_, PyAny>) -> PyResult<ferrocad_types::Matrix4> {
     let mut values = [0.0; 16];
@@ -3240,19 +3578,40 @@ impl PartShape {
         no_element_map: bool,
     ) -> PyResult<PartShape> {
         let a = self.named_shape()?;
-        let b = shape_argument(other)?;
+        // Upstream's `fuse`/`cut`/`common` take a shape or a list of shapes; a
+        // list folds one operation per entry.
+        let targets = shape_sequence(other)?;
+        if targets.is_empty() {
+            return Err(curves::OCCError::new_err(
+                "a boolean needs at least one other shape",
+            ));
+        }
         let backend = ferrocad_part::backend();
-        let result = match operation {
-            BooleanOp::Fuse => backend.fuse(&a, &b),
-            BooleanOp::Cut => backend.cut(&a, &b),
-            BooleanOp::Common => backend.common(&a, &b),
+        let mut shape = a;
+        let mut lineage = Lineage::default();
+        let mut single_history = None;
+        for target in &targets {
+            let result = match operation {
+                BooleanOp::Fuse => backend.fuse(&shape, target),
+                BooleanOp::Cut => backend.cut(&shape, target),
+                BooleanOp::Common => backend.common(&shape, target),
+            }
+            .map_err(kernel_error)?;
+            if targets.len() == 1 {
+                single_history = Some(result.history.clone());
+            } else {
+                lineage.apply(&result.history);
+            }
+            shape = result.shape;
         }
-        .map_err(kernel_error)?;
         if no_element_map {
-            return Ok(PartShape::with_parts(Some(result.shape), None));
+            return Ok(PartShape::with_parts(Some(shape), None));
         }
-        let lineage = Lineage::from_history(&result.history, MapVersion::default());
-        Ok(PartShape::from_shape_with_lineage(result.shape, lineage))
+        let lineage = match single_history {
+            Some(history) => Lineage::from_history(&history, MapVersion::default()),
+            None => lineage,
+        };
+        Ok(PartShape::from_shape_with_lineage(shape, lineage))
     }
 }
 
@@ -3266,7 +3625,6 @@ fn makeCylinder(
     dir: Option<&Bound<'_, PyAny>>,
     angle: f64,
 ) -> PyResult<PartShape> {
-    require_full_revolution("makeCylinder", angle)?;
     let base = pnt
         .map(curves::vector)
         .transpose()?
@@ -3275,9 +3633,16 @@ fn makeCylinder(
         .map(curves::vector)
         .transpose()?
         .unwrap_or_else(|| ferrocad_curves::Vector3::new(0.0, 0.0, 1.0));
-    let shape = ferrocad_part::backend()
-        .make_cylinder(radius, height, base, direction)
-        .map_err(kernel_error)?;
+    // A partial revolution needs the angular sweep; the full one goes through the
+    // plain primitive.
+    let shape = if (angle - 360.0).abs() <= 1e-9 {
+        ferrocad_part::backend()
+            .make_cylinder(radius, height, base, direction)
+            .map_err(kernel_error)?
+    } else {
+        surface_ops::make_cylinder_slice(radius, height, base, direction, angle.to_radians())
+            .map_err(kernel_error)?
+    };
     Ok(PartShape::from_shape(shape))
 }
 
@@ -3874,6 +4239,11 @@ fn shape_sub_element_to_py(py: Python<'_>, data: &dyn ExtensionData, name: &str)
 ///
 /// The property's lineage travels with the handle, so a document object's shape
 /// exposes the same reverse map the operation stored.
+///
+/// The result is the wrapper class upstream's `shape2pyshape` picks from the
+/// shape's topology: `Part.Wire` for a wire, `Part.Face` for a face, … and
+/// `Part.Compound` for a compound. `isinstance(obj.Shape, Part.Wire)` therefore
+/// holds when a `Part.Wire` was assigned, as it does upstream.
 fn shape_to_py(py: Python<'_>, data: &dyn ExtensionData) -> Option<PyObject> {
     let property = data.as_any().downcast_ref::<ShapeProperty>()?;
     let shape = property.shape();
@@ -3886,12 +4256,56 @@ fn shape_to_py(py: Python<'_>, data: &dyn ExtensionData) -> Option<PyObject> {
     } else {
         Some(lineage.clone())
     };
-    Py::new(
-        py,
-        PartShape::with_parts_and_placement(shape, property.placement(), lineage),
-    )
-    .ok()
-    .map(Py::into_any)
+    let inner = match shape {
+        Some(shape) => shape,
+        // An unset property is upstream's null `TopoShape`, not `None`.
+        None => return Py::new(py, PartShape::empty()).ok().map(Py::into_any),
+    };
+    let wrapped: PyObject = match ferrocad_occt::part_ops::shape_kind(&inner) {
+        Some("Solid") => Py::new(py, solids::PySolid::from_shape(inner.clone()))
+            .ok()?
+            .into_any(),
+        Some("Shell") => Py::new(py, solids::PyShell::from_shape(inner.clone()))
+            .ok()?
+            .into_any(),
+        Some("Face") => Py::new(py, curves::PyFace::from_shape(inner.clone()))
+            .ok()?
+            .into_any(),
+        Some("Wire") => Py::new(py, curves::PyWire::from_shape(inner.clone()))
+            .ok()?
+            .into_any(),
+        Some("Edge") => Py::new(
+            py,
+            curves::PyEdge::from_entry(curves::EdgeEntry {
+                shape: inner.clone(),
+                curve: None,
+            }),
+        )
+        .ok()?
+        .into_any(),
+        Some("Vertex") => Py::new(py, curves::PyVertex::from_shape(inner.clone()).ok()?)
+            .ok()?
+            .into_any(),
+        Some("Compound") => {
+            Py::new(py, containers::PyCompound::from_shape_existing(inner.clone()))
+                .ok()?
+                .into_any()
+        }
+        Some("CompSolid") => {
+            Py::new(py, containers::PyCompSolid::from_shape_existing(inner.clone()))
+                .ok()?
+                .into_any()
+        }
+        _ => Py::new(py, PartShape::from_shape(inner.clone()))
+            .ok()?
+            .into_any(),
+    };
+    // The wrapper started from the bare geometry; adopt the property's own
+    // accumulated placement and lineage so `Placement` and `ElementReverseMap`
+    // report what the document object stored.
+    let base = wrapped.bind(py).downcast::<PartShape>().ok()?;
+    base.borrow().adopt_placement_and_lineage(property.placement(), lineage);
+    Some(wrapped)
 }
 
 /// `Part::PropertyTopoShapeList` → a Python list of `Part.Shape` (what `obj.Shapes`

@@ -109,6 +109,26 @@ fn perpendicular(normal: Vector3) -> Vector3 {
     unit(candidate.sub(&normal.scale(normal.dot(&candidate)))).expect("a perpendicular exists")
 }
 
+/// The unit reference direction a circle or ellipse uses when it is created
+/// without an explicit X axis (angle `0` of the parameterisation).
+///
+/// This is the in-plane world axis least aligned with the normal, projected into
+/// the plane — the same choice `Circle::new` and `Ellipse::new` make, so a
+/// freshly constructed conic reports `AngleXU == 0`.
+pub fn reference_x_axis(normal: Vector3) -> Vector3 {
+    let normal = unit(normal).unwrap_or_else(|| Vector3::new(0.0, 0.0, 1.0));
+    perpendicular(normal)
+}
+
+/// Rotate `vector` about the unit `axis` by `angle` radians (Rodrigues' formula).
+pub fn rotate_about(vector: Vector3, axis: Vector3, angle: f64) -> Vector3 {
+    let (sin, cos) = angle.sin_cos();
+    vector
+        .scale(cos)
+        .add(&axis.cross(&vector).scale(sin))
+        .add(&axis.scale(axis.dot(&vector) * (1.0 - cos)))
+}
+
 // ---------------------------------------------------------------------------
 // Line and LineSegment
 // ---------------------------------------------------------------------------
@@ -1939,6 +1959,64 @@ pub enum EdgeCurve {
 }
 
 impl EdgeCurve {
+    /// The piece of this curve between the parameters `first` and `last`
+    /// (`GeometryCurvePy::toShape(first, last)`), or `None` for a kind this
+    /// module cannot restrict (a B-spline or an offset curve — those need OCCT's
+    /// `Geom_BSplineCurve::Segment`).
+    ///
+    /// The parameters are the curve's own: an angle for a circle or ellipse, an
+    /// arc length for a line segment, and the `[0, 1]` range for a Bezier.
+    pub fn trimmed(&self, first: f64, last: f64) -> Option<EdgeCurve> {
+        if !first.is_finite() || !last.is_finite() {
+            return None;
+        }
+        Some(match self {
+            EdgeCurve::Line(curve) => EdgeCurve::LineSegment(
+                LineSegment::new(curve.point_at(first), curve.point_at(last)).ok()?,
+            ),
+            EdgeCurve::LineSegment(curve) => {
+                let span = curve.end().sub(&curve.start());
+                let length = span.length();
+                if length <= TOLERANCE {
+                    return None;
+                }
+                let direction = span.scale(1.0 / length);
+                let at = |parameter: f64| curve.start().add(&direction.scale(parameter));
+                EdgeCurve::LineSegment(LineSegment::new(at(first), at(last)).ok()?)
+            }
+            EdgeCurve::Circle(circle) => EdgeCurve::Arc(Arc::new(*circle, first, last).ok()?),
+            EdgeCurve::Arc(arc) => EdgeCurve::Arc(Arc::new(arc.circle(), first, last).ok()?),
+            EdgeCurve::Ellipse(ellipse) => {
+                EdgeCurve::EllipticalArc(EllipticalArc::new(*ellipse, first, last).ok()?)
+            }
+            EdgeCurve::EllipticalArc(arc) => {
+                EdgeCurve::EllipticalArc(EllipticalArc::new(arc.ellipse(), first, last).ok()?)
+            }
+            EdgeCurve::Hyperbola(hyperbola) => {
+                EdgeCurve::ArcOfHyperbola(ArcOfHyperbola::new(*hyperbola, first, last).ok()?)
+            }
+            EdgeCurve::ArcOfHyperbola(arc) => {
+                EdgeCurve::ArcOfHyperbola(ArcOfHyperbola::new(arc.hyperbola(), first, last).ok()?)
+            }
+            EdgeCurve::Parabola(parabola) => {
+                EdgeCurve::ArcOfParabola(ArcOfParabola::new(*parabola, first, last).ok()?)
+            }
+            EdgeCurve::ArcOfParabola(arc) => {
+                EdgeCurve::ArcOfParabola(ArcOfParabola::new(arc.parabola(), first, last).ok()?)
+            }
+            EdgeCurve::BezierCurve(bezier) => EdgeCurve::BezierCurve(
+                BezierCurve::with_range(
+                    bezier.poles().to_vec(),
+                    bezier.weights().to_vec(),
+                    first,
+                    last,
+                )
+                .ok()?,
+            ),
+            EdgeCurve::BSplineCurve(_) | EdgeCurve::OffsetCurve(_) => return None,
+        })
+    }
+
     /// The point at `parameter` (see the module conventions).
     pub fn point_at(&self, parameter: f64) -> Vector3 {
         match self {

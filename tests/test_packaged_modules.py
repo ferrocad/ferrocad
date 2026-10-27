@@ -50,7 +50,7 @@ doc = App.newDocument(name)
 obj = doc.addObject("Part::Feature", "Box")
 shape = Part.makeBox(2, 3, 4)
 obj.Shape = shape
-assert type(obj.Shape) is Part.Shape, type(obj.Shape)
+assert isinstance(obj.Shape, Part.Solid), type(obj.Shape)
 assert obj.Shape.isSame(shape), "Part and App disagree on the shape"
 
 mesh_obj = doc.addObject("Mesh::Feature", "Mesh")
@@ -87,10 +87,14 @@ obj = doc.addObject("Part::Feature", "Box")
 assert obj.Shape.isNull(), "a fresh Part::Feature is null"
 
 # The shape assigned through `Part` must be the one `FreeCAD` reads back: this
-# only holds when both modules come from the same extension.
+# only holds when both modules come from the same extension. The feature
+# classifies the shape it reports (`Part.Solid` here), so the assertion is on
+# the classification, not on identity with the bare `Part.Shape` wrapper the
+# `make*` factories still return.
 obj.Shape = Part.makeBox(1, 1, 1)
-assert type(obj.Shape) is Part.Shape, type(obj.Shape)
+assert isinstance(obj.Shape, Part.Solid), type(obj.Shape)
 assert not obj.Shape.isNull()
+assert abs(obj.Shape.Volume - 1.0) < 1e-9, obj.Shape.Volume
 
 FreeCAD.closeDocument(name)
 print("ok")

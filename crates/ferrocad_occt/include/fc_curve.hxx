@@ -911,6 +911,39 @@ inline rust::Vec<double> fc_bspline_set_periodic(rust::Slice<const double> coord
   return out;
 }
 
+// `BSplineCurve.segment(u1, u2)`: restrict the curve to `[u1, u2]` and return the
+// new state (`Geom_BSplineCurve::Segment`). Empty when the curve cannot be built
+// or the segmented curve does not report the requested range.
+inline rust::Vec<double> fc_bspline_segment(rust::Slice<const double> coords,
+                                            rust::Slice<const double> weights,
+                                            rust::Slice<const double> knots,
+                                            rust::Slice<const int32_t> multiplicities,
+                                            int degree,
+                                            bool periodic,
+                                            bool check_rational,
+                                            double u1,
+                                            double u2)
+{
+  rust::Vec<double> out;
+  try {
+    Handle(Geom_BSplineCurve) curve = fc_bspline_curve(
+        coords, weights, knots, multiplicities, degree, periodic, check_rational);
+    if (curve.IsNull()) {
+      return out;
+    }
+    curve->Segment(u1, u2);
+    if (std::abs(curve->FirstParameter() - u1) > Precision::Approximation()
+        || std::abs(curve->LastParameter() - u2) > Precision::Approximation()) {
+      return out;
+    }
+    fc_bspline_push_state(out, curve);
+  }
+  catch (...) {
+    out.clear();
+  }
+  return out;
+}
+
 // `Geom_BSplineCurve::Resolution`: the parameter tolerance for a 3D tolerance.
 // NaN when the curve cannot be built.
 inline double fc_bspline_resolution(rust::Slice<const double> coords,

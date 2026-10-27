@@ -72,22 +72,38 @@ impl Wire {
 /// Straight segments between consecutive `points` (`Part.makePolygon`).
 ///
 /// An open chain needs at least two points; a closed one at least three and an
-/// extra segment back to the first point. Consecutive coincident points are
-/// rejected (`CurveError::Degenerate`) rather than silently dropped.
+/// extra segment back to the first point. A point coincident with the previous
+/// one builds no edge, exactly as OCCT's `BRepBuilderAPI_MakePolygon::Add` does
+/// ("when P is coincident to the previous vertex, no edge is built"); so
+/// `[p0, p1, p2, p0]` is a closed triangle, and the closing segment is only added
+/// when the last point is not already the first.
 pub fn polygon(points: &[Vector3], closed: bool) -> Result<Vec<EdgeCurve>, CurveError> {
+    /// `Precision::Confusion`, the tolerance `Add` compares coincident points with.
+    const CONFUSION: f64 = 1e-7;
+
+    let mut kept: Vec<Vector3> = Vec::with_capacity(points.len());
+    for point in points {
+        let duplicate = kept
+            .last()
+            .is_some_and(|previous| previous.distance(point) <= CONFUSION);
+        if !duplicate {
+            kept.push(*point);
+        }
+    }
+
     let minimum = if closed { 3 } else { 2 };
-    if points.len() < minimum {
+    if kept.len() < minimum {
         return Err(CurveError::TooFewPoints);
     }
-    let mut edges = Vec::with_capacity(points.len());
-    for pair in points.windows(2) {
+    let mut edges = Vec::with_capacity(kept.len());
+    for pair in kept.windows(2) {
         edges.push(EdgeCurve::LineSegment(LineSegment::new(pair[0], pair[1])?));
     }
     if closed {
-        edges.push(EdgeCurve::LineSegment(LineSegment::new(
-            *points.last().expect("at least three points"),
-            points[0],
-        )?));
+        let last = *kept.last().expect("at least three points");
+        if last.distance(&kept[0]) > CONFUSION {
+            edges.push(EdgeCurve::LineSegment(LineSegment::new(last, kept[0])?));
+        }
     }
     Ok(edges)
 }
@@ -173,10 +189,33 @@ mod tests {
             polygon(&[Vector3::zero(), Vector3::new(1.0, 0.0, 0.0)], true),
             Err(CurveError::TooFewPoints)
         );
+        // A point coincident with the previous one builds no edge (OCCT's
+        // `BRepBuilderAPI_MakePolygon::Add`), so two equal points leave one.
         assert_eq!(
             polygon(&[Vector3::zero(), Vector3::zero()], false),
-            Err(CurveError::Degenerate)
+            Err(CurveError::TooFewPoints)
         );
+    }
+
+    #[test]
+    fn polygon_skips_coincident_consecutive_points() {
+        // Draft's wire proxy passes `points + [points[0]]`, so a closed chain
+        // often ends on its first point. That must build a triangle, not a
+        // degenerate closing edge.
+        let points = [
+            Vector3::zero(),
+            Vector3::new(4.0, 0.0, 0.0),
+            Vector3::new(4.0, 3.0, 0.0),
+            Vector3::zero(),
+            Vector3::zero(),
+        ];
+        let edges = polygon(&points, false).unwrap();
+        assert_eq!(edges.len(), 3);
+        assert!((Wire::new(edges).unwrap().length() - 12.0).abs() < 1e-9);
+
+        // The explicit closed form must not add a zero-length closing edge.
+        let edges = polygon(&points[..4], true).unwrap();
+        assert_eq!(edges.len(), 3);
     }
 
     #[test]

@@ -43,6 +43,7 @@ mod bridge;
 pub mod chfi2d;
 mod error;
 mod shape;
+pub mod part_ops;
 pub mod shapefix;
 pub mod surface_ops;
 mod topology;

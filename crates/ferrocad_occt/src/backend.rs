@@ -336,6 +336,35 @@ impl OcctBackend {
         resolution.is_finite().then_some(resolution)
     }
 
+    /// `BSplineCurve.segment(u1, u2)`: the state of the curve restricted to
+    /// `[u1, u2]` (`Geom_BSplineCurve::Segment`).
+    #[allow(clippy::too_many_arguments)]
+    pub fn bspline_segment(
+        &self,
+        poles: &[Vector3],
+        weights: &[f64],
+        knots: &[f64],
+        multiplicities: &[i32],
+        degree: i32,
+        periodic: bool,
+        check_rational: bool,
+        u1: f64,
+        u2: f64,
+    ) -> Option<Vec<f64>> {
+        let state = bridge::fc_bspline_segment(
+            &flatten(poles),
+            weights,
+            knots,
+            multiplicities,
+            degree,
+            periodic,
+            check_rational,
+            u1,
+            u2,
+        );
+        (!state.is_empty()).then_some(state)
+    }
+
     /// The point at parameter `u` on the B-spline with the given state
     /// (`BSplineCurve.value(u)`). `None` when the curve cannot be built or the
     /// parameter is outside its domain.

@@ -50,7 +50,8 @@ pub mod wire;
 
 pub use curve::{
     Arc, ArcOfHyperbola, ArcOfParabola, BezierCurve, Circle, EdgeCurve, Ellipse, EllipticalArc,
-    Hyperbola, Line, LineSegment, NurbsCurve, OffsetCurve, Parabola, Vector2,
+    Hyperbola, Line, LineSegment, NurbsCurve, OffsetCurve, Parabola, Vector2, reference_x_axis,
+    rotate_about,
 };
 pub use ferrocad_types::Vector3;
 pub use wire::{Wire, polygon, sort_edges};

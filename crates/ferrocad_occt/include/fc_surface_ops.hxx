@@ -27,6 +27,7 @@
 #include <BRepOffsetAPI_MakeOffset.hxx>
 #include <BRepOffsetAPI_MakePipeShell.hxx>
 #include <BRepOffsetAPI_ThruSections.hxx>
+#include <BRepPrimAPI_MakeCylinder.hxx>
 #include <BRepPrimAPI_MakeSphere.hxx>
 #include <BRepTools_WireExplorer.hxx>
 #include <BRep_Builder.hxx>
@@ -519,6 +520,33 @@ inline std::unique_ptr<TopoDS_Shape> fc_make_sphere_slice(double radius, double 
 }
 
 // --- Variable-radius fillet ------------------------------------------------
+
+// A cylinder slice: `BRepPrimAPI_MakeCylinder(axis, radius, height, angle)` with
+// the axis through `(x, y, z)` along `(dx, dy, dz)`. `angle` is in radians.
+inline std::unique_ptr<TopoDS_Shape> fc_make_cylinder_slice(double radius, double height,
+                                                            double x, double y, double z,
+                                                            double dx, double dy, double dz,
+                                                            double angle)
+{
+    if (!std::isfinite(radius) || radius <= Precision::Confusion())
+        return nullptr;
+    if (!std::isfinite(height) || height <= Precision::Confusion())
+        return nullptr;
+    if (!std::isfinite(angle) || angle <= Precision::Confusion()
+        || angle > 2.0 * M_PI + 1e-9)
+        return nullptr;
+    try {
+        const gp_Ax2 axes(gp_Pnt(x, y, z), gp_Dir(dx, dy, dz));
+        BRepPrimAPI_MakeCylinder make(axes, radius, height, angle);
+        TopoDS_Shape shape = make.Shape();
+        if (shape.IsNull())
+            return nullptr;
+        return fc_surface_ops_internal::owned(shape);
+    }
+    catch (...) {
+        return nullptr;
+    }
+}
 
 // Round `edges` of `shape`, with a linear radius law from `start_radii[i]` at
 // the edge's first vertex to `end_radii[i]` at its last (upstream's

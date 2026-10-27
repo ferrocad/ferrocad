@@ -106,6 +106,20 @@ mod ffi {
 
         /// The normal of the plane a shape lies on (`[n]`).
         fn fc_shape_plane_normal(shape: &TopoDS_Shape) -> Vec<f64>;
+
+        /// A cylinder slice (`BRepPrimAPI_MakeCylinder` with an angular sweep),
+        /// or null. `angle` is in radians.
+        fn fc_make_cylinder_slice(
+            radius: f64,
+            height: f64,
+            x: f64,
+            y: f64,
+            z: f64,
+            dx: f64,
+            dy: f64,
+            dz: f64,
+            angle: f64,
+        ) -> UniquePtr<TopoDS_Shape>;
     }
 }
 
@@ -199,6 +213,46 @@ fn finite(value: f64, what: &'static str) -> Result<(), GeomError> {
     } else {
         Err(OcctError::InvalidInput { what }.into())
     }
+}
+
+/// A cylinder, or a slice of one, of `radius` and `height`, based at `base`
+/// with its axis along `direction`. `angle` is the angular sweep in radians
+/// (`2π` is the full cylinder).
+///
+/// This maps onto upstream's
+/// `BRepPrimAPI_MakeCylinder(gp_Ax2, radius, height, angle)`.
+pub fn make_cylinder_slice(
+    radius: f64,
+    height: f64,
+    base: Vector3,
+    direction: Vector3,
+    angle: f64,
+) -> Result<Shape, GeomError> {
+    finite(radius, "cylinder radius")?;
+    finite(height, "cylinder height")?;
+    finite(angle, "cylinder angle")?;
+    let length = direction.length();
+    if !length.is_finite() || length <= 0.0 {
+        return Err(OcctError::InvalidInput {
+            what: "cylinder direction",
+        }
+        .into());
+    }
+    let direction = direction.scale(1.0 / length);
+    owned(
+        ffi::fc_make_cylinder_slice(
+            radius,
+            height,
+            base.x,
+            base.y,
+            base.z,
+            direction.x,
+            direction.y,
+            direction.z,
+            angle,
+        ),
+        "makeCylinder",
+    )
 }
 
 /// A sphere, or a slice of one, of `radius` centred at `center`.

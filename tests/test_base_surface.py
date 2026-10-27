@@ -1398,9 +1398,11 @@ class TestObjectLifecycle(unittest.TestCase):
     def test_unknown_object_type_raises(self):
         # Upstream resolves the type through `Base::Type` (`ValueError: Unknown
         # C++ type`) instead of fabricating an object that has no properties.
+        # `Part::Prism` used to stand in for "unknown"; it is a real type now, so
+        # this names one that does not exist.
         doc = FreeCAD.newDocument("UnknownType")
         with self.assertRaises(ValueError) as caught:
-            doc.addObject("Part::Prism", "Prism")
+            doc.addObject("Nope::NoSuchFeature", "Thing")
         self.assertIn("Unknown C++ type", str(caught.exception))
         self.assertEqual(doc.Objects, [])
         FreeCAD.closeDocument("UnknownType")

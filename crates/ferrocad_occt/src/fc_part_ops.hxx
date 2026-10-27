@@ -14,11 +14,22 @@
 
 #include <BRepAdaptor_Curve.hxx>
 #include <BRepAdaptor_Surface.hxx>
+#include <BRepAlgoAPI_Defeaturing.hxx>
+#include <BRepAlgo_Image.hxx>
 #include <BRepBuilderAPI_Copy.hxx>
 #include <BRepBuilderAPI_MakeFace.hxx>
+#include <BRepBuilderAPI_MakeSolid.hxx>
 #include <BRepBuilderAPI_NurbsConvert.hxx>
 #include <BRepBuilderAPI_Sewing.hxx>
+#include <BRepCheck_Analyzer.hxx>
 #include <BRepLib.hxx>
+#include <BRepOffsetAPI_MakeOffsetShape.hxx>
+#include <BRepOffsetAPI_ThruSections.hxx>
+#include <BRepOffset_Mode.hxx>
+#include <BRepProj_Projection.hxx>
+#include <BRepTools.hxx>
+#include <BRepTools_WireExplorer.hxx>
+#include <BRepTopAdaptor_FClass2d.hxx>
 #include <BRep_Builder.hxx>
 #include <BRep_Tool.hxx>
 #include <GCPnts_AbscissaPoint.hxx>
@@ -27,6 +38,7 @@
 #include <GCPnts_UniformDeflection.hxx>
 #include <GeomAPI_PointsToBSplineSurface.hxx>
 #include <Geom2d_Curve.hxx>
+#include <GeomAbs_JoinType.hxx>
 #include <GeomProjLib.hxx>
 #include <Geom_BSplineSurface.hxx>
 #include <Geom_TrimmedCurve.hxx>
@@ -36,9 +48,17 @@
 #include <Geom_SphericalSurface.hxx>
 #include <Geom_ToroidalSurface.hxx>
 #include <Precision.hxx>
+#include <ShapeAnalysis_FreeBoundsProperties.hxx>
 #include <ShapeAnalysis_Shell.hxx>
+#include <ShapeAnalysis_Surface.hxx>
+#include <ShapeFix_Shape.hxx>
+#include <ShapeFix_Wire.hxx>
 #include <TColgp_Array2OfPnt.hxx>
+#include <TColStd_Array1OfInteger.hxx>
 #include <TColStd_Array1OfReal.hxx>
+#include <TColStd_Array2OfReal.hxx>
+#include <TopAbs_State.hxx>
+#include <TopLoc_Location.hxx>
 #include <TopAbs_Orientation.hxx>
 #include <TopAbs_ShapeEnum.hxx>
 #include <TopExp.hxx>
@@ -341,27 +361,39 @@ inline std::unique_ptr<TopoDS_Shape> fc_shell_free_edges(const TopoDS_Shape& she
 
 // --- faces on an elementary surface ---------------------------------------
 
-// Build the pcurves of a wire's edges on `surface` and return a copy of the
-// wire that carries them.
+// Build the pcurves of a wire's edges on `surface` and return the wire to hand to
+// `BRepBuilderAPI_MakeFace`.
 //
 // The wire a caller gets from a face carries pcurves on *that face's* surface
 // handle. A fresh `Geom_Surface` built from an elementary description is a
 // different handle, so `BRepBuilderAPI_MakeFace(surface, wire)` would see no 2D
-// representation and produce a zero-area face. Copying the wire first keeps the
-// caller's shape untouched, and projecting each edge onto the new surface gives
-// the new handle the pcurves it needs.
+// representation and produce a zero-area face.
+//
+// The edges are **updated in place** (an OCCT edge may carry pcurves for several
+// surfaces), not copied: the new face then shares its edges with the faces around
+// it, so a rebuilt face still sews into the original shell. Copying the wire here
+// would make `Part.makeShell([...rebuilt...])` fail to close, because the rebuilt
+// face's edges would no longer be the neighbours' edges.
+//
+// A wire with a non-identity location is copied and flattened to the global frame
+// instead: the projection below reads global curves, and rewriting a located
+// edge's pcurve table would change the meaning of the other located pcurves.
 inline TopoDS_Wire fc_wire_on_surface(const TopoDS_Wire& wire,
                                       const Handle(Geom_Surface)& surface)
 {
-    BRepBuilderAPI_Copy copier(wire, Standard_True, Standard_False);
-    if (!copier.IsDone() || copier.Shape().ShapeType() != TopAbs_WIRE)
-        return TopoDS_Wire();
-    TopoDS_Wire copy = TopoDS::Wire(copier.Shape());
-    // The pcurves below are computed from the globally located 3D curves, so the
-    // copy is read in the global frame too.
-    copy.Location(TopLoc_Location());
+    const Standard_Boolean located = !wire.Location().IsIdentity();
+    TopoDS_Wire target = wire;
+    if (located) {
+        BRepBuilderAPI_Copy copier(wire, Standard_True, Standard_False);
+        if (!copier.IsDone() || copier.Shape().ShapeType() != TopAbs_WIRE)
+            return TopoDS_Wire();
+        target = TopoDS::Wire(copier.Shape());
+        // The pcurves below are computed from the globally located 3D curves, so
+        // the copy is read in the global frame too.
+        target.Location(TopLoc_Location());
+    }
     BRep_Builder builder;
-    for (TopExp_Explorer it(copy, TopAbs_EDGE); it.More(); it.Next()) {
+    for (TopExp_Explorer it(target, TopAbs_EDGE); it.More(); it.Next()) {
         const TopoDS_Edge edge = TopoDS::Edge(it.Current());
         Standard_Real first = 0.0;
         Standard_Real last = 0.0;
@@ -378,7 +410,7 @@ inline TopoDS_Wire fc_wire_on_surface(const TopoDS_Wire& wire,
         builder.UpdateEdge(edge, pcurve, surface, TopLoc_Location(), Precision::Confusion());
         BRepLib::SameRange(edge, Precision::Confusion());
     }
-    return copy;
+    return target;
 }
 
 // `Part.Face(surface, wires)`. `spec` is the flat description written by
@@ -599,4 +631,636 @@ inline std::unique_ptr<TopoDS_Shape> fc_shape_sub_shapes_of_type(const TopoDS_Sh
     catch (...) {
         return nullptr;
     }
+}
+
+// --- face domain, validation and projection --------------------------------
+
+// `Face.isPartOfDomain(u, v)`: whether the parameter pair lies inside the face's
+// boundary (`BRepTopAdaptor_FClass2d`), as upstream's `TopoShapeFacePy`.
+inline bool fc_face_is_part_of_domain(const TopoDS_Shape& face, double u, double v)
+{
+    if (face.IsNull() || face.ShapeType() != TopAbs_FACE)
+        return false;
+    try {
+        BRepTopAdaptor_FClass2d classifier(TopoDS::Face(face), Precision::Confusion());
+        const TopAbs_State state = classifier.Perform(gp_Pnt2d(u, v));
+        return state == TopAbs_ON || state == TopAbs_IN;
+    }
+    catch (...) {
+        return false;
+    }
+}
+
+// `Face.validate()`: repair an invalid face's wires in place, exactly as
+// upstream's `TopoShapeFacePy::validate` (rebuild each wire with `ShapeFix_Wire`,
+// then fall back to `ShapeFix_Shape` when the rebuilt face is still invalid).
+// Returns the (possibly unchanged) face.
+inline std::unique_ptr<TopoDS_Shape> fc_validate_face(const TopoDS_Shape& shape)
+{
+    if (shape.IsNull() || shape.ShapeType() != TopAbs_FACE)
+        return nullptr;
+    try {
+        const TopoDS_Face face = TopoDS::Face(shape);
+        BRepCheck_Analyzer checker(face);
+        if (checker.IsValid())
+            return std::make_unique<TopoDS_Shape>(shape);
+
+        const TopoDS_Wire outer = BRepTools::OuterWire(face);
+        TopTools_IndexedMapOfShape seen;
+        seen.Add(outer);
+
+        TopExp_Explorer xp(face, TopAbs_WIRE);
+        ShapeFix_Wire fix;
+        fix.SetFace(face);
+        fix.Load(outer);
+        fix.Perform();
+        BRepBuilderAPI_MakeFace mkFace(fix.WireAPIMake());
+        while (xp.More()) {
+            if (!seen.Contains(xp.Current())) {
+                fix.Load(TopoDS::Wire(xp.Current()));
+                fix.Perform();
+                mkFace.Add(fix.WireAPIMake());
+            }
+            xp.Next();
+        }
+
+        checker.Init(mkFace.Face());
+        if (!checker.IsValid()) {
+            ShapeFix_Shape fixer(mkFace.Face());
+            fixer.SetPrecision(Precision::Confusion());
+            fixer.SetMaxTolerance(Precision::Confusion());
+            fixer.Perform();
+            fixer.FixWireTool()->Perform();
+            fixer.FixFaceTool()->Perform();
+            return std::make_unique<TopoDS_Shape>(fixer.Shape());
+        }
+        return std::make_unique<TopoDS_Shape>(mkFace.Face());
+    }
+    catch (...) {
+        return nullptr;
+    }
+}
+
+// `Shape.fix(precision, mintol, maxtol)`: `ShapeFix_Shape` with upstream's
+// per-kind tool walk (`TopoShape::fix(double, double, double)`), returning the
+// repaired shape.
+inline std::unique_ptr<TopoDS_Shape> fc_fix_shape(const TopoDS_Shape& shape,
+                                                   double precision,
+                                                   double mintol,
+                                                   double maxtol)
+{
+    if (shape.IsNull())
+        return nullptr;
+    try {
+        const TopAbs_ShapeEnum type = shape.ShapeType();
+        ShapeFix_Shape fix(shape);
+        fix.SetPrecision(precision);
+        fix.SetMinTolerance(mintol);
+        fix.SetMaxTolerance(maxtol);
+        fix.Perform();
+
+        if (type == TopAbs_SOLID) {
+            if (auto tool = fix.FixWireTool())
+                tool->Perform();
+            if (auto tool = fix.FixFaceTool())
+                tool->Perform();
+            if (auto tool = fix.FixShellTool())
+                tool->Perform();
+            if (auto tool = fix.FixSolidTool()) {
+                tool->Perform();
+                if (!tool->Shape().IsNull())
+                    return std::make_unique<TopoDS_Shape>(tool->Shape());
+            }
+            return std::make_unique<TopoDS_Shape>(fix.Shape());
+        }
+        if (type == TopAbs_SHELL) {
+            if (auto tool = fix.FixWireTool())
+                tool->Perform();
+            if (auto tool = fix.FixFaceTool())
+                tool->Perform();
+            if (auto tool = fix.FixShellTool()) {
+                tool->Perform();
+                if (!tool->Shape().IsNull())
+                    return std::make_unique<TopoDS_Shape>(tool->Shape());
+            }
+            return std::make_unique<TopoDS_Shape>(fix.Shape());
+        }
+        if (type == TopAbs_FACE) {
+            if (auto tool = fix.FixWireTool())
+                tool->Perform();
+            if (auto tool = fix.FixFaceTool())
+                tool->Perform();
+            return std::make_unique<TopoDS_Shape>(fix.Shape());
+        }
+        if (type == TopAbs_WIRE) {
+            if (auto tool = fix.FixWireTool())
+                tool->Perform();
+        }
+        return std::make_unique<TopoDS_Shape>(fix.Shape());
+    }
+    catch (Standard_Failure&) {
+        return nullptr;
+    }
+    catch (...) {
+        return nullptr;
+    }
+}
+
+// The `(u, v)` of `point` on a face's surface (`ShapeAnalysis_Surface::ValueOfUV`,
+// what upstream's `GeometrySurfacePy::parameter` calls). False when the surface
+// cannot be read or the projection fails.
+inline bool fc_face_parameter(const TopoDS_Shape& shape,
+                              double x,
+                              double y,
+                              double z,
+                              double& u,
+                              double& v)
+{
+    if (shape.IsNull() || shape.ShapeType() != TopAbs_FACE)
+        return false;
+    try {
+        TopLoc_Location location;
+        const Handle(Geom_Surface) surface = BRep_Tool::Surface(TopoDS::Face(shape), location);
+        if (surface.IsNull())
+            return false;
+        ShapeAnalysis_Surface analysis(surface);
+        const gp_Pnt2d uv = analysis.ValueOfUV(gp_Pnt(x, y, z), Precision::Confusion());
+        u = uv.X();
+        v = uv.Y();
+        return true;
+    }
+    catch (...) {
+        return false;
+    }
+}
+
+// `Shape.makeParallelProjection(tool, direction)` / `makePerspectiveProjection`:
+// `BRepProj_Projection` of `tool` onto `shape`. Parallel uses a direction,
+// perspective a viewpoint.
+inline std::unique_ptr<TopoDS_Shape> fc_project_shape(const TopoDS_Shape& tool,
+                                                      const TopoDS_Shape& target,
+                                                      double x,
+                                                      double y,
+                                                      double z,
+                                                      bool parallel)
+{
+    if (tool.IsNull() || target.IsNull())
+        return nullptr;
+    try {
+        if (parallel) {
+            if (x * x + y * y + z * z <= Precision::Confusion())
+                return nullptr;
+            BRepProj_Projection made(tool, target, gp_Dir(x, y, z));
+            return std::make_unique<TopoDS_Shape>(made.Shape());
+        }
+        BRepProj_Projection made(tool, target, gp_Pnt(x, y, z));
+        return std::make_unique<TopoDS_Shape>(made.Shape());
+    }
+    catch (...) {
+        return nullptr;
+    }
+}
+
+// --- defeaturing -----------------------------------------------------------
+
+// `Shape.defeaturing(faces)`: remove the given faces and let their neighbours
+// grow to close the gap (`BRepAlgoAPI_Defeaturing`), as upstream's
+// `TopoShape::makeElementDefeaturing`.
+inline std::unique_ptr<TopoDS_Shape> fc_defeature(const TopoDS_Shape& shape,
+                                                  const TopTools_ListOfShape& faces)
+{
+    if (shape.IsNull() || faces.IsEmpty())
+        return nullptr;
+    try {
+        BRepAlgoAPI_Defeaturing defeaturing;
+        defeaturing.SetRunParallel(Standard_True);
+        defeaturing.SetToFillHistory(Standard_True);
+        defeaturing.SetShape(shape);
+        for (TopTools_ListIteratorOfListOfShape it(faces); it.More(); it.Next()) {
+            if (it.Value().ShapeType() != TopAbs_FACE)
+                return nullptr;
+            defeaturing.AddFaceToRemove(it.Value());
+        }
+        defeaturing.Build();
+        if (!defeaturing.IsDone() || defeaturing.Shape().IsNull())
+            return nullptr;
+        return std::make_unique<TopoDS_Shape>(defeaturing.Shape());
+    }
+    catch (...) {
+        return nullptr;
+    }
+}
+
+// --- 3D offsetting ---------------------------------------------------------
+
+static inline GeomAbs_JoinType fc_offset_join_type(int join)
+{
+    switch (join) {
+        case 1:
+            return GeomAbs_Tangent;
+        case 2:
+            return GeomAbs_Intersection;
+        default:
+            return GeomAbs_Arc;
+    }
+}
+
+// `Shape.makeOffsetShape(offset, tolerance, inter, selfInter, offsetMode, join,
+// fill)` — a 3D offset (`BRepOffsetAPI_MakeOffsetShape::PerformByJoin`).
+//
+// With `fill` the free boundary of the input is closed by a wall between the
+// original wire and its offset image, the pieces are sewn and, when that gives a
+// closed shell, turned into a solid. This mirrors upstream's
+// `TopoShape::makeElementOffset`; `offsetMode` is `BRepOffset_Mode` (0 skin,
+// 1 pipe, 2 recto-verso) and `join` 0 arcs, 1 tangent, 2 intersection.
+inline std::unique_ptr<TopoDS_Shape> fc_offset_shape(const TopoDS_Shape& shape,
+                                                     double offset,
+                                                     double tolerance,
+                                                     bool inter,
+                                                     bool self_inter,
+                                                     int32_t offset_mode,
+                                                     int32_t join,
+                                                     bool fill)
+{
+    if (shape.IsNull())
+        return nullptr;
+    try {
+        BRepOffsetAPI_MakeOffsetShape mkOffset;
+        mkOffset.PerformByJoin(
+            shape,
+            offset,
+            tolerance,
+            static_cast<BRepOffset_Mode>(offset_mode),
+            inter ? Standard_True : Standard_False,
+            self_inter ? Standard_True : Standard_False,
+            fc_offset_join_type(join)
+        );
+        if (!mkOffset.IsDone())
+            return nullptr;
+        TopoDS_Shape result = mkOffset.Shape();
+        if (result.IsNull())
+            return nullptr;
+
+        // An offset of a solid that loses its solidity is closed back into one.
+        auto has_type = [](const TopoDS_Shape& s, TopAbs_ShapeEnum type) {
+            for (TopExp_Explorer xp(s, type); xp.More(); xp.Next())
+                return true;
+            return false;
+        };
+        if (has_type(shape, TopAbs_SOLID) && !has_type(result, TopAbs_SOLID)) {
+            BRepBuilderAPI_Sewing sewn;
+            sewn.Add(result);
+            sewn.Perform();
+            const TopoDS_Shape shell = sewn.SewedShape();
+            if (shell.ShapeType() == TopAbs_SHELL) {
+                BRepBuilderAPI_MakeSolid solid(TopoDS::Shell(shell));
+                if (solid.IsDone())
+                    result = solid.Solid();
+            }
+        }
+
+        if (!fill)
+            return std::make_unique<TopoDS_Shape>(result);
+
+        ShapeAnalysis_FreeBoundsProperties free_check(shape);
+        free_check.Perform();
+        if (free_check.NbClosedFreeBounds() < 1)
+            return nullptr;
+
+        BRep_Builder builder;
+        const BRepAlgo_Image& image = mkOffset.MakeOffset().OffsetEdgesFromShapes();
+        TopoDS_Compound perimeter;
+        builder.MakeCompound(perimeter);
+        for (int index = 1; index <= free_check.NbClosedFreeBounds(); ++index) {
+            const TopoDS_Wire original =
+                TopoDS::Wire(free_check.ClosedFreeBound(index)->FreeBound());
+            TopoDS_Wire offset_wire;
+            builder.MakeWire(offset_wire);
+            for (TopExp_Explorer it(original, TopAbs_EDGE); it.More(); it.Next()) {
+                if (!image.HasImage(it.Current()))
+                    return nullptr;
+                const TopTools_ListOfShape& mapped = image.Image(it.Current());
+                TopoDS_Edge edge;
+                int edges = 0;
+                for (TopTools_ListIteratorOfListOfShape list(mapped); list.More(); list.Next()) {
+                    if (list.Value().ShapeType() != TopAbs_EDGE)
+                        continue;
+                    ++edges;
+                    edge = TopoDS::Edge(list.Value());
+                }
+                if (edges != 1)
+                    return nullptr;
+                builder.Add(offset_wire, edge);
+            }
+            BRepOffsetAPI_ThruSections generator;
+            generator.AddWire(original);
+            generator.AddWire(offset_wire);
+            generator.Build();
+            if (!generator.IsDone())
+                return nullptr;
+            builder.Add(perimeter, generator.Shape());
+        }
+
+        BRepBuilderAPI_Sewing sew;
+        sew.Add(shape);
+        sew.Add(perimeter);
+        sew.Add(result);
+        sew.Perform();
+        TopoDS_Shape output = sew.SewedShape();
+        if (output.ShapeType() == TopAbs_SHELL && output.Closed()) {
+            BRepBuilderAPI_MakeSolid solid(TopoDS::Shell(output));
+            if (solid.IsDone()) {
+                TopoDS_Solid candidate = solid.Solid();
+                if (BRepLib::OrientClosedSolid(candidate))
+                    output = candidate;
+            }
+        }
+        return std::make_unique<TopoDS_Shape>(output);
+    }
+    catch (...) {
+        return nullptr;
+    }
+}
+
+// --- wire traversal --------------------------------------------------------
+
+// The wire's edges in connection order (`BRepTools_WireExplorer`), as a compound
+// whose direct children are the edges (`Wire.OrderedEdges`).
+inline std::unique_ptr<TopoDS_Shape> fc_wire_ordered_edges(const TopoDS_Shape& shape)
+{
+    if (shape.IsNull() || shape.ShapeType() != TopAbs_WIRE)
+        return nullptr;
+    try {
+        TopoDS_Compound compound;
+        BRep_Builder builder;
+        builder.MakeCompound(compound);
+        for (BRepTools_WireExplorer xp(TopoDS::Wire(shape)); xp.More(); xp.Next())
+            builder.Add(compound, xp.Current());
+        return std::make_unique<TopoDS_Shape>(compound);
+    }
+    catch (...) {
+        return nullptr;
+    }
+}
+
+// --- B-spline surfaces -----------------------------------------------------
+
+// The flat layout shared by the four B-spline surface entry points:
+//
+//   0 u degree, 1 v degree, 2 u periodic, 3 v periodic,
+//   4 u first, 5 u last, 6 v first, 7 v last,
+//   8 number of u poles, 9 number of v poles,
+//   then poles in u-major order: for each u, for each v, `x y z weight`,
+//   then the number of u knots followed by (knot, multiplicity) pairs,
+//   then the number of v knots followed by (knot, multiplicity) pairs.
+//
+// The bounds are output-only (`fc_bspline_surface_data`) and ignored on input.
+static inline Standard_Boolean fc_read_bspline_surface(rust::Slice<const double> data,
+                                                       Handle(Geom_BSplineSurface)& surface,
+                                                       Standard_Real& u1,
+                                                       Standard_Real& u2,
+                                                       Standard_Real& v1,
+                                                       Standard_Real& v2)
+{
+    if (data.size() < 10)
+        return Standard_False;
+    const int udegree = static_cast<int>(data[0]);
+    const int vdegree = static_cast<int>(data[1]);
+    const Standard_Boolean uperiodic = data[2] != 0.0;
+    const Standard_Boolean vperiodic = data[3] != 0.0;
+    const int nbu = static_cast<int>(data[8]);
+    const int nbv = static_cast<int>(data[9]);
+    if (udegree < 1 || vdegree < 1 || nbu < 2 || nbv < 2)
+        return Standard_False;
+
+    std::size_t at = 10;
+    const std::size_t poles_end = at + static_cast<std::size_t>(4 * nbu * nbv);
+    if (data.size() < poles_end + 2)
+        return Standard_False;
+
+    TColgp_Array2OfPnt poles(1, nbu, 1, nbv);
+    TColStd_Array2OfReal weights(1, nbu, 1, nbv);
+    for (int i = 1; i <= nbu; ++i) {
+        for (int j = 1; j <= nbv; ++j) {
+            poles.SetValue(i, j, gp_Pnt(data[at], data[at + 1], data[at + 2]));
+            weights.SetValue(i, j, data[at + 3]);
+            at += 4;
+        }
+    }
+    if (data.size() < at + 1)
+        return Standard_False;
+    const int nbuk = static_cast<int>(data[at++]);
+    if (nbuk < 2 || data.size() < at + static_cast<std::size_t>(2 * nbuk) + 1)
+        return Standard_False;
+    TColStd_Array1OfReal uknots(1, nbuk);
+    TColStd_Array1OfInteger umults(1, nbuk);
+    for (int i = 1; i <= nbuk; ++i) {
+        uknots.SetValue(i, data[at]);
+        umults.SetValue(i, static_cast<int>(data[at + 1]));
+        at += 2;
+    }
+    const int nbvk = static_cast<int>(data[at++]);
+    if (nbvk < 2 || data.size() < at + static_cast<std::size_t>(2 * nbvk))
+        return Standard_False;
+    TColStd_Array1OfReal vknots(1, nbvk);
+    TColStd_Array1OfInteger vmults(1, nbvk);
+    for (int i = 1; i <= nbvk; ++i) {
+        vknots.SetValue(i, data[at]);
+        vmults.SetValue(i, static_cast<int>(data[at + 1]));
+        at += 2;
+    }
+
+    surface = new Geom_BSplineSurface(
+        poles,
+        weights,
+        uknots,
+        vknots,
+        umults,
+        vmults,
+        udegree,
+        vdegree,
+        uperiodic,
+        vperiodic
+    );
+    u1 = uknots.Value(1);
+    u2 = uknots.Value(nbuk);
+    v1 = vknots.Value(1);
+    v2 = vknots.Value(nbvk);
+    return Standard_True;
+}
+
+// Read a B-spline face's surface into the flat layout above (`Face.Surface`).
+// Empty for any other surface kind.
+inline rust::Vec<double> fc_bspline_surface_data(const TopoDS_Shape& shape)
+{
+    rust::Vec<double> out;
+    if (shape.IsNull() || shape.ShapeType() != TopAbs_FACE)
+        return out;
+    try {
+        TopLoc_Location location;
+        const Handle(Geom_Surface) generic = BRep_Tool::Surface(TopoDS::Face(shape), location);
+        const Handle(Geom_BSplineSurface) surface = Handle(Geom_BSplineSurface)::DownCast(generic);
+        if (surface.IsNull())
+            return out;
+
+        const int nbu = surface->NbUPoles();
+        const int nbv = surface->NbVPoles();
+        Standard_Real u1 = 0.0, u2 = 0.0, v1 = 0.0, v2 = 0.0;
+        surface->Bounds(u1, u2, v1, v2);
+
+        out.push_back(surface->UDegree());
+        out.push_back(surface->VDegree());
+        out.push_back(surface->IsUPeriodic() ? 1.0 : 0.0);
+        out.push_back(surface->IsVPeriodic() ? 1.0 : 0.0);
+        out.push_back(u1);
+        out.push_back(u2);
+        out.push_back(v1);
+        out.push_back(v2);
+        out.push_back(nbu);
+        out.push_back(nbv);
+
+        for (int i = 1; i <= nbu; ++i) {
+            for (int j = 1; j <= nbv; ++j) {
+                const gp_Pnt point = surface->Pole(i, j);
+                out.push_back(point.X());
+                out.push_back(point.Y());
+                out.push_back(point.Z());
+                out.push_back(surface->Weight(i, j));
+            }
+        }
+
+        out.push_back(surface->NbUKnots());
+        for (int i = 1; i <= surface->NbUKnots(); ++i) {
+            out.push_back(surface->UKnot(i));
+            out.push_back(surface->UMultiplicity(i));
+        }
+        out.push_back(surface->NbVKnots());
+        for (int i = 1; i <= surface->NbVKnots(); ++i) {
+            out.push_back(surface->VKnot(i));
+            out.push_back(surface->VMultiplicity(i));
+        }
+        return out;
+    }
+    catch (...) {
+        return rust::Vec<double>();
+    }
+}
+
+// `BSplineSurface.buildFromPolesMultsKnots`: the surface's face over its whole
+// parameter domain (`BRepBuilderAPI_MakeFace`), or null.
+inline std::unique_ptr<TopoDS_Shape> fc_bspline_surface_face_from_data(
+    rust::Slice<const double> data)
+{
+    Handle(Geom_BSplineSurface) surface;
+    Standard_Real u1 = 0.0, u2 = 0.0, v1 = 0.0, v2 = 0.0;
+    if (!fc_read_bspline_surface(data, surface, u1, u2, v1, v2) || surface.IsNull())
+        return nullptr;
+    try {
+        BRepBuilderAPI_MakeFace make(surface, u1, u2, v1, v2, Precision::Confusion());
+        if (!make.IsDone())
+            return nullptr;
+        return std::make_unique<TopoDS_Shape>(make.Face());
+    }
+    catch (...) {
+        return nullptr;
+    }
+}
+
+// `BSplineSurface.value(u, v)`.
+inline bool fc_bspline_surface_value(rust::Slice<const double> data,
+                                     double u,
+                                     double v,
+                                     double& x,
+                                     double& y,
+                                     double& z)
+{
+    Handle(Geom_BSplineSurface) surface;
+    Standard_Real u1 = 0.0, u2 = 0.0, v1 = 0.0, v2 = 0.0;
+    if (!fc_read_bspline_surface(data, surface, u1, u2, v1, v2) || surface.IsNull())
+        return false;
+    try {
+        const gp_Pnt point = surface->Value(u, v);
+        x = point.X();
+        y = point.Y();
+        z = point.Z();
+        return true;
+    }
+    catch (...) {
+        return false;
+    }
+}
+
+// `BSplineSurface.parameter(point)` (`ShapeAnalysis_Surface::ValueOfUV`).
+inline bool fc_bspline_surface_parameter(rust::Slice<const double> data,
+                                         double x,
+                                         double y,
+                                         double z,
+                                         double& u,
+                                         double& v)
+{
+    Handle(Geom_BSplineSurface) surface;
+    Standard_Real u1 = 0.0, u2 = 0.0, v1 = 0.0, v2 = 0.0;
+    if (!fc_read_bspline_surface(data, surface, u1, u2, v1, v2) || surface.IsNull())
+        return false;
+    try {
+        ShapeAnalysis_Surface analysis(surface);
+        const gp_Pnt2d uv = analysis.ValueOfUV(gp_Pnt(x, y, z), Precision::Confusion());
+        u = uv.X();
+        v = uv.Y();
+        return true;
+    }
+    catch (...) {
+        return false;
+    }
+}
+
+// `Part.Face(bspline_surface, wires)`: trim the surface with the given boundary
+// wires, projecting each edge onto the freshly built surface.
+inline std::unique_ptr<TopoDS_Shape> fc_face_on_bspline_surface(
+    rust::Slice<const double> data,
+    const TopTools_ListOfShape& wires)
+{
+    Handle(Geom_BSplineSurface) surface;
+    Standard_Real u1 = 0.0, u2 = 0.0, v1 = 0.0, v2 = 0.0;
+    if (!fc_read_bspline_surface(data, surface, u1, u2, v1, v2) || surface.IsNull())
+        return nullptr;
+    if (wires.IsEmpty())
+        return nullptr;
+    try {
+        TopTools_ListIteratorOfListOfShape it(wires);
+        if (!it.More() || it.Value().ShapeType() != TopAbs_WIRE)
+            return nullptr;
+        const TopoDS_Wire outer = fc_wire_on_surface(TopoDS::Wire(it.Value()), surface);
+        if (outer.IsNull())
+            return nullptr;
+        BRepBuilderAPI_MakeFace make(surface, outer, Standard_True);
+        if (!make.IsDone())
+            return nullptr;
+        for (it.Next(); it.More(); it.Next()) {
+            if (it.Value().ShapeType() != TopAbs_WIRE)
+                return nullptr;
+            const TopoDS_Wire inner = fc_wire_on_surface(TopoDS::Wire(it.Value()), surface);
+            if (inner.IsNull())
+                return nullptr;
+            make.Add(inner);
+            if (!make.IsDone())
+                return nullptr;
+        }
+        if (make.Face().IsNull())
+            return nullptr;
+        return std::make_unique<TopoDS_Shape>(make.Face());
+    }
+    catch (...) {
+        return nullptr;
+    }
+}
+
+// The `TopAbs_ShapeEnum` discriminant of a shape (`TopoDS_Shape::ShapeType`),
+// or -1 for a null shape. This is the exact topological kind, unlike the
+// sub-shape-count inference `Shape.ShapeType` uses.
+inline int32_t fc_shape_kind(const TopoDS_Shape& shape)
+{
+    if (shape.IsNull())
+        return -1;
+    return static_cast<int32_t>(shape.ShapeType());
 }

@@ -353,6 +353,20 @@ mod ffi {
         /// The flattened state of the B-spline interpolating `coords`, or empty.
         fn fc_bspline_probe_interpolated(coords: &[f64], periodic: bool) -> Vec<f64>;
 
+        /// `BSplineCurve.segment(u1, u2)`: the state of the restricted curve.
+        #[allow(clippy::too_many_arguments)]
+        fn fc_bspline_segment(
+            coords: &[f64],
+            weights: &[f64],
+            knots: &[f64],
+            multiplicities: &[i32],
+            degree: i32,
+            periodic: bool,
+            check_rational: bool,
+            u1: f64,
+            u2: f64,
+        ) -> Vec<f64>;
+
         /// Rebuild the curve in (or out of) the periodic form and return its new
         /// flattened state, or empty.
         fn fc_bspline_set_periodic(
@@ -670,6 +684,103 @@ mod ffi {
 
         /// Upstream's automatic fuzzy value from the current argument/tool bounds.
         fn fc_cut_set_auto_fuzzy(op: Pin<&mut BRepAlgoAPI_Cut>);
+
+        /// `Face.isPartOfDomain(u, v)` (`BRepTopAdaptor_FClass2d`).
+        fn fc_face_is_part_of_domain(face: &TopoDS_Shape, u: f64, v: f64) -> bool;
+
+        /// `Face.validate()`: repair an invalid face's wires, or the unchanged face.
+        fn fc_validate_face(face: &TopoDS_Shape) -> UniquePtr<TopoDS_Shape>;
+
+        /// `Shape.fix(precision, mintol, maxtol)` (`ShapeFix_Shape`).
+        fn fc_fix_shape(
+            shape: &TopoDS_Shape,
+            precision: f64,
+            mintol: f64,
+            maxtol: f64,
+        ) -> UniquePtr<TopoDS_Shape>;
+
+        /// The `(u, v)` of a point on a face's surface
+        /// (`ShapeAnalysis_Surface::ValueOfUV`).
+        fn fc_face_parameter(
+            face: &TopoDS_Shape,
+            x: f64,
+            y: f64,
+            z: f64,
+            u: &mut f64,
+            v: &mut f64,
+        ) -> bool;
+
+        /// Project `tool` onto `target`: parallel with a direction, or
+        /// perspective from a viewpoint (`BRepProj_Projection`).
+        fn fc_project_shape(
+            tool: &TopoDS_Shape,
+            target: &TopoDS_Shape,
+            x: f64,
+            y: f64,
+            z: f64,
+            parallel: bool,
+        ) -> UniquePtr<TopoDS_Shape>;
+
+        /// Remove faces and heal the gap (`BRepAlgoAPI_Defeaturing`), or null.
+        fn fc_defeature(
+            shape: &TopoDS_Shape,
+            faces: &TopTools_ListOfShape,
+        ) -> UniquePtr<TopoDS_Shape>;
+
+        /// A 3D offset (`BRepOffsetAPI_MakeOffsetShape::PerformByJoin`), or null.
+        fn fc_offset_shape(
+            shape: &TopoDS_Shape,
+            offset: f64,
+            tolerance: f64,
+            inter: bool,
+            self_inter: bool,
+            offset_mode: i32,
+            join: i32,
+            fill: bool,
+        ) -> UniquePtr<TopoDS_Shape>;
+
+        /// The wire's edges in connection order as a compound
+        /// (`BRepTools_WireExplorer`), or null.
+        fn fc_wire_ordered_edges(wire: &TopoDS_Shape) -> UniquePtr<TopoDS_Shape>;
+
+        /// A B-spline face's surface in the flat layout documented in
+        /// `fc_part_ops.hxx`; empty for any other surface.
+        fn fc_bspline_surface_data(face: &TopoDS_Shape) -> Vec<f64>;
+
+        /// The face of a B-spline surface described in that layout, or null.
+        fn fc_bspline_surface_face_from_data(
+            data: &[f64],
+        ) -> UniquePtr<TopoDS_Shape>;
+
+        /// `Geom_BSplineSurface::Value(u, v)`.
+        fn fc_bspline_surface_value(
+            data: &[f64],
+            u: f64,
+            v: f64,
+            x: &mut f64,
+            y: &mut f64,
+            z: &mut f64,
+        ) -> bool;
+
+        /// The `(u, v)` of a point on a B-spline surface.
+        fn fc_bspline_surface_parameter(
+            data: &[f64],
+            x: f64,
+            y: f64,
+            z: f64,
+            u: &mut f64,
+            v: &mut f64,
+        ) -> bool;
+
+        /// `Part.Face(bspline_surface, wires)`: trim the surface with `wires`.
+        fn fc_face_on_bspline_surface(
+            data: &[f64],
+            wires: &TopTools_ListOfShape,
+        ) -> UniquePtr<TopoDS_Shape>;
+
+        /// The exact topological kind of a shape (`TopoDS_Shape::ShapeType`),
+        /// or -1 for a null shape.
+        fn fc_shape_kind(shape: &TopoDS_Shape) -> i32;
 
         /// The number of *direct* children (`TopoDS_Iterator`).
         fn fc_shape_child_count(shape: &TopoDS_Shape) -> i32;

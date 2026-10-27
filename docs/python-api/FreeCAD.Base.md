@@ -39,7 +39,11 @@ Kernel failure (``Part.OCCError`` when the Part module is absent).
 
 | Member | Summary |
 | --- | --- |
+| `AmbientColor` (attribute) | — |
 | `DiffuseColor` (attribute) | — |
+| `EmissiveColor` (attribute) | — |
+| `Shininess` (attribute) | — |
+| `SpecularColor` (attribute) | — |
 | `Transparency` (attribute) | — |
 
 ## Class `Matrix`
@@ -187,6 +191,20 @@ Scaling mode returned by ``Matrix.hasScale()`` (``Base::ScaleType``).
 
 | Member | Summary |
 | --- | --- |
-| rotate(angle) | — |
+| `Length` (attribute) | — |
+| add(other) | — |
+| cross(other) | — |
+| distanceToLine(base, direction) | — |
+| distanceToPoint(other) | — |
+| dot(other) | — |
+| getAngle(other) | — |
+| isEqual(other, tol) | — |
+| multiply(factor) | `multiply(factor)`: scale in place and return self (as `Vector`). |
+| negative() | — |
+| normalize() | `normalize()`: normalise in place and return self (upstream's semantics). |
+| normalized() | `normalized()`: a normalised copy; this vector is unchanged. |
+| rotate(angle) | `rotate(angle)`: rotate in place (counter-clockwise) and return self. |
+| scale(factor) | `scale(factor)`: scale in place and return self (as `Vector`). |
+| sub(other) | — |
 | `x` (attribute) | — |
 | `y` (attribute) | — |

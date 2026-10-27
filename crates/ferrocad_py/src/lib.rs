@@ -6035,12 +6035,66 @@ struct PyVector2d {
     y: f64,
 }
 
+impl PyVector2d {
+    fn length_value(&self) -> f64 {
+        self.x.hypot(self.y)
+    }
+
+    fn dot_value(&self, other: &PyVector2d) -> f64 {
+        self.x * other.x + self.y * other.y
+    }
+
+    /// The 2D cross product's z component (upstream `Vector2d::operator%`).
+    fn cross_value(&self, other: &PyVector2d) -> f64 {
+        self.x * other.y - self.y * other.x
+    }
+
+    fn distance_to(&self, other: &PyVector2d) -> f64 {
+        (self.x - other.x).hypot(self.y - other.y)
+    }
+
+    /// Scale to unit length; the null vector stays null (as `Vector.normalize`).
+    fn scaled_to_unit(&self) -> PyVector2d {
+        let length = self.length_value();
+        if length > 0.0 {
+            PyVector2d {
+                x: self.x / length,
+                y: self.y / length,
+            }
+        } else {
+            *self
+        }
+    }
+}
+
 #[pymethods]
 impl PyVector2d {
     #[new]
-    #[pyo3(signature = (x=0.0, y=0.0))]
-    fn new(x: f64, y: f64) -> Self {
-        Self { x, y }
+    #[pyo3(signature = (*args))]
+    fn new(args: &Bound<'_, PyTuple>) -> PyResult<Self> {
+        match args.len() {
+            0 => Ok(Self { x: 0.0, y: 0.0 }),
+            1 => {
+                let arg = args.get_item(0)?;
+                if let Ok(v) = arg.extract::<PyRef<'_, PyVector2d>>() {
+                    Ok(*v)
+                } else if let Ok(seq) = arg.extract::<Vec<f64>>() {
+                    if seq.len() != 2 {
+                        return Err(PyValueError::new_err("Vector2d sequence must have 2 items"));
+                    }
+                    Ok(Self { x: seq[0], y: seq[1] })
+                } else {
+                    Err(PyTypeError::new_err(
+                        "Vector2d() expects x,y, a Vector2d, or a 2-sequence",
+                    ))
+                }
+            }
+            _ => {
+                let x: f64 = args.get_item(0)?.extract()?;
+                let y: f64 = args.get_item(1)?.extract()?;
+                Ok(Self { x, y })
+            }
+        }
     }
 
     #[getter]
@@ -6060,11 +6114,207 @@ impl PyVector2d {
         self.y = v;
     }
 
-    fn rotate(&mut self, angle: f64) {
+    /// `Length`: the magnitude of the vector (also `abs(v)`).
+    #[getter]
+    fn Length(&self) -> f64 {
+        self.length_value()
+    }
+
+    #[setter]
+    fn set_Length(&mut self, v: f64) {
+        let length = self.length_value();
+        if length > 0.0 {
+            let scale = v / length;
+            self.x *= scale;
+            self.y *= scale;
+        }
+    }
+
+    fn add(&self, other: PyRef<'_, PyVector2d>) -> PyVector2d {
+        PyVector2d {
+            x: self.x + other.x,
+            y: self.y + other.y,
+        }
+    }
+
+    fn sub(&self, other: PyRef<'_, PyVector2d>) -> PyVector2d {
+        PyVector2d {
+            x: self.x - other.x,
+            y: self.y - other.y,
+        }
+    }
+
+    fn negative(&self) -> PyVector2d {
+        PyVector2d {
+            x: -self.x,
+            y: -self.y,
+        }
+    }
+
+    fn dot(&self, other: PyRef<'_, PyVector2d>) -> f64 {
+        PyVector2d::dot_value(self, &other)
+    }
+
+    fn cross(&self, other: PyRef<'_, PyVector2d>) -> f64 {
+        PyVector2d::cross_value(self, &other)
+    }
+
+    /// `multiply(factor)`: scale in place and return self (as `Vector`).
+    fn multiply(&mut self, factor: f64) -> PyVector2d {
+        self.x *= factor;
+        self.y *= factor;
+        *self
+    }
+
+    /// `scale(factor)`: scale in place and return self (as `Vector`).
+    fn scale(&mut self, factor: f64) -> PyVector2d {
+        self.x *= factor;
+        self.y *= factor;
+        *self
+    }
+
+    /// `normalize()`: normalise in place and return self (upstream's semantics).
+    fn normalize(&mut self) -> PyVector2d {
+        *self = self.scaled_to_unit();
+        *self
+    }
+
+    /// `normalized()`: a normalised copy; this vector is unchanged.
+    fn normalized(&self) -> PyVector2d {
+        self.scaled_to_unit()
+    }
+
+    fn distanceToPoint(&self, other: PyRef<'_, PyVector2d>) -> f64 {
+        self.distance_to(&other)
+    }
+
+    fn distanceToLine(&self, base: PyRef<'_, PyVector2d>, direction: PyRef<'_, PyVector2d>) -> f64 {
+        let offset = PyVector2d {
+            x: self.x - base.x,
+            y: self.y - base.y,
+        };
+        let length = direction.length_value();
+        if length == 0.0 {
+            offset.length_value()
+        } else {
+            offset.cross_value(&direction).abs() / length
+        }
+    }
+
+    fn getAngle(&self, other: PyRef<'_, PyVector2d>) -> f64 {
+        let denominator = self.length_value() * other.length_value();
+        if denominator == 0.0 {
+            return 0.0;
+        }
+        (PyVector2d::dot_value(self, &other) / denominator)
+            .clamp(-1.0, 1.0)
+            .acos()
+    }
+
+    fn isEqual(&self, other: PyRef<'_, PyVector2d>, tol: f64) -> bool {
+        self.distance_to(&other) <= tol
+    }
+
+    /// `rotate(angle)`: rotate in place (counter-clockwise) and return self.
+    fn rotate(&mut self, angle: f64) -> PyVector2d {
         let (s, c) = angle.sin_cos();
         let (x, y) = (self.x, self.y);
         self.x = x * c - y * s;
         self.y = x * s + y * c;
+        *self
+    }
+
+    fn __add__(&self, other: PyRef<'_, PyVector2d>) -> PyVector2d {
+        PyVector2d::add(self, other)
+    }
+
+    fn __sub__(&self, other: PyRef<'_, PyVector2d>) -> PyVector2d {
+        PyVector2d::sub(self, other)
+    }
+
+    fn __neg__(&self) -> PyVector2d {
+        PyVector2d::negative(self)
+    }
+
+    fn __mul__(&self, other: &Bound<'_, PyAny>) -> PyResult<PyObject> {
+        let py = other.py();
+        if let Ok(factor) = other.extract::<f64>() {
+            return Ok(PyVector2d {
+                x: self.x * factor,
+                y: self.y * factor,
+            }
+            .into_py_any(py)?);
+        }
+        if let Ok(other) = other.extract::<PyRef<'_, PyVector2d>>() {
+            return Ok(PyVector2d::dot_value(self, &other).into_py_any(py)?);
+        }
+        Err(PyTypeError::new_err(
+            "Vector2d can only multiply by a number or Vector2d",
+        ))
+    }
+
+    fn __rmul__(&self, factor: f64) -> PyVector2d {
+        PyVector2d {
+            x: self.x * factor,
+            y: self.y * factor,
+        }
+    }
+
+    fn __truediv__(&self, factor: f64) -> PyResult<PyVector2d> {
+        if factor == 0.0 {
+            return Err(pyo3::exceptions::PyZeroDivisionError::new_err(
+                "Vector2d division by zero",
+            ));
+        }
+        Ok(PyVector2d {
+            x: self.x / factor,
+            y: self.y / factor,
+        })
+    }
+
+    /// `abs(v)` is the vector's magnitude, the same value as `Length`.
+    fn __abs__(&self) -> f64 {
+        self.length_value()
+    }
+
+    fn __eq__(&self, other: &Bound<'_, PyAny>) -> bool {
+        match other.extract::<PyRef<'_, PyVector2d>>() {
+            Ok(other) => self.distance_to(&other) <= 1e-12,
+            Err(_) => false,
+        }
+    }
+
+    fn __ne__(&self, other: &Bound<'_, PyAny>) -> bool {
+        !self.__eq__(other)
+    }
+
+    fn __len__(&self) -> usize {
+        2
+    }
+
+    fn __getitem__(&self, i: isize) -> PyResult<f64> {
+        let idx = if i < 0 { 2 + i } else { i };
+        match idx {
+            0 => Ok(self.x),
+            1 => Ok(self.y),
+            _ => Err(pyo3::exceptions::PyIndexError::new_err(
+                "Vector2d index out of range",
+            )),
+        }
+    }
+
+    fn __setitem__(&mut self, i: isize, v: f64) -> PyResult<()> {
+        let idx = if i < 0 { 2 + i } else { i };
+        match idx {
+            0 => self.x = v,
+            1 => self.y = v,
+            _ => {
+                return Err(pyo3::exceptions::PyIndexError::new_err(
+                    "Vector2d index out of range",
+                ))
+            }
+        }
+        Ok(())
     }
 
     fn __repr__(&self) -> String {
@@ -6076,9 +6326,32 @@ impl PyVector2d {
 #[derive(Clone)]
 struct PyMaterial {
     diffuse: [f64; 4],
+    ambient: [f64; 4],
+    specular: [f64; 4],
+    emissive: [f64; 4],
+    shininess: f64,
+    /// Upstream stores transparency separately from `DiffuseColor`; its alpha and
+    /// `Transparency` are independent values. The headless view state keeps only
+    /// one opacity per appearance slot, in the colour alpha, so an owned handle
+    /// derives this from that alpha (and writes it back the same way).
+    transparency: f64,
     /// When this handle came from a `ViewObject`, changes are written back to it
     /// (`ShapeAppearance[i].DiffuseColor = ...`). A plain `App.Material` has none.
     owner: Option<MaterialOwner>,
+}
+
+/// `App::Material()`'s defaults, from upstream `App::Material::setType(DEFAULT)`.
+///
+/// The colour alpha is opacity (`1.0` fully opaque); `Material.Transparency` is a
+/// separate field (see the view-state note on `PyMaterial::transparency`).
+const DEFAULT_DIFFUSE: [f64; 4] = [0.8, 0.8, 0.9, 1.0];
+const DEFAULT_AMBIENT: [f64; 4] = [0.3333, 0.3333, 0.3333, 1.0];
+const DEFAULT_SPECULAR: [f64; 4] = [0.5333, 0.5333, 0.5333, 1.0];
+const DEFAULT_EMISSIVE: [f64; 4] = [0.0, 0.0, 0.0, 1.0];
+const DEFAULT_SHININESS: f64 = 0.9;
+
+fn color_tuple(color: [f64; 4]) -> (f64, f64, f64, f64) {
+    (color[0], color[1], color[2], color[3])
 }
 
 /// Which view-state slot a [`PyMaterial`] handle writes back to.
@@ -6100,10 +6373,31 @@ struct MaterialOwner {
 
 impl PyMaterial {
     /// A handle on `color` that writes back into `object`'s view state.
+    ///
+    /// The view state stores a colour (and its alpha), not the material's other
+    /// properties, so an owned handle starts the remaining properties at
+    /// [`PyMaterial::new`]'s defaults. Storing the full material in `ViewState` is
+    /// a hand-off; see the App-facade report.
     fn owned(color: [f64; 4], inner: Arc<Mutex<CoreDocument>>, id: ObjectId, slot: MaterialSlot) -> Self {
         Self {
             diffuse: color,
+            ambient: DEFAULT_AMBIENT,
+            specular: DEFAULT_SPECULAR,
+            emissive: DEFAULT_EMISSIVE,
+            shininess: DEFAULT_SHININESS,
+            // The view state stores opacity in the alpha channel.
+            transparency: 1.0 - color[3],
             owner: Some(MaterialOwner { inner, id, slot }),
+        }
+    }
+
+    /// Write the colour (and its alpha) back to the owning view slot.
+    fn write_color_back(&self, color: [f64; 4]) {
+        if let Some(owner) = &self.owner {
+            update_view_state(&owner.inner, owner.id, |state| match owner.slot {
+                MaterialSlot::Appearance(index) => state.set_appearance_slot(index, color),
+                MaterialSlot::Material => state.material = Some(color),
+            });
         }
     }
 }
@@ -6113,14 +6407,19 @@ impl PyMaterial {
     #[new]
     fn new() -> Self {
         Self {
-            diffuse: [0.8, 0.8, 0.8, 1.0],
+            diffuse: DEFAULT_DIFFUSE,
+            ambient: DEFAULT_AMBIENT,
+            specular: DEFAULT_SPECULAR,
+            emissive: DEFAULT_EMISSIVE,
+            shininess: DEFAULT_SHININESS,
+            transparency: 0.0,
             owner: None,
         }
     }
 
     #[getter]
     fn DiffuseColor(&self) -> (f64, f64, f64, f64) {
-        (self.diffuse[0], self.diffuse[1], self.diffuse[2], self.diffuse[3])
+        color_tuple(self.diffuse)
     }
 
     #[setter]
@@ -6128,23 +6427,68 @@ impl PyMaterial {
         let color = py_to_color(value)?;
         self.diffuse = color;
         // A colour change is not a transparency change (upstream PR 11866): only
-        // the colour slot moves.
-        if let Some(owner) = &self.owner {
-            update_view_state(&owner.inner, owner.id, |state| match owner.slot {
-                MaterialSlot::Appearance(index) => state.set_appearance_slot(index, color),
-                MaterialSlot::Material => state.material = Some(color),
-            });
+        // the colour slot moves. An owned handle lives in a view state that keeps
+        // opacity in the alpha channel, so mirror that back into `Transparency`.
+        if self.owner.is_some() {
+            self.transparency = 1.0 - color[3];
+            self.write_color_back(color);
         }
         Ok(())
     }
 
+    #[getter]
+    fn AmbientColor(&self) -> (f64, f64, f64, f64) {
+        color_tuple(self.ambient)
+    }
+
+    #[setter]
+    fn set_AmbientColor(&mut self, value: &Bound<'_, PyAny>) -> PyResult<()> {
+        self.ambient = py_to_color(value)?;
+        Ok(())
+    }
+
+    #[getter]
+    fn SpecularColor(&self) -> (f64, f64, f64, f64) {
+        color_tuple(self.specular)
+    }
+
+    #[setter]
+    fn set_SpecularColor(&mut self, value: &Bound<'_, PyAny>) -> PyResult<()> {
+        self.specular = py_to_color(value)?;
+        Ok(())
+    }
+
+    #[getter]
+    fn EmissiveColor(&self) -> (f64, f64, f64, f64) {
+        color_tuple(self.emissive)
+    }
+
+    #[setter]
+    fn set_EmissiveColor(&mut self, value: &Bound<'_, PyAny>) -> PyResult<()> {
+        self.emissive = py_to_color(value)?;
+        Ok(())
+    }
+
+    /// `Shininess`: upstream stores it as a bare float, without clamping.
+    #[getter]
+    fn Shininess(&self) -> f64 {
+        self.shininess
+    }
+
+    #[setter]
+    fn set_Shininess(&mut self, value: f64) {
+        self.shininess = value;
+    }
+
     /// The material's transparency in `[0, 1]` (`Material.Transparency`).
     ///
-    /// Upstream keeps transparency separate from the diffuse colour and reports
-    /// it as the complement of the alpha channel.
+    /// Upstream keeps this independent of `DiffuseColor`'s alpha: writing one does
+    /// not change the other. The view state still stores one opacity per slot in
+    /// the colour alpha, so an owned handle converts between the two on the way in
+    /// and out.
     #[getter]
     fn Transparency(&self) -> f64 {
-        1.0 - self.diffuse[3]
+        self.transparency
     }
 
     #[setter]
@@ -6154,27 +6498,35 @@ impl PyMaterial {
                 "Transparency must be between 0.0 and 1.0",
             ));
         }
-        let mut color = self.diffuse;
-        color[3] = 1.0 - value;
-        self.diffuse = color;
-        if let Some(owner) = &self.owner {
-            update_view_state(&owner.inner, owner.id, |state| match owner.slot {
-                MaterialSlot::Appearance(index) => state.set_appearance_slot(index, color),
-                MaterialSlot::Material => state.material = Some(color),
-            });
+        self.transparency = value;
+        if self.owner.is_some() {
+            let mut color = self.diffuse;
+            color[3] = 1.0 - value;
+            self.write_color_back(color);
         }
         Ok(())
     }
 
     fn __eq__(&self, other: &Bound<'_, PyAny>) -> bool {
         match other.extract::<PyRef<'_, PyMaterial>>() {
-            Ok(o) => self.diffuse == o.diffuse,
+            Ok(other) => {
+                self.diffuse == other.diffuse
+                    && self.ambient == other.ambient
+                    && self.specular == other.specular
+                    && self.emissive == other.emissive
+                    && self.shininess == other.shininess
+                    && self.transparency == other.transparency
+            }
             Err(_) => false,
         }
     }
 
     fn __ne__(&self, other: &Bound<'_, PyAny>) -> bool {
         !self.__eq__(other)
+    }
+
+    fn __repr__(&self) -> String {
+        "<Material object>".to_string()
     }
 }
 
@@ -6306,15 +6658,24 @@ fn py_to_color(value: &Bound<'_, PyAny>) -> PyResult<[f64; 4]> {
 /// Coerce a `Material` or a colour.
 fn py_to_material_color(value: &Bound<'_, PyAny>) -> PyResult<[f64; 4]> {
     if let Ok(material) = value.extract::<PyRef<'_, PyMaterial>>() {
-        return Ok(material.diffuse);
+        // The view state keeps opacity in the alpha channel, while `Material`
+        // keeps it in the independent `Transparency` field (upstream's shape).
+        let mut color = material.diffuse;
+        color[3] = 1.0 - material.transparency;
+        return Ok(color);
     }
     py_to_color(value)
 }
 
 /// Coerce a list of materials (or colours); a single material becomes a 1-list.
 fn py_to_view_colors(value: &Bound<'_, PyAny>) -> PyResult<Vec<[f64; 4]>> {
+    let material_color = |material: &PyMaterial| {
+        let mut color = material.diffuse;
+        color[3] = 1.0 - material.transparency;
+        color
+    };
     if let Ok(material) = value.extract::<PyRef<'_, PyMaterial>>() {
-        return Ok(vec![material.diffuse]);
+        return Ok(vec![material_color(&material)]);
     }
     let iterator = value
         .try_iter()
@@ -6323,7 +6684,7 @@ fn py_to_view_colors(value: &Bound<'_, PyAny>) -> PyResult<Vec<[f64; 4]>> {
     for item in iterator {
         let item = item?;
         if let Ok(material) = item.extract::<PyRef<'_, PyMaterial>>() {
-            colors.push(material.diffuse);
+            colors.push(material_color(&material));
         } else {
             colors.push(py_to_color(&item)?);
         }

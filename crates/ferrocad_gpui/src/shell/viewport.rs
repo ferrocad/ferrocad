@@ -17,12 +17,67 @@ impl Shell {
             return;
         };
         match self.build_stage() {
-            Ok(stage) => viewport.update(cx, |viewport, cx| {
-                viewport.set_stage(stage);
-                cx.notify();
-            }),
+            Ok(stage) => {
+                // The Python view facade picks over exactly this stage; publish it with
+                // the entity → object names before the viewport takes ownership.
+                self.publish_stage(&stage);
+                viewport.update(cx, |viewport, cx| {
+                    viewport.set_stage(stage);
+                    cx.notify();
+                });
+                self.publish_camera(cx);
+            }
             Err(error) => self.console_line(format!("stage: {error}"), cx),
         }
+    }
+
+    /// Publish the camera the Python view facade reports (`getCameraNode`, …).
+    ///
+    /// The shell owns the camera and the facade cannot see an `InventorViewport`, so
+    /// the live camera is mirrored into `ferrocad_stage` (S4.1). Called from every
+    /// shell render and from each viewport event, so a script that runs in response to
+    /// a click sees the camera that click was made with.
+    pub(super) fn publish_camera(&self, cx: &App) {
+        let Some(viewport) = self.viewport.as_ref() else {
+            return;
+        };
+        ferrocad_stage_py::publish_camera(viewport.read(cx).camera().clone());
+    }
+
+    /// Publish the camera **and**, when nothing has been published yet, the stage.
+    ///
+    /// `enable_viewport` builds the first stage itself (it is the boot path), so the
+    /// stage the viewport is drawing may never have gone through [`sync_stage`]. This
+    /// render-path publish closes that gap once; afterwards `sync_stage` owns it, so a
+    /// frame never clones a stage.
+    pub(super) fn publish_view(&self, cx: &App) {
+        let Some(viewport) = self.viewport.as_ref() else {
+            return;
+        };
+        let viewport = viewport.read(cx);
+        ferrocad_stage_py::publish_camera(viewport.camera().clone());
+        if !ferrocad_stage_py::has_stage() {
+            self.publish_stage(viewport.stage());
+        }
+    }
+
+    /// Publish the compiled display stage and its entity → object names.
+    ///
+    /// `publish_stage` compiles the stage for the pick **once per sync** (not per pick),
+    /// so `getObjectsInfo` walks the same packets the viewport picks against. The
+    /// sub-element name tables come from the items themselves (the kernel
+    /// tessellation's `parts`).
+    pub(super) fn publish_stage(&self, stage: &Stage) {
+        let objects = stage
+            .items()
+            .iter()
+            .filter_map(|item| {
+                self.display
+                    .object_of(item.entity_id())
+                    .map(|name| (item.entity_id(), name.to_string()))
+            })
+            .collect();
+        ferrocad_stage_py::publish_stage(stage, objects, None);
     }
 
     /// Pull the registered overlay scenes into the viewport when the set changed (G5).
@@ -96,6 +151,9 @@ impl Shell {
     /// React to a viewport event: a click selection, a manipulator commit, or a
     /// gizmo drag.
     pub(super) fn on_viewport_event(&mut self, event: &ViewportEvent, cx: &mut Context<Self>) {
+        // The facade's camera snapshot is refreshed before anything can reach Python:
+        // a command or tool that reacts to this event reports the camera it happened in.
+        self.publish_camera(cx);
         match event {
             ViewportEvent::Selection(selection) => self.on_selection(selection, cx),
             ViewportEvent::Interaction(commit) => self.on_interaction(commit, cx),

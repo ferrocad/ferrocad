@@ -25,11 +25,21 @@ What is here today:
 * the **document views** — ``getDocument`` / ``activeDocument`` (and the lazy
   ``ActiveDocument``) return a ``GuiDocument``; ``ActiveView.getSceneGraph``
   returns a per-document ``pivy.coin.SoSeparator`` that scripts can mutate;
+* the **view facade** (S4.1/S4.3) — ``ActiveView`` answers the calls a canvas-first
+  workbench makes: ``getObjectsInfo``/``getObjectInfo`` (a ranked, occlusion-ordered
+  pick with the sub-element name), ``getPointOnScreen``, ``getViewDirection``,
+  ``getCameraNode``, ``getSize``, ``addEventCallbackPivy``/``removeEventCallbackPivy``
+  and ``updateGui``. The camera and stage are **published** by the shell into
+  ``ferrocad_stage`` (``set_view_camera``/``set_view_stage``) and read back here, so
+  the answers follow the live view rather than a frozen default;
 * the **headless form loader** — ``PySideUic.loadUi`` returns a proxy tree from
   ``ferrocad_ui_py`` (Q2a). The extension is imported lazily, so this module
   stays Qt-free and importable before it is built;
-* a **read-only selection snapshot** (``Selection.getSelection`` etc.), filled by
-  the shell;
+* the **selection** — ``Selection.getSelection`` / ``getSelectionEx`` read the
+  shell's snapshot, each entry a ``SelectionObject`` with ``Object``,
+  ``SubElementNames``, ``PickedPoints`` and ``ObjectName``; the writable half
+  (``addSelection``/``removeSelection``/``clearSelection``/``setPreselection``)
+  updates the snapshot and queues the operation for the shell;
 * the **headless window seam** — ``getMainWindow().getActiveWindow()`` returns
   the active document view (or a view without a scene graph), with the event
   callback slots, ``fitAll``, ``redraw`` and ``getPoint`` Draft's utilities ask
@@ -40,9 +50,11 @@ What is here today:
 * the private bridge helpers the app script calls (``_command_list``,
   ``_run``, ``_accept``, ``_cancel``) and the document-view cache helpers.
 
-What is still absent: ``ViewProvider`` (per-object view objects) and live view
-sync (camera, fit, redraw); those are later work. See
-``docs/workbenches/actions-and-tools.md`` and ``FreeCADGui/draft.py``.
+What is still absent: ``ViewProvider`` (per-object view objects), the live
+``Selection`` write-back into the viewport (writes queue for a shell that does not
+read ``_take_requests`` yet), and a camera-changed event (the shell publishes the
+camera while it draws; see ``publish_view``).
+See ``docs/workbenches/actions-and-tools.md`` and ``FreeCADGui/draft.py``.
 """
 
 from __future__ import annotations
@@ -158,34 +170,509 @@ def _detach_children(root) -> None:
             return
 
 
+def _stage_module():
+    """The ``ferrocad_stage`` extension, imported only when a view is asked a question.
+
+    The shell publishes the live camera and stage there (``set_view_camera`` /
+    ``set_view_stage``) and this module reads them back. ``import FreeCADGui`` must
+    keep working without the extension, so the import is lazy and a missing module
+    degrades to "no publication yet" instead of raising.
+    """
+    try:
+        import ferrocad_stage
+    except Exception as exc:  # noqa: BLE001 - degrade with a diagnostic
+        _report_view_once("ferrocad_stage", exc)
+        return None
+    return ferrocad_stage
+
+
+def _published_camera():
+    """The camera the shell (or a script) last published, or ``None``."""
+    module = _stage_module()
+    reader = getattr(module, "view_camera", None)
+    if reader is None:
+        return None
+    try:
+        return reader()
+    except Exception as exc:  # noqa: BLE001 - a broken publication is not a crash
+        _report_view_once("ferrocad_stage.view_camera", exc)
+        return None
+
+
+def _triple(point) -> tuple:
+    """``(x, y, z)`` from a Vector, an ``SbVec3f``-shaped value or a sequence."""
+    getter = getattr(point, "getValue", None)
+    if callable(getter):
+        point = getter()
+    if isinstance(point, (tuple, list)):
+        values = point
+    else:
+        values = (point.x, point.y, point.z)
+    if len(values) != 3:
+        raise ValueError("a world point needs three coordinates")
+    return (float(values[0]), float(values[1]), float(values[2]))
+
+
+class _Vec3:
+    """A read-only ``SbVec3f``-shaped triple.
+
+    Coin's ``getValue()`` is the spelling every workbench uses (``V(*near.getValue())``),
+    so it is here; the sequence and vector operators are for tools that skip it.
+    """
+
+    __slots__ = ("x", "y", "z")
+
+    def __init__(self, x, y, z):
+        self.x, self.y, self.z = float(x), float(y), float(z)
+
+    def getValue(self):
+        return (self.x, self.y, self.z)
+
+    def __iter__(self):
+        return iter((self.x, self.y, self.z))
+
+    def __len__(self):
+        return 3
+
+    def __getitem__(self, index):
+        return (self.x, self.y, self.z)[index]
+
+    def __sub__(self, other):
+        x, y, z = _triple(other)
+        return _Vec3(self.x - x, self.y - y, self.z - z)
+
+    def __repr__(self):
+        return f"({self.x:g}, {self.y:g}, {self.z:g})"
+
+
+class _Quaternion:
+    """A read-only ``SbRotation``-shaped value (``getValue()`` → ``(x, y, z, w)``)."""
+
+    __slots__ = ("_value",)
+
+    def __init__(self, values):
+        self._value = tuple(float(value) for value in values)
+
+    def getValue(self):
+        return self._value
+
+    def __iter__(self):
+        return iter(self._value)
+
+    def __repr__(self):
+        return "(%s)" % ", ".join(f"{value:g}" for value in self._value)
+
+
+class _Field:
+    """A read-only Coin field: ``getValue()`` returns the published value.
+
+    The camera belongs to the shell, so ``setValue`` is refused with a message that
+    names the honest route (the shell's view state) instead of silently doing nothing.
+    """
+
+    __slots__ = ("_name", "_value")
+
+    def __init__(self, name, value):
+        self._name = name
+        self._value = value
+
+    def getValue(self):
+        return self._value
+
+    def setValue(self, *_args):
+        raise RuntimeError(
+            f"the view camera is owned by the shell; camera.{self._name} is read-only here"
+        )
+
+    def __repr__(self):
+        return f"Field({self._name!r})"
+
+
+class _CameraType:
+    """A Coin ``SoType``-shaped camera type, compared by name.
+
+    ``isOfType`` must answer for the type id a caller got from ``pivy.coin`` (which
+    may be the real Coin or FerroCAD's facade), so the comparison is by name and
+    every camera type is also an ``SoCamera``.
+    """
+
+    __slots__ = ("_name",)
+
+    def __init__(self, name):
+        self._name = name
+
+    def getName(self):
+        return self._name
+
+    def isDerivedFrom(self, other):
+        name = _type_name(other)
+        return name == self._name or name == "SoCamera"
+
+    def __eq__(self, other):
+        return _type_name(other) == self._name
+
+    def __hash__(self):
+        return hash(self._name)
+
+    def __repr__(self):
+        return f"SoType({self._name})"
+
+
+def _type_name(type_id) -> str:
+    """The Coin type name of ``type_id`` (a string, an SoType or anything named)."""
+    getter = getattr(type_id, "getName", None)
+    if callable(getter):
+        try:
+            return str(getter())
+        except Exception:  # noqa: BLE001 - a foreign type object
+            pass
+    return str(type_id)
+
+
+class _ViewVolume:
+    """Coin's ``SbViewVolume`` as far as picking needs it.
+
+    ``projectPointToLine`` takes normalized viewport coordinates (``0..1``, **bottom-
+    left** origin, exactly as Coin does) and returns the near and far world points of
+    that line of sight.
+    """
+
+    __slots__ = ("_camera",)
+
+    def __init__(self, camera):
+        self._camera = camera
+
+    def projectPointToLine(self, point):
+        getter = getattr(point, "getValue", None)
+        values = getter() if callable(getter) else tuple(point)
+        if len(values) < 2:
+            raise ValueError("projectPointToLine needs normalized (x, y)")
+        ray = self._camera.ray(float(values[0]), float(values[1]))
+        if ray is None:
+            raise RuntimeError("the view camera has no invertible view-projection")
+        near, far = ray
+        return _Vec3(*near), _Vec3(*far)
+
+    def __repr__(self):
+        return "SbViewVolume"
+
+
+class _CameraNode:
+    """A snapshot of the shell's camera, shaped like a Coin ``SoCamera``.
+
+    ``pivy.coin`` in FerroCAD's build has no camera classes, so the facade presents the
+    published camera with the members a workbench actually reads: ``position``,
+    ``orientation``, ``focalDistance``, ``height``, ``heightAngle``, ``aspectRatio``,
+    ``getTypeId``/``isOfType`` and ``getViewVolume``. Ask the view for it again after
+    the camera moves; each node is a snapshot.
+    """
+
+    __slots__ = ("_camera",)
+
+    def __init__(self, camera):
+        self._camera = camera
+
+    @property
+    def position(self):
+        return _Field("position", _Vec3(*self._camera.position))
+
+    @property
+    def orientation(self):
+        return _Field("orientation", _Quaternion(self._camera.orientation))
+
+    @property
+    def focalDistance(self):
+        return _Field("focalDistance", self._camera.focal_distance)
+
+    @property
+    def height(self):
+        return _Field("height", self._camera.height)
+
+    @property
+    def heightAngle(self):
+        return _Field("heightAngle", self._camera.height_angle)
+
+    @property
+    def aspectRatio(self):
+        return _Field("aspectRatio", self._camera.aspect_ratio)
+
+    def getField(self, name):
+        """The named field, or ``None`` — Coin returns ``None`` for an unknown name."""
+        if name in ("position", "orientation", "focalDistance", "height", "heightAngle", "aspectRatio"):
+            return getattr(self, name)
+        return None
+
+    def getViewVolume(self, aspect=None):
+        """The view volume (``aspect`` is accepted for Coin compatibility)."""
+        del aspect
+        return _ViewVolume(self._camera)
+
+    def getTypeId(self):
+        """The camera type: ``SoPerspectiveCamera`` or ``SoOrthographicCamera``."""
+        return _CameraType(
+            "SoOrthographicCamera" if self._camera.is_orthographic else "SoPerspectiveCamera"
+        )
+
+    def isOfType(self, type_id):
+        """Whether this camera is ``type_id`` (a Coin ``SoType``, by name)."""
+        name = _type_name(type_id)
+        if name == "SoCamera":
+            return True
+        return name == _type_name(self.getTypeId())
+
+    def getSize(self):
+        return tuple(self._camera.size)
+
+    def __repr__(self):
+        return f"SoCamera({_type_name(self.getTypeId())}, position={_Vec3(*self._camera.position)})"
+
+
+class _EventCallback:
+    """A Coin ``SoEventCallback``-shaped handle for ``addEventCallbackPivy``.
+
+    The callback receives this object, so ``callback.getEvent()`` and
+    ``callback.setHandled()`` are the Coin spellings a tool already uses. The event is
+    only present while the shell is dispatching it: this facade never invents one.
+    """
+
+    __slots__ = ("_node", "_registration", "data", "handled")
+
+    def __init__(self, node, registration, data=None):
+        self._node = node
+        self._registration = registration
+        self.data = data
+        self.handled = False
+
+    def getEvent(self):
+        if self._node is None:
+            return None
+        return self._node.getEvent()
+
+    def getPickedPoint(self):
+        if self._node is None:
+            return None
+        return self._node.getPickedPoint()
+
+    def getAction(self):
+        """Coin's action is not modelled; the shell delivers events, not actions."""
+        return None
+
+    def setHandled(self, *_args):
+        """Mark the event consumed (the shell decides what a consumed event stops)."""
+        self.handled = True
+
+    def __repr__(self):
+        return f"SoEventCallback({self._registration.name!r})"
+
+
+class _PivyRegistration:
+    """One ``addEventCallbackPivy`` registration.
+
+    ``SoEventCallback`` has no ``removeEventCallback`` in FerroCAD's Coin facade, so a
+    removed registration stays on the node as a wrapper that forwards nothing. The
+    wrapper count is bounded by add/remove cycles, not by events.
+    """
+
+    __slots__ = ("view", "name", "callback", "active", "data", "handle")
+
+    def __init__(self, view, name, callback, data=None):
+        self.view = view
+        self.name = name
+        self.callback = callback
+        self.data = data
+        self.active = True
+        self.handle = None
+
+    def deactivate(self):
+        self.active = False
+
+    def dispatch(self, *_args):
+        """Forward one event to the user callback (no-op once removed).
+
+        The callback receives the :class:`_EventCallback` handle, not the Coin node:
+        that is the object ``getEvent``/``setHandled`` are documented on, and the one
+        the caller keeps for ``removeEventCallbackPivy``.
+        """
+        if not self.active:
+            return
+        self.callback(self.handle)
+
+    def __repr__(self):
+        return f"SoEventCallback({self.name!r}, active={self.active})"
+
+
 class View3DInventor:
     """A document's 3D view, shaped like upstream's ``View3DInventor``.
 
-    ``getSceneGraph`` is the real surface: enough for a script to attach a Coin
-    node. The remaining members are the headless half of the view protocol that
-    ``draftutils.gui_utils.get_3d_view`` and Draft's Snapper reach for:
-    event callbacks are stored in this view, ``fitAll``/``redraw`` report that
-    the request was accepted, and ``getPoint`` defers to the Snapper session
-    driver. There is no camera to move, so fitting and redrawing are request
-    bookkeeping rather than rendering.
+    ``getSceneGraph`` is the real Coin surface: enough for a script to attach a node.
+    The rest of the view protocol falls into two halves:
+
+    * **the published view** — ``getCameraNode``, ``getViewDirection``,
+      ``getPointOnScreen``, ``getSize``, ``getObjectsInfo`` and ``getObjectInfo`` read
+      the camera and stage the shell **publishes** into ``ferrocad_stage``
+      (``set_view_camera``/``set_view_stage``). They are not frozen defaults: a
+      published camera answers each call, and a headless script or test publishes its
+      own the same way. With nothing published ``getCameraNode`` is ``None`` and
+      ``getViewDirection`` reports ``-Z``; a screen query then raises, because no
+      camera means no honest projection.
+    * **request bookkeeping** — ``fitAll``, ``redraw`` and ``updateGui`` record the
+      request (there is no window here; the shell paints from its own state), and the
+      event callbacks keep the Coin-shaped registrations a tool adds.
     """
 
     def __init__(self, document: "GuiDocument") -> None:
         self._document = document
-        # FreeCADGui's view protocol: event name -> callbacks.
+        # FreeCADGui's view protocol: event name -> callbacks (the string spelling).
         self._event_callbacks: dict = {}
+        # The Pivy spelling: Coin event type ids, wired to one `SoEventCallback` node.
+        self._pivy: list = []
+        self._pivy_node = None
+        self._pivy_attached = False
         self._fits: int = 0
         self._redraws: int = 0
+        self._updates: int = 0
+
+    # -- the scene graph ----------------------------------------------------
 
     def getSceneGraph(self):
         """The document's scene root (``None`` when Coin is unavailable)."""
         return self._document._scene_graph()
 
-    def addEventCallback(self, name, callback) -> None:
-        """Register ``callback`` for the Coin event ``name``.
+    # -- the published view -------------------------------------------------
 
-        Coin is absent in a headless build, so the callbacks are kept here for
-        the shell/tests to drain; no event is ever emitted by this view.
+    def _document_name(self) -> str:
+        """The name the pick dictionaries report as ``Document``."""
+        name = getattr(self._document, "Name", None)
+        if isinstance(name, str) and name:
+            return name
+        document = FreeCAD.ActiveDocument
+        name = getattr(document, "Name", None)
+        return name if isinstance(name, str) else ""
+
+    def getCameraNode(self):
+        """The published camera as a Coin-``SoCamera``-shaped snapshot, or ``None``.
+
+        Ask again after the camera moves: each call returns a fresh snapshot of the
+        camera the shell last published.
+        """
+        camera = _published_camera()
+        if camera is None:
+            return None
+        return _CameraNode(camera)
+
+    def getViewDirection(self):
+        """The world direction the camera looks along.
+
+        ``-Z`` when nothing has been published, which is the direction a fresh
+        FerroCAD view looks along; a published camera is always authoritative.
+        """
+        camera = _published_camera()
+        if camera is None:
+            return FreeCAD.Vector(0.0, 0.0, -1.0)
+        return FreeCAD.Vector(*camera.direction)
+
+    def getPointOnScreen(self, point):
+        """Project a world point to device pixels (bottom-left origin).
+
+        ``None`` when the point is behind the eye (a perspective point on the ``w = 0``
+        plane has no screen position). Raises ``RuntimeError`` when no camera has been
+        published, because any answer would be invented.
+        """
+        camera = self._require_camera("getPointOnScreen")
+        projected = camera.project(_triple(point))
+        return None if projected is None else (projected[0], projected[1])
+
+    def getSize(self):
+        """The device-pixel viewport size, or ``(0, 0)`` when unknown."""
+        camera = _published_camera()
+        return tuple(camera.size) if camera is not None else (0, 0)
+
+    def getObjectsInfo(self, pos):
+        """Every sub-element under device pixel ``pos``, nearest first.
+
+        Each entry is a plain dict shaped like upstream's:
+        ``{'Document', 'Object', 'Component', 'x', 'y', 'z'}``. The list is a real
+        ranking: hits are ordered by distance along the ray, one entry per
+        ``(object, sub-element)`` — the occlusion stack a tool sorts its own
+        candidates from.
+
+        Two limits are deliberate. A hit reports **the stage the shell drew**, so a
+        transient preview and the grid are never picked, exactly as a click sees it.
+        And a ``SC_Support`` profile is not promoted here: that priority belongs to the
+        document, and keeping the list ordered lets the caller apply it (SimpleCAD's
+        ``pick`` does).
+        """
+        return [
+            {
+                "Document": self._document_name(),
+                "Object": hit.object,
+                "Component": hit.part or "",
+                "x": hit.point[0],
+                "y": hit.point[1],
+                "z": hit.point[2],
+            }
+            for hit in self._pick_hits(pos)
+            if hit.object
+        ]
+
+    def getObjectInfo(self, pos):
+        """The nearest entry :meth:`getObjectsInfo` would return, or ``None``."""
+        hits = self.getObjectsInfo(pos)
+        return hits[0] if hits else None
+
+    def _pick_hits(self, pos):
+        """The ranked picks under ``pos`` from the published stage."""
+        module = _stage_module()
+        picker = getattr(module, "pick_at", None)
+        if picker is None:
+            return []
+        try:
+            x, y = int(pos[0]), int(pos[1])
+        except (TypeError, IndexError, ValueError) as exc:
+            raise ValueError("a pick position needs (x, y) device pixels") from exc
+        return picker(x, y)
+
+    def _require_camera(self, what: str):
+        camera = _published_camera()
+        if camera is None:
+            raise RuntimeError(
+                f"{what} needs a view camera; none has been published. The shell "
+                "publishes it while it draws, and a script can publish one with "
+                "ferrocad_stage.set_view_camera(...)"
+            )
+        return camera
+
+    # -- redraw and fit -----------------------------------------------------
+
+    def fitAll(self):
+        """Accept a fit request (fitting is the shell's; nothing moves here)."""
+        self._fits += 1
+        return True
+
+    def redraw(self):
+        """Accept a redraw request (the shell repaints from its own state)."""
+        self._redraws += 1
+        return True
+
+    def updateGui(self):
+        """Request a repaint (upstream ``Gui.updateGui``).
+
+        A preview change asks the view to show it; the request is recorded here and
+        counted globally (``FreeCADGui._take_update_requests``) because a script
+        cannot repaint the shell's window itself.
+        """
+        global _UPDATE_REQUESTS
+        _UPDATE_REQUESTS += 1
+        self._updates += 1
+        return True
+
+    # -- the string-keyed callback registry --------------------------------
+
+    def addEventCallback(self, name, callback) -> None:
+        """Register ``callback`` for the event ``name``.
+
+        Coin is absent in a headless build, so the callbacks are kept here for the
+        shell/tests to drain; no event is ever emitted by this view.
         """
         if not isinstance(name, str) or not name:
             raise ValueError("an event callback name must be a non-empty string")
@@ -206,15 +693,112 @@ class View3DInventor:
             del self._event_callbacks[name]
         return True
 
-    def fitAll(self):
-        """Accept a fit request (there is no camera in a headless view)."""
-        self._fits += 1
+    # -- the Pivy spelling --------------------------------------------------
+
+    def addEventCallbackPivy(self, event_type, callback, data=None):
+        """``view.addEventCallbackPivy(SoEvent.getClassTypeId(), cb)``.
+
+        This is the Coin spelling the controller uses. The registration is wired to an
+        ``SoEventCallback`` node in the document's scene graph, so the shell's event
+        dispatch reaches it exactly as it reaches a scene graph a workbench built; the
+        callback receives an :class:`_EventCallback` handle with ``getEvent``,
+        ``getPickedPoint`` and ``setHandled``. Returns that handle, which is what
+        :meth:`removeEventCallbackPivy` takes back.
+
+        Without Coin (or without ``SoEventCallback`` in the installed facade) the
+        registration is kept on the view for the host to drive; it still returns a
+        handle, and no event is invented.
+        """
+        if not callable(callback):
+            raise TypeError("an event callback must be callable")
+        name = _type_name(
+            event_type.getClassTypeId()
+            if callable(getattr(event_type, "getClassTypeId", None))
+            else event_type
+        )
+        registration = _PivyRegistration(self, name, callback, data)
+        node = self._callback_node()
+        handle = _EventCallback(node, registration, data)
+        registration.handle = handle
+        if node is not None:
+            try:
+                node.addEventCallback(event_type, registration.dispatch)
+            except Exception as exc:  # noqa: BLE001 - a foreign Coin facade
+                _report_view_once("pivy.coin.SoEventCallback.addEventCallback", exc)
+            else:
+                self._attach_callback_node()
+        self._pivy.append(registration)
+        return handle
+
+    def removeEventCallbackPivy(self, event_type, callback):
+        """Undo :meth:`addEventCallbackPivy`; returns whether it was registered.
+
+        ``callback`` is the handle that call returned (the user callback itself is
+        accepted too). The ``SoEventCallback`` node stays in the scene graph: the Coin
+        facade has no per-callback removal, so the removed registration forwards
+        nothing and the node's wrapper count grows by one per add/remove cycle
+        instead of per event.
+        """
+        name = _type_name(
+            event_type.getClassTypeId()
+            if callable(getattr(event_type, "getClassTypeId", None))
+            else event_type
+        )
+        registration = getattr(callback, "_registration", None)
+        if registration is None:
+            registration = next(
+                (
+                    entry
+                    for entry in self._pivy
+                    if (entry.callback is callback or entry.callback == callback)
+                    and entry.name == name
+                ),
+                None,
+            )
+        if registration is None or not registration.active:
+            return False
+        registration.deactivate()
+        try:
+            self._pivy.remove(registration)
+        except ValueError:
+            pass
         return True
 
-    def redraw(self):
-        """Accept a redraw request (the shell repaints from the scene graph)."""
-        self._redraws += 1
-        return True
+    def _callback_node(self):
+        """The view's single ``SoEventCallback`` node, created on first use."""
+        if self._pivy_node is not None:
+            return self._pivy_node
+        coin = _coin_module()
+        factory = getattr(coin, "SoEventCallback", None) if coin is not None else None
+        if factory is None:
+            return None
+        try:
+            self._pivy_node = factory()
+        except Exception as exc:  # noqa: BLE001 - report, keep the registry
+            _report_view_once("pivy.coin.SoEventCallback", exc)
+            return None
+        return self._pivy_node
+
+    def _attach_callback_node(self) -> None:
+        """Put the callback node in the scene graph and refresh the shell's copy."""
+        if self._pivy_node is None:
+            return
+        root = self.getSceneGraph()
+        if root is None:
+            return
+        if not self._pivy_attached:
+            try:
+                root.addChild(self._pivy_node)
+            except Exception as exc:  # noqa: BLE001 - report, keep the registry
+                _report_view_once("pivy.coin.SoEventCallback.addChild", exc)
+                return
+            self._pivy_attached = True
+        # An overlay is a copy: re-register the root so the shell compiles the node.
+        register = getattr(self._document, "_register_overlay", None)
+        if callable(register):
+            register()
+
+    # -- the Snapper point session -----------------------------------------
 
     def getPoint(self, callback=None, *args):
         """Start a Snapper point session on this view.
@@ -514,6 +1098,34 @@ def getMainWindow():
     return _MAIN_WINDOW
 
 
+#: Repaint requests made through ``FreeCADGui.updateGui`` since the host last took
+#: them. The shell owns the window, so this is a request count, not a paint.
+_UPDATE_REQUESTS: int = 0
+
+
+def updateGui() -> None:
+    """Request a repaint (upstream ``Gui.updateGui``).
+
+    A command that changed a preview calls this so the view shows it. FerroCAD has no
+    Python-visible window: the request is recorded on the active view and counted
+    globally (``_take_update_requests``), and the shell's next paint shows the change
+    from its own state. Nothing here can wake a window.
+    """
+    global _UPDATE_REQUESTS
+    updater = getattr(getMainWindow().getActiveWindow(), "updateGui", None)
+    if callable(updater):
+        updater()
+    else:
+        _UPDATE_REQUESTS += 1
+
+
+def _take_update_requests() -> int:
+    """Consume and return the repaint requests made since the last call."""
+    global _UPDATE_REQUESTS
+    count, _UPDATE_REQUESTS = _UPDATE_REQUESTS, 0
+    return count
+
+
 #: Set when the Draft extension could not be installed at the end of this module.
 _DRAFT_IMPORT_ERROR = None
 
@@ -759,50 +1371,269 @@ def _cancel_all() -> None:
 
 
 # ---------------------------------------------------------------------------
-# Selection (read-only; writes arrive with the multi-selection service)
+# Selection (a snapshot the shell pushes; writes are queued for it)
 # ---------------------------------------------------------------------------
 
 
-class _Selection:
-    """A snapshot of what the shell has selected.
+class SelectionObject:
+    """One selected object, shaped like upstream's ``Gui.SelectionObject``.
 
-    The facade keeps no document state; this is UI state, pushed by the shell
-    after each viewport selection. Entries are ``(object name, [subelements])``.
+    ``Object`` is the document object itself, ``SubElementNames`` the picked
+    sub-elements (``["Face6"]``; empty for the whole object), ``PickedPoints`` the
+    world points the picks landed on (as far as the source knew them), and
+    ``ObjectName`` the object's internal name.
+
+    It unpacks as ``(Object, SubElementNames)``, so code written against the older
+    tuple snapshot keeps working.
+    """
+
+    # Declared for the generated reference; `__init__` always sets the instance
+    # attributes (`api_docs` documents what a class declares, not what it assigns).
+    Object = None
+    SubElementNames = None
+    PickedPoints = None
+    ObjectName = None
+
+    def __init__(self, object, subelement_names=None, picked_points=None):
+        self.Object = object
+        self.SubElementNames = [str(name) for name in (subelement_names or [])]
+        self.PickedPoints = list(picked_points or [])
+        name = object if isinstance(object, str) else getattr(object, "Name", "")
+        self.ObjectName = name if isinstance(name, str) else ""
+
+    @property
+    def HasSubObjects(self) -> bool:
+        """Whether the selection names sub-elements (upstream's alias)."""
+        return bool(self.SubElementNames)
+
+    def __iter__(self):
+        return iter((self.Object, self.SubElementNames))
+
+    def __len__(self):
+        return 2
+
+    def __getitem__(self, index):
+        return (self.Object, self.SubElementNames)[index]
+
+    def __eq__(self, other):
+        if isinstance(other, SelectionObject):
+            return (
+                self.Object == other.Object
+                and self.SubElementNames == other.SubElementNames
+                and self.PickedPoints == other.PickedPoints
+            )
+        return NotImplemented
+
+    def __repr__(self):
+        return f"SelectionObject({self.ObjectName!r}, {self.SubElementNames!r})"
+
+
+class _Selection:
+    """What the shell has selected, in upstream's shape.
+
+    The shell owns the selection and pushes it (``_set``) after every viewport
+    change, so ``getSelection``/``getSelectionEx`` always read the live document. The
+    writable half (``addSelection``/``removeSelection``/``clearSelection``/
+    ``setPreselection``) applies to this snapshot **and** queues the operation for the
+    shell (``_take_requests``): Python cannot command the viewport synchronously, and
+    silently pretending the viewport changed would be a lie.
+
+    An entry is ``(name, [sub-elements], [picked points])``; the pushed snapshot
+    carries no picked points, so a shell-made selection reports an empty
+    ``PickedPoints`` unless the writer supplied one.
     """
 
     def __init__(self) -> None:
-        self._pairs: list = []
+        self._entries: list = []
+        self._preselection = None
+        self._requests: list = []
 
-    def _objects(self) -> list:
-        doc = FreeCAD.ActiveDocument
+    # -- reads --------------------------------------------------------------
+
+    def _document(self, doc=None):
         if doc is None:
+            return FreeCAD.ActiveDocument
+        if isinstance(doc, str):
+            return FreeCAD.getDocument(doc)
+        return doc
+
+    def _objects(self, doc=None, object_name=None) -> list:
+        document = self._document(doc)
+        if document is None:
             return []
         resolved = []
-        for name, elements in self._pairs:
-            obj = doc.getObject(name)
+        for name, elements, points in self._entries:
+            if object_name is not None and name != object_name:
+                continue
+            obj = document.getObject(name)
             if obj is not None:
-                resolved.append((obj, list(elements)))
+                resolved.append(SelectionObject(obj, elements, points))
         return resolved
 
-    def getSelection(self) -> list:
+    def getSelection(self, doc=None) -> list:
         """The selected document objects (upstream ``Gui.Selection``)."""
-        return [obj for obj, _ in self._objects()]
+        return [item.Object for item in self._objects(doc)]
 
-    def getSelectionEx(self) -> list:
-        """``[(object, [subelement names])]`` for the current selection."""
-        return self._objects()
+    def getSelectionEx(self, object_name=None, doc=None) -> list:
+        """The selection as :class:`SelectionObject` items.
 
-    def isSelected(self, obj) -> bool:
-        """Whether ``obj`` (or an object name) is in the selection."""
+        An item's ``.Object``/``.SubElementNames``/``.PickedPoints`` are the upstream
+        members, and unpacking one as ``(object, elements)`` still works.
+        """
+        return self._objects(doc, object_name)
+
+    def isSelected(self, obj, subname=None) -> bool:
+        """Whether ``obj`` (or an object name) is in the selection.
+
+        With ``subname``, only a selection of that sub-element (or of the whole
+        object) answers ``True``.
+        """
         name = obj if isinstance(obj, str) else getattr(obj, "Name", None)
-        return any(candidate == name for candidate, _ in self._pairs)
+        for candidate, elements, _ in self._entries:
+            if candidate != name:
+                continue
+            if subname is None or not elements or subname in elements:
+                return True
+        return False
+
+    # -- writes (applied here, queued for the shell) ------------------------
+
+    def addSelection(self, obj, subname=None, point=None, doc=None) -> bool:
+        """Add ``obj`` (with optional sub-elements) to the selection.
+
+        ``subname`` is a name or a list of names. ``point`` is the world point the
+        pick landed on (a Vector, or a list of them, one per sub-element). An object
+        the document does not have is ignored and reported as ``False``: the facade
+        never invents an object.
+        """
+        document = self._document(doc)
+        name = obj if isinstance(obj, str) else getattr(obj, "Name", None)
+        if document is None or not name or document.getObject(name) is None:
+            return False
+        elements = _names(subname)
+        points = _points(point)
+        for index, entry in enumerate(self._entries):
+            if entry[0] != name:
+                continue
+            merged = list(entry[1])
+            merged.extend(element for element in elements if element not in merged)
+            if not elements:
+                merged = []  # a whole-object add wins over a stale sub-element list
+            self._entries[index] = (name, merged, list(entry[2]) + points)
+            break
+        else:
+            self._entries.append((name, elements, points))
+        self._requests.append(
+            {"op": "add", "object": name, "elements": elements, "points": points}
+        )
+        return True
+
+    def removeSelection(self, obj, subname=None, doc=None) -> bool:
+        """Remove ``obj`` (or just ``subname``) from the selection."""
+        del doc
+        name = obj if isinstance(obj, str) else getattr(obj, "Name", None)
+        elements = _names(subname)
+        changed = False
+        for index, (candidate, current, points) in enumerate(list(self._entries)):
+            if candidate != name:
+                continue
+            if not elements:
+                self._entries.pop(index)
+                changed = True
+            else:
+                remaining = [element for element in current if element not in elements]
+                if remaining != current:
+                    self._entries[index] = (candidate, remaining, points)
+                    changed = True
+            break
+        if changed:
+            self._requests.append(
+                {"op": "remove", "object": name, "elements": elements, "points": []}
+            )
+        return changed
+
+    def clearSelection(self, doc=None) -> None:
+        """Clear the selection (``doc`` limits it to one document's objects)."""
+        if doc is None:
+            self._entries = []
+        else:
+            document = self._document(doc)
+            names = {
+                obj.Name
+                for obj in (getattr(document, "Objects", None) or [])
+            }
+            self._entries = [entry for entry in self._entries if entry[0] not in names]
+        self._requests.append({"op": "clear", "object": "", "elements": [], "points": []})
+
+    def setPreselection(self, obj, subname=None, point=None) -> None:
+        """Set the preselection (the object the pointer is over)."""
+        name = obj if isinstance(obj, str) else getattr(obj, "Name", None)
+        self._preselection = (name, _names(subname), _points(point))
+        self._requests.append(
+            {
+                "op": "preselect",
+                "object": name or "",
+                "elements": self._preselection[1],
+                "points": self._preselection[2],
+            }
+        )
+
+    def getPreselection(self):
+        """The preselection as a :class:`SelectionObject`, or ``None``."""
+        if self._preselection is None:
+            return None
+        name, elements, points = self._preselection
+        document = FreeCAD.ActiveDocument
+        obj = document.getObject(name) if document is not None and name else None
+        if obj is None:
+            return None
+        return SelectionObject(obj, elements, points)
+
+    # -- the shell bridge ---------------------------------------------------
 
     def _set(self, pairs) -> None:
-        """Replace the snapshot (called by the shell bridge)."""
-        self._pairs = [
-            (str(name), [str(element) for element in (elements or [])])
-            for name, elements in pairs
-        ]
+        """Replace the snapshot (called by the shell bridge).
+
+        Accepts ``(name, elements)`` pairs or ``(name, elements, points)`` triples, so
+        the existing shell push keeps working and a future one can carry the picked
+        points without a second entry point. Writes made here are **not** queued: the
+        snapshot is the shell's answer, not a request back to it.
+        """
+        entries = []
+        for entry in pairs:
+            name, elements = entry[0], entry[1]
+            points = entry[2] if len(entry) > 2 else None
+            entries.append((str(name), _names(elements), _points(points)))
+        self._entries = entries
+        self._preselection = None
+
+    def _take_requests(self) -> list:
+        """Consume the queued writes for the shell to apply to the viewport."""
+        requests, self._requests = self._requests, []
+        return requests
+
+
+def _names(subname) -> list:
+    """A sub-element selection as a list of names (``None`` → the whole object)."""
+    if subname is None:
+        return []
+    if isinstance(subname, str):
+        return [subname] if subname else []
+    return [str(name) for name in subname if str(name)]
+
+
+def _points(point) -> list:
+    """A picked point (or a list of them) in the caller's own vector type."""
+    if point is None:
+        return []
+    if isinstance(point, (str, bytes)):
+        raise TypeError("a picked point must be a world point, not a string")
+    if hasattr(point, "x") and hasattr(point, "y") and hasattr(point, "z"):
+        return [point]
+    try:
+        return [candidate for candidate in point]
+    except TypeError:
+        return [point]
 
 
 Selection = _Selection()

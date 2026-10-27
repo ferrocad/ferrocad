@@ -461,6 +461,9 @@ impl Shell {
         }
         // The mirror above makes `IsChecked` see the new state.
         self.refresh_commands(cx);
+        // A projection or zoom change is a camera change: republish it for the Python
+        // view facade before any command can ask where the camera is.
+        self.publish_camera(cx);
         // A `{"view": …}` outcome is also how the fork says "the overlay tree changed"
         // (`grid_overlay`); pull it in without waiting for the next document refresh.
         self.sync_overlays(cx);

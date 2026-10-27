@@ -40,6 +40,8 @@ ferrocad_types.workspace = true
 pyo3 = { version = "0.25", features = ["abi3-py311"] }
 
 [dev-dependencies]
+# The tests build a kernel-shaped `Tessellation` to give an item a part-name table.
+ferrocad_geom.workspace = true
 # `auto-initialize` lets the boot tests embed CPython.
 pyo3 = { version = "0.25", features = ["abi3-py311", "auto-initialize"] }
 

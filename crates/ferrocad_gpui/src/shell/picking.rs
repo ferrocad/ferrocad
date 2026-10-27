@@ -119,6 +119,10 @@ impl Shell {
         let Some(viewport) = self.viewport.as_ref() else {
             return String::new();
         };
+        // Every shell render publishes the camera: an orbit or a zoom moves it without
+        // telling the shell, and the next render is the first point a Python call can
+        // observe it. This is the freshness the view facade's getCameraNode relies on.
+        self.publish_view(cx);
         let report = viewport.read(cx).hover_report();
         let target = report
             .target

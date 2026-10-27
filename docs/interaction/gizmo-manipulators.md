@@ -713,7 +713,7 @@ re-selection.
 
 `mods/GizmoOverlay` registers the `gizmo`/`ferrocad` provider and `FerroCAD.Gizmo`
 writes the thirteen stored values, returning `FerroCAD.Gizmo.apply()` as the view request.
-See [`../tasks/settings-model.md`](../tasks/settings-model.md) §S4c.
+See [`../tasks/settings-model.md`](../record/tasks/settings-model.md) §S4c.
 
 Covered by `ferrocad_stage`'s `a_style_ghost_alpha_reaches_every_handle` and
 `a_custom_ghost_alpha_scales_both_ghost_packets`, `ferrocad_viewport`'s

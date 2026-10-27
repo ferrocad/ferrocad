@@ -31,6 +31,7 @@ mod shape;
 mod snap;
 mod stage;
 mod tool;
+mod view;
 mod workplane;
 
 pub use camera::Camera;
@@ -41,6 +42,9 @@ pub use shape::ShapeItem;
 pub use snap::{Snap, SnapCandidate, SnapContext, SnapKind};
 pub use stage::{Stage, extract_stage};
 pub use tool::{PyTool, Tool, extract_tool};
+pub use view::{
+    PickHit, clear_view, has_stage, publish_camera, publish_stage, published_camera,
+};
 pub use workplane::{Workplane, WorkplaneKind};
 
 /// The `ferrocad_stage` extension module (the surface of `ferrocad.stage`).
@@ -57,6 +61,7 @@ pub fn ferrocad_stage(m: &Bound<'_, PyModule>) -> PyResult<()> {
     gizmo::register(m)?;
     workplane::register(m)?;
     snap::register(m)?;
+    view::register(m)?;
     Ok(())
 }
 

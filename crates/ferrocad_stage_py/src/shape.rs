@@ -61,10 +61,46 @@ impl ShapeItem {
         Ok(())
     }
 
+    /// Replace the tessellation **and** tag each position with its sub-element id.
+    ///
+    /// `parts` is indexed by position (the kernel's per-corner sub-element id); a
+    /// shorter (or empty) list leaves the remaining positions at part `0`. This is the
+    /// half of `set_shape` a pick needs: a hit's `part_idx` is a position's tag.
+    #[pyo3(signature = (positions, normals=None, triangles=None, edges=None, parts=None))]
+    fn set_mesh(
+        &mut self,
+        py: Python<'_>,
+        positions: &Bound<'_, PyAny>,
+        normals: Option<&Bound<'_, PyAny>>,
+        triangles: Option<&Bound<'_, PyAny>>,
+        edges: Option<&Bound<'_, PyAny>>,
+        parts: Option<&Bound<'_, PyAny>>,
+    ) -> PyResult<()> {
+        let positions = ingest_vec3(py, positions, "positions")?;
+        let normals = opt_vec3(py, normals, "normals")?;
+        let triangles = opt_u32(py, triangles, "triangles")?;
+        let edges = opt_u32(py, edges, "edges")?;
+        let parts = opt_u32(py, parts, "parts")?;
+        self.inner.set_mesh(positions, normals, triangles, edges, parts);
+        Ok(())
+    }
+
     /// The pick id.
     #[getter]
     fn entity_id(&self) -> u32 {
         self.inner.entity_id()
+    }
+
+    /// The sub-element name table (`part id → "Face6"`).
+    #[getter]
+    fn part_names(&self) -> Vec<String> {
+        self.inner.part_names().to_vec()
+    }
+
+    /// The per-position sub-element ids (empty when untagged).
+    #[getter]
+    fn parts(&self) -> Vec<u32> {
+        self.inner.parts().to_vec()
     }
 
     /// The display mode.

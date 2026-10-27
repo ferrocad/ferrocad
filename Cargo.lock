@@ -2474,6 +2474,7 @@ dependencies = [
 name = "ferrocad_stage_py"
 version = "0.1.4"
 dependencies = [
+ "ferrocad_geom",
  "ferrocad_graphics",
  "ferrocad_stage",
  "ferrocad_types",
@@ -2544,7 +2545,10 @@ dependencies = [
  "ferrocad_inventor",
  "ferrocad_stage",
  "ferrocad_types",
+ "image",
  "naga",
+ "serde",
+ "serde_json",
  "wgpu",
 ]
 

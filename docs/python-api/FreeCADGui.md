@@ -24,6 +24,7 @@ _`Selection` is a read-only snapshot pushed by the shell._
 | `removeCommand(name: str) -> None` | Drop ``name`` from the registry (a no-op when absent). |
 | `removeDocumentObserver(observer) -> bool` | Remove a GUI document observer; returns whether it was registered. |
 | `runCommand(name: str, *args)` | Invoke ``name`` and return whatever ``Activated`` returned. |
+| `updateGui() -> None` | Request a repaint (upstream ``Gui.updateGui``). |
 
 ## Class `GuiDocument`
 
@@ -41,6 +42,18 @@ One status-bar hint: ``text`` plus any formatting ``args``.
 | --- | --- |
 | `args` (attribute) | — |
 | `text` (attribute) | — |
+
+## Class `SelectionObject`
+
+One selected object, shaped like upstream's ``Gui.SelectionObject``.
+
+| Member | Summary |
+| --- | --- |
+| `HasSubObjects` (property) | Whether the selection names sub-elements (upstream's alias). |
+| `Object` (attribute) | — |
+| `ObjectName` (attribute) | — |
+| `PickedPoints` (attribute) | — |
+| `SubElementNames` (attribute) | — |
 
 ## Class `UserInput`
 
@@ -62,12 +75,21 @@ A document's 3D view, shaped like upstream's ``View3DInventor``.
 
 | Member | Summary |
 | --- | --- |
-| addEventCallback(name, callback) -> None | Register ``callback`` for the Coin event ``name``. |
-| fitAll() | Accept a fit request (there is no camera in a headless view). |
+| addEventCallback(name, callback) -> None | Register ``callback`` for the event ``name``. |
+| addEventCallbackPivy(event_type, callback, data=None) | ``view.addEventCallbackPivy(SoEvent.getClassTypeId(), cb)``. |
+| fitAll() | Accept a fit request (fitting is the shell's; nothing moves here). |
+| getCameraNode() | The published camera as a Coin-``SoCamera``-shaped snapshot, or ``None``. |
+| getObjectInfo(pos) | The nearest entry :meth:`getObjectsInfo` would return, or ``None``. |
+| getObjectsInfo(pos) | Every sub-element under device pixel ``pos``, nearest first. |
 | getPoint(callback=None, *args) | Start a Snapper point session on this view. |
+| getPointOnScreen(point) | Project a world point to device pixels (bottom-left origin). |
 | getSceneGraph() | The document's scene root (``None`` when Coin is unavailable). |
-| redraw() | Accept a redraw request (the shell repaints from the scene graph). |
+| getSize() | The device-pixel viewport size, or ``(0, 0)`` when unknown. |
+| getViewDirection() | The world direction the camera looks along. |
+| redraw() | Accept a redraw request (the shell repaints from its own state). |
 | removeEventCallback(name, callback) -> bool | Drop ``callback`` from ``name``; returns whether it was registered. |
+| removeEventCallbackPivy(event_type, callback) | Undo :meth:`addEventCallbackPivy`; returns whether it was registered. |
+| updateGui() | Request a repaint (upstream ``Gui.updateGui``). |
 
 ## Object `HintManager`
 
@@ -90,13 +112,18 @@ The headless hint channel (``FreeCADGui.HintManager``).
 
 ## Object `Selection`
 
-A snapshot of what the shell has selected.
+What the shell has selected, in upstream's shape.
 
 | Member | Summary |
 | --- | --- |
-| getSelection() -> list | The selected document objects (upstream ``Gui.Selection``). |
-| getSelectionEx() -> list | ``[(object, [subelement names])]`` for the current selection. |
-| isSelected(obj) -> bool | Whether ``obj`` (or an object name) is in the selection. |
+| addSelection(obj, subname=None, point=None, doc=None) -> bool | Add ``obj`` (with optional sub-elements) to the selection. |
+| clearSelection(doc=None) -> None | Clear the selection (``doc`` limits it to one document's objects). |
+| getPreselection() | The preselection as a :class:`SelectionObject`, or ``None``. |
+| getSelection(doc=None) -> list | The selected document objects (upstream ``Gui.Selection``). |
+| getSelectionEx(object_name=None, doc=None) -> list | The selection as :class:`SelectionObject` items. |
+| isSelected(obj, subname=None) -> bool | Whether ``obj`` (or an object name) is in the selection. |
+| removeSelection(obj, subname=None, doc=None) -> bool | Remove ``obj`` (or just ``subname``) from the selection. |
+| setPreselection(obj, subname=None, point=None) -> None | Set the preselection (the object the pointer is over). |
 
 ## Object `Snapper`
 

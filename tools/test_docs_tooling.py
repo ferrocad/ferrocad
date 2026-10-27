@@ -10,8 +10,10 @@ Run::
 
 import os
 import sys
+import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 TOOLS = os.path.dirname(os.path.abspath(__file__))
 REPO = os.path.dirname(TOOLS)
@@ -102,6 +104,28 @@ class TestRenderPage(unittest.TestCase):
         self.assertIn("No image captured", page)
         self.assertNotIn("![the viewport]", page)
 
+    def test_an_existing_image_links_the_sibling_images_folder(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            Path(tmp, "demo.png").write_bytes(b"png")
+            with mock.patch.object(userdocs, "IMAGE_DIR", Path(tmp)):
+                page = userdocs.render_page(
+                    capture(
+                        ops=[
+                            {
+                                "kind": "image",
+                                "name": "demo.png",
+                                "alt": "the viewport",
+                                "caption": "A caption.",
+                            }
+                        ]
+                    ),
+                    Path("01_demo.py"),
+                )
+        # The page is in `<quadrant>/`, so the committed image is one level up.
+        self.assertIn("![the viewport](../images/demo.png)", page)
+        self.assertIn("*A caption.*", page)
+        self.assertNotIn("No image captured", page)
+
     def test_rendering_is_deterministic(self):
         self.assertEqual(
             userdocs.render_page(capture(), Path("01_demo.py")),
@@ -139,6 +163,100 @@ class TestRenderIndex(unittest.TestCase):
     def test_an_authored_explanation_page_is_listed(self):
         index = userdocs.render_index([])
         self.assertIn("how-the-shell-talks-to-the-document.md", index)
+
+
+class TestImageSpecs(unittest.TestCase):
+    """The `image()` op records what the renderer needs, without a GPU."""
+
+    def capture(self):
+        return _capture.Capture(slug="demo", quadrant="how-to", title="Demo", summary="")
+
+    def test_a_mesh_op_records_its_geometry_and_display_attributes(self):
+        cap = self.capture()
+        mesh = {
+            "positions": [[0, 0, 0], [1, 0, 0], [0, 1, 0]],
+            "triangles": [0, 1, 2],
+            "edges": [0, 1],
+            "color": [0.1, 0.2, 0.3, 1.0],
+            "display": "shaded_edges",
+            "object": "Slab",
+        }
+        cap.image(
+            "demo.png",
+            "the slab",
+            camera={"eye": [3, 3, 3], "target": [0, 0, 0]},
+            mesh=mesh,
+        )
+        op = cap.ops[-1]
+        self.assertEqual(op["kind"], "image")
+        self.assertEqual(op["name"], "demo.png")
+        spec = op["spec"]
+        self.assertEqual(spec["camera"]["eye"], [3.0, 3.0, 3.0])
+        shape = spec["shapes"][0]
+        self.assertEqual(shape["geometry"]["mesh"]["triangles"], [0, 1, 2])
+        self.assertNotIn("object", shape["geometry"]["mesh"])
+        self.assertEqual(shape["color"], [0.1, 0.2, 0.3, 1.0])
+        self.assertEqual(shape["draw_mode"], "shaded_edges")
+
+    def test_a_box_op_records_the_renderer_primitive(self):
+        cap = self.capture()
+        cap.image(
+            "box.png",
+            "a box",
+            shape={"box": {"size": [105.0, 20.0, 10.0], "origin": [0.0, 0.0, 0.0]}},
+            camera={"eye": [1, 2, 3], "target": [0, 0, 0], "fov_y": 0.6},
+            size=[960, 600],
+        )
+        spec = cap.ops[-1]["spec"]
+        self.assertEqual(spec["size"], [960, 600])
+        self.assertEqual(
+            spec["shapes"][0]["geometry"]["box"]["size"], [105.0, 20.0, 10.0]
+        )
+        self.assertEqual(spec["camera"]["fov_y"], 0.6)
+
+    def test_a_snapshot_needs_a_camera(self):
+        with self.assertRaises(ValueError):
+            self.capture().image("x.png", "alt", shape={"box": {"size": [1, 1, 1]}})
+
+    def test_image_names_stay_inside_the_images_folder(self):
+        for name in ("../escape.png", "a/b.png", "", "not-a-png.gif"):
+            with self.assertRaises(RuntimeError, msg=name):
+                userdocs._safe_image_name(name)
+        self.assertEqual(userdocs._safe_image_name("first-model.png"), "first-model.png")
+
+
+class TestCapture(unittest.TestCase):
+    def test_no_adapter_leaves_the_committed_images_alone(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            image_dir = Path(tmp, "images")
+            image_dir.mkdir()
+            existing = image_dir / "demo.png"
+            existing.write_bytes(b"old bytes")
+
+            # The example's exit code 3 is "no GPU adapter".
+            fake = Path(tmp, "no-gpu.sh")
+            fake.write_text("#!/bin/sh\nexit 3\n")
+            fake.chmod(0o755)
+
+            cap = capture(
+                ops=[
+                    {
+                        "kind": "image",
+                        "name": "demo.png",
+                        "alt": "a",
+                        "caption": None,
+                        "spec": {"camera": {}, "shapes": []},
+                    }
+                ]
+            )
+            with mock.patch.object(userdocs, "IMAGE_DIR", image_dir):
+                written, unchanged, degraded = userdocs.capture_images(
+                    [(Path("01_demo.py"), cap)], fake
+                )
+
+            self.assertTrue(degraded)
+            self.assertEqual((written, unchanged), (0, 0))
+            self.assertEqual(existing.read_bytes(), b"old bytes")
 
 
 class TestQuadrants(unittest.TestCase):

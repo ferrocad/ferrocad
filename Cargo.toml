@@ -27,6 +27,7 @@ members = [
     "crates/ferrocad_graphics",
     "crates/ferrocad_stage",
     "crates/ferrocad_wgpu",
+    "crates/ferrocad_snapshot",
     "crates/ferrocad_inventor_py",
     "crates/ferrocad_stage_py",
     "crates/ferrocad_ui",

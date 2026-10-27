@@ -53,6 +53,41 @@ def run(cap):
         cap.result("Source.Length", str(source.Length))
         cap.result("Derived.Result", str(derived.Result))
 
+    with cap.step("What the result describes"):
+        cap.prose(
+            "`Derived.Result` is 30 mm after the input changed. The box below uses "
+            "that computed value; the depth and height are illustrative."
+        )
+        cap.exec(
+            """
+            box_size = (float(derived.Result), 20.0, 10.0)
+            box_center = [value / 2.0 for value in box_size]
+            span = max(box_size)
+            box_eye = [
+                box_center[0] - span * 0.8,
+                box_center[1] - span * 1.8,
+                box_center[2] + span * 1.5,
+            ]
+            """
+        )
+        cap.result("Box (result, depth, height)", box_size)
+        cap.image(
+            "parametric-recompute.png",
+            "A 30 by 20 by 10 millimetre box drawn in the viewport",
+            caption=(
+                "The 30 mm `Derived.Result` after the input changed to 15 mm, drawn "
+                "as a box; the depth and height are illustrative."
+            ),
+            shape={"box": {"size": list(box_size), "origin": [0.0, 0.0, 0.0]}},
+            color=[0.55, 0.57, 0.60, 1.0],
+            camera={
+                "eye": box_eye,
+                "target": box_center,
+                "up": [0.0, 0.0, 1.0],
+                "fov_y": 0.6,
+            },
+        )
+
     with cap.step("Read the expression back"):
         cap.prose("The expression is part of the document, not of the Python object.")
         cap.exec("expr = derived.ExpressionEngine")

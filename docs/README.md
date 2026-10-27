@@ -197,6 +197,10 @@ rather than restating it.
 - [workbenches/part-api-audit.md](workbenches/part-api-audit.md) — the repeatable
   Part/OCCT surface audit: what we register, what upstream exposes, the gap markers, and
   the `--check` contract used in CI.
+- [workbenches/screenshot-tool.md](workbenches/screenshot-tool.md) — the three screenshot
+  scopes (generated viewport snapshots, app chrome, and the whole desktop), the snapshot
+  spec, the `tools/screenshot.py` and `userdocs --capture` CLIs, and the GPU-free image
+  manifest gate.
 - [workbenches/qt-strategy.md](workbenches/qt-strategy.md) — running upstream workbench
   GUIs without Qt: the measured Qt surface, the `.ui` loader and micro-shim (option D),
   and the Q0–Q5 plan.

@@ -13,25 +13,36 @@ the generated Python API under ``docs/python-api/`` (``tools/api_docs.py``).
 
 Usage::
 
-    python3 tools/userdocs.py             # regenerate docs/user/
-    python3 tools/userdocs.py --check     # fail if any page is stale
-    python3 tools/userdocs.py --capture   # render the image ops into docs/user/images/
-    python3 tools/userdocs.py --list      # list the workflows
+    python3 tools/userdocs.py                 # regenerate docs/user/
+    python3 tools/userdocs.py --check         # fail if a page or image is stale
+    python3 tools/userdocs.py --capture       # render the image ops into docs/user/images/
+    python3 tools/userdocs.py --write-manifest # adopt existing PNGs (no GPU)
+    python3 tools/userdocs.py --list          # list the workflows
     python3 tools/userdocs.py --only toy-workbench
 
 Adding a workflow is adding a file: the index is rebuilt from the set of workflow
 scripts and the authored pages, so it is also the progress list.
 
 A workflow's ``cap.image(...)`` records a render spec; ``--capture`` turns that
-spec into a committed PNG with ``crates/ferrocad_wgpu/examples/snapshot.rs``. The
-normal run and ``--check`` only *read* those PNGs, so the CI gates stay cheap and
-GPU-free. A capture on a machine with no GPU adapter reports it and leaves the
-committed images alone.
+spec into a committed PNG with the ``ferrocad_snapshot`` binary. The normal run and
+``--check`` only *read* those PNGs, so the CI gates stay cheap and GPU-free. A
+capture on a machine with no GPU adapter reports it and leaves the committed images
+alone.
+
+The specs are also pinned in ``docs/user/images/manifest.json``. ``--check``
+compares each workflow's current spec (and the committed PNG's bytes) with that
+manifest, so a changed camera or shape fails the cheap gate even on a machine that
+cannot render. ``--write-manifest`` adopts a set of already-rendered PNGs without a
+GPU; ``--capture`` refreshes both the PNGs and the manifest.
+
+For a one-off viewport image outside the user-page pipeline, use
+``python3 tools/screenshot.py --spec scene.json --out shot.png``.
 """
 
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 import re
@@ -76,10 +87,11 @@ and an **explanation** page says why. Reference is the generated
 INDEX_FOOTER = """## Regenerating and capturing
 
 ```sh
-python3 tools/userdocs.py            # refresh every page
-python3 tools/userdocs.py --check    # non-zero exit if a page is stale
-python3 tools/userdocs.py --capture  # re-render the images (needs a GPU adapter)
-python3 tools/build_book.py          # assemble the mdBook edition
+python3 tools/userdocs.py                # refresh every page
+python3 tools/userdocs.py --check        # non-zero exit if a page or image is stale
+python3 tools/userdocs.py --capture      # re-render the images (needs a GPU adapter)
+python3 tools/userdocs.py --write-manifest  # adopt existing PNGs without a GPU
+python3 tools/build_book.py              # assemble the mdBook edition
 ```
 
 The check is the part that matters: it is cheap, needs no GPU, and it is what
@@ -93,6 +105,16 @@ The screenshots are real viewport pixels, captured by
 and stored under `docs/user/images/`. Capturing needs a GPU adapter; the pages and
 the `--check` gate only read the committed PNGs, so CI stays cheap and GPU-free.
 On a machine with no adapter the capture says so and leaves the images untouched.
+
+`docs/user/images/manifest.json` pins each generated image to its render spec and
+its PNG bytes. `--check` compares both, so a changed camera or shape fails review
+even without a GPU. A page may also use a hand-supplied illustration (no render
+spec); those are deliberately absent from the manifest. For a one-off viewport
+image outside the page pipeline, use `tools/screenshot.py`; its `--mode chrome`
+captures the app window (title bar, header controls, Dev Tools) and `--mode desktop`
+captures the display. See
+[`../workbenches/screenshot-tool.md`](../workbenches/screenshot-tool.md) for the three
+scopes and when to use each.
 
 What the pages are **not** is a claim of upstream parity. Only what runs here is
 documented here; the gap is measured by
@@ -339,11 +361,19 @@ def stale_generated(expected: set[Path]) -> list[Path]:
 # ---------------------------------------------------------------------------
 # Image capture
 # ---------------------------------------------------------------------------
-#: The example binary that renders one spec into one PNG.
-SNAPSHOT_EXAMPLE = "snapshot"
+#: The workspace tool that renders one spec into one PNG.
+SNAPSHOT_PACKAGE = "ferrocad_snapshot"
+SNAPSHOT_BIN = "ferrocad_snapshot"
 
-#: The example's exit code for "this machine has no GPU adapter".
+#: The tool's exit code for "this machine has no GPU adapter".
 SNAPSHOT_NO_ADAPTER = 3
+
+#: The renderer's default size, mirrored here for manifest entries whose spec omits
+#: one (`ferrocad_wgpu::snapshot::DEFAULT_SIZE`).
+SNAPSHOT_DEFAULT_SIZE = [960, 600]
+
+#: The committed record of which PNG belongs to which render spec.
+MANIFEST_VERSION = 1
 
 
 def _safe_image_name(name: str) -> str:
@@ -361,8 +391,185 @@ def _safe_image_name(name: str) -> str:
     return name
 
 
+def _manifest_path() -> Path:
+    """The committed image manifest (kept beside the PNGs)."""
+    return IMAGE_DIR / "manifest.json"
+
+
+def _canonical_spec(spec: dict) -> str:
+    """The byte-stable form of a spec, so key order never changes the digest."""
+    return json.dumps(spec, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
+
+
+def spec_digest(spec: dict) -> str:
+    """A stable SHA-256 for one render spec."""
+    return hashlib.sha256(_canonical_spec(spec).encode("utf-8")).hexdigest()
+
+
+def png_digest(data: bytes) -> str:
+    """The SHA-256 of a committed PNG."""
+    return hashlib.sha256(data).hexdigest()
+
+
+def _image_ops(captures: list[tuple[Path, dict]]):
+    """Every ``image`` op with the workflow that produced it."""
+    for source, capture in captures:
+        for op in capture["ops"]:
+            if op["kind"] == "image":
+                yield source, capture, op
+
+
+def expected_images(captures: list[tuple[Path, dict]]) -> dict[str, dict]:
+    """The generated images the workflows describe, keyed by file name.
+
+    An ``image`` op with no render spec is a manually supplied illustration: it is
+    deliberately absent from the manifest, because the tool cannot reproduce it.
+    """
+    entries: dict[str, dict] = {}
+    for _source, capture, op in _image_ops(captures):
+        spec = op.get("spec")
+        if not spec:
+            continue
+        name = _safe_image_name(op["name"])
+        digest = spec_digest(spec)
+        if name in entries:
+            if entries[name]["spec_sha256"] != digest:
+                raise RuntimeError(
+                    f"image {name!r} is declared with two different render specs"
+                )
+            entries[name]["workflows"].add(capture["slug"])
+            continue
+        entries[name] = {
+            "spec_sha256": digest,
+            "size": [int(value) for value in spec.get("size", SNAPSHOT_DEFAULT_SIZE)],
+            "workflows": {capture["slug"]},
+        }
+    for entry in entries.values():
+        entry["workflows"] = sorted(entry["workflows"])
+    return entries
+
+
+def build_manifest(captures: list[tuple[Path, dict]], *, require_png: bool = True) -> dict:
+    """The manifest a fresh capture would write, including the PNG digests."""
+    entries: dict[str, dict] = {}
+    for name, info in sorted(expected_images(captures).items()):
+        target = IMAGE_DIR / name
+        if not target.is_file():
+            if require_png:
+                raise RuntimeError(
+                    f"{name} has a render spec but no committed PNG; run "
+                    "`python3 tools/userdocs.py --capture`"
+                )
+            continue
+        data = target.read_bytes()
+        entries[name] = {
+            **info,
+            "png_sha256": png_digest(data),
+            "bytes": len(data),
+        }
+    return {
+        "version": MANIFEST_VERSION,
+        "generator": "tools/userdocs.py",
+        "images": entries,
+    }
+
+
+def write_manifest(captures: list[tuple[Path, dict]], *, require_png: bool = True) -> tuple[bool, int]:
+    """Write the image manifest, atomically. Returns ``(changed, images)``."""
+    manifest = build_manifest(captures, require_png=require_png)
+    text = json.dumps(manifest, indent=2, sort_keys=True) + "\n"
+    path = _manifest_path()
+    if path.is_file() and path.read_text() == text:
+        return False, len(manifest["images"])
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = path.with_name(f".{path.name}.tmp")
+    try:
+        temporary.write_text(text)
+        os.replace(temporary, path)
+    except OSError as exc:
+        if temporary.exists():
+            temporary.unlink()
+        raise RuntimeError(f"cannot write {path.relative_to(REPO)}: {exc}") from exc
+    return True, len(manifest["images"])
+
+
+def load_manifest() -> dict | None:
+    """Read the committed manifest, or ``None`` when no capture has run."""
+    path = _manifest_path()
+    if not path.is_file():
+        return None
+    try:
+        data = json.loads(path.read_text())
+    except json.JSONDecodeError as exc:
+        raise RuntimeError(f"{path.relative_to(REPO)} is not valid JSON: {exc}") from exc
+    if data.get("version") != MANIFEST_VERSION:
+        raise RuntimeError(
+            f"{path.relative_to(REPO)} has version {data.get('version')!r}; "
+            f"expected {MANIFEST_VERSION}"
+        )
+    if not isinstance(data.get("images"), dict):
+        raise RuntimeError(f"{path.relative_to(REPO)} has no images object")
+    return data
+
+
+def check_images(
+    captures: list[tuple[Path, dict]], expected: dict[str, dict] | None = None
+) -> list[str]:
+    """Compare the workflows' specs and the committed PNGs with the manifest.
+
+    This is the GPU-free half of the screenshot guarantee: it catches a changed
+    camera or shape (the spec digest), a hand-edited or stale PNG (the byte digest),
+    a missing image, and a manifest entry no workflow produces any more.
+    """
+    if expected is None:
+        expected = expected_images(captures)
+    manifest = load_manifest()
+    if manifest is None:
+        if not expected:
+            return []
+        return [
+            "missing docs/user/images/manifest.json "
+            "(run `python3 tools/userdocs.py --capture` or `--write-manifest`)"
+        ]
+
+    entries = manifest["images"]
+    errors: list[str] = []
+    for name, info in sorted(expected.items()):
+        entry = entries.get(name)
+        if entry is None:
+            errors.append(
+                f"missing manifest entry: {name} "
+                "(run `python3 tools/userdocs.py --capture` or `--write-manifest`)"
+            )
+            continue
+        if entry.get("spec_sha256") != info["spec_sha256"]:
+            errors.append(
+                f"stale spec: {name} (the workflow's render spec changed; "
+                "run `python3 tools/userdocs.py --capture`)"
+            )
+            continue
+        target = IMAGE_DIR / name
+        if not target.is_file():
+            errors.append(
+                f"missing image: {name} (run `python3 tools/userdocs.py --capture`)"
+            )
+            continue
+        if entry.get("png_sha256") != png_digest(target.read_bytes()):
+            errors.append(
+                f"stale image: {name} (the committed PNG does not match the manifest; "
+                "run `python3 tools/userdocs.py --capture`)"
+            )
+
+    for name in sorted(set(entries) - set(expected)):
+        errors.append(
+            f"orphan manifest entry: {name} (no workflow produces it; "
+            "run `python3 tools/userdocs.py --write-manifest`)"
+        )
+    return errors
+
+
 def snapshot_binary(explicit: str | None = None) -> Path:
-    """The snapshot example binary, built first so it cannot be stale.
+    """The snapshot renderer binary, built first so it cannot be stale.
 
     ``--snapshot-bin`` and ``FERROCAD_SNAPSHOT_BIN`` skip the build (the published
     docs workflow sets neither; ``--capture`` is a local tool).
@@ -383,18 +590,16 @@ def snapshot_binary(explicit: str | None = None) -> Path:
         "build",
         "--offline",
         "-p",
-        "ferrocad_wgpu",
-        "--example",
-        SNAPSHOT_EXAMPLE,
+        SNAPSHOT_PACKAGE,
     ]
-    print("building the snapshot example: " + " ".join(command))
+    print("building the snapshot renderer: " + " ".join(command))
     proc = subprocess.run(command, cwd=REPO, capture_output=True, text=True)
     if proc.returncode != 0:
         raise RuntimeError(
-            "could not build the snapshot example\n"
+            "could not build the snapshot renderer\n"
             f"--- stdout ---\n{proc.stdout}\n--- stderr ---\n{proc.stderr}"
         )
-    path = REPO / "target" / "debug" / "examples" / SNAPSHOT_EXAMPLE
+    path = REPO / "target" / "debug" / SNAPSHOT_BIN
     if not path.is_file():
         raise RuntimeError(f"cargo reported success but {path} does not exist")
     return path
@@ -484,6 +689,11 @@ def main(argv: list[str]) -> int:
         action="store_true",
         help="render the workflows' image ops into docs/user/images/ (needs a GPU)",
     )
+    mode.add_argument(
+        "--write-manifest",
+        action="store_true",
+        help="adopt the existing PNGs into docs/user/images/manifest.json (no GPU)",
+    )
     parser.add_argument("--list", action="store_true", help="list the workflows")
     parser.add_argument("--only", metavar="SLUG", help="run one workflow by slug")
     parser.add_argument(
@@ -517,6 +727,23 @@ def main(argv: list[str]) -> int:
         print("error: no workflows found", file=sys.stderr)
         return 1
 
+    if args.write_manifest:
+        if args.only:
+            print(
+                "error: --write-manifest needs the whole workflow set; "
+                "drop --only",
+                file=sys.stderr,
+            )
+            return 1
+        try:
+            changed, count = write_manifest(captures)
+        except (RuntimeError, OSError) as exc:
+            print(f"error: {exc}", file=sys.stderr)
+            return 1
+        state = "updated" if changed else "unchanged"
+        print(f"manifest: {state} ({count} image(s))")
+        return 0
+
     if args.capture:
         try:
             binary = snapshot_binary(args.snapshot_bin)
@@ -526,6 +753,14 @@ def main(argv: list[str]) -> int:
             return 1
         if not degraded:
             print(f"capture: {written} written, {unchanged} unchanged")
+            if not args.only:
+                try:
+                    changed, count = write_manifest(captures)
+                except (RuntimeError, OSError) as exc:
+                    print(f"error: {exc}", file=sys.stderr)
+                    return 1
+                state = "updated" if changed else "unchanged"
+                print(f"manifest: {state} ({count} image(s))")
 
     # `--only` still writes just that page; the index and the orphan sweep need
     # the whole set, so they are skipped in that mode.
@@ -560,15 +795,27 @@ def main(argv: list[str]) -> int:
             path.unlink()
             print(f"removed {path.relative_to(REPO)} (no workflow produces it)")
 
-    if args.check:
-        if stale or orphans:
-            print(
-                "error: generated pages are out of date; run "
-                "`python3 tools/userdocs.py`",
-                file=sys.stderr,
-            )
+    image_errors: list[str] = []
+    if args.check and not args.only:
+        try:
+            image_errors = check_images(captures)
+        except (RuntimeError, OSError) as exc:
+            print(f"error: {exc}", file=sys.stderr)
             return 1
-        print(f"user docs are current ({len(outputs)} pages)")
+    for message in image_errors:
+        print(f"image: {message}", file=sys.stderr)
+
+    if args.check:
+        if stale or orphans or image_errors:
+            if stale or orphans:
+                print(
+                    "error: generated pages are out of date; run "
+                    "`python3 tools/userdocs.py`",
+                    file=sys.stderr,
+                )
+            return 1
+        images = len(expected_images(captures))
+        print(f"user docs are current ({len(outputs)} pages, {images} generated image(s))")
     return 0
 
 

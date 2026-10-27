@@ -3,6 +3,12 @@
 This page explains the shape of the system from the outside in. It is the answer
 to a question the how-to guides skip: *why* does the code look the way it does?
 
+![The FerroCAD Toy edition window and the Dev Tools window](../images/shell-overview.png)
+
+*The Toy edition's main window and Dev Tools. The viewport is one client of the
+`FreeCAD` facade; Dev Tools is another, reading `model_tree()`, `properties()` and
+`commands()`. The workflow pages are a third, with no window at all.*
+
 ## The facade is the contract, and it keeps no state
 
 `import FreeCAD` is the product surface. Everything else — the shell, a workbench

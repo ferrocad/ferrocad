@@ -50,10 +50,11 @@ Understanding-oriented: why it works this way.
 ## Regenerating and capturing
 
 ```sh
-python3 tools/userdocs.py            # refresh every page
-python3 tools/userdocs.py --check    # non-zero exit if a page is stale
-python3 tools/userdocs.py --capture  # re-render the images (needs a GPU adapter)
-python3 tools/build_book.py          # assemble the mdBook edition
+python3 tools/userdocs.py                # refresh every page
+python3 tools/userdocs.py --check        # non-zero exit if a page or image is stale
+python3 tools/userdocs.py --capture      # re-render the images (needs a GPU adapter)
+python3 tools/userdocs.py --write-manifest  # adopt existing PNGs without a GPU
+python3 tools/build_book.py              # assemble the mdBook edition
 ```
 
 The check is the part that matters: it is cheap, needs no GPU, and it is what
@@ -67,6 +68,16 @@ The screenshots are real viewport pixels, captured by
 and stored under `docs/user/images/`. Capturing needs a GPU adapter; the pages and
 the `--check` gate only read the committed PNGs, so CI stays cheap and GPU-free.
 On a machine with no adapter the capture says so and leaves the images untouched.
+
+`docs/user/images/manifest.json` pins each generated image to its render spec and
+its PNG bytes. `--check` compares both, so a changed camera or shape fails review
+even without a GPU. A page may also use a hand-supplied illustration (no render
+spec); those are deliberately absent from the manifest. For a one-off viewport
+image outside the page pipeline, use `tools/screenshot.py`; its `--mode chrome`
+captures the app window (title bar, header controls, Dev Tools) and `--mode desktop`
+captures the display. See
+[`../workbenches/screenshot-tool.md`](../workbenches/screenshot-tool.md) for the three
+scopes and when to use each.
 
 What the pages are **not** is a claim of upstream parity. Only what runs here is
 documented here; the gap is measured by

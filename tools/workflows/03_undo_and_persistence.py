@@ -80,6 +80,41 @@ def run(cap):
         cap.result("Reloaded Length", str(reloaded.Length))
         cap.result("Reloaded Finish", reloaded.Finish)
 
+    with cap.step("What the reloaded length describes"):
+        cap.prose(
+            "The reloaded value is the 25 mm length after the redo, read from the "
+            "file. The box below uses it; the depth and height are illustrative."
+        )
+        cap.exec(
+            """
+            box_size = (float(reloaded.Length), 20.0, 10.0)
+            box_center = [value / 2.0 for value in box_size]
+            span = max(box_size)
+            box_eye = [
+                box_center[0] - span * 0.8,
+                box_center[1] - span * 1.8,
+                box_center[2] + span * 1.5,
+            ]
+            """
+        )
+        cap.result("Box (length, depth, height)", box_size)
+        cap.image(
+            "undo-and-persistence.png",
+            "A 25 by 20 by 10 millimetre box drawn in the viewport",
+            caption=(
+                "The 25 mm length after redo and reload, drawn as a box; the depth "
+                "and height are illustrative."
+            ),
+            shape={"box": {"size": list(box_size), "origin": [0.0, 0.0, 0.0]}},
+            color=[0.55, 0.57, 0.60, 1.0],
+            camera={
+                "eye": box_eye,
+                "target": box_center,
+                "up": [0.0, 0.0, 1.0],
+                "fov_y": 0.6,
+            },
+        )
+
     with cap.step("Clean up"):
         cap.exec(
             """

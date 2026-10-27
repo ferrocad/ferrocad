@@ -16,7 +16,7 @@ use std::collections::HashMap;
 use std::fmt;
 
 use ferrocad_graphics::{
-    Camera, DepthCompare, DepthState, DrawBatch, DrawPacket, Generation, Geometry, Hit, MeshId,
+    Camera, DepthState, DrawBatch, DrawPacket, Generation, Geometry, Hit, MeshId,
     PickId, Rect, RenderQueue, ShaderProgram, StateSnapshot, Topology, theme,
 };
 use ferrocad_inventor::{ImageData, InventorView, ViewSpec};
@@ -1301,7 +1301,7 @@ pub(crate) fn block_on<F: std::future::Future>(future: F) -> F::Output {
 #[cfg(test)]
 pub(crate) mod tests {
     use super::*;
-    use ferrocad_graphics::{PickId, Topology, Viewport};
+    use ferrocad_graphics::{DepthCompare, PickId, Topology, Viewport};
     use ferrocad_inventor::{Node, NodeKind, Scene, compile, compile_with_base};
 
     /// Serializes the GPU tests. The suite runs in one process with one thread per test,

@@ -209,6 +209,10 @@ wide_eye = [
 
 *The `Wide` slab (60 × 40 × 42 mm at x = 35 mm), from `stage_meshes()`.*
 
+![The Toy edition window with the Wide slab beside the sample slab](../images/toy-workbench-window.png)
+
+*The same document opened in the Toy edition. The viewport draws both slabs, the header carries the workbench's controls, and the action dock is the shell's own chrome rather than the workbench's.*
+
 ## 7. Undo the manipulation
 
 Because each interaction is a transaction, the document's own undo stack reverses them one at a time. No workbench-side history is needed.

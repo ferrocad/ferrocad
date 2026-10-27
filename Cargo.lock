@@ -2462,6 +2462,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "ferrocad_snapshot"
+version = "0.1.4"
+dependencies = [
+ "ferrocad_wgpu",
+ "serde_json",
+]
+
+[[package]]
 name = "ferrocad_stage"
 version = "0.1.4"
 dependencies = [

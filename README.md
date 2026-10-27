@@ -1,30 +1,39 @@
 # FerroCAD
 
-![The FerroCAD shell: 3D viewport, the Dev Tools command/model/property/console panes, and the modeless Grid settings card](screenshot.png)
+![The FerroCAD Toy edition: the 3D viewport with the header controls, the navigation cube, the action dock and the status line](screenshot.png)
 
-**FerroCAD** is a Rust reimplementation of FreeCAD's
-C++ `App` core, designed to be a **drop-in replacement for the `FreeCAD` Python package**. The
-Python import namespace stays `FreeCAD`; the project/distribution is `ferrocad`.
+**FerroCAD** is a Rust/GPUI reimplementation of FreeCAD's C++ `App` core, designed to be
+a **drop-in replacement for the `FreeCAD` Python package**. The Python import namespace
+stays `FreeCAD`; the project/distribution is `ferrocad`.
 
 ## Status
 
 | Track | What it is | State |
 | --- | --- | --- |
-| **Engine** | the pure-Rust document model behind the `FreeCAD` API | `A1`/`B1`/`A2`/`B2` done; conformance **160 passing** (`Document.py` 87/137, ~18 real gaps). Persistence (`C`) and the MVP surface (`D`) outstanding. |
-| **App shell** | the `bite-gpui` window driving the engine through embedded CPython | `S1` done: decorated window, inspector, property editor, Python console, status bar. `S2`–`S6` planned. |
-| **Distribution** | how it ships | done: `v0.1.4`, twenty-one crates on crates.io, three self-contained artifacts (base AppImage/zip and the Parametric AppImage) plus `cargo install`. |
-| **Workbenches** | reusing upstream workbenches | `cargo xtask mods` fetches `Draft`; loading is best-effort and stops on the `FreeCADGui` stub (`Workbench`, `addWorkbench`, …) and the missing `FreeCAD.addImportType`. |
+| **Engine** | the Rust document model behind the `FreeCAD` API | units/quantities, properties, documents, links, expressions, observers, undo, and both serializers. The App/Base surface is the measured MVP. |
+| **Part / OCCT** | the real geometry workbench | **531 upstream Part tests passed, 0 failed, 0 errored, 12 skipped**; primitives, booleans, dress-ups, curves/surfaces, NURBS, `ShapeFix`, `ChFi2d`, feature objects and topological lineage. **220/408 (53.9%)** upstream API names in the committed tree; **248/408 (60.8%)** in the current worktree. |
+| **Workbench platform** | running upstream workbenches without Qt | `Part::FeaturePython`/`Part2DObjectPython` execute and persist Python proxies; Draft M2 is green (**27/27**), the Draft `--draft` group is **44/0/0/0**, and `test_modification` is **31/0/2** after the M4 import round. |
+| **App shell** | the `bite-gpui` window driving the engine through embedded CPython | viewport, model tree, property editor, console, command registry, wheel/forms, transform gizmo, navigation cube and Dev Tools. SimpleCAD S4.1–S4.3 (view facade, ranked pick, selection object) are in the worktree. |
+| **SimpleCAD** | the canvas-first proving ground | **88/88** unit modules load in one image: **702 passed, 44 failed, 368 errored, 2 skipped**, no aborts. That baseline predates the current Part/Draft batch. |
+| **Distribution** | how it ships | `v0.1.4`, the base and Parametric artifacts (AppImage + Windows zip), and `cargo install ferrocad`. macOS is not shipped yet. |
 
-This is a proof of concept, not a product. It exists to validate the single
-riskiest assumption of the rewrite plan: *that a Python script written against
-FreeCAD's public `App` API can be served by a Rust implementation instead of the
-C++ one, without changing the script.*
+This is a **working preview, not a finished product**. It exists to validate the single
+riskiest assumption of the rewrite plan: *that a Python script written against FreeCAD's
+public API can be served by a Rust implementation instead of the C++ one, without
+changing the script.* PartDesign's feature tree, Sketcher's solver, FEM, CAM and the GUI
+workbenches are deliberately out of scope; the measured subset is stated with every
+number.
 
-**Roadmap.** The headless engine MVP is defined in [docs/direction/mvp-path.md](docs/direction/mvp-path.md), the
-interactive window in [docs/direction/app-shell-vision.md](docs/direction/app-shell-vision.md), and the full milestone
-record in [docs/record/milestones.md](docs/record/milestones.md). Next: lock the MVP demo, then build the
-`FreeCADGui` workbench host (`Workbench`, commands, workbench lifecycle) so an unmodified upstream
-workbench can load.
+**Roadmap.** [`docs/ROADMAP.md`](docs/ROADMAP.md) is the three-horizon summary and
+[`docs/TODO-27-10-2026.md`](docs/TODO-27-10-2026.md) the active backlog. The measured
+history is [`docs/record/milestones.md`](docs/record/milestones.md); the labels
+(`S1`, `P4`, `D0`, …) are indexed in [`docs/labels.md`](docs/labels.md). Screenshot
+handling (generated viewport snapshots and manual app captures) is in
+[`docs/workbenches/screenshot-tool.md`](docs/workbenches/screenshot-tool.md). The headless
+engine MVP is defined in [`docs/direction/mvp-path.md`](docs/direction/mvp-path.md), the
+shell in [`docs/direction/app-shell-vision.md`](docs/direction/app-shell-vision.md), and
+the Part/Draft layering in
+[`docs/architecture/part-draft-layering.md`](docs/architecture/part-draft-layering.md).
 
 ## Install
 
@@ -100,26 +109,34 @@ FerroCAD is a Cargo workspace (edition 2024). Crate status:
 | --- | --- | --- |
 | `crates/ferrocad` | the base app: runs the general edition (`cargo run -p ferrocad`) | published (app binary) |
 | `crates/ferrocad_types` | base value types: quantities, units, geometry (`Vector3`, `Placement`, …) | primary |
-| `crates/ferrocad_theme` | the visual-language token table: linear draw tokens and packed-sRGB UI tokens, with the round-trip helpers | primary |
-| `crates/ferrocad_graphics` | the neutral graphics primitives: the draw contract (`DrawPacket`/`RenderQueue`/`Geometry`/…), camera/viewport, and CPU picking | primary |
-| `crates/ferrocad_core` | pure-Rust model: properties, documents, recompute DAG (re-exports `ferrocad_types`) | primary |
-| `crates/ferrocad_geom` | the geometry seam: opaque `Shape`, `History`/`ElementMap`, the `GeometryBackend` trait | new |
-| `crates/ferrocad_mesh` | the Mesh workbench core: triangle meshes, STL, analysis/editing, `Mesh::Feature` | new — no OCCT |
-| `crates/ferrocad_occt` | the OCCT backend: implements `GeometryBackend` (box/fuse/cut/fillet/place) | new — needs OCCT 7.8+ |
-| `crates/ferrocad_part` | the Part workbench: registers `Part::Feature` and `Part::PropertyPartShape` | new — needs OCCT 7.8+ |
-| `crates/ferrocad_part_py` | the `Part` Python module (`makeBox`, `Shape`); the composition root that links OCCT | new — needs OCCT 7.8+ |
-| `crates/ferrocad_mesh_py` | the `Mesh` and `MeshPart` Python modules | new |
+| `crates/ferrocad_theme` | the visual-language token table: linear draw tokens and packed-sRGB UI tokens, with round-trip helpers | primary |
+| `crates/ferrocad_graphics` | the neutral graphics primitives: the draw contract, camera/viewport, CPU picking | primary |
+| `crates/ferrocad_core` | pure-Rust model: properties, documents, links, expressions, recompute DAG | primary |
+| `crates/ferrocad_curves` | analytic curves and wires (no OCCT) | primary |
+| `crates/ferrocad_lineage` | the payload-generic lineage vocabulary: element references, history, stable-name maps | primary |
+| `crates/ferrocad_geom` | the geometry seam: opaque `Shape`, lineage re-exports, the `GeometryBackend` trait | primary |
+| `crates/ferrocad_mesh` | the Mesh core: triangle meshes, STL/bms, analysis/editing, `Mesh::Feature` | primary — no OCCT |
+| `crates/ferrocad_occt` | the OCCT backend: implements `GeometryBackend` and the Part-only algorithms | primary — needs OCCT 7.8+ |
+| `crates/ferrocad_part` | the Part workbench: registers `Part::Feature`, `Part::PropertyPartShape` | primary — needs OCCT 7.8+ |
+| `crates/ferrocad_part_py` | the `Part` Python module; the composition root that links OCCT | primary — needs OCCT 7.8+ |
+| `crates/ferrocad_part_gui` | Part's presentation: the edge dress-up manipulator over the generic stage | primary |
+| `crates/ferrocad_mesh_py` | the `Mesh` and `MeshPart` Python modules | primary |
+| `crates/ferrocad_combined_py` | one extension exposing `ferrocad`, `Part`, `Mesh` and `MeshPart` over a shared core | primary |
 | `crates/ferrocad_py` | PyO3 extension over `ferrocad_core` (module `ferrocad`) | primary |
-| `crates/ferrocad_inventor` | the Coin/Inventor scene core: node AST, state accumulator, mesh compiler, events (re-exports `ferrocad_graphics`) | primary |
-| `crates/ferrocad_stage` | the modern declarative CAD presentation: `ShapeItem`s on a `Stage`, tools and a `TransformGizmo`, compiled straight to `ferrocad_graphics` (no scene graph) | primary |
-| `crates/ferrocad_wgpu` | the wgpu backend: pipelines, dynamic uniforms, MSAA, offscreen target, readback | primary |
-| `crates/ferrocad_inventor_py` | the pivy-compatible `coin` facade (scaffolding, surfaced as `pivy.coin`) | new |
-| `crates/ferrocad_stage_py` | the modern-stack Python surface (surfaced as `ferrocad.stage`) | new |
+| `crates/ferrocad_inventor` | the Coin/Inventor scene core: node AST, state accumulator, mesh compiler, events | primary |
+| `crates/ferrocad_inventor_py` | the pivy-compatible `coin` facade (surfaced as `pivy.coin`) | primary |
+| `crates/ferrocad_stage` | the modern declarative CAD presentation: `ShapeItem`s, tools, `TransformGizmo` | primary |
+| `crates/ferrocad_stage_py` | the modern-stack Python surface (surfaced as `ferrocad.stage`) | primary |
+| `crates/ferrocad_ui` | the Qt Designer `.ui` reader and typed form model (no Qt, no rendering) | primary |
+| `crates/ferrocad_ui_py` | the PyO3 proxy layer over `ferrocad_ui` | primary |
+| `crates/ferrocad_wgpu` | the wgpu backend: pipelines, uniforms, MSAA, offscreen target, readback, snapshots | primary |
+| `crates/ferrocad_snapshot` | the small `ferrocad_snapshot` CLI over `ferrocad_wgpu::snapshot` (docs screenshots) | tool — not published |
+| `crates/ferrocad_viewport` | the `bite-gpui` viewport: `InventorViewport`, the navigation cube, the sample scene | primary |
+| `crates/ferrocad_widgets` | reusable `bite-gpui` widgets (window chrome, fields, console, wheel) | primary |
+| `crates/ferrocad_gpui` | library: the reusable app shell (`run`/`run_with` + `HostConfig`), boots CPython | primary |
+| `crates/ferrocad_parametric` | edition binary: the base app + the Part workbench | published — needs OCCT 7.8+ |
+| `crates/ferrocad_toy` | kernel-free edition that exercises the generic manipulator registry | published |
 | `crates/ferrocad_gen` | generated PyO3 skeleton bindings from the `.pyi` model (M3c) | useful — drives the codegen tests |
-| `crates/ferrocad_widgets` | reusable `bite-gpui` widgets (window chrome, field, console) | published |
-| `crates/ferrocad_viewport` | the `bite-gpui` viewport: `InventorViewport` (image path), the navigation cube (`NaviCube`), the sample scene | primary |
-| `crates/ferrocad_gpui` | library: reusable app shell (`run`/`run_with` + `HostConfig`), boots CPython | primary |
-| `crates/ferrocad_parametric` | edition binary: the base app + the Part workbench (`cargo run -p ferrocad_parametric`) | new — needs OCCT 7.8+ |
 | `crates/xtask` | build tasks: `cargo xtask bundle` stages a distribution | tool |
 
 The GUI crates (`ferrocad_viewport`, `ferrocad_widgets`, `ferrocad_gpui`, `ferrocad`) are excluded from
@@ -134,6 +151,12 @@ The GUI crates (`ferrocad_viewport`, `ferrocad_widgets`, `ferrocad_gpui`, `ferro
 cargo run -p ferrocad   # the base app window (needs a display)
 cargo run -p ferrocad_parametric -- --open target/demo/headless.FCStd  # basic .FCStd viewer
 cargo run -p ferrocad_toy -- --render target/demo/toy.png          # headless PNG (no display, no OCCT)
+python3 tools/screenshot.py --spec target/demo/scene.json \
+    --out target/demo/scene.png                                  # viewport snapshot (GPU)
+python3 tools/screenshot.py --mode chrome --edition toy \
+    --out target/demo/toy-window.png                              # app window (X11)
+python3 tools/screenshot.py --mode desktop \
+    --out target/demo/desktop.png                                 # whole display
 cargo run -p ferrocad_parametric -- --render target/demo/part.png  # headless PNG with Part (needs OCCT)
 cargo run -p ferrocad_parametric -- --script examples/headless_part.py \
     --render target/demo/part.png --size 1200x800             # box, bore, fillet
@@ -153,7 +176,8 @@ packaging/linux/appimage.sh    # wrap it into an AppImage (needs appimagetool)
 
 `--render <png>` boots the edition's app script with `GuiUp == 0`, asks its display
 hook for the tessellated document shapes, and draws one offscreen frame with the
-same `Stage` → `WgpuRenderer` path the window uses. It needs a wgpu adapter (a
+same `Stage` → `WgpuRenderer` path the window uses. `tools/screenshot.py` drives the
+same renderer from a JSON spec (see the screenshot-tool note). It needs a wgpu adapter (a
 software Vulkan ICD is enough) but no display server; add `--size WxH` to choose
 the framebuffer, and `--script <py>` to build the model first (the script runs after
 the edition's sample document is created). `--open <file>` loads a saved document
@@ -189,17 +213,18 @@ OK
 Tests:
 
 ```sh
-. ../.toolchain/env.sh && cargo test --manifest-path Cargo.toml   # ferrocad_core unit tests
-PYTHONPATH=python python3 -m unittest discover -s tests -v        # facade parity (M0/M1) + M4
-PYTHONPATH=python python3 tests/test_fc_core.py                    # ferrocad bindings (M3b)
-PYTHONPATH=python python3 tests/test_codegen.py                    # generated skeleton surface (M3c)
-python3 tools/test_inventory.py                                    # .pyi parser (M3a)
-python3 tools/test_codegen.py                                      # codegen logic (M3c)
-python3 tools/test_conformance.py                                  # harness helpers (M3d)
-PYTHONPATH=python python3 examples/file_roundtrip.py               # save/open a document (file load)
-PYTHONPATH=python python3 examples/mvp_workflow.py                # the MVP acceptance demo (docs/direction/mvp-path.md)
-. ../.toolchain/env.sh && cargo test -p ferrocad_gpui              # shell library tests (4)
+cargo test -p ferrocad_core
+cargo test -p ferrocad_part_py --test part_conformance -- --nocapture
+LD_LIBRARY_PATH=.occt/prefix/lib PYTHONPATH=python python3 -m pytest tests -q
+python3 tools/conformance.py --root ../freecad-upstream --draft
+python3 tools/conformance.py --simplecad                    # needs ../simplecad
+LD_LIBRARY_PATH=.occt/prefix/lib PYTHONPATH=python \
+    python3 tools/part_api_audit.py --check                  # Part API contract
+python3 tools/userdocs.py --check && python3 tools/api_docs.py --check
+python3 tools/build_book.py --check
 ```
+The Part suite needs OCCT (`.occt/prefix`); the Draft and SimpleCAD groups self-skip without
+the sibling checkouts. Every published number records the upstream revision.
 
 Regenerate the M3c skeleton (`crates/ferrocad_gen/src/lib.rs`, committed):
 
@@ -211,6 +236,9 @@ Run upstream tests against our `FreeCAD` (conformance harness, M3d):
 
 ```sh
 python3 tools/conformance.py --root ../freecad-upstream            # default curated files
+python3 tools/conformance.py --root ../freecad-upstream --part     # the Part group
+python3 tools/conformance.py --root ../freecad-upstream --draft    # the headless Draft group
+python3 tools/conformance.py --simplecad                           # SimpleCAD's 88 unit modules
 python3 tools/conformance.py --root ../freecad-upstream --list     # list candidates
 ```
 
@@ -234,7 +262,11 @@ the *behaviour* reference is FreeCAD's own. What FerroCAD adds is generated and 
 [`docs/user/`](docs/user/README.md) renders one page per implemented workflow by **running** it
 against the facade, and [`docs/python-api/`](docs/python-api/index.md) is a signature reference read
 from the live modules. CI runs `tools/userdocs.py --check` and `tools/api_docs.py --check`, so neither
-can drift from the code. Narrative notes live in the repository `docs/` ([index](docs/README.md)).
+can drift from the code. Narrative notes live in the repository `docs/` ([index](docs/README.md)):
+[`ROADMAP.md`](docs/ROADMAP.md) for the horizons, [`TODO-27-10-2026.md`](docs/TODO-27-10-2026.md)
+for the active backlog, [`record/milestones.md`](docs/record/milestones.md) for the measured
+history, [`record/tasks/`](docs/record/tasks/README.md) for the closed design specs, and
+[`labels.md`](docs/labels.md) for every `S1`/`P4`/`D0`.
 An mdBook edition of both — tutorials, how-to guides, reference, explanation — is
 assembled by `tools/build_book.py` (`--build` renders it with
 [mdBook](https://rust-lang.github.io/mdBook/)) and published at
@@ -275,11 +307,11 @@ secret).
 
 ## Embedded Python (running scripts from Rust)
 
-The **shell library** (`crates/ferrocad_gpui`) embeds CPython and drives it from Rust. It passes
-four headless `#[gpui::test]`s, one of which embeds the interpreter, imports a Python module, and
-round-trips a click through a Python callback back into a `bite-gpui` element
-(`cargo test -p ferrocad_gpui`). The base app (`crates/ferrocad`) is a thin binary over it
-(`cargo run -p ferrocad`). This is the Blender-style model the M5 UI track builds on: Python
+The **shell library** (`crates/ferrocad_gpui`) embeds CPython and drives it from Rust. Its
+headless `#[gpui::test]` suite covers the boot, model tree, property edits, console, command
+registry, viewport and gizmo paths, including a click that round-trips through a Python
+callback into a `bite-gpui` element. The base app (`crates/ferrocad`) is a thin binary over
+it (`cargo run -p ferrocad`). This is the Blender-style model the design builds on: Python
 declares the UI/workbench, Rust owns the process and renders.
 
 Note the layering: `ferrocad_core` is **pure Rust and does not embed Python**; the embedding lives
@@ -291,8 +323,11 @@ the `ferrocad` extension the ordinary ways (import).
 A plain workbench-style script that uses only the public `FreeCAD` API runs today —
 `hello_freecad.py` is one, and `examples/file_roundtrip.py` demonstrates the **file** path:
 create a document, `doc.saveAs(path)`, `FreeCAD.open(path)`, and read the objects/`PropertyLength`
-back. The on-disk format is FerroCAD's own JSON under a `.FCStd` name; it is not yet upstream's
-`.FCStd`/`zip` and importing real `Part` geometry is still out of scope.
+back. Documents save as native `.ferrocad` JSON or as a real `.FCStd` ZIP. The `.FCStd` reader
+and writer round-trip our documents (shapes, expressions, links, appearance, mesh and
+the lineage sidecar). Upstream's module-specific payloads and private `ElementMap` form
+are not all covered yet, so opening a FerroCAD-written file in upstream FreeCAD is a
+follow-up, not a guarantee.
 
 ```sh
 PYTHONPATH=python python3 examples/file_roundtrip.py
@@ -319,59 +354,63 @@ for the underlying analysis.
 
 ## What is implemented vs. not
 
-Implemented in **`ferrocad_core` / `ferrocad_py`** (the real model, not just a stub):
+Implemented and measured:
 
-* a **full `Quantity`/`Unit` system**: 8-dimension signatures, an internal unit table
-  (SI base + derived + imperial + prefixes), an expression parser (fractions, scientific
-  notation, compound units, `pi`/`sin`/`cos`/`tan`, feet-inches `N'(expr)"`), arithmetic,
-  `Value`/`UserString`/`getValueAs`/`toNumber`.
-* `Property`/`PropertyContainer`, `StringHasher`/`StringID`.
-* `Document`/`DocumentObject` with default naming, a `petgraph` dependency graph,
-  topological recompute order, and `removeObject`.
-* transactions (`open`/`commit`/`abort` + `undo`/`redo`), an `Observer` trait, and an
-  expression parser/evaluator with `Object.Property` names and `recompute()`.
+* **The App/Base surface** through `ferrocad_core` / `ferrocad_py`: a full
+  `Quantity`/`Unit` system, properties (including dynamic, enum, link, quantity and
+  placement), documents and naming, a dependency graph and topological recompute,
+  expressions, observers, undo/redo, groups/extensions and the native/`.FCStd`
+  serializers.
+* **Part/OCCT** through `ferrocad_geom` → `ferrocad_occt` → `ferrocad_part_py`:
+  primitives, booleans, dress-ups, curves/surfaces, NURBS conversion, `ShapeFix`,
+  `ChFi2d`, feature objects, `Part::FeaturePython` and topological lineage. The upstream
+  Part suite reports **531 passed, 0 failed, 0 errored, 12 skipped**; the API audit
+  covers **220/408** names in the committed tree and **248/408** in the worktree.
+* **Mesh** through `ferrocad_mesh` / `ferrocad_mesh_py`: triangle payloads, STL and
+  `.bms`, analysis/editing, `Mesh::Feature`, `MeshPart.meshFromShape`, and the `.FCStd`
+  `<Mesh>` member.
+* **The workbench platform**: Python feature proxies (`Part::FeaturePython`,
+  `Part::Part2DObjectPython`) execute, change, attach, persist and restore; the Draft M2
+  modules are **27/27**, the Draft `--draft` group is **44/0/0/0**, and
+  `test_modification` is **31/0/2** after the M4 import round.
+* **The shell and interaction**: the viewport, model tree, property editor, console,
+  command registry, wheel/forms, transform gizmo, navigation cube, Dev Tools, and the
+  SimpleCAD S4.1–S4.3 view facade, ranked pick and selection object.
 
-Exposed through the **`FreeCAD` facade** (enough for the hello world and a workbench-style script):
+Not implemented, or deliberately partial:
 
-* documents: `newDocument`, `closeDocument`, `getDocument`, `listDocuments`,
-  `ActiveDocument`, unique-name allocation, `Name`/`Label`.
-* objects: `addObject` (default naming), `getObject`, `removeObject`, `Objects`,
-  `CountObjects`, `Name`/`Label`/`TypeId`/`Document`, `recompute`.
-* properties: `addProperty`, `get`/`setPropertyByName`, dynamic attribute
-  mapping (`obj.Foo`), `PropertiesList`, `getTypeIdOfProperty`.
-* a single Python bridge, reported as `FreeCAD.backend` (`"ferrocad"`).
+* PartDesign's feature tree, Sketcher's solver and constraints, FEM, CAM and the GUI
+  workbenches. `Part::Prism` and the `Sketcher::SketchObject` object type exist where
+  Draft needs them; the `Sketcher` module and solver do not.
+* The rest of the Part API: 160 distinct upstream names are still uncovered. The
+  SimpleCAD/Draft runs are the work list.
+* Full upstream `.FCStd` byte-for-byte compatibility and every module payload. The
+  format is real and round-trips our documents; it is not a claim of upstream parity.
+* The Qt-based Draft GUI paths. The native `FreeCADGui` facade, the `PySide` shim and
+  the headless forms cover the non-GUI path; a Qt workbench GUI is not shipped.
+* macOS packaging and signing, and thread-safety guarantees beyond the coarse global
+  mutex.
 
-Not implemented (deliberately out of scope for this milestone):
+The measured subset and its caveats are in
+[`docs/workbenches/conformance.md`](docs/workbenches/conformance.md),
+[`docs/workbenches/part-api-audit.md`](docs/workbenches/part-api-audit.md) and
+[`docs/workbenches/simplecad-bringup.md`](docs/workbenches/simplecad-bringup.md).
 
-* the geometry kernel (`Part::Box` etc. produce no shape),
-* upstream's `.FCStd` (zip) format — persistence is FerroCAD's own JSON,
-* `App`/`Gui` split, Coin3D, Qt,
-* `FeaturePython` scripting callbacks,
-* thread-safety guarantees beyond a coarse global mutex.
+## Current work
 
-## Next: the MVP app shell
+**H1 (finish Part/OCCT) is closed** except the optional two composed-alias element-map
+counts. **H2 (the workbench platform)** is the Draft M3–M5 breadth: the M4 import round
+took `test_modification` to 31/0/2, and the remaining two errors are the `Sketcher`
+module and TechDraw's `DrawPage`. **H3 (proof by use)** is SimpleCAD: S1–S3 are measured,
+S4.1–S4.3 are in the worktree, and the next step is to rebuild the extension and
+re-measure before deciding the next Part cluster. Packaging is on v0.1.4; macOS is the
+open distribution leg.
 
-The headless engine is the foundation; the next chunk is a **single interactive window**
-that drives it — a developer tool with five pillars: **open/close/load/save**, **undo/redo**,
-a **DOM-like inspector**, a **property editor**, and a **Python console**. It is one
-`bite-gpui` window embedding CPython, calling the engine only through the public `FreeCAD`
-API, so commands, console input and property edits all take the same path (and every edit is
-one more undoable transaction). The `ferrocad_gpui` spike already proves the
-Python-declared-UI ↔ `bite-gpui` round-trip headlessly.
-
-The plan, architecture and slices (S1 shell skeleton → S2 lifecycle + commands → S3 inspector
-→ S4 property editor → S5 console → S6 polish) are in
-[`docs/direction/app-shell-vision.md`](docs/direction/app-shell-vision.md). The 3D viewport now docks into
-the shell's pane as an image-path presenter (readback → `RenderImage`) drawing a sample
-Inventor scene; the full `scenix`/`wgpu` viewport and the overlay/NaviCube work are in
-[`docs/viewport/inventor-renderer.md`](docs/viewport/inventor-renderer.md).
-
-**S1 is implemented** (`crates/ferrocad_gpui`): a titled `bite-gpui` window that boots an
-embedded CPython interpreter, creates a sample document, and shows a model inspector, a
-read-only property editor, a 3D viewport (the sample Inventor scene, image path), a Python
-console and a status bar — all
-driven live through the `FreeCAD` API (`python/ferrocad_shell`). Run it with
-`cargo run -p ferrocad` (needs a display); the headless `#[gpui::test]` is the CI-proof path.
+The active backlog is [`docs/TODO-27-10-2026.md`](docs/TODO-27-10-2026.md); the
+three-horizon summary is [`docs/ROADMAP.md`](docs/ROADMAP.md). The shell is no longer a
+spike: `cargo run -p ferrocad_toy` (the kernel-free edition) or
+`cargo run -p ferrocad_parametric` (with Part) opens the current window; the headless
+`#[gpui::test]` suite is the CI-proof path.
 
 ## Repository layout
 
@@ -393,19 +432,28 @@ python/Part.py            shim: publishes the combined extension and aliases its
 python/Mesh.py            shim: the same extension's `Mesh`
 python/MeshPart.py        shim: the same extension's `MeshPart`
 python/ferrocad_gen.abi3.so generated skeleton bindings, M3c (gitignored)
-python/FreeCADGui/        console-mode Gui stub
-python/ferrocad_spike/    Python declarative UI spike module
+python/FreeCADGui/        the upstream-compatible GUI facade (commands, view, selection, Draft tools)
+python/PySide/            the import-time PySide/micro-shim surface (no Qt)
+python/TechDraw/          the minimal TechDraw surface Draft's import/export tests need
+python/BOPTools/          the SplitAPI shim the SimpleCAD suites import
+docs/user/images/         committed workflow snapshots + manifest.json (spec/PNG digests)
+python/ferrocad_spike/    Python declarative UI spike module (kept)
 crates/ferrocad_core/     pure Rust core: quantities, properties, DAG, tx/observers/expr
 crates/ferrocad_py/       PyO3 bindings over ferrocad_core (module `ferrocad`)
 crates/ferrocad_gen/      generated PyO3 skeleton bindings (module `ferrocad_gen`)
     src/lib.rs            GENERATED by tools/codegen.py (committed)
-crates/ferrocad_geom/     geometry seam: Shape, History, GeometryBackend trait
-crates/ferrocad_mesh/     Mesh core: triangle meshes, STL, operations, Mesh::Feature
+crates/ferrocad_curves/   analytic curves and wires (no OCCT)
+crates/ferrocad_lineage/  payload-generic lineage: element refs, history, stable-name maps
+crates/ferrocad_geom/     geometry seam: Shape, lineage re-exports, GeometryBackend trait
+crates/ferrocad_mesh/     Mesh core: triangle meshes, STL/bms, operations, Mesh::Feature
 crates/ferrocad_occt/     OCCT backend (needs OCCT 7.8+)
 crates/ferrocad_part/     Part workbench: Part::Feature, Part::PropertyPartShape
-crates/ferrocad_part_py/  the `Part` Python module (makeBox, Shape); links OCCT
+crates/ferrocad_part_py/  the `Part` Python module (makeBox, Shape, curves, dress-ups); links OCCT
+crates/ferrocad_part_gui/ Part's presentation: the edge dress-up manipulator
 crates/ferrocad_mesh_py/  the `Mesh` and `MeshPart` Python modules
 crates/ferrocad_combined_py/ one `.so` linking ferrocad + Part + Mesh + MeshPart (shared core)
+crates/ferrocad_ui/       the Qt Designer `.ui` reader and typed form model (no Qt)
+crates/ferrocad_ui_py/    the PyO3 proxy layer over ferrocad_ui
 crates/ferrocad/          the base app binary (cargo run -p ferrocad)
     src/main.rs           entry: calls ferrocad::run()
     src/lib.rs            run/run_as + register_core_module (edition entry point)
@@ -413,6 +461,7 @@ crates/ferrocad/          the base app binary (cargo run -p ferrocad)
     build.rs              embeds python/ + mods/ when staged (embedded-payload feature)
 crates/ferrocad_parametric/ edition binary: base app + Part (cargo run -p ferrocad_parametric)
     src/main.rs           registers the Part module, then ferrocad::run_as
+crates/ferrocad_toy/      kernel-free edition (cargo run -p ferrocad_toy)
 crates/ferrocad_viewport/ the bite-gpui viewport: InventorViewport (image path), NaviCube, sample scene
     src/lib.rs            the crate surface (InventorViewport, NaviCube)
     src/inventor_view.rs  the gpui element + pointer→pick→listener interaction
@@ -421,7 +470,8 @@ crates/ferrocad_viewport/ the bite-gpui viewport: InventorViewport (image path),
 crates/ferrocad_gpui/     library: FerroCAD's bite-gpui app shell (boots CPython)
     src/lib.rs            run/run_with + HostConfig + window options
     src/python.rs         embedded-CPython bridge (boot, model_tree, properties, evaluate)
-    src/shell.rs          the Shell view: inspector / property editor / console / status bar
+    src/shell.rs          the Shell state/bootstrap/core
+    src/shell/            render, devtools, popovers, palette, viewport, picking, dispatch, dialogs, forms, properties
     src/spike.rs          kept feasibility spike (Python-declared UI, headless)
 crates/ferrocad_widgets/  reusable bite-gpui widgets (window chrome, field, console)
 crates/xtask/             cargo xtask tasks (bundle: stage a distribution)
@@ -438,10 +488,14 @@ tools/inventory.py        M3a: parse upstream .pyi stubs into an API model (Pyth
 tools/test_inventory.py   M3a tests (hermetic fixtures + upstream integration guard)
 tools/codegen.py          M3c: emit PyO3 skeleton bindings from the API model
 tools/test_codegen.py     M3c tests (hermetic generator logic)
+tools/screenshot.py       render one docs snapshot spec or a workflow's image ops
 tools/conformance.py      M3d: run upstream Mod/Test files against our FreeCAD
 tools/test_conformance.py M3d tests (hermetic harness helpers)
 tests/test_parity.py      behavioural checks (M0/M1)
-tests/test_base_surface.py  end-to-end FreeCAD surface smoke tests (M4)
+tests/test_base_surface.py  end-to-end FreeCAD surface tests (M4)
+tests/test_gui_*.py       the Gui view facade, selection and document surface
+tests/test_draft_import_surface.py  the Draft import-time surface (Quantity, getHomePath, TechDraw)
+tests/test_packaged_modules.py      the combined-extension packaging gate
 tests/test_fc_core.py     ferrocad_core via Python (M3b)
 tests/test_codegen.py     generated skeleton surface (M3c)
 ```

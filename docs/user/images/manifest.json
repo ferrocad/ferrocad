@@ -1,0 +1,78 @@
+{
+  "generator": "tools/userdocs.py",
+  "images": {
+    "documents-and-properties.png": {
+      "bytes": 12582,
+      "png_sha256": "12c0f1ec22ecfb119a8d264735c151af13a61ee80efb1821aa1b6b5159ce5c01",
+      "size": [
+        960,
+        600
+      ],
+      "spec_sha256": "84c251fa32fa4a442a80750ec89799f4b569f1c37e7e1b210bf38217d0ffdda3",
+      "workflows": [
+        "documents-and-properties"
+      ]
+    },
+    "first-model.png": {
+      "bytes": 9678,
+      "png_sha256": "3b3a9aed92995205099f4899503740339ee1fcb8f86be3757c44721ad3e87bda",
+      "size": [
+        960,
+        600
+      ],
+      "spec_sha256": "a72e47c7d05b916a5228c4a375ba522a7fd51786479750ed3bd70bf98936a5ff",
+      "workflows": [
+        "first-model"
+      ]
+    },
+    "parametric-recompute.png": {
+      "bytes": 12661,
+      "png_sha256": "71ea3cb2521a38c73df05a5041fe472fadc29d0bf740de22ca35b20226f51151",
+      "size": [
+        960,
+        600
+      ],
+      "spec_sha256": "067326c32a7696e9df03c4e87967f5cd4d07c36fccdeadfb4f372929d29b4d58",
+      "workflows": [
+        "parametric-recompute"
+      ]
+    },
+    "selection-and-commands.png": {
+      "bytes": 11780,
+      "png_sha256": "015c68c8f478b84699a9207967d16e82f86aff45fa2041e64fad56fc5a992d7a",
+      "size": [
+        960,
+        600
+      ],
+      "spec_sha256": "848245af2cb124204b89a388c01e6690d6cda39849a964641ab1f5ed8f09604e",
+      "workflows": [
+        "selection-and-commands"
+      ]
+    },
+    "toy-slab.png": {
+      "bytes": 11053,
+      "png_sha256": "9ef5e8378f0e542421cf358ee3d66a03cda39b734c647e5862d58e571784cbce",
+      "size": [
+        960,
+        600
+      ],
+      "spec_sha256": "6f5874d99d8c0062ad425b96bdaeb40acfad30112d2eaf95b9316b37470d4c42",
+      "workflows": [
+        "toy-workbench"
+      ]
+    },
+    "undo-and-persistence.png": {
+      "bytes": 13719,
+      "png_sha256": "8484479519d3a1e5dde8897c84cff4510af2195818db1e1ad4f305d9ade771a4",
+      "size": [
+        960,
+        600
+      ],
+      "spec_sha256": "bb5eef901d85c074af78860a2127f9c14a765931351eab5738d655c7842366dc",
+      "workflows": [
+        "undo-and-persistence"
+      ]
+    }
+  },
+  "version": 1
+}

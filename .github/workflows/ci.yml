@@ -56,6 +56,7 @@ jobs:
           python3 tools/api_docs.py --check
           python3 tools/build_book.py --check
           PYTHONPATH=python python3 tools/test_docs_tooling.py
+          PYTHONPATH=python python3 tools/test_screenshot.py
 
       - name: ferrocad_gpui headless tests (bite-gpui + embedded CPython)
         working-directory: crates/ferrocad_gpui
@@ -132,6 +133,14 @@ jobs:
           curl -sSL https://micro.mamba.pm/api/micromamba/linux-64/latest | tar -xj -C .occt
           export MAMBA_ROOT_PREFIX="$PWD/.occt/root"
           .occt/bin/micromamba create -y -p "$PWD/.occt/prefix" -c conda-forge occt=7.8.1
+      - name: Build and validate the docs screenshot tool
+        run: |
+          cargo build -p ferrocad_snapshot
+          cat > /tmp/snapshot-spec.json <<'EOF'
+          {"size":[96,64],"camera":{"eye":[-120,-160,120],"target":[10,10,10]},"shapes":[{"geometry":{"box":{"size":[20,10,6]}}}]}
+          EOF
+          ./target/debug/ferrocad_snapshot --validate /tmp/snapshot-spec.json
+
       - name: Open a real window with the Part workbench (must not crash within 30s)
         run: |
           export VK_ICD_FILENAMES=/usr/share/vulkan/icd.d/lvp_icd.json

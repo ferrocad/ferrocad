@@ -233,7 +233,7 @@ class TestCapture(unittest.TestCase):
             existing = image_dir / "demo.png"
             existing.write_bytes(b"old bytes")
 
-            # The example's exit code 3 is "no GPU adapter".
+            # The snapshot tool's exit code 3 is "no GPU adapter".
             fake = Path(tmp, "no-gpu.sh")
             fake.write_text("#!/bin/sh\nexit 3\n")
             fake.chmod(0o755)
@@ -257,6 +257,150 @@ class TestCapture(unittest.TestCase):
             self.assertTrue(degraded)
             self.assertEqual((written, unchanged), (0, 0))
             self.assertEqual(existing.read_bytes(), b"old bytes")
+
+
+class TestImageManifest(unittest.TestCase):
+    """The GPU-free half of the screenshot guarantee."""
+
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory()
+        self.image_dir = Path(self.temp.name, "images")
+        self.image_dir.mkdir()
+        self.patch = mock.patch.object(userdocs, "IMAGE_DIR", self.image_dir)
+        self.patch.start()
+
+    def tearDown(self):
+        self.patch.stop()
+        self.temp.cleanup()
+
+    @staticmethod
+    def spec(*, eye=(-120.0, -160.0, 120.0), name="demo.png"):
+        return {
+            "size": [960, 600],
+            "camera": {"eye": list(eye), "target": [0.0, 0.0, 0.0], "up": [0.0, 0.0, 1.0]},
+            "shapes": [
+                {
+                    "geometry": {"box": {"size": [10.0, 8.0, 6.0], "origin": [0.0, 0.0, 0.0]}},
+                    "draw_mode": "shaded_with_edges",
+                }
+            ],
+        }
+
+    def image(self, *, name="demo.png", spec=None, slug="demo"):
+        return (
+            Path("01_demo.py"),
+            capture(
+                slug=slug,
+                ops=[
+                    {
+                        "kind": "image",
+                        "name": name,
+                        "alt": "a box",
+                        "caption": None,
+                        "spec": self.spec() if spec is None else spec,
+                    }
+                ],
+            ),
+        )
+
+    def write_bytes(self, name="demo.png", data=b"png bytes"):
+        path = self.image_dir / name
+        path.write_bytes(data)
+        return path
+
+    def test_a_spec_digest_ignores_key_order(self):
+        first = {"camera": {"eye": [1, 2, 3], "target": [0, 0, 0]}, "shapes": []}
+        second = {"shapes": [], "camera": {"target": [0, 0, 0], "eye": [1, 2, 3]}}
+        self.assertEqual(userdocs.spec_digest(first), userdocs.spec_digest(second))
+
+    def test_the_manifest_records_the_spec_and_the_png(self):
+        self.write_bytes()
+        changed, count = userdocs.write_manifest([self.image()])
+        self.assertTrue(changed)
+        self.assertEqual(count, 1)
+
+        manifest = userdocs.load_manifest()
+        entry = manifest["images"]["demo.png"]
+        self.assertEqual(entry["workflows"], ["demo"])
+        self.assertEqual(entry["bytes"], len(b"png bytes"))
+        self.assertEqual(
+            entry["spec_sha256"],
+            userdocs.spec_digest(self.spec()),
+        )
+        self.assertEqual(userdocs.check_images([self.image()]), [])
+        self.assertFalse(userdocs.write_manifest([self.image()])[0])
+
+    def test_a_changed_spec_is_stale_even_without_a_gpu(self):
+        self.write_bytes()
+        userdocs.write_manifest([self.image()])
+        changed = self.image(spec=self.spec(eye=(-200.0, -160.0, 120.0)))
+        errors = userdocs.check_images([changed])
+        self.assertEqual(len(errors), 1)
+        self.assertIn("stale spec: demo.png", errors[0])
+
+    def test_a_changed_png_is_stale(self):
+        self.write_bytes()
+        userdocs.write_manifest([self.image()])
+        self.write_bytes(data=b"edited bytes")
+        errors = userdocs.check_images([self.image()])
+        self.assertEqual(len(errors), 1)
+        self.assertIn("stale image: demo.png", errors[0])
+
+    def test_a_missing_png_is_reported(self):
+        self.write_bytes()
+        userdocs.write_manifest([self.image()])
+        (self.image_dir / "demo.png").unlink()
+        errors = userdocs.check_images([self.image()])
+        self.assertEqual(len(errors), 1)
+        self.assertIn("missing image: demo.png", errors[0])
+
+    def test_an_orphan_manifest_entry_is_reported(self):
+        self.write_bytes()
+        userdocs.write_manifest([self.image()])
+        errors = userdocs.check_images([])
+        self.assertEqual(len(errors), 1)
+        self.assertIn("orphan manifest entry: demo.png", errors[0])
+
+    def test_a_missing_manifest_is_reported_for_generated_images(self):
+        self.write_bytes()
+        errors = userdocs.check_images([self.image()])
+        self.assertEqual(len(errors), 1)
+        self.assertIn("missing docs/user/images/manifest.json", errors[0])
+
+    def test_write_manifest_refuses_a_spec_without_a_png(self):
+        with self.assertRaises(RuntimeError):
+            userdocs.write_manifest([self.image()])
+
+    def test_two_workflows_may_share_an_image_only_with_the_same_spec(self):
+        first = self.image(slug="a")
+        second = self.image(slug="b")
+        entries = userdocs.expected_images([first, second])
+        self.assertEqual(entries["demo.png"]["workflows"], ["a", "b"])
+
+        other = self.image(slug="b", spec=self.spec(eye=(-200.0, -160.0, 120.0)))
+        with self.assertRaises(RuntimeError):
+            userdocs.expected_images([first, other])
+
+    def test_a_manual_image_is_not_in_the_manifest(self):
+        manual = (
+            Path("01_demo.py"),
+            capture(
+                ops=[
+                    {
+                        "kind": "image",
+                        "name": "manual.png",
+                        "alt": "a screenshot",
+                        "caption": None,
+                        "spec": None,
+                    }
+                ]
+            ),
+        )
+        self.assertEqual(userdocs.expected_images([manual]), {})
+        changed, count = userdocs.write_manifest([manual])
+        self.assertTrue(changed)
+        self.assertEqual(count, 0)
+        self.assertEqual(userdocs.check_images([manual]), [])
 
 
 class TestQuadrants(unittest.TestCase):

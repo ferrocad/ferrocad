@@ -99,7 +99,30 @@ reloaded = reopened.getObject("Part")
 | Reloaded Length | 25 mm |
 | Reloaded Finish | Anodised |
 
-## 4. Clean up
+## 4. What the reloaded length describes
+
+The reloaded value is the 25 mm length after the redo, read from the file. The box below uses it; the depth and height are illustrative.
+
+```python
+box_size = (float(reloaded.Length), 20.0, 10.0)
+box_center = [value / 2.0 for value in box_size]
+span = max(box_size)
+box_eye = [
+    box_center[0] - span * 0.8,
+    box_center[1] - span * 1.8,
+    box_center[2] + span * 1.5,
+]
+```
+
+| Read back | Value |
+| --- | --- |
+| Box (length, depth, height) | [25.0, 20.0, 10.0] |
+
+![A 25 by 20 by 10 millimetre box drawn in the viewport](../images/undo-and-persistence.png)
+
+*The 25 mm length after redo and reload, drawn as a box; the depth and height are illustrative.*
+
+## 5. Clean up
 
 ```python
 import shutil

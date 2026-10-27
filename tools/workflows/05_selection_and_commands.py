@@ -82,6 +82,57 @@ def run(cap):
         cap.result("Accept response", accepted)
         cap.result("Objects", [obj.Name for obj in FreeCAD.ActiveDocument.Objects])
 
+    with cap.step("What the command created"):
+        cap.prose(
+            "`Toy_MakeSlab` created a second slab with the values from the dialog. "
+            "The box below is its footprint and height; the document tree above is "
+            "the same object."
+        )
+        cap.exec(
+            """
+            created = next(
+                obj
+                for obj in FreeCAD.ActiveDocument.Objects
+                if obj.Name.startswith("Slab") and obj.Name != "Slab"
+            )
+            box_size = (float(created.Width), float(created.Depth), float(created.Height))
+            box_center = [value / 2.0 for value in box_size]
+            span = max(box_size)
+            box_eye = [
+                box_center[0] - span * 0.8,
+                box_center[1] - span * 1.8,
+                box_center[2] + span * 1.5,
+            ]
+            """
+        )
+        cap.result("Created object", created.Name)
+        cap.result("Box (width, depth, height)", box_size)
+        cap.image(
+            "selection-and-commands.png",
+            "A 50 by 25 by 12 millimetre slab drawn in the viewport",
+            caption=(
+                "The slab `Toy_MakeSlab` created from the dialog values, drawn by the "
+                "same offscreen renderer the viewport uses."
+            ),
+            shape={"box": {"size": list(box_size), "origin": [0.0, 0.0, 0.0]}},
+            color=[0.55, 0.57, 0.60, 1.0],
+            camera={
+                "eye": box_eye,
+                "target": box_center,
+                "up": [0.0, 0.0, 1.0],
+                "fov_y": 0.6,
+            },
+        )
+        cap.image(
+            "selection-and-commands-window.png",
+            "The Toy edition with the workflow's document and Dev Tools open",
+            caption=(
+                "The same document in the Toy edition, with Dev Tools open. "
+                "`Slab001` is the object the dialog created, and the Commands list is "
+                "the shell's view of `commands()`."
+            ),
+        )
+
     with cap.step("Cancelling instead"):
         cap.prose(
             "A token is single-use. Cancelling drops it without running the callback, "

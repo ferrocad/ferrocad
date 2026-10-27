@@ -169,6 +169,15 @@ def run(cap):
                 "fov_y": 0.6,
             },
         )
+        cap.image(
+            "toy-workbench-window.png",
+            "The Toy edition window with the Wide slab beside the sample slab",
+            caption=(
+                "The same document opened in the Toy edition. The viewport draws both "
+                "slabs, the header carries the workbench's controls, and the action "
+                "dock is the shell's own chrome rather than the workbench's."
+            ),
+        )
 
     with cap.step("Undo the manipulation"):
         cap.prose(

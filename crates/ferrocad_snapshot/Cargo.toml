@@ -1,0 +1,18 @@
+[package]
+name = "ferrocad_snapshot"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+rust-version.workspace = true
+description = "Render a FerroCAD documentation snapshot spec to a deterministic PNG"
+publish = false
+
+[[bin]]
+name = "ferrocad_snapshot"
+path = "src/main.rs"
+
+[dependencies]
+ferrocad_wgpu.workspace = true
+serde_json.workspace = true

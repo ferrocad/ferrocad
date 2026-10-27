@@ -45,6 +45,14 @@ def run(cap):
         )
         cap.result("Response", first)
         cap.result("FerroCAD.Grid.enabled", FerroCAD.Grid.enabled)
+        cap.image(
+            "grid-visibility.png",
+            "The Toy edition with the reference grid visible",
+            caption=(
+                "The Toy edition with the grid on. The `Grid` control in the header "
+                "reads the same switch `App_ToggleGrid` flips."
+            ),
+        )
 
     with cap.step("Push the state the window would push"):
         cap.prose(

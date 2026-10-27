@@ -39,6 +39,10 @@ first = json.loads(ferrocad_shell.run_command("App_ToggleGrid"))
 | Response | {"ok": true, "view": {"grid": true, "grid_alpha": 1.0, "grid_color": "#94a3b8", "grid_major": 100.0, "grid_minor": 10.0, "grid_radius": 0.0}} |
 | FerroCAD.Grid.enabled | true |
 
+![The Toy edition with the reference grid visible](../images/grid-visibility.png)
+
+*The Toy edition with the grid on. The `Grid` control in the header reads the same switch `App_ToggleGrid` flips.*
+
 ## 3. Push the state the window would push
 
 With no window, nothing has mirrored the request yet, so the check mark still reads the old state. `set_view_state` is the call the shell makes after it applies a request.

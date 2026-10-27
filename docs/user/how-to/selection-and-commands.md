@@ -113,7 +113,40 @@ accepted = json.loads(
 | Accept response | {"ok": true, "status": "created Slab001"} |
 | Objects | ["Params", "Derived", "Group", "Slab", "Slab001"] |
 
-## 4. Cancelling instead
+## 4. What the command created
+
+`Toy_MakeSlab` created a second slab with the values from the dialog. The box below is its footprint and height; the document tree above is the same object.
+
+```python
+created = next(
+    obj
+    for obj in FreeCAD.ActiveDocument.Objects
+    if obj.Name.startswith("Slab") and obj.Name != "Slab"
+)
+box_size = (float(created.Width), float(created.Depth), float(created.Height))
+box_center = [value / 2.0 for value in box_size]
+span = max(box_size)
+box_eye = [
+    box_center[0] - span * 0.8,
+    box_center[1] - span * 1.8,
+    box_center[2] + span * 1.5,
+]
+```
+
+| Read back | Value |
+| --- | --- |
+| Created object | Slab001 |
+| Box (width, depth, height) | [50.0, 25.0, 12.0] |
+
+![A 50 by 25 by 12 millimetre slab drawn in the viewport](../images/selection-and-commands.png)
+
+*The slab `Toy_MakeSlab` created from the dialog values, drawn by the same offscreen renderer the viewport uses.*
+
+![The Toy edition with the workflow's document and Dev Tools open](../images/selection-and-commands-window.png)
+
+*The same document in the Toy edition, with Dev Tools open. `Slab001` is the object the dialog created, and the Commands list is the shell's view of `commands()`.*
+
+## 5. Cancelling instead
 
 A token is single-use. Cancelling drops it without running the callback, so a cancelled dialog leaves no transaction behind.
 
@@ -129,7 +162,7 @@ cancel_response = json.loads(
 | Cancel response | {"ok": true} |
 | Objects | ["Params", "Derived", "Group", "Slab", "Slab001"] |
 
-## 5. Act on the selection
+## 6. Act on the selection
 
 `App_Delete` is the shell's own edit command. It reads the same selection snapshot and deletes what it names.
 
@@ -145,7 +178,7 @@ deleted = json.loads(ferrocad_shell.run_command("App_Delete"))
 
 > Every call above is a plain function on the shell's Python module. The same functions are what the window calls while you click, which is why these pages run with no window at all.
 
-## 6. Close the document
+## 7. Close the document
 
 ```python
 FreeCAD.closeDocument('Toy')

@@ -21,11 +21,14 @@ use crate::mesh::directed_edges;
 /// tessellator's weld.
 const MERGE_TOLERANCE: f64 = 1e-7;
 
-/// `|(b - a) x (c - a)|` at or below this value is a zero-area facet.
+/// The default squared distance below which a facet is degenerate.
 ///
-/// This is twice the triangle area; `1e-15` is the threshold SimpleCAD's glue
-/// code already uses for the same purpose (`mesh/glue.py`).
-const DEGENERATE_CROSS_LENGTH: f64 = 1e-15;
+/// Upstream `Mesh.fixDegenerations(epsilon)` takes `MeshDefinitions::_fMinPointDistanceP2`,
+/// the square of [`MESH_MIN_POINT_DISTANCE`], by default.
+const DEGENERATE_EPSILON: f64 = MESH_MIN_POINT_DISTANCE * MESH_MIN_POINT_DISTANCE;
+
+/// `MESH_MIN_PT_DIST` from upstream's `MeshDefinitions`.
+const MESH_MIN_POINT_DISTANCE: f64 = 1.0e-6;
 
 impl Mesh {
     /// The sum of the facet areas on the local points (FreeCAD `Mesh.Area`).
@@ -149,13 +152,29 @@ impl Mesh {
         true
     }
 
-    /// Drop facets that repeat a point index or have zero area (upstream
-    /// `MeshKernel::RemoveDegeneration`).
+    /// Drop facets that repeat a point index or are degenerate within the
+    /// default epsilon (upstream `MeshKernel::RemoveDegeneration`).
     ///
     /// Run this after [`remove_duplicated_points`](Mesh::remove_duplicated_points):
     /// a merge can be what makes a facet collapse or become collinear.
     /// Returns whether any facet was dropped.
     pub fn fix_degenerations(&mut self) -> bool {
+        self.fix_degenerations_with(DEGENERATE_EPSILON)
+    }
+
+    /// Drop facets that repeat a point index or are degenerate within `epsilon`
+    /// (upstream `Mesh.fixDegenerations(epsilon)`).
+    ///
+    /// `epsilon` is a **squared length**, the same quantity upstream's
+    /// `MeshGeomFacet::IsDegenerated` compares against: a facet is degenerate
+    /// when one of its edges is at most `epsilon` long (`uu <= epsilon` or
+    /// `vv <= epsilon`) or when `|u x v|^2 <= epsilon * max(u^2, v^2)`, which is
+    /// the squared distance of the third corner from the opposite edge. The
+    /// default is `(1e-6)^2`, `MeshDefinitions::_fMinPointDistanceP2`.
+    ///
+    /// A facet is removed from the facet list; the points stay, exactly as in
+    /// our previous behaviour. Returns whether any facet was dropped.
+    pub fn fix_degenerations_with(&mut self, epsilon: f64) -> bool {
         let points = self.points();
         let mut facets = Vec::with_capacity(self.count_facets());
         let mut changed = false;
@@ -168,7 +187,17 @@ impl Mesh {
             let pa = points[a as usize];
             let pb = points[b as usize];
             let pc = points[c as usize];
-            if pb.sub(&pa).cross(&pc.sub(&pa)).length() <= DEGENERATE_CROSS_LENGTH {
+            let u = pb.sub(&pa);
+            let v = pc.sub(&pa);
+            let uu = u.dot(&u);
+            let vv = v.dot(&v);
+            if uu <= epsilon || vv <= epsilon {
+                changed = true;
+                continue;
+            }
+            let uv = u.dot(&v);
+            let cross_squared = uu * vv - uv * uv;
+            if cross_squared <= epsilon * uu.max(vv) {
                 changed = true;
                 continue;
             }
@@ -286,13 +315,25 @@ impl Mesh {
     ///
     /// Going through [`Mesh::new`] re-runs the structural validation; the
     /// operations above only remove or re-wind facets and remap points, so they
-    /// cannot violate it. The new topology has no facet groups: every mutator
-    /// changes facet indices, so any group recorded earlier would be stale.
+    /// cannot violate it.
+    ///
+    /// Facet groups address facet **indices**, so they survive an operation that
+    /// keeps the facet list (`harmonize_normals`, or a point merge that drops no
+    /// facet) — upstream `MeshObject` keeps `_segments` in exactly those cases
+    /// and clears them only when the facet count decreases. A removal renumbers
+    /// the facets, so the groups are dropped rather than silently pointing at
+    /// the wrong triangles.
     fn replace_topology(&mut self, points: Vec<Vector3>, facets: Vec<[u32; 3]>) {
         let placement = self.placement();
+        let segments = if facets.len() == self.facets().len() {
+            self.segments().to_vec()
+        } else {
+            Vec::new()
+        };
         let mut mesh =
             Mesh::new(points, facets).expect("mesh operations preserve the structural invariants");
         mesh.set_placement(placement);
+        mesh.restore_segments(segments);
         *self = mesh;
     }
 }
@@ -451,5 +492,138 @@ mod tests {
         let mut mesh = Mesh::box_(2.0, 3.0, 4.0).unwrap();
         assert!(!mesh.harmonize_normals());
         assert!(mesh.signed_volume() > 0.0);
+    }
+
+    /// A box whose twelve facets are recorded as six two-facet groups (one per
+    /// face), as `MeshPart.meshFromShape(..., Segments=True)` does. With
+    /// `flipped`, the first facet is wound the other way.
+    fn segmented_box(flipped: bool) -> Mesh {
+        let box_mesh = Mesh::box_(1.0, 1.0, 1.0).unwrap();
+        let parts: Vec<(Vec<Vector3>, Vec<[u32; 3]>)> = (0..6)
+            .map(|face| {
+                let mut facets: Vec<[u32; 3]> = (0..2)
+                    .map(|slot| box_mesh.facets()[face * 2 + slot])
+                    .collect();
+                if flipped && face == 0 {
+                    facets[0] = [facets[0][0], facets[0][2], facets[0][1]];
+                }
+                (box_mesh.points().to_vec(), facets)
+            })
+            .collect();
+        Mesh::from_segmented_facets(&parts, 0.0).unwrap()
+    }
+
+    /// The `segmented_box` groups on an arbitrary mesh (used after a test has
+    /// changed the points or facets).
+    fn add_box_groups(mesh: &mut Mesh) {
+        for face in 0..6u32 {
+            mesh.add_segment([face * 2, face * 2 + 1]).unwrap();
+        }
+    }
+
+    #[test]
+    fn a_near_collinear_facet_is_degenerate() {
+        // The third corner is 1e-7 off the opposite edge: its squared distance
+        // is 1e-14, below the default 1e-12 squared-length epsilon, so upstream
+        // and this crate remove it (the old absolute cross-length test did not).
+        let mut mesh = Mesh::new(
+            vec![
+                Vector3::new(0.0, 0.0, 0.0),
+                Vector3::new(1.0, 0.0, 0.0),
+                Vector3::new(0.5, 1e-7, 0.0),
+            ],
+            vec![[0, 1, 2]],
+        )
+        .unwrap();
+        assert!(mesh.fix_degenerations());
+        assert_eq!(mesh.count_facets(), 0);
+    }
+
+    #[test]
+    fn a_facet_with_a_short_edge_is_degenerate() {
+        let mut mesh = Mesh::new(
+            vec![
+                Vector3::new(0.0, 0.0, 0.0),
+                Vector3::new(1e-7, 0.0, 0.0),
+                Vector3::new(0.0, 1.0, 0.0),
+            ],
+            vec![[0, 1, 2]],
+        )
+        .unwrap();
+        assert!(mesh.fix_degenerations());
+        assert_eq!(mesh.count_facets(), 0);
+    }
+
+    #[test]
+    fn a_thin_but_sound_facet_is_kept() {
+        let mut mesh = Mesh::new(
+            vec![
+                Vector3::new(0.0, 0.0, 0.0),
+                Vector3::new(1.0, 0.0, 0.0),
+                Vector3::new(0.5, 1e-4, 0.0),
+            ],
+            vec![[0, 1, 2]],
+        )
+        .unwrap();
+        assert!(!mesh.fix_degenerations());
+        assert_eq!(mesh.count_facets(), 1);
+    }
+
+    #[test]
+    fn the_degeneracy_epsilon_is_the_squared_length() {
+        // The same 1e-7 sliver survives a much smaller epsilon.
+        let mut mesh = Mesh::new(
+            vec![
+                Vector3::new(0.0, 0.0, 0.0),
+                Vector3::new(1.0, 0.0, 0.0),
+                Vector3::new(0.5, 1e-7, 0.0),
+            ],
+            vec![[0, 1, 2]],
+        )
+        .unwrap();
+        assert!(!mesh.fix_degenerations_with(1e-16));
+        assert_eq!(mesh.count_facets(), 1);
+    }
+
+    #[test]
+    fn harmonize_normals_keeps_the_facet_groups() {
+        let mut mesh = segmented_box(true);
+        assert_eq!(mesh.count_segments(), 6);
+        assert!(mesh.has_non_uniform_oriented_facets());
+        assert!(mesh.harmonize_normals());
+        assert!(!mesh.has_non_uniform_oriented_facets());
+        assert_eq!(mesh.count_segments(), 6);
+        assert_eq!(mesh.segment(0).unwrap().len(), 2);
+    }
+
+    #[test]
+    fn a_point_merge_that_keeps_the_facets_keeps_the_groups() {
+        // An unused duplicate point changes the point list only.
+        let box_mesh = segmented_box(false);
+        let mut points = box_mesh.points().to_vec();
+        points.push(points[0]);
+        let mut mesh = Mesh::new(points, box_mesh.facets().to_vec()).unwrap();
+        add_box_groups(&mut mesh);
+        assert!(mesh.remove_duplicated_points());
+        assert_eq!(mesh.count_points(), 8);
+        assert_eq!(mesh.count_segments(), 6);
+    }
+
+    #[test]
+    fn a_facet_removal_drops_the_groups() {
+        let box_mesh = segmented_box(false);
+        let mut points = box_mesh.points().to_vec();
+        points.push(Vector3::new(0.0, 0.0, 0.0));
+        points.push(Vector3::new(1.0, 0.0, 0.0));
+        points.push(Vector3::new(2.0, 0.0, 0.0));
+        let base = (points.len() - 3) as u32;
+        let mut facets = box_mesh.facets().to_vec();
+        facets.push([base, base + 1, base + 2]);
+        let mut mesh = Mesh::new(points, facets).unwrap();
+        add_box_groups(&mut mesh);
+
+        assert!(mesh.fix_degenerations());
+        assert_eq!(mesh.count_facets(), 12);
+        assert_eq!(mesh.count_segments(), 0);
     }
 }

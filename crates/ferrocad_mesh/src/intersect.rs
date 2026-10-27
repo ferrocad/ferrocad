@@ -4,6 +4,16 @@
 //! cheap boolean and [`Mesh::self_intersections`] reports each offending pair
 //! with two **local** intersection points.
 //!
+//! # Definition
+//!
+//! Upstream's `MeshEvalSelfIntersection::GetIntersections` records a pair only
+//! when `MeshGeomFacet::IntersectWithFacet` returns 2, i.e. when the two facets
+//! meet along a segment of positive length (or overlap over an area when
+//! coplanar). A pair that only touches at a single point returns 1 and is *not*
+//! an intersection, and a coplanar contact that the plausibility check rejects
+//! returns 0. This module follows that definition: a zero-length contact is not
+//! reported.
+//!
 //! # Acceleration
 //!
 //! A uniform grid is built over the facets' axis-aligned bounding boxes. Each
@@ -14,7 +24,7 @@
 //! grid from exploding at the cost of an `O(n)` scan for that one triangle.
 //!
 //! Facets that share a point index are adjacent, not self-intersecting, and are
-//! skipped.
+//! skipped (the same rule as upstream).
 
 use std::collections::{HashMap, HashSet};
 
@@ -342,9 +352,13 @@ fn triangle_intersection(first: &Triangle, second: &Triangle, eps: f64) -> Optio
         ordered(first_clip.0.dot(&direction), first_clip.1.dot(&direction));
     let (second_low, second_high) =
         ordered(second_clip.0.dot(&direction), second_clip.1.dot(&direction));
+    // Two facets intersect when their common region has positive length: a
+    // crossing segment or a coplanar overlap. A contact at a single point is
+    // not an intersection (upstream `MeshGeomFacet::IntersectWithFacet`
+    // returns 1 for that and `GetIntersections` keeps only 2).
     let low = first_low.max(second_low);
     let high = first_high.min(second_high);
-    if high < low - eps {
+    if high - low <= eps {
         return None;
     }
 
@@ -497,24 +511,25 @@ fn coplanar_intersection(
     }
     dedupe(&mut contacts, eps);
 
-    match contacts.len() {
-        0 => None,
-        1 => Some([contacts[0], contacts[0]]),
-        _ => {
-            let mut best = (contacts[0], contacts[1]);
-            let mut best_distance = best.0.distance(&best.1);
-            for first in 0..contacts.len() {
-                for second in (first + 1)..contacts.len() {
-                    let distance = contacts[first].distance(&contacts[second]);
-                    if distance > best_distance {
-                        best_distance = distance;
-                        best = (contacts[first], contacts[second]);
-                    }
-                }
+    // A single contact point is a touch, not an intersection.
+    if contacts.len() < 2 {
+        return None;
+    }
+    let mut best = (contacts[0], contacts[1]);
+    let mut best_distance = best.0.distance(&best.1);
+    for first in 0..contacts.len() {
+        for second in (first + 1)..contacts.len() {
+            let distance = contacts[first].distance(&contacts[second]);
+            if distance > best_distance {
+                best_distance = distance;
+                best = (contacts[first], contacts[second]);
             }
-            Some([best.0, best.1])
         }
     }
+    if best_distance <= eps {
+        return None;
+    }
+    Some([best.0, best.1])
 }
 
 /// Drop the axis with the largest normal component for a 2D projection.
@@ -674,5 +689,55 @@ mod tests {
         let intersections = mesh.self_intersections();
         assert_eq!(intersections.len(), 1);
         assert!(intersections[0].points[0].distance(&intersections[0].points[1]) > 0.0);
+    }
+
+    /// Two facets with separate point indices, so they are not skipped as
+    /// adjacent.
+    fn pair(first: [[f64; 3]; 3], second: [[f64; 3]; 3]) -> Mesh {
+        let mut points = Vec::new();
+        for triangle in [first, second] {
+            for point in triangle {
+                points.push(Vector3::new(point[0], point[1], point[2]));
+            }
+        }
+        Mesh::new(points, vec![[0, 1, 2], [3, 4, 5]]).unwrap()
+    }
+
+    #[test]
+    fn a_single_point_touch_is_not_an_intersection() {
+        // The second triangle stands on one of its vertices, which lies inside
+        // the first triangle: the common region is that point only.
+        let mesh = pair(
+            [[0.0, 0.0, 0.0], [4.0, 0.0, 0.0], [0.0, 4.0, 0.0]],
+            [[1.0, 1.0, 0.0], [1.0, 1.0, 2.0], [2.0, 2.0, 2.0]],
+        );
+        assert!(!mesh.has_self_intersections());
+        assert!(mesh.self_intersections().is_empty());
+
+        // Coplanar triangles that only share a corner point likewise touch.
+        let coplanar = pair(
+            [[0.0, 0.0, 0.0], [4.0, 0.0, 0.0], [0.0, 4.0, 0.0]],
+            [[1.0, 1.0, 0.0], [3.0, 1.0, 0.0], [1.0, 3.0, 0.0]],
+        );
+        // These two overlap over an area, so they *are* reported.
+        assert!(coplanar.has_self_intersections());
+        let touching = pair(
+            [[0.0, 0.0, 0.0], [2.0, 0.0, 0.0], [0.0, 2.0, 0.0]],
+            [[2.0, 0.0, 0.0], [4.0, 0.0, 0.0], [2.0, 2.0, 0.0]],
+        );
+        assert!(!touching.has_self_intersections());
+    }
+
+    #[test]
+    fn an_edge_contact_with_positive_length_is_reported() {
+        // The second triangle leans out of the first one's plane; they meet along
+        // a segment of the first triangle's interior.
+        let mesh = pair(
+            [[0.0, 0.0, 0.0], [4.0, 0.0, 0.0], [0.0, 4.0, 0.0]],
+            [[1.0, 1.0, 0.0], [2.0, 2.0, 0.0], [1.0, 1.0, 2.0]],
+        );
+        let intersections = mesh.self_intersections();
+        assert_eq!(intersections.len(), 1);
+        assert!(intersections[0].points[0].distance(&intersections[0].points[1]) > 1e-6);
     }
 }

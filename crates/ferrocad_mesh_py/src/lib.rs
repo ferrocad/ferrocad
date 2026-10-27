@@ -541,8 +541,15 @@ impl PyMesh {
         self.inner.remove_duplicated_facets();
     }
 
-    fn fixDegenerations(&mut self) {
-        self.inner.fix_degenerations();
+    /// Drop degenerate facets (upstream `Mesh.fixDegenerations(epsilon=1e-12)`).
+    ///
+    /// `epsilon` is a **squared length** (`MeshDefinitions::_fMinPointDistanceP2`
+    /// by default): a facet with an edge shorter than `sqrt(epsilon)`, or whose
+    /// third corner lies closer than `sqrt(epsilon)` to the opposite edge, is
+    /// removed.
+    #[pyo3(signature = (epsilon = 1e-12))]
+    fn fixDegenerations(&mut self, epsilon: f64) {
+        self.inner.fix_degenerations_with(epsilon);
     }
 
     fn harmonizeNormals(&mut self) {

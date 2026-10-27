@@ -201,6 +201,23 @@ noisy.removeDuplicatedPoints()
 assert noisy.CountPoints == 3
 noisy.removeDuplicatedFacets()
 assert noisy.CountFacets == 1
+
+# fixDegenerations takes upstream's squared-length epsilon.
+sliver_points = [V(0, 0, 0), V(1, 0, 0), V(0.5, 1e-7, 0)]
+sliver = Mesh.Mesh((sliver_points, [(0, 1, 2)]))
+assert sliver.getPlanarSegments(1e-3) == [], "one facet is not a segment"
+sliver.fixDegenerations(1e-16)
+assert sliver.CountFacets == 1, "a 1e-14 sliver survives a 1e-16 epsilon"
+sliver.fixDegenerations()
+assert sliver.CountFacets == 0, "the default epsilon is (1e-6)**2"
+
+# A single-point touch is not a self-intersection (upstream keeps only the
+# positive-length intersections).
+touch = Mesh.Mesh(([V(0, 0, 0), V(4, 0, 0), V(0, 4, 0),
+                    V(1, 1, 0), V(1, 1, 2), V(2, 2, 2)],
+                   [(0, 1, 2), (3, 4, 5)]))
+assert not touch.hasSelfIntersections()
+assert touch.getSelfIntersections() == []
 "#,
         );
     });

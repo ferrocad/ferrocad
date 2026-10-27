@@ -395,6 +395,13 @@ impl Mesh {
         self.segments.clear();
     }
 
+    /// Restore facet groups that still address this facet list (used when an
+    /// operation keeps the facets verbatim, for example `harmonize_normals`).
+    pub(crate) fn restore_segments(&mut self, segments: Vec<Vec<u32>>) {
+        debug_assert!(validate_segments(&segments, self.facets.len()).is_ok());
+        self.segments = segments;
+    }
+
     /// The placement stored beside the mesh.
     pub fn placement(&self) -> Placement {
         self.placement

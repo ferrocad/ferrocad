@@ -91,6 +91,16 @@ fn bounding_diagonal(shape: &TopoDS_Shape) -> f64 {
     ((x_max - x_min).powi(2) + (y_max - y_min).powi(2) + (z_max - z_min).powi(2)).sqrt()
 }
 
+/// The linear deflection `options` asks for, in model units.
+fn deflection(s: &TopoDS_Shape, options: &TessellationOptions) -> f64 {
+    let diagonal = bounding_diagonal(s);
+    match options.linear_deflection {
+        Some(d) if options.relative => d * diagonal.max(1e-9),
+        Some(d) => d,
+        None => (diagonal * 1e-3).max(1e-6),
+    }
+}
+
 /// Tessellate `shape` into one mesh whose triangles, segments and vertices carry
 /// their sub-element part id.
 ///
@@ -106,12 +116,7 @@ pub(crate) fn tessellate(
         .as_ref()
         .ok_or(OcctError::InvalidInput { what: "null shape" })?;
 
-    let diagonal = bounding_diagonal(s);
-    let deflection = match options.linear_deflection {
-        Some(d) if options.relative => d * diagonal.max(1e-9),
-        Some(d) => d,
-        None => (diagonal * 1e-3).max(1e-6),
-    };
+    let deflection = deflection(s, options);
     let mesh = ffi::b_rep_mesh::IncrementalMesh_new(s, deflection);
     if !mesh.IsDone() {
         return Err(OcctError::NotDone {
@@ -217,6 +222,75 @@ pub(crate) fn tessellate(
     }
 
     Ok(out)
+}
+
+/// The face triangulations of `shape` in double precision (`Shape.tessellate`).
+///
+/// [`tessellate`] narrows its positions to `f32` because they feed the viewport;
+/// the Python API promises upstream's `Base.Vector` precision, so this reads the
+/// same `Poly_Triangulation` nodes without narrowing them. Positions stay per
+/// face (duplicated along shared edges), exactly as the display mesh has them;
+/// the caller welds them.
+pub(crate) fn tessellate_points(
+    shape: &Shape,
+    options: &TessellationOptions,
+) -> Result<(Vec<[f64; 3]>, Vec<u32>), GeomError> {
+    let occt = downcast(shape)?;
+    let guard = occt.borrow();
+    let s = guard
+        .as_ref()
+        .ok_or(OcctError::InvalidInput { what: "null shape" })?;
+
+    let mesh = ffi::b_rep_mesh::IncrementalMesh_new(s, deflection(s, options));
+    if !mesh.IsDone() {
+        return Err(OcctError::NotDone {
+            operation: "tessellate",
+        }
+        .into());
+    }
+
+    let faces = sub_shape_map(s, TopAbs_ShapeEnum::TopAbs_FACE);
+    let mut positions: Vec<[f64; 3]> = Vec::new();
+    let mut triangles: Vec<u32> = Vec::new();
+    for face_index in 1..=faces.Extent() {
+        let face_shape = faces.FindKey(face_index);
+        let face = TopoDS::Face(face_shape);
+        let mut location = ffi::top_loc::Location_new();
+        let handle = ffi::b_rep::BRep_Tool_Triangulation(face, location.pin_mut());
+        if handle.IsNull() {
+            continue;
+        }
+        let triangulation = ffi::poly::Handle_Poly_Triangulation_Get(&handle).map_err(|_| {
+            OcctError::InvalidInput {
+                what: "null triangulation",
+            }
+        })?;
+        let trsf = ffi::top_loc::TopLoc_Location_Transformation(&location);
+        let reversed = matches!(
+            face_shape.Orientation(),
+            TopAbs_Orientation::TopAbs_REVERSED
+        );
+        let base = positions.len() as u32;
+        for node in 1..=triangulation.NbNodes() {
+            let mut point = ffi::poly::Poly_Triangulation_Node(triangulation, node);
+            point.pin_mut().Transform(&trsf);
+            positions.push([point.X(), point.Y(), point.Z()]);
+        }
+        for triangle_index in 1..=triangulation.NbTriangles() {
+            let triangle = triangulation.Triangle(triangle_index);
+            let a = base + (triangle.Value(1) - 1) as u32;
+            let b = base + (triangle.Value(2) - 1) as u32;
+            let c = base + (triangle.Value(3) - 1) as u32;
+            // As in [`tessellate`]: OCCT keeps the face orientation separately.
+            if reversed {
+                triangles.extend([a, c, b]);
+            }
+            else {
+                triangles.extend([a, b, c]);
+            }
+        }
+    }
+    Ok((positions, triangles))
 }
 
 /// Enumerate the sub-elements of `kind`, in the kernel's own order.

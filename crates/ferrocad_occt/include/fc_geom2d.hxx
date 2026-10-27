@@ -5,9 +5,10 @@
 // Three things live here, all of them seams `opencascade-sys` 0.3 does not
 // bridge:
 //
-//  - a `Geom2d_BSplineCurve` lifted onto a `Geom_Surface` (`BRepBuilderAPI_MakeEdge`
-//    with the pcurve/surface form, i.e. upstream's `Geometry2dPy::toShape`), which
-//    is what `Part.Geom2d.*.toShape(surface)` builds;
+//  - a 2-D curve lifted onto a `Geom_Surface` (`BRepBuilderAPI_MakeEdge` with
+//    the pcurve/surface form, i.e. upstream's `Geometry2dPy::toShape`), which is
+//    what `Part.Geom2d.*.toShape(surface)` builds: the B-spline form from its
+//    control points, every analytic form from its exact planar edge;
 //  - the pcurve an edge has on a face (`BRep_Tool::CurveOnSurface`), which
 //    `Part.Face.curveOnSurface(edge)` reports;
 //  - local surface/curve properties that involve a *non-planar* surface
@@ -34,6 +35,7 @@
 #include <Geom2d_Curve.hxx>
 #include <GeomAPI_PointsToBSpline.hxx>
 #include <GeomAPI_ProjectPointOnCurve.hxx>
+#include <GeomProjLib.hxx>
 #include <Geom_ConicalSurface.hxx>
 #include <Geom_CylindricalSurface.hxx>
 #include <Geom_Plane.hxx>
@@ -174,6 +176,61 @@ inline std::unique_ptr<TopoDS_Shape> fc_bspline2d_edge(
         }
         // Build the 3-D curve from the pcurve, as upstream's `create3dCurve`
         // does for a B-spline pcurve.
+        BRepLib::BuildCurves3d(edge, Precision::Confusion(), GeomAbs_C1, 14, 10000);
+        return std::unique_ptr<TopoDS_Shape>(new TopoDS_Shape(edge));
+    }
+    catch (...) {
+        return nullptr;
+    }
+}
+
+// --- an analytic 2-D curve as an edge on a surface --------------------------
+
+// Upstream's `Curve2dPy::toShape(surface)` for the *analytic* 2-D forms:
+// `BRepBuilderAPI_MakeEdge(pcurve, surface)` followed by `create3dCurve`.
+//
+// `planar_edge` is the exact `z = 0` edge the Rust layer already builds for
+// that same 2-D curve (a line segment, a circle, a conic arc, a Bezier, …), so
+// the pcurve is its exact projection onto the XY plane. `GeomProjLib::Curve2d`
+// returns the native analytic 2-D form (`Geom2d_Line`, `Geom2d_Circle`, …)
+// rather than an approximation, so the pcurve stays exact and the 3-D curve is
+// the true surface image (a helix on a cylinder, a great-circle arc on a
+// sphere, …). Returns null when the projection or the edge build fails; the
+// caller keeps the planar edge in that case.
+inline std::unique_ptr<TopoDS_Shape> fc_curve2d_on_surface(
+    const TopoDS_Shape& planar_edge,
+    rust::Slice<const double> surface_spec,
+    const TopoDS_Shape& surface_face)
+{
+    if (planar_edge.IsNull() || planar_edge.ShapeType() != TopAbs_EDGE)
+        return nullptr;
+    try {
+        Standard_Real first = 0.0;
+        Standard_Real last = 0.0;
+        TopLoc_Location location;
+        Handle(Geom_Curve) curve = BRep_Tool::Curve(TopoDS::Edge(planar_edge), location, first, last);
+        if (curve.IsNull() || !(last > first))
+            return nullptr;
+        if (!location.IsIdentity())
+            curve = Handle(Geom_Curve)::DownCast(curve->Transformed(location.Transformation()));
+        if (curve.IsNull())
+            return nullptr;
+
+        const Handle(Geom_Surface) surface = fc_geom2d_surface(surface_spec, surface_face);
+        if (surface.IsNull())
+            return nullptr;
+
+        // The planar edge lies on the XY plane, so this is the identity
+        // projection of the 3-D curve, expressed in the 2-D form.
+        const Handle(Geom_Surface) xy_plane = new Geom_Plane(gp::XOY());
+        const Handle(Geom2d_Curve) pcurve = GeomProjLib::Curve2d(curve, first, last, xy_plane);
+        if (pcurve.IsNull())
+            return nullptr;
+
+        BRepBuilderAPI_MakeEdge make(pcurve, surface, first, last);
+        if (!make.IsDone())
+            return nullptr;
+        const TopoDS_Edge edge = make.Edge();
         BRepLib::BuildCurves3d(edge, Precision::Confusion(), GeomAbs_C1, 14, 10000);
         return std::unique_ptr<TopoDS_Shape>(new TopoDS_Shape(edge));
     }

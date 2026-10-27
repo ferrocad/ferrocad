@@ -1978,6 +1978,53 @@ inline std::unique_ptr<TopoDS_Shape> fc_pipe(const TopoDS_Shape& spine,
   }
 }
 
+// The property regime of `shape`, upstream's `Part::getShapeProperties`: the
+// measurement follows what the shape *contains*, not its own topological type.
+// A solid is measured by volume, a face (or a shell, or a compound of faces) by
+// surface, a wire by length and a lone set of vertices by their mean. Without
+// this, a shape that OCCT keeps as a compound — the result of a `common`, a
+// `Part.makeCompound` — would be measured as a volume of zero and report the
+// origin as its centre.
+inline bool fc_shape_properties(const TopoDS_Shape& shape, GProp_GProps& props)
+{
+  for (TopAbs_ShapeEnum kind : {TopAbs_SOLID, TopAbs_FACE, TopAbs_EDGE}) {
+    TopExp_Explorer explorer(shape, kind);
+    if (!explorer.More()) {
+      continue;
+    }
+    switch (kind) {
+      case TopAbs_SOLID:
+        BRepGProp::VolumeProperties(shape, props);
+        break;
+      case TopAbs_FACE:
+        BRepGProp::SurfaceProperties(shape, props);
+        break;
+      default:
+        BRepGProp::LinearProperties(shape, props);
+        break;
+    }
+    return true;
+  }
+  TopExp_Explorer vertices(shape, TopAbs_VERTEX);
+  if (!vertices.More()) {
+    return false;
+  }
+  gp_Pnt sum;
+  int count = 0;
+  for (; vertices.More(); vertices.Next()) {
+    const gp_Pnt point = BRep_Tool::Pnt(TopoDS::Vertex(vertices.Current()));
+    sum.SetX(sum.X() + point.X());
+    sum.SetY(sum.Y() + point.Y());
+    sum.SetZ(sum.Z() + point.Z());
+    ++count;
+  }
+  sum.SetX(sum.X() / count);
+  sum.SetY(sum.Y() / count);
+  sum.SetZ(sum.Z() / count);
+  props = GProp_GProps(sum);
+  return true;
+}
+
 // The 3x3 inertia matrix of `shape`, row-major, as nine values. Empty when the
 // shape cannot be measured or OCCT throws.
 inline void fc_inertia_matrix(const TopoDS_Shape& shape, rust::Vec<double>& out)
@@ -2000,6 +2047,29 @@ inline void fc_inertia_matrix(const TopoDS_Shape& shape, rust::Vec<double>& out)
   }
 }
 
+// `Shape.CenterOfMass` by upstream's `Part::getShapeProperties` rule (see
+// `fc_shape_properties`): a compound of faces reports its surface centre, not
+// the origin a volume measurement of zero mass would give. False when the shape
+// carries no measurable content.
+inline bool fc_center_of_mass(const TopoDS_Shape& shape, double& x, double& y, double& z)
+{
+    if (shape.IsNull())
+        return false;
+    try {
+        GProp_GProps props;
+        if (!fc_shape_properties(shape, props))
+            return false;
+        const gp_Pnt centre = props.CentreOfMass();
+        x = centre.X();
+        y = centre.Y();
+        z = centre.Z();
+        return true;
+    }
+    catch (...) {
+        return false;
+    }
+}
+
 // `Shape.PrincipalProperties`, flattened:
 //
 //   [symmetry axis, symmetry point,
@@ -2015,7 +2085,10 @@ inline void fc_principal_properties(const TopoDS_Shape& shape, rust::Vec<double>
   }
   try {
     GProp_GProps props;
-    BRepGProp::VolumeProperties(shape, props);
+    if (!fc_shape_properties(shape, props)) {
+      out.clear();
+      return;
+    }
     const GProp_PrincipalProps principal = props.PrincipalProperties();
 
     out.push_back(principal.HasSymmetryAxis() ? 1.0 : 0.0);

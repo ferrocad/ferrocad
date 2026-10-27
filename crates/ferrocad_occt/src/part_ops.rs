@@ -430,3 +430,16 @@ pub fn face_on_bspline_surface(
         "makeFaceOnBSplineSurface",
     )
 }
+
+/// `Part.makeFace(wires, "Part::FaceMakerBullseye")`: planar faces with holes,
+/// where a hole can hold further faces.
+///
+/// The wires are nested by containment: a wire inside another face is its hole,
+/// and anything outside the faces built so far starts a new face. Disconnected
+/// regions therefore come back as a compound of faces rather than as one
+/// degenerate face with the wrong boundaries.
+pub fn bullseye_face(wires: &[Shape]) -> Result<Shape, GeomError> {
+    let wires = shape_list(wires)
+        .ok_or_else(|| GeomError::from(OcctError::InvalidInput { what: "boundary wire" }))?;
+    result(bridge::fc_make_face_bullseye(&wires), "makeFaceBullseye")
+}

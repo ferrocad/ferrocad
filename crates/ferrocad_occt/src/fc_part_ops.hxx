@@ -17,13 +17,16 @@
 #include <BRepAdaptor_Surface.hxx>
 #include <BRepAlgoAPI_Defeaturing.hxx>
 #include <BRepAlgo_Image.hxx>
+#include <BRepBndLib.hxx>
 #include <BRepBuilderAPI_Copy.hxx>
 #include <BRepBuilderAPI_MakeFace.hxx>
 #include <BRepBuilderAPI_MakeSolid.hxx>
 #include <BRepBuilderAPI_NurbsConvert.hxx>
 #include <BRepBuilderAPI_Sewing.hxx>
 #include <BRepCheck_Analyzer.hxx>
+#include <BRepClass_FaceClassifier.hxx>
 #include <BRepLib.hxx>
+#include <BRepLib_FindSurface.hxx>
 #include <BRepOffsetAPI_MakeOffsetShape.hxx>
 #include <BRepOffsetAPI_ThruSections.hxx>
 #include <BRepOffset_Mode.hxx>
@@ -38,6 +41,7 @@
 #include <GCPnts_UniformAbscissa.hxx>
 #include <GCPnts_UniformDeflection.hxx>
 #include <GeomAPI_PointsToBSplineSurface.hxx>
+#include <GeomAPI_ProjectPointOnSurf.hxx>
 #include <Geom2d_Curve.hxx>
 #include <GeomAbs_JoinType.hxx>
 #include <GeomProjLib.hxx>
@@ -54,10 +58,12 @@
 #include <ShapeAnalysis_Surface.hxx>
 #include <ShapeFix_Shape.hxx>
 #include <ShapeFix_Wire.hxx>
+#include <ShapeUpgrade_ShellSewing.hxx>
 #include <TColgp_Array2OfPnt.hxx>
 #include <TColStd_Array1OfInteger.hxx>
 #include <TColStd_Array1OfReal.hxx>
 #include <TColStd_Array2OfReal.hxx>
+#include <Bnd_Box.hxx>
 #include <TopAbs_State.hxx>
 #include <TopLoc_Location.hxx>
 #include <TopAbs_Orientation.hxx>
@@ -70,6 +76,7 @@
 #include <TopoDS.hxx>
 #include <TopoDS_Compound.hxx>
 #include <TopoDS_Face.hxx>
+#include <TopoDS_Iterator.hxx>
 #include <TopoDS_Shape.hxx>
 #include <TopoDS_Wire.hxx>
 #include <gp_Ax3.hxx>
@@ -177,6 +184,29 @@ inline void fc_face_surface_frame(const TopoDS_Shape& shape, rust::Vec<double>& 
 }
 
 // --- sewing ----------------------------------------------------------------
+
+// `ShapeUpgrade_ShellSewing::ApplySewing`: the re-sew `Part.makeShell` falls
+// back to when the naive `BRep_Builder` assembly is not valid (upstream's
+// `TopoShape::makeElementBoolean` with `OpCodes::Shell`). Unlike
+// `fc_sew_shape`'s single `BRepBuilderAPI_Sewing` pass, this runs the
+// upgrading sewing (and the face fixers it needs) to the default tolerance, so
+// independent triangle/plane faces that merely share vertices become one
+// closed shell. Null on failure.
+inline std::unique_ptr<TopoDS_Shape> fc_sew_shell(const TopoDS_Shape& shape)
+{
+    if (shape.IsNull())
+        return nullptr;
+    try {
+        ShapeUpgrade_ShellSewing sewing;
+        const TopoDS_Shape sewn = sewing.ApplySewing(shape);
+        if (sewn.IsNull())
+            return nullptr;
+        return std::unique_ptr<TopoDS_Shape>(new TopoDS_Shape(sewn));
+    }
+    catch (...) {
+        return nullptr;
+    }
+}
 
 // `TopoShape::sewShape`: join the boundaries of `shape`'s faces into shells.
 // Null on failure.
@@ -504,6 +534,90 @@ inline TopoDS_Wire fc_wire_on_surface(const TopoDS_Wire& wire,
     return target;
 }
 
+// --- faces from wires ------------------------------------------------------
+
+// `Part.Face(wire)` for a single boundary wire: upstream's
+// `BRepBuilderAPI_MakeFace(wire)` with `OnlyPlane = false`, which asks
+// `BRepLib_FindSurface` for a plane, cylinder or sphere that supports the whole
+// wire.
+//
+// When that search does not settle on a surface, the wire's own edges are asked
+// for the surface they already carry, and the wire is re-projected onto it (see
+// below). This is the "existing surface" half of upstream's search, made
+// explicit.
+inline std::unique_ptr<TopoDS_Shape> fc_face_from_wire(const TopoDS_Shape& wire)
+{
+    if (wire.IsNull() || wire.ShapeType() != TopAbs_WIRE)
+        return nullptr;
+    try {
+        const TopoDS_Wire w = TopoDS::Wire(wire);
+        BRepBuilderAPI_MakeFace make(w);
+        if (make.IsDone() && !make.Face().IsNull())
+            return std::unique_ptr<TopoDS_Shape>(new TopoDS_Shape(make.Face()));
+
+        // The surface the wire's own edges already carry: an edge built from a
+        // pcurve (`Part.Geom2d.*.toShape(surface)`) is attached to exactly the
+        // surface the caller meant. Each such call builds its own surface
+        // *object*, though, so the edges of one wire share a description rather
+        // than one handle; re-projecting the wire (on a copy, never the caller's
+        // edges) puts every pcurve on the first edge's surface.
+        TopExp_Explorer first_edge(w, TopAbs_EDGE);
+        if (!first_edge.More())
+            return nullptr;
+        Handle(Geom2d_Curve) pcurve;
+        Handle(Geom_Surface) support;
+        TopLoc_Location location;
+        Standard_Real first = 0.0;
+        Standard_Real last = 0.0;
+        BRep_Tool::CurveOnSurface(TopoDS::Edge(first_edge.Current()), pcurve, support, location,
+                                 first, last);
+        if (pcurve.IsNull() || support.IsNull())
+            return nullptr;
+        BRepBuilderAPI_Copy copier(w, Standard_True, Standard_False);
+        if (!copier.IsDone() || copier.Shape().ShapeType() != TopAbs_WIRE)
+            return nullptr;
+        const TopoDS_Wire projected = fc_wire_on_surface(TopoDS::Wire(copier.Shape()), support);
+        if (projected.IsNull())
+            return nullptr;
+        BRepBuilderAPI_MakeFace on_wire(projected);
+        if (on_wire.IsDone() && !on_wire.Face().IsNull())
+            return std::unique_ptr<TopoDS_Shape>(new TopoDS_Shape(on_wire.Face()));
+        BRepBuilderAPI_MakeFace on_surface(support, Precision::Confusion());
+        if (!on_surface.IsDone())
+            return nullptr;
+        on_surface.Add(projected);
+        if (!on_surface.IsDone() || on_surface.Face().IsNull())
+            return nullptr;
+        BRepCheck_Analyzer check(on_surface.Face());
+        if (!check.IsValid())
+            return nullptr;
+        return std::unique_ptr<TopoDS_Shape>(new TopoDS_Shape(on_surface.Face()));
+    }
+    catch (...) {
+        return nullptr;
+    }
+}
+
+// `BRepBuilderAPI_MakeFace::Add`: attach a further boundary wire to an existing
+// face, upstream's `Part.Face([outer, hole…])` loop. The caller has already
+// oriented the wire.
+inline std::unique_ptr<TopoDS_Shape> fc_face_add_wire(const TopoDS_Shape& face,
+                                                      const TopoDS_Shape& wire)
+{
+    if (face.IsNull() || face.ShapeType() != TopAbs_FACE || wire.IsNull()
+        || wire.ShapeType() != TopAbs_WIRE)
+        return nullptr;
+    try {
+        TopoDS_Face result = TopoDS::Face(face);
+        BRep_Builder builder;
+        builder.Add(result, TopoDS::Wire(wire));
+        return std::unique_ptr<TopoDS_Shape>(new TopoDS_Shape(result));
+    }
+    catch (...) {
+        return nullptr;
+    }
+}
+
 // `Part.Face(surface, wires)`. `spec` is the flat description written by
 // `ferrocad_occt::bridge::surface_spec`:
 //
@@ -561,6 +675,10 @@ inline std::unique_ptr<TopoDS_Shape> fc_make_face_on_surface(
             return nullptr;
         if (it.Value().ShapeType() != TopAbs_WIRE)
             return nullptr;
+        // The wire is projected first: unlike upstream's wires, a wire this
+        // kernel builds (an extruded patch's outer wire, a polygon) may carry no
+        // pcurve on the elementary surface, and `MakeFace` with `Inside=true`
+        // needs them to work out which side of the wire bounds the face.
         const TopoDS_Wire outer = fc_wire_on_surface(TopoDS::Wire(it.Value()), surface);
         if (outer.IsNull())
             return nullptr;
@@ -580,6 +698,188 @@ inline std::unique_ptr<TopoDS_Shape> fc_make_face_on_surface(
         if (make.Face().IsNull())
             return nullptr;
         return std::unique_ptr<TopoDS_Shape>(new TopoDS_Shape(make.Face()));
+    }
+    catch (...) {
+        return nullptr;
+    }
+}
+
+// --- FaceMakerBullseye -----------------------------------------------------
+
+// `FaceMakerBullseye::FaceDriller::getWireDirection`: +1 when `wire` already
+// runs counter-clockwise about `plane` (it can bound a face), -1 when it runs
+// clockwise (it can bound a hole), 0 on failure. The test is upstream's own:
+// build the face and see whether OCCT's `CheckInside` flipped the wire.
+inline int fc_bullseye_wire_direction(const gp_Pln& plane, const TopoDS_Wire& wire)
+{
+    try {
+        BRepBuilderAPI_MakeFace make(plane, wire, Standard_True);
+        if (!make.IsDone())
+            return 0;
+        const TopoDS_Face face = make.Face();
+        TopoDS_Iterator it(face, Standard_False);
+        if (face.IsNull() || !it.More())
+            return 0;
+        return it.Value().Orientation() == wire.Orientation() ? 1 : -1;
+    }
+    catch (...) {
+        return 0;
+    }
+}
+
+// The `(u, v)` of `wire`'s first vertex on `plane`, with the vertex tolerance —
+// the sample point `FaceMakerBullseye::FaceDriller::hitTest` classifies.
+inline bool fc_bullseye_sample(const TopoDS_Shape& wire,
+                               const gp_Pln& plane,
+                               gp_Pnt2d& uv,
+                               double& tolerance)
+{
+    TopExp_Explorer it(wire, TopAbs_VERTEX);
+    if (!it.More())
+        return false;
+    try {
+        const TopoDS_Vertex vertex = TopoDS::Vertex(it.Current());
+        tolerance = BRep_Tool::Tolerance(vertex);
+        GeomAPI_ProjectPointOnSurf projection(BRep_Tool::Pnt(vertex), new Geom_Plane(plane));
+        if (projection.NbPoints() < 1)
+            return false;
+        Standard_Real u = 0.0;
+        Standard_Real v = 0.0;
+        projection.LowerDistanceParameters(u, v);
+        uv.SetCoord(u, v);
+        return true;
+    }
+    catch (...) {
+        return false;
+    }
+}
+
+inline TopAbs_State fc_classify_in_face(const TopoDS_Face& face,
+                                        const gp_Pnt2d& uv,
+                                        double tolerance)
+{
+    if (face.IsNull())
+        return TopAbs_UNKNOWN;
+    try {
+        BRepClass_FaceClassifier classifier(face, uv, tolerance);
+        return classifier.State();
+    }
+    catch (...) {
+        return TopAbs_UNKNOWN;
+    }
+}
+
+// `Part.makeFace(wires, "Part::FaceMakerBullseye")`: planar faces with holes,
+// where the holes may themselves hold further faces (upstream's
+// `FaceMakerBullseye::Build_Essence`).
+//
+// The wires are sorted by bounding-box extent, largest first, and each one is
+// classified against the faces built so far: a wire inside a face is a hole of
+// that face, anything else starts a new face. That is exactly upstream's
+// single-pass walk (`reuseInnerWire` is false for Bullseye). One face is
+// returned directly, several as a compound.
+inline std::unique_ptr<TopoDS_Shape> fc_make_face_bullseye(const TopTools_ListOfShape& wires)
+{
+    if (wires.IsEmpty())
+        return nullptr;
+    try {
+        for (TopTools_ListIteratorOfListOfShape it(wires); it.More(); it.Next()) {
+            if (it.Value().ShapeType() != TopAbs_WIRE
+                || !BRep_Tool::IsClosed(TopoDS::Wire(it.Value())))
+                return nullptr;
+        }
+
+        // The shared plane, found from a compound of copies (upstream does the
+        // same, so a supplied plane is never assumed).
+        TopoDS_Compound compound;
+        BRep_Builder builder;
+        builder.MakeCompound(compound);
+        for (TopTools_ListIteratorOfListOfShape it(wires); it.More(); it.Next())
+            builder.Add(compound, BRepBuilderAPI_Copy(it.Value()).Shape());
+        BRepLib_FindSurface finder(compound, -1.0, Standard_True);
+        if (!finder.Found() || finder.Surface().IsNull())
+            return nullptr;
+        const Handle(Geom_Plane) plane_surface = Handle(Geom_Plane)::DownCast(finder.Surface());
+        if (plane_surface.IsNull())
+            return nullptr;
+        const gp_Pln plane = plane_surface->Pln();
+
+        struct Item
+        {
+            TopoDS_Wire wire;
+            double extent {};
+        };
+        std::vector<Item> items;
+        for (TopTools_ListIteratorOfListOfShape it(wires); it.More(); it.Next()) {
+            Bnd_Box box;
+            BRepBndLib::AddOptimal(it.Value(), box, Standard_False);
+            if (box.IsVoid())
+                continue;
+            items.push_back({TopoDS::Wire(it.Value()), box.SquareExtent()});
+        }
+        std::stable_sort(items.begin(), items.end(), [](const Item& a, const Item& b) {
+            return a.extent - b.extent > Precision::Confusion();
+        });
+
+        struct Driller
+        {
+            TopoDS_Face face;
+            TopoDS_Face bound;
+        };
+        std::vector<Driller> faces;
+        const Handle(Geom_Plane) surface = new Geom_Plane(plane);
+        for (const Item& item : items) {
+            gp_Pnt2d uv;
+            double tolerance = 0.0;
+            if (!fc_bullseye_sample(item.wire, plane, uv, tolerance))
+                return nullptr;
+            int found = -1;
+            for (int index = static_cast<int>(faces.size()) - 1; index >= 0; --index) {
+                const TopAbs_State state = fc_classify_in_face(faces[index].face, uv, tolerance);
+                if (state == TopAbs_IN) {
+                    found = index;
+                    break;
+                }
+                if (state == TopAbs_OUT
+                    && fc_classify_in_face(faces[index].bound, uv, tolerance) != TopAbs_IN)
+                    continue;
+                // ON the face, or inside a hole: upstream keeps looking, and the
+                // wire becomes a new face when no outer face claims it.
+            }
+            if (found < 0) {
+                TopoDS_Wire outer = item.wire;
+                const int direction = fc_bullseye_wire_direction(plane, outer);
+                if (direction == 0)
+                    return nullptr;
+                if (direction < 0)
+                    outer.Reverse();
+                Driller driller;
+                builder.MakeFace(driller.face, surface, Precision::Confusion());
+                builder.Add(driller.face, outer);
+                BRepBuilderAPI_MakeFace bound(surface, outer, Standard_True);
+                if (!bound.IsDone())
+                    return nullptr;
+                driller.bound = bound.Face();
+                faces.push_back(driller);
+                continue;
+            }
+            TopoDS_Wire hole = item.wire;
+            const int direction = fc_bullseye_wire_direction(plane, hole);
+            if (direction == 0)
+                return nullptr;
+            if (direction > 0)
+                hole.Reverse();
+            builder.Add(faces[found].face, hole);
+        }
+        if (faces.empty())
+            return nullptr;
+        if (faces.size() == 1)
+            return std::unique_ptr<TopoDS_Shape>(new TopoDS_Shape(faces.front().face));
+        TopoDS_Compound result_compound;
+        builder.MakeCompound(result_compound);
+        for (const Driller& driller : faces)
+            builder.Add(result_compound, driller.face);
+        return std::unique_ptr<TopoDS_Shape>(new TopoDS_Shape(result_compound));
     }
     catch (...) {
         return nullptr;
@@ -1306,7 +1606,13 @@ inline bool fc_bspline_surface_parameter(rust::Slice<const double> data,
 }
 
 // `Part.Face(bspline_surface, wires)`: trim the surface with the given boundary
-// wires, projecting each edge onto the freshly built surface.
+// wires.
+//
+// Upstream's `TopoShapeFacePyImp` passes the wire straight to
+// `BRepBuilderAPI_MakeFace(Geom_Surface, wire)`; OCCT then fills in whatever
+// pcurves it needs from the 3-D curves. Projecting the wire first
+// (`fc_wire_on_surface`) is *not* upstream and rejects a wire that only lies on
+// a free-form surface to within the fitting tolerance.
 inline std::unique_ptr<TopoDS_Shape> fc_face_on_bspline_surface(
     rust::Slice<const double> data,
     const TopTools_ListOfShape& wires)
@@ -1321,19 +1627,14 @@ inline std::unique_ptr<TopoDS_Shape> fc_face_on_bspline_surface(
         TopTools_ListIteratorOfListOfShape it(wires);
         if (!it.More() || it.Value().ShapeType() != TopAbs_WIRE)
             return nullptr;
-        const TopoDS_Wire outer = fc_wire_on_surface(TopoDS::Wire(it.Value()), surface);
-        if (outer.IsNull())
-            return nullptr;
-        BRepBuilderAPI_MakeFace make(surface, outer, Standard_True);
+        const Handle(Geom_Surface) support = surface;
+        BRepBuilderAPI_MakeFace make(support, TopoDS::Wire(it.Value()), Standard_True);
         if (!make.IsDone())
             return nullptr;
         for (it.Next(); it.More(); it.Next()) {
             if (it.Value().ShapeType() != TopAbs_WIRE)
                 return nullptr;
-            const TopoDS_Wire inner = fc_wire_on_surface(TopoDS::Wire(it.Value()), surface);
-            if (inner.IsNull())
-                return nullptr;
-            make.Add(inner);
+            make.Add(TopoDS::Wire(it.Value()));
             if (!make.IsDone())
                 return nullptr;
         }

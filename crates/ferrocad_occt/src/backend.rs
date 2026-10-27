@@ -718,17 +718,7 @@ impl OcctBackend {
             coordinates.extend_from_slice(&[*u, *v]);
         }
         let spec = surface.map(surface_spec).unwrap_or_default();
-        let owned_face: Option<UniquePtr<TopoDS_Shape>> = match face {
-            Some(face) => {
-                let occt = downcast(face)?;
-                let guard = occt.borrow();
-                let inner = guard
-                    .as_ref()
-                    .ok_or(OcctError::InvalidInput { what: "null face" })?;
-                Some(ffi::topo_ds::TopoDS_Shape_to_owned(inner))
-            }
-            None => None,
-        };
+        let owned_face = surface_face(face)?;
         // A default-constructed (null) face stands in when no surface was given;
         // the C++ side only looks at it when `spec` is empty.
         let null_face = ffi::topo_ds::TopoDS_Face_new();
@@ -757,6 +747,103 @@ impl OcctBackend {
             }
             .into()),
         }
+    }
+
+    /// An analytic 2-D curve lifted onto a surface as an edge, upstream's
+    /// `Curve2dPy::toShape(surface)` for the non-B-spline forms.
+    ///
+    /// `planar_edge` is the exact `z = 0` edge the caller already builds for the
+    /// same 2-D curve; the kernel turns its curve into the pcurve and builds the
+    /// surface image. The B-spline form goes through
+    /// [`Self::make_bspline2d_edge`] instead, which carries the control points
+    /// across directly.
+    pub fn curve2d_on_surface_edge(
+        &self,
+        planar_edge: &Shape,
+        surface: Option<&SurfaceSpec>,
+        face: Option<&Shape>,
+    ) -> Result<Shape, GeomError> {
+        let spec = surface.map(surface_spec).unwrap_or_default();
+        let owned_face = surface_face(face)?;
+        let null_face = ffi::topo_ds::TopoDS_Face_new();
+        let face_shape: &TopoDS_Shape = match &owned_face {
+            Some(shape) => shape,
+            None => ffi::topo_ds::cast_face_to_shape(&null_face),
+        };
+        let edge = downcast(planar_edge)?;
+        let guard = edge.borrow();
+        let inner = guard
+            .as_ref()
+            .ok_or(OcctError::InvalidInput { what: "null edge" })?;
+        let lifted = bridge::fc_curve2d_on_surface(inner, &spec, face_shape);
+        match lifted.as_ref() {
+            Some(shape) => Ok(erase(shape)),
+            None => Err(OcctError::NotDone {
+                operation: "curve2d_on_surface_edge",
+            }
+            .into()),
+        }
+    }
+
+    /// The face triangulations in **double** precision, as flat positions and
+    /// per-face triangle indices (upstream's `Shape.tessellate`).
+    ///
+    /// [`GeometryBackend::tessellate`] narrows to `f32` for the viewport; the
+    /// Python API promises `Base.Vector` precision, so it reads the same
+    /// `Poly_Triangulation` nodes here without narrowing.
+    pub fn tessellate_points(
+        &self,
+        shape: &Shape,
+        options: &TessellationOptions,
+    ) -> Result<(Vec<[f64; 3]>, Vec<u32>), GeomError> {
+        crate::topology::tessellate_points(shape, options)
+    }
+
+    /// Assemble `faces` into one shell with `BRep_Builder`, without judging or
+    /// repairing it.
+    fn assemble_shell(&self, faces: &[Shape]) -> Result<Shape, GeomError> {
+        if faces.is_empty() {
+            return Err(OcctError::InvalidInput {
+                what: "a shell needs at least one face",
+            }
+            .into());
+        }
+        let mut shell = ffi::topo_ds::TopoDS_Shell_new();
+        let builder = ffi::b_rep::BRep_Builder_new();
+        let builder = ffi::b_rep::BRep_Builder_upcast_to_topods_builder(&builder);
+        builder.MakeShell(shell.pin_mut());
+        let mut shell = ffi::topo_ds::TopoDS_Shell_as_shape(shell);
+        for face in faces {
+            let occt = downcast(face)?;
+            let guard = occt.borrow();
+            let inner = guard
+                .as_ref()
+                .ok_or(OcctError::InvalidInput { what: "null face" })?;
+            if !bridge::fc_is_face(inner) {
+                return Err(OcctError::InvalidInput {
+                    what: "a shell is made of faces",
+                }
+                .into());
+            }
+            builder.Add(shell.pin_mut(), inner);
+        }
+        Ok(erase(&shell))
+    }
+}
+
+/// The owned surface face handed to the 2-D lifting bridges: `None` when the
+/// caller passes an elementary surface spec instead.
+fn surface_face(face: Option<&Shape>) -> Result<Option<UniquePtr<TopoDS_Shape>>, GeomError> {
+    match face {
+        Some(face) => {
+            let occt = downcast(face)?;
+            let guard = occt.borrow();
+            let inner = guard
+                .as_ref()
+                .ok_or(OcctError::InvalidInput { what: "null face" })?;
+            Ok(Some(ffi::topo_ds::TopoDS_Shape_to_owned(inner)))
+        }
+        None => Ok(None),
     }
 }
 
@@ -1077,18 +1164,17 @@ impl GeometryBackend for OcctBackend {
             }
             .into());
         }
-        let mut make = ffi::b_rep_builder_api::BRepBuilderAPI_MakeFace_wire(
-            bridge::fc_shape_as_wire(first_inner),
-            true,
-        );
-        // Adding a hole to an already-failed builder can crash OCCT, so stop as
-        // soon as the outer wire does not make a face.
-        if !make.IsDone() {
+        // Upstream's `BRepBuilderAPI_MakeFace(wire)`: the surface is found from
+        // the wire itself, so a wire that lies on a cylinder or a sphere still
+        // bounds a face. See `fc_face_from_wire` for the tolerance retry.
+        let outer = bridge::fc_face_from_wire(first_inner);
+        if outer.is_null() {
             return Err(OcctError::NotDone {
                 operation: "make_face",
             }
             .into());
         }
+        let mut face = outer;
         for wire in rest {
             let occt = downcast(wire)?;
             let guard = occt.borrow();
@@ -1102,26 +1188,24 @@ impl GeometryBackend for OcctBackend {
                 .into());
             }
             // A hole must run opposite to the outer boundary; reverse it so the
-            // builder subtracts its area instead of adding another outer boundary.
+            // boundary subtracts its area instead of adding another one.
             let reversed = bridge::fc_reversed(inner);
-            let reversed = reversed
-                .as_ref()
-                .ok_or(OcctError::InvalidInput { what: "null wire" })?;
-            make.pin_mut().add_wire(bridge::fc_shape_as_wire(reversed));
-            if !make.IsDone() {
+            let Some(reversed) = reversed.as_ref() else {
+                return Err(OcctError::InvalidInput { what: "null wire" }.into());
+            };
+            let Some(source) = face.as_ref() else {
+                return Err(OcctError::InvalidInput { what: "null face" }.into());
+            };
+            let next = bridge::fc_face_add_wire(source, reversed);
+            if next.is_null() {
                 return Err(OcctError::NotDone {
                     operation: "make_face",
                 }
                 .into());
             }
+            face = next;
         }
-        if !make.IsDone() {
-            return Err(OcctError::NotDone {
-                operation: "make_face",
-            }
-            .into());
-        }
-        Ok(erase(ffi::topo_ds::cast_face_to_shape(make.Face())))
+        Ok(erase(&face))
     }
 
     fn make_faces(&self, wires: &[Shape]) -> Result<Shape, GeomError> {
@@ -1797,32 +1881,24 @@ impl GeometryBackend for OcctBackend {
     }
 
     fn make_shell(&self, faces: &[Shape]) -> Result<Shape, GeomError> {
-        if faces.is_empty() {
-            return Err(OcctError::InvalidInput {
-                what: "a shell needs at least one face",
-            }
-            .into());
+        let shell = self.assemble_shell(faces)?;
+        // Upstream's `makeElementBoolean(OpCodes::Shell)` re-sews the assembly
+        // when the naive `BRep_Builder` shell is not a valid shell. Independently
+        // built faces (a mesh's triangles, a set of planar regions) only share
+        // geometry, not topology, so without this they never form a closed
+        // shell.
+        if self.is_valid(&shell) {
+            return Ok(shell);
         }
-        let mut shell = ffi::topo_ds::TopoDS_Shell_new();
-        let builder = ffi::b_rep::BRep_Builder_new();
-        let builder = ffi::b_rep::BRep_Builder_upcast_to_topods_builder(&builder);
-        builder.MakeShell(shell.pin_mut());
-        let mut shell = ffi::topo_ds::TopoDS_Shell_as_shape(shell);
-        for face in faces {
-            let occt = downcast(face)?;
-            let guard = occt.borrow();
-            let inner = guard
-                .as_ref()
-                .ok_or(OcctError::InvalidInput { what: "null face" })?;
-            if !bridge::fc_is_face(inner) {
-                return Err(OcctError::InvalidInput {
-                    what: "make_shell expects faces",
-                }
-                .into());
-            }
-            builder.Add(shell.pin_mut(), inner);
+        let occt = downcast(&shell)?;
+        let guard = occt.borrow();
+        let inner = guard
+            .as_ref()
+            .ok_or(OcctError::InvalidInput { what: "null shell" })?;
+        match bridge::fc_sew_shell(inner).as_ref() {
+            Some(sewn) => Ok(erase(sewn)),
+            None => Ok(shell),
         }
-        Ok(erase(&shell))
     }
 
     fn make_shell_from_wires(&self, wires: &[Shape]) -> Result<Shape, GeomError> {
@@ -1838,7 +1914,10 @@ impl GeometryBackend for OcctBackend {
             // boundaries of a box's faces.
             faces.push(self.make_face(std::slice::from_ref(wire))?);
         }
-        self.make_shell(&faces)
+        // No sewing here: this entry point assembles the faces it just made, and
+        // upstream's `makeElementShellFromWires` does not run the shell sewing
+        // `Part.makeShell` falls back to.
+        self.assemble_shell(&faces)
     }
 
     fn make_loft(&self, wires: &[Shape], solid: bool) -> Result<Shape, GeomError> {
@@ -2073,40 +2152,14 @@ impl GeometryBackend for OcctBackend {
         let occt = downcast(shape).ok()?;
         let guard = occt.borrow();
         let inner = guard.as_ref()?;
-        if inner.ShapeType() == TopAbs_ShapeEnum::TopAbs_VERTEX {
-            let pnt = ffi::b_rep::BRep_Tool_Pnt(bridge::fc_shape_as_vertex(inner));
-            return Some(Vector3::new(pnt.X(), pnt.Y(), pnt.Z()));
+        // Upstream's `getShapeProperties` rule: the property regime follows what
+        // the shape contains, so a compound of faces measures its surface instead
+        // of a zero-mass volume (whose centre is the origin).
+        let (mut x, mut y, mut z) = (0.0, 0.0, 0.0);
+        if !bridge::fc_center_of_mass(inner, &mut x, &mut y, &mut z) {
+            return None;
         }
-        let mut props = ffi::g_prop::GProps_new();
-        match inner.ShapeType() {
-            TopAbs_ShapeEnum::TopAbs_EDGE | TopAbs_ShapeEnum::TopAbs_WIRE => {
-                ffi::b_rep_g_prop::BRepGProp::LinearProperties(
-                    inner,
-                    props.pin_mut(),
-                    false,
-                    false,
-                );
-            }
-            TopAbs_ShapeEnum::TopAbs_FACE | TopAbs_ShapeEnum::TopAbs_SHELL => {
-                ffi::b_rep_g_prop::BRepGProp::SurfaceProperties(
-                    inner,
-                    props.pin_mut(),
-                    false,
-                    false,
-                );
-            }
-            _ => {
-                ffi::b_rep_g_prop::BRepGProp::VolumeProperties(
-                    inner,
-                    props.pin_mut(),
-                    false,
-                    false,
-                    false,
-                );
-            }
-        }
-        let centre = ffi::g_prop::GProp_GProps_CentreOfMass(&props);
-        Some(Vector3::new(centre.X(), centre.Y(), centre.Z()))
+        Some(Vector3::new(x, y, z))
     }
 
     fn is_valid(&self, shape: &Shape) -> bool {

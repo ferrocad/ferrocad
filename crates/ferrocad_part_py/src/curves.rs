@@ -23,11 +23,12 @@
 //! sphere are distinct from the document primitives returned by
 //! `Part.makeCylinder`/`Part.makeSphere`.
 //!
-//! A `BSplineCurve2d` is the one 2-D form that is lifted **onto** a surface: its
-//! `toShape(surface)` builds the edge from the pcurve and the surface
-//! (`BRepBuilderAPI_MakeEdge` with the pcurve/surface form plus
-//! `BRepLib::BuildCurves3d`), so the edge lies on that surface. The analytic
-//! forms build their XY edge and record the 2-D curve as the pcurve only.
+//! Every 2-D form is lifted **onto** a surface by `toShape(surface)`: the edge
+//! is built from the pcurve and the surface (`BRepBuilderAPI_MakeEdge` with the
+//! pcurve/surface form plus `BRepLib::BuildCurves3d`), so the edge lies on that
+//! surface. A `BSplineCurve2d` hands its control points straight to the kernel;
+//! the analytic forms hand over their exact planar (`z = 0`) edge, whose curve
+//! the kernel projects to the pcurve.
 //!
 //! Deliberate limits for this slice, all reported as `Part.OCCError` or
 //! `NotImplementedError` rather than a silent `None`: an infinite `Line` has no
@@ -5922,9 +5923,10 @@ impl PyCurve2d {
     ///
     /// `toShape()` lifts the 2D curve to `z = 0` and builds a real XY edge.
     /// `toShape(first, last)` trims it. `toShape(surface)` (or a `Part.Face`)
-    /// builds the same XY edge and attaches the 2D curve as its pcurve, but
-    /// **does not project it onto the surface** — the seam binds no
-    /// `GeomProjLib`, so the surface is validated and recorded only.
+    /// builds the edge **on** that surface, as upstream's
+    /// `Geom2d_Curve`-on-`Geom_Surface` `BRepBuilderAPI_MakeEdge` does: the 2D
+    /// curve becomes the edge's pcurve and the 3D curve is its surface image
+    /// (a helix on a cylinder, a great-circle arc on a sphere, …).
     #[pyo3(signature = (*args))]
     fn toShape(
         slf: &Bound<'_, Self>,
@@ -6542,13 +6544,13 @@ fn curve2d_entry(shape: Shape, record: &Geom2dData) -> PyClassInitializer<PyEdge
     )
 }
 
-/// The edge of a 2D curve: its XY image as a real edge, with the 2D curve
-/// attached as its pcurve.
+/// The edge of a 2D curve: the curve's XY image as a real edge, with the 2D
+/// curve attached as its pcurve.
 ///
-/// A B-spline is the one form the kernel can place **on** a surface
-/// (`BRepBuilderAPI_MakeEdge` with the pcurve/surface form, upstream's
-/// `Geometry2dPy::toShape(surface)`): the edge then carries the surface image as
-/// its 3-D curve. The analytic forms keep their XY edge.
+/// With a surface (upstream's `Curve2dPy::toShape(surface)`) the edge lies
+/// **on** the surface: the pcurve is the 2D curve and the 3-D curve is its
+/// surface image (`BRepBuilderAPI_MakeEdge` with the pcurve/surface form).
+/// Without one the analytic forms keep their XY edge.
 fn curve2d_edge(
     py: Python<'_>,
     data: &Geom2dData,
@@ -6617,19 +6619,31 @@ fn curve2d_edge(
             );
             let segment = LineSegment::new(start, end).map_err(curve_error)?;
             let shape = shape_from_curve(&EdgeCurve::LineSegment(segment))?;
-            Ok(Py::new(py, curve2d_entry(shape, &record))?)
+            Ok(Py::new(
+                py,
+                curve2d_entry(lift_curve2d(shape, surface)?, &record),
+            )?)
         }
         Geom2dData::Circle(circle) => {
             let shape = shape_from_curve(&EdgeCurve::Circle(*circle))?;
-            Ok(Py::new(py, curve2d_entry(shape, &record))?)
+            Ok(Py::new(
+                py,
+                curve2d_entry(lift_curve2d(shape, surface)?, &record),
+            )?)
         }
         Geom2dData::Arc(arc) => {
             let shape = shape_from_curve(&EdgeCurve::Arc(*arc))?;
-            Ok(Py::new(py, curve2d_entry(shape, &record))?)
+            Ok(Py::new(
+                py,
+                curve2d_entry(lift_curve2d(shape, surface)?, &record),
+            )?)
         }
         Geom2dData::Ellipse(ellipse) => {
             let shape = shape_from_curve(&EdgeCurve::Ellipse(*ellipse))?;
-            Ok(Py::new(py, curve2d_entry(shape, &record))?)
+            Ok(Py::new(
+                py,
+                curve2d_entry(lift_curve2d(shape, surface)?, &record),
+            )?)
         }
         Geom2dData::ArcOfEllipse {
             ellipse,
@@ -6640,7 +6654,7 @@ fn curve2d_edge(
             let shape = spline_state_shape(&state)?;
             Ok(Py::new(
                 py,
-                PyEdge::from_bspline_with_curve2d(shape, state, record),
+                curve2d_spline_entry(lift_curve2d(shape, surface)?, state, record, surface),
             )?)
         }
         Geom2dData::Hyperbola(_) => Err(OCCError::new_err(
@@ -6650,17 +6664,53 @@ fn curve2d_edge(
             "a parabola is unbounded; pass a finite parameter range to toShape",
         )),
         Geom2dData::ArcOfHyperbola(arc) => {
-            spline_curve2d_edge(py, &arc.nurbs().map_err(curve_error)?, record)
+            spline_curve2d_edge(py, &arc.nurbs().map_err(curve_error)?, record, surface)
         }
         Geom2dData::ArcOfParabola(arc) => {
-            spline_curve2d_edge(py, &arc.nurbs().map_err(curve_error)?, record)
+            spline_curve2d_edge(py, &arc.nurbs().map_err(curve_error)?, record, surface)
         }
-        Geom2dData::Bezier(curve) => spline_curve2d_edge(py, &curve.nurbs(), record),
+        Geom2dData::Bezier(curve) => spline_curve2d_edge(py, &curve.nurbs(), record, surface),
         Geom2dData::Offset { .. } => Err(geom2d_not_implemented(
             "OffsetCurve2d.toShape (no exact offset edge is bound in this slice)",
         )),
         Geom2dData::BSpline(_) => unreachable!("the B-spline form is handled above"),
     }
+}
+
+/// The edge of a 2-D B-spline, or of a conic arc converted to one.
+///
+/// `surface` is the surface `toShape(surface)` should lift the curve onto; when
+/// it is present the stored NURBS state describes the *planar* curve and no
+/// longer the edge, so the exact state is dropped and the lifted edge reports
+/// its own surface-image curve.
+fn curve2d_spline_entry(
+    shape: Shape,
+    state: SplineState,
+    record: Geom2dData,
+    surface: Option<&Bound<'_, PyAny>>,
+) -> PyClassInitializer<PyEdge> {
+    if surface.is_some() {
+        curve2d_entry(shape, &record)
+    } else {
+        PyEdge::from_bspline_with_curve2d(shape, state, record)
+    }
+}
+
+/// Lift a planar 2-D edge onto `surface`, upstream's
+/// `Curve2dPy::toShape(surface)`.
+///
+/// The planar (`z = 0`) edge is exact for every analytic 2-D form, so the
+/// kernel only has to turn its curve into the pcurve and rebuild the edge on
+/// the surface (`BRepBuilderAPI_MakeEdge` with the pcurve, then
+/// `BRepLib::BuildCurves3d`). Without a surface the planar edge is the answer.
+fn lift_curve2d(shape: Shape, surface: Option<&Bound<'_, PyAny>>) -> PyResult<Shape> {
+    let Some(value) = surface else {
+        return Ok(shape);
+    };
+    let (spec, face) = to_shape_surface(value)?;
+    occt()
+        .curve2d_on_surface_edge(&shape, spec.as_ref(), face.as_ref())
+        .map_err(kernel_error)
 }
 
 /// The exact NURBS state of an elliptical arc over `[first, last]`.
@@ -6700,10 +6750,14 @@ fn spline_curve2d_edge(
     py: Python<'_>,
     curve: &NurbsCurve,
     record: Geom2dData,
+    surface: Option<&Bound<'_, PyAny>>,
 ) -> PyResult<Py<PyEdge>> {
     let state = nurbs_state(curve)?;
     let shape = spline_state_shape(&state)?;
-    Py::new(py, PyEdge::from_bspline_with_curve2d(shape, state, record))
+    Ok(Py::new(
+        py,
+        curve2d_spline_entry(lift_curve2d(shape, surface)?, state, record, surface),
+    )?)
 }
 
 // --- Line2d ----------------------------------------------------------------
@@ -10110,7 +10164,11 @@ impl PyFace {
     /// `Part.Face(surface, wires)`.
     ///
     /// The first form builds a planar face from one or more boundary wires (the
-    /// rest are holes). The second is upstream's
+    /// rest are holes). `face_maker="Part::FaceMakerBullseye"` nests them
+    /// instead — a wire inside a face is a hole, a wire inside a hole starts a
+    /// new face, and disconnected regions come back as a compound — while
+    /// omitting `face_maker` keeps upstream's plain first-wire/rest-are-holes
+    /// build. The second form is upstream's
     /// `BRepBuilderAPI_MakeFace(Geom_Surface, wire)`: the boundary lies on the
     /// given elementary surface (`Part.Plane`, `Cylinder`, `Cone`, `Sphere` or
     /// `Toroid`), so a face of a cylinder or a cone can be rebuilt without
@@ -10163,11 +10221,35 @@ impl PyFace {
                     "Part.Face expects a face-maker name or, for a surface, boundary wires",
                 )
             })?,
-            None => "Part::FaceMakerBullseye".to_string(),
+            // No maker: upstream's plain `BRepBuilderAPI_MakeFace(wire)` plus
+            // `Add(wire)` for the rest, which takes the first wire as the outer
+            // boundary and does no nesting.
+            None => String::new(),
         };
         let shapes = wire_shapes(value)?;
         let shape = if maker == "Part::FaceMakerUnified" {
             backend().make_faces(&shapes).map_err(face_error)?
+        } else if maker == "Part::FaceMakerBullseye" {
+            // Upstream's named maker nests the wires: a wire inside a face is a
+            // hole, one inside a hole is a new face, and disconnected regions
+            // come back as a compound.
+            ferrocad_occt::part_ops::bullseye_face(&shapes).map_err(face_error)?
+        } else if maker == "Part::FaceMakerSimple" {
+            // One face per wire, each on whatever surface the wire itself lies
+            // on, with no hole handling (upstream's `FaceMakerSimple`).
+            let mut faces = Vec::with_capacity(shapes.len());
+            for wire in &shapes {
+                faces.push(
+                    backend()
+                        .make_face(std::slice::from_ref(wire))
+                        .map_err(kernel_error)?,
+                );
+            }
+            if faces.len() == 1 {
+                faces.remove(0)
+            } else {
+                backend().make_compound(&faces).map_err(kernel_error)?
+            }
         } else {
             backend().make_face(&shapes).map_err(kernel_error)?
         };

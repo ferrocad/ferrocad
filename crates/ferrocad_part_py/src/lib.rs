@@ -1527,15 +1527,19 @@ impl PartShape {
             angular_deflection: angular,
             relative: false,
         };
-        let mesh = ferrocad_part::backend()
-            .tessellate(&shape, &options)
+        // The Python API returns upstream's `Base.Vector` points, so it must not
+        // go through the `f32` display positions: a rounded mesh vertex is no
+        // longer the shape's own vertex (mesh tools weld the two, and a 1e-7
+        // difference breaks that).
+        let (positions, triangles) = OcctBackend::new()
+            .tessellate_points(&shape, &options)
             .map_err(|error| PyRuntimeError::new_err(error.to_string()))?;
 
         // Upstream merges coincident mesh vertices across faces (a box is 8 points,
         // not one set of nodes per face) and returns only the triangle mesh. The
         // merge tolerance is `gp::Resolution`; exact-bit equality is not enough on a
         // curved face, where the two sides of a seam differ in the last bits.
-        let (positions, facets) = weld_triangles(&mesh.positions, &mesh.triangles);
+        let (positions, facets) = weld_triangles(&positions, &triangles);
         let points = positions
             .into_iter()
             .map(|point| Py::new(py, PyVector::fresh(point)))
@@ -4380,7 +4384,7 @@ const WELD_TOLERANCE: f64 = 1e-7;
 /// curved face's seam can differ in the last bits. A facet that collapses to a line or
 /// a point after welding is dropped, as upstream's does.
 fn weld_triangles(
-    positions: &[[f32; 3]],
+    positions: &[[f64; 3]],
     triangles: &[u32],
 ) -> (Vec<Vector3>, Vec<(usize, usize, usize)>) {
     let mut cells: HashMap<(i64, i64, i64), Vec<u32>> = HashMap::new();
@@ -4413,15 +4417,11 @@ fn weld_triangles(
 /// new one. The spatial hash stores points in cells of that size and searches the 27
 /// neighbours, so a point just across a cell boundary still finds its twin.
 fn weld_point(
-    position: [f32; 3],
+    position: [f64; 3],
     cells: &mut HashMap<(i64, i64, i64), Vec<u32>>,
     points: &mut Vec<Vector3>,
 ) -> u32 {
-    let (x, y, z) = (
-        f64::from(position[0]),
-        f64::from(position[1]),
-        f64::from(position[2]),
-    );
+    let (x, y, z) = (position[0], position[1], position[2]);
     let key = (
         (x / WELD_TOLERANCE).floor() as i64,
         (y / WELD_TOLERANCE).floor() as i64,

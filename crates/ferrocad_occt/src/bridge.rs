@@ -230,6 +230,11 @@ mod ffi {
         /// The 3x3 inertia matrix, row-major (nine values), or empty.
         fn fc_inertia_matrix(shape: &TopoDS_Shape, out: &mut Vec<f64>);
 
+        /// `Shape.CenterOfMass` under upstream's `getShapeProperties` rule: the
+        /// measurement follows what the shape contains. False when it has nothing
+        /// to measure.
+        fn fc_center_of_mass(shape: &TopoDS_Shape, x: &mut f64, y: &mut f64, z: &mut f64) -> bool;
+
         /// `GProp_PrincipalProps`, flattened, or empty.
         fn fc_principal_properties(shape: &TopoDS_Shape, out: &mut Vec<f64>);
 
@@ -611,6 +616,32 @@ mod ffi {
             has_range: bool,
         ) -> UniquePtr<TopoDS_Shape>;
 
+        /// `Part.Face(wire)` for one boundary wire: `BRepBuilderAPI_MakeFace`
+        /// with `OnlyPlane = false` (a plane, cylinder or sphere found from the
+        /// wire itself). Null when no surface supports the wire.
+        fn fc_face_from_wire(wire: &TopoDS_Shape) -> UniquePtr<TopoDS_Shape>;
+
+        /// Attach a further boundary wire to an existing face
+        /// (`BRepBuilderAPI_MakeFace::Add`). Null on failure.
+        fn fc_face_add_wire(face: &TopoDS_Shape, wire: &TopoDS_Shape) -> UniquePtr<TopoDS_Shape>;
+
+        /// `Part.makeFace(wires, "Part::FaceMakerBullseye")`: planar faces with
+        /// holes, where a hole can hold further faces. One face, or a compound
+        /// when the wires describe several regions. Null on failure.
+        fn fc_make_face_bullseye(wires: &TopTools_ListOfShape) -> UniquePtr<TopoDS_Shape>;
+
+        /// `Part.Geom2d.*.toShape(surface)` for the analytic 2-D forms: the
+        /// planar (`z = 0`) edge's exact curve becomes the pcurve, and the
+        /// returned edge is the surface image of that pcurve
+        /// (`BRepBuilderAPI_MakeEdge` + `BRepLib::BuildCurves3d`). An empty
+        /// `surface_spec` uses `surface_face`'s own surface, and with neither the
+        /// world XY plane. Null on failure.
+        fn fc_curve2d_on_surface(
+            planar_edge: &TopoDS_Shape,
+            surface_spec: &[f64],
+            surface_face: &TopoDS_Shape,
+        ) -> UniquePtr<TopoDS_Shape>;
+
         /// The pcurve an edge has on a face (`BRep_Tool::CurveOnSurface`), in the
         /// B-spline state layout; empty when the edge has none there.
         fn fc_edge_pcurve(edge: &TopoDS_Shape, face: &TopoDS_Shape) -> Vec<f64>;
@@ -682,6 +713,11 @@ mod ffi {
 
         /// Sew a shape's faces into shells (`BRepBuilderAPI_Sewing`), or null.
         fn fc_sew_shape(shape: &TopoDS_Shape, tolerance: f64) -> UniquePtr<TopoDS_Shape>;
+
+        /// Re-sew a shell whose naive assembly is not valid
+        /// (`ShapeUpgrade_ShellSewing::ApplySewing`), or null. This is the
+        /// fallback upstream's `Part.makeShell` applies.
+        fn fc_sew_shell(shape: &TopoDS_Shape) -> UniquePtr<TopoDS_Shape>;
 
         /// Convert every curve and surface to a B-spline
         /// (`BRepBuilderAPI_NurbsConvert`), or null.

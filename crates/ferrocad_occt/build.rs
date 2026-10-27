@@ -9,6 +9,7 @@
 //! `.occt/prefix` (the prefix CI fetches), or a common system prefix. See
 //! docs/architecture/occt-bundling.md.
 
+use std::fs;
 use std::path::{Path, PathBuf};
 
 fn main() {
@@ -24,6 +25,7 @@ fn main() {
         "include/fc_history.hxx",
         "include/fc_topology.hxx",
         "include/fc_curve.hxx",
+        "include/fc_geom2d.hxx",
         "include/fc_shapefix.hxx",
         "include/fc_chfi2d.hxx",
         "include/fc_surface_ops.hxx",
@@ -45,6 +47,17 @@ fn main() {
              docs/architecture/occt-bundling.md)."
         )
     });
+
+    // The version string the Python surface reports as `Part.OCC_VERSION` is read
+    // from the headers the bridge is compiled against, so it can never drift from
+    // the kernel actually linked in.
+    let version = occt_version(&occt_include).unwrap_or_else(|| {
+        panic!(
+            "{} has no OCC_VERSION_COMPLETE define",
+            occt_include.join("Standard_Version.hxx").display()
+        )
+    });
+    println!("cargo:rustc-env=FERROCAD_OCC_VERSION={version}");
 
     cxx_build::bridges(["src/bridge.rs", "src/shapefix.rs", "src/chfi2d.rs", "src/surface_ops.rs"])
         .include(&occt_include)
@@ -123,4 +136,21 @@ fn normalize(path: PathBuf) -> Option<PathBuf> {
     candidates
         .into_iter()
         .find(|candidate| candidate.join("Standard_Version.hxx").is_file())
+}
+
+/// The `OCC_VERSION_COMPLETE` string (`"7.8.1"`) from `Standard_Version.hxx`.
+fn occt_version(include: &Path) -> Option<String> {
+    let header = fs::read_to_string(include.join("Standard_Version.hxx")).ok()?;
+    for line in header.lines() {
+        let line = line.trim_start();
+        let Some(rest) = line.strip_prefix("#define OCC_VERSION_COMPLETE") else {
+            continue;
+        };
+        let value = rest.trim();
+        return value
+            .strip_prefix('"')
+            .and_then(|value| value.split('"').next())
+            .map(str::to_string);
+    }
+    None
 }

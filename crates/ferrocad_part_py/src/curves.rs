@@ -13,21 +13,25 @@
 //! `BezierCurve2d`, `OffsetCurve2d` and `BSplineCurve2d` classes. Their
 //! geometry is the XY projection of the `ferrocad_curves` types above, so
 //! `value`, the parameter range and `toShape()` are evaluated for real; the
-//! `BSplineCurve2d` only records the points it is asked to fit (this slice binds
-//! no 2D B-spline kernel) and says so instead of inventing a curve. It also
+//! `BSplineCurve2d` wraps a real kernel B-spline (`Geom2d_BSplineCurve`, carried
+//! as its XY lift so it shares the NURBS implementation), so `interpolate`,
+//! `approximate`, `buildFromPolesMultsKnots`, `insertKnot`, `removeKnot` and
+//! `toShape` all work. It also
 //! carries the elementary surface descriptions `Part.Plane`, `Part.Cylinder`
 //! (upstream's `Part::GeomCylinder`) and `Part.Sphere` (upstream's
 //! `Part::GeomSphere`), and `Part.RectangularTrimmedSurface`. The cylinder and
 //! sphere are distinct from the document primitives returned by
 //! `Part.makeCylinder`/`Part.makeSphere`.
 //!
+//! A `BSplineCurve2d` is the one 2-D form that is lifted **onto** a surface: its
+//! `toShape(surface)` builds the edge from the pcurve and the surface
+//! (`BRepBuilderAPI_MakeEdge` with the pcurve/surface form plus
+//! `BRepLib::BuildCurves3d`), so the edge lies on that surface. The analytic
+//! forms build their XY edge and record the 2-D curve as the pcurve only.
+//!
 //! Deliberate limits for this slice, all reported as `Part.OCCError` or
 //! `NotImplementedError` rather than a silent `None`: an infinite `Line` has no
-//! edge, and face/solid constructors (`makeFace`, `makeSolid`, …) are still to
-//! come. `Part.Geom2d`'s `toShape(surface)` attaches the 2D curve as the edge's
-//! pcurve but does **not** project it onto the surface: no `GeomProjLib` binding
-//! exists here, and `Part.Cylinder`/`Part.Sphere` are only descriptions (radius,
-//! center, axis), not real B-Rep geometry. `RectangularTrimmedSurface.toShape()`
+//! edge, and `OffsetCurve2d.toShape` is not exact. `RectangularTrimmedSurface.toShape()`
 //! builds a real planar face for a `Part.Plane` basis only; a trimmed cylinder or
 //! sphere is described but raises `Part.OCCError` when asked for a face.
 
@@ -47,7 +51,7 @@ use pyo3::exceptions::{
     PyException, PyIndexError, PyNotImplementedError, PyRuntimeError, PyTypeError, PyValueError,
 };
 use pyo3::prelude::*;
-use pyo3::types::{PyAny, PyDict, PyModule, PySequence, PyTuple};
+use pyo3::types::{PyAny, PyDict, PyList, PyModule, PySequence, PyTuple};
 use pyo3::IntoPyObjectExt;
 
 use crate::PartShape;
@@ -475,6 +479,19 @@ impl PyCircle {
     #[getter]
     fn TypeId(&self) -> &'static str {
         "Part::GeomCircle"
+    }
+
+    /// A full circle's parameter range is one turn (`Geom_Circle`'s
+    /// `FirstParameter`/`LastParameter`). Upstream's Draft reads these when it
+    /// discretises a circular edge for SVG output.
+    #[getter]
+    fn FirstParameter(&self) -> f64 {
+        0.0
+    }
+
+    #[getter]
+    fn LastParameter(&self) -> f64 {
+        std::f64::consts::TAU
     }
 
     #[new]
@@ -933,6 +950,18 @@ impl PyEllipse {
     #[getter]
     fn TypeId(&self) -> &'static str {
         "Part::GeomEllipse"
+    }
+
+    /// A full ellipse's parameter range is one turn, as for
+    /// [`Circle`](PyCircle).
+    #[getter]
+    fn FirstParameter(&self) -> f64 {
+        0.0
+    }
+
+    #[getter]
+    fn LastParameter(&self) -> f64 {
+        std::f64::consts::TAU
     }
 
     #[new]
@@ -2799,6 +2828,13 @@ impl PyPlane {
         0.0
     }
 
+    /// The parametric bounds `(u1, u2, v1, v2)` (`Geom_Surface::Bounds`); a plane
+    /// is unbounded in both directions.
+    fn bounds(&self) -> (f64, f64, f64, f64) {
+        let infinite = f64::MAX;
+        (-infinite, infinite, -infinite, infinite)
+    }
+
     /// The principal curvature in `kind` (`GeomSurface.curvature`); a plane is
     /// flat, so every kind is zero.
     fn curvature(&self, _u: f64, _v: f64, _kind: &str) -> f64 {
@@ -3069,6 +3105,13 @@ impl PyCylinder {
         0.0
     }
 
+    /// The parametric bounds `(u1, u2, v1, v2)` (`Geom_Surface::Bounds`): one full
+    /// turn around the axis and the whole (unbounded) height.
+    fn bounds(&self) -> (f64, f64, f64, f64) {
+        let infinite = f64::MAX;
+        (0.0, std::f64::consts::TAU, -infinite, infinite)
+    }
+
     /// The principal curvature in `kind` (`GeomSurface.curvature`): `1/r` around
     /// the circumference and `0` along the axis.
     fn curvature(&self, _u: f64, _v: f64, kind: &str) -> PyResult<f64> {
@@ -3272,6 +3315,17 @@ impl PySphere {
     /// A sphere has no V period (`GeomSurface.VPeriod`).
     fn VPeriod(&self) -> f64 {
         0.0
+    }
+
+    /// The parametric bounds `(u1, u2, v1, v2)` (`Geom_Surface::Bounds`): one full
+    /// turn of longitude and the closed latitude range.
+    fn bounds(&self) -> (f64, f64, f64, f64) {
+        (
+            0.0,
+            std::f64::consts::TAU,
+            -std::f64::consts::FRAC_PI_2,
+            std::f64::consts::FRAC_PI_2,
+        )
     }
 
     /// The principal curvature in `kind` (`GeomSurface.curvature`); a sphere is
@@ -3518,6 +3572,14 @@ impl PySurface {
             face: Mutex::new(face),
         }
     }
+
+    /// The face this surface was read from, when it has one.
+    pub(crate) fn face(&self) -> Option<Shape> {
+        self.face
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone()
+    }
 }
 
 #[pymethods]
@@ -3525,6 +3587,15 @@ impl PySurface {
     #[getter]
     fn TypeId(&self) -> String {
         self.type_id.clone()
+    }
+
+    /// The parametric bounds `(u1, u2, v1, v2)` of the underlying surface
+    /// (`GeomSurface.bounds`, the **untrimmed** `Geom_Surface::Bounds`).
+    fn bounds(&self) -> PyResult<(f64, f64, f64, f64)> {
+        let face = self.surface_face()?;
+        occt()
+            .face_surface_bounds(&face)
+            .ok_or_else(|| OCCError::new_err("the surface has no parameter bounds"))
     }
 
     /// The `(u, v)` of `point` on the surface (`GeomSurface.parameter`).
@@ -3898,16 +3969,36 @@ fn build_spline(
     mults: Option<&Bound<'_, PyAny>>,
     knots: Option<&Bound<'_, PyAny>>,
     periodic: bool,
-    mut degree: i32,
+    degree: i32,
     weights: Option<&Bound<'_, PyAny>>,
     check_rational: bool,
 ) -> PyResult<SplineState> {
-    let poles = parse_points(poles)?;
+    build_spline_from_poles(
+        parse_points(poles)?,
+        mults.map(parse_integers).transpose()?,
+        knots.map(parse_floats).transpose()?,
+        periodic,
+        degree,
+        weights.map(parse_floats).transpose()?,
+        check_rational,
+    )
+}
+
+/// [`build_spline`] on already-parsed arguments, so the 2-D binding (whose poles
+/// are `(x, y)` pairs lifted to `z = 0`) gets the same knot guesses and the same
+/// validation as `Part.BSplineCurve`.
+fn build_spline_from_poles(
+    poles: Vec<Vector3>,
+    given_mults: Option<Vec<i32>>,
+    given_knots: Option<Vec<f64>>,
+    periodic: bool,
+    mut degree: i32,
+    given_weights: Option<Vec<f64>>,
+    check_rational: bool,
+) -> PyResult<SplineState> {
     if poles.len() < 2 {
         return Err(OCCError::new_err("need two or more poles"));
     }
-    let given_mults = mults.map(parse_integers).transpose()?;
-    let given_knots = knots.map(parse_floats).transpose()?;
 
     let knot_count = match (&given_mults, &given_knots) {
         (Some(mults), Some(knots)) => {
@@ -3979,7 +4070,7 @@ fn build_spline(
         }
     };
 
-    let weights = match weights.map(parse_floats).transpose()? {
+    let weights = match given_weights {
         Some(weights) => {
             if weights.len() != poles.len() {
                 return Err(OCCError::new_err("number of poles and weights mismatch"));
@@ -4289,6 +4380,84 @@ impl PyBSplineCurve {
             )
             .ok_or_else(|| OCCError::new_err("failed to evaluate the B-spline"))?;
         py_vector(py, point)
+    }
+
+    /// `parameter(point)`: the curve parameter of the point on the curve closest
+    /// to `point` (`GeomCurve.parameter`, upstream's
+    /// `GeomAPI_ProjectPointOnCurve`).
+    fn parameter(&self, point: &Bound<'_, PyAny>) -> PyResult<f64> {
+        let state = self.state()?;
+        let point = vector(point)?;
+        occt()
+            .bspline_parameter(
+                &state.poles,
+                &state.weights,
+                &state.knots,
+                &state.mults,
+                state.degree,
+                state.periodic,
+                state.check_rational(),
+                point,
+            )
+            .ok_or_else(|| OCCError::new_err("failed to project the point onto the B-spline"))
+    }
+
+    /// `insertKnot(u, mult=1, tol=0.0)` (`Geom_BSplineCurve::InsertKnot`).
+    #[pyo3(signature = (u, mult = 1, tol = 0.0))]
+    fn insertKnot(&self, u: f64, mult: i32, tol: f64) -> PyResult<()> {
+        let state = self.state()?;
+        let blob = occt()
+            .bspline_insert_knot_state(
+                &state.poles,
+                &state.weights,
+                &state.knots,
+                &state.mults,
+                state.degree,
+                state.periodic,
+                state.check_rational(),
+                u,
+                mult,
+                tol,
+            )
+            .ok_or_else(|| OCCError::new_err("knot insertion failed"))?;
+        let state = SplineState::from_blob(&blob)
+            .ok_or_else(|| OCCError::new_err("knot insertion failed"))?;
+        *self.state.lock().unwrap_or_else(|e| e.into_inner()) = Some(state);
+        Ok(())
+    }
+
+    /// `removeKnot(index, mult, tol)`: reduce knot `index` to multiplicity
+    /// `mult` (`Geom_BSplineCurve::RemoveKnot`). Returns whether it succeeded:
+    /// a removal that would move the curve by more than `tol` is refused and
+    /// leaves the curve untouched.
+    fn removeKnot(&self, index: i32, mult: i32, tol: f64) -> PyResult<bool> {
+        let state = self.state()?;
+        let Some(blob) = occt().bspline_remove_knot_state(
+            &state.poles,
+            &state.weights,
+            &state.knots,
+            &state.mults,
+            state.degree,
+            state.periodic,
+            state.check_rational(),
+            index,
+            mult,
+            tol,
+        ) else {
+            return Ok(false);
+        };
+        let Some(removed) = SplineState::from_blob(&blob) else {
+            return Ok(false);
+        };
+        *self.state.lock().unwrap_or_else(|e| e.into_inner()) = Some(removed);
+        Ok(true)
+    }
+
+    /// Whether the curve's first and last points coincide
+    /// (`BSplineCurve.isClosed`).
+    fn isClosed(&self) -> PyResult<bool> {
+        let state = self.state()?;
+        Ok(state.start.distance(&state.end) <= TOLERANCE)
     }
 
     #[getter]
@@ -4633,12 +4802,64 @@ fn distance2(a: (f64, f64), b: (f64, f64)) -> f64 {
     ((a.0 - b.0).powi(2) + (a.1 - b.1).powi(2)).sqrt()
 }
 
+/// The lowest continuity of a B-spline (`Geom_BSplineCurve::Continuity`): the
+/// degree minus the largest interior multiplicity, named as upstream's
+/// `GeomAbs_Shape` names it.
+fn spline_continuity_name(curve: &NurbsCurve) -> &'static str {
+    let degree = curve.degree();
+    let mults = curve.mults();
+    if mults.len() < 3 {
+        return "CN";
+    }
+    let inner = mults[1..mults.len() - 1]
+        .iter()
+        .copied()
+        .max()
+        .unwrap_or(1);
+    match (degree - inner).clamp(0, 3) {
+        0 => "C0",
+        1 => "C1",
+        2 => "C2",
+        _ => "C3",
+    }
+}
+
+/// The [`NurbsCurve`] behind a read-back B-spline state, or `None` when OCCT
+/// reported a description `ferrocad_curves` rejects.
+fn nurbs_of_state(state: &SplineState) -> Option<NurbsCurve> {
+    let knots = state.knots.clone();
+    let mults = state.mults.clone();
+    let poles = state.poles.clone();
+    let weights = state.weights.clone();
+    let degree = state.degree;
+    if state.periodic {
+        NurbsCurve::new_periodic(degree, knots, mults, poles, weights).ok()
+    } else {
+        NurbsCurve::new(degree, knots, mults, poles, weights).ok()
+    }
+}
+
 /// A clear failure for a capability this slice's 2D seam does not have.
 fn geom2d_not_implemented(what: &str) -> PyErr {
     PyNotImplementedError::new_err(format!(
         "Part.Geom2d.{what} is not implemented in this slice: the 2D seam has no \
          such capability"
     ))
+}
+
+/// The error for a 2-D query the data cannot answer.
+///
+/// An unbuilt `BSplineCurve2d` is upstream's null `Geom2d_BSplineCurve` handle, so
+/// a query on it is a `Part.OCCError`; every other gap is a
+/// `NotImplementedError`.
+fn curve2d_gap(data: &Geom2dData, what: &str) -> PyErr {
+    if let Geom2dData::BSpline(None) = data {
+        return OCCError::new_err(format!(
+            "Part.Geom2d.{what}: no curve has been built yet; call interpolate, \
+             approximate or buildFromPolesMultsKnots first"
+        ));
+    }
+    geom2d_not_implemented(what)
 }
 
 /// The geometry behind a `Part.Geom2d` object.
@@ -4668,9 +4889,15 @@ pub(crate) enum Geom2dData {
     Parabola(Parabola),
     ArcOfParabola(ArcOfParabola),
     Bezier(BezierCurve),
-    /// The points a `BSplineCurve2d` was asked to fit. This slice binds no 2D
-    /// B-spline kernel, so no curve is built behind that record.
-    BSpline(Vec<(f64, f64)>),
+    /// A real 2-D B-spline (`Geom2d_BSplineCurve`). It is carried as the XY lift
+    /// (`z = 0`) so evaluation, trimming and the edge build all share the one
+    /// NURBS implementation the 3-D classes already use — the kernel's 2-D and
+    /// 3-D B-splines accept the same pole/weight/knot description.
+    ///
+    /// `None` is `Part.Geom2d.BSplineCurve2d()`, which has no geometry until
+    /// `interpolate`, `approximate` or `buildFromPolesMultsKnots` builds one
+    /// (upstream's null `Geom2d_BSplineCurve` handle).
+    BSpline(Option<NurbsCurve>),
     Offset {
         basis: Box<Geom2dData>,
         offset: f64,
@@ -4715,7 +4942,7 @@ impl Geom2dData {
             Self::Parabola(parabola) => xy(parabola.point_at(u)),
             Self::ArcOfParabola(arc) => xy(arc.point_at(u)),
             Self::Bezier(curve) => xy(curve.point_at(u)),
-            Self::BSpline(_) => return None,
+            Self::BSpline(curve) => xy(curve.as_ref()?.point_at(u)?),
             Self::Offset { basis, offset } => {
                 let point = basis.point(u)?;
                 let tangent = basis.tangent(u)?;
@@ -4739,7 +4966,7 @@ impl Geom2dData {
             Self::Parabola(parabola) => xy(parabola.tangent_at(u)),
             Self::ArcOfParabola(arc) => xy(arc.parabola().tangent_at(u)),
             Self::Bezier(curve) => xy(curve.tangent_at(u)),
-            Self::BSpline(_) => return None,
+            Self::BSpline(curve) => xy(curve.as_ref()?.tangent_at(u)),
             Self::Offset { .. } => {
                 // The offset curve's derivative is not a named analytic
                 // quantity here, so it is taken from the offset points.
@@ -4782,13 +5009,12 @@ impl Geom2dData {
                 let f = arc.parabola().focal();
                 (u * u / (4.0 * f * f) + 1.0).sqrt()
             }
-            Self::Bezier(_) | Self::Offset { .. } => {
+            Self::Bezier(_) | Self::BSpline(_) | Self::Offset { .. } => {
                 let step = 1e-6 * (1.0 + u.abs());
                 let before = self.point(u - step)?;
                 let after = self.point(u + step)?;
                 distance2(before, after) / (2.0 * step)
             }
-            Self::BSpline(_) => return None,
         })
     }
 
@@ -4802,7 +5028,7 @@ impl Geom2dData {
             Self::ArcOfHyperbola(arc) => arc.first(),
             Self::ArcOfParabola(arc) => arc.first(),
             Self::Bezier(curve) => curve.first(),
-            Self::BSpline(_) => return None,
+            Self::BSpline(curve) => curve.as_ref()?.first(),
             Self::Offset { basis, .. } => basis.first()?,
         })
     }
@@ -4817,7 +5043,7 @@ impl Geom2dData {
             Self::ArcOfHyperbola(arc) => arc.last(),
             Self::ArcOfParabola(arc) => arc.last(),
             Self::Bezier(curve) => curve.last(),
-            Self::BSpline(_) => return None,
+            Self::BSpline(curve) => curve.as_ref()?.last(),
             Self::Offset { basis, .. } => basis.last()?,
         })
     }
@@ -4825,7 +5051,17 @@ impl Geom2dData {
     fn is_closed(&self) -> bool {
         match self {
             Self::Circle(_) | Self::Ellipse(_) => true,
-            Self::Line(_) | Self::Hyperbola(_) | Self::Parabola(_) | Self::BSpline(_) => false,
+            Self::Line(_) | Self::Hyperbola(_) | Self::Parabola(_) => false,
+            Self::BSpline(Some(curve)) => {
+                let (first, last) = (curve.first(), curve.last());
+                match (curve.point_at(first), curve.point_at(last)) {
+                    (Some(start), Some(end)) if first != last => {
+                        distance2(xy(start), xy(end)) <= TOLERANCE
+                    }
+                    _ => false,
+                }
+            }
+            Self::BSpline(None) => false,
             Self::Bezier(curve) => curve.is_closed(),
             Self::Offset { basis, .. } => basis.is_closed(),
             _ => match (self.first(), self.last()) {
@@ -4842,6 +5078,7 @@ impl Geom2dData {
 
     fn is_periodic(&self) -> bool {
         matches!(self, Self::Circle(_) | Self::Ellipse(_))
+            || matches!(self, Self::BSpline(Some(curve)) if curve.is_periodic())
     }
 
     fn continuity(&self) -> &'static str {
@@ -4851,8 +5088,9 @@ impl Geom2dData {
             | Self::ArcOfEllipse { .. }
             | Self::ArcOfHyperbola(_)
             | Self::ArcOfParabola(_)
-            | Self::BSpline(_)
             | Self::Offset { .. } => "C0",
+            Self::BSpline(Some(curve)) => spline_continuity_name(curve),
+            Self::BSpline(None) => "CN",
             _ => "CN",
         }
     }
@@ -5245,7 +5483,10 @@ impl Geom2dData {
                     BezierCurve::with_range(poles, weights, curve.first(), curve.last()).ok()?,
                 )
             }
-            Self::BSpline(points) => Self::BSpline(points.iter().rev().copied().collect()),
+            Self::BSpline(curve) => match curve {
+                Some(curve) => Self::BSpline(Some(curve.reversed())),
+                None => Self::BSpline(None),
+            },
             Self::Offset { basis, offset } => Self::Offset {
                 basis: Box::new(basis.reversed()?),
                 offset: *offset,
@@ -5308,10 +5549,32 @@ impl Geom2dData {
                 ArcOfParabola::new(arc.parabola(), first, last).map_err(curve_error)?,
             ),
             Self::Bezier(curve) => Self::Bezier(curve.trim(first, last).map_err(curve_error)?),
-            Self::BSpline(_) => {
-                return Err(geom2d_not_implemented(
-                    "BSplineCurve2d.toShape (this slice binds no 2D B-spline kernel)",
-                ))
+            Self::BSpline(curve) => {
+                let curve = curve.as_ref().ok_or_else(|| {
+                    OCCError::new_err(
+                        "Part.Geom2d.BSplineCurve2d has no curve yet; call interpolate, \
+                         approximate or buildFromPolesMultsKnots first",
+                    )
+                })?;
+                let state = nurbs_state(curve)?;
+                let blob = occt()
+                    .bspline_segment(
+                        &state.poles,
+                        &state.weights,
+                        &state.knots,
+                        &state.mults,
+                        state.degree,
+                        state.periodic,
+                        state.check_rational(),
+                        first,
+                        last,
+                    )
+                    .ok_or_else(|| OCCError::new_err("failed to trim the B-spline"))?;
+                let state = SplineState::from_blob(&blob)
+                    .ok_or_else(|| OCCError::new_err("failed to trim the B-spline"))?;
+                Self::BSpline(Some(nurbs_of_state(&state).ok_or_else(|| {
+                    OCCError::new_err("failed to trim the B-spline")
+                })?))
             }
             Self::Offset { .. } => self.clone(),
         })
@@ -5384,14 +5647,14 @@ fn curvature_of(data: &Geom2dData, u: f64) -> PyResult<f64> {
             let step = 1e-6 * (1.0 + u.abs());
             let before = data
                 .tangent(u - step)
-                .ok_or_else(|| geom2d_not_implemented("BSplineCurve2d.curvature"))?;
+                .ok_or_else(|| curve2d_gap(&data, "BSplineCurve2d.curvature"))?;
             let after = data
                 .tangent(u + step)
-                .ok_or_else(|| geom2d_not_implemented("BSplineCurve2d.curvature"))?;
+                .ok_or_else(|| curve2d_gap(&data, "BSplineCurve2d.curvature"))?;
             let rate = distance2(before, after) / (2.0 * step);
             let speed = data
                 .speed(u)
-                .ok_or_else(|| geom2d_not_implemented("BSplineCurve2d.curvature"))?;
+                .ok_or_else(|| curve2d_gap(&data, "BSplineCurve2d.curvature"))?;
             Ok(rate / speed)
         }
     }
@@ -5518,16 +5781,16 @@ impl PyCurve2d {
 
     #[getter]
     fn FirstParameter(slf: &Bound<'_, Self>) -> PyResult<f64> {
-        geometry_data(slf.as_any())?
-            .first()
-            .ok_or_else(|| geom2d_not_implemented("BSplineCurve2d.FirstParameter"))
+        let data = geometry_data(slf.as_any())?;
+        data.first()
+            .ok_or_else(|| curve2d_gap(&data, "BSplineCurve2d.FirstParameter"))
     }
 
     #[getter]
     fn LastParameter(slf: &Bound<'_, Self>) -> PyResult<f64> {
-        geometry_data(slf.as_any())?
-            .last()
-            .ok_or_else(|| geom2d_not_implemented("BSplineCurve2d.LastParameter"))
+        let data = geometry_data(slf.as_any())?;
+        data.last()
+            .ok_or_else(|| curve2d_gap(&data, "BSplineCurve2d.LastParameter"))
     }
 
     /// The point at parameter `u` (`Geom2d_Curve::Value`).
@@ -5535,7 +5798,7 @@ impl PyCurve2d {
         let data = geometry_data(slf.as_any())?;
         let point = data
             .point(u)
-            .ok_or_else(|| geom2d_not_implemented("BSplineCurve2d.value"))?;
+            .ok_or_else(|| curve2d_gap(&data, "BSplineCurve2d.value"))?;
         py_vector2d(py, point)
     }
 
@@ -5544,7 +5807,7 @@ impl PyCurve2d {
         let data = geometry_data(slf.as_any())?;
         let tangent = data
             .tangent(u)
-            .ok_or_else(|| geom2d_not_implemented("BSplineCurve2d.tangent"))?;
+            .ok_or_else(|| curve2d_gap(&data, "BSplineCurve2d.tangent"))?;
         py_vector2d(py, tangent)
     }
 
@@ -5553,7 +5816,7 @@ impl PyCurve2d {
         let data = geometry_data(slf.as_any())?;
         let tangent = data
             .tangent(u)
-            .ok_or_else(|| geom2d_not_implemented("BSplineCurve2d.normal"))?;
+            .ok_or_else(|| curve2d_gap(&data, "BSplineCurve2d.normal"))?;
         py_vector2d(py, (-tangent.1, tangent.0))
     }
 
@@ -5568,10 +5831,10 @@ impl PyCurve2d {
         let data = geometry_data(slf.as_any())?;
         let point = data
             .point(u)
-            .ok_or_else(|| geom2d_not_implemented("BSplineCurve2d.centerOfCurvature"))?;
+            .ok_or_else(|| curve2d_gap(&data, "BSplineCurve2d.centerOfCurvature"))?;
         let tangent = data
             .tangent(u)
-            .ok_or_else(|| geom2d_not_implemented("BSplineCurve2d.centerOfCurvature"))?;
+            .ok_or_else(|| curve2d_gap(&data, "BSplineCurve2d.centerOfCurvature"))?;
         let curvature = curvature_of(&data, u)?;
         if curvature.abs() <= TOLERANCE {
             return Err(OCCError::new_err(
@@ -5612,9 +5875,9 @@ impl PyCurve2d {
             (Some(first), Some(last)) => (first, last),
             (None, None) => (
                 data.first()
-                    .ok_or_else(|| geom2d_not_implemented("BSplineCurve2d.length"))?,
+                    .ok_or_else(|| curve2d_gap(&data, "BSplineCurve2d.length"))?,
                 data.last()
-                    .ok_or_else(|| geom2d_not_implemented("BSplineCurve2d.length"))?,
+                    .ok_or_else(|| curve2d_gap(&data, "BSplineCurve2d.length"))?,
             ),
             _ => {
                 return Err(PyTypeError::new_err(
@@ -5632,15 +5895,15 @@ impl PyCurve2d {
         let step = span / intervals as f64;
         let mut sum = data
             .speed(first)
-            .ok_or_else(|| geom2d_not_implemented("BSplineCurve2d.length"))?
+            .ok_or_else(|| curve2d_gap(&data, "BSplineCurve2d.length"))?
             + data
                 .speed(last)
-                .ok_or_else(|| geom2d_not_implemented("BSplineCurve2d.length"))?;
+                .ok_or_else(|| curve2d_gap(&data, "BSplineCurve2d.length"))?;
         for index in 1..intervals {
             let weight = if index % 2 == 0 { 2.0 } else { 4.0 };
             let speed = data
                 .speed(first + index as f64 * step)
-                .ok_or_else(|| geom2d_not_implemented("BSplineCurve2d.length"))?;
+                .ok_or_else(|| curve2d_gap(&data, "BSplineCurve2d.length"))?;
             sum += weight * speed;
         }
         Ok(sum * step / 3.0)
@@ -5669,8 +5932,8 @@ impl PyCurve2d {
         args: &Bound<'_, PyTuple>,
     ) -> PyResult<Py<PyEdge>> {
         let data = geometry_data(slf.as_any())?;
-        let (_has_surface, first, last) = parse_geometry2d_to_shape_args(args)?;
-        curve2d_edge(py, &data, first, last)
+        let (surface, first, last) = parse_geometry2d_to_shape_args(args)?;
+        curve2d_edge(py, &data, surface.as_ref(), first, last)
     }
 
     /// This slice records the points but builds no 2D B-spline.
@@ -6185,14 +6448,15 @@ fn hyperbola_through_points(
 }
 
 /// Parse `toShape(*args)` into `(surface?, first?, last?)`.
-fn parse_geometry2d_to_shape_args(
-    args: &Bound<'_, PyTuple>,
-) -> PyResult<(bool, Option<f64>, Option<f64>)> {
+fn parse_geometry2d_to_shape_args<'py>(
+    args: &Bound<'py, PyTuple>,
+) -> PyResult<(Option<Bound<'py, PyAny>>, Option<f64>, Option<f64>)> {
     match args.len() {
-        0 => Ok((false, None, None)),
+        0 => Ok((None, None, None)),
         1 => {
-            require_surface_or_face(&args.get_item(0)?)?;
-            Ok((true, None, None))
+            let surface = args.get_item(0)?;
+            require_surface_or_face(&surface)?;
+            Ok((Some(surface), None, None))
         }
         2 => {
             let first: f64 = args
@@ -6203,10 +6467,11 @@ fn parse_geometry2d_to_shape_args(
                 .get_item(1)?
                 .extract()
                 .map_err(|_| to_shape_error())?;
-            Ok((false, Some(first), Some(last)))
+            Ok((None, Some(first), Some(last)))
         }
         3 => {
-            require_surface_or_face(&args.get_item(0)?)?;
+            let surface = args.get_item(0)?;
+            require_surface_or_face(&surface)?;
             let first: f64 = args
                 .get_item(1)?
                 .extract()
@@ -6215,10 +6480,48 @@ fn parse_geometry2d_to_shape_args(
                 .get_item(2)?
                 .extract()
                 .map_err(|_| to_shape_error())?;
-            Ok((true, Some(first), Some(last)))
+            Ok((Some(surface), Some(first), Some(last)))
         }
         _ => Err(to_shape_error()),
     }
+}
+
+/// The surface a 2-D curve is lifted onto: an elementary description as a
+/// [`SurfaceSpec`], or the face that carries any other surface (a B-spline, a
+/// surface of revolution, …).
+fn to_shape_surface(value: &Bound<'_, PyAny>) -> PyResult<(Option<SurfaceSpec>, Option<Shape>)> {
+    if let Some(spec) = face_surface_spec(value) {
+        return Ok((Some(spec), None));
+    }
+    if let Ok(face) = value.downcast::<PyFace>() {
+        let shape = face
+            .borrow()
+            .as_super()
+            .shape()
+            .ok_or_else(|| OCCError::new_err("an empty face has no surface"))?;
+        return Ok((None, Some(shape)));
+    }
+    if let Ok(surface) = value.downcast::<PySurface>() {
+        let shape = surface
+            .borrow()
+            .face()
+            .ok_or_else(|| OCCError::new_err("this surface has no backing face"))?;
+        return Ok((None, Some(shape)));
+    }
+    if let Ok(spline) = value.downcast::<crate::solids::PyBSplineSurface>() {
+        let spline = spline.borrow();
+        let geometry = spline.geometry().ok_or_else(|| {
+            OCCError::new_err(
+                "this BSplineSurface has no control points yet \
+                 (call buildFromPolesMultsKnots or interpolate)",
+            )
+        })?;
+        let shape = ferrocad_occt::part_ops::bspline_surface_face(geometry).map_err(kernel_error)?;
+        return Ok((None, Some(shape)));
+    }
+    Err(PyTypeError::new_err(
+        "toShape(surface) expects a Part surface or a Part.Face",
+    ))
 }
 
 fn to_shape_error() -> PyErr {
@@ -6239,10 +6542,17 @@ fn curve2d_entry(shape: Shape, record: &Geom2dData) -> PyClassInitializer<PyEdge
     )
 }
 
-/// The XY edge of a 2D curve, with the 2D curve attached as its pcurve.
+/// The edge of a 2D curve: its XY image as a real edge, with the 2D curve
+/// attached as its pcurve.
+///
+/// A B-spline is the one form the kernel can place **on** a surface
+/// (`BRepBuilderAPI_MakeEdge` with the pcurve/surface form, upstream's
+/// `Geometry2dPy::toShape(surface)`): the edge then carries the surface image as
+/// its 3-D curve. The analytic forms keep their XY edge.
 fn curve2d_edge(
     py: Python<'_>,
     data: &Geom2dData,
+    surface: Option<&Bound<'_, PyAny>>,
     first: Option<f64>,
     last: Option<f64>,
 ) -> PyResult<Py<PyEdge>> {
@@ -6250,6 +6560,43 @@ fn curve2d_edge(
         (Some(first), Some(last)) => data.restricted(first, last)?,
         _ => data.clone(),
     };
+    if let Geom2dData::BSpline(curve) = &record {
+        let curve = curve.as_ref().ok_or_else(|| {
+            OCCError::new_err(
+                "Part.Geom2d.BSplineCurve2d has no curve yet; call interpolate, \
+                 approximate or buildFromPolesMultsKnots first",
+            )
+        })?;
+        let state = nurbs_state(curve)?;
+        let (spec, face) = match surface {
+            Some(value) => to_shape_surface(value)?,
+            None => (None, None),
+        };
+        let poles: Vec<(f64, f64)> = state.poles.iter().map(|pole| (pole.x, pole.y)).collect();
+        let shape = occt()
+            .make_bspline2d_edge(
+                &poles,
+                &state.weights,
+                &state.knots,
+                &state.mults,
+                state.degree,
+                state.periodic,
+                spec.as_ref(),
+                face.as_ref(),
+                None,
+            )
+            .map_err(kernel_error)?;
+        return Ok(Py::new(
+            py,
+            PyEdge::from_entry_with_curve2d(
+                EdgeEntry {
+                    shape,
+                    curve: None,
+                },
+                record,
+            ),
+        )?);
+    }
     match &record {
         Geom2dData::Line(_) => Err(OCCError::new_err(
             "an infinite 2D line has no edge; pass a parameter range to toShape",
@@ -6312,9 +6659,7 @@ fn curve2d_edge(
         Geom2dData::Offset { .. } => Err(geom2d_not_implemented(
             "OffsetCurve2d.toShape (no exact offset edge is bound in this slice)",
         )),
-        Geom2dData::BSpline(_) => Err(geom2d_not_implemented(
-            "BSplineCurve2d.toShape (this slice binds no 2D B-spline kernel)",
-        )),
+        Geom2dData::BSpline(_) => unreachable!("the B-spline form is handled above"),
     }
 }
 
@@ -7711,14 +8056,14 @@ impl PyBezierCurve2d {
 
 // --- BSplineCurve2d --------------------------------------------------------
 
-/// `Part.Geom2d.BSplineCurve2d()` — upstream's 2D B-spline curve.
+/// `Part.Geom2d.BSplineCurve2d()` — upstream's 2D B-spline curve
+/// (`Geom2d_BSplineCurve`).
 ///
-/// No 2D B-spline kernel is bound in this slice, so `interpolate` and
-/// `approximate` only **record** the points they are given; no curve is computed
-/// behind that record. Every operation that would need the actual curve
-/// (`insertKnot`, `value`, `toShape`) reports `Part.OCCError` /
-/// `NotImplementedError` rather than answering from a curve that was never
-/// built.
+/// The curve is a real kernel B-spline: `interpolate`, `approximate` and
+/// `buildFromPolesMultsKnots` build one, `value`/`tangent`/`length` evaluate it,
+/// `segment`/`insertKnot`/`setPeriodic` modify it, and `toShape` turns it into an
+/// edge — the XY lift without a surface, or the surface image when one is given
+/// (`BRepBuilderAPI_MakeEdge` with the pcurve/surface form).
 ///
 /// The four-argument call upstream's `Geom2d_tests` uses
 /// (`insertKnot(0.5, 1, 0.01, 2)`) is rejected by the signature as a `TypeError`,
@@ -7728,25 +8073,20 @@ pub struct PyBSplineCurve2d;
 curve2d_initializer!(PyBSplineCurve2d);
 
 impl PyBSplineCurve2d {
-    fn point_count(value: &Bound<'_, PyAny>) -> PyResult<usize> {
+    fn curve(value: &Bound<'_, PyAny>) -> PyResult<NurbsCurve> {
         match geometry_data(value)? {
-            Geom2dData::BSpline(points) => Ok(points.len()),
+            Geom2dData::BSpline(Some(curve)) => Ok(curve),
+            Geom2dData::BSpline(None) => Err(OCCError::new_err(
+                "Part.Geom2d.BSplineCurve2d has no curve yet; call interpolate, \
+                 approximate or buildFromPolesMultsKnots first",
+            )),
             _ => Err(OCCError::new_err("the object is not a BSplineCurve2d")),
         }
     }
 
-    /// Parse and remember the `Points` argument of `interpolate`/`approximate`.
-    fn record(slf: &Bound<'_, Self>, points: &Bound<'_, PyAny>) -> PyResult<()> {
-        let mut parsed = Vec::new();
-        for point in points.try_iter()? {
-            parsed.push(vector2d(&point?)?);
-        }
-        if parsed.len() < 2 {
-            return Err(OCCError::new_err(
-                "a 2D B-spline needs at least two points",
-            ));
-        }
-        replace_geometry_data(slf.as_any(), Geom2dData::BSpline(parsed))
+    /// Store the curve built by `interpolate`/`approximate`/`buildFromPoles…`.
+    fn store(slf: &Bound<'_, Self>, curve: NurbsCurve) -> PyResult<()> {
+        replace_geometry_data(slf.as_any(), Geom2dData::BSpline(Some(curve)))
     }
 }
 
@@ -7754,11 +8094,11 @@ impl PyBSplineCurve2d {
 impl PyBSplineCurve2d {
     #[new]
     fn new() -> PyResult<PyClassInitializer<Self>> {
-        Ok(Self::initializer(Geom2dData::BSpline(Vec::new())))
+        Ok(Self::initializer(Geom2dData::BSpline(None)))
     }
 
-    /// `interpolate(Points, PeriodicFlag=False, Tolerance=1e-7)` — record the
-    /// points to interpolate (upstream's `Geom2dAPI_Interpolate`).
+    /// `interpolate(Points, PeriodicFlag=False, Tolerance=1e-7)` — build the
+    /// B-spline through the given points (upstream's `Geom2dAPI_Interpolate`).
     #[pyo3(signature = (Points, PeriodicFlag = false, Tolerance = 1e-7))]
     fn interpolate(
         slf: &Bound<'_, Self>,
@@ -7766,13 +8106,30 @@ impl PyBSplineCurve2d {
         PeriodicFlag: bool,
         Tolerance: f64,
     ) -> PyResult<()> {
-        let _ = (PeriodicFlag, Tolerance);
-        Self::record(slf, Points)
+        let _ = Tolerance;
+        let points = parse_points2d(Points)?;
+        if points.len() < 2 {
+            return Err(OCCError::new_err(
+                "a 2D B-spline needs at least two interpolation points",
+            ));
+        }
+        let blob = occt()
+            .bspline_interpolated_state(&points, PeriodicFlag)
+            .ok_or_else(|| OCCError::new_err("failed to interpolate the 2D B-spline"))?;
+        let state = SplineState::from_blob(&blob)
+            .ok_or_else(|| OCCError::new_err("failed to interpolate the 2D B-spline"))?;
+        let curve = nurbs_of_state(&state)
+            .ok_or_else(|| OCCError::new_err("failed to interpolate the 2D B-spline"))?;
+        Self::store(slf, curve)
     }
 
     /// `approximate(Points, DegMax=8, Continuity="C2", Tolerance=1e-3,
-    /// DegMin=3, ParamType="ChordLength")` — record the points to approximate
+    /// DegMin=3, ParamType="ChordLength")` — approximate the points
     /// (upstream's `Geom2dAPI_PointsToBSpline`).
+    ///
+    /// The approximation runs in the same plane through the 3-D kernel routine,
+    /// which is the same problem the 2-D one solves; `DegMin`/`DegMax` bound the
+    /// degree and `Tolerance` the maximum deviation.
     #[pyo3(signature = (Points, DegMax = 8, Continuity = "C2", Tolerance = 1e-3, DegMin = 3, ParamType = "ChordLength"))]
     fn approximate(
         slf: &Bound<'_, Self>,
@@ -7783,17 +8140,27 @@ impl PyBSplineCurve2d {
         DegMin: i32,
         ParamType: &str,
     ) -> PyResult<()> {
-        let _ = (DegMax, Continuity, Tolerance, DegMin, ParamType);
-        Self::record(slf, Points)
+        let _ = (Continuity, ParamType);
+        let points = parse_points2d(Points)?;
+        if points.len() < 2 {
+            return Err(OCCError::new_err(
+                "a 2D B-spline needs at least two approximation points",
+            ));
+        }
+        let blob = occt()
+            .bspline_approximated_state(&points, DegMin.max(1), DegMax.max(DegMin.max(1)), Tolerance)
+            .ok_or_else(|| OCCError::new_err("failed to approximate the 2D B-spline"))?;
+        let state = SplineState::from_blob(&blob)
+            .ok_or_else(|| OCCError::new_err("failed to approximate the 2D B-spline"))?;
+        let curve = nurbs_of_state(&state)
+            .ok_or_else(|| OCCError::new_err("failed to approximate the 2D B-spline"))?;
+        Self::store(slf, curve)
     }
 
     /// `buildFromPolesMultsKnots(poles, mults=None, knots=None, periodic=False,
-    /// degree=3, weights=None)` — build the 2D B-spline from control points.
-    ///
-    /// The 2D binding records the poles (its `toShape` still reports that no 2D
-    /// B-spline kernel is bound), so the signature and the pole list match
-    /// upstream's `BSplineCurve2d`.
-    #[pyo3(signature = (poles, mults = None, knots = None, periodic = false, degree = 3, weights = None))]
+    /// degree=3, weights=None, CheckRational=True)` — build the 2D B-spline from
+    /// control points.
+    #[pyo3(signature = (poles, mults = None, knots = None, periodic = false, degree = 3, weights = None, CheckRational = true))]
     fn buildFromPolesMultsKnots(
         slf: &Bound<'_, Self>,
         poles: &Bound<'_, PyAny>,
@@ -7802,26 +8169,307 @@ impl PyBSplineCurve2d {
         periodic: bool,
         degree: i32,
         weights: Option<&Bound<'_, PyAny>>,
+        CheckRational: bool,
     ) -> PyResult<()> {
-        let _ = (mults, knots, periodic, degree, weights);
-        Self::record(slf, poles)
+        let poles = parse_points2d(poles)?;
+        let mults = mults.map(parse_integers).transpose()?;
+        let knots = knots.map(parse_floats).transpose()?;
+        let weights = weights.map(parse_floats).transpose()?;
+        let state = build_spline_from_poles(
+            poles,
+            mults,
+            knots,
+            periodic,
+            degree,
+            weights,
+            CheckRational,
+        )?;
+        let curve = nurbs_of_state(&state)
+            .ok_or_else(|| OCCError::new_err("failed to create the 2D spline"))?;
+        Self::store(slf, curve)
     }
 
+    /// `buildFromPoles(poles, periodic=False, degree=3)` — the uniform shortcut
+    /// (`Geom2d_BSplineCurve` with clamped/uniform knots).
+    #[pyo3(signature = (poles, periodic = false, degree = 3))]
+    fn buildFromPoles(
+        slf: &Bound<'_, Self>,
+        poles: &Bound<'_, PyAny>,
+        periodic: bool,
+        degree: i32,
+    ) -> PyResult<()> {
+        let poles = parse_points2d(poles)?;
+        if poles.len() < 2 {
+            return Err(OCCError::new_err("a 2D B-spline needs at least two poles"));
+        }
+        let degree = degree.min(poles.len() as i32 - 1).max(1);
+        let state = build_spline_from_poles(poles, None, None, periodic, degree, None, true)?;
+        let curve = nurbs_of_state(&state)
+            .ok_or_else(|| OCCError::new_err("failed to create the 2D spline"))?;
+        Self::store(slf, curve)
+    }
+
+    /// `insertKnot(u, mult=1, tol=0.0)` (`Geom_BSplineCurve::InsertKnot`).
     #[pyo3(signature = (u, mult = 1, tol = 0.0))]
-    fn insertKnot(&self, u: f64, mult: i32, tol: f64) -> PyResult<()> {
-        let _ = (u, mult, tol);
-        Err(OCCError::new_err(
-            "Part.Geom2d.BSplineCurve2d.insertKnot is not implemented \
-             (this slice binds no 2D B-spline kernel)",
-        ))
+    fn insertKnot(slf: &Bound<'_, Self>, u: f64, mult: i32, tol: f64) -> PyResult<()> {
+        let curve = Self::curve(slf.as_any())?;
+        let state = nurbs_state(&curve)?;
+        let blob = occt()
+            .bspline_insert_knot_state(
+                &state.poles,
+                &state.weights,
+                &state.knots,
+                &state.mults,
+                state.degree,
+                state.periodic,
+                state.check_rational(),
+                u,
+                mult,
+                tol,
+            )
+            .ok_or_else(|| OCCError::new_err("knot insertion failed"))?;
+        let state = SplineState::from_blob(&blob)
+            .ok_or_else(|| OCCError::new_err("knot insertion failed"))?;
+        let curve = nurbs_of_state(&state)
+            .ok_or_else(|| OCCError::new_err("knot insertion failed"))?;
+        Self::store(slf, curve)
+    }
+
+    /// The polynomial degree (`BSplineCurve2d.Degree`).
+    #[getter]
+    fn Degree(slf: &Bound<'_, Self>) -> PyResult<i32> {
+        Ok(Self::curve(slf.as_any())?.degree())
+    }
+
+    /// `removeKnot(index, mult, tol)`: reduce knot `index` to multiplicity
+    /// `mult` (`Geom_BSplineCurve::RemoveKnot`). Returns whether it succeeded.
+    fn removeKnot(slf: &Bound<'_, Self>, index: i32, mult: i32, tol: f64) -> PyResult<bool> {
+        let curve = Self::curve(slf.as_any())?;
+        let state = nurbs_state(&curve)?;
+        let Some(blob) = occt().bspline_remove_knot_state(
+            &state.poles,
+            &state.weights,
+            &state.knots,
+            &state.mults,
+            state.degree,
+            state.periodic,
+            state.check_rational(),
+            index,
+            mult,
+            tol,
+        ) else {
+            return Ok(false);
+        };
+        let Some(removed) = SplineState::from_blob(&blob) else {
+            return Ok(false);
+        };
+        let Some(removed) = nurbs_of_state(&removed) else {
+            return Ok(false);
+        };
+        Self::store(slf, removed)?;
+        Ok(true)
+    }
+
+    /// The maximum polynomial degree the kernel accepts (25).
+    #[getter]
+    fn MaxDegree(_slf: &Bound<'_, Self>) -> i32 {
+        25
+    }
+
+    /// The number of control poles (`BSplineCurve2d.NbPoles`).
+    #[getter]
+    fn NbPoles(slf: &Bound<'_, Self>) -> PyResult<usize> {
+        Ok(Self::curve(slf.as_any())?.poles().len())
+    }
+
+    /// The number of unique knots (`BSplineCurve2d.NbKnots`).
+    #[getter]
+    fn NbKnots(slf: &Bound<'_, Self>) -> PyResult<usize> {
+        Ok(Self::curve(slf.as_any())?.knots().len())
+    }
+
+    /// The first point of the curve (`BSplineCurve2d.StartPoint`).
+    #[getter]
+    fn StartPoint(slf: &Bound<'_, Self>, py: Python<'_>) -> PyResult<PyObject> {
+        let curve = Self::curve(slf.as_any())?;
+        let point = curve
+            .point_at(curve.first())
+            .ok_or_else(|| OCCError::new_err("the curve has no start point"))?;
+        py_vector2d(py, xy(point))
+    }
+
+    /// The last point of the curve (`BSplineCurve2d.EndPoint`).
+    #[getter]
+    fn EndPoint(slf: &Bound<'_, Self>, py: Python<'_>) -> PyResult<PyObject> {
+        let curve = Self::curve(slf.as_any())?;
+        let point = curve
+            .point_at(curve.last())
+            .ok_or_else(|| OCCError::new_err("the curve has no end point"))?;
+        py_vector2d(py, xy(point))
+    }
+
+    /// The expanded knot sequence (`BSplineCurve2d.KnotSequence`).
+    #[getter]
+    fn KnotSequence(slf: &Bound<'_, Self>) -> PyResult<Vec<f64>> {
+        let curve = Self::curve(slf.as_any())?;
+        Ok(curve
+            .knots()
+            .iter()
+            .zip(curve.mults())
+            .flat_map(|(knot, mult)| std::iter::repeat_n(*knot, *mult as usize))
+            .collect())
+    }
+
+    /// The index of the first knot in the knot sequence (`FirstUKnotIndex`).
+    #[getter]
+    fn FirstUKnotIndex(slf: &Bound<'_, Self>) -> PyResult<i32> {
+        let curve = Self::curve(slf.as_any())?;
+        Ok(curve.mults().first().copied().unwrap_or(1))
+    }
+
+    /// The index of the last knot in the knot sequence (`LastUKnotIndex`).
+    #[getter]
+    fn LastUKnotIndex(slf: &Bound<'_, Self>) -> PyResult<i32> {
+        let curve = Self::curve(slf.as_any())?;
+        let total: i32 = curve.mults().iter().sum();
+        Ok(total - curve.mults().last().copied().unwrap_or(1) + 1)
+    }
+
+    fn isRational(slf: &Bound<'_, Self>) -> PyResult<bool> {
+        Ok(Self::curve(slf.as_any())?.is_rational())
+    }
+
+    fn isPeriodic(slf: &Bound<'_, Self>) -> PyResult<bool> {
+        Ok(Self::curve(slf.as_any())?.is_periodic())
+    }
+
+    fn isClosed(slf: &Bound<'_, Self>) -> PyResult<bool> {
+        Ok(geometry_data(slf.as_any())?.is_closed())
+    }
+
+    fn getPoles(slf: &Bound<'_, Self>, py: Python<'_>) -> PyResult<Vec<PyObject>> {
+        let curve = Self::curve(slf.as_any())?;
+        curve
+            .poles()
+            .iter()
+            .map(|pole| py_vector2d(py, xy(*pole)))
+            .collect()
+    }
+
+    fn getPole(slf: &Bound<'_, Self>, py: Python<'_>, index: i32) -> PyResult<PyObject> {
+        let curve = Self::curve(slf.as_any())?;
+        let position = index_at(curve.poles().len(), index)? as usize - 1;
+        py_vector2d(py, xy(curve.poles()[position]))
+    }
+
+    fn getWeights(slf: &Bound<'_, Self>) -> PyResult<Vec<f64>> {
+        Ok(Self::curve(slf.as_any())?.weights().to_vec())
+    }
+
+    fn getWeight(slf: &Bound<'_, Self>, index: i32) -> PyResult<f64> {
+        let curve = Self::curve(slf.as_any())?;
+        let position = index_at(curve.weights().len(), index)? as usize - 1;
+        Ok(curve.weights()[position])
+    }
+
+    fn getKnots(slf: &Bound<'_, Self>) -> PyResult<Vec<f64>> {
+        Ok(Self::curve(slf.as_any())?.knots().to_vec())
+    }
+
+    fn getKnot(slf: &Bound<'_, Self>, index: i32) -> PyResult<f64> {
+        let curve = Self::curve(slf.as_any())?;
+        let position = index_at(curve.knots().len(), index)? as usize - 1;
+        Ok(curve.knots()[position])
+    }
+
+    fn getMultiplicities(slf: &Bound<'_, Self>) -> PyResult<Vec<i32>> {
+        Ok(Self::curve(slf.as_any())?.mults().to_vec())
+    }
+
+    fn getMultiplicity(slf: &Bound<'_, Self>, index: i32) -> PyResult<i32> {
+        let curve = Self::curve(slf.as_any())?;
+        let position = index_at(curve.mults().len(), index)? as usize - 1;
+        Ok(curve.mults()[position])
+    }
+
+    fn getPolesAndWeights(slf: &Bound<'_, Self>, py: Python<'_>) -> PyResult<PyObject> {
+        let curve = Self::curve(slf.as_any())?;
+        let poles = curve
+            .poles()
+            .iter()
+            .map(|pole| py_vector2d(py, xy(*pole)))
+            .collect::<PyResult<Vec<_>>>()?;
+        Ok(PyTuple::new(
+            py,
+            [
+                PyList::new(py, poles)?.into_any().unbind(),
+                PyList::new(py, curve.weights().to_vec())?.into_any().unbind(),
+            ],
+        )?
+        .into_any()
+        .unbind())
+    }
+
+    /// `segment(u1, u2)`: restrict the curve in place (`Geom_BSplineCurve::Segment`).
+    fn segment(slf: &Bound<'_, Self>, u1: f64, u2: f64) -> PyResult<()> {
+        let record = geometry_data(slf.as_any())?.restricted(u1, u2)?;
+        replace_geometry_data(slf.as_any(), record)
+    }
+
+    /// Convert to the periodic form (`Geom_BSplineCurve::SetPeriodic`).
+    fn setPeriodic(slf: &Bound<'_, Self>) -> PyResult<()> {
+        Self::set_periodic(slf, true)
+    }
+
+    /// Convert out of the periodic form (`Geom_BSplineCurve::SetNotPeriodic`).
+    fn setNotPeriodic(slf: &Bound<'_, Self>) -> PyResult<()> {
+        Self::set_periodic(slf, false)
     }
 
     fn __repr__(slf: &Bound<'_, Self>) -> PyResult<String> {
-        Ok(format!(
-            "Part.Geom2d.BSplineCurve2d({} points)",
-            Self::point_count(slf.as_any())?
-        ))
+        Ok(match geometry_data(slf.as_any())? {
+            Geom2dData::BSpline(Some(curve)) => format!(
+                "Part.Geom2d.BSplineCurve2d({} poles, degree {})",
+                curve.poles().len(),
+                curve.degree()
+            ),
+            _ => "Part.Geom2d.BSplineCurve2d()".to_string(),
+        })
     }
+}
+
+impl PyBSplineCurve2d {
+    fn set_periodic(slf: &Bound<'_, Self>, periodic: bool) -> PyResult<()> {
+        let curve = Self::curve(slf.as_any())?;
+        let state = nurbs_state(&curve)?;
+        let blob = occt()
+            .bspline_periodic_state(
+                &state.poles,
+                &state.weights,
+                &state.knots,
+                &state.mults,
+                state.degree,
+                state.periodic,
+                state.check_rational(),
+                periodic,
+            )
+            .ok_or_else(|| OCCError::new_err("the curve cannot change periodicity"))?;
+        let state = SplineState::from_blob(&blob)
+            .ok_or_else(|| OCCError::new_err("the curve cannot change periodicity"))?;
+        let curve = nurbs_of_state(&state)
+            .ok_or_else(|| OCCError::new_err("the curve cannot change periodicity"))?;
+        Self::store(slf, curve)
+    }
+}
+
+/// Parse 2-D points into the `z = 0` vectors the shared NURBS machinery takes.
+fn parse_points2d(points: &Bound<'_, PyAny>) -> PyResult<Vec<Vector3>> {
+    let mut parsed = Vec::new();
+    for point in points.try_iter()? {
+        let (x, y) = vector2d(&point?)?;
+        parsed.push(Vector3::new(x, y, 0.0));
+    }
+    Ok(parsed)
 }
 
 /// Build the Python object for a piece of 2D geometry, picking the concrete
@@ -7946,11 +8594,13 @@ fn edge_query_error(what: &str) -> PyErr {
     ))
 }
 
-/// An edge's start (`first`) or end vertex.
+/// An edge's start (`first`) or end vertex, **in the edge's own orientation**
+/// (`TopExp::FirstVertex`/`LastVertex`).
 ///
-/// The kernel lists an edge's vertices in topological order but exposes no
-/// "first endpoint" query, so the list's first/last entry is the endpoint. A
-/// closed edge has one vertex, which answers both ends.
+/// The kernel lists an edge's vertices in topological order, which is the
+/// curve's order; a `Reversed` edge traverses that list backwards, so the
+/// orientation decides which end is first. A closed edge has one vertex, which
+/// answers both ends.
 fn edge_vertex(edge: &PyRef<'_, PyEdge>, first: bool) -> PyResult<Py<PyVertex>> {
     let what = if first { "firstVertex" } else { "lastVertex" };
     require_edge(edge.as_super(), what)?;
@@ -7958,14 +8608,31 @@ fn edge_vertex(edge: &PyRef<'_, PyEdge>, first: bool) -> PyResult<Py<PyVertex>> 
         .as_super()
         .shape()
         .ok_or_else(|| empty_error(what))?;
-    let vertices = backend().elements(&shape, ElementKind::Vertex);
-    let vertex = if first {
-        vertices.first()
-    } else {
-        vertices.last()
+    let (start, end) = edge_endpoints_oriented(&shape)
+        .ok_or_else(|| OCCError::new_err(format!("Part.{what}: the edge has no vertices")))?;
+    let vertex = if first { start } else { end };
+    Py::new(edge.py(), PyVertex::from_shape(vertex)?)
+}
+
+/// The two endpoint shapes of an edge in its own orientation: `(start, end)`.
+///
+/// This is `TopExp::FirstVertex`/`LastVertex` (through the kernel), which apply
+/// the edge's orientation: a `Reversed` edge starts at the vertex its curve ends
+/// on. When the kernel reports no endpoints (an edge without vertices) the
+/// shape's vertex list is the fallback.
+fn edge_endpoints_oriented(edge: &Shape) -> Option<(Shape, Shape)> {
+    if let (Some(start), Some(end)) = (
+        ferrocad_occt::part_ops::edge_first_vertex(edge),
+        ferrocad_occt::part_ops::edge_last_vertex(edge),
+    ) {
+        return Some((start, end));
     }
-    .ok_or_else(|| OCCError::new_err(format!("Part.{what}: the edge has no vertices")))?;
-    Py::new(edge.py(), PyVertex::from_shape(vertex.shape.clone())?)
+    let vertices = backend().elements(edge, ElementKind::Vertex);
+    match vertices.as_slice() {
+        [only] => Some((only.shape.clone(), only.shape.clone())),
+        [first, second] => Some((first.shape.clone(), second.shape.clone())),
+        _ => None,
+    }
 }
 
 /// One edge: a kernel shape plus, when it was built from an analytic curve, that
@@ -8178,6 +8845,99 @@ impl PyEdge {
             shape: shape_from_curve(&curve)?,
             curve: Some(curve),
         }))
+    }
+}
+
+/// The parsed form of `discretize`'s arguments, shared by `Part.Edge` and
+/// `Part.Wire` (upstream's `TopoShapeEdgePy::discretize` and
+/// `TopoShapeWirePy::discretize` parse them the same way).
+struct DiscretizeArgs {
+    /// 0 = Number, 1 = Distance, 2 = Deflection, 3 = Angular/Curvature.
+    mode: i32,
+    value: f64,
+    curvature: f64,
+    minimum: i32,
+    /// `NaN` means "the whole range".
+    first: f64,
+    last: f64,
+}
+
+impl DiscretizeArgs {
+    fn parse(
+        args: &Bound<'_, PyTuple>,
+        kwargs: Option<&Bound<'_, PyDict>>,
+    ) -> PyResult<Self> {
+        let mut parsed = Self {
+            mode: -1,
+            value: 0.0,
+            curvature: 0.0,
+            minimum: 2,
+            first: f64::NAN,
+            last: f64::NAN,
+        };
+
+        if args.len() > 1 {
+            return Err(PyTypeError::new_err(
+                "discretize expects one number or keyword arguments",
+            ));
+        }
+        if args.len() == 1 {
+            let argument = args.get_item(0)?;
+            if argument.is_instance_of::<pyo3::types::PyInt>() {
+                parsed.mode = 0;
+                parsed.value = argument.extract::<i64>()? as f64;
+            } else if argument.is_instance_of::<pyo3::types::PyFloat>() {
+                parsed.mode = 1;
+                parsed.value = argument.extract::<f64>()?;
+            } else {
+                return Err(PyTypeError::new_err("Either int or float expected"));
+            }
+        }
+
+        if let Some(kwargs) = kwargs {
+            let number = |name: &str| -> PyResult<Option<f64>> {
+                match kwargs.get_item(name)? {
+                    Some(value) if !value.is_none() => Ok(Some(value.extract::<f64>()?)),
+                    _ => Ok(None),
+                }
+            };
+            if let Some(value) = number("First")? {
+                parsed.first = value;
+            }
+            if let Some(value) = number("Last")? {
+                parsed.last = value;
+            }
+            if let Some(number) = number("Number")? {
+                parsed.mode = 0;
+                parsed.value = number;
+            } else if let Some(distance) = number("Distance")? {
+                parsed.mode = 1;
+                parsed.value = distance;
+            } else if let Some(deflection) = number("Deflection")? {
+                parsed.mode = 2;
+                parsed.value = deflection;
+            } else if let Some(angular) = number("Angular")? {
+                parsed.mode = 3;
+                parsed.value = angular;
+                parsed.curvature = number("Curvature")?.unwrap_or(0.1);
+                if let Some(count) = number("Minimum")? {
+                    parsed.minimum = count as i32;
+                }
+            } else if let Some(curvature) = number("Curvature")? {
+                parsed.mode = 3;
+                parsed.value = 0.1;
+                parsed.curvature = curvature;
+                if let Some(count) = number("Minimum")? {
+                    parsed.minimum = count as i32;
+                }
+            }
+        }
+        if parsed.mode < 0 {
+            return Err(PyTypeError::new_err(
+                "discretize expects Number, Distance, Deflection or Angular/Curvature",
+            ));
+        }
+        Ok(parsed)
     }
 }
 
@@ -8420,17 +9180,32 @@ impl PyEdge {
             .as_super()
             .shape()
             .ok_or_else(|| empty_error("tangentAt"))?;
-        py_vector(py, edge_derivative(&shape, parameter)?.normalize())
+        py_vector(py, edge_derivative(&shape, parameter, 1)?.normalize())
     }
 
-    fn normalAt(slf: PyRef<'_, Self>, _parameter: f64) -> PyResult<PyObject> {
-        require_edge(slf.as_super(), "normalAt")?;
-        Err(edge_query_error("normalAt"))
+    /// The principal normal at curve parameter `t` (`Edge.normalAt`, upstream's
+    /// `BRepLProp_CLProps::Normal`). Undefined where the curvature vanishes.
+    fn normalAt(slf: PyRef<'_, Self>, py: Python<'_>, parameter: f64) -> PyResult<PyObject> {
+        let shape = slf
+            .as_super()
+            .shape()
+            .ok_or_else(|| empty_error("normalAt"))?;
+        let normal = occt()
+            .edge_normal_at(&shape, parameter)
+            .ok_or_else(|| OCCError::new_err("normal not defined at this parameter"))?;
+        py_vector(py, normal)
     }
 
-    fn curvatureAt(slf: PyRef<'_, Self>, _parameter: f64) -> PyResult<f64> {
-        require_edge(slf.as_super(), "curvatureAt")?;
-        Err(edge_query_error("curvatureAt"))
+    /// The curvature at curve parameter `t` (`Edge.curvatureAt`, upstream's
+    /// `BRepLProp_CLProps::Curvature`).
+    fn curvatureAt(slf: PyRef<'_, Self>, parameter: f64) -> PyResult<f64> {
+        let shape = slf
+            .as_super()
+            .shape()
+            .ok_or_else(|| empty_error("curvatureAt"))?;
+        occt()
+            .edge_curvature_at(&shape, parameter)
+            .ok_or_else(|| OCCError::new_err("curvature not defined at this parameter"))
     }
 
     fn centerOfCurvatureAt(slf: PyRef<'_, Self>, _parameter: f64) -> PyResult<PyObject> {
@@ -8444,17 +9219,25 @@ impl PyEdge {
             .as_super()
             .shape()
             .ok_or_else(|| empty_error("derivative1At"))?;
-        py_vector(py, edge_derivative(&shape, parameter)?)
+        py_vector(py, edge_derivative(&shape, parameter, 1)?)
     }
 
-    fn derivative2At(slf: PyRef<'_, Self>, _parameter: f64) -> PyResult<PyObject> {
-        require_edge(slf.as_super(), "derivative2At")?;
-        Err(edge_query_error("derivative2At"))
+    /// The second derivative at curve parameter `t` (`Edge.derivative2At`).
+    fn derivative2At(slf: PyRef<'_, Self>, py: Python<'_>, parameter: f64) -> PyResult<PyObject> {
+        let shape = slf
+            .as_super()
+            .shape()
+            .ok_or_else(|| empty_error("derivative2At"))?;
+        py_vector(py, edge_derivative(&shape, parameter, 2)?)
     }
 
-    fn derivative3At(slf: PyRef<'_, Self>, _parameter: f64) -> PyResult<PyObject> {
-        require_edge(slf.as_super(), "derivative3At")?;
-        Err(edge_query_error("derivative3At"))
+    /// The third derivative at curve parameter `t` (`Edge.derivative3At`).
+    fn derivative3At(slf: PyRef<'_, Self>, py: Python<'_>, parameter: f64) -> PyResult<PyObject> {
+        let shape = slf
+            .as_super()
+            .shape()
+            .ok_or_else(|| empty_error("derivative3At"))?;
+        py_vector(py, edge_derivative(&shape, parameter, 3)?)
     }
 
     fn firstVertex(slf: PyRef<'_, Self>) -> PyResult<Py<PyVertex>> {
@@ -8488,78 +9271,17 @@ impl PyEdge {
             .as_super()
             .shape()
             .ok_or_else(|| empty_error("discretize"))?;
-
-        let mut mode = -1;
-        let mut value = 0.0;
-        let mut curvature = 0.0;
-        let mut minimum = 2;
-
-        if args.len() > 1 {
-            return Err(PyTypeError::new_err(
-                "discretize expects one number or keyword arguments",
-            ));
-        }
-        if args.len() == 1 {
-            let argument = args.get_item(0)?;
-            if argument.is_instance_of::<pyo3::types::PyInt>() {
-                mode = 0;
-                value = argument.extract::<i64>()? as f64;
-            } else if argument.is_instance_of::<pyo3::types::PyFloat>() {
-                mode = 1;
-                value = argument.extract::<f64>()?;
-            } else {
-                return Err(PyTypeError::new_err("Either int or float expected"));
-            }
-        }
-
-        let mut first = f64::NAN;
-        let mut last = f64::NAN;
-        if let Some(kwargs) = kwargs {
-            let number = |name: &str| -> PyResult<Option<f64>> {
-                match kwargs.get_item(name)? {
-                    Some(value) => Ok(Some(value.extract::<f64>()?)),
-                    None => Ok(None),
-                }
-            };
-            if let Some(value) = number("First")? {
-                first = value;
-            }
-            if let Some(value) = number("Last")? {
-                last = value;
-            }
-            if let Some(number) = number("Number")? {
-                mode = 0;
-                value = number;
-            } else if let Some(distance) = number("Distance")? {
-                mode = 1;
-                value = distance;
-            } else if let Some(deflection) = number("Deflection")? {
-                mode = 2;
-                value = deflection;
-            } else if let Some(angular) = number("Angular")? {
-                mode = 3;
-                value = angular;
-                curvature = number("Curvature")?.unwrap_or(0.1);
-                if let Some(count) = number("Minimum")? {
-                    minimum = count as i32;
-                }
-            } else if let Some(curvature_value) = number("Curvature")? {
-                mode = 3;
-                value = 0.1;
-                curvature = curvature_value;
-                if let Some(count) = number("Minimum")? {
-                    minimum = count as i32;
-                }
-            }
-        }
-        if mode < 0 {
-            return Err(PyTypeError::new_err(
-                "discretize expects Number, Distance, Deflection or Angular/Curvature",
-            ));
-        }
-
+        let parsed = DiscretizeArgs::parse(args, kwargs)?;
         let points = backend()
-            .edge_discretize(&shape, mode, value, curvature, minimum, first, last)
+            .edge_discretize(
+                &shape,
+                parsed.mode,
+                parsed.value,
+                parsed.curvature,
+                parsed.minimum,
+                parsed.first,
+                parsed.last,
+            )
             .map_err(|_| OCCError::new_err("Discretization of edge failed"))?;
         points.iter().map(|point| py_vector(py, *point)).collect()
     }
@@ -8715,24 +9437,47 @@ impl PyWire {
             .collect()
     }
 
-    /// The wire's vertices in edge-chain order (`Wire.OrderedVertexes`): the
-    /// start vertex of each edge, following the vertices adjacent edges share,
-    /// plus the final vertex of an open wire. A closed wire reports each corner
-    /// once, as upstream's `BRepTools_WireExplorer` walk does.
+    /// The wire's vertices in edge-chain order (`Wire.OrderedVertexes`),
+    /// upstream's `TopoShape::getOrderedVertexes`: the *start* vertex of each
+    /// edge in `BRepTools_WireExplorer` order — so a reversed wire starts at its
+    /// topological first edge — plus the final vertex of an open wire. A closed
+    /// wire reports each corner once.
     ///
-    /// A wire that is not one chain (or an edge without a clean pair of
-    /// endpoints) falls back to the kernel's vertex list, so the result is never
-    /// worse than `Vertexes`.
+    /// Following the wire's own traversal (rather than reconstructing a
+    /// geometric chain) is what keeps `OrderedVertexes` consistent with
+    /// `OrderedEdges`: Draft's `get_extended_wire` indexes both by the same
+    /// position, so they must agree about which end is which.
     #[getter]
     fn OrderedVertexes(slf: PyRef<'_, Self>, py: Python<'_>) -> PyResult<Vec<Py<PyVertex>>> {
-        if slf.as_super().shape().is_none() {
+        let Some(shape) = slf.as_super().shape() else {
             return Ok(Vec::new());
-        }
-        let edges = slf.as_super().sub_shapes(ElementKind::Edge)?;
-        let shapes = match ordered_vertex_shapes(&edges) {
-            Some(shapes) => shapes,
-            None => slf.as_super().sub_shapes(ElementKind::Vertex)?,
         };
+        let edges = ferrocad_occt::part_ops::wire_ordered_edges(&shape).map_err(kernel_error)?;
+        let mut shapes: Vec<Shape> = Vec::with_capacity(edges.len() + 1);
+        for edge in &edges {
+            match edge_endpoints_oriented(edge) {
+                Some((start, _)) => shapes.push(start),
+                // An edge without a clean pair of endpoints falls back to the
+                // kernel's vertex list, so the result is never worse than
+                // `Vertexes`.
+                None => {
+                    return slf
+                        .as_super()
+                        .sub_shapes(ElementKind::Vertex)?
+                        .into_iter()
+                        .map(|shape| Py::new(py, PyVertex::from_shape(shape)?))
+                        .collect()
+                }
+            }
+        }
+        // An open wire also reports its stored final vertex (`TopExp::Vertices`),
+        // exactly as upstream's `TopoShapeWirePy::getOrderedVertexes` does; a
+        // closed wire's first and last vertex are the same one.
+        if let Some((first, last)) = ferrocad_occt::part_ops::wire_end_vertices(&shape) {
+            if !backend().same_shape(&first, &last) {
+                shapes.push(last);
+            }
+        }
         shapes
             .into_iter()
             .map(|shape| Py::new(py, PyVertex::from_shape(shape)?))
@@ -8785,6 +9530,88 @@ impl PyWire {
         slf.as_super().copy_handle()
     }
 
+    /// Repair the wire in place (`Wire.fixWire`), upstream's
+    /// `TopoShapeWirePy::fixWire`: reorder the edges, connect them and close the
+    /// wire (`ShapeFix_Wire::FixReorder/FixConnected/FixClosed`).
+    ///
+    /// `fixWire(face)` fixes the wire *on that face* (which needs the pcurves),
+    /// `fixWire(None, tolerance)` uses `tolerance` (default `Precision::Confusion`)
+    /// without a face. The return value is `None`, as upstream.
+    #[pyo3(signature = (face = None, tolerance = None))]
+    fn fixWire(
+        slf: PyRef<'_, Self>,
+        face: Option<&Bound<'_, PyAny>>,
+        tolerance: Option<f64>,
+    ) -> PyResult<()> {
+        let shape = slf
+            .as_super()
+            .shape()
+            .ok_or_else(|| empty_error("fixWire"))?;
+        let precision = tolerance.unwrap_or(ferrocad_curves::TOLERANCE);
+        let tool = ferrocad_occt::shapefix::Wire::new()
+            .ok_or_else(|| OCCError::new_err("failed to create the wire fixer"))?;
+        match face {
+            Some(face) => {
+                let face = face
+                    .downcast::<PyFace>()
+                    .map_err(|_| PyTypeError::new_err("fixWire expects a Part.Face"))?
+                    .borrow()
+                    .as_super()
+                    .shape()
+                    .ok_or_else(|| OCCError::new_err("an empty face cannot fix a wire"))?;
+                tool.init(&shape, &face, precision);
+            }
+            None => {
+                tool.set_precision(precision);
+                tool.load(&shape);
+            }
+        }
+        tool.fix_reorder();
+        tool.fix_connected(precision);
+        tool.fix_closed(precision);
+        let fixed = tool
+            .wire()
+            .ok_or_else(|| OCCError::new_err("fixWire produced no wire"))?;
+        slf.as_super().replace_shape(Some(fixed));
+        // The analytic entries described the edges before the repair; the shape
+        // is authoritative now, and `Edges` falls back to the kernel's own list.
+        slf.entries().clear();
+        Ok(())
+    }
+
+    /// Sample the wire into points (`Wire.discretize`), upstream's
+    /// `TopoShapeWirePy::discretize` over `BRepAdaptor_CompCurve`.
+    ///
+    /// The arguments are the ones [`Edge.discretize`] takes: `Number=n`,
+    /// `Distance=d`, `Deflection=d` or `Angular`/`Curvature`/`Minimum`, with
+    /// `First`/`Last` trimming the span. The parameter is the *wire's*
+    /// accumulated one, not any single edge's.
+    #[pyo3(signature = (*args, **kwargs))]
+    fn discretize(
+        slf: PyRef<'_, Self>,
+        py: Python<'_>,
+        args: &Bound<'_, PyTuple>,
+        kwargs: Option<&Bound<'_, PyDict>>,
+    ) -> PyResult<Vec<PyObject>> {
+        let shape = slf
+            .as_super()
+            .shape()
+            .ok_or_else(|| empty_error("discretize"))?;
+        let parsed = DiscretizeArgs::parse(args, kwargs)?;
+        let points = occt()
+            .wire_discretize(
+                &shape,
+                parsed.mode,
+                parsed.value,
+                parsed.curvature,
+                parsed.minimum,
+                parsed.first,
+                parsed.last,
+            )
+            .map_err(|_| OCCError::new_err("Discretization of wire failed"))?;
+        points.iter().map(|point| py_vector(py, *point)).collect()
+    }
+
     /// Upstream wires iterate over their edges; the sequence protocol gives both
     /// `list(wire)` and `for edge in wire:`.
     fn __len__(&self) -> usize {
@@ -8806,100 +9633,6 @@ impl PyWire {
     fn __repr__(&self) -> String {
         format!("Part.Wire({} edges)", self.entries().len())
     }
-}
-
-/// The two endpoint vertices of an edge, in either order.
-///
-/// A closed edge (a full circle) has one vertex used at both ends; a shape with
-/// anything other than one or two vertices is not a chainable edge.
-fn edge_endpoint_shapes(edge: &Shape) -> Option<(Shape, Shape)> {
-    let vertices = backend().elements(edge, ElementKind::Vertex);
-    match vertices.as_slice() {
-        [vertex] => Some((vertex.shape.clone(), vertex.shape.clone())),
-        [first, second] => Some((first.shape.clone(), second.shape.clone())),
-        _ => None,
-    }
-}
-
-/// Order a wire's vertices by following the vertices adjacent edges share.
-///
-/// `None` when the edges do not form one chain. The walk starts at the first
-/// edge and grows both ways, so an open wire whose first edge is in the middle
-/// still comes out end-to-end. Edge directions are irrelevant: a wire is a
-/// cyclic chain, and an open wire's direction only decides which end is first.
-fn ordered_vertex_shapes(edges: &[Shape]) -> Option<Vec<Shape>> {
-    if edges.is_empty() {
-        return Some(Vec::new());
-    }
-    let endpoints = edges
-        .iter()
-        .map(edge_endpoint_shapes)
-        .collect::<Option<Vec<_>>>()?;
-    let same = |a: &Shape, b: &Shape| backend().same_shape(a, b);
-
-    let mut used = vec![false; edges.len()];
-    used[0] = true;
-    let (first, second) = endpoints[0].clone();
-
-    // Grow from the first edge's second endpoint.
-    let mut back = vec![second.clone()];
-    let mut tail = second;
-    loop {
-        let Some((index, next)) = endpoints.iter().enumerate().find_map(|(index, (a, b))| {
-            if used[index] {
-                None
-            } else if same(&tail, a) {
-                Some((index, b.clone()))
-            } else if same(&tail, b) {
-                Some((index, a.clone()))
-            } else {
-                None
-            }
-        }) else {
-            break;
-        };
-        used[index] = true;
-        tail = next.clone();
-        back.push(next);
-    }
-
-    // Grow the other way from the first edge's first endpoint.
-    let mut front = vec![first.clone()];
-    let mut head = first;
-    loop {
-        let Some((index, next)) = endpoints.iter().enumerate().find_map(|(index, (a, b))| {
-            if used[index] {
-                None
-            } else if same(&head, a) {
-                Some((index, b.clone()))
-            } else if same(&head, b) {
-                Some((index, a.clone()))
-            } else {
-                None
-            }
-        }) else {
-            break;
-        };
-        used[index] = true;
-        head = next.clone();
-        front.push(next);
-    }
-
-    if used.iter().any(|used| !used) {
-        return None;
-    }
-
-    // `front` runs [first, …, far end]; reverse it so it ends at the junction
-    // `first`, then append the chain that starts at the second endpoint.
-    front.reverse();
-    let mut ordered = front;
-    ordered.extend(back);
-
-    // A chain that closes on itself reports its starting corner once.
-    if ordered.len() > 1 && same(&ordered[0], &ordered[ordered.len() - 1]) {
-        ordered.pop();
-    }
-    Some(ordered)
 }
 
 // ---------------------------------------------------------------------------
@@ -9142,12 +9875,16 @@ fn planar_wire_normal(shape: &Shape) -> Option<Vector3> {
 }
 
 /// The first partial derivatives `(∂P/∂u, ∂P/∂v)` of a face's surface at
-/// `(u, v)`, by central differences over `Face.valueAt`.
+/// `(u, v)` (`BRepLProp_SLProps::D1U/D1V`).
 ///
-/// The seam exposes the surface point but not a `D1` query, so this differentiates
-/// numerically; the step is scaled to the parameter magnitude so large
-/// parameters do not lose precision.
+/// The kernel answers for every surface kind it can differentiate, so a B-spline
+/// or a surface of revolution is as exact as a plane. A shape with no kernel
+/// surface falls back to central differences over `Face.valueAt`, the step scaled
+/// to the parameter magnitude so large parameters do not lose precision.
 fn surface_derivatives(shape: &Shape, u: f64, v: f64) -> PyResult<(Vector3, Vector3)> {
+    if let Some(derivatives) = occt().face_derivatives_at(shape, u, v, 1) {
+        return Ok(derivatives);
+    }
     let backend = backend();
     let h = 1e-6 * (1.0 + u.abs().max(v.abs()));
     let plus_u = backend
@@ -9168,9 +9905,19 @@ fn surface_derivatives(shape: &Shape, u: f64, v: f64) -> PyResult<(Vector3, Vect
     ))
 }
 
-/// The derivative of an edge's curve at `parameter`, by central differences over
-/// `Edge.valueAt` (the seam exposes no `Geom_Curve::DN`).
-fn edge_derivative(shape: &Shape, parameter: f64) -> PyResult<Vector3> {
+/// The derivative of an edge's curve of order `order` (1, 2 or 3) at
+/// `parameter` (`BRepLProp_CLProps`).
+///
+/// The kernel answers whenever the curve provides that derivative; a shape with
+/// no kernel curve falls back to a central difference of `Edge.valueAt`, which is
+/// only meaningful for the first derivative.
+fn edge_derivative(shape: &Shape, parameter: f64, order: i32) -> PyResult<Vector3> {
+    if let Some(derivative) = occt().edge_derivatives_at(shape, parameter, order) {
+        return Ok(derivative);
+    }
+    if order != 1 {
+        return Err(edge_query_error("derivative2At"));
+    }
     let backend = backend();
     let h = 1e-6 * (1.0 + parameter.abs());
     let plus = backend
@@ -9204,12 +9951,17 @@ fn axis_angle(normal: Vector3, x_axis: Vector3) -> f64 {
 
 /// The outward unit normal of a face at surface parameters `(u, v)`.
 ///
-/// A classified surface gives the analytic normal (constant on a plane, radial
-/// on a cylinder or sphere); any other surface falls back to the planar edge
-/// normal, and reports an honest error when that is undefined. The face
-/// orientation flips the result, as upstream's `Face.normalAt` (and
-/// `Tools::getNormal`) does.
+/// The kernel answers for **every** surface kind it can evaluate — a plane, a
+/// cylinder, a sphere, a cone, a torus, a B-spline or any other
+/// `Geom_Surface` — through `BRepLProp_SLProps`, and the face's orientation is
+/// already folded in (`Part::Tools::getNormal`), exactly as upstream's
+/// `Face.normalAt`. A face whose represented geometry knows no surface (a bare
+/// shape built by a test double) falls back to the planar edge normal, and
+/// reports an honest error when that is undefined too.
 fn surface_normal(shape: &Shape, u: f64, v: f64) -> PyResult<Vector3> {
+    if let Some(normal) = occt().face_normal_at(shape, u, v) {
+        return Ok(normal.normalize());
+    }
     let backend = backend();
     let normal = match backend.surface_data(shape) {
         Some(SurfaceData::Plane { normal, .. }) => Some(normal),
@@ -9256,9 +10008,7 @@ fn surface_normal(shape: &Shape, u: f64, v: f64) -> PyResult<Vector3> {
         Some(SurfaceData::Other { .. }) | None => planar_wire_normal(shape),
     };
     let Some(mut normal) = normal else {
-        return Err(OCCError::new_err(
-            "normal not defined: only planar, cylindrical and spherical faces are supported",
-        ));
+        return Err(OCCError::new_err("normal not defined: only planar, cylindrical and spherical faces are supported"));
     };
     if backend.orientation(shape) == Some("Reversed") {
         normal = normal.neg();
@@ -9456,6 +10206,8 @@ impl PyFace {
         py_vector(py, point)
     }
 
+    /// The outward unit normal at surface parameters `(u, v)`
+    /// (`Face.normalAt`), for **any** surface kind the kernel can evaluate.
     fn normalAt(slf: PyRef<'_, Self>, py: Python<'_>, u: f64, v: f64) -> PyResult<PyObject> {
         let shape = slf
             .as_super()
@@ -9465,14 +10217,32 @@ impl PyFace {
         py_vector(py, normal)
     }
 
-    fn tangentAt(slf: PyRef<'_, Self>, _u: f64, _v: f64) -> PyResult<PyObject> {
-        require_edge(slf.as_super(), "tangentAt")?;
-        Err(edge_query_error("tangentAt"))
+    /// The two unit surface tangents at `(u, v)` (`Face.tangentAt`):
+    /// `(tangent in u, tangent in v)`.
+    fn tangentAt(slf: PyRef<'_, Self>, py: Python<'_>, u: f64, v: f64) -> PyResult<PyObject> {
+        let shape = slf
+            .as_super()
+            .shape()
+            .ok_or_else(|| empty_error("tangentAt"))?;
+        let (du, dv) = occt()
+            .face_tangents_at(&shape, u, v)
+            .ok_or_else(|| OCCError::new_err("tangent not defined at these parameters"))?;
+        Ok(PyTuple::new(py, [py_vector(py, du)?, py_vector(py, dv)?])?
+            .into_any()
+            .unbind())
     }
 
-    fn curvatureAt(slf: PyRef<'_, Self>, _u: f64, _v: f64) -> PyResult<PyObject> {
-        require_edge(slf.as_super(), "curvatureAt")?;
-        Err(edge_query_error("curvatureAt"))
+    /// The `(min, max)` principal curvatures at `(u, v)`
+    /// (`Face.curvatureAt`, upstream's `BRepLProp_SLProps`).
+    fn curvatureAt(slf: PyRef<'_, Self>, py: Python<'_>, u: f64, v: f64) -> PyResult<PyObject> {
+        let shape = slf
+            .as_super()
+            .shape()
+            .ok_or_else(|| empty_error("curvatureAt"))?;
+        let (minimum, maximum) = occt()
+            .face_curvature_at(&shape, u, v)
+            .ok_or_else(|| OCCError::new_err("curvature not defined at these parameters"))?;
+        Ok(PyTuple::new(py, [minimum, maximum])?.into_any().unbind())
     }
 
     /// The first partial derivatives `(∂P/∂u, ∂P/∂v)` at surface parameters
@@ -9488,9 +10258,59 @@ impl PyFace {
             .unbind())
     }
 
-    fn derivative2At(slf: PyRef<'_, Self>, _u: f64, _v: f64) -> PyResult<PyObject> {
-        require_edge(slf.as_super(), "derivative2At")?;
-        Err(edge_query_error("derivative2At"))
+    /// The second partial derivatives `(∂²P/∂u², ∂²P/∂v²)`
+    /// (`Face.derivative2At`).
+    fn derivative2At(slf: PyRef<'_, Self>, py: Python<'_>, u: f64, v: f64) -> PyResult<PyObject> {
+        let shape = slf
+            .as_super()
+            .shape()
+            .ok_or_else(|| empty_error("derivative2At"))?;
+        let (du, dv) = occt()
+            .face_derivatives_at(&shape, u, v, 2)
+            .ok_or_else(|| OCCError::new_err("derivative not defined at these parameters"))?;
+        Ok(PyTuple::new(py, [py_vector(py, du)?, py_vector(py, dv)?])?
+            .into_any()
+            .unbind())
+    }
+
+    /// `Face.curveOnSurface(edge)`: the curve the edge follows in this face's
+    /// `(u, v)` space, as `(curve, first, last)`, or `None` when the edge is not
+    /// one of this face's edges (`BRep_Tool::CurveOnSurface`).
+    ///
+    /// The pcurve is reported as the exact `Part.Geom2d.BSplineCurve2d` it
+    /// converts to (`Geom2dConvert::CurveToBSplineCurve`), which shares the
+    /// edge's parameterisation — `curve.value(t)` is the `(u, v)` of the 3-D
+    /// point at edge parameter `t`.
+    fn curveOnSurface(
+        slf: PyRef<'_, Self>,
+        py: Python<'_>,
+        edge: &Bound<'_, PyAny>,
+    ) -> PyResult<Option<PyObject>> {
+        let face = slf
+            .as_super()
+            .shape()
+            .ok_or_else(|| empty_error("curveOnSurface"))?;
+        let edge = edge
+            .downcast::<PartShape>()
+            .map_err(|_| PyTypeError::new_err("curveOnSurface expects a Part.Edge"))?
+            .borrow()
+            .shape()
+            .ok_or_else(|| PyValueError::new_err("an empty edge has no curve on a surface"))?;
+        let Some(blob) = occt().edge_pcurve_state(&edge, &face) else {
+            return Ok(None);
+        };
+        let Some(state) = SplineState::from_blob(&blob) else {
+            return Ok(None);
+        };
+        let curve = Py::new(
+            py,
+            PyBSplineCurve2d::initializer(Geom2dData::BSpline(nurbs_of_state(&state))),
+        )?;
+        Ok(Some(
+            PyTuple::new(py, [curve.into_any(), state.first_parameter.into_py_any(py)?, state.last_parameter.into_py_any(py)?])?
+                .into_any()
+                .unbind(),
+        ))
     }
 
     fn cutHoles(slf: PyRef<'_, Self>, _holes: &Bound<'_, PyAny>) -> PyResult<()> {

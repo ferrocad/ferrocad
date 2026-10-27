@@ -184,8 +184,17 @@ fn translate_check_and_material_and_placement_gaps() {
             .unwrap();
         assert_components(&about.getattr("Base").unwrap(), (1.0, -1.0, 0.0));
 
-        // `Material.Transparency` is the complement of the diffuse alpha.
+        // `Material.Transparency` is its own field, as upstream's is: setting it
+        // does not rewrite the diffuse colour (the view state encodes the pair as
+        // one opacity at the boundary, but the handle keeps them separate).
         let material = app.getattr("Material").unwrap().call0().unwrap();
+        let before = material
+            .getattr("DiffuseColor")
+            .unwrap()
+            .get_item(3)
+            .unwrap()
+            .extract::<f64>()
+            .unwrap();
         material.setattr("Transparency", 0.25).unwrap();
         assert!((f64_of(&material, "Transparency") - 0.25).abs() < 1e-12);
         let alpha = material
@@ -195,7 +204,7 @@ fn translate_check_and_material_and_placement_gaps() {
             .unwrap()
             .extract::<f64>()
             .unwrap();
-        assert!((alpha - 0.75).abs() < 1e-12);
+        assert!((alpha - before).abs() < 1e-12, "diffuse alpha is untouched");
     });
 }
 

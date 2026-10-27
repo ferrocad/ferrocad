@@ -894,9 +894,16 @@ fn geom2d_offset_bezier_and_abstract_classes() {
             );
         }
 
-        // --- BSplineCurve2d still records but does not fake a curve ---------
+        // --- BSplineCurve2d is a real kernel curve ---------------------------
         let bspline = class("BSplineCurve2d").call0().expect("BSplineCurve2d()");
         assert!(isinstance(py, &bspline, &class("Curve2d")));
+        // Before a curve is built the empty class reports an honest error.
+        let occ = occ_error_type(py);
+        let error = bspline
+            .call_method1("value", (0.5,))
+            .expect_err("an unbuilt B-spline has no value");
+        assert!(error.is_instance(py, &occ), "{error}");
+
         let points = PyTuple::new(
             py,
             [vector2(py, 0.0, 0.0), vector2(py, 1.0, 1.0)],
@@ -905,14 +912,64 @@ fn geom2d_offset_bezier_and_abstract_classes() {
         bspline
             .call_method1("interpolate", (points,))
             .expect("interpolate(points)");
-        let error = bspline
-            .call_method1("value", (0.5,))
-            .expect_err("no curve was built");
-        assert!(error.is_instance_of::<PyNotImplementedError>(py), "{error}");
-        let occ = occ_error_type(py);
-        let error = bspline
-            .call_method1("insertKnot", (0.5,))
-            .expect_err("insertKnot is not implemented");
-        assert!(error.is_instance(py, &occ), "{error}");
+        // `GeomAPI_Interpolate` parameterises by chord length, so the domain is
+        // `[0, sqrt(2)]`; evaluate at the ends and the middle of that range.
+        let first = number(&bspline.getattr("FirstParameter").expect("FirstParameter"), "first");
+        let last = number(&bspline.getattr("LastParameter").expect("LastParameter"), "last");
+        assert_close(first, 0.0, "interpolated first parameter");
+        assert_close(last, 2f64.sqrt(), "interpolated last parameter");
+        let start = pair(&bspline.call_method1("value", (first,)).expect("value(first)"));
+        assert_close(start.0, 0.0, "interpolated start x");
+        assert_close(start.1, 0.0, "interpolated start y");
+        let end = pair(&bspline.call_method1("value", (last,)).expect("value(last)"));
+        assert_close(end.0, 1.0, "interpolated end x");
+        assert_close(end.1, 1.0, "interpolated end y");
+        let middle = pair(
+            &bspline
+                .call_method1("value", (0.5 * (first + last),))
+                .expect("value(middle)"),
+        );
+        assert_close(middle.0, 0.5, "interpolated midpoint x");
+        assert_close(middle.1, 0.5, "interpolated midpoint y");
+        assert_eq!(
+            bspline
+                .getattr("NbPoles")
+                .unwrap()
+                .extract::<usize>()
+                .unwrap(),
+            2
+        );
+
+        // Knot insertion rebuilds the curve with the same geometry.
+        let middle_parameter = 0.5 * (first + last);
+        bspline
+            .call_method1("insertKnot", (middle_parameter,))
+            .expect("insertKnot");
+        assert_eq!(
+            bspline
+                .getattr("NbPoles")
+                .unwrap()
+                .extract::<usize>()
+                .unwrap(),
+            3
+        );
+        let inserted = pair(
+            &bspline
+                .call_method1("value", (middle_parameter,))
+                .expect("value(middle)"),
+        );
+        assert_close(inserted.0, 0.5, "midpoint x after insertKnot");
+        assert_close(inserted.1, 0.5, "midpoint y after insertKnot");
+
+        // And it lifts onto a surface as a real edge.
+        let cylinder = part
+            .getattr("Cylinder")
+            .expect("Part.Cylinder")
+            .call0()
+            .expect("Part.Cylinder()");
+        let edge = bspline
+            .call_method1("toShape", (&cylinder,))
+            .expect("toShape(surface)");
+        assert_eq!(shape_type(&edge), "Edge");
     });
 }

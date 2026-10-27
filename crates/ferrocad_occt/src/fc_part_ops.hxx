@@ -12,6 +12,7 @@
 // point catches OCCT exceptions and reports failure with `nullptr`, an empty
 // vector or `NaN`.
 
+#include <BRepAdaptor_CompCurve.hxx>
 #include <BRepAdaptor_Curve.hxx>
 #include <BRepAdaptor_Surface.hxx>
 #include <BRepAlgoAPI_Defeaturing.hxx>
@@ -234,6 +235,96 @@ inline rust::Vec<double> fc_edge_discretize(const TopoDS_Shape& shape,
         return out;
     try {
         BRepAdaptor_Curve adapt(TopoDS::Edge(shape));
+        const double first_parameter =
+            std::isfinite(first) ? first : adapt.FirstParameter();
+        const double last_parameter =
+            std::isfinite(last) ? last : adapt.LastParameter();
+        if (!(first_parameter < last_parameter))
+            return out;
+
+        const auto push = [&out](const gp_Pnt& p) {
+            out.push_back(p.X());
+            out.push_back(p.Y());
+            out.push_back(p.Z());
+        };
+
+        switch (mode) {
+            case 0: {
+                if (value < 2.0)
+                    return out;
+                GCPnts_UniformAbscissa discretizer;
+                discretizer.Initialize(
+                    adapt, static_cast<int>(value), first_parameter, last_parameter);
+                if (!discretizer.IsDone() || discretizer.NbPoints() <= 0)
+                    return out;
+                for (int i = 1; i <= discretizer.NbPoints(); ++i)
+                    push(adapt.Value(discretizer.Parameter(i)));
+                break;
+            }
+            case 1: {
+                if (!(value > 0.0))
+                    return out;
+                GCPnts_UniformAbscissa discretizer;
+                discretizer.Initialize(adapt, value, first_parameter, last_parameter);
+                if (!discretizer.IsDone() || discretizer.NbPoints() <= 0)
+                    return out;
+                for (int i = 1; i <= discretizer.NbPoints(); ++i)
+                    push(adapt.Value(discretizer.Parameter(i)));
+                break;
+            }
+            case 2: {
+                if (!(value > 0.0))
+                    return out;
+                GCPnts_UniformDeflection discretizer(
+                    adapt, value, first_parameter, last_parameter);
+                if (!discretizer.IsDone() || discretizer.NbPoints() <= 0)
+                    return out;
+                for (int i = 1; i <= discretizer.NbPoints(); ++i)
+                    push(discretizer.Value(i));
+                break;
+            }
+            case 3: {
+                if (!(value > 0.0) || !(curvature >= 0.0))
+                    return out;
+                GCPnts_TangentialDeflection discretizer(
+                    adapt,
+                    first_parameter,
+                    last_parameter,
+                    value,
+                    curvature,
+                    minimum > 0 ? minimum : 2);
+                if (discretizer.NbPoints() <= 0)
+                    return out;
+                for (int i = 1; i <= discretizer.NbPoints(); ++i)
+                    push(discretizer.Value(i));
+                break;
+            }
+            default:
+                return out;
+        }
+    }
+    catch (...) {
+        out.clear();
+    }
+    return out;
+}
+
+// `Wire.discretize`, upstream's `TopoShapeWirePy::discretize`. The same modes
+// and layout as `fc_edge_discretize`, over `BRepAdaptor_CompCurve` so the samples
+// follow the wire's accumulated parameterisation across its edges.
+inline rust::Vec<double> fc_wire_discretize(const TopoDS_Shape& shape,
+                                            int mode,
+                                            double value,
+                                            double curvature,
+                                            int minimum,
+                                            double first,
+                                            double last)
+{
+    rust::Vec<double> out;
+    if (shape.IsNull() || shape.ShapeType() != TopAbs_WIRE)
+        return out;
+    try {
+        BRepAdaptor_CompCurve adapt(TopoDS::Wire(shape));
         const double first_parameter =
             std::isfinite(first) ? first : adapt.FirstParameter();
         const double last_parameter =

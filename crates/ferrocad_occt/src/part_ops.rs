@@ -201,6 +201,38 @@ pub fn wire_ordered_edges(wire: &Shape) -> Result<Vec<Shape>, GeomError> {
     Ok(child_shapes(&compound))
 }
 
+/// The vertex an edge starts at in its own orientation (`TopExp::FirstVertex`),
+/// or `None` when the edge has no vertex there.
+pub fn edge_first_vertex(edge: &Shape) -> Option<Shape> {
+    let occt = downcast(edge).ok()?;
+    let guard = occt.borrow();
+    let vertex = bridge::fc_edge_first_vertex(guard.as_ref()?);
+    vertex.as_ref().map(|vertex| crate::shape::erase(vertex))
+}
+
+/// The vertex an edge ends at in its own orientation (`TopExp::LastVertex`), or
+/// `None` when the edge has no vertex there.
+pub fn edge_last_vertex(edge: &Shape) -> Option<Shape> {
+    let occt = downcast(edge).ok()?;
+    let guard = occt.borrow();
+    let vertex = bridge::fc_edge_last_vertex(guard.as_ref()?);
+    vertex.as_ref().map(|vertex| crate::shape::erase(vertex))
+}
+
+/// A wire's **stored** first and last vertex (`TopExp::Vertices(wire, V1, V2)`),
+/// or `None` when the wire has none.
+pub fn wire_end_vertices(wire: &Shape) -> Option<(Shape, Shape)> {
+    let occt = downcast(wire).ok()?;
+    let guard = occt.borrow();
+    let inner = guard.as_ref()?;
+    let first = bridge::fc_wire_first_vertex(inner);
+    let last = bridge::fc_wire_last_vertex(inner);
+    Some((
+        crate::shape::erase(first.as_ref()?),
+        crate::shape::erase(last.as_ref()?),
+    ))
+}
+
 /// The direct children of a shape (the compound `wire_ordered_edges` returns).
 fn child_shapes(compound: &Shape) -> Vec<Shape> {
     borrow(compound, |inner| {

@@ -787,20 +787,27 @@ impl PartShape {
     /// location, so `copy` is neither `isSame` nor `isEqual` with the source but
     /// reports the same volume and area. The accumulated placement is preserved;
     /// the lineage is copied too unless `noElementMap` asks for a bare shape.
+    ///
+    /// The copy keeps the source's typed wrapper: `BRepBuilderAPI_Copy` preserves
+    /// the topology, so a copied wire is still a `Part.Wire` and a copied solid a
+    /// `Part.Solid`. Upstream's document shapes behave the same way, and Draft's
+    /// `wire.fixWire()`/`Wire.OrderedEdges` call after a copy depends on it.
     #[pyo3(signature = (noElementMap = false))]
-    fn copy(&self, noElementMap: bool) -> PyResult<Self> {
+    fn copy(&self, py: Python<'_>, noElementMap: bool) -> PyResult<PyObject> {
         let Some(shape) = self.shape() else {
-            return Ok(Self::empty());
+            return Ok(Py::new(py, Self::empty())?.into_any());
         };
         let copied = ferrocad_part::backend()
             .copy_shape(&shape)
             .map_err(kernel_error)?;
         let lineage = if noElementMap { None } else { self.lineage() };
-        Ok(Self::with_parts_and_placement(
-            Some(copied),
-            self.placement(),
-            lineage,
-        ))
+        let wrapped = wrap_shape(py, copied)?;
+        wrapped
+            .bind(py)
+            .downcast::<PartShape>()?
+            .borrow()
+            .adopt_placement_and_lineage(self.placement(), lineage);
+        Ok(wrapped)
     }
 
     /// Sew the shape's faces into shells (`Shape.sewShape`), joining boundaries
@@ -2899,7 +2906,15 @@ impl PartShape {
     /// parameterisation; each value must lie strictly inside the edge's range.
     /// The original edge is not modified. Defined on `Part.Shape` so `Part.Edge`
     /// inherits it (upstream has it on `Edge` only).
-    fn split(&self, paramval: &Bound<'_, PyAny>) -> PyResult<PartShape> {
+    ///
+    /// The result is wrapped by topology — a `Part.Wire` — as upstream's
+    /// `shape2pyshape` wraps it; Draft's `get_extended_wire` calls
+    /// `.OrderedEdges` on it straight away.
+    fn split(
+        &self,
+        py: Python<'_>,
+        paramval: &Bound<'_, PyAny>,
+    ) -> PyResult<PyObject> {
         let shape = self.named_shape()?;
         let mut parameters = Vec::new();
         if let Ok(value) = paramval.extract::<f64>() {
@@ -2916,7 +2931,7 @@ impl PartShape {
         let split = ferrocad_part::backend()
             .split_edge(&shape, &parameters)
             .map_err(kernel_error)?;
-        Ok(PartShape::from_shape(split))
+        wrap_shape(py, split)
     }
 
     /// `Shape.mapSubElement(shape, op=None)` — upstream's hook for building an
@@ -4261,51 +4276,49 @@ fn shape_to_py(py: Python<'_>, data: &dyn ExtensionData) -> Option<PyObject> {
         // An unset property is upstream's null `TopoShape`, not `None`.
         None => return Py::new(py, PartShape::empty()).ok().map(Py::into_any),
     };
-    let wrapped: PyObject = match ferrocad_occt::part_ops::shape_kind(&inner) {
-        Some("Solid") => Py::new(py, solids::PySolid::from_shape(inner.clone()))
-            .ok()?
-            .into_any(),
-        Some("Shell") => Py::new(py, solids::PyShell::from_shape(inner.clone()))
-            .ok()?
-            .into_any(),
-        Some("Face") => Py::new(py, curves::PyFace::from_shape(inner.clone()))
-            .ok()?
-            .into_any(),
-        Some("Wire") => Py::new(py, curves::PyWire::from_shape(inner.clone()))
-            .ok()?
-            .into_any(),
-        Some("Edge") => Py::new(
-            py,
-            curves::PyEdge::from_entry(curves::EdgeEntry {
-                shape: inner.clone(),
-                curve: None,
-            }),
-        )
-        .ok()?
-        .into_any(),
-        Some("Vertex") => Py::new(py, curves::PyVertex::from_shape(inner.clone()).ok()?)
-            .ok()?
-            .into_any(),
-        Some("Compound") => {
-            Py::new(py, containers::PyCompound::from_shape_existing(inner.clone()))
-                .ok()?
-                .into_any()
-        }
-        Some("CompSolid") => {
-            Py::new(py, containers::PyCompSolid::from_shape_existing(inner.clone()))
-                .ok()?
-                .into_any()
-        }
-        _ => Py::new(py, PartShape::from_shape(inner.clone()))
-            .ok()?
-            .into_any(),
-    };
+    let wrapped = wrap_shape(py, inner).ok()?;
     // The wrapper started from the bare geometry; adopt the property's own
     // accumulated placement and lineage so `Placement` and `ElementReverseMap`
     // report what the document object stored.
     let base = wrapped.bind(py).downcast::<PartShape>().ok()?;
     base.borrow().adopt_placement_and_lineage(property.placement(), lineage);
     Some(wrapped)
+}
+
+/// Wrap a kernel shape in the `Part.*` class upstream's `shape2pyshape` picks
+/// from its topology: `Part.Wire` for a wire, `Part.Face` for a face, … and
+/// `Part.Compound` for a compound (the base `Part.Shape` otherwise).
+///
+/// Used wherever a shape that already exists in the kernel is handed to Python
+/// (`obj.Shape`, `Shape.copy()`), so a typed shape never degrades to the bare
+/// `Part.Shape` on the way out.
+pub(crate) fn wrap_shape(py: Python<'_>, shape: Shape) -> PyResult<PyObject> {
+    Ok(match ferrocad_occt::part_ops::shape_kind(&shape) {
+        Some("Solid") => Py::new(py, solids::PySolid::from_shape(shape.clone()))?.into_any(),
+        Some("Shell") => Py::new(py, solids::PyShell::from_shape(shape.clone()))?.into_any(),
+        Some("Face") => Py::new(py, curves::PyFace::from_shape(shape.clone()))?.into_any(),
+        Some("Wire") => Py::new(py, curves::PyWire::from_shape(shape.clone()))?.into_any(),
+        Some("Edge") => Py::new(
+            py,
+            curves::PyEdge::from_entry(curves::EdgeEntry {
+                shape: shape.clone(),
+                curve: None,
+            }),
+        )?
+        .into_any(),
+        Some("Vertex") => Py::new(py, curves::PyVertex::from_shape(shape.clone())?)?.into_any(),
+        Some("Compound") => Py::new(
+            py,
+            containers::PyCompound::from_shape_existing(shape.clone()),
+        )?
+        .into_any(),
+        Some("CompSolid") => Py::new(
+            py,
+            containers::PyCompSolid::from_shape_existing(shape.clone()),
+        )?
+        .into_any(),
+        _ => Py::new(py, PartShape::from_shape(shape))?.into_any(),
+    })
 }
 
 /// `Part::PropertyTopoShapeList` → a Python list of `Part.Shape` (what `obj.Shapes`
@@ -4450,6 +4463,10 @@ pub fn Part(m: &Bound<'_, PyModule>) -> PyResult<()> {
     );
     m.add_class::<PartShape>()?;
     m.add("_kernel_id", ferrocad_core::application_id())?;
+    // The kernel release string (`"7.8.1"`), read from the OCCT headers at build
+    // time. Upstream's Draft splits it into a tuple to decide whether hidden-line
+    // removal is available (`Draft/draftfunctions/svgshapes.py:145`).
+    m.add("OCC_VERSION", ferrocad_occt::OCC_VERSION)?;
     m.add_function(wrap_pyfunction!(getShape, m)?)?;
     m.add_function(wrap_pyfunction!(makeBox, m)?)?;
     m.add_function(wrap_pyfunction!(makeCylinder, m)?)?;

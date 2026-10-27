@@ -119,6 +119,7 @@ mod ffi {
                 prec: f64,
             );
             fn load(self: &FcShapeFixWire, wire: &TopoDS_Shape) -> bool;
+            fn set_precision(self: &FcShapeFixWire, value: f64);
             fn set_face(self: &FcShapeFixWire, face: &TopoDS_Shape) -> bool;
             fn set_surface(
                 self: &FcShapeFixWire,
@@ -597,6 +598,12 @@ impl Wire {
 
     pub fn load(&self, wire: &Shape) -> bool {
         with_occt!(wire, |wire| self.inner.load(wire))
+    }
+
+    /// `ShapeFix_Root::SetPrecision` - the tolerance `fixWire(tolerance)` uses
+    /// when no face is supplied.
+    pub fn set_precision(&self, value: f64) {
+        self.inner.set_precision(value)
     }
 
     pub fn set_face(&self, face: &Shape) -> bool {

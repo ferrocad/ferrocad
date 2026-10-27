@@ -49,8 +49,17 @@ pub mod surface_ops;
 mod topology;
 
 pub use backend::OcctBackend;
+pub use backend::surface_spec;
 pub use error::OcctError;
 pub use shape::{read_brep, write_brep, OcctShape};
+
+/// The OCCT release this backend was compiled against, e.g. `"7.8.1"`.
+///
+/// Read from `OCC_VERSION_COMPLETE` in the headers `build.rs` located, so it
+/// cannot drift from the kernel that is actually linked. The Python surface
+/// reports it as `Part.OCC_VERSION`, which upstream's Draft reads to decide
+/// whether hidden-line removal is available.
+pub const OCC_VERSION: &str = env!("FERROCAD_OCC_VERSION");
 
 #[cfg(test)]
 mod tests {

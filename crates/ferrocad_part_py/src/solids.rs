@@ -1324,6 +1324,33 @@ impl PyCone {
         }
     }
 
+    /// A cone is periodic around its axis (`GeomSurface.isUPeriodic`).
+    fn isUPeriodic(&self) -> bool {
+        true
+    }
+
+    /// A cone's slant is unbounded, not periodic (`GeomSurface.isVPeriodic`).
+    fn isVPeriodic(&self) -> bool {
+        false
+    }
+
+    /// The angular period around the axis (`GeomSurface.UPeriod`).
+    fn UPeriod(&self) -> f64 {
+        2.0 * PI
+    }
+
+    /// A cone has no V period (`GeomSurface.VPeriod`).
+    fn VPeriod(&self) -> f64 {
+        0.0
+    }
+
+    /// The parametric bounds `(u1, u2, v1, v2)` (`Geom_Surface::Bounds`): one
+    /// full turn around the axis and the whole (unbounded) slant.
+    fn bounds(&self) -> (f64, f64, f64, f64) {
+        let infinite = f64::MAX;
+        (0.0, 2.0 * PI, -infinite, infinite)
+    }
+
     fn __repr__(&self) -> String {
         "<Cone object>".to_string()
     }
@@ -1547,6 +1574,32 @@ impl PyToroid {
     /// directions, so the parameter ranges are the full `0..2π`.
     fn toBSpline(&self) -> PyBSplineSurface {
         PyBSplineSurface::torus()
+    }
+
+    /// A torus is periodic in both directions (`GeomSurface.isUPeriodic`).
+    fn isUPeriodic(&self) -> bool {
+        true
+    }
+
+    /// A torus is periodic in both directions (`GeomSurface.isVPeriodic`).
+    fn isVPeriodic(&self) -> bool {
+        true
+    }
+
+    /// The angular period around the main axis (`GeomSurface.UPeriod`).
+    fn UPeriod(&self) -> f64 {
+        2.0 * PI
+    }
+
+    /// The angular period around the tube (`GeomSurface.VPeriod`).
+    fn VPeriod(&self) -> f64 {
+        2.0 * PI
+    }
+
+    /// The parametric bounds `(u1, u2, v1, v2)` (`Geom_Surface::Bounds`): a full
+    /// turn in each direction.
+    fn bounds(&self) -> (f64, f64, f64, f64) {
+        (0.0, 2.0 * PI, 0.0, 2.0 * PI)
     }
 
     fn __repr__(&self) -> String {
@@ -2079,6 +2132,26 @@ impl PyBSplineSurface {
     fn getVKnot(&self, index: i32) -> PyResult<f64> {
         let geometry = self.require_geometry()?;
         knot_at(&geometry.v_knots, index)
+    }
+
+    /// The distinct U knots (`BSplineSurface.getUKnots`).
+    fn getUKnots(&self) -> PyResult<Vec<f64>> {
+        Ok(self
+            .require_geometry()?
+            .u_knots
+            .iter()
+            .map(|(knot, _)| *knot)
+            .collect())
+    }
+
+    /// The distinct V knots (`BSplineSurface.getVKnots`).
+    fn getVKnots(&self) -> PyResult<Vec<f64>> {
+        Ok(self
+            .require_geometry()?
+            .v_knots
+            .iter()
+            .map(|(knot, _)| *knot)
+            .collect())
     }
 
     /// The U knot multiplicities (`BSplineSurface.getUMultiplicities`).

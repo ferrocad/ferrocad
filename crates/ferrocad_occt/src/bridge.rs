@@ -16,6 +16,7 @@ mod ffi {
         include!("ferrocad_occt/include/fc_history.hxx");
         include!("ferrocad_occt/include/fc_topology.hxx");
         include!("ferrocad_occt/include/fc_curve.hxx");
+        include!("ferrocad_occt/include/fc_geom2d.hxx");
         include!("ferrocad_occt/include/fc_transform.hxx");
         include!("ferrocad_occt/include/fc_shape_ops.hxx");
         include!("ferrocad_occt/src/fc_part_ops.hxx");
@@ -561,6 +562,124 @@ mod ffi {
         /// `fc_face_surface_data` with the cone (4) and torus (5) cases added.
         fn fc_face_surface_frame(shape: &TopoDS_Shape, out: &mut Vec<f64>);
 
+        /// The surface normal at `(u, v)` (`BRepLProp_SLProps`, through upstream's
+        /// `Tools::getNormal`): three components, or empty when the normal is not
+        /// defined there. The face orientation is already applied.
+        fn fc_face_normal(shape: &TopoDS_Shape, u: f64, v: f64) -> Vec<f64>;
+
+        /// The two unit surface tangents at `(u, v)` (`TangentU`, `TangentV`), or
+        /// empty when either is undefined.
+        fn fc_face_tangents(shape: &TopoDS_Shape, u: f64, v: f64) -> Vec<f64>;
+
+        /// The two partial derivatives of order `order` (1 or 2) at `(u, v)`.
+        fn fc_face_derivatives(shape: &TopoDS_Shape, u: f64, v: f64, order: i32)
+            -> Vec<f64>;
+
+        /// The `(min, max)` principal curvatures at `(u, v)`, or empty.
+        fn fc_face_curvature(shape: &TopoDS_Shape, u: f64, v: f64) -> Vec<f64>;
+
+        /// `Geom_Surface::Bounds` of the surface behind a face (untrimmed), or
+        /// empty.
+        fn fc_face_surface_bounds(shape: &TopoDS_Shape) -> Vec<f64>;
+
+        /// The principal normal of a curve at `parameter` (`BRepLProp_CLProps`),
+        /// or empty when it is undefined.
+        fn fc_edge_normal(shape: &TopoDS_Shape, parameter: f64) -> Vec<f64>;
+
+        /// The curve derivative of order `order` (1, 2 or 3) at `parameter`.
+        fn fc_edge_derivatives(shape: &TopoDS_Shape, parameter: f64, order: i32)
+            -> Vec<f64>;
+
+        /// The curvature at `parameter`; `NaN` when it is undefined.
+        fn fc_edge_curvature(shape: &TopoDS_Shape, parameter: f64) -> f64;
+
+        /// `Part.Geom2d.*.toShape(surface)`: the pcurve as an edge on the given
+        /// surface, with the 3-D curve built from it (`BRepBuilderAPI_MakeEdge`
+        /// and `BRepLib::BuildCurves3d`). An empty `surface_spec` uses
+        /// `surface_face`'s own surface, and with neither the world XY plane.
+        fn fc_bspline2d_edge(
+            coords: &[f64],
+            weights: &[f64],
+            knots: &[f64],
+            multiplicities: &[i32],
+            degree: i32,
+            periodic: bool,
+            surface_spec: &[f64],
+            surface_face: &TopoDS_Shape,
+            first: f64,
+            last: f64,
+            has_range: bool,
+        ) -> UniquePtr<TopoDS_Shape>;
+
+        /// The pcurve an edge has on a face (`BRep_Tool::CurveOnSurface`), in the
+        /// B-spline state layout; empty when the edge has none there.
+        fn fc_edge_pcurve(edge: &TopoDS_Shape, face: &TopoDS_Shape) -> Vec<f64>;
+
+        /// The vertex an edge starts at, in the edge's own orientation
+        /// (`TopExp::FirstVertex`), or null.
+        fn fc_edge_first_vertex(shape: &TopoDS_Shape) -> UniquePtr<TopoDS_Shape>;
+
+        /// The vertex an edge ends at, in the edge's own orientation
+        /// (`TopExp::LastVertex`), or null.
+        fn fc_edge_last_vertex(shape: &TopoDS_Shape) -> UniquePtr<TopoDS_Shape>;
+
+        /// A wire's stored first/last vertex (`TopExp::Vertices`), or null.
+        fn fc_wire_first_vertex(shape: &TopoDS_Shape) -> UniquePtr<TopoDS_Shape>;
+        fn fc_wire_last_vertex(shape: &TopoDS_Shape) -> UniquePtr<TopoDS_Shape>;
+
+        /// `GeomAPI_PointsToBSpline` (`BSplineCurve.approximate`), as a state.
+        fn fc_bspline_approximated(
+            coords: &[f64],
+            degree_min: i32,
+            degree_max: i32,
+            tolerance: f64,
+        ) -> Vec<f64>;
+
+        /// `GeomAPI_ProjectPointOnCurve` (`GeometryCurve.parameter`); `NaN` when
+        /// the projection fails.
+        #[allow(clippy::too_many_arguments)]
+        fn fc_bspline_parameter(
+            coords: &[f64],
+            weights: &[f64],
+            knots: &[f64],
+            multiplicities: &[i32],
+            degree: i32,
+            periodic: bool,
+            check_rational: bool,
+            x: f64,
+            y: f64,
+            z: f64,
+        ) -> f64;
+
+        /// `Geom_BSplineCurve::InsertKnot`, reported as the new state.
+        fn fc_bspline_insert_knot(
+            coords: &[f64],
+            weights: &[f64],
+            knots: &[f64],
+            multiplicities: &[i32],
+            degree: i32,
+            periodic: bool,
+            check_rational: bool,
+            u: f64,
+            mult: i32,
+            tolerance: f64,
+        ) -> Vec<f64>;
+
+        /// `Geom_BSplineCurve::RemoveKnot`; empty when the removal is rejected.
+        #[allow(clippy::too_many_arguments)]
+        fn fc_bspline_remove_knot(
+            coords: &[f64],
+            weights: &[f64],
+            knots: &[f64],
+            multiplicities: &[i32],
+            degree: i32,
+            periodic: bool,
+            check_rational: bool,
+            index: i32,
+            mult: i32,
+            tolerance: f64,
+        ) -> Vec<f64>;
+
         /// Sew a shape's faces into shells (`BRepBuilderAPI_Sewing`), or null.
         fn fc_sew_shape(shape: &TopoDS_Shape, tolerance: f64) -> UniquePtr<TopoDS_Shape>;
 
@@ -571,6 +690,18 @@ mod ffi {
         /// `Edge.discretize` points as flat xyz; empty on failure. `mode` is
         /// 0 = Number, 1 = Distance, 2 = Deflection, 3 = Angular/Curvature.
         fn fc_edge_discretize(
+            shape: &TopoDS_Shape,
+            mode: i32,
+            value: f64,
+            curvature: f64,
+            minimum: i32,
+            first: f64,
+            last: f64,
+        ) -> Vec<f64>;
+
+        /// `Wire.discretize` over `BRepAdaptor_CompCurve`; same modes and layout as
+        /// `fc_edge_discretize`, with the wire's accumulated parameterisation.
+        fn fc_wire_discretize(
             shape: &TopoDS_Shape,
             mode: i32,
             value: f64,

@@ -417,6 +417,353 @@ impl OcctBackend {
         );
         (!state.is_empty()).then_some(state)
     }
+
+    /// The curve parameter of the closest point to `point`
+    /// (`GeomAPI_ProjectPointOnCurve`, `GeometryCurve.parameter`). `None` when
+    /// the projection fails.
+    #[allow(clippy::too_many_arguments)]
+    pub fn bspline_parameter(
+        &self,
+        poles: &[Vector3],
+        weights: &[f64],
+        knots: &[f64],
+        multiplicities: &[i32],
+        degree: i32,
+        periodic: bool,
+        check_rational: bool,
+        point: Vector3,
+    ) -> Option<f64> {
+        let parameter = bridge::fc_bspline_parameter(
+            &flatten(poles),
+            weights,
+            knots,
+            multiplicities,
+            degree,
+            periodic,
+            check_rational,
+            point.x,
+            point.y,
+            point.z,
+        );
+        parameter.is_finite().then_some(parameter)
+    }
+
+    /// The state of the B-spline with knot `index` reduced to multiplicity `mult`
+    /// (`Geom_BSplineCurve::RemoveKnot`). `None` when the removal is rejected.
+    #[allow(clippy::too_many_arguments)]
+    pub fn bspline_remove_knot_state(
+        &self,
+        poles: &[Vector3],
+        weights: &[f64],
+        knots: &[f64],
+        multiplicities: &[i32],
+        degree: i32,
+        periodic: bool,
+        check_rational: bool,
+        index: i32,
+        mult: i32,
+        tolerance: f64,
+    ) -> Option<Vec<f64>> {
+        let state = bridge::fc_bspline_remove_knot(
+            &flatten(poles),
+            weights,
+            knots,
+            multiplicities,
+            degree,
+            periodic,
+            check_rational,
+            index,
+            mult,
+            tolerance,
+        );
+        (!state.is_empty()).then_some(state)
+    }
+
+    /// The state of the B-spline approximating `points`
+    /// (`GeomAPI_PointsToBSpline`), read back from OCCT. `None` when the
+    /// approximation fails.
+    pub fn bspline_approximated_state(
+        &self,
+        points: &[Vector3],
+        degree_min: i32,
+        degree_max: i32,
+        tolerance: f64,
+    ) -> Option<Vec<f64>> {
+        let state = bridge::fc_bspline_approximated(
+            &flatten(points),
+            degree_min,
+            degree_max,
+            tolerance,
+        );
+        (!state.is_empty()).then_some(state)
+    }
+
+    /// The state of the B-spline with `u` inserted up to multiplicity `mult`
+    /// (`Geom_BSplineCurve::InsertKnot`). `None` when the insertion is rejected.
+    #[allow(clippy::too_many_arguments)]
+    pub fn bspline_insert_knot_state(
+        &self,
+        poles: &[Vector3],
+        weights: &[f64],
+        knots: &[f64],
+        multiplicities: &[i32],
+        degree: i32,
+        periodic: bool,
+        check_rational: bool,
+        u: f64,
+        mult: i32,
+        tolerance: f64,
+    ) -> Option<Vec<f64>> {
+        let state = bridge::fc_bspline_insert_knot(
+            &flatten(poles),
+            weights,
+            knots,
+            multiplicities,
+            degree,
+            periodic,
+            check_rational,
+            u,
+            mult,
+            tolerance,
+        );
+        (!state.is_empty()).then_some(state)
+    }
+
+    /// The surface normal of `face` at `(u, v)` (`BRepLProp_SLProps` through
+    /// upstream's `Part::Tools::getNormal`), with the face orientation applied.
+    /// `None` where the normal is not defined.
+    pub fn face_normal_at(&self, face: &Shape, u: f64, v: f64) -> Option<Vector3> {
+        let occt = downcast(face).ok()?;
+        let guard = occt.borrow();
+        let inner = guard.as_ref()?;
+        if !bridge::fc_is_face(inner) {
+            return None;
+        }
+        three(&bridge::fc_face_normal(inner, u, v))
+    }
+
+    /// The two unit surface tangents at `(u, v)` (`TangentU`, `TangentV`).
+    pub fn face_tangents_at(
+        &self,
+        face: &Shape,
+        u: f64,
+        v: f64,
+    ) -> Option<(Vector3, Vector3)> {
+        let occt = downcast(face).ok()?;
+        let guard = occt.borrow();
+        let inner = guard.as_ref()?;
+        if !bridge::fc_is_face(inner) {
+            return None;
+        }
+        let raw = bridge::fc_face_tangents(inner, u, v);
+        if raw.len() < 6 {
+            return None;
+        }
+        Some((three(&raw[..3])?, three(&raw[3..6])?))
+    }
+
+    /// The two partial derivatives of order `order` (1 or 2) at `(u, v)`.
+    pub fn face_derivatives_at(
+        &self,
+        face: &Shape,
+        u: f64,
+        v: f64,
+        order: i32,
+    ) -> Option<(Vector3, Vector3)> {
+        let occt = downcast(face).ok()?;
+        let guard = occt.borrow();
+        let inner = guard.as_ref()?;
+        if !bridge::fc_is_face(inner) {
+            return None;
+        }
+        let raw = bridge::fc_face_derivatives(inner, u, v, order);
+        if raw.len() < 6 {
+            return None;
+        }
+        Some((three(&raw[..3])?, three(&raw[3..6])?))
+    }
+
+    /// The `(min, max)` principal curvatures of a face at `(u, v)`.
+    pub fn face_curvature_at(&self, face: &Shape, u: f64, v: f64) -> Option<(f64, f64)> {
+        let occt = downcast(face).ok()?;
+        let guard = occt.borrow();
+        let inner = guard.as_ref()?;
+        if !bridge::fc_is_face(inner) {
+            return None;
+        }
+        let raw = bridge::fc_face_curvature(inner, u, v);
+        (raw.len() == 2).then(|| (raw[0], raw[1]))
+    }
+
+    /// Sample a wire into points (`Wire.discretize`, upstream's
+    /// `BRepAdaptor_CompCurve` samplers). The modes are the same as
+    /// [`GeometryBackend::edge_discretize`](ferrocad_geom::GeometryBackend::edge_discretize).
+    #[allow(clippy::too_many_arguments)]
+    pub fn wire_discretize(
+        &self,
+        wire: &Shape,
+        mode: i32,
+        value: f64,
+        curvature: f64,
+        minimum: i32,
+        first: f64,
+        last: f64,
+    ) -> Result<Vec<Vector3>, GeomError> {
+        let occt = downcast(wire)?;
+        let guard = occt.borrow();
+        let inner = guard
+            .as_ref()
+            .ok_or(OcctError::InvalidInput { what: "null wire" })?;
+        if !bridge::fc_is_wire(inner) {
+            return Err(OcctError::InvalidInput {
+                what: "not a wire",
+            }
+            .into());
+        }
+        let coordinates =
+            bridge::fc_wire_discretize(inner, mode, value, curvature, minimum, first, last);
+        if coordinates.is_empty() || coordinates.len() % 3 != 0 {
+            return Err(OcctError::NotDone {
+                operation: "wire_discretize",
+            }
+            .into());
+        }
+        Ok(coordinates
+            .chunks_exact(3)
+            .map(|point| Vector3::new(point[0], point[1], point[2]))
+            .collect())
+    }
+
+    /// The untrimmed parameter bounds `(u1, u2, v1, v2)` of the surface behind a
+    /// face (`Geom_Surface::Bounds`).
+    pub fn face_surface_bounds(&self, face: &Shape) -> Option<(f64, f64, f64, f64)> {
+        let occt = downcast(face).ok()?;
+        let guard = occt.borrow();
+        let inner = guard.as_ref()?;
+        if !bridge::fc_is_face(inner) {
+            return None;
+        }
+        let raw = bridge::fc_face_surface_bounds(inner);
+        (raw.len() == 4).then(|| (raw[0], raw[1], raw[2], raw[3]))
+    }
+
+    /// The principal normal of an edge's curve at `parameter`.
+    pub fn edge_normal_at(&self, edge: &Shape, parameter: f64) -> Option<Vector3> {
+        let occt = downcast(edge).ok()?;
+        let guard = occt.borrow();
+        let inner = guard.as_ref()?;
+        if !bridge::fc_is_edge(inner) {
+            return None;
+        }
+        three(&bridge::fc_edge_normal(inner, parameter))
+    }
+
+    /// The derivative of order `order` (1, 2 or 3) of an edge's curve.
+    pub fn edge_derivatives_at(
+        &self,
+        edge: &Shape,
+        parameter: f64,
+        order: i32,
+    ) -> Option<Vector3> {
+        let occt = downcast(edge).ok()?;
+        let guard = occt.borrow();
+        let inner = guard.as_ref()?;
+        if !bridge::fc_is_edge(inner) {
+            return None;
+        }
+        three(&bridge::fc_edge_derivatives(inner, parameter, order))
+    }
+
+    /// The curvature of an edge's curve at `parameter`.
+    pub fn edge_curvature_at(&self, edge: &Shape, parameter: f64) -> Option<f64> {
+        let occt = downcast(edge).ok()?;
+        let guard = occt.borrow();
+        let inner = guard.as_ref()?;
+        if !bridge::fc_is_edge(inner) {
+            return None;
+        }
+        let curvature = bridge::fc_edge_curvature(inner, parameter);
+        curvature.is_finite().then_some(curvature)
+    }
+
+    /// The pcurve an edge has on a face, as a B-spline state (see
+    /// [`SplineState`](ferrocad_part_py)) whose range is the edge's own.
+    pub fn edge_pcurve_state(&self, edge: &Shape, face: &Shape) -> Option<Vec<f64>> {
+        let edge = downcast(edge).ok()?;
+        let face = downcast(face).ok()?;
+        let edge = edge.borrow();
+        let face = face.borrow();
+        let state = bridge::fc_edge_pcurve(edge.as_ref()?, face.as_ref()?);
+        (!state.is_empty()).then_some(state)
+    }
+
+    /// A 2-D B-spline lifted onto a surface as an edge: `poles` are `(u, v)`
+    /// points, and the 3-D curve is the surface image of the pcurve
+    /// (`BRepBuilderAPI_MakeEdge` with the pcurve/surface form).
+    #[allow(clippy::too_many_arguments)]
+    pub fn make_bspline2d_edge(
+        &self,
+        poles: &[(f64, f64)],
+        weights: &[f64],
+        knots: &[f64],
+        multiplicities: &[i32],
+        degree: i32,
+        periodic: bool,
+        surface: Option<&SurfaceSpec>,
+        face: Option<&Shape>,
+        range: Option<(f64, f64)>,
+    ) -> Result<Shape, GeomError> {
+        let mut coordinates = Vec::with_capacity(poles.len() * 2);
+        for (u, v) in poles {
+            coordinates.extend_from_slice(&[*u, *v]);
+        }
+        let spec = surface.map(surface_spec).unwrap_or_default();
+        let owned_face: Option<UniquePtr<TopoDS_Shape>> = match face {
+            Some(face) => {
+                let occt = downcast(face)?;
+                let guard = occt.borrow();
+                let inner = guard
+                    .as_ref()
+                    .ok_or(OcctError::InvalidInput { what: "null face" })?;
+                Some(ffi::topo_ds::TopoDS_Shape_to_owned(inner))
+            }
+            None => None,
+        };
+        // A default-constructed (null) face stands in when no surface was given;
+        // the C++ side only looks at it when `spec` is empty.
+        let null_face = ffi::topo_ds::TopoDS_Face_new();
+        let face_shape: &TopoDS_Shape = match &owned_face {
+            Some(shape) => shape,
+            None => ffi::topo_ds::cast_face_to_shape(&null_face),
+        };
+        let (first, last) = range.unwrap_or((0.0, 0.0));
+        let edge = bridge::fc_bspline2d_edge(
+            &coordinates,
+            weights,
+            knots,
+            multiplicities,
+            degree,
+            periodic,
+            &spec,
+            face_shape,
+            first,
+            last,
+            range.is_some(),
+        );
+        match edge.as_ref() {
+            Some(edge) => Ok(erase(edge)),
+            None => Err(OcctError::NotDone {
+                operation: "make_bspline2d_edge",
+            }
+            .into()),
+        }
+    }
+}
+
+/// The `Vector3` in three leading components, or `None` when the kernel
+/// reported nothing.
+fn three(values: &[f64]) -> Option<Vector3> {
+    (values.len() >= 3).then(|| Vector3::new(values[0], values[1], values[2]))
 }
 
 impl GeometryBackend for OcctBackend {
@@ -3038,7 +3385,7 @@ fn flatten_compound_into(shape: &TopoDS_Shape, out: &mut Vec<UniquePtr<TopoDS_Sh
 /// Flatten an elementary surface into the layout `fc_make_face_on_surface`
 /// takes: kind, origin, axis (the normal for a plane), the `u` direction, then
 /// radius, semi-angle, major and minor radius.
-fn surface_spec(surface: &SurfaceSpec) -> Vec<f64> {
+pub fn surface_spec(surface: &SurfaceSpec) -> Vec<f64> {
     fn put(spec: &mut [f64], at: usize, point: Vector3) {
         spec[at] = point.x;
         spec[at + 1] = point.y;

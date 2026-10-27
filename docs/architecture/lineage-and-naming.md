@@ -10,7 +10,7 @@ waits for the remaining guards. Companion to
 [`part-draft-layering.md`](part-draft-layering.md), [`architecture.md`](../architecture.md) §6,
 [`conformance.md`](../workbenches/conformance.md),
 [`spikes/occt-history-rs/README.md`](../../spikes/occt-history-rs/README.md), and
-[`format-serializers.md`](../tasks/format-serializers.md) (the two encoders; `.FCStd` `ElementMap`
+[`format-serializers.md`](../record/tasks/format-serializers.md) (the two encoders; `.FCStd` `ElementMap`
 persistence is still a follow-up there).
 
 The observation that started this note: **topological naming is not inherently a geometric kernel
@@ -85,7 +85,7 @@ of being skipped.
 
 The remaining non-results are the two composed-alias counts (`FaceMakerCheese` 10,
 `makeShellFromWires` 24), which are documented in
-[`element-map-policy.md`](../tasks/element-map-policy.md) and
+[`element-map-policy.md`](../record/tasks/element-map-policy.md) and
 [`../record/TODO-24-10-2026.md`](../record/TODO-24-10-2026.md) §P0.
 
 ---
@@ -309,7 +309,7 @@ name fails loudly — which `store` already turns into an invalid feature.
 
 ## 6. How the formats interact
 
-The two serializers are **parallel and independent** ([`format-serializers.md`](../tasks/format-serializers.md)).
+The two serializers are **parallel and independent** ([`format-serializers.md`](../record/tasks/format-serializers.md)).
 The native format (`.ferrocad`, with `.fe2o3`/`.fe203` aliases) is FerroCAD's own and may evolve
 freely; `.FCStd` is the conformance-tracked import/export path and must stay upstream-compatible.
 Neither is defined in terms of the other, so a native format change cannot invalidate a conformance

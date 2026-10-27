@@ -1,10 +1,10 @@
 # Task — provider-advertised settings and the `Settings` tree
 
-Status: task (2026-10-22). P0.7 in [`../TODO-26-10-2026.md`](../TODO-26-10-2026.md) §P2.
+Status: closed task spec (moved to `record/tasks/` on 2026-10-27). Original status: task (2026-10-22). P0.7 in [`TODO-26-10-2026.md`](../TODO-26-10-2026.md) §P2.
 Companion to [`toolbar-chrome.md`](toolbar-chrome.md) §6,
-[`../workbenches/mod-providers.md`](../workbenches/mod-providers.md),
-[`../architecture/property-types.md`](../architecture/property-types.md) and
-[`../architecture/property-value-extension.md`](../architecture/property-value-extension.md).
+[`../workbenches/mod-providers.md`](../../workbenches/mod-providers.md),
+[`../architecture/property-types.md`](../../architecture/property-types.md) and
+[`../architecture/property-value-extension.md`](../../architecture/property-value-extension.md).
 
 ## Goal
 
@@ -121,7 +121,7 @@ promise, and `S5` remains optional.
 ## Non-goals
 
 - Upstream `Gui::PrefPage` / `.ui` compatibility (that is
-  [`../workbenches/qt-strategy.md`](../workbenches/qt-strategy.md)).
+  [`../workbenches/qt-strategy.md`](../../workbenches/qt-strategy.md)).
 - Arbitrary widget trees in a schema: rows only, so one renderer serves every
   capability.
 - Persisting document geometry, or settings that belong to a document's content.
@@ -278,7 +278,7 @@ S0–S4 landed; S5 (document-scoped overrides) remains optional.
   key to migrate; `reset()` clears only this group. The four WCAG rows
   (`outline_color`/`halo_width`, `hover_scale`, `hit_radius_px`, plus the
   `ghost_alpha` ceiling) are documented in
-  [`../interaction/gizmo-manipulators.md`](../interaction/gizmo-manipulators.md) §17.
+  [`../interaction/gizmo-manipulators.md`](../../interaction/gizmo-manipulators.md) §17.
 - `FerroCAD.Gizmo.apply()` returns `{"view": {"gizmo": {…}}}` and adds
   `backend` from `FerroCADGui.activeProvider("gizmo")` (else `"ferrocad"`).
   `backend` is not a schema row: `snapshot()` is the thirteen stored values, and
@@ -314,7 +314,7 @@ S0–S4 landed; S5 (document-scoped overrides) remains optional.
   reported as `gizmo backend <id> supplied no skin (native handles stay active)`. The
   skin changes materials only — the native manipulator keeps hover, picking, drags and
   commits. See
-  [`../interaction/gizmo-manipulators.md`](../interaction/gizmo-manipulators.md) §17–19.
+  [`../interaction/gizmo-manipulators.md`](../../interaction/gizmo-manipulators.md) §17–19.
 - G3a adds the geometry half: a mod declares a handle through
   `FerroCAD.register_manipulator_provider` (mesh, optional geometry program, frame,
   axis, bounds, readout) and commits through the same `register_interaction_provider`

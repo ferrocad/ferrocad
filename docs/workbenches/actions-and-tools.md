@@ -367,7 +367,7 @@ gone. Commands now live on the floating viewport pill (grid/axes/workplane/mods)
 anchored popovers, and the selection-driven action dock; every command is also listed in
 the Dev Tools window, and app-level commands (Dev Tools first) are in the title-bar `☰`
 menu and the status bar's bug button. See
-[`../tasks/toolbar-chrome.md`](../tasks/toolbar-chrome.md) §10.
+[`../tasks/toolbar-chrome.md`](../record/tasks/toolbar-chrome.md) §10.
 The **request shapes** below are unchanged — only where the buttons live.
 
 A command that changes presentation rather than the document returns a request in the

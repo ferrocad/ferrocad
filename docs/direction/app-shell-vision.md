@@ -215,8 +215,8 @@ next navigation/tool design starts from a clean viewport:
 S6's "dockable/resizable panes" now means the two windows, not three panes. The grid
 settings surface landed as the modeless `Settings/Grid` node (the Grid popover's
 provider/spacing rows plus `Grid settings` selecting it); see
-[`../tasks/toolbar-chrome.md`](../tasks/toolbar-chrome.md) §6 and
-[`../tasks/settings-model.md`](../tasks/settings-model.md).
+[`../tasks/toolbar-chrome.md`](../record/tasks/toolbar-chrome.md) §6 and
+[`../tasks/settings-model.md`](../record/tasks/settings-model.md).
 
 Dependencies: S1 gates S2–S5; S3 and S4 are coupled (selection → editor); S5
 shares the interpreter with S1. S2 (undo/redo + open/save) builds directly on

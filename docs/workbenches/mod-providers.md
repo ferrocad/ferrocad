@@ -35,7 +35,7 @@ replaces the record — a mod reload is safe and does not move the provider in t
 registration order.
 
 `settings` is the optional row schema the backend advertises (see
-[`../tasks/settings-model.md`](../tasks/settings-model.md)); `skin` is the optional
+[`../tasks/settings-model.md`](../record/tasks/settings-model.md)); `skin` is the optional
 **material program** a backend supplies for a capability that hosts one. Today that is
 the manipulator gizmo: the backend hands over the **WGSL source text** (a mod usually
 reads it from its own `Resources/`), and the host compiles and draws it while that
@@ -230,7 +230,7 @@ callback easy to drive from a script or a test.
 ## Notes and limits
 
 - **Advertised settings (S0–S4 landed).** A provider can declare a `settings`
-  schema; [`../tasks/settings-model.md`](../tasks/settings-model.md) implements the
+  schema; [`../tasks/settings-model.md`](../record/tasks/settings-model.md) implements the
   schema, storage, `settings()`/`setSetting()`, the `Settings/<Feature>` tree node,
   and the pane wiring. `FerroCAD.Grid` is a facade over the native `ferrocad`
   provider's store (with a one-time legacy migration), and both grid mods advertise

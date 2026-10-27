@@ -1,7 +1,8 @@
 # FerroCAD — documentation approach
 
-Status: decision (2026-10-02). Companion to [`mvp-path.md`](direction/mvp-path.md) and
-[`milestones.md`](record/milestones.md).
+Status: decision (2026-10-02; layout updated 2026-10-27). Companion to
+[`mvp-path.md`](direction/mvp-path.md), [`milestones.md`](record/milestones.md) and the
+[label index](labels.md).
 
 ## Decision
 
@@ -76,10 +77,15 @@ there (reference is the sibling `docs/python-api/`). The four together are what
 ## Slice documentation
 
 The per-slice record lives in [`milestones.md`](record/milestones.md) (M0–M4 slices 1–16, the
-FerroCAD restructure, MVP slices A1/A2/B1, and §5 for the 2026-10-23/24 Part, lineage
-and Qt round). The 2026-10-24 Q4/Q5 round has its own closed record:
-[`record/2026-10-24-q4-q5-draft-tools.md`](record/2026-10-24-q4-q5-draft-tools.md). The `ferrocad_core` crate page carries
-a short **Implemented capabilities** summary so the same history is visible on docs.rs.
+FerroCAD restructure, MVP slices A1/A2/B1, and the 2026-10-23/24 Part, lineage and Qt
+round). The 2026-10-24 Q4/Q5 round has its own closed record:
+[`record/2026-10-24-q4-q5-draft-tools.md`](record/2026-10-24-q4-q5-draft-tools.md); the
+2026-10-25/27 rounds are in [`record/TODO-26-10-2026.md`](record/TODO-26-10-2026.md),
+with the full detail in
+[`record/archive/TODO-26-detail-2026-10-26.md`](record/archive/TODO-26-detail-2026-10-26.md).
+Closed task specs are in [`record/tasks/`](record/tasks/README.md). The `ferrocad_core`
+crate page carries a short **Implemented capabilities** summary so the same history is
+visible on docs.rs.
 
 ## Repository layout
 
@@ -98,15 +104,16 @@ duplicate it. The folders, and the rule for filing a new note:
 | `mods/` | the external contract for mod writers and API clients |
 | `user/` | generated workflow guides, in Diátaxis sections (`tools/userdocs.py`) |
 | `python-api/` | generated signature reference (`tools/api_docs.py`) |
-| `record/` | closed history: compact milestones and backlogs, incidents, and `archive/` for the full detail |
+| `record/` | closed history: compact milestones and backlogs, closed task specs, incidents, and `archive/` for the full detail |
 | `ROADMAP.md` (root) | the three horizons and their exit criteria |
-| `tasks/` | actionable specs with a checklist |
+| `labels.md` (root) | the index for every slice/work-item label and the area-prefix rule |
+| `tasks/` | active task specs (currently none; closed specs are in `record/tasks/`) |
 
-Four files stay at the root: [`README.md`](README.md) (the index),
+Six files stay at the root: [`README.md`](README.md) (the index),
 [`architecture.md`](architecture.md) (the cross-cutting crate map that every section
 links back to), [`documentation.md`](documentation.md) (this decision),
-[`ROADMAP.md`](ROADMAP.md) (the high-level horizons), and the active `TODO-<date>.md`
-backlog.
+[`ROADMAP.md`](ROADMAP.md) (the high-level horizons), [`labels.md`](labels.md) (the label
+index), and the active `TODO-<date>.md` backlog.
 
 Conventions this imposes on a new note:
 
@@ -124,12 +131,19 @@ exception is `user/explanation/`, which is authored: it has no runnable subject.
   link macro and no site generator to resolve absolutes.
 - **Status line first.** `Status: <kind> (<date>)` plus its companion notes, so a
   reader knows whether the note is a decision, a plan, or history before reading it.
+- **Labels are indexed and prefixed.** A slice or work-item label is registered in
+  [`labels.md`](labels.md) before it is used, and a new label uses an area prefix
+  (`PART-`, `DRAFT-`, `SIMPLE-`, …) rather than a single letter. Qualify an old label
+  with its owner in prose (`SimpleCAD S4`, `stage T4`).
 - **Closed work moves to `record/`.** A TODO becomes historical when a successor
   carries only the open items; it is never deleted, because it holds the measurements.
-- **The record stays compact.** `record/` keeps the timeline, the current assessment and
-  one-page closed backlogs. The slice-by-slice detail moves to `record/archive/` and is
-  linked, not restated. `ROADMAP.md` is the only forward-looking summary; the backlog is
-  where the work is tracked.
+  A task spec moves to `record/tasks/` when its last checklist item lands, and is added
+  to that folder's index; only its open tail stays in the backlog.
+- **The record stays compact.** `record/` keeps the timeline, the current assessment,
+  one-page closed backlogs and one file per closed task spec. The slice-by-slice detail
+  moves to `record/archive/` and is linked, not restated. `ROADMAP.md` is the only
+  forward-looking summary; the backlog is where the work is tracked, and `labels.md` is
+  where the letters are defined.
 
 ## Verification hooks
 

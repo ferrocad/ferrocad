@@ -1,11 +1,11 @@
 # P2 — architecture: curves, Part/Draft layering, Qt, SimpleCAD order
 
-Status: task (2026-10-22). Backlog entry **P2** in
-[`../record/TODO-24-10-2026.md`](../record/TODO-24-10-2026.md). Companion to
-[`part-draft-layering.md`](../architecture/part-draft-layering.md),
-[`qt-strategy.md`](../workbenches/qt-strategy.md),
-[`simplecad-bringup.md`](../workbenches/simplecad-bringup.md), and
-[`architecture.md`](../architecture.md) §6.
+Status: closed task spec (moved to `record/tasks/` on 2026-10-27). Original status: task (2026-10-22). Backlog entry **P2** in
+[`TODO-24-10-2026.md`](../TODO-24-10-2026.md). Companion to
+[`part-draft-layering.md`](../../architecture/part-draft-layering.md),
+[`qt-strategy.md`](../../workbenches/qt-strategy.md),
+[`simplecad-bringup.md`](../../workbenches/simplecad-bringup.md), and
+[`architecture.md`](../../architecture.md) §6.
 
 P2 is the **shape of the work**, not its bulk. It decides where code lives before the
 Part kernel and the Draft GUI are written, so the kernel slice does not land in the
@@ -108,7 +108,7 @@ a wrong edge is architectural. Prefer a new leaf over widening `ferrocad_types`.
 
 ## P2.3 — the Qt split plane (gated)
 
-Implement [`qt-strategy.md`](../workbenches/qt-strategy.md) option **D** only when the Draft GUI
+Implement [`qt-strategy.md`](../../workbenches/qt-strategy.md) option **D** only when the Draft GUI
 work starts; it is a program, not a slice:
 
 - **Q0** — pin the contract: `tools/draft_contract.py` emits
@@ -134,7 +134,7 @@ real Draft command, headless where possible; preference pages are explicitly def
 
 ## P2.4 — SimpleCAD order
 
-Keep the recommendation from [`simplecad-bringup.md`](../workbenches/simplecad-bringup.md):
+Keep the recommendation from [`simplecad-bringup.md`](../../workbenches/simplecad-bringup.md):
 **SimpleCAD first** as the integration target, because it sits directly on `Part`,
 has no `.ui` files, and is canvas-first.
 

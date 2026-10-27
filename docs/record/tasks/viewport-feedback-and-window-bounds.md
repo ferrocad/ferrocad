@@ -1,9 +1,9 @@
 # Task — viewport feedback and window-bounds correctness
 
-Status: task (2026-10-22). P0.8 in [`../record/TODO-22-10-2026.md`](../record/TODO-22-10-2026.md).
+Status: closed task spec (moved to `record/tasks/` on 2026-10-27). Original status: task (2026-10-22). P0.8 in [`TODO-22-10-2026.md`](../TODO-22-10-2026.md).
 Companions: [`toolbar-chrome.md`](toolbar-chrome.md) (Grid split button),
-[`../interaction/visual-language.md`](../interaction/visual-language.md) §1.1 (canvas)
-and [`../direction/app-shell-vision.md`](../direction/app-shell-vision.md) (window
+[`../interaction/visual-language.md`](../../interaction/visual-language.md) §1.1 (canvas)
+and [`../direction/app-shell-vision.md`](../../direction/app-shell-vision.md) (window
 frame).
 
 ## 1. The Grid control gives no on/off indication on hover

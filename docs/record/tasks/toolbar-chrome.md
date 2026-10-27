@@ -1,11 +1,11 @@
 # Task — viewport chrome: a toolbar system and one home for grid settings
 
-Status: task (2026-10-22). P0.6 in [`../record/TODO-22-10-2026.md`](../record/TODO-22-10-2026.md).
-Companion to [`../interaction/visual-language.md`](../interaction/visual-language.md)
-(tokens and states), [`../workbenches/actions-and-tools.md`](../workbenches/actions-and-tools.md) §7
+Status: closed task spec (moved to `record/tasks/` on 2026-10-27). Original status: task (2026-10-22). P0.6 in [`TODO-22-10-2026.md`](../TODO-22-10-2026.md).
+Companion to [`../interaction/visual-language.md`](../../interaction/visual-language.md)
+(tokens and states), [`../workbenches/actions-and-tools.md`](../../workbenches/actions-and-tools.md) §7
 (the view/tool requests a command returns),
-[`../interaction/axis-origin-grid.md`](../interaction/axis-origin-grid.md) (what the grid
-toggles) and [`../direction/app-shell-vision.md`](../direction/app-shell-vision.md) S2.
+[`../interaction/axis-origin-grid.md`](../../interaction/axis-origin-grid.md) (what the grid
+toggles) and [`../direction/app-shell-vision.md`](../../direction/app-shell-vision.md) S2.
 
 **Scope note.** T0–T7 landed on 2026-10-22: the chrome (header controls, popovers,
 the action dock, the title-bar app menu) and the grid-settings half. T4/T5 are wired
@@ -16,7 +16,7 @@ receiving pointer events through an open popover).
 ## 1. Why
 
 The current shell puts **every** registered command in one full-width strip above all
-panes ([`crates/ferrocad_gpui/src/shell.rs`](../../crates/ferrocad_gpui/src/shell.rs),
+panes ([`crates/ferrocad_gpui/src/shell.rs`](../../../crates/ferrocad_gpui/src/shell.rs),
 `actions_bar`, rendered at `Shell::render`). With two grid mods loaded that is fourteen
 text buttons (`Delete`, `Move`, `Grid`, `Axis cross`, `Grid settings`, `Mods`,
 `Reload grid settings`, `Activate workplane`, `Clear workplane`, `View workplane`,
@@ -102,7 +102,7 @@ The design brief (2026-10-22) specifies:
 - **Provider-aware grid popover** (T4) and **Properties-pane grid settings** (T5) —
   blocked (§6).
 - **Deleting the flat strip** and updating
-  [`actions-and-tools.md`](../workbenches/actions-and-tools.md) §7 and §16, which
+  [`actions-and-tools.md`](../../workbenches/actions-and-tools.md) §7 and §16, which
   currently document it as the A1/A4 surface.
 
 ## 5. Slices

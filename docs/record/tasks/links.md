@@ -1,13 +1,13 @@
 # Links: `App::Link`, link arrays, and their interlocks
 
-Status: task (2026-10-23). L0–L5 landed (L5 on 2026-10-24). Records the owner
+Status: closed task spec (moved to `record/tasks/` on 2026-10-27). Original status: task (2026-10-23). L0–L5 landed (L5 on 2026-10-24). Records the owner
 decision of 2026-10-23 that the remaining
 `Part` gaps are **TNP / Links / FCStd**, and that they are one problem seen from three
-sides. Companion to [`../architecture/lineage-and-naming.md`](../architecture/lineage-and-naming.md)
+sides. Companion to [`../architecture/lineage-and-naming.md`](../../architecture/lineage-and-naming.md)
 (the lineage layer this doc depends on) and [`format-serializers.md`](format-serializers.md)
 (the two encoders). Backlog: the `Part` kernel entry in
-[`../record/TODO-24-10-2026.md`](../record/TODO-24-10-2026.md) §P1; conformance method in
-[`../workbenches/conformance.md`](../workbenches/conformance.md).
+[`TODO-24-10-2026.md`](../TODO-24-10-2026.md) §P1; conformance method in
+[`../workbenches/conformance.md`](../../workbenches/conformance.md).
 
 **Legend.** **(verified)** = read from this tree on 2026-10-23, upstream `33adf61`.
 **(proposed)** = not implemented. **(unverified)** = upstream source is outside the
@@ -24,7 +24,7 @@ element set, and none of the transform.
 
 | Surface | Upstream contract | FerroCAD today (**verified**) |
 | --- | --- | --- |
-| `App::Link` | A document object that references one object, with `Placement`/`LinkPlacement`, `Scale`/`ScaleVector`, `LinkTransform`, `LinkMode`, `LinkCopyOnChange`, and an element list ([`occt-history-spike.md`](../architecture/occt-history-spike.md) §6) | **L0–L4.** Full property base, a Part-side `execute`, real elements, containers and non-uniform scale. `LinkMode`/`LinkCopyOnChange` are stored but inert. |
+| `App::Link` | A document object that references one object, with `Placement`/`LinkPlacement`, `Scale`/`ScaleVector`, `LinkTransform`, `LinkMode`, `LinkCopyOnChange`, and an element list ([`occt-history-spike.md`](../../architecture/occt-history-spike.md) §6) | **L0–L4.** Full property base, a Part-side `execute`, real elements, containers and non-uniform scale. `LinkMode`/`LinkCopyOnChange` are stored but inert. |
 | `LinkedObject` | `App::PropertyLink` (or a link-sub) to one object | **Implemented** as `Property::Link`; attribute get/set resolves the target (`lib.rs:2651-2663`, `2745`). |
 | `setLink(obj, subname=None)` | Sets the link and narrows it to sub-elements | **Implemented.** Writes `LinkedObject` and, with `subname`, a `Property::LinkSub`. The shared link table accepts `App::Link*` and `Part::LinkArray*`. |
 | `getLinkedObject(resolve=…)` | Returns the true target, following link chains | **Implemented** (L0): `resolve=False` returns the immediate target, `resolve=True` follows chains with a cycle guard. |
@@ -102,7 +102,7 @@ After a rebuild, `Face3`/`Edge1` may denote a different element. A link referenc
 has **persistence identity but no rebuild identity** on its own. The lineage layer supplies the
 second: the stored name is looked up in the shape's forward map, and a name absent from a
 non-empty map is retired and fails rather than retargeting
-([`lineage-and-naming.md`](../architecture/lineage-and-naming.md) §0.1).
+([`lineage-and-naming.md`](../../architecture/lineage-and-naming.md) §0.1).
 
 ### 3.1 Resolved at use time, never rewritten on read
 

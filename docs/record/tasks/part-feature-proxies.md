@@ -1,10 +1,10 @@
 # Task — Python feature proxies (`Part::FeaturePython` and friends)
 
-Status: task (2026-10-24). P2 in [`../record/TODO-24-10-2026.md`](../record/TODO-24-10-2026.md).
+Status: closed task spec (moved to `record/tasks/` on 2026-10-27). Original status: task (2026-10-24). P2 in [`TODO-24-10-2026.md`](../TODO-24-10-2026.md).
 **P2a–P2e landed 2026-10-24; both Draft M2 modules run green.**
-Companion to [`../architecture/part-draft-layering.md`](../architecture/part-draft-layering.md)
-§9 (M2), [`../architecture/python-bindings.md`](../architecture/python-bindings.md) and
-[`../architecture/property-value-extension.md`](../architecture/property-value-extension.md).
+Companion to [`../architecture/part-draft-layering.md`](../../architecture/part-draft-layering.md)
+§9 (M2), [`../architecture/python-bindings.md`](../../architecture/python-bindings.md) and
+[`../architecture/property-value-extension.md`](../../architecture/property-value-extension.md).
 
 ## Why this is the gate
 
@@ -67,7 +67,7 @@ accepting `(object, subname)` entries, the link extension, `Placement.translate`
 `getSubObject` returning the named sub-shape (`Part::FeaturePy::getSubObject`),
 `Shape.getSubShape`/`findPlane`, the curve `TypeId`s and `Part.getShape`.
 `test_hatch` needed one more piece: a `python/TechDraw` shim for `makeGeomHatch` (see
-[`../workbenches/conformance.md`](../workbenches/conformance.md)).
+[`../workbenches/conformance.md`](../../workbenches/conformance.md)).
 
 ## Constraints
 

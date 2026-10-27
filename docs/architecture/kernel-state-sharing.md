@@ -7,7 +7,7 @@ interpreter-scoped `ferrocad_py` caches (K2a) are live. K2c (bucket reclamation 
 PEP 3121 multi-phase state) is parked, and the modular-wheel `PyCapsule` C-ABI (K4)
 remains an unscheduled proposal gated on whether separate binary wheels are ever
 needed. Task record:
-[`../tasks/kernel-state-sharing.md`](../tasks/kernel-state-sharing.md) (K0–K4).
+[`../tasks/kernel-state-sharing.md`](../record/tasks/kernel-state-sharing.md) (K0–K4).
 
 Companion to [`repackaging.md`](repackaging.md) (the edition model),
 [`distribution.md`](distribution.md) (payload mechanics),

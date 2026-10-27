@@ -1,9 +1,9 @@
 # Task — the grid toggle only reaches the native grid
 
-Status: task (2026-10-22). P0: a shipped command is wrong under the Coin
-provider. Companion to [`../workbenches/mod-providers.md`](../workbenches/mod-providers.md),
-[`../workbenches/grid-overlay-plan.md`](../workbenches/grid-overlay-plan.md) and
-[`../interaction/axis-origin-grid.md`](../interaction/axis-origin-grid.md).
+Status: closed task spec (moved to `record/tasks/` on 2026-10-27). Original status: task (2026-10-22). P0: a shipped command is wrong under the Coin
+provider. Companion to [`../workbenches/mod-providers.md`](../../workbenches/mod-providers.md),
+[`../workbenches/grid-overlay-plan.md`](../../workbenches/grid-overlay-plan.md) and
+[`../interaction/axis-origin-grid.md`](../../interaction/axis-origin-grid.md).
 
 ## Symptom
 
@@ -39,7 +39,7 @@ The last two are the bug: the check mark and the overlay disagree.
 | `FerroCAD.Grid.enabled` (`User parameter:BaseApp/Preferences/View`, `GridEnabled`) | the grid settings dialog, a provider's `activate`/`deactivate` | the native grid's policy, the FerroCAD-native mod |
 | `setting("enabled")` (`…/Preferences/Mod/GridOverlayCoin`) | the Coin mod's own dialog | `GridManager.ensure_grid` / `_bind_active` |
 
-`App_ToggleGrid` ([`python/ferrocad_shell/__init__.py`](../../python/ferrocad_shell/__init__.py),
+`App_ToggleGrid` ([`python/ferrocad_shell/__init__.py`](../../../python/ferrocad_shell/__init__.py),
 `_GridCommand.Activated`) only flips the **first** one:
 
 ```python
@@ -48,11 +48,11 @@ def Activated(self):
 ```
 
 The Coin provider decides visibility from the **third** one
-([`mods/GridOverlayCoin/InitGui.py`](../../mods/GridOverlayCoin/InitGui.py),
+([`mods/GridOverlayCoin/InitGui.py`](../../../mods/GridOverlayCoin/InitGui.py),
 `setting("enabled")` → `_bind_active()`), and it only re-evaluates inside
 `refresh()`, which today is called from its own dialog and the provider switch —
 never from a grid toggle. `ViewRequest.grid_overlay`
-([`crates/ferrocad_gpui/src/view.rs`](../../crates/ferrocad_gpui/src/view.rs))
+([`crates/ferrocad_gpui/src/view.rs`](../../../crates/ferrocad_gpui/src/view.rs))
 is also only ever set by the mod's `apply_dialog`, so the shell's viewport keeps
 "native ground hidden, overlay draws" even after the toggle.
 

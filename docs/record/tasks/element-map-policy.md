@@ -1,6 +1,6 @@
 # Task — the compound-cut element-map size gap (S6c)
 
-Status: **implemented for every reachable shape (2026-10-24).** Upstream is the pinned
+Status: closed task spec (moved to `record/tasks/` on 2026-10-27). Original status: **implemented for every reachable shape (2026-10-24).** Upstream is the pinned
 checkout `../freecad-upstream` at `33adf61`. The compound cuts measure **20** and **47**;
 the compound (52), fuse (58), cut/common (26), general-fuse (60), sweep (6), shell/solid
 (26), loft (24) and filled-face (9) guards also match; and `ElementMapVersion` is enabled

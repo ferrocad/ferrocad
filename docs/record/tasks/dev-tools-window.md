@@ -1,9 +1,9 @@
 # Dev tools window: move the old tooling out of the main window
 
-Status: task (2026-10-22). Backlog entry **P0.5** in
-[`TODO-22-10-2026.md`](../record/TODO-22-10-2026.md). Companion to
-[`app-shell-vision.md`](../direction/app-shell-vision.md) and
-[`actions-and-tools.md`](../workbenches/actions-and-tools.md).
+Status: closed task spec (moved to `record/tasks/` on 2026-10-27). Original status: task (2026-10-22). Backlog entry **P0.5** in
+[`TODO-22-10-2026.md`](../TODO-22-10-2026.md). Companion to
+[`app-shell-vision.md`](../../direction/app-shell-vision.md) and
+[`actions-and-tools.md`](../../workbenches/actions-and-tools.md).
 
 ## Goal
 

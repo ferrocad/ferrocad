@@ -729,7 +729,7 @@ the whole suite.
 `ferrocad_curves`/`Part` curve layer is real, so the Draft suite runs (10 passed,
 1 failed, 1 load error at upstream `33adf61`). M2 is blocked only on the Python
 feature proxies (`Part::FeaturePython`/`Part2DObjectPython`), specified in
-[`../tasks/part-feature-proxies.md`](../tasks/part-feature-proxies.md); the Part
+[`../tasks/part-feature-proxies.md`](../record/tasks/part-feature-proxies.md); the Part
 side they build on now passes 529 upstream tests with no errors. M3–M5 are untouched.
 
 What M0 does **not** need:

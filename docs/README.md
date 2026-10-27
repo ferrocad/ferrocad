@@ -20,13 +20,14 @@ on the first line, so the folder only has to answer "where do I look?".
 | `mods/` | the external contract for mod writers and API clients | you are writing a mod, a script, or an automated client |
 | `user/` | **generated** workflow guides, grouped by Diátaxis quadrant | you want to do something with the app |
 | `python-api/` | **generated** signature reference | you need to know what a name accepts |
-| `record/` | closed history: milestones, closed TODOs, incidents, and their archived detail | you need to know how we got here |
-| `tasks/` | actionable specs with a checklist | you are picking up work |
+| `record/` | closed history: milestones, closed backlogs, closed task specs, incidents, and their archived detail | you need to know how we got here |
+| `tasks/` | active task specs (currently none; closed specs are in `record/tasks/`) | you are picking up work |
 
-Five files stay at the root: this index, the [crate map](architecture.md) (the
+Six files stay at the root: this index, the [crate map](architecture.md) (the
 cross-cutting reference every section links back to), the
-[documentation decision](documentation.md), the [high-level roadmap](ROADMAP.md), and
-the active backlog ([`TODO-26-10-2026.md`](TODO-26-10-2026.md)).
+[documentation decision](documentation.md), the [high-level roadmap](ROADMAP.md), the
+[label index](labels.md) that disambiguates every `S1`/`P4`/`D0`, and the active backlog
+([`TODO-27-10-2026.md`](TODO-27-10-2026.md)).
 
 ## Start here
 
@@ -34,15 +35,16 @@ the active backlog ([`TODO-26-10-2026.md`](TODO-26-10-2026.md)).
   between them, and the C-ABI rationale.
 - [ROADMAP.md](ROADMAP.md) — the three horizons (finish Part/OCCT, build the workbench
   platform, prove it by use), their exit criteria, and how progress is measured.
-- [TODO-26-10-2026.md](TODO-26-10-2026.md) — the active backlog: the interaction and
-  gizmo remainder (re-pivot, select mode, push/pull, the gizmo registry split), the
-  OCCT seam tail, the Draft surface, SimpleCAD S1, and packaging/polish.
-- [record/TODO-24-10-2026.md](record/TODO-24-10-2026.md) — the closed 2026-10-24
-  backlog: the element map, the OCCT seam, the Python feature proxies and the Qt
-  reduction, with the measurements at close.
-- [record/TODO-23-10-2026.md](record/TODO-23-10-2026.md) — the closed 2026-10-23
-  backlog: the Part conformance push, the serializer split, the lineage layer, Links
-  and the Qt-reduction slices, with the measurements at close.
+- [labels.md](labels.md) — what every `S1`, `P4`, `D0`, `T4`, `G1` means, which program
+  owns it, and the area-prefix rule for new labels.
+- [TODO-27-10-2026.md](TODO-27-10-2026.md) — the active backlog: the SimpleCAD API
+  surface, the Draft M3–M5 remainder, the gizmo seam, packaging/polish and the small
+  kernel tail.
+- [record/TODO-26-10-2026.md](record/TODO-26-10-2026.md) — the closed 2026-10-26
+  backlog: the interaction/gizmo layer, the Draft and SimpleCAD rounds, the Mesh module
+  and the kernel state, with the measurements at close.
+- [record/tasks/README.md](record/tasks/README.md) — the closed task specs, indexed by
+  label and closing backlog.
 - [documentation.md](documentation.md) — how the project is documented (Diátaxis,
   rustdoc-first, and this layout).
 
@@ -128,7 +130,7 @@ rather than restating it.
 - [viewport/coin-bridge-reuse-assessment.md](viewport/coin-bridge-reuse-assessment.md) —
   the evidence behind the Coin3D and scene-graph decisions (a snapshot).
 - [viewport/stage.md](viewport/stage.md) — the modern declarative stack
-  (`ferrocad_stage`): the slice path (T0–T6, T6 planned), the T0–T5 build, and the
+  (`ferrocad_stage`): the slice path (T0–T6, all built), the as-built sections, and the
   deferred decisions.
 - [viewport/directives.md](viewport/directives.md) — the neutral **directives** channel:
   semantic scene data the renderer ignores and the viewport consumes (the `SoNaviCube` /
@@ -214,71 +216,49 @@ rather than restating it.
 
 ## The record
 
-The record is deliberately compact: each closed backlog is a one-page summary, and the
-full slice-by-slice text lives in [`record/archive/`](record/archive/).
+The record is deliberately compact: each closed backlog is a one-page summary, the
+closed task specs are one file per subject, and the full slice-by-slice text lives in
+[`record/archive/`](record/archive/).
 
 - [record/milestones.md](record/milestones.md) — the high-level timeline and the
   current assessment. The per-slice detail (M0–M4, the restructure, the MVP and
   app-shell slices, the M3 plan) is in
   [record/archive/milestones-detail-2026-10.md](record/archive/milestones-detail-2026-10.md).
-- [record/TODO-21-10-2026.md](record/TODO-21-10-2026.md) — closed record: the grid
-  overlay, the Draft probe, and the external mod repository; full text in
-  `record/archive/`.
+- [record/TODO-26-10-2026.md](record/TODO-26-10-2026.md) — closed record: the
+  wheel/form layer, re-pivot, select mode, the gizmo registry/set, the Part thread and
+  `curve_of` work, the Mesh module, the SimpleCAD S1–S3 baselines, Draft M3's first
+  slice, and the kernel state. The full round detail is in
+  [record/archive/TODO-26-detail-2026-10-26.md](record/archive/TODO-26-detail-2026-10-26.md).
+- [record/TODO-24-10-2026.md](record/TODO-24-10-2026.md) — closed record: the element
+  map (P0), the OCCT seam (P1), the Python feature proxies (P2), and the Qt reduction
+  through Q5 (P3).
+- [record/TODO-23-10-2026.md](record/TODO-23-10-2026.md) — closed record: the format
+  serializers (F1–F8), the lineage layer (S1–S6c), Links L0–L5, the Qt-reduction
+  slices (Q0–Q3b), and the Part completion at close.
 - [record/TODO-22-10-2026.md](record/TODO-22-10-2026.md) — closed record: the Part
   conformance push, the headless `ViewObject`, the `.FCStd` reader, the link arrays,
   the Ctrl+K palette, and the measurements at close.
-- [record/TODO-23-10-2026.md](record/TODO-23-10-2026.md) — closed record: the format
-  serializers (F1–F8), the lineage layer (S1–S6c), Links L0–L5, the Qt-reduction
-  slices (Q0–Q3b), and the Part completion (529 passed, 0 errored) at close.
-- [record/TODO-24-10-2026.md](record/TODO-24-10-2026.md) — closed record: the element
-  map (P0), the OCCT seam (P1), the Python feature proxies (P2), and the Qt reduction
-  through Q5 (P3), with the measurements at close.
+- [record/TODO-21-10-2026.md](record/TODO-21-10-2026.md) — closed record: the grid
+  overlay, the Draft probe, and the external mod repository; full text in
+  `record/archive/`.
+- [record/tasks/README.md](record/tasks/README.md) — the closed task specs (serializers,
+  lineage element map, Links, proxies, Qt reduction, Mesh, kernel state, Draft import,
+  Dev Tools, chrome, settings, grid visibility, event routing).
 - [record/2026-10-24-q4-q5-draft-tools.md](record/2026-10-24-q4-q5-draft-tools.md) —
   closed record: the Q4/Q5 round (camera-free snapping, the Snapper/tool-bar surface,
-  the line/wire tools and `PlaneGui`, the four forms), its measurements, and the
-  deviations it records.
+  the line/wire tools and `PlaneGui`, the four forms).
 - [record/incident-2026-10-21-session-crash.md](record/incident-2026-10-21-session-crash.md)
   — post-mortem of the lost GNOME session: `systemd-oomd` killed `gnome-shell`, not the
   GPU or Wayland; the evidence, the timeline, and the prevention notes.
 
 ## Tasks
 
-- [tasks/dev-tools-window.md](tasks/dev-tools-window.md) — move the actions bar,
-  inspector, property editor and console into a separate Dev Tools window; the main
-  window becomes a clean viewport.
-- [tasks/d0-draft-import.md](tasks/d0-draft-import.md) — the five headless fixes and the
-  `--draft` conformance group.
-- [tasks/p2-architecture.md](tasks/p2-architecture.md) — `ferrocad_curves`, the
-  Part/Draft seam, the Qt split plane, and the SimpleCAD order.
-- [tasks/part-feature-proxies.md](tasks/part-feature-proxies.md) — `Part::FeaturePython`
-  and `Part::Part2DObjectPython`: the proxy `execute`/`onChanged` contract, attachment,
-  persistence, and the Draft M2 acceptance slices.
-- [tasks/element-map-policy.md](tasks/element-map-policy.md) — why the compound cuts
-  needed the compound-BOP policy plus the naming cascade, and what remains before
-  `ElementMapVersion` can be exposed.
-- [tasks/format-serializers.md](tasks/format-serializers.md) — split persistence into a
-  native `.ferrocad` JSON serializer and an upstream `.FCStd` import/export backend, so
-  conformance tracking is independent of our own format.
-- [tasks/links.md](tasks/links.md) — the `App::Link`/link-array surface, and how link
-  sub-element references depend on the lineage layer and the file formats.
-- [tasks/kernel-state-sharing.md](tasks/kernel-state-sharing.md) — K0–K4: the
-  one-core identity diagnostic, the mixed-image guard, interpreter-scoped Py caches,
-  the `Kernel` facade, and the gated modular-wheel capsule.
-- [tasks/qt-reduction.md](tasks/qt-reduction.md) — where Qt/PySide enters today, the
-  measurable done criteria, and Q0a–Q0d ahead of the Draft GUI plan.
-- [tasks/grid-visibility.md](tasks/grid-visibility.md) — the grid toggle only moves
-  the native flag, so the Coin/WGSL overlay keeps drawing; one switch, a provider
-  `refresh` hook, and the `semantic` → `ferrocad` rename.
-- [tasks/toolbar-chrome.md](tasks/toolbar-chrome.md) — replacing the flat actions bar
-  with viewport-header split buttons, anchored popovers, a selection-reactive dock and
-  a title-bar app menu; the grid popover and `Settings/Grid` settings are wired.
-- [tasks/settings-model.md](tasks/settings-model.md) — provider-advertised settings, a
-  `Settings` node in the tree, and a file-backed parameter store so a provider choice
-  survives a restart.
-- [tasks/viewport-event-routing.md](tasks/viewport-event-routing.md) — pointer events
-  from panes over the canvas (the Grid settings card, the action dock, tool panes)
-  must not reach the viewport; the same fix keeps an editable settings field from
-  closing the card.
-- [tasks/viewport-feedback-and-window-bounds.md](tasks/viewport-feedback-and-window-bounds.md)
-  — the Grid control must show its on/off state on hover; a maximized window must not
-  show resize grips over the viewport or mis-map pointer coordinates.
+`tasks/` is for specs that are still in progress. There are none today: every spec
+written so far has landed, and its file moved to
+[`record/tasks/`](record/tasks/README.md) with the original design and as-built
+sections intact. The open work is tracked in the backlog, not kept as a task checklist.
+
+- [tasks/README.md](tasks/README.md) — the active-spec policy.
+- [record/tasks/README.md](record/tasks/README.md) — the closed specs, each with its
+  label, closing backlog and one-line result. Start there if you want the design
+  argument behind a layer the backlog now builds on.

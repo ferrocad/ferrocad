@@ -1,12 +1,12 @@
 # Task — split document persistence into two serializers
 
-Status: task (2026-10-23; the parallel/independent framing made explicit 2026-10-24). Records
+Status: closed task spec (moved to `record/tasks/` on 2026-10-27). Original status: task (2026-10-23; the parallel/independent framing made explicit 2026-10-24). Records
 the owner decision of 2026-10-23: native JSON and upstream `.FCStd` become **two explicit,
 independently testable serializers**. F1–F8 landed 2026-10-23: `.FCStd` is now the real ZIP
 container on both read and write. Companion
-to [`../architecture/part-draft-layering.md`](../architecture/part-draft-layering.md), the
-[conformance runbook](../workbenches/conformance.md) and
-[`../direction/mvp-path.md`](../direction/mvp-path.md) (§8 decision 3, which this closes).
+to [`../architecture/part-draft-layering.md`](../../architecture/part-draft-layering.md), the
+[conformance runbook](../../workbenches/conformance.md) and
+[`../direction/mvp-path.md`](../../direction/mvp-path.md) (§8 decision 3, which this closes).
 
 **Legend.** **(verified)** = read from the tree on 2026-10-23; **(recommended)** = not implemented.
 
@@ -22,7 +22,7 @@ The two serializers are **parallel and independent**. The native format is ours 
 - Native persistence must therefore **not** be defined in terms of `.FCStd`; otherwise our own
   format changes would move the conformance target.
 
-Lineage persistence follows from that split ([`../architecture/lineage-and-naming.md`](../architecture/lineage-and-naming.md) §0, §6):
+Lineage persistence follows from that split ([`../architecture/lineage-and-naming.md`](../../architecture/lineage-and-naming.md) §0, §6):
 
 - In `.FCStd`, lineage must remain **upstream-compatible**. `PartShapeN.brp` stays raw BREP
   (`ShapeProperty::fcstd_members` → `brep()`); the native `FCSHPROP` envelope is never placed

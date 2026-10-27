@@ -1,10 +1,10 @@
 # Task — the `Mesh` / `MeshPart` / `Mesh::Feature` contract
 
-Status: implemented 2026-10-26 (M1); M1b landed 2026-10-27 (`meshFromShape(Segments=True)`,
+Status: closed task spec (moved to `record/tasks/` on 2026-10-27). Original status: implemented 2026-10-26 (M1); M1b landed 2026-10-27 (`meshFromShape(Segments=True)`,
 facet groups, `.bms`, and the `.FCStd` `<Mesh file="…">`/`MeshKernel.bms` member). The
 measured results are at the end of §5. P4 in
-[`../TODO-26-10-2026.md`](../TODO-26-10-2026.md) (§P4). Companion to
-[`../workbenches/simplecad-bringup.md`](../workbenches/simplecad-bringup.md) §7
+[`TODO-26-10-2026.md`](../TODO-26-10-2026.md) (§P4). Companion to
+[`../workbenches/simplecad-bringup.md`](../../workbenches/simplecad-bringup.md) §7
 (S1 baseline, both images) and §S3.4.
 
 This started as a measured contract; it now records what the implementation does.

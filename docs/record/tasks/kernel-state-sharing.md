@@ -1,14 +1,14 @@
 # Task — kernel state sharing
 
-Status: **closed / steady-state** (2026-10-26; K2a landed 2026-10-27). **K0, K1,
+Status: closed task spec (moved to `record/tasks/` on 2026-10-27). Original status: **closed / steady-state** (2026-10-26; K2a landed 2026-10-27). **K0, K1,
 K3 and K2a are implemented and green** (`beca5fb`, `9869d76`, `05cf713`). **K2b**
 turned out to need nothing (the converter/resolver/provider tables hold no `Py`
 values), and **K2c** (bucket reclamation, multi-phase module state) is parked.
 **K4** (modular-wheel `PyCapsule` ABI) is gated out unless separate per-workbench
 wheels are scheduled.
 
-Design authority: [`../architecture/kernel-state-sharing.md`](../architecture/kernel-state-sharing.md).
-Backlog: [`../TODO-26-10-2026.md`](../TODO-26-10-2026.md) §0.4 / P6.
+Design authority: [`../architecture/kernel-state-sharing.md`](../../architecture/kernel-state-sharing.md).
+Backlog: [`TODO-26-10-2026.md`](../TODO-26-10-2026.md) §0.4 / P6.
 
 ## Slice summary
 

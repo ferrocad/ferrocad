@@ -747,7 +747,7 @@ classes are exercised by at least one panel each.
 ## 8. 2026-10-23 status
 
 The execution plan for reducing the Qt surface further is
-[`tasks/qt-reduction.md`](../tasks/qt-reduction.md). This section is a status note
+[`tasks/qt-reduction.md`](../record/tasks/qt-reduction.md). This section is a status note
 only: the measurements and decisions in §2–§7 are unchanged, still pinned to upstream
 `33adf61`.
 

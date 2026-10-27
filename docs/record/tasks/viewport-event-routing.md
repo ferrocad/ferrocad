@@ -1,9 +1,9 @@
 # Task — viewport event routing: occlusion and the settings card
 
-Status: task (2026-10-22). P0.8 in [`../record/TODO-22-10-2026.md`](../record/TODO-22-10-2026.md).
+Status: closed task spec (moved to `record/tasks/` on 2026-10-27). Original status: task (2026-10-22). P0.8 in [`TODO-22-10-2026.md`](../TODO-22-10-2026.md).
 Companions: [`toolbar-chrome.md`](toolbar-chrome.md) (popovers and the settings card),
 [`settings-model.md`](settings-model.md) (the `Settings/Grid` rows) and
-[`../interaction/visual-language.md`](../interaction/visual-language.md) (glass surfaces).
+[`../interaction/visual-language.md`](../../interaction/visual-language.md) (glass surfaces).
 
 ## 1. Drags/clicks on a pane over the viewport reach the viewport
 

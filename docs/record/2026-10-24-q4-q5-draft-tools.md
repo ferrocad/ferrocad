@@ -2,7 +2,7 @@
 
 Status: record. Closes the **Q4/Q5 items** of P3 in
 [`TODO-24-10-2026.md`](TODO-24-10-2026.md); the plan is
-[`../tasks/qt-reduction.md`](../tasks/qt-reduction.md) Q4/Q5 and the surface reference is
+[`../tasks/qt-reduction.md`](tasks/qt-reduction.md) Q4/Q5 and the surface reference is
 [`../workbenches/draft-tools.md`](../workbenches/draft-tools.md).
 
 ## Goal
@@ -73,7 +73,7 @@ untouched, and every form accepts and rejects headlessly.
 New: [`../workbenches/draft-tools.md`](../workbenches/draft-tools.md) (the surface
 reference) and this log. Updated: the [`docs/README.md`](../README.md) index, the
 [roadmap](../ROADMAP.md) H2 status, [`qt-strategy.md`](../workbenches/qt-strategy.md)
-(status and routing table), [`qt-reduction.md`](../tasks/qt-reduction.md) (Q4/Q5 status
+(status and routing table), [`qt-reduction.md`](tasks/qt-reduction.md) (Q4/Q5 status
 and deviations), [`conformance.md`](../workbenches/conformance.md) (the native tool
 suites), [`actions-and-tools.md`](../workbenches/actions-and-tools.md) §7.1 (the point
 session), [`milestones.md`](milestones.md), [`stage.md`](../viewport/stage.md) (the

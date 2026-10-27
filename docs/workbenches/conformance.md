@@ -31,14 +31,14 @@ summary. Baseline at upstream `33adf61` (2026-10-22, after the GUI document API)
 The remaining failure is the shared `Part` kernel rather than a Draft bug:
 `test_airfoildat` is a load error and `test_import.DraftImport.test_import_draft`
 fails on `import Part`. See
-[`../tasks/d0-draft-import.md`](../tasks/d0-draft-import.md).
+[`../tasks/d0-draft-import.md`](../record/tasks/d0-draft-import.md).
 
 The **Draft M2 modules** are measured separately from that fixed list, because they need
 the Python feature proxies: after P2a–P2c (2026-10-24), `drafttests/test_creation.py`
 loads and runs 26 cases (15 passed, 1 failed, 10 errored), `test_array.py` loads
 (1 errored), and **both have zero load errors**. The residual errors are attachment
 (`AttachmentSupport`/`MapMode`) and a few link/property coercions; see
-[`../tasks/part-feature-proxies.md`](../tasks/part-feature-proxies.md).
+[`../tasks/part-feature-proxies.md`](../record/tasks/part-feature-proxies.md).
 
 ---
 

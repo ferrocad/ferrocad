@@ -1,10 +1,12 @@
-# Part/OCCT API audit (H1)
+# Part/OCCT API audit
 
 `tools/part_api_audit.py` is the repeatable answer to "what is still missing from
 Part/OCCT?". It counts the Python surface of `crates/ferrocad_part_py` and the
 object types registered by both `crates/ferrocad_part` and
 `crates/ferrocad_part_py`, compares them with a sibling `freecad-upstream`
 checkout, then pins both in [`contracts/part-api.json`](../../contracts/part-api.json).
+At the 2026-10-27 pin our surface is 38 functions / 60 classes / 39 object types against
+upstream's 50 / 96 / 80; the headline is the method coverage, not those totals.
 The contract is the source of truth: `--check` re-derives it and fails on any
 surface change, so the roadmap does not have to rely on prose.
 
@@ -95,8 +97,10 @@ the same trees produce byte-identical JSON.
   classes we do not expose at all.
 - `coverage.methods` — the headline number: how many of upstream's distinct
   declared names exist on at least one of our Python classes, the fraction, and
-  the shared-class count. At the 2026-10-26 pin it is **203 of 408 names (49.8%)
-  across 20 shared classes**; the per-class gaps are the H1 work list.
+  the shared-class count. At the 2026-10-27 worktree pin it is **248 of 408 names
+  (60.8%) across 21 shared classes**; the per-class gaps are the SimpleCAD/Draft work
+  list. The previous committed pin was 220/408 (53.9%); always say which tree and which
+  extension build produced the figure.
 - `extra` — our names that upstream does not have in `Part/App` (for example
   `App::Link*`, `Sketcher::SketchObject`, `PartDesign::Body`, `Part.Precision`).
 - `ours.gap_markers` — every honest gap, with `file:line`, kind and source text.

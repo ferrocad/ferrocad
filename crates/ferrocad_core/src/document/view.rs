@@ -17,6 +17,142 @@ use serde::{Deserialize, Serialize};
 /// An RGBA colour, each component in `0.0..=1.0` (FreeCAD's `Base::Color`).
 pub type Color = [f64; 4];
 
+/// `App::Material`'s defaults, from upstream `App::Material::setType(DEFAULT)`.
+pub const DEFAULT_DIFFUSE: Color = [0.8, 0.8, 0.9, 1.0];
+pub const DEFAULT_AMBIENT: Color = [0.3333, 0.3333, 0.3333, 1.0];
+pub const DEFAULT_SPECULAR: Color = [0.5333, 0.5333, 0.5333, 1.0];
+pub const DEFAULT_EMISSIVE: Color = [0.0, 0.0, 0.0, 1.0];
+pub const DEFAULT_SHININESS: f64 = 0.9;
+
+/// One appearance slot: a full `App::Material`, not just its colour.
+///
+/// FreeCAD keeps `DiffuseColor`, `AmbientColor`, `SpecularColor`,
+/// `EmissiveColor`, `Shininess` and `Transparency` on every material, and
+/// `ShapeAppearance[i]` / `ShapeMaterial` are materials. The view state stores
+/// all six so a handle read from `ViewObject.ShapeAppearance[i]` round-trips
+/// instead of resetting everything but its colour.
+///
+/// The diffuse colour's alpha is the opacity (`1 - transparency`), which is the
+/// encoding the viewport consumes; [`Material::new`] and the setters keep the
+/// two in lock-step so a slot cannot drift.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Material {
+    /// `Material.DiffuseColor`; alpha is `1 - transparency`.
+    pub diffuse: Color,
+    /// `Material.AmbientColor`.
+    pub ambient: Color,
+    /// `Material.SpecularColor`.
+    pub specular: Color,
+    /// `Material.EmissiveColor`.
+    pub emissive: Color,
+    /// `Material.Shininess` (not clamped, as upstream).
+    pub shininess: f64,
+    /// `Material.Transparency`, `0.0` (opaque) … `1.0` (invisible).
+    pub transparency: f64,
+}
+
+impl Default for Material {
+    fn default() -> Self {
+        Self {
+            diffuse: DEFAULT_DIFFUSE,
+            ambient: DEFAULT_AMBIENT,
+            specular: DEFAULT_SPECULAR,
+            emissive: DEFAULT_EMISSIVE,
+            shininess: DEFAULT_SHININESS,
+            transparency: 0.0,
+        }
+    }
+}
+
+impl Material {
+    /// A material with every field spelled out. `diffuse`'s alpha is replaced by
+    /// `1 - transparency`, the viewport's encoding.
+    pub fn new(
+        diffuse: Color,
+        ambient: Color,
+        specular: Color,
+        emissive: Color,
+        shininess: f64,
+        transparency: f64,
+    ) -> Self {
+        let transparency = transparency.clamp(0.0, 1.0);
+        let mut diffuse = diffuse;
+        diffuse[3] = 1.0 - transparency;
+        Self {
+            diffuse,
+            ambient,
+            specular,
+            emissive,
+            shininess,
+            transparency,
+        }
+    }
+
+    /// The default material painted with `color` (the `ShapeColor` case).
+    pub fn from_color(color: Color) -> Self {
+        Self::new(
+            color,
+            DEFAULT_AMBIENT,
+            DEFAULT_SPECULAR,
+            DEFAULT_EMISSIVE,
+            DEFAULT_SHININESS,
+            1.0 - color[3],
+        )
+    }
+
+    /// The colour the shape is painted with.
+    pub fn color(&self) -> Color {
+        self.diffuse
+    }
+
+    /// Assign the material colour, keeping `transparency` in step with its alpha.
+    pub fn set_color(&mut self, color: Color) {
+        self.diffuse = color;
+        self.transparency = 1.0 - color[3];
+    }
+
+    /// Assign `Material.Transparency`, keeping the colour alpha in step.
+    pub fn set_transparency(&mut self, transparency: f64) {
+        self.transparency = transparency.clamp(0.0, 1.0);
+        self.diffuse[3] = 1.0 - self.transparency;
+    }
+}
+
+/// A material slot before the shape materials existed, when only its colour was
+/// stored. Reading it as `Material::from_color` keeps native documents written by
+/// older builds loadable.
+#[derive(Deserialize)]
+#[serde(untagged)]
+enum MaterialRepr {
+    Material(Material),
+    Color(Color),
+}
+
+impl MaterialRepr {
+    fn into_material(self) -> Material {
+        match self {
+            Self::Material(material) => material,
+            Self::Color(color) => Material::from_color(color),
+        }
+    }
+}
+
+fn deserialize_appearance<'de, D>(deserializer: D) -> Result<Vec<Material>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let reprs = Vec::<MaterialRepr>::deserialize(deserializer)?;
+    Ok(reprs.into_iter().map(MaterialRepr::into_material).collect())
+}
+
+fn deserialize_material<'de, D>(deserializer: D) -> Result<Option<Material>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let repr = Option::<MaterialRepr>::deserialize(deserializer)?;
+    Ok(repr.map(MaterialRepr::into_material))
+}
+
 /// The view state of one document object.
 ///
 /// A missing `Option<ViewState>` on [`DocumentObject`](super::DocumentObject) means
@@ -41,11 +177,11 @@ pub struct ViewState {
     pub diffuse_color: Option<Vec<Color>>,
     /// `ShapeAppearance` (a material list). Empty means "one material, the
     /// effective colour".
-    #[serde(default)]
-    pub appearance: Vec<Color>,
+    #[serde(default, deserialize_with = "deserialize_appearance")]
+    pub appearance: Vec<Material>,
     /// `ShapeMaterial`; `None` means "follow the effective colour".
-    #[serde(default)]
-    pub material: Option<Color>,
+    #[serde(default, deserialize_with = "deserialize_material")]
+    pub material: Option<Material>,
     /// `DisplayMode` (a FreeCAD display-mode name).
     #[serde(default = "default_display_mode")]
     pub display_mode: String,
@@ -76,17 +212,19 @@ impl ViewState {
     }
 
     /// `ShapeAppearance`: at least one material, the effective colour by default.
-    pub fn appearance(&self) -> Vec<Color> {
+    pub fn appearance(&self) -> Vec<Material> {
         if self.appearance.is_empty() {
-            vec![self.effective_color()]
+            vec![Material::from_color(self.effective_color())]
         } else {
             self.appearance.clone()
         }
     }
 
     /// `ShapeMaterial`: the explicit material, else the effective colour.
-    pub fn material(&self) -> Color {
-        self.material.unwrap_or_else(|| self.effective_color())
+    pub fn material(&self) -> Material {
+        self.material
+            .clone()
+            .unwrap_or_else(|| Material::from_color(self.effective_color()))
     }
 
     /// Assign `ShapeColor`, keeping the appearance and material in step with it.
@@ -98,33 +236,34 @@ impl ViewState {
     pub fn set_shape_color(&mut self, color: Color) {
         self.shape_color = Some(color);
         if let Some(first) = self.appearance.first_mut() {
-            *first = color;
+            first.set_color(color);
         }
     }
 
-    /// Assign one entry of `ShapeAppearance`, materialising the list first.
-    pub fn set_appearance_slot(&mut self, index: usize, color: Color) {
+    /// Assign one `ShapeAppearance` entry, materialising the list first.
+    pub fn set_appearance_slot(&mut self, index: usize, material: Material) {
         if self.appearance.is_empty() {
-            self.appearance = vec![self.effective_color()];
+            self.appearance = vec![Material::from_color(self.effective_color())];
         }
         if index >= self.appearance.len() {
-            let fill = self.effective_color();
+            let fill = Material::from_color(self.effective_color());
             self.appearance.resize(index + 1, fill);
         }
-        self.appearance[index] = color;
+        let color = material.color();
+        self.appearance[index] = material;
         if index == 0 {
             self.shape_color = Some(color);
         }
     }
 
     /// Replace `ShapeAppearance`; the first material also becomes `ShapeColor`.
-    pub fn set_appearance(&mut self, colors: Vec<Color>) {
-        if colors.is_empty() {
+    pub fn set_appearance(&mut self, materials: Vec<Material>) {
+        if materials.is_empty() {
             self.appearance.clear();
             return;
         }
-        self.shape_color = Some(colors[0]);
-        self.appearance = colors;
+        self.shape_color = Some(materials[0].color());
+        self.appearance = materials;
     }
 }
 
@@ -184,26 +323,88 @@ mod tests {
     #[test]
     fn shape_color_updates_the_derived_views() {
         let mut state = ViewState::new(0, [0.8, 0.8, 0.8, 1.0]);
-        assert_eq!(state.appearance(), vec![[0.8, 0.8, 0.8, 1.0]]);
-        assert_eq!(state.material(), [0.8, 0.8, 0.8, 1.0]);
+        assert_eq!(state.appearance()[0].color(), [0.8, 0.8, 0.8, 1.0]);
+        assert_eq!(state.material().color(), [0.8, 0.8, 0.8, 1.0]);
 
         state.set_shape_color([1.0, 0.0, 0.0, 1.0]);
         assert_eq!(state.effective_color(), [1.0, 0.0, 0.0, 1.0]);
         // `ShapeMaterial` follows until it is explicitly set.
-        assert_eq!(state.material(), [1.0, 0.0, 0.0, 1.0]);
+        assert_eq!(state.material().color(), [1.0, 0.0, 0.0, 1.0]);
 
-        state.set_appearance_slot(0, [0.0, 1.0, 0.0, 1.0]);
-        assert_eq!(state.appearance(), vec![[0.0, 1.0, 0.0, 1.0]]);
-        assert_eq!(state.material(), [0.0, 1.0, 0.0, 1.0]);
+        state.set_appearance_slot(0, Material::from_color([0.0, 1.0, 0.0, 1.0]));
+        assert_eq!(state.appearance()[0].color(), [0.0, 1.0, 0.0, 1.0]);
+        assert_eq!(state.material().color(), [0.0, 1.0, 0.0, 1.0]);
 
-        state.material = Some([0.0, 0.0, 1.0, 1.0]);
-        assert_eq!(state.material(), [0.0, 0.0, 1.0, 1.0]);
+        state.material = Some(Material::from_color([0.0, 0.0, 1.0, 1.0]));
+        assert_eq!(state.material().color(), [0.0, 0.0, 1.0, 1.0]);
     }
 
     #[test]
-    fn transparency_is_independent_of_colour() {
+    fn appearance_slots_keep_every_material_field() {
+        let mut state = ViewState::new(0, [0.8, 0.8, 0.8, 1.0]);
+        let material = Material::new(
+            [0.1, 0.2, 0.3, 1.0],
+            [0.4, 0.4, 0.4, 1.0],
+            [0.5, 0.5, 0.5, 1.0],
+            [0.6, 0.0, 0.0, 1.0],
+            0.25,
+            0.35,
+        );
+        state.set_appearance_slot(0, material.clone());
+        assert_eq!(state.appearance()[0], material);
+        // The slot's first material is also the shape colour, with the
+        // viewport's alpha encoding (`alpha = 1 - transparency`).
+        assert_eq!(state.effective_color(), [0.1, 0.2, 0.3, 0.65]);
+        assert_eq!(state.appearance()[0].transparency, 0.35);
+    }
+
+    #[test]
+    fn transparency_is_independent_of_the_view_transparency() {
         let mut state = ViewState::new(70, [1.0, 1.0, 1.0, 1.0]);
-        state.set_appearance_slot(0, [0.5, 0.0, 0.0, 1.0]);
+        state.set_appearance_slot(0, Material::new(
+            [0.5, 0.0, 0.0, 1.0],
+            DEFAULT_AMBIENT,
+            DEFAULT_SPECULAR,
+            DEFAULT_EMISSIVE,
+            DEFAULT_SHININESS,
+            0.0,
+        ));
         assert_eq!(state.transparency, 70);
+    }
+
+    #[test]
+    fn materials_round_trip_through_serde() {
+        let mut state = ViewState::new(0, [1.0, 1.0, 1.0, 1.0]);
+        let material = Material::new(
+            [0.1, 0.2, 0.3, 1.0],
+            [0.4, 0.4, 0.4, 1.0],
+            [0.5, 0.5, 0.5, 1.0],
+            [0.6, 0.0, 0.0, 1.0],
+            0.25,
+            0.35,
+        );
+        state.set_appearance(vec![material.clone()]);
+        state.material = Some(material.clone());
+
+        let json = serde_json::to_string(&state).unwrap();
+        let back: ViewState = serde_json::from_str(&json).unwrap();
+        assert_eq!(back.appearance()[0], material);
+        assert_eq!(back.material(), material);
+        assert_eq!(back.appearance()[0].color(), [0.1, 0.2, 0.3, 0.65]);
+    }
+
+    #[test]
+    fn old_colour_slots_still_deserialize() {
+        let state: ViewState = serde_json::from_str(
+            r#"{"visibility":true,"transparency":0,"default_color":[1,1,1,1],
+                "appearance":[[0.1,0.2,0.3,1.0]],"material":[0.4,0.5,0.6,0.5]}"#,
+        )
+        .unwrap();
+        let appearance = state.appearance();
+        assert_eq!(appearance[0].color(), [0.1, 0.2, 0.3, 1.0]);
+        assert_eq!(appearance[0].ambient, DEFAULT_AMBIENT);
+        let material = state.material();
+        assert_eq!(material.color(), [0.4, 0.5, 0.6, 0.5]);
+        assert_eq!(material.transparency, 0.5);
     }
 }

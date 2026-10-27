@@ -24,9 +24,9 @@ pub mod native;
 mod transaction;
 mod view;
 
-pub use view::{color_from_packed, color_to_packed, Color, ViewState};
+pub use view::{color_from_packed, color_to_packed, Color, Material, ViewState};
 
-use transaction::{Change, PropertyChange, TransactionManager};
+use transaction::{Change, PropertyChange, PropertySlot, TransactionManager};
 
 pub type ObjectId = usize;
 
@@ -305,11 +305,32 @@ impl Document {
         }
     }
 
+    /// Remove a property (`removeProperty`), recording the change so the
+    /// property (value, status and metadata) can be restored by `undo`.
     pub fn remove_property(&mut self, object: ObjectId, name: &str) -> bool {
-        match self.objects.get_mut(&object) {
-            Some(obj) => obj.properties.remove(name).is_some(),
-            None => false,
-        }
+        let old = {
+            let Some(obj) = self.objects.get_mut(&object) else {
+                return false;
+            };
+            let Some(value) = obj.properties.get(name).cloned() else {
+                return false;
+            };
+            let slot = PropertySlot {
+                value,
+                status: obj.properties.raw_status(name).unwrap_or(prop_status::NONE),
+                group: obj.properties.group(name).unwrap_or("").to_string(),
+                doc: obj.properties.doc(name).unwrap_or("").to_string(),
+            };
+            obj.properties.remove(name);
+            slot
+        };
+        self.record_change(Change::PropertySlot {
+            object,
+            name: name.to_string(),
+            old: Some(old),
+            new: None,
+        });
+        true
     }
 
     // -- extensions ---------------------------------------------------------
@@ -589,7 +610,9 @@ impl Document {
     }
 
     /// Add a property with an explicit status mask. Unlike `set_property`, this
-    /// does not touch the object (FreeCAD `addProperty`).
+    /// does not touch the object (FreeCAD `addProperty`). The change is recorded
+    /// so `undo` removes the property again (and restores a same-named one it
+    /// replaced).
     pub fn add_property(
         &mut self,
         object: ObjectId,
@@ -603,11 +626,30 @@ impl Document {
             .objects
             .get_mut(&object)
             .ok_or_else(|| format!("no object {object}"))?;
-        // Mark runtime-added properties as dynamic so that transient ones are
-        // still persisted (`PropertyContainer::Save`).
+        // A same-named property is replaced (as before), so `undo` restores it.
+        let old = obj.properties.get(name).map(|value| PropertySlot {
+            value: value.clone(),
+            status: obj.properties.raw_status(name).unwrap_or(prop_status::NONE),
+            group: obj.properties.group(name).unwrap_or("").to_string(),
+            doc: obj.properties.doc(name).unwrap_or("").to_string(),
+        });
+        let slot = PropertySlot {
+            value,
+            // Mark runtime-added properties as dynamic so that transient ones are
+            // still persisted (`PropertyContainer::Save`).
+            status: status | prop_status::DYNAMIC,
+            group: group.to_string(),
+            doc: doc.to_string(),
+        };
         obj.properties
-            .set_with_status(name.to_string(), value, status | prop_status::DYNAMIC);
+            .set_with_status(name.to_string(), slot.value.clone(), slot.status);
         obj.properties.set_meta(name.to_string(), group, doc);
+        self.record_change(Change::PropertySlot {
+            object,
+            name: name.to_string(),
+            old,
+            new: Some(slot),
+        });
         Ok(())
     }
 

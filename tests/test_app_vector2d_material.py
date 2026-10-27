@@ -228,6 +228,46 @@ class MaterialViewWriteBackTests(unittest.TestCase):
         material.Shininess = 0.75
         self.assertAlmostEqual(material.Shininess, 0.75)
 
+    def test_every_material_field_round_trips_through_shape_appearance(self):
+        material = self.obj.ViewObject.ShapeAppearance[0]
+        material.DiffuseColor = (0.5, 0.4, 0.3, 1.0)
+        material.AmbientColor = (0.1, 0.2, 0.3, 1.0)
+        material.SpecularColor = (0.4, 0.5, 0.6, 1.0)
+        material.EmissiveColor = (0.7, 0.1, 0.0, 1.0)
+        material.Shininess = 0.25
+        material.Transparency = 0.2
+
+        # `ShapeAppearance[i]` returns a fresh handle: the values have to live in
+        # the view state, not only in the handle that was written.
+        again = self.obj.ViewObject.ShapeAppearance[0]
+        self.assertEqual(again.DiffuseColor[:3], (0.5, 0.4, 0.3))
+        self.assertEqual(again.AmbientColor, (0.1, 0.2, 0.3, 1.0))
+        self.assertEqual(again.SpecularColor, (0.4, 0.5, 0.6, 1.0))
+        self.assertEqual(again.EmissiveColor, (0.7, 0.1, 0.0, 1.0))
+        self.assertAlmostEqual(again.Shininess, 0.25)
+        self.assertAlmostEqual(again.Transparency, 0.2)
+        # The viewport reads opacity from the colour alpha.
+        self.assertAlmostEqual(again.DiffuseColor[3], 0.8)
+        self.assertAlmostEqual(self.obj.ViewObject.ShapeColor[3], 0.8)
+
+    def test_every_material_field_round_trips_through_shape_material(self):
+        material = self.obj.ViewObject.ShapeMaterial
+        material.DiffuseColor = (0.5, 0.4, 0.3, 1.0)
+        material.AmbientColor = (0.1, 0.2, 0.3, 1.0)
+        material.SpecularColor = (0.4, 0.5, 0.6, 1.0)
+        material.EmissiveColor = (0.7, 0.1, 0.0, 1.0)
+        material.Shininess = 0.25
+        material.Transparency = 0.2
+
+        again = self.obj.ViewObject.ShapeMaterial
+        self.assertEqual(again.DiffuseColor[:3], (0.5, 0.4, 0.3))
+        self.assertEqual(again.AmbientColor, (0.1, 0.2, 0.3, 1.0))
+        self.assertEqual(again.SpecularColor, (0.4, 0.5, 0.6, 1.0))
+        self.assertEqual(again.EmissiveColor, (0.7, 0.1, 0.0, 1.0))
+        self.assertAlmostEqual(again.Shininess, 0.25)
+        self.assertAlmostEqual(again.Transparency, 0.2)
+        self.assertAlmostEqual(again.DiffuseColor[3], 0.8)
+
     def test_material_list_assignment_keeps_diffuse_and_transparency(self):
         first = FreeCAD.Material()
         first.DiffuseColor = (0.1, 0.2, 0.3)
@@ -268,6 +308,52 @@ class SupportPropertyTests(unittest.TestCase):
     def test_missing_support_is_a_safe_getattr_default(self):
         # `visible_shapes` in SimpleCAD's operations.py reads it this way.
         self.assertIsNone(getattr(self.profile, "SC_Support", None))
+
+    def test_adding_a_dynamic_property_is_undoable(self):
+        self.doc.openTransaction("AddSupport")
+        self.profile.addProperty(
+            "App::PropertyLink", "SC_Support", "SimpleCAD", "Solid used by Push/Pull"
+        )
+        self.profile.SC_Support = self.body
+        self.doc.commitTransaction()
+        self.assertIn("SC_Support", self.profile.PropertiesList)
+
+        self.assertTrue(self.doc.undo())
+        self.assertNotIn("SC_Support", self.profile.PropertiesList)
+        self.assertIsNone(getattr(self.profile, "SC_Support", None))
+
+        self.assertTrue(self.doc.redo())
+        self.assertIn("SC_Support", self.profile.PropertiesList)
+        self.assertIs(self.profile.SC_Support, self.body)
+        self.assertEqual(
+            self.profile.getTypeIdOfProperty("SC_Support"), "App::PropertyLink"
+        )
+
+    def test_removing_a_dynamic_property_is_undoable(self):
+        # SimpleCAD's `transform` removes `SC_Support` inside a transaction and
+        # `test_moving_profile_detaches_support` undoes it.
+        self.profile.addProperty(
+            "App::PropertyLink", "SC_Support", "SimpleCAD", "Solid used by Push/Pull"
+        )
+        self.profile.SC_Support = self.body
+        self.profile.setEditorMode("SC_Support", 1)  # ReadOnly
+
+        self.doc.openTransaction("Move")
+        self.profile.removeProperty("SC_Support")
+        self.doc.commitTransaction()
+        self.assertNotIn("SC_Support", self.profile.PropertiesList)
+
+        self.assertTrue(self.doc.undo())
+        self.assertIn("SC_Support", self.profile.PropertiesList)
+        self.assertIs(self.profile.SC_Support, self.body)
+        # Type and status (the dynamic-kind plus the editor mode) come back too.
+        self.assertEqual(
+            self.profile.getTypeIdOfProperty("SC_Support"), "App::PropertyLink"
+        )
+        self.assertIn("ReadOnly", self.profile.getTypeOfProperty("SC_Support"))
+
+        self.assertTrue(self.doc.redo())
+        self.assertNotIn("SC_Support", self.profile.PropertiesList)
 
 
 if __name__ == "__main__":

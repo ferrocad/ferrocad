@@ -6331,24 +6331,14 @@ struct PyMaterial {
     emissive: [f64; 4],
     shininess: f64,
     /// Upstream stores transparency separately from `DiffuseColor`; its alpha and
-    /// `Transparency` are independent values. The headless view state keeps only
-    /// one opacity per appearance slot, in the colour alpha, so an owned handle
-    /// derives this from that alpha (and writes it back the same way).
+    /// `Transparency` are independent values on a plain `App.Material`. A view
+    /// state slot keeps the viewport's `alpha = 1 - Transparency` encoding, so an
+    /// owned handle derives this from that alpha (and writes it back the same way).
     transparency: f64,
     /// When this handle came from a `ViewObject`, changes are written back to it
     /// (`ShapeAppearance[i].DiffuseColor = ...`). A plain `App.Material` has none.
     owner: Option<MaterialOwner>,
 }
-
-/// `App::Material()`'s defaults, from upstream `App::Material::setType(DEFAULT)`.
-///
-/// The colour alpha is opacity (`1.0` fully opaque); `Material.Transparency` is a
-/// separate field (see the view-state note on `PyMaterial::transparency`).
-const DEFAULT_DIFFUSE: [f64; 4] = [0.8, 0.8, 0.9, 1.0];
-const DEFAULT_AMBIENT: [f64; 4] = [0.3333, 0.3333, 0.3333, 1.0];
-const DEFAULT_SPECULAR: [f64; 4] = [0.5333, 0.5333, 0.5333, 1.0];
-const DEFAULT_EMISSIVE: [f64; 4] = [0.0, 0.0, 0.0, 1.0];
-const DEFAULT_SHININESS: f64 = 0.9;
 
 fn color_tuple(color: [f64; 4]) -> (f64, f64, f64, f64) {
     (color[0], color[1], color[2], color[3])
@@ -6372,31 +6362,48 @@ struct MaterialOwner {
 }
 
 impl PyMaterial {
-    /// A handle on `color` that writes back into `object`'s view state.
+    /// A handle on one of `object`'s view-state material slots.
     ///
-    /// The view state stores a colour (and its alpha), not the material's other
-    /// properties, so an owned handle starts the remaining properties at
-    /// [`PyMaterial::new`]'s defaults. Storing the full material in `ViewState` is
-    /// a hand-off; see the App-facade report.
-    fn owned(color: [f64; 4], inner: Arc<Mutex<CoreDocument>>, id: ObjectId, slot: MaterialSlot) -> Self {
+    /// The slot stores the whole material (all six fields), so every field a
+    /// handle is given here round-trips instead of resetting to a default.
+    fn owned(
+        material: ferrocad_core::Material,
+        inner: Arc<Mutex<CoreDocument>>,
+        id: ObjectId,
+        slot: MaterialSlot,
+    ) -> Self {
         Self {
-            diffuse: color,
-            ambient: DEFAULT_AMBIENT,
-            specular: DEFAULT_SPECULAR,
-            emissive: DEFAULT_EMISSIVE,
-            shininess: DEFAULT_SHININESS,
-            // The view state stores opacity in the alpha channel.
-            transparency: 1.0 - color[3],
+            // The slot's transparency already determines the alpha.
+            diffuse: material.color(),
+            ambient: material.ambient,
+            specular: material.specular,
+            emissive: material.emissive,
+            shininess: material.shininess,
+            transparency: material.transparency,
             owner: Some(MaterialOwner { inner, id, slot }),
         }
     }
 
-    /// Write the colour (and its alpha) back to the owning view slot.
-    fn write_color_back(&self, color: [f64; 4]) {
+    /// The core material this handle represents, with the viewport's
+    /// `alpha = 1 - Transparency` encoding applied to the diffuse colour.
+    fn to_core(&self) -> ferrocad_core::Material {
+        ferrocad_core::Material::new(
+            self.diffuse,
+            self.ambient,
+            self.specular,
+            self.emissive,
+            self.shininess,
+            self.transparency,
+        )
+    }
+
+    /// Write every field back to the owning view slot.
+    fn write_back(&self) {
         if let Some(owner) = &self.owner {
+            let material = self.to_core();
             update_view_state(&owner.inner, owner.id, |state| match owner.slot {
-                MaterialSlot::Appearance(index) => state.set_appearance_slot(index, color),
-                MaterialSlot::Material => state.material = Some(color),
+                MaterialSlot::Appearance(index) => state.set_appearance_slot(index, material),
+                MaterialSlot::Material => state.material = Some(material),
             });
         }
     }
@@ -6406,13 +6413,14 @@ impl PyMaterial {
 impl PyMaterial {
     #[new]
     fn new() -> Self {
+        let default = ferrocad_core::Material::default();
         Self {
-            diffuse: DEFAULT_DIFFUSE,
-            ambient: DEFAULT_AMBIENT,
-            specular: DEFAULT_SPECULAR,
-            emissive: DEFAULT_EMISSIVE,
-            shininess: DEFAULT_SHININESS,
-            transparency: 0.0,
+            diffuse: default.diffuse,
+            ambient: default.ambient,
+            specular: default.specular,
+            emissive: default.emissive,
+            shininess: default.shininess,
+            transparency: default.transparency,
             owner: None,
         }
     }
@@ -6426,12 +6434,12 @@ impl PyMaterial {
     fn set_DiffuseColor(&mut self, value: &Bound<'_, PyAny>) -> PyResult<()> {
         let color = py_to_color(value)?;
         self.diffuse = color;
-        // A colour change is not a transparency change (upstream PR 11866): only
-        // the colour slot moves. An owned handle lives in a view state that keeps
+        // A colour change is not a transparency change on a plain material
+        // (upstream PR 11866). An owned handle lives in a view state that keeps
         // opacity in the alpha channel, so mirror that back into `Transparency`.
         if self.owner.is_some() {
             self.transparency = 1.0 - color[3];
-            self.write_color_back(color);
+            self.write_back();
         }
         Ok(())
     }
@@ -6444,6 +6452,7 @@ impl PyMaterial {
     #[setter]
     fn set_AmbientColor(&mut self, value: &Bound<'_, PyAny>) -> PyResult<()> {
         self.ambient = py_to_color(value)?;
+        self.write_back();
         Ok(())
     }
 
@@ -6455,6 +6464,7 @@ impl PyMaterial {
     #[setter]
     fn set_SpecularColor(&mut self, value: &Bound<'_, PyAny>) -> PyResult<()> {
         self.specular = py_to_color(value)?;
+        self.write_back();
         Ok(())
     }
 
@@ -6466,6 +6476,7 @@ impl PyMaterial {
     #[setter]
     fn set_EmissiveColor(&mut self, value: &Bound<'_, PyAny>) -> PyResult<()> {
         self.emissive = py_to_color(value)?;
+        self.write_back();
         Ok(())
     }
 
@@ -6478,14 +6489,15 @@ impl PyMaterial {
     #[setter]
     fn set_Shininess(&mut self, value: f64) {
         self.shininess = value;
+        self.write_back();
     }
 
     /// The material's transparency in `[0, 1]` (`Material.Transparency`).
     ///
-    /// Upstream keeps this independent of `DiffuseColor`'s alpha: writing one does
-    /// not change the other. The view state still stores one opacity per slot in
-    /// the colour alpha, so an owned handle converts between the two on the way in
-    /// and out.
+    /// Upstream keeps this independent of `DiffuseColor`'s alpha on a plain
+    /// material: writing one does not change the other. A view state slot stores
+    /// the viewport encoding (`alpha = 1 - Transparency`), so an owned handle
+    /// converts between the two on the way in and out.
     #[getter]
     fn Transparency(&self) -> f64 {
         self.transparency
@@ -6500,9 +6512,8 @@ impl PyMaterial {
         }
         self.transparency = value;
         if self.owner.is_some() {
-            let mut color = self.diffuse;
-            color[3] = 1.0 - value;
-            self.write_color_back(color);
+            self.diffuse[3] = 1.0 - value;
+            self.write_back();
         }
         Ok(())
     }
@@ -6667,6 +6678,29 @@ fn py_to_material_color(value: &Bound<'_, PyAny>) -> PyResult<[f64; 4]> {
     py_to_color(value)
 }
 
+/// Coerce a `Material` (all six fields) or a colour into a view-state material.
+fn py_to_material(value: &Bound<'_, PyAny>) -> PyResult<ferrocad_core::Material> {
+    if let Ok(material) = value.extract::<PyRef<'_, PyMaterial>>() {
+        return Ok(material.to_core());
+    }
+    Ok(ferrocad_core::Material::from_color(py_to_color(value)?))
+}
+
+/// Coerce a list of materials (or colours); a single material becomes a 1-list.
+fn py_to_view_materials(value: &Bound<'_, PyAny>) -> PyResult<Vec<ferrocad_core::Material>> {
+    if let Ok(material) = value.extract::<PyRef<'_, PyMaterial>>() {
+        return Ok(vec![material.to_core()]);
+    }
+    let iterator = value
+        .try_iter()
+        .map_err(|_| PyTypeError::new_err("expected a list of materials or colours"))?;
+    let mut materials = Vec::new();
+    for item in iterator {
+        materials.push(py_to_material(&item?)?);
+    }
+    Ok(materials)
+}
+
 /// Coerce a list of materials (or colours); a single material becomes a 1-list.
 fn py_to_view_colors(value: &Bound<'_, PyAny>) -> PyResult<Vec<[f64; 4]>> {
     let material_color = |material: &PyMaterial| {
@@ -6826,21 +6860,22 @@ impl PyViewObject {
         Ok(())
     }
 
-    /// `ShapeAppearance`: the shape's material list. Each handle writes back, so
-    /// `ShapeAppearance[0].DiffuseColor = ...` changes the shape colour without
-    /// touching the transparency.
+    /// `ShapeAppearance`: the shape's material list. Each handle writes every
+    /// material field back, so `ShapeAppearance[0].DiffuseColor = ...` changes the
+    /// shape colour without touching the view transparency, and the other five
+    /// fields persist too.
     #[getter]
     fn ShapeAppearance(&self, py: Python<'_>) -> PyResult<Vec<Py<PyMaterial>>> {
         self.ensure_state(py)?;
-        let colors = self.with_state(|state| state.appearance())?;
-        colors
+        let materials = self.with_state(|state| state.appearance())?;
+        materials
             .into_iter()
             .enumerate()
-            .map(|(index, color)| {
+            .map(|(index, material)| {
                 Py::new(
                     py,
                     PyMaterial::owned(
-                        color,
+                        material,
                         Arc::clone(&self.inner),
                         self.id,
                         MaterialSlot::Appearance(index),
@@ -6852,20 +6887,20 @@ impl PyViewObject {
 
     #[setter]
     fn set_ShapeAppearance(&self, py: Python<'_>, value: &Bound<'_, PyAny>) -> PyResult<()> {
-        let colors = py_to_view_colors(value)?;
+        let materials = py_to_view_materials(value)?;
         self.ensure_state(py)?;
-        self.update(|state| state.set_appearance(colors));
+        self.update(|state| state.set_appearance(materials));
         Ok(())
     }
 
     #[getter]
     fn ShapeMaterial(&self, py: Python<'_>) -> PyResult<Py<PyMaterial>> {
         self.ensure_state(py)?;
-        let color = self.with_state(|state| state.material())?;
+        let material = self.with_state(|state| state.material())?;
         Py::new(
             py,
             PyMaterial::owned(
-                color,
+                material,
                 Arc::clone(&self.inner),
                 self.id,
                 MaterialSlot::Material,
@@ -6875,9 +6910,9 @@ impl PyViewObject {
 
     #[setter]
     fn set_ShapeMaterial(&self, py: Python<'_>, value: &Bound<'_, PyAny>) -> PyResult<()> {
-        let color = py_to_material_color(value)?;
+        let material = py_to_material(value)?;
         self.ensure_state(py)?;
-        self.update(|state| state.material = Some(color));
+        self.update(|state| state.material = Some(material));
         Ok(())
     }
 

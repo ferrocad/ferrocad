@@ -42,11 +42,30 @@ pub struct PropertyChange {
     pub new: Property,
 }
 
+/// The container entry of a dynamic property: its value, raw status mask
+/// (including the internal `DYNAMIC` bit) and its `addProperty` metadata.
+#[derive(Debug, Clone)]
+pub struct PropertySlot {
+    pub value: Property,
+    pub status: u32,
+    pub group: String,
+    pub doc: String,
+}
+
 /// One reversible edit inside a transaction.
 #[derive(Debug, Clone)]
 pub enum Change {
     /// A property assignment.
     Property(PropertyChange),
+    /// A dynamic property slot was added (`addProperty`), removed
+    /// (`removeProperty`) or replaced. `old`/`new` are the slot before and after
+    /// the edit; `None` on either side means "no property by that name".
+    PropertySlot {
+        object: ObjectId,
+        name: String,
+        old: Option<PropertySlot>,
+        new: Option<PropertySlot>,
+    },
     /// An object was added; `saved` is its full state (for redo / undo-removal).
     AddObject { id: ObjectId, saved: SavedObject },
     /// An object was removed; `saved` is its full state (for undo restore).
@@ -385,6 +404,9 @@ impl Document {
             Change::Property(c) => {
                 self.restore_property_value(c.object, &c.name, Some(&c.new));
             }
+            Change::PropertySlot {
+                object, name, new, ..
+            } => self.restore_property_slot(*object, name, new.as_ref()),
             Change::AddObject { id, saved } => self.insert_saved_object(*id, saved),
             Change::RemoveObject { id, .. } => {
                 self.remove_object_raw(*id, true);
@@ -408,6 +430,9 @@ impl Document {
     fn revert(&mut self, change: &Change) {
         match change {
             Change::Property(c) => self.restore_property_value(c.object, &c.name, c.old.as_ref()),
+            Change::PropertySlot {
+                object, name, old, ..
+            } => self.restore_property_slot(*object, name, old.as_ref()),
             Change::AddObject { id, .. } => {
                 self.remove_object_raw(*id, false);
             }
@@ -428,6 +453,31 @@ impl Document {
             },
             Change::RemoveExpression { object, prop, old } => {
                 self.set_expression_raw(*object, prop, old);
+            }
+        }
+    }
+
+    /// Restore a dynamic property's container entry (value, raw status mask and
+    /// `addProperty` metadata), or remove it when `slot` is `None`.
+    ///
+    /// Like [`Document::add_property`], this only touches the property container:
+    /// adding or removing a property does not mark the object for recompute.
+    fn restore_property_slot(&mut self, object: ObjectId, name: &str, slot: Option<&PropertySlot>) {
+        let Some(obj) = self.objects.get_mut(&object) else {
+            return;
+        };
+        match slot {
+            Some(slot) => {
+                obj.properties.set_with_status(
+                    name.to_string(),
+                    slot.value.clone(),
+                    slot.status,
+                );
+                obj.properties
+                    .set_meta(name.to_string(), &slot.group, &slot.doc);
+            }
+            None => {
+                obj.properties.remove(name);
             }
         }
     }

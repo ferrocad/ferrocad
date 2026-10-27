@@ -1,7 +1,7 @@
 //! The transaction engine: abort/commit, undo/redo, names, counts, booking ids,
 //! and reversible object/expression changes.
 
-use crate::{Document, Property};
+use crate::{prop_status, Document, Property};
 
 #[test]
 fn transactions_abort_undo_redo() {
@@ -165,6 +165,178 @@ fn transaction_booking_and_available_steps() {
     // Unknown ids report 0.
     assert_eq!(doc.available_undos(9999), 0);
     assert_eq!(doc.available_redos(9999), 0);
+}
+
+#[test]
+fn undo_added_property_removes_it_and_redo_restores_its_slot() {
+    let mut doc = Document::new();
+    let o = doc.add_object("Obj", "App::FeaturePython");
+    doc.add_property(o, "Other", Property::Integer(2), prop_status::NONE, "", "")
+        .unwrap();
+
+    doc.open_transaction_named("AddProperty");
+    doc.add_property(
+        o,
+        "SC_Support",
+        Property::Link("Base".into()),
+        prop_status::HIDDEN,
+        "SimpleCAD",
+        "Solid used by Push/Pull",
+    )
+    .unwrap();
+    doc.commit_transaction();
+    assert!(doc.object(o).unwrap().properties.get("SC_Support").is_some());
+
+    assert!(doc.undo());
+    assert!(doc.object(o).unwrap().properties.get("SC_Support").is_none());
+    // The rest of the property set is untouched.
+    assert_eq!(
+        doc.object(o).unwrap().properties.get("Other"),
+        Some(&Property::Integer(2))
+    );
+
+    assert!(doc.redo());
+    let obj = doc.object(o).unwrap();
+    assert_eq!(
+        obj.properties.get("SC_Support"),
+        Some(&Property::Link("Base".into()))
+    );
+    // Status and metadata come back exactly as `addProperty` recorded them.
+    assert_eq!(obj.properties.status("SC_Support"), Some(prop_status::HIDDEN));
+    assert_eq!(
+        obj.properties.raw_status("SC_Support"),
+        Some(prop_status::HIDDEN | prop_status::DYNAMIC)
+    );
+    assert_eq!(obj.properties.group("SC_Support"), Some("SimpleCAD"));
+    assert_eq!(
+        obj.properties.doc("SC_Support"),
+        Some("Solid used by Push/Pull")
+    );
+}
+
+#[test]
+fn undo_removed_property_restores_value_status_and_meta() {
+    let mut doc = Document::new();
+    let o = doc.add_object("Obj", "App::FeaturePython");
+    doc.add_property(
+        o,
+        "SC_Support",
+        Property::Link("Base".into()),
+        prop_status::HIDDEN,
+        "SimpleCAD",
+        "Solid used by Push/Pull",
+    )
+    .unwrap();
+
+    doc.open_transaction_named("RemoveProperty");
+    assert!(doc.remove_property(o, "SC_Support"));
+    doc.commit_transaction();
+    assert!(doc.object(o).unwrap().properties.get("SC_Support").is_none());
+
+    assert!(doc.undo());
+    let obj = doc.object(o).unwrap();
+    let property = obj.properties.get("SC_Support").expect("property restored");
+    assert_eq!(property, &Property::Link("Base".into()));
+    assert_eq!(property.type_name(), "App::PropertyLink");
+    assert_eq!(obj.properties.status("SC_Support"), Some(prop_status::HIDDEN));
+    assert_eq!(
+        obj.properties.raw_status("SC_Support"),
+        Some(prop_status::HIDDEN | prop_status::DYNAMIC)
+    );
+    assert_eq!(obj.properties.group("SC_Support"), Some("SimpleCAD"));
+    assert_eq!(
+        obj.properties.doc("SC_Support"),
+        Some("Solid used by Push/Pull")
+    );
+
+    // Redo removes it again.
+    assert!(doc.redo());
+    assert!(doc.object(o).unwrap().properties.get("SC_Support").is_none());
+}
+
+#[test]
+fn aborting_a_property_removal_and_an_addition_are_reversible() {
+    let mut doc = Document::new();
+    let o = doc.add_object("Obj", "App::FeaturePython");
+    doc.add_property(
+        o,
+        "Kept",
+        Property::String("v".into()),
+        prop_status::NONE,
+        "",
+        "",
+    )
+    .unwrap();
+
+    // Abort of an addition drops it again.
+    doc.open_transaction();
+    doc.add_property(
+        o,
+        "Temp",
+        Property::Integer(1),
+        prop_status::NONE,
+        "",
+        "",
+    )
+    .unwrap();
+    assert!(doc.abort_transaction());
+    assert!(doc.object(o).unwrap().properties.get("Temp").is_none());
+
+    // Abort of a removal puts it back, value and status included.
+    doc.open_transaction();
+    assert!(doc.remove_property(o, "Kept"));
+    assert!(doc.abort_transaction());
+    assert_eq!(
+        doc.object(o).unwrap().properties.get("Kept"),
+        Some(&Property::String("v".into()))
+    );
+    assert_eq!(
+        doc.object(o).unwrap().properties.raw_status("Kept"),
+        Some(prop_status::DYNAMIC)
+    );
+}
+
+#[test]
+fn add_property_replacing_a_name_restores_the_old_slot_on_undo() {
+    let mut doc = Document::new();
+    let o = doc.add_object("Obj", "App::FeaturePython");
+    doc.add_property(
+        o,
+        "Thing",
+        Property::Integer(1),
+        prop_status::NONE,
+        "Old",
+        "old",
+    )
+    .unwrap();
+
+    doc.open_transaction_named("ReplaceProperty");
+    doc.add_property(
+        o,
+        "Thing",
+        Property::String("new".into()),
+        prop_status::HIDDEN,
+        "New",
+        "new",
+    )
+    .unwrap();
+    doc.commit_transaction();
+    assert_eq!(
+        doc.object(o).unwrap().properties.get("Thing"),
+        Some(&Property::String("new".into()))
+    );
+
+    assert!(doc.undo());
+    let obj = doc.object(o).unwrap();
+    assert_eq!(obj.properties.get("Thing"), Some(&Property::Integer(1)));
+    assert_eq!(obj.properties.status("Thing"), Some(prop_status::NONE));
+    assert_eq!(obj.properties.group("Thing"), Some("Old"));
+
+    assert!(doc.redo());
+    assert_eq!(
+        doc.object(o).unwrap().properties.get("Thing"),
+        Some(&Property::String("new".into()))
+    );
 }
 
 #[test]

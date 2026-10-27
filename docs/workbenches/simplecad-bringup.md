@@ -370,7 +370,7 @@ Unit tests alone make the priority clear: `makeBox` 357, `makeCylinder` 153,
 This table is the **2026-10-21 audit snapshot** that motivated S2–S5. It is kept as
 provenance, not as a status report: most of the rows below have since been closed, and
 the current state is the measured baseline in §7 (2026-10-27: 88/88 modules load,
-**837 passed / 73 failed / 164 errored / 2 skipped**, with the remaining errors bucketed
+**896 passed / 73 failed / 98 errored / 2 skipped**, with the remaining errors bucketed
 there). Read the `Status` column as history.
 
 Status vocabulary: **exists** (Python and kernel), **partial** (kernel and/or Python
@@ -1053,6 +1053,30 @@ target**; the minimal `Mesh`/`MeshPart` facade stays so the modules load. Measur
 kernel-regime gaps, not a missing mesh facade. Keep the shims counted; do not gate S3 on
 them.
 
+**Sixth round (kernel regimes, S4 remainder, App facade), 2026-10-27.** The same 88
+modules now report **896 passed / 73 failed / 98 errored / 2 skipped**, still with 0 load
+errors and no aborts. The three error clusters the fifth round named are closed
+(`BSplineCurve2d.toShape`, the planar-only `normalAt`, `curveOnSurface`/`discretize`),
+as are the `Material.AmbientColor` and `Vector2d` operator gaps. Per family:
+
+| Family | Fifth round | Sixth round |
+| --- | --- | --- |
+| Draw/pull | 98 p / 16 f / 12 e (77.8%) | **105 / 16 / 5** (83.3%) |
+| Surface tools | 98 / 20 / 74 (50.5%) | **131 / 17 / 37** (70.1%) |
+| Mesh tools | 117 / 2 / 17 (86.0%) | 117 / 2 / 17 (86.0%) |
+| Booleans/edits | 66 / 13 / 17 (68.8%) | **69 / 13 / 14** (71.9%) |
+| Snapping/UI | 48 / 0 / 0 (100%) | 48 / 0 / 0 (100%) |
+| S2 named acceptance | 94 / 12 / 6 (83.9%) | **97 / 12 / 3** (86.6%) |
+| S3 circle/arc/sphere | 41 / 1 / 3 (91.1%) | **44 / 1 / 0** (97.8%) |
+
+What is left is **no longer API breadth**: 16 records are “the drawing leaves the
+surface”, 13 “planar reconstruction could not preserve the complete surface boundary”,
+10 “this mesh could not form valid CAD geometry”, 7 + 4 stud fitting, 5 seam accuracy,
+4 self-intersecting cut outlines and 3 “the operation would create invalid geometry” —
+SimpleCAD's own validation rejecting our kernel's output on hard regimes. The rest are
+deliberate absences (`flatmesh` 6, `PartDesign` 3, BIM in Draft), the PySide
+`QApplication` stub (5), and 3 `common` calls returning `None`.
+
 ### S2 — The `Part` planar/topology slice
 
 S2.1 (B-Rep construction and queries):
@@ -1293,11 +1317,11 @@ kernel is ready.
 
 1. **The S1 image and the S2/S3 baseline both exist.** The Part + Mesh image loads all
    88 modules. The latest S1 baseline (sixth round) is **504 passed, 63 failed, 507
-   errored, 2 skipped**; the 2026-10-27 fifth-round run is **837 / 73 / 164 / 2 with no
+   errored, 2 skipped**; the 2026-10-27 sixth-round run is **896 / 73 / 98 / 2 with no
    aborts, in a single 88-module process**. The S2/S3 targets are replaced by the
-   measured baseline in §7; the remaining work is the `BSplineCurve2d.toShape`
-   conversion (35), the non-planar normal/surface regime (11 direct), and the App
-   facade's `Material` colours (16).
+   measured baseline in §7; what remains is SimpleCAD's own geometry validation on hard
+   kernel regimes (planar reconstruction, surface drawing, mesh-to-CAD validity, stud
+   fitting, seam accuracy) rather than missing API.
 2. **Network was unavailable.** SimpleCAD could not be re-cloned, updated, or
    inspected beyond the local `--depth 1` checkout; no dependency was installed.
 3. **Release cadence is not measurable.** The SimpleCAD clone has one commit. The

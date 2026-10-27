@@ -19,7 +19,7 @@ Usage::
     python3 tools/conformance.py --simplecad                            # run SimpleCAD unit tests
 
 The one-time setup (the sparse `freecad-upstream` checkout, the extension build) and
-the current baseline are in ``docs/workbenches/conformance.md``.
+the current baseline are in ``docs/developer/workbenches/conformance.md``.
 
 The `--part` group needs an image that links the `Part` module (it imports `Part`
 and `FreeCAD` and they must share one core), which the standalone `ferrocad.abi3.so`
@@ -102,7 +102,7 @@ DRAFT_FILES = [
     # App+Part image, as `test_import` already did). `test_modification` runs
     # 31/0/2 but stays out: its two remaining errors need `Sketcher` and
     # `TechDraw::DrawPage`, which this image does not ship. The import modules
-    # are green where they can be: see docs/workbenches/draft-tools.md.
+    # are green where they can be: see docs/developer/workbenches/draft-tools.md.
     "test_creation",
     "test_array",
     "test_dwg",

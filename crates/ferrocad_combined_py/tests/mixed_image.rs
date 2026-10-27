@@ -6,7 +6,7 @@
 //! host-interpreter path used by `ferrocad_combined.abi3.so`; in the same process
 //! it must refuse to publish a second core over the built-ins.
 //!
-//! It needs OCCT (see `docs/architecture/occt-bundling.md`).
+//! It needs OCCT (see `docs/developer/architecture/occt-bundling.md`).
 
 use std::path::PathBuf;
 use std::sync::Mutex;

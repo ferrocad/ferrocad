@@ -759,7 +759,7 @@ def commands() -> str:
     """The registered workbench commands, with resources and live state, as JSON.
 
     A command is `FreeCADGui`-registered by the workbench (see
-    ``docs/workbenches/actions-and-tools.md``); this script only marshals the list, so the
+    ``docs/developer/workbenches/actions-and-tools.md``); this script only marshals the list, so the
     shell names no workbench either.
 
     FerroCAD extends ``GetResources()`` with three optional keys the upstream facade
@@ -934,7 +934,7 @@ def set_selection(pairs_json: str) -> str:
     The payload is ``[{"object": name, "elements": [...]}, ...]``; the facade
     snapshot takes ``(name, elements)`` pairs, so the two are translated here. The
     shell owns the selection; this push is what makes it visible to a command's
-    ``IsActive`` and ``Activated`` (see ``docs/workbenches/actions-and-tools.md`` §5).
+    ``IsActive`` and ``Activated`` (see ``docs/developer/workbenches/actions-and-tools.md`` §5).
     """
     items = json.loads(pairs_json)
     FreeCADGui.Selection._set(

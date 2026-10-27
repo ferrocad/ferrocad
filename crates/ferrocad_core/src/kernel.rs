@@ -16,7 +16,7 @@
 //! name. Register through [`kernel()`] (or the existing free functions, which reach
 //! the same state). Workbench *singletons* such as the Part geometry backend are a
 //! different scope and stay in their crate; see
-//! `docs/architecture/kernel-state-sharing.md` §2.
+//! `docs/developer/architecture/kernel-state-sharing.md` §2.
 //!
 //! ```
 //! use ferrocad_core::{application, kernel};

@@ -14,7 +14,7 @@ distributable artifact:
 
 The macOS packager remains in the tree but is not run by `release.yml` while the
 pinned GPUI fork does not build on macOS (see
-`docs/architecture/edition-publishing.md`).
+`docs/developer/architecture/edition-publishing.md`).
 
 Workbench scripts are fetched first with `cargo xtask mods` (a pinned upstream
 FreeCAD revision, default `Draft`) into `mods/`; the packagers ship them loose.
@@ -88,7 +88,7 @@ embedded interpreter finds `python/` and `mods/`. When an OCCT closure is staged
   (`STATUS_ENTRYPOINT_NOT_FOUND`). The app `.exe` gets the manifest, but a `cargo
   test` harness is a separate binary, so the embedding crate should use
   `embed_resource::compile_for_everything` to reach tests as well. See
-  `docs/architecture/distribution.md` §6.
+  `docs/developer/architecture/distribution.md` §6.
 - **`--check-init` verifies a packaged layout without a display.** The app boots
   its embedded interpreter, native dependencies, built-in modules, facade and
   workbenches, then exits (no window, no GPU). `xtask bundle --check-init` runs it

@@ -10,7 +10,7 @@
 //!   recompute, and undo moves it back.
 //!
 //! Same boot as the other Part tests: `ferrocad` + `Part` as built-ins, one core,
-//! one OCCT backend. Needs OCCT (see `docs/architecture/occt-bundling.md`).
+//! one OCCT backend. Needs OCCT (see `docs/developer/architecture/occt-bundling.md`).
 
 use std::ffi::CString;
 

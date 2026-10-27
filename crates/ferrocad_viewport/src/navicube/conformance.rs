@@ -1,4 +1,4 @@
-//! Cross-producer conformance (`docs/interaction/navicube-spec.md` §11): the legacy inventor producer
+//! Cross-producer conformance (`docs/developer/interaction/navicube-spec.md` §11): the legacy inventor producer
 //! and the modern stage producer must render the same cube from the same
 //! [`NavicubeVisual`] — same ids, topology, roles, geometry and transforms — and rebuild
 //! stably.

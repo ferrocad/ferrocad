@@ -7,8 +7,8 @@
 //!
 //! Core's built-in types keep working through [`crate::typeregistry`] as the fallback;
 //! a module registers its type here and both construction defaults and recompute
-//! behaviour come from the registered [`ObjectType`]. See `docs/architecture/occt-integration.md`
-//! §5 (the document-object SPI) and `docs/architecture/property-types.md`.
+//! behaviour come from the registered [`ObjectType`]. See `docs/developer/architecture/occt-integration.md`
+//! §5 (the document-object SPI) and `docs/developer/architecture/property-types.md`.
 
 use std::collections::BTreeMap;
 use std::fmt;

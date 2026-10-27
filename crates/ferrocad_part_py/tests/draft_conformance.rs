@@ -15,7 +15,7 @@
 //!   cargo test -p ferrocad_part_py --test draft_conformance -- --nocapture
 //! ```
 //!
-//! It needs OCCT (see `docs/architecture/occt-bundling.md`).
+//! It needs OCCT (see `docs/developer/architecture/occt-bundling.md`).
 
 use std::ffi::CString;
 

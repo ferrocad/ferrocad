@@ -1668,7 +1668,7 @@ fn editing_a_settings_row_updates_the_properties(cx: &mut TestAppContext) {
 /// bar. This renders the same `title_bar` element the frame composes, with the
 /// shell's real menu, so the popover and its rows can be clicked. The frame's own
 /// client-decoration branch stays visual-only (see
-/// `docs/tasks/toolbar-chrome.md` §10).
+/// `docs/project/record/tasks/toolbar-chrome.md` §10).
 #[gpui::test]
 fn the_app_menu_opens_dev_tools(cx: &mut TestAppContext) {
     let _guard = crate::PYTHON_LOCK.lock().unwrap_or_else(|e| e.into_inner());

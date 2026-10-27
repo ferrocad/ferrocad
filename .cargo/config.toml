@@ -14,7 +14,7 @@ rustflags = [
 
 [env]
 # The local OCCT prefix fetched by CI (and by the recipe in
-# docs/architecture/occt-bundling.md) lives at `.occt/prefix`. `relative = true`
+# docs/developer/architecture/occt-bundling.md) lives at `.occt/prefix`. `relative = true`
 # resolves these paths against the workspace root, so they work from any working
 # directory. A value already set in the environment wins, which keeps a system
 # OCCT or a custom prefix easy to use.

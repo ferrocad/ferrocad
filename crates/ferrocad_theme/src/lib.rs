@@ -1,4 +1,4 @@
-//! The visual-language token table (V0 of `docs/interaction/visual-language.md`).
+//! The visual-language token table (V0 of `docs/developer/interaction/visual-language.md`).
 //!
 //! Two representations, one namesake:
 //!
@@ -7,7 +7,7 @@
 //!
 //! The navigation cube's palette is the third table, [`navicube`]: moved here as-is,
 //! mostly sRGB-normalised `[f32; 4]`, not yet normalised onto either representation
-//! (`docs/interaction/visual-language.md` §1.6, V0b).
+//! (`docs/developer/interaction/visual-language.md` §1.6, V0b).
 //!
 //! A token is a constant here, never a literal at a call site. The tests keep the
 //! two representations in step, and [`linear_from_srgb_hex`] /

@@ -5,7 +5,7 @@
 //! `Edge.Curve` for the upstream class, with the edge's bounds read back from
 //! the kernel. Same boot as the other Part tests (`ferrocad` + `Part` as
 //! built-ins, one OCCT backend); it needs OCCT (see
-//! `docs/architecture/occt-bundling.md`).
+//! `docs/developer/architecture/occt-bundling.md`).
 
 use pyo3::prelude::*;
 use pyo3::types::{PyList, PyModule};

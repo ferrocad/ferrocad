@@ -12,7 +12,7 @@ WGSL skin the shell draws the same handles with. The **Gizmo (shader)** command
 This mod imports `FerroCAD`/`FerroCADGui`, so it is **FerroCAD-only**: it is not
 usable as-is on upstream FreeCAD. The imports are guarded, and the command
 reports a clear status instead of crashing when that API is absent. See
-[`docs/architecture/api-namespaces.md`](../../docs/architecture/api-namespaces.md).
+[`docs/developer/architecture/api-namespaces.md`](../../docs/developer/architecture/api-namespaces.md).
 
 ## Visual only
 

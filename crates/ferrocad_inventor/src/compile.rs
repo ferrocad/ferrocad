@@ -47,7 +47,7 @@ pub fn compile(scene: &Scene) -> (RenderQueue, Directives) {
 /// cached upload, while identical geometry still hits.
 ///
 /// Semantic nodes (a [`NodeKind::NaviCube`]) emit **no** packet: they are lifted into
-/// the [`Directives`] the viewport consumes (see `docs/viewport/directives.md`). A
+/// the [`Directives`] the viewport consumes (see `docs/developer/viewport/directives.md`). A
 /// [`NodeKind::ShaderProgram`] and its stage/parameter values emit no packet either;
 /// the program binds to the sibling shapes that follow it.
 ///
@@ -458,7 +458,7 @@ fn apply_parameter(
         ShaderParameter::Floats { name, values } => match name.as_str() {
             // The shadow block (`SHADOW_MAX * SHADOW_STRIDE` floats) is part of the
             // fixed ABI but deferred: no document-bounds producer is wired yet
-            // (`docs/workbenches/grid-overlay-plan.md` §3.5). Accept the slot so an upstream tree
+            // (`docs/developer/workbenches/grid-overlay-plan.md` §3.5). Accept the slot so an upstream tree
             // extracts, and do not pretend to apply the data.
             "shadow_data" => {
                 let _ = values;

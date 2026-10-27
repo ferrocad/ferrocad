@@ -12,7 +12,7 @@ This mod imports `FreeCAD`/`FreeCADGui`, `FerroCAD`/`FerroCADGui` and
 `pivy.coin`, so it is **FerroCAD-only**: it is not usable as-is on upstream
 FreeCAD. The FerroCAD imports are guarded, and the command reports a clear status
 instead of crashing when the semantic axis API or the overlay bridge is absent.
-See [`docs/architecture/api-namespaces.md`](../../docs/architecture/api-namespaces.md).
+See [`docs/developer/architecture/api-namespaces.md`](../../docs/developer/architecture/api-namespaces.md).
 
 ## What it is
 

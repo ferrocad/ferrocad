@@ -1,0 +1,406 @@
+# The visual language: tokens, type, strokes and states
+
+Status: design (2026-10-20). Companion to [`axis-origin-grid.md`](axis-origin-grid.md)
+(spatial tokens), [`gizmo-manipulators.md`](gizmo-manipulators.md) §8 (manipulator
+tokens), [`navicube-spec.md`](navicube-spec.md) §5 (theme roles) and
+[`app-shell-vision.md`](../../project/direction/app-shell-vision.md) (chrome).
+
+This note is the **single source of truth for the look**: colour tokens, type scale,
+stroke rules, and the idle → hover → drag state machine. It also records what the code
+already does, because the tokens currently live in four places with three different
+conventions.
+
+---
+
+## 0. Principles
+
+1. **Geometry is the interface.** Chrome recedes; it never masks the model.
+2. **Dielectric, not opaque.** UI layers are frosted glass (`rgba(void, α)`) and thin
+   vector strokes, not opaque rectangles.
+3. **Zero modality.** A control materialises from pointer proximity or a drag and
+   dissolves when idle; nothing is hidden behind a mode switch.
+4. **Numbers never jump.** Every geometric readout is tabular monospace in a fixed
+   pill.
+
+---
+
+## 1. Tokens
+
+Colours are given as **sRGB hex + alpha**, the form a designer or a screenshot picker
+produces. The renderer consumes **linear** RGBA (`Rgba8UnormSrgb` target), and gpui
+consumes packed `0xRRGGBBAA`. A token is authoritative in one place and converted at
+the boundary — see §7.
+
+### 1.1 Canvas
+
+| Token | Value | Today |
+| --- | --- | --- |
+| Canvas void | `#0F1218` | renderer `theme::CANVAS_VOID` (linear); shell `BG = 0x0f1218` ✅ |
+| Canvas void (far) | `#161B22` | `theme::CANVAS_FAR`, the gradient's bottom end ✅ |
+| Panel | `#16181D` | `PANEL` |
+| Panel alt | `#1D2026` | `PANEL_ALT` |
+
+The renderer clears to the canvas token and the shell `BG` matches it. A full-screen
+triangle then paints the vertical `#0F1218 → #161B22` gradient; the
+`the_background_is_the_canvas_gradient` readback asserts both endpoints (V2).
+
+### 1.2 Accents and actions
+
+| Token | sRGB | alpha | Linear (as in code) | Symbol today |
+| --- | --- | --- | --- | --- |
+| Active accent | `#38BDF8` | 1.0 | `[0.040, 0.509, 0.939]` | `gizmo::ACTIVE_COLOR`, `ShapeItem::HIGHLIGHT_COLOR` (selection wire) |
+| Selection tint | `#38BDF8` | 0.12 | accent × 0.12 | `ShapeItem::HIGHLIGHT_TINT` |
+| Hover rim | `#48E5FF` | 1.0 | `[0.065, 0.784, 1.0]` | proposed (state bloom) |
+| Snap aurora | `#38BDF8` | 0.85 | accent × 0.85 | `axis-origin-grid.md` |
+| Inactive structural | `#94A3B8` | 1.0 | `[0.296, 0.366, 0.479]` | `gizmo::INACTIVE_COLOR` |
+| Additive (push-pull) | `#F59E0B` | 1.0 | `[0.913, 0.342, 0.003]` | `gizmo::PUSH_PULL_COLOR` |
+| Subtractive (pocket) | `#EF4444` | 1.0 | `[0.863, 0.058, 0.058]` | `gizmo::SUBTRACT_COLOR` |
+
+The four linear constants are the **reference implementation** of these tokens (see the
+conversion note in §1.7).
+
+### 1.3 Surface glass
+
+| Token | Value | Opaque composite over the void | Meaning |
+| --- | --- | --- | --- |
+| Glass top | `rgba(216, 230, 250, 0.35)` | `#555C67` | upward-facing facets |
+| Glass shade | `rgba(30, 38, 52, 0.42)` | `#151A24` | side / downward facets |
+
+**Constraint.** The opaque scene pipeline is `BlendState::REPLACE` and writes
+depth; only overlay packets blend (`ALPHA_BLENDING`). So these alphas currently do
+nothing on a surface: an entity renders opaque. The staged plan is:
+
+1. **V2a** — ✅ ship the **opaque composites** (last column) as the surface tokens;
+   the look is identical over the void and needs no transparency pass. A bare
+   `ShapeItem` defaults to `GLASS_SHADE`.
+2. **V2b** — ✅ a two-tone material: `dot(normal, up) > 0.5` picks glass-top,
+   otherwise glass-shade, while the existing directional light keeps intra-facet
+   gradation. **The world is Z-up**, so `up` is `(0, 0, 1)` — the same axis the
+   camera's `world_up` and the NaviCube use. Document entities set `GLASS_TOP` as the
+   surface ink and `GLASS_SHADE` as `StateSnapshot::shade`; the fragment shader selects
+   between them.
+3. **V2c** — true translucency needs an explicit ordered/wboit pass; deferred, and not
+   a prerequisite for the look.
+
+The spec's alpha is therefore a **design intent** and the composite is the build target
+until V2c.
+
+**Exception: the selection tint.** The highlight face pass is a `12%` cyan
+`HIGHLIGHT_TINT` over the natural surface, with an opaque `HIGHLIGHT_COLOR` wire on
+top. It asks for test-on/write-off depth, which is not the base opaque pipeline, so
+the wgpu renderer gives it a **blended** scene-triangle variant; no depth write means
+the tint cannot hide the wire drawn after it. This is a targeted blend for one pass,
+not V2c ordered translucency: the body is still an opaque composite.
+
+### 1.4 Edges
+
+| Token | Value | Today |
+| --- | --- | --- |
+| Front edge | `#D6E0F0` @ 0.62 | navicube `EDGE_COLOR = [0.84, 0.88, 0.94, 0.62]` |
+| Occluded edge | `#D6E0F0` @ 0.10 | navicube `EDGE_AWAY = [0.55, 0.60, 0.68, 0.10]` |
+| Entity edge (default) | `#D6E0F0` @ 0.62 | `theme::EDGE_FRONT` ✅ (front wire) |
+| Entity occluded edge | `#D6E0F0` @ 0.10 | `theme::EDGE_OCCLUDED` ✅ (V1 ghost pass) |
+| Entity surface (default) | glass-shade composite | `theme::GLASS_SHADE` ✅ |
+
+The entity defaults are now the tokens. `ferrocad_gpui::display` opts document
+entities into `.with_ghost_edges()`; gizmos, the navicube and transient tools stay
+overlays without a ghost pass. The display provider can still override per object
+(the toy does).
+
+### 1.5 Text and glass chrome
+
+These tokens live in `ferrocad_theme::ui` as packed sRGB — `0xRRGGBB` opaque, passed
+to `rgb()`, and `0xRRGGBBAA` translucent, passed to `rgba()`. The viewport chrome and
+the shell bind the same constants.
+
+| Token | Value | Today |
+| --- | --- | --- |
+| Text | `#D8DBE0` | `ferrocad_theme::ui::FG` (viewport chrome, shell); `TITLE_FG`, `INPUT_FG` still local |
+| Muted | `#8B919A` | `ui::MUTED` (viewport chrome, shell) |
+| Face label | `rgba(235, 242, 252, 0.78)` | navicube `LABEL_COLOR ≈ [0.92, 0.95, 1.0, 0.80]` (`ferrocad_theme::navicube`) |
+| Glass background | `rgba(15, 18, 24, 0.75)` | pill `ui::GLASS` = `#151A24` @ 0.80 — tint and alpha still differ from the token |
+| Glass border | `#FFFFFF14` | pill, chrome `ui::CHROME_LINE` |
+| Dock glass | `#16181D` @ 0.90 | `ui::DOCK_BG` |
+| Dock border | `#FFFFFF` @ 0.12 | `ui::DOCK_BORDER` |
+| Wheel glass | `rgba(15, 18, 24, 0.75)` | `ui::WHEEL_GLASS` |
+| Floating command HUD | `rgba(15, 18, 24, 0.75)` + dock border | `ui::WHEEL_GLASS` + `ui::DOCK_BORDER`; no backdrop |
+| Field glass | `rgba(15, 18, 24, 0.75)` | `TextInput` background (`ui::WHEEL_GLASS`) |
+| Field hairline | `#FFFFFF14` | `TextInput` border at rest (`ui::CHROME_LINE`) |
+| Field focus ring | `#38BDF8` | `ui::ACTIVE_ACCENT` (`TextInput` border while focused) |
+| Axis X token | `#F87171` (coral) | `ui::AXIS_X` (floating HUD label) |
+| Axis Y token | `#4ADE80` | `ui::AXIS_Y` (floating HUD label) |
+| Axis Z token | `#38BDF8` | `ui::AXIS_Z` (floating HUD label) |
+| Hover rim | `#48E5FF` | `ui::HOVER_RIM` (structural wedge) |
+| Additive tone | `#F59E0B` | `ui::PUSH_PULL_COLOR` (push/pull, extrude) |
+| Destructive tone | `#EF4444` | `ui::SUBTRACT_COLOR` (delete, pocket) |
+| Hover tint | `#38BDF8` @ 0.12 | `ui::HIGHLIGHT_TINT` (hovered wedge) |
+| Chrome accent | `#67D7FF` | `ui::CHROME_ACTIVE` (navicube bar, Dev Tools badge) |
+| Chrome active fill | `#1B2B38` @ 0.33 | `ui::CHROME_ACTIVE_BG` (the active projection segment) |
+| Error | `#EF4444` | dialog validation line |
+
+**Modal surface (A3).** An open command dialog is the one **modal** layer, and it is
+not a floating pill: a centred `380 px` panel on `rgba(22, 24, 29, 0.95)` with a
+`#FFFFFF26` border and a `rgba(15, 18, 24, 0.80)` backdrop. The backdrop blocks the
+panes underneath; the panel carries the app text scale (`text_sm` title, `text_xs`
+rows), the muted labels and the accent accept button. Validation errors are the
+subtractive crimson above, inline under the fields. No animation, no drop shadow —
+the contrast step does the layering. The panel does not scroll yet; a long wizard is
+an S6 concern.
+
+The radial menu uses the same language at a different scale: a 0.75 glass torus,
+1 px `CHROME_LINE` hairlines, a hollow deadzone, and a **tone arc** on the inner
+rim (`HOVER_RIM` / `PUSH_PULL_COLOR` / `SUBTRACT_COLOR`). The destructive slot keeps
+a dim red arc at rest, so its position is legible before hover; the hovered wedge
+is a 12% `HIGHLIGHT_TINT`, never an opaque fill.
+
+### 1.6 The convention problem (important)
+
+The token tables now live in one leaf crate, but the conventions are still **three**:
+the V0 extraction is under way, the normalisation (V0b) is not done.
+
+- `ferrocad_theme::draw` — **linear** RGBA, the draw contract.
+  `ferrocad_graphics::theme` re-exports it, so renderer code keeps its `theme::…`
+  paths. The gizmo's linear constants are still local.
+- `ferrocad_theme::navicube` — the navigation cube's palette, mostly
+  **sRGB-normalised** values (`EDGE_COLOR = [0.84, 0.88, 0.94]` is `#D6E0F0 / 255`),
+  with exactly one constant (`TURNTABLE_COLOR`) documented as linear. Fed straight into
+  `StateSnapshot.color`, so the cube's edges render brighter than their nominal hex.
+  `ferrocad_viewport::navicube::theme` re-exports it and keeps the role layer.
+- `ferrocad_theme::ui` — packed `u32` sRGB (`0xD8DBE0`), which is what gpui wants;
+  `ferrocad_gpui`, `ferrocad_widgets` and the viewport chrome bind it.
+
+V0b normalises the navicube palette onto the same convention — **linear at the draw
+contract, packed sRGB at the gpui boundary** — and extends the `ferrocad_theme`
+round-trip tests over it. The audit is still open: the values above are the build
+target until it lands.
+
+---
+
+## 2. Typography
+
+| Role | Size / weight | Family | Today |
+| --- | --- | --- | --- |
+| Status bar, micro-pills | 11 px regular | mono | `CHROME_FONT = 11.0`, `"monospace"` |
+| In-situ dimension tag | 12 px semibold | mono, tabular | pill is 11 px, `"monospace"` |
+| Face labels (`T, F, R`) | 14 px bold | geometric sans or vector glyphs | navicube labels (producer-defined) |
+| UI chrome | 11–13 px | Inter or system sans | gpui default + `"monospace"` where set |
+
+- **Tabular numerals are mandatory** for every geometric number. gpui does not expose
+  `font-variant-numeric`, so those runs use a **monospace** family, which is tabular by
+  construction. This is why the pill is monospace even though the chrome is not.
+- **Fonts are not bundled today.** `font_family("monospace")` resolves through the
+  system. Bundling JetBrains Mono (OFL) and falling back to
+  `JetBrains Mono, ui-monospace, monospace` is V4; until then the pill is system
+  monospace at the correct size and weight.
+- Sizes are **logical px**; gpui applies DPR. The renderer's text is a gpui layer, not
+  GPU text, so no atlas is involved.
+
+---
+
+## 3. Stroke weight and occlusion
+
+WebGPU lines and points are **1 px**. Anything wider is a **screen-space ribbon**
+(triangles), which is how the gizmo (2 px by default), the dress-up arc and the
+navicube glow work. A ribbon carries a lateral UV and is drawn by the unlit
+`fs_ribbon` stage, which feathers its last pixel so the silhouette is smooth at any
+zoom; there is no "line width" knob, weight is carried by **opacity and pairing**.
+
+| Class | How | State |
+| --- | --- | --- |
+| Front-facing primary edges | 1 px `Lines`, front-edge token | ✅ `theme::EDGE_FRONT` |
+| Occluded / back edges | 1 px `Lines`, ghost token | ✅ depth-`Greater`, no write, `theme::EDGE_OCCLUDED` |
+| Machined bevels | twin parallel lines, `0.08` model units apart | ▢ geometry-level, deferred (V4) |
+| Gizmo / manipulator strokes | 2 px ribbons + `outline` halo; the triad is Always-on-top (no ghost), manipulators 100 % / 20 % occluded | ✅ |
+| Dashed rays | runs of short segments | ✓ technique, used by the grid spec |
+
+**The occlusion gap is closed.** The contract was already `DepthState`
+(`test`, `write`, `compare`), and the renderer has built per-state pipeline variants
+since G4. V1 adds the intent constants and the emitters:
+
+```rust
+// ferrocad_stage::shape
+pub const GHOST_DEPTH: DepthState = DepthState {
+    test: true,
+    write: false,
+    compare: DepthCompare::Greater,
+};
+```
+
+`ShapeItem::with_ghost_edges()` emits the front wire (`Less`, writes) and then the
+ghost wire (`Greater`, no write, `EDGE_OCCLUDED`, not pickable). The grid triad does
+the same with a 10 % alpha copy, so an axis cross behind a solid reads as a ghost
+instead of floating over the front face. No new `DepthMode` enum is needed; there is
+one draw contract, `StateSnapshot::depth`.
+
+Gizmo ribbons and glass planes use the surface version:
+
+- `with_blended_surface()` sets `BLENDED_DEPTH` (test on, write off). The non-default
+  state selects the renderer's blended triangle variant, so a glass plane actually
+  blends instead of hitting the opaque scene pipeline's `REPLACE`.
+- `with_ghost_surface()` then emits a `Greater` surface pass at `GHOST_SURFACE_ALPHA`
+  (35 %) plus a matching wire pass, both unpickable. The visible part is drawn by the
+  normal pass; the part behind a solid is drawn at 35 % instead of disappearing.
+
+This is dimming, not dashing: the ghost pass is the same ribbon geometry, so there is no
+separate dash pattern to maintain.
+
+---
+
+## 4. Surfaces and lighting
+
+The scene shader is one directional light (`(0.4, 0.6, 0.8)`, authored in the Z-up
+frame: mostly overhead, offset in +X/+Y so the four side facets separate), ambient
+`0.25`, a two-sided `abs(dot(normal, light))`, and **no back-face culling**. That gives
+top facets their brightest value and sides a darker one, which is the physical basis of
+the glass-top/glass-shade pair.
+
+- **V2b** is shipped as the two-tone threshold: the shader keeps the single light and
+  selects the glass-top or glass-shade token from the world normal. The
+  `a_two_tone_surface_reads_back_as_glass_top_and_shade` readback verifies both
+  facets.
+- A full **material model** (albedo, roughness, per-face thresholds) remains later. It
+  must not become a second lighting path: one light, one shader, tokens in.
+- The spec's translucency is deferred (§1.3); the design must look right opaque first.
+
+---
+
+## 5. State model
+
+```
+IDLE      ambient: wireframe 30 %, structural tokens, no labels
+  │  pointer within HOVER_RADIUS
+HOVER     full luminosity, rim #48E5FF, crisp labels, no commit
+  │  press on a grab target
+DRAG      solid handle, amber/cyan hull, tabular pill follows
+```
+
+| Constant | Value | Notes |
+| --- | --- | --- |
+| `HOVER_RADIUS` | 12 px | visual bloom only |
+| `GRAB_SLOP` | `GizmoStyle::hit_radius_px` | 12 px default, floored at 12 (a 24 px target); the radius that starts a drag |
+| Origin proximity | 5 px | the world-origin node's own, smaller radius (`axis-origin-grid.md`) |
+| Aurora flash | 120 ms | new snap point |
+| Hover in / out | 80 / 120 ms | out is slower, so a pass-over does not strobe |
+
+**Bloom and grab share one radius.** Both default to **12 px**, now expressed as the
+style's `hit_radius_px` (floored at 12 so a 2 px stem still has a 24 × 24 px target,
+WCAG 2.5.8). A larger grab radius (20 px) is available in the settings but is **not** the
+default: it reaches into the triad's interior between the stems and shrinks the *empty
+centre passes through to the scene* deadzone. The bloom must match the grab radius,
+never exceed it: a handle lights up only when it can be grabbed. If a future touch mode
+needs a larger target, grow the **drawn** handle, not the invisible slop. Decision §9.2.
+
+---
+
+## 6. Pass-through indication
+
+When an overlay's interior passes a click through to the model, the status bar says so
+(`clicked through: navicube → Slab`). The mechanism is a small, neutral hover report from
+the viewport, not a workbench concept:
+
+```rust
+pub struct HoverReport {
+    /// What the click would hit in the document.
+    pub target: Option<SelectionRef>,
+    /// The overlay under the pointer that will not consume the click, if any
+    /// (`"gizmo"`, `"dress_up"`, `"navicube"`, …).
+    pub through: Option<&'static str>,
+}
+```
+
+The viewport updates it on every pointer move from the same pick and overlay tests the
+click uses (`InventorViewport::hover_report`), and the shell renders it beside the
+command's status text. **As built (A4):** `through` is `"navicube"` on the ring's
+negative space; a gizmo/manipulator grab target suppresses both fields (the click is
+consumed), and those interiors report nothing yet because they have no `contains`
+query. A command's `{"status": …}` result and the hover segment share one line.
+
+---
+
+## 7. Ownership: one token source
+
+Tokens are currently duplicated with three conventions (§1.6). Add a leaf crate:
+
+```
+ferrocad_theme (rlib, no dependencies)
+  pub struct Srgb { pub hex: u32, pub a: u8 }     // design form
+  pub fn linear(token: Srgb) -> [f32; 4]          // draw contract
+  pub fn packed(token: Srgb) -> u32               // gpui 0xRRGGBBAA
+  pub mod tokens { /* CANVAS, ACCENT, STRUCTURAL, … */ }
+```
+
+- `ferrocad_graphics` (and therefore `stage`, `viewport`, `wgpu`) consume `linear`.
+- `ferrocad_widgets` and the shell consume `packed`.
+- `navicube::theme` keeps its **role** layer (`NavicubeRole → token`), so producers do
+  not change; only the constants underneath do.
+- A leaf crate, not a module in `graphics`: `widgets` must not depend on the renderer,
+  and the renderer must not depend on gpui.
+
+No kernel, no document, no Python. A workbench may override a surface colour per
+object (the toy does) but does not redefine the chrome tokens.
+
+---
+
+## 8. Slice plan
+
+| Slice | Deliverable | Acceptance |
+| --- | --- | --- |
+| **V0 — tokens** | `ferrocad_theme`; migrate gizmo, navicube theme, shell/chrome, pill; normalise to linear/packed | **partial:** the leaf crate exists — `ferrocad_theme::ui` (packed sRGB), `draw` (linear, re-exported by `ferrocad_graphics::theme`) and `navicube` (the cube's palette) — with hex-conversion tests; the gizmo and remaining shell/widgets migration and the V0b sRGB-vs-linear normalisation (§1.6) are still open |
+| **V1 — occlusion** | `GHOST_DEPTH`; entity edge/surface defaults from the tokens; ghost wire + ghost triad | ✅ packet tests assert the front/ghost modes, the ghost is unpickable, and the grid counts include it. A full front-vs-ghost GPU readback is still worth adding alongside the existing depth-bias readback. |
+| **V2 — canvas & surfaces** | clear colour `#0F1218`; gradient; glass composites; two-tone threshold | ✅ `the_background_is_the_canvas_gradient` asserts `#0F1218`/`#161B22`; `a_two_tone_surface_reads_back_as_glass_top_and_shade` asserts both facets. V2c (true translucency) remains deferred. |
+| **V3 — states** | `HOVER_RADIUS`, in/out timings, rim bloom; `HoverReport` → status bar | a headless viewport test: at 13 px no bloom, at 11 px bloom; a gizmo-interior click reports `through: gizmo` and still selects the object behind |
+| **V4 — type & bevels** | bundle JetBrains Mono + fallback chain; pill 12 px semibold; tabular runs; twin-line bevels | the pill's digits do not change advance width across `0–9`; a chamfer renders two parallel lines in a readback |
+
+V0 is the only cross-cutting slice; V1–V4 are independent afterwards.
+
+---
+
+## 9. Decisions
+
+1. **Alpha semantics.** Ship opaque composites now and defer translucency (§1.3).
+   Recommend yes; a transparency pass is a renderer project of its own.
+2. **Hover vs grab radius.** Unify at **12 px**, now the floored default of
+   `GizmoStyle::hit_radius_px`, so a lit handle is always grabbable. A 20 px bloom is
+   offered as a setting but is not the default: it breaks the triad's pass-through
+   centre. The pure stage style keeps `hit_radius_px` as the single source; the viewport
+   clamps it to `12..=48`.
+3. **Font bundling.** JetBrains Mono (OFL) is redistributable; bundling adds ~300 KB and
+   makes the pill deterministic across platforms. Recommend bundle, with the system
+   fallback.
+4. **Canvas gradient.** The viewport is an image/zero-copy target, so the gradient is a
+   full-screen quad in the scene pass (V2), not a gpui background behind a transparent
+   canvas. Recommend the quad; it also covers the zero-copy path.
+5. **Occluded edges.** Depth-`Greater` pass (recommended) vs a stencil/mesh-based
+   approach. `Greater` is one pipeline and one packet flag.
+6. **Bevel twin lines.** Geometry-level offset curves (recommended; the renderer has no
+   outline shader) vs a shader effect. Deferred to V4 either way.
+7. **Token crate.** `ferrocad_theme` (recommended) vs `graphics::theme` + a mirror in
+   `widgets`. The leaf crate is the only option that keeps both boundaries clean.
+
+---
+
+## 10. Non-goals
+
+- No opaque chrome over the canvas; no modal dialogs as the primary interaction.
+- No post-processing (bloom, SSAO, outlines) in this language; weight is opacity and
+  pairing.
+- No theme editor or user-defined palettes yet; tokens are compile-time.
+- No GPU text; labels and pills stay gpui layers.
+- No per-workbench redefinition of chrome tokens.
+
+---
+
+## 11. Verification
+
+- **Tokens** — `ferrocad_graphics::theme` tests that each constant equals the linear
+  form of its hex, and that the edge tokens share RGB and differ only in alpha.
+- **Renderer** — `the_background_is_the_canvas_gradient` reads back both canvas
+  ends; `a_two_tone_surface_reads_back_as_glass_top_and_shade` reads back the two
+  facet colours; the existing depth-bias/state tests cover the `Greater` pipeline. A
+  readback of a front wire over a ghost wire is still the missing visual-regression
+  check.
+- **Viewport** — headless tests for the hover radius, the pass-through report, and the
+  pill's size/weight tokens.
+- **Typography** — an advance-width test over `0123456789` in the pill's font.
+- The overall composition remains a spec: there is no visual-regression harness yet,
+  and this note does not invent one.

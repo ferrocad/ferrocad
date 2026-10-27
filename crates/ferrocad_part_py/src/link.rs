@@ -12,7 +12,7 @@
 //! and adds the shape-valued `Shape`. That helper is the one property list the
 //! link and the `Part::LinkArray*` types share.
 //!
-//! This is slices L1–L4 of `docs/tasks/links.md`. Element expansion is real:
+//! This is slices L1–L4 of `docs/project/record/tasks/links.md`. Element expansion is real:
 //! `ShowElement` creates [`ELEMENT_TYPE`] children with a `Placement`, a link
 //! back to the source and a derived `Shape`, and collapsing removes them again.
 //! L4 adds a non-uniform `ScaleVector` (through the backend's general-affine

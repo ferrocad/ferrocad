@@ -40,6 +40,7 @@ DOCS = REPO / "docs"
 USER = DOCS / "user"
 API = DOCS / "python-api"
 MODS = DOCS / "mods"
+GENERAL = DOCS / "general"
 DEFAULT_OUT = REPO / "target" / "user-book"
 GITHUB = "https://github.com/ferrocad/ferrocad/blob/main"
 BOOK_TITLE = "FerroCAD User Guide"
@@ -48,6 +49,7 @@ BOOK_TITLE = "FerroCAD User Guide"
 #: level is dropped on assembly, so the published URLs are `/tutorials/...`
 #: rather than `/user/tutorials/...`.
 PARTS = [
+    ("general", "Concepts"),
     ("tutorials", "Tutorials"),
     ("how-to", "How-to guides"),
     ("python-api", "Reference"),
@@ -105,6 +107,9 @@ def _book_path(source: Path) -> Path:
 def book_sources() -> list[tuple[Path, Path]]:
     """(absolute source, path under ``src/``) for every page and asset."""
     pairs: list[tuple[Path, Path]] = []
+    for path in sorted(GENERAL.rglob("*")):
+        if path.is_file() and (path.suffix == ".md" or "images" in path.parts):
+            pairs.append((path, _book_path(path)))
     for path in sorted(USER.rglob("*")):
         if path.is_file() and (path.suffix == ".md" or "images" in path.parts):
             pairs.append((path, _book_path(path)))
@@ -118,7 +123,8 @@ def book_sources() -> list[tuple[Path, Path]]:
 def _inside_book(path: Path) -> bool:
     resolved = path.resolve()
     return (
-        resolved.is_relative_to(USER.resolve())
+        resolved.is_relative_to(GENERAL.resolve())
+        or resolved.is_relative_to(USER.resolve())
         or resolved.is_relative_to(API.resolve())
         or resolved.is_relative_to(MODS.resolve())
     )

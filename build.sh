@@ -80,7 +80,7 @@ fi
 # Package the combined App/Part/Mesh/MeshPart extension. Unlike the standalone
 # `ferrocad.abi3.so`, one `.so` links every module, so `import Part`,
 # `import Mesh` and `import FreeCAD` share one document registry (see
-# docs/architecture/occt-integration.md §4). It needs OCCT; a workspace without an
+# docs/developer/architecture/occt-integration.md §4). It needs OCCT; a workspace without an
 # OCCT prefix keeps the core-only bindings and the Part/Mesh shims report the gap.
 if [ -d "$HERE/.occt/prefix" ] || [ -n "${OpenCASCADE_DIR:-}" ] \
     || [ -n "${OCCT_INCLUDE_DIR:-}" ] || [ -n "${OCCT_ROOT:-}" ] || [ -n "${CASROOT:-}" ]; then

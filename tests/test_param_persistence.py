@@ -1,4 +1,4 @@
-"""Tests for the file-backed parameter store (``docs/tasks/settings-model.md`` S3).
+"""Tests for the file-backed parameter store (``docs/project/record/tasks/settings-model.md`` S3).
 
 ``FreeCAD.ParamGet`` stays in memory while no file is configured. These tests
 point it at a temporary file through the FerroCAD-only

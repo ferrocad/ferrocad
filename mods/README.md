@@ -7,7 +7,7 @@ the UI.
 The packaging step (`cargo xtask bundle`) copies this directory into the
 distribution beside `python/`, and `AppRun` puts it on `PYTHONPATH`. A user can
 drop a new workbench into `mods/` after install, which is why the scripts ship as
-loose files rather than embedded in the binary (see `docs/architecture/distribution.md` §8).
+loose files rather than embedded in the binary (see `docs/developer/architecture/distribution.md` §8).
 
 Populate it with `cargo xtask mods`, which fetches selected upstream FreeCAD
 workbenches (default `Draft`, at the pinned revision `FERROCAD_FREECAD_TAG`) and

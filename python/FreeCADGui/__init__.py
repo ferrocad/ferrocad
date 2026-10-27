@@ -11,7 +11,7 @@ the registry below.
 This module is the **upstream-shaped** surface only. Everything FerroCAD adds —
 the mod provider registry, provider-advertised settings, the Coin overlay
 bridge and the shell's view-state mirror — lives on ``FerroCADGui`` (see
-``docs/architecture/api-namespaces.md``); the two are deliberately not aliases
+``docs/developer/architecture/api-namespaces.md``); the two are deliberately not aliases
 of each other.
 
 What is here today:
@@ -61,7 +61,7 @@ What is still absent: ``ViewProvider`` (per-object view objects). The live
 viewport notifies the shell (a wheel zoom or an orbit), not only on a render. A
 script's ``Selection.addSelection`` therefore reaches the viewport, and
 ``getCameraNode`` answers with the camera the last gesture produced.
-See ``docs/workbenches/actions-and-tools.md`` and ``FreeCADGui/draft.py``.
+See ``docs/developer/workbenches/actions-and-tools.md`` and ``FreeCADGui/draft.py``.
 """
 
 from __future__ import annotations
@@ -1297,7 +1297,7 @@ def _run(name: str) -> dict:
 
     The returned dict always has ``ok``; a command may add ``status``,
     ``value``, or a ``dialog`` spec with a single-use ``token`` (see
-    ``docs/workbenches/actions-and-tools.md``).
+    ``docs/developer/workbenches/actions-and-tools.md``).
     """
     global _pending_tool
     command = _COMMANDS.get(name)

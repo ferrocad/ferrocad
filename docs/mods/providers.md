@@ -251,7 +251,7 @@ semantic API exists (upstream FreeCAD falls back to its private `SETTINGS` knob)
 Its colour, opacity, spacing and shadow knobs stay in its own parameter group.
 The native backend reads the same switch directly in `apply()`.
 
-The internal note [`../workbenches/mod-providers.md`](../workbenches/mod-providers.md)
+The internal note [`../developer/workbenches/mod-providers.md`](../developer/workbenches/mod-providers.md)
 covers the selection and switch contract; this page adds the current `refresh`
 hook and the feature-owned switch rule.
 

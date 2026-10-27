@@ -20,7 +20,7 @@
 //! `FERROCAD_SIMPLECAD_FILES` narrows the run to one or more file stems, which is
 //! how a single module can be isolated.
 //!
-//! It needs OCCT (see `docs/architecture/occt-bundling.md`).
+//! It needs OCCT (see `docs/developer/architecture/occt-bundling.md`).
 
 use std::ffi::CString;
 use std::path::{Path, PathBuf};

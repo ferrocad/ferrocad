@@ -12,7 +12,7 @@ name: Release
 # macOS is deliberately absent: the pinned `bite-gp-apple 1.24.402` imports
 # `cocoa` without declaring it (a dead import), so it does not compile for Apple
 # targets. `third_party/bite-gp-apple` patches that import; the rest of the macOS
-# work is unverified. See docs/architecture/macos.md.
+# work is unverified. See docs/developer/architecture/macos.md.
 on:
   push:
     tags: ["v*"]
@@ -81,7 +81,7 @@ jobs:
         # would need `vcruntime140.dll` from the VC++ redistributable on the
         # user's machine. `crt-static` (permitted alongside the bundled `libpython`
         # DLL) removes that dependency, keeping the zip self-contained like the
-        # AppImage. See docs/architecture/distribution.md section 6.
+        # AppImage. See docs/developer/architecture/distribution.md section 6.
         if: runner.os == 'Windows'
         shell: pwsh
         run: echo "RUSTFLAGS=-C target-feature=+crt-static" >> $env:GITHUB_ENV
@@ -143,7 +143,7 @@ jobs:
   # The Parametric edition: the base app plus the Part workbench, linked against
   # OCCT. The OCCT 7.8.1 prefix compiles the crates and is then walked by
   # `xtask bundle --occt`, so one source of truth feeds both (see
-  # docs/architecture/occt-bundling.md). `--check-init` boots the staged payload
+  # docs/developer/architecture/occt-bundling.md). `--check-init` boots the staged payload
   # headlessly before the artifact is wrapped; the AppImage/zip is run again
   # afterwards.
   edition:
@@ -156,7 +156,7 @@ jobs:
         # OCCT's `Handle_T` is a distinct class under MSVC, so the published
         # 0.3.0 does not compile there. Verified green on 2026-10-25 via
         # `edition-windows.yml`, which stays as the on-demand reproduction of
-        # this leg. See docs/architecture/edition-publishing.md §6.
+        # this leg. See docs/developer/architecture/edition-publishing.md §6.
         include:
           - os: ubuntu-latest
             artifact_name: ferrocad-parametric-linux

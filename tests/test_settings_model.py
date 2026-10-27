@@ -1,6 +1,6 @@
 """Tests for provider-advertised settings and the ``Settings`` tree.
 
-Covers S0 and S1 of ``docs/tasks/settings-model.md``: a provider declares a
+Covers S0 and S1 of ``docs/project/record/tasks/settings-model.md``: a provider declares a
 schema at registration, ``FerroCADGui.settings``/``setSetting`` read and write it
 (the parameter group is the store), and ``ferrocad_shell`` exposes a synthetic
 ``Settings/<Feature>`` node whose rows are the property pane's row contract.

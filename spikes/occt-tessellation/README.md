@@ -1,7 +1,7 @@
 # Spike: OCCT tessellation and topology identity
 
 Status: spike (2026-10-20). Answers F0.0b in
-[`docs/interaction/topology-selection.md`](../../docs/interaction/topology-selection.md).
+[`docs/developer/interaction/topology-selection.md`](../../docs/developer/interaction/topology-selection.md).
 
 The question: can `opencascade-sys` 0.3 give us a display mesh with **per-face and
 per-edge identity**, the adjacency a tangent chain needs, a chamfer, and fillet
@@ -48,4 +48,4 @@ prefix is not on CMake's/ld's default paths.)
 
 Conclusion: only three C++ calls are missing from `opencascade-sys` (list access, the
 two-distance chamfer, fillet/chamfer history). The full findings are recorded in
-[`docs/interaction/topology-selection.md`](../../docs/interaction/topology-selection.md) §5.
+[`docs/developer/interaction/topology-selection.md`](../../docs/developer/interaction/topology-selection.md) §5.

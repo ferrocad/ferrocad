@@ -4,7 +4,7 @@ A mod that imports ``FerroCAD`` declares a FerroCAD dependency; a mod that only
 imports ``FreeCAD``/``FreeCADGui`` is written against the upstream surface and
 should run there unchanged. The boundary is deliberate and has no aliases: the
 names here are **not** available on ``FreeCAD``. See
-``docs/architecture/api-namespaces.md``.
+``docs/developer/architecture/api-namespaces.md``.
 
 This module holds the app-side extension points:
 
@@ -18,7 +18,7 @@ This module holds the app-side extension points:
 * :func:`register_manipulator_provider` / :func:`manipulator_specs` — how a module
   declares the handles a selection arms;
 * :func:`set_parameter_file` / :func:`parameter_file` — which file backs
-  ``FreeCAD.ParamGet`` (see ``docs/tasks/settings-model.md`` S3);
+  ``FreeCAD.ParamGet`` (see ``docs/project/record/tasks/settings-model.md`` S3);
 * the **document lifecycle aliases** — ``newDocument``, ``openDocument`` /
   ``open``, ``closeDocument`` and ``setActiveDocument`` delegate to ``FreeCAD``,
   which fires the ``FerroCADGui`` document-observer slot (deactivation happens
@@ -186,7 +186,7 @@ def manipulator_specs(obj, element=""):
 # scripts and the shell already use; only ``closeDocument`` differs, returning
 # whether the document was open where ``FreeCAD`` raises. They are not in
 # ``__all__`` because the names are upstream-shaped and ``FerroCADGui`` owns the
-# extension; see ``docs/architecture/api-namespaces.md``.
+# extension; see ``docs/developer/architecture/api-namespaces.md``.
 # ---------------------------------------------------------------------------
 
 

@@ -5,7 +5,7 @@
 //! the tree, editor and console are already driven by the live document through
 //! `python/ferrocad_shell`; the viewport renders the sample scene until the geometry
 //! kernel/`ViewProvider`s produce real geometry; richer widgets, commands and menus
-//! come in later slices (see `docs/direction/app-shell-vision.md`).
+//! come in later slices (see `docs/project/direction/app-shell-vision.md`).
 
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
@@ -71,7 +71,7 @@ use render::*;
 pub(crate) use render::dev_tools_body;
 
 // The packed-sRGB tokens live in the leaf `ferrocad_theme` crate (V0 of
-// `docs/interaction/visual-language.md`). Re-exported here so the shell's modules
+// `docs/developer/interaction/visual-language.md`). Re-exported here so the shell's modules
 // keep their `crate::shell::FG` paths while the widget layer can use the same table
 // without depending on the shell.
 pub(crate) use ferrocad_theme::ui::{

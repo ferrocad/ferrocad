@@ -8,7 +8,7 @@
 //!
 //! This is the generic half of what used to be `HostDressUp`: the manipulator half
 //! moved to `ferrocad_part_gui`, and the edit half is the app script's `interaction`
-//! hook (see [`crate::shell`] and `docs/architecture.md` §10).
+//! hook (see [`crate::shell`] and `docs/developer/architecture.md` §10).
 
 use std::collections::HashMap;
 

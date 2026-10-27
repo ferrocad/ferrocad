@@ -10,13 +10,13 @@
 //! The app is useless without its Python facade and workbenches. A development
 //! checkout has them in the workspace; `cargo install` does not, so the payload
 //! is embedded into the binary and unpacked on first run. See [`payload`] for the
-//! resolution order and the packaging story in `docs/architecture/distribution.md`.
+//! resolution order and the packaging story in `docs/developer/architecture/distribution.md`.
 //!
 //! ## Editions
 //!
 //! [`run_as`] is the entry point an **edition** (a thin binary that links extra
 //! workbench modules and brands the window) calls. An edition registers its own
-//! built-in modules first, then delegates here; see `docs/architecture/repackaging.md`.
+//! built-in modules first, then delegates here; see `docs/developer/architecture/repackaging.md`.
 
 use ferrocad_gpui::HostConfig;
 
@@ -45,10 +45,10 @@ pub fn run() {
 /// entry module.
 ///
 /// An edition calls this after registering its own built-in modules, so they share
-/// the process-wide core the shell boots (see `docs/architecture/occt-integration.md` §4). The
+/// the process-wide core the shell boots (see `docs/developer/architecture/occt-integration.md` §4). The
 /// entry module is the edition's **app script**: it re-exports the base shell's data
 /// functions and registers its workbenches' module hooks (see
-/// `docs/architecture.md` §9).
+/// `docs/developer/architecture.md` §9).
 pub fn run_as(app_name: &str) {
     run_edition(app_name, "ferrocad_shell");
 }
@@ -114,7 +114,7 @@ pub fn run_edition_with_document(
 /// the built-in `ferrocad` module, the `FreeCAD` facade and the workbenches
 /// exactly as a normal start does, and reports success. It needs no display or
 /// GPU, so the release workflow runs it on an unpacked artifact to catch a broken
-/// layout before shipping (see `docs/architecture/distribution.md`).
+/// layout before shipping (see `docs/developer/architecture/distribution.md`).
 pub fn check_init() -> Result<(), String> {
     register_core_module();
     ferrocad_gpui::check_init(base_config("FerroCAD"))

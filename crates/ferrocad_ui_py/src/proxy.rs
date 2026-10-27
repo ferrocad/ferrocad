@@ -2,7 +2,7 @@
 //! `LayoutItemProxy` and `SignalProxy`.
 //!
 //! These are intentionally *not* a Qt object model. They expose the measured
-//! panel contract from `docs/workbenches/qt-strategy.md` §2.4 over the state in
+//! panel contract from `docs/developer/workbenches/qt-strategy.md` §2.4 over the state in
 //! [`crate::state`]:
 //!
 //! * a form looks widgets up by name and supports the root operations;

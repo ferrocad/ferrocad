@@ -58,7 +58,7 @@ COMMAND = "AxisOverlayCoin_Settings"
 
 #: The provider feature this mod provides, and its backend id. The FerroCAD-native
 #: mod declares the same feature with the id ``"ferrocad"`` and priority 10, so it
-#: stays the default; see ``docs/workbenches/mod-providers.md``.
+#: stays the default; see ``docs/developer/workbenches/mod-providers.md``.
 FEATURE = "axis"
 BACKEND = "coin"
 
@@ -195,7 +195,7 @@ def _srgb_to_linear(channel):
     """One sRGB 0..1 channel in linear light.
 
     The render target is sRGB, so the ``#rrggbb`` tokens have to be decoded before
-    they reach the WGSL block (``docs/workbenches/grid-overlay-plan.md`` §3.4).
+    they reach the WGSL block (``docs/developer/workbenches/grid-overlay-plan.md`` §3.4).
     """
     if channel <= 0.04045:
         return channel / 12.92

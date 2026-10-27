@@ -24,16 +24,16 @@ changing the script.* PartDesign's feature tree, Sketcher's solver, FEM, CAM and
 workbenches are deliberately out of scope; the measured subset is stated with every
 number.
 
-**Roadmap.** [`docs/ROADMAP.md`](docs/ROADMAP.md) is the three-horizon summary and
-[`docs/TODO-27-10-2026.md`](docs/TODO-27-10-2026.md) the active backlog. The measured
-history is [`docs/record/milestones.md`](docs/record/milestones.md); the labels
-(`S1`, `P4`, `D0`, …) are indexed in [`docs/labels.md`](docs/labels.md). Screenshot
+**Roadmap.** [`docs/project/ROADMAP.md`](docs/project/ROADMAP.md) is the three-horizon summary and
+[`docs/project/TODO-27-10-2026.md`](docs/project/TODO-27-10-2026.md) the active backlog. The measured
+history is [`docs/project/record/milestones.md`](docs/project/record/milestones.md); the labels
+(`S1`, `P4`, `D0`, …) are indexed in [`docs/project/labels.md`](docs/project/labels.md). Screenshot
 handling (generated viewport snapshots and manual app captures) is in
-[`docs/workbenches/screenshot-tool.md`](docs/workbenches/screenshot-tool.md). The headless
-engine MVP is defined in [`docs/direction/mvp-path.md`](docs/direction/mvp-path.md), the
-shell in [`docs/direction/app-shell-vision.md`](docs/direction/app-shell-vision.md), and
+[`docs/developer/workbenches/screenshot-tool.md`](docs/developer/workbenches/screenshot-tool.md). The headless
+engine MVP is defined in [`docs/project/direction/mvp-path.md`](docs/project/direction/mvp-path.md), the
+shell in [`docs/project/direction/app-shell-vision.md`](docs/project/direction/app-shell-vision.md), and
 the Part/Draft layering in
-[`docs/architecture/part-draft-layering.md`](docs/architecture/part-draft-layering.md).
+[`docs/developer/architecture/part-draft-layering.md`](docs/developer/architecture/part-draft-layering.md).
 
 ## Install
 
@@ -73,7 +73,7 @@ The binary embeds the Python payload and unpacks it on first run (see
 
 > **macOS** is not shipped yet: the pinned GPUI Metal backend does not compile, so
 > there is no `.dmg` in the releases. See
-> [`docs/architecture/macos.md`](docs/architecture/macos.md) for the diagnosis and
+> [`docs/developer/architecture/macos.md`](docs/developer/architecture/macos.md) for the diagnosis and
 > the re-enable checklist. **Windows**: the zip is unsigned, so SmartScreen may
 > warn on first run.
 
@@ -191,7 +191,7 @@ demo script, and `examples/headless_gear.py` builds the two-gear train shown in
 
 The Parametric edition needs OCCT 7.8. Fetch the 7.8.1 prefix CI uses into
 `.occt/prefix` once (recipe in
-[docs/architecture/occt-bundling.md](docs/architecture/occt-bundling.md#31-local-development-no-exports-needed));
+[docs/developer/architecture/occt-bundling.md](docs/developer/architecture/occt-bundling.md#31-local-development-no-exports-needed));
 `.cargo/config.toml` then supplies `OpenCASCADE_DIR`, `OCCT_INCLUDE_DIR` and
 `LD_LIBRARY_PATH` automatically, so no exports or `.env` file are needed.
 
@@ -263,10 +263,17 @@ the *behaviour* reference is FreeCAD's own. What FerroCAD adds is generated and 
 against the facade, and [`docs/python-api/`](docs/python-api/index.md) is a signature reference read
 from the live modules. CI runs `tools/userdocs.py --check` and `tools/api_docs.py --check`, so neither
 can drift from the code. Narrative notes live in the repository `docs/` ([index](docs/README.md)):
-[`ROADMAP.md`](docs/ROADMAP.md) for the horizons, [`TODO-27-10-2026.md`](docs/TODO-27-10-2026.md)
-for the active backlog, [`record/milestones.md`](docs/record/milestones.md) for the measured
-history, [`record/tasks/`](docs/record/tasks/README.md) for the closed design specs, and
-[`labels.md`](docs/labels.md) for every `S1`/`P4`/`D0`.
+[`ROADMAP.md`](docs/project/ROADMAP.md) for the horizons, [`TODO-27-10-2026.md`](docs/project/TODO-27-10-2026.md)
+for the active backlog, [`record/milestones.md`](docs/project/record/milestones.md) for the measured
+history, [`record/tasks/`](docs/project/record/tasks/README.md) for the closed design specs, and
+[`labels.md`](docs/project/labels.md) for every `S1`/`P4`/`D0`.
+[`docs/INDEX.md`](docs/INDEX.md) is the complete document index: every note is listed
+once under **general**, **user**, **mods**, **python-api**, **developer**, or **project**.
+The [general concepts](docs/general/README.md) open with a
+[gentle introduction to 3D CAD architecture](docs/general/cad-architecture.md), which
+maps NURBS/B-Rep, tessellation and naming onto FerroCAD's crates. The user pages
+then open with [UI users and API users](docs/user/explanation/ui-and-api.md), which
+explains why the Python API is the contract and the window is one client of it.
 An mdBook edition of both — tutorials, how-to guides, reference, explanation — is
 assembled by `tools/build_book.py` (`--build` renders it with
 [mdBook](https://rust-lang.github.io/mdBook/)) and published at
@@ -288,7 +295,7 @@ app (`ferrocad`) publish to **crates.io**, and the wheel publishes to **PyPI**. 
 [`.github/workflows/crates.yml`](.github/workflows/crates.yml) (publish order, payload staging) and
 [`.github/workflows/release.yml`](.github/workflows/release.yml) (the platform artifacts). The
 `abi3`/`extension-module` notes, the publish order, and the staging commands are in
-[`docs/architecture/releasing.md`](docs/architecture/releasing.md) and [`docs/architecture/distribution.md`](docs/architecture/distribution.md).
+[`docs/developer/architecture/releasing.md`](docs/developer/architecture/releasing.md) and [`docs/developer/architecture/distribution.md`](docs/developer/architecture/distribution.md).
 
 `cargo install ferrocad` produces a **self-contained** binary: `crates/ferrocad` embeds the workspace
 `python/` (and, when published with workbenches, `mods/`) and unpacks it on first run, because Cargo has
@@ -345,11 +352,11 @@ and reports `FreeCAD.backend == "ferrocad"`.
 PyO3 is a **hard build dependency on the CPython headers** (CI installs `python3-dev`).
 An earlier M0 `ctypes`/C-ABI fallback was removed: it was not a second transport for the
 same core but a second, narrower model, and every capability it had is available through
-PyO3. See [`docs/architecture.md`](docs/architecture.md) for the call-path diagrams
+PyO3. See [`docs/developer/architecture.md`](docs/developer/architecture.md) for the call-path diagrams
 and the decision.
 
-See [`docs/direction/rewrite-strategy.md`](docs/direction/rewrite-strategy.md) for the direction and
-[`docs/viewport/coin-bridge-reuse-assessment.md`](docs/viewport/coin-bridge-reuse-assessment.md)
+See [`docs/project/direction/rewrite-strategy.md`](docs/project/direction/rewrite-strategy.md) for the direction and
+[`docs/project/research/coin-bridge-reuse-assessment.md`](docs/project/research/coin-bridge-reuse-assessment.md)
 for the underlying analysis.
 
 ## What is implemented vs. not
@@ -392,9 +399,9 @@ Not implemented, or deliberately partial:
   mutex.
 
 The measured subset and its caveats are in
-[`docs/workbenches/conformance.md`](docs/workbenches/conformance.md),
-[`docs/workbenches/part-api-audit.md`](docs/workbenches/part-api-audit.md) and
-[`docs/workbenches/simplecad-bringup.md`](docs/workbenches/simplecad-bringup.md).
+[`docs/developer/workbenches/conformance.md`](docs/developer/workbenches/conformance.md),
+[`docs/developer/workbenches/part-api-audit.md`](docs/developer/workbenches/part-api-audit.md) and
+[`docs/project/research/simplecad-bringup.md`](docs/project/research/simplecad-bringup.md).
 
 ## Current work
 
@@ -406,8 +413,8 @@ S4.1–S4.3 are in the worktree, and the next step is to rebuild the extension a
 re-measure before deciding the next Part cluster. Packaging is on v0.1.4; macOS is the
 open distribution leg.
 
-The active backlog is [`docs/TODO-27-10-2026.md`](docs/TODO-27-10-2026.md); the
-three-horizon summary is [`docs/ROADMAP.md`](docs/ROADMAP.md). The shell is no longer a
+The active backlog is [`docs/project/TODO-27-10-2026.md`](docs/project/TODO-27-10-2026.md); the
+three-horizon summary is [`docs/project/ROADMAP.md`](docs/project/ROADMAP.md). The shell is no longer a
 spike: `cargo run -p ferrocad_toy` (the kernel-free edition) or
 `cargo run -p ferrocad_parametric` (with Part) opens the current window; the headless
 `#[gpui::test]` suite is the CI-proof path.

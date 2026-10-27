@@ -14,7 +14,7 @@
 //!   (upstream's `__sortEdges__`).
 //!
 //! Depends only on `ferrocad_types` (for [`Vector3`]). The dependency rules and
-//! the reason for a separate crate are in `docs/architecture/part-draft-layering.md`
+//! the reason for a separate crate are in `docs/developer/architecture/part-draft-layering.md`
 //! §5; the seam that converts these curves into shapes is P2.2.
 //!
 //! # Example

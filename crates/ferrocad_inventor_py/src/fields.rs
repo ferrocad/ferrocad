@@ -8,7 +8,7 @@
 //! `getValues`/`setValues`/`setValue`/`set1Value`/`getNum`).
 //!
 //! NumPy zero-copy ingestion, detached-field RAII and generational dirty counters
-//! are deferred (see `docs/viewport/inventor-plan.md` §8); editing a field just rewrites the
+//! are deferred (see `docs/developer/viewport/inventor-plan.md` §8); editing a field just rewrites the
 //! node's `Vec`.
 
 use ferrocad_inventor::{
@@ -1041,7 +1041,7 @@ fn detached_node(py: Python<'_>, node: &Node) -> PyResult<PyObject> {
 /// **Value semantics.** `addChild` copies a node into its parent, so this field copies
 /// too: assignment appends or replaces a snapshot of the given node, and a later edit
 /// to the caller's node does not reach the field (the value-semantics choice in
-/// `docs/workbenches/grid-overlay-plan.md` §7.2). Reads return detached `SoNode` snapshots for the
+/// `docs/developer/workbenches/grid-overlay-plan.md` §7.2). Reads return detached `SoNode` snapshots for the
 /// same reason — Coin's pointer identity is not available.
 ///
 /// The element list is the parent's [`Node::children`], which is exactly a node

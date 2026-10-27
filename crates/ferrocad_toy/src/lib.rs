@@ -21,7 +21,7 @@
 //! The toy is also the cheapest full-loop test: no OCCT, no shape kernel, just the
 //! interpreter, a mesh generator and a property.
 //!
-//! See `docs/workbenches/toy-workbench.md` and `docs/architecture.md` §10.
+//! See `docs/developer/workbenches/toy-workbench.md` and `docs/developer/architecture.md` §10.
 
 use ferrocad_geom::SelectionRef;
 use ferrocad_graphics::{Camera, screen_ribbon};
@@ -61,7 +61,7 @@ const STEM_PIXELS: f64 = 44.0;
 /// translate triad uses. On release the grip turns the resulting
 /// [`GizmoCommitEvent`](ferrocad_stage::GizmoCommitEvent) into its workbench
 /// interaction, exactly as the triad turns its own into `transform/apply` (see
-/// `docs/interaction/transform-ux.md` §7).
+/// `docs/developer/interaction/transform-ux.md` §7).
 ///
 /// A stem seen end-on collapses to a dot, so the axis solver has no direction to scrub;
 /// the grip then falls back to the pointer's vertical screen travel, the same
@@ -538,7 +538,7 @@ impl Manipulator for HeightGrip {
 /// with [`GizmoCommitEvent::to_interaction_with`], which is the same conversion the triad
 /// uses (`to_interaction`). Once a host accepts a workbench gizmo in the hosted set, the
 /// adapter moves into the gizmo registry unchanged. See
-/// `docs/interaction/transform-ux.md` §7.
+/// `docs/developer/interaction/transform-ux.md` §7.
 #[derive(Clone, Debug)]
 pub struct HeightGizmo {
     grip: HeightGrip,

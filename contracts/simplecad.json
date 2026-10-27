@@ -1,7 +1,7 @@
 {
   "schema": 1,
   "upstream": "https://github.com/igsova/SimpleCAD.git",
-  "measured_from": "docs/workbenches/simplecad-bringup.md §2",
+  "measured_from": "docs/project/research/simplecad-bringup.md §2",
   "revision": "9180c4b",
   "version": "0.38.0",
   "counts": {

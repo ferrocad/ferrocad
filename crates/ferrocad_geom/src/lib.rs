@@ -30,7 +30,7 @@
 //! provenance vocabulary, and on nothing else. It is the boundary OCCT must sit
 //! *behind*: no crate below the
 //! application depends on the kernel, and `ferrocad_core` stays a leaf (see
-//! `docs/architecture/occt-integration.md`).
+//! `docs/developer/architecture/occt-integration.md`).
 //!
 //! # Example
 //!

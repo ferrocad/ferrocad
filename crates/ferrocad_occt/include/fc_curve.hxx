@@ -4,7 +4,7 @@
 //
 // `opencascade-sys` 0.3 bridges `BRep_Tool::Curve` but not the curve's dynamic
 // type or a `Geom_*`'s parameters, so the classification lives here. Companion to
-// `fc_history.hxx` / `fc_topology.hxx`; see `docs/tasks/p2-architecture.md` P2.2.
+// `fc_history.hxx` / `fc_topology.hxx`; see `docs/project/record/tasks/p2-architecture.md` P2.2.
 //
 // The result is one flat `rust::Vec<double>`. Every payload starts with the same
 // 14-value header, so the previous line/circle/ellipse format is unchanged:

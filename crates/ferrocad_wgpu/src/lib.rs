@@ -24,7 +24,7 @@
 //! - [`pick`] — the g-buffer picking pass that maps a pixel back to a pick id.
 //!
 //! The grid overlay's WGSL (the port of the add-on's GLSL; see
-//! `docs/workbenches/grid-overlay-plan.md` §3.4) is **mod-owned**: it ships in
+//! `docs/developer/workbenches/grid-overlay-plan.md` §3.4) is **mod-owned**: it ships in
 //! `mods/GridOverlayCoin/Resources/grid_overlay.wgsl` and reaches the renderer as a
 //! program packet's module (G4). A packet carrying a
 //! [`ShaderProgram`](ferrocad_graphics::ShaderProgram) replaces the scene pipeline

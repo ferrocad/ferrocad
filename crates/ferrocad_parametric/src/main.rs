@@ -21,13 +21,13 @@
 //! `cargo run -p ferrocad_parametric -- --check-init` boots the interpreter, the
 //! linked `Part` module and the payload, then exits without a window (no display,
 //! no GPU). Packaging runs it on an unpacked artifact; see
-//! `docs/architecture/edition-publishing.md`.
+//! `docs/developer/architecture/edition-publishing.md`.
 //!
 //! `cargo run -p ferrocad_parametric -- --render out.png [--size WxH]` renders the
 //! sample Part solid headlessly instead (needs a wgpu adapter, no display); add
 //! `--open model.FCStd` to render the file, `--script model.py` to build one, and
 //! `--stl out.stl` to export the same tessellation as a binary STL.
-//! See `docs/architecture/repackaging.md` and `docs/architecture/occt-integration.md` §4.
+//! See `docs/developer/architecture/repackaging.md` and `docs/developer/architecture/occt-integration.md` §4.
 
 /// The `--check-init` payload: assert that all four modules share one kernel and
 /// exercise a document by building and closing a `Part::Feature`.

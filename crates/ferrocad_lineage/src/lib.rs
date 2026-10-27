@@ -7,7 +7,7 @@
 //! Everything here is generic over an opaque payload `T`, so this crate is
 //! unable to name a geometry type. `ferrocad_geom` instantiates the vocabulary
 //! with its `Shape` handle, and tests can run the same algorithms with a
-//! `String` payload (see `docs/architecture/lineage-and-naming.md`).
+//! `String` payload (see `docs/developer/architecture/lineage-and-naming.md`).
 //!
 //! It provides:
 //!
@@ -348,7 +348,7 @@ impl<T> ElementMap<T> {
     /// reference recorded before the operation still resolves after the rebuild. When
     /// one input maps to several outputs, the **first** output wins: a single name
     /// cannot denote a set, and composing names (`Face6a`, `Face6b`) is the mapper's
-    /// job (see `docs/architecture/geometry-and-topology.md` §9). An input the operation deleted is
+    /// job (see `docs/project/research/geometry-and-topology.md` §9). An input the operation deleted is
     /// removed, so a stale reference fails to resolve instead of pointing at geometry
     /// that is no longer there.
     ///

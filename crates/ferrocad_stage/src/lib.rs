@@ -20,7 +20,7 @@
 //! [`ferrocad_graphics`]).
 //!
 //! This crate is pure Rust: no `pyo3`, no `wgpu`. The Python surface (`ferrocad.stage`)
-//! and the interactive gizmos are later slices; see `docs/viewport/stage.md`.
+//! and the interactive gizmos are later slices; see `docs/developer/viewport/stage.md`.
 //!
 //! Beyond shapes, the crate carries the interactive layer: [`PointerEvent`]/
 //! [`PointerKind`]/[`MouseButton`] (the structured replacement for `SoEventCallback`),

@@ -78,7 +78,7 @@
 //!
 //! # Implemented capabilities
 //!
-//! The crate grew milestone by milestone (see the repository `docs/record/milestones.md`):
+//! The crate grew milestone by milestone (see the repository `docs/project/record/milestones.md`):
 //!
 //! - **M2** — the core model: [`Property`]/[`PropertyContainer`], [`Quantity`]/[`Unit`],
 //!   the `petgraph` recompute DAG, transaction-backed undo/redo, [`Observer`]s,

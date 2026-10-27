@@ -4,7 +4,7 @@
 //! These are the behaviours upstream's `PartTestBSplineCurve` and
 //! `PartTestCurveToNurbs` exercise. It runs in the same image as `part_boot`
 //! (`ferrocad` + `Part` as built-ins, one OCCT backend) and needs OCCT (see
-//! `docs/architecture/occt-bundling.md`).
+//! `docs/developer/architecture/occt-bundling.md`).
 
 use pyo3::prelude::*;
 use pyo3::types::{PyList, PyModule};

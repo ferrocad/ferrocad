@@ -11,7 +11,7 @@
 //! - `getElement`/`ancestorsOfType` stay typed.
 //!
 //! Same boot as the other Part tests: `ferrocad` + `Part` as built-ins, one core,
-//! one OCCT backend. It needs OCCT (see `docs/architecture/occt-bundling.md`).
+//! one OCCT backend. It needs OCCT (see `docs/developer/architecture/occt-bundling.md`).
 
 use std::ffi::CString;
 

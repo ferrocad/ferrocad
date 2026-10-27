@@ -6,7 +6,7 @@ name: Crates
 #
 # Requires a repository secret named CARGO_REGISTRY_TOKEN (a crates.io API token).
 # Crates whose version is already on crates.io are skipped, so re-running a tag is
-# safe. See docs/architecture/releasing.md.
+# safe. See docs/developer/architecture/releasing.md.
 on:
   push:
     tags: ["v*"]
@@ -32,7 +32,7 @@ jobs:
       - name: Fetch OCCT 7.8.1 (conda-forge, rootless)
         # `cargo publish` verify-builds `ferrocad_occt` and `ferrocad_part_py`,
         # which compile against OCCT. The artifact builds in release.yml use the
-        # same kind of prefix; see docs/architecture/occt-bundling.md.
+        # same kind of prefix; see docs/developer/architecture/occt-bundling.md.
         run: |
           mkdir -p .occt
           curl -sSL https://micro.mamba.pm/api/micromamba/linux-64/latest | tar -xj -C .occt
@@ -63,7 +63,7 @@ jobs:
         run: |
           set -eu
 
-          # Dependency order (docs/architecture/releasing.md §2.1): leaves first,
+          # Dependency order (docs/developer/architecture/releasing.md §2.1): leaves first,
           # then the app. Dev-dependency edges are included: ferrocad_part needs
           # ferrocad_occt, ferrocad_part_py needs ferrocad_stage_py, and
           # ferrocad_wgpu needs ferrocad_stage. `ferrocad_gen` (a wheel-only

@@ -7,7 +7,7 @@
 //! The include directory is `OCCT_INCLUDE_DIR` when set. Otherwise this script
 //! discovers it from `OCCT_ROOT`/`CASROOT`/`OpenCASCADE_DIR`, the workspace's
 //! `.occt/prefix` (the prefix CI fetches), or a common system prefix. See
-//! docs/architecture/occt-bundling.md.
+//! docs/developer/architecture/occt-bundling.md.
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -44,7 +44,7 @@ fn main() {
             "could not find the OCCT headers. Set OCCT_INCLUDE_DIR to the OCCT \
              'include/opencascade' directory (e.g. <prefix>/include/opencascade), or \
              put an OCCT 7.8 prefix at .occt/prefix (the CI recipe is in \
-             docs/architecture/occt-bundling.md)."
+             docs/developer/architecture/occt-bundling.md)."
         )
     });
 

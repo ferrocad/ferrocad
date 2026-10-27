@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""The MVP acceptance demo (``docs/direction/mvp-path.md`` section 2).
+"""The MVP acceptance demo (``docs/project/direction/mvp-path.md`` section 2).
 
 An ordinary FreeCAD ``App`` script exercised end to end on the Rust core: typed,
 dynamic and enumeration properties; an expression dependency; deterministic

@@ -5,7 +5,7 @@
 //! Every test drives the public Python surface and asserts observable behaviour
 //! (coordinates, classes, distances), not internals. The boot is the same as the
 //! other Part tests: `ferrocad` + `Part` as built-ins over one OCCT backend, so it
-//! needs OCCT (see `docs/architecture/occt-bundling.md`).
+//! needs OCCT (see `docs/developer/architecture/occt-bundling.md`).
 
 use std::ffi::CString;
 

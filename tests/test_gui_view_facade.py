@@ -13,7 +13,7 @@ pick are exercised without a window:
   and the document object, and ``getObjectInfo`` is its first entry;
 * ``addEventCallbackPivy`` / ``removeEventCallbackPivy`` and ``updateGui``.
 
-See ``docs/workbenches/simplecad-bringup.md`` §7 S4 and §5.1.
+See ``docs/project/research/simplecad-bringup.md`` §7 S4 and §5.1.
 """
 
 import os

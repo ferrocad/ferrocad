@@ -2,7 +2,7 @@
 
 A thin client of FerroCAD's semantic grid API: the **Grid Overlay** command
 (`GridOverlay_Settings`) opens a settings dialog for the native reference grid.
-It is the A2 shipping form of the fork described in `docs/workbenches/grid-overlay-plan.md`
+It is the A2 shipping form of the fork described in `docs/developer/workbenches/grid-overlay-plan.md`
 §3.2, not a port of the upstream overlay: there is no Qt, no `pivy`, no Coin
 tree, no `getSceneGraph()`/`getMainWindow()` and no per-document attach code.
 The dialog is the shell's declarative spec, and its `on_accept` writes
@@ -14,7 +14,7 @@ shell applies to the same state the native grid draws).
 This mod imports `FerroCAD`/`FerroCADGui`, so it is **FerroCAD-only**: it is not
 usable as-is on upstream FreeCAD. The imports are guarded, and the command
 reports a clear status instead of crashing when that API is absent. See
-[`docs/architecture/api-namespaces.md`](../../docs/architecture/api-namespaces.md).
+[`docs/developer/architecture/api-namespaces.md`](../../docs/developer/architecture/api-namespaces.md).
 
 ## Functional intent that survives
 

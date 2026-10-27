@@ -15,7 +15,7 @@ jobs:
       # Pin the interpreter: `tools/api_docs.py` reads signatures from the live
       # modules, and CPython point releases report inherited builtins differently
       # (the generator now ignores those, but pinning keeps the whole facade and
-      # the doc build reproducible). Keep this in step with docs/documentation.md.
+      # the doc build reproducible). Keep this in step with docs/project/documentation.md.
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
@@ -50,7 +50,7 @@ jobs:
       - name: Generated documentation is current
         # The user guides are rendered by running real workflows, and the API
         # reference is read from the live modules, so this is a behaviour check
-        # as well as a documentation one. See docs/documentation.md.
+        # as well as a documentation one. See docs/project/documentation.md.
         run: |
           python3 tools/userdocs.py --check
           python3 tools/api_docs.py --check
@@ -75,7 +75,7 @@ jobs:
   # manifest is embedded in the linked executable -- including the per-target
   # harness binaries `cargo test` links. A harness without it aborts at startup
   # with 0xc0000139 before any test runs, so this is the only job that exercises
-  # that path. See docs/architecture/distribution.md section 6.
+  # that path. See docs/developer/architecture/distribution.md section 6.
   windows:
     runs-on: windows-latest
     steps:
@@ -192,7 +192,7 @@ jobs:
         # Mesh, so a plain host CPython can `import Part`/`import Mesh` and they
         # share one document registry. This is the packaged-image gate the
         # in-process harness cannot express; see
-        # docs/workbenches/part-api-audit.md and crates/ferrocad_combined_py.
+        # docs/developer/workbenches/part-api-audit.md and crates/ferrocad_combined_py.
         run: |
           export CMAKE_POLICY_VERSION_MINIMUM=3.5
           export PYO3_USE_ABI3_FORWARD_COMPATIBILITY=1
@@ -223,7 +223,7 @@ jobs:
         # S0 is measurement only. PR CI does not clone SimpleCAD, so this is a
         # no-op there; a developer image or a future scheduled job that checks
         # out the pinned revision gets the drift alarm. See
-        # docs/workbenches/simplecad-bringup.md §7 (S0).
+        # docs/project/research/simplecad-bringup.md §7 (S0).
         run: |
           if [ -d ../simplecad ]; then
             python3 tools/simplecad_audit.py --check
@@ -235,7 +235,7 @@ jobs:
         # Measurement only: compares crates/ferrocad_part_py with upstream's
         # Part/App surface. PR CI does not clone freecad-upstream, so this is a
         # no-op there; a developer image gets the drift alarm. See
-        # docs/workbenches/part-api-audit.md.
+        # docs/developer/workbenches/part-api-audit.md.
         run: |
           if [ -d ../freecad-upstream ]; then
             python3 tools/part_api_audit.py --check

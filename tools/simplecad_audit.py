@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """S0 static audit of the SimpleCAD checkout.
 
-Pins the numbers recorded in ``docs/workbenches/simplecad-bringup.md`` §2 and
+Pins the numbers recorded in ``docs/project/research/simplecad-bringup.md`` §2 and
 compares the sibling checkout against ``contracts/simplecad.json``. The contract
 is the source of truth; every value is counted from the checkout, never
 hard-coded here. It is a drift alarm, not a gate on upstream content.
@@ -47,7 +47,7 @@ REPO = Path(__file__).resolve().parents[1]  # ferrocad project root
 DEFAULT_ROOT = REPO.parent / "simplecad"
 DEFAULT_CONTRACT = REPO / "contracts" / "simplecad.json"
 UPSTREAM = "https://github.com/igsova/SimpleCAD.git"
-MEASURED_FROM = "docs/workbenches/simplecad-bringup.md §2"
+MEASURED_FROM = "docs/project/research/simplecad-bringup.md §2"
 
 # Directories that are generated or vendored, never part of the measured tree.
 IGNORED_DIRS = {".git", "__pycache__", ".venv"}

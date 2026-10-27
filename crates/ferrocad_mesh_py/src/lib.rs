@@ -13,7 +13,7 @@
 //!
 //! Both modules must live in the same image as `ferrocad` (and `Part`, for
 //! `wireFromSegment`) so they share one core registry; see
-//! `docs/tasks/mesh-module.md` §4.3. An embedding application registers the
+//! `docs/project/record/tasks/mesh-module.md` §4.3. An embedding application registers the
 //! modules with [`pyo3::append_to_inittab!`] before the interpreter starts, or
 //! calls [`install`] on a running interpreter.
 

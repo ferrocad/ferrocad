@@ -5,7 +5,7 @@
 //! the modules was linked (or published) as a second extension: the document registry
 //! and the extension converters are process-wide, not per module.
 //!
-//! It needs OCCT (see `docs/architecture/occt-bundling.md`).
+//! It needs OCCT (see `docs/developer/architecture/occt-bundling.md`).
 
 use std::ffi::CString;
 

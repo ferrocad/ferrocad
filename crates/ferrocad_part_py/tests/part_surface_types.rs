@@ -3,7 +3,7 @@
 //! `parameter(point)` agreeing with `Face.valueAt` and `normalAt`.
 //!
 //! Same boot as `part_surfaces`: `ferrocad` + `Part` as built-ins. It needs OCCT
-//! (see `docs/architecture/occt-bundling.md`).
+//! (see `docs/developer/architecture/occt-bundling.md`).
 
 use pyo3::prelude::*;
 use pyo3::types::PyModule;

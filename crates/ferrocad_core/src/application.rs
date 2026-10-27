@@ -3,7 +3,7 @@
 //! This is the analog of FreeCAD's `App::Application` (`App::GetApplication()`),
 //! which owns the `DocMap` of open documents and the active document. It is
 //! deliberately **geometry-agnostic**: the kernel lives in a workbench (Part), not
-//! here. See `docs/architecture/occt-integration.md`.
+//! here. See `docs/developer/architecture/occt-integration.md`.
 //!
 //! Documents are shared, not copied: the registry and the Python wrappers hold the
 //! same [`DocumentHandle`]. That is what lets Rust enumerate documents without going

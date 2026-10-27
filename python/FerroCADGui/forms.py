@@ -19,7 +19,7 @@ Command                      Form
 
 ``TaskPanel_Scale.ui`` is the one panel upstream builds in code
 (``drafttaskpanels/task_scale.py``); the local copy is the declarative
-equivalent described by ``docs/workbenches/qt-strategy.md`` §2.5. The other
+equivalent described by ``docs/developer/workbenches/qt-strategy.md`` §2.5. The other
 three files are read from the pinned upstream checkout, resolved exactly as the
 conformance harness resolves it (``FERROCAD_UPSTREAM``, then the sibling
 ``freecad-upstream`` of this repository). An explicit path always wins.

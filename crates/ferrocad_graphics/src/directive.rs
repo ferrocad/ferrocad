@@ -5,7 +5,7 @@
 //! compiler (or a stage) fills it in the same traversal that emits
 //! [`DrawPacket`](crate::DrawPacket)s, and it travels beside the
 //! [`RenderQueue`](crate::RenderQueue) as `(RenderQueue, Directives)`. The renderer never
-//! receives it. See `docs/viewport/directives.md`.
+//! receives it. See `docs/developer/viewport/directives.md`.
 
 use ferrocad_types::Rotation;
 
@@ -74,7 +74,7 @@ pub enum Directive {
 }
 
 /// A neutral navicube overlay request — structural only. Styling is the viewport theme's
-/// concern (see `docs/viewport/directives.md` §5).
+/// concern (see `docs/developer/viewport/directives.md` §5).
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct NaviCubeDirective {
     /// The device-pixel rectangle the overlay occupies (bottom-left origin, like

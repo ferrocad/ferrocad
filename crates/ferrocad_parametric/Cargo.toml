@@ -3,7 +3,7 @@
 # A thin binary: it registers the Part workbench module as a built-in, then
 # delegates to the base app (`ferrocad::run_as`). Everything expensive (the
 # engine, the shell, the widget kit) is shared; the edition only adds a module and
-# a window title. See `docs/architecture/repackaging.md`.
+# a window title. See `docs/developer/architecture/repackaging.md`.
 #
 # It needs OCCT (via `ferrocad_part_py`), so it is a workspace member but NOT in
 # `default-members`, and it is an application binary, so it is NOT published.

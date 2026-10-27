@@ -3,7 +3,7 @@
 The API is pure Python over ``FreeCAD.ParamGet`` and is exercised headless
 (``FreeCAD.GuiUp == 0``): every setter validates and stores, ``apply()`` returns
 the shell's ``{"view": …}`` request and never raises, and ``snapshot()`` reads
-the store back. See ``docs/workbenches/grid-overlay-plan.md`` §2.
+the store back. See ``docs/developer/workbenches/grid-overlay-plan.md`` §2.
 """
 
 import math

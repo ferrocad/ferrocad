@@ -1,6 +1,6 @@
 # Grid Overlay (Coin) — the A1 fork
 
-The **A1** form of the grid-overlay fork (`docs/workbenches/grid-overlay-plan.md` §3.2, G5): a
+The **A1** form of the grid-overlay fork (`docs/developer/workbenches/grid-overlay-plan.md` §3.2, G5): a
 faithful Coin/shader port of the upstream add-on, running under FerroCAD's
 pull-based overlay bridge. It is a proving slice, not the shipping form — the
 shipping form is `mods/GridOverlay/` (A2, a client of `FerroCAD.Grid`).
@@ -11,7 +11,7 @@ This mod imports `FreeCAD`/`FreeCADGui` and `FerroCAD`/`FerroCADGui`, so it is
 **FerroCAD-only**: it is not usable as-is on upstream FreeCAD. The FerroCAD
 imports are guarded, and the command reports a clear status instead of crashing
 when that API is absent. See
-[`docs/architecture/api-namespaces.md`](../../docs/architecture/api-namespaces.md).
+[`docs/developer/architecture/api-namespaces.md`](../../docs/developer/architecture/api-namespaces.md).
 
 ## Distribution and provenance
 

@@ -4,6 +4,11 @@ Generated from the live modules by `tools/api_docs.py`. Each page is a signature
 and summary reference for what FerroCAD ships, not a tutorial: the workflows in
 [`../user/`](../user/) show the same surface being used.
 
+This is the reference for **API users** — the Python console, macros and scripts —
+and for addon authors. UI users do not need it to use the window; the two front
+doors and the history behind them are in
+[`../user/explanation/ui-and-api.md`](../user/explanation/ui-and-api.md).
+
 The product surface is the `FreeCAD`/`FreeCADGui` pair, which deliberately mirrors
 upstream, so the authoritative description of *behaviour* remains FreeCAD's own
 documentation. `FerroCAD`/`FerroCADGui` hold the FerroCAD-only extensions and are
@@ -28,7 +33,7 @@ here.
 - **Signatures where Python exposes them.** Names implemented by the PyO3
   extension may not report a signature; those show as ``(...)``.
 - **Not a parity claim.** Upstream has far more surface. The measured gap lives in
-  [`../workbenches/conformance.md`](../workbenches/conformance.md).
+  [`../developer/workbenches/conformance.md`](../developer/workbenches/conformance.md).
 
 ## Regenerating
 

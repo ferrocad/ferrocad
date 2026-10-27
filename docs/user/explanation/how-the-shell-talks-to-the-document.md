@@ -41,7 +41,7 @@ Every one of those is an ordinary call into `FreeCAD` or `FreeCADGui`. Nothing i
 `ferrocad_shell` names a workbench. That is a rule, not a style preference: it is
 what lets the same shell host the toy edition, a `Part` edition, or a future
 workbench without a rebuild. See
-[`../../workbenches/actions-and-tools.md`](../../workbenches/actions-and-tools.md).
+[`../../developer/workbenches/actions-and-tools.md`](../../developer/workbenches/actions-and-tools.md).
 
 ## A click, step by step
 
@@ -73,14 +73,14 @@ draws. `Mods_Settings` switches them.
 
 This is why the grid has more than one implementation and still one UI: the
 `grid` feature owns the command and the appearance settings, and the provider
-owns the drawing. [`../../workbenches/mod-providers.md`](../../workbenches/mod-providers.md)
+owns the drawing. [`../../developer/workbenches/mod-providers.md`](../../developer/workbenches/mod-providers.md)
 specifies the contract.
 
 The consequence is a rule for anything that adds a provider: **the switch that
 turns a feature on and off belongs to the feature, not to the provider.** When
 two stores disagree about "on", a toggle moves one of them and the other keeps
 drawing — the defect recorded in
-[`../../record/tasks/grid-visibility.md`](../../record/tasks/grid-visibility.md).
+[`../../project/record/tasks/grid-visibility.md`](../../project/record/tasks/grid-visibility.md).
 
 ## What this buys
 
@@ -93,9 +93,9 @@ drawing — the defect recorded in
 
 ## Where to read further
 
-- [`../../architecture.md`](../../architecture.md) — the crate graph and the call
+- [`../../developer/architecture.md`](../../developer/architecture.md) — the crate graph and the call
   paths.
-- [`../../interaction/axis-origin-grid.md`](../../interaction/axis-origin-grid.md)
+- [`../../developer/interaction/axis-origin-grid.md`](../../developer/interaction/axis-origin-grid.md)
   — the spatial model the grid and the navigation cube share.
 - [`../how-to/toy-workbench.md`](../how-to/toy-workbench.md) — the contract above,
   executed.

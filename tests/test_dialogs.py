@@ -2,7 +2,7 @@
 
 A command may return a dialog spec; the facade keeps ``on_accept`` under a
 single-use token and the shell accepts or cancels it later. These tests drive the
-protocol directly, without the gpui shell. See ``docs/workbenches/actions-and-tools.md`` §6.
+protocol directly, without the gpui shell. See ``docs/developer/workbenches/actions-and-tools.md`` §6.
 """
 
 import json

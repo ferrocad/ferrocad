@@ -4,7 +4,7 @@
 //! (`Modified`/`Generated`/`IsDeleted`, and the element maps lineage needs). Rather
 //! than patching or forking the crate, this declares a second `#[cxx::bridge]` over
 //! the same OCCT types and links the same libraries. The C++ side is
-//! `include/fc_history.hxx`; the design is written up in `docs/architecture/occt-integration.md`
+//! `include/fc_history.hxx`; the design is written up in `docs/developer/architecture/occt-integration.md`
 //! and verified in `spikes/occt-history-rs`.
 
 // `common` is bridged for completeness and used when the trait grows an

@@ -5,7 +5,7 @@
 //! toolkit list in `opencascade-sys`'s `build.rs`): the linker keeps only what the
 //! app uses. Linux walks `DT_NEEDED` with `readelf -d`; Windows reads the PE
 //! import directory with [`crate::pe`]. macOS is deliberately blocked until the
-//! upstream GPUI fork works (see `docs/architecture/edition-publishing.md`).
+//! upstream GPUI fork works (see `docs/developer/architecture/edition-publishing.md`).
 //!
 //! Only libraries that resolve inside the OCCT prefix are copied: system
 //! libraries (libc, libm, …) stay the host's responsibility, and the bundled
@@ -59,7 +59,7 @@ pub fn stage(
         Err(
             "the macOS closure is blocked on the pinned bite-gp-apple 1.24.402 \
              (it uses `cocoa` without declaring it); see \
-             docs/architecture/edition-publishing.md. Build the Linux/Windows \
+             docs/developer/architecture/edition-publishing.md. Build the Linux/Windows \
              editions meanwhile."
                 .to_string(),
         )

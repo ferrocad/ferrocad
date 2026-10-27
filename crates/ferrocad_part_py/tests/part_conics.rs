@@ -7,7 +7,7 @@
 //! because the B-spline parameter is not the conic parameter.
 //!
 //! Same boot as the other Part tests (`ferrocad` + `Part` as built-ins, one OCCT
-//! backend); it needs OCCT (see `docs/architecture/occt-bundling.md`).
+//! backend); it needs OCCT (see `docs/developer/architecture/occt-bundling.md`).
 
 use pyo3::prelude::*;
 use pyo3::types::{PyList, PyModule};

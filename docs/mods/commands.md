@@ -91,7 +91,7 @@ its one row. The command decision uses the *presence* of the flag or hook, never
 
 `CmdType` is metadata only. The shell does not wrap `Activated` in a transaction
 because a command may return a dialog and act later; the command owns its
-transaction ([`../workbenches/actions-and-tools.md`](../workbenches/actions-and-tools.md) §3.3).
+transaction ([`../developer/workbenches/actions-and-tools.md`](../developer/workbenches/actions-and-tools.md) §3.3).
 
 A raising `GetResources` is treated as `{}` and reported once. The command stays
 registered.
@@ -301,5 +301,5 @@ hide the native ground while its overlay is bound.
 - [`display-and-interaction.md`](display-and-interaction.md) — what a command's
   display and interaction hooks look like.
 - [`providers.md`](providers.md) — commands that select a feature backend.
-- [`../workbenches/actions-and-tools.md`](../workbenches/actions-and-tools.md) —
+- [`../developer/workbenches/actions-and-tools.md`](../developer/workbenches/actions-and-tools.md) —
   the internal command/tool design.

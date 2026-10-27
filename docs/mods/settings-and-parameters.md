@@ -196,7 +196,7 @@ every other reader agree. The gizmo's rotation detent is the shipped example —
 `ring_snap_deg` is stored as a 5° multiple (WCAG 2.5.7: an arbitrary detent such as
 `49.62°` demands micro-precision), with `0` kept as "continuous". The same setters apply
 the accessibility floors documented in
-[`../interaction/gizmo-manipulators.md`](../interaction/gizmo-manipulators.md) §17: a
+[`../developer/interaction/gizmo-manipulators.md`](../developer/interaction/gizmo-manipulators.md) §17: a
 `hit_radius_px` below 12 is raised, `ghost_alpha` is capped at 0.5, and `hover_scale`
 below 1 is rejected.
 
@@ -440,7 +440,7 @@ it replaced were:
 - **"The store is in memory today"**, repeated in this page's
   `ParamGet` section. The backend is file-backed in a GUI session
   (`python/FreeCAD/__init__.py:224-244`, `:370-418`). The same claim is still in
-  `docs/mods/providers.md` ("Limits") and `docs/workbenches/mod-providers.md`.
+  `docs/mods/providers.md` ("Limits") and `docs/developer/workbenches/mod-providers.md`.
 - **Grid values in `BaseApp/Preferences/View` with `Grid*` keys.** The store
   moved to the provider group; `View` is read once for migration
   (`python/FerroCAD/_grid.py:41-45`, `:126-135`, `:186-198`).

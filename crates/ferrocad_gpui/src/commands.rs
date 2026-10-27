@@ -1,7 +1,7 @@
 //! The workbench command bridge (A0/A1).
 //!
 //! Commands are registered in Python on `FreeCADGui` (see
-//! `docs/workbenches/actions-and-tools.md`), and the shell consumes them through the app
+//! `docs/developer/workbenches/actions-and-tools.md`), and the shell consumes them through the app
 //! script's `commands` / `run_command` functions. This module is the typed Rust
 //! side: the bar's rows ([`CommandInfo`]) and a run's result ([`CommandOutcome`]).
 //!

@@ -4,7 +4,7 @@
 //! (volumes, counts, coordinates, wrapper classes), not internals. The boot is the
 //! same as `part_gap_ops`: `ferrocad` + `Part` as built-ins over one OCCT backend.
 //!
-//! It needs OCCT (see `docs/architecture/occt-bundling.md`).
+//! It needs OCCT (see `docs/developer/architecture/occt-bundling.md`).
 
 use std::ffi::CString;
 

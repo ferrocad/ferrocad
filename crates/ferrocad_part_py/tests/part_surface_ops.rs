@@ -7,7 +7,7 @@
 //! use those operations (`Part.Solid` cavities, `Part::Helix`, `Part.makeThread`,
 //! `Part.Sweep` and partial revolutions).
 //!
-//! It needs OCCT (see `docs/architecture/occt-bundling.md`).
+//! It needs OCCT (see `docs/developer/architecture/occt-bundling.md`).
 
 use std::f64::consts::{PI, TAU};
 

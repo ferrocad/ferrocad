@@ -16,8 +16,8 @@
 //! `--occt` walks the binary's shared-library closure and copies the OCCT
 //! toolkits into `lib/` (beside the `.exe` on Windows). Per-platform packaging
 //! (AppImage, `.app`, portable Windows) lives in `packaging/` and wraps this
-//! payload; see `docs/architecture/distribution.md` and
-//! `docs/architecture/edition-publishing.md`. The app binary links the PyO3
+//! payload; see `docs/developer/architecture/distribution.md` and
+//! `docs/developer/architecture/edition-publishing.md`. The app binary links the PyO3
 //! bindings and registers them as a built-in `ferrocad` module, so no separate
 //! extension file ships.
 //!
@@ -444,7 +444,7 @@ fn occt_task(opts: &Options) -> Result<(), String> {
     println!("OCCT {version}: {}", prefix.display());
     if version != occt::PINNED_VERSION {
         eprintln!(
-            "warning: the workspace pins OCCT {}; see docs/architecture/occt-bundling.md",
+            "warning: the workspace pins OCCT {}; see docs/developer/architecture/occt-bundling.md",
             occt::PINNED_VERSION
         );
     }
@@ -708,7 +708,7 @@ fn ensure_runtime(root: &Path) -> Result<PathBuf, String> {
 ///
 /// Uses a blobless sparse checkout, so only the selected `src/Mod/<WB>` trees are
 /// downloaded. The result is loose files, as FreeCAD ships them; `bundle` copies
-/// them into the payload. See `docs/architecture/distribution.md`.
+/// them into the payload. See `docs/developer/architecture/distribution.md`.
 ///
 /// `src/Ext/freecad` is fetched too and copied to `mods/freecad`. The packaging
 /// step puts `mods/` on `PYTHONPATH`, so `from freecad.deprecation import

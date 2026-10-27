@@ -45,7 +45,7 @@
 //! Follows `ferrocad_core`: the `Base`/`App` surface through M4 slices 1–16, plus the
 //! MVP slices A1 (object state / property status), B1 (name/label semantics), and A2
 //! ([`PropertyEnumeration`](https://docs.rs/ferrocad_core) and type validation). See
-//! the repository `docs/record/milestones.md` for the per-slice record.
+//! the repository `docs/project/record/milestones.md` for the per-slice record.
 
 #![allow(non_snake_case)]
 

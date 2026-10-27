@@ -9,6 +9,7 @@ Run::
 """
 
 import os
+import re
 import sys
 import tempfile
 import unittest
@@ -417,12 +418,56 @@ class TestQuadrants(unittest.TestCase):
         self.assertTrue(page.startswith(userdocs.GENERATED_MARKER))
 
 
+class TestDocumentIndex(unittest.TestCase):
+    """Every note under docs/ is listed once in docs/INDEX.md."""
+
+    INDEX = Path(REPO, "docs", "INDEX.md")
+    DOCS = Path(REPO, "docs")
+
+    @staticmethod
+    def _entries(text):
+        # An entry is a bullet whose first link is the note itself; prose links and
+        # the "where do I start" table are deliberately not counted.
+        pattern = re.compile(r"^\s*- \[[^\]]*\]\(([^)]+)\)")
+        for line in text.splitlines():
+            match = pattern.match(line)
+            if not match:
+                continue
+            target = match.group(1).split("#", 1)[0].strip()
+            if target and "://" not in target:
+                yield target
+
+    def test_every_markdown_note_is_listed_once(self):
+        targets = list(self._entries(self.INDEX.read_text()))
+        resolved = [(self.DOCS / target).resolve() for target in targets]
+        expected = {
+            path.resolve()
+            for path in self.DOCS.rglob("*.md")
+            if path.resolve() != self.INDEX.resolve()
+        }
+        self.assertEqual(len(resolved), len(set(resolved)), "a note is listed twice")
+        self.assertEqual(set(resolved) - expected, set(), "the index lists a non-note")
+        self.assertEqual(expected - set(resolved), set(), "a note is missing from the index")
+
+    def test_the_index_names_the_six_folders(self):
+        text = self.INDEX.read_text()
+        for heading in (
+            "## General concepts",
+            "## User documentation",
+            "## Mods documentation",
+            "## Python API reference",
+            "## Developer documentation",
+            "## Project documentation",
+        ):
+            self.assertIn(heading, text)
+
+
 class TestBook(unittest.TestCase):
     def test_a_link_that_leaves_the_book_becomes_a_github_url(self):
         source = build_book.USER / "explanation" / "x.md"
-        out = build_book._rewrite_links("[x](../../workbenches/conformance.md)", source)
+        out = build_book._rewrite_links("[x](../../developer/workbenches/conformance.md)", source)
         self.assertIn(
-            "https://github.com/ferrocad/ferrocad/blob/main/docs/workbenches/conformance.md",
+            "https://github.com/ferrocad/ferrocad/blob/main/docs/developer/workbenches/conformance.md",
             out,
         )
 
@@ -446,6 +491,15 @@ class TestBook(unittest.TestCase):
             build_book._book_path(build_book.API / "FreeCAD.md").as_posix(),
             "python-api/FreeCAD.md",
         )
+        self.assertEqual(
+            build_book._book_path(build_book.GENERAL / "cad-architecture.md").as_posix(),
+            "general/cad-architecture.md",
+        )
+
+    def test_a_general_link_stays_inside_the_book(self):
+        source = build_book.USER / "explanation" / "x.md"
+        out = build_book._rewrite_links("[x](../../general/cad-architecture.md)", source)
+        self.assertIn("(../general/cad-architecture.md)", out)
 
     def test_a_cross_section_link_is_recomputed_for_the_book_layout(self):
         source = build_book.USER / "how-to" / "x.md"

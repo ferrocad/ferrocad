@@ -6,7 +6,7 @@
 //! suite runs against the real kernel: the line/wire tools create a real
 //! `Part::Feature` whose shape is a real wire.
 //!
-//! It needs OCCT (see `docs/architecture/occt-bundling.md`).
+//! It needs OCCT (see `docs/developer/architecture/occt-bundling.md`).
 
 use std::ffi::CString;
 use std::sync::Once;

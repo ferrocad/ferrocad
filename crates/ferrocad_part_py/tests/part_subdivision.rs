@@ -1,7 +1,7 @@
 //! `Part::FaceMakerUnified` on open-wire cutters: subdivision end to end.
 //!
 //! Same boot as `part_unified`: `ferrocad` + `Part` as built-ins, one core, one
-//! OCCT backend. It needs OCCT (see `docs/architecture/occt-bundling.md`).
+//! OCCT backend. It needs OCCT (see `docs/developer/architecture/occt-bundling.md`).
 
 use pyo3::prelude::*;
 use pyo3::types::{PyList, PyModule};

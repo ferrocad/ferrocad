@@ -1,7 +1,7 @@
 //! `Part.ShapeFix` and `Part.ChFi2d`, end to end.
 //!
 //! Runs in the same image as `part_boot`: `ferrocad` + `Part` as built-ins, one
-//! core, one OCCT backend. It needs OCCT (see `docs/architecture/occt-bundling.md`).
+//! core, one OCCT backend. It needs OCCT (see `docs/developer/architecture/occt-bundling.md`).
 //!
 //! These are the Rust-side checks that the new submodules are really wired to
 //! OCCT; the upstream `TestPartApp` cases in `part_conformance` remain the

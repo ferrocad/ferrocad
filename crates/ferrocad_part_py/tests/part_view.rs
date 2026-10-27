@@ -6,7 +6,7 @@
 //!
 //! Same boot as `part_unified`: `ferrocad` + `Part` as built-ins, so `import Part`
 //! and `import FreeCAD` see one core. It needs OCCT (see
-//! `docs/architecture/occt-bundling.md`).
+//! `docs/developer/architecture/occt-bundling.md`).
 
 use std::path::{Path, PathBuf};
 use std::sync::{Mutex, MutexGuard, Once};

@@ -6,9 +6,14 @@ This section is for people who write a FerroCAD mod, drive `FreeCAD` from a
 script, or drive the JSON bridge from an automated client. It describes the
 surface FerroCAD actually accepts today, with runnable snippets.
 
+If you are not sure whether you need the window or the API, start with
+[UI users and API users](../user/explanation/ui-and-api.md): the short version is
+that the window is one client of the API, and a mod is the API packaged for other
+people.
+
 It is deliberately **not**:
 
-- [`../workbenches/`](../workbenches/) — internal design notes about bringing up
+- [`../developer/workbenches/`](../developer/workbenches/) — internal design notes about bringing up
   upstream workbenches.
 - [`../python-api/`](../python-api/) — the generated signature reference.
 
@@ -43,7 +48,7 @@ A mod that imports only `FreeCAD`/`FreeCADGui` and uses only upstream names is
 **FreeCAD-compatible**: a port of an upstream workbench should need nothing else.
 Importing `FerroCAD`/`FerroCADGui` marks the mod **FerroCAD-only** — a deliberate
 dependency, and worth stating in the mod's README. The boundary is
-[`../architecture/api-namespaces.md`](../architecture/api-namespaces.md).
+[`../developer/architecture/api-namespaces.md`](../developer/architecture/api-namespaces.md).
 
 The loader does not use an upstream `Workbench` class, there is no build step,
 and there is no package manager. `FreeCADGui.addWorkbench` does not exist. The
@@ -139,6 +144,9 @@ should go through the functions above.
 
 ## Background
 
+- [`../general/cad-architecture.md`](../general/cad-architecture.md) — the geometry,
+  tessellation and naming pipeline behind the API, and how FerroCAD's crates map onto
+  it.
 - [`../user/explanation/how-the-shell-talks-to-the-document.md`](../user/explanation/how-the-shell-talks-to-the-document.md)
   — why the shell is a client of the facade, and why dialogs are data.
 - [`../user/how-to/toy-workbench.md`](../user/how-to/toy-workbench.md) — a

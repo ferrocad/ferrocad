@@ -4,7 +4,7 @@
 //! the `#RRGGBB` byte divided by 255, not converted to linear — so the cube's edges
 //! render brighter than their nominal hex when they reach the renderer.
 //! [`TURNTABLE_COLOR`] is the one documented exception: it is **linear**. The V0b
-//! audit in `docs/interaction/visual-language.md` §1.6 still has to normalise the
+//! audit in `docs/developer/interaction/visual-language.md` §1.6 still has to normalise the
 //! set onto one convention; until then these values are the build target and must
 //! not change.
 //!

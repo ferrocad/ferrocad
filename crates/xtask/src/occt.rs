@@ -3,7 +3,7 @@
 //! The same prefix compiles the edition (`OpenCASCADE_DIR`/`OCCT_INCLUDE_DIR`) and
 //! is walked by `bundle --occt`, so [`resolve`] is the one source of truth. A
 //! fetched prefix lives at `.occt/prefix` (the recipe in
-//! `docs/architecture/occt-bundling.md`); `target/occt-runtime/<triple>/prefix.txt`
+//! `docs/developer/architecture/occt-bundling.md`); `target/occt-runtime/<triple>/prefix.txt`
 //! records the prefix `xtask occt` last resolved so a later `bundle --offline`
 //! finds it without repeating the search.
 
@@ -11,7 +11,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-/// The OCCT release the workspace pins (`docs/architecture/occt-bundling.md`).
+/// The OCCT release the workspace pins (`docs/developer/architecture/occt-bundling.md`).
 pub const PINNED_VERSION: &str = "7.8.1";
 
 /// `x86_64-unknown-linux-gnu`, `aarch64-apple-darwin`, …
@@ -209,7 +209,7 @@ pub fn validate(prefix: &Path) -> Result<PathBuf, String> {
 
 /// Fetch the pinned conda-forge build into `.occt/prefix` with micromamba.
 ///
-/// This mirrors `docs/architecture/occt-bundling.md` §3.1. It needs network and
+/// This mirrors `docs/developer/architecture/occt-bundling.md` §3.1. It needs network and
 /// `curl`/`tar`; `bundle --offline` never calls it. The release workflow may fetch
 /// the prefix itself and pass `--occt-prefix` instead.
 fn fetch(root: &Path) -> Result<(), String> {

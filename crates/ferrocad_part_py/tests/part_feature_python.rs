@@ -6,7 +6,7 @@
 //! proxy and the shape. A document whose proxy class cannot be imported loads
 //! readable but invalid.
 //!
-//! Needs OCCT (see `docs/architecture/occt-bundling.md`) and the one image that
+//! Needs OCCT (see `docs/developer/architecture/occt-bundling.md`) and the one image that
 //! links `ferrocad` + `Part`.
 
 use std::ffi::CString;

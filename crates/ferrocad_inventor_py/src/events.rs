@@ -7,7 +7,7 @@
 //! the `SoPickedPoint`/`SoDetail` value objects, the `SoEventCallback` node, and
 //! [`dispatch_event`], which the host calls with a picked [`Hit`].
 //!
-//! Deferred (see `docs/viewport/inventor-plan.md` §8): the global thread-local context Coin
+//! Deferred (see `docs/developer/viewport/inventor-plan.md` §8): the global thread-local context Coin
 //! uses (the context here lives on the node for the duration of a call), the
 //! 1-based sub-shape `part_index` (needs topological naming), and the g-buffer pass.
 //! Because the extracted [`Scene`] is a copy, a callback that edits Python nodes

@@ -11,7 +11,7 @@
 //!   `Placement.rotate(..., comp=False)` composes `P_new = P_old · loc`.
 //!
 //! Same boot as the other Part tests: `ferrocad` + `Part` as built-ins, one core,
-//! one OCCT backend. Needs OCCT (see `docs/architecture/occt-bundling.md`).
+//! one OCCT backend. Needs OCCT (see `docs/developer/architecture/occt-bundling.md`).
 
 use pyo3::prelude::*;
 use pyo3::types::PyModule;

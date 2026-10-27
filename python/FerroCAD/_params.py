@@ -3,7 +3,7 @@
 Upstream FreeCAD keeps parameters in a platform-specific preferences file; this
 module names **which** file FerroCAD uses and lets a caller point it elsewhere.
 ``ParamGet``/``ParameterGrp`` themselves stay on ``FreeCAD`` because their shape
-is upstream's. See ``docs/architecture/api-namespaces.md``.
+is upstream's. See ``docs/developer/architecture/api-namespaces.md``.
 
 The default resolution is:
 

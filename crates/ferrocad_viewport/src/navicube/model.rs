@@ -12,7 +12,7 @@
 //! `+X right`, `+Y screen-up`, `+Z toward the viewer`.
 //!
 //! `FRONT` is `-Y`, FreeCAD's front: the default front view looks from `-Y` toward `+Y`
-//! with `+Z` up. (See `docs/interaction/axis-origin-grid.md` §2 and `docs/interaction/navicube-spec.md` §2.)
+//! with `+Z` up. (See `docs/developer/interaction/axis-origin-grid.md` §2 and `docs/developer/interaction/navicube-spec.md` §2.)
 
 use ferrocad_graphics::{Camera, PickId, Projection, Rect, Viewport, screen_ribbon};
 use ferrocad_types::{Matrix4, Placement, Rotation, Vector3};

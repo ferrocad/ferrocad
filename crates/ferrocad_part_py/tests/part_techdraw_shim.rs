@@ -6,7 +6,7 @@
 //! `python/Mod/TechDraw/PAT/`. This test runs that shim against a real face.
 //!
 //! Same boot as the other Part tests: `ferrocad` + `Part` as built-ins, one core,
-//! one OCCT backend. It needs OCCT (see `docs/architecture/occt-bundling.md`).
+//! one OCCT backend. It needs OCCT (see `docs/developer/architecture/occt-bundling.md`).
 
 use std::sync::Once;
 

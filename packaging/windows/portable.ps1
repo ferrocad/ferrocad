@@ -5,11 +5,11 @@
 #
 # The base artifact is ferrocad-windows-x86_64.zip; an edition's is
 # ferrocad-<edition>-windows-x86_64.zip (see
-# docs/architecture/edition-publishing.md). `-Occt` copies the OCCT DLL closure
+# docs/developer/architecture/edition-publishing.md). `-Occt` copies the OCCT DLL closure
 # into bin/ beside ferrocad.exe, where the loader finds it first.
 #
 # Requires a Rust toolchain and CPython headers (PyO3). An MSIX/WiX installer is a
-# later step (see docs/architecture/distribution.md).
+# later step (see docs/developer/architecture/distribution.md).
 [CmdletBinding()]
 param(
     # Named `DebugBuild`, not `Debug`: `[CmdletBinding()]` already contributes a

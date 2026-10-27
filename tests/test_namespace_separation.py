@@ -1,6 +1,6 @@
 """Guard the boundary between the upstream and FerroCAD-only namespaces.
 
-``docs/architecture/api-namespaces.md`` makes the split checkable:
+``docs/developer/architecture/api-namespaces.md`` makes the split checkable:
 
 * ``FreeCAD``/``FreeCADGui`` carry the **upstream** surface, name for name;
 * ``FerroCAD``/``FerroCADGui`` carry everything FerroCAD adds;

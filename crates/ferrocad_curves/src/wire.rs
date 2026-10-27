@@ -2,7 +2,7 @@
 //!
 //! Mirrors upstream's `Part.Wire` / `Part.makePolygon` and Draft's
 //! `__sortEdges__` / `Part.sortEdges`. The consumer is Draft's `draftgeoutils`
-//! (see `docs/architecture/part-draft-layering.md` §2): it builds wires from
+//! (see `docs/developer/architecture/part-draft-layering.md` §2): it builds wires from
 //! analytic curves long before it asks the kernel for a shape.
 
 use ferrocad_types::Vector3;

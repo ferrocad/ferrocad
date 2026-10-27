@@ -1,268 +1,81 @@
 # FerroCAD docs
 
-Planning notes and reference material for the FerroCAD rewrite. These are working
-notes, some of them snapshots in time, not user documentation. The product surface
-is the `FreeCAD` Python API, documented by convention and by upstream.
+The repository's documentation. The product surface is the `FreeCAD` Python API;
+these notes explain how to use it, how to extend it, how it is built, and how the work
+is planned.
 
-## Layout
+## The six folders
 
-The tree is organized by **what a note is about**, not by what kind of note it is —
-each file already states its own status (`decision`, `reference`, `plan`, `record`)
-on the first line, so the folder only has to answer "where do I look?".
+The tree is split by **audience and stability**. The first four folders are the
+stable public surface (and what the mdBook publishes); `developer/` is stable
+engineering documentation; `project/` is the unstable record of the work.
 
-| Folder | Holds | Read it when |
-| --- | --- | --- |
-| `direction/` | why we are doing this, and what the product is | you want the argument, not the design |
-| `architecture/` | the crate graph, seams, data model, packaging | you are changing a boundary |
-| `viewport/` | the scene/render/present stack | you are working on what reaches the screen |
-| `interaction/` | spatial reference, selection, gizmos, navigation, visual language | you are working on how the user acts on the scene |
-| `workbenches/` | the Python module contract and upstream bring-up | you are wiring a mod or an upstream workbench |
-| `mods/` | the external contract for mod writers and API clients | you are writing a mod, a script, or an automated client |
-| `user/` | **generated** workflow guides, grouped by Diátaxis quadrant | you want to do something with the app |
-| `python-api/` | **generated** signature reference | you need to know what a name accepts |
-| `record/` | closed history: milestones, closed backlogs, closed task specs, incidents, and their archived detail | you need to know how we got here |
-| `tasks/` | active task specs (currently none; closed specs are in `record/tasks/`) | you are picking up work |
+| Folder | Surface / audience | Stability | Start here |
+| --- | --- | --- | --- |
+| [`general/`](general/README.md) | general readers: the concepts behind 3D CAD and FerroCAD, useful to users and developers | stable, published | [general/README.md](general/README.md) |
+| [`user/`](user/README.md) | UI users, and the generated API workflows for console, macro and script users | stable, published | [user/README.md](user/README.md) |
+| [`mods/`](mods/README.md) | addon authors: mods, workbenches, scripts, automated clients | stable, published | [mods/README.md](mods/README.md) |
+| [`python-api/`](python-api/index.md) | API users: the exact signature reference | stable, published | [python-api/index.md](python-api/index.md) |
+| [`developer/`](developer/README.md) | people changing FerroCAD | stable, repository only | [developer/README.md](developer/README.md) |
+| [`project/`](project/README.md) | maintainers and contributors | unstable, repository only | [project/README.md](project/README.md) |
 
-Six files stay at the root: this index, the [crate map](architecture.md) (the
-cross-cutting reference every section links back to), the
-[documentation decision](documentation.md), the [high-level roadmap](ROADMAP.md), the
-[label index](labels.md) that disambiguates every `S1`/`P4`/`D0`, and the active backlog
-([`TODO-27-10-2026.md`](TODO-27-10-2026.md)).
+The complete file-by-file map is [INDEX.md](INDEX.md): every note appears once, under
+its primary folder, with a one-line description. This page is the short tour.
+
+## UI users and API users
+
+The public surface has two front doors, and the distinction is deliberate:
+
+- **UI users** work in the app window. The window is the guide; the generated pages
+  are not click-throughs. The [repository README](../README.md) shows the window.
+- **API users** — the Python console, macros and scripts — use the same document model
+  through `FreeCAD`/`FreeCADGui`. Start with
+  [UI users and API users](user/explanation/ui-and-api.md), then the generated
+  [API workflows](user/README.md) and the [reference](python-api/index.md).
+- **Addon authors** package the API for other people: [mods/README.md](mods/README.md).
+
+If you want a task done once, use the window; if you want to repeat it, automate it or
+build on it, use the API. A macro is not a second-class path — the console, a macro and
+a workbench command call the same functions.
 
 ## Start here
 
-- [architecture.md](architecture.md) — crates, the call paths, the dependency rules
-  between them, and the C-ABI rationale.
-- [ROADMAP.md](ROADMAP.md) — the three horizons (finish Part/OCCT, build the workbench
-  platform, prove it by use), their exit criteria, and how progress is measured.
-- [labels.md](labels.md) — what every `S1`, `P4`, `D0`, `T4`, `G1` means, which program
-  owns it, and the area-prefix rule for new labels.
-- [TODO-27-10-2026.md](TODO-27-10-2026.md) — the active backlog: the SimpleCAD API
-  surface, the Draft M3–M5 remainder, the gizmo seam, packaging/polish and the small
-  kernel tail.
-- [record/TODO-26-10-2026.md](record/TODO-26-10-2026.md) — the closed 2026-10-26
-  backlog: the interaction/gizmo layer, the Draft and SimpleCAD rounds, the Mesh module
-  and the kernel state, with the measurements at close.
-- [record/tasks/README.md](record/tasks/README.md) — the closed task specs, indexed by
-  label and closing backlog.
-- [documentation.md](documentation.md) — how the project is documented (Diátaxis,
-  rustdoc-first, and this layout).
+- **New to 3D CAD?** — [A gentle introduction to 3D CAD architecture](general/cad-architecture.md):
+  NURBS/B-Rep vs meshes, the tessellation and GPU pipeline, topological naming, and
+  how FerroCAD's crates map onto them.
+- **Using the app (UI)** — [user/README.md](user/README.md) and the
+  [repository README](../README.md) for the window.
+- **Using the API (console, macros, scripts)** —
+  [UI users and API users](user/explanation/ui-and-api.md), the generated
+  [API workflows](user/README.md), and the [Python API reference](python-api/index.md).
+- **Writing a mod or a workbench** — [mods/README.md](mods/README.md): the contract,
+  the five contributions, and the JSON boundary; the signatures are in
+  [python-api/index.md](python-api/index.md).
+- **Changing FerroCAD** — [developer/README.md](developer/README.md): start with
+  [developer/architecture.md](developer/architecture.md) for the crate graph.
+- **Planning the next round** — [project/ROADMAP.md](project/ROADMAP.md) for the
+  horizons and [project/TODO-27-10-2026.md](project/TODO-27-10-2026.md) for the active
+  backlog.
+- **Understanding a decision** — [project/documentation.md](project/documentation.md)
+  for the documentation policy, [project/labels.md](project/labels.md) for the labels,
+  and [project/direction/rewrite-strategy.md](project/direction/rewrite-strategy.md)
+  for the argument behind the rewrite.
 
-## Using FerroCAD
+## Conventions
 
-Both `user/` and `python-api/` are generated and checked in CI, so they cannot
-drift from the code. Edit the source they are generated from, never the pages.
-`mods/` is authored: it is the contract, and it links to the generated reference
-rather than restating it.
+- **Generated, not written.** `user/` pages come from `tools/workflows/` via
+  `tools/userdocs.py`; `python-api/` pages come from the live modules via
+  `tools/api_docs.py`. Both have a `--check` mode in CI. Edit the source, never the
+  page. The one authored exception is [`user/explanation/`](user/explanation/).
+- **The index is exhaustive.** [`INDEX.md`](INDEX.md) lists every Markdown note once;
+  `tools/test_docs_tooling.py` fails when a note is missing or duplicated.
+- **Relative links only.** Cross-folder links are `../<folder>/<name>.md`.
+  `tools/build_book.py --check` and the relative-link sweep catch a move that left an
+  inbound link behind.
+- **Stable here, unstable there.** Research notes, open plans, milestones and task
+  specs live in `project/`; when a result becomes a stable design, the design note goes
+  in `developer/` and the research or plan is linked, not duplicated.
 
-- [user/README.md](user/README.md) — the workflows FerroCAD implements today, each
-  one a page generated by **running** a script in `tools/workflows/` against the
-  facade, grouped as tutorials, how-to guides and explanation. This is the progress
-  list: no script, no page.
-- [python-api/index.md](python-api/index.md) — per-module signatures and
-  summaries, read from the live `FreeCAD`, `FreeCAD.Base`, `FreeCAD.Units`,
-  `FreeCAD.Console`, `FreeCADGui` and `ferrocad_shell` modules.
-- [mods/README.md](mods/README.md) — the external contract: what a mod is, the five
-  things it can contribute (commands, display, interaction, feature providers,
-  overlays), the JSON boundary for automated clients, and a worked minimal mod.
-- **mdBook edition.** `python3 tools/build_book.py --build` assembles the three
-  above into `target/user-book/` in Diátaxis order and renders it with
-  [mdBook](https://rust-lang.github.io/mdBook/) (if installed). Links that leave
-  the book are rewritten to the repository on GitHub.
-
-## Direction
-
-- [direction/rewrite-strategy.md](direction/rewrite-strategy.md) — the authoritative
-  direction: why a Rust reimplementation, the risk register, and the shape of the work.
-- [direction/mvp-path.md](direction/mvp-path.md) — the headless engine MVP: definition,
-  acceptance script, and the slice plan (tracks A/B/C/D).
-- [direction/app-shell-vision.md](direction/app-shell-vision.md) — the interactive
-  window: the five pillars, architecture, and slices S1–S6.
-
-## Architecture
-
-- [architecture/geometry-and-topology.md](architecture/geometry-and-topology.md) —
-  topological sorting vs topological naming, and the seam for a future OCCT geometry
-  engine.
-- [architecture/part-draft-layering.md](architecture/part-draft-layering.md) — the
-  Part/Draft/BIM layers: why the cycle is a test fixture, the analytic/B-Rep split,
-  `ferrocad_curves`, and M0–M5.
-- [architecture/lineage-and-naming.md](architecture/lineage-and-naming.md) — topological
-  naming as a separate lineage layer: the kernel supplies provenance, `ferrocad_lineage`
-  owns identity, naming policy and persistence, and Part consumes it.
-- [architecture/occt-history-spike.md](architecture/occt-history-spike.md) — the first
-  geometry spike: what OCCT history FreeCAD depends on, and what it implies for the
-  trait and the B slices.
-- [architecture/occt-integration.md](architecture/occt-integration.md) — the crate
-  layout for OCCT: the `ferrocad_geom` seam, the `ferrocad_occt` backend, and where
-  Part/its Python bindings sit.
-- [architecture/occt-bundling.md](architecture/occt-bundling.md) — shipping OCCT the
-  way we ship CPython (closure, payload layout, launcher, licensing).
-- [architecture/property-types.md](architecture/property-types.md) — how FreeCAD
-  exposes property types (C++ `Base::Type`, addressed by name) and what that demands
-  of the document-object SPI.
-- [architecture/property-value-extension.md](architecture/property-value-extension.md) —
-  how a module holds its own property value (`Property::Extension`) with
-  `clone`/`eq`/`save`/`restore`.
-- [architecture/python-bindings.md](architecture/python-bindings.md) — the PyO3 binding
-  design.
-- [architecture/api-namespaces.md](architecture/api-namespaces.md) — the FreeCAD-vs-FerroCAD
-  namespace rule: which names stay upstream-compatible and which are FerroCAD-only.
-- [architecture/distribution.md](architecture/distribution.md) — how the app runs and is
-  packaged (payload, bundled runtime, artifacts).
-- [architecture/kernel-state-sharing.md](architecture/kernel-state-sharing.md) — the
-  one-process-wide-core invariant, the state scopes, and the combined extension
-  vs edition compositions.
-- [architecture/repackaging.md](architecture/repackaging.md) — editions and the
-  repackaging vision.
-- [architecture/edition-publishing.md](architecture/edition-publishing.md) — how the
-  first edition (`FerroCAD: Parametric`) is published: a linked `Part`/OCCT binary and
-  its bundled `lib/`, the slices, and the open decisions.
-- [architecture/releasing.md](architecture/releasing.md) — how a release is cut
-  (crates.io, the tag, the artifacts).
-
-## Viewport
-
-- [viewport/inventor-renderer.md](viewport/inventor-renderer.md) — the Inventor scene
-  core, the wgpu backend, and the gpui viewport (the render milestone).
-- [viewport/inventor-plan.md](viewport/inventor-plan.md) — the Inventor/Coin emulation
-  roadmap (four phases), adapted to the code as it stands (plan, with per-item status).
-- [viewport/coin-bridge-reuse-assessment.md](viewport/coin-bridge-reuse-assessment.md) —
-  the evidence behind the Coin3D and scene-graph decisions (a snapshot).
-- [viewport/stage.md](viewport/stage.md) — the modern declarative stack
-  (`ferrocad_stage`): the slice path (T0–T6, all built), the as-built sections, and the
-  deferred decisions.
-- [viewport/directives.md](viewport/directives.md) — the neutral **directives** channel:
-  semantic scene data the renderer ignores and the viewport consumes (the `SoNaviCube` /
-  `SoEventCallback` bridge).
-- [viewport/gpu-interop-assessment.md](viewport/gpu-interop-assessment.md) — zero-copy
-  GPU presentation through `gpui_interop`: the dma-buf hand-off, the same-device
-  fallback, the platform matrix, and the implemented first slice.
-- [viewport/render-diagnostics.md](viewport/render-diagnostics.md) — the `FERROCAD_TRACE`
-  / `--trace` knobs, the frame/pipeline/presenter trace lines, and the black-frame
-  investigation.
-- [viewport/upstream-dmabuf-issue.md](viewport/upstream-dmabuf-issue.md) — the
-  single-dma-buf race filed as `bite-gpui/gpui_interop#1`, the residual black-frame
-  symptom, and the usage rules.
-
-## Interaction
-
-- [interaction/selection-gizmos-and-forms.md](interaction/selection-gizmos-and-forms.md) —
-  the interaction state machine: persistent selection vs a wheel's context target,
-  wheel armed/latched phases, gizmo drag/preview/re-arm, the floating command form,
-  pointer/keyboard precedence and the invariants.
-- [interaction/axis-origin-grid.md](interaction/axis-origin-grid.md) — the spatial
-  reference model: the world triad, the ground and workplane grids, face frames,
-  snapping, and how the navicube relates to them.
-- [interaction/visual-language.md](interaction/visual-language.md) — the token set
-  (canvas, accents, glass, edges, text), the type scale, stroke/occlusion rules and the
-  idle → hover → drag state model.
-- [interaction/gizmo-manipulators.md](interaction/gizmo-manipulators.md) — the
-  context-driven manipulator suite: the Spatial Transactor (T1–T4 built), the topology
-  prerequisite F0, and the edge dress-up arc F1.
-- [interaction/topology-selection.md](interaction/topology-selection.md) — the F0
-  prerequisite for the manipulators: the topology/selection seam, the tessellation
-  contract, the `opencascade-sys` binding findings, and the F0.0–F0.6 slice plan.
-- [interaction/navicube.md](interaction/navicube.md) — the navigation cube: what it is
-  upstream, the slice plan, and the as-built map (implemented, N1–N4b).
-- [interaction/navicube-spec.md](interaction/navicube-spec.md) — the navigation cube
-  **specification**: the coordinate conventions, piece taxonomy and ids, geometry,
-  appearance **roles** (styling is a theme), overlay camera, placement, interaction, and
-  the producer build contract.
-- [interaction/navicube-plan.md](interaction/navicube-plan.md) — making the navigation
-  cube **producer-independent**: the model/producer/controller layering and the V1–V4
-  slice path.
-- [interaction/navicube-gpui-design.md](interaction/navicube-gpui-design.md) — the
-  GPUI-native redesign: the wireframe gyro-cube, hover/proximity states, compass ring,
-  projection toggle, and the D1–D5 slice plan.
-- [interaction/input-components.md](interaction/input-components.md) — the input widget
-  design.
-- [interaction/python-ui-research.md](interaction/python-ui-research.md) —
-  Python-declarative UI research.
-
-## Workbenches
-
-- [workbenches/actions-and-tools.md](workbenches/actions-and-tools.md) — the workbench
-  command model: `Gui` command registration, enablement, dialogs, the actions bar, and
-  the command/tool split.
-- [workbenches/mod-providers.md](workbenches/mod-providers.md) — how a mod declares what
-  it provides, how one provider per feature is chosen and persisted, and how
-  `Mods_Settings` switches them.
-- [workbenches/toy-workbench.md](workbenches/toy-workbench.md) — the kernel-free edition
-  that exercises the generic interaction registry end to end (and the template for a new
-  workbench).
-- [workbenches/conformance.md](workbenches/conformance.md) — running the upstream
-  FreeCAD test suite against the facade: the sparse checkout, the extension build, the
-  commands and the baseline.
-- [workbenches/part-api-audit.md](workbenches/part-api-audit.md) — the repeatable
-  Part/OCCT surface audit: what we register, what upstream exposes, the gap markers, and
-  the `--check` contract used in CI.
-- [workbenches/screenshot-tool.md](workbenches/screenshot-tool.md) — the three screenshot
-  scopes (generated viewport snapshots, app chrome, and the whole desktop), the snapshot
-  spec, the `tools/screenshot.py` and `userdocs --capture` CLIs, and the GPU-free image
-  manifest gate.
-- [workbenches/qt-strategy.md](workbenches/qt-strategy.md) — running upstream workbench
-  GUIs without Qt: the measured Qt surface, the `.ui` loader and micro-shim (option D),
-  and the Q0–Q5 plan.
-- [workbenches/draft-tools.md](workbenches/draft-tools.md) — the native Draft tool layer
-  (Q4/Q5): `FreeCADGui.Snapper`, the task-panel adapter, the async point session,
-  `PlaneGui`, `Draft_Line`/`Draft_Wire`, the checkable snap bar and the four headless
-  forms — with the call path, the modes, and the known gaps.
-- [workbenches/simplecad-bringup.md](workbenches/simplecad-bringup.md) — SimpleCAD as the
-  canvas-first proving ground: the measured tree, the Part gap table, and the S0–S5 plan.
-- [workbenches/grid-overlay-bringup.md](workbenches/grid-overlay-bringup.md) — a
-  third-party Coin/GLSL addon as a **shader/extraction fixture**: why it is not a
-  workbench, why its GLSL 1.20 cannot run on wgpu, and the D→C plan (headless fixture,
-  then WGSL authoring).
-- [workbenches/grid-overlay-plan.md](workbenches/grid-overlay-plan.md) — the decisions
-  that followed (fork/WGSL, `FerroCAD.Grid` semantic API, Coin completeness), the
-  `FerroCAD.Grid` surface and semantics, and the G0–G6 staging.
-
-## The record
-
-The record is deliberately compact: each closed backlog is a one-page summary, the
-closed task specs are one file per subject, and the full slice-by-slice text lives in
-[`record/archive/`](record/archive/).
-
-- [record/milestones.md](record/milestones.md) — the high-level timeline and the
-  current assessment. The per-slice detail (M0–M4, the restructure, the MVP and
-  app-shell slices, the M3 plan) is in
-  [record/archive/milestones-detail-2026-10.md](record/archive/milestones-detail-2026-10.md).
-- [record/TODO-26-10-2026.md](record/TODO-26-10-2026.md) — closed record: the
-  wheel/form layer, re-pivot, select mode, the gizmo registry/set, the Part thread and
-  `curve_of` work, the Mesh module, the SimpleCAD S1–S3 baselines, Draft M3's first
-  slice, and the kernel state. The full round detail is in
-  [record/archive/TODO-26-detail-2026-10-26.md](record/archive/TODO-26-detail-2026-10-26.md).
-- [record/TODO-24-10-2026.md](record/TODO-24-10-2026.md) — closed record: the element
-  map (P0), the OCCT seam (P1), the Python feature proxies (P2), and the Qt reduction
-  through Q5 (P3).
-- [record/TODO-23-10-2026.md](record/TODO-23-10-2026.md) — closed record: the format
-  serializers (F1–F8), the lineage layer (S1–S6c), Links L0–L5, the Qt-reduction
-  slices (Q0–Q3b), and the Part completion at close.
-- [record/TODO-22-10-2026.md](record/TODO-22-10-2026.md) — closed record: the Part
-  conformance push, the headless `ViewObject`, the `.FCStd` reader, the link arrays,
-  the Ctrl+K palette, and the measurements at close.
-- [record/TODO-21-10-2026.md](record/TODO-21-10-2026.md) — closed record: the grid
-  overlay, the Draft probe, and the external mod repository; full text in
-  `record/archive/`.
-- [record/tasks/README.md](record/tasks/README.md) — the closed task specs (serializers,
-  lineage element map, Links, proxies, Qt reduction, Mesh, kernel state, Draft import,
-  Dev Tools, chrome, settings, grid visibility, event routing).
-- [record/2026-10-24-q4-q5-draft-tools.md](record/2026-10-24-q4-q5-draft-tools.md) —
-  closed record: the Q4/Q5 round (camera-free snapping, the Snapper/tool-bar surface,
-  the line/wire tools and `PlaneGui`, the four forms).
-- [record/incident-2026-10-21-session-crash.md](record/incident-2026-10-21-session-crash.md)
-  — post-mortem of the lost GNOME session: `systemd-oomd` killed `gnome-shell`, not the
-  GPU or Wayland; the evidence, the timeline, and the prevention notes.
-
-## Tasks
-
-`tasks/` is for specs that are still in progress. There are none today: every spec
-written so far has landed, and its file moved to
-[`record/tasks/`](record/tasks/README.md) with the original design and as-built
-sections intact. The open work is tracked in the backlog, not kept as a task checklist.
-
-- [tasks/README.md](tasks/README.md) — the active-spec policy.
-- [record/tasks/README.md](record/tasks/README.md) — the closed specs, each with its
-  label, closing backlog and one-line result. Start there if you want the design
-  argument behind a layer the backlog now builds on.
+The repository-root [`README.md`](../README.md) covers install, build, test and the
+workspace layout. The mdBook edition at <https://ferrocad.github.io/docs/> is assembled
+from `user/`, `mods/` and `python-api/` by `tools/build_book.py`.

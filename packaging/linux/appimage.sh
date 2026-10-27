@@ -9,7 +9,7 @@
 #                               [--check-init]
 #
 # The base app's artifact is ferrocad-<arch>.AppImage; an edition's is
-# ferrocad-<edition>-<arch>.AppImage (see docs/architecture/edition-publishing.md).
+# ferrocad-<edition>-<arch>.AppImage (see docs/developer/architecture/edition-publishing.md).
 set -eu
 
 HERE=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)

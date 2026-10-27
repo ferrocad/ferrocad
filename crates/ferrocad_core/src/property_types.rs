@@ -5,7 +5,7 @@
 //! (`obj.addProperty("App::PropertyLength", "Length", …)`) and enumerates them
 //! (`supportedProperties()`). This is the Rust equivalent: a name-keyed registry of
 //! factories. Core seeds the `App::*` types; modules register their own
-//! (e.g. `Part::PropertyPartShape`). See `docs/architecture/property-types.md`.
+//! (e.g. `Part::PropertyPartShape`). See `docs/developer/architecture/property-types.md`.
 //!
 //! An unknown name is *not* a default value: `default_for` returns `None` so callers
 //! can raise, matching upstream (which raises for an unregistered type) rather than
@@ -69,7 +69,7 @@ pub(crate) fn extensions() -> &'static PropertyExtensionRegistry {
 /// function that reconstructs it from [`ExtensionData::save`] bytes (used on load).
 ///
 /// `make_default` must return a `Property::Extension`; `restore` is called with the
-/// bytes when a saved document is read. See `docs/architecture/property-value-extension.md`.
+/// bytes when a saved document is read. See `docs/developer/architecture/property-value-extension.md`.
 pub fn register_extension(
     name: &str,
     make_default: impl Fn() -> Property + Send + Sync + 'static,

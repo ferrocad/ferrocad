@@ -3,7 +3,7 @@
 A mod that imports ``FerroCADGui`` declares a FerroCAD dependency. Nothing here
 is aliased onto ``FreeCADGui``: the upstream namespace keeps only the
 upstream-shaped command registry, selection snapshot and dialog helpers. See
-``docs/architecture/api-namespaces.md``.
+``docs/developer/architecture/api-namespaces.md``.
 
 What lives here:
 
@@ -13,11 +13,11 @@ What lives here:
   is active, and switching runs the outgoing ``deactivate`` and incoming
   ``activate`` callbacks; a later request can run the active backend's
   ``refresh`` callback without switching (see
-  ``docs/workbenches/mod-providers.md``);
+  ``docs/developer/workbenches/mod-providers.md``);
 * the **provider settings schema** — a provider may advertise its knobs in
   ``registerProvider(..., settings=[...])``; ``settings`` returns the active
   backend's rows in the property-pane row shape and ``setSetting`` validates,
-  stores and refreshes (see ``docs/tasks/settings-model.md`` S0);
+  stores and refreshes (see ``docs/project/record/tasks/settings-model.md`` S0);
 * the **edition appearance presets** — ``registerAppearancePreset`` /
   ``installAppearancePresets`` / ``resetAppearance``: an edition declares its own
   defaults for the gizmo, axis and grid appearance. The preset is a fallback
@@ -151,7 +151,7 @@ def addDocumentListener(observer) -> None:
     This slot lives on ``FerroCADGui`` because it is a FerroCAD extension: the
     App observer reports creation/activation/deletion without a deactivation
     event, and ``FreeCADGui.addDocumentObserver`` forwards here for the
-    upstream-shaped name (see ``docs/architecture/api-namespaces.md``).
+    upstream-shaped name (see ``docs/developer/architecture/api-namespaces.md``).
     """
     if any(existing is observer for existing in _DOCUMENT_LISTENERS):
         return
@@ -226,7 +226,7 @@ def _document_event(event: str, name: str) -> None:
 # also runs on document activation, so writing ``enabled`` there would undo a
 # user's "off". A command that changed shared state without switching can ask
 # the active backend to re-read it with :func:`refreshProviders`. See
-# ``docs/mods/providers.md`` and ``docs/workbenches/mod-providers.md``.
+# ``docs/mods/providers.md`` and ``docs/developer/workbenches/mod-providers.md``.
 # ---------------------------------------------------------------------------
 
 
@@ -295,7 +295,7 @@ def registerProvider(
     ``set`` callables. It is validated here and stored; **no default is written**
     at registration, so importing a mod stays free of side effects. An unknown
     kind is allowed and reported once; its row is read-only. See
-    ``docs/tasks/settings-model.md`` S0.
+    ``docs/project/record/tasks/settings-model.md`` S0.
 
     ``skin`` is the optional WGSL source text of the material program this
     backend supplies for a capability that hosts one (the manipulator gizmo
@@ -727,7 +727,7 @@ addDocumentListener(_ProviderDocumentObserver())
 
 
 # ---------------------------------------------------------------------------
-# Provider settings (S0, docs/tasks/settings-model.md)
+# Provider settings (S0, docs/project/record/tasks/settings-model.md)
 #
 # A provider declares its knobs once, at registration, and FerroCAD owns the
 # store: one parameter group per ``(feature, backend)``, one typed key per
@@ -1597,7 +1597,7 @@ def addOverlay(node) -> None:
 
     The node is **extracted now**: the shell keeps a copy of its subtree and draws
     it beside the document scene on the next refresh. This is the pull bridge that
-    replaces Coin's ``getSceneGraph()``; see ``docs/workbenches/grid-overlay-plan.md`` §3.2.
+    replaces Coin's ``getSceneGraph()``; see ``docs/developer/workbenches/grid-overlay-plan.md`` §3.2.
     A later in-place edit does not reach the copy, so an author re-registers the
     node (``removeOverlay`` then ``addOverlay``) after changing it.
     """

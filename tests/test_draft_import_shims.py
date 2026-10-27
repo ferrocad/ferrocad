@@ -1,6 +1,6 @@
 """Tests for the shims that let the upstream Draft workbench import headlessly.
 
-Covers the D0 fixes (``docs/tasks/d0-draft-import.md``):
+Covers the D0 fixes (``docs/project/record/tasks/d0-draft-import.md``):
 
 * ``lazy_loader.LazyLoader`` imports on first attribute access and caches.
 * ``PySide`` is a pure-Python name subset (no Qt runtime), with a loud

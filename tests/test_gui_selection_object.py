@@ -10,7 +10,7 @@ shell owns the real viewport selection, so this facade:
   queues the operation for the shell (``_take_requests``) instead of pretending it
   moved the viewport.
 
-See ``docs/workbenches/simplecad-bringup.md`` §5.5 and §7 S4.3.
+See ``docs/project/research/simplecad-bringup.md`` §5.5 and §7 S4.3.
 """
 
 import os

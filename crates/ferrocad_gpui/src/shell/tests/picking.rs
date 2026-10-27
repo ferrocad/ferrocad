@@ -1,6 +1,8 @@
 //! Shell tests: select mode (whole-body vs sub-element selection).
 
 use super::*;
+use crate::python::SelectionRequest;
+use crate::shell::picking::apply_selection_request;
 use crate::translate_gizmo;
 use ferrocad_stage::{ShapeItem, Stage};
 
@@ -206,4 +208,205 @@ fn the_hosted_set_keeps_a_workbench_gizmo_beside_the_shared_triad(cx: &mut TestA
         Vector3::new(9.0, 9.0, 9.0),
         "the triad follows the session pivot"
     );
+}
+
+/// S4.3 write path: a script's `Gui.Selection.addSelection` reaches the shell.
+///
+/// The facade queues the write because Python cannot command the viewport; the shell
+/// drains the queue into **its own** selection, pushes the applied selection back so
+/// the two sides agree, and re-arms the primary item's manipulators (which is what
+/// makes a scripted face selection arm the Part push/pull stem).
+#[gpui::test]
+fn a_scripted_selection_reaches_the_shell(cx: &mut TestAppContext) {
+    let _guard = crate::PYTHON_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let (shell, model) = shell_with_stage(cx, [0.0, 0.0, 0.0]);
+
+    // Start from an empty selection with an empty queue.
+    let reset = crate::python::evaluate(
+        "import FreeCADGui\n\
+         FreeCADGui.Selection._set([])\n\
+         FreeCADGui.Selection._take_requests()\n",
+    )
+    .expect("reset the facade selection");
+    assert!(reset.ok, "{}", reset.output);
+    shell.update(cx, |shell, cx| shell.drain_selection_requests(cx));
+    assert!(selection(&model).is_empty());
+
+    // A script selects a face on the sample document's object.
+    let added = crate::python::evaluate(
+        "import FreeCADGui\n\
+         FreeCADGui.Selection.addSelection('Params', 'Face6')\n",
+    )
+    .expect("add a selection");
+    assert!(added.ok, "{}", added.output);
+    shell.update(cx, |shell, cx| shell.drain_selection_requests(cx));
+    assert_eq!(
+        selection(&model),
+        vec![SelectionItem::with_elements("Params", vec!["Face6".into()])],
+        "the shell's selection reflects the script's write"
+    );
+
+    // The applied selection is pushed back down, so `getSelectionEx` agrees.
+    let facade = crate::python::evaluate(
+        "import FreeCADGui\n\
+         print(repr([item.SubElementNames for item in FreeCADGui.Selection.getSelectionEx('Params')]))\n",
+    )
+    .expect("read the facade selection");
+    assert_eq!(facade.output.trim(), "[['Face6']]");
+    let queue = crate::python::evaluate(
+        "import FreeCADGui\nprint(repr(FreeCADGui.Selection._take_requests()))\n",
+    )
+    .expect("read the queue");
+    assert_eq!(queue.output.trim(), "[]", "applying a write does not requeue it");
+
+    // Adding a second object makes it the primary (last) item.
+    crate::python::evaluate(
+        "import FreeCADGui\nFreeCADGui.Selection.addSelection('Derived')\n",
+    )
+    .expect("add the second object");
+    shell.update(cx, |shell, cx| shell.drain_selection_requests(cx));
+    assert_eq!(
+        selection(&model)
+            .iter()
+            .map(|item| item.object.as_str())
+            .collect::<Vec<_>>(),
+        vec!["Params", "Derived"]
+    );
+
+    // A remove drops just the named object.
+    crate::python::evaluate(
+        "import FreeCADGui\nFreeCADGui.Selection.removeSelection('Derived')\n",
+    )
+    .expect("remove the second object");
+    shell.update(cx, |shell, cx| shell.drain_selection_requests(cx));
+    assert_eq!(
+        selection(&model),
+        vec![SelectionItem::with_elements("Params", vec!["Face6".into()])]
+    );
+
+    // A clear empties the shell's selection too.
+    crate::python::evaluate("import FreeCADGui\nFreeCADGui.Selection.clearSelection()\n")
+        .expect("clear the selection");
+    shell.update(cx, |shell, cx| shell.drain_selection_requests(cx));
+    assert!(selection(&model).is_empty());
+    assert!(
+        shell
+            .read_with(cx, |shell, _| shell.user_origin)
+            .is_none(),
+        "a cleared selection drops the session pivot"
+    );
+}
+
+/// The queue is applied in order, and a record that changes nothing is a no-op.
+#[test]
+fn a_selection_request_is_applied_with_the_facades_rules() {
+    let mut items = Vec::new();
+    apply_selection_request(
+        &mut items,
+        SelectionRequest {
+            op: "add".into(),
+            object: "Body".into(),
+            elements: vec!["Face6".into()],
+            points: vec![(0.0, 0.0, 0.0)],
+        },
+    );
+    assert_eq!(
+        items,
+        vec![SelectionItem::with_elements("Body", vec!["Face6".into()])]
+    );
+
+    // A second add merges sub-elements instead of duplicating the object.
+    apply_selection_request(
+        &mut items,
+        SelectionRequest {
+            op: "add".into(),
+            object: "Body".into(),
+            elements: vec!["Face6".into(), "Edge2".into()],
+            points: Vec::new(),
+        },
+    );
+    assert_eq!(
+        items,
+        vec![SelectionItem::with_elements(
+            "Body",
+            vec!["Face6".into(), "Edge2".into()]
+        )]
+    );
+
+    // A whole-object add replaces the element list and makes it primary.
+    apply_selection_request(
+        &mut items,
+        SelectionRequest {
+            op: "add".into(),
+            object: "Slab".into(),
+            elements: Vec::new(),
+            points: Vec::new(),
+        },
+    );
+    apply_selection_request(
+        &mut items,
+        SelectionRequest {
+            op: "add".into(),
+            object: "Body".into(),
+            elements: Vec::new(),
+            points: Vec::new(),
+        },
+    );
+    assert_eq!(items.len(), 2);
+    assert_eq!(items.last().map(|item| item.object.as_str()), Some("Body"));
+    assert!(items.last().is_some_and(SelectionItem::is_whole));
+
+    // Removing the last sub-element drops the object; an unknown name is a no-op.
+    apply_selection_request(
+        &mut items,
+        SelectionRequest {
+            op: "remove".into(),
+            object: "Body".into(),
+            elements: vec!["Face6".into()],
+            points: Vec::new(),
+        },
+    );
+    assert_eq!(items.len(), 1);
+    apply_selection_request(
+        &mut items,
+        SelectionRequest {
+            op: "remove".into(),
+            object: "Missing".into(),
+            elements: Vec::new(),
+            points: Vec::new(),
+        },
+    );
+    assert_eq!(items.len(), 1);
+
+    // Hover and an unknown op never touch the selection (forward compatible).
+    apply_selection_request(
+        &mut items,
+        SelectionRequest {
+            op: "preselect".into(),
+            object: "Slab".into(),
+            elements: vec!["Face1".into()],
+            points: Vec::new(),
+        },
+    );
+    apply_selection_request(
+        &mut items,
+        SelectionRequest {
+            op: "something-new".into(),
+            object: "Slab".into(),
+            elements: Vec::new(),
+            points: Vec::new(),
+        },
+    );
+    assert_eq!(items.len(), 1);
+
+    apply_selection_request(
+        &mut items,
+        SelectionRequest {
+            op: "clear".into(),
+            object: String::new(),
+            elements: Vec::new(),
+            points: Vec::new(),
+        },
+    );
+    assert!(items.is_empty());
 }

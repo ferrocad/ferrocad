@@ -5,7 +5,8 @@
 //! `getCameraNode` and `getObjectsInfo`. The Python facade cannot see the shell's
 //! `InventorViewport`, so the host **publishes** the two things those calls need:
 //!
-//! * the camera, on every shell render ([`publish_camera`]);
+//! * the camera, on every shell render and on every viewport notification
+//!   ([`publish_camera`]);
 //! * the compiled stage and its entity/part-name tables, whenever the document's
 //!   display changes ([`publish_stage`]).
 //!
@@ -13,6 +14,12 @@
 //! view. A headless script (or a test) publishes the same two values through
 //! `ferrocad_stage.set_view_camera` / `set_view_stage`, so the facade behaves
 //! identically without a shell.
+//!
+//! A host also publishes **transient preview items** here (S4.6,
+//! [`set_preview_items`]). They are drawn beside the stage but are not part of the
+//! published pick stage, and each item is forced non-selectable, so a preview never
+//! answers a click. [`preview_generation`] is the cheap change signal a host polls to
+//! redraw without cloning the list.
 //!
 //! [`pick_at`] is the **ranked** pick S4.2 asks for: `ferrocad_graphics`' picker
 //! returns the nearest hit only, while this one returns every distinct
@@ -53,6 +60,68 @@ fn camera_cell() -> &'static Mutex<Option<gfx::Camera>> {
 fn stage_cell() -> &'static Mutex<Option<Arc<PublishedStage>>> {
     static CELL: OnceLock<Mutex<Option<Arc<PublishedStage>>>> = OnceLock::new();
     CELL.get_or_init(|| Mutex::new(None))
+}
+
+/// The transient preview items a script published (S4.6).
+///
+/// A preview is drawn over the document but is **not** part of the published stage:
+/// it is unpickable by construction ([`force_unpickable`] clears `selectable`), and
+/// the ranked picker therefore never reports it. The generation counter lets a host
+/// that owns the draw (the shell) notice a change without cloning the list.
+#[derive(Default)]
+struct PreviewState {
+    items: Vec<fs::ShapeItem>,
+    generation: u64,
+}
+
+fn preview_cell() -> &'static Mutex<PreviewState> {
+    static CELL: OnceLock<Mutex<PreviewState>> = OnceLock::new();
+    CELL.get_or_init(|| Mutex::new(PreviewState::default()))
+}
+
+/// Replace the transient preview items with `items`.
+///
+/// Every item is forced non-selectable: a preview is a visual, so a click must pass
+/// through it to the geometry underneath (the same rule the grid follows). Returns
+/// the new generation.
+pub fn set_preview_items(items: Vec<fs::ShapeItem>) -> u64 {
+    let mut state = preview_cell().lock().unwrap_or_else(|e| e.into_inner());
+    state.items = items.into_iter().map(force_unpickable).collect();
+    state.generation += 1;
+    state.generation
+}
+
+/// Drop every transient preview. Returns the new generation.
+pub fn clear_previews() -> u64 {
+    let mut state = preview_cell().lock().unwrap_or_else(|e| e.into_inner());
+    state.items.clear();
+    state.generation += 1;
+    state.generation
+}
+
+/// The transient preview items, in publication order.
+pub fn preview_items() -> Vec<fs::ShapeItem> {
+    preview_cell()
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .items
+        .clone()
+}
+
+/// A counter that changes whenever the preview set does.
+pub fn preview_generation() -> u64 {
+    preview_cell()
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .generation
+}
+
+fn force_unpickable(item: fs::ShapeItem) -> fs::ShapeItem {
+    if item.selectable() {
+        item.with_selectable(false)
+    } else {
+        item
+    }
 }
 
 /// Publish the camera the shell is drawing with.
@@ -342,6 +411,41 @@ fn py_clear_view() {
     clear_view();
 }
 
+/// Publish the transient preview items a script wants drawn (S4.6).
+///
+/// Each item is forced unpickable, so a preview never answers a click and the ranked
+/// picker never reports it. Returns the new generation, which a host polls to redraw
+/// without cloning the list.
+#[pyfunction]
+#[pyo3(name = "set_preview_items")]
+fn py_set_preview_items(items: Vec<PyRef<'_, crate::shape::ShapeItem>>) -> u64 {
+    set_preview_items(items.iter().map(|item| item.inner.clone()).collect())
+}
+
+/// The published transient preview items.
+#[pyfunction]
+#[pyo3(name = "preview_items")]
+fn py_preview_items() -> Vec<crate::shape::ShapeItem> {
+    preview_items()
+        .into_iter()
+        .map(crate::shape::ShapeItem::wrap)
+        .collect()
+}
+
+/// Drop every transient preview.
+#[pyfunction]
+#[pyo3(name = "clear_previews")]
+fn py_clear_previews() -> u64 {
+    clear_previews()
+}
+
+/// A counter that changes whenever the preview set does.
+#[pyfunction]
+#[pyo3(name = "preview_generation")]
+fn py_preview_generation() -> u64 {
+    preview_generation()
+}
+
 /// Register this module's functions and classes.
 pub(crate) fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PickHit>()?;
@@ -350,6 +454,10 @@ pub(crate) fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(view_camera, m)?)?;
     m.add_function(wrap_pyfunction!(pick_at, m)?)?;
     m.add_function(wrap_pyfunction!(py_clear_view, m)?)?;
+    m.add_function(wrap_pyfunction!(py_set_preview_items, m)?)?;
+    m.add_function(wrap_pyfunction!(py_preview_items, m)?)?;
+    m.add_function(wrap_pyfunction!(py_clear_previews, m)?)?;
+    m.add_function(wrap_pyfunction!(py_preview_generation, m)?)?;
     Ok(())
 }
 
@@ -381,6 +489,14 @@ fn normal_of(a: [f64; 3], b: [f64; 3], c: [f64; 3]) -> [f64; 3] {
 mod tests {
     use super::*;
     use ferrocad_stage::ShapeItem;
+
+    /// The published view is process-global, so the tests that write it must not
+    /// run concurrently with each other (`publish_stage` would make `has_stage`
+    /// true under the preview test).
+    fn view_lock() -> std::sync::MutexGuard<'static, ()> {
+        static LOCK: Mutex<()> = Mutex::new(());
+        LOCK.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
+    }
 
     fn camera(size: [u32; 2], eye_z: f64) -> gfx::Camera {
         gfx::Camera {
@@ -431,6 +547,7 @@ mod tests {
 
     #[test]
     fn the_nearest_sub_element_ranks_first() {
+        let _guard = view_lock();
         let mut stage = fs::Stage::new();
         stage.add_item(quad(1, 0.0, "Face1"));
         stage.add_item(quad(2, -5.0, "Face2"));
@@ -490,5 +607,34 @@ mod tests {
             0,
         );
         assert!(hits.is_empty());
+    }
+
+    /// S4.6: a preview is drawn by the host but never published as a pick target, and
+    /// the generation counter is what tells the host to redraw.
+    #[test]
+    fn previews_are_unpickable_and_bump_the_generation() {
+        let _guard = view_lock();
+        clear_view();
+        clear_previews();
+        let before = preview_generation();
+
+        // A selectable item is forced unpickable by the channel, so a preview can
+        // never answer a click even when the caller forgot.
+        let preview = quad(9, 1.0, "Face1");
+        assert!(preview.selectable());
+        let generation = set_preview_items(vec![preview]);
+        assert_ne!(generation, before, "publishing a preview bumps the generation");
+
+        let items = preview_items();
+        assert_eq!(items.len(), 1);
+        assert!(!items[0].selectable(), "a preview is never selectable");
+        // The published pick stage is the document, not the preview set: a host that
+        // only publishes the document stage cannot report a preview.
+        assert!(!has_stage());
+
+        clear_previews();
+        assert!(preview_items().is_empty());
+        assert_ne!(preview_generation(), generation);
+        set_preview_items(Vec::new());
     }
 }

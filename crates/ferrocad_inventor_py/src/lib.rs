@@ -27,6 +27,7 @@ use pyo3::types::{PyDict, PyModule};
 
 mod fields;
 mod events;
+mod values;
 
 pub use events::dispatch_event;
 
@@ -431,6 +432,16 @@ impl SoType {
                 Some(Py::new(py, fields::SoShaderParameterArray1f::new())?.into_any())
             }
             "SoEventCallback" => Some(Py::new(py, events::SoEventCallback::new())?.into_any()),
+            "SoPerspectiveCamera" => Some(
+                Py::new(py, values::SoCamera::initializer("SoPerspectiveCamera")
+                    .add_subclass(values::SoPerspectiveCamera))?
+                .into_any(),
+            ),
+            "SoOrthographicCamera" => Some(
+                Py::new(py, values::SoCamera::initializer("SoOrthographicCamera")
+                    .add_subclass(values::SoOrthographicCamera))?
+                .into_any(),
+            ),
             _ => None,
         };
         Ok(instance)
@@ -472,6 +483,9 @@ const KNOWN_TYPES: &[&str] = &[
     "SoShaderParameter3f",
     "SoShaderParameterArray1f",
     "SoEventCallback",
+    "SoCamera",
+    "SoPerspectiveCamera",
+    "SoOrthographicCamera",
     "SoEvent",
     "SoButtonEvent",
     "SoMouseButtonEvent",
@@ -485,6 +499,8 @@ pub(crate) fn derives_from(child: &str, parent: &str) -> bool {
     }
     match child {
         "SoSeparator" | "SoSwitch" => derives_from("SoGroup", parent),
+        "SoPerspectiveCamera" | "SoOrthographicCamera" => derives_from("SoCamera", parent),
+        "SoCamera" => derives_from("SoNode", parent),
         "SoGroup" => derives_from("SoNode", parent),
         "SoCoordinate3"
         | "SoNormal"
@@ -532,6 +548,7 @@ pub fn coin(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<SoType>()?;
     fields::register(m)?;
     events::register(m)?;
+    values::register(m)?;
     // The pull-based overlay bridge (`docs/workbenches/grid-overlay-plan.md` §3.2, G5). The
     // shell reads the Rust side; these functions are the Python author surface.
     m.add_function(wrap_pyfunction!(add_overlay, m)?)?;

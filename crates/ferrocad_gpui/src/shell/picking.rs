@@ -3,6 +3,7 @@
 //! Split out of `shell.rs`; the paths and behaviour are unchanged.
 
 use super::*;
+use crate::python::SelectionRequest;
 
 /// The selection a click asks for.
 ///
@@ -113,6 +114,46 @@ impl Shell {
         selection::push(&items)
     }
 
+    /// Apply the selection writes a script queued on `FreeCADGui.Selection`.
+    ///
+    /// This is the write half of S4.3 (the read half is [`Self::push_selection`]).
+    /// The facade cannot command the viewport synchronously, so a script's
+    /// `addSelection`/`removeSelection`/`clearSelection` records the operation and
+    /// the shell applies it to **its own** selection — the same state a click
+    /// produces. The selection is then pushed back down (so the facade snapshot and
+    /// the shell agree, without a second request) and the primary item's workbench
+    /// manipulators are re-armed, which is what makes a `Select Face6` from a script
+    /// arm the Part push/pull stem exactly as a click does.
+    ///
+    /// A `preselect` record is session hover state, not a selection: the viewport
+    /// owns hover, so it is dropped here (the facade keeps its own copy for
+    /// `getPreselection`). The facade refuses an object the document does not have
+    /// before it queues anything, so a record always names a live object; one deleted
+    /// between the write and the drain is pruned by the next
+    /// [`refresh`](Self::refresh).
+    pub(super) fn drain_selection_requests(&mut self, cx: &mut Context<Self>) {
+        let requests = match python::take_selection_requests() {
+            Ok(requests) => requests,
+            Err(error) => {
+                self.console_line(format!("selection: {error}"), cx);
+                return;
+            }
+        };
+        let mut items = {
+            let m = self.model.lock().unwrap();
+            m.selection.clone()
+        };
+        let before = items.clone();
+        for request in requests {
+            apply_selection_request(&mut items, request);
+        }
+        if items == before {
+            return;
+        }
+        self.replace_selection(items, cx);
+        self.rearm_selection(cx);
+    }
+
     /// The status line's pass-through segment: the overlay the pointer would click
     /// through, plus the document object beneath it. Empty when there is none.
     pub(super) fn hover_line(&self, cx: &App) -> String {
@@ -187,4 +228,55 @@ impl Shell {
         cx.notify();
     }
 
+}
+
+/// Apply one facade selection write to the shell's selection list.
+///
+/// The rules mirror `FreeCADGui.Selection`'s own: an `add` promotes the object to the
+/// **primary** (last) slot, merges sub-elements instead of duplicating them, and a
+/// whole-object add replaces a stale element list. A `remove` of the last sub-element
+/// drops the object; `clear` empties everything. `preselect` is hover state and is
+/// ignored here, and an unknown op is ignored so a newer facade cannot break an older
+/// shell.
+pub(super) fn apply_selection_request(items: &mut Vec<SelectionItem>, request: SelectionRequest) {
+    match request.op.as_str() {
+        "add" => {
+            if request.object.is_empty() {
+                return;
+            }
+            let index = items.iter().position(|item| item.is(&request.object));
+            let mut item = index
+                .map(|index| items.remove(index))
+                .unwrap_or_else(|| SelectionItem::new(request.object.clone()));
+            if request.elements.is_empty() {
+                item.elements.clear();
+            } else {
+                for element in request.elements {
+                    if !item.elements.contains(&element) {
+                        item.elements.push(element);
+                    }
+                }
+            }
+            items.push(item);
+        }
+        "remove" => {
+            let Some(index) = items.iter().position(|item| item.is(&request.object)) else {
+                return;
+            };
+            if request.elements.is_empty() {
+                items.remove(index);
+                return;
+            }
+            items[index]
+                .elements
+                .retain(|element| !request.elements.contains(element));
+            if items[index].elements.is_empty() {
+                items.remove(index);
+            }
+        }
+        "clear" => items.clear(),
+        // Hover (`preselect`) belongs to the viewport; an unknown op is a newer
+        // facade's, and ignoring it keeps an older shell working.
+        _ => {}
+    }
 }

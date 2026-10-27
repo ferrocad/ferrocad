@@ -1,9 +1,12 @@
 //! The shell's selection: what the user picked, and the facade's snapshot (A2).
 //!
-//! The shell owns the selection; `FreeCADGui.Selection` is a **read-only snapshot**
-//! of it, pushed after every change so a command's `IsActive`/`Activated` can see
-//! the same thing the UI shows. The facade keeps no document state of its own
-//! (see `docs/workbenches/actions-and-tools.md` §5).
+//! The shell owns the selection; `FreeCADGui.Selection` is a **snapshot** of it,
+//! pushed after every change so a command's `IsActive`/`Activated` can see the same
+//! thing the UI shows. The write direction is queued, not synchronous: the facade
+//! records `addSelection`/`removeSelection`/`clearSelection` and
+//! `Shell::drain_selection_requests` applies them to this state, which is what makes
+//! a scripted selection reach the viewport. The facade keeps no document state of
+//! its own (see `docs/workbenches/actions-and-tools.md` §5).
 //!
 //! Unlike the viewport's [`ferrocad_geom::SelectionRef`], which addresses objects by
 //! picking identity, an item is already resolved to a document object name: the

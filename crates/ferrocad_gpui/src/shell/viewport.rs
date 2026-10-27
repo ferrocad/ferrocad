@@ -13,22 +13,73 @@ impl Shell {
     /// snippet, or an interaction commit (which syncs itself). An empty document or a
     /// build without a display workbench simply yields an empty stage.
     pub(super) fn sync_stage(&mut self, cx: &mut Context<Self>) {
-        let Some(viewport) = self.viewport.clone() else {
+        if self.viewport.is_none() {
             return;
-        };
+        }
         match self.build_stage() {
             Ok(stage) => {
                 // The Python view facade picks over exactly this stage; publish it with
                 // the entity → object names before the viewport takes ownership.
                 self.publish_stage(&stage);
-                viewport.update(cx, |viewport, cx| {
-                    viewport.set_stage(stage);
-                    cx.notify();
-                });
+                self.set_stage(stage, cx);
                 self.publish_camera(cx);
             }
             Err(error) => self.console_line(format!("stage: {error}"), cx),
         }
+    }
+
+    /// Hand `stage` (the document's items) to the viewport with the transient previews.
+    ///
+    /// The document stage is kept so a preview change can redraw without re-reading the
+    /// tessellations (`stage_meshes` crosses into the kernel). A stage with no preview
+    /// published is handed over as built — the common case pays nothing.
+    pub(super) fn set_stage(&mut self, stage: Stage, cx: &mut Context<Self>) {
+        let generation = ferrocad_stage_py::preview_generation();
+        self.preview_generation = generation;
+        let merged = self.stage_with_previews(&stage);
+        self.last_stage = Some(stage);
+        if let Some(viewport) = self.viewport.clone() {
+            viewport.update(cx, |viewport, cx| {
+                viewport.set_stage(merged);
+                cx.notify();
+            });
+        }
+    }
+
+    /// The draw stage: the document's items plus the published preview items.
+    pub(super) fn stage_with_previews(&self, stage: &Stage) -> Stage {
+        if ferrocad_stage_py::preview_generation() == 0 {
+            return stage.clone();
+        }
+        let mut merged = stage.clone();
+        for item in ferrocad_stage_py::preview_items() {
+            merged.add_item(item);
+        }
+        merged
+    }
+
+    /// Redraw when a script published or dropped preview items (S4.6).
+    ///
+    /// A preview changes without a document edit, so [`sync_stage`] would not run and
+    /// the drawn stage would keep the old visual. The generation check is a mutex read;
+    /// only a real change clones the document stage.
+    pub(super) fn sync_previews(&mut self, cx: &mut Context<Self>) {
+        let generation = ferrocad_stage_py::preview_generation();
+        if generation == self.preview_generation {
+            return;
+        }
+        self.preview_generation = generation;
+        let Some(viewport) = self.viewport.clone() else {
+            return;
+        };
+        let Some(stage) = self.last_stage.clone() else {
+            return;
+        };
+        let merged = self.stage_with_previews(&stage);
+        viewport.update(cx, |viewport, cx| {
+            viewport.set_stage(merged);
+            cx.notify();
+        });
     }
 
     /// Publish the camera the Python view facade reports (`getCameraNode`, …).
@@ -162,6 +213,9 @@ impl Shell {
             ViewportEvent::GizmoOrigin { point, kind } => self.on_gizmo_origin(*point, *kind, cx),
             ViewportEvent::ToolState(status) => self.on_tool_state(status, cx),
         }
+        // A tool or a mod event callback can select through the facade; applying the
+        // queue here keeps that write in the same frame as the event that caused it.
+        self.drain_selection_requests(cx);
     }
 
     /// The origin/centre handle was released: remember the snapped pivot as the session
@@ -679,14 +733,19 @@ impl Shell {
 
     /// Refresh the model panes and the stage after the document changed.
     pub(super) fn after_document_edit(&mut self, cx: &mut Context<Self>) {
-        if let Some(viewport) = self.viewport.clone() {
+        if self.viewport.is_some() {
             match self.build_stage() {
-                Ok(stage) => viewport.update(cx, |viewport, cx| {
-                    viewport.set_stage(stage);
-                    viewport.set_manipulators(Vec::new());
-                    viewport.set_gizmo(None);
-                    cx.notify();
-                }),
+                Ok(stage) => {
+                    self.publish_stage(&stage);
+                    self.set_stage(stage, cx);
+                    if let Some(viewport) = self.viewport.clone() {
+                        viewport.update(cx, |viewport, cx| {
+                            viewport.set_manipulators(Vec::new());
+                            viewport.set_gizmo(None);
+                            cx.notify();
+                        });
+                    }
+                }
                 Err(error) => self.console_line(format!("stage: {error}"), cx),
             }
         }

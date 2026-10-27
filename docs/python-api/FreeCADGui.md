@@ -43,6 +43,20 @@ One status-bar hint: ``text`` plus any formatting ``args``.
 | `args` (attribute) | — |
 | `text` (attribute) | — |
 
+## Class `Preview`
+
+Transient, unpickable shapes drawn over the viewport (S4.6).
+
+| Member | Summary |
+| --- | --- |
+| `BASE_ID` (attribute) | — |
+| add(item) -> int | Draw ``item`` (a ``ferrocad_stage.ShapeItem``) until it is removed. |
+| add_mesh(positions, triangles=None, edges=None, color=None, shaded=True) -> int | Draw a tessellation (``positions`` plus optional triangle/edge indices). |
+| clear() -> None | Drop every preview item in this set. |
+| items() -> list | The items in publication order (a copy; the set is what ``update`` sends). |
+| remove(handle: int) -> bool | Stop drawing the item ``handle``; returns whether it was present. |
+| update() -> int | Publish the set and ask for a repaint; returns the new generation. |
+
 ## Class `SelectionObject`
 
 One selected object, shaped like upstream's ``Gui.SelectionObject``.

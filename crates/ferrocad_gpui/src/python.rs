@@ -573,6 +573,34 @@ pub fn set_selection(items: &[crate::selection::SelectionItem]) -> Result<(), St
     Ok(())
 }
 
+/// One write a script queued on `FreeCADGui.Selection`.
+///
+/// `op` is `add`, `remove`, `clear` or `preselect`. `object` is a document object
+/// name (empty for `clear`), `elements` the kernel sub-element names, and `points`
+/// the world points the pick reported (as far as the script knew them). The shape is
+/// deliberately the facade's own record so the two sides cannot drift.
+#[derive(Debug, Clone, Deserialize, PartialEq)]
+pub struct SelectionRequest {
+    pub op: String,
+    #[serde(default)]
+    pub object: String,
+    #[serde(default)]
+    pub elements: Vec<String>,
+    #[serde(default)]
+    pub points: Vec<(f64, f64, f64)>,
+}
+
+/// Drain the selection writes a script queued (`FreeCADGui.Selection.addSelection` …).
+///
+/// The facade cannot command the viewport synchronously, so `addSelection`,
+/// `removeSelection`, `clearSelection` and `setPreselection` update its snapshot and
+/// queue the operation. The shell applies the queue to its own selection, which is
+/// what makes a scripted selection visible to the viewport (and arms the workbench's
+/// manipulators for it). Draining empties the queue.
+pub fn take_selection_requests() -> Result<Vec<SelectionRequest>, String> {
+    call_json("take_selection_requests", None)
+}
+
 /// Mirror the shell's presentation state to `FerroCADGui.ViewState`.
 ///
 /// A checkable command (`App_ToggleGrid`) reads this in `IsChecked`, so the push

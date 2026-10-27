@@ -39,7 +39,12 @@ What is here today:
   shell's snapshot, each entry a ``SelectionObject`` with ``Object``,
   ``SubElementNames``, ``PickedPoints`` and ``ObjectName``; the writable half
   (``addSelection``/``removeSelection``/``clearSelection``/``setPreselection``)
-  updates the snapshot and queues the operation for the shell;
+  updates the snapshot and queues the operation, which the shell drains into its
+  own selection (so a scripted selection arms the same manipulators a click does);
+* the **transient previews** (S4.6) — ``Preview`` collects unpickable
+  ``ferrocad_stage.ShapeItem``s and publishes them with
+  ``ferrocad_stage.set_preview_items``; the shell draws them beside the document
+  stage, and the ranked picker never reports one;
 * the **headless window seam** — ``getMainWindow().getActiveWindow()`` returns
   the active document view (or a view without a scene graph), with the event
   callback slots, ``fitAll``, ``redraw`` and ``getPoint`` Draft's utilities ask
@@ -50,10 +55,12 @@ What is here today:
 * the private bridge helpers the app script calls (``_command_list``,
   ``_run``, ``_accept``, ``_cancel``) and the document-view cache helpers.
 
-What is still absent: ``ViewProvider`` (per-object view objects), the live
-``Selection`` write-back into the viewport (writes queue for a shell that does not
-read ``_take_requests`` yet), and a camera-changed event (the shell publishes the
-camera while it draws; see ``publish_view``).
+What is still absent: ``ViewProvider`` (per-object view objects). The live
+``Selection`` write is now drained by the shell at every Python entry point
+(``Shell::drain_selection_requests``), and the camera is republished whenever the
+viewport notifies the shell (a wheel zoom or an orbit), not only on a render. A
+script's ``Selection.addSelection`` therefore reaches the viewport, and
+``getCameraNode`` answers with the camera the last gesture produced.
 See ``docs/workbenches/actions-and-tools.md`` and ``FreeCADGui/draft.py``.
 """
 
@@ -256,6 +263,25 @@ class _Quaternion:
     def getValue(self):
         return self._value
 
+    def multVec(self, vector):
+        """Rotate ``vector`` by this quaternion (Coin's ``SbRotation.multVec``).
+
+        ``box_selection`` derives the view's screen-right axis with
+        ``camera.orientation.getValue().multVec(coin.SbVec3f(1, 0, 0))``, so the
+        rotation has to be applied here rather than left to the caller.
+        """
+        x, y, z, w = self._value
+        vx, vy, vz = _triple(vector)
+        # t = 2 · (q × v); v' = v + w·t + q × t
+        tx = 2.0 * (y * vz - z * vy)
+        ty = 2.0 * (z * vx - x * vz)
+        tz = 2.0 * (x * vy - y * vx)
+        return _Vec3(
+            vx + w * tx + (y * tz - z * ty),
+            vy + w * ty + (z * tx - x * tz),
+            vz + w * tz + (x * ty - y * tx),
+        )
+
     def __iter__(self):
         return iter(self._value)
 
@@ -305,14 +331,14 @@ class _CameraType:
         return self._name
 
     def isDerivedFrom(self, other):
-        name = _type_name(other)
-        return name == self._name or name == "SoCamera"
+        name = _type_key(other)
+        return name == _type_key(self._name) or name == "Camera"
 
     def __eq__(self, other):
-        return _type_name(other) == self._name
+        return _type_key(other) == _type_key(self._name)
 
     def __hash__(self):
-        return hash(self._name)
+        return hash(_type_key(self._name))
 
     def __repr__(self):
         return f"SoType({self._name})"
@@ -327,6 +353,18 @@ def _type_name(type_id) -> str:
         except Exception:  # noqa: BLE001 - a foreign type object
             pass
     return str(type_id)
+
+
+def _type_key(type_id) -> str:
+    """A type name normalised for comparison.
+
+    Real Coin's ``SoType.getName()`` returns the *registered* name, which omits the
+    ``So`` prefix (``coin.SoPerspectiveCamera.getClassTypeId().getName()`` is
+    ``"PerspectiveCamera"``), while FerroCAD's facade (and a class's own name) keeps
+    it. Comparing the two spellings must not depend on which module supplied the id.
+    """
+    name = _type_name(type_id)
+    return name[2:] if name.startswith("So") else name
 
 
 class _ViewVolume:
@@ -415,10 +453,10 @@ class _CameraNode:
 
     def isOfType(self, type_id):
         """Whether this camera is ``type_id`` (a Coin ``SoType``, by name)."""
-        name = _type_name(type_id)
-        if name == "SoCamera":
+        name = _type_key(type_id)
+        if name == "Camera":
             return True
-        return name == _type_name(self.getTypeId())
+        return name == _type_key(self.getTypeId())
 
     def getSize(self):
         return tuple(self._camera.size)
@@ -1370,8 +1408,116 @@ def _cancel_all() -> None:
     _pending_tool = None
 
 
+class Preview:
+    """Transient, unpickable shapes drawn over the viewport (S4.6).
+
+    SimpleCAD draws its construction previews as imperative Coin subtrees. FerroCAD's
+    equivalent is a **transient `ShapeItem`**: the shell draws it beside the document
+    stage and the picker ignores it (an item is forced non-selectable when it is
+    published), so a preview never answers a click and never appears in
+    :meth:`View3DInventor.getObjectsInfo`.
+
+    Building items is the caller's job — this is the presentation channel, not a
+    shape factory. ``add`` takes a ready ``ferrocad_stage.ShapeItem`` (the declarative
+    route a ``ViewProvider`` uses); ``add_mesh`` is the convenience for a tessellation
+    a tool already has.
+
+    Publishing is explicit, like Coin's own ``replaceChild``: add/remove/clear edit
+    the local set and :meth:`update` hands it to the shell. A headless caller sees the
+    same set through ``ferrocad_stage.preview_items()``.
+    """
+
+    #: The first item id a preview claims. Document entities are small counters, and
+    #: the push/pull stem uses 2 100 000, so this range is free.
+    BASE_ID = 3_000_000
+
+    def __init__(self, view=None) -> None:
+        self._view = view
+        self._items: dict = {}
+        self._next = 0
+        self._serial = 0
+
+    def _item_module(self):
+        module = _stage_module()
+        if module is None or not hasattr(module, "ShapeItem"):
+            raise RuntimeError(
+                "FreeCADGui.Preview needs the `ferrocad_stage` extension; build it "
+                "with `cargo build -p ferrocad_stage_py`"
+            )
+        return module
+
+    def add(self, item) -> int:
+        """Draw ``item`` (a ``ferrocad_stage.ShapeItem``) until it is removed."""
+        if not hasattr(item, "set_shape") or not hasattr(item, "entity_id"):
+            raise TypeError("Preview.add needs a ferrocad_stage.ShapeItem")
+        handle = self._next
+        self._next += 1
+        self._items[handle] = item
+        return handle
+
+    def add_mesh(
+        self,
+        positions,
+        triangles=None,
+        edges=None,
+        color=None,
+        shaded=True,
+    ) -> int:
+        """Draw a tessellation (``positions`` plus optional triangle/edge indices).
+
+        ``shaded`` picks ``ShadedWithEdges`` (a solid preview) over ``Wireframe`` (a
+        construction guide); ``color`` is an RGBA tuple applied to the surface.
+        """
+        module = self._item_module()
+        self._serial += 1
+        item = module.ShapeItem(self.BASE_ID + self._serial)
+        item.set_shape(positions, None, triangles, edges)
+        item.draw_mode = (
+            module.DrawMode.ShadedWithEdges if shaded else module.DrawMode.Wireframe
+        )
+        if color is not None:
+            rgba = tuple(float(value) for value in color)
+            item.surface_color = rgba if len(rgba) == 4 else rgba + (1.0,)
+        item.selectable = False
+        return self.add(item)
+
+    def remove(self, handle: int) -> bool:
+        """Stop drawing the item ``handle``; returns whether it was present."""
+        return self._items.pop(handle, None) is not None
+
+    def clear(self) -> None:
+        """Drop every preview item in this set."""
+        self._items.clear()
+
+    def items(self) -> list:
+        """The items in publication order (a copy; the set is what ``update`` sends)."""
+        return list(self._items.values())
+
+    def update(self) -> int:
+        """Publish the set and ask for a repaint; returns the new generation."""
+        module = _stage_module()
+        if module is None or not hasattr(module, "set_preview_items"):
+            raise RuntimeError(
+                "FreeCADGui.Preview.update needs the `ferrocad_stage` extension"
+            )
+        generation = module.set_preview_items(self.items())
+        view = self._view
+        if view is None:
+            document = activeDocument()
+            view = getattr(document, "ActiveView", None) if document is not None else None
+        if view is not None:
+            view.updateGui()
+        return generation
+
+    def __len__(self) -> int:
+        return len(self._items)
+
+    def __repr__(self) -> str:
+        return f"Preview({len(self)} items)"
+
+
 # ---------------------------------------------------------------------------
-# Selection (a snapshot the shell pushes; writes are queued for it)
+# Selection (the shell owns it; writes are queued back to it)
 # ---------------------------------------------------------------------------
 
 

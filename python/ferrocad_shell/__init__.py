@@ -24,9 +24,10 @@ _NAMESPACE: dict = {}
 # Beyond the model, the shell asks for the pieces the UI needs: the tessellated
 # shapes to draw (:func:`stage_meshes`), the document edit a manipulator commit
 # produces (:func:`interaction`), the workbench actions (:func:`commands`,
-# :func:`run_command`), and the selection snapshot (:func:`set_selection`). All go
-# through the FerroCAD module hooks or ``FreeCADGui``/``FerroCADGui``, so this
-# script names no workbench.
+# :func:`run_command`), and both halves of the selection (:func:`set_selection`
+# pushes the shell's selection down, :func:`take_selection_requests` drains what a
+# script asked for back). All go through the FerroCAD module hooks or
+# ``FreeCADGui``/``FerroCADGui``, so this script names no workbench.
 
 # Property type id -> editor kind. A type absent here is read-only in the pane.
 _EDITABLE_KINDS = {
@@ -940,6 +941,52 @@ def set_selection(pairs_json: str) -> str:
         [(item["object"], item.get("elements") or []) for item in items]
     )
     return _json({"ok": True})
+
+
+def _point_triples(points) -> list:
+    """World points as JSON `[x, y, z]` triples.
+
+    The facade keeps the caller's own vector type (a ``FreeCAD.Vector`` from a
+    workbench, or whatever a test supplied), which ``json.dumps`` cannot serialise.
+    The shell's record carries plain numbers, so the conversion happens here.
+    """
+    triples = []
+    for point in points or ():
+        values = point.getValue() if callable(getattr(point, "getValue", None)) else point
+        if not isinstance(values, (tuple, list)) or len(values) != 3:
+            values = (values.x, values.y, values.z)
+        triples.append([float(values[0]), float(values[1]), float(values[2])])
+    return triples
+
+
+def take_selection_requests() -> str:
+    """Drain the writes a script queued on ``FreeCADGui.Selection``.
+
+    The shell owns the selection; ``Selection.addSelection``/``removeSelection``/
+    ``clearSelection``/``setPreselection`` update the facade's snapshot **and** queue
+    the operation, because Python cannot command the viewport synchronously. This is
+    the other half of the bridge: the payload is a JSON list of
+    ``{"op", "object", "elements", "points"}`` records, in the order they were
+    requested, and the queue is empty afterwards. ``points`` are ``[x, y, z]``
+    triples, not the caller's vector objects.
+
+    Every record is applied by the shell to its own selection, so a script
+    (SimpleCAD's controller, a macro) selects exactly what a click would. A
+    ``preselect`` record names the object under the pointer; the viewport owns hover,
+    so the shell keeps it as session state rather than re-selecting.
+    """
+    requests = FreeCADGui.Selection._take_requests()
+    return _json(
+        [
+            {
+                "op": request.get("op", ""),
+                "object": request.get("object", ""),
+                "elements": [str(name) for name in request.get("elements") or ()],
+                "points": _point_triples(request.get("points")),
+            }
+            for request in requests
+        ]
+    )
 
 
 def set_view_state(state_json: str) -> str:

@@ -261,6 +261,12 @@ impl Shell {
             }
         };
 
+        // A command may select through the facade (`Gui.Selection.addSelection`) instead
+        // of returning a `select` directive; apply those writes before the outcome is
+        // read, so a command sees the selection it just made and a `{"view": …}` /
+        // `select` outcome composes with it.
+        self.drain_selection_requests(cx);
+
         if !outcome.ok {
             let status = if outcome.error.is_empty() {
                 format!("{id} failed")

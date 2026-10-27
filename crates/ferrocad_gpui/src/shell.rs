@@ -22,7 +22,7 @@ use ferrocad_geom::SelectionRef;
 use ferrocad_inventor::{Scene, Viewport};
 use ferrocad_stage::{
     DeclarativeManipulator, GizmoAxis, GizmoHandle, GizmoMode, GizmoValue, InteractionCommit,
-    Manipulator, SnapKind, ToolStatus, TransformGizmo,
+    Manipulator, SnapKind, Stage, ToolStatus, TransformGizmo,
 };
 use ferrocad_types::Vector3;
 use ferrocad_ui::Form;
@@ -416,6 +416,15 @@ pub struct Shell {
     dev_scroll: DevScroll,
     /// The viewport's event subscription (selection and interaction commits).
     _viewport_events: Option<Subscription>,
+    /// The viewport's **notification** observation: a wheel zoom or an orbit moves the
+    /// camera without emitting an event, and the facade's next `getCameraNode` must see
+    /// the camera that gesture produced (not the one the last render published).
+    _viewport_camera: Option<Subscription>,
+    /// The document stage as last built, so a transient preview change can redraw
+    /// without re-reading the tessellations from the kernel (S4.6).
+    last_stage: Option<Stage>,
+    /// The preview generation the drawn stage was built for.
+    preview_generation: u64,
     _submit: Subscription,
 }
 
@@ -723,6 +732,9 @@ impl Shell {
             ]),
             dev_scroll: DevScroll::default(),
             _viewport_events: None,
+            _viewport_camera: None,
+            last_stage: None,
+            preview_generation: 0,
             _submit: submit,
         }
     }
@@ -966,10 +978,12 @@ impl Shell {
             .with_listener(Box::new(python::PythonEventCallbacks))
             .with_navicube(navicube);
         if let Some(stage) = stage {
-            viewport.set_stage(stage);
+            viewport.set_stage(self.stage_with_previews(&stage));
             // A document's scene is usually not the sample camera's scale: frame it once
             // so the viewport does not open from inside the model.
             viewport.frame_stage();
+            self.last_stage = Some(stage);
+            self.preview_generation = ferrocad_stage_py::preview_generation();
         }
         // G5: overlays registered through `FerroCADGui.addOverlay` before the viewport
         // existed are pulled in now, once the scene they merge beside is built.
@@ -1022,8 +1036,16 @@ impl Shell {
         let events = cx.subscribe(&viewport, |this, _viewport, event: &ViewportEvent, cx| {
             this.on_viewport_event(event, cx)
         });
+        // Every camera change the viewport makes outside an event (a wheel notch, a
+        // middle-button orbit, the navigation cube, a keyboard view preset) notifies the
+        // entity but reports nothing, so the camera the facade answers with would stay
+        // at the last render's. Observing the notification republishes it in the same
+        // effect cycle as the gesture. The render path (`publish_view`) still covers
+        // the animation-driven moves (inertia, a snap that settles between frames).
+        let camera = cx.observe(&viewport, |this, _viewport, cx| this.publish_camera(cx));
         self.viewport = Some(viewport);
         self._viewport_events = Some(events);
+        self._viewport_camera = Some(camera);
     }
 
     /// Append a line to the console transcript.
@@ -1058,6 +1080,11 @@ impl Shell {
         }
         // A console line can add objects or change values; re-read the model.
         self.refresh(cx);
+        // A console line is how a script selects (`Gui.Selection.addSelection`); the
+        // facade queued those writes, and they are applied to the shell's selection
+        // now — a console-driven selection therefore arms the same manipulators a
+        // click does.
+        self.drain_selection_requests(cx);
         self.sync_stage(cx);
         self.rearm_selection(cx);
         let transcript = transcript_of(&self.model);
@@ -1074,6 +1101,9 @@ impl Shell {
 
 impl Render for Shell {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        // A script's transient previews (S4.6) change without a document edit; the
+        // generation check is a mutex read, and only a real change rebuilds the stage.
+        self.sync_previews(cx);
         let model = self.snapshot();
         // The app menu shows the window's real state; the registry cannot know it.
         let dev_tools_open = self.dev_tools_open(cx);

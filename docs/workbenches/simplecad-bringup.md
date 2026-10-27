@@ -370,7 +370,7 @@ Unit tests alone make the priority clear: `makeBox` 357, `makeCylinder` 153,
 This table is the **2026-10-21 audit snapshot** that motivated S2–S5. It is kept as
 provenance, not as a status report: most of the rows below have since been closed, and
 the current state is the measured baseline in §7 (2026-10-27: 88/88 modules load,
-**896 passed / 73 failed / 98 errored / 2 skipped**, with the remaining errors bucketed
+**966 passed / 64 failed / 29 errored / 2 skipped**, with the remaining errors bucketed
 there). Read the `Status` column as history.
 
 Status vocabulary: **exists** (Python and kernel), **partial** (kernel and/or Python
@@ -1077,6 +1077,33 @@ SimpleCAD's own validation rejecting our kernel's output on hard regimes. The re
 deliberate absences (`flatmesh` 6, `PartDesign` 3, BIM in Draft), the PySide
 `QApplication` stub (5), and 3 `common` calls returning `None`.
 
+**Seventh round (reconstruction, mesh, core, flatmesh), 2026-10-27.** The regime work
+closed almost all of the above: **966 passed / 64 failed / 29 errored / 2 skipped**, still
+88/88 modules with no aborts.
+
+| Family | Sixth round | Seventh round |
+| --- | --- | --- |
+| Draw/pull | 105 / 16 / 5 (83.3%) | **107 / 16 / 3** (84.9%) |
+| Surface tools | 131 / 17 / 37 (70.1%) | **156 / 9 / 12** (87.2%) |
+| Mesh tools | 117 / 2 / 17 (86.0%) | **130 / 3 / 3** (95.6%) |
+| Booleans/edits | 69 / 13 / 14 (71.9%) | **82 / 11 / 3** (85.4%) |
+| Snapping/UI | 48 / 0 / 0 (100%) | 48 / 0 / 0 (100%) |
+| S3 circle/arc/sphere | 44 / 1 / 0 (97.8%) | 44 / 1 / 0 (97.8%) |
+
+One bug explained most of it: `Geom2d.*.toShape(surface)` never lifted an *analytic* 2-D
+curve onto its surface, so SimpleCAD's surface lines were plane lines and every
+"drawing leaves the surface" check failed. Behind it were four more: `makeShell` did not
+sew an invalid shell, the Bullseye face maker was “first wire is outer”, `CenterOfMass`
+measured a compound of faces by volume, and `Shape.tessellate` returned `f32`. The Mesh
+side now defines self-intersection by positive-length contact only and refits planar
+segments as they grow; `flatmesh` exists as a pure-Python unwrapper.
+
+The 29 remaining errors: `QApplication()` in the PySide shim (5), `Shape.project` is
+planar-only so a wrapped drawing cannot land on a curved face (4), `common` returning
+`None` (3), `PartDesign` (4, deliberate), and singles (`Part.Cylinder(Circle)`,
+`Toroid.parameter`, `Mesh.decimate`, `Part.Shape.Point`, a pole-less `BSplineSurface`, a
+deleted-object `Name`, two invalid-geometry cases).
+
 ### S2 — The `Part` planar/topology slice
 
 S2.1 (B-Rep construction and queries):
@@ -1317,11 +1344,9 @@ kernel is ready.
 
 1. **The S1 image and the S2/S3 baseline both exist.** The Part + Mesh image loads all
    88 modules. The latest S1 baseline (sixth round) is **504 passed, 63 failed, 507
-   errored, 2 skipped**; the 2026-10-27 sixth-round run is **896 / 73 / 98 / 2 with no
+   errored, 2 skipped**; the 2026-10-27 seventh-round run is **966 / 64 / 29 / 2 with no
    aborts, in a single 88-module process**. The S2/S3 targets are replaced by the
-   measured baseline in §7; what remains is SimpleCAD's own geometry validation on hard
-   kernel regimes (planar reconstruction, surface drawing, mesh-to-CAD validity, stud
-   fitting, seam accuracy) rather than missing API.
+   measured baseline in §7; what remains is a short, named list rather than a regime.
 2. **Network was unavailable.** SimpleCAD could not be re-cloned, updated, or
    inspected beyond the local `--depth 1` checkout; no dependency was installed.
 3. **Release cadence is not measurable.** The SimpleCAD clone has one commit. The

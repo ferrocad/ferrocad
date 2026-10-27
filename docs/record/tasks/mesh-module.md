@@ -255,6 +255,21 @@ standard branch, always with `Relative=False`.
    `Mesh::Feature::onChanged` (`MeshFeature.cpp:77-87`), not `execute`.
 10. **Upstream's tuple constructor silently ignores non-Vector points**
     (`MeshPyImp.cpp:634-756`); do not copy that bug.
+11. **Self-intersection counts positive-length intersections only.** Upstream's
+    `MeshEvalSelfIntersection` keeps a pair when the common region is a segment
+    (`IntersectWithFacet(...) == 2`); a pair touching at a single vertex is not a
+    self-intersection. Reporting point contacts inflated the count against the
+    preview, which uses the same rule.
+12. **`getPlanarSegments` refits the plane as the region grows**
+    (`MeshDistanceGenericSurfaceFitSegment<PlaneSurfaceFit>`): a least-squares
+    plane through the seed triangle and the accepted facet centres, with a
+    distance-only test and no angular gate. A single facet is never a region.
+13. **`fixDegenerations` uses upstream's squared-length epsilon**
+    (`(1e-6)²`, compared against `uu`, `vv` and `|u×v|²`), not an absolute cross
+    product, and the optional argument is that squared length.
+14. **Operations keep facet groups when they keep the facet list.**
+    `harmonizeNormals` and a merge that drops no facet preserve `countSegments()`;
+    an operation that removes facets drops them, as upstream's `MeshObject` does.
 
 ## 4. The implementation split
 

@@ -72,6 +72,7 @@ class TestDraftGroup(unittest.TestCase):
                 "test_array",
                 "test_dwg",
                 "test_oca",
+                "test_svg",
             ],
         )
 

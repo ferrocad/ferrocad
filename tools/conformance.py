@@ -107,6 +107,9 @@ DRAFT_FILES = [
     "test_array",
     "test_dwg",
     "test_oca",
+    # SVG export runs green once `Part.OCC_VERSION` and the conic parameter
+    # ranges exist; its one skip is honest (the BIM module is not shipped).
+    "test_svg",
 ]
 
 # `src/Mod/Test` also holds package plumbing; the App group's `--list` has always

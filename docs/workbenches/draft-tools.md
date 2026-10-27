@@ -340,7 +340,7 @@ remain need modules outside this workbench.
   no longer holds and belongs to the Part track). Genuinely unknown ids still fail.
 
 `tools/conformance.py`'s `DRAFT_FILES` now also runs `test_creation`, `test_array`,
-`test_dwg` and `test_oca`, all of which are green:
+`test_dwg`, `test_oca` and `test_svg`, all of which are green:
 
 | `--draft` module | pass | fail | error | skip |
 | --- | --- | --- | --- | --- |
@@ -353,20 +353,22 @@ remain need modules outside this workbench.
 | `test_array` | 1 | 0 | 0 | 0 |
 | `test_dwg` | 2 | 0 | 0 | 0 |
 | `test_oca` | 2 | 0 | 0 | 0 |
-| **whole group** | **44** | **0** | **0** | **0** |
+| `test_svg` | 6 | 0 | 0 | 1 |
+| **whole group** | **50** | **0** | **0** | **1** |
 
-No further import module qualified for `DRAFT_FILES` this round: `test_svg`,
-`test_dxf`, `test_import_tools` and `test_draftgeomutils` still carry at least one
-out-of-scope error (below), so the group stays at 44 green tests.
+The one skip is honest: `test_get_svg_from_arch_space_with_zero_vector` says the BIM
+module is not installed, which it is not. `test_dxf`, `test_import_tools` and
+`test_draftgeomutils` still carry at least one out-of-scope error (below), so they stay
+out of the group.
 
 Neighbouring modules measured with `--files` (the rest of the headless Draft
 suite). "Before" is the pre-round image, "after" is this round's:
 
 | module | before (p/f/e/s) | after (p/f/e/s) | what moved |
 | --- | --- | --- | --- |
-| `test_svg` | 3/0/3/1 | 3/0/6/1 | the three `projectToSVG` patch errors are gone; the subtests now reach a Part gap |
+| `test_svg` | 3/0/3/1 | 6/0/0/1 | `Part.OCC_VERSION` and the conic parameter ranges landed; the exporter takes its own edge/arc path |
 | `test_dxf` | 1/0/1/0 | 1/0/1/0 | blocker moved from `getHomePath` to `Import.readDXF` |
-| `test_draftgeomutils` | 0/0/10/0 | 2/4/4/0 | `Shape.fix`/`OrderedEdges` landed; the rest is Part/curve geometry |
+| `test_draftgeomutils` | 0/0/10/0 | 6/4/0/0 | the wrapper (`Shape.copy`) and wire-order work landed; the four extension-math failures remain |
 | `test_modification` | 22/1/10/0 | 31/0/2/0 | quantity equality plus the Part wrapper/Prism work |
 | `test_import_tools` | 2/0/1/0 | 2/0/1/0 | GUI `UserInput.KeyShift` |
 | `test_import_gui` | 3/0/1/0 | 3/0/1/0 | GUI, out of scope |
@@ -378,16 +380,17 @@ suite). "Before" is the pre-round image, "after" is this round's:
 
 | Test(s) | Blocker | Owner |
 | --- | --- | --- |
-| `test_svg` regressions (6 subtests) | `wire.fixWire()` is absent and `Part.Wire.copy()` returns a bare `Part.Shape`, so the call at upstream `draftfunctions/svgshapes.py:379` fails. `PartShape::copy` returns `Self` (`crates/ferrocad_part_py/src/lib.rs:791`), losing the subclass; only `fixWireTool` exists in `shape_fix.rs`, not `fixWire`. | Part (`ferrocad_part_py`) |
 | `test_dxf.test_read_dxf_Issue24314` | The modern importer calls `Import.readDXF` (upstream's C++ `src/Mod/Import`), and there is no `Import` module (`importDXF.py:2915`, reached once `getHomePath` resolves the fixture). A Python DXF parser is not faked. | Import workbench (deliberate gap) |
-| `test_import_tools.test_import_gui_draftedit`, `test_import_gui.test_import_gui_draft_tools` | `draftguitools.gui_tool_utils` reads `Gui.UserInput.KeyShift` at import (`gui_tool_utils.py:67`); our `FreeCADGui` exposes no `UserInput` (`python/FreeCADGui` was out of scope this round). | GUI |
-| `test_draftgeomutils` (`get_extended_wire1/2/5/6`) | `Part.Shape.OrderedEdges` is missing because the wire arrives as a bare `Part.Shape` (the same `Shape.copy`/wrapper gap; `draftgeoutils/wires.py:468`). | Part (`ferrocad_part_py`) |
-| `test_draftgeomutils` (`get_extended_wire3/4/7/8`) | The extension math disagrees with the kernel: `start=2000.0, end=0.0` instead of `end=start` (differences of 5522.68 and 4000.0). | Part/Curves (`ferrocad_curves`) |
-| `test_modification.test_draft_to_sketch` | `ModuleNotFoundError: No module named 'Sketcher'` (`Draft/make_sketch.py:92`). | Sketcher track |
+| `test_import_tools.test_import_gui_draftedit`, `test_import_gui.test_import_gui_draft_tools` | `draftguitools.gui_tool_utils` reads `Gui.UserInput.KeyShift` at import (`gui_tool_utils.py:67`); our `FreeCADGui` exposes no `UserInput`. | GUI |
+| `test_draftgeomutils` (`get_extended_wire3/4/7/8`) | `Part.Wire(list)` rebuilds a wire of already-reversed edges in a different traversal order: `BRepBuilderAPI_MakeWire::Add` chains on *stored* vertex order, so it prepends and flips each edge. Upstream uses the identical call, so a different construction rule would need a guarded "the caller's list already chains" path and a reference run to prove parity. `Edge.firstVertex`/`lastVertex` and `Wire.OrderedVertexes` now follow `WireExplorer`/`TopExp`, so the extension math itself agrees. | Part (`ferrocad_part_py`) |
+| `test_modification.test_draft_to_sketch` | `ModuleNotFoundError: No module named 'Sketcher'` (`Draft/make_sketch.py:92`). A shim is not enough: `make_sketch` builds a real `Sketcher::SketchObject` with geometry, constraints and a solver, so this is the Draft M5 workbench layer. | Sketcher track |
 | `test_modification.test_draft_to_techdraw` | `ValueError: Unknown C++ type 'TechDraw::DrawPage'` (`test_modification.py:664`); needs `DrawPage`/`DrawSVGTemplate`/`DrawViewDraft`. | TechDraw track |
 
-Part-kernel progress notes: the `Part::Feature.Shape` getter now returns the topology
+Closed this round: the `test_svg` regressions (`Part.OCC_VERSION` is parsed from the
+OCCT headers at build time; `Circle`/`Ellipse` report `FirstParameter`/`LastParameter`)
+and `test_draftgeomutils`'s `OrderedEdges` half (`Shape.copy` keeps its subclass).
+
+Part-kernel progress notes: the `Part::Feature.Shape` getter returns the topology
 subclass (`Part.Wire`/`Part.Face`/…), `Part::Prism` is a real registered object, and
 `Shape.fix()`/`Wire.OrderedEdges` are present, which is why `test_modification`
-reaches 31/0/2. The SVG and `test_draftgeomutils` errors above are the same wrapper
-story one level down: `Shape.copy()` still returns the base class.
+reaches 31/0/2.

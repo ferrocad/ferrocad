@@ -56,9 +56,23 @@ class TestTotals(unittest.TestCase):
 
 class TestDraftGroup(unittest.TestCase):
     def test_file_list(self):
+        # The group grows only when a module runs green against this image; the
+        # list is asserted so a silent addition or removal is caught in review.
+        # `test_modification` is deliberately absent (it still needs `Sketcher`
+        # and TechDraw); the GUI-adjacent files are absent by design.
         self.assertEqual(
             conformance.DRAFT_FILES,
-            ["test_base", "test_grid_settings", "test_pivy", "test_airfoildat", "test_import"],
+            [
+                "test_base",
+                "test_grid_settings",
+                "test_pivy",
+                "test_airfoildat",
+                "test_import",
+                "test_creation",
+                "test_array",
+                "test_dwg",
+                "test_oca",
+            ],
         )
 
     def test_paths_cover_the_package_root_and_ext(self):

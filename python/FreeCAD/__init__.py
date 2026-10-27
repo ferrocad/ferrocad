@@ -205,6 +205,37 @@ def getResourceDir():
     return os.path.join(root, "")
 
 
+def getHomePath():
+    """The FreeCAD installation root (upstream's ``App.getHomePath()``).
+
+    This is the directory that owns the ``Mod`` workbench tree. A workbench
+    imported from a source checkout names that root (upstream's
+    ``<home>/Mod/Draft/__init__.py``); otherwise this facade's own root is the
+    home, the same root :func:`getResourceDir` reports. The result ends with the
+    platform separator, as upstream's does.
+    """
+    import os
+    import sys
+
+    for name in ("Draft", "Part", "Import", "Mesh"):
+        module = sys.modules.get(name)
+        path = getattr(module, "__file__", None)
+        if not path:
+            continue
+        directory = os.path.dirname(os.path.abspath(path))
+        # At most `<home>/Mod/<workbench>/<module>.py`; do not wander above it.
+        for _ in range(3):
+            if os.path.basename(directory) == "Mod":
+                return os.path.join(os.path.dirname(directory), "")
+            parent = os.path.dirname(directory)
+            if parent == directory:
+                break
+            directory = parent
+
+    root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    return os.path.join(root, "")
+
+
 __all__ = [
     "Version",
     "newDocument",

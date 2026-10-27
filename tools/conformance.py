@@ -99,8 +99,10 @@ DRAFT_FILES = [
     "test_airfoildat",
     "test_import",
     # M2/M3 modules that now run green in this group (they need the combined
-    # App+Part image, as `test_import` already did). `test_modification` stays out
-    # until its remaining kernel gaps close; see docs/workbenches/draft-tools.md.
+    # App+Part image, as `test_import` already did). `test_modification` runs
+    # 31/0/2 but stays out: its two remaining errors need `Sketcher` and
+    # `TechDraw::DrawPage`, which this image does not ship. The import modules
+    # are green where they can be: see docs/workbenches/draft-tools.md.
     "test_creation",
     "test_array",
     "test_dwg",

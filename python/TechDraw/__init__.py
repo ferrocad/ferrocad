@@ -1,10 +1,15 @@
 """The TechDraw surface FerroCAD needs: geometric hatch generation.
 
-FerroCAD does not implement the TechDraw workbench. Draft's two-dimensional
-hatch object (``Draft.make_hatch``) imports ``TechDraw`` for exactly one
-function, :func:`makeGeomHatch`, which turns a filled face and a standard
-AutoCAD ``.pat`` pattern into the lines that fill it. This module provides that
-function over the Part kernel; nothing else of TechDraw is exposed.
+FerroCAD does not implement the TechDraw workbench. Draft imports ``TechDraw``
+for two functions:
+
+* :func:`makeGeomHatch`, which turns a filled face and a standard AutoCAD
+  ``.pat`` pattern into the lines that fill it. This module implements that
+  function over the Part kernel.
+* :func:`projectToSVG`, the hidden-line-removal projection Draft's SVG exporter
+  asks for before falling back to its own edge/arc path. FerroCAD has no HLR
+  projection, so it answers ``""`` ("no projection available"), which is the
+  empty-snippet case Draft already handles.
 
 Each pattern row is an infinite line family: the row's angle gives the line
 direction, its ``(x, y)`` origin and ``(dx, dy)`` offset step place successive
@@ -17,7 +22,18 @@ import math
 
 import Part
 
-__all__ = ["makeGeomHatch"]
+__all__ = ["makeGeomHatch", "projectToSVG"]
+
+
+def projectToSVG(shape, direction=None, *args, **kwargs):
+    """An SVG projection snippet for `shape`, or ``""`` when none is available.
+
+    Upstream this is TechDraw's hidden-line-removal projector. FerroCAD does not
+    implement HLR: returning the empty string tells Draft's exporter
+    (``draftfunctions/svgshapes.py``) to use its own edge and circular-arc path
+    generation, which is the real implementation on this path.
+    """
+    return ""
 
 
 def _normalize(vector):

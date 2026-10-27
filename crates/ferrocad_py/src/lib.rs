@@ -1071,9 +1071,15 @@ impl PyQuantity {
         self.inner.value()
     }
 
+    /// A bare number is compared against this quantity's magnitude in its own
+    /// unit, the same coercion upstream's `Quantity` applies: `1 mm == 1` is
+    /// true, and `obj.Length == 12` works for a length of 12 mm.
     fn __eq__(&self, other: &Bound<'_, PyAny>) -> bool {
-        match other.extract::<PyRef<'_, PyQuantity>>() {
-            Ok(o) => self.inner == o.inner,
+        if let Ok(o) = other.extract::<PyRef<'_, PyQuantity>>() {
+            return self.inner == o.inner;
+        }
+        match other.extract::<f64>() {
+            Ok(value) => self.inner.value() == value,
             Err(_) => false,
         }
     }
